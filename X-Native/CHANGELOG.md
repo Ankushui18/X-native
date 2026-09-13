@@ -126,6 +126,18 @@ are the crate versions in `Cargo.toml`, which still drift (see
 - Dead constants `TEXT_PRIMARY` / `TEXT_SECONDARY` / `ACCENT` / `ICON_SIZE` and
   thirteen unused brand aliases removed; UI code names a role instead.
 
+- A component **color property bound to `stroke`** repainted the interior of
+  the node it was bound to: `OverrideValue` had no stroke arm, so both write
+  sites (`x_core::PropRegistry::apply`, `Editor::set_prop_value`) emitted a
+  `Fill` (docs/KNOWN_DEBT.md §4). `OverrideValue::Stroke` now encodes
+  `stroke:#rrggbb` — decoded before the bare-hex fallback, which still means
+  fill — `x_core::color_override` picks the arm from the property's
+  `target_property`, and `x_core::apply_stroke_paint` gives a zero-width
+  stroke a 1px width and recolors materialized stroke layers so the write is
+  visible. Both appliers and the two renderer encoders (`ir::lower`,
+  `scene::encode`) honour the override; §4 records what is left (the duplicate
+  enum's missing `Number` variant, Sketch export dropping `stroke:` overrides).
+
 ## [0.34.0] — 2026-09-12 (`69315b0`)
 
 Headless toolkit at parity with the reference implementation: `tree`, `find`,
