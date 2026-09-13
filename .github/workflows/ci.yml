@@ -2,6 +2,11 @@
 # "green" — this workflow runs exactly that script so "it passes locally" and
 # "it passes on CI" are the same claim. Before this file existed, a PR got zero
 # checks and the gate had never run anywhere.
+#
+# The gate's output is published through BOTH the job summary and error
+# annotations, from a step that runs even when the gate step itself dies: the
+# raw step log is served from blob storage (unreachable from some tooling) and
+# step summaries are not exposed by the check-runs API, while annotations are.
 name: CI
 
 on:
@@ -51,19 +56,26 @@ jobs:
 
       # Bash, not `./scripts/check.sh`: the script was committed non-executable
       # (mode 100644), which is why running it locally fails with "permission
-      # denied".
-      #
-      # The gate's output is mirrored into the job summary: the raw step log
-      # lives on blob storage, so a failure is otherwise unreadable from any
-      # tooling that only speaks the REST API (and unreadable entirely if the
-      # blob host is unreachable).
+      # denied". continue-on-error keeps the job alive so the log step below
+      # always gets to publish what happened.
       - name: Gate
+        id: gate
+        continue-on-error: true
         run: |
-          set +e
-          bash scripts/check.sh > /tmp/gate.log 2>&1
-          status=$?
+          bash scripts/check.sh 2>&1 | tee /tmp/gate.log
+          printf 'scripts/check.sh exited %s\n' "${PIPESTATUS[0]}" | tee /tmp/gate.exit
+
+      - name: Gate log
+        if: always()
+        run: |
+          echo "gate outcome: ${{ steps.gate.outcome }}"
+          cat /tmp/gate.exit 2>/dev/null || echo "no exit line recorded"
+          test -f /tmp/gate.log || exit 0
+
           {
-            echo "### \`scripts/check.sh\` exit: **$status**"
+            echo "### \`scripts/check.sh\`: **${{ steps.gate.outcome }}**"
+            echo
+            cat /tmp/gate.exit 2>/dev/null || true
             echo
             echo "| tool | version |"
             echo "|---|---|"
@@ -75,20 +87,24 @@ jobs:
             echo "#### gate output"
             echo
             echo '```'
-            head -c 120000 /tmp/gate.log
+            cat /tmp/gate.log
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          # The raw step log lives on blob storage, which is unreachable from
-          # some tooling, and step summaries are not exposed by the check-runs
-          # API — so the gate's output is also emitted as annotations, which
-          # ARE reachable through api.github.com. Newlines must be %0A-escaped
-          # inside a workflow-command message, hence the dance below.
+
+          # Annotations are readable through api.github.com, so mirror the log
+          # there too. Newlines must be %0A-escaped inside a workflow-command
+          # message, hence the dance below.
           sed -e 's/%/%25/g' -e 's/\r//g' /tmp/gate.log |
             tr '\n' '\036' |
             sed 's/\x1e/%0A/g' |
             fold -s -w 3000 |
-            head -30 |
+            head -20 |
             while IFS= read -r chunk; do
               printf '::error::%s\n' "$chunk"
             done
-          exit $status
+
+      - name: Verdict
+        if: steps.gate.outcome != 'success'
+        run: |
+          echo "::error::scripts/check.sh failed — read the 'Gate log' step's annotations or summary"
+          exit 1
