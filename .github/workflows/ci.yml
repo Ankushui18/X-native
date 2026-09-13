@@ -97,28 +97,39 @@ jobs:
         run: |
           set +e
           report=/tmp/report.txt
-          : > "$report"
-          # One line per diagnostic, never the full rustc dump: GitHub drops
-          # oversized comments, and rustc's source excerpts say nothing the
-          # `--message-format short` line above them does not. Keeping this
-          # small is also what makes the report survive the API round-trip.
-          phase() {
-            name="$1"
-            shift
-            tmp=$(mktemp)
-            "$@" >"$tmp" 2>&1
-            status=$?
-            printf '\n### %s — exit %s, %s lines\n' "$name" "$status" "$(wc -l < "$tmp")" >> "$report"
-            grep -aE '(^error|^warning|\.rs:[0-9]+:[0-9]+:|FAILED|panicked)' "$tmp" |
-              cut -c1-200 | head -80 >> "$report"
-            rm -f "$tmp"
+          build=/tmp/build.log
+          clippy=/tmp/clippy.log
+          tests=/tmp/tests.log
+
+          cargo build --workspace --message-format short       >"$build"  2>&1
+          build_status=$?
+          cargo clippy --workspace --all-targets --message-format short >"$clippy" 2>&1
+          clippy_status=$?
+          cargo test --workspace --locked --no-fail-fast       >"$tests"  2>&1
+          test_status=$?
+
+          # One line per diagnostic: rustc's source excerpts and "note:" lines
+          # say nothing the short line above them does not, and GitHub drops
+          # oversized comments, so the useful lines go in first.
+          diag() {
+            grep -aE '\.rs:[0-9]+:[0-9]+: (warning|error)' "$1" | cut -c1-200
           }
-          phase "cargo --version" cargo --version
-          phase "rustc --version" rustc --version
-          phase "cargo build --workspace" cargo build --workspace --message-format short
-          phase "cargo clippy --workspace --all-targets" cargo clippy --workspace --all-targets --message-format short
-          phase "cargo test --workspace" cargo test --workspace --locked --no-fail-fast --message-format short
-          phase "cargo build -p x-designer --bin x_native" cargo build -p x-designer --bin x_native
+
+          {
+            echo "### statuses: build=$build_status clippy=$clippy_status test=$test_status"
+            echo
+            echo "### clippy: warnings outside the dead-code budget (the LIVE count)"
+            diag "$clippy" | grep -avE 'never (used|read|constructed)'
+            echo
+            echo "### tests: failures, with panic text"
+            grep -aA4 -E 'panicked at|^---- ' "$tests" | cut -c1-220 | head -70
+            echo
+            echo "### build: errors"
+            diag "$build" | head -40
+            echo
+            echo "### clippy: tracked dead code (first 20 of $(diag "$clippy" | grep -acE 'never (used|read|constructed)'))"
+            diag "$clippy" | grep -aE 'never (used|read|constructed)' | cut -c1-160 | head -20
+          } > "$report"
           echo "report: $(wc -c < "$report") bytes"
           cat "$report" || true
           exit 0
@@ -145,7 +156,7 @@ jobs:
               head -c 6000 /tmp/gate.log 2>/dev/null
               echo '~~~'
               echo '~~~'
-              head -c 12000 /tmp/report.txt 2>/dev/null
+              head -c 40000 /tmp/report.txt 2>/dev/null
               echo '~~~'
             } > /tmp/ci-comment.md
             gh pr comment "$number" --body-file /tmp/ci-comment.md || true
