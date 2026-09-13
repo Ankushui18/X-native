@@ -1,19 +1,22 @@
 # Mechanical fixes, applied by CI because a checkout without a Rust toolchain
-# cannot run them: `cargo fmt --all` (the remedy scripts/check.sh itself
-# prescribes) followed by the full gate, with the gate log published as a PR
+# cannot run them: `cargo fmt --all` — the remedy scripts/check.sh itself
+# prescribes — followed by the full gate, with the gate log published as a PR
 # comment. The commit is marked [skip ci] so it does not queue a second full
-# build; re-run CI by hand for the verdict.
+# build; re-run CI (or push any commit) for the verdict.
 #
 #   gh workflow run fix.yml --ref <branch>
+#   ...or put [ci-fix] in a commit message when dispatching is not available.
 name: Fix
 
 on:
   workflow_dispatch:
     inputs:
       clippy_fix:
-        description: "also run `cargo clippy --fix` (mechanical lint autofixes)"
+        description: "also run cargo clippy --fix (mechanical lint autofixes)"
         type: boolean
         default: false
+  push:
+    branches: ["main", "arena/**"]
 
 permissions:
   contents: write
@@ -22,6 +25,9 @@ permissions:
 jobs:
   fix:
     name: cargo fmt + gate
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && contains(github.event.head_commit.message, '[ci-fix]'))
     runs-on: ubuntu-latest
     timeout-minutes: 60
     defaults:
@@ -59,14 +65,35 @@ jobs:
           fi
           git --no-pager diff --stat
 
-      # The gate is expected to fail here — this records WHAT it says on the
-      # fixed tree, which is the whole point of the job.
+      # scripts/check.sh hides its diagnostics (cargo writes to temp files that
+      # it greps, and the CLI build's stderr is /dev/null), so record the raw
+      # output of each phase it covers as well as the gate's own verdict.
       - name: Re-gate (log only)
         run: |
           set +e
           bash scripts/check.sh > /tmp/gate.log 2>&1
           echo "gate exit: $?" >> /tmp/gate.log
-          cat /tmp/gate.log
+          exit 0
+
+      - name: Raw phase output
+        run: |
+          set +e
+          report=/tmp/report.txt
+          : > "$report"
+          phase() {
+            printf '\n########## %s ##########\n' "$1" >> "$report"
+            shift
+            "$@" >> "$report" 2>&1
+            printf '########## exit: %s\n' "$?" >> "$report"
+          }
+          phase "cargo --version" cargo --version
+          phase "cargo metadata (do the manifests load?)" cargo metadata --no-deps --format-version 1
+          phase "cargo build --workspace" cargo build --workspace
+          phase "cargo clippy --workspace --all-targets" cargo clippy --workspace --all-targets --message-format short
+          phase "cargo test --workspace --locked" cargo test --workspace --locked --no-fail-fast
+          phase "cargo build -p x-designer --bin x_native" cargo build -p x-designer --bin x_native
+          echo "=== report size: $(wc -c < "$report") bytes ==="
+          tail -c 3000 "$report"
           exit 0
 
       - name: Commit the fixes
@@ -77,12 +104,8 @@ jobs:
           if git diff --cached --quiet; then
             echo "nothing to commit"
           else
-            git commit -m "Apply cargo fmt to the workspace [skip ci]
-
-scripts/check.sh said 'unformatted code — run: cargo fmt --all', and the tree
-had never been formatted: apps/x-designer/src/bin/x_native_app/chrome.rs (and
-whatever else the diff covers) carried trailing whitespace and other rustfmt
-differences. No behaviour change."
+            git commit -m "Apply cargo fmt to the workspace [skip ci]" \
+              -m "Formatting only, no behaviour change: scripts/check.sh reported unformatted code and the tree had never been run through rustfmt."
             git push
           fi
 
@@ -91,15 +114,18 @@ differences. No behaviour change."
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          test -f /tmp/gate.log || exit 0
+          test -f /tmp/gate.log || true
           number=$(gh pr list --head "$GITHUB_REF_NAME" --state open \
                      --json number --jq '.[0].number' 2>/dev/null || true)
           if [ -n "$number" ]; then
             {
-              echo "Mechanical-fix run (\`cargo fmt\`${{ inputs.clippy_fix == true && ' + `clippy --fix`' || '' }}) — gate output on the fixed tree."
+              echo 'Mechanical-fix run — gate verdict, then the raw output of each phase.'
               echo
               echo '~~~'
-              head -c 60000 /tmp/gate.log
+              cat /tmp/gate.log 2>/dev/null
+              echo '~~~'
+              echo '~~~'
+              head -c 55000 /tmp/report.txt 2>/dev/null
               echo '~~~'
             } > /tmp/fix-comment.md
             gh pr comment "$number" --body-file /tmp/fix-comment.md || true
