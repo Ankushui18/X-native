@@ -1374,6 +1374,20 @@ fn matches_frame_clip(n: &Node) -> bool {
     matches!(n.kind, NodeKind::Frame { .. }) && n.overflow.clips()
 }
 
+/// True when a node's transform is more than a translation — i.e. its box on
+/// screen is a rotated / skewed / scaled QUAD, not an axis-aligned rectangle.
+/// The renderer already draws it that way (`transform.matrix`); the selection
+/// outline, the corner handles and the resize grab all have to agree, or a
+/// rotated shape shows a box that is nowhere near the shape.
+pub fn is_transformed(n: &Node) -> bool {
+    let t = &n.transform;
+    t.rotation.abs() > 1e-9
+        || t.skew_x.abs() > 1e-9
+        || t.skew_y.abs() > 1e-9
+        || (t.scale_x - 1.0).abs() > 1e-9
+        || (t.scale_y - 1.0).abs() > 1e-9
+}
+
 pub fn find_node<'a>(n: &'a Node, id: &str) -> Option<&'a Node> {
     if n.id == id {
         return Some(n);
@@ -3311,6 +3325,49 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
             continue;
         }
         if let Some(n) = find_node(&doc.editor_ref().root, id) {
+            // A transformed node is outlined through its REAL corners, the
+            // same four the renderer produces and the same four the resize
+            // grab hit-tests — one geometry for paint and input.
+            if sel.len() == 1 && is_transformed(n) {
+                // world_corners order is the app's handle numbering:
+                // 0 TL, 1 TR, 2 BL, 3 BR
+                let corners: Vec<Point> = x_native::editor::world_corners(n)
+                    .iter()
+                    .map(|(wx, wy)| app.world_to_screen(Point::new(*wx, *wy)))
+                    .collect();
+                // push the outline 1.5px off the shape's edge (same intent as
+                // the `inflate` on the axis-aligned path below)
+                let cx = corners.iter().map(|p| p.x).sum::<f64>() / 4.0;
+                let cy = corners.iter().map(|p| p.y).sum::<f64>() / 4.0;
+                let out: Vec<Point> = corners
+                    .iter()
+                    .map(|p| {
+                        let (dx, dy) = (p.x - cx, p.y - cy);
+                        let len = (dx * dx + dy * dy).sqrt().max(1e-6);
+                        Point::new(p.x + dx / len * 1.5, p.y + dy / len * 1.5)
+                    })
+                    .collect();
+                // edges: TL-TR, TR-BR, BR-BL, BL-TL
+                for (a, b) in [(0usize, 1usize), (1, 3), (3, 2), (2, 0)] {
+                    line(s, out[a].x, out[a].y, out[b].x, out[b].y, C_SEL, 1.5);
+                }
+                for h in &corners {
+                    fill_rrect(
+                        s,
+                        Rect::new(h.x - 3.5, h.y - 3.5, h.x + 3.5, h.y + 3.5),
+                        1.0,
+                        C_TEXT,
+                    );
+                    stroke_rrect(
+                        s,
+                        Rect::new(h.x - 3.5, h.y - 3.5, h.x + 3.5, h.y + 3.5),
+                        1.0,
+                        C_SEL,
+                        1.0,
+                    );
+                }
+                continue;
+            }
             let p0 = app.world_to_screen(Point::new(n.transform.x, n.transform.y));
             let p1 = app.world_to_screen(Point::new(n.transform.x + n.w, n.transform.y + n.h));
             let r = Rect::new(p0.x, p0.y, p1.x, p1.y);
@@ -3339,6 +3396,38 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
             }
         }
     }
+    // Vector-editing affordances: with the Pen tool active, the selected
+    // vector node shows its anchors and bezier control handles. Both come
+    // from the engine's WORLD-space layer, so they sit on the shape even
+    // when the node is rotated or scaled — path data is local, the canvas
+    // is not, and drawing one in the other's coordinates is the bug.
+    if app.tool == Tool::Pen && sel.len() == 1 {
+        if let Some(n) = find_node(&doc.editor_ref().root, &sel[0]) {
+            let anchors = x_native::editor::anchors_world(n);
+            let handles = x_native::editor::handles_world(n);
+            // tangent lines first so the points draw on top of them
+            for (idx, _outgoing, (hx, hy)) in &handles {
+                if let Some(a) = anchors.iter().find(|a| a.index == *idx) {
+                    let p0 = app.world_to_screen(Point::new(a.x, a.y));
+                    let p1 = app.world_to_screen(Point::new(*hx, *hy));
+                    line(s, p0.x, p0.y, p1.x, p1.y, C_SEL, 1.0);
+                }
+            }
+            for (_idx, _outgoing, (hx, hy)) in &handles {
+                let p = app.world_to_screen(Point::new(*hx, *hy));
+                let r = Rect::new(p.x - 3.0, p.y - 3.0, p.x + 3.0, p.y + 3.0);
+                fill_rrect(s, r, 3.0, C_TEXT);
+                stroke_rrect(s, r, 3.0, C_SEL, 1.0);
+            }
+            for a in &anchors {
+                let p = app.world_to_screen(Point::new(a.x, a.y));
+                let r = Rect::new(p.x - 3.5, p.y - 3.5, p.x + 3.5, p.y + 3.5);
+                fill_rrect(s, r, 1.0, C_TEXT);
+                stroke_rrect(s, r, 1.0, C_SEL, 1.0);
+            }
+        }
+    }
+
     // multi-select: one COMBINED bounding box with corner-only handles
     // (Figma convention) around all selected layers
     if sel.len() > 1 {
