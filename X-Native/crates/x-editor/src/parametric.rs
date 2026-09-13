@@ -52,7 +52,10 @@ pub struct ParametricReport {
 
 /// The variable name bound to `prop` on this node, if any.
 pub fn bound_var<'a>(n: &'a Node, prop: &str) -> Option<&'a str> {
-    n.bindings.get(prop).map(String::as_str).filter(|s| !s.is_empty())
+    n.bindings
+        .get(prop)
+        .map(String::as_str)
+        .filter(|s| !s.is_empty())
 }
 
 /// Clamp corner radii to what the box can actually show. A 40px radius on a
@@ -235,7 +238,9 @@ mod tests {
         let mut ed = Editor::new(Node::frame("page", 800.0, 600.0).child(card));
         let mut vars = vars_with(&[("card-w", 100.0)]);
 
-        let report = ed.resize_parametric("card", 240.0, 50.0, &mut vars).unwrap();
+        let report = ed
+            .resize_parametric("card", 240.0, 50.0, &mut vars)
+            .unwrap();
         assert_eq!(report.vars_updated, vec![("card-w".to_string(), 240.0)]);
         assert_eq!(vars.number("card-w", -1.0), 240.0);
         assert_eq!(report.size, Some((240.0, 50.0)));
@@ -296,7 +301,8 @@ mod tests {
 
         let mut ed = Editor::new(page);
         let mut vars = Variables::default();
-        ed.resize_parametric("frame", 300.0, 100.0, &mut vars).unwrap();
+        ed.resize_parametric("frame", 300.0, 100.0, &mut vars)
+            .unwrap();
 
         let r = find(&ed.root, "right").unwrap();
         assert_eq!(r.transform.x, 250.0, "right-pinned child follows +100");
@@ -336,7 +342,11 @@ mod tests {
 
         ed.undo();
         assert_eq!(find(&ed.root, "a").unwrap().w, 100.0);
-        assert_eq!(find(&ed.root, "b").unwrap().w, 100.0, "the family rolls back too");
+        assert_eq!(
+            find(&ed.root, "b").unwrap().w,
+            100.0,
+            "the family rolls back too"
+        );
         // the variable table is not part of the document undo — say so loudly
         assert_eq!(vars.number("card-w", -1.0), 260.0);
     }
@@ -355,19 +365,32 @@ mod tests {
 
         let mut ed = Editor::new(page);
         let mut vars = Variables::default();
-        let report = ed.resize_parametric("hug", 320.0, 180.0, &mut vars).unwrap();
+        let report = ed
+            .resize_parametric("hug", 320.0, 180.0, &mut vars)
+            .unwrap();
         assert_eq!(report.size, Some((320.0, 180.0)));
         let n = find(&ed.root, "hug").unwrap();
-        assert_eq!((n.w, n.h), (320.0, 180.0), "a Hug frame keeps the authored size");
+        assert_eq!(
+            (n.w, n.h),
+            (320.0, 180.0),
+            "a Hug frame keeps the authored size"
+        );
     }
 
     #[test]
     fn unknown_ids_and_tiny_sizes_are_handled() {
-        let mut ed = Editor::new(
-            Node::frame("page", 800.0, 600.0).child(Node::rect("r", 0.0, 0.0, 50.0, 50.0, Color::BLACK)),
-        );
+        let mut ed = Editor::new(Node::frame("page", 800.0, 600.0).child(Node::rect(
+            "r",
+            0.0,
+            0.0,
+            50.0,
+            50.0,
+            Color::BLACK,
+        )));
         let mut vars = Variables::default();
-        assert!(ed.resize_parametric("nope", 10.0, 10.0, &mut vars).is_none());
+        assert!(ed
+            .resize_parametric("nope", 10.0, 10.0, &mut vars)
+            .is_none());
         let report = ed.resize_parametric("r", 0.0, -5.0, &mut vars).unwrap();
         assert_eq!(report.size, Some((1.0, 1.0)), "clamped to the 1px floor");
     }

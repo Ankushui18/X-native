@@ -1793,7 +1793,14 @@ fn paint_design(
     sq_btn(app, s, hit, aspect_lock.x0, aspect_lock.y0, "lock", false);
     if app.aspect_ratio_locked {
         fill_rrect(s, aspect_lock, 8.0, C_FIELD_2);
-        draw_icon(s, "lock", aspect_lock.x0 + 7.0, aspect_lock.y0 + 7.0, 14.0, C_TEXT);
+        draw_icon(
+            s,
+            "lock",
+            aspect_lock.x0 + 7.0,
+            aspect_lock.y0 + 7.0,
+            14.0,
+            C_TEXT,
+        );
     }
     hit.push((aspect_lock, Action::ToggleAspectRatio));
 
@@ -2010,14 +2017,7 @@ fn paint_design(
     hit.push((g1, Action::Field(FieldId::Gap)));
     let g2 = Rect::new(gx, y0 + 410.0, gx + 219.0, y0 + 442.0);
     input_box(app, s, g2, 8.0);
-    draw_icon(
-        s,
-        "arrow-up-down",
-        g2.x0 + 8.0,
-        g2.y0 + 10.0,
-        12.0,
-        C_DIM,
-    );
+    draw_icon(s, "arrow-up-down", g2.x0 + 8.0, g2.y0 + 10.0, 12.0, C_DIM);
     // The second gap axis was previously a decorative empty field. Both
     // axes use the engine's single Auto Layout gap value until independent
     // row/column gaps are supported.
@@ -3007,7 +3007,10 @@ fn paint_layer_visible(app: &App, is_fill: bool) -> bool {
         if is_fill {
             node.fill_layers.first().map(|l| l.visible).unwrap_or(true)
         } else {
-            node.stroke_layers.first().map(|l| l.visible).unwrap_or(true)
+            node.stroke_layers
+                .first()
+                .map(|l| l.visible)
+                .unwrap_or(true)
         }
     } else if is_fill {
         true
@@ -3571,9 +3574,10 @@ pub(crate) fn color_picker_rect(app: &App) -> Option<Rect> {
     } else {
         (anchor.x1 + 8.0).min((app.win_w - w - 8.0).max(8.0))
     };
-    let y = anchor
-        .y0
-        .clamp(ED_TITLE_H + 4.0, (app.win_h - h - 8.0).max(ED_TITLE_H + 4.0));
+    let y = anchor.y0.clamp(
+        ED_TITLE_H + 4.0,
+        (app.win_h - h - 8.0).max(ED_TITLE_H + 4.0),
+    );
     Some(Rect::new(x, y, x + w, y + h))
 }
 
@@ -3598,19 +3602,33 @@ fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         s,
         panel.x0 + 14.0,
         panel.y0 + 14.0,
-        if is_fill { "Fill color" } else { "Stroke color" },
+        if is_fill {
+            "Fill color"
+        } else {
+            "Stroke color"
+        },
         T11,
         C_TEXT,
         Wt::Med,
     );
-    let close = Rect::new(panel.x1 - 30.0, panel.y0 + 7.0, panel.x1 - 7.0, panel.y0 + 29.0);
+    let close = Rect::new(
+        panel.x1 - 30.0,
+        panel.y0 + 7.0,
+        panel.x1 - 7.0,
+        panel.y0 + 29.0,
+    );
     if hover(app, close) {
         fill_rrect(s, close, 5.0, C_FIELD_2);
     }
     draw_icon(s, "x", close.x0 + 5.0, close.y0 + 5.0, 13.0, C_DIM);
     hit.push((close, Action::CloseColorPicker));
 
-    let preview = Rect::new(panel.x0 + 14.0, panel.y0 + 38.0, panel.x1 - 14.0, panel.y0 + 72.0);
+    let preview = Rect::new(
+        panel.x0 + 14.0,
+        panel.y0 + 38.0,
+        panel.x1 - 14.0,
+        panel.y0 + 72.0,
+    );
     fill_rrect(s, preview, 6.0, current.clone());
     stroke_rrect(s, preview, 6.0, C_LINE_2, 1.0);
     app.fonts.text(
@@ -3633,8 +3651,8 @@ fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
     );
 
     const PRESETS: [&str; 16] = [
-        "FFFFFF", "F2F3F7", "D9DCE5", "9A9EAA", "6B6E7A", "343842", "1B1D23", "000000",
-        "FF3B30", "FF9500", "FFCC00", "34C759", "00A3FF", "5856D6", "AF52DE", "FF2D55",
+        "FFFFFF", "F2F3F7", "D9DCE5", "9A9EAA", "6B6E7A", "343842", "1B1D23", "000000", "FF3B30",
+        "FF9500", "FFCC00", "34C759", "00A3FF", "5856D6", "AF52DE", "FF2D55",
     ];
     let size = 26.0;
     let gap = 7.0;

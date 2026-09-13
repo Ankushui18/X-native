@@ -153,12 +153,8 @@ pub fn overlap(a: &Node, b: &Node) -> Option<OverlapReport> {
 /// both cases into one — the refusal is only actionable if it says WHICH
 /// layer the Shape Builder could not use.
 fn overlap_named(a: &Node, b: &Node) -> Result<OverlapReport, ShapeBuilderIssue> {
-    let pa = node_to_path(a).ok_or(ShapeBuilderIssue::UnsupportedNode {
-        id: a.id.clone(),
-    })?;
-    let pb = node_to_path(b).ok_or(ShapeBuilderIssue::UnsupportedNode {
-        id: b.id.clone(),
-    })?;
+    let pa = node_to_path(a).ok_or(ShapeBuilderIssue::UnsupportedNode { id: a.id.clone() })?;
+    let pb = node_to_path(b).ok_or(ShapeBuilderIssue::UnsupportedNode { id: b.id.clone() })?;
     Ok(measure_pair(a, &pa, b, &pb))
 }
 
@@ -325,7 +321,8 @@ mod tests {
     fn subtract_that_would_leave_nothing_is_refused() {
         let small = rect("small", 40.0, 40.0, 20.0, 20.0);
         let big = rect("big", 0.0, 0.0, 200.0, 200.0);
-        let err = validate(ShapeBuilderOp::Subtract, &small, &big, DEFAULT_MIN_OVERLAP).unwrap_err();
+        let err =
+            validate(ShapeBuilderOp::Subtract, &small, &big, DEFAULT_MIN_OVERLAP).unwrap_err();
         match err {
             ShapeBuilderIssue::FullyNested { id, ratio } => {
                 assert_eq!(id, "small");

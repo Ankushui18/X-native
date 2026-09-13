@@ -507,7 +507,7 @@ fn encode(
             if rounded {
                 frame_clip_shape = Some(shape);
             }
-            
+
             // QA-004 FIX: Render frame name label (same as Section nodes)
             // This ensures frame names appear on the canvas like in Figma
             let name = if node.name.is_empty() {

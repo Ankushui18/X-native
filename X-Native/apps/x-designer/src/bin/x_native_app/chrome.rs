@@ -262,22 +262,26 @@ impl XNativeApp {
 
     fn on_click(&mut self) {
         let (x, y) = self.mouse;
-        
+
         // Check if clicking inside color picker popups - if so, don't close
         if self.fill_color_popup || self.stroke_color_popup {
             let popup_x = self.popup_position.0;
             let popup_y = self.popup_position.1;
             let popup_w = 200.0;
             let popup_h = 250.0;
-            
+
             // If click is outside both popups and not on Fill/Stroke fields, close them
-            let in_fill_popup = self.fill_color_popup 
-                && x >= popup_x && x <= popup_x + popup_w 
-                && y >= popup_y && y <= popup_y + popup_h;
-            let in_stroke_popup = self.stroke_color_popup 
-                && x >= popup_x && x <= popup_x + popup_w 
-                && y >= popup_y && y <= popup_y + popup_h;
-            
+            let in_fill_popup = self.fill_color_popup
+                && x >= popup_x
+                && x <= popup_x + popup_w
+                && y >= popup_y
+                && y <= popup_y + popup_h;
+            let in_stroke_popup = self.stroke_color_popup
+                && x >= popup_x
+                && x <= popup_x + popup_w
+                && y >= popup_y
+                && y <= popup_y + popup_h;
+
             if !in_fill_popup && !in_stroke_popup {
                 // Check if clicking on the Fill or Stroke field to keep popup open
                 let right_x = self.config.width as f64 - self.right_w();
@@ -285,12 +289,16 @@ impl XNativeApp {
                 let stroke_field_y = self.top_h() + 428.0;
                 let field_height = 28.0;
                 let field_width = self.right_w() - 114.0;
-                
-                let clicked_fill = x >= right_x + 98.0 && x <= right_x + 98.0 + field_width
-                    && y >= fill_field_y - 6.0 && y <= fill_field_y - 6.0 + field_height;
-                let clicked_stroke = x >= right_x + 98.0 && x <= right_x + 98.0 + field_width
-                    && y >= stroke_field_y - 6.0 && y <= stroke_field_y - 6.0 + field_height;
-                
+
+                let clicked_fill = x >= right_x + 98.0
+                    && x <= right_x + 98.0 + field_width
+                    && y >= fill_field_y - 6.0
+                    && y <= fill_field_y - 6.0 + field_height;
+                let clicked_stroke = x >= right_x + 98.0
+                    && x <= right_x + 98.0 + field_width
+                    && y >= stroke_field_y - 6.0
+                    && y <= stroke_field_y - 6.0 + field_height;
+
                 if !clicked_fill && !clicked_stroke {
                     self.fill_color_popup = false;
                     self.stroke_color_popup = false;
@@ -298,7 +306,7 @@ impl XNativeApp {
             }
             // Don't return early - allow normal click handling
         }
-        
+
         // Check for right panel tab clicks
         let right_x = self.config.width as f64 - self.right_w();
         let top = self.top_h();
@@ -308,16 +316,19 @@ impl XNativeApp {
             ("Code", 148.0, 35.0),
             ("Variables", 220.0, 58.0),
         ];
-        
+
         for (i, (_, offset, width)) in tabs.iter().enumerate() {
-            if x >= right_x + *offset && x <= right_x + *offset + *width
-                && y >= top && y <= top + 33.0 {
+            if x >= right_x + *offset
+                && x <= right_x + *offset + *width
+                && y >= top
+                && y <= top + 33.0
+            {
                 self.right_panel_tab = i;
                 self.window.request_redraw();
                 return;
             }
         }
-        
+
         if self.command_palette.open {
             self.command_palette.close();
             return;
@@ -410,7 +421,7 @@ impl XNativeApp {
                     return;
                 }
                 Key::Character(c) if c.eq_ignore_ascii_case("s") => {
-                    // Toggle stroke color popup  
+                    // Toggle stroke color popup
                     self.stroke_color_popup = !self.stroke_color_popup;
                     if self.stroke_color_popup {
                         // Position popup near the Stroke field in right panel
@@ -674,7 +685,7 @@ impl XNativeApp {
         let h = self.config.height as f64 - top - 24.0;
         self.rect(x, top, width, h, p.surface, 0.0);
         self.line(x + 0.5, top, x + 0.5, h + top, p.border, 1.0);
-        
+
         // Render tab headers with click handling
         let tabs = [
             ("Design", 16.0),
@@ -682,25 +693,32 @@ impl XNativeApp {
             ("Code", 148.0),
             ("Variables", 220.0),
         ];
-        
+
         for (i, (label, offset)) in tabs.iter().enumerate() {
             let is_active = i == self.right_panel_tab;
             let color = if is_active { p.text } else { p.faint };
             self.draw_text(label, x + *offset, top + 13.0, 11.5, color);
-            
+
             // Active underline
             if is_active {
                 let text_width = match *i {
-                    0 => 43.0,  // Design
-                    1 => 60.0,  // Prototype
-                    2 => 35.0,  // Code
-                    3 => 58.0,  // Variables
+                    0 => 43.0, // Design
+                    1 => 60.0, // Prototype
+                    2 => 35.0, // Code
+                    3 => 58.0, // Variables
                     _ => 40.0,
                 };
-                self.line(x + *offset - 2.0, top + 33.0, x + *offset - 2.0 + text_width, top + 33.0, p.accent, 2.0);
+                self.line(
+                    x + *offset - 2.0,
+                    top + 33.0,
+                    x + *offset - 2.0 + text_width,
+                    top + 33.0,
+                    p.accent,
+                    2.0,
+                );
             }
         }
-        
+
         // Render tab content based on active tab
         match self.right_panel_tab {
             0 => {
@@ -1153,11 +1171,17 @@ impl XNativeApp {
         self.round(x + 16.0, top + 110.0, width - 32.0, 60.0, p.surface2, 6.0);
         self.draw_text("No interactions yet", x + 28.0, top + 125.0, 10.5, p.text);
         self.draw_text("+ Add interaction", x + 28.0, top + 145.0, 10.0, p.muted);
-        
+
         self.section(x, top + 190.0, "FLOW STARTING POINTS", p);
         self.round(x + 16.0, top + 220.0, width - 32.0, 40.0, p.surface2, 6.0);
-        self.draw_text("Choose a frame to start from", x + 28.0, top + 235.0, 10.0, p.muted);
-        
+        self.draw_text(
+            "Choose a frame to start from",
+            x + 28.0,
+            top + 235.0,
+            10.0,
+            p.muted,
+        );
+
         self.section(x, top + 280.0, "OVERLAY SETTINGS", p);
         self.round(x + 16.0, top + 310.0, width - 32.0, 34.0, p.surface2, 6.0);
         self.draw_text("Background overlay", x + 28.0, top + 320.0, 10.0, p.text);
@@ -1170,59 +1194,110 @@ impl XNativeApp {
         self.round(x + 16.0, top + 110.0, width - 32.0, 34.0, p.field, 6.0);
         self.draw_text("React + Tailwind", x + 28.0, top + 120.0, 10.5, p.text);
         self.draw_text("▼", x + width - 40.0, top + 118.0, 14.0, p.muted);
-        
+
         self.section(x, top + 165.0, "PREVIEW", p);
         self.round(x + 16.0, top + 195.0, width - 32.0, 200.0, p.surface2, 6.0);
-        self.draw_text("<div className=\"flex gap-4 p-4\">", x + 28.0, top + 210.0, 9.0, p.muted);
-        self.draw_text("  <Card width={320} height={180} />", x + 28.0, top + 228.0, 9.0, p.text);
+        self.draw_text(
+            "<div className=\"flex gap-4 p-4\">",
+            x + 28.0,
+            top + 210.0,
+            9.0,
+            p.muted,
+        );
+        self.draw_text(
+            "  <Card width={320} height={180} />",
+            x + 28.0,
+            top + 228.0,
+            9.0,
+            p.text,
+        );
         self.draw_text("</div>", x + 28.0, top + 246.0, 9.0, p.muted);
         self.draw_text("...", x + 28.0, top + 264.0, 9.0, p.muted);
-        
-        self.round(x + 16.0, top + 420.0, width - 32.0, 34.0, p.accent_soft, 6.0);
+
+        self.round(
+            x + 16.0,
+            top + 420.0,
+            width - 32.0,
+            34.0,
+            p.accent_soft,
+            6.0,
+        );
         self.draw_text("Copy to clipboard", x + 28.0, top + 430.0, 10.5, p.accent);
     }
 
     // Variables tab content (design tokens)
     fn variables_tab(&mut self, x: f64, top: f64, width: f64, p: Palette) {
         self.section(x, top + 80.0, "COLOR TOKENS", p);
-        
+
         // Add some default variables if empty
         if self.variables.is_empty() {
-            self.variables.insert("color-primary".to_string(), "#6750A4".to_string());
-            self.variables.insert("color-secondary".to_string(), "#03DAC6".to_string());
-            self.variables.insert("color-background".to_string(), "#12151C".to_string());
-            self.variables.insert("color-surface".to_string(), "#1E2329".to_string());
-            self.variables.insert("color-text".to_string(), "#FFFFFF".to_string());
-            self.variables.insert("spacing-4".to_string(), "16px".to_string());
-            self.variables.insert("spacing-8".to_string(), "32px".to_string());
-            self.variables.insert("radius-sm".to_string(), "4px".to_string());
-            self.variables.insert("radius-md".to_string(), "8px".to_string());
-            self.variables.insert("radius-lg".to_string(), "16px".to_string());
+            self.variables
+                .insert("color-primary".to_string(), "#6750A4".to_string());
+            self.variables
+                .insert("color-secondary".to_string(), "#03DAC6".to_string());
+            self.variables
+                .insert("color-background".to_string(), "#12151C".to_string());
+            self.variables
+                .insert("color-surface".to_string(), "#1E2329".to_string());
+            self.variables
+                .insert("color-text".to_string(), "#FFFFFF".to_string());
+            self.variables
+                .insert("spacing-4".to_string(), "16px".to_string());
+            self.variables
+                .insert("spacing-8".to_string(), "32px".to_string());
+            self.variables
+                .insert("radius-sm".to_string(), "4px".to_string());
+            self.variables
+                .insert("radius-md".to_string(), "8px".to_string());
+            self.variables
+                .insert("radius-lg".to_string(), "16px".to_string());
         }
-        
+
         let mut y = top + 110.0;
         for (i, (name, value)) in self.variables.iter().enumerate() {
-            if i >= 12 { break; } // Limit display
+            if i >= 12 {
+                break;
+            } // Limit display
             self.variable_row(x, y, width, name, value, p);
             y += 34.0;
         }
-        
+
         // Add new variable button
         y += 10.0;
         self.round(x + 16.0, y, width - 32.0, 34.0, p.surface2, 6.0);
         self.draw_text("+ Add variable", x + 28.0, y + 10.0, 10.5, p.muted);
-        
+
         self.section(x, top + 500.0, "EXPORT", p);
-        self.round(x + 16.0, top + 530.0, (width - 32.0) / 2.0 - 8.0, 34.0, p.field, 6.0);
+        self.round(
+            x + 16.0,
+            top + 530.0,
+            (width - 32.0) / 2.0 - 8.0,
+            34.0,
+            p.field,
+            6.0,
+        );
         self.draw_text("JSON", x + 28.0, top + 540.0, 10.0, p.text);
-        self.round(x + 16.0 + (width - 32.0) / 2.0 + 8.0, top + 530.0, (width - 32.0) / 2.0 - 8.0, 34.0, p.field, 6.0);
-        self.draw_text("CSS", x + 28.0 + (width - 32.0) / 2.0 + 8.0, top + 540.0, 10.0, p.text);
+        self.round(
+            x + 16.0 + (width - 32.0) / 2.0 + 8.0,
+            top + 530.0,
+            (width - 32.0) / 2.0 - 8.0,
+            34.0,
+            p.field,
+            6.0,
+        );
+        self.draw_text(
+            "CSS",
+            x + 28.0 + (width - 32.0) / 2.0 + 8.0,
+            top + 540.0,
+            10.0,
+            p.text,
+        );
     }
 
     fn variable_row(&mut self, x: f64, y: f64, width: f64, name: &str, value: &str, p: Palette) {
         // Variable name
         self.draw_text(name, x + 16.0, y + 2.0, 10.0, p.text);
-        
+
         // Variable value with color preview if it's a color
         let is_color = value.starts_with('#');
         if is_color {
@@ -1390,17 +1465,24 @@ impl XNativeApp {
 
     fn render_color_picker_popup(&mut self, p: Palette) {
         use vello::peniko::Color as VelloColor;
-        
+
         let popup_x = self.popup_position.0;
         let popup_y = self.popup_position.1;
         let popup_w = 200.0;
         let popup_h = 250.0;
-        
+
         // Draw popup background with shadow
-        self.round(popup_x - 2.0, popup_y + 2.0, popup_w, popup_h, Color::from_rgba8(0, 0, 0, 40), 8.0);
+        self.round(
+            popup_x - 2.0,
+            popup_y + 2.0,
+            popup_w,
+            popup_h,
+            Color::from_rgba8(0, 0, 0, 40),
+            8.0,
+        );
         self.round(popup_x, popup_y, popup_w, popup_h, p.surface, 8.0);
         self.line(popup_x, popup_y, popup_x + popup_w, popup_y, p.border, 1.0);
-        
+
         // Popup title
         let title = if self.fill_color_popup && !self.stroke_color_popup {
             "Fill Color"
@@ -1410,23 +1492,30 @@ impl XNativeApp {
             "Color Picker"
         };
         self.draw_text(title, popup_x + 16.0, popup_y + 14.0, 11.0, p.text);
-        
+
         // Close button (X)
         self.draw_text("×", popup_x + popup_w - 24.0, popup_y + 12.0, 16.0, p.muted);
-        
+
         // Color preview swatch
         let swatch_size = 40.0;
         let swatch_x = popup_x + 16.0;
         let swatch_y = popup_y + 36.0;
-        self.round(swatch_x, swatch_y, swatch_size, swatch_size, VelloColor::from_rgba8(255, 255, 255, 255), 6.0);
+        self.round(
+            swatch_x,
+            swatch_y,
+            swatch_size,
+            swatch_size,
+            VelloColor::from_rgba8(255, 255, 255, 255),
+            6.0,
+        );
         self.round(swatch_x, swatch_y, swatch_size, swatch_size, p.border, 6.0);
-        
+
         // Hue gradient bar (simplified - just a colored rectangle for now)
         let hue_bar_x = popup_x + 16.0;
         let hue_bar_y = popup_y + 90.0;
         let hue_bar_w = popup_w - 32.0;
         let hue_bar_h = 16.0;
-        
+
         // Draw hue spectrum as multiple colored segments
         let colors = [
             VelloColor::from_rgba8(255, 0, 0, 255),   // Red
@@ -1437,7 +1526,7 @@ impl XNativeApp {
             VelloColor::from_rgba8(255, 0, 255, 255), // Magenta
             VelloColor::from_rgba8(255, 0, 0, 255),   // Back to Red
         ];
-        
+
         let segment_w = hue_bar_w / 6.0;
         for i in 0..6 {
             let seg_x = hue_bar_x + (i as f64 * segment_w);
@@ -1447,40 +1536,112 @@ impl XNativeApp {
             path.line_to((seg_x + segment_w, hue_bar_y + hue_bar_h));
             path.line_to((seg_x, hue_bar_y + hue_bar_h));
             path.close_path();
-            self.scene.fill(vello::peniko::Fill::NonZero, Affine::IDENTITY, colors[i], None, &path);
+            self.scene.fill(
+                vello::peniko::Fill::NonZero,
+                Affine::IDENTITY,
+                colors[i],
+                None,
+                &path,
+            );
         }
-        
+
         // Saturation/brightness area
         let sb_area_x = popup_x + 16.0;
         let sb_area_y = popup_y + 116.0;
         let sb_area_w = popup_w - 32.0;
         let sb_area_h = 80.0;
-        self.round(sb_area_x, sb_area_y, sb_area_w, sb_area_h, VelloColor::from_rgba8(255, 255, 255, 255), 6.0);
+        self.round(
+            sb_area_x,
+            sb_area_y,
+            sb_area_w,
+            sb_area_h,
+            VelloColor::from_rgba8(255, 255, 255, 255),
+            6.0,
+        );
         // Gradient overlay (white to transparent on top, black to transparent on bottom)
-        self.round(sb_area_x, sb_area_y, sb_area_w, sb_area_h, Color::from_rgba8(0, 0, 0, 0), 6.0);
-        
+        self.round(
+            sb_area_x,
+            sb_area_y,
+            sb_area_w,
+            sb_area_h,
+            Color::from_rgba8(0, 0, 0, 0),
+            6.0,
+        );
+
         // RGB input fields
         let field_y = popup_y + 206.0;
         let field_h = 24.0;
         let field_w = (popup_w - 48.0) / 3.0;
-        
+
         self.draw_text("R", popup_x + 16.0, field_y + 2.0, 9.0, p.muted);
-        self.round(popup_x + 30.0, field_y - 4.0, field_w, field_h, p.field, 4.0);
+        self.round(
+            popup_x + 30.0,
+            field_y - 4.0,
+            field_w,
+            field_h,
+            p.field,
+            4.0,
+        );
         self.draw_text("255", popup_x + 38.0, field_y + 2.0, 10.0, p.text);
-        
-        self.draw_text("G", popup_x + 30.0 + field_w + 8.0, field_y + 2.0, 9.0, p.muted);
-        self.round(popup_x + 44.0 + field_w, field_y - 4.0, field_w, field_h, p.field, 4.0);
+
+        self.draw_text(
+            "G",
+            popup_x + 30.0 + field_w + 8.0,
+            field_y + 2.0,
+            9.0,
+            p.muted,
+        );
+        self.round(
+            popup_x + 44.0 + field_w,
+            field_y - 4.0,
+            field_w,
+            field_h,
+            p.field,
+            4.0,
+        );
         self.draw_text("255", popup_x + 52.0 + field_w, field_y + 2.0, 10.0, p.text);
-        
-        self.draw_text("B", popup_x + 58.0 + field_w * 2.0 + 8.0, field_y + 2.0, 9.0, p.muted);
-        self.round(popup_x + 72.0 + field_w * 2.0, field_y - 4.0, field_w, field_h, p.field, 4.0);
-        self.draw_text("255", popup_x + 80.0 + field_w * 2.0, field_y + 2.0, 10.0, p.text);
-        
+
+        self.draw_text(
+            "B",
+            popup_x + 58.0 + field_w * 2.0 + 8.0,
+            field_y + 2.0,
+            9.0,
+            p.muted,
+        );
+        self.round(
+            popup_x + 72.0 + field_w * 2.0,
+            field_y - 4.0,
+            field_w,
+            field_h,
+            p.field,
+            4.0,
+        );
+        self.draw_text(
+            "255",
+            popup_x + 80.0 + field_w * 2.0,
+            field_y + 2.0,
+            10.0,
+            p.text,
+        );
+
         // Opacity slider
         let opacity_y = popup_y + 238.0;
         self.draw_text("Opacity", popup_x + 16.0, opacity_y + 2.0, 9.0, p.muted);
-        self.round(popup_x + 60.0, opacity_y - 4.0, popup_w - 92.0, field_h, p.field, 4.0);
-        self.draw_text("100%", popup_x + popup_w - 44.0, opacity_y + 2.0, 10.0, p.text);
+        self.round(
+            popup_x + 60.0,
+            opacity_y - 4.0,
+            popup_w - 92.0,
+            field_h,
+            p.field,
+            4.0,
+        );
+        self.draw_text(
+            "100%",
+            popup_x + popup_w - 44.0,
+            opacity_y + 2.0,
+            10.0,
+            p.text,
+        );
     }
 
     fn search_icon(&mut self, x: f64, y: f64, c: Color) {

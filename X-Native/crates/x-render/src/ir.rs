@@ -2114,15 +2114,13 @@ mod tests {
         let mut inst = Node::instance("i2", "Chip2", 200.0, 0.0, 40.0, 20.0);
         inst.overrides
             .insert("chip-bg".into(), "stroke:#00ff00".into());
-        let doc = Node::frame("page", 400.0, 300.0)
-            .child(master)
-            .child(inst);
+        let doc = Node::frame("page", 400.0, 300.0).child(master).child(inst);
         let tree = build_render_tree(&doc, &x_core::Variables::default());
 
         let stroke = tree.commands.iter().find_map(|c| match c {
-            RenderCommand::StrokePath { key, brush, width, .. } if key.contains("chip-bg") => {
-                Some((brush.clone(), *width))
-            }
+            RenderCommand::StrokePath {
+                key, brush, width, ..
+            } if key.contains("chip-bg") => Some((brush.clone(), *width)),
             _ => None,
         });
         let (brush, width) = stroke.expect("the stroke override must paint a stroke");

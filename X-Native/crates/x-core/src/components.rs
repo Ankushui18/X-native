@@ -115,7 +115,8 @@ pub fn apply_stroke_paint(node: &mut Node, color: Color) {
     }
     if node.visual_stacks_materialized {
         if node.stroke_layers.is_empty() {
-            node.stroke_layers.push(StrokeLayer::new(node.stroke.clone()));
+            node.stroke_layers
+                .push(StrokeLayer::new(node.stroke.clone()));
         } else {
             for l in &mut node.stroke_layers {
                 if l.visible {
@@ -772,7 +773,10 @@ mod tests {
         assert_eq!(enc, "stroke:#00ff00", "color_to_hex emits lowercase hex");
         assert_eq!(OverrideValue::decode(&enc), Some(OverrideValue::Stroke(c)));
         // the bare-hex serialization surface still means Fill
-        assert_eq!(OverrideValue::decode("#00ff00"), Some(OverrideValue::Fill(c)));
+        assert_eq!(
+            OverrideValue::decode("#00ff00"),
+            Some(OverrideValue::Fill(c))
+        );
         // a bad payload after the prefix is rejected, never silently a Fill
         assert_eq!(OverrideValue::decode("stroke:nope"), None);
     }
@@ -799,7 +803,10 @@ mod tests {
         let c = Color::from_rgb8(0, 0xff, 0);
         let mut n = Node::rect("r", 0.0, 0.0, 10.0, 10.0, Color::WHITE);
         n.materialize_visual_stacks();
-        assert!(n.active_strokes().is_empty(), "width 0 materializes no layer");
+        assert!(
+            n.active_strokes().is_empty(),
+            "width 0 materializes no layer"
+        );
         apply_stroke_paint(&mut n, c);
         let strokes = n.active_strokes();
         assert_eq!(strokes.len(), 1, "the override adds a paintable layer");

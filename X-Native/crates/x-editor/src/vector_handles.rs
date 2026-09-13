@@ -18,9 +18,9 @@
 //! local space before handing the drag to the existing (already undoable)
 //! `vector_edit` operations. No path math is duplicated here.
 
+use crate::transformed_resize::{linear, local_point, local_to_world};
 #[allow(unused_imports)]
 use crate::*;
-use crate::transformed_resize::{linear, local_point, local_to_world};
 use crate::{anchors, find, Anchor, Editor};
 use x_core::{Node, NodeKind, PathCmd};
 
@@ -239,7 +239,11 @@ mod tests {
         assert!((list[1].x - 50.0).abs() < 1e-9 && (list[1].y - 50.0).abs() < 1e-9);
         assert!((list[0].x - 100.0).abs() < 1e-9 && (list[0].y - 0.0).abs() < 1e-9);
         assert_eq!(anchor_at_world(&n, 100.0, 0.0, 2.0), Some(0));
-        assert_eq!(anchor_at_world(&n, 0.0, 0.0, 2.0), None, "old spot is empty");
+        assert_eq!(
+            anchor_at_world(&n, 0.0, 0.0, 2.0),
+            None,
+            "old spot is empty"
+        );
     }
 
     #[test]
@@ -256,7 +260,13 @@ mod tests {
         assert!(handles.contains(&(2, false, (100.0, 20.0))));
         // and they hit-test where they are drawn
         let hit = handle_at_world(&n, 70.0, 70.0, 2.0).unwrap();
-        assert_eq!(hit, HandleHit { anchor: 1, outgoing: true });
+        assert_eq!(
+            hit,
+            HandleHit {
+                anchor: 1,
+                outgoing: true
+            }
+        );
         assert_eq!(
             handle_at_world(&n, 500.0, 500.0, 2.0),
             None,

@@ -1349,8 +1349,14 @@ mod tests {
     #[test]
     fn stroke_bound_color_property_repaints_only_the_stroke() {
         use x_core::ComponentProp;
-        let master = Node::component("comp-Btn", "Btn", 200.0, 50.0)
-            .child(Node::rect("body", 0.0, 0.0, 200.0, 50.0, Color::WHITE));
+        let master = Node::component("comp-Btn", "Btn", 200.0, 50.0).child(Node::rect(
+            "body",
+            0.0,
+            0.0,
+            200.0,
+            50.0,
+            Color::WHITE,
+        ));
         let page = Node::frame("page", 800.0, 600.0)
             .child(master)
             .child(Node::instance("Btn-1", "Btn", 10.0, 10.0, 200.0, 50.0));

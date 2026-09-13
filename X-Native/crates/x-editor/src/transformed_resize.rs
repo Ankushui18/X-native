@@ -126,11 +126,7 @@ pub fn world_corners(n: &Node) -> [(f64, f64); 4] {
 pub fn local_point(n: &Node, wx: f64, wy: f64) -> (f64, f64) {
     let t = n.transform;
     let (px, py) = (t.origin_x * n.w, t.origin_y * n.h);
-    let (dx, dy) = apply(
-        linear(n).inverse(),
-        wx - (t.x + px),
-        wy - (t.y + py),
-    );
+    let (dx, dy) = apply(linear(n).inverse(), wx - (t.x + px), wy - (t.y + py));
     (dx + px, dy + py)
 }
 
@@ -278,8 +274,8 @@ mod tests {
     fn rotated_drag_keeps_the_opposite_corner_pinned() {
         let mut n = rect(100.0, 50.0, 80.0, 40.0);
         n.transform.rotation = std::f64::consts::FRAC_PI_4; // 45°
-        // aim beyond the dragged corner along BOTH local axes, so the drag is
-        // a valid outward resize whatever the rotation happens to be
+                                                            // aim beyond the dragged corner along BOTH local axes, so the drag is
+                                                            // a valid outward resize whatever the rotation happens to be
         let (tx, ty) = world_point(&n, 1.5, 1.5);
         // a plain resize would leave x/y alone; the transformed plan must not
         let p = plan_resize(&n, Corner::BottomRight, tx, ty, false, 1.0).unwrap();
@@ -308,15 +304,7 @@ mod tests {
         let mut n = rect(200.0, 200.0, 100.0, 40.0);
         n.transform.rotation = std::f64::consts::FRAC_PI_2;
         let start = world_point(&n, 1.0, 1.0);
-        let p = plan_resize(
-            &n,
-            Corner::BottomRight,
-            start.0,
-            start.1 + 30.0,
-            false,
-            1.0,
-        )
-        .unwrap();
+        let p = plan_resize(&n, Corner::BottomRight, start.0, start.1 + 30.0, false, 1.0).unwrap();
         assert!((p.w - 130.0).abs() < 1e-9, "w = {}", p.w);
         assert!((p.h - 40.0).abs() < 1e-9, "h = {}", p.h);
         assert_anchor_pinned(&n, Corner::BottomRight, &p);
@@ -403,7 +391,11 @@ mod tests {
         let mut ed = Editor::new(Node::frame("page", 800.0, 600.0).child(n.clone()));
         let depth_before = ed.undo_depth();
         assert!(ed.resize_transformed("r", Corner::BottomRight, tx, ty, false, 1.0));
-        assert_eq!(ed.undo_depth(), depth_before + 1, "one drag = one undo step");
+        assert_eq!(
+            ed.undo_depth(),
+            depth_before + 1,
+            "one drag = one undo step"
+        );
         let after = find(&ed.root, "r").unwrap().clone();
         assert!((after.w - 120.0).abs() < 1e-9 && (after.h - 60.0).abs() < 1e-9);
         assert!(
@@ -420,7 +412,8 @@ mod tests {
 
     #[test]
     fn missing_node_and_degenerate_geometry_return_false() {
-        let mut ed = Editor::new(Node::frame("page", 800.0, 600.0).child(rect(0.0, 0.0, 10.0, 10.0)));
+        let mut ed =
+            Editor::new(Node::frame("page", 800.0, 600.0).child(rect(0.0, 0.0, 10.0, 10.0)));
         assert!(!ed.resize_transformed("nope", Corner::TopLeft, 1.0, 1.0, false, 1.0));
         // drag past the anchor -> refused, and nothing was pushed
         let depth = ed.undo_depth();

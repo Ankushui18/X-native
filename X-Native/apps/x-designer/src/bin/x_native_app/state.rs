@@ -2176,7 +2176,7 @@ impl App {
         if idx >= self.docs.len() {
             return;
         }
-        
+
         // QA-002 FIX: Add warning and user feedback when trying to close dirty docs
         // This should only be called after user confirms save/discard via request_close_doc()
         if self.docs[idx].dirty {
@@ -2195,7 +2195,7 @@ impl App {
             }
             return;
         }
-        
+
         let removed = self.docs.remove(idx);
         let _ = std::fs::remove_file(&removed.recovery_path);
         if let Some(path) = removed.path.as_ref() {
