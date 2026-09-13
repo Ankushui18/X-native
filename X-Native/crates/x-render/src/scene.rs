@@ -501,6 +501,38 @@ fn encode(
             if rounded {
                 frame_clip_shape = Some(shape);
             }
+            
+            // QA-004 FIX: Render frame name label (same as Section nodes)
+            // This ensures frame names appear on the canvas like in Figma
+            let name = if node.name.is_empty() {
+                "Frame"
+            } else {
+                node.name.as_str()
+            };
+            let label_color =
+                Color::from_rgba8(0x4b, 0x55, 0x63, 0xff).multiply_alpha(node.opacity.min(0.7));
+            let t = world * Affine::translate((14.0, 20.0));
+            let drew = if let Some(fm) = ctx.fonts {
+                if let Some(font) = fm.default_font() {
+                    stats.paths += fm.encode_text_block(
+                        scene,
+                        name,
+                        t,
+                        font,
+                        14.0,
+                        Some((node.w - 20.0).max(8.0)),
+                        label_color,
+                    );
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            if !drew {
+                stats.paths += x_text::encode_text(scene, name, t, 16.0, label_color);
+            }
         }
         NodeKind::Section => {
             // Figma-style section: tinted rounded container, hairline

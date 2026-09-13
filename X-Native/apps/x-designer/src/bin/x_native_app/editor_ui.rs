@@ -2880,6 +2880,9 @@ fn paint_paint_row(
     if !is_fill {
         stroke_rrect(s, sw, 3.0, C_LINE_2, 1.0);
     }
+    // Add click handler for color swatch to open color picker popup
+    hit.push((sw, Action::ToggleColorPicker(is_fill)));
+    
     let shown = field_val(app, hex_field, hex.to_string());
     app.fonts
         .text(s, sw.x1 + 8.0, y + 8.0, &shown, T11, C_TEXT, Wt::Mono);
