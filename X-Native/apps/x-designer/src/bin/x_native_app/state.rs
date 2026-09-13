@@ -250,11 +250,15 @@ pub enum Action {
     Ctx(CtxCmd),
     /// pages-panel context menu (right-click on the page field)
     PageMenu(PageMenuCmd),
+    /// Add the selected frame's first auto-layout definition.
+    AddAutoLayout,
     /// auto-layout wrap toggle (selected frame's own layout)
     ToggleWrap,
     /// main/cross axis Hug<->Fixed (selected frame's own layout)
     ToggleMainSizing,
     ToggleCrossSizing,
+    /// Lock the W/H inspector fields to the current aspect ratio.
+    ToggleAspectRatio,
     /// selected CHILD of an auto-layout frame: Fill container vs Fixed
     SetChildFill(bool),
     /// selected CHILD of an auto-layout frame: absolute position toggle
@@ -333,12 +337,19 @@ pub enum Action {
     AddGuide,
     RemoveGuide,
     ToggleGuide(usize),
+    ToggleGuideVisibility,
     CycleExportFormat,
     CycleExportScale,
     PaletteToggle,
     PaletteRun(usize),
     ToggleVisible,
     ToggleLock,
+    /// Toggle visibility of the primary fill or stroke layer.
+    TogglePaintVisibility(bool),
+    /// Cycle the selected stroke between inside, center, and outside.
+    CycleStrokePosition,
+    /// Apply a color chosen from the native color popover.
+    PaintPreset(bool, String),
     Align(usize, usize),
     /// Color picker popup toggle (fill/stroke)
     ToggleColorPicker(bool),
@@ -592,6 +603,8 @@ pub struct OpenDoc {
     pub export_suffix: String,
     pub guide_kind: usize, // 0 Square 1 Grid
     pub guide_size: f64,
+    /// Whether the selected frame's layout-guide overlay is visible.
+    pub guides_visible: bool,
     pub scroll_left: f64,
     pub scroll_right: f64,
     /// Ruler guides: ('v' | 'h', world coord along the canvas axis)
@@ -734,6 +747,7 @@ impl OpenDoc {
             export_suffix: String::new(),
             guide_kind: 0,
             guide_size: 16.0,
+            guides_visible: true,
             scroll_left: 0.0,
             scroll_right: 0.0,
             guides: vec![],
@@ -785,6 +799,7 @@ impl OpenDoc {
             export_suffix: String::new(),
             guide_kind: 0,
             guide_size: 16.0,
+            guides_visible: true,
             scroll_left: 0.0,
             scroll_right: 0.0,
             guides: vec![],
@@ -924,6 +939,9 @@ pub struct App {
     /// Color picker popup state: (is_fill, field_rect, is_open)
     pub color_picker_popup: Option<(bool, Rect, bool)>,
     pub status: String,
+    /// Inspector W/H lock state; kept at app level because it is UI intent,
+    /// not a document property.
+    pub aspect_ratio_locked: bool,
     pub zoom: f64,
     pub pan: (f64, f64),
     pub ctrl: bool,
@@ -1038,6 +1056,7 @@ impl App {
             context_menu: ContextMenu::new(),
             color_picker_popup: None,
             status: String::from("Ready"),
+            aspect_ratio_locked: false,
             zoom: 1.0,
             pan: (0.0, 0.0),
             ctrl: false,
@@ -2027,7 +2046,10 @@ impl App {
 
         self.docs.push(od);
         self.active = self.docs.len() - 1;
-        self.screen = Screen::Editor;
+        // Board documents use the board scene and board input state. The old
+        // path opened them in the artboard editor, which made the visible
+        // board toolbar look active while clicks still hit design-canvas code.
+        self.screen = Screen::Board;
         self.center_view();
     }
 
