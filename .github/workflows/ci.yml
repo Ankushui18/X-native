@@ -48,31 +48,25 @@ jobs:
             pkg-config libssl-dev \
             libx11-dev libxcb1-dev libxkbcommon-dev libwayland-dev libudev-dev
 
-      # Honours X-Native/rust-toolchain.toml. Both inputs are set explicitly:
-      # without them the action reliably did nothing, and the gate then watched
-      # rustup auto-install 1.98.1 mid-run — fmt/clippy/test/CLI-build all
-      # failed with exit codes and no diagnostics.
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: "1.98.1"
-          components: rustfmt, clippy
-          # This action defaults build-warnings to "deny", i.e. it exports
-          # CARGO_BUILD_WARNINGS=deny and turns every warning into an error.
-          # That contradicts this repo's own policy: scripts/check.sh tolerates
-          # dead code up to DEAD_CODE_CEILING and only fails on lints outside
-          # the budget. Empty = the documented gate.
-          build-warnings: ""
-          cache: true
-
-      # Fail here, loudly, if the toolchain is incomplete — not 90 seconds
-      # later inside the gate as a mysterious exit 101.
-      - name: Toolchain
+      # The pinned toolchain, installed explicitly. actions-rust-lang's setup
+      # action is avoided on purpose: it exports CARGO_BUILD_WARNINGS=deny by
+      # default (-D warnings), which turns every dead-code warning into an error
+      # and makes scripts/check.sh's DEAD_CODE_CEILING meaningless — and it did
+      # nothing at all when the toolchain inputs were left to rust-toolchain.toml,
+      # so rustup auto-installed 1.98.1 in the middle of the gate.
+      - name: Toolchain (1.98.1)
         run: |
+          rustup toolchain install 1.98.1 --profile minimal \
+            --component rustfmt --component clippy
           rustup show active-toolchain
           cargo --version
           rustc --version
           rustfmt --version
           cargo clippy --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: X-Native
 
       # `bash scripts/check.sh`, not `./scripts/check.sh`: the script is
       # committed 100644 (non-executable), so the direct form fails with

@@ -43,24 +43,23 @@ jobs:
             pkg-config libssl-dev \
             libx11-dev libxcb1-dev libxkbcommon-dev libwayland-dev libudev-dev
 
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: "1.98.1"
-          components: rustfmt, clippy
-          # This action defaults build-warnings to "deny", i.e. it exports
-          # CARGO_BUILD_WARNINGS=deny and turns every warning into an error.
-          # That contradicts this repo's own policy: scripts/check.sh tolerates
-          # dead code up to DEAD_CODE_CEILING and only fails on lints outside
-          # the budget. Empty = the documented gate.
-          build-warnings: ""
-          cache: true
-
-      - name: Toolchain
+      # Explicit rustup install, not actions-rust-lang's setup action: that one
+      # exports CARGO_BUILD_WARNINGS=deny (-D warnings) by default, which turns
+      # dead-code warnings into errors and makes scripts/check.sh's
+      # DEAD_CODE_CEILING meaningless.
+      - name: Toolchain (1.98.1)
         run: |
+          rustup toolchain install 1.98.1 --profile minimal \
+            --component rustfmt --component clippy
           rustup show active-toolchain
           cargo --version
+          rustc --version
           rustfmt --version
           cargo clippy --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: X-Native
 
       - name: Apply mechanical fixes
         run: |
