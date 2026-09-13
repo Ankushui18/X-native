@@ -2,6 +2,11 @@
 # "green" — this workflow runs exactly that script so "it passes locally" and
 # "it passes on CI" are the same claim. Before this file existed the repo
 # shipped no checks at all.
+#
+# A failing gate is reported twice: as short annotations (the only failure
+# channel reachable through the check-runs API) and as a PR comment carrying
+# the full log (the raw step log is served from blob storage, which some
+# tooling cannot reach).
 name: CI
 
 on:
@@ -9,6 +14,10 @@ on:
     branches: ["main", "arena/**"]
   pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -48,14 +57,47 @@ jobs:
       # `bash scripts/check.sh`, not `./scripts/check.sh`: the script is
       # committed 100644 (non-executable), so the direct form fails with
       # "permission denied".
+      #
+      # The gate writes to a FILE, not into a pipeline: `check.sh | tee` loses
+      # output when the log sink stops reading (the step log dies with a broken
+      # pipe and the pipeline's status becomes tee's 0, masking the failure).
       - name: Gate
         run: |
-          set -o pipefail
-          bash scripts/check.sh 2>&1 | tee /tmp/gate.log
+          set +e
+          bash scripts/check.sh > /tmp/gate.log 2>&1
+          status=$?
+          cat /tmp/gate.log || true
+          exit $status
 
-      # The gate's output again as a summary, which is easier to read than a
-      # 10k-line step log when something fails.
-      - name: Gate output
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test -f /tmp/gate.log || exit 0
+
+          # short single-line annotations: large multi-line ones are dropped
+          esc=$(printf '\033')
+          grep -aE '==>|FAIL|error|warning|Diff|panicked|\.rs:[0-9]+' /tmp/gate.log |
+            sed -e "s/${esc}\[[0-9;]*m//g" -e 's/%/%25/g' -e 's/\r//g' |
+            cut -c1-350 | head -35 |
+            while IFS= read -r line; do printf '::error::%s\n' "$line"; done
+
+          # the whole log as a PR comment
+          number=$(gh pr list --head "$GITHUB_REF_NAME" --state open \
+                     --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$number" ]; then
+            {
+              echo "Gate failed on \`${GITHUB_SHA:0:7}\` (\`scripts/check.sh\`, full log)."
+              echo
+              echo '~~~'
+              head -c 60000 /tmp/gate.log
+              echo '~~~'
+            } > /tmp/gate-comment.md
+            gh pr comment "$number" --body-file /tmp/gate-comment.md || true
+          fi
+
+      - name: Summary
         if: failure()
         run: |
           {
@@ -65,23 +107,3 @@ jobs:
             cat /tmp/gate.log
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-
-      # Short, one-line annotations for the lines that explain a failure: the
-      # gate's per-step verdicts, the diagnostics it printed, and the first
-      # hunks of a formatting diff. These are readable through the check-runs
-      # API — large multi-line annotations get dropped on the floor.
-      - name: Annotate failures
-        if: failure()
-        run: |
-          test -f /tmp/gate.log || exit 0
-          esc=$(printf '\033')
-          annotate() { # $1 pattern, $2 max lines
-            grep -aE "$1" /tmp/gate.log 2>/dev/null |
-              sed -e "s/${esc}\[[0-9;]*m//g" -e 's/\r//g' -e 's/%/%25/g' |
-              cut -c1-400 |
-              head -"$2" |
-              while IFS= read -r line; do printf '::error::%s\n' "$line"; done
-          }
-          annotate '==>|^ *ok |FAIL' 20
-          annotate 'error(\[|:| from )' 12
-          annotate 'Diff in|needs to be updated|not found|No such file' 8
