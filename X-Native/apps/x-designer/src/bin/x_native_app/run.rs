@@ -2864,6 +2864,17 @@ impl Host {
             self.app.dropdown_lh = false;
         }
 
+        // Color popovers are modal to the inspector. Consume clicks inside
+        // the popup and close without editing the canvas when the click lands
+        // outside it.
+        let color_popup_hit = crate::editor_ui::color_picker_rect(&self.app)
+            .map(|r| r.contains(p))
+            .unwrap_or(false);
+        if self.app.color_picker_popup.is_some() && !color_popup_hit {
+            self.dispatch(Action::CloseColorPicker);
+            return;
+        }
+
         // chrome hit zones
         for (r, a) in self.app.hit.iter().rev() {
             if r.contains(p) {
@@ -2881,6 +2892,9 @@ impl Host {
                 self.dispatch(a);
                 return;
             }
+        }
+        if color_popup_hit {
+            return;
         }
 
         // flow preview: canvas clicks navigate, never edit
@@ -4005,6 +4019,12 @@ impl Host {
             self.on_text(" ");
             return;
         }
+        if self.app.color_picker_popup.is_some()
+            && matches!(key, Key::Named(NamedKey::Escape))
+        {
+            self.dispatch(Action::CloseColorPicker);
+            return;
+        }
         // comment composer (C18): owns the keyboard while open
         if self.app.comment_draft.is_some() {
             match (&key, text) {
@@ -4193,15 +4213,29 @@ impl Host {
                     self.app.palette.close();
                 }
                 (Key::Named(NamedKey::Enter), _) => {
-                    if let Some(cmd_id) = self.app.palette.execute_selected() {
-                        self.execute_command(&cmd_id);
+                    // The active painter uses editor_ui::palette_commands;
+                    // execute the same filtered row that the user sees
+                    // instead of the retired CommandDef result list.
+                    if let Some(ci) = self.palette_selection() {
+                        self.run_palette(ci);
                     }
                 }
                 (Key::Named(NamedKey::ArrowDown), _) => {
-                    self.app.palette.select_next();
+                    let len = self.palette_len();
+                    if len > 0 {
+                        self.app.palette.selected_index =
+                            (self.app.palette.selected_index + 1) % len;
+                    }
                 }
                 (Key::Named(NamedKey::ArrowUp), _) => {
-                    self.app.palette.select_previous();
+                    let len = self.palette_len();
+                    if len > 0 {
+                        self.app.palette.selected_index = if self.app.palette.selected_index == 0 {
+                            len - 1
+                        } else {
+                            self.app.palette.selected_index - 1
+                        };
+                    }
                 }
                 (Key::Named(NamedKey::Backspace), _) => {
                     let current = self.app.palette.query.clone();
@@ -4689,112 +4723,6 @@ impl Host {
                 .min(cmds.len().saturating_sub(1)),
         )
         .copied()
-    }
-
-    /// Execute a command from the palette by ID
-    fn execute_command(&mut self, cmd_id: &str) {
-        match cmd_id {
-            "file.new" => self.cmd_new_file(),
-            "file.new_board" => self.cmd_new_board(),
-            "file.open" => self.cmd_open_file(),
-            "file.import" => self.cmd_import_file(),
-            "file.save" => self.cmd_save(),
-            "file.export_png" => {
-                self.app.doc().export_format = 0;
-                self.cmd_export(false);
-            }
-            "file.export_svg" => {
-                self.app.doc().export_format = 2;
-                self.cmd_export(false);
-            }
-            "file.close" => {
-                if !self.finish_edits() {
-                    return;
-                }
-                self.app.screen = Screen::Dashboard;
-            }
-            "edit.undo" => {
-                self.app.doc().undo_document();
-            }
-            "edit.redo" => {
-                self.app.doc().redo_document();
-            }
-            "edit.delete" => {
-                self.app.doc().editor().delete_selection();
-                self.app.mark_dirty();
-            }
-            "edit.duplicate" => {
-                self.app.doc().editor().duplicate_selection((12.0, 12.0));
-                self.app.mark_dirty();
-            }
-            "edit.select_all" => {
-                self.app.doc().editor().select_all();
-                self.app.mark_dirty();
-            }
-            "tools.select" => self.app.tool = Tool::Select,
-            "tools.hand" => self.app.tool = Tool::Hand,
-            "tools.frame" => self.app.tool = Tool::Frame,
-            "tools.rectangle" => self.app.tool = Tool::Rect,
-            "tools.ellipse" => self.app.tool = Tool::Ellipse,
-            "tools.pen" => self.app.tool = Tool::Pen,
-            "tools.text" => self.app.tool = Tool::Text,
-            "tools.eraser" => self.app.tool = Tool::Eraser,
-            "tools.symmetry" => self.app.tool = Tool::Symmetry,
-            "object.group" => {
-                let doc = self.app.doc();
-                doc.editor().group_selection(&x_native::fresh_id("group"));
-                self.app.mark_dirty();
-            }
-            "object.ungroup" => {
-                let doc = self.app.doc();
-                if let Some(id) = doc.selected_id() {
-                    doc.editor().ungroup(&id);
-                }
-                self.app.mark_dirty();
-            }
-            "object.bring_front" => {
-                let doc = self.app.doc();
-                if let Some(id) = doc.selected_id() {
-                    let id = id.clone();
-                    doc.editor().bring_to_front(&id);
-                }
-                self.app.mark_dirty();
-            }
-            "object.send_back" => {
-                let doc = self.app.doc();
-                if let Some(id) = doc.selected_id() {
-                    let id = id.clone();
-                    doc.editor().send_to_back(&id);
-                }
-                self.app.mark_dirty();
-            }
-            "view.zoom_in" => self.app.zoom = (self.app.zoom * 1.2).min(256.0),
-            "view.zoom_out" => self.app.zoom = (self.app.zoom / 1.2).max(0.01),
-            "view.zoom_fit" => self.zoom_fit(),
-            "view.zoom_100" => self.app.zoom = 1.0,
-            "view.toggle_grid" => {
-                self.app.grid_pct = if self.app.grid_pct > 0.0 { 0.0 } else { 20.0 };
-            }
-            "layout.add_auto" => {
-                self.app.status = "Select a frame, then set Auto Layout in the inspector".into();
-            }
-            "design.lint" => self.cmd_lint(),
-            "proto.preview" => {
-                if self.app.flow.is_some() {
-                    self.app.flow = None;
-                    self.app.status = "Flow preview ended".into();
-                } else {
-                    self.flow_enter();
-                }
-            }
-            "help.shortcuts" => {
-                self.app.status =
-                    "Keyboard shortcuts: ⌘K commands, ⌘Z undo, V select, R rect, T text".into();
-            }
-            _ => {
-                self.app.status = format!("Command '{}' not implemented", cmd_id);
-            }
-        }
     }
 
     fn run_palette(&mut self, ci: usize) {
@@ -6306,39 +6234,75 @@ impl Host {
                 self.apply_theme(next);
             }
             Action::ToggleColorPicker(is_fill) => {
-                let doc = self.app.doc_mut();
-                if is_fill {
-                    doc.color_picker_fill_open = !doc.color_picker_fill_open;
-                    if doc.color_picker_fill_open {
-                        doc.color_picker_stroke_open = false;
-                    }
-                } else {
-                    doc.color_picker_stroke_open = !doc.color_picker_stroke_open;
-                    if doc.color_picker_stroke_open {
-                        doc.color_picker_fill_open = false;
-                    }
-                }
-                // Sync chrome-level popup state with document state
-                self.chrome.fill_color_popup = doc.color_picker_fill_open;
-                self.chrome.stroke_color_popup = doc.color_picker_stroke_open;
-                // Position popup near the right panel
-                if doc.color_picker_fill_open || doc.color_picker_stroke_open {
-                    let right_x = self.chrome.config.width as f64 - self.chrome.right_w();
-                    let field_y = if is_fill {
-                        self.chrome.top_h() + 394.0
+                let (fill_open, stroke_open) = {
+                    let doc = self.app.doc();
+                    if is_fill {
+                        doc.color_picker_fill_open = !doc.color_picker_fill_open;
+                        if doc.color_picker_fill_open {
+                            doc.color_picker_stroke_open = false;
+                        }
                     } else {
-                        self.chrome.top_h() + 428.0
-                    };
-                    self.chrome.popup_position = (right_x + 80.0, field_y + 20.0);
+                        doc.color_picker_stroke_open = !doc.color_picker_stroke_open;
+                        if doc.color_picker_stroke_open {
+                            doc.color_picker_fill_open = false;
+                        }
+                    }
+                    (doc.color_picker_fill_open, doc.color_picker_stroke_open)
+                };
+                if fill_open || stroke_open {
+                    // Keep the popup anchored to the actual click instead of
+                    // the retired chrome renderer. The active editor painter
+                    // owns the popup and appends its own hit targets.
+                    let p = self.app.mouse;
+                    self.app.color_picker_popup = Some((
+                        is_fill,
+                        Rect::new(p.x, p.y, p.x + 1.0, p.y + 1.0),
+                        true,
+                    ));
+                } else {
+                    self.app.color_picker_popup = None;
                 }
             }
             Action::CloseColorPicker => {
-                let doc = self.app.doc_mut();
+                let doc = self.app.doc();
                 doc.color_picker_fill_open = false;
                 doc.color_picker_stroke_open = false;
-                // Sync chrome-level popup state
-                self.chrome.fill_color_popup = false;
-                self.chrome.stroke_color_popup = false;
+                self.app.color_picker_popup = None;
+            }
+            Action::PaintPreset(is_fill, hex) => {
+                let Some(color) = crate::state::parse_hex(&hex) else {
+                    self.app.status = "Invalid color preset".into();
+                    return;
+                };
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select a layer before changing its color".into();
+                    return;
+                };
+                let info = crate::editor_ui::sel_info(&self.app);
+                let changed = if is_fill {
+                    self.app.doc().editor().set_fill(&id, Paint::Solid(color));
+                    true
+                } else {
+                    let width = info.stroke_w.max(1.0);
+                    self.app.doc().editor().mutate_visual_stack(&id, move |n| {
+                        n.materialize_visual_stacks();
+                        let stroke = x_native::Stroke::solid(color, width);
+                        n.stroke = stroke.clone();
+                        if let Some(layer) = n.stroke_layers.last_mut() {
+                            layer.stroke = stroke;
+                        } else {
+                            n.stroke_layers.push(x_native::StrokeLayer::new(stroke));
+                        }
+                    })
+                };
+                if changed {
+                    self.app.mark_dirty();
+                    self.app.status = format!("{} color updated", if is_fill { "Fill" } else { "Stroke" });
+                }
+                self.app.color_picker_popup = None;
+                let doc = self.app.doc();
+                doc.color_picker_fill_open = false;
+                doc.color_picker_stroke_open = false;
             }
             Action::RightTab(t) => {
                 self.app.doc().right_tab = t;
@@ -6392,7 +6356,12 @@ impl Host {
                     nm
                 };
                 let done = self.app.doc().editor().combine_as_variants(&set_name);
-                let _ = done;
+                if done > 0 {
+                    self.app.mark_dirty();
+                    self.app.status = format!("Combined {done} component masters into {set_name}");
+                } else {
+                    self.app.status = "Select component masters to create a variant set".into();
+                }
             }
             Action::ProtoAdd => self.proto_add(),
             Action::ProtoRemove(i) => self.proto_edit(move |l| {
@@ -6437,6 +6406,55 @@ impl Host {
             }
             Action::ToggleVisible => self.app.apply_toggle(false),
             Action::ToggleLock => self.app.apply_toggle(true),
+            Action::ToggleAspectRatio => {
+                self.app.aspect_ratio_locked = !self.app.aspect_ratio_locked;
+                self.app.status = if self.app.aspect_ratio_locked {
+                    "Aspect ratio locked".into()
+                } else {
+                    "Aspect ratio unlocked".into()
+                };
+            }
+            Action::TogglePaintVisibility(is_fill) => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    return;
+                };
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, move |n| {
+                    n.materialize_visual_stacks();
+                    if is_fill {
+                        if let Some(layer) = n.fill_layers.first_mut() {
+                            layer.visible = !layer.visible;
+                        }
+                    } else if let Some(layer) = n.stroke_layers.first_mut() {
+                        layer.visible = !layer.visible;
+                    }
+                });
+                if changed {
+                    self.app.mark_dirty();
+                }
+            }
+            Action::CycleStrokePosition => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    return;
+                };
+                let has_stroke = crate::editor_ui::sel_info(&self.app).stroke_w > 0.0;
+                if !has_stroke {
+                    self.app.status = "Add a stroke before changing its position".into();
+                    return;
+                }
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    n.materialize_visual_stacks();
+                    if let Some(layer) = n.stroke_layers.first_mut() {
+                        layer.options.align = match layer.options.align {
+                            x_native::StrokeAlign::Inside => x_native::StrokeAlign::Center,
+                            x_native::StrokeAlign::Center => x_native::StrokeAlign::Outside,
+                            x_native::StrokeAlign::Outside => x_native::StrokeAlign::Inside,
+                        };
+                    }
+                });
+                if changed {
+                    self.app.mark_dirty();
+                }
+            }
             Action::Align(row, col) => self.app.apply_align(row, col),
             // UX Analysis actions
             Action::UxAccessibility => self.app.run_ux_accessibility_check(),
@@ -6610,7 +6628,23 @@ impl Host {
                 }
             }
             Action::ExportRun => self.cmd_export(true),
-            Action::AddFill => self.app.status = "Fill layers — edit the hex field".into(),
+            Action::AddFill => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select a layer before adding a fill".into();
+                    return;
+                };
+                let info = crate::editor_ui::sel_info(&self.app);
+                let color = crate::state::parse_hex(&info.fill).unwrap_or(x_native::Color::WHITE);
+                if self
+                    .app
+                    .doc()
+                    .editor()
+                    .add_fill_layer(&id, Paint::Solid(color))
+                {
+                    self.app.mark_dirty();
+                    self.app.status = "Fill layer added".into();
+                }
+            }
             Action::RemoveFill => {
                 let doc = self.app.doc();
                 if let Some(id) = doc.selected_id() {
@@ -6635,7 +6669,22 @@ impl Host {
                     self.app.mark_dirty();
                 }
             }
-            Action::AddEffect => self.app.status = "Effects — coming soon".into(),
+            Action::AddEffect => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select a layer before adding an effect".into();
+                    return;
+                };
+                let effect = x_native::Effect::DropShadow {
+                    dx: 0.0,
+                    dy: 4.0,
+                    blur: 12.0,
+                    color: x_native::Color::from_rgba8(0, 0, 0, 96),
+                };
+                if self.app.doc().editor().add_effect_layer(&id, effect) {
+                    self.app.mark_dirty();
+                    self.app.status = "Drop shadow added".into();
+                }
+            }
             Action::AddGuide => {
                 // drop a vertical guide at the canvas center
                 let reg = self.app.editor_regions();
@@ -6660,6 +6709,10 @@ impl Host {
                 let doc = self.app.doc();
                 doc.guide_kind = 1 - doc.guide_kind;
             }
+            Action::ToggleGuideVisibility => {
+                let doc = self.app.doc();
+                doc.guides_visible = !doc.guides_visible;
+            }
             Action::CycleExportFormat => {
                 let doc = self.app.doc();
                 doc.export_format = (doc.export_format + 1) % 4;
@@ -6667,6 +6720,25 @@ impl Host {
             Action::CycleExportScale => {
                 let doc = self.app.doc();
                 doc.export_scale = 1 - doc.export_scale;
+            }
+            Action::AddAutoLayout => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select a frame to add Auto Layout".into();
+                    return;
+                };
+                let vars = self.app.doc().doc.variables.clone();
+                let mut layout = self.app.selected_layout().unwrap_or_default();
+                layout.gap = self.app.doc().gap;
+                let pad_h = self.app.doc().pad_h;
+                let pad_v = self.app.doc().pad_v;
+                layout.padding = [pad_h, pad_v, pad_h, pad_v];
+                let changed = self.app.doc().editor().set_auto_layout(&id, Some(layout), &vars);
+                if changed {
+                    self.app.mark_dirty();
+                    self.app.status = "Auto Layout added".into();
+                } else {
+                    self.app.status = "Auto Layout can only be added to a frame".into();
+                }
             }
             Action::ToggleWrap => {
                 self.app.modify_selected_layout(|l| {
@@ -6899,6 +6971,7 @@ impl Host {
 
     fn apply_field_to_selection(&mut self, id: FieldId, raw: &str) {
         let info = crate::editor_ui::sel_info(&self.app);
+        let aspect_ratio_locked = self.app.aspect_ratio_locked;
         let sel = self.app.doc().selected_id();
         let Some(node_id) = sel else { return };
         let doc = self.app.doc();
@@ -6908,16 +6981,19 @@ impl Host {
         };
         match id {
             FieldId::W | FieldId::H => {
-                let w = if id == FieldId::W {
-                    num(raw).unwrap_or(info.w)
+                let requested = num(raw).unwrap_or(if id == FieldId::W { info.w } else { info.h });
+                let (mut w, mut h) = (info.w, info.h);
+                if id == FieldId::W {
+                    w = requested;
+                    if aspect_ratio_locked && info.w > 0.0 {
+                        h = requested * info.h / info.w;
+                    }
                 } else {
-                    info.w
-                };
-                let h = if id == FieldId::H {
-                    num(raw).unwrap_or(info.h)
-                } else {
-                    info.h
-                };
+                    h = requested;
+                    if aspect_ratio_locked && info.h > 0.0 {
+                        w = requested * info.w / info.h;
+                    }
+                }
                 if w > 0.0 && h > 0.0 {
                     // manually sizing a text box pins it (Figma fixed-size)
                     doc.editor().mutate_visual_stack(&node_id, |n| {
@@ -6981,24 +7057,49 @@ impl Host {
                     }
                 }
             }
-            FieldId::StrokeHex => {
-                if let Some(c) = crate::state::parse_hex(raw) {
-                    let w = if info.stroke_w > 0.0 {
-                        info.stroke_w
-                    } else {
-                        1.0
+            FieldId::StrokeHex | FieldId::StrokeAlpha => {
+                let Some(mut c) = crate::state::parse_hex(&info.stroke) else {
+                    return;
+                };
+                if id == FieldId::StrokeHex {
+                    let Some(next) = crate::state::parse_hex(raw) else {
+                        return;
                     };
-                    doc.editor().mutate_visual_stack(&node_id, move |n| {
-                        n.stroke = x_native::Stroke::solid(c, w);
-                    });
-                    self.app.mark_dirty();
+                    c = next;
+                } else if let Some(a) = num(raw) {
+                    let rgba = c.to_rgba8();
+                    c = x_native::Color::from_rgba8(
+                        rgba.r,
+                        rgba.g,
+                        rgba.b,
+                        (a.clamp(0.0, 100.0) / 100.0 * 255.0) as u8,
+                    );
                 }
+                let w = info.stroke_w.max(1.0);
+                doc.editor().mutate_visual_stack(&node_id, move |n| {
+                    n.materialize_visual_stacks();
+                    let stroke = x_native::Stroke::solid(c, w);
+                    n.stroke = stroke.clone();
+                    if let Some(layer) = n.stroke_layers.last_mut() {
+                        layer.stroke = stroke;
+                    } else {
+                        n.stroke_layers.push(x_native::StrokeLayer::new(stroke));
+                    }
+                });
+                self.app.mark_dirty();
             }
             FieldId::StrokeWeight => {
                 if let Some(w) = num(raw) {
                     if let Some(c) = crate::state::parse_hex(&info.stroke) {
                         doc.editor().mutate_visual_stack(&node_id, move |n| {
-                            n.stroke = x_native::Stroke::solid(c, w.max(0.0));
+                            n.materialize_visual_stacks();
+                            let stroke = x_native::Stroke::solid(c, w.max(0.0));
+                            n.stroke = stroke.clone();
+                            if let Some(layer) = n.stroke_layers.last_mut() {
+                                layer.stroke = stroke;
+                            } else {
+                                n.stroke_layers.push(x_native::StrokeLayer::new(stroke));
+                            }
                         });
                         self.app.mark_dirty();
                     }

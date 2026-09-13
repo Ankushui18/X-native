@@ -45,6 +45,7 @@ pub fn paint(app: &mut App, s: &mut Scene) {
     if app.palette.open {
         paint_palette(app, s, &mut hit);
     }
+    paint_color_picker(app, s, &mut hit);
     paint_carets(app, s);
     app.hit = hit;
     let _ = reg;
@@ -62,6 +63,7 @@ pub fn paint_over(app: &mut App, s: &mut Scene) {
         return;
     }
     paint_canvas_overlays(app, s);
+    paint_layout_guides(app, s);
     paint_ruler_guides(app, s);
     paint_smart_guides(app, s);
     paint_text_editor(app, s);
@@ -80,6 +82,9 @@ fn paint_ruler_guides(app: &App, s: &mut Scene) {
     }
     let reg = app.editor_regions();
     let doc = app.doc_ref();
+    if !doc.guides_visible {
+        return;
+    }
     let guides = doc
         .guides
         .iter()
@@ -98,6 +103,64 @@ fn paint_ruler_guides(app: &App, s: &mut Scene) {
                 hline(s, reg.canvas.x0, reg.canvas.x1, y, crate::theme::C_SNAP);
             }
         }
+    }
+}
+
+/// Draw the inspector's layout-guide settings on the selected frame.
+///
+/// These controls used to change only `guide_kind`/`guide_size` text in the
+/// inspector. Keeping the overlay in the UI layer makes the control useful
+/// for both legacy documents and new documents that do not yet carry a
+/// serialized layout-grid definition.
+fn paint_layout_guides(app: &App, s: &mut Scene) {
+    let doc = app.doc_ref();
+    if !doc.guides_visible {
+        return;
+    }
+    let Some(id) = doc.selected_id() else {
+        return;
+    };
+    let Some(node) = find_node(&doc.editor_ref().root, &id) else {
+        return;
+    };
+    let step = doc.guide_size.max(1.0).min(4096.0);
+    let (ox, oy) = (node.transform.x, node.transform.y);
+    let max_lines = 512usize;
+    let guide_color = vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0x58);
+    let reg = app.editor_regions();
+
+    // Square and Grid intentionally share the same measured cell size. Both
+    // modes therefore remain useful for legacy documents even before a full
+    // serialized layout-grid editor is available.
+    let mut i = 0usize;
+    let mut x = 0.0;
+    while x <= node.w && i < max_lines {
+        let sx = app.world_to_screen(Point::new(ox + x, oy)).x;
+        if sx >= reg.canvas.x0 && sx <= reg.canvas.x1 {
+            let color = if doc.guide_kind == 1 && i % 4 == 0 {
+                vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0x90)
+            } else {
+                guide_color.clone()
+            };
+            vline(s, sx, reg.canvas.y0, reg.canvas.y1, color);
+        }
+        x += step;
+        i += 1;
+    }
+    i = 0;
+    let mut y = 0.0;
+    while y <= node.h && i < max_lines {
+        let sy = app.world_to_screen(Point::new(ox, oy + y)).y;
+        if sy >= reg.canvas.y0 && sy <= reg.canvas.y1 {
+            let color = if doc.guide_kind == 1 && i % 4 == 0 {
+                vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0x90)
+            } else {
+                guide_color.clone()
+            };
+            hline(s, reg.canvas.x0, reg.canvas.x1, sy, color);
+        }
+        y += step;
+        i += 1;
     }
 }
 
@@ -1155,11 +1218,11 @@ fn paint_right(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         let ix = rx + rw - 84.0 + 28.0 * i as f64;
         let iy = ED_TITLE_H + 16.0;
         draw_icon(s, ic, ix, iy, 16.0, C_DIM);
-        if i == 2 {
-            hit.push((
-                Rect::new(ix - 2.0, iy - 2.0, ix + 18.0, iy + 18.0),
-                Action::RightTab(RightTab::Prototype),
-            ));
+        let icon_hit = Rect::new(ix - 2.0, iy - 2.0, ix + 18.0, iy + 18.0);
+        match i {
+            0 => hit.push((icon_hit, Action::Tool(Tool::Comment))),
+            2 => hit.push((icon_hit, Action::RightTab(RightTab::Prototype))),
+            _ => {}
         }
     }
 
@@ -1712,7 +1775,13 @@ fn paint_design(
         Some(Action::Field(FieldId::H)),
         None,
     );
-    sq_btn(app, s, hit, x0 + 287.0, r2, "lock", false);
+    let aspect_lock = Rect::new(x0 + 287.0, r2, x0 + 287.0 + SQ_BTN, r2 + SQ_BTN);
+    sq_btn(app, s, hit, aspect_lock.x0, aspect_lock.y0, "lock", false);
+    if app.aspect_ratio_locked {
+        fill_rrect(s, aspect_lock, 8.0, C_FIELD_2);
+        draw_icon(s, "lock", aspect_lock.x0 + 7.0, aspect_lock.y0 + 7.0, 14.0, C_TEXT);
+    }
+    hit.push((aspect_lock, Action::ToggleAspectRatio));
 
     let r3 = y0 + 84.0;
     let xr3 = Rect::new(x0, r3, x0 + half, r3 + h);
@@ -1760,6 +1829,9 @@ fn paint_design(
     fill_rrect(s, addb, 6.0, if hov { C_FIELD_2 } else { C_FIELD });
     stroke_rrect(s, addb, 6.0, C_LINE, 1.0);
     draw_icon(s, "plus", addb.x0 + 5.0, addb.y0 + 5.0, 14.0, C_DIM);
+    // The add button must create the same default layout that the Flow
+    // controls edit; previously it was painted without a hit target.
+    hit.push((addb, Action::AddAutoLayout));
 
     app.fonts
         .text(s, x0, y0 + 209.0, "Flow", T10, C_DIM, Wt::Reg);
@@ -1927,11 +1999,17 @@ fn paint_design(
     draw_icon(
         s,
         "arrow-up-down",
-        g2.x0 + (219.0 - 16.0) / 2.0,
-        g2.y0 + 8.0,
-        16.0,
+        g2.x0 + 8.0,
+        g2.y0 + 10.0,
+        12.0,
         C_DIM,
     );
+    // The second gap axis was previously a decorative empty field. Both
+    // axes use the engine's single Auto Layout gap value until independent
+    // row/column gaps are supported.
+    app.fonts
+        .text(s, g2.x0 + 29.0, g2.y0 + 6.8, &gap_val, T11, C_TEXT, Wt::Reg);
+    hit.push((g2, Action::Field(FieldId::Gap)));
 
     app.fonts
         .text(s, x0, y0 + 470.0, "Padding", T10, C_DIM, Wt::Reg);
@@ -2093,7 +2171,22 @@ fn paint_design(
     // ---- appearance -----------------------------------------------------
     app.fonts
         .text_tracked(s, x0, y0 + 582.5, "Appearance", T10, 0.08, C_TEXT, Wt::Med);
-    draw_icon(s, "eye", xr - 14.0, y0 + 582.0, 14.0, C_DIM);
+    let appearance_eye = Rect::new(xr - 22.0, y0 + 576.0, xr, y0 + 596.0);
+    let selected_visible = {
+        let d = app.doc();
+        d.selected_id()
+            .and_then(|id| find_node(&d.editor_ref().root, &id).map(|n| n.visible))
+            .unwrap_or(true)
+    };
+    draw_icon(
+        s,
+        if selected_visible { "eye" } else { "eye-off" },
+        xr - 14.0,
+        y0 + 582.0,
+        14.0,
+        C_DIM,
+    );
+    hit.push((appearance_eye, Action::ToggleVisible));
     let opr = Rect::new(x0, y0 + 605.5, x0 + 153.5, y0 + 633.5);
     input(
         app,
@@ -2463,9 +2556,9 @@ fn paint_design(
         hit,
         pos,
         None,
-        "Outside",
+        stroke_position_label(app),
         false,
-        None,
+        Some(Action::CycleStrokePosition),
         Some("chevron-down"),
     );
     let wtr = Rect::new(pos.x1 + gap, y, pos.x1 + gap + half3, y + h);
@@ -2575,7 +2668,24 @@ fn paint_design(
         Some(Action::Field(FieldId::GuideSize)),
         None,
     );
-    sq_btn_small(app, s, kd.x1 + 6.0 + 48.0 + 6.0, y, "eye");
+    let guide_eye = Rect::new(
+        kd.x1 + 6.0 + 48.0 + 6.0,
+        y,
+        kd.x1 + 6.0 + 48.0 + 6.0 + 24.0,
+        y + 24.0,
+    );
+    sq_btn_small(
+        app,
+        s,
+        guide_eye.x0,
+        guide_eye.y0,
+        if app.doc().guides_visible {
+            "eye"
+        } else {
+            "eye-off"
+        },
+    );
+    hit.push((guide_eye, Action::ToggleGuideVisibility));
     let rm = Rect::new(
         kd.x1 + 6.0 + 48.0 + 6.0 + 24.0 + 6.0,
         y + 2.0,
@@ -2852,6 +2962,46 @@ fn section_header(
     ));
 }
 
+fn stroke_position_label(app: &App) -> &'static str {
+    let Some(doc) = app.doc_opt() else {
+        return "Center";
+    };
+    let Some(id) = doc.selected_id() else {
+        return "Center";
+    };
+    let Some(node) = find_node(&doc.editor_ref().root, &id) else {
+        return "Center";
+    };
+    match node.stroke_layers.first().map(|l| l.options.align) {
+        Some(x_native::StrokeAlign::Inside) => "Inside",
+        Some(x_native::StrokeAlign::Outside) => "Outside",
+        _ => "Center",
+    }
+}
+
+fn paint_layer_visible(app: &App, is_fill: bool) -> bool {
+    let Some(doc) = app.doc_opt() else {
+        return true;
+    };
+    let Some(id) = doc.selected_id() else {
+        return true;
+    };
+    let Some(node) = find_node(&doc.editor_ref().root, &id) else {
+        return true;
+    };
+    if node.visual_stacks_materialized {
+        if is_fill {
+            node.fill_layers.first().map(|l| l.visible).unwrap_or(true)
+        } else {
+            node.stroke_layers.first().map(|l| l.visible).unwrap_or(true)
+        }
+    } else if is_fill {
+        true
+    } else {
+        node.stroke.width > 0.0
+    }
+}
+
 /// Fill / Stroke value row — swatch + hex + alpha + eye + minus.
 #[allow(clippy::too_many_arguments)]
 fn paint_paint_row(
@@ -2880,13 +3030,16 @@ fn paint_paint_row(
     if !is_fill {
         stroke_rrect(s, sw, 3.0, C_LINE_2, 1.0);
     }
-    // Add click handler for color swatch to open color picker popup
-    hit.push((sw, Action::ToggleColorPicker(is_fill)));
-    
+    if hover(app, sw) {
+        stroke_rrect(s, sw.inflate(1.5, 1.5), 4.0, C_ACCENT, 1.5);
+    }
     let shown = field_val(app, hex_field, hex.to_string());
     app.fonts
         .text(s, sw.x1 + 8.0, y + 8.0, &shown, T11, C_TEXT, Wt::Mono);
+    // Register the broad text field first so the later, smaller swatch hit
+    // wins during reverse hit-testing.
     hit.push((r, Action::Field(hex_field)));
+    hit.push((sw, Action::ToggleColorPicker(is_fill)));
     let ar = Rect::new(r.x1 + 8.0, y, r.x1 + 8.0 + 64.0, y + h);
     input(
         app,
@@ -2900,7 +3053,19 @@ fn paint_paint_row(
         Some("chevron-down"),
     );
     let e1 = Rect::new(ar.x1 + 8.0, y + 2.0, ar.x1 + 8.0 + 24.0, y + 2.0 + 24.0);
-    draw_icon(s, "eye", e1.x0 + 5.0, e1.y0 + 5.0, 14.0, C_DIM);
+    let paint_visible = paint_layer_visible(app, is_fill);
+    if hover(app, e1) || !paint_visible {
+        fill_rrect(s, e1, 6.0, C_FIELD_2);
+    }
+    draw_icon(
+        s,
+        if paint_visible { "eye" } else { "eye-off" },
+        e1.x0 + 5.0,
+        e1.y0 + 5.0,
+        14.0,
+        if paint_visible { C_DIM } else { C_TEXT },
+    );
+    hit.push((e1, Action::TogglePaintVisibility(is_fill)));
     let e2 = Rect::new(e1.x1 + 8.0, y + 2.0, e1.x1 + 8.0 + 24.0, y + 2.0 + 24.0);
     if hover(app, e2) {
         fill_rrect(s, e2, 6.0, C_FIELD);
@@ -3296,6 +3461,113 @@ fn paint_carets(app: &mut App, s: &mut Scene) {
                 break;
             }
         }
+    }
+}
+
+// ------------------------------------------------------ color picker
+
+/// Bounds of the native color popover. Keeping this calculation shared by
+/// painting and input means clicks outside the popup close it instead of
+/// accidentally editing the canvas underneath.
+pub(crate) fn color_picker_rect(app: &App) -> Option<Rect> {
+    let (_, anchor, open) = app.color_picker_popup.as_ref()?.clone();
+    if !open {
+        return None;
+    }
+    let w = 244.0;
+    let h = 250.0;
+    let x_left = anchor.x0 - w - 8.0;
+    let x = if x_left >= 8.0 {
+        x_left
+    } else {
+        (anchor.x1 + 8.0).min((app.win_w - w - 8.0).max(8.0))
+    };
+    let y = anchor
+        .y0
+        .clamp(ED_TITLE_H + 4.0, (app.win_h - h - 8.0).max(ED_TITLE_H + 4.0));
+    Some(Rect::new(x, y, x + w, y + h))
+}
+
+fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    let Some((is_fill, _, open)) = app.color_picker_popup.as_ref().cloned() else {
+        return;
+    };
+    if !open || app.doc_opt().is_none() {
+        return;
+    }
+    let Some(panel) = color_picker_rect(app) else {
+        return;
+    };
+    let info = sel_info(app);
+    let current = parse_hex(if is_fill { &info.fill } else { &info.stroke })
+        .unwrap_or(if is_fill { Color::WHITE } else { Color::BLACK });
+    drop_shadow(s, panel, 14.0);
+    fill_rrect(s, panel, 10.0, C_FIELD);
+    stroke_rrect(s, panel, 10.0, C_LINE_2, 1.0);
+
+    app.fonts.text(
+        s,
+        panel.x0 + 14.0,
+        panel.y0 + 14.0,
+        if is_fill { "Fill color" } else { "Stroke color" },
+        T11,
+        C_TEXT,
+        Wt::Med,
+    );
+    let close = Rect::new(panel.x1 - 30.0, panel.y0 + 7.0, panel.x1 - 7.0, panel.y0 + 29.0);
+    if hover(app, close) {
+        fill_rrect(s, close, 5.0, C_FIELD_2);
+    }
+    draw_icon(s, "x", close.x0 + 5.0, close.y0 + 5.0, 13.0, C_DIM);
+    hit.push((close, Action::CloseColorPicker));
+
+    let preview = Rect::new(panel.x0 + 14.0, panel.y0 + 38.0, panel.x1 - 14.0, panel.y0 + 72.0);
+    fill_rrect(s, preview, 6.0, current.clone());
+    stroke_rrect(s, preview, 6.0, C_LINE_2, 1.0);
+    app.fonts.text(
+        s,
+        panel.x0 + 14.0,
+        panel.y0 + 87.0,
+        &format!("#{}", crate::state::color_hex(current.clone())),
+        T10,
+        C_TEXT,
+        Wt::Mono,
+    );
+    app.fonts.text(
+        s,
+        panel.x0 + 14.0,
+        panel.y0 + 104.0,
+        "Choose a preset or edit the hex field",
+        T9,
+        C_DIM,
+        Wt::Reg,
+    );
+
+    const PRESETS: [&str; 16] = [
+        "FFFFFF", "F2F3F7", "D9DCE5", "9A9EAA", "6B6E7A", "343842", "1B1D23", "000000",
+        "FF3B30", "FF9500", "FFCC00", "34C759", "00A3FF", "5856D6", "AF52DE", "FF2D55",
+    ];
+    let size = 26.0;
+    let gap = 7.0;
+    let start_x = panel.x0 + 14.0;
+    let start_y = panel.y0 + 119.0;
+    for (i, hex) in PRESETS.into_iter().enumerate() {
+        let col = i % 8;
+        let row = i / 8;
+        let r = Rect::new(
+            start_x + col as f64 * (size + gap),
+            start_y + row as f64 * (size + gap),
+            start_x + col as f64 * (size + gap) + size,
+            start_y + row as f64 * (size + gap) + size,
+        );
+        let color = parse_hex(hex).unwrap_or(Color::WHITE);
+        fill_rrect(s, r, 5.0, color.clone());
+        if color == current {
+            stroke_rrect(s, r.inflate(1.5, 1.5), 6.0, C_TEXT, 1.5);
+        } else {
+            stroke_rrect(s, r, 5.0, C_LINE, 1.0);
+        }
+        hit.push((r, Action::PaintPreset(is_fill, hex.to_string())));
     }
 }
 
