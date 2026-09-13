@@ -4325,14 +4325,22 @@ impl Host {
                     }
                     "z" | "Z" => {
                         if self.app.shift {
-                            self.app.doc().redo_document();
+                            if self.app.doc().redo_document() {
+                                self.app.mark_dirty();
+                                return;
+                            }
                         } else {
-                            self.app.doc().undo_document();
+                            if self.app.doc().undo_document() {
+                                self.app.mark_dirty();
+                                return;
+                            }
                         }
                         return;
                     }
                     "y" | "Y" => {
-                        self.app.doc().redo_document();
+                        if self.app.doc().redo_document() {
+                            self.app.mark_dirty();
+                        }
                         return;
                     }
                     "c" | "C" => {
@@ -4352,10 +4360,20 @@ impl Host {
                         if let Some(figma_doc) = crate::state::try_import_from_figma_clipboard() {
                             // Successfully imported from Figma clipboard
                             self.app.import_figma_document(figma_doc);
+                            self.app.status = "Imported from Figma clipboard".into();
                             return;
                         }
                         // Fall back to internal clipboard
+                        // QA-001 FIX: Check clipboard content via method instead of direct field access
+                        let had_content = self.app.has_clipboard_content();
                         self.app.paste_nodes();
+                        
+                        // Provide user feedback on paste result
+                        if had_content {
+                            // Status already set by paste_nodes()
+                        } else {
+                            self.app.status = "Clipboard is empty. Copy from Figma or select objects first.".into();
+                        }
                         return;
                     }
                     "d" | "D" => {
@@ -6286,6 +6304,41 @@ impl Host {
             Action::CycleTheme => {
                 let next = crate::theme::active_theme().next();
                 self.apply_theme(next);
+            }
+            Action::ToggleColorPicker(is_fill) => {
+                let doc = self.app.doc_mut();
+                if is_fill {
+                    doc.color_picker_fill_open = !doc.color_picker_fill_open;
+                    if doc.color_picker_fill_open {
+                        doc.color_picker_stroke_open = false;
+                    }
+                } else {
+                    doc.color_picker_stroke_open = !doc.color_picker_stroke_open;
+                    if doc.color_picker_stroke_open {
+                        doc.color_picker_fill_open = false;
+                    }
+                }
+                // Sync chrome-level popup state with document state
+                self.chrome.fill_color_popup = doc.color_picker_fill_open;
+                self.chrome.stroke_color_popup = doc.color_picker_stroke_open;
+                // Position popup near the right panel
+                if doc.color_picker_fill_open || doc.color_picker_stroke_open {
+                    let right_x = self.chrome.config.width as f64 - self.chrome.right_w();
+                    let field_y = if is_fill {
+                        self.chrome.top_h() + 394.0
+                    } else {
+                        self.chrome.top_h() + 428.0
+                    };
+                    self.chrome.popup_position = (right_x + 80.0, field_y + 20.0);
+                }
+            }
+            Action::CloseColorPicker => {
+                let doc = self.app.doc_mut();
+                doc.color_picker_fill_open = false;
+                doc.color_picker_stroke_open = false;
+                // Sync chrome-level popup state
+                self.chrome.fill_color_popup = false;
+                self.chrome.stroke_color_popup = false;
             }
             Action::RightTab(t) => {
                 self.app.doc().right_tab = t;

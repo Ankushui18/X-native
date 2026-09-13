@@ -340,6 +340,9 @@ pub enum Action {
     ToggleVisible,
     ToggleLock,
     Align(usize, usize),
+    /// Color picker popup toggle (fill/stroke)
+    ToggleColorPicker(bool),
+    CloseColorPicker,
     /// UX Analysis actions (Quant-UX inspired)
     UxAccessibility,
     UxUserFlow,
@@ -597,6 +600,10 @@ pub struct OpenDoc {
     pub guide_drag: Option<(char, f64)>,
     /// Board document for infinite canvas mode
     pub board_doc: Option<x_board::BoardDocument>,
+    /// Color picker popup state for fill
+    pub color_picker_fill_open: bool,
+    /// Color picker popup state for stroke
+    pub color_picker_stroke_open: bool,
 }
 
 /// One row of the v45 mock's left-panel layers array (HTML `layers` const):
@@ -732,6 +739,8 @@ impl OpenDoc {
             guides: vec![],
             guide_drag: None,
             board_doc: None,
+            color_picker_fill_open: false,
+            color_picker_stroke_open: false,
         }
     }
 
@@ -781,6 +790,8 @@ impl OpenDoc {
             guides: vec![],
             guide_drag: None,
             board_doc: None,
+            color_picker_fill_open: false,
+            color_picker_stroke_open: false,
         }
     }
 
@@ -910,6 +921,8 @@ pub struct App {
     pub palette: CommandPalette,
     /// Context menu system for canvas, layers, pages, inspector, and tool rail
     pub context_menu: ContextMenu,
+    /// Color picker popup state: (is_fill, field_rect, is_open)
+    pub color_picker_popup: Option<(bool, Rect, bool)>,
     pub status: String,
     pub zoom: f64,
     pub pan: (f64, f64),
@@ -1023,6 +1036,7 @@ impl App {
             page_field_rect: None,
             palette: CommandPalette::new(1440.0, 900.0),
             context_menu: ContextMenu::new(),
+            color_picker_popup: None,
             status: String::from("Ready"),
             zoom: 1.0,
             pan: (0.0, 0.0),
@@ -2112,9 +2126,26 @@ impl App {
         if idx >= self.docs.len() {
             return;
         }
+        
+        // QA-002 FIX: Add warning and user feedback when trying to close dirty docs
+        // This should only be called after user confirms save/discard via request_close_doc()
         if self.docs[idx].dirty {
+            eprintln!(
+                "[BUG] close_doc() called on dirty document at index {}. \
+                 Caller should use request_close_doc() to show save dialog.",
+                idx
+            );
+            // Set status to inform the user if this is the active document
+            if idx == self.active {
+                self.status = format!(
+                    "Cannot close '{}': Document has unsaved changes. \
+                     Please save or discard changes first.",
+                    self.docs[idx].name
+                );
+            }
             return;
         }
+        
         let removed = self.docs.remove(idx);
         let _ = std::fs::remove_file(&removed.recovery_path);
         if let Some(path) = removed.path.as_ref() {
@@ -2481,9 +2512,37 @@ pub fn get_system_clipboard_text() -> Option<String> {
 pub fn try_import_from_figma_clipboard() -> Option<x_native::Document> {
     let clipboard_text = get_system_clipboard_text()?;
 
-    // Try to parse as Figma JSON — Figma's clipboard format is a JSON
-    // object with node data; non-Figma content simply fails to parse.
-    x_native::fileio::import_figma_json(&clipboard_text).ok()
+    // QA-001 FIX: Add early validation and debug logging
+    // Early exit for empty or very short content
+    if clipboard_text.trim().is_empty() || clipboard_text.len() < 10 {
+        return None;
+    }
+
+    // Quick check: Figma JSON must start with '{' and contain "document"
+    let trimmed = clipboard_text.trim();
+    if !trimmed.starts_with('{') || !trimmed.contains("\"document\"") {
+        // Not Figma format - could be plain text or other app's clipboard
+        eprintln!("[CLIPBOARD] Content does not appear to be Figma JSON");
+        return None;
+    }
+
+    // Try to parse as Figma JSON with better error reporting
+    match x_native::fileio::import_figma_json(&clipboard_text) {
+        Ok(doc) => {
+            eprintln!("[CLIPBOARD] Successfully imported Figma document");
+            Some(doc)
+        }
+        Err(e) => {
+            eprintln!("[CLIPBOARD] Figma import failed: {}", e);
+            // Provide more context about what went wrong
+            if e.contains("no \"document\"") {
+                eprintln!("[CLIPBOARD] Expected Figma REST API format with 'document' key");
+            } else if e.contains("not a Figma REST JSON") {
+                eprintln!("[CLIPBOARD] JSON structure doesn't match Figma format");
+            }
+            None
+        }
+    }
 }
 
 #[cfg(test)]
