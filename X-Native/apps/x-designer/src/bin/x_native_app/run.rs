@@ -3244,11 +3244,14 @@ impl Host {
         }
 
         // Get combined bounding box for multi-selection
+        let mut single: Option<x_native::Node> = None;
         let bounds = if editor.selection.len() == 1 {
             // Single selection - use existing logic
             let id = editor.selection.first()?.clone();
             let n = crate::editor_ui::find_node(&editor.root, id.as_str())?;
-            (n.transform.x, n.transform.y, n.w, n.h)
+            let b = (n.transform.x, n.transform.y, n.w, n.h);
+            single = Some(n.clone());
+            b
         } else {
             // Multi-selection - compute combined bounds
             let mut min_x = f64::MAX;
@@ -3276,9 +3279,20 @@ impl Host {
         // proximity in SCREEN px
         let tol = 6.0 / self.app.zoom.max(0.01);
         let corners = [(x, y), (x + w, y), (x, y + h), (x + w, y + h)];
-        let corner = corners
-            .iter()
-            .position(|(cx, cy)| (world.x - cx).abs() <= tol && (world.y - cy).abs() <= tol)?;
+        // A transformed layer's handles are NOT at the corners of its
+        // axis-aligned box: the renderer draws the node through
+        // `transform.matrix`, so the outline (and these handles) have to be
+        // placed the same way or grabbing a rotated shape misses. Unrotated
+        // nodes keep the original square-proximity test, byte for byte.
+        let corner = match &single {
+            Some(n) if crate::editor_ui::is_transformed(n) => {
+                x_native::editor::corner_at(n, world.x, world.y, tol)
+                    .map(x_native::editor::corner_index)?
+            }
+            _ => corners
+                .iter()
+                .position(|(cx, cy)| (world.x - cx).abs() <= tol && (world.y - cy).abs() <= tol)?,
+        };
         Some(Drag::ResizeSel {
             corner,
             orig: (x, y, w, h),
@@ -3324,6 +3338,53 @@ impl Host {
                 start,
             }) => {
                 let world = self.app.screen_to_world(p);
+
+                // ONE layer, dragged by a corner: resize in the node's own
+                // frame. The engine keeps the opposite corner pinned in world
+                // space (and derives the position that achieves it), instead
+                // of growing an axis-aligned box and letting a rotated shape
+                // slide off its own outline. ⌥ (resize from center) has no
+                // anchor corner to pin, so it keeps the symmetric path below.
+                let single = {
+                    let doc = self.app.doc();
+                    doc.editor_ref().selection.clone()
+                };
+                if single.len() == 1 && !self.app.alt {
+                    let id = single[0].clone();
+                    // read the modifier BEFORE taking the document: the
+                    // editor call holds a mutable borrow of the app, so a
+                    // `self.app.shift` in its argument list would fight it
+                    let keep_aspect = self.app.shift;
+                    let resized = {
+                        let doc = self.app.doc();
+                        doc.editor().resize_transformed(
+                            &id,
+                            x_native::editor::corner_from_index(corner),
+                            world.x,
+                            world.y,
+                            keep_aspect,
+                            2.0,
+                        )
+                    };
+                    if resized {
+                        // manually resizing a text box pins it (Figma fixed-size)
+                        let is_text = {
+                            let doc = self.app.doc();
+                            crate::editor_ui::find_node(&doc.editor_ref().root, &id)
+                                .map(|n| matches!(n.kind, x_native::NodeKind::Text { .. }))
+                                .unwrap_or(false)
+                        };
+                        if is_text {
+                            let doc = self.app.doc();
+                            doc.editor().mutate_visual_stack(&id, |node| {
+                                node.bindings.insert("tm".into(), "fixed".into());
+                            });
+                        }
+                        self.app.mark_dirty();
+                    }
+                    return;
+                }
+
                 let mut dx = (world.x - start.x).min(ow - 2.0);
                 let mut dy = (world.y - start.y).min(oh - 2.0);
                 // ⇧ keeps the original aspect ratio
@@ -6593,7 +6654,11 @@ impl Host {
                         if matches!(n.kind, NodeKind::Frame { .. }) {
                             let name = FRAME_PRESETS[i].0.to_string();
                             doc.editor().rename_node(&id, &name);
-                            doc.editor().resize(&id, w, h);
+                            // same parametric path as the inspector's W/H
+                            // fields: bound sizes and pinned children follow
+                            let mut vars = doc.doc.variables.clone();
+                            doc.editor().resize_parametric(&id, w, h, &mut vars);
+                            doc.doc.variables = vars;
                             self.app.mark_dirty();
                             let _ = is_frame;
                         }
@@ -7001,7 +7066,13 @@ impl Host {
                             n.bindings.insert("tm".into(), "fixed".into());
                         }
                     });
-                    doc.editor().resize(&node_id, w, h);
+                    // Parametric: if W or H is bound to a number variable,
+                    // the variable is rewritten and every other node bound
+                    // to it follows — in the same undo step. Pinned children
+                    // and corner radii are re-synced to the new box too.
+                    let mut vars = doc.doc.variables.clone();
+                    doc.editor().resize_parametric(&node_id, w, h, &mut vars);
+                    doc.doc.variables = vars;
                     self.app.mark_dirty();
                 }
             }

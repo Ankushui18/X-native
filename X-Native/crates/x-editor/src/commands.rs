@@ -19,6 +19,15 @@ pub enum Command {
         from: (f64, f64),
         to: (f64, f64),
     },
+    /// Rotation-aware corner resize: `((w, h), (x, y))` before and after.
+    /// Unlike `Resize` this also repositions the node, because a rotated box
+    /// that grows along its local axes has to move to keep the corner the
+    /// user is NOT dragging pinned in world space. See `transformed_resize`.
+    ResizeTransformed {
+        id: String,
+        from: ((f64, f64), (f64, f64)),
+        to: ((f64, f64), (f64, f64)),
+    },
     Rotate {
         id: String,
         from: f64,
@@ -125,6 +134,18 @@ pub(crate) fn apply(root: &mut Node, cmd: &Command) -> bool {
             if let Some(n) = find_mut(root, id) {
                 n.w = to.0.max(1.0);
                 n.h = to.1.max(1.0);
+                n.dirty = true;
+                true
+            } else {
+                false
+            }
+        }
+        Command::ResizeTransformed { id, to, .. } => {
+            if let Some(n) = find_mut(root, id) {
+                n.w = to.0 .0.max(1.0);
+                n.h = to.0 .1.max(1.0);
+                n.transform.x = to.1 .0;
+                n.transform.y = to.1 .1;
                 n.dirty = true;
                 true
             } else {
@@ -363,6 +384,11 @@ pub(crate) fn invert(cmd: &Command) -> Command {
             dy: -dy,
         },
         Command::Resize { id, from, to } => Command::Resize {
+            id: id.clone(),
+            from: *to,
+            to: *from,
+        },
+        Command::ResizeTransformed { id, from, to } => Command::ResizeTransformed {
             id: id.clone(),
             from: *to,
             to: *from,

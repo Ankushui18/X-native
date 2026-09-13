@@ -1793,6 +1793,9 @@ impl App {
             }
             _ => {}
         }
+        // Shape Builder refusals are reported here, after the `doc` borrow
+        // ends — the status bar belongs to the app, not the document.
+        let mut refusal: Option<String> = None;
         let doc = self.doc();
         match cmd {
             Copy | Cut | Paste => unreachable!("clipboard handled above"),
@@ -1829,13 +1832,35 @@ impl App {
             }
             Union | Subtract | Intersect | Exclude => {
                 use x_native::booleans::BoolOp as B;
+                use x_native::editor::{
+                    ShapeBuilderOp as SbOp, DEFAULT_MIN_OVERLAP as MIN_OVERLAP,
+                };
                 let op = match cmd {
                     CtxCmd::Union => B::Union,
                     CtxCmd::Subtract => B::Subtract,
                     CtxCmd::Intersect => B::Intersect,
                     _ => B::Exclude,
                 };
-                doc.editor().boolean_selected(op);
+                // Union/Subtract go through the Shape Builder, which measures
+                // the overlap first and refuses with a reason: merging two
+                // shapes that never touch produced a compound path of two
+                // unrelated islands, and subtracting a shape that fully
+                // covers the other just deleted a layer. Intersect/Exclude
+                // keep the raw boolean — an empty result IS their answer.
+                let shape_builder = match op {
+                    B::Union => Some(SbOp::Merge),
+                    B::Subtract => Some(SbOp::Subtract),
+                    _ => None,
+                };
+                match shape_builder {
+                    Some(sb) => match doc.editor().shape_builder_selected(sb, MIN_OVERLAP) {
+                        Ok(_) => {}
+                        Err(issue) => refusal = Some(issue.message()),
+                    },
+                    None => {
+                        doc.editor().boolean_selected(op);
+                    }
+                }
             }
             BringFwd => {
                 if let Some(id) = doc.selected_id().clone() {
@@ -1863,6 +1888,9 @@ impl App {
                     doc.editor().set_visible(&id, false);
                 }
             }
+        }
+        if let Some(msg) = refusal {
+            self.status = msg;
         }
         self.mark_dirty();
     }

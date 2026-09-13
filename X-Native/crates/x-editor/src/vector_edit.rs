@@ -132,16 +132,8 @@ fn set_anchor_pos(path: &mut [PathCmd], cmd_index: usize, nx: f64, ny: f64) {
         }
         PathCmd::Close => {}
     }
-    // outgoing cubic's c1 also moves rigidly (it belongs to the NEXT cmd)
-    if cmd_index + 1 < path.len() {
-        // capture the (possibly updated) anchor position first
-        let (ax, ay) = match path[cmd_index] {
-            PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => (x, y),
-            PathCmd::CurveTo(_, _, _, _, x, y) => (x, y),
-            PathCmd::Close => return,
-        };
-        let _ = (ax, ay);
-    }
+    // the OUTGOING cubic's c1 belongs to the next command and is moved by
+    // `move_anchor`, which knows the anchor's pre-move position
 }
 
 impl Editor {
@@ -362,6 +354,11 @@ impl Editor {
         if !changed {
             return false;
         }
+        // A control handle pulled outside the box extends the shape's real
+        // extent even though no ANCHOR moved — the same reason `move_anchor`
+        // regrows. Without this the curve is clipped by the node's stale
+        // w/h, and hit-testing / marquee miss the new bulge.
+        grow_bounds(&mut after);
         self.push_replace(id, before, after);
         true
     }

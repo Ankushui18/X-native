@@ -8,6 +8,38 @@ are the crate versions in `Cargo.toml`, which still drift (see
 ## [Unreleased] — 2026-09-12
 
 ### Added
+- **Transformed (rotation-aware) corner resize.** `x_editor::transformed_resize`
+  does the corner-drag math in the node's own frame and solves for the position
+  that keeps the corner the user is NOT dragging pinned in world space —
+  `plan_resize`, `world_corners`, `local_point`/`local_to_world`, `corner_at`,
+  plus `Editor::resize_transformed` and a new `Command::ResizeTransformed` so a
+  rotated resize is one undo step that restores size AND position. Previously
+  `Command::Resize` wrote only `w`/`h`, so a rotated layer slid off its own
+  selection outline while being resized.
+- **Shape Builder overlap validation.** `x_editor::shape_builder` measures
+  `|A ∩ B| / min(|A|, |B|)` from the real boolean geometry (the same
+  "fraction of the smaller box" the audit toolkit reports) and refuses with a
+  reason: `NotEnoughSelection`, `UnsupportedNode` (naming the layer),
+  `DegenerateGeometry`, `Disjoint`, `FullyNested`. Union/Subtract in the canvas
+  menu now go through it, so merging two shapes that never touch no longer
+  yields a compound path of unrelated islands, and subtracting a shape that
+  fully covers the other no longer silently deletes a layer — the status bar
+  says why instead.
+- **Parametric resize synchronization.** `Node::bind("w" | "h" | "radius" |
+  "opacity", var)` round-tripped through the file format but nothing ever read
+  it back. `x_editor::parametric` now resolves those bindings (variable → node)
+  and writes them back on a manual resize (node → variable), so every other
+  node bound to the same token follows in the same undo step; pinned children
+  re-sync via `apply_constraints` and corner radii clamp to the new box.
+  Wired into the inspector's W/H fields and the frame presets.
+- **World-space vector handles.** `x_editor::vector_handles` is the coordinate
+  layer `vector_edit` was missing: `anchors_world`, `handles_world`,
+  `anchor_at_world`, `handle_at_world`, `segment_at_world` and world-space
+  `drag_anchor_world` / `drag_handle_world` / `pen_add_anchor_world` /
+  `split_segment_world`. Path data is node-local, the pointer is world — hit
+  testing in local coordinates missed every handle on a placed node, and was
+  outright wrong once the node was rotated. The canvas paints anchors, control
+  handles and tangent lines through this layer when the Pen tool is active.
 - **UI themes with a contrast audit.** `x_native::ui::ColorTokens` is now the
   single source of truth for interface color: 22 semantic roles across three
   palettes — Graphite (dark, default), Daylight (light), High Contrast.
@@ -60,6 +92,18 @@ are the crate versions in `Cargo.toml`, which still drift (see
   parser.
 
 ### Fixed
+- Rotated layers drew an axis-aligned selection outline and corner handles
+  (taken from `transform.x/y` + `w/h`) while the renderer drew the shape
+  through `transform.matrix` — the box was nowhere near the artwork, and
+  grabbing a handle missed. Outline, handles and resize hit-testing now share
+  one transform-aware geometry (`editor_ui::is_transformed`).
+- `Editor::move_handle` did not regrow the node's bounds, so dragging a bezier
+  control handle outside the box left the curve clipped by stale `w`/`h` and
+  invisible to hit-testing and marquee. `move_anchor` already did this;
+  handles now match.
+- A dead block in `vector_edit::set_anchor_pos` computed the anchor position
+  and discarded it (`let _ = (ax, ay)`); removed, with the comment pointing at
+  `move_anchor`, which owns the outgoing control point.
 - Contrast failures in the default dark theme: secondary text (was 3.87:1 on
   active rows), destructive labels painted in the danger red (was 2.6–4.6:1),
   and the accent fill under white button labels (4.38 → 5.39:1 by deepening

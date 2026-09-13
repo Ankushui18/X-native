@@ -7,6 +7,9 @@
 //! - hit testing (transform-aware, z-order-aware, lock/visibility-aware)
 //! - Editor: selection + command-based mutations with full undo/redo
 //! - move / resize / rotate / set-fill / reorder(z) / group / delete
+//! - transformed (rotation-aware) corner resize + world/local mapping
+//! - shape builder with overlap validation before any boolean runs
+//! - parametric resize: variable-bound sizes and the dependents they sync
 //! - align & distribute
 //! - snapping (grid + other-object edges)
 //! - constraints solver (pins: left/right/center/stretch/scale)
@@ -21,10 +24,14 @@ pub mod constraints;
 pub mod devmode;
 pub mod editor_core;
 pub mod eraser;
+pub mod parametric;
 pub mod prototype;
 pub mod selection;
+pub mod shape_builder;
 pub mod snapping;
 pub mod spatial;
+pub mod transformed_resize;
+pub mod vector_handles;
 #[cfg(test)]
 mod tests_mod;
 pub mod vector_edit;
@@ -36,8 +43,21 @@ pub use constraints::*;
 pub use devmode::*;
 pub use editor_core::*;
 pub use eraser::*;
+pub use parametric::*;
 pub use prototype::*;
 pub use selection::*;
 pub use snapping::*;
 pub use spatial::*;
+pub use shape_builder::{
+    overlap, path_area, validate, OverlapReport, ShapeBuilderIssue, ShapeBuilderOp,
+    AREA_STEPS, DEFAULT_MIN_OVERLAP,
+};
+pub use transformed_resize::{
+    anchor_norm, corner_at, corner_from_index, corner_index, handle_norm, linear, local_point,
+    local_to_world, plan_resize, world_corners, world_point, ResizePlan,
+};
 pub use vector_edit::{anchor_at, anchors, segment_at, Anchor};
+pub use vector_handles::{
+    anchor_at_world, anchors_of, anchors_world, anchors_world_of, handle_at_world, handles_world,
+    local_scale, segment_at_world, AnchorWorld, HandleHit,
+};
