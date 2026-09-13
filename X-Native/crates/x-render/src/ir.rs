@@ -883,7 +883,7 @@ fn lower(
     if let Some(c) = overrides
         .get(&node.id)
         .and_then(|raw| raw.strip_prefix("stroke:"))
-        .and_then(|v| parse_hex_color(v))
+        .and_then(parse_hex_color)
     {
         let mut n2 = node.clone();
         apply_stroke_paint(&mut n2, c);

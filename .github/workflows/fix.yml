@@ -47,6 +47,12 @@ jobs:
         with:
           toolchain: "1.98.1"
           components: rustfmt, clippy
+          # This action defaults build-warnings to "deny", i.e. it exports
+          # CARGO_BUILD_WARNINGS=deny and turns every warning into an error.
+          # That contradicts this repo's own policy: scripts/check.sh tolerates
+          # dead code up to DEAD_CODE_CEILING and only fails on lints outside
+          # the budget. Empty = the documented gate.
+          build-warnings: ""
           cache: true
 
       - name: Toolchain

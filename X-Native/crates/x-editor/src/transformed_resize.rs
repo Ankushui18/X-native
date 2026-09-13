@@ -88,7 +88,9 @@ pub fn linear(n: &Node) -> Affine {
 }
 
 fn apply(m: Affine, x: f64, y: f64) -> (f64, f64) {
-    let p = m.transform_point(Point::new(x, y));
+    // kurbo's Affine has no `transform_point`; multiplying by a Point is the
+    // idiom the rest of the tree uses (see x-core/src/image_transform.rs).
+    let p = m * Point::new(x, y);
     (p.x, p.y)
 }
 
