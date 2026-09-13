@@ -1534,7 +1534,10 @@ impl XNativeApp {
         ];
 
         let segment_w = hue_bar_w / 6.0;
-        for i in 0..6 {
+        // Iterate the first six stops directly (clippy::needless_range_loop):
+        // colors[6] is the duplicate red that closes the ramp, drawn by the
+        // last segment, not a segment of its own.
+        for (i, color) in colors.iter().enumerate().take(6) {
             let seg_x = hue_bar_x + (i as f64 * segment_w);
             let mut path = BezPath::new();
             path.move_to((seg_x, hue_bar_y));
@@ -1545,7 +1548,7 @@ impl XNativeApp {
             self.scene.fill(
                 vello::peniko::Fill::NonZero,
                 Affine::IDENTITY,
-                colors[i],
+                *color,
                 None,
                 &path,
             );

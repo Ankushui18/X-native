@@ -10,6 +10,15 @@ mod tests {
     use super::*;
     use x_core::{Color, Node};
 
+    /// Frames and sections draw their own name as a canvas label (the QA-004
+    /// block in scene.rs), and every glyph of that label counts as one path in
+    /// the scene stats. The names used in these tests are ASCII, so one glyph
+    /// per character — spell the label out instead of hardcoding the sum, so a
+    /// renamed fixture shows up as a label change, not as a mystery off-by-N.
+    fn label_paths(name: &str) -> usize {
+        name.chars().count()
+    }
+
     fn doc() -> Node {
         Node::frame("page", 800.0, 600.0)
             .child(Node::rect(
@@ -1154,7 +1163,8 @@ mod tests {
         ));
         let mid = smart_animate(&from, &to, 0.25);
         let (_, s) = x_render::build_scene(&mid, None, &Variables::default());
-        assert_eq!(s.paths, 1);
+        // the interpolated box, plus the morph frame's own name label
+        assert_eq!(s.paths, 1 + label_paths("s1"));
     }
 
     #[test]
@@ -1248,12 +1258,13 @@ mod tests {
         assert!(master.children.iter().any(|c| c.id == "a"));
         // rendering resolves the instance -> master children paths
         let (_, s) = x_render::build_scene(&e.root, None, &Variables::default());
-        assert_eq!(s.paths, 3); // c (ellipse) + 2 resolved members
-                                // stamp two more instances
+        // c (ellipse) + 2 resolved members + the page frame's label
+        assert_eq!(s.paths, 3 + label_paths("page"));
+        // stamp two more instances
         let id2 = e.place_instance("Card", 400.0, 300.0).unwrap();
         assert_eq!(id2, "Card-2");
         let (_, s) = x_render::build_scene(&e.root, None, &Variables::default());
-        assert_eq!(s.paths, 5);
+        assert_eq!(s.paths, 5 + label_paths("page"));
         // editing the MASTER's child updates every instance render
         assert_eq!(e.component_names(), vec!["Card".to_string()]);
         // undo the placement, then undo the componentization entirely

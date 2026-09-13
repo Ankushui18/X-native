@@ -790,9 +790,12 @@ mod run_fns_tests {
                 60.0,
                 x_native::Color::from_rgb8(0x88, 0x99, 0xAA),
             );
+            // x = 60, not 200: step 6 unions r1 and e1 through the context
+            // menu, and the Shape Builder refuses to merge shapes that do not
+            // overlap (that is its whole point), so the two must overlap.
             let e = x_native::Node::ellipse(
                 "e1",
-                200.0,
+                60.0,
                 0.0,
                 60.0,
                 60.0,

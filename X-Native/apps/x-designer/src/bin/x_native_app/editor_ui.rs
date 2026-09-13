@@ -123,7 +123,9 @@ fn paint_layout_guides(app: &App, s: &mut Scene) {
     let Some(node) = find_node(&doc.editor_ref().root, &id) else {
         return;
     };
-    let step = doc.guide_size.max(1.0).min(4096.0);
+    // clamp, not max().min() (clippy::manual_clamp); NaN draws no guides
+    // rather than a 1px wall of them.
+    let step = doc.guide_size.clamp(1.0, 4096.0);
     let (ox, oy) = (node.transform.x, node.transform.y);
     let max_lines = 512usize;
     let guide_color = vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0x58);
@@ -137,10 +139,10 @@ fn paint_layout_guides(app: &App, s: &mut Scene) {
     while x <= node.w && i < max_lines {
         let sx = app.world_to_screen(Point::new(ox + x, oy)).x;
         if sx >= reg.canvas.x0 && sx <= reg.canvas.x1 {
-            let color = if doc.guide_kind == 1 && i % 4 == 0 {
+            let color = if doc.guide_kind == 1 && i.is_multiple_of(4) {
                 vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0x90)
             } else {
-                guide_color.clone()
+                guide_color
             };
             vline(s, sx, reg.canvas.y0, reg.canvas.y1, color);
         }
@@ -152,10 +154,10 @@ fn paint_layout_guides(app: &App, s: &mut Scene) {
     while y <= node.h && i < max_lines {
         let sy = app.world_to_screen(Point::new(ox, oy + y)).y;
         if sy >= reg.canvas.y0 && sy <= reg.canvas.y1 {
-            let color = if doc.guide_kind == 1 && i % 4 == 0 {
+            let color = if doc.guide_kind == 1 && i.is_multiple_of(4) {
                 vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0x90)
             } else {
-                guide_color.clone()
+                guide_color
             };
             hline(s, reg.canvas.x0, reg.canvas.x1, sy, color);
         }
@@ -3557,7 +3559,7 @@ fn paint_carets(app: &mut App, s: &mut Scene) {
 /// painting and input means clicks outside the popup close it instead of
 /// accidentally editing the canvas underneath.
 pub(crate) fn color_picker_rect(app: &App) -> Option<Rect> {
-    let (_, anchor, open) = app.color_picker_popup.as_ref()?.clone();
+    let (_, anchor, open) = *app.color_picker_popup.as_ref()?;
     if !open {
         return None;
     }
@@ -3624,13 +3626,13 @@ fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         panel.x1 - 14.0,
         panel.y0 + 72.0,
     );
-    fill_rrect(s, preview, 6.0, current.clone());
+    fill_rrect(s, preview, 6.0, current);
     stroke_rrect(s, preview, 6.0, C_LINE_2, 1.0);
     app.fonts.text(
         s,
         panel.x0 + 14.0,
         panel.y0 + 87.0,
-        &format!("#{}", crate::state::color_hex(current.clone())),
+        &format!("#{}", crate::state::color_hex(current)),
         T10,
         C_TEXT,
         Wt::Mono,
@@ -3663,7 +3665,7 @@ fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
             start_y + row as f64 * (size + gap) + size,
         );
         let color = parse_hex(hex).unwrap_or(Color::WHITE);
-        fill_rrect(s, r, 5.0, color.clone());
+        fill_rrect(s, r, 5.0, color);
         if color == current {
             stroke_rrect(s, r.inflate(1.5, 1.5), 6.0, C_TEXT, 1.5);
         } else {
