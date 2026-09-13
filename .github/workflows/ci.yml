@@ -78,10 +78,17 @@ jobs:
             head -c 120000 /tmp/gate.log
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          # compiler/lint errors as annotations: they show up on the checks tab
-          # and are readable through the check-runs API
-          grep -E '^(error|warning)(\[[A-Z0-9]+\])?:' /tmp/gate.log |
-            head -40 | while IFS= read -r line; do
-              printf '::error::%s\n' "$line"
+          # The raw step log lives on blob storage, which is unreachable from
+          # some tooling, and step summaries are not exposed by the check-runs
+          # API — so the gate's output is also emitted as annotations, which
+          # ARE reachable through api.github.com. Newlines must be %0A-escaped
+          # inside a workflow-command message, hence the dance below.
+          sed -e 's/%/%25/g' -e 's/\r//g' /tmp/gate.log |
+            tr '\n' '\036' |
+            sed 's/\x1e/%0A/g' |
+            fold -s -w 3000 |
+            head -30 |
+            while IFS= read -r chunk; do
+              printf '::error::%s\n' "$chunk"
             done
           exit $status
