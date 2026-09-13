@@ -160,6 +160,12 @@ fn encode(
                     };
                     swapped = Some(n2);
                 }
+            } else if let Some(c) = raw.strip_prefix("stroke:").and_then(|v| parse_hex_color(v)) {
+                // a stroke colour override repaints the stroke, never the
+                // fill (the bare-hex form above is the fill override)
+                let mut n2 = node.clone();
+                apply_stroke_paint(&mut n2, c);
+                swapped = Some(n2);
             }
         }
         if !effective_visible {

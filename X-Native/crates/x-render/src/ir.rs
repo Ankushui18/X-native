@@ -876,6 +876,20 @@ fn lower(
     if node_alpha <= 0.0 {
         return;
     }
+    // a stroke colour override repaints the stroke — the node's own paint or
+    // its materialized stroke layers — and never the fill (the bare-hex form
+    // of the override stays the fill override)
+    let mut stroked: Option<Node> = None;
+    if let Some(c) = overrides
+        .get(&node.id)
+        .and_then(|raw| raw.strip_prefix("stroke:"))
+        .and_then(|v| parse_hex_color(v))
+    {
+        let mut n2 = node.clone();
+        apply_stroke_paint(&mut n2, c);
+        stroked = Some(n2);
+    }
+    let node = stroked.as_ref().unwrap_or(node);
     let opacity = 1.0; // composite node opacity once, after its overlapping paints/children
     let world = parent * node.transform.matrix(node.w, node.h);
     let key = format!("{path}/{}", node.id);
@@ -2082,6 +2096,51 @@ mod tests {
         assert!(
             !f2.changed_keys(&f1).is_empty(),
             "fit change must dirty the image command"
+        );
+    }
+
+    #[test]
+    fn stroke_override_paints_the_stroke_and_not_the_fill() {
+        let mut master = Node::component("cb2", "Chip2", 40.0, 20.0);
+        master.visible = false;
+        master.children.push(Node::rect(
+            "chip-bg",
+            0.0,
+            0.0,
+            40.0,
+            20.0,
+            Color::from_rgb8(0, 0, 0xff),
+        ));
+        let mut inst = Node::instance("i2", "Chip2", 200.0, 0.0, 40.0, 20.0);
+        inst.overrides
+            .insert("chip-bg".into(), "stroke:#00ff00".into());
+        let doc = Node::frame("page", 400.0, 300.0)
+            .child(master)
+            .child(inst);
+        let tree = build_render_tree(&doc, &x_core::Variables::default());
+
+        let stroke = tree.commands.iter().find_map(|c| match c {
+            RenderCommand::StrokePath { key, brush, width, .. } if key.contains("chip-bg") => {
+                Some((brush.clone(), *width))
+            }
+            _ => None,
+        });
+        let (brush, width) = stroke.expect("the stroke override must paint a stroke");
+        assert_eq!(width, 1.0, "a zero-width stroke is made visible");
+        assert!(
+            matches!(&brush, Brush::Solid(c) if x_core::color_to_hex(*c) == "#00ff00"),
+            "the override colour reaches the stroke brush, got {brush:?}"
+        );
+        // the interior keeps the master's fill: nothing was written as a fill
+        let fill = tree.commands.iter().find_map(|c| match c {
+            RenderCommand::FillPath { key, brush, .. } if key.contains("chip-bg") => {
+                Some(brush.clone())
+            }
+            _ => None,
+        });
+        assert!(
+            matches!(&fill, Some(Brush::Solid(c)) if x_core::color_to_hex(*c) == "#0000ff"),
+            "the fill is untouched, got {fill:?}"
         );
     }
 

@@ -44,6 +44,7 @@ pub fn resolve_instance_layout(
                     }
                 }
                 OverrideValue::Fill(c) => n.fill = x_core::Paint::Solid(*c),
+                OverrideValue::Stroke(c) => x_core::apply_stroke_paint(n, *c),
                 OverrideValue::Visible(b) => n.visible = *b,
                 OverrideValue::Opacity(o) => n.opacity = *o,
                 OverrideValue::Swap(c) => {

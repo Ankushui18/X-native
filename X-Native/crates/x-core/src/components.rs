@@ -14,13 +14,17 @@
 //! legacy `HashMap<String, String>` ("#hex" / "text:") remains as a
 //! serialization surface and is converted losslessly both ways.
 
-use crate::{color_to_hex, parse_hex_color, Color, Node, NodeKind, Paint, Variables};
+use crate::{color_to_hex, parse_hex_color, Color, Node, NodeKind, Paint, StrokeLayer, Variables};
 use std::collections::HashMap;
 
 /// A typed per-node override carried by an Instance.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OverrideValue {
     Fill(Color),
+    /// Stroke paint. A component color property bound to `target_property:
+    /// "stroke"` writes this, so a border colour never repaints the interior
+    /// of the node it is bound to.
+    Stroke(Color),
     Text(String),
     Visible(bool),
     Opacity(f32),
@@ -36,6 +40,7 @@ impl OverrideValue {
     pub fn encode(&self) -> String {
         match self {
             OverrideValue::Fill(c) => color_to_hex(*c),
+            OverrideValue::Stroke(c) => format!("stroke:{}", color_to_hex(*c)),
             OverrideValue::Text(t) => format!("text:{t}"),
             OverrideValue::Visible(v) => format!("visible:{v}"),
             OverrideValue::Opacity(o) => format!("opacity:{o}"),
@@ -59,6 +64,11 @@ impl OverrideValue {
         if let Some(n) = s.strip_prefix("num:") {
             return n.parse().ok().map(OverrideValue::Number);
         }
+        // checked BEFORE the bare-hex fallback: "#00ff00" still means Fill,
+        // "stroke:#00ff00" does not
+        if let Some(c) = s.strip_prefix("stroke:") {
+            return parse_hex_color(c).map(OverrideValue::Stroke);
+        }
         parse_hex_color(s).map(OverrideValue::Fill)
     }
 }
@@ -79,6 +89,41 @@ pub fn set_override(node: &mut Node, target: &str, value: OverrideValue) {
 /// content lives in the instance's children, so it is kept.
 pub fn reset_overrides(instance: &mut Node) {
     instance.overrides.clear();
+}
+
+/// The typed override a color property writes, picked from its
+/// `target_property` ("fill" or "stroke"). Anything that is not "stroke"
+/// stays a fill, so documents written before the stroke variant existed
+/// keep their meaning.
+pub fn color_override(target_property: &str, color: Color) -> OverrideValue {
+    if target_property.eq_ignore_ascii_case("stroke") {
+        OverrideValue::Stroke(color)
+    } else {
+        OverrideValue::Fill(color)
+    }
+}
+
+/// Write `color` into `node`'s stroke. The write has to be VISIBLE: a
+/// zero-width stroke is given a 1px width, and a node that renders from
+/// materialized stroke layers (`Node::active_strokes`) is recolored there
+/// too — a materialized node paints from its layers, so a write to the
+/// legacy `stroke` field alone would never show up.
+pub fn apply_stroke_paint(node: &mut Node, color: Color) {
+    node.stroke.paint = Paint::Solid(color);
+    if node.stroke.width <= 0.0 {
+        node.stroke.width = 1.0;
+    }
+    if node.visual_stacks_materialized {
+        if node.stroke_layers.is_empty() {
+            node.stroke_layers.push(StrokeLayer::new(node.stroke.clone()));
+        } else {
+            for l in &mut node.stroke_layers {
+                if l.visible {
+                    l.stroke.paint = Paint::Solid(color);
+                }
+            }
+        }
+    }
 }
 
 // ------------------------------------------------------------- properties
@@ -273,10 +318,7 @@ impl PropRegistry {
                 } if name == prop_name => {
                     // Parse hex color and apply to the specified target_property (fill or stroke)
                     if let Some(color) = parse_hex_color(value) {
-                        // OverrideValue has no Stroke variant yet, so every
-                        // color property lands as a Fill (tracked in
-                        // docs/KNOWN_DEBT.md).
-                        set_override(instance, target, OverrideValue::Fill(color));
+                        set_override(instance, target, color_override(target_property, color));
                         return true;
                     }
                 }
@@ -468,6 +510,7 @@ fn apply_overrides_deep(node: &mut Node, ovr: &HashMap<String, OverrideValue>, v
     if let Some(v) = ovr.get(&node.id) {
         match v {
             OverrideValue::Fill(c) => node.fill = Paint::Solid(*c),
+            OverrideValue::Stroke(c) => apply_stroke_paint(node, *c),
             OverrideValue::Text(t) => {
                 if let NodeKind::Text { text } = &mut node.kind {
                     *text = t.clone();
@@ -702,6 +745,110 @@ mod tests {
             default: Some("Badge".into()),
         };
         assert!(matches!(typed, ComponentPropertyType::Slot { .. }));
+    }
+
+    #[test]
+    fn color_override_picks_the_variant_from_target_property() {
+        let c = Color::from_rgb8(0, 0xff, 0);
+        assert!(matches!(
+            color_override("stroke", c),
+            OverrideValue::Stroke(_)
+        ));
+        assert!(
+            matches!(color_override("Stroke", c), OverrideValue::Stroke(_)),
+            "target_property matching is case-insensitive"
+        );
+        assert!(matches!(color_override("fill", c), OverrideValue::Fill(_)));
+        assert!(
+            matches!(color_override("radius", c), OverrideValue::Fill(_)),
+            "anything unknown keeps the pre-stroke-variant behaviour"
+        );
+    }
+
+    #[test]
+    fn stroke_override_encodes_and_decodes() {
+        let c = Color::from_rgb8(0, 0xff, 0);
+        let enc = OverrideValue::Stroke(c).encode();
+        assert_eq!(enc, "stroke:#00ff00", "color_to_hex emits lowercase hex");
+        assert_eq!(OverrideValue::decode(&enc), Some(OverrideValue::Stroke(c)));
+        // the bare-hex serialization surface still means Fill
+        assert_eq!(OverrideValue::decode("#00ff00"), Some(OverrideValue::Fill(c)));
+        // a bad payload after the prefix is rejected, never silently a Fill
+        assert_eq!(OverrideValue::decode("stroke:nope"), None);
+    }
+
+    #[test]
+    fn apply_stroke_paint_sets_paint_and_makes_a_zero_width_visible() {
+        let c = Color::from_rgb8(0, 0xff, 0);
+        let mut n = Node::rect("r", 0.0, 0.0, 10.0, 10.0, Color::WHITE);
+        assert_eq!(n.stroke.width, 0.0);
+        apply_stroke_paint(&mut n, c);
+        assert_eq!(n.stroke.solid_color(), Some(c));
+        assert_eq!(n.stroke.width, 1.0, "zero-width stroke is made visible");
+        // an existing width is kept, not overwritten
+        n.stroke.width = 3.0;
+        apply_stroke_paint(&mut n, Color::BLACK);
+        assert_eq!(n.stroke.width, 3.0);
+        assert_eq!(n.stroke.solid_color(), Some(Color::BLACK));
+        // the fill of the node is never touched
+        assert!(matches!(&n.fill, Paint::Solid(c) if *c == Color::WHITE));
+    }
+
+    #[test]
+    fn apply_stroke_paint_recolors_materialized_stroke_layers() {
+        let c = Color::from_rgb8(0, 0xff, 0);
+        let mut n = Node::rect("r", 0.0, 0.0, 10.0, 10.0, Color::WHITE);
+        n.materialize_visual_stacks();
+        assert!(n.active_strokes().is_empty(), "width 0 materializes no layer");
+        apply_stroke_paint(&mut n, c);
+        let strokes = n.active_strokes();
+        assert_eq!(strokes.len(), 1, "the override adds a paintable layer");
+        assert_eq!(strokes[0].stroke.solid_color(), Some(c));
+        assert_eq!(strokes[0].stroke.width, 1.0);
+        // an existing visible layer is recolored in place, not duplicated
+        let mut m = Node::rect("m", 0.0, 0.0, 10.0, 10.0, Color::WHITE);
+        m.stroke.width = 2.0;
+        m.materialize_visual_stacks();
+        apply_stroke_paint(&mut m, c);
+        assert_eq!(m.stroke_layers.len(), 1);
+        assert_eq!(m.stroke_layers[0].stroke.solid_color(), Some(c));
+        assert_eq!(m.stroke_layers[0].stroke.width, 2.0);
+    }
+
+    #[test]
+    fn prop_registry_apply_writes_stroke_and_fill_overrides() {
+        let mut reg = PropRegistry::default();
+        reg.props.insert(
+            "Card".into(),
+            vec![
+                ComponentProp::Color {
+                    name: "Border".into(),
+                    target: "border".into(),
+                    target_property: "stroke".into(),
+                    default: Color::BLACK,
+                },
+                ComponentProp::Color {
+                    name: "Surface".into(),
+                    target: "border".into(),
+                    target_property: "fill".into(),
+                    default: Color::WHITE,
+                },
+            ],
+        );
+        let mut inst = Node::instance("i1", "Card", 0.0, 0.0, 200.0, 100.0);
+        assert!(reg.apply("Card", &mut inst, "Border", "#00ff00"));
+        assert_eq!(
+            inst.overrides.get("border").map(String::as_str),
+            Some("stroke:#00ff00"),
+            "a stroke property must not encode as a fill"
+        );
+        assert!(reg.apply("Card", &mut inst, "Surface", "#ff0000"));
+        assert_eq!(
+            inst.overrides.get("border").map(String::as_str),
+            Some("#ff0000")
+        );
+        // a bad colour is rejected outright
+        assert!(!reg.apply("Card", &mut inst, "Border", "not-a-color"));
     }
 
     fn find<'a>(n: &'a Node, id: &str) -> Option<&'a Node> {

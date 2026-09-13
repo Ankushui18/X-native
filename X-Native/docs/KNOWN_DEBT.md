@@ -50,13 +50,26 @@ at paint time through `theme::resolve`. Still open:
   deliberately **not** theme-mapped: a UI theme switch must never repaint what
   the user drew.
 
-## 4. `OverrideValue` has no `Stroke` variant
+## 4. The duplicate `OverrideValue` / `ComponentProp` pairs still diverge
 
-Component color properties can be bound to `stroke`, but the value lands as a
-`Fill` until the variant exists (grep `OverrideValue has no Stroke`). The
-`target_property` field is parsed, stored and displayed; only the write side is
-coarse. Marked in `crates/x-core/src/components.rs` and
-`crates/x-editor/src/editor_core.rs`.
+Fixed: a component color property bound to `target_property: "stroke"` now
+writes `OverrideValue::Stroke`, so it paints the stroke of the bound node
+instead of recoloring its interior (the variant exists on both copies —
+`crates/x-core/src/components.rs`, `crates/x-components/src/model.rs`). What is
+left of this entry:
+
+- `x-components`' copy of the enum has no `Number` variant, so a `"num:..."`
+  override decodes to `None` there and the instance-layout pass drops it,
+  while `x-core`'s applier honours it — by writing `node.w`, whatever the
+  property's `target_property` says (`"height"`, `"radius"` and `"opacity"`
+  number properties are all stored as the same `num:` string and land on the
+  width). Deciding what `Number` means per target property comes first; the
+  duplicate can be collapsed after that.
+- `x-components`' `ComponentProp` (the shape the app's property panel and
+  `ComponentPropEntry` use) has no `Color` variant, so color properties are
+  reachable only through `Editor::set_prop_value` and the `.x` format.
+- Sketch export (`crates/x-format/src/sketch.rs`) maps text / fill / swap /
+  opacity overrides; a `stroke:` override is dropped on that path.
 
 ## 5. Deliberately not ported from OpenPencil
 
