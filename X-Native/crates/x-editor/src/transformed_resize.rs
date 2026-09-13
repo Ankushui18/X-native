@@ -27,6 +27,24 @@ use crate::*;
 use crate::{find, Command, Corner, Editor};
 use x_core::{Affine, Node, Point};
 
+/// `a > b` for floats, NaN counting as "not greater".
+///
+/// Written out because `clippy::neg_cmp_op_on_partial_ord` (rightly) rejects
+/// the `!(a > b)` spelling these checks used to use, and `a <= b` would quietly
+/// accept NaN. The resize code must refuse NaN: a NaN size propagates into the
+/// document and then into every export.
+fn gt(a: f64, b: f64) -> bool {
+    matches!(a.partial_cmp(&b), Some(std::cmp::Ordering::Greater))
+}
+
+/// `a >= b` for floats, NaN counting as "no" — see [`gt`].
+fn ge(a: f64, b: f64) -> bool {
+    matches!(
+        a.partial_cmp(&b),
+        Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
+    )
+}
+
 /// The result of a corner drag: the new size AND the position that keeps the
 /// anchor corner where it was.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -165,7 +183,7 @@ pub fn plan_resize(
     keep_aspect: bool,
     min: f64,
 ) -> Option<ResizePlan> {
-    if !(n.w > 0.0) || !(n.h > 0.0) {
+    if !gt(n.w, 0.0) || !gt(n.h, 0.0) {
         return None;
     }
     let (ax, ay) = anchor_norm(handle);
@@ -187,7 +205,7 @@ pub fn plan_resize(
             w = h / ratio;
         }
     }
-    if !(w >= min) || !(h >= min) {
+    if !ge(w, min) || !ge(h, min) {
         return None;
     }
     let t = n.transform;

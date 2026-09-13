@@ -174,9 +174,7 @@ impl Editor {
         vars: &mut Variables,
     ) -> Option<ParametricReport> {
         let root_id = self.root.id.clone();
-        if find_mut(&mut self.root, id).is_none() {
-            return None;
-        }
+        find_mut(&mut self.root, id)?;
         let before = Box::new(self.root.clone());
         let mut after = self.root.clone();
 
@@ -356,9 +354,11 @@ mod tests {
         let mut page = Node::frame("page", 800.0, 600.0);
         let mut hug = Node::frame("hug", 200.0, 100.0);
         if let NodeKind::Frame { layout } = &mut hug.kind {
-            let mut l = x_core::AutoLayout::default();
-            l.sizing = Sizing::Hug;
-            *layout = Some(l);
+            // clippy::field_reassign_with_default: build it in one expression.
+            *layout = Some(x_core::AutoLayout {
+                sizing: Sizing::Hug,
+                ..Default::default()
+            });
         }
         hug.children = vec![Node::rect("kid", 0.0, 0.0, 40.0, 40.0, Color::BLACK)];
         page.children = vec![hug];

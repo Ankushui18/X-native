@@ -158,6 +158,16 @@ fn overlap_named(a: &Node, b: &Node) -> Result<OverlapReport, ShapeBuilderIssue>
     Ok(measure_pair(a, &pa, b, &pb))
 }
 
+/// `a > b` for floats, NaN counting as "not greater".
+///
+/// The degenerate-geometry checks below used to read `!(area > 0.0)`, which is
+/// the correct NaN-rejecting test but is rejected by
+/// `clippy::neg_cmp_op_on_partial_ord`; `area <= 0.0` would silently accept NaN
+/// and let a NaN-sized shape through the boolean backends.
+fn gt(a: f64, b: f64) -> bool {
+    matches!(a.partial_cmp(&b), Some(std::cmp::Ordering::Greater))
+}
+
 /// Validate a Shape Builder operation before performing it.
 ///
 /// * `Merge` needs a real overlap — otherwise the "combined" shape is just
@@ -171,10 +181,10 @@ pub fn validate(
     min_ratio: f64,
 ) -> Result<OverlapReport, ShapeBuilderIssue> {
     let report = overlap_named(a, b)?;
-    if !(report.area_a > 0.0) {
+    if !gt(report.area_a, 0.0) {
         return Err(ShapeBuilderIssue::DegenerateGeometry { id: a.id.clone() });
     }
-    if !(report.area_b > 0.0) {
+    if !gt(report.area_b, 0.0) {
         return Err(ShapeBuilderIssue::DegenerateGeometry { id: b.id.clone() });
     }
     if report.ratio < min_ratio {

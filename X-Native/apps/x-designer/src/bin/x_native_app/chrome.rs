@@ -701,7 +701,7 @@ impl XNativeApp {
 
             // Active underline
             if is_active {
-                let text_width = match *i {
+                let text_width = match i {
                     0 => 43.0, // Design
                     1 => 60.0, // Prototype
                     2 => 35.0, // Code
@@ -1254,10 +1254,16 @@ impl XNativeApp {
         }
 
         let mut y = top + 110.0;
-        for (i, (name, value)) in self.variables.iter().enumerate() {
-            if i >= 12 {
-                break;
-            } // Limit display
+        // Limit display: snapshot the first 12 variables before drawing them.
+        // variable_row takes &mut self, so a borrow of self.variables cannot
+        // live across the call.
+        let rows: Vec<(String, String)> = self
+            .variables
+            .iter()
+            .take(12)
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
+        for (name, value) in &rows {
             self.variable_row(x, y, width, name, value, p);
             y += 34.0;
         }

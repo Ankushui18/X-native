@@ -2688,17 +2688,12 @@ fn paint_design(
         kd.x1 + 6.0 + 48.0 + 6.0 + 24.0,
         y + 24.0,
     );
-    sq_btn_small(
-        app,
-        s,
-        guide_eye.x0,
-        guide_eye.y0,
-        if app.doc().guides_visible {
-            "eye"
-        } else {
-            "eye-off"
-        },
-    );
+    let eye_icon = if app.doc().guides_visible {
+        "eye"
+    } else {
+        "eye-off"
+    };
+    sq_btn_small(app, s, guide_eye.x0, guide_eye.y0, eye_icon);
     hit.push((guide_eye, Action::ToggleGuideVisibility));
     let rm = Rect::new(
         kd.x1 + 6.0 + 48.0 + 6.0 + 24.0 + 6.0,

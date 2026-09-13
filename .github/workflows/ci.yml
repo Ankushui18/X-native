@@ -98,20 +98,29 @@ jobs:
           set +e
           report=/tmp/report.txt
           : > "$report"
+          # One line per diagnostic, never the full rustc dump: GitHub drops
+          # oversized comments, and rustc's source excerpts say nothing the
+          # `--message-format short` line above them does not. Keeping this
+          # small is also what makes the report survive the API round-trip.
           phase() {
-            printf '\n########## %s ##########\n' "$1" >> "$report"
+            name="$1"
             shift
-            "$@" >> "$report" 2>&1
-            printf '########## exit: %s\n' "$?" >> "$report"
+            tmp=$(mktemp)
+            "$@" >"$tmp" 2>&1
+            status=$?
+            printf '\n### %s — exit %s, %s lines\n' "$name" "$status" "$(wc -l < "$tmp")" >> "$report"
+            grep -aE '(^error|^warning|\.rs:[0-9]+:[0-9]+:|FAILED|panicked)' "$tmp" |
+              cut -c1-200 | head -80 >> "$report"
+            rm -f "$tmp"
           }
           phase "cargo --version" cargo --version
           phase "rustc --version" rustc --version
-          phase "cargo build --workspace" cargo build --workspace
+          phase "cargo build --workspace" cargo build --workspace --message-format short
           phase "cargo clippy --workspace --all-targets" cargo clippy --workspace --all-targets --message-format short
-          phase "cargo test --workspace --locked" cargo test --workspace --locked --no-fail-fast
+          phase "cargo test --workspace" cargo test --workspace --locked --no-fail-fast --message-format short
           phase "cargo build -p x-designer --bin x_native" cargo build -p x-designer --bin x_native
           echo "report: $(wc -c < "$report") bytes"
-          tail -c 4000 "$report"
+          cat "$report" || true
           exit 0
 
       - name: Report failure
@@ -130,13 +139,13 @@ jobs:
                      --json number --jq '.[0].number' 2>/dev/null || true)
           if [ -n "$number" ]; then
             {
-              echo "Gate failed on \`${GITHUB_SHA:0:7}\` — gate log, then the raw output of each phase."
+              echo "Gate failed on \`${GITHUB_SHA:0:7}\` — gate log, then one line per diagnostic from each phase."
               echo
               echo '~~~'
-              cat /tmp/gate.log 2>/dev/null
+              head -c 6000 /tmp/gate.log 2>/dev/null
               echo '~~~'
               echo '~~~'
-              head -c 55000 /tmp/report.txt 2>/dev/null
+              head -c 12000 /tmp/report.txt 2>/dev/null
               echo '~~~'
             } > /tmp/ci-comment.md
             gh pr comment "$number" --body-file /tmp/ci-comment.md || true
