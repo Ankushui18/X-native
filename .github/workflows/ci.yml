@@ -48,11 +48,25 @@ jobs:
             pkg-config libssl-dev \
             libx11-dev libxcb1-dev libxkbcommon-dev libwayland-dev libudev-dev
 
-      # Honours X-Native/rust-toolchain.toml — 1.98.1 with rustfmt + clippy,
-      # the exact toolchain the gate asserts against.
+      # Honours X-Native/rust-toolchain.toml. Both inputs are set explicitly:
+      # without them the action reliably did nothing, and the gate then watched
+      # rustup auto-install 1.98.1 mid-run — fmt/clippy/test/CLI-build all
+      # failed with exit codes and no diagnostics.
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: "1.98.1"
+          components: rustfmt, clippy
           cache: true
+
+      # Fail here, loudly, if the toolchain is incomplete — not 90 seconds
+      # later inside the gate as a mysterious exit 101.
+      - name: Toolchain
+        run: |
+          rustup show active-toolchain
+          cargo --version
+          rustc --version
+          rustfmt --version
+          cargo clippy --version
 
       # `bash scripts/check.sh`, not `./scripts/check.sh`: the script is
       # committed 100644 (non-executable), so the direct form fails with

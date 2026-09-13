@@ -1,0 +1,106 @@
+# Mechanical fixes, applied by CI because a checkout without a Rust toolchain
+# cannot run them: `cargo fmt --all` (the remedy scripts/check.sh itself
+# prescribes) followed by the full gate, with the gate log published as a PR
+# comment. The commit is marked [skip ci] so it does not queue a second full
+# build; re-run CI by hand for the verdict.
+#
+#   gh workflow run fix.yml --ref <branch>
+name: Fix
+
+on:
+  workflow_dispatch:
+    inputs:
+      clippy_fix:
+        description: "also run `cargo clippy --fix` (mechanical lint autofixes)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  fix:
+    name: cargo fmt + gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: X-Native
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libssl-dev \
+            libx11-dev libxcb1-dev libxkbcommon-dev libwayland-dev libudev-dev
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: "1.98.1"
+          components: rustfmt, clippy
+          cache: true
+
+      - name: Toolchain
+        run: |
+          rustup show active-toolchain
+          cargo --version
+          rustfmt --version
+          cargo clippy --version
+
+      - name: Apply mechanical fixes
+        run: |
+          cargo fmt --all
+          if [ "${{ inputs.clippy_fix }}" = "true" ]; then
+            cargo clippy --fix --workspace --all-targets --allow-dirty --allow-staged || true
+            cargo fmt --all
+          fi
+          git --no-pager diff --stat
+
+      # The gate is expected to fail here — this records WHAT it says on the
+      # fixed tree, which is the whole point of the job.
+      - name: Re-gate (log only)
+        run: |
+          set +e
+          bash scripts/check.sh > /tmp/gate.log 2>&1
+          echo "gate exit: $?" >> /tmp/gate.log
+          cat /tmp/gate.log
+          exit 0
+
+      - name: Commit the fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A .
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+          else
+            git commit -m "Apply cargo fmt to the workspace [skip ci]
+
+scripts/check.sh said 'unformatted code — run: cargo fmt --all', and the tree
+had never been formatted: apps/x-designer/src/bin/x_native_app/chrome.rs (and
+whatever else the diff covers) carried trailing whitespace and other rustfmt
+differences. No behaviour change."
+            git push
+          fi
+
+      - name: Publish the gate log
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test -f /tmp/gate.log || exit 0
+          number=$(gh pr list --head "$GITHUB_REF_NAME" --state open \
+                     --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$number" ]; then
+            {
+              echo "Mechanical-fix run (\`cargo fmt\`${{ inputs.clippy_fix == true && ' + `clippy --fix`' || '' }}) — gate output on the fixed tree."
+              echo
+              echo '~~~'
+              head -c 60000 /tmp/gate.log
+              echo '~~~'
+            } > /tmp/fix-comment.md
+            gh pr comment "$number" --body-file /tmp/fix-comment.md || true
+          fi
