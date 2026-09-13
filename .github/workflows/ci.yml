@@ -65,3 +65,23 @@ jobs:
             cat /tmp/gate.log
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Short, one-line annotations for the lines that explain a failure: the
+      # gate's per-step verdicts, the diagnostics it printed, and the first
+      # hunks of a formatting diff. These are readable through the check-runs
+      # API — large multi-line annotations get dropped on the floor.
+      - name: Annotate failures
+        if: failure()
+        run: |
+          test -f /tmp/gate.log || exit 0
+          esc=$(printf '\033')
+          annotate() { # $1 pattern, $2 max lines
+            grep -aE "$1" /tmp/gate.log 2>/dev/null |
+              sed -e "s/${esc}\[[0-9;]*m//g" -e 's/\r//g' -e 's/%/%25/g' |
+              cut -c1-400 |
+              head -"$2" |
+              while IFS= read -r line; do printf '::error::%s\n' "$line"; done
+          }
+          annotate '==>|^ *ok |FAIL' 20
+          annotate 'error(\[|:| from )' 12
+          annotate 'Diff in|needs to be updated|not found|No such file' 8
