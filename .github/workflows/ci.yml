@@ -89,41 +89,61 @@ jobs:
           cat /tmp/gate.log || true
           exit $status
 
+      # scripts/check.sh is deliberately opaque: cargo writes into temp files it
+      # greps, the CLI build sends stderr to /dev/null, and the clippy branch
+      # prints only lines starting with "error". When the gate fails, re-run the
+      # phases it covers with nothing filtered out, and publish that alongside
+      # the gate's own log.
+      #
+      # The publish step is a PR comment because the raw step log is served from
+      # blob storage (unreachable from some tooling) and large multi-line
+      # annotations are dropped by GitHub.
+      - name: Diagnose
+        if: failure()
+        run: |
+          set +e
+          report=/tmp/report.txt
+          : > "$report"
+          phase() {
+            printf '\n########## %s ##########\n' "$1" >> "$report"
+            shift
+            "$@" >> "$report" 2>&1
+            printf '########## exit: %s\n' "$?" >> "$report"
+          }
+          phase "cargo --version" cargo --version
+          phase "rustc --version" rustc --version
+          phase "cargo build --workspace" cargo build --workspace
+          phase "cargo clippy --workspace --all-targets" cargo clippy --workspace --all-targets --message-format short
+          phase "cargo test --workspace --locked" cargo test --workspace --locked --no-fail-fast
+          phase "cargo build -p x-designer --bin x_native" cargo build -p x-designer --bin x_native
+          echo "report: $(wc -c < "$report") bytes"
+          tail -c 4000 "$report"
+          exit 0
+
       - name: Report failure
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          test -f /tmp/gate.log || exit 0
-
-          # short single-line annotations: large multi-line ones are dropped
           esc=$(printf '\033')
-          grep -aE '==>|FAIL|error|warning|Diff|panicked|\.rs:[0-9]+' /tmp/gate.log |
-            sed -e "s/${esc}\[[0-9;]*m//g" -e 's/%/%25/g' -e 's/\r//g' |
-            cut -c1-350 | head -35 |
-            while IFS= read -r line; do printf '::error::%s\n' "$line"; done
-
-          # the whole log as a PR comment
+          if [ -f /tmp/gate.log ]; then
+            grep -aE '==>|FAIL|error|warning|Diff|panicked|\.rs:[0-9]+' /tmp/gate.log |
+              sed -e "s/${esc}\[[0-9;]*m//g" -e 's/%/%25/g' -e 's/\r//g' |
+              cut -c1-350 | head -35 |
+              while IFS= read -r line; do printf '::error::%s\n' "$line"; done
+          fi
           number=$(gh pr list --head "$GITHUB_REF_NAME" --state open \
                      --json number --jq '.[0].number' 2>/dev/null || true)
           if [ -n "$number" ]; then
             {
-              echo "Gate failed on \`${GITHUB_SHA:0:7}\` (\`scripts/check.sh\`, full log)."
+              echo "Gate failed on \`${GITHUB_SHA:0:7}\` — gate log, then the raw output of each phase."
               echo
               echo '~~~'
-              head -c 60000 /tmp/gate.log
+              cat /tmp/gate.log 2>/dev/null
               echo '~~~'
-            } > /tmp/gate-comment.md
-            gh pr comment "$number" --body-file /tmp/gate-comment.md || true
+              echo '~~~'
+              head -c 55000 /tmp/report.txt 2>/dev/null
+              echo '~~~'
+            } > /tmp/ci-comment.md
+            gh pr comment "$number" --body-file /tmp/ci-comment.md || true
           fi
-
-      - name: Summary
-        if: failure()
-        run: |
-          {
-            echo '### `scripts/check.sh` failed'
-            echo
-            echo '```'
-            cat /tmp/gate.log
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
