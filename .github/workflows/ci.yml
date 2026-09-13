@@ -44,10 +44,44 @@ jobs:
           cache: true
 
       - name: Rust version
-        run: cargo --version && rustc --version
+        run: |
+          cargo --version && rustc --version
+          rustfmt --version || true
+          cargo clippy --version || true
 
-      # Bash, not `./scripts/check.sh`: the script is committed non-executable
+      # Bash, not `./scripts/check.sh`: the script was committed non-executable
       # (mode 100644), which is why running it locally fails with "permission
       # denied".
+      #
+      # The gate's output is mirrored into the job summary: the raw step log
+      # lives on blob storage, so a failure is otherwise unreadable from any
+      # tooling that only speaks the REST API (and unreadable entirely if the
+      # blob host is unreachable).
       - name: Gate
-        run: bash scripts/check.sh
+        run: |
+          set +e
+          bash scripts/check.sh > /tmp/gate.log 2>&1
+          status=$?
+          {
+            echo "### \`scripts/check.sh\` exit: **$status**"
+            echo
+            echo "| tool | version |"
+            echo "|---|---|"
+            echo "| cargo | \`$(cargo --version 2>&1)\` |"
+            echo "| rustc | \`$(rustc --version 2>&1)\` |"
+            echo "| rustfmt | \`$(rustfmt --version 2>&1)\` |"
+            echo "| clippy | \`$(cargo clippy --version 2>&1)\` |"
+            echo
+            echo "#### gate output"
+            echo
+            echo '```'
+            head -c 120000 /tmp/gate.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # compiler/lint errors as annotations: they show up on the checks tab
+          # and are readable through the check-runs API
+          grep -E '^(error|warning)(\[[A-Z0-9]+\])?:' /tmp/gate.log |
+            head -40 | while IFS= read -r line; do
+              printf '::error::%s\n' "$line"
+            done
+          exit $status
