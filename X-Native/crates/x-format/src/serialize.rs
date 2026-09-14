@@ -295,6 +295,9 @@ fn nested_action_json(a: &Action) -> String {
                 }
             }
         }
+        Action::OpenLink { url } => {
+            s.push_str(&format!(",\"url\":\"{}\"", esc(url)));
+        }
         Action::SetVar { name, value } => {
             s.push_str(&format!(",\"var\":\"{}\"", esc(name)));
             s.push_str(&format!(",\"expr\":{}", expr_json(value)));
@@ -332,6 +335,7 @@ fn interaction_json(i: &Interaction) -> String {
             format!(",\"var\":\"{}\",\"expr\":{}", esc(name), expr_json(value))
         }
         Action::SetMode { mode } => format!(",\"mode\":\"{}\"", esc(mode)),
+        Action::OpenLink { url } => format!(",\"url\":\"{}\"", esc(url)),
         Action::Cond { cond, then, els } => {
             let mut s = format!(
                 ",\"cond\":{},\"then\":{}",

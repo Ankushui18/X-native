@@ -245,7 +245,8 @@ impl ApplicationHandler for Host {
                     MouseButton::Right => self.on_right_press(p),
                     MouseButton::Middle
                         if self.app.screen == Screen::Editor
-                            && self.app.document_loading.is_none() =>
+                            && self.app.document_loading.is_none()
+                            && self.app.flow.is_none() =>
                     {
                         self.app.drag = Some(Drag::Pan {
                             start: p,
@@ -386,6 +387,16 @@ impl ApplicationHandler for Host {
                 self.next_loading_frame = now + std::time::Duration::from_millis(16);
             }
             wake = wake.min(self.next_loading_frame);
+        }
+        // prototype delays: fire what is due, wake for the rest
+        if self.app.flow.as_ref().is_some_and(|f| !f.delays.is_empty()) {
+            if self.flow_tick(now) > 0 && let Some(w) = &self.window {
+                w.request_redraw();
+            }
+            let next = self.app.flow.as_ref().and_then(|f| f.delays.iter().map(|d| d.at).min());
+            if let Some(next) = next {
+                wake = wake.min(next);
+            }
         }
         event_loop.set_control_flow(ControlFlow::WaitUntil(wake));
     }
@@ -2722,6 +2733,10 @@ impl Host {
         if self.app.document_loading.is_some() {
             return;
         }
+        if self.app.flow.is_some() {
+            // no context menus in the viewer
+            return;
+        }
         if self.app.screen != Screen::Editor {
             return;
         }
@@ -2900,9 +2915,9 @@ impl Host {
             return;
         }
 
-        // flow preview: canvas clicks navigate, never edit
+        // flow preview: viewer clicks drive the prototype, never edit
         if self.app.flow.is_some() {
-            if reg.canvas.contains(p) {
+            if self.app.view_canvas().contains(p) {
                 self.flow_press(p);
             }
             return;
@@ -3307,6 +3322,11 @@ impl Host {
         if self.app.document_loading.is_some() {
             return;
         }
+        if self.app.flow.is_some() {
+            // viewer: pointer moves drive hover/drag triggers, never edits
+            self.flow_move(p);
+            return;
+        }
         match self.app.drag.clone() {
             Some(Drag::LeftPanel { start_x, start_w }) => {
                 self.app.left_w = (start_w + p.x - start_x).clamp(ED_LEFT_MIN, ED_LEFT_MAX);
@@ -3672,6 +3692,10 @@ impl Host {
         if self.app.document_loading.is_some() {
             return;
         }
+        if self.app.flow.is_some() {
+            self.flow_release();
+            return;
+        }
         self.app.snap_lines.clear();
         match self.app.drag.clone() {
             Some(Drag::Marquee { start, cur }) => {
@@ -3895,6 +3919,10 @@ impl Host {
         if self.app.document_loading.is_some() {
             return;
         }
+        if self.app.flow.is_some() {
+            // the viewer fits each screen; there is nothing to zoom/pan
+            return;
+        }
         let dy = match delta {
             MouseScrollDelta::LineDelta(_, y) => y as f64,
             MouseScrollDelta::PixelDelta(p) => p.y / 40.0,
@@ -3980,15 +4008,8 @@ impl Host {
             return;
         }
         if self.app.flow.is_some() {
-            // preview mode: everything except navigation is swallowed
-            match &key {
-                Key::Named(NamedKey::Escape) => self.flow_back(),
-                Key::Character(c) if c.eq_ignore_ascii_case("q") => {
-                    self.app.flow = None;
-                    self.app.status = "Flow preview ended".into();
-                }
-                _ => {}
-            }
+            // preview mode: navigation + prototype keys only, rest swallowed
+            self.flow_key(&key);
             return;
         }
         if key == Key::Named(NamedKey::Escape)
@@ -5034,6 +5055,7 @@ impl Host {
                     x_native::Trigger::OnHover => x_native::Trigger::MouseEnter,
                     x_native::Trigger::MouseEnter => x_native::Trigger::MouseLeave,
                     x_native::Trigger::MouseLeave => x_native::Trigger::OnPress,
+                    x_native::Trigger::OnPress => x_native::Trigger::MouseUp,
                     _ => x_native::Trigger::OnClick,
                 };
             }
@@ -5132,15 +5154,19 @@ impl Host {
             self.app.status = "Flow start frame not found in this document".into();
             return;
         }
+        let vars = self.app.doc().doc.variables.clone();
         self.app.flow = Some(crate::state::FlowState {
             current: current.clone(),
-            stack: vec![],
+            vars,
+            ..Default::default()
         });
         self.flow_focus(&current);
-        self.app.status = "Flow preview — click targets to navigate, Esc back, Q exit".into();
+        self.arm_flow_delays();
+        self.app.status =
+            "Flow preview — hover, click, drag or press keys; Esc back, Q exit".into();
     }
 
-    /// Pan/zoom so the focused frame fills the canvas, switching pages.
+    /// Pan/zoom so the focused frame fills the viewer, switching pages.
     fn flow_focus(&mut self, id: &str) {
         let Some((page, r, _)) = crate::editor_ui::flow_locate(&self.app, id) else {
             return;
@@ -5149,64 +5175,69 @@ impl Host {
         if d.page != page {
             d.page = page;
         }
-        let reg = self.app.editor_regions();
-        let cw = reg.canvas.x1 - reg.canvas.x0;
-        let ch = reg.canvas.y1 - reg.canvas.y0;
+        let c = self.app.view_canvas();
+        let cw = c.x1 - c.x0;
+        let ch = c.y1 - c.y0;
         let z = ((cw / r.width().max(1.0)).min(ch / r.height().max(1.0)) * 0.92).clamp(0.01, 64.0);
         self.app.zoom = z;
         self.app.pan = (
-            reg.canvas.x0 + cw / 2.0 - (r.x0 + r.x1) / 2.0 * z,
-            reg.canvas.y0 + ch / 2.0 - (r.y0 + r.y1) / 2.0 * z,
+            c.x0 + cw / 2.0 - (r.x0 + r.x1) / 2.0 * z,
+            c.y0 + ch / 2.0 - (r.y0 + r.y1) / 2.0 * z,
         );
     }
 
-    fn flow_press(&mut self, p: Point) {
-        let Some(flow) = self.app.flow.clone() else {
+    /// Pan so node `id` lands centered in the viewer, KEEPING the current
+    /// zoom — Figma "scroll to" pans within the screen instead of
+    /// navigating. Page-switches when the node lives elsewhere.
+    fn flow_pan_to(&mut self, id: &str) {
+        let Some((page, r, _)) = crate::editor_ui::flow_locate(&self.app, id) else {
             return;
         };
-        let w = self.app.screen_to_world(p);
-        let action = {
-            let d = self.app.doc();
-            let Some(f) = find_frame(d, &flow.current) else {
-                return;
-            };
-            let Some(hit) = x_native::editor::hit_test(f, w) else {
-                return;
-            };
-            let Some((_, ix)) = x_native::find_interaction_for(f, &hit, x_native::Trigger::OnClick)
-            else {
-                return;
-            };
-            ix.action.clone()
-        };
-        match action {
-            x_native::Action::Navigate { destination }
-            | x_native::Action::ScrollTo { destination } => {
-                if crate::editor_ui::flow_locate(&self.app, &destination).is_none() {
-                    return;
-                }
-                let mut f = flow;
-                f.stack.push(f.current.clone());
-                f.current = destination.clone();
-                self.app.flow = Some(f);
-                self.flow_focus(&destination);
-            }
-            x_native::Action::Back => self.flow_back(),
-            _ => {}
+        let d = self.app.doc();
+        if d.page != page {
+            d.page = page;
         }
-        fn find_frame<'d>(d: &'d crate::state::OpenDoc, id: &str) -> Option<&'d x_native::Node> {
-            for ed in &d.editors {
-                if ed.root.id == id {
-                    return Some(&ed.root);
-                }
-                if let Some(n) = crate::editor_ui::find_node(&ed.root, id) {
-                    return Some(n);
-                }
-            }
-            None
-        }
+        let c = self.app.view_canvas();
+        let z = self.app.zoom;
+        self.app.pan = (
+            c.x0 + (c.x1 - c.x0) / 2.0 - (r.x0 + r.x1) / 2.0 * z,
+            c.y0 + (c.y1 - c.y0) / 2.0 - (r.y0 + r.y1) / 2.0 * z,
+        );
     }
 
+    /// Viewer press: fires `OnPress` then `OnClick` for the node under the
+    /// pointer (topmost overlay first, else the current frame), and arms
+    /// drag detection. A tap is both a press and a click — distinct
+    /// triggers, both fire. Pressing a new node while a "while hovering"
+    /// span is armed keeps the orphan (see the engine's `press`): the
+    /// next move still counts as leaving the hotspot.
+    fn flow_press(&mut self, p: Point) {
+        if self.app.flow.is_none() {
+            return;
+        }
+        let w = self.app.screen_to_world(p);
+        if let Some(f) = self.app.flow.as_mut() {
+            f.dragging = true;
+            f.drag_fired = false;
+        }
+        let Some((_, hit)) = self.flow_pick(w) else {
+            return;
+        };
+        let orphaned = self.app.flow.as_ref().is_some_and(|f| {
+            f.hover_span.as_ref().is_some_and(|s| s.hotspot() != hit)
+        });
+        if !orphaned
+            && let Some(f) = self.app.flow.as_mut()
+        {
+            f.hovered = Some(hit.clone());
+        }
+        self.flow_fire_trigger(&hit, x_native::Trigger::OnPress);
+        self.flow_fire_trigger(&hit, x_native::Trigger::OnClick);
+    }
+
+    /// Step back through preview history; with no history left — and no
+    /// overlays open — the preview ends. Esc reaches here only after all
+    /// overlays are dismissed (see `flow_escape`).
     fn flow_back(&mut self) {
         let Some(f) = self.app.flow.as_mut() else {
             return;
@@ -5214,13 +5245,500 @@ impl Host {
         match f.stack.pop() {
             Some(prev) => {
                 f.current = prev;
+                f.overlays.clear();
+                f.hovered = None;
                 let cur = f.current.clone();
                 self.flow_focus(&cur);
+                self.arm_flow_delays();
             }
             None => {
                 self.app.flow = None;
                 self.app.status = "Flow preview ended".into();
             }
+        }
+    }
+
+    // ---- prototype player: triggers, overlays, and preview-owned variables ----
+
+    /// Any node in any page by id (overlay + frame lookup).
+    fn flow_node(&self, id: &str) -> Option<&x_native::Node> {
+        let d = self.app.doc_ref();
+        d.editors.iter().find_map(|ed| {
+            if ed.root.id == id {
+                return Some(&ed.root);
+            }
+            crate::editor_ui::find_node(&ed.root, id)
+        })
+    }
+
+    /// Node under viewer point `w` (world coords) plus the subtree to
+    /// search for its triggers: `(search_root_id, hit_node_id)`. The
+    /// topmost overlay wins, else the current frame.
+    fn flow_pick(&self, w: Point) -> Option<(String, String)> {
+        let f = self.app.flow.as_ref()?;
+        // overlays render anchored to the current frame: relocate each
+        // candidate before hit-testing (same math as the painter)
+        let (_, frame_rect, _) = crate::editor_ui::flow_locate(&self.app, &f.current)?;
+        for ov in f.overlays.iter().rev() {
+            let Some(node) = self.flow_node(&ov.frame) else {
+                continue;
+            };
+            let (ox, oy) = x_native::overlay_offset(
+                frame_rect.width(),
+                frame_rect.height(),
+                node.w,
+                node.h,
+                ov.position,
+            );
+            let mut placed = node.clone();
+            placed.transform.x = frame_rect.x0 + ox;
+            placed.transform.y = frame_rect.y0 + oy;
+            if let Some(hit) = x_native::editor::hit_test(&placed, w) {
+                return Some((ov.frame.clone(), hit));
+            }
+        }
+        let node = self.flow_node(&f.current)?;
+        let hit = x_native::editor::hit_test(node, w)?;
+        Some((f.current.clone(), hit))
+    }
+
+    /// The `trigger` interaction owned by `hit` inside `frame_id`, if any.
+    fn flow_find_interaction(
+        &self,
+        frame_id: &str,
+        hit: &str,
+        trigger: x_native::Trigger,
+    ) -> Option<x_native::Interaction> {
+        let d = self.app.doc_ref();
+        let node = d
+            .editors
+            .iter()
+            .find_map(|ed| crate::editor_ui::find_node(&ed.root, frame_id))?;
+        x_native::find_interaction_for(node, hit, trigger).map(|(_, ix)| ix)
+    }
+
+    /// The `trigger` interaction owned by `hit`, searching the topmost
+    /// overlay first, then the current frame. Split from
+    /// `flow_fire_trigger` so the search borrows `&self` and returns an
+    /// owned interaction — firing it borrows `&mut self`.
+    fn flow_find_trigger(
+        &self,
+        hit: &str,
+        trigger: &x_native::Trigger,
+    ) -> Option<x_native::Interaction> {
+        let f = self.app.flow.as_ref()?;
+        for ov in f.overlays.iter().rev() {
+            if let Some(ix) = self.flow_find_interaction(&ov.frame, hit, trigger.clone()) {
+                return Some(ix);
+            }
+        }
+        self.flow_find_interaction(&f.current, hit, trigger.clone())
+    }
+
+    /// Fire `trigger` for `hit` wherever it lives: the topmost overlay
+    /// first, then the current frame. `false` when nothing handles it.
+    /// "While" triggers that navigated or opened an overlay arm the
+    /// Figma auto-reverse spans.
+    fn flow_fire_trigger(&mut self, hit: &str, trigger: x_native::Trigger) -> bool {
+        if let Some(ix) = self.flow_find_trigger(hit, &trigger) {
+            let before = self
+                .app
+                .flow
+                .as_ref()
+                .map(|f| (f.current.clone(), f.overlays.len(), f.stack.len()));
+            let (origin, overlay_depth, stack_depth) = before.unwrap_or_default();
+            self.flow_fire(&ix);
+            self.flow_arm_while_span(hit, &trigger, &origin, overlay_depth, stack_depth);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Arm Figma's while-hovering/while-pressing auto-reverse (see the
+    /// engine's `arm_while_span`): a "while" trigger that navigated
+    /// (with a history push) or opened an overlay reverts on leave /
+    /// release. Logic actions, closes, backs, and swaps never arm.
+    fn flow_arm_while_span(
+        &mut self,
+        hit: &str,
+        trigger: &x_native::Trigger,
+        origin: &str,
+        overlay_depth: usize,
+        stack_depth: usize,
+    ) {
+        let Some(f) = self.app.flow.as_mut() else {
+            return;
+        };
+        let slot = match trigger {
+            x_native::Trigger::OnHover => &mut f.hover_span,
+            x_native::Trigger::OnPress => &mut f.press_span,
+            _ => return,
+        };
+        *slot = None;
+        if f.current != origin && f.stack.len() > stack_depth {
+            *slot = Some(x_native::editor::WhileSpan::Navigated {
+                hotspot: hit.into(),
+                origin: origin.into(),
+                dest: f.current.clone(),
+            });
+        } else if f.overlays.len() > overlay_depth {
+            if let Some(top) = f.overlays.last() {
+                *slot = Some(x_native::editor::WhileSpan::OverlayOpened {
+                    hotspot: hit.into(),
+                    frame: top.frame.clone(),
+                });
+            }
+        }
+    }
+
+    /// Revert a taken "while" span (see the engine's `revert_span`):
+    /// navigate back without pushing history, or remove the opened
+    /// overlay — but only if the viewer still sits in the "while"
+    /// result. Returns whether anything reverted.
+    fn flow_revert_span(&mut self, span: Option<x_native::editor::WhileSpan>) -> bool {
+        match span {
+            Some(x_native::editor::WhileSpan::Navigated { origin, dest, .. }) => {
+                let still_there = self.app.flow.as_ref().is_some_and(|f| f.current == dest);
+                if !still_there {
+                    return false;
+                }
+                if let Some(f) = self.app.flow.as_mut() {
+                    f.current = origin.clone();
+                    f.stack.pop();
+                    f.hovered = None;
+                    f.dragging = false;
+                    f.drag_fired = false;
+                }
+                self.flow_focus(&origin);
+                self.arm_flow_delays();
+                self.app.status = format!("Flow preview — viewing {origin}");
+                true
+            }
+            Some(x_native::editor::WhileSpan::OverlayOpened { frame, .. }) => {
+                if !self.flow_overlay_open(&frame) {
+                    return false;
+                }
+                if let Some(f) = self.app.flow.as_mut() {
+                    f.overlays.retain(|o| o.frame != frame);
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Drop the hover span when the pointer leaves `hotspot`, reverting
+    /// its effect when the viewer still sits in the "while" result.
+    fn flow_leave_hover_span(&mut self, hotspot: &str) {
+        let relevant = self.app.flow.as_ref().is_some_and(|f| {
+            f.hover_span.as_ref().is_some_and(|s| s.hotspot() == hotspot)
+        });
+        if !relevant {
+            return;
+        }
+        let span = self.app.flow.as_mut().and_then(|f| f.hover_span.take());
+        self.flow_revert_span(span);
+    }
+
+    /// Drop the press span on release, reverting its effect when the
+    /// viewer still sits in the "while" result (wherever the pointer
+    /// lifted).
+    fn flow_release_press_span(&mut self) {
+        let span = self.app.flow.as_mut().and_then(|f| f.press_span.take());
+        self.flow_revert_span(span);
+    }
+
+    /// Run one interaction through the shared [`x_native::editor::fire_action`]
+    /// engine against the preview's OWN variable store, then refocus and
+    /// re-arm delays when the screen changed. Navigation re-arms from
+    /// scratch; overlay changes re-arm just the top overlay.
+    fn flow_fire(&mut self, ix: &x_native::Interaction) -> x_native::editor::FireEffect {
+        let Some(mut f) = self.app.flow.take() else {
+            return x_native::editor::FireEffect::default();
+        };
+        let known = |id: &str| crate::editor_ui::flow_locate(&self.app, id).is_some();
+        let effect = x_native::editor::fire_action(
+            &mut f.current,
+            &mut f.stack,
+            &mut f.overlays,
+            &mut f.vars,
+            &known,
+            &ix.action,
+            ix.transition_ms,
+        );
+        if effect.navigated.is_some() {
+            f.hovered = None;
+            f.dragging = false;
+            f.drag_fired = false;
+        }
+        self.app.flow = Some(f);
+        if effect.navigated.is_some() {
+            let cur = self.app.flow.as_ref().map(|f| f.current.clone()).unwrap_or_default();
+            self.flow_focus(&cur);
+            self.arm_flow_delays();
+            self.app.status = format!("Flow preview — viewing {cur}");
+        } else if effect.overlays_changed {
+            self.arm_flow_overlay_delays();
+        } else if let Some(dest) = effect.scrolled_to.clone() {
+            // Figma "scroll to": pan within the screen, never navigate
+            self.flow_pan_to(&dest);
+        }
+        // headless (tests, jobs) has no window: never spawn a browser
+        if let Some(url) = effect.opened_link.as_deref()
+            && self.window.is_some()
+        {
+            Self::open_flow_link(url);
+        }
+        effect
+    }
+
+    /// Open an external URL from an `OpenLink` action in the system
+    /// browser. Best-effort: a missing opener must never break playback.
+    fn open_flow_link(url: &str) {
+        #[cfg(target_os = "macos")]
+        let result = std::process::Command::new("open").arg(url).spawn();
+        #[cfg(target_os = "windows")]
+        let result = std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn();
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let result = std::process::Command::new("xdg-open").arg(url).spawn();
+        let _ = result;
+    }
+
+    /// Viewer pointer move: drag detection while pressed, hover otherwise.
+    fn flow_move(&mut self, p: Point) {
+        let dragging = self.app.flow.as_ref().is_some_and(|f| f.dragging);
+        if dragging {
+            self.flow_drag_at(p);
+        } else {
+            self.flow_hover_at(p);
+        }
+    }
+
+    /// Viewer hover: fires `MouseLeave` on the node being left, then
+    /// `MouseEnter` and `OnHover` on the node being entered, then the
+    /// while-hovering auto-reverse. A "while hovering" navigate clears
+    /// hover tracking, orphaning its span — the next move anywhere
+    /// counts as leaving the hotspot, even onto empty canvas.
+    fn flow_hover_at(&mut self, p: Point) {
+        let Some(f) = self.app.flow.as_ref() else {
+            return;
+        };
+        let cur_hovered = f.hovered.clone();
+        let orphan = f.hovered.is_none() && f.hover_span.is_some();
+        let orphan_hotspot = f.hover_span.as_ref().map(|s| s.hotspot().to_string());
+        let w = self.app.screen_to_world(p);
+        let next = self.flow_pick(w).map(|(_, hit)| hit);
+        if cur_hovered == next && !orphan {
+            return;
+        }
+        let old = cur_hovered.or(orphan_hotspot);
+        if let Some(old) = old
+            && Some(&old) != next.as_ref()
+        {
+            self.flow_fire_trigger(&old, x_native::Trigger::MouseLeave);
+            self.flow_leave_hover_span(&old);
+        }
+        if let Some(f) = self.app.flow.as_mut() {
+            f.hovered = next.clone();
+        }
+        if let Some(hit) = next {
+            self.flow_fire_trigger(&hit, x_native::Trigger::MouseEnter);
+            self.flow_fire_trigger(&hit, x_native::Trigger::OnHover);
+        }
+    }
+
+    /// Viewer drag: fires `OnDrag` once per press-drag-release cycle.
+    fn flow_drag_at(&mut self, p: Point) {
+        let Some(f) = self.app.flow.as_ref() else {
+            return;
+        };
+        if !f.dragging || f.drag_fired {
+            return;
+        }
+        let w = self.app.screen_to_world(p);
+        let Some((_, hit)) = self.flow_pick(w) else {
+            return;
+        };
+        let orphaned = self.app.flow.as_ref().is_some_and(|f| {
+            f.hover_span.as_ref().is_some_and(|s| s.hotspot() != hit)
+        });
+        if !orphaned
+            && let Some(f) = self.app.flow.as_mut()
+        {
+            f.hovered = Some(hit.clone());
+        }
+        if self.flow_fire_trigger(&hit, x_native::Trigger::OnDrag)
+            && let Some(f) = self.app.flow.as_mut()
+        {
+            f.drag_fired = true;
+        }
+    }
+
+    /// Viewer release: ends drag detection, reverts an armed "while
+    /// pressing" span, then fires `MouseUp` on the node under the
+    /// release point (Figma's drop-down pattern: the press opens the
+    /// menu, the release selects the item).
+    fn flow_release(&mut self) {
+        if let Some(f) = self.app.flow.as_mut() {
+            f.dragging = false;
+        }
+        self.flow_release_press_span();
+        let w = self.app.screen_to_world(self.app.mouse);
+        if let Some((_, hit)) = self.flow_pick(w) {
+            self.flow_fire_trigger(&hit, x_native::Trigger::MouseUp);
+        }
+    }
+
+    /// Viewer key: Q exits, Esc dismisses-then-backs (see `flow_escape`),
+    /// everything else is offered to `KeyDown` triggers, topmost overlay
+    /// first. The key is swallowed either way — editing never starts in
+    /// the viewer.
+    fn flow_key(&mut self, key: &Key) {
+        match key {
+            Key::Named(NamedKey::Escape) => {
+                self.flow_escape();
+                return;
+            }
+            Key::Character(c) if c.eq_ignore_ascii_case("q") => {
+                self.app.flow = None;
+                self.app.status = "Flow preview ended".into();
+                return;
+            }
+            _ => {}
+        }
+        let name = match key {
+            Key::Character(c) => c.to_string(),
+            Key::Named(n) => format!("{n:?}"),
+            _ => return,
+        };
+        if let Some(ix) = self.flow_find_key(&name) {
+            self.flow_fire(&ix);
+        }
+    }
+
+    /// First `KeyDown` interaction matching `name`, topmost overlay
+    /// first, then the current frame. `&self` search feeding
+    /// `flow_key`'s `&mut self` firing (see `flow_find_trigger`).
+    fn flow_find_key(&self, name: &str) -> Option<x_native::Interaction> {
+        let f = self.app.flow.as_ref()?;
+        for ov in f.overlays.iter().rev() {
+            let found = self
+                .flow_node(&ov.frame)
+                .and_then(|n| x_native::find_key_interaction(n, name));
+            if let Some((_, ix)) = found {
+                return Some(ix);
+            }
+        }
+        self.flow_node(&f.current)
+            .and_then(|n| x_native::find_key_interaction(n, name))
+            .map(|(_, ix)| ix)
+    }
+
+    /// Is overlay `frame` open in the viewer?
+    fn flow_overlay_open(&self, frame: &str) -> bool {
+        self.app.flow.as_ref().is_some_and(|f| f.overlays.iter().any(|o| o.frame == frame))
+    }
+
+    /// Viewer Esc: dismiss the top overlay first, then step back through
+    /// history, then end the preview.
+    fn flow_escape(&mut self) {
+        if self.app.flow.as_mut().is_some_and(|f| f.overlays.pop().is_some()) {
+            self.app.status = "Overlay dismissed".into();
+        } else {
+            self.flow_back();
+        }
+    }
+
+    /// Fire due `AfterDelay` triggers in arm order. A navigation cancels
+    /// the remaining due timers (the new screen re-arms its own); delays
+    /// whose overlay closed are disarmed. Returns how many fired.
+    fn flow_tick(&mut self, now: std::time::Instant) -> usize {
+        if self.app.flow.is_none() {
+            return 0;
+        }
+        let mut fired = 0;
+        loop {
+            let Some(f) = self.app.flow.as_ref() else {
+                return fired;
+            };
+            let Some(i) = f.delays.iter().position(|d| d.at <= now) else {
+                break;
+            };
+            let Some(f) = self.app.flow.as_mut() else {
+                return fired;
+            };
+            let d = f.delays.remove(i);
+            if let Some(src) = &d.source_overlay
+                && !self.flow_overlay_open(src)
+            {
+                continue; // its overlay closed: disarmed
+            }
+            let ix = x_native::Interaction {
+                trigger: x_native::Trigger::AfterDelay { ms: 0 },
+                action: d.action,
+                transition_ms: d.ms,
+                animation: x_native::Animation::Instant,
+            };
+            let effect = self.flow_fire(&ix);
+            if effect.fired() {
+                fired += 1;
+            }
+            if effect.navigated.is_some() {
+                // the new screen re-armed its own delays; old timers die
+                break;
+            }
+        }
+        fired
+    }
+
+    /// Arm the current frame's `AfterDelay` triggers against the wall
+    /// clock. Called on enter and after every navigation; navigation
+    /// discards previously armed delays.
+    fn arm_flow_delays(&mut self) {
+        let now = std::time::Instant::now();
+        let node = self.app.flow.as_ref().and_then(|f| self.flow_node(&f.current));
+        let mut armed = Vec::new();
+        if let Some(node) = node {
+            for (_, ms, ix) in x_native::delayed_interactions(node) {
+                let wait = std::time::Duration::from_millis(u64::from(ms));
+                armed.push(crate::state::FlowDelay {
+                    at: now + wait,
+                    source_overlay: None,
+                    ms: ix.transition_ms,
+                    action: ix.action.clone(),
+                });
+            }
+        }
+        if let Some(f) = self.app.flow.as_mut() {
+            f.delays = armed;
+        }
+    }
+
+    /// Arm `AfterDelay` triggers of the topmost overlay (base-frame delays
+    /// keep running underneath). Stale entries die in `flow_tick`.
+    fn arm_flow_overlay_delays(&mut self) {
+        let now = std::time::Instant::now();
+        let top = self.app.flow.as_ref().and_then(|f| f.overlays.last().map(|o| o.frame.clone()));
+        let Some(top) = top else {
+            return;
+        };
+        let mut armed = Vec::new();
+        if let Some(node) = self.flow_node(&top) {
+            for (_, ms, ix) in x_native::delayed_interactions(node) {
+                let wait = std::time::Duration::from_millis(u64::from(ms));
+                armed.push(crate::state::FlowDelay {
+                    at: now + wait,
+                    source_overlay: Some(top.clone()),
+                    ms: ix.transition_ms,
+                    action: ix.action.clone(),
+                });
+            }
+        }
+        if let Some(f) = self.app.flow.as_mut() {
+            f.delays.extend(armed);
         }
     }
 
@@ -7298,23 +7816,23 @@ fn blank_editing_text(root: &mut Node, eid: Option<&str>) {
 
 fn watermark_shadows(app: &App, inner: &mut Scene, root: &x_native::Node) {
     for (r, _) in frame_watermarks(app, root) {
-        crate::paint::drop_shadow(inner, r, 8.0);
+        crate::paint::elev_shadow(inner, r, 8.0, x_native::ui::Elevation::Raised);
     }
 }
 
-/// Pass 2 — watermark label ON TOP of the document (black/10, 28px bold).
+/// Pass 2 — watermark label ON TOP of the document (black/10, 20px bold).
 fn watermark_labels(app: &App, inner: &mut Scene, root: &x_native::Node) {
     for (r, label) in frame_watermarks(app, root) {
         let cx = (r.x0 + r.x1) / 2.0;
         let cy = (r.y0 + r.y1) / 2.0;
-        let w = app.fonts.measure(&label, T28, crate::paint::Wt::Bold);
-        // audit: 28px bold box top = frame_center − 21 (half the 1.5em box)
+        let w = app.fonts.measure(&label, T20, crate::paint::Wt::Bold);
+        // audit: 20px bold box top = frame_center − 15 (half the 1.5em box)
         app.fonts.text(
             inner,
             cx - w / 2.0,
-            cy - crate::paint::CSS_LH * T28 / 2.0,
+            cy - crate::paint::CSS_LH * T20 / 2.0,
             &label,
-            T28,
+            T20,
             C_BLACK_10,
             crate::paint::Wt::Semi,
         );
@@ -10221,9 +10739,9 @@ impl App {
     }
 
     pub fn canvas_scene(&mut self) -> Scene {
-        let reg = self.editor_regions();
-        let a = self.screen_to_world(Point::new(reg.canvas.x0, reg.canvas.y0));
-        let b = self.screen_to_world(Point::new(reg.canvas.x1, reg.canvas.y1));
+        let canvas = self.view_canvas();
+        let a = self.screen_to_world(Point::new(canvas.x0, canvas.y0));
+        let b = self.screen_to_world(Point::new(canvas.x1, canvas.y1));
         let viewport = Rect::from_points(a, b);
         let Some(d) = self.docs.get_mut(self.active) else {
             return Scene::new();
@@ -10320,8 +10838,9 @@ impl App {
             }
             Screen::Editor => {
                 editor_ui::paint(self, &mut inner);
-                // document content, clipped to the canvas region
-                let reg = self.editor_regions();
+                // document content, clipped to the viewport (the whole
+                // window in the chrome-less flow viewer)
+                let canvas = self.view_canvas();
                 if !self.docs.is_empty() {
                     let doc_scene = self.canvas_scene();
                     if self.demo_mode {
@@ -10335,10 +10854,10 @@ impl App {
                         ),
                         1.0,
                         Affine::IDENTITY,
-                        &reg.canvas,
+                        &canvas,
                     );
                     inner.append(&doc_scene, Some(self.canvas_affine()));
-                    // empty-frame watermark: node name in black/10, 28px bold
+                    // empty-frame watermark: node name in black/10, 20px bold
                     if self.demo_mode {
                         watermark_labels(self, &mut inner, &self.doc_ref().editor_ref().root);
                     }

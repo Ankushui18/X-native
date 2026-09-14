@@ -176,12 +176,23 @@ pub fn ring(s: &mut Scene, cx: f64, cy: f64, r: f64, c: Color, w: f64) {
     );
 }
 
-/// Soft drop shadow (shadow-2xl approximation): layered translucent
-/// rounded rects expanding under `r`.
-pub fn drop_shadow(s: &mut Scene, r: Rect, radius: f64) {
-    for (grow, alpha) in [(3.0, 22), (8.0, 14), (16.0, 8), (28.0, 4)] {
+/// Intent-driven drop shadow: twelve translucent shells expanding under
+/// `r`, with weights normalised so the stack delivers the intent token's
+/// alpha exactly ([`x_native::ui::Elevation::layers`]).
+///
+/// Call sites name the intent — `Raised` chrome, `Floating` menus,
+/// `Overlay` prototype layers, `Modal` palettes — never a blur radius.
+/// `Flat` paints nothing. Shadow black bypasses [`crate::theme::resolve`]
+/// deliberately: it is light physics, not a palette role, and stays black
+/// in every theme.
+pub fn elev_shadow(s: &mut Scene, r: Rect, radius: f64, elev: x_native::ui::Elevation) {
+    for (grow, alpha) in elev.layers() {
+        if alpha == 0 {
+            continue;
+        }
         let c = Color::from_rgba8(0, 0, 0, alpha);
-        fill_rrect(s, r.inflate(grow, grow), radius + grow * 0.6, c);
+        let rr = RoundedRect::from_rect(r.inflate(grow, grow), radius + grow * 0.6);
+        s.fill(Fill::NonZero, Affine::IDENTITY, c, None, &rr);
     }
 }
 
@@ -471,7 +482,7 @@ impl TextUi {
         self.draw_spans_baseline(s, &spans, font, x, y_baseline);
     }
 
-    /// Draw with letter-spacing in px (e.g. 9px * 0.12em tracked labels).
+    /// Draw with letter-spacing in px (e.g. 10px * 0.12em tracked labels).
     #[allow(clippy::too_many_arguments)]
     pub fn text_tracked(
         &self,
@@ -491,6 +502,28 @@ impl TextUi {
             .letter_spacing(size * spacing_em)];
         let baseline = y + self.css_baseline(font, size);
         self.draw_spans_baseline(s, &spans, font, x, baseline);
+    }
+
+    /// Micro label: dim section eyebrows (`DRAFTS`, `PAGES`, `FONTS`) —
+    /// T10 tracked 0.12em. One of the two tracked steps; the other is
+    /// [`TextUi::caps_label`].
+    pub fn micro_label(
+        &self,
+        s: &mut Scene,
+        x: f64,
+        y: f64,
+        text: &str,
+        color: Color,
+        wt: Wt,
+    ) {
+        self.text_tracked(s, x, y, text, T10, 0.12, color, wt);
+    }
+
+    /// Caps label: panel section headings (`Appearance`, `PROTOTYPE`) —
+    /// T10 tracked 0.08em. Pairs with [`TextUi::micro_label`]; together
+    /// they are the only tracked steps in the UI.
+    pub fn caps_label(&self, s: &mut Scene, x: f64, y: f64, text: &str, color: Color, wt: Wt) {
+        self.text_tracked(s, x, y, text, T10, 0.08, color, wt);
     }
 
     /// Draw text centered in `r` horizontally (and optionally vertically).
@@ -536,7 +569,7 @@ impl TextUi {
 
     /// Avatar bubble: filled circle + centered initial (S per the HTML).
     /// `size` is the initial's font size — a Tailwind class per instance in
-    /// the HTML (12px in the 32px dashboard avatar, 9px in the 20px member
+    /// the HTML (12px in the 32px dashboard avatar, 10px in the 20px member
     /// bubbles, 11px in the editor's 24px one) so it can't be derived.
     /// Centers the CAP height (uppercase initials have no descender) —
     /// the same optical centering flexbox produces visually.

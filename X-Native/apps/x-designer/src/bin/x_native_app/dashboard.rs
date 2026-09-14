@@ -129,7 +129,7 @@ fn paint_top_bar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let av_cy = 19.5;
     let initial = app.user.chars().next().unwrap_or('?').to_string();
     app.fonts
-        .avatar(s, av_cx, av_cy, 16.0, C_AVATAR, 12.0, &initial);
+        .avatar(s, av_cx, av_cy, 16.0, C_AVATAR, T12, &initial);
 }
 
 // -------------------------------------------------------- sidebar 260px
@@ -143,7 +143,7 @@ fn paint_sidebar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     fill_rrect(s, Rect::new(12.0, 52.0, 28.0, 68.0), 4.0, C_FIELD);
     draw_icon(s, "box", 16.0, 56.0, 12.0, C_DIM);
     app.fonts
-        .text_tracked(s, 36.0, 53.3, "DRAFTS", T9, 0.12, C_DIM, Wt::Med);
+        .micro_label(s, 36.0, 53.3, "DRAFTS", C_DIM, Wt::Med);
     draw_icon(s, "more-horizontal", 234.0, 51.0, 14.0, C_DIM);
 
     // Personal row 30px at y 80
@@ -216,7 +216,7 @@ fn paint_sidebar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     }
     // TEAMS header — label box top 281
     app.fonts
-        .text_tracked(s, 12.0, 281.0, "TEAMS", T9, 0.12, C_DIM, Wt::Med);
+        .micro_label(s, 12.0, 281.0, "TEAMS", C_DIM, Wt::Med);
     let plus_r = Rect::new(234.0, 273.75, 248.0, 287.75);
     draw_icon(s, "plus", 234.0, 280.75, 14.0, C_DIM);
     hit.push((plus_r, Action::AddTeam));
@@ -241,7 +241,7 @@ fn paint_sidebar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             let cb = Rect::new(223.0, y + 6.0, 243.0, y + 26.0);
             circle(s, 233.0, y + 16.0, 10.0, C_FIELD);
             ring(s, 233.0, y + 16.0, 10.0, C_LINE, 1.0);
-            app.fonts.text_center(s, cb, n, T9, C_DIM, Wt::Reg, true);
+            app.fonts.text_center(s, cb, n, T10, C_DIM, Wt::Reg, true);
         }
         hit.push((r, Action::DashNav(DashView::Home)));
     }
@@ -321,7 +321,7 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         } else {
             "Your design workspace".into()
         },
-        T24,
+        T20,
         -0.025,
         C_TEXT,
         Wt::Semi,
@@ -539,7 +539,7 @@ fn paint_recents(
             let dark_bg = f.color == Color::from_rgb8(0xFF, 0xFF, 0xFF);
             let wm = if dark_bg { C_BLACK_10 } else { C_WHITE_10 };
             app.fonts
-                .text_center(s, thumb, "X", T28, wm, Wt::Bold, true);
+                .text_center(s, thumb, "X", T20, wm, Wt::Bold, true);
             let st = Rect::new(
                 thumb.x1 - 32.0,
                 thumb.y0 + 8.0,
@@ -596,7 +596,7 @@ fn paint_recents(
                 let mcy = cy + 207.5;
                 circle(s, mcx, mcy, 10.0, C_AVATAR);
                 ring(s, mcx, mcy, 10.0, C_PANEL, 1.5);
-                app.fonts.avatar(s, mcx, mcy, 10.0, C_AVATAR, 9.0, m);
+                app.fonts.avatar(s, mcx, mcy, 10.0, C_AVATAR, T10, m);
                 mx += 20.0;
             }
         }

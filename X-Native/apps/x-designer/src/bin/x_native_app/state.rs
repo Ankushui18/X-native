@@ -447,12 +447,47 @@ pub enum FieldId {
     Zoom,
 }
 
-/// Flow-preview state (prototype playback over the live canvas): the
-/// viewer focuses `current`, `stack` backs navigation.
-#[derive(Clone, Debug, Default, PartialEq)]
+/// An armed `AfterDelay` trigger in the flow preview: fire `action` when
+/// the wall clock reaches `at`. `source_overlay` pins delays authored
+/// inside an overlay: closing the overlay disarms them.
+#[derive(Clone, Debug)]
+pub struct FlowDelay {
+    pub at: std::time::Instant,
+    pub source_overlay: Option<String>,
+    pub action: x_native::Action,
+    pub ms: u32,
+}
+
+/// Flow-preview state: prototype playback in a chrome-less viewer over the
+/// live canvas. The viewer focuses `current`, `stack` backs navigation,
+/// `overlays` float above the screen.
+///
+/// `vars` is the preview's OWN variable store, cloned from the document
+/// when the preview starts: expression evaluation, `SetVar`/`SetMode`,
+/// and conditionals all run against it, so playback can never edit the
+/// file. (No `PartialEq`: [`x_native::Variables`] deliberately doesn't
+/// implement it — use field asserts in tests.)
+#[derive(Clone, Debug, Default)]
 pub struct FlowState {
     pub current: String,
     pub stack: Vec<String>,
+    /// open overlay stack, bottom → top (the shared engine type, so the
+    /// preview and the editor player can't disagree on its shape).
+    pub overlays: Vec<x_native::editor::Overlay>,
+    /// preview-owned variables (see above).
+    pub vars: x_native::Variables,
+    /// armed `AfterDelay` triggers, in arm order.
+    pub delays: Vec<FlowDelay>,
+    /// node id under the pointer (drives hover / enter / leave).
+    pub hovered: Option<String>,
+    /// a press is down inside the viewer (drag detection armed).
+    pub dragging: bool,
+    /// `OnDrag` already fired for this press-drag-release cycle.
+    pub drag_fired: bool,
+    /// armed Figma "while hovering" auto-reverse (engine `WhileSpan`).
+    pub hover_span: Option<x_native::editor::WhileSpan>,
+    /// armed Figma "while pressing" auto-reverse (reverts on release).
+    pub press_span: Option<x_native::editor::WhileSpan>,
 }
 
 /// The one text-entry surface: clicking a field focuses it; keystrokes go
@@ -1093,19 +1128,27 @@ impl App {
         }
     }
 
+    /// The rect the document viewport occupies: the canvas region while
+    /// editing, the whole window in the chrome-less flow viewer (editor
+    /// chrome is hidden, so the prototype gets every pixel).
+    pub fn view_canvas(&self) -> Rect {
+        if self.flow.is_some() {
+            Rect::new(0.0, 0.0, self.win_w, self.win_h)
+        } else {
+            self.editor_regions().canvas
+        }
+    }
+
     pub fn canvas_transform(&self) -> (f64, f64, f64) {
-        let r = self.editor_regions();
-        // rulers shrink the viewport (content starts after the strips)
-        let (dx, dy) = if self.rulers {
+        let c = self.view_canvas();
+        // rulers shrink the viewport (content starts after the strips);
+        // the flow viewer paints no rulers
+        let (dx, dy) = if self.rulers && self.flow.is_none() {
             (crate::theme::RULER_SIZE, crate::theme::RULER_SIZE)
         } else {
             (0.0, 0.0)
         };
-        (
-            r.canvas.x0 + self.pan.0 + dx,
-            r.canvas.y0 + self.pan.1 + dy,
-            self.zoom,
-        )
+        (c.x0 + self.pan.0 + dx, c.y0 + self.pan.1 + dy, self.zoom)
     }
 
     pub fn screen_to_world(&self, p: Point) -> Point {

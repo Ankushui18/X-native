@@ -385,6 +385,37 @@ mod tests {
     }
 
     #[test]
+    fn openlink_and_mouseup_roundtrip_through_x_format() {
+        let mut doc = Document::new();
+        let page = Node::frame("page-1", 800.0, 600.0).child(
+            Node::rect("ext", 0.0, 0.0, 120.0, 40.0, Color::from_rgb8(255, 0, 0)).interaction(
+                Interaction {
+                    trigger: Trigger::MouseUp,
+                    action: Action::OpenLink {
+                        url: "https://example.com/docs".into(),
+                    },
+                    transition_ms: 0,
+                    animation: Animation::Instant,
+                },
+            ),
+        );
+        doc.pages.push(page);
+        let text = save_x(&doc);
+        assert!(text.contains("\"action\":\"link\""), "link kind survives: {text}");
+        assert!(text.contains("https://example.com/docs"), "url survives: {text}");
+        let loaded = load_x(&text).expect("load");
+        let ext = find(&loaded.pages[0], "ext").expect("ext survives");
+        assert_eq!(ext.interactions.len(), 1);
+        assert_eq!(ext.interactions[0].trigger, Trigger::MouseUp);
+        match &ext.interactions[0].action {
+            Action::OpenLink { url } => assert_eq!(url, "https://example.com/docs"),
+            other => panic!("expected open-link, got {other:?}"),
+        }
+        // determinism
+        assert_eq!(save_x(&loaded), text);
+    }
+
+    #[test]
     fn scroll_overflow_fixed_sticky_roundtrip() {
         let mut doc = Document::new();
         let page = Node::frame("page-1", 800.0, 600.0).child(

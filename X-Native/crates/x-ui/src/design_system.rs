@@ -283,13 +283,13 @@ pub struct TypographyScale {
 impl Default for TypographyScale {
     fn default() -> Self {
         Self {
-            size_xs: 10.0,
-            size_sm: 11.0,
-            size_base: 12.0,
-            size_md: 13.0,
-            size_lg: 14.0,
-            size_xl: 16.0,
-            size_xxl: 20.0,
+            size_xs: Self::XS,
+            size_sm: Self::SM,
+            size_base: Self::BASE,
+            size_md: Self::MD,
+            size_lg: Self::LG,
+            size_xl: Self::XL,
+            size_xxl: Self::XXL,
 
             line_height_tight: 1.2,
             line_height_base: 1.4,
@@ -305,6 +305,19 @@ impl Default for TypographyScale {
             letter_spacing_wide: 0.5,
         }
     }
+}
+
+impl TypographyScale {
+    /// The seven type steps, usable in `const` contexts: the designer's
+    /// `theme::T10`–`T20` are aliases of these, so the scale has one name
+    /// per step and the audit below pins them equal.
+    pub const XS: f64 = 10.0;
+    pub const SM: f64 = 11.0;
+    pub const BASE: f64 = 12.0;
+    pub const MD: f64 = 13.0;
+    pub const LG: f64 = 14.0;
+    pub const XL: f64 = 16.0;
+    pub const XXL: f64 = 20.0;
 }
 
 // =========================================================== Spacing System
@@ -388,21 +401,38 @@ pub struct RadiusScale {
 impl Default for RadiusScale {
     fn default() -> Self {
         Self {
-            none: 0.0,
-            xs: 2.0,
-            sm: 4.0,
-            md: 6.0,
-            lg: 8.0,
-            xl: 12.0,
-            full: 9999.0,
+            none: Self::NONE,
+            xs: Self::XS,
+            sm: Self::SM,
+            md: Self::MD,
+            lg: Self::LG,
+            xl: Self::XL,
+            full: Self::FULL,
         }
     }
+}
+
+impl RadiusScale {
+    /// The radius steps, usable in `const` contexts: the designer's
+    /// `theme::R_*` vocabulary derives from these, so a corner radius is
+    /// always one of 2/4/6/8/12 and the audit below pins them equal.
+    pub const NONE: f64 = 0.0;
+    pub const XS: f64 = 2.0;
+    pub const SM: f64 = 4.0;
+    pub const MD: f64 = 6.0;
+    pub const LG: f64 = 8.0;
+    pub const XL: f64 = 12.0;
+    pub const FULL: f64 = 9999.0;
 }
 
 // ======================================================== Shadow System
 
 /// Elevation shadows - subtle, multi-layered for depth.
-#[derive(Debug, Clone)]
+///
+/// `Copy` because elevation is read per painted surface: copying a 44-byte
+/// token out of the scale is cheaper and clearer than cloning through an
+/// `Option` at every call site.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Shadow {
     pub color: [u8; 3],
     pub offset_x: f64,
@@ -458,6 +488,84 @@ impl Default for ShadowScale {
                 alpha: 80,
             }),
         }
+    }
+}
+
+/// How many translucent shells the renderer stacks for one shadow.
+/// Twelve steps is enough that the falloff reads as a blur, not bands.
+pub const ELEVATION_LAYERS: usize = 12;
+
+/// Named elevation intent — WHY a surface floats, not how far.
+///
+/// Call sites name the intent (`Raised` toolbar, `Floating` menu, `Overlay`
+/// prototype layer, `Modal` palette) and [`Elevation::layers`] turns it
+/// into paint. Blur radii and alphas live in exactly one place: the
+/// [`ShadowScale`] token each intent maps to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Elevation {
+    /// Flush with its parent: no shadow at all.
+    #[default]
+    Flat,
+    /// Resting chrome: toolbars, cards, canvas frames.
+    Raised,
+    /// Hovered/floating controls: dropdown menus, tooltips, popovers.
+    Floating,
+    /// Content floating above the page: prototype overlays, drawers.
+    Overlay,
+    /// Blocking surfaces: command palette, dialogs, modals.
+    Modal,
+}
+
+impl Elevation {
+    /// The shadow token this intent carries. `Copy` on [`Shadow`] keeps
+    /// this a value return instead of a borrow into a temporary scale.
+    pub fn token(self) -> Option<Shadow> {
+        let scale = ShadowScale::default();
+        match self {
+            Elevation::Flat => None,
+            Elevation::Raised => scale.sm,
+            Elevation::Floating => scale.md,
+            Elevation::Overlay => scale.lg,
+            Elevation::Modal => scale.xl,
+        }
+    }
+
+    /// The 12 `(grow_px, alpha)` shells for this intent, innermost first.
+    ///
+    /// The falloff weights are NORMALISED: the alphas sum to exactly the
+    /// token's alpha, so the token means what it says. (An earlier draft
+    /// scaled raw falloff weights and delivered only ~62% of the token's
+    /// alpha — the audit below pins the sum.) Grows expand linearly out
+    /// to `1.75 × blur`; `Flat` yields twelve transparent shells.
+    pub fn layers(self) -> [(f64, u8); ELEVATION_LAYERS] {
+        let mut out = [(0.0, 0); ELEVATION_LAYERS];
+        let Some(t) = self.token() else {
+            return out;
+        };
+        let mut weights = [0.0f64; ELEVATION_LAYERS];
+        let mut sum = 0.0;
+        let mut w = 1.0;
+        for slot in weights.iter_mut() {
+            *slot = w;
+            sum += w;
+            w *= 0.72;
+        }
+        let max_grow = t.blur * 1.75;
+        let mut acc = 0u32;
+        for (i, slot) in out.iter_mut().enumerate() {
+            let a = (f64::from(t.alpha) * weights[i] / sum).round().clamp(0.0, 255.0) as u8;
+            acc += u32::from(a);
+            slot.0 = max_grow * (i + 1) as f64 / ELEVATION_LAYERS as f64;
+            slot.1 = a;
+        }
+        // Rounding residue lands on the innermost (most visible) shell so
+        // the stack delivers the token's alpha exactly.
+        let target = u32::from(t.alpha);
+        if acc != target {
+            let fixed = i32::from(out[0].1) + (target as i32 - acc as i32);
+            out[0].1 = fixed.clamp(0, 255) as u8;
+        }
+        out
     }
 }
 
@@ -592,5 +700,93 @@ impl From<&DesignSystem> for Theme {
             high_contrast: ds.high_contrast,
             reduced_motion: ds.reduced_motion,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scale_consts_match_defaults() {
+        let r = RadiusScale::default();
+        assert_eq!(
+            [r.none, r.xs, r.sm, r.md, r.lg, r.xl, r.full],
+            [
+                RadiusScale::NONE,
+                RadiusScale::XS,
+                RadiusScale::SM,
+                RadiusScale::MD,
+                RadiusScale::LG,
+                RadiusScale::XL,
+                RadiusScale::FULL,
+            ]
+        );
+        let t = TypographyScale::default();
+        assert_eq!(
+            [
+                t.size_xs,
+                t.size_sm,
+                t.size_base,
+                t.size_md,
+                t.size_lg,
+                t.size_xl,
+                t.size_xxl,
+            ],
+            [
+                TypographyScale::XS,
+                TypographyScale::SM,
+                TypographyScale::BASE,
+                TypographyScale::MD,
+                TypographyScale::LG,
+                TypographyScale::XL,
+                TypographyScale::XXL,
+            ]
+        );
+    }
+
+    #[test]
+    fn shadow_is_copy() {
+        fn assert_copy<T: Copy>() {}
+        assert_copy::<Shadow>();
+        // ... which is what lets intents hand out tokens by value
+        let a = Elevation::Modal.token().unwrap();
+        let b = a;
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn elevation_intents_deepen_monotonically() {
+        let tokens = [
+            Elevation::Raised.token().unwrap(),
+            Elevation::Floating.token().unwrap(),
+            Elevation::Overlay.token().unwrap(),
+            Elevation::Modal.token().unwrap(),
+        ];
+        for pair in tokens.windows(2) {
+            assert!(pair[1].alpha > pair[0].alpha, "alpha must deepen: {pair:?}");
+            assert!(pair[1].blur > pair[0].blur, "blur must deepen: {pair:?}");
+        }
+        assert!(Elevation::Flat.token().is_none());
+    }
+
+    #[test]
+    fn elevation_layers_are_normalised_to_the_token() {
+        for intent in [
+            Elevation::Raised,
+            Elevation::Floating,
+            Elevation::Overlay,
+            Elevation::Modal,
+        ] {
+            let layers = intent.layers();
+            let token = intent.token().unwrap();
+            let sum: u32 = layers.iter().map(|(_, a)| u32::from(*a)).sum();
+            assert_eq!(sum, u32::from(token.alpha), "{intent:?} stack must deliver");
+            assert!(layers[0].1 > 0, "{intent:?} innermost shell is visible");
+            for pair in layers.windows(2) {
+                assert!(pair[1].0 > pair[0].0, "{intent:?} shells expand outward");
+            }
+        }
+        assert!(Elevation::Flat.layers().iter().all(|(_, a)| *a == 0));
     }
 }
