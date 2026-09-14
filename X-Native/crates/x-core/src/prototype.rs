@@ -7,6 +7,11 @@
 //! starting points via [`Node::is_starting_point`].
 
 /// When an interaction fires.
+///
+/// The press trio mirrors Figma: `OnPress` is "while pressing" (fires on
+/// pointer-down, and the player reverts its navigate/overlay effect on
+/// release); `MouseUp` fires once on release with no revert (pair it with
+/// a press that opens a menu to replicate drop-down navigation).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Trigger {
     OnClick,
@@ -18,6 +23,7 @@ pub enum Trigger {
     },
     MouseEnter,
     MouseLeave,
+    MouseUp,
     /// Prototype-player key press (Figma "key" gamepad/keyboard trigger).
     /// `key` is a single character ("a", "1") or a named key ("Enter",
     /// "Space", "Escape").
@@ -36,6 +42,7 @@ impl Trigger {
             Trigger::AfterDelay { .. } => "delay",
             Trigger::MouseEnter => "enter",
             Trigger::MouseLeave => "leave",
+            Trigger::MouseUp => "mouseup",
             Trigger::KeyDown { .. } => "key",
         }
     }
@@ -45,6 +52,7 @@ impl Trigger {
             Trigger::OnClick => "On click",
             Trigger::OnHover => "While hovering",
             Trigger::OnPress => "While pressing",
+            Trigger::MouseUp => "Mouse up",
             Trigger::OnDrag => "On drag",
             Trigger::AfterDelay { ms } => {
                 if *ms == 0 {
@@ -82,6 +90,10 @@ pub enum Action {
     SwapOverlay { overlay: String },
     /// Dismiss the topmost open overlay.
     CloseOverlay,
+    /// Open an external URL in the browser (Figma "open link"): leaves
+    /// the prototype. Players surface the URL in the fire effect and
+    /// change nothing else; hosts do the opening.
+    OpenLink { url: String },
     /// Scroll the nearest scrollable ancestor so `destination` is in view.
     ScrollTo { destination: String },
     /// Navigate back to the previous frame (presentation history).
@@ -116,6 +128,7 @@ impl Action {
             | Action::ScrollTo { destination } => Some(destination),
             Action::CloseOverlay
             | Action::Back
+            | Action::OpenLink { .. }
             | Action::SetVar { .. }
             | Action::SetMode { .. }
             | Action::Cond { .. } => None,
@@ -128,6 +141,7 @@ impl Action {
             Action::SwapOverlay { .. } => "swap",
             Action::CloseOverlay => "close",
             Action::ScrollTo { .. } => "scroll",
+            Action::OpenLink { .. } => "link",
             Action::Back => "back",
             Action::SetVar { .. } => "setvar",
             Action::SetMode { .. } => "setmode",
@@ -146,6 +160,39 @@ pub enum OverlayPosition {
     BottomRight,
     /// Absolute offset from the top-left of the canvas.
     Manual(f64, f64),
+}
+
+/// The five named overlay anchors (everything but [`OverlayPosition::Manual`]).
+/// Players position overlays with [`overlay_offset`]; the property panel
+/// offers these five plus manual offsets.
+pub const NAMED_OVERLAY_POSITIONS: [OverlayPosition; 5] = [
+    OverlayPosition::Center,
+    OverlayPosition::TopLeft,
+    OverlayPosition::TopRight,
+    OverlayPosition::BottomLeft,
+    OverlayPosition::BottomRight,
+];
+
+/// Top-left offset of an overlay inside its frame, in frame-local units:
+/// the frame is `frame_w × frame_h`, the overlay `ov_w × ov_h`. Named
+/// positions anchor to the frame edges; `Manual(x, y)` is taken as-is.
+/// Pure geometry shared by the editor player, the app preview, and the
+/// overlay painter, so hit-testing and rendering can never disagree.
+pub fn overlay_offset(
+    frame_w: f64,
+    frame_h: f64,
+    ov_w: f64,
+    ov_h: f64,
+    pos: OverlayPosition,
+) -> (f64, f64) {
+    match pos {
+        OverlayPosition::Center => ((frame_w - ov_w) / 2.0, (frame_h - ov_h) / 2.0),
+        OverlayPosition::TopLeft => (0.0, 0.0),
+        OverlayPosition::TopRight => (frame_w - ov_w, 0.0),
+        OverlayPosition::BottomLeft => (0.0, frame_h - ov_h),
+        OverlayPosition::BottomRight => (frame_w - ov_w, frame_h - ov_h),
+        OverlayPosition::Manual(x, y) => (x, y),
+    }
 }
 
 impl OverlayPosition {
@@ -1364,5 +1411,22 @@ mod tests {
         assert_eq!(d[0].0, "a");
         assert_eq!(d[0].1, 700);
         assert!(matches!(d[0].2.action, Action::Back));
+    }
+
+    #[test]
+    fn overlay_offset_anchors_all_five_positions() {
+        // frame 400x300, overlay 100x80
+        let at = |p: OverlayPosition| overlay_offset(400.0, 300.0, 100.0, 80.0, p);
+        assert_eq!(at(OverlayPosition::Center), (150.0, 110.0));
+        assert_eq!(at(OverlayPosition::TopLeft), (0.0, 0.0));
+        assert_eq!(at(OverlayPosition::TopRight), (300.0, 0.0));
+        assert_eq!(at(OverlayPosition::BottomLeft), (0.0, 220.0));
+        assert_eq!(at(OverlayPosition::BottomRight), (300.0, 220.0));
+        assert_eq!(at(OverlayPosition::Manual(12.0, 34.0)), (12.0, 34.0));
+        // oversized overlays overflow symmetrically from the center
+        let over = overlay_offset(100.0, 100.0, 200.0, 50.0, OverlayPosition::Center);
+        assert_eq!(over, (-50.0, 25.0));
+        assert_eq!(NAMED_OVERLAY_POSITIONS.len(), 5);
+        assert!(!NAMED_OVERLAY_POSITIONS.contains(&OverlayPosition::Manual(0.0, 0.0)));
     }
 }

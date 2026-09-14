@@ -1,6 +1,7 @@
 //! Lucide icon set (https://lucide.dev) — stroke icons, 24x24 grid,
-//! 1.75px rounded caps/joins — the same library and geometry the HTML
-//! source-of-truth files load via `data-lucide`.
+//! constant 1.5 device-px stroke with rounded caps/joins — the same
+//! library and geometry the HTML source-of-truth files load via
+//! `data-lucide`, at the shared `IconScale` weight.
 //!
 //! Icons are stored as SVG path data (24x24 viewBox) and parsed once;
 //! `draw_icon` scales them to the requested pixel size. The X logo paths
@@ -322,16 +323,22 @@ fn cache() -> &'static HashMap<&'static str, Vec<BezPath>> {
 }
 
 /// Draw a Lucide icon: 24x24 design units scaled to `size` px at (x, y),
-/// stroked 1.75px (design units) with round caps/joins — matching the
-/// HTML's lucide rendering.
+/// stroked with round caps/joins at a CONSTANT 1.5 device px — the
+/// [`x_native::ui::IconScale`] stroke weight — regardless of the drawn
+/// size. (A fixed design-unit width would render hairlines at 12px and
+/// blobs at 24px; dividing by the scale keeps every icon on-weight.)
 pub fn draw_icon(scene: &mut Scene, name: &str, x: f64, y: f64, size: f64, color: Color) {
+    if !size.is_finite() || size <= 0.0 {
+        return;
+    }
     let paths = match cache().get(name) {
         Some(p) if !p.is_empty() => p,
         _ => return,
     };
     let s = size / 24.0;
     let t = Affine::translate((x, y)) * Affine::scale(s);
-    let stroke = Stroke::new(1.75)
+    let w = x_native::ui::IconScale::default().stroke_width / s;
+    let stroke = Stroke::new(w)
         .with_caps(vello::kurbo::Cap::Round)
         .with_join(vello::kurbo::Join::Round);
     for p in paths {

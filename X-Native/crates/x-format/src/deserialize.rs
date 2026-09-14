@@ -212,6 +212,13 @@ fn parse_nested_action(v: &V) -> Action {
         Some("close") => Action::CloseOverlay,
         Some("scroll") => Action::ScrollTo { destination: dest },
         Some("back") => Action::Back,
+        Some("link") => Action::OpenLink {
+            url: v
+                .get("url")
+                .and_then(V::str)
+                .unwrap_or(dest.as_str())
+                .to_string(),
+        },
         Some("setvar") => Action::SetVar {
             name: v.get("var").and_then(V::str).unwrap_or("").to_string(),
             value: v
@@ -728,6 +735,7 @@ pub(crate) fn parse_node(v: &V) -> Node {
                 Some("drag") => Trigger::OnDrag,
                 Some("enter") => Trigger::MouseEnter,
                 Some("leave") => Trigger::MouseLeave,
+                Some("mouseup") => Trigger::MouseUp,
                 Some("delay") => Trigger::AfterDelay {
                     ms: e.get("delay_ms").and_then(V::num).unwrap_or(0.0) as u32,
                 },
@@ -773,6 +781,13 @@ pub(crate) fn parse_node(v: &V) -> Node {
                 Some("swap") => Action::SwapOverlay { overlay: dest },
                 Some("close") => Action::CloseOverlay,
                 Some("scroll") => Action::ScrollTo { destination: dest },
+                Some("link") => Action::OpenLink {
+                    url: e
+                        .get("url")
+                        .and_then(V::str)
+                        .unwrap_or(dest.as_str())
+                        .to_string(),
+                },
                 Some("back") => Action::Back,
                 _ => Action::Navigate { destination: dest },
             };

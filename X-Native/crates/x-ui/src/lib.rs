@@ -41,8 +41,8 @@ pub use containers::{
     MENU_ROW_H, MENU_W,
 };
 pub use design_system::{
-    ColorTokens, DesignSystem, IconScale, InteractionState, RadiusScale, Shadow, ShadowScale,
-    SpacingScale, TypographyScale, COLOR_ROLES,
+    ColorTokens, DesignSystem, Elevation, IconScale, InteractionState, RadiusScale, Shadow,
+    ShadowScale, SpacingScale, TypographyScale, COLOR_ROLES,
 };
 pub use status_bar::{
     BreadcrumbPath, BreadcrumbSegment, ConnectionStatus, CursorState, EntityId, NotificationLevel,

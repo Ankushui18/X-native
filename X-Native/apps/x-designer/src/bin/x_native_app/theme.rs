@@ -19,7 +19,7 @@
 
 use vello::peniko::Color;
 use x_native::text::Span;
-use x_native::ui::{ColorTokens, ThemeId};
+use x_native::ui::{ColorTokens, RadiusScale, ThemeId, TypographyScale};
 
 /// The palette these constants are derived from.
 const P: ColorTokens = ColorTokens::GRAPHITE;
@@ -209,27 +209,39 @@ pub const SEARCH_H: f64 = 32.0;
 pub const DRAFT_ROW_H: f64 = 48.0;
 pub const LOGO: f64 = 28.0;
 
-// radius
-pub const R_INPUT: f64 = 8.0;
-pub const R_SEARCH: f64 = 10.0;
-pub const R_CARD: f64 = 12.0;
-pub const R_TOOLBAR: f64 = 12.0;
-pub const R_ROW: f64 = 8.0;
-pub const R_PAGE: f64 = 6.0;
-pub const R_PILL: f64 = 6.0;
-pub const R_TREE: f64 = 5.0;
-pub const R_LOGO: f64 = 4.0;
-pub const R_TOOL_ICON: f64 = 8.0;
+// --------------------------------------------------------------- radius
+// One name per step, derived from the shared `x-ui` scale: a corner is
+// always 2/4/6/8/12. The semantic aliases below name the intent (input,
+// card, toolbar…) so call sites read as usage, not geometry.
+pub const R_XS: f64 = RadiusScale::XS;
+pub const R_SM: f64 = RadiusScale::SM;
+pub const R_MD: f64 = RadiusScale::MD;
+pub const R_LG: f64 = RadiusScale::LG;
+pub const R_XL: f64 = RadiusScale::XL;
 
-// type scale (px)
-pub const T9: f64 = 9.0;
-pub const T10: f64 = 10.0;
-pub const T11: f64 = 11.0;
-pub const T12: f64 = 12.0;
-pub const T13: f64 = 13.0;
-pub const T14: f64 = 14.0;
-pub const T24: f64 = 24.0;
-pub const T28: f64 = 28.0;
+pub const R_INPUT: f64 = R_LG;
+pub const R_SEARCH: f64 = R_XL;
+pub const R_CARD: f64 = R_XL;
+pub const R_TOOLBAR: f64 = R_XL;
+pub const R_ROW: f64 = R_LG;
+pub const R_PAGE: f64 = R_MD;
+pub const R_PILL: f64 = R_MD;
+pub const R_TREE: f64 = R_SM;
+pub const R_LOGO: f64 = R_SM;
+pub const R_TOOL_ICON: f64 = R_LG;
+
+// ------------------------------------------------------------- type (px)
+// One name per step, derived from the shared `x-ui` scale: 10/11/12/13/
+// 14/20. There is deliberately no 9px step — micro labels sit on T10
+// with tracking (`TextUi::micro_label`) instead of shrinking the face —
+// and no 16px step either (nothing in the UI sets 16px; the shared
+// scale still defines it for future use).
+pub const T10: f64 = TypographyScale::XS;
+pub const T11: f64 = TypographyScale::SM;
+pub const T12: f64 = TypographyScale::BASE;
+pub const T13: f64 = TypographyScale::MD;
+pub const T14: f64 = TypographyScale::LG;
+pub const T20: f64 = TypographyScale::XXL;
 
 /// Create a color from RGBA8 values (for rich-text run colors).
 pub fn color_from_rgba8(r: u8, g: u8, b: u8) -> vello::peniko::Color {

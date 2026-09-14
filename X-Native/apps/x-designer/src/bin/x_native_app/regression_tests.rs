@@ -1186,6 +1186,405 @@ fn flow_enter_follows_selection_to_its_top_frame() {
     assert_eq!(h.app.flow.as_ref().unwrap().current, "f1");
 }
 
+/// Rich prototype fixture: two screens, a centered dialog overlay, one
+/// interaction per trigger kind, and a `n = 1` document variable.
+fn player_doc(h: &mut Host) {
+    use x_native::{
+        Action, Animation, CondOp, Condition, Expr, Interaction, OverlayPosition, Trigger,
+    };
+    let d = h.app.doc();
+    let root_id = d.editor_ref().root.id.clone();
+    let mut f1 = Node::frame("f1", 300.0, 200.0);
+    f1.name = "Home".into();
+    f1.is_starting_point = true;
+    let key = Interaction {
+        trigger: Trigger::KeyDown { key: "a".into() },
+        action: Action::Navigate {
+            destination: "f2".into(),
+        },
+        transition_ms: 0,
+        animation: Animation::Instant,
+    };
+    let delay = |ms: u32, action: Action| Interaction {
+        trigger: Trigger::AfterDelay { ms },
+        action,
+        transition_ms: 0,
+        animation: Animation::Instant,
+    };
+    f1.interactions = vec![
+        key,
+        delay(
+            30,
+            Action::SetVar {
+                name: "tick".into(),
+                value: Expr::num(1.0),
+            },
+        ),
+        delay(
+            35,
+            Action::SetVar {
+                name: "tick".into(),
+                value: Expr::num(2.0),
+            },
+        ),
+        delay(
+            60,
+            Action::Navigate {
+                destination: "f2".into(),
+            },
+        ),
+    ];
+    let mut f2 = Node::frame("f2", 300.0, 200.0);
+    f2.name = "Detail".into();
+    f2.transform.x = 400.0;
+    let mut dlg = Node::frame("dlg", 160.0, 100.0);
+    dlg.name = "Dialog".into();
+    dlg.transform.x = 800.0;
+    d.editor().insert_node(&root_id, f1);
+    d.editor().insert_node(&root_id, f2);
+    d.editor().insert_node(&root_id, dlg);
+    let rect =
+        |id: &str, x: f64, y: f64| Node::rect(id, x, y, 80.0, 30.0, Color::from_rgb8(9, 9, 9));
+    let mut btn = rect("btn", 20.0, 20.0);
+    btn.interactions = vec![Interaction::click("f2")];
+    d.editor().insert_node("f1", btn);
+    let mut hov = rect("hov", 20.0, 60.0);
+    hov.interactions = vec![
+        Interaction {
+            trigger: Trigger::OnHover,
+            action: Action::OpenOverlay {
+                overlay: "dlg".into(),
+                position: OverlayPosition::Center,
+            },
+            transition_ms: 0,
+            animation: Animation::Instant,
+        },
+        Interaction {
+            trigger: Trigger::MouseLeave,
+            action: Action::CloseOverlay,
+            transition_ms: 0,
+            animation: Animation::Instant,
+        },
+    ];
+    d.editor().insert_node("f1", hov);
+    let mut drg = rect("drg", 20.0, 100.0);
+    drg.interactions = vec![Interaction {
+        trigger: Trigger::OnDrag,
+        action: Action::Navigate {
+            destination: "f2".into(),
+        },
+        transition_ms: 0,
+        animation: Animation::Instant,
+    }];
+    d.editor().insert_node("f1", drg);
+    let mut set = rect("set", 20.0, 140.0);
+    set.interactions = vec![Interaction {
+        trigger: Trigger::OnClick,
+        action: Action::SetVar {
+            name: "n".into(),
+            value: Expr::num(41.0),
+        },
+        transition_ms: 0,
+        animation: Animation::Instant,
+    }];
+    d.editor().insert_node("f1", set);
+    // while-hovering navigate (110..190, 20..50): returns on leave
+    let mut wh = rect("wh", 110.0, 20.0);
+    wh.interactions = vec![Interaction {
+        trigger: Trigger::OnHover,
+        action: Action::Navigate {
+            destination: "f2".into(),
+        },
+        transition_ms: 0,
+        animation: Animation::Instant,
+    }];
+    d.editor().insert_node("f1", wh);
+    // while-pressing overlay (200..280, 20..50) + mouse-up set-var
+    let mut pu = rect("pu", 200.0, 20.0);
+    pu.interactions = vec![
+        Interaction {
+            trigger: Trigger::OnPress,
+            action: Action::OpenOverlay {
+                overlay: "dlg".into(),
+                position: OverlayPosition::Center,
+            },
+            transition_ms: 0,
+            animation: Animation::Instant,
+        },
+        Interaction {
+            trigger: Trigger::MouseUp,
+            action: Action::SetVar {
+                name: "n".into(),
+                value: Expr::num(99.0),
+            },
+            transition_ms: 0,
+            animation: Animation::Instant,
+        },
+    ];
+    d.editor().insert_node("f1", pu);
+    let mut gate = rect("gate", 20.0, 60.0); // f2-local → world (420..500, 60..90)
+    gate.interactions = vec![Interaction {
+        trigger: Trigger::OnClick,
+        action: Action::Cond {
+            cond: Condition {
+                lhs: Expr::var("n"),
+                op: CondOp::Gt,
+                rhs: Expr::num(40.0),
+            },
+            then: Box::new(Action::Navigate {
+                destination: "f1".into(),
+            }),
+            els: Some(Box::new(Action::OpenOverlay {
+                overlay: "dlg".into(),
+                position: OverlayPosition::TopLeft,
+            })),
+        },
+        transition_ms: 0,
+        animation: Animation::Instant,
+    }];
+    d.editor().insert_node("f2", gate);
+    let mut shut = Node::rect("shut", 10.0, 10.0, 60.0, 30.0, Color::from_rgb8(9, 9, 9));
+    shut.interactions = vec![Interaction {
+        trigger: Trigger::OnClick,
+        action: Action::CloseOverlay,
+        transition_ms: 0,
+        animation: Animation::Instant,
+    }];
+    d.editor().insert_node("dlg", shut);
+    d.doc.variables.numbers.insert("n".into(), 1.0);
+}
+
+#[test]
+fn player_hover_opens_overlay_and_leave_closes_it() {
+    let mut h = host();
+    player_doc(&mut h);
+    h.flow_enter();
+    // hov @ f1-local (20..100, 60..90): hover opens the dialog
+    let sp = h.app.world_to_screen(Point::new(60.0, 75.0));
+    h.flow_hover_at(sp);
+    assert_eq!(h.app.flow.as_ref().unwrap().overlays.len(), 1);
+    assert_eq!(h.app.flow.as_ref().unwrap().overlays[0].frame, "dlg");
+    // leaving for empty canvas fires MouseLeave: the dialog closes
+    let sp = h.app.world_to_screen(Point::new(250.0, 180.0));
+    h.flow_hover_at(sp);
+    assert!(h.app.flow.as_ref().unwrap().overlays.is_empty());
+    assert_eq!(h.app.flow.as_ref().unwrap().current, "f1");
+}
+
+#[test]
+fn player_click_routes_through_open_overlay_at_rendered_position() {
+    let mut h = host();
+    player_doc(&mut h);
+    h.flow_enter();
+    let sp = h.app.world_to_screen(Point::new(60.0, 75.0));
+    h.flow_hover_at(sp);
+    assert_eq!(h.app.flow.as_ref().unwrap().overlays.len(), 1);
+    // dlg renders centered over f1: offset (70, 50), so shut sits at
+    // world (80..140, 60..90) — nothing else is near (110, 75)
+    let sp = h.app.world_to_screen(Point::new(110.0, 75.0));
+    h.flow_press(sp);
+    assert!(
+        h.app.flow.as_ref().unwrap().overlays.is_empty(),
+        "shut closes dlg"
+    );
+    assert_eq!(h.app.flow.as_ref().unwrap().current, "f1");
+}
+
+#[test]
+fn player_drag_fires_once_per_press() {
+    let mut h = host();
+    player_doc(&mut h);
+    h.flow_enter();
+    // drg center (60, 115): press arms the drag, moving fires it
+    let sp = h.app.world_to_screen(Point::new(60.0, 115.0));
+    h.flow_press(sp);
+    assert_eq!(h.app.flow.as_ref().unwrap().current, "f1");
+    h.flow_drag_at(sp);
+    assert_eq!(h.app.flow.as_ref().unwrap().current, "f2");
+    assert_eq!(h.app.flow.as_ref().unwrap().stack, vec!["f1".to_string()]);
+    // navigation disarms the cycle: further moves push no history
+    h.flow_drag_at(sp);
+    assert_eq!(h.app.flow.as_ref().unwrap().stack.len(), 1);
+}
+
+#[test]
+fn player_key_trigger_navigates_and_unknown_key_ignored() {
+    let mut h = host();
+    player_doc(&mut h);
+    h.flow_enter();
+    h.flow_key(&Key::Character("z".into()));
+    assert_eq!(h.app.flow.as_ref().unwrap().current, "f1");
+    h.flow_key(&Key::Character("a".into()));
+    assert_eq!(h.app.flow.as_ref().unwrap().current, "f2");
+}
+
+#[test]
+fn player_delay_fires_in_order_and_navigation_cancels_rest() {
+    let mut h = host();
+    player_doc(&mut h);
+    h.flow_enter();
+    assert_eq!(h.app.flow.as_ref().unwrap().delays.len(), 3);
+    let t0 = std::time::Instant::now();
+    let tick = std::time::Duration::from_millis(40);
+    assert_eq!(h.flow_tick(t0 + tick), 2, "30ms and 35ms delays fire");
+    assert_eq!(h.app.flow.as_ref().unwrap().vars.numbers["tick"], 2.0);
+    assert_eq!(h.app.flow.as_ref().unwrap().current, "f1");
+    let tick = std::time::Duration::from_millis(70);
+    assert_eq!(h.flow_tick(t0 + tick), 1, "60ms delay navigates");
+    assert_eq!(h.app.flow.as_ref().unwrap().current, "f2");
+    assert!(
+        h.app.flow.as_ref().unwrap().delays.is_empty(),
+        "f2 arms none"
+    );
+}
+
+#[test]
+fn player_escape_dismisses_then_backs_then_exits() {
+    let mut h = host();
+    player_doc(&mut h);
+    h.flow_enter();
+    let sp = h.app.world_to_screen(Point::new(60.0, 75.0));
+    h.flow_hover_at(sp);
+    h.on_key(Key::Named(NamedKey::Escape), None);
+    assert!(
+        h.app.flow.as_ref().unwrap().overlays.is_empty(),
+        "dismissed"
+    );
+    assert_eq!(h.app.flow.as_ref().unwrap().current, "f1");
+    let sp = h.app.world_to_screen(Point::new(60.0, 35.0));
+    h.flow_press(sp);
+    assert_eq!(h.app.flow.as_ref().unwrap().current, "f2");
+    h.on_key(Key::Named(NamedKey::Escape), None);
+    assert_eq!(h.app.flow.as_ref().unwrap().current, "f1", "backed");
+    h.on_key(Key::Named(NamedKey::Escape), None);
+    assert!(h.app.flow.is_none(), "empty history exits");
+}
+
+#[test]
+fn player_variables_stay_preview_local() {
+    let mut h = host();
+    player_doc(&mut h);
+    h.flow_enter();
+    assert_eq!(h.app.flow.as_ref().unwrap().vars.numbers["n"], 1.0);
+    // set @ (20..100, 140..170): preview n becomes 41, document stays 1
+    let sp = h.app.world_to_screen(Point::new(60.0, 155.0));
+    h.flow_press(sp);
+    assert_eq!(h.app.flow.as_ref().unwrap().vars.numbers["n"], 41.0);
+    assert_eq!(h.app.doc_ref().doc.variables.numbers["n"], 1.0);
+    // the gate on f2 reads the preview store: 41 > 40 navigates home
+    let sp = h.app.world_to_screen(Point::new(60.0, 35.0));
+    h.flow_press(sp);
+    assert_eq!(h.app.flow.as_ref().unwrap().current, "f2");
+    let sp = h.app.world_to_screen(Point::new(460.0, 75.0));
+    h.flow_press(sp);
+    assert_eq!(h.app.flow.as_ref().unwrap().current, "f1");
+    assert_eq!(h.app.doc_ref().doc.variables.numbers["n"], 1.0);
+}
+
+#[test]
+fn player_hover_navigate_returns_on_leave() {
+    let mut h = host();
+    player_doc(&mut h);
+    h.flow_enter();
+    // wh @ f1-local (110..190, 20..50): while-hovering navigates to f2
+    let sp = h.app.world_to_screen(Point::new(150.0, 35.0));
+    h.flow_hover_at(sp);
+    assert_eq!(h.app.flow.as_ref().unwrap().current, "f2");
+    // moving anywhere leaves the hotspot: back to f1, no history kept
+    let sp = h.app.world_to_screen(Point::new(460.0, 150.0));
+    h.flow_hover_at(sp);
+    assert_eq!(h.app.flow.as_ref().unwrap().current, "f1");
+    assert!(h.app.flow.as_ref().unwrap().stack.is_empty());
+}
+
+#[test]
+fn player_press_opens_and_release_reverts_then_mouseup_fires() {
+    let mut h = host();
+    player_doc(&mut h);
+    h.flow_enter();
+    // pu @ f1-local (200..280, 20..50): press opens the dialog
+    let sp = h.app.world_to_screen(Point::new(240.0, 35.0));
+    h.flow_press(sp);
+    assert_eq!(h.app.flow.as_ref().unwrap().overlays.len(), 1);
+    // release over pu: the press span closes the dialog, then MouseUp
+    // sets n in the preview store
+    h.app.mouse = sp;
+    h.flow_release();
+    assert!(h.app.flow.as_ref().unwrap().overlays.is_empty());
+    assert_eq!(h.app.flow.as_ref().unwrap().vars.numbers["n"], 99.0);
+}
+
+#[test]
+fn player_scrollto_pans_without_navigating() {
+    use x_native::{Action, Animation, Interaction, Trigger};
+    let mut h = host();
+    player_doc(&mut h);
+    h.flow_enter();
+    let zoom = h.app.zoom;
+    let ix = Interaction {
+        trigger: Trigger::OnClick,
+        action: Action::ScrollTo {
+            destination: "set".into(),
+        },
+        transition_ms: 0,
+        animation: Animation::Instant,
+    };
+    h.flow_fire(&ix);
+    assert_eq!(h.app.flow.as_ref().unwrap().current, "f1");
+    assert!(h.app.flow.as_ref().unwrap().stack.is_empty());
+    assert_eq!(h.app.zoom, zoom, "scroll keeps the zoom");
+    // the "set" rect (center (60, 155)) lands centered in the viewer
+    let c = h.app.view_canvas();
+    let sp = h.app.world_to_screen(Point::new(60.0, 155.0));
+    assert!((sp.x - (c.x0 + c.x1) / 2.0).abs() < 1.0);
+    assert!((sp.y - (c.y0 + c.y1) / 2.0).abs() < 1.0);
+}
+
+#[test]
+fn player_swap_without_overlay_navigates_without_history() {
+    use x_native::{Action, Animation, Interaction, Trigger};
+    let mut h = host();
+    player_doc(&mut h);
+    h.flow_enter();
+    let ix = Interaction {
+        trigger: Trigger::OnClick,
+        action: Action::SwapOverlay {
+            overlay: "f2".into(),
+        },
+        transition_ms: 0,
+        animation: Animation::Instant,
+    };
+    h.flow_fire(&ix);
+    assert_eq!(h.app.flow.as_ref().unwrap().current, "f2");
+    assert!(
+        h.app.flow.as_ref().unwrap().stack.is_empty(),
+        "Back skips it"
+    );
+    assert_eq!(h.app.status, "Flow preview — viewing f2");
+}
+
+#[test]
+fn player_openlink_reports_url_without_leaving() {
+    use x_native::{Action, Animation, Interaction, Trigger};
+    let mut h = host();
+    player_doc(&mut h);
+    h.flow_enter();
+    let ix = Interaction {
+        trigger: Trigger::OnClick,
+        action: Action::OpenLink {
+            url: "https://example.com".into(),
+        },
+        transition_ms: 0,
+        animation: Animation::Instant,
+    };
+    // headless: no window, so no browser spawns — the URL just reports
+    let effect = h.flow_fire(&ix);
+    assert_eq!(effect.opened_link.as_deref(), Some("https://example.com"));
+    assert_eq!(h.app.flow.as_ref().unwrap().current, "f1");
+    assert!(h.app.flow.as_ref().unwrap().stack.is_empty());
+    assert!(h.app.flow.as_ref().unwrap().overlays.is_empty());
+}
+
 #[test]
 fn assets_panel_lists_faces_and_offers_load_font() {
     let mut h = host();
