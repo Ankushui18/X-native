@@ -4,6 +4,45 @@ use kurbo::{Affine, Circle, Rect, RoundedRect, RoundedRectRadii, Shape};
 use peniko::{Brush, Color, Fill, Gradient, Mix};
 use std::collections::HashMap;
 
+// Phase 6: Import ImageAdjustments from x-render
+// We'll define it here in x-core to avoid circular dependencies
+/// Phase 6: Image adjustment parameters
+/// All values are in the range [-1.0, 1.0] where:
+/// - -1.0 = maximum negative adjustment
+/// - 0.0 = no adjustment
+/// - 1.0 = maximum positive adjustment
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ImageAdjustments {
+    /// Brightness adjustment (-1.0 to 1.0)
+    pub exposure: f32,
+    /// Contrast adjustment (-1.0 to 1.0)
+    pub contrast: f32,
+    /// Color saturation adjustment (-1.0 to 1.0)
+    pub saturation: f32,
+    /// Color temperature adjustment (-1.0 to 1.0, negative = cool/blue, positive = warm/orange)
+    pub temperature: f32,
+    /// Color tint adjustment (-1.0 to 1.0, negative = green, positive = magenta)
+    pub tint: f32,
+    /// Highlight brightness adjustment (-1.0 to 1.0)
+    pub highlights: f32,
+    /// Shadow brightness adjustment (-1.0 to 1.0)
+    pub shadows: f32,
+}
+
+impl Default for ImageAdjustments {
+    fn default() -> Self {
+        Self {
+            exposure: 0.0,
+            contrast: 0.0,
+            saturation: 0.0,
+            temperature: 0.0,
+            tint: 0.0,
+            highlights: 0.0,
+            shadows: 0.0,
+        }
+    }
+}
+
 // -------------------------------------------------------------------- nodes
 
 /// Phase 2.6: editable vector path data. A vector node owns a list of
@@ -231,6 +270,11 @@ pub struct Node {
     pub overrides: HashMap<String, String>,
     /// Phase 4.7: per-corner radii [tl, tr, br, bl]; overrides Rect's uniform radius.
     pub corner_radii: Option<[f64; 4]>,
+    /// Corner smoothing (0.0–1.0): Figma's "squircle" corner rounding.
+    /// 0.0 = standard circular corner (default), 0.6–0.8 = iOS-style
+    /// continuous corner (superellipse). Higher values produce smoother
+    /// transitions between straight edges and curved corners.
+    pub corner_smoothing: f64,
     /// Phase 4: blend mode.
     pub blend: BlendKind,
     /// Phase 4: layer effects (shadows/blurs).
@@ -240,6 +284,13 @@ pub struct Node {
     /// Phase 2.12/P0: resize + per-child auto-layout constraints
     /// (absolute/fixed/sticky, align_self, grow/shrink/basis).
     pub constraints: ChildConstraints,
+    /// Z-index override for paint order within auto-layout frames. When
+    /// `Some(i)`, this child paints at the given z-level relative to
+    /// siblings (higher values paint on top). When `None`, the child
+    /// paints in document order (layer-panel order). This enables
+    /// z-index-like behavior within auto-layout without breaking the
+    /// flow semantics. Default: `None`.
+    pub z_index: Option<i32>,
     /// Masks: when true, this node clips its FOLLOWING SIBLINGS inside
     /// the same parent (mask semantics semantics, simplified).
     pub is_mask: bool,
@@ -280,7 +331,27 @@ pub struct Node {
     /// overlays on a frame — guides, NOT auto layout. A frame may stack
     /// several (e.g. columns + rows). Meaningful only on Frame nodes.
     pub layout_grids: Vec<LayoutGridDef>,
-}
+    
+    // Text formatting properties
+    pub text_align: TextAlign,
+    pub text_align_vertical: TextAlignVertical,
+    pub text_decoration: TextDecoration,
+    pub text_case: TextCase,
+    pub text_truncation: TextTruncation,
+    pub max_lines: Option<usize>,
+    pub paragraph_spacing: f64,
+    pub paragraph_indent: f64,
+    pub hanging_punctuation: HangingPunctuation,
+    pub list_style: ListStyle,
+    pub wrap_style: WrapStyle,
+    
+    /// Phase 6: Image adjustments (exposure, contrast, saturation, etc.)
+    /// Only applies to Image nodes and Pattern fills
+    pub image_adjustments: Option<ImageAdjustments>,
+    
+    /// Phase 6: Image rotation in degrees (0, 90, 180, 270)
+    /// Independent of node rotation, applies only to the image fill
+    pub image_rotation: f64,
 
 impl Node {
     /// Clone this node's own state without walking/allocating its descendants.
@@ -307,10 +378,12 @@ impl Node {
             prototype: self.prototype.clone(),
             overrides: self.overrides.clone(),
             corner_radii: self.corner_radii,
+            corner_smoothing: self.corner_smoothing,
             blend: self.blend,
             effects: self.effects.clone(),
             pin: self.pin,
             constraints: self.constraints.clone(),
+            z_index: self.z_index,
             is_mask: self.is_mask,
             bindings: self.bindings.clone(),
             text_metrics: self.text_metrics.clone(),
@@ -323,6 +396,19 @@ impl Node {
             overflow: self.overflow,
             scroll: self.scroll,
             layout_grids: self.layout_grids.clone(),
+            text_align: self.text_align,
+            text_align_vertical: self.text_align_vertical,
+            text_decoration: self.text_decoration,
+            text_case: self.text_case,
+            text_truncation: self.text_truncation,
+            max_lines: self.max_lines,
+            paragraph_spacing: self.paragraph_spacing,
+            paragraph_indent: self.paragraph_indent,
+            hanging_punctuation: self.hanging_punctuation,
+            list_style: self.list_style,
+            wrap_style: self.wrap_style,
+            image_adjustments: self.image_adjustments,
+            image_rotation: self.image_rotation,
         }
     }
 
@@ -407,6 +493,213 @@ impl TextWrap {
 
 /// Layout-grid guide pattern.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+
+/// Text horizontal alignment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+    Justified,
+}
+
+impl TextAlign {
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Center => "center",
+            Self::Right => "right",
+            Self::Justified => "justified",
+        }
+    }
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "center" => Self::Center,
+            "right" => Self::Right,
+            "justified" => Self::Justified,
+            _ => Self::Left,
+        }
+    }
+}
+
+/// Text vertical alignment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextAlignVertical {
+    #[default]
+    Top,
+    Middle,
+    Bottom,
+}
+
+impl TextAlignVertical {
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::Top => "top",
+            Self::Middle => "middle",
+            Self::Bottom => "bottom",
+        }
+    }
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "middle" => Self::Middle,
+            "bottom" => Self::Bottom,
+            _ => Self::Top,
+        }
+    }
+}
+
+/// Text decoration (underline/strikethrough).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextDecoration {
+    #[default]
+    None,
+    Underline,
+    Strikethrough,
+}
+
+impl TextDecoration {
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Underline => "underline",
+            Self::Strikethrough => "strikethrough",
+        }
+    }
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "underline" => Self::Underline,
+            "strikethrough" => Self::Strikethrough,
+            _ => Self::None,
+        }
+    }
+}
+
+/// Text case transformation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextCase {
+    #[default]
+    Original,
+    Upper,
+    Lower,
+    Title,
+}
+
+impl TextCase {
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::Original => "original",
+            Self::Upper => "upper",
+            Self::Lower => "lower",
+            Self::Title => "title",
+        }
+    }
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "upper" => Self::Upper,
+            "lower" => Self::Lower,
+            "title" => Self::Title,
+            _ => Self::Original,
+        }
+    }
+}
+
+/// Text truncation mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextTruncation {
+    #[default]
+    Disabled,
+    End,
+    Middle,
+}
+
+impl TextTruncation {
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::End => "end",
+            Self::Middle => "middle",
+        }
+    }
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "end" => Self::End,
+            "middle" => Self::Middle,
+            _ => Self::Disabled,
+        }
+    }
+}
+
+/// List style (bulleted/numbered).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ListStyle {
+    #[default]
+    None,
+    Bulleted,
+    Numbered,
+}
+
+impl ListStyle {
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Bulleted => "bulleted",
+            Self::Numbered => "numbered",
+        }
+    }
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "bulleted" => Self::Bulleted,
+            "numbered" => Self::Numbered,
+            _ => Self::None,
+        }
+    }
+}
+
+/// Text wrap style for line breaking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WrapStyle {
+    #[default]
+    Normal,
+    BreakWord,
+}
+
+impl WrapStyle {
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::BreakWord => "break-word",
+        }
+    }
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "break-word" => Self::BreakWord,
+            _ => Self::Normal,
+        }
+    }
+}
+
+/// Hanging punctuation settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HangingPunctuation {
+    pub quotes: bool,
+    pub lists: bool,
+}
+
+impl HangingPunctuation {
+    pub fn to_json(&self) -> String {
+        format!(
+            "{{\"quotes\":{},\"lists\":{}}}",
+            self.quotes, self.lists
+        )
+    }
+    pub fn parse(s: &str) -> Self {
+        // Simple JSON parser for {"quotes":bool,"lists":bool}
+        let quotes = s.contains("\"quotes\":true");
+        let lists = s.contains("\"lists\":true");
+        Self { quotes, lists }
+    }
+}
 pub enum GridPattern {
     #[default]
     Columns,
@@ -670,11 +963,13 @@ impl Node {
             prototype: None,
             overrides: HashMap::new(),
             corner_radii: None,
+            corner_smoothing: 0.0,
             blend: BlendKind::Normal,
             effects: vec![],
             is_mask: false,
             pin: (HPin::Left, VPin::Top),
             constraints: ChildConstraints::default(),
+            z_index: None,
             bindings: HashMap::new(),
             text_metrics: None,
             text_runs: vec![],
@@ -686,6 +981,19 @@ impl Node {
             overflow: Overflow::default(),
             scroll: (0.0, 0.0),
             layout_grids: vec![],
+            text_align: TextAlign::Left,
+            text_align_vertical: TextAlignVertical::Top,
+            text_decoration: TextDecoration::None,
+            text_case: TextCase::Original,
+            text_truncation: TextTruncation::Disabled,
+            max_lines: None,
+            paragraph_spacing: 0.0,
+            paragraph_indent: 0.0,
+            hanging_punctuation: HangingPunctuation::default(),
+            list_style: ListStyle::None,
+            wrap_style: WrapStyle::Normal,
+            image_adjustments: None,
+            image_rotation: 0.0,
         }
     }
     pub fn frame(id: &str, w: f64, h: f64) -> Self {
@@ -863,6 +1171,12 @@ impl Node {
         self.corner_radii = Some([tl, tr, br, bl]);
         self
     }
+    /// Set corner smoothing (0.0–1.0). Higher values produce iOS-style
+    /// continuous corners (superellipse). 0.0 = standard circular corners.
+    pub fn smooth_corners(mut self, v: f64) -> Self {
+        self.corner_smoothing = v.clamp(0.0, 1.0);
+        self
+    }
     pub fn rotate(mut self, r: f64) -> Self {
         self.transform.rotation = r;
         self
@@ -936,6 +1250,18 @@ impl Node {
                 .collect()
         }
     }
+    /// CSS Flexbox parity (Figma Jul-2026): the effective inside-stroke
+    /// width for layout purposes. Returns the maximum width among visible
+    /// inside-aligned stroke layers (inside strokes reduce the content
+    /// area like CSS `border` in border-box model). Outside and center
+    /// strokes are never included — they behave like CSS `outline`.
+    pub fn inside_stroke_width(&self) -> f64 {
+        self.active_strokes()
+            .iter()
+            .filter(|l| l.options.align == StrokeAlign::Inside)
+            .map(|l| l.stroke.width)
+            .fold(0.0f64, f64::max)
+    }
     pub fn active_effects(&self) -> Vec<EffectLayer> {
         if !self.visual_stacks_materialized {
             self.effects.iter().cloned().map(EffectLayer::new).collect()
@@ -994,6 +1320,12 @@ impl Node {
                 layout: Some(layout),
             }
         }
+        self
+    }
+    /// Set z-index for paint order within auto-layout frames. Higher
+    /// values paint on top of siblings. `None` = document order.
+    pub fn z_index(mut self, z: i32) -> Self {
+        self.z_index = Some(z);
         self
     }
     /// Absolute-position this child inside its auto-layout parent (Figma ABSOLUTE).

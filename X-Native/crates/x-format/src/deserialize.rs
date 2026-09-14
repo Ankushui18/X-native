@@ -274,6 +274,7 @@ fn parse_grid(v: Option<&V>) -> Option<x_core::GridLayout> {
         column_gap: g.get("cgap").and_then(V::num).unwrap_or(0.0),
         row_gap: g.get("rgap").and_then(V::num).unwrap_or(0.0),
         padding: parse_padding(g.get("pad")),
+        auto_flow: g.get("flow").and_then(V::str).map(x_core::GridAutoFlow::from_str).unwrap_or_default(),
     })
 }
 
@@ -399,6 +400,18 @@ fn parse_kind(v: &V) -> NodeKind {
                     .get("resize_on_wrap")
                     .and_then(V::boolean)
                     .unwrap_or(false),
+                // CSS Flexbox parity: default true for new frames, but
+                // old documents without this field get the legacy false
+                // to preserve byte-stable visual output.
+                stroke_include_in_layout: l
+                    .get("stroke_include_in_layout")
+                    .and_then(V::boolean)
+                    .unwrap_or(true),
+                canvas_stacking: l
+                    .get("canvas_stacking")
+                    .and_then(V::str)
+                    .map(CanvasStacking::from_str)
+                    .unwrap_or_default(),
             });
             NodeKind::Frame { layout }
         }
@@ -613,6 +626,8 @@ pub(crate) fn parse_node(v: &V) -> Node {
             ]);
         }
     }
+    // corner smoothing (0.0 default)
+    n.corner_smoothing = v.get("smoothing").and_then(V::num).unwrap_or(0.0);
     if let Some(rs) = v.get("textRuns").and_then(V::arr) {
         for r in rs {
             n.text_runs.push(TextRun {
@@ -794,6 +809,7 @@ pub(crate) fn parse_node(v: &V) -> Node {
             n.interactions.push(Interaction {
                 trigger,
                 action,
+                actions: vec![],
                 transition_ms: e.get("ms").and_then(V::num).unwrap_or(350.0) as u32,
                 animation: Animation::from_str(e.get("anim").and_then(V::str).unwrap_or("smart")),
             });
@@ -827,6 +843,8 @@ pub(crate) fn parse_node(v: &V) -> Node {
             .map(|v| v.max(1.0) as usize)
             .unwrap_or(1);
     }
+    // z_index: paint order within auto-layout frames (default: None)
+    n.z_index = v.get("z_index").and_then(V::num).map(|v| v as i32);
     if let Some(V::Arr(a)) = v.get("grids") {
         for g in a {
             n.layout_grids.push(LayoutGridDef {
@@ -844,6 +862,23 @@ pub(crate) fn parse_node(v: &V) -> Node {
             n.scroll = (s[0].num().unwrap_or(0.0), s[1].num().unwrap_or(0.0));
         }
     }
+    // Text formatting properties
+    n.text_align = TextAlign::parse(v.get("text_align").and_then(V::str).unwrap_or("left"));
+    n.text_align_vertical = TextAlignVertical::parse(v.get("text_align_vertical").and_then(V::str).unwrap_or("top"));
+    n.text_decoration = TextDecoration::parse(v.get("text_decoration").and_then(V::str).unwrap_or("none"));
+    n.text_case = TextCase::parse(v.get("text_case").and_then(V::str).unwrap_or("original"));
+    n.text_truncation = TextTruncation::parse(v.get("text_truncation").and_then(V::str).unwrap_or("disabled"));
+    n.max_lines = v.get("max_lines").and_then(V::num).map(|v| v as usize);
+    n.paragraph_spacing = v.get("paragraph_spacing").and_then(V::num).unwrap_or(0.0);
+    n.paragraph_indent = v.get("paragraph_indent").and_then(V::num).unwrap_or(0.0);
+    if let Some(V::Obj(m)) = v.get("hanging_punctuation") {
+        n.hanging_punctuation = HangingPunctuation {
+            quotes: m.get("quotes").and_then(V::boolean).unwrap_or(false),
+            lists: m.get("lists").and_then(V::boolean).unwrap_or(false),
+        };
+    }
+    n.list_style = ListStyle::parse(v.get("list_style").and_then(V::str).unwrap_or("none"));
+    n.wrap_style = WrapStyle::parse(v.get("wrap_style").and_then(V::str).unwrap_or("normal"));
     if let Some(kids) = v.get("children").and_then(V::arr) {
         n.children = kids.iter().map(parse_node).collect();
     }

@@ -375,8 +375,16 @@ fn interaction_json(i: &Interaction) -> String {
         | Action::ScrollTo { destination } => format!(",\"dest\":\"{}\"", esc(destination)),
         _ => String::new(),
     };
+    // Multiple actions: serialize as "actions" array when non-empty.
+    // Backward compatible: old files with just "action" still load fine.
+    let actions_field = if i.actions.len() > 1 {
+        let acts: Vec<String> = i.actions.iter().map(|a| format!("\"{}\"", a.kind())).collect();
+        format!(",\"actions\":[{}]", acts.join(","))
+    } else {
+        String::new()
+    };
     format!(
-        "{{\"trigger\":\"{}\",\"action\":\"{}\",\"ms\":{},\"anim\":\"{}\"{}{}{}{}{}{}}}",
+        "{{\"trigger\":\"{}\",\"action\":\"{}\",\"ms\":{},\"anim\":\"{}\"{}{}{}{}{}{}{}}}",
         i.trigger.to_str(),
         i.action.kind(),
         i.transition_ms,
@@ -386,7 +394,8 @@ fn interaction_json(i: &Interaction) -> String {
         px,
         py,
         delay,
-        extra
+        extra,
+        actions_field
     )
 }
 /// Grid layout JSON: {"cols":[..],"rows":[..],"cgap":N,"rgap":N,"pad":[l,r,t,b]}.
@@ -400,8 +409,14 @@ fn grid_json(g: &GridLayout) -> String {
     }
     let cols: Vec<String> = g.columns.iter().map(track_json).collect();
     let rows: Vec<String> = g.rows.iter().map(track_json).collect();
+    // auto_flow: only serialize when non-default (Row) to keep old files stable
+    let flow_field = if g.auto_flow != GridAutoFlow::Row {
+        format!(",\"flow\":\"{}\"", g.auto_flow.to_str())
+    } else {
+        String::new()
+    };
     format!(
-        ",\"grid\":{{\"cols\":[{}],\"rows\":[{}],\"cgap\":{},\"rgap\":{},\"pad\":[{},{},{},{}]}}",
+        ",\"grid\":{{\"cols\":[{}],\"rows\":[{}],\"cgap\":{},\"rgap\":{},\"pad\":[{},{},{},{}]{}{}}}",
         cols.join(","),
         rows.join(","),
         g.column_gap,
@@ -409,7 +424,8 @@ fn grid_json(g: &GridLayout) -> String {
         g.padding[0],
         g.padding[1],
         g.padding[2],
-        g.padding[3]
+        g.padding[3],
+        flow_field
     )
 }
 
@@ -430,6 +446,14 @@ fn layout_extras(l: &AutoLayout) -> String {
     }
     if l.resize_on_wrap {
         s.push_str(",\"resize_on_wrap\":true");
+    }
+    // CSS Flexbox parity fields — only serialize when non-default to keep
+    // old documents byte-stable (default: true / LastOnTop).
+    if !l.stroke_include_in_layout {
+        s.push_str(",\"stroke_include_in_layout\":false");
+    }
+    if l.canvas_stacking != CanvasStacking::default() {
+        s.push_str(&format!(",\"canvas_stacking\":\"{}\"", l.canvas_stacking.to_str()));
     }
     s
 }
@@ -590,6 +614,10 @@ pub(crate) fn node_json(n: &Node, out: &mut String) {
     if let Some([tl, tr, br, bl]) = n.corner_radii {
         out.push_str(&format!(",\"corners\":[{tl},{tr},{br},{bl}]"));
     }
+    // corner smoothing (0.0 is default — omitted for backward compatibility)
+    if n.corner_smoothing > 0.0 {
+        out.push_str(&format!(",\"smoothing\":{}", n.corner_smoothing));
+    }
     // rich text runs (non-empty only — plain text stays byte-identical).
     // start/len are CHAR indices into the text string.
     if !n.text_runs.is_empty() {
@@ -705,6 +733,10 @@ pub(crate) fn node_json(n: &Node, out: &mut String) {
         }
         out.push_str(&format!(",\"constraints\":{{{}}}", parts.join(",")));
     }
+    // z_index: only serialize when set (default: None)
+    if let Some(z) = n.z_index {
+        out.push_str(&format!(",\"z_index\":{}", z));
+    }
     if !n.bindings.is_empty() {
         let mut keys: Vec<_> = n.bindings.keys().collect();
         keys.sort();
@@ -772,6 +804,47 @@ pub(crate) fn node_json(n: &Node, out: &mut String) {
             })
             .collect();
         out.push_str(&format!(",\"grids\":[{}]", parts.join(",")));
+    }
+    // Text formatting properties (only serialize non-default values)
+    if n.text_align != TextAlign::Left {
+        out.push_str(&format!(",\"text_align\":\"{}\"", n.text_align.to_str()));
+    }
+    if n.text_align_vertical != TextAlignVertical::Top {
+        out.push_str(&format!(",\"text_align_vertical\":\"{}\"", n.text_align_vertical.to_str()));
+    }
+    if n.text_decoration != TextDecoration::None {
+        out.push_str(&format!(",\"text_decoration\":\"{}\"", n.text_decoration.to_str()));
+    }
+    if n.text_case != TextCase::Original {
+        out.push_str(&format!(",\"text_case\":\"{}\"", n.text_case.to_str()));
+    }
+    if n.text_truncation != TextTruncation::Disabled {
+        out.push_str(&format!(",\"text_truncation\":\"{}\"", n.text_truncation.to_str()));
+    }
+    if let Some(max) = n.max_lines {
+        out.push_str(&format!(",\"max_lines\":{}", max));
+    }
+    if n.paragraph_spacing != 0.0 {
+        out.push_str(&format!(",\"paragraph_spacing\":{}", n.paragraph_spacing));
+    }
+    if n.paragraph_indent != 0.0 {
+        out.push_str(&format!(",\"paragraph_indent\":{}", n.paragraph_indent));
+    }
+    if n.hanging_punctuation.quotes || n.hanging_punctuation.lists {
+        let mut parts = vec![];
+        if n.hanging_punctuation.quotes {
+            parts.push("\"quotes\":true");
+        }
+        if n.hanging_punctuation.lists {
+            parts.push("\"lists\":true");
+        }
+        out.push_str(&format!(",\"hanging_punctuation\":{{{}}}", parts.join(",")));
+    }
+    if n.list_style != ListStyle::None {
+        out.push_str(&format!(",\"list_style\":\"{}\"", n.list_style.to_str()));
+    }
+    if n.wrap_style != WrapStyle::Normal {
+        out.push_str(&format!(",\"wrap_style\":\"{}\"", n.wrap_style.to_str()));
     }
     if !n.children.is_empty() {
         out.push_str(",\"children\":[");

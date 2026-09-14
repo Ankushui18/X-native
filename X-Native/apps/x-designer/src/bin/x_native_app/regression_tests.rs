@@ -1204,12 +1204,14 @@ fn player_doc(h: &mut Host) {
         },
         transition_ms: 0,
         animation: Animation::Instant,
+        actions: vec![],
     };
     let delay = |ms: u32, action: Action| Interaction {
         trigger: Trigger::AfterDelay { ms },
         action,
         transition_ms: 0,
         animation: Animation::Instant,
+        actions: vec![],
     };
     f1.interactions = vec![
         key,
@@ -1258,12 +1260,14 @@ fn player_doc(h: &mut Host) {
             },
             transition_ms: 0,
             animation: Animation::Instant,
+            actions: vec![],
         },
         Interaction {
             trigger: Trigger::MouseLeave,
             action: Action::CloseOverlay,
             transition_ms: 0,
             animation: Animation::Instant,
+        actions: vec![],
         },
     ];
     d.editor().insert_node("f1", hov);
@@ -1275,6 +1279,7 @@ fn player_doc(h: &mut Host) {
         },
         transition_ms: 0,
         animation: Animation::Instant,
+        actions: vec![],
     }];
     d.editor().insert_node("f1", drg);
     let mut set = rect("set", 20.0, 140.0);
@@ -1286,6 +1291,7 @@ fn player_doc(h: &mut Host) {
         },
         transition_ms: 0,
         animation: Animation::Instant,
+        actions: vec![],
     }];
     d.editor().insert_node("f1", set);
     // while-hovering navigate (110..190, 20..50): returns on leave
@@ -1297,6 +1303,7 @@ fn player_doc(h: &mut Host) {
         },
         transition_ms: 0,
         animation: Animation::Instant,
+        actions: vec![],
     }];
     d.editor().insert_node("f1", wh);
     // while-pressing overlay (200..280, 20..50) + mouse-up set-var
@@ -1310,6 +1317,7 @@ fn player_doc(h: &mut Host) {
             },
             transition_ms: 0,
             animation: Animation::Instant,
+            actions: vec![],
         },
         Interaction {
             trigger: Trigger::MouseUp,
@@ -1319,6 +1327,7 @@ fn player_doc(h: &mut Host) {
             },
             transition_ms: 0,
             animation: Animation::Instant,
+            actions: vec![],
         },
     ];
     d.editor().insert_node("f1", pu);
@@ -1341,6 +1350,7 @@ fn player_doc(h: &mut Host) {
         },
         transition_ms: 0,
         animation: Animation::Instant,
+        actions: vec![],
     }];
     d.editor().insert_node("f2", gate);
     let mut shut = Node::rect("shut", 10.0, 10.0, 60.0, 30.0, Color::from_rgb8(9, 9, 9));
@@ -1349,6 +1359,7 @@ fn player_doc(h: &mut Host) {
         action: Action::CloseOverlay,
         transition_ms: 0,
         animation: Animation::Instant,
+        actions: vec![],
     }];
     d.editor().insert_node("dlg", shut);
     d.doc.variables.numbers.insert("n".into(), 1.0);
@@ -1528,6 +1539,7 @@ fn player_scrollto_pans_without_navigating() {
         },
         transition_ms: 0,
         animation: Animation::Instant,
+        actions: vec![],
     };
     h.flow_fire(&ix);
     assert_eq!(h.app.flow.as_ref().unwrap().current, "f1");
@@ -1553,6 +1565,7 @@ fn player_swap_without_overlay_navigates_without_history() {
         },
         transition_ms: 0,
         animation: Animation::Instant,
+        actions: vec![],
     };
     h.flow_fire(&ix);
     assert_eq!(h.app.flow.as_ref().unwrap().current, "f2");
@@ -1576,6 +1589,7 @@ fn player_openlink_reports_url_without_leaving() {
         },
         transition_ms: 0,
         animation: Animation::Instant,
+        actions: vec![],
     };
     // headless: no window, so no browser spawns — the URL just reports
     let effect = h.flow_fire(&ix);

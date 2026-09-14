@@ -355,6 +355,7 @@ mod tests {
                         overlay: "tooltip".into(),
                         position: OverlayPosition::TopRight,
                     },
+                    actions: vec![],
                     transition_ms: 200,
                     animation: Animation::Dissolve,
                 })
@@ -394,6 +395,7 @@ mod tests {
                     action: Action::OpenLink {
                         url: "https://example.com/docs".into(),
                     },
+                    actions: vec![],
                     transition_ms: 0,
                     animation: Animation::Instant,
                 },
@@ -1348,6 +1350,7 @@ mod tests {
                     column_gap: 12.0,
                     row_gap: 8.0,
                     padding: [4.0, 6.0, 8.0, 10.0],
+                    auto_flow: GridAutoFlow::Row,
                 }),
                 ..Default::default()
             });
@@ -1536,6 +1539,7 @@ mod tests {
                     value: Expr::Add(Box::new(Expr::var("step")), Box::new(Expr::num(1.0))),
                 })),
             },
+            actions: vec![],
             transition_ms: 200,
             animation: Animation::MoveIn(Direction::Bottom),
         };

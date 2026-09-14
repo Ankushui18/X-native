@@ -93,6 +93,10 @@ pub fn node_to_css(node: &Node, vars: &Variables) -> String {
                     g.padding[2], g.padding[1], g.padding[3], g.padding[0]
                 ));
             }
+            // CSS grid-auto-flow: only emit when non-default (Row)
+            if g.auto_flow != GridAutoFlow::Row {
+                css.push_str(&format!("  grid-auto-flow: {};\n", g.auto_flow.css()));
+            }
             // explicit grid placements, when any child carries one
             let placed: Vec<String> = node
                 .children
@@ -245,16 +249,43 @@ pub fn node_to_css(node: &Node, vars: &Variables) -> String {
         } else if radius > 0.0 {
             css.push_str(&format!("  border-radius: {radius}px;\n"));
         }
+        // Figma squircle corner smoothing (0.0–1.0).
+        // CSS has no native squircle; use SVG clip-path or border-image
+        // for production. We emit a comment for developer awareness.
+        if node.corner_smoothing > 0.0 {
+            css.push_str(&format!(
+                "  /* corner-smoothing: {:.2} (Figma squircle) */\n",
+                node.corner_smoothing
+            ));
+        }
     }
+    // CSS Flexbox parity (Figma Jul-2026): inside strokes → CSS `border`
+    // (included in layout by default), outside/center strokes → CSS
+    // `outline` (excluded from layout, like outline vs border in CSS).
     if node.stroke.width > 0.0 {
+        let align = node
+            .active_strokes()
+            .first()
+            .map(|l| l.options.align)
+            .unwrap_or(StrokeAlign::Center);
+        let css_prop = match align {
+            StrokeAlign::Inside => "border",
+            _ => "outline",
+        };
+        // Inside strokes participate in the border-box model
+        if align == StrokeAlign::Inside {
+            css.push_str("  box-sizing: border-box;\n");
+        }
         match node.stroke.solid_color() {
             Some(c) if c.components[3] > 0.0 => css.push_str(&format!(
-                "  border: {}px solid {};\n",
+                "  {}: {}px solid {};\n",
+                css_prop,
                 node.stroke.width,
                 x_core::color_to_hex(c)
             )),
             _ if node.stroke.solid_color().is_none() => css.push_str(&format!(
-                "  border: {}px solid; /* gradient stroke */\n",
+                "  {}: {}px solid; /* gradient stroke */\n",
+                css_prop,
                 node.stroke.width
             )),
             _ => {}
@@ -321,15 +352,30 @@ pub fn node_to_css(node: &Node, vars: &Variables) -> String {
             blend_css_name(node.blend)
         ));
     }
+    // z_index: paint order within auto-layout frames (CSS z-index)
+    if let Some(z) = node.z_index {
+        css.push_str(&format!("  z-index: {};\n", z));
+    }
     if node.transform.rotation != 0.0 {
         css.push_str(&format!(
             "  transform: rotate({:.1}deg);\n",
             node.transform.rotation.to_degrees()
         ));
     }
+    // CSS Flexbox parity: inside strokes → border, outside/center → outline
     if node.stroke.width > 0.0 {
+        let align = node
+            .active_strokes()
+            .first()
+            .map(|l| l.options.align)
+            .unwrap_or(StrokeAlign::Center);
+        let css_prop = match align {
+            StrokeAlign::Inside => "border",
+            _ => "outline",
+        };
         css.push_str(&format!(
-            "  border: {:.0}px solid {};\n",
+            "  {}: {:.0}px solid {};\n",
+            css_prop,
             node.stroke.width,
             x_core::color_to_hex(node.stroke.solid_color().unwrap_or(peniko::Color::BLACK))
         ));

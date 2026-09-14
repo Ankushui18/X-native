@@ -93,6 +93,48 @@ pub enum LeftTab {
     Tokens,
 }
 
+/// Navigation bar tab (vertical left-most bar, Figma-style).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NavTab {
+    File,
+    Agents,
+    Assets,
+    Tools,
+    Variables,
+}
+
+impl NavTab {
+    pub fn icon(self) -> &'static str {
+        match self {
+            NavTab::File => "file",
+            NavTab::Agents => "sparkles",
+            NavTab::Assets => "component",
+            NavTab::Tools => "sliders-horizontal",
+            NavTab::Variables => "code",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            NavTab::File => "Files",
+            NavTab::Agents => "Agents",
+            NavTab::Assets => "Assets",
+            NavTab::Tools => "Tools",
+            NavTab::Variables => "Variables",
+        }
+    }
+
+    pub fn shortcut(self) -> &'static str {
+        match self {
+            NavTab::File => "⌥1",
+            NavTab::Agents => "⌥2",
+            NavTab::Assets => "⌥3",
+            NavTab::Tools => "⌥4",
+            NavTab::Variables => "⌥5",
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RightTab {
     Design,
@@ -277,6 +319,18 @@ pub enum Action {
     ProtoTrigger(usize),
     ProtoDest(usize, i32),
     ProtoSpeed(usize),
+    ProtoAnimation(usize),
+    ProtoActionType(usize),
+    ProtoEasing(usize),
+    ProtoToggleReset(usize),
+    ProtoAddAction(usize),
+    ProtoRemoveAction(usize, usize),
+    ProtoSetVariable(usize),
+    ProtoConditional(usize),
+    ProtoEditDelay(usize),
+    ProtoEditKey(usize),
+    ProtoEditUrl(usize),
+    ProtoEditVideoTime(usize),
     ProtoToggleStart,
     FlowEnter,
     FlowBack,
@@ -348,6 +402,19 @@ pub enum Action {
     TogglePaintVisibility(bool),
     /// Cycle the selected stroke between inside, center, and outside.
     CycleStrokePosition,
+    /// Text formatting actions (Figma Design parity)
+    /// Cycle horizontal text alignment: left/center/right/justified
+    CycleTextAlign,
+    /// Cycle vertical text alignment: top/middle/bottom
+    CycleTextAlignVertical,
+    /// Toggle text decoration: none/underline/strikethrough
+    CycleTextDecoration,
+    /// Cycle text truncation: disabled/end/middle
+    CycleTextTruncation,
+    /// Cycle list style: none/bulleted/numbered
+    CycleListStyle,
+    /// Toggle wrap style: normal/break-word
+    ToggleTextWrapStyle,
     /// Apply a color chosen from the native color popover.
     PaintPreset(bool, String),
     Align(usize, usize),
@@ -361,6 +428,144 @@ pub enum Action {
     UxPatterns,
     UxContrast,
     UxResponsive,
+    // Navigation bar (Figma-style)
+    NavTab(NavTab),
+    ToggleNavLabels,
+    OpenAppMenu,
+    CloseAppMenu,
+    AppMenuItem(usize),
+    OpenFind,
+    CloseFind,
+    FindNext,
+    FindPrev,
+    ReplaceAll,
+    ToggleCaseSensitive,
+    ToggleFindInSelection,
+    ToggleNotifications,
+    DismissNotification(String),
+    MarkAllNotificationsRead,
+    ToggleMinimizeUI,
+    ResizeLeftSidebar(f64),
+    CollapseAllLayers,
+    /// Edit file menu actions
+    FileRename,
+    FileMoveToDrafts,
+    FileDuplicate,
+    // Layer management (Figma parity)
+    /// Show hidden layer outlines (⌘⇧O)
+    ToggleHiddenOutlines,
+    /// Inverse selection (⌘⇧A)
+    InverseSelection,
+    /// Select matching objects (⌥⌘A)
+    SelectMatching,
+    /// Deep select with Cmd/Ctrl+click
+    DeepSelect(String),
+    /// Measure distances to hovered layer
+    ShowMeasurements(String),
+    /// Bulk rename modal
+    OpenBulkRename,
+    CloseBulkRename,
+    ApplyBulkRename,
+    /// Copy/paste properties
+    CopyProperties,
+    PasteProperties,
+    /// Layer panel search
+    SetLayerSearch(String),
+    /// Keyboard navigation in layer panel
+    SelectChild,
+    SelectParent,
+    SelectNextSibling,
+    SelectPrevSibling,
+    /// Select layer from context menu
+    SelectLayerFromMenu(String),
+    // Vector Edit Mode actions (Figma parity)
+    /// Enter vector edit mode (Enter key on vector node)
+    EnterVectorEditMode,
+    /// Exit vector edit mode (Escape or Enter again)
+    ExitVectorEditMode,
+    /// Select a vector point by index
+    SelectVectorPoint(usize),
+    /// Deselect all vector points
+    DeselectVectorPoints,
+    /// Move selected vector points
+    MoveVectorPoints { dx: f64, dy: f64 },
+    /// Add a point to a vector path
+    AddVectorPoint { segment_idx: usize, position: (f64, f64) },
+    /// Delete selected vector points
+    DeleteVectorPoints,
+    /// Switch vector editing tool
+    SetVectorTool(VectorTool),
+    /// Toggle vector handle visibility
+    ToggleVectorHandles,
+    /// Add bezier handle to a point
+    AddBezierHandle(usize),
+    /// Adjust bezier handle
+    AdjustBezierHandle { point_idx: usize, handle: (f64, f64) },
+    /// Split vector path at a point
+    SplitVectorPath(usize),
+    /// Cut vector path along a line
+    CutVectorPath { start: (f64, f64), end: (f64, f64) },
+    /// Outline stroke (convert stroke to vector path)
+    OutlineStroke,
+    /// Flatten selection (merge into single vector path)
+    FlattenSelection,
+    /// Offset vector path
+    OffsetVector { distance: f64, join: String },
+    /// Simplify vector path
+    SimplifyVector { tolerance: f64 },
+    /// Convert text to vector path
+    TextToOutline,
+    // Phase 2: Vector Editing Tools
+    AddBezierHandle { point_idx: usize, handle_pos: (f64, f64) },
+    AdjustBezierHandle { point_idx: usize, handle_idx: usize, new_pos: (f64, f64) },
+    SplitVectorPath { point_idx: usize },
+    CutVectorPath { start: (f64, f64), end: (f64, f64) },
+    LassoSelectPoints { boundary: Vec<(f64, f64)> },
+    SetVariableWidthStroke { width_points: Vec<(f64, f64)> },
+    RemoveBezierHandles { point_idx: usize },
+    MirrorBezierHandles { point_idx: usize, mode: crate::state::MirrorMode },
+    // Phase 3: Enhanced Path Operations
+    OutlineStrokeEnhanced,
+    OffsetVectorEnhanced { distance: f64, join_style: JoinStyle },
+    TextToOutlineEnhanced,
+    SimplifyVectorInteractive { tolerance: f64, preview: bool },
+    JoinPaths { node_id1: String, node_id2: String },
+    ReversePathDirection,
+    // Phase 4: Stroke Caps
+    SetStrokeCapStart { node_id: String, cap: crate::state::StrokeCapType },
+    SetStrokeCapEnd { node_id: String, cap: crate::state::StrokeCapType },
+    // Phase 5: Interactive UI Actions
+    UpdateShapeBuilderHover { mouse_pos: (f64, f64) },
+    ExecuteShapeBuilderOperation,
+    SetShapeBuilderMode(ShapeBuilderMode),
+    ToggleShapeBuilderSelectionMode,
+    ApplyDashPattern { node_id: String, pattern: DashPattern },
+    SetAdvancedStrokeCap { node_id: String, is_start: bool, cap: AdvancedStrokeCap },
+    // Phase 6: Advanced Gradients, Image Adjustments, and Missing Blend Modes
+    /// Flip a gradient (reverse color stops)
+    FlipGradient,
+    /// Rotate gradient angle
+    RotateGradient { degrees: f64 },
+    /// Add a color stop to a gradient at position 0.0-1.0
+    AddGradientStop { position: f32, color: [u8; 3] },
+    /// Remove a color stop from gradient
+    RemoveGradientStop { index: usize },
+    /// Move a color stop to new position
+    MoveGradientStop { index: usize, new_position: f32 },
+    /// Change gradient type (linear/radial/angular/diamond)
+    SetGradientType { gradient_type: String },
+    /// Enable eyedropper tool
+    EnableEyedropper,
+    /// Set image adjustments (exposure, contrast, saturation, etc.)
+    SetImageAdjustments { adjustments: x_native::ImageAdjustments },
+    /// Update individual image adjustment value
+    UpdateImageAdjustment { adjustment: String, value: f32 },
+    /// Reset all image adjustments
+    ResetImageAdjustments,
+    /// Rotate image (90° clockwise increments)
+    RotateImage { clockwise: bool },
+    /// Set image fill mode (fill/fit/crop/tile)
+    SetImageFillMode { mode: String },
 }
 
 /// Commands offered by the editor right-click context menu
@@ -435,6 +640,22 @@ pub enum FieldId {
     TextCase,
     OpticalSize,
     WidthAxis,
+    /// Text alignment (horizontal): left/center/right/justified
+    TextAlign,
+    /// Text alignment (vertical): top/middle/bottom
+    TextAlignVertical,
+    /// Text decoration: none/underline/strikethrough
+    TextDecoration,
+    /// Text truncation: disabled/end/middle
+    TextTruncation,
+    /// Maximum lines for text truncation
+    MaxLines,
+    /// Paragraph indent (first-line indent in pixels)
+    ParagraphIndent,
+    /// List style: none/bulleted/numbered
+    ListStyle,
+    /// Text wrap style: normal/break-word
+    TextWrapStyle,
     ExportSuffix,
     GuideSize,
     /// No-selection DESIGN panel: editor canvas background hex
@@ -456,6 +677,89 @@ pub struct FlowDelay {
     pub source_overlay: Option<String>,
     pub action: x_native::Action,
     pub ms: u32,
+}
+
+/// Hamburger menu state (Figma navigation bar top menu).
+#[derive(Clone, Debug, Default)]
+pub struct AppMenu {
+    pub open: bool,
+    pub hover_index: Option<usize>,
+}
+
+/// Find/Replace panel state (Figma left sidebar search).
+#[derive(Clone, Debug, Default)]
+pub struct FindReplace {
+    pub open: bool,
+    pub show_replace: bool,
+    pub query: String,
+    pub replace: String,
+    pub case_sensitive: bool,
+    pub in_selection: bool,
+    pub match_count: usize,
+    pub current_match: usize,
+}
+
+/// Notification center state (Figma navigation bar bottom).
+#[derive(Clone, Debug)]
+pub struct NotificationCenter {
+    pub open: bool,
+    pub notifications: Vec<Notification>,
+    pub unread_count: usize,
+}
+
+impl Default for NotificationCenter {
+    fn default() -> Self {
+        Self {
+            open: false,
+            notifications: vec![
+                Notification {
+                    id: "font-missing".into(),
+                    kind: NotificationKind::MissingFont,
+                    message: "Inter font not installed — using fallback".into(),
+                    timestamp: 0,
+                    read: false,
+                },
+                Notification {
+                    id: "lib-update".into(),
+                    kind: NotificationKind::LibraryUpdate,
+                    message: "2 library components have updates available".into(),
+                    timestamp: 0,
+                    read: false,
+                },
+            ],
+            unread_count: 2,
+        }
+    }
+}
+
+/// A single notification entry.
+#[derive(Clone, Debug)]
+pub struct Notification {
+    pub id: String,
+    pub kind: NotificationKind,
+    pub message: String,
+    pub timestamp: u64,
+    pub read: bool,
+}
+
+/// Notification type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotificationKind {
+    LibraryUpdate,
+    MissingFont,
+    OfflineStatus,
+    ComponentUpdate,
+}
+
+impl NotificationKind {
+    pub fn icon(self) -> &'static str {
+        match self {
+            NotificationKind::LibraryUpdate => "rotate-cw",
+            NotificationKind::MissingFont => "type",
+            NotificationKind::OfflineStatus => "eye-off",
+            NotificationKind::ComponentUpdate => "component",
+        }
+    }
 }
 
 /// Flow-preview state: prototype playback in a chrome-less viewer over the
@@ -493,6 +797,144 @@ pub struct FlowState {
 /// The one text-entry surface: clicking a field focuses it; keystrokes go
 /// into `buffer`; Enter commits, Esc cancels.
 #[derive(Clone, Debug)]
+/// Clipboard for copying/pasting layer properties (Figma parity)
+#[derive(Clone, Debug)]
+pub struct PropertyClipboard {
+    pub fill: Option<x_native::Paint>,
+    pub stroke: Option<x_native::Stroke>,
+    pub effects: Vec<x_native::Effect>,
+    pub opacity: Option<f32>,
+    pub corner_radius: Option<f64>,
+}
+
+// Vector Edit Mode (Figma parity)
+#[derive(Debug, Clone)]
+pub struct VectorEditMode {
+    pub active: bool,
+    pub selected_node: Option<String>,
+    pub selected_points: Vec<usize>,
+    pub tool: VectorTool,
+    pub show_handles: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VectorTool {
+    Move,
+    Pen,
+    Bend,
+    Cut,
+    Eraser,
+    Lasso,
+}
+
+impl Default for VectorTool {
+    fn default() -> Self {
+        VectorTool::Move
+    }
+}
+
+/// Mirror mode for bézier handles
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MirrorMode {
+    None,
+    Angle,
+    AngleAndLength,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JoinStyle {
+    Miter,
+    Round,
+    Bevel,
+}
+
+impl Default for JoinStyle {
+    fn default() -> Self {
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StrokeCapType {
+    None,
+    Round,
+    Square,
+    Arrow,
+    Triangle,
+}
+        JoinStyle::Miter
+
+/// Shape Builder operation mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShapeBuilderMode {
+    Merge,
+    Subtract,
+    Intersect,
+    Exclude,
+}
+
+/// Selection mode for Shape Builder
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionMode {
+    Click,
+    Drag,
+    Lasso,
+}
+
+/// Shape operation for Shape Builder
+#[derive(Debug, Clone)]
+pub enum ShapeOperation {
+    Merge(Vec<String>),
+    Subtract { base: String, subtract: Vec<String> },
+    Intersect(Vec<String>),
+    Exclude(Vec<String>),
+}
+
+/// Arrow style configuration
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArrowStyle {
+    pub length_factor: f64,
+    pub width_factor: f64,
+    pub filled: bool,
+    pub reversed: bool,
+}
+
+/// Advanced stroke cap types
+#[derive(Debug, Clone, PartialEq)]
+pub enum AdvancedStrokeCap {
+    None,
+    Round,
+    Square,
+    Arrow(ArrowStyle),
+    Triangle,
+    Diamond,
+    Circle,
+    Bar,
+    Custom(Vec<PathCmd>),
+}
+
+/// Dash pattern configuration
+#[derive(Debug, Clone, PartialEq)]
+pub struct DashPattern {
+    pub dashes: Vec<f64>,
+    pub offset: f64,
+}
+
+    }
+}
+
+impl Default for VectorEditMode {
+    fn default() -> Self {
+        Self {
+            active: false,
+            selected_node: None,
+            selected_points: Vec::new(),
+            tool: VectorTool::Move,
+            show_handles: true,
+        }
+    }
+}
+
+    pub text_align: String,
+}
+
 pub struct FieldEdit {
     pub id: FieldId,
     pub buffer: String,
@@ -974,6 +1416,17 @@ pub struct App {
     /// Color picker popup state: (is_fill, field_rect, is_open)
     pub color_picker_popup: Option<(bool, Rect, bool)>,
     pub status: String,
+    // Navigation bar state (Figma-style)
+    pub nav_tab: NavTab,
+    pub nav_show_labels: bool,
+    pub nav_bar_w: f64,
+    pub left_sidebar_w: f64,
+    pub sidebar_resizing: bool,
+    pub ui_minimized: bool,
+    pub app_menu: AppMenu,
+    pub find_replace: FindReplace,
+    pub notifications: NotificationCenter,
+    pub left_sidebar_width: f64,
     /// Inspector W/H lock state; kept at app level because it is UI intent,
     /// not a document property.
     pub aspect_ratio_locked: bool,
@@ -986,6 +1439,21 @@ pub struct App {
     /// Symmetry axis for mirror tool: 'v' vertical, 'h' horizontal, None = off
     pub symmetry_axis: Option<char>,
     pub fonts: TextUi,
+    // Layer management (Figma parity)
+    pub show_hidden_outlines: bool,
+    pub property_clipboard: Option<PropertyClipboard>,
+    pub layer_search: String,
+    pub bulk_rename_open: bool,
+    pub bulk_rename_match: String,
+    pub bulk_rename_replace: String,
+    pub bulk_rename_preview: Vec<(String, String)>,
+    /// Vector edit mode state (Figma parity)
+    pub vector_edit_mode: VectorEditMode,
+    // Phase 5: Shape Builder state
+    pub shape_builder_hover: Option<(f64, f64)>,
+    pub shape_builder_mode: ShapeBuilderMode,
+    pub shape_builder_selection_mode: SelectionMode,
+    pub shape_builder_preview: Option<ShapeOperation>,
     pub win_w: f64,
     pub win_h: f64,
     pub hit: Vec<(Rect, Action)>,
@@ -1091,6 +1559,29 @@ impl App {
             context_menu: ContextMenu::new(),
             color_picker_popup: None,
             status: String::from("Ready"),
+            nav_tab: NavTab::File,
+            nav_show_labels: true,
+            nav_bar_w: 48.0,
+            left_sidebar_w: 280.0,
+            sidebar_resizing: false,
+            ui_minimized: false,
+            app_menu: AppMenu::default(),
+            find_replace: FindReplace::default(),
+            notifications: NotificationCenter::default(),
+            left_sidebar_width: 280.0,
+            show_hidden_outlines: false,
+            property_clipboard: None,
+            layer_search: String::new(),
+            bulk_rename_open: false,
+            bulk_rename_match: String::new(),
+            bulk_rename_replace: String::new(),
+            bulk_rename_preview: Vec::new(),
+            vector_edit_mode: VectorEditMode::default(),
+            // Phase 5: Shape Builder state
+            shape_builder_hover: None,
+            shape_builder_mode: ShapeBuilderMode::Merge,
+            shape_builder_selection_mode: SelectionMode::Click,
+            shape_builder_preview: None,
             aspect_ratio_locked: false,
             zoom: 1.0,
             pan: (0.0, 0.0),
@@ -1111,8 +1602,20 @@ impl App {
     // ------------------------------------------------------------- regions
 
     pub fn editor_regions(&self) -> EdRegions {
+        let left_total = if self.ui_minimized {
+            self.nav_bar_w
+        } else {
+            self.nav_bar_w + self.left_sidebar_w
+        };
         EdRegions {
-            left: Rect::new(0.0, ED_TITLE_H, self.left_w, self.win_h),
+            left: Rect::new(0.0, ED_TITLE_H, left_total, self.win_h),
+            nav_bar: Rect::new(0.0, ED_TITLE_H, self.nav_bar_w, self.win_h),
+            sidebar: Rect::new(
+                self.nav_bar_w,
+                ED_TITLE_H,
+                left_total,
+                self.win_h,
+            ),
             right: Rect::new(
                 self.win_w - self.right_w,
                 ED_TITLE_H,
@@ -1120,7 +1623,7 @@ impl App {
                 self.win_h,
             ),
             canvas: Rect::new(
-                self.left_w,
+                left_total,
                 ED_TITLE_H,
                 self.win_w - self.right_w,
                 self.win_h,
@@ -2273,6 +2776,8 @@ impl App {
 
 pub struct EdRegions {
     pub left: Rect,
+    pub nav_bar: Rect,
+    pub sidebar: Rect,
     pub right: Rect,
     pub canvas: Rect,
 }

@@ -16,7 +16,7 @@
 
 use x_core::{
     color_to_hex, AutoLayout, AutoLayoutWrap, CrossAlign, Distribute, ImageFit, Node, NodeKind,
-    Paint,
+    Paint, StrokeAlign,
 };
 
 /// JSX for a SELECTION: one subtree per node, wrapped in a fragment when
@@ -144,6 +144,7 @@ fn paint_css(p: &Paint, key: &str) -> Option<String> {
     })
 }
 
+/// CSS Flexbox parity: inside strokes → `border`, outside/center → `outline`.
 fn stroke_css(node: &Node) -> Option<String> {
     if node.stroke.width <= 0.0 {
         return None;
@@ -152,8 +153,18 @@ fn stroke_css(node: &Node) -> Option<String> {
         Paint::Solid(c) if c.components[3] > 0.0 => color_to_hex(*c),
         _ => return None,
     };
+    let align = node
+        .active_strokes()
+        .first()
+        .map(|l| l.options.align)
+        .unwrap_or(StrokeAlign::Center);
+    let prop = match align {
+        StrokeAlign::Inside => "border",
+        _ => "outline",
+    };
     Some(format!(
-        "border: {}px solid {}",
+        "{}: {}px solid {}",
+        prop,
         n(node.stroke.width),
         quote(&hex)
     ))

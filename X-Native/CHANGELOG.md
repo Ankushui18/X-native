@@ -5,6 +5,116 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-15 (Text Formatting)
+
+### Added
+- **Comprehensive text formatting properties (Figma Design parity).** 11 new
+  fields on `Node` matching Figma's typography system:
+  - **Text alignment.** Horizontal (`left` / `center` / `right` / `justified`)
+    and vertical (`top` / `middle` / `bottom`). Enums: `TextAlign`,
+    `TextAlignVertical`. Persisted as `"text_align":"center"` etc.
+  - **Text decoration.** `underline` and `strikethrough` via `TextDecoration`
+    enum. Persisted as `"text_decoration":"underline"`.
+  - **Text case transformation.** `original` / `upper` / `lower` / `title`
+    via `TextCase` enum. Non-destructive display transform (underlying text
+    unchanged). Persisted as `"text_case":"upper"`.
+  - **Text truncation.** `disabled` / `end` (with ellipsis) / `middle` via
+    `TextTruncation` enum, plus optional `max_lines: Option<usize>` to limit
+    visible lines. Persisted as `"text_truncation":"end"` and `"max_lines":3`.
+  - **Paragraph spacing.** `f64` value in pixels for inter-paragraph distance.
+    Persisted as `"paragraph_spacing":8.0`.
+  - **Paragraph indent.** `f64` value in pixels for first-line indent.
+    Persisted as `"paragraph_indent":16.0`.
+  - **Hanging punctuation.** `HangingPunctuation` struct with `quotes: bool`
+    and `lists: bool` to allow marks to hang outside the text box. Persisted
+    as `"hanging_punctuation":{"quotes":true,"lists":true}`.
+  - **List styles.** `none` / `bulleted` / `numbered` via `ListStyle` enum.
+    Persisted as `"list_style":"bulleted"`.
+  - **Wrap style.** `normal` / `break-word` via `WrapStyle` enum for
+    controlling line-breaking behavior. Persisted as `"wrap_style":"break-word"`.
+  All properties serialize only when non-default (backward compatible with
+  old `.x` files). Full implementation guide: `TEXT_FORMATTING_IMPLEMENTATION.md`.
+  Reference: [Figma text properties](https://help.figma.com/hc/en-us/articles/360039956634-Explore-text-properties).
+
+## [Unreleased] — 2026-09-14 (Follow-up: Figma Design Feature Parity)
+
+### Added
+- **SmartAnimate interpolation engine.** New `smart_animate` module in `x-core`
+  provides frame-to-frame morphing for prototype transitions. `interpolate_frames()`
+  collects all nodes from two frames, matches by ID, and interpolates position,
+  size, opacity, rotation, corner radius, and fill color. Nodes present in one
+  frame but not the other fade in/out. Includes easing functions (linear, ease-in,
+  ease-out, ease-in-out, cubic variants). 6 unit tests.
+- **Corner smoothing (squircle).** New `Node::corner_smoothing: f64` field
+  (0.0–1.0) enables Figma-style continuous corners (superellipse geometry).
+  The renderer generates squircle paths using a parametric superellipse formula
+  `|x/a|^n + |y/b|^n = 1` where `n = 2 + 4 * smoothing`. Builder method:
+  `node.smooth_corners(0.6)`. Persisted in `.x` format as `"smoothing":0.6`
+  and emitted in dev-mode CSS as a comment (CSS has no native squircle).
+- **Multiple actions per interaction.** `Interaction` struct now carries
+  `actions: Vec<Action>` in addition to the legacy `action: Action` field.
+  When `actions` is non-empty, `all_actions()` returns all actions for
+  sequential execution. Figma parity: a single trigger can now navigate,
+  set variables, and play sounds in sequence. Serialized as `"actions":[...]`
+  when more than one action is present (backward compatible with old files).
+  Builder: `Interaction::with_actions(trigger, vec![...], ms, anim)`.
+
+## [Unreleased] — 2026-09-14 (Follow-up: Real Gap Fixes)
+
+### Added
+- **Grid dense auto-flow (CSS `grid-auto-flow: dense`).** New `GridAutoFlow`
+  enum with `Row` (default), `Column`, and `Dense` variants. Dense mode
+  backfills empty cells by re-scanning from the origin on every placement,
+  matching CSS's dense packing algorithm. Column-major fills top-to-bottom
+  then wraps to the next column. Persisted in `.x` format and emitted in
+  dev-mode CSS as `grid-auto-flow`.
+- **Z-index for auto-layout children.** New `Node::z_index: Option<i32>`
+  field controls paint order within auto-layout frames. Higher values paint
+  on top of siblings; `None` uses document order. The renderer now sorts
+  children by z_index before encoding (stable sort preserving document order
+  for equal z-levels). Persisted in `.x` format and emitted in dev-mode CSS
+  as `z-index`.
+- **CRDT architecture document.** `docs/CRDT_ARCHITECTURE.md` describes the
+  planned path to collaborative editing: CRDT type selection (Loro tree CRDT
+  for hierarchy, LWW registers for properties, RGA for children arrays),
+  operation model, network protocol, 5-phase rollout plan, and migration
+  strategy. Not yet implemented — architecture only.
+
+## [Unreleased] — 2026-09-14
+
+### Added
+- **CSS Flexbox parity (Figma Jul-2026 auto-layout update).** The auto-layout
+  solver now matches the updated Figma behavior where inside strokes, padding
+  minimums, and border-box fill-container distribution work like CSS flexbox
+  out of the box:
+  - **Inside strokes included in layout.** A frame's inside stroke width adds
+    to its effective padding — hug frames grow to include it, fixed frames
+    clamp to at least their padding + stroke total. Outside and center strokes
+    never affect layout (they behave like CSS `outline`).
+  - **Padding minimum enforced.** A frame can no longer be sized smaller than
+    its padding total (matching CSS `border-box` where padding always gets its
+    room).
+  - **Border-box fill-container distribution.** Children set to fill container
+    share the available content area (not total width), so a child with a
+    thicker inside stroke gets proportionally more total space, keeping content
+    areas equal across siblings.
+  - **Auto-gap stacks never overlap.** Gap in auto-spacing (Between/Around/
+    Evenly) stacks clamps at 0 — children collapse to the start instead of
+    overlapping when they don't fit.
+  - **Canvas stacking order.** New `CanvasStacking` enum (`LastOnTop` /
+    `FirstOnTop`) on `AutoLayout` controls paint order in negative-gap
+    (overlapping) stacks, matching Figma's canvas stacking setting.
+  - **Stroke-aware dev-mode CSS.** Inside strokes emit `border` with
+    `box-sizing: border-box`; outside/center strokes emit `outline`.
+
+### Changed
+- `AutoLayout` now carries `stroke_include_in_layout: bool` (default `true`)
+  and `canvas_stacking: CanvasStacking` (default `LastOnTop`). The manual
+  `Default` impl replaces the derived one to set `stroke_include_in_layout`
+  to `true` (matching Figma's new-frame default).
+- `Node` gains `inside_stroke_width()` — returns the maximum width among
+  visible inside-aligned stroke layers, for layout calculations.
+
 ## [Unreleased] — 2026-09-12
 
 ### Added

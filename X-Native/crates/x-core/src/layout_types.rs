@@ -150,6 +150,42 @@ impl Overflow {
 /// Per-side frame padding: `[left, right, top, bottom]`.
 pub type Padding = [f64; 4];
 
+/// Canvas stacking order for negative-gap (overlapping) auto-layout stacks.
+/// Figma Jun-2026: controls which end of the stack paints on top when gap
+/// is negative (items overlap).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CanvasStacking {
+    /// The last (right-most / bottom-most) item paints on top. This is
+    /// the classic canvas painter's-algorithm order and the default.
+    #[default]
+    LastOnTop,
+    /// The first (left-most / top-most) item paints on top — useful for
+    /// card-fan layouts where the "first" card should be visually in front.
+    FirstOnTop,
+}
+
+impl CanvasStacking {
+    pub fn label(self) -> &'static str {
+        match self {
+            CanvasStacking::LastOnTop => "Last on top",
+            CanvasStacking::FirstOnTop => "First on top",
+        }
+    }
+    pub fn to_str(self) -> &'static str {
+        match self {
+            CanvasStacking::LastOnTop => "last-on-top",
+            CanvasStacking::FirstOnTop => "first-on-top",
+        }
+    }
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "first-on-top" => CanvasStacking::FirstOnTop,
+            _ => CanvasStacking::LastOnTop,
+        }
+    }
+}
+
 /// CSS-Grid-style track sizing (Figma Grid, Config 2025).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GridTrack {
@@ -159,6 +195,56 @@ pub enum GridTrack {
     Fr(f64),
     /// Content-sized: the max natural size of the items in the track.
     Auto,
+}
+
+/// Grid auto-flow mode (CSS `grid-auto-flow`). Controls how auto-placed
+/// children fill empty cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GridAutoFlow {
+    /// Row-major: children fill left-to-right, then wrap to the next row
+    /// (default, matches CSS `grid-auto-flow: row`).
+    #[default]
+    Row,
+    /// Column-major: children fill top-to-bottom, then wrap to the next
+    /// column (matches CSS `grid-auto-flow: column`).
+    Column,
+    /// Dense packing: backfill empty cells by reordering auto-placed
+    /// children to fill earlier gaps, even if it means later children
+    /// appear before earlier ones in the visual order (matches CSS
+    /// `grid-auto-flow: dense`). Can cause visual reordering.
+    Dense,
+}
+
+impl GridAutoFlow {
+    pub fn label(self) -> &'static str {
+        match self {
+            GridAutoFlow::Row => "Row",
+            GridAutoFlow::Column => "Column",
+            GridAutoFlow::Dense => "Dense",
+        }
+    }
+    pub fn to_str(self) -> &'static str {
+        match self {
+            GridAutoFlow::Row => "row",
+            GridAutoFlow::Column => "column",
+            GridAutoFlow::Dense => "dense",
+        }
+    }
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "column" => GridAutoFlow::Column,
+            "dense" => GridAutoFlow::Dense,
+            _ => GridAutoFlow::Row,
+        }
+    }
+    pub fn css(self) -> &'static str {
+        match self {
+            GridAutoFlow::Row => "row",
+            GridAutoFlow::Column => "column",
+            GridAutoFlow::Dense => "dense",
+        }
+    }
 }
 
 /// Grid layout for frames (CSS grid; Figma Grid). Children place into
@@ -175,6 +261,9 @@ pub struct GridLayout {
     pub row_gap: f64,
     /// `[left, right, top, bottom]` (same convention as AutoLayout).
     pub padding: [f64; 4],
+    /// Grid auto-flow mode: row-major (default), column-major, or dense
+    /// packing. Controls how auto-placed children fill empty cells.
+    pub auto_flow: GridAutoFlow,
 }
 
 impl Default for GridLayout {
@@ -185,6 +274,7 @@ impl Default for GridLayout {
             column_gap: 8.0,
             row_gap: 8.0,
             padding: [0.0; 4],
+            auto_flow: GridAutoFlow::Row,
         }
     }
 }
@@ -266,7 +356,7 @@ impl Distribute {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AutoLayout {
     pub direction: LayoutDirection,
     pub gap: f64,
@@ -296,6 +386,43 @@ pub struct AutoLayout {
     /// CSS-Grid mode: when set, the frame lays out as a grid instead of a
     /// stack (see [`GridLayout`]); the stack fields above are ignored.
     pub grid: Option<GridLayout>,
+    /// CSS Flexbox parity (Figma Jul-2026): when true, inside strokes on
+    /// THIS frame are included in layout calculations (minimum size and
+    /// padding offset). Outside and center strokes are never included,
+    /// regardless of this setting. Default: true, matching Figma's new
+    /// default for new frames.
+    pub stroke_include_in_layout: bool,
+    /// Canvas stacking order for negative-gap (overlapping) stacks. Figma
+    /// Jun-2026: controls paint order when items overlap due to negative
+    /// gap. Default: LastOnTop (classic painter's-algorithm order).
+    pub canvas_stacking: CanvasStacking,
+}
+
+impl Default for AutoLayout {
+    fn default() -> Self {
+        Self {
+            direction: LayoutDirection::default(),
+            gap: 0.0,
+            padding: [0.0; 4],
+            sizing: Sizing::default(),
+            cross_sizing: None,
+            gap_var: None,
+            padding_var: None,
+            align: CrossAlign::default(),
+            distribute: Distribute::default(),
+            wrap: AutoLayoutWrap::default(),
+            min_width: None,
+            max_width: None,
+            min_height: None,
+            max_height: None,
+            resize_on_wrap: false,
+            grid: None,
+            // CSS Flexbox parity (Figma Jul-2026): inside strokes are
+            // included in layout by default for new frames.
+            stroke_include_in_layout: true,
+            canvas_stacking: CanvasStacking::default(),
+        }
+    }
 }
 
 impl AutoLayout {

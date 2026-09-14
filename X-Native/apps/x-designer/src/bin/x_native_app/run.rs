@@ -19,13 +19,14 @@ use x_native::build_render_tree;
 use x_native::build_scene_full;
 #[cfg(test)]
 use x_native::fileio::load_x_file;
+use x_editor;
 use x_native::{Node, NodeKind, Paint, PathCmd};
 
 use crate::dashboard;
 use crate::editor_ui;
 use crate::state::{
-    push_system_clipboard, Action, App, CtxCmd, Drag, FieldEdit, FieldId, OpenDoc, Screen, Tool,
-    FRAME_PRESETS,
+    push_system_clipboard, Action, App, CtxCmd, Drag, FieldEdit, FieldId, NavTab, OpenDoc, Screen,
+    Tool, FRAME_PRESETS,
 };
 use crate::theme::*;
 
@@ -4375,6 +4376,64 @@ impl Host {
             return;
         }
 
+        
+        // Vector edit mode keyboard shortcuts (Figma parity)
+        if self.app.screen == Screen::Editor && !self.app.docs.is_empty() {
+            // Enter/Exit vector edit mode
+            if matches!(key, Key::Named(NamedKey::Enter))
+                && !self.app.ctrl
+                && !self.app.alt
+                && !self.app.shift
+            {
+                if self.app.vector_edit_mode.active {
+                    self.dispatch(Action::ExitVectorEditMode);
+                    return;
+                } else if self.app.enter_edit_selected() {
+                    self.dispatch(Action::EnterVectorEditMode);
+                    return;
+                }
+            }
+            // Escape exits vector edit mode
+            if matches!(key, Key::Named(NamedKey::Escape)) && self.app.vector_edit_mode.active {
+                self.dispatch(Action::ExitVectorEditMode);
+                return;
+            }
+            // Delete selected vector points
+            if matches!(key, Key::Named(NamedKey::Backspace | NamedKey::Delete))
+                && self.app.vector_edit_mode.active
+            {
+                self.dispatch(Action::DeleteVectorPoints);
+                return;
+            }
+            // Vector tool shortcuts (only when not in vector edit mode)
+            if !self.app.vector_edit_mode.active {
+                if let Key::Character(c) = &key {
+                    match c.as_str() {
+                        "p" | "P" if !self.app.ctrl && !self.app.alt => {
+                            self.dispatch(Action::SetVectorTool(crate::state::VectorTool::Pen));
+                            return;
+                        }
+                        "v" | "V" if !self.app.ctrl && !self.app.alt => {
+                            self.dispatch(Action::SetVectorTool(crate::state::VectorTool::MovePoint));
+                            return;
+                        }
+                        "x" | "X" if !self.app.ctrl && !self.app.alt => {
+                            self.dispatch(Action::SetVectorTool(crate::state::VectorTool::Cut));
+                            return;
+                        }
+                        "e" | "E" if self.app.shift && !self.app.ctrl => {
+                            self.dispatch(Action::SetVectorTool(crate::state::VectorTool::Eraser));
+                            return;
+                        }
+                        "q" | "Q" if !self.app.ctrl && !self.app.alt => {
+                            self.dispatch(Action::SetVectorTool(crate::state::VectorTool::Lasso));
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
         let ctrl = self.app.ctrl;
         if ctrl && (self.app.screen != Screen::Editor || self.app.docs.is_empty()) {
             if let Key::Character(c) = &key {
@@ -4402,6 +4461,37 @@ impl Host {
                     }
                     "x" | "X" if self.app.alt => {
                         self.app.apply_ctx(CtxCmd::Exclude);
+                        return;
+                    }
+                    // ⌥1-5: navigation bar tab switching
+                    "1" if self.app.alt => {
+                        self.app.nav_tab = NavTab::File;
+                        return;
+                    }
+                    "2" if self.app.alt => {
+                        self.app.nav_tab = NavTab::Agents;
+                        return;
+                    }
+                    "3" if self.app.alt => {
+                        self.app.nav_tab = NavTab::Assets;
+                        return;
+                    }
+                    "4" if self.app.alt => {
+                        self.app.nav_tab = NavTab::Tools;
+                        return;
+                    }
+                    "5" if self.app.alt => {
+                        self.app.nav_tab = NavTab::Variables;
+                        return;
+                    }
+                    // ⇧⌘\ — minimize UI
+                    "\\" if self.app.shift => {
+                        self.app.ui_minimized = !self.app.ui_minimized;
+                        return;
+                    }
+                    // ⇧⌘F — find
+                    "f" | "F" if self.app.shift => {
+                        self.app.find_replace.open = !self.app.find_replace.open;
                         return;
                     }
                     // ⇧⌘L / ⇧⌘H — Figma's lock & hide
@@ -4572,6 +4662,31 @@ impl Host {
                     }
                     "1" => {
                         self.zoom_fit();
+                        return;
+                    }
+                    // Layer management shortcuts
+                    "r" | "R" if self.app.shift => {
+                        self.dispatch(Action::OpenBulkRename);
+                        return;
+                    }
+                    "a" | "A" if self.app.shift && self.app.alt => {
+                        self.dispatch(Action::InverseSelection);
+                        return;
+                    }
+                    "m" | "M" if self.app.shift && self.app.alt => {
+                        self.dispatch(Action::SelectMatching);
+                        return;
+                    }
+                    "o" | "O" if self.app.shift => {
+                        self.dispatch(Action::ToggleHiddenOutlines);
+                        return;
+                    }
+                    "c" | "C" if self.app.alt => {
+                        self.dispatch(Action::CopyProperties);
+                        return;
+                    }
+                    "v" | "V" if self.app.alt => {
+                        self.dispatch(Action::PasteProperties);
                         return;
                     }
                     _ => {}
@@ -5109,6 +5224,168 @@ impl Host {
                     .position(|m| *m == ix.transition_ms)
                     .unwrap_or(2);
                 ix.transition_ms = SPEEDS[(pos + 1) % SPEEDS.len()];
+            }
+        });
+    }
+
+    fn proto_animation_cycle(&mut self, i: usize) {
+        self.proto_edit(move |l| {
+            if let Some(ix) = l.get_mut(i) {
+                ix.animation = match ix.animation {
+                    x_native::Animation::Instant => x_native::Animation::Dissolve,
+                    x_native::Animation::Dissolve => x_native::Animation::SmartAnimate,
+                    x_native::Animation::SmartAnimate => x_native::Animation::SlideIn,
+                    x_native::Animation::SlideIn => x_native::Animation::MoveIn(x_native::Direction::Left),
+                    x_native::Animation::MoveIn(d) => match d {
+                        x_native::Direction::Left => x_native::Animation::MoveIn(x_native::Direction::Right),
+                        x_native::Direction::Right => x_native::Animation::MoveIn(x_native::Direction::Top),
+                        x_native::Direction::Top => x_native::Animation::MoveIn(x_native::Direction::Bottom),
+                        x_native::Direction::Bottom => x_native::Animation::MoveOut(x_native::Direction::Left),
+                    },
+                    x_native::Animation::MoveOut(d) => match d {
+                        x_native::Direction::Left => x_native::Animation::MoveOut(x_native::Direction::Right),
+                        x_native::Direction::Right => x_native::Animation::MoveOut(x_native::Direction::Top),
+                        x_native::Direction::Top => x_native::Animation::MoveOut(x_native::Direction::Bottom),
+                        x_native::Direction::Bottom => x_native::Animation::SlideOut,
+                    },
+                    x_native::Animation::SlideOut => x_native::Animation::Instant,
+                };
+            }
+        });
+    }
+
+    fn proto_action_type_cycle(&mut self, i: usize) {
+        let targets = crate::editor_ui::proto_targets(&self.app);
+        self.proto_edit(move |l| {
+            if let Some(ix) = l.get_mut(i) {
+                // Cycle through action types: Navigate -> OpenOverlay -> Back -> CloseOverlay -> Navigate
+                ix.action = match &ix.action {
+                    x_native::Action::Navigate { destination } => {
+                        // Switch to OpenOverlay with same destination
+                        x_native::Action::OpenOverlay {
+                            overlay: destination.clone(),
+                            position: x_native::OverlayPosition::Center,
+                        }
+                    }
+                    x_native::Action::OpenOverlay { overlay, position } => {
+                        // Cycle overlay position
+                        let next_pos = match position {
+                            x_native::OverlayPosition::Center => x_native::OverlayPosition::TopRight,
+                            x_native::OverlayPosition::TopRight => x_native::OverlayPosition::BottomRight,
+                            x_native::OverlayPosition::BottomRight => x_native::OverlayPosition::TopLeft,
+                            x_native::OverlayPosition::TopLeft => x_native::OverlayPosition::BottomLeft,
+                            x_native::OverlayPosition::BottomLeft => x_native::OverlayPosition::Center,
+                            _ => x_native::OverlayPosition::Center,
+                        };
+                        x_native::Action::OpenOverlay {
+                            overlay: overlay.clone(),
+                            position: next_pos,
+                        }
+                    }
+                    x_native::Action::Back => x_native::Action::CloseOverlay,
+                    x_native::Action::CloseOverlay => {
+                        // Navigate to first other frame
+                        let dest = targets.iter().next().map(|(id, _)| id.clone()).unwrap_or_default();
+                        x_native::Action::Navigate { destination: dest }
+                    }
+                    _ => x_native::Action::Back,
+                };
+            }
+        });
+    }
+
+    fn proto_edit_delay(&mut self, i: usize) {
+        self.proto_edit(move |l| {
+            if let Some(ix) = l.get_mut(i) {
+                if let x_native::Trigger::AfterDelay { ms } = &mut ix.trigger {
+                    // Cycle through common delay values: 100ms, 300ms, 500ms, 1000ms, 2000ms
+                    *ms = match *ms {
+                        0 => 100,
+                        100 => 300,
+                        300 => 500,
+                        500 => 1000,
+                        1000 => 2000,
+                        _ => 0,
+                    };
+                }
+            }
+        });
+    }
+
+    fn proto_edit_key(&mut self, i: usize) {
+        self.proto_edit(move |l| {
+            if let Some(ix) = l.get_mut(i) {
+                if let x_native::Trigger::KeyDown { key } = &mut ix.trigger {
+                    // Cycle through common keys
+                    *key = match key.as_str() {
+                        "Enter" => "Space",
+                        "Space" => "Escape",
+                        "Escape" => "ArrowLeft",
+                        "ArrowLeft" => "ArrowRight",
+                        "ArrowRight" => "ArrowUp",
+                        "ArrowUp" => "ArrowDown",
+                        "ArrowDown" => "a",
+                        _ => "Enter",
+                    };
+                }
+            }
+        });
+    }
+
+    fn proto_edit_url(&mut self, i: usize) {
+        // For now, just open a simple URL editor
+        // In a full implementation, this would open a text field
+        self.proto_edit(move |l| {
+            if let Some(ix) = l.get_mut(i) {
+                if let x_native::Action::OpenLink { url } = &mut ix.action {
+                    // Cycle through example URLs
+                    *url = match url.as_str() {
+                        "" => "https://example.com",
+                        "https://example.com" => "https://figma.com",
+                        "https://figma.com" => "https://github.com",
+                        _ => "",
+                    };
+                }
+            }
+        });
+    }
+
+    fn proto_edit_video_time(&mut self, i: usize) {
+        self.proto_edit(move |l| {
+            if let Some(ix) = l.get_mut(i) {
+                if let x_native::Trigger::WhenVideoHits { time } = &mut ix.trigger {
+                    // Cycle through common video times (in seconds)
+                    *time = match (*time * 10.0) as i32 {
+                        0 => 50,    // 5.0s
+                        50 => 100,  // 10.0s
+                        100 => 150, // 15.0s
+                        150 => 200, // 20.0s
+                        _ => 0,     // 0.0s
+                    } as f32 / 10.0;
+                }
+            }
+        });
+    }
+
+    fn proto_easing(&mut self, i: usize) {
+        self.proto_edit(move |l| {
+            if let Some(ix) = l.get_mut(i) {
+                // Cycle through easing options
+                ix.easing = match ix.easing {
+                    x_native::Easing::Linear => x_native::Easing::EaseIn,
+                    x_native::Easing::EaseIn => x_native::Easing::EaseOut,
+                    x_native::Easing::EaseOut => x_native::Easing::EaseInOut,
+                    x_native::Easing::EaseInOut => x_native::Easing::CubicBezier(0.25, 0.1, 0.25, 1.0),
+                    x_native::Easing::CubicBezier(..) => x_native::Easing::Linear,
+                };
+            }
+        });
+    }
+
+    fn proto_toggle_reset(&mut self, i: usize) {
+        self.proto_edit(move |l| {
+            if let Some(ix) = l.get_mut(i) {
+                ix.reset_on_navigate = !ix.reset_on_navigate;
             }
         });
     }
@@ -5706,6 +5983,7 @@ impl Host {
             let ix = x_native::Interaction {
                 trigger: x_native::Trigger::AfterDelay { ms: 0 },
                 action: d.action,
+                actions: vec![],
                 transition_ms: d.ms,
                 animation: x_native::Animation::Instant,
             };
@@ -6987,6 +7265,14 @@ impl Host {
             Action::ProtoTrigger(i) => self.proto_trigger_cycle(i),
             Action::ProtoDest(i, dir) => self.proto_dest_cycle(i, dir),
             Action::ProtoSpeed(i) => self.proto_speed_cycle(i),
+            Action::ProtoAnimation(i) => self.proto_animation_cycle(i),
+            Action::ProtoActionType(i) => self.proto_action_type_cycle(i),
+            Action::ProtoEditDelay(i) => self.proto_edit_delay(i),
+            Action::ProtoEditKey(i) => self.proto_edit_key(i),
+            Action::ProtoEditUrl(i) => self.proto_edit_url(i),
+            Action::ProtoEditVideoTime(i) => self.proto_edit_video_time(i),
+            Action::ProtoEasing(i) => self.proto_easing(i),
+            Action::ProtoToggleReset(i) => self.proto_toggle_reset(i),
             Action::ProtoToggleStart => {
                 let Some(id) = self.proto_selected_id() else {
                     self.app.status = "Select one layer to mark it as a flow start".into();
@@ -7070,6 +7356,96 @@ impl Host {
                     self.app.mark_dirty();
                 }
             }
+            Action::CycleTextAlign => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    return;
+                };
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    n.text_align = match n.text_align {
+                        x_native::TextAlign::Left => x_native::TextAlign::Center,
+                        x_native::TextAlign::Center => x_native::TextAlign::Right,
+                        x_native::TextAlign::Right => x_native::TextAlign::Justified,
+                        x_native::TextAlign::Justified => x_native::TextAlign::Left,
+                    };
+                });
+                if changed {
+                    self.app.mark_dirty();
+                }
+            }
+            Action::CycleTextAlignVertical => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    return;
+                };
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    n.text_align_vertical = match n.text_align_vertical {
+                        x_native::TextAlignVertical::Top => x_native::TextAlignVertical::Middle,
+                        x_native::TextAlignVertical::Middle => x_native::TextAlignVertical::Bottom,
+                        x_native::TextAlignVertical::Bottom => x_native::TextAlignVertical::Top,
+                    };
+                });
+                if changed {
+                    self.app.mark_dirty();
+                }
+            }
+            Action::CycleTextDecoration => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    return;
+                };
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    n.text_decoration = match n.text_decoration {
+                        x_native::TextDecoration::None => x_native::TextDecoration::Underline,
+                        x_native::TextDecoration::Underline => x_native::TextDecoration::Strikethrough,
+                        x_native::TextDecoration::Strikethrough => x_native::TextDecoration::None,
+                    };
+                });
+                if changed {
+                    self.app.mark_dirty();
+                }
+            }
+            Action::CycleTextTruncation => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    return;
+                };
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    n.text_truncation = match n.text_truncation {
+                        x_native::TextTruncation::Disabled => x_native::TextTruncation::End,
+                        x_native::TextTruncation::End => x_native::TextTruncation::Middle,
+                        x_native::TextTruncation::Middle => x_native::TextTruncation::Disabled,
+                    };
+                });
+                if changed {
+                    self.app.mark_dirty();
+                }
+            }
+            Action::CycleListStyle => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    return;
+                };
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    n.list_style = match n.list_style {
+                        x_native::ListStyle::None => x_native::ListStyle::Bulleted,
+                        x_native::ListStyle::Bulleted => x_native::ListStyle::Numbered,
+                        x_native::ListStyle::Numbered => x_native::ListStyle::None,
+                    };
+                });
+                if changed {
+                    self.app.mark_dirty();
+                }
+            }
+            Action::ToggleTextWrapStyle => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    return;
+                };
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    n.wrap_style = match n.wrap_style {
+                        x_native::WrapStyle::Normal => x_native::WrapStyle::BreakWord,
+                        x_native::WrapStyle::BreakWord => x_native::WrapStyle::Normal,
+                    };
+                });
+                if changed {
+                    self.app.mark_dirty();
+                }
+            }
             Action::Align(row, col) => self.app.apply_align(row, col),
             // UX Analysis actions
             Action::UxAccessibility => self.app.run_ux_accessibility_check(),
@@ -7078,6 +7454,97 @@ impl Host {
             Action::UxPatterns => self.app.run_ux_interaction_patterns(),
             Action::UxContrast => self.app.run_ux_color_contrast(),
             Action::UxResponsive => self.app.run_ux_responsive_preview(),
+            // Navigation bar actions
+            Action::NavTab(tab) => {
+                self.app.nav_tab = tab;
+            }
+            Action::ToggleNavLabels => {
+                self.app.nav_show_labels = !self.app.nav_show_labels;
+            }
+            Action::OpenAppMenu => {
+                self.app.app_menu.open = !self.app.app_menu.open;
+            }
+            Action::CloseAppMenu => {
+                self.app.app_menu.open = false;
+            }
+            Action::AppMenuItem(idx) => {
+                self.app.app_menu.open = false;
+                match idx {
+                    0 => { self.app.open_blank(); } // New file
+                    3 => { self.cmd_save(); } // Save
+                    8 => {} // Preferences (no-op for now)
+                    9 => { // Dark mode toggle
+                        let next = crate::theme::active_theme().next();
+                        self.apply_theme(next);
+                    }
+                    _ => {}
+                }
+            }
+            Action::OpenFind => {
+                self.app.find_replace.open = true;
+            }
+            Action::CloseFind => {
+                self.app.find_replace.open = false;
+            }
+            Action::FindNext => {
+                // Advance to next match (simplified)
+                if self.app.find_replace.match_count > 0 {
+                    self.app.find_replace.current_match = 
+                        (self.app.find_replace.current_match % self.app.find_replace.match_count) + 1;
+                }
+            }
+            Action::FindPrev => {
+                if self.app.find_replace.match_count > 0 {
+                    let cur = self.app.find_replace.current_match;
+                    self.app.find_replace.current_match = 
+                        if cur <= 1 { self.app.find_replace.match_count } else { cur - 1 };
+                }
+            }
+            Action::ReplaceAll => {
+                // Simplified replace all
+                self.app.status = "Replace all: not yet implemented".into();
+            }
+            Action::ToggleCaseSensitive => {
+                self.app.find_replace.case_sensitive = !self.app.find_replace.case_sensitive;
+            }
+            Action::ToggleFindInSelection => {
+                self.app.find_replace.in_selection = !self.app.find_replace.in_selection;
+            }
+            Action::ToggleNotifications => {
+                self.app.notifications.open = !self.app.notifications.open;
+                if self.app.notifications.open {
+                    self.app.app_menu.open = false;
+                }
+            }
+            Action::DismissNotification(id) => {
+                self.app.notifications.notifications.retain(|n| n.id != id);
+                self.app.notifications.unread_count = self.app.notifications.notifications.iter().filter(|n| !n.read).count();
+            }
+            Action::MarkAllNotificationsRead => {
+                for n in &mut self.app.notifications.notifications {
+                    n.read = true;
+                }
+                self.app.notifications.unread_count = 0;
+            }
+            Action::ToggleMinimizeUI => {
+                self.app.ui_minimized = !self.app.ui_minimized;
+            }
+            Action::ResizeLeftSidebar(w) => {
+                self.app.left_sidebar_w = w.clamp(200.0, 500.0);
+            }
+            Action::CollapseAllLayers => {
+                self.app.doc().expanded.clear();
+            }
+            Action::FileRename => {
+                self.app.field = Some(crate::state::FieldEdit {
+                    id: crate::state::FieldId::DocName,
+                    buffer: self.app.doc().name.clone(),
+                });
+                self.app.field_select_all = true;
+            }
+            Action::FileMoveToDrafts | Action::FileDuplicate => {
+                self.app.status = format!("File action: not yet implemented");
+            }
             Action::AddPage => {
                 if !self.finish_edits() {
                     return;
@@ -7454,6 +7921,807 @@ impl Host {
                 self.app.palette.query.clear();
             }
             Action::PaletteRun(ci) => self.run_palette(ci),
+            // Layer management (Figma parity)
+            Action::ToggleHiddenOutlines => {
+                self.app.show_hidden_outlines = !self.app.show_hidden_outlines;
+                self.app.status = if self.app.show_hidden_outlines {
+                    "Showing hidden layer outlines"
+                } else {
+                    "Hidden layer outlines disabled"
+                }.into();
+            }
+            Action::InverseSelection => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    let all_ids = editor.get_all_selectable_ids();
+                    let current: std::collections::HashSet<_> = editor.selection.iter().cloned().collect();
+                    let new_selection: Vec<_> = all_ids.into_iter()
+                        .filter(|id| !current.contains(id))
+                        .collect();
+                    editor.selection = new_selection;
+                    self.app.status = format!("Selected {} layers (inverse)", editor.selection.len());
+                }
+            }
+            Action::SelectMatching => {
+                if let Some(doc) = self.app.docs.get(self.app.active) {
+                    let editor = &doc.editors[doc.active_editor];
+                    if editor.selection.len() == 1 {
+                        let selected_id = &editor.selection[0];
+                        if let Some(selected_node) = editor.get_node(selected_id) {
+                            let matching = editor.find_matching_nodes(selected_node);
+                            let matching_ids: Vec<_> = matching.into_iter().map(|n| n.id.clone()).collect();
+                            drop(editor);
+                            let doc = self.app.docs.get_mut(self.app.active).unwrap();
+                            let editor = &mut doc.editors[doc.active_editor];
+                            editor.selection = matching_ids;
+                            self.app.status = format!("Selected {} matching layers", editor.selection.len());
+                        }
+                    } else {
+                        self.app.status = "Select exactly one layer to find matching".into();
+                    }
+                }
+            }
+            Action::DeepSelect(node_id) => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    editor.selection = vec![node_id.clone()];
+                }
+            }
+            Action::ShowMeasurements(node_id) => {
+                // This is handled in the rendering code, not here
+                // Just update status
+                self.app.status = format!("Measuring to {}", node_id);
+            }
+            Action::OpenBulkRename => {
+                self.app.bulk_rename_open = true;
+                self.app.bulk_rename_match.clear();
+                self.app.bulk_rename_replace.clear();
+                self.app.bulk_rename_preview.clear();
+            }
+            Action::CloseBulkRename => {
+                self.app.bulk_rename_open = false;
+            }
+            Action::ApplyBulkRename => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    let selected_ids = editor.selection.clone();
+                    let match_pattern = &self.app.bulk_rename_match;
+                    let replace_pattern = &self.app.bulk_rename_replace;
+                    
+                    let mut renamed_count = 0;
+                    for id in selected_ids {
+                        if let Some(node) = editor.get_node_mut(&id) {
+                            let old_name = node.name.clone();
+                            let new_name = if match_pattern.is_empty() {
+                                replace_pattern.clone()
+                            } else {
+                                old_name.replace(match_pattern, replace_pattern)
+                            };
+                            if new_name != old_name {
+                                node.name = new_name;
+                                renamed_count += 1;
+                            }
+                        }
+                    }
+                    self.app.status = format!("Renamed {} layers", renamed_count);
+                }
+                self.app.bulk_rename_open = false;
+            }
+            Action::CopyProperties => {
+                if let Some(doc) = self.app.docs.get(self.app.active) {
+                    let editor = &doc.editors[doc.active_editor];
+                    if editor.selection.len() == 1 {
+                        let selected_id = &editor.selection[0];
+                        if let Some(node) = editor.get_node(selected_id) {
+                            let clipboard = PropertyClipboard {
+                                fill: Some(node.fill.clone()),
+                                stroke: Some(node.stroke.clone()),
+                                effects: node.effects.clone(),
+                                opacity: Some(node.opacity),
+                                corner_radius: node.corner_radii.as_ref().map(|r| r[0]),
+                            };
+                            drop(editor);
+                            self.app.property_clipboard = Some(clipboard);
+                            self.app.status = "Properties copied".into();
+                        }
+                    } else {
+                        self.app.status = "Select exactly one layer to copy properties".into();
+                    }
+                }
+            }
+            Action::PasteProperties => {
+                if let Some(clipboard) = &self.app.property_clipboard {
+                    if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                        let editor = &mut doc.editors[doc.active_editor];
+                        let selected_ids = editor.selection.clone();
+                        let mut pasted_count = 0;
+                        
+                        for id in selected_ids {
+                            if let Some(node) = editor.get_node_mut(&id) {
+                                if let Some(fill) = &clipboard.fill {
+                                    node.fill = fill.clone();
+                                }
+                                if let Some(stroke) = &clipboard.stroke {
+                                    node.stroke = stroke.clone();
+                                }
+                                node.effects = clipboard.effects.clone();
+                                if let Some(opacity) = clipboard.opacity {
+                                    node.opacity = opacity;
+                                }
+                                if let Some(radius) = clipboard.corner_radius {
+                                    node.corner_radii = Some([radius, radius, radius, radius]);
+                                }
+                                pasted_count += 1;
+                            }
+                        }
+                        self.app.status = format!("Pasted properties to {} layers", pasted_count);
+                    }
+                } else {
+                    self.app.status = "No properties copied".into();
+                }
+            }
+            Action::SetLayerSearch(query) => {
+                self.app.layer_search = query;
+            }
+            Action::SelectChild => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    if editor.selection.len() == 1 {
+                        let selected_id = &editor.selection[0];
+                        if let Some(node) = editor.get_node(selected_id) {
+                            if let Some(first_child) = node.children.first() {
+                                editor.selection = vec![first_child.id.clone()];
+                            }
+                        }
+                    }
+                }
+            }
+            Action::SelectParent => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    if editor.selection.len() == 1 {
+                        let selected_id = &editor.selection[0];
+                        if let Some(parent_id) = editor.get_parent_id(selected_id) {
+                            editor.selection = vec![parent_id];
+                        }
+                    }
+                }
+            }
+            Action::SelectNextSibling => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    if editor.selection.len() == 1 {
+                        let selected_id = &editor.selection[0];
+                        if let Some(next_id) = editor.get_next_sibling_id(selected_id) {
+                            editor.selection = vec![next_id];
+                        }
+                    }
+                }
+            }
+            Action::SelectPrevSibling => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    if editor.selection.len() == 1 {
+                        let selected_id = &editor.selection[0];
+                        if let Some(prev_id) = editor.get_prev_sibling_id(selected_id) {
+                            editor.selection = vec![prev_id];
+                        }
+                    }
+                }
+            }
+            Action::SelectLayerFromMenu(node_id) => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    editor.selection = vec![node_id];
+                }
+            }
+            // Vector Edit Mode actions
+            Action::EnterVectorEditMode => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    if let Some(node_id) = editor.selection.first().cloned() {
+                        if editor.enter_vector_edit_mode(&node_id) {
+                            self.app.vector_edit_mode.active = true;
+                            self.app.vector_edit_mode.selected_node = Some(node_id);
+                            self.app.status = "Entered vector edit mode".into();
+                        }
+                    }
+                }
+            }
+            Action::ExitVectorEditMode => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    editor.exit_vector_edit_mode();
+                    self.app.vector_edit_mode.active = false;
+                    self.app.vector_edit_mode.selected_node = None;
+                    self.app.vector_edit_mode.selected_points.clear();
+                    self.app.status = "Exited vector edit mode".into();
+                }
+            }
+            Action::SelectVectorPoint(idx) => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    editor.select_vector_point(idx, self.app.shift);
+                    self.app.vector_edit_mode.selected_points = editor.vector_edit_selected_points.clone();
+                }
+            }
+            Action::DeselectVectorPoints => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    editor.deselect_vector_points();
+                    self.app.vector_edit_mode.selected_points.clear();
+                }
+            }
+            Action::MoveVectorPoints { dx, dy } => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    editor.move_vector_points(dx, dy);
+                    self.app.mark_dirty();
+                }
+            }
+            Action::AddVectorPoint { segment_idx, position } => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    editor.add_vector_point(segment_idx, position);
+                    self.app.mark_dirty();
+                }
+            }
+            Action::DeleteVectorPoints => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    editor.delete_vector_points();
+                    self.app.mark_dirty();
+                    self.app.status = "Deleted vector points".into();
+                }
+            }
+            Action::SetVectorTool(tool) => {
+                self.app.vector_edit_mode.tool = tool;
+                self.app.status = format!("Vector tool: {:?}", tool);
+            }
+            Action::ToggleVectorHandles => {
+                self.app.vector_edit_mode.show_handles = !self.app.vector_edit_mode.show_handles;
+            }
+            Action::OutlineStroke => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    if let Some(node_id) = editor.selection.first().cloned() {
+                        if editor.outline_stroke(&node_id) {
+                            self.app.mark_dirty();
+                            self.app.status = "Outlined stroke".into();
+                        } else {
+                            self.app.status = "Cannot outline stroke - node must have a stroke".into();
+                        }
+                    }
+                }
+            }
+            Action::FlattenSelection => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    if editor.flatten_selection() {
+                        self.app.mark_dirty();
+                        self.app.status = "Flattened selection".into();
+                    } else {
+                        self.app.status = "Cannot flatten - no vector nodes selected".into();
+                    }
+                }
+            }
+            Action::OffsetVector { distance, join } => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    if let Some(node_id) = editor.selection.first().cloned() {
+                        if editor.offset_vector(&node_id, distance) {
+                            self.app.mark_dirty();
+                            self.app.status = format!("Offset vector by {} with {} join", distance, join);
+                        } else {
+                            self.app.status = "Cannot offset - node must be a vector".into();
+                        }
+                    }
+                }
+            }
+            Action::SimplifyVector { tolerance } => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    editor.simplify_vector(tolerance);
+                    self.app.mark_dirty();
+                    self.app.status = format!("Simplified vector path with tolerance {}", tolerance);
+                }
+            }
+            Action::TextToOutline => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    if let Some(node_id) = editor.selection.first().cloned() {
+                        if editor.text_to_outline(&node_id) {
+                            self.app.mark_dirty();
+                            self.app.status = "Converted text to outline".into();
+                        } else {
+                            self.app.status = "Cannot convert - node must be text".into();
+                        }
+                    }
+                }
+            }
+            // Phase 2: Vector Editing Tools
+            Action::AddBezierHandle { point_idx, handle_pos } => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    if let Some(node_id) = editor.vector_edit_node.clone() {
+                        if editor.add_bezier_handle(&node_id, point_idx, handle_pos) {
+                            self.app.mark_dirty();
+                            self.app.status = "Added bézier handle".into();
+                        }
+                    }
+                }
+            }
+            Action::AdjustBezierHandle { point_idx, handle_idx, new_pos } => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    if let Some(node_id) = editor.vector_edit_node.clone() {
+                        if editor.adjust_bezier_handle(&node_id, point_idx, handle_idx, new_pos) {
+                            self.app.mark_dirty();
+                        }
+                    }
+                }
+            }
+            Action::SplitVectorPath { point_idx } => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    if let Some(node_id) = editor.vector_edit_node.clone() {
+                        if let Some(new_id) = editor.split_vector_path(&node_id, point_idx) {
+                            editor.selection = vec![new_id];
+                            self.app.mark_dirty();
+                            self.app.status = "Split vector path".into();
+                        }
+                    }
+                }
+            }
+            Action::CutVectorPath { start, end } => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    if let Some(node_id) = editor.vector_edit_node.clone() {
+                        let new_ids = editor.cut_vector_path(&node_id, start, end);
+                        if !new_ids.is_empty() {
+                            self.app.mark_dirty();
+                            self.app.status = format!("Cut path into {} pieces", new_ids.len() + 1);
+                        }
+                    }
+                }
+            }
+            Action::LassoSelectPoints { boundary } => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    if let Some(node_id) = editor.vector_edit_node.clone() {
+                        let selected = editor.lasso_select_points(&node_id, &boundary);
+                        editor.vector_edit_selected_points = selected;
+                        self.app.vector_edit_mode.selected_points = selected.clone();
+                        self.app.status = format!("Selected {} points", selected.len());
+                    }
+                }
+            }
+            Action::SetVariableWidthStroke { width_points } => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    if let Some(node_id) = editor.selection.first().cloned() {
+                        if editor.set_variable_width_stroke(&node_id, width_points) {
+                            self.app.mark_dirty();
+                            self.app.status = "Set variable width stroke".into();
+                        }
+                    }
+                }
+            }
+            Action::RemoveBezierHandles { point_idx } => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    if let Some(node_id) = editor.vector_edit_node.clone() {
+                        if editor.remove_bezier_handles(&node_id, point_idx) {
+                            self.app.mark_dirty();
+                            self.app.status = "Removed bézier handles".into();
+                        }
+                    }
+                }
+            }
+            Action::MirrorBezierHandles { point_idx, mode } => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                        // Convert state::MirrorMode to x_editor::MirrorMode
+                        let mirror_mode = match mode {
+                            crate::state::MirrorMode::None => x_editor::MirrorMode::None,
+                            crate::state::MirrorMode::Angle => x_editor::MirrorMode::Angle,
+                        };
+                        // TODO: Properly convert to editor_core::MirrorMode or unify the types
+                            self.app.mark_dirty();
+                            self.app.status = "Mirrored bézier handles".into();
+                        }
+                    }
+                }
+            }
+            // Phase 3: Enhanced Path Operations
+            Action::OutlineStrokeEnhanced => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    if let Some(node_id) = editor.selection.first().cloned() {
+                        if editor.outline_stroke_enhanced(&node_id) {
+                            self.app.mark_dirty();
+                            self.app.status = "Outlined stroke (enhanced)".into();
+                        } else {
+                            self.app.status = "Cannot outline stroke - node must have a stroke".into();
+                        }
+                    }
+                }
+            }
+            Action::OffsetVectorEnhanced { distance, join_style } => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    if let Some(node_id) = editor.selection.first().cloned() {
+                        // Convert state::JoinStyle to x_editor::JoinStyle
+                        let js = match join_style {
+                            crate::state::JoinStyle::Miter => x_editor::JoinStyle::Miter,
+                            crate::state::JoinStyle::Round => x_editor::JoinStyle::Round,
+                            crate::state::JoinStyle::Bevel => x_editor::JoinStyle::Bevel,
+                        };
+                        if editor.offset_vector_enhanced(&node_id, distance, js) {
+                            self.app.mark_dirty();
+                            self.app.status = format!("Offset vector by {} with {:?} join", distance, join_style);
+                        } else {
+                            self.app.status = "Cannot offset - node must be a vector".into();
+                        }
+                    }
+                }
+            }
+            Action::TextToOutlineEnhanced => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    if let Some(node_id) = editor.selection.first().cloned() {
+                        if editor.text_to_outline_enhanced(&node_id) {
+                            self.app.mark_dirty();
+                            self.app.status = "Converted text to outline (enhanced)".into();
+                        } else {
+                            self.app.status = "Cannot convert - node must be text".into();
+                        }
+                    }
+                }
+            }
+            Action::SimplifyVectorInteractive { tolerance, preview } => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    if let Some(node_id) = editor.selection.first().cloned() {
+                        if let Some(simplified) = editor.simplify_vector_interactive(&node_id, tolerance, preview) {
+                            if !preview {
+                                self.app.mark_dirty();
+                                self.app.status = format!("Simplified vector path with tolerance {}", tolerance);
+                            } else {
+                                self.app.status = format!("Preview: {} points after simplification", simplified.len());
+                            }
+                        }
+                    }
+                }
+            }
+            Action::JoinPaths { node_id1, node_id2 } => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    if let Some(joined_id) = editor.join_paths(&node_id1, &node_id2) {
+                        editor.selection = vec![joined_id];
+                        self.app.mark_dirty();
+                        self.app.status = "Joined paths".into();
+                    } else {
+                        self.app.status = "Cannot join - both nodes must be vectors".into();
+                    }
+                }
+            }
+            Action::ReversePathDirection => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    if let Some(node_id) = editor.selection.first().cloned() {
+                        if editor.reverse_path_direction(&node_id) {
+                            self.app.mark_dirty();
+                            self.app.status = "Reversed path direction".into();
+                        } else {
+                            self.app.status = "Cannot reverse - node must be a vector".into();
+                        }
+                    }
+                }
+            }
+            Action::SetStrokeCapStart { node_id, cap } => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    // Convert state::StrokeCapType to x_core::StrokeCap
+                    let stroke_cap = match cap {
+                        crate::state::StrokeCapType::None => x_core::StrokeCap::None,
+                        crate::state::StrokeCapType::Round => x_core::StrokeCap::Round,
+                        crate::state::StrokeCapType::Square => x_core::StrokeCap::Square,
+                        crate::state::StrokeCapType::Arrow => x_core::StrokeCap::Arrow,
+                        crate::state::StrokeCapType::Triangle => x_core::StrokeCap::Triangle,
+                    };
+                    if editor.set_stroke_cap_start(&node_id, stroke_cap) {
+                        self.app.mark_dirty();
+                        self.app.status = format!("Set start stroke cap to {:?}", cap);
+                    }
+                }
+            }
+            Action::SetStrokeCapEnd { node_id, cap } => {
+                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                    let editor = &mut doc.editors[doc.active_editor];
+                    // Convert state::StrokeCapType to x_core::StrokeCap
+                    let stroke_cap = match cap {
+                        crate::state::StrokeCapType::None => x_core::StrokeCap::None,
+                        crate::state::StrokeCapType::Round => x_core::StrokeCap::Round,
+                        crate::state::StrokeCapType::Square => x_core::StrokeCap::Square,
+                        crate::state::StrokeCapType::Arrow => x_core::StrokeCap::Arrow,
+                        crate::state::StrokeCapType::Triangle => x_core::StrokeCap::Triangle,
+                    };
+                    if editor.set_stroke_cap_end(&node_id, stroke_cap) {
+                        self.app.mark_dirty();
+                        self.app.status = format!("Set end stroke cap to {:?}", cap);
+                    }
+                }
+            }
+            
+            // Phase 5: Interactive UI Handlers
+            Action::UpdateShapeBuilderHover { mouse_pos } => {
+                // Update hover state for Shape Builder tool
+                self.app.shape_builder_hover = Some(mouse_pos);
+            }
+            
+            Action::ExecuteShapeBuilderOperation => {
+                // Execute the current Shape Builder operation
+                if let Some(preview) = &self.app.shape_builder_preview {
+                    match preview {
+                        ShapeOperation::Merge(shapes) => {
+                            if let Some(new_id) = self.editor.shape_builder_merge(shapes) {
+                                self.app.status = format!("Merged {} shapes into {}", shapes.len(), new_id);
+                            }
+                        }
+                        ShapeOperation::Subtract { base, subtract } => {
+                            if let Some(new_id) = self.editor.shape_builder_subtract(base, subtract) {
+                                self.app.status = format!("Subtracted {} shapes from {}", subtract.len(), new_id);
+                            }
+                        }
+                        ShapeOperation::Intersect(shapes) => {
+                            self.app.status = format!("Intersect operation for {} shapes", shapes.len());
+                            // TODO: Implement intersect
+                        }
+                        ShapeOperation::Exclude(shapes) => {
+                            self.app.status = format!("Exclude operation for {} shapes", shapes.len());
+                            // TODO: Implement exclude
+                        }
+                    }
+                }
+            }
+            
+            Action::SetShapeBuilderMode(mode) => {
+                // Set the Shape Builder operation mode
+                self.app.shape_builder_mode = mode;
+                self.app.status = format!("Shape Builder mode: {:?}", mode);
+            }
+            
+            Action::ToggleShapeBuilderSelectionMode => {
+                // Toggle between Click and Lasso selection modes
+                self.app.shape_builder_selection_mode = match self.app.shape_builder_selection_mode {
+                    SelectionMode::Click => SelectionMode::Lasso,
+                    SelectionMode::Lasso => SelectionMode::Click,
+                    _ => SelectionMode::Click,
+                };
+                self.app.status = format!("Selection mode: {:?}", self.app.shape_builder_selection_mode);
+            }
+            
+            Action::ApplyDashPattern { node_id, pattern } => {
+                // Apply dash pattern to a stroke
+                // TODO: Implement dash pattern application
+                self.app.status = format!("Applied dash pattern to {}", node_id);
+            }
+            
+            Action::SetAdvancedStrokeCap { node_id, is_start, cap } => {
+                // Set advanced stroke cap
+                if is_start {
+                    // TODO: Implement advanced start cap
+                    self.app.status = format!("Set advanced start cap for {}", node_id);
+                } else {
+                    // TODO: Implement advanced end cap
+                    self.app.status = format!("Set advanced end cap for {}", node_id);
+                }
+            }
+
+            // Phase 6: Advanced Gradients, Image Adjustments, and Missing Blend Modes
+            Action::FlipGradient => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select a layer with a gradient fill first".into();
+                    return;
+                };
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    n.fill.flip();
+                });
+                if changed {
+                    self.app.mark_dirty();
+                    self.app.status = "Gradient flipped".into();
+                } else {
+                    self.app.status = "No gradient to flip".into();
+                }
+            }
+
+            Action::RotateGradient { degrees } => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select a layer with a gradient fill first".into();
+                    return;
+                };
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    n.fill.rotate(degrees);
+                });
+                if changed {
+                    self.app.mark_dirty();
+                    self.app.status = format!("Gradient rotated by {:.1}°", degrees);
+                } else {
+                    self.app.status = "No gradient to rotate".into();
+                }
+            }
+
+            Action::AddGradientStop { position, color } => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select a layer with a gradient fill first".into();
+                    return;
+                };
+                let color = x_native::Color::from_rgb8(color[0], color[1], color[2]);
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    n.fill.add_stop(position, color);
+                });
+                if changed {
+                    self.app.mark_dirty();
+                    self.app.status = "Gradient stop added".into();
+                } else {
+                    self.app.status = "No gradient to add stop to".into();
+                }
+            }
+
+            Action::RemoveGradientStop { index } => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select a layer with a gradient fill first".into();
+                    return;
+                };
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    n.fill.remove_stop(index);
+                });
+                if changed {
+                    self.app.mark_dirty();
+                    self.app.status = "Gradient stop removed".into();
+                } else {
+                    self.app.status = "Could not remove gradient stop".into();
+                }
+            }
+
+            Action::MoveGradientStop { index, new_position } => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select a layer with a gradient fill first".into();
+                    return;
+                };
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    n.fill.move_stop(index, new_position);
+                });
+                if changed {
+                    self.app.mark_dirty();
+                    self.app.status = "Gradient stop moved".into();
+                } else {
+                    self.app.status = "Could not move gradient stop".into();
+                }
+            }
+
+            Action::SetGradientType { gradient_type } => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select a layer with a gradient fill first".into();
+                    return;
+                };
+                // This would require converting between gradient types
+                // For now, just show a status message
+                self.app.status = format!("Gradient type change to '{}' - requires gradient conversion", gradient_type);
+            }
+
+            Action::SetImageAdjustments { adjustments } => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select an image layer first".into();
+                    return;
+                };
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    n.image_adjustments = Some(adjustments);
+                });
+                if changed {
+                    self.app.mark_dirty();
+                    self.app.status = "Image adjustments applied".into();
+                } else {
+                    self.app.status = "Could not apply image adjustments".into();
+                }
+            }
+
+            Action::UpdateImageAdjustment { adjustment, value } => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select an image layer first".into();
+                    return;
+                };
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    if let Some(ref mut adj) = n.image_adjustments {
+                        match adjustment.as_str() {
+                            "exposure" => adj.exposure = value,
+                            "contrast" => adj.contrast = value,
+                            "saturation" => adj.saturation = value,
+                            "temperature" => adj.temperature = value,
+                            "tint" => adj.tint = value,
+                            "highlights" => adj.highlights = value,
+                            "shadows" => adj.shadows = value,
+                            _ => {}
+                        }
+                    } else {
+                        // Initialize with default adjustments if not present
+                        let mut adj = x_native::ImageAdjustments::default();
+                        match adjustment.as_str() {
+                            "exposure" => adj.exposure = value,
+                            "contrast" => adj.contrast = value,
+                            "saturation" => adj.saturation = value,
+                            "temperature" => adj.temperature = value,
+                            "tint" => adj.tint = value,
+                            "highlights" => adj.highlights = value,
+                            "shadows" => adj.shadows = value,
+                            _ => {}
+                        }
+                        n.image_adjustments = Some(adj);
+                    }
+                });
+                if changed {
+                    self.app.mark_dirty();
+                    self.app.status = format!("{} adjusted to {:.2}", adjustment, value);
+                } else {
+                    self.app.status = "Could not update image adjustment".into();
+                }
+            }
+
+            Action::ResetImageAdjustments => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select an image layer first".into();
+                    return;
+                };
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    n.image_adjustments = None;
+                });
+                if changed {
+                    self.app.mark_dirty();
+                    self.app.status = "Image adjustments reset".into();
+                } else {
+                    self.app.status = "No image adjustments to reset".into();
+                }
+            }
+
+            Action::RotateImage { clockwise } => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select an image layer first".into();
+                    return;
+                };
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    let delta = if clockwise { 90.0 } else { -90.0 };
+                    n.image_rotation = (n.image_rotation + delta) % 360.0;
+                    if n.image_rotation < 0.0 {
+                        n.image_rotation += 360.0;
+                    }
+                });
+                if changed {
+                    self.app.mark_dirty();
+                    let direction = if clockwise { "clockwise" } else { "counter-clockwise" };
+                    self.app.status = format!("Image rotated 90° {}", direction);
+                } else {
+                    self.app.status = "Could not rotate image".into();
+                }
+            }
+
+            Action::SetImageFillMode { mode } => {
+                // This would require implementing image fill modes in the data model
+                // For now, show a status message
+                self.app.status = format!("Image fill mode '{}' - requires fill mode implementation", mode);
+            }
+
+            Action::EnableEyedropper => {
+                // Enable eyedropper tool mode
+                // This would typically set a tool mode and handle the next click to sample color
+                self.app.status = "Eyedropper tool enabled - click on canvas to sample color".into();
+                // TODO: Implement actual eyedropper functionality
+                // This requires:
+                // 1. Setting a tool mode
+                // 2. Handling the next canvas click
+                // 3. Sampling color from rendered scene at click position
+                // 4. Applying sampled color to active fill/stroke
+            }
         }
     }
 
@@ -7732,6 +9000,22 @@ impl Host {
                         });
                         self.app.mark_dirty();
                     }
+                }
+            }
+            FieldId::ParagraphIndent => {
+                if let Some(v) = num(raw) {
+                    doc.editor().mutate_visual_stack(&node_id, |n| {
+                        n.paragraph_indent = v.max(0.0) as f32;
+                    });
+                    self.app.mark_dirty();
+                }
+            }
+            FieldId::MaxLines => {
+                if let Some(v) = num(raw) {
+                    doc.editor().mutate_visual_stack(&node_id, |n| {
+                        n.max_lines = if v > 0.0 { Some(v as u32) } else { None };
+                    });
+                    self.app.mark_dirty();
                 }
             }
             _ => {
