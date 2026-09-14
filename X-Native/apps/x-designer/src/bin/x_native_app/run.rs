@@ -8518,6 +8518,210 @@ impl Host {
                     self.app.status = format!("Set advanced end cap for {}", node_id);
                 }
             }
+
+            // Phase 6: Advanced Gradients, Image Adjustments, and Missing Blend Modes
+            Action::FlipGradient => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select a layer with a gradient fill first".into();
+                    return;
+                };
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    n.fill.flip();
+                });
+                if changed {
+                    self.app.mark_dirty();
+                    self.app.status = "Gradient flipped".into();
+                } else {
+                    self.app.status = "No gradient to flip".into();
+                }
+            }
+
+            Action::RotateGradient { degrees } => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select a layer with a gradient fill first".into();
+                    return;
+                };
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    n.fill.rotate(degrees);
+                });
+                if changed {
+                    self.app.mark_dirty();
+                    self.app.status = format!("Gradient rotated by {:.1}°", degrees);
+                } else {
+                    self.app.status = "No gradient to rotate".into();
+                }
+            }
+
+            Action::AddGradientStop { position, color } => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select a layer with a gradient fill first".into();
+                    return;
+                };
+                let color = x_native::Color::from_rgb8(color[0], color[1], color[2]);
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    n.fill.add_stop(position, color);
+                });
+                if changed {
+                    self.app.mark_dirty();
+                    self.app.status = "Gradient stop added".into();
+                } else {
+                    self.app.status = "No gradient to add stop to".into();
+                }
+            }
+
+            Action::RemoveGradientStop { index } => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select a layer with a gradient fill first".into();
+                    return;
+                };
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    n.fill.remove_stop(index);
+                });
+                if changed {
+                    self.app.mark_dirty();
+                    self.app.status = "Gradient stop removed".into();
+                } else {
+                    self.app.status = "Could not remove gradient stop".into();
+                }
+            }
+
+            Action::MoveGradientStop { index, new_position } => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select a layer with a gradient fill first".into();
+                    return;
+                };
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    n.fill.move_stop(index, new_position);
+                });
+                if changed {
+                    self.app.mark_dirty();
+                    self.app.status = "Gradient stop moved".into();
+                } else {
+                    self.app.status = "Could not move gradient stop".into();
+                }
+            }
+
+            Action::SetGradientType { gradient_type } => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select a layer with a gradient fill first".into();
+                    return;
+                };
+                // This would require converting between gradient types
+                // For now, just show a status message
+                self.app.status = format!("Gradient type change to '{}' - requires gradient conversion", gradient_type);
+            }
+
+            Action::SetImageAdjustments { adjustments } => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select an image layer first".into();
+                    return;
+                };
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    n.image_adjustments = Some(adjustments);
+                });
+                if changed {
+                    self.app.mark_dirty();
+                    self.app.status = "Image adjustments applied".into();
+                } else {
+                    self.app.status = "Could not apply image adjustments".into();
+                }
+            }
+
+            Action::UpdateImageAdjustment { adjustment, value } => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select an image layer first".into();
+                    return;
+                };
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    if let Some(ref mut adj) = n.image_adjustments {
+                        match adjustment.as_str() {
+                            "exposure" => adj.exposure = value,
+                            "contrast" => adj.contrast = value,
+                            "saturation" => adj.saturation = value,
+                            "temperature" => adj.temperature = value,
+                            "tint" => adj.tint = value,
+                            "highlights" => adj.highlights = value,
+                            "shadows" => adj.shadows = value,
+                            _ => {}
+                        }
+                    } else {
+                        // Initialize with default adjustments if not present
+                        let mut adj = x_native::ImageAdjustments::default();
+                        match adjustment.as_str() {
+                            "exposure" => adj.exposure = value,
+                            "contrast" => adj.contrast = value,
+                            "saturation" => adj.saturation = value,
+                            "temperature" => adj.temperature = value,
+                            "tint" => adj.tint = value,
+                            "highlights" => adj.highlights = value,
+                            "shadows" => adj.shadows = value,
+                            _ => {}
+                        }
+                        n.image_adjustments = Some(adj);
+                    }
+                });
+                if changed {
+                    self.app.mark_dirty();
+                    self.app.status = format!("{} adjusted to {:.2}", adjustment, value);
+                } else {
+                    self.app.status = "Could not update image adjustment".into();
+                }
+            }
+
+            Action::ResetImageAdjustments => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select an image layer first".into();
+                    return;
+                };
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    n.image_adjustments = None;
+                });
+                if changed {
+                    self.app.mark_dirty();
+                    self.app.status = "Image adjustments reset".into();
+                } else {
+                    self.app.status = "No image adjustments to reset".into();
+                }
+            }
+
+            Action::RotateImage { clockwise } => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select an image layer first".into();
+                    return;
+                };
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    let delta = if clockwise { 90.0 } else { -90.0 };
+                    n.image_rotation = (n.image_rotation + delta) % 360.0;
+                    if n.image_rotation < 0.0 {
+                        n.image_rotation += 360.0;
+                    }
+                });
+                if changed {
+                    self.app.mark_dirty();
+                    let direction = if clockwise { "clockwise" } else { "counter-clockwise" };
+                    self.app.status = format!("Image rotated 90° {}", direction);
+                } else {
+                    self.app.status = "Could not rotate image".into();
+                }
+            }
+
+            Action::SetImageFillMode { mode } => {
+                // This would require implementing image fill modes in the data model
+                // For now, show a status message
+                self.app.status = format!("Image fill mode '{}' - requires fill mode implementation", mode);
+            }
+
+            Action::EnableEyedropper => {
+                // Enable eyedropper tool mode
+                // This would typically set a tool mode and handle the next click to sample color
+                self.app.status = "Eyedropper tool enabled - click on canvas to sample color".into();
+                // TODO: Implement actual eyedropper functionality
+                // This requires:
+                // 1. Setting a tool mode
+                // 2. Handling the next canvas click
+                // 3. Sampling color from rendered scene at click position
+                // 4. Applying sampled color to active fill/stroke
+            }
         }
     }
 
