@@ -122,6 +122,19 @@ are the crate versions in `Cargo.toml`, which still drift (see
   carried `MouseUp` twice (unreachable pattern, E0416); and a test had one
   closing paren too many. `cargo test --workspace` now reaches the new engine
   (10 host + 12 engine + 1 format suites).
+- The prototype player's own semantics, once those suites could run:
+  `Player::drag_to` answered "an `OnDrag` was found" rather than "the drag
+  fired", so an inert `Back` (empty history) swallowed the whole
+  press-drag-release cycle — it now keys on `FireEffect::fired()`, exactly
+  like `click` / `key` / `tick`, and the flow viewer's `flow_fire_trigger`
+  mirrors it. `Player::enter` reset the hover/drag state and the overlays but
+  not the navigation history, so a "while hovering" span abandoned by a
+  re-entry left its push on the stack and a later `Back` popped a screen the
+  player had already left; `enter` is a fresh session now, the way the host's
+  `flow_enter` (a fresh `FlowState`) always was. `leave_hover_span` /
+  `release_press_span` also took their span out of `self` before handing it to
+  `revert_span` — the double mutable borrow (E0499) that stopped the crate
+  compiling.
 - `cargo build --workspace` / `cargo test --workspace` failed before reaching a
   single test: the app crate held four errors nothing had ever compiled — a
   `match *i` on a `usize` (E0614), a `&mut self` call inside a borrow of
