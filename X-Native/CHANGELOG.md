@@ -5,6 +5,37 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-15 (Text Formatting)
+
+### Added
+- **Comprehensive text formatting properties (Figma Design parity).** 11 new
+  fields on `Node` matching Figma's typography system:
+  - **Text alignment.** Horizontal (`left` / `center` / `right` / `justified`)
+    and vertical (`top` / `middle` / `bottom`). Enums: `TextAlign`,
+    `TextAlignVertical`. Persisted as `"text_align":"center"` etc.
+  - **Text decoration.** `underline` and `strikethrough` via `TextDecoration`
+    enum. Persisted as `"text_decoration":"underline"`.
+  - **Text case transformation.** `original` / `upper` / `lower` / `title`
+    via `TextCase` enum. Non-destructive display transform (underlying text
+    unchanged). Persisted as `"text_case":"upper"`.
+  - **Text truncation.** `disabled` / `end` (with ellipsis) / `middle` via
+    `TextTruncation` enum, plus optional `max_lines: Option<usize>` to limit
+    visible lines. Persisted as `"text_truncation":"end"` and `"max_lines":3`.
+  - **Paragraph spacing.** `f64` value in pixels for inter-paragraph distance.
+    Persisted as `"paragraph_spacing":8.0`.
+  - **Paragraph indent.** `f64` value in pixels for first-line indent.
+    Persisted as `"paragraph_indent":16.0`.
+  - **Hanging punctuation.** `HangingPunctuation` struct with `quotes: bool`
+    and `lists: bool` to allow marks to hang outside the text box. Persisted
+    as `"hanging_punctuation":{"quotes":true,"lists":true}`.
+  - **List styles.** `none` / `bulleted` / `numbered` via `ListStyle` enum.
+    Persisted as `"list_style":"bulleted"`.
+  - **Wrap style.** `normal` / `break-word` via `WrapStyle` enum for
+    controlling line-breaking behavior. Persisted as `"wrap_style":"break-word"`.
+  All properties serialize only when non-default (backward compatible with
+  old `.x` files). Full implementation guide: `TEXT_FORMATTING_IMPLEMENTATION.md`.
+  Reference: [Figma text properties](https://help.figma.com/hc/en-us/articles/360039956634-Explore-text-properties).
+
 ## [Unreleased] — 2026-09-14 (Follow-up: Figma Design Feature Parity)
 
 ### Added
