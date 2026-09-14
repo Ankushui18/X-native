@@ -491,14 +491,19 @@ impl<'a> Player<'a> {
         if !relevant {
             return false;
         }
-        self.revert_span(self.hover_span.take())
+        // take the span out first: `revert_span` borrows `self` mutably, so it
+        // cannot share the call with the `Option::take` that reads the field
+        let span = self.hover_span.take();
+        self.revert_span(span)
     }
 
     /// Drop the press span on release, reverting its effect when the
     /// player still sits in the "while" result (wherever the pointer
     /// lifted). Returns whether anything reverted.
     fn release_press_span(&mut self) -> bool {
-        self.revert_span(self.press_span.take())
+        // same split as `leave_hover_span` (see above)
+        let span = self.press_span.take();
+        self.revert_span(span)
     }
 
     /// Node under `point` plus the subtree to search for its triggers:
