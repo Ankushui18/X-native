@@ -15,6 +15,10 @@ use std::collections::HashMap;
 /// baseline) originally written against scalar padding, and the per-side
 /// padding + cross_sizing model. Padding is `[left, right, top, bottom]`;
 /// main-axis start/end and cross-axis start/end are picked per direction.
+///
+/// CSS Flexbox parity (Figma Jul-2026): inside strokes included in layout,
+/// border-box fill-container distribution, auto-gap never overlaps, padding
+/// minimum enforced on fixed frames.
 pub fn apply_auto_layout(node: &mut Node, vars: &Variables) {
     let layout = match &node.kind {
         NodeKind::Frame { layout: Some(l) } => l.clone(),
@@ -34,14 +38,40 @@ pub fn apply_auto_layout(node: &mut Node, vars: &Variables) {
         })
         .unwrap_or(layout.padding);
 
+    // CSS Flexbox parity: inside strokes add to the effective padding when
+    // `stroke_include_in_layout` is true (the new default). Outside and
+    // center strokes never affect layout.
+    let inside_stroke = if layout.stroke_include_in_layout {
+        node.inside_stroke_width()
+    } else {
+        0.0
+    };
+    let eff_padding: Padding = [
+        padding[0] + inside_stroke, // left
+        padding[1] + inside_stroke, // right
+        padding[2] + inside_stroke, // top
+        padding[3] + inside_stroke, // bottom
+    ];
+
+    // CSS Flexbox parity: padding (incl. inside stroke) always gets the room
+    // it needs. A fixed-size frame can't be smaller than its padding total.
+    let min_w = eff_padding[0] + eff_padding[1];
+    let min_h = eff_padding[2] + eff_padding[3];
+    if node.w < min_w {
+        node.w = min_w;
+    }
+    if node.h < min_h {
+        node.h = min_h;
+    }
+
     if let Some(g) = &layout.grid {
         // CSS-grid mode (Figma Grid): the stack solver is bypassed; the
         // min/max clamp below still applies to HUG frames.
         crate::grid::apply_grid_layout(node, &layout, g);
     } else if layout.wrap == AutoLayoutWrap::Wrap {
-        layout_wrapped(node, &layout, gap, padding);
+        layout_wrapped(node, &layout, gap, eff_padding);
     } else {
-        layout_flow(node, &layout, gap, padding);
+        layout_flow(node, &layout, gap, eff_padding);
     }
 
     // Min/max constraints clamp a HUG frame's final extent (Figma: fixed
@@ -51,13 +81,20 @@ pub fn apply_auto_layout(node: &mut Node, vars: &Variables) {
             node.w = node.w.max(mn);
         }
         if let Some(mx) = layout.max_width {
-            node.w = node.w.min(mx);
+            node.w = node.w.max(min_w).min(mx);
         }
         if let Some(mn) = layout.min_height {
             node.h = node.h.max(mn);
         }
         if let Some(mx) = layout.max_height {
-            node.h = node.h.min(mx);
+            node.h = node.h.max(min_h).min(mx);
+        }
+        // Hug frames still respect the padding minimum
+        if node.w < min_w {
+            node.w = min_w;
+        }
+        if node.h < min_h {
+            node.h = min_h;
         }
     }
     node.dirty = false;
@@ -134,16 +171,35 @@ fn layout_flow(node: &mut Node, layout: &AutoLayout, gap: f64, pad: Padding) {
         let available = container_main - m0 - m1 - (n as f64 - 1.0) * gap;
         if available > content_main {
             // grow: distribute leftover among children with grow > 0.
+            // CSS Flexbox parity (Figma Jul-2026): border-box model —
+            // children with thicker inside strokes take more total space
+            // so their content areas match their siblings'.
             let grow_total: f64 = flow
                 .iter()
                 .map(|&i| node.children[i].constraints.grow)
                 .sum();
             if grow_total > 0.0 {
-                let leftover = available - content_main;
+                // Sum of inside strokes for grow children (each stroke
+                // counts on both sides: 2 * stroke_width).
+                let grow_stroke_total: f64 = flow
+                    .iter()
+                    .filter(|&&i| node.children[i].constraints.grow > 0.0)
+                    .map(|&i| 2.0 * node.children[i].inside_stroke_width())
+                    .sum();
+                // Total size of non-grow children (their sizes stay fixed).
+                let non_grow_total: f64 = (0..n)
+                    .filter(|&k| node.children[flow[k]].constraints.grow == 0.0)
+                    .map(|k| mains[k])
+                    .sum();
+                // Content pool: available space minus non-grow children
+                // minus grow children's stroke widths.
+                let content_pool = (available - non_grow_total - grow_stroke_total).max(0.0);
                 for k in 0..n {
                     let g = node.children[flow[k]].constraints.grow;
                     if g > 0.0 {
-                        mains[k] += leftover * g / grow_total;
+                        let child_stroke = 2.0 * node.children[flow[k]].inside_stroke_width();
+                        // Content share + own stroke = total allocation.
+                        mains[k] = content_pool * g / grow_total + child_stroke;
                     }
                 }
             }
@@ -357,6 +413,8 @@ fn layout_wrapped(node: &mut Node, layout: &AutoLayout, gap: f64, pad: Padding) 
         .collect();
     // Per-line flex-grow (Fixed frames): "fill container" fills the remaining
     // width of its own line, exactly like Figma's fill in wrap layouts.
+    // CSS Flexbox parity (Figma Jul-2026): border-box model — distribute
+    // by content area so children with thicker strokes get more total space.
     let mut final_main: Vec<f64> = mains.clone();
     if layout.sizing == Sizing::Fixed && layout.distribute == Distribute::Packed {
         for (ri, row) in rows.iter().enumerate() {
@@ -366,11 +424,23 @@ fn layout_wrapped(node: &mut Node, layout: &AutoLayout, gap: f64, pad: Padding) 
                 .sum();
             if grow_total > 0.0 {
                 let line_gaps = (row.len().saturating_sub(1)) as f64 * gap;
-                let leftover = (avail - row_items[ri] - line_gaps).max(0.0);
+                let line_avail = (avail - line_gaps).max(0.0);
+                let grow_stroke_total: f64 = row
+                    .iter()
+                    .filter(|&&i| node.children[flow[i]].constraints.grow > 0.0)
+                    .map(|&i| 2.0 * node.children[flow[i]].inside_stroke_width())
+                    .sum();
+                let non_grow_total: f64 = row
+                    .iter()
+                    .filter(|&&i| node.children[flow[i]].constraints.grow == 0.0)
+                    .map(|&i| mains[i])
+                    .sum();
+                let content_pool = (line_avail - non_grow_total - grow_stroke_total).max(0.0);
                 for &i in row.iter() {
                     let g = node.children[flow[i]].constraints.grow;
                     if g > 0.0 {
-                        final_main[i] += leftover * g / grow_total;
+                        let child_stroke = 2.0 * node.children[flow[i]].inside_stroke_width();
+                        final_main[i] = content_pool * g / grow_total + child_stroke;
                     }
                 }
             }

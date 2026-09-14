@@ -246,15 +246,33 @@ pub fn node_to_css(node: &Node, vars: &Variables) -> String {
             css.push_str(&format!("  border-radius: {radius}px;\n"));
         }
     }
+    // CSS Flexbox parity (Figma Jul-2026): inside strokes → CSS `border`
+    // (included in layout by default), outside/center strokes → CSS
+    // `outline` (excluded from layout, like outline vs border in CSS).
     if node.stroke.width > 0.0 {
+        let align = node
+            .active_strokes()
+            .first()
+            .map(|l| l.options.align)
+            .unwrap_or(StrokeAlign::Center);
+        let css_prop = match align {
+            StrokeAlign::Inside => "border",
+            _ => "outline",
+        };
+        // Inside strokes participate in the border-box model
+        if align == StrokeAlign::Inside {
+            css.push_str("  box-sizing: border-box;\n");
+        }
         match node.stroke.solid_color() {
             Some(c) if c.components[3] > 0.0 => css.push_str(&format!(
-                "  border: {}px solid {};\n",
+                "  {}: {}px solid {};\n",
+                css_prop,
                 node.stroke.width,
                 x_core::color_to_hex(c)
             )),
             _ if node.stroke.solid_color().is_none() => css.push_str(&format!(
-                "  border: {}px solid; /* gradient stroke */\n",
+                "  {}: {}px solid; /* gradient stroke */\n",
+                css_prop,
                 node.stroke.width
             )),
             _ => {}
@@ -327,9 +345,20 @@ pub fn node_to_css(node: &Node, vars: &Variables) -> String {
             node.transform.rotation.to_degrees()
         ));
     }
+    // CSS Flexbox parity: inside strokes → border, outside/center → outline
     if node.stroke.width > 0.0 {
+        let align = node
+            .active_strokes()
+            .first()
+            .map(|l| l.options.align)
+            .unwrap_or(StrokeAlign::Center);
+        let css_prop = match align {
+            StrokeAlign::Inside => "border",
+            _ => "outline",
+        };
         css.push_str(&format!(
-            "  border: {:.0}px solid {};\n",
+            "  {}: {:.0}px solid {};\n",
+            css_prop,
             node.stroke.width,
             x_core::color_to_hex(node.stroke.solid_color().unwrap_or(peniko::Color::BLACK))
         ));

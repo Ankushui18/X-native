@@ -440,3 +440,250 @@ fn independent_cross_axis_sizing() {
         "hug main sizes w, fixed cross keeps h"
     );
 }
+
+// --------------------------------------------------- CSS Flexbox parity (Figma Jul-2026)
+
+/// Inside strokes add to effective padding — hug frame accounts for stroke
+/// width in its minimum size.
+#[test]
+fn inside_stroke_adds_to_hug_minimum() {
+    // Horizontal hug frame, padding 5 each side, inside stroke 3px
+    // Children: a 30x20, b 20x20, gap 10
+    let mut row = Node::frame("row", 0.0, 0.0)
+        .auto_layout(AutoLayout {
+            direction: LayoutDirection::Horizontal,
+            gap: 10.0,
+            padding: [5.0; 4],
+            sizing: Sizing::Hug,
+            stroke_include_in_layout: true,
+            ..Default::default()
+        })
+        .child(Node::rect("a", 0.0, 0.0, 30.0, 20.0, Color::WHITE))
+        .child(Node::rect("b", 0.0, 0.0, 20.0, 20.0, Color::WHITE));
+    // Give the frame an inside stroke of 3px
+    row.stroke = x_core::Stroke::solid(Color::BLACK, 3.0);
+    row.stroke_layers = vec![x_core::StrokeLayer {
+        stroke: x_core::Stroke::solid(Color::BLACK, 3.0),
+        opacity: 1.0,
+        visible: true,
+        blend: x_core::BlendKind::Normal,
+        options: x_core::StrokeOptions {
+            align: x_core::StrokeAlign::Inside,
+            ..Default::default()
+        },
+    }];
+    row.visual_stacks_materialized = true;
+    let mut page = Node::frame("page", 500.0, 500.0).child(row);
+    apply_layout_recursive(&mut page, &Variables::default());
+
+    let row = find(&page, "row").unwrap();
+    // Effective padding = 5 + 3 = 8 each side
+    // Hug width = 8 + 30 + 10 + 20 + 8 = 76
+    // Hug height = max(20, 20) + 8 + 8 = 36
+    assert_eq!(
+        (row.w, row.h),
+        (76.0, 36.0),
+        "inside stroke adds to effective padding in hug sizing"
+    );
+}
+
+/// Padding minimum enforced on fixed frames: frame can't be smaller than
+/// its padding total (CSS Flexbox parity).
+#[test]
+fn padding_minimum_enforced_on_fixed_frame() {
+    // Fixed frame 50x50, padding 30 each side → minimum = 60
+    let mut row = Node::frame("row", 50.0, 50.0)
+        .auto_layout(AutoLayout {
+            direction: LayoutDirection::Horizontal,
+            gap: 0.0,
+            padding: [30.0; 4],
+            sizing: Sizing::Fixed,
+            stroke_include_in_layout: true,
+            ..Default::default()
+        })
+        .child(Node::rect("a", 0.0, 0.0, 10.0, 10.0, Color::WHITE));
+    let mut page = Node::frame("page", 500.0, 500.0).child(row);
+    apply_layout_recursive(&mut page, &Variables::default());
+
+    let row = find(&page, "row").unwrap();
+    // Frame clamped up to min_w = 30 + 30 = 60, min_h = 30 + 30 = 60
+    assert_eq!(
+        (row.w, row.h),
+        (60.0, 60.0),
+        "fixed frame is clamped up to padding minimum"
+    );
+}
+
+/// Border-box fill-container: children with different stroke widths get
+/// different total allocations so their content areas match.
+#[test]
+fn border_box_fill_container_distribution() {
+    // Fixed 300px frame, 2 fill children with different stroke widths
+    let mut child_a = Node::rect("a", 0.0, 0.0, 50.0, 20.0, Color::WHITE);
+    child_a.constraints.grow = 1.0;
+    // Child A: inside stroke 4px
+    child_a.stroke = x_core::Stroke::solid(Color::BLACK, 4.0);
+    child_a.stroke_layers = vec![x_core::StrokeLayer {
+        stroke: x_core::Stroke::solid(Color::BLACK, 4.0),
+        opacity: 1.0,
+        visible: true,
+        blend: x_core::BlendKind::Normal,
+        options: x_core::StrokeOptions {
+            align: x_core::StrokeAlign::Inside,
+            ..Default::default()
+        },
+    }];
+    child_a.visual_stacks_materialized = true;
+
+    let mut child_b = Node::rect("b", 0.0, 0.0, 50.0, 20.0, Color::WHITE);
+    child_b.constraints.grow = 1.0;
+    // Child B: inside stroke 0px (no stroke)
+    let mut row = Node::frame("row", 300.0, 40.0)
+        .auto_layout(AutoLayout {
+            direction: LayoutDirection::Horizontal,
+            gap: 0.0,
+            padding: [0.0; 4],
+            sizing: Sizing::Fixed,
+            stroke_include_in_layout: true,
+            ..Default::default()
+        })
+        .child(child_a)
+        .child(child_b);
+    let mut page = Node::frame("page", 500.0, 500.0).child(row);
+    apply_layout_recursive(&mut page, &Variables::default());
+
+    let a = find(&page, "a").unwrap();
+    let b = find(&page, "b").unwrap();
+    // Available = 300. Grow stroke total = 2*4 + 2*0 = 8.
+    // Content pool = 300 - 8 = 292. Each gets 146 content.
+    // A total = 146 + 2*4 = 154, B total = 146 + 0 = 146.
+    // Content A = 154 - 8 = 146, Content B = 146 - 0 = 146. Equal! ✓
+    assert!(
+        (a.w - 154.0).abs() < 1e-6,
+        "A gets stroke-adjusted total: {:?}",
+        a.w
+    );
+    assert!(
+        (b.w - 146.0).abs() < 1e-6,
+        "B gets content-equal total: {:?}",
+        b.w
+    );
+    // Content areas should be equal
+    let content_a = a.w - 2.0 * 4.0; // A has 4px stroke on each side
+    let content_b = b.w - 0.0;
+    assert!(
+        (content_a - content_b).abs() < 1e-6,
+        "content areas are equal: {} vs {}",
+        content_a,
+        content_b
+    );
+}
+
+/// Outside/center strokes do NOT add to effective padding.
+#[test]
+fn outside_stroke_does_not_affect_layout() {
+    // Horizontal hug frame, padding 5 each side, outside stroke 10px
+    let mut row = Node::frame("row", 0.0, 0.0)
+        .auto_layout(AutoLayout {
+            direction: LayoutDirection::Horizontal,
+            gap: 0.0,
+            padding: [5.0; 4],
+            sizing: Sizing::Hug,
+            stroke_include_in_layout: true,
+            ..Default::default()
+        })
+        .child(Node::rect("a", 0.0, 0.0, 30.0, 20.0, Color::WHITE));
+    // Outside stroke — should NOT affect layout
+    row.stroke = x_core::Stroke::solid(Color::BLACK, 10.0);
+    row.stroke_layers = vec![x_core::StrokeLayer {
+        stroke: x_core::Stroke::solid(Color::BLACK, 10.0),
+        opacity: 1.0,
+        visible: true,
+        blend: x_core::BlendKind::Normal,
+        options: x_core::StrokeOptions {
+            align: x_core::StrokeAlign::Outside,
+            ..Default::default()
+        },
+    }];
+    row.visual_stacks_materialized = true;
+    let mut page = Node::frame("page", 500.0, 500.0).child(row);
+    apply_layout_recursive(&mut page, &Variables::default());
+
+    let row = find(&page, "row").unwrap();
+    // Outside stroke does NOT add to padding
+    // Hug width = 5 + 30 + 5 = 40 (no stroke contribution)
+    assert_eq!(
+        (row.w, row.h),
+        (40.0, 30.0),
+        "outside stroke does not add to effective padding"
+    );
+}
+
+/// stroke_include_in_layout=false disables stroke contribution.
+#[test]
+fn stroke_include_false_disables_stroke_in_layout() {
+    let mut row = Node::frame("row", 0.0, 0.0)
+        .auto_layout(AutoLayout {
+            direction: LayoutDirection::Horizontal,
+            gap: 0.0,
+            padding: [5.0; 4],
+            sizing: Sizing::Hug,
+            stroke_include_in_layout: false, // disabled
+            ..Default::default()
+        })
+        .child(Node::rect("a", 0.0, 0.0, 30.0, 20.0, Color::WHITE));
+    // Inside stroke, but disabled via flag
+    row.stroke = x_core::Stroke::solid(Color::BLACK, 8.0);
+    row.stroke_layers = vec![x_core::StrokeLayer {
+        stroke: x_core::Stroke::solid(Color::BLACK, 8.0),
+        opacity: 1.0,
+        visible: true,
+        blend: x_core::BlendKind::Normal,
+        options: x_core::StrokeOptions {
+            align: x_core::StrokeAlign::Inside,
+            ..Default::default()
+        },
+    }];
+    row.visual_stacks_materialized = true;
+    let mut page = Node::frame("page", 500.0, 500.0).child(row);
+    apply_layout_recursive(&mut page, &Variables::default());
+
+    let row = find(&page, "row").unwrap();
+    // Stroke excluded: width = 5 + 30 + 5 = 40
+    assert_eq!(
+        (row.w, row.h),
+        (40.0, 30.0),
+        "stroke_include_in_layout=false ignores inside stroke"
+    );
+}
+
+/// Auto-gap stacks: gap never goes below 0 (no overlap).
+#[test]
+fn auto_gap_no_overlap_when_children_exceed_container() {
+    // Fixed 60px frame, 3 children of 30px each with Between distribution
+    // Total content = 90, container = 60, leftover would be -30 → clamped to 0
+    let row = Node::frame("row", 60.0, 40.0)
+        .auto_layout(AutoLayout {
+            direction: LayoutDirection::Horizontal,
+            gap: 0.0,
+            padding: [0.0; 4],
+            sizing: Sizing::Fixed,
+            distribute: x_core::Distribute::Between,
+            stroke_include_in_layout: true,
+            ..Default::default()
+        })
+        .child(Node::rect("a", 0.0, 0.0, 30.0, 20.0, Color::WHITE))
+        .child(Node::rect("b", 0.0, 0.0, 30.0, 20.0, Color::WHITE))
+        .child(Node::rect("c", 0.0, 0.0, 30.0, 20.0, Color::WHITE));
+    let mut page = Node::frame("page", 500.0, 500.0).child(row);
+    apply_layout_recursive(&mut page, &Variables::default());
+
+    let a = find(&page, "a").unwrap();
+    let b = find(&page, "b").unwrap();
+    let c = find(&page, "c").unwrap();
+    // With leftover = 0, gap = 0 (no negative gap → no overlap)
+    // Children stack from left: a at 0, b at 30, c at 60
+    assert_eq!(a.transform.x, 0.0);
+    assert_eq!(b.transform.x, 30.0);
+    assert_eq!(c.transform.x, 60.0, "children don't overlap with auto-gap");
+}

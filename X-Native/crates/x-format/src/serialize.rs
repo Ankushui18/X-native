@@ -431,6 +431,14 @@ fn layout_extras(l: &AutoLayout) -> String {
     if l.resize_on_wrap {
         s.push_str(",\"resize_on_wrap\":true");
     }
+    // CSS Flexbox parity fields — only serialize when non-default to keep
+    // old documents byte-stable (default: true / LastOnTop).
+    if !l.stroke_include_in_layout {
+        s.push_str(",\"stroke_include_in_layout\":false");
+    }
+    if l.canvas_stacking != CanvasStacking::default() {
+        s.push_str(&format!(",\"canvas_stacking\":\"{}\"", l.canvas_stacking.to_str()));
+    }
     s
 }
 

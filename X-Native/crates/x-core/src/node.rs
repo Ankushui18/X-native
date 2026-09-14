@@ -936,6 +936,18 @@ impl Node {
                 .collect()
         }
     }
+    /// CSS Flexbox parity (Figma Jul-2026): the effective inside-stroke
+    /// width for layout purposes. Returns the maximum width among visible
+    /// inside-aligned stroke layers (inside strokes reduce the content
+    /// area like CSS `border` in border-box model). Outside and center
+    /// strokes are never included — they behave like CSS `outline`.
+    pub fn inside_stroke_width(&self) -> f64 {
+        self.active_strokes()
+            .iter()
+            .filter(|l| l.options.align == StrokeAlign::Inside)
+            .map(|l| l.stroke.width)
+            .fold(0.0f64, f64::max)
+    }
     pub fn active_effects(&self) -> Vec<EffectLayer> {
         if !self.visual_stacks_materialized {
             self.effects.iter().cloned().map(EffectLayer::new).collect()

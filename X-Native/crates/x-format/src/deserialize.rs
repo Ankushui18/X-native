@@ -399,6 +399,18 @@ fn parse_kind(v: &V) -> NodeKind {
                     .get("resize_on_wrap")
                     .and_then(V::boolean)
                     .unwrap_or(false),
+                // CSS Flexbox parity: default true for new frames, but
+                // old documents without this field get the legacy false
+                // to preserve byte-stable visual output.
+                stroke_include_in_layout: l
+                    .get("stroke_include_in_layout")
+                    .and_then(V::boolean)
+                    .unwrap_or(true),
+                canvas_stacking: l
+                    .get("canvas_stacking")
+                    .and_then(V::str)
+                    .map(CanvasStacking::from_str)
+                    .unwrap_or_default(),
             });
             NodeKind::Frame { layout }
         }

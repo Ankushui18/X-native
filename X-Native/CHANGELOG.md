@@ -5,6 +5,41 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-14
+
+### Added
+- **CSS Flexbox parity (Figma Jul-2026 auto-layout update).** The auto-layout
+  solver now matches the updated Figma behavior where inside strokes, padding
+  minimums, and border-box fill-container distribution work like CSS flexbox
+  out of the box:
+  - **Inside strokes included in layout.** A frame's inside stroke width adds
+    to its effective padding — hug frames grow to include it, fixed frames
+    clamp to at least their padding + stroke total. Outside and center strokes
+    never affect layout (they behave like CSS `outline`).
+  - **Padding minimum enforced.** A frame can no longer be sized smaller than
+    its padding total (matching CSS `border-box` where padding always gets its
+    room).
+  - **Border-box fill-container distribution.** Children set to fill container
+    share the available content area (not total width), so a child with a
+    thicker inside stroke gets proportionally more total space, keeping content
+    areas equal across siblings.
+  - **Auto-gap stacks never overlap.** Gap in auto-spacing (Between/Around/
+    Evenly) stacks clamps at 0 — children collapse to the start instead of
+    overlapping when they don't fit.
+  - **Canvas stacking order.** New `CanvasStacking` enum (`LastOnTop` /
+    `FirstOnTop`) on `AutoLayout` controls paint order in negative-gap
+    (overlapping) stacks, matching Figma's canvas stacking setting.
+  - **Stroke-aware dev-mode CSS.** Inside strokes emit `border` with
+    `box-sizing: border-box`; outside/center strokes emit `outline`.
+
+### Changed
+- `AutoLayout` now carries `stroke_include_in_layout: bool` (default `true`)
+  and `canvas_stacking: CanvasStacking` (default `LastOnTop`). The manual
+  `Default` impl replaces the derived one to set `stroke_include_in_layout`
+  to `true` (matching Figma's new-frame default).
+- `Node` gains `inside_stroke_width()` — returns the maximum width among
+  visible inside-aligned stroke layers, for layout calculations.
+
 ## [Unreleased] — 2026-09-12
 
 ### Added
