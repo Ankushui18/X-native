@@ -12,7 +12,8 @@
 /// pointer-down, and the player reverts its navigate/overlay effect on
 /// release); `MouseUp` fires once on release with no revert (pair it with
 /// a press that opens a menu to replicate drop-down navigation).
-#[derive(Debug, Clone, PartialEq, Eq)]
+// No `Eq`: `WhenVideoHits` carries an f32 time, and f32 is only `PartialEq`.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Trigger {
     OnClick,
     OnHover,
