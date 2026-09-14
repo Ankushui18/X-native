@@ -1066,7 +1066,14 @@ fn lower(
                 .get("fs")
                 .and_then(|v| v.parse::<f64>().ok())
                 .filter(|v| *v > 0.0);
-            let fs = fs_binding.unwrap_or(node.h * 0.72);
+            // Variable-bound typography: a `fontsize` token outranks the
+            // literal `fs` binding, exactly as `radius`/`opacity`/`w`/`h`
+            // tokens outrank theirs. `Node::bound_number` has documented
+            // "fontsize" as a supported key since the variables work, and
+            // x-render's `variable_bindings` suite asserts it resolves —
+            // this is the line that makes that true on the canvas rather
+            // than only inside the helper.
+            let fs = node.bound_number("fontsize", vars, fs_binding.unwrap_or(node.h * 0.72));
             let typo_num = |k: &str| node.bindings.get(k).and_then(|v| v.parse::<f64>().ok());
             // word/paragraph spacing + baseline shift ride the node like ls/lh
             let ws = typo_num("ws").unwrap_or(0.0);
@@ -1075,17 +1082,30 @@ fn lower(
             let small_caps = node.bindings.get("tc").map(String::as_str) == Some("sc");
             let opsz = typo_num("opsz").unwrap_or(0.0) as f32;
             let wdth = typo_num("wdth").unwrap_or(0.0) as f32;
-            let ls = node
-                .bindings
-                .get("ls")
-                .and_then(|v| v.parse::<f64>().ok())
-                .unwrap_or(0.0);
+            let ls = node.bound_number(
+                "letterspacing",
+                vars,
+                node.bindings
+                    .get("ls")
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .unwrap_or(0.0),
+            );
             let lh = node
                 .bindings
                 .get("lh")
                 .and_then(|v| v.parse::<f64>().ok())
                 .unwrap_or(1.2);
-            let (lh_mode, lh_value) = node.lh_mode_value();
+            // A `lineheight` token is a px line box — the same meaning as the
+            // node's own "px" mode — so it resolves into (mode 1, px) and
+            // outranks whatever literal mode the node carries.
+            let (lh_mode, lh_value) = match node
+                .bindings
+                .get("lineheight")
+                .and_then(|name| vars.numbers.get(name))
+            {
+                Some(px) if *px > 0.0 => (1, *px),
+                _ => node.lh_mode_value(),
+            };
             let fills = node.active_fills();
             let text_blur = node
                 .active_effects()

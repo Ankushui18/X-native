@@ -596,6 +596,89 @@ mod variable_bindings {
         // missing variable -> fallback
         assert_eq!(n.bound_number("fontsize", &vars, 16.0), 16.0);
     }
+
+    /// The three typography tokens Figma lets you bind — font size, line
+    /// height, letter spacing — have to reach the render tree, not just the
+    /// `bound_number` helper. Before this, "fontsize" was documented on
+    /// `Node::bind` and asserted in the test above while every sink ignored
+    /// it, so binding a type scale to a variable changed nothing on canvas.
+    #[test]
+    fn typography_tokens_reach_the_render_tree() {
+        let mut vars = Variables::default();
+        vars.numbers.insert("type-scale-lg".into(), 40.0);
+        vars.numbers.insert("leading".into(), 48.0);
+        vars.numbers.insert("tracking".into(), 2.0);
+        let d = Node::frame("page", 400.0, 200.0).child(
+            Node::text("t", 0.0, 0.0, 200.0, 20.0, "hello")
+                .bind("fontsize", "type-scale-lg")
+                .bind("lineheight", "leading")
+                .bind("letterspacing", "tracking"),
+        );
+        // the literal bindings a style/inspector would have written
+        let mut literal = d.clone();
+        {
+            let t = &mut literal.children[0];
+            t.bindings.insert("fs".into(), "12".into());
+            t.bindings.insert("ls".into(), "0".into());
+            t.bindings.insert("lhm".into(), "px".into());
+            t.bindings.insert("lhpx".into(), "14".into());
+        }
+        let glyphs = |root: &Node| {
+            build_render_tree(root, &vars)
+                .commands
+                .iter()
+                .find_map(|c| match c {
+                    RenderCommand::Glyphs {
+                        text,
+                        size,
+                        letter_spacing,
+                        lh_mode,
+                        lh_value,
+                        ..
+                    } if text == "hello" => Some((*size, *letter_spacing, *lh_mode, *lh_value)),
+                    _ => None,
+                })
+                .expect("the text node renders")
+        };
+        let (size, ls, mode, value) = glyphs(&literal);
+        assert_eq!(size, 40.0, "the fontsize token outranks the literal fs");
+        assert_eq!(ls, 2.0, "the letterspacing token outranks the literal ls");
+        assert_eq!(
+            (mode, value),
+            (1, 48.0),
+            "the lineheight token is a px line box (mode 1)"
+        );
+        // a token that is missing from the table falls back to the literal,
+        // so a renamed variable degrades instead of collapsing the type
+        let mut unresolved = literal.clone();
+        unresolved.children[0]
+            .bindings
+            .insert("fontsize".into(), "no-such-token".into());
+        assert_eq!(glyphs(&unresolved).0, 12.0);
+    }
+
+    /// The vello path resolves the same tokens: `build_rich_spans_px` is where
+    /// per-run letter spacing is decided.
+    #[test]
+    fn letterspacing_token_reaches_the_shaped_spans() {
+        let mut fm = x_text::FontManager::new();
+        if fm.load_system_fonts() == 0 {
+            return;
+        } // headless env w/o fonts: skip
+        let f = fm.default_font().unwrap();
+        let mut vars = Variables::default();
+        vars.numbers.insert("tracking-wide".into(), 3.0);
+        let mut d = Node::text("t", 0.0, 0.0, 400.0, 24.0, "abc");
+        d.bindings.insert("ls".into(), "0.5".into());
+        d.bindings
+            .insert("letterspacing".into(), "tracking-wide".into());
+        let spans = build_rich_spans_px(&d, "abc", Color::BLACK, &fm, f, d.h * 0.72, &vars);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(
+            spans[0].letter_spacing, 3.0,
+            "the token outranks the literal ls"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -723,7 +806,7 @@ mod typography_integration {
             ..Default::default()
         }];
         let base = Color::BLACK;
-        let spans = build_rich_spans_px(&d, "abcdef", base, &fm, f, d.h * 0.72);
+        let spans = build_rich_spans_px(&d, "abcdef", base, &fm, f, d.h * 0.72, &Variables::default());
         // three segments: "a" (base), "bcd" (styled), "ef" (base)
         assert_eq!(spans.len(), 3);
         assert_eq!(spans[0].text, "a");

@@ -14,12 +14,11 @@ pub enum LegacyStyle {
     Paint {
         fill: Paint,
     },
-    Text {
-        font: String,
-        size: f64,
-        letter_spacing: f64,
-        line_height: f64,
-    },
+    /// A text style. Carries `TextStyleData` — the same property set Figma's
+    /// text styles carry — so a style can hold line height, letter spacing,
+    /// paragraph spacing/indent, case, decoration, lists and wrap instead of
+    /// the four numbers this variant used to squeeze into.
+    Text(TextStyleData),
     Effect {
         effects: Vec<Effect>,
     },
@@ -29,7 +28,7 @@ impl LegacyStyle {
     pub fn kind_label(&self) -> &'static str {
         match self {
             LegacyStyle::Paint { .. } => "PAINT",
-            LegacyStyle::Text { .. } => "TEXT",
+            LegacyStyle::Text(..) => "TEXT",
             LegacyStyle::Effect { .. } => "FX",
         }
     }
@@ -46,7 +45,7 @@ pub const STYLE_BINDING_KEYS: [(&str, &str); 3] = [
 pub fn binding_key_for(s: &LegacyStyle) -> &'static str {
     match s {
         LegacyStyle::Paint { .. } => "style:paint",
-        LegacyStyle::Text { .. } => "style:text",
+        LegacyStyle::Text(..) => "style:text",
         LegacyStyle::Effect { .. } => "style:fx",
     }
 }
@@ -139,13 +138,13 @@ pub fn apply_style(n: &mut Node, s: &LegacyStyle) {
                 }
             }
         }
-        LegacyStyle::Text { font, size, .. } => {
-            if !font.is_empty() {
-                n.bindings.insert("font".into(), font.clone());
-            }
-            if *size > 0.0 {
-                n.h = *size;
-            }
+        LegacyStyle::Text(data) => {
+            // The whole property set, through the bindings every renderer
+            // reads (fs/fw/font/ls/lhm/lhpx/lhp/ps/pi/tc/tw) plus the typed
+            // fields the .x format and the inspector read. The old applier
+            // wrote only `font` and stuffed the size into `n.h`, which the
+            // px-contract renderers ignore as soon as an `fs` binding exists.
+            data.apply_to_node(n);
         }
         LegacyStyle::Effect { effects } => {
             n.effects = effects.clone();
@@ -283,6 +282,86 @@ impl Document {
     pub fn page(&self, id: &str) -> Option<&Node> {
         self.pages.iter().find(|p| p.id == id)
     }
+    // -------------------------------------------------- text style registry
+    //
+    // The registry is `styles`; these are the create / update / detach /
+    // propagate operations Figma's "Create and apply text styles" describes.
+    // A node stays LINKED through its `style:text` binding (see `bind_style`),
+    // so updating a definition and re-running `resolve_styles` over the page
+    // trees moves every consumer — "edits to a style update all the layers
+    // using it".
+
+    /// Names of every text style, sorted: the picker's list order.
+    pub fn text_style_names(&self) -> Vec<&str> {
+        let mut v: Vec<&str> = self
+            .styles
+            .iter()
+            .filter(|(_, s)| matches!(s, LegacyStyle::Text(_)))
+            .map(|(k, _)| k.as_str())
+            .collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// The definition behind a text style name.
+    pub fn text_style(&self, name: &str) -> Option<&TextStyleData> {
+        match self.styles.get(name)? {
+            LegacyStyle::Text(data) => Some(data),
+            _ => None,
+        }
+    }
+
+    /// Create a text style. Names are unique across ALL style kinds (as in
+    /// Figma), so an existing paint or effect style blocks the name too.
+    pub fn add_text_style(&mut self, name: &str, data: TextStyleData) -> Result<(), String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("a text style needs a name".into());
+        }
+        if self.styles.contains_key(name) {
+            return Err(format!("style '{name}' already exists"));
+        }
+        self.styles
+            .insert(name.to_string(), LegacyStyle::Text(data));
+        Ok(())
+    }
+
+    /// Replace a text style's definition. Callers follow with `resolve_styles`
+    /// on each page tree so the consumers pick the change up. False when the
+    /// name is missing or holds a different kind of style.
+    pub fn update_text_style(&mut self, name: &str, data: TextStyleData) -> bool {
+        match self.styles.get_mut(name) {
+            Some(slot @ LegacyStyle::Text(_)) => {
+                *slot = LegacyStyle::Text(data);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Delete a text style definition. Linked layers keep their values (the
+    /// link simply stops resolving); `detach_style` clears it explicitly.
+    /// Another kind of style under that name is left alone.
+    pub fn remove_text_style(&mut self, name: &str) -> Option<TextStyleData> {
+        match self.styles.remove(name)? {
+            LegacyStyle::Text(data) => Some(data),
+            other => {
+                self.styles.insert(name.to_string(), other);
+                None
+            }
+        }
+    }
+
+    /// How many nodes under `root` are linked to this text style — the usage
+    /// count a style row shows before you delete or rename it.
+    pub fn text_style_usage(&self, root: &Node, name: &str) -> usize {
+        fn walk(n: &Node, name: &str) -> usize {
+            let linked = n.bindings.get("style:text").map(String::as_str) == Some(name);
+            usize::from(linked) + n.children.iter().map(|c| walk(c, name)).sum::<usize>()
+        }
+        walk(root, name)
+    }
+
     pub fn page_mut(&mut self, id: &str) -> Option<&mut Node> {
         self.pages.iter_mut().find(|p| p.id == id)
     }
@@ -304,20 +383,29 @@ mod style_tests {
     }
 
     #[test]
-    fn apply_text_style_sets_font_binding_and_size() {
+    fn apply_text_style_writes_the_bindings_renderers_read() {
         let mut n = Node::text("t", 0.0, 0.0, 100.0, 20.0, "hi");
-        let s = LegacyStyle::Text {
-            font: "Lobster 400".into(),
-            size: 32.0,
-            letter_spacing: 0.0,
-            line_height: 1.2,
+        let data = TextStyleData {
+            font_family: "Lobster".into(),
+            font_weight: 700,
+            font_size: 32.0,
+            letter_spacing: 0.5,
+            line_height: LineHeight::Percent(140.0),
+            ..Default::default()
         };
-        apply_style(&mut n, &s);
-        assert_eq!(
-            n.bindings.get("font").map(String::as_str),
-            Some("Lobster 400")
-        );
-        assert_eq!(n.h, 32.0);
+        apply_style(&mut n, &LegacyStyle::Text(data));
+        let b = |k: &str| n.bindings.get(k).map(String::as_str);
+        assert_eq!(b("font"), Some("Lobster"));
+        assert_eq!(b("fw"), Some("700"));
+        // the px contract: an `fs` binding IS the glyph size, no 0.72 factor
+        assert_eq!(b("fs"), Some("32"));
+        assert_eq!(b("ls"), Some("0.5"));
+        assert_eq!(b("lhm"), Some("pct"));
+        assert_eq!(b("lhp"), Some("140"));
+        // the legacy "size lives in n.h" carrier is no longer what a style
+        // writes; the box stays where it was until the app re-fits it
+        assert_eq!(n.h, 20.0);
+        assert!(n.dirty);
     }
 
     #[test]
@@ -332,12 +420,12 @@ mod style_tests {
         );
         styles.insert(
             "H1".into(),
-            LegacyStyle::Text {
-                font: "Inter 400".into(),
-                size: 20.0,
-                letter_spacing: 0.0,
-                line_height: 1.2,
-            },
+            LegacyStyle::Text(TextStyleData {
+                font_family: "Inter".into(),
+                font_weight: 400,
+                font_size: 20.0,
+                ..Default::default()
+            }),
         );
         let mut root = Node::frame("page", 800.0, 600.0)
             .child(Node::rect("a", 0.0, 0.0, 50.0, 50.0, Color::BLACK))
@@ -380,12 +468,13 @@ mod style_tests {
         );
         styles.insert(
             "H1".into(),
-            LegacyStyle::Text {
-                font: "Lobster 700".into(),
-                size: 44.0,
-                letter_spacing: 0.0,
-                line_height: 1.2,
-            },
+            LegacyStyle::Text(TextStyleData {
+                font_family: "Lobster".into(),
+                font_weight: 700,
+                font_size: 44.0,
+                letter_spacing: 1.5,
+                ..Default::default()
+            }),
         );
         let updated = resolve_styles(&mut root, &styles);
         assert_eq!(updated, 3, "all three consumers re-resolved");
@@ -401,9 +490,13 @@ mod style_tests {
         let t = find_mut(&mut root, "t").unwrap();
         assert_eq!(
             t.bindings.get("font").map(String::as_str),
-            Some("Lobster 700")
+            Some("Lobster")
         );
-        assert_eq!(t.h, 44.0);
+        assert_eq!(t.bindings.get("fw").map(String::as_str), Some("700"));
+        assert_eq!(t.bindings.get("fs").map(String::as_str), Some("44"));
+        // letter spacing propagated too — the property the old four-field
+        // variant carried but the applier dropped on the floor
+        assert_eq!(t.bindings.get("ls").map(String::as_str), Some("1.5"));
         // unbinding stops updates
         find_mut(&mut root, "a")
             .unwrap()

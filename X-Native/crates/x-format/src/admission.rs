@@ -462,12 +462,18 @@ pub fn validate_admission(doc: &Document) -> Result<(), String> {
     for style in doc.styles.values() {
         match style {
             LegacyStyle::Paint { fill } => paint(fill)?,
-            LegacyStyle::Text {
-                size,
-                letter_spacing,
-                line_height,
-                ..
-            } => numbers(&[*size, *letter_spacing, *line_height])?,
+            LegacyStyle::Text(data) => {
+                numbers(&[
+                    data.font_size,
+                    data.letter_spacing,
+                    data.paragraph_spacing,
+                    data.paragraph_indent,
+                    data.line_height.value(),
+                ])?;
+                if data.font_family.len() > 1024 {
+                    return Err("text style font family budget exceeded".into());
+                }
+            }
             LegacyStyle::Effect { effects } => {
                 for e in effects {
                     effect(e)?;

@@ -63,10 +63,29 @@ jobs:
 
       - name: Apply mechanical fixes
         run: |
+          # Non-fatal on purpose: rustfmt exits non-zero when it cannot parse a
+          # file, and that used to skip every step below — including the gate
+          # log this workflow exists to publish. Format what can be formatted,
+          # then name the file that could not be.
+          set +e
           cargo fmt --all
+          fmt_exit=$?
+          set -e
+          if [ "$fmt_exit" -ne 0 ]; then
+            echo "cargo fmt exited $fmt_exit — probing each tracked .rs file"
+            for f in $(git ls-files '*.rs'); do
+              err=$(rustfmt --edition 2021 --check "$f" 2>&1 >/dev/null)
+              case "$err" in
+                *error*)
+                  printf '\n### PARSE %s\n' "$f"
+                  printf '%s\n' "$err" | head -14
+                  ;;
+              esac
+            done
+          fi
           if [ "${{ inputs.clippy_fix }}" = "true" ]; then
             cargo clippy --fix --workspace --all-targets --allow-dirty --allow-staged || true
-            cargo fmt --all
+            cargo fmt --all || true
           fi
           git --no-pager diff --stat
 

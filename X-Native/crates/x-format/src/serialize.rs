@@ -1148,8 +1148,7 @@ pub fn save_x(doc: &Document) -> String {
 pub(crate) fn legacy_style_json(s: &LegacyStyle) -> String {
     match s {
         LegacyStyle::Paint { fill } => format!("{{\"t\":\"paint\",\"fill\":{}}}", paint_json(fill)),
-        LegacyStyle::Text { font, size, letter_spacing, line_height } => format!(
-            "{{\"t\":\"text\",\"font\":\"{}\",\"size\":{size},\"ls\":{letter_spacing},\"lh\":{line_height}}}", esc(font)),
+        LegacyStyle::Text(data) => text_style_json(data),
         LegacyStyle::Effect { effects } => {
             let fx: Vec<String> = effects.iter().map(|e| match e {
                 Effect::DropShadow { dx, dy, blur, color } => format!("{{\"t\":\"drop\",\"dx\":{dx},\"dy\":{dy},\"blur\":{blur},\"c\":\"{}\"}}", color_to_hex(*color)),
@@ -1163,20 +1162,69 @@ pub(crate) fn legacy_style_json(s: &LegacyStyle) -> String {
     }
 }
 
+/// Text-style encoder shared by `.x` documents and `.xlib` libraries — one
+/// dialect, and one property set: everything `TextStyleData` carries.
+///
+/// Keys stay terse like the rest of the format, and a property is emitted only
+/// when it differs from its default, so a plain Inter/16 style costs what it
+/// always cost. Line height travels as (`lhm`, `lhv`); files written before
+/// modes existed carry a bare `lh` multiplier, which the decoder still reads.
+pub(crate) fn text_style_json(d: &TextStyleData) -> String {
+    let mut out = format!(
+        "{{\"t\":\"text\",\"font\":\"{}\",\"fw\":{},\"size\":{},\"ls\":{}",
+        esc(&d.font_family),
+        d.font_weight,
+        d.font_size,
+        d.letter_spacing
+    );
+    if d.line_height != LineHeight::Auto {
+        out.push_str(&format!(
+            ",\"lhm\":\"{}\",\"lhv\":{}",
+            d.line_height.mode_str(),
+            d.line_height.value()
+        ));
+    }
+    if d.paragraph_spacing != 0.0 {
+        out.push_str(&format!(",\"ps\":{}", d.paragraph_spacing));
+    }
+    if d.paragraph_indent != 0.0 {
+        out.push_str(&format!(",\"pi\":{}", d.paragraph_indent));
+    }
+    // small caps takes the case slot on a node ("tc":"sc"), so it wins here too
+    if d.small_caps {
+        out.push_str(",\"sc\":true");
+    } else if d.text_case != TextCase::Original {
+        out.push_str(&format!(",\"tc\":\"{}\"", d.text_case.to_str()));
+    }
+    if d.text_decoration != TextDecoration::None {
+        out.push_str(&format!(",\"dec\":\"{}\"", d.text_decoration.to_str()));
+    }
+    if d.list_style != ListStyle::None {
+        out.push_str(&format!(",\"list\":\"{}\"", d.list_style.to_str()));
+    }
+    if d.wrap != TextWrap::Auto {
+        out.push_str(&format!(",\"wrap\":\"{}\"", d.wrap.to_str()));
+    }
+    if d.wrap_style != WrapStyle::Normal {
+        out.push_str(&format!(",\"wb\":\"{}\"", d.wrap_style.to_str()));
+    }
+    if d.hanging_punctuation.quotes {
+        out.push_str(",\"hq\":true");
+    }
+    if d.hanging_punctuation.lists {
+        out.push_str(",\"hl\":true");
+    }
+    out.push('}');
+    out
+}
+
 /// New style encoder for .xlib libraries.
 pub(crate) fn style_json(s: &x_core::Style) -> String {
     match &s.data {
         x_core::StyleData::Color(data) => {
             format!("{{\"t\":\"color\",\"paint\":{}}}", paint_json(&data.paint))
         }
-        x_core::StyleData::Text(data) => format!(
-            "{{\"t\":\"text\",\"font\":\"{}\",\"weight\":{},\"size\":{},\"ls\":{},\"lh\":{}}}",
-            esc(&data.font_family),
-            data.font_weight,
-            data.font_size,
-            data.letter_spacing,
-            data.line_height
-        ),
+        x_core::StyleData::Text(data) => text_style_json(data),
         x_core::StyleData::Effect(data) => {
             let fx: Vec<String> = data
                 .effects

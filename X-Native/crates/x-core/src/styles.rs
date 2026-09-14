@@ -127,29 +127,75 @@ pub enum LineHeight {
     /// Natural line box of the resolved face.
     #[default]
     Auto,
-    /// Absolute px per line.
+    /// Absolute px per line (Figma's "px" mode; engine binding `lhm=px`).
     Px(f64),
-    /// Percentage of the font size (100.0 = 1em).
+    /// Percentage of the font size (Figma's "%" mode; engine `lhm=pct`).
     Percent(f64),
+    /// Multiple of the face's natural line box (the engine's original `lh`
+    /// binding, and what every pre-mode document carries).
+    Multiple(f64),
 }
 
 impl LineHeight {
-    /// The node-binding triple: (`lhm`, `lhpx`, `lhp`). `Auto` writes nothing.
-    pub fn bindings(self) -> (Option<&'static str>, Option<f64>, Option<f64>) {
+    /// The `lhm` spelling used by the file format: `auto`/`px`/`pct`/`mult`.
+    pub fn mode_str(self) -> &'static str {
         match self {
-            Self::Auto => (None, None, None),
-            Self::Px(v) => (Some("px"), Some(v), None),
-            Self::Percent(v) => (Some("pct"), None, Some(v)),
+            Self::Auto => "auto",
+            Self::Px(_) => "px",
+            Self::Percent(_) => "pct",
+            Self::Multiple(_) => "mult",
+        }
+    }
+
+    /// The value that travels with the mode (`0.0` for `Auto`).
+    pub fn value(self) -> f64 {
+        match self {
+            Self::Auto => 0.0,
+            Self::Px(v) | Self::Percent(v) | Self::Multiple(v) => v,
+        }
+    }
+
+    /// Parse the (`lhm`, value) pair the file format stores.
+    pub fn from_mode(mode: Option<&str>, value: f64) -> Self {
+        match mode {
+            Some("px") => Self::Px(value),
+            Some("pct") => Self::Percent(value),
+            Some("mult") => Self::Multiple(value),
+            _ => Self::Auto,
         }
     }
 
     /// Read the mode back out of a node's bindings.
     pub fn from_node(n: &Node) -> Self {
-        let (mode, value) = n.lh_mode_value();
-        match mode {
-            1 => Self::Px(value),
-            2 => Self::Percent(value),
-            _ => Self::Auto,
+        match n.lh_mode_value() {
+            (1, v) => Self::Px(v),
+            (2, v) => Self::Percent(v),
+            _ => match n.bindings.get("lh").and_then(|v| v.parse::<f64>().ok()) {
+                Some(v) => Self::Multiple(v),
+                None => Self::Auto,
+            },
+        }
+    }
+
+    /// Write the mode into a node's bindings, clearing the keys of every
+    /// other mode so a node never carries two contradictory line heights.
+    fn write(self, b: &mut HashMap<String, String>) {
+        for k in ["lhm", "lhpx", "lhp", "lh"] {
+            b.remove(k);
+        }
+        match self {
+            Self::Auto => {}
+            Self::Px(v) => {
+                b.insert("lhm".into(), "px".into());
+                b.insert("lhpx".into(), fmt_num(v));
+            }
+            Self::Percent(v) => {
+                b.insert("lhm".into(), "pct".into());
+                b.insert("lhp".into(), fmt_num(v));
+            }
+            Self::Multiple(v) => {
+                b.insert("lh".into(), fmt_num(v));
+            }
         }
     }
 }
@@ -280,30 +326,9 @@ impl TextStyleData {
         b.insert("ls".into(), fmt_num(self.letter_spacing));
         b.insert("ps".into(), fmt_num(self.paragraph_spacing));
         b.insert("pi".into(), fmt_num(self.paragraph_indent));
-        // Line height: one mode key plus its value; Auto clears all three so
-        // the face's natural line box applies.
-        let (mode, px, pct) = self.line_height.bindings();
-        match mode {
-            Some(m) => {
-                b.insert("lhm".into(), m.into());
-                if let Some(v) = px {
-                    b.insert("lhpx".into(), fmt_num(v));
-                    b.remove("lhp");
-                }
-                if let Some(v) = pct {
-                    b.insert("lhp".into(), fmt_num(v));
-                    b.remove("lhpx");
-                }
-                // `lh` is the legacy multiplier; a mode supersedes it.
-                b.remove("lh");
-            }
-            None => {
-                b.remove("lhm");
-                b.remove("lhpx");
-                b.remove("lhp");
-                b.remove("lh");
-            }
-        }
+        // One line-height mode at a time; Auto clears all of them so the
+        // face's natural line box applies.
+        self.line_height.write(b);
         // Case and small caps share the `tc` slot; small caps wins, exactly as
         // the renderers read it.
         if self.small_caps {

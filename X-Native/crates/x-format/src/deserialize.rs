@@ -1172,18 +1172,72 @@ pub fn load_x_file(path: &str) -> Result<Document, String> {
     Ok(doc)
 }
 
+/// Text-style decoder, shared by `.x` documents and `.xlib` libraries.
+///
+/// Reads today's keys and the two shapes older files carry: a bare `lh`
+/// multiplier (now `LineHeight::Multiple`, which is exactly what it was), and
+/// a family string with the weight baked into it ("Inter 700"), split here so
+/// `font_weight` is a number the font resolver can use.
+pub(crate) fn parse_text_style(sv: &V) -> TextStyleData {
+    let (family, weight_in_name) = split_family_weight(sv.get("font").and_then(V::str).unwrap_or(""));
+    let mut d = TextStyleData {
+        font_family: family,
+        font_weight: sv
+            .get("fw")
+            .and_then(V::num)
+            .map(|v| (v as u16).clamp(100, 900))
+            .unwrap_or(weight_in_name),
+        font_size: sv.get("size").and_then(V::num).unwrap_or(0.0),
+        letter_spacing: sv.get("ls").and_then(V::num).unwrap_or(0.0),
+        paragraph_spacing: sv.get("ps").and_then(V::num).unwrap_or(0.0),
+        paragraph_indent: sv.get("pi").and_then(V::num).unwrap_or(0.0),
+        ..Default::default()
+    };
+    d.line_height = match sv.get("lhm").and_then(V::str) {
+        Some(mode) => LineHeight::from_mode(
+            Some(mode),
+            sv.get("lhv").and_then(V::num).unwrap_or(0.0),
+        ),
+        None => match sv.get("lh").and_then(V::num) {
+            Some(v) if v > 0.0 => LineHeight::Multiple(v),
+            _ => LineHeight::Auto,
+        },
+    };
+    d.small_caps = sv.get("sc").and_then(V::boolean).unwrap_or(false);
+    d.text_case = TextCase::parse(sv.get("tc").and_then(V::str).unwrap_or("original"));
+    d.text_decoration = TextDecoration::parse(sv.get("dec").and_then(V::str).unwrap_or("none"));
+    d.list_style = ListStyle::parse(sv.get("list").and_then(V::str).unwrap_or("none"));
+    d.wrap = TextWrap::parse(sv.get("wrap").and_then(V::str).unwrap_or("auto"));
+    d.wrap_style = WrapStyle::parse(sv.get("wb").and_then(V::str).unwrap_or("normal"));
+    d.hanging_punctuation = HangingPunctuation {
+        quotes: sv.get("hq").and_then(V::boolean).unwrap_or(false),
+        lists: sv.get("hl").and_then(V::boolean).unwrap_or(false),
+    };
+    d
+}
+
+/// "Inter 700" -> ("Inter", 700). A family with no trailing weight keeps 400,
+/// and a trailing number outside 100..=900 stays part of the name.
+fn split_family_weight(raw: &str) -> (String, u16) {
+    let trimmed = raw.trim();
+    if let Some(idx) = trimmed.rfind(' ') {
+        let (family, tail) = trimmed.split_at(idx);
+        if let Ok(w) = tail.trim().parse::<u16>() {
+            if (100..=900).contains(&w) {
+                return (family.trim().to_string(), w);
+            }
+        }
+    }
+    (trimmed.to_string(), 400)
+}
+
 /// Shared style decoder (.x documents AND .xlib libraries).
 pub(crate) fn parse_style_v(sv: &V) -> Option<LegacyStyle> {
     match sv.get("t").and_then(V::str) {
         Some("paint") => sv.get("fill").map(|f| LegacyStyle::Paint {
             fill: parse_paint(f),
         }),
-        Some("text") => Some(LegacyStyle::Text {
-            font: sv.get("font").and_then(V::str).unwrap_or("").into(),
-            size: sv.get("size").and_then(V::num).unwrap_or(0.0),
-            letter_spacing: sv.get("ls").and_then(V::num).unwrap_or(0.0),
-            line_height: sv.get("lh").and_then(V::num).unwrap_or(0.0),
-        }),
+        Some("text") => Some(LegacyStyle::Text(parse_text_style(sv))),
         Some("effect") => {
             let mut effects = Vec::new();
             if let Some(fx) = sv.get("effects").and_then(V::arr) {

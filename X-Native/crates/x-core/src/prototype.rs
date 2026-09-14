@@ -984,27 +984,6 @@ impl Interaction {
         }
     }
 
-    /// Create an interaction with multiple actions (Figma parity).
-    pub fn with_actions(trigger: Trigger, actions: Vec<Action>, transition_ms: u32, animation: Animation) -> Self {
-        let action = actions.first().cloned().unwrap_or(Action::Back);
-        Self {
-            trigger,
-            action,
-            actions,
-            transition_ms,
-            animation,
-        }
-    }
-
-    /// Returns all actions for this interaction: `actions` if non-empty,
-    /// otherwise wraps the single `action` in a vec.
-    pub fn all_actions(&self) -> Vec<&Action> {
-        if self.actions.is_empty() {
-            vec![&self.action]
-        } else {
-            self.actions.iter().collect()
-        }
-    }
 }
 
 /// The interactions a node actually fires during playback. Rich
