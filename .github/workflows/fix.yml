@@ -62,32 +62,43 @@ jobs:
           workspaces: X-Native
 
       - name: Apply mechanical fixes
+        shell: bash
         run: |
-          # Non-fatal on purpose: rustfmt exits non-zero when it cannot parse a
-          # file, and that used to skip every step below — including the gate
-          # log this workflow exists to publish. Format what can be formatted,
-          # then name the file that could not be.
+          # Nothing in here may fail the step. `run:` defaults to `bash -e`, so
+          # a non-zero rustfmt used to skip every step below — including the
+          # gate log this workflow exists to publish. Format what can be
+          # formatted, record why anything could not, and carry on.
           set +e
-          cargo fmt --all
+          probe=/tmp/fmt-probe.txt
+          cargo fmt --all > /tmp/fmt.log 2>&1
           fmt_exit=$?
-          set -e
+          {
+            printf 'cargo fmt --all exit: %s\n' "$fmt_exit"
+            tail -40 /tmp/fmt.log
+          } > "$probe"
           if [ "$fmt_exit" -ne 0 ]; then
-            echo "cargo fmt exited $fmt_exit — probing each tracked .rs file"
-            for f in $(git ls-files '*.rs'); do
-              err=$(rustfmt --edition 2021 --check "$f" 2>&1 >/dev/null)
+            # rustfmt exits non-zero for unformatted code only under --check;
+            # in write mode it means a file it could not parse. Name the file.
+            echo "--- probing every .rs file for a parse error" >> "$probe"
+            while IFS= read -r f; do
+              err=$(rustfmt --edition 2021 --check "$f" 2>&1 >/dev/null || true)
               case "$err" in
                 *error*)
-                  printf '\n### PARSE %s\n' "$f"
-                  printf '%s\n' "$err" | head -14
+                  printf '\n### PARSE %s\n' "$f" >> "$probe"
+                  printf '%s\n' "$err" | head -14 >> "$probe"
+                  first=$(printf '%s\n' "$err" | grep -m1 '^error' || true)
+                  echo "::error title=rustfmt cannot parse ${f}::${first}"
                   ;;
               esac
-            done
+            done < <(find . -name '*.rs' -not -path './target/*' | sort)
           fi
+          cat "$probe"
           if [ "${{ inputs.clippy_fix }}" = "true" ]; then
             cargo clippy --fix --workspace --all-targets --allow-dirty --allow-staged || true
             cargo fmt --all || true
           fi
-          git --no-pager diff --stat
+          git --no-pager diff --stat || true
+          exit 0
 
       # scripts/check.sh hides its diagnostics (cargo writes to temp files that
       # it greps, and the CLI build's stderr is /dev/null), so record the raw
@@ -138,19 +149,23 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          test -f /tmp/gate.log || true
+          set +e
           number=$(gh pr list --head "$GITHUB_REF_NAME" --state open \
                      --json number --jq '.[0].number' 2>/dev/null || true)
           if [ -n "$number" ]; then
             {
-              echo 'Mechanical-fix run — gate verdict, then the raw output of each phase.'
+              echo 'Mechanical-fix run — fmt probe, gate verdict, then the raw output of each phase.'
               echo
               echo '~~~'
-              cat /tmp/gate.log 2>/dev/null
+              head -c 8000 /tmp/fmt-probe.txt 2>/dev/null || true
               echo '~~~'
               echo '~~~'
-              head -c 55000 /tmp/report.txt 2>/dev/null
+              head -c 20000 /tmp/gate.log 2>/dev/null || true
+              echo '~~~'
+              echo '~~~'
+              head -c 45000 /tmp/report.txt 2>/dev/null || true
               echo '~~~'
             } > /tmp/fix-comment.md
             gh pr comment "$number" --body-file /tmp/fix-comment.md || true
           fi
+          exit 0
