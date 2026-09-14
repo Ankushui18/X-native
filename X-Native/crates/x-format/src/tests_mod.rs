@@ -355,6 +355,7 @@ mod tests {
                         overlay: "tooltip".into(),
                         position: OverlayPosition::TopRight,
                     },
+                    actions: vec![],
                     transition_ms: 200,
                     animation: Animation::Dissolve,
                 })
@@ -394,6 +395,7 @@ mod tests {
                     action: Action::OpenLink {
                         url: "https://example.com/docs".into(),
                     },
+                    actions: vec![],
                     transition_ms: 0,
                     animation: Animation::Instant,
                 },
@@ -1537,6 +1539,7 @@ mod tests {
                     value: Expr::Add(Box::new(Expr::var("step")), Box::new(Expr::num(1.0))),
                 })),
             },
+            actions: vec![],
             transition_ms: 200,
             animation: Animation::MoveIn(Direction::Bottom),
         };

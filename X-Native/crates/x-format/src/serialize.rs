@@ -375,8 +375,16 @@ fn interaction_json(i: &Interaction) -> String {
         | Action::ScrollTo { destination } => format!(",\"dest\":\"{}\"", esc(destination)),
         _ => String::new(),
     };
+    // Multiple actions: serialize as "actions" array when non-empty.
+    // Backward compatible: old files with just "action" still load fine.
+    let actions_field = if i.actions.len() > 1 {
+        let acts: Vec<String> = i.actions.iter().map(|a| format!("\"{}\"", a.kind())).collect();
+        format!(",\"actions\":[{}]", acts.join(","))
+    } else {
+        String::new()
+    };
     format!(
-        "{{\"trigger\":\"{}\",\"action\":\"{}\",\"ms\":{},\"anim\":\"{}\"{}{}{}{}{}{}}}",
+        "{{\"trigger\":\"{}\",\"action\":\"{}\",\"ms\":{},\"anim\":\"{}\"{}{}{}{}{}{}{}}}",
         i.trigger.to_str(),
         i.action.kind(),
         i.transition_ms,
@@ -386,7 +394,8 @@ fn interaction_json(i: &Interaction) -> String {
         px,
         py,
         delay,
-        extra
+        extra,
+        actions_field
     )
 }
 /// Grid layout JSON: {"cols":[..],"rows":[..],"cgap":N,"rgap":N,"pad":[l,r,t,b]}.
@@ -604,6 +613,10 @@ pub(crate) fn node_json(n: &Node, out: &mut String) {
     }
     if let Some([tl, tr, br, bl]) = n.corner_radii {
         out.push_str(&format!(",\"corners\":[{tl},{tr},{br},{bl}]"));
+    }
+    // corner smoothing (0.0 is default — omitted for backward compatibility)
+    if n.corner_smoothing > 0.0 {
+        out.push_str(&format!(",\"smoothing\":{}", n.corner_smoothing));
     }
     // rich text runs (non-empty only — plain text stays byte-identical).
     // start/len are CHAR indices into the text string.

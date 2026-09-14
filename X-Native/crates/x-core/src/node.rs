@@ -231,6 +231,11 @@ pub struct Node {
     pub overrides: HashMap<String, String>,
     /// Phase 4.7: per-corner radii [tl, tr, br, bl]; overrides Rect's uniform radius.
     pub corner_radii: Option<[f64; 4]>,
+    /// Corner smoothing (0.0–1.0): Figma's "squircle" corner rounding.
+    /// 0.0 = standard circular corner (default), 0.6–0.8 = iOS-style
+    /// continuous corner (superellipse). Higher values produce smoother
+    /// transitions between straight edges and curved corners.
+    pub corner_smoothing: f64,
     /// Phase 4: blend mode.
     pub blend: BlendKind,
     /// Phase 4: layer effects (shadows/blurs).
@@ -314,6 +319,7 @@ impl Node {
             prototype: self.prototype.clone(),
             overrides: self.overrides.clone(),
             corner_radii: self.corner_radii,
+            corner_smoothing: self.corner_smoothing,
             blend: self.blend,
             effects: self.effects.clone(),
             pin: self.pin,
@@ -678,6 +684,7 @@ impl Node {
             prototype: None,
             overrides: HashMap::new(),
             corner_radii: None,
+            corner_smoothing: 0.0,
             blend: BlendKind::Normal,
             effects: vec![],
             is_mask: false,
@@ -870,6 +877,12 @@ impl Node {
     }
     pub fn corners(mut self, tl: f64, tr: f64, br: f64, bl: f64) -> Self {
         self.corner_radii = Some([tl, tr, br, bl]);
+        self
+    }
+    /// Set corner smoothing (0.0–1.0). Higher values produce iOS-style
+    /// continuous corners (superellipse). 0.0 = standard circular corners.
+    pub fn smooth_corners(mut self, v: f64) -> Self {
+        self.corner_smoothing = v.clamp(0.0, 1.0);
         self
     }
     pub fn rotate(mut self, r: f64) -> Self {

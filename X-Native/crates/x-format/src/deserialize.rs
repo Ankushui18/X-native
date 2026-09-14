@@ -626,6 +626,8 @@ pub(crate) fn parse_node(v: &V) -> Node {
             ]);
         }
     }
+    // corner smoothing (0.0 default)
+    n.corner_smoothing = v.get("smoothing").and_then(V::num).unwrap_or(0.0);
     if let Some(rs) = v.get("textRuns").and_then(V::arr) {
         for r in rs {
             n.text_runs.push(TextRun {
@@ -807,6 +809,7 @@ pub(crate) fn parse_node(v: &V) -> Node {
             n.interactions.push(Interaction {
                 trigger,
                 action,
+                actions: vec![],
                 transition_ms: e.get("ms").and_then(V::num).unwrap_or(350.0) as u32,
                 animation: Animation::from_str(e.get("anim").and_then(V::str).unwrap_or("smart")),
             });

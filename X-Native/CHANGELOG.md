@@ -5,6 +5,29 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-14 (Follow-up: Figma Design Feature Parity)
+
+### Added
+- **SmartAnimate interpolation engine.** New `smart_animate` module in `x-core`
+  provides frame-to-frame morphing for prototype transitions. `interpolate_frames()`
+  collects all nodes from two frames, matches by ID, and interpolates position,
+  size, opacity, rotation, corner radius, and fill color. Nodes present in one
+  frame but not the other fade in/out. Includes easing functions (linear, ease-in,
+  ease-out, ease-in-out, cubic variants). 6 unit tests.
+- **Corner smoothing (squircle).** New `Node::corner_smoothing: f64` field
+  (0.0–1.0) enables Figma-style continuous corners (superellipse geometry).
+  The renderer generates squircle paths using a parametric superellipse formula
+  `|x/a|^n + |y/b|^n = 1` where `n = 2 + 4 * smoothing`. Builder method:
+  `node.smooth_corners(0.6)`. Persisted in `.x` format as `"smoothing":0.6`
+  and emitted in dev-mode CSS as a comment (CSS has no native squircle).
+- **Multiple actions per interaction.** `Interaction` struct now carries
+  `actions: Vec<Action>` in addition to the legacy `action: Action` field.
+  When `actions` is non-empty, `all_actions()` returns all actions for
+  sequential execution. Figma parity: a single trigger can now navigate,
+  set variables, and play sounds in sequence. Serialized as `"actions":[...]`
+  when more than one action is present (backward compatible with old files).
+  Builder: `Interaction::with_actions(trigger, vec![...], ms, anim)`.
+
 ## [Unreleased] — 2026-09-14 (Follow-up: Real Gap Fixes)
 
 ### Added

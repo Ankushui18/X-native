@@ -64,17 +64,83 @@ pub struct EncodeCtx<'a> {
 }
 
 fn shape_for_rect(node: &Node, radius: f64) -> vello::kurbo::BezPath {
-    if let Some([tl, tr, br, bl]) = node.corner_radii {
+    let radii = if let Some([tl, tr, br, bl]) = node.corner_radii {
+        [tl, tr, br, bl]
+    } else if radius > 0.0 {
+        [radius; 4]
+    } else {
+        [0.0; 4]
+    };
+
+    // Use squircle (superellipse) geometry when corner_smoothing > 0
+    if node.corner_smoothing > 0.0 && radii.iter().any(|&r| r > 0.0) {
+        squircle_path(node.w, node.h, radii, node.corner_smoothing)
+    } else if radii.iter().any(|&r| r > 0.0) {
         RoundedRect::from_rect(
             Rect::new(0.0, 0.0, node.w, node.h),
-            RoundedRectRadii::new(tl, tr, br, bl),
+            RoundedRectRadii::new(radii[0], radii[1], radii[2], radii[3]),
         )
         .into_path(0.1)
-    } else if radius > 0.0 {
-        RoundedRect::new(0.0, 0.0, node.w, node.h, radius).into_path(0.1)
     } else {
         Rect::new(0.0, 0.0, node.w, node.h).into_path(0.1)
     }
+}
+
+/// Generate a squircle (superellipse) path with smooth corners.
+///
+/// `smoothing` (0.0–1.0) controls how "iOS-like" the corners are:
+/// - 0.0 = standard circular corner
+/// - 0.6–0.8 = continuous curvature (superellipse, n ≈ 4–5)
+/// - 1.0 = maximum smoothing (very round transition)
+///
+/// Uses a parametric superellipse: |x/a|^n + |y/b|^n = 1
+/// where n = 2 + 4 * smoothing (range: 2.0–6.0)
+fn squircle_path(w: f64, h: f64, radii: [f64; 4], smoothing: f64) -> vello::kurbo::BezPath {
+    use vello::kurbo::BezPath;
+
+    let [tl, tr, br, bl] = radii;
+    let n = 2.0 + 4.0 * smoothing; // superellipse exponent
+    let segments = 12; // points per corner (higher = smoother)
+    let mut path = BezPath::new();
+
+    // Generate points for each corner using superellipse formula
+    let corners = [
+        (w - tr, tr, tr),      // top-right
+        (w - br, h - br, br),  // bottom-right
+        (bl, h - bl, bl),      // bottom-left
+        (tl, tl, tl),          // top-left
+    ];
+
+    for (corner_idx, &(cx, cy, radius)) in corners.iter().enumerate() {
+        let start_angle = corner_idx as f64 * std::f64::consts::FRAC_PI_2;
+        let end_angle = start_angle + std::f64::consts::FRAC_PI_2;
+
+        for i in 0..=segments {
+            let t = i as f64 / segments as f64;
+            let angle = start_angle + t * (end_angle - start_angle);
+
+            // Superellipse parametric form
+            let cos_a = angle.cos();
+            let sin_a = angle.sin();
+            let sign_x = if cos_a >= 0.0 { 1.0 } else { -1.0 };
+            let sign_y = if sin_a >= 0.0 { 1.0 } else { -1.0 };
+
+            let x = sign_x * cos_a.abs().powf(2.0 / n);
+            let y = sign_y * sin_a.abs().powf(2.0 / n);
+
+            let px = cx + x * radius;
+            let py = cy + y * radius;
+
+            if corner_idx == 0 && i == 0 {
+                path.move_to((px, py));
+            } else {
+                path.line_to((px, py));
+            }
+        }
+    }
+
+    path.close_path();
+    path
 }
 
 fn encode_drop_shadows(

@@ -5706,6 +5706,7 @@ impl Host {
             let ix = x_native::Interaction {
                 trigger: x_native::Trigger::AfterDelay { ms: 0 },
                 action: d.action,
+                actions: vec![],
                 transition_ms: d.ms,
                 animation: x_native::Animation::Instant,
             };

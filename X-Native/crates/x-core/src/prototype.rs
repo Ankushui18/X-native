@@ -834,6 +834,11 @@ fn run_action_depth(action: &Action, vars: &mut crate::Variables, depth: u32) ->
 pub struct Interaction {
     pub trigger: Trigger,
     pub action: Action,
+    /// Multiple actions: Figma supports running several actions in sequence
+    /// from a single trigger (e.g., navigate + set variable + play sound).
+    /// When non-empty, these take precedence over `action`. Empty by
+    /// default for backward compatibility with single-action interactions.
+    pub actions: Vec<Action>,
     pub transition_ms: u32,
     pub animation: Animation,
 }
@@ -846,8 +851,31 @@ impl Interaction {
             action: Action::Navigate {
                 destination: destination.into(),
             },
+            actions: vec![],
             transition_ms: 350,
             animation: Animation::SmartAnimate,
+        }
+    }
+
+    /// Create an interaction with multiple actions (Figma parity).
+    pub fn with_actions(trigger: Trigger, actions: Vec<Action>, transition_ms: u32, animation: Animation) -> Self {
+        let action = actions.first().cloned().unwrap_or(Action::Back);
+        Self {
+            trigger,
+            action,
+            actions,
+            transition_ms,
+            animation,
+        }
+    }
+
+    /// Returns all actions for this interaction: `actions` if non-empty,
+    /// otherwise wraps the single `action` in a vec.
+    pub fn all_actions(&self) -> Vec<&Action> {
+        if self.actions.is_empty() {
+            vec![&self.action]
+        } else {
+            self.actions.iter().collect()
         }
     }
 }
@@ -866,6 +894,7 @@ pub fn effective_interactions(node: &crate::Node) -> Vec<Interaction> {
             action: Action::Navigate {
                 destination: p.destination.clone(),
             },
+            actions: vec![],
             transition_ms: p.transition_ms,
             animation: Animation::SmartAnimate,
         }];
@@ -979,6 +1008,7 @@ mod tests {
             .interaction(Interaction {
                 trigger: Trigger::OnHover,
                 action: Action::Back,
+                actions: vec![],
                 transition_ms: 0,
                 animation: Animation::Instant,
             });
@@ -1276,6 +1306,7 @@ mod tests {
                 Interaction {
                     trigger: Trigger::KeyDown { key: "a".into() },
                     action: Action::Back,
+                    actions: vec![],
                     transition_ms: 0,
                     animation: Animation::Instant,
                 },
@@ -1291,6 +1322,7 @@ mod tests {
                     key: "Enter".into(),
                 },
                 action: Action::Back,
+                actions: vec![],
                 transition_ms: 0,
                 animation: Animation::Instant,
             }),
@@ -1397,6 +1429,7 @@ mod tests {
                     Interaction {
                         trigger: Trigger::AfterDelay { ms: 700 },
                         action: Action::Back,
+                        actions: vec![],
                         transition_ms: 0,
                         animation: Animation::Instant,
                     },

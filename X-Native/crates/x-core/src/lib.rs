@@ -22,6 +22,7 @@ pub mod node;
 pub mod paint;
 pub mod pins;
 pub mod prototype;
+pub mod smart_animate;
 pub mod query;
 pub mod registry;
 pub mod styles;

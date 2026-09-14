@@ -221,6 +221,7 @@ mod tests {
             Interaction {
                 trigger: Trigger::OnHover,
                 action: Action::Back,
+                actions: vec![],
                 transition_ms: 150,
                 animation: Animation::Instant,
             },
@@ -2532,6 +2533,7 @@ mod component_and_proto_engine {
             action: Action::Navigate {
                 destination: "m2".into(),
             },
+            actions: vec![],
             transition_ms: 200,
             animation: Animation::Instant,
         }];
@@ -2559,6 +2561,7 @@ mod component_and_proto_engine {
         ret.interactions = vec![Interaction {
             trigger: Trigger::OnClick,
             action: Action::Back,
+            actions: vec![],
             transition_ms: 0,
             animation: Animation::Instant,
         }];
