@@ -5344,8 +5344,10 @@ impl Host {
     }
 
     /// Fire `trigger` for `hit` wherever it lives: the topmost overlay
-    /// first, then the current frame. `false` when nothing handles it.
-    /// "While" triggers that navigated or opened an overlay arm the
+    /// first, then the current frame. `true` when the interaction ran AND
+    /// changed something — the engine's `drag_to` distinguishes an inert
+    /// `Back`/`CloseOverlay` from a real one, and the drag cycle has to
+    /// agree. "While" triggers that navigated or opened an overlay arm the
     /// Figma auto-reverse spans.
     fn flow_fire_trigger(&mut self, hit: &str, trigger: x_native::Trigger) -> bool {
         if let Some(ix) = self.flow_find_trigger(hit, &trigger) {
@@ -5355,9 +5357,9 @@ impl Host {
                 .as_ref()
                 .map(|f| (f.current.clone(), f.overlays.len(), f.stack.len()));
             let (origin, overlay_depth, stack_depth) = before.unwrap_or_default();
-            self.flow_fire(&ix);
+            let effect = self.flow_fire(&ix);
             self.flow_arm_while_span(hit, &trigger, &origin, overlay_depth, stack_depth);
-            true
+            effect.fired()
         } else {
             false
         }

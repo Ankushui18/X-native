@@ -414,16 +414,24 @@ impl<'a> Player<'a> {
     /// Fire `trigger` for `hit` wherever it lives: the topmost overlay
     /// first, then the current frame. `false` when nothing handles it.
     fn fire_trigger(&mut self, hit: &str, trigger: Trigger) -> bool {
-        if let Some(ix) = self.find_trigger(hit, &trigger) {
-            let origin = self.current.clone();
-            let overlay_depth = self.overlays.len();
-            let stack_depth = self.stack.len();
-            self.fire(&ix);
-            self.arm_while_span(hit, &trigger, &origin, overlay_depth, stack_depth);
-            true
-        } else {
-            false
-        }
+        self.fire_trigger_effect(hit, trigger).is_some()
+    }
+
+    /// [`Player::fire_trigger`], returning the fired interaction's effect
+    /// instead of "handled": `None` when no interaction carries the
+    /// trigger, and an effect whose [`FireEffect::fired`] is false when the
+    /// action was inert (a `Back` with no history, a `CloseOverlay` with
+    /// nothing open). Callers that mean "did anything happen" — the drag
+    /// cycle, the click path — need that distinction, exactly as
+    /// [`Player::click`] does.
+    fn fire_trigger_effect(&mut self, hit: &str, trigger: Trigger) -> Option<FireEffect> {
+        let ix = self.find_trigger(hit, &trigger)?;
+        let origin = self.current.clone();
+        let overlay_depth = self.overlays.len();
+        let stack_depth = self.stack.len();
+        let effect = self.fire(&ix);
+        self.arm_while_span(hit, &trigger, &origin, overlay_depth, stack_depth);
+        Some(effect)
     }
 
     /// Arm Figma's while-hovering/while-pressing auto-reverse: a "while"
@@ -649,7 +657,9 @@ impl<'a> Player<'a> {
     }
 
     /// Drag through `point` (pointer held): fires `OnDrag` once per
-    /// press-drag-release cycle. Returns `true` on the move that fired.
+    /// press-drag-release cycle. Returns `true` on the move that fired —
+    /// an `OnDrag` whose action was inert (a `Back` with no history) did
+    /// not fire, so the cycle stays armed and the next move may still.
     pub fn drag_to(&mut self, point: Point) -> bool {
         if !self.dragging || self.drag_fired {
             return false;
@@ -663,7 +673,10 @@ impl<'a> Player<'a> {
         if !orphaned {
             self.hovered = Some(hit.clone());
         }
-        if self.fire_trigger(&hit, Trigger::OnDrag) {
+        let Some(effect) = self.fire_trigger_effect(&hit, Trigger::OnDrag) else {
+            return false;
+        };
+        if effect.fired() {
             self.drag_fired = true;
             true
         } else {
