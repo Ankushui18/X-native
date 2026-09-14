@@ -400,8 +400,14 @@ fn grid_json(g: &GridLayout) -> String {
     }
     let cols: Vec<String> = g.columns.iter().map(track_json).collect();
     let rows: Vec<String> = g.rows.iter().map(track_json).collect();
+    // auto_flow: only serialize when non-default (Row) to keep old files stable
+    let flow_field = if g.auto_flow != GridAutoFlow::Row {
+        format!(",\"flow\":\"{}\"", g.auto_flow.to_str())
+    } else {
+        String::new()
+    };
     format!(
-        ",\"grid\":{{\"cols\":[{}],\"rows\":[{}],\"cgap\":{},\"rgap\":{},\"pad\":[{},{},{},{}]}}",
+        ",\"grid\":{{\"cols\":[{}],\"rows\":[{}],\"cgap\":{},\"rgap\":{},\"pad\":[{},{},{},{}]{}{}}}",
         cols.join(","),
         rows.join(","),
         g.column_gap,
@@ -409,7 +415,8 @@ fn grid_json(g: &GridLayout) -> String {
         g.padding[0],
         g.padding[1],
         g.padding[2],
-        g.padding[3]
+        g.padding[3],
+        flow_field
     )
 }
 
@@ -712,6 +719,10 @@ pub(crate) fn node_json(n: &Node, out: &mut String) {
             parts.push(format!("\"row_span\":{}", n.constraints.grid_row_span));
         }
         out.push_str(&format!(",\"constraints\":{{{}}}", parts.join(",")));
+    }
+    // z_index: only serialize when set (default: None)
+    if let Some(z) = n.z_index {
+        out.push_str(&format!(",\"z_index\":{}", z));
     }
     if !n.bindings.is_empty() {
         let mut keys: Vec<_> = n.bindings.keys().collect();

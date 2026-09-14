@@ -610,7 +610,15 @@ fn encode(
     if matches!(node.kind, NodeKind::Instance { .. }) {
         return;
     }
-    for child in &node.children {
+    // Sort children by z_index for paint order (higher z_index paints on top).
+    // Children without z_index (None) use document order at z=0.
+    let mut indexed_children: Vec<(usize, &Node)> = node.children.iter().enumerate().collect();
+    indexed_children.sort_by(|(i_a, a), (i_b, b)| {
+        let z_a = a.z_index.unwrap_or(0);
+        let z_b = b.z_index.unwrap_or(0);
+        z_a.cmp(&z_b).then(i_a.cmp(i_b)) // stable sort: equal z_index preserves document order
+    });
+    for (_, child) in indexed_children {
         encode(
             scene, child, world, viewport, vars, stats, registry, overrides, depth, ctx,
         );

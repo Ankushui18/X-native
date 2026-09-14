@@ -197,6 +197,56 @@ pub enum GridTrack {
     Auto,
 }
 
+/// Grid auto-flow mode (CSS `grid-auto-flow`). Controls how auto-placed
+/// children fill empty cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GridAutoFlow {
+    /// Row-major: children fill left-to-right, then wrap to the next row
+    /// (default, matches CSS `grid-auto-flow: row`).
+    #[default]
+    Row,
+    /// Column-major: children fill top-to-bottom, then wrap to the next
+    /// column (matches CSS `grid-auto-flow: column`).
+    Column,
+    /// Dense packing: backfill empty cells by reordering auto-placed
+    /// children to fill earlier gaps, even if it means later children
+    /// appear before earlier ones in the visual order (matches CSS
+    /// `grid-auto-flow: dense`). Can cause visual reordering.
+    Dense,
+}
+
+impl GridAutoFlow {
+    pub fn label(self) -> &'static str {
+        match self {
+            GridAutoFlow::Row => "Row",
+            GridAutoFlow::Column => "Column",
+            GridAutoFlow::Dense => "Dense",
+        }
+    }
+    pub fn to_str(self) -> &'static str {
+        match self {
+            GridAutoFlow::Row => "row",
+            GridAutoFlow::Column => "column",
+            GridAutoFlow::Dense => "dense",
+        }
+    }
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "column" => GridAutoFlow::Column,
+            "dense" => GridAutoFlow::Dense,
+            _ => GridAutoFlow::Row,
+        }
+    }
+    pub fn css(self) -> &'static str {
+        match self {
+            GridAutoFlow::Row => "row",
+            GridAutoFlow::Column => "column",
+            GridAutoFlow::Dense => "dense",
+        }
+    }
+}
+
 /// Grid layout for frames (CSS grid; Figma Grid). Children place into
 /// cells — explicitly via [`ChildConstraints`] or auto-flowed row-major —
 /// and stretch to their spanned cell area. Column tracks size
@@ -211,6 +261,9 @@ pub struct GridLayout {
     pub row_gap: f64,
     /// `[left, right, top, bottom]` (same convention as AutoLayout).
     pub padding: [f64; 4],
+    /// Grid auto-flow mode: row-major (default), column-major, or dense
+    /// packing. Controls how auto-placed children fill empty cells.
+    pub auto_flow: GridAutoFlow,
 }
 
 impl Default for GridLayout {
@@ -221,6 +274,7 @@ impl Default for GridLayout {
             column_gap: 8.0,
             row_gap: 8.0,
             padding: [0.0; 4],
+            auto_flow: GridAutoFlow::Row,
         }
     }
 }

@@ -1979,6 +1979,7 @@ mod tests {
                     column_gap: 12.0,
                     row_gap: 8.0,
                     padding: [8.0, 8.0, 8.0, 8.0],
+                    auto_flow: GridAutoFlow::Row,
                 }),
                 ..Default::default()
             });

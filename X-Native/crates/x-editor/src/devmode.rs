@@ -93,6 +93,10 @@ pub fn node_to_css(node: &Node, vars: &Variables) -> String {
                     g.padding[2], g.padding[1], g.padding[3], g.padding[0]
                 ));
             }
+            // CSS grid-auto-flow: only emit when non-default (Row)
+            if g.auto_flow != GridAutoFlow::Row {
+                css.push_str(&format!("  grid-auto-flow: {};\n", g.auto_flow.css()));
+            }
             // explicit grid placements, when any child carries one
             let placed: Vec<String> = node
                 .children
@@ -338,6 +342,10 @@ pub fn node_to_css(node: &Node, vars: &Variables) -> String {
             "  mix-blend-mode: {};\n",
             blend_css_name(node.blend)
         ));
+    }
+    // z_index: paint order within auto-layout frames (CSS z-index)
+    if let Some(z) = node.z_index {
+        css.push_str(&format!("  z-index: {};\n", z));
     }
     if node.transform.rotation != 0.0 {
         css.push_str(&format!(

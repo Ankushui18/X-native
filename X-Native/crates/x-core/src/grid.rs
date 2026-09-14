@@ -2,11 +2,12 @@
 //!
 //! Frames whose [`AutoLayout`] carries a [`GridLayout`] lay out as a grid:
 //! children place into cells (explicitly via [`ChildConstraints::grid_col`]
-//! / `grid_row`, or auto-flowed row-major), stretch to their spanned cell
-//! area, and tracks size Fixed / Fr / Auto. Row tracks beyond the declared
-//! ones are implicit `Auto` rows. A HUG frame sizes to its tracks.
+//! / `grid_row`, or auto-flowed row-major/column-major/dense), stretch to
+//! their spanned cell area, and tracks size Fixed / Fr / Auto. Row tracks
+//! beyond the declared ones are implicit `Auto` rows. A HUG frame sizes to
+//! its tracks.
 
-use crate::{ChildConstraints, GridLayout, GridTrack, Node, Sizing};
+use crate::{ChildConstraints, GridAutoFlow, GridLayout, GridTrack, Node, Sizing};
 use std::collections::HashMap;
 
 struct Placed {
@@ -153,27 +154,72 @@ pub fn apply_grid_layout(node: &mut Node, layout: &crate::AutoLayout, grid: &Gri
         placed.insert(i, p);
     }
 
-    // pass 3: auto-flow row-major into the first fitting cell
+    // pass 3: auto-flow into the first fitting cell. Mode depends on
+    // `grid.auto_flow`:
+    //   - Row: row-major, scan left-to-right then top-to-bottom (default).
+    //   - Column: column-major, scan top-to-bottom then left-to-right.
+    //   - Dense: same as Row, but backfill gaps from the start — re-scan
+    //     from (0,0) on every placement so earlier children can fill holes
+    //     left by larger items.
     for &i in &flow {
         let (cs, rs) = {
             let c = &node.children[i];
             (c.constraints.grid_col_span, c.constraints.grid_row_span)
         };
         let cs = cs.min(ncols).max(1);
-        'outer: for row in 0.. {
-            for col in 0..ncols.saturating_sub(cs - 1) {
-                if cells_free(&mut occupancy, col, row, cs, rs) {
-                    mark(&mut occupancy, col, row, cs, rs);
-                    placed.insert(
-                        i,
-                        Placed {
-                            col,
-                            row,
-                            col_span: cs,
-                            row_span: rs,
-                        },
-                    );
-                    break 'outer;
+
+        match grid.auto_flow {
+            GridAutoFlow::Row | GridAutoFlow::Dense => {
+                // Row-major: scan rows first, then columns within each row.
+                // Dense mode: always restart from (0,0) to backfill gaps.
+                let start_row = if grid.auto_flow == GridAutoFlow::Dense { 0 } else { 0 };
+                'outer: for row in start_row.. {
+                    for col in 0..ncols.saturating_sub(cs - 1) {
+                        if cells_free(&mut occupancy, col, row, cs, rs) {
+                            mark(&mut occupancy, col, row, cs, rs);
+                            placed.insert(
+                                i,
+                                Placed {
+                                    col,
+                                    row,
+                                    col_span: cs,
+                                    row_span: rs,
+                                },
+                            );
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            GridAutoFlow::Column => {
+                // Column-major: scan columns first, then rows within each column.
+                // Determine how many rows we might need (explicit + implicit).
+                let nrows_estimate = if grid.rows.is_empty() {
+                    // Implicit rows: grow as needed.
+                    occupancy.len().max(1)
+                } else {
+                    grid.rows.len().max(1)
+                };
+                'outer_col: for col in 0..ncols {
+                    for row in 0.. {
+                        if cells_free(&mut occupancy, col, row, cs, rs) {
+                            mark(&mut occupancy, col, row, cs, rs);
+                            placed.insert(
+                                i,
+                                Placed {
+                                    col,
+                                    row,
+                                    col_span: cs,
+                                    row_span: rs,
+                                },
+                            );
+                            break 'outer_col;
+                        }
+                        // Safety: don't scan forever if no cell is free.
+                        if row > nrows_estimate + 100 {
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -363,6 +409,7 @@ mod tests {
                     column_gap: 0.0,
                     row_gap: 0.0,
                     padding: [0.0; 4],
+                    auto_flow: GridAutoFlow::Row,
                 }),
                 ..Default::default()
             }),
@@ -559,5 +606,74 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(g2.template_rows_css(), "60px");
+    }
+
+    // ----- Grid auto-flow modes -----
+
+    #[test]
+    fn grid_column_major_auto_flow() {
+        // 2x3 grid, column-major: children fill top-to-bottom, then next column
+        let mut f = grid_frame(
+            300.0,
+            200.0,
+            vec![GridTrack::Fixed(100.0), GridTrack::Fixed(100.0)],
+            vec![GridTrack::Fixed(50.0), GridTrack::Fixed(50.0), GridTrack::Fixed(50.0)],
+        );
+        if let NodeKind::Frame { layout: Some(l) } = &mut f.kind {
+            if let Some(g) = &mut l.grid {
+                g.auto_flow = GridAutoFlow::Column;
+            }
+        }
+        // 5 children to place column-major
+        for i in 0..5 {
+            f.children.push(cell(&format!("c{}", i), 20.0, 20.0));
+        }
+        apply_auto_layout(&mut f, &Variables::default());
+        // Column-major: c0(0,0), c1(0,1), c2(0,2), c3(1,0), c4(1,1)
+        let c0 = &f.children[0];
+        let c1 = &f.children[1];
+        let c2 = &f.children[2];
+        let c3 = &f.children[3];
+        let c4 = &f.children[4];
+        assert_eq!((c0.transform.x, c0.transform.y), (0.0, 0.0));
+        assert_eq!((c1.transform.x, c1.transform.y), (0.0, 50.0));
+        assert_eq!((c2.transform.x, c2.transform.y), (0.0, 100.0));
+        assert_eq!((c3.transform.x, c3.transform.y), (100.0, 0.0));
+        assert_eq!((c4.transform.x, c4.transform.y), (100.0, 50.0));
+    }
+
+    #[test]
+    fn grid_dense_auto_flow_backfills_gaps() {
+        // 3x3 grid with one explicit child at (2,0), then 3 auto-flow children.
+        // Row-major without dense: auto children skip (2,0) and go to row 1.
+        // With dense: auto children backfill the gap at (0,0), (1,0), then (0,1).
+        let mut f = grid_frame(
+            300.0,
+            300.0,
+            vec![GridTrack::Fixed(100.0); 3],
+            vec![GridTrack::Fixed(50.0); 3],
+        );
+        if let NodeKind::Frame { layout: Some(l) } = &mut f.kind {
+            if let Some(g) = &mut l.grid {
+                g.auto_flow = GridAutoFlow::Dense;
+            }
+        }
+        // Explicit child at column 2, row 0
+        let mut explicit = cell("explicit", 20.0, 20.0);
+        explicit.constraints.grid_col = Some(2);
+        explicit.constraints.grid_row = Some(0);
+        f.children.push(explicit);
+        // 3 auto-flow children
+        for i in 0..3 {
+            f.children.push(cell(&format!("auto{}", i), 20.0, 20.0));
+        }
+        apply_auto_layout(&mut f, &Variables::default());
+        // Dense: auto0 fills (0,0), auto1 fills (1,0), auto2 fills (0,1)
+        let auto0 = &f.children[1];
+        let auto1 = &f.children[2];
+        let auto2 = &f.children[3];
+        assert_eq!((auto0.transform.x, auto0.transform.y), (0.0, 0.0));
+        assert_eq!((auto1.transform.x, auto1.transform.y), (100.0, 0.0));
+        assert_eq!((auto2.transform.x, auto2.transform.y), (0.0, 50.0));
     }
 }

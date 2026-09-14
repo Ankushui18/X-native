@@ -274,6 +274,7 @@ fn parse_grid(v: Option<&V>) -> Option<x_core::GridLayout> {
         column_gap: g.get("cgap").and_then(V::num).unwrap_or(0.0),
         row_gap: g.get("rgap").and_then(V::num).unwrap_or(0.0),
         padding: parse_padding(g.get("pad")),
+        auto_flow: g.get("flow").and_then(V::str).map(x_core::GridAutoFlow::from_str).unwrap_or_default(),
     })
 }
 
@@ -839,6 +840,8 @@ pub(crate) fn parse_node(v: &V) -> Node {
             .map(|v| v.max(1.0) as usize)
             .unwrap_or(1);
     }
+    // z_index: paint order within auto-layout frames (default: None)
+    n.z_index = v.get("z_index").and_then(V::num).map(|v| v as i32);
     if let Some(V::Arr(a)) = v.get("grids") {
         for g in a {
             n.layout_grids.push(LayoutGridDef {

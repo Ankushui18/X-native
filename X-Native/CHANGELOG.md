@@ -5,6 +5,27 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-14 (Follow-up: Real Gap Fixes)
+
+### Added
+- **Grid dense auto-flow (CSS `grid-auto-flow: dense`).** New `GridAutoFlow`
+  enum with `Row` (default), `Column`, and `Dense` variants. Dense mode
+  backfills empty cells by re-scanning from the origin on every placement,
+  matching CSS's dense packing algorithm. Column-major fills top-to-bottom
+  then wraps to the next column. Persisted in `.x` format and emitted in
+  dev-mode CSS as `grid-auto-flow`.
+- **Z-index for auto-layout children.** New `Node::z_index: Option<i32>`
+  field controls paint order within auto-layout frames. Higher values paint
+  on top of siblings; `None` uses document order. The renderer now sorts
+  children by z_index before encoding (stable sort preserving document order
+  for equal z-levels). Persisted in `.x` format and emitted in dev-mode CSS
+  as `z-index`.
+- **CRDT architecture document.** `docs/CRDT_ARCHITECTURE.md` describes the
+  planned path to collaborative editing: CRDT type selection (Loro tree CRDT
+  for hierarchy, LWW registers for properties, RGA for children arrays),
+  operation model, network protocol, 5-phase rollout plan, and migration
+  strategy. Not yet implemented — architecture only.
+
 ## [Unreleased] — 2026-09-14
 
 ### Added

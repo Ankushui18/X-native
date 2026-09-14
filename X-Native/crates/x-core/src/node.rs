@@ -240,6 +240,13 @@ pub struct Node {
     /// Phase 2.12/P0: resize + per-child auto-layout constraints
     /// (absolute/fixed/sticky, align_self, grow/shrink/basis).
     pub constraints: ChildConstraints,
+    /// Z-index override for paint order within auto-layout frames. When
+    /// `Some(i)`, this child paints at the given z-level relative to
+    /// siblings (higher values paint on top). When `None`, the child
+    /// paints in document order (layer-panel order). This enables
+    /// z-index-like behavior within auto-layout without breaking the
+    /// flow semantics. Default: `None`.
+    pub z_index: Option<i32>,
     /// Masks: when true, this node clips its FOLLOWING SIBLINGS inside
     /// the same parent (mask semantics semantics, simplified).
     pub is_mask: bool,
@@ -311,6 +318,7 @@ impl Node {
             effects: self.effects.clone(),
             pin: self.pin,
             constraints: self.constraints.clone(),
+            z_index: self.z_index,
             is_mask: self.is_mask,
             bindings: self.bindings.clone(),
             text_metrics: self.text_metrics.clone(),
@@ -675,6 +683,7 @@ impl Node {
             is_mask: false,
             pin: (HPin::Left, VPin::Top),
             constraints: ChildConstraints::default(),
+            z_index: None,
             bindings: HashMap::new(),
             text_metrics: None,
             text_runs: vec![],
@@ -1006,6 +1015,12 @@ impl Node {
                 layout: Some(layout),
             }
         }
+        self
+    }
+    /// Set z-index for paint order within auto-layout frames. Higher
+    /// values paint on top of siblings. `None` = document order.
+    pub fn z_index(mut self, z: i32) -> Self {
+        self.z_index = Some(z);
         self
     }
     /// Absolute-position this child inside its auto-layout parent (Figma ABSOLUTE).
