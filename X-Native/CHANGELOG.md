@@ -69,6 +69,29 @@ are the crate versions in `Cargo.toml`, which still drift (see
   `crates/x-format/tests/fixtures/circle.fig` end-to-end (`import-fig` →
   `lint` → `analyze` → `info` → `export -f svg`), then runs the CLI and MCP
   unit tests in release.
+- **Prototype player (Figma parity) in `x_editor::prototype` + the app's
+  chrome-less flow viewer.** 9 triggers / 10 actions — `MouseUp` and
+  `OpenLink { url }` are new, and both round-trip through `.x` (`"mouseup"`,
+  `"link"`) — driven by one shared engine (`fire_action`, `Player`, `Overlay`,
+  `WhileSpan`) that the editor player, the app preview and the panel all use,
+  so playback cannot disagree with the panel. Figma's "while hovering" /
+  "while pressing" auto-reverse: leaving the hotspot or lifting the pointer
+  undoes the navigate/overlay the span armed, and only if the player still sits
+  in that result. `ScrollTo` pans within the screen (no history, no overlay
+  churn), swap-from-a-bare-frame navigates without pushing history, overlays
+  anchor to the frame (`overlay_offset`) and are hit-tested at their rendered
+  position, and preview playback runs against a copy of the document variables
+  so a prototype can never edit the file. Links open in the system browser only
+  when a window exists (headless hosts just report the URL).
+- **`Elevation` tokens and shared design scales.** `x_ui::Elevation`
+  (Flat/Raised/Floating/Overlay/Modal) turns an intent token into twelve
+  normalised translucent shells — the alphas sum to the token's alpha — and
+  every shadowed surface now names its intent instead of a blur radius.
+  `theme.rs` derives its radii from `RadiusScale` and its type steps from
+  `TypographyScale` (T10/T20 replacing the ad-hoc 9/24/28px steps), tracked
+  labels collapse into `TextUi::micro_label` / `caps_label`, icons stroke at a
+  constant 1.5 device px (`IconScale`) at any size, and the rulers show the
+  selection's extent plus a pointer marker clamped to the canvas.
 
 ### Changed
 - Lint is preset-driven: one rule table (15 rules) feeds `recommended` /
@@ -92,6 +115,13 @@ are the crate versions in `Cargo.toml`, which still drift (see
   parser.
 
 ### Fixed
+- The prototype-player pass did not compile on the workspace's Rust 2021
+  edition: nine `if`/`while` **let chains** (`if a && let Some(b) = c`) are a
+  Rust 2024 feature (E0658) and are now plain nested guards, which also
+  un-breaks `cargo fmt` (rustfmt refuses to parse the file); `Trigger::label`
+  carried `MouseUp` twice (unreachable pattern, E0416); and a test had one
+  closing paren too many. `cargo test --workspace` now reaches the new engine
+  (10 host + 12 engine + 1 format suites).
 - `cargo build --workspace` / `cargo test --workspace` failed before reaching a
   single test: the app crate held four errors nothing had ever compiled — a
   `match *i` on a `usize` (E0614), a `&mut self` call inside a borrow of

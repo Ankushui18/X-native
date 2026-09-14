@@ -390,8 +390,10 @@ impl ApplicationHandler for Host {
         }
         // prototype delays: fire what is due, wake for the rest
         if self.app.flow.as_ref().is_some_and(|f| !f.delays.is_empty()) {
-            if self.flow_tick(now) > 0 && let Some(w) = &self.window {
-                w.request_redraw();
+            if self.flow_tick(now) > 0 {
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
             }
             let next = self.app.flow.as_ref().and_then(|f| f.delays.iter().map(|d| d.at).min());
             if let Some(next) = next {
@@ -5226,10 +5228,10 @@ impl Host {
         let orphaned = self.app.flow.as_ref().is_some_and(|f| {
             f.hover_span.as_ref().is_some_and(|s| s.hotspot() != hit)
         });
-        if !orphaned
-            && let Some(f) = self.app.flow.as_mut()
-        {
-            f.hovered = Some(hit.clone());
+        if !orphaned {
+            if let Some(f) = self.app.flow.as_mut() {
+                f.hovered = Some(hit.clone());
+            }
         }
         self.flow_fire_trigger(&hit, x_native::Trigger::OnPress);
         self.flow_fire_trigger(&hit, x_native::Trigger::OnClick);
@@ -5485,10 +5487,10 @@ impl Host {
             self.flow_pan_to(&dest);
         }
         // headless (tests, jobs) has no window: never spawn a browser
-        if let Some(url) = effect.opened_link.as_deref()
-            && self.window.is_some()
-        {
-            Self::open_flow_link(url);
+        if let Some(url) = effect.opened_link.as_deref() {
+            if self.window.is_some() {
+                Self::open_flow_link(url);
+            }
         }
         effect
     }
@@ -5535,11 +5537,11 @@ impl Host {
             return;
         }
         let old = cur_hovered.or(orphan_hotspot);
-        if let Some(old) = old
-            && Some(&old) != next.as_ref()
-        {
-            self.flow_fire_trigger(&old, x_native::Trigger::MouseLeave);
-            self.flow_leave_hover_span(&old);
+        if let Some(old) = old {
+            if Some(&old) != next.as_ref() {
+                self.flow_fire_trigger(&old, x_native::Trigger::MouseLeave);
+                self.flow_leave_hover_span(&old);
+            }
         }
         if let Some(f) = self.app.flow.as_mut() {
             f.hovered = next.clone();
@@ -5565,15 +5567,15 @@ impl Host {
         let orphaned = self.app.flow.as_ref().is_some_and(|f| {
             f.hover_span.as_ref().is_some_and(|s| s.hotspot() != hit)
         });
-        if !orphaned
-            && let Some(f) = self.app.flow.as_mut()
-        {
-            f.hovered = Some(hit.clone());
+        if !orphaned {
+            if let Some(f) = self.app.flow.as_mut() {
+                f.hovered = Some(hit.clone());
+            }
         }
-        if self.flow_fire_trigger(&hit, x_native::Trigger::OnDrag)
-            && let Some(f) = self.app.flow.as_mut()
-        {
-            f.drag_fired = true;
+        if self.flow_fire_trigger(&hit, x_native::Trigger::OnDrag) {
+            if let Some(f) = self.app.flow.as_mut() {
+                f.drag_fired = true;
+            }
         }
     }
 
@@ -5671,10 +5673,10 @@ impl Host {
                 return fired;
             };
             let d = f.delays.remove(i);
-            if let Some(src) = &d.source_overlay
-                && !self.flow_overlay_open(src)
-            {
-                continue; // its overlay closed: disarmed
+            if let Some(src) = &d.source_overlay {
+                if !self.flow_overlay_open(src) {
+                    continue; // its overlay closed: disarmed
+                }
             }
             let ix = x_native::Interaction {
                 trigger: x_native::Trigger::AfterDelay { ms: 0 },

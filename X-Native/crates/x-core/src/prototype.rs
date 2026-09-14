@@ -63,7 +63,6 @@ impl Trigger {
             }
             Trigger::MouseEnter => "Mouse enter",
             Trigger::MouseLeave => "Mouse leave",
-            Trigger::MouseUp => "Mouse up",
             Trigger::KeyDown { .. } => "Key down",
         }
     }

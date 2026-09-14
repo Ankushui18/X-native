@@ -602,14 +602,14 @@ impl<'a> Player<'a> {
         let mut fired = false;
         let orphan_hotspot = self.hover_span.as_ref().map(|s| s.hotspot().to_string());
         let old = self.hovered.clone().or(orphan_hotspot);
-        if let Some(old) = old
-            && Some(&old) != next.as_ref()
-        {
-            fired |= self.fire_trigger(&old, Trigger::MouseLeave);
-            // explicit leave first (authorial intent), then the
-            // ambient while-hovering auto-reverse — guarded, so it
-            // quietly dies when the explicit leave already moved on
-            fired |= self.leave_hover_span(&old);
+        if let Some(old) = old {
+            if Some(&old) != next.as_ref() {
+                fired |= self.fire_trigger(&old, Trigger::MouseLeave);
+                // explicit leave first (authorial intent), then the
+                // ambient while-hovering auto-reverse — guarded, so it
+                // quietly dies when the explicit leave already moved on
+                fired |= self.leave_hover_span(&old);
+            }
         }
         self.hovered = next.clone();
         if let Some(hit) = next {
@@ -712,10 +712,10 @@ impl<'a> Player<'a> {
         let mut fired = 0;
         while let Some(i) = self.delays.iter().position(|d| d.at_ms <= now_ms) {
             let d = self.delays.remove(i);
-            if let Some(src) = &d.source_overlay
-                && !self.overlays.iter().any(|o| &o.frame == src)
-            {
-                continue; // its overlay closed: disarmed
+            if let Some(src) = &d.source_overlay {
+                if !self.overlays.iter().any(|o| &o.frame == src) {
+                    continue; // its overlay closed: disarmed
+                }
             }
             let effect = self.fire(&d.ix);
             if effect.fired() {
@@ -1214,7 +1214,7 @@ mod tests {
         let root = player_doc();
         let mut p = Player::new(&root, "home");
         // hover "hov": while-hovering navigates to detail, no history yet
-        assert!(p.hover(Point::new(120.0, 35.0))));
+        assert!(p.hover(Point::new(120.0, 35.0)));
         assert_eq!(p.current, "detail");
         // moving anywhere — even empty canvas — leaves the hotspot and
         // returns to home WITHOUT pushing history
