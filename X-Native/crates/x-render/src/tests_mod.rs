@@ -6,18 +6,21 @@ use x_core::*;
 
 // -------------------------------------------------------------------- tests
 
+/// Frames and sections draw their own name as a canvas label (the QA-004 block
+/// in scene.rs), and every glyph of that label counts as one path in the scene
+/// stats. The names these tests use are ASCII, so one glyph per character —
+/// spell the label out instead of hardcoding the sum, so a renamed fixture
+/// reads as a label change rather than a mystery off-by-N.
+///
+/// File scope on purpose: this file holds several `#[cfg(test)]` modules
+/// (`tests`, `variable_bindings`, …) and they all build scenes with frames.
+fn label_paths(name: &str) -> usize {
+    name.chars().count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Frames and sections draw their own name as a canvas label (the QA-004
-    /// block in scene.rs), and every glyph of that label counts as one path in
-    /// the scene stats. The names used in these tests are ASCII, so one glyph
-    /// per character — spell the label out instead of hardcoding the sum, so a
-    /// renamed fixture shows up as a label change, not as a mystery off-by-N.
-    fn label_paths(name: &str) -> usize {
-        name.chars().count()
-    }
 
     #[test]
     fn feature_model_has_expected_nodes() {
