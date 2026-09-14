@@ -528,9 +528,15 @@ impl<'a> Player<'a> {
         hit_test(frame, point).map(|hit| (self.current.clone(), hit))
     }
 
-    /// Show `frame`: reset hover/drag state, clear overlays, arm delays.
+    /// Show `frame` as a fresh preview session: clear the navigation
+    /// history, the overlays, and all hover/drag/while-span state, then
+    /// arm delays. The host enters its viewer the same way (a fresh
+    /// `FlowState`), so a re-entry can never inherit a stale back target:
+    /// a "while hovering" span abandoned by `enter` has its push dropped
+    /// with the rest of the history.
     pub fn enter(&mut self, frame: &str) {
         self.current = frame.into();
+        self.stack.clear();
         self.overlays.clear();
         self.hovered = None;
         self.dragging = false;
