@@ -3591,6 +3591,22 @@ fn shape_signature(n: &Node) -> Sig {
         matches
     }
 
+    /// Get a shared reference to a node by ID
+    pub fn get_node(&self, id: &str) -> Option<&Node> {
+        fn find_node(node: &Node, id: &str) -> Option<&Node> {
+            if node.id == id {
+                return Some(node);
+            }
+            for child in &node.children {
+                if let Some(found) = find_node(child, id) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        find_node(&self.root, id)
+    }
+
     /// Get a mutable reference to a node by ID
     pub fn get_node_mut(&mut self, id: &str) -> Option<&mut Node> {
         fn find_node_mut<'a>(node: &'a mut Node, id: &str) -> Option<&'a mut Node> {

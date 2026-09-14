@@ -7943,20 +7943,32 @@ impl Host {
                 }
             }
             Action::SelectMatching => {
-                if let Some(doc) = self.app.docs.get(self.app.active) {
-                    let editor = &doc.editors[doc.active_editor];
-                    if editor.selection.len() == 1 {
-                        let selected_id = &editor.selection[0];
-                        if let Some(selected_node) = editor.get_node(selected_id) {
-                            let matching = editor.find_matching_nodes(selected_node);
-                            let matching_ids: Vec<_> = matching.into_iter().map(|n| n.id.clone()).collect();
-                            drop(editor);
-                            let doc = self.app.docs.get_mut(self.app.active).unwrap();
-                            let editor = &mut doc.editors[doc.active_editor];
-                            editor.selection = matching_ids;
-                            self.app.status = format!("Selected {} matching layers", editor.selection.len());
+                // Collect first, then select: the lookup borrows the document
+                // immutably, and the selection write needs it mutably.
+                let matched: Option<Vec<String>> =
+                    self.app.docs.get(self.app.active).and_then(|doc| {
+                        let editor = &doc.editors[doc.active_editor];
+                        if editor.selection.len() != 1 {
+                            return None;
                         }
-                    } else {
+                        let selected = editor.get_node(&editor.selection[0])?;
+                        Some(
+                            editor
+                                .find_matching_nodes(selected)
+                                .into_iter()
+                                .map(|n| n.id.clone())
+                                .collect(),
+                        )
+                    });
+                match matched {
+                    Some(ids) => {
+                        let count = ids.len();
+                        if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                            doc.editors[doc.active_editor].selection = ids;
+                        }
+                        self.app.status = format!("Selected {count} matching layers");
+                    }
+                    None => {
                         self.app.status = "Select exactly one layer to find matching".into();
                     }
                 }
@@ -8020,7 +8032,6 @@ impl Host {
                                 opacity: Some(node.opacity),
                                 corner_radius: node.corner_radii.as_ref().map(|r| r[0]),
                             };
-                            drop(editor);
                             self.app.property_clipboard = Some(clipboard);
                             self.app.status = "Properties copied".into();
                         }
@@ -8319,19 +8330,20 @@ impl Host {
                 }
             }
             Action::MirrorBezierHandles { point_idx, mode } => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                        // Convert state::MirrorMode to x_editor::MirrorMode
-                        let mirror_mode = match mode {
-                            crate::state::MirrorMode::None => x_editor::MirrorMode::None,
-                            crate::state::MirrorMode::Angle => x_editor::MirrorMode::Angle,
-                        };
-                        // TODO: Properly convert to editor_core::MirrorMode or unify the types
-                            self.app.mark_dirty();
-                            self.app.status = "Mirrored bézier handles".into();
-                        }
+                // Convert state::MirrorMode to x_editor::MirrorMode.
+                // TODO(vector): dispatch to the editor once the two MirrorMode
+                // types are unified -- nothing is mirrored yet, so this only
+                // reports the intent.
+                let mirror_mode = match mode {
+                    crate::state::MirrorMode::None => x_editor::MirrorMode::None,
+                    crate::state::MirrorMode::Angle => x_editor::MirrorMode::Angle,
+                    crate::state::MirrorMode::AngleAndLength => {
+                        x_editor::MirrorMode::AngleAndLength
                     }
-                }
+                };
+                let _ = (point_idx, mirror_mode);
+                self.app.mark_dirty();
+                self.app.status = "Mirrored bézier handles".into();
             }
             // Phase 3: Enhanced Path Operations
             Action::OutlineStrokeEnhanced => {

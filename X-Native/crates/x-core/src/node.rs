@@ -492,9 +492,6 @@ impl TextWrap {
     }
 }
 
-/// Layout-grid guide pattern.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-
 /// Text horizontal alignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TextAlign {
@@ -701,6 +698,8 @@ impl HangingPunctuation {
         Self { quotes, lists }
     }
 }
+/// Layout-grid guide pattern.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GridPattern {
     #[default]
     Columns,

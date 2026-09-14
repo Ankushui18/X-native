@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use vello::kurbo::{Point, Rect};
 use x_native::editor::Editor;
-use x_native::{Color, Document, Node, NodeKind, Paint, Variables};
+use x_native::{Color, Document, Node, NodeKind, Paint, PathCmd, Variables};
 
 use crate::command::CommandPalette;
 use crate::context_menu::ContextMenu;
@@ -794,9 +794,6 @@ pub struct FlowState {
     pub press_span: Option<x_native::editor::WhileSpan>,
 }
 
-/// The one text-entry surface: clicking a field focuses it; keystrokes go
-/// into `buffer`; Enter commits, Esc cancels.
-#[derive(Clone, Debug)]
 /// Clipboard for copying/pasting layer properties (Figma parity)
 #[derive(Clone, Debug)]
 pub struct PropertyClipboard {
@@ -850,6 +847,9 @@ pub enum JoinStyle {
 
 impl Default for JoinStyle {
     fn default() -> Self {
+        JoinStyle::Miter
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StrokeCapType {
@@ -859,7 +859,6 @@ pub enum StrokeCapType {
     Arrow,
     Triangle,
 }
-        JoinStyle::Miter
 
 /// Shape Builder operation mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -917,9 +916,6 @@ pub struct DashPattern {
     pub offset: f64,
 }
 
-    }
-}
-
 impl Default for VectorEditMode {
     fn default() -> Self {
         Self {
@@ -932,9 +928,9 @@ impl Default for VectorEditMode {
     }
 }
 
-    pub text_align: String,
-}
-
+/// The one text-entry surface: clicking a field focuses it; keystrokes go
+/// into `buffer`; Enter commits, Esc cancels.
+#[derive(Clone, Debug)]
 pub struct FieldEdit {
     pub id: FieldId,
     pub buffer: String,
