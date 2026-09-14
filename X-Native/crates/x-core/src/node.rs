@@ -4,6 +4,45 @@ use kurbo::{Affine, Circle, Rect, RoundedRect, RoundedRectRadii, Shape};
 use peniko::{Brush, Color, Fill, Gradient, Mix};
 use std::collections::HashMap;
 
+// Phase 6: Import ImageAdjustments from x-render
+// We'll define it here in x-core to avoid circular dependencies
+/// Phase 6: Image adjustment parameters
+/// All values are in the range [-1.0, 1.0] where:
+/// - -1.0 = maximum negative adjustment
+/// - 0.0 = no adjustment
+/// - 1.0 = maximum positive adjustment
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ImageAdjustments {
+    /// Brightness adjustment (-1.0 to 1.0)
+    pub exposure: f32,
+    /// Contrast adjustment (-1.0 to 1.0)
+    pub contrast: f32,
+    /// Color saturation adjustment (-1.0 to 1.0)
+    pub saturation: f32,
+    /// Color temperature adjustment (-1.0 to 1.0, negative = cool/blue, positive = warm/orange)
+    pub temperature: f32,
+    /// Color tint adjustment (-1.0 to 1.0, negative = green, positive = magenta)
+    pub tint: f32,
+    /// Highlight brightness adjustment (-1.0 to 1.0)
+    pub highlights: f32,
+    /// Shadow brightness adjustment (-1.0 to 1.0)
+    pub shadows: f32,
+}
+
+impl Default for ImageAdjustments {
+    fn default() -> Self {
+        Self {
+            exposure: 0.0,
+            contrast: 0.0,
+            saturation: 0.0,
+            temperature: 0.0,
+            tint: 0.0,
+            highlights: 0.0,
+            shadows: 0.0,
+        }
+    }
+}
+
 // -------------------------------------------------------------------- nodes
 
 /// Phase 2.6: editable vector path data. A vector node owns a list of
@@ -305,7 +344,14 @@ pub struct Node {
     pub hanging_punctuation: HangingPunctuation,
     pub list_style: ListStyle,
     pub wrap_style: WrapStyle,
-}
+    
+    /// Phase 6: Image adjustments (exposure, contrast, saturation, etc.)
+    /// Only applies to Image nodes and Pattern fills
+    pub image_adjustments: Option<ImageAdjustments>,
+    
+    /// Phase 6: Image rotation in degrees (0, 90, 180, 270)
+    /// Independent of node rotation, applies only to the image fill
+    pub image_rotation: f64,
 
 impl Node {
     /// Clone this node's own state without walking/allocating its descendants.
@@ -361,6 +407,8 @@ impl Node {
             hanging_punctuation: self.hanging_punctuation,
             list_style: self.list_style,
             wrap_style: self.wrap_style,
+            image_adjustments: self.image_adjustments,
+            image_rotation: self.image_rotation,
         }
     }
 
@@ -605,6 +653,51 @@ impl ListStyle {
             "numbered" => Self::Numbered,
             _ => Self::None,
         }
+    }
+}
+
+/// Text wrap style for line breaking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WrapStyle {
+    #[default]
+    Normal,
+    BreakWord,
+}
+
+impl WrapStyle {
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::BreakWord => "break-word",
+        }
+    }
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "break-word" => Self::BreakWord,
+            _ => Self::Normal,
+        }
+    }
+}
+
+/// Hanging punctuation settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HangingPunctuation {
+    pub quotes: bool,
+    pub lists: bool,
+}
+
+impl HangingPunctuation {
+    pub fn to_json(&self) -> String {
+        format!(
+            "{{\"quotes\":{},\"lists\":{}}}",
+            self.quotes, self.lists
+        )
+    }
+    pub fn parse(s: &str) -> Self {
+        // Simple JSON parser for {"quotes":bool,"lists":bool}
+        let quotes = s.contains("\"quotes\":true");
+        let lists = s.contains("\"lists\":true");
+        Self { quotes, lists }
     }
 }
 pub enum GridPattern {
@@ -899,6 +992,8 @@ impl Node {
             hanging_punctuation: HangingPunctuation::default(),
             list_style: ListStyle::None,
             wrap_style: WrapStyle::Normal,
+            image_adjustments: None,
+            image_rotation: 0.0,
         }
     }
     pub fn frame(id: &str, w: f64, h: f64) -> Self {

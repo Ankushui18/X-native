@@ -39,10 +39,213 @@ pub enum Paint {
         stops: Vec<(f32, Color)>,
         space: GradSpace,
     },
+    /// Phase 6: Angular/Conic gradient - rotates around center point
+    AngularGradient {
+        center: (f64, f64),
+        start_angle: f64,  // degrees, 0 = right, 90 = down
+        end_angle: f64,    // degrees, typically start_angle + 360
+        stops: Vec<(f32, Color)>,
+        space: GradSpace,
+    },
+    /// Phase 6: Diamond gradient - expands in diamond shape from center
+    DiamondGradient {
+        center: (f64, f64),
+        width: f64,        // horizontal radius
+        height: f64,       // vertical radius
+        stops: Vec<(f32, Color)>,
+        space: GradSpace,
+    },
     Pattern {
         asset: String,
         fit: ImageFit,
     },
+}
+
+impl Paint {
+    /// Phase 6: Flip gradient - reverse the color stops
+    pub fn flip(&mut self) {
+        match self {
+            Paint::LinearGradient { stops, .. } |
+            Paint::RadialGradient { stops, .. } |
+            Paint::AngularGradient { stops, .. } |
+            Paint::DiamondGradient { stops, .. } => {
+                // Reverse stops and adjust positions
+                for (pos, _) in stops.iter_mut() {
+                    *pos = 1.0 - *pos;
+                }
+                stops.reverse();
+            }
+            _ => {}
+        }
+    }
+
+    /// Phase 6: Rotate gradient by angle (degrees)
+    pub fn rotate(&mut self, angle: f64) {
+        match self {
+            Paint::LinearGradient { start, end, .. } => {
+                // Rotate the gradient line around its center
+                let cx = (start.0 + end.0) / 2.0;
+                let cy = (start.1 + end.1) / 2.0;
+                
+                let rad = angle.to_radians();
+                let cos = rad.cos();
+                let sin = rad.sin();
+                
+                // Rotate start point
+                let dx = start.0 - cx;
+                let dy = start.1 - cy;
+                start.0 = cx + dx * cos - dy * sin;
+                start.1 = cy + dx * sin + dy * cos;
+                
+                // Rotate end point
+                let dx = end.0 - cx;
+                let dy = end.1 - cy;
+                end.0 = cx + dx * cos - dy * sin;
+                end.1 = cy + dx * sin + dy * cos;
+            }
+            Paint::AngularGradient { start_angle, end_angle, .. } => {
+                // Rotate angular gradient
+                *start_angle += angle;
+                *end_angle += angle;
+                // Normalize angles
+                *start_angle = start_angle.rem_euclid(360.0);
+                *end_angle = end_angle.rem_euclid(360.0);
+            }
+            _ => {}
+        }
+    }
+
+    /// Phase 6: Add a color stop at position
+    pub fn add_stop(&mut self, position: f32, color: Color) {
+        match self {
+            Paint::LinearGradient { stops, .. } |
+            Paint::RadialGradient { stops, .. } |
+            Paint::AngularGradient { stops, .. } |
+            Paint::DiamondGradient { stops, .. } => {
+                stops.push((position, color));
+                // Sort by position
+                stops.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            }
+            _ => {}
+        }
+    }
+
+    /// Phase 6: Remove a color stop at index
+    pub fn remove_stop(&mut self, index: usize) {
+        match self {
+            Paint::LinearGradient { stops, .. } |
+            Paint::RadialGradient { stops, .. } |
+            Paint::AngularGradient { stops, .. } |
+            Paint::DiamondGradient { stops, .. } => {
+                if index < stops.len() && stops.len() > 2 {
+                    stops.remove(index);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Phase 6: Move a color stop to new position
+    pub fn move_stop(&mut self, index: usize, new_position: f32) {
+        match self {
+            Paint::LinearGradient { stops, .. } |
+            Paint::RadialGradient { stops, .. } |
+            Paint::AngularGradient { stops, .. } |
+            Paint::DiamondGradient { stops, .. } => {
+                if index < stops.len() {
+                    stops[index].0 = new_position.clamp(0.0, 1.0);
+                    // Re-sort
+                    stops.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Phase 6: Check if this paint is a gradient
+    pub fn is_gradient(&self) -> bool {
+        matches!(self, 
+            Paint::LinearGradient { .. } | 
+            Paint::RadialGradient { .. } |
+            Paint::AngularGradient { .. } |
+            Paint::DiamondGradient { .. }
+        )
+    }
+
+    /// Phase 6: Get gradient type name for UI
+    pub fn gradient_type_name(&self) -> &'static str {
+        match self {
+            Paint::LinearGradient { .. } => "Linear",
+            Paint::RadialGradient { .. } => "Radial",
+            Paint::AngularGradient { .. } => "Angular",
+            Paint::DiamondGradient { .. } => "Diamond",
+            _ => "Solid",
+        }
+    }
+
+    /// Phase 6: Create a linear gradient
+    pub fn linear_gradient(
+        start: (f64, f64),
+        end: (f64, f64),
+        stops: Vec<(f32, Color)>,
+        space: GradSpace,
+    ) -> Self {
+        Paint::LinearGradient {
+            start,
+            end,
+            stops,
+            space,
+        }
+    }
+
+    /// Phase 6: Create a radial gradient
+    pub fn radial_gradient(
+        center: (f64, f64),
+        radius: f64,
+        stops: Vec<(f32, Color)>,
+        space: GradSpace,
+    ) -> Self {
+        Paint::RadialGradient {
+            center,
+            radius,
+            stops,
+            space,
+        }
+    }
+
+    /// Phase 6: Create an angular (conic) gradient
+    pub fn angular_gradient(
+        center: (f64, f64),
+        start_angle: f64,
+        end_angle: f64,
+        stops: Vec<(f32, Color)>,
+        space: GradSpace,
+    ) -> Self {
+        Paint::AngularGradient {
+            center,
+            start_angle,
+            end_angle,
+            stops,
+            space,
+        }
+    }
+
+    /// Phase 6: Create a diamond gradient
+    pub fn diamond_gradient(
+        center: (f64, f64),
+        width: f64,
+        height: f64,
+        stops: Vec<(f32, Color)>,
+        space: GradSpace,
+    ) -> Self {
+        Paint::DiamondGradient {
+            center,
+            width,
+            height,
+            stops,
+            space,
+        }
+    }
 }
 
 impl GradSpace {
@@ -268,6 +471,7 @@ impl Stroke {
 }
 
 /// Phase 4: blend modes. Applied as a Vello mix layer around the node.
+/// Phase 6: Added PlusDarker, PlusLighter, and PassThrough for Figma parity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BlendKind {
     #[default]
@@ -287,6 +491,13 @@ pub enum BlendKind {
     Saturation,
     Color,
     Luminosity,
+    /// Phase 6: Stronger darken effect on mid-tones
+    PlusDarker,
+    /// Phase 6: Stronger lighten effect on mid-tones
+    PlusLighter,
+    /// Phase 6: Special mode for groups/frames - allows child blend modes
+    /// to interact with content below parent layer
+    PassThrough,
 }
 impl BlendKind {
     pub fn mix(self) -> Option<Mix> {
@@ -307,6 +518,12 @@ impl BlendKind {
             BlendKind::Saturation => Some(Mix::Saturation),
             BlendKind::Color => Some(Mix::Color),
             BlendKind::Luminosity => Some(Mix::Luminosity),
+            // Phase 6: PlusDarker and PlusLighter use custom formulas
+            // Vello/Peniko doesn't have direct support, so we return None
+            // and handle them with custom shaders in the renderer
+            BlendKind::PlusDarker => None,  // Custom: max(0, base + blend - 1)
+            BlendKind::PlusLighter => None, // Custom: min(1, base + blend)
+            BlendKind::PassThrough => None, // Special: handled by group rendering
         }
     }
 }

@@ -16,7 +16,8 @@ use x_native::{ui::Elevation, FrameCache, Node, NodeKind, VelloSink};
 use crate::icons::{draw_flow_glyph, draw_icon};
 use crate::paint::*;
 use crate::state::{
-    kind_icon, parse_hex, Action, App, CtxCmd, FieldId, LeftTab, RightTab, Tool, FRAME_PRESETS,
+    kind_icon, parse_hex, Action, App, CtxCmd, FieldId, LeftTab, NavTab, NotificationKind,
+    RightTab, Tool, FRAME_PRESETS,
 };
 use crate::theme::*;
 
@@ -36,6 +37,7 @@ pub fn paint(app: &mut App, s: &mut Scene) {
 
     paint_canvas_bg(app, s);
     paint_title(app, s, &mut hit);
+    paint_nav_bar(app, s, &mut hit);
     paint_left(app, s, &mut hit);
     paint_resizers(app, s);
     paint_right(app, s, &mut hit);
@@ -72,12 +74,17 @@ pub fn paint_over(app: &mut App, s: &mut Scene) {
     paint_canvas_overlays(app, s);
     paint_layout_guides(app, s);
     paint_ruler_guides(app, s);
+    paint_vector_points(app, s);
     paint_smart_guides(app, s);
     paint_text_editor(app, s);
+    paint_proto_connections(app, s);
     paint_rulers(app, s);
     paint_toolbar(app, s, &mut hit);
     paint_context_menu(app, s, &mut hit);
     paint_page_menu(app, s, &mut hit);
+    paint_app_menu(app, s, &mut hit);
+    paint_find_replace(app, s, &mut hit);
+    paint_notifications(app, s, &mut hit);
     app.hit = hit;
 }
 
@@ -193,6 +200,106 @@ fn paint_smart_guides(app: &App, s: &mut Scene) {
     }
 }
 
+/// Prototype connection arrows ("noodles") between frames.
+/// Draws colored bezier curves connecting source nodes to their destinations,
+/// following Figma's prototype visualization style.
+fn paint_proto_connections(app: &App, s: &mut Scene) {
+    // Only show connections when on the Prototype tab and we have a selection
+    if app.doc().right_tab != RightTab::Prototype {
+        return;
+    }
+    let doc = app.doc_opt();
+    let Some(doc) = doc else { return };
+    let root = &doc.editor_ref().root;
+
+    // Collect all nodes with interactions
+    fn collect_interactions(
+        n: &x_native::Node,
+        out: &mut Vec<(String, x_native::Interaction)>,
+    ) {
+        for ix in x_native::effective_interactions(n) {
+            out.push((n.id.clone(), ix));
+        }
+        for c in &n.children {
+            collect_interactions(c, out);
+        }
+    }
+    let mut all_interactions: Vec<(String, x_native::Interaction)> = Vec::new();
+    collect_interactions(root, &mut all_interactions);
+
+    if all_interactions.is_empty() {
+        return;
+    }
+
+    // Helper to find node bounds
+    fn find_node_bounds(root: &x_native::Node, id: &str) -> Option<Rect> {
+        fn walk(n: &x_native::Node, id: &str, ox: f64, oy: f64) -> Option<Rect> {
+            let x = ox + n.transform.x;
+            let y = oy + n.transform.y;
+            if n.id == id {
+                return Some(Rect::new(x, y, x + n.w, y + n.h));
+            }
+            for c in &n.children {
+                if let Some(r) = walk(c, id, x, y) {
+                    return Some(r);
+                }
+            }
+            None
+        }
+        walk(root, id, 0.0, 0.0)
+    }
+
+    // Draw each connection as a curved arrow
+    for (source_id, ix) in &all_interactions {
+        let dest_id = match &ix.action {
+            x_native::Action::Navigate { destination } => Some(destination.as_str()),
+            x_native::Action::OpenOverlay { overlay, .. } => Some(overlay.as_str()),
+            x_native::Action::SwapOverlay { overlay } => Some(overlay.as_str()),
+            x_native::Action::ScrollTo { destination } => Some(destination.as_str()),
+            _ => None,
+        };
+        let Some(dest_id) = dest_id else { continue };
+        let Some(src_rect) = find_node_bounds(root, source_id) else { continue };
+        let Some(dst_rect) = find_node_bounds(root, dest_id) else { continue };
+
+        // Convert to screen coordinates
+        let src_screen = Rect::new(
+            app.world_to_screen(Point::new(src_rect.x0, src_rect.y0)).x,
+            app.world_to_screen(Point::new(src_rect.x0, src_rect.y0)).y,
+            app.world_to_screen(Point::new(src_rect.x1, src_rect.y1)).x,
+            app.world_to_screen(Point::new(src_rect.x1, src_rect.y1)).y,
+        );
+        let dst_screen = Rect::new(
+            app.world_to_screen(Point::new(dst_rect.x0, dst_rect.y0)).x,
+            app.world_to_screen(Point::new(dst_rect.x0, dst_rect.y0)).y,
+            app.world_to_screen(Point::new(dst_rect.x1, dst_rect.y1)).x,
+            app.world_to_screen(Point::new(dst_rect.x1, dst_rect.y1)).y,
+        );
+
+        // Start from right edge of source, end at left edge of destination
+        let x0 = src_screen.x1;
+        let y0 = (src_screen.y0 + src_screen.y1) / 2.0;
+        let x1 = dst_screen.x0;
+        let y1 = (dst_screen.y0 + dst_screen.y1) / 2.0;
+
+        // Draw bezier curve (simplified as a line with control points)
+        let mid_x = (x0 + x1) / 2.0;
+        let color = crate::theme::C_SNAP; // Use the snap color (blue/purple)
+        line(s, x0, y0, mid_x, y0, color, 1.5);
+        line(s, mid_x, y0, mid_x, y1, color, 1.5);
+        line(s, mid_x, y1, x1, y1, color, 1.5);
+
+        // Draw arrowhead at destination
+        let arrow_size = 6.0;
+        // Right-pointing arrow
+        line(s, x1 - arrow_size, y1 - arrow_size / 2.0, x1, y1, color, 1.5);
+        line(s, x1 - arrow_size, y1 + arrow_size / 2.0, x1, y1, color, 1.5);
+
+        // Draw small circle at source
+        circle(s, x0, y0, 4.0, color);
+    }
+}
+
 /// Inline canvas text editor — Figma's model: the buffer renders IN PLACE
 /// over the node (its own text is blanked for the session), a thin blue
 /// border replaces the selection chrome, and the caret + selection wash
@@ -300,6 +407,93 @@ fn paint_text_editor(app: &App, s: &mut Scene) {
     if let Some((cx, cy)) = app.text_caret_pos(app.text_caret) {
         let cr = Rect::new(cx, cy, cx + 1.5, cy + line_h);
         fill_rrect(s, cr, 0.5, crate::theme::C_SEL);
+    }
+}
+
+/// Render vector edit mode: points, handles, and selection
+fn paint_vector_points(app: &App, s: &mut Scene) {
+    if !app.vector_edit_mode.active {
+        return;
+    }
+    let Some(node_id) = &app.vector_edit_mode.selected_node else {
+        return;
+    };
+    let doc = app.doc_ref();
+    let editor = doc.editor_ref();
+    let Some(node) = find_node(&editor.root, node_id) else {
+        return;
+    };
+    
+    // Get vector data
+    let vector = match &node.kind {
+        NodeKind::Vector(v) => v,
+        _ => return,
+    };
+    
+    // Draw control handles if enabled
+    if app.vector_edit_mode.show_handles {
+        let handle_color = vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0x40);
+        for (i, segment) in vector.segments.iter().enumerate() {
+            if let Some(ref h_in) = segment.handle_in {
+                let p0 = segment.point;
+                let p1 = *h_in;
+                let sp0 = app.world_to_screen(Point::new(p0.x, p0.y));
+                let sp1 = app.world_to_screen(Point::new(p1.x, p1.y));
+                // Draw handle line
+                draw_line(s, sp0.x, sp0.y, sp1.x, sp1.y, handle_color, 1.0);
+                // Draw handle point
+                let handle_size = 3.0;
+                let handle_rect = Rect::new(
+                    sp1.x - handle_size,
+                    sp1.y - handle_size,
+                    sp1.x + handle_size,
+                    sp1.y + handle_size,
+                );
+                fill_rrect(s, handle_rect, 1.0, handle_color);
+            }
+            if let Some(ref h_out) = segment.handle_out {
+                let p0 = segment.point;
+                let p1 = *h_out;
+                let sp0 = app.world_to_screen(Point::new(p0.x, p0.y));
+                let sp1 = app.world_to_screen(Point::new(p1.x, p1.y));
+                // Draw handle line
+                draw_line(s, sp0.x, sp0.y, sp1.x, sp1.y, handle_color, 1.0);
+                // Draw handle point
+                let handle_size = 3.0;
+                let handle_rect = Rect::new(
+                    sp1.x - handle_size,
+                    sp1.y - handle_size,
+                    sp1.x + handle_size,
+                    sp1.y + handle_size,
+                );
+                fill_rrect(s, handle_rect, 1.0, handle_color);
+            }
+        }
+    }
+    
+    // Draw vector points
+    for (i, segment) in vector.segments.iter().enumerate() {
+        let p = segment.point;
+        let sp = app.world_to_screen(Point::new(p.x, p.y));
+        let is_selected = app.vector_edit_mode.selected_points.contains(&i);
+        
+        let point_size = if is_selected { 5.0 } else { 4.0 };
+        let point_color = if is_selected {
+            vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0xFF)
+        } else {
+            vello::peniko::Color::from_rgba8(0xFF, 0xFF, 0xFF, 0xFF)
+        };
+        let border_color = vello::peniko::Color::from_rgba8(0x00, 0x00, 0x00, 0xFF);
+        
+        // Draw point square
+        let point_rect = Rect::new(
+            sp.x - point_size,
+            sp.y - point_size,
+            sp.x + point_size,
+            sp.y + point_size,
+        );
+        fill_rrect(s, point_rect, 1.0, point_color);
+        stroke_rrect(s, point_rect, 1.0, border_color, 1.0);
     }
 }
 
@@ -830,30 +1024,360 @@ fn paint_title(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     // rename doc field lives in the left panel; caret drawn there
 }
 
+// ------------------------------------------- navigation bar (Figma-style)
+
+/// Navigation bar colors.
+const C_NAV_BG: Color = Color::from_rgb8(0x1A, 0x1A, 0x1A);
+const C_NAV_BORDER: Color = Color::from_rgb8(0x2A, 0x2A, 0x2A);
+const C_NAV_ACTIVE: Color = Color::from_rgb8(0x00, 0x7A, 0xFF);
+const C_NAV_HOVER: Color = Color::from_rgb8(0x25, 0x25, 0x25);
+const C_NAV_ICON: Color = Color::from_rgb8(0x99, 0x99, 0x99);
+const C_NAV_ICON_ACTIVE: Color = Color::from_rgb8(0xFF, 0xFF, 0xFF);
+const C_NAV_LABEL: Color = Color::from_rgb8(0x66, 0x66, 0x66);
+const NAV_ICON_SIZE: f64 = 20.0;
+const NAV_ITEM_H: f64 = 40.0;
+const NAV_ITEM_GAP: f64 = 2.0;
+
+/// Vertical navigation bar — Figma's left-most rail with tab icons.
+/// Width: 48px, background #1A1A1A, icons 20px, labels 10px below.
+fn paint_nav_bar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    let reg = app.editor_regions();
+    let nr = reg.nav_bar;
+    // Background
+    fill_rect(s, nr, C_NAV_BG);
+    vline(s, nr.x1 - 1.0, ED_TITLE_H, app.win_h, C_NAV_BORDER);
+
+    let mut y = nr.y0 + 8.0;
+    let nav_w = nr.x1 - nr.x0;
+
+    // Figma menu (hamburger) at top
+    let menu_r = Rect::new(nr.x0 + 4.0, y, nr.x1 - 4.0, y + 36.0);
+    let menu_hov = hover(app, menu_r);
+    if menu_hov {
+        fill_rrect(s, menu_r, 6.0, C_NAV_HOVER);
+    }
+    // Draw hamburger icon (3 lines)
+    let hx = menu_r.x0 + (nav_w - 20.0) / 2.0;
+    let hy = menu_r.y0 + 8.0;
+    for i in 0..3 {
+        hline(s, hx, hx + 20.0, hy + i as f64 * 5.0, C_NAV_ICON);
+    }
+    hit.push((menu_r, Action::OpenAppMenu));
+    y += 44.0;
+
+    // Divider
+    hline(s, nr.x0 + 8.0, nr.x1 - 8.0, y, C_NAV_BORDER);
+    y += 8.0;
+
+    // Tab items
+    let tabs = [
+        NavTab::File,
+        NavTab::Agents,
+        NavTab::Assets,
+        NavTab::Tools,
+        NavTab::Variables,
+    ];
+    for (i, tab) in tabs.iter().enumerate() {
+        let ir = Rect::new(nr.x0 + 4.0, y, nr.x1 - 4.0, y + NAV_ITEM_H);
+        let active = app.nav_tab == *tab;
+        let hov = hover(app, ir);
+
+        if active {
+            // Active indicator: left border accent
+            fill_rrect(s, ir, 6.0, C_NAV_HOVER);
+            // Left accent bar
+            fill_rrect(
+                s,
+                Rect::new(nr.x0, ir.y0 + 4.0, nr.x0 + 3.0, ir.y1 - 4.0),
+                1.5,
+                C_NAV_ACTIVE,
+            );
+        } else if hov {
+            fill_rrect(s, ir, 6.0, C_NAV_HOVER);
+        }
+
+        // Icon
+        let icon_color = if active { C_NAV_ICON_ACTIVE } else { C_NAV_ICON };
+        draw_icon(s, tab.icon(), ir.x0 + (nav_w - 8.0 - NAV_ICON_SIZE) / 2.0, ir.y0 + (NAV_ITEM_H - NAV_ICON_SIZE) / 2.0 - 2.0, NAV_ICON_SIZE, icon_color);
+
+        // Label below icon (if labels are shown)
+        if app.nav_show_labels {
+            let label = tab.label();
+            let lw = app.fonts.measure(label, 9.0, Wt::Reg);
+            app.fonts.text(
+                s,
+                ir.x0 + (nav_w - 8.0 - lw) / 2.0,
+                ir.y1 - 12.0,
+                label,
+                9.0,
+                if active { C_NAV_ICON_ACTIVE } else { C_NAV_LABEL },
+                Wt::Reg,
+            );
+        }
+
+        hit.push((ir, Action::NavTab(*tab)));
+        y += NAV_ITEM_H + NAV_ITEM_GAP;
+    }
+
+    // Spacer to push notifications to bottom
+    y = app.win_h - 52.0;
+
+    // Notifications bell at bottom
+    let bell_r = Rect::new(nr.x0 + 4.0, y, nr.x1 - 4.0, y + 40.0);
+    let bell_hov = hover(app, bell_r);
+    if bell_hov {
+        fill_rrect(s, bell_r, 6.0, C_NAV_HOVER);
+    }
+    draw_icon(
+        s,
+        "message-circle",
+        bell_r.x0 + (nav_w - 8.0 - 18.0) / 2.0,
+        bell_r.y0 + 4.0,
+        18.0,
+        C_NAV_ICON,
+    );
+    // Badge for unread count
+    let unread = app.notifications.unread_count;
+    if unread > 0 {
+        let badge = Rect::new(bell_r.x1 - 16.0, bell_r.y0 + 4.0, bell_r.x1 - 4.0, bell_r.y0 + 18.0);
+        fill_rrect(s, badge, 6.0, vello::peniko::Color::from_rgb8(0xFF, 0x3B, 0x30));
+        let count = if unread > 9 { "9+".to_string() } else { unread.to_string() };
+        let cw = app.fonts.measure(&count, 8.0, Wt::Bold);
+        app.fonts.text(
+            s,
+            badge.x0 + (badge.x1 - badge.x0 - cw) / 2.0,
+            badge.y0 + 3.0,
+            &count,
+            8.0,
+            Color::WHITE,
+            Wt::Bold,
+        );
+    }
+    hit.push((bell_r, Action::ToggleNotifications));
+}
+
+/// Application menu (hamburger menu dropdown).
+fn paint_app_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    if !app.app_menu.open {
+        return;
+    }
+    let reg = app.editor_regions();
+    let mx = reg.nav_bar.x1 + 4.0;
+    let my = reg.nav_bar.y0 + 8.0;
+    let mw = 220.0;
+    let items: Vec<(&str, &str, bool)> = vec![
+        ("New file", "⌘N", true),
+        ("Open file…", "⌘O", true),
+        ("", "", false), // separator
+        ("Save", "⌘S", true),
+        ("Save as…", "⇧⌘S", true),
+        ("", "", false), // separator
+        ("Export as…", "⇧⌘E", true),
+        ("", "", false), // separator
+        ("Preferences", "⌘,", true),
+        ("Dark mode", "", true),
+        ("Highlight layers on hover", "", true),
+        ("", "", false), // separator
+        ("Keyboard shortcuts", "⌘/", true),
+        ("About X-Native", "", true),
+    ];
+    let row_h = 32.0;
+    let mut h = 8.0;
+    for (label, _, is_sep) in &items {
+        if *is_sep && label.is_empty() {
+            h += 8.0;
+        } else {
+            h += row_h;
+        }
+    }
+    let panel = Rect::new(mx, my, mx + mw, my + h);
+    elev_shadow(s, panel, 12.0, Elevation::Floating);
+    fill_rrect(s, panel, 8.0, C_FIELD);
+    stroke_rrect(s, panel, 8.0, C_LINE_2, 1.0);
+
+    let mut y = my + 4.0;
+    for (i, (label, shortcut, is_item)) in items.iter().enumerate() {
+        if *is_item && !label.is_empty() {
+            let r = Rect::new(mx + 4.0, y, mx + mw - 4.0, y + row_h);
+            let hov = hover(app, r);
+            if hov {
+                fill_rrect(s, r, 4.0, C_FIELD_2);
+                app.app_menu.hover_index = Some(i);
+            }
+            app.fonts.text(s, r.x0 + 12.0, r.y0 + 8.0, label, T11, C_TEXT, Wt::Reg);
+            if !shortcut.is_empty() {
+                app.fonts.text_right(s, r.x1 - 12.0, r.y0 + 8.5, shortcut, T10, C_DIM, Wt::Reg, 0.0);
+            }
+            hit.push((r, Action::AppMenuItem(i)));
+            y += row_h;
+        } else if *is_item {
+            // Separator
+            hline(s, mx + 12.0, mx + mw - 12.0, y + 4.0, C_LINE);
+            y += 8.0;
+        }
+    }
+
+    // Close when clicking outside
+    let outside = Rect::new(0.0, 0.0, app.win_w, app.win_h);
+    // We don't add a hit for outside — that's handled by press dispatch
+}
+
+/// Find/Replace panel (top of left sidebar).
+fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    if !app.find_replace.open {
+        return;
+    }
+    let reg = app.editor_regions();
+    let fx = reg.sidebar.x0 + 8.0;
+    let fy = reg.sidebar.y0 + 8.0;
+    let fw = reg.sidebar.x1 - reg.sidebar.x0 - 16.0;
+    let fh = if app.find_replace.show_replace { 84.0 } else { 48.0 };
+    let panel = Rect::new(fx, fy, fx + fw, fy + fh);
+    fill_rrect(s, panel, 6.0, C_FIELD);
+    stroke_rrect(s, panel, 6.0, C_LINE_2, 1.0);
+
+    // Search input row
+    let search_r = Rect::new(fx + 6.0, fy + 6.0, fx + fw - 6.0, fy + 28.0);
+    fill_rrect(s, search_r, 4.0, C_BG);
+    stroke_rrect(s, search_r, 4.0, C_LINE, 1.0);
+    draw_icon(s, "search", search_r.x0 + 6.0, search_r.y0 + 5.0, 14.0, C_DIM);
+    let query = if app.find_replace.query.is_empty() {
+        "Search…".to_string()
+    } else {
+        app.find_replace.query.clone()
+    };
+    let qc = if app.find_replace.query.is_empty() { C_PLACEHOLDER } else { C_TEXT };
+    app.fonts.text(s, search_r.x0 + 24.0, search_r.y0 + 4.0, &query, T11, qc, Wt::Reg);
+    if !app.find_replace.query.is_empty() {
+        let match_text = format!("{}/{}", app.find_replace.current_match, app.find_replace.match_count);
+        let mtw = app.fonts.measure(&match_text, T10, Wt::Reg);
+        app.fonts.text(s, search_r.x1 - 60.0 - mtw, search_r.y0 + 5.0, &match_text, T10, C_DIM, Wt::Reg);
+        // Prev/Next buttons
+        let prev_r = Rect::new(search_r.x1 - 44.0, search_r.y0 + 2.0, search_r.x1 - 26.0, search_r.y1 - 2.0);
+        let next_r = Rect::new(search_r.x1 - 22.0, search_r.y0 + 2.0, search_r.x1 - 4.0, search_r.y1 - 2.0);
+        draw_icon(s, "chevron-up", prev_r.x0, prev_r.y0 + 2.0, 12.0, C_DIM);
+        draw_icon(s, "chevron-down", next_r.x0, next_r.y0 + 2.0, 12.0, C_DIM);
+        hit.push((prev_r, Action::FindPrev));
+        hit.push((next_r, Action::FindNext));
+    }
+    // Close button
+    let close_r = Rect::new(fx + fw - 20.0, fy + 2.0, fx + fw - 4.0, fy + 18.0);
+    draw_icon(s, "x", close_r.x0 + 4.0, close_r.y0 + 4.0, 10.0, C_DIM);
+
+    // Replace row (if shown)
+    if app.find_replace.show_replace {
+        let ry = fy + 34.0;
+        let replace_r = Rect::new(fx + 6.0, ry, fx + fw - 6.0, ry + 22.0);
+        fill_rrect(s, replace_r, 4.0, C_BG);
+        stroke_rrect(s, replace_r, 4.0, C_LINE, 1.0);
+        let rep_text = if app.find_replace.replace.is_empty() {
+            "Replace…".to_string()
+        } else {
+            app.find_replace.replace.clone()
+        };
+        let rc = if app.find_replace.replace.is_empty() { C_PLACEHOLDER } else { C_TEXT };
+        app.fonts.text(s, replace_r.x0 + 8.0, replace_r.y0 + 4.0, &rep_text, T11, rc, Wt::Reg);
+
+        // Replace / Replace All buttons
+        let btn_y = ry + 26.0;
+        let repl_all_r = Rect::new(fx + fw - 80.0, btn_y, fx + fw - 6.0, btn_y + 18.0);
+        fill_rrect(s, repl_all_r, 4.0, C_FIELD_2);
+        app.fonts.text(s, repl_all_r.x0 + 6.0, repl_all_r.y0 + 3.0, "Replace all", T10, C_TEXT, Wt::Reg);
+        hit.push((repl_all_r, Action::ReplaceAll));
+    }
+
+    // Toggle row
+    let toggle_y = fy + if app.find_replace.show_replace { 60.0 } else { 32.0 };
+    let case_r = Rect::new(fx + 6.0, toggle_y, fx + 22.0, toggle_y + 14.0);
+    if app.find_replace.case_sensitive {
+        fill_rrect(s, case_r, 3.0, C_NAV_ACTIVE);
+    }
+    app.fonts.text(s, case_r.x0 + 2.0, case_r.y0, "Aa", 9.0, if app.find_replace.case_sensitive { Color::WHITE } else { C_DIM }, Wt::Bold);
+    hit.push((case_r, Action::ToggleCaseSensitive));
+
+    let sel_r = Rect::new(fx + 26.0, toggle_y, fx + 42.0, toggle_y + 14.0);
+    if app.find_replace.in_selection {
+        fill_rrect(s, sel_r, 3.0, C_NAV_ACTIVE);
+    }
+    draw_icon(s, "box-select", sel_r.x0 + 1.0, sel_r.y0 + 1.0, 11.0, if app.find_replace.in_selection { Color::WHITE } else { C_DIM });
+    hit.push((sel_r, Action::ToggleFindInSelection));
+}
+
+/// Notification panel (opens from nav bar bell icon).
+fn paint_notifications(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    if !app.notifications.open {
+        return;
+    }
+    let reg = app.editor_regions();
+    let nx = reg.nav_bar.x1 + 4.0;
+    let ny = app.win_h - 200.0;
+    let nw = 280.0;
+    let nh = 180.0;
+    let panel = Rect::new(nx, ny, nx + nw, ny + nh);
+    elev_shadow(s, panel, 12.0, Elevation::Floating);
+    fill_rrect(s, panel, 8.0, C_FIELD);
+    stroke_rrect(s, panel, 8.0, C_LINE_2, 1.0);
+
+    // Header
+    app.fonts.text(s, panel.x0 + 12.0, panel.y0 + 10.0, "Notifications", T11, C_TEXT, Wt::Med);
+    if app.notifications.unread_count > 0 {
+        let mark_all_r = Rect::new(panel.x1 - 80.0, panel.y0 + 4.0, panel.x1 - 8.0, panel.y0 + 22.0);
+        app.fonts.text(s, mark_all_r.x0, mark_all_r.y0 + 4.0, "Mark all read", T10, C_NAV_ACTIVE, Wt::Reg);
+        hit.push((mark_all_r, Action::MarkAllNotificationsRead));
+    }
+    hline(s, panel.x0 + 8.0, panel.x1 - 8.0, panel.y0 + 28.0, C_LINE);
+
+    // Notification items
+    let mut y = panel.y0 + 34.0;
+    for notif in &app.notifications.notifications {
+        let nr = Rect::new(panel.x0 + 8.0, y, panel.x1 - 8.0, y + 44.0);
+        if !notif.read {
+            fill_rrect(s, nr, 4.0, vello::peniko::Color::from_rgba8(0x00, 0x7A, 0xFF, 0x08));
+        }
+        draw_icon(s, notif.kind.icon(), nr.x0 + 8.0, nr.y0 + 6.0, 14.0, if notif.read { C_DIM } else { C_NAV_ACTIVE });
+        let msg = app.fonts.truncate(&notif.message, T10, Wt::Reg, nr.width() - 40.0);
+        app.fonts.text(s, nr.x0 + 28.0, nr.y0 + 8.0, &msg, T10, if notif.read { C_DIM } else { C_TEXT }, Wt::Reg);
+        // Dismiss button
+        let dismiss_r = Rect::new(nr.x1 - 20.0, nr.y0 + 4.0, nr.x1 - 4.0, nr.y0 + 20.0);
+        if hover(app, dismiss_r) {
+            draw_icon(s, "x", dismiss_r.x0 + 4.0, dismiss_r.y0 + 4.0, 10.0, C_DIM);
+        }
+        hit.push((dismiss_r, Action::DismissNotification(notif.id.clone())));
+        y += 48.0;
+    }
+}
+
 // ------------------------------------------------------- left panel 280px
 
 fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let reg = app.editor_regions();
-    let lw = reg.left.x1;
-    fill_rect(s, reg.left, C_PANEL);
+    // If UI is minimized, hide the sidebar
+    if app.ui_minimized {
+        return;
+    }
+    let sidebar = reg.sidebar;
+    let lw = sidebar.x1;
+    fill_rect(s, sidebar, C_PANEL);
     vline(s, lw - 1.0, ED_TITLE_H, app.win_h, C_LINE);
 
     // Audited (1440): DRAFTS row 48, project row 78, pills 110.5, PAGES 156.5,
     // page field 178, divider 218, tree from 252.5. Offsets below are abs - 36.
     let y0 = ED_TITLE_H;
+    // x-offset: sidebar starts at nav_bar_w (old code assumed x=0)
+    let sx = sidebar.x0;
 
     // DRAFTS header
-    fill_rrect(s, Rect::new(12.0, y0 + 12.0, 28.0, y0 + 28.0), 4.0, C_FIELD);
+    fill_rrect(s, Rect::new(sx + 12.0, y0 + 12.0, sx + 28.0, y0 + 28.0), 4.0, C_FIELD);
     stroke_rrect(
         s,
-        Rect::new(12.0, y0 + 12.0, 28.0, y0 + 28.0),
+        Rect::new(sx + 12.0, y0 + 12.0, sx + 28.0, y0 + 28.0),
         4.0,
         C_LINE,
         1.0,
     );
-    draw_icon(s, "box", 16.0, y0 + 16.0, 12.0, C_DIM);
+    draw_icon(s, "box", sx + 16.0, y0 + 16.0, 12.0, C_DIM);
     app.fonts
-        .micro_label(s, 36.0, y0 + 13.3, "DRAFTS", C_DIM, Wt::Med);
+        .micro_label(s, sx + 36.0, y0 + 13.3, "DRAFTS", C_DIM, Wt::Med);
     draw_icon(s, "more-horizontal", lw - 27.0, y0 + 13.0, 14.0, C_DIM);
 
     // file name row (editable) — the mock's file-name-text, independent
@@ -866,32 +1390,32 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         )
     };
     let ny = y0 + 42.0; // name text box top 78
-    let nr = Rect::new(8.0, ny - 3.0, lw - 8.0, ny + 20.5);
+    let nr = Rect::new(sx + 8.0, ny - 3.0, lw - 8.0, ny + 20.5);
     if app.field.as_ref().map(|f| f.id) == Some(FieldId::DocName) {
         let editing = app.field.as_ref().unwrap().buffer.clone();
         fill_rrect(
             s,
-            Rect::new(12.0, ny - 1.0, lw - 12.0, ny + 19.0),
+            Rect::new(sx + 12.0, ny - 1.0, lw - 12.0, ny + 19.0),
             4.0,
             C_FIELD,
         );
         stroke_rrect(
             s,
-            Rect::new(12.0, ny - 1.0, lw - 12.0, ny + 19.0),
+            Rect::new(sx + 12.0, ny - 1.0, lw - 12.0, ny + 19.0),
             4.0,
             C_LINE_2,
             1.0,
         );
-        app.fonts.text(s, 18.0, ny, &editing, T11, C_TEXT, Wt::Med);
+        app.fonts.text(s, sx + 18.0, ny, &editing, T11, C_TEXT, Wt::Med);
     } else {
         if hover(app, nr) {
             // .editable:hover — bg #1A1A1A, border #2A2A2A, radius 4
             fill_rrect(s, nr, 4.0, C_FIELD);
             stroke_rrect(s, nr, 4.0, C_LINE_2, 1.0);
         }
-        circle(s, 15.0, ny + 8.3, 3.0, C_DRAFT_DOT);
+        circle(s, sx + 15.0, ny + 8.3, 3.0, C_DRAFT_DOT);
         let shown = app.fonts.truncate(&name, T11, Wt::Med, lw - 24.0 - 40.0);
-        app.fonts.text(s, 26.0, ny, &shown, T11, C_TEXT, Wt::Med);
+        app.fonts.text(s, sx + 26.0, ny, &shown, T11, C_TEXT, Wt::Med);
         if hover(app, nr) {
             draw_icon(s, "pencil", lw - 25.0, ny + 2.3, 12.0, C_DIM);
         }
@@ -900,8 +1424,8 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
 
     // pill tabs LAYERS / ASSETS / TOKENS — container (8,110.5,263,30)
     let pill_y = y0 + 74.5;
-    let px0 = 8.0;
-    let pw = 263.0;
+    let px0 = sx + 8.0;
+    let pw = sidebar.x1 - sidebar.x0 - 17.0;
     fill_rrect(
         s,
         Rect::new(px0, pill_y, px0 + pw, pill_y + PILL_H),
@@ -915,7 +1439,7 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         C_LINE,
         1.0,
     );
-    let item_w = 85.0;
+    let item_w = (pw - 6.0 - 4.0) / 3.0;
     let tabs = [
         (LeftTab::Layers, "LAYERS"),
         (LeftTab::Assets, "ASSETS"),
@@ -952,7 +1476,7 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     }
 
     // PAGES section
-    app.fonts.micro_label(s, 12.0, y, "PAGES", C_DIM, Wt::Med);
+    app.fonts.micro_label(s, sx + 12.0, y, "PAGES", C_DIM, Wt::Med);
     let addp = Rect::new(lw - 25.0, y + 0.8, lw - 13.0, y + 12.8);
     draw_icon(s, "plus", addp.x0, y + 0.8, 12.0, C_DIM);
     hit.push((addp, Action::AddPage)); // page field top 178 → drawn below
@@ -962,11 +1486,11 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let page_count = app.doc().editors.len();
     let cur_page = app.doc().page;
     let py = y0 + 142.0;
-    let pr = Rect::new(12.0, py, lw - 25.0, py + 28.0);
+    let pr = Rect::new(sx + 12.0, py, lw - 25.0, py + 28.0);
     app.page_field_rect = Some(pr);
     fill_rrect(s, pr, R_PAGE, C_FIELD);
     stroke_rrect(s, pr, R_PAGE, C_LINE_2, 1.0);
-    draw_icon(s, "file", 21.0, py + 8.0, 12.0, C_TEXT);
+    draw_icon(s, "file", sx + 21.0, py + 8.0, 12.0, C_TEXT);
     let page_label = {
         let d = app.doc();
         d.doc
@@ -983,11 +1507,11 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         fill_rrect(s, pr, R_PAGE, C_FIELD_2);
         stroke_rrect(s, pr, R_PAGE, C_LINE_2, 1.0);
         app.fonts
-            .text(s, 41.0, py + 5.8, &editing, T11, C_TEXT, Wt::Reg);
+            .text(s, sx + 41.0, py + 5.8, &editing, T11, C_TEXT, Wt::Reg);
         hit.push((pr, Action::Field(FieldId::PageName)));
     } else {
         app.fonts
-            .text(s, 41.0, py + 5.8, &page_label, T11, C_TEXT, Wt::Reg);
+            .text(s, sx + 41.0, py + 5.8, &page_label, T11, C_TEXT, Wt::Reg);
     }
     if hover(app, pr) && page_count > 1 {
         let tr = Rect::new(lw - 30.0, py + 6.0, lw - 12.0, py + 22.0);
@@ -997,12 +1521,12 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     hit.push((pr, Action::SelectPage(cur_page)));
 
     // divider at 218
-    hline(s, 0.0, lw, y0 + 182.0, C_LINE);
+    hline(s, sx, lw, y0 + 182.0, C_LINE);
 
     // PAGE header — audit: label top 231, search icon 12px at (255, 231.8)
     let page_name = format!("PAGE {}", cur_page + 1);
     app.fonts
-        .micro_label(s, 12.0, y0 + 195.0, &page_name, C_DIM, Wt::Med);
+        .micro_label(s, sx + 12.0, y0 + 195.0, &page_name, C_DIM, Wt::Med);
     draw_icon(s, "search", lw - 25.0, y0 + 195.8, 12.0, C_DIM);
 
     // tree (scrollable) from 252.5
@@ -1030,12 +1554,12 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                 stack.push((mock.indent, mock.expanded));
             }
             if visible {
-                let r = Rect::new(8.0, ry, lw - 8.0, ry + TREE_ROW_H);
+                let r = Rect::new(sx + 8.0, ry, lw - 8.0, ry + TREE_ROW_H);
                 if r.y1 >= tree_top && r.y0 <= tree_bottom {
                     if mock.selected {
                         fill_rrect(s, r, R_TREE, C_SEL_SOFT);
                     }
-                    let ix = 8.0 + 8.0 + mock.indent as f64 * TREE_INDENT;
+                    let ix = sx + 8.0 + 8.0 + mock.indent as f64 * TREE_INDENT;
                     if mock.has_children {
                         let chev = if mock.expanded {
                             "chevron-down"
@@ -1071,7 +1595,7 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         let (rows, total_h) = collect_tree_rows(app, scroll, tree_bottom - tree_top);
         for row in &rows {
             let ry = tree_top + row.index as f64 * (TREE_ROW_H + 1.0) - scroll;
-            let r = Rect::new(8.0, ry, lw - 8.0, ry + TREE_ROW_H);
+            let r = Rect::new(sx + 8.0, ry, lw - 8.0, ry + TREE_ROW_H);
             if r.y1 >= tree_top && r.y0 <= tree_bottom {
                 let selected = row.selected;
                 if hover(app, r) || selected {
@@ -1082,7 +1606,7 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                         if selected { C_SEL_SOFT } else { C_ROW_HOVER },
                     );
                 }
-                let ix = 8.0 + 8.0 + row.indent as f64 * TREE_INDENT;
+                let ix = sx + 8.0 + 8.0 + row.indent as f64 * TREE_INDENT;
                 if row.has_children {
                     let chev = if row.expanded {
                         "chevron-down"
@@ -1211,9 +1735,9 @@ fn collect_tree_rows(app: &App, scroll: f64, height: f64) -> (Vec<RowRef>, f64) 
 fn paint_resizers(app: &App, s: &mut Scene) {
     let reg = app.editor_regions();
     let lr = Rect::new(
-        reg.left.x1 - RESIZER_W / 2.0,
+        reg.sidebar.x1 - RESIZER_W / 2.0,
         ED_TITLE_H,
-        reg.left.x1 + RESIZER_W / 2.0,
+        reg.sidebar.x1 + RESIZER_W / 2.0,
         app.win_h,
     );
     let rr = Rect::new(
@@ -2543,8 +3067,131 @@ fn paint_design(
         C_DIM,
     );
 
+    // ---- TEXT FORMATTING (Figma Design parity) ----
+    // Text alignment (horizontal)
+    app.fonts
+        .text(s, x0, y0 + 1024.5, "Text alignment", T10, C_DIM, Wt::Reg);
+    let h_align = Rect::new(x0, y0 + 1042.0, x0 + 153.5, y0 + 1070.0);
+    input(
+        app,
+        s,
+        hit,
+        h_align,
+        None,
+        &text_align_label(app),
+        false,
+        Some(Action::CycleTextAlign),
+        Some("chevron-down"),
+    );
+    // Text alignment (vertical)
+    let v_align = Rect::new(x0 + 161.5, y0 + 1042.0, x0 + 315.0, y0 + 1070.0);
+    input(
+        app,
+        s,
+        hit,
+        v_align,
+        None,
+        &text_align_vertical_label(app),
+        false,
+        Some(Action::CycleTextAlignVertical),
+        Some("chevron-down"),
+    );
+
+    // Text decoration
+    app.fonts
+        .text(s, x0, y0 + 1078.5, "Decoration", T10, C_DIM, Wt::Reg);
+    let deco = Rect::new(x0, y0 + 1096.0, x0 + 153.5, y0 + 1124.0);
+    input(
+        app,
+        s,
+        hit,
+        deco,
+        None,
+        &text_decoration_label(app),
+        false,
+        Some(Action::CycleTextDecoration),
+        Some("chevron-down"),
+    );
+    // Truncation
+    app.fonts
+        .text(s, x0 + 161.5, y0 + 1078.5, "Truncation", T10, C_DIM, Wt::Reg);
+    let trunc = Rect::new(x0 + 161.5, y0 + 1096.0, x0 + 315.0, y0 + 1124.0);
+    input(
+        app,
+        s,
+        hit,
+        trunc,
+        None,
+        &text_truncation_label(app),
+        false,
+        Some(Action::CycleTextTruncation),
+        Some("chevron-down"),
+    );
+
+    // List style
+    app.fonts
+        .text(s, x0, y0 + 1132.5, "List style", T10, C_DIM, Wt::Reg);
+    let list = Rect::new(x0, y0 + 1150.0, x0 + 153.5, y0 + 1178.0);
+    input(
+        app,
+        s,
+        hit,
+        list,
+        None,
+        &list_style_label(app),
+        false,
+        Some(Action::CycleListStyle),
+        Some("chevron-down"),
+    );
+    // Wrap style
+    app.fonts
+        .text(s, x0 + 161.5, y0 + 1132.5, "Wrap style", T10, C_DIM, Wt::Reg);
+    let wrap = Rect::new(x0 + 161.5, y0 + 1150.0, x0 + 315.0, y0 + 1178.0);
+    input(
+        app,
+        s,
+        hit,
+        wrap,
+        None,
+        &wrap_style_label(app),
+        false,
+        Some(Action::ToggleTextWrapStyle),
+        Some("chevron-down"),
+    );
+
+    // Paragraph indent
+    app.fonts
+        .text(s, x0, y0 + 1186.5, "Paragraph indent", T10, C_DIM, Wt::Reg);
+    let para_indent = Rect::new(x0, y0 + 1204.0, x0 + 153.5, y0 + 1232.0);
+    input(
+        app,
+        s,
+        hit,
+        para_indent,
+        None,
+        &field_val(app, FieldId::ParagraphIndent, "0px".into()),
+        false,
+        Some(Action::Field(FieldId::ParagraphIndent)),
+        None,
+    );
+    // Max lines
+    app.fonts
+        .text(s, x0 + 161.5, y0 + 1186.5, "Max lines", T10, C_DIM, Wt::Reg);
+    let max_lines = Rect::new(x0 + 161.5, y0 + 1204.0, x0 + 315.0, y0 + 1232.0);
+    input(
+        app,
+        s,
+        hit,
+        max_lines,
+        None,
+        &field_val(app, FieldId::MaxLines, "Auto".into()),
+        false,
+        Some(Action::Field(FieldId::MaxLines)),
+        None,
+    );
+
     // ---- fill / stroke / effects / guides continue with the shared tail
-    hline(s, rx, rx + rw, y0 + 1028.5, C_LINE);
+    hline(s, rx, rx + rw, y0 + 1240.5, C_LINE);
     let mut y = y0 + 1029.5 + 12.0;
     let inner_w = rw - pl * 2.0;
 
@@ -3012,6 +3659,109 @@ fn stroke_position_label(app: &App) -> &'static str {
         Some(x_native::StrokeAlign::Inside) => "Inside",
         Some(x_native::StrokeAlign::Outside) => "Outside",
         _ => "Center",
+    }
+}
+
+/// Text formatting labels (Figma Design parity)
+fn text_align_label(app: &App) -> String {
+    let Some(doc) = app.doc_opt() else {
+        return "Left".into();
+    };
+    let Some(id) = doc.selected_id() else {
+        return "Left".into();
+    };
+    let Some(node) = find_node(&doc.editor_ref().root, &id) else {
+        return "Left".into();
+    };
+    match node.text_align {
+        x_native::TextAlign::Left => "Left".into(),
+        x_native::TextAlign::Center => "Center".into(),
+        x_native::TextAlign::Right => "Right".into(),
+        x_native::TextAlign::Justified => "Justified".into(),
+    }
+}
+
+fn text_align_vertical_label(app: &App) -> String {
+    let Some(doc) = app.doc_opt() else {
+        return "Top".into();
+    };
+    let Some(id) = doc.selected_id() else {
+        return "Top".into();
+    };
+    let Some(node) = find_node(&doc.editor_ref().root, &id) else {
+        return "Top".into();
+    };
+    match node.text_align_vertical {
+        x_native::TextAlignVertical::Top => "Top".into(),
+        x_native::TextAlignVertical::Middle => "Middle".into(),
+        x_native::TextAlignVertical::Bottom => "Bottom".into(),
+    }
+}
+
+fn text_decoration_label(app: &App) -> String {
+    let Some(doc) = app.doc_opt() else {
+        return "None".into();
+    };
+    let Some(id) = doc.selected_id() else {
+        return "None".into();
+    };
+    let Some(node) = find_node(&doc.editor_ref().root, &id) else {
+        return "None".into();
+    };
+    match node.text_decoration {
+        x_native::TextDecoration::None => "None".into(),
+        x_native::TextDecoration::Underline => "Underline".into(),
+        x_native::TextDecoration::Strikethrough => "Strikethrough".into(),
+    }
+}
+
+fn text_truncation_label(app: &App) -> String {
+    let Some(doc) = app.doc_opt() else {
+        return "Disabled".into();
+    };
+    let Some(id) = doc.selected_id() else {
+        return "Disabled".into();
+    };
+    let Some(node) = find_node(&doc.editor_ref().root, &id) else {
+        return "Disabled".into();
+    };
+    match node.text_truncation {
+        x_native::TextTruncation::Disabled => "Disabled".into(),
+        x_native::TextTruncation::End => "End".into(),
+        x_native::TextTruncation::Middle => "Middle".into(),
+    }
+}
+
+fn list_style_label(app: &App) -> String {
+    let Some(doc) = app.doc_opt() else {
+        return "None".into();
+    };
+    let Some(id) = doc.selected_id() else {
+        return "None".into();
+    };
+    let Some(node) = find_node(&doc.editor_ref().root, &id) else {
+        return "None".into();
+    };
+    match node.list_style {
+        x_native::ListStyle::None => "None".into(),
+        x_native::ListStyle::Bulleted => "Bulleted".into(),
+        x_native::ListStyle::Numbered => "Numbered".into(),
+    }
+}
+
+fn wrap_style_label(app: &App) -> String {
+    let Some(doc) = app.doc_opt() else {
+        return "Normal".into();
+    };
+    let Some(id) = doc.selected_id() else {
+        return "Normal".into();
+    };
+    let Some(node) = find_node(&doc.editor_ref().root, &id) else {
+        return "Normal".into();
+    };
+    match node.wrap_style {
+        x_native::WrapStyle::Normal => "Normal".into(),
+        x_native::WrapStyle::BreakWord => "Break Word".into(),
     }
 }
 
@@ -4557,6 +5307,8 @@ pub(crate) fn proto_trigger_label(t: &x_native::Trigger) -> &'static str {
         T::OnDrag => "On drag",
         T::AfterDelay { .. } => "After delay",
         T::KeyDown { .. } => "Key pressed",
+        T::WhenVideoHits { .. } => "Video hits",
+        T::WhenVideoEnds => "Video ends",
     }
 }
 
@@ -4564,32 +5316,73 @@ pub(crate) fn proto_action_label(a: &x_native::Action, targets: &[(String, Strin
     // x_core's prototype Action; the app's own Action is `crate::state::Action`
     use x_native::Action as A;
     match a {
-        A::Navigate { destination } | A::ScrollTo { destination } => format!(
-            "→ {}",
-            targets
+        A::Navigate { destination } | A::ScrollTo { destination } => targets
+            .iter()
+            .find(|(id, _)| id == destination)
+            .map(|(_, n)| n.as_str())
+            .unwrap_or(destination)
+            .to_string(),
+        A::OpenOverlay { overlay, position } => {
+            let name = targets
                 .iter()
-                .find(|(id, _)| id == destination)
+                .find(|(id, _)| id == overlay)
                 .map(|(_, n)| n.as_str())
-                .unwrap_or(destination)
-        ),
-        A::OpenOverlay { overlay, .. } | A::SwapOverlay { overlay } => {
-            format!("⇧ overlay {overlay}")
+                .unwrap_or(overlay);
+            format!("{} ({})", name, position.label())
         }
-        A::CloseOverlay => "⇧ close overlay".into(),
-        A::OpenLink { url } => format!("🔗 {url}"),
-        A::Back => "→ Back".into(),
-        A::SetVar { name, .. } => format!("set {name}"),
-        A::SetMode { mode } => format!("mode → {mode}"),
-        A::Cond { .. } => "if/else".into(),
+        A::SwapOverlay { overlay } => {
+            let name = targets
+                .iter()
+                .find(|(id, _)| id == overlay)
+                .map(|(_, n)| n.as_str())
+                .unwrap_or(overlay);
+            format!("{} (swap)", name)
+        }
+        A::CloseOverlay => "Close overlay".into(),
+        A::OpenLink { url } => format!("Open {url}"),
+        A::Back => "Go back".into(),
+        A::SetVar { name, .. } => format!("Set {name}"),
+        A::SetMode { mode } => format!("Mode → {mode}"),
+        A::Cond { .. } => "Conditional".into(),
     }
 }
 
 pub(crate) fn proto_dest_of(a: &x_native::Action) -> Option<String> {
     match a {
-        x_native::Action::Navigate { destination } | x_native::Action::ScrollTo { destination } => {
-            Some(destination.clone())
-        }
+        x_native::Action::Navigate { destination }
+        | x_native::Action::ScrollTo { destination } => Some(destination.clone()),
+        x_native::Action::OpenOverlay { overlay, .. }
+        | x_native::Action::SwapOverlay { overlay } => Some(overlay.clone()),
         _ => None,
+    }
+}
+
+pub(crate) fn proto_action_type_label(a: &x_native::Action) -> &'static str {
+    use x_native::Action as A;
+    match a {
+        A::Navigate { .. } => "Navigate",
+        A::OpenOverlay { .. } => "Overlay",
+        A::SwapOverlay { .. } => "Swap overlay",
+        A::CloseOverlay => "Close overlay",
+        A::OpenLink { .. } => "Open link",
+        A::ScrollTo { .. } => "Scroll to",
+        A::Back => "Back",
+        A::SetVar { .. } => "Set variable",
+        A::SetMode { .. } => "Set mode",
+        A::Cond { .. } => "Conditional",
+    }
+}
+
+pub(crate) fn proto_animation_label(a: &x_native::Animation) -> String {
+    use x_native::Animation as A;
+    match a {
+        A::Instant => "Instant".into(),
+        A::Dissolve => "Dissolve".into(),
+        A::SmartAnimate => "Smart animate".into(),
+        A::SlideIn => "Slide in".into(),
+        A::SlideOut => "Slide out".into(),
+        A::MoveIn(d) => format!("Move in ({})", d.to_str()),
+        A::MoveOut(d) => format!("Move out ({})", d.to_str()),
     }
 }
 
@@ -4657,55 +5450,139 @@ fn paint_prototype(
         }
         let targets = proto_targets(app);
         for (i, ix) in list.iter().enumerate() {
-            let row = Rect::new(x0, y, xr, y + 26.0);
+            // Calculate row height based on content
+            let has_url = matches!(&ix.action, x_native::Action::OpenLink { .. });
+            let row_h = if has_url { 92.0 } else { 56.0 };
+            let row = Rect::new(x0, y, xr, y + row_h);
             fill_rrect(s, row, 6.0, C_FIELD);
-            // trigger chip (cycles on click)
-            let tb = Rect::new(x0 + 5.0, y + 4.0, x0 + 97.0, y + 22.0);
+            // Row 1: trigger + action type + destination
+            let tb = Rect::new(x0 + 5.0, y + 4.0, x0 + 75.0, y + 20.0);
+            input_box(app, s, tb, 4.0);
             app.fonts.text(
                 s,
-                tb.x0 + 5.0,
-                y + 7.0,
+                tb.x0 + 4.0,
+                y + 6.0,
                 proto_trigger_label(&ix.trigger),
                 T10,
                 C_TEXT,
                 Wt::Reg,
             );
             hit.push((tb, Action::ProtoTrigger(i)));
-            // action chip: destination cycles / label for other actions
-            let db = Rect::new(tb.x1 + 5.0, y + 4.0, xr - 96.0, y + 22.0);
-            let dest = proto_dest_of(&ix.action);
-            let label = proto_action_label(&ix.action, &targets);
-            app.fonts
-                .text(s, db.x0 + 5.0, y + 7.0, &label, T10, C_TEXT, Wt::Reg);
-            if dest.is_some() {
-                draw_icon(s, "chevron-down", db.x1 - 15.0, y + 7.5, 10.0, C_DIM);
-                let half = Rect::new(db.x0, db.y0, db.x0 + db.width() / 2.0, db.y1);
-                hit.push((half, Action::ProtoDest(i, -1)));
-                hit.push((
-                    Rect::new(half.x1, db.y0, db.x1, db.y1),
-                    Action::ProtoDest(i, 1),
-                ));
+
+            // Show trigger-specific fields (delay for AfterDelay, key for KeyDown, time for WhenVideoHits)
+            let mut extra_y = 0.0;
+            match &ix.trigger {
+                x_native::Trigger::AfterDelay { ms } => {
+                    let db = Rect::new(x0 + 80.0, y + 4.0, x0 + 140.0, y + 20.0);
+                    input_box(app, s, db, 4.0);
+                    app.fonts.text(
+                        s,
+                        db.x0 + 4.0,
+                        y + 6.0,
+                        &format!("{}ms", ms),
+                        T10,
+                        C_TEXT,
+                        Wt::Mono,
+                    );
+                    hit.push((db, Action::ProtoEditDelay(i)));
+                }
+                x_native::Trigger::KeyDown { key } => {
+                    let kb = Rect::new(x0 + 80.0, y + 4.0, x0 + 140.0, y + 20.0);
+                    input_box(app, s, kb, 4.0);
+                    app.fonts.text(
+                        s,
+                        kb.x0 + 4.0,
+                        y + 6.0,
+                        key,
+                        T10,
+                        C_TEXT,
+                        Wt::Mono,
+                    );
+                    hit.push((kb, Action::ProtoEditKey(i)));
+                }
+                x_native::Trigger::WhenVideoHits { time } => {
+                    let vb = Rect::new(x0 + 80.0, y + 4.0, x0 + 140.0, y + 20.0);
+                    input_box(app, s, vb, 4.0);
+                    app.fonts.text(
+                        s,
+                        vb.x0 + 4.0,
+                        y + 6.0,
+                        &format!("{:.1}s", time),
+                        T10,
+                        C_TEXT,
+                        Wt::Mono,
+                    );
+                    hit.push((vb, Action::ProtoEditVideoTime(i)));
+                }
+                _ => {}
             }
-            // speed chip (0/150/350/700 ms)
-            let sb = Rect::new(xr - 86.0, y + 4.0, xr - 40.0, y + 22.0);
+
+            // Show action-specific fields (URL for OpenLink)
+            match &ix.action {
+                x_native::Action::OpenLink { url } => {
+                    extra_y = 20.0;
+                    let ub = Rect::new(x0 + 5.0, y + 50.0, xr - 5.0, y + 66.0);
+                    input_box(app, s, ub, 4.0);
+                    let display_url = if url.is_empty() {
+                        "https://example.com".to_string()
+                    } else {
+                        url.clone()
+                    };
+                    let truncated = if display_url.len() > 30 {
+                        format!("{}...", &display_url[..27])
+                    } else {
+                        display_url
+                    };
+                    app.fonts.text(
+                        s,
+                        ub.x0 + 4.0,
+                        y + 52.0,
+                        &truncated,
+                        T10,
+                        C_TEXT,
+                        Wt::Mono,
+                    );
+                    hit.push((ub, Action::ProtoEditUrl(i)));
+                }
+                _ => {}
+            }
+        }
+            // Row 3: easing + reset + remove
+            let row3_y = y + 30.0;
+            let eb = Rect::new(x0 + 5.0, row3_y, x0 + 85.0, row3_y + 20.0);
+            input_box(app, s, eb, 4.0);
             app.fonts.text(
                 s,
-                sb.x0 + 4.0,
-                y + 7.0,
-                &format!("{}ms", ix.transition_ms),
+                eb.x0 + 4.0,
+                row3_y + 2.0,
+                &format!("Easing: {}", ix.easing.label()),
                 T10,
-                C_DIM,
-                Wt::Mono,
+                C_TEXT,
+                Wt::Reg,
             );
-            hit.push((sb, Action::ProtoSpeed(i)));
-            // remove
-            let xb = Rect::new(xr - 32.0, y + 4.0, xr - 16.0, y + 22.0);
-            app.fonts
-                .text(s, xb.x0 + 3.0, y + 6.0, "✕", T10, C_DIM, Wt::Reg);
-            hit.push((xb, Action::ProtoRemove(i)));
-            y += 32.0;
-        }
-        // editing affordance for non-navigate actions: replace with click nav
+            hit.push((eb, Action::ProtoEasing(i)));
+
+            let rb = Rect::new(x0 + 90.0, row3_y, x0 + 140.0, row3_y + 20.0);
+            input_box(app, s, rb, 4.0);
+            app.fonts.text(
+                s,
+                rb.x0 + 4.0,
+                row3_y + 2.0,
+                if ix.reset_on_navigate {
+                    "Reset: On"
+                } else {
+                    "Reset: Off"
+                },
+                T10,
+                C_TEXT,
+                Wt::Reg,
+            );
+            hit.push((rb, Action::ProtoToggleReset(i)));
+            // Row 4: remove button
+            let rb_rm = Rect::new(xr - 30.0, row3_y, xr - 5.0, row3_y + 20.0);
+            input_box(app, s, rb_rm, 4.0);
+            app.fonts.text_center(s, rb_rm, "Remove", T10, C_TEXT, Wt::Reg);
+            hit.push((rb_rm, Action::ProtoRemove(i)));
     } else {
         let hint = if sel.len() == 1 {
             "Frame not found"

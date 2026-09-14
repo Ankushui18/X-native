@@ -30,6 +30,13 @@ pub enum Trigger {
     KeyDown {
         key: String,
     },
+    /// Triggered when a video reaches a specific time (Figma parity).
+    WhenVideoHits {
+        /// Time in seconds
+        time: f32,
+    },
+    /// Triggered when a video ends playback (Figma parity).
+    WhenVideoEnds,
 }
 
 impl Trigger {
@@ -44,6 +51,8 @@ impl Trigger {
             Trigger::MouseLeave => "leave",
             Trigger::MouseUp => "mouseup",
             Trigger::KeyDown { .. } => "key",
+            Trigger::WhenVideoHits { .. } => "video-hit",
+            Trigger::WhenVideoEnds => "video-end",
         }
     }
     /// Human label for the Prototype panel.
@@ -64,13 +73,17 @@ impl Trigger {
             Trigger::MouseEnter => "Mouse enter",
             Trigger::MouseLeave => "Mouse leave",
             Trigger::KeyDown { .. } => "Key down",
+            Trigger::WhenVideoHits { .. } => "When video hits",
+            Trigger::WhenVideoEnds => "When video ends",
         }
     }
-    /// Full label including the delay duration.
+    /// Full label including the delay duration or video time.
     pub fn label_with(&self) -> String {
         match self {
-            Trigger::AfterDelay { ms } => format!("After delay ({ms} ms)"),
-            Trigger::KeyDown { key } => format!("Key down ({key})"),
+            Trigger::AfterDelay { ms } => format!("After delay ({} ms)", ms),
+            Trigger::KeyDown { key } => format!("Key down ({})", key),
+            Trigger::WhenVideoHits { time } => format!("When video hits ({:.1}s)", time),
+            Trigger::WhenVideoEnds => "When video ends".to_string(),
             other => other.label().to_string(),
         }
     }
@@ -236,6 +249,69 @@ pub enum Direction {
     Right,
     Top,
     Bottom,
+}
+
+/// Easing function for animations (Figma parity).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Easing {
+    /// Linear interpolation (no easing)
+    Linear,
+    /// Ease in (accelerate from zero velocity)
+    EaseIn,
+    /// Ease out (decelerate to zero velocity)
+    EaseOut,
+    /// Ease in and out (accelerate then decelerate)
+    EaseInOut,
+    /// Custom cubic bezier curve (x1, y1, x2, y2)
+    CubicBezier(f32, f32, f32, f32),
+}
+
+impl Easing {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Easing::Linear => "Linear",
+            Easing::EaseIn => "Ease in",
+            Easing::EaseOut => "Ease out",
+            Easing::EaseInOut => "Ease in and out",
+            Easing::CubicBezier(..) => "Custom",
+        }
+    }
+
+    pub fn to_str(&self) -> String {
+        match self {
+            Easing::Linear => "linear".to_string(),
+            Easing::EaseIn => "ease-in".to_string(),
+            Easing::EaseOut => "ease-out".to_string(),
+            Easing::EaseInOut => "ease-in-out".to_string(),
+            Easing::CubicBezier(x1, y1, x2, y2) => {
+                format!("cubic-bezier({},{},{},{})", x1, y1, x2, y2)
+            }
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "linear" => Easing::Linear,
+            "ease-in" => Easing::EaseIn,
+            "ease-out" => Easing::EaseOut,
+            "ease-in-out" => Easing::EaseInOut,
+            _ if s.starts_with("cubic-bezier(") => {
+                // Parse cubic-bezier(x1,y1,x2,y2)
+                let inner = &s[13..s.len()-1];
+                let parts: Vec<&str> = inner.split(',').collect();
+                if parts.len() == 4 {
+                    let x1 = parts[0].trim().parse().unwrap_or(0.0);
+                    let y1 = parts[1].trim().parse().unwrap_or(0.0);
+                    let x2 = parts[2].trim().parse().unwrap_or(1.0);
+                    let y2 = parts[3].trim().parse().unwrap_or(1.0);
+                    Easing::CubicBezier(x1, y1, x2, y2)
+                } else {
+                    Easing::Linear
+                }
+            }
+            _ => Easing::Linear,
+        }
+    }
 }
 
 impl Direction {
@@ -841,6 +917,12 @@ pub struct Interaction {
     pub actions: Vec<Action>,
     pub transition_ms: u32,
     pub animation: Animation,
+    /// Easing function for the animation (Figma parity).
+    pub easing: Easing,
+    /// Whether to reset object properties when navigating (Figma parity).
+    /// If true, object states (scroll position, form inputs, etc.) are
+    /// reset when this interaction fires.
+    pub reset_on_navigate: bool,
 }
 
 impl Interaction {
@@ -854,6 +936,51 @@ impl Interaction {
             actions: vec![],
             transition_ms: 350,
             animation: Animation::SmartAnimate,
+            easing: Easing::EaseInOut,
+            reset_on_navigate: false,
+        }
+    }
+
+    /// Create an interaction with multiple actions (Figma parity).
+    pub fn with_actions(trigger: Trigger, actions: Vec<Action>, transition_ms: u32, animation: Animation) -> Self {
+        let action = actions.first().cloned().unwrap_or(Action::Back);
+        Self {
+            trigger,
+            action,
+            actions,
+            transition_ms,
+            animation,
+            easing: Easing::EaseInOut,
+            reset_on_navigate: false,
+        }
+    }
+
+    /// Create an interaction with full customization (Figma parity).
+    pub fn custom(
+        trigger: Trigger,
+        action: Action,
+        transition_ms: u32,
+        animation: Animation,
+        easing: Easing,
+    ) -> Self {
+        Self {
+            trigger,
+            action,
+            actions: vec![],
+            transition_ms,
+            animation,
+            easing,
+            reset_on_navigate: false,
+        }
+    }
+
+    /// Returns all actions for this interaction: `actions` if non-empty,
+    /// otherwise wraps the single `action` in a vec.
+    pub fn all_actions(&self) -> Vec<&Action> {
+        if self.actions.is_empty() {
+            vec![&self.action]
+        } else {
+            self.actions.iter().collect()
         }
     }
 
@@ -897,6 +1024,8 @@ pub fn effective_interactions(node: &crate::Node) -> Vec<Interaction> {
             actions: vec![],
             transition_ms: p.transition_ms,
             animation: Animation::SmartAnimate,
+            easing: Easing::EaseInOut,
+            reset_on_navigate: false,
         }];
     }
     vec![]
@@ -1011,6 +1140,8 @@ mod tests {
                 actions: vec![],
                 transition_ms: 0,
                 animation: Animation::Instant,
+                easing: Easing::Linear,
+                reset_on_navigate: false,
             });
         let eff2 = effective_interactions(&n2);
         assert_eq!(eff2.len(), 1);
@@ -1309,6 +1440,8 @@ mod tests {
                     actions: vec![],
                     transition_ms: 0,
                     animation: Animation::Instant,
+                    easing: Easing::Linear,
+                    reset_on_navigate: false,
                 },
             ),
         );
@@ -1325,6 +1458,8 @@ mod tests {
                 actions: vec![],
                 transition_ms: 0,
                 animation: Animation::Instant,
+                easing: Easing::Linear,
+                reset_on_navigate: false,
             }),
         );
         assert!(find_key_interaction(&page2, "Enter").is_some());
@@ -1432,6 +1567,8 @@ mod tests {
                         actions: vec![],
                         transition_ms: 0,
                         animation: Animation::Instant,
+                        easing: Easing::Linear,
+                        reset_on_navigate: false,
                     },
                 ),
             )
@@ -1461,5 +1598,61 @@ mod tests {
         assert_eq!(over, (-50.0, 25.0));
         assert_eq!(NAMED_OVERLAY_POSITIONS.len(), 5);
         assert!(!NAMED_OVERLAY_POSITIONS.contains(&OverlayPosition::Manual(0.0, 0.0)));
+    }
+
+    #[test]
+    fn easing_roundtrips_through_strings() {
+        // Standard easings
+        assert_eq!(Easing::from_str("linear"), Easing::Linear);
+        assert_eq!(Easing::from_str("ease-in"), Easing::EaseIn);
+        assert_eq!(Easing::from_str("ease-out"), Easing::EaseOut);
+        assert_eq!(Easing::from_str("ease-in-out"), Easing::EaseInOut);
+        
+        // Custom bezier
+        let bezier = Easing::from_str("cubic-bezier(0.4,0.0,0.2,1.0)");
+        if let Easing::CubicBezier(x1, y1, x2, y2) = bezier {
+            assert!((x1 - 0.4).abs() < 0.001);
+            assert!((y1 - 0.0).abs() < 0.001);
+            assert!((x2 - 0.2).abs() < 0.001);
+            assert!((y2 - 1.0).abs() < 0.001);
+        } else {
+            panic!("Expected CubicBezier");
+        }
+        
+        // Labels
+        assert_eq!(Easing::Linear.label(), "Linear");
+        assert_eq!(Easing::EaseIn.label(), "Ease in");
+        assert_eq!(Easing::EaseOut.label(), "Ease out");
+        assert_eq!(Easing::EaseInOut.label(), "Ease in and out");
+        assert_eq!(Easing::CubicBezier(0.4, 0.0, 0.2, 1.0).label(), "Custom");
+    }
+
+    #[test]
+    fn video_triggers_work() {
+        // WhenVideoHits
+        let trigger = Trigger::WhenVideoHits { time: 5.5 };
+        assert_eq!(trigger.to_str(), "video-hit");
+        assert_eq!(trigger.label(), "When video hits");
+        assert_eq!(trigger.label_with(), "When video hits (5.5s)");
+        
+        // WhenVideoEnds
+        let trigger = Trigger::WhenVideoEnds;
+        assert_eq!(trigger.to_str(), "video-end");
+        assert_eq!(trigger.label(), "When video ends");
+        assert_eq!(trigger.label_with(), "When video ends");
+    }
+
+    #[test]
+    fn interaction_includes_easing_and_state_management() {
+        let interaction = Interaction::custom(
+            Trigger::OnClick,
+            Action::Back,
+            300,
+            Animation::Dissolve,
+            Easing::EaseOut,
+        );
+        
+        assert_eq!(interaction.easing, Easing::EaseOut);
+        assert_eq!(interaction.reset_on_navigate, false);
     }
 }
