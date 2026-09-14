@@ -98,6 +98,29 @@ fn paint(p: &Paint) -> Result<(), String> {
             }
             stops
         }
+        Paint::AngularGradient {
+            center,
+            start_angle,
+            end_angle,
+            stops,
+            ..
+        } => {
+            numbers(&[center.0, center.1, *start_angle, *end_angle])?;
+            stops
+        }
+        Paint::DiamondGradient {
+            center,
+            width,
+            height,
+            stops,
+            ..
+        } => {
+            numbers(&[center.0, center.1, *width, *height])?;
+            if *width < 0.0 || *height < 0.0 {
+                return Err("negative diamond gradient radius".into());
+            }
+            stops
+        }
     };
     if stops.len() > 1024 {
         return Err("gradient stop budget exceeded".into());

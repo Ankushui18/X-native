@@ -140,6 +140,11 @@ fn sk_fill(p: &Paint, w: f64, h: f64) -> String {
         "{{\"isEnabled\":true,\"fillType\":2,\"image\":{{\"_ref\":\"images/{}.png\"}},\"patternFillType\":{},\"patternTileScale\":1}}",
         esc(asset.trim_start_matches("asset://")),
         if *fit == ImageFit::Tile { 0 } else { 1 }),
+    // Sketch gradientType: 0 linear, 1 radial, 2 angular. A diamond has no
+    // Sketch equivalent — exported as the radial that shares its radii
+    // (documented lossy, same policy as Pattern in the Figma exporter).
+    Paint::AngularGradient { center,stops,.. } => format!("{{\"isEnabled\":true,\"fillType\":1,\"gradient\":{{\"gradientType\":2,\"from\":\"{{{}, {}}}\",\"to\":\"{{{}, {}}}\",\"stops\":[{}]}}}}", center.0/w.max(1.0),center.1/h.max(1.0),(center.0+0.5*w)/w.max(1.0),center.1/h.max(1.0),stops.iter().map(|(t,c)|format!("{{\"position\":{t},\"color\":{}}}",sk_color(*c))).collect::<Vec<_>>().join(",")),
+    Paint::DiamondGradient { center,width,height,stops,.. } => format!("{{\"isEnabled\":true,\"fillType\":1,\"gradient\":{{\"gradientType\":1,\"from\":\"{{{}, {}}}\",\"to\":\"{{{}, {}}}\",\"stops\":[{}]}}}}", center.0/w.max(1.0),center.1/h.max(1.0),(center.0+width.max(*height))/w.max(1.0),center.1/h.max(1.0),stops.iter().map(|(t,c)|format!("{{\"position\":{t},\"color\":{}}}",sk_color(*c))).collect::<Vec<_>>().join(",")),
 }
 }
 

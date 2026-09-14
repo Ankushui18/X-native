@@ -462,6 +462,11 @@ fn blend_css_name(b: BlendKind) -> &'static str {
         BlendKind::Saturation => "saturation",
         BlendKind::Color => "color",
         BlendKind::Luminosity => "luminosity",
+        BlendKind::PlusDarker => "plus-darker",
+        BlendKind::PlusLighter => "plus-lighter",
+        // CSS has no pass-through; the group behaves like normal and its
+        // children keep their own mix-blend-mode.
+        BlendKind::PassThrough => "normal",
     }
 }
 

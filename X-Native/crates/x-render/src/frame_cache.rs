@@ -97,6 +97,42 @@ fn paint_mix(h: &mut u64, p: &Paint) {
                 cmix(h, c);
             }
         }
+        Paint::AngularGradient {
+            center,
+            start_angle,
+            end_angle,
+            stops,
+            space,
+        } => {
+            mix(h, 6);
+            mix(h, *space as u64);
+            fmix(h, center.0);
+            fmix(h, center.1);
+            fmix(h, *start_angle);
+            fmix(h, *end_angle);
+            for (t, c) in stops {
+                fmix(h, *t as f64);
+                cmix(h, c);
+            }
+        }
+        Paint::DiamondGradient {
+            center,
+            width,
+            height,
+            stops,
+            space,
+        } => {
+            mix(h, 7);
+            mix(h, *space as u64);
+            fmix(h, center.0);
+            fmix(h, center.1);
+            fmix(h, *width);
+            fmix(h, *height);
+            for (t, c) in stops {
+                fmix(h, *t as f64);
+                cmix(h, c);
+            }
+        }
     }
 }
 

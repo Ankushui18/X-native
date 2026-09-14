@@ -80,6 +80,56 @@ fn paint_json(p: &Paint) -> String {
             },
             ""
         ),
+        // Phase 6 gradients: `a0`/`a1` are DEGREES (the model's unit); the
+        // renderer converts to radians for peniko's sweep gradient.
+        Paint::AngularGradient {
+            center,
+            start_angle,
+            end_angle,
+            stops,
+            space,
+        } => format!(
+            "{{\"t\":\"angular\",\"cx\":{},\"cy\":{},\"a0\":{},\"a1\":{},\"stops\":[{}]{}{}}}",
+            center.0,
+            center.1,
+            start_angle,
+            end_angle,
+            stops
+                .iter()
+                .map(|(t, c)| format!("[{},\"{}\"]", t, color_to_hex(*c)))
+                .collect::<Vec<_>>()
+                .join(","),
+            if *space == GradSpace::Oklab {
+                ",\"gs\":\"oklab\""
+            } else {
+                ""
+            },
+            ""
+        ),
+        Paint::DiamondGradient {
+            center,
+            width,
+            height,
+            stops,
+            space,
+        } => format!(
+            "{{\"t\":\"diamond\",\"cx\":{},\"cy\":{},\"w\":{},\"h\":{},\"stops\":[{}]{}{}}}",
+            center.0,
+            center.1,
+            width,
+            height,
+            stops
+                .iter()
+                .map(|(t, c)| format!("[{},\"{}\"]", t, color_to_hex(*c)))
+                .collect::<Vec<_>>()
+                .join(","),
+            if *space == GradSpace::Oklab {
+                ",\"gs\":\"oklab\""
+            } else {
+                ""
+            },
+            ""
+        ),
     }
 }
 
@@ -101,6 +151,9 @@ fn blend_name(b: BlendKind) -> &'static str {
         BlendKind::Saturation => "saturation",
         BlendKind::Color => "color",
         BlendKind::Luminosity => "luminosity",
+        BlendKind::PlusDarker => "plus-darker",
+        BlendKind::PlusLighter => "plus-lighter",
+        BlendKind::PassThrough => "pass-through",
     }
 }
 fn cap_name(c: StrokeCap) -> &'static str {

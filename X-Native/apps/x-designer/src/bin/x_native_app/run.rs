@@ -9005,7 +9005,7 @@ impl Host {
             FieldId::ParagraphIndent => {
                 if let Some(v) = num(raw) {
                     doc.editor().mutate_visual_stack(&node_id, |n| {
-                        n.paragraph_indent = v.max(0.0) as f32;
+                        n.paragraph_indent = v.max(0.0);
                     });
                     self.app.mark_dirty();
                 }
@@ -9013,7 +9013,7 @@ impl Host {
             FieldId::MaxLines => {
                 if let Some(v) = num(raw) {
                     doc.editor().mutate_visual_stack(&node_id, |n| {
-                        n.max_lines = if v > 0.0 { Some(v as u32) } else { None };
+                        n.max_lines = if v > 0.0 { Some(v as usize) } else { None };
                     });
                     self.app.mark_dirty();
                 }

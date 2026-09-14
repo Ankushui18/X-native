@@ -211,6 +211,44 @@ fn layer_brush(paint: &Paint, vars: &Variables, opacity: f32) -> Brush {
             },
             vars,
         ),
+        Paint::AngularGradient {
+            center,
+            start_angle,
+            end_angle,
+            stops,
+            space,
+        } => paint_brush(
+            &Paint::AngularGradient {
+                center: *center,
+                start_angle: *start_angle,
+                end_angle: *end_angle,
+                stops: stops
+                    .iter()
+                    .map(|(t, c)| (*t, c.multiply_alpha(opacity)))
+                    .collect(),
+                space: *space,
+            },
+            vars,
+        ),
+        Paint::DiamondGradient {
+            center,
+            width,
+            height,
+            stops,
+            space,
+        } => paint_brush(
+            &Paint::DiamondGradient {
+                center: *center,
+                width: *width,
+                height: *height,
+                stops: stops
+                    .iter()
+                    .map(|(t, c)| (*t, c.multiply_alpha(opacity)))
+                    .collect(),
+                space: *space,
+            },
+            vars,
+        ),
         // pattern FILLS are intercepted in emit_visual_layers and render
         // via clip + tiled image; this gray is the fallback for strokes,
         // text fills and lines (patterns can't clip a stroke region)

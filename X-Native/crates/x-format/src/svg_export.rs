@@ -185,6 +185,43 @@ fn svg_fill(
             defs.push_str("</radialGradient>\n");
             format!("url(#{id})")
         }
+        // SVG has no conic/angular paint server. The honest degradation is a
+        // solid fill of the first stop, and the loss is recorded in the
+        // exported defs so a reader can see WHY the gradient disappeared.
+        Paint::AngularGradient { stops, space, .. } => {
+            let stops = space.stops_for_render(stops);
+            defs.push_str(
+                "<!-- angular gradient flattened to its first stop: \
+SVG has no conic gradient -->\n",
+            );
+            stops
+                .first()
+                .map(|(_, c)| color_to_hex(*c))
+                .unwrap_or_else(|| "none".into())
+        }
+        // A diamond is approximated by the radial gradient carrying its
+        // larger radius (elliptical diamonds lose their aspect in SVG 1.1).
+        Paint::DiamondGradient {
+            center,
+            width,
+            height,
+            stops,
+            space,
+        } => {
+            *grad_id += 1;
+            let id = format!("g{grad_id}");
+            let stops = space.stops_for_render(stops);
+            defs.push_str(&format!("<radialGradient id=\"{id}\" cx=\"{}\" cy=\"{}\" r=\"{}\" gradientUnits=\"userSpaceOnUse\">", center.0, center.1, width.max(*height)));
+            for (t, c) in stops.iter() {
+                defs.push_str(&format!(
+                    "<stop offset=\"{}\" stop-color=\"{}\"/>",
+                    t,
+                    color_to_hex(*c)
+                ));
+            }
+            defs.push_str("</radialGradient>\n");
+            format!("url(#{id})")
+        }
     }
 }
 
@@ -288,6 +325,12 @@ fn svg_blend(blend: BlendKind) -> &'static str {
         BlendKind::Saturation => " style=\"mix-blend-mode:saturation\"",
         BlendKind::Color => " style=\"mix-blend-mode:color\"",
         BlendKind::Luminosity => " style=\"mix-blend-mode:luminosity\"",
+        BlendKind::PlusDarker => " style=\"mix-blend-mode:plus-darker\"",
+        BlendKind::PlusLighter => " style=\"mix-blend-mode:plus-lighter\"",
+        // CSS has no pass-through: a group that lets its children blend with
+        // the backdrop exports as if it were normal (the children carry their
+        // own mix-blend-mode).
+        BlendKind::PassThrough => "",
     }
 }
 

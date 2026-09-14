@@ -461,6 +461,8 @@ fn fill_label(n: &Node) -> String {
         crate::Paint::Variable(v) => format!("var {v}"),
         crate::Paint::LinearGradient { .. } => "linear gradient".into(),
         crate::Paint::RadialGradient { .. } => "radial gradient".into(),
+        crate::Paint::AngularGradient { .. } => "angular gradient".into(),
+        crate::Paint::DiamondGradient { .. } => "diamond gradient".into(),
         crate::Paint::Pattern { .. } => "pattern".into(),
     }
 }

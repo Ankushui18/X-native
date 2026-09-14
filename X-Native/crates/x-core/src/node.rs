@@ -352,6 +352,7 @@ pub struct Node {
     /// Phase 6: Image rotation in degrees (0, 90, 180, 270)
     /// Independent of node rotation, applies only to the image fill
     pub image_rotation: f64,
+}
 
 impl Node {
     /// Clone this node's own state without walking/allocating its descendants.

@@ -46,6 +46,26 @@ fn parse_paint(v: &V) -> Paint {
             stops: parse_stops(v),
             space: parse_grad_space(v),
         },
+        "angular" => Paint::AngularGradient {
+            center: (
+                v.get("cx").and_then(V::num).unwrap_or(0.0),
+                v.get("cy").and_then(V::num).unwrap_or(0.0),
+            ),
+            start_angle: v.get("a0").and_then(V::num).unwrap_or(0.0),
+            end_angle: v.get("a1").and_then(V::num).unwrap_or(360.0),
+            stops: parse_stops(v),
+            space: parse_grad_space(v),
+        },
+        "diamond" => Paint::DiamondGradient {
+            center: (
+                v.get("cx").and_then(V::num).unwrap_or(0.0),
+                v.get("cy").and_then(V::num).unwrap_or(0.0),
+            ),
+            width: v.get("w").and_then(V::num).unwrap_or(0.0),
+            height: v.get("h").and_then(V::num).unwrap_or(0.0),
+            stops: parse_stops(v),
+            space: parse_grad_space(v),
+        },
         _ => Paint::Solid(
             v.get("c")
                 .and_then(V::str)
@@ -88,6 +108,9 @@ fn parse_blend(v: Option<&str>) -> BlendKind {
         Some("saturation") => BlendKind::Saturation,
         Some("color") => BlendKind::Color,
         Some("luminosity") => BlendKind::Luminosity,
+        Some("plus-darker") => BlendKind::PlusDarker,
+        Some("plus-lighter") => BlendKind::PlusLighter,
+        Some("pass-through") => BlendKind::PassThrough,
         _ => BlendKind::Normal,
     }
 }
