@@ -487,7 +487,10 @@ impl<'a> Player<'a> {
     /// its effect when the player still sits in the "while" result.
     /// Returns whether anything reverted.
     fn leave_hover_span(&mut self, hotspot: &str) -> bool {
-        let relevant = self.hover_span.as_ref().is_some_and(|s| s.hotspot() == hotspot);
+        let relevant = self
+            .hover_span
+            .as_ref()
+            .is_some_and(|s| s.hotspot() == hotspot);
         if !relevant {
             return false;
         }
@@ -873,10 +876,7 @@ mod tests {
                     trigger: Trigger::OnPress,
                     action: Action::SetVar {
                         name: "taps".into(),
-                        value: Expr::Add(
-                            Box::new(Expr::var("taps")),
-                            Box::new(Expr::num(1.0)),
-                        ),
+                        value: Expr::Add(Box::new(Expr::var("taps")), Box::new(Expr::num(1.0))),
                     },
                     transition_ms: 0,
                     animation: Animation::Instant,
@@ -1157,7 +1157,9 @@ mod tests {
             &mut overlays,
             &mut vars,
             &known,
-            &Action::SetMode { mode: "dark".into() },
+            &Action::SetMode {
+                mode: "dark".into(),
+            },
             0,
         );
         assert!(e.vars_changed && e.navigated.is_none());

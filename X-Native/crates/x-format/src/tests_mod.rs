@@ -401,8 +401,14 @@ mod tests {
         );
         doc.pages.push(page);
         let text = save_x(&doc);
-        assert!(text.contains("\"action\":\"link\""), "link kind survives: {text}");
-        assert!(text.contains("https://example.com/docs"), "url survives: {text}");
+        assert!(
+            text.contains("\"action\":\"link\""),
+            "link kind survives: {text}"
+        );
+        assert!(
+            text.contains("https://example.com/docs"),
+            "url survives: {text}"
+        );
         let loaded = load_x(&text).expect("load");
         let ext = find(&loaded.pages[0], "ext").expect("ext survives");
         assert_eq!(ext.interactions.len(), 1);

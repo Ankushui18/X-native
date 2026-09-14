@@ -395,7 +395,11 @@ impl ApplicationHandler for Host {
                     w.request_redraw();
                 }
             }
-            let next = self.app.flow.as_ref().and_then(|f| f.delays.iter().map(|d| d.at).min());
+            let next = self
+                .app
+                .flow
+                .as_ref()
+                .and_then(|f| f.delays.iter().map(|d| d.at).min());
             if let Some(next) = next {
                 wake = wake.min(next);
             }
@@ -5225,9 +5229,11 @@ impl Host {
         let Some((_, hit)) = self.flow_pick(w) else {
             return;
         };
-        let orphaned = self.app.flow.as_ref().is_some_and(|f| {
-            f.hover_span.as_ref().is_some_and(|s| s.hotspot() != hit)
-        });
+        let orphaned = self
+            .app
+            .flow
+            .as_ref()
+            .is_some_and(|f| f.hover_span.as_ref().is_some_and(|s| s.hotspot() != hit));
         if !orphaned {
             if let Some(f) = self.app.flow.as_mut() {
                 f.hovered = Some(hit.clone());
@@ -5434,7 +5440,9 @@ impl Host {
     /// its effect when the viewer still sits in the "while" result.
     fn flow_leave_hover_span(&mut self, hotspot: &str) {
         let relevant = self.app.flow.as_ref().is_some_and(|f| {
-            f.hover_span.as_ref().is_some_and(|s| s.hotspot() == hotspot)
+            f.hover_span
+                .as_ref()
+                .is_some_and(|s| s.hotspot() == hotspot)
         });
         if !relevant {
             return;
@@ -5476,7 +5484,12 @@ impl Host {
         }
         self.app.flow = Some(f);
         if effect.navigated.is_some() {
-            let cur = self.app.flow.as_ref().map(|f| f.current.clone()).unwrap_or_default();
+            let cur = self
+                .app
+                .flow
+                .as_ref()
+                .map(|f| f.current.clone())
+                .unwrap_or_default();
             self.flow_focus(&cur);
             self.arm_flow_delays();
             self.app.status = format!("Flow preview — viewing {cur}");
@@ -5564,9 +5577,11 @@ impl Host {
         let Some((_, hit)) = self.flow_pick(w) else {
             return;
         };
-        let orphaned = self.app.flow.as_ref().is_some_and(|f| {
-            f.hover_span.as_ref().is_some_and(|s| s.hotspot() != hit)
-        });
+        let orphaned = self
+            .app
+            .flow
+            .as_ref()
+            .is_some_and(|f| f.hover_span.as_ref().is_some_and(|s| s.hotspot() != hit));
         if !orphaned {
             if let Some(f) = self.app.flow.as_mut() {
                 f.hovered = Some(hit.clone());
@@ -5641,13 +5656,21 @@ impl Host {
 
     /// Is overlay `frame` open in the viewer?
     fn flow_overlay_open(&self, frame: &str) -> bool {
-        self.app.flow.as_ref().is_some_and(|f| f.overlays.iter().any(|o| o.frame == frame))
+        self.app
+            .flow
+            .as_ref()
+            .is_some_and(|f| f.overlays.iter().any(|o| o.frame == frame))
     }
 
     /// Viewer Esc: dismiss the top overlay first, then step back through
     /// history, then end the preview.
     fn flow_escape(&mut self) {
-        if self.app.flow.as_mut().is_some_and(|f| f.overlays.pop().is_some()) {
+        if self
+            .app
+            .flow
+            .as_mut()
+            .is_some_and(|f| f.overlays.pop().is_some())
+        {
             self.app.status = "Overlay dismissed".into();
         } else {
             self.flow_back();
@@ -5701,7 +5724,11 @@ impl Host {
     /// discards previously armed delays.
     fn arm_flow_delays(&mut self) {
         let now = std::time::Instant::now();
-        let node = self.app.flow.as_ref().and_then(|f| self.flow_node(&f.current));
+        let node = self
+            .app
+            .flow
+            .as_ref()
+            .and_then(|f| self.flow_node(&f.current));
         let mut armed = Vec::new();
         if let Some(node) = node {
             for (_, ms, ix) in x_native::delayed_interactions(node) {
@@ -5723,7 +5750,11 @@ impl Host {
     /// keep running underneath). Stale entries die in `flow_tick`.
     fn arm_flow_overlay_delays(&mut self) {
         let now = std::time::Instant::now();
-        let top = self.app.flow.as_ref().and_then(|f| f.overlays.last().map(|o| o.frame.clone()));
+        let top = self
+            .app
+            .flow
+            .as_ref()
+            .and_then(|f| f.overlays.last().map(|o| o.frame.clone()));
         let Some(top) = top else {
             return;
         };

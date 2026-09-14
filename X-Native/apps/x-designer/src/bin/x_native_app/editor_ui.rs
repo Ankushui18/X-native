@@ -648,9 +648,11 @@ fn paint_rulers(app: &App, s: &mut Scene) {
     }
     // selection extent: focus-ring band on both rulers spanning the
     // current-page selection's world bounds (clamped to the canvas)
-    let page_sel = app
-        .doc_opt()
-        .and_then(|d| d.editors.get(d.page).map(|ed| (d.page, ed.selection.clone())));
+    let page_sel = app.doc_opt().and_then(|d| {
+        d.editors
+            .get(d.page)
+            .map(|ed| (d.page, ed.selection.clone()))
+    });
     if let Some((page, ids)) = page_sel {
         let mut ext: Option<Rect> = None;
         for id in &ids {
@@ -665,10 +667,18 @@ fn paint_rulers(app: &App, s: &mut Scene) {
             let sy0 = (e.y0 * z + oy).clamp(reg.canvas.y0, reg.canvas.y1);
             let sy1 = (e.y1 * z + oy).clamp(reg.canvas.y0, reg.canvas.y1);
             if sx1 > sx0 {
-                fill_rect(s, Rect::new(sx0, reg.canvas.y0, sx1, reg.canvas.y0 + 3.0), C_SEL);
+                fill_rect(
+                    s,
+                    Rect::new(sx0, reg.canvas.y0, sx1, reg.canvas.y0 + 3.0),
+                    C_SEL,
+                );
             }
             if sy1 > sy0 {
-                fill_rect(s, Rect::new(reg.canvas.x0, sy0, reg.canvas.x0 + 3.0, sy1), C_SEL);
+                fill_rect(
+                    s,
+                    Rect::new(reg.canvas.x0, sy0, reg.canvas.x0 + 3.0, sy1),
+                    C_SEL,
+                );
             }
         }
     }
@@ -942,8 +952,7 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     }
 
     // PAGES section
-    app.fonts
-        .micro_label(s, 12.0, y, "PAGES", C_DIM, Wt::Med);
+    app.fonts.micro_label(s, 12.0, y, "PAGES", C_DIM, Wt::Med);
     let addp = Rect::new(lw - 25.0, y + 0.8, lw - 13.0, y + 12.8);
     draw_icon(s, "plus", addp.x0, y + 0.8, 12.0, C_DIM);
     hit.push((addp, Action::AddPage)); // page field top 178 → drawn below
@@ -1659,7 +1668,8 @@ fn paint_design_empty(
     let w = xr - x0;
 
     // CANVAS BACKGROUND
-    app.fonts.micro_label(s, x0, y0 + 14.0, "CANVAS BACKGROUND", C_DIM, Wt::Med);
+    app.fonts
+        .micro_label(s, x0, y0 + 14.0, "CANVAS BACKGROUND", C_DIM, Wt::Med);
     let f1 = Rect::new(x0, y0 + 30.0, x0 + w, y0 + 58.0);
     input_box(app, s, f1, R_INPUT);
     fill_rrect(
@@ -1681,7 +1691,8 @@ fn paint_design_empty(
     hit.push((f1, Action::Field(FieldId::CanvasBg)));
 
     // PIXEL GRID COLOR
-    app.fonts.micro_label(s, x0, y0 + 74.0, "PIXEL GRID COLOR", C_DIM, Wt::Med);
+    app.fonts
+        .micro_label(s, x0, y0 + 74.0, "PIXEL GRID COLOR", C_DIM, Wt::Med);
     let pct_w = 64.0;
     let f2 = Rect::new(x0, y0 + 90.0, xr - pct_w - 8.0, y0 + 118.0);
     input_box(app, s, f2, R_INPUT);
@@ -2659,7 +2670,8 @@ fn paint_design(
 
     // --- GUIDES --------------------------------------------------------
     draw_icon(s, "chevron-down", rx + pl, y + 1.0, 12.0, C_DIM);
-    app.fonts.caps_label(s, rx + pl + 12.0 + 6.0, y, "GUIDES", C_TEXT, Wt::Med);
+    app.fonts
+        .caps_label(s, rx + pl + 12.0 + 6.0, y, "GUIDES", C_TEXT, Wt::Med);
     draw_icon(s, "plus", rx + rw - pl - 14.0, y - 1.0, 14.0, C_DIM);
     hit.push((
         Rect::new(rx + rw - pl - 18.0, y - 4.0, rx + rw - pl, y + 16.0),
@@ -2795,8 +2807,7 @@ fn paint_design(
     // descendant); instances edit them as typed overrides (A2).
     hline(s, rx, rx + rw, y, C_LINE);
     y += 1.0 + 12.0;
-    app.fonts
-        .caps_label(s, x0, y, "COMPONENT", C_TEXT, Wt::Med);
+    app.fonts.caps_label(s, x0, y, "COMPONENT", C_TEXT, Wt::Med);
     y += 12.0 + 10.0;
     let (master, inst) = (app.selected_master_name(), app.selected_instance());
     if let Some((iid, comp)) = inst {
@@ -2969,8 +2980,7 @@ fn section_header(
     with_grid: bool,
     plus_action: Action,
 ) {
-    app.fonts
-        .caps_label(s, rx + pl, y, title, C_TEXT, Wt::Med);
+    app.fonts.caps_label(s, rx + pl, y, title, C_TEXT, Wt::Med);
     if with_grid {
         draw_icon(
             s,
@@ -4594,8 +4604,7 @@ fn paint_prototype(
     let x0 = rx + 16.0;
     let xr = rx + rw - 16.0;
     let mut y = y0 + 14.0;
-    app.fonts
-        .caps_label(s, x0, y, "PROTOTYPE", C_TEXT, Wt::Med);
+    app.fonts.caps_label(s, x0, y, "PROTOTYPE", C_TEXT, Wt::Med);
     y += 20.0;
 
     let sel: Vec<String> = app.doc().editor_ref().selection.clone();
@@ -4803,13 +4812,8 @@ fn paint_flow_overlay(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         let Some(mut placed) = placed else {
             continue;
         };
-        let (ox, oy) = x_native::overlay_offset(
-            wr.width(),
-            wr.height(),
-            placed.w,
-            placed.h,
-            ov.position,
-        );
+        let (ox, oy) =
+            x_native::overlay_offset(wr.width(), wr.height(), placed.w, placed.h, ov.position);
         placed.transform.x = wr.x0 + ox;
         placed.transform.y = wr.y0 + oy;
         let Some(d) = app.doc_opt() else {

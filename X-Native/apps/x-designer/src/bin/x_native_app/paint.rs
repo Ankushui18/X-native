@@ -507,15 +507,7 @@ impl TextUi {
     /// Micro label: dim section eyebrows (`DRAFTS`, `PAGES`, `FONTS`) —
     /// T10 tracked 0.12em. One of the two tracked steps; the other is
     /// [`TextUi::caps_label`].
-    pub fn micro_label(
-        &self,
-        s: &mut Scene,
-        x: f64,
-        y: f64,
-        text: &str,
-        color: Color,
-        wt: Wt,
-    ) {
+    pub fn micro_label(&self, s: &mut Scene, x: f64, y: f64, text: &str, color: Color, wt: Wt) {
         self.text_tracked(s, x, y, text, T10, 0.12, color, wt);
     }
 

@@ -553,7 +553,9 @@ impl Elevation {
         let max_grow = t.blur * 1.75;
         let mut acc = 0u32;
         for (i, slot) in out.iter_mut().enumerate() {
-            let a = (f64::from(t.alpha) * weights[i] / sum).round().clamp(0.0, 255.0) as u8;
+            let a = (f64::from(t.alpha) * weights[i] / sum)
+                .round()
+                .clamp(0.0, 255.0) as u8;
             acc += u32::from(a);
             slot.0 = max_grow * (i + 1) as f64 / ELEVATION_LAYERS as f64;
             slot.1 = a;

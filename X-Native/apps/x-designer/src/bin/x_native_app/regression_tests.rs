@@ -1190,7 +1190,7 @@ fn flow_enter_follows_selection_to_its_top_frame() {
 /// interaction per trigger kind, and a `n = 1` document variable.
 fn player_doc(h: &mut Host) {
     use x_native::{
-        Action, Animation, Condition, CondOp, Expr, Interaction, OverlayPosition, Trigger,
+        Action, Animation, CondOp, Condition, Expr, Interaction, OverlayPosition, Trigger,
     };
     let d = h.app.doc();
     let root_id = d.editor_ref().root.id.clone();
@@ -1199,7 +1199,9 @@ fn player_doc(h: &mut Host) {
     f1.is_starting_point = true;
     let key = Interaction {
         trigger: Trigger::KeyDown { key: "a".into() },
-        action: Action::Navigate { destination: "f2".into() },
+        action: Action::Navigate {
+            destination: "f2".into(),
+        },
         transition_ms: 0,
         animation: Animation::Instant,
     };
@@ -1211,9 +1213,26 @@ fn player_doc(h: &mut Host) {
     };
     f1.interactions = vec![
         key,
-        delay(30, Action::SetVar { name: "tick".into(), value: Expr::num(1.0) }),
-        delay(35, Action::SetVar { name: "tick".into(), value: Expr::num(2.0) }),
-        delay(60, Action::Navigate { destination: "f2".into() }),
+        delay(
+            30,
+            Action::SetVar {
+                name: "tick".into(),
+                value: Expr::num(1.0),
+            },
+        ),
+        delay(
+            35,
+            Action::SetVar {
+                name: "tick".into(),
+                value: Expr::num(2.0),
+            },
+        ),
+        delay(
+            60,
+            Action::Navigate {
+                destination: "f2".into(),
+            },
+        ),
     ];
     let mut f2 = Node::frame("f2", 300.0, 200.0);
     f2.name = "Detail".into();
@@ -1224,9 +1243,8 @@ fn player_doc(h: &mut Host) {
     d.editor().insert_node(&root_id, f1);
     d.editor().insert_node(&root_id, f2);
     d.editor().insert_node(&root_id, dlg);
-    let rect = |id: &str, x: f64, y: f64| {
-        Node::rect(id, x, y, 80.0, 30.0, Color::from_rgb8(9, 9, 9))
-    };
+    let rect =
+        |id: &str, x: f64, y: f64| Node::rect(id, x, y, 80.0, 30.0, Color::from_rgb8(9, 9, 9));
     let mut btn = rect("btn", 20.0, 20.0);
     btn.interactions = vec![Interaction::click("f2")];
     d.editor().insert_node("f1", btn);
@@ -1252,7 +1270,9 @@ fn player_doc(h: &mut Host) {
     let mut drg = rect("drg", 20.0, 100.0);
     drg.interactions = vec![Interaction {
         trigger: Trigger::OnDrag,
-        action: Action::Navigate { destination: "f2".into() },
+        action: Action::Navigate {
+            destination: "f2".into(),
+        },
         transition_ms: 0,
         animation: Animation::Instant,
     }];
@@ -1260,7 +1280,10 @@ fn player_doc(h: &mut Host) {
     let mut set = rect("set", 20.0, 140.0);
     set.interactions = vec![Interaction {
         trigger: Trigger::OnClick,
-        action: Action::SetVar { name: "n".into(), value: Expr::num(41.0) },
+        action: Action::SetVar {
+            name: "n".into(),
+            value: Expr::num(41.0),
+        },
         transition_ms: 0,
         animation: Animation::Instant,
     }];
@@ -1269,7 +1292,9 @@ fn player_doc(h: &mut Host) {
     let mut wh = rect("wh", 110.0, 20.0);
     wh.interactions = vec![Interaction {
         trigger: Trigger::OnHover,
-        action: Action::Navigate { destination: "f2".into() },
+        action: Action::Navigate {
+            destination: "f2".into(),
+        },
         transition_ms: 0,
         animation: Animation::Instant,
     }];
@@ -1288,7 +1313,10 @@ fn player_doc(h: &mut Host) {
         },
         Interaction {
             trigger: Trigger::MouseUp,
-            action: Action::SetVar { name: "n".into(), value: Expr::num(99.0) },
+            action: Action::SetVar {
+                name: "n".into(),
+                value: Expr::num(99.0),
+            },
             transition_ms: 0,
             animation: Animation::Instant,
         },
@@ -1298,8 +1326,14 @@ fn player_doc(h: &mut Host) {
     gate.interactions = vec![Interaction {
         trigger: Trigger::OnClick,
         action: Action::Cond {
-            cond: Condition { lhs: Expr::var("n"), op: CondOp::Gt, rhs: Expr::num(40.0) },
-            then: Box::new(Action::Navigate { destination: "f1".into() }),
+            cond: Condition {
+                lhs: Expr::var("n"),
+                op: CondOp::Gt,
+                rhs: Expr::num(40.0),
+            },
+            then: Box::new(Action::Navigate {
+                destination: "f1".into(),
+            }),
             els: Some(Box::new(Action::OpenOverlay {
                 overlay: "dlg".into(),
                 position: OverlayPosition::TopLeft,
@@ -1349,7 +1383,10 @@ fn player_click_routes_through_open_overlay_at_rendered_position() {
     // world (80..140, 60..90) — nothing else is near (110, 75)
     let sp = h.app.world_to_screen(Point::new(110.0, 75.0));
     h.flow_press(sp);
-    assert!(h.app.flow.as_ref().unwrap().overlays.is_empty(), "shut closes dlg");
+    assert!(
+        h.app.flow.as_ref().unwrap().overlays.is_empty(),
+        "shut closes dlg"
+    );
     assert_eq!(h.app.flow.as_ref().unwrap().current, "f1");
 }
 
@@ -1395,7 +1432,10 @@ fn player_delay_fires_in_order_and_navigation_cancels_rest() {
     let tick = std::time::Duration::from_millis(70);
     assert_eq!(h.flow_tick(t0 + tick), 1, "60ms delay navigates");
     assert_eq!(h.app.flow.as_ref().unwrap().current, "f2");
-    assert!(h.app.flow.as_ref().unwrap().delays.is_empty(), "f2 arms none");
+    assert!(
+        h.app.flow.as_ref().unwrap().delays.is_empty(),
+        "f2 arms none"
+    );
 }
 
 #[test]
@@ -1406,7 +1446,10 @@ fn player_escape_dismisses_then_backs_then_exits() {
     let sp = h.app.world_to_screen(Point::new(60.0, 75.0));
     h.flow_hover_at(sp);
     h.on_key(Key::Named(NamedKey::Escape), None);
-    assert!(h.app.flow.as_ref().unwrap().overlays.is_empty(), "dismissed");
+    assert!(
+        h.app.flow.as_ref().unwrap().overlays.is_empty(),
+        "dismissed"
+    );
     assert_eq!(h.app.flow.as_ref().unwrap().current, "f1");
     let sp = h.app.world_to_screen(Point::new(60.0, 35.0));
     h.flow_press(sp);
@@ -1480,7 +1523,9 @@ fn player_scrollto_pans_without_navigating() {
     let zoom = h.app.zoom;
     let ix = Interaction {
         trigger: Trigger::OnClick,
-        action: Action::ScrollTo { destination: "set".into() },
+        action: Action::ScrollTo {
+            destination: "set".into(),
+        },
         transition_ms: 0,
         animation: Animation::Instant,
     };
@@ -1503,13 +1548,18 @@ fn player_swap_without_overlay_navigates_without_history() {
     h.flow_enter();
     let ix = Interaction {
         trigger: Trigger::OnClick,
-        action: Action::SwapOverlay { overlay: "f2".into() },
+        action: Action::SwapOverlay {
+            overlay: "f2".into(),
+        },
         transition_ms: 0,
         animation: Animation::Instant,
     };
     h.flow_fire(&ix);
     assert_eq!(h.app.flow.as_ref().unwrap().current, "f2");
-    assert!(h.app.flow.as_ref().unwrap().stack.is_empty(), "Back skips it");
+    assert!(
+        h.app.flow.as_ref().unwrap().stack.is_empty(),
+        "Back skips it"
+    );
     assert_eq!(h.app.status, "Flow preview — viewing f2");
 }
 
@@ -1521,7 +1571,9 @@ fn player_openlink_reports_url_without_leaving() {
     h.flow_enter();
     let ix = Interaction {
         trigger: Trigger::OnClick,
-        action: Action::OpenLink { url: "https://example.com".into() },
+        action: Action::OpenLink {
+            url: "https://example.com".into(),
+        },
         transition_ms: 0,
         animation: Animation::Instant,
     };
