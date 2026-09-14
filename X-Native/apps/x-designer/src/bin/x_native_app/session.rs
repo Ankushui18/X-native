@@ -210,11 +210,11 @@ impl OpenDoc {
         self.remember_serials();
         self.sync();
         self.dirty = Some(self.history.revision) != self.history.saved_revision;
-        
+
         // QA-003 FIX: Invalidate frame cache to force full re-render
         // This ensures Vello rebuilds the scene from the reverted state
         self.frame_cache = x_native::FrameCache::new();
-        
+
         true
     }
 

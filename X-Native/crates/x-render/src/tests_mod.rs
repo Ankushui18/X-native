@@ -6,6 +6,18 @@ use x_core::*;
 
 // -------------------------------------------------------------------- tests
 
+/// Frames and sections draw their own name as a canvas label (the QA-004 block
+/// in scene.rs), and every glyph of that label counts as one path in the scene
+/// stats. The names these tests use are ASCII, so one glyph per character —
+/// spell the label out instead of hardcoding the sum, so a renamed fixture
+/// reads as a label change rather than a mystery off-by-N.
+///
+/// File scope on purpose: this file holds several `#[cfg(test)]` modules
+/// (`tests`, `variable_bindings`, …) and they all build scenes with frames.
+fn label_paths(name: &str) -> usize {
+    name.chars().count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -52,7 +64,7 @@ mod tests {
             }),
             &Variables::default(),
         );
-        assert_eq!(s.paths, 1);
+        assert_eq!(s.paths, 1 + label_paths("r"));
         assert_eq!(s.culled, 1)
     }
 
@@ -71,7 +83,7 @@ mod tests {
     fn stress_10k() {
         let (_, s) = build_scene(&benchmark_scene(10_000), None, &Variables::default());
         assert_eq!(s.nodes, 10_001);
-        assert_eq!(s.paths, 10_000)
+        assert_eq!(s.paths, 10_000 + label_paths("benchmark"))
     }
 
     #[test]
@@ -123,7 +135,8 @@ mod tests {
             .child(master)
             .child(Node::instance("i1", "Button", 10.0, 10.0, 100.0, 40.0));
         let (_, s) = build_scene(&d, None, &Variables::default());
-        assert_eq!(s.paths, 1); // the instance's resolved bg, master hidden
+        // the instance's resolved bg, plus the frame's own label
+        assert_eq!(s.paths, 1 + label_paths("r"));
     }
 
     #[test]
@@ -575,7 +588,7 @@ mod variable_bindings {
         );
         // renders without panic and produces the path
         let (_, s) = build_scene(&d, None, &vars);
-        assert_eq!(s.paths, 1);
+        assert_eq!(s.paths, 1 + label_paths("page"));
         // resolution helpers give bound values
         let n = &d.children[0];
         assert_eq!(n.bound_number("radius", &vars, 2.0), 20.0);

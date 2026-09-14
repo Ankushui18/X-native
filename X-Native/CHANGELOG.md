@@ -92,6 +92,23 @@ are the crate versions in `Cargo.toml`, which still drift (see
   parser.
 
 ### Fixed
+- `cargo build --workspace` / `cargo test --workspace` failed before reaching a
+  single test: the app crate held four errors nothing had ever compiled — a
+  `match *i` on a `usize` (E0614), a `&mut self` call inside a borrow of
+  `self.variables` while drawing the Variables panel (E0502), an `app` borrow
+  inside `sq_btn_small`'s own argument list (E0499), and a call to
+  `App::has_clipboard_content`, a method the QA-001 comment promised but that
+  was never written (E0599) — plus an `Affine::transform_point` call in
+  `x_editor::transformed_resize` that does not exist in kursbo.
+- Frame/section name labels are drawn on the canvas (QA-004), so every glyph of
+  a frame's name is a path in the scene stats. The render tests that asserted
+  exact path counts predated that and are now label-aware instead of
+  hardcoding sums that only hold for unnamed frames.
+- `clippy::neg_cmp_op_on_partial_ord` on the `!(a > b)` / `!(a >= b)` guards in
+  `x_editor::shape_builder` and `x_editor::transformed_resize`. The checks are
+  intentionally NaN-rejecting (a NaN size reaches the document and every
+  export), so they now read `gt`/`ge` helpers instead of the negated
+  comparison; the naive `a <= b` rewrite would have accepted NaN.
 - Rotated layers drew an axis-aligned selection outline and corner handles
   (taken from `transform.x/y` + `w/h`) while the renderer drew the shape
   through `transform.matrix` — the box was nowhere near the artwork, and
@@ -125,6 +142,18 @@ are the crate versions in `Cargo.toml`, which still drift (see
   too — while `lint` without a file still exits 2 with a usage message.
 - Dead constants `TEXT_PRIMARY` / `TEXT_SECONDARY` / `ACCENT` / `ICON_SIZE` and
   thirteen unused brand aliases removed; UI code names a role instead.
+
+- A component **color property bound to `stroke`** repainted the interior of
+  the node it was bound to: `OverrideValue` had no stroke arm, so both write
+  sites (`x_core::PropRegistry::apply`, `Editor::set_prop_value`) emitted a
+  `Fill` (docs/KNOWN_DEBT.md §4). `OverrideValue::Stroke` now encodes
+  `stroke:#rrggbb` — decoded before the bare-hex fallback, which still means
+  fill — `x_core::color_override` picks the arm from the property's
+  `target_property`, and `x_core::apply_stroke_paint` gives a zero-width
+  stroke a 1px width and recolors materialized stroke layers so the write is
+  visible. Both appliers and the two renderer encoders (`ir::lower`,
+  `scene::encode`) honour the override; §4 records what is left (the duplicate
+  enum's missing `Number` variant, Sketch export dropping `stroke:` overrides).
 
 ## [0.34.0] — 2026-09-12 (`69315b0`)
 

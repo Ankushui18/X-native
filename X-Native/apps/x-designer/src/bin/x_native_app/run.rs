@@ -790,9 +790,12 @@ mod run_fns_tests {
                 60.0,
                 x_native::Color::from_rgb8(0x88, 0x99, 0xAA),
             );
+            // x = 60, not 200: step 6 unions r1 and e1 through the context
+            // menu, and the Shape Builder refuses to merge shapes that do not
+            // overlap (that is its whole point), so the two must overlap.
             let e = x_native::Node::ellipse(
                 "e1",
-                200.0,
+                60.0,
                 0.0,
                 60.0,
                 60.0,
@@ -4080,9 +4083,7 @@ impl Host {
             self.on_text(" ");
             return;
         }
-        if self.app.color_picker_popup.is_some()
-            && matches!(key, Key::Named(NamedKey::Escape))
-        {
+        if self.app.color_picker_popup.is_some() && matches!(key, Key::Named(NamedKey::Escape)) {
             self.dispatch(Action::CloseColorPicker);
             return;
         }
@@ -4462,12 +4463,14 @@ impl Host {
                         // QA-001 FIX: Check clipboard content via method instead of direct field access
                         let had_content = self.app.has_clipboard_content();
                         self.app.paste_nodes();
-                        
+
                         // Provide user feedback on paste result
                         if had_content {
                             // Status already set by paste_nodes()
                         } else {
-                            self.app.status = "Clipboard is empty. Copy from Figma or select objects first.".into();
+                            self.app.status =
+                                "Clipboard is empty. Copy from Figma or select objects first."
+                                    .into();
                         }
                         return;
                     }
@@ -6315,11 +6318,8 @@ impl Host {
                     // the retired chrome renderer. The active editor painter
                     // owns the popup and appends its own hit targets.
                     let p = self.app.mouse;
-                    self.app.color_picker_popup = Some((
-                        is_fill,
-                        Rect::new(p.x, p.y, p.x + 1.0, p.y + 1.0),
-                        true,
-                    ));
+                    self.app.color_picker_popup =
+                        Some((is_fill, Rect::new(p.x, p.y, p.x + 1.0, p.y + 1.0), true));
                 } else {
                     self.app.color_picker_popup = None;
                 }
@@ -6358,7 +6358,8 @@ impl Host {
                 };
                 if changed {
                     self.app.mark_dirty();
-                    self.app.status = format!("{} color updated", if is_fill { "Fill" } else { "Stroke" });
+                    self.app.status =
+                        format!("{} color updated", if is_fill { "Fill" } else { "Stroke" });
                 }
                 self.app.color_picker_popup = None;
                 let doc = self.app.doc();
@@ -6797,7 +6798,11 @@ impl Host {
                 let pad_h = self.app.doc().pad_h;
                 let pad_v = self.app.doc().pad_v;
                 layout.padding = [pad_h, pad_v, pad_h, pad_v];
-                let changed = self.app.doc().editor().set_auto_layout(&id, Some(layout), &vars);
+                let changed = self
+                    .app
+                    .doc()
+                    .editor()
+                    .set_auto_layout(&id, Some(layout), &vars);
                 if changed {
                     self.app.mark_dirty();
                     self.app.status = "Auto Layout added".into();

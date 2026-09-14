@@ -123,7 +123,9 @@ fn paint_layout_guides(app: &App, s: &mut Scene) {
     let Some(node) = find_node(&doc.editor_ref().root, &id) else {
         return;
     };
-    let step = doc.guide_size.max(1.0).min(4096.0);
+    // clamp, not max().min() (clippy::manual_clamp); NaN draws no guides
+    // rather than a 1px wall of them.
+    let step = doc.guide_size.clamp(1.0, 4096.0);
     let (ox, oy) = (node.transform.x, node.transform.y);
     let max_lines = 512usize;
     let guide_color = vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0x58);
@@ -137,10 +139,10 @@ fn paint_layout_guides(app: &App, s: &mut Scene) {
     while x <= node.w && i < max_lines {
         let sx = app.world_to_screen(Point::new(ox + x, oy)).x;
         if sx >= reg.canvas.x0 && sx <= reg.canvas.x1 {
-            let color = if doc.guide_kind == 1 && i % 4 == 0 {
+            let color = if doc.guide_kind == 1 && i.is_multiple_of(4) {
                 vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0x90)
             } else {
-                guide_color.clone()
+                guide_color
             };
             vline(s, sx, reg.canvas.y0, reg.canvas.y1, color);
         }
@@ -152,10 +154,10 @@ fn paint_layout_guides(app: &App, s: &mut Scene) {
     while y <= node.h && i < max_lines {
         let sy = app.world_to_screen(Point::new(ox, oy + y)).y;
         if sy >= reg.canvas.y0 && sy <= reg.canvas.y1 {
-            let color = if doc.guide_kind == 1 && i % 4 == 0 {
+            let color = if doc.guide_kind == 1 && i.is_multiple_of(4) {
                 vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0x90)
             } else {
-                guide_color.clone()
+                guide_color
             };
             hline(s, reg.canvas.x0, reg.canvas.x1, sy, color);
         }
@@ -1793,7 +1795,14 @@ fn paint_design(
     sq_btn(app, s, hit, aspect_lock.x0, aspect_lock.y0, "lock", false);
     if app.aspect_ratio_locked {
         fill_rrect(s, aspect_lock, 8.0, C_FIELD_2);
-        draw_icon(s, "lock", aspect_lock.x0 + 7.0, aspect_lock.y0 + 7.0, 14.0, C_TEXT);
+        draw_icon(
+            s,
+            "lock",
+            aspect_lock.x0 + 7.0,
+            aspect_lock.y0 + 7.0,
+            14.0,
+            C_TEXT,
+        );
     }
     hit.push((aspect_lock, Action::ToggleAspectRatio));
 
@@ -2010,14 +2019,7 @@ fn paint_design(
     hit.push((g1, Action::Field(FieldId::Gap)));
     let g2 = Rect::new(gx, y0 + 410.0, gx + 219.0, y0 + 442.0);
     input_box(app, s, g2, 8.0);
-    draw_icon(
-        s,
-        "arrow-up-down",
-        g2.x0 + 8.0,
-        g2.y0 + 10.0,
-        12.0,
-        C_DIM,
-    );
+    draw_icon(s, "arrow-up-down", g2.x0 + 8.0, g2.y0 + 10.0, 12.0, C_DIM);
     // The second gap axis was previously a decorative empty field. Both
     // axes use the engine's single Auto Layout gap value until independent
     // row/column gaps are supported.
@@ -2688,17 +2690,12 @@ fn paint_design(
         kd.x1 + 6.0 + 48.0 + 6.0 + 24.0,
         y + 24.0,
     );
-    sq_btn_small(
-        app,
-        s,
-        guide_eye.x0,
-        guide_eye.y0,
-        if app.doc().guides_visible {
-            "eye"
-        } else {
-            "eye-off"
-        },
-    );
+    let eye_icon = if app.doc().guides_visible {
+        "eye"
+    } else {
+        "eye-off"
+    };
+    sq_btn_small(app, s, guide_eye.x0, guide_eye.y0, eye_icon);
     hit.push((guide_eye, Action::ToggleGuideVisibility));
     let rm = Rect::new(
         kd.x1 + 6.0 + 48.0 + 6.0 + 24.0 + 6.0,
@@ -3007,7 +3004,10 @@ fn paint_layer_visible(app: &App, is_fill: bool) -> bool {
         if is_fill {
             node.fill_layers.first().map(|l| l.visible).unwrap_or(true)
         } else {
-            node.stroke_layers.first().map(|l| l.visible).unwrap_or(true)
+            node.stroke_layers
+                .first()
+                .map(|l| l.visible)
+                .unwrap_or(true)
         }
     } else if is_fill {
         true
@@ -3559,7 +3559,7 @@ fn paint_carets(app: &mut App, s: &mut Scene) {
 /// painting and input means clicks outside the popup close it instead of
 /// accidentally editing the canvas underneath.
 pub(crate) fn color_picker_rect(app: &App) -> Option<Rect> {
-    let (_, anchor, open) = app.color_picker_popup.as_ref()?.clone();
+    let (_, anchor, open) = *app.color_picker_popup.as_ref()?;
     if !open {
         return None;
     }
@@ -3571,9 +3571,10 @@ pub(crate) fn color_picker_rect(app: &App) -> Option<Rect> {
     } else {
         (anchor.x1 + 8.0).min((app.win_w - w - 8.0).max(8.0))
     };
-    let y = anchor
-        .y0
-        .clamp(ED_TITLE_H + 4.0, (app.win_h - h - 8.0).max(ED_TITLE_H + 4.0));
+    let y = anchor.y0.clamp(
+        ED_TITLE_H + 4.0,
+        (app.win_h - h - 8.0).max(ED_TITLE_H + 4.0),
+    );
     Some(Rect::new(x, y, x + w, y + h))
 }
 
@@ -3598,26 +3599,40 @@ fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         s,
         panel.x0 + 14.0,
         panel.y0 + 14.0,
-        if is_fill { "Fill color" } else { "Stroke color" },
+        if is_fill {
+            "Fill color"
+        } else {
+            "Stroke color"
+        },
         T11,
         C_TEXT,
         Wt::Med,
     );
-    let close = Rect::new(panel.x1 - 30.0, panel.y0 + 7.0, panel.x1 - 7.0, panel.y0 + 29.0);
+    let close = Rect::new(
+        panel.x1 - 30.0,
+        panel.y0 + 7.0,
+        panel.x1 - 7.0,
+        panel.y0 + 29.0,
+    );
     if hover(app, close) {
         fill_rrect(s, close, 5.0, C_FIELD_2);
     }
     draw_icon(s, "x", close.x0 + 5.0, close.y0 + 5.0, 13.0, C_DIM);
     hit.push((close, Action::CloseColorPicker));
 
-    let preview = Rect::new(panel.x0 + 14.0, panel.y0 + 38.0, panel.x1 - 14.0, panel.y0 + 72.0);
-    fill_rrect(s, preview, 6.0, current.clone());
+    let preview = Rect::new(
+        panel.x0 + 14.0,
+        panel.y0 + 38.0,
+        panel.x1 - 14.0,
+        panel.y0 + 72.0,
+    );
+    fill_rrect(s, preview, 6.0, current);
     stroke_rrect(s, preview, 6.0, C_LINE_2, 1.0);
     app.fonts.text(
         s,
         panel.x0 + 14.0,
         panel.y0 + 87.0,
-        &format!("#{}", crate::state::color_hex(current.clone())),
+        &format!("#{}", crate::state::color_hex(current)),
         T10,
         C_TEXT,
         Wt::Mono,
@@ -3633,8 +3648,8 @@ fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
     );
 
     const PRESETS: [&str; 16] = [
-        "FFFFFF", "F2F3F7", "D9DCE5", "9A9EAA", "6B6E7A", "343842", "1B1D23", "000000",
-        "FF3B30", "FF9500", "FFCC00", "34C759", "00A3FF", "5856D6", "AF52DE", "FF2D55",
+        "FFFFFF", "F2F3F7", "D9DCE5", "9A9EAA", "6B6E7A", "343842", "1B1D23", "000000", "FF3B30",
+        "FF9500", "FFCC00", "34C759", "00A3FF", "5856D6", "AF52DE", "FF2D55",
     ];
     let size = 26.0;
     let gap = 7.0;
@@ -3650,7 +3665,7 @@ fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
             start_y + row as f64 * (size + gap) + size,
         );
         let color = parse_hex(hex).unwrap_or(Color::WHITE);
-        fill_rrect(s, r, 5.0, color.clone());
+        fill_rrect(s, r, 5.0, color);
         if color == current {
             stroke_rrect(s, r.inflate(1.5, 1.5), 6.0, C_TEXT, 1.5);
         } else {

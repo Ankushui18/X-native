@@ -355,6 +355,12 @@ impl App {
             !self.clipboard.nodes.is_empty()
         }
     }
+    /// Whether a paste would have anything to do. `paste_nodes` reports the
+    /// empty case in `status` itself, so callers use this only to explain *why*
+    /// they are overriding that message (QA-001: method, not field access).
+    pub fn has_clipboard_content(&self) -> bool {
+        !self.clipboard.nodes.is_empty()
+    }
     pub fn paste_nodes(&mut self) {
         let clipboard = std::mem::take(&mut self.clipboard);
         let result = clipboard.paste(self.doc());

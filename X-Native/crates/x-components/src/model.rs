@@ -15,12 +15,19 @@
 //! serialization surface and is converted losslessly both ways.
 
 use std::collections::HashMap;
-use x_core::{color_to_hex, parse_hex_color, Color, Node, NodeKind, Paint, Variables};
+use x_core::{
+    apply_stroke_paint, color_to_hex, parse_hex_color, Color, Node, NodeKind, Paint, Variables,
+};
 
 /// A typed per-node override carried by an Instance.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OverrideValue {
     Fill(Color),
+    /// Stroke paint. A component color property bound to `target_property:
+    /// "stroke"` writes this, so a border colour never repaints the interior
+    /// of the node it is bound to. This copy still lacks `Number` — see
+    /// docs/KNOWN_DEBT.md §4.
+    Stroke(Color),
     Text(String),
     Visible(bool),
     Opacity(f32),
@@ -34,6 +41,7 @@ impl OverrideValue {
     pub fn encode(&self) -> String {
         match self {
             OverrideValue::Fill(c) => color_to_hex(*c),
+            OverrideValue::Stroke(c) => format!("stroke:{}", color_to_hex(*c)),
             OverrideValue::Text(t) => format!("text:{t}"),
             OverrideValue::Visible(v) => format!("visible:{v}"),
             OverrideValue::Opacity(o) => format!("opacity:{o}"),
@@ -52,6 +60,11 @@ impl OverrideValue {
         }
         if let Some(c) = s.strip_prefix("swap:") {
             return Some(OverrideValue::Swap(c.into()));
+        }
+        // checked BEFORE the bare-hex fallback: "#00ff00" still means Fill,
+        // "stroke:#00ff00" does not
+        if let Some(c) = s.strip_prefix("stroke:") {
+            return parse_hex_color(c).map(OverrideValue::Stroke);
         }
         parse_hex_color(s).map(OverrideValue::Fill)
     }
@@ -214,6 +227,7 @@ fn apply_overrides_deep(node: &mut Node, ovr: &HashMap<String, OverrideValue>, v
     if let Some(v) = ovr.get(&node.id) {
         match v {
             OverrideValue::Fill(c) => node.fill = Paint::Solid(*c),
+            OverrideValue::Stroke(c) => apply_stroke_paint(node, *c),
             OverrideValue::Text(t) => {
                 if let NodeKind::Text { text } = &mut node.kind {
                     *text = t.clone();

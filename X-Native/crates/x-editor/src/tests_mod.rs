@@ -10,6 +10,15 @@ mod tests {
     use super::*;
     use x_core::{Color, Node};
 
+    /// Frames and sections draw their own name as a canvas label (the QA-004
+    /// block in scene.rs), and every glyph of that label counts as one path in
+    /// the scene stats. The names used in these tests are ASCII, so one glyph
+    /// per character — spell the label out instead of hardcoding the sum, so a
+    /// renamed fixture shows up as a label change, not as a mystery off-by-N.
+    fn label_paths(name: &str) -> usize {
+        name.chars().count()
+    }
+
     fn doc() -> Node {
         Node::frame("page", 800.0, 600.0)
             .child(Node::rect(
@@ -1154,7 +1163,8 @@ mod tests {
         ));
         let mid = smart_animate(&from, &to, 0.25);
         let (_, s) = x_render::build_scene(&mid, None, &Variables::default());
-        assert_eq!(s.paths, 1);
+        // the interpolated box, plus the morph frame's own name label
+        assert_eq!(s.paths, 1 + label_paths("s1"));
     }
 
     #[test]
@@ -1248,12 +1258,13 @@ mod tests {
         assert!(master.children.iter().any(|c| c.id == "a"));
         // rendering resolves the instance -> master children paths
         let (_, s) = x_render::build_scene(&e.root, None, &Variables::default());
-        assert_eq!(s.paths, 3); // c (ellipse) + 2 resolved members
-                                // stamp two more instances
+        // c (ellipse) + 2 resolved members + the page frame's label
+        assert_eq!(s.paths, 3 + label_paths("page"));
+        // stamp two more instances
         let id2 = e.place_instance("Card", 400.0, 300.0).unwrap();
         assert_eq!(id2, "Card-2");
         let (_, s) = x_render::build_scene(&e.root, None, &Variables::default());
-        assert_eq!(s.paths, 5);
+        assert_eq!(s.paths, 5 + label_paths("page"));
         // editing the MASTER's child updates every instance render
         assert_eq!(e.component_names(), vec!["Card".to_string()]);
         // undo the placement, then undo the componentization entirely
@@ -1344,6 +1355,64 @@ mod tests {
         assert!(!e.set_prop_value("nope", "Label", "x"));
         assert!(!e.set_prop_value("Btn-1", "nope", "x"));
         assert!(!e.set_prop_value("Btn-1", "Bar width", "abc"));
+    }
+
+    #[test]
+    fn stroke_bound_color_property_repaints_only_the_stroke() {
+        use x_core::ComponentProp;
+        let master = Node::component("comp-Btn", "Btn", 200.0, 50.0).child(Node::rect(
+            "body",
+            0.0,
+            0.0,
+            200.0,
+            50.0,
+            Color::WHITE,
+        ));
+        let page = Node::frame("page", 800.0, 600.0)
+            .child(master)
+            .child(Node::instance("Btn-1", "Btn", 10.0, 10.0, 200.0, 50.0));
+        let mut e = Editor::new(page);
+        assert!(e.add_component_prop(
+            "Btn",
+            ComponentProp::Color {
+                name: "Border".into(),
+                target: "body".into(),
+                target_property: "stroke".into(),
+                default: Color::BLACK,
+            }
+        ));
+
+        assert!(e.set_prop_value("Btn-1", "Border", "#00ff00"));
+        let inst = find(&e.root, "Btn-1").unwrap();
+        assert_eq!(
+            inst.overrides.get("body").map(String::as_str),
+            Some("stroke:#00ff00"),
+            "a border colour must not encode as a fill"
+        );
+
+        // applying that override repaints the stroke, and only the stroke
+        let root = e.root.clone();
+        let inst = find(&root, "Btn-1").unwrap();
+        let group = x_core::detach_instance(&root, inst, &Variables::default()).expect("detach");
+        let body = group.children.iter().find(|c| c.name == "body").unwrap();
+        assert!(
+            matches!(&body.fill, Paint::Solid(c) if x_core::color_to_hex(*c) == "#ffffff"),
+            "the interior keeps the master's fill, got {:?}",
+            body.fill
+        );
+        assert_eq!(
+            body.stroke.solid_color().map(x_core::color_to_hex),
+            Some("#00ff00".to_string())
+        );
+        assert_eq!(
+            body.stroke.width, 1.0,
+            "a zero-width stroke is given a width so the override is visible"
+        );
+
+        // and the write is undoable like every other property assignment
+        assert!(e.undo());
+        let inst = find(&e.root, "Btn-1").unwrap();
+        assert!(!inst.overrides.contains_key("body"));
     }
 
     #[test]

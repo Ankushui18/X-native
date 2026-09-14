@@ -2123,15 +2123,16 @@ impl Editor {
                     false
                 }
             }
-            // `target_property` is ignored for now: every color property
-            // lands as a Fill (OverrideValue has no Stroke variant).
-            ComponentProp::Color { target, .. } => {
+            // `target_property` ("fill" or "stroke") picks the typed
+            // override: a border colour must not repaint the interior.
+            ComponentProp::Color {
+                target,
+                target_property,
+                ..
+            } => {
                 // Parse hex color and apply it to the bound node
                 if let Some(color) = parse_hex_color(value) {
-                    // OverrideValue has no Stroke variant yet, so every
-                    // color property lands as a Fill (tracked in
-                    // docs/KNOWN_DEBT.md).
-                    set_override(&mut after, target, OverrideValue::Fill(color));
+                    set_override(&mut after, target, color_override(target_property, color));
                     true
                 } else {
                     false

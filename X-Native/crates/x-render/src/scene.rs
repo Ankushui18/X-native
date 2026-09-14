@@ -160,6 +160,12 @@ fn encode(
                     };
                     swapped = Some(n2);
                 }
+            } else if let Some(c) = raw.strip_prefix("stroke:").and_then(parse_hex_color) {
+                // a stroke colour override repaints the stroke, never the
+                // fill (the bare-hex form above is the fill override)
+                let mut n2 = node.clone();
+                apply_stroke_paint(&mut n2, c);
+                swapped = Some(n2);
             }
         }
         if !effective_visible {
@@ -501,7 +507,7 @@ fn encode(
             if rounded {
                 frame_clip_shape = Some(shape);
             }
-            
+
             // QA-004 FIX: Render frame name label (same as Section nodes)
             // This ensures frame names appear on the canvas like in Figma
             let name = if node.name.is_empty() {

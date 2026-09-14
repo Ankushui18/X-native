@@ -153,13 +153,19 @@ pub fn overlap(a: &Node, b: &Node) -> Option<OverlapReport> {
 /// both cases into one — the refusal is only actionable if it says WHICH
 /// layer the Shape Builder could not use.
 fn overlap_named(a: &Node, b: &Node) -> Result<OverlapReport, ShapeBuilderIssue> {
-    let pa = node_to_path(a).ok_or(ShapeBuilderIssue::UnsupportedNode {
-        id: a.id.clone(),
-    })?;
-    let pb = node_to_path(b).ok_or(ShapeBuilderIssue::UnsupportedNode {
-        id: b.id.clone(),
-    })?;
+    let pa = node_to_path(a).ok_or(ShapeBuilderIssue::UnsupportedNode { id: a.id.clone() })?;
+    let pb = node_to_path(b).ok_or(ShapeBuilderIssue::UnsupportedNode { id: b.id.clone() })?;
     Ok(measure_pair(a, &pa, b, &pb))
+}
+
+/// `a > b` for floats, NaN counting as "not greater".
+///
+/// The degenerate-geometry checks below used to read `!(area > 0.0)`, which is
+/// the correct NaN-rejecting test but is rejected by
+/// `clippy::neg_cmp_op_on_partial_ord`; `area <= 0.0` would silently accept NaN
+/// and let a NaN-sized shape through the boolean backends.
+fn gt(a: f64, b: f64) -> bool {
+    matches!(a.partial_cmp(&b), Some(std::cmp::Ordering::Greater))
 }
 
 /// Validate a Shape Builder operation before performing it.
@@ -175,10 +181,10 @@ pub fn validate(
     min_ratio: f64,
 ) -> Result<OverlapReport, ShapeBuilderIssue> {
     let report = overlap_named(a, b)?;
-    if !(report.area_a > 0.0) {
+    if !gt(report.area_a, 0.0) {
         return Err(ShapeBuilderIssue::DegenerateGeometry { id: a.id.clone() });
     }
-    if !(report.area_b > 0.0) {
+    if !gt(report.area_b, 0.0) {
         return Err(ShapeBuilderIssue::DegenerateGeometry { id: b.id.clone() });
     }
     if report.ratio < min_ratio {
@@ -325,7 +331,8 @@ mod tests {
     fn subtract_that_would_leave_nothing_is_refused() {
         let small = rect("small", 40.0, 40.0, 20.0, 20.0);
         let big = rect("big", 0.0, 0.0, 200.0, 200.0);
-        let err = validate(ShapeBuilderOp::Subtract, &small, &big, DEFAULT_MIN_OVERLAP).unwrap_err();
+        let err =
+            validate(ShapeBuilderOp::Subtract, &small, &big, DEFAULT_MIN_OVERLAP).unwrap_err();
         match err {
             ShapeBuilderIssue::FullyNested { id, ratio } => {
                 assert_eq!(id, "small");

@@ -1,0 +1,163 @@
+# The repository gate. `X-Native/scripts/check.sh` is the single definition of
+# "green" — this workflow runs exactly that script so "it passes locally" and
+# "it passes on CI" are the same claim. Before this file existed the repo
+# shipped no checks at all.
+#
+# A failing gate is reported twice: as short annotations (the only failure
+# channel reachable through the check-runs API) and as a PR comment carrying
+# the full log (the raw step log is served from blob storage, which some
+# tooling cannot reach).
+name: CI
+
+on:
+  push:
+    branches: ["main", "arena/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: scripts/check.sh
+    runs-on: ubuntu-latest
+    # The workspace pulls vello/wgpu/winit; a cold dependency build plus the
+    # full test suite is minutes, not seconds. If this job fails early, suspect
+    # the environment (dependency download, cache) before the code — the gate
+    # compiles ~400 crates before it reaches any of ours.
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: X-Native
+    steps:
+      - uses: actions/checkout@v4
+
+      # System libraries the GUI stack (winit / wgpu / arboard) links against
+      # on Linux. Without them the build fails inside a C dependency rather
+      # than on any Rust error.
+      - name: Linux build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libssl-dev \
+            libx11-dev libxcb1-dev libxkbcommon-dev libwayland-dev libudev-dev
+
+      # The pinned toolchain, installed explicitly. actions-rust-lang's setup
+      # action is avoided on purpose: it exports CARGO_BUILD_WARNINGS=deny by
+      # default (-D warnings), which turns every dead-code warning into an error
+      # and makes scripts/check.sh's DEAD_CODE_CEILING meaningless — and it did
+      # nothing at all when the toolchain inputs were left to rust-toolchain.toml,
+      # so rustup auto-installed 1.98.1 in the middle of the gate.
+      - name: Toolchain (1.98.1)
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal \
+            --component rustfmt --component clippy
+          rustup show active-toolchain
+          cargo --version
+          rustc --version
+          rustfmt --version
+          cargo clippy --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: X-Native
+
+      # `bash scripts/check.sh`, not `./scripts/check.sh`: the script is
+      # committed 100644 (non-executable), so the direct form fails with
+      # "permission denied".
+      #
+      # The gate writes to a FILE, not into a pipeline: `check.sh | tee` loses
+      # output when the log sink stops reading (the step log dies with a broken
+      # pipe and the pipeline's status becomes tee's 0, masking the failure).
+      - name: Gate
+        run: |
+          set +e
+          bash scripts/check.sh > /tmp/gate.log 2>&1
+          status=$?
+          cat /tmp/gate.log || true
+          exit $status
+
+      # scripts/check.sh is deliberately opaque: cargo writes into temp files it
+      # greps, the CLI build sends stderr to /dev/null, and the clippy branch
+      # prints only lines starting with "error". When the gate fails, re-run the
+      # phases it covers with nothing filtered out, and publish that alongside
+      # the gate's own log.
+      #
+      # The publish step is a PR comment because the raw step log is served from
+      # blob storage (unreachable from some tooling) and large multi-line
+      # annotations are dropped by GitHub.
+      - name: Diagnose
+        if: failure()
+        run: |
+          set +e
+          report=/tmp/report.txt
+          build=/tmp/build.log
+          clippy=/tmp/clippy.log
+          tests=/tmp/tests.log
+
+          cargo build --workspace --message-format short       >"$build"  2>&1
+          build_status=$?
+          cargo clippy --workspace --all-targets --message-format short >"$clippy" 2>&1
+          clippy_status=$?
+          cargo test --workspace --locked --no-fail-fast       >"$tests"  2>&1
+          test_status=$?
+
+          # One line per diagnostic: rustc's source excerpts and "note:" lines
+          # say nothing the short line above them does not, and GitHub drops
+          # oversized comments, so the useful lines go in first.
+          diag() {
+            grep -aE '\.rs:[0-9]+:[0-9]+: (warning|error)' "$1" | cut -c1-200
+          }
+
+          {
+            echo "### statuses: build=$build_status clippy=$clippy_status test=$test_status"
+            echo
+            echo "### clippy: warnings outside the dead-code budget (the LIVE count)"
+            diag "$clippy" | grep -avE 'never (used|read|constructed)'
+            echo
+            echo "### tests: failures, with panic text"
+            grep -aA4 -E 'panicked at|^---- ' "$tests" | cut -c1-220 | head -70
+            echo
+            echo "### build: errors"
+            diag "$build" | head -40
+            echo
+            echo "### clippy: tracked dead code (first 20 of $(diag "$clippy" | grep -acE 'never (used|read|constructed)'))"
+            diag "$clippy" | grep -aE 'never (used|read|constructed)' | cut -c1-160 | head -20
+          } > "$report"
+          echo "report: $(wc -c < "$report") bytes"
+          cat "$report" || true
+          exit 0
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          esc=$(printf '\033')
+          if [ -f /tmp/gate.log ]; then
+            grep -aE '==>|FAIL|error|warning|Diff|panicked|\.rs:[0-9]+' /tmp/gate.log |
+              sed -e "s/${esc}\[[0-9;]*m//g" -e 's/%/%25/g' -e 's/\r//g' |
+              cut -c1-350 | head -35 |
+              while IFS= read -r line; do printf '::error::%s\n' "$line"; done
+          fi
+          number=$(gh pr list --head "$GITHUB_REF_NAME" --state open \
+                     --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$number" ]; then
+            {
+              echo "Gate failed on \`${GITHUB_SHA:0:7}\` — gate log, then one line per diagnostic from each phase."
+              echo
+              echo '~~~'
+              head -c 6000 /tmp/gate.log 2>/dev/null
+              echo '~~~'
+              echo '~~~'
+              head -c 40000 /tmp/report.txt 2>/dev/null
+              echo '~~~'
+            } > /tmp/ci-comment.md
+            gh pr comment "$number" --body-file /tmp/ci-comment.md || true
+          fi

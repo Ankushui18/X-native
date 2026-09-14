@@ -1,0 +1,137 @@
+# Mechanical fixes, applied by CI because a checkout without a Rust toolchain
+# cannot run them: `cargo fmt --all` — the remedy scripts/check.sh itself
+# prescribes — followed by the full gate, with the gate log published as a PR
+# comment. The commit is marked [skip ci] so it does not queue a second full
+# build; re-run CI (or push any commit) for the verdict.
+#
+#   gh workflow run fix.yml --ref <branch>
+#   ...or put [ci-fix] in a commit message when dispatching is not available.
+name: Fix
+
+on:
+  workflow_dispatch:
+    inputs:
+      clippy_fix:
+        description: "also run cargo clippy --fix (mechanical lint autofixes)"
+        type: boolean
+        default: false
+  push:
+    branches: ["main", "arena/**"]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  fix:
+    name: cargo fmt + gate
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && contains(github.event.head_commit.message, '[ci-fix]'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: X-Native
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libssl-dev \
+            libx11-dev libxcb1-dev libxkbcommon-dev libwayland-dev libudev-dev
+
+      # Explicit rustup install, not actions-rust-lang's setup action: that one
+      # exports CARGO_BUILD_WARNINGS=deny (-D warnings) by default, which turns
+      # dead-code warnings into errors and makes scripts/check.sh's
+      # DEAD_CODE_CEILING meaningless.
+      - name: Toolchain (1.98.1)
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal \
+            --component rustfmt --component clippy
+          rustup show active-toolchain
+          cargo --version
+          rustc --version
+          rustfmt --version
+          cargo clippy --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: X-Native
+
+      - name: Apply mechanical fixes
+        run: |
+          cargo fmt --all
+          if [ "${{ inputs.clippy_fix }}" = "true" ]; then
+            cargo clippy --fix --workspace --all-targets --allow-dirty --allow-staged || true
+            cargo fmt --all
+          fi
+          git --no-pager diff --stat
+
+      # scripts/check.sh hides its diagnostics (cargo writes to temp files that
+      # it greps, and the CLI build's stderr is /dev/null), so record the raw
+      # output of each phase it covers as well as the gate's own verdict.
+      - name: Re-gate (log only)
+        run: |
+          set +e
+          bash scripts/check.sh > /tmp/gate.log 2>&1
+          echo "gate exit: $?" >> /tmp/gate.log
+          exit 0
+
+      - name: Raw phase output
+        run: |
+          set +e
+          report=/tmp/report.txt
+          : > "$report"
+          phase() {
+            printf '\n########## %s ##########\n' "$1" >> "$report"
+            shift
+            "$@" >> "$report" 2>&1
+            printf '########## exit: %s\n' "$?" >> "$report"
+          }
+          phase "cargo --version" cargo --version
+          phase "cargo metadata (do the manifests load?)" cargo metadata --no-deps --format-version 1
+          phase "cargo build --workspace" cargo build --workspace
+          phase "cargo clippy --workspace --all-targets" cargo clippy --workspace --all-targets --message-format short
+          phase "cargo test --workspace --locked" cargo test --workspace --locked --no-fail-fast
+          phase "cargo build -p x-designer --bin x_native" cargo build -p x-designer --bin x_native
+          echo "=== report size: $(wc -c < "$report") bytes ==="
+          tail -c 3000 "$report"
+          exit 0
+
+      - name: Commit the fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A .
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+          else
+            git commit -m "Apply cargo fmt to the workspace [skip ci]" \
+              -m "Formatting only, no behaviour change: scripts/check.sh reported unformatted code and the tree had never been run through rustfmt."
+            git push
+          fi
+
+      - name: Publish the gate log
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test -f /tmp/gate.log || true
+          number=$(gh pr list --head "$GITHUB_REF_NAME" --state open \
+                     --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$number" ]; then
+            {
+              echo 'Mechanical-fix run — gate verdict, then the raw output of each phase.'
+              echo
+              echo '~~~'
+              cat /tmp/gate.log 2>/dev/null
+              echo '~~~'
+              echo '~~~'
+              head -c 55000 /tmp/report.txt 2>/dev/null
+              echo '~~~'
+            } > /tmp/fix-comment.md
+            gh pr comment "$number" --body-file /tmp/fix-comment.md || true
+          fi
