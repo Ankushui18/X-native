@@ -805,6 +805,47 @@ pub(crate) fn node_json(n: &Node, out: &mut String) {
             .collect();
         out.push_str(&format!(",\"grids\":[{}]", parts.join(",")));
     }
+    // Text formatting properties (only serialize non-default values)
+    if n.text_align != TextAlign::Left {
+        out.push_str(&format!(",\"text_align\":\"{}\"", n.text_align.to_str()));
+    }
+    if n.text_align_vertical != TextAlignVertical::Top {
+        out.push_str(&format!(",\"text_align_vertical\":\"{}\"", n.text_align_vertical.to_str()));
+    }
+    if n.text_decoration != TextDecoration::None {
+        out.push_str(&format!(",\"text_decoration\":\"{}\"", n.text_decoration.to_str()));
+    }
+    if n.text_case != TextCase::Original {
+        out.push_str(&format!(",\"text_case\":\"{}\"", n.text_case.to_str()));
+    }
+    if n.text_truncation != TextTruncation::Disabled {
+        out.push_str(&format!(",\"text_truncation\":\"{}\"", n.text_truncation.to_str()));
+    }
+    if let Some(max) = n.max_lines {
+        out.push_str(&format!(",\"max_lines\":{}", max));
+    }
+    if n.paragraph_spacing != 0.0 {
+        out.push_str(&format!(",\"paragraph_spacing\":{}", n.paragraph_spacing));
+    }
+    if n.paragraph_indent != 0.0 {
+        out.push_str(&format!(",\"paragraph_indent\":{}", n.paragraph_indent));
+    }
+    if n.hanging_punctuation.quotes || n.hanging_punctuation.lists {
+        let mut parts = vec![];
+        if n.hanging_punctuation.quotes {
+            parts.push("\"quotes\":true");
+        }
+        if n.hanging_punctuation.lists {
+            parts.push("\"lists\":true");
+        }
+        out.push_str(&format!(",\"hanging_punctuation\":{{{}}}", parts.join(",")));
+    }
+    if n.list_style != ListStyle::None {
+        out.push_str(&format!(",\"list_style\":\"{}\"", n.list_style.to_str()));
+    }
+    if n.wrap_style != WrapStyle::Normal {
+        out.push_str(&format!(",\"wrap_style\":\"{}\"", n.wrap_style.to_str()));
+    }
     if !n.children.is_empty() {
         out.push_str(",\"children\":[");
         for (i, c) in n.children.iter().enumerate() {

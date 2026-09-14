@@ -292,6 +292,19 @@ pub struct Node {
     /// overlays on a frame — guides, NOT auto layout. A frame may stack
     /// several (e.g. columns + rows). Meaningful only on Frame nodes.
     pub layout_grids: Vec<LayoutGridDef>,
+    
+    // Text formatting properties
+    pub text_align: TextAlign,
+    pub text_align_vertical: TextAlignVertical,
+    pub text_decoration: TextDecoration,
+    pub text_case: TextCase,
+    pub text_truncation: TextTruncation,
+    pub max_lines: Option<usize>,
+    pub paragraph_spacing: f64,
+    pub paragraph_indent: f64,
+    pub hanging_punctuation: HangingPunctuation,
+    pub list_style: ListStyle,
+    pub wrap_style: WrapStyle,
 }
 
 impl Node {
@@ -337,6 +350,17 @@ impl Node {
             overflow: self.overflow,
             scroll: self.scroll,
             layout_grids: self.layout_grids.clone(),
+            text_align: self.text_align,
+            text_align_vertical: self.text_align_vertical,
+            text_decoration: self.text_decoration,
+            text_case: self.text_case,
+            text_truncation: self.text_truncation,
+            max_lines: self.max_lines,
+            paragraph_spacing: self.paragraph_spacing,
+            paragraph_indent: self.paragraph_indent,
+            hanging_punctuation: self.hanging_punctuation,
+            list_style: self.list_style,
+            wrap_style: self.wrap_style,
         }
     }
 
@@ -421,6 +445,168 @@ impl TextWrap {
 
 /// Layout-grid guide pattern.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+
+/// Text horizontal alignment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+    Justified,
+}
+
+impl TextAlign {
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Center => "center",
+            Self::Right => "right",
+            Self::Justified => "justified",
+        }
+    }
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "center" => Self::Center,
+            "right" => Self::Right,
+            "justified" => Self::Justified,
+            _ => Self::Left,
+        }
+    }
+}
+
+/// Text vertical alignment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextAlignVertical {
+    #[default]
+    Top,
+    Middle,
+    Bottom,
+}
+
+impl TextAlignVertical {
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::Top => "top",
+            Self::Middle => "middle",
+            Self::Bottom => "bottom",
+        }
+    }
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "middle" => Self::Middle,
+            "bottom" => Self::Bottom,
+            _ => Self::Top,
+        }
+    }
+}
+
+/// Text decoration (underline/strikethrough).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextDecoration {
+    #[default]
+    None,
+    Underline,
+    Strikethrough,
+}
+
+impl TextDecoration {
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Underline => "underline",
+            Self::Strikethrough => "strikethrough",
+        }
+    }
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "underline" => Self::Underline,
+            "strikethrough" => Self::Strikethrough,
+            _ => Self::None,
+        }
+    }
+}
+
+/// Text case transformation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextCase {
+    #[default]
+    Original,
+    Upper,
+    Lower,
+    Title,
+}
+
+impl TextCase {
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::Original => "original",
+            Self::Upper => "upper",
+            Self::Lower => "lower",
+            Self::Title => "title",
+        }
+    }
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "upper" => Self::Upper,
+            "lower" => Self::Lower,
+            "title" => Self::Title,
+            _ => Self::Original,
+        }
+    }
+}
+
+/// Text truncation mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextTruncation {
+    #[default]
+    Disabled,
+    End,
+    Middle,
+}
+
+impl TextTruncation {
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::End => "end",
+            Self::Middle => "middle",
+        }
+    }
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "end" => Self::End,
+            "middle" => Self::Middle,
+            _ => Self::Disabled,
+        }
+    }
+}
+
+/// List style (bulleted/numbered).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ListStyle {
+    #[default]
+    None,
+    Bulleted,
+    Numbered,
+}
+
+impl ListStyle {
+    pub fn to_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Bulleted => "bulleted",
+            Self::Numbered => "numbered",
+        }
+    }
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "bulleted" => Self::Bulleted,
+            "numbered" => Self::Numbered,
+            _ => Self::None,
+        }
+    }
+}
 pub enum GridPattern {
     #[default]
     Columns,
@@ -702,6 +888,17 @@ impl Node {
             overflow: Overflow::default(),
             scroll: (0.0, 0.0),
             layout_grids: vec![],
+            text_align: TextAlign::Left,
+            text_align_vertical: TextAlignVertical::Top,
+            text_decoration: TextDecoration::None,
+            text_case: TextCase::Original,
+            text_truncation: TextTruncation::Disabled,
+            max_lines: None,
+            paragraph_spacing: 0.0,
+            paragraph_indent: 0.0,
+            hanging_punctuation: HangingPunctuation::default(),
+            list_style: ListStyle::None,
+            wrap_style: WrapStyle::Normal,
         }
     }
     pub fn frame(id: &str, w: f64, h: f64) -> Self {

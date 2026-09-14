@@ -862,6 +862,23 @@ pub(crate) fn parse_node(v: &V) -> Node {
             n.scroll = (s[0].num().unwrap_or(0.0), s[1].num().unwrap_or(0.0));
         }
     }
+    // Text formatting properties
+    n.text_align = TextAlign::parse(v.get("text_align").and_then(V::str).unwrap_or("left"));
+    n.text_align_vertical = TextAlignVertical::parse(v.get("text_align_vertical").and_then(V::str).unwrap_or("top"));
+    n.text_decoration = TextDecoration::parse(v.get("text_decoration").and_then(V::str).unwrap_or("none"));
+    n.text_case = TextCase::parse(v.get("text_case").and_then(V::str).unwrap_or("original"));
+    n.text_truncation = TextTruncation::parse(v.get("text_truncation").and_then(V::str).unwrap_or("disabled"));
+    n.max_lines = v.get("max_lines").and_then(V::num).map(|v| v as usize);
+    n.paragraph_spacing = v.get("paragraph_spacing").and_then(V::num).unwrap_or(0.0);
+    n.paragraph_indent = v.get("paragraph_indent").and_then(V::num).unwrap_or(0.0);
+    if let Some(V::Obj(m)) = v.get("hanging_punctuation") {
+        n.hanging_punctuation = HangingPunctuation {
+            quotes: m.get("quotes").and_then(V::boolean).unwrap_or(false),
+            lists: m.get("lists").and_then(V::boolean).unwrap_or(false),
+        };
+    }
+    n.list_style = ListStyle::parse(v.get("list_style").and_then(V::str).unwrap_or("none"));
+    n.wrap_style = WrapStyle::parse(v.get("wrap_style").and_then(V::str).unwrap_or("normal"));
     if let Some(kids) = v.get("children").and_then(V::arr) {
         n.children = kids.iter().map(parse_node).collect();
     }
