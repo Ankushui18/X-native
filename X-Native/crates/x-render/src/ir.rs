@@ -1778,8 +1778,9 @@ mod tests {
             RenderCommand::Glyphs { key, transform, size, max_width, .. } => {
                 assert_eq!(key, "/label");
                 // world origin + the same top-left inset the Section arm uses
-                assert!((transform.translation_y() - 10.0).abs() < 1e-9);
-                assert!((transform.translation_x() - 14.0).abs() < 1e-9);
+                let (tx, ty) = transform.translation();
+                assert!((tx - 14.0).abs() < 1e-9);
+                assert!((ty - 10.0).abs() < 1e-9);
                 assert_eq!(*size, 18.0);
                 assert_eq!(*max_width, 280.0);
             }

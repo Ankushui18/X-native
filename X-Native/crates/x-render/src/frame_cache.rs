@@ -1090,7 +1090,7 @@ mod reliability_tests {
         // name label (QA-004) is chrome, not a text node, so it stays
         assert_eq!(
             cache.render(&page, &vars, &sink).encoding().n_paths,
-            page.name.chars().count(),
+            page.name.chars().count() as u32,
             "only the text node's glyphs are hidden"
         );
         cache.set_hidden_text(None);

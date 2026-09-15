@@ -2035,7 +2035,9 @@ fn t16_layer_drag_merges_into_one_undo_step() {
     h.app.mouse = p0;
     h.on_press(p0);
     for i in 1..=3 {
-        let p = h.app.world_to_screen(Point::new(187.5 + i as f64 * 10.0, 270.0));
+        let p = h
+            .app
+            .world_to_screen(Point::new(187.5 + i as f64 * 10.0, 270.0));
         h.app.mouse = p;
         h.on_move(p);
     }
@@ -2048,8 +2050,12 @@ fn t16_layer_drag_merges_into_one_undo_step() {
     );
     let x_after = find_node_clone(&h.app.doc_ref().editor_ref().root, "frame-1")
         .unwrap()
-        .transform.x;
-    assert!((x_after - 30.0).abs() < 0.01, "frame moved 30pt, got {x_after}");
+        .transform
+        .x;
+    assert!(
+        (x_after - 30.0).abs() < 0.01,
+        "frame moved 30pt, got {x_after}"
+    );
     // one undo reverts the whole gesture
     assert!(h.app.doc().editor().undo());
     let x0 = find_node_clone(&h.app.doc_ref().editor_ref().root, "frame-1")
