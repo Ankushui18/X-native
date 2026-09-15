@@ -167,6 +167,12 @@ pub struct TextMetrics {
 // NodeKind::Vector. The .x deserializer never had a "vector_network" case
 // (unknown tags load as frames), so no file-format compatibility is lost.
 
+// `Frame`'s inline `Option<AutoLayout>` (stack fields plus an optional
+// `GridLayout`) makes this enum ~272 bytes, which trips
+// clippy::large_enum_variant. Boxing the layout would rewrite ~90
+// construction and pattern sites across the workspace; that is a layout
+// refactor of its own, not something to smuggle into a build repair.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeKind {
     Frame {

@@ -133,13 +133,13 @@ impl Paint {
     /// Phase 6: Remove a color stop at index
     pub fn remove_stop(&mut self, index: usize) {
         match self {
-            Paint::LinearGradient { stops, .. } |
-            Paint::RadialGradient { stops, .. } |
-            Paint::AngularGradient { stops, .. } |
-            Paint::DiamondGradient { stops, .. } => {
-                if index < stops.len() && stops.len() > 2 {
-                    stops.remove(index);
-                }
+            Paint::LinearGradient { stops, .. }
+            | Paint::RadialGradient { stops, .. }
+            | Paint::AngularGradient { stops, .. }
+            | Paint::DiamondGradient { stops, .. }
+                if index < stops.len() && stops.len() > 2 =>
+            {
+                stops.remove(index);
             }
             _ => {}
         }
@@ -148,15 +148,15 @@ impl Paint {
     /// Phase 6: Move a color stop to new position
     pub fn move_stop(&mut self, index: usize, new_position: f32) {
         match self {
-            Paint::LinearGradient { stops, .. } |
-            Paint::RadialGradient { stops, .. } |
-            Paint::AngularGradient { stops, .. } |
-            Paint::DiamondGradient { stops, .. } => {
-                if index < stops.len() {
-                    stops[index].0 = new_position.clamp(0.0, 1.0);
-                    // Re-sort
-                    stops.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-                }
+            Paint::LinearGradient { stops, .. }
+            | Paint::RadialGradient { stops, .. }
+            | Paint::AngularGradient { stops, .. }
+            | Paint::DiamondGradient { stops, .. }
+                if index < stops.len() =>
+            {
+                stops[index].0 = new_position.clamp(0.0, 1.0);
+                // Re-sort
+                stops.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
             }
             _ => {}
         }

@@ -835,6 +835,12 @@ pub(crate) fn parse_node(v: &V) -> Node {
                 actions: vec![],
                 transition_ms: e.get("ms").and_then(V::num).unwrap_or(350.0) as u32,
                 animation: Animation::from_str(e.get("anim").and_then(V::str).unwrap_or("smart")),
+                easing: e
+                    .get("ease")
+                    .and_then(V::str)
+                    .map(Easing::from_str)
+                    .unwrap_or(Easing::Linear),
+                reset_on_navigate: e.get("reset").and_then(V::boolean).unwrap_or(false),
             });
         }
     }
@@ -895,9 +901,12 @@ pub(crate) fn parse_node(v: &V) -> Node {
     n.paragraph_spacing = v.get("paragraph_spacing").and_then(V::num).unwrap_or(0.0);
     n.paragraph_indent = v.get("paragraph_indent").and_then(V::num).unwrap_or(0.0);
     if let Some(V::Obj(m)) = v.get("hanging_punctuation") {
+        // V::Obj holds a pair slice, not a map, so look keys up the same way
+        // V::get does.
+        let field = |key: &str| m.iter().find(|(k, _)| k == key).map(|(_, val)| val);
         n.hanging_punctuation = HangingPunctuation {
-            quotes: m.get("quotes").and_then(V::boolean).unwrap_or(false),
-            lists: m.get("lists").and_then(V::boolean).unwrap_or(false),
+            quotes: field("quotes").and_then(V::boolean).unwrap_or(false),
+            lists: field("lists").and_then(V::boolean).unwrap_or(false),
         };
     }
     n.list_style = ListStyle::parse(v.get("list_style").and_then(V::str).unwrap_or("none"));

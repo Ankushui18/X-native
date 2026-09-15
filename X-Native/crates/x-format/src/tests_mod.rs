@@ -375,6 +375,8 @@ mod tests {
                     actions: vec![],
                     transition_ms: 200,
                     animation: Animation::Dissolve,
+                    easing: Easing::Linear,
+                    reset_on_navigate: false,
                 })
                 .starting_point(true),
         );
@@ -415,6 +417,8 @@ mod tests {
                     actions: vec![],
                     transition_ms: 0,
                     animation: Animation::Instant,
+                    easing: Easing::Linear,
+                    reset_on_navigate: false,
                 },
             ),
         );
@@ -1559,6 +1563,8 @@ mod tests {
             actions: vec![],
             transition_ms: 200,
             animation: Animation::MoveIn(Direction::Bottom),
+            easing: Easing::Linear,
+            reset_on_navigate: false,
         };
         if let Some(n) = doc.pages[0].children.first_mut() {
             n.interactions.push(logic);

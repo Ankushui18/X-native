@@ -3,8 +3,8 @@
 //! This module provides rendering support for Angular and Diamond gradients,
 //! including conversion to mesh approximations and shader parameters.
 
-use x_core::{Paint, GradSpace, Color};
-use kurbo::{Point, Rect, Affine};
+use vello::kurbo::{Point, Rect};
+use x_core::Paint;
 
 /// Phase 6: Render parameters for Angular gradient
 #[derive(Debug, Clone)]
@@ -254,6 +254,7 @@ fn interpolate_stops(stops: &[(f32, [f32; 4])], t: f32) -> [f32; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use x_core::{Color, GradSpace};
     
     #[test]
     fn test_angular_gradient_creation() {

@@ -171,8 +171,10 @@ pub fn apply_grid_layout(node: &mut Node, layout: &crate::AutoLayout, grid: &Gri
         match grid.auto_flow {
             GridAutoFlow::Row | GridAutoFlow::Dense => {
                 // Row-major: scan rows first, then columns within each row.
-                // Dense mode: always restart from (0,0) to backfill gaps.
-                let start_row = if grid.auto_flow == GridAutoFlow::Dense { 0 } else { 0 };
+                // No cursor is carried between children, so sparse and dense
+                // placement both start at row 0 and dense backfilling falls
+                // out of the scan itself.
+                let start_row: usize = 0;
                 'outer: for row in start_row.. {
                     for col in 0..ncols.saturating_sub(cs - 1) {
                         if cells_free(&mut occupancy, col, row, cs, rs) {

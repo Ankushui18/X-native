@@ -469,7 +469,7 @@ fn grid_json(g: &GridLayout) -> String {
         String::new()
     };
     format!(
-        ",\"grid\":{{\"cols\":[{}],\"rows\":[{}],\"cgap\":{},\"rgap\":{},\"pad\":[{},{},{},{}]{}{}}}",
+        ",\"grid\":{{\"cols\":[{}],\"rows\":[{}],\"cgap\":{},\"rgap\":{},\"pad\":[{},{},{},{}]{}}}",
         cols.join(","),
         rows.join(","),
         g.column_gap,

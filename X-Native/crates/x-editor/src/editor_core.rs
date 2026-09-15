@@ -2534,6 +2534,7 @@ impl Editor {
 
     // Vector Edit Mode methods (Figma parity)
 
+impl Editor {
     /// Enter vector edit mode for a vector node
     pub fn enter_vector_edit_mode(&mut self, node_id: &str) -> bool {
         if let Some(node) = self.get_node(node_id) {
@@ -2647,7 +2648,7 @@ impl Editor {
             }
             
             // Simplify using the existing algorithm
-            let simplified = x_native::node::simplify_polyline(&points, tolerance);
+            let simplified = simplify_polyline(&points, tolerance);
             
             // Rebuild path from simplified points
             if simplified.len() >= 2 {
@@ -2731,7 +2732,7 @@ impl Editor {
         }
         
         // Create new vector node with the outlined path
-        let new_id = x_native::fresh_id();
+        let new_id = fresh_id();
         let new_node = Node::vector(&new_id, node.transform.x, node.transform.y, node.w, node.h, offset_path);
         
         // Replace the original node
@@ -2789,7 +2790,7 @@ impl Editor {
         }
         
         let (x, y, w, h) = bounds.unwrap();
-        let new_id = x_native::fresh_id();
+        let new_id = fresh_id();
         let new_node = Node::vector(&new_id, x, y, w, h, combined_path);
         
         // Delete original nodes
@@ -2861,7 +2862,7 @@ impl Editor {
                 PathCmd::Close,
             ];
             
-            let new_id = x_native::fresh_id();
+            let new_id = fresh_id();
             let new_node = Node::vector(&new_id, node.transform.x, node.transform.y, node.w, node.h, path);
             
             self.replace_node(node_id, new_node);
@@ -2876,7 +2877,7 @@ impl Editor {
     fn replace_path(&mut self, node_id: &str, new_path: Vec<PathCmd>) {
         fn update_path(node: &mut Node, id: &str, path: Vec<PathCmd>) -> bool {
             if node.id == id {
-                if let NodeKind::Vector { ref mut path: ref mut p } = node.kind {
+                if let NodeKind::Vector { path: ref mut p } = node.kind {
                     *p = path;
                     return true;
                 }
@@ -2912,7 +2913,8 @@ impl Editor {
                             let cp1 = (*x, *y); // Start point (no incoming handle)
                             let cp2 = handle_pos;
                             let end = (*x, *y);
-                            *cmd = PathCmd::CurveTo(cp1, cp2, end);
+                            *cmd =
+                                PathCmd::CurveTo(cp1.0, cp1.1, cp2.0, cp2.1, end.0, end.1);
                             self.replace_path(node_id, new_path);
                             self.mark_dirty();
                             return true;
@@ -2925,7 +2927,8 @@ impl Editor {
                             let cp1 = (*x, *y);
                             let cp2 = handle_pos;
                             let end = (*x, *y);
-                            *cmd = PathCmd::CurveTo(cp1, cp2, end);
+                            *cmd =
+                                PathCmd::CurveTo(cp1.0, cp1.1, cp2.0, cp2.1, end.0, end.1);
                             self.replace_path(node_id, new_path);
                             self.mark_dirty();
                             return true;
@@ -2948,12 +2951,14 @@ impl Editor {
             
             let mut point_count = 0;
             for cmd in new_path.iter_mut() {
-                if let PathCmd::CurveTo(cp1, cp2, _) = cmd {
+                if let PathCmd::CurveTo(h1x, h1y, h2x, h2y, _, _) = cmd {
                     if point_count == point_idx {
                         if handle_idx == 0 {
-                            *cp1 = new_pos;
+                            *h1x = new_pos.0;
+                            *h1y = new_pos.1;
                         } else {
-                            *cp2 = new_pos;
+                            *h2x = new_pos.0;
+                            *h2y = new_pos.1;
                         }
                         self.replace_path(node_id, new_path);
                         self.mark_dirty();
@@ -2998,11 +3003,12 @@ impl Editor {
                         }
                         point_count += 1;
                     }
-                    PathCmd::CurveTo(cp1, cp2, end) => {
+                    PathCmd::CurveTo(h1x, h1y, h2x, h2y, ex, ey) => {
+                        let curve = PathCmd::CurveTo(*h1x, *h1y, *h2x, *h2y, *ex, *ey);
                         if in_second_path {
-                            path2.push(PathCmd::CurveTo(*cp1, *cp2, *end));
+                            path2.push(curve);
                         } else {
-                            path1.push(PathCmd::CurveTo(*cp1, *cp2, *end));
+                            path1.push(curve);
                         }
                         point_count += 1;
                     }
@@ -3018,7 +3024,7 @@ impl Editor {
             
             // Create new node with second path
             if !path2.is_empty() {
-                let new_id = x_native::fresh_id();
+                let new_id = fresh_id();
                 let new_node = Node::vector(&new_id, node.transform.x, node.transform.y, node.w, node.h, path2);
                 self.add_node(new_node);
                 return Some(new_id);
@@ -3050,10 +3056,10 @@ impl Editor {
                         prev_point = Some((*x, *y));
                         point_idx += 1;
                     }
-                    PathCmd::CurveTo(_, _, end_pt) => {
+                    PathCmd::CurveTo(_, _, _, _, end_x, end_y) => {
                         // For curves, we'd need more complex intersection logic
                         // For now, skip curve intersections
-                        prev_point = Some((end_pt.0, end_pt.1));
+                        prev_point = Some((*end_x, *end_y));
                         point_idx += 1;
                     }
                     PathCmd::Close => {
@@ -3085,7 +3091,7 @@ impl Editor {
                 let point = match cmd {
                     PathCmd::MoveTo(x, y) => Some((*x, *y)),
                     PathCmd::LineTo(x, y) => Some((*x, *y)),
-                    PathCmd::CurveTo(_, _, end) => Some(*end),
+                    PathCmd::CurveTo(_, _, _, _, ex, ey) => Some((*ex, *ey)),
                     PathCmd::Close => None,
                 };
                 
@@ -3126,9 +3132,10 @@ impl Editor {
             
             let mut point_count = 0;
             for cmd in new_path.iter_mut() {
-                if let PathCmd::CurveTo(_, _, end) = cmd {
+                if let PathCmd::CurveTo(_, _, _, _, end_x, end_y) = cmd {
                     if point_count == point_idx {
                         // Convert to LineTo (remove handles)
+                        let end = (*end_x, *end_y);
                         *cmd = PathCmd::LineTo(end.0, end.1);
                         self.replace_path(node_id, new_path);
                         self.mark_dirty();
@@ -3150,8 +3157,11 @@ impl Editor {
             
             let mut point_count = 0;
             for cmd in new_path.iter_mut() {
-                if let PathCmd::CurveTo(cp1, cp2, end) = cmd {
+                if let PathCmd::CurveTo(h1x, h1y, h2x, h2y, end_x, end_y) = cmd {
                     if point_count == point_idx {
+                        let cp1 = (*h1x, *h1y);
+                        let cp2 = (*h2x, *h2y);
+                        let end = (*end_x, *end_y);
                         match mirror_mode {
                             MirrorMode::Angle => {
                                 // Mirror angle only, keep lengths
@@ -3159,16 +3169,18 @@ impl Editor {
                                 let angle2 = (cp2.1 - end.1).atan2(cp2.0 - end.0);
                                 let len1 = ((cp1.0 - end.0).powi(2) + (cp1.1 - end.1).powi(2)).sqrt();
                                 let len2 = ((cp2.0 - end.0).powi(2) + (cp2.1 - end.1).powi(2)).sqrt();
-                                
+
                                 // Average the angles and apply opposite directions
                                 let avg_angle = (angle1 + angle2 + std::f64::consts::PI) / 2.0;
-                                *cp1 = (end.0 + len1 * avg_angle.cos(), end.1 + len1 * avg_angle.sin());
-                                *cp2 = (end.0 - len2 * avg_angle.cos(), end.1 - len2 * avg_angle.sin());
+                                *h1x = end.0 + len1 * avg_angle.cos();
+                                *h1y = end.1 + len1 * avg_angle.sin();
+                                *h2x = end.0 - len2 * avg_angle.cos();
+                                *h2y = end.1 - len2 * avg_angle.sin();
                             }
                             MirrorMode::AngleAndLength => {
                                 // Mirror both angle and length
-                                let center = *end;
-                                *cp2 = (2.0 * center.0 - cp1.0, 2.0 * center.1 - cp1.1);
+                                *h2x = 2.0 * end.0 - cp1.0;
+                                *h2y = 2.0 * end.1 - cp1.1;
                             }
                             MirrorMode::None => {
                                 // No mirroring - do nothing
@@ -3402,6 +3414,7 @@ impl Editor {
     // Phase 4: Shape Builder Tool
     // ========================================================================
 
+}
     /// Shape Builder tool state
     pub struct ShapeBuilderState {
         pub active: bool,
@@ -3429,6 +3442,7 @@ impl Editor {
         Exclude,
     }
     
+impl Editor {
     /// Detect overlapping regions between selected shapes
     pub fn detect_shape_regions(&self, node_ids: &[String]) -> Vec<ShapeRegion> {
         let mut regions = Vec::new();
@@ -3502,7 +3516,7 @@ impl Editor {
         }
         
         // Create new node with combined path
-        let new_id = x_native::fresh_id();
+        let new_id = fresh_id();
         let first_node = self.get_node(&node_ids[0])?;
         let new_node = Node::vector(
             &new_id,
@@ -3543,6 +3557,7 @@ impl Editor {
         Some(base_id.to_string())
     }
 
+}
 /// Shape signature for Select Similar: node kind + fill + stroke.
 type Sig = (std::mem::Discriminant<NodeKind>, String, String, f64);
 
@@ -3558,6 +3573,7 @@ fn shape_signature(n: &Node) -> Sig {
 
     // Layer management methods (Figma parity)
     
+impl Editor {
     /// Get all selectable node IDs in the document
     pub fn get_all_selectable_ids(&self) -> Vec<String> {
         let mut ids = Vec::new();
@@ -3593,7 +3609,7 @@ fn shape_signature(n: &Node) -> Sig {
 
     /// Get a shared reference to a node by ID
     pub fn get_node(&self, id: &str) -> Option<&Node> {
-        fn find_node(node: &Node, id: &str) -> Option<&Node> {
+        fn find_node<'n>(node: &'n Node, id: &str) -> Option<&'n Node> {
             if node.id == id {
                 return Some(node);
             }
@@ -3715,9 +3731,10 @@ fn shape_signature(n: &Node) -> Sig {
                         }
                         prev_point = Some((*x, *y));
                     }
-                    PathCmd::CurveTo(cp1, cp2, end) => {
+                    PathCmd::CurveTo(_, _, _, _, end_x, end_y) => {
                         // For curves, we'd need to offset the control points
                         // For now, just use the endpoint
+                        let end = (*end_x, *end_y);
                         if let Some((px, py)) = prev_point {
                             let dx = end.0 - px;
                             let dy = end.1 - py;
@@ -3759,7 +3776,8 @@ fn shape_signature(n: &Node) -> Sig {
                         }
                         prev_point = Some((*x, *y));
                     }
-                    PathCmd::CurveTo(cp1, cp2, end) => {
+                    PathCmd::CurveTo(_, _, _, _, end_x, end_y) => {
+                        let end = (*end_x, *end_y);
                         if let Some((px, py)) = prev_point {
                             let dx = px - end.0;
                             let dy = py - end.1;
@@ -3847,8 +3865,11 @@ fn shape_signature(n: &Node) -> Sig {
                         }
                         prev_point = Some((*x, *y));
                     }
-                    PathCmd::CurveTo(cp1, cp2, end) => {
+                    PathCmd::CurveTo(h1x, h1y, h2x, h2y, end_x, end_y) => {
                         // For curves, offset control points
+                        let cp1 = (*h1x, *h1y);
+                        let cp2 = (*h2x, *h2y);
+                        let end = (*end_x, *end_y);
                         if let Some((px, py)) = prev_point {
                             let dx = end.0 - px;
                             let dy = end.1 - py;
@@ -3857,9 +3878,12 @@ fn shape_signature(n: &Node) -> Sig {
                                 let nx = -dy / len * distance;
                                 let ny = dx / len * distance;
                                 offset_path.push(PathCmd::CurveTo(
-                                    (cp1.0 + nx, cp1.1 + ny),
-                                    (cp2.0 + nx, cp2.1 + ny),
-                                    (end.0 + nx, end.1 + ny),
+                                    cp1.0 + nx,
+                                    cp1.1 + ny,
+                                    cp2.0 + nx,
+                                    cp2.1 + ny,
+                                    end.0 + nx,
+                                    end.1 + ny,
                                 ));
                                 prev_normal = Some((nx, ny));
                             }
@@ -3911,7 +3935,7 @@ fn shape_signature(n: &Node) -> Sig {
                 x_offset += char_width;
             }
             
-            let new_id = x_native::fresh_id();
+            let new_id = fresh_id();
             let new_node = Node::vector(&new_id, node.transform.x, node.transform.y, x_offset, font_size, outline_path);
             
             self.replace_node(node_id, new_node);
@@ -3933,8 +3957,8 @@ fn shape_signature(n: &Node) -> Sig {
                     PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => {
                         points.push((*x, *y));
                     }
-                    PathCmd::CurveTo(_, _, end) => {
-                        points.push(*end);
+                    PathCmd::CurveTo(_, _, _, _, end_x, end_y) => {
+                        points.push((*end_x, *end_y));
                     }
                     PathCmd::Close => {}
                 }
@@ -3995,10 +4019,57 @@ fn shape_signature(n: &Node) -> Sig {
     /// Reverse path direction
     pub fn reverse_path_direction(&mut self, node_id: &str) -> bool {
 
+
+        let Some(node) = self.get_node(node_id) else { return false };
+        
+        if let NodeKind::Vector { ref path } = node.kind {
+            let mut reversed = Vec::new();
+            let mut points = Vec::new();
+            
+            // Collect all points
+            for cmd in path {
+                match cmd {
+                    PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => {
+                        points.push(PathCmd::LineTo(*x, *y));
+                    }
+                    PathCmd::CurveTo(h1x, h1y, h2x, h2y, ex, ey) => {
+                        // Traversed backwards, so the two handles swap roles
+                        points.push(PathCmd::CurveTo(*h2x, *h2y, *h1x, *h1y, *ex, *ey));
+                    }
+                    PathCmd::Close => {
+                        // Ignore Close, we'll add it at the end
+                    }
+                }
+            }
+            
+            // Reverse and convert to path
+            if !points.is_empty() {
+                if let PathCmd::LineTo(x, y) = points[0] {
+                    reversed.push(PathCmd::MoveTo(x, y));
+                } else if let PathCmd::CurveTo(_, _, _, _, end_x, end_y) = points[0] {
+                    reversed.push(PathCmd::MoveTo(end_x, end_y));
+                }
+                
+                for i in (0..points.len() - 1).rev() {
+                    reversed.push(points[i].clone());
+                }
+                
+                reversed.push(PathCmd::Close);
+            }
+            
+            self.replace_path(node_id, reversed);
+            self.mark_dirty();
+            return true;
+        }
+        false
+    }
+
+
     // ========================================================================
     // Phase 5: Interactive UI & Performance Optimizations
     // ========================================================================
 
+}
     /// Interactive Shape Builder with hover detection
     pub struct InteractiveShapeBuilder {
         pub state: ShapeBuilderState,
@@ -4035,12 +4106,13 @@ fn shape_signature(n: &Node) -> Sig {
         Exclude(Vec<String>),
     }
     
+impl InteractiveShapeBuilder {
     /// Update hover state based on mouse position
-    pub fn update_shape_builder_hover(&mut self, mouse_pos: (f64, f64)) {
+    pub fn update_shape_builder_hover(&mut self, ed: &Editor, mouse_pos: (f64, f64)) {
         self.hover_point = Some(mouse_pos);
-        
+
         // Find shape under cursor
-        let hit_result = self.hit_test_shapes(mouse_pos);
+        let hit_result = self.hit_test_shapes(ed, mouse_pos);
         
         if let Some(shape_id) = hit_result {
             self.hovered_shape = Some(shape_id);
@@ -4054,9 +4126,10 @@ fn shape_signature(n: &Node) -> Sig {
     }
     
     /// Hit test to find shape under cursor
-    fn hit_test_shapes(&self, point: (f64, f64)) -> Option<String> {
+    fn hit_test_shapes(&self, ed: &Editor, point: (f64, f64)) -> Option<String> {
         // Check all visible vector shapes
-        for node in self.iter_nodes() {
+        for id in ed.get_all_selectable_ids() {
+            let Some(node) = ed.get_node(&id) else { continue };
             if let NodeKind::Vector { ref path } = node.kind {
                 if self.point_in_shape(path, point) {
                     return Some(node.id.clone());
@@ -4172,20 +4245,20 @@ fn shape_signature(n: &Node) -> Sig {
     }
     
     /// Execute the preview operation
-    pub fn execute_preview_operation(&mut self) -> Option<String> {
+    pub fn execute_preview_operation(&mut self, ed: &mut Editor) -> Option<String> {
         if let Some(operation) = self.preview_operation.clone() {
             match operation {
                 ShapeOperation::Merge(shapes) => {
-                    return self.shape_builder_merge(&shapes);
+                    return ed.shape_builder_merge(&shapes);
                 }
                 ShapeOperation::Subtract { base, subtract } => {
-                    return self.shape_builder_subtract(&base, &subtract);
+                    return ed.shape_builder_subtract(&base, &subtract);
                 }
-                ShapeOperation::Intersect(shapes) => {
+                ShapeOperation::Intersect(_shapes) => {
                     // TODO: Implement intersect operation
                     return None;
                 }
-                ShapeOperation::Exclude(shapes) => {
+                ShapeOperation::Exclude(_shapes) => {
                     // TODO: Implement exclude operation
                     return None;
                 }
@@ -4203,49 +4276,8 @@ fn shape_signature(n: &Node) -> Sig {
             hover_point: self.hover_point,
         }
     }
+}
 
-        let Some(node) = self.get_node(node_id) else { return false };
-        
-        if let NodeKind::Vector { ref path } = node.kind {
-            let mut reversed = Vec::new();
-            let mut points = Vec::new();
-            
-            // Collect all points
-            for cmd in path {
-                match cmd {
-                    PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => {
-                        points.push(PathCmd::LineTo(*x, *y));
-                    }
-                    PathCmd::CurveTo(cp1, cp2, end) => {
-                        points.push(PathCmd::CurveTo(*cp2, *cp1, *end)); // Swap control points
-                    }
-                    PathCmd::Close => {
-                        // Ignore Close, we'll add it at the end
-                    }
-                }
-            }
-            
-            // Reverse and convert to path
-            if !points.is_empty() {
-                if let PathCmd::LineTo(x, y) = points[0] {
-                    reversed.push(PathCmd::MoveTo(x, y));
-                } else if let PathCmd::CurveTo(_, _, end) = points[0] {
-                    reversed.push(PathCmd::MoveTo(end.0, end.1));
-                }
-                
-                for i in (0..points.len() - 1).rev() {
-                    reversed.push(points[i].clone());
-                }
-                
-                reversed.push(PathCmd::Close);
-            }
-            
-            self.replace_path(node_id, reversed);
-            self.mark_dirty();
-            return true;
-        }
-        false
-    }
 
 
     // ========================================================================
@@ -4399,7 +4431,7 @@ fn shape_signature(n: &Node) -> Sig {
         
         fn contains_bounds(&self, bounds: &(f64, f64, f64, f64)) -> bool {
             let (x, y, w, h) = self.bounds;
-            let (bx, by, bw, bh) = bounds;
+            let (bx, by, bw, bh) = *bounds;
             
             bx >= x && by >= y && 
             bx + bw <= x + w && by + bh <= y + h
@@ -4410,8 +4442,8 @@ fn shape_signature(n: &Node) -> Sig {
         }
         
         fn bounds_intersect(&self, b1: &(f64, f64, f64, f64), b2: &(f64, f64, f64, f64)) -> bool {
-            let (x1, y1, w1, h1) = b1;
-            let (x2, y2, w2, h2) = b2;
+            let (x1, y1, w1, h1) = *b1;
+            let (x2, y2, w2, h2) = *b2;
             
             !(x1 + w1 < x2 || x2 + w2 < x1 || y1 + h1 < y2 || y2 + h2 < y1)
         }
@@ -4483,6 +4515,7 @@ fn shape_signature(n: &Node) -> Sig {
         pub hover_point: Option<(f64, f64)>,
     }
     
+impl Editor {
     /// Render visual feedback for Shape Builder
     pub fn render_shape_builder_feedback(&self, visuals: &ShapeBuilderVisuals) -> Vec<VisualFeedback> {
         let mut feedback = Vec::new();
@@ -4543,6 +4576,7 @@ fn shape_signature(n: &Node) -> Sig {
         feedback
     }
     
+}
     /// Visual feedback item for rendering
     #[derive(Debug, Clone)]
     pub struct VisualFeedback {
@@ -4560,6 +4594,7 @@ fn shape_signature(n: &Node) -> Sig {
         Preview,    // Green outline with fill
     }
     
+impl Editor {
     /// Generate merge preview path
     fn generate_merge_preview(&self, shapes: &[String]) -> Vec<PathCmd> {
         // Combine all paths
@@ -4591,6 +4626,7 @@ fn shape_signature(n: &Node) -> Sig {
     // Phase 5: Advanced Stroke Cap Features
     // ========================================================================
 
+}
     /// Extended stroke cap types
     #[derive(Debug, Clone, PartialEq)]
     pub enum AdvancedStrokeCap {
@@ -4659,6 +4695,7 @@ fn shape_signature(n: &Node) -> Sig {
         Bevel,
     }
     
+impl Editor {
     /// Generate advanced stroke cap
     pub fn generate_advanced_cap(&self, cap: &AdvancedStrokeCap, x: f64, y: f64, 
                                   dx: f64, dy: f64, width: f64, is_start: bool) -> Vec<PathCmd> {
@@ -4863,9 +4900,7 @@ fn shape_signature(n: &Node) -> Sig {
         
         dashed_paths
     }
-
-#[cfg(test)]
-
+}
 
 /// Join style for offset paths
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5011,7 +5046,7 @@ fn find_path_intersections(path1: &[PathCmd], path2: &[PathCmd]) -> Vec<(f64, f6
     // Check each pair of segments
     for seg1 in &segments1 {
         for seg2 in &segments2 {
-            if let Some(point) = line_segment_intersection(seg1, seg2) {
+            if let Some(point) = line_segment_intersection(*seg1, *seg2) {
                 intersections.push(point);
             }
         }
@@ -5132,6 +5167,7 @@ fn point_in_polygon(x: f64, y: f64, polygon: &[(f64, f64)]) -> bool {
     inside
 }
 
+#[cfg(test)]
 mod reliability_history_tests {
     use super::*;
     #[test]
