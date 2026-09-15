@@ -1719,7 +1719,14 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                 stroke_rrect(s, r, R_PAGE, C_LINE_2, 1.0);
             }
         }
-        draw_icon(s, "file", sx + 21.0, r.y0 + 7.0, 12.0, if active { C_TEXT } else { C_DIM });
+        draw_icon(
+            s,
+            "file",
+            sx + 21.0,
+            r.y0 + 7.0,
+            12.0,
+            if active { C_TEXT } else { C_DIM },
+        );
         let page_label = app
             .doc()
             .doc
@@ -1756,8 +1763,16 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let band_bottom = app.pages_band_bottom();
     hline(s, sx, lw, band_bottom + 12.0, C_LINE);
     let ly = band_bottom + 25.0;
-    app.fonts.micro_label(s, sx + 12.0, ly, "LAYERS", C_DIM, Wt::Med);
-    draw_icon(s, "search", lw - 25.0, band_bottom + 25.8, 12.0, C_DIM);
+    app.fonts
+        .micro_label(s, sx + 12.0, ly, "LAYERS", C_DIM, Wt::Med);
+    draw_icon(
+        s,
+        "search",
+        lw - 25.0,
+        band_bottom + 25.8,
+        12.0,
+        C_DIM,
+    );
 
     // tree (scrollable)
     let tree_top = band_bottom + 34.5;

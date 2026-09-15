@@ -3188,8 +3188,14 @@ impl Host {
             let n = self.app.doc_ref().editors.len();
             let cur = self.app.doc_ref().page;
             let rows = self.app.pages_rows();
-            let page_row = rows.iter().find(|(_, r)| r.contains(p));
-            if let Some((i, _)) = page_row {
+            let mut page_index: Option<usize> = None;
+            for (i, r) in rows.iter() {
+                if r.contains(p) {
+                    page_index = Some(*i);
+                    break;
+                }
+            }
+            if let Some(i) = page_index {
                 if i < n && i != cur {
                     self.dispatch(Action::SelectPage(i));
                 }
