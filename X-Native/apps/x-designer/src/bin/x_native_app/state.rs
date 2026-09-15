@@ -1527,6 +1527,38 @@ impl App {
 
     // ------------------------------------------------------------- regions
 
+    /// PAGES list band geometry — ONE source of truth shared by paint and
+    /// hit-testing. Rows start where the old single page field did
+    /// (y0+142), 26px tall, max 4 rows; more pages collapse into a
+    /// "+N more" row whose index is the page COUNT (a sentinel).
+    pub fn pages_rows(&self) -> Vec<(usize, Rect)> {
+        const ROW_H: f64 = 26.0;
+        const MAX_ROWS: usize = 4;
+        let y0 = ED_TITLE_H;
+        let sidebar = self.editor_regions().sidebar;
+        let sx = sidebar.x0;
+        let lw = sidebar.x1;
+        let n = self.doc_ref().editors.len();
+        let count = n.min(MAX_ROWS);
+        let overflow = n > MAX_ROWS;
+        (0..count)
+            .map(|i| {
+                let page_i = if overflow && i == MAX_ROWS - 1 { n } else { i };
+                let ry = y0 + 142.0 + i as f64 * ROW_H;
+                (page_i, Rect::new(sx + 12.0, ry, lw - 13.0, ry + ROW_H))
+            })
+            .collect()
+    }
+
+    /// Bottom of the PAGES band (header label at y0+120.5, then the rows).
+    pub fn pages_band_bottom(&self) -> f64 {
+        const ROW_H: f64 = 26.0;
+        const MAX_ROWS: usize = 4;
+        let n = self.doc_ref().editors.len();
+        let count = n.min(MAX_ROWS).max(1);
+        ED_TITLE_H + 142.0 + count as f64 * ROW_H
+    }
+
     pub fn editor_regions(&self) -> EdRegions {
         let left_total = if self.ui_minimized {
             self.nav_bar_w

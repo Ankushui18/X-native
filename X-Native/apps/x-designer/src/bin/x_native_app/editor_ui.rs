@@ -1684,65 +1684,115 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         paint_tokens(app, s, hit, y0 + 108.0, lw);
     }
 
-    // PAGES section
+    // PAGES section — a real page LIST (viewport audit P2): every page is
+    // visible, click a row to switch, right-click for the page menu, hover
+    // trash to delete. The band height is MEASURED from its rows (no more
+    // fixed single field) and the LAYERS band below anchors to its bottom.
     app.fonts
         .micro_label(s, sx + 12.0, y, "PAGES", C_DIM, Wt::Med);
     let addp = Rect::new(lw - 25.0, y + 0.8, lw - 13.0, y + 12.8);
     draw_icon(s, "plus", addp.x0, y + 0.8, 12.0, C_DIM);
-    hit.push((addp, Action::AddPage)); // page field top 178 → drawn below
+    hit.push((addp, Action::AddPage));
 
-    // The mock shows a single field: the active page ("Page 3" with 3 pages
-    // in the demo doc) — not a full page list.
     let page_count = app.doc().editors.len();
     let cur_page = app.doc().page;
-    let py = y0 + 142.0;
-    let pr = Rect::new(sx + 12.0, py, lw - 25.0, py + 28.0);
-    app.page_field_rect = Some(pr);
-    fill_rrect(s, pr, R_PAGE, C_FIELD);
-    stroke_rrect(s, pr, R_PAGE, C_LINE_2, 1.0);
-    draw_icon(s, "file", sx + 21.0, py + 8.0, 12.0, C_TEXT);
-    let page_label = {
-        let d = app.doc();
-        d.doc
+    let rows = app.pages_rows();
+    // right-click zone = the whole band (paint + input share pages_rows)
+    let (bx0, by0) = (rows[0].1.x0, rows[0].1.y0);
+    let (bx1, by1) = (rows[rows.len() - 1].1.x1, rows[rows.len() - 1].1.y1);
+    app.page_field_rect = Some(Rect::new(bx0, by0, bx1, by1));
+    for (page_i, r) in rows {
+        let overflow = page_i >= page_count; // the "+N more" sentinel row
+        if overflow {
+            if hover(app, r) {
+                fill_rrect(s, r, R_PAGE, C_ROW_HOVER);
+            }
+            let more = format!("+{} more", page_count - 3);
+            app.fonts.text(
+                s,
+                sx + 41.0,
+                r.y0 + 5.2,
+                &more,
+                T11,
+                C_DIM,
+                Wt::Reg,
+            );
+            continue;
+        }
+        let active = page_i == cur_page;
+        if active || hover(app, r) {
+            fill_rrect(
+                s,
+                r,
+                R_PAGE,
+                if active { C_FIELD_2 } else { C_ROW_HOVER },
+            );
+            if active {
+                stroke_rrect(s, r, R_PAGE, C_LINE_2, 1.0);
+            }
+        }
+        draw_icon(
+            s,
+            "file",
+            sx + 21.0,
+            r.y0 + 7.0,
+            12.0,
+            if active { C_TEXT } else { C_DIM },
+        );
+        let page_label = app
+            .doc()
+            .doc
             .pages
-            .get(cur_page)
+            .get(page_i)
             .map(|p| p.name.clone())
-            .unwrap_or_else(|| format!("Page {}", cur_page + 1))
-    };
-    // inline rename state (opened from the page context menu): the field
-    // box shows the buffer; the Field hit zone (pushed BEFORE SelectPage,
-    // so clicks still select) lets paint_carets find the caret position
-    if app.field.as_ref().map(|f| f.id) == Some(FieldId::PageName) {
-        let editing = app.field.as_ref().unwrap().buffer.clone();
-        fill_rrect(s, pr, R_PAGE, C_FIELD_2);
-        stroke_rrect(s, pr, R_PAGE, C_LINE_2, 1.0);
-        app.fonts
-            .text(s, sx + 41.0, py + 5.8, &editing, T11, C_TEXT, Wt::Reg);
-        hit.push((pr, Action::Field(FieldId::PageName)));
-    } else {
-        app.fonts
-            .text(s, sx + 41.0, py + 5.8, &page_label, T11, C_TEXT, Wt::Reg);
+            .unwrap_or_else(|| format!("Page {}", page_i + 1));
+        // inline rename state (opened from the page menu): the ACTIVE row
+        // shows the buffer; the Field hit zone is pushed BEFORE SelectPage
+        // so clicks still select
+        let field_id = app.field.as_ref().map(|f| f.id);
+        if field_id == Some(FieldId::PageName) && active {
+            let editing = app.field.as_ref().unwrap().buffer.clone();
+            app.fonts.text(
+                s,
+                sx + 41.0,
+                r.y0 + 5.2,
+                &editing,
+                T11,
+                C_TEXT,
+                Wt::Reg,
+            );
+            hit.push((r, Action::Field(FieldId::PageName)));
+        } else {
+            let max_nw = (r.x1 - sx - 41.0 - 26.0).max(16.0);
+            let shown = app.fonts.truncate(&page_label, T11, Wt::Reg, max_nw);
+            app.fonts.text(
+                s,
+                sx + 41.0,
+                r.y0 + 5.2,
+                &shown,
+                T11,
+                if active { C_TEXT } else { C_MUTED },
+                Wt::Reg,
+            );
+        }
+        if !active && hover(app, r) && page_count > 1 {
+            let tr = Rect::new(lw - 30.0, r.y0 + 5.0, lw - 12.0, r.y0 + 21.0);
+            draw_icon(s, "trash-2", tr.x0, r.y0 + 6.0, 12.0, C_DIM);
+            hit.push((tr, Action::DeletePage(page_i)));
+        }
+        hit.push((r, Action::SelectPage(page_i)));
     }
-    if hover(app, pr) && page_count > 1 {
-        let tr = Rect::new(lw - 30.0, py + 6.0, lw - 12.0, py + 22.0);
-        draw_icon(s, "trash-2", tr.x0, py + 7.0, 12.0, C_DIM);
-        hit.push((tr, Action::DeletePage(cur_page)));
-    }
-    hit.push((pr, Action::SelectPage(cur_page)));
 
-    // divider at 218
-    hline(s, sx, lw, y0 + 182.0, C_LINE);
+    // divider + LAYERS header anchored to the measured band bottom (the
+    // old fixed 182/195/216.5 offsets assumed one 28px field)
+    let band_bottom = app.pages_band_bottom();
+    hline(s, sx, lw, band_bottom + 12.0, C_LINE);
+    let ly = band_bottom + 25.0;
+    app.fonts.micro_label(s, sx + 12.0, ly, "LAYERS", C_DIM, Wt::Med);
+    draw_icon(s, "search", lw - 25.0, band_bottom + 25.8, 12.0, C_DIM);
 
-    // LAYERS header — audit: label top 231, search icon 12px at (255, 231.8).
-    // This section lists the page's layers, so it is headed "LAYERS" (the
-    // page name lives in the PAGES section field above, matching the
-    // left-panel mock's PAGE → LAYERS order); it used to say "PAGE N".
-    app.fonts
-        .micro_label(s, sx + 12.0, y0 + 195.0, "LAYERS", C_DIM, Wt::Med);
-    draw_icon(s, "search", lw - 25.0, y0 + 195.8, 12.0, C_DIM);
-
-    // tree (scrollable) from 252.5
-    let tree_top = y0 + 216.5;
+    // tree (scrollable)
+    let tree_top = band_bottom + 34.5;
     let tree_bottom = app.win_h - 16.0;
     let scroll = app.doc().scroll_left;
     if !app.doc().mock_layers.is_empty() {

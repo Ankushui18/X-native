@@ -3145,13 +3145,18 @@ impl Host {
             // group_selection needs 2+ and the click had just reduced the
             // selection to the one node under the cursor.
             if let Some(hit) = hit_id {
-                let top = {
-                    let root = self.app.doc_ref().editor_ref().root.clone();
-                    x_native::editor::top_level_ancestor(&root, &hit).unwrap_or(hit.clone())
-                };
-                let already_selected = self.app.doc_ref().editor_ref().selection.iter().any(|s| s == &top);
+                let er = self.app.doc_ref().editor_ref();
+                let root = er.root.clone();
+                let top = x_native::editor::top_level_ancestor(
+                    &root,
+                    &hit,
+                )
+                .unwrap_or(hit.clone());
+                let sel = er.selection.clone();
+                let already_selected = sel.iter().any(|s| s == &top);
                 if !already_selected {
-                    self.app.doc().editor().click_select(world, false, false);
+                    let ed = self.app.doc().editor();
+                    ed.click_select(world, false, false);
                 }
             }
             let sel_count = {
@@ -3180,7 +3185,21 @@ impl Host {
             .unwrap_or(false)
             && self.app.page_menu.is_none()
         {
-            // B14: right-click on the pages panel's page field
+            // B14: right-click on the pages panel — the page menu acts on
+            // the ACTIVE page, so a right-click on a non-active row
+            // activates it first (right-click = select + menu)
+            let n = self.app.doc_ref().editors.len();
+            let cur = self.app.doc_ref().page;
+            let page_row = self
+                .app
+                .pages_rows()
+                .into_iter()
+                .find(|(_, r)| r.contains(p));
+            if let Some((i, _)) = page_row {
+                if i < n && i != cur {
+                    self.dispatch(Action::SelectPage(i));
+                }
+            }
             self.app.page_menu = Some(p);
         } else {
             // second right-click (or outside canvas) closes
@@ -4412,7 +4431,8 @@ impl Host {
         let n = counter + 1;
         let node = match tool {
             Tool::Frame => {
-                let mut f = Node::frame(&x_native::fresh_id("frame"), w.max(8.0), h.max(8.0));
+                let fid = x_native::fresh_id("frame");
+                let mut f = Node::frame(&fid, w.max(8.0), h.max(8.0));
                 f.name = format!("Frame {n}");
                 f.transform.x = x;
                 f.transform.y = y;
@@ -4447,7 +4467,8 @@ impl Host {
             Tool::Text => {
                 // Figma: a new text object starts EMPTY (placeholder only);
                 // committing empty deletes it
-                let mut t = Node::text(&x_native::fresh_id("text"), x, y, w.max(120.0), 14.0, "");
+                let tid = x_native::fresh_id("text");
+                let mut t = Node::text(&tid, x, y, w.max(120.0), 14.0, "");
                 t.name = format!("Text {n}");
                 t
             }
@@ -4466,7 +4487,8 @@ impl Host {
             let root = &doc.editor_ref().root;
             let sel = &doc.editor_ref().selection;
             if sel.len() == 1 {
-                if let Some(p) = crate::editor_ui::find_node(root, &sel[0]) {
+                let p = crate::editor_ui::find_node(root, &sel[0]);
+                if let Some(p) = p {
                     let is_container = matches!(
                         p.kind,
                         x_native::NodeKind::Frame { .. }
@@ -4479,7 +4501,9 @@ impl Host {
                         node.transform.y = ly;
                         let auto_layout = matches!(
                             &p.kind,
-                            x_native::NodeKind::Frame { layout } if layout.is_some()
+                            x_native::NodeKind::Frame {
+                                layout: Some(_),
+                            }
                         );
                         (p.id.clone(), auto_layout)
                     } else {
@@ -4498,8 +4522,9 @@ impl Host {
         if parent_auto_layout {
             let vars = self.app.doc().doc.variables.clone();
             let e = self.app.doc().editor();
-            if let Some(parent) = x_native::editor::find_mut(&mut e.root, &parent_id) {
-                x_native::apply_layout_recursive(parent, &vars);
+            let par = x_native::editor::find_mut(&mut e.root, &parent_id);
+            if let Some(par) = par {
+                x_native::apply_layout_recursive(par, &vars);
             }
         }
         self.app.doc().editor().selection = vec![id.clone()];
@@ -9766,12 +9791,14 @@ fn world_to_local(root: &Node, target: &str, x: f64, y: f64) -> (f64, f64) {
         pt: (f64, f64),
         out: &mut Option<(f64, f64)>,
     ) {
+        // `acc` is the world matrix of `n`'s parent; multiplying in `n`'s
+        // own transform gives the space where `n`'s children live.
+        let m = acc * n.transform.matrix(n.w, n.h);
         if n.id == id {
-            let p = acc.inverse() * vello::kurbo::Point::new(pt.0, pt.1);
+            let p = m.inverse() * vello::kurbo::Point::new(pt.0, pt.1);
             *out = Some((p.x, p.y));
             return;
         }
-        let next = acc * n.transform.matrix(n.w, n.h);
         for c in &n.children {
             rec(c, id, next, pt, out);
             if out.is_some() {

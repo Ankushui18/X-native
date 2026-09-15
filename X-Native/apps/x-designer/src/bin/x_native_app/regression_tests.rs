@@ -392,7 +392,10 @@ fn right_click_keeps_multi_selection_so_grouping_works() {
     let (tx, ty, z) = h.app.canvas_transform();
     let p = Point::new(515.0 * z + tx, 515.0 * z + ty);
     h.on_right_press(p);
-    assert!(h.app.context_menu.open, "right-click must open the context menu");
+    assert!(
+        h.app.context_menu.open,
+        "right-click must open the context menu"
+    );
     assert_eq!(
         h.app.doc_ref().editor_ref().selection.len(),
         2,
@@ -401,9 +404,20 @@ fn right_click_keeps_multi_selection_so_grouping_works() {
     // ...and the group actually forms through the menu action
     h.app.apply_ctx(CtxCmd::Group);
     let root = &h.app.doc_ref().editor_ref().root;
-    let group = root.children.iter().find(|n| matches!(n.kind, NodeKind::Group)).unwrap();
-    assert_eq!(group.children.len(), 2, "both members inside the group");
-    assert_eq!(h.app.doc_ref().editor_ref().selection, vec![group.id.clone()]);
+    let group = root
+        .children
+        .iter()
+        .find(|n| matches!(n.kind, NodeKind::Group))
+        .unwrap();
+    assert_eq!(
+        group.children.len(),
+        2,
+        "both members inside the group"
+    );
+    assert_eq!(
+        h.app.doc_ref().editor_ref().selection,
+        vec![group.id.clone()]
+    );
 }
 
 #[test]
@@ -414,23 +428,42 @@ fn drawing_into_a_selected_frame_nests_the_new_node() {
     let mut h = host();
     // demo doc: frame-1 is 375x420 at world (0, 60)
     h.app.doc().editor().selection = vec!["frame-1".into()];
-    h.finish_create(Tool::Rect, Point::new(20.0, 80.0), Point::new(60.0, 100.0));
+    h.finish_create(
+        Tool::Rect,
+        Point::new(20.0, 80.0),
+        Point::new(60.0, 100.0),
+    );
     let root = &h.app.doc_ref().editor_ref().root;
-    assert_eq!(root.children.len(), 1, "the new rect must NOT be a root sibling");
+    assert_eq!(
+        root.children.len(),
+        1,
+        "the new rect must NOT be a root sibling"
+    );
     let f1 = find_node_clone(root, "frame-1").unwrap();
-    assert_eq!(f1.children.len(), 1, "the new rect must be inside frame-1");
+    assert_eq!(
+        f1.children.len(),
+        1,
+        "the new rect must be inside frame-1"
+    );
     let r = &f1.children[0];
     // world (20, 80) inside a frame at (0, 60) → local (20, 20)
     assert_eq!((r.transform.x, r.transform.y), (20.0, 20.0));
     assert_eq!((r.w, r.h), (40.0, 20.0));
-    assert_eq!(h.app.doc_ref().editor_ref().selection, vec![r.id.clone()]);
+    assert_eq!(
+        h.app.doc_ref().editor_ref().selection,
+        vec![r.id.clone()]
+    );
 }
 
 #[test]
 fn drawing_with_no_container_selected_lands_at_the_page_root() {
     let mut h = host();
     assert!(h.app.doc_ref().editor_ref().selection.is_empty());
-    h.finish_create(Tool::Rect, Point::new(10.0, 10.0), Point::new(50.0, 30.0));
+    h.finish_create(
+        Tool::Rect,
+        Point::new(10.0, 10.0),
+        Point::new(50.0, 30.0),
+    );
     let root = &h.app.doc_ref().editor_ref().root;
     assert_eq!(root.children.len(), 2, "rect + the demo frame");
     let r = root.children.iter().find(|n| n.id != "frame-1").unwrap();
@@ -438,9 +471,53 @@ fn drawing_with_no_container_selected_lands_at_the_page_root() {
     // and selecting a non-container (a plain rect) also must not nest:
     // only frames / groups / sections are drop targets
     h.app.doc().editor().selection = vec![r.id.clone()];
-    h.finish_create(Tool::Rect, Point::new(120.0, 120.0), Point::new(160.0, 140.0));
+    h.finish_create(
+        Tool::Rect,
+        Point::new(120.0, 120.0),
+        Point::new(160.0, 140.0),
+    );
     let root = &h.app.doc_ref().editor_ref().root;
-    assert_eq!(root.children.len(), 3, "non-container selection → root again");
+    assert_eq!(
+        root.children.len(),
+        3,
+        "non-container selection → root again"
+    );
+}
+
+#[test]
+fn pages_list_shows_every_page_with_measured_band() {
+    // Viewport audit P2 (the "two page areas" redesign): the PAGES band
+    // is a real list — one row per page, paint and hit-testing share the
+    // same geometry, and the LAYERS band below anchors to its bottom.
+    let mut h = host();
+    h.dispatch(Action::AddPage);
+    h.dispatch(Action::AddPage);
+    assert_eq!(h.app.doc_ref().editors.len(), 3);
+    let rows = h.app.pages_rows();
+    assert_eq!(rows.len(), 3, "one row per page");
+    for (i, (_, r)) in rows.iter().enumerate() {
+        assert!((r.y1 - r.y0 - 26.0).abs() < 1e-9, "26px rows");
+        assert_eq!(*i, h.app.pages_rows()[i].0, "row i addresses page i");
+    }
+    // band bottom = last row bottom (the divider/LAYERS/tree anchor to it)
+    let last_bottom = rows.last().unwrap().1.y1;
+    assert!((h.app.pages_band_bottom() - last_bottom).abs() < 1e-9);
+    // the row's hit zone dispatches SelectPage(i) — verify that switches
+    h.dispatch(Action::SelectPage(2));
+    assert_eq!(h.app.doc_ref().page, 2, "row click switches pages");
+}
+
+#[test]
+fn pages_list_collapses_beyond_four_pages() {
+    let mut h = host();
+    for _ in 0..5 {
+        h.dispatch(Action::AddPage);
+    }
+    // 6 pages → 3 real rows + a "+3 more" sentinel (index = page count)
+    let rows = h.app.pages_rows();
+    assert_eq!(rows.len(), 4);
+    assert_eq!(rows[3].0, 6, "the overflow row is the sentinel");
+    assert!((h.app.pages_band_bottom() - rows[3].1.y1).abs() < 1e-9);
 }
 
 #[test]
