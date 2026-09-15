@@ -377,6 +377,73 @@ fn new_file_opens_clean_without_the_canvas_grid() {
 }
 
 #[test]
+fn right_click_keeps_multi_selection_so_grouping_works() {
+    // Viewport audit P2: the right-click before the context menu used to
+    // collapse the selection to the node under the cursor, so
+    // "Group selection" (which needs 2+) silently did nothing.
+    let mut h = host();
+    let root_id = h.app.doc_ref().editor_ref().root.id.clone();
+    let ga = Node::rect("ga", 500.0, 500.0, 30.0, 30.0, Color::BLACK);
+    let gb = Node::rect("gb", 550.0, 500.0, 30.0, 30.0, Color::WHITE);
+    h.app.doc().editor().insert_node(&root_id, ga);
+    h.app.doc().editor().insert_node(&root_id, gb);
+    h.app.doc().editor().selection = vec!["ga".into(), "gb".into()];
+    // right-click ON an already-selected node
+    let (tx, ty, z) = h.app.canvas_transform();
+    let p = Point::new(515.0 * z + tx, 515.0 * z + ty);
+    h.on_right_press(p);
+    assert!(h.app.context_menu.open, "right-click must open the context menu");
+    assert_eq!(
+        h.app.doc_ref().editor_ref().selection.len(),
+        2,
+        "right-clicking a selected node must keep the multi-selection"
+    );
+    // ...and the group actually forms through the menu action
+    h.app.apply_ctx(CtxCmd::Group);
+    let root = &h.app.doc_ref().editor_ref().root;
+    let group = root.children.iter().find(|n| matches!(n.kind, NodeKind::Group)).unwrap();
+    assert_eq!(group.children.len(), 2, "both members inside the group");
+    assert_eq!(h.app.doc_ref().editor_ref().selection, vec![group.id.clone()]);
+}
+
+#[test]
+fn drawing_into_a_selected_frame_nests_the_new_node() {
+    // Viewport audit P2: drawn nodes were always forced onto the page root,
+    // so artboards could never receive content. Figma semantics: one
+    // selected frame → the new node is its child, in the frame's space.
+    let mut h = host();
+    // demo doc: frame-1 is 375x420 at world (0, 60)
+    h.app.doc().editor().selection = vec!["frame-1".into()];
+    h.finish_create(Tool::Rect, Point::new(20.0, 80.0), Point::new(60.0, 100.0));
+    let root = &h.app.doc_ref().editor_ref().root;
+    assert_eq!(root.children.len(), 1, "the new rect must NOT be a root sibling");
+    let f1 = find_node_clone(root, "frame-1").unwrap();
+    assert_eq!(f1.children.len(), 1, "the new rect must be inside frame-1");
+    let r = &f1.children[0];
+    // world (20, 80) inside a frame at (0, 60) → local (20, 20)
+    assert_eq!((r.transform.x, r.transform.y), (20.0, 20.0));
+    assert_eq!((r.w, r.h), (40.0, 20.0));
+    assert_eq!(h.app.doc_ref().editor_ref().selection, vec![r.id.clone()]);
+}
+
+#[test]
+fn drawing_with_no_container_selected_lands_at_the_page_root() {
+    let mut h = host();
+    assert!(h.app.doc_ref().editor_ref().selection.is_empty());
+    h.finish_create(Tool::Rect, Point::new(10.0, 10.0), Point::new(50.0, 30.0));
+    let root = &h.app.doc_ref().editor_ref().root;
+    assert_eq!(root.children.len(), 2, "rect + the demo frame");
+    let r = root.children.iter().find(|n| n.id != "frame-1").unwrap();
+    assert_eq!((r.transform.x, r.transform.y), (10.0, 10.0));
+    // and selecting a non-container (a plain rect) also must not nest:
+    // only frames / groups / sections are drop targets
+    h.app.doc().editor().selection = vec![r.id.clone()];
+    h.finish_create(Tool::Rect, Point::new(120.0, 120.0), Point::new(160.0, 140.0));
+    let root = &h.app.doc_ref().editor_ref().root;
+    assert_eq!(root.children.len(), 3, "non-container selection → root again");
+}
+
+#[test]
 fn new_session_and_new_document_have_no_mock_content() {
     let mut app = App::new();
     assert!(app.docs.is_empty() && app.drafts.is_empty());

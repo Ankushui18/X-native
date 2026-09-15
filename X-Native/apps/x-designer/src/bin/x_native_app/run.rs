@@ -3139,8 +3139,20 @@ impl Host {
                 let root = doc.editor_ref().root.clone();
                 x_native::editor::hit_test(&root, world)
             };
-            if hit_id.is_some() {
-                self.app.doc().editor().click_select(world, false, false);
+            // Figma: right-clicking an ALREADY-SELECTED node keeps the
+            // multi-selection. Collapsing it here made "Group selection"
+            // silently no-op — the menu opened for N nodes, but
+            // group_selection needs 2+ and the click had just reduced the
+            // selection to the one node under the cursor.
+            if let Some(hit) = hit_id {
+                let top = {
+                    let root = self.app.doc_ref().editor_ref().root.clone();
+                    x_native::editor::top_level_ancestor(&root, &hit).unwrap_or(hit.clone())
+                };
+                let already_selected = self.app.doc_ref().editor_ref().selection.iter().any(|s| s == &top);
+                if !already_selected {
+                    self.app.doc().editor().click_select(world, false, false);
+                }
             }
             let sel_count = {
                 let doc = self.app.doc();
@@ -4442,8 +4454,55 @@ impl Host {
             _ => return,
         };
         let id = node.id.clone();
-        doc.editor().insert_node(&root_id, node);
-        doc.editor().selection = vec![id.clone()];
+        let mut node = node;
+        // Figma semantics: when exactly one container (frame / group /
+        // section) is selected, the new node lands INSIDE it, with its
+        // position expressed in that container's local space — drawing
+        // with a frame selected builds the frame. Previously every drawn
+        // node was forced onto the page root, so artboards could never
+        // receive content (viewport audit P2).
+        let (parent_id, parent_auto_layout) = {
+            let doc = self.app.doc();
+            let root = &doc.editor_ref().root;
+            let sel = &doc.editor_ref().selection;
+            if sel.len() == 1 {
+                if let Some(p) = crate::editor_ui::find_node(root, &sel[0]) {
+                    let is_container = matches!(
+                        p.kind,
+                        x_native::NodeKind::Frame { .. }
+                            | x_native::NodeKind::Group
+                            | x_native::NodeKind::Section
+                    );
+                    if is_container {
+                        let (lx, ly) = world_to_local(root, &p.id, x, y);
+                        node.transform.x = lx;
+                        node.transform.y = ly;
+                        let auto_layout = matches!(
+                            &p.kind,
+                            x_native::NodeKind::Frame { layout } if layout.is_some()
+                        );
+                        (p.id.clone(), auto_layout)
+                    } else {
+                        (root_id.clone(), false)
+                    }
+                } else {
+                    (root_id.clone(), false)
+                }
+            } else {
+                (root_id.clone(), false)
+            }
+        };
+        self.app.doc().editor().insert_node(&parent_id, node);
+        // an auto-layout parent flow-places its children: the stored x/y is
+        // only a pre-layout hint, so run the layout to settle it
+        if parent_auto_layout {
+            let vars = self.app.doc().doc.variables.clone();
+            let e = self.app.doc().editor();
+            if let Some(parent) = x_native::editor::find_mut(&mut e.root, &parent_id) {
+                x_native::apply_layout_recursive(parent, &vars);
+            }
+        }
+        self.app.doc().editor().selection = vec![id.clone()];
         self.app.mark_dirty();
         self.app.tool = Tool::Select;
         // click/drag with the Text tool drops a text node and starts editing it
@@ -9693,6 +9752,36 @@ fn watermark_labels(app: &App, inner: &mut Scene, root: &x_native::Node) {
             crate::paint::Wt::Semi,
         );
     }
+}
+
+/// A world coordinate expressed in the local space of `target` — the space
+/// a child's transform lives in: the inverse of the ancestor chain's
+/// transform product. Drawing into a selected frame needs this so the new
+/// node lands where the pointer was, in the frame's own coordinates.
+fn world_to_local(root: &Node, target: &str, x: f64, y: f64) -> (f64, f64) {
+    fn rec(
+        n: &Node,
+        id: &str,
+        acc: vello::kurbo::Affine,
+        pt: (f64, f64),
+        out: &mut Option<(f64, f64)>,
+    ) {
+        if n.id == id {
+            let p = acc.inverse() * vello::kurbo::Point::new(pt.0, pt.1);
+            *out = Some((p.x, p.y));
+            return;
+        }
+        let next = acc * n.transform.matrix(n.w, n.h);
+        for c in &n.children {
+            rec(c, id, next, pt, out);
+            if out.is_some() {
+                return;
+            }
+        }
+    }
+    let mut out = None;
+    rec(root, target, vello::kurbo::Affine::IDENTITY, (x, y), &mut out);
+    out.unwrap_or((x, y))
 }
 
 // ------------------------------------------------------------------ utils
