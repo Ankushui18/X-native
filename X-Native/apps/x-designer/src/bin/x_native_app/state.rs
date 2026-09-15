@@ -1559,7 +1559,7 @@ impl App {
         const ROW_H: f64 = 26.0;
         const MAX_ROWS: usize = 4;
         let n = self.doc_ref().editors.len();
-        let count = n.min(MAX_ROWS).max(1);
+        let count = n.clamp(1, MAX_ROWS);
         ED_TITLE_H + 142.0 + count as f64 * ROW_H
     }
 

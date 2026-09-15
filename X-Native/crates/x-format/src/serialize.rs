@@ -934,7 +934,7 @@ pub fn save_x(doc: &Document) -> String {
     // document-level default font (viewport audit P3: per-file data,
     // not a UI constant); omitted when unset so old readers ignore it
     if let Some(f) = &doc.default_font {
-        out.push_str(&format!("\"default_font\":\"\"{}\",", esc(f)));
+        out.push_str(&format!("\"default_font\":\"{}\",", esc(f)));
     }
     // variables
     let mut colors: Vec<_> = doc.variables.colors.iter().collect();

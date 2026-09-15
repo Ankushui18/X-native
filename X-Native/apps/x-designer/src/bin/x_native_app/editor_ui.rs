@@ -1765,14 +1765,7 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let ly = band_bottom + 25.0;
     app.fonts
         .micro_label(s, sx + 12.0, ly, "LAYERS", C_DIM, Wt::Med);
-    draw_icon(
-        s,
-        "search",
-        lw - 25.0,
-        band_bottom + 25.8,
-        12.0,
-        C_DIM,
-    );
+    draw_icon(s, "search", lw - 25.0, band_bottom + 25.8, 12.0, C_DIM);
 
     // tree (scrollable)
     let tree_top = band_bottom + 34.5;
