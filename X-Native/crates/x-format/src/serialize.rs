@@ -931,6 +931,11 @@ pub(crate) fn node_json(n: &Node, out: &mut String) {
 /// Serialize a Document to `.x` v1 JSON.
 pub fn save_x(doc: &Document) -> String {
     let mut out = format!("{{\"format\":\"x-native\",\"version\":{X_FORMAT_VERSION},");
+    // document-level default font (viewport audit P3: per-file data,
+    // not a UI constant); omitted when unset so old readers ignore it
+    if let Some(f) = &doc.default_font {
+        out.push_str(&format!("\"default_font\":\"\"{}\",", esc(f)));
+    }
     // variables
     let mut colors: Vec<_> = doc.variables.colors.iter().collect();
     colors.sort_by_key(|(k, _)| (*k).clone());

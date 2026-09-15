@@ -968,6 +968,11 @@ pub(crate) fn decode_document(v: &V) -> Result<Document, String> {
         .ok_or("pages must be an array")?;
     validate_native_nodes(pages)?;
     let mut doc = Document::new();
+    // P3: document-level default font; absent in files written before
+    // the field (lenient by design — resolves to the engine default)
+    if let Some(V::Str(f)) = v.get("default_font") {
+        doc.default_font = Some(f.clone());
+    }
     if let Some(vars) = v.get("variables") {
         if let Some(V::Obj(m)) = vars.get("colors") {
             for (k, val) in m {
