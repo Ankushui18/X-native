@@ -70,9 +70,13 @@ fi
 if [[ $DEAD -gt $DEAD_CODE_CEILING ]]; then
     bad "dead code grew: $DEAD warning(s), ceiling $DEAD_CODE_CEILING (docs/KNOWN_DEBT.md)"
     # Where it lives, per file, so the ratchet can be reconciled against the
-    # table in docs/KNOWN_DEBT.md instead of guessed at.
+    # table in docs/KNOWN_DEBT.md instead of guessed at — and then the items
+    # themselves, because a file count cannot tell you WHICH entry to write.
     printf '%s\n' "$WARN_LINES" | grep -E 'never (used|read|constructed)' |
         sed -E 's/:[0-9]+:[0-9]+:.*//' | sort | uniq -c | sort -rn | sed 's/^/      /'
+    printf '%s\n' "$WARN_LINES" | grep -E 'never (used|read|constructed)' |
+        sed -E 's|^([^:]+):[0-9]+:[0-9]+: warning: |\1  ::  |' | sort |
+        sed 's/^/      /'
 else
     ok "dead code $DEAD / ceiling $DEAD_CODE_CEILING"
 fi

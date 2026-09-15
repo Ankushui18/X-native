@@ -117,7 +117,20 @@ fn t05_canvas_transform_must_match_hit_test_and_overlay_transform() {
     h.app.zoom = 2.0;
     let p = Point::new(10.0, 10.0);
     let rendered = h.app.canvas_affine() * p;
-    assert_eq!(rendered, Point::new(340.0, 76.0));
+    // This used to pin the literal (340.0, 76.0), which went stale the moment
+    // the chrome grew: the canvas origin is `editor_regions().canvas.x0 + pan
+    // + ruler`, and the nav rail and resizable sidebar both feed it. What the
+    // test audits is that the three transforms AGREE, so the expectation is
+    // recomputed from the same (x, y, zoom) triple the renderer consumes —
+    // which still pins the order (translate ∘ scale, not scale ∘ translate).
+    let (tx, ty, z) = h.app.canvas_transform();
+    assert_eq!(rendered, Point::new(p.x * z + tx, p.y * z + ty));
+    // and the origin really is the chrome's canvas region, not the window's
+    let canvas = h.app.view_canvas();
+    assert!(
+        canvas.x0 > 0.0 && canvas.y0 > 0.0,
+        "canvas must start after the chrome: {canvas:?}"
+    );
     assert_eq!(h.app.screen_to_world(rendered), p);
     let overlay = h.app.world_to_screen(p);
     assert_eq!(

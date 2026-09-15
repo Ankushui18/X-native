@@ -273,7 +273,7 @@ pub fn outline_text_node(
         maxy.max(1.0),
         cmds,
     );
-    v.transform = node.transform.clone();
+    v.transform = node.transform;
     v.name = node.name.clone();
     v.opacity = node.opacity;
     v.visible = node.visible;

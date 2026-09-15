@@ -739,10 +739,12 @@ fn signed_area(pts: &[(f64, f64)]) -> f64 {
 
 /// Per-vertex (incoming edge normal, outgoing edge normal); `None` for a
 /// degenerate edge, and both `None` at the ends of an open polyline.
-fn vertex_normals(
-    pts: &[(f64, f64)],
-    closed: bool,
-) -> Vec<(Option<(f64, f64)>, Option<(f64, f64)>)> {
+/// Per-vertex `(incoming normal, outgoing normal)`; the alias exists because the
+/// nested option pairs are unreadable at a call site and clippy's
+/// `type_complexity` is denied workspace-wide.
+type VertexNormals = Vec<(Option<(f64, f64)>, Option<(f64, f64)>)>;
+
+fn vertex_normals(pts: &[(f64, f64)], closed: bool) -> VertexNormals {
     let n = pts.len();
     let usable = |v: (f64, f64)| (v.0.abs() + v.1.abs() > 1e-9).then_some(v);
     (0..n)

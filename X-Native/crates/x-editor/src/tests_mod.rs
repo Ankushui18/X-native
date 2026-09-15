@@ -2186,9 +2186,37 @@ mod tests {
     fn dev_mode_css_emits_borders() {
         let mut n = Node::rect("r", 0.0, 0.0, 10.0, 10.0, Color::BLACK);
         n.stroke = x_core::Stroke::solid(Color::from_rgb8(0x11, 0x22, 0x33), 2.0);
+        // Stroke ALIGN picks the CSS property: `border` lives in the border-box
+        // model, so only an INSIDE stroke may map to it — Center (the default)
+        // and Outside map to `outline`, which CSS excludes from layout. This
+        // test used to assert `border` for a default-aligned stroke, which is
+        // what made it fail once the emitter became align-aware.
         let css = node_to_css(&n, &Variables::default());
-        assert!(css.contains("border: 2px solid #112233;"));
-        // gradient stroke degrades to a commented hint
+        assert!(
+            css.contains("outline: 2px solid #112233;"),
+            "a center-aligned stroke must map to outline: {css}"
+        );
+        assert!(
+            !css.contains("box-sizing"),
+            "outline is outside the box model: {css}"
+        );
+
+        // `active_strokes()` only reads `stroke_layers` once the visual stacks
+        // are materialized, so flipping the align means materializing them.
+        n.visual_stacks_materialized = true;
+        n.stroke_layers = vec![x_core::StrokeLayer {
+            options: x_core::StrokeOptions {
+                align: x_core::StrokeAlign::Inside,
+                ..Default::default()
+            },
+            ..x_core::StrokeLayer::new(n.stroke.clone())
+        }];
+        let css = node_to_css(&n, &Variables::default());
+        assert!(css.contains("border: 2px solid #112233;"), "{css}");
+        assert!(css.contains("box-sizing: border-box;"), "{css}");
+
+        // gradient stroke degrades to a commented hint (align is unchanged, so
+        // it stays a `border`)
         n.stroke = x_core::Stroke {
             paint: Paint::LinearGradient {
                 start: (0.0, 0.0),

@@ -6290,26 +6290,23 @@ fn paint_prototype(
             }
 
             // Show action-specific fields (URL for OpenLink)
-            match &ix.action {
-                x_native::Action::OpenLink { url } => {
-                    extra_y = 20.0;
-                    let ub = Rect::new(x0 + 5.0, y + 50.0, xr - 5.0, y + 66.0);
-                    input_box(app, s, ub, 4.0);
-                    let display_url = if url.is_empty() {
-                        "https://example.com".to_string()
-                    } else {
-                        url.clone()
-                    };
-                    let truncated = if display_url.len() > 30 {
-                        format!("{}...", &display_url[..27])
-                    } else {
-                        display_url
-                    };
-                    app.fonts
-                        .text(s, ub.x0 + 4.0, y + 52.0, &truncated, T10, C_TEXT, Wt::Mono);
-                    hit.push((ub, Action::ProtoEditUrl(i)));
-                }
-                _ => {}
+            if let x_native::Action::OpenLink { url } = &ix.action {
+                extra_y = 20.0;
+                let ub = Rect::new(x0 + 5.0, y + 50.0, xr - 5.0, y + 66.0);
+                input_box(app, s, ub, 4.0);
+                let display_url = if url.is_empty() {
+                    "https://example.com".to_string()
+                } else {
+                    url.clone()
+                };
+                let truncated = if display_url.len() > 30 {
+                    format!("{}...", &display_url[..27])
+                } else {
+                    display_url
+                };
+                app.fonts
+                    .text(s, ub.x0 + 4.0, y + 52.0, &truncated, T10, C_TEXT, Wt::Mono);
+                hit.push((ub, Action::ProtoEditUrl(i)));
             }
             // Row 3: easing + reset + remove
             let row3_y = y + 30.0;

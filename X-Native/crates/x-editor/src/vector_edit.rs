@@ -538,7 +538,7 @@ fn grow_bounds(n: &mut Node) {
 /// incoming c2 through [`set_anchor_pos`], the outgoing c1 through the next
 /// command. A handle belonging to a NON-selected neighbour keeps its absolute
 /// position, which is what bends the segment between the two.
-pub fn move_anchors_by(path: &mut Vec<PathCmd>, idxs: &[usize], dx: f64, dy: f64) {
+pub fn move_anchors_by(path: &mut [PathCmd], idxs: &[usize], dx: f64, dy: f64) {
     if idxs.is_empty() || (dx == 0.0 && dy == 0.0) {
         return;
     }
@@ -704,7 +704,13 @@ fn anchor_point(c: PathCmd) -> (f64, f64) {
 /// curve approximates the original bend instead of re-fitting it.
 /// `tolerance <= 0` returns the input unchanged.
 pub fn simplify_path(cmds: &[PathCmd], tolerance: f64) -> Vec<PathCmd> {
-    if !(tolerance > 0.0) {
+    // `partial_cmp` rather than `!(tolerance > 0.0)`: the negated form is a
+    // denied lint on a partially ordered type, and spelling the comparison out
+    // keeps the NaN case explicit — an incomparable tolerance simplifies nothing.
+    if !matches!(
+        tolerance.partial_cmp(&0.0),
+        Some(std::cmp::Ordering::Greater)
+    ) {
         return cmds.to_vec();
     }
     let mut out: Vec<PathCmd> = vec![];

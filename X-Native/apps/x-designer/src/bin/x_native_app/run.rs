@@ -5886,10 +5886,7 @@ impl Host {
                     x_native::Action::Back => x_native::Action::CloseOverlay,
                     x_native::Action::CloseOverlay => {
                         // Navigate to first other frame
-                        let dest = targets
-                            .iter()
-                            .next()
-                            .map(|(id, _)| id.clone())
+                        let dest = targets.first().map(|(id, _)| id.clone())
                             .unwrap_or_default();
                         x_native::Action::Navigate { destination: dest }
                     }
@@ -8174,7 +8171,7 @@ impl Host {
                 self.app.field_select_all = true;
             }
             Action::FileMoveToDrafts | Action::FileDuplicate => {
-                self.app.status = format!("File action: not yet implemented");
+                self.app.status = "File action: not yet implemented".to_string();
             }
             Action::AddPage => {
                 if !self.finish_edits() {

@@ -72,7 +72,7 @@ pub fn detach_style(n: &mut Node, kind_key: &str) -> bool {
 /// [`TextStyleData::clear_from_node`] drops, so clearing without re-applying
 /// the snapshot would silently reset the layer's type.
 pub fn detach_text_style(n: &mut Node) -> bool {
-    if n.bindings.get("style:text").is_none() {
+    if !n.bindings.contains_key("style:text") {
         return false;
     }
     let keep = TextStyleData::from_node(n);

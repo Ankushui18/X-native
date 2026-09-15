@@ -492,7 +492,7 @@ fn inside_stroke_adds_to_hug_minimum() {
 #[test]
 fn padding_minimum_enforced_on_fixed_frame() {
     // Fixed frame 50x50, padding 30 each side → minimum = 60
-    let mut row = Node::frame("row", 50.0, 50.0)
+    let row = Node::frame("row", 50.0, 50.0)
         .auto_layout(AutoLayout {
             direction: LayoutDirection::Horizontal,
             gap: 0.0,
@@ -538,7 +538,7 @@ fn border_box_fill_container_distribution() {
     let mut child_b = Node::rect("b", 0.0, 0.0, 50.0, 20.0, Color::WHITE);
     child_b.constraints.grow = 1.0;
     // Child B: inside stroke 0px (no stroke)
-    let mut row = Node::frame("row", 300.0, 40.0)
+    let row = Node::frame("row", 300.0, 40.0)
         .auto_layout(AutoLayout {
             direction: LayoutDirection::Horizontal,
             gap: 0.0,

@@ -1076,6 +1076,22 @@ mod tests {
         };
         let code = node_to_jsx(&r);
         assert!(code.contains("opacity: 0.5"), "{code}");
+        // Center is the default stroke align and CSS `border` is part of the
+        // border-box model, so a centered stroke maps to `outline`; only an
+        // INSIDE stroke earns `border` (see stroke_css).
+        assert!(
+            code.contains("outline: 1.5px solid '#ff0000'"),
+            "{code}"
+        );
+        r.visual_stacks_materialized = true;
+        r.stroke_layers = vec![x_core::StrokeLayer {
+            options: x_core::StrokeOptions {
+                align: x_core::StrokeAlign::Inside,
+                ..Default::default()
+            },
+            ..x_core::StrokeLayer::new(r.stroke.clone())
+        }];
+        let code = node_to_jsx(&r);
         assert!(code.contains("border: 1.5px solid '#ff0000'"), "{code}");
         // 0deg -> 90deg vector + 90 (CSS to-top)
         assert!(

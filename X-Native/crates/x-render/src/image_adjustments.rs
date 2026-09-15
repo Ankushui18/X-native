@@ -240,8 +240,10 @@ mod tests {
 
     #[test]
     fn test_exposure_adjustment() {
-        let mut adj = ImageAdjustments::default();
-        adj.exposure = 1.0; // +2 stops
+        let adj = ImageAdjustments {
+            exposure: 1.0, // +2 stops
+            ..Default::default()
+        };
 
         let white = Color::from_rgb8(255, 255, 255);
         let adjusted = adj.apply_to_color(white);
@@ -255,8 +257,10 @@ mod tests {
 
     #[test]
     fn test_saturation_adjustment() {
-        let mut adj = ImageAdjustments::default();
-        adj.saturation = -1.0; // Fully desaturate
+        let adj = ImageAdjustments {
+            saturation: -1.0, // Fully desaturate
+            ..Default::default()
+        };
 
         let red = Color::from_rgb8(255, 0, 0);
         let adjusted = adj.apply_to_color(red);
@@ -296,10 +300,13 @@ mod tests {
 
     #[test]
     fn test_reset() {
-        let mut adj = ImageAdjustments::default();
-        adj.exposure = 1.0;
-        adj.contrast = -0.5;
-        adj.saturation = 0.3;
+        // `mut` stays: the point of the test is that reset() clears these.
+        let mut adj = ImageAdjustments {
+            exposure: 1.0,
+            contrast: -0.5,
+            saturation: 0.3,
+            ..Default::default()
+        };
 
         assert!(adj.has_adjustments());
 

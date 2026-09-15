@@ -1637,6 +1637,6 @@ mod tests {
         );
 
         assert_eq!(interaction.easing, Easing::EaseOut);
-        assert_eq!(interaction.reset_on_navigate, false);
+        assert!(!interaction.reset_on_navigate);
     }
 }
