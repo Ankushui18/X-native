@@ -724,7 +724,10 @@ impl FrameCache {
                             lower_shell.children.push(child.clone());
                         }
                     }
-                    let sub_tree = crate::ir::build_render_tree_with_hidden(
+                    // bucket shell: the root's name label is painted exactly
+                    // once by the shell scene above — re-emitting it here
+                    // would overdraw it once per bucket
+                    let sub_tree = crate::ir::build_render_tree_bucket_shell(
                         &lower_shell,
                         vars,
                         self.hidden_text.as_deref(),

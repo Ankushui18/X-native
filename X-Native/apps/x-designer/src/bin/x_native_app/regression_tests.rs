@@ -248,11 +248,31 @@ fn t13_canvas_and_export_must_encode_the_same_fill_stack() {
     assert_eq!(export_fills, 2);
     let canvas = h.app.canvas_scene();
     // canvas = the export's fills + the root frame's name label glyphs
-    // (QA-004: one glyph path per character, as in the direct encoder)
-    let label = h.app.doc_ref().editor_ref().root.name.chars().count();
+    // (QA-004). The label's path count must be MEASURED, not assumed:
+    // real font outlines (Inter in the app) are multi-contour, so one
+    // character can emit several glyph paths. Render the root alone
+    // (fill + label, no children) through the same font-aware sink the
+    // canvas uses, and subtract its fills.
+    let shell = h.app.doc_ref().editor_ref().root.shallow_clone();
+    let shell_tree = build_render_tree(&shell, &Variables::default());
+    let shell_fills = shell_tree
+        .commands
+        .iter()
+        .filter(|c| matches!(c, RenderCommand::FillPath { .. }))
+        .count();
+    let label_scene = x_native::VelloSink {
+        assets: None,
+        fonts: Some(&h.app.fonts.fonts),
+    }
+    .render(&shell_tree);
+    let label_paths = label_scene.encoding().n_paths as usize - shell_fills;
+    assert!(
+        label_paths > 0,
+        "the root frame's name label must render on the canvas"
+    );
     assert_eq!(
         canvas.encoding().n_paths as usize,
-        export_fills + label,
+        export_fills + label_paths,
         "canvas paths = export fills + frame-name label"
     );
 }
