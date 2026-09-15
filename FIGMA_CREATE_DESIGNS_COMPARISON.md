@@ -39,6 +39,45 @@ Two orphan files were deleted rather than gated: `x-core/src/p0_features.rs`
 `x-render/src/vector_network.rs` (769 lines, compiled and exported, referenced by
 nothing, rendering a `VectorNetwork` type deleted from `x-core` on 2026-09-02).
 
+### The gate's verdict — a fifth, inherited layer
+
+There is no Rust toolchain in the working environment (no `cargo`, `rustc` or
+`rustup`; TLS to crates.io is blocked), so blockers 1–4 were found by reading and
+the fix was verified by CI, not locally. The gate (`scripts/check.sh`: fmt →
+clippy → `cargo test --workspace`) ran on this branch and reported in two rounds.
+
+**Round 1** — one error, in this branch's new code: `E0689 can't call method max
+on ambiguous numeric type {float}` at `vector_edit.rs:775`. `let mut worst = 0.0;`
+leaves an unresolved float inference variable and rustc builds the inherent-method
+candidate list from the receiver alone, so `worst.max(perp_dist(..))` is ambiguous
+between `f32::max` and `f64::max` even though every operand in the function is
+`f64` and the signature pins the result. Argument types do not participate in
+method selection. Fixed by annotating the binding.
+
+**Round 2** — with `x-editor` compiling, the build reached the app crate for the
+first time and produced 31 diagnostics. `main` has never compiled this far: its
+own gate fails inside `x-editor` on blocker 1, so **everything below was inherited
+breakage that no CI run had ever reported**. Every diagnostic was attributed by
+`git blame`:
+
+| Root cause | Whose | Fix |
+|---|---|---|
+| Six vector-edit functions (`sync_vector_edit_mode`, `vector_edit_id`, `vector_press`, `apply_stroke_caps`, `local_delta`, `vector_drag_node`) written for `Host` — every body says `self.app.doc()`, `self.dispatch(..)` — but pasted inside `impl App`, where `self` *is* the app (16 × `E0609 no field app on type &mut App`, `E0599 no method dispatch`) | This branch | The 196-line block moved into `impl Host`, unchanged: all ten `self.app.*` members and `dispatch` exist there, and every caller (`run.rs:3434`, `:4200`, `:5552`, `:8824-8967`) already calls them as `self.x()` from `Host` methods |
+| `paint_vector_points` called `draw_line(..)`; the helper in `paint.rs:100` is `line(..)`, already glob-imported (`E0425`) | This branch | Renamed the call |
+| `third((prev.map(..).unwrap_or(..)), (x, y))` — clippy `unused_parens`, a denied lint | This branch | Parens dropped |
+| The prototype inspector's `for (i, ix) in list.iter().enumerate()` loop **closed 40 lines early**, leaving rows 3 and 4 (easing / reset / remove) outside the only scope that binds `i` and `ix` (5 × `E0425`) | `main` | Brace moved to the end of the row-4 block, rows re-indented into the loop |
+| `text_center(s, r, "Remove", T10, C_TEXT, Wt::Reg)` — the signature takes a 7th `vcenter: bool` (`paint.rs:523`); every other caller passes `true` (`E0061`) | `main` | `, true` added |
+| `center + (value * slider_r.width() / 2.0)` — the image-adjustment fields are `f32`, `Rect::width()` is `f64` (4 × `E0277`/`E0308`) | `main` | `value as f64` |
+| `NotificationKind` imported and never used | `main` | Import dropped |
+
+While moving that brace, one behavioural bug came with it: the loop computes
+`let row_h = if has_url { 92.0 } else { 56.0 };` and paints a row rect that tall,
+but `y` never advanced by it — the only `y +=` in the function is *after* the loop
+— so every interaction in the list was painted at the same offset, on top of the
+previous one. `y += row_h;` now ends the iteration. This is the one fix here that
+changes what the UI draws rather than whether it compiles, and it is flagged as
+such because it pre-dates this branch.
+
 Net effect on the tree: **+3,498 / −4,852 lines** across 12 files. The engine
 gained real implementations (`offset_path` in `x-core`, 13 new path operations and
 a gesture API in `x-editor`, `outline_text_node` in the facade) and **27 new

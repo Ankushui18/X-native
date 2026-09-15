@@ -16,8 +16,8 @@ use x_native::{ui::Elevation, FrameCache, Node, NodeKind, VelloSink};
 use crate::icons::{draw_flow_glyph, draw_icon};
 use crate::paint::*;
 use crate::state::{
-    kind_icon, parse_hex, Action, App, CtxCmd, FieldId, LeftTab, NavTab, NotificationKind,
-    RightTab, Tool, FRAME_PRESETS,
+    kind_icon, parse_hex, Action, App, CtxCmd, FieldId, LeftTab, NavTab, RightTab, Tool,
+    FRAME_PRESETS,
 };
 use crate::theme::*;
 
@@ -477,7 +477,7 @@ fn paint_vector_points(app: &App, s: &mut Scene) {
             };
             let p0 = app.world_to_screen(Point::new(a.x, a.y));
             let p1 = app.world_to_screen(Point::new(hx, hy));
-            draw_line(s, p0.x, p0.y, p1.x, p1.y, HANDLE_COLOR, 1.0);
+            line(s, p0.x, p0.y, p1.x, p1.y, HANDLE_COLOR, 1.0);
             let r = Rect::new(
                 p1.x - HANDLE_HALF,
                 p1.y - HANDLE_HALF,
@@ -4311,7 +4311,7 @@ fn paint_image_adjustments(
 
         // Slider fill (centered at 0)
         let center = (slider_r.x0 + slider_r.x1) / 2.0;
-        let fill_x = center + (value * slider_r.width() / 2.0);
+        let fill_x = center + (value as f64 * slider_r.width() / 2.0);
         let fill_r = Rect::new(
             center.min(fill_x),
             slider_r.y0 + 2.0,
@@ -6303,44 +6303,45 @@ fn paint_prototype(
                 }
                 _ => {}
             }
-        }
-        // Row 3: easing + reset + remove
-        let row3_y = y + 30.0;
-        let eb = Rect::new(x0 + 5.0, row3_y, x0 + 85.0, row3_y + 20.0);
-        input_box(app, s, eb, 4.0);
-        app.fonts.text(
-            s,
-            eb.x0 + 4.0,
-            row3_y + 2.0,
-            &format!("Easing: {}", ix.easing.label()),
-            T10,
-            C_TEXT,
-            Wt::Reg,
-        );
-        hit.push((eb, Action::ProtoEasing(i)));
+            // Row 3: easing + reset + remove
+            let row3_y = y + 30.0;
+            let eb = Rect::new(x0 + 5.0, row3_y, x0 + 85.0, row3_y + 20.0);
+            input_box(app, s, eb, 4.0);
+            app.fonts.text(
+                s,
+                eb.x0 + 4.0,
+                row3_y + 2.0,
+                &format!("Easing: {}", ix.easing.label()),
+                T10,
+                C_TEXT,
+                Wt::Reg,
+            );
+            hit.push((eb, Action::ProtoEasing(i)));
 
-        let rb = Rect::new(x0 + 90.0, row3_y, x0 + 140.0, row3_y + 20.0);
-        input_box(app, s, rb, 4.0);
-        app.fonts.text(
-            s,
-            rb.x0 + 4.0,
-            row3_y + 2.0,
-            if ix.reset_on_navigate {
-                "Reset: On"
-            } else {
-                "Reset: Off"
-            },
-            T10,
-            C_TEXT,
-            Wt::Reg,
-        );
-        hit.push((rb, Action::ProtoToggleReset(i)));
-        // Row 4: remove button
-        let rb_rm = Rect::new(xr - 30.0, row3_y, xr - 5.0, row3_y + 20.0);
-        input_box(app, s, rb_rm, 4.0);
-        app.fonts
-            .text_center(s, rb_rm, "Remove", T10, C_TEXT, Wt::Reg);
-        hit.push((rb_rm, Action::ProtoRemove(i)));
+            let rb = Rect::new(x0 + 90.0, row3_y, x0 + 140.0, row3_y + 20.0);
+            input_box(app, s, rb, 4.0);
+            app.fonts.text(
+                s,
+                rb.x0 + 4.0,
+                row3_y + 2.0,
+                if ix.reset_on_navigate {
+                    "Reset: On"
+                } else {
+                    "Reset: Off"
+                },
+                T10,
+                C_TEXT,
+                Wt::Reg,
+            );
+            hit.push((rb, Action::ProtoToggleReset(i)));
+            // Row 4: remove button
+            let rb_rm = Rect::new(xr - 30.0, row3_y, xr - 5.0, row3_y + 20.0);
+            input_box(app, s, rb_rm, 4.0);
+            app.fonts
+                .text_center(s, rb_rm, "Remove", T10, C_TEXT, Wt::Reg, true);
+            hit.push((rb_rm, Action::ProtoRemove(i)));
+            y += row_h;
+        }
     } else {
         let hint = if sel.len() == 1 {
             "Frame not found"

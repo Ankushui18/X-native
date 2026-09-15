@@ -1563,202 +1563,6 @@ impl App {
         Some((p0.x, p0.y, fw))
     }
 
-    /// Mirror the engine's vector edit mode into the app struct the canvas
-    /// overlay reads: `editor_ui` draws anchors and handles from
-    /// `app.vector_edit_mode`, and it must not borrow the document while it
-    /// paints. Called after every mode/selection change.
-    fn sync_vector_edit_mode(&mut self) {
-        let (active, node, points) = {
-            let editor = self.app.doc().editor_ref();
-            (
-                editor.vector_edit_active,
-                editor.vector_edit_node.clone(),
-                editor.vector_edit_selected_points.clone(),
-            )
-        };
-        self.app.vector_edit_mode.active = active;
-        self.app.vector_edit_mode.selected_node = node;
-        self.app.vector_edit_mode.selected_points = points;
-    }
-
-    /// The layer a path command should act on: the node in vector edit mode,
-    /// else the single selected layer — so the palette's path commands work
-    /// without entering node edit mode first.
-    fn vector_edit_id(&mut self) -> Option<String> {
-        let editor = self.app.doc().editor();
-        if let Some(id) = editor.vector_edit_target() {
-            return Some(id.to_string());
-        }
-        editor.selection.first().cloned()
-    }
-
-    /// Canvas press while vector edit mode is active. Anchors and control
-    /// handles are hit BEFORE the layer, an empty press starts the point lasso,
-    /// and the layer itself is never moved or re-selected mid-edit — that is
-    /// the whole difference between editing a shape and editing its points.
-    ///
-    /// Returns false only when the mode has nothing to say about the press (no
-    /// node behind it), so the caller can fall through to the normal tool path.
-    fn vector_press(&mut self, world: Point) -> bool {
-        let Some(id) = self.app.vector_edit_mode.selected_node.clone() else {
-            return false;
-        };
-        let node = {
-            let doc = self.app.doc();
-            x_native::editor::find(&doc.editor_ref().root, &id).cloned()
-        };
-        let Some(node) = node else {
-            // the layer is gone (deleted, or undo walked past it): leave the
-            // mode instead of hit-testing anchors that no longer exist
-            self.dispatch(Action::ExitVectorEditMode);
-            return true;
-        };
-        // Two tools keep their own behaviour even inside the mode: Hand pans
-        // (space-drag already returned before this), and the Eraser erases
-        // segments — neither should be captured by an anchor lasso.
-        if matches!(self.app.tool, Tool::Hand | Tool::Eraser) {
-            return false;
-        }
-        // The tolerance is a SCREEN distance, so it shrinks in world units as
-        // the user zooms in — and it is the drawn size plus a couple of pixels,
-        // which keeps "what you can grab" equal to "what you can see".
-        let zoom = self.app.zoom.max(1e-3);
-        let anchor_tol = (crate::editor_ui::ANCHOR_HALF + 2.0) / zoom;
-        let handle_tol = (crate::editor_ui::HANDLE_HALF + 2.0) / zoom;
-        let (alt, pen) = (self.app.alt, self.app.tool == Tool::Pen);
-
-        // 1. a control handle wins: it is the smaller target sitting on the
-        //    tangent line, and grabbing it must never move the anchor with it
-        if self.app.vector_edit_mode.show_handles {
-            if let Some(hit) =
-                x_native::editor::handle_at_world(&node, world.x, world.y, handle_tol)
-            {
-                if self.app.doc().editor().begin_path_gesture(&id) {
-                    self.app.drag = Some(Drag::VectorHandle {
-                        anchor_idx: hit.anchor,
-                        outgoing: hit.outgoing,
-                    });
-                    return true;
-                }
-            }
-        }
-
-        // 2. an anchor: plain click selects it (⇧ adds to the selection),
-        //    ⌥-click converts a curved point back to a corner, and dragging
-        //    moves every selected anchor as ONE undoable gesture
-        if let Some(anchor) = x_native::editor::anchor_at_world(&node, world.x, world.y, anchor_tol)
-        {
-            if alt {
-                self.dispatch(Action::RemoveBezierHandles(anchor));
-                return true;
-            }
-            // With the PEN tool, dragging an anchor pulls its handles out —
-            // that is how a corner becomes a curve. With the move tool the same
-            // drag slides the point (and every other selected point with it).
-            if pen {
-                if self.app.doc().editor().begin_path_gesture(&id) {
-                    self.app.drag = Some(Drag::VectorBend { anchor_idx: anchor });
-                }
-                return true;
-            }
-            let already = self.app.vector_edit_mode.selected_points.contains(&anchor);
-            if !already || self.app.shift {
-                self.dispatch(Action::SelectVectorPoint(anchor));
-            }
-            if self.app.doc().editor().begin_path_gesture(&id) {
-                self.app.drag = Some(Drag::VectorPoint { last: world });
-            }
-            return true;
-        }
-
-        // 3. pen tool: it keeps drawing THE SELECTED path (Figma's pen
-        //    continues the open path) instead of starting a new polygon. On a
-        //    segment it cuts an anchor in where the pen clicked.
-        if pen {
-            if let Some(seg) =
-                x_native::editor::segment_at_world(&node, world.x, world.y, anchor_tol)
-            {
-                if seg > 0 {
-                    let (lx, ly) = x_native::editor::local_point(&node, world.x, world.y);
-                    self.dispatch(Action::AddVectorPoint {
-                        segment_idx: seg,
-                        position: (lx, ly),
-                    });
-                    return true;
-                }
-            }
-            if self
-                .app
-                .doc()
-                .editor()
-                .pen_add_anchor_world(&id, world.x, world.y)
-            {
-                self.app.mark_dirty();
-                self.sync_vector_edit_mode();
-            }
-            return true;
-        }
-
-        // 4. empty canvas with the move tool: rubber-band the anchors. A release
-        //    without movement is a click, which drops the ANCHOR selection and
-        //    leaves the layer selected (Figma's node-edit click).
-        if self.app.tool == Tool::Select {
-            self.app.drag = Some(Drag::VectorLasso {
-                start: world,
-                cur: world,
-            });
-            return true;
-        }
-        // every other tool (a shape tool, the comment pin) falls through to its
-        // own press handler
-        false
-    }
-
-    /// Apply a stroke cap to BOTH ends of the selected layer(s). The engine
-    /// keeps the ends separate (`set_stroke_cap_start` / `_end`) because that is
-    /// what Figma's stroke panel exposes; the palette has no parameter to ask
-    /// for, so its cap entries say "both ends" and mean it.
-    fn apply_stroke_caps(&mut self, cap: x_native::StrokeCap) {
-        let ids = self.app.doc().editor().selection.clone();
-        if ids.is_empty() {
-            self.app.status = "Select a layer with a stroke first".into();
-            return;
-        }
-        let mut changed = 0usize;
-        for id in &ids {
-            let editor = self.app.doc().editor();
-            // either end changing counts: a node already capped at one end still
-            // needs the other
-            let a = editor.set_stroke_cap_start(id, cap);
-            let b = editor.set_stroke_cap_end(id, cap);
-            if a || b {
-                changed += 1;
-            }
-        }
-        if changed > 0 {
-            self.app.mark_dirty();
-            self.app.status = format!("Cap set on {changed} layer(s): {cap:?}");
-        } else {
-            self.app.status = "Those layers already use that cap".into();
-        }
-    }
-
-    /// A world-space pointer delta expressed in a node's LOCAL units, so a drag
-    /// moves the path by the right amount when the node is scaled or rotated.
-    fn local_delta(&self, node: &x_native::Node, from: Point, to: Point) -> (f64, f64) {
-        let (ax, ay) = x_native::editor::local_point(node, from.x, from.y);
-        let (bx, by) = x_native::editor::local_point(node, to.x, to.y);
-        (bx - ax, by - ay)
-    }
-
-    /// The node a live vector drag is acting on, cloned out so the pointer
-    /// handlers can convert coordinates without holding the document borrow.
-    fn vector_drag_node(&self) -> Option<(String, x_native::Node)> {
-        let id = self.app.vector_edit_mode.selected_node.clone()?;
-        let doc = self.app.doc_ref();
-        let node = x_native::editor::find(&doc.editor_ref().root, &id)?.clone();
-        Some((id, node))
-    }
 
     /// Font face for editor ink, resolved exactly like the renderer:
     /// family (run override, then node binding) at the weight, else the
@@ -3111,6 +2915,205 @@ impl App {
 }
 
 impl Host {
+    // ── vector edit mode: engine <-> app mirroring, pointer handling ──
+
+    /// Mirror the engine's vector edit mode into the app struct the canvas
+    /// overlay reads: `editor_ui` draws anchors and handles from
+    /// `app.vector_edit_mode`, and it must not borrow the document while it
+    /// paints. Called after every mode/selection change.
+    fn sync_vector_edit_mode(&mut self) {
+        let (active, node, points) = {
+            let editor = self.app.doc().editor_ref();
+            (
+                editor.vector_edit_active,
+                editor.vector_edit_node.clone(),
+                editor.vector_edit_selected_points.clone(),
+            )
+        };
+        self.app.vector_edit_mode.active = active;
+        self.app.vector_edit_mode.selected_node = node;
+        self.app.vector_edit_mode.selected_points = points;
+    }
+
+    /// The layer a path command should act on: the node in vector edit mode,
+    /// else the single selected layer — so the palette's path commands work
+    /// without entering node edit mode first.
+    fn vector_edit_id(&mut self) -> Option<String> {
+        let editor = self.app.doc().editor();
+        if let Some(id) = editor.vector_edit_target() {
+            return Some(id.to_string());
+        }
+        editor.selection.first().cloned()
+    }
+
+    /// Canvas press while vector edit mode is active. Anchors and control
+    /// handles are hit BEFORE the layer, an empty press starts the point lasso,
+    /// and the layer itself is never moved or re-selected mid-edit — that is
+    /// the whole difference between editing a shape and editing its points.
+    ///
+    /// Returns false only when the mode has nothing to say about the press (no
+    /// node behind it), so the caller can fall through to the normal tool path.
+    fn vector_press(&mut self, world: Point) -> bool {
+        let Some(id) = self.app.vector_edit_mode.selected_node.clone() else {
+            return false;
+        };
+        let node = {
+            let doc = self.app.doc();
+            x_native::editor::find(&doc.editor_ref().root, &id).cloned()
+        };
+        let Some(node) = node else {
+            // the layer is gone (deleted, or undo walked past it): leave the
+            // mode instead of hit-testing anchors that no longer exist
+            self.dispatch(Action::ExitVectorEditMode);
+            return true;
+        };
+        // Two tools keep their own behaviour even inside the mode: Hand pans
+        // (space-drag already returned before this), and the Eraser erases
+        // segments — neither should be captured by an anchor lasso.
+        if matches!(self.app.tool, Tool::Hand | Tool::Eraser) {
+            return false;
+        }
+        // The tolerance is a SCREEN distance, so it shrinks in world units as
+        // the user zooms in — and it is the drawn size plus a couple of pixels,
+        // which keeps "what you can grab" equal to "what you can see".
+        let zoom = self.app.zoom.max(1e-3);
+        let anchor_tol = (crate::editor_ui::ANCHOR_HALF + 2.0) / zoom;
+        let handle_tol = (crate::editor_ui::HANDLE_HALF + 2.0) / zoom;
+        let (alt, pen) = (self.app.alt, self.app.tool == Tool::Pen);
+
+        // 1. a control handle wins: it is the smaller target sitting on the
+        //    tangent line, and grabbing it must never move the anchor with it
+        if self.app.vector_edit_mode.show_handles {
+            if let Some(hit) =
+                x_native::editor::handle_at_world(&node, world.x, world.y, handle_tol)
+            {
+                if self.app.doc().editor().begin_path_gesture(&id) {
+                    self.app.drag = Some(Drag::VectorHandle {
+                        anchor_idx: hit.anchor,
+                        outgoing: hit.outgoing,
+                    });
+                    return true;
+                }
+            }
+        }
+
+        // 2. an anchor: plain click selects it (⇧ adds to the selection),
+        //    ⌥-click converts a curved point back to a corner, and dragging
+        //    moves every selected anchor as ONE undoable gesture
+        if let Some(anchor) = x_native::editor::anchor_at_world(&node, world.x, world.y, anchor_tol)
+        {
+            if alt {
+                self.dispatch(Action::RemoveBezierHandles(anchor));
+                return true;
+            }
+            // With the PEN tool, dragging an anchor pulls its handles out —
+            // that is how a corner becomes a curve. With the move tool the same
+            // drag slides the point (and every other selected point with it).
+            if pen {
+                if self.app.doc().editor().begin_path_gesture(&id) {
+                    self.app.drag = Some(Drag::VectorBend { anchor_idx: anchor });
+                }
+                return true;
+            }
+            let already = self.app.vector_edit_mode.selected_points.contains(&anchor);
+            if !already || self.app.shift {
+                self.dispatch(Action::SelectVectorPoint(anchor));
+            }
+            if self.app.doc().editor().begin_path_gesture(&id) {
+                self.app.drag = Some(Drag::VectorPoint { last: world });
+            }
+            return true;
+        }
+
+        // 3. pen tool: it keeps drawing THE SELECTED path (Figma's pen
+        //    continues the open path) instead of starting a new polygon. On a
+        //    segment it cuts an anchor in where the pen clicked.
+        if pen {
+            if let Some(seg) =
+                x_native::editor::segment_at_world(&node, world.x, world.y, anchor_tol)
+            {
+                if seg > 0 {
+                    let (lx, ly) = x_native::editor::local_point(&node, world.x, world.y);
+                    self.dispatch(Action::AddVectorPoint {
+                        segment_idx: seg,
+                        position: (lx, ly),
+                    });
+                    return true;
+                }
+            }
+            if self
+                .app
+                .doc()
+                .editor()
+                .pen_add_anchor_world(&id, world.x, world.y)
+            {
+                self.app.mark_dirty();
+                self.sync_vector_edit_mode();
+            }
+            return true;
+        }
+
+        // 4. empty canvas with the move tool: rubber-band the anchors. A release
+        //    without movement is a click, which drops the ANCHOR selection and
+        //    leaves the layer selected (Figma's node-edit click).
+        if self.app.tool == Tool::Select {
+            self.app.drag = Some(Drag::VectorLasso {
+                start: world,
+                cur: world,
+            });
+            return true;
+        }
+        // every other tool (a shape tool, the comment pin) falls through to its
+        // own press handler
+        false
+    }
+
+    /// Apply a stroke cap to BOTH ends of the selected layer(s). The engine
+    /// keeps the ends separate (`set_stroke_cap_start` / `_end`) because that is
+    /// what Figma's stroke panel exposes; the palette has no parameter to ask
+    /// for, so its cap entries say "both ends" and mean it.
+    fn apply_stroke_caps(&mut self, cap: x_native::StrokeCap) {
+        let ids = self.app.doc().editor().selection.clone();
+        if ids.is_empty() {
+            self.app.status = "Select a layer with a stroke first".into();
+            return;
+        }
+        let mut changed = 0usize;
+        for id in &ids {
+            let editor = self.app.doc().editor();
+            // either end changing counts: a node already capped at one end still
+            // needs the other
+            let a = editor.set_stroke_cap_start(id, cap);
+            let b = editor.set_stroke_cap_end(id, cap);
+            if a || b {
+                changed += 1;
+            }
+        }
+        if changed > 0 {
+            self.app.mark_dirty();
+            self.app.status = format!("Cap set on {changed} layer(s): {cap:?}");
+        } else {
+            self.app.status = "Those layers already use that cap".into();
+        }
+    }
+
+    /// A world-space pointer delta expressed in a node's LOCAL units, so a drag
+    /// moves the path by the right amount when the node is scaled or rotated.
+    fn local_delta(&self, node: &x_native::Node, from: Point, to: Point) -> (f64, f64) {
+        let (ax, ay) = x_native::editor::local_point(node, from.x, from.y);
+        let (bx, by) = x_native::editor::local_point(node, to.x, to.y);
+        (bx - ax, by - ay)
+    }
+
+    /// The node a live vector drag is acting on, cloned out so the pointer
+    /// handlers can convert coordinates without holding the document borrow.
+    fn vector_drag_node(&self) -> Option<(String, x_native::Node)> {
+        let id = self.app.vector_edit_mode.selected_node.clone()?;
+        let doc = self.app.doc_ref();
+        let node = x_native::editor::find(&doc.editor_ref().root, &id)?.clone();
+        Some((id, node))
+    }
+
     // ------------------------------------------------------- interaction
 
     /// Right-click: select what's under the cursor (Figma behavior), then

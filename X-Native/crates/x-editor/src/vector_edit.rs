@@ -964,7 +964,7 @@ pub fn bend_anchor(
     // incoming segment: the command that LANDS on this anchor
     if prev.is_some() {
         if let PathCmd::LineTo(x, y) = p[a.cmd_index] {
-            let (c1x, c1y, c2x, c2y) = third((prev.map(|q| (q.x, q.y)).unwrap_or((x, y))), (x, y));
+            let (c1x, c1y, c2x, c2y) = third(prev.map(|q| (q.x, q.y)).unwrap_or((x, y)), (x, y));
             p[a.cmd_index] = PathCmd::CurveTo(c1x, c1y, c2x, c2y, x, y);
         }
         if let PathCmd::CurveTo(c1x, c1y, _, _, x, y) = p[a.cmd_index] {
