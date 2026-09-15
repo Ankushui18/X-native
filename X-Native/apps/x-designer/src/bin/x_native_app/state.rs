@@ -866,6 +866,11 @@ pub enum Drag {
     /// Moving the current selection.
     MoveSel {
         last: Point,
+        /// Undo-stack depth when the press started the gesture. Every
+        /// mouse event pushes its own `Command::Move`, so release merges
+        /// `undo_depth() - base_depth` entries into ONE undo step (one
+        /// Ctrl+Z reverts the whole drag).
+        base_depth: usize,
     },
     /// Rubber-band selection.
     Marquee {
@@ -890,6 +895,9 @@ pub enum Drag {
         corner: usize,
         orig: (f64, f64, f64, f64), // x, y, w, h at drag start
         start: Point,
+        /// Undo-stack depth at press; release merges the per-event resize
+        /// entries into ONE undo step (see `MoveSel::base_depth`).
+        base_depth: usize,
     },
     /// Pen-tool polyline in progress (world-space points).
     Pen {

@@ -117,7 +117,8 @@ pub fn alignment_guides(root: &Node, moving_id: &str, tol: f64) -> Vec<(bool, f6
         tol,
         &mut guides,
     );
-    guides.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    // total_cmp: a NaN guide coordinate must not panic the smart-guide sort
+    guides.sort_by(|a, b| a.total_cmp(b));
     guides.dedup_by(|a, b| a.0 == b.0 && (a.1 - b.1).abs() < 0.5);
     guides
 }

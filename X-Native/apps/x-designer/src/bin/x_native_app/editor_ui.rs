@@ -1025,8 +1025,12 @@ fn paint_title(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             12.0,
             if hover(app, cx_r) { C_TEXT } else { C_DIM },
         );
-        hit.push((cx_r, Action::CloseDoc(i)));
+        // hit zones are scanned in reverse, so the MORE SPECIFIC zone must
+        // be pushed LAST: the ✕ must beat the whole-tab SelectDoc zone that
+        // contains it (pushing SelectDoc last made clicks on ✕ select the
+        // tab instead of closing it)
         hit.push((r, Action::SelectDoc(i)));
+        hit.push((cx_r, Action::CloseDoc(i)));
         x += tab_w;
     }
 
@@ -1729,10 +1733,12 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     // divider at 218
     hline(s, sx, lw, y0 + 182.0, C_LINE);
 
-    // PAGE header — audit: label top 231, search icon 12px at (255, 231.8)
-    let page_name = format!("PAGE {}", cur_page + 1);
+    // LAYERS header — audit: label top 231, search icon 12px at (255, 231.8).
+    // This section lists the page's layers, so it is headed "LAYERS" (the
+    // page name lives in the PAGES section field above, matching the
+    // left-panel mock's PAGE → LAYERS order); it used to say "PAGE N".
     app.fonts
-        .micro_label(s, sx + 12.0, y0 + 195.0, &page_name, C_DIM, Wt::Med);
+        .micro_label(s, sx + 12.0, y0 + 195.0, "LAYERS", C_DIM, Wt::Med);
     draw_icon(s, "search", lw - 25.0, y0 + 195.8, 12.0, C_DIM);
 
     // tree (scrollable) from 252.5
@@ -2225,7 +2231,9 @@ fn num_str(v: f64, unit: &str) -> String {
 pub fn typo_val(app: &App, which: Typo) -> String {
     let Some(t) = app.selected_text_typo() else {
         return match which {
-            Typo::Family => "Manrope".into(),
+            // default family = the document's default font (Inter), not a
+            // hardcoded third family
+            Typo::Family => "Inter".into(),
             Typo::Weight => "Regular".into(),
             Typo::Size => "14".into(),
             Typo::LineHeight => "20".into(),

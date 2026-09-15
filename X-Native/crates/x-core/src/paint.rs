@@ -127,8 +127,9 @@ impl Paint {
             | Paint::AngularGradient { stops, .. }
             | Paint::DiamondGradient { stops, .. } => {
                 stops.push((position, color));
-                // Sort by position
-                stops.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                // Sort by position (total_cmp: a NaN stop position must not
+                // panic the gradient sort)
+                stops.sort_by(|a, b| a.0.total_cmp(&b.0));
             }
             _ => {}
         }
@@ -159,8 +160,8 @@ impl Paint {
                 if index < stops.len() =>
             {
                 stops[index].0 = new_position.clamp(0.0, 1.0);
-                // Re-sort
-                stops.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                // Re-sort (total_cmp: NaN-proof, same as add_stop)
+                stops.sort_by(|a, b| a.0.total_cmp(&b.0));
             }
             _ => {}
         }
@@ -614,6 +615,36 @@ mod tests {
         assert!((mid.r as i32 - 140).abs() <= 2, "r ~140, got {}", mid.r);
         assert!((mid.g as i32 - 83).abs() <= 2, "g ~83, got {}", mid.g);
         assert!((mid.b as i32 - 162).abs() <= 2, "b ~162, got {}", mid.b);
+    }
+
+    #[test]
+    fn nan_stop_positions_do_not_panic_the_sort() {
+        // AUDIT: gradient stop sorting used partial_cmp().unwrap() — a NaN
+        // position (0.0/0.0, import garbage) panicked the app mid-paint.
+        // total_cmp orders NaN past every finite stop instead.
+        let mut p = Paint::linear_gradient(
+            (0.0, 0.0),
+            (100.0, 0.0),
+            vec![
+                (0.0f32, Color::from_rgb8(255, 0, 0)),
+                (1.0f32, Color::from_rgb8(0, 0, 255)),
+            ],
+            GradSpace::Srgb,
+        );
+        p.add_stop(f32::NAN, Color::from_rgb8(0, 255, 0));
+        p.add_stop(0.5, Color::from_rgb8(255, 255, 0));
+        // clamp keeps NaN (NaN.clamp(0,1) == NaN), so move_stop is a real
+        // NaN path too
+        p.move_stop(0, f32::NAN);
+        if let Paint::LinearGradient { stops, .. } = &p {
+            let pos: Vec<f32> = stops.iter().map(|(t, _)| *t).collect();
+            assert_eq!(pos.len(), 4);
+            assert_eq!(pos[0], 0.5, "finite stops keep natural order");
+            assert_eq!(pos[1], 1.0);
+            assert!(pos[2].is_nan() && pos[3].is_nan(), "NaN parked at the end");
+        } else {
+            panic!("expected LinearGradient");
+        }
     }
 
     #[test]

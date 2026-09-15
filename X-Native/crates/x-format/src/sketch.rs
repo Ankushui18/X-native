@@ -1957,13 +1957,17 @@ mod tests {
             "color from attribute run"
         );
         // and the render IR actually carries it: PX CONTRACT — the IR size
-        // is the real glyph px (legacy em 24 pre-scaled by 0.72), named font
+        // is the real glyph px (legacy em 24 pre-scaled by 0.72), named
+        // font. The page frame's own name label (QA-004) is a separate
+        // Glyphs command, so collect the TEXT node's command only.
         let tree = x_render::build_render_tree(&doc.pages[0], &x_core::Variables::default());
         let glyphs = tree
             .commands
             .iter()
             .filter_map(|c| match c {
-                x_render::RenderCommand::Glyphs { size, font, .. } => Some((*size, font.clone())),
+                x_render::RenderCommand::Glyphs {
+                    text, size, font, ..
+                } if text == "Headline" => Some((*size, font.clone())),
                 _ => None,
             })
             .collect::<Vec<_>>();

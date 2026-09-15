@@ -204,7 +204,8 @@ mod tests {
         );
 
         // without content, the anchor placeholder renders instead (a frame
-        // with no fill produces no extra rect — count stays 1)
+        // with no fill produces no extra rect — only the master bg fills,
+        // plus the QA-004 name labels of the root and the anchor frame)
         let mut master2 = Node::component("def2", "Card", 200.0, 100.0)
             .child(Node::rect("bg", 0.0, 0.0, 200.0, 100.0, Color::BLACK))
             .child(Node::frame("body", 184.0, 60.0));
@@ -218,10 +219,16 @@ mod tests {
             .child(master2)
             .child(Node::instance("i2", "Card", 0.0, 0.0, 200.0, 100.0));
         let tree2 = build_render_tree(&plain, &Variables::default());
+        let fills2: Vec<&RenderCommand> = tree2
+            .commands
+            .iter()
+            .filter(|c| matches!(c, RenderCommand::FillPath { .. }))
+            .collect();
+        assert_eq!(fills2.len(), 1, "only master bg fills: {:?}", tree2.commands);
         assert_eq!(
             tree2.commands.len(),
-            1,
-            "only master bg: {:?}",
+            3,
+            "master bg + root label + anchor-frame label: {:?}",
             tree2.commands
         );
     }

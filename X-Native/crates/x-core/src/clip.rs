@@ -213,7 +213,8 @@ fn clip_once(s: &[Pt], c: &[Pt], op: ClipOp) -> Result<Vec<Vec<Pt>>, bool> {
                 processed: false,
             });
             let _ = i;
-            on[i].sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            // total_cmp: a NaN event parameter must not panic the clipper
+            on[i].sort_by(|a, b| a.0.total_cmp(&b.0));
             for (_, id) in &on[i] {
                 id2[*id] = arena.len();
                 arena.push(V {

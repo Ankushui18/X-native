@@ -247,7 +247,14 @@ fn t13_canvas_and_export_must_encode_the_same_fill_stack() {
         .count();
     assert_eq!(export_fills, 2);
     let canvas = h.app.canvas_scene();
-    assert_eq!(canvas.encoding().n_paths as usize, export_fills);
+    // canvas = the export's fills + the root frame's name label glyphs
+    // (QA-004: one glyph path per character, as in the direct encoder)
+    let label = h.app.doc_ref().editor_ref().root.name.chars().count();
+    assert_eq!(
+        canvas.encoding().n_paths as usize,
+        export_fills + label,
+        "canvas paths = export fills + frame-name label"
+    );
 }
 
 #[test]
@@ -2012,4 +2019,77 @@ fn text_styles_create_apply_update_and_detach_end_to_end() {
     assert_eq!(h.app.apply_text_style("New style"), 0);
     assert!(h.app.create_text_style_from_selection().is_none());
     assert_eq!(h.app.detach_text_style_from_selection(), 0);
+}
+
+#[test]
+fn t16_layer_drag_merges_into_one_undo_step() {
+    // AUDIT: dragging a layer pushed one undo entry per mouse event, so a
+    // single gesture needed N Ctrl+Zs. Release must merge the gesture into
+    // ONE step (the engine's merge_last), reverting the whole drag at once.
+    let mut h = host();
+    h.app.doc().editor().selection = vec!["frame-1".into()];
+    let depth0 = h.app.doc().editor_ref().undo_depth();
+
+    // press the demo frame's center and drag it 30pt in three events
+    let p0 = h.app.world_to_screen(Point::new(187.5, 270.0));
+    h.app.mouse = p0;
+    h.on_press(p0);
+    for i in 1..=3 {
+        let p = h.app.world_to_screen(Point::new(187.5 + i as f64 * 10.0, 270.0));
+        h.app.mouse = p;
+        h.on_move(p);
+    }
+    h.on_release();
+
+    assert_eq!(
+        h.app.doc().editor_ref().undo_depth(),
+        depth0 + 1,
+        "three move events = ONE undo step after release"
+    );
+    let x_after = find_node_clone(&h.app.doc_ref().editor_ref().root, "frame-1")
+        .unwrap()
+        .transform.x;
+    assert!((x_after - 30.0).abs() < 0.01, "frame moved 30pt, got {x_after}");
+    // one undo reverts the whole gesture
+    assert!(h.app.doc().editor().undo());
+    let x0 = find_node_clone(&h.app.doc_ref().editor_ref().root, "frame-1")
+        .unwrap()
+        .transform.x;
+    assert!(x0.abs() < 0.01, "one undo reverted the entire drag, got {x0}");
+}
+
+#[test]
+fn t17_tab_close_button_closes_the_tab_not_selects_it() {
+    // AUDIT: the ✕ sat inside the whole-tab SelectDoc zone and the hit
+    // scan (reverse push order) let the tab zone win, so clicking ✕ just
+    // selected the tab. The close zone must resolve to CloseDoc.
+    let mut h = host();
+    h.app.docs.push(OpenDoc::demo_blank("Second".into()));
+    h.app.compose_frame(); // paint the chrome and build its hit zones
+    let close_r = h
+        .app
+        .hit
+        .iter()
+        .find(|(_, a)| matches!(a, Action::CloseDoc(0)))
+        .map(|(r, _)| *r)
+        .expect("tab ✕ hit zone is registered");
+    let p = close_r.center();
+    // the UI resolves hits in reverse push order — the zone under the ✕
+    // must be CloseDoc(0), not the containing SelectDoc(0)
+    let resolved = h
+        .app
+        .hit
+        .iter()
+        .rev()
+        .find(|(r, _)| r.contains(p))
+        .map(|(_, a)| a.clone());
+    assert!(
+        matches!(resolved, Some(Action::CloseDoc(0))),
+        "✕ resolves to CloseDoc(0), got {resolved:?}"
+    );
+    // end-to-end through the real press handler
+    h.app.mouse = p;
+    h.on_press(p);
+    assert_eq!(h.app.docs.len(), 1, "pressing ✕ closed the tab");
+    assert_eq!(h.app.docs[0].name, "Second");
 }

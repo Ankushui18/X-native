@@ -2856,7 +2856,10 @@ impl App {
             return false;
         }
         self.pending_text_edit = Some((id, p));
-        self.drag = Some(Drag::MoveSel { last: world });
+        self.drag = Some(Drag::MoveSel {
+            last: world,
+            base_depth: self.doc().editor_ref().undo_depth(),
+        });
         true
     }
 
@@ -3496,7 +3499,10 @@ impl Host {
                     }
                     self.app.doc().editor().click_select(world, shift, deep);
                     self.app.mark_dirty();
-                    self.app.drag = Some(Drag::MoveSel { last: world });
+                    self.app.drag = Some(Drag::MoveSel {
+                        last: world,
+                        base_depth: self.app.doc().editor_ref().undo_depth(),
+                    });
                 } else {
                     if !self.app.shift {
                         self.app.doc().editor().selection.clear();
@@ -3664,6 +3670,9 @@ impl Host {
         if editor.selection.is_empty() {
             return None;
         }
+        // undo depth at press: release merges the per-event resize entries
+        // so one Ctrl+Z reverts the whole corner drag
+        let base_depth = editor.undo_depth();
 
         // Get combined bounding box for multi-selection
         let mut single: Option<x_native::Node> = None;
@@ -3719,6 +3728,7 @@ impl Host {
             corner,
             orig: (x, y, w, h),
             start: world,
+            base_depth,
         })
     }
 
@@ -3741,14 +3751,14 @@ impl Host {
             Some(Drag::Pan { start, start_pan }) => {
                 self.app.pan = (start_pan.0 + p.x - start.x, start_pan.1 + p.y - start.y);
             }
-            Some(Drag::MoveSel { last }) => {
+            Some(Drag::MoveSel { last, .. }) => {
                 let world = self.app.screen_to_world(p);
                 let dx = world.x - last.x;
                 let dy = world.y - last.y;
                 if dx != 0.0 || dy != 0.0 {
                     self.app.pending_text_edit = None; // a drag moves, no caret
                     self.smart_move(dx, dy);
-                    if let Some(Drag::MoveSel { last }) = self.app.drag.as_mut() {
+                    if let Some(Drag::MoveSel { last, .. }) = self.app.drag.as_mut() {
                         *last = world;
                     }
                 }
@@ -3834,6 +3844,7 @@ impl Host {
                 corner,
                 orig: (ox, oy, ow, oh),
                 start,
+                ..
             }) => {
                 let world = self.app.screen_to_world(p);
 
@@ -4339,6 +4350,30 @@ impl Host {
                 }
                 self.app.drag = None;
                 self.app.tool = Tool::Select;
+            }
+            // Layer move ends on release: every mouse event pushed its own
+            // undo entry, so merge the whole gesture into ONE step — a
+            // single Ctrl+Z reverts the drag (Figma semantics).
+            Some(Drag::MoveSel { base_depth, .. }) => {
+                {
+                    let doc = self.app.doc();
+                    let editor = doc.editor();
+                    editor.merge_last(editor.undo_depth().saturating_sub(base_depth));
+                }
+                self.app.drag = None;
+                // a click (no movement) on already-selected text still
+                // places the caret — the gesture pushed nothing to merge
+                if self.app.finish_pending_text_edit() {
+                    self.app.mark_dirty();
+                }
+            }
+            // Layer corner-resize ends on release: same one-gesture =
+            // one-step merge as MoveSel.
+            Some(Drag::ResizeSel { base_depth, .. }) => {
+                let doc = self.app.doc();
+                let editor = doc.editor();
+                editor.merge_last(editor.undo_depth().saturating_sub(base_depth));
+                self.app.drag = None;
             }
             _ => {
                 self.app.drag = None;
@@ -10301,9 +10336,10 @@ mod tests {
         assert_eq!(typo_val(&app, Typo::LineHeight), "19.6");
         assert_eq!(typo_val(&app, Typo::Family), "Inter");
 
-        // nothing selected → the HTML-spec defaults (pixel parity states)
+        // nothing selected → the document defaults (family = Inter, the
+        // default font; the no-selection state must not invent a third)
         app.doc().editor().selection.clear();
-        assert_eq!(typo_val(&app, Typo::Family), "Manrope");
+        assert_eq!(typo_val(&app, Typo::Family), "Inter");
         assert_eq!(typo_val(&app, Typo::LetterSpacing), "-0.16px");
         app.doc().editor().selection = vec!["tx".into()];
 

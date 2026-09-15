@@ -1356,6 +1356,40 @@ fn lower(
                 opacity,
                 override_color,
             );
+            // the frame's own NAME as a canvas label (QA-004) — the same
+            // header Glyphs command the Section arm emits, so frame names
+            // appear on the canvas like section names; children render
+            // through the shared path below, after the clip scope
+            let name = if node.name.is_empty() {
+                "Frame"
+            } else {
+                node.name.as_str()
+            };
+            tree.commands.push(RenderCommand::Glyphs {
+                key: format!("{key}/label"),
+                transform: world * Affine::translate((14.0, 10.0)),
+                text: name.to_string(),
+                size: 18.0,
+                brush: layer_brush(
+                    &Paint::Solid(Color::from_rgba8(0x4b, 0x55, 0x63, 0xff)),
+                    vars,
+                    opacity,
+                ),
+                max_width: (node.w - 20.0).max(8.0),
+                font: None,
+                letter_spacing: 0.0,
+                line_height: 1.2,
+                lh_mode: 0,
+                lh_value: 0.0,
+                wrap: x_core::TextWrap::Auto,
+                word_spacing: 0.0,
+                paragraph_spacing: 0.0,
+                baseline_shift: 0.0,
+                small_caps: false,
+                optical_size: 0.0,
+                width_axis: 0.0,
+                runs: vec![],
+            });
             // A frame clips its children ONLY when it actually has rounded
             // corners — the visually load-bearing case (content must not
             // stick out of the radii). Square frames behave like groups:
@@ -1683,15 +1717,16 @@ mod tests {
         }];
         let d = Node::frame("page", 300.0, 100.0).child(t);
         let tree = build_render_tree(&d, &Variables::default());
+        // the text node's OWN Glyphs command — the root frame's name label
+        // (QA-004) is a separate, earlier command
         let runs = tree
             .commands
             .iter()
-            .find_map(|c| {
-                if let RenderCommand::Glyphs { runs, .. } = c {
+            .find_map(|c| match c {
+                RenderCommand::Glyphs { text, runs, .. } if text == "Hello world" => {
                     Some(runs)
-                } else {
-                    None
                 }
+                _ => None,
             })
             .expect("glyphs command");
         assert_eq!(runs.len(), 2, "styled + unstyled part, got {runs:?}");
@@ -1714,18 +1749,51 @@ mod tests {
         let d =
             Node::frame("page", 300.0, 100.0).child(Node::text("t", 10.0, 10.0, 100.0, 20.0, "hi"));
         let tree = build_render_tree(&d, &Variables::default());
+        // the text node's OWN command, not the frame's name label
         let runs = tree
             .commands
             .iter()
-            .find_map(|c| {
-                if let RenderCommand::Glyphs { runs, .. } = c {
-                    Some(runs)
-                } else {
-                    None
-                }
+            .find_map(|c| match c {
+                RenderCommand::Glyphs { text, runs, .. } if text == "hi" => Some(runs),
+                _ => None,
             })
             .expect("glyphs command");
         assert!(runs.is_empty(), "plain text takes the unchanged plain path");
+    }
+
+    #[test]
+    fn frame_name_loweres_to_a_canvas_label() {
+        // QA-004 on the IR path: the live canvas lowers frames through
+        // build_render_tree, so a frame's name must appear as a Glyphs
+        // command there — not just in the direct encoder (scene.rs).
+        let d = Node::frame("Hero", 300.0, 100.0)
+            .child(Node::rect("r", 0.0, 0.0, 10.0, 10.0, Color::WHITE));
+        let tree = build_render_tree(&d, &Variables::default());
+        let label = tree
+            .commands
+            .iter()
+            .find(|c| matches!(c, RenderCommand::Glyphs { text, .. } if text == "Hero"))
+            .expect("frame name label command");
+        match label {
+            RenderCommand::Glyphs { key, transform, size, max_width, .. } => {
+                assert_eq!(key, "/label");
+                // world origin + the same top-left inset the Section arm uses
+                assert!((transform.translation_y() - 10.0).abs() < 1e-9);
+                assert!((transform.translation_x() - 14.0).abs() < 1e-9);
+                assert_eq!(*size, 18.0);
+                assert_eq!(*max_width, 280.0);
+            }
+            other => panic!("expected Glyphs, got {other:?}"),
+        }
+        // an unnamed frame falls back to "Frame"
+        let anon = Node::frame("", 50.0, 50.0);
+        let t2 = build_render_tree(&anon, &Variables::default());
+        assert!(
+            t2.commands
+                .iter()
+                .any(|c| matches!(c, RenderCommand::Glyphs { text, .. } if text == "Frame")),
+            "empty name falls back to 'Frame'"
+        );
     }
 
     #[test]
