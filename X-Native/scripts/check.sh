@@ -27,7 +27,10 @@ bad()  { printf '    \033[31mFAIL\033[0m %s\n' "$1"; FAILED=$((FAILED + 1)); }
 
 # Dead code is tracked, not gated: see docs/KNOWN_DEBT.md. This number is a
 # ratchet — fixing a warning means lowering it, adding one means CI complains.
-DEAD_CODE_CEILING=${DEAD_CODE_CEILING:-76}
+# Re-measured 16 Sep 2026 after a period in which the tree did not compile and
+# therefore reported nothing: see the "Why the ceiling moved" note in
+# docs/KNOWN_DEBT.md, which itemises all 82.
+DEAD_CODE_CEILING=${DEAD_CODE_CEILING:-82}
 
 if [[ $FIX == 1 ]]; then
     step "formatting (cargo fmt)"

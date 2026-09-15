@@ -121,16 +121,23 @@ mechanical ones (`get(..).is_none()` → `!contains_key`, `assert_eq!(x, false)`
 `format!("literal")` → `.to_string()`, three `Default::default()`-then-assign
 blocks → struct literals, one single-arm `match` → `if let`).
 
-**Still open, and the reason this branch is not green yet:** the dead-code
-ratchet reads **84 against `DEAD_CODE_CEILING = 76`**. `docs/KNOWN_DEBT.md`
-documents a pile of exactly 76, measured on 12 Sep 2026 — before the tree stopped
-compiling, so the eight extra were never measured. Per file: `context_menu.rs` 32
-(as documented), `command.rs` 18 (as documented), `theme.rs` 9 (documented 8),
-`state.rs` 9 (documented 6), `x-ui/components.rs` 7 (as documented),
-`editor_ui.rs` 5 (documented 0), `chrome.rs` 3 (as documented),
-`serialize.rs` 1 (as documented), `run.rs` 0 (documented 1 — the unused `id` this
-branch turned into a guard). Reconciling that table is the last gate item;
-`check.sh` now prints the individual items when the ratchet trips, because a
+**The last gate item was the dead-code ratchet, and it needed a re-measurement
+rather than a fix.** It read 84 against `DEAD_CODE_CEILING = 76`, where
+`docs/KNOWN_DEBT.md` documented a pile of exactly 76, measured on 12 Sep 2026 —
+*before* the tree stopped compiling. A workspace that does not build reports no
+dead-code diagnostics at all, so for everything merged after that the number was
+remembered rather than measured. Per file, measured against documented:
+`context_menu.rs` 32/32, `command.rs` 18/18, `theme.rs` 9/8 (the extra is
+`R_XS`), `state.rs` 9/6, `x-ui/components.rs` 7/7, `editor_ui.rs` 5/0,
+`chrome.rs` 3/3, `serialize.rs` 1/1, `run.rs` 0/1 (the unused `id` this branch
+turned into a guard). None of the growth is from this branch: `editor_ui.rs`'s
+five are three `proto_*_label` builders for prototype pickers that were never
+built plus `extra_y`, and `state.rs`'s nine are shortcut accessors, unreached
+`Action`/`FieldId`/`NotificationKind` variants and drag-state fields that
+pre-date it. This branch deletes the two `extra_y` warnings (write-only state:
+the row height is already handled by `row_h`), re-baselines the ceiling to the
+measured **82**, and rewrites `KNOWN_DEBT.md` §1 to name every item — with
+`check.sh` now printing the list itself when the ratchet trips, because a
 per-file count cannot tell you which entry to write.
 
 Net effect on the tree: **+3,890 / −4,993 lines** across 21 files. The engine
@@ -432,12 +439,12 @@ through `ProtoRemove(usize)`), which is what makes the 172 exhaustive.
    Formatting is clean, the workspace compiles, LIVE lints are 0, **621 tests
    pass**, and the CLI smoke tests pass. §0 records every diagnostic and who
    introduced it. Everything else in this document is still static analysis.
-7. ⬜ **Reconcile the dead-code ratchet — the last red gate item.** 84 warnings
-   against `DEAD_CODE_CEILING = 76`; `docs/KNOWN_DEBT.md` documents 76, measured
-   before the tree stopped compiling. Either delete the eight undocumented ones
-   (`editor_ui.rs` 5, `state.rs` +3, `theme.rs` +1) or write them into the table
-   and move the ceiling to the measured number. `check.sh` now prints the items
-   when the ratchet trips.
+7. ✅ **Dead-code ratchet reconciled.** Measured 84 against a ceiling of 76 that
+   was last taken before the tree stopped compiling; the two write-only `extra_y`
+   warnings deleted, every remaining item named in `docs/KNOWN_DEBT.md` §1, and
+   the ceiling re-baselined to the measured 82 — upward, with the reason written
+   down in the same file, because a ratchet that moves silently is worse than one
+   that does not move.
 8. ⬜ Correct §10's doc claims in the same commit, and retire or rewrite
    `VECTOR_TOOLS_COMPLETE*.md` / `PHASE2…6_*.md`, which describe deleted code.
 

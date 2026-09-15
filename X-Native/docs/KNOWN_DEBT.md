@@ -6,7 +6,7 @@ is either measured by a command in the tree or gated by a ratchet in
 
 If you fix one of these, delete its entry and lower the relevant ceiling.
 
-## 1. Dead code (ratcheted: `DEAD_CODE_CEILING`, currently 76)
+## 1. Dead code (ratcheted: `DEAD_CODE_CEILING`, currently 82)
 
 `cargo clippy --workspace --all-targets` reports warnings that are *not*
 errors, and `scripts/check.sh` fails if the count grows past the ceiling above.
@@ -14,18 +14,40 @@ Everything else (correctness, suspicious, `unsafe_code`, `unused_must_use`,
 `dbg_macro`, `todo`) is denied in `[workspace.lints]`, so the pile below is the
 only noise the gate tolerates.
 
-Where it lives (measured 12 Sep 2026, `--message-format short`):
+Where it lives (measured 16 Sep 2026, `--message-format short`, every item named
+— the gate prints this list itself when the ratchet trips):
 
 | Count | File | Why it is still there |
 |---|---|---|
 | 32 | `apps/x-designer/src/bin/x_native_app/context_menu.rs` | `render_context_menu()` builds a display list (`ContextPaintCommand`) that no painter consumes — the live right-click menu is `editor_ui::paint_context_menu()`. Either port the renderer onto the command list (it is easier to test) or delete the module's paint half. |
 | 18 | `apps/x-designer/src/bin/x_native_app/command.rs` | The command-palette view layer (`XNativeApp::command_palette` and friends) from an earlier chrome iteration; `CommandPalette`/`CommandCategory` logic *is* used, the painter is not. |
-| 8 | `apps/x-designer/src/bin/x_native_app/theme.rs` | Role aliases no live widget calls yet (`C_ACCENT_*`, state colors). They exist so the next panel does not hand-type a hex; delete when a call site appears, not before. |
+| 9 | `apps/x-designer/src/bin/x_native_app/theme.rs` | Role aliases no live widget calls yet — `C_BASE`, `C_RAISED`, `C_EDGE`, `C_ACCENT_MUTED`, `C_ON_ACCENT`, `C_FAINT`, `R_XS`, plus the `argb`/`argba` hex helpers. They exist so the next panel does not hand-type a hex; delete when a call site appears, not before. (`R_XS` is the one added since the previous measurement.) |
+| 9 | `apps/x-designer/src/bin/x_native_app/state.rs` | Vocabulary ahead of its UI, item by item: `Tool::shortcut()` and `NavTab::shortcut()` (nothing renders shortcut hints yet); `Action`'s unreachable variants — 20 have a handler and no dispatch site, listed in `FIGMA_CREATE_DESIGNS_COMPARISON.md` §9; `FieldId::{TextAlign, TextAlignVertical, TextDecoration, TextTruncation, ListStyle, TextWrapStyle}` (the text inspector's paragraph block); `NotificationKind::{OfflineStatus, ComponentUpdate}` and `Notification.timestamp`; the `start` field of two drag-state variants; and `App::{sidebar_resizing, left_sidebar_width, symmetry_axis}` — written and never read, which is the same reason `Action::ResizeLeftSidebar` is unreachable. |
 | 7 | `crates/x-ui/src/components.rs` | Builder structs (`ButtonBuilder`, `TabBuilder`, …) that paint without reading their own fields back. Half-finished widget-kit API. |
-| 6 | `apps/x-designer/src/bin/x_native_app/state.rs` | Action variants (`NewBoard`, `Inspect`, `Text`, …) the palette/keyboard paths no longer route through. |
+| 3 | `apps/x-designer/src/bin/x_native_app/editor_ui.rs` | `proto_action_label`, `proto_action_type_label`, `proto_animation_label` — label builders for the prototype inspector's action-type and animation pickers, which are not built (`Action::ProtoActionType`, `ProtoAnimation` and `ProtoDest` all have handlers and no dispatch site). Same family as `proto_targets`, which the panel does call. |
 | 3 | `apps/x-designer/src/bin/x_native_app/chrome.rs` | Legacy `XNativeApp` chrome struct, kept because its command-palette layout code is the reference for the rewritten panel. |
 | 1 | `crates/x-format/src/serialize.rs` | `style_json` — superseded by `x_core`'s serializer, retained as the format's fallback encoder. |
-| 1 | `apps/x-designer/src/bin/x_native_app/run.rs` | Helper awaiting its call site. |
+
+### Why the ceiling moved 76 → 82 (16 Sep 2026)
+
+Upward, which is the opposite of what a ratchet is for, so it is worth being
+exact about what happened. The 76 was measured on 12 Sep. The tree then stopped
+compiling — `x-editor` called three `Editor` methods that existed nowhere — and a
+workspace that does not build produces **no dead-code diagnostics at all**, so
+from that moment the number was not measurable, only remembered. Everything
+merged in between was never counted. The first gate run that could see the whole
+workspace again reported 84.
+
+This branch is net-negative on the pile: it deleted 1,027 lines of orphan files
+(`x-core/p0_features.rs`, `x-render/vector_network.rs`), 32 unreachable `Action`
+variants, 8 phantom types, and the write-only `extra_y` in the prototype panel
+(−2 warnings, hence 82 rather than 84). Deleting the variants did not lower the
+count further because rustc groups unused variants **per enum** — one warning
+covers all twenty — so removing variants shrinks a warning, not the tally.
+
+The `run.rs` row is gone rather than grown: its single entry ("helper awaiting
+its call site") was the unused `id` in `Action::SetGradientType`, which is now an
+`is_none()` guard.
 
 ## 2. `.fig` is read, never written
 

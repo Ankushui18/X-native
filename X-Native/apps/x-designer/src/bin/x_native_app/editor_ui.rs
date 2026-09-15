@@ -6249,7 +6249,6 @@ fn paint_prototype(
             hit.push((tb, Action::ProtoTrigger(i)));
 
             // Show trigger-specific fields (delay for AfterDelay, key for KeyDown, time for WhenVideoHits)
-            let mut extra_y = 0.0;
             match &ix.trigger {
                 x_native::Trigger::AfterDelay { ms } => {
                     let db = Rect::new(x0 + 80.0, y + 4.0, x0 + 140.0, y + 20.0);
@@ -6291,7 +6290,6 @@ fn paint_prototype(
 
             // Show action-specific fields (URL for OpenLink)
             if let x_native::Action::OpenLink { url } = &ix.action {
-                extra_y = 20.0;
                 let ub = Rect::new(x0 + 5.0, y + 50.0, xr - 5.0, y + 66.0);
                 input_box(app, s, ub, 4.0);
                 let display_url = if url.is_empty() {
