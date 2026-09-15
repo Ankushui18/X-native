@@ -29,7 +29,6 @@ pub mod prototype;
 pub mod selection;
 pub mod shape_builder;
 pub mod snapping;
-pub use editor_core::{JoinStyle, MirrorMode};
 pub mod spatial;
 #[cfg(test)]
 mod tests_mod;
@@ -57,7 +56,10 @@ pub use transformed_resize::{
     anchor_norm, corner_at, corner_from_index, corner_index, handle_norm, linear, local_point,
     local_to_world, plan_resize, world_corners, world_point, ResizePlan,
 };
-pub use vector_edit::{anchor_at, anchors, segment_at, Anchor};
+pub use vector_edit::{
+    anchor_at, anchors, bend_anchor, delete_anchors, move_anchors_by, move_handle_in, reverse_path,
+    segment_at, simplify_path, split_path_at, split_segment_at, translate_path, Anchor,
+};
 pub use vector_handles::{
     anchor_at_world, anchors_of, anchors_world, anchors_world_of, handle_at_world, handles_world,
     local_scale, segment_at_world, AnchorWorld, HandleHit,

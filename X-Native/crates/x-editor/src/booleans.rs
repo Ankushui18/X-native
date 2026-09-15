@@ -172,7 +172,10 @@ impl Editor {
                     .collect::<Vec<_>>()
             })
             .collect();
-        let new_id = format!("flat-{}", self.undo_depth());
+        // a fresh id, NOT one derived from the undo depth: two flattens at the
+        // same depth would otherwise mint the same id, and a duplicate id makes
+        // every `find` in the engine ambiguous
+        let new_id = x_core::fresh_id("flat");
         let mut v = Node::vector(
             &new_id,
             0.0,
@@ -183,21 +186,46 @@ impl Editor {
         );
         v.transform.x = minx;
         v.transform.y = miny;
+        v.name = n.name.clone();
         v.fill = n.fill.clone();
         v.stroke = n.stroke.clone();
+        // flattening must not silently drop the layer's other appearance: the
+        // opacity and the effect stack always travel with the baked path, and a
+        // single shape's paint stacks travel too. A GROUP's stacks describe the
+        // group, not its children's geometry, so they are left behind rather
+        // than being applied twice.
+        v.opacity = n.opacity;
+        v.effects = n.effects.clone();
+        v.effect_layers = n.effect_layers.clone();
+        if !matches!(n.kind, NodeKind::Group) {
+            v.fill_layers = n.fill_layers.clone();
+            v.stroke_layers = n.stroke_layers.clone();
+            v.visual_stacks_materialized = n.visual_stacks_materialized;
+        }
         self.replace_child(&parent, &id, v)
     }
 
-    /// Outline Stroke (Figma): replace a stroked shape with its stroke's
-    /// outline as a filled vector path (approximate: miter joins, butt
-    /// caps; the fill takes the stroke's paint). Returns the new node id.
+    /// Outline Stroke (Figma): replace the single selected shape with its
+    /// stroke's outline. Returns the new node id (None when the selection is not
+    /// exactly one node, or that node refuses outlining).
     pub fn outline_stroke_selected(&mut self) -> Option<String> {
         if self.selection.len() != 1 {
             return None;
         }
         let id = self.selection[0].clone();
-        let n = find(&self.root, &id)?.clone();
-        let parent = parent_id(&self.root, &id)?;
+        self.outline_stroke_node(&id)
+    }
+
+    /// Outline Stroke for an EXPLICIT node — the same operation the selection
+    /// entry point performs, addressable by id so the canvas menu, the keyboard
+    /// shortcut and vector-edit mode can all reach it without touching the
+    /// selection. Replaces the node with its stroke's outline as a filled vector
+    /// path (miter joins, butt caps; the fill takes the stroke's paint, and the
+    /// stroke itself goes away). Returns the new node id, or None when the node
+    /// is missing, has no path geometry, or has no stroke width to outline.
+    pub fn outline_stroke_node(&mut self, id: &str) -> Option<String> {
+        let n = find(&self.root, id)?.clone();
+        let parent = parent_id(&self.root, id)?;
         if n.stroke.width <= 0.0 {
             return None;
         }
@@ -239,12 +267,14 @@ impl Editor {
         v.transform.x = minx + n.transform.x;
         v.transform.y = miny + n.transform.y;
         v.fill = n.stroke.paint.clone();
-        self.replace_child(&parent, &id, v)
+        self.replace_child(&parent, id, v)
     }
 }
 
-/// Translate a PathCmd by (dx, dy).
-fn c_shift(c: PathCmd, dx: f64, dy: f64) -> PathCmd {
+/// Translate a PathCmd by (dx, dy). Shared with `vector_edit` (join/offset
+/// move paths between node-local spaces), so it is crate-visible rather than
+/// a second copy of the same match.
+pub(crate) fn c_shift(c: PathCmd, dx: f64, dy: f64) -> PathCmd {
     match c {
         PathCmd::MoveTo(x, y) => PathCmd::MoveTo(x + dx, y + dy),
         PathCmd::LineTo(x, y) => PathCmd::LineTo(x + dx, y + dy),

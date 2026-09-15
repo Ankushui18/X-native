@@ -14,7 +14,6 @@ pub mod stress;
 #[cfg(test)]
 mod tests_mod;
 pub mod text_geometry;
-pub mod vector_network;
 
 pub use assets::*;
 pub use frame_cache::{FrameCache, FrameCacheStats};
@@ -33,9 +32,5 @@ pub use raster::{
 pub use scene::*;
 pub use sinks::{export_pdf, export_pdf_full, export_pdf_with_assets, thumbnail_scene, SceneCache};
 pub use stress::*;
-pub use vector_network::{
-    render_vector_network, DashPattern, LineCap, LineJoin, PathCommand, VNEdge, VNFillStyle,
-    VNNode, VNStrokeStyle, VectorNetworkInput, VectorNetworkRenderOutput, AABB,
-};
 
 pub use vello::peniko::Color;

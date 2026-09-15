@@ -10,7 +10,7 @@
 //! same API later; results are already visually correct and re-editable
 //! as vector contours.)
 
-use crate::{Node, NodeKind, PathCmd};
+use crate::{Node, NodeKind, PathCmd, StrokeJoin};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BoolOp {
@@ -508,7 +508,18 @@ pub fn arc_path_cmds(w: f64, h: f64, start: f64, end: f64) -> Vec<PathCmd> {
 /// Flatten PathCmds into polylines (cubics subdivided `steps` times).
 /// One polyline per subpath; `Close` ends its subpath.
 pub fn path_to_polylines(cmds: &[PathCmd], steps: usize) -> Vec<Vec<(f64, f64)>> {
-    let mut out: Vec<Vec<(f64, f64)>> = vec![];
+    subpaths(cmds, steps)
+        .into_iter()
+        .map(|(pts, _closed)| pts)
+        .collect()
+}
+
+/// Like [`path_to_polylines`], but each subpath keeps the bit the caller
+/// usually needs next: whether it ended with an explicit `Close`. Shared by
+/// the outline-stroke and path-offset geometry so there is exactly one cubic
+/// flattener in the crate.
+fn subpaths(cmds: &[PathCmd], steps: usize) -> Vec<(Vec<(f64, f64)>, bool)> {
+    let mut out: Vec<(Vec<(f64, f64)>, bool)> = vec![];
     let mut cur: Vec<(f64, f64)> = vec![];
     let mut last = (0.0, 0.0);
     let steps = steps.max(1);
@@ -516,7 +527,7 @@ pub fn path_to_polylines(cmds: &[PathCmd], steps: usize) -> Vec<Vec<(f64, f64)>>
         match *c {
             PathCmd::MoveTo(x, y) => {
                 if cur.len() >= 2 {
-                    out.push(cur);
+                    out.push((std::mem::take(&mut cur), false));
                 }
                 cur = vec![(x, y)];
                 last = (x, y);
@@ -544,14 +555,14 @@ pub fn path_to_polylines(cmds: &[PathCmd], steps: usize) -> Vec<Vec<(f64, f64)>>
             }
             PathCmd::Close => {
                 if cur.len() >= 2 {
-                    out.push(cur);
+                    out.push((std::mem::take(&mut cur), true));
                 }
                 cur = vec![];
             }
         }
     }
     if cur.len() >= 2 {
-        out.push(cur);
+        out.push((cur, false));
     }
     out
 }
@@ -703,6 +714,163 @@ pub fn stroke_outline(pts: &[(f64, f64)], width: f64, closed: bool) -> Vec<PathC
         emit(&poly, &mut cmds);
     }
     cmds
+}
+
+// ---------------------------------------------------------------- path offset
+
+/// Cubic flattening resolution for [`offset_path`]: subdivisions per cubic.
+/// 12 matches the outline-stroke path, so "offset" and "outline stroke" agree
+/// on how a curve becomes a polyline.
+pub const OFFSET_FLATTEN_STEPS: usize = 12;
+
+/// Shoelace area in y-down page space: positive = clockwise on screen.
+fn signed_area(pts: &[(f64, f64)]) -> f64 {
+    if pts.len() < 3 {
+        return 0.0;
+    }
+    let mut a = 0.0;
+    let mut j = pts.len() - 1;
+    for i in 0..pts.len() {
+        a += pts[j].0 * pts[i].1 - pts[i].0 * pts[j].1;
+        j = i;
+    }
+    a * 0.5
+}
+
+/// Per-vertex (incoming edge normal, outgoing edge normal); `None` for a
+/// degenerate edge, and both `None` at the ends of an open polyline.
+fn vertex_normals(
+    pts: &[(f64, f64)],
+    closed: bool,
+) -> Vec<(Option<(f64, f64)>, Option<(f64, f64)>)> {
+    let n = pts.len();
+    let usable = |v: (f64, f64)| (v.0.abs() + v.1.abs() > 1e-9).then_some(v);
+    (0..n)
+        .map(|i| {
+            let prev = if i > 0 {
+                pts[i - 1]
+            } else if closed && n > 1 {
+                pts[n - 1]
+            } else {
+                pts[i]
+            };
+            let next = if i + 1 < n {
+                pts[i + 1]
+            } else if closed && n > 1 {
+                pts[0]
+            } else {
+                pts[i]
+            };
+            (
+                usable(seg_normal(prev, pts[i])),
+                usable(seg_normal(pts[i], next)),
+            )
+        })
+        .collect()
+}
+
+/// Bevel join: two offset points per corner (one per adjacent edge normal).
+fn offset_bevel(pts: &[(f64, f64)], d: f64, closed: bool) -> Vec<(f64, f64)> {
+    let mut out: Vec<(f64, f64)> = vec![];
+    for ((n1, n2), p) in vertex_normals(pts, closed).into_iter().zip(pts) {
+        let push = |out: &mut Vec<(f64, f64)>, n: (f64, f64)| {
+            let q = (p.0 + n.0 * d, p.1 + n.1 * d);
+            let far_enough = out
+                .last()
+                .is_none_or(|r: &(f64, f64)| (r.0 - q.0).hypot(r.1 - q.1) > 1e-9);
+            if far_enough {
+                out.push(q);
+            }
+        };
+        if let Some(n) = n1.or(n2) {
+            push(&mut out, n);
+        }
+        if let Some(n) = n2 {
+            push(&mut out, n);
+        }
+    }
+    out
+}
+
+/// Round join: interpolate the normal direction across the corner in <= 15
+/// degree steps, so a round corner is a short polyline arc.
+fn offset_round(pts: &[(f64, f64)], d: f64, closed: bool) -> Vec<(f64, f64)> {
+    use std::f64::consts::{PI, TAU};
+    const STEP: f64 = PI / 12.0;
+    let mut out: Vec<(f64, f64)> = vec![];
+    for ((n1, n2), p) in vertex_normals(pts, closed).into_iter().zip(pts) {
+        match (n1, n2) {
+            (Some(a), Some(b)) => {
+                let (a0, a1) = (a.1.atan2(a.0), b.1.atan2(b.0));
+                let mut delta = (a1 - a0) % TAU;
+                if delta > PI {
+                    delta -= TAU;
+                } else if delta < -PI {
+                    delta += TAU;
+                }
+                let steps = ((delta.abs() / STEP).ceil() as usize).max(1);
+                for i in 0..=steps {
+                    let ang = a0 + delta * (i as f64 / steps as f64);
+                    out.push((p.0 + ang.cos() * d, p.1 + ang.sin() * d));
+                }
+            }
+            (Some(a), None) | (None, Some(a)) => out.push((p.0 + a.0 * d, p.1 + a.1 * d)),
+            (None, None) => out.push(*p),
+        }
+    }
+    out
+}
+
+/// Offset a path along its vertex normals — the honest version of Figma's
+/// "Offset path" (`Object > Offset path`).
+///
+/// Positive `distance` moves a CLOSED subpath OUTWARD and an open subpath to
+/// the left of travel; negative moves inward / right. Outward is decided by
+/// measuring the subpath's winding, not by assuming one, so a counter-clockwise
+/// hole in a compound path still offsets the way the designer expects.
+///
+/// Curves are flattened to polylines first ([`OFFSET_FLATTEN_STEPS`]
+/// subdivisions per cubic), so an offset path comes back polygonal — the same
+/// trade Figma makes when it re-authors the path. Corner treatment follows
+/// `join`: `Miter` reuses the stroke-outline miter (bounded by a 4x miter
+/// limit, past which it bevels), `Bevel` emits two points per corner, `Round`
+/// interpolates the normal across the corner.
+///
+/// Returns an empty vec when there is nothing to offset: a zero distance, or a
+/// path with no subpath of at least two points.
+pub fn offset_path(cmds: &[PathCmd], distance: f64, join: StrokeJoin) -> Vec<PathCmd> {
+    if !distance.is_finite() || distance.abs() < 1e-9 {
+        return vec![];
+    }
+    let mut out: Vec<PathCmd> = vec![];
+    for (pts, closed) in subpaths(cmds, OFFSET_FLATTEN_STEPS) {
+        if pts.len() < 2 {
+            continue;
+        }
+        // `seg_normal` is the LEFT normal, which points INWARD for a
+        // clockwise-on-screen polygon — flip by winding so +d is outward.
+        let d = if closed && signed_area(&pts) > 0.0 {
+            -distance
+        } else {
+            distance
+        };
+        let ring = match join {
+            StrokeJoin::Miter => offset_polyline(&pts, d, closed),
+            StrokeJoin::Bevel => offset_bevel(&pts, d, closed),
+            StrokeJoin::Round => offset_round(&pts, d, closed),
+        };
+        if ring.len() < 2 {
+            continue;
+        }
+        out.push(PathCmd::MoveTo(ring[0].0, ring[0].1));
+        for q in ring.iter().skip(1) {
+            out.push(PathCmd::LineTo(q.0, q.1));
+        }
+        if closed {
+            out.push(PathCmd::Close);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1020,5 +1188,144 @@ mod tests {
         // outer 10000 + hole traced as its own contour: |area| sums both
         // even-odd rendering makes the hole transparent; area check loose
         assert!(area > 9000.0, "ring area sum: {area}");
+    }
+
+    // ------------------------------------------------------- offset_path
+
+    /// The same square traced the other way: counter-clockwise on screen.
+    fn sq_ccw(size: f64) -> Vec<PathCmd> {
+        vec![
+            PathCmd::MoveTo(0.0, 0.0),
+            PathCmd::LineTo(0.0, size),
+            PathCmd::LineTo(size, size),
+            PathCmd::LineTo(size, 0.0),
+            PathCmd::Close,
+        ]
+    }
+
+    #[test]
+    fn offset_path_grows_a_closed_square_outward() {
+        // 90-degree corners: the miter point is exact, so +10 on a 100x100
+        // square must produce exactly a 120x120 square.
+        let out = offset_path(&sq(100.0), 10.0, StrokeJoin::Miter);
+        assert!(!out.is_empty(), "offset produced nothing");
+        assert!(
+            matches!(out.last(), Some(PathCmd::Close)),
+            "a closed subpath stays closed"
+        );
+        let area = area_of(&out);
+        assert!(
+            (area - 14400.0).abs() / 14400.0 < 0.01,
+            "100+10+10 squared = 14400, got {area}"
+        );
+    }
+
+    #[test]
+    fn offset_path_negative_distance_offsets_inward() {
+        let out = offset_path(&sq(100.0), -10.0, StrokeJoin::Miter);
+        let area = area_of(&out);
+        assert!(
+            (area - 6400.0).abs() / 6400.0 < 0.01,
+            "100-10-10 squared = 6400, got {area}"
+        );
+    }
+
+    #[test]
+    fn offset_path_measures_winding_instead_of_assuming_it() {
+        // Same outline, opposite winding: +10 must still grow it outward.
+        let cw = area_of(&offset_path(&sq(100.0), 10.0, StrokeJoin::Miter));
+        let ccw = area_of(&offset_path(&sq_ccw(100.0), 10.0, StrokeJoin::Miter));
+        assert!(
+            (cw - ccw).abs() / cw < 0.01,
+            "winding must not change the result: cw {cw} vs ccw {ccw}"
+        );
+        assert!(cw > 10000.0, "both grew outward, got {cw}");
+    }
+
+    #[test]
+    fn offset_path_round_join_subdivides_the_corner() {
+        let miter = offset_path(&sq(100.0), 10.0, StrokeJoin::Miter);
+        let bevel = offset_path(&sq(100.0), 10.0, StrokeJoin::Bevel);
+        let round = offset_path(&sq(100.0), 10.0, StrokeJoin::Round);
+        let pts = |p: &[PathCmd]| p.iter().filter(|c| matches!(c, PathCmd::LineTo(..))).count();
+        assert_eq!(pts(&miter), 3, "miter keeps one point per corner");
+        assert!(
+            pts(&bevel) > pts(&miter),
+            "bevel emits two points per corner: {} vs {}",
+            pts(&bevel),
+            pts(&miter)
+        );
+        assert!(
+            pts(&round) > pts(&bevel),
+            "round interpolates across the corner: {} vs {}",
+            pts(&round),
+            pts(&bevel)
+        );
+        // all three enclose the same area to within the chord error of the
+        // round approximation
+        let (am, ab, ar) = (area_of(&miter), area_of(&bevel), area_of(&round));
+        assert!((am - ab).abs() / am < 0.02, "bevel area {ab} vs {am}");
+        assert!((am - ar).abs() / am < 0.02, "round area {ar} vs {am}");
+    }
+
+    #[test]
+    fn offset_path_leaves_an_open_subpath_open() {
+        let open = vec![PathCmd::MoveTo(0.0, 0.0), PathCmd::LineTo(100.0, 0.0)];
+        let out = offset_path(&open, 10.0, StrokeJoin::Miter);
+        assert!(
+            !out.iter().any(|c| matches!(c, PathCmd::Close)),
+            "an open path must not gain a Close"
+        );
+        // left of travel (+x) is +y in page space
+        assert!(
+            matches!(out.first(), Some(PathCmd::MoveTo(_, y)) if (*y - 10.0).abs() < 1e-9),
+            "open paths offset to the left of travel: {out:?}"
+        );
+    }
+
+    #[test]
+    fn offset_path_refuses_a_zero_or_degenerate_request() {
+        assert!(
+            offset_path(&sq(100.0), 0.0, StrokeJoin::Miter).is_empty(),
+            "zero distance is a no-op, not a copy"
+        );
+        assert!(
+            offset_path(&sq(100.0), f64::NAN, StrokeJoin::Miter).is_empty(),
+            "NaN distance is refused"
+        );
+        assert!(
+            offset_path(&[PathCmd::MoveTo(0.0, 0.0)], 10.0, StrokeJoin::Miter).is_empty(),
+            "a single point cannot be offset"
+        );
+    }
+
+    #[test]
+    fn offset_path_flattens_curves_before_offsetting() {
+        // a full circle of two cubics: the offset ring must have many more
+        // points than the input, and its area must grow by ~2*pi*r*d
+        let r = 50.0;
+        let k = 0.5523 * r;
+        let circle = vec![
+            PathCmd::MoveTo(r + r, r),
+            PathCmd::CurveTo(r + r, r + k, r + k, r + r, r, r + r),
+            PathCmd::CurveTo(r - k, r + r, 0.0, r + k, 0.0, r),
+            PathCmd::CurveTo(0.0, r - k, r - k, 0.0, r, 0.0),
+            PathCmd::CurveTo(r + k, 0.0, r + r, r - k, r + r, r),
+            PathCmd::Close,
+        ];
+        let before = area_of(&circle);
+        let out = offset_path(&circle, 5.0, StrokeJoin::Round);
+        let after = area_of(&out);
+        let expected = std::f64::consts::PI * (r + 5.0).powi(2);
+        assert!(
+            out.iter().filter(|c| matches!(c, PathCmd::LineTo(..))).count() > 20,
+            "the flattened ring is a polygon, got {:?}",
+            out.len()
+        );
+        assert!(after > before, "grew: {before} -> {after}");
+        assert!(
+            (after - expected).abs() / expected < 0.03,
+            "offset circle area {after} vs expected {expected}"
+        );
     }
 }

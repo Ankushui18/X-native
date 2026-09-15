@@ -104,6 +104,229 @@ pub fn svg_text_outliner(
     }
 }
 
+/// TEXT-TO-VECTOR glue: outline a Text node's glyphs into ONE editable vector
+/// path — Figma's "Outline text" (⌥⌘O), which turns type into geometry you can
+/// node-edit, boolean and offset.
+///
+/// This lives in the facade for the same dependency-direction reason as
+/// [`svg_text_outliner`]: x-editor must not depend on x-text/x-render, so the
+/// editor cannot resolve glyphs itself. Glyph outlines come from the very same
+/// `node_text_outlines` pipeline the canvas, the PDF sink and the SVG exporter
+/// consume, with the same parameter derivation x-render's IR uses (`fs` /
+/// `fontsize`, `ls` / `letterspacing`, `lh` + `lineheight`, `tw` wrap, `font`
+/// family, `ws`/`ps`/`bs`, small caps, `opsz`/`wdth` axes) — so the outlined
+/// shape matches what was on screen, wrapping and per-run styling included.
+/// TrueType quadratics are elevated to cubics exactly (no re-fitting), because
+/// `PathCmd` has no quad.
+///
+/// The result is a `Vector` node in the text node's own local space, carrying
+/// its transform, name, opacity and paint (the text colour becomes the path
+/// fill), with w/h grown to cover the glyphs. Feed it to
+/// `editor::Editor::replace_node` to make the swap one undo step.
+///
+/// Returns None when the node is not text, its string is empty or whitespace, or
+/// no font resolves — the caller should say so instead of quietly keeping the
+/// text layer.
+pub fn outline_text_node(
+    node: &Node,
+    fonts: &x_text::FontManager,
+    vars: &Variables,
+) -> Option<Node> {
+    let NodeKind::Text { text } = &node.kind else {
+        return None;
+    };
+    if text.trim().is_empty() {
+        return None;
+    }
+    // typography bindings, derived exactly like x-render's IR does
+    let fs_binding = node
+        .bindings
+        .get("fs")
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|v| *v > 0.0);
+    let size = node.bound_number("fontsize", vars, fs_binding.unwrap_or(node.h * 0.72));
+    let typo_num = |k: &str| node.bindings.get(k).and_then(|v| v.parse::<f64>().ok());
+    let ls = node.bound_number("letterspacing", vars, typo_num("ls").unwrap_or(0.0));
+    let font = node.bindings.get("font").cloned();
+    let (lh_mode, lh_value) =
+        match node
+            .bindings
+            .get("lineheight")
+            .and_then(|name| vars.numbers.get(name))
+        {
+            Some(px) if *px > 0.0 => (1u8, *px),
+            _ => node.lh_mode_value(),
+        };
+    // a px / percent line-height is a BOX; the shaper wants a multiplier of the
+    // face's natural line height — the same conversion the sinks perform
+    let nat = x_text::resolve_natural_line_height(fonts, font.as_deref(), size).max(0.1);
+    let lh = match lh_mode {
+        1 => lh_value.max(1.0) / nat,
+        2 => (lh_value / 100.0 * size / nat).max(0.1),
+        _ => typo_num("lh").unwrap_or(1.2),
+    };
+    let wrap = node.text_wrap();
+    let (ws, ps, bs) = (
+        typo_num("ws").unwrap_or(0.0),
+        typo_num("ps").unwrap_or(0.0),
+        typo_num("bs").unwrap_or(0.0),
+    );
+    let small_caps = node.bindings.get("tc").map(String::as_str) == Some("sc");
+    let (opsz, wdth) = (
+        typo_num("opsz").unwrap_or(0.0) as f32,
+        typo_num("wdth").unwrap_or(0.0) as f32,
+    );
+    // Runs, derived exactly like x-render's IR: rich runs only when the node
+    // carries them; a node-level weight with no runs is synthesized into one, so
+    // "Inter 600" outlines as the 600 face and not the 400. Instance text
+    // overrides are NOT resolvable from a bare node — outlining an overridden
+    // instance's text uses the component's own string, which is the honest
+    // limit of a node-level API.
+    let parts: Vec<TextPart> = if !node.text_runs.is_empty() {
+        resolve_text_parts(text, &node.text_runs)
+    } else {
+        match node
+            .bindings
+            .get("fw")
+            .and_then(|v| v.parse::<u16>().ok())
+            .filter(|w| *w != 400)
+        {
+            Some(w) => vec![TextPart {
+                text: text.clone(),
+                color: None,
+                size: None,
+                font: None,
+                weight: Some(w),
+                italic: None,
+                ls: None,
+            }],
+            None => vec![],
+        }
+    };
+    // empty runs = the plain pipeline, the same branch the canvas/PDF/SVG sinks
+    // take, so all four agree on the glyph geometry
+    let glyphs = if parts.is_empty() {
+        x_text::node_text_outlines_styled(
+            fonts,
+            text,
+            size,
+            node.w.max(1.0),
+            font.as_deref(),
+            vello::peniko::Color::BLACK,
+            ls,
+            lh,
+            wrap,
+            ws,
+            ps,
+            bs,
+            small_caps,
+            opsz,
+            wdth,
+            lh_mode,
+        )?
+        .0
+    } else {
+        x_text::node_text_outlines_rich(
+            fonts,
+            &parts,
+            size,
+            node.w.max(1.0),
+            font.as_deref(),
+            ls,
+            lh,
+            wrap,
+            ws,
+            ps,
+            bs,
+            small_caps,
+            opsz,
+            wdth,
+            lh_mode,
+        )?
+        .0
+    };
+    if glyphs.is_empty() {
+        return None;
+    }
+    // glyph space -> node-local space, then into PathCmds
+    let mut cmds: Vec<PathCmd> = vec![];
+    for g in &glyphs {
+        let mut p = g.path.clone();
+        p.apply_affine(g.transform);
+        cmds.extend(bez_to_path_cmds(&p));
+    }
+    if cmds.is_empty() {
+        return None;
+    }
+    // grow-only bounds, the same contract the editor's path ops use
+    let (mut maxx, mut maxy) = (node.w, node.h);
+    for c in &cmds {
+        for (x, y) in path_cmd_points(*c) {
+            maxx = maxx.max(x);
+            maxy = maxy.max(y);
+        }
+    }
+    let mut v = Node::vector(
+        &fresh_id("outline"),
+        node.transform.x,
+        node.transform.y,
+        maxx.max(1.0),
+        maxy.max(1.0),
+        cmds,
+    );
+    v.transform = node.transform.clone();
+    v.name = node.name.clone();
+    v.opacity = node.opacity;
+    v.visible = node.visible;
+    // the text colour becomes the path fill (both the simple and the ordered
+    // stack, so a text layer with several fill layers keeps all of them)
+    v.fill = node.fill.clone();
+    v.fill_layers = node.fill_layers.clone();
+    Some(v)
+}
+
+/// Every point a PathCmd carries (anchors and control points), for bounds.
+fn path_cmd_points(c: PathCmd) -> Vec<(f64, f64)> {
+    match c {
+        PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => vec![(x, y)],
+        PathCmd::CurveTo(a, b, c2, d, e, f) => vec![(a, b), (c2, d), (e, f)],
+        PathCmd::Close => vec![],
+    }
+}
+
+/// BezPath -> PathCmd. Font outlines are quadratic (TrueType) or cubic (CFF), so
+/// quads are elevated to cubics with the exact 2/3 rule — the curve is
+/// identical, not approximated.
+fn bez_to_path_cmds(p: &vello::kurbo::BezPath) -> Vec<PathCmd> {
+    use vello::kurbo::PathEl;
+    let mut out: Vec<PathCmd> = vec![];
+    let mut cur = (0.0f64, 0.0f64);
+    for el in p.elements() {
+        match *el {
+            PathEl::MoveTo(a) => {
+                out.push(PathCmd::MoveTo(a.x, a.y));
+                cur = (a.x, a.y);
+            }
+            PathEl::LineTo(a) => {
+                out.push(PathCmd::LineTo(a.x, a.y));
+                cur = (a.x, a.y);
+            }
+            PathEl::QuadTo(a, b) => {
+                let c1 = (cur.0 + 2.0 / 3.0 * (a.x - cur.0), cur.1 + 2.0 / 3.0 * (a.y - cur.1));
+                let c2 = (b.x + 2.0 / 3.0 * (a.x - b.x), b.y + 2.0 / 3.0 * (a.y - b.y));
+                out.push(PathCmd::CurveTo(c1.0, c1.1, c2.0, c2.1, b.x, b.y));
+                cur = (b.x, b.y);
+            }
+            PathEl::CurveTo(a, b, c) => {
+                out.push(PathCmd::CurveTo(a.x, a.y, b.x, b.y, c.x, c.y));
+                cur = (c.x, c.y);
+            }
+            PathEl::ClosePath => out.push(PathCmd::Close),
+        }
+    }
+    out
+}
+
 fn svg_path_data(p: &vello::kurbo::BezPath) -> String {
     use vello::kurbo::PathEl::*;
     let mut d = String::new();
