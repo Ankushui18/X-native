@@ -87,6 +87,23 @@ fn figma_paint_json(p: &Paint, w: f64, h: f64) -> String {
         Paint::Pattern { .. } => "{\"type\":\"SOLID\",\"visible\":true,\"color\":{\"r\":0.6,\"g\":0.6,\"b\":0.6,\"a\":1}}".into(),
         Paint::LinearGradient { start, end, stops, .. } => format!("{{\"type\":\"GRADIENT_LINEAR\",\"visible\":true,\"gradientHandlePositions\":[{{\"x\":{},\"y\":{}}},{{\"x\":{},\"y\":{}}}],\"gradientStops\":[{}]}}", start.0 / w.max(1.0), start.1 / h.max(1.0), end.0 / w.max(1.0), end.1 / h.max(1.0), stops.iter().map(|(t,c)| format!("{{\"position\":{t},\"color\":{}}}", figma_color_json(*c))).collect::<Vec<_>>().join(",")),
         Paint::RadialGradient { center, radius, stops, .. } => format!("{{\"type\":\"GRADIENT_RADIAL\",\"visible\":true,\"gradientHandlePositions\":[{{\"x\":{},\"y\":{}}},{{\"x\":{},\"y\":{}}}],\"gradientStops\":[{}]}}", center.0 / w.max(1.0), center.1 / h.max(1.0), (center.0 + radius) / w.max(1.0), center.1 / h.max(1.0), stops.iter().map(|(t,c)| format!("{{\"position\":{t},\"color\":{}}}", figma_color_json(*c))).collect::<Vec<_>>().join(",")),
+        // Figma's REST schema does carry both Phase-6 gradients. Handles are
+        // normalized (0..1 of the node box) like the arms above: angular uses
+        // center + a unit point at each of the two sweep angles, diamond uses
+        // center + the horizontal/vertical radius points.
+        Paint::AngularGradient { center, start_angle, end_angle, stops, .. } => {
+            let pt = |deg: f64| {
+                let r = deg.to_radians();
+                (
+                    (center.0 + r.cos() * 0.5 * w.max(1.0)) / w.max(1.0),
+                    (center.1 + r.sin() * 0.5 * h.max(1.0)) / h.max(1.0),
+                )
+            };
+            let (sx, sy) = pt(*start_angle);
+            let (ex, ey) = pt(*end_angle);
+            format!("{{\"type\":\"GRADIENT_ANGULAR\",\"visible\":true,\"gradientHandlePositions\":[{{\"x\":{},\"y\":{}}},{{\"x\":{},\"y\":{}}},{{\"x\":{},\"y\":{}}}],\"gradientStops\":[{}]}}", center.0 / w.max(1.0), center.1 / h.max(1.0), sx, sy, ex, ey, stops.iter().map(|(t,c)| format!("{{\"position\":{t},\"color\":{}}}", figma_color_json(*c))).collect::<Vec<_>>().join(","))
+        }
+        Paint::DiamondGradient { center, width, height, stops, .. } => format!("{{\"type\":\"GRADIENT_DIAMOND\",\"visible\":true,\"gradientHandlePositions\":[{{\"x\":{},\"y\":{}}},{{\"x\":{},\"y\":{}}},{{\"x\":{},\"y\":{}}}],\"gradientStops\":[{}]}}", center.0 / w.max(1.0), center.1 / h.max(1.0), (center.0 + width) / w.max(1.0), center.1 / h.max(1.0), center.0 / w.max(1.0), (center.1 + height) / h.max(1.0), stops.iter().map(|(t,c)| format!("{{\"position\":{t},\"color\":{}}}", figma_color_json(*c))).collect::<Vec<_>>().join(",")),
     }
 }
 

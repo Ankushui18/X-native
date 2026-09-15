@@ -114,12 +114,25 @@ mod tests {
         );
         doc.styles.insert(
             "Heading/H1".into(),
-            LegacyStyle::Text {
-                font: "Inter 700".into(),
-                size: 34.0,
+            LegacyStyle::Text(TextStyleData {
+                font_family: "Inter".into(),
+                font_weight: 700,
+                font_size: 34.0,
                 letter_spacing: 0.5,
-                line_height: 1.3,
-            },
+                line_height: LineHeight::Percent(130.0),
+                paragraph_spacing: 8.0,
+                paragraph_indent: 12.0,
+                text_case: TextCase::Upper,
+                text_decoration: TextDecoration::Underline,
+                list_style: ListStyle::Bulleted,
+                wrap: TextWrap::Pretty,
+                wrap_style: WrapStyle::BreakWord,
+                hanging_punctuation: HangingPunctuation {
+                    quotes: true,
+                    lists: false,
+                },
+                ..Default::default()
+            }),
         );
         doc.styles.insert(
             "Elevation/2".into(),
@@ -144,17 +157,20 @@ mod tests {
                 fill: Paint::Solid(Color::from_rgb8(0x0d, 0x99, 0xff))
             }
         );
+        // the WHOLE property set survives, not just the four numbers the old
+        // variant could hold: equality on the enum is the assertion
+        assert_eq!(
+            loaded.styles["Heading/H1"], doc.styles["Heading/H1"],
+            "text style round-trips with every property intact"
+        );
         match &loaded.styles["Heading/H1"] {
-            LegacyStyle::Text {
-                font,
-                size,
-                letter_spacing,
-                line_height,
-            } => {
-                assert_eq!(font, "Inter 700");
-                assert_eq!(*size, 34.0);
-                assert_eq!(*letter_spacing, 0.5);
-                assert_eq!(*line_height, 1.3);
+            LegacyStyle::Text(d) => {
+                assert_eq!(d.font_weight, 700);
+                assert_eq!(d.line_height, LineHeight::Percent(130.0));
+                assert_eq!(d.paragraph_indent, 12.0);
+                assert_eq!(d.list_style, ListStyle::Bulleted);
+                assert_eq!(d.wrap, TextWrap::Pretty);
+                assert!(d.hanging_punctuation.quotes);
             }
             other => panic!("expected text style, got {other:?}"),
         }
@@ -358,6 +374,8 @@ mod tests {
                     actions: vec![],
                     transition_ms: 200,
                     animation: Animation::Dissolve,
+                    easing: Easing::Linear,
+                    reset_on_navigate: false,
                 })
                 .starting_point(true),
         );
@@ -398,6 +416,8 @@ mod tests {
                     actions: vec![],
                     transition_ms: 0,
                     animation: Animation::Instant,
+                    easing: Easing::Linear,
+                    reset_on_navigate: false,
                 },
             ),
         );
@@ -1542,6 +1562,8 @@ mod tests {
             actions: vec![],
             transition_ms: 200,
             animation: Animation::MoveIn(Direction::Bottom),
+            easing: Easing::Linear,
+            reset_on_navigate: false,
         };
         if let Some(n) = doc.pages[0].children.first_mut() {
             n.interactions.push(logic);

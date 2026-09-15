@@ -105,10 +105,10 @@ fn squircle_path(w: f64, h: f64, radii: [f64; 4], smoothing: f64) -> vello::kurb
 
     // Generate points for each corner using superellipse formula
     let corners = [
-        (w - tr, tr, tr),      // top-right
-        (w - br, h - br, br),  // bottom-right
-        (bl, h - bl, bl),      // bottom-left
-        (tl, tl, tl),          // top-left
+        (w - tr, tr, tr),     // top-right
+        (w - br, h - br, br), // bottom-right
+        (bl, h - bl, bl),     // bottom-left
+        (tl, tl, tl),         // top-left
     ];
 
     for (corner_idx, &(cx, cy, radius)) in corners.iter().enumerate() {
@@ -367,12 +367,17 @@ fn encode(
             // nodes keep the engine em convention (0.72 * node.h px).
             // Rich-text runs (node.text_runs) split the block into
             // per-style parts.
-            let fs_px = node
-                .bindings
-                .get("fs")
-                .and_then(|v| v.parse::<f64>().ok())
-                .filter(|v| *v > 0.0)
-                .unwrap_or(node.h * 0.72);
+            // a `fontsize` token outranks the literal `fs` binding (same
+            // contract as ir.rs, so both sinks agree on the size)
+            let fs_px = node.bound_number(
+                "fontsize",
+                vars,
+                node.bindings
+                    .get("fs")
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .filter(|v| *v > 0.0)
+                    .unwrap_or(node.h * 0.72),
+            );
             let fw = node.bindings.get("fw").and_then(|v| v.parse::<u16>().ok());
             let needs_styled = text_needs_styled(node);
             let drew = if let Some(fm) = ctx.fonts {
@@ -391,7 +396,16 @@ fn encode(
                     // percent of font size (converted with the face's
                     // natural line box, the same one the pipeline uses)
                     let nat_lh = fm.line_height(font, fs_px).max(0.1);
-                    let (lh_mode, lh_value) = node.lh_mode_value();
+                    // a `lineheight` token is a px line box: mode 1 semantics,
+                    // outranking the literal mode on the node
+                    let (lh_mode, lh_value) = match node
+                        .bindings
+                        .get("lineheight")
+                        .and_then(|name| vars.numbers.get(name))
+                    {
+                        Some(px) if *px > 0.0 => (1, *px),
+                        _ => node.lh_mode_value(),
+                    };
                     let lh_mult = match lh_mode {
                         1 => lh_value.max(1.0) / nat_lh,
                         2 => (lh_value / 100.0 * fs_px / nat_lh).max(0.1),
@@ -416,7 +430,7 @@ fn encode(
                             // styled defaults without runs (sc / variable axes)
                             vec![x_text::Span::new(content, fs_px).color(color)]
                         } else {
-                            build_rich_spans_px(node, content, color, fm, font, fs_px)
+                            build_rich_spans_px(node, content, color, fm, font, fs_px, vars)
                         };
                         let (n, _) = x_text::encode_rich_text(
                             scene,
@@ -728,8 +742,15 @@ pub(crate) fn build_rich_spans_px(
     fm: &x_text::FontManager,
     _default_font: usize,
     base_size_px: f64,
+    vars: &Variables,
 ) -> Vec<x_text::Span> {
-    let node_ls = node.bindings.get("ls").and_then(|v| v.parse::<f64>().ok());
+    // a `letterspacing` token outranks the node's literal `ls`
+    let node_ls = node
+        .bindings
+        .get("letterspacing")
+        .and_then(|name| vars.numbers.get(name))
+        .copied()
+        .or_else(|| node.bindings.get("ls").and_then(|v| v.parse::<f64>().ok()));
     x_core::resolve_text_parts(text, &node.text_runs)
         .iter()
         .map(|p| {

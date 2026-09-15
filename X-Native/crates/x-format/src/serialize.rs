@@ -80,6 +80,56 @@ fn paint_json(p: &Paint) -> String {
             },
             ""
         ),
+        // Phase 6 gradients: `a0`/`a1` are DEGREES (the model's unit); the
+        // renderer converts to radians for peniko's sweep gradient.
+        Paint::AngularGradient {
+            center,
+            start_angle,
+            end_angle,
+            stops,
+            space,
+        } => format!(
+            "{{\"t\":\"angular\",\"cx\":{},\"cy\":{},\"a0\":{},\"a1\":{},\"stops\":[{}]{}{}}}",
+            center.0,
+            center.1,
+            start_angle,
+            end_angle,
+            stops
+                .iter()
+                .map(|(t, c)| format!("[{},\"{}\"]", t, color_to_hex(*c)))
+                .collect::<Vec<_>>()
+                .join(","),
+            if *space == GradSpace::Oklab {
+                ",\"gs\":\"oklab\""
+            } else {
+                ""
+            },
+            ""
+        ),
+        Paint::DiamondGradient {
+            center,
+            width,
+            height,
+            stops,
+            space,
+        } => format!(
+            "{{\"t\":\"diamond\",\"cx\":{},\"cy\":{},\"w\":{},\"h\":{},\"stops\":[{}]{}{}}}",
+            center.0,
+            center.1,
+            width,
+            height,
+            stops
+                .iter()
+                .map(|(t, c)| format!("[{},\"{}\"]", t, color_to_hex(*c)))
+                .collect::<Vec<_>>()
+                .join(","),
+            if *space == GradSpace::Oklab {
+                ",\"gs\":\"oklab\""
+            } else {
+                ""
+            },
+            ""
+        ),
     }
 }
 
@@ -101,6 +151,9 @@ fn blend_name(b: BlendKind) -> &'static str {
         BlendKind::Saturation => "saturation",
         BlendKind::Color => "color",
         BlendKind::Luminosity => "luminosity",
+        BlendKind::PlusDarker => "plus-darker",
+        BlendKind::PlusLighter => "plus-lighter",
+        BlendKind::PassThrough => "pass-through",
     }
 }
 fn cap_name(c: StrokeCap) -> &'static str {
@@ -378,7 +431,11 @@ fn interaction_json(i: &Interaction) -> String {
     // Multiple actions: serialize as "actions" array when non-empty.
     // Backward compatible: old files with just "action" still load fine.
     let actions_field = if i.actions.len() > 1 {
-        let acts: Vec<String> = i.actions.iter().map(|a| format!("\"{}\"", a.kind())).collect();
+        let acts: Vec<String> = i
+            .actions
+            .iter()
+            .map(|a| format!("\"{}\"", a.kind()))
+            .collect();
         format!(",\"actions\":[{}]", acts.join(","))
     } else {
         String::new()
@@ -416,7 +473,7 @@ fn grid_json(g: &GridLayout) -> String {
         String::new()
     };
     format!(
-        ",\"grid\":{{\"cols\":[{}],\"rows\":[{}],\"cgap\":{},\"rgap\":{},\"pad\":[{},{},{},{}]{}{}}}",
+        ",\"grid\":{{\"cols\":[{}],\"rows\":[{}],\"cgap\":{},\"rgap\":{},\"pad\":[{},{},{},{}]{}}}",
         cols.join(","),
         rows.join(","),
         g.column_gap,
@@ -453,7 +510,10 @@ fn layout_extras(l: &AutoLayout) -> String {
         s.push_str(",\"stroke_include_in_layout\":false");
     }
     if l.canvas_stacking != CanvasStacking::default() {
-        s.push_str(&format!(",\"canvas_stacking\":\"{}\"", l.canvas_stacking.to_str()));
+        s.push_str(&format!(
+            ",\"canvas_stacking\":\"{}\"",
+            l.canvas_stacking.to_str()
+        ));
     }
     s
 }
@@ -810,16 +870,25 @@ pub(crate) fn node_json(n: &Node, out: &mut String) {
         out.push_str(&format!(",\"text_align\":\"{}\"", n.text_align.to_str()));
     }
     if n.text_align_vertical != TextAlignVertical::Top {
-        out.push_str(&format!(",\"text_align_vertical\":\"{}\"", n.text_align_vertical.to_str()));
+        out.push_str(&format!(
+            ",\"text_align_vertical\":\"{}\"",
+            n.text_align_vertical.to_str()
+        ));
     }
     if n.text_decoration != TextDecoration::None {
-        out.push_str(&format!(",\"text_decoration\":\"{}\"", n.text_decoration.to_str()));
+        out.push_str(&format!(
+            ",\"text_decoration\":\"{}\"",
+            n.text_decoration.to_str()
+        ));
     }
     if n.text_case != TextCase::Original {
         out.push_str(&format!(",\"text_case\":\"{}\"", n.text_case.to_str()));
     }
     if n.text_truncation != TextTruncation::Disabled {
-        out.push_str(&format!(",\"text_truncation\":\"{}\"", n.text_truncation.to_str()));
+        out.push_str(&format!(
+            ",\"text_truncation\":\"{}\"",
+            n.text_truncation.to_str()
+        ));
     }
     if let Some(max) = n.max_lines {
         out.push_str(&format!(",\"max_lines\":{}", max));
@@ -1095,19 +1164,97 @@ pub fn save_x(doc: &Document) -> String {
 pub(crate) fn legacy_style_json(s: &LegacyStyle) -> String {
     match s {
         LegacyStyle::Paint { fill } => format!("{{\"t\":\"paint\",\"fill\":{}}}", paint_json(fill)),
-        LegacyStyle::Text { font, size, letter_spacing, line_height } => format!(
-            "{{\"t\":\"text\",\"font\":\"{}\",\"size\":{size},\"ls\":{letter_spacing},\"lh\":{line_height}}}", esc(font)),
+        LegacyStyle::Text(data) => text_style_json(data),
         LegacyStyle::Effect { effects } => {
-            let fx: Vec<String> = effects.iter().map(|e| match e {
-                Effect::DropShadow { dx, dy, blur, color } => format!("{{\"t\":\"drop\",\"dx\":{dx},\"dy\":{dy},\"blur\":{blur},\"c\":\"{}\"}}", color_to_hex(*color)),
-                Effect::InnerShadow { dx, dy, blur, color } => format!("{{\"t\":\"inner\",\"dx\":{dx},\"dy\":{dy},\"blur\":{blur},\"c\":\"{}\"}}", color_to_hex(*color)),
-                Effect::LayerBlur { radius } => format!("{{\"t\":\"blur\",\"r\":{radius}}}"),
-                Effect::BackgroundBlur { radius } => format!("{{\"t\":\"bgblur\",\"r\":{radius}}}"),
-                Effect::Noise { amount, seed } => format!("{{\"t\":\"noise\",\"a\":{amount},\"s\":{seed}}}"),
-            }).collect();
+            let fx: Vec<String> = effects
+                .iter()
+                .map(|e| match e {
+                    Effect::DropShadow {
+                        dx,
+                        dy,
+                        blur,
+                        color,
+                    } => format!(
+                        "{{\"t\":\"drop\",\"dx\":{dx},\"dy\":{dy},\"blur\":{blur},\"c\":\"{}\"}}",
+                        color_to_hex(*color)
+                    ),
+                    Effect::InnerShadow {
+                        dx,
+                        dy,
+                        blur,
+                        color,
+                    } => format!(
+                        "{{\"t\":\"inner\",\"dx\":{dx},\"dy\":{dy},\"blur\":{blur},\"c\":\"{}\"}}",
+                        color_to_hex(*color)
+                    ),
+                    Effect::LayerBlur { radius } => format!("{{\"t\":\"blur\",\"r\":{radius}}}"),
+                    Effect::BackgroundBlur { radius } => {
+                        format!("{{\"t\":\"bgblur\",\"r\":{radius}}}")
+                    }
+                    Effect::Noise { amount, seed } => {
+                        format!("{{\"t\":\"noise\",\"a\":{amount},\"s\":{seed}}}")
+                    }
+                })
+                .collect();
             format!("{{\"t\":\"effect\",\"effects\":[{}]}}", fx.join(","))
         }
     }
+}
+
+/// Text-style encoder shared by `.x` documents and `.xlib` libraries — one
+/// dialect, and one property set: everything `TextStyleData` carries.
+///
+/// Keys stay terse like the rest of the format, and a property is emitted only
+/// when it differs from its default, so a plain Inter/16 style costs what it
+/// always cost. Line height travels as (`lhm`, `lhv`); files written before
+/// modes existed carry a bare `lh` multiplier, which the decoder still reads.
+pub(crate) fn text_style_json(d: &TextStyleData) -> String {
+    let mut out = format!(
+        "{{\"t\":\"text\",\"font\":\"{}\",\"fw\":{},\"size\":{},\"ls\":{}",
+        esc(&d.font_family),
+        d.font_weight,
+        d.font_size,
+        d.letter_spacing
+    );
+    if d.line_height != LineHeight::Auto {
+        out.push_str(&format!(
+            ",\"lhm\":\"{}\",\"lhv\":{}",
+            d.line_height.mode_str(),
+            d.line_height.value()
+        ));
+    }
+    if d.paragraph_spacing != 0.0 {
+        out.push_str(&format!(",\"ps\":{}", d.paragraph_spacing));
+    }
+    if d.paragraph_indent != 0.0 {
+        out.push_str(&format!(",\"pi\":{}", d.paragraph_indent));
+    }
+    // small caps takes the case slot on a node ("tc":"sc"), so it wins here too
+    if d.small_caps {
+        out.push_str(",\"sc\":true");
+    } else if d.text_case != TextCase::Original {
+        out.push_str(&format!(",\"tc\":\"{}\"", d.text_case.to_str()));
+    }
+    if d.text_decoration != TextDecoration::None {
+        out.push_str(&format!(",\"dec\":\"{}\"", d.text_decoration.to_str()));
+    }
+    if d.list_style != ListStyle::None {
+        out.push_str(&format!(",\"list\":\"{}\"", d.list_style.to_str()));
+    }
+    if d.wrap != TextWrap::Auto {
+        out.push_str(&format!(",\"wrap\":\"{}\"", d.wrap.to_str()));
+    }
+    if d.wrap_style != WrapStyle::Normal {
+        out.push_str(&format!(",\"wb\":\"{}\"", d.wrap_style.to_str()));
+    }
+    if d.hanging_punctuation.quotes {
+        out.push_str(",\"hq\":true");
+    }
+    if d.hanging_punctuation.lists {
+        out.push_str(",\"hl\":true");
+    }
+    out.push('}');
+    out
 }
 
 /// New style encoder for .xlib libraries.
@@ -1116,14 +1263,7 @@ pub(crate) fn style_json(s: &x_core::Style) -> String {
         x_core::StyleData::Color(data) => {
             format!("{{\"t\":\"color\",\"paint\":{}}}", paint_json(&data.paint))
         }
-        x_core::StyleData::Text(data) => format!(
-            "{{\"t\":\"text\",\"font\":\"{}\",\"weight\":{},\"size\":{},\"ls\":{},\"lh\":{}}}",
-            esc(&data.font_family),
-            data.font_weight,
-            data.font_size,
-            data.letter_spacing,
-            data.line_height
-        ),
+        x_core::StyleData::Text(data) => text_style_json(data),
         x_core::StyleData::Effect(data) => {
             let fx: Vec<String> = data
                 .effects

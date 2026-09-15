@@ -886,6 +886,9 @@ mod tests {
                     },
                     transition_ms: 0,
                     animation: Animation::Instant,
+                    actions: vec![],
+                    easing: Easing::Linear,
+                    reset_on_navigate: false,
                 },
             ))
             .child(btn(
@@ -899,6 +902,9 @@ mod tests {
                     },
                     transition_ms: 0,
                     animation: Animation::Instant,
+                    actions: vec![],
+                    easing: Easing::Linear,
+                    reset_on_navigate: false,
                 },
             ))
             .child(btn(
@@ -909,6 +915,9 @@ mod tests {
                     action: Action::Back,
                     transition_ms: 0,
                     animation: Animation::Instant,
+                    actions: vec![],
+                    easing: Easing::Linear,
+                    reset_on_navigate: false,
                 },
             ))
             .child(btn(
@@ -922,6 +931,9 @@ mod tests {
                     },
                     transition_ms: 120,
                     animation: Animation::Dissolve,
+                    actions: vec![],
+                    easing: Easing::Linear,
+                    reset_on_navigate: false,
                 },
             ));
         let detail = Node::frame("detail", 400.0, 300.0)
@@ -933,6 +945,9 @@ mod tests {
                     action: Action::Back,
                     transition_ms: 0,
                     animation: Animation::Instant,
+                    actions: vec![],
+                    easing: Easing::Linear,
+                    reset_on_navigate: false,
                 },
             ))
             .child(btn(
@@ -945,6 +960,9 @@ mod tests {
                     },
                     transition_ms: 0,
                     animation: Animation::Instant,
+                    actions: vec![],
+                    easing: Easing::Linear,
+                    reset_on_navigate: false,
                 },
             ))
             .child(btn(
@@ -958,6 +976,9 @@ mod tests {
                     },
                     transition_ms: 0,
                     animation: Animation::Instant,
+                    actions: vec![],
+                    easing: Easing::Linear,
+                    reset_on_navigate: false,
                 },
             ));
         let mut dlg = Node::frame("dlg", 160.0, 100.0).child(btn(
@@ -968,6 +989,9 @@ mod tests {
                 action: Action::CloseOverlay,
                 transition_ms: 0,
                 animation: Animation::Instant,
+                actions: vec![],
+                easing: Easing::Linear,
+                reset_on_navigate: false,
             },
         ));
         // authored far from home: overlay hit-testing must use the RENDERED
@@ -1260,6 +1284,9 @@ mod tests {
                 },
                 transition_ms: 0,
                 animation: Animation::Instant,
+                actions: vec![],
+                easing: Easing::Linear,
+                reset_on_navigate: false,
             }),
         );
         let root = Node::frame("root", 1000.0, 600.0)

@@ -62,7 +62,7 @@ impl ImageAdjustments {
 
     /// Phase 6: Apply all adjustments to a color
     pub fn apply_to_color(&self, color: Color) -> Color {
-        let mut rgba = color.to_rgba8();
+        let rgba = color.to_rgba8();
         let mut r = rgba.r as f32 / 255.0;
         let mut g = rgba.g as f32 / 255.0;
         let mut b = rgba.b as f32 / 255.0;

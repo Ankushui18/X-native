@@ -285,8 +285,7 @@ pub fn node_to_css(node: &Node, vars: &Variables) -> String {
             )),
             _ if node.stroke.solid_color().is_none() => css.push_str(&format!(
                 "  {}: {}px solid; /* gradient stroke */\n",
-                css_prop,
-                node.stroke.width
+                css_prop, node.stroke.width
             )),
             _ => {}
         }
@@ -462,6 +461,11 @@ fn blend_css_name(b: BlendKind) -> &'static str {
         BlendKind::Saturation => "saturation",
         BlendKind::Color => "color",
         BlendKind::Luminosity => "luminosity",
+        BlendKind::PlusDarker => "plus-darker",
+        BlendKind::PlusLighter => "plus-lighter",
+        // CSS has no pass-through; the group behaves like normal and its
+        // children keep their own mix-blend-mode.
+        BlendKind::PassThrough => "normal",
     }
 }
 

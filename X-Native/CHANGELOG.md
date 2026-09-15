@@ -5,6 +5,44 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-15 (Text Styles & Variable Typography)
+
+### Added
+- **Text styles are reachable from the inspector.** `Document.styles` was
+  already serialized in `.x` and already applied through `LegacyStyle::Text`,
+  but nothing in the UI could create, apply, update or detach one. The
+  Typography header's two icons now own hit rects: the styles button opens a
+  picker that lists the registry (the applied style highlighted), and the plus
+  creates a style from the selection. Rows offer *Update '<name>' from
+  selection* and *Detach style* when the selection is linked, and *Create text
+  style* when it is a text layer. A style carries typography only — family,
+  weight, size, line-height mode + value, letter spacing, paragraph spacing and
+  indent, case, synthesized small caps, decoration, list style, wrap and wrap
+  style, hanging punctuation — which is Figma's included/excluded split:
+  alignment, fill and resizing are deliberately not part of a style. Editing a
+  definition re-resolves every consumer on every page through
+  `mutate_visual_stack`, so propagation is undoable per node.
+  `App::{apply_text_style, create_text_style_from_selection,
+  detach_text_style_from_selection, update_text_style_from_selection}` in
+  `apps/x-designer/src/bin/x_native_app/run.rs`; `x_native::detach_text_style`
+  and the registry façade on `Document` in `crates/x-core/src/document.rs`;
+  picker in `apps/x-designer/src/bin/x_native_app/editor_ui.rs`.
+  Reference: [Create and apply text styles](https://help.figma.com/hc/en-us/articles/360039957034-Create-and-apply-text-styles).
+- **Variables bound to typography resolve at render time.** `fontsize`,
+  `lineheight` and `letterspacing` bindings now reach both render paths
+  (`crates/x-render/src/ir.rs`, `crates/x-render/src/scene.rs`), mirroring the
+  existing `w`/`h`/`radius` parametric pattern: the variable supplies the
+  number, the node's `lhm` still owns the line-height *mode*, and a missing
+  token falls back to the literal, so unbound documents render exactly as
+  before.
+
+### Fixed
+- **The Line-height dropdown painted 89px above its field.**
+  `paint_lh_dropdown` anchored on `ED_TITLE_H` instead of the panel's `y_entry`
+  — the chrome sum `paint_frame_dropdown` builds (`8 + 24 + 10 + PILL_H + 10 +
+  1`, plus 12 to the first row) — so the menu floated over the rows above it.
+  Both typography dropdowns now derive one anchor from `y_entry`.
+
 ## [Unreleased] — 2026-09-15 (Text Formatting)
 
 ### Added

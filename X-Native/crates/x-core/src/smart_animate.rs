@@ -7,7 +7,7 @@
 //!
 //! This is the core of Figma's "Smart animate" transition preset.
 
-use crate::{Node, Paint, Color};
+use crate::{Color, Node, Paint};
 use std::collections::HashMap;
 
 /// Interpolated state for a single node during a SmartAnimate transition.
@@ -147,30 +147,25 @@ fn lerp_angle(a: f64, b: f64, t: f64) -> f64 {
     a + diff * t
 }
 
-/// Interpolate two colors by linearly blending RGBA components.
+/// Interpolate two colors by linearly blending RGBA components. Color
+/// components are f32, so this uses `lerp_f32` — the f64 `lerp` above is for
+/// geometry.
 fn interpolate_color(c1: Color, c2: Color, t: f64) -> Color {
-    let r = lerp(c1.components[0], c2.components[0], t);
-    let g = lerp(c1.components[1], c2.components[1], t);
-    let b = lerp(c1.components[2], c2.components[2], t);
-    let a = lerp(c1.components[3], c2.components[3], t);
-    Color::new(
-        r.clamp(0.0, 1.0) as f32,
-        g.clamp(0.0, 1.0) as f32,
-        b.clamp(0.0, 1.0) as f32,
-        a.clamp(0.0, 1.0) as f32,
-    )
+    let t = t as f32;
+    let mix = |i: usize| lerp_f32(c1.components[i], c2.components[i], t).clamp(0.0, 1.0);
+    Color::new([mix(0), mix(1), mix(2), mix(3)])
 }
 
 /// Fade a color out (alpha → 0).
 fn fade_color_out(c: Color, t: f64) -> Color {
-    let a = c.components[3] * (1.0 - t) as f32;
-    Color::new(c.components[0], c.components[1], c.components[2], a.clamp(0.0, 1.0))
+    let a = (c.components[3] * (1.0 - t as f32)).clamp(0.0, 1.0);
+    Color::new([c.components[0], c.components[1], c.components[2], a])
 }
 
 /// Fade a color in (alpha 0 → target).
 fn fade_color_in(c: Color, t: f64) -> Color {
-    let a = c.components[3] * t as f32;
-    Color::new(c.components[0], c.components[1], c.components[2], a.clamp(0.0, 1.0))
+    let a = (c.components[3] * t as f32).clamp(0.0, 1.0);
+    Color::new([c.components[0], c.components[1], c.components[2], a])
 }
 
 /// Easing functions for animation curves.
@@ -270,8 +265,8 @@ mod tests {
 
     #[test]
     fn interpolate_color() {
-        let c1 = Color::new(0.0, 0.0, 0.0, 1.0); // black
-        let c2 = Color::new(1.0, 1.0, 1.0, 1.0); // white
+        let c1 = Color::new([0.0, 0.0, 0.0, 1.0]); // black
+        let c2 = Color::new([1.0, 1.0, 1.0, 1.0]); // white
         let mid = super::interpolate_color(c1, c2, 0.5);
         assert!((mid.components[0] - 0.5).abs() < 0.01);
         assert!((mid.components[1] - 0.5).abs() < 0.01);

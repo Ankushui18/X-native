@@ -229,12 +229,13 @@ mod tests {
         );
         l.styles.insert(
             "Heading".into(),
-            LegacyStyle::Text {
-                font: "Inter 700".into(),
-                size: 32.0,
-                letter_spacing: 0.0,
-                line_height: 1.3,
-            },
+            LegacyStyle::Text(TextStyleData {
+                font_family: "Inter".into(),
+                font_weight: 700,
+                font_size: 32.0,
+                line_height: LineHeight::Multiple(1.3),
+                ..Default::default()
+            }),
         );
         l.variables
             .colors

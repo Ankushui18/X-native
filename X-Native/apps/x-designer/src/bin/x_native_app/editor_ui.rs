@@ -51,6 +51,9 @@ pub fn paint(app: &mut App, s: &mut Scene) {
     if app.dropdown_lh {
         paint_lh_dropdown(app, s, &mut hit);
     }
+    if app.dropdown_text_style {
+        paint_text_style_dropdown(app, s, &mut hit);
+    }
     if app.palette.open {
         paint_palette(app, s, &mut hit);
     }
@@ -213,10 +216,7 @@ fn paint_proto_connections(app: &App, s: &mut Scene) {
     let root = &doc.editor_ref().root;
 
     // Collect all nodes with interactions
-    fn collect_interactions(
-        n: &x_native::Node,
-        out: &mut Vec<(String, x_native::Interaction)>,
-    ) {
+    fn collect_interactions(n: &x_native::Node, out: &mut Vec<(String, x_native::Interaction)>) {
         for ix in x_native::effective_interactions(n) {
             out.push((n.id.clone(), ix));
         }
@@ -259,8 +259,12 @@ fn paint_proto_connections(app: &App, s: &mut Scene) {
             _ => None,
         };
         let Some(dest_id) = dest_id else { continue };
-        let Some(src_rect) = find_node_bounds(root, source_id) else { continue };
-        let Some(dst_rect) = find_node_bounds(root, dest_id) else { continue };
+        let Some(src_rect) = find_node_bounds(root, source_id) else {
+            continue;
+        };
+        let Some(dst_rect) = find_node_bounds(root, dest_id) else {
+            continue;
+        };
 
         // Convert to screen coordinates
         let src_screen = Rect::new(
@@ -292,8 +296,24 @@ fn paint_proto_connections(app: &App, s: &mut Scene) {
         // Draw arrowhead at destination
         let arrow_size = 6.0;
         // Right-pointing arrow
-        line(s, x1 - arrow_size, y1 - arrow_size / 2.0, x1, y1, color, 1.5);
-        line(s, x1 - arrow_size, y1 + arrow_size / 2.0, x1, y1, color, 1.5);
+        line(
+            s,
+            x1 - arrow_size,
+            y1 - arrow_size / 2.0,
+            x1,
+            y1,
+            color,
+            1.5,
+        );
+        line(
+            s,
+            x1 - arrow_size,
+            y1 + arrow_size / 2.0,
+            x1,
+            y1,
+            color,
+            1.5,
+        );
 
         // Draw small circle at source
         circle(s, x0, y0, 4.0, color);
@@ -423,13 +443,13 @@ fn paint_vector_points(app: &App, s: &mut Scene) {
     let Some(node) = find_node(&editor.root, node_id) else {
         return;
     };
-    
+
     // Get vector data
     let vector = match &node.kind {
         NodeKind::Vector(v) => v,
         _ => return,
     };
-    
+
     // Draw control handles if enabled
     if app.vector_edit_mode.show_handles {
         let handle_color = vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0x40);
@@ -470,13 +490,13 @@ fn paint_vector_points(app: &App, s: &mut Scene) {
             }
         }
     }
-    
+
     // Draw vector points
     for (i, segment) in vector.segments.iter().enumerate() {
         let p = segment.point;
         let sp = app.world_to_screen(Point::new(p.x, p.y));
         let is_selected = app.vector_edit_mode.selected_points.contains(&i);
-        
+
         let point_size = if is_selected { 5.0 } else { 4.0 };
         let point_color = if is_selected {
             vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0xFF)
@@ -484,7 +504,7 @@ fn paint_vector_points(app: &App, s: &mut Scene) {
             vello::peniko::Color::from_rgba8(0xFF, 0xFF, 0xFF, 0xFF)
         };
         let border_color = vello::peniko::Color::from_rgba8(0x00, 0x00, 0x00, 0xFF);
-        
+
         // Draw point square
         let point_rect = Rect::new(
             sp.x - point_size,
@@ -1097,8 +1117,19 @@ fn paint_nav_bar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         }
 
         // Icon
-        let icon_color = if active { C_NAV_ICON_ACTIVE } else { C_NAV_ICON };
-        draw_icon(s, tab.icon(), ir.x0 + (nav_w - 8.0 - NAV_ICON_SIZE) / 2.0, ir.y0 + (NAV_ITEM_H - NAV_ICON_SIZE) / 2.0 - 2.0, NAV_ICON_SIZE, icon_color);
+        let icon_color = if active {
+            C_NAV_ICON_ACTIVE
+        } else {
+            C_NAV_ICON
+        };
+        draw_icon(
+            s,
+            tab.icon(),
+            ir.x0 + (nav_w - 8.0 - NAV_ICON_SIZE) / 2.0,
+            ir.y0 + (NAV_ITEM_H - NAV_ICON_SIZE) / 2.0 - 2.0,
+            NAV_ICON_SIZE,
+            icon_color,
+        );
 
         // Label below icon (if labels are shown)
         if app.nav_show_labels {
@@ -1110,7 +1141,11 @@ fn paint_nav_bar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                 ir.y1 - 12.0,
                 label,
                 9.0,
-                if active { C_NAV_ICON_ACTIVE } else { C_NAV_LABEL },
+                if active {
+                    C_NAV_ICON_ACTIVE
+                } else {
+                    C_NAV_LABEL
+                },
                 Wt::Reg,
             );
         }
@@ -1139,9 +1174,23 @@ fn paint_nav_bar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     // Badge for unread count
     let unread = app.notifications.unread_count;
     if unread > 0 {
-        let badge = Rect::new(bell_r.x1 - 16.0, bell_r.y0 + 4.0, bell_r.x1 - 4.0, bell_r.y0 + 18.0);
-        fill_rrect(s, badge, 6.0, vello::peniko::Color::from_rgb8(0xFF, 0x3B, 0x30));
-        let count = if unread > 9 { "9+".to_string() } else { unread.to_string() };
+        let badge = Rect::new(
+            bell_r.x1 - 16.0,
+            bell_r.y0 + 4.0,
+            bell_r.x1 - 4.0,
+            bell_r.y0 + 18.0,
+        );
+        fill_rrect(
+            s,
+            badge,
+            6.0,
+            vello::peniko::Color::from_rgb8(0xFF, 0x3B, 0x30),
+        );
+        let count = if unread > 9 {
+            "9+".to_string()
+        } else {
+            unread.to_string()
+        };
         let cw = app.fonts.measure(&count, 8.0, Wt::Bold);
         app.fonts.text(
             s,
@@ -1204,9 +1253,19 @@ fn paint_app_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                 fill_rrect(s, r, 4.0, C_FIELD_2);
                 app.app_menu.hover_index = Some(i);
             }
-            app.fonts.text(s, r.x0 + 12.0, r.y0 + 8.0, label, T11, C_TEXT, Wt::Reg);
+            app.fonts
+                .text(s, r.x0 + 12.0, r.y0 + 8.0, label, T11, C_TEXT, Wt::Reg);
             if !shortcut.is_empty() {
-                app.fonts.text_right(s, r.x1 - 12.0, r.y0 + 8.5, shortcut, T10, C_DIM, Wt::Reg, 0.0);
+                app.fonts.text_right(
+                    s,
+                    r.x1 - 12.0,
+                    r.y0 + 8.5,
+                    shortcut,
+                    T10,
+                    C_DIM,
+                    Wt::Reg,
+                    0.0,
+                );
             }
             hit.push((r, Action::AppMenuItem(i)));
             y += row_h;
@@ -1231,7 +1290,11 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
     let fx = reg.sidebar.x0 + 8.0;
     let fy = reg.sidebar.y0 + 8.0;
     let fw = reg.sidebar.x1 - reg.sidebar.x0 - 16.0;
-    let fh = if app.find_replace.show_replace { 84.0 } else { 48.0 };
+    let fh = if app.find_replace.show_replace {
+        84.0
+    } else {
+        48.0
+    };
     let panel = Rect::new(fx, fy, fx + fw, fy + fh);
     fill_rrect(s, panel, 6.0, C_FIELD);
     stroke_rrect(s, panel, 6.0, C_LINE_2, 1.0);
@@ -1240,21 +1303,61 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
     let search_r = Rect::new(fx + 6.0, fy + 6.0, fx + fw - 6.0, fy + 28.0);
     fill_rrect(s, search_r, 4.0, C_BG);
     stroke_rrect(s, search_r, 4.0, C_LINE, 1.0);
-    draw_icon(s, "search", search_r.x0 + 6.0, search_r.y0 + 5.0, 14.0, C_DIM);
+    draw_icon(
+        s,
+        "search",
+        search_r.x0 + 6.0,
+        search_r.y0 + 5.0,
+        14.0,
+        C_DIM,
+    );
     let query = if app.find_replace.query.is_empty() {
         "Search…".to_string()
     } else {
         app.find_replace.query.clone()
     };
-    let qc = if app.find_replace.query.is_empty() { C_PLACEHOLDER } else { C_TEXT };
-    app.fonts.text(s, search_r.x0 + 24.0, search_r.y0 + 4.0, &query, T11, qc, Wt::Reg);
+    let qc = if app.find_replace.query.is_empty() {
+        C_PLACEHOLDER
+    } else {
+        C_TEXT
+    };
+    app.fonts.text(
+        s,
+        search_r.x0 + 24.0,
+        search_r.y0 + 4.0,
+        &query,
+        T11,
+        qc,
+        Wt::Reg,
+    );
     if !app.find_replace.query.is_empty() {
-        let match_text = format!("{}/{}", app.find_replace.current_match, app.find_replace.match_count);
+        let match_text = format!(
+            "{}/{}",
+            app.find_replace.current_match, app.find_replace.match_count
+        );
         let mtw = app.fonts.measure(&match_text, T10, Wt::Reg);
-        app.fonts.text(s, search_r.x1 - 60.0 - mtw, search_r.y0 + 5.0, &match_text, T10, C_DIM, Wt::Reg);
+        app.fonts.text(
+            s,
+            search_r.x1 - 60.0 - mtw,
+            search_r.y0 + 5.0,
+            &match_text,
+            T10,
+            C_DIM,
+            Wt::Reg,
+        );
         // Prev/Next buttons
-        let prev_r = Rect::new(search_r.x1 - 44.0, search_r.y0 + 2.0, search_r.x1 - 26.0, search_r.y1 - 2.0);
-        let next_r = Rect::new(search_r.x1 - 22.0, search_r.y0 + 2.0, search_r.x1 - 4.0, search_r.y1 - 2.0);
+        let prev_r = Rect::new(
+            search_r.x1 - 44.0,
+            search_r.y0 + 2.0,
+            search_r.x1 - 26.0,
+            search_r.y1 - 2.0,
+        );
+        let next_r = Rect::new(
+            search_r.x1 - 22.0,
+            search_r.y0 + 2.0,
+            search_r.x1 - 4.0,
+            search_r.y1 - 2.0,
+        );
         draw_icon(s, "chevron-up", prev_r.x0, prev_r.y0 + 2.0, 12.0, C_DIM);
         draw_icon(s, "chevron-down", next_r.x0, next_r.y0 + 2.0, 12.0, C_DIM);
         hit.push((prev_r, Action::FindPrev));
@@ -1275,31 +1378,79 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         } else {
             app.find_replace.replace.clone()
         };
-        let rc = if app.find_replace.replace.is_empty() { C_PLACEHOLDER } else { C_TEXT };
-        app.fonts.text(s, replace_r.x0 + 8.0, replace_r.y0 + 4.0, &rep_text, T11, rc, Wt::Reg);
+        let rc = if app.find_replace.replace.is_empty() {
+            C_PLACEHOLDER
+        } else {
+            C_TEXT
+        };
+        app.fonts.text(
+            s,
+            replace_r.x0 + 8.0,
+            replace_r.y0 + 4.0,
+            &rep_text,
+            T11,
+            rc,
+            Wt::Reg,
+        );
 
         // Replace / Replace All buttons
         let btn_y = ry + 26.0;
         let repl_all_r = Rect::new(fx + fw - 80.0, btn_y, fx + fw - 6.0, btn_y + 18.0);
         fill_rrect(s, repl_all_r, 4.0, C_FIELD_2);
-        app.fonts.text(s, repl_all_r.x0 + 6.0, repl_all_r.y0 + 3.0, "Replace all", T10, C_TEXT, Wt::Reg);
+        app.fonts.text(
+            s,
+            repl_all_r.x0 + 6.0,
+            repl_all_r.y0 + 3.0,
+            "Replace all",
+            T10,
+            C_TEXT,
+            Wt::Reg,
+        );
         hit.push((repl_all_r, Action::ReplaceAll));
     }
 
     // Toggle row
-    let toggle_y = fy + if app.find_replace.show_replace { 60.0 } else { 32.0 };
+    let toggle_y = fy
+        + if app.find_replace.show_replace {
+            60.0
+        } else {
+            32.0
+        };
     let case_r = Rect::new(fx + 6.0, toggle_y, fx + 22.0, toggle_y + 14.0);
     if app.find_replace.case_sensitive {
         fill_rrect(s, case_r, 3.0, C_NAV_ACTIVE);
     }
-    app.fonts.text(s, case_r.x0 + 2.0, case_r.y0, "Aa", 9.0, if app.find_replace.case_sensitive { Color::WHITE } else { C_DIM }, Wt::Bold);
+    app.fonts.text(
+        s,
+        case_r.x0 + 2.0,
+        case_r.y0,
+        "Aa",
+        9.0,
+        if app.find_replace.case_sensitive {
+            Color::WHITE
+        } else {
+            C_DIM
+        },
+        Wt::Bold,
+    );
     hit.push((case_r, Action::ToggleCaseSensitive));
 
     let sel_r = Rect::new(fx + 26.0, toggle_y, fx + 42.0, toggle_y + 14.0);
     if app.find_replace.in_selection {
         fill_rrect(s, sel_r, 3.0, C_NAV_ACTIVE);
     }
-    draw_icon(s, "box-select", sel_r.x0 + 1.0, sel_r.y0 + 1.0, 11.0, if app.find_replace.in_selection { Color::WHITE } else { C_DIM });
+    draw_icon(
+        s,
+        "box-select",
+        sel_r.x0 + 1.0,
+        sel_r.y0 + 1.0,
+        11.0,
+        if app.find_replace.in_selection {
+            Color::WHITE
+        } else {
+            C_DIM
+        },
+    );
     hit.push((sel_r, Action::ToggleFindInSelection));
 }
 
@@ -1319,10 +1470,31 @@ fn paint_notifications(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action
     stroke_rrect(s, panel, 8.0, C_LINE_2, 1.0);
 
     // Header
-    app.fonts.text(s, panel.x0 + 12.0, panel.y0 + 10.0, "Notifications", T11, C_TEXT, Wt::Med);
+    app.fonts.text(
+        s,
+        panel.x0 + 12.0,
+        panel.y0 + 10.0,
+        "Notifications",
+        T11,
+        C_TEXT,
+        Wt::Med,
+    );
     if app.notifications.unread_count > 0 {
-        let mark_all_r = Rect::new(panel.x1 - 80.0, panel.y0 + 4.0, panel.x1 - 8.0, panel.y0 + 22.0);
-        app.fonts.text(s, mark_all_r.x0, mark_all_r.y0 + 4.0, "Mark all read", T10, C_NAV_ACTIVE, Wt::Reg);
+        let mark_all_r = Rect::new(
+            panel.x1 - 80.0,
+            panel.y0 + 4.0,
+            panel.x1 - 8.0,
+            panel.y0 + 22.0,
+        );
+        app.fonts.text(
+            s,
+            mark_all_r.x0,
+            mark_all_r.y0 + 4.0,
+            "Mark all read",
+            T10,
+            C_NAV_ACTIVE,
+            Wt::Reg,
+        );
         hit.push((mark_all_r, Action::MarkAllNotificationsRead));
     }
     hline(s, panel.x0 + 8.0, panel.x1 - 8.0, panel.y0 + 28.0, C_LINE);
@@ -1332,11 +1504,33 @@ fn paint_notifications(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action
     for notif in &app.notifications.notifications {
         let nr = Rect::new(panel.x0 + 8.0, y, panel.x1 - 8.0, y + 44.0);
         if !notif.read {
-            fill_rrect(s, nr, 4.0, vello::peniko::Color::from_rgba8(0x00, 0x7A, 0xFF, 0x08));
+            fill_rrect(
+                s,
+                nr,
+                4.0,
+                vello::peniko::Color::from_rgba8(0x00, 0x7A, 0xFF, 0x08),
+            );
         }
-        draw_icon(s, notif.kind.icon(), nr.x0 + 8.0, nr.y0 + 6.0, 14.0, if notif.read { C_DIM } else { C_NAV_ACTIVE });
-        let msg = app.fonts.truncate(&notif.message, T10, Wt::Reg, nr.width() - 40.0);
-        app.fonts.text(s, nr.x0 + 28.0, nr.y0 + 8.0, &msg, T10, if notif.read { C_DIM } else { C_TEXT }, Wt::Reg);
+        draw_icon(
+            s,
+            notif.kind.icon(),
+            nr.x0 + 8.0,
+            nr.y0 + 6.0,
+            14.0,
+            if notif.read { C_DIM } else { C_NAV_ACTIVE },
+        );
+        let msg = app
+            .fonts
+            .truncate(&notif.message, T10, Wt::Reg, nr.width() - 40.0);
+        app.fonts.text(
+            s,
+            nr.x0 + 28.0,
+            nr.y0 + 8.0,
+            &msg,
+            T10,
+            if notif.read { C_DIM } else { C_TEXT },
+            Wt::Reg,
+        );
         // Dismiss button
         let dismiss_r = Rect::new(nr.x1 - 20.0, nr.y0 + 4.0, nr.x1 - 4.0, nr.y0 + 20.0);
         if hover(app, dismiss_r) {
@@ -1367,7 +1561,12 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let sx = sidebar.x0;
 
     // DRAFTS header
-    fill_rrect(s, Rect::new(sx + 12.0, y0 + 12.0, sx + 28.0, y0 + 28.0), 4.0, C_FIELD);
+    fill_rrect(
+        s,
+        Rect::new(sx + 12.0, y0 + 12.0, sx + 28.0, y0 + 28.0),
+        4.0,
+        C_FIELD,
+    );
     stroke_rrect(
         s,
         Rect::new(sx + 12.0, y0 + 12.0, sx + 28.0, y0 + 28.0),
@@ -1406,7 +1605,8 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             C_LINE_2,
             1.0,
         );
-        app.fonts.text(s, sx + 18.0, ny, &editing, T11, C_TEXT, Wt::Med);
+        app.fonts
+            .text(s, sx + 18.0, ny, &editing, T11, C_TEXT, Wt::Med);
     } else {
         if hover(app, nr) {
             // .editable:hover — bg #1A1A1A, border #2A2A2A, radius 4
@@ -1415,7 +1615,8 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         }
         circle(s, sx + 15.0, ny + 8.3, 3.0, C_DRAFT_DOT);
         let shown = app.fonts.truncate(&name, T11, Wt::Med, lw - 24.0 - 40.0);
-        app.fonts.text(s, sx + 26.0, ny, &shown, T11, C_TEXT, Wt::Med);
+        app.fonts
+            .text(s, sx + 26.0, ny, &shown, T11, C_TEXT, Wt::Med);
         if hover(app, nr) {
             draw_icon(s, "pencil", lw - 25.0, ny + 2.3, 12.0, C_DIM);
         }
@@ -1476,7 +1677,8 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     }
 
     // PAGES section
-    app.fonts.micro_label(s, sx + 12.0, y, "PAGES", C_DIM, Wt::Med);
+    app.fonts
+        .micro_label(s, sx + 12.0, y, "PAGES", C_DIM, Wt::Med);
     let addp = Rect::new(lw - 25.0, y + 0.8, lw - 13.0, y + 12.8);
     draw_icon(s, "plus", addp.x0, y + 0.8, 12.0, C_DIM);
     hit.push((addp, Action::AddPage)); // page field top 178 → drawn below
@@ -2817,29 +3019,47 @@ fn paint_design(
     );
 
     hline(s, rx, rx + rw, y0 + 645.5, C_LINE);
-    
+
     // Phase 6: Image adjustment controls (only shown for image nodes)
     let y_after_appearance = y0 + 645.5 + 1.0 + 12.0;
-    let y_after_image = paint_image_adjustments(app, s, hit, rx + pl, rx + rw - pl, y_after_appearance);
+    let y_after_image =
+        paint_image_adjustments(app, s, hit, rx + pl, rx + rw - pl, y_after_appearance);
     if y_after_image != y_after_appearance {
-        // Image adjustments were rendered, adjust the vertical position
-        // The image controls take about 280px (7 sliders * 28px + buttons)
-        let image_section_height = y_after_image - y_after_appearance;
-        // Note: We can't easily adjust y0 for subsequent sections, so this is a best-effort integration
+        // The image-adjustment block rendered (7 sliders + buttons, ~280px).
+        // Its height cannot be folded into `y0` without re-flowing every
+        // audited offset below it, so the sections that follow keep their
+        // audited positions — see the Chromium-audit note atop this function.
     }
 
     // ---- typography -----------------------------------------------------
     app.fonts
         .caps_label(s, x0, y0 + 658.5, "Typography", C_TEXT, Wt::Med);
+    // Figma's Typography header: the styles button opens the text-style
+    // picker, the plus creates a style from the current selection. Both were
+    // painted but inert — these rects are what make them buttons.
+    let styles_btn = Rect::new(xr - 38.0, y0 + 654.0, xr - 18.0, y0 + 676.0);
+    let create_btn = Rect::new(xr - 18.0, y0 + 654.0, xr + 2.0, y0 + 676.0);
+    let styles_tint = if app.dropdown_text_style || hover(app, styles_btn) {
+        C_TEXT
+    } else {
+        C_DIM
+    };
     draw_icon(
         s,
         "grid-2x2",
         xr - 14.0 - 8.0 - 12.0,
         y0 + 659.0,
         12.0,
-        C_DIM,
+        styles_tint,
     );
-    draw_icon(s, "plus", xr - 14.0, y0 + 658.0, 14.0, C_DIM);
+    let create_tint = if hover(app, create_btn) {
+        C_TEXT
+    } else {
+        C_DIM
+    };
+    draw_icon(s, "plus", xr - 14.0, y0 + 658.0, 14.0, create_tint);
+    hit.push((styles_btn, Action::TextStyleDropdown));
+    hit.push((create_btn, Action::CreateTextStyle));
     let fam = Rect::new(x0, y0 + 681.5, x0 + 315.0, y0 + 709.5);
     input(
         app,
@@ -3123,8 +3343,15 @@ fn paint_design(
         Some("chevron-down"),
     );
     // Truncation
-    app.fonts
-        .text(s, x0 + 161.5, y0 + 1078.5, "Truncation", T10, C_DIM, Wt::Reg);
+    app.fonts.text(
+        s,
+        x0 + 161.5,
+        y0 + 1078.5,
+        "Truncation",
+        T10,
+        C_DIM,
+        Wt::Reg,
+    );
     let trunc = Rect::new(x0 + 161.5, y0 + 1096.0, x0 + 315.0, y0 + 1124.0);
     input(
         app,
@@ -3154,8 +3381,15 @@ fn paint_design(
         Some("chevron-down"),
     );
     // Wrap style
-    app.fonts
-        .text(s, x0 + 161.5, y0 + 1132.5, "Wrap style", T10, C_DIM, Wt::Reg);
+    app.fonts.text(
+        s,
+        x0 + 161.5,
+        y0 + 1132.5,
+        "Wrap style",
+        T10,
+        C_DIM,
+        Wt::Reg,
+    );
     let wrap = Rect::new(x0 + 161.5, y0 + 1150.0, x0 + 315.0, y0 + 1178.0);
     input(
         app,
@@ -3222,10 +3456,10 @@ fn paint_design(
         true,
     );
     y += 12.0 + 4.0;
-    
+
     // Phase 6: Gradient controls (only shown when fill is a gradient)
     y = paint_gradient_controls(app, s, hit, rx + pl, rx + rw - pl, y);
-    
+
     hline(s, rx, rx + rw, y, C_LINE);
     y += 1.0 + 12.0;
 
@@ -3809,20 +4043,35 @@ fn paint_layer_visible(app: &App, is_fill: bool) -> bool {
 
 /// Phase 6: Check if the selected node has a gradient fill
 fn has_gradient_fill(app: &App) -> bool {
-    let Some(doc) = app.doc_opt() else { return false };
-    let Some(id) = doc.selected_id() else { return false };
-    let Some(node) = find_node(&doc.editor_ref().root, &id) else { return false };
-    matches!(node.fill, x_native::Paint::LinearGradient { .. } 
-        | x_native::Paint::RadialGradient { .. }
-        | x_native::Paint::AngularGradient { .. }
-        | x_native::Paint::DiamondGradient { .. })
+    let Some(doc) = app.doc_opt() else {
+        return false;
+    };
+    let Some(id) = doc.selected_id() else {
+        return false;
+    };
+    let Some(node) = find_node(&doc.editor_ref().root, &id) else {
+        return false;
+    };
+    matches!(
+        node.fill,
+        x_native::Paint::LinearGradient { .. }
+            | x_native::Paint::RadialGradient { .. }
+            | x_native::Paint::AngularGradient { .. }
+            | x_native::Paint::DiamondGradient { .. }
+    )
 }
 
 /// Phase 6: Get gradient type label
 fn gradient_type_label(app: &App) -> String {
-    let Some(doc) = app.doc_opt() else { return "None".into() };
-    let Some(id) = doc.selected_id() else { return "None".into() };
-    let Some(node) = find_node(&doc.editor_ref().root, &id) else { return "None".into() };
+    let Some(doc) = app.doc_opt() else {
+        return "None".into();
+    };
+    let Some(id) = doc.selected_id() else {
+        return "None".into();
+    };
+    let Some(node) = find_node(&doc.editor_ref().root, &id) else {
+        return "None".into();
+    };
     match &node.fill {
         x_native::Paint::LinearGradient { .. } => "Linear".into(),
         x_native::Paint::RadialGradient { .. } => "Radial".into(),
@@ -3834,9 +4083,15 @@ fn gradient_type_label(app: &App) -> String {
 
 /// Phase 6: Check if the selected node is an image
 fn is_image_node(app: &App) -> bool {
-    let Some(doc) = app.doc_opt() else { return false };
-    let Some(id) = doc.selected_id() else { return false };
-    let Some(node) = find_node(&doc.editor_ref().root, &id) else { return false };
+    let Some(doc) = app.doc_opt() else {
+        return false;
+    };
+    let Some(id) = doc.selected_id() else {
+        return false;
+    };
+    let Some(node) = find_node(&doc.editor_ref().root, &id) else {
+        return false;
+    };
     matches!(node.kind, x_native::NodeKind::Image { .. })
 }
 
@@ -3854,7 +4109,7 @@ fn paint_gradient_controls(
     }
 
     let mut y = y;
-    
+
     // Section header
     app.fonts.caps_label(s, x0, y, "GRADIENT", C_TEXT, Wt::Med);
     y += 20.0;
@@ -3863,8 +4118,23 @@ fn paint_gradient_controls(
     let type_r = Rect::new(x0, y, x0 + 120.0, y + 24.0);
     input_box(app, s, type_r, 6.0);
     let label = gradient_type_label(app);
-    app.fonts.text(s, type_r.x0 + 8.0, type_r.y0 + 6.0, &label, T10, C_TEXT, Wt::Reg);
-    draw_icon(s, "chevron-down", type_r.x1 - 18.0, type_r.y0 + 6.0, 12.0, C_DIM);
+    app.fonts.text(
+        s,
+        type_r.x0 + 8.0,
+        type_r.y0 + 6.0,
+        &label,
+        T10,
+        C_TEXT,
+        Wt::Reg,
+    );
+    draw_icon(
+        s,
+        "chevron-down",
+        type_r.x1 - 18.0,
+        type_r.y0 + 6.0,
+        12.0,
+        C_DIM,
+    );
     hit.push((type_r, Action::FrameDropdown)); // Reuse frame dropdown for now
     y += 32.0;
 
@@ -3872,14 +4142,37 @@ fn paint_gradient_controls(
     let flip_r = Rect::new(x0, y, x0 + 60.0, y + 24.0);
     input_box(app, s, flip_r, 6.0);
     draw_icon(s, "repeat", flip_r.x0 + 8.0, flip_r.y0 + 6.0, 12.0, C_DIM);
-    app.fonts.text(s, flip_r.x0 + 24.0, flip_r.y0 + 6.0, "Flip", T10, C_TEXT, Wt::Reg);
+    app.fonts.text(
+        s,
+        flip_r.x0 + 24.0,
+        flip_r.y0 + 6.0,
+        "Flip",
+        T10,
+        C_TEXT,
+        Wt::Reg,
+    );
     hit.push((flip_r, Action::FlipGradient));
 
     // Rotate gradient slider
     let rotate_r = Rect::new(x0 + 70.0, y, x0 + 200.0, y + 24.0);
     input_box(app, s, rotate_r, 6.0);
-    draw_icon(s, "rotate-cw", rotate_r.x0 + 8.0, rotate_r.y0 + 6.0, 12.0, C_DIM);
-    app.fonts.text(s, rotate_r.x0 + 24.0, rotate_r.y0 + 6.0, "90°", T10, C_TEXT, Wt::Reg);
+    draw_icon(
+        s,
+        "rotate-cw",
+        rotate_r.x0 + 8.0,
+        rotate_r.y0 + 6.0,
+        12.0,
+        C_DIM,
+    );
+    app.fonts.text(
+        s,
+        rotate_r.x0 + 24.0,
+        rotate_r.y0 + 6.0,
+        "90°",
+        T10,
+        C_TEXT,
+        Wt::Reg,
+    );
     hit.push((rotate_r, Action::RotateGradient { degrees: 90.0 }));
     y += 32.0;
 
@@ -3887,18 +4180,20 @@ fn paint_gradient_controls(
     let stops_r = Rect::new(x0, y, xr, y + 24.0);
     fill_rrect(s, stops_r, 6.0, C_FIELD);
     stroke_rrect(s, stops_r, 6.0, C_LINE, 1.0);
-    
+
     // Draw gradient preview bar
     let bar_h = 16.0;
     let bar_y = y + 4.0;
     let bar_r = Rect::new(x0 + 4.0, bar_y, xr - 4.0, bar_y + bar_h);
-    
+
     // Create a simple gradient preview (blue to red for demo)
-    let gradient_preview = vello::peniko::Gradient::new_linear((bar_r.x0, bar_r.y0), (bar_r.x1, bar_r.y0))
-        .with_stops([
-            vello::peniko::Color::from_rgb8(0x00, 0x99, 0xFF),
-            vello::peniko::Color::from_rgb8(0xFF, 0x33, 0x00),
-        ]);
+    let gradient_preview =
+        vello::peniko::Gradient::new_linear((bar_r.x0, bar_r.y0), (bar_r.x1, bar_r.y0)).with_stops(
+            [
+                vello::peniko::Color::from_rgb8(0x00, 0x99, 0xFF),
+                vello::peniko::Color::from_rgb8(0xFF, 0x33, 0x00),
+            ],
+        );
     s.fill(
         vello::peniko::Fill::NonZero,
         vello::kurbo::Affine::IDENTITY,
@@ -3906,7 +4201,7 @@ fn paint_gradient_controls(
         None,
         &bar_r,
     );
-    
+
     // Add stop markers
     let stop_count = 2; // Simplified
     for i in 0..stop_count {
@@ -3914,7 +4209,7 @@ fn paint_gradient_controls(
         let marker_r = Rect::new(stop_x - 4.0, bar_r.y0 - 2.0, stop_x + 4.0, bar_r.y1 + 2.0);
         stroke_rrect(s, marker_r, 2.0, C_TEXT, 2.0);
     }
-    
+
     y += 32.0;
 
     // Add stop button
@@ -3923,8 +4218,22 @@ fn paint_gradient_controls(
     fill_rrect(s, add_r, 4.0, if hov { C_FIELD_2 } else { C_FIELD });
     stroke_rrect(s, add_r, 4.0, C_LINE, 1.0);
     draw_icon(s, "plus", add_r.x0 + 8.0, add_r.y0 + 4.0, 12.0, C_DIM);
-    app.fonts.text(s, add_r.x0 + 24.0, add_r.y0 + 4.0, "Add", T10, C_TEXT, Wt::Reg);
-    hit.push((add_r, Action::AddGradientStop { position: 0.5, color: [128, 128, 128] }));
+    app.fonts.text(
+        s,
+        add_r.x0 + 24.0,
+        add_r.y0 + 4.0,
+        "Add",
+        T10,
+        C_TEXT,
+        Wt::Reg,
+    );
+    hit.push((
+        add_r,
+        Action::AddGradientStop {
+            position: 0.5,
+            color: [128, 128, 128],
+        },
+    ));
 
     y += 28.0;
     y += 8.0;
@@ -3946,7 +4255,7 @@ fn paint_image_adjustments(
     }
 
     let mut y = y;
-    
+
     // Section header
     app.fonts.caps_label(s, x0, y, "IMAGE", C_TEXT, Wt::Med);
     y += 20.0;
@@ -3975,24 +4284,27 @@ fn paint_image_adjustments(
     ];
 
     for (label, name) in adj_names.iter() {
-        let value = adjustments.as_ref().map(|a| match *name {
-            "exposure" => a.exposure,
-            "contrast" => a.contrast,
-            "saturation" => a.saturation,
-            "temperature" => a.temperature,
-            "tint" => a.tint,
-            "highlights" => a.highlights,
-            "shadows" => a.shadows,
-            _ => 0.0,
-        }).unwrap_or(0.0);
+        let value = adjustments
+            .as_ref()
+            .map(|a| match *name {
+                "exposure" => a.exposure,
+                "contrast" => a.contrast,
+                "saturation" => a.saturation,
+                "temperature" => a.temperature,
+                "tint" => a.tint,
+                "highlights" => a.highlights,
+                "shadows" => a.shadows,
+                _ => 0.0,
+            })
+            .unwrap_or(0.0);
 
         // Label
         app.fonts.text(s, x0, y + 4.0, label, T10, C_DIM, Wt::Reg);
-        
+
         // Slider track
         let slider_r = Rect::new(x0 + 100.0, y, x0 + 220.0, y + 20.0);
         fill_rrect(s, slider_r, 4.0, C_FIELD);
-        
+
         // Slider fill (centered at 0)
         let center = (slider_r.x0 + slider_r.x1) / 2.0;
         let fill_x = center + (value * slider_r.width() / 2.0);
@@ -4003,17 +4315,21 @@ fn paint_image_adjustments(
             slider_r.y1 - 2.0,
         );
         fill_rrect(s, fill_r, 2.0, C_ACCENT);
-        
+
         // Value label
         let val_label = format!("{:.0}%", value * 100.0);
-        app.fonts.text(s, x0 + 230.0, y + 4.0, &val_label, T10, C_TEXT, Wt::Mono);
-        
+        app.fonts
+            .text(s, x0 + 230.0, y + 4.0, &val_label, T10, C_TEXT, Wt::Mono);
+
         // Hit area for slider
-        hit.push((slider_r, Action::UpdateImageAdjustment { 
-            adjustment: name.to_string(), 
-            value: (value + 0.1).clamp(-1.0, 1.0) 
-        }));
-        
+        hit.push((
+            slider_r,
+            Action::UpdateImageAdjustment {
+                adjustment: name.to_string(),
+                value: (value + 0.1).clamp(-1.0, 1.0),
+            },
+        ));
+
         y += 28.0;
     }
 
@@ -4022,7 +4338,8 @@ fn paint_image_adjustments(
     let hov = hover(app, reset_r);
     fill_rrect(s, reset_r, 6.0, if hov { C_FIELD_2 } else { C_FIELD });
     stroke_rrect(s, reset_r, 6.0, C_LINE, 1.0);
-    app.fonts.text_center(s, reset_r, "Reset", T10, C_TEXT, Wt::Reg, true);
+    app.fonts
+        .text_center(s, reset_r, "Reset", T10, C_TEXT, Wt::Reg, true);
     hit.push((reset_r, Action::ResetImageAdjustments));
 
     // Rotate buttons
@@ -4030,16 +4347,46 @@ fn paint_image_adjustments(
     let hov = hover(app, rot_cw_r);
     fill_rrect(s, rot_cw_r, 6.0, if hov { C_FIELD_2 } else { C_FIELD });
     stroke_rrect(s, rot_cw_r, 6.0, C_LINE, 1.0);
-    draw_icon(s, "rotate-cw", rot_cw_r.x0 + 8.0, rot_cw_r.y0 + 6.0, 12.0, C_DIM);
-    app.fonts.text(s, rot_cw_r.x0 + 24.0, rot_cw_r.y0 + 6.0, "90°", T10, C_TEXT, Wt::Reg);
+    draw_icon(
+        s,
+        "rotate-cw",
+        rot_cw_r.x0 + 8.0,
+        rot_cw_r.y0 + 6.0,
+        12.0,
+        C_DIM,
+    );
+    app.fonts.text(
+        s,
+        rot_cw_r.x0 + 24.0,
+        rot_cw_r.y0 + 6.0,
+        "90°",
+        T10,
+        C_TEXT,
+        Wt::Reg,
+    );
     hit.push((rot_cw_r, Action::RotateImage { clockwise: true }));
 
     let rot_ccw_r = Rect::new(x0 + 150.0, y, x0 + 200.0, y + 24.0);
     let hov = hover(app, rot_ccw_r);
     fill_rrect(s, rot_ccw_r, 6.0, if hov { C_FIELD_2 } else { C_FIELD });
     stroke_rrect(s, rot_ccw_r, 6.0, C_LINE, 1.0);
-    draw_icon(s, "rotate-ccw", rot_ccw_r.x0 + 8.0, rot_ccw_r.y0 + 6.0, 12.0, C_DIM);
-    app.fonts.text(s, rot_ccw_r.x0 + 24.0, rot_ccw_r.y0 + 6.0, "90°", T10, C_TEXT, Wt::Reg);
+    draw_icon(
+        s,
+        "rotate-ccw",
+        rot_ccw_r.x0 + 8.0,
+        rot_ccw_r.y0 + 6.0,
+        12.0,
+        C_DIM,
+    );
+    app.fonts.text(
+        s,
+        rot_ccw_r.x0 + 24.0,
+        rot_ccw_r.y0 + 6.0,
+        "90°",
+        T10,
+        C_TEXT,
+        Wt::Reg,
+    );
     hit.push((rot_ccw_r, Action::RotateImage { clockwise: false }));
 
     y += 32.0;
@@ -4172,9 +4519,14 @@ fn paint_frame_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Actio
 fn paint_lh_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let reg = app.editor_regions();
     let x0 = reg.right.x0 + 13.0; // panel border + padding (cols x0)
-    let y0 = crate::theme::ED_TITLE_H;
+                                  // Panel rows live at `y_entry - scroll + offset`, where `y_entry` is the
+                                  // pixel after the pill-tab divider: `ED_TITLE_H` plus the same chrome sum
+                                  // `paint_frame_dropdown` builds (8 + 24 + 10 + PILL_H + 10 + 1 = 77, +12
+                                  // to the first row = 89). Anchoring on `ED_TITLE_H` alone floated this
+                                  // menu 89px above the Line-height field it belongs to.
+    let y_entry = crate::theme::ED_TITLE_H + 89.0;
     // the typography rows scroll with the panel
-    let fy = y0 + 771.0 - app.doc().scroll_right;
+    let fy = y_entry + 771.0 - app.doc().scroll_right;
     let dd = Rect::new(x0, fy + 28.0, x0 + 153.5, fy + 28.0 + 3.0 * 32.0);
     elev_shadow(s, dd, 8.0, Elevation::Floating);
     fill_rrect(s, dd, 8.0, C_FIELD);
@@ -4202,6 +4554,91 @@ fn paint_lh_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>
             Wt::Reg,
         );
         hit.push((r, Action::LhMode(i)));
+    }
+}
+
+/// Text-style picker (Figma's Typography ▸ styles button): every text style in
+/// the document, then the rows that act on the current selection — Update and
+/// Detach when the selection is linked to a style, Create when it is a text
+/// layer. Same design language as the line-height menu.
+///
+/// Panel rows live at `y_entry - scroll + offset`, where `y_entry` is the
+/// pixel after the pill-tab divider (`ED_TITLE_H + 89`, see `paint_right`);
+/// the anchor below is the Typography header row at offset 658.5.
+fn paint_text_style_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    let reg = app.editor_regions();
+    let x0 = reg.right.x0 + 13.0; // panel border + padding (cols x0)
+    let y_entry = crate::theme::ED_TITLE_H + 89.0;
+    let fy = y_entry + 658.5 - app.doc().scroll_right;
+
+    let names: Vec<String> = {
+        let doc = app.doc();
+        doc.doc
+            .text_style_names()
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    };
+    let selected = app.doc().selected_id();
+    let linked = selected.as_deref().and_then(|id| app.linked_text_style(id));
+    let is_text = selected
+        .as_deref()
+        .map(|id| app.is_text_layer(id))
+        .unwrap_or(false);
+
+    // (label, action) — a None action is an inert row (the empty state)
+    let mut rows: Vec<(String, Option<Action>)> = names
+        .iter()
+        .map(|n| (n.clone(), Some(Action::ApplyTextStyle(n.clone()))))
+        .collect();
+    if names.is_empty() {
+        rows.push(("No text styles yet".into(), None));
+    }
+    if let Some(name) = &linked {
+        rows.push((
+            format!("Update '{name}' from selection"),
+            Some(Action::UpdateTextStyleFromSelection),
+        ));
+        rows.push(("Detach style".into(), Some(Action::DetachTextStyle)));
+    }
+    if is_text {
+        rows.push(("Create text style".into(), Some(Action::CreateTextStyle)));
+    }
+
+    let dd = Rect::new(
+        x0,
+        fy + 22.0,
+        x0 + 315.0,
+        fy + 22.0 + rows.len() as f64 * 32.0,
+    );
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, 8.0, C_FIELD);
+    stroke_rrect(s, dd, 8.0, C_LINE_2, 1.0);
+    for (i, (label, action)) in rows.into_iter().enumerate() {
+        let r = Rect::new(
+            dd.x0,
+            dd.y0 + 32.0 * i as f64,
+            dd.x1,
+            dd.y0 + 32.0 * (i + 1) as f64,
+        );
+        let hov = hover(app, r);
+        if hov {
+            fill_rect(s, r, C_FIELD_2);
+        }
+        // the style this layer already carries is the highlighted row
+        let active = linked.as_deref() == Some(label.as_str());
+        app.fonts.text(
+            s,
+            r.x0 + 10.0,
+            r.y0 + 10.0,
+            &label,
+            T11,
+            if hov || active { C_TEXT } else { C_MUTED },
+            Wt::Reg,
+        );
+        if let Some(a) = action {
+            hit.push((r, a));
+        }
     }
 }
 
@@ -5605,8 +6042,9 @@ pub(crate) fn proto_action_label(a: &x_native::Action, targets: &[(String, Strin
 
 pub(crate) fn proto_dest_of(a: &x_native::Action) -> Option<String> {
     match a {
-        x_native::Action::Navigate { destination }
-        | x_native::Action::ScrollTo { destination } => Some(destination.clone()),
+        x_native::Action::Navigate { destination } | x_native::Action::ScrollTo { destination } => {
+            Some(destination.clone())
+        }
         x_native::Action::OpenOverlay { overlay, .. }
         | x_native::Action::SwapOverlay { overlay } => Some(overlay.clone()),
         _ => None,
@@ -5745,15 +6183,8 @@ fn paint_prototype(
                 x_native::Trigger::KeyDown { key } => {
                     let kb = Rect::new(x0 + 80.0, y + 4.0, x0 + 140.0, y + 20.0);
                     input_box(app, s, kb, 4.0);
-                    app.fonts.text(
-                        s,
-                        kb.x0 + 4.0,
-                        y + 6.0,
-                        key,
-                        T10,
-                        C_TEXT,
-                        Wt::Mono,
-                    );
+                    app.fonts
+                        .text(s, kb.x0 + 4.0, y + 6.0, key, T10, C_TEXT, Wt::Mono);
                     hit.push((kb, Action::ProtoEditKey(i)));
                 }
                 x_native::Trigger::WhenVideoHits { time } => {
@@ -5789,56 +6220,50 @@ fn paint_prototype(
                     } else {
                         display_url
                     };
-                    app.fonts.text(
-                        s,
-                        ub.x0 + 4.0,
-                        y + 52.0,
-                        &truncated,
-                        T10,
-                        C_TEXT,
-                        Wt::Mono,
-                    );
+                    app.fonts
+                        .text(s, ub.x0 + 4.0, y + 52.0, &truncated, T10, C_TEXT, Wt::Mono);
                     hit.push((ub, Action::ProtoEditUrl(i)));
                 }
                 _ => {}
             }
         }
-            // Row 3: easing + reset + remove
-            let row3_y = y + 30.0;
-            let eb = Rect::new(x0 + 5.0, row3_y, x0 + 85.0, row3_y + 20.0);
-            input_box(app, s, eb, 4.0);
-            app.fonts.text(
-                s,
-                eb.x0 + 4.0,
-                row3_y + 2.0,
-                &format!("Easing: {}", ix.easing.label()),
-                T10,
-                C_TEXT,
-                Wt::Reg,
-            );
-            hit.push((eb, Action::ProtoEasing(i)));
+        // Row 3: easing + reset + remove
+        let row3_y = y + 30.0;
+        let eb = Rect::new(x0 + 5.0, row3_y, x0 + 85.0, row3_y + 20.0);
+        input_box(app, s, eb, 4.0);
+        app.fonts.text(
+            s,
+            eb.x0 + 4.0,
+            row3_y + 2.0,
+            &format!("Easing: {}", ix.easing.label()),
+            T10,
+            C_TEXT,
+            Wt::Reg,
+        );
+        hit.push((eb, Action::ProtoEasing(i)));
 
-            let rb = Rect::new(x0 + 90.0, row3_y, x0 + 140.0, row3_y + 20.0);
-            input_box(app, s, rb, 4.0);
-            app.fonts.text(
-                s,
-                rb.x0 + 4.0,
-                row3_y + 2.0,
-                if ix.reset_on_navigate {
-                    "Reset: On"
-                } else {
-                    "Reset: Off"
-                },
-                T10,
-                C_TEXT,
-                Wt::Reg,
-            );
-            hit.push((rb, Action::ProtoToggleReset(i)));
-            // Row 4: remove button
-            let rb_rm = Rect::new(xr - 30.0, row3_y, xr - 5.0, row3_y + 20.0);
-            input_box(app, s, rb_rm, 4.0);
-            app.fonts.text_center(s, rb_rm, "Remove", T10, C_TEXT, Wt::Reg);
-            hit.push((rb_rm, Action::ProtoRemove(i)));
+        let rb = Rect::new(x0 + 90.0, row3_y, x0 + 140.0, row3_y + 20.0);
+        input_box(app, s, rb, 4.0);
+        app.fonts.text(
+            s,
+            rb.x0 + 4.0,
+            row3_y + 2.0,
+            if ix.reset_on_navigate {
+                "Reset: On"
+            } else {
+                "Reset: Off"
+            },
+            T10,
+            C_TEXT,
+            Wt::Reg,
+        );
+        hit.push((rb, Action::ProtoToggleReset(i)));
+        // Row 4: remove button
+        let rb_rm = Rect::new(xr - 30.0, row3_y, xr - 5.0, row3_y + 20.0);
+        input_box(app, s, rb_rm, 4.0);
+        app.fonts
+            .text_center(s, rb_rm, "Remove", T10, C_TEXT, Wt::Reg);
+        hit.push((rb_rm, Action::ProtoRemove(i)));
     } else {
         let hint = if sel.len() == 1 {
             "Frame not found"

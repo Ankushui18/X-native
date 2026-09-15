@@ -112,3 +112,19 @@ the single source of the gate, but this working copy has no reachable remote, so
 no badge currently runs. Push the branch and the pipeline is live; until then
 `scripts/check.sh` is the honest claim, and `docs/VERIFICATION.md` records what
 was actually run locally.
+
+## 10. Style definitions are not undoable
+
+Undo lives per editor (`Editor::undo_stack` of `Command`s,
+`crates/x-editor/src/editor_core.rs`), and `Document.styles` — the
+text/paint/effect style registry — is not part of any `Command`. Applying or
+detaching a style *is* undoable (the consumers are mutated through
+`Editor::mutate_visual_stack`), but editing a definition is not: undoing the
+app's "Update style" restores every consumer's old values while the registry
+still holds the new ones, so the next re-resolve writes them back. Propagation
+is also N undo steps (one per consumer), not one batched step — `Command::Group`
+exists and is unused here. The fix is to snapshot the registry into the same
+step, or to move the registry behind the editor; until then the behaviour that
+*does* hold is pinned by
+`text_styles_create_apply_update_and_detach_end_to_end` in
+`apps/x-designer/src/bin/x_native_app/regression_tests.rs`.

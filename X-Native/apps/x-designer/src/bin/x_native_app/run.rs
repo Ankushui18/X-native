@@ -13,14 +13,17 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{CursorIcon, Window, WindowId};
 
+use x_editor;
 #[cfg(test)]
 use x_native::build_render_tree;
 #[cfg(test)]
 use x_native::build_scene_full;
 #[cfg(test)]
 use x_native::fileio::load_x_file;
-use x_editor;
-use x_native::{Node, NodeKind, Paint, PathCmd};
+use x_native::{
+    bind_style, detach_text_style, resolve_styles, LegacyStyle, Node, NodeKind, Paint, PathCmd,
+    TextStyleData,
+};
 
 use crate::dashboard;
 use crate::editor_ui;
@@ -2502,6 +2505,186 @@ impl App {
         self.autosize_text_node(id.as_str())
     }
 
+    // ---------------------------------------------------------- text styles
+    //
+    // Figma's "Create and apply text styles": a text style is a named
+    // typography definition in `Document.styles`. Applying one writes the
+    // values AND links the layer through its `style:text` binding, so
+    // updating the definition and re-resolving the trees moves every
+    // consumer. Alignment, fill and resizing are deliberately not part of a
+    // style — the four operations below only ever touch typography.
+
+    /// True when `id` names a text layer: the only kind a text style applies
+    /// to.
+    pub fn is_text_layer(&self, id: &str) -> bool {
+        let root = &self.doc_ref().editor_ref().root;
+        crate::editor_ui::find_node(root, id)
+            .map(|n| matches!(n.kind, NodeKind::Text { .. }))
+            .unwrap_or(false)
+    }
+
+    /// The text style `id` is linked to, if any.
+    pub fn linked_text_style(&self, id: &str) -> Option<String> {
+        let root = &self.doc_ref().editor_ref().root;
+        crate::editor_ui::find_node(root, id)?
+            .bindings
+            .get("style:text")
+            .cloned()
+    }
+
+    /// Every node under `root` carrying a style link — the consumers a style
+    /// edit has to re-resolve.
+    pub fn collect_style_consumers(root: &Node, out: &mut Vec<String>) {
+        if x_native::STYLE_BINDING_KEYS
+            .iter()
+            .any(|(key, _)| root.bindings.contains_key(*key))
+        {
+            out.push(root.id.clone());
+        }
+        for c in &root.children {
+            Self::collect_style_consumers(c, out);
+        }
+    }
+
+    /// Apply `name` to every selected text layer and link it. Returns the
+    /// number of layers linked; 0 covers both "no such style" and "no text
+    /// layer in the selection".
+    pub fn apply_text_style(&mut self, name: &str) -> usize {
+        let Some(data) = self.doc_ref().doc.text_style(name).cloned() else {
+            return 0;
+        };
+        let ids: Vec<String> = self.doc_ref().editor_ref().selection.clone();
+        let mut linked = 0usize;
+        for id in ids {
+            if !self.is_text_layer(id.as_str()) {
+                continue;
+            }
+            let style = LegacyStyle::Text(data.clone());
+            let bound = self
+                .doc()
+                .editor()
+                .mutate_visual_stack(id.as_str(), |n| bind_style(n, name, &style));
+            if bound {
+                linked += 1;
+                // the style owns the size, so the box re-fits around it
+                self.autosize_text_node(id.as_str());
+            }
+        }
+        if linked > 0 {
+            self.mark_dirty();
+            self.doc().sync();
+        }
+        linked
+    }
+
+    /// Create a style from the selected text layer's typography and apply it
+    /// to that layer — Figma creates and links in one step. None when the
+    /// selection is not a text layer.
+    pub fn create_text_style_from_selection(&mut self) -> Option<String> {
+        let id = self.doc_ref().selected_id()?;
+        if !self.is_text_layer(id.as_str()) {
+            return None;
+        }
+        let data = {
+            let root = &self.doc_ref().editor_ref().root;
+            TextStyleData::from_node(crate::editor_ui::find_node(root, id.as_str())?)
+        };
+        // Figma's naming: "New style", then "New style 2", "New style 3", …
+        let name = (1..)
+            .map(|i| {
+                if i == 1 {
+                    "New style".to_string()
+                } else {
+                    format!("New style {i}")
+                }
+            })
+            .find(|candidate| !self.doc_ref().doc.styles.contains_key(candidate))?;
+        self.doc().doc.add_text_style(&name, data).ok()?;
+        self.apply_text_style(&name);
+        self.status = format!("Created text style '{name}'");
+        Some(name)
+    }
+
+    /// Detach every selected layer linked to a text style: the typography
+    /// stays, the link goes, so later style edits stop reaching it.
+    pub fn detach_text_style_from_selection(&mut self) -> usize {
+        let ids: Vec<String> = self.doc_ref().editor_ref().selection.clone();
+        let mut detached = 0usize;
+        for id in ids {
+            if self.linked_text_style(id.as_str()).is_none() {
+                continue;
+            }
+            self.doc().editor().mutate_visual_stack(id.as_str(), |n| {
+                detach_text_style(n);
+            });
+            detached += 1;
+        }
+        if detached > 0 {
+            self.mark_dirty();
+            self.doc().sync();
+        }
+        detached
+    }
+
+    /// Push the selected layer's current typography into the style it is
+    /// linked to, then re-resolve every page (Figma's "Update style").
+    /// Returns the consumers re-resolved; None when the selection is not
+    /// linked to a style.
+    pub fn update_text_style_from_selection(&mut self) -> Option<usize> {
+        let id = self.doc_ref().selected_id()?;
+        let name = self.linked_text_style(id.as_str())?;
+        let data = {
+            let root = &self.doc_ref().editor_ref().root;
+            TextStyleData::from_node(crate::editor_ui::find_node(root, id.as_str())?)
+        };
+        if !self.doc().doc.update_text_style(&name, data) {
+            return None;
+        }
+        let updated = self.propagate_styles();
+        self.status = format!("Updated '{name}' — {updated} linked layers re-resolved");
+        Some(updated)
+    }
+
+    /// Re-apply every linked style across all page trees: the "edit a style,
+    /// every consumer updates" pass. Each consumer goes through its own page
+    /// editor so the change lands in that page's undo stack (the engine keeps
+    /// one undo stack per page). Returns the consumers re-resolved.
+    pub fn propagate_styles(&mut self) -> usize {
+        let styles = self.doc_ref().doc.styles.clone();
+        // collected up front: the walk borrows the editors immutably while
+        // the mutation pass needs them mutably
+        let per_page: Vec<Vec<String>> = self
+            .doc_ref()
+            .editors
+            .iter()
+            .map(|ed| {
+                let mut ids = Vec::new();
+                Self::collect_style_consumers(&ed.root, &mut ids);
+                ids
+            })
+            .collect();
+        let mut updated = 0usize;
+        for (pi, ids) in per_page.into_iter().enumerate() {
+            let doc = self.doc();
+            let Some(ed) = doc.editors.get_mut(pi) else {
+                continue;
+            };
+            for id in ids {
+                let registry = &styles;
+                if ed.mutate_visual_stack(id.as_str(), |n| {
+                    resolve_styles(n, registry);
+                }) {
+                    updated += 1;
+                }
+            }
+        }
+        if updated > 0 {
+            self.mark_dirty();
+            self.doc().sync();
+        }
+        updated
+    }
+
     /// Press for a ruler guide: from a ruler strip (create) or near an
     /// existing line (grab). True when the press started a guide drag.
     pub fn guide_press(&mut self, p: Point) -> bool {
@@ -2839,6 +3022,9 @@ impl Host {
             if self.app.dropdown_frame {
                 self.app.dropdown_frame = false;
             }
+            if self.app.dropdown_text_style {
+                self.app.dropdown_text_style = false;
+            }
 
             // chrome hit zones
             for (r, a) in self.app.hit.iter().rev() {
@@ -2887,6 +3073,9 @@ impl Host {
         }
         if self.app.dropdown_lh {
             self.app.dropdown_lh = false;
+        }
+        if self.app.dropdown_text_style {
+            self.app.dropdown_text_style = false;
         }
 
         // Color popovers are modal to the inspector. Consume clicks inside
@@ -4376,7 +4565,6 @@ impl Host {
             return;
         }
 
-        
         // Vector edit mode keyboard shortcuts (Figma parity)
         if self.app.screen == Screen::Editor && !self.app.docs.is_empty() {
             // Enter/Exit vector edit mode
@@ -4414,7 +4602,9 @@ impl Host {
                             return;
                         }
                         "v" | "V" if !self.app.ctrl && !self.app.alt => {
-                            self.dispatch(Action::SetVectorTool(crate::state::VectorTool::MovePoint));
+                            self.dispatch(Action::SetVectorTool(
+                                crate::state::VectorTool::MovePoint,
+                            ));
                             return;
                         }
                         "x" | "X" if !self.app.ctrl && !self.app.alt => {
@@ -4696,9 +4886,10 @@ impl Host {
 
         match key {
             Key::Named(NamedKey::Escape) => {
-                if self.app.dropdown_frame || self.app.dropdown_lh {
+                if self.app.dropdown_frame || self.app.dropdown_lh || self.app.dropdown_text_style {
                     self.app.dropdown_frame = false;
                     self.app.dropdown_lh = false;
+                    self.app.dropdown_text_style = false;
                 } else if self.app.screen == Screen::Editor {
                     self.app.doc().editor().selection.clear();
                 } else {
@@ -5235,17 +5426,33 @@ impl Host {
                     x_native::Animation::Instant => x_native::Animation::Dissolve,
                     x_native::Animation::Dissolve => x_native::Animation::SmartAnimate,
                     x_native::Animation::SmartAnimate => x_native::Animation::SlideIn,
-                    x_native::Animation::SlideIn => x_native::Animation::MoveIn(x_native::Direction::Left),
+                    x_native::Animation::SlideIn => {
+                        x_native::Animation::MoveIn(x_native::Direction::Left)
+                    }
                     x_native::Animation::MoveIn(d) => match d {
-                        x_native::Direction::Left => x_native::Animation::MoveIn(x_native::Direction::Right),
-                        x_native::Direction::Right => x_native::Animation::MoveIn(x_native::Direction::Top),
-                        x_native::Direction::Top => x_native::Animation::MoveIn(x_native::Direction::Bottom),
-                        x_native::Direction::Bottom => x_native::Animation::MoveOut(x_native::Direction::Left),
+                        x_native::Direction::Left => {
+                            x_native::Animation::MoveIn(x_native::Direction::Right)
+                        }
+                        x_native::Direction::Right => {
+                            x_native::Animation::MoveIn(x_native::Direction::Top)
+                        }
+                        x_native::Direction::Top => {
+                            x_native::Animation::MoveIn(x_native::Direction::Bottom)
+                        }
+                        x_native::Direction::Bottom => {
+                            x_native::Animation::MoveOut(x_native::Direction::Left)
+                        }
                     },
                     x_native::Animation::MoveOut(d) => match d {
-                        x_native::Direction::Left => x_native::Animation::MoveOut(x_native::Direction::Right),
-                        x_native::Direction::Right => x_native::Animation::MoveOut(x_native::Direction::Top),
-                        x_native::Direction::Top => x_native::Animation::MoveOut(x_native::Direction::Bottom),
+                        x_native::Direction::Left => {
+                            x_native::Animation::MoveOut(x_native::Direction::Right)
+                        }
+                        x_native::Direction::Right => {
+                            x_native::Animation::MoveOut(x_native::Direction::Top)
+                        }
+                        x_native::Direction::Top => {
+                            x_native::Animation::MoveOut(x_native::Direction::Bottom)
+                        }
                         x_native::Direction::Bottom => x_native::Animation::SlideOut,
                     },
                     x_native::Animation::SlideOut => x_native::Animation::Instant,
@@ -5270,11 +5477,21 @@ impl Host {
                     x_native::Action::OpenOverlay { overlay, position } => {
                         // Cycle overlay position
                         let next_pos = match position {
-                            x_native::OverlayPosition::Center => x_native::OverlayPosition::TopRight,
-                            x_native::OverlayPosition::TopRight => x_native::OverlayPosition::BottomRight,
-                            x_native::OverlayPosition::BottomRight => x_native::OverlayPosition::TopLeft,
-                            x_native::OverlayPosition::TopLeft => x_native::OverlayPosition::BottomLeft,
-                            x_native::OverlayPosition::BottomLeft => x_native::OverlayPosition::Center,
+                            x_native::OverlayPosition::Center => {
+                                x_native::OverlayPosition::TopRight
+                            }
+                            x_native::OverlayPosition::TopRight => {
+                                x_native::OverlayPosition::BottomRight
+                            }
+                            x_native::OverlayPosition::BottomRight => {
+                                x_native::OverlayPosition::TopLeft
+                            }
+                            x_native::OverlayPosition::TopLeft => {
+                                x_native::OverlayPosition::BottomLeft
+                            }
+                            x_native::OverlayPosition::BottomLeft => {
+                                x_native::OverlayPosition::Center
+                            }
                             _ => x_native::OverlayPosition::Center,
                         };
                         x_native::Action::OpenOverlay {
@@ -5285,7 +5502,11 @@ impl Host {
                     x_native::Action::Back => x_native::Action::CloseOverlay,
                     x_native::Action::CloseOverlay => {
                         // Navigate to first other frame
-                        let dest = targets.iter().next().map(|(id, _)| id.clone()).unwrap_or_default();
+                        let dest = targets
+                            .iter()
+                            .next()
+                            .map(|(id, _)| id.clone())
+                            .unwrap_or_default();
                         x_native::Action::Navigate { destination: dest }
                     }
                     _ => x_native::Action::Back,
@@ -5361,7 +5582,8 @@ impl Host {
                         100 => 150, // 15.0s
                         150 => 200, // 20.0s
                         _ => 0,     // 0.0s
-                    } as f32 / 10.0;
+                    } as f32
+                        / 10.0;
                 }
             }
         });
@@ -5375,7 +5597,9 @@ impl Host {
                     x_native::Easing::Linear => x_native::Easing::EaseIn,
                     x_native::Easing::EaseIn => x_native::Easing::EaseOut,
                     x_native::Easing::EaseOut => x_native::Easing::EaseInOut,
-                    x_native::Easing::EaseInOut => x_native::Easing::CubicBezier(0.25, 0.1, 0.25, 1.0),
+                    x_native::Easing::EaseInOut => {
+                        x_native::Easing::CubicBezier(0.25, 0.1, 0.25, 1.0)
+                    }
                     x_native::Easing::CubicBezier(..) => x_native::Easing::Linear,
                 };
             }
@@ -5986,6 +6210,8 @@ impl Host {
                 actions: vec![],
                 transition_ms: d.ms,
                 animation: x_native::Animation::Instant,
+                easing: x_native::Easing::Linear,
+                reset_on_navigate: false,
             };
             let effect = self.flow_fire(&ix);
             if effect.fired() {
@@ -7394,7 +7620,9 @@ impl Host {
                 let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
                     n.text_decoration = match n.text_decoration {
                         x_native::TextDecoration::None => x_native::TextDecoration::Underline,
-                        x_native::TextDecoration::Underline => x_native::TextDecoration::Strikethrough,
+                        x_native::TextDecoration::Underline => {
+                            x_native::TextDecoration::Strikethrough
+                        }
                         x_native::TextDecoration::Strikethrough => x_native::TextDecoration::None,
                     };
                 });
@@ -7470,10 +7698,15 @@ impl Host {
             Action::AppMenuItem(idx) => {
                 self.app.app_menu.open = false;
                 match idx {
-                    0 => { self.app.open_blank(); } // New file
-                    3 => { self.cmd_save(); } // Save
+                    0 => {
+                        self.app.open_blank();
+                    } // New file
+                    3 => {
+                        self.cmd_save();
+                    } // Save
                     8 => {} // Preferences (no-op for now)
-                    9 => { // Dark mode toggle
+                    9 => {
+                        // Dark mode toggle
                         let next = crate::theme::active_theme().next();
                         self.apply_theme(next);
                     }
@@ -7489,15 +7722,19 @@ impl Host {
             Action::FindNext => {
                 // Advance to next match (simplified)
                 if self.app.find_replace.match_count > 0 {
-                    self.app.find_replace.current_match = 
-                        (self.app.find_replace.current_match % self.app.find_replace.match_count) + 1;
+                    self.app.find_replace.current_match = (self.app.find_replace.current_match
+                        % self.app.find_replace.match_count)
+                        + 1;
                 }
             }
             Action::FindPrev => {
                 if self.app.find_replace.match_count > 0 {
                     let cur = self.app.find_replace.current_match;
-                    self.app.find_replace.current_match = 
-                        if cur <= 1 { self.app.find_replace.match_count } else { cur - 1 };
+                    self.app.find_replace.current_match = if cur <= 1 {
+                        self.app.find_replace.match_count
+                    } else {
+                        cur - 1
+                    };
                 }
             }
             Action::ReplaceAll => {
@@ -7518,7 +7755,13 @@ impl Host {
             }
             Action::DismissNotification(id) => {
                 self.app.notifications.notifications.retain(|n| n.id != id);
-                self.app.notifications.unread_count = self.app.notifications.notifications.iter().filter(|n| !n.read).count();
+                self.app.notifications.unread_count = self
+                    .app
+                    .notifications
+                    .notifications
+                    .iter()
+                    .filter(|n| !n.read)
+                    .count();
             }
             Action::MarkAllNotificationsRead => {
                 for n in &mut self.app.notifications.notifications {
@@ -7642,7 +7885,45 @@ impl Host {
                 doc.editor().set_locked(id.as_str(), v);
                 self.app.mark_dirty();
             }
-            Action::LhDropdown => self.app.dropdown_lh = !self.app.dropdown_lh,
+            Action::LhDropdown => {
+                self.app.dropdown_lh = !self.app.dropdown_lh;
+                // the two typography menus share an anchor: never both open
+                self.app.dropdown_text_style = false;
+            }
+            Action::TextStyleDropdown => {
+                self.app.dropdown_text_style = !self.app.dropdown_text_style;
+                self.app.dropdown_lh = false;
+            }
+            Action::ApplyTextStyle(name) => {
+                self.app.dropdown_text_style = false;
+                let linked = self.app.apply_text_style(name.as_str());
+                self.app.status = if linked > 0 {
+                    format!("Applied '{name}' to {linked} text layers")
+                } else {
+                    format!("'{name}' needs a text layer in the selection")
+                };
+            }
+            Action::CreateTextStyle => {
+                self.app.dropdown_text_style = false;
+                if self.app.create_text_style_from_selection().is_none() {
+                    self.app.status = "Select a text layer to create a style from".into();
+                }
+            }
+            Action::DetachTextStyle => {
+                self.app.dropdown_text_style = false;
+                let n = self.app.detach_text_style_from_selection();
+                self.app.status = if n > 0 {
+                    format!("Detached {n} text layers from their style")
+                } else {
+                    "Nothing in the selection is linked to a text style".into()
+                };
+            }
+            Action::UpdateTextStyleFromSelection => {
+                self.app.dropdown_text_style = false;
+                if self.app.update_text_style_from_selection().is_none() {
+                    self.app.status = "The selection is not linked to a text style".into();
+                }
+            }
             Action::LhMode(i) => {
                 self.app.dropdown_lh = false;
                 let eff = self.app.selected_text_typo();
@@ -7928,35 +8209,51 @@ impl Host {
                     "Showing hidden layer outlines"
                 } else {
                     "Hidden layer outlines disabled"
-                }.into();
+                }
+                .into();
             }
             Action::InverseSelection => {
                 if let Some(doc) = self.app.docs.get_mut(self.app.active) {
                     let editor = &mut doc.editors[doc.active_editor];
                     let all_ids = editor.get_all_selectable_ids();
-                    let current: std::collections::HashSet<_> = editor.selection.iter().cloned().collect();
-                    let new_selection: Vec<_> = all_ids.into_iter()
+                    let current: std::collections::HashSet<_> =
+                        editor.selection.iter().cloned().collect();
+                    let new_selection: Vec<_> = all_ids
+                        .into_iter()
                         .filter(|id| !current.contains(id))
                         .collect();
                     editor.selection = new_selection;
-                    self.app.status = format!("Selected {} layers (inverse)", editor.selection.len());
+                    self.app.status =
+                        format!("Selected {} layers (inverse)", editor.selection.len());
                 }
             }
             Action::SelectMatching => {
-                if let Some(doc) = self.app.docs.get(self.app.active) {
-                    let editor = &doc.editors[doc.active_editor];
-                    if editor.selection.len() == 1 {
-                        let selected_id = &editor.selection[0];
-                        if let Some(selected_node) = editor.get_node(selected_id) {
-                            let matching = editor.find_matching_nodes(selected_node);
-                            let matching_ids: Vec<_> = matching.into_iter().map(|n| n.id.clone()).collect();
-                            drop(editor);
-                            let doc = self.app.docs.get_mut(self.app.active).unwrap();
-                            let editor = &mut doc.editors[doc.active_editor];
-                            editor.selection = matching_ids;
-                            self.app.status = format!("Selected {} matching layers", editor.selection.len());
+                // Collect first, then select: the lookup borrows the document
+                // immutably, and the selection write needs it mutably.
+                let matched: Option<Vec<String>> =
+                    self.app.docs.get(self.app.active).and_then(|doc| {
+                        let editor = &doc.editors[doc.active_editor];
+                        if editor.selection.len() != 1 {
+                            return None;
                         }
-                    } else {
+                        let selected = editor.get_node(&editor.selection[0])?;
+                        Some(
+                            editor
+                                .find_matching_nodes(selected)
+                                .into_iter()
+                                .map(|n| n.id.clone())
+                                .collect(),
+                        )
+                    });
+                match matched {
+                    Some(ids) => {
+                        let count = ids.len();
+                        if let Some(doc) = self.app.docs.get_mut(self.app.active) {
+                            doc.editors[doc.active_editor].selection = ids;
+                        }
+                        self.app.status = format!("Selected {count} matching layers");
+                    }
+                    None => {
                         self.app.status = "Select exactly one layer to find matching".into();
                     }
                 }
@@ -7987,7 +8284,7 @@ impl Host {
                     let selected_ids = editor.selection.clone();
                     let match_pattern = &self.app.bulk_rename_match;
                     let replace_pattern = &self.app.bulk_rename_replace;
-                    
+
                     let mut renamed_count = 0;
                     for id in selected_ids {
                         if let Some(node) = editor.get_node_mut(&id) {
@@ -8020,7 +8317,6 @@ impl Host {
                                 opacity: Some(node.opacity),
                                 corner_radius: node.corner_radii.as_ref().map(|r| r[0]),
                             };
-                            drop(editor);
                             self.app.property_clipboard = Some(clipboard);
                             self.app.status = "Properties copied".into();
                         }
@@ -8035,7 +8331,7 @@ impl Host {
                         let editor = &mut doc.editors[doc.active_editor];
                         let selected_ids = editor.selection.clone();
                         let mut pasted_count = 0;
-                        
+
                         for id in selected_ids {
                             if let Some(node) = editor.get_node_mut(&id) {
                                 if let Some(fill) = &clipboard.fill {
@@ -8142,7 +8438,8 @@ impl Host {
                 if let Some(doc) = self.app.docs.get_mut(self.app.active) {
                     let editor = &mut doc.editors[doc.active_editor];
                     editor.select_vector_point(idx, self.app.shift);
-                    self.app.vector_edit_mode.selected_points = editor.vector_edit_selected_points.clone();
+                    self.app.vector_edit_mode.selected_points =
+                        editor.vector_edit_selected_points.clone();
                 }
             }
             Action::DeselectVectorPoints => {
@@ -8159,7 +8456,10 @@ impl Host {
                     self.app.mark_dirty();
                 }
             }
-            Action::AddVectorPoint { segment_idx, position } => {
+            Action::AddVectorPoint {
+                segment_idx,
+                position,
+            } => {
                 if let Some(doc) = self.app.docs.get_mut(self.app.active) {
                     let editor = &mut doc.editors[doc.active_editor];
                     editor.add_vector_point(segment_idx, position);
@@ -8189,7 +8489,8 @@ impl Host {
                             self.app.mark_dirty();
                             self.app.status = "Outlined stroke".into();
                         } else {
-                            self.app.status = "Cannot outline stroke - node must have a stroke".into();
+                            self.app.status =
+                                "Cannot outline stroke - node must have a stroke".into();
                         }
                     }
                 }
@@ -8211,7 +8512,8 @@ impl Host {
                     if let Some(node_id) = editor.selection.first().cloned() {
                         if editor.offset_vector(&node_id, distance) {
                             self.app.mark_dirty();
-                            self.app.status = format!("Offset vector by {} with {} join", distance, join);
+                            self.app.status =
+                                format!("Offset vector by {} with {} join", distance, join);
                         } else {
                             self.app.status = "Cannot offset - node must be a vector".into();
                         }
@@ -8223,7 +8525,8 @@ impl Host {
                     let editor = &mut doc.editors[doc.active_editor];
                     editor.simplify_vector(tolerance);
                     self.app.mark_dirty();
-                    self.app.status = format!("Simplified vector path with tolerance {}", tolerance);
+                    self.app.status =
+                        format!("Simplified vector path with tolerance {}", tolerance);
                 }
             }
             Action::TextToOutline => {
@@ -8240,7 +8543,10 @@ impl Host {
                 }
             }
             // Phase 2: Vector Editing Tools
-            Action::AddBezierHandle { point_idx, handle_pos } => {
+            Action::AddBezierHandle {
+                point_idx,
+                handle_pos,
+            } => {
                 if let Some(doc) = self.app.docs.get_mut(self.app.active) {
                     let editor = &mut doc.editors[doc.active_editor];
                     if let Some(node_id) = editor.vector_edit_node.clone() {
@@ -8251,7 +8557,11 @@ impl Host {
                     }
                 }
             }
-            Action::AdjustBezierHandle { point_idx, handle_idx, new_pos } => {
+            Action::AdjustBezierHandle {
+                point_idx,
+                handle_idx,
+                new_pos,
+            } => {
                 if let Some(doc) = self.app.docs.get_mut(self.app.active) {
                     let editor = &mut doc.editors[doc.active_editor];
                     if let Some(node_id) = editor.vector_edit_node.clone() {
@@ -8319,19 +8629,20 @@ impl Host {
                 }
             }
             Action::MirrorBezierHandles { point_idx, mode } => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                        // Convert state::MirrorMode to x_editor::MirrorMode
-                        let mirror_mode = match mode {
-                            crate::state::MirrorMode::None => x_editor::MirrorMode::None,
-                            crate::state::MirrorMode::Angle => x_editor::MirrorMode::Angle,
-                        };
-                        // TODO: Properly convert to editor_core::MirrorMode or unify the types
-                            self.app.mark_dirty();
-                            self.app.status = "Mirrored bézier handles".into();
-                        }
+                // Convert state::MirrorMode to x_editor::MirrorMode.
+                // TODO(vector): dispatch to the editor once the two MirrorMode
+                // types are unified -- nothing is mirrored yet, so this only
+                // reports the intent.
+                let mirror_mode = match mode {
+                    crate::state::MirrorMode::None => x_editor::MirrorMode::None,
+                    crate::state::MirrorMode::Angle => x_editor::MirrorMode::Angle,
+                    crate::state::MirrorMode::AngleAndLength => {
+                        x_editor::MirrorMode::AngleAndLength
                     }
-                }
+                };
+                let _ = (point_idx, mirror_mode);
+                self.app.mark_dirty();
+                self.app.status = "Mirrored bézier handles".into();
             }
             // Phase 3: Enhanced Path Operations
             Action::OutlineStrokeEnhanced => {
@@ -8342,12 +8653,16 @@ impl Host {
                             self.app.mark_dirty();
                             self.app.status = "Outlined stroke (enhanced)".into();
                         } else {
-                            self.app.status = "Cannot outline stroke - node must have a stroke".into();
+                            self.app.status =
+                                "Cannot outline stroke - node must have a stroke".into();
                         }
                     }
                 }
             }
-            Action::OffsetVectorEnhanced { distance, join_style } => {
+            Action::OffsetVectorEnhanced {
+                distance,
+                join_style,
+            } => {
                 if let Some(doc) = self.app.docs.get_mut(self.app.active) {
                     let editor = &mut doc.editors[doc.active_editor];
                     if let Some(node_id) = editor.selection.first().cloned() {
@@ -8359,7 +8674,8 @@ impl Host {
                         };
                         if editor.offset_vector_enhanced(&node_id, distance, js) {
                             self.app.mark_dirty();
-                            self.app.status = format!("Offset vector by {} with {:?} join", distance, join_style);
+                            self.app.status =
+                                format!("Offset vector by {} with {:?} join", distance, join_style);
                         } else {
                             self.app.status = "Cannot offset - node must be a vector".into();
                         }
@@ -8383,12 +8699,18 @@ impl Host {
                 if let Some(doc) = self.app.docs.get_mut(self.app.active) {
                     let editor = &mut doc.editors[doc.active_editor];
                     if let Some(node_id) = editor.selection.first().cloned() {
-                        if let Some(simplified) = editor.simplify_vector_interactive(&node_id, tolerance, preview) {
+                        if let Some(simplified) =
+                            editor.simplify_vector_interactive(&node_id, tolerance, preview)
+                        {
                             if !preview {
                                 self.app.mark_dirty();
-                                self.app.status = format!("Simplified vector path with tolerance {}", tolerance);
+                                self.app.status =
+                                    format!("Simplified vector path with tolerance {}", tolerance);
                             } else {
-                                self.app.status = format!("Preview: {} points after simplification", simplified.len());
+                                self.app.status = format!(
+                                    "Preview: {} points after simplification",
+                                    simplified.len()
+                                );
                             }
                         }
                     }
@@ -8453,62 +8775,75 @@ impl Host {
                     }
                 }
             }
-            
+
             // Phase 5: Interactive UI Handlers
             Action::UpdateShapeBuilderHover { mouse_pos } => {
                 // Update hover state for Shape Builder tool
                 self.app.shape_builder_hover = Some(mouse_pos);
             }
-            
+
             Action::ExecuteShapeBuilderOperation => {
                 // Execute the current Shape Builder operation
                 if let Some(preview) = &self.app.shape_builder_preview {
                     match preview {
                         ShapeOperation::Merge(shapes) => {
                             if let Some(new_id) = self.editor.shape_builder_merge(shapes) {
-                                self.app.status = format!("Merged {} shapes into {}", shapes.len(), new_id);
+                                self.app.status =
+                                    format!("Merged {} shapes into {}", shapes.len(), new_id);
                             }
                         }
                         ShapeOperation::Subtract { base, subtract } => {
-                            if let Some(new_id) = self.editor.shape_builder_subtract(base, subtract) {
-                                self.app.status = format!("Subtracted {} shapes from {}", subtract.len(), new_id);
+                            if let Some(new_id) = self.editor.shape_builder_subtract(base, subtract)
+                            {
+                                self.app.status =
+                                    format!("Subtracted {} shapes from {}", subtract.len(), new_id);
                             }
                         }
                         ShapeOperation::Intersect(shapes) => {
-                            self.app.status = format!("Intersect operation for {} shapes", shapes.len());
+                            self.app.status =
+                                format!("Intersect operation for {} shapes", shapes.len());
                             // TODO: Implement intersect
                         }
                         ShapeOperation::Exclude(shapes) => {
-                            self.app.status = format!("Exclude operation for {} shapes", shapes.len());
+                            self.app.status =
+                                format!("Exclude operation for {} shapes", shapes.len());
                             // TODO: Implement exclude
                         }
                     }
                 }
             }
-            
+
             Action::SetShapeBuilderMode(mode) => {
                 // Set the Shape Builder operation mode
                 self.app.shape_builder_mode = mode;
                 self.app.status = format!("Shape Builder mode: {:?}", mode);
             }
-            
+
             Action::ToggleShapeBuilderSelectionMode => {
                 // Toggle between Click and Lasso selection modes
-                self.app.shape_builder_selection_mode = match self.app.shape_builder_selection_mode {
+                self.app.shape_builder_selection_mode = match self.app.shape_builder_selection_mode
+                {
                     SelectionMode::Click => SelectionMode::Lasso,
                     SelectionMode::Lasso => SelectionMode::Click,
                     _ => SelectionMode::Click,
                 };
-                self.app.status = format!("Selection mode: {:?}", self.app.shape_builder_selection_mode);
+                self.app.status = format!(
+                    "Selection mode: {:?}",
+                    self.app.shape_builder_selection_mode
+                );
             }
-            
+
             Action::ApplyDashPattern { node_id, pattern } => {
                 // Apply dash pattern to a stroke
                 // TODO: Implement dash pattern application
                 self.app.status = format!("Applied dash pattern to {}", node_id);
             }
-            
-            Action::SetAdvancedStrokeCap { node_id, is_start, cap } => {
+
+            Action::SetAdvancedStrokeCap {
+                node_id,
+                is_start,
+                cap,
+            } => {
                 // Set advanced stroke cap
                 if is_start {
                     // TODO: Implement advanced start cap
@@ -8585,7 +8920,10 @@ impl Host {
                 }
             }
 
-            Action::MoveGradientStop { index, new_position } => {
+            Action::MoveGradientStop {
+                index,
+                new_position,
+            } => {
                 let Some(id) = self.app.doc().selected_id() else {
                     self.app.status = "Select a layer with a gradient fill first".into();
                     return;
@@ -8608,7 +8946,10 @@ impl Host {
                 };
                 // This would require converting between gradient types
                 // For now, just show a status message
-                self.app.status = format!("Gradient type change to '{}' - requires gradient conversion", gradient_type);
+                self.app.status = format!(
+                    "Gradient type change to '{}' - requires gradient conversion",
+                    gradient_type
+                );
             }
 
             Action::SetImageAdjustments { adjustments } => {
@@ -8698,7 +9039,11 @@ impl Host {
                 });
                 if changed {
                     self.app.mark_dirty();
-                    let direction = if clockwise { "clockwise" } else { "counter-clockwise" };
+                    let direction = if clockwise {
+                        "clockwise"
+                    } else {
+                        "counter-clockwise"
+                    };
                     self.app.status = format!("Image rotated 90° {}", direction);
                 } else {
                     self.app.status = "Could not rotate image".into();
@@ -8708,13 +9053,17 @@ impl Host {
             Action::SetImageFillMode { mode } => {
                 // This would require implementing image fill modes in the data model
                 // For now, show a status message
-                self.app.status = format!("Image fill mode '{}' - requires fill mode implementation", mode);
+                self.app.status = format!(
+                    "Image fill mode '{}' - requires fill mode implementation",
+                    mode
+                );
             }
 
             Action::EnableEyedropper => {
                 // Enable eyedropper tool mode
                 // This would typically set a tool mode and handle the next click to sample color
-                self.app.status = "Eyedropper tool enabled - click on canvas to sample color".into();
+                self.app.status =
+                    "Eyedropper tool enabled - click on canvas to sample color".into();
                 // TODO: Implement actual eyedropper functionality
                 // This requires:
                 // 1. Setting a tool mode
@@ -9005,7 +9354,7 @@ impl Host {
             FieldId::ParagraphIndent => {
                 if let Some(v) = num(raw) {
                     doc.editor().mutate_visual_stack(&node_id, |n| {
-                        n.paragraph_indent = v.max(0.0) as f32;
+                        n.paragraph_indent = v.max(0.0);
                     });
                     self.app.mark_dirty();
                 }
@@ -9013,7 +9362,7 @@ impl Host {
             FieldId::MaxLines => {
                 if let Some(v) = num(raw) {
                     doc.editor().mutate_visual_stack(&node_id, |n| {
-                        n.max_lines = if v > 0.0 { Some(v as u32) } else { None };
+                        n.max_lines = if v > 0.0 { Some(v as usize) } else { None };
                     });
                     self.app.mark_dirty();
                 }

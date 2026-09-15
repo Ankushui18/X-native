@@ -167,6 +167,12 @@ pub struct TextMetrics {
 // NodeKind::Vector. The .x deserializer never had a "vector_network" case
 // (unknown tags load as frames), so no file-format compatibility is lost.
 
+// `Frame`'s inline `Option<AutoLayout>` (stack fields plus an optional
+// `GridLayout`) makes this enum ~272 bytes, which trips
+// clippy::large_enum_variant. Boxing the layout would rewrite ~90
+// construction and pattern sites across the workspace; that is a layout
+// refactor of its own, not something to smuggle into a build repair.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeKind {
     Frame {
@@ -331,7 +337,7 @@ pub struct Node {
     /// overlays on a frame — guides, NOT auto layout. A frame may stack
     /// several (e.g. columns + rows). Meaningful only on Frame nodes.
     pub layout_grids: Vec<LayoutGridDef>,
-    
+
     // Text formatting properties
     pub text_align: TextAlign,
     pub text_align_vertical: TextAlignVertical,
@@ -344,14 +350,15 @@ pub struct Node {
     pub hanging_punctuation: HangingPunctuation,
     pub list_style: ListStyle,
     pub wrap_style: WrapStyle,
-    
+
     /// Phase 6: Image adjustments (exposure, contrast, saturation, etc.)
     /// Only applies to Image nodes and Pattern fills
     pub image_adjustments: Option<ImageAdjustments>,
-    
+
     /// Phase 6: Image rotation in degrees (0, 90, 180, 270)
     /// Independent of node rotation, applies only to the image fill
     pub image_rotation: f64,
+}
 
 impl Node {
     /// Clone this node's own state without walking/allocating its descendants.
@@ -490,9 +497,6 @@ impl TextWrap {
         }
     }
 }
-
-/// Layout-grid guide pattern.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 
 /// Text horizontal alignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -688,10 +692,7 @@ pub struct HangingPunctuation {
 
 impl HangingPunctuation {
     pub fn to_json(&self) -> String {
-        format!(
-            "{{\"quotes\":{},\"lists\":{}}}",
-            self.quotes, self.lists
-        )
+        format!("{{\"quotes\":{},\"lists\":{}}}", self.quotes, self.lists)
     }
     pub fn parse(s: &str) -> Self {
         // Simple JSON parser for {"quotes":bool,"lists":bool}
@@ -700,6 +701,8 @@ impl HangingPunctuation {
         Self { quotes, lists }
     }
 }
+/// Layout-grid guide pattern.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GridPattern {
     #[default]
     Columns,

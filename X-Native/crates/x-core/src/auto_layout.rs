@@ -417,7 +417,7 @@ fn layout_wrapped(node: &mut Node, layout: &AutoLayout, gap: f64, pad: Padding) 
     // by content area so children with thicker strokes get more total space.
     let mut final_main: Vec<f64> = mains.clone();
     if layout.sizing == Sizing::Fixed && layout.distribute == Distribute::Packed {
-        for (ri, row) in rows.iter().enumerate() {
+        for row in rows.iter() {
             let grow_total: f64 = row
                 .iter()
                 .map(|&i| node.children[flow[i]].constraints.grow)

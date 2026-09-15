@@ -134,6 +134,32 @@ fn paint_css(p: &Paint, key: &str) -> Option<String> {
                 ))
             )
         }
+        Paint::AngularGradient {
+            center,
+            start_angle,
+            stops,
+            ..
+        } => {
+            // CSS conic gradients measure `from` clockwise from north, while
+            // the model's 0deg points east — hence the 90deg shift.
+            let stops: Vec<String> = stops
+                .iter()
+                .map(|(p, c)| format!("{} {}%", color_to_hex(*c), n((*p * 100.0) as f64)))
+                .collect();
+            format!(
+                "{key}: {}",
+                quote(&format!(
+                    "conic-gradient(from {}deg at {}% {}%, {})",
+                    n((start_angle - 90.0).rem_euclid(360.0)),
+                    n(center.0 * 100.0),
+                    n(center.1 * 100.0),
+                    stops.join(", ")
+                ))
+            )
+        }
+        // CSS has no diamond ramp; emitting a linear or radial gradient here
+        // would misrepresent the paint, so codegen leaves it out.
+        Paint::DiamondGradient { .. } => return None,
         Paint::Pattern { asset, fit } => {
             let size = match fit {
                 ImageFit::Fit => "backgroundSize: 'contain', backgroundRepeat: 'no-repeat'",

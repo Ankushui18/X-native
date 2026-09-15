@@ -185,7 +185,10 @@ pub fn paint_color(p: &Paint, vars: &Variables) -> Color {
     match p {
         Paint::Solid(c) => *c,
         Paint::Variable(n) => vars.color(n, Color::BLACK),
-        Paint::LinearGradient { stops, .. } | Paint::RadialGradient { stops, .. } => {
+        Paint::LinearGradient { stops, .. }
+        | Paint::RadialGradient { stops, .. }
+        | Paint::AngularGradient { stops, .. }
+        | Paint::DiamondGradient { stops, .. } => {
             stops.first().map(|s| s.1).unwrap_or(Color::BLACK)
         }
         // patterns have no single color; callers needing a flat fallback
@@ -214,6 +217,37 @@ pub fn paint_brush(p: &Paint, vars: &Variables) -> Brush {
             space,
         } => Brush::Gradient(
             Gradient::new_radial((center.0, center.1), *radius as f32)
+                .with_stops(space.stops_for_render(stops).as_ref()),
+        ),
+        // Angular == peniko's sweep gradient (angles are radians there, our
+        // model stores degrees). The accurate path is the mesh tessellation
+        // in `x-render/src/gradients.rs`; this brush is what every non-mesh
+        // consumer (swatches, thumbnails, PDF/SVG fallbacks) sees.
+        Paint::AngularGradient {
+            center,
+            start_angle,
+            end_angle,
+            stops,
+            space,
+        } => Brush::Gradient(
+            Gradient::new_sweep(
+                (center.0, center.1),
+                start_angle.to_radians() as f32,
+                end_angle.to_radians() as f32,
+            )
+            .with_stops(space.stops_for_render(stops).as_ref()),
+        ),
+        // A diamond has no peniko primitive: approximate with the radial
+        // gradient at the larger of the two radii (documented lossy — the
+        // mesh path renders the true diamond).
+        Paint::DiamondGradient {
+            center,
+            width,
+            height,
+            stops,
+            space,
+        } => Brush::Gradient(
+            Gradient::new_radial((center.0, center.1), width.max(*height) as f32)
                 .with_stops(space.stops_for_render(stops).as_ref()),
         ),
         // patterns are not a flat brush: fills render via clip + tiled

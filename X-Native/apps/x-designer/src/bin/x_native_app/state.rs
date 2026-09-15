@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use vello::kurbo::{Point, Rect};
 use x_native::editor::Editor;
-use x_native::{Color, Document, Node, NodeKind, Paint, Variables};
+use x_native::{Color, Document, Node, NodeKind, Paint, PathCmd, Variables};
 
 use crate::command::CommandPalette;
 use crate::context_menu::ContextMenu;
@@ -375,6 +375,18 @@ pub enum Action {
     FrameDropdown,
     LhDropdown,
     LhMode(usize),
+    /// Typography panel: the styles button opens the text-style picker
+    TextStyleDropdown,
+    /// Apply a named text style to the selected text layers (and link them,
+    /// so later edits to the style propagate)
+    ApplyTextStyle(String),
+    /// Create a text style from the selected text layer's typography
+    CreateTextStyle,
+    /// Unlink the selected text layers from their text style, keeping values
+    DetachTextStyle,
+    /// Push the selection's typography into the style it is linked to and
+    /// re-resolve every consumer (Figma's "Update style")
+    UpdateTextStyleFromSelection,
     /// layer row hover toggles (Figma): eye / padlock
     TreeVisible(String),
     TreeLock(String),
@@ -488,9 +500,15 @@ pub enum Action {
     /// Deselect all vector points
     DeselectVectorPoints,
     /// Move selected vector points
-    MoveVectorPoints { dx: f64, dy: f64 },
+    MoveVectorPoints {
+        dx: f64,
+        dy: f64,
+    },
     /// Add a point to a vector path
-    AddVectorPoint { segment_idx: usize, position: (f64, f64) },
+    AddVectorPoint {
+        segment_idx: usize,
+        position: (f64, f64),
+    },
     /// Delete selected vector points
     DeleteVectorPoints,
     /// Switch vector editing tool
@@ -500,72 +518,149 @@ pub enum Action {
     /// Add bezier handle to a point
     AddBezierHandle(usize),
     /// Adjust bezier handle
-    AdjustBezierHandle { point_idx: usize, handle: (f64, f64) },
+    AdjustBezierHandle {
+        point_idx: usize,
+        handle: (f64, f64),
+    },
     /// Split vector path at a point
     SplitVectorPath(usize),
     /// Cut vector path along a line
-    CutVectorPath { start: (f64, f64), end: (f64, f64) },
+    CutVectorPath {
+        start: (f64, f64),
+        end: (f64, f64),
+    },
     /// Outline stroke (convert stroke to vector path)
     OutlineStroke,
     /// Flatten selection (merge into single vector path)
     FlattenSelection,
     /// Offset vector path
-    OffsetVector { distance: f64, join: String },
+    OffsetVector {
+        distance: f64,
+        join: String,
+    },
     /// Simplify vector path
-    SimplifyVector { tolerance: f64 },
+    SimplifyVector {
+        tolerance: f64,
+    },
     /// Convert text to vector path
     TextToOutline,
     // Phase 2: Vector Editing Tools
-    AddBezierHandle { point_idx: usize, handle_pos: (f64, f64) },
-    AdjustBezierHandle { point_idx: usize, handle_idx: usize, new_pos: (f64, f64) },
-    SplitVectorPath { point_idx: usize },
-    CutVectorPath { start: (f64, f64), end: (f64, f64) },
-    LassoSelectPoints { boundary: Vec<(f64, f64)> },
-    SetVariableWidthStroke { width_points: Vec<(f64, f64)> },
-    RemoveBezierHandles { point_idx: usize },
-    MirrorBezierHandles { point_idx: usize, mode: crate::state::MirrorMode },
+    AddBezierHandle {
+        point_idx: usize,
+        handle_pos: (f64, f64),
+    },
+    AdjustBezierHandle {
+        point_idx: usize,
+        handle_idx: usize,
+        new_pos: (f64, f64),
+    },
+    SplitVectorPath {
+        point_idx: usize,
+    },
+    CutVectorPath {
+        start: (f64, f64),
+        end: (f64, f64),
+    },
+    LassoSelectPoints {
+        boundary: Vec<(f64, f64)>,
+    },
+    SetVariableWidthStroke {
+        width_points: Vec<(f64, f64)>,
+    },
+    RemoveBezierHandles {
+        point_idx: usize,
+    },
+    MirrorBezierHandles {
+        point_idx: usize,
+        mode: crate::state::MirrorMode,
+    },
     // Phase 3: Enhanced Path Operations
     OutlineStrokeEnhanced,
-    OffsetVectorEnhanced { distance: f64, join_style: JoinStyle },
+    OffsetVectorEnhanced {
+        distance: f64,
+        join_style: JoinStyle,
+    },
     TextToOutlineEnhanced,
-    SimplifyVectorInteractive { tolerance: f64, preview: bool },
-    JoinPaths { node_id1: String, node_id2: String },
+    SimplifyVectorInteractive {
+        tolerance: f64,
+        preview: bool,
+    },
+    JoinPaths {
+        node_id1: String,
+        node_id2: String,
+    },
     ReversePathDirection,
     // Phase 4: Stroke Caps
-    SetStrokeCapStart { node_id: String, cap: crate::state::StrokeCapType },
-    SetStrokeCapEnd { node_id: String, cap: crate::state::StrokeCapType },
+    SetStrokeCapStart {
+        node_id: String,
+        cap: crate::state::StrokeCapType,
+    },
+    SetStrokeCapEnd {
+        node_id: String,
+        cap: crate::state::StrokeCapType,
+    },
     // Phase 5: Interactive UI Actions
-    UpdateShapeBuilderHover { mouse_pos: (f64, f64) },
+    UpdateShapeBuilderHover {
+        mouse_pos: (f64, f64),
+    },
     ExecuteShapeBuilderOperation,
     SetShapeBuilderMode(ShapeBuilderMode),
     ToggleShapeBuilderSelectionMode,
-    ApplyDashPattern { node_id: String, pattern: DashPattern },
-    SetAdvancedStrokeCap { node_id: String, is_start: bool, cap: AdvancedStrokeCap },
+    ApplyDashPattern {
+        node_id: String,
+        pattern: DashPattern,
+    },
+    SetAdvancedStrokeCap {
+        node_id: String,
+        is_start: bool,
+        cap: AdvancedStrokeCap,
+    },
     // Phase 6: Advanced Gradients, Image Adjustments, and Missing Blend Modes
     /// Flip a gradient (reverse color stops)
     FlipGradient,
     /// Rotate gradient angle
-    RotateGradient { degrees: f64 },
+    RotateGradient {
+        degrees: f64,
+    },
     /// Add a color stop to a gradient at position 0.0-1.0
-    AddGradientStop { position: f32, color: [u8; 3] },
+    AddGradientStop {
+        position: f32,
+        color: [u8; 3],
+    },
     /// Remove a color stop from gradient
-    RemoveGradientStop { index: usize },
+    RemoveGradientStop {
+        index: usize,
+    },
     /// Move a color stop to new position
-    MoveGradientStop { index: usize, new_position: f32 },
+    MoveGradientStop {
+        index: usize,
+        new_position: f32,
+    },
     /// Change gradient type (linear/radial/angular/diamond)
-    SetGradientType { gradient_type: String },
+    SetGradientType {
+        gradient_type: String,
+    },
     /// Enable eyedropper tool
     EnableEyedropper,
     /// Set image adjustments (exposure, contrast, saturation, etc.)
-    SetImageAdjustments { adjustments: x_native::ImageAdjustments },
+    SetImageAdjustments {
+        adjustments: x_native::ImageAdjustments,
+    },
     /// Update individual image adjustment value
-    UpdateImageAdjustment { adjustment: String, value: f32 },
+    UpdateImageAdjustment {
+        adjustment: String,
+        value: f32,
+    },
     /// Reset all image adjustments
     ResetImageAdjustments,
     /// Rotate image (90° clockwise increments)
-    RotateImage { clockwise: bool },
+    RotateImage {
+        clockwise: bool,
+    },
     /// Set image fill mode (fill/fit/crop/tile)
-    SetImageFillMode { mode: String },
+    SetImageFillMode {
+        mode: String,
+    },
 }
 
 /// Commands offered by the editor right-click context menu
@@ -794,9 +889,6 @@ pub struct FlowState {
     pub press_span: Option<x_native::editor::WhileSpan>,
 }
 
-/// The one text-entry surface: clicking a field focuses it; keystrokes go
-/// into `buffer`; Enter commits, Esc cancels.
-#[derive(Clone, Debug)]
 /// Clipboard for copying/pasting layer properties (Figma parity)
 #[derive(Clone, Debug)]
 pub struct PropertyClipboard {
@@ -850,6 +942,9 @@ pub enum JoinStyle {
 
 impl Default for JoinStyle {
     fn default() -> Self {
+        JoinStyle::Miter
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StrokeCapType {
@@ -859,7 +954,6 @@ pub enum StrokeCapType {
     Arrow,
     Triangle,
 }
-        JoinStyle::Miter
 
 /// Shape Builder operation mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -917,9 +1011,6 @@ pub struct DashPattern {
     pub offset: f64,
 }
 
-    }
-}
-
 impl Default for VectorEditMode {
     fn default() -> Self {
         Self {
@@ -932,9 +1023,9 @@ impl Default for VectorEditMode {
     }
 }
 
-    pub text_align: String,
-}
-
+/// The one text-entry surface: clicking a field focuses it; keystrokes go
+/// into `buffer`; Enter commits, Esc cancels.
+#[derive(Clone, Debug)]
 pub struct FieldEdit {
     pub id: FieldId,
     pub buffer: String,
@@ -1354,6 +1445,8 @@ pub struct App {
     pub dropdown_frame: bool,
     /// Typography panel: line-height mode menu (Auto / Pixels / Percent)
     pub dropdown_lh: bool,
+    /// Typography panel: text-style picker (Figma's styles button)
+    pub dropdown_text_style: bool,
     /// Viewport rulers (Shift+R). Off by default — the HTML mock has none.
     pub rulers: bool,
     /// DESIGN panel (no selection): editor canvas background
@@ -1527,6 +1620,7 @@ impl App {
             flow: None,
             dropdown_frame: false,
             dropdown_lh: false,
+            dropdown_text_style: false,
             rulers: false,
             // canvas matches the HTML `.canvas` token; grid per the design
             // empty-selection panel (PIXEL GRID COLOR 0070E4 @ 20%)
@@ -1610,12 +1704,7 @@ impl App {
         EdRegions {
             left: Rect::new(0.0, ED_TITLE_H, left_total, self.win_h),
             nav_bar: Rect::new(0.0, ED_TITLE_H, self.nav_bar_w, self.win_h),
-            sidebar: Rect::new(
-                self.nav_bar_w,
-                ED_TITLE_H,
-                left_total,
-                self.win_h,
-            ),
+            sidebar: Rect::new(self.nav_bar_w, ED_TITLE_H, left_total, self.win_h),
             right: Rect::new(
                 self.win_w - self.right_w,
                 ED_TITLE_H,

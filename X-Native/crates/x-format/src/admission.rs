@@ -98,6 +98,29 @@ fn paint(p: &Paint) -> Result<(), String> {
             }
             stops
         }
+        Paint::AngularGradient {
+            center,
+            start_angle,
+            end_angle,
+            stops,
+            ..
+        } => {
+            numbers(&[center.0, center.1, *start_angle, *end_angle])?;
+            stops
+        }
+        Paint::DiamondGradient {
+            center,
+            width,
+            height,
+            stops,
+            ..
+        } => {
+            numbers(&[center.0, center.1, *width, *height])?;
+            if *width < 0.0 || *height < 0.0 {
+                return Err("negative diamond gradient radius".into());
+            }
+            stops
+        }
     };
     if stops.len() > 1024 {
         return Err("gradient stop budget exceeded".into());
@@ -439,12 +462,18 @@ pub fn validate_admission(doc: &Document) -> Result<(), String> {
     for style in doc.styles.values() {
         match style {
             LegacyStyle::Paint { fill } => paint(fill)?,
-            LegacyStyle::Text {
-                size,
-                letter_spacing,
-                line_height,
-                ..
-            } => numbers(&[*size, *letter_spacing, *line_height])?,
+            LegacyStyle::Text(data) => {
+                numbers(&[
+                    data.font_size,
+                    data.letter_spacing,
+                    data.paragraph_spacing,
+                    data.paragraph_indent,
+                    data.line_height.value(),
+                ])?;
+                if data.font_family.len() > 1024 {
+                    return Err("text style font family budget exceeded".into());
+                }
+            }
             LegacyStyle::Effect { effects } => {
                 for e in effects {
                     effect(e)?;

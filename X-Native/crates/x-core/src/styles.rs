@@ -19,6 +19,9 @@
 //! - Saved to .xlib libraries for sharing across documents
 
 use crate::layout_types::GridLayout;
+use crate::node::{
+    HangingPunctuation, ListStyle, Node, TextCase, TextDecoration, TextWrap, WrapStyle,
+};
 use crate::paint::{BlendKind, Effect, Paint, Stroke};
 use std::collections::HashMap;
 
@@ -115,37 +118,125 @@ impl ColorStyleData {
 
 // ------------------------------------------------------------- TextStyle data
 
-/// Text style — named text properties
+/// Line height as a text style carries it: Figma offers Auto, a fixed px
+/// value, or a percentage of the font size. The engine's node bindings hold
+/// the same three states as `lhm` (`"px"`/`"pct"`) + `lhpx`/`lhp`, so a style
+/// applies without loss and reads back exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum LineHeight {
+    /// Natural line box of the resolved face.
+    #[default]
+    Auto,
+    /// Absolute px per line (Figma's "px" mode; engine binding `lhm=px`).
+    Px(f64),
+    /// Percentage of the font size (Figma's "%" mode; engine `lhm=pct`).
+    Percent(f64),
+    /// Multiple of the face's natural line box (the engine's original `lh`
+    /// binding, and what every pre-mode document carries).
+    Multiple(f64),
+}
+
+impl LineHeight {
+    /// The `lhm` spelling used by the file format: `auto`/`px`/`pct`/`mult`.
+    pub fn mode_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Px(_) => "px",
+            Self::Percent(_) => "pct",
+            Self::Multiple(_) => "mult",
+        }
+    }
+
+    /// The value that travels with the mode (`0.0` for `Auto`).
+    pub fn value(self) -> f64 {
+        match self {
+            Self::Auto => 0.0,
+            Self::Px(v) | Self::Percent(v) | Self::Multiple(v) => v,
+        }
+    }
+
+    /// Parse the (`lhm`, value) pair the file format stores.
+    pub fn from_mode(mode: Option<&str>, value: f64) -> Self {
+        match mode {
+            Some("px") => Self::Px(value),
+            Some("pct") => Self::Percent(value),
+            Some("mult") => Self::Multiple(value),
+            _ => Self::Auto,
+        }
+    }
+
+    /// Read the mode back out of a node's bindings.
+    pub fn from_node(n: &Node) -> Self {
+        match n.lh_mode_value() {
+            (1, v) => Self::Px(v),
+            (2, v) => Self::Percent(v),
+            _ => match n.bindings.get("lh").and_then(|v| v.parse::<f64>().ok()) {
+                Some(v) => Self::Multiple(v),
+                None => Self::Auto,
+            },
+        }
+    }
+
+    /// Write the mode into a node's bindings, clearing the keys of every
+    /// other mode so a node never carries two contradictory line heights.
+    fn write(self, b: &mut HashMap<String, String>) {
+        for k in ["lhm", "lhpx", "lhp", "lh"] {
+            b.remove(k);
+        }
+        match self {
+            Self::Auto => {}
+            Self::Px(v) => {
+                b.insert("lhm".into(), "px".into());
+                b.insert("lhpx".into(), fmt_num(v));
+            }
+            Self::Percent(v) => {
+                b.insert("lhm".into(), "pct".into());
+                b.insert("lhp".into(), fmt_num(v));
+            }
+            Self::Multiple(v) => {
+                b.insert("lh".into(), fmt_num(v));
+            }
+        }
+    }
+}
+
+/// Text style — the named bundle of typography properties.
+///
+/// The property list is Figma's (see "Create and apply text styles"): family,
+/// weight and size; line height; letter spacing; paragraph spacing and indent;
+/// decoration; case; lists; and wrap style. Equally deliberate is what is NOT
+/// here — alignment, fill, and resizing behaviour stay per-layer, because in
+/// Figma a text style does not carry them either.
+///
+/// A style applies through the SAME channel the rest of the engine uses: the
+/// node's `bindings` map (Model B) for everything a renderer reads, plus the
+/// typed node fields (Model A) that the `.x` format and the inspector show.
+/// Writing both is what keeps a style from being inert.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextStyleData {
     pub font_family: String,
-    pub font_weight: u16,    // 100-900
-    pub font_size: f64,      // points
-    pub line_height: f64,    // 0 = auto
-    pub letter_spacing: f64, // em units
+    /// 100-900
+    pub font_weight: u16,
+    /// Point size; the engine's px contract makes this the glyph size in px.
+    pub font_size: f64,
+    pub line_height: LineHeight,
+    /// Letter spacing in px (the shaper's `ls`; Figma's tracking is 1/1000em).
+    pub letter_spacing: f64,
+    /// Space inserted after a paragraph, px.
     pub paragraph_spacing: f64,
+    /// First-line indent, px (Figma honours it on left-aligned paragraphs).
+    pub paragraph_indent: f64,
     pub text_case: TextCase,
+    /// Synthesized small caps — the engine spells this `tc = "sc"`, which
+    /// takes the case slot, so it rides beside `text_case` rather than in it.
+    pub small_caps: bool,
     pub text_decoration: TextDecoration,
-}
-
-/// Text case transformation
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TextCase {
-    #[default]
-    None,
-    Upper,
-    Lower,
-    Title,
-}
-
-/// Text decoration (underline, strikethrough)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TextDecoration {
-    #[default]
-    None,
-    Underline,
-    Strikethrough,
-    UnderlineStrikethrough,
+    pub list_style: ListStyle,
+    /// Paragraph wrap strategy (`tw` binding: auto/balance/pretty).
+    pub wrap: TextWrap,
+    /// Word-break behaviour (`wrap_style` field: normal/break-word).
+    pub wrap_style: WrapStyle,
+    pub hanging_punctuation: HangingPunctuation,
 }
 
 impl Default for TextStyleData {
@@ -154,12 +245,166 @@ impl Default for TextStyleData {
             font_family: "Inter".to_string(),
             font_weight: 400,
             font_size: 16.0,
-            line_height: 0.0,
+            line_height: LineHeight::Auto,
             letter_spacing: 0.0,
             paragraph_spacing: 0.0,
-            text_case: TextCase::None,
+            paragraph_indent: 0.0,
+            text_case: TextCase::Original,
+            small_caps: false,
             text_decoration: TextDecoration::None,
+            list_style: ListStyle::None,
+            wrap: TextWrap::Auto,
+            wrap_style: WrapStyle::Normal,
+            hanging_punctuation: HangingPunctuation::default(),
         }
+    }
+}
+
+/// Every binding key a text style owns. `detach` clears exactly these, so
+/// detaching a style never touches a layer's variable bindings (`fontsize`,
+/// `radius`, …) or its prototype/annotation entries.
+pub const TEXT_STYLE_BINDINGS: [&str; 12] = [
+    "font", "fw", "fs", "ls", "lh", "lhm", "lhpx", "lhp", "ps", "pi", "tc", "tw",
+];
+
+impl TextStyleData {
+    /// Read the typography a node carries today — "create style from
+    /// selection" in Figma's flow.
+    pub fn from_node(n: &Node) -> Self {
+        let num = |k: &str| n.bindings.get(k).and_then(|v| v.parse::<f64>().ok());
+        let small_caps = n.bindings.get("tc").map(String::as_str) == Some("sc");
+        Self {
+            font_family: n
+                .bindings
+                .get("font")
+                .cloned()
+                .unwrap_or_else(|| "Inter".to_string()),
+            font_weight: n
+                .bindings
+                .get("fw")
+                .and_then(|v| v.parse::<u16>().ok())
+                .unwrap_or(400),
+            font_size: num("fs").filter(|v| *v > 0.0).unwrap_or(16.0),
+            line_height: LineHeight::from_node(n),
+            letter_spacing: num("ls").unwrap_or(0.0),
+            paragraph_spacing: num("ps").unwrap_or(0.0),
+            paragraph_indent: num("pi").unwrap_or(n.paragraph_indent),
+            text_case: if small_caps {
+                TextCase::Original
+            } else {
+                n.text_case
+            },
+            small_caps,
+            text_decoration: n.text_decoration,
+            list_style: n.list_style,
+            wrap: n.text_wrap(),
+            wrap_style: n.wrap_style,
+            hanging_punctuation: n.hanging_punctuation,
+        }
+    }
+
+    /// Write the style onto a node: the bindings every renderer reads, and the
+    /// typed fields the file format and the inspector read. Returns true when
+    /// anything changed, so callers can decide about dirty/undo.
+    pub fn apply_to_node(&self, n: &mut Node) -> bool {
+        let before = owned_typography(n);
+        let b = &mut n.bindings;
+        b.insert("font".into(), self.font_family.clone());
+        b.insert("fw".into(), self.font_weight.to_string());
+        b.insert("fs".into(), fmt_num(self.font_size));
+        b.insert("ls".into(), fmt_num(self.letter_spacing));
+        b.insert("ps".into(), fmt_num(self.paragraph_spacing));
+        b.insert("pi".into(), fmt_num(self.paragraph_indent));
+        // One line-height mode at a time; Auto clears all of them so the
+        // face's natural line box applies.
+        self.line_height.write(b);
+        // Case and small caps share the `tc` slot; small caps wins, exactly as
+        // the renderers read it.
+        if self.small_caps {
+            b.insert("tc".into(), "sc".into());
+        } else if self.text_case != TextCase::Original {
+            b.insert("tc".into(), self.text_case.to_str().into());
+        } else {
+            b.remove("tc");
+        }
+        if self.wrap != TextWrap::Auto {
+            b.insert("tw".into(), self.wrap.to_str().into());
+        } else {
+            b.remove("tw");
+        }
+        n.text_case = self.text_case;
+        n.text_decoration = self.text_decoration;
+        n.list_style = self.list_style;
+        n.wrap_style = self.wrap_style;
+        n.paragraph_spacing = self.paragraph_spacing;
+        n.paragraph_indent = self.paragraph_indent;
+        n.hanging_punctuation = self.hanging_punctuation;
+        before != owned_typography(n)
+    }
+
+    /// Detach: drop every key this style owns and reset the typed fields, so
+    /// the layer keeps rendering exactly as it did but is no longer linked.
+    /// Values are NOT re-derived from the style — the caller keeps them by
+    /// simply not touching the bindings it wants to preserve (see
+    /// the free fn `detach_text_style` in `document.rs`, which snapshots first).
+    pub fn clear_from_node(n: &mut Node) {
+        for k in TEXT_STYLE_BINDINGS {
+            n.bindings.remove(k);
+        }
+        n.text_case = TextCase::default();
+        n.text_decoration = TextDecoration::default();
+        n.list_style = ListStyle::default();
+        n.wrap_style = WrapStyle::default();
+        n.paragraph_spacing = 0.0;
+        n.paragraph_indent = 0.0;
+        n.hanging_punctuation = HangingPunctuation::default();
+    }
+}
+
+/// The typography a style owns, as comparable data: the binding entries in
+/// `TEXT_STYLE_BINDINGS` plus the typed node fields. `Node` is not
+/// `PartialEq` (it carries paths and caches), so "did applying this style
+/// change anything?" compares exactly the slice of the node a style writes.
+#[derive(PartialEq)]
+struct TypographySnapshot {
+    bindings: Vec<(String, String)>,
+    text_case: TextCase,
+    text_decoration: TextDecoration,
+    list_style: ListStyle,
+    wrap_style: WrapStyle,
+    paragraph_spacing: f64,
+    paragraph_indent: f64,
+    hanging_punctuation: HangingPunctuation,
+}
+
+fn owned_typography(n: &Node) -> TypographySnapshot {
+    let mut bindings: Vec<(String, String)> = TEXT_STYLE_BINDINGS
+        .iter()
+        .filter_map(|k| n.bindings.get(*k).map(|v| (k.to_string(), v.clone())))
+        .collect();
+    bindings.sort();
+    TypographySnapshot {
+        bindings,
+        text_case: n.text_case,
+        text_decoration: n.text_decoration,
+        list_style: n.list_style,
+        wrap_style: n.wrap_style,
+        paragraph_spacing: n.paragraph_spacing,
+        paragraph_indent: n.paragraph_indent,
+        hanging_punctuation: n.hanging_punctuation,
+    }
+}
+
+/// Compact number formatting for bindings: no trailing-zero noise, no
+/// scientific notation for the sizes/spacing a style can hold.
+fn fmt_num(v: f64) -> String {
+    if v == v.round() && v.abs() < 1e15 {
+        format!("{:.0}", v)
+    } else {
+        format!("{:.4}", v)
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string()
     }
 }
 

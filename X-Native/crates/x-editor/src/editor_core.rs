@@ -2532,8 +2532,9 @@ impl Editor {
     }
 }
 
-    // Vector Edit Mode methods (Figma parity)
+// Vector Edit Mode methods (Figma parity)
 
+impl Editor {
     /// Enter vector edit mode for a vector node
     pub fn enter_vector_edit_mode(&mut self, node_id: &str) -> bool {
         if let Some(node) = self.get_node(node_id) {
@@ -2571,19 +2572,32 @@ impl Editor {
 
     /// Move selected vector points
     pub fn move_vector_points(&mut self, dx: f64, dy: f64) {
-        let Some(node_id) = &self.vector_edit_node else { return };
-        let Some(node) = self.get_node_mut(node_id) else { return };
-        
+        let Some(node_id) = &self.vector_edit_node else {
+            return;
+        };
+        let Some(node) = self.get_node_mut(node_id) else {
+            return;
+        };
+
         if let NodeKind::Vector { path } = &mut node.kind {
             for &idx in &self.vector_edit_selected_points {
                 if let Some(cmd) = path.get_mut(idx) {
                     match cmd {
-                        PathCmd::MoveTo(x, y) => { *x += dx; *y += dy; }
-                        PathCmd::LineTo(x, y) => { *x += dx; *y += dy; }
-                        PathCmd::CurveTo(x1, y1, x2, y2, x, y) => { 
-                            *x1 += dx; *y1 += dy; 
-                            *x2 += dx; *y2 += dy; 
-                            *x += dx; *y += dy; 
+                        PathCmd::MoveTo(x, y) => {
+                            *x += dx;
+                            *y += dy;
+                        }
+                        PathCmd::LineTo(x, y) => {
+                            *x += dx;
+                            *y += dy;
+                        }
+                        PathCmd::CurveTo(x1, y1, x2, y2, x, y) => {
+                            *x1 += dx;
+                            *y1 += dy;
+                            *x2 += dx;
+                            *y2 += dy;
+                            *x += dx;
+                            *y += dy;
                         }
                         PathCmd::Close => {}
                     }
@@ -2595,9 +2609,13 @@ impl Editor {
 
     /// Add a point to a vector path
     pub fn add_vector_point(&mut self, segment_idx: usize, position: (f64, f64)) {
-        let Some(node_id) = &self.vector_edit_node else { return };
-        let Some(node) = self.get_node_mut(node_id) else { return };
-        
+        let Some(node_id) = &self.vector_edit_node else {
+            return;
+        };
+        let Some(node) = self.get_node_mut(node_id) else {
+            return;
+        };
+
         if let NodeKind::Vector { path } = &mut node.kind {
             // Insert a LineTo at the specified position after the segment
             let insert_idx = (segment_idx + 1).min(path.len());
@@ -2608,14 +2626,18 @@ impl Editor {
 
     /// Delete selected vector points
     pub fn delete_vector_points(&mut self) {
-        let Some(node_id) = &self.vector_edit_node else { return };
-        let Some(node) = self.get_node_mut(node_id) else { return };
-        
+        let Some(node_id) = &self.vector_edit_node else {
+            return;
+        };
+        let Some(node) = self.get_node_mut(node_id) else {
+            return;
+        };
+
         if let NodeKind::Vector { path } = &mut node.kind {
             // Sort indices in descending order to delete from end to start
             let mut indices = self.vector_edit_selected_points.clone();
             indices.sort_by(|a, b| b.cmp(a));
-            
+
             for idx in indices {
                 if idx < path.len() {
                     path.remove(idx);
@@ -2628,9 +2650,13 @@ impl Editor {
 
     /// Simplify vector path using Ramer-Douglas-Peucker algorithm
     pub fn simplify_vector(&mut self, tolerance: f64) {
-        let Some(node_id) = &self.vector_edit_node else { return };
-        let Some(node) = self.get_node_mut(node_id) else { return };
-        
+        let Some(node_id) = &self.vector_edit_node else {
+            return;
+        };
+        let Some(node) = self.get_node_mut(node_id) else {
+            return;
+        };
+
         if let NodeKind::Vector { path } = &mut node.kind {
             // Extract points from path
             let mut points = Vec::new();
@@ -2645,10 +2671,10 @@ impl Editor {
                     PathCmd::Close => {}
                 }
             }
-            
+
             // Simplify using the existing algorithm
-            let simplified = x_native::node::simplify_polyline(&points, tolerance);
-            
+            let simplified = simplify_polyline(&points, tolerance);
+
             // Rebuild path from simplified points
             if simplified.len() >= 2 {
                 let mut new_path = Vec::new();
@@ -2664,13 +2690,15 @@ impl Editor {
 
     /// Outline stroke (convert stroke to vector path)
     pub fn outline_stroke(&mut self, node_id: &str) -> bool {
-        let Some(node) = self.get_node(node_id) else { return false };
-        
+        let Some(node) = self.get_node(node_id) else {
+            return false;
+        };
+
         // Only works on nodes with stroke
         if node.stroke.width <= 0.0 {
             return false;
         }
-        
+
         // Get the node's path or shape
         let path_cmds = match &node.kind {
             NodeKind::Vector { path } => path.clone(),
@@ -2694,21 +2722,49 @@ impl Editor {
                 let kappa = 0.5522847498; // Magic number for circle approximation
                 vec![
                     PathCmd::MoveTo(cx + rx, cy),
-                    PathCmd::CurveTo(cx + rx, cy + kappa * ry, cx + kappa * rx, cy + ry, cx, cy + ry),
-                    PathCmd::CurveTo(cx - kappa * rx, cy + ry, cx - rx, cy + kappa * ry, cx - rx, cy),
-                    PathCmd::CurveTo(cx - rx, cy - kappa * ry, cx - kappa * rx, cy - ry, cx, cy - ry),
-                    PathCmd::CurveTo(cx + kappa * rx, cy - ry, cx + rx, cy - kappa * ry, cx + rx, cy),
+                    PathCmd::CurveTo(
+                        cx + rx,
+                        cy + kappa * ry,
+                        cx + kappa * rx,
+                        cy + ry,
+                        cx,
+                        cy + ry,
+                    ),
+                    PathCmd::CurveTo(
+                        cx - kappa * rx,
+                        cy + ry,
+                        cx - rx,
+                        cy + kappa * ry,
+                        cx - rx,
+                        cy,
+                    ),
+                    PathCmd::CurveTo(
+                        cx - rx,
+                        cy - kappa * ry,
+                        cx - kappa * rx,
+                        cy - ry,
+                        cx,
+                        cy - ry,
+                    ),
+                    PathCmd::CurveTo(
+                        cx + kappa * rx,
+                        cy - ry,
+                        cx + rx,
+                        cy - kappa * ry,
+                        cx + rx,
+                        cy,
+                    ),
                     PathCmd::Close,
                 ]
             }
             _ => return false,
         };
-        
+
         // Create offset paths for the stroke
         // For simplicity, we'll create two offset paths (inside and outside)
         let offset = node.stroke.width / 2.0;
         let mut offset_path = Vec::new();
-        
+
         for cmd in &path_cmds {
             match cmd {
                 PathCmd::MoveTo(x, y) => {
@@ -2719,9 +2775,12 @@ impl Editor {
                 }
                 PathCmd::CurveTo(x1, y1, x2, y2, x, y) => {
                     offset_path.push(PathCmd::CurveTo(
-                        x1 + offset, y1 + offset,
-                        x2 + offset, y2 + offset,
-                        x + offset, y + offset,
+                        x1 + offset,
+                        y1 + offset,
+                        x2 + offset,
+                        y2 + offset,
+                        x + offset,
+                        y + offset,
                     ));
                 }
                 PathCmd::Close => {
@@ -2729,11 +2788,18 @@ impl Editor {
                 }
             }
         }
-        
+
         // Create new vector node with the outlined path
-        let new_id = x_native::fresh_id();
-        let new_node = Node::vector(&new_id, node.transform.x, node.transform.y, node.w, node.h, offset_path);
-        
+        let new_id = fresh_id();
+        let new_node = Node::vector(
+            &new_id,
+            node.transform.x,
+            node.transform.y,
+            node.w,
+            node.h,
+            offset_path,
+        );
+
         // Replace the original node
         self.replace_node(node_id, new_node);
         self.mark_dirty();
@@ -2745,11 +2811,11 @@ impl Editor {
         if self.selection.is_empty() {
             return false;
         }
-        
+
         // Collect all paths from selected nodes
         let mut combined_path = Vec::new();
         let mut bounds = None;
-        
+
         for node_id in &self.selection.clone() {
             if let Some(node) = self.get_node(node_id) {
                 // Update bounds
@@ -2764,7 +2830,7 @@ impl Editor {
                         (min_x, min_y, max_x - min_x, max_y - min_y)
                     }
                 });
-                
+
                 // Get path from node
                 match &node.kind {
                     NodeKind::Vector { path } => {
@@ -2783,20 +2849,20 @@ impl Editor {
                 }
             }
         }
-        
+
         if combined_path.is_empty() {
             return false;
         }
-        
+
         let (x, y, w, h) = bounds.unwrap();
-        let new_id = x_native::fresh_id();
+        let new_id = fresh_id();
         let new_node = Node::vector(&new_id, x, y, w, h, combined_path);
-        
+
         // Delete original nodes
         for node_id in &self.selection {
             self.delete_node(node_id);
         }
-        
+
         // Add new flattened node
         self.add_node(new_node);
         self.selection = vec![new_id.clone()];
@@ -2806,8 +2872,10 @@ impl Editor {
 
     /// Offset vector path
     pub fn offset_vector(&mut self, node_id: &str, distance: f64) -> bool {
-        let Some(node) = self.get_node(node_id) else { return false };
-        
+        let Some(node) = self.get_node(node_id) else {
+            return false;
+        };
+
         if let NodeKind::Vector { path } = &node.kind {
             // Simple offset: move all points outward by distance
             // This is a simplified implementation - proper offset requires
@@ -2823,9 +2891,12 @@ impl Editor {
                     }
                     PathCmd::CurveTo(x1, y1, x2, y2, x, y) => {
                         offset_path.push(PathCmd::CurveTo(
-                            x1 + distance, y1 + distance,
-                            x2 + distance, y2 + distance,
-                            x + distance, y + distance,
+                            x1 + distance,
+                            y1 + distance,
+                            x2 + distance,
+                            y2 + distance,
+                            x + distance,
+                            y + distance,
                         ));
                     }
                     PathCmd::Close => {
@@ -2833,7 +2904,7 @@ impl Editor {
                     }
                 }
             }
-            
+
             // Update the node's path
             if let Some(node) = self.get_node_mut(node_id) {
                 if let NodeKind::Vector { path } = &mut node.kind {
@@ -2848,8 +2919,10 @@ impl Editor {
 
     /// Convert text to vector path (outline text)
     pub fn text_to_outline(&mut self, node_id: &str) -> bool {
-        let Some(node) = self.get_node(node_id) else { return false };
-        
+        let Some(node) = self.get_node(node_id) else {
+            return false;
+        };
+
         if let NodeKind::Text { text } = &node.kind {
             // For now, create a simple rectangular outline
             // In a full implementation, this would use font outlines
@@ -2860,10 +2933,17 @@ impl Editor {
                 PathCmd::LineTo(0.0, node.h),
                 PathCmd::Close,
             ];
-            
-            let new_id = x_native::fresh_id();
-            let new_node = Node::vector(&new_id, node.transform.x, node.transform.y, node.w, node.h, path);
-            
+
+            let new_id = fresh_id();
+            let new_node = Node::vector(
+                &new_id,
+                node.transform.x,
+                node.transform.y,
+                node.w,
+                node.h,
+                path,
+            );
+
             self.replace_node(node_id, new_node);
             self.mark_dirty();
             return true;
@@ -2871,12 +2951,11 @@ impl Editor {
         false
     }
 
-
     /// Replace the path of a vector node
     fn replace_path(&mut self, node_id: &str, new_path: Vec<PathCmd>) {
         fn update_path(node: &mut Node, id: &str, path: Vec<PathCmd>) -> bool {
             if node.id == id {
-                if let NodeKind::Vector { ref mut path: ref mut p } = node.kind {
+                if let NodeKind::Vector { path: ref mut p } = node.kind {
                     *p = path;
                     return true;
                 }
@@ -2896,12 +2975,19 @@ impl Editor {
     // ========================================================================
 
     /// Add a bézier handle to a vector point
-    pub fn add_bezier_handle(&mut self, node_id: &str, point_idx: usize, handle_pos: (f64, f64)) -> bool {
-        let Some(node) = self.get_node(node_id) else { return false };
-        
+    pub fn add_bezier_handle(
+        &mut self,
+        node_id: &str,
+        point_idx: usize,
+        handle_pos: (f64, f64),
+    ) -> bool {
+        let Some(node) = self.get_node(node_id) else {
+            return false;
+        };
+
         if let NodeKind::Vector { ref path } = node.kind {
             let mut new_path = path.clone();
-            
+
             // Find the point and convert LineTo to CurveTo with handles
             let mut point_count = 0;
             for cmd in new_path.iter_mut() {
@@ -2912,7 +2998,7 @@ impl Editor {
                             let cp1 = (*x, *y); // Start point (no incoming handle)
                             let cp2 = handle_pos;
                             let end = (*x, *y);
-                            *cmd = PathCmd::CurveTo(cp1, cp2, end);
+                            *cmd = PathCmd::CurveTo(cp1.0, cp1.1, cp2.0, cp2.1, end.0, end.1);
                             self.replace_path(node_id, new_path);
                             self.mark_dirty();
                             return true;
@@ -2925,7 +3011,7 @@ impl Editor {
                             let cp1 = (*x, *y);
                             let cp2 = handle_pos;
                             let end = (*x, *y);
-                            *cmd = PathCmd::CurveTo(cp1, cp2, end);
+                            *cmd = PathCmd::CurveTo(cp1.0, cp1.1, cp2.0, cp2.1, end.0, end.1);
                             self.replace_path(node_id, new_path);
                             self.mark_dirty();
                             return true;
@@ -2940,20 +3026,30 @@ impl Editor {
     }
 
     /// Adjust a bézier handle position
-    pub fn adjust_bezier_handle(&mut self, node_id: &str, point_idx: usize, handle_idx: usize, new_pos: (f64, f64)) -> bool {
-        let Some(node) = self.get_node(node_id) else { return false };
-        
+    pub fn adjust_bezier_handle(
+        &mut self,
+        node_id: &str,
+        point_idx: usize,
+        handle_idx: usize,
+        new_pos: (f64, f64),
+    ) -> bool {
+        let Some(node) = self.get_node(node_id) else {
+            return false;
+        };
+
         if let NodeKind::Vector { ref path } = node.kind {
             let mut new_path = path.clone();
-            
+
             let mut point_count = 0;
             for cmd in new_path.iter_mut() {
-                if let PathCmd::CurveTo(cp1, cp2, _) = cmd {
+                if let PathCmd::CurveTo(h1x, h1y, h2x, h2y, _, _) = cmd {
                     if point_count == point_idx {
                         if handle_idx == 0 {
-                            *cp1 = new_pos;
+                            *h1x = new_pos.0;
+                            *h1y = new_pos.1;
                         } else {
-                            *cp2 = new_pos;
+                            *h2x = new_pos.0;
+                            *h2y = new_pos.1;
                         }
                         self.replace_path(node_id, new_path);
                         self.mark_dirty();
@@ -2968,15 +3064,17 @@ impl Editor {
 
     /// Split a vector path at a specific point
     pub fn split_vector_path(&mut self, node_id: &str, at_point: usize) -> Option<String> {
-        let Some(node) = self.get_node(node_id) else { return None };
-        
+        let Some(node) = self.get_node(node_id) else {
+            return None;
+        };
+
         if let NodeKind::Vector { ref path } = node.kind {
             // Split path into two parts at the specified point
             let mut path1 = Vec::new();
             let mut path2 = Vec::new();
             let mut point_count = 0;
             let mut in_second_path = false;
-            
+
             for cmd in path {
                 match cmd {
                     PathCmd::MoveTo(x, y) => {
@@ -2998,11 +3096,12 @@ impl Editor {
                         }
                         point_count += 1;
                     }
-                    PathCmd::CurveTo(cp1, cp2, end) => {
+                    PathCmd::CurveTo(h1x, h1y, h2x, h2y, ex, ey) => {
+                        let curve = PathCmd::CurveTo(*h1x, *h1y, *h2x, *h2y, *ex, *ey);
                         if in_second_path {
-                            path2.push(PathCmd::CurveTo(*cp1, *cp2, *end));
+                            path2.push(curve);
                         } else {
-                            path1.push(PathCmd::CurveTo(*cp1, *cp2, *end));
+                            path1.push(curve);
                         }
                         point_count += 1;
                     }
@@ -3012,14 +3111,21 @@ impl Editor {
                     }
                 }
             }
-            
+
             // Update original node with first path
             self.replace_path(node_id, path1);
-            
+
             // Create new node with second path
             if !path2.is_empty() {
-                let new_id = x_native::fresh_id();
-                let new_node = Node::vector(&new_id, node.transform.x, node.transform.y, node.w, node.h, path2);
+                let new_id = fresh_id();
+                let new_node = Node::vector(
+                    &new_id,
+                    node.transform.x,
+                    node.transform.y,
+                    node.w,
+                    node.h,
+                    path2,
+                );
                 self.add_node(new_node);
                 return Some(new_id);
             }
@@ -3028,32 +3134,41 @@ impl Editor {
     }
 
     /// Cut a vector path along a line
-    pub fn cut_vector_path(&mut self, node_id: &str, start: (f64, f64), end: (f64, f64)) -> Vec<String> {
+    pub fn cut_vector_path(
+        &mut self,
+        node_id: &str,
+        start: (f64, f64),
+        end: (f64, f64),
+    ) -> Vec<String> {
         let mut new_ids = Vec::new();
-        let Some(node) = self.get_node(node_id) else { return new_ids };
-        
+        let Some(node) = self.get_node(node_id) else {
+            return new_ids;
+        };
+
         if let NodeKind::Vector { ref path } = node.kind {
             // Find all intersection points with the cut line
             let mut intersections = Vec::new();
             let mut prev_point = None;
             let mut point_idx = 0;
-            
+
             for cmd in path {
                 match cmd {
                     PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => {
                         if let Some((px, py)) = prev_point {
                             // Check if this segment intersects the cut line
-                            if let Some(intersection) = line_intersection(px, py, *x, *y, start.0, start.1, end.0, end.1) {
+                            if let Some(intersection) =
+                                line_intersection(px, py, *x, *y, start.0, start.1, end.0, end.1)
+                            {
                                 intersections.push((point_idx, intersection));
                             }
                         }
                         prev_point = Some((*x, *y));
                         point_idx += 1;
                     }
-                    PathCmd::CurveTo(_, _, end_pt) => {
+                    PathCmd::CurveTo(_, _, _, _, end_x, end_y) => {
                         // For curves, we'd need more complex intersection logic
                         // For now, skip curve intersections
-                        prev_point = Some((end_pt.0, end_pt.1));
+                        prev_point = Some((*end_x, *end_y));
                         point_idx += 1;
                     }
                     PathCmd::Close => {
@@ -3061,7 +3176,7 @@ impl Editor {
                     }
                 }
             }
-            
+
             // Split at each intersection (in reverse order to maintain indices)
             intersections.sort_by(|a, b| b.0.cmp(&a.0));
             for (idx, _) in intersections {
@@ -3070,25 +3185,27 @@ impl Editor {
                 }
             }
         }
-        
+
         new_ids
     }
 
     /// Lasso select points within a freeform boundary
     pub fn lasso_select_points(&self, node_id: &str, boundary: &[(f64, f64)]) -> Vec<usize> {
         let mut selected = Vec::new();
-        let Some(node) = self.get_node(node_id) else { return selected };
-        
+        let Some(node) = self.get_node(node_id) else {
+            return selected;
+        };
+
         if let NodeKind::Vector { ref path } = node.kind {
             let mut point_idx = 0;
             for cmd in path {
                 let point = match cmd {
                     PathCmd::MoveTo(x, y) => Some((*x, *y)),
                     PathCmd::LineTo(x, y) => Some((*x, *y)),
-                    PathCmd::CurveTo(_, _, end) => Some(*end),
+                    PathCmd::CurveTo(_, _, _, _, ex, ey) => Some((*ex, *ey)),
                     PathCmd::Close => None,
                 };
-                
+
                 if let Some((px, py)) = point {
                     if point_in_polygon(px, py, boundary) {
                         selected.push(point_idx);
@@ -3097,38 +3214,47 @@ impl Editor {
                 }
             }
         }
-        
+
         selected
     }
 
     /// Set variable width stroke profile
-    pub fn set_variable_width_stroke(&mut self, node_id: &str, width_points: Vec<(f64, f64)>) -> bool {
-        let Some(node) = self.get_node_mut(node_id) else { return false };
-        
+    pub fn set_variable_width_stroke(
+        &mut self,
+        node_id: &str,
+        width_points: Vec<(f64, f64)>,
+    ) -> bool {
+        let Some(node) = self.get_node_mut(node_id) else {
+            return false;
+        };
+
         // Store width profile as a custom property
         // In a full implementation, this would be a proper field on Node
         // For now, we'll store it in the stroke metadata
         node.stroke.width = width_points.iter().map(|(_, w)| w).fold(0.0, f64::max);
-        
+
         // TODO: Add proper variable width storage to Node struct
         // For now, this is a placeholder
-        
+
         self.mark_dirty();
         true
     }
 
     /// Remove bézier handles from a point (convert to corner)
     pub fn remove_bezier_handles(&mut self, node_id: &str, point_idx: usize) -> bool {
-        let Some(node) = self.get_node(node_id) else { return false };
-        
+        let Some(node) = self.get_node(node_id) else {
+            return false;
+        };
+
         if let NodeKind::Vector { ref path } = node.kind {
             let mut new_path = path.clone();
-            
+
             let mut point_count = 0;
             for cmd in new_path.iter_mut() {
-                if let PathCmd::CurveTo(_, _, end) = cmd {
+                if let PathCmd::CurveTo(_, _, _, _, end_x, end_y) = cmd {
                     if point_count == point_idx {
                         // Convert to LineTo (remove handles)
+                        let end = (*end_x, *end_y);
                         *cmd = PathCmd::LineTo(end.0, end.1);
                         self.replace_path(node_id, new_path);
                         self.mark_dirty();
@@ -3142,33 +3268,47 @@ impl Editor {
     }
 
     /// Mirror bézier handles (symmetric curves)
-    pub fn mirror_bezier_handles(&mut self, node_id: &str, point_idx: usize, mirror_mode: MirrorMode) -> bool {
-        let Some(node) = self.get_node(node_id) else { return false };
-        
+    pub fn mirror_bezier_handles(
+        &mut self,
+        node_id: &str,
+        point_idx: usize,
+        mirror_mode: MirrorMode,
+    ) -> bool {
+        let Some(node) = self.get_node(node_id) else {
+            return false;
+        };
+
         if let NodeKind::Vector { ref path } = node.kind {
             let mut new_path = path.clone();
-            
+
             let mut point_count = 0;
             for cmd in new_path.iter_mut() {
-                if let PathCmd::CurveTo(cp1, cp2, end) = cmd {
+                if let PathCmd::CurveTo(h1x, h1y, h2x, h2y, end_x, end_y) = cmd {
                     if point_count == point_idx {
+                        let cp1 = (*h1x, *h1y);
+                        let cp2 = (*h2x, *h2y);
+                        let end = (*end_x, *end_y);
                         match mirror_mode {
                             MirrorMode::Angle => {
                                 // Mirror angle only, keep lengths
                                 let angle1 = (cp1.1 - end.1).atan2(cp1.0 - end.0);
                                 let angle2 = (cp2.1 - end.1).atan2(cp2.0 - end.0);
-                                let len1 = ((cp1.0 - end.0).powi(2) + (cp1.1 - end.1).powi(2)).sqrt();
-                                let len2 = ((cp2.0 - end.0).powi(2) + (cp2.1 - end.1).powi(2)).sqrt();
-                                
+                                let len1 =
+                                    ((cp1.0 - end.0).powi(2) + (cp1.1 - end.1).powi(2)).sqrt();
+                                let len2 =
+                                    ((cp2.0 - end.0).powi(2) + (cp2.1 - end.1).powi(2)).sqrt();
+
                                 // Average the angles and apply opposite directions
                                 let avg_angle = (angle1 + angle2 + std::f64::consts::PI) / 2.0;
-                                *cp1 = (end.0 + len1 * avg_angle.cos(), end.1 + len1 * avg_angle.sin());
-                                *cp2 = (end.0 - len2 * avg_angle.cos(), end.1 - len2 * avg_angle.sin());
+                                *h1x = end.0 + len1 * avg_angle.cos();
+                                *h1y = end.1 + len1 * avg_angle.sin();
+                                *h2x = end.0 - len2 * avg_angle.cos();
+                                *h2y = end.1 - len2 * avg_angle.sin();
                             }
                             MirrorMode::AngleAndLength => {
                                 // Mirror both angle and length
-                                let center = *end;
-                                *cp2 = (2.0 * center.0 - cp1.0, 2.0 * center.1 - cp1.1);
+                                *h2x = 2.0 * end.0 - cp1.0;
+                                *h2y = 2.0 * end.1 - cp1.1;
                             }
                             MirrorMode::None => {
                                 // No mirroring - do nothing
@@ -3185,7 +3325,6 @@ impl Editor {
         false
     }
 
-
     // ========================================================================
     // Phase 4: Stroke Caps and Advanced Tools
     // ========================================================================
@@ -3193,42 +3332,50 @@ impl Editor {
     /// Render stroke caps at path endpoints
     /// Returns additional path commands for caps
     pub fn render_stroke_caps(&self, node_id: &str) -> Vec<PathCmd> {
-        let Some(node) = self.get_node(node_id) else { return Vec::new() };
-        
+        let Some(node) = self.get_node(node_id) else {
+            return Vec::new();
+        };
+
         if let NodeKind::Vector { ref path } = node.kind {
             if path.is_empty() {
                 return Vec::new();
             }
-            
+
             let mut cap_commands = Vec::new();
             let stroke_width = node.stroke.width;
-            
+
             // Get stroke options from the first stroke layer
-            let options = node.stroke_layers.first()
+            let options = node
+                .stroke_layers
+                .first()
                 .map(|l| &l.options)
                 .unwrap_or(&StrokeOptions::default());
-            
+
             // Find start and end points
             let start_point = match path.first() {
                 Some(PathCmd::MoveTo(x, y)) => (*x, *y),
                 Some(PathCmd::LineTo(x, y)) => (*x, *y),
                 _ => return Vec::new(),
             };
-            
+
             let end_point = match path.last() {
                 Some(PathCmd::LineTo(x, y)) => (*x, *y),
                 Some(PathCmd::CurveTo(_, _, _, _, x, y)) => (*x, *y),
                 Some(PathCmd::Close) => {
                     // For closed paths, find the last non-close point
-                    path.iter().rev().skip(1).find_map(|cmd| match cmd {
-                        PathCmd::LineTo(x, y) => Some((*x, *y)),
-                        PathCmd::CurveTo(_, _, _, _, x, y) => Some((*x, *y)),
-                        _ => None,
-                    }).unwrap_or(start_point)
+                    path.iter()
+                        .rev()
+                        .skip(1)
+                        .find_map(|cmd| match cmd {
+                            PathCmd::LineTo(x, y) => Some((*x, *y)),
+                            PathCmd::CurveTo(_, _, _, _, x, y) => Some((*x, *y)),
+                            _ => None,
+                        })
+                        .unwrap_or(start_point)
                 }
                 _ => start_point,
             };
-            
+
             // Calculate direction vectors for caps
             let start_dir = if path.len() >= 2 {
                 match &path[1] {
@@ -3236,67 +3383,108 @@ impl Editor {
                         let dx = x - start_point.0;
                         let dy = y - start_point.1;
                         let len = (dx * dx + dy * dy).sqrt();
-                        if len > 0.0 { Some((dx / len, dy / len)) } else { None }
+                        if len > 0.0 {
+                            Some((dx / len, dy / len))
+                        } else {
+                            None
+                        }
                     }
                     PathCmd::CurveTo(x1, y1, _, _, _, _) => {
                         let dx = x1 - start_point.0;
                         let dy = y1 - start_point.1;
                         let len = (dx * dx + dy * dy).sqrt();
-                        if len > 0.0 { Some((dx / len, dy / len)) } else { None }
+                        if len > 0.0 {
+                            Some((dx / len, dy / len))
+                        } else {
+                            None
+                        }
                     }
                     _ => None,
                 }
             } else {
                 None
             };
-            
+
             let end_dir = if path.len() >= 2 {
                 match path.get(path.len() - 2) {
                     Some(PathCmd::LineTo(x, y)) => {
                         let dx = end_point.0 - x;
                         let dy = end_point.1 - y;
                         let len = (dx * dx + dy * dy).sqrt();
-                        if len > 0.0 { Some((dx / len, dy / len)) } else { None }
+                        if len > 0.0 {
+                            Some((dx / len, dy / len))
+                        } else {
+                            None
+                        }
                     }
                     Some(PathCmd::CurveTo(_, _, x2, y2, _, _)) => {
                         let dx = end_point.0 - x2;
                         let dy = end_point.1 - y2;
                         let len = (dx * dx + dy * dy).sqrt();
-                        if len > 0.0 { Some((dx / len, dy / len)) } else { None }
+                        if len > 0.0 {
+                            Some((dx / len, dy / len))
+                        } else {
+                            None
+                        }
                     }
                     _ => None,
                 }
             } else {
                 None
             };
-            
+
             // Render start cap
             if let (Some(dir), Some((sx, sy))) = (start_dir, Some(start_point)) {
-                let cap_cmds = self.generate_stroke_cap(options.cap_start, sx, sy, dir.0, dir.1, stroke_width, true);
+                let cap_cmds = self.generate_stroke_cap(
+                    options.cap_start,
+                    sx,
+                    sy,
+                    dir.0,
+                    dir.1,
+                    stroke_width,
+                    true,
+                );
                 cap_commands.extend(cap_cmds);
             }
-            
+
             // Render end cap
             if let (Some(dir), Some((ex, ey))) = (end_dir, Some(end_point)) {
-                let cap_cmds = self.generate_stroke_cap(options.cap_end, ex, ey, dir.0, dir.1, stroke_width, false);
+                let cap_cmds = self.generate_stroke_cap(
+                    options.cap_end,
+                    ex,
+                    ey,
+                    dir.0,
+                    dir.1,
+                    stroke_width,
+                    false,
+                );
                 cap_commands.extend(cap_cmds);
             }
-            
+
             cap_commands
         } else {
             Vec::new()
         }
     }
-    
+
     /// Generate stroke cap geometry
-    fn generate_stroke_cap(&self, cap: StrokeCap, x: f64, y: f64, dx: f64, dy: f64, width: f64, is_start: bool) -> Vec<PathCmd> {
+    fn generate_stroke_cap(
+        &self,
+        cap: StrokeCap,
+        x: f64,
+        y: f64,
+        dx: f64,
+        dy: f64,
+        width: f64,
+        is_start: bool,
+    ) -> Vec<PathCmd> {
         let mut cmds = Vec::new();
         let half_width = width / 2.0;
-        
+
         // Perpendicular direction
         let px = -dy;
         let py = dx;
-        
+
         match cap {
             StrokeCap::None => {
                 // No cap
@@ -3305,8 +3493,12 @@ impl Editor {
                 // Round cap: semicircle
                 let steps = 16;
                 let start_angle = if is_start { std::f64::consts::PI } else { 0.0 };
-                let end_angle = if is_start { 2.0 * std::f64::consts::PI } else { std::f64::consts::PI };
-                
+                let end_angle = if is_start {
+                    2.0 * std::f64::consts::PI
+                } else {
+                    std::f64::consts::PI
+                };
+
                 cmds.push(PathCmd::MoveTo(x + px * half_width, y + py * half_width));
                 for i in 1..=steps {
                     let t = i as f64 / steps as f64;
@@ -3323,7 +3515,7 @@ impl Editor {
                 let p1y = y + dy * extend + py * half_width;
                 let p2x = x + dx * extend - px * half_width;
                 let p2y = y + dy * extend - py * half_width;
-                
+
                 cmds.push(PathCmd::MoveTo(x + px * half_width, y + py * half_width));
                 cmds.push(PathCmd::LineTo(p1x, p1y));
                 cmds.push(PathCmd::LineTo(p2x, p2y));
@@ -3333,15 +3525,15 @@ impl Editor {
                 // Arrow cap: triangular arrow pointing outward
                 let arrow_length = width * 1.5;
                 let arrow_width = width * 0.8;
-                
+
                 let tip_x = x + dx * arrow_length;
                 let tip_y = y + dy * arrow_length;
-                
+
                 let base1_x = x + px * arrow_width;
                 let base1_y = y + py * arrow_width;
                 let base2_x = x - px * arrow_width;
                 let base2_y = y - py * arrow_width;
-                
+
                 cmds.push(PathCmd::MoveTo(base1_x, base1_y));
                 cmds.push(PathCmd::LineTo(tip_x, tip_y));
                 cmds.push(PathCmd::LineTo(base2_x, base2_y));
@@ -3352,25 +3544,28 @@ impl Editor {
                 let tri_length = width;
                 let tip_x = x + dx * tri_length;
                 let tip_y = y + dy * tri_length;
-                
+
                 cmds.push(PathCmd::MoveTo(x + px * half_width, y + py * half_width));
                 cmds.push(PathCmd::LineTo(tip_x, tip_y));
                 cmds.push(PathCmd::LineTo(x - px * half_width, y - py * half_width));
                 cmds.push(PathCmd::Close);
             }
         }
-        
+
         cmds
     }
-    
+
     /// Set stroke cap for start of path
     pub fn set_stroke_cap_start(&mut self, node_id: &str, cap: StrokeCap) -> bool {
-        let Some(node) = self.get_node_mut(node_id) else { return false };
-        
+        let Some(node) = self.get_node_mut(node_id) else {
+            return false;
+        };
+
         if node.stroke_layers.is_empty() {
-            node.stroke_layers.push(StrokeLayer::new(node.stroke.clone()));
+            node.stroke_layers
+                .push(StrokeLayer::new(node.stroke.clone()));
         }
-        
+
         if let Some(layer) = node.stroke_layers.first_mut() {
             layer.options.cap_start = cap;
             self.mark_dirty();
@@ -3379,15 +3574,18 @@ impl Editor {
             false
         }
     }
-    
+
     /// Set stroke cap for end of path
     pub fn set_stroke_cap_end(&mut self, node_id: &str, cap: StrokeCap) -> bool {
-        let Some(node) = self.get_node_mut(node_id) else { return false };
-        
+        let Some(node) = self.get_node_mut(node_id) else {
+            return false;
+        };
+
         if node.stroke_layers.is_empty() {
-            node.stroke_layers.push(StrokeLayer::new(node.stroke.clone()));
+            node.stroke_layers
+                .push(StrokeLayer::new(node.stroke.clone()));
         }
-        
+
         if let Some(layer) = node.stroke_layers.first_mut() {
             layer.options.cap_end = cap;
             self.mark_dirty();
@@ -3397,44 +3595,45 @@ impl Editor {
         }
     }
 
-
     // ========================================================================
     // Phase 4: Shape Builder Tool
     // ========================================================================
+}
+/// Shape Builder tool state
+pub struct ShapeBuilderState {
+    pub active: bool,
+    pub selected_nodes: Vec<String>,
+    pub hovered_region: Option<usize>,
+    pub mode: ShapeBuilderMode,
+}
 
-    /// Shape Builder tool state
-    pub struct ShapeBuilderState {
-        pub active: bool,
-        pub selected_nodes: Vec<String>,
-        pub hovered_region: Option<usize>,
-        pub mode: ShapeBuilderMode,
-    }
-    
-    impl Default for ShapeBuilderState {
-        fn default() -> Self {
-            Self {
-                active: false,
-                selected_nodes: Vec::new(),
-                hovered_region: None,
-                mode: ShapeBuilderMode::Merge,
-            }
+impl Default for ShapeBuilderState {
+    fn default() -> Self {
+        Self {
+            active: false,
+            selected_nodes: Vec::new(),
+            hovered_region: None,
+            mode: ShapeBuilderMode::Merge,
         }
     }
-    
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub enum ShapeBuilderMode {
-        Merge,
-        Subtract,
-        Intersect,
-        Exclude,
-    }
-    
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShapeBuilderMode {
+    Merge,
+    Subtract,
+    Intersect,
+    Exclude,
+}
+
+impl Editor {
     /// Detect overlapping regions between selected shapes
     pub fn detect_shape_regions(&self, node_ids: &[String]) -> Vec<ShapeRegion> {
         let mut regions = Vec::new();
-        
+
         // Collect all paths
-        let paths: Vec<(String, Vec<PathCmd>)> = node_ids.iter()
+        let paths: Vec<(String, Vec<PathCmd>)> = node_ids
+            .iter()
             .filter_map(|id| {
                 self.get_node(id).and_then(|node| {
                     if let NodeKind::Vector { ref path } = node.kind {
@@ -3445,20 +3644,20 @@ impl Editor {
                 })
             })
             .collect();
-        
+
         if paths.len() < 2 {
             return regions;
         }
-        
+
         // Simple region detection: find intersection points
         for i in 0..paths.len() {
             for j in (i + 1)..paths.len() {
                 let (id1, path1) = &paths[i];
                 let (id2, path2) = &paths[j];
-                
+
                 // Find intersection points
                 let intersections = find_path_intersections(path1, path2);
-                
+
                 if !intersections.is_empty() {
                     regions.push(ShapeRegion {
                         node_ids: vec![id1.clone(), id2.clone()],
@@ -3468,18 +3667,19 @@ impl Editor {
                 }
             }
         }
-        
+
         regions
     }
-    
+
     /// Merge selected shapes into one
     pub fn shape_builder_merge(&mut self, node_ids: &[String]) -> Option<String> {
         if node_ids.len() < 2 {
             return None;
         }
-        
+
         // Get all paths
-        let paths: Vec<Vec<PathCmd>> = node_ids.iter()
+        let paths: Vec<Vec<PathCmd>> = node_ids
+            .iter()
             .filter_map(|id| {
                 self.get_node(id).and_then(|node| {
                     if let NodeKind::Vector { ref path } = node.kind {
@@ -3490,19 +3690,19 @@ impl Editor {
                 })
             })
             .collect();
-        
+
         if paths.is_empty() {
             return None;
         }
-        
+
         // Combine all paths into one
         let mut combined_path = Vec::new();
         for path in paths {
             combined_path.extend(path);
         }
-        
+
         // Create new node with combined path
-        let new_id = x_native::fresh_id();
+        let new_id = fresh_id();
         let first_node = self.get_node(&node_ids[0])?;
         let new_node = Node::vector(
             &new_id,
@@ -3512,21 +3712,25 @@ impl Editor {
             first_node.h,
             combined_path,
         );
-        
+
         // Delete old nodes
         for id in node_ids {
             self.delete_node(id);
         }
-        
+
         // Add new node
         self.add_node(new_node);
-        
+
         self.mark_dirty();
         Some(new_id)
     }
-    
+
     /// Subtract shape from another
-    pub fn shape_builder_subtract(&mut self, base_id: &str, subtract_ids: &[String]) -> Option<String> {
+    pub fn shape_builder_subtract(
+        &mut self,
+        base_id: &str,
+        subtract_ids: &[String],
+    ) -> Option<String> {
         // Get base path
         let base_node = self.get_node(base_id)?;
         let base_path = if let NodeKind::Vector { ref path } = base_node.kind {
@@ -3534,15 +3738,15 @@ impl Editor {
         } else {
             return None;
         };
-        
+
         // For now, just return the base path
         // Full implementation would use boolean operations
         // This is a placeholder
-        
+
         self.mark_dirty();
         Some(base_id.to_string())
     }
-
+}
 /// Shape signature for Select Similar: node kind + fill + stroke.
 type Sig = (std::mem::Discriminant<NodeKind>, String, String, f64);
 
@@ -3555,9 +3759,9 @@ fn shape_signature(n: &Node) -> Sig {
     )
 }
 
+// Layer management methods (Figma parity)
 
-    // Layer management methods (Figma parity)
-    
+impl Editor {
     /// Get all selectable node IDs in the document
     pub fn get_all_selectable_ids(&self) -> Vec<String> {
         let mut ids = Vec::new();
@@ -3589,6 +3793,22 @@ fn shape_signature(n: &Node) -> Sig {
         }
         find_matches(&self.root, template, &mut matches);
         matches
+    }
+
+    /// Get a shared reference to a node by ID
+    pub fn get_node(&self, id: &str) -> Option<&Node> {
+        fn find_node<'n>(node: &'n Node, id: &str) -> Option<&'n Node> {
+            if node.id == id {
+                return Some(node);
+            }
+            for child in &node.children {
+                if let Some(found) = find_node(child, id) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        find_node(&self.root, id)
     }
 
     /// Get a mutable reference to a node by ID
@@ -3662,18 +3882,20 @@ fn shape_signature(n: &Node) -> Sig {
     /// Enhanced outline stroke with proper stroke-to-fill conversion
     /// Creates a filled path that represents the stroke outline
     pub fn outline_stroke_enhanced(&mut self, node_id: &str) -> bool {
-        let Some(node) = self.get_node(node_id) else { return false };
-        
+        let Some(node) = self.get_node(node_id) else {
+            return false;
+        };
+
         if let NodeKind::Vector { ref path } = node.kind {
             let stroke_width = node.stroke.width;
             if stroke_width <= 0.0 {
                 return false;
             }
-            
+
             // Generate offset paths for stroke outline
             let mut outline_path = Vec::new();
             let half_width = stroke_width / 2.0;
-            
+
             // For each segment, create offset paths on both sides
             let mut prev_point = None;
             for cmd in path {
@@ -3692,16 +3914,17 @@ fn shape_signature(n: &Node) -> Sig {
                             if len > 0.0 {
                                 let nx = -dy / len * half_width;
                                 let ny = dx / len * half_width;
-                                
+
                                 // Add points for both sides
                                 outline_path.push(PathCmd::LineTo(*x + nx, *y + ny));
                             }
                         }
                         prev_point = Some((*x, *y));
                     }
-                    PathCmd::CurveTo(cp1, cp2, end) => {
+                    PathCmd::CurveTo(_, _, _, _, end_x, end_y) => {
                         // For curves, we'd need to offset the control points
                         // For now, just use the endpoint
+                        let end = (*end_x, *end_y);
                         if let Some((px, py)) = prev_point {
                             let dx = end.0 - px;
                             let dy = end.1 - py;
@@ -3720,7 +3943,7 @@ fn shape_signature(n: &Node) -> Sig {
                     }
                 }
             }
-            
+
             // Now create the return path (other side of stroke)
             let mut return_path = Vec::new();
             prev_point = None;
@@ -3743,7 +3966,8 @@ fn shape_signature(n: &Node) -> Sig {
                         }
                         prev_point = Some((*x, *y));
                     }
-                    PathCmd::CurveTo(cp1, cp2, end) => {
+                    PathCmd::CurveTo(_, _, _, _, end_x, end_y) => {
+                        let end = (*end_x, *end_y);
                         if let Some((px, py)) = prev_point {
                             let dx = px - end.0;
                             let dy = py - end.1;
@@ -3762,11 +3986,11 @@ fn shape_signature(n: &Node) -> Sig {
                     }
                 }
             }
-            
+
             // Combine forward and return paths
             outline_path.extend(return_path);
             outline_path.push(PathCmd::Close);
-            
+
             // Update node with new path and remove stroke
             self.replace_path(node_id, outline_path);
             if let Some(node) = self.get_node_mut(node_id) {
@@ -3779,14 +4003,21 @@ fn shape_signature(n: &Node) -> Sig {
     }
 
     /// Enhanced offset vector with different join styles
-    pub fn offset_vector_enhanced(&mut self, node_id: &str, distance: f64, join_style: JoinStyle) -> bool {
-        let Some(node) = self.get_node(node_id) else { return false };
-        
+    pub fn offset_vector_enhanced(
+        &mut self,
+        node_id: &str,
+        distance: f64,
+        join_style: JoinStyle,
+    ) -> bool {
+        let Some(node) = self.get_node(node_id) else {
+            return false;
+        };
+
         if let NodeKind::Vector { ref path } = node.kind {
             let mut offset_path = Vec::new();
             let mut prev_point = None;
             let mut prev_normal = None;
-            
+
             for cmd in path {
                 match cmd {
                     PathCmd::MoveTo(x, y) => {
@@ -3803,7 +4034,7 @@ fn shape_signature(n: &Node) -> Sig {
                             if len > 0.0 {
                                 let nx = -dy / len * distance;
                                 let ny = dx / len * distance;
-                                
+
                                 // Handle join style
                                 if let Some((prev_nx, prev_ny)) = prev_normal {
                                     // Apply join style at corner
@@ -3818,21 +4049,25 @@ fn shape_signature(n: &Node) -> Sig {
                                         }
                                         JoinStyle::Bevel => {
                                             // Cut corner with line
-                                            offset_path.push(PathCmd::LineTo(*x + prev_nx, *y + prev_ny));
+                                            offset_path
+                                                .push(PathCmd::LineTo(*x + prev_nx, *y + prev_ny));
                                             offset_path.push(PathCmd::LineTo(*x + nx, *y + ny));
                                         }
                                     }
                                 } else {
                                     offset_path.push(PathCmd::LineTo(*x + nx, *y + ny));
                                 }
-                                
+
                                 prev_normal = Some((nx, ny));
                             }
                         }
                         prev_point = Some((*x, *y));
                     }
-                    PathCmd::CurveTo(cp1, cp2, end) => {
+                    PathCmd::CurveTo(h1x, h1y, h2x, h2y, end_x, end_y) => {
                         // For curves, offset control points
+                        let cp1 = (*h1x, *h1y);
+                        let cp2 = (*h2x, *h2y);
+                        let end = (*end_x, *end_y);
                         if let Some((px, py)) = prev_point {
                             let dx = end.0 - px;
                             let dy = end.1 - py;
@@ -3841,9 +4076,12 @@ fn shape_signature(n: &Node) -> Sig {
                                 let nx = -dy / len * distance;
                                 let ny = dx / len * distance;
                                 offset_path.push(PathCmd::CurveTo(
-                                    (cp1.0 + nx, cp1.1 + ny),
-                                    (cp2.0 + nx, cp2.1 + ny),
-                                    (end.0 + nx, end.1 + ny),
+                                    cp1.0 + nx,
+                                    cp1.1 + ny,
+                                    cp2.0 + nx,
+                                    cp2.1 + ny,
+                                    end.0 + nx,
+                                    end.1 + ny,
                                 ));
                                 prev_normal = Some((nx, ny));
                             }
@@ -3857,7 +4095,7 @@ fn shape_signature(n: &Node) -> Sig {
                     }
                 }
             }
-            
+
             self.replace_path(node_id, offset_path);
             self.mark_dirty();
             return true;
@@ -3868,36 +4106,45 @@ fn shape_signature(n: &Node) -> Sig {
     /// Enhanced text to outline with actual glyph conversion
     /// Note: This is still a placeholder. Full implementation requires font outline extraction
     pub fn text_to_outline_enhanced(&mut self, node_id: &str) -> bool {
-        let Some(node) = self.get_node(node_id) else { return false };
-        
+        let Some(node) = self.get_node(node_id) else {
+            return false;
+        };
+
         if let NodeKind::Text { text } = &node.kind {
             // Get text metrics
             let font_size = node.font.size;
             let char_width = font_size * 0.6; // Approximate character width
-            
+
             // Create a path for each character (simplified as rectangles)
             let mut outline_path = Vec::new();
             let mut x_offset = 0.0;
-            
+
             for ch in text.chars() {
                 if ch == ' ' {
                     x_offset += char_width;
                     continue;
                 }
-                
+
                 // Create rectangle for each character
                 outline_path.push(PathCmd::MoveTo(x_offset, 0.0));
                 outline_path.push(PathCmd::LineTo(x_offset + char_width, 0.0));
                 outline_path.push(PathCmd::LineTo(x_offset + char_width, font_size));
                 outline_path.push(PathCmd::LineTo(x_offset, font_size));
                 outline_path.push(PathCmd::Close);
-                
+
                 x_offset += char_width;
             }
-            
-            let new_id = x_native::fresh_id();
-            let new_node = Node::vector(&new_id, node.transform.x, node.transform.y, x_offset, font_size, outline_path);
-            
+
+            let new_id = fresh_id();
+            let new_node = Node::vector(
+                &new_id,
+                node.transform.x,
+                node.transform.y,
+                x_offset,
+                font_size,
+                outline_path,
+            );
+
             self.replace_node(node_id, new_node);
             self.mark_dirty();
             return true;
@@ -3906,9 +4153,16 @@ fn shape_signature(n: &Node) -> Sig {
     }
 
     /// Interactive path simplification with tolerance control
-    pub fn simplify_vector_interactive(&mut self, node_id: &str, tolerance: f64, preview: bool) -> Option<Vec<PathCmd>> {
-        let Some(node) = self.get_node(node_id) else { return None };
-        
+    pub fn simplify_vector_interactive(
+        &mut self,
+        node_id: &str,
+        tolerance: f64,
+        preview: bool,
+    ) -> Option<Vec<PathCmd>> {
+        let Some(node) = self.get_node(node_id) else {
+            return None;
+        };
+
         if let NodeKind::Vector { ref path } = node.kind {
             // Extract points from path
             let mut points = Vec::new();
@@ -3917,16 +4171,16 @@ fn shape_signature(n: &Node) -> Sig {
                     PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => {
                         points.push((*x, *y));
                     }
-                    PathCmd::CurveTo(_, _, end) => {
-                        points.push(*end);
+                    PathCmd::CurveTo(_, _, _, _, end_x, end_y) => {
+                        points.push((*end_x, *end_y));
                     }
                     PathCmd::Close => {}
                 }
             }
-            
+
             // Apply Ramer-Douglas-Peucker simplification
             let simplified = ramer_douglas_peucker(&points, tolerance);
-            
+
             // Convert back to path commands
             let mut new_path = Vec::new();
             if !simplified.is_empty() {
@@ -3936,12 +4190,12 @@ fn shape_signature(n: &Node) -> Sig {
                 }
                 new_path.push(PathCmd::Close);
             }
-            
+
             if !preview {
                 self.replace_path(node_id, new_path.clone());
                 self.mark_dirty();
             }
-            
+
             return Some(new_path);
         }
         None
@@ -3949,27 +4203,33 @@ fn shape_signature(n: &Node) -> Sig {
 
     /// Join two vector paths at their endpoints
     pub fn join_paths(&mut self, node_id1: &str, node_id2: &str) -> Option<String> {
-        let Some(node1) = self.get_node(node_id1) else { return None };
-        let Some(node2) = self.get_node(node_id2) else { return None };
-        
-        if let (NodeKind::Vector { path: ref path1 }, NodeKind::Vector { path: ref path2 }) = (&node1.kind, &node2.kind) {
+        let Some(node1) = self.get_node(node_id1) else {
+            return None;
+        };
+        let Some(node2) = self.get_node(node_id2) else {
+            return None;
+        };
+
+        if let (NodeKind::Vector { path: ref path1 }, NodeKind::Vector { path: ref path2 }) =
+            (&node1.kind, &node2.kind)
+        {
             // Combine paths
             let mut joined_path = path1.clone();
-            
+
             // Remove Close command from first path if present
             if let Some(PathCmd::Close) = joined_path.last() {
                 joined_path.pop();
             }
-            
+
             // Append second path
             joined_path.extend(path2.iter().cloned());
-            
+
             // Update first node with joined path
             self.replace_path(node_id1, joined_path);
-            
+
             // Delete second node
             self.delete_node(node_id2);
-            
+
             self.mark_dirty();
             return Some(node_id1.to_string());
         }
@@ -3978,57 +4238,103 @@ fn shape_signature(n: &Node) -> Sig {
 
     /// Reverse path direction
     pub fn reverse_path_direction(&mut self, node_id: &str) -> bool {
+        let Some(node) = self.get_node(node_id) else {
+            return false;
+        };
+
+        if let NodeKind::Vector { ref path } = node.kind {
+            let mut reversed = Vec::new();
+            let mut points = Vec::new();
+
+            // Collect all points
+            for cmd in path {
+                match cmd {
+                    PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => {
+                        points.push(PathCmd::LineTo(*x, *y));
+                    }
+                    PathCmd::CurveTo(h1x, h1y, h2x, h2y, ex, ey) => {
+                        // Traversed backwards, so the two handles swap roles
+                        points.push(PathCmd::CurveTo(*h2x, *h2y, *h1x, *h1y, *ex, *ey));
+                    }
+                    PathCmd::Close => {
+                        // Ignore Close, we'll add it at the end
+                    }
+                }
+            }
+
+            // Reverse and convert to path
+            if !points.is_empty() {
+                if let PathCmd::LineTo(x, y) = points[0] {
+                    reversed.push(PathCmd::MoveTo(x, y));
+                } else if let PathCmd::CurveTo(_, _, _, _, end_x, end_y) = points[0] {
+                    reversed.push(PathCmd::MoveTo(end_x, end_y));
+                }
+
+                for i in (0..points.len() - 1).rev() {
+                    reversed.push(points[i].clone());
+                }
+
+                reversed.push(PathCmd::Close);
+            }
+
+            self.replace_path(node_id, reversed);
+            self.mark_dirty();
+            return true;
+        }
+        false
+    }
 
     // ========================================================================
     // Phase 5: Interactive UI & Performance Optimizations
     // ========================================================================
+}
+/// Interactive Shape Builder with hover detection
+pub struct InteractiveShapeBuilder {
+    pub state: ShapeBuilderState,
+    pub hovered_shape: Option<String>,
+    pub hover_point: Option<(f64, f64)>,
+    pub preview_operation: Option<ShapeOperation>,
+    pub selection_mode: SelectionMode,
+}
 
-    /// Interactive Shape Builder with hover detection
-    pub struct InteractiveShapeBuilder {
-        pub state: ShapeBuilderState,
-        pub hovered_shape: Option<String>,
-        pub hover_point: Option<(f64, f64)>,
-        pub preview_operation: Option<ShapeOperation>,
-        pub selection_mode: SelectionMode,
-    }
-    
-    impl Default for InteractiveShapeBuilder {
-        fn default() -> Self {
-            Self {
-                state: ShapeBuilderState::default(),
-                hovered_shape: None,
-                hover_point: None,
-                preview_operation: None,
-                selection_mode: SelectionMode::Click,
-            }
+impl Default for InteractiveShapeBuilder {
+    fn default() -> Self {
+        Self {
+            state: ShapeBuilderState::default(),
+            hovered_shape: None,
+            hover_point: None,
+            preview_operation: None,
+            selection_mode: SelectionMode::Click,
         }
     }
-    
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub enum SelectionMode {
-        Click,      // Click to select shapes
-        Drag,       // Drag to select multiple shapes
-        Lasso,      // Lasso selection
-    }
-    
-    #[derive(Debug, Clone)]
-    pub enum ShapeOperation {
-        Merge(Vec<String>),
-        Subtract { base: String, subtract: Vec<String> },
-        Intersect(Vec<String>),
-        Exclude(Vec<String>),
-    }
-    
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionMode {
+    Click, // Click to select shapes
+    Drag,  // Drag to select multiple shapes
+    Lasso, // Lasso selection
+}
+
+#[derive(Debug, Clone)]
+pub enum ShapeOperation {
+    Merge(Vec<String>),
+    Subtract { base: String, subtract: Vec<String> },
+    Intersect(Vec<String>),
+    Exclude(Vec<String>),
+}
+
+impl InteractiveShapeBuilder {
     /// Update hover state based on mouse position
-    pub fn update_shape_builder_hover(&mut self, mouse_pos: (f64, f64)) {
+    pub fn update_shape_builder_hover(&mut self, ed: &Editor, mouse_pos: (f64, f64)) {
         self.hover_point = Some(mouse_pos);
-        
+
         // Find shape under cursor
-        let hit_result = self.hit_test_shapes(mouse_pos);
-        
+        let hit_result = self.hit_test_shapes(ed, mouse_pos);
+
         if let Some(shape_id) = hit_result {
             self.hovered_shape = Some(shape_id);
-            
+
             // Generate preview based on current mode
             self.update_preview_operation();
         } else {
@@ -4036,11 +4342,14 @@ fn shape_signature(n: &Node) -> Sig {
             self.preview_operation = None;
         }
     }
-    
+
     /// Hit test to find shape under cursor
-    fn hit_test_shapes(&self, point: (f64, f64)) -> Option<String> {
+    fn hit_test_shapes(&self, ed: &Editor, point: (f64, f64)) -> Option<String> {
         // Check all visible vector shapes
-        for node in self.iter_nodes() {
+        for id in ed.get_all_selectable_ids() {
+            let Some(node) = ed.get_node(&id) else {
+                continue;
+            };
             if let NodeKind::Vector { ref path } = node.kind {
                 if self.point_in_shape(path, point) {
                     return Some(node.id.clone());
@@ -4049,38 +4358,39 @@ fn shape_signature(n: &Node) -> Sig {
         }
         None
     }
-    
+
     /// Check if point is inside a shape
     fn point_in_shape(&self, path: &[PathCmd], point: (f64, f64)) -> bool {
         // Convert path to polygon points
         let points = self.path_to_points(path);
-        
+
         if points.is_empty() {
             return false;
         }
-        
+
         // Ray casting algorithm
         let mut inside = false;
         let mut j = points.len() - 1;
-        
+
         for i in 0..points.len() {
             let (xi, yi) = points[i];
             let (xj, yj) = points[j];
-            
-            if ((yi > point.1) != (yj > point.1)) && 
-               (point.0 < (xj - xi) * (point.1 - yi) / (yj - yi) + xi) {
+
+            if ((yi > point.1) != (yj > point.1))
+                && (point.0 < (xj - xi) * (point.1 - yi) / (yj - yi) + xi)
+            {
                 inside = !inside;
             }
             j = i;
         }
-        
+
         inside
     }
-    
+
     /// Convert path to list of points
     fn path_to_points(&self, path: &[PathCmd]) -> Vec<(f64, f64)> {
         let mut points = Vec::new();
-        
+
         for cmd in path {
             match cmd {
                 PathCmd::MoveTo(x, y) => points.push((*x, *y)),
@@ -4089,14 +4399,14 @@ fn shape_signature(n: &Node) -> Sig {
                 PathCmd::Close => {}
             }
         }
-        
+
         points
     }
-    
+
     /// Update preview operation based on hover and mode
     fn update_preview_operation(&mut self) {
         let hovered = self.hovered_shape.clone();
-        
+
         if let Some(shape_id) = hovered {
             match self.state.mode {
                 ShapeBuilderMode::Merge => {
@@ -4135,7 +4445,7 @@ fn shape_signature(n: &Node) -> Sig {
             }
         }
     }
-    
+
     /// Handle click in Shape Builder mode
     pub fn handle_shape_builder_click(&mut self, shift: bool) -> Option<ShapeOperation> {
         if let Some(hovered) = self.hovered_shape.clone() {
@@ -4148,28 +4458,28 @@ fn shape_signature(n: &Node) -> Sig {
                 // Replace selection
                 self.state.selected_nodes = vec![hovered.clone()];
             }
-            
+
             self.update_preview_operation();
             return self.preview_operation.clone();
         }
         None
     }
-    
+
     /// Execute the preview operation
-    pub fn execute_preview_operation(&mut self) -> Option<String> {
+    pub fn execute_preview_operation(&mut self, ed: &mut Editor) -> Option<String> {
         if let Some(operation) = self.preview_operation.clone() {
             match operation {
                 ShapeOperation::Merge(shapes) => {
-                    return self.shape_builder_merge(&shapes);
+                    return ed.shape_builder_merge(&shapes);
                 }
                 ShapeOperation::Subtract { base, subtract } => {
-                    return self.shape_builder_subtract(&base, &subtract);
+                    return ed.shape_builder_subtract(&base, &subtract);
                 }
-                ShapeOperation::Intersect(shapes) => {
+                ShapeOperation::Intersect(_shapes) => {
                     // TODO: Implement intersect operation
                     return None;
                 }
-                ShapeOperation::Exclude(shapes) => {
+                ShapeOperation::Exclude(_shapes) => {
                     // TODO: Implement exclude operation
                     return None;
                 }
@@ -4177,7 +4487,7 @@ fn shape_signature(n: &Node) -> Sig {
         }
         None
     }
-    
+
     /// Get visual feedback data for rendering
     pub fn get_shape_builder_visuals(&self) -> ShapeBuilderVisuals {
         ShapeBuilderVisuals {
@@ -4187,290 +4497,251 @@ fn shape_signature(n: &Node) -> Sig {
             hover_point: self.hover_point,
         }
     }
+}
 
-        let Some(node) = self.get_node(node_id) else { return false };
-        
-        if let NodeKind::Vector { ref path } = node.kind {
-            let mut reversed = Vec::new();
-            let mut points = Vec::new();
-            
-            // Collect all points
-            for cmd in path {
-                match cmd {
-                    PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => {
-                        points.push(PathCmd::LineTo(*x, *y));
-                    }
-                    PathCmd::CurveTo(cp1, cp2, end) => {
-                        points.push(PathCmd::CurveTo(*cp2, *cp1, *end)); // Swap control points
-                    }
-                    PathCmd::Close => {
-                        // Ignore Close, we'll add it at the end
-                    }
+// ========================================================================
+// Phase 5: Spatial Indexing with Quadtree
+// ========================================================================
+
+/// Quadtree for fast spatial queries
+pub struct Quadtree {
+    root: Option<Box<QuadNode>>,
+    bounds: (f64, f64, f64, f64), // x, y, width, height
+    max_items: usize,
+    max_depth: usize,
+}
+
+struct QuadNode {
+    bounds: (f64, f64, f64, f64),
+    items: Vec<QuadItem>,
+    children: Option<Box<[QuadNode; 4]>>,
+    depth: usize,
+}
+
+#[derive(Clone)]
+pub struct QuadItem {
+    pub id: String,
+    pub bounds: (f64, f64, f64, f64), // x, y, width, height
+    pub node_id: String,
+}
+
+impl Quadtree {
+    pub fn new(bounds: (f64, f64, f64, f64)) -> Self {
+        Self {
+            root: None,
+            bounds,
+            max_items: 10,
+            max_depth: 8,
+        }
+    }
+
+    /// Insert item into quadtree
+    pub fn insert(&mut self, item: QuadItem) {
+        if self.root.is_none() {
+            self.root = Some(Box::new(QuadNode::new(self.bounds, 0)));
+        }
+
+        if let Some(root) = &mut self.root {
+            root.insert(item, self.max_items, self.max_depth);
+        }
+    }
+
+    /// Query items in bounds
+    pub fn query(&self, bounds: (f64, f64, f64, f64)) -> Vec<QuadItem> {
+        let mut results = Vec::new();
+        if let Some(root) = &self.root {
+            root.query(bounds, &mut results);
+        }
+        results
+    }
+
+    /// Query items at point
+    pub fn query_point(&self, point: (f64, f64)) -> Vec<QuadItem> {
+        self.query((point.0, point.1, 0.0, 0.0))
+    }
+
+    /// Clear all items
+    pub fn clear(&mut self) {
+        self.root = None;
+    }
+}
+
+impl QuadNode {
+    fn new(bounds: (f64, f64, f64, f64), depth: usize) -> Self {
+        Self {
+            bounds,
+            items: Vec::new(),
+            children: None,
+            depth,
+        }
+    }
+
+    fn insert(&mut self, item: QuadItem, max_items: usize, max_depth: usize) {
+        // Check if item is within bounds
+        if !self.contains_bounds(&item.bounds) {
+            return;
+        }
+
+        // If we have children, insert into appropriate child
+        if let Some(children) = &mut self.children {
+            for child in children.iter_mut() {
+                if child.contains_bounds(&item.bounds) {
+                    child.insert(item, max_items, max_depth);
+                    return;
                 }
             }
-            
-            // Reverse and convert to path
-            if !points.is_empty() {
-                if let PathCmd::LineTo(x, y) = points[0] {
-                    reversed.push(PathCmd::MoveTo(x, y));
-                } else if let PathCmd::CurveTo(_, _, end) = points[0] {
-                    reversed.push(PathCmd::MoveTo(end.0, end.1));
-                }
-                
-                for i in (0..points.len() - 1).rev() {
-                    reversed.push(points[i].clone());
-                }
-                
-                reversed.push(PathCmd::Close);
-            }
-            
-            self.replace_path(node_id, reversed);
-            self.mark_dirty();
-            return true;
         }
-        false
+
+        // Add to this node
+        self.items.push(item);
+
+        // Subdivide if needed
+        if self.items.len() > max_items && self.depth < max_depth && self.children.is_none() {
+            self.subdivide(max_items, max_depth);
+        }
     }
 
+    fn query(&self, bounds: (f64, f64, f64, f64), results: &mut Vec<QuadItem>) {
+        // Check if query bounds intersects this node
+        if !self.intersects_bounds(&bounds) {
+            return;
+        }
 
-    // ========================================================================
-    // Phase 5: Spatial Indexing with Quadtree
-    // ========================================================================
+        // Check items in this node
+        for item in &self.items {
+            if self.bounds_intersect(&item.bounds, &bounds) {
+                results.push(item.clone());
+            }
+        }
 
-    /// Quadtree for fast spatial queries
-    pub struct Quadtree {
-        root: Option<Box<QuadNode>>,
-        bounds: (f64, f64, f64, f64), // x, y, width, height
-        max_items: usize,
-        max_depth: usize,
-    }
-    
-    struct QuadNode {
-        bounds: (f64, f64, f64, f64),
-        items: Vec<QuadItem>,
-        children: Option<Box<[QuadNode; 4]>>,
-        depth: usize,
-    }
-    
-    #[derive(Clone)]
-    pub struct QuadItem {
-        pub id: String,
-        pub bounds: (f64, f64, f64, f64), // x, y, width, height
-        pub node_id: String,
-    }
-    
-    impl Quadtree {
-        pub fn new(bounds: (f64, f64, f64, f64)) -> Self {
-            Self {
-                root: None,
-                bounds,
-                max_items: 10,
-                max_depth: 8,
+        // Query children
+        if let Some(children) = &self.children {
+            for child in children.iter() {
+                child.query(bounds, results);
             }
-        }
-        
-        /// Insert item into quadtree
-        pub fn insert(&mut self, item: QuadItem) {
-            if self.root.is_none() {
-                self.root = Some(Box::new(QuadNode::new(self.bounds, 0)));
-            }
-            
-            if let Some(root) = &mut self.root {
-                root.insert(item, self.max_items, self.max_depth);
-            }
-        }
-        
-        /// Query items in bounds
-        pub fn query(&self, bounds: (f64, f64, f64, f64)) -> Vec<QuadItem> {
-            let mut results = Vec::new();
-            if let Some(root) = &self.root {
-                root.query(bounds, &mut results);
-            }
-            results
-        }
-        
-        /// Query items at point
-        pub fn query_point(&self, point: (f64, f64)) -> Vec<QuadItem> {
-            self.query((point.0, point.1, 0.0, 0.0))
-        }
-        
-        /// Clear all items
-        pub fn clear(&mut self) {
-            self.root = None;
         }
     }
-    
-    impl QuadNode {
-        fn new(bounds: (f64, f64, f64, f64), depth: usize) -> Self {
-            Self {
-                bounds,
-                items: Vec::new(),
-                children: None,
-                depth,
-            }
-        }
-        
-        fn insert(&mut self, item: QuadItem, max_items: usize, max_depth: usize) {
-            // Check if item is within bounds
-            if !self.contains_bounds(&item.bounds) {
-                return;
-            }
-            
-            // If we have children, insert into appropriate child
+
+    fn subdivide(&mut self, max_items: usize, max_depth: usize) {
+        let (x, y, w, h) = self.bounds;
+        let hw = w / 2.0;
+        let hh = h / 2.0;
+
+        self.children = Some(Box::new([
+            QuadNode::new((x, y, hw, hh), self.depth + 1),
+            QuadNode::new((x + hw, y, hw, hh), self.depth + 1),
+            QuadNode::new((x, y + hh, hw, hh), self.depth + 1),
+            QuadNode::new((x + hw, y + hh, hw, hh), self.depth + 1),
+        ]));
+
+        // Redistribute items to children
+        let items = std::mem::take(&mut self.items);
+        for item in items {
             if let Some(children) = &mut self.children {
                 for child in children.iter_mut() {
                     if child.contains_bounds(&item.bounds) {
-                        child.insert(item, max_items, max_depth);
-                        return;
-                    }
-                }
-            }
-            
-            // Add to this node
-            self.items.push(item);
-            
-            // Subdivide if needed
-            if self.items.len() > max_items && self.depth < max_depth && self.children.is_none() {
-                self.subdivide(max_items, max_depth);
-            }
-        }
-        
-        fn query(&self, bounds: (f64, f64, f64, f64), results: &mut Vec<QuadItem>) {
-            // Check if query bounds intersects this node
-            if !self.intersects_bounds(&bounds) {
-                return;
-            }
-            
-            // Check items in this node
-            for item in &self.items {
-                if self.bounds_intersect(&item.bounds, &bounds) {
-                    results.push(item.clone());
-                }
-            }
-            
-            // Query children
-            if let Some(children) = &self.children {
-                for child in children.iter() {
-                    child.query(bounds, results);
-                }
-            }
-        }
-        
-        fn subdivide(&mut self, max_items: usize, max_depth: usize) {
-            let (x, y, w, h) = self.bounds;
-            let hw = w / 2.0;
-            let hh = h / 2.0;
-            
-            self.children = Some(Box::new([
-                QuadNode::new((x, y, hw, hh), self.depth + 1),
-                QuadNode::new((x + hw, y, hw, hh), self.depth + 1),
-                QuadNode::new((x, y + hh, hw, hh), self.depth + 1),
-                QuadNode::new((x + hw, y + hh, hw, hh), self.depth + 1),
-            ]));
-            
-            // Redistribute items to children
-            let items = std::mem::take(&mut self.items);
-            for item in items {
-                if let Some(children) = &mut self.children {
-                    for child in children.iter_mut() {
-                        if child.contains_bounds(&item.bounds) {
-                            child.insert(item.clone(), max_items, max_depth);
-                            break;
-                        }
+                        child.insert(item.clone(), max_items, max_depth);
+                        break;
                     }
                 }
             }
         }
-        
-        fn contains_bounds(&self, bounds: &(f64, f64, f64, f64)) -> bool {
-            let (x, y, w, h) = self.bounds;
-            let (bx, by, bw, bh) = bounds;
-            
-            bx >= x && by >= y && 
-            bx + bw <= x + w && by + bh <= y + h
-        }
-        
-        fn intersects_bounds(&self, bounds: &(f64, f64, f64, f64)) -> bool {
-            self.bounds_intersect(&self.bounds, bounds)
-        }
-        
-        fn bounds_intersect(&self, b1: &(f64, f64, f64, f64), b2: &(f64, f64, f64, f64)) -> bool {
-            let (x1, y1, w1, h1) = b1;
-            let (x2, y2, w2, h2) = b2;
-            
-            !(x1 + w1 < x2 || x2 + w2 < x1 || y1 + h1 < y2 || y2 + h2 < y1)
-        }
     }
-    
-    /// Spatial index for fast shape queries
-    pub struct SpatialIndex {
-        quadtree: Quadtree,
-        item_count: usize,
+
+    fn contains_bounds(&self, bounds: &(f64, f64, f64, f64)) -> bool {
+        let (x, y, w, h) = self.bounds;
+        let (bx, by, bw, bh) = *bounds;
+
+        bx >= x && by >= y && bx + bw <= x + w && by + bh <= y + h
     }
-    
-    impl SpatialIndex {
-        pub fn new(bounds: (f64, f64, f64, f64)) -> Self {
-            Self {
-                quadtree: Quadtree::new(bounds),
-                item_count: 0,
-            }
-        }
-        
-        /// Index a node
-        pub fn index_node(&mut self, node_id: &str, bounds: (f64, f64, f64, f64)) {
-            let item = QuadItem {
-                id: format!("{}_{}", node_id, self.item_count),
-                bounds,
-                node_id: node_id.to_string(),
-            };
-            self.quadtree.insert(item);
-            self.item_count += 1;
-        }
-        
-        /// Query shapes in bounds
-        pub fn query_bounds(&self, bounds: (f64, f64, f64, f64)) -> Vec<String> {
-            let items = self.quadtree.query(bounds);
-            items.into_iter()
-                .map(|item| item.node_id)
-                .collect::<std::collections::HashSet<_>>()
-                .into_iter()
-                .collect()
-        }
-        
-        /// Query shape at point
-        pub fn query_point(&self, point: (f64, f64)) -> Vec<String> {
-            let items = self.quadtree.query_point(point);
-            items.into_iter()
-                .map(|item| item.node_id)
-                .collect::<std::collections::HashSet<_>>()
-                .into_iter()
-                .collect()
-        }
-        
-        /// Clear index
-        pub fn clear(&mut self) {
-            self.quadtree.clear();
-            self.item_count = 0;
+
+    fn intersects_bounds(&self, bounds: &(f64, f64, f64, f64)) -> bool {
+        self.bounds_intersect(&self.bounds, bounds)
+    }
+
+    fn bounds_intersect(&self, b1: &(f64, f64, f64, f64), b2: &(f64, f64, f64, f64)) -> bool {
+        let (x1, y1, w1, h1) = *b1;
+        let (x2, y2, w2, h2) = *b2;
+
+        !(x1 + w1 < x2 || x2 + w2 < x1 || y1 + h1 < y2 || y2 + h2 < y1)
+    }
+}
+
+/// Spatial index for fast shape queries
+pub struct SpatialIndex {
+    quadtree: Quadtree,
+    item_count: usize,
+}
+
+impl SpatialIndex {
+    pub fn new(bounds: (f64, f64, f64, f64)) -> Self {
+        Self {
+            quadtree: Quadtree::new(bounds),
+            item_count: 0,
         }
     }
 
-
-    // ========================================================================
-    // Phase 5: Visual Feedback Structures
-    // ========================================================================
-
-    /// Visual feedback data for Shape Builder rendering
-    #[derive(Debug, Clone)]
-    pub struct ShapeBuilderVisuals {
-        pub hovered_shape: Option<String>,
-        pub selected_shapes: Vec<String>,
-        pub preview_operation: Option<ShapeOperation>,
-        pub hover_point: Option<(f64, f64)>,
+    /// Index a node
+    pub fn index_node(&mut self, node_id: &str, bounds: (f64, f64, f64, f64)) {
+        let item = QuadItem {
+            id: format!("{}_{}", node_id, self.item_count),
+            bounds,
+            node_id: node_id.to_string(),
+        };
+        self.quadtree.insert(item);
+        self.item_count += 1;
     }
-    
+
+    /// Query shapes in bounds
+    pub fn query_bounds(&self, bounds: (f64, f64, f64, f64)) -> Vec<String> {
+        let items = self.quadtree.query(bounds);
+        items
+            .into_iter()
+            .map(|item| item.node_id)
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    /// Query shape at point
+    pub fn query_point(&self, point: (f64, f64)) -> Vec<String> {
+        let items = self.quadtree.query_point(point);
+        items
+            .into_iter()
+            .map(|item| item.node_id)
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    /// Clear index
+    pub fn clear(&mut self) {
+        self.quadtree.clear();
+        self.item_count = 0;
+    }
+}
+
+// ========================================================================
+// Phase 5: Visual Feedback Structures
+// ========================================================================
+
+/// Visual feedback data for Shape Builder rendering
+#[derive(Debug, Clone)]
+pub struct ShapeBuilderVisuals {
+    pub hovered_shape: Option<String>,
+    pub selected_shapes: Vec<String>,
+    pub preview_operation: Option<ShapeOperation>,
+    pub hover_point: Option<(f64, f64)>,
+}
+
+impl Editor {
     /// Render visual feedback for Shape Builder
-    pub fn render_shape_builder_feedback(&self, visuals: &ShapeBuilderVisuals) -> Vec<VisualFeedback> {
+    pub fn render_shape_builder_feedback(
+        &self,
+        visuals: &ShapeBuilderVisuals,
+    ) -> Vec<VisualFeedback> {
         let mut feedback = Vec::new();
-        
+
         // Highlight selected shapes
         for shape_id in &visuals.selected_shapes {
             if let Some(node) = self.get_node(shape_id) {
@@ -4484,7 +4755,7 @@ fn shape_signature(n: &Node) -> Sig {
                 }
             }
         }
-        
+
         // Highlight hovered shape
         if let Some(hovered_id) = &visuals.hovered_shape {
             if let Some(node) = self.get_node(hovered_id) {
@@ -4498,7 +4769,7 @@ fn shape_signature(n: &Node) -> Sig {
                 }
             }
         }
-        
+
         // Show preview operation
         if let Some(operation) = &visuals.preview_operation {
             match operation {
@@ -4523,27 +4794,28 @@ fn shape_signature(n: &Node) -> Sig {
                 _ => {}
             }
         }
-        
+
         feedback
     }
-    
-    /// Visual feedback item for rendering
-    #[derive(Debug, Clone)]
-    pub struct VisualFeedback {
-        pub shape_id: String,
-        pub path: Vec<PathCmd>,
-        pub style: FeedbackStyle,
-        pub opacity: f32,
-    }
-    
-    /// Style of visual feedback
-    #[derive(Debug, Clone, Copy, PartialEq)]
-    pub enum FeedbackStyle {
-        Selected,   // Blue outline
-        Hovered,    // Yellow outline
-        Preview,    // Green outline with fill
-    }
-    
+}
+/// Visual feedback item for rendering
+#[derive(Debug, Clone)]
+pub struct VisualFeedback {
+    pub shape_id: String,
+    pub path: Vec<PathCmd>,
+    pub style: FeedbackStyle,
+    pub opacity: f32,
+}
+
+/// Style of visual feedback
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FeedbackStyle {
+    Selected, // Blue outline
+    Hovered,  // Yellow outline
+    Preview,  // Green outline with fill
+}
+
+impl Editor {
     /// Generate merge preview path
     fn generate_merge_preview(&self, shapes: &[String]) -> Vec<PathCmd> {
         // Combine all paths
@@ -4557,7 +4829,7 @@ fn shape_signature(n: &Node) -> Sig {
         }
         combined
     }
-    
+
     /// Generate subtract preview path
     fn generate_subtract_preview(&self, base: &str, subtract: &[String]) -> Vec<PathCmd> {
         // For now, just return base path
@@ -4570,98 +4842,110 @@ fn shape_signature(n: &Node) -> Sig {
         Vec::new()
     }
 
-
     // ========================================================================
     // Phase 5: Advanced Stroke Cap Features
     // ========================================================================
+}
+/// Extended stroke cap types
+#[derive(Debug, Clone, PartialEq)]
+pub enum AdvancedStrokeCap {
+    None,
+    Round,
+    Square,
+    Arrow(ArrowStyle),
+    Triangle,
+    Diamond,
+    Circle,
+    Bar,
+    Custom(Vec<PathCmd>),
+}
 
-    /// Extended stroke cap types
-    #[derive(Debug, Clone, PartialEq)]
-    pub enum AdvancedStrokeCap {
-        None,
-        Round,
-        Square,
-        Arrow(ArrowStyle),
-        Triangle,
-        Diamond,
-        Circle,
-        Bar,
-        Custom(Vec<PathCmd>),
-    }
-    
-    /// Arrow style configuration
-    #[derive(Debug, Clone, PartialEq)]
-    pub struct ArrowStyle {
-        pub length_factor: f64,      // Length multiplier (default 1.5)
-        pub width_factor: f64,       // Width multiplier (default 0.8)
-        pub filled: bool,            // Filled or outline
-        pub reversed: bool,          // Point inward
-    }
-    
-    impl Default for ArrowStyle {
-        fn default() -> Self {
-            Self {
-                length_factor: 1.5,
-                width_factor: 0.8,
-                filled: true,
-                reversed: false,
-            }
+/// Arrow style configuration
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArrowStyle {
+    pub length_factor: f64, // Length multiplier (default 1.5)
+    pub width_factor: f64,  // Width multiplier (default 0.8)
+    pub filled: bool,       // Filled or outline
+    pub reversed: bool,     // Point inward
+}
+
+impl Default for ArrowStyle {
+    fn default() -> Self {
+        Self {
+            length_factor: 1.5,
+            width_factor: 0.8,
+            filled: true,
+            reversed: false,
         }
     }
-    
-    /// Dash pattern configuration
-    #[derive(Debug, Clone, PartialEq)]
-    pub struct DashPattern {
-        pub dashes: Vec<f64>,        // Dash and gap lengths
-        pub offset: f64,             // Starting offset
-        pub line_cap: LineCap,       // Cap style for dash ends
-        pub line_join: LineJoin,     // Join style at corners
-    }
-    
-    impl Default for DashPattern {
-        fn default() -> Self {
-            Self {
-                dashes: vec![10.0, 5.0],  // 10px dash, 5px gap
-                offset: 0.0,
-                line_cap: LineCap::Butt,
-                line_join: LineJoin::Miter,
-            }
+}
+
+/// Dash pattern configuration
+#[derive(Debug, Clone, PartialEq)]
+pub struct DashPattern {
+    pub dashes: Vec<f64>,    // Dash and gap lengths
+    pub offset: f64,         // Starting offset
+    pub line_cap: LineCap,   // Cap style for dash ends
+    pub line_join: LineJoin, // Join style at corners
+}
+
+impl Default for DashPattern {
+    fn default() -> Self {
+        Self {
+            dashes: vec![10.0, 5.0], // 10px dash, 5px gap
+            offset: 0.0,
+            line_cap: LineCap::Butt,
+            line_join: LineJoin::Miter,
         }
     }
-    
-    #[derive(Debug, Clone, Copy, PartialEq)]
-    pub enum LineCap {
-        Butt,
-        Round,
-        Square,
-    }
-    
-    #[derive(Debug, Clone, Copy, PartialEq)]
-    pub enum LineJoin {
-        Miter,
-        Round,
-        Bevel,
-    }
-    
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LineCap {
+    Butt,
+    Round,
+    Square,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LineJoin {
+    Miter,
+    Round,
+    Bevel,
+}
+
+impl Editor {
     /// Generate advanced stroke cap
-    pub fn generate_advanced_cap(&self, cap: &AdvancedStrokeCap, x: f64, y: f64, 
-                                  dx: f64, dy: f64, width: f64, is_start: bool) -> Vec<PathCmd> {
+    pub fn generate_advanced_cap(
+        &self,
+        cap: &AdvancedStrokeCap,
+        x: f64,
+        y: f64,
+        dx: f64,
+        dy: f64,
+        width: f64,
+        is_start: bool,
+    ) -> Vec<PathCmd> {
         let mut cmds = Vec::new();
         let half_width = width / 2.0;
-        
+
         // Perpendicular direction
         let px = -dy;
         let py = dx;
-        
+
         match cap {
             AdvancedStrokeCap::None => {}
-            
+
             AdvancedStrokeCap::Round => {
                 // Round cap: semicircle
                 let steps = 16;
                 let start_angle = if is_start { std::f64::consts::PI } else { 0.0 };
-                let end_angle = if is_start { 2.0 * std::f64::consts::PI } else { std::f64::consts::PI };
-                
+                let end_angle = if is_start {
+                    2.0 * std::f64::consts::PI
+                } else {
+                    std::f64::consts::PI
+                };
+
                 cmds.push(PathCmd::MoveTo(x + px * half_width, y + py * half_width));
                 for i in 1..=steps {
                     let t = i as f64 / steps as f64;
@@ -4671,7 +4955,7 @@ fn shape_signature(n: &Node) -> Sig {
                     cmds.push(PathCmd::LineTo(cx, cy));
                 }
             }
-            
+
             AdvancedStrokeCap::Square => {
                 // Square cap: extends half_width beyond endpoint
                 let extend = half_width;
@@ -4679,28 +4963,28 @@ fn shape_signature(n: &Node) -> Sig {
                 let p1y = y + dy * extend + py * half_width;
                 let p2x = x + dx * extend - px * half_width;
                 let p2y = y + dy * extend - py * half_width;
-                
+
                 cmds.push(PathCmd::MoveTo(x + px * half_width, y + py * half_width));
                 cmds.push(PathCmd::LineTo(p1x, p1y));
                 cmds.push(PathCmd::LineTo(p2x, p2y));
                 cmds.push(PathCmd::LineTo(x - px * half_width, y - py * half_width));
             }
-            
+
             AdvancedStrokeCap::Arrow(style) => {
                 // Arrow cap with customizable style
                 let length = width * style.length_factor;
                 let arrow_width = width * style.width_factor;
-                
+
                 let direction = if style.reversed { -1.0 } else { 1.0 };
-                
+
                 let tip_x = x + dx * length * direction;
                 let tip_y = y + dy * length * direction;
-                
+
                 let base1_x = x + px * arrow_width;
                 let base1_y = y + py * arrow_width;
                 let base2_x = x - px * arrow_width;
                 let base2_y = y - py * arrow_width;
-                
+
                 if style.filled {
                     cmds.push(PathCmd::MoveTo(base1_x, base1_y));
                     cmds.push(PathCmd::LineTo(tip_x, tip_y));
@@ -4712,19 +4996,19 @@ fn shape_signature(n: &Node) -> Sig {
                     cmds.push(PathCmd::LineTo(base2_x, base2_y));
                 }
             }
-            
+
             AdvancedStrokeCap::Triangle => {
                 // Triangle cap
                 let tri_length = width;
                 let tip_x = x + dx * tri_length;
                 let tip_y = y + dy * tri_length;
-                
+
                 cmds.push(PathCmd::MoveTo(x + px * half_width, y + py * half_width));
                 cmds.push(PathCmd::LineTo(tip_x, tip_y));
                 cmds.push(PathCmd::LineTo(x - px * half_width, y - py * half_width));
                 cmds.push(PathCmd::Close);
             }
-            
+
             AdvancedStrokeCap::Diamond => {
                 // Diamond cap
                 let size = width;
@@ -4732,24 +5016,24 @@ fn shape_signature(n: &Node) -> Sig {
                 let tip_y = y + dy * size;
                 let back_x = x - dx * size * 0.5;
                 let back_y = y - dy * size * 0.5;
-                
+
                 cmds.push(PathCmd::MoveTo(x + px * half_width, y + py * half_width));
                 cmds.push(PathCmd::LineTo(tip_x, tip_y));
                 cmds.push(PathCmd::LineTo(x - px * half_width, y - py * half_width));
                 cmds.push(PathCmd::LineTo(back_x, back_y));
                 cmds.push(PathCmd::Close);
             }
-            
+
             AdvancedStrokeCap::Circle => {
                 // Circle cap
                 let steps = 24;
                 let radius = half_width;
-                
+
                 for i in 0..=steps {
                     let angle = (i as f64 / steps as f64) * 2.0 * std::f64::consts::PI;
                     let cx = x + radius * angle.cos();
                     let cy = y + radius * angle.sin();
-                    
+
                     if i == 0 {
                         cmds.push(PathCmd::MoveTo(cx, cy));
                     } else {
@@ -4758,61 +5042,55 @@ fn shape_signature(n: &Node) -> Sig {
                 }
                 cmds.push(PathCmd::Close);
             }
-            
+
             AdvancedStrokeCap::Bar => {
                 // Bar cap (perpendicular line)
                 let bar_length = width * 1.5;
-                
-                cmds.push(PathCmd::MoveTo(
-                    x + px * bar_length,
-                    y + py * bar_length
-                ));
-                cmds.push(PathCmd::LineTo(
-                    x - px * bar_length,
-                    y - py * bar_length
-                ));
+
+                cmds.push(PathCmd::MoveTo(x + px * bar_length, y + py * bar_length));
+                cmds.push(PathCmd::LineTo(x - px * bar_length, y - py * bar_length));
             }
-            
+
             AdvancedStrokeCap::Custom(custom_path) => {
                 // Custom path-based cap
                 cmds.extend(custom_path.iter().cloned());
             }
         }
-        
+
         cmds
     }
-    
+
     /// Apply dash pattern to path
     pub fn apply_dash_pattern(&self, path: &[PathCmd], pattern: &DashPattern) -> Vec<Vec<PathCmd>> {
         let mut dashed_paths = Vec::new();
         let mut current_path = Vec::new();
         let mut dash_index = 0;
         let mut distance_in_dash = pattern.offset;
-        
+
         // Convert path to segments
         let segments = self.path_to_segments(path);
-        
+
         for segment in segments {
             let (start, end) = segment;
             let segment_length = ((end.0 - start.0).powi(2) + (end.1 - start.1).powi(2)).sqrt();
             let mut remaining = segment_length;
             let mut current_pos = start;
-            
+
             while remaining > 0.0 {
                 let dash_length = pattern.dashes[dash_index % pattern.dashes.len()];
                 let available = dash_length - distance_in_dash;
                 let draw_length = remaining.min(available);
-                
+
                 // Calculate direction
                 let dx = (end.0 - start.0) / segment_length;
                 let dy = (end.1 - start.1) / segment_length;
-                
+
                 // Calculate next position
                 let next_pos = (
                     current_pos.0 + dx * draw_length,
-                    current_pos.1 + dy * draw_length
+                    current_pos.1 + dy * draw_length,
                 );
-                
+
                 // If this is a dash (even index), add to path
                 if dash_index % 2 == 0 {
                     if current_path.is_empty() {
@@ -4826,12 +5104,12 @@ fn shape_signature(n: &Node) -> Sig {
                         current_path = Vec::new();
                     }
                 }
-                
+
                 // Update state
                 distance_in_dash += draw_length;
                 remaining -= draw_length;
                 current_pos = next_pos;
-                
+
                 // Move to next dash if needed
                 if distance_in_dash >= dash_length {
                     distance_in_dash = 0.0;
@@ -4839,17 +5117,15 @@ fn shape_signature(n: &Node) -> Sig {
                 }
             }
         }
-        
+
         // Add final path if not empty
         if !current_path.is_empty() {
             dashed_paths.push(current_path);
         }
-        
+
         dashed_paths
     }
-
-#[cfg(test)]
-
+}
 
 /// Join style for offset paths
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4874,14 +5150,14 @@ fn ramer_douglas_peucker(points: &[(f64, f64)], tolerance: f64) -> Vec<(f64, f64
     if points.len() < 3 {
         return points.to_vec();
     }
-    
+
     // Find the point with maximum distance from line between first and last
     let mut max_distance = 0.0;
     let mut max_index = 0;
-    
+
     let first = points[0];
     let last = points[points.len() - 1];
-    
+
     for i in 1..points.len() - 1 {
         let distance = perpendicular_distance(points[i], first, last);
         if distance > max_distance {
@@ -4889,18 +5165,18 @@ fn ramer_douglas_peucker(points: &[(f64, f64)], tolerance: f64) -> Vec<(f64, f64
             max_index = i;
         }
     }
-    
+
     // If max distance is greater than tolerance, recursively simplify
     if max_distance > tolerance {
         // Recursive call for first part
         let mut result = ramer_douglas_peucker(&points[0..=max_index], tolerance);
-        
+
         // Recursive call for second part (excluding the point at max_index to avoid duplication)
         let second_part = ramer_douglas_peucker(&points[max_index..], tolerance);
-        
+
         // Combine results (excluding first point of second part to avoid duplication)
         result.extend(second_part.into_iter().skip(1));
-        
+
         result
     } else {
         // All points are within tolerance, just return first and last
@@ -4912,18 +5188,20 @@ fn ramer_douglas_peucker(points: &[(f64, f64)], tolerance: f64) -> Vec<(f64, f64
 fn perpendicular_distance(point: (f64, f64), line_start: (f64, f64), line_end: (f64, f64)) -> f64 {
     let dx = line_end.0 - line_start.0;
     let dy = line_end.1 - line_start.1;
-    
+
     // If line is actually a point, return distance to that point
     if dx == 0.0 && dy == 0.0 {
         let pdx = point.0 - line_start.0;
         let pdy = point.1 - line_start.1;
         return (pdx * pdx + pdy * pdy).sqrt();
     }
-    
+
     // Calculate perpendicular distance using cross product
-    let numerator = ((dy * point.0) - (dx * point.1) + (line_end.0 * line_start.1) - (line_end.1 * line_start.0)).abs();
+    let numerator = ((dy * point.0) - (dx * point.1) + (line_end.0 * line_start.1)
+        - (line_end.1 * line_start.0))
+        .abs();
     let denominator = (dx * dx + dy * dy).sqrt();
-    
+
     numerator / denominator
 }
 
@@ -4932,31 +5210,31 @@ fn smooth_corner(points: &[(f64, f64)], radius: f64) -> Vec<(f64, f64)> {
     if points.len() < 3 {
         return points.to_vec();
     }
-    
+
     let mut result = Vec::new();
     result.push(points[0]);
-    
+
     for i in 1..points.len() - 1 {
         let prev = points[i - 1];
         let curr = points[i];
         let next = points[i + 1];
-        
+
         // Calculate vectors
         let v1 = (curr.0 - prev.0, curr.1 - prev.1);
         let v2 = (next.0 - curr.0, next.1 - curr.1);
-        
+
         // Normalize vectors
         let len1 = (v1.0 * v1.0 + v1.1 * v1.1).sqrt();
         let len2 = (v2.0 * v2.0 + v2.1 * v2.1).sqrt();
-        
+
         if len1 > 0.0 && len2 > 0.0 {
             let n1 = (v1.0 / len1, v1.1 / len1);
             let n2 = (v2.0 / len2, v2.1 / len2);
-            
+
             // Calculate arc points
             let arc_start = (curr.0 - n1.0 * radius, curr.1 - n1.1 * radius);
             let arc_end = (curr.0 + n2.0 * radius, curr.1 + n2.1 * radius);
-            
+
             // Add arc points (simplified - just add start and end)
             result.push(arc_start);
             result.push(arc_end);
@@ -4964,11 +5242,10 @@ fn smooth_corner(points: &[(f64, f64)], radius: f64) -> Vec<(f64, f64)> {
             result.push(curr);
         }
     }
-    
+
     result.push(points[points.len() - 1]);
     result
 }
-
 
 #[derive(Debug, Clone)]
 pub struct ShapeRegion {
@@ -4987,20 +5264,20 @@ pub enum RegionType {
 /// Find intersection points between two paths
 fn find_path_intersections(path1: &[PathCmd], path2: &[PathCmd]) -> Vec<(f64, f64)> {
     let mut intersections = Vec::new();
-    
+
     // Convert paths to line segments for simplicity
     let segments1 = path_to_segments(path1);
     let segments2 = path_to_segments(path2);
-    
+
     // Check each pair of segments
     for seg1 in &segments1 {
         for seg2 in &segments2 {
-            if let Some(point) = line_segment_intersection(seg1, seg2) {
+            if let Some(point) = line_segment_intersection(*seg1, *seg2) {
                 intersections.push(point);
             }
         }
     }
-    
+
     intersections
 }
 
@@ -5008,7 +5285,7 @@ fn find_path_intersections(path1: &[PathCmd], path2: &[PathCmd]) -> Vec<(f64, f6
 fn path_to_segments(path: &[PathCmd]) -> Vec<((f64, f64), (f64, f64))> {
     let mut segments = Vec::new();
     let mut current_point = None;
-    
+
     for cmd in path {
         match cmd {
             PathCmd::MoveTo(x, y) => {
@@ -5032,7 +5309,7 @@ fn path_to_segments(path: &[PathCmd]) -> Vec<((f64, f64), (f64, f64))> {
             }
         }
     }
-    
+
     segments
 }
 
@@ -5043,15 +5320,15 @@ fn line_segment_intersection(
 ) -> Option<(f64, f64)> {
     let ((x1, y1), (x2, y2)) = seg1;
     let ((x3, y3), (x4, y4)) = seg2;
-    
+
     let denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
     if denom.abs() < 1e-10 {
         return None; // Parallel lines
     }
-    
+
     let t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom;
     let u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / denom;
-    
+
     if t >= 0.0 && t <= 1.0 && u >= 0.0 && u <= 1.0 {
         let x = x1 + t * (x2 - x1);
         let y = y1 + t * (y2 - y1);
@@ -5074,17 +5351,23 @@ pub enum MirrorMode {
 
 /// Find intersection point of two line segments
 fn line_intersection(
-    x1: f64, y1: f64, x2: f64, y2: f64,  // Line 1
-    x3: f64, y3: f64, x4: f64, y4: f64,  // Line 2
+    x1: f64,
+    y1: f64,
+    x2: f64,
+    y2: f64, // Line 1
+    x3: f64,
+    y3: f64,
+    x4: f64,
+    y4: f64, // Line 2
 ) -> Option<(f64, f64)> {
     let denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
     if denom.abs() < 1e-10 {
         return None; // Parallel lines
     }
-    
+
     let t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom;
     let u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / denom;
-    
+
     if t >= 0.0 && t <= 1.0 && u >= 0.0 && u <= 1.0 {
         let x = x1 + t * (x2 - x1);
         let y = y1 + t * (y2 - y1);
@@ -5099,23 +5382,24 @@ fn point_in_polygon(x: f64, y: f64, polygon: &[(f64, f64)]) -> bool {
     if polygon.len() < 3 {
         return false;
     }
-    
+
     let mut inside = false;
     let mut j = polygon.len() - 1;
-    
+
     for i in 0..polygon.len() {
         let (xi, yi) = polygon[i];
         let (xj, yj) = polygon[j];
-        
+
         if ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi) {
             inside = !inside;
         }
         j = i;
     }
-    
+
     inside
 }
 
+#[cfg(test)]
 mod reliability_history_tests {
     use super::*;
     #[test]
