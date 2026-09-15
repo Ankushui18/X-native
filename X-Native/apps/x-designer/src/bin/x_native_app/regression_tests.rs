@@ -1190,7 +1190,7 @@ fn flow_enter_follows_selection_to_its_top_frame() {
 /// interaction per trigger kind, and a `n = 1` document variable.
 fn player_doc(h: &mut Host) {
     use x_native::{
-        Action, Animation, CondOp, Condition, Expr, Interaction, OverlayPosition, Trigger,
+        Action, Animation, CondOp, Condition, Easing, Expr, Interaction, OverlayPosition, Trigger,
     };
     let d = h.app.doc();
     let root_id = d.editor_ref().root.id.clone();
