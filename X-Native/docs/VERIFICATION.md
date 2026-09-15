@@ -86,6 +86,16 @@ Gate log (tail, this machine):
     ok lint --list-rules · ok unknown input exits 2 (usage)
 ```
 
+**Since this record was taken.** The log above is the 7 September pass and is left
+as written; two of its numbers are no longer current. The dead-code ceiling is
+**82**, not 76: the tree stopped compiling after this pass, and a workspace that
+does not build reports no dead-code diagnostics at all, so the count was
+remembered rather than measured until the first gate run that could see the whole
+workspace again (84 warnings, of which none belonged to the branch that found
+them). `KNOWN_DEBT.md` §1 names every item and records why the ceiling moved.
+The suite is **896 passed, 6 ignored** as of 16 September 2026, gate exit 0 on
+`arena/01a0a5bd-x-native`.
+
 ## What was deliberately changed in the default theme
 
 Three colors in the shipped dark palette moved because they failed AA, not for

@@ -7,10 +7,14 @@
 and layer-management work landed on this branch** — see §0.
 
 **Method.** Every row was verified by reading code, not by reading our own docs.
-Verification is static: this sandbox has no `cargo` and no network egress, so
-findings come from name resolution, exhaustiveness and duplicate-definition rules
-rather than a compiler run. They should be re-confirmed with `./scripts/check.sh`
-on a machine that has the toolchain.
+The reading happened in a sandbox with no `cargo` and no network egress, so the
+first pass rested on name resolution, exhaustiveness and duplicate-definition
+rules rather than a compiler. It was then **verified by the repository's own
+gate**: `scripts/check.sh` ran on CI in seven rounds, each verdict feeding the
+next, and the branch now passes it — formatting clean, zero live lints, dead code
+82/82, **896 tests passing**, CLI smoke green. What remains judgement rather than
+measurement is the Figma side of each row: what Figma does comes from its help
+articles, not from a running copy of Figma.
 
 **Witness convention.** Engine claims carry `file:line` (those files were
 re-verified line-by-line in this pass). App-side claims name the **symbol**
@@ -381,7 +385,7 @@ through `ProtoRemove(usize)`), which is what makes the 172 exhaustive.
 | `X-Native/docs/UI_CAPABILITY_MAP.md` | Inspector covers "rotation, **flip**, and constraints" | No flip and no constraints UI (§3.6, §3.16). |
 | `X-Native/docs/UI_CAPABILITY_MAP.md` | "Auto Layout **and grid layout**"; "Multiple fills, strokes, effects, radius, opacity, and **blend**" | No grid-layout UI (§8.5); no blend UI (§6.5). |
 | `X-Native/README.md` | "the command palette gained **Lint document**" | True — verified. (Listed for contrast.) |
-| `X-Native/README.md` | Build/run instructions (`cargo build --release -p x-designer --bin x_native_app`) | The four known compile blockers are fixed on this branch, but the build has **not been run** (no toolchain in this environment). Treat as "expected to build, unverified". |
+| `X-Native/README.md` | Build/run instructions (`cargo build --release -p x-designer --bin x_native_app`) | Now accurate for this branch: the build **has** been run — `cargo build --workspace` and the full test suite pass on CI (§0, round 6). It is still inaccurate for `main`, which does not compile. |
 | Root `PHASE2_…md` … `PHASE6_…md`, `VECTOR_TOOLS_COMPLETE.md`, `VECTOR_TOOLS_COMPLETE_SUMMARY.md` | Vector tools / path ops / advanced tools / interactive UI / action handlers "complete" | The code those documents described was largely deleted on this branch: it did not compile, and roughly half of it was undispatched or a stub. The *features* they claim now exist for real in §4 — but the documents describe different code and should be rewritten or retired. |
 | Root `LAYER_MANAGEMENT_GAP_ANALYSIS.md` | Lists deep select, select-layer menu, smart selection, measurements, bulk rename, hidden outlines, layer search, keyboard nav as "missing" | Now split three ways: **wired** (⌘-click deep select, keyboard nav, renumber), **deleted as unwireable dead code** (select-layer menu, measurements, hidden outlines, layer search), and **still genuinely missing** (smart selection by properties, the find/replace rename modal). |
 
@@ -434,11 +438,13 @@ through `ProtoRemove(usize)`), which is what makes the 172 exhaustive.
    so P/V/X/Q/E stopped hijacking the primary tools.
 5. ✅ Orphan files deleted (`p0_features.rs`, `vector_network.rs`) and the fourth
    blocker (`paint_vector_points` vs `NodeKind::Vector`) fixed.
-6. ✅ **`./scripts/check.sh` has now been run** — not here (no toolchain, no
-   network) but on CI, five rounds of it, with each verdict feeding the next.
-   Formatting is clean, the workspace compiles, LIVE lints are 0, **621 tests
-   pass**, and the CLI smoke tests pass. §0 records every diagnostic and who
-   introduced it. Everything else in this document is still static analysis.
+6. ✅ **`./scripts/check.sh` has been run, and the branch passes it.** Not here
+   (no toolchain, no network) but on CI, in seven rounds, each verdict feeding the
+   next: `gate exit: 0` — formatting clean, LIVE lints 0, dead code 82/82, **896
+   tests passed / 6 ignored**, docs references and CLI smoke green. §0 records
+   every diagnostic and who introduced it. Note the direction of that number: the
+   suite was 621 passing with 5 failing when it first ran at all, and `main` still
+   does not compile.
 7. ✅ **Dead-code ratchet reconciled.** Measured 84 against a ceiling of 76 that
    was last taken before the tree stopped compiling; the two write-only `extra_y`
    warnings deleted, every remaining item named in `docs/KNOWN_DEBT.md` §1, and
