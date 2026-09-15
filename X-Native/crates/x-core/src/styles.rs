@@ -19,6 +19,7 @@
 //! - Saved to .xlib libraries for sharing across documents
 
 use crate::layout_types::GridLayout;
+use crate::node::{TextCase, TextDecoration};
 use crate::paint::{BlendKind, Effect, Paint, Stroke};
 use std::collections::HashMap;
 
@@ -128,25 +129,10 @@ pub struct TextStyleData {
     pub text_decoration: TextDecoration,
 }
 
-/// Text case transformation
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TextCase {
-    #[default]
-    None,
-    Upper,
-    Lower,
-    Title,
-}
-
-/// Text decoration (underline, strikethrough)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TextDecoration {
-    #[default]
-    None,
-    Underline,
-    Strikethrough,
-    UnderlineStrikethrough,
-}
+// `TextCase` / `TextDecoration` live in `node.rs` — they are the node's
+// text model, and named Text styles carry the very same enums. A second
+// copy here (with a divergent variant list) was a silent fork: styles
+// could state a decoration the node model could not represent.
 
 impl Default for TextStyleData {
     fn default() -> Self {
@@ -157,7 +143,7 @@ impl Default for TextStyleData {
             line_height: 0.0,
             letter_spacing: 0.0,
             paragraph_spacing: 0.0,
-            text_case: TextCase::None,
+            text_case: crate::node::TextCase::Original,
             text_decoration: TextDecoration::None,
         }
     }

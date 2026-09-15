@@ -3200,6 +3200,22 @@ fn paint_design(
         None,
     );
 
+    // Paragraph break strategy (Figma "Wrap style": balance / pretty)
+    app.fonts
+        .text(s, x0, y0 + 1240.5, "Break", T10, C_DIM, Wt::Reg);
+    let wrap_mode = Rect::new(x0, y0 + 1258.0, x0 + 315.0, y0 + 1286.0);
+    input(
+        app,
+        s,
+        hit,
+        wrap_mode,
+        None,
+        &wrap_mode_label(app),
+        false,
+        Some(Action::CycleTextWrap),
+        Some("chevron-down"),
+    );
+
     // ---- fill / stroke / effects / guides continue with the shared tail
     hline(s, rx, rx + rw, y0 + 1240.5, C_LINE);
     let mut y = y0 + 1029.5 + 12.0;
@@ -3760,6 +3776,24 @@ fn list_style_label(app: &App) -> String {
         x_native::ListStyle::None => "None".into(),
         x_native::ListStyle::Bulleted => "Bulleted".into(),
         x_native::ListStyle::Numbered => "Numbered".into(),
+    }
+}
+
+/// The paragraph break strategy (Auto/Balance/Pretty) of the selection.
+fn wrap_mode_label(app: &App) -> String {
+    let Some(doc) = app.doc_opt() else {
+        return "Auto".into();
+    };
+    let Some(id) = doc.selected_id() else {
+        return "Auto".into();
+    };
+    let Some(node) = find_node(&doc.editor_ref().root, &id) else {
+        return "Auto".into();
+    };
+    match node.text_wrap() {
+        x_native::TextWrap::Auto => "Auto".into(),
+        x_native::TextWrap::Balance => "Balance".into(),
+        x_native::TextWrap::Pretty => "Pretty".into(),
     }
 }
 

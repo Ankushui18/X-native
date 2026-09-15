@@ -328,6 +328,9 @@ impl<'a> RasterSink<'a> {
                     small_caps,
                     optical_size,
                     width_axis,
+                    align,
+                    decoration,
+                    layout,
                     ..
                 } => {
                     let mut drew = false;
@@ -356,6 +359,9 @@ impl<'a> RasterSink<'a> {
                             *optical_size,
                             *width_axis,
                             *lh_mode,
+                            crate::ir::align_from_bits(*align),
+                            *decoration,
+                            layout,
                         ) {
                             for gl in glyphs {
                                 if let Some(p) = to_path(&gl.path) {

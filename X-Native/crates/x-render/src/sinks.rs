@@ -147,6 +147,9 @@ pub fn export_pdf_full(
                 optical_size,
                 width_axis,
                 runs,
+                align,
+                decoration,
+                layout,
                 ..
             } => {
                 // TEXT PARITY: shaped glyph outlines via the exact canvas
@@ -180,6 +183,9 @@ pub fn export_pdf_full(
                             *optical_size,
                             *width_axis,
                             *lh_mode,
+                            crate::ir::align_from_bits(*align),
+                            *decoration,
+                            layout,
                         ) {
                             for gl in glyphs {
                                 let full = *transform * gl.transform;
@@ -229,6 +235,9 @@ pub fn export_pdf_full(
                         *optical_size,
                         *width_axis,
                         *lh_mode,
+                        crate::ir::align_from_bits(*align),
+                        *decoration,
+                        layout,
                     ) {
                         for gl in glyphs {
                             // full transform = node world * glyph local;

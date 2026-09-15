@@ -879,6 +879,11 @@ pub(crate) fn parse_node(v: &V) -> Node {
     }
     n.list_style = ListStyle::parse(v.get("list_style").and_then(V::str).unwrap_or("none"));
     n.wrap_style = WrapStyle::parse(v.get("wrap_style").and_then(V::str).unwrap_or("normal"));
+    n.text_wrap = TextWrap::parse(v.get("text_wrap").and_then(V::str).unwrap_or("auto"));
+    n.vertical_trim = v.get("vertical_trim").and_then(V::boolean).unwrap_or(false);
+    n.line_height = v.get("line_height").and_then(V::num).filter(|x| *x > 0.0).unwrap_or(0.0);
+    n.letter_spacing = v.get("letter_spacing").and_then(V::num).unwrap_or(0.0);
+    n.font_size = v.get("font_size").and_then(V::num).filter(|x| *x > 0.0).unwrap_or(0.0);
     if let Some(kids) = v.get("children").and_then(V::arr) {
         n.children = kids.iter().map(parse_node).collect();
     }

@@ -26,15 +26,16 @@ fn text_style_of(node: &Node) -> (f64, Option<f64>, Option<u16>, Option<bool>) {
         NodeKind::Text { text } => text.chars().count(),
         _ => 0,
     };
-    let node_ls = node.bindings.get("ls").and_then(|v| v.parse::<f64>().ok());
+    let node_ls = Some(node.resolved_letter_spacing()).filter(|v| *v != 0.0);
+    let node_fs = node.resolved_font_size().unwrap_or(node.h * 0.72);
     match node.text_runs.iter().find(|r| r.start == 0 && r.len == len) {
         Some(r) => (
-            r.size.unwrap_or(node.h),
+            r.size.unwrap_or(node_fs),
             r.ls.or(node_ls),
             r.weight,
             r.italic,
         ),
-        None => (node.h, node_ls, None, None),
+        None => (node_fs, node_ls, None, None),
     }
 }
 
@@ -304,9 +305,10 @@ pub fn node_to_css(node: &Node, vars: &Variables) -> String {
             )),
             _ => {}
         }
-        // h IS the font size; font/ls/lh ride the bindings (typography
-        // bindings — the same source the render sinks honor). A full-text
-        // run overrides size/ls and may carry weight/italic.
+        // px contract identical to the render tree: the typed font-size
+        // field first, then the legacy "fs" binding, then the engine em
+        // (h * 0.72). A full-text run overrides size/ls and may carry
+        // weight/italic.
         let (size, ls, weight, italic) = text_style_of(node);
         css.push_str(&format!("  font-size: {}px;\n", size));
         let font = node
@@ -315,18 +317,107 @@ pub fn node_to_css(node: &Node, vars: &Variables) -> String {
             .cloned()
             .unwrap_or_else(|| "sans-serif".into());
         css.push_str(&format!("  font-family: \"{font}\";\n"));
-        let lh = node
-            .bindings
-            .get("lh")
-            .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(1.2);
-        css.push_str(&format!("  line-height: {lh};\n"));
+        let (lh_mode, lh_value) = node.lh_mode_value();
+        match lh_mode {
+            1 => css.push_str(&format!("  line-height: {lh_value}px;\n")),
+            2 => css.push_str(&format!("  line-height: {lh_value}%;\n")),
+            // multiplier only when the node actually pins one — otherwise
+            // the engine default stays implicit (byte-stable legacy output)
+            _ => {
+                if node.line_height > 0.0 || node.bindings.contains_key("lh") {
+                    css.push_str(&format!(
+                        "  line-height: {};\n",
+                        node.resolved_line_height()
+                    ));
+                }
+            }
+        }
         if let Some(ls) = ls {
             css.push_str(&format!("  letter-spacing: {ls}px;\n"));
         }
         // paragraph wrap strategy (Figma Aug-2026 text wrap)
-        if node.text_wrap() != x_core::TextWrap::Auto {
-            css.push_str(&format!("  text-wrap: {};\n", node.text_wrap().to_str()));
+        if let Some(tw) = node.text_wrap_mode() {
+            css.push_str(&format!("  text-wrap: {tw};\n"));
+        }
+        // ---- canonical text model (typed Node fields) ----
+        // Figma's alignment icons map to the two CSS axes; justify is
+        // expressed as text-align-last so the paragraph's LAST line also
+        // stretches, matching the shaper's behavior.
+        match node.resolved_text_align() {
+            x_core::TextAlign::Left => {}
+            x_core::TextAlign::Center => css.push_str("  text-align: center;\n"),
+            x_core::TextAlign::Right => css.push_str("  text-align: right;\n"),
+            x_core::TextAlign::Justified => {
+                css.push_str("  text-align: justify;\n  text-align-last: justify;\n")
+            }
+        }
+        match node.resolved_text_decoration() {
+            x_core::TextDecoration::None => {}
+            x_core::TextDecoration::Underline => css.push_str("  text-decoration: underline;\n"),
+            x_core::TextDecoration::Strikethrough => {
+                css.push_str("  text-decoration: line-through;\n")
+            }
+        }
+        match node.resolved_text_case() {
+            x_core::TextCase::Original => {}
+            x_core::TextCase::Upper => css.push_str("  text-transform: uppercase;\n"),
+            x_core::TextCase::Lower => css.push_str("  text-transform: lowercase;\n"),
+            x_core::TextCase::Title => css.push_str("  text-transform: capitalize;\n"),
+        }
+        if node.resolved_small_caps() {
+            css.push_str("  font-variant-caps: small-caps;\n");
+        }
+        if node.resolved_paragraph_spacing() != 0.0 {
+            css.push_str(&format!(
+                "  margin-bottom: {}px; /* paragraph spacing */\n",
+                node.resolved_paragraph_spacing()
+            ));
+        }
+        if node.resolved_paragraph_indent() != 0.0 {
+            css.push_str(&format!(
+                "  text-indent: {}px;\n",
+                node.resolved_paragraph_indent()
+            ));
+        }
+        match node.resolved_list_style() {
+            x_core::ListStyle::None => {}
+            x_core::ListStyle::Bulleted => {
+                css.push_str("  list-style: disc; /* render as <ul> */\n")
+            }
+            x_core::ListStyle::Numbered => {
+                css.push_str("  list-style: decimal; /* render as <ol> */\n")
+            }
+        }
+        if node.resolved_word_break() {
+            css.push_str("  overflow-wrap: break-word;\n");
+        }
+        let (trunc, max_lines) = node.resolved_truncation();
+        if trunc != x_core::TextTruncation::Disabled {
+            css.push_str("  overflow: hidden;\n");
+            if let Some(n) = max_lines {
+                css.push_str(&format!(
+                    "  display: -webkit-box; -webkit-line-clamp: {n}; -webkit-box-orient: vertical;\n"
+                ));
+            }
+            css.push_str(match trunc {
+                x_core::TextTruncation::Middle =>
+                    "  /* middle ellipsis: needs JS (CSS has no equivalent) */\n",
+                _ => "  text-overflow: ellipsis;\n",
+            });
+        } else if let Some(n) = max_lines {
+            css.push_str(&format!(
+                "  display: -webkit-box; -webkit-line-clamp: {n}; -webkit-box-orient: vertical; overflow: hidden;\n"
+            ));
+        }
+        if node.vertical_trim {
+            css.push_str("  /* vertical trim: line boxes already tight */\n");
+        }
+        let hanging = node.resolved_hanging_punctuation();
+        if hanging.quotes {
+            css.push_str("  hanging-punctuation: first;\n");
+        }
+        if hanging.lists {
+            css.push_str("  /* hanging list markers into the margin */\n");
         }
         if weight.unwrap_or(400) >= 600 {
             css.push_str("  font-weight: bold;\n");

@@ -17,11 +17,12 @@ pub mod sources;
 pub use cache::{ShapedBlock, ShapedTextCache, TextLayoutKey};
 pub use font::{FontManager, LoadedFont, PositionedGlyph};
 pub use shaping::{
-    break_opportunities, encode_rich_text, glyph_outlines, layout_lines, node_text_baseline,
-    node_text_outlines, node_text_outlines_rich, node_text_outlines_rich_uncached,
+    break_opportunities, encode_rich_text, glyph_outlines, layout_lines, layout_lines_wrapped,
+    layout_lines_wrapped_styled, node_text_baseline, node_text_outlines, node_text_outlines_rich,
+    node_text_outlines_rich_uncached, node_text_outlines_style, node_text_outlines_style_uncached,
     node_text_outlines_styled, node_text_outlines_styled_uncached, node_text_outlines_uncached,
-    resolve_natural_line_height, small_caps_segments, Align, GlyphRun, Line, OutlineGlyph, Shaper,
-    Span, TextBlockStyle, SMALL_CAPS_RATIO,
+    resolve_natural_line_height, small_caps_segments, Align, GlyphRun, Line, NodeTextSpec,
+    OutlineGlyph, Shaper, Span, TextBlockStyle, TextLayout, SMALL_CAPS_RATIO,
 };
 pub use sources::{platform_font_dirs, FaceInfo, GoogleFonts, SystemFonts};
 

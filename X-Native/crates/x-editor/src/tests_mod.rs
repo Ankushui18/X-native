@@ -63,6 +63,65 @@ mod tests {
         assert!(!css2.contains("text-wrap"), "auto is implicit: {css2}");
     }
 
+    /// Figma text-properties parity: the CODE panel must mirror the typed
+    /// Node fields (the same source the canvas + exports honor).
+    #[test]
+    fn dev_mode_css_mirrors_typed_text_properties() {
+        let mut n = Node::text("t", 0.0, 0.0, 200.0, 60.0, "Body copy");
+        n.text_align = x_core::TextAlign::Justified;
+        n.text_decoration = x_core::TextDecoration::Underline;
+        n.bindings.insert("sc".into(), "1".into()); // small caps mode
+        n.paragraph_spacing = 6.0;
+        n.paragraph_indent = 14.0;
+        n.list_style = x_core::ListStyle::Bulleted;
+        n.wrap_style = x_core::WrapStyle::BreakWord;
+        n.vertical_trim = true;
+        n.hanging_punctuation = x_core::HangingPunctuation {
+            quotes: true,
+            lists: false,
+        };
+        n.text_truncation = x_core::TextTruncation::End;
+        n.max_lines = Some(3);
+        n.text_wrap = x_core::TextWrap::Balance;
+        let css = node_to_css(&n, &Variables::default());
+        for frag in [
+            "text-align: justify;",
+            "text-align-last: justify;",
+            "text-decoration: underline;",
+            "font-variant-caps: small-caps;",
+            "margin-bottom: 6px; /* paragraph spacing */",
+            "text-indent: 14px;",
+            "list-style: disc;",
+            "overflow-wrap: break-word;",
+            "text-wrap: balance;",
+            "overflow: hidden;",
+            "-webkit-line-clamp: 3;",
+            "text-overflow: ellipsis;",
+            "hanging-punctuation: first;",
+            "vertical trim",
+        ] {
+            assert!(css.contains(frag), "missing `{frag}` in:\n{css}");
+        }
+    }
+
+    #[test]
+    fn dev_mode_css_stays_quiet_for_plain_text() {
+        let n = Node::text("t", 0.0, 0.0, 200.0, 20.0, "Plain");
+        let css = node_to_css(&n, &Variables::default());
+        for frag in [
+            "text-align",
+            "text-decoration",
+            "text-transform",
+            "text-indent",
+            "line-clamp",
+            "list-style",
+            "hanging-punctuation",
+            "vertical trim",
+        ] {
+            assert!(!css.contains(frag), "plain text emits no `{frag}`: {css}");
+        }
+    }
+
     #[test]
     fn segment_at_finds_line_curve_and_close() {
         let path = vec![

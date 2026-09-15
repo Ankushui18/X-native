@@ -63,6 +63,16 @@ pub enum RenderCommand {
         optical_size: f32,
         width_axis: f32,
         runs: Vec<x_core::TextPart>,
+        /// node's canonical horizontal alignment (x_text::Align as u8:
+        /// 0 left / 1 center / 2 right / 3 justify) — carried so every
+        /// sink shapes with it (placement is baked into the glyphs)
+        align: u8,
+        /// 0 none / 1 underline / 2 strikethrough (x_core::TextDecoration;
+        /// painted as real geometry inside the shaped block)
+        decoration: u8,
+        /// paragraph-breaking properties (indent, lists, truncation, max
+        /// lines, word break, vertical trim)
+        layout: x_text::TextLayout,
     },
     Image {
         key: String,
@@ -308,6 +318,9 @@ fn offset_command(command: &RenderCommand, dx: f64, dy: f64) -> RenderCommand {
             optical_size,
             width_axis,
             runs,
+            align,
+            decoration,
+            layout,
         } => RenderCommand::Glyphs {
             key: format!("{key}/bg"),
             transform: shift * *transform,
@@ -328,6 +341,9 @@ fn offset_command(command: &RenderCommand, dx: f64, dy: f64) -> RenderCommand {
             optical_size: *optical_size,
             width_axis: *width_axis,
             runs: runs.clone(),
+            align: *align,
+            decoration: *decoration,
+            layout: *layout,
         },
         RenderCommand::Image {
             key,
@@ -685,10 +701,14 @@ fn fingerprint(c: &RenderCommand) -> String {
             optical_size,
             width_axis,
             wrap,
+            align,
+            decoration,
+            layout,
             ..
         } => format!(
-            "g{:?}{text}{size}{max_width}{font:?}{brush:?}{runs:?}{letter_spacing}{line_height}{lh_mode}{lh_value}{word_spacing}{paragraph_spacing}{baseline_shift}{small_caps}{optical_size}{width_axis}{wrap:?}",
-            transform.as_coeffs()
+            "g{:?}{text}{size}{max_width}{font:?}{brush:?}{runs:?}{letter_spacing}{line_height}{lh_mode}{lh_value}{word_spacing}{paragraph_spacing}{baseline_shift}{small_caps}{optical_size}{width_axis}{wrap:?}{align}{decoration}{:?}",
+            transform.as_coeffs(),
+            layout.fingerprint()
         ),
         RenderCommand::Image {
             transform,
@@ -701,6 +721,124 @@ fn fingerprint(c: &RenderCommand) -> String {
             transform, path, ..
         } => format!("c{:?}{}", transform.as_coeffs(), path.elements().len()),
         RenderCommand::PopLayer => String::new(),
+    }
+}
+
+/// Map the node's canonical alignment onto the shaping enum
+/// (bits: 0 left / 1 center / 2 right / 3 justify).
+pub fn align_of(node: &Node) -> x_text::Align {
+    align_from_bits(align_bits_of(node))
+}
+
+/// u8 bits -> x_text::Align, without a node (sink-side).
+pub fn align_from_bits(v: u8) -> x_text::Align {
+    match v {
+        1 => x_text::Align::Center,
+        2 => x_text::Align::Right,
+        3 => x_text::Align::Justify,
+        _ => x_text::Align::Left,
+    }
+}
+
+pub fn align_bits_of(node: &Node) -> u8 {
+    match node.resolved_text_align() {
+        x_core::TextAlign::Left => 0,
+        x_core::TextAlign::Center => 1,
+        x_core::TextAlign::Right => 2,
+        x_core::TextAlign::Justified => 3,
+    }
+}
+
+/// Map the node's decoration onto the shaping bits
+/// (0 none / 1 underline / 2 strikethrough).
+pub fn decoration_bits_of(node: &Node) -> u8 {
+    match node.resolved_text_decoration() {
+        x_core::TextDecoration::None => 0,
+        x_core::TextDecoration::Underline => 1,
+        x_core::TextDecoration::Strikethrough => 2,
+    }
+}
+
+/// The node's paragraph-breaking properties, in the shape the shaper
+/// consumes. ONE place — the render tree and every export sink build
+/// this from the same getters, so canvas and file outputs cannot drift.
+pub fn text_layout_of(node: &Node) -> x_text::TextLayout {
+    let mut l = text_layout_core_of(node);
+    // Figma: vertical alignment is a property of FIXED-size text — the
+    // block sits inside the layer height. The engine has no explicit
+    // resize mode on the node, so we pass the box height unconditionally:
+    // auto-fit text has box == ink box, and the shift is a structural
+    // no-op there (shaping skips it when box_h <= block height).
+    l.align_v = match node.resolved_text_align_vertical() {
+        x_core::TextAlignVertical::Top => 0,
+        x_core::TextAlignVertical::Middle => 1,
+        x_core::TextAlignVertical::Bottom => 2,
+    };
+    l.box_h = node.h;
+    l
+}
+
+fn text_layout_core_of(node: &Node) -> x_text::TextLayout {
+    let hanging = node.resolved_hanging_punctuation();
+    let (truncation, max_lines) = node.resolved_truncation();
+    let truncate = match truncation {
+        x_core::TextTruncation::Disabled => 0,
+        x_core::TextTruncation::End => 1,
+        x_core::TextTruncation::Middle => 2,
+    };
+    let list = match node.resolved_list_style() {
+        x_core::ListStyle::None => 0,
+        x_core::ListStyle::Bulleted => 1,
+        x_core::ListStyle::Numbered => 2,
+    };
+    x_text::TextLayout {
+        paragraph_indent: node.resolved_paragraph_indent(),
+        list,
+        hanging_quotes: hanging.quotes,
+        hanging_lists: hanging.lists,
+        max_lines: max_lines.unwrap_or(0).min(u32::MAX as usize) as u32,
+        truncate,
+        // Figma: truncation only clips when there IS a line cap; max-lines
+        // alone (no ellipsis) clips overflow silently
+        overflow_hidden: max_lines.map(|m| m > 0).unwrap_or(false),
+        word_break: node.resolved_word_break(),
+        vertical_trim: node.vertical_trim,
+    }
+}
+
+/// Build the shaping style struct for a Text node and its (already
+/// case-transformed) content — the single place the render tree and the
+/// sinks agree on what "this node's typography" means. `line_height` is
+/// the FINAL multiplier: callers that resolve line-height MODES (px/%)
+/// pre-convert, exactly like `shaped_block` does for the cache.
+pub fn text_spec<'a>(
+    node: &Node,
+    text: &'a str,
+    size: f64,
+    color: vello::peniko::Color,
+    letter_spacing: f64,
+    line_height: f64,
+) -> x_text::NodeTextSpec<'a> {
+    let typo_num = |k: &str| node.bindings.get(k).and_then(|v| v.parse::<f64>().ok());
+    x_text::NodeTextSpec {
+        text,
+        size,
+        max_width: node.w.max(8.0),
+        font: node.bindings.get("font").map(String::as_str),
+        color,
+        ls: letter_spacing,
+        lh: line_height,
+        wrap: node.text_wrap(),
+        word_spacing: typo_num("ws").unwrap_or(0.0),
+        paragraph_spacing: node.resolved_paragraph_spacing(),
+        baseline_shift: typo_num("bs").unwrap_or(0.0),
+        small_caps: node.resolved_small_caps(),
+        optical_size: typo_num("opsz").unwrap_or(0.0) as f32,
+        width_axis: typo_num("wdth").unwrap_or(0.0) as f32,
+        lh_mode: 0,
+        align: align_of(node),
+        decoration: decoration_bits_of(node),
+        layout: text_layout_of(node),
     }
 }
 
@@ -1023,31 +1161,24 @@ fn lower(
             // size in px. An fs binding is the point size directly; legacy
             // nodes keep the engine's em convention, pre-scaled (h * 0.72)
             // so their rendered geometry is byte-identical to history.
-            let fs_binding = node
-                .bindings
-                .get("fs")
-                .and_then(|v| v.parse::<f64>().ok())
-                .filter(|v| *v > 0.0);
-            let fs = fs_binding.unwrap_or(node.h * 0.72);
+            let fs = node
+                .resolved_font_size()
+                .unwrap_or(node.h * 0.72);
             let typo_num = |k: &str| node.bindings.get(k).and_then(|v| v.parse::<f64>().ok());
             // word/paragraph spacing + baseline shift ride the node like ls/lh
             let ws = typo_num("ws").unwrap_or(0.0);
-            let ps = typo_num("ps").unwrap_or(0.0);
+            let ps = node.resolved_paragraph_spacing();
             let bs = typo_num("bs").unwrap_or(0.0);
-            let small_caps = node.bindings.get("tc").map(String::as_str) == Some("sc");
+            let small_caps = node.resolved_small_caps();
             let opsz = typo_num("opsz").unwrap_or(0.0) as f32;
             let wdth = typo_num("wdth").unwrap_or(0.0) as f32;
-            let ls = node
-                .bindings
-                .get("ls")
-                .and_then(|v| v.parse::<f64>().ok())
-                .unwrap_or(0.0);
-            let lh = node
-                .bindings
-                .get("lh")
-                .and_then(|v| v.parse::<f64>().ok())
-                .unwrap_or(1.2);
+            let ls = node.resolved_letter_spacing();
+            let lh_mult = node.resolved_line_height();
             let (lh_mode, lh_value) = node.lh_mode_value();
+            // px/% line-height MODES arrive as a multiplier over the
+            // natural line box here; `line_height` carries the legacy
+            // multiplier so `shaped_block` can re-derive per mode
+            let lh = lh_mult;
             let fills = node.active_fills();
             let text_blur = node
                 .active_effects()
@@ -1073,8 +1204,15 @@ fn lower(
             // only — weight/family keep the run pipeline
             let content_box;
             let content = if base_parts.is_none() {
-                content_box =
-                    x_core::apply_text_case(content, node.bindings.get("tc").map(String::as_str));
+                content_box = x_core::apply_text_case(
+                    content,
+                    node.text_case_mode().or_else(|| {
+                        node.bindings
+                            .get("tc")
+                            .map(String::as_str)
+                            .filter(|v| matches!(*v, "upper" | "lower" | "title"))
+                    }),
+                );
                 content_box.as_str()
             } else {
                 content
@@ -1160,6 +1298,9 @@ fn lower(
                         optical_size: opsz,
                         width_axis: wdth,
                         runs,
+                        align: align_bits_of(node),
+                        decoration: decoration_bits_of(node),
+                        layout: text_layout_of(node),
                     });
                 }
                 if layer.blend != BlendKind::Normal {
@@ -1261,6 +1402,9 @@ fn lower(
                 optical_size: 0.0,
                 width_axis: 0.0,
                 runs: vec![],
+                align: 0,
+                decoration: 0,
+                layout: x_text::TextLayout::default(),
             });
             let rounded = node
                 .corner_radii
@@ -1649,6 +1793,104 @@ mod tests {
             runs[1].color.is_none(),
             "unstyled run keeps the command-brush fallback"
         );
+    }
+
+    /// Figma text-properties parity: the typed Node fields ride the
+    /// Glyphs command end-to-end (canvas tree == every export sink).
+    #[test]
+    fn typed_text_properties_flow_into_glyphs() {
+        let mut t = Node::text("t", 10.0, 10.0, 200.0, 80.0, "Hello world");
+        t.text_align = x_core::TextAlign::Right;
+        t.text_align_vertical = x_core::TextAlignVertical::Middle;
+        t.text_decoration = x_core::TextDecoration::Strikethrough;
+        t.text_case = x_core::TextCase::Upper;
+        t.small_caps = true;
+        t.list_style = x_core::ListStyle::Numbered;
+        t.text_truncation = x_core::TextTruncation::End;
+        t.max_lines = Some(2);
+        t.paragraph_indent = 16.0;
+        t.word_break = true;
+        t.vertical_trim = true;
+        t.text_wrap = x_core::TextWrap::Balance;
+        t.font_size = 24.0;
+        let d = Node::frame("page", 400.0, 200.0).child(t);
+        let g = build_render_tree(&d, &Variables::default())
+            .commands
+            .iter()
+            .find_map(|c| match c {
+                RenderCommand::Glyphs {
+                    text,
+                    align,
+                    decoration,
+                    layout,
+                    size,
+                    wrap,
+                    small_caps,
+                    ..
+                } if text == "HELLO WORLD" => {
+                    Some((*align, *decoration, *size, *small_caps, *wrap, *layout))
+                }
+                _ => None,
+            })
+            .expect("upper-cased text command");
+        let (align, decoration, size, small_caps, wrap, layout) = g;
+        assert_eq!(align, 2, "right align bits");
+        assert_eq!(decoration, 2, "strikethrough bits");
+        assert_eq!(size, 24.0, "typed font size wins");
+        assert!(small_caps, "typed small caps");
+        assert!(matches!(wrap, x_core::TextWrap::Balance));
+        assert_eq!(layout.paragraph_indent, 16.0);
+        assert_eq!(layout.list, 2, "numbered list");
+        assert_eq!(layout.max_lines, 2);
+        assert_eq!(layout.truncate, 1, "ellipsis end");
+        assert!(layout.overflow_hidden);
+        assert!(layout.word_break);
+        assert!(layout.vertical_trim);
+        assert_eq!(layout.align_v, 1, "middle vertical align");
+        assert_eq!(layout.box_h, 80.0, "fixed box height for the shift");
+    }
+
+    #[test]
+    fn align_and_decoration_helpers_match_bits() {
+        let mut t = Node::text("t", 0.0, 0.0, 100.0, 20.0, "x");
+        assert_eq!(align_bits_of(&t), 0);
+        assert_eq!(decoration_bits_of(&t), 0);
+        t.text_align = x_core::TextAlign::Justified;
+        t.text_decoration = x_core::TextDecoration::Underline;
+        assert_eq!(align_bits_of(&t), 3);
+        assert_eq!(decoration_bits_of(&t), 1);
+        assert_eq!(align_of(&t), x_text::Align::Justify);
+        assert_eq!(align_from_bits(1), x_text::Align::Center);
+        // legacy bindings still drive the same bits
+        let mut legacy = Node::text("l", 0.0, 0.0, 100.0, 20.0, "x");
+        legacy.bindings.insert("ta".into(), "center".into());
+        legacy.bindings.insert("td".into(), "underline".into());
+        assert_eq!(align_bits_of(&legacy), 1);
+        assert_eq!(decoration_bits_of(&legacy), 1);
+    }
+
+    #[test]
+    fn text_spec_mirrors_the_command_fields() {
+        let mut t = Node::text("t", 5.0, 5.0, 180.0, 60.0, "Hi");
+        t.text_align = x_core::TextAlign::Center;
+        t.text_decoration = x_core::TextDecoration::Underline;
+        t.text_wrap = x_core::TextWrap::Pretty;
+        t.small_caps = true;
+        let spec = text_spec(
+            &t,
+            "Hi",
+            20.0,
+            vello::peniko::Color::BLACK,
+            1.0,
+            1.4,
+        );
+        assert_eq!(spec.align, x_text::Align::Center);
+        assert_eq!(spec.decoration, 1);
+        assert_eq!(spec.wrap, x_core::TextWrap::Pretty);
+        assert!(spec.small_caps);
+        assert_eq!(spec.lh, 1.4);
+        assert_eq!(spec.max_width, 180.0);
+        assert_eq!(spec.layout.align_v, 0, "top vertical align is a no-op");
     }
 
     #[test]

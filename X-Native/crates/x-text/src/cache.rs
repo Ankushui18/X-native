@@ -60,6 +60,17 @@ pub struct TextLayoutKey {
     /// paragraph wrap mode (x_core::TextWrap as u8): Balance/Pretty
     /// change line breaking, so layouts must not be served cross-mode
     pub wrap: u8,
+    /// x_text::Align as u8 (Left/Center/Right/Justify): placement is part
+    /// of the shaped block, so it must not be served cross-alignment
+    pub align: u8,
+    /// decoration bits (0 none / 1 underline / 2 strike / 3 both):
+    /// decorations are REAL geometry in the block — sinks draw the glyph
+    /// list alone, so anything painted has to be keyed
+    pub decoration: u8,
+    /// the node's paragraph-breaking properties (indent, lists,
+    /// truncation, max lines, word break, vertical trim); None = all
+    /// defaults, which keeps legacy keys byte-identical
+    pub layout: Option<crate::shaping::TextLayout>,
 }
 
 /// One styled run inside a rich-text layout key (see TextLayoutKey::runs).
@@ -142,6 +153,74 @@ impl TextLayoutKey {
             optical_size_bits: optical_size.to_bits() as u64,
             width_axis_bits: width_axis.to_bits() as u64,
             wrap: wrap as u8,
+            color: {
+                let rgba = color.to_rgba8();
+                [rgba.r, rgba.g, rgba.b, rgba.a]
+            },
+            font_epoch,
+            runs: vec![],
+            align: 0,
+            decoration: 0,
+            layout: None,
+        }
+    }
+
+    /// Attach the node's canonical text-layout properties (alignment,
+    /// decoration, paragraph-breaking). Default values leave the key
+    /// byte-identical to the 16-arg constructor — old callers and old
+    /// files keep their cache behavior.
+    pub fn with_text_layout(
+        mut self,
+        align: u8,
+        decoration: u8,
+        layout: &crate::shaping::TextLayout,
+    ) -> Self {
+        self.align = align;
+        self.decoration = decoration;
+        self.layout = if layout.is_identity() {
+            None
+        } else {
+            Some(*layout)
+        };
+        self
+    }
+
+    /// Key from a full style struct (the sink-side parity path): every
+    /// field that changes shaping comes from ONE place, so exports cannot
+    /// drift from the canvas.
+    pub fn from_style(
+        text: &str,
+        size: f64,
+        max_width: f64,
+        font: Option<&str>,
+        color: vello::peniko::Color,
+        font_epoch: u64,
+        style: &crate::shaping::TextBlockStyle,
+        ls: f64,
+        word_spacing: f64,
+    ) -> Self {
+        Self {
+            text: text.to_string(),
+            font: font.map(str::to_string),
+            size_bits: size.to_bits(),
+            max_width_bits: max_width.to_bits(),
+            letter_spacing_bits: ls.to_bits(),
+            line_height_bits: style.line_height.to_bits(),
+            lh_mode: style.lh_mode,
+            word_spacing_bits: word_spacing.to_bits(),
+            paragraph_spacing_bits: style.paragraph_spacing.to_bits(),
+            baseline_shift_bits: style.baseline_shift.to_bits(),
+            small_caps: style.small_caps,
+            optical_size_bits: style.optical_size.to_bits() as u64,
+            width_axis_bits: style.width_axis.to_bits() as u64,
+            wrap: style.wrap as u8,
+            align: style.align as u8,
+            decoration: style.decoration,
+            layout: if style.layout.is_identity() {
+                None
+            } else {
+                Some(style.layout)
+            },
             color: {
                 let rgba = color.to_rgba8();
                 [rgba.r, rgba.g, rgba.b, rgba.a]
@@ -243,6 +322,17 @@ const MAX_ENTRIES: usize = 4096;
 /// exceeding either bound triggers eviction
 const MAX_BYTES: usize = 64 * 1024 * 1024;
 
+/// u8 -> Align for cache-miss rebuilds (variants are ordered, so a
+/// numeric round-trip is exact; anything unknown is Left).
+fn align_of(v: u8) -> crate::shaping::Align {
+    match v {
+        1 => crate::shaping::Align::Center,
+        2 => crate::shaping::Align::Right,
+        3 => crate::shaping::Align::Justify,
+        _ => crate::shaping::Align::Left,
+    }
+}
+
 impl ShapedTextCache {
     pub fn new() -> Self {
         Self::default()
@@ -299,6 +389,9 @@ impl ShapedTextCache {
                 opsz,
                 wdth,
                 key.lh_mode,
+                align_of(key.align),
+                key.decoration,
+                key.layout.unwrap_or_default(),
             )?
         } else {
             // rich path: rebuild the parts from the key (the cache only
@@ -339,6 +432,9 @@ impl ShapedTextCache {
                 opsz,
                 wdth,
                 key.lh_mode,
+                align_of(key.align),
+                key.decoration,
+                &key.layout.unwrap_or_default(),
             )?
         };
         let block = Arc::new(ShapedBlock { glyphs, height });
@@ -467,7 +563,9 @@ mod tests {
                 false,
                 0.0,
                 0.0,
-                0
+                0,
+                0,
+                &TextLayout::default()
             ),
             "same runs -> same key"
         );
@@ -497,7 +595,9 @@ mod tests {
                 false,
                 0.0,
                 0.0,
-                0
+                0,
+                0,
+                &TextLayout::default()
             ))
         );
     }
@@ -587,7 +687,7 @@ mod tests {
             0.0,
             0.0,
             0,
-        )
+         Align::Left, 0, &TextLayout::default())
         .expect("rich outlines");
         assert!(glyphs.len() >= 8, "shaped {} glyphs", glyphs.len());
         // first three glyphs (the "BIG" run) carry the explicit color

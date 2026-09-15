@@ -1432,10 +1432,7 @@ pub fn runs_style<F: Fn(&mut x_native::TextRun)>(
 /// Typography of the selected Text node (all engine bindings + fallbacks).
 /// Legacy line-height multiplier binding (mode 0 fallback).
 fn lh_mult_of(n: &x_native::Node) -> f64 {
-    n.bindings
-        .get("lh")
-        .and_then(|v| v.parse::<f64>().ok().filter(|n| n.is_finite()))
-        .unwrap_or(1.2)
+    n.resolved_line_height()
 }
 
 #[derive(Debug, Clone)]
@@ -1526,16 +1523,10 @@ impl App {
         let doc = self.doc_opt()?;
         let n = crate::editor_ui::find_node(&doc.editor_ref().root, id.as_str())?;
         let fs = n
-            .bindings
-            .get("fs")
-            .and_then(|v| v.parse::<f64>().ok().filter(|n| n.is_finite()))
-            .filter(|v| *v > 0.0)
+            .resolved_font_size()
+            .filter(|v| v.is_finite() && *v > 0.0)
             .unwrap_or(n.h * 0.72);
-        let ls = n
-            .bindings
-            .get("ls")
-            .and_then(|v| v.parse::<f64>().ok().filter(|n| n.is_finite()))
-            .unwrap_or(0.0);
+        let ls = n.resolved_letter_spacing();
         // line box: legacy multiplier, or a MODE — fixed px / percent of
         // font size (Figma). Linear in fs for every mode -> scale once.
         let (lh_mode, lh_value) = n.lh_mode_value();
@@ -2122,24 +2113,31 @@ impl App {
         };
         let (lh_mode, lh_value) = n.lh_mode_value();
         Some(TextTypo {
-            fs: get("fs").filter(|v| *v > 0.0).unwrap_or(n.h),
-            ls: get("ls").unwrap_or(0.0),
-            lh: get("lh").unwrap_or(1.2),
+            fs: n.resolved_font_size().unwrap_or(n.h),
+            ls: n.resolved_letter_spacing(),
+            lh: n.resolved_line_height(),
             lh_mode,
             lh_value,
             ws: get("ws").unwrap_or(0.0),
-            ps: get("ps").unwrap_or(0.0),
+            ps: n.resolved_paragraph_spacing(),
             bs: get("bs").unwrap_or(0.0),
             fw: n
                 .bindings
                 .get("fw")
                 .and_then(|v| v.parse::<u16>().ok())
                 .unwrap_or(400),
-            tc: n
-                .bindings
-                .get("tc")
-                .cloned()
-                .unwrap_or_else(|| "none".into()),
+            tc: {
+                // the inspector's case field shows the TYPED field first;
+                // "sc" (small caps) remains a binding-only mode
+                if n.resolved_small_caps() {
+                    "sc".into()
+                } else {
+                    match n.text_case_mode() {
+                        Some(m) => m.to_string(),
+                        None => "none".into(),
+                    }
+                }
+            }
             opsz: get("opsz").unwrap_or(0.0) as f32,
             width_axis: get("wdth").unwrap_or(0.0) as f32,
             font: n.bindings.get("font").cloned(),
@@ -2222,15 +2220,8 @@ impl App {
                 NodeKind::Text { text } => Some((
                     text.clone(),
                     n.w,
-                    n.bindings
-                        .get("fs")
-                        .and_then(|v| v.parse::<f64>().ok().filter(|n| n.is_finite()))
-                        .filter(|v| *v > 0.0)
-                        .unwrap_or(n.h),
-                    n.bindings
-                        .get("lh")
-                        .and_then(|v| v.parse::<f64>().ok().filter(|n| n.is_finite()))
-                        .unwrap_or(1.2),
+                    n.resolved_font_size().unwrap_or(n.h),
+                    n.resolved_line_height(),
                     n.bindings
                         .get("tm")
                         .map(String::as_str)
@@ -2265,10 +2256,12 @@ impl App {
                         _ => lh_binding,
                     };
                     (
-                        num("ls").unwrap_or(0.0),
+                        n.resolved_letter_spacing(),
                         num("ws").unwrap_or(0.0),
-                        num("ps").unwrap_or(0.0),
-                        n.bindings.get("tc").cloned(),
+                        n.resolved_paragraph_spacing(),
+                        n.text_case_mode().map(str::to_string).or_else(|| {
+                            n.bindings.get("tc").cloned()
+                        }),
                         lh,
                     )
                 })
@@ -2496,6 +2489,30 @@ impl App {
             return false;
         };
         self.doc().editor().mutate_visual_stack(id.as_str(), |n| {
+            // mirror onto the canonical typed field (the renderer, exports
+            // and the Code panel read those first); the binding stays so
+            // older builds of the app keep seeing the value
+            match (key, value.as_str()) {
+                ("fs", v) => {
+                    if let Ok(x) = v.parse::<f64>() {
+                        n.font_size = x.max(0.0);
+                    }
+                }
+                ("ls", v) => {
+                    if let Ok(x) = v.parse::<f64>() {
+                        n.letter_spacing = x;
+                    }
+                }
+                ("ps", v) => {
+                    if let Ok(x) = v.parse::<f64>() {
+                        n.paragraph_spacing = x;
+                    }
+                }
+                ("tc", v) => {
+                    n.text_case = x_native::TextCase::parse(v);
+                }
+                _ => {}
+            }
             n.bindings.insert(key.into(), value);
         });
         self.mark_dirty();
@@ -7446,6 +7463,21 @@ impl Host {
                     self.app.mark_dirty();
                 }
             }
+            Action::CycleTextWrap => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    return;
+                };
+                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    n.text_wrap = match n.text_wrap() {
+                        x_native::TextWrap::Auto => x_native::TextWrap::Balance,
+                        x_native::TextWrap::Balance => x_native::TextWrap::Pretty,
+                        x_native::TextWrap::Pretty => x_native::TextWrap::Auto,
+                    };
+                });
+                if changed {
+                    self.app.mark_dirty();
+                }
+            }
             Action::Align(row, col) => self.app.apply_align(row, col),
             // UX Analysis actions
             Action::UxAccessibility => self.app.run_ux_accessibility_check(),
@@ -8321,12 +8353,16 @@ impl Host {
             Action::MirrorBezierHandles { point_idx, mode } => {
                 if let Some(doc) = self.app.docs.get_mut(self.app.active) {
                     let editor = &mut doc.editors[doc.active_editor];
-                        // Convert state::MirrorMode to x_editor::MirrorMode
-                        let mirror_mode = match mode {
-                            crate::state::MirrorMode::None => x_editor::MirrorMode::None,
-                            crate::state::MirrorMode::Angle => x_editor::MirrorMode::Angle,
-                        };
-                        // TODO: Properly convert to editor_core::MirrorMode or unify the types
+                    // Convert state::MirrorMode to x_editor::MirrorMode
+                    let mirror_mode = match mode {
+                        crate::state::MirrorMode::None => x_editor::MirrorMode::None,
+                        crate::state::MirrorMode::Angle => x_editor::MirrorMode::Angle,
+                        crate::state::MirrorMode::AngleAndLength => {
+                            x_editor::MirrorMode::AngleAndLength
+                        }
+                    };
+                    if let Some(node_id) = editor.vector_edit_node.clone() {
+                        if editor.mirror_bezier_handles(&node_id, point_idx, mirror_mode) {
                             self.app.mark_dirty();
                             self.app.status = "Mirrored bézier handles".into();
                         }
@@ -9005,7 +9041,7 @@ impl Host {
             FieldId::ParagraphIndent => {
                 if let Some(v) = num(raw) {
                     doc.editor().mutate_visual_stack(&node_id, |n| {
-                        n.paragraph_indent = v.max(0.0) as f32;
+                        n.paragraph_indent = v.max(0.0);
                     });
                     self.app.mark_dirty();
                 }
@@ -9013,7 +9049,7 @@ impl Host {
             FieldId::MaxLines => {
                 if let Some(v) = num(raw) {
                     doc.editor().mutate_visual_stack(&node_id, |n| {
-                        n.max_lines = if v > 0.0 { Some(v as u32) } else { None };
+                        n.max_lines = if v > 0.0 { Some(v as usize) } else { None };
                     });
                     self.app.mark_dirty();
                 }

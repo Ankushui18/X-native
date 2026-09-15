@@ -332,7 +332,11 @@ pub struct Node {
     /// several (e.g. columns + rows). Meaningful only on Frame nodes.
     pub layout_grids: Vec<LayoutGridDef>,
     
-    // Text formatting properties
+    /// Text formatting properties — the CANONICAL model (Figma "Text and
+    /// typography"). The renderer, the `.x` format, the inspector and the
+    /// CSS/Code panels read these through the `resolved_*` getters below.
+    /// The legacy string bindings ("ps", "bs", "tc", "tw", "lh") stay
+    /// readable for older documents but are no longer written.
     pub text_align: TextAlign,
     pub text_align_vertical: TextAlignVertical,
     pub text_decoration: TextDecoration,
@@ -344,6 +348,20 @@ pub struct Node {
     pub hanging_punctuation: HangingPunctuation,
     pub list_style: ListStyle,
     pub wrap_style: WrapStyle,
+    /// Paragraph break strategy (Auto/Balance/Pretty) — was the "tw"
+    /// binding; a field now, so the model has exactly one home for it.
+    pub text_wrap: TextWrap,
+    /// Explicit line-height multiplier (legacy "lh" binding). 0.0 = unset,
+    /// which keeps default-shaped nodes on the pipeline's 1.2.
+    pub line_height: f64,
+    /// Explicit letter-spacing in px (legacy "ls" binding).
+    pub letter_spacing: f64,
+    /// Explicit font size in px (legacy "fs" binding). 0.0 = unset — the
+    /// renderer falls back to the engine-em convention `h * 0.72`.
+    pub font_size: f64,
+    /// Figma "Trim lines and paragraphs": the text box hugs the rendered
+    /// ink box instead of the full line boxes.
+    pub vertical_trim: bool,
     
     /// Phase 6: Image adjustments (exposure, contrast, saturation, etc.)
     /// Only applies to Image nodes and Pattern fills
@@ -352,6 +370,7 @@ pub struct Node {
     /// Phase 6: Image rotation in degrees (0, 90, 180, 270)
     /// Independent of node rotation, applies only to the image fill
     pub image_rotation: f64,
+}
 
 impl Node {
     /// Clone this node's own state without walking/allocating its descendants.
@@ -407,6 +426,11 @@ impl Node {
             hanging_punctuation: self.hanging_punctuation,
             list_style: self.list_style,
             wrap_style: self.wrap_style,
+            text_wrap: self.text_wrap,
+            line_height: self.line_height,
+            letter_spacing: self.letter_spacing,
+            font_size: self.font_size,
+            vertical_trim: self.vertical_trim,
             image_adjustments: self.image_adjustments,
             image_rotation: self.image_rotation,
         }
@@ -441,16 +465,205 @@ impl Node {
     /// such nodes must render through the styled pipeline (the plain
     /// block path always uses the face's natural line box).
     pub fn has_explicit_lh(&self) -> bool {
-        self.bindings.contains_key("lhm") || self.bindings.contains_key("lh")
+        self.bindings.contains_key("lhm")
+            || self.bindings.contains_key("lh")
+            || self.line_height > 0.0
     }
 
+    /// Paragraph break strategy. Canonical: the typed `text_wrap` field;
+    /// legacy: the "tw" binding written by older documents and importers.
     pub fn text_wrap(&self) -> TextWrap {
-        TextWrap::parse(
-            self.bindings
-                .get("tw")
-                .map(String::as_str)
-                .unwrap_or("auto"),
-        )
+        if self.text_wrap != TextWrap::Auto {
+            return self.text_wrap;
+        }
+        // "twm" is the canonical binding spelling for the break strategy;
+        // "tw" predates it (older .x documents)
+        for k in ["twm", "tw"] {
+            if let Some(v) = self.bindings.get(k) {
+                let p = TextWrap::parse(v);
+                if p != TextWrap::Auto {
+                    return p;
+                }
+            }
+        }
+        TextWrap::Auto
+    }
+
+    /// Figma's paragraph-resize strategy as a CSS `text-wrap` value:
+    /// "balance"/"pretty" when set, else None (no property emitted).
+    pub fn text_wrap_mode(&self) -> Option<&'static str> {
+        match self.text_wrap() {
+            TextWrap::Auto => None,
+            TextWrap::Balance => Some("balance"),
+            TextWrap::Pretty => Some("pretty"),
+        }
+    }
+
+    // ------------------------------------------------- resolved text model
+    // One home per property: typed fields are canonical, bindings are the
+    // legacy read path only. Renderer, `.x`, inspector and Code panels all
+    // go through these getters — that is what keeps canvas, export and
+    // generated CSS honest with each other.
+
+    /// Horizontal alignment inside the box.
+    pub fn resolved_text_align(&self) -> TextAlign {
+        self.text_align
+    }
+
+    /// Vertical alignment inside the box (only meaningful for fixed-size
+    /// text — Figma ignores it while auto-resizing, and so do we).
+    pub fn resolved_text_align_vertical(&self) -> TextAlignVertical {
+        self.text_align_vertical
+    }
+
+    /// Underline / strikethrough as authored on the node.
+    pub fn resolved_text_decoration(&self) -> TextDecoration {
+        self.text_decoration
+    }
+
+    /// Small caps rides the legacy "tc"="sc" spelling (it is a shaping
+    /// mode, not a case transform); the typed case transform is separate.
+    pub fn resolved_small_caps(&self) -> bool {
+        if self.bindings.get("tc").map(String::as_str) == Some("sc") {
+            return true;
+        }
+        // legacy spelling: a standalone "sc" binding (pre-`tc` documents)
+        self.bindings
+            .get("sc")
+            .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+            .unwrap_or(false)
+    }
+
+    /// The non-destructive case transform applied to the CONTENT. Legacy
+    /// documents carry it as the "tc" binding ("upper"/"lower"/"title").
+    pub fn resolved_text_case(&self) -> TextCase {
+        if self.text_case != TextCase::Original {
+            return self.text_case;
+        }
+        match self.bindings.get("tc").map(String::as_str) {
+            Some("upper") => TextCase::Upper,
+            Some("lower") => TextCase::Lower,
+            Some("title") => TextCase::Title,
+            _ => TextCase::Original,
+        }
+    }
+
+    /// Case mode as `apply_text_case` expects it ("upper"/"lower"/"title").
+    pub fn text_case_mode(&self) -> Option<&'static str> {
+        match self.text_case {
+            TextCase::Original => None,
+            TextCase::Upper => Some("upper"),
+            TextCase::Lower => Some("lower"),
+            TextCase::Title => Some("title"),
+        }
+    }
+
+    /// End/middle truncation with an optional line cap.
+    pub fn resolved_truncation(&self) -> (TextTruncation, Option<usize>) {
+        (self.text_truncation, self.max_lines)
+    }
+
+    /// Space added after each paragraph (`\n`-terminated line).
+    pub fn resolved_paragraph_spacing(&self) -> f64 {
+        if self.paragraph_spacing != 0.0 {
+            return self.paragraph_spacing;
+        }
+        self.bindings
+            .get("ps")
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.0)
+    }
+
+    /// First-line indent in px for every paragraph.
+    pub fn resolved_paragraph_indent(&self) -> f64 {
+        if self.paragraph_indent > 0.0 {
+            return self.paragraph_indent;
+        }
+        self.bindings
+            .get("pi")
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| *v > 0.0)
+            .unwrap_or(0.0)
+    }
+
+    pub fn resolved_list_style(&self) -> ListStyle {
+        self.list_style
+    }
+
+    pub fn resolved_hanging_punctuation(&self) -> HangingPunctuation {
+        self.hanging_punctuation
+    }
+
+    /// CSS `overflow-wrap`-style breaking of overlong words mid-glyph.
+    pub fn resolved_word_break(&self) -> bool {
+        self.wrap_style == WrapStyle::BreakWord
+    }
+
+    /// Line-height multiplier (legacy "lh" binding, then the typed field).
+    pub fn resolved_line_height(&self) -> f64 {
+        if self.line_height > 0.0 {
+            return self.line_height;
+        }
+        self.bindings
+            .get("lh")
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| *v > 0.0)
+            .unwrap_or(1.2)
+    }
+
+    /// Letter-spacing in px (legacy "ls" binding, then the typed field).
+    pub fn resolved_letter_spacing(&self) -> f64 {
+        if self.letter_spacing != 0.0 {
+            return self.letter_spacing;
+        }
+        self.bindings
+            .get("ls")
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.0)
+    }
+
+    /// Font size in px: legacy "fs" binding, then the typed field; `None`
+    /// means "engine em" (`h * 0.72`).
+    pub fn resolved_font_size(&self) -> Option<f64> {
+        if self.font_size > 0.0 {
+            return Some(self.font_size);
+        }
+        self.bindings
+            .get("fs")
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| *v > 0.0)
+    }
+
+    /// True when the text must render through the styled pipeline (the
+    /// plain block path only knows size/color/wrap-at-width).
+    pub fn text_needs_styled(&self) -> bool {
+        self.resolved_small_caps()
+            || self.resolved_text_case() != TextCase::Original
+            || self.resolved_paragraph_spacing() != 0.0
+            || self.resolved_paragraph_indent() != 0.0
+            || self.text_decoration != TextDecoration::None
+            || self.text_align != TextAlign::Left
+            || self.text_align_vertical != TextAlignVertical::Top
+            || self.text_truncation != TextTruncation::Disabled
+            || self.list_style != ListStyle::None
+            || self.paragraph_indent != 0.0
+            || self.text_align_vertical != TextAlignVertical::Top
+            || self.vertical_trim
+            || self.wrap_style != WrapStyle::Normal
+            || self.text_wrap != TextWrap::Auto
+            || self
+                .bindings
+                .get("opsz")
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(0.0)
+                > 0.0
+            || self
+                .bindings
+                .get("wdth")
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(0.0)
+                > 0.0
+            || self.has_explicit_lh()
     }
 }
 
@@ -992,6 +1205,11 @@ impl Node {
             hanging_punctuation: HangingPunctuation::default(),
             list_style: ListStyle::None,
             wrap_style: WrapStyle::Normal,
+            text_wrap: TextWrap::Auto,
+            line_height: 0.0,
+            letter_spacing: 0.0,
+            font_size: 0.0,
+            vertical_trim: false,
             image_adjustments: None,
             image_rotation: 0.0,
         }
@@ -1700,5 +1918,144 @@ mod layout_grid_tests {
         );
         assert_eq!(apply_text_case("same", None), "same");
         assert_eq!(apply_text_case("same", Some("nonesuch")), "same");
+    }
+
+    #[test]
+    fn typed_text_fields_are_canonical() {
+        let mut n = Node::text("t", 0.0, 0.0, 120.0, 40.0, "Hi");
+        n.text_align = TextAlign::Center;
+        n.text_align_vertical = TextAlignVertical::Middle;
+        n.text_decoration = TextDecoration::Underline;
+        n.text_case = TextCase::Upper;
+        n.bindings.insert("sc".into(), "1".into()); // small caps mode
+        n.list_style = ListStyle::Numbered;
+        n.text_truncation = TextTruncation::Middle;
+        n.max_lines = Some(3);
+        n.paragraph_indent = 12.0;
+        n.paragraph_spacing = 8.0;
+        n.wrap_style = WrapStyle::BreakWord;
+        n.vertical_trim = true;
+        n.hanging_punctuation = HangingPunctuation {
+            quotes: true,
+            lists: true,
+        };
+        n.text_wrap = TextWrap::Balance;
+        n.font_size = 24.0;
+        n.letter_spacing = 1.5;
+        n.line_height = 1.5;
+        assert_eq!(n.resolved_text_align(), TextAlign::Center);
+        assert_eq!(n.resolved_text_align_vertical(), TextAlignVertical::Middle);
+        assert_eq!(n.resolved_text_decoration(), TextDecoration::Underline);
+        assert_eq!(n.resolved_text_case(), TextCase::Upper);
+        assert!(n.resolved_small_caps());
+        assert_eq!(n.resolved_list_style(), ListStyle::Numbered);
+        assert_eq!(
+            n.resolved_truncation(),
+            (TextTruncation::Middle, Some(3usize))
+        );
+        assert_eq!(n.resolved_paragraph_indent(), 12.0);
+        assert_eq!(n.resolved_paragraph_spacing(), 8.0);
+        assert!(n.resolved_word_break());
+        assert!(n.vertical_trim);
+        let hang = n.resolved_hanging_punctuation();
+        assert!(hang.quotes && hang.lists);
+        assert_eq!(n.text_wrap(), TextWrap::Balance);
+        assert_eq!(n.text_wrap_mode(), Some("balance"));
+        assert_eq!(n.resolved_font_size(), Some(24.0));
+        assert_eq!(n.resolved_letter_spacing(), 1.5);
+        assert_eq!(n.resolved_line_height(), 1.5);
+        assert!(n.text_needs_styled());
+    }
+
+    #[test]
+    fn legacy_text_bindings_still_resolve() {
+        // documents saved before the typed fields existed keep their
+        // typography in the bindings map — the getters must still honor it
+        let mut n = Node::text("t", 0.0, 0.0, 120.0, 40.0, "Hi");
+        n.bindings
+            .insert("twm".into(), "pretty".into()); // wrap mode
+        n.bindings.insert("pi".into(), "10".into()); // paragraph indent
+        n.bindings.insert("ps".into(), "6".into()); // paragraph spacing
+        n.bindings.insert("tc".into(), "upper".into()); // case
+        n.bindings.insert("sc".into(), "1".into()); // small caps
+        n.bindings.insert("fs".into(), "30".into()); // font size
+        n.bindings.insert("ls".into(), "2".into()); // letter spacing
+        n.bindings.insert("lh".into(), "1.75".into()); // line height
+        assert_eq!(n.text_wrap_mode(), Some("pretty"));
+        assert_eq!(n.resolved_paragraph_indent(), 10.0);
+        assert_eq!(n.resolved_paragraph_spacing(), 6.0);
+        assert_eq!(n.resolved_text_case(), TextCase::Upper);
+        assert!(n.resolved_small_caps());
+        assert_eq!(n.resolved_font_size(), Some(30.0));
+        assert_eq!(n.resolved_letter_spacing(), 2.0);
+        assert_eq!(n.resolved_line_height(), 1.75);
+        assert!(n.text_needs_styled());
+    }
+
+    #[test]
+    fn text_enum_strings_roundtrip() {
+        for a in [
+            TextAlign::Left,
+            TextAlign::Center,
+            TextAlign::Right,
+            TextAlign::Justified,
+        ] {
+            assert_eq!(TextAlign::parse(a.to_str()), a);
+        }
+        for v in [
+            TextAlignVertical::Top,
+            TextAlignVertical::Middle,
+            TextAlignVertical::Bottom,
+        ] {
+            assert_eq!(TextAlignVertical::parse(v.to_str()), v);
+        }
+        for d in [
+            TextDecoration::None,
+            TextDecoration::Underline,
+            TextDecoration::Strikethrough,
+        ] {
+            assert_eq!(TextDecoration::parse(d.to_str()), d);
+        }
+        for c in [
+            TextCase::Original,
+            TextCase::Upper,
+            TextCase::Lower,
+            TextCase::Title,
+        ] {
+            assert_eq!(TextCase::parse(c.to_str()), c);
+        }
+        for t in [
+            TextTruncation::Disabled,
+            TextTruncation::End,
+            TextTruncation::Middle,
+        ] {
+            assert_eq!(TextTruncation::parse(t.to_str()), t);
+        }
+        for l in [
+            ListStyle::None,
+            ListStyle::Bulleted,
+            ListStyle::Numbered,
+        ] {
+            assert_eq!(ListStyle::parse(l.to_str()), l);
+        }
+        for w in [WrapStyle::Normal, WrapStyle::BreakWord] {
+            assert_eq!(WrapStyle::parse(w.to_str()), w);
+        }
+        assert_eq!(TextAlign::parse("nonsense"), TextAlign::Left);
+    }
+
+    #[test]
+    fn text_clone_keeps_typed_fields() {
+        let mut n = Node::text("t", 0.0, 0.0, 120.0, 40.0, "Hi");
+        n.text_align = TextAlign::Justified;
+        n.vertical_trim = true;
+        n.text_wrap = TextWrap::Pretty;
+        let c = n.clone();
+        assert_eq!(c.text_align, TextAlign::Justified);
+        assert!(c.vertical_trim);
+        assert_eq!(c.text_wrap, TextWrap::Pretty);
+        let s = n.shallow_clone();
+        assert_eq!(s.text_align, TextAlign::Justified);
+        assert!(s.vertical_trim);
     }
 }

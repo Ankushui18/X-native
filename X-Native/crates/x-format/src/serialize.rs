@@ -846,6 +846,21 @@ pub(crate) fn node_json(n: &Node, out: &mut String) {
     if n.wrap_style != WrapStyle::Normal {
         out.push_str(&format!(",\"wrap_style\":\"{}\"", n.wrap_style.to_str()));
     }
+    if n.text_wrap != TextWrap::Auto {
+        out.push_str(&format!(",\"text_wrap\":\"{}\"", n.text_wrap.to_str()));
+    }
+    if n.vertical_trim {
+        out.push_str(",\"vertical_trim\":true");
+    }
+    if n.line_height > 0.0 {
+        out.push_str(&format!(",\"line_height\":{}", n.line_height));
+    }
+    if n.letter_spacing != 0.0 {
+        out.push_str(&format!(",\"letter_spacing\":{}", n.letter_spacing));
+    }
+    if n.font_size > 0.0 {
+        out.push_str(&format!(",\"font_size\":{}", n.font_size));
+    }
     if !n.children.is_empty() {
         out.push_str(",\"children\":[");
         for (i, c) in n.children.iter().enumerate() {

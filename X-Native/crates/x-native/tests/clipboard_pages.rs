@@ -112,6 +112,9 @@ fn typography_bindings_change_text_geometry() {
         0.0,
         0.0,
         0,
+        x_native::text::Align::Left,
+        0,
+        &x_native::text::TextLayout::default(),
     )
     .unwrap();
     let wide = x_native::text::node_text_outlines_styled(
@@ -131,6 +134,9 @@ fn typography_bindings_change_text_geometry() {
         0.0,
         0.0,
         0,
+        x_native::text::Align::Left,
+        0,
+        &x_native::text::TextLayout::default(),
     )
     .unwrap();
     let last_x = |g: &[x_native::text::OutlineGlyph]| {
@@ -159,6 +165,9 @@ fn typography_bindings_change_text_geometry() {
         0.0,
         0.0,
         0,
+        x_native::text::Align::Left,
+        0,
+        &x_native::text::TextLayout::default(),
     )
     .unwrap();
     let short = x_native::text::node_text_outlines_styled(
@@ -178,6 +187,9 @@ fn typography_bindings_change_text_geometry() {
         0.0,
         0.0,
         0,
+        x_native::text::Align::Left,
+        0,
+        &x_native::text::TextLayout::default(),
     )
     .unwrap();
     assert!(tall.1 > short.1, "line height increases block height");

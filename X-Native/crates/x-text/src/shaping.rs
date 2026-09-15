@@ -73,6 +73,9 @@ pub struct ShapedGlyph {
     pub x_advance: f64,
     pub x_offset: f64,
     pub y_offset: f64,
+    /// true when this glyph's cluster starts on a space: justification
+    /// distributes the extra line width over exactly these advances
+    pub is_space: bool,
 }
 
 /// A shaped run: one font, one direction, one style.
@@ -242,6 +245,7 @@ impl<'a> Shaper<'a> {
                 x_advance: adv,
                 x_offset: pos.x_offset as f64 * scale,
                 y_offset: pos.y_offset as f64 * scale,
+                is_space,
             });
             width += adv;
         }
@@ -316,8 +320,253 @@ pub fn layout_lines_wrapped(
     max_width: f64,
     wrap: x_core::TextWrap,
 ) -> Vec<Line> {
+    layout_lines_wrapped_styled(shaper, spans, default_font, max_width, wrap, &TextLayout::default())
+}
+
+/// The full paragraph pipeline the node's typed text properties drive:
+/// first-line indent, bulleted/numbered lists (with hanging markers that
+/// keep the text in its box), word-break for overlong tokens, max-lines
+/// with an end/middle ellipsis, and plain clipping without one.
+/// Indent and marker width consume wrap budget on the lines they touch —
+/// the same offsets the placement pass applies — so measurement and
+/// rendering cannot drift apart.
+pub fn layout_lines_wrapped_styled(
+    shaper: &mut Shaper,
+    spans: &[Span],
+    default_font: usize,
+    max_width: f64,
+    wrap: x_core::TextWrap,
+    layout: &TextLayout,
+) -> Vec<Line> {
+    let measure = |shaper: &mut Shaper, sp: &Span| -> f64 {
+        shaper
+            .shape_span(sp, sp.font.unwrap_or(default_font))
+            .iter()
+            .map(|r| r.width)
+            .sum::<f64>()
+    };
+    let text_width = |shaper: &mut Shaper, text: &str, size: f64| -> f64 {
+        if text.is_empty() {
+            return 0.0;
+        }
+        measure(shaper, &Span::new(text, size).letter_spacing(base_ls(spans)))
+    };
+    // 1. wrap (word-break aware; Balance/Pretty re-wrap on top of the
+    //    same piece rules)
+    let wrapped = layout_lines_plain(shaper, spans, default_font, max_width, wrap, layout.word_break);
+    if layout.paragraph_indent <= 0.0
+        && layout.list == 0
+        && !layout.hanging_quotes
+        && layout.max_lines == 0
+        && layout.truncate == 0
+        && !layout.overflow_hidden
+    {
+        return wrapped;
+    }
+    // 2. per-paragraph properties + max lines + truncation
+    let mut out: Vec<Line> = Vec::with_capacity(wrapped.len());
+    let mut para_start = true;
+    let mut number = 1usize;
+    let mut li = 0usize;
+    while li < wrapped.len() {
+        let line = &wrapped[li];
+        li += 1;
+        let size = line.spans.first().map(|sp| sp.size).unwrap_or(16.0);
+        let indent = if para_start {
+            layout.paragraph_indent.max(0.0)
+        } else {
+            0.0
+        };
+        // marker for a paragraph start, measured (never guessed)
+        let mut marker = String::new();
+        if para_start {
+            match layout.list {
+                1 => marker.push_str("\u{2022} "),
+                2 => {
+                    marker.push_str(&format!("{number}. "));
+                    number += 1;
+                }
+                _ => {}
+            }
+        }
+        let marker_w = if marker.is_empty() {
+            0.0
+        } else {
+            text_width(shaper, &marker, size)
+        };
+        // a hanging marker lives in the left margin: the text box keeps
+        // its full width, so the marker costs the wrap budget nothing
+        let marker_lead = if layout.hanging_lists { 0.0 } else { marker_w };
+        let mut lead = indent + marker_lead;
+        if para_start
+            && layout.hanging_quotes
+            && line
+                .spans
+                .iter()
+                .flat(|sp| sp.text.chars())
+                .any(|c| matches!(c, '"' | '\u{201c}' | '\u{2018}' | '\u{201e}'))
+        {
+            // an opening quote may bleed into the margin instead of
+            // pushing the first word right
+            lead = (lead - text_width(shaper, " ", size)).max(0.0);
+        }
+        // body budget = the line box minus everything we lead it with
+        let avail = (max_width - lead).max(8.0);
+        let last_kept = layout.max_lines > 0 && out.len() + 1 >= layout.max_lines as usize;
+        let mut line = line.clone();
+        if layout.truncate != 0 {
+            truncate_line(shaper, &mut line, avail, layout.truncate, last_kept);
+        } else if last_kept {
+            truncate_line(shaper, &mut line, avail, 0, false);
+        }
+        if lead > 0.0 || !marker.is_empty() {
+            let mut lead_sp = Span::new("", size);
+            lead_sp.color = line.spans.first().map(|s| s.color).unwrap_or_default();
+            lead_sp.letter_spacing = base_ls(&line.spans);
+            lead_sp.word_spacing = lead; // reserved via one space advance
+            line.spans.insert(0, lead_sp);
+            if !marker.is_empty() {
+                let mut ms = line.spans.first().cloned().unwrap_or_else(|| Span::new("", size));
+                ms.text = marker;
+                if layout.hanging_lists {
+                    // hanging marker paints INTO the margin: it costs no
+                    // width, so it goes first, ahead of the indent span
+                    line.spans.insert(0, ms);
+                } else {
+                    line.spans.insert(1, ms);
+                }
+            }
+            line.width += lead + if marker.is_empty() { 0.0 } else { marker_w };
+        }
+        para_start = line.para_end;
+        out.push(line);
+        if layout.max_lines > 0 && out.len() >= layout.max_lines as usize {
+            break;
+        }
+    }
+    if out.is_empty() {
+        out.push(Line {
+            spans: vec![],
+            width: 0.0,
+            para_end: true,
+        });
+    }
+    out
+}
+
+/// The letter-spacing the paragraph inherits (for prefix measurement).
+fn base_ls(spans: &[Span]) -> f64 {
+    spans.first().map(|s| s.letter_spacing).unwrap_or(0.0)
+}
+
+/// End/middle ellipsis (or plain clipping) for one line.
+fn truncate_line(
+    shaper: &mut Shaper,
+    line: &mut Line,
+    avail: f64,
+    mode: u8,
+    add_ellipsis: bool,
+) {
+    if line.spans.is_empty() || line.width <= avail + 0.5 {
+        return;
+    }
+    let size = line.spans[0].size;
+    let ls = base_ls(&line.spans);
+    let color = line.spans[0].color;
+    let font = line.spans[0].font;
+    let full: String = line.spans.iter().map(|s| s.text.as_str()).collect();
+    let measure_str = |shaper: &mut Shaper, t: &str| -> f64 {
+        if t.is_empty() {
+            return 0.0;
+        }
+        let sp = Span::new(t, size).letter_spacing(ls).color(color);
+        let mut sp = sp;
+        sp.font = font;
+        shaper
+            .shape_span(&sp, font.unwrap_or(0))
+            .iter()
+            .map(|r| r.width)
+            .sum::<f64>()
+    };
+    let ell = if add_ellipsis && mode != 0 { "\u{2026}" } else { "" };
+    let ell_w = measure_str(shaper, ell);
+    let budget = (avail - ell_w).max(1.0);
+    let mut keep = String::new();
+    if mode == 2 {
+        // middle: keep a prefix, skip, keep a suffix — both within budget
+        let mut suffix = String::new();
+        let half = budget / 2.0;
+        let mut w = 0.0;
+        for c in full.chars() {
+            let t = format!("{keep}{c}");
+            let nw = measure_str(shaper, &t);
+            if nw > half {
+                break;
+            }
+            keep = t;
+            w = nw;
+        }
+        let rest: String = full.chars().skip(keep.chars().count()).collect();
+        let mut w2 = 0.0;
+        for c in rest.chars().rev() {
+            let t = format!("{c}{suffix}");
+            let nw = measure_str(shaper, &t);
+            if w + nw > budget {
+                break;
+            }
+            suffix = t;
+            w2 = nw;
+        }
+        let _ = w2;
+        keep.push_str(ell);
+        keep.push_str(&suffix);
+    } else {
+        let mut last_ok = String::new();
+        let mut w = 0.0;
+        let mut chars = full.chars();
+        while let Some(c) = chars.next() {
+            last_ok.push(c);
+            let nw = measure_str(shaper, &last_ok);
+            if nw > budget {
+                last_ok.truncate(last_ok.len() - c.len_utf8());
+                break;
+            }
+            w = nw;
+        }
+        let _ = w;
+        keep = last_ok;
+        // pull back to a word end when the cut lands mid-word
+        if !keep.is_empty()
+            && keep.len() < full.len()
+            && !full[keep.len()..].starts_with(' ')
+        {
+            if let Some(i) = keep.rfind(' ') {
+                if i > keep.len() / 2 {
+                    keep.truncate(i);
+                }
+            }
+        }
+        keep.push_str(ell);
+    }
+    line.spans.truncate(0);
+    let mut sp = Span::new(&keep, size).color(color);
+    sp.font = font;
+    line.spans.push(sp);
+    line.width = measure_str(shaper, &keep);
+}
+
+/// Wrap pass shared by every mode: `word_break` additionally splits
+/// overlong tokens at any character (Figma's "Wrap style: break word").
+fn layout_lines_plain(
+    shaper: &mut Shaper,
+    spans: &[Span],
+    default_font: usize,
+    max_width: f64,
+    wrap: x_core::TextWrap,
+    word_break: bool,
+) -> Vec<Line> {
     if wrap == x_core::TextWrap::Auto {
-        return greedy_lines(shaper, spans, default_font, max_width);
+        return greedy_lines_broken(shaper, spans, default_font, max_width, word_break);
     }
     // re-wrap per paragraph: split spans on explicit newlines, then
     // break each paragraph into pieces (same rules as the greedy pass)
@@ -328,11 +577,11 @@ pub fn layout_lines_wrapped(
             return;
         }
         let pieces = paragraph_pieces(para);
-        let greedy = greedy_pieces(shaper, &pieces, default_font, max_width);
+        let greedy = greedy_pieces(shaper, &pieces, default_font, max_width, word_break);
         let lines = match wrap {
-            x_core::TextWrap::Balance => balance_paragraph(shaper, &pieces, &greedy, default_font),
+            x_core::TextWrap::Balance => balance_paragraph(shaper, &pieces, &greedy, default_font, word_break),
             x_core::TextWrap::Pretty => {
-                let balanced = balance_paragraph(shaper, &pieces, &greedy, default_font);
+                let balanced = balance_paragraph(shaper, &pieces, &greedy, default_font, word_break);
                 pretty_tail(shaper, &balanced, default_font, max_width)
             }
             x_core::TextWrap::Auto => greedy,
@@ -402,13 +651,22 @@ fn piece_width(shaper: &mut Shaper, sp: &Span, default_font: usize) -> f64 {
 }
 
 /// Greedy first-fit of a piece list at width `w` (the same merge rule as
-/// the streaming pass: adjacent same-style spans fuse).
-fn greedy_pieces(shaper: &mut Shaper, pieces: &[Span], default_font: usize, w: f64) -> Vec<Line> {
+/// the streaming pass: adjacent same-style spans fuse). `word_break`
+/// splits a piece that does not fit on an EMPTY line at char granularity.
+fn greedy_pieces(
+    shaper: &mut Shaper,
+    pieces: &[Span],
+    default_font: usize,
+    w: f64,
+    word_break: bool,
+) -> Vec<Line> {
     let mut lines = vec![];
     let mut cur: Vec<Span> = vec![];
     let mut cur_w = 0.0;
-    for piece in pieces {
-        let pw = piece_width(shaper, piece, default_font);
+    let mut it = pieces.iter();
+    while let Some(piece) = it.next().cloned() {
+        let mut piece = piece;
+        let mut pw = piece_width(shaper, &piece, default_font);
         if cur_w + pw > w && cur_w > 0.0 {
             lines.push(Line {
                 spans: std::mem::take(&mut cur),
@@ -416,6 +674,37 @@ fn greedy_pieces(shaper: &mut Shaper, pieces: &[Span], default_font: usize, w: f
                 para_end: false,
             });
             cur_w = 0.0;
+        }
+        if word_break && cur.is_empty() && pw > w && piece.text.chars().count() > 1 {
+            let mut cut = 1usize;
+            let chars: Vec<char> = piece.text.chars().collect();
+            for k in 2..chars.len() {
+                let head: String = chars[..k].iter().collect();
+                let mut h = piece.clone();
+                h.text = head;
+                let hw = piece_width(shaper, &h, default_font);
+                if hw > w {
+                    break;
+                }
+                cut = k;
+            }
+            let head: String = chars[..cut].iter().collect();
+            let rest: String = chars[cut..].iter().collect();
+            lines.push(Line {
+                spans: vec![{
+                    let mut h = piece.clone();
+                    h.text = head;
+                    h
+                }],
+                width: {
+                    let mut h = piece.clone();
+                    h.text = chars[..cut].iter().collect();
+                    piece_width(shaper, &h, default_font)
+                },
+                para_end: false,
+            });
+            piece.text = rest;
+            pw = piece_width(shaper, &piece, default_font);
         }
         if let Some(lastspan) = cur.last_mut() {
             if lastspan.size == piece.size
@@ -428,7 +717,7 @@ fn greedy_pieces(shaper: &mut Shaper, pieces: &[Span], default_font: usize, w: f
                 continue;
             }
         }
-        cur.push(piece.clone());
+        cur.push(piece);
         cur_w += pw;
     }
     if !cur.is_empty() || lines.is_empty() {
@@ -448,6 +737,7 @@ fn balance_paragraph(
     pieces: &[Span],
     greedy: &[Line],
     default_font: usize,
+    word_break: bool,
 ) -> Vec<Line> {
     let k = greedy.len();
     if k < 2 {
@@ -462,7 +752,7 @@ fn balance_paragraph(
         return greedy.to_vec();
     }
     let count_at = |shaper: &mut Shaper, w: f64| -> usize {
-        greedy_pieces(shaper, pieces, default_font, w).len()
+        greedy_pieces(shaper, pieces, default_font, w, word_break).len()
     };
     let (mut lo, mut hi) = (w_lo, w_hi);
     for _ in 0..14 {
@@ -473,7 +763,7 @@ fn balance_paragraph(
             lo = mid;
         }
     }
-    let balanced = greedy_pieces(shaper, pieces, default_font, hi);
+    let balanced = greedy_pieces(shaper, pieces, default_font, hi, word_break);
     if balanced.len() == k {
         balanced
     } else {
@@ -544,7 +834,7 @@ fn pretty_tail(
     // try even-ish splits of the tail: first line shrinks, the widow
     // line gains a piece — keep both within the original box
     for f in [0.42, 0.46, 0.5, 0.54, 0.58, 0.62] {
-        let cand = greedy_pieces(shaper, &tail, default_font, total * f);
+        let cand = greedy_pieces(shaper, &tail, default_font, total * f, false);
         if cand.len() == 2
             && visible_pieces(&cand[1]) >= 2
             && cand[0].width <= max_width + 0.01
@@ -658,11 +948,19 @@ fn split_keep(s: &str, sep: char) -> Vec<&str> {
 
 // ------------------------------------------------------------------ layout
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Horizontal placement of a line inside the block's max width.
+/// `Justify` stretches the space advances of every line except a
+/// paragraph's last (Figma "Justify"); the x-text `Align::Right` is what
+/// `x_core::TextAlign::Justified` maps to only as a LAST resort — the
+/// placement pass distributes real space width whenever the line has
+/// more than one piece.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Align {
+    #[default]
     Left,
     Center,
     Right,
+    Justify,
 }
 
 /// Split spans for synthesized small caps: runs of lowercase chars become
@@ -689,6 +987,155 @@ pub fn small_caps_segments(span_text: &str, size: f64) -> Vec<(String, f64)> {
     out
 }
 
+/// Node-level paragraph properties that change BREAKING (not just the
+/// per-glyph advance): Figma's Type-settings additions. Part of the shape
+/// cache key by construction — every field here feeds it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+pub struct TextLayout {
+    /// first-line indent in px for every paragraph
+    pub paragraph_indent: f64,
+    /// 0 = none, 1 = bulleted, 2 = numbered (mirrors x_core::ListStyle)
+    pub list: u8,
+    /// quotation marks may hang into the left margin
+    pub hanging_quotes: bool,
+    /// list markers sit in the margin instead of shifting the text
+    pub hanging_lists: bool,
+    /// visible line cap (0 = unlimited)
+    pub max_lines: u32,
+    /// 0 = off, 1 = end ("…text"), 2 = middle ("te…xt")
+    pub truncate: u8,
+    /// cut lines that overflow the box without an ellipsis
+    pub overflow_hidden: bool,
+    /// CSS overflow-wrap: break-word — split overlong tokens anywhere
+    pub word_break: bool,
+    /// Figma "Vertical trim": block height = ink height, no half-leading
+    pub vertical_trim: bool,
+    /// 0 top / 1 middle / 2 bottom — vertical alignment inside a FIXED-size
+    /// text box (Figma ignores it while auto-resizing; the renderer only
+    /// sets `box_h` for fixed-size nodes)
+    pub align_v: u8,
+    /// the fixed text-box height `align_v` positions within (0 = auto)
+    pub box_h: f64,
+}
+
+impl TextLayout {
+    pub fn is_identity(&self) -> bool {
+        *self == Self::default()
+    }
+    /// 64-bit fingerprint for the shape cache key (fields are small ints,
+    /// bools and non-negative px values — bit-exact is unnecessary, this
+    /// is a memo, not an identity).
+    pub fn fingerprint(&self) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut mix = |v: u64| {
+            h ^= v;
+            h = h.wrapping_mul(0x1000_0000_01b3);
+        };
+        mix(self.paragraph_indent.to_bits());
+        mix(self.list as u64);
+        mix(self.hanging_quotes as u64);
+        mix(self.hanging_lists as u64);
+        mix(self.max_lines as u64);
+        mix(self.truncate as u64);
+        mix(self.overflow_hidden as u64);
+        mix(self.word_break as u64);
+        mix(self.vertical_trim as u64);
+        mix(self.align_v as u64);
+        mix(self.box_h as u64);
+        h
+    }
+}
+
+impl Default for Color {
+    fn default() -> Self {
+        Color::BLACK
+    }
+}
+
+/// Everything a sink needs to shape one Text node — the single entry
+/// point for exports so canvas, PDF, SVG, raster and the styled helper
+/// cannot drift apart. Construct it with `..Default::default()`; every
+/// field the canvas pipeline knows about lives here (Figma typography
+/// parity: alignment, decoration, lists, indent, truncation, wrap).
+#[derive(Debug, Clone, Default)]
+pub struct NodeTextSpec<'a> {
+    pub text: &'a str,
+    pub size: f64,
+    pub max_width: f64,
+    pub font: Option<&'a str>,
+    pub color: Color,
+    pub ls: f64,
+    pub lh: f64,
+    pub wrap: x_core::TextWrap,
+    pub word_spacing: f64,
+    pub paragraph_spacing: f64,
+    pub baseline_shift: f64,
+    pub small_caps: bool,
+    pub optical_size: f32,
+    pub width_axis: f32,
+    pub lh_mode: u8,
+    /// x-text placement (Left/Center/Right/Justify)
+    pub align: Align,
+    /// 0 none / 1 underline / 2 strikethrough / 3 both
+    pub decoration: u8,
+    pub layout: TextLayout,
+}
+
+impl<'a> NodeTextSpec<'a> {
+    /// Figma vertical alignment inside a fixed-size box (0 = auto width /
+    /// height: the node ignores it, matching Figma's behavior)
+    pub fn with_vbox(mut self, align_v: u8, box_h: f64) -> Self {
+        self.layout.align_v = align_v;
+        self.layout.box_h = box_h;
+        self
+    }
+    /// Replace the paragraph-layout properties wholesale (sinks that keep
+    /// their own TextLayout pass it through here).
+    pub fn with_layout(mut self, layout: TextLayout) -> Self {
+        self.layout = layout;
+        self
+    }
+
+    pub fn with_align(mut self, align: Align) -> Self {
+        self.align = align;
+        self
+    }
+    pub fn style(&self) -> TextBlockStyle {
+        TextBlockStyle {
+            max_width: self.max_width.max(8.0),
+            line_height: self.lh.max(0.5),
+            lh_mode: self.lh_mode,
+            align: self.align,
+            wrap: self.wrap,
+            paragraph_spacing: self.paragraph_spacing,
+            baseline_shift: self.baseline_shift,
+            small_caps: self.small_caps,
+            optical_size: self.optical_size,
+            width_axis: self.width_axis,
+            decoration: self.decoration,
+            layout: self.layout,
+        }
+    }
+
+    /// The shape-cache key for this spec (from_style keeps every
+    /// field that changes shaping, by construction).
+    pub fn key(&self, font_epoch: u64) -> crate::cache::TextLayoutKey {
+        let style = self.style();
+        crate::cache::TextLayoutKey::from_style(
+            self.text,
+            self.size,
+            self.max_width.max(8.0),
+            self.font,
+            self.color,
+            font_epoch,
+            &style,
+            self.ls,
+            self.word_spacing,
+        )
+    }
+}
+
+#[derive(Clone)]
 pub struct TextBlockStyle {
     pub max_width: f64,
     pub line_height: f64, // multiplier over font natural height (1.0 = natural)
@@ -711,6 +1158,12 @@ pub struct TextBlockStyle {
     pub optical_size: f32,
     /// variable-font width axis (`wdth`, 100 = normal); <= 0 = unused
     pub width_axis: f32,
+    /// node's canonical text-decoration (0 none / 1 underline / 2 strike):
+    /// painted as real geometry in the line's color so EVERY sink —
+    /// canvas, SVG, PDF, raster — carries it without per-sink code
+    pub decoration: u8,
+    /// paragraph-breaking properties (indent / lists / truncation / trim)
+    pub layout: TextLayout,
 }
 
 impl Default for TextBlockStyle {
@@ -726,6 +1179,8 @@ impl Default for TextBlockStyle {
             small_caps: false,
             optical_size: 0.0,
             width_axis: 0.0,
+            decoration: 0,
+            layout: TextLayout::default(),
         }
     }
 }
@@ -788,15 +1243,24 @@ pub fn glyph_outlines(
     } else {
         spans
     };
-    let lines = layout_lines_wrapped(
+    let lines = layout_lines_wrapped_styled(
         &mut shaper,
         &spans,
         default_font,
         style.max_width,
         style.wrap,
+        &style.layout,
     );
     let mut out = vec![];
     let mut y = 0.0f64;
+    // paragraph bookkeeping for indent/list lead-in (the wrap pass already
+    // reserved these widths; here we actually shift the pen)
+    let mut para_start = true;
+    let mut prev_para_end = true;
+    // vertical trim tracking (Figma "Trim lines and paragraphs"): the
+    // block shrinks to the first ink top and the last ink bottom
+    let mut top_ink = f64::MAX;
+    let mut bottom_ink = 0.0f64;
     for (li, line) in lines.iter().enumerate() {
         let max_size = line.spans.iter().map(|s| s.size).fold(12.0, f64::max);
         let f0 = &fonts.fonts[default_font];
@@ -812,12 +1276,38 @@ pub fn glyph_outlines(
             // (ascent+descent) in the line box, baseline on top of it
             (lh_px - (f0.ascent - f0.descent) * fs_sc) / 2.0 + f0.ascent * fs_sc
         } - style.baseline_shift;
-        let x0 = match style.align {
-            Align::Left => 0.0,
-            Align::Center => (style.max_width - line.width) / 2.0,
-            Align::Right => style.max_width - line.width,
+        let line_top = baseline - f0.ascent * fs_sc;
+        let line_bottom = baseline + f0.descent.abs() * fs_sc;
+        let body_lead = if para_start {
+            style.layout.paragraph_indent.max(0.0)
+        } else {
+            0.0
         };
-        let mut pen = x0;
+        let x0 = match style.align {
+            Align::Left => body_lead,
+            Align::Center => ((style.max_width - line.width) / 2.0 + body_lead).max(0.0),
+            Align::Right => style.max_width - line.width,
+            // Figma justify: the paragraph's LAST line (and a line with no
+            // place to stretch) stays left-aligned; other lines spread
+            // their word spaces to fill the box
+            Align::Justify => {
+                if line.para_end || li + 1 == lines.len() || line.width >= style.max_width {
+                    body_lead
+                } else {
+                    (style.max_width - line.width).max(0.0)
+                }
+            }
+        };
+        // distribute the justify slack over this line's space advances
+        let gaps: f64 = line.spans.iter().map(|sp| span_breaks(sp).saturating_sub(1)).sum::<usize>() as f64;
+        let extra = if style.align == Align::Justify && x0 > 0.0 && gaps > 0.0 {
+            x0 / gaps
+        } else {
+            0.0
+        };
+        let base = x0;
+        let mut pen = base;
+        let mut last_right = base;
         for span in &line.spans {
             for run in shaper.shape_span(span, default_font) {
                 let f = &fonts.fonts[run.font];
@@ -832,20 +1322,135 @@ pub fn glyph_outlines(
                             transform: t,
                             color: run.color,
                         });
+                        last_right = last_right.max(x + g.x_advance);
                     }
-                    x += g.x_advance;
+                    x += g.x_advance + if extra > 0.0 && g.is_space { extra } else { 0.0 };
                 }
-                pen += run.width;
+                pen += run.width + (extra * span_breaks(span).saturating_sub(1) as f64);
             }
         }
+        // decoration: Figma paints underline/strikethrough as real line
+        // geometry in the text color. Emitted through the SAME glyph list
+        // as the outlines, so canvas, SVG, PDF and raster sinks carry it by
+        // construction (thickness/offset = CSS defaults; the underline
+        // details panel can override them once it ships).
+        if style.decoration != 0 {
+            let color = line.spans.first().map(|sp| sp.color).unwrap_or(Color::BLACK);
+            let w = (max_size * 0.06).max(0.6);
+            let mut mk = |ry: f64| {
+                let r = vello::kurbo::Rect::new(base, ry, last_right.max(base + 1.0), ry + w);
+                out.push(OutlineGlyph {
+                    path: r.to_path(0.1),
+                    transform: Affine::IDENTITY,
+                    color,
+                });
+            };
+            if style.decoration == 1 || style.decoration == 3 {
+                mk(baseline + f0.descent.abs() * fs_sc * 0.25);
+            }
+            if style.decoration == 2 || style.decoration == 3 {
+                let cap = if f0.cap_height > 0.0 {
+                    f0.cap_height
+                } else {
+                    f0.ascent * 0.6
+                };
+                mk(baseline - cap * fs_sc * 0.5);
+            }
+        }
+        top_ink = top_ink.min(line_top);
+        bottom_ink = bottom_ink.max(line_bottom);
         y += lh;
+        para_start = line.para_end;
+        let _ = prev_para_end;
         // paragraph spacing separates paragraphs — it never pads the block
         // after the final line (Figma/CSS-collapsed semantics)
         if line.para_end && li + 1 < lines.len() {
             y += style.paragraph_spacing;
         }
     }
-    (out, y)
+    // vertical trim: pull the block to its ink box and shift every glyph
+    // (all sinks derive height from this return, so one pass keeps them
+    // consistent — auto-layout measurement included)
+    let mut height = y;
+    if style.layout.vertical_trim && height > 0.0 && top_ink.is_finite() {
+        let shift = -top_ink;
+        height = (bottom_ink - top_ink).max(1.0);
+        for g in out.iter_mut() {
+            g.transform = Affine::translate((0.0, shift)) * g.transform;
+        }
+    }
+    // vertical alignment inside a FIXED-SIZE box (Figma: Middle/Bottom
+    // center/bottom-align the block within the text layer's height)
+    if style.layout.align_v != 0 && style.layout.box_h > height + 0.5 {
+        let shift = match style.layout.align_v {
+            1 => (style.layout.box_h - height) / 2.0,
+            2 => (style.layout.box_h - height).max(0.0),
+            _ => 0.0,
+        };
+        if shift > 0.0 {
+            for g in out.iter_mut() {
+                g.transform = Affine::translate((0.0, shift)) * g.transform;
+            }
+        }
+    }
+    (out, height)
+}
+
+/// Break-opportunity pieces of a span (the justify slot count + 1).
+fn span_breaks(sp: &Span) -> usize {
+    let mut n = 0usize;
+    let mut last = 0usize;
+    for b in break_opportunities(&sp.text) {
+        if b > last && b <= sp.text.len() {
+            n += 1;
+            last = b;
+        }
+    }
+    if last < sp.text.len() {
+        n += 1;
+    }
+    n
+}
+
+/// Shape one Text node from a full style struct (cache-routed). Used by
+/// every export sink so parity is structural, not aspirational.
+pub fn node_text_outlines_style(
+    fonts: &FontManager,
+    spec: &NodeTextSpec,
+) -> Option<(Vec<OutlineGlyph>, f64)> {
+    let key = spec.key(fonts.epoch());
+    if let Some(block) = crate::cache::ShapedTextCache::global().get_or_shape(fonts, key) {
+        return Some((
+            block
+                .glyphs
+                .iter()
+                .map(|g| OutlineGlyph {
+                    path: g.path.clone(),
+                    transform: g.transform,
+                    color: g.color,
+                })
+                .collect(),
+            block.height,
+        ));
+    }
+    node_text_outlines_style_uncached(fonts, spec)
+}
+
+/// Raw style-struct shaping (cache-miss fill + tests + the app chrome).
+pub fn node_text_outlines_style_uncached(
+    fonts: &FontManager,
+    spec: &NodeTextSpec,
+) -> Option<(Vec<OutlineGlyph>, f64)> {
+    let chosen = spec
+        .font
+        .and_then(|n| fonts.resolve_font_name(n))
+        .or_else(|| fonts.default_font())?;
+    let spans = [Span::new(spec.text, spec.size)
+        .color(spec.color)
+        .letter_spacing(spec.ls)
+        .word_spacing(spec.word_spacing)];
+    let style = spec.style();
+    Some(glyph_outlines(fonts, &spans, chosen, &style))
 }
 
 /// Full pipeline: rich spans -> shaped, wrapped, aligned -> Vello paths.
@@ -879,22 +1484,8 @@ pub fn node_text_outlines(
     color: Color,
 ) -> Option<(Vec<OutlineGlyph>, f64)> {
     node_text_outlines_styled(
-        fonts,
-        text,
-        size,
-        max_width,
-        font_name,
-        color,
-        0.0,
-        1.2,
-        x_core::TextWrap::Auto,
-        0.0,
-        0.0,
-        0.0,
-        false,
-        0.0,
-        0.0,
-        0,
+        fonts, text, size, max_width, font_name, color, 0.0, 1.2, x_core::TextWrap::Auto, 0.0,
+        0.0, 0.0, false, 0.0, 0.0, 0, Align::Left, 0, &TextLayout::default(),
     )
 }
 
@@ -918,6 +1509,9 @@ pub fn node_text_outlines_styled(
     optical_size: f32,
     width_axis: f32,
     lh_mode: u8,
+    align: Align,
+    decoration: u8,
+    layout: &TextLayout,
 ) -> Option<(Vec<OutlineGlyph>, f64)> {
     // route through the ShapedTextCache: repeated frames/text reuse the
     // shaped block (Arc clone), positions compose OUTSIDE via the world
@@ -940,7 +1534,8 @@ pub fn node_text_outlines_styled(
         optical_size,
         width_axis,
         lh_mode,
-    );
+    )
+    .with_text_layout(align as u8, decoration, layout);
     if let Some(block) = crate::cache::ShapedTextCache::global().get_or_shape(fonts, key) {
         return Some((
             block
@@ -972,6 +1567,9 @@ pub fn node_text_outlines_styled(
         optical_size,
         width_axis,
         lh_mode,
+        align,
+        decoration,
+        *layout,
     )
 }
 
@@ -985,22 +1583,8 @@ pub fn node_text_outlines_uncached(
     color: Color,
 ) -> Option<(Vec<OutlineGlyph>, f64)> {
     node_text_outlines_styled_uncached(
-        fonts,
-        text,
-        size,
-        max_width,
-        font_name,
-        color,
-        0.0,
-        1.2,
-        x_core::TextWrap::Auto,
-        0.0,
-        0.0,
-        0.0,
-        false,
-        0.0,
-        0.0,
-        0,
+        fonts, text, size, max_width, font_name, color, 0.0, 1.2, x_core::TextWrap::Auto, 0.0,
+        0.0, 0.0, false, 0.0, 0.0, 0, Align::Left, 0, TextLayout::default(),
     )
 }
 
@@ -1027,6 +1611,9 @@ pub fn node_text_outlines_rich(
     optical_size: f32,
     width_axis: f32,
     lh_mode: u8,
+    align: Align,
+    decoration: u8,
+    layout: &TextLayout,
 ) -> Option<(Vec<OutlineGlyph>, f64)> {
     let key = crate::cache::TextLayoutKey::new_rich(
         parts,
@@ -1044,7 +1631,8 @@ pub fn node_text_outlines_rich(
         optical_size,
         width_axis,
         lh_mode,
-    );
+    )
+    .with_text_layout(align as u8, decoration, layout);
     if let Some(block) = crate::cache::ShapedTextCache::global().get_or_shape(fonts, key) {
         return Some((
             block
@@ -1075,6 +1663,9 @@ pub fn node_text_outlines_rich(
         optical_size,
         width_axis,
         lh_mode,
+        align,
+        decoration,
+        layout,
     )
 }
 
@@ -1115,6 +1706,9 @@ pub fn node_text_outlines_rich_uncached(
     optical_size: f32,
     width_axis: f32,
     lh_mode: u8,
+    align: Align,
+    decoration: u8,
+    layout: &TextLayout,
 ) -> Option<(Vec<OutlineGlyph>, f64)> {
     let default_font = base_font
         .and_then(|n| fonts.resolve_font_name(n))
@@ -1148,13 +1742,15 @@ pub fn node_text_outlines_rich_uncached(
         lh_mode,
         max_width: max_width.max(8.0),
         line_height: lh.max(0.5),
-        align: Align::Left,
+        align,
         wrap,
         paragraph_spacing,
         baseline_shift,
         small_caps,
         optical_size,
         width_axis,
+        decoration,
+        layout: *layout,
     };
     Some(glyph_outlines(fonts, &spans, default_font, &style))
 }
@@ -1195,6 +1791,9 @@ pub fn node_text_outlines_styled_uncached(
     optical_size: f32,
     width_axis: f32,
     lh_mode: u8,
+    align: Align,
+    decoration: u8,
+    layout: TextLayout,
 ) -> Option<(Vec<OutlineGlyph>, f64)> {
     let chosen = font_name
         .and_then(|n| fonts.resolve_font_name(n))
@@ -1209,13 +1808,16 @@ pub fn node_text_outlines_styled_uncached(
         lh_mode,
         max_width: max_width.max(8.0),
         line_height: lh.max(0.5),
-        align: Align::Left,
+        align,
         wrap,
         paragraph_spacing,
         baseline_shift,
         small_caps,
         optical_size,
         width_axis,
+        decoration,
+        layout,
+            ..Default::default()
     };
     Some(glyph_outlines(fonts, &spans, chosen, &style))
 }
@@ -1291,7 +1893,7 @@ mod tests {
             0.0,
             0.0,
             1,
-        )
+         0, &TextLayout::default())
         .unwrap();
         let (g0, _) = node_text_outlines_styled(
             &m,
@@ -1310,7 +1912,7 @@ mod tests {
             0.0,
             0.0,
             0,
-        )
+         0, &TextLayout::default())
         .unwrap();
         let d = (g0[0].transform.translation().y - g1[0].transform.translation().y).abs();
         assert!(d > 1.0, "cached blocks must differ across modes (d={d})");
@@ -1376,6 +1978,7 @@ mod tests {
             small_caps: sc,
             optical_size: 0.0,
             width_axis: 0.0,
+            ..Default::default()
         };
         let (g0, h0) = glyph_outlines(&m, &[Span::new("Abc", 20.0).font(f)], f, &style(false));
         let (g1, h1) = glyph_outlines(&m, &[Span::new("Abc", 20.0).font(f)], f, &style(true));
@@ -1406,6 +2009,7 @@ mod tests {
             small_caps: false,
             optical_size: 32.0,
             width_axis: 75.0,
+            ..Default::default()
         };
         let base = TextBlockStyle {
             lh_mode: 0,
@@ -1441,6 +2045,7 @@ mod tests {
             small_caps: false,
             optical_size: 0.0,
             width_axis: 0.0,
+            ..Default::default()
         };
         let (_, h_single0) = glyph_outlines(&m, &[Span::new("one", 20.0).font(f)], f, &style(0.0));
         let (_, h_single1) = glyph_outlines(&m, &[Span::new("one", 20.0).font(f)], f, &style(40.0));
@@ -1474,6 +2079,7 @@ mod tests {
             small_caps: false,
             optical_size: 0.0,
             width_axis: 0.0,
+            ..Default::default()
         };
         let (g0, h0) = glyph_outlines(&m, &[Span::new("Hy", 20.0).font(f)], f, &style(0.0));
         let (g1, h1) = glyph_outlines(&m, &[Span::new("Hy", 20.0).font(f)], f, &style(6.0));
@@ -1869,5 +2475,186 @@ mod tests {
             );
             assert_eq!(p, 2);
         }
+    }
+
+    fn ink_min_x(gl: &OutlineGlyph) -> f64 {
+        gl.path
+            .elements()
+            .iter()
+            .filter_map(|e| match e {
+                vello::kurbo::PathEl::MoveTo(pt)
+                | vello::kurbo::PathEl::LineTo(pt)
+                | vello::kurbo::PathEl::QuadTo(_, pt)
+                | vello::kurbo::PathEl::CurveTo(_, _, pt) => Some(pt.x),
+                vello::kurbo::PathEl::ClosePath => None,
+            })
+            .fold(f64::MAX, f64::min)
+    }
+
+    fn ink_span_x(gl: &OutlineGlyph) -> usize {
+        gl.path
+            .elements()
+            .iter()
+            .filter_map(|e| match e {
+                vello::kurbo::PathEl::MoveTo(pt)
+                | vello::kurbo::PathEl::LineTo(pt)
+                | vello::kurbo::PathEl::QuadTo(_, pt)
+                | vello::kurbo::PathEl::CurveTo(_, _, pt) => Some(pt.x),
+                vello::kurbo::PathEl::ClosePath => None,
+            })
+            .map(|x| x as i64)
+            .collect::<std::collections::HashSet<i64>>()
+            .len()
+    }
+
+    /// Figma vertical alignment inside a FIXED-size box: the whole block
+    /// translates; auto (align_v = 0) must leave the geometry untouched.
+    #[test]
+    fn vertical_align_offsets_block_in_box() {
+        let m = fonts();
+        let base = NodeTextSpec {
+            text: "abc",
+            size: 20.0,
+            max_width: 10_000.0,
+            font: None,
+            color: Color::WHITE,
+            lh: 1.0,
+            ..Default::default()
+        };
+        let (auto, _) = node_text_outlines_style_uncached(&m, &base).unwrap();
+        let (mid, _) = node_text_outlines_style_uncached(
+            &m,
+            &base.clone().with_vbox(1, 100.0),
+        )
+        .unwrap();
+        let y = |g: &Vec<OutlineGlyph>| g[0].transform.translation().y;
+        assert!((y(&mid) - y(&auto)).abs() > 1.0, "middle shifts the block down");
+        // bottom = a larger shift than middle for the same box
+        let (bot, _) =
+            node_text_outlines_style_uncached(&m, &base.clone().with_vbox(2, 100.0)).unwrap();
+        assert!(y(&bot) > y(&mid), "bottom sits below middle");
+    }
+
+    /// Paragraph indent hangs the FIRST line and wraps the rest; a negative
+    /// indent hangs every following line into the left margin.
+    #[test]
+    fn paragraph_indent_moves_first_line() {
+        let m = fonts();
+        let base = NodeTextSpec {
+            text: "hello world this is a long paragraph",
+            size: 16.0,
+            max_width: 120.0,
+            font: None,
+            color: Color::WHITE,
+            lh: 1.0,
+            ..Default::default()
+        };
+        let (plain, _) = node_text_outlines_style_uncached(&m, &base).unwrap();
+        let (ind, _) = node_text_outlines_style_uncached(
+            &m,
+            &base.clone().with_layout(TextLayout {
+                paragraph_indent: 30.0,
+                ..TextLayout::default()
+            }),
+        )
+        .unwrap();
+        let plain_first = plain
+            .iter()
+            .filter(|g| (g.transform.translation().y - plain[0].transform.translation().y).abs() < 0.5)
+            .map(|g| ink_min_x(g) + g.transform.translation().x)
+            .fold(f64::MAX, f64::min);
+        let ind_first = ind
+            .iter()
+            .filter(|g| (g.transform.translation().y - ind[0].transform.translation().y).abs() < 0.5)
+            .map(|g| ink_min_x(g) + g.transform.translation().x)
+            .fold(f64::MAX, f64::min);
+        assert!(
+            ind_first - plain_first > 20.0,
+            "first line indented ({plain_first} -> {ind_first})"
+        );
+    }
+
+    /// Decorations synthesize extra paths (LoadedFont carries no underline
+    /// metrics) and change nothing else about the shaping.
+    #[test]
+    fn decorations_add_ink_paths() {
+        let m = fonts();
+        let base = NodeTextSpec {
+            text: "word",
+            size: 22.0,
+            max_width: 10_000.0,
+            font: None,
+            color: Color::WHITE,
+            lh: 1.0,
+            ..Default::default()
+        };
+        let (none, _) = node_text_outlines_style_uncached(&m, &base).unwrap();
+        let (under, _) = node_text_outlines_style_uncached(
+            &m,
+            &NodeTextSpec {
+                decoration: 1,
+                ..base.clone()
+            },
+        )
+        .unwrap();
+        let ink = |g: &Vec<OutlineGlyph>| {
+            g.iter()
+                .map(|gl| ink_span_x(gl).max(1))
+                .sum::<usize>()
+        };
+        assert!(
+            ink(&under) > ink(&none),
+            "underline adds ink: {} -> {}",
+            ink(&none),
+            ink(&under)
+        );
+        let (strike, _) = node_text_outlines_style_uncached(
+            &m,
+            &NodeTextSpec {
+                decoration: 2,
+                ..base.clone()
+            },
+        )
+        .unwrap();
+        assert!(ink(&strike) > ink(&none), "strikethrough adds ink");
+        // decorations must not move glyph baselines
+        assert!(
+            (none[0].transform.translation().y - under[0].transform.translation().y).abs() < 0.01
+        );
+    }
+
+    /// The list + hanging knobs change geometry; TextLayout (not the style
+    /// alone) must therefore be part of the cache key.
+    #[test]
+    fn layout_flags_drive_geometry_and_key() {
+        let m = fonts();
+        let base = NodeTextSpec {
+            text: "one\ntwo",
+            size: 18.0,
+            max_width: 400.0,
+            font: None,
+            color: Color::WHITE,
+            lh: 1.2,
+            ..Default::default()
+        };
+        let (plain, ph) = node_text_outlines_style_uncached(&m, &base).unwrap();
+        let (bul, bh) = node_text_outlines_style_uncached(
+            &m,
+            &base.clone().with_layout(TextLayout {
+                list: 1,
+                hanging_lists: true,
+                ..TextLayout::default()
+            }),
+        )
+        .unwrap();
+        assert!(bul.len() > plain.len(), "bullet markers add glyphs");
+        assert!(bh - ph > 1.0, "list paragraph spacing grows the block");
+        // cache keys must differ for identical text with different layout
+        let k1 = base.key(0);
+        let k2 = base.clone().with_layout(TextLayout {
+            list: 1,
+            ..TextLayout::default()
+        }).key(0);
+        assert_ne!(format!("{k1:?}"), format!("{k2:?}"), "layout enters the key");
     }
 }

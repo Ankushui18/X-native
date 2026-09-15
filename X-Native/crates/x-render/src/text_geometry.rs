@@ -27,6 +27,9 @@ pub fn shaped_block(
         optical_size,
         width_axis,
         runs,
+        align,
+        decoration,
+        layout,
         ..
     } = command
     else {
@@ -57,6 +60,7 @@ pub fn shaped_block(
             *width_axis,
             *lh_mode,
         )
+        .with_text_layout(*align, *decoration, layout)
     } else {
         x_text::TextLayoutKey::new_rich(
             runs,
@@ -75,6 +79,7 @@ pub fn shaped_block(
             *width_axis,
             *lh_mode,
         )
+        .with_text_layout(*align, *decoration, layout)
     };
     x_text::ShapedTextCache::global().get_or_shape(fm, key)
 }

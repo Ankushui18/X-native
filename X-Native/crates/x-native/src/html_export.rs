@@ -150,7 +150,34 @@ fn node_css(n: &Node, doc: &Document, parent_flow: bool) -> String {
         out.push_str("  overflow: hidden;\n");
     }
     if matches!(n.kind, NodeKind::Text { .. }) {
-        out.push_str("  white-space: pre;\n");
+        // devmode CSS mirrors the design tool's text model (typed Node
+        // fields); HTML export overrides the whitespace policy because the
+        // DOM wraps by default while the engine's auto-width layers never do
+        let (truncation, max_lines) = n.resolved_truncation();
+        if matches!(truncation, x_core::TextTruncation::Disabled) && max_lines.is_none() {
+            if n.resolved_word_break() {
+                out.push_str("  overflow-wrap: break-word;\n");
+            }
+            out.push_str(if n.resolved_word_break() {
+                "  white-space: pre-wrap;\n"
+            } else {
+                "  white-space: pre;\n"
+            });
+        } else {
+            out.push_str("  overflow: hidden;\n");
+            match max_lines {
+                Some(k) if k > 0 => out.push_str(&format!(
+                    "  display: -webkit-box; -webkit-line-clamp: {k}; -webkit-box-orient: vertical;\n"
+                )),
+                _ => out.push_str("  white-space: nowrap;\n"),
+            }
+            if matches!(truncation, x_core::TextTruncation::End) {
+                out.push_str("  text-overflow: ellipsis;\n");
+            }
+        }
+        if n.text_needs_styled() {
+            out.push_str("  /* styled per the text model (see Code panel CSS) */\n");
+        }
     }
     if !n.visible {
         out.push_str("  visibility: hidden;\n");

@@ -415,6 +415,8 @@ pub enum Action {
     CycleListStyle,
     /// Toggle wrap style: normal/break-word
     ToggleTextWrapStyle,
+    /// Cycle paragraph break strategy: auto/balance/pretty (Figma wrap)
+    CycleTextWrap,
     /// Apply a color chosen from the native color popover.
     PaintPreset(bool, String),
     Align(usize, usize),
@@ -794,9 +796,6 @@ pub struct FlowState {
     pub press_span: Option<x_native::editor::WhileSpan>,
 }
 
-/// The one text-entry surface: clicking a field focuses it; keystrokes go
-/// into `buffer`; Enter commits, Esc cancels.
-#[derive(Clone, Debug)]
 /// Clipboard for copying/pasting layer properties (Figma parity)
 #[derive(Clone, Debug)]
 pub struct PropertyClipboard {
@@ -850,6 +849,9 @@ pub enum JoinStyle {
 
 impl Default for JoinStyle {
     fn default() -> Self {
+        JoinStyle::Miter
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StrokeCapType {
@@ -859,7 +861,6 @@ pub enum StrokeCapType {
     Arrow,
     Triangle,
 }
-        JoinStyle::Miter
 
 /// Shape Builder operation mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -917,9 +918,6 @@ pub struct DashPattern {
     pub offset: f64,
 }
 
-    }
-}
-
 impl Default for VectorEditMode {
     fn default() -> Self {
         Self {
@@ -930,9 +928,6 @@ impl Default for VectorEditMode {
             show_handles: true,
         }
     }
-}
-
-    pub text_align: String,
 }
 
 pub struct FieldEdit {

@@ -145,30 +145,73 @@ All properties use snake_case keys and only serialize when non-default:
 - Updated `shallow_clone()` to copy new fields
 - Updated default initialization in `Node::frame()` constructor
 
-## Testing Recommendations
+## Wiring — one source of truth for canvas and exports
 
-When testing these features:
+The typed fields above are CANONICAL. Every consumer resolves them through
+the getters in `crates/x-core/src/node.rs` (`resolved_text_align()`,
+`resolved_text_decoration()`, `resolved_truncation()`,
+`resolved_paragraph_indent()`, `resolved_small_caps()`,
+`text_wrap_mode()`, `text_needs_styled()` …). Legacy documents that still
+carry typography as `bindings` (`fs`/`ls`/`lh`/`ps`/`bs`/`tc`/`tw`/`twm`/
+`pi`/…) keep resolving through the same getters, so no file rewrites are
+required; new edits mirror onto the typed field *and* the binding.
 
-1. **Round-trip serialization**: Create a node with text properties, serialize to `.x` format, deserialize, and verify all properties match
-2. **Default values**: Verify old files without text properties load with correct defaults
-3. **Non-default values**: Test each enum variant serializes/deserializes correctly
-4. **Edge cases**: Test `max_lines: None` vs `max_lines: Some(0)` vs `max_lines: Some(100)`
-5. **Combination**: Test multiple properties set simultaneously (e.g., centered + underlined + uppercase text)
+`crates/x-render/src/ir.rs` owns the mapping from node to shaper:
 
-## Future Enhancements
+- `align_bits_of` / `align_of` / `align_from_bits` — horizontal placement
+  (0 left / 1 center / 2 right / 3 justify).
+- `decoration_bits_of` — 0 none / 1 underline / 2 strikethrough
+  (drawn by shaping as synthesized rects; `LoadedFont` has no underline
+  metrics, so thickness = `size * 0.06`).
+- `text_layout_of` — the `x_text::TextLayout` bundle: paragraph indent,
+  list bits, hanging quotes/lists, `max_lines` + truncation mode,
+  `word_break`, `vertical_trim`, and the fixed-box vertical alignment
+  (`align_v`/`box_h`). Truncation clips only when a line cap exists,
+  matching Figma's behavior.
+- `text_spec` — builds the `x_text::NodeTextSpec` shared by every sink.
 
-Potential future additions based on Figma's full typography system:
+`RenderCommand::Glyphs` carries `align`, `decoration` and `layout`, and all
+of them are part of the frame/glyph cache keys (`{align}{decoration}{layout
+.fingerprint()}` in `ir.rs`, `TextLayoutKey::align/decoration/layout` in
+`x-text`), so changing any paragraph property busts the cache exactly.
+`x_text::glyph_outlines` (fed by `TextLayout`) is the single geometry
+authority — the canvas (`scene.rs`), the PDF sink, the raster exporter, the
+text-metrics helper and the SVG outliner all go through it.
 
-1. **Line height modes**: Auto, exact pixels, percentage of font size
-2. **Letter spacing**: Per-character spacing adjustment
-3. **Text indent styles**: Hanging indent, first-line only, all lines
-4. **Paragraph styles**: Named reusable paragraph formatting
-5. **Text styles**: Named reusable text formatting (already partially implemented)
-6. **OpenType features**: Ligatures, small caps, stylistic sets
-7. **Variable font axes**: Weight, width, slant interpolation
-8. **Text on path**: Curved text following a path
-9. **Vertical text**: Writing modes for CJK languages
-10. **Bidirectional text**: Mixed RTL/LTR text support
+HTML export (`x-native/src/html_export.rs`) and the Code panel
+(`x-editor/src/devmode.rs`) emit the same model as CSS: `text-align
+(+text-align-last for justify)`, `text-decoration`, `text-transform`,
+`font-variant-caps`, `margin-bottom` (paragraph spacing), `text-indent`,
+`list-style`, `overflow-wrap`, `text-wrap` (balance/pretty),
+`-webkit-line-clamp` + `text-overflow` for truncation, and
+`hanging-punctuation`.
+
+## Still not implemented (Figma parity gaps)
+
+- Underline sub-settings: style (solid/wavy/dotted), thickness, offset,
+  skip-ink, per-decoration color. Only the synthesized solid rule exists.
+- Small caps remains a shaping MODE reachable through the `tc`/`sc`
+  bindings; there is no dedicated typed field yet (the inspector writes
+  `"tc": "sc"`).
+- Numbered-list formatting options (number style/position) always use the
+  default `1.` marker at the hanging indent.
+- Vertical alignment is expressed inside the fixed layer box; the engine
+  has no explicit auto-width/auto-height resize mode, so for auto-fit text
+  the shift is structurally a no-op (box == ink box).
+- Rich runs accept size/color/font/weight/italic/ls only; per-run case,
+  decoration and lists stay node-level.
+
+## Testing
+
+- `crates/x-core/src/node.rs` — typed fields, legacy-binding fallbacks,
+  enum `to_str`/`parse`, clone fidelity.
+- `crates/x-text/src/shaping.rs` — vertical-align shift, paragraph indent,
+  decoration ink, list/hanging geometry, layout-in-cache-key.
+- `crates/x-render/src/ir.rs` — properties flow through `Glyphs`;
+  `text_spec` mirrors the command fields.
+- `crates/x-editor/src/tests_mod.rs` — Code-panel CSS mirrors the model.
+- `crates/x-format/tests/text_props.rs` — full round trip + byte-stability
+  for plain nodes.
 
 ## References
 
@@ -176,13 +219,15 @@ Potential future additions based on Figma's full typography system:
 - [Explore text properties](https://help.figma.com/hc/en-us/articles/360039956634-Explore-text-properties)
 - [Guide to text in Figma Design](https://help.figma.com/hc/en-us/articles/360039956434-Guide-to-text-in-Figma-Design)
 - [Create bulleted and numbered lists](https://help.figma.com/hc/en-us/articles/360040449773-Create-bulleted-and-numbered-lists)
+- [Adjust text dimensions and resizing](https://help.figma.com/hc/en-us/articles/27378154668951-Adjust-text-dimensions-and-resizing)
 
 ## Commit Information
 
-- **Commit**: `55b8329`
-- **Branch**: `arena/01a0a0a5-x-native`
+- **Branch**: `arena/01a0a37b-x-native`
 - **Date**: 2026-09-15
-- **Files changed**: 3
-  - `crates/x-core/src/node.rs` (enum definitions, Node fields)
-  - `crates/x-format/src/serialize.rs` (serialization logic)
-  - `crates/x-format/src/deserialize.rs` (deserialization logic)
+- **Files changed** (wiring pass): `x-core/node.rs`, `x-text/shaping.rs`,
+  `x-text/cache.rs`, `x-render/ir.rs`, `x-render/scene.rs`,
+  `x-render/sinks.rs`, `x-render/raster.rs`, `x-render/text_geometry.rs`,
+  `x-format/serialize.rs`, `x-format/deserialize.rs`,
+  `x-native/html_export.rs`, `x-native/lib.rs`, `x-editor/devmode.rs`,
+  `apps/x-designer` (inspector + field routing)

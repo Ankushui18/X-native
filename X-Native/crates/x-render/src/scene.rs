@@ -351,12 +351,19 @@ fn encode(
         NodeKind::Text { text } => {
             let raw = effective_text(node, overrides).unwrap_or(text);
             // text case transforms the CONTENT (only when there are no rich
-            // runs — case can change char counts)
-            // text case transforms the CONTENT (only when there are no rich
-            // runs — case can change char counts)
+            // runs — case can change char counts). Canonical source is the
+            // node's typed field; the legacy "tc" binding is the fallback.
             let cased;
             let content: &str = if node.text_runs.is_empty() {
-                cased = x_core::apply_text_case(raw, node.bindings.get("tc").map(String::as_str));
+                cased = x_core::apply_text_case(
+                    raw,
+                    node.text_case_mode().or_else(|| {
+                        node.bindings
+                            .get("tc")
+                            .map(String::as_str)
+                            .filter(|v| matches!(*v, "upper" | "lower" | "title"))
+                    }),
+                );
                 cased.as_str()
             } else {
                 raw
@@ -367,14 +374,9 @@ fn encode(
             // nodes keep the engine em convention (0.72 * node.h px).
             // Rich-text runs (node.text_runs) split the block into
             // per-style parts.
-            let fs_px = node
-                .bindings
-                .get("fs")
-                .and_then(|v| v.parse::<f64>().ok())
-                .filter(|v| *v > 0.0)
-                .unwrap_or(node.h * 0.72);
+            let fs_px = node.resolved_font_size().unwrap_or(node.h * 0.72);
             let fw = node.bindings.get("fw").and_then(|v| v.parse::<u16>().ok());
-            let needs_styled = text_needs_styled(node);
+            let needs_styled = node.text_needs_styled();
             let drew = if let Some(fm) = ctx.fonts {
                 if let Some(font) = node
                     .bindings
@@ -395,11 +397,7 @@ fn encode(
                     let lh_mult = match lh_mode {
                         1 => lh_value.max(1.0) / nat_lh,
                         2 => (lh_value / 100.0 * fs_px / nat_lh).max(0.1),
-                        _ => node
-                            .bindings
-                            .get("lh")
-                            .and_then(|v| v.parse::<f64>().ok())
-                            .unwrap_or(1.2),
+                        _ => node.resolved_line_height(),
                     };
                     if node.text_runs.is_empty() && !needs_styled {
                         stats.paths += fm.encode_text_block(
@@ -418,6 +416,16 @@ fn encode(
                         } else {
                             build_rich_spans_px(node, content, color, fm, font, fs_px)
                         };
+                        // EVERY canvas text property resolves through the
+                        // node's getters and the SAME TextBlockStyle the
+                        // export sinks build — alignment, decoration,
+                        // lists, indent, truncation and vertical trim are
+                        // not canvas-only features by construction.
+                        let typo_num = |k: &str| {
+                            node.bindings
+                                .get(k)
+                                .and_then(|v| v.parse::<f64>().ok())
+                        };
                         let (n, _) = x_text::encode_rich_text(
                             scene,
                             fm,
@@ -428,30 +436,15 @@ fn encode(
                                 lh_mode,
                                 max_width: node.w.max(8.0),
                                 line_height: lh_mult,
-                                align: x_text::Align::Left,
+                                align: crate::ir::align_of(node),
                                 wrap: node.text_wrap(),
-                                paragraph_spacing: node
-                                    .bindings
-                                    .get("ps")
-                                    .and_then(|v| v.parse::<f64>().ok())
-                                    .unwrap_or(0.0),
-                                baseline_shift: node
-                                    .bindings
-                                    .get("bs")
-                                    .and_then(|v| v.parse::<f64>().ok())
-                                    .unwrap_or(0.0),
-                                small_caps: node.bindings.get("tc").map(String::as_str)
-                                    == Some("sc"),
-                                optical_size: node
-                                    .bindings
-                                    .get("opsz")
-                                    .and_then(|v| v.parse::<f32>().ok())
-                                    .unwrap_or(0.0),
-                                width_axis: node
-                                    .bindings
-                                    .get("wdth")
-                                    .and_then(|v| v.parse::<f32>().ok())
-                                    .unwrap_or(0.0),
+                                paragraph_spacing: node.resolved_paragraph_spacing(),
+                                baseline_shift: typo_num("bs").unwrap_or(0.0),
+                                small_caps: node.resolved_small_caps(),
+                                optical_size: typo_num("opsz").unwrap_or(0.0) as f32,
+                                width_axis: typo_num("wdth").unwrap_or(0.0) as f32,
+                                decoration: crate::ir::decoration_bits_of(node),
+                                layout: crate::ir::text_layout_of(node),
                             },
                         );
                         stats.paths += n;
@@ -707,18 +700,10 @@ fn encode(
 /// small caps, variable-font axes, or an EXPLICIT line-height (the plain
 /// block path always uses the face's natural line box).
 pub(crate) fn text_needs_styled(node: &Node) -> bool {
-    let sc = node.bindings.get("tc").map(String::as_str) == Some("sc");
-    let opsz = node
-        .bindings
-        .get("opsz")
-        .and_then(|v| v.parse::<f32>().ok())
-        .unwrap_or(0.0);
-    let wdth = node
-        .bindings
-        .get("wdth")
-        .and_then(|v| v.parse::<f32>().ok())
-        .unwrap_or(0.0);
-    sc || opsz > 0.0 || wdth > 0.0 || node.has_explicit_lh()
+    // canonical predicate lives on the node so the render tree, the scene
+    // encoder and the inspector agree on when the styled pipeline is
+    // REQUIRED (alignment/decoration/case/lists cannot render otherwise)
+    node.text_needs_styled()
 }
 
 pub(crate) fn build_rich_spans_px(
@@ -729,7 +714,7 @@ pub(crate) fn build_rich_spans_px(
     _default_font: usize,
     base_size_px: f64,
 ) -> Vec<x_text::Span> {
-    let node_ls = node.bindings.get("ls").and_then(|v| v.parse::<f64>().ok());
+    let node_ls = Some(node.resolved_letter_spacing()).filter(|v| *v != 0.0);
     x_core::resolve_text_parts(text, &node.text_runs)
         .iter()
         .map(|p| {
