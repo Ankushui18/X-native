@@ -32,7 +32,9 @@ pub fn angular_gradient_params(paint: &Paint, bounds: Rect) -> Option<AngularGra
             start_angle,
             end_angle,
             stops,
-            space,
+            // The mesh interpolates the stops' stored RGBA directly, so the
+            // gradient's interpolation space is not consulted here.
+            space: _,
         } => {
             // Convert center from relative (0-1) to absolute coordinates
             let abs_center = Point::new(
@@ -76,7 +78,8 @@ pub fn diamond_gradient_params(paint: &Paint, bounds: Rect) -> Option<DiamondGra
             width,
             height,
             stops,
-            space,
+            // As above: the sampled stops are already RGBA.
+            space: _,
         } => {
             // Convert center from relative (0-1) to absolute coordinates
             let abs_center = Point::new(
@@ -144,11 +147,14 @@ pub fn angular_gradient_mesh(
 
         // Calculate vertex position on the boundary
         let radius = bounds.width().max(bounds.height()) as f32;
-        let x = params.center.x + radius * angle.cos();
-        let y = params.center.y + radius * angle.sin();
+        // `center` is a kurbo Point (f64); the mesh works in f32 throughout.
+        let cx = params.center.x as f32;
+        let cy = params.center.y as f32;
+        let x = cx + radius * angle.cos();
+        let y = cy + radius * angle.sin();
 
         vertices.push(Vertex {
-            position: [x as f32, y as f32],
+            position: [x, y],
             color,
         });
 

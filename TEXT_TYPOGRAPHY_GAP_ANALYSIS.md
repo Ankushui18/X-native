@@ -2,8 +2,13 @@
 
 Source of truth for "what Figma does": the 14 articles in
 [Figma Learn → Text and typography](https://help.figma.com/hc/en-us/sections/360006606853-Text-and-typography).
-Source of truth for "what X-Native does": this tree, at commit `a2cefb0` (the
-Phase 6 merge), read line by line — every claim below carries a `file:line`.
+Source of truth for "what X-Native does": this tree, read line by line — every
+claim below carries a `file:line`. The analysis was written against `a2cefb0`
+(the Phase 6 merge); the references have since been carried forward to this
+branch's head, which repairs that merge's build damage, adds the P0 work below,
+and has been through `cargo fmt` — so the numbers are this branch's, not
+`a2cefb0`'s. If the tree moves again, grep by symbol name: the claims are about
+code, not coordinates.
 
 ## Executive Summary
 
@@ -43,7 +48,7 @@ Two more findings that are not typography but blocked all of this work:
    closing brace of `pub struct Node` (line 242 opens; `pub image_rotation:
    f64,` at 354 was followed directly by `impl Node {`), which is exactly the
    CI failure on `main`: *"error: this file contains an unclosed delimiter →
-   crates/x-core/src/node.rs:1704:3"*. Behind it, the Phase 6 commit added
+   crates/x-core/src/node.rs:1707:3"*. Behind it, the Phase 6 commit added
    `Paint::{AngularGradient, DiamondGradient}` and
    `BlendKind::{PlusDarker, PlusLighter, PassThrough}` without updating the 13
    exhaustive `match`es they appear in, plus two type errors in the new
@@ -77,9 +82,9 @@ Two more findings that are not typography but blocked all of this work:
 | CJK line breaking without spaces | `typography_fixture.rs:158-166` (test) |
 | Font fallback per run, incl. forced Noto CJK load | `font.rs:238-244` |
 | Letter spacing, word spacing, paragraph spacing | `shaping.rs:692-714`, `:845` |
-| Line-height modes: auto / px / % (CSS half-leading model) | `node.rs:415-445`, `scene.rs:392-403` |
+| Line-height modes: auto / px / % (CSS half-leading model) | `node.rs:422-452`, `scene.rs:397-417` |
 | Horizontal align in the shaper (Left/Center/Right) | `shaping.rs:662-666`, `:815`, `:1845-1860` (test) |
-| Wrap styles Auto / Balance / Pretty (Figma Aug-2026) | `node.rs:457-470`, `shaping.rs:701` |
+| Wrap styles Auto / Balance / Pretty (Figma Aug-2026) | `node.rs:464-477`, `shaping.rs:701` |
 | Synthesized small caps (70% uppercase) when no `smcp` | `shaping.rs:668-712` |
 | Variable-font axes (`wght`, `opsz`, `wdth`) | `shaping.rs:29`, `:206-215`, `:780-783` |
 | Shaped-text cache keyed on the full style tuple | `cache.rs:47`, `:123-190` |
@@ -93,21 +98,21 @@ Two more findings that are not typography but blocked all of this work:
 
 | Capability | Evidence |
 | --- | --- |
-| Text tool: click/drag creates a node and enters edit | `run.rs:3905-3921` |
-| Inline editor: caret, anchor, shift-select, ⌘A, word/line nav | `run.rs:4141-4245`, `state.rs:1371-1385` |
-| Per-range rich text: color / size / family / weight / italic / ls | `node.rs:804-816`, `run.rs:1959-1994` |
-| ⌘B / ⌘I on the selection (runs), with toggle-off semantics | `run.rs:1969-1994`, `:4227-4234` |
+| Text tool: click/drag creates a node and enters edit | `run.rs:4094-4110` |
+| Inline editor: caret, anchor, shift-select, ⌘A, word/line nav | `run.rs:4330-4434`, `state.rs:1464-1478` |
+| Per-range rich text: color / size / family / weight / italic / ls | `node.rs:807-819`, `run.rs:1962-1997` |
+| ⌘B / ⌘I on the selection (runs), with toggle-off semantics | `run.rs:1972-1997`, `:4416-4423` |
 | Bounded undo inside the editor, document undo at commit | `text_session.rs:1-82` |
-| Grapheme-correct editing (ZWJ emoji, combining marks) | `run.rs:1705` |
-| Empty-on-commit deletes the layer (Figma parity) | `run.rs:2084-2090` |
-| Auto-width text box that hugs measured ink | `run.rs:2217-2315` |
-| Manual resize / W-H edit pins the box to `tm=fixed` | `run.rs:3400-3412`, `:3515-3527`, `:8886-8895` |
-| Typography panel: family, weight, size, line height (+mode), letter/word/paragraph spacing, baseline shift, text case, opsz, wdth | `editor_ui.rs:2832-3078`, `run.rs:2346-2460` |
-| Text case transform (upper/lower/title/small caps) | `node.rs:850`, `ir.rs:1077`, `scene.rs:359` |
-| Named styles: apply/bind/detach/rename/usage/resolve + `.xlib` pinning | `document.rs:38-130`, `library.rs:101-127`, `:274-282` |
-| Dev Mode CSS: font-size/family/line-height/letter-spacing/text-wrap/weight/italic | `devmode.rs:307-345` |
-| Codegen: JSX/Tailwind/CSS/Swift/Compose/XML text output | `codegen.rs:401-430`, `devmode.rs:574-591`, `:817-818`, `:944-953` |
-| Figma REST + `.fig` binary import of text (base style + per-char runs) | `figma.rs:657-750`, `figbinary.rs:313-410` |
+| Grapheme-correct editing (ZWJ emoji, combining marks) | `run.rs:1708` |
+| Empty-on-commit deletes the layer (Figma parity) | `run.rs:2087-2093` |
+| Auto-width text box that hugs measured ink | `run.rs:2220-2318` |
+| Manual resize / W-H edit pins the box to `tm=fixed` | `run.rs:3589-3601`, `:3704-3716`, `:9235-9244` |
+| Typography panel: family, weight, size, line height (+mode), letter/word/paragraph spacing, baseline shift, text case, opsz, wdth | `editor_ui.rs:3035-3298`, `run.rs:2349-2463` |
+| Text case transform (upper/lower/title/small caps) | `node.rs:853`, `ir.rs:1135`, `scene.rs:359` |
+| Named styles: apply/bind/detach/rename/usage/resolve + `.xlib` pinning | `document.rs:37-148`, `library.rs:101-127`, `:274-282` |
+| Dev Mode CSS: font-size/family/line-height/letter-spacing/text-wrap/weight/italic | `devmode.rs:306-344` |
+| Codegen: JSX/Tailwind/CSS/Swift/Compose/XML text output | `codegen.rs:427-456`, `devmode.rs:578-595`, `:821-822`, `:948-957` |
+| Figma REST + `.fig` binary import of text (base style + per-char runs) | `figma.rs:674-767`, `figbinary.rs:313-410` |
 
 ---
 
@@ -117,54 +122,54 @@ Two more findings that are not typography but blocked all of this work:
 
 | Figma | X-Native | Status |
 | --- | --- | --- |
-| `T` tool; click → Auto width, drag → Fixed size | `run.rs:3905-3921` creates + enters edit; `tm=fixed` only ever written on manual resize (`run.rs:3410`) | 🟡 click-vs-drag does **not** set the resizing mode at creation |
-| Double-click / `Enter` to edit | `run.rs:4141+`, `is_double_click` `run.rs:2098` | ✅ |
+| `T` tool; click → Auto width, drag → Fixed size | `run.rs:4094-4110` creates + enters edit; `tm=fixed` only ever written on manual resize (`run.rs:3599`) | 🟡 click-vs-drag does **not** set the resizing mode at creation |
+| Double-click / `Enter` to edit | `run.rs:4330+`, `is_double_click` `run.rs:2101` | ✅ |
 | While editing, click another text layer to edit it | not implemented | ❌ |
 | Multi-edit text (one edit applies to N layers) | not implemented | ❌ |
 | Spellcheck | not implemented (no `spell` anywhere) | ❌ |
 | **Text on a path** tool (+ flip orientation) | not implemented | ❌ |
-| Fill on text (solid/gradient/image) | fills iterate for text: `ir.rs:1102-1160` | ✅ |
-| **Stroke on text** (outline individual characters) | the `NodeKind::Text` arm emits fills only; `active_strokes()` is used by other kinds (`ir.rs:521`, `:991`) | ❌ |
-| Effects on text (shadow/blur) | `ir.rs:1051-1058` (layer blur taps) | ✅ |
+| Fill on text (solid/gradient/image) | fills iterate for text: `ir.rs:1160-1218` | ✅ |
+| **Stroke on text** (outline individual characters) | the `NodeKind::Text` arm emits fills only; `active_strokes()` is used by other kinds (`ir.rs:559`, `:1029`) | ❌ |
+| Effects on text (shadow/blur) | `ir.rs:1174` (layer blur taps) | ✅ |
 
 ### 2.2 Explore text properties — 🟡 (the core of the gap)
 
 Figma's property list, against what our four layers actually do.
-"Model A" = the `Node.text_*` enum fields (`node.rs:336-346`);
+"Model A" = the `Node.text_*` enum fields (`node.rs:342-352`);
 "Model B" = the `bindings` string map (`font`, `fw`, `fs`, `lh*`, `ls`, `ws`,
 `ps`, `bs`, `tc`, `opsz`, `wdth`, `tw`, `tm`).
 
 | Figma property | Model | Inspector | Renderer | Export | Verdict |
 | --- | --- | --- | --- | --- | --- |
-| Font family | B `font` | ✅ `editor_ui.rs:2845` | ✅ `scene.rs:381` | ✅ | ✅ |
-| Font weight / style | B `fw` | ✅ `:2857` | ✅ `scene.rs:377-390` | ✅ | ✅ |
-| Font size | B `fs` | ✅ `:2868` | ✅ `ir.rs:1030-1038` | ✅ | ✅ |
-| Line height (auto / px / %) | B `lhm`,`lhpx`,`lhp` | ✅ + mode dropdown `:2895-2925` | ✅ `scene.rs:392-403` | ✅ | ✅ |
-| Letter spacing | B `ls` | ✅ `:2926-2940` | ✅ `ir.rs:1040-1044` | ✅ | ✅ |
-| Horizontal alignment (L/C/R/**Justify**) | A `text_align` | 🟡 cycles `run.rs:7364-7369`; the 6-button row is decorative (`let active = i == 0;` `editor_ui.rs:3050`) | ❌ **`scene.rs:431` hardcodes `Align::Left`**; `RenderCommand::Glyphs` has no align field (`ir.rs:44-66`) | ❌ no `text-align` in CSS (`devmode.rs:307-345`) | 🟡 phantom |
-| Vertical alignment (Top/Middle/Bottom) | A `text_align_vertical` | 🟡 cycles `run.rs:7380` | ❌ not read anywhere outside model/UI/format | ❌ | 🟡 phantom |
-| Decoration: underline / strikethrough (+ style, thickness, offset, skip-ink, color) | A `text_decoration` | 🟡 cycles `run.rs:7395-7399` | ❌ **no underline/strikethrough drawing code exists in the repo** | ❌ | 🟡 phantom |
-| Letter case (upper/lower/capitalize/**small caps**) | **both**: A `text_case` (dead) and B `tc` (live) | ✅ via B `run.rs:2430-2441` | ✅ via B `ir.rs:1077`, `scene.rs:359`; small caps `shaping.rs:706-712` | 🟡 A serializes (`serialize.rs:818`) but nothing writes it | 🟡 duplicate model |
+| Font family | B `font` | ✅ `editor_ui.rs:3063-3074` | ✅ `scene.rs:386` | ✅ | ✅ |
+| Font weight / style | B `fw` | ✅ `:3075-3086` | ✅ `scene.rs:382-395` | ✅ | ✅ |
+| Font size | B `fs` | ✅ `:3087-3098` | ✅ `ir.rs:1068-1083` | ✅ | ✅ |
+| Line height (auto / px / %) | B `lhm`,`lhpx`,`lhp` | ✅ + mode dropdown `:3100-3139` | ✅ `scene.rs:397-417` | ✅ | ✅ |
+| Letter spacing | B `ls` | ✅ `:3105`, `:3140` | ✅ `ir.rs:1085-1089` | ✅ | ✅ |
+| Horizontal alignment (L/C/R/**Justify**) | A `text_align` | 🟡 cycles `run.rs:7590-7595`; the 6-button row is decorative (`let active = i == 0;` `editor_ui.rs:3270`) | ❌ **`scene.rs:445` hardcodes `Align::Left`**; `RenderCommand::Glyphs` has no align field (`ir.rs:44-66`) | ❌ no `text-align` in CSS (`devmode.rs:306-344`) | 🟡 phantom |
+| Vertical alignment (Top/Middle/Bottom) | A `text_align_vertical` | 🟡 cycles `run.rs:7606` | ❌ not read anywhere outside model/UI/format | ❌ | 🟡 phantom |
+| Decoration: underline / strikethrough (+ style, thickness, offset, skip-ink, color) | A `text_decoration` | 🟡 cycles `run.rs:7621-7627` | ❌ **no underline/strikethrough drawing code exists in the repo** | ❌ | 🟡 phantom |
+| Letter case (upper/lower/capitalize/**small caps**) | **both**: A `text_case` (dead) and B `tc` (live) | ✅ via B `run.rs:2433-2444` | ✅ via B `ir.rs:1135`, `scene.rs:359`; small caps `shaping.rs:706-712` | 🟡 A serializes (`serialize.rs:884`) but nothing writes it | 🟡 duplicate model |
 | Vertical trim (cap-height box, `leading-trim`) | — | ❌ | ❌ | ❌ | ❌ |
-| Lists (bulleted / numbered, 5 indent levels, counters rotate numbers → letters → roman) | A `list_style` | 🟡 cycles `run.rs:7425-7429` | ❌ no bullet/counter drawing code | ❌ | 🟡 phantom |
+| Lists (bulleted / numbered, 5 indent levels, counters rotate numbers → letters → roman) | A `list_style` | 🟡 cycles `run.rs:7653-7657` | ❌ no bullet/counter drawing code | ❌ | 🟡 phantom |
 | List spacing | — | ❌ | ❌ | ❌ | ❌ |
-| Paragraph spacing | **both**: A `paragraph_spacing` (dead) and B `ps` (live) | ✅ via B `run.rs:2408-2413` | ✅ `shaping.rs:845` | 🟡 A serializes, never written | 🟡 duplicate model |
-| Paragraph indent (first line) | A `paragraph_indent` | ✅ field `run.rs:9005-9011` | ❌ | ❌ | 🟡 phantom |
-| Hanging quotes | A `hanging_punctuation.quotes` | ❌ no control | ❌ | ✅ round-trips `deserialize.rs:875` | ☠️ |
+| Paragraph spacing | **both**: A `paragraph_spacing` (dead) and B `ps` (live) | ✅ via B `run.rs:2411-2416` | ✅ `shaping.rs:845` | 🟡 A serializes, never written | 🟡 duplicate model |
+| Paragraph indent (first line) | A `paragraph_indent` | ✅ field `run.rs:9354-9360` | ❌ | ❌ | 🟡 phantom |
+| Hanging quotes | A `hanging_punctuation.quotes` | ❌ no control | ❌ | ✅ round-trips `deserialize.rs:920` | ☠️ |
 | Hanging lists | A `hanging_punctuation.lists` | ❌ | ❌ | ✅ | ☠️ |
-| Truncate text + Max lines | A `text_truncation`, `max_lines` | ✅ `run.rs:7410-7414`, `:9013-9019` | ❌ no ellipsis/clamp code (the only `truncate` is UI-label eliding, `paint.rs:351`) | ❌ | 🟡 phantom |
-| Wrap style (Auto / Balance / Pretty) | B `tw` | ❌ no control (the panel's "Wrap style" row is the unrelated CSS `WrapStyle`, see 2.2.1) | ✅ `node.rs:447-455`, `shaping.rs:701` | ✅ `devmode.rs:327-330` | 🟡 engine-only |
+| Truncate text + Max lines | A `text_truncation`, `max_lines` | ✅ `run.rs:7638-7642`, `:9362-9368` | ❌ no ellipsis/clamp code (the only `truncate` is UI-label eliding, `paint.rs:356`) | ❌ | 🟡 phantom |
+| Wrap style (Auto / Balance / Pretty) | B `tw` | ❌ no control (the panel's "Wrap style" row is the unrelated CSS `WrapStyle`, see 2.2.1) | ✅ `node.rs:454-462`, `shaping.rs:701` | ✅ `devmode.rs:326-329` | 🟡 engine-only |
 | Numbers: fractions, sub/superscript, slashed zero, proportional/tabular × lining/old-style | — | ❌ (`bs` baseline shift is node-wide, not per-range) | ❌ | ❌ | ❌ |
 | OpenType features (`ss01`-`ss20`, `cv01`…, `liga`/`dlig`/`calt`, `ordn`, `frac`, `tnum`…) | — | ❌ | ❌ **`rustybuzz::shape(&face, &[], buf)` — the feature list is always empty** (`shaping.rs:225`); `Span` has `variations` but no `features` (`shaping.rs:20-30`) | ❌ | ❌ |
-| Variable-font axes | B `opsz`, `wdth` (+ `fw`) | ✅ `editor_ui.rs:3006-3040` | ✅ `shaping.rs:206-215` | ❌ not in Dev Mode output | 🟡 |
+| Variable-font axes | B `opsz`, `wdth` (+ `fw`) | ✅ `editor_ui.rs:3226-3260` | ✅ `shaping.rs:206-215` | ❌ not in Dev Mode output | 🟡 |
 | Dev Mode inspection (copy all properties) | — | 🟡 partial CSS | — | 🟡 | 🟡 |
 
 #### 2.2.1 Two different things both called "wrap style"
 
-`node.rs:659-680` defines `WrapStyle { Normal, BreakWord }` (a CSS concept),
+`node.rs:663-684` defines `WrapStyle { Normal, BreakWord }` (a CSS concept),
 serialized (`serialize.rs`), round-tripped, and exposed in the inspector as
-"Wrap style" (`editor_ui.rs:3158-3175`, `run.rs:7440-7444`). Figma's *Wrap
-style* is `TextWrap { Auto, Balance, Pretty }` (`node.rs:457-470`), which we
+"Wrap style" (`editor_ui.rs:3385-3409`, `run.rs:7668-7672`). Figma's *Wrap
+style* is `TextWrap { Auto, Balance, Pretty }` (`node.rs:464-477`), which we
 also implement — in the engine — with **no inspector control**. So the panel
 label "Wrap style" is bound to the property Figma does not have, while the
 property Figma does have is unreachable from the UI. Neither `BreakWord` nor
@@ -184,9 +189,9 @@ missing is everything user-facing:
 - ❌ No "add font" / font-folder flow, no drag-a-font-in.
 - ❌ **No missing-font detection.** The notification center ships a *hardcoded
   mock*: `"Inter font not installed — using fallback"` is a literal in
-  `NotificationCenter::default()` (`state.rs:713-720`), not a probe. An
+  `NotificationCenter::default()` (`state.rs:808-815`), not a probe. An
   unresolved family silently falls back to the default face
-  (`scene.rs:381-390`).
+  (`scene.rs:386-395`).
 - ❌ No replacement/substitution dialog.
 - 🟡 `.fig`/REST import records the family name only; if it isn't installed the
   file renders in the default face with no warning.
@@ -198,8 +203,8 @@ at org / Installed by you / Google fonts / Variable fonts), hover-to-preview on
 the selected layer, per-session filter memory; fonts apply to a layer, to many
 layers, or to a range inside a layer.
 
-X-Native: the family field is a **free-text input** (`editor_ui.rs:2845-2856`)
-that writes the `font` binding verbatim (`run.rs:2361-2368`) — no validation
+X-Native: the family field is a **free-text input** (`editor_ui.rs:3065-3076`)
+that writes the `font` binding verbatim (`run.rs:2364-2371`) — no validation
 against loaded families, no list, no preview, no filters. Meanwhile
 `GoogleFonts::{catalog, search, fetch, install_family}` (`sources.rs:250-390`,
 with a curl-based downloader and on-disk cache) and
@@ -208,8 +213,8 @@ outside `x-text` and its own tests** — the picker's entire backend already
 exists and is unreachable.
 
 Applying to a *range* works (`text_style_field` scopes panel commits to the
-editor selection, `run.rs:1996-2000`); applying to *many layers* at once does
-not (`set_text_typo` uses `doc.selected_id()`, singular — `run.rs:2495-2500`).
+editor selection, `run.rs:1999-2003`); applying to *many layers* at once does
+not (`set_text_typo` uses `doc.selected_id()`, singular — `run.rs:2498-2503`).
 
 ### 2.5 Create and apply text styles — ☠️ **priority area**
 
@@ -217,7 +222,7 @@ Figma's own property table for text styles:
 
 | Text property | In a Figma text style | In `TextStyleData` today |
 | --- | --- | --- |
-| Font family, weight, size | ✓ | ✓ (`styles.rs:120-131`) |
+| Font family, weight, size | ✓ | ✓ (`styles.rs:216-236`) |
 | Line height | ✓ | ✓ (single `f64`, **no auto/px/% mode**) |
 | Letter spacing | ✓ | ✓ |
 | Paragraph spacing and indentation | ✓ | spacing ✓, **indent ✗** |
@@ -233,16 +238,16 @@ Figma's own property table for text styles:
 Everything around that struct is dead:
 
 - `StyleLibrary` (add/get/get_by_name/remove/update/list/import/name_available,
-  `styles.rs:301-408`), `Style`, `StyleData::Text`, `StyleUsage`
-  (`styles.rs:410-446`), `StyleId` — **referenced only from
+  `styles.rs:546-653`), `Style`, `StyleData::Text`, `StyleUsage`
+  (`styles.rs:655-691`), `StyleId` — **referenced only from
   `crates/x-core/src/styles.rs` itself**. No document field, no editor op, no
   serialization, no UI, no test.
 - The live path is the *deprecated* `LegacyStyle::Text { font, size,
-  letter_spacing, line_height }` (`document.rs:13-26`) — and its applier
+  letter_spacing, line_height }` (`document.rs:13-25`) — and its applier
   **throws two of the four fields away**:
 
   ```rust
-  LegacyStyle::Text { font, size, .. } => {      // document.rs:143
+  LegacyStyle::Text { font, size, .. } => {      // document.rs:160
       if !font.is_empty() { n.bindings.insert("font".into(), font.clone()); }
       if *size > 0.0 { n.h = *size; }            // legacy em convention
   }
@@ -250,16 +255,16 @@ Everything around that struct is dead:
 
   `letter_spacing` and `line_height` are bound to `..` and dropped. And size is
   written to `n.h`, which the modern pipeline ignores whenever an `fs` binding
-  exists (`ir.rs:1030-1038`: `fs_binding.unwrap_or(node.h * 0.72)`) — so
+  exists (`ir.rs:1068-1083`: `fs_binding.unwrap_or(node.h * 0.72)`) — so
   applying a text style to any node the editor has touched **changes nothing
   visible**.
 - There is no style picker in the inspector. The Typography section draws a
-  `grid-2x2` icon and a `plus` icon at `editor_ui.rs:2837-2844`; neither is in
+  `grid-2x2` icon and a `plus` icon at `editor_ui.rs:3050-3064`; neither is in
   the `hit` list, so neither is clickable.
-- No `textStyleId` handling in either Figma importer (`figma.rs:657-750`,
+- No `textStyleId` handling in either Figma importer (`figma.rs:674-767`,
   `figbinary.rs:313-410` read `style`/`styleOverrideTable` only), so styles do
   not survive a round trip through Figma.
-- `.x` carries `styles` (`serialize.rs:982-993`, `deserialize.rs:1028`) but as
+- `.x` carries `styles` (`serialize.rs:1051-1062`, `deserialize.rs:1073`) but as
   `legacy_style_json` — the modern type has no wire format.
 - `crates/x-native/tests/library_lifecycle.rs` exercises `.xlib` style
   publish/pin/merge, so the *library* half of the story is real; the *editor*
@@ -279,18 +284,18 @@ Fixed size; max-lines only with Auto height/width or hug-contents.
 X-Native has **two** of the three, and no mode switcher:
 
 - Auto width ✅ — `autosize_text_node` measures the **unwrapped** line and
-  resizes *both* axes (`run.rs:2277-2312`), gated on the `tm` binding
-  (`run.rs:2245-2249`).
+  resizes *both* axes (`run.rs:2280-2315`), gated on the `tm` binding
+  (`run.rs:2248-2252`).
 - Fixed size ✅ — `tm=fixed` is written on handle-drag, scale-drag and W/H
-  field commit (`run.rs:3410`, `:3525`, `:8892`).
+  field commit (`run.rs:3599`, `:3714`, `:9241`).
 - **Auto height ❌** — nothing ever writes `tm=auto-height`; there is no mode
   control in the Layout section, and because auto-width measures unwrapped, a
   paragraph can never reflow at a fixed width and grow downward. This is the
   single most common text mode in real files.
-- Scale tool ✅ for font size — `run.rs:1533-1547` resolves the line box
+- Scale tool ✅ for font size — `run.rs:1536-1550` resolves the line box
   "linear in fs for every mode → scale once".
 - Creation semantics 🟡 — `Tool::Text` always creates `w.max(120.0) × 14.0`
-  and enters edit (`run.rs:3905-3911`); whether the user clicked or dragged is
+  and enters edit (`run.rs:4094-4100`); whether the user clicked or dragged is
   not consulted, so drag-to-create does not produce a Fixed-size box (it becomes
   Fixed only after the *next* manual resize).
 - Overflow 🟡 — with no truncation rendering, Fixed-size text that overflows
@@ -303,10 +308,10 @@ preview, click to follow (external / other file / page / frame), edit/delete
 from the link modal, links work in prototypes, underlined by default, `⌘U`
 toggles the underline.
 
-X-Native: no link model at all. `TextRun` (`node.rs:804-816`) has
+X-Native: no link model at all. `TextRun` (`node.rs:807-819`) has
 color/size/font/weight/italic/ls and no `href`; there is no `hyperlink` field
 on `Node`; neither Figma importer reads a link (REST `hyperlink` /
-`.fig` `hyperlink` are not in `figma.rs:657-750` or `figbinary.rs:313-410`); no
+`.fig` `hyperlink` are not in `figma.rs:674-767` or `figbinary.rs:313-410`); no
 export emits one. The prototype system (`x-core/src/prototype.rs`,
 `Interaction`) navigates between frames on node clicks, which is the substrate a
 "link to frame/page" would reuse — but text-range links need a new run property
@@ -316,7 +321,7 @@ already builds caret positions, so the geometry exists).
 ### 2.8 Add emojis and smart symbols to text — 🟡
 
 - Emoji **input and shaping** ✅ — grapheme-cluster editing keeps ZWJ sequences
-  intact (`run.rs:1705`), fallback maps emoji without crashing, and the
+  intact (`run.rs:1708`), fallback maps emoji without crashing, and the
   contract is pinned by a test that is explicit about the limit:
   *"Color rendering (COLR/CBDT) is a known gap; this documents the current
   contract: no panic, graceful monochrome-or-skip"*
@@ -326,7 +331,7 @@ already builds caret positions, so the geometry exists).
 - ❌ No `:shortcode` autocomplete (`:heart`, `:plus`), no emoji picker.
 - ❌ No smart symbols: nothing converts `->`→`→`, `<-`→`←`, `vv`→`↓`, `^^`→`↑`,
   `(c)`→`©`, `(r)`→`®`, `(tm)`→`™`, `[ ]`→`▢`, and no smart quotes. There is no
-  input-rewrite hook in the editor at all (`run.rs:4223-4242` inserts text
+  input-rewrite hook in the editor at all (`run.rs:4412-4431` inserts text
   verbatim).
 
 ### 2.9 Create bulleted and numbered lists — 🟡 phantom
@@ -339,8 +344,8 @@ their item; stroke weight and effects apply to bullets too; `⌘Z` right after a
 list shortcut undoes just the styling.
 
 X-Native: `ListStyle { None, Bulleted, Numbered }` on the node
-(`node.rs:632-655`), a cycling inspector control (`editor_ui.rs:3145-3157`,
-`run.rs:7425-7429`), and `.x` round-trip (`serialize.rs`, `deserialize.rs:880`).
+(`node.rs:636-659`), a cycling inspector control (`editor_ui.rs:3372-3384`,
+`run.rs:7653-7657`), and `.x` round-trip (`serialize.rs`, `deserialize.rs:925`).
 **No renderer draws a bullet or a counter**, there is no per-paragraph/per-line
 list model (Figma lists are per-paragraph with a level; ours is one flag for the
 whole layer), no indent levels, no list spacing, no markdown-style auto-list on
@@ -393,7 +398,7 @@ output.
 
 X-Native: the engine sets axes per span (`shaping.rs:206-215`), the inspector
 has two numeric fields — Optical size (`opsz`) and Width (`wdth`) —
-(`editor_ui.rs:3006-3040`, `run.rs:2443-2459`), and weight rides `fw`.
+(`editor_ui.rs:3226-3260`, `run.rs:2446-2462`), and weight rides `fw`.
 Gaps: ❌ no sliders, ❌ **no enumeration of the axes a face actually has**
 (`font.rs:352` notes static faces ignore `wght`; there is no `fvar` reader, so
 author axes like `GRAD`, `slnt`, `SOFT` are invisible), ❌ no `slnt`/italic-axis
@@ -409,11 +414,11 @@ field, ❌ no per-axis ranges/clamping, ❌ no Dev Mode output for axes, ❌ no
   the directory scan stops early (`font.rs:238-244`), matching Figma's
   "falls back to a Noto font".
 - ✅ `.fig`/Sketch import handle astral/UTF-16 text correctly
-  (`sketch.rs:1974`, `json.rs:141`, `:433`).
+  (`sketch.rs:1979`, `json.rs:141`, `:433`).
 - ❌ No font picker, so the SC/TC/JP/KR shorthand naming and the "pick the
   right Noto for your language" flow Figma documents have no surface.
 - ❌ **No IME / composing-text support.** The editor consumes
-  `WindowEvent::KeyboardInput` + `text` directly (`run.rs:296`, `:4223-4242`);
+  `WindowEvent::KeyboardInput` + `text` directly (`run.rs:299`, `:4412-4431`);
   nothing handles `WindowEvent::Ime` (preedit/composition), so Pinyin/Kana/
   Hangul input cannot commit. For CJK *authoring* (as opposed to CJK
   *rendering*) this is the blocking gap. Figma's article is about fonts and
@@ -433,7 +438,7 @@ field, ❌ no per-axis ranges/clamping, ❌ no Dev Mode output for axes, ❌ no
   is no `dir`/`rtl` binding, no UI, and no `.fig`/REST import of
   `textDirection`.
 - ❌ **Editing is logical, not visual.** Arrow keys move by char index
-  (`run.rs:4141-4222`); in mixed RTL/LTR text Figma moves the caret
+  (`run.rs:4330-4411`); in mixed RTL/LTR text Figma moves the caret
   forward/backward *visually* per the paragraph direction. Same for
   click-to-caret and drag-selection: `p0_features.rs:37-45` maps y→line,
   x→char on the *logical* string.
@@ -452,11 +457,11 @@ generate most of the rows above.
 Model A (`Node.text_align`, `text_align_vertical`, `text_decoration`,
 `text_case`, `text_truncation`, `max_lines`, `paragraph_spacing`,
 `paragraph_indent`, `hanging_punctuation`, `list_style`, `wrap_style` —
-`node.rs:336-346`) was added by the Phase-6 "text formatting" commit: model +
+`node.rs:342-352`) was added by the Phase-6 "text formatting" commit: model +
 serializer + deserializer + inspector labels + cycle actions.
 
 Model B (the `bindings` map) is what the renderers actually read
-(`ir.rs:1029-1050`, `scene.rs:370-455`).
+(`ir.rs:1067-1098`, `scene.rs:370-469`).
 
 Reference counts outside `node.rs` tell the story — every Model A field is
 touched ~5 times, all of them in `editor_ui.rs` (label), `run.rs` (cycle),
@@ -480,7 +485,7 @@ shift, small caps, opsz, wdth, runs. It has **no align, no decoration, no list
 state, no truncation, no indent** — so even a correctly-modelled property has
 no way to reach `sinks.rs`/`raster.rs`/`text_geometry.rs`. `scene.rs` bypasses
 the IR and calls `x_text` directly, and hardcodes `align: Align::Left`
-(`scene.rs:431`). Alignment therefore needs: an `align` field on the IR command,
+(`scene.rs:445`). Alignment therefore needs: an `align` field on the IR command,
 a `Justify` variant on `x_text::Align` (`shaping.rs:662-666`) with word-spacing
 distribution in `layout_lines`, and the node→command plumbing.
 
@@ -496,9 +501,9 @@ Three small changes unlock Figma's entire *Details* tab.
   deprecated one (`document.rs`) drops half its payload and writes a field the
   renderer ignores.
 - `Node::bind`/`bound_number` document `"fontsize"` as a bindable property
-  (`node.rs:1381-1393`) and there is a test asserting
+  (`node.rs:1384-1396`) and there is a test asserting
   `bound_number("fontsize", …)` resolves (`x-render/tests_mod.rs:597`) — but the
-  renderers only ever resolve `"radius"` (`ir.rs:943`) and
+  renderers only ever resolve `"radius"` (`ir.rs:981`) and
   `"opacity"`/`"radius"` (`scene.rs:255`, `:279`). **A test passes for a
   behaviour no product path performs.**
 - The only variable-binding UI is a context menu
@@ -538,7 +543,7 @@ deserialize}.rs`, `x-editor/src/`, `apps/.../{editor_ui,run,state}.rs`.
 Figma's whole *included* set — family, weight, size, line-height **mode +
 value**, letter spacing, paragraph spacing, paragraph indent, case, synthesized
 small caps, decoration, list style, wrap, wrap style, hanging punctuation — and
-`from_node` / `apply_to_node` / `clear_from_node` (`:284`, `:320`, `:361`) move
+`from_node` / `apply_to_node` / `clear_from_node` (`:273`, `:309`, `:350`) move
 it through **Model B**, the bindings every renderer reads
 (`TEXT_STYLE_BINDINGS`, `:266`). The registry is `Document.styles` behind a
 typed façade (`document.rs:314-383`: `text_style_names`, `text_style`,
@@ -546,31 +551,31 @@ typed façade (`document.rs:314-383`: `text_style_names`, `text_style`,
 `text_style_usage`) plus `detach_text_style` (`:74`), and
 `LegacyStyle::Text`'s applier writes the px contract instead of stuffing the
 size into `n.h` (`:160`). `.x` carries the full set
-(`serialize.rs:1172` `text_style_json` ⇄ `deserialize.rs:1190`
+(`serialize.rs:1211` `text_style_json` ⇄ `deserialize.rs:1203`
 `parse_text_style`, including the back-compat bare `lh` and `"Inter 700"`
 family/weight splits). Tests: `document.rs:405` (bindings renderers read),
 `:431` (detach keeps type, drops link), `:472` (update propagates to every
-consumer), `:584` (rename / detach / usage), plus the format round-trip.
+consumer), `:581` (rename / detach / usage), plus the format round-trip.
 *Still open:* italic-as-an-axis and OpenType feature toggles are not in the
 style payload (Figma includes the latter); `Document.styles` mutations are not
 on any undo stack — see the debt note under P0.2.
 
 **P0.2 Typography style picker in the inspector.**
-Make the dead icons at `editor_ui.rs:2837-2844` real: a style row showing the
+Make the dead icons at `editor_ui.rs:3037-3051` real: a style row showing the
 applied style name (or "Mixed"/none), a dropdown listing text styles with
 create/apply/detach, and hit registration. Reuse the existing dropdown pattern
-(`Action::LhDropdown`, `editor_ui.rs:4171`).
+(`Action::LhDropdown`, `editor_ui.rs:4519`).
 
 *Implemented on this branch.* The two icons own hit rects and hover tint now
-(`editor_ui.rs:2840-2851`): the styles button toggles `Action::TextStyleDropdown`,
+(`editor_ui.rs:3040-3051`): the styles button toggles `Action::TextStyleDropdown`,
 the plus fires `Action::CreateTextStyle`. `paint_text_style_dropdown`
-(`:4230`) lists every style in the document, highlights the one the selection
+(`:4568`) lists every style in the document, highlights the one the selection
 carries, and appends the rows that act on the current selection — *Update
 '\<name\>' from selection* and *Detach style* when it is linked, *Create text
 style* when it is a text layer, *No text styles yet* when the registry is
 empty. The four operations live on `App` next to the other typography mutators
 (`run.rs:2552` apply, `:2583` create, `:2610` detach, `:2633` update, `:2652`
-propagate-across-pages), are dispatched at `run.rs:7845-7880`, and report
+propagate-across-pages), are dispatched at `run.rs:7893-7928`, and report
 through `app.status`; the menu closes on outside click and `Escape` with the
 other dropdowns, and the two typography menus are mutually exclusive.
 End-to-end test:
@@ -587,14 +592,14 @@ registry inside `Command` or snapshotting it in the same step. (2) **Anchor
 bug found while cloning the pattern:** `paint_lh_dropdown` anchored on
 `ED_TITLE_H` instead of the panel's `y_entry` (`ED_TITLE_H + 89`, the chrome
 sum `paint_frame_dropdown` builds), floating that menu 89px above the
-Line-height field. Fixed at `editor_ui.rs:4184-4191`; `paint_frame_dropdown`
+Line-height field. Fixed at `editor_ui.rs:4522-4529`; `paint_frame_dropdown`
 still ignores `scroll_right` and drifts when the panel is scrolled (left alone
 — it needs a visual check, not a guess).
 
 **P0.3 Variable-bound typography that actually resolves.**
 Resolve number variables for `fontsize`, `lineheight`, `letterspacing`,
-`paragraphspacing` in both render paths (`ir.rs:1029-1050`,
-`scene.rs:370-410`) via the existing `bound_number` helper, and make the
+`paragraphspacing` in both render paths (`ir.rs:1067-1098`,
+`scene.rs:370-424`) via the existing `bound_number` helper, and make the
 inspector able to *create* the binding (the panel fields accept a variable
 reference; the dead `BindVariable` context action gets a dispatcher or is
 removed). Modes must stay respected (a variable supplies the value, `lhm`
@@ -620,7 +625,7 @@ paragraph spacing in the layout pass).
 
 **P0.4 Horizontal alignment renders.**
 Add `align` to `RenderCommand::Glyphs`, stop hardcoding `Align::Left`
-(`scene.rs:431`), read it from Model B (new `ta` binding) with Model A as the
+(`scene.rs:445`), read it from Model B (new `ta` binding) with Model A as the
 fallback, add `Align::Justify` + word-spacing distribution in `layout_lines`,
 and emit `text-align` in Dev Mode CSS. Delete the decorative 6-button row or
 make it the real control.
@@ -636,14 +641,14 @@ make it the real control.
 | P1.5 | Paragraph indent + hanging quotes | `x-text` line positioning |
 | P1.6 | Vertical trim (cap-height bounding box) + `leading-trim` in Dev Mode | `node.rs` metrics, `x-text` |
 | P1.7 | Collapse Model A / Model B into one representation; delete `WrapStyle{Normal,BreakWord}` or rename it, and expose Figma's `TextWrap` (Auto/Balance/Pretty) in the panel | repo-wide |
-| P1.8 | Auto-height resizing mode + a Layout-section mode switcher; click-vs-drag creation semantics | `run.rs:2217-2315`, `:3905-3921` |
+| P1.8 | Auto-height resizing mode + a Layout-section mode switcher; click-vs-drag creation semantics | `run.rs:2220-2318`, `:4094-4110` |
 
 ### P2 — Fonts and OpenType
 
 | # | Item |
 | --- | --- |
 | P2.1 | Font picker: search + filters (All / In this file / Installed / Google / Variable), hover-preview, backed by the already-written `SystemFonts::family_names` + `GoogleFonts::{catalog,search,fetch,install_family}` |
-| P2.2 | Real missing-font detection replacing the mock notification (`state.rs:713-720`), with a substitution dialog |
+| P2.2 | Real missing-font detection replacing the mock notification (`state.rs:808-815`), with a substitution dialog |
 | P2.3 | OpenType features channel: `Span.features` → `rustybuzz::Feature` slice (`shaping.rs:225`) + cache key (`cache.rs`), then a Details panel (letterforms, `ss##`, `cv##`, figures, fractions, slashed zero) with hover previews |
 | P2.4 | Variable-font axis enumeration from `fvar` → sliders for every axis the face has (incl. author axes), axis ranges, Dev Mode output |
 | P2.5 | Numbers: per-range superscript/subscript with faux-synthesis fallback, tabular/oldstyle figures, fractions |
@@ -663,7 +668,7 @@ make it the real control.
 | P3.8 | Stroke on text (outline glyphs) |
 | P3.9 | Spellcheck |
 | P3.10 | Per-paragraph properties (wrap style, alignment, indent, list level) instead of per-layer only |
-| P3.11 | Figma `textStyleId` / `hyperlink` / `textAutoResize` / `textTruncation` / `maxLines` / `paragraphSpacing` / `paragraphIndent` / `listSpacing` / `opentypeFlags` in both importers and the REST/`.fig` exporters (today the exporter writes only family/size/lineHeightPx/letterSpacing + runs — `figma.rs:262`) |
+| P3.11 | Figma `textStyleId` / `hyperlink` / `textAutoResize` / `textTruncation` / `maxLines` / `paragraphSpacing` / `paragraphIndent` / `listSpacing` / `opentypeFlags` in both importers and the REST/`.fig` exporters (today the exporter writes only family/size/lineHeightPx/letterSpacing + runs — `figma.rs:279`) |
 
 ---
 
