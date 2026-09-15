@@ -9085,10 +9085,13 @@ impl Host {
             }
 
             Action::SetGradientType { gradient_type } => {
-                let Some(id) = self.app.doc().selected_id() else {
+                // The selection is a precondition here, not an input: converting
+                // between gradient types is not implemented, so this handler
+                // only reports. Binding the id produced an unused variable.
+                if self.app.doc().selected_id().is_none() {
                     self.app.status = "Select a layer with a gradient fill first".into();
                     return;
-                };
+                }
                 // This would require converting between gradient types
                 // For now, just show a status message
                 self.app.status = format!(
