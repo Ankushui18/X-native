@@ -766,7 +766,10 @@ fn segment_deviation(cmd: PathCmd, from: (f64, f64)) -> f64 {
     let PathCmd::CurveTo(c1x, c1y, c2x, c2y, x, y) = cmd else {
         return 0.0;
     };
-    let mut worst = 0.0;
+    // Pinned to f64 on purpose: rustc resolves an inherent method call from the
+    // receiver alone, so `worst.max(..)` on a bare `0.0` literal is E0689
+    // ("ambiguous numeric type {float}") even though every operand here is f64.
+    let mut worst: f64 = 0.0;
     for k in 1..16 {
         let t = k as f64 / 16.0;
         let mt = 1.0 - t;
