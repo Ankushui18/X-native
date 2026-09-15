@@ -186,6 +186,21 @@ HTML export (`x-native/src/html_export.rs`) and the Code panel
 `-webkit-line-clamp` + `text-overflow` for truncation, and
 `hanging-punctuation`.
 
+### Placement contract (`glyph_outlines`)
+
+The paragraph pass in `layout_lines_wrapped_styled` reserves lead width
+(indent + non-hanging marker) inside `line.width`; the placement pass
+applies the SAME lead exactly once — pen start `body_lead`, width
+`line.width - body_lead` — so center/right/justify align inside the
+indented box and never double-count. Justify stretches the line's SPACE
+advances (never break-opportunity counts, which include CJK/hyphen
+positions with no stretchable glyph), adding the slack once at the glyph
+level and once consistently at the pen level. `decoration` is a bit mask
+(1 underline, 2 strike, 3 both). `overflow_hidden` without a `max_lines`
+cap drops WHOLE lines whose box top starts past `box_h` and clamps the
+returned height to it; with a cap the wrap pass already trimmed the lines.
+Auto-fit text is structurally unaffected (box == ink box).
+
 ## Still not implemented (Figma parity gaps)
 
 - Underline sub-settings: style (solid/wavy/dotted), thickness, offset,

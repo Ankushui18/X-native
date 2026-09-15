@@ -2176,6 +2176,7 @@ impl App {
         ps: f64,
         sc: bool,
         wrap: x_native::TextWrap,
+        layout: Option<x_native::text::TextLayout>,
     ) -> (f64, f64) {
         let font = self.fonts.fonts.default_font().unwrap_or(0);
         // width: per-segment advance widths (small caps re-sizes segments —
@@ -2202,6 +2203,9 @@ impl App {
             wrap,
             paragraph_spacing: ps,
             small_caps: sc,
+            // the paragraph pass (indent/list/trim/caps) so the measured
+            // height matches what the canvas will paint
+            layout: layout.unwrap_or_default(),
             ..Default::default()
         };
         let (_, total_h) = x_native::text::glyph_outlines(&self.fonts.fonts, &spans, font, &style);
@@ -2272,6 +2276,31 @@ impl App {
         // fits what is actually rendered; small caps re-sizes segments)
         let tc = tc.as_deref();
         let text = x_native::apply_text_case(&text, tc);
+        let node_layout = crate::editor_ui::find_node(&self.doc().editor_ref().root, id)
+            .map(|n| {
+                let (trunc, max_lines) = n.resolved_truncation();
+                let hanging = n.resolved_hanging_punctuation();
+                x_native::text::TextLayout {
+                    paragraph_indent: n.resolved_paragraph_indent(),
+                    list: match n.resolved_list_style() {
+                        x_native::ListStyle::None => 0,
+                        x_native::ListStyle::Bulleted => 1,
+                        x_native::ListStyle::Numbered => 2,
+                    },
+                    hanging_quotes: hanging.quotes,
+                    hanging_lists: hanging.lists,
+                    max_lines: max_lines.unwrap_or(0).min(u32::MAX as usize) as u32,
+                    truncate: match trunc {
+                        x_native::TextTruncation::Disabled => 0,
+                        x_native::TextTruncation::End => 1,
+                        x_native::TextTruncation::Middle => 2,
+                    },
+                    overflow_hidden: max_lines.map(|m| m > 0).unwrap_or(false),
+                    word_break: n.resolved_word_break(),
+                    vertical_trim: n.vertical_trim,
+                    ..Default::default()
+                }
+            });
         let (line_w, block_h) = self.measure_text_node(
             &text,
             fs,
@@ -2281,6 +2310,7 @@ impl App {
             ps,
             tc == Some("sc"),
             x_native::TextWrap::Auto,
+            node_layout,
         );
         let w = {
             let doc = self.doc();
@@ -2463,6 +2493,9 @@ impl App {
             return false;
         };
         self.doc().editor().mutate_visual_stack(id.as_str(), |n| {
+            // "auto" clears the typed multiplier too — otherwise it would
+            // silently keep winning over the natural line box
+            n.line_height = 0.0;
             n.bindings.remove("lh");
             n.bindings.remove("lhm");
             n.bindings.remove("lhpx");
@@ -9921,6 +9954,7 @@ mod tests {
             t.ps,
             t.tc == "sc",
             x_native::TextWrap::Auto,
+            None,
         );
         assert!(
             w + 0.6 >= line_w && w - line_w < 5.0,

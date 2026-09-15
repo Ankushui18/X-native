@@ -360,6 +360,7 @@ pub fn layout_lines_wrapped_styled(
         && layout.max_lines == 0
         && layout.truncate == 0
         && !layout.overflow_hidden
+        && layout.align_v == 0
     {
         return wrapped;
     }
@@ -436,7 +437,11 @@ pub fn layout_lines_wrapped_styled(
                     line.spans.insert(1, ms);
                 }
             }
-            line.width += lead + if marker.is_empty() { 0.0 } else { marker_w };
+            // `lead` is carried by the zero-width lead span and `marker_w`
+            // by the marker span's own advance — line.width already folds
+            // both through greedy wrapping; adding them again would make
+            // placement double-count (and skew right/center alignment)
+            line.width += lead;
         }
         para_start = line.para_end;
         out.push(line);
@@ -1076,7 +1081,7 @@ pub struct NodeTextSpec<'a> {
     pub lh_mode: u8,
     /// x-text placement (Left/Center/Right/Justify)
     pub align: Align,
-    /// 0 none / 1 underline / 2 strikethrough / 3 both
+    /// decoration bits: 1 underline, 2 strikethrough (3 = both)
     pub decoration: u8,
     pub layout: TextLayout,
 }
@@ -1256,12 +1261,15 @@ pub fn glyph_outlines(
     // paragraph bookkeeping for indent/list lead-in (the wrap pass already
     // reserved these widths; here we actually shift the pen)
     let mut para_start = true;
-    let mut prev_para_end = true;
     // vertical trim tracking (Figma "Trim lines and paragraphs"): the
     // block shrinks to the first ink top and the last ink bottom
     let mut top_ink = f64::MAX;
     let mut bottom_ink = 0.0f64;
+    // per-line glyph ranges + box tops (the overflow-hidden clip below
+    // drops WHOLE lines, never half a line)
+    let mut line_starts: Vec<(usize, f64)> = Vec::with_capacity(lines.len());
     for (li, line) in lines.iter().enumerate() {
+        line_starts.push((out.len(), y));
         let max_size = line.spans.iter().map(|s| s.size).fold(12.0, f64::max);
         let f0 = &fonts.fonts[default_font];
         let natural = (f0.ascent - f0.descent + f0.line_gap) * (max_size / f0.units_per_em);
@@ -1283,27 +1291,34 @@ pub fn glyph_outlines(
         } else {
             0.0
         };
+        // placement box: a positive lead (paragraph indent / non-hanging
+        // list marker) shifts AND narrows the line body; centering and
+        // right-aligning happen INSIDE the indented box, exactly like the
+        // wrap pass that reserved the lead in line.width
+        let text_w = (line.width - body_lead).max(0.0);
+        let slack =
+            (style.max_width - body_lead - text_w).clamp(0.0, style.max_width);
+        // justify stretches the SPACE advances of the line (CSS/Figma
+        // "justify stretches words"), so the divisor is the space count —
+        // break opportunities include CJK/hyphen positions that carry no
+        // stretchable glyph
+        let mut extra = 0.0f64;
         let x0 = match style.align {
             Align::Left => body_lead,
-            Align::Center => ((style.max_width - line.width) / 2.0 + body_lead).max(0.0),
-            Align::Right => style.max_width - line.width,
+            Align::Center => body_lead + slack / 2.0,
+            Align::Right => body_lead + slack,
             // Figma justify: the paragraph's LAST line (and a line with no
             // place to stretch) stays left-aligned; other lines spread
             // their word spaces to fill the box
             Align::Justify => {
-                if line.para_end || li + 1 == lines.len() || line.width >= style.max_width {
+                let gaps = line.spans.iter().map(span_spaces).sum::<usize>() as f64;
+                if line.para_end || li + 1 == lines.len() || gaps == 0.0 || slack <= 0.01 {
                     body_lead
                 } else {
-                    (style.max_width - line.width).max(0.0)
+                    extra = slack / gaps;
+                    body_lead
                 }
             }
-        };
-        // distribute the justify slack over this line's space advances
-        let gaps: f64 = line.spans.iter().map(|sp| span_breaks(sp).saturating_sub(1)).sum::<usize>() as f64;
-        let extra = if style.align == Align::Justify && x0 > 0.0 && gaps > 0.0 {
-            x0 / gaps
-        } else {
-            0.0
         };
         let base = x0;
         let mut pen = base;
@@ -1326,7 +1341,9 @@ pub fn glyph_outlines(
                     }
                     x += g.x_advance + if extra > 0.0 && g.is_space { extra } else { 0.0 };
                 }
-                pen += run.width + (extra * span_breaks(span).saturating_sub(1) as f64);
+                // each stretched space moves the pen once — exactly where
+                // the glyph advances above got it (never both levels)
+                pen += run.width + extra * span_spaces(span) as f64;
             }
         }
         // decoration: Figma paints underline/strikethrough as real line
@@ -1345,10 +1362,10 @@ pub fn glyph_outlines(
                     color,
                 });
             };
-            if style.decoration == 1 || style.decoration == 3 {
+            if style.decoration & 1 != 0 {
                 mk(baseline + f0.descent.abs() * fs_sc * 0.25);
             }
-            if style.decoration == 2 || style.decoration == 3 {
+            if style.decoration & 2 != 0 {
                 let cap = if f0.cap_height > 0.0 {
                     f0.cap_height
                 } else {
@@ -1361,17 +1378,44 @@ pub fn glyph_outlines(
         bottom_ink = bottom_ink.max(line_bottom);
         y += lh;
         para_start = line.para_end;
-        let _ = prev_para_end;
         // paragraph spacing separates paragraphs — it never pads the block
         // after the final line (Figma/CSS-collapsed semantics)
         if line.para_end && li + 1 < lines.len() {
             y += style.paragraph_spacing;
         }
     }
+    let mut height = y;
+    // overflow-hidden without a line cap (Figma clips whole lines that run
+    // past a fixed-size text box). With a cap the wrap pass already
+    // dropped the overflow lines, so this only handles the cap-free case.
+    if style.layout.overflow_hidden
+        && style.layout.max_lines == 0
+        && style.layout.box_h > 0.5
+        && height > style.layout.box_h
+    {
+        let ranges: Vec<(usize, f64)> = line_starts
+            .iter()
+            .cloned()
+            .chain(std::iter::once((out.len(), f64::MAX)))
+            .collect();
+
+        // last kept line's end (tops are monotonic, but paragraph spacing
+        // and mixed sizes make "last index whose top fits" the contract)
+        let last_kept = ranges
+            .iter()
+            .enumerate()
+            .take(ranges.len() - 1)
+            .filter(|(_, (_, top))| *top < style.layout.box_h)
+            .map(|(i, _)| i)
+            .next_back()
+            .unwrap_or(0);
+        let end_i = ranges[last_kept + 1].0;
+        out = out.as_slice()[..end_i].to_vec();
+        height = style.layout.box_h;
+    }
     // vertical trim: pull the block to its ink box and shift every glyph
     // (all sinks derive height from this return, so one pass keeps them
     // consistent — auto-layout measurement included)
-    let mut height = y;
     if style.layout.vertical_trim && height > 0.0 && top_ink.is_finite() {
         let shift = -top_ink;
         height = (bottom_ink - top_ink).max(1.0);
@@ -1396,20 +1440,10 @@ pub fn glyph_outlines(
     (out, height)
 }
 
-/// Break-opportunity pieces of a span (the justify slot count + 1).
-fn span_breaks(sp: &Span) -> usize {
-    let mut n = 0usize;
-    let mut last = 0usize;
-    for b in break_opportunities(&sp.text) {
-        if b > last && b <= sp.text.len() {
-            n += 1;
-            last = b;
-        }
-    }
-    if last < sp.text.len() {
-        n += 1;
-    }
-    n
+/// Stretchable word separators in a span (CSS justify widens spaces;
+/// hyphen/CJK break positions carry no glyph to stretch).
+fn span_spaces(sp: &Span) -> usize {
+    sp.text.matches(' ').count()
 }
 
 /// Shape one Text node from a full style struct (cache-routed). Used by
@@ -2656,5 +2690,133 @@ mod tests {
             ..TextLayout::default()
         }).key(0);
         assert_ne!(format!("{k1:?}"), format!("{k2:?}"), "layout enters the key");
+    }
+
+    /// Justify spreads the STRETCHED space advances exactly to the box:
+    /// the line must neither overshoot (double-advance bug) nor fall
+    /// short, and the stretch must ride the pen as well as the glyphs.
+    #[test]
+    fn justify_stretches_spaces_exactly_to_box() {
+        let m = fonts();
+        let spec = |align: Align| NodeTextSpec {
+            text: "Hello world hello",
+            size: 20.0,
+            max_width: 400.0,
+            font: None,
+            color: Color::WHITE,
+            lh: 1.2,
+            align,
+            ..Default::default()
+        };
+        let (auto, _) = node_text_outlines_style_uncached(&m, &spec(Align::Left)).unwrap();
+        let (just, _) = node_text_outlines_style_uncached(&m, &spec(Align::Justify)).unwrap();
+        assert_eq!(just.len(), auto.len(), "no glyphs invented by justify");
+        // the last word must move right by (roughly) the full slack, while
+        // every advance stays inside the box — the double-advance
+        // regression stretched the pen AND the glyph advances (2x slack)
+        let last_word_x = |gs: &[OutlineGlyph]| {
+            gs.iter()
+                .filter(|g| g.transform.translation().y < 1e9)
+                .map(|g| g.transform.translation().x)
+                .fold(0.0f64, f64::max)
+        };
+        let shift = last_word_x(&just) - last_word_x(&auto);
+        assert!(shift > 50.0, "justify spreads the word spaces (shift {shift})");
+        assert!(
+            last_word_x(&just) < 400.0,
+            "stretched line stays inside the box ({})",
+            last_word_x(&just)
+        );
+    }
+
+    /// Indent/list lead: placement adds it once; center/right align inside
+    /// the indented box (never double-count the reserved width).
+    #[test]
+    fn lead_placed_once_and_alignment_respects_it() {
+        let m = fonts();
+        let base = NodeTextSpec {
+            text: "Hi",
+            size: 20.0,
+            max_width: 300.0,
+            font: None,
+            color: Color::WHITE,
+            lh: 1.2,
+            ..Default::default()
+        };
+        let (plain, _) = node_text_outlines_style_uncached(&m, &base).unwrap();
+        let indented = base.clone().with_layout(TextLayout {
+            paragraph_indent: 50.0,
+            ..TextLayout::default()
+        });
+        let (left_ind, _) =
+            node_text_outlines_style_uncached(&m, &indented.clone().with_align(Align::Left))
+                .unwrap();
+        let min_x = |gs: &[OutlineGlyph]| {
+            gs.iter()
+                .map(|g| g.transform.translation().x)
+                .fold(f64::MAX, f64::min)
+        };
+        assert!(
+            (min_x(&left_ind) - (min_x(&plain) + 50.0)).abs() < 0.5,
+            "first line shifted exactly one lead"
+        );
+        let (centered, _) =
+            node_text_outlines_style_uncached(&m, &indented.clone().with_align(Align::Center))
+                .unwrap();
+        let text_w = min_x(&plain); // 300-wide box, left text starts at 0
+        let _ = text_w;
+        let line_w = min_x(&left_ind) - min_x(&plain); // == text width
+        let expect = 50.0 + (300.0 - 50.0 - line_w).max(0.0) / 2.0;
+        assert!(
+            (min_x(&centered) - expect).abs() < 1.0,
+            "center inside the indented box ({} vs {expect})",
+            min_x(&centered)
+        );
+        let (right, _) =
+            node_text_outlines_style_uncached(&m, &indented.with_align(Align::Right)).unwrap();
+        assert!(
+            (min_x(&right) - (50.0 + (300.0 - 50.0 - line_w).max(0.0))).abs() < 1.0,
+            "right aligns to the box edge, never overshoots"
+        );
+    }
+
+    /// `overflow_hidden` without a line cap (fixed-size text, Figma clips
+    /// whole lines that run past the box): lines below the box drop and
+    /// the reported height clamps to it.
+    #[test]
+    fn overflow_hidden_clips_whole_lines() {
+        let m = fonts();
+        let base = NodeTextSpec {
+            text: "a
+b
+c
+d
+e",
+            size: 20.0,
+            max_width: 400.0,
+            font: None,
+            color: Color::WHITE,
+            lh: 1.2,
+            ..Default::default()
+        };
+        let (all, ah) = node_text_outlines_style_uncached(&m, &base).unwrap();
+        assert_eq!(all.len(), 5, "five single-char lines");
+        let clipped = NodeTextSpec {
+            layout: TextLayout {
+                overflow_hidden: true,
+                box_h: 50.0,
+                ..TextLayout::default()
+            },
+            ..base
+        };
+        let (keep, kh) = node_text_outlines_style_uncached(&m, &clipped).unwrap();
+        assert!(keep.len() < all.len(), "lines past the box dropped");
+        assert!(keep.len() >= 2, "lines whose top fits are kept");
+        assert!(
+            keep.iter().all(|g| g.transform.translation().y < 50.0 + 20.0),
+            "no glyph painted far below the box"
+        );
+        assert!((kh - 50.0).abs() < 0.01, "height clamps to the box (got {kh})");
+        assert!(ah > 50.0, "unclipped block is taller");
     }
 }

@@ -27,7 +27,20 @@ fn text_style_of(node: &Node) -> (f64, Option<f64>, Option<u16>, Option<bool>) {
         _ => 0,
     };
     let node_ls = Some(node.resolved_letter_spacing()).filter(|v| *v != 0.0);
-    let node_fs = node.resolved_font_size().unwrap_or(node.h * 0.72);
+    // the panel speaks CSS px in the design's em convention (h = the font
+    // size a designer typed); an explicit "fs" binding is real px on the
+    // render path, so it wins verbatim
+    let node_fs = node
+        .bindings
+        .get("fs")
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|v| *v > 0.0 && v.is_finite())
+        .or(if node.font_size > 0.0 {
+            Some(node.font_size)
+        } else {
+            None
+        })
+        .unwrap_or(node.h);
     match node.text_runs.iter().find(|r| r.start == 0 && r.len == len) {
         Some(r) => (
             r.size.unwrap_or(node_fs),
@@ -305,10 +318,9 @@ pub fn node_to_css(node: &Node, vars: &Variables) -> String {
             )),
             _ => {}
         }
-        // px contract identical to the render tree: the typed font-size
-        // field first, then the legacy "fs" binding, then the engine em
-        // (h * 0.72). A full-text run overrides size/ls and may carry
-        // weight/italic.
+        // font size: the layer height is the em the designer typed (the
+        // panel's legacy contract); "fs"/typed size are real px and win.
+        // A full-text run overrides size/ls and may carry weight/italic.
         let (size, ls, weight, italic) = text_style_of(node);
         css.push_str(&format!("  font-size: {}px;\n", size));
         let font = node
