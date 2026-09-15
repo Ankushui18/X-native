@@ -1549,7 +1549,7 @@ fn player_press_opens_and_release_reverts_then_mouseup_fires() {
 
 #[test]
 fn player_scrollto_pans_without_navigating() {
-    use x_native::{Action, Animation, Interaction, Trigger};
+    use x_native::{Action, Animation, Easing, Interaction, Trigger};
     let mut h = host();
     player_doc(&mut h);
     h.flow_enter();
@@ -1578,7 +1578,7 @@ fn player_scrollto_pans_without_navigating() {
 
 #[test]
 fn player_swap_without_overlay_navigates_without_history() {
-    use x_native::{Action, Animation, Interaction, Trigger};
+    use x_native::{Action, Animation, Easing, Interaction, Trigger};
     let mut h = host();
     player_doc(&mut h);
     h.flow_enter();
@@ -1604,7 +1604,7 @@ fn player_swap_without_overlay_navigates_without_history() {
 
 #[test]
 fn player_openlink_reports_url_without_leaving() {
-    use x_native::{Action, Animation, Interaction, Trigger};
+    use x_native::{Action, Animation, Easing, Interaction, Trigger};
     let mut h = host();
     player_doc(&mut h);
     h.flow_enter();
