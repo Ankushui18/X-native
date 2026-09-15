@@ -3147,11 +3147,8 @@ impl Host {
             if let Some(hit) = hit_id {
                 let er = self.app.doc_ref().editor_ref();
                 let root = er.root.clone();
-                let top = x_native::editor::top_level_ancestor(
-                    &root,
-                    &hit,
-                )
-                .unwrap_or(hit.clone());
+                let top_id = x_native::editor::top_level_ancestor(&root, &hit);
+                let top = top_id.unwrap_or(hit.clone());
                 let sel = er.selection.clone();
                 let already_selected = sel.iter().any(|s| s == &top);
                 if !already_selected {
@@ -3190,11 +3187,8 @@ impl Host {
             // activates it first (right-click = select + menu)
             let n = self.app.doc_ref().editors.len();
             let cur = self.app.doc_ref().page;
-            let page_row = self
-                .app
-                .pages_rows()
-                .into_iter()
-                .find(|(_, r)| r.contains(p));
+            let rows = self.app.pages_rows();
+            let page_row = rows.iter().find(|(_, r)| r.contains(p));
             if let Some((i, _)) = page_row {
                 if i < n && i != cur {
                     self.dispatch(Action::SelectPage(i));
@@ -9784,30 +9778,24 @@ fn watermark_labels(app: &App, inner: &mut Scene, root: &x_native::Node) {
 /// transform product. Drawing into a selected frame needs this so the new
 /// node lands where the pointer was, in the frame's own coordinates.
 fn world_to_local(root: &Node, target: &str, x: f64, y: f64) -> (f64, f64) {
-    fn rec(
-        n: &Node,
-        id: &str,
-        acc: vello::kurbo::Affine,
-        pt: (f64, f64),
-        out: &mut Option<(f64, f64)>,
-    ) {
+    fn rec(n: &Node, id: &str, acc: Affine, pt: (f64, f64), out: &mut Option<(f64, f64)>) {
         // `acc` is the world matrix of `n`'s parent; multiplying in `n`'s
         // own transform gives the space where `n`'s children live.
         let m = acc * n.transform.matrix(n.w, n.h);
         if n.id == id {
-            let p = m.inverse() * vello::kurbo::Point::new(pt.0, pt.1);
+            let p = m.inverse() * Point::new(pt.0, pt.1);
             *out = Some((p.x, p.y));
             return;
         }
         for c in &n.children {
-            rec(c, id, next, pt, out);
+            rec(c, id, m, pt, out);
             if out.is_some() {
                 return;
             }
         }
     }
     let mut out = None;
-    rec(root, target, vello::kurbo::Affine::IDENTITY, (x, y), &mut out);
+    rec(root, target, Affine::IDENTITY, (x, y), &mut out);
     out.unwrap_or((x, y))
 }
 

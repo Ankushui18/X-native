@@ -497,7 +497,7 @@ fn pages_list_shows_every_page_with_measured_band() {
     assert_eq!(rows.len(), 3, "one row per page");
     for (i, (_, r)) in rows.iter().enumerate() {
         assert!((r.y1 - r.y0 - 26.0).abs() < 1e-9, "26px rows");
-        assert_eq!(*i, h.app.pages_rows()[i].0, "row i addresses page i");
+        assert_eq!(i, h.app.pages_rows()[i].0, "row i addresses page i");
     }
     // band bottom = last row bottom (the divider/LAYERS/tree anchor to it)
     let last_bottom = rows.last().unwrap().1.y1;

@@ -1708,37 +1708,18 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                 fill_rrect(s, r, R_PAGE, C_ROW_HOVER);
             }
             let more = format!("+{} more", page_count - 3);
-            app.fonts.text(
-                s,
-                sx + 41.0,
-                r.y0 + 5.2,
-                &more,
-                T11,
-                C_DIM,
-                Wt::Reg,
-            );
+            app.fonts
+                .text(s, sx + 41.0, r.y0 + 5.2, &more, T11, C_DIM, Wt::Reg);
             continue;
         }
         let active = page_i == cur_page;
         if active || hover(app, r) {
-            fill_rrect(
-                s,
-                r,
-                R_PAGE,
-                if active { C_FIELD_2 } else { C_ROW_HOVER },
-            );
+            fill_rrect(s, r, R_PAGE, if active { C_FIELD_2 } else { C_ROW_HOVER });
             if active {
                 stroke_rrect(s, r, R_PAGE, C_LINE_2, 1.0);
             }
         }
-        draw_icon(
-            s,
-            "file",
-            sx + 21.0,
-            r.y0 + 7.0,
-            12.0,
-            if active { C_TEXT } else { C_DIM },
-        );
+        draw_icon(s, "file", sx + 21.0, r.y0 + 7.0, 12.0, if active { C_TEXT } else { C_DIM });
         let page_label = app
             .doc()
             .doc
@@ -1752,28 +1733,15 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         let field_id = app.field.as_ref().map(|f| f.id);
         if field_id == Some(FieldId::PageName) && active {
             let editing = app.field.as_ref().unwrap().buffer.clone();
-            app.fonts.text(
-                s,
-                sx + 41.0,
-                r.y0 + 5.2,
-                &editing,
-                T11,
-                C_TEXT,
-                Wt::Reg,
-            );
+            app.fonts
+                .text(s, sx + 41.0, r.y0 + 5.2, &editing, T11, C_TEXT, Wt::Reg);
             hit.push((r, Action::Field(FieldId::PageName)));
         } else {
             let max_nw = (r.x1 - sx - 41.0 - 26.0).max(16.0);
             let shown = app.fonts.truncate(&page_label, T11, Wt::Reg, max_nw);
-            app.fonts.text(
-                s,
-                sx + 41.0,
-                r.y0 + 5.2,
-                &shown,
-                T11,
-                if active { C_TEXT } else { C_MUTED },
-                Wt::Reg,
-            );
+            let shown_color = if active { C_TEXT } else { C_MUTED };
+            app.fonts
+                .text(s, sx + 41.0, r.y0 + 5.2, &shown, T11, shown_color, Wt::Reg);
         }
         if !active && hover(app, r) && page_count > 1 {
             let tr = Rect::new(lw - 30.0, r.y0 + 5.0, lw - 12.0, r.y0 + 21.0);
