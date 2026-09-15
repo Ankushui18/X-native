@@ -20,7 +20,10 @@ use x_native::build_scene_full;
 #[cfg(test)]
 use x_native::fileio::load_x_file;
 use x_editor;
-use x_native::{Node, NodeKind, Paint, PathCmd};
+use x_native::{
+    bind_style, detach_text_style, resolve_styles, LegacyStyle, Node, NodeKind, Paint, PathCmd,
+    TextStyleData,
+};
 
 use crate::dashboard;
 use crate::editor_ui;
@@ -2502,6 +2505,186 @@ impl App {
         self.autosize_text_node(id.as_str())
     }
 
+    // ---------------------------------------------------------- text styles
+    //
+    // Figma's "Create and apply text styles": a text style is a named
+    // typography definition in `Document.styles`. Applying one writes the
+    // values AND links the layer through its `style:text` binding, so
+    // updating the definition and re-resolving the trees moves every
+    // consumer. Alignment, fill and resizing are deliberately not part of a
+    // style — the four operations below only ever touch typography.
+
+    /// True when `id` names a text layer: the only kind a text style applies
+    /// to.
+    pub fn is_text_layer(&self, id: &str) -> bool {
+        let root = &self.doc_ref().editor_ref().root;
+        crate::editor_ui::find_node(root, id)
+            .map(|n| matches!(n.kind, NodeKind::Text { .. }))
+            .unwrap_or(false)
+    }
+
+    /// The text style `id` is linked to, if any.
+    pub fn linked_text_style(&self, id: &str) -> Option<String> {
+        let root = &self.doc_ref().editor_ref().root;
+        crate::editor_ui::find_node(root, id)?
+            .bindings
+            .get("style:text")
+            .cloned()
+    }
+
+    /// Every node under `root` carrying a style link — the consumers a style
+    /// edit has to re-resolve.
+    pub fn collect_style_consumers(root: &Node, out: &mut Vec<String>) {
+        if x_native::STYLE_BINDING_KEYS
+            .iter()
+            .any(|(key, _)| root.bindings.contains_key(*key))
+        {
+            out.push(root.id.clone());
+        }
+        for c in &root.children {
+            Self::collect_style_consumers(c, out);
+        }
+    }
+
+    /// Apply `name` to every selected text layer and link it. Returns the
+    /// number of layers linked; 0 covers both "no such style" and "no text
+    /// layer in the selection".
+    pub fn apply_text_style(&mut self, name: &str) -> usize {
+        let Some(data) = self.doc_ref().doc.text_style(name).cloned() else {
+            return 0;
+        };
+        let ids: Vec<String> = self.doc_ref().editor_ref().selection.clone();
+        let mut linked = 0usize;
+        for id in ids {
+            if !self.is_text_layer(id.as_str()) {
+                continue;
+            }
+            let style = LegacyStyle::Text(data.clone());
+            let bound = self
+                .doc()
+                .editor()
+                .mutate_visual_stack(id.as_str(), |n| bind_style(n, name, &style));
+            if bound {
+                linked += 1;
+                // the style owns the size, so the box re-fits around it
+                self.autosize_text_node(id.as_str());
+            }
+        }
+        if linked > 0 {
+            self.mark_dirty();
+            self.doc().sync();
+        }
+        linked
+    }
+
+    /// Create a style from the selected text layer's typography and apply it
+    /// to that layer — Figma creates and links in one step. None when the
+    /// selection is not a text layer.
+    pub fn create_text_style_from_selection(&mut self) -> Option<String> {
+        let id = self.doc_ref().selected_id()?;
+        if !self.is_text_layer(id.as_str()) {
+            return None;
+        }
+        let data = {
+            let root = &self.doc_ref().editor_ref().root;
+            TextStyleData::from_node(crate::editor_ui::find_node(root, id.as_str())?)
+        };
+        // Figma's naming: "New style", then "New style 2", "New style 3", …
+        let name = (1..)
+            .map(|i| {
+                if i == 1 {
+                    "New style".to_string()
+                } else {
+                    format!("New style {i}")
+                }
+            })
+            .find(|candidate| !self.doc_ref().doc.styles.contains_key(candidate))?;
+        self.doc().doc.add_text_style(&name, data).ok()?;
+        self.apply_text_style(&name);
+        self.status = format!("Created text style '{name}'");
+        Some(name)
+    }
+
+    /// Detach every selected layer linked to a text style: the typography
+    /// stays, the link goes, so later style edits stop reaching it.
+    pub fn detach_text_style_from_selection(&mut self) -> usize {
+        let ids: Vec<String> = self.doc_ref().editor_ref().selection.clone();
+        let mut detached = 0usize;
+        for id in ids {
+            if self.linked_text_style(id.as_str()).is_none() {
+                continue;
+            }
+            self.doc().editor().mutate_visual_stack(id.as_str(), |n| {
+                detach_text_style(n);
+            });
+            detached += 1;
+        }
+        if detached > 0 {
+            self.mark_dirty();
+            self.doc().sync();
+        }
+        detached
+    }
+
+    /// Push the selected layer's current typography into the style it is
+    /// linked to, then re-resolve every page (Figma's "Update style").
+    /// Returns the consumers re-resolved; None when the selection is not
+    /// linked to a style.
+    pub fn update_text_style_from_selection(&mut self) -> Option<usize> {
+        let id = self.doc_ref().selected_id()?;
+        let name = self.linked_text_style(id.as_str())?;
+        let data = {
+            let root = &self.doc_ref().editor_ref().root;
+            TextStyleData::from_node(crate::editor_ui::find_node(root, id.as_str())?)
+        };
+        if !self.doc().doc.update_text_style(&name, data) {
+            return None;
+        }
+        let updated = self.propagate_styles();
+        self.status = format!("Updated '{name}' — {updated} linked layers re-resolved");
+        Some(updated)
+    }
+
+    /// Re-apply every linked style across all page trees: the "edit a style,
+    /// every consumer updates" pass. Each consumer goes through its own page
+    /// editor so the change lands in that page's undo stack (the engine keeps
+    /// one undo stack per page). Returns the consumers re-resolved.
+    pub fn propagate_styles(&mut self) -> usize {
+        let styles = self.doc_ref().doc.styles.clone();
+        // collected up front: the walk borrows the editors immutably while
+        // the mutation pass needs them mutably
+        let per_page: Vec<Vec<String>> = self
+            .doc_ref()
+            .editors
+            .iter()
+            .map(|ed| {
+                let mut ids = Vec::new();
+                Self::collect_style_consumers(&ed.root, &mut ids);
+                ids
+            })
+            .collect();
+        let mut updated = 0usize;
+        for (pi, ids) in per_page.into_iter().enumerate() {
+            let doc = self.doc();
+            let Some(ed) = doc.editors.get_mut(pi) else {
+                continue;
+            };
+            for id in ids {
+                let registry = &styles;
+                if ed.mutate_visual_stack(id.as_str(), |n| {
+                    resolve_styles(n, registry);
+                }) {
+                    updated += 1;
+                }
+            }
+        }
+        if updated > 0 {
+            self.mark_dirty();
+            self.doc().sync();
+        }
+        updated
+    }
+
     /// Press for a ruler guide: from a ruler strip (create) or near an
     /// existing line (grab). True when the press started a guide drag.
     pub fn guide_press(&mut self, p: Point) -> bool {
@@ -2839,6 +3022,9 @@ impl Host {
             if self.app.dropdown_frame {
                 self.app.dropdown_frame = false;
             }
+            if self.app.dropdown_text_style {
+                self.app.dropdown_text_style = false;
+            }
 
             // chrome hit zones
             for (r, a) in self.app.hit.iter().rev() {
@@ -2887,6 +3073,9 @@ impl Host {
         }
         if self.app.dropdown_lh {
             self.app.dropdown_lh = false;
+        }
+        if self.app.dropdown_text_style {
+            self.app.dropdown_text_style = false;
         }
 
         // Color popovers are modal to the inspector. Consume clicks inside
@@ -4696,9 +4885,13 @@ impl Host {
 
         match key {
             Key::Named(NamedKey::Escape) => {
-                if self.app.dropdown_frame || self.app.dropdown_lh {
+                if self.app.dropdown_frame
+                    || self.app.dropdown_lh
+                    || self.app.dropdown_text_style
+                {
                     self.app.dropdown_frame = false;
                     self.app.dropdown_lh = false;
+                    self.app.dropdown_text_style = false;
                 } else if self.app.screen == Screen::Editor {
                     self.app.doc().editor().selection.clear();
                 } else {
@@ -5986,6 +6179,8 @@ impl Host {
                 actions: vec![],
                 transition_ms: d.ms,
                 animation: x_native::Animation::Instant,
+                easing: x_native::Easing::Linear,
+                reset_on_navigate: false,
             };
             let effect = self.flow_fire(&ix);
             if effect.fired() {
@@ -7642,7 +7837,45 @@ impl Host {
                 doc.editor().set_locked(id.as_str(), v);
                 self.app.mark_dirty();
             }
-            Action::LhDropdown => self.app.dropdown_lh = !self.app.dropdown_lh,
+            Action::LhDropdown => {
+                self.app.dropdown_lh = !self.app.dropdown_lh;
+                // the two typography menus share an anchor: never both open
+                self.app.dropdown_text_style = false;
+            }
+            Action::TextStyleDropdown => {
+                self.app.dropdown_text_style = !self.app.dropdown_text_style;
+                self.app.dropdown_lh = false;
+            }
+            Action::ApplyTextStyle(name) => {
+                self.app.dropdown_text_style = false;
+                let linked = self.app.apply_text_style(name.as_str());
+                self.app.status = if linked > 0 {
+                    format!("Applied '{name}' to {linked} text layers")
+                } else {
+                    format!("'{name}' needs a text layer in the selection")
+                };
+            }
+            Action::CreateTextStyle => {
+                self.app.dropdown_text_style = false;
+                if self.app.create_text_style_from_selection().is_none() {
+                    self.app.status = "Select a text layer to create a style from".into();
+                }
+            }
+            Action::DetachTextStyle => {
+                self.app.dropdown_text_style = false;
+                let n = self.app.detach_text_style_from_selection();
+                self.app.status = if n > 0 {
+                    format!("Detached {n} text layers from their style")
+                } else {
+                    "Nothing in the selection is linked to a text style".into()
+                };
+            }
+            Action::UpdateTextStyleFromSelection => {
+                self.app.dropdown_text_style = false;
+                if self.app.update_text_style_from_selection().is_none() {
+                    self.app.status = "The selection is not linked to a text style".into();
+                }
+            }
             Action::LhMode(i) => {
                 self.app.dropdown_lh = false;
                 let eff = self.app.selected_text_typo();

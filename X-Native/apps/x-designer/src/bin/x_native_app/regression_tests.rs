@@ -1205,6 +1205,8 @@ fn player_doc(h: &mut Host) {
         transition_ms: 0,
         animation: Animation::Instant,
         actions: vec![],
+        easing: Easing::Linear,
+        reset_on_navigate: false,
     };
     let delay = |ms: u32, action: Action| Interaction {
         trigger: Trigger::AfterDelay { ms },
@@ -1212,6 +1214,8 @@ fn player_doc(h: &mut Host) {
         transition_ms: 0,
         animation: Animation::Instant,
         actions: vec![],
+        easing: Easing::Linear,
+        reset_on_navigate: false,
     };
     f1.interactions = vec![
         key,
@@ -1261,6 +1265,8 @@ fn player_doc(h: &mut Host) {
             transition_ms: 0,
             animation: Animation::Instant,
             actions: vec![],
+            easing: Easing::Linear,
+            reset_on_navigate: false,
         },
         Interaction {
             trigger: Trigger::MouseLeave,
@@ -1268,6 +1274,8 @@ fn player_doc(h: &mut Host) {
             transition_ms: 0,
             animation: Animation::Instant,
         actions: vec![],
+            easing: Easing::Linear,
+            reset_on_navigate: false,
         },
     ];
     d.editor().insert_node("f1", hov);
@@ -1280,6 +1288,8 @@ fn player_doc(h: &mut Host) {
         transition_ms: 0,
         animation: Animation::Instant,
         actions: vec![],
+        easing: Easing::Linear,
+        reset_on_navigate: false,
     }];
     d.editor().insert_node("f1", drg);
     let mut set = rect("set", 20.0, 140.0);
@@ -1292,6 +1302,8 @@ fn player_doc(h: &mut Host) {
         transition_ms: 0,
         animation: Animation::Instant,
         actions: vec![],
+        easing: Easing::Linear,
+        reset_on_navigate: false,
     }];
     d.editor().insert_node("f1", set);
     // while-hovering navigate (110..190, 20..50): returns on leave
@@ -1304,6 +1316,8 @@ fn player_doc(h: &mut Host) {
         transition_ms: 0,
         animation: Animation::Instant,
         actions: vec![],
+        easing: Easing::Linear,
+        reset_on_navigate: false,
     }];
     d.editor().insert_node("f1", wh);
     // while-pressing overlay (200..280, 20..50) + mouse-up set-var
@@ -1318,6 +1332,8 @@ fn player_doc(h: &mut Host) {
             transition_ms: 0,
             animation: Animation::Instant,
             actions: vec![],
+            easing: Easing::Linear,
+            reset_on_navigate: false,
         },
         Interaction {
             trigger: Trigger::MouseUp,
@@ -1328,6 +1344,8 @@ fn player_doc(h: &mut Host) {
             transition_ms: 0,
             animation: Animation::Instant,
             actions: vec![],
+            easing: Easing::Linear,
+            reset_on_navigate: false,
         },
     ];
     d.editor().insert_node("f1", pu);
@@ -1351,6 +1369,8 @@ fn player_doc(h: &mut Host) {
         transition_ms: 0,
         animation: Animation::Instant,
         actions: vec![],
+        easing: Easing::Linear,
+        reset_on_navigate: false,
     }];
     d.editor().insert_node("f2", gate);
     let mut shut = Node::rect("shut", 10.0, 10.0, 60.0, 30.0, Color::from_rgb8(9, 9, 9));
@@ -1360,6 +1380,8 @@ fn player_doc(h: &mut Host) {
         transition_ms: 0,
         animation: Animation::Instant,
         actions: vec![],
+        easing: Easing::Linear,
+        reset_on_navigate: false,
     }];
     d.editor().insert_node("dlg", shut);
     d.doc.variables.numbers.insert("n".into(), 1.0);
@@ -1540,6 +1562,8 @@ fn player_scrollto_pans_without_navigating() {
         transition_ms: 0,
         animation: Animation::Instant,
         actions: vec![],
+        easing: Easing::Linear,
+        reset_on_navigate: false,
     };
     h.flow_fire(&ix);
     assert_eq!(h.app.flow.as_ref().unwrap().current, "f1");
@@ -1566,6 +1590,8 @@ fn player_swap_without_overlay_navigates_without_history() {
         transition_ms: 0,
         animation: Animation::Instant,
         actions: vec![],
+        easing: Easing::Linear,
+        reset_on_navigate: false,
     };
     h.flow_fire(&ix);
     assert_eq!(h.app.flow.as_ref().unwrap().current, "f2");
@@ -1590,6 +1616,8 @@ fn player_openlink_reports_url_without_leaving() {
         transition_ms: 0,
         animation: Animation::Instant,
         actions: vec![],
+        easing: Easing::Linear,
+        reset_on_navigate: false,
     };
     // headless: no window, so no browser spawns — the URL just reports
     let effect = h.flow_fire(&ix);
@@ -1886,4 +1914,77 @@ fn theme_action_reports_the_active_palette_without_touching_it() {
         x_native::ui::ThemeId::Graphite,
         "selecting the active theme is a no-op"
     );
+}
+
+/// The four text-style operations Figma's "Create and apply text styles"
+/// describes, driven through the same App methods the picker's rows call:
+/// create-from-selection, apply, update-with-propagation, detach.
+#[test]
+fn text_styles_create_apply_update_and_detach_end_to_end() {
+    let mut h = host();
+    let root_id = h.app.doc().editor_ref().root.id.clone();
+    h.app.doc().editor().insert_node(
+        &root_id,
+        Node::text("ta", 0.0, 0.0, 200.0, 20.0, "Headline"),
+    );
+    h.app.doc().editor().insert_node(
+        &root_id,
+        Node::text("tb", 0.0, 40.0, 200.0, 20.0, "Body"),
+    );
+
+    // give `ta` distinctive typography, then create the style from it
+    h.app.doc().editor().selection = vec!["ta".into()];
+    h.app.set_text_typo("font", "Lobster".into());
+    h.app.set_text_typo("fw", "700".into());
+    h.app.set_text_typo("fs", "32".into());
+    let name = h
+        .app
+        .create_text_style_from_selection()
+        .expect("a text layer is selected, so a style is created");
+    assert_eq!(name, "New style");
+    assert!(h.app.doc_ref().doc.text_style("New style").is_some());
+    // creating also applies: the source layer is linked to its own style
+    assert_eq!(
+        h.app.linked_text_style("ta").as_deref(),
+        Some("New style"),
+        "create links the layer it was built from"
+    );
+
+    // apply to the second layer through the picker's row action
+    h.app.doc().editor().selection = vec!["tb".into()];
+    assert_eq!(h.app.apply_text_style("New style"), 1);
+    assert_eq!(h.app.linked_text_style("tb").as_deref(), Some("New style"));
+    let fs = |h: &Host, id: &str| {
+        let root = &h.app.doc_ref().editor_ref().root;
+        crate::editor_ui::find_node(root, id)
+            .and_then(|n| n.bindings.get("fs").cloned())
+            .unwrap_or_default()
+    };
+    assert_eq!(fs(&h, "tb"), "32", "the style's size reached the second layer");
+
+    // a local edit + "Update style" moves every consumer
+    h.app.doc().editor().selection = vec!["ta".into()];
+    h.app.set_text_typo("fs", "44".into());
+    assert_eq!(h.app.update_text_style_from_selection(), Some(2));
+    assert_eq!(fs(&h, "ta"), "44");
+    assert_eq!(fs(&h, "tb"), "44", "the update propagated to the other consumer");
+
+    // detaching keeps the values and drops the link…
+    h.app.doc().editor().selection = vec!["tb".into()];
+    assert_eq!(h.app.detach_text_style_from_selection(), 1);
+    assert_eq!(h.app.linked_text_style("tb"), None);
+    assert_eq!(fs(&h, "tb"), "44", "detach keeps the typography it rendered");
+
+    // …so the next update no longer reaches it
+    h.app.doc().editor().selection = vec!["ta".into()];
+    h.app.set_text_typo("fs", "55".into());
+    assert_eq!(h.app.update_text_style_from_selection(), Some(1));
+    assert_eq!(fs(&h, "ta"), "55");
+    assert_eq!(fs(&h, "tb"), "44", "a detached layer stays put");
+
+    // the picker only offers create/apply for text layers
+    h.app.doc().editor().selection = vec![root_id.clone()];
+    assert_eq!(h.app.apply_text_style("New style"), 0);
+    assert!(h.app.create_text_style_from_selection().is_none());
+    assert_eq!(h.app.detach_text_style_from_selection(), 0);
 }

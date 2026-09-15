@@ -375,6 +375,18 @@ pub enum Action {
     FrameDropdown,
     LhDropdown,
     LhMode(usize),
+    /// Typography panel: the styles button opens the text-style picker
+    TextStyleDropdown,
+    /// Apply a named text style to the selected text layers (and link them,
+    /// so later edits to the style propagate)
+    ApplyTextStyle(String),
+    /// Create a text style from the selected text layer's typography
+    CreateTextStyle,
+    /// Unlink the selected text layers from their text style, keeping values
+    DetachTextStyle,
+    /// Push the selection's typography into the style it is linked to and
+    /// re-resolve every consumer (Figma's "Update style")
+    UpdateTextStyleFromSelection,
     /// layer row hover toggles (Figma): eye / padlock
     TreeVisible(String),
     TreeLock(String),
@@ -1350,6 +1362,8 @@ pub struct App {
     pub dropdown_frame: bool,
     /// Typography panel: line-height mode menu (Auto / Pixels / Percent)
     pub dropdown_lh: bool,
+    /// Typography panel: text-style picker (Figma's styles button)
+    pub dropdown_text_style: bool,
     /// Viewport rulers (Shift+R). Off by default — the HTML mock has none.
     pub rulers: bool,
     /// DESIGN panel (no selection): editor canvas background
@@ -1523,6 +1537,7 @@ impl App {
             flow: None,
             dropdown_frame: false,
             dropdown_lh: false,
+            dropdown_text_style: false,
             rulers: false,
             // canvas matches the HTML `.canvas` token; grid per the design
             // empty-selection panel (PIXEL GRID COLOR 0070E4 @ 20%)

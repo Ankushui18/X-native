@@ -64,6 +64,25 @@ pub fn detach_style(n: &mut Node, kind_key: &str) -> bool {
     n.bindings.remove(kind_key).is_some()
 }
 
+/// Detach a TEXT style from a node: the layer keeps the typography it renders
+/// today but loses its `style:text` link, so later edits to the style stop
+/// reaching it (Figma's "Detach style"). Returns false when it was not linked.
+///
+/// Snapshot-first: the values a text style writes live in the very bindings
+/// [`TextStyleData::clear_from_node`] drops, so clearing without re-applying
+/// the snapshot would silently reset the layer's type.
+pub fn detach_text_style(n: &mut Node) -> bool {
+    if n.bindings.get("style:text").is_none() {
+        return false;
+    }
+    let keep = TextStyleData::from_node(n);
+    TextStyleData::clear_from_node(n);
+    keep.apply_to_node(n);
+    n.bindings.remove("style:text");
+    n.dirty = true;
+    true
+}
+
 /// How many nodes in the subtree are bound to style `name` (usage count).
 pub fn style_usage(n: &Node, name: &str) -> usize {
     let mut count = STYLE_BINDING_KEYS
@@ -406,6 +425,47 @@ mod style_tests {
         // writes; the box stays where it was until the app re-fits it
         assert_eq!(n.h, 20.0);
         assert!(n.dirty);
+    }
+
+    #[test]
+    fn detach_text_style_keeps_the_typography_and_drops_the_link() {
+        let mut n = Node::text("t", 0.0, 0.0, 100.0, 20.0, "hi");
+        let data = TextStyleData {
+            font_family: "Lobster".into(),
+            font_weight: 700,
+            font_size: 32.0,
+            letter_spacing: 0.5,
+            line_height: LineHeight::Percent(140.0),
+            ..Default::default()
+        };
+        bind_style(&mut n, "H1", &LegacyStyle::Text(data.clone()));
+        assert_eq!(n.bindings.get("style:text").map(String::as_str), Some("H1"));
+
+        assert!(detach_text_style(&mut n));
+        // the link is gone…
+        assert_eq!(n.bindings.get("style:text"), None);
+        // …and the typography the layer was rendering is untouched
+        let b = |k: &str| n.bindings.get(k).map(String::as_str);
+        assert_eq!(b("font"), Some("Lobster"));
+        assert_eq!(b("fw"), Some("700"));
+        assert_eq!(b("fs"), Some("32"));
+        assert_eq!(b("ls"), Some("0.5"));
+        assert_eq!(b("lhm"), Some("pct"));
+        assert_eq!(b("lhp"), Some("140"));
+
+        // an edit to the style definition no longer reaches this layer
+        let mut styles: HashMap<String, LegacyStyle> = HashMap::new();
+        styles.insert(
+            "H1".into(),
+            LegacyStyle::Text(TextStyleData {
+                font_size: 64.0,
+                ..data
+            }),
+        );
+        assert_eq!(resolve_styles(&mut n, &styles), 0);
+        assert_eq!(n.bindings.get("fs").map(String::as_str), Some("32"));
+        // detaching an unlinked layer is a no-op
+        assert!(!detach_text_style(&mut n));
     }
 
     #[test]

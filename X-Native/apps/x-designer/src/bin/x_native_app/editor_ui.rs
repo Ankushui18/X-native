@@ -51,6 +51,9 @@ pub fn paint(app: &mut App, s: &mut Scene) {
     if app.dropdown_lh {
         paint_lh_dropdown(app, s, &mut hit);
     }
+    if app.dropdown_text_style {
+        paint_text_style_dropdown(app, s, &mut hit);
+    }
     if app.palette.open {
         paint_palette(app, s, &mut hit);
     }
@@ -2822,24 +2825,30 @@ fn paint_design(
     let y_after_appearance = y0 + 645.5 + 1.0 + 12.0;
     let y_after_image = paint_image_adjustments(app, s, hit, rx + pl, rx + rw - pl, y_after_appearance);
     if y_after_image != y_after_appearance {
-        // Image adjustments were rendered, adjust the vertical position
-        // The image controls take about 280px (7 sliders * 28px + buttons)
-        let image_section_height = y_after_image - y_after_appearance;
-        // Note: We can't easily adjust y0 for subsequent sections, so this is a best-effort integration
+        // The image-adjustment block rendered (7 sliders + buttons, ~280px).
+        // Its height cannot be folded into `y0` without re-flowing every
+        // audited offset below it, so the sections that follow keep their
+        // audited positions — see the Chromium-audit note atop this function.
     }
 
     // ---- typography -----------------------------------------------------
     app.fonts
         .caps_label(s, x0, y0 + 658.5, "Typography", C_TEXT, Wt::Med);
-    draw_icon(
-        s,
-        "grid-2x2",
-        xr - 14.0 - 8.0 - 12.0,
-        y0 + 659.0,
-        12.0,
-        C_DIM,
-    );
-    draw_icon(s, "plus", xr - 14.0, y0 + 658.0, 14.0, C_DIM);
+    // Figma's Typography header: the styles button opens the text-style
+    // picker, the plus creates a style from the current selection. Both were
+    // painted but inert — these rects are what make them buttons.
+    let styles_btn = Rect::new(xr - 38.0, y0 + 654.0, xr - 18.0, y0 + 676.0);
+    let create_btn = Rect::new(xr - 18.0, y0 + 654.0, xr + 2.0, y0 + 676.0);
+    let styles_tint = if app.dropdown_text_style || hover(app, styles_btn) {
+        C_TEXT
+    } else {
+        C_DIM
+    };
+    draw_icon(s, "grid-2x2", xr - 14.0 - 8.0 - 12.0, y0 + 659.0, 12.0, styles_tint);
+    let create_tint = if hover(app, create_btn) { C_TEXT } else { C_DIM };
+    draw_icon(s, "plus", xr - 14.0, y0 + 658.0, 14.0, create_tint);
+    hit.push((styles_btn, Action::TextStyleDropdown));
+    hit.push((create_btn, Action::CreateTextStyle));
     let fam = Rect::new(x0, y0 + 681.5, x0 + 315.0, y0 + 709.5);
     input(
         app,
@@ -4172,9 +4181,14 @@ fn paint_frame_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Actio
 fn paint_lh_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let reg = app.editor_regions();
     let x0 = reg.right.x0 + 13.0; // panel border + padding (cols x0)
-    let y0 = crate::theme::ED_TITLE_H;
+    // Panel rows live at `y_entry - scroll + offset`, where `y_entry` is the
+    // pixel after the pill-tab divider: `ED_TITLE_H` plus the same chrome sum
+    // `paint_frame_dropdown` builds (8 + 24 + 10 + PILL_H + 10 + 1 = 77, +12
+    // to the first row = 89). Anchoring on `ED_TITLE_H` alone floated this
+    // menu 89px above the Line-height field it belongs to.
+    let y_entry = crate::theme::ED_TITLE_H + 89.0;
     // the typography rows scroll with the panel
-    let fy = y0 + 771.0 - app.doc().scroll_right;
+    let fy = y_entry + 771.0 - app.doc().scroll_right;
     let dd = Rect::new(x0, fy + 28.0, x0 + 153.5, fy + 28.0 + 3.0 * 32.0);
     elev_shadow(s, dd, 8.0, Elevation::Floating);
     fill_rrect(s, dd, 8.0, C_FIELD);
@@ -4202,6 +4216,89 @@ fn paint_lh_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>
             Wt::Reg,
         );
         hit.push((r, Action::LhMode(i)));
+    }
+}
+
+/// Text-style picker (Figma's Typography ▸ styles button): every text style in
+/// the document, then the rows that act on the current selection — Update and
+/// Detach when the selection is linked to a style, Create when it is a text
+/// layer. Same design language as the line-height menu.
+///
+/// Panel rows live at `y_entry - scroll + offset`, where `y_entry` is the
+/// pixel after the pill-tab divider (`ED_TITLE_H + 89`, see `paint_right`);
+/// the anchor below is the Typography header row at offset 658.5.
+fn paint_text_style_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    let reg = app.editor_regions();
+    let x0 = reg.right.x0 + 13.0; // panel border + padding (cols x0)
+    let y_entry = crate::theme::ED_TITLE_H + 89.0;
+    let fy = y_entry + 658.5 - app.doc().scroll_right;
+
+    let names: Vec<String> = {
+        let doc = app.doc();
+        doc.doc
+            .text_style_names()
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    };
+    let selected = app.doc().selected_id();
+    let linked = selected.as_deref().and_then(|id| app.linked_text_style(id));
+    let is_text = selected
+        .as_deref()
+        .map(|id| app.is_text_layer(id))
+        .unwrap_or(false);
+
+    // (label, action) — a None action is an inert row (the empty state)
+    let mut rows: Vec<(String, Option<Action>)> = names
+        .iter()
+        .map(|n| (n.clone(), Some(Action::ApplyTextStyle(n.clone()))))
+        .collect();
+    if names.is_empty() {
+        rows.push(("No text styles yet".into(), None));
+    }
+    if let Some(name) = &linked {
+        rows.push((
+            format!("Update '{name}' from selection"),
+            Some(Action::UpdateTextStyleFromSelection),
+        ));
+        rows.push(("Detach style".into(), Some(Action::DetachTextStyle)));
+    }
+    if is_text {
+        rows.push((
+            "Create text style".into(),
+            Some(Action::CreateTextStyle),
+        ));
+    }
+
+    let dd = Rect::new(x0, fy + 22.0, x0 + 315.0, fy + 22.0 + rows.len() as f64 * 32.0);
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, 8.0, C_FIELD);
+    stroke_rrect(s, dd, 8.0, C_LINE_2, 1.0);
+    for (i, (label, action)) in rows.into_iter().enumerate() {
+        let r = Rect::new(
+            dd.x0,
+            dd.y0 + 32.0 * i as f64,
+            dd.x1,
+            dd.y0 + 32.0 * (i + 1) as f64,
+        );
+        let hov = hover(app, r);
+        if hov {
+            fill_rect(s, r, C_FIELD_2);
+        }
+        // the style this layer already carries is the highlighted row
+        let active = linked.as_deref() == Some(label.as_str());
+        app.fonts.text(
+            s,
+            r.x0 + 10.0,
+            r.y0 + 10.0,
+            &label,
+            T11,
+            if hov || active { C_TEXT } else { C_MUTED },
+            Wt::Reg,
+        );
+        if let Some(a) = action {
+            hit.push((r, a));
+        }
     }
 }
 

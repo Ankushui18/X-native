@@ -357,7 +357,7 @@ impl TextStyleData {
     /// the layer keeps rendering exactly as it did but is no longer linked.
     /// Values are NOT re-derived from the style — the caller keeps them by
     /// simply not touching the bindings it wants to preserve (see
-    /// `Document::detach_text_style`, which snapshots first).
+    /// the free fn `detach_text_style` in `document.rs`, which snapshots first).
     pub fn clear_from_node(n: &mut Node) {
         for k in TEXT_STYLE_BINDINGS {
             n.bindings.remove(k);
