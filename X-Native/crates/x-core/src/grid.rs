@@ -206,7 +206,8 @@ pub fn apply_grid_layout(node: &mut Node, layout: &crate::AutoLayout, grid: &Gri
                 if declared > 0 {
                     'declared_col: for col in 0..ncols {
                         for row in 0..declared {
-                            if row + rs <= declared && cells_free(&mut occupancy, col, row, cs, rs) {
+                            if row + rs <= declared && cells_free(&mut occupancy, col, row, cs, rs)
+                            {
                                 at = Some((col, row));
                                 break 'declared_col;
                             }

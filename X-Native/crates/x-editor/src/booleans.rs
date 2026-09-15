@@ -338,14 +338,7 @@ mod tests {
     fn flatten_twice_at_one_undo_depth_mints_distinct_ids() {
         let mut ed = crate::Editor::new(
             x_core::Node::frame("page", 400.0, 300.0)
-                .child(x_core::Node::rect(
-                    "r1",
-                    0.0,
-                    0.0,
-                    10.0,
-                    10.0,
-                    Color::BLACK,
-                ))
+                .child(x_core::Node::rect("r1", 0.0, 0.0, 10.0, 10.0, Color::BLACK))
                 .child(x_core::Node::rect(
                     "r2",
                     20.0,
@@ -359,7 +352,11 @@ mod tests {
         let first = ed.flatten_selected().expect("first flatten");
         assert_eq!(ed.undo_depth(), 1, "one undo group");
         assert!(ed.undo(), "undo");
-        assert_eq!(ed.undo_depth(), 0, "depth is back where the collision lived");
+        assert_eq!(
+            ed.undo_depth(),
+            0,
+            "depth is back where the collision lived"
+        );
         ed.selection = vec!["r2".into()];
         let second = ed.flatten_selected().expect("second flatten");
         assert_ne!(first, second, "two flattens must never share an id");
@@ -367,7 +364,10 @@ mod tests {
             crate::find(&ed.root, &first).is_none(),
             "the undone flatten is gone from the tree"
         );
-        assert!(crate::find(&ed.root, &second).is_some(), "and this one is live");
+        assert!(
+            crate::find(&ed.root, &second).is_some(),
+            "and this one is live"
+        );
     }
 
     #[test]
