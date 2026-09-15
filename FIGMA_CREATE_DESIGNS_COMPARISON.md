@@ -92,11 +92,54 @@ previous one. `y += row_h;` now ends the iteration. This is the one fix here tha
 changes what the UI draws rather than whether it compiles, and it is flagged as
 such because it pre-dates this branch.
 
-Net effect on the tree: **+3,498 / −4,852 lines** across 12 files. The engine
+**Round 4** — the workspace compiled for the first time, so `cargo test
+--workspace` ran: **621 passed, 5 failed**, and all five failing tests blame to
+`faff63f1`. `main` has never compiled far enough to run any of them, so these are
+inherited failures that no CI run had ever reported. Two were real:
+
+| Test | Diagnosis | Fix |
+|---|---|---|
+| `grid_column_major_auto_flow` (x-core) | **A genuine bug, not a stale test.** The column-major scan was `for col in 0..ncols { for row in 0.. { … } }`, and `cells_free` answers `true` for any row past the end of `occupancy` (which `mark` grows on demand) — so the unbounded inner scan always "found" a fresh implicit row in column 0. `grid-auto-flow: column` never reached column 1 and every child stacked into the first column | The row scan is bounded by the *declared* rows, with a bounded implicit-row fallback for when the declared cells are all taken |
+| `flatten_group_bakes_children_into_one_vector` (x-editor) | **Caused by a deliberate change on this branch:** it asserted `n.id == "flat-0"`, i.e. the `format!("flat-{}", undo_depth())` scheme that made two flattens at one undo depth collide on the same id | The assertion now checks the property (a fresh `flat-` id), and a new test `flatten_twice_at_one_undo_depth_mints_distinct_ids` walks the collision path — flatten, undo (depth returns to 0), flatten again — and requires distinct ids |
+
+Three were stale tests asserting behaviour that had deliberately changed:
+
+| Test | What changed | Fix |
+|---|---|---|
+| `dev_mode_css_emits_borders` (x-editor), `stroke_opacity_and_gradient` (x-format) | Both asserted `border:` for a **default-aligned** stroke. The emitters are align-aware by design ("CSS Flexbox parity: inside strokes → `border`, outside/center → `outline`") and `StrokeAlign`'s default is `Center`, so the correct output is `outline:` | Each test now asserts the rule in **both** directions — `outline` for Center (and no `box-sizing`), then `border` + `box-sizing: border-box` for Inside. Flipping the align requires `visual_stacks_materialized = true`, because `active_strokes()` synthesizes a layer from `node.stroke` and ignores `stroke_layers` until then |
+| `t05_canvas_transform_must_match_hit_test_and_overlay_transform` (app) | It pinned the literal `(340.0, 76.0)`; the canvas origin is `editor_regions().canvas.x0 + pan + ruler`, which the nav rail and the *resizable* sidebar both feed, so it had drifted to `(388.0, 76.0)` | The expectation is recomputed from the same `(x, y, zoom)` triple the renderer consumes — which still pins translate-then-scale order — plus an assertion that the origin is the chrome's canvas region and not the window's. The two invariants the test is named for (round-trip, renderer == overlay) are untouched |
+
+**Round 5** — clippy's LIVE-warning budget. `scripts/check.sh` requires **zero**
+warnings that are not dead code, and 14 remained: 4 from this branch
+(`type_complexity` on the nested-optional normal pairs → a `VertexNormals` alias;
+`ptr_arg` on `move_anchors_by`, which only assigns through `set_anchor_pos` and
+`get_mut` so `&mut [PathCmd]` is enough; a negated comparison on a partially
+ordered type → an explicit `partial_cmp` match, which also keeps the NaN case
+meaning "simplify nothing"; `clone_on_copy` on `Transform`) and 10 pre-existing
+mechanical ones (`get(..).is_none()` → `!contains_key`, `assert_eq!(x, false)` →
+`assert!(!x)`, two needless `mut`, `.iter().next()` → `.first()`,
+`format!("literal")` → `.to_string()`, three `Default::default()`-then-assign
+blocks → struct literals, one single-arm `match` → `if let`).
+
+**Still open, and the reason this branch is not green yet:** the dead-code
+ratchet reads **84 against `DEAD_CODE_CEILING = 76`**. `docs/KNOWN_DEBT.md`
+documents a pile of exactly 76, measured on 12 Sep 2026 — before the tree stopped
+compiling, so the eight extra were never measured. Per file: `context_menu.rs` 32
+(as documented), `command.rs` 18 (as documented), `theme.rs` 9 (documented 8),
+`state.rs` 9 (documented 6), `x-ui/components.rs` 7 (as documented),
+`editor_ui.rs` 5 (documented 0), `chrome.rs` 3 (as documented),
+`serialize.rs` 1 (as documented), `run.rs` 0 (documented 1 — the unused `id` this
+branch turned into a guard). Reconciling that table is the last gate item;
+`check.sh` now prints the individual items when the ratchet trips, because a
+per-file count cannot tell you which entry to write.
+
+Net effect on the tree: **+3,890 / −4,993 lines** across 21 files. The engine
 gained real implementations (`offset_path` in `x-core`, 13 new path operations and
-a gesture API in `x-editor`, `outline_text_node` in the facade) and **27 new
-tests** (7 for the offset, 20 for the path operations and the gesture contract);
-the app lost its dead wiring.
+a gesture API in `x-editor`, `outline_text_node` in the facade) and **28 new
+tests** (7 for the offset, 20 for the path operations and the gesture contract, 1
+witness for the flatten id collision); the app lost its dead wiring; and nine
+files that this branch did not otherwise touch were repaired because the gate
+cannot pass while `main`'s own breakage is in them.
 
 ### Status legend
 
@@ -384,9 +427,18 @@ through `ProtoRemove(usize)`), which is what makes the 172 exhaustive.
    so P/V/X/Q/E stopped hijacking the primary tools.
 5. ✅ Orphan files deleted (`p0_features.rs`, `vector_network.rs`) and the fourth
    blocker (`paint_vector_points` vs `NodeKind::Vector`) fixed.
-6. ⬜ **Run `./scripts/check.sh`.** This is the one P0 item that cannot be done
-   here: no toolchain, no network. Everything in this document is static analysis.
-7. ⬜ Correct §10's doc claims in the same commit, and retire or rewrite
+6. ✅ **`./scripts/check.sh` has now been run** — not here (no toolchain, no
+   network) but on CI, five rounds of it, with each verdict feeding the next.
+   Formatting is clean, the workspace compiles, LIVE lints are 0, **621 tests
+   pass**, and the CLI smoke tests pass. §0 records every diagnostic and who
+   introduced it. Everything else in this document is still static analysis.
+7. ⬜ **Reconcile the dead-code ratchet — the last red gate item.** 84 warnings
+   against `DEAD_CODE_CEILING = 76`; `docs/KNOWN_DEBT.md` documents 76, measured
+   before the tree stopped compiling. Either delete the eight undocumented ones
+   (`editor_ui.rs` 5, `state.rs` +3, `theme.rs` +1) or write them into the table
+   and move the ceiling to the measured number. `check.sh` now prints the items
+   when the ratchet trips.
+8. ⬜ Correct §10's doc claims in the same commit, and retire or rewrite
    `VECTOR_TOOLS_COMPLETE*.md` / `PHASE2…6_*.md`, which describe deleted code.
 
 ### P1 — highest Figma-parity value per unit of effort (all engine-ready)
