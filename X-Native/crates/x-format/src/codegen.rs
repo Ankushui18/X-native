@@ -1079,10 +1079,7 @@ mod tests {
         // Center is the default stroke align and CSS `border` is part of the
         // border-box model, so a centered stroke maps to `outline`; only an
         // INSIDE stroke earns `border` (see stroke_css).
-        assert!(
-            code.contains("outline: 1.5px solid '#ff0000'"),
-            "{code}"
-        );
+        assert!(code.contains("outline: 1.5px solid '#ff0000'"), "{code}");
         r.visual_stacks_materialized = true;
         r.stroke_layers = vec![x_core::StrokeLayer {
             options: x_core::StrokeOptions {

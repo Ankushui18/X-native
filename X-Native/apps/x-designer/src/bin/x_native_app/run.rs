@@ -5886,7 +5886,9 @@ impl Host {
                     x_native::Action::Back => x_native::Action::CloseOverlay,
                     x_native::Action::CloseOverlay => {
                         // Navigate to first other frame
-                        let dest = targets.first().map(|(id, _)| id.clone())
+                        let dest = targets
+                            .first()
+                            .map(|(id, _)| id.clone())
                             .unwrap_or_default();
                         x_native::Action::Navigate { destination: dest }
                     }
