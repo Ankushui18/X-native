@@ -4737,6 +4737,13 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
 
 // ------------------------------------------------------- canvas overlays
 
+/// The size badge is only drawn when the selection's SCREEN bounding box
+/// actually occupies area — a zero-size node would otherwise print a
+/// meaningless "0 × 0" under empty canvas.
+pub(crate) fn size_badge_visible(bb: &Rect) -> bool {
+    bb.width() > 0.5 && bb.height() > 0.5
+}
+
 fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
     let doc = match app.doc_opt() {
         Some(d) => d,
@@ -4783,21 +4790,25 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
             }
         }
         if let Some(b) = bb {
-            let label = format!(
-                "{} \u{d7} {}",
-                b.width().round() as i64,
-                b.height().round() as i64
-            );
-            let tw = app.fonts.measure(&label, 10.0, Wt::Mono);
-            let bw = (tw + 12.0).ceil();
-            let cx = (b.x0 + b.x1) / 2.0;
-            let by = b.y1 + 8.0;
-            let reg = app.editor_regions();
-            if by + 16.0 <= reg.canvas.y1 {
-                let br = Rect::new(cx - bw / 2.0, by, cx + bw / 2.0, by + 16.0);
-                fill_rrect(s, br, 3.0, C_SEL);
-                app.fonts
-                    .text(s, br.x0 + 6.0, by + 0.5, &label, 10.0, C_TEXT, Wt::Mono);
+            // a degenerate union (zero-size node) has no area to measure —
+            // printing "0 × 0" under empty canvas is noise
+            if size_badge_visible(&b) {
+                let label = format!(
+                    "{} \u{d7} {}",
+                    b.width().round() as i64,
+                    b.height().round() as i64
+                );
+                let tw = app.fonts.measure(&label, 10.0, Wt::Mono);
+                let bw = (tw + 12.0).ceil();
+                let cx = (b.x0 + b.x1) / 2.0;
+                let by = b.y1 + 8.0;
+                let reg = app.editor_regions();
+                if by + 16.0 <= reg.canvas.y1 {
+                    let br = Rect::new(cx - bw / 2.0, by, cx + bw / 2.0, by + 16.0);
+                    fill_rrect(s, br, 3.0, C_SEL);
+                    app.fonts
+                        .text(s, br.x0 + 6.0, by + 0.5, &label, 10.0, C_TEXT, Wt::Mono);
+                }
             }
         }
     }
@@ -6720,6 +6731,14 @@ fn paint_tokens(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
 #[cfg(test)]
 mod viewport_row_tests {
     use super::*;
+    #[test]
+    fn size_badge_needs_an_area_to_measure() {
+        assert!(size_badge_visible(&Rect::new(100.0, 100.0, 140.0, 140.0)));
+        assert!(size_badge_visible(&Rect::new(100.0, 100.0, 100.6, 140.0)));
+        // a zero-size node selects fine, but "0 × 0" is not a measurement
+        assert!(!size_badge_visible(&Rect::new(100.0, 100.0, 100.0, 100.0)));
+        assert!(!size_badge_visible(&Rect::new(100.0, 100.0, 140.0, 100.0)));
+    }
     #[test]
     fn layer_rows_allocate_only_the_visible_window_and_keep_flags() {
         let mut app = App::new();

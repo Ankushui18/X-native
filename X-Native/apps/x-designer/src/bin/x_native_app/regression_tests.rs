@@ -353,6 +353,30 @@ fn t17_comments_must_stay_on_their_page_after_page_reordering() {
 }
 
 #[test]
+fn new_file_opens_clean_without_the_canvas_grid() {
+    // The grid is OPT-IN: a fresh document must not auto-create canvas
+    // chrome (the user's viewport audit, P1). Both document constructors
+    // (new_blank via from_document, and demo_blank) share the default.
+    let mut h = host();
+    assert!(
+        !h.app.doc().guides_visible,
+        "a fresh document must open without the canvas grid"
+    );
+    let mut app = App::new();
+    app.open_blank();
+    assert!(
+        !app.doc().guides_visible,
+        "OpenDoc::new_blank must also start grid-free"
+    );
+    // the eye toggle still turns it on (grid off by default, not gone)
+    h.dispatch(Action::ToggleGuideVisibility);
+    assert!(
+        h.app.doc().guides_visible,
+        "the grid toggle must still be able to turn the grid on"
+    );
+}
+
+#[test]
 fn new_session_and_new_document_have_no_mock_content() {
     let mut app = App::new();
     assert!(app.docs.is_empty() && app.drafts.is_empty());

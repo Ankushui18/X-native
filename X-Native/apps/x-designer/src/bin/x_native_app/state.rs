@@ -1166,7 +1166,8 @@ impl OpenDoc {
             export_suffix: String::new(),
             guide_kind: 0,
             guide_size: 16.0,
-            guides_visible: true,
+            // the canvas grid is OPT-IN: a fresh document opens clean
+            guides_visible: false,
             scroll_left: 0.0,
             scroll_right: 0.0,
             guides: vec![],
@@ -1218,7 +1219,8 @@ impl OpenDoc {
             export_suffix: String::new(),
             guide_kind: 0,
             guide_size: 16.0,
-            guides_visible: true,
+            // the canvas grid is OPT-IN: a fresh document opens clean
+            guides_visible: false,
             scroll_left: 0.0,
             scroll_right: 0.0,
             guides: vec![],

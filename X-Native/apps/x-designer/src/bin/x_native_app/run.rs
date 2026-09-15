@@ -9611,6 +9611,12 @@ impl Host {
                 .copy(&gpu.device, &mut encoder, &gpu.target, &view);
             gpu.queue.submit([encoder.finish()]);
             tex.present();
+            // A lost surface self-heals on this very frame (we reconfigured
+            // it before rendering). The transient message must not linger
+            // in the status bar after the canvas is drawing again.
+            if self.app.status.contains("window surface is unavailable") {
+                self.app.status = "Ready".into();
+            }
             self.app.presented_frames += 1;
             if drawing_loading {
                 self.app.loading_frames_presented += 1;
