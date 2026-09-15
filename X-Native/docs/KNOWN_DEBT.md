@@ -17,6 +17,21 @@ only noise the gate tolerates.
 Where it lives (measured 16 Sep 2026, `--message-format short`, every item named
 — the gate prints this list itself when the ratchet trips):
 
+Reproduce the number instead of trusting this file. Both filters matter: the
+first drops clippy's per-crate summary lines (such as
+"warning: `x-ui` (lib) generated 7 warnings"), which would otherwise be counted
+as items, and the second is the
+dead-code rule `scripts/check.sh:55` applies.
+
+```sh
+cargo clippy --workspace --all-targets --message-format short 2>&1 \
+  | grep -E '\.rs:[0-9]+:[0-9]+: (warning|error)' \
+  | grep -cE 'never (used|read|constructed)'   # → 82
+```
+
+Swap `-c` for nothing and you get the list below. If your count differs from 82,
+this table is stale — fix the table and the ceiling together, never one alone.
+
 | Count | File | Why it is still there |
 |---|---|---|
 | 32 | `apps/x-designer/src/bin/x_native_app/context_menu.rs` | `render_context_menu()` builds a display list (`ContextPaintCommand`) that no painter consumes — the live right-click menu is `editor_ui::paint_context_menu()`. Either port the renderer onto the command list (it is easier to test) or delete the module's paint half. |
