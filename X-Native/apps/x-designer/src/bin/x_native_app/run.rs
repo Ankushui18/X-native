@@ -5061,6 +5061,29 @@ impl Host {
                         }
                         return;
                     }
+                    // Modifier-guarded arms MUST precede the plain Ctrl+C /
+                    // Ctrl+V / Ctrl+A arms below: rustc takes the first arm
+                    // whose pattern matches, and an unguarded pattern makes
+                    // every later guarded arm on the same key unreachable.
+                    // These three were dead until they moved (Ctrl+Shift+Alt+A
+                    // inverse-select, Ctrl+Alt+C copy properties, Ctrl+Alt+V
+                    // paste properties); Ctrl+Shift+Alt+M was already live.
+                    "a" | "A" if self.app.shift && self.app.alt => {
+                        self.dispatch(Action::InverseSelection);
+                        return;
+                    }
+                    "m" | "M" if self.app.shift && self.app.alt => {
+                        self.dispatch(Action::SelectMatching);
+                        return;
+                    }
+                    "c" | "C" if self.app.alt => {
+                        self.dispatch(Action::CopyProperties);
+                        return;
+                    }
+                    "v" | "V" if self.app.alt => {
+                        self.dispatch(Action::PasteProperties);
+                        return;
+                    }
                     "c" | "C" => {
                         self.app.copy_nodes();
                         return;
@@ -5183,22 +5206,6 @@ impl Host {
                                 self.app.status = "Select the anchor to split at, then ⇧⌘B".into()
                             }
                         }
-                        return;
-                    }
-                    "a" | "A" if self.app.shift && self.app.alt => {
-                        self.dispatch(Action::InverseSelection);
-                        return;
-                    }
-                    "m" | "M" if self.app.shift && self.app.alt => {
-                        self.dispatch(Action::SelectMatching);
-                        return;
-                    }
-                    "c" | "C" if self.app.alt => {
-                        self.dispatch(Action::CopyProperties);
-                        return;
-                    }
-                    "v" | "V" if self.app.alt => {
-                        self.dispatch(Action::PasteProperties);
                         return;
                     }
                     _ => {}
@@ -5915,6 +5922,8 @@ impl Host {
             if let Some(ix) = l.get_mut(i) {
                 if let x_native::Trigger::KeyDown { key } = &mut ix.trigger {
                     // Cycle through common keys
+                    // The arms are &'static str and the field is a String; the
+                    // match borrow of `key` ends before the assignment.
                     *key = match key.as_str() {
                         "Enter" => "Space",
                         "Space" => "Escape",
@@ -5924,7 +5933,8 @@ impl Host {
                         "ArrowUp" => "ArrowDown",
                         "ArrowDown" => "a",
                         _ => "Enter",
-                    };
+                    }
+                    .to_string();
                 }
             }
         });
@@ -5942,7 +5952,8 @@ impl Host {
                         "https://example.com" => "https://figma.com",
                         "https://figma.com" => "https://github.com",
                         _ => "",
-                    };
+                    }
+                    .to_string();
                 }
             }
         });

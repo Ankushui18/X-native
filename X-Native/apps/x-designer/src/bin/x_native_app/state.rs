@@ -323,10 +323,11 @@ pub enum Action {
     ProtoActionType(usize),
     ProtoEasing(usize),
     ProtoToggleReset(usize),
-    ProtoAddAction(usize),
-    ProtoRemoveAction(usize, usize),
-    ProtoSetVariable(usize),
-    ProtoConditional(usize),
+    // ProtoAddAction / ProtoRemoveAction / ProtoSetVariable / ProtoConditional
+    // were declared here and constructed nowhere, so `dispatch` could never be
+    // exhaustive over them (E0004) — the app crate did not compile. Deleting
+    // them is the honest fix: "add interaction" and "set variable" have no UI,
+    // and removing one already goes through ProtoRemove(usize) below.
     ProtoEditDelay(usize),
     ProtoEditKey(usize),
     ProtoEditUrl(usize),

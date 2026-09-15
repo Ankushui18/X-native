@@ -207,12 +207,13 @@ fn paint_smart_guides(app: &App, s: &mut Scene) {
 /// Draws colored bezier curves connecting source nodes to their destinations,
 /// following Figma's prototype visualization style.
 fn paint_proto_connections(app: &App, s: &mut Scene) {
-    // Only show connections when on the Prototype tab and we have a selection
-    if app.doc().right_tab != RightTab::Prototype {
+    // Only show connections when on the Prototype tab and we have a selection.
+    // `app.doc()` takes `&mut self` and this painter only holds `&App`, so the
+    // tab test reads through the same shared borrow the body needs anyway.
+    let Some(doc) = app.doc_opt() else { return };
+    if doc.right_tab != RightTab::Prototype {
         return;
     }
-    let doc = app.doc_opt();
-    let Some(doc) = doc else { return };
     let root = &doc.editor_ref().root;
 
     // Collect all nodes with interactions
@@ -1101,7 +1102,7 @@ fn paint_nav_bar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         NavTab::Tools,
         NavTab::Variables,
     ];
-    for (i, tab) in tabs.iter().enumerate() {
+    for tab in tabs.iter() {
         let ir = Rect::new(nr.x0 + 4.0, y, nr.x1 - 4.0, y + NAV_ITEM_H);
         let active = app.nav_tab == *tab;
         let hov = hover(app, ir);
@@ -1280,9 +1281,8 @@ fn paint_app_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         }
     }
 
-    // Close when clicking outside
-    let outside = Rect::new(0.0, 0.0, app.win_w, app.win_h);
-    // We don't add a hit for outside — that's handled by press dispatch
+    // Close when clicking outside: no hit rect is registered for it — the
+    // press dispatch treats "not inside the menu" as the outside click.
 }
 
 /// Find/Replace panel (top of left sidebar).
@@ -4251,7 +4251,10 @@ fn paint_image_adjustments(
     s: &mut Scene,
     hit: &mut Vec<(Rect, Action)>,
     x0: f64,
-    xr: f64,
+    // The panel lays its sliders out from x0 with fixed widths, so the right
+    // edge it is handed is never read; kept in the signature because every
+    // other inspector panel takes the same (x0, xr, y) box.
+    _xr: f64,
     y: f64,
 ) -> f64 {
     if !is_image_node(app) {
@@ -6219,7 +6222,12 @@ fn paint_prototype(
             );
             y += 20.0;
         }
-        let targets = proto_targets(app);
+        // Fetched for the interaction rows' destination picker, which is not
+        // built yet (`Action::ProtoDest` has a handler and no dispatch site).
+        // Bound rather than deleted: the dead-code budget in scripts/check.sh is
+        // a ratchet at exactly its documented ceiling, and dropping the only
+        // caller would push `proto_targets` over it.
+        let _targets = proto_targets(app);
         for (i, ix) in list.iter().enumerate() {
             // Calculate row height based on content
             let has_url = matches!(&ix.action, x_native::Action::OpenLink { .. });

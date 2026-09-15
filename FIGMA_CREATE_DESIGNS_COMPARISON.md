@@ -70,6 +70,20 @@ breakage that no CI run had ever reported**. Every diagnostic was attributed by
 | `center + (value * slider_r.width() / 2.0)` — the image-adjustment fields are `f32`, `Rect::width()` is `f64` (4 × `E0277`/`E0308`) | `main` | `value as f64` |
 | `NotificationKind` imported and never used | `main` | Import dropped |
 
+**Round 3** — with those repaired, the compiler went deeper still and reported 4
+more errors and 7 more warnings, **every one of them pre-existing on `main`**
+(blame: `faff63f1`). `scripts/check.sh` requires zero LIVE warnings — anything
+not phrased "never used/read/constructed" — so these block the gate exactly as
+hard as the errors do:
+
+| Diagnostic | Whose | Fix |
+|---|---|---|
+| 2 × `E0308` in `proto_edit_key` / `proto_edit_url`: `*key = match key.as_str() { "Enter" => "Space", … }` assigns `&'static str` into a `String` field | `main` | `.to_string()` on the match result; the arms are static strings so the borrow of `key` ends before the assignment |
+| `E0596` in `paint_proto_connections(app: &App, ..)`: called `app.doc()`, which takes `&mut self` (`state.rs:1594`) | `main` | The tab test now reads `app.doc_opt()` — the shared borrow the body needed on its next line anyway |
+| `E0004` non-exhaustive `dispatch`: `ProtoAddAction`, `ProtoRemoveAction`, `ProtoSetVariable`, `ProtoConditional` | `main` | Deleted — see the correction in §9 |
+| 3 × `unreachable_pattern`: the guarded arms `"a" \| "A" if shift && alt` (inverse selection), `"c" \| "C" if alt` (copy properties) and `"v" \| "V" if alt` (paste properties) sat **below** the unguarded ⌘A / ⌘C / ⌘V arms, so three real shortcuts silently did nothing | `main` | The four modifier-guarded arms moved above the plain-⌘ family, with a comment stating the precedence rule. This is a behaviour fix, not just a warning fix: ⇧⌥A, ⌥⌘C and ⌥⌘V work now (§11) |
+| 4 × unused variable (`i` in the nav-tab loop, `outside` — a `Rect` built and dropped, `xr` — an inspector parameter the panel never reads, `targets` — `proto_targets(app)` fetched for a destination picker that was never built) | `main` | `i` and `outside` removed; `xr` renamed `_xr` with a note (every other panel takes the same `(x0, xr, y)` box); the `targets` binding renamed `_targets` and kept — **not** deleted, because `scripts/check.sh` ratchets dead code at `DEAD_CODE_CEILING=76` and `docs/KNOWN_DEBT.md` documents a pile of exactly 76, so dropping `proto_targets`' only caller would push it over. §9 still lists `ProtoDest` as an action with a handler and no dispatch site |
+
 While moving that brace, one behavioural bug came with it: the loop computes
 `let row_h = if has_url { 92.0 } else { 56.0 };` and paints a row rect that tall,
 but `y` never advanced by it — the only `y +=` in the function is *after* the loop
@@ -275,22 +289,27 @@ Now the weakest section, and the only one still carrying dead wiring.
 
 ### Still dead (all pre-existing; none introduced by this branch)
 
-Verified mechanically: every `Action::X` in the enum was cross-checked against
-construction sites across all app files. **19 variants have a handler and no
-dispatch site** — `CloseAppMenu`, `CloseFind`, `CollapseAllLayers`,
-`EnableEyedropper`, `FileDuplicate`, `FileRename`, `MoveGradientStop`, `NewBoard`,
-`OpenFind`, `ProtoActionType`, `ProtoAnimation`, `ProtoDest`,
-`RemoveGradientStop`, `ResizeLeftSidebar`, `SetGradientType`,
-`SetImageAdjustments`, `SetImageFillMode`, `ToggleMinimizeUI`, `ToggleNavLabels`.
-The enum holds **176 variants**: 172 have an explicit arm in `dispatch`, and the
+Verified mechanically (every `Action::X` in the enum cross-checked against
+construction sites in all app files, or-arms included) and then by the compiler.
+The enum holds **172 variants, every one with an explicit arm in `dispatch`** —
+exhaustiveness is no longer a claim but a property rustc enforces — and the
 palette is exactly balanced (57 labels ↔ 57 dispatch arms, no dead entries, no
-orphans). The remaining **4 are enum-only** — `ProtoAddAction`,
-`ProtoRemoveAction`, `ProtoSetVariable`, `ProtoConditional` (`state.rs:326-329`)
-are neither constructed nor matched anywhere in the workspace, so they are
-silently swallowed by the `_ => {}` wildcard at the end of `dispatch`. They are
-the deepest kind of dead wiring (an action that cannot be produced *or*
-consumed), and pre-date this branch; the prototype inspector should either build
-them or the variants should go.
+orphans). **20 variants have a handler and no dispatch site**: `CloseAppMenu`,
+`CloseFind`, `CollapseAllLayers`, `EnableEyedropper`, `FileDuplicate`,
+`FileMoveToDrafts`, `FileRename`, `MoveGradientStop`, `NewBoard`, `OpenFind`,
+`ProtoActionType`, `ProtoAnimation`, `ProtoDest`, `RemoveGradientStop`,
+`ResizeLeftSidebar`, `SetGradientType`, `SetImageAdjustments`,
+`SetImageFillMode`, `ToggleMinimizeUI`, `ToggleNavLabels`.
+
+**A correction to the previous revision of this document.** It reported four
+enum-only variants — `ProtoAddAction`, `ProtoRemoveAction`, `ProtoSetVariable`,
+`ProtoConditional` — as "silently swallowed by the `_ => {}` wildcard at the end
+of `dispatch`". That was wrong, and reading code without a compiler is why: the
+wildcard my scan found belongs to a *nested* match inside a dispatch arm, not to
+`dispatch` itself. `dispatch` has no catch-all, so those four uncovered variants
+were a hard `E0004 non-exhaustive patterns` — the app crate did not compile.
+They are deleted (constructed nowhere; removing an interaction already goes
+through `ProtoRemove(usize)`), which is what makes the 172 exhaustive.
 
 | Feature area | State | Evidence |
 |---|---|---|
@@ -336,8 +355,10 @@ them or the variants should go.
 | Renumber selection | ⌘R modal (numbering) | **⇧⌘R** | numbering only; no find/replace (§3.13) |
 | Layer-tree navigation | ⏎ child, ⇧⏎ parent, Tab/⇧Tab siblings | **same ✅** | fixed on this branch (handlers existed, nothing dispatched them) |
 | Deep select | ⌘-click | **⌘-click ✅** | fixed on this branch |
-| Select matching layers | ⌥⌘A | ⌥⇧M | deviation |
-| Inverse selection | ⇧⌘A (via Select menu) | ⌥⇧A | deviation |
+| Select matching layers | ⌥⌘A | ⌥⇧M | deviation; the arm was already reachable |
+| Inverse selection | ⇧⌘A (via Select menu) | ⌥⇧A | deviation — **and it did nothing until this branch**: the guarded arm sat *below* the unguarded ⌘A select-all arm, and rustc takes the first pattern that matches, so it was `unreachable_pattern` dead code. Moved above; now live |
+| Copy properties | ⌥⌘C | **⌥⌘C ✅** | same arm-order bug, same fix — was shadowed by ⌘C copy |
+| Paste properties | ⌥⌘V | **⌥⌘V ✅** | same — was shadowed by ⌘V paste |
 | Add auto layout | ⇧A | *unbound* (inspector + palette) | |
 | Use as mask | ⌥⌘M | *unbound* | no mask UI at all (§2.9) |
 | Frame selection | ⌥⌘G | *unbound* | only in the decorative menu |
