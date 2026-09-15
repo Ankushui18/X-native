@@ -432,7 +432,8 @@ fn paint_text_editor(app: &App, s: &mut Scene) {
 
 /// Anchor / handle colours for vector edit mode (the app's selection blue at
 /// two alphas: solid for a selected point, translucent for the tangent chrome).
-const POINT_SELECTED: vello::peniko::Color = vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0xFF);
+const POINT_SELECTED: vello::peniko::Color =
+    vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0xFF);
 const POINT_IDLE: vello::peniko::Color = vello::peniko::Color::from_rgba8(0xFF, 0xFF, 0xFF, 0xFF);
 const POINT_BORDER: vello::peniko::Color = vello::peniko::Color::from_rgba8(0x00, 0x00, 0x00, 0xFF);
 const HANDLE_COLOR: vello::peniko::Color = vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0x40);
@@ -587,7 +588,13 @@ fn paint_context_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         (CtxCmd::Intersect, "", "Intersect", "⌘⌥I", sel2),
         (CtxCmd::Exclude, "", "Exclude", "⌘⌥X", sel2),
         (CtxCmd::Flatten, "layers", "Flatten", "⌘E", sel),
-        (CtxCmd::OutlineStroke, "pen-line", "Outline stroke", "⇧⌘O", sel),
+        (
+            CtxCmd::OutlineStroke,
+            "pen-line",
+            "Outline stroke",
+            "⇧⌘O",
+            sel,
+        ),
         (CtxCmd::OutlineText, "type", "Outline text", "⇧⌥⌘O", sel),
         (CtxCmd::LockSel, "lock", "Lock", "⇧⌘L", sel),
         (CtxCmd::HideSel, "eye-off", "Hide", "⇧⌘H", sel),

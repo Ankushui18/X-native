@@ -2265,9 +2265,10 @@ impl App {
             OutlineText => unreachable!("outline text handled above"),
             Flatten => {
                 if doc.editor().flatten_selected().is_none() {
-                    refusal =
-                        Some("Select one shape or group to flatten (a vector layer is already flat)"
-                            .into());
+                    refusal = Some(
+                        "Select one shape or group to flatten (a vector layer is already flat)"
+                            .into(),
+                    );
                 }
             }
             OutlineStroke => {

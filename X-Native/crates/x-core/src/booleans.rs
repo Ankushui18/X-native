@@ -1247,7 +1247,11 @@ mod tests {
         let miter = offset_path(&sq(100.0), 10.0, StrokeJoin::Miter);
         let bevel = offset_path(&sq(100.0), 10.0, StrokeJoin::Bevel);
         let round = offset_path(&sq(100.0), 10.0, StrokeJoin::Round);
-        let pts = |p: &[PathCmd]| p.iter().filter(|c| matches!(c, PathCmd::LineTo(..))).count();
+        let pts = |p: &[PathCmd]| {
+            p.iter()
+                .filter(|c| matches!(c, PathCmd::LineTo(..)))
+                .count()
+        };
         assert_eq!(pts(&miter), 3, "miter keeps one point per corner");
         assert!(
             pts(&bevel) > pts(&miter),
@@ -1318,7 +1322,10 @@ mod tests {
         let after = area_of(&out);
         let expected = std::f64::consts::PI * (r + 5.0).powi(2);
         assert!(
-            out.iter().filter(|c| matches!(c, PathCmd::LineTo(..))).count() > 20,
+            out.iter()
+                .filter(|c| matches!(c, PathCmd::LineTo(..)))
+                .count()
+                > 20,
             "the flattened ring is a polygon, got {:?}",
             out.len()
         );

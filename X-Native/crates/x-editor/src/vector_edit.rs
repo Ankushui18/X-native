@@ -773,8 +773,14 @@ fn segment_deviation(cmd: PathCmd, from: (f64, f64)) -> f64 {
     for k in 1..16 {
         let t = k as f64 / 16.0;
         let mt = 1.0 - t;
-        let px = mt * mt * mt * from.0 + 3.0 * mt * mt * t * c1x + 3.0 * mt * t * t * c2x + t * t * t * x;
-        let py = mt * mt * mt * from.1 + 3.0 * mt * mt * t * c1y + 3.0 * mt * t * t * c2y + t * t * t * y;
+        let px = mt * mt * mt * from.0
+            + 3.0 * mt * mt * t * c1x
+            + 3.0 * mt * t * t * c2x
+            + t * t * t * x;
+        let py = mt * mt * mt * from.1
+            + 3.0 * mt * mt * t * c1y
+            + 3.0 * mt * t * t * c2y
+            + t * t * t * y;
         worst = worst.max(perp_dist((px, py), from, (x, y)));
     }
     worst
@@ -933,7 +939,12 @@ pub fn translate_path(cmds: &[PathCmd], dx: f64, dy: f64) -> Vec<PathCmd> {
 /// uses, which is what makes a corner point become a curve point in ONE undo
 /// step. Anchor 0 of an open path has no incoming segment, so the handle goes
 /// on the outgoing one. Returns None when the anchor does not exist.
-pub fn bend_anchor(path: &[PathCmd], idx: usize, pos: (f64, f64), mirror: bool) -> Option<Vec<PathCmd>> {
+pub fn bend_anchor(
+    path: &[PathCmd],
+    idx: usize,
+    pos: (f64, f64),
+    mirror: bool,
+) -> Option<Vec<PathCmd>> {
     let list = anchors(path);
     let a = list.get(idx).copied()?;
     let prev = if idx > 0 {
@@ -1363,7 +1374,9 @@ impl Editor {
         anchor_idx: usize,
         handle_pos: (f64, f64),
     ) -> bool {
-        self.rewrite_path(node_id, |path| bend_anchor(path, anchor_idx, handle_pos, true))
+        self.rewrite_path(node_id, |path| {
+            bend_anchor(path, anchor_idx, handle_pos, true)
+        })
     }
 
     /// Move one bezier handle of an anchor: `handle_idx` 0 = incoming (the
@@ -1810,7 +1823,10 @@ mod tests {
         let mut e = three_anchors();
         assert!(e.enter_vector_edit_mode("v"));
         assert!(e.select_vector_point(0, false));
-        assert!(e.select_vector_point(1, true), "shift adds to the selection");
+        assert!(
+            e.select_vector_point(1, true),
+            "shift adds to the selection"
+        );
         assert_eq!(e.vector_edit_selected_points, vec![0, 1]);
         // a stale index (there is no anchor 9) is refused, not mis-applied
         assert!(!e.select_vector_point(9, true));
@@ -1850,7 +1866,10 @@ mod tests {
             !e.delete_vector_points(),
             "deleting two of three anchors would leave no segment"
         );
-        assert!(!e.add_vector_point(0, (1.0, 1.0)), "segment 0 cannot take one");
+        assert!(
+            !e.add_vector_point(0, (1.0, 1.0)),
+            "segment 0 cannot take one"
+        );
         assert_eq!(e.undo_depth(), depth, "undo still undoes real work only");
         // the refused delete left the selection intact, so a real move works
         assert!(e.move_vector_points(5.0, 0.0));
@@ -1929,7 +1948,11 @@ mod tests {
             ],
             "the collinear midpoint goes, the corner stays"
         );
-        assert_eq!(simplify_path(&p, 0.0), p, "a zero tolerance changes nothing");
+        assert_eq!(
+            simplify_path(&p, 0.0),
+            p,
+            "a zero tolerance changes nothing"
+        );
         assert_eq!(
             simplify_path(&p, -1.0),
             p,
@@ -1994,16 +2017,23 @@ mod tests {
             "backwards through a cubic swaps its control points"
         );
         // one undo step through the editor
-        let mut e = Editor::new(
-            Node::frame("page", 800.0, 600.0)
-                .child(Node::vector("v", 0.0, 0.0, 20.0, 20.0, sq.clone())),
-        );
+        let mut e = Editor::new(Node::frame("page", 800.0, 600.0).child(Node::vector(
+            "v",
+            0.0,
+            0.0,
+            20.0,
+            20.0,
+            sq.clone(),
+        )));
         let depth = e.undo_depth();
         assert!(e.reverse_path_direction("v"));
         assert_eq!(e.undo_depth(), depth + 1);
         assert!(e.undo());
         assert_eq!(path_of(&e, "v"), sq);
-        assert!(!e.reverse_path_direction("nope"), "an unknown node is refused");
+        assert!(
+            !e.reverse_path_direction("nope"),
+            "an unknown node is refused"
+        );
     }
 
     #[test]
@@ -2023,25 +2053,40 @@ mod tests {
             b,
             vec![PathCmd::MoveTo(50.0, 0.0), PathCmd::LineTo(100.0, 0.0)]
         );
-        assert!(split_path_at(&p, 0).is_none(), "the first anchor cannot split");
+        assert!(
+            split_path_at(&p, 0).is_none(),
+            "the first anchor cannot split"
+        );
         assert!(split_path_at(&p, 2).is_none(), "nor can the last");
         // through the editor: two layers, one undo step, the new one selected
-        let mut e = Editor::new(
-            Node::frame("page", 800.0, 600.0)
-                .child(Node::vector("v", 0.0, 0.0, 100.0, 10.0, p.clone())),
-        );
+        let mut e = Editor::new(Node::frame("page", 800.0, 600.0).child(Node::vector(
+            "v",
+            0.0,
+            0.0,
+            100.0,
+            10.0,
+            p.clone(),
+        )));
         e.selection = vec!["v".into()];
         let new_id = e.split_vector_path("v", 1).expect("split");
         assert_eq!(e.root.children.len(), 2, "the second half is a sibling");
         assert_eq!(e.root.children[1].id, new_id);
-        assert_eq!(e.selection, vec![new_id.clone()], "the new layer is selected");
+        assert_eq!(
+            e.selection,
+            vec![new_id.clone()],
+            "the new layer is selected"
+        );
         assert_eq!(
             path_of(&e, "v"),
             vec![PathCmd::MoveTo(0.0, 0.0), PathCmd::LineTo(50.0, 0.0)]
         );
         assert_eq!(path_of(&e, &new_id), b);
         assert!(e.undo());
-        assert_eq!(e.root.children.len(), 1, "one undo restores the closed path");
+        assert_eq!(
+            e.root.children.len(),
+            1,
+            "one undo restores the closed path"
+        );
         assert_eq!(path_of(&e, "v"), p);
     }
 
@@ -2079,7 +2124,11 @@ mod tests {
             ],
             "coincident ends become ONE anchor, not a zero-length segment"
         );
-        assert_eq!(e.undo_depth(), depth + 1, "replace + delete = one undo step");
+        assert_eq!(
+            e.undo_depth(),
+            depth + 1,
+            "replace + delete = one undo step"
+        );
         assert!(e.undo());
         assert!(find(&e.root, "a").is_some() && find(&e.root, "b").is_some());
     }
@@ -2148,9 +2197,15 @@ mod tests {
             ));
         let mut e = Editor::new(page);
         let depth = e.undo_depth();
-        assert!(e.join_paths("a", "b").is_none(), "a rotated node is refused");
+        assert!(
+            e.join_paths("a", "b").is_none(),
+            "a rotated node is refused"
+        );
         assert!(e.join_paths("a", "r").is_none(), "so is a non-vector");
-        assert!(e.join_paths("a", "a").is_none(), "and joining a node to itself");
+        assert!(
+            e.join_paths("a", "a").is_none(),
+            "and joining a node to itself"
+        );
         assert!(find(&e.root, "b").is_some(), "nothing was removed");
         assert_eq!(e.undo_depth(), depth, "nothing was pushed");
     }
@@ -2208,17 +2263,13 @@ mod tests {
     fn lasso_picks_the_anchors_inside_a_world_boundary() {
         let mut e = three_anchors();
         e.enter_vector_edit_mode("v");
-        let box_lasso = vec![
-            (-10.0, -10.0),
-            (60.0, -10.0),
-            (60.0, 10.0),
-            (-10.0, 10.0),
-        ];
+        let box_lasso = vec![(-10.0, -10.0), (60.0, -10.0), (60.0, 10.0), (-10.0, 10.0)];
         assert_eq!(e.lasso_select_points("v", &box_lasso), vec![0, 1]);
         let triangle = vec![(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0)];
         assert_eq!(e.lasso_select_points("v", &triangle), vec![0]);
         assert!(
-            e.lasso_select_points("v", &[(0.0, 0.0), (1.0, 1.0)]).is_empty(),
+            e.lasso_select_points("v", &[(0.0, 0.0), (1.0, 1.0)])
+                .is_empty(),
             "a degenerate lasso selects nothing"
         );
         assert!(
@@ -2245,8 +2296,7 @@ mod tests {
         let p = path_of(&e, "v");
         let a = anchors(&p);
         assert!(a.len() >= 4, "the ring still has its four corners: {a:?}");
-        let (mut minx, mut miny, mut maxx, mut maxy) =
-            (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        let (mut minx, mut miny, mut maxx, mut maxy) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
         for pt in &a {
             minx = minx.min(pt.x);
             miny = miny.min(pt.y);
@@ -2360,7 +2410,10 @@ mod tests {
     #[test]
     fn a_gesture_only_opens_on_a_vector_node() {
         let mut e = three_anchors();
-        assert!(!e.begin_path_gesture("page"), "a frame has no anchors to drag");
+        assert!(
+            !e.begin_path_gesture("page"),
+            "a frame has no anchors to drag"
+        );
         assert!(!e.begin_path_gesture("nope"));
         assert!(!e.path_gesture_active());
     }
@@ -2424,7 +2477,10 @@ mod tests {
             move_handle_in(&open, 0, true, 1.0, 1.0, true).is_some(),
             "but it does have an outgoing one"
         );
-        assert!(move_handle_in(&p, 9, true, 1.0, 1.0, false).is_none(), "no such anchor");
+        assert!(
+            move_handle_in(&p, 9, true, 1.0, 1.0, false).is_none(),
+            "no such anchor"
+        );
     }
 
     #[test]
@@ -2452,6 +2508,9 @@ mod tests {
         let p = path_of(&e, "v");
         assert_eq!(p[2], PathCmd::CurveTo(60.0, -30.0, 90.0, 0.0, 100.0, 0.0));
         assert!(e.undo());
-        assert_eq!(path_of(&e, "v")[2], PathCmd::CurveTo(60.0, 0.0, 90.0, 0.0, 100.0, 0.0));
+        assert_eq!(
+            path_of(&e, "v")[2],
+            PathCmd::CurveTo(60.0, 0.0, 90.0, 0.0, 100.0, 0.0)
+        );
     }
 }

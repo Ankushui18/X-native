@@ -2655,11 +2655,13 @@ impl Editor {
             return false;
         };
         // refuse the no-op BEFORE cloning, so it never reaches the undo stack
-        if node
-            .stroke_layers
-            .first()
-            .map(|l| if start { l.options.cap_start } else { l.options.cap_end })
-            == Some(cap)
+        if node.stroke_layers.first().map(|l| {
+            if start {
+                l.options.cap_start
+            } else {
+                l.options.cap_end
+            }
+        }) == Some(cap)
         {
             return false;
         }

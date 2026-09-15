@@ -1657,9 +1657,7 @@ impl App {
             // drag slides the point (and every other selected point with it).
             if pen {
                 if self.app.doc().editor().begin_path_gesture(&id) {
-                    self.app.drag = Some(Drag::VectorBend {
-                        anchor_idx: anchor,
-                    });
+                    self.app.drag = Some(Drag::VectorBend { anchor_idx: anchor });
                 }
                 return true;
             }
@@ -1677,7 +1675,8 @@ impl App {
         //    continues the open path) instead of starting a new polygon. On a
         //    segment it cuts an anchor in where the pen clicked.
         if pen {
-            if let Some(seg) = x_native::editor::segment_at_world(&node, world.x, world.y, anchor_tol)
+            if let Some(seg) =
+                x_native::editor::segment_at_world(&node, world.x, world.y, anchor_tol)
             {
                 if seg > 0 {
                     let (lx, ly) = x_native::editor::local_point(&node, world.x, world.y);
@@ -1688,7 +1687,12 @@ impl App {
                     return true;
                 }
             }
-            if self.app.doc().editor().pen_add_anchor_world(&id, world.x, world.y) {
+            if self
+                .app
+                .doc()
+                .editor()
+                .pen_add_anchor_world(&id, world.x, world.y)
+            {
                 self.app.mark_dirty();
                 self.sync_vector_edit_mode();
             }
@@ -5174,8 +5178,7 @@ impl Host {
                         match self.app.vector_edit_mode.selected_points.first().copied() {
                             Some(i) => self.dispatch(Action::SplitVectorPath(i)),
                             None => {
-                                self.app.status =
-                                    "Select the anchor to split at, then ⇧⌘B".into()
+                                self.app.status = "Select the anchor to split at, then ⇧⌘B".into()
                             }
                         }
                         return;
@@ -5546,18 +5549,10 @@ impl Host {
             // the palette takes no parameters, so a cap entry states the cap it
             // applies and sets BOTH ends — the per-end dropdowns are the
             // inspector's job, and the engine keeps them separate
-            "Stroke cap: round (both ends)" => {
-                self.apply_stroke_caps(x_native::StrokeCap::Round)
-            }
-            "Stroke cap: square (both ends)" => {
-                self.apply_stroke_caps(x_native::StrokeCap::Square)
-            }
-            "Stroke cap: butt (both ends)" => {
-                self.apply_stroke_caps(x_native::StrokeCap::None)
-            }
-            "Stroke cap: arrow (both ends)" => {
-                self.apply_stroke_caps(x_native::StrokeCap::Arrow)
-            }
+            "Stroke cap: round (both ends)" => self.apply_stroke_caps(x_native::StrokeCap::Round),
+            "Stroke cap: square (both ends)" => self.apply_stroke_caps(x_native::StrokeCap::Square),
+            "Stroke cap: butt (both ends)" => self.apply_stroke_caps(x_native::StrokeCap::None),
+            "Stroke cap: arrow (both ends)" => self.apply_stroke_caps(x_native::StrokeCap::Arrow),
             "Renumber selected layers" => self.dispatch(Action::RenumberSelection),
             "Enter vector edit mode" => self.dispatch(Action::EnterVectorEditMode),
             "Toggle bezier handles" => self.dispatch(Action::ToggleVectorHandles),
@@ -8664,8 +8659,7 @@ impl Host {
                                     stripped
                                 });
                             }
-                            let name =
-                                format!("{} {}", base.as_deref().unwrap_or("Layer"), i + 1);
+                            let name = format!("{} {}", base.as_deref().unwrap_or("Layer"), i + 1);
                             node.name = name;
                             node.dirty = true;
                             n += 1;
@@ -8675,8 +8669,7 @@ impl Host {
                 };
                 if renamed {
                     self.app.mark_dirty();
-                    self.app.status =
-                        format!("Renumbered {} layers (one undo step)", ids.len());
+                    self.app.status = format!("Renumbered {} layers (one undo step)", ids.len());
                 } else {
                     self.app.status = "Nothing to renumber".into();
                 }
@@ -8700,8 +8693,8 @@ impl Host {
                 match clipboard {
                     Some(c) => {
                         self.app.property_clipboard = Some(c);
-                        self.app.status = "Properties copied (fill, stroke, effects, opacity, radius)"
-                            .into();
+                        self.app.status =
+                            "Properties copied (fill, stroke, effects, opacity, radius)".into();
                     }
                     None => {
                         self.app.status = "Select exactly one layer to copy properties".into();
@@ -8835,8 +8828,9 @@ impl Host {
                             .into()
                     }
                     // the engine refuses anything that has no anchors to edit
-                    (false, true) => "Anchor editing needs a vector layer - this one has none"
-                        .into(),
+                    (false, true) => {
+                        "Anchor editing needs a vector layer - this one has none".into()
+                    }
                     (false, false) => "Select a vector layer to edit its anchors".into(),
                 };
             }
@@ -8885,8 +8879,7 @@ impl Host {
                     self.sync_vector_edit_mode();
                     self.app.status = "Deleted the selected anchors".into();
                 } else {
-                    self.app.status =
-                        "Cannot delete - a path keeps at least two anchors".into();
+                    self.app.status = "Cannot delete - a path keeps at least two anchors".into();
                 }
             }
             Action::ToggleVectorHandles => {
@@ -8905,7 +8898,8 @@ impl Host {
                     self.app.mark_dirty();
                     self.app.status = "Handles removed - the point is a corner again".into();
                 } else {
-                    self.app.status = "That point is already a corner - no handles to remove".into();
+                    self.app.status =
+                        "That point is already a corner - no handles to remove".into();
                 }
             }
             Action::LassoSelectPoints { boundary } => {
@@ -8976,10 +8970,8 @@ impl Host {
                 };
                 if self.app.doc().editor().offset_vector(&id, distance, join) {
                     self.app.mark_dirty();
-                    self.app.status = format!(
-                        "Offset the path by {distance}px ({:?} corners)",
-                        join
-                    );
+                    self.app.status =
+                        format!("Offset the path by {distance}px ({:?} corners)", join);
                 } else {
                     self.app.status =
                         "Cannot offset - select a vector layer and use a non-zero distance".into();

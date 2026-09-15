@@ -148,15 +148,14 @@ pub fn outline_text_node(
     let typo_num = |k: &str| node.bindings.get(k).and_then(|v| v.parse::<f64>().ok());
     let ls = node.bound_number("letterspacing", vars, typo_num("ls").unwrap_or(0.0));
     let font = node.bindings.get("font").cloned();
-    let (lh_mode, lh_value) =
-        match node
-            .bindings
-            .get("lineheight")
-            .and_then(|name| vars.numbers.get(name))
-        {
-            Some(px) if *px > 0.0 => (1u8, *px),
-            _ => node.lh_mode_value(),
-        };
+    let (lh_mode, lh_value) = match node
+        .bindings
+        .get("lineheight")
+        .and_then(|name| vars.numbers.get(name))
+    {
+        Some(px) if *px > 0.0 => (1u8, *px),
+        _ => node.lh_mode_value(),
+    };
     // a px / percent line-height is a BOX; the shaper wants a multiplier of the
     // face's natural line height — the same conversion the sinks perform
     let nat = x_text::resolve_natural_line_height(fonts, font.as_deref(), size).max(0.1);
@@ -312,7 +311,10 @@ fn bez_to_path_cmds(p: &vello::kurbo::BezPath) -> Vec<PathCmd> {
                 cur = (a.x, a.y);
             }
             PathEl::QuadTo(a, b) => {
-                let c1 = (cur.0 + 2.0 / 3.0 * (a.x - cur.0), cur.1 + 2.0 / 3.0 * (a.y - cur.1));
+                let c1 = (
+                    cur.0 + 2.0 / 3.0 * (a.x - cur.0),
+                    cur.1 + 2.0 / 3.0 * (a.y - cur.1),
+                );
                 let c2 = (b.x + 2.0 / 3.0 * (a.x - b.x), b.y + 2.0 / 3.0 * (a.y - b.y));
                 out.push(PathCmd::CurveTo(c1.0, c1.1, c2.0, c2.1, b.x, b.y));
                 cur = (b.x, b.y);
