@@ -1563,7 +1563,6 @@ impl App {
         Some((p0.x, p0.y, fw))
     }
 
-
     /// Font face for editor ink, resolved exactly like the renderer:
     /// family (run override, then node binding) at the weight, else the
     /// default family at that weight.
