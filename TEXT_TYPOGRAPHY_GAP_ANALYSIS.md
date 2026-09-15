@@ -26,8 +26,8 @@ What is missing sits almost entirely **above** the engine:
 | Data model (`x-core`) | Two **parallel, partially dead** representations of the same properties |
 | Renderer wiring (`x-render`) | Reads one representation, ignores the other |
 | Inspector UI (`x-designer`) | Offers controls for properties nothing renders — **phantom controls** |
-| Text styles | **Dead code**: a complete `StyleLibrary`/`TextStyleData` module no caller touches |
-| Variables → typography | Documented and unit-tested, but **never resolved at render time** |
+| Text styles | **Wired on this branch** (P0.1/P0.2 below): registry ops, `.x` round-trip, inspector picker |
+| Variables → typography | **Resolved at render time on this branch** (P0.3 below) for size / line-height / letter spacing |
 | Fonts (browse / add / missing) | Engine has Google Fonts + system enumeration; **no UI reaches either** |
 
 Concretely, of the properties Figma documents in *Explore text properties*,
@@ -534,11 +534,62 @@ byte-stable; a Figma-imported file keeps nothing silently.
 *Files:* `x-core/src/styles.rs`, `document.rs`, `x-format/src/{serialize,
 deserialize}.rs`, `x-editor/src/`, `apps/.../{editor_ui,run,state}.rs`.
 
+*Implemented on this branch.* `TextStyleData` (`styles.rs:216`) now carries
+Figma's whole *included* set — family, weight, size, line-height **mode +
+value**, letter spacing, paragraph spacing, paragraph indent, case, synthesized
+small caps, decoration, list style, wrap, wrap style, hanging punctuation — and
+`from_node` / `apply_to_node` / `clear_from_node` (`:284`, `:320`, `:361`) move
+it through **Model B**, the bindings every renderer reads
+(`TEXT_STYLE_BINDINGS`, `:266`). The registry is `Document.styles` behind a
+typed façade (`document.rs:314-383`: `text_style_names`, `text_style`,
+`add_text_style`, `update_text_style`, `remove_text_style`,
+`text_style_usage`) plus `detach_text_style` (`:74`), and
+`LegacyStyle::Text`'s applier writes the px contract instead of stuffing the
+size into `n.h` (`:160`). `.x` carries the full set
+(`serialize.rs:1172` `text_style_json` ⇄ `deserialize.rs:1190`
+`parse_text_style`, including the back-compat bare `lh` and `"Inter 700"`
+family/weight splits). Tests: `document.rs:405` (bindings renderers read),
+`:431` (detach keeps type, drops link), `:472` (update propagates to every
+consumer), `:584` (rename / detach / usage), plus the format round-trip.
+*Still open:* italic-as-an-axis and OpenType feature toggles are not in the
+style payload (Figma includes the latter); `Document.styles` mutations are not
+on any undo stack — see the debt note under P0.2.
+
 **P0.2 Typography style picker in the inspector.**
 Make the dead icons at `editor_ui.rs:2837-2844` real: a style row showing the
 applied style name (or "Mixed"/none), a dropdown listing text styles with
 create/apply/detach, and hit registration. Reuse the existing dropdown pattern
 (`Action::LhDropdown`, `editor_ui.rs:4171`).
+
+*Implemented on this branch.* The two icons own hit rects and hover tint now
+(`editor_ui.rs:2840-2851`): the styles button toggles `Action::TextStyleDropdown`,
+the plus fires `Action::CreateTextStyle`. `paint_text_style_dropdown`
+(`:4230`) lists every style in the document, highlights the one the selection
+carries, and appends the rows that act on the current selection — *Update
+'\<name\>' from selection* and *Detach style* when it is linked, *Create text
+style* when it is a text layer, *No text styles yet* when the registry is
+empty. The four operations live on `App` next to the other typography mutators
+(`run.rs:2552` apply, `:2583` create, `:2610` detach, `:2633` update, `:2652`
+propagate-across-pages), are dispatched at `run.rs:7845-7880`, and report
+through `app.status`; the menu closes on outside click and `Escape` with the
+other dropdowns, and the two typography menus are mutually exclusive.
+End-to-end test:
+`regression_tests.rs:1923` `text_styles_create_apply_update_and_detach_end_to_end`
+(create → apply to a second layer → local edit + update propagates → detach
+keeps values and stops propagating → non-text selections refuse all four).
+
+*Two debts, recorded rather than hidden.* (1) **Undo:** consumers are mutated
+through `Editor::mutate_visual_stack`, so an apply/detach/update is undoable
+per node, but the *definition* change in `Document.styles` is not on any undo
+stack — undoing "Update style" restores the consumers' old values while the
+style still holds the new ones. Fixing this properly means either putting the
+registry inside `Command` or snapshotting it in the same step. (2) **Anchor
+bug found while cloning the pattern:** `paint_lh_dropdown` anchored on
+`ED_TITLE_H` instead of the panel's `y_entry` (`ED_TITLE_H + 89`, the chrome
+sum `paint_frame_dropdown` builds), floating that menu 89px above the
+Line-height field. Fixed at `editor_ui.rs:4184-4191`; `paint_frame_dropdown`
+still ignores `scroll_right` and drifts when the panel is scrolled (left alone
+— it needs a visual check, not a guess).
 
 **P0.3 Variable-bound typography that actually resolves.**
 Resolve number variables for `fontsize`, `lineheight`, `letterspacing`,
@@ -550,6 +601,22 @@ removed). Modes must stay respected (a variable supplies the value, `lhm`
 supplies the unit).
 *Acceptance:* bind font size to `type/scale/body`, switch variable mode, text
 re-renders; `x-render/tests_mod.rs:597` stops being a lie.
+
+*Implemented on this branch (renderer half).* Both render paths resolve the
+typography tokens ahead of the literals, mirroring the `w`/`h`/`radius`
+pattern: `fontsize` and `letterspacing` through `Node::bound_number`
+(`ir.rs:1076`, `:1085`, `scene.rs:372`), `lineheight` through the token →
+`(lhm, value)` pair so the **mode** still comes from `lhm` and the variable
+only supplies the number. A missing token falls back to the literal, so
+unbound documents are bit-identical. `build_rich_spans_px` takes the variable
+map (`scene.rs:738`) and the shaped spans carry the resolved values. Tests:
+`x-render/src/tests_mod.rs:606` `typography_tokens_reach_the_render_tree`,
+`:663` `letterspacing_token_reaches_the_shaped_spans`.
+*Still open:* the inspector cannot yet *create* those bindings — the dead
+`BindVariable` / `UnbindVariable` context actions (§3) still have no
+dispatcher, so a variable-bound font size is reachable only from a file or a
+test. `paragraphspacing` is not resolved at render time either (P1.2 owns
+paragraph spacing in the layout pass).
 
 **P0.4 Horizontal alignment renders.**
 Add `align` to `RenderCommand::Glyphs`, stop hardcoding `Align::Left`
