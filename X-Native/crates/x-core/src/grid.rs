@@ -194,34 +194,51 @@ pub fn apply_grid_layout(node: &mut Node, layout: &crate::AutoLayout, grid: &Gri
                 }
             }
             GridAutoFlow::Column => {
-                // Column-major: scan columns first, then rows within each column.
-                // Determine how many rows we might need (explicit + implicit).
-                let nrows_estimate = if grid.rows.is_empty() {
-                    // Implicit rows: grow as needed.
-                    occupancy.len().max(1)
-                } else {
-                    grid.rows.len().max(1)
-                };
-                'outer_col: for col in 0..ncols {
-                    for row in 0.. {
-                        if cells_free(&mut occupancy, col, row, cs, rs) {
-                            mark(&mut occupancy, col, row, cs, rs);
-                            placed.insert(
-                                i,
-                                Placed {
-                                    col,
-                                    row,
-                                    col_span: cs,
-                                    row_span: rs,
-                                },
-                            );
-                            break 'outer_col;
-                        }
-                        // Safety: don't scan forever if no cell is free.
-                        if row > nrows_estimate + 100 {
-                            break;
+                // Column-major: fill each column's DECLARED rows top-to-bottom,
+                // then move to the next column. The row scan has to be bounded
+                // by the declared rows — `cells_free` answers true for any row
+                // past the end of `occupancy` (which `mark` grows on demand), so
+                // an unbounded scan always "found" a fresh implicit row in
+                // column 0 and the flow never reached column 1. Every child
+                // stacked into column 0 as a result.
+                let declared = grid.rows.len();
+                let mut at = None;
+                if declared > 0 {
+                    'declared_col: for col in 0..ncols {
+                        for row in 0..declared {
+                            if row + rs <= declared && cells_free(&mut occupancy, col, row, cs, rs)
+                            {
+                                at = Some((col, row));
+                                break 'declared_col;
+                            }
                         }
                     }
+                }
+                if at.is_none() {
+                    // Every declared cell is taken, or the grid declares no rows
+                    // at all. Grow implicit rows, still trying the earlier
+                    // columns first so the column-major order survives. Bounded
+                    // so a full grid cannot spin.
+                    'implicit_col: for col in 0..ncols {
+                        for row in declared..declared + 100 {
+                            if cells_free(&mut occupancy, col, row, cs, rs) {
+                                at = Some((col, row));
+                                break 'implicit_col;
+                            }
+                        }
+                    }
+                }
+                if let Some((col, row)) = at {
+                    mark(&mut occupancy, col, row, cs, rs);
+                    placed.insert(
+                        i,
+                        Placed {
+                            col,
+                            row,
+                            col_span: cs,
+                            row_span: rs,
+                        },
+                    );
                 }
             }
         }

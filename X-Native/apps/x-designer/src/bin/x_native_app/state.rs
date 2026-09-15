@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use vello::kurbo::{Point, Rect};
 use x_native::editor::Editor;
-use x_native::{Color, Document, Node, NodeKind, Paint, PathCmd, Variables};
+use x_native::{Color, Document, Node, NodeKind, Paint, StrokeJoin, Variables};
 
 use crate::command::CommandPalette;
 use crate::context_menu::ContextMenu;
@@ -323,10 +323,11 @@ pub enum Action {
     ProtoActionType(usize),
     ProtoEasing(usize),
     ProtoToggleReset(usize),
-    ProtoAddAction(usize),
-    ProtoRemoveAction(usize, usize),
-    ProtoSetVariable(usize),
-    ProtoConditional(usize),
+    // ProtoAddAction / ProtoRemoveAction / ProtoSetVariable / ProtoConditional
+    // were declared here and constructed nowhere, so `dispatch` could never be
+    // exhaustive over them (E0004) — the app crate did not compile. Deleting
+    // them is the honest fix: "add interaction" and "set variable" have no UI,
+    // and removing one already goes through ProtoRemove(usize) below.
     ProtoEditDelay(usize),
     ProtoEditKey(usize),
     ProtoEditUrl(usize),
@@ -464,32 +465,21 @@ pub enum Action {
     FileMoveToDrafts,
     FileDuplicate,
     // Layer management (Figma parity)
-    /// Show hidden layer outlines (⌘⇧O)
-    ToggleHiddenOutlines,
     /// Inverse selection (⌘⇧A)
     InverseSelection,
     /// Select matching objects (⌥⌘A)
     SelectMatching,
-    /// Deep select with Cmd/Ctrl+click
-    DeepSelect(String),
-    /// Measure distances to hovered layer
-    ShowMeasurements(String),
-    /// Bulk rename modal
-    OpenBulkRename,
-    CloseBulkRename,
-    ApplyBulkRename,
     /// Copy/paste properties
     CopyProperties,
     PasteProperties,
-    /// Layer panel search
-    SetLayerSearch(String),
-    /// Keyboard navigation in layer panel
+    /// Renumber the selected layers ("Layer 1", "Layer 2", …) as ONE undo step
+    /// — the numbering half of Figma's bulk rename, without the modal
+    RenumberSelection,
+    /// Keyboard navigation in the layer tree (Figma: ⇧⏎ parent, Tab siblings)
     SelectChild,
     SelectParent,
     SelectNextSibling,
     SelectPrevSibling,
-    /// Select layer from context menu
-    SelectLayerFromMenu(String),
     // Vector Edit Mode actions (Figma parity)
     /// Enter vector edit mode (Enter key on vector node)
     EnterVectorEditMode,
@@ -511,111 +501,31 @@ pub enum Action {
     },
     /// Delete selected vector points
     DeleteVectorPoints,
-    /// Switch vector editing tool
-    SetVectorTool(VectorTool),
-    /// Toggle vector handle visibility
+    /// Toggle vector handle visibility (read by the canvas overlay)
     ToggleVectorHandles,
-    /// Add bezier handle to a point
-    AddBezierHandle(usize),
-    /// Adjust bezier handle
-    AdjustBezierHandle {
-        point_idx: usize,
-        handle: (f64, f64),
-    },
-    /// Split vector path at a point
-    SplitVectorPath(usize),
-    /// Cut vector path along a line
-    CutVectorPath {
-        start: (f64, f64),
-        end: (f64, f64),
-    },
-    /// Outline stroke (convert stroke to vector path)
-    OutlineStroke,
-    /// Flatten selection (merge into single vector path)
-    FlattenSelection,
-    /// Offset vector path
-    OffsetVector {
-        distance: f64,
-        join: String,
-    },
-    /// Simplify vector path
-    SimplifyVector {
-        tolerance: f64,
-    },
-    /// Convert text to vector path
-    TextToOutline,
-    // Phase 2: Vector Editing Tools
-    AddBezierHandle {
-        point_idx: usize,
-        handle_pos: (f64, f64),
-    },
-    AdjustBezierHandle {
-        point_idx: usize,
-        handle_idx: usize,
-        new_pos: (f64, f64),
-    },
-    SplitVectorPath {
-        point_idx: usize,
-    },
-    CutVectorPath {
-        start: (f64, f64),
-        end: (f64, f64),
-    },
+    /// Take an anchor's handles away: smooth point collapses to a corner
+    /// (⌥-click on the point inside vector edit mode)
+    RemoveBezierHandles(usize),
+    /// Lasso anchors; `boundary` is in world space, like every canvas hit
     LassoSelectPoints {
         boundary: Vec<(f64, f64)>,
     },
-    SetVariableWidthStroke {
-        width_points: Vec<(f64, f64)>,
-    },
-    RemoveBezierHandles {
-        point_idx: usize,
-    },
-    MirrorBezierHandles {
-        point_idx: usize,
-        mode: crate::state::MirrorMode,
-    },
-    // Phase 3: Enhanced Path Operations
-    OutlineStrokeEnhanced,
-    OffsetVectorEnhanced {
-        distance: f64,
-        join_style: JoinStyle,
-    },
-    TextToOutlineEnhanced,
-    SimplifyVectorInteractive {
-        tolerance: f64,
-        preview: bool,
-    },
-    JoinPaths {
-        node_id1: String,
-        node_id2: String,
-    },
+    /// Split the path at an anchor into two vector layers
+    SplitVectorPath(usize),
+    /// Reverse the path's direction of travel (contour <-> hole, cap swap)
     ReversePathDirection,
-    // Phase 4: Stroke Caps
-    SetStrokeCapStart {
-        node_id: String,
-        cap: crate::state::StrokeCapType,
+    /// Join the two selected open paths end to end into one layer
+    JoinSelectedPaths,
+    /// Offset path along its normals (positive = outward on a closed path)
+    OffsetVector {
+        distance: f64,
+        join: StrokeJoin,
     },
-    SetStrokeCapEnd {
-        node_id: String,
-        cap: crate::state::StrokeCapType,
+    /// Simplify path: drop anchors within `tolerance` (local units)
+    SimplifyVector {
+        tolerance: f64,
     },
-    // Phase 5: Interactive UI Actions
-    UpdateShapeBuilderHover {
-        mouse_pos: (f64, f64),
-    },
-    ExecuteShapeBuilderOperation,
-    SetShapeBuilderMode(ShapeBuilderMode),
-    ToggleShapeBuilderSelectionMode,
-    ApplyDashPattern {
-        node_id: String,
-        pattern: DashPattern,
-    },
-    SetAdvancedStrokeCap {
-        node_id: String,
-        is_start: bool,
-        cap: AdvancedStrokeCap,
-    },
-    // Phase 6: Advanced Gradients, Image Adjustments, and Missing Blend Modes
+    // Advanced Gradients, Image Adjustments, and Missing Blend Modes
     /// Flip a gradient (reverse color stops)
     FlipGradient,
     /// Rotate gradient angle
@@ -692,6 +602,12 @@ pub enum CtxCmd {
     Subtract,
     Intersect,
     Exclude,
+    /// Flatten selection (⌘E): bake shapes into ONE editable vector path
+    Flatten,
+    /// Outline stroke (⇧⌘O): a stroked shape becomes its stroke's outline
+    OutlineStroke,
+    /// Outline text: glyphs become an editable vector path
+    OutlineText,
     /// single-step z-order (Figma ⌘] / ⌘[)
     BringFwd,
     SendBack,
@@ -900,115 +816,15 @@ pub struct PropertyClipboard {
 }
 
 // Vector Edit Mode (Figma parity)
+/// Vector edit mode state. Mirrors the engine's own three fields
+/// (`Editor::vector_edit_active` / `_node` / `_selected_points`) so the canvas
+/// overlay can draw anchors and handles without borrowing the document.
 #[derive(Debug, Clone)]
 pub struct VectorEditMode {
     pub active: bool,
     pub selected_node: Option<String>,
     pub selected_points: Vec<usize>,
-    pub tool: VectorTool,
     pub show_handles: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VectorTool {
-    Move,
-    Pen,
-    Bend,
-    Cut,
-    Eraser,
-    Lasso,
-}
-
-impl Default for VectorTool {
-    fn default() -> Self {
-        VectorTool::Move
-    }
-}
-
-/// Mirror mode for bézier handles
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MirrorMode {
-    None,
-    Angle,
-    AngleAndLength,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum JoinStyle {
-    Miter,
-    Round,
-    Bevel,
-}
-
-impl Default for JoinStyle {
-    fn default() -> Self {
-        JoinStyle::Miter
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StrokeCapType {
-    None,
-    Round,
-    Square,
-    Arrow,
-    Triangle,
-}
-
-/// Shape Builder operation mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ShapeBuilderMode {
-    Merge,
-    Subtract,
-    Intersect,
-    Exclude,
-}
-
-/// Selection mode for Shape Builder
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SelectionMode {
-    Click,
-    Drag,
-    Lasso,
-}
-
-/// Shape operation for Shape Builder
-#[derive(Debug, Clone)]
-pub enum ShapeOperation {
-    Merge(Vec<String>),
-    Subtract { base: String, subtract: Vec<String> },
-    Intersect(Vec<String>),
-    Exclude(Vec<String>),
-}
-
-/// Arrow style configuration
-#[derive(Debug, Clone, PartialEq)]
-pub struct ArrowStyle {
-    pub length_factor: f64,
-    pub width_factor: f64,
-    pub filled: bool,
-    pub reversed: bool,
-}
-
-/// Advanced stroke cap types
-#[derive(Debug, Clone, PartialEq)]
-pub enum AdvancedStrokeCap {
-    None,
-    Round,
-    Square,
-    Arrow(ArrowStyle),
-    Triangle,
-    Diamond,
-    Circle,
-    Bar,
-    Custom(Vec<PathCmd>),
-}
-
-/// Dash pattern configuration
-#[derive(Debug, Clone, PartialEq)]
-pub struct DashPattern {
-    pub dashes: Vec<f64>,
-    pub offset: f64,
 }
 
 impl Default for VectorEditMode {
@@ -1017,7 +833,6 @@ impl Default for VectorEditMode {
             active: false,
             selected_node: None,
             selected_points: Vec::new(),
-            tool: VectorTool::Move,
             show_handles: true,
         }
     }
@@ -1085,6 +900,34 @@ pub enum Drag {
     Erase {
         start: Point,
         cur: Point,
+    },
+    /// Dragging the selected anchors of the node in vector edit mode. The
+    /// ENGINE holds the gesture snapshot (`Editor::begin_path_gesture`), so the
+    /// whole drag commits as one undo entry and this only has to remember the
+    /// last pointer position to turn it into a delta.
+    VectorPoint {
+        last: Point,
+    },
+    /// Dragging one bezier control handle. `outgoing` picks the side of the
+    /// anchor; Alt while dragging breaks the tangent instead of mirroring it.
+    /// No last-position field: a handle follows the pointer absolutely (in the
+    /// node's local space), it is not accumulated from deltas.
+    VectorHandle {
+        anchor_idx: usize,
+        outgoing: bool,
+    },
+    /// Rubber-band over anchors (point selection inside vector edit mode). A
+    /// release without movement is a click on empty canvas, which deselects
+    /// the anchors rather than the layer.
+    VectorLasso {
+        start: Point,
+        cur: Point,
+    },
+    /// Pen tool dragging an anchor: pulls bezier handles out of a corner point
+    /// (Figma's pen drag), mirrored so the point stays smooth unless Alt is held.
+    /// Absolute, like `VectorHandle`, so it carries no last position either.
+    VectorBend {
+        anchor_idx: usize,
     },
     /// Board: Creating a sticky note.
     BoardCreateSticky {
@@ -1532,21 +1375,10 @@ pub struct App {
     /// Symmetry axis for mirror tool: 'v' vertical, 'h' horizontal, None = off
     pub symmetry_axis: Option<char>,
     pub fonts: TextUi,
-    // Layer management (Figma parity)
-    pub show_hidden_outlines: bool,
     pub property_clipboard: Option<PropertyClipboard>,
-    pub layer_search: String,
-    pub bulk_rename_open: bool,
-    pub bulk_rename_match: String,
-    pub bulk_rename_replace: String,
-    pub bulk_rename_preview: Vec<(String, String)>,
     /// Vector edit mode state (Figma parity)
     pub vector_edit_mode: VectorEditMode,
     // Phase 5: Shape Builder state
-    pub shape_builder_hover: Option<(f64, f64)>,
-    pub shape_builder_mode: ShapeBuilderMode,
-    pub shape_builder_selection_mode: SelectionMode,
-    pub shape_builder_preview: Option<ShapeOperation>,
     pub win_w: f64,
     pub win_h: f64,
     pub hit: Vec<(Rect, Action)>,
@@ -1663,19 +1495,9 @@ impl App {
             find_replace: FindReplace::default(),
             notifications: NotificationCenter::default(),
             left_sidebar_width: 280.0,
-            show_hidden_outlines: false,
             property_clipboard: None,
-            layer_search: String::new(),
-            bulk_rename_open: false,
-            bulk_rename_match: String::new(),
-            bulk_rename_replace: String::new(),
-            bulk_rename_preview: Vec::new(),
             vector_edit_mode: VectorEditMode::default(),
             // Phase 5: Shape Builder state
-            shape_builder_hover: None,
-            shape_builder_mode: ShapeBuilderMode::Merge,
-            shape_builder_selection_mode: SelectionMode::Click,
-            shape_builder_preview: None,
             aspect_ratio_locked: false,
             zoom: 1.0,
             pan: (0.0, 0.0),
@@ -2414,6 +2236,12 @@ impl App {
                 self.doc().editor().select_all();
                 return;
             }
+            OutlineText => {
+                // the font manager lives on the app, so this cannot run inside
+                // the `doc` borrow below
+                self.outline_selected_text();
+                return;
+            }
             Cut => {
                 if !self.copy_nodes() {
                     return;
@@ -2428,13 +2256,27 @@ impl App {
             }
             _ => {}
         }
-        // Shape Builder refusals are reported here, after the `doc` borrow
-        // ends — the status bar belongs to the app, not the document.
+        // Refusals are reported after the `doc` borrow ends — the status bar
+        // belongs to the app, not the document.
         let mut refusal: Option<String> = None;
         let doc = self.doc();
         match cmd {
             Copy | Cut | Paste => unreachable!("clipboard handled above"),
             CopyAsCode => unreachable!("copy handled above"),
+            OutlineText => unreachable!("outline text handled above"),
+            Flatten => {
+                if doc.editor().flatten_selected().is_none() {
+                    refusal = Some(
+                        "Select one shape or group to flatten (a vector layer is already flat)"
+                            .into(),
+                    );
+                }
+            }
+            OutlineStroke => {
+                if doc.editor().outline_stroke_selected().is_none() {
+                    refusal = Some("Select one shape with a stroke weight to outline".into());
+                }
+            }
             Duplicate => {
                 doc.editor().duplicate_selection((12.0, 12.0));
             }
@@ -2528,6 +2370,38 @@ impl App {
             self.status = msg;
         }
         self.mark_dirty();
+    }
+
+    /// Outline text (Figma ⌥⌘O): swap the selected Text layer for its glyph
+    /// outlines as ONE editable vector path, in ONE undo step. The glyph
+    /// geometry comes from `x_native::outline_text_node`, i.e. the same shaping
+    /// pipeline the canvas renders with, so the outline matches the text that
+    /// was on screen.
+    pub fn outline_selected_text(&mut self) {
+        let miss = "Select a text layer to outline";
+        let Some(id) = self.doc().selected_id() else {
+            self.status = miss.into();
+            return;
+        };
+        let vars = self.doc().doc.variables.clone();
+        let Some(node) = self.doc().editor().get_node(&id).cloned() else {
+            self.status = miss.into();
+            return;
+        };
+        if !matches!(node.kind, NodeKind::Text { .. }) {
+            self.status = miss.into();
+            return;
+        }
+        let Some(v) = x_native::outline_text_node(&node, &self.fonts.fonts, &vars) else {
+            self.status = "Cannot outline text - no font resolves for this layer".into();
+            return;
+        };
+        if self.doc().editor().replace_node(&id, v) {
+            self.mark_dirty();
+            self.status = "Outlined text - the layer is now an editable vector path".into();
+        } else {
+            self.status = miss.into();
+        }
     }
 
     // --------------------------------------------------- dev mode

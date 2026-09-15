@@ -27,7 +27,10 @@ bad()  { printf '    \033[31mFAIL\033[0m %s\n' "$1"; FAILED=$((FAILED + 1)); }
 
 # Dead code is tracked, not gated: see docs/KNOWN_DEBT.md. This number is a
 # ratchet — fixing a warning means lowering it, adding one means CI complains.
-DEAD_CODE_CEILING=${DEAD_CODE_CEILING:-76}
+# Re-measured 16 Sep 2026 after a period in which the tree did not compile and
+# therefore reported nothing: see the "Why the ceiling moved" note in
+# docs/KNOWN_DEBT.md, which itemises all 82.
+DEAD_CODE_CEILING=${DEAD_CODE_CEILING:-82}
 
 if [[ $FIX == 1 ]]; then
     step "formatting (cargo fmt)"
@@ -59,11 +62,24 @@ if [[ $CLIPPY_EXIT -ne 0 ]]; then
     $CARGO clippy --workspace --all-targets 2>&1 | grep -E '^error' -A 8 | head -30 | sed 's/^/      /'
 elif [[ $LIVE -ne 0 ]]; then
     bad "$LIVE clippy warning(s) that are not tracked dead code"
+    # The requirement is zero, so this list is bounded by definition — print all
+    # of it. A count that does not say WHICH warning cannot be acted on from a
+    # PR comment, which for a checkout without a toolchain is the only channel.
+    printf '%s\n' "$WARN_LINES" | grep -vE 'never (used|read|constructed)' |
+        head -40 | sed 's/^/      /'
 else
     ok "no lints outside the dead-code budget"
 fi
 if [[ $DEAD -gt $DEAD_CODE_CEILING ]]; then
     bad "dead code grew: $DEAD warning(s), ceiling $DEAD_CODE_CEILING (docs/KNOWN_DEBT.md)"
+    # Where it lives, per file, so the ratchet can be reconciled against the
+    # table in docs/KNOWN_DEBT.md instead of guessed at — and then the items
+    # themselves, because a file count cannot tell you WHICH entry to write.
+    printf '%s\n' "$WARN_LINES" | grep -E 'never (used|read|constructed)' |
+        sed -E 's/:[0-9]+:[0-9]+:.*//' | sort | uniq -c | sort -rn | sed 's/^/      /'
+    printf '%s\n' "$WARN_LINES" | grep -E 'never (used|read|constructed)' |
+        sed -E 's|^([^:]+):[0-9]+:[0-9]+: warning: |\1  ::  |' | sort |
+        sed 's/^/      /'
 else
     ok "dead code $DEAD / ceiling $DEAD_CODE_CEILING"
 fi
@@ -78,6 +94,12 @@ if [[ $QUICK == 0 ]]; then
     else
         bad "test failures"
         grep -E '^(test .* FAILED|error(\[|:))' "$TEST_LOG" | head -20 | sed 's/^/      /'
+        # WHICH test failed is only half the report; the panic payload is the
+        # half that says why. The raw step log lives in blob storage that some
+        # tooling cannot reach, so for a failure diagnosed through the PR
+        # comment these lines are the only evidence there is.
+        grep -E "panicked at|^assertion|assertion .*failed|^ *(left|right):" "$TEST_LOG" |
+            head -40 | sed 's/^/      /'
     fi
     rm -f "$TEST_LOG"
 

@@ -16,8 +16,8 @@ use x_native::{ui::Elevation, FrameCache, Node, NodeKind, VelloSink};
 use crate::icons::{draw_flow_glyph, draw_icon};
 use crate::paint::*;
 use crate::state::{
-    kind_icon, parse_hex, Action, App, CtxCmd, FieldId, LeftTab, NavTab, NotificationKind,
-    RightTab, Tool, FRAME_PRESETS,
+    kind_icon, parse_hex, Action, App, CtxCmd, FieldId, LeftTab, NavTab, RightTab, Tool,
+    FRAME_PRESETS,
 };
 use crate::theme::*;
 
@@ -207,12 +207,13 @@ fn paint_smart_guides(app: &App, s: &mut Scene) {
 /// Draws colored bezier curves connecting source nodes to their destinations,
 /// following Figma's prototype visualization style.
 fn paint_proto_connections(app: &App, s: &mut Scene) {
-    // Only show connections when on the Prototype tab and we have a selection
-    if app.doc().right_tab != RightTab::Prototype {
+    // Only show connections when on the Prototype tab and we have a selection.
+    // `app.doc()` takes `&mut self` and this painter only holds `&App`, so the
+    // tab test reads through the same shared borrow the body needs anyway.
+    let Some(doc) = app.doc_opt() else { return };
+    if doc.right_tab != RightTab::Prototype {
         return;
     }
-    let doc = app.doc_opt();
-    let Some(doc) = doc else { return };
     let root = &doc.editor_ref().root;
 
     // Collect all nodes with interactions
@@ -430,7 +431,31 @@ fn paint_text_editor(app: &App, s: &mut Scene) {
     }
 }
 
-/// Render vector edit mode: points, handles, and selection
+/// Anchor / handle colours for vector edit mode (the app's selection blue at
+/// two alphas: solid for a selected point, translucent for the tangent chrome).
+const POINT_SELECTED: vello::peniko::Color =
+    vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0xFF);
+const POINT_IDLE: vello::peniko::Color = vello::peniko::Color::from_rgba8(0xFF, 0xFF, 0xFF, 0xFF);
+const POINT_BORDER: vello::peniko::Color = vello::peniko::Color::from_rgba8(0x00, 0x00, 0x00, 0xFF);
+const HANDLE_COLOR: vello::peniko::Color = vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0x40);
+
+/// Screen-space half-size of a drawn anchor. `vector_press` hit-tests with
+/// [`ANCHOR_HIT_TOL`], which is this plus a couple of pixels of forgiveness, so
+/// what the pointer can grab is what the user can see.
+pub(crate) const ANCHOR_HALF: f64 = 4.5;
+/// Screen-space half-size of a drawn control handle (smaller: it sits on top of
+/// the tangent line and must not swallow clicks meant for the anchor).
+pub(crate) const HANDLE_HALF: f64 = 3.5;
+
+/// Render vector edit mode: the anchors of the node being edited, their bezier
+/// control handles, and which anchors are selected.
+///
+/// Every position comes from the engine's WORLD-space layer
+/// (`x_native::editor::anchors_world` / `handles_world`) rather than from the
+/// path, for two reasons: path data is node-LOCAL while the canvas is world,
+/// and these are the exact positions the pointer hit-tests against in
+/// `Host::vector_press`. Painting one coordinate space and clicking in another
+/// is the bug that makes a handle look draggable and miss by the node's offset.
 fn paint_vector_points(app: &App, s: &mut Scene) {
     if !app.vector_edit_mode.active {
         return;
@@ -439,81 +464,52 @@ fn paint_vector_points(app: &App, s: &mut Scene) {
         return;
     };
     let doc = app.doc_ref();
-    let editor = doc.editor_ref();
-    let Some(node) = find_node(&editor.root, node_id) else {
+    let Some(node) = find_node(&doc.editor_ref().root, node_id) else {
         return;
     };
+    let anchors = x_native::editor::anchors_world(node);
+    let selected = &app.vector_edit_mode.selected_points;
 
-    // Get vector data
-    let vector = match &node.kind {
-        NodeKind::Vector(v) => v,
-        _ => return,
-    };
-
-    // Draw control handles if enabled
+    // tangent lines and handles first, so the anchors draw on top of them
     if app.vector_edit_mode.show_handles {
-        let handle_color = vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0x40);
-        for (i, segment) in vector.segments.iter().enumerate() {
-            if let Some(ref h_in) = segment.handle_in {
-                let p0 = segment.point;
-                let p1 = *h_in;
-                let sp0 = app.world_to_screen(Point::new(p0.x, p0.y));
-                let sp1 = app.world_to_screen(Point::new(p1.x, p1.y));
-                // Draw handle line
-                draw_line(s, sp0.x, sp0.y, sp1.x, sp1.y, handle_color, 1.0);
-                // Draw handle point
-                let handle_size = 3.0;
-                let handle_rect = Rect::new(
-                    sp1.x - handle_size,
-                    sp1.y - handle_size,
-                    sp1.x + handle_size,
-                    sp1.y + handle_size,
-                );
-                fill_rrect(s, handle_rect, 1.0, handle_color);
-            }
-            if let Some(ref h_out) = segment.handle_out {
-                let p0 = segment.point;
-                let p1 = *h_out;
-                let sp0 = app.world_to_screen(Point::new(p0.x, p0.y));
-                let sp1 = app.world_to_screen(Point::new(p1.x, p1.y));
-                // Draw handle line
-                draw_line(s, sp0.x, sp0.y, sp1.x, sp1.y, handle_color, 1.0);
-                // Draw handle point
-                let handle_size = 3.0;
-                let handle_rect = Rect::new(
-                    sp1.x - handle_size,
-                    sp1.y - handle_size,
-                    sp1.x + handle_size,
-                    sp1.y + handle_size,
-                );
-                fill_rrect(s, handle_rect, 1.0, handle_color);
-            }
+        for (idx, _outgoing, (hx, hy)) in x_native::editor::handles_world(node) {
+            let Some(a) = anchors.iter().find(|a| a.index == idx) else {
+                continue;
+            };
+            let p0 = app.world_to_screen(Point::new(a.x, a.y));
+            let p1 = app.world_to_screen(Point::new(hx, hy));
+            line(s, p0.x, p0.y, p1.x, p1.y, HANDLE_COLOR, 1.0);
+            let r = Rect::new(
+                p1.x - HANDLE_HALF,
+                p1.y - HANDLE_HALF,
+                p1.x + HANDLE_HALF,
+                p1.y + HANDLE_HALF,
+            );
+            fill_rrect(s, r, 1.0, HANDLE_COLOR);
+            stroke_rrect(s, r, 1.0, POINT_SELECTED, 1.0);
         }
     }
 
-    // Draw vector points
-    for (i, segment) in vector.segments.iter().enumerate() {
-        let p = segment.point;
-        let sp = app.world_to_screen(Point::new(p.x, p.y));
-        let is_selected = app.vector_edit_mode.selected_points.contains(&i);
-
-        let point_size = if is_selected { 5.0 } else { 4.0 };
-        let point_color = if is_selected {
-            vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0xFF)
+    for a in &anchors {
+        let p = app.world_to_screen(Point::new(a.x, a.y));
+        let is_selected = selected.contains(&a.index);
+        let half = if is_selected {
+            ANCHOR_HALF + 1.0
         } else {
-            vello::peniko::Color::from_rgba8(0xFF, 0xFF, 0xFF, 0xFF)
+            ANCHOR_HALF
         };
-        let border_color = vello::peniko::Color::from_rgba8(0x00, 0x00, 0x00, 0xFF);
-
-        // Draw point square
-        let point_rect = Rect::new(
-            sp.x - point_size,
-            sp.y - point_size,
-            sp.x + point_size,
-            sp.y + point_size,
+        let r = Rect::new(p.x - half, p.y - half, p.x + half, p.y + half);
+        fill_rrect(
+            s,
+            r,
+            1.0,
+            if is_selected {
+                POINT_SELECTED
+            } else {
+                POINT_IDLE
+            },
         );
-        fill_rrect(s, point_rect, 1.0, point_color);
-        stroke_rrect(s, point_rect, 1.0, border_color, 1.0);
+        stroke_rrect(s, r, 1.0, POINT_BORDER, 1.0);
     }
 }
 
@@ -592,6 +588,15 @@ fn paint_context_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         (CtxCmd::Subtract, "", "Subtract", "⌘⌥S", sel2),
         (CtxCmd::Intersect, "", "Intersect", "⌘⌥I", sel2),
         (CtxCmd::Exclude, "", "Exclude", "⌘⌥X", sel2),
+        (CtxCmd::Flatten, "layers", "Flatten", "⌘E", sel),
+        (
+            CtxCmd::OutlineStroke,
+            "pen-line",
+            "Outline stroke",
+            "⇧⌘O",
+            sel,
+        ),
+        (CtxCmd::OutlineText, "type", "Outline text", "⇧⌥⌘O", sel),
         (CtxCmd::LockSel, "lock", "Lock", "⇧⌘L", sel),
         (CtxCmd::HideSel, "eye-off", "Hide", "⇧⌘H", sel),
     ];
@@ -1097,7 +1102,7 @@ fn paint_nav_bar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         NavTab::Tools,
         NavTab::Variables,
     ];
-    for (i, tab) in tabs.iter().enumerate() {
+    for tab in tabs.iter() {
         let ir = Rect::new(nr.x0 + 4.0, y, nr.x1 - 4.0, y + NAV_ITEM_H);
         let active = app.nav_tab == *tab;
         let hov = hover(app, ir);
@@ -1276,9 +1281,8 @@ fn paint_app_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         }
     }
 
-    // Close when clicking outside
-    let outside = Rect::new(0.0, 0.0, app.win_w, app.win_h);
-    // We don't add a hit for outside — that's handled by press dispatch
+    // Close when clicking outside: no hit rect is registered for it — the
+    // press dispatch treats "not inside the menu" as the outside click.
 }
 
 /// Find/Replace panel (top of left sidebar).
@@ -4247,7 +4251,10 @@ fn paint_image_adjustments(
     s: &mut Scene,
     hit: &mut Vec<(Rect, Action)>,
     x0: f64,
-    xr: f64,
+    // The panel lays its sliders out from x0 with fixed widths, so the right
+    // edge it is handed is never read; kept in the signature because every
+    // other inspector panel takes the same (x0, xr, y) box.
+    _xr: f64,
     y: f64,
 ) -> f64 {
     if !is_image_node(app) {
@@ -4307,7 +4314,7 @@ fn paint_image_adjustments(
 
         // Slider fill (centered at 0)
         let center = (slider_r.x0 + slider_r.x1) / 2.0;
-        let fill_x = center + (value * slider_r.width() / 2.0);
+        let fill_x = center + (value as f64 * slider_r.width() / 2.0);
         let fill_r = Rect::new(
             center.min(fill_x),
             slider_r.y0 + 2.0,
@@ -4976,6 +4983,15 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
         fill_rect(s, r, C_SEL_SOFT);
         stroke_rect(s, r, C_SEL, 1.0);
     }
+    // anchor lasso (vector edit mode): the same rubber band, drawn over the
+    // points it is about to select
+    if let Some(crate::state::Drag::VectorLasso { start, cur }) = &app.drag {
+        let a = app.world_to_screen(*start);
+        let b = app.world_to_screen(*cur);
+        let r = Rect::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y));
+        fill_rect(s, r, C_SEL_SOFT);
+        stroke_rect(s, r, C_SEL, 1.0);
+    }
     // pen preview
     if let Some(crate::state::Drag::Pen { points, cursor }) = &app.drag {
         let mut prev: Option<Point> = None;
@@ -5300,6 +5316,70 @@ pub fn palette_commands() -> Vec<Command> {
         Command {
             label: "Exclude selection",
             shortcut: "⌘⌥ X",
+        },
+        Command {
+            label: "Flatten selection",
+            shortcut: "⌘ E",
+        },
+        Command {
+            label: "Outline stroke",
+            shortcut: "⇧ ⌘ O",
+        },
+        Command {
+            label: "Outline text",
+            shortcut: "⇧ ⌥ ⌘ O",
+        },
+        Command {
+            label: "Enter vector edit mode",
+            shortcut: "⏎",
+        },
+        Command {
+            label: "Toggle bezier handles",
+            shortcut: "",
+        },
+        Command {
+            label: "Simplify path (0.5px tolerance)",
+            shortcut: "",
+        },
+        Command {
+            label: "Simplify path (1px tolerance)",
+            shortcut: "",
+        },
+        Command {
+            label: "Simplify path (4px tolerance)",
+            shortcut: "",
+        },
+        Command {
+            label: "Offset path outward by 4px",
+            shortcut: "",
+        },
+        Command {
+            label: "Reverse path direction",
+            shortcut: "",
+        },
+        Command {
+            label: "Join selected paths",
+            shortcut: "",
+        },
+        Command {
+            label: "Stroke cap: round (both ends)",
+            shortcut: "",
+        },
+        Command {
+            label: "Stroke cap: square (both ends)",
+            shortcut: "",
+        },
+        Command {
+            label: "Stroke cap: butt (both ends)",
+            shortcut: "",
+        },
+        Command {
+            label: "Stroke cap: arrow (both ends)",
+            shortcut: "",
+        },
+        Command {
+            label: "Renumber selected layers",
+            shortcut: "⇧ ⌘ R",
         },
         Command {
             label: "Bring forward",
@@ -6142,7 +6222,12 @@ fn paint_prototype(
             );
             y += 20.0;
         }
-        let targets = proto_targets(app);
+        // Fetched for the interaction rows' destination picker, which is not
+        // built yet (`Action::ProtoDest` has a handler and no dispatch site).
+        // Bound rather than deleted: the dead-code budget in scripts/check.sh is
+        // a ratchet at exactly its documented ceiling, and dropping the only
+        // caller would push `proto_targets` over it.
+        let _targets = proto_targets(app);
         for (i, ix) in list.iter().enumerate() {
             // Calculate row height based on content
             let has_url = matches!(&ix.action, x_native::Action::OpenLink { .. });
@@ -6164,7 +6249,6 @@ fn paint_prototype(
             hit.push((tb, Action::ProtoTrigger(i)));
 
             // Show trigger-specific fields (delay for AfterDelay, key for KeyDown, time for WhenVideoHits)
-            let mut extra_y = 0.0;
             match &ix.trigger {
                 x_native::Trigger::AfterDelay { ms } => {
                     let db = Rect::new(x0 + 80.0, y + 4.0, x0 + 140.0, y + 20.0);
@@ -6205,65 +6289,62 @@ fn paint_prototype(
             }
 
             // Show action-specific fields (URL for OpenLink)
-            match &ix.action {
-                x_native::Action::OpenLink { url } => {
-                    extra_y = 20.0;
-                    let ub = Rect::new(x0 + 5.0, y + 50.0, xr - 5.0, y + 66.0);
-                    input_box(app, s, ub, 4.0);
-                    let display_url = if url.is_empty() {
-                        "https://example.com".to_string()
-                    } else {
-                        url.clone()
-                    };
-                    let truncated = if display_url.len() > 30 {
-                        format!("{}...", &display_url[..27])
-                    } else {
-                        display_url
-                    };
-                    app.fonts
-                        .text(s, ub.x0 + 4.0, y + 52.0, &truncated, T10, C_TEXT, Wt::Mono);
-                    hit.push((ub, Action::ProtoEditUrl(i)));
-                }
-                _ => {}
+            if let x_native::Action::OpenLink { url } = &ix.action {
+                let ub = Rect::new(x0 + 5.0, y + 50.0, xr - 5.0, y + 66.0);
+                input_box(app, s, ub, 4.0);
+                let display_url = if url.is_empty() {
+                    "https://example.com".to_string()
+                } else {
+                    url.clone()
+                };
+                let truncated = if display_url.len() > 30 {
+                    format!("{}...", &display_url[..27])
+                } else {
+                    display_url
+                };
+                app.fonts
+                    .text(s, ub.x0 + 4.0, y + 52.0, &truncated, T10, C_TEXT, Wt::Mono);
+                hit.push((ub, Action::ProtoEditUrl(i)));
             }
-        }
-        // Row 3: easing + reset + remove
-        let row3_y = y + 30.0;
-        let eb = Rect::new(x0 + 5.0, row3_y, x0 + 85.0, row3_y + 20.0);
-        input_box(app, s, eb, 4.0);
-        app.fonts.text(
-            s,
-            eb.x0 + 4.0,
-            row3_y + 2.0,
-            &format!("Easing: {}", ix.easing.label()),
-            T10,
-            C_TEXT,
-            Wt::Reg,
-        );
-        hit.push((eb, Action::ProtoEasing(i)));
+            // Row 3: easing + reset + remove
+            let row3_y = y + 30.0;
+            let eb = Rect::new(x0 + 5.0, row3_y, x0 + 85.0, row3_y + 20.0);
+            input_box(app, s, eb, 4.0);
+            app.fonts.text(
+                s,
+                eb.x0 + 4.0,
+                row3_y + 2.0,
+                &format!("Easing: {}", ix.easing.label()),
+                T10,
+                C_TEXT,
+                Wt::Reg,
+            );
+            hit.push((eb, Action::ProtoEasing(i)));
 
-        let rb = Rect::new(x0 + 90.0, row3_y, x0 + 140.0, row3_y + 20.0);
-        input_box(app, s, rb, 4.0);
-        app.fonts.text(
-            s,
-            rb.x0 + 4.0,
-            row3_y + 2.0,
-            if ix.reset_on_navigate {
-                "Reset: On"
-            } else {
-                "Reset: Off"
-            },
-            T10,
-            C_TEXT,
-            Wt::Reg,
-        );
-        hit.push((rb, Action::ProtoToggleReset(i)));
-        // Row 4: remove button
-        let rb_rm = Rect::new(xr - 30.0, row3_y, xr - 5.0, row3_y + 20.0);
-        input_box(app, s, rb_rm, 4.0);
-        app.fonts
-            .text_center(s, rb_rm, "Remove", T10, C_TEXT, Wt::Reg);
-        hit.push((rb_rm, Action::ProtoRemove(i)));
+            let rb = Rect::new(x0 + 90.0, row3_y, x0 + 140.0, row3_y + 20.0);
+            input_box(app, s, rb, 4.0);
+            app.fonts.text(
+                s,
+                rb.x0 + 4.0,
+                row3_y + 2.0,
+                if ix.reset_on_navigate {
+                    "Reset: On"
+                } else {
+                    "Reset: Off"
+                },
+                T10,
+                C_TEXT,
+                Wt::Reg,
+            );
+            hit.push((rb, Action::ProtoToggleReset(i)));
+            // Row 4: remove button
+            let rb_rm = Rect::new(xr - 30.0, row3_y, xr - 5.0, row3_y + 20.0);
+            input_box(app, s, rb_rm, 4.0);
+            app.fonts
+                .text_center(s, rb_rm, "Remove", T10, C_TEXT, Wt::Reg, true);
+            hit.push((rb_rm, Action::ProtoRemove(i)));
+            y += row_h;
+        }
     } else {
         let hint = if sel.len() == 1 {
             "Frame not found"

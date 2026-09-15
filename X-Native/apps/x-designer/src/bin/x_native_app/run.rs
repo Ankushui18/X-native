@@ -13,7 +13,6 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{CursorIcon, Window, WindowId};
 
-use x_editor;
 #[cfg(test)]
 use x_native::build_render_tree;
 #[cfg(test)]
@@ -22,14 +21,14 @@ use x_native::build_scene_full;
 use x_native::fileio::load_x_file;
 use x_native::{
     bind_style, detach_text_style, resolve_styles, LegacyStyle, Node, NodeKind, Paint, PathCmd,
-    TextStyleData,
+    StrokeJoin, TextStyleData,
 };
 
 use crate::dashboard;
 use crate::editor_ui;
 use crate::state::{
-    push_system_clipboard, Action, App, CtxCmd, Drag, FieldEdit, FieldId, NavTab, OpenDoc, Screen,
-    Tool, FRAME_PRESETS,
+    push_system_clipboard, Action, App, CtxCmd, Drag, FieldEdit, FieldId, NavTab, OpenDoc,
+    PropertyClipboard, Screen, Tool, FRAME_PRESETS,
 };
 use crate::theme::*;
 
@@ -2915,6 +2914,205 @@ impl App {
 }
 
 impl Host {
+    // ── vector edit mode: engine <-> app mirroring, pointer handling ──
+
+    /// Mirror the engine's vector edit mode into the app struct the canvas
+    /// overlay reads: `editor_ui` draws anchors and handles from
+    /// `app.vector_edit_mode`, and it must not borrow the document while it
+    /// paints. Called after every mode/selection change.
+    fn sync_vector_edit_mode(&mut self) {
+        let (active, node, points) = {
+            let editor = self.app.doc().editor_ref();
+            (
+                editor.vector_edit_active,
+                editor.vector_edit_node.clone(),
+                editor.vector_edit_selected_points.clone(),
+            )
+        };
+        self.app.vector_edit_mode.active = active;
+        self.app.vector_edit_mode.selected_node = node;
+        self.app.vector_edit_mode.selected_points = points;
+    }
+
+    /// The layer a path command should act on: the node in vector edit mode,
+    /// else the single selected layer — so the palette's path commands work
+    /// without entering node edit mode first.
+    fn vector_edit_id(&mut self) -> Option<String> {
+        let editor = self.app.doc().editor();
+        if let Some(id) = editor.vector_edit_target() {
+            return Some(id.to_string());
+        }
+        editor.selection.first().cloned()
+    }
+
+    /// Canvas press while vector edit mode is active. Anchors and control
+    /// handles are hit BEFORE the layer, an empty press starts the point lasso,
+    /// and the layer itself is never moved or re-selected mid-edit — that is
+    /// the whole difference between editing a shape and editing its points.
+    ///
+    /// Returns false only when the mode has nothing to say about the press (no
+    /// node behind it), so the caller can fall through to the normal tool path.
+    fn vector_press(&mut self, world: Point) -> bool {
+        let Some(id) = self.app.vector_edit_mode.selected_node.clone() else {
+            return false;
+        };
+        let node = {
+            let doc = self.app.doc();
+            x_native::editor::find(&doc.editor_ref().root, &id).cloned()
+        };
+        let Some(node) = node else {
+            // the layer is gone (deleted, or undo walked past it): leave the
+            // mode instead of hit-testing anchors that no longer exist
+            self.dispatch(Action::ExitVectorEditMode);
+            return true;
+        };
+        // Two tools keep their own behaviour even inside the mode: Hand pans
+        // (space-drag already returned before this), and the Eraser erases
+        // segments — neither should be captured by an anchor lasso.
+        if matches!(self.app.tool, Tool::Hand | Tool::Eraser) {
+            return false;
+        }
+        // The tolerance is a SCREEN distance, so it shrinks in world units as
+        // the user zooms in — and it is the drawn size plus a couple of pixels,
+        // which keeps "what you can grab" equal to "what you can see".
+        let zoom = self.app.zoom.max(1e-3);
+        let anchor_tol = (crate::editor_ui::ANCHOR_HALF + 2.0) / zoom;
+        let handle_tol = (crate::editor_ui::HANDLE_HALF + 2.0) / zoom;
+        let (alt, pen) = (self.app.alt, self.app.tool == Tool::Pen);
+
+        // 1. a control handle wins: it is the smaller target sitting on the
+        //    tangent line, and grabbing it must never move the anchor with it
+        if self.app.vector_edit_mode.show_handles {
+            if let Some(hit) =
+                x_native::editor::handle_at_world(&node, world.x, world.y, handle_tol)
+            {
+                if self.app.doc().editor().begin_path_gesture(&id) {
+                    self.app.drag = Some(Drag::VectorHandle {
+                        anchor_idx: hit.anchor,
+                        outgoing: hit.outgoing,
+                    });
+                    return true;
+                }
+            }
+        }
+
+        // 2. an anchor: plain click selects it (⇧ adds to the selection),
+        //    ⌥-click converts a curved point back to a corner, and dragging
+        //    moves every selected anchor as ONE undoable gesture
+        if let Some(anchor) = x_native::editor::anchor_at_world(&node, world.x, world.y, anchor_tol)
+        {
+            if alt {
+                self.dispatch(Action::RemoveBezierHandles(anchor));
+                return true;
+            }
+            // With the PEN tool, dragging an anchor pulls its handles out —
+            // that is how a corner becomes a curve. With the move tool the same
+            // drag slides the point (and every other selected point with it).
+            if pen {
+                if self.app.doc().editor().begin_path_gesture(&id) {
+                    self.app.drag = Some(Drag::VectorBend { anchor_idx: anchor });
+                }
+                return true;
+            }
+            let already = self.app.vector_edit_mode.selected_points.contains(&anchor);
+            if !already || self.app.shift {
+                self.dispatch(Action::SelectVectorPoint(anchor));
+            }
+            if self.app.doc().editor().begin_path_gesture(&id) {
+                self.app.drag = Some(Drag::VectorPoint { last: world });
+            }
+            return true;
+        }
+
+        // 3. pen tool: it keeps drawing THE SELECTED path (Figma's pen
+        //    continues the open path) instead of starting a new polygon. On a
+        //    segment it cuts an anchor in where the pen clicked.
+        if pen {
+            if let Some(seg) =
+                x_native::editor::segment_at_world(&node, world.x, world.y, anchor_tol)
+            {
+                if seg > 0 {
+                    let (lx, ly) = x_native::editor::local_point(&node, world.x, world.y);
+                    self.dispatch(Action::AddVectorPoint {
+                        segment_idx: seg,
+                        position: (lx, ly),
+                    });
+                    return true;
+                }
+            }
+            if self
+                .app
+                .doc()
+                .editor()
+                .pen_add_anchor_world(&id, world.x, world.y)
+            {
+                self.app.mark_dirty();
+                self.sync_vector_edit_mode();
+            }
+            return true;
+        }
+
+        // 4. empty canvas with the move tool: rubber-band the anchors. A release
+        //    without movement is a click, which drops the ANCHOR selection and
+        //    leaves the layer selected (Figma's node-edit click).
+        if self.app.tool == Tool::Select {
+            self.app.drag = Some(Drag::VectorLasso {
+                start: world,
+                cur: world,
+            });
+            return true;
+        }
+        // every other tool (a shape tool, the comment pin) falls through to its
+        // own press handler
+        false
+    }
+
+    /// Apply a stroke cap to BOTH ends of the selected layer(s). The engine
+    /// keeps the ends separate (`set_stroke_cap_start` / `_end`) because that is
+    /// what Figma's stroke panel exposes; the palette has no parameter to ask
+    /// for, so its cap entries say "both ends" and mean it.
+    fn apply_stroke_caps(&mut self, cap: x_native::StrokeCap) {
+        let ids = self.app.doc().editor().selection.clone();
+        if ids.is_empty() {
+            self.app.status = "Select a layer with a stroke first".into();
+            return;
+        }
+        let mut changed = 0usize;
+        for id in &ids {
+            let editor = self.app.doc().editor();
+            // either end changing counts: a node already capped at one end still
+            // needs the other
+            let a = editor.set_stroke_cap_start(id, cap);
+            let b = editor.set_stroke_cap_end(id, cap);
+            if a || b {
+                changed += 1;
+            }
+        }
+        if changed > 0 {
+            self.app.mark_dirty();
+            self.app.status = format!("Cap set on {changed} layer(s): {cap:?}");
+        } else {
+            self.app.status = "Those layers already use that cap".into();
+        }
+    }
+
+    /// A world-space pointer delta expressed in a node's LOCAL units, so a drag
+    /// moves the path by the right amount when the node is scaled or rotated.
+    fn local_delta(&self, node: &x_native::Node, from: Point, to: Point) -> (f64, f64) {
+        let (ax, ay) = x_native::editor::local_point(node, from.x, from.y);
+        let (bx, by) = x_native::editor::local_point(node, to.x, to.y);
+        (bx - ax, by - ay)
+    }
+
+    /// The node a live vector drag is acting on, cloned out so the pointer
+    /// handlers can convert coordinates without holding the document borrow.
+    fn vector_drag_node(&self) -> Option<(String, x_native::Node)> {
+        let id = self.app.vector_edit_mode.selected_node.clone()?;
+        let doc = self.app.doc_ref();
+        let node = x_native::editor::find(&doc.editor_ref().root, &id)?.clone();
+        Some((id, node))
+    }
+
     // ------------------------------------------------------- interaction
 
     /// Right-click: select what's under the cursor (Figma behavior), then
@@ -3232,6 +3430,12 @@ impl Host {
             });
             return;
         }
+        // Vector edit mode owns the canvas while it is active: the press goes
+        // to anchors and handles first, and only falls through here when the
+        // mode has no node to edit.
+        if self.app.vector_edit_mode.active && self.vector_press(world) {
+            return;
+        }
         match tool {
             Tool::Hand => {
                 self.app.drag = Some(Drag::Pan {
@@ -3253,6 +3457,10 @@ impl Host {
                 // double-click: deep-select into groups / inline-edit text
                 let dbl = self.app.is_double_click(p);
                 self.app.last_click = Some((std::time::Instant::now(), p));
+                // ⌘-click reaches through groups to the exact nested layer,
+                // which is the other half of Figma's selection story alongside
+                // double-click diving in
+                let deep_click = self.app.ctrl;
                 if dbl {
                     if let Some(id) = hit_id.clone() {
                         let text = {
@@ -3280,7 +3488,7 @@ impl Host {
                 }
                 if let Some(_id) = hit_id {
                     let shift = self.app.shift;
-                    let deep = dbl;
+                    let deep = dbl || deep_click;
                     // ⌥-drag: duplicate the selection, then drag the copy
                     if self.app.alt {
                         self.app.doc().editor().duplicate_selection((0.0, 0.0));
@@ -3548,6 +3756,77 @@ impl Host {
             Some(Drag::Marquee { .. }) => {
                 let world = self.app.screen_to_world(p);
                 if let Some(Drag::Marquee { cur, .. }) = self.app.drag.as_mut() {
+                    *cur = world;
+                }
+            }
+            // ---- vector edit mode drags: live in the tree, logged once ----
+            Some(Drag::VectorPoint { last }) => {
+                let world = self.app.screen_to_world(p);
+                let Some((id, node)) = self.vector_drag_node() else {
+                    return;
+                };
+                let (dx, dy) = self.local_delta(&node, last, world);
+                if dx == 0.0 && dy == 0.0 {
+                    return;
+                }
+                let idxs = self.app.vector_edit_mode.selected_points.clone();
+                let moved = {
+                    let editor = self.app.doc().editor();
+                    editor.live_rewrite_path(&id, |path| {
+                        let mut path = path.to_vec();
+                        x_native::editor::move_anchors_by(&mut path, &idxs, dx, dy);
+                        Some(path)
+                    })
+                };
+                if moved {
+                    self.app.mark_dirty();
+                    if let Some(Drag::VectorPoint { last }) = self.app.drag.as_mut() {
+                        *last = world;
+                    }
+                }
+            }
+            Some(Drag::VectorHandle {
+                anchor_idx,
+                outgoing,
+            }) => {
+                let world = self.app.screen_to_world(p);
+                let Some((id, node)) = self.vector_drag_node() else {
+                    return;
+                };
+                // the handle lives in the node's LOCAL space, and Alt breaks
+                // the tangent instead of mirroring through the anchor
+                let (lx, ly) = x_native::editor::local_point(&node, world.x, world.y);
+                let mirror = !self.app.alt;
+                let moved = {
+                    let editor = self.app.doc().editor();
+                    editor.live_rewrite_path(&id, |path| {
+                        x_native::editor::move_handle_in(path, anchor_idx, outgoing, lx, ly, mirror)
+                    })
+                };
+                if moved {
+                    self.app.mark_dirty();
+                }
+            }
+            Some(Drag::VectorBend { anchor_idx }) => {
+                let world = self.app.screen_to_world(p);
+                let Some((id, node)) = self.vector_drag_node() else {
+                    return;
+                };
+                let (lx, ly) = x_native::editor::local_point(&node, world.x, world.y);
+                let mirror = !self.app.alt;
+                let moved = {
+                    let editor = self.app.doc().editor();
+                    editor.live_rewrite_path(&id, |path| {
+                        x_native::editor::bend_anchor(path, anchor_idx, (lx, ly), mirror)
+                    })
+                };
+                if moved {
+                    self.app.mark_dirty();
+                }
+            }
+            Some(Drag::VectorLasso { .. }) => {
+                let world = self.app.screen_to_world(p);
+                if let Some(Drag::VectorLasso { cur, .. }) = self.app.drag.as_mut() {
                     *cur = world;
                 }
             }
@@ -3909,6 +4188,33 @@ impl Host {
             Some(Drag::Create { tool, start, cur }) => {
                 self.finish_create(tool, start, cur);
                 self.app.drag = None;
+            }
+            // a vector drag commits here, as the ONE undo entry the engine has
+            // been holding since the press opened the gesture
+            Some(Drag::VectorPoint { .. })
+            | Some(Drag::VectorHandle { .. })
+            | Some(Drag::VectorBend { .. }) => {
+                self.app.drag = None;
+                if self.app.doc().editor().end_path_gesture() {
+                    self.app.mark_dirty();
+                    self.app.status = "Anchor moved - one undo step for the whole drag".into();
+                }
+                self.sync_vector_edit_mode();
+            }
+            Some(Drag::VectorLasso { start, cur }) => {
+                self.app.drag = None;
+                let zoom = self.app.zoom.max(1e-3);
+                let (x0, y0) = (start.x.min(cur.x), start.y.min(cur.y));
+                let (x1, y1) = (start.x.max(cur.x), start.y.max(cur.y));
+                if (x1 - x0) * zoom < 2.0 && (y1 - y0) * zoom < 2.0 {
+                    // a click, not a drag: empty canvas inside node edit mode
+                    // drops the ANCHOR selection and leaves the layer selected
+                    self.dispatch(Action::DeselectVectorPoints);
+                } else {
+                    self.dispatch(Action::LassoSelectPoints {
+                        boundary: vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1)],
+                    });
+                }
             }
             Some(Drag::Guide { .. }) => {
                 self.app.guide_release();
@@ -4559,69 +4865,64 @@ impl Host {
 
         // Enter edits the selected text node (market-standard inline edit)
         if matches!(key, Key::Named(NamedKey::Enter))
+            && !self.app.shift
             && self.app.screen == Screen::Editor
             && self.app.enter_edit_selected()
         {
             return;
         }
 
-        // Vector edit mode keyboard shortcuts (Figma parity)
+        // Vector edit mode (Figma parity): Enter on a vector layer edits its
+        // anchors; inside the mode Escape or Enter leaves, ⌫ deletes the selected
+        // anchors, and the arrows nudge them (⇧ = 10px, like every other nudge).
+        // Scoped to the mode on purpose: P stays the pen tool and V the move
+        // tool, so node editing never hijacks the global tool shortcuts.
         if self.app.screen == Screen::Editor && !self.app.docs.is_empty() {
-            // Enter/Exit vector edit mode
-            if matches!(key, Key::Named(NamedKey::Enter))
+            if self.app.vector_edit_mode.active {
+                let (ctrl, alt, shift) = (self.app.ctrl, self.app.alt, self.app.shift);
+                let nudge = match &key {
+                    Key::Named(NamedKey::ArrowUp) => Some((0.0, -1.0)),
+                    Key::Named(NamedKey::ArrowDown) => Some((0.0, 1.0)),
+                    Key::Named(NamedKey::ArrowLeft) => Some((-1.0, 0.0)),
+                    Key::Named(NamedKey::ArrowRight) => Some((1.0, 0.0)),
+                    _ => None,
+                };
+                if let Some((ux, uy)) = nudge {
+                    if !ctrl && !alt {
+                        let step = if shift { 10.0 } else { 1.0 };
+                        self.dispatch(Action::MoveVectorPoints {
+                            dx: ux * step,
+                            dy: uy * step,
+                        });
+                        return;
+                    }
+                }
+                match &key {
+                    Key::Named(NamedKey::Escape) => {
+                        self.dispatch(Action::ExitVectorEditMode);
+                        return;
+                    }
+                    Key::Named(NamedKey::Enter) if !ctrl && !alt && !shift => {
+                        self.dispatch(Action::ExitVectorEditMode);
+                        return;
+                    }
+                    Key::Named(NamedKey::Backspace | NamedKey::Delete) => {
+                        self.dispatch(Action::DeleteVectorPoints);
+                        return;
+                    }
+                    _ => {}
+                }
+            } else if matches!(key, Key::Named(NamedKey::Enter))
                 && !self.app.ctrl
                 && !self.app.alt
                 && !self.app.shift
+                && self.app.doc().editor_ref().selection.len() == 1
             {
-                if self.app.vector_edit_mode.active {
-                    self.dispatch(Action::ExitVectorEditMode);
-                    return;
-                } else if self.app.enter_edit_selected() {
-                    self.dispatch(Action::EnterVectorEditMode);
-                    return;
-                }
-            }
-            // Escape exits vector edit mode
-            if matches!(key, Key::Named(NamedKey::Escape)) && self.app.vector_edit_mode.active {
-                self.dispatch(Action::ExitVectorEditMode);
+                // a single selected layer: Enter edits its anchors when it is a
+                // vector (the engine refuses anything else). Text was already
+                // claimed by `enter_edit_selected` above.
+                self.dispatch(Action::EnterVectorEditMode);
                 return;
-            }
-            // Delete selected vector points
-            if matches!(key, Key::Named(NamedKey::Backspace | NamedKey::Delete))
-                && self.app.vector_edit_mode.active
-            {
-                self.dispatch(Action::DeleteVectorPoints);
-                return;
-            }
-            // Vector tool shortcuts (only when not in vector edit mode)
-            if !self.app.vector_edit_mode.active {
-                if let Key::Character(c) = &key {
-                    match c.as_str() {
-                        "p" | "P" if !self.app.ctrl && !self.app.alt => {
-                            self.dispatch(Action::SetVectorTool(crate::state::VectorTool::Pen));
-                            return;
-                        }
-                        "v" | "V" if !self.app.ctrl && !self.app.alt => {
-                            self.dispatch(Action::SetVectorTool(
-                                crate::state::VectorTool::MovePoint,
-                            ));
-                            return;
-                        }
-                        "x" | "X" if !self.app.ctrl && !self.app.alt => {
-                            self.dispatch(Action::SetVectorTool(crate::state::VectorTool::Cut));
-                            return;
-                        }
-                        "e" | "E" if self.app.shift && !self.app.ctrl => {
-                            self.dispatch(Action::SetVectorTool(crate::state::VectorTool::Eraser));
-                            return;
-                        }
-                        "q" | "Q" if !self.app.ctrl && !self.app.alt => {
-                            self.dispatch(Action::SetVectorTool(crate::state::VectorTool::Lasso));
-                            return;
-                        }
-                        _ => {}
-                    }
-                }
             }
         }
         let ctrl = self.app.ctrl;
@@ -4651,6 +4952,20 @@ impl Host {
                     }
                     "x" | "X" if self.app.alt => {
                         self.app.apply_ctx(CtxCmd::Exclude);
+                        return;
+                    }
+                    // ⌘E — Flatten selection (Figma's shortcut)
+                    "e" | "E" if !self.app.alt && !self.app.shift => {
+                        self.app.apply_ctx(CtxCmd::Flatten);
+                        return;
+                    }
+                    // ⇧⌘O — Outline stroke, ⇧⌥⌘O — Outline text
+                    "o" | "O" if self.app.shift && !self.app.alt => {
+                        self.app.apply_ctx(CtxCmd::OutlineStroke);
+                        return;
+                    }
+                    "o" | "O" if self.app.shift && self.app.alt => {
+                        self.app.apply_ctx(CtxCmd::OutlineText);
                         return;
                     }
                     // ⌥1-5: navigation bar tab switching
@@ -4744,6 +5059,29 @@ impl Host {
                         if self.app.doc().redo_document() {
                             self.app.mark_dirty();
                         }
+                        return;
+                    }
+                    // Modifier-guarded arms MUST precede the plain Ctrl+C /
+                    // Ctrl+V / Ctrl+A arms below: rustc takes the first arm
+                    // whose pattern matches, and an unguarded pattern makes
+                    // every later guarded arm on the same key unreachable.
+                    // These three were dead until they moved (Ctrl+Shift+Alt+A
+                    // inverse-select, Ctrl+Alt+C copy properties, Ctrl+Alt+V
+                    // paste properties); Ctrl+Shift+Alt+M was already live.
+                    "a" | "A" if self.app.shift && self.app.alt => {
+                        self.dispatch(Action::InverseSelection);
+                        return;
+                    }
+                    "m" | "M" if self.app.shift && self.app.alt => {
+                        self.dispatch(Action::SelectMatching);
+                        return;
+                    }
+                    "c" | "C" if self.app.alt => {
+                        self.dispatch(Action::CopyProperties);
+                        return;
+                    }
+                    "v" | "V" if self.app.alt => {
+                        self.dispatch(Action::PasteProperties);
                         return;
                     }
                     "c" | "C" => {
@@ -4856,27 +5194,18 @@ impl Host {
                     }
                     // Layer management shortcuts
                     "r" | "R" if self.app.shift => {
-                        self.dispatch(Action::OpenBulkRename);
+                        self.dispatch(Action::RenumberSelection);
                         return;
                     }
-                    "a" | "A" if self.app.shift && self.app.alt => {
-                        self.dispatch(Action::InverseSelection);
-                        return;
-                    }
-                    "m" | "M" if self.app.shift && self.app.alt => {
-                        self.dispatch(Action::SelectMatching);
-                        return;
-                    }
-                    "o" | "O" if self.app.shift => {
-                        self.dispatch(Action::ToggleHiddenOutlines);
-                        return;
-                    }
-                    "c" | "C" if self.app.alt => {
-                        self.dispatch(Action::CopyProperties);
-                        return;
-                    }
-                    "v" | "V" if self.app.alt => {
-                        self.dispatch(Action::PasteProperties);
+                    // ⇧⌘B — split the path at the selected anchor (vector edit
+                    // mode only; ⌘B stays free for bold everywhere else)
+                    "b" | "B" if self.app.shift && self.app.vector_edit_mode.active => {
+                        match self.app.vector_edit_mode.selected_points.first().copied() {
+                            Some(i) => self.dispatch(Action::SplitVectorPath(i)),
+                            None => {
+                                self.app.status = "Select the anchor to split at, then ⇧⌘B".into()
+                            }
+                        }
                         return;
                     }
                     _ => {}
@@ -4900,6 +5229,29 @@ impl Host {
                 if self.app.screen == Screen::Editor {
                     self.app.doc().editor().delete_selection();
                     self.app.mark_dirty();
+                }
+            }
+            // Layer-tree navigation (Figma): Tab cycles siblings, ⇧Tab goes the
+            // other way, ⇧⏎ climbs to the parent and ⏎ dives into the first
+            // child. ⏎ only reaches here once the inline text editor and vector
+            // edit mode have both declined it, so nothing is stolen from them.
+            Key::Named(NamedKey::Tab) => {
+                if self.app.screen == Screen::Editor {
+                    self.dispatch(if self.app.shift {
+                        Action::SelectPrevSibling
+                    } else {
+                        Action::SelectNextSibling
+                    });
+                }
+            }
+            Key::Named(NamedKey::Enter) if self.app.shift => {
+                if self.app.screen == Screen::Editor {
+                    self.dispatch(Action::SelectParent);
+                }
+            }
+            Key::Named(NamedKey::Enter) => {
+                if self.app.screen == Screen::Editor {
+                    self.dispatch(Action::SelectChild);
                 }
             }
             Key::Named(
@@ -5181,6 +5533,38 @@ impl Host {
             "Subtract selection" => self.app.apply_ctx(CtxCmd::Subtract),
             "Intersect selection" => self.app.apply_ctx(CtxCmd::Intersect),
             "Exclude selection" => self.app.apply_ctx(CtxCmd::Exclude),
+            "Flatten selection" => self.app.apply_ctx(CtxCmd::Flatten),
+            "Outline stroke" => self.app.apply_ctx(CtxCmd::OutlineStroke),
+            "Outline text" => self.app.apply_ctx(CtxCmd::OutlineText),
+            // the palette takes no parameters, so the path commands state the
+            // value they will use instead of pretending to ask for one
+            // three preset tolerances instead of a dialog: the palette has no
+            // parameter to ask for, so the entry states the value it will use
+            "Simplify path (0.5px tolerance)" => {
+                self.dispatch(Action::SimplifyVector { tolerance: 0.5 })
+            }
+            "Simplify path (1px tolerance)" => {
+                self.dispatch(Action::SimplifyVector { tolerance: 1.0 })
+            }
+            "Simplify path (4px tolerance)" => {
+                self.dispatch(Action::SimplifyVector { tolerance: 4.0 })
+            }
+            "Offset path outward by 4px" => self.dispatch(Action::OffsetVector {
+                distance: 4.0,
+                join: StrokeJoin::Miter,
+            }),
+            "Reverse path direction" => self.dispatch(Action::ReversePathDirection),
+            "Join selected paths" => self.dispatch(Action::JoinSelectedPaths),
+            // the palette takes no parameters, so a cap entry states the cap it
+            // applies and sets BOTH ends — the per-end dropdowns are the
+            // inspector's job, and the engine keeps them separate
+            "Stroke cap: round (both ends)" => self.apply_stroke_caps(x_native::StrokeCap::Round),
+            "Stroke cap: square (both ends)" => self.apply_stroke_caps(x_native::StrokeCap::Square),
+            "Stroke cap: butt (both ends)" => self.apply_stroke_caps(x_native::StrokeCap::None),
+            "Stroke cap: arrow (both ends)" => self.apply_stroke_caps(x_native::StrokeCap::Arrow),
+            "Renumber selected layers" => self.dispatch(Action::RenumberSelection),
+            "Enter vector edit mode" => self.dispatch(Action::EnterVectorEditMode),
+            "Toggle bezier handles" => self.dispatch(Action::ToggleVectorHandles),
             "Bring forward" => self.app.apply_ctx(CtxCmd::BringFwd),
             "Send backward" => self.app.apply_ctx(CtxCmd::SendBack),
             "Lock selection" => self.app.apply_ctx(CtxCmd::LockSel),
@@ -5503,8 +5887,7 @@ impl Host {
                     x_native::Action::CloseOverlay => {
                         // Navigate to first other frame
                         let dest = targets
-                            .iter()
-                            .next()
+                            .first()
                             .map(|(id, _)| id.clone())
                             .unwrap_or_default();
                         x_native::Action::Navigate { destination: dest }
@@ -5538,6 +5921,8 @@ impl Host {
             if let Some(ix) = l.get_mut(i) {
                 if let x_native::Trigger::KeyDown { key } = &mut ix.trigger {
                     // Cycle through common keys
+                    // The arms are &'static str and the field is a String; the
+                    // match borrow of `key` ends before the assignment.
                     *key = match key.as_str() {
                         "Enter" => "Space",
                         "Space" => "Escape",
@@ -5547,7 +5932,8 @@ impl Host {
                         "ArrowUp" => "ArrowDown",
                         "ArrowDown" => "a",
                         _ => "Enter",
-                    };
+                    }
+                    .to_string();
                 }
             }
         });
@@ -5565,7 +5951,8 @@ impl Host {
                         "https://example.com" => "https://figma.com",
                         "https://figma.com" => "https://github.com",
                         _ => "",
-                    };
+                    }
+                    .to_string();
                 }
             }
         });
@@ -7786,7 +8173,7 @@ impl Host {
                 self.app.field_select_all = true;
             }
             Action::FileMoveToDrafts | Action::FileDuplicate => {
-                self.app.status = format!("File action: not yet implemented");
+                self.app.status = "File action: not yet implemented".to_string();
             }
             Action::AddPage => {
                 if !self.finish_edits() {
@@ -8202,257 +8589,285 @@ impl Host {
                 self.app.palette.query.clear();
             }
             Action::PaletteRun(ci) => self.run_palette(ci),
-            // Layer management (Figma parity)
-            Action::ToggleHiddenOutlines => {
-                self.app.show_hidden_outlines = !self.app.show_hidden_outlines;
-                self.app.status = if self.app.show_hidden_outlines {
-                    "Showing hidden layer outlines"
-                } else {
-                    "Hidden layer outlines disabled"
-                }
-                .into();
-            }
+            // Layer management (Figma parity). Every gesture here goes through
+            // the engine's command log: a batch operation (inverse select, bulk
+            // rename, paste properties) is ONE undo step via `edit_batch`, never
+            // a `get_node_mut` write behind the log's back.
             Action::InverseSelection => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    let all_ids = editor.get_all_selectable_ids();
-                    let current: std::collections::HashSet<_> =
+                let ids: Vec<String> = {
+                    let editor = self.app.doc().editor();
+                    let root_id = editor.root.id.clone();
+                    let current: std::collections::HashSet<String> =
                         editor.selection.iter().cloned().collect();
-                    let new_selection: Vec<_> = all_ids
+                    editor
+                        .get_all_selectable_ids()
                         .into_iter()
-                        .filter(|id| !current.contains(id))
-                        .collect();
-                    editor.selection = new_selection;
-                    self.app.status =
-                        format!("Selected {} layers (inverse)", editor.selection.len());
-                }
+                        // the page itself is not a selectable layer
+                        .filter(|id| *id != root_id && !current.contains(id))
+                        .collect()
+                };
+                let count = ids.len();
+                self.app.doc().editor().selection = ids;
+                self.app.status = format!("Selected {count} layers (inverse)");
             }
             Action::SelectMatching => {
                 // Collect first, then select: the lookup borrows the document
                 // immutably, and the selection write needs it mutably.
-                let matched: Option<Vec<String>> =
-                    self.app.docs.get(self.app.active).and_then(|doc| {
-                        let editor = &doc.editors[doc.active_editor];
-                        if editor.selection.len() != 1 {
-                            return None;
-                        }
-                        let selected = editor.get_node(&editor.selection[0])?;
-                        Some(
+                let matched: Option<Vec<String>> = {
+                    let editor = self.app.doc().editor();
+                    if editor.selection.len() != 1 {
+                        None
+                    } else {
+                        let sel = editor.selection[0].clone();
+                        editor.get_node(&sel).map(|template| {
                             editor
-                                .find_matching_nodes(selected)
+                                .find_matching_nodes(template)
                                 .into_iter()
                                 .map(|n| n.id.clone())
-                                .collect(),
-                        )
-                    });
+                                .collect()
+                        })
+                    }
+                };
                 match matched {
-                    Some(ids) => {
+                    Some(ids) if !ids.is_empty() => {
                         let count = ids.len();
-                        if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                            doc.editors[doc.active_editor].selection = ids;
-                        }
+                        self.app.doc().editor().selection = ids;
                         self.app.status = format!("Selected {count} matching layers");
                     }
-                    None => {
+                    _ => {
                         self.app.status = "Select exactly one layer to find matching".into();
                     }
                 }
             }
-            Action::DeepSelect(node_id) => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    editor.selection = vec![node_id.clone()];
+            // The numbering half of Figma's bulk rename, without the modal:
+            // one gesture, ONE undo step for the whole selection. The base name
+            // is the first selected layer's name with trailing digits stripped,
+            // so renumbering "Icon 7 / Icon 3 / Icon 9" gives "Icon 1..3"
+            // instead of inventing a name the user never typed.
+            Action::RenumberSelection => {
+                let ids = self.app.doc().editor().selection.clone();
+                if ids.is_empty() {
+                    self.app.status = "Select the layers to renumber first".into();
+                    return;
                 }
-            }
-            Action::ShowMeasurements(node_id) => {
-                // This is handled in the rendering code, not here
-                // Just update status
-                self.app.status = format!("Measuring to {}", node_id);
-            }
-            Action::OpenBulkRename => {
-                self.app.bulk_rename_open = true;
-                self.app.bulk_rename_match.clear();
-                self.app.bulk_rename_replace.clear();
-                self.app.bulk_rename_preview.clear();
-            }
-            Action::CloseBulkRename => {
-                self.app.bulk_rename_open = false;
-            }
-            Action::ApplyBulkRename => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    let selected_ids = editor.selection.clone();
-                    let match_pattern = &self.app.bulk_rename_match;
-                    let replace_pattern = &self.app.bulk_rename_replace;
-
-                    let mut renamed_count = 0;
-                    for id in selected_ids {
-                        if let Some(node) = editor.get_node_mut(&id) {
-                            let old_name = node.name.clone();
-                            let new_name = if match_pattern.is_empty() {
-                                replace_pattern.clone()
-                            } else {
-                                old_name.replace(match_pattern, replace_pattern)
+                let renamed = {
+                    let editor = self.app.doc().editor();
+                    editor.edit_batch(|root| {
+                        let mut base: Option<String> = None;
+                        let mut n = 0;
+                        for (i, id) in ids.iter().enumerate() {
+                            let Some(node) = x_native::editor::find_mut(root, id) else {
+                                continue;
                             };
-                            if new_name != old_name {
-                                node.name = new_name;
-                                renamed_count += 1;
+                            if base.is_none() {
+                                let stripped = node
+                                    .name
+                                    .trim_end_matches(|c: char| c.is_ascii_digit())
+                                    .trim_end()
+                                    .to_string();
+                                base = Some(if stripped.is_empty() {
+                                    "Layer".to_string()
+                                } else {
+                                    stripped
+                                });
                             }
+                            let name = format!("{} {}", base.as_deref().unwrap_or("Layer"), i + 1);
+                            node.name = name;
+                            node.dirty = true;
+                            n += 1;
                         }
-                    }
-                    self.app.status = format!("Renamed {} layers", renamed_count);
+                        n
+                    })
+                };
+                if renamed {
+                    self.app.mark_dirty();
+                    self.app.status = format!("Renumbered {} layers (one undo step)", ids.len());
+                } else {
+                    self.app.status = "Nothing to renumber".into();
                 }
-                self.app.bulk_rename_open = false;
             }
             Action::CopyProperties => {
-                if let Some(doc) = self.app.docs.get(self.app.active) {
-                    let editor = &doc.editors[doc.active_editor];
-                    if editor.selection.len() == 1 {
-                        let selected_id = &editor.selection[0];
-                        if let Some(node) = editor.get_node(selected_id) {
-                            let clipboard = PropertyClipboard {
+                let clipboard = {
+                    let editor = self.app.doc().editor();
+                    match editor.selection.len() {
+                        1 => editor.get_node(&editor.selection[0].clone()).map(|node| {
+                            PropertyClipboard {
                                 fill: Some(node.fill.clone()),
                                 stroke: Some(node.stroke.clone()),
                                 effects: node.effects.clone(),
                                 opacity: Some(node.opacity),
                                 corner_radius: node.corner_radii.as_ref().map(|r| r[0]),
-                            };
-                            self.app.property_clipboard = Some(clipboard);
-                            self.app.status = "Properties copied".into();
-                        }
-                    } else {
+                            }
+                        }),
+                        _ => None,
+                    }
+                };
+                match clipboard {
+                    Some(c) => {
+                        self.app.property_clipboard = Some(c);
+                        self.app.status =
+                            "Properties copied (fill, stroke, effects, opacity, radius)".into();
+                    }
+                    None => {
                         self.app.status = "Select exactly one layer to copy properties".into();
                     }
                 }
             }
             Action::PasteProperties => {
-                if let Some(clipboard) = &self.app.property_clipboard {
-                    if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                        let editor = &mut doc.editors[doc.active_editor];
-                        let selected_ids = editor.selection.clone();
-                        let mut pasted_count = 0;
-
-                        for id in selected_ids {
-                            if let Some(node) = editor.get_node_mut(&id) {
-                                if let Some(fill) = &clipboard.fill {
-                                    node.fill = fill.clone();
-                                }
-                                if let Some(stroke) = &clipboard.stroke {
-                                    node.stroke = stroke.clone();
-                                }
-                                node.effects = clipboard.effects.clone();
-                                if let Some(opacity) = clipboard.opacity {
-                                    node.opacity = opacity;
-                                }
-                                if let Some(radius) = clipboard.corner_radius {
-                                    node.corner_radii = Some([radius, radius, radius, radius]);
-                                }
-                                pasted_count += 1;
+                let Some(clip) = self.app.property_clipboard.clone() else {
+                    self.app.status = "No properties copied yet".into();
+                    return;
+                };
+                let ids = self.app.doc().editor().selection.clone();
+                let pasted = {
+                    let editor = self.app.doc().editor();
+                    editor.edit_batch(|root| {
+                        let mut n = 0;
+                        for id in &ids {
+                            let Some(node) = x_native::editor::find_mut(root, id) else {
+                                continue;
+                            };
+                            // Figma pastes THE fill / THE stroke, not a whole
+                            // stack, so each stack collapses to the one copied
+                            // layer; materialized nodes read the stacks, so both
+                            // the simple field and the stack are written.
+                            if let Some(fill) = &clip.fill {
+                                node.fill = fill.clone();
+                                node.fill_layers = vec![x_native::PaintLayer::new(fill.clone())];
                             }
+                            if let Some(stroke) = &clip.stroke {
+                                node.stroke = stroke.clone();
+                                node.stroke_layers = if stroke.width > 0.0 {
+                                    vec![x_native::StrokeLayer::new(stroke.clone())]
+                                } else {
+                                    vec![]
+                                };
+                            }
+                            node.effects = clip.effects.clone();
+                            node.effect_layers = clip
+                                .effects
+                                .iter()
+                                .cloned()
+                                .map(x_native::EffectLayer::new)
+                                .collect();
+                            node.visual_stacks_materialized = true;
+                            if let Some(op) = clip.opacity {
+                                node.opacity = op;
+                            }
+                            if let Some(r) = clip.corner_radius {
+                                node.corner_radii = Some([r, r, r, r]);
+                            }
+                            node.dirty = true;
+                            n += 1;
                         }
-                        self.app.status = format!("Pasted properties to {} layers", pasted_count);
-                    }
+                        n
+                    })
+                };
+                if pasted {
+                    self.app.mark_dirty();
+                    self.app.status = format!("Pasted properties onto {} layers", ids.len());
                 } else {
-                    self.app.status = "No properties copied".into();
+                    self.app.status = "Nothing selected to paste onto".into();
                 }
             }
-            Action::SetLayerSearch(query) => {
-                self.app.layer_search = query;
-            }
             Action::SelectChild => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    if editor.selection.len() == 1 {
-                        let selected_id = &editor.selection[0];
-                        if let Some(node) = editor.get_node(selected_id) {
-                            if let Some(first_child) = node.children.first() {
-                                editor.selection = vec![first_child.id.clone()];
-                            }
+                let child = {
+                    let editor = self.app.doc().editor();
+                    match editor.selection.len() {
+                        1 => {
+                            let sel = editor.selection[0].clone();
+                            editor
+                                .get_node(&sel)
+                                .and_then(|n| n.children.first().map(|c| c.id.clone()))
                         }
+                        _ => None,
                     }
+                };
+                if let Some(id) = child {
+                    self.app.doc().editor().selection = vec![id];
                 }
             }
             Action::SelectParent => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    if editor.selection.len() == 1 {
-                        let selected_id = &editor.selection[0];
-                        if let Some(parent_id) = editor.get_parent_id(selected_id) {
-                            editor.selection = vec![parent_id];
-                        }
+                let parent = {
+                    let editor = self.app.doc().editor();
+                    match editor.selection.len() {
+                        1 => editor.get_parent_id(&editor.selection[0].clone()),
+                        _ => None,
                     }
+                };
+                if let Some(id) = parent {
+                    self.app.doc().editor().selection = vec![id];
                 }
             }
             Action::SelectNextSibling => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    if editor.selection.len() == 1 {
-                        let selected_id = &editor.selection[0];
-                        if let Some(next_id) = editor.get_next_sibling_id(selected_id) {
-                            editor.selection = vec![next_id];
-                        }
+                let next = {
+                    let editor = self.app.doc().editor();
+                    match editor.selection.len() {
+                        1 => editor.get_next_sibling_id(&editor.selection[0].clone()),
+                        _ => None,
                     }
+                };
+                if let Some(id) = next {
+                    self.app.doc().editor().selection = vec![id];
                 }
             }
             Action::SelectPrevSibling => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    if editor.selection.len() == 1 {
-                        let selected_id = &editor.selection[0];
-                        if let Some(prev_id) = editor.get_prev_sibling_id(selected_id) {
-                            editor.selection = vec![prev_id];
-                        }
+                let prev = {
+                    let editor = self.app.doc().editor();
+                    match editor.selection.len() {
+                        1 => editor.get_prev_sibling_id(&editor.selection[0].clone()),
+                        _ => None,
                     }
+                };
+                if let Some(id) = prev {
+                    self.app.doc().editor().selection = vec![id];
                 }
             }
-            Action::SelectLayerFromMenu(node_id) => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    editor.selection = vec![node_id];
-                }
-            }
-            // Vector Edit Mode actions
+            // ---- vector edit mode + path operations (Figma parity) --------
+            // The engine owns the mode (`Editor::vector_edit_*`); the app
+            // mirrors it into `vector_edit_mode` for the canvas overlay.
             Action::EnterVectorEditMode => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    if let Some(node_id) = editor.selection.first().cloned() {
-                        if editor.enter_vector_edit_mode(&node_id) {
-                            self.app.vector_edit_mode.active = true;
-                            self.app.vector_edit_mode.selected_node = Some(node_id);
-                            self.app.status = "Entered vector edit mode".into();
-                        }
+                let id = self.app.doc().editor().selection.first().cloned();
+                let had_selection = id.is_some();
+                let entered = match &id {
+                    Some(id) => self.app.doc().editor().enter_vector_edit_mode(id),
+                    None => false,
+                };
+                self.sync_vector_edit_mode();
+                self.app.status = match (entered, had_selection) {
+                    (true, _) => {
+                        "Editing anchors - Enter or Escape to leave, ⌫ deletes the selected points"
+                            .into()
                     }
-                }
+                    // the engine refuses anything that has no anchors to edit
+                    (false, true) => {
+                        "Anchor editing needs a vector layer - this one has none".into()
+                    }
+                    (false, false) => "Select a vector layer to edit its anchors".into(),
+                };
             }
             Action::ExitVectorEditMode => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    editor.exit_vector_edit_mode();
-                    self.app.vector_edit_mode.active = false;
-                    self.app.vector_edit_mode.selected_node = None;
-                    self.app.vector_edit_mode.selected_points.clear();
-                    self.app.status = "Exited vector edit mode".into();
-                }
+                let editor = self.app.doc().editor();
+                // leaving mid-drag abandons it: the snapshot goes back and
+                // nothing is logged, so Esc is always a clean exit
+                editor.cancel_path_gesture();
+                editor.exit_vector_edit_mode();
+                self.app.drag = None;
+                self.sync_vector_edit_mode();
+                self.app.status = "Left vector edit mode".into();
             }
             Action::SelectVectorPoint(idx) => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    editor.select_vector_point(idx, self.app.shift);
-                    self.app.vector_edit_mode.selected_points =
-                        editor.vector_edit_selected_points.clone();
-                }
+                let additive = self.app.shift;
+                let editor = self.app.doc().editor();
+                editor.select_vector_point(idx, additive);
+                self.sync_vector_edit_mode();
             }
             Action::DeselectVectorPoints => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    editor.deselect_vector_points();
-                    self.app.vector_edit_mode.selected_points.clear();
-                }
+                self.app.doc().editor().deselect_vector_points();
+                self.sync_vector_edit_mode();
             }
             Action::MoveVectorPoints { dx, dy } => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    editor.move_vector_points(dx, dy);
+                if self.app.doc().editor().move_vector_points(dx, dy) {
                     self.app.mark_dirty();
                 }
             }
@@ -8460,400 +8875,129 @@ impl Host {
                 segment_idx,
                 position,
             } => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    editor.add_vector_point(segment_idx, position);
+                if self
+                    .app
+                    .doc()
+                    .editor()
+                    .add_vector_point(segment_idx, position)
+                {
                     self.app.mark_dirty();
+                    self.app.status = "Added an anchor on the segment".into();
                 }
             }
             Action::DeleteVectorPoints => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    editor.delete_vector_points();
+                if self.app.doc().editor().delete_vector_points() {
                     self.app.mark_dirty();
-                    self.app.status = "Deleted vector points".into();
+                    self.sync_vector_edit_mode();
+                    self.app.status = "Deleted the selected anchors".into();
+                } else {
+                    self.app.status = "Cannot delete - a path keeps at least two anchors".into();
                 }
-            }
-            Action::SetVectorTool(tool) => {
-                self.app.vector_edit_mode.tool = tool;
-                self.app.status = format!("Vector tool: {:?}", tool);
             }
             Action::ToggleVectorHandles => {
                 self.app.vector_edit_mode.show_handles = !self.app.vector_edit_mode.show_handles;
             }
-            Action::OutlineStroke => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    if let Some(node_id) = editor.selection.first().cloned() {
-                        if editor.outline_stroke(&node_id) {
-                            self.app.mark_dirty();
-                            self.app.status = "Outlined stroke".into();
-                        } else {
-                            self.app.status =
-                                "Cannot outline stroke - node must have a stroke".into();
-                        }
-                    }
-                }
-            }
-            Action::FlattenSelection => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    if editor.flatten_selection() {
-                        self.app.mark_dirty();
-                        self.app.status = "Flattened selection".into();
-                    } else {
-                        self.app.status = "Cannot flatten - no vector nodes selected".into();
-                    }
-                }
-            }
-            Action::OffsetVector { distance, join } => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    if let Some(node_id) = editor.selection.first().cloned() {
-                        if editor.offset_vector(&node_id, distance) {
-                            self.app.mark_dirty();
-                            self.app.status =
-                                format!("Offset vector by {} with {} join", distance, join);
-                        } else {
-                            self.app.status = "Cannot offset - node must be a vector".into();
-                        }
-                    }
-                }
-            }
-            Action::SimplifyVector { tolerance } => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    editor.simplify_vector(tolerance);
+            Action::RemoveBezierHandles(anchor_idx) => {
+                let Some(id) = self.vector_edit_id() else {
+                    return;
+                };
+                if self
+                    .app
+                    .doc()
+                    .editor()
+                    .remove_bezier_handles(&id, anchor_idx)
+                {
                     self.app.mark_dirty();
+                    self.app.status = "Handles removed - the point is a corner again".into();
+                } else {
                     self.app.status =
-                        format!("Simplified vector path with tolerance {}", tolerance);
-                }
-            }
-            Action::TextToOutline => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    if let Some(node_id) = editor.selection.first().cloned() {
-                        if editor.text_to_outline(&node_id) {
-                            self.app.mark_dirty();
-                            self.app.status = "Converted text to outline".into();
-                        } else {
-                            self.app.status = "Cannot convert - node must be text".into();
-                        }
-                    }
-                }
-            }
-            // Phase 2: Vector Editing Tools
-            Action::AddBezierHandle {
-                point_idx,
-                handle_pos,
-            } => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    if let Some(node_id) = editor.vector_edit_node.clone() {
-                        if editor.add_bezier_handle(&node_id, point_idx, handle_pos) {
-                            self.app.mark_dirty();
-                            self.app.status = "Added bézier handle".into();
-                        }
-                    }
-                }
-            }
-            Action::AdjustBezierHandle {
-                point_idx,
-                handle_idx,
-                new_pos,
-            } => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    if let Some(node_id) = editor.vector_edit_node.clone() {
-                        if editor.adjust_bezier_handle(&node_id, point_idx, handle_idx, new_pos) {
-                            self.app.mark_dirty();
-                        }
-                    }
-                }
-            }
-            Action::SplitVectorPath { point_idx } => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    if let Some(node_id) = editor.vector_edit_node.clone() {
-                        if let Some(new_id) = editor.split_vector_path(&node_id, point_idx) {
-                            editor.selection = vec![new_id];
-                            self.app.mark_dirty();
-                            self.app.status = "Split vector path".into();
-                        }
-                    }
-                }
-            }
-            Action::CutVectorPath { start, end } => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    if let Some(node_id) = editor.vector_edit_node.clone() {
-                        let new_ids = editor.cut_vector_path(&node_id, start, end);
-                        if !new_ids.is_empty() {
-                            self.app.mark_dirty();
-                            self.app.status = format!("Cut path into {} pieces", new_ids.len() + 1);
-                        }
-                    }
+                        "That point is already a corner - no handles to remove".into();
                 }
             }
             Action::LassoSelectPoints { boundary } => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    if let Some(node_id) = editor.vector_edit_node.clone() {
-                        let selected = editor.lasso_select_points(&node_id, &boundary);
-                        editor.vector_edit_selected_points = selected;
-                        self.app.vector_edit_mode.selected_points = selected.clone();
-                        self.app.status = format!("Selected {} points", selected.len());
-                    }
-                }
-            }
-            Action::SetVariableWidthStroke { width_points } => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    if let Some(node_id) = editor.selection.first().cloned() {
-                        if editor.set_variable_width_stroke(&node_id, width_points) {
-                            self.app.mark_dirty();
-                            self.app.status = "Set variable width stroke".into();
-                        }
-                    }
-                }
-            }
-            Action::RemoveBezierHandles { point_idx } => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    if let Some(node_id) = editor.vector_edit_node.clone() {
-                        if editor.remove_bezier_handles(&node_id, point_idx) {
-                            self.app.mark_dirty();
-                            self.app.status = "Removed bézier handles".into();
-                        }
-                    }
-                }
-            }
-            Action::MirrorBezierHandles { point_idx, mode } => {
-                // Convert state::MirrorMode to x_editor::MirrorMode.
-                // TODO(vector): dispatch to the editor once the two MirrorMode
-                // types are unified -- nothing is mirrored yet, so this only
-                // reports the intent.
-                let mirror_mode = match mode {
-                    crate::state::MirrorMode::None => x_editor::MirrorMode::None,
-                    crate::state::MirrorMode::Angle => x_editor::MirrorMode::Angle,
-                    crate::state::MirrorMode::AngleAndLength => {
-                        x_editor::MirrorMode::AngleAndLength
-                    }
+                let Some(id) = self.vector_edit_id() else {
+                    return;
                 };
-                let _ = (point_idx, mirror_mode);
-                self.app.mark_dirty();
-                self.app.status = "Mirrored bézier handles".into();
+                let picked = self.app.doc().editor().lasso_select_points(&id, &boundary);
+                self.app.doc().editor().vector_edit_selected_points = picked.clone();
+                self.sync_vector_edit_mode();
+                self.app.status = format!("{} anchors inside the lasso", picked.len());
             }
-            // Phase 3: Enhanced Path Operations
-            Action::OutlineStrokeEnhanced => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    if let Some(node_id) = editor.selection.first().cloned() {
-                        if editor.outline_stroke_enhanced(&node_id) {
-                            self.app.mark_dirty();
-                            self.app.status = "Outlined stroke (enhanced)".into();
-                        } else {
-                            self.app.status =
-                                "Cannot outline stroke - node must have a stroke".into();
-                        }
-                    }
-                }
-            }
-            Action::OffsetVectorEnhanced {
-                distance,
-                join_style,
-            } => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    if let Some(node_id) = editor.selection.first().cloned() {
-                        // Convert state::JoinStyle to x_editor::JoinStyle
-                        let js = match join_style {
-                            crate::state::JoinStyle::Miter => x_editor::JoinStyle::Miter,
-                            crate::state::JoinStyle::Round => x_editor::JoinStyle::Round,
-                            crate::state::JoinStyle::Bevel => x_editor::JoinStyle::Bevel,
-                        };
-                        if editor.offset_vector_enhanced(&node_id, distance, js) {
-                            self.app.mark_dirty();
-                            self.app.status =
-                                format!("Offset vector by {} with {:?} join", distance, join_style);
-                        } else {
-                            self.app.status = "Cannot offset - node must be a vector".into();
-                        }
-                    }
-                }
-            }
-            Action::TextToOutlineEnhanced => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    if let Some(node_id) = editor.selection.first().cloned() {
-                        if editor.text_to_outline_enhanced(&node_id) {
-                            self.app.mark_dirty();
-                            self.app.status = "Converted text to outline (enhanced)".into();
-                        } else {
-                            self.app.status = "Cannot convert - node must be text".into();
-                        }
-                    }
-                }
-            }
-            Action::SimplifyVectorInteractive { tolerance, preview } => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    if let Some(node_id) = editor.selection.first().cloned() {
-                        if let Some(simplified) =
-                            editor.simplify_vector_interactive(&node_id, tolerance, preview)
-                        {
-                            if !preview {
-                                self.app.mark_dirty();
-                                self.app.status =
-                                    format!("Simplified vector path with tolerance {}", tolerance);
-                            } else {
-                                self.app.status = format!(
-                                    "Preview: {} points after simplification",
-                                    simplified.len()
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-            Action::JoinPaths { node_id1, node_id2 } => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    if let Some(joined_id) = editor.join_paths(&node_id1, &node_id2) {
-                        editor.selection = vec![joined_id];
+            Action::SplitVectorPath(anchor_idx) => {
+                let Some(id) = self.vector_edit_id() else {
+                    return;
+                };
+                match self.app.doc().editor().split_vector_path(&id, anchor_idx) {
+                    Some(_) => {
                         self.app.mark_dirty();
-                        self.app.status = "Joined paths".into();
-                    } else {
-                        self.app.status = "Cannot join - both nodes must be vectors".into();
+                        self.app.status = "Split the path into two layers".into();
+                    }
+                    None => {
+                        self.app.status =
+                            "Cannot split there - pick an anchor between the first and last".into()
                     }
                 }
             }
             Action::ReversePathDirection => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    if let Some(node_id) = editor.selection.first().cloned() {
-                        if editor.reverse_path_direction(&node_id) {
-                            self.app.mark_dirty();
-                            self.app.status = "Reversed path direction".into();
-                        } else {
-                            self.app.status = "Cannot reverse - node must be a vector".into();
-                        }
-                    }
-                }
-            }
-            Action::SetStrokeCapStart { node_id, cap } => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    // Convert state::StrokeCapType to x_core::StrokeCap
-                    let stroke_cap = match cap {
-                        crate::state::StrokeCapType::None => x_core::StrokeCap::None,
-                        crate::state::StrokeCapType::Round => x_core::StrokeCap::Round,
-                        crate::state::StrokeCapType::Square => x_core::StrokeCap::Square,
-                        crate::state::StrokeCapType::Arrow => x_core::StrokeCap::Arrow,
-                        crate::state::StrokeCapType::Triangle => x_core::StrokeCap::Triangle,
-                    };
-                    if editor.set_stroke_cap_start(&node_id, stroke_cap) {
-                        self.app.mark_dirty();
-                        self.app.status = format!("Set start stroke cap to {:?}", cap);
-                    }
-                }
-            }
-            Action::SetStrokeCapEnd { node_id, cap } => {
-                if let Some(doc) = self.app.docs.get_mut(self.app.active) {
-                    let editor = &mut doc.editors[doc.active_editor];
-                    // Convert state::StrokeCapType to x_core::StrokeCap
-                    let stroke_cap = match cap {
-                        crate::state::StrokeCapType::None => x_core::StrokeCap::None,
-                        crate::state::StrokeCapType::Round => x_core::StrokeCap::Round,
-                        crate::state::StrokeCapType::Square => x_core::StrokeCap::Square,
-                        crate::state::StrokeCapType::Arrow => x_core::StrokeCap::Arrow,
-                        crate::state::StrokeCapType::Triangle => x_core::StrokeCap::Triangle,
-                    };
-                    if editor.set_stroke_cap_end(&node_id, stroke_cap) {
-                        self.app.mark_dirty();
-                        self.app.status = format!("Set end stroke cap to {:?}", cap);
-                    }
-                }
-            }
-
-            // Phase 5: Interactive UI Handlers
-            Action::UpdateShapeBuilderHover { mouse_pos } => {
-                // Update hover state for Shape Builder tool
-                self.app.shape_builder_hover = Some(mouse_pos);
-            }
-
-            Action::ExecuteShapeBuilderOperation => {
-                // Execute the current Shape Builder operation
-                if let Some(preview) = &self.app.shape_builder_preview {
-                    match preview {
-                        ShapeOperation::Merge(shapes) => {
-                            if let Some(new_id) = self.editor.shape_builder_merge(shapes) {
-                                self.app.status =
-                                    format!("Merged {} shapes into {}", shapes.len(), new_id);
-                            }
-                        }
-                        ShapeOperation::Subtract { base, subtract } => {
-                            if let Some(new_id) = self.editor.shape_builder_subtract(base, subtract)
-                            {
-                                self.app.status =
-                                    format!("Subtracted {} shapes from {}", subtract.len(), new_id);
-                            }
-                        }
-                        ShapeOperation::Intersect(shapes) => {
-                            self.app.status =
-                                format!("Intersect operation for {} shapes", shapes.len());
-                            // TODO: Implement intersect
-                        }
-                        ShapeOperation::Exclude(shapes) => {
-                            self.app.status =
-                                format!("Exclude operation for {} shapes", shapes.len());
-                            // TODO: Implement exclude
-                        }
-                    }
-                }
-            }
-
-            Action::SetShapeBuilderMode(mode) => {
-                // Set the Shape Builder operation mode
-                self.app.shape_builder_mode = mode;
-                self.app.status = format!("Shape Builder mode: {:?}", mode);
-            }
-
-            Action::ToggleShapeBuilderSelectionMode => {
-                // Toggle between Click and Lasso selection modes
-                self.app.shape_builder_selection_mode = match self.app.shape_builder_selection_mode
-                {
-                    SelectionMode::Click => SelectionMode::Lasso,
-                    SelectionMode::Lasso => SelectionMode::Click,
-                    _ => SelectionMode::Click,
+                let Some(id) = self.vector_edit_id() else {
+                    self.app.status = "Select a vector layer first".into();
+                    return;
                 };
-                self.app.status = format!(
-                    "Selection mode: {:?}",
-                    self.app.shape_builder_selection_mode
-                );
-            }
-
-            Action::ApplyDashPattern { node_id, pattern } => {
-                // Apply dash pattern to a stroke
-                // TODO: Implement dash pattern application
-                self.app.status = format!("Applied dash pattern to {}", node_id);
-            }
-
-            Action::SetAdvancedStrokeCap {
-                node_id,
-                is_start,
-                cap,
-            } => {
-                // Set advanced stroke cap
-                if is_start {
-                    // TODO: Implement advanced start cap
-                    self.app.status = format!("Set advanced start cap for {}", node_id);
+                if self.app.doc().editor().reverse_path_direction(&id) {
+                    self.app.mark_dirty();
+                    self.app.status = "Reversed the path direction".into();
                 } else {
-                    // TODO: Implement advanced end cap
-                    self.app.status = format!("Set advanced end cap for {}", node_id);
+                    self.app.status = "Cannot reverse - select a vector layer".into();
                 }
             }
-
+            Action::JoinSelectedPaths => {
+                let pair = {
+                    let sel = &self.app.doc().editor().selection;
+                    if sel.len() == 2 {
+                        Some((sel[0].clone(), sel[1].clone()))
+                    } else {
+                        None
+                    }
+                };
+                let Some((a, b)) = pair else {
+                    self.app.status = "Select exactly two vector layers to join".into();
+                    return;
+                };
+                match self.app.doc().editor().join_paths(&a, &b) {
+                    Some(_) => {
+                        self.app.mark_dirty();
+                        self.app.status = "Joined the two paths into one layer".into();
+                    }
+                    None => {
+                        self.app.status = "Cannot join - both layers must be vector paths that are \
+                                           not rotated or scaled"
+                            .into()
+                    }
+                }
+            }
+            Action::OffsetVector { distance, join } => {
+                let Some(id) = self.vector_edit_id() else {
+                    self.app.status = "Select a vector layer to offset".into();
+                    return;
+                };
+                if self.app.doc().editor().offset_vector(&id, distance, join) {
+                    self.app.mark_dirty();
+                    self.app.status =
+                        format!("Offset the path by {distance}px ({:?} corners)", join);
+                } else {
+                    self.app.status =
+                        "Cannot offset - select a vector layer and use a non-zero distance".into();
+                }
+            }
+            Action::SimplifyVector { tolerance } => {
+                if self.app.doc().editor().simplify_vector(tolerance) {
+                    self.app.mark_dirty();
+                    self.app.status = format!("Simplified the path (tolerance {tolerance}px)");
+                } else {
+                    self.app.status =
+                        "Nothing to simplify - no anchor sits within that tolerance".into();
+                }
+            }
             // Phase 6: Advanced Gradients, Image Adjustments, and Missing Blend Modes
             Action::FlipGradient => {
                 let Some(id) = self.app.doc().selected_id() else {
@@ -8940,10 +9084,13 @@ impl Host {
             }
 
             Action::SetGradientType { gradient_type } => {
-                let Some(id) = self.app.doc().selected_id() else {
+                // The selection is a precondition here, not an input: converting
+                // between gradient types is not implemented, so this handler
+                // only reports. Binding the id produced an unused variable.
+                if self.app.doc().selected_id().is_none() {
                     self.app.status = "Select a layer with a gradient fill first".into();
                     return;
-                };
+                }
                 // This would require converting between gradient types
                 // For now, just show a status message
                 self.app.status = format!(

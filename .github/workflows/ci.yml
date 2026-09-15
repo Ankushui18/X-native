@@ -128,7 +128,11 @@ jobs:
             diag "$build" | head -40
             echo
             echo "### clippy: tracked dead code (first 20 of $(diag "$clippy" | grep -acE 'never (used|read|constructed)'))"
-            diag "$clippy" | grep -aE 'never (used|read|constructed)' | cut -c1-160 | head -20
+            # Not head -20: when the dead-code ratchet trips, this list IS the
+            # actionable content — 20 of 84 lines cannot be reconciled against
+            # the per-file table in docs/KNOWN_DEBT.md, and for a checkout with
+            # no Rust toolchain this comment is the only channel there is.
+            diag "$clippy" | grep -aE 'never (used|read|constructed)' | cut -c1-200 | head -120
           } > "$report"
           echo "report: $(wc -c < "$report") bytes"
           cat "$report" || true

@@ -5,6 +5,115 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-16 (Vector Tools, and the Build They Needed)
+
+### Added
+- **A real vector offset.** `x_core::booleans::offset_path(cmds, distance, join)`
+  flattens each cubic at 12 steps, builds per-vertex miter normals with a 4×
+  miter limit that falls back to bevel, applies `Bevel`/`Round` corner
+  treatments, and measures winding with `signed_area` rather than assuming it —
+  so a positive distance grows a closed path outward and a counter-clockwise
+  hole offsets the way the designer expects. A zero distance is refused instead
+  of polygonising the path for nothing. `Editor::offset_vector` wraps it
+  undoably. 7 tests. `crates/x-core/src/booleans.rs`.
+  Reference: [Create designs](https://help.figma.com/hc/en-us/sections/4403912808599-Create-designs) — *Offset a vector path*.
+- **One undo step per vector gesture.** `begin_path_gesture` snapshots the node,
+  `live_rewrite_path` mutates the tree without logging, `end_path_gesture` pushes
+  a single `ReplaceNode`; `undo`/`redo` drop a stale snapshot and Esc cancels it.
+  A drag used to be one history entry per mouse-move event.
+  `crates/x-editor/src/vector_edit.rs`.
+- **Batch path operations**, all tested: `move_anchors_by`, `delete_anchors`
+  (refuses to leave fewer than two anchors, re-roots a deleted `MoveTo`),
+  `split_segment_at` (de Casteljau at t=0.5, so a split cubic keeps its shape),
+  `simplify_path`, `reverse_path`, `split_path_at`, `translate_path`,
+  `bend_anchor`, `move_handle_in`. Simplification is Ramer–Douglas–Peucker as a
+  *keep mask*, so a survivor keeps its original command and a simplified curve
+  stays a cubic; a bulge guard means it can never straighten a curve. 20 tests.
+- **Text outlining goes through the real shaper.**
+  `x_native::outline_text_node(node, fonts, vars)` derives every typography
+  binding the renderer does, shapes through the same `x-text` pipeline the canvas
+  uses, resolves natural line height exactly as `sinks.rs` does, elevates
+  quad→cubic, and returns one `Vector` node carrying the text's transform, name,
+  opacity, fill and fill stack. `crates/x-native/src/lib.rs`.
+- **What you click is what is drawn.** `crates/x-editor/src/vector_handles.rs`
+  hit-tests anchors, handles and segments in world space, and both the pointer
+  and `paint_vector_points` now consume it, with tolerance scaling by zoom.
+- **Vector-edit shortcuts:** ⌘E flatten, ⇧⌘O outline stroke, ⇧⌥⌘O outline text,
+  ⇧⌘B split path at an anchor, ⏎/Esc in and out of node edit mode, ⌫ to delete
+  selected anchors, arrows to nudge them (⇧ = 10px), ⌥-click to convert a curve
+  point back to a corner, Tab/⇧Tab/⇧⏎/⏎ for layer-tree navigation, ⌘-click to
+  deep-select. Palette presets for simplify at 0.5 / 1 / 4 px.
+- **`FIGMA_CREATE_DESIGNS_COMPARISON.md`** — all 70 articles in Figma's *Create
+  designs* help section compared against this codebase, one row each with
+  `file:line` evidence and a five-level grade (23 match, 24 partial, 10
+  engine-only, 2 dead-wired, 11 absent), ending in a P0/P1/P2 plan.
+
+### Fixed
+- **The workspace did not compile.** `x-editor` called `mark_dirty()`,
+  `delete_node()` and `add_node()` from ~30 sites; none of the three existed on
+  `Editor`. The 36 junk methods that called them are gone rather than stubbed,
+  and every path operation now goes through the command log
+  (`rewrite_path`, `push_replace`, `push_cmds`, `edit_batch`) so it is undoable
+  and a refused operation pushes nothing.
+- **`grid-auto-flow: column` never left column 0.** The scan was
+  `for col { for row in 0.. }`, and `cells_free` answers true for any row past
+  the end of `occupancy` — which `mark` grows on demand — so the unbounded inner
+  scan always "found" a fresh implicit row in the first column and every child
+  stacked vertically. The row scan is bounded by the declared rows, with a
+  bounded implicit-row fallback. `crates/x-core/src/grid.rs`.
+- **Three shortcuts were dead code.** ⇧⌥A (inverse selection), ⌥⌘C (copy
+  properties) and ⌥⌘V (paste properties) had modifier-guarded arms *below* the
+  unguarded ⌘A/⌘C/⌘V arms; rustc takes the first arm whose pattern matches, so
+  the guards were never consulted and `unreachable_pattern` was reporting a real
+  bug. The guarded family now precedes the plain one.
+- **The prototype inspector's interaction loop closed 40 lines early**, leaving
+  its easing / reset / remove rows outside the only scope that binds `i` and
+  `ix`. While moving the brace: the loop computed `row_h` and painted a row that
+  tall but never advanced `y`, so every interaction drew on top of the previous
+  one. `y += row_h;` now ends the iteration.
+- **Two flattens at one undo depth minted the same id.** `flatten_selected` used
+  `format!("flat-{}", undo_depth())`; flatten pushes one group, so undoing a
+  flatten put the depth back and the next flatten collided — and a duplicate id
+  makes every `find` in the engine ambiguous. Now `fresh_id("flat")`, with a
+  regression test that walks the collision path. Flatten also carries over name,
+  opacity, effects and effect layers, plus a single shape's materialised paint
+  stacks (a group's describe the group, not the baked geometry).
+- **`offset_vector` was a translation, not an offset** — it added `distance` to
+  both x and y of every point. Deleted in favour of `offset_path`.
+- **Two fake text outliners deleted**: one emitted the text node's bounding
+  rectangle, the other a `0.6 × font_size` box per character.
+- **`paint_vector_points` destructured `NodeKind::Vector(v)` and read
+  `v.segments`** — `Vector` is a struct variant holding `path: Vec<PathCmd>`, and
+  there is no `segments` field in the model. Rewritten onto `anchors_world` /
+  `handles_world`.
+- **The P / V / X / Q / E "vector tool shortcuts" block ran outside vector edit
+  mode and `return`ed**, so V no longer selected the Select tool. Scoped to the
+  mode; ⌘E is flatten.
+- `Action::SetGradientType` bound `let Some(id)` and never read it; the selection
+  is a precondition there, so it is an `is_none()` guard now.
+
+### Removed
+- `x-core/src/p0_features.rs` (258 lines, never declared as a module) and
+  `x-render/src/vector_network.rs` (769 lines rendering a type deleted from
+  `x-core` on 2026-09-02); 32 unreachable `Action` variants, 8 phantom types
+  (`MirrorMode`, `JoinStyle`, `ShapeOperation`, `SelectionMode`, `ArrowStyle`,
+  `DashPattern`, `VectorTool`, `StrokeCapType`) and 3 unused fields. `dispatch`
+  is now exhaustive over all 172 variants — four prototype variants that nothing
+  constructed were a hard `E0004`, not dead weight.
+
+### Changed
+- **`DEAD_CODE_CEILING` re-measured 76 → 82**, upward, because the previous
+  number was measured on 12 Sep and the tree stopped compiling afterwards: a
+  workspace that does not build reports no dead-code diagnostics at all, so the
+  count was remembered rather than measured. The first gate run that could see
+  the whole workspace again reported 84; this branch deletes two of them
+  (`extra_y`, write-only state in the prototype panel) on top of 1,027 lines of
+  orphan files. `docs/KNOWN_DEBT.md` §1 now names every item, and
+  `scripts/check.sh` prints the list when the ratchet trips — a count that does
+  not say *which* warning cannot be acted on from a PR comment, which for a
+  checkout without a toolchain is the only channel there is. It also prints each
+  failing test's panic payload, for the same reason.
+
 ## [Unreleased] — 2026-09-15 (Text Styles & Variable Typography)
 
 ### Added
