@@ -214,7 +214,18 @@ pub struct Document {
     pub component_props: HashMap<String, Vec<crate::ComponentPropEntry>>,
     /// canvas comment pins, in page order (review C18)
     pub comments: Vec<Comment>,
+    /// The document's default font family. Text nodes without an explicit
+    /// `font` binding render with — and the inspector reports — this
+    /// family. `None` means "the engine default" (APP_DEFAULT_FONT).
+    /// Persisted in the .x file, so a file's default travels with it
+    /// instead of being a constant scattered through the UI.
+    pub default_font: Option<String>,
 }
+
+/// The engine's fallback font family: the face bundled with the app
+/// (`assets/fonts/Inter-400.ttf`), so it always resolves to a real font.
+/// Documents may override it via `Document::default_font`.
+pub const APP_DEFAULT_FONT: &str = "Inter";
 
 /// The kind of document being edited.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
@@ -231,6 +242,16 @@ pub enum DocumentKind {
 impl Document {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The family text falls back to when a node carries no explicit
+    /// `font` binding: this document's `default_font`, or the engine
+    /// default when the file predates the field.
+    pub fn resolved_default_font(&self) -> &str {
+        self.default_font
+            .as_deref()
+            .filter(|f| !f.is_empty())
+            .unwrap_or(APP_DEFAULT_FONT)
     }
 
     /// Approximate resident bytes of the document model (nodes, styles,

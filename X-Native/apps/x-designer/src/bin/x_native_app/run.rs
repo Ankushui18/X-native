@@ -2586,7 +2586,14 @@ impl App {
         }
         let data = {
             let root = &self.doc_ref().editor_ref().root;
-            TextStyleData::from_node(crate::editor_ui::find_node(root, id.as_str())?)
+            let node = crate::editor_ui::find_node(root, id.as_str())?;
+            let mut data = TextStyleData::from_node(node);
+            // P3: a node without an explicit font carries the document's
+            // default typeface into the new style
+            if !node.bindings.contains_key("font") {
+                data.font_family = self.doc_ref().doc.resolved_default_font().to_string();
+            }
+            data
         };
         // Figma's naming: "New style", then "New style 2", "New style 3", …
         let name = (1..)
@@ -2634,7 +2641,12 @@ impl App {
         let name = self.linked_text_style(id.as_str())?;
         let data = {
             let root = &self.doc_ref().editor_ref().root;
-            TextStyleData::from_node(crate::editor_ui::find_node(root, id.as_str())?)
+            let node = crate::editor_ui::find_node(root, id.as_str())?;
+            let mut data = TextStyleData::from_node(node);
+            if !node.bindings.contains_key("font") {
+                data.font_family = self.doc_ref().doc.resolved_default_font().to_string();
+            }
+            data
         };
         if !self.doc().doc.update_text_style(&name, data) {
             return None;
@@ -2856,7 +2868,10 @@ impl App {
             return false;
         }
         self.pending_text_edit = Some((id, p));
-        self.drag = Some(Drag::MoveSel { last: world });
+        self.drag = Some(Drag::MoveSel {
+            last: world,
+            base_depth: self.doc().editor_ref().undo_depth(),
+        });
         true
     }
 
@@ -3136,8 +3151,22 @@ impl Host {
                 let root = doc.editor_ref().root.clone();
                 x_native::editor::hit_test(&root, world)
             };
-            if hit_id.is_some() {
-                self.app.doc().editor().click_select(world, false, false);
+            // Figma: right-clicking an ALREADY-SELECTED node keeps the
+            // multi-selection. Collapsing it here made "Group selection"
+            // silently no-op — the menu opened for N nodes, but
+            // group_selection needs 2+ and the click had just reduced the
+            // selection to the one node under the cursor.
+            if let Some(hit) = hit_id {
+                let er = self.app.doc_ref().editor_ref();
+                let root = er.root.clone();
+                let top_id = x_native::editor::top_level_ancestor(&root, &hit);
+                let top = top_id.unwrap_or(hit.clone());
+                let sel = er.selection.clone();
+                let already_selected = sel.iter().any(|s| s == &top);
+                if !already_selected {
+                    let ed = self.app.doc().editor();
+                    ed.click_select(world, false, false);
+                }
             }
             let sel_count = {
                 let doc = self.app.doc();
@@ -3165,7 +3194,24 @@ impl Host {
             .unwrap_or(false)
             && self.app.page_menu.is_none()
         {
-            // B14: right-click on the pages panel's page field
+            // B14: right-click on the pages panel — the page menu acts on
+            // the ACTIVE page, so a right-click on a non-active row
+            // activates it first (right-click = select + menu)
+            let n = self.app.doc_ref().editors.len();
+            let cur = self.app.doc_ref().page;
+            let rows = self.app.pages_rows();
+            let mut page_index: Option<usize> = None;
+            for (i, r) in rows.iter() {
+                if r.contains(p) {
+                    page_index = Some(*i);
+                    break;
+                }
+            }
+            if let Some(i) = page_index {
+                if i < n && i != cur {
+                    self.dispatch(Action::SelectPage(i));
+                }
+            }
             self.app.page_menu = Some(p);
         } else {
             // second right-click (or outside canvas) closes
@@ -3496,7 +3542,10 @@ impl Host {
                     }
                     self.app.doc().editor().click_select(world, shift, deep);
                     self.app.mark_dirty();
-                    self.app.drag = Some(Drag::MoveSel { last: world });
+                    self.app.drag = Some(Drag::MoveSel {
+                        last: world,
+                        base_depth: self.app.doc().editor_ref().undo_depth(),
+                    });
                 } else {
                     if !self.app.shift {
                         self.app.doc().editor().selection.clear();
@@ -3664,6 +3713,9 @@ impl Host {
         if editor.selection.is_empty() {
             return None;
         }
+        // undo depth at press: release merges the per-event resize entries
+        // so one Ctrl+Z reverts the whole corner drag
+        let base_depth = editor.undo_depth();
 
         // Get combined bounding box for multi-selection
         let mut single: Option<x_native::Node> = None;
@@ -3719,6 +3771,7 @@ impl Host {
             corner,
             orig: (x, y, w, h),
             start: world,
+            base_depth,
         })
     }
 
@@ -3741,14 +3794,14 @@ impl Host {
             Some(Drag::Pan { start, start_pan }) => {
                 self.app.pan = (start_pan.0 + p.x - start.x, start_pan.1 + p.y - start.y);
             }
-            Some(Drag::MoveSel { last }) => {
+            Some(Drag::MoveSel { last, .. }) => {
                 let world = self.app.screen_to_world(p);
                 let dx = world.x - last.x;
                 let dy = world.y - last.y;
                 if dx != 0.0 || dy != 0.0 {
                     self.app.pending_text_edit = None; // a drag moves, no caret
                     self.smart_move(dx, dy);
-                    if let Some(Drag::MoveSel { last }) = self.app.drag.as_mut() {
+                    if let Some(Drag::MoveSel { last, .. }) = self.app.drag.as_mut() {
                         *last = world;
                     }
                 }
@@ -3834,6 +3887,7 @@ impl Host {
                 corner,
                 orig: (ox, oy, ow, oh),
                 start,
+                ..
             }) => {
                 let world = self.app.screen_to_world(p);
 
@@ -4340,6 +4394,30 @@ impl Host {
                 self.app.drag = None;
                 self.app.tool = Tool::Select;
             }
+            // Layer move ends on release: every mouse event pushed its own
+            // undo entry, so merge the whole gesture into ONE step — a
+            // single Ctrl+Z reverts the drag (Figma semantics).
+            Some(Drag::MoveSel { base_depth, .. }) => {
+                {
+                    let doc = self.app.doc();
+                    let editor = doc.editor();
+                    editor.merge_last(editor.undo_depth().saturating_sub(base_depth));
+                }
+                self.app.drag = None;
+                // a click (no movement) on already-selected text still
+                // places the caret — the gesture pushed nothing to merge
+                if self.app.finish_pending_text_edit() {
+                    self.app.mark_dirty();
+                }
+            }
+            // Layer corner-resize ends on release: same one-gesture =
+            // one-step merge as MoveSel.
+            Some(Drag::ResizeSel { base_depth, .. }) => {
+                let doc = self.app.doc();
+                let editor = doc.editor();
+                editor.merge_last(editor.undo_depth().saturating_sub(base_depth));
+                self.app.drag = None;
+            }
             _ => {
                 self.app.drag = None;
                 // click (no drag) on already-selected text = caret there
@@ -4365,7 +4443,8 @@ impl Host {
         let n = counter + 1;
         let node = match tool {
             Tool::Frame => {
-                let mut f = Node::frame(&x_native::fresh_id("frame"), w.max(8.0), h.max(8.0));
+                let fid = x_native::fresh_id("frame");
+                let mut f = Node::frame(&fid, w.max(8.0), h.max(8.0));
                 f.name = format!("Frame {n}");
                 f.transform.x = x;
                 f.transform.y = y;
@@ -4400,15 +4479,71 @@ impl Host {
             Tool::Text => {
                 // Figma: a new text object starts EMPTY (placeholder only);
                 // committing empty deletes it
-                let mut t = Node::text(&x_native::fresh_id("text"), x, y, w.max(120.0), 14.0, "");
+                let tid = x_native::fresh_id("text");
+                let mut t = Node::text(&tid, x, y, w.max(120.0), 14.0, "");
                 t.name = format!("Text {n}");
+                // P3: new text is set in the document's default typeface
+                // (per-file data) rather than an engine constant
+                let default_font = doc.doc.resolved_default_font().to_string();
+                t.bindings.insert("font".into(), default_font);
                 t
             }
             _ => return,
         };
         let id = node.id.clone();
-        doc.editor().insert_node(&root_id, node);
-        doc.editor().selection = vec![id.clone()];
+        let mut node = node;
+        // Figma semantics: when exactly one container (frame / group /
+        // section) is selected, the new node lands INSIDE it, with its
+        // position expressed in that container's local space — drawing
+        // with a frame selected builds the frame. Previously every drawn
+        // node was forced onto the page root, so artboards could never
+        // receive content (viewport audit P2).
+        let (parent_id, parent_auto_layout) = {
+            let doc = self.app.doc();
+            let root = &doc.editor_ref().root;
+            let sel = &doc.editor_ref().selection;
+            if sel.len() == 1 {
+                let p = crate::editor_ui::find_node(root, &sel[0]);
+                if let Some(p) = p {
+                    let is_container = matches!(
+                        p.kind,
+                        x_native::NodeKind::Frame { .. }
+                            | x_native::NodeKind::Group
+                            | x_native::NodeKind::Section
+                    );
+                    if is_container {
+                        let (lx, ly) = world_to_local(root, &p.id, x, y);
+                        node.transform.x = lx;
+                        node.transform.y = ly;
+                        let auto_layout = matches!(
+                            &p.kind,
+                            x_native::NodeKind::Frame {
+                                layout: Some(_),
+                            }
+                        );
+                        (p.id.clone(), auto_layout)
+                    } else {
+                        (root_id.clone(), false)
+                    }
+                } else {
+                    (root_id.clone(), false)
+                }
+            } else {
+                (root_id.clone(), false)
+            }
+        };
+        self.app.doc().editor().insert_node(&parent_id, node);
+        // an auto-layout parent flow-places its children: the stored x/y is
+        // only a pre-layout hint, so run the layout to settle it
+        if parent_auto_layout {
+            let vars = self.app.doc().doc.variables.clone();
+            let e = self.app.doc().editor();
+            let par = x_native::editor::find_mut(&mut e.root, &parent_id);
+            if let Some(par) = par {
+                x_native::apply_layout_recursive(par, &vars);
+            }
+        }
+        self.app.doc().editor().selection = vec![id.clone()];
         self.app.mark_dirty();
         self.app.tool = Tool::Select;
         // click/drag with the Text tool drops a text node and starts editing it
@@ -9576,6 +9711,12 @@ impl Host {
                 .copy(&gpu.device, &mut encoder, &gpu.target, &view);
             gpu.queue.submit([encoder.finish()]);
             tex.present();
+            // A lost surface self-heals on this very frame (we reconfigured
+            // it before rendering). The transient message must not linger
+            // in the status bar after the canvas is drawing again.
+            if self.app.status.contains("window surface is unavailable") {
+                self.app.status = "Ready".into();
+            }
             self.app.presented_frames += 1;
             if drawing_loading {
                 self.app.loading_frames_presented += 1;
@@ -9652,6 +9793,32 @@ fn watermark_labels(app: &App, inner: &mut Scene, root: &x_native::Node) {
             crate::paint::Wt::Semi,
         );
     }
+}
+
+/// A world coordinate expressed in the local space of `target` — the space
+/// a child's transform lives in: the inverse of the ancestor chain's
+/// transform product. Drawing into a selected frame needs this so the new
+/// node lands where the pointer was, in the frame's own coordinates.
+fn world_to_local(root: &Node, target: &str, x: f64, y: f64) -> (f64, f64) {
+    fn rec(n: &Node, id: &str, acc: Affine, pt: (f64, f64), out: &mut Option<(f64, f64)>) {
+        // `acc` is the world matrix of `n`'s parent; multiplying in `n`'s
+        // own transform gives the space where `n`'s children live.
+        let m = acc * n.transform.matrix(n.w, n.h);
+        if n.id == id {
+            let p = m.inverse() * Point::new(pt.0, pt.1);
+            *out = Some((p.x, p.y));
+            return;
+        }
+        for c in &n.children {
+            rec(c, id, m, pt, out);
+            if out.is_some() {
+                return;
+            }
+        }
+    }
+    let mut out = None;
+    rec(root, target, Affine::IDENTITY, (x, y), &mut out);
+    out.unwrap_or((x, y))
 }
 
 // ------------------------------------------------------------------ utils
@@ -10301,9 +10468,10 @@ mod tests {
         assert_eq!(typo_val(&app, Typo::LineHeight), "19.6");
         assert_eq!(typo_val(&app, Typo::Family), "Inter");
 
-        // nothing selected → the HTML-spec defaults (pixel parity states)
+        // nothing selected → the document defaults (family = Inter, the
+        // default font; the no-selection state must not invent a third)
         app.doc().editor().selection.clear();
-        assert_eq!(typo_val(&app, Typo::Family), "Manrope");
+        assert_eq!(typo_val(&app, Typo::Family), "Inter");
         assert_eq!(typo_val(&app, Typo::LetterSpacing), "-0.16px");
         app.doc().editor().selection = vec!["tx".into()];
 

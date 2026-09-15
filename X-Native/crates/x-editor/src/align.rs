@@ -69,12 +69,12 @@ pub fn distribute_horizontal(parent: &mut Node, ids: &[String]) {
     if sel.len() < 3 {
         return;
     }
+    // total_cmp: a NaN transform.x must not panic the distribution sort
     sel.sort_by(|&a, &b| {
         parent.children[a]
             .transform
             .x
-            .partial_cmp(&parent.children[b].transform.x)
-            .unwrap()
+            .total_cmp(&parent.children[b].transform.x)
     });
     let first = sel[0];
     let last = *sel.last().unwrap();

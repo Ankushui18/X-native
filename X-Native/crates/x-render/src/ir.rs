@@ -776,6 +776,44 @@ pub fn build_render_tree_with_hidden(
         &mut tree,
         "",
         hidden,
+        true,
+    );
+    tree
+}
+
+/// Same as `build_render_tree_with_hidden`, but the ROOT's name label is
+/// suppressed: the frame-cache segmented path lowers the root once per
+/// child bucket, so the root label must be painted by the separately
+/// rendered shell scene EXACTLY ONCE — never re-emitted per bucket
+/// (that overdraws the name N+1 times and darkens it).
+pub(crate) fn build_render_tree_bucket_shell(
+    root: &Node,
+    vars: &Variables,
+    hidden: Option<&str>,
+) -> RenderTree {
+    let mut tree = RenderTree::default();
+    let mut registry: HashMap<&str, &Node> = HashMap::new();
+    fn collect<'a>(n: &'a Node, reg: &mut HashMap<&'a str, &'a Node>) {
+        if let NodeKind::Component { name } = &n.kind {
+            reg.insert(name.as_str(), n);
+        }
+        for c in &n.children {
+            collect(c, reg);
+        }
+    }
+    collect(root, &mut registry);
+    let empty = HashMap::new();
+    lower(
+        root,
+        Affine::IDENTITY,
+        vars,
+        &registry,
+        &empty,
+        0,
+        &mut tree,
+        "",
+        hidden,
+        false,
     );
     tree
 }
@@ -818,6 +856,7 @@ pub fn build_render_tree_of(root: &Node, id: &str, vars: &Variables) -> Option<R
         &mut tree,
         "",
         None,
+        true,
     );
     Some(tree)
 }
@@ -888,6 +927,12 @@ fn lower(
     tree: &mut RenderTree,
     path: &str,
     hidden: Option<&str>,
+    // true for the document root on every PUBLIC lowering entry (canvas,
+    // exports, previews): the root's name is canvas chrome and must render.
+    // false only for the frame-cache BUCKET shells, where the root is
+    // re-lowered per child bucket and its label is painted once by the
+    // separately rendered shell scene instead.
+    label_root: bool,
 ) {
     // typed traversal overrides (visible / opacity / swap), same semantics
     // as the direct encoder
@@ -1290,36 +1335,39 @@ fn lower(
                 opacity,
                 override_color,
             );
-            let name = if node.name.is_empty() {
-                "Section"
-            } else {
-                node.name.as_str()
-            };
-            tree.commands.push(RenderCommand::Glyphs {
-                key: format!("{key}/label"),
-                transform: world * Affine::translate((14.0, 10.0)),
-                text: name.to_string(),
-                size: 18.0,
-                brush: layer_brush(
-                    &Paint::Solid(Color::from_rgba8(0x4b, 0x55, 0x63, 0xff)),
-                    vars,
-                    opacity,
-                ),
-                max_width: (node.w - 20.0).max(8.0),
-                font: None,
-                letter_spacing: 0.0,
-                line_height: 1.2,
-                lh_mode: 0,
-                lh_value: 0.0,
-                wrap: x_core::TextWrap::Auto,
-                word_spacing: 0.0,
-                paragraph_spacing: 0.0,
-                baseline_shift: 0.0,
-                small_caps: false,
-                optical_size: 0.0,
-                width_axis: 0.0,
-                runs: vec![],
-            });
+            // same root-label gating as the Frame arm (bucket shells)
+            if label_root || !path.is_empty() {
+                let name = if node.name.is_empty() {
+                    "Section"
+                } else {
+                    node.name.as_str()
+                };
+                tree.commands.push(RenderCommand::Glyphs {
+                    key: format!("{key}/label"),
+                    transform: world * Affine::translate((14.0, 10.0)),
+                    text: name.to_string(),
+                    size: 18.0,
+                    brush: layer_brush(
+                        &Paint::Solid(Color::from_rgba8(0x4b, 0x55, 0x63, 0xff)),
+                        vars,
+                        opacity,
+                    ),
+                    max_width: (node.w - 20.0).max(8.0),
+                    font: None,
+                    letter_spacing: 0.0,
+                    line_height: 1.2,
+                    lh_mode: 0,
+                    lh_value: 0.0,
+                    wrap: x_core::TextWrap::Auto,
+                    word_spacing: 0.0,
+                    paragraph_spacing: 0.0,
+                    baseline_shift: 0.0,
+                    small_caps: false,
+                    optical_size: 0.0,
+                    width_axis: 0.0,
+                    runs: vec![],
+                });
+            }
             let rounded = node
                 .corner_radii
                 .map(|[tl, tr, br, bl]| tl > 0.0 || tr > 0.0 || br > 0.0 || bl > 0.0)
@@ -1356,6 +1404,46 @@ fn lower(
                 opacity,
                 override_color,
             );
+            // the frame's own NAME as a canvas label (QA-004) — the same
+            // header Glyphs command the Section arm emits, so frame names
+            // appear on the canvas like section names; children render
+            // through the shared path below, after the clip scope.
+            // The root's label is gated by `label_root` (see the
+            // parameter): frame-cache bucket shells re-lower the root per
+            // bucket and leave the root label to the shell scene, which
+            // paints it exactly once.
+            if label_root || !path.is_empty() {
+                let name = if node.name.is_empty() {
+                    "Frame"
+                } else {
+                    node.name.as_str()
+                };
+                tree.commands.push(RenderCommand::Glyphs {
+                    key: format!("{key}/label"),
+                    transform: world * Affine::translate((14.0, 10.0)),
+                    text: name.to_string(),
+                    size: 18.0,
+                    brush: layer_brush(
+                        &Paint::Solid(Color::from_rgba8(0x4b, 0x55, 0x63, 0xff)),
+                        vars,
+                        opacity,
+                    ),
+                    max_width: (node.w - 20.0).max(8.0),
+                    font: None,
+                    letter_spacing: 0.0,
+                    line_height: 1.2,
+                    lh_mode: 0,
+                    lh_value: 0.0,
+                    wrap: x_core::TextWrap::Auto,
+                    word_spacing: 0.0,
+                    paragraph_spacing: 0.0,
+                    baseline_shift: 0.0,
+                    small_caps: false,
+                    optical_size: 0.0,
+                    width_axis: 0.0,
+                    runs: vec![],
+                });
+            }
             // A frame clips its children ONLY when it actually has rounded
             // corners — the visually load-bearing case (content must not
             // stick out of the radii). Square frames behave like groups:
@@ -1389,6 +1477,7 @@ fn lower(
                             tree,
                             &key,
                             hidden,
+                            true,
                         );
                     }
                 }
@@ -1459,6 +1548,7 @@ fn lower(
             tree,
             &key,
             hidden,
+            true,
         );
     }
     for _ in 0..mask_layers {
@@ -1660,6 +1750,7 @@ pub fn build_render_tree_selection(
         &mut tree,
         "",
         None,
+        true,
     );
     Some(tree)
 }
@@ -1683,15 +1774,14 @@ mod tests {
         }];
         let d = Node::frame("page", 300.0, 100.0).child(t);
         let tree = build_render_tree(&d, &Variables::default());
+        // the text node's OWN Glyphs command — the root frame's name label
+        // (QA-004) is a separate, earlier command
         let runs = tree
             .commands
             .iter()
-            .find_map(|c| {
-                if let RenderCommand::Glyphs { runs, .. } = c {
-                    Some(runs)
-                } else {
-                    None
-                }
+            .find_map(|c| match c {
+                RenderCommand::Glyphs { text, runs, .. } => (text == "Hello world").then_some(runs),
+                _ => None,
             })
             .expect("glyphs command");
         assert_eq!(runs.len(), 2, "styled + unstyled part, got {runs:?}");
@@ -1714,18 +1804,66 @@ mod tests {
         let d =
             Node::frame("page", 300.0, 100.0).child(Node::text("t", 10.0, 10.0, 100.0, 20.0, "hi"));
         let tree = build_render_tree(&d, &Variables::default());
+        // the text node's OWN command, not the frame's name label
         let runs = tree
             .commands
             .iter()
-            .find_map(|c| {
-                if let RenderCommand::Glyphs { runs, .. } = c {
-                    Some(runs)
-                } else {
-                    None
-                }
+            .find_map(|c| match c {
+                RenderCommand::Glyphs { text, runs, .. } if text == "hi" => Some(runs),
+                _ => None,
             })
             .expect("glyphs command");
         assert!(runs.is_empty(), "plain text takes the unchanged plain path");
+    }
+
+    #[test]
+    fn frame_name_loweres_to_a_canvas_label() {
+        // QA-004 on the IR path: the live canvas lowers frames through
+        // build_render_tree, so a frame's name must appear as a Glyphs
+        // command there — not just in the direct encoder (scene.rs).
+        let d = Node::frame("Hero", 300.0, 100.0).child(Node::rect(
+            "r",
+            0.0,
+            0.0,
+            10.0,
+            10.0,
+            Color::WHITE,
+        ));
+        let tree = build_render_tree(&d, &Variables::default());
+        let label = tree
+            .commands
+            .iter()
+            .find(|c| matches!(c, RenderCommand::Glyphs { text, .. } if text == "Hero"))
+            .expect("frame name label command");
+        match label {
+            RenderCommand::Glyphs {
+                key,
+                transform,
+                size,
+                max_width,
+                ..
+            } => {
+                // the root's own id is part of its path ("/Hero"), so the
+                // label key is "/Hero/label", not "/label"
+                assert_eq!(key, "/Hero/label");
+                // world origin + the same top-left inset the Section arm uses
+                let t = transform.translation();
+                assert!((t.x - 14.0).abs() < 1e-9);
+                assert!((t.y - 10.0).abs() < 1e-9);
+                assert_eq!(*size, 18.0);
+                assert_eq!(*max_width, 280.0);
+            }
+            other => panic!("expected Glyphs, got {other:?}"),
+        }
+        // an unnamed frame falls back to "Frame"
+        let anon = Node::frame("", 50.0, 50.0);
+        let t2 = build_render_tree(&anon, &Variables::default());
+        assert!(
+            t2.commands
+                .iter()
+                .any(|c| matches!(c, RenderCommand::Glyphs { text, .. } if text == "Frame")),
+            "empty name falls back to 'Frame'"
+        );
     }
 
     #[test]

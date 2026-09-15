@@ -348,7 +348,7 @@ fn clip_bezier_once(subject: &[Seg], clipper: &[Seg], op: ClipOp) -> Option<Vec<
     hits.sort_by(|a, b| {
         (a.seg_a, a.seg_b)
             .cmp(&(b.seg_a, b.seg_b))
-            .then(a.ta.partial_cmp(&b.ta).unwrap())
+            .then(a.ta.total_cmp(&b.ta))
     });
     hits.dedup_by(|a, b| {
         a.seg_a == b.seg_a
@@ -428,7 +428,8 @@ fn clip_bezier_once(subject: &[Seg], clipper: &[Seg], op: ClipOp) -> Option<Vec<
                 .filter(|(_, h)| if which_a { h.seg_a == i } else { h.seg_b == i })
                 .map(|(id, h)| (if which_a { h.ta } else { h.tb }, id))
                 .collect();
-            cuts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            // total_cmp: a NaN parameter must not panic the de Casteljau split
+            cuts.sort_by(|a, b| a.0.total_cmp(&b.0));
             // successive de Casteljau splits with param rescaling
             let mut rest = *seg;
             let mut prev_t = 0.0;

@@ -24,16 +24,18 @@ use x_native::{
 /// The pinned golden values. When a deliberate engine change moves them,
 /// update HERE with a commit message explaining why.
 ///
-/// Re-pinned 2026-09-02 (render-IR cleanup): transparent legacy fills no
-/// longer lower to no-op FillPath commands (frames/groups/instances used
-/// to emit one each), and frames only clip children when they have actual
-/// corner radii. The remaining 50 commands were reviewed command-by-command:
-/// 37 are the deliberate gaussian blur taps for `grad`'s DropShadow,
-/// the rest map 1:1 onto the document's real content (auto-layout row,
-/// component master + instance with text override, gradient fill, mask
-/// clip + image, variable-bound fill, title glyphs, boolean union, pop).
-const GOLDEN_COMMANDS: usize = 50;
-const GOLDEN_KIND_HASH: u64 = 0xad13_07e3_363b_ec73;
+/// Re-pinned 2026-09-16 (frame-name canvas labels, QA-004): every frame
+/// and section now lowers its name as a header Glyphs command, so this
+/// document gained exactly TWO new glyph commands — `/golden/label` (the
+/// page root) and `/golden/row/label` (the auto-layout row). Reviewed
+/// against the CI drift listing: 50 = reviewed command-by-command (37 are
+/// the deliberate gaussian blur taps for `grad`'s DropShadow, the rest
+/// map 1:1 onto the document's real content — auto-layout row, component
+/// master + instance with text override, gradient fill, mask clip +
+/// image, variable-bound fill, title glyphs, boolean union, pop), plus
+/// the two new name labels = 52.
+const GOLDEN_COMMANDS: usize = 52;
+const GOLDEN_KIND_HASH: u64 = 0xe156_0b27_ca1a_6fbd;
 
 fn golden_document() -> Document {
     let mut doc = Document::new();

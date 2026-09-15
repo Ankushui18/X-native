@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use vello::kurbo::{Point, Rect};
 use x_native::editor::Editor;
-use x_native::{Color, Document, Node, NodeKind, Paint, StrokeJoin, Variables};
+use x_native::{APP_DEFAULT_FONT, Color, Document, Node, NodeKind, Paint, StrokeJoin, Variables};
 
 use crate::command::CommandPalette;
 use crate::context_menu::ContextMenu;
@@ -866,6 +866,11 @@ pub enum Drag {
     /// Moving the current selection.
     MoveSel {
         last: Point,
+        /// Undo-stack depth when the press started the gesture. Every
+        /// mouse event pushes its own `Command::Move`, so release merges
+        /// `undo_depth() - base_depth` entries into ONE undo step (one
+        /// Ctrl+Z reverts the whole drag).
+        base_depth: usize,
     },
     /// Rubber-band selection.
     Marquee {
@@ -890,6 +895,9 @@ pub enum Drag {
         corner: usize,
         orig: (f64, f64, f64, f64), // x, y, w, h at drag start
         start: Point,
+        /// Undo-stack depth at press; release merges the per-event resize
+        /// entries into ONE undo step (see `MoveSel::base_depth`).
+        base_depth: usize,
     },
     /// Pen-tool polyline in progress (world-space points).
     Pen {
@@ -1101,6 +1109,8 @@ impl OpenDoc {
             None,
             Document {
                 pages: vec![page],
+                // P3: a new file declares its default typeface as data
+                default_font: Some(APP_DEFAULT_FONT.to_string()),
                 ..Default::default()
             },
         )
@@ -1121,6 +1131,8 @@ impl OpenDoc {
         let editor = Editor::new(page.clone());
         let doc = Document {
             pages: vec![page],
+            // P3: the demo document declares its default typeface too
+            default_font: Some(APP_DEFAULT_FONT.to_string()),
             ..Document::default()
         };
         Self {
@@ -1158,7 +1170,8 @@ impl OpenDoc {
             export_suffix: String::new(),
             guide_kind: 0,
             guide_size: 16.0,
-            guides_visible: true,
+            // the canvas grid is OPT-IN: a fresh document opens clean
+            guides_visible: false,
             scroll_left: 0.0,
             scroll_right: 0.0,
             guides: vec![],
@@ -1210,7 +1223,8 @@ impl OpenDoc {
             export_suffix: String::new(),
             guide_kind: 0,
             guide_size: 16.0,
-            guides_visible: true,
+            // the canvas grid is OPT-IN: a fresh document opens clean
+            guides_visible: false,
             scroll_left: 0.0,
             scroll_right: 0.0,
             guides: vec![],
@@ -1516,6 +1530,38 @@ impl App {
     }
 
     // ------------------------------------------------------------- regions
+
+    /// PAGES list band geometry — ONE source of truth shared by paint and
+    /// hit-testing. Rows start where the old single page field did
+    /// (y0+142), 26px tall, max 4 rows; more pages collapse into a
+    /// "+N more" row whose index is the page COUNT (a sentinel).
+    pub fn pages_rows(&self) -> Vec<(usize, Rect)> {
+        const ROW_H: f64 = 26.0;
+        const MAX_ROWS: usize = 4;
+        let y0 = ED_TITLE_H;
+        let sidebar = self.editor_regions().sidebar;
+        let sx = sidebar.x0;
+        let lw = sidebar.x1;
+        let n = self.doc_ref().editors.len();
+        let count = n.min(MAX_ROWS);
+        let overflow = n > MAX_ROWS;
+        (0..count)
+            .map(|i| {
+                let page_i = if overflow && i == MAX_ROWS - 1 { n } else { i };
+                let ry = y0 + 142.0 + i as f64 * ROW_H;
+                (page_i, Rect::new(sx + 12.0, ry, lw - 13.0, ry + ROW_H))
+            })
+            .collect()
+    }
+
+    /// Bottom of the PAGES band (header label at y0+120.5, then the rows).
+    pub fn pages_band_bottom(&self) -> f64 {
+        const ROW_H: f64 = 26.0;
+        const MAX_ROWS: usize = 4;
+        let n = self.doc_ref().editors.len();
+        let count = n.clamp(1, MAX_ROWS);
+        ED_TITLE_H + 142.0 + count as f64 * ROW_H
+    }
 
     pub fn editor_regions(&self) -> EdRegions {
         let left_total = if self.ui_minimized {

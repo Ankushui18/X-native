@@ -286,6 +286,9 @@ fn hash_subtree(n: &Node) -> (u64, bool, bool) {
         match &n.kind {
             NodeKind::Frame { layout } => {
                 mix(h, 21);
+                // the frame's name is a canvas label (QA-004) — a rename
+                // must invalidate the cached segment, exactly like Section
+                smix(h, &n.name);
                 if let Some(l) = layout {
                     fmix(h, l.gap);
                     for p in l.padding {
@@ -721,7 +724,10 @@ impl FrameCache {
                             lower_shell.children.push(child.clone());
                         }
                     }
-                    let sub_tree = crate::ir::build_render_tree_with_hidden(
+                    // bucket shell: the root's name label is painted exactly
+                    // once by the shell scene above — re-emitting it here
+                    // would overdraw it once per bucket
+                    let sub_tree = crate::ir::build_render_tree_bucket_shell(
                         &lower_shell,
                         vars,
                         self.hidden_text.as_deref(),
@@ -901,8 +907,9 @@ mod tests {
         let mut fc2 = FrameCache::new();
         fc2.render(&page, &vars, &sink);
         assert_eq!(fc2.segments.len(), 1, "3 children fit one bucket");
-        // reference sanity: 3 paint commands were lowered
-        assert_eq!(reference.commands.len(), 3);
+        // reference sanity: 3 child paint commands + the root frame's
+        // name label (QA-004) were lowered
+        assert_eq!(reference.commands.len(), 4);
     }
 }
 
@@ -1082,7 +1089,13 @@ mod reliability_tests {
         let mut cache = FrameCache::new();
         let paths = cache.render(&page, &vars, &sink).encoding().n_paths;
         cache.set_hidden_text(Some("text"));
-        assert_eq!(cache.render(&page, &vars, &sink).encoding().n_paths, 0);
+        // hiding the edited TEXT node blanks its glyphs; the frame's own
+        // name label (QA-004) is chrome, not a text node, so it stays
+        assert_eq!(
+            cache.render(&page, &vars, &sink).encoding().n_paths,
+            page.name.chars().count() as u32,
+            "only the text node's glyphs are hidden"
+        );
         cache.set_hidden_text(None);
         assert_eq!(cache.render(&page, &vars, &sink).encoding().n_paths, paths);
         assert!(matches!(&page.children[0].kind, NodeKind::Text { text } if text == "ABC"));
