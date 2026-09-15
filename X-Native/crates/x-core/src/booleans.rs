@@ -627,12 +627,137 @@ fn vertex_miters(pts: &[(f64, f64)], closed: bool) -> Vec<((f64, f64), f64)> {
     out
 }
 
-fn offset_polyline(pts: &[(f64, f64)], d: f64, closed: bool) -> Vec<(f64, f64)> {
+/// Offset a polyline by `d` along miter normals. Shared by path
+/// offsetting (`offset_path`), stroke alignment in the renderer and
+/// outline strokes — one geometry authority, no drift.
+pub fn offset_polyline(pts: &[(f64, f64)], d: f64, closed: bool) -> Vec<(f64, f64)> {
     vertex_miters(pts, closed)
         .iter()
         .zip(pts)
         .map(|((m, scale), p)| (p.0 + m.0 * d * scale, p.1 + m.1 * d * scale))
         .collect()
+}
+
+/// Offset every subpath of a path by `d` along vertex miter normals
+/// (Figma's "Offset vector path" and the renderer's stroke-alignment
+/// inset/outset). Curves are flattened to `steps` segments per cubic
+/// before offsetting; closed subpaths re-close, open ones keep their
+/// open ends (miter-capped endpoints). The sign of `d` follows the
+/// left-normal of each segment, so which visual direction is "out"
+/// depends on winding — callers decide via `grow_path` or a bbox test.
+pub fn offset_path(cmds: &[PathCmd], d: f64, steps: usize) -> Vec<PathCmd> {
+    // collect (polyline, closed) per subpath
+    let mut subs: Vec<(Vec<(f64, f64)>, bool)> = vec![];
+    let mut cur: Vec<(f64, f64)> = vec![];
+    let mut last = (0.0, 0.0);
+    let steps = steps.max(2);
+    for c in cmds {
+        match *c {
+            PathCmd::MoveTo(x, y) => {
+                if cur.len() >= 2 {
+                    subs.push((std::mem::take(&mut cur), false));
+                }
+                cur = vec![(x, y)];
+                last = (x, y);
+            }
+            PathCmd::LineTo(x, y) => {
+                cur.push((x, y));
+                last = (x, y);
+            }
+            PathCmd::CurveTo(c1x, c1y, c2x, c2y, x, y) => {
+                let (a, b, e) = (last, (c1x, c1y), (c2x, c2y));
+                for i in 1..=steps {
+                    let t = i as f64 / steps as f64;
+                    let mt = 1.0 - t;
+                    cur.push((
+                        mt * mt * mt * a.0
+                            + 3.0 * mt * mt * t * b.0
+                            + 3.0 * mt * t * t * e.0
+                            + t * t * t * x,
+                        mt * mt * mt * a.1
+                            + 3.0 * mt * mt * t * b.1
+                            + 3.0 * mt * t * t * e.1
+                            + t * t * t * y,
+                    ));
+                }
+                last = (x, y);
+            }
+            PathCmd::Close => {
+                if cur.len() >= 2 {
+                    subs.push((std::mem::take(&mut cur), true));
+                }
+                cur = vec![];
+            }
+        }
+    }
+    if cur.len() >= 2 {
+        subs.push((cur, false));
+    }
+    let mut out: Vec<PathCmd> = vec![];
+    for (pts, closed) in subs {
+        let off = if closed && pts.len() >= 3 {
+            offset_polyline(&pts, d, true)
+        } else if !closed && pts.len() >= 2 {
+            offset_polyline(&pts, d, false)
+        } else {
+            continue;
+        };
+        out.push(PathCmd::MoveTo(off[0].0, off[0].1));
+        for q in off.iter().skip(1) {
+            out.push(PathCmd::LineTo(q.0, q.1));
+        }
+        if closed {
+            out.push(PathCmd::Close);
+        }
+    }
+    out
+}
+
+/// Offset a path so that positive `amount` GROWS it regardless of winding
+/// (the direction Figma's offset tool uses): the bbox decides the normal
+/// sign for closed paths; open paths offset along the literal normals.
+pub fn grow_path(cmds: &[PathCmd], amount: f64, steps: usize) -> Vec<PathCmd> {
+    if !path_is_closed(cmds) || amount == 0.0 {
+        return offset_path(cmds, amount, steps);
+    }
+    let extent = |cs: &[PathCmd]| -> Option<f64> {
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        let mut seen = false;
+        for c in cs {
+            let mut acc = |x: f64, y: f64| {
+                x0 = x0.min(x);
+                y0 = y0.min(y);
+                x1 = x1.max(x);
+                y1 = y1.max(y);
+            };
+            match *c {
+                PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => {
+                    acc(x, y);
+                    seen = true;
+                }
+                PathCmd::CurveTo(x1c, y1c, x2c, y2c, x, y) => {
+                    acc(x1c, y1c);
+                    acc(x2c, y2c);
+                    acc(x, y);
+                    seen = true;
+                }
+                PathCmd::Close => {}
+            }
+        }
+        seen.then(|| (x1 - x0) + (y1 - y0))
+    };
+    let want_grow = amount > 0.0;
+    let d = amount.abs();
+    let plus = offset_path(cmds, d, steps);
+    let growing = match (extent(cmds), extent(&plus)) {
+        (Some(a), Some(b)) => (b >= a) == want_grow,
+        _ => return plus,
+    };
+    if growing {
+        plus
+    } else {
+        offset_path(cmds, -d, steps)
+    }
 }
 
 /// Variable-width brush stroke outline: each vertex carries its own full
@@ -822,6 +947,76 @@ mod tests {
             ),
             "outer corner miter present"
         );
+    }
+
+    fn unit_square() -> Vec<PathCmd> {
+        vec![
+            PathCmd::MoveTo(0.0, 0.0),
+            PathCmd::LineTo(100.0, 0.0),
+            PathCmd::LineTo(100.0, 100.0),
+            PathCmd::LineTo(0.0, 100.0),
+            PathCmd::Close,
+        ]
+    }
+
+    fn bbox(cmds: &[PathCmd]) -> (f64, f64, f64, f64) {
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for c in cmds {
+            let pts: Vec<(f64, f64)> = match *c {
+                PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => vec![(x, y)],
+                PathCmd::CurveTo(a, b, cc, d, e, f) => {
+                    vec![(a, b), (cc, d), (e, f)]
+                }
+                PathCmd::Close => vec![],
+            };
+            for (x, y) in pts {
+                x0 = x0.min(x);
+                y0 = y0.min(y);
+                x1 = x1.max(x);
+                y1 = y1.max(y);
+            }
+        }
+        (x0, y0, x1, y1)
+    }
+
+    #[test]
+    fn grow_path_is_winding_independent() {
+        // +10 must GROW, -10 must shrink, whatever the normal convention
+        let big = grow_path(&unit_square(), 10.0, 8);
+        let small = grow_path(&unit_square(), -10.0, 8);
+        assert!(path_is_closed(&big) && path_is_closed(&small), "rings re-close");
+        let (ax0, ay0, ax1, ay1) = bbox(&big);
+        assert!(
+            (ax0 + 10.0).abs() < 1e-6
+                && (ay0 + 10.0).abs() < 1e-6
+                && (ax1 - 110.0).abs() < 1e-6
+                && (ay1 - 110.0).abs() < 1e-6,
+            "grow by 10: {ax0},{ay0},{ax1},{ay1}"
+        );
+        let (bx0, by0, bx1, by1) = bbox(&small);
+        assert!(
+            (bx0 - 10.0).abs() < 1e-6
+                && (by0 - 10.0).abs() < 1e-6
+                && (bx1 - 90.0).abs() < 1e-6
+                && (by1 - 90.0).abs() < 1e-6,
+            "shrink by 10: {bx0},{by0},{bx1},{by1}"
+        );
+    }
+
+    #[test]
+    fn offset_path_keeps_open_subpaths_open() {
+        let line = vec![PathCmd::MoveTo(0.0, 0.0), PathCmd::LineTo(100.0, 0.0)];
+        let off = offset_path(&line, 5.0, 8);
+        assert!(!path_is_closed(&off), "open stays open");
+        assert_eq!(off.len(), 2, "two endpoints, no cap geometry");
+        // offset is along the segment normal: both endpoints moved equally
+        let (a, b) = match (off[0], off[1]) {
+            (PathCmd::MoveTo(ax, ay), PathCmd::LineTo(bx, by)) => ((ax, ay), (bx, by)),
+            _ => panic!("shape preserved"),
+        };
+        assert!((a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9, "rigid");
+        let d = (a.0 * a.0 + a.1 * a.1).sqrt();
+        assert!((d - 5.0).abs() < 1e-6, "5px normal offset, got {d}");
     }
 
     #[test]

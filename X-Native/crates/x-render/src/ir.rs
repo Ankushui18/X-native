@@ -534,10 +534,153 @@ fn emit_visual_layers(
             tree.commands.push(RenderCommand::PopLayer);
         }
     }
+/// Rebuild a shape path so an Inside/Outside stroke paints the right band:
+/// a w-px inside stroke on a shape equals a center stroke of w along the
+/// path inset by w/2 (outset for outside). Winding differs per shape
+/// (rect vs ellipse go opposite ways), so the offset SIGN is chosen by the
+/// bbox — inside must shrink, outside must grow. Open subpaths are left
+/// alone (Figma ignores alignment there, and the Line node draws its own
+/// center band). Curves are flattened at 16 steps/cubic, the same
+/// approximation the export outline-stroke pass already ships.
+fn align_stroke_path(path: &BezPath, width: f64, inside: bool) -> BezPath {
+    use vello::kurbo::PathEl;
+    let d = (width / 2.0).max(0.0);
+    if d <= 0.0 {
+        return path.clone();
+    }
+    let mut polys: Vec<(Vec<(f64, f64)>, bool)> = vec![];
+    let mut cur: Vec<(f64, f64)> = vec![];
+    let mut start = (0.0, 0.0);
+    let mut last = (0.0, 0.0);
+    for el in path.elements() {
+        match *el {
+            PathEl::MoveTo(pt) => {
+                if cur.len() >= 2 {
+                    polys.push((std::mem::take(&mut cur), false));
+                }
+                start = (pt.x, pt.y);
+                last = start;
+                cur.push(start);
+            }
+            PathEl::LineTo(pt) => {
+                last = (pt.x, pt.y);
+                cur.push(last);
+            }
+            PathEl::QuadTo(c, pt) => {
+                for i in 1..=16 {
+                    let t = i as f64 / 16.0;
+                    let mt = 1.0 - t;
+                    cur.push((
+                        mt * mt * last.0 + 2.0 * mt * t * c.x + t * t * pt.x,
+                        mt * mt * last.1 + 2.0 * mt * t * c.y + t * t * pt.y,
+                    ));
+                }
+                last = (pt.x, pt.y);
+            }
+            PathEl::CurveTo(a, b, pt) => {
+                for i in 1..=16 {
+                    let t = i as f64 / 16.0;
+                    let mt = 1.0 - t;
+                    cur.push((
+                        mt * mt * mt * last.0
+                            + 3.0 * mt * mt * t * a.x
+                            + 3.0 * mt * t * t * b.x
+                            + t * t * t * pt.x,
+                        mt * mt * mt * last.1
+                            + 3.0 * mt * mt * t * a.y
+                            + 3.0 * mt * t * t * b.y
+                            + t * t * t * pt.y,
+                    ));
+                }
+                last = (pt.x, pt.y);
+            }
+            PathEl::ClosePath => {
+                // kurbo closes without duplicating the start point
+                while cur.len() > 1
+                    && (cur[cur.len() - 1].0 - start.0).abs() < 1e-9
+                    && (cur[cur.len() - 1].1 - start.1).abs() < 1e-9
+                {
+                    cur.pop();
+                }
+                if cur.len() >= 3 {
+                    polys.push((std::mem::take(&mut cur), true));
+                }
+                cur.push(start);
+                last = start;
+            }
+        }
+    }
+    if cur.len() >= 2 {
+        polys.push((cur, false));
+    }
+    if !polys.iter().any(|(_, c)| *c) {
+        return path.clone();
+    }
+    let extent = |pl: &Vec<(Vec<(f64, f64)>, bool)>| -> f64 {
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for (pts, _) in pl {
+            for (x, y) in pts {
+                x0 = x0.min(*x);
+                y0 = y0.min(*y);
+                x1 = x1.max(*x);
+                y1 = y1.max(*y);
+            }
+        }
+        (x1 - x0) + (y1 - y0)
+    };
+    let offset_all = |sign: f64| -> Vec<(Vec<(f64, f64)>, bool)> {
+        polys
+            .iter()
+            .map(|(pts, closed)| {
+                if *closed {
+                    (x_core::booleans::offset_polyline(pts, sign * d, true), true)
+                } else {
+                    (pts.clone(), false)
+                }
+            })
+            .collect()
+    };
+    // which way does +d point on THIS path? The bbox answers — winding
+    // differs per shape. inside shrinks, outside grows.
+    let plus_grows = extent(&offset_all(1.0)) > extent(&polys) + 1e-9;
+    let sign = if inside == plus_grows { -1.0 } else { 1.0 };
+    let final_polys = offset_all(sign);
+    let mut out = BezPath::new();
+    let mut wrote = false;
+    for (pts, closed) in final_polys {
+        if pts.len() < 2 {
+            continue;
+        }
+        wrote = true;
+        out.move_to((pts[0].0, pts[0].1));
+        for q in pts.iter().skip(1) {
+            out.line_to((q.0, q.1));
+        }
+        if closed {
+            out.close_path();
+        }
+    }
+    if wrote {
+        out
+    } else {
+        path.clone()
+    }
+}
+
     for (i, layer) in node.active_strokes().iter().enumerate() {
         if layer.opacity <= 0.0 || paint_fully_transparent(&layer.stroke.paint, vars) {
             continue;
         }
+        // Figma "Stroke align": inside/outside are painted by offsetting
+        // the centerline (open paths keep their band) — every sink
+        // (canvas, PDF, SVG, raster, bounds) inherits it from ONE place
+        let stroke_path = if layer.stroke.width > 0.0
+            && !matches!(layer.options.align, StrokeAlign::Center)
+        {
+            align_stroke_path(path, layer.stroke.width, matches!(layer.options.align, StrokeAlign::Inside))
+        } else {
+            path.clone()
+        };
         let layer_key = format!("{key}/stroke-{i}");
         if let Some(mix) = layer.blend.mix() {
             tree.commands.push(RenderCommand::PushLayer {
@@ -555,7 +698,7 @@ fn emit_visual_layers(
                     layer_key.clone()
                 },
                 transform: Affine::translate((dx, dy)) * world,
-                path: path.clone(),
+                path: stroke_path.clone(),
                 brush: layer_brush(
                     &layer.stroke.paint,
                     vars,
@@ -1867,6 +2010,60 @@ mod tests {
         legacy.bindings.insert("td".into(), "underline".into());
         assert_eq!(align_bits_of(&legacy), 1);
         assert_eq!(decoration_bits_of(&legacy), 1);
+    }
+
+    /// Figma "Stroke align": inside/outside are painted by offsetting the
+    /// centerline at lowering time, so every sink inherits it.
+    #[test]
+    fn stroke_alignment_offsets_the_painted_path() {
+        let extent = |p: &BezPath| {
+            let (mut x0, mut y0, mut x1, mut y1) =
+                (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+            for el in p.elements() {
+                let pts: Vec<vello::kurbo::Point> = match *el {
+                    vello::kurbo::PathEl::MoveTo(pt) | vello::kurbo::PathEl::LineTo(pt) => {
+                        vec![pt]
+                    }
+                    _ => vec![],
+                };
+                for pt in pts {
+                    x0 = x0.min(pt.x);
+                    y0 = y0.min(pt.y);
+                    x1 = x1.max(pt.x);
+                    y1 = y1.max(pt.y);
+                }
+            }
+            (x0, y0, x1, y1)
+        };
+        for (align, exp) in [
+            (StrokeAlign::Inside, (5.0, 5.0, 95.0, 45.0)),
+            (StrokeAlign::Outside, (-5.0, -5.0, 105.0, 55.0)),
+            (StrokeAlign::Center, (0.0, 0.0, 100.0, 50.0)),
+        ] {
+            let mut n = Node::rect("r", 0.0, 0.0, 100.0, 50.0, Color::WHITE);
+            n.visual_stacks_materialized = true;
+            let mut layer = StrokeLayer::new(Stroke::solid(Color::BLACK, 10.0));
+            layer.options.align = align;
+            n.stroke_layers = vec![layer];
+            let d = Node::frame("page", 200.0, 100.0).child(n);
+            let tree = build_render_tree(&d, &Variables::default());
+            let path = tree
+                .commands
+                .iter()
+                .find_map(|c| match c {
+                    RenderCommand::StrokePath { path, .. } => Some(path.clone()),
+                    _ => None,
+                })
+                .expect("stroke command");
+            let (x0, y0, x1, y1) = extent(&path);
+            assert!(
+                (x0 - exp.0).abs() < 0.01
+                    && (y0 - exp.1).abs() < 0.01
+                    && (x1 - exp.2).abs() < 0.01
+                    && (y1 - exp.3).abs() < 0.01,
+                "{align:?} stroke path bbox ({x0},{y0},{x1},{y1}) != {exp:?}"
+            );
+        }
     }
 
     #[test]

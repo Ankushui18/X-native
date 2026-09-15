@@ -5,6 +5,47 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-15 (Figma-parity reconciliation)
+
+### Fixed
+- **Compile-fatal "island" in `x-editor`.** A block of vector-tool methods
+  (`offset_vector`, `outline_stroke`, shape-builder joins, `text_to_outline`,
+  …) called `Editor::get_node`, `mark_dirty`, `delete_node`, `add_node` and
+  `iter_nodes` — none of which existed — plus `x_native::fresh_id()` /
+  `x_native::node::simplify_polyline` from a crate that does not depend on
+  the facade, and a non-existent `node.font.size` field. All five helpers are
+  now real (structural ones use the whole-tree `push_replace` snapshot so
+  they are undoable), the paths are `x_core::fresh_id("node")` /
+  `x_core::node::simplify_polyline`, and the text size resolves through the
+  px-contract getter.
+- **`offset_vector` offset by translating diagonally** (`x+d, y+d`). It now
+  walks vertex miter normals via the shared `x_core::booleans::grow_path`
+  engine (positive grows the ring regardless of winding; open polylines keep
+  open ends), matching Figma's "Offset a vector path".
+- **Stroke alignment was model-only.** `StrokeAlign::Inside/Outside` round-
+  tripped through `.x`, fed auto-layout padding and dev-mode CSS, but the
+  renderer painted every stroke centered. Lowering now rebuilds closed shape
+  paths offset by ±w/2 (winding-safe via a bbox probe) for one center stroke —
+  the GPU canvas, PDF, SVG, raster and export-bounds sinks all inherit it
+  from the single IR pass; open paths (Line) keep Figma's center band.
+- Text-pipeline placement audit (same-day, see commits on
+  `arena/01a0a37b-x-native`): paragraph indent / list lead applied exactly
+  once, justify spreads space advances without overshooting the box,
+  `overflow_hidden` without a line cap clips whole lines and clamps height,
+  decoration honored as a bit mask, and the Code panel keeps its pinned
+  em-box font-size contract.
+
+### Added
+- `x_core::booleans::{offset_polyline, offset_path, grow_path}` — the one
+  normal-offset engine shared by the editor tool and the renderer.
+- Tests: winding-independent grow/shrink, open-subpath offsetting, stroke
+  alignment bbox assertions in the IR, editor structural helpers
+  (undoable delete/add, `mark_dirty` tick) and normal-based `offset_vector`.
+
+### Known gaps (documented, not regressions)
+- Shadow **spread** and stroke **weight distribution** (per-side widths) are
+  still not modeled; prototype `WhenVideoHits` has no video layer to fire on.
+
 ## [Unreleased] — 2026-09-15 (Text Formatting)
 
 ### Added

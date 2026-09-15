@@ -112,3 +112,21 @@ the single source of the gate, but this working copy has no reachable remote, so
 no badge currently runs. Push the branch and the pipeline is live; until then
 `scripts/check.sh` is the honest claim, and `docs/VERIFICATION.md` records what
 was actually run locally.
+
+## 10. Figma parity: deferred sub-features
+
+The reconciliation pass (2026-09-15, `arena/01a0a37b-x-native`) wired or
+verified the headline features from the Figma Design help center — text
+properties (typed fields, renderer, exports, Code panel), stroke caps /
+joins / dashes / alignment, auto-layout min-max + grid flows, prototype
+triggers (`AfterDelay`, `OnDrag`, `KeyDown`, multi-action). Still open, by
+choice, each needing a real design pass rather than a patch:
+
+- Drop/inner shadow **spread** and per-property blur (Figma has x/y blur).
+- Stroke **weight distribution** (independent per-side widths).
+- **Video layers** (fills + `WhenVideoHits` + GIF playback in the player).
+- Rich-run styling beyond size/color/font/weight/italic (per-run case,
+  decoration, bullets); underline details panel (style/thickness/offset).
+- **Text on a path** and vertical CJK writing modes.
+
+When one ships, delete its line here and extend the matching test module.

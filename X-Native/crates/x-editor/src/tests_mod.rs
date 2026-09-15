@@ -971,6 +971,75 @@ mod tests {
     }
 
     #[test]
+    fn node_lookup_and_structural_helpers() {
+        let mut e = Editor::new(doc());
+        e.insert_node(
+            "page",
+            Node::rect("r1", 0.0, 0.0, 10.0, 10.0, Color::WHITE),
+        );
+        assert!(e.get_node("r1").is_some(), "get_node sees the page tree");
+        let ids: Vec<String> = e.iter_nodes().map(|n| n.id.clone()).collect();
+        assert!(ids.contains(&"r1".to_string()) && ids.contains(&"page".to_string()));
+        assert!(e.delete_node("r1"), "delete_node removes it");
+        assert!(e.get_node("r1").is_none());
+        e.undo();
+        assert!(e.get_node("r1").is_some(), "delete is one undo deep");
+        assert!(e.add_node(Node::rect("r2", 0.0, 0.0, 4.0, 4.0, Color::WHITE)));
+        assert!(e.get_node("r2").is_some(), "add_node appends to the page");
+        let serial = e.edit_serial;
+        e.mark_dirty();
+        assert!(e.edit_serial != serial, "mark_dirty ticks the redraw serial");
+    }
+
+    #[test]
+    fn offset_vector_offsets_along_normals_not_diagonally() {
+        let mut e = Editor::new(doc());
+        let square = vec![
+            PathCmd::MoveTo(0.0, 0.0),
+            PathCmd::LineTo(100.0, 0.0),
+            PathCmd::LineTo(100.0, 100.0),
+            PathCmd::LineTo(0.0, 100.0),
+            PathCmd::Close,
+        ];
+        e.insert_node("page", Node::vector("v", 0.0, 0.0, 100.0, 100.0, square));
+        assert!(e.offset_vector("v", 10.0), "positive distance grows the ring");
+        let n = e.get_node("v").expect("vector node");
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        if let NodeKind::Vector { path } = &n.kind {
+            for c in path {
+                let pts: Vec<(f64, f64)> = match *c {
+                    PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => vec![(x, y)],
+                    PathCmd::CurveTo(a, b, cc, d, ee, f) => vec![(a, b), (cc, d), (ee, f)],
+                    PathCmd::Close => vec![],
+                };
+                for (x, y) in pts {
+                    x0 = x0.min(x);
+                    y0 = y0.min(y);
+                    x1 = x1.max(x);
+                    y1 = y1.max(y);
+                }
+            }
+        } else {
+            panic!("still a vector");
+        }
+        // grown 10px on EVERY side (the old code slid +10,+10: min corner
+        // would have stayed at 10,10)
+        assert!(
+            x0 < -9.0 && y0 < -9.0 && x1 > 109.0 && y1 > 109.0,
+            "offset grew the bbox to ({x0},{y0},{x1},{y1})"
+        );
+        assert!(path_is_closed_v(&n.kind), "ring re-closed");
+
+        fn path_is_closed_v(kind: &NodeKind) -> bool {
+            if let NodeKind::Vector { path } = kind {
+                matches!(path.last(), Some(PathCmd::Close))
+            } else {
+                false
+            }
+        }
+    }
+
+    #[test]
     fn copy_paste_remaps_ids_and_is_undoable() {
         let mut e = Editor::new(doc());
         e.selection = vec!["a".into()];

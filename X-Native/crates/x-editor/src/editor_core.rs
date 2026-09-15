@@ -2647,7 +2647,7 @@ impl Editor {
             }
             
             // Simplify using the existing algorithm
-            let simplified = x_native::node::simplify_polyline(&points, tolerance);
+            let simplified = x_core::node::simplify_polyline(&points, tolerance);
             
             // Rebuild path from simplified points
             if simplified.len() >= 2 {
@@ -2731,7 +2731,7 @@ impl Editor {
         }
         
         // Create new vector node with the outlined path
-        let new_id = x_native::fresh_id();
+        let new_id = x_core::fresh_id("node");
         let new_node = Node::vector(&new_id, node.transform.x, node.transform.y, node.w, node.h, offset_path);
         
         // Replace the original node
@@ -2789,11 +2789,12 @@ impl Editor {
         }
         
         let (x, y, w, h) = bounds.unwrap();
-        let new_id = x_native::fresh_id();
+        let new_id = x_core::fresh_id("node");
         let new_node = Node::vector(&new_id, x, y, w, h, combined_path);
         
-        // Delete original nodes
-        for node_id in &self.selection {
+        // Delete original nodes (snapshot the ids: the loop mutates self)
+        let doomed: Vec<String> = self.selection.clone();
+        for node_id in &doomed {
             self.delete_node(node_id);
         }
         
@@ -2804,40 +2805,21 @@ impl Editor {
         true
     }
 
-    /// Offset vector path
+    /// Offset a vector path along its vertex miter normals (Figma's
+    /// "offset path" tool): positive distance GROWS closed rings whatever
+    /// their winding, open polylines offset along segment normals with
+    /// open ends kept. Curves are flattened at engine offset density
+    /// (24/cubic) — the same approximation outline-stroke uses.
     pub fn offset_vector(&mut self, node_id: &str, distance: f64) -> bool {
         let Some(node) = self.get_node(node_id) else { return false };
-        
         if let NodeKind::Vector { path } = &node.kind {
-            // Simple offset: move all points outward by distance
-            // This is a simplified implementation - proper offset requires
-            // computing normals and handling corners
-            let mut offset_path = Vec::new();
-            for cmd in path {
-                match cmd {
-                    PathCmd::MoveTo(x, y) => {
-                        offset_path.push(PathCmd::MoveTo(*x + distance, *y + distance));
-                    }
-                    PathCmd::LineTo(x, y) => {
-                        offset_path.push(PathCmd::LineTo(*x + distance, *y + distance));
-                    }
-                    PathCmd::CurveTo(x1, y1, x2, y2, x, y) => {
-                        offset_path.push(PathCmd::CurveTo(
-                            x1 + distance, y1 + distance,
-                            x2 + distance, y2 + distance,
-                            x + distance, y + distance,
-                        ));
-                    }
-                    PathCmd::Close => {
-                        offset_path.push(PathCmd::Close);
-                    }
-                }
+            let off = x_core::booleans::grow_path(path, distance, 24);
+            if off.is_empty() {
+                return false;
             }
-            
-            // Update the node's path
             if let Some(node) = self.get_node_mut(node_id) {
                 if let NodeKind::Vector { path } = &mut node.kind {
-                    *path = offset_path;
+                    *path = off;
                     self.mark_dirty();
                     return true;
                 }
@@ -2861,7 +2843,7 @@ impl Editor {
                 PathCmd::Close,
             ];
             
-            let new_id = x_native::fresh_id();
+            let new_id = x_core::fresh_id("node");
             let new_node = Node::vector(&new_id, node.transform.x, node.transform.y, node.w, node.h, path);
             
             self.replace_node(node_id, new_node);
@@ -3018,7 +3000,7 @@ impl Editor {
             
             // Create new node with second path
             if !path2.is_empty() {
-                let new_id = x_native::fresh_id();
+                let new_id = x_core::fresh_id("node");
                 let new_node = Node::vector(&new_id, node.transform.x, node.transform.y, node.w, node.h, path2);
                 self.add_node(new_node);
                 return Some(new_id);
@@ -3502,7 +3484,7 @@ impl Editor {
         }
         
         // Create new node with combined path
-        let new_id = x_native::fresh_id();
+        let new_id = x_core::fresh_id("node");
         let first_node = self.get_node(&node_ids[0])?;
         let new_node = Node::vector(
             &new_id,
@@ -3589,6 +3571,65 @@ fn shape_signature(n: &Node) -> Sig {
         }
         find_matches(&self.root, template, &mut matches);
         matches
+    }
+
+    /// Read-only lookup of a node by ID in the current page tree.
+    pub fn get_node(&self, id: &str) -> Option<&Node> {
+        find(&self.root, id)
+    }
+
+    /// Every node depth-first (root included) — small documents only; the
+    /// vector tools and hit tests use it instead of threading iterators.
+    pub fn iter_nodes(&self) -> Vec<&Node> {
+        fn walk<'a>(n: &'a Node, out: &mut Vec<&'a Node>) {
+            out.push(n);
+            for c in &n.children {
+                walk(c, out);
+            }
+        }
+        let mut out = vec![];
+        walk(&self.root, &mut out);
+        out
+    }
+
+    /// Remove a node (and its subtree) by id — one undoable whole-tree
+    /// replacement, the same mechanism `rename_node` uses.
+    pub fn delete_node(&mut self, id: &str) -> bool {
+        fn strip(node: &mut Node, id: &str) -> bool {
+            let before = node.children.len();
+            node.children.retain(|c| c.id != id);
+            if node.children.len() != before {
+                return true;
+            }
+            node.children.iter_mut().any(|c| strip(c, id))
+        }
+        let root_id = self.root.id.clone();
+        let before = Box::new(self.root.clone());
+        let mut after = self.root.clone();
+        if !strip(&mut after, id) {
+            return false;
+        }
+        self.push_replace(&root_id, before, after);
+        self.selection.retain(|s| s != id);
+        true
+    }
+
+    /// Append a node to the current page root — undoable whole-tree swap.
+    pub fn add_node(&mut self, node: Node) -> bool {
+        let root_id = self.root.id.clone();
+        let before = Box::new(self.root.clone());
+        let mut after = self.root.clone();
+        after.children.push(node);
+        self.push_replace(&root_id, before, after);
+        true
+    }
+
+    /// Redraw/autosave tick for the vector-tool mutations that edit the
+    /// tree in place (they run outside a Command transaction; the serial
+    /// bump notifies the app, undo for these stays coarse on purpose).
+    pub fn mark_dirty(&mut self) {
+        self.edit_serial = self.edit_serial.wrapping_add(1);
+        self.root.dirty = true;
     }
 
     /// Get a mutable reference to a node by ID
@@ -3871,8 +3912,8 @@ fn shape_signature(n: &Node) -> Sig {
         let Some(node) = self.get_node(node_id) else { return false };
         
         if let NodeKind::Text { text } = &node.kind {
-            // Get text metrics
-            let font_size = node.font.size;
+            // Get text metrics (px contract: explicit size, else the box)
+            let font_size = node.resolved_font_size().unwrap_or(node.h);
             let char_width = font_size * 0.6; // Approximate character width
             
             // Create a path for each character (simplified as rectangles)
@@ -3895,7 +3936,7 @@ fn shape_signature(n: &Node) -> Sig {
                 x_offset += char_width;
             }
             
-            let new_id = x_native::fresh_id();
+            let new_id = x_core::fresh_id("node");
             let new_node = Node::vector(&new_id, node.transform.x, node.transform.y, x_offset, font_size, outline_path);
             
             self.replace_node(node_id, new_node);

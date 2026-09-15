@@ -295,3 +295,25 @@ Status: ✅ Pushed and up-to-date
 **Implemented By:** Arena Agent  
 **Repository:** Ankushui18/X-native  
 **Branch:** arena/01a0a0c5-x-native
+
+---
+
+## Reconciliation note (2026-09-15, this branch)
+
+The list above was written BEFORE the parity pass; several claims were model-
+only or unverified. Status after the reconciliation commits:
+
+- Text formatting: no longer model-only — the renderer, `.x`, HTML export,
+  Code panel and inspector all read the typed fields; placement (justify,
+  indent, lists, truncation, vertical align, vertical trim) is implemented
+  in `x-text` shaping with cache-key coverage (see
+  `TEXT_FORMATTING_IMPLEMENTATION.md`).
+- Stroke caps/joins/dashes/miter: already serialized; **alignment now paints**
+  (offset-centerline pass in `x-render::ir`).
+- "Prototype triggers": verified wired (`AfterDelay`, `OnDrag`, `KeyDown`,
+  multi-action) in `x-editor::prototype`.
+- The `x-editor` island that made claims like "offset path" unreachable
+  (missing `Editor::get_node`/`mark_dirty`/`delete_node`/`add_node`,
+  wrong-crate paths) is fixed — it was a compile error on this tree.
+- ❌ list additions: shadow spread, stroke weight distribution, per-run rich
+  styling beyond size/color/font; see `docs/KNOWN_DEBT.md` §10.
