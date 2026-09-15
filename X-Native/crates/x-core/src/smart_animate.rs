@@ -7,7 +7,7 @@
 //!
 //! This is the core of Figma's "Smart animate" transition preset.
 
-use crate::{Node, Paint, Color};
+use crate::{Color, Node, Paint};
 use std::collections::HashMap;
 
 /// Interpolated state for a single node during a SmartAnimate transition.

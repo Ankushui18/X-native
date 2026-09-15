@@ -548,10 +548,7 @@ mod style_tests {
             Paint::Solid(Color::from_rgb8(0, 0, 255))
         );
         let t = find_mut(&mut root, "t").unwrap();
-        assert_eq!(
-            t.bindings.get("font").map(String::as_str),
-            Some("Lobster")
-        );
+        assert_eq!(t.bindings.get("font").map(String::as_str), Some("Lobster"));
         assert_eq!(t.bindings.get("fw").map(String::as_str), Some("700"));
         assert_eq!(t.bindings.get("fs").map(String::as_str), Some("44"));
         // letter spacing propagated too — the property the old four-field

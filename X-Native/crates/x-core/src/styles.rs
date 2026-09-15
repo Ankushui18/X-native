@@ -264,18 +264,7 @@ impl Default for TextStyleData {
 /// detaching a style never touches a layer's variable bindings (`fontsize`,
 /// `radius`, …) or its prototype/annotation entries.
 pub const TEXT_STYLE_BINDINGS: [&str; 12] = [
-    "font",
-    "fw",
-    "fs",
-    "ls",
-    "lh",
-    "lhm",
-    "lhpx",
-    "lhp",
-    "ps",
-    "pi",
-    "tc",
-    "tw",
+    "font", "fw", "fs", "ls", "lh", "lhm", "lhpx", "lhp", "ps", "pi", "tc", "tw",
 ];
 
 impl TextStyleData {

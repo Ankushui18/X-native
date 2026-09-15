@@ -431,7 +431,11 @@ fn interaction_json(i: &Interaction) -> String {
     // Multiple actions: serialize as "actions" array when non-empty.
     // Backward compatible: old files with just "action" still load fine.
     let actions_field = if i.actions.len() > 1 {
-        let acts: Vec<String> = i.actions.iter().map(|a| format!("\"{}\"", a.kind())).collect();
+        let acts: Vec<String> = i
+            .actions
+            .iter()
+            .map(|a| format!("\"{}\"", a.kind()))
+            .collect();
         format!(",\"actions\":[{}]", acts.join(","))
     } else {
         String::new()
@@ -506,7 +510,10 @@ fn layout_extras(l: &AutoLayout) -> String {
         s.push_str(",\"stroke_include_in_layout\":false");
     }
     if l.canvas_stacking != CanvasStacking::default() {
-        s.push_str(&format!(",\"canvas_stacking\":\"{}\"", l.canvas_stacking.to_str()));
+        s.push_str(&format!(
+            ",\"canvas_stacking\":\"{}\"",
+            l.canvas_stacking.to_str()
+        ));
     }
     s
 }
@@ -863,16 +870,25 @@ pub(crate) fn node_json(n: &Node, out: &mut String) {
         out.push_str(&format!(",\"text_align\":\"{}\"", n.text_align.to_str()));
     }
     if n.text_align_vertical != TextAlignVertical::Top {
-        out.push_str(&format!(",\"text_align_vertical\":\"{}\"", n.text_align_vertical.to_str()));
+        out.push_str(&format!(
+            ",\"text_align_vertical\":\"{}\"",
+            n.text_align_vertical.to_str()
+        ));
     }
     if n.text_decoration != TextDecoration::None {
-        out.push_str(&format!(",\"text_decoration\":\"{}\"", n.text_decoration.to_str()));
+        out.push_str(&format!(
+            ",\"text_decoration\":\"{}\"",
+            n.text_decoration.to_str()
+        ));
     }
     if n.text_case != TextCase::Original {
         out.push_str(&format!(",\"text_case\":\"{}\"", n.text_case.to_str()));
     }
     if n.text_truncation != TextTruncation::Disabled {
-        out.push_str(&format!(",\"text_truncation\":\"{}\"", n.text_truncation.to_str()));
+        out.push_str(&format!(
+            ",\"text_truncation\":\"{}\"",
+            n.text_truncation.to_str()
+        ));
     }
     if let Some(max) = n.max_lines {
         out.push_str(&format!(",\"max_lines\":{}", max));
@@ -1150,13 +1166,36 @@ pub(crate) fn legacy_style_json(s: &LegacyStyle) -> String {
         LegacyStyle::Paint { fill } => format!("{{\"t\":\"paint\",\"fill\":{}}}", paint_json(fill)),
         LegacyStyle::Text(data) => text_style_json(data),
         LegacyStyle::Effect { effects } => {
-            let fx: Vec<String> = effects.iter().map(|e| match e {
-                Effect::DropShadow { dx, dy, blur, color } => format!("{{\"t\":\"drop\",\"dx\":{dx},\"dy\":{dy},\"blur\":{blur},\"c\":\"{}\"}}", color_to_hex(*color)),
-                Effect::InnerShadow { dx, dy, blur, color } => format!("{{\"t\":\"inner\",\"dx\":{dx},\"dy\":{dy},\"blur\":{blur},\"c\":\"{}\"}}", color_to_hex(*color)),
-                Effect::LayerBlur { radius } => format!("{{\"t\":\"blur\",\"r\":{radius}}}"),
-                Effect::BackgroundBlur { radius } => format!("{{\"t\":\"bgblur\",\"r\":{radius}}}"),
-                Effect::Noise { amount, seed } => format!("{{\"t\":\"noise\",\"a\":{amount},\"s\":{seed}}}"),
-            }).collect();
+            let fx: Vec<String> = effects
+                .iter()
+                .map(|e| match e {
+                    Effect::DropShadow {
+                        dx,
+                        dy,
+                        blur,
+                        color,
+                    } => format!(
+                        "{{\"t\":\"drop\",\"dx\":{dx},\"dy\":{dy},\"blur\":{blur},\"c\":\"{}\"}}",
+                        color_to_hex(*color)
+                    ),
+                    Effect::InnerShadow {
+                        dx,
+                        dy,
+                        blur,
+                        color,
+                    } => format!(
+                        "{{\"t\":\"inner\",\"dx\":{dx},\"dy\":{dy},\"blur\":{blur},\"c\":\"{}\"}}",
+                        color_to_hex(*color)
+                    ),
+                    Effect::LayerBlur { radius } => format!("{{\"t\":\"blur\",\"r\":{radius}}}"),
+                    Effect::BackgroundBlur { radius } => {
+                        format!("{{\"t\":\"bgblur\",\"r\":{radius}}}")
+                    }
+                    Effect::Noise { amount, seed } => {
+                        format!("{{\"t\":\"noise\",\"a\":{amount},\"s\":{seed}}}")
+                    }
+                })
+                .collect();
             format!("{{\"t\":\"effect\",\"effects\":[{}]}}", fx.join(","))
         }
     }

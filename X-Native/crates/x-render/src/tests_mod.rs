@@ -806,7 +806,15 @@ mod typography_integration {
             ..Default::default()
         }];
         let base = Color::BLACK;
-        let spans = build_rich_spans_px(&d, "abcdef", base, &fm, f, d.h * 0.72, &Variables::default());
+        let spans = build_rich_spans_px(
+            &d,
+            "abcdef",
+            base,
+            &fm,
+            f,
+            d.h * 0.72,
+            &Variables::default(),
+        );
         // three segments: "a" (base), "bcd" (styled), "ef" (base)
         assert_eq!(spans.len(), 3);
         assert_eq!(spans[0].text, "a");

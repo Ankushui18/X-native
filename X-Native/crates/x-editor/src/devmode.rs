@@ -285,8 +285,7 @@ pub fn node_to_css(node: &Node, vars: &Variables) -> String {
             )),
             _ if node.stroke.solid_color().is_none() => css.push_str(&format!(
                 "  {}: {}px solid; /* gradient stroke */\n",
-                css_prop,
-                node.stroke.width
+                css_prop, node.stroke.width
             )),
             _ => {}
         }

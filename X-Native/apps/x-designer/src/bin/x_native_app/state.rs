@@ -500,9 +500,15 @@ pub enum Action {
     /// Deselect all vector points
     DeselectVectorPoints,
     /// Move selected vector points
-    MoveVectorPoints { dx: f64, dy: f64 },
+    MoveVectorPoints {
+        dx: f64,
+        dy: f64,
+    },
     /// Add a point to a vector path
-    AddVectorPoint { segment_idx: usize, position: (f64, f64) },
+    AddVectorPoint {
+        segment_idx: usize,
+        position: (f64, f64),
+    },
     /// Delete selected vector points
     DeleteVectorPoints,
     /// Switch vector editing tool
@@ -512,72 +518,149 @@ pub enum Action {
     /// Add bezier handle to a point
     AddBezierHandle(usize),
     /// Adjust bezier handle
-    AdjustBezierHandle { point_idx: usize, handle: (f64, f64) },
+    AdjustBezierHandle {
+        point_idx: usize,
+        handle: (f64, f64),
+    },
     /// Split vector path at a point
     SplitVectorPath(usize),
     /// Cut vector path along a line
-    CutVectorPath { start: (f64, f64), end: (f64, f64) },
+    CutVectorPath {
+        start: (f64, f64),
+        end: (f64, f64),
+    },
     /// Outline stroke (convert stroke to vector path)
     OutlineStroke,
     /// Flatten selection (merge into single vector path)
     FlattenSelection,
     /// Offset vector path
-    OffsetVector { distance: f64, join: String },
+    OffsetVector {
+        distance: f64,
+        join: String,
+    },
     /// Simplify vector path
-    SimplifyVector { tolerance: f64 },
+    SimplifyVector {
+        tolerance: f64,
+    },
     /// Convert text to vector path
     TextToOutline,
     // Phase 2: Vector Editing Tools
-    AddBezierHandle { point_idx: usize, handle_pos: (f64, f64) },
-    AdjustBezierHandle { point_idx: usize, handle_idx: usize, new_pos: (f64, f64) },
-    SplitVectorPath { point_idx: usize },
-    CutVectorPath { start: (f64, f64), end: (f64, f64) },
-    LassoSelectPoints { boundary: Vec<(f64, f64)> },
-    SetVariableWidthStroke { width_points: Vec<(f64, f64)> },
-    RemoveBezierHandles { point_idx: usize },
-    MirrorBezierHandles { point_idx: usize, mode: crate::state::MirrorMode },
+    AddBezierHandle {
+        point_idx: usize,
+        handle_pos: (f64, f64),
+    },
+    AdjustBezierHandle {
+        point_idx: usize,
+        handle_idx: usize,
+        new_pos: (f64, f64),
+    },
+    SplitVectorPath {
+        point_idx: usize,
+    },
+    CutVectorPath {
+        start: (f64, f64),
+        end: (f64, f64),
+    },
+    LassoSelectPoints {
+        boundary: Vec<(f64, f64)>,
+    },
+    SetVariableWidthStroke {
+        width_points: Vec<(f64, f64)>,
+    },
+    RemoveBezierHandles {
+        point_idx: usize,
+    },
+    MirrorBezierHandles {
+        point_idx: usize,
+        mode: crate::state::MirrorMode,
+    },
     // Phase 3: Enhanced Path Operations
     OutlineStrokeEnhanced,
-    OffsetVectorEnhanced { distance: f64, join_style: JoinStyle },
+    OffsetVectorEnhanced {
+        distance: f64,
+        join_style: JoinStyle,
+    },
     TextToOutlineEnhanced,
-    SimplifyVectorInteractive { tolerance: f64, preview: bool },
-    JoinPaths { node_id1: String, node_id2: String },
+    SimplifyVectorInteractive {
+        tolerance: f64,
+        preview: bool,
+    },
+    JoinPaths {
+        node_id1: String,
+        node_id2: String,
+    },
     ReversePathDirection,
     // Phase 4: Stroke Caps
-    SetStrokeCapStart { node_id: String, cap: crate::state::StrokeCapType },
-    SetStrokeCapEnd { node_id: String, cap: crate::state::StrokeCapType },
+    SetStrokeCapStart {
+        node_id: String,
+        cap: crate::state::StrokeCapType,
+    },
+    SetStrokeCapEnd {
+        node_id: String,
+        cap: crate::state::StrokeCapType,
+    },
     // Phase 5: Interactive UI Actions
-    UpdateShapeBuilderHover { mouse_pos: (f64, f64) },
+    UpdateShapeBuilderHover {
+        mouse_pos: (f64, f64),
+    },
     ExecuteShapeBuilderOperation,
     SetShapeBuilderMode(ShapeBuilderMode),
     ToggleShapeBuilderSelectionMode,
-    ApplyDashPattern { node_id: String, pattern: DashPattern },
-    SetAdvancedStrokeCap { node_id: String, is_start: bool, cap: AdvancedStrokeCap },
+    ApplyDashPattern {
+        node_id: String,
+        pattern: DashPattern,
+    },
+    SetAdvancedStrokeCap {
+        node_id: String,
+        is_start: bool,
+        cap: AdvancedStrokeCap,
+    },
     // Phase 6: Advanced Gradients, Image Adjustments, and Missing Blend Modes
     /// Flip a gradient (reverse color stops)
     FlipGradient,
     /// Rotate gradient angle
-    RotateGradient { degrees: f64 },
+    RotateGradient {
+        degrees: f64,
+    },
     /// Add a color stop to a gradient at position 0.0-1.0
-    AddGradientStop { position: f32, color: [u8; 3] },
+    AddGradientStop {
+        position: f32,
+        color: [u8; 3],
+    },
     /// Remove a color stop from gradient
-    RemoveGradientStop { index: usize },
+    RemoveGradientStop {
+        index: usize,
+    },
     /// Move a color stop to new position
-    MoveGradientStop { index: usize, new_position: f32 },
+    MoveGradientStop {
+        index: usize,
+        new_position: f32,
+    },
     /// Change gradient type (linear/radial/angular/diamond)
-    SetGradientType { gradient_type: String },
+    SetGradientType {
+        gradient_type: String,
+    },
     /// Enable eyedropper tool
     EnableEyedropper,
     /// Set image adjustments (exposure, contrast, saturation, etc.)
-    SetImageAdjustments { adjustments: x_native::ImageAdjustments },
+    SetImageAdjustments {
+        adjustments: x_native::ImageAdjustments,
+    },
     /// Update individual image adjustment value
-    UpdateImageAdjustment { adjustment: String, value: f32 },
+    UpdateImageAdjustment {
+        adjustment: String,
+        value: f32,
+    },
     /// Reset all image adjustments
     ResetImageAdjustments,
     /// Rotate image (90° clockwise increments)
-    RotateImage { clockwise: bool },
+    RotateImage {
+        clockwise: bool,
+    },
     /// Set image fill mode (fill/fit/crop/tile)
-    SetImageFillMode { mode: String },
+    SetImageFillMode {
+        mode: String,
+    },
 }
 
 /// Commands offered by the editor right-click context menu
@@ -1621,12 +1704,7 @@ impl App {
         EdRegions {
             left: Rect::new(0.0, ED_TITLE_H, left_total, self.win_h),
             nav_bar: Rect::new(0.0, ED_TITLE_H, self.nav_bar_w, self.win_h),
-            sidebar: Rect::new(
-                self.nav_bar_w,
-                ED_TITLE_H,
-                left_total,
-                self.win_h,
-            ),
+            sidebar: Rect::new(self.nav_bar_w, ED_TITLE_H, left_total, self.win_h),
             right: Rect::new(
                 self.win_w - self.right_w,
                 ED_TITLE_H,

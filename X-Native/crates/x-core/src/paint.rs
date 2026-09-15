@@ -42,16 +42,16 @@ pub enum Paint {
     /// Phase 6: Angular/Conic gradient - rotates around center point
     AngularGradient {
         center: (f64, f64),
-        start_angle: f64,  // degrees, 0 = right, 90 = down
-        end_angle: f64,    // degrees, typically start_angle + 360
+        start_angle: f64, // degrees, 0 = right, 90 = down
+        end_angle: f64,   // degrees, typically start_angle + 360
         stops: Vec<(f32, Color)>,
         space: GradSpace,
     },
     /// Phase 6: Diamond gradient - expands in diamond shape from center
     DiamondGradient {
         center: (f64, f64),
-        width: f64,        // horizontal radius
-        height: f64,       // vertical radius
+        width: f64,  // horizontal radius
+        height: f64, // vertical radius
         stops: Vec<(f32, Color)>,
         space: GradSpace,
     },
@@ -65,10 +65,10 @@ impl Paint {
     /// Phase 6: Flip gradient - reverse the color stops
     pub fn flip(&mut self) {
         match self {
-            Paint::LinearGradient { stops, .. } |
-            Paint::RadialGradient { stops, .. } |
-            Paint::AngularGradient { stops, .. } |
-            Paint::DiamondGradient { stops, .. } => {
+            Paint::LinearGradient { stops, .. }
+            | Paint::RadialGradient { stops, .. }
+            | Paint::AngularGradient { stops, .. }
+            | Paint::DiamondGradient { stops, .. } => {
                 // Reverse stops and adjust positions
                 for (pos, _) in stops.iter_mut() {
                     *pos = 1.0 - *pos;
@@ -86,24 +86,28 @@ impl Paint {
                 // Rotate the gradient line around its center
                 let cx = (start.0 + end.0) / 2.0;
                 let cy = (start.1 + end.1) / 2.0;
-                
+
                 let rad = angle.to_radians();
                 let cos = rad.cos();
                 let sin = rad.sin();
-                
+
                 // Rotate start point
                 let dx = start.0 - cx;
                 let dy = start.1 - cy;
                 start.0 = cx + dx * cos - dy * sin;
                 start.1 = cy + dx * sin + dy * cos;
-                
+
                 // Rotate end point
                 let dx = end.0 - cx;
                 let dy = end.1 - cy;
                 end.0 = cx + dx * cos - dy * sin;
                 end.1 = cy + dx * sin + dy * cos;
             }
-            Paint::AngularGradient { start_angle, end_angle, .. } => {
+            Paint::AngularGradient {
+                start_angle,
+                end_angle,
+                ..
+            } => {
                 // Rotate angular gradient
                 *start_angle += angle;
                 *end_angle += angle;
@@ -118,10 +122,10 @@ impl Paint {
     /// Phase 6: Add a color stop at position
     pub fn add_stop(&mut self, position: f32, color: Color) {
         match self {
-            Paint::LinearGradient { stops, .. } |
-            Paint::RadialGradient { stops, .. } |
-            Paint::AngularGradient { stops, .. } |
-            Paint::DiamondGradient { stops, .. } => {
+            Paint::LinearGradient { stops, .. }
+            | Paint::RadialGradient { stops, .. }
+            | Paint::AngularGradient { stops, .. }
+            | Paint::DiamondGradient { stops, .. } => {
                 stops.push((position, color));
                 // Sort by position
                 stops.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
@@ -164,11 +168,12 @@ impl Paint {
 
     /// Phase 6: Check if this paint is a gradient
     pub fn is_gradient(&self) -> bool {
-        matches!(self, 
-            Paint::LinearGradient { .. } | 
-            Paint::RadialGradient { .. } |
-            Paint::AngularGradient { .. } |
-            Paint::DiamondGradient { .. }
+        matches!(
+            self,
+            Paint::LinearGradient { .. }
+                | Paint::RadialGradient { .. }
+                | Paint::AngularGradient { .. }
+                | Paint::DiamondGradient { .. }
         )
     }
 
@@ -521,7 +526,7 @@ impl BlendKind {
             // Phase 6: PlusDarker and PlusLighter use custom formulas
             // Vello/Peniko doesn't have direct support, so we return None
             // and handle them with custom shaders in the renderer
-            BlendKind::PlusDarker => None,  // Custom: max(0, base + blend - 1)
+            BlendKind::PlusDarker => None, // Custom: max(0, base + blend - 1)
             BlendKind::PlusLighter => None, // Custom: min(1, base + blend)
             BlendKind::PassThrough => None, // Special: handled by group rendering
         }

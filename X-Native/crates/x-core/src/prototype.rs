@@ -298,7 +298,7 @@ impl Easing {
             "ease-in-out" => Easing::EaseInOut,
             _ if s.starts_with("cubic-bezier(") => {
                 // Parse cubic-bezier(x1,y1,x2,y2)
-                let inner = &s[13..s.len()-1];
+                let inner = &s[13..s.len() - 1];
                 let parts: Vec<&str> = inner.split(',').collect();
                 if parts.len() == 4 {
                     let x1 = parts[0].trim().parse().unwrap_or(0.0);
@@ -943,7 +943,12 @@ impl Interaction {
     }
 
     /// Create an interaction with multiple actions (Figma parity).
-    pub fn with_actions(trigger: Trigger, actions: Vec<Action>, transition_ms: u32, animation: Animation) -> Self {
+    pub fn with_actions(
+        trigger: Trigger,
+        actions: Vec<Action>,
+        transition_ms: u32,
+        animation: Animation,
+    ) -> Self {
         let action = actions.first().cloned().unwrap_or(Action::Back);
         Self {
             trigger,
@@ -984,7 +989,6 @@ impl Interaction {
             self.actions.iter().collect()
         }
     }
-
 }
 
 /// The interactions a node actually fires during playback. Rich
@@ -1587,7 +1591,7 @@ mod tests {
         assert_eq!(Easing::from_str("ease-in"), Easing::EaseIn);
         assert_eq!(Easing::from_str("ease-out"), Easing::EaseOut);
         assert_eq!(Easing::from_str("ease-in-out"), Easing::EaseInOut);
-        
+
         // Custom bezier
         let bezier = Easing::from_str("cubic-bezier(0.4,0.0,0.2,1.0)");
         if let Easing::CubicBezier(x1, y1, x2, y2) = bezier {
@@ -1598,7 +1602,7 @@ mod tests {
         } else {
             panic!("Expected CubicBezier");
         }
-        
+
         // Labels
         assert_eq!(Easing::Linear.label(), "Linear");
         assert_eq!(Easing::EaseIn.label(), "Ease in");
@@ -1614,7 +1618,7 @@ mod tests {
         assert_eq!(trigger.to_str(), "video-hit");
         assert_eq!(trigger.label(), "When video hits");
         assert_eq!(trigger.label_with(), "When video hits (5.5s)");
-        
+
         // WhenVideoEnds
         let trigger = Trigger::WhenVideoEnds;
         assert_eq!(trigger.to_str(), "video-end");
@@ -1631,7 +1635,7 @@ mod tests {
             Animation::Dissolve,
             Easing::EaseOut,
         );
-        
+
         assert_eq!(interaction.easing, Easing::EaseOut);
         assert_eq!(interaction.reset_on_navigate, false);
     }

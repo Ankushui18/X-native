@@ -297,7 +297,11 @@ fn parse_grid(v: Option<&V>) -> Option<x_core::GridLayout> {
         column_gap: g.get("cgap").and_then(V::num).unwrap_or(0.0),
         row_gap: g.get("rgap").and_then(V::num).unwrap_or(0.0),
         padding: parse_padding(g.get("pad")),
-        auto_flow: g.get("flow").and_then(V::str).map(x_core::GridAutoFlow::from_str).unwrap_or_default(),
+        auto_flow: g
+            .get("flow")
+            .and_then(V::str)
+            .map(x_core::GridAutoFlow::from_str)
+            .unwrap_or_default(),
     })
 }
 
@@ -893,10 +897,19 @@ pub(crate) fn parse_node(v: &V) -> Node {
     }
     // Text formatting properties
     n.text_align = TextAlign::parse(v.get("text_align").and_then(V::str).unwrap_or("left"));
-    n.text_align_vertical = TextAlignVertical::parse(v.get("text_align_vertical").and_then(V::str).unwrap_or("top"));
-    n.text_decoration = TextDecoration::parse(v.get("text_decoration").and_then(V::str).unwrap_or("none"));
+    n.text_align_vertical = TextAlignVertical::parse(
+        v.get("text_align_vertical")
+            .and_then(V::str)
+            .unwrap_or("top"),
+    );
+    n.text_decoration =
+        TextDecoration::parse(v.get("text_decoration").and_then(V::str).unwrap_or("none"));
     n.text_case = TextCase::parse(v.get("text_case").and_then(V::str).unwrap_or("original"));
-    n.text_truncation = TextTruncation::parse(v.get("text_truncation").and_then(V::str).unwrap_or("disabled"));
+    n.text_truncation = TextTruncation::parse(
+        v.get("text_truncation")
+            .and_then(V::str)
+            .unwrap_or("disabled"),
+    );
     n.max_lines = v.get("max_lines").and_then(V::num).map(|v| v as usize);
     n.paragraph_spacing = v.get("paragraph_spacing").and_then(V::num).unwrap_or(0.0);
     n.paragraph_indent = v.get("paragraph_indent").and_then(V::num).unwrap_or(0.0);
@@ -1188,7 +1201,8 @@ pub fn load_x_file(path: &str) -> Result<Document, String> {
 /// a family string with the weight baked into it ("Inter 700"), split here so
 /// `font_weight` is a number the font resolver can use.
 pub(crate) fn parse_text_style(sv: &V) -> TextStyleData {
-    let (family, weight_in_name) = split_family_weight(sv.get("font").and_then(V::str).unwrap_or(""));
+    let (family, weight_in_name) =
+        split_family_weight(sv.get("font").and_then(V::str).unwrap_or(""));
     let mut d = TextStyleData {
         font_family: family,
         font_weight: sv
@@ -1203,10 +1217,9 @@ pub(crate) fn parse_text_style(sv: &V) -> TextStyleData {
         ..Default::default()
     };
     d.line_height = match sv.get("lhm").and_then(V::str) {
-        Some(mode) => LineHeight::from_mode(
-            Some(mode),
-            sv.get("lhv").and_then(V::num).unwrap_or(0.0),
-        ),
+        Some(mode) => {
+            LineHeight::from_mode(Some(mode), sv.get("lhv").and_then(V::num).unwrap_or(0.0))
+        }
         None => match sv.get("lh").and_then(V::num) {
             Some(v) if v > 0.0 => LineHeight::Multiple(v),
             _ => LineHeight::Auto,

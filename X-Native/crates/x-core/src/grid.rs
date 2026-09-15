@@ -619,7 +619,11 @@ mod tests {
             300.0,
             200.0,
             vec![GridTrack::Fixed(100.0), GridTrack::Fixed(100.0)],
-            vec![GridTrack::Fixed(50.0), GridTrack::Fixed(50.0), GridTrack::Fixed(50.0)],
+            vec![
+                GridTrack::Fixed(50.0),
+                GridTrack::Fixed(50.0),
+                GridTrack::Fixed(50.0),
+            ],
         );
         if let NodeKind::Frame { layout: Some(l) } = &mut f.kind {
             if let Some(g) = &mut l.grid {

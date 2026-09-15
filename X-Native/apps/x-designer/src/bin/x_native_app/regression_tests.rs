@@ -1273,7 +1273,7 @@ fn player_doc(h: &mut Host) {
             action: Action::CloseOverlay,
             transition_ms: 0,
             animation: Animation::Instant,
-        actions: vec![],
+            actions: vec![],
             easing: Easing::Linear,
             reset_on_navigate: false,
         },
@@ -1927,10 +1927,10 @@ fn text_styles_create_apply_update_and_detach_end_to_end() {
         &root_id,
         Node::text("ta", 0.0, 0.0, 200.0, 20.0, "Headline"),
     );
-    h.app.doc().editor().insert_node(
-        &root_id,
-        Node::text("tb", 0.0, 40.0, 200.0, 20.0, "Body"),
-    );
+    h.app
+        .doc()
+        .editor()
+        .insert_node(&root_id, Node::text("tb", 0.0, 40.0, 200.0, 20.0, "Body"));
 
     // give `ta` distinctive typography, then create the style from it
     h.app.doc().editor().selection = vec!["ta".into()];
@@ -1960,20 +1960,32 @@ fn text_styles_create_apply_update_and_detach_end_to_end() {
             .and_then(|n| n.bindings.get("fs").cloned())
             .unwrap_or_default()
     };
-    assert_eq!(fs(&h, "tb"), "32", "the style's size reached the second layer");
+    assert_eq!(
+        fs(&h, "tb"),
+        "32",
+        "the style's size reached the second layer"
+    );
 
     // a local edit + "Update style" moves every consumer
     h.app.doc().editor().selection = vec!["ta".into()];
     h.app.set_text_typo("fs", "44".into());
     assert_eq!(h.app.update_text_style_from_selection(), Some(2));
     assert_eq!(fs(&h, "ta"), "44");
-    assert_eq!(fs(&h, "tb"), "44", "the update propagated to the other consumer");
+    assert_eq!(
+        fs(&h, "tb"),
+        "44",
+        "the update propagated to the other consumer"
+    );
 
     // detaching keeps the values and drops the link…
     h.app.doc().editor().selection = vec!["tb".into()];
     assert_eq!(h.app.detach_text_style_from_selection(), 1);
     assert_eq!(h.app.linked_text_style("tb"), None);
-    assert_eq!(fs(&h, "tb"), "44", "detach keeps the typography it rendered");
+    assert_eq!(
+        fs(&h, "tb"),
+        "44",
+        "detach keeps the typography it rendered"
+    );
 
     // …so the next update no longer reaches it
     h.app.doc().editor().selection = vec!["ta".into()];

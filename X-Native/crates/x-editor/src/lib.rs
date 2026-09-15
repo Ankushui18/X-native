@@ -29,7 +29,7 @@ pub mod prototype;
 pub mod selection;
 pub mod shape_builder;
 pub mod snapping;
-pub use editor_core::{MirrorMode, JoinStyle};
+pub use editor_core::{JoinStyle, MirrorMode};
 pub mod spatial;
 #[cfg(test)]
 mod tests_mod;

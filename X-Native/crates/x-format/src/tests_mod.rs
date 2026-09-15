@@ -160,8 +160,7 @@ mod tests {
         // the WHOLE property set survives, not just the four numbers the old
         // variant could hold: equality on the enum is the assertion
         assert_eq!(
-            loaded.styles["Heading/H1"],
-            doc.styles["Heading/H1"],
+            loaded.styles["Heading/H1"], doc.styles["Heading/H1"],
             "text style round-trips with every property intact"
         );
         match &loaded.styles["Heading/H1"] {

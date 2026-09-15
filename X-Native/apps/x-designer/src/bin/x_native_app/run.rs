@@ -13,13 +13,13 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{CursorIcon, Window, WindowId};
 
+use x_editor;
 #[cfg(test)]
 use x_native::build_render_tree;
 #[cfg(test)]
 use x_native::build_scene_full;
 #[cfg(test)]
 use x_native::fileio::load_x_file;
-use x_editor;
 use x_native::{
     bind_style, detach_text_style, resolve_styles, LegacyStyle, Node, NodeKind, Paint, PathCmd,
     TextStyleData,
@@ -4565,7 +4565,6 @@ impl Host {
             return;
         }
 
-        
         // Vector edit mode keyboard shortcuts (Figma parity)
         if self.app.screen == Screen::Editor && !self.app.docs.is_empty() {
             // Enter/Exit vector edit mode
@@ -4603,7 +4602,9 @@ impl Host {
                             return;
                         }
                         "v" | "V" if !self.app.ctrl && !self.app.alt => {
-                            self.dispatch(Action::SetVectorTool(crate::state::VectorTool::MovePoint));
+                            self.dispatch(Action::SetVectorTool(
+                                crate::state::VectorTool::MovePoint,
+                            ));
                             return;
                         }
                         "x" | "X" if !self.app.ctrl && !self.app.alt => {
@@ -4885,10 +4886,7 @@ impl Host {
 
         match key {
             Key::Named(NamedKey::Escape) => {
-                if self.app.dropdown_frame
-                    || self.app.dropdown_lh
-                    || self.app.dropdown_text_style
-                {
+                if self.app.dropdown_frame || self.app.dropdown_lh || self.app.dropdown_text_style {
                     self.app.dropdown_frame = false;
                     self.app.dropdown_lh = false;
                     self.app.dropdown_text_style = false;
@@ -5428,17 +5426,33 @@ impl Host {
                     x_native::Animation::Instant => x_native::Animation::Dissolve,
                     x_native::Animation::Dissolve => x_native::Animation::SmartAnimate,
                     x_native::Animation::SmartAnimate => x_native::Animation::SlideIn,
-                    x_native::Animation::SlideIn => x_native::Animation::MoveIn(x_native::Direction::Left),
+                    x_native::Animation::SlideIn => {
+                        x_native::Animation::MoveIn(x_native::Direction::Left)
+                    }
                     x_native::Animation::MoveIn(d) => match d {
-                        x_native::Direction::Left => x_native::Animation::MoveIn(x_native::Direction::Right),
-                        x_native::Direction::Right => x_native::Animation::MoveIn(x_native::Direction::Top),
-                        x_native::Direction::Top => x_native::Animation::MoveIn(x_native::Direction::Bottom),
-                        x_native::Direction::Bottom => x_native::Animation::MoveOut(x_native::Direction::Left),
+                        x_native::Direction::Left => {
+                            x_native::Animation::MoveIn(x_native::Direction::Right)
+                        }
+                        x_native::Direction::Right => {
+                            x_native::Animation::MoveIn(x_native::Direction::Top)
+                        }
+                        x_native::Direction::Top => {
+                            x_native::Animation::MoveIn(x_native::Direction::Bottom)
+                        }
+                        x_native::Direction::Bottom => {
+                            x_native::Animation::MoveOut(x_native::Direction::Left)
+                        }
                     },
                     x_native::Animation::MoveOut(d) => match d {
-                        x_native::Direction::Left => x_native::Animation::MoveOut(x_native::Direction::Right),
-                        x_native::Direction::Right => x_native::Animation::MoveOut(x_native::Direction::Top),
-                        x_native::Direction::Top => x_native::Animation::MoveOut(x_native::Direction::Bottom),
+                        x_native::Direction::Left => {
+                            x_native::Animation::MoveOut(x_native::Direction::Right)
+                        }
+                        x_native::Direction::Right => {
+                            x_native::Animation::MoveOut(x_native::Direction::Top)
+                        }
+                        x_native::Direction::Top => {
+                            x_native::Animation::MoveOut(x_native::Direction::Bottom)
+                        }
                         x_native::Direction::Bottom => x_native::Animation::SlideOut,
                     },
                     x_native::Animation::SlideOut => x_native::Animation::Instant,
@@ -5463,11 +5477,21 @@ impl Host {
                     x_native::Action::OpenOverlay { overlay, position } => {
                         // Cycle overlay position
                         let next_pos = match position {
-                            x_native::OverlayPosition::Center => x_native::OverlayPosition::TopRight,
-                            x_native::OverlayPosition::TopRight => x_native::OverlayPosition::BottomRight,
-                            x_native::OverlayPosition::BottomRight => x_native::OverlayPosition::TopLeft,
-                            x_native::OverlayPosition::TopLeft => x_native::OverlayPosition::BottomLeft,
-                            x_native::OverlayPosition::BottomLeft => x_native::OverlayPosition::Center,
+                            x_native::OverlayPosition::Center => {
+                                x_native::OverlayPosition::TopRight
+                            }
+                            x_native::OverlayPosition::TopRight => {
+                                x_native::OverlayPosition::BottomRight
+                            }
+                            x_native::OverlayPosition::BottomRight => {
+                                x_native::OverlayPosition::TopLeft
+                            }
+                            x_native::OverlayPosition::TopLeft => {
+                                x_native::OverlayPosition::BottomLeft
+                            }
+                            x_native::OverlayPosition::BottomLeft => {
+                                x_native::OverlayPosition::Center
+                            }
                             _ => x_native::OverlayPosition::Center,
                         };
                         x_native::Action::OpenOverlay {
@@ -5478,7 +5502,11 @@ impl Host {
                     x_native::Action::Back => x_native::Action::CloseOverlay,
                     x_native::Action::CloseOverlay => {
                         // Navigate to first other frame
-                        let dest = targets.iter().next().map(|(id, _)| id.clone()).unwrap_or_default();
+                        let dest = targets
+                            .iter()
+                            .next()
+                            .map(|(id, _)| id.clone())
+                            .unwrap_or_default();
                         x_native::Action::Navigate { destination: dest }
                     }
                     _ => x_native::Action::Back,
@@ -5554,7 +5582,8 @@ impl Host {
                         100 => 150, // 15.0s
                         150 => 200, // 20.0s
                         _ => 0,     // 0.0s
-                    } as f32 / 10.0;
+                    } as f32
+                        / 10.0;
                 }
             }
         });
@@ -5568,7 +5597,9 @@ impl Host {
                     x_native::Easing::Linear => x_native::Easing::EaseIn,
                     x_native::Easing::EaseIn => x_native::Easing::EaseOut,
                     x_native::Easing::EaseOut => x_native::Easing::EaseInOut,
-                    x_native::Easing::EaseInOut => x_native::Easing::CubicBezier(0.25, 0.1, 0.25, 1.0),
+                    x_native::Easing::EaseInOut => {
+                        x_native::Easing::CubicBezier(0.25, 0.1, 0.25, 1.0)
+                    }
                     x_native::Easing::CubicBezier(..) => x_native::Easing::Linear,
                 };
             }
@@ -7589,7 +7620,9 @@ impl Host {
                 let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
                     n.text_decoration = match n.text_decoration {
                         x_native::TextDecoration::None => x_native::TextDecoration::Underline,
-                        x_native::TextDecoration::Underline => x_native::TextDecoration::Strikethrough,
+                        x_native::TextDecoration::Underline => {
+                            x_native::TextDecoration::Strikethrough
+                        }
                         x_native::TextDecoration::Strikethrough => x_native::TextDecoration::None,
                     };
                 });
@@ -7665,10 +7698,15 @@ impl Host {
             Action::AppMenuItem(idx) => {
                 self.app.app_menu.open = false;
                 match idx {
-                    0 => { self.app.open_blank(); } // New file
-                    3 => { self.cmd_save(); } // Save
+                    0 => {
+                        self.app.open_blank();
+                    } // New file
+                    3 => {
+                        self.cmd_save();
+                    } // Save
                     8 => {} // Preferences (no-op for now)
-                    9 => { // Dark mode toggle
+                    9 => {
+                        // Dark mode toggle
                         let next = crate::theme::active_theme().next();
                         self.apply_theme(next);
                     }
@@ -7684,15 +7722,19 @@ impl Host {
             Action::FindNext => {
                 // Advance to next match (simplified)
                 if self.app.find_replace.match_count > 0 {
-                    self.app.find_replace.current_match = 
-                        (self.app.find_replace.current_match % self.app.find_replace.match_count) + 1;
+                    self.app.find_replace.current_match = (self.app.find_replace.current_match
+                        % self.app.find_replace.match_count)
+                        + 1;
                 }
             }
             Action::FindPrev => {
                 if self.app.find_replace.match_count > 0 {
                     let cur = self.app.find_replace.current_match;
-                    self.app.find_replace.current_match = 
-                        if cur <= 1 { self.app.find_replace.match_count } else { cur - 1 };
+                    self.app.find_replace.current_match = if cur <= 1 {
+                        self.app.find_replace.match_count
+                    } else {
+                        cur - 1
+                    };
                 }
             }
             Action::ReplaceAll => {
@@ -7713,7 +7755,13 @@ impl Host {
             }
             Action::DismissNotification(id) => {
                 self.app.notifications.notifications.retain(|n| n.id != id);
-                self.app.notifications.unread_count = self.app.notifications.notifications.iter().filter(|n| !n.read).count();
+                self.app.notifications.unread_count = self
+                    .app
+                    .notifications
+                    .notifications
+                    .iter()
+                    .filter(|n| !n.read)
+                    .count();
             }
             Action::MarkAllNotificationsRead => {
                 for n in &mut self.app.notifications.notifications {
@@ -8161,18 +8209,22 @@ impl Host {
                     "Showing hidden layer outlines"
                 } else {
                     "Hidden layer outlines disabled"
-                }.into();
+                }
+                .into();
             }
             Action::InverseSelection => {
                 if let Some(doc) = self.app.docs.get_mut(self.app.active) {
                     let editor = &mut doc.editors[doc.active_editor];
                     let all_ids = editor.get_all_selectable_ids();
-                    let current: std::collections::HashSet<_> = editor.selection.iter().cloned().collect();
-                    let new_selection: Vec<_> = all_ids.into_iter()
+                    let current: std::collections::HashSet<_> =
+                        editor.selection.iter().cloned().collect();
+                    let new_selection: Vec<_> = all_ids
+                        .into_iter()
                         .filter(|id| !current.contains(id))
                         .collect();
                     editor.selection = new_selection;
-                    self.app.status = format!("Selected {} layers (inverse)", editor.selection.len());
+                    self.app.status =
+                        format!("Selected {} layers (inverse)", editor.selection.len());
                 }
             }
             Action::SelectMatching => {
@@ -8232,7 +8284,7 @@ impl Host {
                     let selected_ids = editor.selection.clone();
                     let match_pattern = &self.app.bulk_rename_match;
                     let replace_pattern = &self.app.bulk_rename_replace;
-                    
+
                     let mut renamed_count = 0;
                     for id in selected_ids {
                         if let Some(node) = editor.get_node_mut(&id) {
@@ -8279,7 +8331,7 @@ impl Host {
                         let editor = &mut doc.editors[doc.active_editor];
                         let selected_ids = editor.selection.clone();
                         let mut pasted_count = 0;
-                        
+
                         for id in selected_ids {
                             if let Some(node) = editor.get_node_mut(&id) {
                                 if let Some(fill) = &clipboard.fill {
@@ -8386,7 +8438,8 @@ impl Host {
                 if let Some(doc) = self.app.docs.get_mut(self.app.active) {
                     let editor = &mut doc.editors[doc.active_editor];
                     editor.select_vector_point(idx, self.app.shift);
-                    self.app.vector_edit_mode.selected_points = editor.vector_edit_selected_points.clone();
+                    self.app.vector_edit_mode.selected_points =
+                        editor.vector_edit_selected_points.clone();
                 }
             }
             Action::DeselectVectorPoints => {
@@ -8403,7 +8456,10 @@ impl Host {
                     self.app.mark_dirty();
                 }
             }
-            Action::AddVectorPoint { segment_idx, position } => {
+            Action::AddVectorPoint {
+                segment_idx,
+                position,
+            } => {
                 if let Some(doc) = self.app.docs.get_mut(self.app.active) {
                     let editor = &mut doc.editors[doc.active_editor];
                     editor.add_vector_point(segment_idx, position);
@@ -8433,7 +8489,8 @@ impl Host {
                             self.app.mark_dirty();
                             self.app.status = "Outlined stroke".into();
                         } else {
-                            self.app.status = "Cannot outline stroke - node must have a stroke".into();
+                            self.app.status =
+                                "Cannot outline stroke - node must have a stroke".into();
                         }
                     }
                 }
@@ -8455,7 +8512,8 @@ impl Host {
                     if let Some(node_id) = editor.selection.first().cloned() {
                         if editor.offset_vector(&node_id, distance) {
                             self.app.mark_dirty();
-                            self.app.status = format!("Offset vector by {} with {} join", distance, join);
+                            self.app.status =
+                                format!("Offset vector by {} with {} join", distance, join);
                         } else {
                             self.app.status = "Cannot offset - node must be a vector".into();
                         }
@@ -8467,7 +8525,8 @@ impl Host {
                     let editor = &mut doc.editors[doc.active_editor];
                     editor.simplify_vector(tolerance);
                     self.app.mark_dirty();
-                    self.app.status = format!("Simplified vector path with tolerance {}", tolerance);
+                    self.app.status =
+                        format!("Simplified vector path with tolerance {}", tolerance);
                 }
             }
             Action::TextToOutline => {
@@ -8484,7 +8543,10 @@ impl Host {
                 }
             }
             // Phase 2: Vector Editing Tools
-            Action::AddBezierHandle { point_idx, handle_pos } => {
+            Action::AddBezierHandle {
+                point_idx,
+                handle_pos,
+            } => {
                 if let Some(doc) = self.app.docs.get_mut(self.app.active) {
                     let editor = &mut doc.editors[doc.active_editor];
                     if let Some(node_id) = editor.vector_edit_node.clone() {
@@ -8495,7 +8557,11 @@ impl Host {
                     }
                 }
             }
-            Action::AdjustBezierHandle { point_idx, handle_idx, new_pos } => {
+            Action::AdjustBezierHandle {
+                point_idx,
+                handle_idx,
+                new_pos,
+            } => {
                 if let Some(doc) = self.app.docs.get_mut(self.app.active) {
                     let editor = &mut doc.editors[doc.active_editor];
                     if let Some(node_id) = editor.vector_edit_node.clone() {
@@ -8587,12 +8653,16 @@ impl Host {
                             self.app.mark_dirty();
                             self.app.status = "Outlined stroke (enhanced)".into();
                         } else {
-                            self.app.status = "Cannot outline stroke - node must have a stroke".into();
+                            self.app.status =
+                                "Cannot outline stroke - node must have a stroke".into();
                         }
                     }
                 }
             }
-            Action::OffsetVectorEnhanced { distance, join_style } => {
+            Action::OffsetVectorEnhanced {
+                distance,
+                join_style,
+            } => {
                 if let Some(doc) = self.app.docs.get_mut(self.app.active) {
                     let editor = &mut doc.editors[doc.active_editor];
                     if let Some(node_id) = editor.selection.first().cloned() {
@@ -8604,7 +8674,8 @@ impl Host {
                         };
                         if editor.offset_vector_enhanced(&node_id, distance, js) {
                             self.app.mark_dirty();
-                            self.app.status = format!("Offset vector by {} with {:?} join", distance, join_style);
+                            self.app.status =
+                                format!("Offset vector by {} with {:?} join", distance, join_style);
                         } else {
                             self.app.status = "Cannot offset - node must be a vector".into();
                         }
@@ -8628,12 +8699,18 @@ impl Host {
                 if let Some(doc) = self.app.docs.get_mut(self.app.active) {
                     let editor = &mut doc.editors[doc.active_editor];
                     if let Some(node_id) = editor.selection.first().cloned() {
-                        if let Some(simplified) = editor.simplify_vector_interactive(&node_id, tolerance, preview) {
+                        if let Some(simplified) =
+                            editor.simplify_vector_interactive(&node_id, tolerance, preview)
+                        {
                             if !preview {
                                 self.app.mark_dirty();
-                                self.app.status = format!("Simplified vector path with tolerance {}", tolerance);
+                                self.app.status =
+                                    format!("Simplified vector path with tolerance {}", tolerance);
                             } else {
-                                self.app.status = format!("Preview: {} points after simplification", simplified.len());
+                                self.app.status = format!(
+                                    "Preview: {} points after simplification",
+                                    simplified.len()
+                                );
                             }
                         }
                     }
@@ -8698,62 +8775,75 @@ impl Host {
                     }
                 }
             }
-            
+
             // Phase 5: Interactive UI Handlers
             Action::UpdateShapeBuilderHover { mouse_pos } => {
                 // Update hover state for Shape Builder tool
                 self.app.shape_builder_hover = Some(mouse_pos);
             }
-            
+
             Action::ExecuteShapeBuilderOperation => {
                 // Execute the current Shape Builder operation
                 if let Some(preview) = &self.app.shape_builder_preview {
                     match preview {
                         ShapeOperation::Merge(shapes) => {
                             if let Some(new_id) = self.editor.shape_builder_merge(shapes) {
-                                self.app.status = format!("Merged {} shapes into {}", shapes.len(), new_id);
+                                self.app.status =
+                                    format!("Merged {} shapes into {}", shapes.len(), new_id);
                             }
                         }
                         ShapeOperation::Subtract { base, subtract } => {
-                            if let Some(new_id) = self.editor.shape_builder_subtract(base, subtract) {
-                                self.app.status = format!("Subtracted {} shapes from {}", subtract.len(), new_id);
+                            if let Some(new_id) = self.editor.shape_builder_subtract(base, subtract)
+                            {
+                                self.app.status =
+                                    format!("Subtracted {} shapes from {}", subtract.len(), new_id);
                             }
                         }
                         ShapeOperation::Intersect(shapes) => {
-                            self.app.status = format!("Intersect operation for {} shapes", shapes.len());
+                            self.app.status =
+                                format!("Intersect operation for {} shapes", shapes.len());
                             // TODO: Implement intersect
                         }
                         ShapeOperation::Exclude(shapes) => {
-                            self.app.status = format!("Exclude operation for {} shapes", shapes.len());
+                            self.app.status =
+                                format!("Exclude operation for {} shapes", shapes.len());
                             // TODO: Implement exclude
                         }
                     }
                 }
             }
-            
+
             Action::SetShapeBuilderMode(mode) => {
                 // Set the Shape Builder operation mode
                 self.app.shape_builder_mode = mode;
                 self.app.status = format!("Shape Builder mode: {:?}", mode);
             }
-            
+
             Action::ToggleShapeBuilderSelectionMode => {
                 // Toggle between Click and Lasso selection modes
-                self.app.shape_builder_selection_mode = match self.app.shape_builder_selection_mode {
+                self.app.shape_builder_selection_mode = match self.app.shape_builder_selection_mode
+                {
                     SelectionMode::Click => SelectionMode::Lasso,
                     SelectionMode::Lasso => SelectionMode::Click,
                     _ => SelectionMode::Click,
                 };
-                self.app.status = format!("Selection mode: {:?}", self.app.shape_builder_selection_mode);
+                self.app.status = format!(
+                    "Selection mode: {:?}",
+                    self.app.shape_builder_selection_mode
+                );
             }
-            
+
             Action::ApplyDashPattern { node_id, pattern } => {
                 // Apply dash pattern to a stroke
                 // TODO: Implement dash pattern application
                 self.app.status = format!("Applied dash pattern to {}", node_id);
             }
-            
-            Action::SetAdvancedStrokeCap { node_id, is_start, cap } => {
+
+            Action::SetAdvancedStrokeCap {
+                node_id,
+                is_start,
+                cap,
+            } => {
                 // Set advanced stroke cap
                 if is_start {
                     // TODO: Implement advanced start cap
@@ -8830,7 +8920,10 @@ impl Host {
                 }
             }
 
-            Action::MoveGradientStop { index, new_position } => {
+            Action::MoveGradientStop {
+                index,
+                new_position,
+            } => {
                 let Some(id) = self.app.doc().selected_id() else {
                     self.app.status = "Select a layer with a gradient fill first".into();
                     return;
@@ -8853,7 +8946,10 @@ impl Host {
                 };
                 // This would require converting between gradient types
                 // For now, just show a status message
-                self.app.status = format!("Gradient type change to '{}' - requires gradient conversion", gradient_type);
+                self.app.status = format!(
+                    "Gradient type change to '{}' - requires gradient conversion",
+                    gradient_type
+                );
             }
 
             Action::SetImageAdjustments { adjustments } => {
@@ -8943,7 +9039,11 @@ impl Host {
                 });
                 if changed {
                     self.app.mark_dirty();
-                    let direction = if clockwise { "clockwise" } else { "counter-clockwise" };
+                    let direction = if clockwise {
+                        "clockwise"
+                    } else {
+                        "counter-clockwise"
+                    };
                     self.app.status = format!("Image rotated 90° {}", direction);
                 } else {
                     self.app.status = "Could not rotate image".into();
@@ -8953,13 +9053,17 @@ impl Host {
             Action::SetImageFillMode { mode } => {
                 // This would require implementing image fill modes in the data model
                 // For now, show a status message
-                self.app.status = format!("Image fill mode '{}' - requires fill mode implementation", mode);
+                self.app.status = format!(
+                    "Image fill mode '{}' - requires fill mode implementation",
+                    mode
+                );
             }
 
             Action::EnableEyedropper => {
                 // Enable eyedropper tool mode
                 // This would typically set a tool mode and handle the next click to sample color
-                self.app.status = "Eyedropper tool enabled - click on canvas to sample color".into();
+                self.app.status =
+                    "Eyedropper tool enabled - click on canvas to sample color".into();
                 // TODO: Implement actual eyedropper functionality
                 // This requires:
                 // 1. Setting a tool mode

@@ -105,10 +105,10 @@ fn squircle_path(w: f64, h: f64, radii: [f64; 4], smoothing: f64) -> vello::kurb
 
     // Generate points for each corner using superellipse formula
     let corners = [
-        (w - tr, tr, tr),      // top-right
-        (w - br, h - br, br),  // bottom-right
-        (bl, h - bl, bl),      // bottom-left
-        (tl, tl, tl),          // top-left
+        (w - tr, tr, tr),     // top-right
+        (w - br, h - br, br), // bottom-right
+        (bl, h - bl, bl),     // bottom-left
+        (tl, tl, tl),         // top-left
     ];
 
     for (corner_idx, &(cx, cy, radius)) in corners.iter().enumerate() {
