@@ -1723,8 +1723,8 @@ mod tests {
             .commands
             .iter()
             .find_map(|c| match c {
-                RenderCommand::Glyphs { text, runs, .. } if text == "Hello world" => {
-                    Some(runs)
+                RenderCommand::Glyphs { text, runs, .. } => {
+                    (text == "Hello world").then_some(runs)
                 }
                 _ => None,
             })
@@ -1778,9 +1778,9 @@ mod tests {
             RenderCommand::Glyphs { key, transform, size, max_width, .. } => {
                 assert_eq!(key, "/label");
                 // world origin + the same top-left inset the Section arm uses
-                let (tx, ty) = transform.translation();
-                assert!((tx - 14.0).abs() < 1e-9);
-                assert!((ty - 10.0).abs() < 1e-9);
+                let t = transform.translation();
+                assert!((t.x - 14.0).abs() < 1e-9);
+                assert!((t.y - 10.0).abs() < 1e-9);
                 assert_eq!(*size, 18.0);
                 assert_eq!(*max_width, 280.0);
             }

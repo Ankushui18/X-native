@@ -2060,8 +2060,12 @@ fn t16_layer_drag_merges_into_one_undo_step() {
     assert!(h.app.doc().editor().undo());
     let x0 = find_node_clone(&h.app.doc_ref().editor_ref().root, "frame-1")
         .unwrap()
-        .transform.x;
-    assert!(x0.abs() < 0.01, "one undo reverted the entire drag, got {x0}");
+        .transform
+        .x;
+    assert!(
+        x0.abs() < 0.01,
+        "one undo reverted the entire drag, got {x0}"
+    );
 }
 
 #[test]
