@@ -2590,7 +2590,7 @@ impl App {
             let mut data = TextStyleData::from_node(node);
             // P3: a node without an explicit font carries the document's
             // default typeface into the new style
-            if node.bindings.get("font").is_none() {
+            if !node.bindings.contains_key("font") {
                 data.font_family = self.doc_ref().doc.resolved_default_font().to_string();
             }
             data
@@ -2643,7 +2643,7 @@ impl App {
             let root = &self.doc_ref().editor_ref().root;
             let node = crate::editor_ui::find_node(root, id.as_str())?;
             let mut data = TextStyleData::from_node(node);
-            if node.bindings.get("font").is_none() {
+            if !node.bindings.contains_key("font") {
                 data.font_family = self.doc_ref().doc.resolved_default_font().to_string();
             }
             data
