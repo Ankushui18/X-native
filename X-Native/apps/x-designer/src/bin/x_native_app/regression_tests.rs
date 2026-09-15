@@ -452,7 +452,11 @@ fn drawing_with_no_container_selected_lands_at_the_page_root() {
     // and selecting a non-container (a plain rect) also must not nest:
     // only frames / groups / sections are drop targets
     h.app.doc().editor().selection = vec![r.id.clone()];
-    h.finish_create(Tool::Rect, Point::new(120.0, 120.0), Point::new(160.0, 140.0));
+    h.finish_create(
+        Tool::Rect,
+        Point::new(120.0, 120.0),
+        Point::new(160.0, 140.0),
+    );
     let root = &h.app.doc_ref().editor_ref().root;
     assert_eq!(
         root.children.len(),
@@ -507,7 +511,11 @@ fn new_documents_carry_the_default_font_into_new_text() {
         h.app.doc_ref().doc.default_font.as_deref(),
         Some(x_native::APP_DEFAULT_FONT)
     );
-    h.finish_create(Tool::Text, Point::new(100.0, 100.0), Point::new(200.0, 114.0));
+    h.finish_create(
+        Tool::Text,
+        Point::new(100.0, 100.0),
+        Point::new(200.0, 114.0),
+    );
     let id = h.app.doc_ref().selected_id().unwrap();
     let root = &h.app.doc_ref().editor_ref().root;
     let t = crate::editor_ui::find_node(root, &id).unwrap();
