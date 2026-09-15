@@ -224,7 +224,8 @@ mod tests {
             .iter()
             .filter(|c| matches!(c, RenderCommand::FillPath { .. }))
             .collect();
-        assert_eq!(fills2.len(), 1, "only master bg fills: {:?}", tree2.commands);
+        let cmds_dbg = format!("{:?}", tree2.commands);
+        assert_eq!(fills2.len(), 1, "only master bg fills: {cmds_dbg}");
         assert_eq!(
             tree2.commands.len(),
             3,

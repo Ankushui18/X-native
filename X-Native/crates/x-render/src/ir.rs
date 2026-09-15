@@ -1836,7 +1836,13 @@ mod tests {
             .find(|c| matches!(c, RenderCommand::Glyphs { text, .. } if text == "Hero"))
             .expect("frame name label command");
         match label {
-            RenderCommand::Glyphs { key, transform, size, max_width, .. } => {
+            RenderCommand::Glyphs {
+                key,
+                transform,
+                size,
+                max_width,
+                ..
+            } => {
                 // the root's own id is part of its path ("/Hero"), so the
                 // label key is "/Hero/label", not "/label"
                 assert_eq!(key, "/Hero/label");
