@@ -521,6 +521,39 @@ fn pages_list_collapses_beyond_four_pages() {
 }
 
 #[test]
+fn new_documents_carry_the_default_font_into_new_text() {
+    // Viewport audit P3: the default typeface is per-file data
+    // (Document::default_font), declared at file creation and applied
+    // to new text — not a constant scattered through the UI.
+    let mut h = host();
+    assert_eq!(
+        h.app.doc_ref().doc.default_font.as_deref(),
+        Some(x_native::APP_DEFAULT_FONT)
+    );
+    h.finish_create(
+        Tool::Text,
+        Point::new(100.0, 100.0),
+        Point::new(200.0, 114.0),
+    );
+    let id = h.app.doc_ref().selected_id().unwrap();
+    let root = &h.app.doc_ref().editor_ref().root;
+    let t = crate::editor_ui::find_node(root, &id).unwrap();
+    assert_eq!(
+        t.bindings.get("font").map(String::as_str),
+        Some(x_native::APP_DEFAULT_FONT)
+    );
+}
+
+#[test]
+fn inspector_falls_back_to_the_document_default_font() {
+    use crate::editor_ui::{typo_val, Typo};
+    let mut h = host();
+    // no text selected: the inspector reports the document default
+    let family = typo_val(&h.app, Typo::Family);
+    assert_eq!(family, x_native::APP_DEFAULT_FONT);
+}
+
+#[test]
 fn new_session_and_new_document_have_no_mock_content() {
     let mut app = App::new();
     assert!(app.docs.is_empty() && app.drafts.is_empty());

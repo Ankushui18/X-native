@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use vello::kurbo::{Point, Rect};
 use x_native::editor::Editor;
-use x_native::{Color, Document, Node, NodeKind, Paint, StrokeJoin, Variables};
+use x_native::{APP_DEFAULT_FONT, Color, Document, Node, NodeKind, Paint, StrokeJoin, Variables};
 
 use crate::command::CommandPalette;
 use crate::context_menu::ContextMenu;
@@ -1109,6 +1109,8 @@ impl OpenDoc {
             None,
             Document {
                 pages: vec![page],
+                // P3: a new file declares its default typeface as data
+                default_font: Some(APP_DEFAULT_FONT.to_string()),
                 ..Default::default()
             },
         )
@@ -1129,6 +1131,8 @@ impl OpenDoc {
         let editor = Editor::new(page.clone());
         let doc = Document {
             pages: vec![page],
+            // P3: the demo document declares its default typeface too
+            default_font: Some(APP_DEFAULT_FONT.to_string()),
             ..Document::default()
         };
         Self {

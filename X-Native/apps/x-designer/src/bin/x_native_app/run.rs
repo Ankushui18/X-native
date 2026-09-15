@@ -2586,7 +2586,14 @@ impl App {
         }
         let data = {
             let root = &self.doc_ref().editor_ref().root;
-            TextStyleData::from_node(crate::editor_ui::find_node(root, id.as_str())?)
+            let node = crate::editor_ui::find_node(root, id.as_str())?;
+            let mut data = TextStyleData::from_node(node);
+            // P3: a node without an explicit font carries the document's
+            // default typeface into the new style
+            if node.bindings.get("font").is_none() {
+                data.font_family = self.doc_ref().doc.resolved_default_font().to_string();
+            }
+            data
         };
         // Figma's naming: "New style", then "New style 2", "New style 3", …
         let name = (1..)
@@ -2634,7 +2641,12 @@ impl App {
         let name = self.linked_text_style(id.as_str())?;
         let data = {
             let root = &self.doc_ref().editor_ref().root;
-            TextStyleData::from_node(crate::editor_ui::find_node(root, id.as_str())?)
+            let node = crate::editor_ui::find_node(root, id.as_str())?;
+            let mut data = TextStyleData::from_node(node);
+            if node.bindings.get("font").is_none() {
+                data.font_family = self.doc_ref().doc.resolved_default_font().to_string();
+            }
+            data
         };
         if !self.doc().doc.update_text_style(&name, data) {
             return None;
@@ -4470,6 +4482,10 @@ impl Host {
                 let tid = x_native::fresh_id("text");
                 let mut t = Node::text(&tid, x, y, w.max(120.0), 14.0, "");
                 t.name = format!("Text {n}");
+                // P3: new text is set in the document's default typeface
+                // (per-file data) rather than an engine constant
+                let default_font = doc.doc.resolved_default_font().to_string();
+                t.bindings.insert("font".into(), default_font);
                 t
             }
             _ => return,

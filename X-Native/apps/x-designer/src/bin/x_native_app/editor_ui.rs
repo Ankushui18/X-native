@@ -2262,11 +2262,12 @@ fn num_str(v: f64, unit: &str) -> String {
 /// when nothing (or a non-text node) is selected — pixel parity with the
 /// v45 mock is preserved for every non-text state.
 pub fn typo_val(app: &App, which: Typo) -> String {
+    // P3: the fallback family is the document's default font (per-file
+    // data), not a constant — a file can carry any default typeface
+    let default_family = app.doc_ref().doc.resolved_default_font();
     let Some(t) = app.selected_text_typo() else {
         return match which {
-            // default family = the document's default font (Inter), not a
-            // hardcoded third family
-            Typo::Family => "Inter".into(),
+            Typo::Family => default_family.to_string(),
             Typo::Weight => "Regular".into(),
             Typo::Size => "14".into(),
             Typo::LineHeight => "20".into(),
@@ -2280,7 +2281,7 @@ pub fn typo_val(app: &App, which: Typo) -> String {
         };
     };
     match which {
-        Typo::Family => t.font.unwrap_or_else(|| "Inter".into()),
+        Typo::Family => t.font.unwrap_or_else(|| default_family.to_string()),
         Typo::Weight => weight_name(t.fw).to_string(),
         Typo::Size => num_str(t.fs, ""),
         Typo::LineHeight => match t.lh_mode {
