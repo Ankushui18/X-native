@@ -108,7 +108,11 @@ impl Tool {
         for (k, sh) in KEYS {
             if Self::from_shortcut(k, *sh, board) == Some(self) {
                 let base = k.chars().next().unwrap().to_ascii_uppercase();
-                return if *sh { format!("⇧{base}") } else { format!("{base}") };
+                return if *sh {
+                    format!("⇧{base}")
+                } else {
+                    format!("{base}")
+                };
             }
         }
         String::new()

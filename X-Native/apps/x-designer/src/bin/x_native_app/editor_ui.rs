@@ -108,7 +108,7 @@ fn paint_tooltip(app: &App, s: &mut Scene) {
             continue;
         }
         let area = r.width() * r.height();
-        if best.map_or(true, |(a, _)| area < a) {
+        if best.is_none_or(|(a, _)| area < a) {
             best = Some((area, label));
         }
     }
@@ -128,7 +128,8 @@ fn paint_tooltip(app: &App, s: &mut Scene) {
     let tr = Rect::new(x, y, x + tw, y + th);
     elev_shadow(s, tr, 8.0, Elevation::Floating);
     fill_rrect(s, tr, 5.0, C_TEXT);
-    app.fonts.text(s, x + 8.0, y + 5.0, label, T10, C_BASE, Wt::Reg);
+    app.fonts
+        .text(s, x + 8.0, y + 5.0, label, T10, C_BASE, Wt::Reg);
 }
 
 /// Persistent ruler guides (Figma): 1px pink lines across the canvas plus
