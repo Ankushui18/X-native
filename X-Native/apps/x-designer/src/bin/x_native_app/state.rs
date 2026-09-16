@@ -2963,15 +2963,12 @@ impl App {
         let center_w = {
             let doc = self.doc();
             doc.editor().selection = vec![id.clone()];
-            doc.editor_ref().get_node(&id).map(|n| {
-                Point::new(
-                    n.transform.x + n.w / 2.0,
-                    n.transform.y + n.h / 2.0,
-                )
-            })
+            doc.editor_ref()
+                .get_node(&id)
+                .map(|n| (n.transform.x + n.w / 2.0, n.transform.y + n.h / 2.0))
         };
-        if let Some(center_w) = center_w {
-            let sp = self.world_to_screen(center_w);
+        if let Some((cx, cy)) = center_w {
+            let sp = self.world_to_screen(Point::new(cx, cy));
             let reg = self.editor_regions();
             let cx = (reg.canvas.x0 + reg.canvas.x1) / 2.0;
             let cy = (reg.canvas.y0 + reg.canvas.y1) / 2.0;
@@ -3492,18 +3489,20 @@ fn scan_find(
     in_sel: bool,
     out: &mut Vec<String>,
 ) {
-    if !sel.is_empty() && !in_sel && !sel.iter().any(|s| s == &node.id) {
-        return; // outside every selected subtree
-    }
+    // `in_sel`: an ancestor is selected. An unselected node is never
+    // pruned here — it may still contain a selected descendant — but
+    // only nodes inside a selected subtree are tested.
     let in_sel = in_sel || sel.iter().any(|s| s == &node.id);
-    if let NodeKind::Text { text } = &node.kind {
-        let hit = if case {
-            text.contains(q)
-        } else {
-            text.to_lowercase().contains(&q.to_lowercase())
-        };
-        if hit {
-            out.push(node.id.clone());
+    if sel.is_empty() || in_sel {
+        if let NodeKind::Text { text } = &node.kind {
+            let hit = if case {
+                text.contains(q)
+            } else {
+                text.to_lowercase().contains(&q.to_lowercase())
+            };
+            if hit {
+                out.push(node.id.clone());
+            }
         }
     }
     for c in &node.children {
@@ -3792,7 +3791,8 @@ mod tool_shortcut_tests {
         app.find_replace.query = "hi".into();
         app.find_replace.replace = "yo".into();
         app.rescan_find();
-        app.find_nav(2); // current match = t2
+        app.find_nav(1);
+        app.find_nav(1); // current match = t2
         assert!(app.replace_current_find());
         let doc = app.doc();
         assert_eq!(

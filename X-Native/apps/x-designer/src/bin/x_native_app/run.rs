@@ -9470,8 +9470,7 @@ impl Host {
 
             Action::EnableEyedropper => {
                 self.app.eyedropper = true;
-                self.app.status =
-                    "Eyedropper armed - click a layer to sample its color".into();
+                self.app.status = "Eyedropper armed - click a layer to sample its color".into();
             }
             Action::ToggleCanvasBgVisibility => {
                 self.app.canvas_bg_visible = !self.app.canvas_bg_visible;
