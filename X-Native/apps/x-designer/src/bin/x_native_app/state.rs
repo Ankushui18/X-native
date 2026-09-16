@@ -3121,12 +3121,7 @@ impl App {
         // Threads are flat: replying to a REPLY still attaches to the root.
         let mut root = doc.doc.comments.iter().find(|c| c.id == root_id)?.clone();
         while let Some(parent_id) = root.parent.clone() {
-            root = doc
-                .doc
-                .comments
-                .iter()
-                .find(|c| c.id == parent_id)?
-                .clone();
+            root = doc.doc.comments.iter().find(|c| c.id == parent_id)?.clone();
         }
         let id = x_native::fresh_id("comment");
         let n = doc
