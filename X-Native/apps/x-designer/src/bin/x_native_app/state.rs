@@ -59,22 +59,31 @@ impl Tool {
         }
     }
 
-    pub fn shortcut(self) -> Option<&'static str> {
-        match self {
-            Tool::Select => Some("V"),
-            Tool::Frame => Some("F"),
-            Tool::Text => Some("T"),
-            Tool::Rect => Some("R"),
-            Tool::Ellipse => Some("O"),
-            Tool::Pen => Some("P"),
-            Tool::Hand => Some("H"),
-            Tool::Comment => Some("C"),
-            Tool::Eraser => Some("Shift+E"),
-            Tool::Symmetry => Some("M"),
-            Tool::BoardSticky => Some("S"),
-            Tool::BoardConnector => Some("C"),
-            Tool::BoardRect => Some("R"),
-            Tool::BoardCircle => Some("O"),
+    /// The tool a plain (Ctrl-free) keystroke selects, per document
+    /// mode — the single source of truth for tool shortcuts (audit F3:
+    /// the handler used to keep a second, half-drifted copy inline).
+    /// `key` is the lowercased character; `board` selects the mode's
+    /// tool set. Baseline keys are case/shift tolerant as before;
+    /// plain-C is mode-specific and ⇧C stays free; ⇧E is the eraser;
+    /// M-symmetry is design-mode only (the old handler let it leak
+    /// into boards).
+    pub fn from_shortcut(key: &str, shift: bool, board: bool) -> Option<Tool> {
+        match (key, shift) {
+            ("e", true) => Some(Tool::Eraser),
+            ("c", false) if board => Some(Tool::BoardConnector),
+            ("c", false) => Some(Tool::Comment),
+            ("m", false) if !board => Some(Tool::Symmetry),
+            ("s", _) if board => Some(Tool::BoardSticky),
+            ("r", _) if board => Some(Tool::BoardRect),
+            ("o", _) if board => Some(Tool::BoardCircle),
+            ("v", _) => Some(Tool::Select),
+            ("f", _) => Some(Tool::Frame),
+            ("t", _) => Some(Tool::Text),
+            ("r", _) => Some(Tool::Rect),
+            ("o", _) => Some(Tool::Ellipse),
+            ("p", _) => Some(Tool::Pen),
+            ("h", _) => Some(Tool::Hand),
+            _ => None,
         }
     }
 }
@@ -3160,5 +3169,52 @@ impl App {
         self.active = self.docs.len() - 1;
         self.screen = Screen::Editor;
         self.center_view();
+    }
+}
+
+#[cfg(test)]
+mod tool_shortcut_tests {
+    use super::Tool;
+
+    #[test]
+    fn design_mode_shortcuts_resolve() {
+        let d = |k: &str, sh: bool| Tool::from_shortcut(k, sh, false);
+        assert_eq!(d("v", false), Some(Tool::Select));
+        assert_eq!(d("f", false), Some(Tool::Frame));
+        assert_eq!(d("t", false), Some(Tool::Text));
+        assert_eq!(d("r", false), Some(Tool::Rect));
+        assert_eq!(d("o", false), Some(Tool::Ellipse));
+        assert_eq!(d("p", false), Some(Tool::Pen));
+        assert_eq!(d("h", false), Some(Tool::Hand));
+        assert_eq!(d("c", false), Some(Tool::Comment));
+        assert_eq!(d("m", false), Some(Tool::Symmetry));
+        assert_eq!(d("e", true), Some(Tool::Eraser));
+    }
+
+    #[test]
+    fn board_mode_shortcuts_resolve() {
+        let b = |k: &str, sh: bool| Tool::from_shortcut(k, sh, true);
+        assert_eq!(b("s", false), Some(Tool::BoardSticky));
+        assert_eq!(b("c", false), Some(Tool::BoardConnector));
+        assert_eq!(b("r", false), Some(Tool::BoardRect));
+        assert_eq!(b("o", false), Some(Tool::BoardCircle));
+        assert_eq!(b("v", false), Some(Tool::Select));
+        // design-only tools do not leak into boards
+        assert_eq!(b("m", false), None);
+        assert_eq!(b("f", false), Some(Tool::Frame));
+    }
+
+    #[test]
+    fn shift_rules_hold() {
+        // ⇧C stays free (old comment promised this; old code broke it)
+        assert_eq!(Tool::from_shortcut("c", true, false), None);
+        assert_eq!(Tool::from_shortcut("c", true, true), None);
+        // the eraser needs shift; bare E is not a tool key
+        assert_eq!(Tool::from_shortcut("e", false, false), None);
+        // baseline keys stay shift-tolerant (pre-refactor behavior)
+        assert_eq!(Tool::from_shortcut("r", true, false), Some(Tool::Rect));
+        // unclaimed keys
+        assert_eq!(Tool::from_shortcut("s", false, false), None);
+        assert_eq!(Tool::from_shortcut("q", false, false), None);
     }
 }

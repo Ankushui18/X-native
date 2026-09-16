@@ -4750,7 +4750,9 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             Tool::Hand,
         ]
     } else {
-        // Design tools for artboard-based work
+        // Design tools for artboard-based work — the full tool set
+        // (audit F2: eraser, symmetry and comment were keyboard-only
+        // before; the toolbar is the tool hub)
         &[
             Tool::Select,
             Tool::Frame,
@@ -4758,13 +4760,16 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             Tool::Rect,
             Tool::Ellipse,
             Tool::Pen,
+            Tool::Eraser,
+            Tool::Symmetry,
+            Tool::Comment,
             Tool::Hand,
         ]
     };
-    // Audited (canvas 280..1100 @900): container 311×40 r12 at bottom-5
-    // (y = win_h − 60); icons 32px pitch 36 starting +7; divider mid-gap;
-    // palette btn at +272 from container left.
-    let bar_w = 311.0;
+    // Audited (canvas 280..1100 @900): container 415×40 r12 at bottom-5
+    // (y = win_h − 60); icons 32px pitch 36 starting +7; divider mid-gap
+    // after ten tools; palette btn at +376 from container left.
+    let bar_w = 415.0;
     let bar_x0 = reg.canvas.x0 + (reg.canvas.x1 - reg.canvas.x0 - bar_w) / 2.0;
     let bar_y0 = app.win_h - TOOLBAR_BOTTOM - TOOLBAR_H;
     let bar = Rect::new(bar_x0, bar_y0, bar_x0 + bar_w, bar_y0 + TOOLBAR_H);
@@ -4792,15 +4797,15 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         );
         hit.push((r, Action::Tool(*t)));
     }
-    // divider between hand (ends +263) and palette (+272)
-    let dx = bar.x0 + 267.5;
+    // divider between hand (ends +363) and palette (+376)
+    let dx = bar.x0 + 371.5;
     fill_rect(
         s,
         Rect::new(dx, bar.y0 + 10.0, dx + 1.0, bar.y1 - 10.0),
         C_LINE_2,
     );
     // search → palette
-    let sx = bar.x0 + 272.0;
+    let sx = bar.x0 + 376.0;
     let sr = Rect::new(sx, bar.y0 + 4.0, sx + TOOL_ICON, bar.y0 + 4.0 + TOOL_ICON);
     if hover(app, sr) {
         fill_rrect(s, sr, R_TOOL_ICON, C_FIELD_2);

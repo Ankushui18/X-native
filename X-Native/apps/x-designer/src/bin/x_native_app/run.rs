@@ -5429,45 +5429,13 @@ impl Host {
                 };
                 return;
             }
-            // Board-specific shortcuts (only when in Board document)
-            if self.app.is_board() {
-                let board_tool = match c {
-                    "s" | "S" => Some(Tool::BoardSticky),
-                    "c" | "C" => Some(Tool::BoardConnector),
-                    "r" | "R" => Some(Tool::BoardRect),
-                    "o" | "O" => Some(Tool::BoardCircle),
-                    _ => None,
-                };
-                if let Some(t) = board_tool {
-                    self.app.tool = t;
-                    return;
-                }
-            }
-
-            let tool = match c {
-                "v" | "V" => Some(Tool::Select),
-                "f" | "F" => Some(Tool::Frame),
-                "t" | "T" => Some(Tool::Text),
-                "r" | "R" => Some(Tool::Rect),
-                "o" | "O" => Some(Tool::Ellipse),
-                "p" | "P" => Some(Tool::Pen),
-                "h" | "H" => Some(Tool::Hand),
-                // C selects the comment tool BUT ⇧C stays free; Figma's
-                // comment shortcut is plain C
-                "c" | "C" => Some(Tool::Comment),
-                _ => None,
-            };
-            if let Some(t) = tool {
+            // Tool shortcuts — the mode-aware table lives in
+            // Tool::from_shortcut (audit F3); there is no second copy.
+            // The ⇧R ruler arm above stays first so it keeps its key.
+            let tool_key = c.to_lowercase();
+            let board_mode = self.app.is_board();
+            if let Some(t) = Tool::from_shortcut(&tool_key, self.app.shift, board_mode) {
                 self.app.tool = t;
-                return;
-            }
-            // Handle Shift+E for Eraser and M for Symmetry
-            if self.app.shift && (c == "e" || c == "E") {
-                self.app.tool = Tool::Eraser;
-                return;
-            }
-            if c == "m" || c == "M" {
-                self.app.tool = Tool::Symmetry;
                 return;
             }
             if self.app.shift {
