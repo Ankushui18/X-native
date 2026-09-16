@@ -3438,36 +3438,30 @@ impl Host {
                     };
                     match sel {
                         Some(target) if target != id => {
-                            let doc = self.app.doc();
                             if to_stroke {
-                                let w = {
-                                    let doc = self.app.doc();
-                                    doc.editor_ref()
-                                        .get_node(&target)
-                                        .map(|n| n.stroke.width)
-                                        .unwrap_or(1.0)
+                                let w = self
+                                    .app
+                                    .doc()
+                                    .editor_ref()
+                                    .get_node(&target)
+                                    .map(|n| n.stroke.width)
+                                    .unwrap_or(1.0);
+                                let color = match &paint {
+                                    x_native::Paint::Solid(c) => *c,
+                                    _ => x_native::Color::BLACK,
                                 };
-                                doc.editor()
-                                    .mutate_visual_stack(&target, move |n| {
-                                        n.materialize_visual_stacks();
-                                        let stroke =
-                                            x_native::Stroke::solid(
-                                                match &paint {
-                                                    x_native::Paint::Solid(c) => *c,
-                                                    _ => x_native::Color::BLACK,
-                                                },
-                                                w.max(1.0),
-                                            );
-                                        n.stroke = stroke.clone();
-                                        if let Some(layer) = n.stroke_layers.last_mut() {
-                                            layer.stroke = stroke;
-                                        } else {
-                                            n.stroke_layers
-                                                .push(x_native::StrokeLayer::new(stroke));
-                                        }
-                                    });
+                                self.app.doc().editor().mutate_visual_stack(&target, move |n| {
+                                    n.materialize_visual_stacks();
+                                    let stroke = x_native::Stroke::solid(color, w.max(1.0));
+                                    n.stroke = stroke.clone();
+                                    if let Some(layer) = n.stroke_layers.last_mut() {
+                                        layer.stroke = stroke;
+                                    } else {
+                                        n.stroke_layers.push(x_native::StrokeLayer::new(stroke));
+                                    }
+                                });
                             } else {
-                                doc.editor().set_fill(&target, paint);
+                                self.app.doc().editor().set_fill(&target, paint);
                             }
                             self.app.mark_dirty();
                             self.app.status = format!("Sampled color from {id}");
