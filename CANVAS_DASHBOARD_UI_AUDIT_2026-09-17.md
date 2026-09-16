@@ -151,15 +151,16 @@ browser Library: the document model is a scene graph, not a Figma clone."*
 ## 6. Remaining fix/upgrade backlog (canvas + dashboard)
 
 **Canvas (editor):**
-- ~~Variables **rename + text-value editing**~~ **VALUE EDITING DONE 2026-09-17** — every
-  Tokens-panel variable row's value is an inline field (`FieldId::VarValue`): click → edit →
-  Enter commits through `var_history` (hex → color, `true/false` → bool, numeric → number,
-  anything else → string; empty clears). Rename-as-alias remains open (the model's alias
-  mechanism makes it a one-command rename; needs a name-field variant of the same pattern).
+- ~~Variables **rename + text-value editing**~~ **DONE 2026-09-17** — value editing
+  (`FieldId::VarValue`: hex/bool/number/string with type sniffing, empty clears) AND rename
+  (`FieldId::VarName`): rename lands as ONE undoable `Batch` — value moves to the new name, the
+  old name becomes an alias so existing bindings keep resolving, the old entry retires.
+  Renaming an alias re-points it. (v1: mode-scoped overrides keep the old name.)
 - Library **update-acceptance dialog**: notification kind exists; wire `diff_library` →
   review list → `accept_update` (backend complete in x-core).
-- ~~**Font picker UI**~~ **ALREADY EXISTS** (editor_ui.rs:3540 lists `family_names()`); upgrade
-  it to family-grouped listings via the new `FontManager::families()`.
+- ~~**Font picker UI**~~ **EXISTS + UPGRADED 2026-09-17** — both listing sites (FONT BROWSER
+  popup, LIBRARY panel) now group faces into families via `FontManager::families()`, with face
+  counts; picking a family resolves to a face at render time.
 - **Comment threads**: `Comment` is flat — add `parent: Option<String>` + thread rendering in
   `paint_comments`.
 - Verify **SmartAnimate** interpolation end-to-end in Flow preview (transition is selectable;
@@ -175,7 +176,9 @@ browser Library: the document model is a scene graph, not a Figma clone."*
   one render pumped per frame so a wall of new files warms up without hitching; failures fall
   back to the watermark card. v1 covers `.x` documents; embedded image assets preview as
   placeholders.
-- **Trash restore** (files already listed; restore action back to Drafts).
+- **Trash restore** — blocked on a product decision first: Trash is currently a static empty
+  state with NO deletion pipeline. Deleting a user file needs a policy (move to OS trash vs
+  in-app list) before restore can exist.
 - **Templates gallery**: bundled sample documents opened as copies (replaces the retired
   "Browse templates" card honestly).
 - Re-skin signature elements (cards/sidebar/wordmark) so screenshots read X-Native, not Figma.

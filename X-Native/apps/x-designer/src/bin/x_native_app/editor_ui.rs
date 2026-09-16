@@ -3538,16 +3538,24 @@ fn paint_design(
         Some("chevron-down"),
     );
     if app.font_picker_open {
-        let names = app.fonts.fonts.family_names();
+        // family-grouped listing (owned — no borrow held across draws);
+        // picking a FAMILY is enough: rendering resolves it to a face.
+        let fams = app.fonts.fonts.families();
         let popup = Rect::new(fam.x0, fam.y1 + 2.0, fam.x1, fam.y1 + 174.0);
         fill_rrect(s, popup, 6.0, C_PANEL_2);
         stroke_rrect(s, popup, 6.0, C_LINE_2, 1.0);
         app.fonts.micro_label(s, popup.x0 + 10.0, popup.y0 + 14.0, "FONT BROWSER", C_DIM, Wt::Med);
-        for (i, name) in names.iter().take(8).enumerate() {
+        for (i, (fam, faces)) in fams.iter().take(8).enumerate() {
             let row = Rect::new(popup.x0 + 4.0, popup.y0 + 22.0 + i as f64 * 18.0, popup.x1 - 4.0, popup.y0 + 39.0 + i as f64 * 18.0);
             if hover(app, row) { fill_rrect(s, row, 3.0, C_FIELD_2); }
-            app.fonts.text(s, row.x0 + 6.0, row.y0 + 3.0, name, T10, C_TEXT, Wt::Reg);
-            hit.push((row, Action::FontPicker(name.clone())));
+            app.fonts.text(s, row.x0 + 6.0, row.y0 + 3.0, fam, T10, C_TEXT, Wt::Reg);
+            if faces.len() > 1 {
+                let cnt = format!("{} faces", faces.len());
+                let cw = app.fonts.measure(&cnt, T10, Wt::Reg);
+                app.fonts
+                    .text(s, row.x1 - 10.0 - cw, row.y0 + 3.0, &cnt, T10, C_DIM, Wt::Reg);
+            }
+            hit.push((row, Action::FontPicker(fam.clone())));
         }
     }
     let wgt = Rect::new(x0, y0 + 717.5, x0 + 227.0, y0 + 745.5);
@@ -7263,22 +7271,27 @@ fn paint_assets(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
     let mut y = y0 + 160.5;
     app.fonts.micro_label(s, x0, y, "FONTS", C_DIM, Wt::Med);
     y += 18.0;
-    let names = app.fonts.fonts.family_names();
-    if names.is_empty() {
+    let fams = app.fonts.fonts.families();
+    if fams.is_empty() {
         app.fonts
             .text(s, x0, y, "No faces registered", T10, C_MUTED, Wt::Reg);
         y += 18.0;
     }
-    for nm in names.iter().take(24) {
-        app.fonts.text(s, x0 + 4.0, y, nm, T10, C_TEXT, Wt::Reg);
+    for (fam, faces) in fams.iter().take(24) {
+        let label = if faces.len() > 1 {
+            format!("{fam} ({})", faces.len())
+        } else {
+            fam.clone()
+        };
+        app.fonts.text(s, x0 + 4.0, y, &label, T10, C_TEXT, Wt::Reg);
         y += 16.0;
     }
-    if names.len() > 24 {
+    if fams.len() > 24 {
         app.fonts.text(
             s,
             x0 + 4.0,
             y,
-            &format!("… {} more", names.len() - 24),
+            &format!("… {} more families", fams.len() - 24),
             T10,
             C_MUTED,
             Wt::Reg,
@@ -7316,6 +7329,7 @@ fn paint_tokens(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
     let x0 = 12.0;
     let mut y = y0 + 160.5;
     app.var_value_rects.clear();
+    app.var_name_rects.clear();
     app.fonts
         .micro_label(s, x0, y, "X-NATIVE TOKENS", C_DIM, Wt::Med);
     y += 18.0;
@@ -7492,7 +7506,33 @@ fn paint_tokens(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
             };
             app.fonts.text_center(s, kr, glyph, T10, C_DIM, Wt::Med, true);
         }
-        app.fonts.text(s, x0 + 18.0, row_t + 3.0, &name, T10, C_TEXT, Wt::Med);
+        // name slot: click to rename inline (FieldId::VarName; commits as a
+        // rename-as-alias, so old bindings keep resolving).
+        let editing_name = app.field.as_ref().map(|f| f.id) == Some(FieldId::VarName)
+            && app.var_edit_name.as_deref() == Some(name.as_str());
+        let name_shown = if editing_name {
+            app.field
+                .as_ref()
+                .map(|f| f.buffer.clone())
+                .unwrap_or_default()
+        } else {
+            name.clone()
+        };
+        let nw = app.fonts.measure(&name_shown, T10, Wt::Med);
+        app.fonts.text(s, x0 + 18.0, row_t + 3.0, &name_shown, T10, C_TEXT, Wt::Med);
+        let nr = Rect::new(
+            x0 + 16.0,
+            row_t + 1.0,
+            (x0 + 24.0 + nw).min(lw - 84.0),
+            row_t + 19.0,
+        );
+        if editing_name {
+            stroke_rrect(s, nr, 4.0, C_EDIT_BORDER, 1.0);
+        } else if hover(app, nr) {
+            stroke_rrect(s, nr, 4.0, C_LINE_2, 1.0);
+        }
+        app.var_name_rects.push((nr, name.clone()));
+        hit.push((nr, Action::Field(FieldId::VarName)));
         // value slot: click to edit inline (FieldId::VarValue; the active
         // buffer renders while the field is open). Bools keep the toggle —
         // their text form is still editable from the field.

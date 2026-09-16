@@ -3416,6 +3416,14 @@ impl Host {
                         .find(|(r2, _)| r2.contains(p))
                         .map(|(_, n)| n.clone());
                 }
+                if matches!(a, Action::Field(FieldId::VarName)) {
+                    self.app.var_edit_name = self
+                        .app
+                        .var_name_rects
+                        .iter()
+                        .find(|(r2, _)| r2.contains(p))
+                        .map(|(_, n)| n.clone());
+                }
                 self.dispatch(a);
                 return;
             }
@@ -10236,6 +10244,29 @@ impl Host {
                     self.apply_auto_layout();
                 }
             }
+            FieldId::VarName => {
+                let Some(old) = self.app.var_edit_name.clone() else {
+                    self.app.status = "No variable targeted".into();
+                    return;
+                };
+                let new = raw.trim().to_string();
+                if new.is_empty() || new == old {
+                    return; // field closes; nothing changed
+                }
+                let d = self.app.doc();
+                match x_native::editor::rename_variable(&d.doc.variables, &old, &new) {
+                    Some(cmd) => {
+                        if d.var_history.commit(&mut d.doc.variables, cmd) {
+                            self.app.mark_dirty();
+                            self.app.status =
+                                format!("{old} renamed to {new} — old references still resolve");
+                        } else {
+                            self.app.status = format!("Rename to {new} changed nothing");
+                        }
+                    }
+                    None => self.app.status = format!("{old}: nothing to rename"),
+                }
+            }
             FieldId::VarValue => {
                 let Some(name) = self.app.var_edit_name.clone() else {
                     self.app.status = "No variable targeted".into();
@@ -10710,6 +10741,7 @@ fn field_initial(app: &App, f: FieldId) -> String {
             &app.doc_ref().doc.variables,
             app.var_edit_name.as_deref().unwrap_or_default(),
         ),
+        FieldId::VarName => app.var_edit_name.clone().unwrap_or_default(),
         _ => String::new(),
     }
 }

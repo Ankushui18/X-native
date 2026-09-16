@@ -737,6 +737,9 @@ pub enum FieldId {
     /// `App::var_edit_name`, resolved at click from `var_value_rects` —
     /// same pattern as `InstanceProp`).
     VarValue,
+    /// Tokens panel: variable name editing (rename-as-alias; same target
+    /// resolution as `VarValue`, from `var_name_rects`).
+    VarName,
     /// layers panel: tree search query (row above the tree; audit F8).
     /// Enter keeps the field open — the query lives in
     /// `OpenDoc::tree_search` and filters the tree live.
@@ -1567,6 +1570,8 @@ pub struct App {
     /// Click→variable resolution for `FieldId::VarValue`, recorded by the
     /// Tokens panel each paint (same pattern as `last_instance_prop_rect`).
     pub var_value_rects: Vec<(Rect, String)>,
+    /// Same, for the name slots (`FieldId::VarName` rename).
+    pub var_name_rects: Vec<(Rect, String)>,
     /// last JSX produced by Copy-as-code (for tests; the real target is
     /// the system clipboard)
     pub last_copied_code: Option<String>,
@@ -1723,6 +1728,7 @@ impl App {
             instance_prop_target: None,
             var_edit_name: None,
             var_value_rects: Vec::new(),
+            var_name_rects: Vec::new(),
             last_copied_code: None,
             comment_draft: None,
             open_comment: None,
