@@ -365,7 +365,7 @@ fn css_channels_and_alpha<'a>(
 fn css_rgb_channel(token: &str) -> Option<u8> {
     let value = token
         .strip_suffix('%')
-        .map(|v| v.parse::<f64>().ok().map(|n| n * 2.55))
+        .map(|v| v.parse::<f64>().ok().map(|n| n * 255.0 / 100.0))
         .unwrap_or_else(|| token.parse::<f64>().ok());
     Some(value?.clamp(0.0, 255.0).round() as u8)
 }

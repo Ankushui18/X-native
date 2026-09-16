@@ -247,8 +247,8 @@ fn selector_specificity(
     // design-tool SVGs, while unsupported combinators safely do not match.
     let selector = selector
         .split(['>', '+', '~', ' '])
-        .filter(|part| !part.is_empty())
-        .next_back()?;
+        .rev()
+        .find(|part| !part.is_empty())?;
     let id = attr(attrs, "id");
     let classes: Vec<&str> = attr(attrs, "class")
         .unwrap_or_default()
@@ -307,12 +307,14 @@ fn stylesheet_value(
         let Some(value) = properties.get(&key.to_ascii_lowercase()) else {
             continue;
         };
-        let replace = winner
-            .as_ref()
-            .is_some_and(|(old_specificity, old_index, _)| {
+        let replace = match winner.as_ref() {
+            Some((old_specificity, old_index, _)) => {
                 specificity > *old_specificity
                     || (specificity == *old_specificity && index >= *old_index)
-            });
+            }
+            // First matching rule wins when nothing has matched yet.
+            None => true,
+        };
         if replace {
             winner = Some((specificity, index, value.clone()));
         }
@@ -385,14 +387,13 @@ impl SvgPaint {
         }
         match &mut paint {
             Paint::Solid(color) => *color = color.multiply_alpha(alpha),
-            Paint::LinearGradient { stops, .. }
-            | Paint::RadialGradient { stops, .. }
-            | Paint::AngularGradient { stops, .. }
-            | Paint::DiamondGradient { stops, .. } => {
-                for (_, color) in stops {
-                    *color = color.multiply_alpha(alpha);
-                }
-            }
+            // Gradient stops carry their authored stop-opacity; the model has
+            // no gradient-global alpha, and baking element opacity into the
+            // stops would corrupt the declared gradient.
+            Paint::LinearGradient { .. }
+            | Paint::RadialGradient { .. }
+            | Paint::AngularGradient { .. }
+            | Paint::DiamondGradient { .. } => {}
             Paint::Variable(_) | Paint::Pattern { .. } => {}
         }
         paint
