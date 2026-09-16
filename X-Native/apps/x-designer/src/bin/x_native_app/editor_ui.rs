@@ -1153,6 +1153,7 @@ fn paint_nav_bar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     for i in 0..3 {
         hline(s, hx, hx + 20.0, hy + i as f64 * 5.0, C_NAV_ICON);
     }
+    tip(app, menu_r, "Document menu");
     hit.push((menu_r, Action::OpenAppMenu));
     y += 44.0;
 
@@ -1273,6 +1274,7 @@ fn paint_nav_bar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             Wt::Bold,
         );
     }
+    tip(app, bell_r, "Notifications");
     hit.push((bell_r, Action::ToggleNotifications));
 }
 
@@ -1430,12 +1432,16 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         );
         draw_icon(s, "chevron-up", prev_r.x0, prev_r.y0 + 2.0, 12.0, C_DIM);
         draw_icon(s, "chevron-down", next_r.x0, next_r.y0 + 2.0, 12.0, C_DIM);
+        tip(app, prev_r, "Previous match");
         hit.push((prev_r, Action::FindPrev));
+        tip(app, next_r, "Next match");
         hit.push((next_r, Action::FindNext));
     }
     // Close button
     let close_r = Rect::new(fx + fw - 20.0, fy + 2.0, fx + fw - 4.0, fy + 18.0);
     draw_icon(s, "x", close_r.x0 + 4.0, close_r.y0 + 4.0, 10.0, C_DIM);
+    tip(app, close_r, "Close find & replace");
+    hit.push((close_r, Action::CloseFind));
 
     // Replace row (if shown)
     if app.find_replace.show_replace {
@@ -1749,6 +1755,7 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         .micro_label(s, sx + 12.0, y, "PAGES", C_DIM, Wt::Med);
     let addp = Rect::new(lw - 25.0, y + 0.8, lw - 13.0, y + 12.8);
     draw_icon(s, "plus", addp.x0, y + 0.8, 12.0, C_DIM);
+    tip(app, addp, "Add page");
     hit.push((addp, Action::AddPage));
 
     let page_count = app.doc().editors.len();
@@ -1810,6 +1817,7 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         if !active && hover(app, r) && page_count > 1 {
             let tr = Rect::new(lw - 30.0, r.y0 + 5.0, lw - 12.0, r.y0 + 21.0);
             draw_icon(s, "trash-2", tr.x0, r.y0 + 6.0, 12.0, C_DIM);
+            tip(app, tr, "Delete page");
             hit.push((tr, Action::DeletePage(page_i)));
         }
         hit.push((r, Action::SelectPage(page_i)));
@@ -2010,6 +2018,7 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                         12.0,
                         if hidden { C_TEXT } else { C_DIM },
                     );
+                    tip(app, ey, "Show / hide layer");
                     hit.push((ey, Action::TreeVisible(row.id.clone())));
                 }
                 if row_hover || locked {
@@ -2022,6 +2031,7 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                         12.0,
                         if locked { C_TEXT } else { C_DIM },
                     );
+                    tip(app, lr, "Lock / unlock layer");
                     hit.push((lr, Action::TreeLock(row.id.clone())));
                 }
             }
