@@ -8428,7 +8428,34 @@ impl Host {
             Action::SearchFocus => {
                 self.app.dash_search_focus = true;
             }
-            Action::InviteTeam => self.app.status = "Invite team — coming soon".into(),
+            Action::OpenTemplates => {
+                self.app.template_picker_open = true;
+            }
+            Action::CloseTemplates => {
+                self.app.template_picker_open = false;
+            }
+            Action::NewFromTemplate(i) => {
+                self.app.template_picker_open = false;
+                if !self.finish_edits() {
+                    return;
+                }
+                let Some(doc) = crate::state::OpenDoc::template_doc(i) else {
+                    return;
+                };
+                let name = crate::state::OpenDoc::TEMPLATES
+                    .get(i)
+                    .map(|(n, _)| n.to_string())
+                    .unwrap_or_default();
+                self.app.docs.push(doc);
+                self.app.active = self.app.docs.len() - 1;
+                self.app.screen = if self.app.is_board() {
+                    crate::state::Screen::Board
+                } else {
+                    crate::state::Screen::Editor
+                };
+                self.app.center_view();
+                self.app.status = format!("New from template: {name}");
+            }
             Action::AddTeam => self.app.status = "Team creation — coming soon".into(),
             Action::SelectDoc(i) => {
                 if !self.finish_edits() {
@@ -11051,6 +11078,30 @@ mod tests {
         app.delete_comment(&ra);
         assert_eq!(app.reply_count(&root2), 1);
         assert!(app.doc_ref().doc.comments.iter().any(|c| c.id == rb));
+    }
+
+    #[test]
+    fn templates_catalog_builds_independent_copies() {
+        for (i, (name, blurb)) in OpenDoc::TEMPLATES.iter().enumerate() {
+            assert!(!name.is_empty() && !blurb.is_empty());
+            let d = OpenDoc::template_doc(i)
+                .unwrap_or_else(|| panic!("template {i} ({name}) builds"));
+            if i == 3 {
+                assert!(d.board_doc.is_some(), "board template carries a board");
+                assert_eq!(d.doc.kind, x_native::DocumentKind::Board);
+            } else {
+                assert!(d.board_doc.is_none());
+                assert!(!d.doc.pages.is_empty(), "design template has a page");
+                assert!(
+                    !d.doc.pages[0].children.is_empty(),
+                    "template {i} has content"
+                );
+                // each open is an independent copy: two builds share nothing
+                let d2 = OpenDoc::template_doc(i).unwrap();
+                assert_ne!(d.doc.pages[0].id, d2.doc.pages[0].id);
+            }
+        }
+        assert!(OpenDoc::template_doc(OpenDoc::TEMPLATES.len()).is_none());
     }
 
     /// Dashboard paints without panicking (fonts may be absent in CI).

@@ -460,7 +460,12 @@ pub enum Action {
     /// UI palette (roles live in crates/x-ui/src/design_system.rs)
     SetTheme(x_native::ui::ThemeId),
     CycleTheme,
-    InviteTeam,
+    /// Dashboard: open the template gallery (also replaced the old dead
+    /// "Invite team" quick card).
+    OpenTemplates,
+    CloseTemplates,
+    /// Dashboard template gallery: create a new document from template `i`.
+    NewFromTemplate(usize),
     AddTeam,
     // editor chrome
     SelectDoc(usize),
@@ -1335,6 +1340,176 @@ impl OpenDoc {
         )
     }
 
+    // ---------------------------------------------------------- templates
+
+    /// Built-in templates for the dashboard gallery: (name, blurb).
+    pub const TEMPLATES: [(&str, &str); 4] = [
+        ("Mobile app flow", "Two linked screens with a working prototype"),
+        ("Landing page", "1440 desktop hero with nav, CTA and feature cards"),
+        ("Design system", "Color variables, swatches and a Button component"),
+        ("Starter board", "Freeform brainstorm canvas for quick ideas"),
+    ];
+
+    fn seed_brand_vars(doc: &mut Document) {
+        doc.variables
+            .colors
+            .insert("color/brand".into(), Color::from_rgb8(0x6B, 0x49, 0xF5));
+        doc.variables.numbers.insert("space/page".into(), 24.0);
+        doc.variables.numbers.insert("radius/card".into(), 12.0);
+    }
+
+    fn text(id: &str, x: f64, y: f64, w: f64, h: f64, s: &str) -> Node {
+        let mut t = Node::text(id, x, y, w, h, s);
+        t.bindings.insert("font".into(), APP_DEFAULT_FONT.into());
+        t
+    }
+
+    /// Build the built-in template `i` as a fresh document COPY (templates
+    /// are code, so every open is independent). `None` out of range.
+    pub fn template_doc(i: usize) -> Option<Self> {
+        let brand = Color::from_rgb8(0x6B, 0x49, 0xF5);
+        match i {
+            0 => {
+                // Mobile app flow: two linked screens + tab bars.
+                let mut page = Node::frame(&x_native::fresh_id("page"), 1440.0, 1024.0);
+                page.name = "Mobile flow".into();
+                let mut home = Node::frame("screen-home", 375.0, 812.0);
+                home.name = "Home".into();
+                home.transform.x = 80.0;
+                home.transform.y = 60.0;
+                home.fill = Paint::Solid(Color::from_rgb8(0xF8, 0xFA, 0xFC));
+                home.children.push(Self::text("m-title", 24.0, 48.0, 327.0, 40.0, "Today"));
+                let mut cta = Node::rect("m-cta", 24.0, 120.0, 327.0, 52.0, brand);
+                cta.name = "Start".into();
+                cta.corner_radii = Some([12.0, 12.0, 12.0, 12.0]);
+                cta.interactions.push(x_native::Interaction::click("screen-detail"));
+                home.children.push(cta);
+                let mut tabs = Node::rect("m-tabs", 0.0, 748.0, 375.0, 64.0, Color::from_rgb8(0x1B, 0x1D, 0x23));
+                tabs.name = "Tab bar".into();
+                home.children.push(tabs);
+                let mut detail = Node::frame("screen-detail", 375.0, 812.0);
+                detail.name = "Detail".into();
+                detail.transform.x = 520.0;
+                detail.transform.y = 60.0;
+                detail.fill = Paint::Solid(Color::WHITE);
+                detail.children.push(Self::text("d-title", 24.0, 48.0, 327.0, 40.0, "Detail"));
+                page.children.extend([home, detail]);
+                let editor = Editor::new(page.clone());
+                let mut doc = Document {
+                    pages: vec![page],
+                    default_font: Some(APP_DEFAULT_FONT.into()),
+                    ..Document::default()
+                };
+                Self::seed_brand_vars(&mut doc);
+                let mut out = Self::from_document("Mobile app flow".into(), None, doc);
+                out.editors = vec![editor];
+                Some(out)
+            }
+            1 => {
+                // Landing page: nav, hero, CTA, feature cards.
+                let mut page = Node::frame(&x_native::fresh_id("page"), 1440.0, 1100.0);
+                page.name = "Landing".into();
+                let mut hero = Node::frame("lp-hero", 1440.0, 900.0);
+                hero.name = "Hero".into();
+                hero.fill = Paint::Solid(Color::from_rgb8(0x0B, 0x0B, 0x0F));
+                let mut nav = Node::rect("lp-nav", 0.0, 0.0, 1440.0, 64.0, Color::from_rgb8(0x1B, 0x1D, 0x23));
+                nav.name = "Nav".into();
+                hero.children.push(nav);
+                hero.children.push(Self::text("lp-brand", 64.0, 18.0, 200.0, 28.0, "X-Native"));
+                hero.children.push(Self::text("lp-h1", 64.0, 260.0, 900.0, 120.0, "Design anything. Ship it native."));
+                hero.children.push(Self::text("lp-sub", 64.0, 400.0, 640.0, 60.0, "A local-first design tool with a plain-JSON file format."));
+                let mut cta = Node::rect("lp-cta", 64.0, 500.0, 220.0, 56.0, brand);
+                cta.name = "Get started".into();
+                cta.corner_radii = Some([12.0, 12.0, 12.0, 12.0]);
+                hero.children.push(cta);
+                for (k, (name, x)) in ["Fast", "Local", "Free"].iter().zip([64.0, 384.0, 704.0]) {
+                    let mut c = Node::rect(&format!("lp-card-{k}"), x, 640.0, 288.0, 160.0, Color::from_rgb8(0x1B, 0x1D, 0x23));
+                    c.name = format!("Feature {name}");
+                    c.corner_radii = Some([12.0, 12.0, 12.0, 12.0]);
+                    hero.children.push(c);
+                }
+                page.children.push(hero);
+                let editor = Editor::new(page.clone());
+                let mut doc = Document {
+                    pages: vec![page],
+                    default_font: Some(APP_DEFAULT_FONT.into()),
+                    ..Document::default()
+                };
+                Self::seed_brand_vars(&mut doc);
+                let mut out = Self::from_document("Landing page".into(), None, doc);
+                out.editors = vec![editor];
+                Some(out)
+            }
+            2 => {
+                // Design system: swatches + type labels + a Button master.
+                let mut page = Node::frame(&x_native::fresh_id("page"), 1440.0, 1024.0);
+                page.name = "Foundations".into();
+                for (k, (name, hex)) in [
+                    ("brand", 0x6B49F5u32),
+                    ("ink", 0x111318),
+                    ("surface", 0xFFFFFF),
+                    ("success", 0x4CD966),
+                    ("danger", 0xEF9A94),
+                ]
+                .iter()
+                .enumerate()
+                {
+                    let x = 64.0 + k as f64 * 200.0;
+                    let mut sw = Node::rect(
+                        &format!("sw-{name}"),
+                        x,
+                        80.0,
+                        160.0,
+                        160.0,
+                        Color::from_rgb8(
+                            (hex >> 16) as u8,
+                            (hex >> 8) as u8,
+                            hex as u8,
+                        ),
+                    );
+                    sw.name = format!("color/{name}");
+                    sw.corner_radii = Some([12.0, 12.0, 12.0, 12.0]);
+                    page.children.push(sw);
+                    page.children
+                        .push(Self::text(&format!("swl-{name}"), x, 252.0, 160.0, 24.0, &format!("color/{name}")));
+                }
+                page.children.push(Self::text("ts-display", 64.0, 360.0, 600.0, 56.0, "Display"));
+                page.children.push(Self::text("ts-h", 64.0, 440.0, 400.0, 40.0, "Heading"));
+                page.children.push(Self::text("ts-body", 64.0, 520.0, 400.0, 24.0, "Body copy for real interfaces."));
+                let mut btn = Node::component("btn-master", "Button", 160.0, 48.0);
+                btn.name = "Button".into();
+                btn.fill = Paint::Solid(brand);
+                btn.corner_radii = Some([10.0, 10.0, 10.0, 10.0]);
+                btn.props.push(x_native::ComponentProp::Text {
+                    name: "Label".into(),
+                    target: "btn-label".into(),
+                    default: "Press me".into(),
+                });
+                btn.children.push(Self::text("btn-label", 16.0, 12.0, 128.0, 24.0, "Press me"));
+                page.children.push(btn);
+                let editor = Editor::new(page.clone());
+                let mut doc = Document {
+                    pages: vec![page],
+                    default_font: Some(APP_DEFAULT_FONT.into()),
+                    ..Document::default()
+                };
+                Self::seed_brand_vars(&mut doc);
+                let mut out = Self::from_document("Design system".into(), None, doc);
+                out.editors = vec![editor];
+                Some(out)
+            }
+            3 => {
+                // Starter board: freeform brainstorm canvas.
+                use x_board::{BoardDocument, BoardKind};
+                let mut od = Self::new_blank("Starter board".into());
+                od.doc.kind = x_native::DocumentKind::Board;
+                od.board_doc = Some(BoardDocument::new("Starter board", BoardKind::Brainstorm));
+                Some(od)
+            }
+            _ => None,
+        }
+    }
+
     pub fn demo_blank(name: String) -> Self {
         let mut page = Node::frame("page-1", 1440.0, 1024.0);
         page.name = "Page 1".into();
@@ -1599,6 +1774,8 @@ pub struct App {
     pub var_name_rects: Vec<(Rect, String)>,
     /// Active library-update review (modal dialog state).
     pub lib_review: Option<LibReview>,
+    /// Dashboard template gallery (modal).
+    pub template_picker_open: bool,
     /// last JSX produced by Copy-as-code (for tests; the real target is
     /// the system clipboard)
     pub last_copied_code: Option<String>,
@@ -1757,6 +1934,7 @@ impl App {
             var_value_rects: Vec::new(),
             var_name_rects: Vec::new(),
             lib_review: None,
+            template_picker_open: false,
             last_copied_code: None,
             comment_draft: None,
             open_comment: None,

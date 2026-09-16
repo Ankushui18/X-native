@@ -41,7 +41,61 @@ pub fn paint(app: &mut App, s: &mut Scene) {
         caret(s, app, search_rect(app));
     }
 
+    // template gallery modal (topmost; its scrim swallows clicks — the
+    // input pass resolves the LAST painted rect first)
+    if app.template_picker_open {
+        paint_template_picker(app, s, &mut hit);
+    }
+
     app.hit = hit;
+}
+
+/// Template gallery modal: the built-in catalog, each row opens a fresh
+/// document COPY (templates are code, so opens never share state).
+fn paint_template_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    let card_w = 520.0;
+    let row_h = 64.0;
+    let n = App::TEMPLATES.len() as f64;
+    let card_h = 76.0 + n * row_h + 20.0;
+    let cx = (app.win_w - card_w) / 2.0;
+    let cy = ((app.win_h - card_h) / 2.0).max(60.0);
+    hit.push((
+        Rect::new(0.0, 0.0, app.win_w, app.win_h),
+        Action::CloseTemplates,
+    ));
+    fill_rect(s, Rect::new(0.0, 0.0, app.win_w, app.win_h), C_SCRIM);
+    let card = Rect::new(cx, cy, cx + card_w, cy + card_h);
+    fill_rrect(s, card, 12.0, C_PANEL);
+    stroke_rrect(s, card, 12.0, C_LINE_2, 1.0);
+    app.fonts.text(s, cx + 24.0, cy + 22.0, "Start from a template", T14, C_TEXT, Wt::Semi);
+    app.fonts.text(
+        s,
+        cx + 24.0,
+        cy + 46.0,
+        "Opens as a new copy — your files stay independent",
+        T10,
+        C_MUTED,
+        Wt::Reg,
+    );
+    for (i, (name, blurb)) in App::TEMPLATES.iter().enumerate() {
+        let ry = cy + 76.0 + i as f64 * row_h;
+        let row = Rect::new(cx + 12.0, ry, cx + card_w - 12.0, ry + row_h - 8.0);
+        if hover(app, row) {
+            fill_rrect(s, row, 8.0, C_FIELD_2);
+        }
+        // template mark: violet chip + glyph
+        let chip = Rect::new(row.x0 + 12.0, ry + 10.0, row.x0 + 44.0, ry + 42.0);
+        fill_rrect(s, chip, 8.0, C_ACCENT_MUTED);
+        draw_icon(s, "layout-template", chip.x0 + 8.0, chip.y0 + 8.0, 16.0, C_ON_ACCENT);
+        app.fonts.text(s, row.x0 + 58.0, ry + 10.0, name, T13, C_TEXT, Wt::Med);
+        app.fonts.text(s, row.x0 + 58.0, ry + 30.0, blurb, T11, C_DIM, Wt::Reg);
+        let useb = Rect::new(row.x1 - 76.0, ry + 12.0, row.x1 - 12.0, ry + 40.0);
+        fill_rrect(s, useb, 6.0, if hover(app, useb) { C_LINE_2 } else { C_FIELD });
+        stroke_rrect(s, useb, 6.0, C_LINE, 1.0);
+        app.fonts.text_center(s, useb, "Use", T11, C_TEXT, Wt::Med, true);
+        hit.push((useb, Action::NewFromTemplate(i)));
+        hit.push((row, Action::NewFromTemplate(i)));
+    }
 }
 
 fn search_rect(app: &App) -> Rect {
@@ -438,51 +492,39 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             "Infinite canvas for brainstorming",
             false,
         ),
-        ("users", "Invite team", "Not available in this build", false),
+        (
+            "layout-template",
+            "Start from a template",
+            "Mobile, landing, system, board",
+            false,
+        ),
     ];
     let acts = [
         Action::NewFile,
         Action::ImportFile,
         Action::NewBoard,
-        Action::InviteTeam,
+        Action::OpenTemplates,
     ];
     for (i, (icon, title, sub, white)) in cards.into_iter().enumerate() {
         let cx = x0 + (cw + gap) * i as f64;
         let r = Rect::new(cx, dy + 147.5, cx + cw, dy + 235.5);
-        // i == 3 (Invite team) stays a roadmap stub outside demo mode
-        let enabled = app.demo_mode || i < 3;
-        let hov = enabled && hover(app, r);
+        let hov = hover(app, r);
         // .card:hover{transform:translateY(-2px);...} — lift the whole card
         let dy = if hov { dy - 2.0 } else { dy };
         let r = Rect::new(cx, dy + 147.5, cx + cw, dy + 235.5);
         fill_rrect(s, r, R_CARD, if hov { C_PANEL_2 } else { C_PANEL });
-        stroke_rrect(s, r, R_CARD, if hov { C_LINE_2 } else { C_LINE }, 1.0);
-        // icon chip: measured 30.7×18 at (+17, +17) — the reference flex
-        // shrinks the w-8 h-8 chip inside the fixed 88px card
+        // signature: violet hover ring (was the reference's neutral border)
+        stroke_rrect(s, r, R_CARD, if hov { C_SEL } else { C_LINE }, 1.0);
+        // signature: every icon chip wears the brand violet wash (was
+        // white/gray chips copied from the reference mock)
+        let _ = white;
         let ib = Rect::new(cx + 17.0, dy + 164.5, cx + 47.7, dy + 182.5);
-        if white {
-            fill_rrect(s, ib, 8.0, C_TEXT);
-            draw_icon(s, icon, ib.x0 + 7.3, dy + 165.5, 16.0, C_BLACK);
-        } else {
-            fill_rrect(s, ib, 8.0, C_FIELD);
-            stroke_rrect(s, ib, 8.0, C_LINE, 1.0);
-            draw_icon(s, icon, ib.x0 + 7.3, dy + 165.5, 16.0, C_DIM);
-        }
-        // Make unavailable collaboration explicit on a local first launch;
-        // a disabled action should not look like a broken button.
-        let (shown_title, shown_sub) = if i == 3 && !app.demo_mode {
-            ("Team features", "Coming later")
-        } else {
-            (title, sub)
-        };
+        fill_rrect(s, ib, 8.0, C_ACCENT_MUTED);
+        draw_icon(s, icon, ib.x0 + 7.3, dy + 165.5, 16.0, C_ON_ACCENT);
         // title box top 182.5 (+35), sub top 202 (+54.5)
-        app.fonts
-            .text(s, cx + 17.0, dy + 182.5, shown_title, T13, C_TEXT, Wt::Med);
-        app.fonts
-            .text(s, cx + 17.0, dy + 202.0, shown_sub, T11, C_DIM, Wt::Reg);
-        if enabled {
-            hit.push((r, acts[i].clone()));
-        }
+        app.fonts.text(s, cx + 17.0, dy + 182.5, title, T13, C_TEXT, Wt::Med);
+        app.fonts.text(s, cx + 17.0, dy + 202.0, sub, T11, C_DIM, Wt::Reg);
+        hit.push((r, acts[i].clone()));
     }
 
     // visible sections depend on the sidebar view

@@ -192,9 +192,16 @@ browser Library: the document model is a scene graph, not a Figma clone."*
 - **Trash restore** — blocked on a product decision first: Trash is currently a static empty
   state with NO deletion pipeline. Deleting a user file needs a policy (move to OS trash vs
   in-app list) before restore can exist.
-- **Templates gallery**: bundled sample documents opened as copies (replaces the retired
-  "Browse templates" card honestly).
-- Re-skin signature elements (cards/sidebar/wordmark) so screenshots read X-Native, not Figma.
+- ~~**Templates gallery**~~ **DONE 2026-09-17** — the third quick card is now "Start from a
+  template" (replacing the dead "Invite team" stub, whose action is fully removed). The modal
+  gallery lists 4 built-ins (Mobile app flow / Landing page / Design system / Starter board)
+  built as code and opened as independent copies (`OpenDoc::template_doc`; board template
+  carries its BoardDocument and opens the Board screen). Connectivity stays clean:
+  `OpenTemplates`/`CloseTemplates`/`NewFromTemplate(i)` all producers+handlers, tested.
+- **Re-skin signature elements** — IN PROGRESS 2026-09-17: quick-action cards now wear the
+  brand (violet icon chips `C_ACCENT_MUTED`/`C_ON_ACCENT` on every card + violet hover ring
+  `C_SEL`, replacing the reference's white/gray chips and neutral borders). Sidebar/wordmark
+  treatment still open.
 
 **Verification note:** all of today's edits are static-checked (pattern-matched against
 neighboring code, brace-balanced, diff-verified); the sandbox still has no Rust toolchain, so
