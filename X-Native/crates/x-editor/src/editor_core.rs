@@ -2937,12 +2937,18 @@ mod reliability_history_tests {
     fn reorder_node_moves_within_a_parent_with_undo_redo() {
         let mut ed = Editor::new(Node::frame("p", 100.0, 100.0));
         let root_id = ed.root.id.clone();
-        ed
-            .insert_node(&root_id, Node::rect("a", 0.0, 0.0, 10.0, 10.0, Color::WHITE));
-        ed
-            .insert_node(&root_id, Node::rect("b", 20.0, 0.0, 10.0, 10.0, Color::WHITE));
-        ed
-            .insert_node(&root_id, Node::rect("c", 30.0, 0.0, 10.0, 10.0, Color::WHITE));
+        ed.insert_node(
+            &root_id,
+            Node::rect("a", 0.0, 0.0, 10.0, 10.0, Color::WHITE),
+        );
+        ed.insert_node(
+            &root_id,
+            Node::rect("b", 20.0, 0.0, 10.0, 10.0, Color::WHITE),
+        );
+        ed.insert_node(
+            &root_id,
+            Node::rect("c", 30.0, 0.0, 10.0, 10.0, Color::WHITE),
+        );
         // "after b" (b's slot + 1) -> [b, a, c]
         assert!(ed.reorder_node("a", &root_id, 0, &root_id, 2));
         assert_eq!(ids_of(&ed.root), vec!["b", "a", "c"]);
@@ -2963,8 +2969,10 @@ mod reliability_history_tests {
         let mut ed = Editor::new(Node::frame("p", 100.0, 100.0));
         let root_id = ed.root.id.clone();
         ed.insert_node(&root_id, Node::frame("fr", 100.0, 100.0));
-        ed
-            .insert_node("fr", Node::rect("in", 0.0, 0.0, 10.0, 10.0, Color::WHITE));
+        ed.insert_node(
+            "fr",
+            Node::rect("in", 0.0, 0.0, 10.0, 10.0, Color::WHITE),
+        );
         ed.insert_node(&root_id, Node::frame("fr2", 100.0, 100.0));
         // in (first child of fr) -> first child of fr2
         assert!(ed.reorder_node("in", "fr", 0, "fr2", 0));
@@ -2980,8 +2988,10 @@ mod reliability_history_tests {
         let mut ed = Editor::new(Node::frame("p", 100.0, 100.0));
         let root_id = ed.root.id.clone();
         ed.insert_node(&root_id, Node::frame("fr", 100.0, 100.0));
-        ed
-            .insert_node("fr", Node::rect("in", 0.0, 0.0, 10.0, 10.0, Color::WHITE));
+        ed.insert_node(
+            "fr",
+            Node::rect("in", 0.0, 0.0, 10.0, 10.0, Color::WHITE),
+        );
         ed.insert_node(&root_id, Node::frame("fr2", 100.0, 100.0));
         // cycle: fr into its own descendant
         assert!(!ed.reorder_node("fr", &root_id, 0, "in", 0));
