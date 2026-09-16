@@ -47,6 +47,7 @@ __pycache__/
 .pytest_cache/
 
 # Rust specific
-Cargo.lock
-**/Cargo.lock
+# NOTE: X-Native/Cargo.lock is intentionally TRACKED (this workspace ships an
+# application binary), so it must not be listed here — an ignore rule for it
+# would contradict the lockfile's committed state and confuse new lockfiles in.
 ```

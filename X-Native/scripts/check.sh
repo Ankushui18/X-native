@@ -48,12 +48,20 @@ DEAD_CODE_CEILING=${DEAD_CODE_CEILING:-82}
 # unordered floats and must never be force-unwrapped in production Rust. Keep
 # the recurring gradient panic from coming back.
 step "NaN ordering guard"
+# The scan below shells out to ripgrep. Without this preflight a host without
+# rg would silently pass (empty output reads as "no matches"), which is exactly
+# the failure mode the Rust-toolchain preflight above exists to prevent.
+if ! command -v rg >/dev/null 2>&1; then
+    bad "ripgrep (rg) is not installed; the NaN-ordering scan cannot run"
+    printf '      expected command: rg (install via package manager or cargo install ripgrep)\n'
+else
 NAN_MATCHES=$(rg -n --glob '*.rs' 'partial_cmp\([^\n]*\)\.unwrap\(' crates apps || true)
 if [[ -z "$NAN_MATCHES" ]]; then
     ok "no partial_cmp().unwrap() sites"
 else
     bad "unsafe partial_cmp().unwrap() found"
     printf '%s\n' "$NAN_MATCHES" | sed 's/^/      /'
+fi
 fi
 
 if [[ $FIX == 1 ]]; then
