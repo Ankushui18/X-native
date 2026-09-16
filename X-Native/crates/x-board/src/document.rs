@@ -21,6 +21,10 @@ pub struct BoardDocument {
     pub metadata: BoardMetadata,
     pub pages: Vec<BoardPage>,
     pub kind: BoardKind,
+    /// Active board page. Older files did not persist this value and default
+    /// to the first page for backwards compatibility.
+    #[serde(default)]
+    pub active_page: usize,
     /// Board-specific settings (infinite canvas, grid visibility, etc.)
     pub settings: BoardSettings,
     /// Shared stickies library (optional)
@@ -43,6 +47,11 @@ pub struct BoardPage {
     pub nodes: Vec<BoardNode>,
     /// Connectors between nodes (board-specific)
     pub connectors: Vec<Connector>,
+    /// The active selection is page-local, just like the board nodes. The
+    /// default keeps older serialized boards compatible while making the
+    /// selection UI an actual part of the model instead of a no-op.
+    #[serde(default)]
+    pub selection: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,8 +104,10 @@ impl BoardDocument {
                 name: "Page 1".to_string(),
                 nodes: Vec::new(),
                 connectors: Vec::new(),
+                selection: Vec::new(),
             }],
             kind,
+            active_page: 0,
             settings: BoardSettings::default(),
             sticky_styles: Self::default_sticky_styles(),
         }
@@ -142,16 +153,37 @@ impl BoardDocument {
             name: name.to_string(),
             nodes: Vec::new(),
             connectors: Vec::new(),
+            selection: Vec::new(),
         });
         self.pages.last_mut().expect("page was just pushed")
     }
 
     pub fn current_page(&self) -> &BoardPage {
-        &self.pages[0] // Simplified - would track active page
+        let index = self.active_page.min(self.pages.len().saturating_sub(1));
+        &self.pages[index]
     }
 
     pub fn current_page_mut(&mut self) -> &mut BoardPage {
-        &mut self.pages[0]
+        let index = self.active_page.min(self.pages.len().saturating_sub(1));
+        self.active_page = index;
+        &mut self.pages[index]
+    }
+
+    /// Select a board page without allowing an out-of-range persisted index to
+    /// panic the renderer or input handlers. Returns whether the page changed.
+    pub fn set_active_page(&mut self, index: usize) -> bool {
+        if self.pages.is_empty() {
+            self.active_page = 0;
+            return false;
+        }
+        let next = index.min(self.pages.len() - 1);
+        let changed = self.active_page != next;
+        self.active_page = next;
+        changed
+    }
+
+    pub fn active_page_index(&self) -> usize {
+        self.active_page.min(self.pages.len().saturating_sub(1))
     }
 
     /// Add a node to the current page
@@ -164,12 +196,27 @@ impl BoardDocument {
         self.current_page_mut().connectors.push(connector);
     }
 
-    /// Set selection to specific nodes
+    /// Set selection to specific nodes.
+    ///
+    /// This used to discard the ids, which made the board appear to accept
+    /// clicks while the selection outline, move state, and marquee result
+    /// could never be reflected back in the UI. Keep only ids that still
+    /// exist on the current page and preserve their order for deterministic
+    /// top-most selection behaviour.
     pub fn set_selection(&mut self, node_ids: Vec<String>) {
-        // Store selection in page or document level
-        // For now, we'll track it via selected node IDs
-        // In a full implementation, this would be stored in page state
-        let _ = node_ids; // Placeholder for selection tracking
+        let page = self.current_page_mut();
+        let mut selection = Vec::with_capacity(node_ids.len());
+        for id in node_ids {
+            if page.nodes.iter().any(|node| node.id() == &id) && !selection.contains(&id) {
+                selection.push(id);
+            }
+        }
+        page.selection = selection;
+    }
+
+    /// Read the current page selection without exposing mutable board state.
+    pub fn selection(&self) -> &[String] {
+        &self.current_page().selection
     }
 
     /// Marquee select nodes within a rectangle

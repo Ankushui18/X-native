@@ -27,7 +27,8 @@ pub use ir::{
     RenderTree, VelloSink,
 };
 pub use raster::{
-    encode_jpg, encode_png, export_raster, export_raster_cancellable, RasterFormat, RasterSink,
+    encode_jpg, encode_png, encode_rgba_png, export_raster, export_raster_cancellable,
+    RasterFormat, RasterSink,
 };
 pub use scene::*;
 pub use sinks::{export_pdf, export_pdf_full, export_pdf_with_assets, thumbnail_scene, SceneCache};

@@ -1,7 +1,8 @@
-//! X-Native — FINAL v45 UI (`ui/dashboard-v2.html` + `ui/v45-final-editor-28px.html`).
+//! X-Native — native Graphite & Signal workspace. The reference HTML audit
+//! supplies density and interaction benchmarks; the shipped shell uses the
+//! X-Native Compose → Flow → Ship workflow rather than cloning Figma.
 
 mod board_ui;
-mod chrome;
 mod clipboard;
 mod command;
 mod context_menu;

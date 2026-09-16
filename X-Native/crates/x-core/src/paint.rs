@@ -167,6 +167,84 @@ impl Paint {
         }
     }
 
+    /// Convert a gradient while preserving its authored stops. Coordinates
+    /// are kept in the node's existing local space; when a source geometry
+    /// does not provide a meaningful span, a 100px default keeps the result
+    /// visible instead of collapsing it to a zero-length gradient.
+    pub fn set_gradient_type(&mut self, gradient_type: &str) -> bool {
+        let stops = match self {
+            Paint::LinearGradient { stops, .. }
+            | Paint::RadialGradient { stops, .. }
+            | Paint::AngularGradient { stops, .. }
+            | Paint::DiamondGradient { stops, .. } => stops.clone(),
+            _ => return false,
+        };
+        let (center, span, space) = match self {
+            Paint::LinearGradient {
+                start, end, space, ..
+            } => (
+                ((start.0 + end.0) / 2.0, (start.1 + end.1) / 2.0),
+                ((end.0 - start.0) / 2.0, (end.1 - start.1) / 2.0),
+                *space,
+            ),
+            Paint::RadialGradient {
+                center,
+                radius,
+                space,
+                ..
+            } => (*center, (*radius, 0.0), *space),
+            Paint::AngularGradient {
+                center,
+                space,
+                ..
+            } => (*center, (100.0, 0.0), *space),
+            Paint::DiamondGradient {
+                center,
+                width,
+                height,
+                space,
+                ..
+            } => (*center, (*width, *height), *space),
+            _ => return false,
+        };
+        let span = if span.0.abs() + span.1.abs() < 1e-9 {
+            (100.0, 0.0)
+        } else {
+            span
+        };
+        let kind = gradient_type.trim().to_ascii_lowercase();
+        *self = match kind.as_str() {
+            "linear" => Paint::LinearGradient {
+                start: (center.0 - span.0, center.1 - span.1),
+                end: (center.0 + span.0, center.1 + span.1),
+                stops,
+                space,
+            },
+            "radial" => Paint::RadialGradient {
+                center,
+                radius: span.0.hypot(span.1).max(1.0),
+                stops,
+                space,
+            },
+            "angular" | "conic" => Paint::AngularGradient {
+                center,
+                start_angle: 0.0,
+                end_angle: 360.0,
+                stops,
+                space,
+            },
+            "diamond" => Paint::DiamondGradient {
+                center,
+                width: span.0.abs().max(1.0),
+                height: span.1.abs().max(1.0),
+                stops,
+                space,
+            },
+            _ => return false,
+        };
+        true
+    }
+
     /// Phase 6: Check if this paint is a gradient
     pub fn is_gradient(&self) -> bool {
         matches!(
@@ -645,6 +723,29 @@ mod tests {
         } else {
             panic!("expected LinearGradient");
         }
+    }
+
+    #[test]
+    fn gradient_type_conversion_preserves_stops() {
+        let mut paint = Paint::linear_gradient(
+            (10.0, 20.0),
+            (110.0, 20.0),
+            vec![
+                (0.0, Color::from_rgb8(255, 0, 0)),
+                (1.0, Color::from_rgb8(0, 0, 255)),
+            ],
+            GradSpace::Srgb,
+        );
+        assert!(paint.set_gradient_type("radial"));
+        assert_eq!(paint.gradient_type_name(), "Radial");
+        match paint {
+            Paint::RadialGradient { stops, center, .. } => {
+                assert_eq!(center, (60.0, 20.0));
+                assert_eq!(stops.len(), 2);
+            }
+            other => panic!("expected radial gradient, got {other:?}"),
+        }
+        assert!(!Paint::Solid(Color::WHITE).set_gradient_type("linear"));
     }
 
     #[test]

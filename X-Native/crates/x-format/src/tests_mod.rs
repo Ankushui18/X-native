@@ -786,12 +786,15 @@ mod tests {
         let root = import_svg(svg).unwrap();
         let p = find(&root, "p").unwrap();
         if let NodeKind::Vector { path } = &p.kind {
-            assert_eq!(path[0], PathCmd::MoveTo(10.0, 10.0));
-            assert_eq!(path[1], PathCmd::LineTo(30.0, 10.0)); // relative l resolved
-            assert_eq!(path[2], PathCmd::LineTo(30.0, 30.0));
-            assert_eq!(path[3], PathCmd::LineTo(40.0, 30.0)); // h
-            assert_eq!(path[4], PathCmd::LineTo(40.0, 40.0)); // v
-            assert!(matches!(path[5], PathCmd::CurveTo(..)));
+            // Path commands are normalized to the vector's local origin;
+            // document-space placement is carried by the node transform.
+            assert_eq!((p.transform.x, p.transform.y), (10.0, 10.0));
+            assert_eq!(path[0], PathCmd::MoveTo(0.0, 0.0));
+            assert_eq!(path[1], PathCmd::LineTo(20.0, 0.0)); // relative l resolved
+            assert_eq!(path[2], PathCmd::LineTo(20.0, 20.0));
+            assert_eq!(path[3], PathCmd::LineTo(30.0, 20.0)); // h
+            assert_eq!(path[4], PathCmd::LineTo(30.0, 30.0)); // v
+            assert_eq!(path[5], PathCmd::CurveTo(25.0, 35.0, 15.0, 35.0, 10.0, 30.0));
             assert_eq!(*path.last().unwrap(), PathCmd::Close);
         } else {
             panic!("not a vector")

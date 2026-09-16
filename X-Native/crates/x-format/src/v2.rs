@@ -21,6 +21,11 @@ pub struct Metadata {
 pub struct DocumentV2 {
     pub doc: Document,
     pub metadata: Metadata,
+    /// Optional app-level payload for document types owned by a higher-level
+    /// crate (currently the infinite-canvas board). It is kept as JSON text so
+    /// x-format stays independent of x-board while still preserving unknown
+    /// board files through normal .x save/load.
+    pub board_json: Option<String>,
     /// (family, style, source)
     pub fonts: Vec<(String, String, String)>,
     /// (id, kind, sha256, href)
@@ -71,6 +76,9 @@ pub fn save_x_v2(d: &DocumentV2) -> String {
         esc(&d.metadata.uuid),
         esc(&d.metadata.app_version)
     ));
+    if let Some(board_json) = &d.board_json {
+        out.push_str(&format!("\"board_json\":\"{}\",", esc(board_json)));
+    }
     out.push_str("\"fonts\":[");
     out.push_str(
         &d.fonts
@@ -199,6 +207,9 @@ fn load_v2(text: &str) -> Result<DocumentV2, String> {
             uuid: field(m, "uuid"),
             app_version: field(m, "app_version"),
         };
+    }
+    if let Some(board_json) = v.get("board_json").and_then(V::str) {
+        d.board_json = Some(board_json.to_owned());
     }
     if let Some(V::Obj(m)) = v.get("uuids") {
         for (key, value) in m {

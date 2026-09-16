@@ -197,12 +197,7 @@ pub fn export_pdf_full(
                                     }
                                 }
                                 let (r, g, b) = if explicit {
-                                    let c = gl.color;
-                                    (
-                                        c.components[0] as f64,
-                                        c.components[1] as f64,
-                                        c.components[2] as f64,
-                                    )
+                                    pdf_rgb(gl.color)
                                 } else {
                                     brush_rgb(brush)
                                 };
@@ -285,13 +280,26 @@ pub fn export_pdf_full(
                 h,
                 fit,
                 placement,
+                adjustments,
+                rotation,
                 ..
             } => {
-                if let Some(img) = assets.and_then(|a| a.get(asset)) {
-                    let idx = match images.iter().position(|(n, _)| n == asset) {
+                let adjusted = adjustments
+                    .as_ref()
+                    .and_then(|adj| assets.and_then(|a| a.get_adjusted(asset, *adj)));
+                if let Some(img) = adjusted
+                    .as_ref()
+                    .or_else(|| assets.and_then(|a| a.get(asset)))
+                {
+                    let image_key = if let Some(adj) = adjustments {
+                        format!("{asset}#adjusted:{adj:?}")
+                    } else {
+                        asset.clone()
+                    };
+                    let idx = match images.iter().position(|(n, _)| n == &image_key) {
                         Some(i) => i,
                         None => {
-                            images.push((asset.clone(), img.clone()));
+                            images.push((image_key, img.clone()));
                             images.len() - 1
                         }
                     };
@@ -302,7 +310,11 @@ pub fn export_pdf_full(
                     // scaling with a y-flip (image data is top-down).
                     let (iw, ih) = (img.image.width as f64, img.image.height as f64);
                     let resolved = x_core::resolve_image_placement(*fit, placement, *w, *h, iw, ih);
-                    let t = transform.as_coeffs(); // node world (page is already y-flipped)
+                    let image_transform = *transform
+                        * Affine::translate((*w / 2.0, *h / 2.0))
+                        * Affine::rotate(rotation.to_radians())
+                        * Affine::translate((-*w / 2.0, -*h / 2.0));
+                    let t = image_transform.as_coeffs(); // node world (page is already y-flipped)
                     content.push_str("q\n");
                     content.push_str(&format!(
                         "{} {} {} {} {} {} cm\n",
@@ -331,23 +343,25 @@ pub fn export_pdf_full(
     build_pdf_with_images(&content, page_w, page_h, &images, &shadings, &patterns)
 }
 
+/// PDF DeviceRGB is an encoded sRGB boundary. Convert through the byte
+/// representation explicitly rather than relying on the color component
+/// storage type's interpretation.
+fn pdf_rgb(c: vello::peniko::Color) -> (f64, f64, f64) {
+    let rgba = c.to_rgba8();
+    (
+        f64::from(rgba.r) / 255.0,
+        f64::from(rgba.g) / 255.0,
+        f64::from(rgba.b) / 255.0,
+    )
+}
+
 fn brush_rgb(b: &Brush) -> (f64, f64, f64) {
     match b {
-        Brush::Solid(c) => (
-            c.components[0] as f64,
-            c.components[1] as f64,
-            c.components[2] as f64,
-        ),
+        Brush::Solid(c) => pdf_rgb(*c),
         Brush::Gradient(g) => g
             .stops
             .first()
-            .map(|s| {
-                (
-                    s.color.components[0] as f64,
-                    s.color.components[1] as f64,
-                    s.color.components[2] as f64,
-                )
-            })
+            .map(|s| pdf_rgb(s.color.to_alpha_color()))
             .unwrap_or((0.0, 0.0, 0.0)),
         _ => (0.0, 0.0, 0.0),
     }
@@ -407,12 +421,7 @@ fn shading_for(g: &vello::peniko::Gradient, transform: &Affine) -> Option<String
         return None;
     }
     let stop_color = |i: usize| -> (f64, f64, f64) {
-        let c = g.stops[i].color;
-        (
-            c.components[0] as f64,
-            c.components[1] as f64,
-            c.components[2] as f64,
-        )
+        pdf_rgb(g.stops[i].color.to_alpha_color())
     };
     // color function over the whole 0..1 domain
     let func = if g.stops.len() == 1 {
@@ -637,8 +646,18 @@ fn command_bounds(cmd: &RenderCommand) -> Option<Rect> {
             ..
         } => Some(transform.transform_rect_bbox(Rect::new(0.0, 0.0, *max_width, size * 1.4))),
         RenderCommand::Image {
-            transform, w, h, ..
-        } => Some(transform.transform_rect_bbox(Rect::new(0.0, 0.0, *w, *h))),
+            transform,
+            w,
+            h,
+            rotation,
+            ..
+        } => {
+            let image_transform = *transform
+                * Affine::translate((*w / 2.0, *h / 2.0))
+                * Affine::rotate(rotation.to_radians())
+                * Affine::translate((-*w / 2.0, -*h / 2.0));
+            Some(image_transform.transform_rect_bbox(Rect::new(0.0, 0.0, *w, *h)))
+        }
         _ => None,
     }
 }

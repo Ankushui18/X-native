@@ -448,9 +448,11 @@ pub fn load_document_with_progress(
     } else {
         Stage::Parsing
     });
+    let mut loaded_board: Option<String> = None;
     let (doc, envelope, title) = match extension {
         "x" => {
             let d = x_native::fileio::load_x_any(as_text()?)?;
+            loaded_board = d.board_json.clone();
             let title = if d.metadata.name.is_empty() || d.metadata.name == "Untitled" {
                 stem
             } else {
@@ -505,6 +507,20 @@ pub fn load_document_with_progress(
     progress(Stage::Building);
     let native = extension == "x";
     let mut open = OpenDoc::from_document(title, native.then(|| original.to_owned()), doc);
+    if let Some(raw) = loaded_board {
+        match serde_json::from_str::<x_board::BoardDocument>(&raw) {
+            Ok(board) => {
+                open.board_doc = Some(board);
+                open.doc.kind = x_native::DocumentKind::Board;
+            }
+            Err(error) => {
+                // A malformed optional board payload should not make an
+                // otherwise valid design file unloadable; keep the native
+                // document and surface a recoverable status later.
+                eprintln!("warning: could not restore board payload: {error}");
+            }
+        }
+    }
     open.envelope = envelope;
     open.disk_hash = disk_hash;
     open.source_path = (!native).then(|| original.to_owned());
@@ -522,6 +538,9 @@ pub fn load_document_with_progress(
 
 impl OpenDoc {
     fn serialized(&mut self) -> String {
+        // Editors own the live design roots; synchronize before either the
+        // normal document payload or the optional board payload is captured.
+        self.sync();
         if self.envelope.uuid.is_empty() {
             self.envelope.uuid = x_native::fresh_id("document");
         }
@@ -537,6 +556,10 @@ impl OpenDoc {
         self.envelope.uuids = live;
         let d = x_native::fileio::DocumentV2 {
             doc: self.doc.clone(),
+            board_json: self
+                .board_doc
+                .as_ref()
+                .and_then(|board| serde_json::to_string(board).ok()),
             metadata: x_native::fileio::Metadata {
                 name: self.name.clone(),
                 uuid: self.envelope.uuid.clone(),

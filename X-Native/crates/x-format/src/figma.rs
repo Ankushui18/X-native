@@ -69,13 +69,23 @@ fn path_d(path: &[x_core::PathCmd]) -> String {
         .collect::<Vec<_>>()
         .join(" ")
 }
+/// Serialize a native color at the Figma boundary.
+///
+/// `peniko::Color::components` are renderer-space components, not the
+/// normalized sRGB bytes that Figma's REST schema expects. In particular,
+/// mid-tone sRGB values may be stored in a linear working space. Reading the
+/// raw array made exported Figma colors visibly darker and also made alpha
+/// handling depend on peniko internals. `to_rgba8` is the explicit, stable
+/// sRGB conversion for this interchange boundary.
 fn figma_color_json(c: Color) -> String {
+    let rgba = c.to_rgba8();
+    let channel = |v: u8| v as f64 / 255.0;
     format!(
         "{{\"r\":{},\"g\":{},\"b\":{},\"a\":{}}}",
-        c.components[0] as f64,
-        c.components[1] as f64,
-        c.components[2] as f64,
-        c.components[3] as f64
+        channel(rgba.r),
+        channel(rgba.g),
+        channel(rgba.b),
+        channel(rgba.a)
     )
 }
 fn figma_paint_json(p: &Paint, w: f64, h: f64) -> String {
@@ -369,11 +379,15 @@ fn s<'a>(v: &'a V, key: &str) -> Option<&'a str> {
 }
 
 fn figma_color(v: &V) -> Color {
+    // Figma stores unpremultiplied, normalized sRGB channels. Clamp before
+    // converting so malformed JSON cannot wrap a negative/out-of-range value
+    // through `as u8`; round so .5 maps to the same byte on both boundaries.
+    let byte = |value: f64| ((value.clamp(0.0, 1.0) * 255.0).round()) as u8;
     Color::from_rgba8(
-        (n_or(v, "r", 0.0) * 255.0) as u8,
-        (n_or(v, "g", 0.0) * 255.0) as u8,
-        (n_or(v, "b", 0.0) * 255.0) as u8,
-        (n_or(v, "a", 1.0) * 255.0) as u8,
+        byte(n_or(v, "r", 0.0)),
+        byte(n_or(v, "g", 0.0)),
+        byte(n_or(v, "b", 0.0)),
+        byte(n_or(v, "a", 1.0)),
     )
 }
 fn n_or(v: &V, key: &str, d: f64) -> f64 {
@@ -408,9 +422,10 @@ fn figma_fill_paint(f: &V, w: f64, h: f64) -> Option<Paint> {
                 .arr()?
                 .iter()
                 .filter_map(|st| {
+                    let color = st.get("color").map(figma_color)?;
                     Some((
                         n_or(st, "position", 0.0) as f32,
-                        st.get("color").map(figma_color)?,
+                        color.multiply_alpha(opacity.clamp(0.0, 1.0)),
                     ))
                 })
                 .collect();
@@ -1014,6 +1029,43 @@ mod tests {
     fn non_figma_json_is_an_error() {
         assert!(import_figma_json("{}").is_err());
         assert!(import_figma_json("not json").is_err());
+    }
+
+    #[test]
+    fn figma_color_boundary_uses_normalized_srgb_channels() {
+        // `components` is renderer-space data; Figma expects unpremultiplied
+        // sRGB values. This catches the classic mid-tone regression where a
+        // native 128 gray was exported as its linear-light value (~0.216).
+        let value = crate::json::parse(&figma_color_json(Color::from_rgba8(
+            128, 64, 200, 127,
+        )))
+        .expect("color object is valid JSON");
+        assert!((n_or(&value, "r", 0.0) - 128.0 / 255.0).abs() < 1e-9);
+        assert!((n_or(&value, "g", 0.0) - 64.0 / 255.0).abs() < 1e-9);
+        assert!((n_or(&value, "b", 0.0) - 200.0 / 255.0).abs() < 1e-9);
+        assert!((n_or(&value, "a", 0.0) - 127.0 / 255.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn figma_fractional_channels_round_trip_without_truncation() {
+        let json = r##"{
+          "document": { "children": [{ "type": "CANVAS", "id": "p", "children": [
+            { "type": "RECTANGLE", "id": "r",
+              "absoluteBoundingBox": {"x": 0, "y": 0, "width": 10, "height": 10},
+              "fills": [{"type":"SOLID","color":{"r":0.5,"g":0.25,"b":0.75,"a":0.5}}] }
+          ] }] }
+        }"##;
+        let doc = import_figma_json(json).expect("figma import");
+        let color = match doc.pages[0].children[0].fill {
+            Paint::Solid(c) => c,
+            other => panic!("expected solid color, got {other:?}"),
+        };
+        // Round-to-nearest is intentional: it keeps the two interchange
+        // boundaries within one byte instead of always biasing downward.
+        assert_eq!(color.to_rgba8().r, 128);
+        assert_eq!(color.to_rgba8().g, 64);
+        assert_eq!(color.to_rgba8().b, 191);
+        assert_eq!(color.to_rgba8().a, 128);
     }
 
     #[test]

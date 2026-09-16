@@ -72,6 +72,10 @@ pub enum RenderCommand {
         h: f64,
         fit: ImageFit,
         placement: ImagePlacement,
+        adjustments: Option<x_core::ImageAdjustments>,
+        /// Independent image-fill rotation in degrees; node rotation remains
+        /// on `transform` and is applied to both the box and its contents.
+        rotation: f64,
     },
     /// clip layer from an arbitrary path (masks)
     PushClip {
@@ -375,6 +379,8 @@ fn offset_command(command: &RenderCommand, dx: f64, dy: f64) -> RenderCommand {
             h,
             fit,
             placement,
+            adjustments,
+            rotation,
         } => RenderCommand::Image {
             key: format!("{key}/bg"),
             transform: shift * *transform,
@@ -383,6 +389,8 @@ fn offset_command(command: &RenderCommand, dx: f64, dy: f64) -> RenderCommand {
             h: *h,
             fit: *fit,
             placement: *placement,
+            adjustments: *adjustments,
+            rotation: *rotation,
         },
         RenderCommand::PushClip {
             key,
@@ -534,6 +542,8 @@ fn emit_visual_layers(
                     h: bb.height().max(1.0),
                     fit: *fit,
                     placement: ImagePlacement::default(),
+                    adjustments: None,
+                    rotation: 0.0,
                 });
                 tree.commands.push(RenderCommand::PopLayer);
                 if group < 1.0 {
@@ -733,8 +743,13 @@ fn fingerprint(c: &RenderCommand) -> String {
             asset,
             fit,
             placement,
+            adjustments,
+            rotation,
             ..
-        } => format!("i{:?}{asset}{fit:?}{placement:?}", transform.as_coeffs()),
+        } => format!(
+            "i{:?}{asset}{fit:?}{placement:?}{adjustments:?}{rotation}",
+            transform.as_coeffs()
+        ),
         RenderCommand::PushClip {
             transform, path, ..
         } => format!("c{:?}{}", transform.as_coeffs(), path.elements().len()),
@@ -1305,6 +1320,8 @@ fn lower(
                     h: node.h,
                     fit: *fit,
                     placement: *placement,
+                    adjustments: node.image_adjustments,
+                    rotation: node.image_rotation,
                 });
                 if image_blur > 0.01 {
                     tree.commands.push(RenderCommand::PopLayer);
@@ -1637,12 +1654,20 @@ impl<'a> VelloSink<'a> {
                     h,
                     fit,
                     placement,
+                    adjustments,
+                    rotation,
                     ..
                 } => {
-                    if let Some(img) = self.assets.and_then(|a| a.get(asset)) {
+                    let adjusted = adjustments
+                        .as_ref()
+                        .and_then(|adj| self.assets.and_then(|a| a.get_adjusted(asset, *adj)));
+                    let image = adjusted
+                        .as_ref()
+                        .or_else(|| self.assets.and_then(|a| a.get(asset)));
+                    if let Some(img) = image {
                         // CANONICAL image transform model: fit/focal/zoom/
-                        // flip/tiling resolved ONCE in x-core; this sink
-                        // only composes the world transform and clips.
+                        // flip/tiling resolved ONCE in x-core; image-fill
+                        // rotation is applied inside the unrotated clip box.
                         let resolved = x_core::resolve_image_placement(
                             *fit,
                             placement,
@@ -1653,8 +1678,12 @@ impl<'a> VelloSink<'a> {
                         );
                         let box_rect = Rect::new(0.0, 0.0, *w, *h).into_path(0.1);
                         scene.push_clip_layer(Fill::NonZero, *transform, &box_rect);
+                        let image_transform = *transform
+                            * Affine::translate((*w / 2.0, *h / 2.0))
+                            * Affine::rotate(rotation.to_radians())
+                            * Affine::translate((-*w / 2.0, -*h / 2.0));
                         for draw in &resolved.draws {
-                            scene.draw_image(img, *transform * *draw);
+                            scene.draw_image(img, image_transform * *draw);
                         }
                         scene.pop_layer();
                     } else {
