@@ -3192,7 +3192,6 @@ pub fn try_import_from_figma_clipboard() -> Option<x_native::Document> {
     }
 }
 
-
 /// DFS from `node` to `target`, recording the root→target path in
 /// `keep` when found (audit F6: collapse-all keeps selection ancestors).
 fn collect_ancestor_path(
@@ -3226,7 +3225,7 @@ impl App {
 
 #[cfg(test)]
 mod tool_shortcut_tests {
-    use super::{App, Tool};
+    use super::{App, Color, Node, Tool};
 
     #[test]
     fn design_mode_shortcuts_resolve() {
@@ -3268,7 +3267,7 @@ mod tool_shortcut_tests {
             .insert_node("f1", Node::rect("r1", 0.0, 0.0, 10.0, 10.0, Color::WHITE));
         doc.expanded.insert("f1".into());
         doc.expanded.insert("f2".into());
-        doc.editor_ref().selection.insert("r1".into());
+        doc.editor().selection.push("r1".into());
         app.collapse_all_layers();
         assert!(app.doc().expanded.contains("f1"), "selection ancestor stays open");
         assert!(!app.doc().expanded.contains("f2"), "everything else collapses");
