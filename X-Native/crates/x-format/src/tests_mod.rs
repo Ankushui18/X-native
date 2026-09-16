@@ -278,6 +278,31 @@ mod tests {
     }
 
     #[test]
+    fn document_default_font_roundtrips_and_legacy_files_resolve() {
+        let mut doc = Document::new();
+        doc.pages.push(Node::frame("page-1", 800.0, 600.0));
+        // a file that declares a default font carries it through
+        doc.default_font = Some("Manrope".into());
+        let text = save_x(&doc);
+        assert!(text.contains("\"default_font\":\"Manrope\""));
+        let back = load_x(&text).unwrap();
+        assert_eq!(back.default_font.as_deref(), Some("Manrope"));
+        assert_eq!(back.resolved_default_font(), "Manrope");
+        assert_eq!(text, save_x(&back), "byte-stable round trip");
+        // a file written before the field (unset -> key omitted) loads
+        // as None and resolves to the engine default
+        let legacy = Document {
+            pages: vec![Node::frame("p", 100.0, 100.0)],
+            ..Default::default()
+        };
+        let legacy_text = save_x(&legacy);
+        assert!(!legacy_text.contains("default_font"), "unset is omitted");
+        let loaded = load_x(&legacy_text).unwrap();
+        assert!(loaded.default_font.is_none());
+        assert_eq!(loaded.resolved_default_font(), APP_DEFAULT_FONT);
+    }
+
+    #[test]
     fn slice_roundtrips_through_x_format() {
         let mut doc = Document::new();
         let page = Node::frame("page-1", 800.0, 600.0)

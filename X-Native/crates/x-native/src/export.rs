@@ -22,6 +22,18 @@ pub fn prepare_export(
             .ok_or("selection no longer exists")?,
         None => x_render::build_render_tree(root, vars),
     };
+    // Frame/Section NAMES are canvas chrome (like the canvas grid): they
+    // help identify layers while editing but are never part of the
+    // exported artwork — Figma exports frame names out of the output too.
+    // Stripping here (before outlining) keeps label glyph outlines out of
+    // BOTH the export content and the computed bounds, in one place, for
+    // every export format (PNG / SVG / PDF / clipboard image).
+    let tree = {
+        let mut t = tree;
+        t.commands
+            .retain(|c| !matches!(c, RenderCommand::Glyphs { key, .. } if key.ends_with("/label")));
+        t
+    };
     let mut tree = x_render::text_geometry::outline_text(&tree, fonts)?;
     x_render::text_geometry::outline_strokes(&mut tree);
     let mut bounds: Option<Rect> = None;

@@ -125,6 +125,8 @@ pub const C_EDGE: Color = C_LINE; // Edge/border color
 
 pub const C_ACCENT: Color = rgb(role!(accent)); // Primary accent (fill)
 pub const C_ACCENT_MUTED: Color = rgba(role!(accent), 0x33); // Muted accent
+/// Unread-notification wash on the nav bar (accent at a whisper of alpha).
+pub const C_UNREAD_WASH: Color = rgba(role!(accent), 0x08);
 pub const C_ON_ACCENT: Color = rgb(role!(on_accent)); // Text on accent
 
 // ------------------------------------------------------------------ textual
@@ -149,6 +151,12 @@ pub const C_LINE_2: Color = rgb(role!(border_strong)); // Strong borders
 // selection ring on canvas; smart-guide lines while dragging
 pub const C_SEL: Color = rgb(role!(focus_ring));
 pub const C_SEL_SOFT: Color = rgba(role!(focus_ring), 0x14);
+/// Wash behind the editor's selected text (stronger than C_SEL_SOFT).
+pub const C_SEL_WASH: Color = rgba(role!(focus_ring), 0x42);
+/// Border of the in-place text editor (replaces the selection chrome).
+pub const C_EDIT_BORDER: Color = rgba(role!(focus_ring), 0x80);
+/// Tangent handles in vector edit mode.
+pub const C_SEL_HANDLE: Color = rgba(role!(focus_ring), 0x40);
 pub const C_SNAP: Color = Color::from_rgb8(0xF2, 0x4E, 0x1E);
 
 // ------------------------------------------------------------- core palette
@@ -200,6 +208,16 @@ pub const TOOLBAR_H: f64 = 40.0;
 pub const TOOL_ICON: f64 = 32.0;
 pub const TOOLBAR_BOTTOM: f64 = 20.0;
 pub const RESIZER_W: f64 = 6.0;
+
+// ------------------------------------------------------- menus & dropdowns
+/// Right-click menus (canvas + pages) — one geometry for both.
+pub const MENU_WIDTH: f64 = 208.0;
+pub const MENU_ROW_H: f64 = 28.0;
+/// Hamburger app menu width.
+pub const APP_MENU_WIDTH: f64 = 220.0;
+/// Row height of the hamburger + inspector dropdowns (app menu, frame,
+/// line-height, text-style pickers).
+pub const DROPDOWN_ROW_H: f64 = 32.0;
 
 // Dashboard dimensions
 pub const DASH_TITLE_H: f64 = 40.0;

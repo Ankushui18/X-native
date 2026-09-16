@@ -144,7 +144,6 @@ fn paint_sidebar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     draw_icon(s, "box", 16.0, 56.0, 12.0, C_DIM);
     app.fonts
         .micro_label(s, 36.0, 53.3, "DRAFTS", C_DIM, Wt::Med);
-    draw_icon(s, "more-horizontal", 234.0, 51.0, 14.0, C_DIM);
 
     // Personal row 30px at y 80
     let pr = Rect::new(8.0, 80.0, DASH_SIDE_W - 8.0, 110.0);
@@ -387,9 +386,10 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             false,
         ),
         (
+            // P14: was the dead "Browse templates" card; boards are real
             "layout-template",
-            "Browse templates",
-            "Not available in this build",
+            "New board",
+            "Infinite canvas for brainstorming",
             false,
         ),
         ("users", "Invite team", "Not available in this build", false),
@@ -397,13 +397,14 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let acts = [
         Action::NewFile,
         Action::ImportFile,
-        Action::Upgrade,
+        Action::NewBoard,
         Action::InviteTeam,
     ];
     for (i, (icon, title, sub, white)) in cards.into_iter().enumerate() {
         let cx = x0 + (cw + gap) * i as f64;
         let r = Rect::new(cx, dy + 147.5, cx + cw, dy + 235.5);
-        let enabled = app.demo_mode || i < 2;
+        // i == 3 (Invite team) stays a roadmap stub outside demo mode
+        let enabled = app.demo_mode || i < 3;
         let hov = enabled && hover(app, r);
         // .card:hover{transform:translateY(-2px);...} — lift the whole card
         let dy = if hov { dy - 2.0 } else { dy };
@@ -464,6 +465,14 @@ fn paint_recents(
     app.fonts
         .text(s, x0, dy + 269.0, "Recents", T14, C_TEXT, Wt::Semi);
     let chip_l = x0 + app.fonts.measure("Recents", T14, Wt::Semi) + 12.0;
+    // P13: the chip was painted without a hit; it now cycles the view
+    // (Home -> Recents -> Starred -> Trash) and reflects the active one
+    let chip_label = match app.dash_view {
+        DashView::Home => "All files",
+        DashView::Recents => "Recents",
+        DashView::Starred => "Starred",
+        DashView::Trash => "Trash",
+    };
     let chip = Rect::new(chip_l, dy + 267.5, chip_l + 75.0, dy + 291.5);
     fill_rrect(s, chip, 6.0, C_FIELD);
     stroke_rrect(s, chip, 6.0, C_LINE, 1.0);
@@ -471,14 +480,13 @@ fn paint_recents(
         s,
         chip.x0 + 9.0,
         dy + 271.3,
-        "All files",
+        chip_label,
         T11,
         C_MUTED,
         Wt::Reg,
     );
     draw_icon(s, "chevron-down", chip.x1 - 21.0, dy + 273.5, 12.0, C_DIM);
-    draw_icon(s, "search", x1 - 40.0, dy + 271.5, 16.0, C_DIM);
-    draw_icon(s, "more-horizontal", x1 - 16.0, dy + 271.5, 16.0, C_DIM);
+    hit.push((chip, Action::CycleDashView));
 
     let query = app.dash_search.to_lowercase();
     let files: Vec<(usize, &RecentFile)> = app

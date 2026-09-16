@@ -18,6 +18,7 @@
 //! - Updated globally (changing style updates all linked layers)
 //! - Saved to .xlib libraries for sharing across documents
 
+use crate::document::APP_DEFAULT_FONT;
 use crate::layout_types::GridLayout;
 use crate::node::{
     HangingPunctuation, ListStyle, Node, TextCase, TextDecoration, TextWrap, WrapStyle,
@@ -242,7 +243,7 @@ pub struct TextStyleData {
 impl Default for TextStyleData {
     fn default() -> Self {
         Self {
-            font_family: "Inter".to_string(),
+            font_family: APP_DEFAULT_FONT.to_string(),
             font_weight: 400,
             font_size: 16.0,
             line_height: LineHeight::Auto,
@@ -278,7 +279,7 @@ impl TextStyleData {
                 .bindings
                 .get("font")
                 .cloned()
-                .unwrap_or_else(|| "Inter".to_string()),
+                .unwrap_or_else(|| APP_DEFAULT_FONT.to_string()),
             font_weight: n
                 .bindings
                 .get("fw")

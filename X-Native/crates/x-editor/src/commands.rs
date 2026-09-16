@@ -88,6 +88,19 @@ pub enum Command {
         from: usize,
         to: usize,
     },
+    /// P12 drag-reorder: move the node from slot `from_index` in
+    /// `from_parent` to slot `index` in `to_parent`. Both are children
+    /// indices; `index` is the insertion slot AFTER removal (clamped at
+    /// apply). The inverse swaps the parents and restores `from_index`
+    /// as the insertion slot. Apply resolves the removal slot by node id
+    /// within the hinted parent, so history stays exact after clamping.
+    ReorderNode {
+        id: String,
+        from_parent: String,
+        from_index: usize,
+        to_parent: String,
+        index: usize,
+    },
     Delete {
         parent_id: String,
         index: usize,
@@ -265,6 +278,33 @@ pub(crate) fn apply(root: &mut Node, cmd: &Command) -> bool {
                 }
             }
             false
+        }
+        Command::ReorderNode {
+            id,
+            from_parent,
+            from_index,
+            to_parent,
+            index,
+        } => {
+            let node = {
+                let Some(p) = find_mut(root, from_parent) else {
+                    return false;
+                };
+                let pos = p
+                    .children
+                    .get(*from_index)
+                    .filter(|c| c.id == *id)
+                    .map(|_| *from_index)
+                    .or_else(|| p.children.iter().position(|c| &c.id == id));
+                let Some(pos) = pos else { return false };
+                p.children.remove(pos)
+            };
+            let Some(tp) = find_mut(root, to_parent) else {
+                return false;
+            };
+            let i = (*index).min(tp.children.len());
+            tp.children.insert(i, node);
+            true
         }
         Command::Delete {
             parent_id, index, ..
@@ -460,6 +500,19 @@ pub(crate) fn invert(cmd: &Command) -> Command {
             id: id.clone(),
             from: *to,
             to: *from,
+        },
+        Command::ReorderNode {
+            id,
+            from_parent,
+            from_index,
+            to_parent,
+            index,
+        } => Command::ReorderNode {
+            id: id.clone(),
+            from_parent: to_parent.clone(),
+            from_index: *index,
+            to_parent: from_parent.clone(),
+            index: *from_index,
         },
         Command::Delete {
             parent_id,

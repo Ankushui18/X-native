@@ -27,8 +27,8 @@ use x_native::{
 use crate::dashboard;
 use crate::editor_ui;
 use crate::state::{
-    push_system_clipboard, Action, App, CtxCmd, Drag, FieldEdit, FieldId, NavTab, OpenDoc,
-    PropertyClipboard, Screen, Tool, FRAME_PRESETS,
+    push_system_clipboard, Action, App, CtxCmd, DashView, Drag, FieldEdit, FieldId, NavTab,
+    OpenDoc, PropertyClipboard, Screen, Tool, FRAME_PRESETS,
 };
 use crate::theme::*;
 
@@ -2586,7 +2586,14 @@ impl App {
         }
         let data = {
             let root = &self.doc_ref().editor_ref().root;
-            TextStyleData::from_node(crate::editor_ui::find_node(root, id.as_str())?)
+            let node = crate::editor_ui::find_node(root, id.as_str())?;
+            let mut data = TextStyleData::from_node(node);
+            // P3: a node without an explicit font carries the document's
+            // default typeface into the new style
+            if !node.bindings.contains_key("font") {
+                data.font_family = self.doc_ref().doc.resolved_default_font().to_string();
+            }
+            data
         };
         // Figma's naming: "New style", then "New style 2", "New style 3", …
         let name = (1..)
@@ -2634,7 +2641,12 @@ impl App {
         let name = self.linked_text_style(id.as_str())?;
         let data = {
             let root = &self.doc_ref().editor_ref().root;
-            TextStyleData::from_node(crate::editor_ui::find_node(root, id.as_str())?)
+            let node = crate::editor_ui::find_node(root, id.as_str())?;
+            let mut data = TextStyleData::from_node(node);
+            if !node.bindings.contains_key("font") {
+                data.font_family = self.doc_ref().doc.resolved_default_font().to_string();
+            }
+            data
         };
         if !self.doc().doc.update_text_style(&name, data) {
             return None;
@@ -2856,7 +2868,10 @@ impl App {
             return false;
         }
         self.pending_text_edit = Some((id, p));
-        self.drag = Some(Drag::MoveSel { last: world });
+        self.drag = Some(Drag::MoveSel {
+            last: world,
+            base_depth: self.doc().editor_ref().undo_depth(),
+        });
         true
     }
 
@@ -3136,20 +3151,40 @@ impl Host {
                 let root = doc.editor_ref().root.clone();
                 x_native::editor::hit_test(&root, world)
             };
-            if hit_id.is_some() {
-                self.app.doc().editor().click_select(world, false, false);
+            // Figma: right-clicking an ALREADY-SELECTED node keeps the
+            // multi-selection. Collapsing it here made "Group selection"
+            // silently no-op — the menu opened for N nodes, but
+            // group_selection needs 2+ and the click had just reduced the
+            // selection to the one node under the cursor.
+            if let Some(hit) = hit_id {
+                let er = self.app.doc_ref().editor_ref();
+                let root = er.root.clone();
+                let top_id = x_native::editor::top_level_ancestor(&root, &hit);
+                let top = top_id.unwrap_or(hit.clone());
+                let sel = er.selection.clone();
+                let already_selected = sel.iter().any(|s| s == &top);
+                if !already_selected {
+                    let ed = self.app.doc().editor();
+                    ed.click_select(world, false, false);
+                }
             }
             let sel_count = {
                 let doc = self.app.doc();
                 doc.editor_ref().selection.len()
             };
+            let contains_group = {
+                use x_native::NodeKind as K;
+                let d = self.app.doc();
+                let id = d.selected_id();
+                let root = &d.editor_ref().root;
+                id.and_then(|i| crate::editor_ui::find_node(root, i.as_str()))
+                    .map(|n| matches!(n.kind, K::Group))
+                    .unwrap_or(false)
+            };
             let target = if sel_count > 0 {
                 crate::context_menu::ContextTarget::CanvasSelection {
                     selected_count: sel_count,
-                    contains_frame: false,
-                    contains_component_instance: false,
-                    contains_vector: false,
-                    contains_text: false,
+                    contains_group,
                 }
             } else {
                 crate::context_menu::ContextTarget::CanvasEmpty
@@ -3165,7 +3200,24 @@ impl Host {
             .unwrap_or(false)
             && self.app.page_menu.is_none()
         {
-            // B14: right-click on the pages panel's page field
+            // B14: right-click on the pages panel — the page menu acts on
+            // the ACTIVE page, so a right-click on a non-active row
+            // activates it first (right-click = select + menu)
+            let n = self.app.doc_ref().editors.len();
+            let cur = self.app.doc_ref().page;
+            let rows = self.app.pages_rows();
+            let mut page_index: Option<usize> = None;
+            for (i, r) in rows.iter() {
+                if r.contains(p) {
+                    page_index = Some(*i);
+                    break;
+                }
+            }
+            if let Some(i) = page_index {
+                if i < n && i != cur {
+                    self.dispatch(Action::SelectPage(i));
+                }
+            }
             self.app.page_menu = Some(p);
         } else {
             // second right-click (or outside canvas) closes
@@ -3220,6 +3272,9 @@ impl Host {
             if self.app.dropdown_frame {
                 self.app.dropdown_frame = false;
             }
+            if self.app.dropdown_zoom {
+                self.app.dropdown_zoom = false;
+            }
             if self.app.dropdown_text_style {
                 self.app.dropdown_text_style = false;
             }
@@ -3269,6 +3324,9 @@ impl Host {
         if self.app.dropdown_frame {
             self.app.dropdown_frame = false;
         }
+        if self.app.dropdown_zoom {
+            self.app.dropdown_zoom = false;
+        }
         if self.app.dropdown_lh {
             self.app.dropdown_lh = false;
         }
@@ -3291,6 +3349,22 @@ impl Host {
         for (r, a) in self.app.hit.iter().rev() {
             if r.contains(p) {
                 let a = a.clone();
+                if let Action::TreeRow(id) = &a {
+                    if !id.starts_with("mock:") {
+                        // P12: select on press; a >4px move starts the
+                        // reorder drag, a plain click just selects
+                        let doc = self.app.doc();
+                        doc.mock_layers.iter_mut().for_each(|m| m.selected = false);
+                        doc.editor().selection = vec![id.clone()];
+                        self.app.drag = Some(Drag::TreeRow {
+                            id: id.clone(),
+                            start: p,
+                            active: false,
+                            over: None,
+                        });
+                        return;
+                    }
+                }
                 if matches!(a, Action::Field(FieldId::InstanceProp)) {
                     // resolve WHICH text prop was clicked from the rect the
                     // paint pass recorded
@@ -3332,6 +3406,78 @@ impl Host {
         if self.app.guide_press(p) {
             return;
         }
+        // P13: eyedropper — the first canvas click samples the topmost
+        // layer's fill into the current selection
+        if self.app.eyedropper.is_some() {
+            let to_stroke = self.app.eyedropper.unwrap_or(false);
+            self.app.eyedropper = None;
+            let world = self.app.screen_to_world(p);
+            let id = {
+                let doc = self.app.doc();
+                x_native::editor::hit_test(&doc.editor_ref().root, world)
+            };
+            match id {
+                Some(id) => {
+                    let (paint, sel) = {
+                        let doc = self.app.doc();
+                        let Some(node) = doc.editor_ref().get_node(&id) else {
+                            self.app.status = "Eyedropper: layer not found".into();
+                            return;
+                        };
+                        let paint = if to_stroke {
+                            node.stroke.paint.clone()
+                        } else {
+                            node.fill_layers
+                                .iter()
+                                .find(|l| l.visible)
+                                .map(|l| l.paint.clone())
+                                .unwrap_or_else(|| node.fill.clone())
+                        };
+                        let sel = doc.selected_id();
+                        (paint, sel)
+                    };
+                    match sel {
+                        Some(target) if target != id => {
+                            if to_stroke {
+                                let w = self
+                                    .app
+                                    .doc()
+                                    .editor_ref()
+                                    .get_node(&target)
+                                    .map(|n| n.stroke.width)
+                                    .unwrap_or(1.0);
+                                let color = match &paint {
+                                    x_native::Paint::Solid(c) => *c,
+                                    _ => x_native::Color::BLACK,
+                                };
+                                self.app
+                                    .doc()
+                                    .editor()
+                                    .mutate_visual_stack(&target, move |n| {
+                                        n.materialize_visual_stacks();
+                                        let stroke = x_native::Stroke::solid(color, w.max(1.0));
+                                        n.stroke = stroke.clone();
+                                        if let Some(layer) = n.stroke_layers.last_mut() {
+                                            layer.stroke = stroke;
+                                        } else {
+                                            n.stroke_layers
+                                                .push(x_native::StrokeLayer::new(stroke));
+                                        }
+                                    });
+                            } else {
+                                self.app.doc().editor().set_fill(&target, paint);
+                            }
+                            self.app.mark_dirty();
+                            self.app.status = format!("Sampled color from {id}");
+                        }
+                        Some(_) => self.app.status = "Already the same layer".into(),
+                        _ => self.app.status = "Select a layer first, then sample".into(),
+                    }
+                }
+                None => self.app.status = "Eyedropper: no layer under the cursor".into(),
+            }
+            return;
+        }
         // ---- comments (C18): composer, then pins -------------------
         if let Some(d) = self.app.comment_draft.clone() {
             let sp = self.app.world_to_screen(vello::kurbo::Point::new(d.x, d.y));
@@ -3362,7 +3508,10 @@ impl Host {
                 doc.doc.comments.iter().find(|c| c.id == id).cloned()
             } {
                 let sp = self.app.world_to_screen(vello::kurbo::Point::new(c.x, c.y));
-                let resolve = Rect::new(sp.x + 28.0, sp.y + 6.0, sp.x + 118.0, sp.y + 30.0);
+                // P13: rects match the painted pill (card.x0 = sp.x+32,
+                // card.y0 = sp.y-28; pill at card +12/+48, 84×22) — the
+                // old resolve rect missed most of the pill
+                let resolve = Rect::new(sp.x + 44.0, sp.y + 20.0, sp.x + 128.0, sp.y + 42.0);
                 let del = Rect::new(sp.x + 126.0, sp.y + 6.0, sp.x + 168.0, sp.y + 30.0);
                 if resolve.contains(p) {
                     let next = !c.resolved;
@@ -3496,7 +3645,10 @@ impl Host {
                     }
                     self.app.doc().editor().click_select(world, shift, deep);
                     self.app.mark_dirty();
-                    self.app.drag = Some(Drag::MoveSel { last: world });
+                    self.app.drag = Some(Drag::MoveSel {
+                        last: world,
+                        base_depth: self.app.doc().editor_ref().undo_depth(),
+                    });
                 } else {
                     if !self.app.shift {
                         self.app.doc().editor().selection.clear();
@@ -3664,6 +3816,9 @@ impl Host {
         if editor.selection.is_empty() {
             return None;
         }
+        // undo depth at press: release merges the per-event resize entries
+        // so one Ctrl+Z reverts the whole corner drag
+        let base_depth = editor.undo_depth();
 
         // Get combined bounding box for multi-selection
         let mut single: Option<x_native::Node> = None;
@@ -3719,6 +3874,7 @@ impl Host {
             corner,
             orig: (x, y, w, h),
             start: world,
+            base_depth,
         })
     }
 
@@ -3741,14 +3897,14 @@ impl Host {
             Some(Drag::Pan { start, start_pan }) => {
                 self.app.pan = (start_pan.0 + p.x - start.x, start_pan.1 + p.y - start.y);
             }
-            Some(Drag::MoveSel { last }) => {
+            Some(Drag::MoveSel { last, .. }) => {
                 let world = self.app.screen_to_world(p);
                 let dx = world.x - last.x;
                 let dy = world.y - last.y;
                 if dx != 0.0 || dy != 0.0 {
                     self.app.pending_text_edit = None; // a drag moves, no caret
                     self.smart_move(dx, dy);
-                    if let Some(Drag::MoveSel { last }) = self.app.drag.as_mut() {
+                    if let Some(Drag::MoveSel { last, .. }) = self.app.drag.as_mut() {
                         *last = world;
                     }
                 }
@@ -3757,6 +3913,22 @@ impl Host {
                 let world = self.app.screen_to_world(p);
                 if let Some(Drag::Marquee { cur, .. }) = self.app.drag.as_mut() {
                     *cur = world;
+                }
+            }
+            Some(Drag::TreeRow {
+                id, start, active, ..
+            }) => {
+                if !active {
+                    if (p.x - start.x).abs().max((p.y - start.y).abs()) < 4.0 {
+                        return;
+                    }
+                    if let Some(Drag::TreeRow { active, .. }) = self.app.drag.as_mut() {
+                        *active = true;
+                    }
+                }
+                let over = crate::editor_ui::tree_drop_target(&self.app, &id, p);
+                if let Some(Drag::TreeRow { over: o, .. }) = self.app.drag.as_mut() {
+                    *o = over;
                 }
             }
             // ---- vector edit mode drags: live in the tree, logged once ----
@@ -3834,6 +4006,7 @@ impl Host {
                 corner,
                 orig: (ox, oy, ow, oh),
                 start,
+                ..
             }) => {
                 let world = self.app.screen_to_world(p);
 
@@ -4219,6 +4392,15 @@ impl Host {
             Some(Drag::Guide { .. }) => {
                 self.app.guide_release();
             }
+            // P12: the tree reorder commits on release — one undo step
+            Some(Drag::TreeRow { active, over, .. }) => {
+                if active {
+                    if let Some(drop) = over {
+                        self.app.apply_tree_drop(&drop);
+                    }
+                }
+                self.app.drag = None;
+            }
             // pen session continues across clicks (Enter/Esc/close ends it)
             Some(Drag::Pen { .. }) => {}
             // eraser stroke ends on release - apply the erasure
@@ -4340,6 +4522,30 @@ impl Host {
                 self.app.drag = None;
                 self.app.tool = Tool::Select;
             }
+            // Layer move ends on release: every mouse event pushed its own
+            // undo entry, so merge the whole gesture into ONE step — a
+            // single Ctrl+Z reverts the drag (Figma semantics).
+            Some(Drag::MoveSel { base_depth, .. }) => {
+                {
+                    let doc = self.app.doc();
+                    let editor = doc.editor();
+                    editor.merge_last(editor.undo_depth().saturating_sub(base_depth));
+                }
+                self.app.drag = None;
+                // a click (no movement) on already-selected text still
+                // places the caret — the gesture pushed nothing to merge
+                if self.app.finish_pending_text_edit() {
+                    self.app.mark_dirty();
+                }
+            }
+            // Layer corner-resize ends on release: same one-gesture =
+            // one-step merge as MoveSel.
+            Some(Drag::ResizeSel { base_depth, .. }) => {
+                let doc = self.app.doc();
+                let editor = doc.editor();
+                editor.merge_last(editor.undo_depth().saturating_sub(base_depth));
+                self.app.drag = None;
+            }
             _ => {
                 self.app.drag = None;
                 // click (no drag) on already-selected text = caret there
@@ -4365,7 +4571,8 @@ impl Host {
         let n = counter + 1;
         let node = match tool {
             Tool::Frame => {
-                let mut f = Node::frame(&x_native::fresh_id("frame"), w.max(8.0), h.max(8.0));
+                let fid = x_native::fresh_id("frame");
+                let mut f = Node::frame(&fid, w.max(8.0), h.max(8.0));
                 f.name = format!("Frame {n}");
                 f.transform.x = x;
                 f.transform.y = y;
@@ -4400,15 +4607,67 @@ impl Host {
             Tool::Text => {
                 // Figma: a new text object starts EMPTY (placeholder only);
                 // committing empty deletes it
-                let mut t = Node::text(&x_native::fresh_id("text"), x, y, w.max(120.0), 14.0, "");
+                let tid = x_native::fresh_id("text");
+                let mut t = Node::text(&tid, x, y, w.max(120.0), 14.0, "");
                 t.name = format!("Text {n}");
+                // P3: new text is set in the document's default typeface
+                // (per-file data) rather than an engine constant
+                let default_font = doc.doc.resolved_default_font().to_string();
+                t.bindings.insert("font".into(), default_font);
                 t
             }
             _ => return,
         };
         let id = node.id.clone();
-        doc.editor().insert_node(&root_id, node);
-        doc.editor().selection = vec![id.clone()];
+        let mut node = node;
+        // Figma semantics: when exactly one container (frame / group /
+        // section) is selected, the new node lands INSIDE it, with its
+        // position expressed in that container's local space — drawing
+        // with a frame selected builds the frame. Previously every drawn
+        // node was forced onto the page root, so artboards could never
+        // receive content (viewport audit P2).
+        let (parent_id, parent_auto_layout) = {
+            let doc = self.app.doc();
+            let root = &doc.editor_ref().root;
+            let sel = &doc.editor_ref().selection;
+            if sel.len() == 1 {
+                let p = crate::editor_ui::find_node(root, &sel[0]);
+                if let Some(p) = p {
+                    let is_container = matches!(
+                        p.kind,
+                        x_native::NodeKind::Frame { .. }
+                            | x_native::NodeKind::Group
+                            | x_native::NodeKind::Section
+                    );
+                    if is_container {
+                        let (lx, ly) = world_to_local(root, &p.id, x, y);
+                        node.transform.x = lx;
+                        node.transform.y = ly;
+                        let auto_layout =
+                            matches!(&p.kind, x_native::NodeKind::Frame { layout: Some(_) });
+                        (p.id.clone(), auto_layout)
+                    } else {
+                        (root_id.clone(), false)
+                    }
+                } else {
+                    (root_id.clone(), false)
+                }
+            } else {
+                (root_id.clone(), false)
+            }
+        };
+        self.app.doc().editor().insert_node(&parent_id, node);
+        // an auto-layout parent flow-places its children: the stored x/y is
+        // only a pre-layout hint, so run the layout to settle it
+        if parent_auto_layout {
+            let vars = self.app.doc().doc.variables.clone();
+            let e = self.app.doc().editor();
+            let par = x_native::editor::find_mut(&mut e.root, &parent_id);
+            if let Some(par) = par {
+                x_native::apply_layout_recursive(par, &vars);
+            }
+        }
+        self.app.doc().editor().selection = vec![id.clone()];
         self.app.mark_dirty();
         self.app.tool = Tool::Select;
         // click/drag with the Text tool drops a text node and starts editing it
@@ -4470,6 +4729,7 @@ impl Host {
             f.id,
             FieldId::DocName
                 | FieldId::PageName
+                | FieldId::TreeSearch
                 | FieldId::InstanceProp
                 | FieldId::FillHex
                 | FieldId::StrokeHex
@@ -5215,11 +5475,20 @@ impl Host {
 
         match key {
             Key::Named(NamedKey::Escape) => {
-                if self.app.dropdown_frame || self.app.dropdown_lh || self.app.dropdown_text_style {
+                if self.app.dropdown_frame
+                    || self.app.dropdown_zoom
+                    || self.app.dropdown_lh
+                    || self.app.dropdown_text_style
+                {
                     self.app.dropdown_frame = false;
+                    self.app.dropdown_zoom = false;
                     self.app.dropdown_lh = false;
                     self.app.dropdown_text_style = false;
                 } else if self.app.screen == Screen::Editor {
+                    // P12: an in-flight tree drag cancels first
+                    if matches!(self.app.drag, Some(Drag::TreeRow { .. })) {
+                        self.app.drag = None;
+                    }
                     self.app.doc().editor().selection.clear();
                 } else {
                     self.app.dash_search_focus = false;
@@ -5292,45 +5561,13 @@ impl Host {
                 };
                 return;
             }
-            // Board-specific shortcuts (only when in Board document)
-            if self.app.is_board() {
-                let board_tool = match c {
-                    "s" | "S" => Some(Tool::BoardSticky),
-                    "c" | "C" => Some(Tool::BoardConnector),
-                    "r" | "R" => Some(Tool::BoardRect),
-                    "o" | "O" => Some(Tool::BoardCircle),
-                    _ => None,
-                };
-                if let Some(t) = board_tool {
-                    self.app.tool = t;
-                    return;
-                }
-            }
-
-            let tool = match c {
-                "v" | "V" => Some(Tool::Select),
-                "f" | "F" => Some(Tool::Frame),
-                "t" | "T" => Some(Tool::Text),
-                "r" | "R" => Some(Tool::Rect),
-                "o" | "O" => Some(Tool::Ellipse),
-                "p" | "P" => Some(Tool::Pen),
-                "h" | "H" => Some(Tool::Hand),
-                // C selects the comment tool BUT ⇧C stays free; Figma's
-                // comment shortcut is plain C
-                "c" | "C" => Some(Tool::Comment),
-                _ => None,
-            };
-            if let Some(t) = tool {
+            // Tool shortcuts — the mode-aware table lives in
+            // Tool::from_shortcut (audit F3); there is no second copy.
+            // The ⇧R ruler arm above stays first so it keeps its key.
+            let tool_key = c.to_lowercase();
+            let board_mode = self.app.is_board();
+            if let Some(t) = Tool::from_shortcut(&tool_key, self.app.shift, board_mode) {
                 self.app.tool = t;
-                return;
-            }
-            // Handle Shift+E for Eraser and M for Symmetry
-            if self.app.shift && (c == "e" || c == "E") {
-                self.app.tool = Tool::Eraser;
-                return;
-            }
-            if c == "m" || c == "M" {
-                self.app.tool = Tool::Symmetry;
                 return;
             }
             if self.app.shift {
@@ -5582,8 +5819,16 @@ impl Host {
             "Ellipse tool" => self.app.tool = Tool::Ellipse,
             "Pen tool" => self.app.tool = Tool::Pen,
             "Hand tool" => self.app.tool = Tool::Hand,
-            "Zoom to fit" => self.zoom_fit(),
-            "Zoom 100%" => self.app.zoom = 1.0,
+            // audit F7: these labels were misspelled (and In/Out missing),
+            // so four advertised palette commands ran nothing
+            "Zoom In" => {
+                self.zoom_at(Point::new(-100.0, -100.0), 1.25);
+            }
+            "Zoom Out" => {
+                self.zoom_at(Point::new(-100.0, -100.0), 0.8);
+            }
+            "Zoom to Fit" => self.zoom_fit(),
+            "Zoom to 100%" => self.app.zoom = 1.0,
             "Back to dashboard" => {
                 if !self.finish_edits() {
                     return;
@@ -7679,10 +7924,16 @@ impl Host {
                 }
             }
             Action::OpenDraft(i) => {
-                if !self.app.demo_mode {
+                if !self.finish_edits() {
                     return;
                 }
-                if !self.finish_edits() {
+                let path = self.app.drafts.get(i).and_then(|d| d.path.clone());
+                if let Some(p) = path {
+                    // P13: saved drafts open like any other file
+                    self.open_path(p);
+                    return;
+                }
+                if !self.app.demo_mode {
                     return;
                 }
                 let name = self
@@ -8073,14 +8324,8 @@ impl Host {
             Action::NavTab(tab) => {
                 self.app.nav_tab = tab;
             }
-            Action::ToggleNavLabels => {
-                self.app.nav_show_labels = !self.app.nav_show_labels;
-            }
             Action::OpenAppMenu => {
                 self.app.app_menu.open = !self.app.app_menu.open;
-            }
-            Action::CloseAppMenu => {
-                self.app.app_menu.open = false;
             }
             Action::AppMenuItem(idx) => {
                 self.app.app_menu.open = false;
@@ -8088,11 +8333,20 @@ impl Host {
                     0 => {
                         self.app.open_blank();
                     } // New file
-                    3 => {
-                        self.cmd_save();
-                    } // Save
-                    8 => {} // Preferences (no-op for now)
+                    1 => self.cmd_open_file(), // Open file…
+                    3 => self.cmd_save(),      // Save
+                    4 => self.cmd_save_as(),   // Save as…
+                    5 => {
+                        self.dispatch(Action::FileDuplicate);
+                    } // Duplicate file
+                    6 => {
+                        self.dispatch(Action::FileMoveToDrafts);
+                    } // Move to drafts
+                    8 => self.cmd_export(false), // Export as…
                     9 => {
+                        self.dispatch(Action::OpenFind);
+                    } // Find…
+                    11 => {
                         // Dark mode toggle
                         let next = crate::theme::active_theme().next();
                         self.apply_theme(next);
@@ -8106,27 +8360,22 @@ impl Host {
             Action::CloseFind => {
                 self.app.find_replace.open = false;
             }
-            Action::FindNext => {
-                // Advance to next match (simplified)
-                if self.app.find_replace.match_count > 0 {
-                    self.app.find_replace.current_match = (self.app.find_replace.current_match
-                        % self.app.find_replace.match_count)
-                        + 1;
-                }
-            }
-            Action::FindPrev => {
-                if self.app.find_replace.match_count > 0 {
-                    let cur = self.app.find_replace.current_match;
-                    self.app.find_replace.current_match = if cur <= 1 {
-                        self.app.find_replace.match_count
-                    } else {
-                        cur - 1
-                    };
-                }
-            }
+            Action::FindNext => self.app.find_nav(1),
+            Action::FindPrev => self.app.find_nav(-1),
             Action::ReplaceAll => {
-                // Simplified replace all
-                self.app.status = "Replace all: not yet implemented".into();
+                let changed = self.app.replace_all_find();
+                self.app.status = if changed > 0 {
+                    format!("Replaced matches in {changed} layers")
+                } else {
+                    "Nothing to replace".to_string()
+                };
+            }
+            Action::Replace => {
+                self.app.status = if self.app.replace_current_find() {
+                    "Replaced current match".to_string()
+                } else {
+                    "Nothing to replace".to_string()
+                };
             }
             Action::ToggleCaseSensitive => {
                 self.app.find_replace.case_sensitive = !self.app.find_replace.case_sensitive;
@@ -8156,24 +8405,48 @@ impl Host {
                 }
                 self.app.notifications.unread_count = 0;
             }
-            Action::ToggleMinimizeUI => {
-                self.app.ui_minimized = !self.app.ui_minimized;
+            Action::CollapseAllLayers => self.app.collapse_all_layers(),
+            Action::TreeSearchClear => {
+                self.app.doc().tree_search.clear();
+                self.app.field = None;
             }
-            Action::ResizeLeftSidebar(w) => {
-                self.app.left_sidebar_w = w.clamp(200.0, 500.0);
+
+            Action::FileDuplicate => {
+                let (name, doc) = {
+                    let d = self.app.doc();
+                    (d.name.clone(), d.doc.clone())
+                };
+                let copy_name = format!("{name} (copy)");
+                self.app
+                    .docs
+                    .push(OpenDoc::from_document(copy_name, None, doc));
+                self.app.active = self.app.docs.len() - 1;
+                self.app.center_view();
+                self.app.status = "Document duplicated".into();
             }
-            Action::CollapseAllLayers => {
-                self.app.doc().expanded.clear();
-            }
-            Action::FileRename => {
-                self.app.field = Some(crate::state::FieldEdit {
-                    id: crate::state::FieldId::DocName,
-                    buffer: self.app.doc().name.clone(),
-                });
-                self.app.field_select_all = true;
-            }
-            Action::FileMoveToDrafts | Action::FileDuplicate => {
-                self.app.status = "File action: not yet implemented".to_string();
+            Action::FileMoveToDrafts => {
+                let (name, path) = {
+                    let d = self.app.doc();
+                    (d.name.clone(), d.path.clone())
+                };
+                if path.is_none() {
+                    self.app.status = "Save the document first to move it to drafts".into();
+                    return;
+                }
+                self.app.drafts.insert(
+                    0,
+                    crate::state::RecentFile {
+                        name,
+                        team: "file".into(),
+                        edited: "Just now".into(),
+                        color: crate::theme::C_PANEL,
+                        members: vec![],
+                        starred: false,
+                        path,
+                        icon: "file",
+                    },
+                );
+                self.app.status = "Moved to drafts".into();
             }
             Action::AddPage => {
                 if !self.finish_edits() {
@@ -8256,6 +8529,17 @@ impl Host {
                 });
             }
             Action::FrameDropdown => self.app.dropdown_frame = !self.app.dropdown_frame,
+            Action::ZoomMenu => self.app.dropdown_zoom = !self.app.dropdown_zoom,
+            Action::ZoomStep(i) => {
+                self.app.dropdown_zoom = false;
+                match i {
+                    0 => self.zoom_at(Point::new(-100.0, -100.0), 1.25),
+                    1 => self.zoom_at(Point::new(-100.0, -100.0), 0.8),
+                    2 => self.app.zoom = 1.0,
+                    3 => self.zoom_to_selection(),
+                    _ => self.zoom_fit(),
+                }
+            }
             Action::TreeVisible(id) => {
                 let doc = self.app.doc();
                 let v = crate::editor_ui::find_node(&doc.editor_ref().root, id.as_str())
@@ -9206,17 +9490,25 @@ impl Host {
                 );
             }
 
-            Action::EnableEyedropper => {
-                // Enable eyedropper tool mode
-                // This would typically set a tool mode and handle the next click to sample color
-                self.app.status =
-                    "Eyedropper tool enabled - click on canvas to sample color".into();
-                // TODO: Implement actual eyedropper functionality
-                // This requires:
-                // 1. Setting a tool mode
-                // 2. Handling the next canvas click
-                // 3. Sampling color from rendered scene at click position
-                // 4. Applying sampled color to active fill/stroke
+            Action::EnableEyedropper(to_stroke) => {
+                self.app.eyedropper = Some(to_stroke);
+                self.app.status = if to_stroke {
+                    "Eyedropper armed - click a layer to sample its stroke"
+                } else {
+                    "Eyedropper armed - click a layer to sample its fill"
+                }
+                .into();
+            }
+            Action::ToggleCanvasBgVisibility => {
+                self.app.canvas_bg_visible = !self.app.canvas_bg_visible;
+            }
+            Action::CycleDashView => {
+                self.app.dash_view = match self.app.dash_view {
+                    DashView::Home => DashView::Recents,
+                    DashView::Recents => DashView::Starred,
+                    DashView::Starred => DashView::Trash,
+                    DashView::Trash => DashView::Home,
+                };
             }
         }
     }
@@ -9301,6 +9593,30 @@ impl Host {
             }
             FieldId::PageName => {
                 self.app.commit_page_rename(&raw);
+            }
+            FieldId::TreeSearch => {
+                // search stays open after Enter (Figma): the query lives
+                // in the doc; re-open the field on the committed buffer
+                self.app.doc().tree_search = raw.clone();
+                let id = f.id;
+                self.app.field = Some(FieldEdit { id, buffer: raw });
+            }
+            FieldId::FindQuery => {
+                // P13: the query stays open and rescans on commit
+                self.app.find_replace.query = raw.clone();
+                self.app.rescan_find();
+                let id = f.id;
+                self.app.field = Some(FieldEdit { id, buffer: raw });
+            }
+            FieldId::FindReplace => {
+                self.app.find_replace.replace = raw.clone();
+                let id = f.id;
+                self.app.field = Some(FieldEdit { id, buffer: raw });
+            }
+            FieldId::CanvasBgAlpha => {
+                if let Ok(v) = raw.parse::<f64>() {
+                    self.app.canvas_bg_alpha = v.clamp(0.0, 100.0);
+                }
             }
             FieldId::InstanceProp => {
                 self.app.commit_instance_prop(&raw);
@@ -9576,6 +9892,12 @@ impl Host {
                 .copy(&gpu.device, &mut encoder, &gpu.target, &view);
             gpu.queue.submit([encoder.finish()]);
             tex.present();
+            // A lost surface self-heals on this very frame (we reconfigured
+            // it before rendering). The transient message must not linger
+            // in the status bar after the canvas is drawing again.
+            if self.app.status.contains("window surface is unavailable") {
+                self.app.status = "Ready".into();
+            }
             self.app.presented_frames += 1;
             if drawing_loading {
                 self.app.loading_frames_presented += 1;
@@ -9654,6 +9976,32 @@ fn watermark_labels(app: &App, inner: &mut Scene, root: &x_native::Node) {
     }
 }
 
+/// A world coordinate expressed in the local space of `target` — the space
+/// a child's transform lives in: the inverse of the ancestor chain's
+/// transform product. Drawing into a selected frame needs this so the new
+/// node lands where the pointer was, in the frame's own coordinates.
+fn world_to_local(root: &Node, target: &str, x: f64, y: f64) -> (f64, f64) {
+    fn rec(n: &Node, id: &str, acc: Affine, pt: (f64, f64), out: &mut Option<(f64, f64)>) {
+        // `acc` is the world matrix of `n`'s parent; multiplying in `n`'s
+        // own transform gives the space where `n`'s children live.
+        let m = acc * n.transform.matrix(n.w, n.h);
+        if n.id == id {
+            let p = m.inverse() * Point::new(pt.0, pt.1);
+            *out = Some((p.x, p.y));
+            return;
+        }
+        for c in &n.children {
+            rec(c, id, m, pt, out);
+            if out.is_some() {
+                return;
+            }
+        }
+    }
+    let mut out = None;
+    rec(root, target, Affine::IDENTITY, (x, y), &mut out);
+    out.unwrap_or((x, y))
+}
+
 // ------------------------------------------------------------------ utils
 
 fn resizer_at(app: &App, p: Point) -> Option<u8> {
@@ -9708,6 +10056,12 @@ fn field_initial(app: &App, f: FieldId) -> String {
     use crate::editor_ui::sel_info;
     let s = sel_info(app);
     match f {
+        FieldId::TreeSearch => app.doc_ref().tree_search.clone(),
+        FieldId::FindQuery => app.find_replace.query.clone(),
+        FieldId::FindReplace => app.find_replace.replace.clone(),
+        FieldId::CanvasBgAlpha => {
+            format!("{}", app.canvas_bg_alpha.round() as i64)
+        }
         FieldId::PageName => {
             let d = app.doc_ref();
             d.doc
@@ -10301,9 +10655,10 @@ mod tests {
         assert_eq!(typo_val(&app, Typo::LineHeight), "19.6");
         assert_eq!(typo_val(&app, Typo::Family), "Inter");
 
-        // nothing selected → the HTML-spec defaults (pixel parity states)
+        // nothing selected → the document defaults (family = Inter, the
+        // default font; the no-selection state must not invent a third)
         app.doc().editor().selection.clear();
-        assert_eq!(typo_val(&app, Typo::Family), "Manrope");
+        assert_eq!(typo_val(&app, Typo::Family), "Inter");
         assert_eq!(typo_val(&app, Typo::LetterSpacing), "-0.16px");
         app.doc().editor().selection = vec!["tx".into()];
 
@@ -11257,10 +11612,7 @@ fn screenshot_screens() {
         app.context_menu.open_for_target(
             crate::context_menu::ContextTarget::CanvasSelection {
                 selected_count: 1,
-                contains_frame: false,
-                contains_component_instance: false,
-                contains_vector: false,
-                contains_text: false,
+                contains_group: false,
             },
             700.0,
             500.0,

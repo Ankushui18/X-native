@@ -13,10 +13,11 @@ use vello::peniko::{Color, Fill};
 use vello::Scene;
 use x_native::{ui::Elevation, FrameCache, Node, NodeKind, VelloSink};
 
+use crate::context_menu::{action_for, ContextMenuItem, SEPARATOR_HEIGHT};
 use crate::icons::{draw_flow_glyph, draw_icon};
 use crate::paint::*;
 use crate::state::{
-    kind_icon, parse_hex, Action, App, CtxCmd, FieldId, LeftTab, NavTab, RightTab, Tool,
+    kind_icon, parse_hex, Action, App, Drag, FieldId, LeftTab, NavTab, RightTab, Tool, TreeDrop,
     FRAME_PRESETS,
 };
 use crate::theme::*;
@@ -24,6 +25,7 @@ use crate::theme::*;
 // ------------------------------------------------------------------ paint
 
 pub fn paint(app: &mut App, s: &mut Scene) {
+    app.tooltip.clear();
     let mut hit: Vec<(Rect, Action)> = Vec::new();
     fill_rect(s, Rect::new(0.0, 0.0, app.win_w, app.win_h), C_BG);
     if app.flow.is_some() {
@@ -53,6 +55,9 @@ pub fn paint(app: &mut App, s: &mut Scene) {
     }
     if app.dropdown_text_style {
         paint_text_style_dropdown(app, s, &mut hit);
+    }
+    if app.dropdown_zoom {
+        paint_zoom_dropdown(app, s, &mut hit);
     }
     if app.palette.open {
         paint_palette(app, s, &mut hit);
@@ -88,7 +93,44 @@ pub fn paint_over(app: &mut App, s: &mut Scene) {
     paint_app_menu(app, s, &mut hit);
     paint_find_replace(app, s, &mut hit);
     paint_notifications(app, s, &mut hit);
+    paint_tooltip(app, s);
     app.hit = hit;
+}
+
+/// P10: the hover label for the control under the cursor. The
+/// smallest registered rect containing the mouse wins (most specific
+/// control); the pill floats below-right of the cursor, clamped to the
+/// window, inverted against the chrome.
+fn paint_tooltip(app: &App, s: &mut Scene) {
+    let mouse = app.mouse;
+    let mut best: Option<(f64, &String)> = None;
+    for (r, label) in &app.tooltip {
+        if !r.contains(mouse) {
+            continue;
+        }
+        let area = r.width() * r.height();
+        if best.is_none_or(|(a, _)| area < a) {
+            best = Some((area, label));
+        }
+    }
+    let Some((_, label)) = best else {
+        return;
+    };
+    let tw = app.fonts.measure(label, T10, Wt::Reg) + 16.0;
+    let th = 20.0;
+    let mut x = mouse.x + 14.0;
+    let mut y = mouse.y + 18.0;
+    if x + tw > app.win_w - 8.0 {
+        x = (mouse.x - tw - 10.0).max(8.0);
+    }
+    if y + th > app.win_h - 8.0 {
+        y = (mouse.y - th - 12.0).max(8.0);
+    }
+    let tr = Rect::new(x, y, x + tw, y + th);
+    elev_shadow(s, tr, 8.0, Elevation::Floating);
+    fill_rrect(s, tr, 5.0, C_TEXT);
+    app.fonts
+        .text(s, x + 8.0, y + 5.0, label, T10, C_BASE, Wt::Reg);
 }
 
 /// Persistent ruler guides (Figma): 1px pink lines across the canvas plus
@@ -431,13 +473,12 @@ fn paint_text_editor(app: &App, s: &mut Scene) {
     }
 }
 
-/// Anchor / handle colours for vector edit mode (the app's selection blue at
-/// two alphas: solid for a selected point, translucent for the tangent chrome).
-const POINT_SELECTED: vello::peniko::Color =
-    vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0xFF);
+/// Anchor / handle colours for vector edit mode (the theme's selection ring:
+/// solid for a selected point, translucent for the tangent chrome).
+const POINT_SELECTED: vello::peniko::Color = C_SEL;
 const POINT_IDLE: vello::peniko::Color = vello::peniko::Color::from_rgba8(0xFF, 0xFF, 0xFF, 0xFF);
 const POINT_BORDER: vello::peniko::Color = vello::peniko::Color::from_rgba8(0x00, 0x00, 0x00, 0xFF);
-const HANDLE_COLOR: vello::peniko::Color = vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0x40);
+const HANDLE_COLOR: vello::peniko::Color = C_SEL_HANDLE;
 
 /// Screen-space half-size of a drawn anchor. `vector_press` hit-tests with
 /// [`ANCHOR_HIT_TOL`], which is this plus a couple of pixels of forgiveness, so
@@ -514,12 +555,11 @@ fn paint_vector_points(app: &App, s: &mut Scene) {
 }
 
 /// Translucent selection wash behind the editor's selected text.
-const SELECTION_WASH: vello::peniko::Color =
-    vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0x42);
+const SELECTION_WASH: vello::peniko::Color = C_SEL_WASH;
 
 /// Light-blue border shown around the text while it is being edited
 /// (Figma's edit-mode frame — replaces the selection chrome).
-const EDIT_BORDER: vello::peniko::Color = vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0x80);
+const EDIT_BORDER: vello::peniko::Color = C_EDIT_BORDER;
 
 /// Inspector weight number -> the bundled face weight.
 pub(crate) fn wt_for(w: u16) -> Wt {
@@ -533,76 +573,20 @@ pub(crate) fn wt_for(w: u16) -> Wt {
 
 /// Right-click context menu — app design language: #1A1A1A panel,
 /// #2A2A2A border, r8, drop shadow, 28px rows (icon + label + shortcut),
-/// #222222 hover row. Items act on the current selection.
+/// #222222 hover row. Renders the data model's `items` — labels, icons,
+/// shortcuts and enabled state are owned by `context_menu.rs` (viewport
+/// audit P4: this used to be a hardcoded item list).
 fn paint_context_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
-    if !app.context_menu.open {
+    let cm = &app.context_menu;
+    if !cm.open {
         return;
     }
-    let anchor = Point::new(app.context_menu.x, app.context_menu.y);
-    let sel = {
-        let d = app.doc();
-        !d.editor_ref().selection.is_empty()
-    };
-    let group_kind = {
-        use x_native::NodeKind as K;
-        let d = app.doc();
-        d.selected_id()
-            .and_then(|id| find_node(&d.editor_ref().root, id.as_str()))
-            .map(|n| matches!(n.kind, K::Group))
-            .unwrap_or(false)
-    };
-    // boolean combine: enabled once two layers are selected (the engine
-    // currently combines exactly two)
-    let sel2 = {
-        let d = app.doc();
-        d.editor_ref().selection.len() >= 2
-    };
-    let items: Vec<(CtxCmd, &str, &str, &str, bool)> = vec![
-        (CtxCmd::Copy, "copy", "Copy", "⌘C", sel),
-        (CtxCmd::Cut, "scissors", "Cut", "⌘X", sel),
-        (CtxCmd::Paste, "clipboard", "Paste", "⌘V", true),
-        (CtxCmd::CopyAsCode, "code", "Copy as code", "", sel),
-        (CtxCmd::Duplicate, "copy-plus", "Duplicate", "⌘D", sel),
-        (CtxCmd::ToFront, "chevrons-up", "Bring to front", "⇧⌘]", sel),
-        (CtxCmd::ToBack, "chevrons-down", "Send to back", "⇧⌘[", sel),
-        (CtxCmd::BringFwd, "chevron-up", "Bring forward", "⌘]", sel),
-        (CtxCmd::SendBack, "chevron-down", "Send backward", "⌘[", sel),
-        (CtxCmd::Delete, "trash-2", "Delete", "⌫", sel),
-        (CtxCmd::SelectAll, "box-select", "Select all", "⌘A", true),
-        (CtxCmd::Group, "group", "Group selection", "⌘G", sel),
-        (
-            CtxCmd::Ungroup,
-            "ungroup",
-            "Ungroup",
-            "⇧⌘G",
-            sel && group_kind,
-        ),
-        (
-            CtxCmd::MakeComponent,
-            "component",
-            "Make component",
-            "⌘⌥K",
-            sel,
-        ),
-        (CtxCmd::Union, "", "Union selection", "⌘⌥U", sel2),
-        (CtxCmd::Subtract, "", "Subtract", "⌘⌥S", sel2),
-        (CtxCmd::Intersect, "", "Intersect", "⌘⌥I", sel2),
-        (CtxCmd::Exclude, "", "Exclude", "⌘⌥X", sel2),
-        (CtxCmd::Flatten, "layers", "Flatten", "⌘E", sel),
-        (
-            CtxCmd::OutlineStroke,
-            "pen-line",
-            "Outline stroke",
-            "⇧⌘O",
-            sel,
-        ),
-        (CtxCmd::OutlineText, "type", "Outline text", "⇧⌥⌘O", sel),
-        (CtxCmd::LockSel, "lock", "Lock", "⇧⌘L", sel),
-        (CtxCmd::HideSel, "eye-off", "Hide", "⇧⌘H", sel),
-    ];
-    let w = 208.0;
-    let row_h = 28.0;
-    let h = items.len() as f64 * row_h + 10.0;
+    let w = cm.width;
+    let mut h = 10.0;
+    for it in &cm.items {
+        h += it.height();
+    }
+    let anchor = Point::new(cm.x, cm.y);
     let reg = app.editor_regions();
     // keep inside the canvas area
     let mx = anchor
@@ -614,41 +598,112 @@ fn paint_context_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
     elev_shadow(s, panel, 10.0, Elevation::Floating);
     fill_rrect(s, panel, 8.0, C_FIELD);
     stroke_rrect(s, panel, 8.0, C_LINE_2, 1.0);
-    let _ = reg;
-    for (i, (cmd, icon, label, shortcut, enabled)) in items.iter().enumerate() {
-        let r = Rect::new(
-            mx + 4.0,
-            my + 5.0 + row_h * i as f64,
-            mx + w - 4.0,
-            my + 5.0 + row_h * (i + 1) as f64,
-        );
-        let hov = *enabled && hover(app, r);
-        if hov {
-            fill_rrect(s, r, 5.0, C_FIELD_2);
+    let row_h = MENU_ROW_H;
+    let mut cy = my + 5.0;
+    let mut flyouts: Vec<(Rect, &Vec<ContextMenuItem>)> = Vec::new();
+    for it in &cm.items {
+        match it {
+            ContextMenuItem::Separator => {
+                let ly = cy + 3.5;
+                hline(s, mx + 8.0, mx + w - 8.0, ly, C_LINE_2);
+                cy += SEPARATOR_HEIGHT;
+            }
+            ContextMenuItem::Action { action, enabled } => {
+                let r = Rect::new(mx + 4.0, cy, mx + w - 4.0, cy + row_h);
+                let hov = *enabled && hover(app, r);
+                if hov {
+                    fill_rrect(s, r, 5.0, C_FIELD_2);
+                }
+                let ic = if *enabled { C_TEXT } else { C_DIM };
+                draw_icon(s, action.icon(), r.x0 + 8.0, r.y0 + 7.0, 14.0, ic);
+                app.fonts
+                    .text(s, r.x0 + 30.0, r.y0 + 6.8, action.label(), T11, ic, Wt::Reg);
+                if let Some(sc) = action.shortcut() {
+                    app.fonts.text_right(
+                        s,
+                        r.x1 - 8.0,
+                        r.y0 + 7.3,
+                        sc,
+                        T10,
+                        if *enabled { C_DIM } else { C_MUTED },
+                        Wt::Reg,
+                        0.0,
+                    );
+                }
+                if *enabled {
+                    if let Some(a) = action_for(action) {
+                        hit.push((r, a));
+                    }
+                }
+                cy += row_h;
+            }
+            ContextMenuItem::Submenu {
+                label,
+                icon,
+                enabled,
+                items,
+            } => {
+                let r = Rect::new(mx + 4.0, cy, mx + w - 4.0, cy + row_h);
+                let hov = *enabled && hover(app, r);
+                if hov {
+                    fill_rrect(s, r, 5.0, C_FIELD_2);
+                    flyouts.push((r, items));
+                }
+                let ic = if *enabled { C_TEXT } else { C_DIM };
+                draw_icon(s, icon, r.x0 + 8.0, r.y0 + 7.0, 14.0, ic);
+                app.fonts
+                    .text(s, r.x0 + 30.0, r.y0 + 6.8, label, T11, ic, Wt::Reg);
+                draw_icon(s, "chevron-right", r.x1 - 20.0, r.y0 + 8.0, 12.0, C_DIM);
+                cy += row_h;
+            }
         }
-        let ic = if *enabled { C_TEXT } else { C_DIM };
-        draw_icon(s, icon, r.x0 + 8.0, r.y0 + 7.0, 14.0, ic);
-        app.fonts.text(
-            s,
-            r.x0 + 30.0,
-            r.y0 + 6.8,
-            label,
-            T11,
-            if *enabled { C_TEXT } else { C_MUTED },
-            Wt::Reg,
-        );
-        app.fonts.text_right(
-            s,
-            r.x1 - 8.0,
-            r.y0 + 7.3,
-            shortcut,
-            T10,
-            if *enabled { C_DIM } else { C_MUTED },
-            Wt::Reg,
-            0.0,
-        );
-        if *enabled {
-            hit.push((r, Action::Ctx(*cmd)));
+    }
+    // Submenu flyouts: open on parent hover, clamped to the window,
+    // flipped left when there is no room on the right.
+    for (pr, sub) in flyouts {
+        let sh = 6.0 + sub.len() as f64 * row_h;
+        let right = pr.x1 + 4.0;
+        let left = pr.x0 - w - 4.0;
+        let sx = if right + w <= reg.canvas.x1 - 4.0 {
+            right
+        } else {
+            left
+        };
+        let sy = (pr.y0 + 2.0).min(app.win_h - sh - 4.0);
+        let sp = Rect::new(sx, sy, sx + w, sy + sh);
+        elev_shadow(s, sp, 10.0, Elevation::Floating);
+        fill_rrect(s, sp, 8.0, C_FIELD);
+        stroke_rrect(s, sp, 8.0, C_LINE_2, 1.0);
+        for (j, it) in sub.iter().enumerate() {
+            if let ContextMenuItem::Action { action, enabled } = it {
+                let y = sy + 3.0 + row_h * j as f64;
+                let r = Rect::new(sx + 4.0, y, sx + w - 4.0, y + row_h);
+                let hov = *enabled && hover(app, r);
+                if hov {
+                    fill_rrect(s, r, 5.0, C_FIELD_2);
+                }
+                let ic = if *enabled { C_TEXT } else { C_DIM };
+                draw_icon(s, action.icon(), r.x0 + 8.0, r.y0 + 7.0, 14.0, ic);
+                app.fonts
+                    .text(s, r.x0 + 30.0, r.y0 + 6.8, action.label(), T11, ic, Wt::Reg);
+                if let Some(sc) = action.shortcut() {
+                    app.fonts.text_right(
+                        s,
+                        r.x1 - 8.0,
+                        r.y0 + 7.3,
+                        sc,
+                        T10,
+                        if *enabled { C_DIM } else { C_MUTED },
+                        Wt::Reg,
+                        0.0,
+                    );
+                }
+                if *enabled {
+                    if let Some(a) = action_for(action) {
+                        hit.push((r, a));
+                    }
+                }
+            }
         }
     }
 }
@@ -700,8 +755,8 @@ fn paint_page_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) 
             page + 1 < pages,
         ),
     ];
-    let w = 208.0;
-    let row_h = 28.0;
+    let w = MENU_WIDTH;
+    let row_h = MENU_ROW_H;
     let h = items.len() as f64 * row_h + 10.0;
     let mx = anchor.x.min(app.win_w - w - 4.0).max(4.0);
     let my = anchor.y.min(app.win_h - h - 4.0).max(4.0);
@@ -912,6 +967,12 @@ fn paint_rulers(app: &App, s: &mut Scene) {
     }
 }
 
+/// P10: register a hover label for `r`; `paint_tooltip` draws the one
+/// under the cursor, above everything else.
+fn tip(app: &mut App, r: Rect, label: &str) {
+    app.tooltip.push((r, label.to_string()));
+}
+
 fn hover(app: &App, r: Rect) -> bool {
     r.contains(app.mouse)
 }
@@ -927,8 +988,18 @@ fn input_box(app: &App, s: &mut Scene, r: Rect, radius: f64) {
 // ------------------------------------------------------------- canvas bg
 
 fn paint_canvas_bg(app: &App, s: &mut Scene) {
+    if !app.canvas_bg_visible {
+        return;
+    }
     let r = app.editor_regions();
-    fill_rect(s, r.canvas, app.canvas_bg);
+    let a = (app.canvas_bg_alpha / 100.0).clamp(0.0, 1.0) as f32;
+    let c = vello::peniko::Color::new([
+        app.canvas_bg.components[0] * a,
+        app.canvas_bg.components[1] * a,
+        app.canvas_bg.components[2] * a,
+        app.canvas_bg.components[3] * a,
+    ]);
+    fill_rect(s, r.canvas, c);
 }
 
 // ------------------------------------------------------------ title 36px
@@ -1025,8 +1096,12 @@ fn paint_title(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             12.0,
             if hover(app, cx_r) { C_TEXT } else { C_DIM },
         );
-        hit.push((cx_r, Action::CloseDoc(i)));
+        // hit zones are scanned in reverse, so the MORE SPECIFIC zone must
+        // be pushed LAST: the ✕ must beat the whole-tab SelectDoc zone that
+        // contains it (pushing SelectDoc last made clicks on ✕ select the
+        // tab instead of closing it)
         hit.push((r, Action::SelectDoc(i)));
+        hit.push((cx_r, Action::CloseDoc(i)));
         x += tab_w;
     }
 
@@ -1052,13 +1127,15 @@ fn paint_title(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
 // ------------------------------------------- navigation bar (Figma-style)
 
 /// Navigation bar colors.
-const C_NAV_BG: Color = Color::from_rgb8(0x1A, 0x1A, 0x1A);
-const C_NAV_BORDER: Color = Color::from_rgb8(0x2A, 0x2A, 0x2A);
-const C_NAV_ACTIVE: Color = Color::from_rgb8(0x00, 0x7A, 0xFF);
-const C_NAV_HOVER: Color = Color::from_rgb8(0x25, 0x25, 0x25);
-const C_NAV_ICON: Color = Color::from_rgb8(0x99, 0x99, 0x99);
-const C_NAV_ICON_ACTIVE: Color = Color::from_rgb8(0xFF, 0xFF, 0xFF);
-const C_NAV_LABEL: Color = Color::from_rgb8(0x66, 0x66, 0x66);
+// The nav bar paints through the theme roles like the rest of the chrome,
+// so a theme switch reaches it too.
+const C_NAV_BG: Color = C_PANEL;
+const C_NAV_BORDER: Color = C_LINE;
+const C_NAV_ACTIVE: Color = C_ACCENT;
+const C_NAV_HOVER: Color = C_INPUT_HOVER;
+const C_NAV_ICON: Color = C_DIM;
+const C_NAV_ICON_ACTIVE: Color = C_TEXT;
+const C_NAV_LABEL: Color = C_MUTED;
 const NAV_ICON_SIZE: f64 = 20.0;
 const NAV_ITEM_H: f64 = 40.0;
 const NAV_ITEM_GAP: f64 = 2.0;
@@ -1087,6 +1164,7 @@ fn paint_nav_bar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     for i in 0..3 {
         hline(s, hx, hx + 20.0, hy + i as f64 * 5.0, C_NAV_ICON);
     }
+    tip(app, menu_r, "Document menu");
     hit.push((menu_r, Action::OpenAppMenu));
     y += 44.0;
 
@@ -1136,8 +1214,8 @@ fn paint_nav_bar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             icon_color,
         );
 
-        // Label below icon (if labels are shown)
-        if app.nav_show_labels {
+        // Label below icon
+        {
             let label = tab.label();
             let lw = app.fonts.measure(label, 9.0, Wt::Reg);
             app.fonts.text(
@@ -1207,6 +1285,7 @@ fn paint_nav_bar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             Wt::Bold,
         );
     }
+    tip(app, bell_r, "Notifications");
     hit.push((bell_r, Action::ToggleNotifications));
 }
 
@@ -1218,24 +1297,24 @@ fn paint_app_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let reg = app.editor_regions();
     let mx = reg.nav_bar.x1 + 4.0;
     let my = reg.nav_bar.y0 + 8.0;
-    let mw = 220.0;
+    let mw = APP_MENU_WIDTH;
+    // P14: every item is wired — file items route to the same commands as
+    // their shortcuts; items without an implementation were removed
     let items: Vec<(&str, &str, bool)> = vec![
         ("New file", "⌘N", true),
         ("Open file…", "⌘O", true),
         ("", "", false), // separator
         ("Save", "⌘S", true),
         ("Save as…", "⇧⌘S", true),
+        ("Duplicate file", "", true),
+        ("Move to drafts", "", true),
         ("", "", false), // separator
         ("Export as…", "⇧⌘E", true),
+        ("Find…", "⇧⌘F", true),
         ("", "", false), // separator
-        ("Preferences", "⌘,", true),
         ("Dark mode", "", true),
-        ("Highlight layers on hover", "", true),
-        ("", "", false), // separator
-        ("Keyboard shortcuts", "⌘/", true),
-        ("About X-Native", "", true),
     ];
-    let row_h = 32.0;
+    let row_h = DROPDOWN_ROW_H;
     let mut h = 8.0;
     for (label, _, is_sep) in &items {
         if *is_sep && label.is_empty() {
@@ -1315,7 +1394,16 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         14.0,
         C_DIM,
     );
-    let query = if app.find_replace.query.is_empty() {
+    let query = if app
+        .field
+        .as_ref()
+        .is_some_and(|f| f.id == FieldId::FindQuery)
+    {
+        app.field
+            .as_ref()
+            .map(|f| f.buffer.clone())
+            .unwrap_or_default()
+    } else if app.find_replace.query.is_empty() {
         "Search…".to_string()
     } else {
         app.find_replace.query.clone()
@@ -1334,10 +1422,13 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         qc,
         Wt::Reg,
     );
+    // P13: the search row is a real field (was painted without a hit)
+    hit.push((search_r, Action::Field(FieldId::FindQuery)));
     if !app.find_replace.query.is_empty() {
         let match_text = format!(
             "{}/{}",
-            app.find_replace.current_match, app.find_replace.match_count
+            app.find_replace.current_match.max(1),
+            app.find_replace.match_count
         );
         let mtw = app.fonts.measure(&match_text, T10, Wt::Reg);
         app.fonts.text(
@@ -1364,12 +1455,16 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         );
         draw_icon(s, "chevron-up", prev_r.x0, prev_r.y0 + 2.0, 12.0, C_DIM);
         draw_icon(s, "chevron-down", next_r.x0, next_r.y0 + 2.0, 12.0, C_DIM);
+        tip(app, prev_r, "Previous match");
         hit.push((prev_r, Action::FindPrev));
+        tip(app, next_r, "Next match");
         hit.push((next_r, Action::FindNext));
     }
     // Close button
     let close_r = Rect::new(fx + fw - 20.0, fy + 2.0, fx + fw - 4.0, fy + 18.0);
     draw_icon(s, "x", close_r.x0 + 4.0, close_r.y0 + 4.0, 10.0, C_DIM);
+    tip(app, close_r, "Close find & replace");
+    hit.push((close_r, Action::CloseFind));
 
     // Replace row (if shown)
     if app.find_replace.show_replace {
@@ -1377,7 +1472,16 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         let replace_r = Rect::new(fx + 6.0, ry, fx + fw - 6.0, ry + 22.0);
         fill_rrect(s, replace_r, 4.0, C_BG);
         stroke_rrect(s, replace_r, 4.0, C_LINE, 1.0);
-        let rep_text = if app.find_replace.replace.is_empty() {
+        let rep_text = if app
+            .field
+            .as_ref()
+            .is_some_and(|f| f.id == FieldId::FindReplace)
+        {
+            app.field
+                .as_ref()
+                .map(|f| f.buffer.clone())
+                .unwrap_or_default()
+        } else if app.find_replace.replace.is_empty() {
             "Replace…".to_string()
         } else {
             app.find_replace.replace.clone()
@@ -1396,6 +1500,8 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
             rc,
             Wt::Reg,
         );
+        // P13: the replace row is a real field (was painted without a hit)
+        hit.push((replace_r, Action::Field(FieldId::FindReplace)));
 
         // Replace / Replace All buttons
         let btn_y = ry + 26.0;
@@ -1411,6 +1517,19 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
             Wt::Reg,
         );
         hit.push((repl_all_r, Action::ReplaceAll));
+        // P13: single-replace for the current match (was missing)
+        let repl_r = Rect::new(fx + 6.0, btn_y, fx + 6.0 + 64.0, btn_y + 18.0);
+        fill_rrect(s, repl_r, 4.0, C_FIELD_2);
+        app.fonts.text(
+            s,
+            repl_r.x0 + 6.0,
+            repl_r.y0 + 3.0,
+            "Replace",
+            T10,
+            C_TEXT,
+            Wt::Reg,
+        );
+        hit.push((repl_r, Action::Replace));
     }
 
     // Toggle row
@@ -1508,12 +1627,7 @@ fn paint_notifications(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action
     for notif in &app.notifications.notifications {
         let nr = Rect::new(panel.x0 + 8.0, y, panel.x1 - 8.0, y + 44.0);
         if !notif.read {
-            fill_rrect(
-                s,
-                nr,
-                4.0,
-                vello::peniko::Color::from_rgba8(0x00, 0x7A, 0xFF, 0x08),
-            );
+            fill_rrect(s, nr, 4.0, C_UNREAD_WASH);
         }
         draw_icon(
             s,
@@ -1581,7 +1695,6 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     draw_icon(s, "box", sx + 16.0, y0 + 16.0, 12.0, C_DIM);
     app.fonts
         .micro_label(s, sx + 36.0, y0 + 13.3, "DRAFTS", C_DIM, Wt::Med);
-    draw_icon(s, "more-horizontal", lw - 27.0, y0 + 13.0, 14.0, C_DIM);
 
     // file name row (editable) — the mock's file-name-text, independent
     // from the active tab name
@@ -1680,63 +1793,138 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         paint_tokens(app, s, hit, y0 + 108.0, lw);
     }
 
-    // PAGES section
+    // PAGES section — a real page LIST (viewport audit P2): every page is
+    // visible, click a row to switch, right-click for the page menu, hover
+    // trash to delete. The band height is MEASURED from its rows (no more
+    // fixed single field) and the LAYERS band below anchors to its bottom.
     app.fonts
         .micro_label(s, sx + 12.0, y, "PAGES", C_DIM, Wt::Med);
     let addp = Rect::new(lw - 25.0, y + 0.8, lw - 13.0, y + 12.8);
     draw_icon(s, "plus", addp.x0, y + 0.8, 12.0, C_DIM);
-    hit.push((addp, Action::AddPage)); // page field top 178 → drawn below
+    tip(app, addp, "Add page");
+    hit.push((addp, Action::AddPage));
 
-    // The mock shows a single field: the active page ("Page 3" with 3 pages
-    // in the demo doc) — not a full page list.
     let page_count = app.doc().editors.len();
     let cur_page = app.doc().page;
-    let py = y0 + 142.0;
-    let pr = Rect::new(sx + 12.0, py, lw - 25.0, py + 28.0);
-    app.page_field_rect = Some(pr);
-    fill_rrect(s, pr, R_PAGE, C_FIELD);
-    stroke_rrect(s, pr, R_PAGE, C_LINE_2, 1.0);
-    draw_icon(s, "file", sx + 21.0, py + 8.0, 12.0, C_TEXT);
-    let page_label = {
-        let d = app.doc();
-        d.doc
+    let rows = app.pages_rows();
+    // right-click zone = the whole band (paint + input share pages_rows)
+    let (bx0, by0) = (rows[0].1.x0, rows[0].1.y0);
+    let (bx1, by1) = (rows[rows.len() - 1].1.x1, rows[rows.len() - 1].1.y1);
+    app.page_field_rect = Some(Rect::new(bx0, by0, bx1, by1));
+    for (page_i, r) in rows {
+        let overflow = page_i >= page_count; // the "+N more" sentinel row
+        if overflow {
+            if hover(app, r) {
+                fill_rrect(s, r, R_PAGE, C_ROW_HOVER);
+            }
+            let more = format!("+{} more", page_count - 3);
+            app.fonts
+                .text(s, sx + 41.0, r.y0 + 5.2, &more, T11, C_DIM, Wt::Reg);
+            continue;
+        }
+        let active = page_i == cur_page;
+        if active || hover(app, r) {
+            fill_rrect(s, r, R_PAGE, if active { C_FIELD_2 } else { C_ROW_HOVER });
+            if active {
+                stroke_rrect(s, r, R_PAGE, C_LINE_2, 1.0);
+            }
+        }
+        draw_icon(
+            s,
+            "file",
+            sx + 21.0,
+            r.y0 + 7.0,
+            12.0,
+            if active { C_TEXT } else { C_DIM },
+        );
+        let page_label = app
+            .doc()
+            .doc
             .pages
-            .get(cur_page)
+            .get(page_i)
             .map(|p| p.name.clone())
-            .unwrap_or_else(|| format!("Page {}", cur_page + 1))
-    };
-    // inline rename state (opened from the page context menu): the field
-    // box shows the buffer; the Field hit zone (pushed BEFORE SelectPage,
-    // so clicks still select) lets paint_carets find the caret position
-    if app.field.as_ref().map(|f| f.id) == Some(FieldId::PageName) {
-        let editing = app.field.as_ref().unwrap().buffer.clone();
-        fill_rrect(s, pr, R_PAGE, C_FIELD_2);
-        stroke_rrect(s, pr, R_PAGE, C_LINE_2, 1.0);
-        app.fonts
-            .text(s, sx + 41.0, py + 5.8, &editing, T11, C_TEXT, Wt::Reg);
-        hit.push((pr, Action::Field(FieldId::PageName)));
-    } else {
-        app.fonts
-            .text(s, sx + 41.0, py + 5.8, &page_label, T11, C_TEXT, Wt::Reg);
+            .unwrap_or_else(|| format!("Page {}", page_i + 1));
+        // inline rename state (opened from the page menu): the ACTIVE row
+        // shows the buffer; the Field hit zone is pushed BEFORE SelectPage
+        // so clicks still select
+        let field_id = app.field.as_ref().map(|f| f.id);
+        if field_id == Some(FieldId::PageName) && active {
+            let editing = app.field.as_ref().unwrap().buffer.clone();
+            app.fonts
+                .text(s, sx + 41.0, r.y0 + 5.2, &editing, T11, C_TEXT, Wt::Reg);
+            hit.push((r, Action::Field(FieldId::PageName)));
+        } else {
+            let max_nw = (r.x1 - sx - 41.0 - 26.0).max(16.0);
+            let shown = app.fonts.truncate(&page_label, T11, Wt::Reg, max_nw);
+            let shown_color = if active { C_TEXT } else { C_MUTED };
+            app.fonts
+                .text(s, sx + 41.0, r.y0 + 5.2, &shown, T11, shown_color, Wt::Reg);
+        }
+        if !active && hover(app, r) && page_count > 1 {
+            let tr = Rect::new(lw - 30.0, r.y0 + 5.0, lw - 12.0, r.y0 + 21.0);
+            draw_icon(s, "trash-2", tr.x0, r.y0 + 6.0, 12.0, C_DIM);
+            tip(app, tr, "Delete page");
+            hit.push((tr, Action::DeletePage(page_i)));
+        }
+        hit.push((r, Action::SelectPage(page_i)));
     }
-    if hover(app, pr) && page_count > 1 {
-        let tr = Rect::new(lw - 30.0, py + 6.0, lw - 12.0, py + 22.0);
-        draw_icon(s, "trash-2", tr.x0, py + 7.0, 12.0, C_DIM);
-        hit.push((tr, Action::DeletePage(cur_page)));
-    }
-    hit.push((pr, Action::SelectPage(cur_page)));
 
-    // divider at 218
-    hline(s, sx, lw, y0 + 182.0, C_LINE);
-
-    // PAGE header — audit: label top 231, search icon 12px at (255, 231.8)
-    let page_name = format!("PAGE {}", cur_page + 1);
+    // divider + LAYERS header anchored to the measured band bottom (the
+    // old fixed 182/195/216.5 offsets assumed one 28px field)
+    let band_bottom = app.pages_band_bottom();
+    hline(s, sx, lw, band_bottom + 12.0, C_LINE);
+    let ly = band_bottom + 25.0;
     app.fonts
-        .micro_label(s, sx + 12.0, y0 + 195.0, &page_name, C_DIM, Wt::Med);
-    draw_icon(s, "search", lw - 25.0, y0 + 195.8, 12.0, C_DIM);
+        .micro_label(s, sx + 12.0, ly, "LAYERS", C_DIM, Wt::Med);
+    // F8: the search icon was dead — it opens the tree search field
+    let srch = Rect::new(lw - 28.0, ly - 3.0, lw - 12.0, ly + 13.0);
+    if hover(app, srch) {
+        fill_rrect(s, srch, 4.0, C_FIELD_2);
+    }
+    draw_icon(s, "search", lw - 25.0, ly, 12.0, C_DIM);
+    tip(app, srch, "Search layers");
+    hit.push((srch, Action::Field(FieldId::TreeSearch)));
+    // F6: collapse-all (Figma parity) — the selection's ancestors stay
+    // open; it sits left of search
+    let cpl = Rect::new(lw - 46.0, ly - 3.0, lw - 30.0, ly + 13.0);
+    if hover(app, cpl) {
+        fill_rrect(s, cpl, 4.0, C_FIELD_2);
+    }
+    draw_icon(s, "chevrons-down", lw - 43.0, ly, 12.0, C_DIM);
+    tip(app, cpl, "Collapse all layers");
+    hit.push((cpl, Action::CollapseAllLayers));
 
-    // tree (scrollable) from 252.5
-    let tree_top = y0 + 216.5;
+    // F8: the search row is visible while the field is open or the
+    // query is non-empty; the tree anchors below it
+    let search_open = app.field.as_ref().map(|f| f.id) == Some(FieldId::TreeSearch)
+        || !app.doc().tree_search.is_empty();
+    if search_open {
+        let sr = Rect::new(sx + 4.0, ly + 12.0, sx + lw - 4.0, ly + 12.0 + 24.0);
+        input_box(app, s, sr, 6.0);
+        draw_icon(s, "search", sr.x0 + 8.0, sr.y0 + 6.0, 12.0, C_DIM);
+        let q = if app.field.as_ref().map(|f| f.id) == Some(FieldId::TreeSearch) {
+            app.field.as_ref().unwrap().buffer.clone()
+        } else {
+            app.doc().tree_search.clone()
+        };
+        if !q.is_empty() {
+            let shown = app
+                .fonts
+                .truncate(&q, T11, Wt::Reg, (sr.width() - 40.0).max(16.0));
+            app.fonts
+                .text(s, sr.x0 + 26.0, sr.y0 + 6.5, &shown, T11, C_TEXT, Wt::Reg);
+            let clr = Rect::new(sr.x1 - 20.0, sr.y0 + 2.0, sr.x1 - 6.0, sr.y1 - 2.0);
+            if hover(app, clr) {
+                fill_rrect(s, clr, 4.0, C_FIELD_2);
+            }
+            draw_icon(s, "x", clr.x0 + 2.0, clr.y0 + 2.0, 10.0, C_DIM);
+            hit.push((clr, Action::TreeSearchClear));
+        }
+        hit.push((sr, Action::Field(FieldId::TreeSearch)));
+    }
+
+    // tree (scrollable)
+    let tree_top = band_bottom + 34.5 + if search_open { 30.0 } else { 0.0 };
     let tree_bottom = app.win_h - 16.0;
     let scroll = app.doc().scroll_left;
     if !app.doc().mock_layers.is_empty() {
@@ -1747,6 +1935,8 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         // with a smaller indent is collapsed
         let mut stack: Vec<(usize, bool)> = Vec::new();
         let mut ry = tree_top - scroll;
+        let mut max_indent = 0usize;
+        let mut last_bottom = tree_top;
         for (mi, mock) in mocks.iter().enumerate() {
             while stack
                 .last()
@@ -1762,6 +1952,8 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             if visible {
                 let r = Rect::new(sx + 8.0, ry, lw - 8.0, ry + TREE_ROW_H);
                 if r.y1 >= tree_top && r.y0 <= tree_bottom {
+                    max_indent = max_indent.max(mock.indent);
+                    last_bottom = r.y1;
                     if mock.selected {
                         fill_rrect(s, r, R_TREE, C_SEL_SOFT);
                     }
@@ -1796,21 +1988,68 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                 ry += TREE_ROW_H + 1.0;
             }
         }
+        tree_indent_guides(s, sx + 16.0, tree_top, last_bottom, max_indent);
         app.scaled = false;
     } else {
         let (rows, total_h) = collect_tree_rows(app, scroll, tree_bottom - tree_top);
+        let mut max_indent = 0usize;
+        let mut last_bottom = tree_top;
         for row in &rows {
             let ry = tree_top + row.index as f64 * (TREE_ROW_H + 1.0) - scroll;
             let r = Rect::new(sx + 8.0, ry, lw - 8.0, ry + TREE_ROW_H);
             if r.y1 >= tree_top && r.y0 <= tree_bottom {
+                max_indent = max_indent.max(row.indent);
+                last_bottom = r.y1;
                 let selected = row.selected;
-                if hover(app, r) || selected {
+                // P5: a section (frame with children) keeps a subtle header
+                // band so the document's hierarchy reads at a glance; hover
+                // steps one surface level up instead of appearing from none.
+                if row.is_section {
+                    fill_rrect(s, r, R_TREE, C_FIELD);
+                }
+                if selected {
+                    fill_rrect(s, r, R_TREE, C_SEL_SOFT);
+                } else if hover(app, r) {
                     fill_rrect(
                         s,
                         r,
                         R_TREE,
-                        if selected { C_SEL_SOFT } else { C_ROW_HOVER },
+                        if row.is_section {
+                            C_FIELD_2
+                        } else {
+                            C_ROW_HOVER
+                        },
                     );
+                }
+                // P12: live drag indicator — the dragged row lifts and
+                // the accent line/ring shows where it will land.
+                if let Some(Drag::TreeRow {
+                    id: drag_row,
+                    active: true,
+                    over,
+                    ..
+                }) = &app.drag
+                {
+                    if drag_row == &row.id {
+                        stroke_rrect(s, r, R_TREE, C_ACCENT, 1.5);
+                    }
+                    if let Some(drop) = over {
+                        if drop.row == row.id {
+                            match drop.zone {
+                                0 => fill_rect(
+                                    s,
+                                    Rect::new(r.x0, r.y0 - 1.5, r.x1, r.y0 + 0.5),
+                                    C_ACCENT,
+                                ),
+                                2 => fill_rect(
+                                    s,
+                                    Rect::new(r.x0, r.y1 - 0.5, r.x1, r.y1 + 1.5),
+                                    C_ACCENT,
+                                ),
+                                _ => stroke_rrect(s, r, R_TREE, C_ACCENT, 1.5),
+                            }
+                        }
+                    }
                 }
                 let ix = sx + 8.0 + 8.0 + row.indent as f64 * TREE_INDENT;
                 if row.has_children {
@@ -1855,6 +2094,7 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                         12.0,
                         if hidden { C_TEXT } else { C_DIM },
                     );
+                    tip(app, ey, "Show / hide layer");
                     hit.push((ey, Action::TreeVisible(row.id.clone())));
                 }
                 if row_hover || locked {
@@ -1867,11 +2107,31 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                         12.0,
                         if locked { C_TEXT } else { C_DIM },
                     );
+                    tip(app, lr, "Lock / unlock layer");
                     hit.push((lr, Action::TreeLock(row.id.clone())));
                 }
             }
         }
+        tree_indent_guides(s, sx + 16.0, tree_top, last_bottom, max_indent);
         app.scaled = total_h > tree_bottom - tree_top;
+    }
+}
+
+/// Faint vertical guides at every indent depth below the root — the
+/// hierarchy affordance that makes nesting scannable (drawn after the rows
+/// so the guides sit over the section bands, like the reference tool).
+fn tree_indent_guides(s: &mut Scene, base_x: f64, top: f64, bottom: f64, max_indent: usize) {
+    if bottom <= top {
+        return;
+    }
+    for k in 1..=max_indent.min(12) {
+        vline(
+            s,
+            base_x + k as f64 * TREE_INDENT + 7.0,
+            top,
+            bottom,
+            C_LINE,
+        );
     }
 }
 
@@ -1886,6 +2146,11 @@ struct RowRef {
     selected: bool,
     locked: bool,
     hidden: bool,
+    /// A frame/section container — the document's "sections" get a
+    /// persistent header band in the paint layer.
+    is_section: bool,
+    /// P12: accepts child drops (frames & sections, empty or not).
+    can_contain: bool,
 }
 
 /// Allocate only visible row metadata. In particular, don't clone vector paths
@@ -1904,6 +2169,19 @@ fn collect_tree_rows(app: &App, scroll: f64, height: f64) -> (Vec<RowRef>, f64) 
         .map(String::as_str)
         .collect();
     let mut out = Vec::with_capacity(last.saturating_sub(first).min(128) + 1);
+    // F8: a non-empty query renders matches plus their ancestor chain
+    let ql = doc.tree_search.trim().to_lowercase();
+    let visible: Option<HashSet<&str>> = if ql.is_empty() {
+        None
+    } else {
+        let mut found = HashSet::new();
+        let mut path: Vec<&str> = Vec::new();
+        let root = &doc.editor_ref().root;
+        for c in &root.children {
+            search_visible(c, &ql, &mut path, &mut found);
+        }
+        Some(found)
+    };
     let mut index = 0;
     let mut stack = vec![(doc.editor_ref().root.children.iter(), 0usize)];
     while let Some((children, indent)) = stack.last_mut() {
@@ -1914,6 +2192,13 @@ fn collect_tree_rows(app: &App, scroll: f64, height: f64) -> (Vec<RowRef>, f64) 
         let indent = *indent;
         let has = !child.children.is_empty();
         let expanded = has && doc.expanded.contains(&child.id);
+        let shown = match &visible {
+            Some(set) => set.contains(child.id.as_str()),
+            None => true,
+        };
+        if !shown {
+            continue;
+        }
         if (first..=last).contains(&index) {
             out.push(RowRef {
                 id: child.id.clone(),
@@ -1926,14 +2211,128 @@ fn collect_tree_rows(app: &App, scroll: f64, height: f64) -> (Vec<RowRef>, f64) 
                 selected: selected.contains(child.id.as_str()),
                 locked: child.locked,
                 hidden: !child.visible,
+                is_section: has && matches!(child.kind, NodeKind::Frame { .. } | NodeKind::Section),
+                can_contain: matches!(child.kind, NodeKind::Frame { .. } | NodeKind::Section),
             });
         }
         index += 1;
-        if expanded {
+        // while searching, descend past collapsed nodes too — matches
+        // deeper than the current expansion must still surface
+        if expanded || visible.is_some() {
             stack.push((child.children.iter(), indent + 1));
         }
     }
     (out, index as f64 * pitch)
+}
+
+/// P12: the tree band's geometry (top, bottom, scroll) — the single
+/// source shared by paint and drag hit-testing, so drop targets can
+/// never drift from the painted rows.
+pub(crate) fn tree_geometry(app: &App) -> Option<(f64, f64, f64)> {
+    if app.ui_minimized {
+        return None;
+    }
+    let doc = app.doc_opt()?;
+    let search_open = app.field.as_ref().map(|f| f.id) == Some(FieldId::TreeSearch)
+        || !doc.tree_search.is_empty();
+    let tree_top = app.pages_band_bottom() + 34.5 + if search_open { 30.0 } else { 0.0 };
+    Some((tree_top, app.win_h - 16.0, doc.scroll_left))
+}
+
+/// P12: the drop target for a layers-tree row drag: the row under
+/// `p`, its zone (0 before, 1 child, 2 after) and the tree coordinates
+/// to commit. Frames/sections accept child drops in the middle band;
+/// leaf rows split before/after at the midpoint. The dragged row and
+/// its descendants are never targets; the mock demo tree has no
+/// reorderable content.
+pub fn tree_drop_target(app: &App, drag_id: &str, p: Point) -> Option<TreeDrop> {
+    let doc = app.doc_opt()?;
+    if !doc.mock_layers.is_empty() {
+        return None;
+    }
+    let (tree_top, tree_bottom, scroll) = tree_geometry(app)?;
+    if p.y < tree_top || p.y >= tree_bottom {
+        return None;
+    }
+    let (rows, _h) = collect_tree_rows(app, scroll, tree_bottom - tree_top);
+    let pitch = TREE_ROW_H + 1.0;
+    let subtree = subtree_ids(app, drag_id);
+    for row in &rows {
+        if row.id == drag_id || subtree.contains(row.id.as_str()) {
+            continue;
+        }
+        let ry = tree_top + row.index as f64 * pitch - scroll;
+        if p.y < ry || p.y > ry + TREE_ROW_H {
+            continue;
+        }
+        let rel = (p.y - ry) / TREE_ROW_H;
+        let zone = if row.can_contain && (0.3..0.7).contains(&rel) {
+            1
+        } else if rel < if row.can_contain { 0.3 } else { 0.5 } {
+            0
+        } else {
+            2
+        };
+        let root = &doc.editor_ref().root;
+        let (parent, index) = crate::state::tree_drop_coords(root, &row.id, zone)?;
+        return Some(TreeDrop {
+            row: row.id.clone(),
+            zone,
+            parent,
+            index,
+        });
+    }
+    None
+}
+
+/// P12: every id inside the subtree rooted at `id` (the root itself
+/// excluded).
+fn subtree_ids(app: &App, id: &str) -> HashSet<String> {
+    let mut out: HashSet<String> = HashSet::new();
+    let Some(doc) = app.doc_opt() else {
+        return out;
+    };
+    let root = &doc.editor_ref().root;
+    if let Some(n) = find_node_in(root, id) {
+        walk_subtree(n, &mut out);
+    }
+    out
+}
+
+fn find_node_in<'a>(n: &'a Node, id: &str) -> Option<&'a Node> {
+    if n.id == id {
+        return Some(n);
+    }
+    n.children.iter().find_map(|c| find_node_in(c, id))
+}
+
+fn walk_subtree(n: &Node, out: &mut HashSet<String>) {
+    for c in &n.children {
+        out.insert(c.id.clone());
+        walk_subtree(c, out);
+    }
+}
+
+/// F8: record `node` and its path in `found` when it or any descendant
+/// name contains the (lowercased) query.
+fn search_visible<'e>(
+    node: &'e Node,
+    q: &str,
+    path: &mut Vec<&'e str>,
+    found: &mut HashSet<&'e str>,
+) -> bool {
+    path.push(node.id.as_str());
+    let mut match_sub = node.name.to_lowercase().contains(q);
+    for c in &node.children {
+        if search_visible(c, q, path, found) {
+            match_sub = true;
+        }
+    }
+    if match_sub {
+        found.extend(path.iter().copied());
+    }
+    path.pop();
+    match_sub
 }
 
 /// 6px edge strips between canvas and panels — drags are handled
@@ -1955,10 +2354,10 @@ fn paint_resizers(app: &App, s: &mut Scene) {
     let l_drag = matches!(app.drag, Some(crate::state::Drag::LeftPanel { .. }));
     let r_drag = matches!(app.drag, Some(crate::state::Drag::RightPanel { .. }));
     if hover(app, lr) || l_drag {
-        fill_rect(s, lr, vello::peniko::Color::from_rgba8(255, 255, 255, 20));
+        fill_rect(s, lr, C_WHITE_10);
     }
     if hover(app, rr) || r_drag {
-        fill_rect(s, rr, vello::peniko::Color::from_rgba8(255, 255, 255, 20));
+        fill_rect(s, rr, C_WHITE_10);
     }
 }
 
@@ -1988,26 +2387,39 @@ fn paint_right(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             .map(|c| c.to_string())
             .unwrap_or_else(|| "?".into()),
     );
+    // zoom% is the zoom menu (audit F4): in/out/100%/selection/fit in
+    // one dropdown; the dead history button is gone (F5)
     let zoom_label = format!("{}%", (app.zoom * 100.0).round() as i64);
+    let zoom_r = Rect::new(rx + 38.0, ED_TITLE_H + 7.0, rx + 92.0, ED_TITLE_H + 37.0);
+    if hover(app, zoom_r) || app.dropdown_zoom {
+        fill_rrect(s, zoom_r, 6.0, C_FIELD_2);
+    }
     app.fonts.text(
         s,
         rx + 45.0,
         ED_TITLE_H + 15.8,
         &zoom_label,
         T11,
-        C_MUTED,
+        if app.dropdown_zoom { C_TEXT } else { C_MUTED },
         Wt::Reg,
     );
-    let icons = ["message-circle", "history", "play"];
+    tip(app, zoom_r, "Zoom menu");
+    hit.push((zoom_r, Action::ZoomMenu));
+    let icons = ["message-circle", "play"];
     for (i, ic) in icons.iter().enumerate() {
-        let ix = rx + rw - 84.0 + 28.0 * i as f64;
+        let ix = rx + rw - 56.0 + 28.0 * i as f64;
         let iy = ED_TITLE_H + 16.0;
         draw_icon(s, ic, ix, iy, 16.0, C_DIM);
         let icon_hit = Rect::new(ix - 2.0, iy - 2.0, ix + 18.0, iy + 18.0);
         match i {
-            0 => hit.push((icon_hit, Action::Tool(Tool::Comment))),
-            2 => hit.push((icon_hit, Action::RightTab(RightTab::Prototype))),
-            _ => {}
+            0 => {
+                tip(app, icon_hit, "Comment tool");
+                hit.push((icon_hit, Action::Tool(Tool::Comment)));
+            }
+            _ => {
+                tip(app, icon_hit, "Prototype tab");
+                hit.push((icon_hit, Action::RightTab(RightTab::Prototype)));
+            }
         }
     }
 
@@ -2223,9 +2635,12 @@ fn num_str(v: f64, unit: &str) -> String {
 /// when nothing (or a non-text node) is selected — pixel parity with the
 /// v45 mock is preserved for every non-text state.
 pub fn typo_val(app: &App, which: Typo) -> String {
+    // P3: the fallback family is the document's default font (per-file
+    // data), not a constant — a file can carry any default typeface
+    let default_family = app.doc_ref().doc.resolved_default_font();
     let Some(t) = app.selected_text_typo() else {
         return match which {
-            Typo::Family => "Manrope".into(),
+            Typo::Family => default_family.to_string(),
             Typo::Weight => "Regular".into(),
             Typo::Size => "14".into(),
             Typo::LineHeight => "20".into(),
@@ -2239,7 +2654,7 @@ pub fn typo_val(app: &App, which: Typo) -> String {
         };
     };
     match which {
-        Typo::Family => t.font.unwrap_or_else(|| "Inter".into()),
+        Typo::Family => t.font.unwrap_or_else(|| default_family.to_string()),
         Typo::Weight => weight_name(t.fw).to_string(),
         Typo::Size => num_str(t.fs, ""),
         Typo::LineHeight => match t.lh_mode {
@@ -2395,12 +2810,14 @@ fn paint_design_empty(
     xr: f64,
     y0: f64,
 ) {
-    let w = xr - x0;
+    let pct_w = 64.0;
 
     // CANVAS BACKGROUND
     app.fonts
         .micro_label(s, x0, y0 + 14.0, "CANVAS BACKGROUND", C_DIM, Wt::Med);
-    let f1 = Rect::new(x0, y0 + 30.0, x0 + w, y0 + 58.0);
+    // P13: canvas background gains opacity % + visibility (Figma parity),
+    // mirroring the pixel-grid row layout below
+    let f1 = Rect::new(x0, y0 + 30.0, xr - pct_w - 8.0, y0 + 58.0);
     input_box(app, s, f1, R_INPUT);
     fill_rrect(
         s,
@@ -2419,11 +2836,35 @@ fn paint_design_empty(
     app.fonts
         .text(s, x0 + 30.0, y0 + 37.8, &bg_hex, T11, C_TEXT, Wt::Mono);
     hit.push((f1, Action::Field(FieldId::CanvasBg)));
+    let bg_alpha = field_val(
+        app,
+        FieldId::CanvasBgAlpha,
+        format!("{}", app.canvas_bg_alpha.round() as i64),
+    );
+    let fa = Rect::new(xr - pct_w, y0 + 30.0, xr, y0 + 58.0);
+    input_box(app, s, fa, R_INPUT);
+    app.fonts
+        .text(s, fa.x0 + 9.0, y0 + 36.5, "%", T10, C_DIM, Wt::Reg);
+    app.fonts
+        .text(s, fa.x0 + 33.5, y0 + 37.8, &bg_alpha, T11, C_TEXT, Wt::Mono);
+    hit.push((fa, Action::Field(FieldId::CanvasBgAlpha)));
+    let eye = Rect::new(f1.x1 - 24.0, f1.y0 + 6.0, f1.x1 - 6.0, f1.y1 - 6.0);
+    if hover(app, eye) {
+        fill_rrect(s, eye, 4.0, C_FIELD_2);
+    }
+    let eye_name = if app.canvas_bg_visible {
+        "eye"
+    } else {
+        "eye-off"
+    };
+    let eye_col = if app.canvas_bg_visible { C_TEXT } else { C_DIM };
+    draw_icon(s, eye_name, eye.x0 + 1.0, f1.y0 + 8.0, 12.0, eye_col);
+    tip(app, eye, "Show / hide canvas background");
+    hit.push((eye, Action::ToggleCanvasBgVisibility));
 
     // PIXEL GRID COLOR
     app.fonts
         .micro_label(s, x0, y0 + 74.0, "PIXEL GRID COLOR", C_DIM, Wt::Med);
-    let pct_w = 64.0;
     let f2 = Rect::new(x0, y0 + 90.0, xr - pct_w - 8.0, y0 + 118.0);
     input_box(app, s, f2, R_INPUT);
     fill_rrect(
@@ -2625,7 +3066,6 @@ fn paint_design(
 
     app.fonts
         .text(s, x0, y0 + 209.0, "Flow", T10, C_DIM, Wt::Reg);
-    draw_icon(s, "arrow-up-right", xr - 14.0, y0 + 207.5, 14.0, C_DIM);
     let flow_xs = [0.0, 80.3, 160.5, 240.8];
     let flow = app.doc().flow;
     let boot_mock = app.doc().flow_boot_mock;
@@ -2723,10 +3163,6 @@ fn paint_design(
             ));
         }
     }
-    let mz = Rect::new(x0 + 283.0, y0 + 299.0, x0 + 315.0, y0 + 331.0);
-    input_box(app, s, mz, 8.0);
-    draw_icon(s, "maximize-2", mz.x0 + 9.0, mz.y0 + 9.0, 14.0, C_DIM);
-
     app.fonts
         .text(s, x0, y0 + 347.0, "Alignment", T10, C_DIM, Wt::Reg);
     app.fonts
@@ -2747,13 +3183,7 @@ fn paint_design(
             let active = align.0 == row && align.1 == col;
             let mirror = col == 0 && align.0 == row && align.1 == 2;
             if active || mirror {
-                circle(
-                    s,
-                    dx,
-                    dy,
-                    9.0,
-                    vello::peniko::Color::from_rgba8(255, 255, 255, 31),
-                );
+                circle(s, dx, dy, 9.0, C_WHITE_10);
             }
             circle(
                 s,
@@ -2807,23 +3237,19 @@ fn paint_design(
         let pr = Rect::new(fx, y0 + 493.0, fx + 133.5, y0 + 525.0);
         input_box(app, s, pr, 8.0);
         let g = Rect::new(pr.x0 + 9.0, pr.y0 + 8.0, pr.x0 + 25.0, pr.y0 + 24.0);
-        let gray55 = vello::peniko::Color::from_rgb8(0x55, 0x55, 0x55);
-        stroke_rrect(s, g, 3.0, gray55, 1.0);
+        stroke_rrect(s, g, 3.0, C_DIM, 1.0);
         if i == 0 {
-            vline(s, g.x0 + 5.0, g.y0 + 3.0, g.y1 - 3.0, gray55);
-            vline(s, g.x1 - 5.0, g.y0 + 3.0, g.y1 - 3.0, gray55);
+            vline(s, g.x0 + 5.0, g.y0 + 3.0, g.y1 - 3.0, C_DIM);
+            vline(s, g.x1 - 5.0, g.y0 + 3.0, g.y1 - 3.0, C_DIM);
         } else {
-            hline(s, g.x0 + 3.0, g.x1 - 3.0, g.y0 + 5.0, gray55);
-            hline(s, g.x0 + 3.0, g.x1 - 3.0, g.y1 - 5.0, gray55);
+            hline(s, g.x0 + 3.0, g.x1 - 3.0, g.y0 + 5.0, C_DIM);
+            hline(s, g.x0 + 3.0, g.x1 - 3.0, g.y1 - 5.0, C_DIM);
         }
         let v = field_val(app, fid, fmt_num(val));
         app.fonts
             .text(s, g.x1 + 5.0, pr.y0 + 6.8, &v, T11, C_TEXT, Wt::Reg);
         hit.push((pr, Action::Field(fid)));
     }
-    let pgb = Rect::new(x0 + 283.0, y0 + 493.0, x0 + 315.0, y0 + 525.0);
-    input_box(app, s, pgb, 8.0);
-    draw_icon(s, "layout-grid", pgb.x0 + 9.0, pgb.y0 + 9.0, 14.0, C_DIM);
 
     // ---- A3/A4 row: Wrap (frame WITH auto-layout) or, for a CHILD of
     // an auto-layout frame, Fill container + Absolute position. Sits in
@@ -3577,9 +4003,16 @@ fn paint_design(
         Action::AddGuide,
     ));
     y += 14.0 + 8.0;
+    // P13: the guide overflow was dead; the guides list only ever gains
+    // entries, so the honest control is a clear-all button
     let mvb = Rect::new(rx + pl, y, rx + pl + 24.0, y + 28.0);
     input_box(app, s, mvb, 6.0);
-    draw_icon(s, "more-vertical", mvb.x0 + 6.0, mvb.y0 + 6.0, 12.0, C_DIM);
+    if hover(app, mvb) {
+        fill_rrect(s, mvb, 6.0, C_FIELD_2);
+    }
+    draw_icon(s, "trash-2", mvb.x0 + 6.0, mvb.y0 + 6.0, 12.0, C_DIM);
+    tip(app, mvb, "Clear all guides");
+    hit.push((mvb, Action::RemoveGuide));
     let kd_w = inner_w - 24.0 - 48.0 - 24.0 - 24.0 - 6.0 * 4.0;
     let kd = Rect::new(mvb.x1 + 6.0, y, mvb.x1 + 6.0 + kd_w, y + 28.0);
     let kind_label = if app.doc().guide_kind == 0 {
@@ -4418,7 +4851,8 @@ fn paint_paint_row(
 ) -> f64 {
     let inner_w = rw - pl * 2.0;
     let h = 28.0;
-    let hex_w = inner_w - 64.0 - 24.0 - 24.0 - 8.0 * 3.0;
+    // hex field + pipette 24 + alpha % 64 + eye 24 + remove 24, gaps of 8
+    let hex_w = inner_w - 64.0 - 24.0 - 24.0 - 24.0 - 8.0 * 4.0;
     let r = Rect::new(rx + pl, y, rx + pl + hex_w, y + h);
     let hov = hover(app, r);
     fill_rrect(s, r, 6.0, if hov { C_INPUT_HOVER } else { C_FIELD });
@@ -4439,7 +4873,23 @@ fn paint_paint_row(
     // wins during reverse hit-testing.
     hit.push((r, Action::Field(hex_field)));
     hit.push((sw, Action::ToggleColorPicker(is_fill)));
-    let ar = Rect::new(r.x1 + 8.0, y, r.x1 + 8.0 + 64.0, y + h);
+    // P14: eyedropper — sample a layer's paint (was an unreachable action)
+    let pd = Rect::new(r.x1 + 8.0, y + 2.0, r.x1 + 8.0 + 24.0, y + 26.0);
+    let drop_armed = app.eyedropper == Some(!is_fill);
+    if hover(app, pd) || drop_armed {
+        fill_rrect(s, pd, 6.0, if drop_armed { C_SEL } else { C_FIELD_2 });
+    }
+    draw_icon(
+        s,
+        "pipette",
+        pd.x0 + 5.0,
+        pd.y0 + 5.0,
+        14.0,
+        if drop_armed { C_TEXT } else { C_DIM },
+    );
+    tip(app, pd, "Eyedropper: sample a layer's fill / stroke");
+    hit.push((pd, Action::EnableEyedropper(!is_fill)));
+    let ar = Rect::new(pd.x1 + 8.0, y, pd.x1 + 8.0 + 64.0, y + h);
     input(
         app,
         s,
@@ -4483,6 +4933,42 @@ fn paint_paint_row(
 
 // -------------------------------------------------------- frame dropdown
 
+/// Zoom menu (audit F4): the zoom% in the right header opens it;
+/// in/out/100%/selection/fit with the real shortcut hints.
+fn paint_zoom_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    let reg = app.editor_regions();
+    let x0 = reg.right.x0 + 20.0;
+    let y0 = ED_TITLE_H + 42.0;
+    let items = [
+        ("zoom-in", "Zoom in", "⌘="),
+        ("zoom-out", "Zoom out", "⌘-"),
+        ("target", "Zoom to 100%", "⌘0"),
+        ("box-select", "Zoom to selection", "⇧0"),
+        ("maximize", "Zoom to fit", "⇧1"),
+    ];
+    let dd = Rect::new(x0, y0, x0 + 190.0, y0 + items.len() as f64 * DROPDOWN_ROW_H);
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, 8.0, C_FIELD);
+    stroke_rrect(s, dd, 8.0, C_LINE_2, 1.0);
+    for (i, (ic, name, sc)) in items.into_iter().enumerate() {
+        let r = Rect::new(
+            x0,
+            y0 + DROPDOWN_ROW_H * i as f64,
+            x0 + 190.0,
+            y0 + DROPDOWN_ROW_H * (i + 1) as f64,
+        );
+        if hover(app, r) {
+            fill_rect(s, r, C_FIELD_2);
+        }
+        draw_icon(s, ic, r.x0 + 10.0, r.y0 + 8.0, 14.0, C_DIM);
+        app.fonts
+            .text(s, r.x0 + 32.0, r.y0 + 9.0, name, T11, C_TEXT, Wt::Reg);
+        app.fonts
+            .text_right(s, r.x1 - 10.0, r.y0 + 10.0, sc, T10, C_DIM, Wt::Reg, 0.0);
+        hit.push((r, Action::ZoomStep(i)));
+    }
+}
+
 fn paint_frame_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let reg = app.editor_regions();
     let pl = 12.0;
@@ -4490,16 +4976,16 @@ fn paint_frame_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Actio
     let fd_w = inner_w - 90.0 - SQ_BTN - SQ_BTN - 8.0 * 3.0;
     let dx = reg.right.x0 + pl;
     let dy = ED_TITLE_H + 8.0 + 24.0 + 10.0 + PILL_H + 10.0 + 1.0 + 12.0 + 32.0;
-    let dd = Rect::new(dx, dy, dx + fd_w, dy + 5.0 * 32.0);
+    let dd = Rect::new(dx, dy, dx + fd_w, dy + 5.0 * DROPDOWN_ROW_H);
     elev_shadow(s, dd, 8.0, Elevation::Floating);
     fill_rrect(s, dd, 8.0, C_FIELD);
     stroke_rrect(s, dd, 8.0, C_LINE_2, 1.0);
     for (i, (name, w, h)) in FRAME_PRESETS.into_iter().enumerate() {
         let r = Rect::new(
             dx,
-            dy + 32.0 * i as f64,
+            dy + DROPDOWN_ROW_H * i as f64,
             dx + fd_w,
-            dy + 32.0 * (i + 1) as f64,
+            dy + DROPDOWN_ROW_H * (i + 1) as f64,
         );
         if hover(app, r) || i == 0 {
             fill_rect(s, r, if hover(app, r) { C_FIELD_2 } else { C_FIELD });
@@ -4534,7 +5020,7 @@ fn paint_lh_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>
     let y_entry = crate::theme::ED_TITLE_H + 89.0;
     // the typography rows scroll with the panel
     let fy = y_entry + 771.0 - app.doc().scroll_right;
-    let dd = Rect::new(x0, fy + 28.0, x0 + 153.5, fy + 28.0 + 3.0 * 32.0);
+    let dd = Rect::new(x0, fy + 28.0, x0 + 153.5, fy + 28.0 + 3.0 * DROPDOWN_ROW_H);
     elev_shadow(s, dd, 8.0, Elevation::Floating);
     fill_rrect(s, dd, 8.0, C_FIELD);
     stroke_rrect(s, dd, 8.0, C_LINE_2, 1.0);
@@ -4542,9 +5028,9 @@ fn paint_lh_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>
     for (i, name) in ["Auto", "Pixels", "Percent"].into_iter().enumerate() {
         let r = Rect::new(
             dd.x0,
-            dd.y0 + 32.0 * i as f64,
+            dd.y0 + DROPDOWN_ROW_H * i as f64,
             dd.x1,
-            dd.y0 + 32.0 * (i + 1) as f64,
+            dd.y0 + DROPDOWN_ROW_H * (i + 1) as f64,
         );
         let hov = hover(app, r);
         if hov {
@@ -4616,7 +5102,7 @@ fn paint_text_style_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, 
         x0,
         fy + 22.0,
         x0 + 315.0,
-        fy + 22.0 + rows.len() as f64 * 32.0,
+        fy + 22.0 + rows.len() as f64 * DROPDOWN_ROW_H,
     );
     elev_shadow(s, dd, 8.0, Elevation::Floating);
     fill_rrect(s, dd, 8.0, C_FIELD);
@@ -4624,9 +5110,9 @@ fn paint_text_style_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, 
     for (i, (label, action)) in rows.into_iter().enumerate() {
         let r = Rect::new(
             dd.x0,
-            dd.y0 + 32.0 * i as f64,
+            dd.y0 + DROPDOWN_ROW_H * i as f64,
             dd.x1,
-            dd.y0 + 32.0 * (i + 1) as f64,
+            dd.y0 + DROPDOWN_ROW_H * (i + 1) as f64,
         );
         let hov = hover(app, r);
         if hov {
@@ -4668,7 +5154,9 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             Tool::Hand,
         ]
     } else {
-        // Design tools for artboard-based work
+        // Design tools for artboard-based work — the full tool set
+        // (audit F2: eraser, symmetry and comment were keyboard-only
+        // before; the toolbar is the tool hub)
         &[
             Tool::Select,
             Tool::Frame,
@@ -4676,13 +5164,16 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             Tool::Rect,
             Tool::Ellipse,
             Tool::Pen,
+            Tool::Eraser,
+            Tool::Symmetry,
+            Tool::Comment,
             Tool::Hand,
         ]
     };
-    // Audited (canvas 280..1100 @900): container 311×40 r12 at bottom-5
-    // (y = win_h − 60); icons 32px pitch 36 starting +7; divider mid-gap;
-    // palette btn at +272 from container left.
-    let bar_w = 311.0;
+    // Audited (canvas 280..1100 @900): container 415×40 r12 at bottom-5
+    // (y = win_h − 60); icons 32px pitch 36 starting +7; divider mid-gap
+    // after ten tools; palette btn at +376 from container left.
+    let bar_w = 415.0;
     let bar_x0 = reg.canvas.x0 + (reg.canvas.x1 - reg.canvas.x0 - bar_w) / 2.0;
     let bar_y0 = app.win_h - TOOLBAR_BOTTOM - TOOLBAR_H;
     let bar = Rect::new(bar_x0, bar_y0, bar_x0 + bar_w, bar_y0 + TOOLBAR_H);
@@ -4708,26 +5199,41 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             16.0,
             if active { C_BLACK } else { C_DIM },
         );
+        let sc = t.shortcut_hint(app.is_board());
+        let tl = if sc.is_empty() {
+            t.label().to_string()
+        } else {
+            format!("{} ({})", t.label(), sc)
+        };
+        tip(app, r, &tl);
         hit.push((r, Action::Tool(*t)));
     }
-    // divider between hand (ends +263) and palette (+272)
-    let dx = bar.x0 + 267.5;
+    // divider between hand (ends +363) and palette (+376)
+    let dx = bar.x0 + 371.5;
     fill_rect(
         s,
         Rect::new(dx, bar.y0 + 10.0, dx + 1.0, bar.y1 - 10.0),
         C_LINE_2,
     );
     // search → palette
-    let sx = bar.x0 + 272.0;
+    let sx = bar.x0 + 376.0;
     let sr = Rect::new(sx, bar.y0 + 4.0, sx + TOOL_ICON, bar.y0 + 4.0 + TOOL_ICON);
     if hover(app, sr) {
         fill_rrect(s, sr, R_TOOL_ICON, C_FIELD_2);
     }
     draw_icon(s, "search", sr.x0 + 8.0, sr.y0 + 8.0, 16.0, C_DIM);
+    tip(app, sr, "Command palette (⌘K)");
     hit.push((sr, Action::PaletteToggle));
 }
 
 // ------------------------------------------------------- canvas overlays
+
+/// The size badge is only drawn when the selection's SCREEN bounding box
+/// actually occupies area — a zero-size node would otherwise print a
+/// meaningless "0 × 0" under empty canvas.
+pub(crate) fn size_badge_visible(bb: &Rect) -> bool {
+    bb.width() > 0.5 && bb.height() > 0.5
+}
 
 fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
     let doc = match app.doc_opt() {
@@ -4775,21 +5281,25 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
             }
         }
         if let Some(b) = bb {
-            let label = format!(
-                "{} \u{d7} {}",
-                b.width().round() as i64,
-                b.height().round() as i64
-            );
-            let tw = app.fonts.measure(&label, 10.0, Wt::Mono);
-            let bw = (tw + 12.0).ceil();
-            let cx = (b.x0 + b.x1) / 2.0;
-            let by = b.y1 + 8.0;
-            let reg = app.editor_regions();
-            if by + 16.0 <= reg.canvas.y1 {
-                let br = Rect::new(cx - bw / 2.0, by, cx + bw / 2.0, by + 16.0);
-                fill_rrect(s, br, 3.0, C_SEL);
-                app.fonts
-                    .text(s, br.x0 + 6.0, by + 0.5, &label, 10.0, C_TEXT, Wt::Mono);
+            // a degenerate union (zero-size node) has no area to measure —
+            // printing "0 × 0" under empty canvas is noise
+            if size_badge_visible(&b) {
+                let label = format!(
+                    "{} \u{d7} {}",
+                    b.width().round() as i64,
+                    b.height().round() as i64
+                );
+                let tw = app.fonts.measure(&label, 10.0, Wt::Mono);
+                let bw = (tw + 12.0).ceil();
+                let cx = (b.x0 + b.x1) / 2.0;
+                let by = b.y1 + 8.0;
+                let reg = app.editor_regions();
+                if by + 16.0 <= reg.canvas.y1 {
+                    let br = Rect::new(cx - bw / 2.0, by, cx + bw / 2.0, by + 16.0);
+                    fill_rrect(s, br, 3.0, C_SEL);
+                    app.fonts
+                        .text(s, br.x0 + 6.0, by + 0.5, &label, 10.0, C_TEXT, Wt::Mono);
+                }
             }
         }
     }
@@ -5026,6 +5536,12 @@ fn paint_carets(app: &mut App, s: &mut Scene) {
                     FieldId::DocName => r.x0 + 10.0 + w,
                     // component property input: unlabeled, text at +8
                     FieldId::InstanceProp => r.x0 + 8.0 + w,
+                    // find rows: search text at +24 (after the icon),
+                    // replace text at +8
+                    FieldId::FindQuery => r.x0 + 24.0 + w,
+                    FieldId::FindReplace => r.x0 + 8.0 + w,
+                    // % boxes: value text at +33.5 (after the % label)
+                    FieldId::GridPct | FieldId::CanvasBgAlpha => r.x0 + 33.5 + w,
                     _ => r.x0 + 8.0 + 14.0 + 6.0 + w,
                 };
                 if x < r.x1 - 8.0 {
@@ -5604,7 +6120,10 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
                 Wt::Med,
                 true,
             );
-            draw_icon(s, "trash-2", card.x0 + 126.0, card.y0 + 51.0, 14.0, C_DIM);
+            // Delete: `canvas_press` handles the del click at
+            // (sp.x+126, sp.y+6, +42, +24); card.x0 = sp.x+32 and
+            // card.y0 = sp.y-28, so the icon centers in that rect
+            draw_icon(s, "trash-2", card.x0 + 108.0, card.y0 + 39.0, 14.0, C_DIM);
         }
     }
     // the composer (new comment)
@@ -6713,6 +7232,14 @@ fn paint_tokens(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
 mod viewport_row_tests {
     use super::*;
     #[test]
+    fn size_badge_needs_an_area_to_measure() {
+        assert!(size_badge_visible(&Rect::new(100.0, 100.0, 140.0, 140.0)));
+        assert!(size_badge_visible(&Rect::new(100.0, 100.0, 100.6, 140.0)));
+        // a zero-size node selects fine, but "0 × 0" is not a measurement
+        assert!(!size_badge_visible(&Rect::new(100.0, 100.0, 100.0, 100.0)));
+        assert!(!size_badge_visible(&Rect::new(100.0, 100.0, 140.0, 100.0)));
+    }
+    #[test]
     fn layer_rows_allocate_only_the_visible_window_and_keep_flags() {
         let mut app = App::new();
         app.open_blank();
@@ -6730,5 +7257,131 @@ mod viewport_row_tests {
         let row = rows.iter().find(|r| r.id == "r9000").unwrap();
         assert!(row.locked && row.selected);
         assert!(rows.iter().find(|r| r.id == "r9001").unwrap().selected);
+    }
+
+    #[test]
+    fn tree_drop_target_zones_and_exclusions() {
+        let mut app = App::new();
+        app.open_blank();
+        let root_id = app.doc().editor_ref().root.id.clone();
+        app.doc()
+            .editor()
+            .insert_node(&root_id, Node::frame("fr1", 300.0, 200.0));
+        app.doc()
+            .editor()
+            .insert_node(&root_id, Node::frame("fr2", 300.0, 200.0));
+        app.doc().editor().insert_node(
+            "fr1",
+            Node::rect("card", 0.0, 0.0, 10.0, 10.0, x_native::Color::WHITE),
+        );
+        app.doc().expanded.insert("fr1".into());
+        let (top, _bottom, _scroll) = tree_geometry(&app).unwrap();
+        let pitch = TREE_ROW_H + 1.0;
+        // rows: fr1 (0), card (1), fr2 (2)
+        let row_top = |idx: usize| top + idx as f64 * pitch;
+        let x = 120.0;
+        let p_before = Point::new(x, row_top(2) + 2.0);
+        let p_inside = Point::new(x, row_top(2) + TREE_ROW_H / 2.0);
+        let p_after = Point::new(x, row_top(2) + TREE_ROW_H - 1.0);
+        let p_leaf = Point::new(x, row_top(1) + TREE_ROW_H / 2.0);
+        let p_own = Point::new(x, row_top(1) + 1.0);
+        let p_out = Point::new(x, top - 10.0);
+        let before = tree_drop_target(&app, "card", p_before);
+        assert_eq!(
+            before.map(|d| (d.zone, d.parent, d.index)),
+            Some((0, root_id.clone(), 1))
+        );
+        let inside = tree_drop_target(&app, "card", p_inside);
+        assert_eq!(
+            inside.map(|d| (d.zone, d.parent, d.index)),
+            Some((1, "fr2".to_string(), 0))
+        );
+        let after = tree_drop_target(&app, "card", p_after);
+        assert_eq!(
+            after.map(|d| (d.zone, d.parent, d.index)),
+            Some((2, root_id.clone(), 2))
+        );
+        // a leaf row never takes a child drop; midpoint falls after
+        let leaf_mid = tree_drop_target(&app, "fr2", p_leaf);
+        assert_eq!(leaf_mid.map(|d| d.zone), Some(2));
+        // the dragged row itself is never a target
+        assert!(tree_drop_target(&app, "card", p_own).is_none());
+        // descendants are never targets (dragging fr1 over its own child)
+        assert!(tree_drop_target(&app, "fr1", p_own).is_none());
+        // outside the band
+        assert!(tree_drop_target(&app, "card", p_out).is_none());
+    }
+
+    #[test]
+    fn tree_search_shows_only_matches_and_ancestors() {
+        // F8: a query renders matches plus their ancestor chain, through
+        // collapsed nodes; clearing the query restores the full tree.
+        let mut app = App::new();
+        app.open_blank();
+        let root_id = app.doc().editor_ref().root.id.clone();
+        app.doc()
+            .editor()
+            .insert_node(&root_id, Node::frame("fr1", 300.0, 200.0));
+        app.doc()
+            .editor()
+            .insert_node(&root_id, Node::frame("fr2", 300.0, 200.0));
+        app.doc().editor().insert_node(
+            "fr1",
+            Node::rect("card", 0.0, 0.0, 10.0, 10.0, x_native::Color::WHITE),
+        );
+        app.doc().editor().insert_node(
+            "fr2",
+            Node::rect("btn", 0.0, 0.0, 10.0, 10.0, x_native::Color::WHITE),
+        );
+        app.doc().tree_search = "card".into();
+        let (rows, _) = collect_tree_rows(&app, 0.0, 400.0);
+        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["fr1", "card"], "match + its ancestor only");
+        app.doc().tree_search.clear();
+        let (rows, _) = collect_tree_rows(&app, 0.0, 400.0);
+        assert_eq!(rows.len(), 2, "cleared query → both top frames again");
+    }
+
+    #[test]
+    fn tree_rows_flag_frames_as_sections_but_not_groups() {
+        // P5: frames (the document's sections) carry the section affordance;
+        // plain group containers do not.
+        let mut app = App::new();
+        app.open_blank();
+        let root_id = app.doc().editor_ref().root.id.clone();
+        app.doc()
+            .editor()
+            .insert_node(&root_id, Node::frame("fr1", 300.0, 200.0));
+        app.doc()
+            .editor()
+            .insert_node(&root_id, Node::group("gr1", 300.0, 200.0));
+        app.doc().editor().insert_node(
+            "fr1",
+            Node::rect("r1", 0.0, 0.0, 10.0, 10.0, x_native::Color::WHITE),
+        );
+        app.doc().editor().insert_node(
+            "gr1",
+            Node::rect("r2", 0.0, 0.0, 10.0, 10.0, x_native::Color::WHITE),
+        );
+        let (rows, _) = collect_tree_rows(&app, 0.0, 400.0);
+        assert_eq!(rows.len(), 2, "collapsed containers hide their children");
+        let fr = rows.iter().find(|r| r.id == "fr1").unwrap();
+        assert!(
+            fr.is_section && fr.has_children && fr.indent == 0,
+            "a frame with children is a top-level section"
+        );
+        let gr = rows.iter().find(|r| r.id == "gr1").unwrap();
+        assert!(
+            gr.has_children && !gr.is_section,
+            "a group is a container but not a section"
+        );
+        app.doc().expanded.insert("fr1".into());
+        let (rows, _) = collect_tree_rows(&app, 0.0, 400.0);
+        assert_eq!(rows.len(), 3);
+        let child = rows.iter().find(|r| r.id == "r1").unwrap();
+        assert!(
+            !child.is_section && child.indent == 1,
+            "a leaf child sits one level in"
+        );
     }
 }

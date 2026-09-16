@@ -1594,6 +1594,63 @@ impl Editor {
         true
     }
 
+    /// P12 drag-reorder: move node `id` (currently at `from_index` in
+    /// `from_parent`) so it lands at logical slot `index` in `to_parent`'s
+    /// children — the slot expressed in the list where the node STILL
+    /// exists (e.g. "before sibling T" = T's index, "after T" = T's
+    /// index + 1). The same-parent removal shift is applied here, and the
+    /// index is clamped at apply. One undo step. `false` when invalid
+    /// (unknown ids, the root, a cycle) or a no-op (same slot).
+    pub fn reorder_node(
+        &mut self,
+        id: &str,
+        from_parent: &str,
+        from_index: usize,
+        to_parent: &str,
+        index: usize,
+    ) -> bool {
+        if id == to_parent || id == self.root.id {
+            return false;
+        }
+        let Some(node) = find(&self.root, id) else {
+            return false;
+        };
+        if find(node, to_parent).is_some() {
+            return false; // to_parent lives inside the moving subtree
+        }
+        let Some(fp) = find(&self.root, from_parent) else {
+            return false;
+        };
+        if fp.children.get(from_index).map(|c| c.id.as_str()) != Some(id) {
+            return false;
+        }
+        // Splice semantics: removing the node above the slot shifts the
+        // insertion point down by one (same parent only).
+        let slot = if from_parent == to_parent && from_index < index {
+            index.saturating_sub(1)
+        } else {
+            index
+        };
+        if from_parent == to_parent && slot == from_index {
+            return false; // same slot
+        }
+        let cmd = Command::ReorderNode {
+            id: id.into(),
+            from_parent: from_parent.into(),
+            from_index,
+            to_parent: to_parent.into(),
+            index: slot,
+        };
+        if apply(&mut self.root, &cmd) {
+            self.edit_serial = self.edit_serial.wrapping_add(1);
+            self.undo_stack.push(vec![cmd]);
+            self.clear_redo_history();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Phase 5.2: turn the current selection into a Component definition.
     /// The selected nodes become children of a hidden master (placed at the
     /// document root), and the selection is replaced in-place by an Instance
@@ -2870,5 +2927,94 @@ mod reliability_history_tests {
         editor.move_node("a", 1.0, 0.0);
         assert!(editor.snapshots.iter().all(|(d, _)| *d != usize::MAX));
         assert!(!editor.redo());
+    }
+
+    fn ids_of(node: &Node) -> Vec<&str> {
+        node.children.iter().map(|c| c.id.as_str()).collect()
+    }
+
+    #[test]
+    fn reorder_node_moves_within_a_parent_with_undo_redo() {
+        let mut ed = Editor::new(Node::frame("p", 100.0, 100.0));
+        let root_id = ed.root.id.clone();
+        ed.insert_node(
+            &root_id,
+            Node::rect("a", 0.0, 0.0, 10.0, 10.0, Color::WHITE),
+        );
+        ed.insert_node(
+            &root_id,
+            Node::rect("b", 20.0, 0.0, 10.0, 10.0, Color::WHITE),
+        );
+        ed.insert_node(
+            &root_id,
+            Node::rect("c", 30.0, 0.0, 10.0, 10.0, Color::WHITE),
+        );
+        // "after b" (b's slot + 1) -> [b, a, c]
+        assert!(ed.reorder_node("a", &root_id, 0, &root_id, 2));
+        assert_eq!(ids_of(&ed.root), vec!["b", "a", "c"]);
+        assert!(ed.undo());
+        assert_eq!(ids_of(&ed.root), vec!["a", "b", "c"]);
+        assert!(ed.redo());
+        assert_eq!(ids_of(&ed.root), vec!["b", "a", "c"]);
+        // "to the front" -> [a, b, c]
+        assert!(ed.reorder_node("a", &root_id, 1, &root_id, 0));
+        assert_eq!(ids_of(&ed.root), vec!["a", "b", "c"]);
+        // "before b" from the end -> [a, c, b]
+        assert!(ed.reorder_node("c", &root_id, 2, &root_id, 1));
+        assert_eq!(ids_of(&ed.root), vec!["a", "c", "b"]);
+    }
+
+    #[test]
+    fn reorder_node_reparents_with_undo() {
+        let mut ed = Editor::new(Node::frame("p", 100.0, 100.0));
+        let root_id = ed.root.id.clone();
+        ed.insert_node(&root_id, Node::frame("fr", 100.0, 100.0));
+        ed.insert_node("fr", Node::rect("in", 0.0, 0.0, 10.0, 10.0, Color::WHITE));
+        ed.insert_node(&root_id, Node::frame("fr2", 100.0, 100.0));
+        // in (first child of fr) -> first child of fr2
+        assert!(ed.reorder_node("in", "fr", 0, "fr2", 0));
+        assert!(ed
+            .get_node("fr2")
+            .unwrap()
+            .children
+            .iter()
+            .any(|c| c.id == "in"));
+        assert!(ed.get_node("fr").unwrap().children.is_empty());
+        assert!(ed.undo());
+        assert!(ed
+            .get_node("fr")
+            .unwrap()
+            .children
+            .iter()
+            .any(|c| c.id == "in"));
+        assert!(ed.get_node("fr2").unwrap().children.is_empty());
+    }
+
+    #[test]
+    fn reorder_node_rejects_invalid_and_noops() {
+        let mut ed = Editor::new(Node::frame("p", 100.0, 100.0));
+        let root_id = ed.root.id.clone();
+        ed.insert_node(&root_id, Node::frame("fr", 100.0, 100.0));
+        ed.insert_node("fr", Node::rect("in", 0.0, 0.0, 10.0, 10.0, Color::WHITE));
+        ed.insert_node(&root_id, Node::frame("fr2", 100.0, 100.0));
+        // cycle: fr into its own descendant
+        assert!(!ed.reorder_node("fr", &root_id, 0, "in", 0));
+        // self as target
+        assert!(!ed.reorder_node("fr", &root_id, 0, "fr", 0));
+        // the root cannot move
+        assert!(!ed.reorder_node(&root_id, "fr", 0, "fr2", 0));
+        // no-op: same slot
+        assert!(!ed.reorder_node("fr2", &root_id, 1, &root_id, 1));
+        // same slot via adjacent insert (slot 0 -> slot 1 == same place)
+        assert!(!ed.reorder_node("fr", &root_id, 0, &root_id, 1));
+        // unknown ids
+        assert!(!ed.reorder_node("nope", &root_id, 0, &root_id, 0));
+        assert!(!ed.reorder_node("fr2", &root_id, 1, "ghost", 0));
+        // no reorder was recorded: undo pops the last setup INSERT,
+        // not a reorder
+        assert!(ed.undo());
+        assert!(ed.get_node("fr2").is_none());
+        assert!(ed.get_node("fr").is_some());
+        assert_eq!(ids_of(&ed.root), vec!["fr"]);
     }
 }

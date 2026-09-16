@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use vello::kurbo::{Point, Rect};
 use x_native::editor::Editor;
-use x_native::{Color, Document, Node, NodeKind, Paint, StrokeJoin, Variables};
+use x_native::{Color, Document, Node, NodeKind, Paint, StrokeJoin, Variables, APP_DEFAULT_FONT};
 
 use crate::command::CommandPalette;
 use crate::context_menu::ContextMenu;
@@ -59,22 +59,82 @@ impl Tool {
         }
     }
 
-    pub fn shortcut(self) -> Option<&'static str> {
+    /// The tool a plain (Ctrl-free) keystroke selects, per document
+    /// mode — the single source of truth for tool shortcuts (audit F3:
+    /// the handler used to keep a second, half-drifted copy inline).
+    /// `key` is the lowercased character; `board` selects the mode's
+    /// tool set. Baseline keys are case/shift tolerant as before;
+    /// plain-C is mode-specific and ⇧C stays free; ⇧E is the eraser;
+    /// M-symmetry is design-mode only (the old handler let it leak
+    /// into boards).
+    /// Display name (toolbar tooltips; P10)
+    pub fn label(self) -> &'static str {
         match self {
-            Tool::Select => Some("V"),
-            Tool::Frame => Some("F"),
-            Tool::Text => Some("T"),
-            Tool::Rect => Some("R"),
-            Tool::Ellipse => Some("O"),
-            Tool::Pen => Some("P"),
-            Tool::Hand => Some("H"),
-            Tool::Comment => Some("C"),
-            Tool::Eraser => Some("Shift+E"),
-            Tool::Symmetry => Some("M"),
-            Tool::BoardSticky => Some("S"),
-            Tool::BoardConnector => Some("C"),
-            Tool::BoardRect => Some("R"),
-            Tool::BoardCircle => Some("O"),
+            Tool::Select => "Move",
+            Tool::Frame => "Frame",
+            Tool::Text => "Text",
+            Tool::Rect => "Rectangle",
+            Tool::Ellipse => "Ellipse",
+            Tool::Pen => "Pen",
+            Tool::Hand => "Hand",
+            Tool::Comment => "Comment",
+            Tool::Eraser => "Vector eraser",
+            Tool::Symmetry => "Symmetry",
+            Tool::BoardSticky => "Sticky note",
+            Tool::BoardConnector => "Connector",
+            Tool::BoardRect => "Rectangle",
+            Tool::BoardCircle => "Ellipse",
+        }
+    }
+
+    /// Tooltip shortcut hint, derived from `from_shortcut` — the one
+    /// source of truth — so the hint can never drift from the key
+    /// handler (P10). Empty when the mode has no shortcut for this
+    /// tool.
+    pub fn shortcut_hint(self, board: bool) -> String {
+        const KEYS: &[(&str, bool)] = &[
+            ("v", false),
+            ("f", false),
+            ("t", false),
+            ("r", false),
+            ("o", false),
+            ("p", false),
+            ("h", false),
+            ("c", false),
+            ("m", false),
+            ("s", false),
+            ("e", true),
+        ];
+        for (k, sh) in KEYS {
+            if Self::from_shortcut(k, *sh, board) == Some(self) {
+                let base = k.chars().next().unwrap().to_ascii_uppercase();
+                return if *sh {
+                    format!("⇧{base}")
+                } else {
+                    format!("{base}")
+                };
+            }
+        }
+        String::new()
+    }
+
+    pub fn from_shortcut(key: &str, shift: bool, board: bool) -> Option<Tool> {
+        match (key, shift) {
+            ("e", true) => Some(Tool::Eraser),
+            ("c", false) if board => Some(Tool::BoardConnector),
+            ("c", false) => Some(Tool::Comment),
+            ("m", false) if !board => Some(Tool::Symmetry),
+            ("s", _) if board => Some(Tool::BoardSticky),
+            ("r", _) if board => Some(Tool::BoardRect),
+            ("o", _) if board => Some(Tool::BoardCircle),
+            ("v", _) => Some(Tool::Select),
+            ("f", _) => Some(Tool::Frame),
+            ("t", _) => Some(Tool::Text),
+            ("r", _) => Some(Tool::Rect),
+            ("o", _) => Some(Tool::Ellipse),
+            ("p", _) => Some(Tool::Pen),
+            ("h", _) => Some(Tool::Hand),
+            _ => None,
         }
     }
 }
@@ -374,6 +434,10 @@ pub enum Action {
     RenameStart,
     // inspector
     FrameDropdown,
+    /// Toggle the zoom menu (right-panel header; audit F4)
+    ZoomMenu,
+    /// Zoom-menu item: 0 in, 1 out, 2 100%, 3 selection, 4 fit
+    ZoomStep(usize),
     LhDropdown,
     LhMode(usize),
     /// Typography panel: the styles button opens the text-style picker
@@ -443,25 +507,31 @@ pub enum Action {
     UxResponsive,
     // Navigation bar (Figma-style)
     NavTab(NavTab),
-    ToggleNavLabels,
     OpenAppMenu,
-    CloseAppMenu,
     AppMenuItem(usize),
     OpenFind,
     CloseFind,
     FindNext,
     FindPrev,
     ReplaceAll,
+    /// P13: replace the occurrences in the current match only
+    Replace,
+    /// P14: sample a layer's fill (true) or stroke (false) onto the
+    /// selection — the pipette in the right panel's paint rows
+    EnableEyedropper(bool),
+    /// P13: canvas background visibility toggle (Figma parity)
+    ToggleCanvasBgVisibility,
+    /// P13: dashboard view chip — cycle Home -> Recents -> Starred -> Trash
+    CycleDashView,
     ToggleCaseSensitive,
     ToggleFindInSelection,
     ToggleNotifications,
     DismissNotification(String),
     MarkAllNotificationsRead,
-    ToggleMinimizeUI,
-    ResizeLeftSidebar(f64),
     CollapseAllLayers,
-    /// Edit file menu actions
-    FileRename,
+    /// Clear the layers tree search (audit F8)
+    TreeSearchClear,
+    /// File menu actions (the app menu's file section)
     FileMoveToDrafts,
     FileDuplicate,
     // Layer management (Figma parity)
@@ -550,8 +620,6 @@ pub enum Action {
     SetGradientType {
         gradient_type: String,
     },
-    /// Enable eyedropper tool
-    EnableEyedropper,
     /// Set image adjustments (exposure, contrast, saturation, etc.)
     SetImageAdjustments {
         adjustments: x_native::ImageAdjustments,
@@ -625,6 +693,10 @@ pub enum FieldId {
     InstanceProp,
     /// pages panel: active-page inline rename (opened from the page menu)
     PageName,
+    /// layers panel: tree search query (row above the tree; audit F8).
+    /// Enter keeps the field open — the query lives in
+    /// `OpenDoc::tree_search` and filters the tree live.
+    TreeSearch,
     W,
     H,
     X,
@@ -677,6 +749,13 @@ pub enum FieldId {
     GridPct,
     /// Right-panel zoom % box
     Zoom,
+    /// No-selection DESIGN panel: canvas background opacity %
+    CanvasBgAlpha,
+    /// Find panel: search query (Enter keeps the field open, like
+    /// `TreeSearch`; the query lives in `App::find_replace`)
+    FindQuery,
+    /// Find panel: replacement string
+    FindReplace,
 }
 
 /// An armed `AfterDelay` trigger in the flow preview: fire `action` when
@@ -708,6 +787,9 @@ pub struct FindReplace {
     pub in_selection: bool,
     pub match_count: usize,
     pub current_match: usize,
+    /// P13: ids of the matched text layers, document order (rebuilt by
+    /// `App::rescan_find`)
+    pub matches: Vec<String>,
 }
 
 /// Notification center state (Figma navigation bar bottom).
@@ -848,6 +930,17 @@ pub struct FieldEdit {
 
 // ------------------------------------------------------------ drag / input
 
+/// P12: a resolved layers-tree drop: the hovered row (`row` + `zone`
+/// for the indicator) and the tree coordinates to commit (`parent` +
+/// logical `index`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TreeDrop {
+    pub row: String,
+    pub zone: u8,
+    pub parent: String,
+    pub index: usize,
+}
+
 #[derive(Clone, Debug)]
 pub enum Drag {
     LeftPanel {
@@ -866,11 +959,25 @@ pub enum Drag {
     /// Moving the current selection.
     MoveSel {
         last: Point,
+        /// Undo-stack depth when the press started the gesture. Every
+        /// mouse event pushes its own `Command::Move`, so release merges
+        /// `undo_depth() - base_depth` entries into ONE undo step (one
+        /// Ctrl+Z reverts the whole drag).
+        base_depth: usize,
     },
     /// Rubber-band selection.
     Marquee {
         start: Point,
         cur: Point,
+    },
+    /// P12: dragging a layers-tree row. `active` once the pointer moved
+    /// past the threshold; `over` = live drop target (row id, zone:
+    /// 0 before, 1 child, 2 after).
+    TreeRow {
+        id: String,
+        start: Point,
+        active: bool,
+        over: Option<TreeDrop>,
     },
     /// Drag-selecting text inside the open inline editor.
     TextEditSel,
@@ -890,6 +997,9 @@ pub enum Drag {
         corner: usize,
         orig: (f64, f64, f64, f64), // x, y, w, h at drag start
         start: Point,
+        /// Undo-stack depth at press; release merges the per-event resize
+        /// entries into ONE undo step (see `MoveSel::base_depth`).
+        base_depth: usize,
     },
     /// Pen-tool polyline in progress (world-space points).
     Pen {
@@ -999,6 +1109,9 @@ pub struct OpenDoc {
     pub page: usize,
     pub dirty: bool,
     pub expanded: HashSet<String>,
+    /// layers tree search query (audit F8); non-empty → the tree renders
+    /// only the matches plus their ancestor chain
+    pub tree_search: String,
     pub left_tab: LeftTab,
     pub right_tab: RightTab,
     pub frame_preset: usize,
@@ -1101,6 +1214,8 @@ impl OpenDoc {
             None,
             Document {
                 pages: vec![page],
+                // P3: a new file declares its default typeface as data
+                default_font: Some(APP_DEFAULT_FONT.to_string()),
                 ..Default::default()
             },
         )
@@ -1121,6 +1236,8 @@ impl OpenDoc {
         let editor = Editor::new(page.clone());
         let doc = Document {
             pages: vec![page],
+            // P3: the demo document declares its default typeface too
+            default_font: Some(APP_DEFAULT_FONT.to_string()),
             ..Document::default()
         };
         Self {
@@ -1145,6 +1262,7 @@ impl OpenDoc {
             page: 0,
             dirty: false,
             expanded: HashSet::new(),
+            tree_search: String::new(),
             left_tab: LeftTab::Layers,
             right_tab: RightTab::Design,
             frame_preset: 0,
@@ -1158,7 +1276,8 @@ impl OpenDoc {
             export_suffix: String::new(),
             guide_kind: 0,
             guide_size: 16.0,
-            guides_visible: true,
+            // the canvas grid is OPT-IN: a fresh document opens clean
+            guides_visible: false,
             scroll_left: 0.0,
             scroll_right: 0.0,
             guides: vec![],
@@ -1197,6 +1316,7 @@ impl OpenDoc {
             page: 0,
             dirty: false,
             expanded: HashSet::new(),
+            tree_search: String::new(),
             left_tab: LeftTab::Layers,
             right_tab: RightTab::Design,
             frame_preset: 0,
@@ -1210,7 +1330,8 @@ impl OpenDoc {
             export_suffix: String::new(),
             guide_kind: 0,
             guide_size: 16.0,
-            guides_visible: true,
+            // the canvas grid is OPT-IN: a fresh document opens clean
+            guides_visible: false,
             scroll_left: 0.0,
             scroll_right: 0.0,
             guides: vec![],
@@ -1286,6 +1407,11 @@ pub struct App {
     /// prototype flow preview (None = normal editing)
     pub flow: Option<FlowState>,
     pub dropdown_frame: bool,
+    /// Zoom menu open (right-panel header, audit F4)
+    pub dropdown_zoom: bool,
+    /// Hover labels registered this frame (P10); paint_tooltip draws
+    /// the one under the cursor
+    pub tooltip: Vec<(Rect, String)>,
     /// Typography panel: line-height mode menu (Auto / Pixels / Percent)
     pub dropdown_lh: bool,
     /// Typography panel: text-style picker (Figma's styles button)
@@ -1294,6 +1420,13 @@ pub struct App {
     pub rulers: bool,
     /// DESIGN panel (no selection): editor canvas background
     pub canvas_bg: Color,
+    /// Canvas background opacity % (Figma parity; audit P13)
+    pub canvas_bg_alpha: f64,
+    /// Canvas background visibility (Figma parity; audit P13)
+    pub canvas_bg_visible: bool,
+    /// Eyedropper armed: `Some(true)` samples a layer's fill,
+    /// `Some(false)` its stroke, into the current selection
+    pub eyedropper: Option<bool>,
     /// DESIGN panel (no selection): pixel grid color + opacity %
     pub grid_color: Color,
     pub grid_pct: f64,
@@ -1354,9 +1487,7 @@ pub struct App {
     pub status: String,
     // Navigation bar state (Figma-style)
     pub nav_tab: NavTab,
-    pub nav_show_labels: bool,
     pub nav_bar_w: f64,
-    pub left_sidebar_w: f64,
     pub sidebar_resizing: bool,
     pub ui_minimized: bool,
     pub app_menu: AppMenu,
@@ -1451,12 +1582,17 @@ impl App {
             field: None,
             flow: None,
             dropdown_frame: false,
+            dropdown_zoom: false,
+            tooltip: Vec::new(),
             dropdown_lh: false,
             dropdown_text_style: false,
             rulers: false,
             // canvas matches the HTML `.canvas` token; grid per the design
             // empty-selection panel (PIXEL GRID COLOR 0070E4 @ 20%)
             canvas_bg: crate::theme::C_CANVAS,
+            canvas_bg_alpha: 100.0,
+            canvas_bg_visible: true,
+            eyedropper: None,
             grid_color: Color::from_rgb8(0x00, 0x70, 0xE4),
             grid_pct: 20.0,
             align: (0, 2),
@@ -1486,9 +1622,7 @@ impl App {
             color_picker_popup: None,
             status: String::from("Ready"),
             nav_tab: NavTab::File,
-            nav_show_labels: true,
             nav_bar_w: 48.0,
-            left_sidebar_w: 280.0,
             sidebar_resizing: false,
             ui_minimized: false,
             app_menu: AppMenu::default(),
@@ -1517,11 +1651,45 @@ impl App {
 
     // ------------------------------------------------------------- regions
 
+    /// PAGES list band geometry — ONE source of truth shared by paint and
+    /// hit-testing. Rows start where the old single page field did
+    /// (y0+142), 26px tall, max 4 rows; more pages collapse into a
+    /// "+N more" row whose index is the page COUNT (a sentinel).
+    pub fn pages_rows(&self) -> Vec<(usize, Rect)> {
+        const ROW_H: f64 = 26.0;
+        const MAX_ROWS: usize = 4;
+        let y0 = ED_TITLE_H;
+        let sidebar = self.editor_regions().sidebar;
+        let sx = sidebar.x0;
+        let lw = sidebar.x1;
+        let n = self.doc_ref().editors.len();
+        let count = n.min(MAX_ROWS);
+        let overflow = n > MAX_ROWS;
+        (0..count)
+            .map(|i| {
+                let page_i = if overflow && i == MAX_ROWS - 1 { n } else { i };
+                let ry = y0 + 142.0 + i as f64 * ROW_H;
+                (page_i, Rect::new(sx + 12.0, ry, lw - 13.0, ry + ROW_H))
+            })
+            .collect()
+    }
+
+    /// Bottom of the PAGES band (header label at y0+120.5, then the rows).
+    pub fn pages_band_bottom(&self) -> f64 {
+        const ROW_H: f64 = 26.0;
+        const MAX_ROWS: usize = 4;
+        let n = self.doc_ref().editors.len();
+        let count = n.clamp(1, MAX_ROWS);
+        ED_TITLE_H + 142.0 + count as f64 * ROW_H
+    }
+
     pub fn editor_regions(&self) -> EdRegions {
         let left_total = if self.ui_minimized {
             self.nav_bar_w
         } else {
-            self.nav_bar_w + self.left_sidebar_w
+            // `left_w` is the live width — Drag::LeftPanel resizes it;
+            // the old static field made the resize a visual no-op
+            self.nav_bar_w + self.left_w
         };
         EdRegions {
             left: Rect::new(0.0, ED_TITLE_H, left_total, self.win_h),
@@ -2723,6 +2891,210 @@ impl App {
 
     /// Center the view on document content (first open: like the HTML —
     /// the 375x420 frame centered in the canvas with p-8 padding).
+    /// Collapse every expanded layer, keeping only the selection's
+    /// ancestors expanded (Figma parity; audit F6).
+    pub fn collapse_all_layers(&mut self) {
+        let doc = self.doc();
+        let sel = doc.editor_ref().selection.clone();
+        let mut keep: HashSet<String> = HashSet::new();
+        for target in &sel {
+            let mut path: Vec<String> = Vec::new();
+            let _ = collect_ancestor_path(&doc.editor_ref().root, target, &mut path, &mut keep);
+        }
+        doc.expanded.retain(|id| keep.contains(id));
+    }
+
+    /// P13: rebuild the find/replace match list from the current query.
+    /// Scans text layers of the active page (case per `case_sensitive`);
+    /// `in_selection` restricts the search to the selected subtrees.
+    pub fn rescan_find(&mut self) {
+        let mut matches: Vec<String> = Vec::new();
+        // owned: `self.doc()` below takes `&mut self`
+        let q = self.find_replace.query.trim().to_string();
+        let case = self.find_replace.case_sensitive;
+        if !q.is_empty() {
+            // the "in selection" toggle scopes the search to the current
+            // selection; off = the whole page
+            let in_scope = self.find_replace.in_selection;
+            let doc = self.doc();
+            let sel = if in_scope {
+                doc.editor_ref().selection.clone()
+            } else {
+                Vec::new()
+            };
+            let root = &doc.editor_ref().root;
+            scan_find(root, &q, case, &sel, false, &mut matches);
+        }
+        self.find_replace.matches = matches.clone();
+        self.find_replace.match_count = matches.len();
+        // 0 = nothing selected yet (the first Next lands on match 1);
+        // an out-of-range index collapses to the last match
+        if self.find_replace.current_match > matches.len() {
+            self.find_replace.current_match = matches.len();
+        }
+    }
+
+    /// P13: step to the next (1) / previous (-1) find match, wrapping;
+    /// selects the matched layer and centers the camera on it.
+    pub fn find_nav(&mut self, dir: i32) {
+        if self.find_replace.query.is_empty() {
+            return;
+        }
+        if self.find_replace.matches.is_empty() {
+            self.rescan_find();
+        }
+        let n = self.find_replace.matches.len();
+        if n == 0 {
+            self.status = "No matches".into();
+            return;
+        }
+        let next = if self.find_replace.current_match == 0 {
+            if dir < 0 {
+                n
+            } else {
+                1
+            }
+        } else {
+            let cur = self.find_replace.current_match.clamp(1, n);
+            let step = if dir < 0 { n - 1 } else { 1 };
+            (cur - 1 + step) % n + 1
+        };
+        self.find_replace.current_match = next;
+        let id = self.find_replace.matches[next - 1].clone();
+        let center_w = {
+            let doc = self.doc();
+            doc.editor().selection = vec![id.clone()];
+            doc.editor_ref()
+                .get_node(&id)
+                .map(|n| (n.transform.x + n.w / 2.0, n.transform.y + n.h / 2.0))
+        };
+        if let Some((cx, cy)) = center_w {
+            let sp = self.world_to_screen(Point::new(cx, cy));
+            let reg = self.editor_regions();
+            let cx = (reg.canvas.x0 + reg.canvas.x1) / 2.0;
+            let cy = (reg.canvas.y0 + reg.canvas.y1) / 2.0;
+            self.pan = (self.pan.0 + (cx - sp.x), self.pan.1 + (cy - sp.y));
+        }
+        self.status = format!(
+            "Match {}/{}",
+            self.find_replace.current_match, self.find_replace.match_count
+        );
+    }
+
+    /// P13: replace every occurrence of the query in every matched text
+    /// layer (one undo entry per layer). Returns the number of layers
+    /// changed.
+    pub fn replace_all_find(&mut self) -> usize {
+        let (q, repl, case) = (
+            self.find_replace.query.trim().to_string(),
+            self.find_replace.replace.clone(),
+            self.find_replace.case_sensitive,
+        );
+        if q.is_empty() || self.find_replace.matches.is_empty() {
+            return 0;
+        }
+        let ids = self.find_replace.matches.clone();
+        let mut changed = 0;
+        for id in &ids {
+            let new = {
+                let doc = self.doc();
+                let Some(node) = doc.editor_ref().get_node(id) else {
+                    continue;
+                };
+                match &node.kind {
+                    NodeKind::Text { text } => {
+                        let new = replace_all_text(text, &q, &repl, case);
+                        if new == *text {
+                            continue;
+                        }
+                        Some(new)
+                    }
+                    _ => continue,
+                }
+            };
+            if let Some(new) = new {
+                let doc = self.doc();
+                doc.editor().set_text(id, &new);
+                changed += 1;
+            }
+        }
+        if changed > 0 {
+            self.mark_dirty();
+        }
+        self.rescan_find();
+        changed
+    }
+
+    /// P13: replace every occurrence of the query in the *current* match
+    /// only (the "Replace" button, as opposed to `replace_all_find`).
+    pub fn replace_current_find(&mut self) -> bool {
+        let (q, repl, case) = (
+            self.find_replace.query.trim().to_string(),
+            self.find_replace.replace.clone(),
+            self.find_replace.case_sensitive,
+        );
+        if q.is_empty() || self.find_replace.matches.is_empty() {
+            return false;
+        }
+        let cur = self
+            .find_replace
+            .current_match
+            .clamp(1, self.find_replace.matches.len());
+        let id = self.find_replace.matches[cur - 1].clone();
+        let new = {
+            let doc = self.doc();
+            let Some(node) = doc.editor_ref().get_node(&id) else {
+                return false;
+            };
+            match &node.kind {
+                NodeKind::Text { text } => {
+                    let new = replace_all_text(text, &q, &repl, case);
+                    if new == *text {
+                        return false;
+                    }
+                    Some(new)
+                }
+                _ => return false,
+            }
+        };
+        if let Some(new) = new {
+            let doc = self.doc();
+            doc.editor().set_text(&id, &new);
+            self.mark_dirty();
+            self.rescan_find();
+            return true;
+        }
+        false
+    }
+
+    /// P12: apply a layers-tree drop (from the active `Drag::TreeRow`):
+    /// reorder the dragged row to the resolved target and keep it
+    /// selected. No-op when there is no live drag or the move is
+    /// invalid/a no-op.
+    pub fn apply_tree_drop(&mut self, drop: &TreeDrop) {
+        let Some(Drag::TreeRow { id, .. }) = self.drag.clone() else {
+            return;
+        };
+        let root = {
+            let doc = self.doc();
+            doc.editor_ref().root.clone()
+        };
+        let Some((from_parent, from_index)) = node_slot(&root, &id) else {
+            return;
+        };
+        let moved = {
+            let doc = self.doc();
+            doc.editor()
+                .reorder_node(&id, &from_parent, from_index, &drop.parent, drop.index)
+        };
+        if moved {
+            let doc = self.doc();
+            doc.editor().selection = vec![id];
+            self.mark_dirty();
+            self.status = "Layer reordered - one undo step".into();
+        }
+    }
+
     pub fn center_view(&mut self) {
         let camera = crate::loading::ViewConfig::from_app(self).camera(self.doc_opt());
         self.zoom = camera.zoom;
@@ -3106,6 +3478,145 @@ pub fn try_import_from_figma_clipboard() -> Option<x_native::Document> {
     }
 }
 
+/// P13: collect ids of text layers whose content matches `q` (case per
+/// `case_sensitive`); `sel` non-empty restricts the search to the
+/// selected subtrees (Figma's "find in selection").
+fn scan_find(
+    node: &Node,
+    q: &str,
+    case: bool,
+    sel: &[String],
+    in_sel: bool,
+    out: &mut Vec<String>,
+) {
+    // `in_sel`: an ancestor is selected. An unselected node is never
+    // pruned here — it may still contain a selected descendant — but
+    // only nodes inside a selected subtree are tested.
+    let in_sel = in_sel || sel.iter().any(|s| s == &node.id);
+    if sel.is_empty() || in_sel {
+        if let NodeKind::Text { text } = &node.kind {
+            let hit = if case {
+                text.contains(q)
+            } else {
+                text.to_lowercase().contains(&q.to_lowercase())
+            };
+            if hit {
+                out.push(node.id.clone());
+            }
+        }
+    }
+    for c in &node.children {
+        scan_find(c, q, case, sel, in_sel, out);
+    }
+}
+
+/// P13: case-aware literal replace-all over a string.
+pub fn replace_all_text(text: &str, q: &str, repl: &str, case: bool) -> String {
+    if q.is_empty() {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < text.len() {
+        let matched = if case {
+            text[i..].starts_with(q)
+        } else {
+            case_insensitive_prefix(&text[i..], q)
+        };
+        if matched {
+            out.push_str(repl);
+            i += q.len();
+        } else {
+            let ch = text[i..].chars().next().map_or(1, |c| c.len_utf8());
+            out.push_str(&text[i..i + ch]);
+            i += ch;
+        }
+    }
+    out
+}
+
+fn case_insensitive_prefix(hay: &str, needle: &str) -> bool {
+    let hc: Vec<char> = hay.chars().collect();
+    let nc: Vec<char> = needle.chars().collect();
+    if hc.len() < nc.len() {
+        return false;
+    }
+    hc[..nc.len()]
+        .iter()
+        .zip(nc.iter())
+        .all(|(a, b)| a.to_lowercase().eq(b.to_lowercase()))
+}
+
+/// P12: `(parent id, child index)` of `id` within `root` — a top-level
+/// child reports the root's own id as parent. `None` for the root or an
+/// unknown id.
+pub fn node_slot(root: &Node, id: &str) -> Option<(String, usize)> {
+    fn walk(n: &Node, id: &str) -> Option<(String, usize)> {
+        for (i, c) in n.children.iter().enumerate() {
+            if c.id == id {
+                return Some((n.id.clone(), i));
+            }
+            if let Some(found) = walk(c, id) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    if root.id == id {
+        return None;
+    }
+    walk(root, id)
+}
+
+/// P12: resolve a layers-tree drop `(target row, zone)` into
+/// `(destination parent id, insertion index)`: before/after = the
+/// target's own parent slot; child = append at the end of the target's
+/// children.
+pub fn tree_drop_coords(root: &Node, target: &str, zone: u8) -> Option<(String, usize)> {
+    let (parent, node) = {
+        fn walk<'a>(n: &'a Node, id: &str) -> Option<(Option<&'a Node>, &'a Node)> {
+            for c in &n.children {
+                if c.id == id {
+                    return Some((Some(n), c));
+                }
+                if let Some(found) = walk(c, id) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        walk(root, target)?
+    };
+    let pid = parent
+        .map(|p| p.id.clone())
+        .unwrap_or_else(|| root.id.clone());
+    let slot = parent.and_then(|p| p.children.iter().position(|c| c.id == node.id))?;
+    match zone {
+        0 => Some((pid, slot)),
+        2 => Some((pid, slot + 1)),
+        1 => Some((node.id.clone(), node.children.len())),
+        _ => None,
+    }
+}
+
+fn collect_ancestor_path(
+    node: &Node,
+    target: &str,
+    path: &mut Vec<String>,
+    keep: &mut HashSet<String>,
+) -> bool {
+    path.push(node.id.clone());
+    let found = if node.id == target {
+        keep.extend(path.iter().cloned());
+        true
+    } else {
+        node.children
+            .iter()
+            .any(|c| collect_ancestor_path(c, target, path, keep))
+    };
+    path.pop();
+    found
+}
 #[cfg(test)]
 impl App {
     /// Explicit deterministic content for old inspector/screenshot fixtures.
@@ -3114,5 +3625,239 @@ impl App {
         self.active = self.docs.len() - 1;
         self.screen = Screen::Editor;
         self.center_view();
+    }
+}
+
+#[cfg(test)]
+mod tool_shortcut_tests {
+    use super::{node_slot, replace_all_text, tree_drop_coords, App, Color, Node, NodeKind, Tool};
+
+    #[test]
+    fn design_mode_shortcuts_resolve() {
+        let d = |k: &str, sh: bool| Tool::from_shortcut(k, sh, false);
+        assert_eq!(d("v", false), Some(Tool::Select));
+        assert_eq!(d("f", false), Some(Tool::Frame));
+        assert_eq!(d("t", false), Some(Tool::Text));
+        assert_eq!(d("r", false), Some(Tool::Rect));
+        assert_eq!(d("o", false), Some(Tool::Ellipse));
+        assert_eq!(d("p", false), Some(Tool::Pen));
+        assert_eq!(d("h", false), Some(Tool::Hand));
+        assert_eq!(d("c", false), Some(Tool::Comment));
+        assert_eq!(d("m", false), Some(Tool::Symmetry));
+        assert_eq!(d("e", true), Some(Tool::Eraser));
+    }
+
+    #[test]
+    fn board_mode_shortcuts_resolve() {
+        let b = |k: &str, sh: bool| Tool::from_shortcut(k, sh, true);
+        assert_eq!(b("s", false), Some(Tool::BoardSticky));
+        assert_eq!(b("c", false), Some(Tool::BoardConnector));
+        assert_eq!(b("r", false), Some(Tool::BoardRect));
+        assert_eq!(b("o", false), Some(Tool::BoardCircle));
+        assert_eq!(b("v", false), Some(Tool::Select));
+        // design-only tools do not leak into boards
+        assert_eq!(b("m", false), None);
+        assert_eq!(b("f", false), Some(Tool::Frame));
+    }
+
+    #[test]
+    fn collapse_all_keeps_selection_ancestors() {
+        let mut app = App::new();
+        app.open_blank();
+        let doc = app.doc();
+        let root_id = doc.editor_ref().root.id.clone();
+        doc.editor()
+            .insert_node(&root_id, Node::frame("f1", 300.0, 200.0));
+        doc.editor()
+            .insert_node(&root_id, Node::frame("f2", 300.0, 200.0));
+        doc.editor()
+            .insert_node("f1", Node::rect("r1", 0.0, 0.0, 10.0, 10.0, Color::WHITE));
+        doc.expanded.insert("f1".into());
+        doc.expanded.insert("f2".into());
+        doc.editor().selection.push("r1".into());
+        app.collapse_all_layers();
+        assert!(
+            app.doc().expanded.contains("f1"),
+            "selection ancestor stays open"
+        );
+        assert!(
+            !app.doc().expanded.contains("f2"),
+            "everything else collapses"
+        );
+    }
+
+    #[test]
+    fn replace_all_text_handles_case_and_boundaries() {
+        assert_eq!(replace_all_text("a b a", "a", "c", true), "c b c");
+        assert_eq!(replace_all_text("banana", "an", "X", true), "bXXa");
+        assert_eq!(replace_all_text("A a Ab", "a", "c", false), "c c cb");
+        assert_eq!(replace_all_text("hello", "z", "q", true), "hello");
+        assert_eq!(replace_all_text("abc", "", "c", true), "abc");
+        assert_eq!(replace_all_text("", "a", "c", false), "");
+    }
+
+    #[test]
+    fn find_matches_text_layers_and_navigates() {
+        let mut app = App::new();
+        app.open_blank();
+        let root_id = app.doc().editor_ref().root.id.clone();
+        app.doc().editor().insert_node(
+            &root_id,
+            Node::text("t1", 0.0, 0.0, 100.0, 20.0, "Hello world"),
+        );
+        app.doc().editor().insert_node(
+            &root_id,
+            Node::text("t2", 0.0, 40.0, 100.0, 20.0, "hello again"),
+        );
+        app.doc().editor().insert_node(
+            &root_id,
+            Node::text("t3", 0.0, 80.0, 100.0, 20.0, "goodbye"),
+        );
+        app.find_replace.query = "hello".into();
+        app.rescan_find();
+        assert_eq!(app.find_replace.matches, vec!["t1", "t2"]);
+        assert_eq!(app.find_replace.match_count, 2);
+        app.find_nav(1);
+        assert_eq!(app.find_replace.current_match, 1);
+        assert_eq!(app.doc().editor_ref().selection, vec!["t1".to_string()]);
+        app.find_nav(1);
+        assert_eq!(app.find_replace.current_match, 2);
+        app.find_nav(1); // wraps to first
+        assert_eq!(app.find_replace.current_match, 1);
+        app.find_nav(-1); // wraps to last
+        assert_eq!(app.find_replace.current_match, 2);
+        // case sensitivity: "HELLO" matches nothing case-sensitively
+        // ("Hello" != "HELLO"), both again case-insensitively
+        app.find_replace.query = "HELLO".into();
+        app.find_replace.case_sensitive = true;
+        app.rescan_find();
+        assert!(app.find_replace.matches.is_empty());
+        app.find_replace.case_sensitive = false;
+        app.rescan_find();
+        assert_eq!(app.find_replace.matches, vec!["t1", "t2"]);
+        // "in selection" scope: after the navs the selection is [t2], so
+        // only t2 is searched
+        app.find_replace.in_selection = true;
+        app.rescan_find();
+        assert_eq!(app.find_replace.matches, vec!["t2"]);
+        app.find_replace.in_selection = false;
+        app.rescan_find();
+        assert_eq!(app.find_replace.matches, vec!["t1", "t2"]);
+    }
+
+    #[test]
+    fn replace_all_find_rewrites_and_is_undoable() {
+        let mut app = App::new();
+        app.open_blank();
+        let root_id = app.doc().editor_ref().root.id.clone();
+        app.doc().editor().insert_node(
+            &root_id,
+            Node::text("t1", 0.0, 0.0, 100.0, 20.0, "hello hello"),
+        );
+        app.doc().editor().insert_node(
+            &root_id,
+            Node::text("t2", 0.0, 40.0, 100.0, 20.0, "hello there"),
+        );
+        app.find_replace.query = "hello".into();
+        app.find_replace.replace = "hi".into();
+        app.rescan_find();
+        assert_eq!(app.replace_all_find(), 2);
+        let doc = app.doc();
+        assert_eq!(
+            doc.editor_ref().get_node("t1").unwrap().kind,
+            NodeKind::Text {
+                text: "hi hi".into()
+            }
+        );
+        assert_eq!(
+            doc.editor_ref().get_node("t2").unwrap().kind,
+            NodeKind::Text {
+                text: "hi there".into()
+            }
+        );
+        // both layers back with two undos
+        assert!(app.doc().editor().undo());
+        assert!(app.doc().editor().undo());
+        let doc = app.doc();
+        let t1 = doc.editor_ref().get_node("t1").unwrap();
+        assert!(matches!(&t1.kind, NodeKind::Text { text } if text == "hello hello"));
+    }
+
+    #[test]
+    fn replace_current_find_touches_only_the_active_match() {
+        let mut app = App::new();
+        app.open_blank();
+        let root_id = app.doc().editor_ref().root.id.clone();
+        app.doc().editor().insert_node(
+            &root_id,
+            Node::text("t1", 0.0, 0.0, 100.0, 20.0, "hi there"),
+        );
+        app.doc()
+            .editor()
+            .insert_node(&root_id, Node::text("t2", 0.0, 40.0, 100.0, 20.0, "hi hi"));
+        app.find_replace.query = "hi".into();
+        app.find_replace.replace = "yo".into();
+        app.rescan_find();
+        app.find_nav(1);
+        app.find_nav(1); // current match = t2
+        assert!(app.replace_current_find());
+        let doc = app.doc();
+        assert_eq!(
+            doc.editor_ref().get_node("t1").unwrap().kind,
+            NodeKind::Text {
+                text: "hi there".into()
+            }
+        );
+        assert_eq!(
+            doc.editor_ref().get_node("t2").unwrap().kind,
+            NodeKind::Text {
+                text: "yo yo".into()
+            }
+        );
+    }
+
+    #[test]
+    fn tree_drop_slots_resolve_parents_and_zones() {
+        let mut fr = Node::frame("fr", 100.0, 100.0);
+        fr.children
+            .push(Node::rect("in", 0.0, 0.0, 10.0, 10.0, Color::WHITE));
+        let root = Node::frame("page", 100.0, 100.0)
+            .child(fr)
+            .child(Node::frame("fr2", 100.0, 100.0));
+        assert_eq!(node_slot(&root, "fr"), Some(("page".into(), 0)));
+        assert_eq!(node_slot(&root, "in"), Some(("fr".into(), 0)));
+        assert_eq!(node_slot(&root, "page"), None);
+        assert_eq!(node_slot(&root, "ghost"), None);
+        // before fr2 = its slot; after = slot + 1; child = append to fr2
+        assert_eq!(tree_drop_coords(&root, "fr2", 0), Some(("page".into(), 1)));
+        assert_eq!(tree_drop_coords(&root, "fr2", 2), Some(("page".into(), 2)));
+        assert_eq!(tree_drop_coords(&root, "fr2", 1), Some(("fr2".into(), 0)));
+        assert_eq!(tree_drop_coords(&root, "ghost", 0), None);
+    }
+
+    #[test]
+    fn tool_labels_and_hints_follow_mode() {
+        assert_eq!(Tool::Select.label(), "Move");
+        assert_eq!(Tool::Eraser.label(), "Vector eraser");
+        assert_eq!(Tool::Select.shortcut_hint(false), "V");
+        assert_eq!(Tool::Eraser.shortcut_hint(false), "⇧E");
+        assert_eq!(Tool::Symmetry.shortcut_hint(true), "");
+        assert_eq!(Tool::BoardSticky.shortcut_hint(true), "S");
+        assert_eq!(Tool::BoardSticky.shortcut_hint(false), "");
+        assert_eq!(Tool::Comment.shortcut_hint(true), "");
+    }
+
+    #[test]
+    fn shift_rules_hold() {
+        // ⇧C stays free (old comment promised this; old code broke it)
+        assert_eq!(Tool::from_shortcut("c", true, false), None);
+        assert_eq!(Tool::from_shortcut("c", true, true), None);
+        // the eraser needs shift; bare E is not a tool key
+        assert_eq!(Tool::from_shortcut("e", false, false), None);
+        // baseline keys stay shift-tolerant (pre-refactor behavior)
+        assert_eq!(Tool::from_shortcut("r", true, false), Some(Tool::Rect));
+        // unclaimed keys
+        assert_eq!(Tool::from_shortcut("s", false, false), None);
+        assert_eq!(Tool::from_shortcut("q", false, false), None);
     }
 }
