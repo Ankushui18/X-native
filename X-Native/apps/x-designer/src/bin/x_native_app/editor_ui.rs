@@ -597,7 +597,12 @@ fn paint_context_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
                 }
                 cy += row_h;
             }
-            ContextMenuItem::Submenu { label, icon, enabled, items } => {
+            ContextMenuItem::Submenu {
+                label,
+                icon,
+                enabled,
+                items,
+            } => {
                 let r = Rect::new(mx + 4.0, cy, mx + w - 4.0, cy + row_h);
                 let hov = *enabled && hover(app, r);
                 if hov {
@@ -606,7 +611,8 @@ fn paint_context_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
                 }
                 let ic = if *enabled { C_TEXT } else { C_DIM };
                 draw_icon(s, icon, r.x0 + 8.0, r.y0 + 7.0, 14.0, ic);
-                app.fonts.text(s, r.x0 + 30.0, r.y0 + 6.8, label, T11, ic, Wt::Reg);
+                app.fonts
+                    .text(s, r.x0 + 30.0, r.y0 + 6.8, label, T11, ic, Wt::Reg);
                 draw_icon(s, "chevron-right", r.x1 - 20.0, r.y0 + 8.0, 12.0, C_DIM);
                 cy += row_h;
             }

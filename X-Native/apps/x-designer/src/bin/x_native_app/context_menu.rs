@@ -363,3 +363,90 @@ fn clamp_menu_x(x: f64, w: f64, screen_w: f64) -> f64 {
 fn clamp_menu_y(y: f64, h: f64, screen_h: f64) -> f64 {
     y.min(screen_h - h - 4.0).max(4.0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn actions_of(items: &[ContextMenuItem]) -> Vec<&ContextAction> {
+        items
+            .iter()
+            .filter_map(|it| match it {
+                ContextMenuItem::Action { action, .. } => Some(action),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn canvas_empty_menu_offers_paste_select_all_and_grid() {
+        let items = build_menu_items(&ContextTarget::CanvasEmpty);
+        let actions = actions_of(&items);
+        assert!(
+            actions.contains(&&ContextAction::Paste),
+            "empty canvas must offer paste"
+        );
+        assert!(
+            actions.contains(&&ContextAction::SelectAll),
+            "empty canvas must offer select-all"
+        );
+        assert!(
+            actions.contains(&&ContextAction::ToggleGrid),
+            "empty canvas must offer the grid toggle"
+        );
+    }
+
+    #[test]
+    fn multi_selection_menu_offers_group_and_boolean_submenu() {
+        let items = build_menu_items(&ContextTarget::CanvasSelection {
+            selected_count: 2,
+            contains_group: false,
+        });
+        let actions = actions_of(&items);
+        assert!(
+            actions.contains(&&ContextAction::Group),
+            "two selections must offer group"
+        );
+        assert!(
+            !actions.contains(&&ContextAction::Ungroup),
+            "a non-group selection must not offer ungroup"
+        );
+        let has_bool = items.iter().any(|it| {
+            matches!(it, ContextMenuItem::Submenu { label, .. } if *label == "Boolean")
+        });
+        assert!(has_bool, "two selections must offer the boolean submenu");
+    }
+
+    #[test]
+    fn single_group_selection_offers_ungroup_not_group() {
+        let items = build_menu_items(&ContextTarget::CanvasSelection {
+            selected_count: 1,
+            contains_group: true,
+        });
+        let actions = actions_of(&items);
+        assert!(
+            actions.contains(&&ContextAction::Ungroup),
+            "a group selection must offer ungroup"
+        );
+        assert!(
+            !actions.contains(&&ContextAction::Group),
+            "a single selection must not offer group"
+        );
+        let has_bool = items.iter().any(|it| {
+            matches!(it, ContextMenuItem::Submenu { label, .. } if *label == "Boolean")
+        });
+        assert!(!has_bool, "booleans need two selections");
+    }
+
+    #[test]
+    fn every_action_maps_to_a_runnable_action() {
+        assert_eq!(
+            action_for(&ContextAction::BringToFront),
+            Some(Action::Ctx(CtxCmd::ToFront))
+        );
+        assert_eq!(
+            action_for(&ContextAction::ToggleGrid),
+            Some(Action::ToggleGuideVisibility)
+        );
+    }
+}

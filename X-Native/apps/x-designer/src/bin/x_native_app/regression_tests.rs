@@ -2,19 +2,6 @@
 use super::*;
 use x_native::{Color, PaintLayer, RenderCommand, Variables};
 
-/// The actions carried by a menu's action rows (asserting item models).
-fn actions_of(
-    items: &[crate::context_menu::ContextMenuItem],
-) -> Vec<&crate::context_menu::ContextAction> {
-    items
-        .iter()
-        .filter_map(|it| match it {
-            crate::context_menu::ContextMenuItem::Action { action, .. } => Some(action),
-            _ => None,
-        })
-        .collect()
-}
-
 fn host() -> Host {
     let mut app = App::new();
     app.docs = vec![OpenDoc::demo_blank("Audit".into())];
@@ -427,51 +414,6 @@ fn right_click_keeps_multi_selection_so_grouping_works() {
         h.app.doc_ref().editor_ref().selection,
         vec![group.id.clone()]
     );
-}
-
-#[test]
-fn context_menu_items_follow_the_target_model() {
-    // Viewport audit P4: the menu is data-driven — items are built from
-    // the target, not hardcoded in the painter.
-    use crate::context_menu::{
-        action_for, build_menu_items, ContextAction, ContextMenuItem, ContextTarget,
-    };
-    let empty = build_menu_items(&ContextTarget::CanvasEmpty);
-    let empty_actions = actions_of(&empty);
-    assert!(empty_actions.contains(&&ContextAction::Paste), "empty canvas must offer paste");
-    assert!(
-        empty_actions.contains(&&ContextAction::ToggleGrid),
-        "empty canvas must offer the grid toggle"
-    );
-
-    let multi = build_menu_items(&ContextTarget::CanvasSelection {
-        selected_count: 2,
-        contains_group: false,
-    });
-    let multi_actions = actions_of(&multi);
-    assert!(multi_actions.contains(&&ContextAction::Group), "two selections must offer group");
-    assert!(
-        !multi_actions.contains(&&ContextAction::Ungroup),
-        "a non-group selection must not offer ungroup"
-    );
-    let has_bool_sub = multi.iter().any(|it| {
-        matches!(it, ContextMenuItem::Submenu { label, .. } if *label == "Boolean")
-    });
-    assert!(has_bool_sub, "two selections must offer the boolean submenu");
-
-    let one_group = build_menu_items(&ContextTarget::CanvasSelection {
-        selected_count: 1,
-        contains_group: true,
-    });
-    let one_actions = actions_of(&one_group);
-    assert!(
-        one_actions.contains(&&ContextAction::Ungroup),
-        "a group selection must offer ungroup"
-    );
-
-    // Every item maps to a concrete action the run loop can execute.
-    assert_eq!(action_for(&ContextAction::BringToFront), Some(Action::Ctx(CtxCmd::ToFront)));
-    assert_eq!(action_for(&ContextAction::ToggleGrid), Some(Action::ToggleGuideVisibility));
 }
 
 #[test]
