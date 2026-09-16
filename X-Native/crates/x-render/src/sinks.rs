@@ -420,9 +420,7 @@ fn shading_for(g: &vello::peniko::Gradient, transform: &Affine) -> Option<String
     if g.stops.is_empty() {
         return None;
     }
-    let stop_color = |i: usize| -> (f64, f64, f64) {
-        pdf_rgb(g.stops[i].color.to_alpha_color())
-    };
+    let stop_color = |i: usize| -> (f64, f64, f64) { pdf_rgb(g.stops[i].color.to_alpha_color()) };
     // color function over the whole 0..1 domain
     let func = if g.stops.len() == 1 {
         let (r, gr, b) = stop_color(0);

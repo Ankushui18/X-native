@@ -84,9 +84,15 @@ pub fn load_persisted_theme() -> Option<ThemeId> {
 /// Persist only the stable theme slug, using a temp file so an interrupted
 /// write cannot leave a truncated preference.
 pub fn persist_theme(id: ThemeId) {
-    let Some(home) = std::env::var_os("HOME") else { return };
-    let dir = std::path::PathBuf::from(home).join(".config").join("x-native");
-    if std::fs::create_dir_all(&dir).is_err() { return; }
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(home)
+        .join(".config")
+        .join("x-native");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
     let path = dir.join("theme");
     let tmp = dir.join("theme.tmp");
     if std::fs::write(&tmp, format!("{}\n", id.slug())).is_ok() {

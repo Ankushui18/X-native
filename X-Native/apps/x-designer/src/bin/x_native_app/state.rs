@@ -1298,27 +1298,70 @@ impl OpenDoc {
         home.transform.x = 80.0;
         home.transform.y = 80.0;
         home.fill = Paint::Solid(VelloColor::from_rgb8(0xF8, 0xFA, 0xFC));
-        let mut title = Node::text("welcome-title", 24.0, 32.0, 327.0, 40.0, "Welcome to X-Native");
-        title.bindings.insert("font".into(), APP_DEFAULT_FONT.into());
+        let mut title = Node::text(
+            "welcome-title",
+            24.0,
+            32.0,
+            327.0,
+            40.0,
+            "Welcome to X-Native",
+        );
+        title
+            .bindings
+            .insert("font".into(), APP_DEFAULT_FONT.into());
         home.children.push(title);
-        let mut button = Node::rect("try-button", 24.0, 120.0, 180.0, 48.0, VelloColor::from_rgb8(0x4F, 0x46, 0xE5));
+        let mut button = Node::rect(
+            "try-button",
+            24.0,
+            120.0,
+            180.0,
+            48.0,
+            VelloColor::from_rgb8(0x4F, 0x46, 0xE5),
+        );
         button.name = "Try prototype".into();
-        button.interactions.push(x_native::Interaction::click("screen-detail"));
+        button
+            .interactions
+            .push(x_native::Interaction::click("screen-detail"));
         home.children.push(button);
         let mut detail = Node::frame("screen-detail", 375.0, 812.0);
         detail.name = "Detail screen".into();
         detail.transform.x = 520.0;
         detail.transform.y = 80.0;
         detail.fill = Paint::Solid(VelloColor::WHITE);
-        detail.children.push(Node::text("detail-title", 24.0, 32.0, 327.0, 40.0, "Prototype destination"));
+        detail.children.push(Node::text(
+            "detail-title",
+            24.0,
+            32.0,
+            327.0,
+            40.0,
+            "Prototype destination",
+        ));
         let mut card = Node::component("card-master", "Starter Card", 280.0, 120.0);
         card.name = "Card component".into();
-        card.props.push(x_native::ComponentProp::Slot { name: "Content".into(), target: "card-master".into(), default: None });
-        card.children.push(Node::text("card-label", 16.0, 16.0, 248.0, 28.0, "Component with a slot"));
+        card.props.push(x_native::ComponentProp::Slot {
+            name: "Content".into(),
+            target: "card-master".into(),
+            default: None,
+        });
+        card.children.push(Node::text(
+            "card-label",
+            16.0,
+            16.0,
+            248.0,
+            28.0,
+            "Component with a slot",
+        ));
         page.children.extend([home, detail, card]);
         let editor = Editor::new(page.clone());
-        let mut doc = Document { pages: vec![page], default_font: Some(APP_DEFAULT_FONT.into()), ..Document::default() };
-        doc.variables.colors.insert("color/brand".into(), VelloColor::from_rgb8(0x4F, 0x46, 0xE5));
+        let mut doc = Document {
+            pages: vec![page],
+            default_font: Some(APP_DEFAULT_FONT.into()),
+            ..Document::default()
+        };
+        doc.variables.colors.insert(
+            "color/brand".into(),
+            VelloColor::from_rgb8(0x4F, 0x46, 0xE5),
+        );
         doc.variables.numbers.insert("space/page".into(), 24.0);
         let mut out = Self::from_document("Getting Started".into(), None, doc);
         out.editors = vec![editor];
@@ -1344,10 +1387,22 @@ impl OpenDoc {
 
     /// Built-in templates for the dashboard gallery: (name, blurb).
     pub const TEMPLATES: [(&str, &str); 4] = [
-        ("Mobile app flow", "Two linked screens with a working prototype"),
-        ("Landing page", "1440 desktop hero with nav, CTA and feature cards"),
-        ("Design system", "Color variables, swatches and a Button component"),
-        ("Starter board", "Freeform brainstorm canvas for quick ideas"),
+        (
+            "Mobile app flow",
+            "Two linked screens with a working prototype",
+        ),
+        (
+            "Landing page",
+            "1440 desktop hero with nav, CTA and feature cards",
+        ),
+        (
+            "Design system",
+            "Color variables, swatches and a Button component",
+        ),
+        (
+            "Starter board",
+            "Freeform brainstorm canvas for quick ideas",
+        ),
     ];
 
     fn seed_brand_vars(doc: &mut Document) {
@@ -1378,13 +1433,22 @@ impl OpenDoc {
                 home.transform.x = 80.0;
                 home.transform.y = 60.0;
                 home.fill = Paint::Solid(Color::from_rgb8(0xF8, 0xFA, 0xFC));
-                home.children.push(Self::text("m-title", 24.0, 48.0, 327.0, 40.0, "Today"));
+                home.children
+                    .push(Self::text("m-title", 24.0, 48.0, 327.0, 40.0, "Today"));
                 let mut cta = Node::rect("m-cta", 24.0, 120.0, 327.0, 52.0, brand);
                 cta.name = "Start".into();
                 cta.corner_radii = Some([12.0, 12.0, 12.0, 12.0]);
-                cta.interactions.push(x_native::Interaction::click("screen-detail"));
+                cta.interactions
+                    .push(x_native::Interaction::click("screen-detail"));
                 home.children.push(cta);
-                let mut tabs = Node::rect("m-tabs", 0.0, 748.0, 375.0, 64.0, Color::from_rgb8(0x1B, 0x1D, 0x23));
+                let mut tabs = Node::rect(
+                    "m-tabs",
+                    0.0,
+                    748.0,
+                    375.0,
+                    64.0,
+                    Color::from_rgb8(0x1B, 0x1D, 0x23),
+                );
                 tabs.name = "Tab bar".into();
                 home.children.push(tabs);
                 let mut detail = Node::frame("screen-detail", 375.0, 812.0);
@@ -1392,7 +1456,9 @@ impl OpenDoc {
                 detail.transform.x = 520.0;
                 detail.transform.y = 60.0;
                 detail.fill = Paint::Solid(Color::WHITE);
-                detail.children.push(Self::text("d-title", 24.0, 48.0, 327.0, 40.0, "Detail"));
+                detail
+                    .children
+                    .push(Self::text("d-title", 24.0, 48.0, 327.0, 40.0, "Detail"));
                 page.children.extend([home, detail]);
                 let editor = Editor::new(page.clone());
                 let mut doc = Document {
@@ -1412,18 +1478,47 @@ impl OpenDoc {
                 let mut hero = Node::frame("lp-hero", 1440.0, 900.0);
                 hero.name = "Hero".into();
                 hero.fill = Paint::Solid(Color::from_rgb8(0x0B, 0x0B, 0x0F));
-                let mut nav = Node::rect("lp-nav", 0.0, 0.0, 1440.0, 64.0, Color::from_rgb8(0x1B, 0x1D, 0x23));
+                let mut nav = Node::rect(
+                    "lp-nav",
+                    0.0,
+                    0.0,
+                    1440.0,
+                    64.0,
+                    Color::from_rgb8(0x1B, 0x1D, 0x23),
+                );
                 nav.name = "Nav".into();
                 hero.children.push(nav);
-                hero.children.push(Self::text("lp-brand", 64.0, 18.0, 200.0, 28.0, "X-Native"));
-                hero.children.push(Self::text("lp-h1", 64.0, 260.0, 900.0, 120.0, "Design anything. Ship it native."));
-                hero.children.push(Self::text("lp-sub", 64.0, 400.0, 640.0, 60.0, "A local-first design tool with a plain-JSON file format."));
+                hero.children
+                    .push(Self::text("lp-brand", 64.0, 18.0, 200.0, 28.0, "X-Native"));
+                hero.children.push(Self::text(
+                    "lp-h1",
+                    64.0,
+                    260.0,
+                    900.0,
+                    120.0,
+                    "Design anything. Ship it native.",
+                ));
+                hero.children.push(Self::text(
+                    "lp-sub",
+                    64.0,
+                    400.0,
+                    640.0,
+                    60.0,
+                    "A local-first design tool with a plain-JSON file format.",
+                ));
                 let mut cta = Node::rect("lp-cta", 64.0, 500.0, 220.0, 56.0, brand);
                 cta.name = "Get started".into();
                 cta.corner_radii = Some([12.0, 12.0, 12.0, 12.0]);
                 hero.children.push(cta);
-                for (k, (name, x)) in ["Fast", "Local", "Free"].iter().zip([64.0, 384.0, 704.0]) {
-                    let mut c = Node::rect(&format!("lp-card-{k}"), x, 640.0, 288.0, 160.0, Color::from_rgb8(0x1B, 0x1D, 0x23));
+                for (name, x) in ["Fast", "Local", "Free"].iter().zip([64.0, 384.0, 704.0]) {
+                    let mut c = Node::rect(
+                        &format!("lp-card-{}", name.to_lowercase()),
+                        x,
+                        640.0,
+                        288.0,
+                        160.0,
+                        Color::from_rgb8(0x1B, 0x1D, 0x23),
+                    );
                     c.name = format!("Feature {name}");
                     c.corner_radii = Some([12.0, 12.0, 12.0, 12.0]);
                     hero.children.push(c);
@@ -1461,21 +1556,38 @@ impl OpenDoc {
                         80.0,
                         160.0,
                         160.0,
-                        Color::from_rgb8(
-                            (hex >> 16) as u8,
-                            (hex >> 8) as u8,
-                            hex as u8,
-                        ),
+                        Color::from_rgb8((*hex >> 16) as u8, (*hex >> 8) as u8, *hex as u8),
                     );
                     sw.name = format!("color/{name}");
                     sw.corner_radii = Some([12.0, 12.0, 12.0, 12.0]);
                     page.children.push(sw);
-                    page.children
-                        .push(Self::text(&format!("swl-{name}"), x, 252.0, 160.0, 24.0, &format!("color/{name}")));
+                    page.children.push(Self::text(
+                        &format!("swl-{name}"),
+                        x,
+                        252.0,
+                        160.0,
+                        24.0,
+                        &format!("color/{name}"),
+                    ));
                 }
-                page.children.push(Self::text("ts-display", 64.0, 360.0, 600.0, 56.0, "Display"));
-                page.children.push(Self::text("ts-h", 64.0, 440.0, 400.0, 40.0, "Heading"));
-                page.children.push(Self::text("ts-body", 64.0, 520.0, 400.0, 24.0, "Body copy for real interfaces."));
+                page.children.push(Self::text(
+                    "ts-display",
+                    64.0,
+                    360.0,
+                    600.0,
+                    56.0,
+                    "Display",
+                ));
+                page.children
+                    .push(Self::text("ts-h", 64.0, 440.0, 400.0, 40.0, "Heading"));
+                page.children.push(Self::text(
+                    "ts-body",
+                    64.0,
+                    520.0,
+                    400.0,
+                    24.0,
+                    "Body copy for real interfaces.",
+                ));
                 let mut btn = Node::component("btn-master", "Button", 160.0, 48.0);
                 btn.name = "Button".into();
                 btn.fill = Paint::Solid(brand);
@@ -1485,7 +1597,8 @@ impl OpenDoc {
                     target: "btn-label".into(),
                     default: "Press me".into(),
                 });
-                btn.children.push(Self::text("btn-label", 16.0, 12.0, 128.0, 24.0, "Press me"));
+                btn.children
+                    .push(Self::text("btn-label", 16.0, 12.0, 128.0, 24.0, "Press me"));
                 page.children.push(btn);
                 let editor = Editor::new(page.clone());
                 let mut doc = Document {
@@ -1689,7 +1802,8 @@ pub struct App {
     /// Dashboard thumbnail cache: file path → (mtime validated at read,
     /// single-image `Assets` under key "thumb"). Filled lazily, one render
     /// per dashboard frame (see `thumb_pump`), mirrored to a disk cache.
-    pub thumbs: std::collections::HashMap<std::path::PathBuf, (std::time::SystemTime, x_native::Assets)>,
+    pub thumbs:
+        std::collections::HashMap<std::path::PathBuf, (std::time::SystemTime, x_native::Assets)>,
     /// Files whose thumbnail render failed this session (no retry storm;
     /// they fall back to the flat watermark card).
     pub thumb_failed: std::collections::HashSet<std::path::PathBuf>,
@@ -2336,16 +2450,27 @@ impl App {
     /// Slots live on the master node's component-property list and are
     /// resolved by the engine when an instance supplies slot content.
     pub fn add_slot(&mut self) {
-        let Some(component) = self.selected_master_name() else { return };
-        let Some(target) = self.doc_ref().selected_id() else { return };
+        let Some(component) = self.selected_master_name() else {
+            return;
+        };
+        let Some(target) = self.doc_ref().selected_id() else {
+            return;
+        };
         let name = {
             let root = &self.doc_ref().editor_ref().root;
-            let Some(node) = crate::editor_ui::find_node(root, target.as_str()) else { return };
-            let base = if node.name.is_empty() { "Content" } else { &node.name };
+            let Some(node) = crate::editor_ui::find_node(root, target.as_str()) else {
+                return;
+            };
+            let base = if node.name.is_empty() {
+                "Content"
+            } else {
+                &node.name
+            };
             let mut candidate = base.to_string();
             let mut n = 2;
-            while crate::editor_ui::find_node(root, target.as_str()).is_some_and(|node|
-                node.props.iter().any(|p| p.name() == candidate)) {
+            while crate::editor_ui::find_node(root, target.as_str())
+                .is_some_and(|node| node.props.iter().any(|p| p.name() == candidate))
+            {
                 candidate = format!("{base} {n}");
                 n += 1;
             }
@@ -2355,7 +2480,9 @@ impl App {
         doc.checkpoint();
         doc.editor().mutate_visual_stack(target.as_str(), |node| {
             node.props.push(x_native::ComponentProp::Slot {
-                name: name.clone(), target: target.clone(), default: None,
+                name: name.clone(),
+                target: target.clone(),
+                default: None,
             });
         });
         self.mark_dirty();
@@ -2991,12 +3118,11 @@ impl App {
     /// anchors near the root pin. `None` when `root_id` is unknown.
     pub fn post_reply(&mut self, root_id: &str, text: &str) -> Option<String> {
         let doc = self.doc();
-        let root = doc
-            .doc
-            .comments
-            .iter()
-            .find(|c| c.id == root_id)?
-            .clone();
+        // Threads are flat: replying to a REPLY still attaches to the root.
+        let mut root = doc.doc.comments.iter().find(|c| c.id == root_id)?.clone();
+        while let Some(parent_id) = root.parent.clone() {
+            root = doc.doc.comments.iter().find(|c| c.id == parent_id)?.clone();
+        }
         let id = x_native::fresh_id("comment");
         let n = doc
             .doc
@@ -3049,7 +3175,12 @@ impl App {
         let members = |c: &x_native::Comment| {
             c.id == root_id || c.parent.as_deref() == Some(root_id.as_str())
         };
-        if !doc.doc.comments.iter().any(|c| members(c) && c.resolved != resolved) {
+        if !doc
+            .doc
+            .comments
+            .iter()
+            .any(|c| members(c) && c.resolved != resolved)
+        {
             return;
         }
         doc.checkpoint();
@@ -3553,13 +3684,7 @@ impl App {
     pub fn mark_board_dirty(&mut self) {
         if let Some(d) = self.docs.get_mut(self.active) {
             d.dirty = true;
-            // Board edits do not enter the design editor's undo stack, but
-            // they still need a monotonic revision so autosave and recovery
-            // do not mistake a later board mutation for the already-saved
-            // revision.
-            d.history.next_revision = d.history.next_revision.saturating_add(1);
-            d.history.revision = d.history.next_revision;
-            d.history.saved_revision = None;
+            d.bump_board_revision();
             d.last_autosave_revision = None;
         }
     }
@@ -4179,7 +4304,8 @@ impl App {
         // labels and outlines text), so the preview cannot drift from the
         // artifact the user gets. Embedded image assets are not decoded in
         // this path — v1 previews are text+vector.
-        let Ok(plan) = x_native::prepare_export(page, &doc.variables, None, &self.fonts) else {
+        let Ok(plan) = x_native::prepare_export(page, &doc.variables, None, &self.fonts.fonts)
+        else {
             fail(self);
             return;
         };
@@ -4192,7 +4318,7 @@ impl App {
             scale,
             None,
             None,
-            Some(&self.fonts),
+            Some(&self.fonts.fonts),
         ) else {
             fail(self);
             return;

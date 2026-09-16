@@ -1,8 +1,8 @@
 use crate::import_ir::{lower, ImportDoc, ImportKind, ImportNode};
 #[allow(unused_imports)]
 use crate::*;
-use x_core::*;
 use std::collections::HashMap;
+use x_core::*;
 
 // --------------------------------------------------------------- SVG import
 
@@ -193,9 +193,13 @@ fn parse_css_rules(svg: &str) -> CssRules {
     while let Some(relative_start) = svg[offset..].find("<style") {
         let start = offset + relative_start;
         let after_open = &svg[start..];
-        let Some(open_end) = after_open.find('>') else { break };
+        let Some(open_end) = after_open.find('>') else {
+            break;
+        };
         let body_start = start + open_end + 1;
-        let Some(close_rel) = svg[body_start..].find("</style>") else { break };
+        let Some(close_rel) = svg[body_start..].find("</style>") else {
+            break;
+        };
         let body_end = body_start + close_rel;
         let body = &svg[body_start..body_end];
         for block in body.split('}') {
@@ -220,7 +224,11 @@ fn parse_css_rules(svg: &str) -> CssRules {
             if properties.is_empty() {
                 continue;
             }
-            for selector in selectors.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            for selector in selectors
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
                 rules.push((selector.to_string(), properties.clone()));
             }
         }
@@ -239,8 +247,8 @@ fn selector_specificity(
     // design-tool SVGs, while unsupported combinators safely do not match.
     let selector = selector
         .split(['>', '+', '~', ' '])
-        .filter(|part| !part.is_empty())
-        .last()?;
+        .rev()
+        .find(|part| !part.is_empty())?;
     let id = attr(attrs, "id");
     let classes: Vec<&str> = attr(attrs, "class")
         .unwrap_or_default()
@@ -255,13 +263,11 @@ fn selector_specificity(
             return None;
         }
         ids = 1;
-        rest = "";
     } else if let Some(name) = rest.strip_prefix('.') {
-        if !classes.iter().any(|class| *class == name) {
+        if !classes.contains(&name) {
             return None;
         }
         class_count = 1;
-        rest = "";
     } else {
         if let Some((name, suffix)) = rest.split_once('#') {
             if id != Some(suffix) {
@@ -271,7 +277,7 @@ fn selector_specificity(
             rest = name;
         }
         if let Some((name, suffix)) = rest.split_once('.') {
-            if !classes.iter().any(|class| *class == suffix) {
+            if !classes.contains(&suffix) {
                 return None;
             }
             class_count = 1;
@@ -301,12 +307,14 @@ fn stylesheet_value(
         let Some(value) = properties.get(&key.to_ascii_lowercase()) else {
             continue;
         };
-        let replace = winner
-            .as_ref()
-            .map_or(true, |(old_specificity, old_index, _)| {
+        let replace = match winner.as_ref() {
+            Some((old_specificity, old_index, _)) => {
                 specificity > *old_specificity
                     || (specificity == *old_specificity && index >= *old_index)
-            });
+            }
+            // First matching rule wins when nothing has matched yet.
+            None => true,
+        };
         if replace {
             winner = Some((specificity, index, value.clone()));
         }
@@ -340,13 +348,8 @@ fn computed_value(
 }
 
 fn attr_num(attrs: &[(String, String)], key: &str) -> Option<f64> {
-    attr_or_style(attrs, key).and_then(|v| {
-        v.trim()
-            .strip_suffix("px")
-            .unwrap_or(v.trim())
-            .parse()
-            .ok()
-    })
+    attr_or_style(attrs, key)
+        .and_then(|v| v.trim().strip_suffix("px").unwrap_or(v.trim()).parse().ok())
 }
 
 fn css_number(value: &str) -> Option<f32> {
@@ -384,14 +387,13 @@ impl SvgPaint {
         }
         match &mut paint {
             Paint::Solid(color) => *color = color.multiply_alpha(alpha),
-            Paint::LinearGradient { stops, .. }
-            | Paint::RadialGradient { stops, .. }
-            | Paint::AngularGradient { stops, .. }
-            | Paint::DiamondGradient { stops, .. } => {
-                for (_, color) in stops {
-                    *color = color.multiply_alpha(alpha);
-                }
-            }
+            // Gradient stops carry their authored stop-opacity; the model has
+            // no gradient-global alpha, and baking element opacity into the
+            // stops would corrupt the declared gradient.
+            Paint::LinearGradient { .. }
+            | Paint::RadialGradient { .. }
+            | Paint::AngularGradient { .. }
+            | Paint::DiamondGradient { .. } => {}
             Paint::Variable(_) | Paint::Pattern { .. } => {}
         }
         paint
@@ -501,9 +503,9 @@ impl SvgStyle {
         if let Some(value) = computed("stroke-opacity").as_deref().and_then(css_number) {
             style.stroke_opacity = parent.stroke_opacity * value;
         }
-        if let Some(value) = computed("stroke-width").and_then(|v| {
-            v.trim_end_matches("px").parse::<f64>().ok()
-        }) {
+        if let Some(value) =
+            computed("stroke-width").and_then(|v| v.trim_end_matches("px").parse::<f64>().ok())
+        {
             style.stroke_width = value.max(0.0);
         }
         if let Some(value) = computed("stroke-linecap") {
@@ -577,7 +579,11 @@ fn gradient_number(value: Option<&str>, default: f64, percent_default: f64) -> f
         return default;
     };
     if let Some(percent) = value.strip_suffix('%') {
-        percent.parse::<f64>().ok().map(|n| n / 100.0 * percent_default).unwrap_or(default)
+        percent
+            .parse::<f64>()
+            .ok()
+            .map(|n| n / 100.0 * percent_default)
+            .unwrap_or(default)
     } else {
         value.parse().unwrap_or(default)
     }
@@ -671,11 +677,8 @@ fn parse_gradient(
         return Ok(());
     }
     let paint = if kind == "linearGradient" {
-        let defaults = if object_bounding_box {
-            (0.0, 0.0, 1.0, 0.0)
-        } else {
-            (0.0, 0.0, 1.0, 0.0)
-        };
+        // Both gradientUnits modes share the same default unit x-gradient.
+        let defaults = (0.0, 0.0, 1.0, 0.0);
         Paint::LinearGradient {
             start: (
                 gradient_number(attr(&attrs, "x1"), defaults.0, 1.0),
@@ -760,16 +763,15 @@ fn parse_svg_transform(value: &str) -> Option<Affine> {
         let close = rest[open + 1..].find(')')? + open + 1;
         let args = transform_numbers(&rest[open + 1..close]);
         let op = match name.as_str() {
-            "matrix" if args.len() >= 6 => Affine::new([
-                args[0], args[1], args[2], args[3], args[4], args[5],
-            ]),
+            "matrix" if args.len() >= 6 => {
+                Affine::new([args[0], args[1], args[2], args[3], args[4], args[5]])
+            }
             "translate" if !args.is_empty() => {
                 Affine::translate((args[0], args.get(1).copied().unwrap_or(0.0)))
             }
-            "scale" if !args.is_empty() => Affine::scale_non_uniform(
-                args[0],
-                args.get(1).copied().unwrap_or(args[0]),
-            ),
+            "scale" if !args.is_empty() => {
+                Affine::scale_non_uniform(args[0], args.get(1).copied().unwrap_or(args[0]))
+            }
             "rotate" if !args.is_empty() => {
                 let rotate = Affine::rotate(args[0].to_radians());
                 if args.len() >= 3 {
@@ -783,19 +785,16 @@ fn parse_svg_transform(value: &str) -> Option<Affine> {
             "skewx" if !args.is_empty() => Affine::skew(args[0].to_radians(), 0.0),
             "skewy" if !args.is_empty() => Affine::skew(0.0, args[0].to_radians()),
             _ => {
-                rest = rest[close + 1..].trim_start_matches(|c: char| {
-                    c.is_ascii_whitespace() || c == ','
-                });
+                rest = rest[close + 1..]
+                    .trim_start_matches(|c: char| c.is_ascii_whitespace() || c == ',');
                 continue;
             }
         };
         // SVG transform lists are applied in declaration order to the
         // geometry; with column-vector affines that is a right multiply.
-        result = result * op;
+        result *= op;
         parsed = true;
-        rest = rest[close + 1..].trim_start_matches(|c: char| {
-            c.is_ascii_whitespace() || c == ','
-        });
+        rest = rest[close + 1..].trim_start_matches(|c: char| c.is_ascii_whitespace() || c == ',');
     }
     parsed.then_some(result)
 }
@@ -860,7 +859,14 @@ fn include_cubic_extrema(min: &mut f64, max: &mut f64, a: f64, b: f64, c: f64, d
 /// Bounds the actual cubic curve, not just its control polygon. This avoids
 /// importing a curve with an unnecessarily large node box (which changes
 /// transforms, hit testing, and gradient coordinates).
-fn include_point(min_x: &mut f64, min_y: &mut f64, max_x: &mut f64, max_y: &mut f64, x: f64, y: f64) {
+fn include_point(
+    min_x: &mut f64,
+    min_y: &mut f64,
+    max_x: &mut f64,
+    max_y: &mut f64,
+    x: f64,
+    y: f64,
+) {
     *min_x = (*min_x).min(x);
     *min_y = (*min_y).min(y);
     *max_x = (*max_x).max(x);
@@ -887,12 +893,7 @@ fn path_bounds(cmds: &[PathCmd]) -> (f64, f64, f64, f64) {
             }
             PathCmd::CurveTo(x1, y1, x2, y2, x, y) => {
                 include_point(
-                    &mut min_x,
-                    &mut min_y,
-                    &mut max_x,
-                    &mut max_y,
-                    current.0,
-                    current.1,
+                    &mut min_x, &mut min_y, &mut max_x, &mut max_y, current.0, current.1,
                 );
                 include_point(&mut min_x, &mut min_y, &mut max_x, &mut max_y, x, y);
                 include_cubic_extrema(&mut min_x, &mut max_x, current.0, x1, x2, x);
@@ -1013,8 +1014,7 @@ fn append_svg_arc(
     let y2 = y_prime * y_prime;
     let numerator = (rx2 * ry2 - rx2 * y2 - ry2 * x2).max(0.0);
     let denominator = (rx2 * y2 + ry2 * x2).max(1e-24);
-    let factor = if large_arc == sweep { -1.0 } else { 1.0 }
-        * (numerator / denominator).sqrt();
+    let factor = if large_arc == sweep { -1.0 } else { 1.0 } * (numerator / denominator).sqrt();
     let cx_prime = factor * rx * y_prime / ry;
     let cy_prime = factor * -ry * x_prime / rx;
     let cx = cos_phi * cx_prime - sin_phi * cy_prime + (start.0 + end.0) / 2.0;
@@ -1152,14 +1152,22 @@ pub(crate) fn parse_path_d(d: &str) -> Vec<PathCmd> {
                 last_quadratic_control = None;
             }
             'H' => {
-                let x = if relative { current.0 + values[0] } else { values[0] };
+                let x = if relative {
+                    current.0 + values[0]
+                } else {
+                    values[0]
+                };
                 current.0 = x;
                 out.push(PathCmd::LineTo(current.0, current.1));
                 last_cubic_control = None;
                 last_quadratic_control = None;
             }
             'V' => {
-                let y = if relative { current.1 + values[0] } else { values[0] };
+                let y = if relative {
+                    current.1 + values[0]
+                } else {
+                    values[0]
+                };
                 current.1 = y;
                 out.push(PathCmd::LineTo(current.0, current.1));
                 last_cubic_control = None;
@@ -1347,7 +1355,10 @@ fn parse_children(
                     }
                     n
                 };
-                let inherited = stack.last().map(|frame| frame.style.clone()).unwrap_or_default();
+                let inherited = stack
+                    .last()
+                    .map(|frame| frame.style.clone())
+                    .unwrap_or_default();
                 let current_style =
                     SvgStyle::from_parent(&inherited, &attrs, &gradients, &css_rules, &name);
                 match name.as_str() {
@@ -1443,10 +1454,7 @@ fn parse_children(
                             .size(dx.abs().max(1.0), dy.abs().max(1.0))
                             .fill(Paint::Solid(Color::TRANSPARENT));
                         n.opacity = current_style.opacity;
-                        n.stroke = current_style.stroke_paint(
-                            dx.abs().max(1.0),
-                            dy.abs().max(1.0),
-                        );
+                        n.stroke = current_style.stroke_paint(dx.abs().max(1.0), dy.abs().max(1.0));
                         n.stroke_options = current_style
                             .stroke
                             .as_ref()
@@ -1515,13 +1523,7 @@ fn parse_children(
                         }
                     }
                     "linearGradient" | "radialGradient" => {
-                        parse_gradient(
-                            lexer,
-                            &name,
-                            attrs,
-                            &mut gradients,
-                            self_closed,
-                        )?;
+                        parse_gradient(lexer, &name, attrs, &mut gradients, self_closed)?;
                     }
                     "style" | "clipPath" | "mask" | "symbol" => {
                         if !self_closed {
@@ -1601,15 +1603,19 @@ mod tests {
         let page = import_svg(svg).expect("SVG should import");
         let group = &page.children[0];
         let rect = &group.children[0];
-        assert!(matches!(&rect.fill, Paint::Solid(color) if color.to_rgba8() == Color::from_rgba8(255, 0, 0, 102).to_rgba8()));
-        assert_eq!(rect.stroke.as_ref().map(|s| s.width), Some(3.0));
+        assert!(
+            matches!(&rect.fill, Paint::Solid(color) if color.to_rgba8() == Color::from_rgba8(255, 0, 0, 102).to_rgba8())
+        );
+        assert_eq!(rect.stroke.width, 3.0);
         assert_eq!(
             rect.stroke_layers.first().unwrap().options.cap_start,
             StrokeCap::Round
         );
         let path = &group.children[1];
         match &path.fill {
-            Paint::LinearGradient { start, end, stops, .. } => {
+            Paint::LinearGradient {
+                start, end, stops, ..
+            } => {
                 assert_eq!(*start, (0.0, 0.0));
                 assert_eq!(*end, (100.0, 0.0));
                 assert_eq!(stops.len(), 2);
@@ -1629,10 +1635,9 @@ mod tests {
         .expect("stylesheet should import");
         let node = &page.children[0];
         assert_eq!(node.fill, Paint::Solid(Color::from_rgb8(0x12, 0x34, 0x56)));
-        assert_eq!(node.stroke.as_ref().map(|stroke| stroke.width), Some(4.0));
+        assert_eq!(node.stroke.width, 4.0);
         assert_eq!(
-            x_core::paint_color(&node.stroke.as_ref().unwrap().paint, &Variables::default())
-                .to_rgba8(),
+            x_core::paint_color(&node.stroke.paint, &Variables::default()).to_rgba8(),
             Color::from_rgb8(0xfe, 0xdc, 0xba).to_rgba8()
         );
     }
@@ -1661,7 +1666,13 @@ mod tests {
         let NodeKind::Vector { path: commands } = &path.kind else {
             panic!("expected vector")
         };
-        assert!(commands.iter().filter(|c| matches!(c, PathCmd::CurveTo(..))).count() >= 4);
+        assert!(
+            commands
+                .iter()
+                .filter(|c| matches!(c, PathCmd::CurveTo(..)))
+                .count()
+                >= 4
+        );
         assert_eq!(path.fill, Paint::Solid(Color::from_rgb8(255, 165, 0)));
         assert!(path.w > 0.0 && path.h > 0.0);
     }

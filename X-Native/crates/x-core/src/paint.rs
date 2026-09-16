@@ -193,11 +193,7 @@ impl Paint {
                 space,
                 ..
             } => (*center, (*radius, 0.0), *space),
-            Paint::AngularGradient {
-                center,
-                space,
-                ..
-            } => (*center, (100.0, 0.0), *space),
+            Paint::AngularGradient { center, space, .. } => (*center, (100.0, 0.0), *space),
             Paint::DiamondGradient {
                 center,
                 width,

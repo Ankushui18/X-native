@@ -657,7 +657,13 @@ mod snapshot_tests {
 /// documents for bundled static instances.
 pub fn family_of_face(face: &str) -> &str {
     match face.rsplit_once('-') {
-        Some((fam, suffix)) if !fam.is_empty() && !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) => fam,
+        Some((fam, suffix))
+            if !fam.is_empty()
+                && !suffix.is_empty()
+                && suffix.chars().all(|c| c.is_ascii_digit()) =>
+        {
+            fam
+        }
         _ => face,
     }
 }
@@ -705,11 +711,24 @@ mod families_tests {
 
     #[test]
     fn group_families_sorts_and_dedups() {
-        let got = group_families(["Roboto-400", "Inter-700", "Inter-400", "Inter", "Roboto-400"]);
+        let got = group_families([
+            "Roboto-400",
+            "Inter-700",
+            "Inter-400",
+            "Inter",
+            "Roboto-400",
+        ]);
         assert_eq!(
             got,
             vec![
-                ("Inter".to_string(), vec!["Inter".to_string(), "Inter-400".to_string(), "Inter-700".to_string()]),
+                (
+                    "Inter".to_string(),
+                    vec![
+                        "Inter".to_string(),
+                        "Inter-400".to_string(),
+                        "Inter-700".to_string()
+                    ]
+                ),
                 ("Roboto".to_string(), vec!["Roboto-400".to_string()]),
             ]
         );

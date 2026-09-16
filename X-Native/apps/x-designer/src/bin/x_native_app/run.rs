@@ -20,8 +20,8 @@ use x_native::build_scene_full;
 #[cfg(test)]
 use x_native::fileio::load_x_file;
 use x_native::{
-    bind_style, detach_text_style, resolve_styles, ImageFit, LegacyStyle, Node, NodeKind, Paint, PathCmd,
-    StrokeJoin, TextStyleData,
+    bind_style, detach_text_style, resolve_styles, ImageFit, LegacyStyle, Node, NodeKind, Paint,
+    PathCmd, StrokeJoin, TextStyleData,
 };
 
 use crate::dashboard;
@@ -2954,9 +2954,13 @@ impl App {
 }
 
 fn mark_onboarding_complete() {
-    let Some(home) = std::env::var_os("HOME") else { return };
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
     let dir = std::path::PathBuf::from(home).join(".config/x-native");
-    if std::fs::create_dir_all(&dir).is_ok() { let _ = std::fs::write(dir.join("onboarding-complete"), b"1\n"); }
+    if std::fs::create_dir_all(&dir).is_ok() {
+        let _ = std::fs::write(dir.join("onboarding-complete"), b"1\n");
+    }
 }
 
 impl Host {
@@ -3617,20 +3621,19 @@ impl Host {
                     // Reply pill under the rows
                     let card_x0 = sp.x + 32.0;
                     let pill_y = sp.y - 28.0 + 76.0 + reply_n as f64 * 18.0 + 2.0;
-                    let reply_btn = Rect::new(card_x0 + 12.0, pill_y, card_x0 + 96.0, pill_y + 24.0);
+                    let reply_btn =
+                        Rect::new(card_x0 + 12.0, pill_y, card_x0 + 96.0, pill_y + 24.0);
                     if reply_btn.contains(p) {
                         let draft = {
                             let doc = self.app.doc();
-                            doc.doc
-                                .comments
-                                .iter()
-                                .find(|c| c.id == id)
-                                .map(|c| crate::state::CommentDraft {
+                            doc.doc.comments.iter().find(|c| c.id == id).map(|c| {
+                                crate::state::CommentDraft {
                                     x: c.x,
                                     y: c.y,
                                     buffer: String::new(),
                                     parent: Some(c.id.clone()),
-                                })
+                                }
+                            })
                         };
                         if let Some(d) = draft {
                             self.app.comment_draft = Some(d);
@@ -3812,7 +3815,11 @@ impl Host {
                     self.app.mark_dirty();
                     self.app.status = format!(
                         "Reflected {changed} layer(s) {}",
-                        if horizontal { "horizontally" } else { "vertically" }
+                        if horizontal {
+                            "horizontally"
+                        } else {
+                            "vertically"
+                        }
                     );
                 }
             }
@@ -3867,7 +3874,9 @@ impl Host {
                         }
                         self.app.board_doc_mut().set_selection(selection);
                     } else {
-                        self.app.board_doc_mut().set_selection(vec![node_id.clone()]);
+                        self.app
+                            .board_doc_mut()
+                            .set_selection(vec![node_id.clone()]);
                     }
                     // Start moving the node
                     self.app.drag = Some(Drag::BoardMoveNode {
@@ -7647,8 +7656,11 @@ impl Host {
                 // Archived versions are snapshots, not normal save targets.
                 // Open them as a new unsaved document so Ctrl/Cmd+S cannot
                 // silently overwrite history.
-                let archived = path.parent().and_then(|p| p.file_name())
-                    .and_then(|n| n.to_str()) == Some(".x-native-history");
+                let archived = path
+                    .parent()
+                    .and_then(|p| p.file_name())
+                    .and_then(|n| n.to_str())
+                    == Some(".x-native-history");
                 if archived {
                     doc.path = None;
                     doc.canonical_path = None;
@@ -7714,7 +7726,11 @@ impl Host {
                     self.app.docs.push(doc);
                     if activate {
                         self.app.active = self.app.docs.len() - 1;
-                        self.app.screen = if is_board { Screen::Board } else { Screen::Editor };
+                        self.app.screen = if is_board {
+                            Screen::Board
+                        } else {
+                            Screen::Editor
+                        };
                         if is_board {
                             self.app.center_view();
                         } else {
@@ -7911,21 +7927,39 @@ impl Host {
     }
 
     fn cmd_publish_library(&mut self) {
-        if !self.finish_edits() { return; }
-        let Some(doc) = self.app.doc_opt() else { return; };
+        if !self.finish_edits() {
+            return;
+        }
+        let Some(doc) = self.app.doc_opt() else {
+            return;
+        };
         let Some(path) = rfd::FileDialog::new()
             .set_file_name(format!("{}.xlib", doc.name))
             .add_filter("X-Native library", &["xlib"])
-            .save_file() else { return };
-        let roots = doc.editors.iter().map(|ed| ed.root.clone()).collect::<Vec<_>>();
-        let library_id = doc.name.to_lowercase().chars()
+            .save_file()
+        else {
+            return;
+        };
+        let roots = doc
+            .editors
+            .iter()
+            .map(|ed| ed.root.clone())
+            .collect::<Vec<_>>();
+        let library_id = doc
+            .name
+            .to_lowercase()
+            .chars()
             .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
             .collect::<String>();
         let library = x_native::library_from_parts(
-            &doc.doc.styles, &doc.doc.variables, &roots,
-            library_id.trim_matches('-'), &doc.name, 1,
+            &doc.doc.styles,
+            &doc.doc.variables,
+            &roots,
+            library_id.trim_matches('-'),
+            &doc.name,
+            1,
         );
-        let text = x_native::save_xlib(&library);
+        let text = x_native::fileio::save_xlib(&library);
         match std::fs::write(&path, text) {
             Ok(()) => self.app.status = format!("Published library: {}", path.display()),
             Err(e) => self.app.status = format!("Library publish failed: {e}"),
@@ -8025,10 +8059,15 @@ impl Host {
     }
 
     fn cmd_open_version(&mut self) {
-        let dir = self.app.doc_opt().and_then(|d| d.path.clone())
+        let dir = self
+            .app
+            .doc_opt()
+            .and_then(|d| d.path.clone())
             .and_then(|p| p.parent().map(|p| p.join(".x-native-history")));
         let mut dialog = rfd::FileDialog::new().add_filter("X-Native version", &["x"]);
-        if let Some(dir) = dir { dialog = dialog.set_directory(dir); }
+        if let Some(dir) = dir {
+            dialog = dialog.set_directory(dir);
+        }
         if let Some(path) = dialog.pick_file() {
             self.open_path(path);
             self.app.status = "Opened archived version in a new tab".into();
@@ -8060,13 +8099,22 @@ impl Host {
     /// The current file is still the canonical save; history copies are plain
     /// JSON .x files, so they remain diffable and recoverable without a server.
     fn archive_version(&self, path: &std::path::Path) -> Result<(), String> {
-        if !path.exists() { return Ok(()); }
-        let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."))
+        if !path.exists() {
+            return Ok(());
+        }
+        let dir = path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
             .join(".x-native-history");
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_secs();
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("document");
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_secs();
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("document");
         let mut dst = dir.join(format!("{stem}-{stamp}.x"));
         let mut suffix = 2u32;
         while dst.exists() {
@@ -8074,20 +8122,28 @@ impl Host {
             suffix += 1;
         }
         std::fs::copy(path, &dst).map_err(|e| e.to_string())?;
-        let mut versions = std::fs::read_dir(&dir).map_err(|e| e.to_string())?
-            .filter_map(Result::ok).filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("x"))
+        let mut versions = std::fs::read_dir(&dir)
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("x"))
             .collect::<Vec<_>>();
         versions.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
         while versions.len() > 20 {
-            if let Some(old) = versions.first() { let _ = std::fs::remove_file(old.path()); }
+            if let Some(old) = versions.first() {
+                let _ = std::fs::remove_file(old.path());
+            }
             versions.remove(0);
         }
         Ok(())
     }
 
     fn save_to(&mut self, path: std::path::PathBuf) {
-        if !self.finish_edits() { return; }
-        if self.app.docs.is_empty() { return; }
+        if !self.finish_edits() {
+            return;
+        }
+        if self.app.docs.is_empty() {
+            return;
+        }
         let history = self.archive_version(&path);
         match self.app.doc().save_to(&path) {
             Ok(()) => {
@@ -8346,7 +8402,10 @@ impl Host {
                 self.app.screen = crate::state::Screen::Editor;
                 self.app.center_view();
             }
-            Action::OnboardingBlank => { mark_onboarding_complete(); self.cmd_new_file(); }
+            Action::OnboardingBlank => {
+                mark_onboarding_complete();
+                self.cmd_new_file();
+            }
             Action::OnboardingDismiss => mark_onboarding_complete(),
             Action::NewBoard => self.cmd_new_board(),
             Action::ImportFile => self.cmd_import_file(),
@@ -8486,15 +8545,32 @@ impl Host {
                     };
                     let mut name = base.to_string();
                     let mut n = 2;
-                    while doc.doc.variables.catalog().iter().any(|(_, key, _)| key == &name) {
+                    while doc
+                        .doc
+                        .variables
+                        .catalog()
+                        .iter()
+                        .any(|(_, key, _)| key == &name)
+                    {
                         name = format!("{base}-{n}");
                         n += 1;
                     }
                     match kind {
-                        crate::state::VariableKind::Color => { doc.doc.variables.colors.insert(name, x_native::Color::from_rgba8(99, 102, 241, 255)); }
-                        crate::state::VariableKind::Number => { doc.doc.variables.numbers.insert(name, 0.0); }
-                        crate::state::VariableKind::String => { doc.doc.variables.strings.insert(name, String::new()); }
-                        crate::state::VariableKind::Boolean => { doc.doc.variables.bools.insert(name, false); }
+                        crate::state::VariableKind::Color => {
+                            doc.doc
+                                .variables
+                                .colors
+                                .insert(name, x_native::Color::from_rgba8(99, 102, 241, 255));
+                        }
+                        crate::state::VariableKind::Number => {
+                            doc.doc.variables.numbers.insert(name, 0.0);
+                        }
+                        crate::state::VariableKind::String => {
+                            doc.doc.variables.strings.insert(name, String::new());
+                        }
+                        crate::state::VariableKind::Boolean => {
+                            doc.doc.variables.bools.insert(name, false);
+                        }
                     }
                     doc.dirty = true;
                 }
@@ -8864,9 +8940,9 @@ impl Host {
                     0 => {
                         self.app.open_blank();
                     } // New file
-                    1 => self.cmd_open_file(), // Open file…
-                    3 => self.cmd_save(),      // Save
-                    4 => self.cmd_save_as(),   // Save as…
+                    1 => self.cmd_open_file(),    // Open file…
+                    3 => self.cmd_save(),         // Save
+                    4 => self.cmd_save_as(),      // Save as…
                     5 => self.cmd_open_version(), // Open archived version
                     6 => {
                         self.dispatch(Action::FileDuplicate);
@@ -8874,7 +8950,7 @@ impl Host {
                     7 => {
                         self.dispatch(Action::FileMoveToDrafts);
                     } // Move to drafts
-                    9 => self.cmd_export(false), // Export as…
+                    9 => self.cmd_export(false),  // Export as…
                     10 => {
                         self.dispatch(Action::OpenFind);
                     } // Find…
@@ -9185,7 +9261,8 @@ impl Host {
             }
             Action::FontPicker(name) => {
                 self.app.font_picker_open = false;
-                self.app.apply_typo_field(FieldId::FontFamily, name.as_str());
+                self.app
+                    .apply_typo_field(FieldId::FontFamily, name.as_str());
                 self.app.mark_dirty();
                 self.app.status = format!("Font: {name}");
             }
@@ -9456,16 +9533,15 @@ impl Host {
                 // this file (snapshot_hash must cover the NEW snapshot or
                 // load-time verification would flag the document).
                 if let Some(dep) = doc.library_deps.get_mut(rv.dep_index) {
-                    dep.snapshot_hash = x_native::library_hash(
+                    dep.snapshot_hash = x_native::fileio::library_hash(
                         doc.library_snapshots.get(&id).expect("just inserted"),
                     );
                     dep.source_path = rv.path.to_string_lossy().into_owned();
                 }
                 let _ = changes;
                 self.app.mark_dirty();
-                self.app.status = format!(
-                    "Library “{id}” updated — {updated} layer(s) re-resolved"
-                );
+                self.app.status =
+                    format!("Library “{id}” updated — {updated} layer(s) re-resolved");
             }
             Action::LibReviewClose => {
                 self.app.lib_review = None;
@@ -9476,8 +9552,7 @@ impl Host {
                 };
                 let sel = self.app.doc_ref().editor_ref().selection.clone();
                 let Some(content_id) = sel.iter().find(|id| **id != iid).cloned() else {
-                    self.app.status =
-                        "Select the content layer together with the instance".into();
+                    self.app.status = "Select the content layer together with the instance".into();
                     return;
                 };
                 let d = self.app.doc();
@@ -9506,11 +9581,11 @@ impl Host {
                 content.h = anchor.h;
                 let content_name = content.name.clone();
                 d.checkpoint();
-                d.editor()
-                    .mutate_visual_stack(&iid, |inst| x_native::set_slot_content(inst, &name, content));
+                d.editor().mutate_visual_stack(&iid, |inst| {
+                    x_native::set_slot_content(inst, &name, content)
+                });
                 self.app.mark_dirty();
-                self.app.status =
-                    format!("Slot {name} ← {content_name}");
+                self.app.status = format!("Slot {name} ← {content_name}");
             }
             Action::SlotClear(name) => {
                 let Some((iid, _)) = self.app.selected_instance() else {
@@ -10454,15 +10529,21 @@ impl Host {
                 self.app.commit_instance_prop(&raw);
             }
             FieldId::ComponentDescription => {
-                let Some(id) = self.app.doc_ref().selected_id() else { return };
+                let Some(id) = self.app.doc_ref().selected_id() else {
+                    return;
+                };
                 self.app.doc().checkpoint();
-                self.app.doc().editor().mutate_visual_stack(id.as_str(), |node| {
-                    if raw.is_empty() {
-                        node.bindings.remove("component:description");
-                    } else {
-                        node.bindings.insert("component:description".into(), raw.clone());
-                    }
-                });
+                self.app
+                    .doc()
+                    .editor()
+                    .mutate_visual_stack(id.as_str(), |node| {
+                        if raw.is_empty() {
+                            node.bindings.remove("component:description");
+                        } else {
+                            node.bindings
+                                .insert("component:description".into(), raw.clone());
+                        }
+                    });
                 self.app.mark_dirty();
             }
             FieldId::ExportSuffix => {
@@ -10987,7 +11068,9 @@ fn field_initial(app: &App, f: FieldId) -> String {
         FieldId::ComponentDescription => app
             .doc_ref()
             .selected_id()
-            .and_then(|id| crate::editor_ui::find_node(&app.doc_ref().editor_ref().root, id.as_str()))
+            .and_then(|id| {
+                crate::editor_ui::find_node(&app.doc_ref().editor_ref().root, id.as_str())
+            })
             .and_then(|n| n.bindings.get("component:description").cloned())
             .unwrap_or_default(),
         FieldId::InstanceProp => {
@@ -11050,7 +11133,8 @@ mod tests {
         app.post_reply(&root, "second").expect("second reply posts");
         assert_eq!(app.reply_count(&root), 2);
         // replying to a REPLY still attaches to the thread root (flat)
-        app.post_reply(&r1, "still the root thread").expect("nested reply posts");
+        app.post_reply(&r1, "still the root thread")
+            .expect("nested reply posts");
         assert_eq!(app.reply_count(&root), 3);
         // unknown root is a clean None, not a panic
         assert!(app.post_reply("nope", "x").is_none());
@@ -11084,8 +11168,8 @@ mod tests {
     fn templates_catalog_builds_independent_copies() {
         for (i, (name, blurb)) in OpenDoc::TEMPLATES.iter().enumerate() {
             assert!(!name.is_empty() && !blurb.is_empty());
-            let d = OpenDoc::template_doc(i)
-                .unwrap_or_else(|| panic!("template {i} ({name}) builds"));
+            let d =
+                OpenDoc::template_doc(i).unwrap_or_else(|| panic!("template {i} ({name}) builds"));
             if i == 3 {
                 assert!(d.board_doc.is_some(), "board template carries a board");
                 assert_eq!(d.doc.kind, x_native::DocumentKind::Board);
@@ -12237,7 +12321,7 @@ fn screenshot_screens() {
             Screen::Dashboard => {
                 dashboard::paint(app, &mut inner);
                 editor_ui::paint_palette_overlay(app, &mut inner);
-            },
+            }
             Screen::Editor => {
                 editor_ui::paint(app, &mut inner);
                 let reg = app.editor_regions();
@@ -12667,7 +12751,7 @@ fn screenshot_screens_more() {
             Screen::Dashboard => {
                 dashboard::paint(app, &mut inner);
                 editor_ui::paint_palette_overlay(app, &mut inner);
-            },
+            }
             Screen::Editor => {
                 editor_ui::paint(app, &mut inner);
                 let reg = app.editor_regions();
@@ -12896,7 +12980,7 @@ fn screenshot_screens_r7() {
             Screen::Dashboard => {
                 dashboard::paint(app, &mut inner);
                 editor_ui::paint_palette_overlay(app, &mut inner);
-            },
+            }
             Screen::Editor => {
                 editor_ui::paint(app, &mut inner);
                 let reg = app.editor_regions();

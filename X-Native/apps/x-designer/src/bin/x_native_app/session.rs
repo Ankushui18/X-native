@@ -77,6 +77,15 @@ impl OpenDoc {
         (before, self.history.revision)
     }
 
+    /// Board edits never enter the design editor's undo stack, but they still
+    /// need a monotonic revision so autosave and recovery do not mistake a
+    /// later board mutation for the already-saved revision.
+    pub fn bump_board_revision(&mut self) {
+        self.history.next_revision = self.history.next_revision.saturating_add(1);
+        self.history.revision = self.history.next_revision;
+        self.history.saved_revision = None;
+    }
+
     pub fn record_page_changes(&mut self, coalesce: bool) {
         for i in 0..self.editors.len() {
             let ed = &self.editors[i];

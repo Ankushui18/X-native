@@ -637,7 +637,11 @@ pub fn encode_png(pix: &ts::Pixmap) -> Result<Vec<u8>, String> {
 /// Encode straight RGBA8 image bytes for vector exports that need to carry a
 /// derived image (for example, an image with non-default adjustments).
 pub fn encode_rgba_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
-    if rgba.len() != (width as usize).saturating_mul(height as usize).saturating_mul(4) {
+    if rgba.len()
+        != (width as usize)
+            .saturating_mul(height as usize)
+            .saturating_mul(4)
+    {
         return Err("RGBA byte length does not match image dimensions".into());
     }
     let mut out = Vec::new();
