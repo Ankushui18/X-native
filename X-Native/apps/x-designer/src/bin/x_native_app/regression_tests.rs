@@ -1229,6 +1229,7 @@ fn provisional_composition_and_comment_are_not_discarded_on_context_switch() {
         x: 1.0,
         y: 2.0,
         buffer: "unposted".into(),
+        parent: None,
     });
     h.cmd_new_file();
     assert_eq!(h.app.docs.len(), 1);

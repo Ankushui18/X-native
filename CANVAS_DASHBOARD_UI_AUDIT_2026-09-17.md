@@ -164,8 +164,12 @@ browser Library: the document model is a scene graph, not a Figma clone."*
 - ~~**Font picker UI**~~ **EXISTS + UPGRADED 2026-09-17** — both listing sites (FONT BROWSER
   popup, LIBRARY panel) now group faces into families via `FontManager::families()`, with face
   counts; picking a family resolves to a face at render time.
-- **Comment threads**: `Comment` is flat — add `parent: Option<String>` + thread rendering in
-  `paint_comments`.
+- ~~**Comment threads**~~ **DONE 2026-09-17** — `Comment.parent: Option<String>` (flat
+  threads: replies point at the root), serialized with backward compat (missing key loads as
+  None; roundtrip-tested). UI: one pin per thread root with a reply-count badge, hover preview
+  shows "+N replies", the open card lists replies (each deletable), and a Reply composer
+  (reply-to-reply still attaches to the root). Resolve/delete are thread-cascade
+  (resolve root ⇒ replies resolve; delete root ⇒ thread gone).
 - Verify **SmartAnimate** interpolation end-to-end in Flow preview (transition is selectable;
   engine untested through the app path).
 - Consolidate on `fire_action`: retire the duplicated `x-editor::Player` loop from app paths.

@@ -1484,6 +1484,8 @@ pub struct CommentDraft {
     pub x: f64,
     pub y: f64,
     pub buffer: String,
+    /// `Some(root id)` = this composer posts a reply into that thread.
+    pub parent: Option<String>,
 }
 
 pub struct App {
@@ -2796,23 +2798,80 @@ impl App {
             author: USER_NAME.to_string(),
             text: text.to_string(),
             resolved: false,
+            parent: None,
         });
         self.mark_dirty();
         id
     }
 
-    pub fn resolve_comment(&mut self, id: &str, resolved: bool) {
+    /// Reply to a comment thread: parents to the ROOT (flat threads — a
+    /// reply to a reply still attaches to the root), inherits the page, and
+    /// anchors near the root pin. `None` when `root_id` is unknown.
+    pub fn post_reply(&mut self, root_id: &str, text: &str) -> Option<String> {
         let doc = self.doc();
-        if !doc
+        let root = doc
             .doc
             .comments
             .iter()
-            .any(|c| c.id == id && c.resolved != resolved)
-        {
+            .find(|c| c.id == root_id)?
+            .clone();
+        let id = x_native::fresh_id("comment");
+        let n = doc
+            .doc
+            .comments
+            .iter()
+            .filter(|c| c.parent.as_deref() == Some(root.id.as_str()))
+            .count();
+        doc.checkpoint();
+        doc.doc.comments.push(x_native::Comment {
+            id: id.clone(),
+            page: root.page,
+            x: root.x + 6.0,
+            y: root.y + 10.0 + n as f64 * 6.0,
+            author: USER_NAME.to_string(),
+            text: text.to_string(),
+            resolved: false,
+            parent: Some(root.id.clone()),
+        });
+        self.mark_dirty();
+        Some(id)
+    }
+
+    /// Number of replies in a thread (0 for unknown ids — and for replies,
+    /// which never have their own replies).
+    pub fn reply_count(&self, root_id: &str) -> usize {
+        self.doc_opt()
+            .map(|d| {
+                d.doc
+                    .comments
+                    .iter()
+                    .filter(|c| c.parent.as_deref() == Some(root_id))
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
+    pub fn resolve_comment(&mut self, id: &str, resolved: bool) {
+        let doc = self.doc();
+        // Thread-wide: resolving a root resolves its replies with it (a
+        // reply id normalizes to its root). One message = one-member thread.
+        let root_id = doc
+            .doc
+            .comments
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| c.parent.clone().unwrap_or_else(|| c.id.clone()));
+        let Some(root_id) = root_id else {
+            return;
+        };
+        let members = |c: &x_native::Comment| {
+            c.id == root_id || c.parent.as_deref() == Some(root_id.as_str())
+        };
+        if !doc.doc.comments.iter().any(|c| members(c) && c.resolved != resolved) {
             return;
         }
         doc.checkpoint();
-        if let Some(c) = doc.doc.comments.iter_mut().find(|c| c.id == id) {
+        for c in doc.doc.comments.iter_mut().filter(|c| members(c)) {
             c.resolved = resolved;
         }
         self.mark_dirty();
@@ -2820,11 +2879,19 @@ impl App {
 
     pub fn delete_comment(&mut self, id: &str) {
         let doc = self.doc();
-        if !doc.doc.comments.iter().any(|c| c.id == id) {
+        let Some(c) = doc.doc.comments.iter().find(|c| c.id == id) else {
             return;
-        }
+        };
+        let is_root = c.parent.is_none();
         doc.checkpoint();
-        doc.doc.comments.retain(|c| c.id != id);
+        if is_root {
+            // deleting a root removes the whole thread
+            doc.doc
+                .comments
+                .retain(|c| c.id != id && c.parent.as_deref() != Some(id));
+        } else {
+            doc.doc.comments.retain(|c| c.id != id);
+        }
         self.mark_dirty();
     }
 

@@ -3536,9 +3536,17 @@ impl Host {
                 let text = d.buffer.trim().to_string();
                 self.app.comment_draft = None;
                 if !text.is_empty() {
-                    let (x, y) = (d.x, d.y);
-                    self.app.post_comment(x, y, &text);
-                    self.app.status = "Comment added".into();
+                    match d.parent.clone() {
+                        Some(root) => {
+                            self.app.post_reply(&root, &text);
+                            self.app.status = "Reply added".into();
+                        }
+                        None => {
+                            let (x, y) = (d.x, d.y);
+                            self.app.post_comment(x, y, &text);
+                            self.app.status = "Comment added".into();
+                        }
+                    }
                 }
                 return;
             }
@@ -3578,6 +3586,59 @@ impl Host {
                     self.app.status = "Comment deleted".into();
                     return;
                 }
+                // reply rows (geometry mirrors paint_comments; ids in paint
+                // order so row i maps to reply i)
+                let reply_n = self.app.reply_count(&id);
+                if reply_n > 0 {
+                    let reply_ids: Vec<String> = {
+                        let doc = self.app.doc();
+                        doc.doc
+                            .comments
+                            .iter()
+                            .filter(|c| c.parent.as_deref() == Some(id.as_str()))
+                            .map(|c| c.id.clone())
+                            .collect()
+                    };
+                    for (i, rid) in reply_ids.iter().enumerate() {
+                        let ry = sp.y - 28.0 + 76.0 + i as f64 * 18.0;
+                        // row body keeps the card open
+                        let row = Rect::new(sp.x + 32.0, ry, sp.x + 32.0 + 248.0 - 24.0, ry + 16.0);
+                        // ✕ rect mirrors paint: card.x1-40 .. card.x1-22
+                        let x_btn = Rect::new(row.x1 - 16.0, ry + 1.0, row.x1 + 2.0, ry + 16.0);
+                        if x_btn.contains(p) {
+                            self.app.delete_comment(rid);
+                            self.app.status = "Reply deleted".into();
+                            return;
+                        }
+                        if row.contains(p) {
+                            return;
+                        }
+                    }
+                    // Reply pill under the rows
+                    let card_x0 = sp.x + 32.0;
+                    let pill_y = sp.y - 28.0 + 76.0 + reply_n as f64 * 18.0 + 2.0;
+                    let reply_btn = Rect::new(card_x0 + 12.0, pill_y, card_x0 + 96.0, pill_y + 24.0);
+                    if reply_btn.contains(p) {
+                        let draft = {
+                            let doc = self.app.doc();
+                            doc.doc
+                                .comments
+                                .iter()
+                                .find(|c| c.id == id)
+                                .map(|c| crate::state::CommentDraft {
+                                    x: c.x,
+                                    y: c.y,
+                                    buffer: String::new(),
+                                    parent: Some(c.id.clone()),
+                                })
+                        };
+                        if let Some(d) = draft {
+                            self.app.comment_draft = Some(d);
+                            self.app.open_comment = None;
+                        }
+                        return;
+                    }
+                }
                 // clicking the card keeps it open; anywhere else closes it
                 let card = Rect::new(sp.x, sp.y - 24.0, sp.x + 240.0, sp.y + 40.0);
                 if card.contains(p) || self.app.comment_at(p) == Some(id.clone()) {
@@ -3598,6 +3659,7 @@ impl Host {
             self.app.comment_draft = Some(crate::state::CommentDraft {
                 x: world.x,
                 y: world.y,
+                parent: None,
                 buffer: String::new(),
             });
             return;
@@ -5052,9 +5114,17 @@ impl Host {
                     let t = d.buffer.trim().to_string();
                     self.app.comment_draft = None;
                     if !t.is_empty() {
-                        let (x, y) = (d.x, d.y);
-                        self.app.post_comment(x, y, &t);
-                        self.app.status = "Comment added".into();
+                        match d.parent.clone() {
+                            Some(root) => {
+                                self.app.post_reply(&root, &t);
+                                self.app.status = "Reply added".into();
+                            }
+                            None => {
+                                let (x, y) = (d.x, d.y);
+                                self.app.post_comment(x, y, &t);
+                                self.app.status = "Comment added".into();
+                            }
+                        }
                     }
                 }
                 (Key::Named(NamedKey::Backspace), _) => {
@@ -10892,6 +10962,44 @@ mod tests {
     use crate::editor_ui;
     use crate::state::{OpenDoc, RightTab, Screen, Tool};
 
+    #[test]
+    fn comment_threads_reply_resolve_and_delete_cascade() {
+        let mut app = App::demo();
+        let root = app.post_comment(10.0, 10.0, "root");
+        let r1 = app.post_reply(&root, "first").expect("reply posts");
+        app.post_reply(&root, "second").expect("second reply posts");
+        assert_eq!(app.reply_count(&root), 2);
+        // replying to a REPLY still attaches to the thread root (flat)
+        app.post_reply(&r1, "still the root thread").expect("nested reply posts");
+        assert_eq!(app.reply_count(&root), 3);
+        // unknown root is a clean None, not a panic
+        assert!(app.post_reply("nope", "x").is_none());
+        // resolving the root resolves the whole thread
+        app.resolve_comment(&root, true);
+        {
+            let d = app.doc_ref();
+            let thread: Vec<bool> = d
+                .doc
+                .comments
+                .iter()
+                .filter(|c| c.id == root || c.parent.as_deref() == Some(root.as_str()))
+                .map(|c| c.resolved)
+                .collect();
+            assert_eq!(thread.len(), 4);
+            assert!(thread.iter().all(|r| *r), "resolve cascades");
+        }
+        // deleting the root removes the whole thread
+        app.delete_comment(&root);
+        assert_eq!(app.doc_ref().doc.comments.len(), 0);
+        // deleting a single reply leaves the rest of the thread
+        let root2 = app.post_comment(1.0, 1.0, "t2");
+        let ra = app.post_reply(&root2, "a").expect("reply posts");
+        let rb = app.post_reply(&root2, "b").expect("reply posts");
+        app.delete_comment(&ra);
+        assert_eq!(app.reply_count(&root2), 1);
+        assert!(app.doc_ref().doc.comments.iter().any(|c| c.id == rb));
+    }
+
     /// Dashboard paints without panicking (fonts may be absent in CI).
     #[test]
     fn dashboard_paints() {
@@ -13136,6 +13244,7 @@ fn screenshot_screens_r7() {
         x: 200.0,
         y: 500.0,
         buffer: "Need a lighter shadow".into(),
+        parent: None,
     });
     shoot("editor-comments", &mut app);
 

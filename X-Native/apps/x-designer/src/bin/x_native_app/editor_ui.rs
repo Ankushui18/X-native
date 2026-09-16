@@ -6245,7 +6245,15 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
         .filter(|c| c.page == doc.page)
         .cloned()
         .collect();
-    for c in &comments {
+    // Threads: one pin per ROOT; replies render inside the open card.
+    let replies_of = |id: &str| -> Vec<x_native::Comment> {
+        comments
+            .iter()
+            .filter(|c| c.parent.as_deref() == Some(id))
+            .cloned()
+            .collect()
+    };
+    for c in comments.iter().filter(|c| c.parent.is_none()) {
         let Some(pin) = app.comment_pin_rect(&c.id) else {
             continue;
         };
@@ -6280,6 +6288,35 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
             app.fonts
                 .text_center(s, pin, &initial.to_string(), T11, C_TEXT, Wt::Med, false);
         }
+        // reply count badge (top-right of the pin)
+        let replies = replies_of(&c.id);
+        if !replies.is_empty() {
+            let bc = (pin.x1 - 1.0, pin.y0 + 1.0);
+            s.fill(
+                vello::peniko::Fill::NonZero,
+                vello::kurbo::Affine::IDENTITY,
+                C_SEL,
+                None,
+                &Circle::new(bc, 8.0),
+            );
+            s.stroke(
+                &vello::kurbo::Stroke::new(1.5),
+                vello::kurbo::Affine::IDENTITY,
+                C_PANEL,
+                None,
+                &Circle::new(bc, 8.0),
+            );
+            let n = replies.len().to_string();
+            app.fonts.text_center(
+                s,
+                Rect::new(pin.x1 - 10.0, pin.y0 - 8.0, pin.x1 + 8.0, pin.y0 + 10.0),
+                &n,
+                T10,
+                C_TEXT,
+                Wt::Semi,
+                false,
+            );
+        }
         // collapsed preview bubble on hover (not while its thread is open)
         if hov && !open {
             let w = (app.fonts.measure(&c.text, T10, Wt::Reg) + 24.0).min(240.0);
@@ -6287,12 +6324,23 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
             elev_shadow(s, b, 8.0, Elevation::Floating);
             fill_rrect(s, b, 12.0, C_FIELD);
             stroke_rrect(s, b, 12.0, C_LINE_2, 1.0);
+            let hint = if replies.is_empty() {
+                c.text.clone()
+            } else {
+                format!("{} · {} repl{}", c.text, replies.len(), if replies.len() == 1 { "y" } else { "ies" })
+            };
             app.fonts
-                .text(s, b.x0 + 12.0, b.y0 + 9.0, &c.text, T10, C_TEXT, Wt::Reg);
+                .text(s, b.x0 + 12.0, b.y0 + 9.0, &hint, T10, C_TEXT, Wt::Reg);
         }
-        // open thread popover
+        // open thread popover (grows with the thread)
         if open {
-            let card = Rect::new(pin.x1 + 8.0, pin.y0 - 4.0, pin.x1 + 248.0, pin.y0 + 76.0);
+            let reply_n = replies.len();
+            let card = Rect::new(
+                pin.x1 + 8.0,
+                pin.y0 - 4.0,
+                pin.x1 + 248.0,
+                pin.y0 + 76.0 + reply_n as f64 * 18.0 + 30.0,
+            );
             elev_shadow(s, card, 12.0, Elevation::Floating);
             fill_rrect(s, card, 12.0, C_FIELD);
             stroke_rrect(s, card, 12.0, C_LINE_2, 1.0);
@@ -6344,6 +6392,32 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
             // (sp.x+126, sp.y+6, +42, +24); card.x0 = sp.x+32 and
             // card.y0 = sp.y-28, so the icon centers in that rect
             draw_icon(s, "trash-2", card.x0 + 108.0, card.y0 + 39.0, 14.0, C_DIM);
+            // reply rows (geometry mirrored by `canvas_press` — keep in sync)
+            for (i, r) in replies.iter().enumerate() {
+                let ry = card.y0 + 76.0 + i as f64 * 18.0;
+                hline(s, card.x0 + 10.0, card.x1 - 10.0, ry, C_LINE);
+                app.fonts.text(s, card.x0 + 12.0, ry + 3.0, &r.author, T10, C_DIM, Wt::Med);
+                let shown_r: String = if r.text.chars().count() > 26 {
+                    format!("{}…", r.text.chars().take(26).collect::<String>())
+                } else {
+                    r.text.clone()
+                };
+                app.fonts
+                    .text(s, card.x0 + 76.0, ry + 3.0, &shown_r, T10, C_TEXT, Wt::Reg);
+                // per-reply delete ✕
+                let xb = Rect::new(card.x1 - 40.0, ry + 1.0, card.x1 - 22.0, ry + 16.0);
+                if hover(app, xb) {
+                    fill_rrect(s, xb, 3.0, C_FIELD_2);
+                }
+                draw_icon(s, "x", xb.x0 + 4.0, xb.y0 + 1.0, 12.0, C_DIM);
+            }
+            // Reply pill (opens the composer parented to this thread)
+            let pill_y = card.y0 + 76.0 + reply_n as f64 * 18.0 + 2.0;
+            let rbtn = Rect::new(card.x0 + 12.0, pill_y, card.x0 + 96.0, pill_y + 24.0);
+            fill_rrect(s, rbtn, 6.0, if hover(app, rbtn) { C_FIELD_2 } else { C_PANEL });
+            stroke_rrect(s, rbtn, 6.0, C_LINE_2, 1.0);
+            app.fonts
+                .text_center(s, rbtn, "Reply", T10, C_SEL, Wt::Med, true);
         }
     }
     // the composer (new comment)
@@ -6353,15 +6427,20 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
         elev_shadow(s, card, 12.0, Elevation::Floating);
         fill_rrect(s, card, 12.0, C_FIELD);
         stroke_rrect(s, card, 12.0, C_SEL, 1.0);
-        app.fonts.text(
-            s,
-            card.x0 + 28.0,
-            card.y0 + 10.0,
-            crate::state::USER_NAME,
-            T10,
-            C_DIM,
-            Wt::Med,
-        );
+        let title = match d.parent.as_deref() {
+            Some(root_id) => {
+                let who = app
+                    .doc_opt()
+                    .and_then(|dd| {
+                        dd.doc.comments.iter().find(|c| c.id == root_id)
+                    })
+                    .map(|c| c.author.clone())
+                    .unwrap_or_default();
+                format!("Reply to {who}")
+            }
+            None => crate::state::USER_NAME.to_string(),
+        };
+        app.fonts.text(s, card.x0 + 28.0, card.y0 + 10.0, &title, T10, C_DIM, Wt::Med);
         let shown = if d.buffer.is_empty() {
             "Add a comment…".to_string()
         } else {
