@@ -315,7 +315,12 @@ pub fn parse_css_color(value: &str) -> Option<Color> {
     } else {
         return None;
     };
-    let tokens = css_function_tokens(body);
+    // CSS Color 4 permits commas or whitespace, with `/` separating alpha.
+    // Keeping the slash as its own token makes both syntaxes equivalent.
+    // The normalized string must be owned here (not inside a helper) so the
+    // returned tokens can borrow from it for the rest of this scope.
+    let body = body.replace(',', " ").replace('/', " / ");
+    let tokens: Vec<&str> = body.split_whitespace().collect();
     if kind == "rgb" || kind == "rgba" {
         let (channels, alpha) = css_channels_and_alpha(&tokens, kind == "rgba")?;
         let rgb = [
@@ -337,15 +342,6 @@ pub fn parse_css_color(value: &str) -> Option<Color> {
     let lightness = css_percentage(channels[2])?;
     let (r, g, b) = hsl_to_srgb(hue, saturation, lightness);
     Some(Color::from_rgba8(r, g, b, css_alpha(alpha.unwrap_or("1"))?))
-}
-
-fn css_function_tokens(body: &str) -> Vec<&str> {
-    // CSS Color 4 permits commas or whitespace, with `/` separating alpha.
-    // Keeping the slash as its own token makes both syntaxes equivalent.
-    body.replace(',', " ")
-        .replace('/', " / ")
-        .split_whitespace()
-        .collect()
 }
 
 fn css_channels_and_alpha<'a>(
