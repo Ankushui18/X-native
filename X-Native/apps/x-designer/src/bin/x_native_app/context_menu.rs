@@ -411,9 +411,9 @@ mod tests {
             !actions.contains(&&ContextAction::Ungroup),
             "a non-group selection must not offer ungroup"
         );
-        let has_bool = items.iter().any(|it| {
-            matches!(it, ContextMenuItem::Submenu { label, .. } if *label == "Boolean")
-        });
+        let has_bool = items
+            .iter()
+            .any(|it| matches!(it, ContextMenuItem::Submenu { label, .. } if *label == "Boolean"));
         assert!(has_bool, "two selections must offer the boolean submenu");
     }
 
@@ -432,9 +432,9 @@ mod tests {
             !actions.contains(&&ContextAction::Group),
             "a single selection must not offer group"
         );
-        let has_bool = items.iter().any(|it| {
-            matches!(it, ContextMenuItem::Submenu { label, .. } if *label == "Boolean")
-        });
+        let has_bool = items
+            .iter()
+            .any(|it| matches!(it, ContextMenuItem::Submenu { label, .. } if *label == "Boolean"));
         assert!(!has_bool, "booleans need two selections");
     }
 
