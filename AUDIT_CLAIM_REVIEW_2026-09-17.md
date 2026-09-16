@@ -9,6 +9,12 @@ finding — because it, like the audit, only searched `crates/x-format/`. Raster
 **`crates/x-render/`** and is surfaced through `x-native`. Verdict corrected below: the audit's
 Critical finding #2 is **false**, making it **3 of 4 critical findings false** for this tree.
 
+**Rev. 3 (superseded in part — see `CANVAS_DASHBOARD_UI_AUDIT_2026-09-17.md`).** Rev. 1/2 also
+searched only `crates/` and missed the application layer `apps/x-designer` (37.5k lines). There
+the nav rail **does** exist and is fully wired at HEAD (panel switching, ⌥1–5, Agents panel,
+variable creation in the Tokens panel) — the submitted audit's finding #1 was substantially
+right for its (still-absent) commit `bc46c9f`. The export finding remains false even in the app.
+
 **Headline.** The audit cannot be used as-is before "the fixes." It cites commit `bc46c9f`,
 which **does not exist** in this repository's history. Three of its four "critical findings"
 describe code that exists and is tested here; the fourth (font browser) is real. Its overall
