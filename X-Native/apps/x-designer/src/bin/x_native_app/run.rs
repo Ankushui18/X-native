@@ -3172,13 +3172,19 @@ impl Host {
                 let doc = self.app.doc();
                 doc.editor_ref().selection.len()
             };
+            let contains_group = {
+                use x_native::NodeKind as K;
+                let d = self.app.doc();
+                let id = d.selected_id();
+                let root = &d.editor_ref().root;
+                id.and_then(|i| crate::editor_ui::find_node(root, i.as_str()))
+                    .map(|n| matches!(n.kind, K::Group))
+                    .unwrap_or(false)
+            };
             let target = if sel_count > 0 {
                 crate::context_menu::ContextTarget::CanvasSelection {
                     selected_count: sel_count,
-                    contains_frame: false,
-                    contains_component_instance: false,
-                    contains_vector: false,
-                    contains_text: false,
+                    contains_group,
                 }
             } else {
                 crate::context_menu::ContextTarget::CanvasEmpty
@@ -11421,10 +11427,7 @@ fn screenshot_screens() {
         app.context_menu.open_for_target(
             crate::context_menu::ContextTarget::CanvasSelection {
                 selected_count: 1,
-                contains_frame: false,
-                contains_component_instance: false,
-                contains_vector: false,
-                contains_text: false,
+                contains_group: false,
             },
             700.0,
             500.0,

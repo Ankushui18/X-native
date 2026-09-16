@@ -13,10 +13,11 @@ use vello::peniko::{Color, Fill};
 use vello::Scene;
 use x_native::{ui::Elevation, FrameCache, Node, NodeKind, VelloSink};
 
+use crate::context_menu::{action_for, ContextMenuItem, ROW_HEIGHT, SEPARATOR_HEIGHT};
 use crate::icons::{draw_flow_glyph, draw_icon};
 use crate::paint::*;
 use crate::state::{
-    kind_icon, parse_hex, Action, App, CtxCmd, FieldId, LeftTab, NavTab, RightTab, Tool,
+    kind_icon, parse_hex, Action, App, FieldId, LeftTab, NavTab, RightTab, Tool,
     FRAME_PRESETS,
 };
 use crate::theme::*;
@@ -533,76 +534,20 @@ pub(crate) fn wt_for(w: u16) -> Wt {
 
 /// Right-click context menu — app design language: #1A1A1A panel,
 /// #2A2A2A border, r8, drop shadow, 28px rows (icon + label + shortcut),
-/// #222222 hover row. Items act on the current selection.
+/// #222222 hover row. Renders the data model's `items` — labels, icons,
+/// shortcuts and enabled state are owned by `context_menu.rs` (viewport
+/// audit P4: this used to be a hardcoded item list).
 fn paint_context_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
-    if !app.context_menu.open {
+    let cm = &app.context_menu;
+    if !cm.open {
         return;
     }
-    let anchor = Point::new(app.context_menu.x, app.context_menu.y);
-    let sel = {
-        let d = app.doc();
-        !d.editor_ref().selection.is_empty()
-    };
-    let group_kind = {
-        use x_native::NodeKind as K;
-        let d = app.doc();
-        d.selected_id()
-            .and_then(|id| find_node(&d.editor_ref().root, id.as_str()))
-            .map(|n| matches!(n.kind, K::Group))
-            .unwrap_or(false)
-    };
-    // boolean combine: enabled once two layers are selected (the engine
-    // currently combines exactly two)
-    let sel2 = {
-        let d = app.doc();
-        d.editor_ref().selection.len() >= 2
-    };
-    let items: Vec<(CtxCmd, &str, &str, &str, bool)> = vec![
-        (CtxCmd::Copy, "copy", "Copy", "⌘C", sel),
-        (CtxCmd::Cut, "scissors", "Cut", "⌘X", sel),
-        (CtxCmd::Paste, "clipboard", "Paste", "⌘V", true),
-        (CtxCmd::CopyAsCode, "code", "Copy as code", "", sel),
-        (CtxCmd::Duplicate, "copy-plus", "Duplicate", "⌘D", sel),
-        (CtxCmd::ToFront, "chevrons-up", "Bring to front", "⇧⌘]", sel),
-        (CtxCmd::ToBack, "chevrons-down", "Send to back", "⇧⌘[", sel),
-        (CtxCmd::BringFwd, "chevron-up", "Bring forward", "⌘]", sel),
-        (CtxCmd::SendBack, "chevron-down", "Send backward", "⌘[", sel),
-        (CtxCmd::Delete, "trash-2", "Delete", "⌫", sel),
-        (CtxCmd::SelectAll, "box-select", "Select all", "⌘A", true),
-        (CtxCmd::Group, "group", "Group selection", "⌘G", sel),
-        (
-            CtxCmd::Ungroup,
-            "ungroup",
-            "Ungroup",
-            "⇧⌘G",
-            sel && group_kind,
-        ),
-        (
-            CtxCmd::MakeComponent,
-            "component",
-            "Make component",
-            "⌘⌥K",
-            sel,
-        ),
-        (CtxCmd::Union, "", "Union selection", "⌘⌥U", sel2),
-        (CtxCmd::Subtract, "", "Subtract", "⌘⌥S", sel2),
-        (CtxCmd::Intersect, "", "Intersect", "⌘⌥I", sel2),
-        (CtxCmd::Exclude, "", "Exclude", "⌘⌥X", sel2),
-        (CtxCmd::Flatten, "layers", "Flatten", "⌘E", sel),
-        (
-            CtxCmd::OutlineStroke,
-            "pen-line",
-            "Outline stroke",
-            "⇧⌘O",
-            sel,
-        ),
-        (CtxCmd::OutlineText, "type", "Outline text", "⇧⌥⌘O", sel),
-        (CtxCmd::LockSel, "lock", "Lock", "⇧⌘L", sel),
-        (CtxCmd::HideSel, "eye-off", "Hide", "⇧⌘H", sel),
-    ];
-    let w = 208.0;
-    let row_h = 28.0;
-    let h = items.len() as f64 * row_h + 10.0;
+    let w = cm.width;
+    let mut h = 10.0;
+    for it in &cm.items {
+        h += it.height();
+    }
+    let anchor = Point::new(cm.x, cm.y);
     let reg = app.editor_regions();
     // keep inside the canvas area
     let mx = anchor
@@ -614,41 +559,104 @@ fn paint_context_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
     elev_shadow(s, panel, 10.0, Elevation::Floating);
     fill_rrect(s, panel, 8.0, C_FIELD);
     stroke_rrect(s, panel, 8.0, C_LINE_2, 1.0);
-    let _ = reg;
-    for (i, (cmd, icon, label, shortcut, enabled)) in items.iter().enumerate() {
-        let r = Rect::new(
-            mx + 4.0,
-            my + 5.0 + row_h * i as f64,
-            mx + w - 4.0,
-            my + 5.0 + row_h * (i + 1) as f64,
-        );
-        let hov = *enabled && hover(app, r);
-        if hov {
-            fill_rrect(s, r, 5.0, C_FIELD_2);
+    let row_h = ROW_HEIGHT;
+    let mut cy = my + 5.0;
+    let mut flyouts: Vec<(Rect, &Vec<ContextMenuItem>)> = Vec::new();
+    for it in &cm.items {
+        match it {
+            ContextMenuItem::Separator => {
+                let ly = cy + 3.5;
+                hline(s, mx + 8.0, mx + w - 8.0, ly, C_LINE_2);
+                cy += SEPARATOR_HEIGHT;
+            }
+            ContextMenuItem::Action { action, enabled } => {
+                let r = Rect::new(mx + 4.0, cy, mx + w - 4.0, cy + row_h);
+                let hov = *enabled && hover(app, r);
+                if hov {
+                    fill_rrect(s, r, 5.0, C_FIELD_2);
+                }
+                let ic = if *enabled { C_TEXT } else { C_DIM };
+                draw_icon(s, action.icon(), r.x0 + 8.0, r.y0 + 7.0, 14.0, ic);
+                app.fonts.text(s, r.x0 + 30.0, r.y0 + 6.8, action.label(), T11, ic, Wt::Reg);
+                if let Some(sc) = action.shortcut() {
+                    app.fonts.text_right(
+                        s,
+                        r.x1 - 8.0,
+                        r.y0 + 7.3,
+                        sc,
+                        T10,
+                        if *enabled { C_DIM } else { C_MUTED },
+                        Wt::Reg,
+                        0.0,
+                    );
+                }
+                if *enabled {
+                    if let Some(a) = action_for(action) {
+                        hit.push((r, a));
+                    }
+                }
+                cy += row_h;
+            }
+            ContextMenuItem::Submenu { label, icon, enabled, items } => {
+                let r = Rect::new(mx + 4.0, cy, mx + w - 4.0, cy + row_h);
+                let hov = *enabled && hover(app, r);
+                if hov {
+                    fill_rrect(s, r, 5.0, C_FIELD_2);
+                    flyouts.push((r, items));
+                }
+                let ic = if *enabled { C_TEXT } else { C_DIM };
+                draw_icon(s, icon, r.x0 + 8.0, r.y0 + 7.0, 14.0, ic);
+                app.fonts.text(s, r.x0 + 30.0, r.y0 + 6.8, label, T11, ic, Wt::Reg);
+                draw_icon(s, "chevron-right", r.x1 - 20.0, r.y0 + 8.0, 12.0, C_DIM);
+                cy += row_h;
+            }
         }
-        let ic = if *enabled { C_TEXT } else { C_DIM };
-        draw_icon(s, icon, r.x0 + 8.0, r.y0 + 7.0, 14.0, ic);
-        app.fonts.text(
-            s,
-            r.x0 + 30.0,
-            r.y0 + 6.8,
-            label,
-            T11,
-            if *enabled { C_TEXT } else { C_MUTED },
-            Wt::Reg,
-        );
-        app.fonts.text_right(
-            s,
-            r.x1 - 8.0,
-            r.y0 + 7.3,
-            shortcut,
-            T10,
-            if *enabled { C_DIM } else { C_MUTED },
-            Wt::Reg,
-            0.0,
-        );
-        if *enabled {
-            hit.push((r, Action::Ctx(*cmd)));
+    }
+    // Submenu flyouts: open on parent hover, clamped to the window,
+    // flipped left when there is no room on the right.
+    for (pr, sub) in flyouts {
+        let sh = 6.0 + sub.len() as f64 * row_h;
+        let right = pr.x1 + 4.0;
+        let left = pr.x0 - w - 4.0;
+        let sx = if right + w <= reg.canvas.x1 - 4.0 {
+            right
+        } else {
+            left
+        };
+        let sy = (pr.y0 + 2.0).min(app.win_h - sh - 4.0);
+        let sp = Rect::new(sx, sy, sx + w, sy + sh);
+        elev_shadow(s, sp, 10.0, Elevation::Floating);
+        fill_rrect(s, sp, 8.0, C_FIELD);
+        stroke_rrect(s, sp, 8.0, C_LINE_2, 1.0);
+        for (j, it) in sub.iter().enumerate() {
+            if let ContextMenuItem::Action { action, enabled } = it {
+                let y = sy + 3.0 + row_h * j as f64;
+                let r = Rect::new(sx + 4.0, y, sx + w - 4.0, y + row_h);
+                let hov = *enabled && hover(app, r);
+                if hov {
+                    fill_rrect(s, r, 5.0, C_FIELD_2);
+                }
+                let ic = if *enabled { C_TEXT } else { C_DIM };
+                draw_icon(s, action.icon(), r.x0 + 8.0, r.y0 + 7.0, 14.0, ic);
+                app.fonts.text(s, r.x0 + 30.0, r.y0 + 6.8, action.label(), T11, ic, Wt::Reg);
+                if let Some(sc) = action.shortcut() {
+                    app.fonts.text_right(
+                        s,
+                        r.x1 - 8.0,
+                        r.y0 + 7.3,
+                        sc,
+                        T10,
+                        if *enabled { C_DIM } else { C_MUTED },
+                        Wt::Reg,
+                        0.0,
+                    );
+                }
+                if *enabled {
+                    if let Some(a) = action_for(action) {
+                        hit.push((r, a));
+                    }
+                }
+            }
         }
     }
 }
