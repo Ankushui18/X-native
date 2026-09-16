@@ -2922,7 +2922,7 @@ impl App {
             let doc = self.doc();
             let sel = doc.editor_ref().selection.clone();
             let root = &doc.editor_ref().root;
-            scan_find(root, q, case, &sel, false, &mut matches);
+            scan_find(root, &q, case, &sel, false, &mut matches);
         }
         self.find_replace.matches = matches.clone();
         self.find_replace.match_count = matches.len();

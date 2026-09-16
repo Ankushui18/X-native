@@ -3439,14 +3439,11 @@ impl Host {
                             self.app.mark_dirty();
                             self.app.status = format!("Sampled color from {id}");
                         }
-                        Some(_) => self.app.status = "Already the same layer"
-                            .into(),
-                        _ => self.app.status = "Select a layer first, then sample"
-                            .into(),
+                        Some(_) => self.app.status = "Already the same layer".into(),
+                        _ => self.app.status = "Select a layer first, then sample".into(),
                     }
                 }
-                None => self.app.status =
-                    "Eyedropper: no layer under the cursor".into(),
+                None => self.app.status = "Eyedropper: no layer under the cursor".into(),
             }
             return;
         }

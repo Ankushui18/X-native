@@ -6105,14 +6105,7 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
             // Delete: `canvas_press` handles the del click at
             // (sp.x+126, sp.y+6, +42, +24); card.x0 = sp.x+32 and
             // card.y0 = sp.y-28, so the icon centers in that rect
-            draw_icon(
-                s,
-                "trash-2",
-                card.x0 + 108.0,
-                card.y0 + 39.0,
-                14.0,
-                C_DIM,
-            );
+            draw_icon(s, "trash-2", card.x0 + 108.0, card.y0 + 39.0, 14.0, C_DIM);
         }
     }
     // the composer (new comment)
