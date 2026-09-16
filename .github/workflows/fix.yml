@@ -40,7 +40,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            pkg-config libssl-dev \
+            pkg-config libssl-dev ripgrep \
             libx11-dev libxcb1-dev libxkbcommon-dev libwayland-dev libudev-dev
 
       # Explicit rustup install, not actions-rust-lang's setup action: that one
