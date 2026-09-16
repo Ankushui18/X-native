@@ -7,9 +7,7 @@ use std::path::PathBuf;
 
 use vello::kurbo::{Point, Rect};
 use x_native::editor::Editor;
-use x_native::{
-    APP_DEFAULT_FONT, Color, Document, Node, NodeKind, Paint, StrokeJoin, Variables,
-};
+use x_native::{Color, Document, Node, NodeKind, Paint, StrokeJoin, Variables, APP_DEFAULT_FONT};
 
 use crate::command::CommandPalette;
 use crate::context_menu::ContextMenu;
