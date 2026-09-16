@@ -1868,7 +1868,11 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                         s,
                         r,
                         R_TREE,
-                        if row.is_section { C_FIELD_2 } else { C_ROW_HOVER },
+                        if row.is_section {
+                            C_FIELD_2
+                        } else {
+                            C_ROW_HOVER
+                        },
                     );
                 }
                 let ix = sx + 8.0 + 8.0 + row.indent as f64 * TREE_INDENT;
@@ -1943,7 +1947,13 @@ fn tree_indent_guides(s: &mut Scene, base_x: f64, top: f64, bottom: f64, max_ind
         return;
     }
     for k in 1..=max_indent.min(12) {
-        vline(s, base_x + k as f64 * TREE_INDENT + 7.0, top, bottom, C_LINE);
+        vline(
+            s,
+            base_x + k as f64 * TREE_INDENT + 7.0,
+            top,
+            bottom,
+            C_LINE,
+        );
     }
 }
 
