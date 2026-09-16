@@ -4122,7 +4122,7 @@ fn paint_design(
     y += 1.0 + 12.0;
 
     // --- Export ---------------------------------------------------------
-    let fmts = ["PNG", "JPG", "SVG", "PDF"];
+    let fmts = ["PNG", "JPG", "SVG", "PDF", "SKETCH"];
     let scales = ["1x", "2x"];
     let f_r = Rect::new(rx + pl, y, rx + pl + 56.0, y + 24.0);
     let fmt_label = fmts[app.doc().export_format];
@@ -6589,9 +6589,9 @@ fn paint_inspect(
     hline(s, x0 - 8.0, xr, y, C_LINE);
     let y = y + 1.0 + 12.0;
     // platform segmented control for X-Native's artifact handoff targets
-    const NAMES: [&str; 4] = App::INSPECT_PLATFORMS;
+    const NAMES: [&str; 5] = App::INSPECT_PLATFORMS;
     let w = xr - x0;
-    let seg_w = (w - 3.0 * 4.0) / 4.0;
+    let seg_w = (w - 4.0 * 4.0) / 5.0;
     for (i, name) in NAMES.iter().enumerate() {
         let bx = x0 + (seg_w + 4.0) * i as f64;
         let r = Rect::new(bx, y, bx + seg_w, y + 24.0);
@@ -7428,6 +7428,113 @@ fn paint_tokens(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
         hit.push((br, Action::CreateVariable(kind)));
     }
     y += 66.0;
+
+    // Variable management rows — every entry is live: ✕ deletes (undoable
+    // through the document's variable command log), booleans toggle in place,
+    // numbers step by ±1. Editing names/values as text stays in the document
+    // JSON for now; the undo button below replays `var_history`.
+    let mut rows: Vec<(String, &'static str, String, [u8; 3])> = Vec::new();
+    if let Some(d) = app.doc_opt() {
+        let v = &d.doc.variables;
+        for (_coll, name, kind) in v.catalog().into_iter().take(6) {
+            let (disp, sw) = match kind {
+                "color" => (
+                    v.colors.get(&name).map(|c| x_native::color_to_hex(*c)).unwrap_or_default(),
+                    v.colors
+                        .get(&name)
+                        .map(|c| {
+                            let t = c.to_rgba8();
+                            [t.r, t.g, t.b]
+                        })
+                        .unwrap_or([0x9a, 0x9e, 0xaa]),
+                ),
+                "number" => (
+                    v.numbers.get(&name).map(|n| format!("{n}")).unwrap_or_default(),
+                    [0x9a, 0x9e, 0xaa],
+                ),
+                "string" => (
+                    v.strings.get(&name).cloned().unwrap_or_default(),
+                    [0x9a, 0x9e, 0xaa],
+                ),
+                _ => (
+                    v.bools.get(&name).map(|b| b.to_string()).unwrap_or_default(),
+                    [0x9a, 0x9e, 0xaa],
+                ),
+            };
+            rows.push((name, kind, disp, sw));
+        }
+    }
+    let undo_n = app
+        .doc_opt()
+        .map(|d| d.var_history.undo_len())
+        .unwrap_or(0);
+    if !rows.is_empty() {
+        app.fonts.micro_label(s, x0, y, "VARIABLES", C_DIM, Wt::Med);
+        y += 16.0;
+    }
+    for (name, kind, disp, sw) in rows {
+        let row_t = y;
+        let hover_r = Rect::new(x0, row_t, lw - 12.0, row_t + 20.0);
+        if hover(app, hover_r) {
+            fill_rrect(s, hover_r, 4.0, C_ROW_HOVER);
+        }
+        // kind marker: color swatch or a mono kind letter
+        let kr = Rect::new(x0 + 2.0, row_t + 5.0, x0 + 12.0, row_t + 15.0);
+        if kind == "color" {
+            fill_rrect(s, kr, 3.0, x_native::Color::from_rgb8(sw[0], sw[1], sw[2]));
+            stroke_rrect(s, kr, 3.0, C_LINE_2, 1.0);
+        } else {
+            let glyph = match kind {
+                "number" => "N",
+                "string" => "S",
+                _ => "B",
+            };
+            app.fonts.text_center(s, kr, glyph, T10, C_DIM, Wt::Med, true);
+        }
+        app.fonts.text(s, x0 + 18.0, row_t + 3.0, &name, T10, C_TEXT, Wt::Med);
+        let vw = app.fonts.measure(&disp, T10, Wt::Mono);
+        app.fonts.text(s, lw - 66.0 - vw, row_t + 3.0, &disp, T10, C_MUTED, Wt::Mono);
+        // kind controls, right-aligned before the delete ✕
+        if kind == "bool" {
+            let tb = Rect::new(lw - 64.0, row_t + 2.0, lw - 38.0, row_t + 18.0);
+            fill_rrect(s, tb, 4.0, if hover(app, tb) { C_LINE_2 } else { C_FIELD });
+            app.fonts.text_center(s, tb, "on/off", T10, C_TEXT, Wt::Reg, true);
+            hit.push((tb, Action::VarToggleBool(name.clone())));
+        } else if kind == "number" {
+            for (j, (glyph, delta)) in [("−", -1.0), ("+", 1.0)].into_iter().enumerate() {
+                let sb = Rect::new(
+                    lw - 64.0 + j as f64 * 14.0,
+                    row_t + 2.0,
+                    lw - 50.0 + j as f64 * 14.0,
+                    row_t + 18.0,
+                );
+                fill_rrect(s, sb, 4.0, if hover(app, sb) { C_LINE_2 } else { C_FIELD });
+                app.fonts.text_center(s, sb, glyph, T10, C_TEXT, Wt::Med, true);
+                hit.push((sb, Action::VarStep(name.clone(), delta)));
+            }
+        }
+        let del = Rect::new(lw - 30.0, row_t + 3.0, lw - 16.0, row_t + 17.0);
+        draw_icon(s, "x", del.x0 + 1.0, del.y0 + 1.0, 12.0, if hover(app, del) { C_TEXT } else { C_DIM });
+        hit.push((del, Action::VarDelete(name)));
+        y += 20.0;
+    }
+    if undo_n > 0 {
+        let ub = Rect::new(x0, y, lw - 12.0, y + 22.0);
+        let hov = hover(app, ub);
+        fill_rrect(s, ub, 5.0, if hov { C_LINE_2 } else { C_FIELD_2 });
+        stroke_rrect(s, ub, 5.0, C_LINE_2, 1.0);
+        app.fonts.text_center(
+            s,
+            ub,
+            &format!("Undo variable edit ({undo_n})"),
+            T10,
+            C_TEXT,
+            Wt::Med,
+            true,
+        );
+        hit.push((ub, Action::VarUndoVars));
+        y += 28.0;
+    }
 
     // UI theme cycle. Palettes live in x-ui (design_system.rs); paint.rs maps
     // every chrome color through the active one, so this repaints the tool.

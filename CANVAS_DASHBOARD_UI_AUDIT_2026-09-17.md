@@ -138,12 +138,45 @@ browser Library: the document model is a scene graph, not a Figma clone."*
 
 **Priority list (from this audit):**
 1. ~~Swap `C_SNAP` off Figma brand red~~ **DONE 2026-09-17** — now role-derived `accent_ink` violet (theme-reactive).
-2. Ship the missing capability UIs — Sketch export + Tailwind in the code panel + library
-   update-acceptance dialog + variables edit/rename/delete/mode UI (backend ready: last session's
-   `variable_commands` + `FontManager::families()`).
+2. Ship the missing capability UIs — **IN PROGRESS 2026-09-17**: Sketch **export** landed
+   (5th format end-to-end: picker → dialog → jobs arm → palette command), **Tailwind** landed as
+   5th INSPECT platform (+ copy status), **variables management rows** landed in the Tokens panel
+   (delete / bool toggle / number ±1 stepping, undoable via the document's `var_history`
+   command log). Still open: variables rename/text-value editing, library update-acceptance
+   dialog, font-picker UI on the `FontManager::families()` backend.
 3. ~~De-clone dashboard signature styling; fix "Upgrade to Pro" framing~~ **PARTIALLY DONE
    2026-09-17** — "Upgrade to Pro" card replaced with a free/local-first badge (no CTA, no
    `Action::Upgrade`); full dashboard re-skin still open.
+
+## 6. Remaining fix/upgrade backlog (canvas + dashboard)
+
+**Canvas (editor):**
+- Variables **rename + text-value editing** inline (the remaining half of the Tokens-panel
+  surface; needs the text-field pattern used by page rename).
+- Library **update-acceptance dialog**: notification kind exists; wire `diff_library` →
+  review list → `accept_update` (backend complete in x-core).
+- **Font picker UI** in the text inspector, listing `FontManager::families()`; apply via
+  `resolve_font_name`.
+- **Comment threads**: `Comment` is flat — add `parent: Option<String>` + thread rendering in
+  `paint_comments`.
+- Verify **SmartAnimate** interpolation end-to-end in Flow preview (transition is selectable;
+  engine untested through the app path).
+- Consolidate on `fire_action`: retire the duplicated `x-editor::Player` loop from app paths.
+- Component **slots/descriptions**: `AddSlot` action exists — extend to full slot editing +
+  description field in component props.
+
+**Dashboard:**
+- **Real thumbnails**: render each recent file's first page via the CPU raster path
+  (`export_raster`/`thumbnail_scene`) into a disk cache keyed by file mtime — replaces the
+  recents grid's flat cards with live previews. Highest-impact dashboard upgrade.
+- **Trash restore** (files already listed; restore action back to Drafts).
+- **Templates gallery**: bundled sample documents opened as copies (replaces the retired
+  "Browse templates" card honestly).
+- Re-skin signature elements (cards/sidebar/wordmark) so screenshots read X-Native, not Figma.
+
+**Verification note:** all of today's edits are static-checked (pattern-matched against
+neighboring code, brace-balanced, diff-verified); the sandbox still has no Rust toolchain, so
+first compile remains pending on restored build infra.
 4. Optionally consolidate on `fire_action` (retire the duplicated `Player` loop) and verify
    SmartAnimate interpolation end-to-end in Flow preview.
 

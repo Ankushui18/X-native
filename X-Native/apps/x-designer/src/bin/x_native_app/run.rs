@@ -5919,6 +5919,10 @@ impl Host {
                 self.app.doc().export_format = 3;
                 self.cmd_export(false);
             }
+            "Export Sketch" => {
+                self.app.doc().export_format = 4;
+                self.cmd_export(false);
+            }
             "Copy as code" => self.app.apply_ctx(CtxCmd::CopyAsCode),
             "Comment tool" => self.app.tool = Tool::Comment,
             "Union selection" => self.app.apply_ctx(CtxCmd::Union),
@@ -8061,6 +8065,7 @@ impl Host {
             3 => "pdf",
             2 => "svg",
             1 => "jpg",
+            4 => "sketch",
             _ => "png",
         };
         let Some(path) = rfd::FileDialog::new()
@@ -9101,7 +9106,7 @@ impl Host {
             }
             Action::CycleExportFormat => {
                 let doc = self.app.doc();
-                doc.export_format = (doc.export_format + 1) % 4;
+                doc.export_format = (doc.export_format + 1) % 5;
             }
             Action::CycleExportScale => {
                 let doc = self.app.doc();
@@ -9197,6 +9202,43 @@ impl Host {
             }
             Action::InspectPlatform(i) => {
                 self.app.inspect_platform = i;
+            }
+            Action::VarDelete(name) => {
+                let d = self.app.doc();
+                if let Some(cmd) = x_native::editor::remove_variable(&d.doc.variables, &name) {
+                    let label = name.clone();
+                    if d.var_history.commit(&mut d.doc.variables, cmd) {
+                        self.app.mark_dirty();
+                        self.app.status = format!("Deleted variable {label}");
+                    }
+                }
+            }
+            Action::VarToggleBool(name) => {
+                let d = self.app.doc();
+                let cur = d.doc.variables.bools.get(&name).copied().unwrap_or(false);
+                let cmd = x_native::editor::set_bool(&d.doc.variables, &name, !cur);
+                if d.var_history.commit(&mut d.doc.variables, cmd) {
+                    self.app.mark_dirty();
+                    self.app.status = format!("{name} = {}", if cur { "false" } else { "true" });
+                }
+            }
+            Action::VarStep(name, delta) => {
+                let d = self.app.doc();
+                let cur = d.doc.variables.numbers.get(&name).copied().unwrap_or(0.0);
+                let cmd = x_native::editor::set_number(&d.doc.variables, &name, cur + delta);
+                if d.var_history.commit(&mut d.doc.variables, cmd) {
+                    self.app.mark_dirty();
+                    self.app.status = format!("{name} = {}", cur + delta);
+                }
+            }
+            Action::VarUndoVars => {
+                let d = self.app.doc();
+                if d.var_history.undo(&mut d.doc.variables) {
+                    self.app.mark_dirty();
+                    self.app.status = "Variable edit undone".into();
+                } else {
+                    self.app.status = "Nothing to undo in variables".into();
+                }
             }
             Action::InspectCopy => {
                 let code = self.app.inspect_code();

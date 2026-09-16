@@ -419,6 +419,13 @@ pub enum Action {
     /// C21 INSPECT: platform picker + copy-code-to-clipboard
     InspectPlatform(usize),
     InspectCopy,
+    /// Tokens panel variable management (undoable via `var_history`):
+    /// delete a variable, toggle a boolean, nudge a number by `f64`.
+    VarDelete(String),
+    VarToggleBool(String),
+    VarStep(String, f64),
+    /// Undo the last variable-table edit on the open document.
+    VarUndoVars,
     CycleInstanceSwap(String),
     ResetInstanceProps,
     // board chrome
@@ -1157,9 +1164,13 @@ pub struct OpenDoc {
     pub gap: f64,
     pub pad_h: f64,
     pub pad_v: f64,
-    pub export_format: usize, // 0 PNG 1 JPG 2 SVG 3 PDF
+    pub export_format: usize, // 0 PNG 1 JPG 2 SVG 3 PDF 4 SKETCH
     pub export_scale: usize,  // 0 1x 1 2x
     pub export_suffix: String,
+    /// Undo log for variable-table edits (rename/delete/value), backed by
+    /// `x_editor::variable_commands`. Session-scoped: it does not persist
+    /// with the file (the node-tree undo stack doesn't either).
+    pub var_history: x_native::editor::VariableHistory,
     pub guide_kind: usize, // 0 Square 1 Grid
     pub guide_size: f64,
     /// Whether the selected frame's layout-guide overlay is visible.
@@ -1347,6 +1358,7 @@ impl OpenDoc {
             export_format: 0,
             export_scale: 0,
             export_suffix: String::new(),
+            var_history: Default::default(),
             guide_kind: 0,
             guide_size: 16.0,
             // the canvas grid is OPT-IN: a fresh document opens clean
@@ -1401,6 +1413,7 @@ impl OpenDoc {
             export_format: 0,
             export_scale: 0,
             export_suffix: String::new(),
+            var_history: Default::default(),
             guide_kind: 0,
             guide_size: 16.0,
             // the canvas grid is OPT-IN: a fresh document opens clean
@@ -2693,7 +2706,7 @@ impl App {
     // (C21): the INSPECT tab's code view over the existing devmode
     // generators (CSS / SwiftUI / Compose / XML)
 
-    pub const INSPECT_PLATFORMS: [&str; 4] = ["CSS", "SwiftUI", "Compose", "XML"];
+    pub const INSPECT_PLATFORMS: [&str; 5] = ["CSS", "SwiftUI", "Compose", "XML", "Tailwind"];
 
     /// Code for the current selection in the current INSPECT platform
     /// (empty string when nothing is selected).
@@ -2712,6 +2725,7 @@ impl App {
             1 => x_native::editor::node_to_swift(n, &doc.doc.variables),
             2 => x_native::editor::node_to_compose(n, &doc.doc.variables),
             3 => x_native::editor::node_to_xml(n, &doc.doc.variables),
+            4 => x_native::selection_to_tailwind(std::slice::from_ref(n)),
             _ => x_native::editor::node_to_css(n, &doc.doc.variables),
         }
     }

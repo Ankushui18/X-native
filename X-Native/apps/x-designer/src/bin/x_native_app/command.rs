@@ -316,6 +316,15 @@ impl CommandPalette {
                 requires_selection: false,
                 enabled: true,
             },
+            CommandDef {
+                id: "file.export_sketch",
+                label: "Export Sketch".into(),
+                category: CommandCategory::File,
+                shortcut: None,
+                icon: "download",
+                requires_selection: false,
+                enabled: true,
+            },
             // Edit
             CommandDef {
                 id: "edit.undo",
