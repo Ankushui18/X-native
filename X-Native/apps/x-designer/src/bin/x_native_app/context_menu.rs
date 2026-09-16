@@ -5,6 +5,7 @@
 //! renders `items`, and this file owns what they are).
 
 use crate::state::{Action, CtxCmd};
+use crate::theme::{MENU_ROW_H, MENU_WIDTH};
 
 // ═══════════════════════════════════════════════════════════
 // Menu target
@@ -178,14 +179,13 @@ impl ContextMenuItem {
     pub fn height(&self) -> f64 {
         match self {
             Self::Separator => SEPARATOR_HEIGHT,
-            _ => ROW_HEIGHT,
+            _ => MENU_ROW_H,
         }
     }
 }
 
-/// Menu geometry, shared with the painter (single source).
-pub const MENU_WIDTH: f64 = 208.0;
-pub const ROW_HEIGHT: f64 = 28.0;
+/// Separator row height inside a menu. The menu width / row-height tokens
+/// live in `theme.rs` (one geometry for the whole chrome).
 pub const SEPARATOR_HEIGHT: f64 = 7.0;
 
 // ═══════════════════════════════════════════════════════════

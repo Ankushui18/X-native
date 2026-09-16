@@ -13,7 +13,7 @@ use vello::peniko::{Color, Fill};
 use vello::Scene;
 use x_native::{ui::Elevation, FrameCache, Node, NodeKind, VelloSink};
 
-use crate::context_menu::{action_for, ContextMenuItem, ROW_HEIGHT, SEPARATOR_HEIGHT};
+use crate::context_menu::{action_for, ContextMenuItem, SEPARATOR_HEIGHT};
 use crate::icons::{draw_flow_glyph, draw_icon};
 use crate::paint::*;
 use crate::state::{
@@ -431,13 +431,12 @@ fn paint_text_editor(app: &App, s: &mut Scene) {
     }
 }
 
-/// Anchor / handle colours for vector edit mode (the app's selection blue at
-/// two alphas: solid for a selected point, translucent for the tangent chrome).
-const POINT_SELECTED: vello::peniko::Color =
-    vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0xFF);
+/// Anchor / handle colours for vector edit mode (the theme's selection ring:
+/// solid for a selected point, translucent for the tangent chrome).
+const POINT_SELECTED: vello::peniko::Color = C_SEL;
 const POINT_IDLE: vello::peniko::Color = vello::peniko::Color::from_rgba8(0xFF, 0xFF, 0xFF, 0xFF);
 const POINT_BORDER: vello::peniko::Color = vello::peniko::Color::from_rgba8(0x00, 0x00, 0x00, 0xFF);
-const HANDLE_COLOR: vello::peniko::Color = vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0x40);
+const HANDLE_COLOR: vello::peniko::Color = C_SEL_HANDLE;
 
 /// Screen-space half-size of a drawn anchor. `vector_press` hit-tests with
 /// [`ANCHOR_HIT_TOL`], which is this plus a couple of pixels of forgiveness, so
@@ -514,12 +513,11 @@ fn paint_vector_points(app: &App, s: &mut Scene) {
 }
 
 /// Translucent selection wash behind the editor's selected text.
-const SELECTION_WASH: vello::peniko::Color =
-    vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0x42);
+const SELECTION_WASH: vello::peniko::Color = C_SEL_WASH;
 
 /// Light-blue border shown around the text while it is being edited
 /// (Figma's edit-mode frame — replaces the selection chrome).
-const EDIT_BORDER: vello::peniko::Color = vello::peniko::Color::from_rgba8(0x00, 0x99, 0xFF, 0x80);
+const EDIT_BORDER: vello::peniko::Color = C_EDIT_BORDER;
 
 /// Inspector weight number -> the bundled face weight.
 pub(crate) fn wt_for(w: u16) -> Wt {
@@ -558,7 +556,7 @@ fn paint_context_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
     elev_shadow(s, panel, 10.0, Elevation::Floating);
     fill_rrect(s, panel, 8.0, C_FIELD);
     stroke_rrect(s, panel, 8.0, C_LINE_2, 1.0);
-    let row_h = ROW_HEIGHT;
+    let row_h = MENU_ROW_H;
     let mut cy = my + 5.0;
     let mut flyouts: Vec<(Rect, &Vec<ContextMenuItem>)> = Vec::new();
     for it in &cm.items {
@@ -715,8 +713,8 @@ fn paint_page_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) 
             page + 1 < pages,
         ),
     ];
-    let w = 208.0;
-    let row_h = 28.0;
+    let w = MENU_WIDTH;
+    let row_h = MENU_ROW_H;
     let h = items.len() as f64 * row_h + 10.0;
     let mx = anchor.x.min(app.win_w - w - 4.0).max(4.0);
     let my = anchor.y.min(app.win_h - h - 4.0).max(4.0);
@@ -1071,13 +1069,15 @@ fn paint_title(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
 // ------------------------------------------- navigation bar (Figma-style)
 
 /// Navigation bar colors.
-const C_NAV_BG: Color = Color::from_rgb8(0x1A, 0x1A, 0x1A);
-const C_NAV_BORDER: Color = Color::from_rgb8(0x2A, 0x2A, 0x2A);
-const C_NAV_ACTIVE: Color = Color::from_rgb8(0x00, 0x7A, 0xFF);
-const C_NAV_HOVER: Color = Color::from_rgb8(0x25, 0x25, 0x25);
-const C_NAV_ICON: Color = Color::from_rgb8(0x99, 0x99, 0x99);
-const C_NAV_ICON_ACTIVE: Color = Color::from_rgb8(0xFF, 0xFF, 0xFF);
-const C_NAV_LABEL: Color = Color::from_rgb8(0x66, 0x66, 0x66);
+// The nav bar paints through the theme roles like the rest of the chrome,
+// so a theme switch reaches it too.
+const C_NAV_BG: Color = C_PANEL;
+const C_NAV_BORDER: Color = C_LINE;
+const C_NAV_ACTIVE: Color = C_ACCENT;
+const C_NAV_HOVER: Color = C_INPUT_HOVER;
+const C_NAV_ICON: Color = C_DIM;
+const C_NAV_ICON_ACTIVE: Color = C_TEXT;
+const C_NAV_LABEL: Color = C_MUTED;
 const NAV_ICON_SIZE: f64 = 20.0;
 const NAV_ITEM_H: f64 = 40.0;
 const NAV_ITEM_GAP: f64 = 2.0;
@@ -1237,7 +1237,7 @@ fn paint_app_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let reg = app.editor_regions();
     let mx = reg.nav_bar.x1 + 4.0;
     let my = reg.nav_bar.y0 + 8.0;
-    let mw = 220.0;
+    let mw = APP_MENU_WIDTH;
     let items: Vec<(&str, &str, bool)> = vec![
         ("New file", "⌘N", true),
         ("Open file…", "⌘O", true),
@@ -1254,7 +1254,7 @@ fn paint_app_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         ("Keyboard shortcuts", "⌘/", true),
         ("About X-Native", "", true),
     ];
-    let row_h = 32.0;
+    let row_h = DROPDOWN_ROW_H;
     let mut h = 8.0;
     for (label, _, is_sep) in &items {
         if *is_sep && label.is_empty() {
@@ -1531,7 +1531,7 @@ fn paint_notifications(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action
                 s,
                 nr,
                 4.0,
-                vello::peniko::Color::from_rgba8(0x00, 0x7A, 0xFF, 0x08),
+                C_UNREAD_WASH,
             );
         }
         draw_icon(
@@ -2002,10 +2002,10 @@ fn paint_resizers(app: &App, s: &mut Scene) {
     let l_drag = matches!(app.drag, Some(crate::state::Drag::LeftPanel { .. }));
     let r_drag = matches!(app.drag, Some(crate::state::Drag::RightPanel { .. }));
     if hover(app, lr) || l_drag {
-        fill_rect(s, lr, vello::peniko::Color::from_rgba8(255, 255, 255, 20));
+        fill_rect(s, lr, C_WHITE_10);
     }
     if hover(app, rr) || r_drag {
-        fill_rect(s, rr, vello::peniko::Color::from_rgba8(255, 255, 255, 20));
+        fill_rect(s, rr, C_WHITE_10);
     }
 }
 
@@ -2802,7 +2802,7 @@ fn paint_design(
                     dx,
                     dy,
                     9.0,
-                    vello::peniko::Color::from_rgba8(255, 255, 255, 31),
+                    C_WHITE_10,
                 );
             }
             circle(
@@ -2857,14 +2857,13 @@ fn paint_design(
         let pr = Rect::new(fx, y0 + 493.0, fx + 133.5, y0 + 525.0);
         input_box(app, s, pr, 8.0);
         let g = Rect::new(pr.x0 + 9.0, pr.y0 + 8.0, pr.x0 + 25.0, pr.y0 + 24.0);
-        let gray55 = vello::peniko::Color::from_rgb8(0x55, 0x55, 0x55);
-        stroke_rrect(s, g, 3.0, gray55, 1.0);
+        stroke_rrect(s, g, 3.0, C_DIM, 1.0);
         if i == 0 {
-            vline(s, g.x0 + 5.0, g.y0 + 3.0, g.y1 - 3.0, gray55);
-            vline(s, g.x1 - 5.0, g.y0 + 3.0, g.y1 - 3.0, gray55);
+            vline(s, g.x0 + 5.0, g.y0 + 3.0, g.y1 - 3.0, C_DIM);
+            vline(s, g.x1 - 5.0, g.y0 + 3.0, g.y1 - 3.0, C_DIM);
         } else {
-            hline(s, g.x0 + 3.0, g.x1 - 3.0, g.y0 + 5.0, gray55);
-            hline(s, g.x0 + 3.0, g.x1 - 3.0, g.y1 - 5.0, gray55);
+            hline(s, g.x0 + 3.0, g.x1 - 3.0, g.y0 + 5.0, C_DIM);
+            hline(s, g.x0 + 3.0, g.x1 - 3.0, g.y1 - 5.0, C_DIM);
         }
         let v = field_val(app, fid, fmt_num(val));
         app.fonts
@@ -4540,16 +4539,16 @@ fn paint_frame_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Actio
     let fd_w = inner_w - 90.0 - SQ_BTN - SQ_BTN - 8.0 * 3.0;
     let dx = reg.right.x0 + pl;
     let dy = ED_TITLE_H + 8.0 + 24.0 + 10.0 + PILL_H + 10.0 + 1.0 + 12.0 + 32.0;
-    let dd = Rect::new(dx, dy, dx + fd_w, dy + 5.0 * 32.0);
+    let dd = Rect::new(dx, dy, dx + fd_w, dy + 5.0 * DROPDOWN_ROW_H);
     elev_shadow(s, dd, 8.0, Elevation::Floating);
     fill_rrect(s, dd, 8.0, C_FIELD);
     stroke_rrect(s, dd, 8.0, C_LINE_2, 1.0);
     for (i, (name, w, h)) in FRAME_PRESETS.into_iter().enumerate() {
         let r = Rect::new(
             dx,
-            dy + 32.0 * i as f64,
+            dy + DROPDOWN_ROW_H * i as f64,
             dx + fd_w,
-            dy + 32.0 * (i + 1) as f64,
+            dy + DROPDOWN_ROW_H * (i + 1) as f64,
         );
         if hover(app, r) || i == 0 {
             fill_rect(s, r, if hover(app, r) { C_FIELD_2 } else { C_FIELD });
@@ -4584,7 +4583,7 @@ fn paint_lh_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>
     let y_entry = crate::theme::ED_TITLE_H + 89.0;
     // the typography rows scroll with the panel
     let fy = y_entry + 771.0 - app.doc().scroll_right;
-    let dd = Rect::new(x0, fy + 28.0, x0 + 153.5, fy + 28.0 + 3.0 * 32.0);
+    let dd = Rect::new(x0, fy + 28.0, x0 + 153.5, fy + 28.0 + 3.0 * DROPDOWN_ROW_H);
     elev_shadow(s, dd, 8.0, Elevation::Floating);
     fill_rrect(s, dd, 8.0, C_FIELD);
     stroke_rrect(s, dd, 8.0, C_LINE_2, 1.0);
@@ -4592,9 +4591,9 @@ fn paint_lh_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>
     for (i, name) in ["Auto", "Pixels", "Percent"].into_iter().enumerate() {
         let r = Rect::new(
             dd.x0,
-            dd.y0 + 32.0 * i as f64,
+            dd.y0 + DROPDOWN_ROW_H * i as f64,
             dd.x1,
-            dd.y0 + 32.0 * (i + 1) as f64,
+            dd.y0 + DROPDOWN_ROW_H * (i + 1) as f64,
         );
         let hov = hover(app, r);
         if hov {
@@ -4666,7 +4665,7 @@ fn paint_text_style_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, 
         x0,
         fy + 22.0,
         x0 + 315.0,
-        fy + 22.0 + rows.len() as f64 * 32.0,
+        fy + 22.0 + rows.len() as f64 * DROPDOWN_ROW_H,
     );
     elev_shadow(s, dd, 8.0, Elevation::Floating);
     fill_rrect(s, dd, 8.0, C_FIELD);
@@ -4674,9 +4673,9 @@ fn paint_text_style_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, 
     for (i, (label, action)) in rows.into_iter().enumerate() {
         let r = Rect::new(
             dd.x0,
-            dd.y0 + 32.0 * i as f64,
+            dd.y0 + DROPDOWN_ROW_H * i as f64,
             dd.x1,
-            dd.y0 + 32.0 * (i + 1) as f64,
+            dd.y0 + DROPDOWN_ROW_H * (i + 1) as f64,
         );
         let hov = hover(app, r);
         if hov {
