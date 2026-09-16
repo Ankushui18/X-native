@@ -248,7 +248,7 @@ fn selector_specificity(
     let selector = selector
         .split(['>', '+', '~', ' '])
         .filter(|part| !part.is_empty())
-        .last()?;
+        .next_back()?;
     let id = attr(attrs, "id");
     let classes: Vec<&str> = attr(attrs, "class")
         .unwrap_or_default()
@@ -263,13 +263,11 @@ fn selector_specificity(
             return None;
         }
         ids = 1;
-        rest = "";
     } else if let Some(name) = rest.strip_prefix('.') {
-        if !classes.iter().any(|class| *class == name) {
+        if !classes.contains(&name) {
             return None;
         }
         class_count = 1;
-        rest = "";
     } else {
         if let Some((name, suffix)) = rest.split_once('#') {
             if id != Some(suffix) {
@@ -279,7 +277,7 @@ fn selector_specificity(
             rest = name;
         }
         if let Some((name, suffix)) = rest.split_once('.') {
-            if !classes.iter().any(|class| *class == suffix) {
+            if !classes.contains(&suffix) {
                 return None;
             }
             class_count = 1;
@@ -311,7 +309,7 @@ fn stylesheet_value(
         };
         let replace = winner
             .as_ref()
-            .map_or(true, |(old_specificity, old_index, _)| {
+            .is_some_and(|(old_specificity, old_index, _)| {
                 specificity > *old_specificity
                     || (specificity == *old_specificity && index >= *old_index)
             });
@@ -678,11 +676,8 @@ fn parse_gradient(
         return Ok(());
     }
     let paint = if kind == "linearGradient" {
-        let defaults = if object_bounding_box {
-            (0.0, 0.0, 1.0, 0.0)
-        } else {
-            (0.0, 0.0, 1.0, 0.0)
-        };
+        // Both gradientUnits modes share the same default unit x-gradient.
+        let defaults = (0.0, 0.0, 1.0, 0.0);
         Paint::LinearGradient {
             start: (
                 gradient_number(attr(&attrs, "x1"), defaults.0, 1.0),
@@ -796,7 +791,7 @@ fn parse_svg_transform(value: &str) -> Option<Affine> {
         };
         // SVG transform lists are applied in declaration order to the
         // geometry; with column-vector affines that is a right multiply.
-        result = result * op;
+        result *= op;
         parsed = true;
         rest = rest[close + 1..].trim_start_matches(|c: char| c.is_ascii_whitespace() || c == ',');
     }
@@ -1610,7 +1605,7 @@ mod tests {
         assert!(
             matches!(&rect.fill, Paint::Solid(color) if color.to_rgba8() == Color::from_rgba8(255, 0, 0, 102).to_rgba8())
         );
-        assert_eq!(rect.stroke.as_ref().map(|s| s.width), Some(3.0));
+        assert_eq!(rect.stroke.width, 3.0);
         assert_eq!(
             rect.stroke_layers.first().unwrap().options.cap_start,
             StrokeCap::Round
@@ -1639,9 +1634,9 @@ mod tests {
         .expect("stylesheet should import");
         let node = &page.children[0];
         assert_eq!(node.fill, Paint::Solid(Color::from_rgb8(0x12, 0x34, 0x56)));
-        assert_eq!(node.stroke.as_ref().map(|stroke| stroke.width), Some(4.0));
+        assert_eq!(node.stroke.width, 4.0);
         assert_eq!(
-            x_core::paint_color(&node.stroke.as_ref().unwrap().paint, &Variables::default())
+            x_core::paint_color(&node.stroke.paint, &Variables::default())
                 .to_rgba8(),
             Color::from_rgb8(0xfe, 0xdc, 0xba).to_rgba8()
         );

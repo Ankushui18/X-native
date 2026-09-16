@@ -11,8 +11,8 @@
 
 use std::collections::HashSet;
 
-use vello::kurbo::{Affine, Point, Rect};
-use vello::peniko::{Color, Fill};
+use vello::kurbo::{Point, Rect};
+use vello::peniko::Color;
 use vello::Scene;
 use x_native::{ui::Elevation, FrameCache, ImageFit, Node, NodeKind, Paint, VelloSink};
 
@@ -5596,11 +5596,9 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
         None => return,
     };
 
-    // Render board-specific elements (grid, nodes)
-    if app.is_board() {
-        paint_board_grid(app, s);
-        paint_board_nodes(app, s);
-    }
+    // NOTE: board-mode grid + nodes are painted by the render paths in
+    // run.rs (crate::board_ui::paint_grid / paint_nodes) before editor
+    // overlays are layered on top — nothing board-specific to do here.
 
     // selection outlines + handles
     let sel = doc.editor_ref().selection.clone();
@@ -7785,9 +7783,7 @@ fn paint_assets(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
             app.fonts
                 .text_center(s, cb, "check", T10, C_TEXT, Wt::Reg, true);
             hit.push((cb, Action::LibCheckUpdate(i)));
-            y += 20.0;
         }
-        y += 8.0;
     }
 }
 

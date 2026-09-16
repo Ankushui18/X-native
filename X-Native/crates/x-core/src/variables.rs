@@ -304,17 +304,16 @@ pub fn parse_css_color(value: &str) -> Option<Color> {
     if let Some(hex) = css_named_color(&lower) {
         return parse_hex_color(hex);
     }
-    let (kind, body) = if let Some(body) = lower.strip_prefix("rgba(") {
-        ("rgba", body.strip_suffix(')')?)
-    } else if let Some(body) = lower.strip_prefix("rgb(") {
-        ("rgb", body.strip_suffix(')')?)
-    } else if let Some(body) = lower.strip_prefix("hsla(") {
-        ("hsla", body.strip_suffix(')')?)
-    } else if let Some(body) = lower.strip_prefix("hsl(") {
-        ("hsl", body.strip_suffix(')')?)
-    } else {
-        return None;
-    };
+    let known = [
+        ("rgba(", "rgba"),
+        ("rgb(", "rgb"),
+        ("hsla(", "hsla"),
+        ("hsl(", "hsl"),
+    ];
+    let (kind, body) = known
+        .iter()
+        .find_map(|(prefix, kind)| lower.strip_prefix(prefix).map(|rest| (*kind, rest)))?;
+    let body = body.strip_suffix(')')?;
     // CSS Color 4 permits commas or whitespace, with `/` separating alpha.
     // Keeping the slash as its own token makes both syntaxes equivalent.
     // The normalized string must be owned here (not inside a helper) so the

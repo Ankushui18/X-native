@@ -1054,7 +1054,7 @@ mod tests {
           ] }] }
         }"##;
         let doc = import_figma_json(json).expect("figma import");
-        let color = match doc.pages[0].children[0].fill {
+        let color = match &doc.pages[0].children[0].fill {
             Paint::Solid(c) => c,
             other => panic!("expected solid color, got {other:?}"),
         };

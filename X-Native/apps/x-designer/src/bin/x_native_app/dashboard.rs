@@ -13,7 +13,7 @@ use x_native::Color;
 
 use crate::icons::draw_icon;
 use crate::paint::*;
-use crate::state::{Action, App, DashLayout, DashView, RecentFile};
+use crate::state::{Action, App, DashLayout, DashView, OpenDoc, RecentFile};
 use crate::theme::*;
 
 /// Left edge of the main column (sidebar 260 + px-6 24).
@@ -55,7 +55,7 @@ pub fn paint(app: &mut App, s: &mut Scene) {
 fn paint_template_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let card_w = 520.0;
     let row_h = 64.0;
-    let n = App::TEMPLATES.len() as f64;
+    let n = OpenDoc::TEMPLATES.len() as f64;
     let card_h = 76.0 + n * row_h + 20.0;
     let cx = (app.win_w - card_w) / 2.0;
     let cy = ((app.win_h - card_h) / 2.0).max(60.0);
@@ -85,7 +85,7 @@ fn paint_template_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Acti
         C_MUTED,
         Wt::Reg,
     );
-    for (i, (name, blurb)) in App::TEMPLATES.iter().enumerate() {
+    for (i, (name, blurb)) in OpenDoc::TEMPLATES.iter().enumerate() {
         let ry = cy + 76.0 + i as f64 * row_h;
         let row = Rect::new(cx + 12.0, ry, cx + card_w - 12.0, ry + row_h - 8.0);
         if hover(app, row) {
@@ -791,8 +791,7 @@ fn paint_recents(
                             s.push_clip_layer(
                                 vello::peniko::Fill::NonZero,
                                 Affine::IDENTITY,
-                                &RoundedRect::new(thumb.x0, thumb.y0, thumb.x1, thumb.y1, 8.0)
-                                    .into_path(0.1),
+                                &RoundedRect::new(thumb.x0, thumb.y0, thumb.x1, thumb.y1, 8.0),
                             );
                             s.draw_image(
                                 b,

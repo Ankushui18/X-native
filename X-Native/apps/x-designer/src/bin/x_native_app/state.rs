@@ -1510,7 +1510,7 @@ impl OpenDoc {
                 cta.name = "Get started".into();
                 cta.corner_radii = Some([12.0, 12.0, 12.0, 12.0]);
                 hero.children.push(cta);
-                for (k, (name, x)) in ["Fast", "Local", "Free"].iter().zip([64.0, 384.0, 704.0]) {
+                for (k, name, x) in ["Fast", "Local", "Free"].iter().zip([64.0, 384.0, 704.0]) {
                     let mut c = Node::rect(
                         &format!("lp-card-{k}"),
                         x,
@@ -1556,7 +1556,7 @@ impl OpenDoc {
                         80.0,
                         160.0,
                         160.0,
-                        Color::from_rgb8((hex >> 16) as u8, (hex >> 8) as u8, hex as u8),
+                        Color::from_rgb8((*hex >> 16) as u8, (*hex >> 8) as u8, *hex as u8),
                     );
                     sw.name = format!("color/{name}");
                     sw.corner_radii = Some([12.0, 12.0, 12.0, 12.0]);
@@ -3680,13 +3680,7 @@ impl App {
     pub fn mark_board_dirty(&mut self) {
         if let Some(d) = self.docs.get_mut(self.active) {
             d.dirty = true;
-            // Board edits do not enter the design editor's undo stack, but
-            // they still need a monotonic revision so autosave and recovery
-            // do not mistake a later board mutation for the already-saved
-            // revision.
-            d.history.next_revision = d.history.next_revision.saturating_add(1);
-            d.history.revision = d.history.next_revision;
-            d.history.saved_revision = None;
+            d.bump_board_revision();
             d.last_autosave_revision = None;
         }
     }
@@ -4306,7 +4300,12 @@ impl App {
         // labels and outlines text), so the preview cannot drift from the
         // artifact the user gets. Embedded image assets are not decoded in
         // this path — v1 previews are text+vector.
-        let Ok(plan) = x_native::prepare_export(page, &doc.variables, None, &self.fonts) else {
+        let Ok(plan) = x_native::prepare_export(
+            page,
+            &doc.variables,
+            None,
+            &self.fonts.fonts,
+        ) else {
             fail(self);
             return;
         };
@@ -4319,7 +4318,7 @@ impl App {
             scale,
             None,
             None,
-            Some(&self.fonts),
+            Some(&self.fonts.fonts),
         ) else {
             fail(self);
             return;

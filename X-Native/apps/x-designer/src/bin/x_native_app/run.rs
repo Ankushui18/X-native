@@ -7959,7 +7959,7 @@ impl Host {
             &doc.name,
             1,
         );
-        let text = x_native::save_xlib(&library);
+        let text = x_native::fileio::save_xlib(&library);
         match std::fs::write(&path, text) {
             Ok(()) => self.app.status = format!("Published library: {}", path.display()),
             Err(e) => self.app.status = format!("Library publish failed: {e}"),
@@ -9533,7 +9533,7 @@ impl Host {
                 // this file (snapshot_hash must cover the NEW snapshot or
                 // load-time verification would flag the document).
                 if let Some(dep) = doc.library_deps.get_mut(rv.dep_index) {
-                    dep.snapshot_hash = x_native::library_hash(
+                    dep.snapshot_hash = x_native::fileio::library_hash(
                         doc.library_snapshots.get(&id).expect("just inserted"),
                     );
                     dep.source_path = rv.path.to_string_lossy().into_owned();

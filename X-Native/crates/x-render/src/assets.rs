@@ -203,7 +203,7 @@ impl Assets {
         }
         let bytes = source.image.data.data();
         let mut adjusted = Vec::with_capacity(bytes.len());
-        for pixel in bytes.chunks_exact(4) {
+        for pixel in bytes.as_chunks::<4>().0 {
             let color = Color::from_rgba8(pixel[0], pixel[1], pixel[2], pixel[3]);
             let rgba = adjustments.apply_to_color(color).to_rgba8();
             adjusted.extend_from_slice(&[rgba.r, rgba.g, rgba.b, rgba.a]);
@@ -216,7 +216,7 @@ impl Assets {
                 width: source.image.width,
                 height: source.image.height,
             },
-            sampler: source.sampler.clone(),
+            sampler: source.sampler,
         })
     }
     /// Sorted asset names (image replace UI / pickers).

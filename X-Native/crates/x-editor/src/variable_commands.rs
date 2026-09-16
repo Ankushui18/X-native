@@ -683,7 +683,8 @@ mod tests {
     fn number_create_undo_redo() {
         let mut vars = Variables::default();
         let mut h = VariableHistory::default();
-        assert!(h.commit(&mut vars, set_number(&vars, "gap", 8.0)));
+        let cmd = set_number(&vars, "gap", 8.0);
+        assert!(h.commit(&mut vars, cmd));
         assert_eq!(vars.get("gap"), Some(Value::Num(8.0)));
         assert_eq!(vars.catalog()[0].2, "number");
         assert!(h.undo(&mut vars));
@@ -697,17 +698,17 @@ mod tests {
         let mut vars = Variables::default();
         let mut h = VariableHistory::default();
         let base = Color::from_rgb8(0x11, 0x22, 0x33);
-        assert!(h.commit(&mut vars, set_color(&vars, "brand", base)));
-        assert!(h.commit(
-            &mut vars,
-            set_mode_value(
-                &vars,
-                "brand",
-                "dark",
-                VarValue::color_of("#ff0000").unwrap()
-            )
-        ));
-        assert!(h.commit(&mut vars, set_active_mode(&vars, "dark").unwrap()));
+        let cmd = set_color(&vars, "brand", base);
+        assert!(h.commit(&mut vars, cmd));
+        let cmd = set_mode_value(
+            &vars,
+            "brand",
+            "dark",
+            VarValue::color_of("#ff0000").unwrap(),
+        );
+        assert!(h.commit(&mut vars, cmd));
+        let cmd = set_active_mode(&vars, "dark").unwrap();
+        assert!(h.commit(&mut vars, cmd));
         let active_hex = vars.get("brand").unwrap();
         assert_ne!(active_hex, Value::Str(color_to_hex(base)));
         // Undo active mode → base color again.
@@ -726,10 +727,13 @@ mod tests {
     fn alias_resolves_and_undos() {
         let mut vars = Variables::default();
         let mut h = VariableHistory::default();
-        h.commit(&mut vars, set_number(&vars, "radius", 8.0));
-        h.commit(&mut vars, set_alias(&vars, "r", Some("radius")));
+        let cmd = set_number(&vars, "radius", 8.0);
+        h.commit(&mut vars, cmd);
+        let cmd = set_alias(&vars, "r", Some("radius"));
+        h.commit(&mut vars, cmd);
         assert_eq!(vars.get("r"), Some(Value::Num(8.0)));
-        h.commit(&mut vars, set_alias(&vars, "r", None));
+        let cmd = set_alias(&vars, "r", None);
+        h.commit(&mut vars, cmd);
         assert_eq!(vars.get("r"), None);
         h.undo(&mut vars);
         assert_eq!(vars.get("r"), Some(Value::Num(8.0)));
@@ -739,8 +743,10 @@ mod tests {
     fn type_move_and_exact_restore() {
         let mut vars = Variables::default();
         let mut h = VariableHistory::default();
-        h.commit(&mut vars, set_number(&vars, "v", 1.0));
-        h.commit(&mut vars, set_string(&vars, "v", "auto"));
+        let cmd = set_number(&vars, "v", 1.0);
+        h.commit(&mut vars, cmd);
+        let cmd = set_string(&vars, "v", "auto");
+        h.commit(&mut vars, cmd);
         assert_eq!(vars.get("v"), Some(Value::Str("auto".into())));
         assert!(
             !vars.numbers.contains_key("v"),
@@ -759,7 +765,8 @@ mod tests {
         let mut vars = Variables::default();
         let mut h = VariableHistory::default();
         let c = Color::from_rgb8(0xAA, 0xBB, 0xCC);
-        h.commit(&mut vars, set_color(&vars, "bg", c));
+        let cmd = set_color(&vars, "bg", c);
+        h.commit(&mut vars, cmd);
         let cmd = remove_variable(&vars, "bg").unwrap();
         h.commit(&mut vars, cmd);
         assert_eq!(vars.get("bg"), None);
@@ -771,9 +778,12 @@ mod tests {
     fn collection_exposed_catalog() {
         let mut vars = Variables::default();
         let mut h = VariableHistory::default();
-        h.commit(&mut vars, set_number(&vars, "gap", 4.0));
-        h.commit(&mut vars, set_collection(&vars, "gap", Some("Primitives")));
-        h.commit(&mut vars, set_exposed(&vars, "gap", true));
+        let cmd = set_number(&vars, "gap", 4.0);
+        h.commit(&mut vars, cmd);
+        let cmd = set_collection(&vars, "gap", Some("Primitives"));
+        h.commit(&mut vars, cmd);
+        let cmd = set_exposed(&vars, "gap", true);
+        h.commit(&mut vars, cmd);
         assert_eq!(vars.collection_of("gap"), "Primitives");
         assert!(vars.exposed.contains("gap"));
         assert_eq!(vars.catalog()[0].0, "Primitives");
@@ -782,18 +792,18 @@ mod tests {
         h.undo(&mut vars); // untag collection
         assert_eq!(vars.collection_of("gap"), "Local");
         // "Local" and "" are untag aliases of each other — second is a no-op.
-        assert!(!h.commit(&mut vars, set_collection(&vars, "gap", Some("Local"))));
+        let cmd = set_collection(&vars, "gap", Some("Local"));
+        assert!(!h.commit(&mut vars, cmd));
     }
 
     #[test]
     fn mode_value_remove_and_reject_underspecified() {
         let mut vars = Variables::default();
         let mut h = VariableHistory::default();
-        h.commit(&mut vars, set_color(&vars, "bg", Color::from_rgb8(1, 2, 3)));
-        h.commit(
-            &mut vars,
-            set_mode_value(&vars, "bg", "dark", VarValue::color_of("#00ff00").unwrap()),
-        );
+        let cmd = set_color(&vars, "bg", Color::from_rgb8(1, 2, 3));
+        h.commit(&mut vars, cmd);
+        let cmd = set_mode_value(&vars, "bg", "dark", VarValue::color_of("#00ff00").unwrap());
+        h.commit(&mut vars, cmd);
         let rm = remove_mode_value(&vars, "bg", "dark").unwrap();
         h.commit(&mut vars, rm);
         assert_eq!(snapshot_mode(&vars, "bg", "dark"), None);
@@ -823,16 +833,21 @@ mod tests {
     fn redo_cleared_on_new_commit_and_limit_holds() {
         let mut vars = Variables::default();
         let mut h = VariableHistory::new(2);
-        h.commit(&mut vars, set_number(&vars, "n", 1.0));
-        h.commit(&mut vars, set_number(&vars, "n", 2.0));
+        let cmd = set_number(&vars, "n", 1.0);
+        h.commit(&mut vars, cmd);
+        let cmd = set_number(&vars, "n", 2.0);
+        h.commit(&mut vars, cmd);
         h.undo(&mut vars);
         assert_eq!(h.redo_len(), 1);
-        h.commit(&mut vars, set_number(&vars, "n", 3.0)); // clears redo
+        let cmd = set_number(&vars, "n", 3.0);
+        h.commit(&mut vars, cmd); // clears redo
         assert_eq!(h.redo_len(), 0);
-        h.commit(&mut vars, set_number(&vars, "n", 4.0)); // exceeds limit 2
+        let cmd = set_number(&vars, "n", 4.0);
+        h.commit(&mut vars, cmd); // exceeds limit 2
         assert_eq!(h.undo_len(), 2);
         // No-op edits are rejected and record nothing.
-        assert!(!h.commit(&mut vars, set_number(&vars, "n", 4.0)));
+        let cmd = set_number(&vars, "n", 4.0);
+        assert!(!h.commit(&mut vars, cmd));
         assert_eq!(h.undo_len(), 2);
     }
 
@@ -852,7 +867,8 @@ mod tests {
     fn rename_moves_value_keeps_old_references_and_undo_restores() {
         let mut vars = Variables::default();
         let mut h = VariableHistory::default();
-        h.commit(&mut vars, set_number(&vars, "gap", 8.0));
+        let cmd = set_number(&vars, "gap", 8.0);
+        h.commit(&mut vars, cmd);
         let cmd = rename_variable(&vars, "gap", "spacing").unwrap();
         assert!(h.commit(&mut vars, cmd));
         assert_eq!(vars.get("spacing"), Some(Value::Num(8.0)));
@@ -875,8 +891,10 @@ mod tests {
     fn rename_alias_repoints_instead() {
         let mut vars = Variables::default();
         let mut h = VariableHistory::default();
-        h.commit(&mut vars, set_number(&vars, "radius", 8.0));
-        h.commit(&mut vars, set_alias(&vars, "r", Some("radius")));
+        let cmd = set_number(&vars, "radius", 8.0);
+        h.commit(&mut vars, cmd);
+        let cmd = set_alias(&vars, "r", Some("radius"));
+        h.commit(&mut vars, cmd);
         let cmd = rename_variable(&vars, "r", "corner").unwrap();
         assert!(h.commit(&mut vars, cmd));
         assert_eq!(vars.get("corner"), Some(Value::Num(8.0)));
