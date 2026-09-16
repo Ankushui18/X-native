@@ -4515,12 +4515,8 @@ impl Host {
                         let (lx, ly) = world_to_local(root, &p.id, x, y);
                         node.transform.x = lx;
                         node.transform.y = ly;
-                        let auto_layout = matches!(
-                            &p.kind,
-                            x_native::NodeKind::Frame {
-                                layout: Some(_),
-                            }
-                        );
+                        let auto_layout =
+                            matches!(&p.kind, x_native::NodeKind::Frame { layout: Some(_) });
                         (p.id.clone(), auto_layout)
                     } else {
                         (root_id.clone(), false)
