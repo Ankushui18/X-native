@@ -473,6 +473,8 @@ pub enum Action {
     ToggleMinimizeUI,
     ResizeLeftSidebar(f64),
     CollapseAllLayers,
+    /// Clear the layers tree search (audit F8)
+    TreeSearchClear,
     /// Edit file menu actions
     FileRename,
     FileMoveToDrafts,
@@ -638,6 +640,10 @@ pub enum FieldId {
     InstanceProp,
     /// pages panel: active-page inline rename (opened from the page menu)
     PageName,
+    /// layers panel: tree search query (row above the tree; audit F8).
+    /// Enter keeps the field open — the query lives in
+    /// `OpenDoc::tree_search` and filters the tree live.
+    TreeSearch,
     W,
     H,
     X,
@@ -1020,6 +1026,9 @@ pub struct OpenDoc {
     pub page: usize,
     pub dirty: bool,
     pub expanded: HashSet<String>,
+    /// layers tree search query (audit F8); non-empty → the tree renders
+    /// only the matches plus their ancestor chain
+    pub tree_search: String,
     pub left_tab: LeftTab,
     pub right_tab: RightTab,
     pub frame_preset: usize,
@@ -1170,6 +1179,7 @@ impl OpenDoc {
             page: 0,
             dirty: false,
             expanded: HashSet::new(),
+            tree_search: String::new(),
             left_tab: LeftTab::Layers,
             right_tab: RightTab::Design,
             frame_preset: 0,
@@ -1223,6 +1233,7 @@ impl OpenDoc {
             page: 0,
             dirty: false,
             expanded: HashSet::new(),
+            tree_search: String::new(),
             left_tab: LeftTab::Layers,
             right_tab: RightTab::Design,
             frame_preset: 0,
@@ -2785,6 +2796,19 @@ impl App {
 
     /// Center the view on document content (first open: like the HTML —
     /// the 375x420 frame centered in the canvas with p-8 padding).
+    /// Collapse every expanded layer, keeping only the selection's
+    /// ancestors expanded (Figma parity; audit F6).
+    pub fn collapse_all_layers(&mut self) {
+        let doc = self.doc();
+        let sel = doc.editor_ref().selection.clone();
+        let mut keep: HashSet<String> = HashSet::new();
+        for target in &sel {
+            let mut path: Vec<String> = Vec::new();
+            let _ = collect_ancestor_path(&doc.editor_ref().root, target, &mut path, &mut keep);
+        }
+        doc.expanded.retain(|id| keep.contains(id));
+    }
+
     pub fn center_view(&mut self) {
         let camera = crate::loading::ViewConfig::from_app(self).camera(self.doc_opt());
         self.zoom = camera.zoom;
@@ -3168,6 +3192,27 @@ pub fn try_import_from_figma_clipboard() -> Option<x_native::Document> {
     }
 }
 
+
+/// DFS from `node` to `target`, recording the root→target path in
+/// `keep` when found (audit F6: collapse-all keeps selection ancestors).
+fn collect_ancestor_path(
+    node: &Node,
+    target: &str,
+    path: &mut Vec<String>,
+    keep: &mut HashSet<String>,
+) -> bool {
+    path.push(node.id.clone());
+    let found = if node.id == target {
+        keep.extend(path.iter().cloned());
+        true
+    } else {
+        node.children
+            .iter()
+            .any(|c| collect_ancestor_path(c, target, path, keep))
+    };
+    path.pop();
+    found
+}
 #[cfg(test)]
 impl App {
     /// Explicit deterministic content for old inspector/screenshot fixtures.
@@ -3209,6 +3254,24 @@ mod tool_shortcut_tests {
         // design-only tools do not leak into boards
         assert_eq!(b("m", false), None);
         assert_eq!(b("f", false), Some(Tool::Frame));
+    }
+
+    #[test]
+    fn collapse_all_keeps_selection_ancestors() {
+        let mut app = App::new();
+        app.open_blank();
+        let doc = app.doc();
+        let root_id = doc.editor_ref().root.id.clone();
+        doc.editor().insert_node(&root_id, Node::frame("f1", 300.0, 200.0));
+        doc.editor().insert_node(&root_id, Node::frame("f2", 300.0, 200.0));
+        doc.editor()
+            .insert_node("f1", Node::rect("r1", 0.0, 0.0, 10.0, 10.0, Color::WHITE));
+        doc.expanded.insert("f1".into());
+        doc.expanded.insert("f2".into());
+        doc.editor_ref().selection.insert("r1".into());
+        app.collapse_all_layers();
+        assert!(app.doc().expanded.contains("f1"), "selection ancestor stays open");
+        assert!(!app.doc().expanded.contains("f2"), "everything else collapses");
     }
 
     #[test]

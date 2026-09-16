@@ -4613,6 +4613,7 @@ impl Host {
             f.id,
             FieldId::DocName
                 | FieldId::PageName
+                | FieldId::TreeSearch
                 | FieldId::InstanceProp
                 | FieldId::FillHex
                 | FieldId::StrokeHex
@@ -8300,8 +8301,10 @@ impl Host {
             Action::ResizeLeftSidebar(w) => {
                 self.app.left_sidebar_w = w.clamp(200.0, 500.0);
             }
-            Action::CollapseAllLayers => {
-                self.app.doc().expanded.clear();
+            Action::CollapseAllLayers => self.app.collapse_all_layers(),
+            Action::TreeSearchClear => {
+                self.app.doc().tree_search.clear();
+                self.app.field = None;
             }
             Action::FileRename => {
                 self.app.field = Some(crate::state::FieldEdit {
@@ -9451,6 +9454,13 @@ impl Host {
             FieldId::PageName => {
                 self.app.commit_page_rename(&raw);
             }
+            FieldId::TreeSearch => {
+                // search stays open after Enter (Figma): the query lives
+                // in the doc; re-open the field on the committed buffer
+                self.app.doc().tree_search = raw.clone();
+                let id = f.id;
+                self.app.field = Some(FieldEdit { id, buffer: raw });
+            }
             FieldId::InstanceProp => {
                 self.app.commit_instance_prop(&raw);
             }
@@ -9889,6 +9899,7 @@ fn field_initial(app: &App, f: FieldId) -> String {
     use crate::editor_ui::sel_info;
     let s = sel_info(app);
     match f {
+        FieldId::TreeSearch => app.doc_ref().tree_search.clone(),
         FieldId::PageName => {
             let d = app.doc_ref();
             d.doc

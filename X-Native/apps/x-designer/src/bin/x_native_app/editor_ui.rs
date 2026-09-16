@@ -1778,10 +1778,60 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let ly = band_bottom + 25.0;
     app.fonts
         .micro_label(s, sx + 12.0, ly, "LAYERS", C_DIM, Wt::Med);
-    draw_icon(s, "search", lw - 25.0, band_bottom + 25.8, 12.0, C_DIM);
+    // F8: the search icon was dead — it opens the tree search field
+    let srch = Rect::new(lw - 28.0, ly - 3.0, lw - 12.0, ly + 13.0);
+    if hover(app, srch) {
+        fill_rrect(s, srch, 4.0, C_FIELD_2);
+    }
+    draw_icon(s, "search", lw - 25.0, ly, 12.0, C_DIM);
+    hit.push((srch, Action::Field(FieldId::TreeSearch)));
+    // F6: collapse-all (Figma parity) — the selection's ancestors stay
+    // open; it sits left of search
+    let cpl = Rect::new(lw - 46.0, ly - 3.0, lw - 30.0, ly + 13.0);
+    if hover(app, cpl) {
+        fill_rrect(s, cpl, 4.0, C_FIELD_2);
+    }
+    draw_icon(s, "chevrons-down", lw - 43.0, ly, 12.0, C_DIM);
+    hit.push((cpl, Action::CollapseAllLayers));
+
+    // F8: the search row is visible while the field is open or the
+    // query is non-empty; the tree anchors below it
+    let search_open = app
+        .field
+        .as_ref()
+        .map(|f| f.id)
+        == Some(FieldId::TreeSearch)
+        || !app.doc().tree_search.is_empty();
+    if search_open {
+        let sr = Rect::new(sx + 4.0, ly + 12.0, sx + lw - 4.0, ly + 12.0 + 24.0);
+        input_box(app, s, sr, 6.0);
+        draw_icon(s, "search", sr.x0 + 8.0, sr.y0 + 6.0, 12.0, C_DIM);
+        let q = if app
+            .field
+            .as_ref()
+            .map(|f| f.id)
+            == Some(FieldId::TreeSearch)
+        {
+            app.field.as_ref().unwrap().buffer.clone()
+        } else {
+            app.doc().tree_search.clone()
+        };
+        if !q.is_empty() {
+            let shown =
+                app.fonts.truncate(&q, T11, Wt::Reg, (sr.width() - 40.0).max(16.0));
+            app.fonts.text(s, sr.x0 + 26.0, sr.y0 + 6.5, &shown, T11, C_TEXT, Wt::Reg);
+            let clr = Rect::new(sr.x1 - 20.0, sr.y0 + 2.0, sr.x1 - 6.0, sr.y1 - 2.0);
+            if hover(app, clr) {
+                fill_rrect(s, clr, 4.0, C_FIELD_2);
+            }
+            draw_icon(s, "x", clr.x0 + 2.0, clr.y0 + 2.0, 10.0, C_DIM);
+            hit.push((clr, Action::TreeSearchClear));
+        }
+        hit.push((sr, Action::Field(FieldId::TreeSearch)));
+    }
 
     // tree (scrollable)
-    let tree_top = band_bottom + 34.5;
+    let tree_top = band_bottom + 34.5 + if search_open { 30.0 } else { 0.0 };
     let tree_bottom = app.win_h - 16.0;
     let scroll = app.doc().scroll_left;
     if !app.doc().mock_layers.is_empty() {
@@ -1992,6 +2042,19 @@ fn collect_tree_rows(app: &App, scroll: f64, height: f64) -> (Vec<RowRef>, f64) 
         .map(String::as_str)
         .collect();
     let mut out = Vec::with_capacity(last.saturating_sub(first).min(128) + 1);
+    // F8: a non-empty query renders matches plus their ancestor chain
+    let ql = doc.tree_search.trim().to_lowercase();
+    let visible: Option<HashSet<&str>> = if ql.is_empty() {
+        None
+    } else {
+        let mut found = HashSet::new();
+        let mut path: Vec<&str> = Vec::new();
+        let root = &doc.editor_ref().root;
+        for c in &root.children {
+            search_visible(c, &ql, &mut path, &mut found);
+        }
+        Some(found)
+    };
     let mut index = 0;
     let mut stack = vec![(doc.editor_ref().root.children.iter(), 0usize)];
     while let Some((children, indent)) = stack.last_mut() {
@@ -2002,6 +2065,13 @@ fn collect_tree_rows(app: &App, scroll: f64, height: f64) -> (Vec<RowRef>, f64) 
         let indent = *indent;
         let has = !child.children.is_empty();
         let expanded = has && doc.expanded.contains(&child.id);
+        let shown = match &visible {
+            Some(set) => set.contains(child.id.as_str()),
+            None => true,
+        };
+        if !shown {
+            continue;
+        }
         if (first..=last).contains(&index) {
             out.push(RowRef {
                 id: child.id.clone(),
@@ -2018,11 +2088,30 @@ fn collect_tree_rows(app: &App, scroll: f64, height: f64) -> (Vec<RowRef>, f64) 
             });
         }
         index += 1;
-        if expanded {
+        // while searching, descend past collapsed nodes too — matches
+        // deeper than the current expansion must still surface
+        if expanded || visible.is_some() {
             stack.push((child.children.iter(), indent + 1));
         }
     }
     (out, index as f64 * pitch)
+}
+
+/// F8: record `node` and its path in `found` when it or any descendant
+/// name contains the (lowercased) query.
+fn search_visible(node: &Node, q: &str, path: &mut Vec<&str>, found: &mut HashSet<&str>) -> bool {
+    path.push(node.id.as_str());
+    let mut match_sub = node.name.to_lowercase().contains(q);
+    for c in &node.children {
+        if search_visible(c, q, path, found) {
+            match_sub = true;
+        }
+    }
+    if match_sub {
+        found.extend(path.iter().copied());
+    }
+    path.pop();
+    match_sub
 }
 
 /// 6px edge strips between canvas and panels — drags are handled
@@ -6879,6 +6968,36 @@ mod viewport_row_tests {
         let row = rows.iter().find(|r| r.id == "r9000").unwrap();
         assert!(row.locked && row.selected);
         assert!(rows.iter().find(|r| r.id == "r9001").unwrap().selected);
+    }
+
+    #[test]
+    fn tree_search_shows_only_matches_and_ancestors() {
+        // F8: a query renders matches plus their ancestor chain, through
+        // collapsed nodes; clearing the query restores the full tree.
+        let mut app = App::new();
+        app.open_blank();
+        let root_id = app.doc().editor_ref().root.id.clone();
+        app.doc()
+            .editor()
+            .insert_node(&root_id, Node::frame("fr1", 300.0, 200.0));
+        app.doc()
+            .editor()
+            .insert_node(&root_id, Node::frame("fr2", 300.0, 200.0));
+        app.doc().editor().insert_node(
+            "fr1",
+            Node::rect("card", 0.0, 0.0, 10.0, 10.0, x_native::Color::WHITE),
+        );
+        app.doc().editor().insert_node(
+            "fr2",
+            Node::rect("btn", 0.0, 0.0, 10.0, 10.0, x_native::Color::WHITE),
+        );
+        app.doc().tree_search = "card".into();
+        let (rows, _) = collect_tree_rows(&app, 0.0, 400.0);
+        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["fr1", "card"], "match + its ancestor only");
+        app.doc().tree_search.clear();
+        let (rows, _) = collect_tree_rows(&app, 0.0, 400.0);
+        assert_eq!(rows.len(), 2, "cleared query → both top frames again");
     }
 
     #[test]
