@@ -1527,12 +1527,7 @@ fn paint_notifications(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action
     for notif in &app.notifications.notifications {
         let nr = Rect::new(panel.x0 + 8.0, y, panel.x1 - 8.0, y + 44.0);
         if !notif.read {
-            fill_rrect(
-                s,
-                nr,
-                4.0,
-                C_UNREAD_WASH,
-            );
+            fill_rrect(s, nr, 4.0, C_UNREAD_WASH);
         }
         draw_icon(
             s,
@@ -2797,13 +2792,7 @@ fn paint_design(
             let active = align.0 == row && align.1 == col;
             let mirror = col == 0 && align.0 == row && align.1 == 2;
             if active || mirror {
-                circle(
-                    s,
-                    dx,
-                    dy,
-                    9.0,
-                    C_WHITE_10,
-                );
+                circle(s, dx, dy, 9.0, C_WHITE_10);
             }
             circle(
                 s,
