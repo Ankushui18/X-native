@@ -8334,8 +8334,8 @@ impl Host {
                         self.app.open_blank();
                     } // New file
                     1 => self.cmd_open_file(), // Open file…
-                    3 => self.cmd_save(), // Save
-                    4 => self.cmd_save_as(), // Save as…
+                    3 => self.cmd_save(),      // Save
+                    4 => self.cmd_save_as(),   // Save as…
                     5 => {
                         self.dispatch(Action::FileDuplicate);
                     } // Duplicate file
