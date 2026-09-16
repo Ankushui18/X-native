@@ -1796,22 +1796,13 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
 
     // F8: the search row is visible while the field is open or the
     // query is non-empty; the tree anchors below it
-    let search_open = app
-        .field
-        .as_ref()
-        .map(|f| f.id)
-        == Some(FieldId::TreeSearch)
+    let search_open = app.field.as_ref().map(|f| f.id) == Some(FieldId::TreeSearch)
         || !app.doc().tree_search.is_empty();
     if search_open {
         let sr = Rect::new(sx + 4.0, ly + 12.0, sx + lw - 4.0, ly + 12.0 + 24.0);
         input_box(app, s, sr, 6.0);
         draw_icon(s, "search", sr.x0 + 8.0, sr.y0 + 6.0, 12.0, C_DIM);
-        let q = if app
-            .field
-            .as_ref()
-            .map(|f| f.id)
-            == Some(FieldId::TreeSearch)
-        {
+        let q = if app.field.as_ref().map(|f| f.id) == Some(FieldId::TreeSearch) {
             app.field.as_ref().unwrap().buffer.clone()
         } else {
             app.doc().tree_search.clone()
@@ -2099,7 +2090,12 @@ fn collect_tree_rows(app: &App, scroll: f64, height: f64) -> (Vec<RowRef>, f64) 
 
 /// F8: record `node` and its path in `found` when it or any descendant
 /// name contains the (lowercased) query.
-fn search_visible(node: &Node, q: &str, path: &mut Vec<&str>, found: &mut HashSet<&str>) -> bool {
+fn search_visible<'a>(
+    node: &'a Node,
+    q: &str,
+    path: &'a mut Vec<&'a str>,
+    found: &'a mut HashSet<&'a str>,
+) -> bool {
     path.push(node.id.as_str());
     let mut match_sub = node.name.to_lowercase().contains(q);
     for c in &node.children {

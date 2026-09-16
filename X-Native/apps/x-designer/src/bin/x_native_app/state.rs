@@ -3226,7 +3226,7 @@ impl App {
 
 #[cfg(test)]
 mod tool_shortcut_tests {
-    use super::Tool;
+    use super::{App, Tool};
 
     #[test]
     fn design_mode_shortcuts_resolve() {
