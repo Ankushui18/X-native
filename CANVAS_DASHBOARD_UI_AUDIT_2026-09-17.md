@@ -173,8 +173,14 @@ browser Library: the document model is a scene graph, not a Figma clone."*
 - Verify **SmartAnimate** interpolation end-to-end in Flow preview (transition is selectable;
   engine untested through the app path).
 - Consolidate on `fire_action`: retire the duplicated `x-editor::Player` loop from app paths.
-- Component **slots/descriptions**: `AddSlot` action exists — extend to full slot editing +
-  description field in component props.
+- ~~Component **slots/descriptions**~~ **COMPLETED 2026-09-17** — the audit undersold both:
+  slot declaration (`+ Slot property`), live render substitution (ir.rs calls `resolve_slots`
+  in the Instance path), and the description field (bindings["component:description"], edited
+  in the master inspector) already existed. The genuine gap — filling/clearing slot content on
+  INSTANCES — is now closed: the COMPONENT panel shows a SLOTS section per instance
+  (status: filled/default/anchor), "from selection" copies another selected layer into the
+  slot re-based on the anchor's transform (set_slot_content), and the ✕ clears it
+  (clear_slot_content) — both checkpointed one-undo steps.
 
 **Dashboard:**
 - ~~**Real thumbnails**~~ **DONE 2026-09-17** — Recents grid now renders each file's first page
