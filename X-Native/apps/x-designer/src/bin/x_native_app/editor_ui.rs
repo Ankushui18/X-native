@@ -1808,9 +1808,11 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             app.doc().tree_search.clone()
         };
         if !q.is_empty() {
-            let shown =
-                app.fonts.truncate(&q, T11, Wt::Reg, (sr.width() - 40.0).max(16.0));
-            app.fonts.text(s, sr.x0 + 26.0, sr.y0 + 6.5, &shown, T11, C_TEXT, Wt::Reg);
+            let shown = app
+                .fonts
+                .truncate(&q, T11, Wt::Reg, (sr.width() - 40.0).max(16.0));
+            app.fonts
+                .text(s, sr.x0 + 26.0, sr.y0 + 6.5, &shown, T11, C_TEXT, Wt::Reg);
             let clr = Rect::new(sr.x1 - 20.0, sr.y0 + 2.0, sr.x1 - 6.0, sr.y1 - 2.0);
             if hover(app, clr) {
                 fill_rrect(s, clr, 4.0, C_FIELD_2);
@@ -2090,11 +2092,11 @@ fn collect_tree_rows(app: &App, scroll: f64, height: f64) -> (Vec<RowRef>, f64) 
 
 /// F8: record `node` and its path in `found` when it or any descendant
 /// name contains the (lowercased) query.
-fn search_visible<'a>(
-    node: &'a Node,
+fn search_visible<'e>(
+    node: &'e Node,
     q: &str,
-    path: &'a mut Vec<&'a str>,
-    found: &'a mut HashSet<&'a str>,
+    path: &mut Vec<&'e str>,
+    found: &mut HashSet<&'e str>,
 ) -> bool {
     path.push(node.id.as_str());
     let mut match_sub = node.name.to_lowercase().contains(q);
@@ -4687,7 +4689,8 @@ fn paint_zoom_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action
             fill_rect(s, r, C_FIELD_2);
         }
         draw_icon(s, ic, r.x0 + 10.0, r.y0 + 8.0, 14.0, C_DIM);
-        app.fonts.text(s, r.x0 + 32.0, r.y0 + 9.0, name, T11, C_TEXT, Wt::Reg);
+        app.fonts
+            .text(s, r.x0 + 32.0, r.y0 + 9.0, name, T11, C_TEXT, Wt::Reg);
         app.fonts.text_right(s, r.x1 - 10.0, r.y0 + 10.0, sc, T10, C_DIM, Wt::Reg, 0.0);
         hit.push((r, Action::ZoomStep(i)));
     }
