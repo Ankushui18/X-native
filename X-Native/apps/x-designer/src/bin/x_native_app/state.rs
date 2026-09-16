@@ -2920,7 +2920,13 @@ impl App {
         let case = self.find_replace.case_sensitive;
         if !q.is_empty() {
             let doc = self.doc();
-            let sel = doc.editor_ref().selection.clone();
+            // the "in selection" toggle scopes the search to the current
+            // selection; off = the whole page
+            let sel = if self.find_replace.in_selection {
+                doc.editor_ref().selection.clone()
+            } else {
+                Vec::new()
+            };
             let root = &doc.editor_ref().root;
             scan_find(root, &q, case, &sel, false, &mut matches);
         }
@@ -2976,8 +2982,7 @@ impl App {
         }
         self.status = format!(
             "Match {}/{}",
-            self.find_replace.current_match,
-            self.find_replace.match_count
+            self.find_replace.current_match, self.find_replace.match_count
         );
     }
 
@@ -3735,6 +3740,14 @@ mod tool_shortcut_tests {
         app.find_replace.case_sensitive = false;
         app.rescan_find();
         assert_eq!(app.find_replace.matches, vec!["t1", "t2"]);
+        // "in selection" scope: after the navs the selection is [t2], so
+        // only t2 is searched
+        app.find_replace.in_selection = true;
+        app.rescan_find();
+        assert_eq!(app.find_replace.matches, vec!["t2"]);
+        app.find_replace.in_selection = false;
+        app.rescan_find();
+        assert_eq!(app.find_replace.matches, vec!["t1", "t2"]);
     }
 
     #[test]
@@ -3784,10 +3797,9 @@ mod tool_shortcut_tests {
             &root_id,
             Node::text("t1", 0.0, 0.0, 100.0, 20.0, "hi there"),
         );
-        app.doc().editor().insert_node(
-            &root_id,
-            Node::text("t2", 0.0, 40.0, 100.0, 20.0, "hi hi"),
-        );
+        app.doc()
+            .editor()
+            .insert_node(&root_id, Node::text("t2", 0.0, 40.0, 100.0, 20.0, "hi hi"));
         app.find_replace.query = "hi".into();
         app.find_replace.replace = "yo".into();
         app.rescan_find();
