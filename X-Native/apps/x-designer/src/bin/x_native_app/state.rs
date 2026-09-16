@@ -3261,16 +3261,24 @@ mod tool_shortcut_tests {
         app.open_blank();
         let doc = app.doc();
         let root_id = doc.editor_ref().root.id.clone();
-        doc.editor().insert_node(&root_id, Node::frame("f1", 300.0, 200.0));
-        doc.editor().insert_node(&root_id, Node::frame("f2", 300.0, 200.0));
+        doc.editor()
+            .insert_node(&root_id, Node::frame("f1", 300.0, 200.0));
+        doc.editor()
+            .insert_node(&root_id, Node::frame("f2", 300.0, 200.0));
         doc.editor()
             .insert_node("f1", Node::rect("r1", 0.0, 0.0, 10.0, 10.0, Color::WHITE));
         doc.expanded.insert("f1".into());
         doc.expanded.insert("f2".into());
         doc.editor().selection.push("r1".into());
         app.collapse_all_layers();
-        assert!(app.doc().expanded.contains("f1"), "selection ancestor stays open");
-        assert!(!app.doc().expanded.contains("f2"), "everything else collapses");
+        assert!(
+            app.doc().expanded.contains("f1"),
+            "selection ancestor stays open"
+        );
+        assert!(
+            !app.doc().expanded.contains("f2"),
+            "everything else collapses"
+        );
     }
 
     #[test]

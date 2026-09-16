@@ -5205,20 +5205,6 @@ impl Host {
                         }
                         return;
                     }
-                    // ⌘= / ⌘- / 0 — the zoom shortcuts the palette
-                    // advertises were never in the handler (audit F7)
-                    "=" => {
-                        self.zoom_at(Point::new(-100.0, -100.0), 1.25);
-                        return;
-                    }
-                    "-" => {
-                        self.zoom_at(Point::new(-100.0, -100.0), 0.8);
-                        return;
-                    }
-                    "0" => {
-                        self.app.zoom = 1.0;
-                        return;
-                    }
                     // Modifier-guarded arms MUST precede the plain Ctrl+C /
                     // Ctrl+V / Ctrl+A arms below: rustc takes the first arm
                     // whose pattern matches, and an unguarded pattern makes
