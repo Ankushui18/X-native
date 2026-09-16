@@ -3450,16 +3450,20 @@ impl Host {
                                     x_native::Paint::Solid(c) => *c,
                                     _ => x_native::Color::BLACK,
                                 };
-                                self.app.doc().editor().mutate_visual_stack(&target, move |n| {
-                                    n.materialize_visual_stacks();
-                                    let stroke = x_native::Stroke::solid(color, w.max(1.0));
-                                    n.stroke = stroke.clone();
-                                    if let Some(layer) = n.stroke_layers.last_mut() {
-                                        layer.stroke = stroke;
-                                    } else {
-                                        n.stroke_layers.push(x_native::StrokeLayer::new(stroke));
-                                    }
-                                });
+                                self.app
+                                    .doc()
+                                    .editor()
+                                    .mutate_visual_stack(&target, move |n| {
+                                        n.materialize_visual_stacks();
+                                        let stroke = x_native::Stroke::solid(color, w.max(1.0));
+                                        n.stroke = stroke.clone();
+                                        if let Some(layer) = n.stroke_layers.last_mut() {
+                                            layer.stroke = stroke;
+                                        } else {
+                                            n.stroke_layers
+                                                .push(x_native::StrokeLayer::new(stroke));
+                                        }
+                                    });
                             } else {
                                 self.app.doc().editor().set_fill(&target, paint);
                             }
