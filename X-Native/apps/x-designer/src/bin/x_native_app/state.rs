@@ -3340,8 +3340,7 @@ pub fn tree_drop_coords(root: &Node, target: &str, zone: u8) -> Option<(String, 
     let pid = parent
         .map(|p| p.id.clone())
         .unwrap_or_else(|| root.id.clone());
-    let slot = parent
-        .and_then(|p| p.children.iter().position(|c| c.id == node.id))?;
+    let slot = parent.and_then(|p| p.children.iter().position(|c| c.id == node.id))?;
     match zone {
         0 => Some((pid, slot)),
         2 => Some((pid, slot + 1)),

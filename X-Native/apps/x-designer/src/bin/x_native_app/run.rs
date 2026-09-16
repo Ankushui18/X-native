@@ -3840,7 +3840,12 @@ impl Host {
                     *cur = world;
                 }
             }
-            Some(Drag::TreeRow { id, start, active, .. }) => {
+            Some(Drag::TreeRow {
+                id,
+                start,
+                active,
+                ..
+            }) => {
                 if !active {
                     if (p.x - start.x).abs().max((p.y - start.y).abs()) < 4.0 {
                         return;

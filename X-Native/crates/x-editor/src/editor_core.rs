@@ -2991,8 +2991,11 @@ mod reliability_history_tests {
         // unknown ids
         assert!(!ed.reorder_node("nope", &root_id, 0, &root_id, 0));
         assert!(!ed.reorder_node("fr2", &root_id, 1, "ghost", 0));
-        // nothing was recorded: undo has nothing to restore
-        assert!(!ed.undo());
-        assert_eq!(ids_of(&ed.root), vec!["fr", "fr2"]);
+        // no reorder was recorded: undo pops the last setup INSERT,
+        // not a reorder
+        assert!(ed.undo());
+        assert!(ed.get_node("fr2").is_none());
+        assert!(ed.get_node("fr").is_some());
+        assert_eq!(ids_of(&ed.root), vec!["fr"]);
     }
 }
