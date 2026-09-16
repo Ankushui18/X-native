@@ -128,6 +128,11 @@ pub enum VariableCommand {
         from: Option<VarValue>,
         to: Option<VarValue>,
     },
+    /// Several edits applied as one history unit (e.g. a rename that moves
+    /// the value, re-points old references via an alias, and retires the old
+    /// entry). Applies in order; the inverse applies the inverted commands
+    /// in reverse order.
+    Batch(Vec<VariableCommand>),
 }
 
 /// Apply one variable edit. Returns `false` (and changes nothing) when the
@@ -244,6 +249,13 @@ pub fn apply_variable(vars: &mut Variables, cmd: &VariableCommand) -> bool {
                 },
             }
         }
+        VariableCommand::Batch(cmds) => {
+            let mut any = false;
+            for c in cmds {
+                any |= apply_variable(vars, c);
+            }
+            any
+        }
     }
 }
 
@@ -284,6 +296,9 @@ pub fn invert_variable(cmd: &VariableCommand) -> VariableCommand {
             from: to.clone(),
             to: from.clone(),
         },
+        VariableCommand::Batch(cmds) => {
+            VariableCommand::Batch(cmds.iter().rev().map(invert_variable).collect())
+        }
     }
 }
 
@@ -510,6 +525,46 @@ pub fn remove_mode_value(vars: &Variables, name: &str, mode: &str) -> Option<Var
         from: Some(from),
         to: None,
     })
+}
+
+/// Rename a variable as one undoable [`VariableCommand::Batch`]: the value
+/// moves to `new`, the old name becomes an alias of the new one (so existing
+/// bindings — `Node::bind`, style refs, prototype expressions — keep
+/// resolving), and the old entry is retired. Renaming an alias re-points it
+/// instead. Mode-scoped overrides keep the old name in v1 (resolution goes
+/// through the alias only for base lookups). `None` when `new` is empty,
+/// equals `old`, or `old` has neither value nor alias.
+pub fn rename_variable(vars: &Variables, old: &str, new: &str) -> Option<VariableCommand> {
+    let new = new.trim();
+    if new.is_empty() || new == old {
+        return None;
+    }
+    if let Some(target) = vars.aliases.get(old).cloned() {
+        // Re-point the alias under its new name and retire the old one
+        // (chains stay within the model's MAX_ALIAS_DEPTH walk).
+        return Some(VariableCommand::Batch(vec![
+            set_alias(vars, old, None),
+            VariableCommand::SetAlias {
+                name: new.to_string(),
+                from: None,
+                to: Some(target),
+            },
+        ]));
+    }
+    let value = snapshot_base(vars, old)?;
+    Some(VariableCommand::Batch(vec![
+        VariableCommand::SetBase {
+            name: new.to_string(),
+            from: snapshot_base(vars, new),
+            to: Some(value.clone()),
+        },
+        set_alias(vars, old, Some(new)),
+        VariableCommand::SetBase {
+            name: old.to_string(),
+            from: Some(value),
+            to: None,
+        },
+    ]))
 }
 
 /// Convenience: apply a batch (e.g. one panel edit fanned out over several
@@ -757,5 +812,43 @@ mod tests {
         ];
         assert_eq!(apply_all(&mut vars, &cmds), 3);
         assert_eq!(vars.get("flag"), Some(Value::Bool(true)));
+    }
+
+    #[test]
+    fn rename_moves_value_keeps_old_references_and_undo_restores() {
+        let mut vars = Variables::default();
+        let mut h = VariableHistory::default();
+        h.commit(&mut vars, set_number(&vars, "gap", 8.0));
+        let cmd = rename_variable(&vars, "gap", "spacing").unwrap();
+        assert!(h.commit(&mut vars, cmd));
+        assert_eq!(vars.get("spacing"), Some(Value::Num(8.0)));
+        // Old references keep resolving through the alias…
+        assert_eq!(vars.get("gap"), Some(Value::Num(8.0)));
+        // …but the old entry is retired (the catalog shows one variable).
+        assert!(!vars.numbers.contains_key("gap"));
+        assert_eq!(vars.catalog().len(), 1);
+        // One undo reverts the whole rename.
+        assert!(h.undo(&mut vars));
+        assert_eq!(vars.get("gap"), Some(Value::Num(8.0)));
+        assert!(!vars.numbers.contains_key("spacing"));
+        assert_eq!(vars.aliases.get("gap"), None);
+        // Guards: empty and same-name renames are rejected.
+        assert!(rename_variable(&vars, "gap", "").is_none());
+        assert!(rename_variable(&vars, "gap", "gap").is_none());
+    }
+
+    #[test]
+    fn rename_alias_repoints_instead() {
+        let mut vars = Variables::default();
+        let mut h = VariableHistory::default();
+        h.commit(&mut vars, set_number(&vars, "radius", 8.0));
+        h.commit(&mut vars, set_alias(&vars, "r", Some("radius")));
+        let cmd = rename_variable(&vars, "r", "corner").unwrap();
+        assert!(h.commit(&mut vars, cmd));
+        assert_eq!(vars.get("corner"), Some(Value::Num(8.0)));
+        assert_eq!(vars.aliases.get("r"), None);
+        assert!(h.undo(&mut vars));
+        assert_eq!(vars.aliases.get("r").map(String::as_str), Some("radius"));
+        assert_eq!(vars.aliases.get("corner"), None);
     }
 }

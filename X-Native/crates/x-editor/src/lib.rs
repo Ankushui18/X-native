@@ -49,8 +49,8 @@ pub use prototype::*;
 pub use selection::*;
 pub use variable_commands::{
     apply_all, apply_variable, clear_active_mode, invert_variable, remove_mode_value,
-    remove_variable, set_active_mode, set_alias, set_bool, set_collection, set_color,
-    set_exposed, set_mode_value, set_number, set_string, VarValue, VariableCommand,
+    remove_variable, rename_variable, set_active_mode, set_alias, set_bool, set_collection,
+    set_color, set_exposed, set_mode_value, set_number, set_string, VarValue, VariableCommand,
     VariableHistory,
 };
 pub use shape_builder::{
