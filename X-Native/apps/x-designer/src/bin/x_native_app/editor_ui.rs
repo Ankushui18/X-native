@@ -988,8 +988,18 @@ fn input_box(app: &App, s: &mut Scene, r: Rect, radius: f64) {
 // ------------------------------------------------------------- canvas bg
 
 fn paint_canvas_bg(app: &App, s: &mut Scene) {
+    if !app.canvas_bg_visible {
+        return;
+    }
     let r = app.editor_regions();
-    fill_rect(s, r.canvas, app.canvas_bg);
+    let a = (app.canvas_bg_alpha / 100.0).clamp(0.0, 1.0);
+    let c = vello::peniko::Color::new([
+        app.canvas_bg.components[0] * a,
+        app.canvas_bg.components[1] * a,
+        app.canvas_bg.components[2] * a,
+        app.canvas_bg.components[3] * a,
+    ]);
+    fill_rect(s, r.canvas, c);
 }
 
 // ------------------------------------------------------------ title 36px
@@ -1384,7 +1394,16 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         14.0,
         C_DIM,
     );
-    let query = if app.find_replace.query.is_empty() {
+    let query = if app
+        .field
+        .as_ref()
+        .is_some_and(|f| f.id == FieldId::FindQuery)
+    {
+        app.field
+            .as_ref()
+            .map(|f| f.buffer.clone())
+            .unwrap_or_default()
+    } else if app.find_replace.query.is_empty() {
         "Search…".to_string()
     } else {
         app.find_replace.query.clone()
@@ -1403,6 +1422,8 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         qc,
         Wt::Reg,
     );
+    // P13: the search row is a real field (was painted without a hit)
+    hit.push((search_r, Action::Field(FieldId::FindQuery)));
     if !app.find_replace.query.is_empty() {
         let match_text = format!(
             "{}/{}",
@@ -1450,7 +1471,16 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         let replace_r = Rect::new(fx + 6.0, ry, fx + fw - 6.0, ry + 22.0);
         fill_rrect(s, replace_r, 4.0, C_BG);
         stroke_rrect(s, replace_r, 4.0, C_LINE, 1.0);
-        let rep_text = if app.find_replace.replace.is_empty() {
+        let rep_text = if app
+            .field
+            .as_ref()
+            .is_some_and(|f| f.id == FieldId::FindReplace)
+        {
+            app.field
+                .as_ref()
+                .map(|f| f.buffer.clone())
+                .unwrap_or_default()
+        } else if app.find_replace.replace.is_empty() {
             "Replace…".to_string()
         } else {
             app.find_replace.replace.clone()
@@ -1469,6 +1499,8 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
             rc,
             Wt::Reg,
         );
+        // P13: the replace row is a real field (was painted without a hit)
+        hit.push((replace_r, Action::Field(FieldId::FindReplace)));
 
         // Replace / Replace All buttons
         let btn_y = ry + 26.0;
@@ -1484,6 +1516,19 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
             Wt::Reg,
         );
         hit.push((repl_all_r, Action::ReplaceAll));
+        // P13: single-replace for the current match (was missing)
+        let repl_r = Rect::new(fx + 6.0, btn_y, fx + 6.0 + 64.0, btn_y + 18.0);
+        fill_rrect(s, repl_r, 4.0, C_FIELD_2);
+        app.fonts.text(
+            s,
+            repl_r.x0 + 6.0,
+            repl_r.y0 + 3.0,
+            "Replace",
+            T10,
+            C_TEXT,
+            Wt::Reg,
+        );
+        hit.push((repl_r, Action::Replace));
     }
 
     // Toggle row
@@ -1649,7 +1694,6 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     draw_icon(s, "box", sx + 16.0, y0 + 16.0, 12.0, C_DIM);
     app.fonts
         .micro_label(s, sx + 36.0, y0 + 13.3, "DRAFTS", C_DIM, Wt::Med);
-    draw_icon(s, "more-horizontal", lw - 27.0, y0 + 13.0, 14.0, C_DIM);
 
     // file name row (editable) — the mock's file-name-text, independent
     // from the active tab name
@@ -2765,12 +2809,14 @@ fn paint_design_empty(
     xr: f64,
     y0: f64,
 ) {
-    let w = xr - x0;
+    let pct_w = 64.0;
 
     // CANVAS BACKGROUND
     app.fonts
         .micro_label(s, x0, y0 + 14.0, "CANVAS BACKGROUND", C_DIM, Wt::Med);
-    let f1 = Rect::new(x0, y0 + 30.0, x0 + w, y0 + 58.0);
+    // P13: canvas background gains opacity % + visibility (Figma parity),
+    // mirroring the pixel-grid row layout below
+    let f1 = Rect::new(x0, y0 + 30.0, xr - pct_w - 8.0, y0 + 58.0);
     input_box(app, s, f1, R_INPUT);
     fill_rrect(
         s,
@@ -2789,11 +2835,31 @@ fn paint_design_empty(
     app.fonts
         .text(s, x0 + 30.0, y0 + 37.8, &bg_hex, T11, C_TEXT, Wt::Mono);
     hit.push((f1, Action::Field(FieldId::CanvasBg)));
+    let bg_alpha = field_val(
+        app,
+        FieldId::CanvasBgAlpha,
+        format!("{}", app.canvas_bg_alpha.round() as i64),
+    );
+    let fa = Rect::new(xr - pct_w, y0 + 30.0, xr, y0 + 58.0);
+    input_box(app, s, fa, R_INPUT);
+    app.fonts
+        .text(s, fa.x0 + 9.0, y0 + 36.5, "%", T10, C_DIM, Wt::Reg);
+    app.fonts
+        .text(s, fa.x0 + 33.5, y0 + 37.8, &bg_alpha, T11, C_TEXT, Wt::Mono);
+    hit.push((fa, Action::Field(FieldId::CanvasBgAlpha)));
+    let eye = Rect::new(f1.x1 - 24.0, f1.y0 + 6.0, f1.x1 - 6.0, f1.y1 - 6.0);
+    if hover(app, eye) {
+        fill_rrect(s, eye, 4.0, C_FIELD_2);
+    }
+    let eye_name = if app.canvas_bg_visible { "eye" } else { "eye-off" };
+    let eye_col = if app.canvas_bg_visible { C_TEXT } else { C_DIM };
+    draw_icon(s, eye_name, eye.x0 + 1.0, f1.y0 + 8.0, 12.0, eye_col);
+    tip(app, eye, "Show / hide canvas background");
+    hit.push((eye, Action::ToggleCanvasBgVisibility));
 
     // PIXEL GRID COLOR
     app.fonts
         .micro_label(s, x0, y0 + 74.0, "PIXEL GRID COLOR", C_DIM, Wt::Med);
-    let pct_w = 64.0;
     let f2 = Rect::new(x0, y0 + 90.0, xr - pct_w - 8.0, y0 + 118.0);
     input_box(app, s, f2, R_INPUT);
     fill_rrect(
@@ -2995,7 +3061,6 @@ fn paint_design(
 
     app.fonts
         .text(s, x0, y0 + 209.0, "Flow", T10, C_DIM, Wt::Reg);
-    draw_icon(s, "arrow-up-right", xr - 14.0, y0 + 207.5, 14.0, C_DIM);
     let flow_xs = [0.0, 80.3, 160.5, 240.8];
     let flow = app.doc().flow;
     let boot_mock = app.doc().flow_boot_mock;
@@ -3093,10 +3158,6 @@ fn paint_design(
             ));
         }
     }
-    let mz = Rect::new(x0 + 283.0, y0 + 299.0, x0 + 315.0, y0 + 331.0);
-    input_box(app, s, mz, 8.0);
-    draw_icon(s, "maximize-2", mz.x0 + 9.0, mz.y0 + 9.0, 14.0, C_DIM);
-
     app.fonts
         .text(s, x0, y0 + 347.0, "Alignment", T10, C_DIM, Wt::Reg);
     app.fonts
@@ -3184,9 +3245,6 @@ fn paint_design(
             .text(s, g.x1 + 5.0, pr.y0 + 6.8, &v, T11, C_TEXT, Wt::Reg);
         hit.push((pr, Action::Field(fid)));
     }
-    let pgb = Rect::new(x0 + 283.0, y0 + 493.0, x0 + 315.0, y0 + 525.0);
-    input_box(app, s, pgb, 8.0);
-    draw_icon(s, "layout-grid", pgb.x0 + 9.0, pgb.y0 + 9.0, 14.0, C_DIM);
 
     // ---- A3/A4 row: Wrap (frame WITH auto-layout) or, for a CHILD of
     // an auto-layout frame, Fill container + Absolute position. Sits in
@@ -3940,9 +3998,16 @@ fn paint_design(
         Action::AddGuide,
     ));
     y += 14.0 + 8.0;
+    // P13: the guide overflow was dead; the guides list only ever gains
+    // entries, so the honest control is a clear-all button
     let mvb = Rect::new(rx + pl, y, rx + pl + 24.0, y + 28.0);
     input_box(app, s, mvb, 6.0);
-    draw_icon(s, "more-vertical", mvb.x0 + 6.0, mvb.y0 + 6.0, 12.0, C_DIM);
+    if hover(app, mvb) {
+        fill_rrect(s, mvb, 6.0, C_FIELD_2);
+    }
+    draw_icon(s, "trash-2", mvb.x0 + 6.0, mvb.y0 + 6.0, 12.0, C_DIM);
+    tip(app, mvb, "Clear all guides");
+    hit.push((mvb, Action::RemoveGuide));
     let kd_w = inner_w - 24.0 - 48.0 - 24.0 - 24.0 - 6.0 * 4.0;
     let kd = Rect::new(mvb.x1 + 6.0, y, mvb.x1 + 6.0 + kd_w, y + 28.0);
     let kind_label = if app.doc().guide_kind == 0 {
@@ -6027,7 +6092,17 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
                 Wt::Med,
                 true,
             );
-            draw_icon(s, "trash-2", card.x0 + 126.0, card.y0 + 51.0, 14.0, C_DIM);
+            // Delete: `canvas_press` handles the del click at
+            // (sp.x+126, sp.y+6, +42, +24); card.x0 = sp.x+32 and
+            // card.y0 = sp.y-28, so the icon centers in that rect
+            draw_icon(
+                s,
+                "trash-2",
+                card.x0 + 108.0,
+                card.y0 + 39.0,
+                14.0,
+                C_DIM,
+            );
         }
     }
     // the composer (new comment)

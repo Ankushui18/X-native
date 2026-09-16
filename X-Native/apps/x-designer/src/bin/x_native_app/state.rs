@@ -516,6 +516,12 @@ pub enum Action {
     FindNext,
     FindPrev,
     ReplaceAll,
+    /// P13: replace the occurrences in the current match only
+    Replace,
+    /// P13: canvas background visibility toggle (Figma parity)
+    ToggleCanvasBgVisibility,
+    /// P13: dashboard view chip — cycle Home -> Recents -> Starred -> Trash
+    CycleDashView,
     ToggleCaseSensitive,
     ToggleFindInSelection,
     ToggleNotifications,
@@ -747,6 +753,13 @@ pub enum FieldId {
     GridPct,
     /// Right-panel zoom % box
     Zoom,
+    /// No-selection DESIGN panel: canvas background opacity %
+    CanvasBgAlpha,
+    /// Find panel: search query (Enter keeps the field open, like
+    /// `TreeSearch`; the query lives in `App::find_replace`)
+    FindQuery,
+    /// Find panel: replacement string
+    FindReplace,
 }
 
 /// An armed `AfterDelay` trigger in the flow preview: fire `action` when
@@ -778,6 +791,9 @@ pub struct FindReplace {
     pub in_selection: bool,
     pub match_count: usize,
     pub current_match: usize,
+    /// P13: ids of the matched text layers, document order (rebuilt by
+    /// `App::rescan_find`)
+    pub matches: Vec<String>,
 }
 
 /// Notification center state (Figma navigation bar bottom).
@@ -1408,6 +1424,13 @@ pub struct App {
     pub rulers: bool,
     /// DESIGN panel (no selection): editor canvas background
     pub canvas_bg: Color,
+    /// Canvas background opacity % (Figma parity; audit P13)
+    pub canvas_bg_alpha: f64,
+    /// Canvas background visibility (Figma parity; audit P13)
+    pub canvas_bg_visible: bool,
+    /// Eyedropper armed: the next canvas click samples a layer's fill
+    /// (audit P13 — the action used to only print a status line)
+    pub eyedropper: bool,
     /// DESIGN panel (no selection): pixel grid color + opacity %
     pub grid_color: Color,
     pub grid_pct: f64,
@@ -1573,6 +1596,9 @@ impl App {
             // canvas matches the HTML `.canvas` token; grid per the design
             // empty-selection panel (PIXEL GRID COLOR 0070E4 @ 20%)
             canvas_bg: crate::theme::C_CANVAS,
+            canvas_bg_alpha: 100.0,
+            canvas_bg_visible: true,
+            eyedropper: false,
             grid_color: Color::from_rgb8(0x00, 0x70, 0xE4),
             grid_pct: 20.0,
             align: (0, 2),
@@ -2884,6 +2910,153 @@ impl App {
         doc.expanded.retain(|id| keep.contains(id));
     }
 
+    /// P13: rebuild the find/replace match list from the current query.
+    /// Scans text layers of the active page (case per `case_sensitive`);
+    /// `in_selection` restricts the search to the selected subtrees.
+    pub fn rescan_find(&mut self) {
+        let mut matches: Vec<String> = Vec::new();
+        let q = self.find_replace.query.trim();
+        let case = self.find_replace.case_sensitive;
+        if !q.is_empty() {
+            let doc = self.doc();
+            let sel = doc.editor_ref().selection.clone();
+            let root = &doc.editor_ref().root;
+            scan_find(root, q, case, &sel, false, &mut matches);
+        }
+        self.find_replace.matches = matches.clone();
+        self.find_replace.match_count = matches.len();
+        if self.find_replace.current_match == 0
+            || self.find_replace.current_match > matches.len()
+        {
+            self.find_replace.current_match = matches.len().min(1);
+        }
+    }
+
+    /// P13: step to the next (1) / previous (-1) find match, wrapping;
+    /// selects the matched layer and centers the camera on it.
+    pub fn find_nav(&mut self, dir: i32) {
+        if self.find_replace.query.is_empty() {
+            return;
+        }
+        if self.find_replace.matches.is_empty() {
+            self.rescan_find();
+        }
+        let n = self.find_replace.matches.len();
+        if n == 0 {
+            self.status = "No matches".into();
+            return;
+        }
+        let cur = self.find_replace.current_match.clamp(1, n);
+        let step = if dir < 0 { n - 1 } else { 1 };
+        let next = (cur - 1 + step) % n + 1;
+        self.find_replace.current_match = next;
+        let id = self.find_replace.matches[next - 1].clone();
+        let doc = self.doc();
+        doc.editor().selection = vec![id.clone()];
+        if let Some(node) = doc.editor_ref().get_node(&id) {
+            let center_w = Point::new(
+                node.transform.x + node.w / 2.0,
+                node.transform.y + node.h / 2.0,
+            );
+            let sp = self.world_to_screen(center_w);
+            let reg = self.editor_regions();
+            let cx = (reg.canvas.x0 + reg.canvas.x1) / 2.0;
+            let cy = (reg.canvas.y0 + reg.canvas.y1) / 2.0;
+            self.pan = (self.pan.0 + (cx - sp.x), self.pan.1 + (cy - sp.y));
+        }
+        self.status = format!(
+            "Match {}/{}",
+            self.find_replace.current_match,
+            self.find_replace.match_count
+        );
+    }
+
+    /// P13: replace every occurrence of the query in every matched text
+    /// layer (one undo entry per layer). Returns the number of layers
+    /// changed.
+    pub fn replace_all_find(&mut self) -> usize {
+        let (q, repl, case) = (
+            self.find_replace.query.trim().to_string(),
+            self.find_replace.replace.clone(),
+            self.find_replace.case_sensitive,
+        );
+        if q.is_empty() || self.find_replace.matches.is_empty() {
+            return 0;
+        }
+        let ids = self.find_replace.matches.clone();
+        let mut changed = 0;
+        for id in &ids {
+            let new = {
+                let doc = self.doc();
+                let Some(node) = doc.editor_ref().get_node(id) else {
+                    continue;
+                };
+                match &node.kind {
+                    NodeKind::Text { text } => {
+                        let new = replace_all_text(text, &q, &repl, case);
+                        if new == *text {
+                            continue;
+                        }
+                        Some(new)
+                    }
+                    _ => continue,
+                }
+            };
+            if let Some(new) = new {
+                let doc = self.doc();
+                doc.editor().set_text(id, &new);
+                changed += 1;
+            }
+        }
+        if changed > 0 {
+            self.mark_dirty();
+        }
+        self.rescan_find();
+        changed
+    }
+
+    /// P13: replace every occurrence of the query in the *current* match
+    /// only (the "Replace" button, as opposed to `replace_all_find`).
+    pub fn replace_current_find(&mut self) -> bool {
+        let (q, repl, case) = (
+            self.find_replace.query.trim().to_string(),
+            self.find_replace.replace.clone(),
+            self.find_replace.case_sensitive,
+        );
+        if q.is_empty() || self.find_replace.matches.is_empty() {
+            return false;
+        }
+        let cur = self
+            .find_replace
+            .current_match
+            .clamp(1, self.find_replace.matches.len());
+        let id = self.find_replace.matches[cur - 1].clone();
+        let new = {
+            let doc = self.doc();
+            let Some(node) = doc.editor_ref().get_node(&id) else {
+                return false;
+            };
+            match &node.kind {
+                NodeKind::Text { text } => {
+                    let new = replace_all_text(text, &q, &repl, case);
+                    if new == *text {
+                        return false;
+                    }
+                    Some(new)
+                }
+                _ => return false,
+            }
+        };
+        if let Some(new) = new {
+            let doc = self.doc();
+            doc.editor().set_text(&id, &new);
+            self.mark_dirty();
+            self.rescan_find();
+            return true;
+        }
+        false
+    }
+
     /// P12: apply a layers-tree drop (from the active `Drag::TreeRow`):
     /// reorder the dragged row to the resolved target and keep it
     /// selected. No-op when there is no live drag or the move is
@@ -3295,8 +3468,73 @@ pub fn try_import_from_figma_clipboard() -> Option<x_native::Document> {
     }
 }
 
-/// DFS from `node` to `target`, recording the root→target path in
-/// `keep` when found (audit F6: collapse-all keeps selection ancestors).
+/// P13: collect ids of text layers whose content matches `q` (case per
+/// `case_sensitive`); `sel` non-empty restricts the search to the
+/// selected subtrees (Figma's "find in selection").
+fn scan_find(
+    node: &Node,
+    q: &str,
+    case: bool,
+    sel: &[String],
+    in_sel: bool,
+    out: &mut Vec<String>,
+) {
+    if !sel.is_empty() && !in_sel && !sel.iter().any(|s| s == &node.id) {
+        return; // outside every selected subtree
+    }
+    let in_sel = in_sel || sel.iter().any(|s| s == &node.id);
+    if let NodeKind::Text { text } = &node.kind {
+        let hit = if case {
+            text.contains(q)
+        } else {
+            text.to_lowercase().contains(&q.to_lowercase())
+        };
+        if hit {
+            out.push(node.id.clone());
+        }
+    }
+    for c in &node.children {
+        scan_find(c, q, case, sel, in_sel, out);
+    }
+}
+
+/// P13: case-aware literal replace-all over a string.
+pub fn replace_all_text(text: &str, q: &str, repl: &str, case: bool) -> String {
+    if q.is_empty() {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < text.len() {
+        let matched = if case {
+            text[i..].starts_with(q)
+        } else {
+            case_insensitive_prefix(&text[i..], q)
+        };
+        if matched {
+            out.push_str(repl);
+            i += q.len();
+        } else {
+            let ch = text[i..].chars().next().map_or(1, |c| c.len_utf8());
+            out.push_str(&text[i..i + ch]);
+            i += ch;
+        }
+    }
+    out
+}
+
+fn case_insensitive_prefix(hay: &str, needle: &str) -> bool {
+    let hc: Vec<char> = hay.chars().collect();
+    let nc: Vec<char> = needle.chars().collect();
+    if hc.len() < nc.len() {
+        return false;
+    }
+    hc[..nc.len()]
+        .iter()
+        .zip(nc.iter())
+        .all(|(a, b)| a.to_lowercase().eq(b.to_lowercase()))
+}
+
 /// P12: `(parent id, child index)` of `id` within `root` — a top-level
 /// child reports the root's own id as parent. `None` for the root or an
 /// unknown id.
@@ -3433,6 +3671,124 @@ mod tool_shortcut_tests {
         assert!(
             !app.doc().expanded.contains("f2"),
             "everything else collapses"
+        );
+    }
+
+    #[test]
+    fn replace_all_text_handles_case_and_boundaries() {
+        assert_eq!(replace_all_text("a b a", "a", "c", true), "c b c");
+        assert_eq!(replace_all_text("banana", "an", "X", true), "bXna");
+        assert_eq!(replace_all_text("A a Ab", "a", "c", false), "c c cb");
+        assert_eq!(replace_all_text("hello", "z", "q", true), "hello");
+        assert_eq!(replace_all_text("abc", "", "c", true), "abc");
+        assert_eq!(replace_all_text("", "a", "c", false), "");
+    }
+
+    #[test]
+    fn find_matches_text_layers_and_navigates() {
+        let mut app = App::new();
+        app.open_blank();
+        let root_id = app.doc().editor_ref().root.id.clone();
+        app.doc().editor().insert_node(
+            &root_id,
+            Node::text("t1", 0.0, 0.0, 100.0, 20.0, "Hello world"),
+        );
+        app.doc().editor().insert_node(
+            &root_id,
+            Node::text("t2", 0.0, 40.0, 100.0, 20.0, "hello again"),
+        );
+        app.doc().editor().insert_node(
+            &root_id,
+            Node::text("t3", 0.0, 80.0, 100.0, 20.0, "goodbye"),
+        );
+        app.find_replace.query = "hello".into();
+        app.rescan_find();
+        assert_eq!(app.find_replace.matches, vec!["t1", "t2"]);
+        assert_eq!(app.find_replace.match_count, 2);
+        app.find_nav(1);
+        assert_eq!(app.find_replace.current_match, 1);
+        assert_eq!(app.doc().editor_ref().selection, vec!["t1".to_string()]);
+        app.find_nav(1);
+        assert_eq!(app.find_replace.current_match, 2);
+        app.find_nav(1); // wraps to first
+        assert_eq!(app.find_replace.current_match, 1);
+        app.find_nav(-1); // wraps to last
+        assert_eq!(app.find_replace.current_match, 2);
+        // case sensitivity
+        app.find_replace.query = "HELLO".into();
+        app.find_replace.case_sensitive = true;
+        app.rescan_find();
+        assert_eq!(app.find_replace.matches, vec!["t1"]);
+    }
+
+    #[test]
+    fn replace_all_find_rewrites_and_is_undoable() {
+        let mut app = App::new();
+        app.open_blank();
+        let root_id = app.doc().editor_ref().root.id.clone();
+        app.doc().editor().insert_node(
+            &root_id,
+            Node::text("t1", 0.0, 0.0, 100.0, 20.0, "hello hello"),
+        );
+        app.doc().editor().insert_node(
+            &root_id,
+            Node::text("t2", 0.0, 40.0, 100.0, 20.0, "hello there"),
+        );
+        app.find_replace.query = "hello".into();
+        app.find_replace.replace = "hi".into();
+        app.rescan_find();
+        assert_eq!(app.replace_all_find(), 2);
+        let doc = app.doc();
+        assert_eq!(
+            doc.editor_ref().get_node("t1").unwrap().kind,
+            NodeKind::Text {
+                text: "hi hi".into()
+            }
+        );
+        assert_eq!(
+            doc.editor_ref().get_node("t2").unwrap().kind,
+            NodeKind::Text {
+                text: "hi there".into()
+            }
+        );
+        // both layers back with two undos
+        assert!(app.doc().editor().undo());
+        assert!(app.doc().editor().undo());
+        let doc = app.doc();
+        let t1 = doc.editor_ref().get_node("t1").unwrap();
+        assert!(matches!(&t1.kind, NodeKind::Text { text } if text == "hello hello"));
+    }
+
+    #[test]
+    fn replace_current_find_touches_only_the_active_match() {
+        let mut app = App::new();
+        app.open_blank();
+        let root_id = app.doc().editor_ref().root.id.clone();
+        app.doc().editor().insert_node(
+            &root_id,
+            Node::text("t1", 0.0, 0.0, 100.0, 20.0, "hi there"),
+        );
+        app.doc().editor().insert_node(
+            &root_id,
+            Node::text("t2", 0.0, 40.0, 100.0, 20.0, "hi hi"),
+        );
+        app.find_replace.query = "hi".into();
+        app.find_replace.replace = "yo".into();
+        app.rescan_find();
+        app.find_nav(2); // current match = t2
+        assert!(app.replace_current_find());
+        let doc = app.doc();
+        assert_eq!(
+            doc.editor_ref().get_node("t1").unwrap().kind,
+            NodeKind::Text {
+                text: "hi there".into()
+            }
+        );
+        assert_eq!(
+            doc.editor_ref().get_node("t2").unwrap().kind,
+            NodeKind::Text {
+                text: "yo yo".into()
+            }
         );
     }
 

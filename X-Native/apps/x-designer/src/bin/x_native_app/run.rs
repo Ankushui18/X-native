@@ -3406,6 +3406,50 @@ impl Host {
         if self.app.guide_press(p) {
             return;
         }
+        // P13: eyedropper — the first canvas click samples the topmost
+        // layer's fill into the current selection
+        if self.app.eyedropper {
+            self.app.eyedropper = false;
+            let world = self.app.screen_to_world(p);
+            let id = {
+                let doc = self.app.doc();
+                x_native::editor::hit_test(&doc.editor_ref().root, world)
+            };
+            match id {
+                Some(id) => {
+                    let (paint, sel) = {
+                        let doc = self.app.doc();
+                        let Some(node) = doc.editor_ref().get_node(&id) else {
+                            self.app.status = "Eyedropper: layer not found".into();
+                            return;
+                        };
+                        let paint = node
+                            .fill_layers
+                            .iter()
+                            .find(|l| l.visible)
+                            .map(|l| l.paint.clone())
+                            .unwrap_or_else(|| node.fill.clone());
+                        let sel = doc.selected_id();
+                        (paint, sel)
+                    };
+                    match sel {
+                        Some(target) if target != id => {
+                            let doc = self.app.doc();
+                            doc.editor().set_fill(&target, paint);
+                            self.app.mark_dirty();
+                            self.app.status = format!("Sampled color from {id}");
+                        }
+                        Some(_) => self.app.status = "Already the same layer"
+                            .into(),
+                        _ => self.app.status = "Select a layer first, then sample"
+                            .into(),
+                    }
+                }
+                None => self.app.status =
+                    "Eyedropper: no layer under the cursor".into(),
+            }
+            return;
+        }
         // ---- comments (C18): composer, then pins -------------------
         if let Some(d) = self.app.comment_draft.clone() {
             let sp = self.app.world_to_screen(vello::kurbo::Point::new(d.x, d.y));
@@ -3436,7 +3480,10 @@ impl Host {
                 doc.doc.comments.iter().find(|c| c.id == id).cloned()
             } {
                 let sp = self.app.world_to_screen(vello::kurbo::Point::new(c.x, c.y));
-                let resolve = Rect::new(sp.x + 28.0, sp.y + 6.0, sp.x + 118.0, sp.y + 30.0);
+                // P13: rects match the painted pill (card.x0 = sp.x+32,
+                // card.y0 = sp.y-28; pill at card +12/+48, 84×22) — the
+                // old resolve rect missed most of the pill
+                let resolve = Rect::new(sp.x + 44.0, sp.y + 20.0, sp.x + 128.0, sp.y + 42.0);
                 let del = Rect::new(sp.x + 126.0, sp.y + 6.0, sp.x + 168.0, sp.y + 30.0);
                 if resolve.contains(p) {
                     let next = !c.resolved;
@@ -7849,10 +7896,16 @@ impl Host {
                 }
             }
             Action::OpenDraft(i) => {
-                if !self.app.demo_mode {
+                if !self.finish_edits() {
                     return;
                 }
-                if !self.finish_edits() {
+                let path = self.app.drafts.get(i).and_then(|d| d.path.clone());
+                if let Some(p) = path {
+                    // P13: saved drafts open like any other file
+                    self.open_path(p);
+                    return;
+                }
+                if !self.app.demo_mode {
                     return;
                 }
                 let name = self
@@ -8276,27 +8329,22 @@ impl Host {
             Action::CloseFind => {
                 self.app.find_replace.open = false;
             }
-            Action::FindNext => {
-                // Advance to next match (simplified)
-                if self.app.find_replace.match_count > 0 {
-                    self.app.find_replace.current_match = (self.app.find_replace.current_match
-                        % self.app.find_replace.match_count)
-                        + 1;
-                }
-            }
-            Action::FindPrev => {
-                if self.app.find_replace.match_count > 0 {
-                    let cur = self.app.find_replace.current_match;
-                    self.app.find_replace.current_match = if cur <= 1 {
-                        self.app.find_replace.match_count
-                    } else {
-                        cur - 1
-                    };
-                }
-            }
+            Action::FindNext => self.app.find_nav(1),
+            Action::FindPrev => self.app.find_nav(-1),
             Action::ReplaceAll => {
-                // Simplified replace all
-                self.app.status = "Replace all: not yet implemented".into();
+                let changed = self.app.replace_all_find();
+                self.app.status = if changed > 0 {
+                    format!("Replaced matches in {changed} layers")
+                } else {
+                    "Nothing to replace".to_string()
+                };
+            }
+            Action::Replace => {
+                self.app.status = if self.app.replace_current_find() {
+                    "Replaced current match".to_string()
+                } else {
+                    "Nothing to replace".to_string()
+                };
             }
             Action::ToggleCaseSensitive => {
                 self.app.find_replace.case_sensitive = !self.app.find_replace.case_sensitive;
@@ -8344,8 +8392,41 @@ impl Host {
                 });
                 self.app.field_select_all = true;
             }
-            Action::FileMoveToDrafts | Action::FileDuplicate => {
-                self.app.status = "File action: not yet implemented".to_string();
+            Action::FileDuplicate => {
+                let (name, doc) = {
+                    let d = self.app.doc();
+                    (d.name.clone(), d.doc.clone())
+                };
+                let copy_name = format!("{name} (copy)");
+                self.app.docs.push(OpenDoc::from_document(copy_name, None, doc));
+                self.app.active = self.app.docs.len() - 1;
+                self.app.center_view();
+                self.app.status = "Document duplicated".into();
+            }
+            Action::FileMoveToDrafts => {
+                let (name, path) = {
+                    let d = self.app.doc();
+                    (d.name.clone(), d.path.clone())
+                };
+                if path.is_none() {
+                    self.app.status = "Save the document first to move it to drafts"
+                        .into();
+                    return;
+                }
+                self.app.drafts.insert(
+                    0,
+                    crate::state::RecentFile {
+                        name,
+                        team: "file".into(),
+                        edited: "Just now".into(),
+                        color: crate::theme::C_PANEL,
+                        members: vec![],
+                        starred: false,
+                        path,
+                        icon: "file",
+                    },
+                );
+                self.app.status = "Moved to drafts".into();
             }
             Action::AddPage => {
                 if !self.finish_edits() {
@@ -9390,16 +9471,20 @@ impl Host {
             }
 
             Action::EnableEyedropper => {
-                // Enable eyedropper tool mode
-                // This would typically set a tool mode and handle the next click to sample color
+                self.app.eyedropper = true;
                 self.app.status =
-                    "Eyedropper tool enabled - click on canvas to sample color".into();
-                // TODO: Implement actual eyedropper functionality
-                // This requires:
-                // 1. Setting a tool mode
-                // 2. Handling the next canvas click
-                // 3. Sampling color from rendered scene at click position
-                // 4. Applying sampled color to active fill/stroke
+                    "Eyedropper armed - click a layer to sample its color".into();
+            }
+            Action::ToggleCanvasBgVisibility => {
+                self.app.canvas_bg_visible = !self.app.canvas_bg_visible;
+            }
+            Action::CycleDashView => {
+                self.app.dash_view = match self.app.dash_view {
+                    DashView::Home => DashView::Recents,
+                    DashView::Recents => DashView::Starred,
+                    DashView::Starred => DashView::Trash,
+                    DashView::Trash => DashView::Home,
+                };
             }
         }
     }
@@ -9491,6 +9576,23 @@ impl Host {
                 self.app.doc().tree_search = raw.clone();
                 let id = f.id;
                 self.app.field = Some(FieldEdit { id, buffer: raw });
+            }
+            FieldId::FindQuery => {
+                // P13: the query stays open and rescans on commit
+                self.app.find_replace.query = raw.clone();
+                self.app.rescan_find();
+                let id = f.id;
+                self.app.field = Some(FieldEdit { id, buffer: raw });
+            }
+            FieldId::FindReplace => {
+                self.app.find_replace.replace = raw.clone();
+                let id = f.id;
+                self.app.field = Some(FieldEdit { id, buffer: raw });
+            }
+            FieldId::CanvasBgAlpha => {
+                if let Ok(v) = raw.parse::<f64>() {
+                    self.app.canvas_bg_alpha = v.clamp(0.0, 100.0);
+                }
             }
             FieldId::InstanceProp => {
                 self.app.commit_instance_prop(&raw);
@@ -9931,6 +10033,11 @@ fn field_initial(app: &App, f: FieldId) -> String {
     let s = sel_info(app);
     match f {
         FieldId::TreeSearch => app.doc_ref().tree_search.clone(),
+        FieldId::FindQuery => app.find_replace.query.clone(),
+        FieldId::FindReplace => app.find_replace.replace.clone(),
+        FieldId::CanvasBgAlpha => {
+            format!("{}", app.canvas_bg_alpha.round() as i64)
+        }
         FieldId::PageName => {
             let d = app.doc_ref();
             d.doc
