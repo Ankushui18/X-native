@@ -8395,7 +8395,9 @@ impl Host {
                     (d.name.clone(), d.doc.clone())
                 };
                 let copy_name = format!("{name} (copy)");
-                self.app.docs.push(OpenDoc::from_document(copy_name, None, doc));
+                self.app
+                    .docs
+                    .push(OpenDoc::from_document(copy_name, None, doc));
                 self.app.active = self.app.docs.len() - 1;
                 self.app.center_view();
                 self.app.status = "Document duplicated".into();
@@ -8406,8 +8408,7 @@ impl Host {
                     (d.name.clone(), d.path.clone())
                 };
                 if path.is_none() {
-                    self.app.status = "Save the document first to move it to drafts"
-                        .into();
+                    self.app.status = "Save the document first to move it to drafts".into();
                     return;
                 }
                 self.app.drafts.insert(

@@ -2926,10 +2926,10 @@ impl App {
         }
         self.find_replace.matches = matches.clone();
         self.find_replace.match_count = matches.len();
-        if self.find_replace.current_match == 0
-            || self.find_replace.current_match > matches.len()
-        {
-            self.find_replace.current_match = matches.len().min(1);
+        // 0 = nothing selected yet (the first Next lands on match 1);
+        // an out-of-range index collapses to the last match
+        if self.find_replace.current_match > matches.len() {
+            self.find_replace.current_match = matches.len();
         }
     }
 
@@ -2947,9 +2947,17 @@ impl App {
             self.status = "No matches".into();
             return;
         }
-        let cur = self.find_replace.current_match.clamp(1, n);
-        let step = if dir < 0 { n - 1 } else { 1 };
-        let next = (cur - 1 + step) % n + 1;
+        let next = if self.find_replace.current_match == 0 {
+            if dir < 0 {
+                n
+            } else {
+                1
+            }
+        } else {
+            let cur = self.find_replace.current_match.clamp(1, n);
+            let step = if dir < 0 { n - 1 } else { 1 };
+            (cur - 1 + step) % n + 1
+        };
         self.find_replace.current_match = next;
         let id = self.find_replace.matches[next - 1].clone();
         let center_w = {
@@ -3682,7 +3690,7 @@ mod tool_shortcut_tests {
     #[test]
     fn replace_all_text_handles_case_and_boundaries() {
         assert_eq!(replace_all_text("a b a", "a", "c", true), "c b c");
-        assert_eq!(replace_all_text("banana", "an", "X", true), "bXna");
+        assert_eq!(replace_all_text("banana", "an", "X", true), "bXXa");
         assert_eq!(replace_all_text("A a Ab", "a", "c", false), "c c cb");
         assert_eq!(replace_all_text("hello", "z", "q", true), "hello");
         assert_eq!(replace_all_text("abc", "", "c", true), "abc");
@@ -3719,11 +3727,15 @@ mod tool_shortcut_tests {
         assert_eq!(app.find_replace.current_match, 1);
         app.find_nav(-1); // wraps to last
         assert_eq!(app.find_replace.current_match, 2);
-        // case sensitivity
+        // case sensitivity: "HELLO" matches nothing case-sensitively
+        // ("Hello" != "HELLO"), both again case-insensitively
         app.find_replace.query = "HELLO".into();
         app.find_replace.case_sensitive = true;
         app.rescan_find();
-        assert_eq!(app.find_replace.matches, vec!["t1"]);
+        assert!(app.find_replace.matches.is_empty());
+        app.find_replace.case_sensitive = false;
+        app.rescan_find();
+        assert_eq!(app.find_replace.matches, vec!["t1", "t2"]);
     }
 
     #[test]

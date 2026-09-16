@@ -1427,7 +1427,8 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
     if !app.find_replace.query.is_empty() {
         let match_text = format!(
             "{}/{}",
-            app.find_replace.current_match, app.find_replace.match_count
+            app.find_replace.current_match.max(1),
+            app.find_replace.match_count
         );
         let mtw = app.fonts.measure(&match_text, T10, Wt::Reg);
         app.fonts.text(
