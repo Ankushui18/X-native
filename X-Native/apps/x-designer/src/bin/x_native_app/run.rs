@@ -27,8 +27,8 @@ use x_native::{
 use crate::dashboard;
 use crate::editor_ui;
 use crate::state::{
-    push_system_clipboard, Action, App, CtxCmd, Drag, FieldEdit, FieldId, NavTab, OpenDoc,
-    PropertyClipboard, Screen, Tool, FRAME_PRESETS,
+    push_system_clipboard, Action, App, CtxCmd, DashView, Drag, FieldEdit, FieldId, NavTab,
+    OpenDoc, PropertyClipboard, Screen, Tool, FRAME_PRESETS,
 };
 use crate::theme::*;
 

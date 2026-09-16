@@ -992,7 +992,7 @@ fn paint_canvas_bg(app: &App, s: &mut Scene) {
         return;
     }
     let r = app.editor_regions();
-    let a = (app.canvas_bg_alpha / 100.0).clamp(0.0, 1.0);
+    let a = (app.canvas_bg_alpha / 100.0).clamp(0.0, 1.0) as f32;
     let c = vello::peniko::Color::new([
         app.canvas_bg.components[0] * a,
         app.canvas_bg.components[1] * a,
@@ -2851,7 +2851,11 @@ fn paint_design_empty(
     if hover(app, eye) {
         fill_rrect(s, eye, 4.0, C_FIELD_2);
     }
-    let eye_name = if app.canvas_bg_visible { "eye" } else { "eye-off" };
+    let eye_name = if app.canvas_bg_visible {
+        "eye"
+    } else {
+        "eye-off"
+    };
     let eye_col = if app.canvas_bg_visible { C_TEXT } else { C_DIM };
     draw_icon(s, eye_name, eye.x0 + 1.0, f1.y0 + 8.0, 12.0, eye_col);
     tip(app, eye, "Show / hide canvas background");
@@ -5514,6 +5518,12 @@ fn paint_carets(app: &mut App, s: &mut Scene) {
                     FieldId::DocName => r.x0 + 10.0 + w,
                     // component property input: unlabeled, text at +8
                     FieldId::InstanceProp => r.x0 + 8.0 + w,
+                    // find rows: search text at +24 (after the icon),
+                    // replace text at +8
+                    FieldId::FindQuery => r.x0 + 24.0 + w,
+                    FieldId::FindReplace => r.x0 + 8.0 + w,
+                    // % boxes: value text at +33.5 (after the % label)
+                    FieldId::GridPct | FieldId::CanvasBgAlpha => r.x0 + 33.5 + w,
                     _ => r.x0 + 8.0 + 14.0 + 6.0 + w,
                 };
                 if x < r.x1 - 8.0 {

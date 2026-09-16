@@ -2915,7 +2915,8 @@ impl App {
     /// `in_selection` restricts the search to the selected subtrees.
     pub fn rescan_find(&mut self) {
         let mut matches: Vec<String> = Vec::new();
-        let q = self.find_replace.query.trim();
+        // owned: `self.doc()` below takes `&mut self`
+        let q = self.find_replace.query.trim().to_string();
         let case = self.find_replace.case_sensitive;
         if !q.is_empty() {
             let doc = self.doc();
@@ -2951,13 +2952,17 @@ impl App {
         let next = (cur - 1 + step) % n + 1;
         self.find_replace.current_match = next;
         let id = self.find_replace.matches[next - 1].clone();
-        let doc = self.doc();
-        doc.editor().selection = vec![id.clone()];
-        if let Some(node) = doc.editor_ref().get_node(&id) {
-            let center_w = Point::new(
-                node.transform.x + node.w / 2.0,
-                node.transform.y + node.h / 2.0,
-            );
+        let center_w = {
+            let doc = self.doc();
+            doc.editor().selection = vec![id.clone()];
+            doc.editor_ref().get_node(&id).map(|n| {
+                Point::new(
+                    n.transform.x + n.w / 2.0,
+                    n.transform.y + n.h / 2.0,
+                )
+            })
+        };
+        if let Some(center_w) = center_w {
             let sp = self.world_to_screen(center_w);
             let reg = self.editor_regions();
             let cx = (reg.canvas.x0 + reg.canvas.x1) / 2.0;
@@ -3618,7 +3623,7 @@ impl App {
 
 #[cfg(test)]
 mod tool_shortcut_tests {
-    use super::{node_slot, tree_drop_coords, App, Color, Node, Tool};
+    use super::{node_slot, replace_all_text, tree_drop_coords, App, Color, Node, NodeKind, Tool};
 
     #[test]
     fn design_mode_shortcuts_resolve() {
