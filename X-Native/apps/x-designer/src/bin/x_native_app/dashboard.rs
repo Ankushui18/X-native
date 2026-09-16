@@ -386,9 +386,10 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             false,
         ),
         (
+            // P14: was the dead "Browse templates" card; boards are real
             "layout-template",
-            "Browse templates",
-            "Not available in this build",
+            "New board",
+            "Infinite canvas for brainstorming",
             false,
         ),
         ("users", "Invite team", "Not available in this build", false),
@@ -396,13 +397,14 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let acts = [
         Action::NewFile,
         Action::ImportFile,
-        Action::Upgrade,
+        Action::NewBoard,
         Action::InviteTeam,
     ];
     for (i, (icon, title, sub, white)) in cards.into_iter().enumerate() {
         let cx = x0 + (cw + gap) * i as f64;
         let r = Rect::new(cx, dy + 147.5, cx + cw, dy + 235.5);
-        let enabled = app.demo_mode || i < 2;
+        // i == 3 (Invite team) stays a roadmap stub outside demo mode
+        let enabled = app.demo_mode || i < 3;
         let hov = enabled && hover(app, r);
         // .card:hover{transform:translateY(-2px);...} — lift the whole card
         let dy = if hov { dy - 2.0 } else { dy };

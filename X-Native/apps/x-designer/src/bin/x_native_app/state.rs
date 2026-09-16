@@ -507,9 +507,7 @@ pub enum Action {
     UxResponsive,
     // Navigation bar (Figma-style)
     NavTab(NavTab),
-    ToggleNavLabels,
     OpenAppMenu,
-    CloseAppMenu,
     AppMenuItem(usize),
     OpenFind,
     CloseFind,
@@ -518,6 +516,9 @@ pub enum Action {
     ReplaceAll,
     /// P13: replace the occurrences in the current match only
     Replace,
+    /// P14: sample a layer's fill (true) or stroke (false) onto the
+    /// selection — the pipette in the right panel's paint rows
+    EnableEyedropper(bool),
     /// P13: canvas background visibility toggle (Figma parity)
     ToggleCanvasBgVisibility,
     /// P13: dashboard view chip — cycle Home -> Recents -> Starred -> Trash
@@ -527,13 +528,10 @@ pub enum Action {
     ToggleNotifications,
     DismissNotification(String),
     MarkAllNotificationsRead,
-    ToggleMinimizeUI,
-    ResizeLeftSidebar(f64),
     CollapseAllLayers,
     /// Clear the layers tree search (audit F8)
     TreeSearchClear,
-    /// Edit file menu actions
-    FileRename,
+    /// File menu actions (the app menu's file section)
     FileMoveToDrafts,
     FileDuplicate,
     // Layer management (Figma parity)
@@ -622,8 +620,6 @@ pub enum Action {
     SetGradientType {
         gradient_type: String,
     },
-    /// Enable eyedropper tool
-    EnableEyedropper,
     /// Set image adjustments (exposure, contrast, saturation, etc.)
     SetImageAdjustments {
         adjustments: x_native::ImageAdjustments,
@@ -1428,9 +1424,9 @@ pub struct App {
     pub canvas_bg_alpha: f64,
     /// Canvas background visibility (Figma parity; audit P13)
     pub canvas_bg_visible: bool,
-    /// Eyedropper armed: the next canvas click samples a layer's fill
-    /// (audit P13 — the action used to only print a status line)
-    pub eyedropper: bool,
+    /// Eyedropper armed: `Some(true)` samples a layer's fill,
+    /// `Some(false)` its stroke, into the current selection
+    pub eyedropper: Option<bool>,
     /// DESIGN panel (no selection): pixel grid color + opacity %
     pub grid_color: Color,
     pub grid_pct: f64,
@@ -1491,9 +1487,7 @@ pub struct App {
     pub status: String,
     // Navigation bar state (Figma-style)
     pub nav_tab: NavTab,
-    pub nav_show_labels: bool,
     pub nav_bar_w: f64,
-    pub left_sidebar_w: f64,
     pub sidebar_resizing: bool,
     pub ui_minimized: bool,
     pub app_menu: AppMenu,
@@ -1598,7 +1592,7 @@ impl App {
             canvas_bg: crate::theme::C_CANVAS,
             canvas_bg_alpha: 100.0,
             canvas_bg_visible: true,
-            eyedropper: false,
+            eyedropper: None,
             grid_color: Color::from_rgb8(0x00, 0x70, 0xE4),
             grid_pct: 20.0,
             align: (0, 2),
@@ -1628,9 +1622,7 @@ impl App {
             color_picker_popup: None,
             status: String::from("Ready"),
             nav_tab: NavTab::File,
-            nav_show_labels: true,
             nav_bar_w: 48.0,
-            left_sidebar_w: 280.0,
             sidebar_resizing: false,
             ui_minimized: false,
             app_menu: AppMenu::default(),
@@ -1695,7 +1687,9 @@ impl App {
         let left_total = if self.ui_minimized {
             self.nav_bar_w
         } else {
-            self.nav_bar_w + self.left_sidebar_w
+            // `left_w` is the live width — Drag::LeftPanel resizes it;
+            // the old static field made the resize a visual no-op
+            self.nav_bar_w + self.left_w
         };
         EdRegions {
             left: Rect::new(0.0, ED_TITLE_H, left_total, self.win_h),

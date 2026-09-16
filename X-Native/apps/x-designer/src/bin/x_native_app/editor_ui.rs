@@ -1214,8 +1214,8 @@ fn paint_nav_bar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             icon_color,
         );
 
-        // Label below icon (if labels are shown)
-        if app.nav_show_labels {
+        // Label below icon
+        {
             let label = tab.label();
             let lw = app.fonts.measure(label, 9.0, Wt::Reg);
             app.fonts.text(
@@ -1298,21 +1298,21 @@ fn paint_app_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let mx = reg.nav_bar.x1 + 4.0;
     let my = reg.nav_bar.y0 + 8.0;
     let mw = APP_MENU_WIDTH;
+    // P14: every item is wired — file items route to the same commands as
+    // their shortcuts; items without an implementation were removed
     let items: Vec<(&str, &str, bool)> = vec![
         ("New file", "⌘N", true),
         ("Open file…", "⌘O", true),
         ("", "", false), // separator
         ("Save", "⌘S", true),
         ("Save as…", "⇧⌘S", true),
+        ("Duplicate file", "", true),
+        ("Move to drafts", "", true),
         ("", "", false), // separator
         ("Export as…", "⇧⌘E", true),
+        ("Find…", "⇧⌘F", true),
         ("", "", false), // separator
-        ("Preferences", "⌘,", true),
         ("Dark mode", "", true),
-        ("Highlight layers on hover", "", true),
-        ("", "", false), // separator
-        ("Keyboard shortcuts", "⌘/", true),
-        ("About X-Native", "", true),
     ];
     let row_h = DROPDOWN_ROW_H;
     let mut h = 8.0;
@@ -4851,7 +4851,8 @@ fn paint_paint_row(
 ) -> f64 {
     let inner_w = rw - pl * 2.0;
     let h = 28.0;
-    let hex_w = inner_w - 64.0 - 24.0 - 24.0 - 8.0 * 3.0;
+    // hex field + pipette 24 + alpha % 64 + eye 24 + remove 24, gaps of 8
+    let hex_w = inner_w - 64.0 - 24.0 - 24.0 - 24.0 - 8.0 * 4.0;
     let r = Rect::new(rx + pl, y, rx + pl + hex_w, y + h);
     let hov = hover(app, r);
     fill_rrect(s, r, 6.0, if hov { C_INPUT_HOVER } else { C_FIELD });
@@ -4872,7 +4873,23 @@ fn paint_paint_row(
     // wins during reverse hit-testing.
     hit.push((r, Action::Field(hex_field)));
     hit.push((sw, Action::ToggleColorPicker(is_fill)));
-    let ar = Rect::new(r.x1 + 8.0, y, r.x1 + 8.0 + 64.0, y + h);
+    // P14: eyedropper — sample a layer's paint (was an unreachable action)
+    let pd = Rect::new(r.x1 + 8.0, y + 2.0, r.x1 + 8.0 + 24.0, y + 26.0);
+    let drop_armed = app.eyedropper == Some(!is_fill);
+    if hover(app, pd) || drop_armed {
+        fill_rrect(s, pd, 6.0, if drop_armed { C_SEL } else { C_FIELD_2 });
+    }
+    draw_icon(
+        s,
+        "pipette",
+        pd.x0 + 5.0,
+        pd.y0 + 5.0,
+        14.0,
+        if drop_armed { C_TEXT } else { C_DIM },
+    );
+    tip(app, pd, "Eyedropper: sample a layer's fill / stroke");
+    hit.push((pd, Action::EnableEyedropper(!is_fill)));
+    let ar = Rect::new(pd.x1 + 8.0, y, pd.x1 + 8.0 + 64.0, y + h);
     input(
         app,
         s,

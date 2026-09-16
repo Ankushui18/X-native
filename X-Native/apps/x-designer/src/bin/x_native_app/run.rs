@@ -3408,8 +3408,9 @@ impl Host {
         }
         // P13: eyedropper — the first canvas click samples the topmost
         // layer's fill into the current selection
-        if self.app.eyedropper {
-            self.app.eyedropper = false;
+        if self.app.eyedropper.is_some() {
+            let to_stroke = self.app.eyedropper.unwrap_or(false);
+            self.app.eyedropper = None;
             let world = self.app.screen_to_world(p);
             let id = {
                 let doc = self.app.doc();
@@ -3423,19 +3424,51 @@ impl Host {
                             self.app.status = "Eyedropper: layer not found".into();
                             return;
                         };
-                        let paint = node
-                            .fill_layers
-                            .iter()
-                            .find(|l| l.visible)
-                            .map(|l| l.paint.clone())
-                            .unwrap_or_else(|| node.fill.clone());
+                        let paint = if to_stroke {
+                            node.stroke.paint.clone()
+                        } else {
+                            node.fill_layers
+                                .iter()
+                                .find(|l| l.visible)
+                                .map(|l| l.paint.clone())
+                                .unwrap_or_else(|| node.fill.clone())
+                        };
                         let sel = doc.selected_id();
                         (paint, sel)
                     };
                     match sel {
                         Some(target) if target != id => {
                             let doc = self.app.doc();
-                            doc.editor().set_fill(&target, paint);
+                            if to_stroke {
+                                let w = {
+                                    let doc = self.app.doc();
+                                    doc.editor_ref()
+                                        .get_node(&target)
+                                        .map(|n| n.stroke.width)
+                                        .unwrap_or(1.0)
+                                };
+                                doc.editor()
+                                    .mutate_visual_stack(&target, move |n| {
+                                        n.materialize_visual_stacks();
+                                        let stroke =
+                                            x_native::Stroke::solid(
+                                                match &paint {
+                                                    x_native::Paint::Solid(c) => *c,
+                                                    _ => x_native::Color::BLACK,
+                                                },
+                                                w.max(1.0),
+                                            );
+                                        n.stroke = stroke.clone();
+                                        if let Some(layer) = n.stroke_layers.last_mut() {
+                                            layer.stroke = stroke;
+                                        } else {
+                                            n.stroke_layers
+                                                .push(x_native::StrokeLayer::new(stroke));
+                                        }
+                                    });
+                            } else {
+                                doc.editor().set_fill(&target, paint);
+                            }
                             self.app.mark_dirty();
                             self.app.status = format!("Sampled color from {id}");
                         }
@@ -8293,14 +8326,8 @@ impl Host {
             Action::NavTab(tab) => {
                 self.app.nav_tab = tab;
             }
-            Action::ToggleNavLabels => {
-                self.app.nav_show_labels = !self.app.nav_show_labels;
-            }
             Action::OpenAppMenu => {
                 self.app.app_menu.open = !self.app.app_menu.open;
-            }
-            Action::CloseAppMenu => {
-                self.app.app_menu.open = false;
             }
             Action::AppMenuItem(idx) => {
                 self.app.app_menu.open = false;
@@ -8308,11 +8335,20 @@ impl Host {
                     0 => {
                         self.app.open_blank();
                     } // New file
-                    3 => {
-                        self.cmd_save();
-                    } // Save
-                    8 => {} // Preferences (no-op for now)
+                    1 => self.cmd_open_file(), // Open file…
+                    3 => self.cmd_save(), // Save
+                    4 => self.cmd_save_as(), // Save as…
+                    5 => {
+                        self.dispatch(Action::FileDuplicate);
+                    } // Duplicate file
+                    6 => {
+                        self.dispatch(Action::FileMoveToDrafts);
+                    } // Move to drafts
+                    8 => self.cmd_export(false), // Export as…
                     9 => {
+                        self.dispatch(Action::OpenFind);
+                    } // Find…
+                    11 => {
                         // Dark mode toggle
                         let next = crate::theme::active_theme().next();
                         self.apply_theme(next);
@@ -8371,24 +8407,12 @@ impl Host {
                 }
                 self.app.notifications.unread_count = 0;
             }
-            Action::ToggleMinimizeUI => {
-                self.app.ui_minimized = !self.app.ui_minimized;
-            }
-            Action::ResizeLeftSidebar(w) => {
-                self.app.left_sidebar_w = w.clamp(200.0, 500.0);
-            }
             Action::CollapseAllLayers => self.app.collapse_all_layers(),
             Action::TreeSearchClear => {
                 self.app.doc().tree_search.clear();
                 self.app.field = None;
             }
-            Action::FileRename => {
-                self.app.field = Some(crate::state::FieldEdit {
-                    id: crate::state::FieldId::DocName,
-                    buffer: self.app.doc().name.clone(),
-                });
-                self.app.field_select_all = true;
-            }
+
             Action::FileDuplicate => {
                 let (name, doc) = {
                     let d = self.app.doc();
@@ -9468,9 +9492,14 @@ impl Host {
                 );
             }
 
-            Action::EnableEyedropper => {
-                self.app.eyedropper = true;
-                self.app.status = "Eyedropper armed - click a layer to sample its color".into();
+            Action::EnableEyedropper(to_stroke) => {
+                self.app.eyedropper = Some(to_stroke);
+                self.app.status = if to_stroke {
+                    "Eyedropper armed - click a layer to sample its stroke"
+                } else {
+                    "Eyedropper armed - click a layer to sample its fill"
+                }
+                .into();
             }
             Action::ToggleCanvasBgVisibility => {
                 self.app.canvas_bg_visible = !self.app.canvas_bg_visible;
