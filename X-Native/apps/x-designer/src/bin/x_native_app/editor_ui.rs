@@ -576,7 +576,8 @@ fn paint_context_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
                 }
                 let ic = if *enabled { C_TEXT } else { C_DIM };
                 draw_icon(s, action.icon(), r.x0 + 8.0, r.y0 + 7.0, 14.0, ic);
-                app.fonts.text(s, r.x0 + 30.0, r.y0 + 6.8, action.label(), T11, ic, Wt::Reg);
+                app.fonts
+                    .text(s, r.x0 + 30.0, r.y0 + 6.8, action.label(), T11, ic, Wt::Reg);
                 if let Some(sc) = action.shortcut() {
                     app.fonts.text_right(
                         s,
@@ -637,7 +638,8 @@ fn paint_context_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
                 }
                 let ic = if *enabled { C_TEXT } else { C_DIM };
                 draw_icon(s, action.icon(), r.x0 + 8.0, r.y0 + 7.0, 14.0, ic);
-                app.fonts.text(s, r.x0 + 30.0, r.y0 + 6.8, action.label(), T11, ic, Wt::Reg);
+                app.fonts
+                    .text(s, r.x0 + 30.0, r.y0 + 6.8, action.label(), T11, ic, Wt::Reg);
                 if let Some(sc) = action.shortcut() {
                     app.fonts.text_right(
                         s,

@@ -279,10 +279,7 @@ pub fn action_for(action: &ContextAction) -> Option<Action> {
 /// the right-click menu offers.
 /// One enabled menu row for a given action.
 fn ai(a: ContextAction, enabled: bool) -> ContextMenuItem {
-    ContextMenuItem::Action {
-        action: a,
-        enabled,
-    }
+    ContextMenuItem::Action { action: a, enabled }
 }
 
 pub fn build_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {

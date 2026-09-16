@@ -2,6 +2,19 @@
 use super::*;
 use x_native::{Color, PaintLayer, RenderCommand, Variables};
 
+/// The actions carried by a menu's action rows (asserting item models).
+fn actions_of(
+    items: &[crate::context_menu::ContextMenuItem],
+) -> Vec<&crate::context_menu::ContextAction> {
+    items
+        .iter()
+        .filter_map(|it| match it {
+            crate::context_menu::ContextMenuItem::Action { action, .. } => Some(action),
+            _ => None,
+        })
+        .collect()
+}
+
 fn host() -> Host {
     let mut app = App::new();
     app.docs = vec![OpenDoc::demo_blank("Audit".into())];
@@ -422,15 +435,6 @@ fn context_menu_items_follow_the_target_model() {
     // the target, not hardcoded in the painter.
     use crate::context_menu::{
         action_for, build_menu_items, ContextAction, ContextMenuItem, ContextTarget,
-    };
-    let actions_of = |items: &[ContextMenuItem]| -> Vec<&ContextAction> {
-        items
-            .iter()
-            .filter_map(|it| match it {
-                ContextMenuItem::Action { action, .. } => Some(action),
-                _ => None,
-            })
-            .collect()
     };
     let empty = build_menu_items(&ContextTarget::CanvasEmpty);
     let empty_actions = actions_of(&empty);
