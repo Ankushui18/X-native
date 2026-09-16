@@ -137,11 +137,13 @@ browser Library: the document model is a scene graph, not a Figma clone."*
    (cheap, high signal).
 
 **Priority list (from this audit):**
-1. Swap `C_SNAP` off Figma brand red (one line).
+1. ~~Swap `C_SNAP` off Figma brand red~~ **DONE 2026-09-17** — now role-derived `accent_ink` violet (theme-reactive).
 2. Ship the missing capability UIs — Sketch export + Tailwind in the code panel + library
    update-acceptance dialog + variables edit/rename/delete/mode UI (backend ready: last session's
    `variable_commands` + `FontManager::families()`).
-3. De-clone dashboard signature styling; fix "Upgrade to Pro" framing.
+3. ~~De-clone dashboard signature styling; fix "Upgrade to Pro" framing~~ **PARTIALLY DONE
+   2026-09-17** — "Upgrade to Pro" card replaced with a free/local-first badge (no CTA, no
+   `Action::Upgrade`); full dashboard re-skin still open.
 4. Optionally consolidate on `fire_action` (retire the duplicated `Player` loop) and verify
    SmartAnimate interpolation end-to-end in Flow preview.
 
