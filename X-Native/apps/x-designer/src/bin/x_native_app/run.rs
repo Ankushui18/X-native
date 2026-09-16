@@ -3406,6 +3406,16 @@ impl Host {
                         .filter(|(r2, _)| r2.contains(p))
                         .map(|(_, n)| n.clone());
                 }
+                if matches!(a, Action::Field(FieldId::VarValue)) {
+                    // resolve WHICH variable was clicked from the rects the
+                    // Tokens panel recorded this paint
+                    self.app.var_edit_name = self
+                        .app
+                        .var_value_rects
+                        .iter()
+                        .find(|(r2, _)| r2.contains(p))
+                        .map(|(_, n)| n.clone());
+                }
                 self.dispatch(a);
                 return;
             }
@@ -10226,6 +10236,37 @@ impl Host {
                     self.apply_auto_layout();
                 }
             }
+            FieldId::VarValue => {
+                let Some(name) = self.app.var_edit_name.clone() else {
+                    self.app.status = "No variable targeted".into();
+                    return;
+                };
+                let d = self.app.doc();
+                let raw = raw.trim();
+                let cmd = if !raw.is_empty() {
+                    if let Some(c) = x_native::parse_hex_color(raw) {
+                        x_native::editor::set_color(&d.doc.variables, &name, c)
+                    } else if raw == "true" || raw == "false" {
+                        x_native::editor::set_bool(&d.doc.variables, &name, raw == "true")
+                    } else if let Ok(n2) = raw.parse::<f64>() {
+                        x_native::editor::set_number(&d.doc.variables, &name, n2)
+                    } else {
+                        x_native::editor::set_string(&d.doc.variables, &name, raw)
+                    }
+                } else if let Some(cmd) = x_native::editor::remove_variable(&d.doc.variables, &name)
+                {
+                    cmd
+                } else {
+                    self.app.status = format!("{name}: nothing to clear");
+                    return;
+                };
+                if d.var_history.commit(&mut d.doc.variables, cmd) {
+                    self.app.mark_dirty();
+                    self.app.status = format!("{name} updated");
+                } else {
+                    self.app.status = format!("{name}: no change");
+                }
+            }
             _ => {
                 // node-bound fields
                 self.apply_field_to_selection(f.id, &raw);
@@ -10665,7 +10706,24 @@ fn field_initial(app: &App, f: FieldId) -> String {
                 _ => String::new(),
             }
         }
+        FieldId::VarValue => var_field_initial(
+            &app.doc_ref().doc.variables,
+            app.var_edit_name.as_deref().unwrap_or_default(),
+        ),
         _ => String::new(),
+    }
+}
+
+/// Current display value of a variable (the VarValue field's seed buffer).
+fn var_field_initial(v: &x_native::Variables, name: &str) -> String {
+    if let Some(c) = v.colors.get(name) {
+        x_native::color_to_hex(*c)
+    } else if let Some(n) = v.numbers.get(name) {
+        fmt(*n)
+    } else if let Some(b) = v.bools.get(name) {
+        b.to_string()
+    } else {
+        v.strings.get(name).cloned().unwrap_or_default()
     }
 }
 

@@ -7315,6 +7315,7 @@ fn paint_tokens(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
     use crate::paint::{fill_rrect, stroke_rrect, Wt};
     let x0 = 12.0;
     let mut y = y0 + 160.5;
+    app.var_value_rects.clear();
     app.fonts
         .micro_label(s, x0, y, "X-NATIVE TOKENS", C_DIM, Wt::Med);
     y += 18.0;
@@ -7492,8 +7493,39 @@ fn paint_tokens(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
             app.fonts.text_center(s, kr, glyph, T10, C_DIM, Wt::Med, true);
         }
         app.fonts.text(s, x0 + 18.0, row_t + 3.0, &name, T10, C_TEXT, Wt::Med);
-        let vw = app.fonts.measure(&disp, T10, Wt::Mono);
-        app.fonts.text(s, lw - 66.0 - vw, row_t + 3.0, &disp, T10, C_MUTED, Wt::Mono);
+        // value slot: click to edit inline (FieldId::VarValue; the active
+        // buffer renders while the field is open). Bools keep the toggle —
+        // their text form is still editable from the field.
+        let editing_this = app.field.as_ref().map(|f| f.id) == Some(FieldId::VarValue)
+            && app.var_edit_name.as_deref() == Some(name.as_str());
+        let shown = if editing_this {
+            app.field
+                .as_ref()
+                .map(|f| f.buffer.clone())
+                .unwrap_or_default()
+        } else {
+            disp.clone()
+        };
+        let vvw = app.fonts.measure(&shown, T10, Wt::Mono);
+        app.fonts.text(
+            s,
+            lw - 66.0 - vvw,
+            row_t + 3.0,
+            &shown,
+            T10,
+            if editing_this { C_TEXT } else { C_MUTED },
+            Wt::Mono,
+        );
+        if kind != "bool" {
+            let vr = Rect::new(lw - 66.0 - vvw - 4.0, row_t + 1.0, lw - 42.0, row_t + 19.0);
+            if editing_this {
+                stroke_rrect(s, vr, 4.0, C_EDIT_BORDER, 1.0);
+            } else if hover(app, vr) {
+                stroke_rrect(s, vr, 4.0, C_LINE_2, 1.0);
+            }
+            app.var_value_rects.push((vr, name.clone()));
+            hit.push((vr, Action::Field(FieldId::VarValue)));
+        }
         // kind controls, right-aligned before the delete ✕
         if kind == "bool" {
             let tb = Rect::new(lw - 64.0, row_t + 2.0, lw - 38.0, row_t + 18.0);

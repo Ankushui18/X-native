@@ -593,6 +593,7 @@ fn paint_recents(
         let gap = 16.0;
         let cols = 3.0;
         let cw = ((x1 - x0) - gap * (cols - 1.0)) / cols;
+        let mut thumb_pending: Vec<std::path::PathBuf> = Vec::new();
         for (i, (idx, f)) in files.iter().enumerate() {
             let col = i as f64 % cols;
             let row = (i as f64 / cols).floor();
@@ -603,14 +604,51 @@ fn paint_recents(
             let hov = hover(app, card);
             fill_rrect(s, card, R_CARD, if hov { C_PANEL_2 } else { C_PANEL });
             stroke_rrect(s, card, R_CARD, if hov { C_LINE_2 } else { C_LINE }, 1.0);
-            // thumb 140 tall
+            // thumb 140 tall — live document preview when the file exists on
+            // disk (rendered through the same export pipeline as PNG export),
+            // flat color + watermark otherwise. One render per frame is
+            // pumped at the bottom of paint_recents.
             let thumb = Rect::new(cx + 1.0, cy + 1.0, cx + cw - 1.0, cy + 141.0);
-            fill_rect(s, thumb, f.color);
-            // big X watermark — 28px bold centered
-            let dark_bg = f.color == Color::from_rgb8(0xFF, 0xFF, 0xFF);
-            let wm = if dark_bg { C_BLACK_10 } else { C_WHITE_10 };
-            app.fonts
-                .text_center(s, thumb, "X", T20, wm, Wt::Bold, true);
+            let mut drawn = false;
+            if let Some(p) = f.path.as_ref() {
+                if let Some((iw, ih)) = app.thumb_ready(p) {
+                    if let Some(assets) = app.thumb_brush(p) {
+                        if let Some(b) = assets.get("thumb") {
+                            use vello::kurbo::{Affine, RoundedRect};
+                            let sc = (thumb.width() / f64::from(iw))
+                                .max(thumb.height() / f64::from(ih));
+                            let dw = f64::from(iw) * sc;
+                            let dh = f64::from(ih) * sc;
+                            s.push_clip_layer(
+                                vello::peniko::Fill::NonZero,
+                                Affine::IDENTITY,
+                                &RoundedRect::new(thumb.x0, thumb.y0, thumb.x1, thumb.y1, 8.0)
+                                    .into_path(0.1),
+                            );
+                            s.draw_image(
+                                b,
+                                Affine::translate((
+                                    thumb.x0 + (thumb.width() - dw) / 2.0,
+                                    thumb.y0 + (thumb.height() - dh) / 2.0,
+                                )) * Affine::scale(sc),
+                            );
+                            s.pop_layer();
+                            drawn = true;
+                        }
+                    }
+                }
+            }
+            if !drawn {
+                fill_rect(s, thumb, f.color);
+                // big X watermark — 28px bold centered
+                let dark_bg = f.color == Color::from_rgb8(0xFF, 0xFF, 0xFF);
+                let wm = if dark_bg { C_BLACK_10 } else { C_WHITE_10 };
+                app.fonts
+                    .text_center(s, thumb, "X", T20, wm, Wt::Bold, true);
+                if let Some(p) = &f.path {
+                    thumb_pending.push(p.clone());
+                }
+            }
             let st = Rect::new(
                 thumb.x1 - 32.0,
                 thumb.y0 + 8.0,
@@ -671,6 +709,8 @@ fn paint_recents(
                 mx += 20.0;
             }
         }
+        // warm the thumbnail cache progressively (one render per frame)
+        app.thumb_pump(thumb_pending);
     } else {
         // list layout — same rows as the drafts panel
         let list_h = (files.len() as f64 * DRAFT_ROW_H).max(1.0);

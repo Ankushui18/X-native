@@ -733,6 +733,10 @@ pub enum FieldId {
     ComponentDescription,
     /// pages panel: active-page inline rename (opened from the page menu)
     PageName,
+    /// Tokens panel: variable value editing (target variable lives in
+    /// `App::var_edit_name`, resolved at click from `var_value_rects` —
+    /// same pattern as `InstanceProp`).
+    VarValue,
     /// layers panel: tree search query (row above the tree; audit F8).
     /// Enter keeps the field open — the query lives in
     /// `OpenDoc::tree_search` and filters the tree live.
@@ -1479,6 +1483,13 @@ pub struct App {
     pub user: &'static str,
     pub recents: Vec<RecentFile>,
     pub drafts: Vec<RecentFile>,
+    /// Dashboard thumbnail cache: file path → (mtime validated at read,
+    /// single-image `Assets` under key "thumb"). Filled lazily, one render
+    /// per dashboard frame (see `thumb_pump`), mirrored to a disk cache.
+    pub thumbs: std::collections::HashMap<std::path::PathBuf, (std::time::SystemTime, x_native::Assets)>,
+    /// Files whose thumbnail render failed this session (no retry storm;
+    /// they fall back to the flat watermark card).
+    pub thumb_failed: std::collections::HashSet<std::path::PathBuf>,
     pub dash_view: DashView,
     pub dash_layout: DashLayout,
     pub dash_search: String,
@@ -1550,6 +1561,12 @@ pub struct App {
     pub field_select_all: bool,
     /// the component Text property currently being edited
     pub instance_prop_target: Option<String>,
+    /// Tokens panel: which variable's value field is being edited
+    /// (`FieldId::VarValue`).
+    pub var_edit_name: Option<String>,
+    /// Click→variable resolution for `FieldId::VarValue`, recorded by the
+    /// Tokens panel each paint (same pattern as `last_instance_prop_rect`).
+    pub var_value_rects: Vec<(Rect, String)>,
     /// last JSX produced by Copy-as-code (for tests; the real target is
     /// the system clipboard)
     pub last_copied_code: Option<String>,
@@ -1661,6 +1678,8 @@ impl App {
             user: USER_NAME,
             recents: seed_recents(),
             drafts: seed_drafts(),
+            thumbs: std::collections::HashMap::new(),
+            thumb_failed: std::collections::HashSet::new(),
             dash_view: DashView::Home,
             dash_layout: DashLayout::Grid,
             dash_search: String::new(),
@@ -1702,6 +1721,8 @@ impl App {
             hover_node: None,
             pending_text_edit: None,
             instance_prop_target: None,
+            var_edit_name: None,
+            var_value_rects: Vec::new(),
             last_copied_code: None,
             comment_draft: None,
             open_comment: None,
@@ -3775,6 +3796,145 @@ fn collect_ancestor_path(
     path.pop();
     found
 }
+
+// --------------------------------------------------- dashboard thumbnails
+
+impl App {
+    /// (w, h) of the cached thumbnail for `path`, if fresh (the stored mtime
+    /// still matches the file on disk).
+    pub fn thumb_ready(&self, path: &std::path::Path) -> Option<(u32, u32)> {
+        let (mt, assets) = self.thumbs.get(path)?;
+        let cur = std::fs::metadata(path).ok()?.modified().ok()?;
+        if cur != *mt {
+            return None;
+        }
+        let b = assets.get("thumb")?;
+        Some((b.image.width, b.image.height))
+    }
+
+    /// The cached asset bundle for `path` (call after `thumb_ready`).
+    pub fn thumb_brush(&self, path: &std::path::Path) -> Option<&x_native::Assets> {
+        self.thumbs.get(path).map(|(_, a)| a)
+    }
+
+    /// Render at most one pending thumbnail per call (the dashboard calls
+    /// this once per frame, so a wall of new files warms up progressively
+    /// instead of hitching). Skips cached and known-failed entries.
+    pub fn thumb_pump(&mut self, pending: Vec<std::path::PathBuf>) {
+        for p in pending {
+            if self.thumbs.contains_key(&p) || self.thumb_failed.contains(&p) {
+                continue;
+            }
+            self.render_thumb(&p);
+            return;
+        }
+    }
+
+    /// Disk-cache location for a thumbnail: FNV-1a of path + mtime under
+    /// `~/.config/x-native/thumbs/`. `None` without a HOME.
+    fn thumb_cache_file(
+        path: &std::path::Path,
+        mt: &std::time::SystemTime,
+    ) -> Option<std::path::PathBuf> {
+        let home = std::env::var_os("HOME")?;
+        let mut h: u64 = 0xcbf2_9fe4_8422_2325;
+        for b in path.to_string_lossy().as_bytes() {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        let nanos = mt
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        for b in nanos.to_le_bytes() {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        Some(
+            std::path::PathBuf::from(home)
+                .join(".config")
+                .join("x-native")
+                .join("thumbs")
+                .join(format!("{h:016x}.png")),
+        )
+    }
+
+    fn render_thumb(&mut self, path: &std::path::Path) {
+        let fail = |me: &mut Self| {
+            me.thumb_failed.insert(path.to_path_buf());
+        };
+        let Ok(md) = std::fs::metadata(path) else {
+            fail(self);
+            return;
+        };
+        let Ok(mt) = md.modified() else {
+            fail(self);
+            return;
+        };
+        // Warm sessions: a valid disk-cache hit skips the document parse.
+        let cache = Self::thumb_cache_file(path, &mt);
+        if let Some(cf) = &cache {
+            if let Ok(bytes) = std::fs::read(cf) {
+                let mut a = x_native::Assets::new();
+                if a.load_png_bytes("thumb", &bytes).is_ok() {
+                    self.thumbs.insert(path.to_path_buf(), (mt, a));
+                    return;
+                }
+            }
+        }
+        // v1 scope: native documents only (other formats keep the watermark).
+        if path.extension().map(|e| e != "x").unwrap_or(true) {
+            fail(self);
+            return;
+        }
+        let doc = match x_native::fileio::load_x_file(&path.to_string_lossy()) {
+            Ok(d) => d,
+            Err(_) => {
+                fail(self);
+                return;
+            }
+        };
+        let Some(page) = doc.pages.first() else {
+            fail(self);
+            return;
+        };
+        // Same export path as PNG export (prepare_export strips frame-name
+        // labels and outlines text), so the preview cannot drift from the
+        // artifact the user gets. Embedded image assets are not decoded in
+        // this path — v1 previews are text+vector.
+        let Ok(plan) = x_native::prepare_export(page, &doc.variables, None, &self.fonts) else {
+            fail(self);
+            return;
+        };
+        let scale = (340.0 / plan.width.max(plan.height).max(1.0)).clamp(0.05, 1.0);
+        let Ok((png, _, _)) = x_native::export_raster(
+            &plan.tree,
+            plan.width,
+            plan.height,
+            x_native::RasterFormat::Png,
+            scale,
+            None,
+            None,
+            Some(&self.fonts),
+        ) else {
+            fail(self);
+            return;
+        };
+        if let Some(cf) = &cache {
+            if let Some(dir) = cf.parent() {
+                let _ = std::fs::create_dir_all(dir);
+                let _ = std::fs::write(cf, &png);
+            }
+        }
+        let mut a = x_native::Assets::new();
+        if a.load_png_bytes("thumb", &png).is_ok() {
+            self.thumbs.insert(path.to_path_buf(), (mt, a));
+        } else {
+            fail(self);
+        }
+    }
+}
+
 #[cfg(test)]
 impl App {
     /// Explicit deterministic content for old inspector/screenshot fixtures.

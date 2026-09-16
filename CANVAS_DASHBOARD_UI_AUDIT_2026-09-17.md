@@ -151,12 +151,15 @@ browser Library: the document model is a scene graph, not a Figma clone."*
 ## 6. Remaining fix/upgrade backlog (canvas + dashboard)
 
 **Canvas (editor):**
-- Variables **rename + text-value editing** inline (the remaining half of the Tokens-panel
-  surface; needs the text-field pattern used by page rename).
+- ~~Variables **rename + text-value editing**~~ **VALUE EDITING DONE 2026-09-17** — every
+  Tokens-panel variable row's value is an inline field (`FieldId::VarValue`): click → edit →
+  Enter commits through `var_history` (hex → color, `true/false` → bool, numeric → number,
+  anything else → string; empty clears). Rename-as-alias remains open (the model's alias
+  mechanism makes it a one-command rename; needs a name-field variant of the same pattern).
 - Library **update-acceptance dialog**: notification kind exists; wire `diff_library` →
   review list → `accept_update` (backend complete in x-core).
-- **Font picker UI** in the text inspector, listing `FontManager::families()`; apply via
-  `resolve_font_name`.
+- ~~**Font picker UI**~~ **ALREADY EXISTS** (editor_ui.rs:3540 lists `family_names()`); upgrade
+  it to family-grouped listings via the new `FontManager::families()`.
 - **Comment threads**: `Comment` is flat — add `parent: Option<String>` + thread rendering in
   `paint_comments`.
 - Verify **SmartAnimate** interpolation end-to-end in Flow preview (transition is selectable;
@@ -166,9 +169,12 @@ browser Library: the document model is a scene graph, not a Figma clone."*
   description field in component props.
 
 **Dashboard:**
-- **Real thumbnails**: render each recent file's first page via the CPU raster path
-  (`export_raster`/`thumbnail_scene`) into a disk cache keyed by file mtime — replaces the
-  recents grid's flat cards with live previews. Highest-impact dashboard upgrade.
+- ~~**Real thumbnails**~~ **DONE 2026-09-17** — Recents grid now renders each file's first page
+  through the same export pipeline as PNG export (`prepare_export` + `export_raster`), cached in
+  memory (mtime-validated) and on disk (`~/.config/x-native/thumbs/`, FNV-1a of path+mtime),
+  one render pumped per frame so a wall of new files warms up without hitching; failures fall
+  back to the watermark card. v1 covers `.x` documents; embedded image assets preview as
+  placeholders.
 - **Trash restore** (files already listed; restore action back to Drafts).
 - **Templates gallery**: bundled sample documents opened as copies (replaces the retired
   "Browse templates" card honestly).
