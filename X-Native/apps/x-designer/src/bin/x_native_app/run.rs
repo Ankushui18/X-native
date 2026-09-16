@@ -2953,6 +2953,12 @@ impl App {
     }
 }
 
+fn mark_onboarding_complete() {
+    let Some(home) = std::env::var_os("HOME") else { return };
+    let dir = std::path::PathBuf::from(home).join(".config/x-native");
+    if std::fs::create_dir_all(&dir).is_ok() { let _ = std::fs::write(dir.join("onboarding-complete"), b"1\n"); }
+}
+
 impl Host {
     // ── vector edit mode: engine <-> app mirroring, pointer handling ──
 
@@ -6030,6 +6036,7 @@ impl Host {
     fn apply_theme(&mut self, id: x_native::ui::ThemeId) {
         use x_native::ui::ColorTokens;
         let changed = crate::theme::set_theme(id);
+        crate::theme::persist_theme(id);
         let failures = ColorTokens::for_theme(id).contrast_audit();
         self.app.status = if !changed {
             format!("Theme: {} (already active)", id.label())
@@ -7544,7 +7551,20 @@ impl Host {
                 path,
                 note,
             }) => {
-                let doc = *document;
+                let mut doc = *document;
+                // Archived versions are snapshots, not normal save targets.
+                // Open them as a new unsaved document so Ctrl/Cmd+S cannot
+                // silently overwrite history.
+                let archived = path.parent().and_then(|p| p.file_name())
+                    .and_then(|n| n.to_str()) == Some(".x-native-history");
+                if archived {
+                    doc.path = None;
+                    doc.canonical_path = None;
+                    doc.source_path = None;
+                    doc.name = format!("{} (archived)", doc.name);
+                    doc.file_label = Some(doc.name.clone());
+                    doc.dirty = true;
+                }
                 let origin = match kind {
                     Kind::Open { origin } => origin,
                     _ => self.focus_origin(),
@@ -7623,7 +7643,11 @@ impl Host {
                     } else if tracked {
                         self.app.document_loading = None;
                     }
-                    self.app.status = note;
+                    self.app.status = if archived {
+                        "Archived version opened as an unsaved copy".into()
+                    } else {
+                        note
+                    };
                     if !activate {
                         self.app
                             .status
@@ -7794,6 +7818,28 @@ impl Host {
         true
     }
 
+    fn cmd_publish_library(&mut self) {
+        if !self.finish_edits() { return; }
+        let Some(doc) = self.app.doc_opt() else { return; };
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name(format!("{}.xlib", doc.name))
+            .add_filter("X-Native library", &["xlib"])
+            .save_file() else { return };
+        let roots = doc.editors.iter().map(|ed| ed.root.clone()).collect::<Vec<_>>();
+        let library_id = doc.name.to_lowercase().chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect::<String>();
+        let library = x_native::library_from_parts(
+            &doc.doc.styles, &doc.doc.variables, &roots,
+            library_id.trim_matches('-'), &doc.name, 1,
+        );
+        let text = x_native::save_xlib(&library);
+        match std::fs::write(&path, text) {
+            Ok(()) => self.app.status = format!("Published library: {}", path.display()),
+            Err(e) => self.app.status = format!("Library publish failed: {e}"),
+        }
+    }
+
     fn cmd_save(&mut self) {
         if !self.finish_edits() {
             return;
@@ -7805,6 +7851,17 @@ impl Host {
             self.save_to(path);
         } else {
             self.cmd_save_as();
+        }
+    }
+
+    fn cmd_open_version(&mut self) {
+        let dir = self.app.doc_opt().and_then(|d| d.path.clone())
+            .and_then(|p| p.parent().map(|p| p.join(".x-native-history")));
+        let mut dialog = rfd::FileDialog::new().add_filter("X-Native version", &["x"]);
+        if let Some(dir) = dir { dialog = dialog.set_directory(dir); }
+        if let Some(path) = dialog.pick_file() {
+            self.open_path(path);
+            self.app.status = "Opened archived version in a new tab".into();
         }
     }
 
@@ -7829,19 +7886,47 @@ impl Host {
         self.save_to(with_extension(path, "x"));
     }
 
+    /// Keep a small, local, persisted version history beside native .x files.
+    /// The current file is still the canonical save; history copies are plain
+    /// JSON .x files, so they remain diffable and recoverable without a server.
+    fn archive_version(&self, path: &std::path::Path) -> Result<(), String> {
+        if !path.exists() { return Ok(()); }
+        let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."))
+            .join(".x-native-history");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_secs();
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("document");
+        let mut dst = dir.join(format!("{stem}-{stamp}.x"));
+        let mut suffix = 2u32;
+        while dst.exists() {
+            dst = dir.join(format!("{stem}-{stamp}-{suffix}.x"));
+            suffix += 1;
+        }
+        std::fs::copy(path, &dst).map_err(|e| e.to_string())?;
+        let mut versions = std::fs::read_dir(&dir).map_err(|e| e.to_string())?
+            .filter_map(Result::ok).filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("x"))
+            .collect::<Vec<_>>();
+        versions.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
+        while versions.len() > 20 {
+            if let Some(old) = versions.first() { let _ = std::fs::remove_file(old.path()); }
+            versions.remove(0);
+        }
+        Ok(())
+    }
+
     fn save_to(&mut self, path: std::path::PathBuf) {
-        if !self.finish_edits() {
-            return;
-        }
-        if self.app.docs.is_empty() {
-            return;
-        }
+        if !self.finish_edits() { return; }
+        if self.app.docs.is_empty() { return; }
+        let history = self.archive_version(&path);
         match self.app.doc().save_to(&path) {
             Ok(()) => {
                 let name = self.app.doc_ref().name.clone();
-                self.app.status = match self.push_recent(name, Some(path)) {
-                    Ok(()) => "Saved".into(),
-                    Err(e) => format!("Saved; recent list not updated: {e}"),
+                let result = self.push_recent(name, Some(path));
+                self.app.status = match (result, history) {
+                    (Ok(()), Ok(())) => "Saved · version archived".into(),
+                    (Ok(()), Err(e)) => format!("Saved; history unavailable: {e}"),
+                    (Err(e), _) => format!("Saved; recent list not updated: {e}"),
                 };
             }
             Err(e) => self.app.status = format!("Save failed: {e}; document remains open"),
@@ -8082,6 +8167,16 @@ impl Host {
                 }
             }
             Action::NewFile => self.cmd_new_file(),
+            Action::OnboardingSample => {
+                mark_onboarding_complete();
+                let doc = crate::state::OpenDoc::getting_started();
+                self.app.docs.push(doc);
+                self.app.active = self.app.docs.len() - 1;
+                self.app.screen = crate::state::Screen::Editor;
+                self.app.center_view();
+            }
+            Action::OnboardingBlank => { mark_onboarding_complete(); self.cmd_new_file(); }
+            Action::OnboardingDismiss => mark_onboarding_complete(),
             Action::NewBoard => self.cmd_new_board(),
             Action::ImportFile => self.cmd_import_file(),
             Action::OpenRecent(i) => {
@@ -8183,6 +8278,31 @@ impl Host {
                 self.app.doc().left_tab = t;
             }
             Action::TokensExtractVars => self.cmd_extract_tokens(),
+            Action::CreateVariable(kind) => {
+                {
+                    let doc = self.app.doc();
+                    let base = match kind {
+                        crate::state::VariableKind::Color => "color/new",
+                        crate::state::VariableKind::Number => "number/new",
+                        crate::state::VariableKind::String => "string/new",
+                        crate::state::VariableKind::Boolean => "boolean/new",
+                    };
+                    let mut name = base.to_string();
+                    let mut n = 2;
+                    while doc.doc.variables.catalog().iter().any(|(_, key, _)| key == &name) {
+                        name = format!("{base}-{n}");
+                        n += 1;
+                    }
+                    match kind {
+                        crate::state::VariableKind::Color => { doc.doc.variables.colors.insert(name, x_native::Color::from_rgba8(99, 102, 241, 255)); }
+                        crate::state::VariableKind::Number => { doc.doc.variables.numbers.insert(name, 0.0); }
+                        crate::state::VariableKind::String => { doc.doc.variables.strings.insert(name, String::new()); }
+                        crate::state::VariableKind::Boolean => { doc.doc.variables.bools.insert(name, false); }
+                    }
+                    doc.dirty = true;
+                }
+                self.app.status = "Variable created".into();
+            }
             Action::SetTheme(t) => self.apply_theme(t),
             Action::CycleTheme => {
                 let next = crate::theme::active_theme().next();
@@ -8360,7 +8480,18 @@ impl Host {
                 self.app.flow = None;
                 self.app.status = "Flow preview ended".into();
             }
+            Action::FlowDeviceToggle => {
+                if let Some(flow) = self.app.flow.as_mut() {
+                    flow.device_frame = !flow.device_frame;
+                    self.app.status = if flow.device_frame {
+                        "Device frame enabled".into()
+                    } else {
+                        "Device frame disabled".into()
+                    };
+                }
+            }
             Action::LoadFont => self.cmd_load_font(),
+            Action::PublishLibrary => self.cmd_publish_library(),
             Action::Ctx(cmd) => {
                 self.app.context_menu.close();
                 self.app.apply_ctx(cmd);
@@ -8519,6 +8650,13 @@ impl Host {
             // Navigation bar actions
             Action::NavTab(tab) => {
                 self.app.nav_tab = tab;
+                // The rail is a navigation control, not a decorative state.
+                // Keep its selection and the document sidebar in sync.
+                self.app.doc().left_tab = match tab {
+                    NavTab::File | NavTab::Agents => crate::state::LeftTab::Layers,
+                    NavTab::Assets => crate::state::LeftTab::Assets,
+                    NavTab::Tools | NavTab::Variables => crate::state::LeftTab::Tokens,
+                };
             }
             Action::OpenAppMenu => {
                 self.app.app_menu.open = !self.app.app_menu.open;
@@ -8532,17 +8670,18 @@ impl Host {
                     1 => self.cmd_open_file(), // Open file…
                     3 => self.cmd_save(),      // Save
                     4 => self.cmd_save_as(),   // Save as…
-                    5 => {
+                    5 => self.cmd_open_version(), // Open archived version
+                    6 => {
                         self.dispatch(Action::FileDuplicate);
                     } // Duplicate file
-                    6 => {
+                    7 => {
                         self.dispatch(Action::FileMoveToDrafts);
                     } // Move to drafts
-                    8 => self.cmd_export(false), // Export as…
-                    9 => {
+                    9 => self.cmd_export(false), // Export as…
+                    10 => {
                         self.dispatch(Action::OpenFind);
                     } // Find…
-                    11 => {
+                    12 => {
                         // Dark mode toggle
                         let next = crate::theme::active_theme().next();
                         self.apply_theme(next);
@@ -8763,6 +8902,7 @@ impl Host {
             }
             Action::ApplyTextStyle(name) => {
                 self.app.dropdown_text_style = false;
+                self.app.doc().checkpoint();
                 let linked = self.app.apply_text_style(name.as_str());
                 self.app.status = if linked > 0 {
                     format!("Applied '{name}' to {linked} text layers")
@@ -8772,6 +8912,7 @@ impl Host {
             }
             Action::CreateTextStyle => {
                 self.app.dropdown_text_style = false;
+                self.app.doc().checkpoint();
                 if self.app.create_text_style_from_selection().is_none() {
                     self.app.status = "Select a text layer to create a style from".into();
                 }
@@ -8787,6 +8928,7 @@ impl Host {
             }
             Action::UpdateTextStyleFromSelection => {
                 self.app.dropdown_text_style = false;
+                self.app.doc().checkpoint();
                 if self.app.update_text_style_from_selection().is_none() {
                     self.app.status = "The selection is not linked to a text style".into();
                 }
@@ -8835,9 +8977,20 @@ impl Host {
                 }
             }
             Action::Field(f) => {
-                let buffer = field_initial(&self.app, f);
-                self.app.field_select_all = true;
-                self.app.field = Some(FieldEdit { id: f, buffer });
+                if f == FieldId::FontFamily {
+                    self.app.font_picker_open = !self.app.font_picker_open;
+                    self.app.field = None;
+                } else {
+                    let buffer = field_initial(&self.app, f);
+                    self.app.field_select_all = true;
+                    self.app.field = Some(FieldEdit { id: f, buffer });
+                }
+            }
+            Action::FontPicker(name) => {
+                self.app.font_picker_open = false;
+                self.app.apply_typo_field(FieldId::FontFamily, name.as_str());
+                self.app.mark_dirty();
+                self.app.status = format!("Font: {name}");
             }
             Action::FlowBtn(i) => {
                 let doc = self.app.doc();
@@ -9018,6 +9171,7 @@ impl Host {
             Action::AddProp(kind) => {
                 self.app.add_prop(kind);
             }
+            Action::AddSlot => self.app.add_slot(),
             Action::RemoveProp(name) => {
                 if let Some(c) = self.app.selected_master_name() {
                     self.app.remove_prop(&c, &name);
@@ -9975,6 +10129,18 @@ impl Host {
             FieldId::InstanceProp => {
                 self.app.commit_instance_prop(&raw);
             }
+            FieldId::ComponentDescription => {
+                let Some(id) = self.app.doc_ref().selected_id() else { return };
+                self.app.doc().checkpoint();
+                self.app.doc().editor().mutate_visual_stack(id.as_str(), |node| {
+                    if raw.is_empty() {
+                        node.bindings.remove("component:description");
+                    } else {
+                        node.bindings.insert("component:description".into(), raw.clone());
+                    }
+                });
+                self.app.mark_dirty();
+            }
             FieldId::ExportSuffix => {
                 self.app.doc().export_suffix = raw;
             }
@@ -10440,6 +10606,12 @@ fn field_initial(app: &App, f: FieldId) -> String {
         FieldId::GridColor => editor_ui::hex6(app.grid_color),
         FieldId::GridPct => format!("{}", app.grid_pct.round() as i64),
         FieldId::Zoom => format!("{}", (app.zoom * 100.0).round() as i64),
+        FieldId::ComponentDescription => app
+            .doc_ref()
+            .selected_id()
+            .and_then(|id| crate::editor_ui::find_node(&app.doc_ref().editor_ref().root, id.as_str()))
+            .and_then(|n| n.bindings.get("component:description").cloned())
+            .unwrap_or_default(),
         FieldId::InstanceProp => {
             // current override value of the targeted prop (default if none)
             match (app.selected_instance(), app.instance_prop_target.clone()) {

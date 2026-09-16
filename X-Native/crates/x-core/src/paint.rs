@@ -697,7 +697,7 @@ mod tests {
 
     #[test]
     fn nan_stop_positions_do_not_panic_the_sort() {
-        // AUDIT: gradient stop sorting used partial_cmp().unwrap() — a NaN
+        // AUDIT: gradient stop sorting once force-unwrapped float ordering — a NaN
         // position (0.0/0.0, import garbage) panicked the app mid-paint.
         // total_cmp orders NaN past every finite stop instead.
         let mut p = Paint::linear_gradient(

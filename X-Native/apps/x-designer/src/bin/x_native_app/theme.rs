@@ -69,6 +69,31 @@ pub fn set_theme(id: ThemeId) -> bool {
     ACTIVE.swap(index, std::sync::atomic::Ordering::Relaxed) != index
 }
 
+/// Load the user's UI palette from the platform config directory. A missing
+/// or malformed preference intentionally falls back to Graphite.
+pub fn load_persisted_theme() -> Option<ThemeId> {
+    let home = std::env::var_os("HOME")?;
+    let path = std::path::PathBuf::from(home)
+        .join(".config")
+        .join("x-native")
+        .join("theme");
+    let value = std::fs::read_to_string(path).ok()?;
+    ThemeId::parse(value.trim())
+}
+
+/// Persist only the stable theme slug, using a temp file so an interrupted
+/// write cannot leave a truncated preference.
+pub fn persist_theme(id: ThemeId) {
+    let Some(home) = std::env::var_os("HOME") else { return };
+    let dir = std::path::PathBuf::from(home).join(".config").join("x-native");
+    if std::fs::create_dir_all(&dir).is_err() { return; }
+    let path = dir.join("theme");
+    let tmp = dir.join("theme.tmp");
+    if std::fs::write(&tmp, format!("{}\n", id.slug())).is_ok() {
+        let _ = std::fs::rename(tmp, path);
+    }
+}
+
 /// Map a Graphite-authored color into the active theme. Identity while the
 /// default theme is active, and for colors that are not palette roles.
 #[inline]

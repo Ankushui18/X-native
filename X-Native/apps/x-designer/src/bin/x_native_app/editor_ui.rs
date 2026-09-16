@@ -23,7 +23,7 @@ use crate::icons::{draw_flow_glyph, draw_icon};
 use crate::paint::*;
 use crate::state::{
     kind_icon, parse_hex, Action, App, Drag, FieldId, LeftTab, NavTab, RightTab, Tool, TreeDrop,
-    FRAME_PRESETS,
+    VariableKind, FRAME_PRESETS,
 };
 use crate::theme::*;
 
@@ -1313,6 +1313,7 @@ fn paint_app_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         ("", "", false), // separator
         ("Save", "⌘S", true),
         ("Save as…", "⇧⌘S", true),
+        ("Open version…", "", true),
         ("Duplicate file", "", true),
         ("Move to drafts", "", true),
         ("", "", false), // separator
@@ -1793,6 +1794,29 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             hit.push((ir, Action::LeftTab(tab)));
         }
     }
+    // Agents is a real workspace surface, not an empty selection state. Keep
+    // it intentionally small until the agent conversation UI lands, but make
+    // the available integration visible and give the user useful context.
+    if app.nav_tab == NavTab::Agents {
+        let ay = y0 + 132.0;
+        app.fonts.micro_label(s, sx + 12.0, ay, "AGENT WORKSPACE", C_DIM, Wt::Med);
+        app.fonts.text(s, sx + 12.0, ay + 28.0, "MCP tools connected", T11, C_TEXT, Wt::Med);
+        app.fonts.text(
+            s,
+            sx + 12.0,
+            ay + 48.0,
+            "Ask an agent to inspect or edit this file.",
+            T10,
+            C_MUTED,
+            Wt::Reg,
+        );
+        let status_r = Rect::new(sx + 12.0, ay + 68.0, lw - 12.0, ay + 96.0);
+        fill_rrect(s, status_r, 6.0, C_FIELD_2);
+        app.fonts.text_center(s, status_r, "⌘K  Open command palette", T10, C_TEXT, Wt::Med, true);
+        hit.push((status_r, Action::PaletteToggle));
+        return;
+    }
+
     let y = y0 + 120.5; // PAGES label top 156.5
 
     if app.doc().left_tab == LeftTab::Assets {
@@ -3513,6 +3537,19 @@ fn paint_design(
         Some(Action::Field(FieldId::FontFamily)),
         Some("chevron-down"),
     );
+    if app.font_picker_open {
+        let names = app.fonts.fonts.family_names();
+        let popup = Rect::new(fam.x0, fam.y1 + 2.0, fam.x1, fam.y1 + 174.0);
+        fill_rrect(s, popup, 6.0, C_PANEL_2);
+        stroke_rrect(s, popup, 6.0, C_LINE_2, 1.0);
+        app.fonts.micro_label(s, popup.x0 + 10.0, popup.y0 + 14.0, "FONT BROWSER", C_DIM, Wt::Med);
+        for (i, name) in names.iter().take(8).enumerate() {
+            let row = Rect::new(popup.x0 + 4.0, popup.y0 + 22.0 + i as f64 * 18.0, popup.x1 - 4.0, popup.y0 + 39.0 + i as f64 * 18.0);
+            if hover(app, row) { fill_rrect(s, row, 3.0, C_FIELD_2); }
+            app.fonts.text(s, row.x0 + 6.0, row.y0 + 3.0, name, T10, C_TEXT, Wt::Reg);
+            hit.push((row, Action::FontPicker(name.clone())));
+        }
+    }
     let wgt = Rect::new(x0, y0 + 717.5, x0 + 227.0, y0 + 745.5);
     input(
         app,
@@ -4246,6 +4283,20 @@ fn paint_design(
         // master side: bind the selected descendant as a new property
         app.fonts.text(s, x0, y, &master, T10, C_DIM, Wt::Reg);
         y += 20.0;
+        app.fonts.text(s, x0, y, "Description", T10, C_DIM, Wt::Reg);
+        let description = app
+            .doc_ref()
+            .selected_id()
+            .and_then(|id| find_node(&app.doc_ref().editor_ref().root, id.as_str()))
+            .and_then(|n| n.bindings.get("component:description").cloned())
+            .unwrap_or_default();
+        let description_r = Rect::new(x0, y + 8.0, xr, y + 36.0);
+        input(
+            app, s, hit, description_r, None,
+            &field_val(app, FieldId::ComponentDescription, description),
+            false, Some(Action::Field(FieldId::ComponentDescription)), None,
+        );
+        y += 46.0;
         // variant-set affordance for multi-master selections
         {
             let cb = Rect::new(x0, y, xr, y + 22.0);
@@ -4264,6 +4315,13 @@ fn paint_design(
             hit.push((cb, Action::VariantCombine));
             y += 28.0;
         }
+        let slot = Rect::new(x0, y, xr, y + 24.0);
+        let slot_hov = hover(app, slot);
+        fill_rrect(s, slot, 6.0, if slot_hov { C_FIELD_2 } else { C_FIELD });
+        stroke_rrect(s, slot, 6.0, C_LINE, 1.0);
+        app.fonts.text_center(s, slot, "+ Slot property", T10, C_TEXT, Wt::Reg, true);
+        hit.push((slot, Action::AddSlot));
+        y += 28.0;
         for (kind, label) in [
             (x_native::ComponentPropKind::Text, "+ Text property"),
             (x_native::ComponentPropKind::Bool, "+ Bool property"),
@@ -7122,8 +7180,15 @@ fn paint_flow_overlay(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         s.append(scene, Some(aff));
     }
 
-    // chrome chip: frame name + Back + Exit
+    // Optional device chrome for presenting mobile/tablet flows. The authored
+    // frame remains untouched; this is preview-only presentation chrome.
     let canvas = app.view_canvas();
+    if flow.device_frame {
+        stroke_rrect(s, canvas, 18.0, C_LINE_2, 8.0);
+        fill_rrect(s, Rect::new(canvas.x0 + 10.0, canvas.y0 + 8.0, canvas.x1 - 10.0, canvas.y0 + 12.0), 2.0, C_LINE);
+        fill_rrect(s, Rect::new((canvas.x0 + canvas.x1) / 2.0 - 26.0, canvas.y1 - 18.0, (canvas.x0 + canvas.x1) / 2.0 + 26.0, canvas.y1 - 14.0), 2.0, C_LINE_2);
+    }
+    // chrome chip: frame name + device toggle + Back + Exit
     let chip_w = 210.0 + app.fonts.measure(&name, T11, Wt::Med);
     let chip = Rect::new(
         (app.win_w - chip_w) / 2.0,
@@ -7142,6 +7207,10 @@ fn paint_flow_overlay(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         C_TEXT,
         Wt::Med,
     );
+    let device_btn = Rect::new(chip.x0 + 112.0, chip.y0 + 7.0, chip.x0 + 176.0, chip.y1 - 7.0);
+    fill_rrect(s, device_btn, 6.0, if flow.device_frame { C_FIELD_2 } else { C_FIELD });
+    app.fonts.text_center(s, device_btn, if flow.device_frame { "Device ✓" } else { "Device" }, T10, C_TEXT, Wt::Med, true);
+    hit.push((device_btn, Action::FlowDeviceToggle));
     let bw = 74.0;
     let bb = Rect::new(
         chip.x1 - bw - 84.0,
@@ -7222,6 +7291,12 @@ fn paint_assets(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
     app.fonts
         .text_center(s, br, "Load Font…", T10, C_TEXT, Wt::Med, true);
     hit.push((br, Action::LoadFont));
+    y += 34.0;
+    let publish = Rect::new(x0, y, lw - 12.0, y + 26.0);
+    fill_rrect(s, publish, 6.0, if hover(app, publish) { C_LINE_2 } else { C_FIELD_2 });
+    stroke_rrect(s, publish, 6.0, C_LINE_2, 1.0);
+    app.fonts.text_center(s, publish, "Publish library…", T10, C_TEXT, Wt::Med, true);
+    hit.push((publish, Action::PublishLibrary));
     y += 34.0;
     app.fonts.text(
         s,
@@ -7331,6 +7406,29 @@ fn paint_tokens(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
         hit.push((br, Action::TokensExtractVars));
     }
     y += 32.0;
+    // Variables are engine-backed, so the prominent rail has a real creation
+    // entry point instead of being a decorative highlight. Names are generated
+    // deterministically and can be renamed in the document JSON afterwards.
+    app.fonts.micro_label(s, x0, y, "NEW VARIABLE", C_DIM, Wt::Med);
+    y += 16.0;
+    let kinds = [
+        (VariableKind::Color, "Color"),
+        (VariableKind::Number, "Number"),
+        (VariableKind::String, "String"),
+        (VariableKind::Boolean, "Boolean"),
+    ];
+    let bw = (lw - 16.0) / 2.0;
+    for (i, (kind, label)) in kinds.into_iter().enumerate() {
+        let bx = x0 + (i % 2) as f64 * (bw + 4.0);
+        let by = y + (i / 2) as f64 * 30.0;
+        let br = Rect::new(bx, by, bx + bw, by + 25.0);
+        fill_rrect(s, br, 5.0, if hover(app, br) { C_LINE_2 } else { C_FIELD_2 });
+        stroke_rrect(s, br, 5.0, C_LINE_2, 1.0);
+        app.fonts.text_center(s, br, label, T10, C_TEXT, Wt::Med, true);
+        hit.push((br, Action::CreateVariable(kind)));
+    }
+    y += 66.0;
+
     // UI theme cycle. Palettes live in x-ui (design_system.rs); paint.rs maps
     // every chrome color through the active one, so this repaints the tool.
     let tb = Rect::new(x0, y, lw - 12.0, y + 26.0);
