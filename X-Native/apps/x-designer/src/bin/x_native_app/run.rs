@@ -8257,7 +8257,6 @@ impl Host {
             Action::SearchFocus => {
                 self.app.dash_search_focus = true;
             }
-            Action::Upgrade => self.app.status = "Upgrade — coming soon".into(),
             Action::InviteTeam => self.app.status = "Invite team — coming soon".into(),
             Action::AddTeam => self.app.status = "Team creation — coming soon".into(),
             Action::SelectDoc(i) => {

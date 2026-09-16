@@ -439,7 +439,6 @@ pub enum Action {
     DashNav(DashView),
     DashLayout(DashLayout),
     SearchFocus,
-    Upgrade,
     /// UI palette (roles live in crates/x-ui/src/design_system.rs)
     SetTheme(x_native::ui::ThemeId),
     CycleTheme,

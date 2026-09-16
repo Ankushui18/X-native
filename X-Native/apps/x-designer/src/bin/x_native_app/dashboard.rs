@@ -285,7 +285,9 @@ fn paint_sidebar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         hit.push((r, Action::DashNav(DashView::Home)));
     }
 
-    // upgrade card pinned to bottom — p-3 container, card 235×90 r10
+    // Free/local-first badge (was the "Upgrade to Pro" card — the tool is
+    // free to use, there is nothing to sell). Same geometry as before so the
+    // sidebar keeps its bottom anchor; purely informational, not clickable.
     let card = Rect::new(
         12.0,
         app.win_h - 102.0,
@@ -302,13 +304,12 @@ fn paint_sidebar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     );
     fill_rrect(s, ib, 8.0, Color::from_rgba8(0x1B, 0xCB, 0x55, 51));
     stroke_rrect(s, ib, 8.0, crate::theme::C_LOGO_GREEN.with_alpha(0.3), 1.0);
-    draw_icon(s, "sparkles", ib.x0 + 8.0, ib.y0 + 8.0, 16.0, C_LOGO_GREEN);
-    // title box top 811.3 → card.y0 + 13.3 ; sub top 827.8 → +16.5 after title
+    draw_icon(s, "check", ib.x0 + 8.0, ib.y0 + 8.0, 16.0, C_LOGO_GREEN);
     app.fonts.text(
         s,
         ib.x1 + 8.0,
         card.y0 + 13.3,
-        "Upgrade to Pro",
+        "Free for everyone",
         T11,
         C_TEXT,
         Wt::Med,
@@ -317,23 +318,28 @@ fn paint_sidebar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         s,
         ib.x1 + 8.0,
         card.y0 + 29.8,
-        "Unlimited files",
+        "No account required",
         T10,
         C_DIM,
         Wt::Reg,
     );
-    let ub = Rect::new(
+    // old button slot → plain caption row (not a control, no hit region)
+    let cb = Rect::new(
         card.x0 + 13.0,
         card.y1 - 37.0,
         card.x1 - 13.0,
         card.y1 - 13.0,
     );
-    let hov = hover(app, ub);
-    fill_rrect(s, ub, 6.0, if hov { C_LINE_2 } else { C_FIELD_2 });
-    stroke_rrect(s, ub, 6.0, C_LINE_2, 1.0);
-    app.fonts
-        .text_center(s, ub, "Upgrade", T10, C_TEXT, Wt::Med, true);
-    hit.push((ub, Action::Upgrade));
+    fill_rrect(s, cb, 6.0, C_FIELD_2);
+    app.fonts.text_center(
+        s,
+        cb,
+        "Your files stay on this machine",
+        T10,
+        C_MUTED,
+        Wt::Reg,
+        true,
+    );
 }
 
 // ------------------------------------------------------------- main area
