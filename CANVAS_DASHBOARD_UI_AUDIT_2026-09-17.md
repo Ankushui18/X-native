@@ -156,8 +156,11 @@ browser Library: the document model is a scene graph, not a Figma clone."*
   (`FieldId::VarName`): rename lands as ONE undoable `Batch` — value moves to the new name, the
   old name becomes an alias so existing bindings keep resolving, the old entry retires.
   Renaming an alias re-points it. (v1: mode-scoped overrides keep the old name.)
-- Library **update-acceptance dialog**: notification kind exists; wire `diff_library` →
-  review list → `accept_update` (backend complete in x-core).
+- ~~Library **update-acceptance dialog**~~ **DONE 2026-09-17** — LIBRARIES section in the
+  Assets panel lists pinned dependencies ("check" per row) → picks the updated .xlib
+  (source-path hint → `<doc dir>/<id>.xlib` → file dialog) → `diff_library` review modal
+  (scrim + change list + Accept/Keep) → `accept_update` repins, re-resolves consumers,
+  recomputes `snapshot_hash` (so reopen passes integrity), and records the new source path.
 - ~~**Font picker UI**~~ **EXISTS + UPGRADED 2026-09-17** — both listing sites (FONT BROWSER
   popup, LIBRARY panel) now group faces into families via `FontManager::families()`, with face
   counts; picking a family resolves to a face at render time.

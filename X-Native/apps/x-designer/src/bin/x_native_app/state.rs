@@ -426,6 +426,13 @@ pub enum Action {
     VarStep(String, f64),
     /// Undo the last variable-table edit on the open document.
     VarUndoVars,
+    /// Libraries: pick an updated .xlib for pinned dependency `usize` and
+    /// open the diff review (Assets panel LIBRARIES section).
+    LibCheckUpdate(usize),
+    /// Review dialog: repin to the newer library and re-resolve consumers.
+    LibReviewAccept,
+    /// Review dialog: keep the pinned version (also the click-away action).
+    LibReviewClose,
     CycleInstanceSwap(String),
     ResetInstanceProps,
     // board chrome
@@ -900,6 +907,18 @@ impl NotificationKind {
             NotificationKind::ComponentUpdate => "component",
         }
     }
+}
+
+/// Library update review: a newer .xlib was picked for a pinned dependency
+/// and its diff is awaiting Accept / Keep. `dep_index` points into
+/// `Document::library_deps` at accept time.
+#[derive(Clone)]
+pub struct LibReview {
+    pub dep_index: usize,
+    pub library_id: String,
+    pub path: std::path::PathBuf,
+    pub newer: x_native::Library,
+    pub changes: Vec<x_native::LibraryChange>,
 }
 
 /// Flow-preview state: prototype playback in a chrome-less viewer over the
@@ -1572,6 +1591,8 @@ pub struct App {
     pub var_value_rects: Vec<(Rect, String)>,
     /// Same, for the name slots (`FieldId::VarName` rename).
     pub var_name_rects: Vec<(Rect, String)>,
+    /// Active library-update review (modal dialog state).
+    pub lib_review: Option<LibReview>,
     /// last JSX produced by Copy-as-code (for tests; the real target is
     /// the system clipboard)
     pub last_copied_code: Option<String>,
@@ -1729,6 +1750,7 @@ impl App {
             var_edit_name: None,
             var_value_rects: Vec::new(),
             var_name_rects: Vec::new(),
+            lib_review: None,
             last_copied_code: None,
             comment_draft: None,
             open_comment: None,

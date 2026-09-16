@@ -7862,6 +7862,84 @@ impl Host {
         }
     }
 
+    /// Pick an updated .xlib for pinned dependency `i`, diff it against the
+    /// pinned snapshot, and open the review modal. Tries the recorded source
+    /// hint, then `<doc dir>/<library_id>.xlib`, then a file dialog.
+    fn cmd_lib_check_update(&mut self, i: usize) {
+        let (id, source) = {
+            let d = self.app.doc_ref();
+            match d.doc.library_deps.get(i) {
+                Some(dep) => (dep.library_id.clone(), dep.source_path.clone()),
+                None => return,
+            }
+        };
+        let mut candidate: Option<std::path::PathBuf> = None;
+        if !source.is_empty() {
+            let p = std::path::PathBuf::from(&source);
+            if p.is_file() {
+                candidate = Some(p);
+            }
+        }
+        if candidate.is_none() {
+            if let Some(dp) = self.app.doc_ref().path.clone() {
+                if let Some(dir) = dp.parent() {
+                    let p = dir.join(format!("{id}.xlib"));
+                    if p.is_file() {
+                        candidate = Some(p);
+                    }
+                }
+            }
+        }
+        let path = match candidate {
+            Some(p) => p,
+            None => {
+                let Some(p) = rfd::FileDialog::new()
+                    .set_file_name(format!("{id}.xlib"))
+                    .add_filter("X-Native library", &["xlib"])
+                    .pick_file()
+                else {
+                    return;
+                };
+                p
+            }
+        };
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => {
+                self.app.status = format!("Cannot read {}: {e}", path.display());
+                return;
+            }
+        };
+        let newer = match x_native::fileio::load_xlib(&text) {
+            Ok(l) => l,
+            Err(e) => {
+                self.app.status = format!("Not a valid .xlib: {e}");
+                return;
+            }
+        };
+        let changes = {
+            let d = self.app.doc_ref();
+            match d.doc.library_snapshots.get(&id) {
+                Some(pinned) => x_native::diff_library(pinned, &newer),
+                None => {
+                    self.app.status = format!("No pinned snapshot for {id}");
+                    return;
+                }
+            }
+        };
+        if changes.is_empty() {
+            self.app.status = format!("{id}: picked library matches the pinned version");
+            return;
+        }
+        self.app.lib_review = Some(crate::state::LibReview {
+            dep_index: i,
+            library_id: id,
+            path,
+            newer,
+            changes,
+        });
+    }
+
     fn cmd_save(&mut self) {
         if !self.finish_edits() {
             return;
@@ -9257,6 +9335,43 @@ impl Host {
                 } else {
                     self.app.status = "Nothing to undo in variables".into();
                 }
+            }
+            Action::LibCheckUpdate(i) => self.cmd_lib_check_update(i),
+            Action::LibReviewAccept => {
+                let Some(rv) = self.app.lib_review.clone() else {
+                    return;
+                };
+                self.app.lib_review = None;
+                let d = self.app.doc();
+                if rv.dep_index >= d.doc.library_deps.len() {
+                    self.app.status = "Library dependency no longer exists".into();
+                    return;
+                }
+                let doc = &mut d.doc;
+                let id = doc.library_deps[rv.dep_index].library_id.clone();
+                let (changes, updated) = x_native::accept_update(
+                    &mut doc.library_deps[rv.dep_index],
+                    &mut doc.library_snapshots,
+                    &mut doc.pages,
+                    rv.newer,
+                );
+                // Repin integrity + source hint so future checks auto-find
+                // this file (snapshot_hash must cover the NEW snapshot or
+                // load-time verification would flag the document).
+                if let Some(dep) = doc.library_deps.get_mut(rv.dep_index) {
+                    dep.snapshot_hash = x_native::library_hash(
+                        doc.library_snapshots.get(&id).expect("just inserted"),
+                    );
+                    dep.source_path = rv.path.to_string_lossy().into_owned();
+                }
+                let _ = changes;
+                self.app.mark_dirty();
+                self.app.status = format!(
+                    "Library “{id}” updated — {updated} layer(s) re-resolved"
+                );
+            }
+            Action::LibReviewClose => {
+                self.app.lib_review = None;
             }
             Action::InspectCopy => {
                 let code = self.app.inspect_code();

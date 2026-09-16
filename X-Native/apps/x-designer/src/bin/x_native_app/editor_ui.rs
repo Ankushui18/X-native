@@ -67,6 +67,9 @@ pub fn paint(app: &mut App, s: &mut Scene) {
     if app.palette.open {
         paint_palette(app, s, &mut hit);
     }
+    if app.lib_review.is_some() {
+        paint_lib_review(app, s, &mut hit);
+    }
     paint_color_picker(app, s, &mut hit);
     paint_carets(app, s);
     app.hit = hit;
@@ -7266,6 +7269,89 @@ fn paint_flow_overlay(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
 
 // ————————————————————————————————————————— assets panel (fonts)
 
+/// Library update review modal: the pinned-vs-newer changeset with
+/// Accept / Keep. Painted last + a full-window scrim hit, so clicks outside
+/// the card close the review (hit resolution takes the LAST painted rect).
+fn paint_lib_review(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    use crate::paint::{fill_rect, fill_rrect, stroke_rrect, Wt};
+    let Some(rv) = app.lib_review.as_ref() else {
+        return;
+    };
+    let card_w = 460.0;
+    let row_h = 22.0;
+    let shown = rv.changes.len().min(8);
+    let card_h = 96.0 + shown as f64 * row_h + if rv.changes.len() > 8 { 18.0 } else { 0.0 };
+    let cx = (app.win_w - card_w) / 2.0;
+    let cy = (app.win_h - card_h).max(60.0) / 2.0;
+    let card = Rect::new(cx, cy, cx + card_w, cy + card_h);
+    // scrim swallows outside clicks
+    hit.push((Rect::new(0.0, 0.0, app.win_w, app.win_h), Action::LibReviewClose));
+    fill_rect(s, Rect::new(0.0, 0.0, app.win_w, app.win_h), C_SCRIM);
+    fill_rrect(s, card, 10.0, C_PANEL);
+    stroke_rrect(s, card, 10.0, C_LINE_2, 1.0);
+    app.fonts.text(
+        s,
+        cx + 20.0,
+        cy + 20.0,
+        &format!("Update library “{}”", rv.library_id),
+        T14,
+        C_TEXT,
+        Wt::Semi,
+    );
+    app.fonts.text(
+        s,
+        cx + 20.0,
+        cy + 42.0,
+        &format!(
+            "{} · {} change{}",
+            rv.path.display(),
+            rv.changes.len(),
+            if rv.changes.len() == 1 { "" } else { "s" }
+        ),
+        T10,
+        C_MUTED,
+        Wt::Reg,
+    );
+    for (i, ch) in rv.changes.iter().take(8).enumerate() {
+        let ry = cy + 64.0 + i as f64 * row_h;
+        let (glyph, label): (&str, String) = match ch {
+            x_native::LibraryChange::StyleAdded(n) => ("plus", format!("Style added: {n}")),
+            x_native::LibraryChange::StyleRemoved(n) => ("x", format!("Style removed: {n}")),
+            x_native::LibraryChange::StyleModified(n) => ("pencil", format!("Style modified: {n}")),
+            x_native::LibraryChange::VariableChanged(n) => ("code", format!("Variable changed: {n}")),
+            x_native::LibraryChange::ComponentAdded(n) => ("plus", format!("Component added: {n}")),
+            x_native::LibraryChange::ComponentRemoved(n) => ("x", format!("Component removed: {n}")),
+        };
+        let icon_c = if label.contains("removed") { C_MUTED } else { C_TEXT };
+        draw_icon(s, glyph, cx + 20.0, ry + 2.0, 12.0, icon_c);
+        app.fonts
+            .text(s, cx + 40.0, ry + 2.0, &label, T11, C_TEXT, Wt::Reg);
+    }
+    if rv.changes.len() > 8 {
+        app.fonts.text(
+            s,
+            cx + 40.0,
+            cy + 64.0 + 8.0 * row_h,
+            &format!("… and {} more", rv.changes.len() - 8),
+            T10,
+            C_DIM,
+            Wt::Reg,
+        );
+    }
+    // footer buttons
+    let by = card.y1 - 40.0;
+    let accept = Rect::new(card.x1 - 168.0, by, card.x1 - 20.0, card.y1 - 14.0);
+    let keep = Rect::new(card.x1 - 292.0, by, card.x1 - 176.0, card.y1 - 14.0);
+    fill_rrect(s, accept, 6.0, if hover(app, accept) { C_LINE_2 } else { C_FIELD_2 });
+    stroke_rrect(s, accept, 6.0, C_LINE_2, 1.0);
+    app.fonts.text_center(s, accept, "Update library", T11, C_TEXT, Wt::Med, true);
+    hit.push((accept, Action::LibReviewAccept));
+    fill_rrect(s, keep, 6.0, C_FIELD);
+    stroke_rrect(s, keep, 6.0, C_LINE, 1.0);
+    app.fonts.text_center(s, keep, "Keep pinned version", T11, C_MUTED, Wt::Reg, true);
+    hit.push((keep, Action::LibReviewClose));
+}
+
 fn paint_assets(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0: f64, lw: f64) {
     let x0 = 12.0;
     let mut y = y0 + 160.5;
@@ -7320,6 +7406,43 @@ fn paint_assets(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
         C_MUTED,
         Wt::Reg,
     );
+    y += 20.0;
+    // LIBRARIES — pinned document dependencies, each checkable against an
+    // updated .xlib on disk (diff review before anything is repinned).
+    let deps: Vec<(String, u32)> = app
+        .doc_opt()
+        .map(|d| {
+            d.doc
+                .library_deps
+                .iter()
+                .map(|dep| (dep.library_id.clone(), dep.resolved_version))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !deps.is_empty() {
+        app.fonts.micro_label(s, x0, y, "LIBRARIES", C_DIM, Wt::Med);
+        y += 16.0;
+        for (i, (id, ver)) in deps.iter().enumerate() {
+            let row_t = y;
+            let hover_r = Rect::new(x0, row_t, lw - 12.0, row_t + 20.0);
+            if hover(app, hover_r) {
+                fill_rrect(s, hover_r, 4.0, C_ROW_HOVER);
+            }
+            draw_icon(s, "component", x0 + 3.0, row_t + 4.0, 12.0, C_MUTED);
+            let label = app.fonts.truncate(id, T10, Wt::Med, lw - 92.0);
+            app.fonts.text(s, x0 + 20.0, row_t + 3.0, &label, T10, C_TEXT, Wt::Med);
+            let vs = format!("v{ver}");
+            let vw2 = app.fonts.measure(&vs, T10, Wt::Mono);
+            app.fonts.text(s, lw - 74.0 - vw2, row_t + 3.0, &vs, T10, C_MUTED, Wt::Mono);
+            // "check" — picks the updated .xlib and opens the diff review
+            let cb = Rect::new(lw - 66.0, row_t + 2.0, lw - 16.0, row_t + 18.0);
+            fill_rrect(s, cb, 4.0, if hover(app, cb) { C_LINE_2 } else { C_FIELD });
+            app.fonts.text_center(s, cb, "check", T10, C_TEXT, Wt::Reg, true);
+            hit.push((cb, Action::LibCheckUpdate(i)));
+            y += 20.0;
+        }
+        y += 8.0;
+    }
 }
 
 // ————————————————————————————————————————— tokens panel (design audit)
