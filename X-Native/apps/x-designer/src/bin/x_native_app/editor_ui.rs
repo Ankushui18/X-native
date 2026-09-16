@@ -24,6 +24,7 @@ use crate::theme::*;
 // ------------------------------------------------------------------ paint
 
 pub fn paint(app: &mut App, s: &mut Scene) {
+    app.tooltip.clear();
     let mut hit: Vec<(Rect, Action)> = Vec::new();
     fill_rect(s, Rect::new(0.0, 0.0, app.win_w, app.win_h), C_BG);
     if app.flow.is_some() {
@@ -91,7 +92,43 @@ pub fn paint_over(app: &mut App, s: &mut Scene) {
     paint_app_menu(app, s, &mut hit);
     paint_find_replace(app, s, &mut hit);
     paint_notifications(app, s, &mut hit);
+    paint_tooltip(app, s);
     app.hit = hit;
+}
+
+/// P10: the hover label for the control under the cursor. The
+/// smallest registered rect containing the mouse wins (most specific
+/// control); the pill floats below-right of the cursor, clamped to the
+/// window, inverted against the chrome.
+fn paint_tooltip(app: &App, s: &mut Scene) {
+    let mouse = app.mouse;
+    let mut best: Option<(f64, &String)> = None;
+    for (r, label) in &app.tooltip {
+        if !r.contains(mouse) {
+            continue;
+        }
+        let area = r.width() * r.height();
+        if best.map_or(true, |(a, _)| area < a) {
+            best = Some((area, label));
+        }
+    }
+    let Some((_, label)) = best else {
+        return;
+    };
+    let tw = app.fonts.measure(label, T10, Wt::Reg) + 16.0;
+    let th = 20.0;
+    let mut x = mouse.x + 14.0;
+    let mut y = mouse.y + 18.0;
+    if x + tw > app.win_w - 8.0 {
+        x = (mouse.x - tw - 10.0).max(8.0);
+    }
+    if y + th > app.win_h - 8.0 {
+        y = (mouse.y - th - 12.0).max(8.0);
+    }
+    let tr = Rect::new(x, y, x + tw, y + th);
+    elev_shadow(s, tr, 8.0, Elevation::Floating);
+    fill_rrect(s, tr, 5.0, C_TEXT);
+    app.fonts.text(s, x + 8.0, y + 5.0, label, T10, C_BASE, Wt::Reg);
 }
 
 /// Persistent ruler guides (Figma): 1px pink lines across the canvas plus
@@ -926,6 +963,12 @@ fn paint_rulers(app: &App, s: &mut Scene) {
         vline(s, sx, reg.canvas.y0, reg.canvas.y0 + r, C_ACCENT);
         hline(s, reg.canvas.x0, reg.canvas.x0 + r, sy, C_ACCENT);
     }
+}
+
+/// P10: register a hover label for `r`; `paint_tooltip` draws the one
+/// under the cursor, above everything else.
+fn tip(app: &mut App, r: Rect, label: &str) {
+    app.tooltip.push((r, label.to_string()));
 }
 
 fn hover(app: &App, r: Rect) -> bool {
@@ -1784,6 +1827,7 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         fill_rrect(s, srch, 4.0, C_FIELD_2);
     }
     draw_icon(s, "search", lw - 25.0, ly, 12.0, C_DIM);
+    tip(app, srch, "Search layers");
     hit.push((srch, Action::Field(FieldId::TreeSearch)));
     // F6: collapse-all (Figma parity) — the selection's ancestors stay
     // open; it sits left of search
@@ -1792,6 +1836,7 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         fill_rrect(s, cpl, 4.0, C_FIELD_2);
     }
     draw_icon(s, "chevrons-down", lw - 43.0, ly, 12.0, C_DIM);
+    tip(app, cpl, "Collapse all layers");
     hit.push((cpl, Action::CollapseAllLayers));
 
     // F8: the search row is visible while the field is open or the
@@ -2180,6 +2225,7 @@ fn paint_right(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         if app.dropdown_zoom { C_TEXT } else { C_MUTED },
         Wt::Reg,
     );
+    tip(app, zoom_r, "Zoom menu");
     hit.push((zoom_r, Action::ZoomMenu));
     let icons = ["message-circle", "play"];
     for (i, ic) in icons.iter().enumerate() {
@@ -2188,8 +2234,14 @@ fn paint_right(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         draw_icon(s, ic, ix, iy, 16.0, C_DIM);
         let icon_hit = Rect::new(ix - 2.0, iy - 2.0, ix + 18.0, iy + 18.0);
         match i {
-            0 => hit.push((icon_hit, Action::Tool(Tool::Comment))),
-            _ => hit.push((icon_hit, Action::RightTab(RightTab::Prototype))),
+            0 => {
+                tip(app, icon_hit, "Comment tool");
+                hit.push((icon_hit, Action::Tool(Tool::Comment)));
+            }
+            _ => {
+                tip(app, icon_hit, "Prototype tab");
+                hit.push((icon_hit, Action::RightTab(RightTab::Prototype)));
+            }
         }
     }
 
@@ -4927,6 +4979,13 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             16.0,
             if active { C_BLACK } else { C_DIM },
         );
+        let sc = t.shortcut_hint(app.is_board());
+        let tl = if sc.is_empty() {
+            t.label().to_string()
+        } else {
+            format!("{} ({})", t.label(), sc)
+        };
+        tip(app, r, &tl);
         hit.push((r, Action::Tool(*t)));
     }
     // divider between hand (ends +363) and palette (+376)
@@ -4943,6 +5002,7 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         fill_rrect(s, sr, R_TOOL_ICON, C_FIELD_2);
     }
     draw_icon(s, "search", sr.x0 + 8.0, sr.y0 + 8.0, 16.0, C_DIM);
+    tip(app, sr, "Command palette (⌘K)");
     hit.push((sr, Action::PaletteToggle));
 }
 

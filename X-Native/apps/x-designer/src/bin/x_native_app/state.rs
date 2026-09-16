@@ -67,6 +67,53 @@ impl Tool {
     /// plain-C is mode-specific and ⇧C stays free; ⇧E is the eraser;
     /// M-symmetry is design-mode only (the old handler let it leak
     /// into boards).
+    /// Display name (toolbar tooltips; P10)
+    pub fn label(self) -> &'static str {
+        match self {
+            Tool::Select => "Move",
+            Tool::Frame => "Frame",
+            Tool::Text => "Text",
+            Tool::Rect => "Rectangle",
+            Tool::Ellipse => "Ellipse",
+            Tool::Pen => "Pen",
+            Tool::Hand => "Hand",
+            Tool::Comment => "Comment",
+            Tool::Eraser => "Vector eraser",
+            Tool::Symmetry => "Symmetry",
+            Tool::BoardSticky => "Sticky note",
+            Tool::BoardConnector => "Connector",
+            Tool::BoardRect => "Rectangle",
+            Tool::BoardCircle => "Ellipse",
+        }
+    }
+
+    /// Tooltip shortcut hint, derived from `from_shortcut` — the one
+    /// source of truth — so the hint can never drift from the key
+    /// handler (P10). Empty when the mode has no shortcut for this
+    /// tool.
+    pub fn shortcut_hint(self, board: bool) -> String {
+        const KEYS: &[(&str, bool)] = &[
+            ("v", false),
+            ("f", false),
+            ("t", false),
+            ("r", false),
+            ("o", false),
+            ("p", false),
+            ("h", false),
+            ("c", false),
+            ("m", false),
+            ("s", false),
+            ("e", true),
+        ];
+        for (k, sh) in KEYS {
+            if Self::from_shortcut(k, *sh, board) == Some(self) {
+                let base = k.chars().next().unwrap().to_ascii_uppercase();
+                return if *sh { format!("⇧{base}") } else { format!("{base}") };
+            }
+        }
+        String::new()
+    }
+
     pub fn from_shortcut(key: &str, shift: bool, board: bool) -> Option<Tool> {
         match (key, shift) {
             ("e", true) => Some(Tool::Eraser),
@@ -1326,6 +1373,9 @@ pub struct App {
     pub dropdown_frame: bool,
     /// Zoom menu open (right-panel header, audit F4)
     pub dropdown_zoom: bool,
+    /// Hover labels registered this frame (P10); paint_tooltip draws
+    /// the one under the cursor
+    pub tooltip: Vec<(Rect, String)>,
     /// Typography panel: line-height mode menu (Auto / Pixels / Percent)
     pub dropdown_lh: bool,
     /// Typography panel: text-style picker (Figma's styles button)
@@ -1492,6 +1542,7 @@ impl App {
             flow: None,
             dropdown_frame: false,
             dropdown_zoom: false,
+            tooltip: Vec::new(),
             dropdown_lh: false,
             dropdown_text_style: false,
             rulers: false,
@@ -3279,6 +3330,18 @@ mod tool_shortcut_tests {
             !app.doc().expanded.contains("f2"),
             "everything else collapses"
         );
+    }
+
+    #[test]
+    fn tool_labels_and_hints_follow_mode() {
+        assert_eq!(Tool::Select.label(), "Move");
+        assert_eq!(Tool::Eraser.label(), "Vector eraser");
+        assert_eq!(Tool::Select.shortcut_hint(false), "V");
+        assert_eq!(Tool::Eraser.shortcut_hint(false), "⇧E");
+        assert_eq!(Tool::Symmetry.shortcut_hint(true), "");
+        assert_eq!(Tool::BoardSticky.shortcut_hint(true), "S");
+        assert_eq!(Tool::BoardSticky.shortcut_hint(false), "");
+        assert_eq!(Tool::Comment.shortcut_hint(true), "");
     }
 
     #[test]
