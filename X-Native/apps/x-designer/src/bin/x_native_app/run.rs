@@ -3841,10 +3841,7 @@ impl Host {
                 }
             }
             Some(Drag::TreeRow {
-                id,
-                start,
-                active,
-                ..
+                id, start, active, ..
             }) => {
                 if !active {
                     if (p.x - start.x).abs().max((p.y - start.y).abs()) < 4.0 {

@@ -288,7 +288,7 @@ pub(crate) fn apply(root: &mut Node, cmd: &Command) -> bool {
         } => {
             let node = {
                 let Some(p) = find_mut(root, from_parent) else {
-                    return false
+                    return false;
                 };
                 let pos = p
                     .children
