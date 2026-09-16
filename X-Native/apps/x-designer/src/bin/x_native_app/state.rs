@@ -383,6 +383,10 @@ pub enum Action {
     RenameStart,
     // inspector
     FrameDropdown,
+    /// Toggle the zoom menu (right-panel header; audit F4)
+    ZoomMenu,
+    /// Zoom-menu item: 0 in, 1 out, 2 100%, 3 selection, 4 fit
+    ZoomStep(usize),
     LhDropdown,
     LhMode(usize),
     /// Typography panel: the styles button opens the text-style picker
@@ -1309,6 +1313,8 @@ pub struct App {
     /// prototype flow preview (None = normal editing)
     pub flow: Option<FlowState>,
     pub dropdown_frame: bool,
+    /// Zoom menu open (right-panel header, audit F4)
+    pub dropdown_zoom: bool,
     /// Typography panel: line-height mode menu (Auto / Pixels / Percent)
     pub dropdown_lh: bool,
     /// Typography panel: text-style picker (Figma's styles button)
@@ -1474,6 +1480,7 @@ impl App {
             field: None,
             flow: None,
             dropdown_frame: false,
+            dropdown_zoom: false,
             dropdown_lh: false,
             dropdown_text_style: false,
             rulers: false,

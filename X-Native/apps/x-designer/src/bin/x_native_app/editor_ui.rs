@@ -54,6 +54,9 @@ pub fn paint(app: &mut App, s: &mut Scene) {
     if app.dropdown_text_style {
         paint_text_style_dropdown(app, s, &mut hit);
     }
+    if app.dropdown_zoom {
+        paint_zoom_dropdown(app, s, &mut hit);
+    }
     if app.palette.open {
         paint_palette(app, s, &mut hit);
     }
@@ -2074,26 +2077,32 @@ fn paint_right(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             .map(|c| c.to_string())
             .unwrap_or_else(|| "?".into()),
     );
+    // zoom% is the zoom menu (audit F4): in/out/100%/selection/fit in
+    // one dropdown; the dead history button is gone (F5)
     let zoom_label = format!("{}%", (app.zoom * 100.0).round() as i64);
+    let zoom_r = Rect::new(rx + 38.0, ED_TITLE_H + 7.0, rx + 92.0, ED_TITLE_H + 37.0);
+    if hover(app, zoom_r) || app.dropdown_zoom {
+        fill_rrect(s, zoom_r, 6.0, C_FIELD_2);
+    }
     app.fonts.text(
         s,
         rx + 45.0,
         ED_TITLE_H + 15.8,
         &zoom_label,
         T11,
-        C_MUTED,
+        if app.dropdown_zoom { C_TEXT } else { C_MUTED },
         Wt::Reg,
     );
-    let icons = ["message-circle", "history", "play"];
+    hit.push((zoom_r, Action::ZoomMenu));
+    let icons = ["message-circle", "play"];
     for (i, ic) in icons.iter().enumerate() {
-        let ix = rx + rw - 84.0 + 28.0 * i as f64;
+        let ix = rx + rw - 56.0 + 28.0 * i as f64;
         let iy = ED_TITLE_H + 16.0;
         draw_icon(s, ic, ix, iy, 16.0, C_DIM);
         let icon_hit = Rect::new(ix - 2.0, iy - 2.0, ix + 18.0, iy + 18.0);
         match i {
             0 => hit.push((icon_hit, Action::Tool(Tool::Comment))),
-            2 => hit.push((icon_hit, Action::RightTab(RightTab::Prototype))),
-            _ => {}
+            _ => hit.push((icon_hit, Action::RightTab(RightTab::Prototype))),
         }
     }
 
@@ -4564,6 +4573,40 @@ fn paint_paint_row(
 }
 
 // -------------------------------------------------------- frame dropdown
+
+/// Zoom menu (audit F4): the zoom% in the right header opens it;
+/// in/out/100%/selection/fit with the real shortcut hints.
+fn paint_zoom_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    let reg = app.editor_regions();
+    let x0 = reg.right.x0 + 20.0;
+    let y0 = ED_TITLE_H + 42.0;
+    let items = [
+        ("zoom-in", "Zoom in", "⌘="),
+        ("zoom-out", "Zoom out", "⌘-"),
+        ("target", "Zoom to 100%", "⌘0"),
+        ("box-select", "Zoom to selection", "⇧0"),
+        ("maximize", "Zoom to fit", "⇧1"),
+    ];
+    let dd = Rect::new(x0, y0, x0 + 190.0, y0 + items.len() as f64 * DROPDOWN_ROW_H);
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, 8.0, C_FIELD);
+    stroke_rrect(s, dd, 8.0, C_LINE_2, 1.0);
+    for (i, (ic, name, sc)) in items.into_iter().enumerate() {
+        let r = Rect::new(
+            x0,
+            y0 + DROPDOWN_ROW_H * i as f64,
+            x0 + 190.0,
+            y0 + DROPDOWN_ROW_H * (i + 1) as f64,
+        );
+        if hover(app, r) {
+            fill_rect(s, r, C_FIELD_2);
+        }
+        draw_icon(s, ic, r.x0 + 10.0, r.y0 + 8.0, 14.0, C_DIM);
+        app.fonts.text(s, r.x0 + 32.0, r.y0 + 9.0, name, T11, C_TEXT, Wt::Reg);
+        app.fonts.text_right(s, r.x1 - 10.0, r.y0 + 10.0, sc, T10, C_DIM, Wt::Reg, 0.0);
+        hit.push((r, Action::ZoomStep(i)));
+    }
+}
 
 fn paint_frame_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let reg = app.editor_regions();

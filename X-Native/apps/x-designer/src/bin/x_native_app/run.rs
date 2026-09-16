@@ -3272,6 +3272,9 @@ impl Host {
             if self.app.dropdown_frame {
                 self.app.dropdown_frame = false;
             }
+            if self.app.dropdown_zoom {
+                self.app.dropdown_zoom = false;
+            }
             if self.app.dropdown_text_style {
                 self.app.dropdown_text_style = false;
             }
@@ -3320,6 +3323,9 @@ impl Host {
         // close frame dropdown on outside click
         if self.app.dropdown_frame {
             self.app.dropdown_frame = false;
+        }
+        if self.app.dropdown_zoom {
+            self.app.dropdown_zoom = false;
         }
         if self.app.dropdown_lh {
             self.app.dropdown_lh = false;
@@ -5198,6 +5204,20 @@ impl Host {
                         }
                         return;
                     }
+                    // ⌘= / ⌘- / 0 — the zoom shortcuts the palette
+                    // advertises were never in the handler (audit F7)
+                    "=" => {
+                        self.zoom_at(Point::new(-100.0, -100.0), 1.25);
+                        return;
+                    }
+                    "-" => {
+                        self.zoom_at(Point::new(-100.0, -100.0), 0.8);
+                        return;
+                    }
+                    "0" => {
+                        self.app.zoom = 1.0;
+                        return;
+                    }
                     // Modifier-guarded arms MUST precede the plain Ctrl+C /
                     // Ctrl+V / Ctrl+A arms below: rustc takes the first arm
                     // whose pattern matches, and an unguarded pattern makes
@@ -5352,8 +5372,13 @@ impl Host {
 
         match key {
             Key::Named(NamedKey::Escape) => {
-                if self.app.dropdown_frame || self.app.dropdown_lh || self.app.dropdown_text_style {
+                if self.app.dropdown_frame
+                    || self.app.dropdown_zoom
+                    || self.app.dropdown_lh
+                    || self.app.dropdown_text_style
+                {
                     self.app.dropdown_frame = false;
+                    self.app.dropdown_zoom = false;
                     self.app.dropdown_lh = false;
                     self.app.dropdown_text_style = false;
                 } else if self.app.screen == Screen::Editor {
@@ -5687,8 +5712,16 @@ impl Host {
             "Ellipse tool" => self.app.tool = Tool::Ellipse,
             "Pen tool" => self.app.tool = Tool::Pen,
             "Hand tool" => self.app.tool = Tool::Hand,
-            "Zoom to fit" => self.zoom_fit(),
-            "Zoom 100%" => self.app.zoom = 1.0,
+            // audit F7: these labels were misspelled (and In/Out missing),
+            // so four advertised palette commands ran nothing
+            "Zoom In" => {
+                self.zoom_at(Point::new(-100.0, -100.0), 1.25);
+            }
+            "Zoom Out" => {
+                self.zoom_at(Point::new(-100.0, -100.0), 0.8);
+            }
+            "Zoom to Fit" => self.zoom_fit(),
+            "Zoom to 100%" => self.app.zoom = 1.0,
             "Back to dashboard" => {
                 if !self.finish_edits() {
                     return;
@@ -8361,6 +8394,17 @@ impl Host {
                 });
             }
             Action::FrameDropdown => self.app.dropdown_frame = !self.app.dropdown_frame,
+            Action::ZoomMenu => self.app.dropdown_zoom = !self.app.dropdown_zoom,
+            Action::ZoomStep(i) => {
+                self.app.dropdown_zoom = false;
+                match i {
+                    0 => self.zoom_at(Point::new(-100.0, -100.0), 1.25),
+                    1 => self.zoom_at(Point::new(-100.0, -100.0), 0.8),
+                    2 => self.app.zoom = 1.0,
+                    3 => self.zoom_to_selection(),
+                    _ => self.zoom_fit(),
+                }
+            }
             Action::TreeVisible(id) => {
                 let doc = self.app.doc();
                 let v = crate::editor_ui::find_node(&doc.editor_ref().root, id.as_str())
