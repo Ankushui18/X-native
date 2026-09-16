@@ -9443,6 +9443,59 @@ impl Host {
             Action::LibReviewClose => {
                 self.app.lib_review = None;
             }
+            Action::SlotSetFromSelection(name) => {
+                let Some((iid, comp)) = self.app.selected_instance() else {
+                    return;
+                };
+                let sel = self.app.doc_ref().editor_ref().selection.clone();
+                let Some(content_id) = sel.iter().find(|id| **id != iid).cloned() else {
+                    self.app.status =
+                        "Select the content layer together with the instance".into();
+                    return;
+                };
+                let d = self.app.doc();
+                // Immutable plan: master's slot anchor geometry + content clone.
+                let plan = (|| {
+                    let root = &d.editor_ref().root;
+                    let m = x_native::find_master(root, &comp)?;
+                    let p = m.props.iter().find(|p| {
+                        p.name() == name && matches!(p, x_native::ComponentProp::Slot { .. })
+                    })?;
+                    let x_native::ComponentProp::Slot { target, .. } = p else {
+                        return None;
+                    };
+                    let anchor = crate::editor_ui::find_node(m, target).cloned()?;
+                    let content = crate::editor_ui::find_node(root, &content_id).cloned()?;
+                    Some((anchor, content))
+                })();
+                let Some((anchor, mut content)) = plan else {
+                    self.app.status = format!("Slot {name}: no anchor or content layer");
+                    return;
+                };
+                // Slot content renders in the anchor's place: take its
+                // geometry (substitute_slots clones the content verbatim).
+                content.transform = anchor.transform;
+                content.w = anchor.w;
+                content.h = anchor.h;
+                let content_name = content.name.clone();
+                d.checkpoint();
+                d.editor()
+                    .mutate_visual_stack(&iid, |inst| x_native::set_slot_content(inst, &name, content));
+                self.app.mark_dirty();
+                self.app.status =
+                    format!("Slot {name} ← {content_name}");
+            }
+            Action::SlotClear(name) => {
+                let Some((iid, _)) = self.app.selected_instance() else {
+                    return;
+                };
+                let d = self.app.doc();
+                d.checkpoint();
+                d.editor()
+                    .mutate_visual_stack(&iid, |inst| x_native::clear_slot_content(inst, &name));
+                self.app.mark_dirty();
+                self.app.status = format!("Slot {name} cleared");
+            }
             Action::InspectCopy => {
                 let code = self.app.inspect_code();
                 if code.is_empty() {

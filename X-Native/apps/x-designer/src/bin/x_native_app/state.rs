@@ -429,6 +429,10 @@ pub enum Action {
     /// Libraries: pick an updated .xlib for pinned dependency `usize` and
     /// open the diff review (Assets panel LIBRARIES section).
     LibCheckUpdate(usize),
+    /// Instance slots: fill `slot` from another selected layer / clear it
+    /// back to the anchor (or the slot's default component).
+    SlotSetFromSelection(String),
+    SlotClear(String),
     /// Review dialog: repin to the newer library and re-resolve consumers.
     LibReviewAccept,
     /// Review dialog: keep the pinned version (also the click-away action).

@@ -4290,6 +4290,61 @@ fn paint_design(
             hit.push((rr, Action::ResetInstanceProps));
             y += 30.0;
         }
+        // SLOTS — insertion points declared on the master tree
+        // (ComponentProp::Slot; not part of component_props). Fill from
+        // another selected layer, or clear back to anchor/default.
+        let slots: Vec<(String, Option<String>)> = {
+            let d = app.doc_ref();
+            x_native::find_master(&d.editor_ref().root, &comp)
+                .map(|m| {
+                    m.props
+                        .iter()
+                        .filter_map(|p| match p {
+                            x_native::ComponentProp::Slot { name, default, .. } => {
+                                Some((name.clone(), default.clone()))
+                            }
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        if !slots.is_empty() {
+            app.fonts.micro_label(s, x0, y, "SLOTS", C_DIM, Wt::Med);
+            y += 16.0;
+            for (sname, def) in &slots {
+                let filled = {
+                    let d = app.doc_ref();
+                    crate::editor_ui::find_node(&d.editor_ref().root, iid.as_str())
+                        .and_then(|n| x_native::slot_content(n, sname))
+                        .is_some()
+                };
+                let st = if filled {
+                    "filled".to_string()
+                } else if def.is_some() {
+                    "default".to_string()
+                } else {
+                    "anchor".to_string()
+                };
+                app.fonts
+                    .text(s, x0, y + 6.0, &app.fonts.truncate(sname, T10, Wt::Reg, 90.0), T10, C_TEXT, Wt::Reg);
+                let sw = app.fonts.measure(&st, T10, Wt::Reg);
+                app.fonts
+                    .text(s, xr - 170.0 - sw, y + 7.0, &st, T10, C_MUTED, Wt::Reg);
+                let setb = Rect::new(xr - 164.0, y, xr - 84.0, y + 20.0);
+                fill_rrect(s, setb, 4.0, if hover(app, setb) { C_LINE_2 } else { C_FIELD });
+                stroke_rrect(s, setb, 4.0, C_LINE, 1.0);
+                app.fonts
+                    .text_center(s, setb, "from selection", T10, C_TEXT, Wt::Reg, true);
+                hit.push((setb, Action::SlotSetFromSelection(sname.clone())));
+                let clrb = Rect::new(xr - 78.0, y, xr - 56.0, y + 20.0);
+                fill_rrect(s, clrb, 4.0, if hover(app, clrb) { C_LINE_2 } else { C_FIELD });
+                draw_icon(s, "x", clrb.x0 + 5.0, clrb.y0 + 4.0, 12.0, C_DIM);
+                hit.push((clrb, Action::SlotClear(sname.clone())));
+                y += 26.0;
+            }
+            y += 8.0;
+        }
     } else if let Some(master) = master {
         // master side: bind the selected descendant as a new property
         app.fonts.text(s, x0, y, &master, T10, C_DIM, Wt::Reg);
