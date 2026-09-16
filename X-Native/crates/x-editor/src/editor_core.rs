@@ -2969,17 +2969,24 @@ mod reliability_history_tests {
         let mut ed = Editor::new(Node::frame("p", 100.0, 100.0));
         let root_id = ed.root.id.clone();
         ed.insert_node(&root_id, Node::frame("fr", 100.0, 100.0));
-        ed.insert_node(
-            "fr",
-            Node::rect("in", 0.0, 0.0, 10.0, 10.0, Color::WHITE),
-        );
+        ed.insert_node("fr", Node::rect("in", 0.0, 0.0, 10.0, 10.0, Color::WHITE));
         ed.insert_node(&root_id, Node::frame("fr2", 100.0, 100.0));
         // in (first child of fr) -> first child of fr2
         assert!(ed.reorder_node("in", "fr", 0, "fr2", 0));
-        assert!(ed.get_node("fr2").unwrap().children.iter().any(|c| c.id == "in"));
+        assert!(ed
+            .get_node("fr2")
+            .unwrap()
+            .children
+            .iter()
+            .any(|c| c.id == "in"));
         assert!(ed.get_node("fr").unwrap().children.is_empty());
         assert!(ed.undo());
-        assert!(ed.get_node("fr").unwrap().children.iter().any(|c| c.id == "in"));
+        assert!(ed
+            .get_node("fr")
+            .unwrap()
+            .children
+            .iter()
+            .any(|c| c.id == "in"));
         assert!(ed.get_node("fr2").unwrap().children.is_empty());
     }
 
@@ -2988,10 +2995,7 @@ mod reliability_history_tests {
         let mut ed = Editor::new(Node::frame("p", 100.0, 100.0));
         let root_id = ed.root.id.clone();
         ed.insert_node(&root_id, Node::frame("fr", 100.0, 100.0));
-        ed.insert_node(
-            "fr",
-            Node::rect("in", 0.0, 0.0, 10.0, 10.0, Color::WHITE),
-        );
+        ed.insert_node("fr", Node::rect("in", 0.0, 0.0, 10.0, 10.0, Color::WHITE));
         ed.insert_node(&root_id, Node::frame("fr2", 100.0, 100.0));
         // cycle: fr into its own descendant
         assert!(!ed.reorder_node("fr", &root_id, 0, "in", 0));
