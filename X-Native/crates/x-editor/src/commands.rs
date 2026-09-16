@@ -297,12 +297,12 @@ pub(crate) fn apply(root: &mut Node, cmd: &Command) -> bool {
                     .map(|_| *from_index)
                     .or_else(|| p.children.iter().position(|c| &c.id == id));
                 let Some(pos) = pos else {
-                    return false
+                    return false;
                 };
                 p.children.remove(pos)
             };
             let Some(tp) = find_mut(root, to_parent) else {
-                return false
+                return false;
             };
             let i = (*index).min(tp.children.len());
             tp.children.insert(i, node);
