@@ -1510,9 +1510,9 @@ impl OpenDoc {
                 cta.name = "Get started".into();
                 cta.corner_radii = Some([12.0, 12.0, 12.0, 12.0]);
                 hero.children.push(cta);
-                for (k, name, x) in ["Fast", "Local", "Free"].iter().zip([64.0, 384.0, 704.0]) {
+                for (name, x) in ["Fast", "Local", "Free"].iter().zip([64.0, 384.0, 704.0]) {
                     let mut c = Node::rect(
-                        &format!("lp-card-{k}"),
+                        &format!("lp-card-{}", name.to_lowercase()),
                         x,
                         640.0,
                         288.0,
