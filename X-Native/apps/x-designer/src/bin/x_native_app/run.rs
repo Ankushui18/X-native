@@ -3354,9 +3354,7 @@ impl Host {
                         // P12: select on press; a >4px move starts the
                         // reorder drag, a plain click just selects
                         let doc = self.app.doc();
-                        doc.mock_layers
-                            .iter_mut()
-                            .for_each(|m| m.selected = false);
+                        doc.mock_layers.iter_mut().for_each(|m| m.selected = false);
                         doc.editor().selection = vec![id.clone()];
                         self.app.drag = Some(Drag::TreeRow {
                             id: id.clone(),

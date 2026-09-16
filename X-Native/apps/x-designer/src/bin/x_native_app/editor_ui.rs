@@ -2254,7 +2254,7 @@ fn subtree_ids(app: &App, id: &str) -> HashSet<String> {
     out
 }
 
-fn find_node_in(n: &Node, id: &str) -> Option<&Node> {
+fn find_node_in<'a>(n: &'a Node, id: &str) -> Option<&'a Node> {
     if n.id == id {
         return Some(n);
     }
@@ -7168,8 +7168,12 @@ mod viewport_row_tests {
         let mut app = App::new();
         app.open_blank();
         let root_id = app.doc().editor_ref().root.id.clone();
-        app.doc().editor().insert_node(&root_id, Node::frame("fr1", 300.0, 200.0));
-        app.doc().editor().insert_node(&root_id, Node::frame("fr2", 300.0, 200.0));
+        app.doc()
+            .editor()
+            .insert_node(&root_id, Node::frame("fr1", 300.0, 200.0));
+        app.doc()
+            .editor()
+            .insert_node(&root_id, Node::frame("fr2", 300.0, 200.0));
         app.doc().editor().insert_node(
             "fr1",
             Node::rect("card", 0.0, 0.0, 10.0, 10.0, x_native::Color::WHITE),
@@ -7205,11 +7209,11 @@ mod viewport_row_tests {
         let leaf_mid = tree_drop_target(&app, "fr2", p_leaf);
         assert_eq!(leaf_mid.map(|d| d.zone), Some(2));
         // the dragged row itself is never a target
-        assert_eq!(tree_drop_target(&app, "card", p_own), None);
+        assert!(tree_drop_target(&app, "card", p_own).is_none());
         // descendants are never targets (dragging fr1 over its own child)
-        assert_eq!(tree_drop_target(&app, "fr1", p_own), None);
+        assert!(tree_drop_target(&app, "fr1", p_own).is_none());
         // outside the band
-        assert_eq!(tree_drop_target(&app, "card", p_out), None);
+        assert!(tree_drop_target(&app, "card", p_out).is_none());
     }
 
     #[test]

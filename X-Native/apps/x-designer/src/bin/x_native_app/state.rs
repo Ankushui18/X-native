@@ -921,7 +921,7 @@ pub struct FieldEdit {
 /// P12: a resolved layers-tree drop: the hovered row (`row` + `zone`
 /// for the indicator) and the tree coordinates to commit (`parent` +
 /// logical `index`).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TreeDrop {
     pub row: String,
     pub zone: u8,
@@ -3324,7 +3324,7 @@ pub fn node_slot(root: &Node, id: &str) -> Option<(String, usize)> {
 /// children.
 pub fn tree_drop_coords(root: &Node, target: &str, zone: u8) -> Option<(String, usize)> {
     let (parent, node) = {
-        fn walk(n: &Node, id: &str) -> Option<(Option<&Node>, &Node)> {
+        fn walk<'a>(n: &'a Node, id: &str) -> Option<(Option<&'a Node>, &'a Node)> {
             for c in &n.children {
                 if c.id == id {
                     return Some((Some(n), c));
