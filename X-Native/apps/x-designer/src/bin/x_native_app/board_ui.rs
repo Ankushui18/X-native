@@ -52,29 +52,64 @@ fn paint_board_header(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         fill_rrect(s, back, 6.0, C_FIELD_2);
     }
     draw_icon(s, "undo", 18.0, 13.0, 16.0, C_DIM);
-    app.fonts.text(s, 40.0, 11.0, "Dashboard", T11, C_TEXT, Wt::Med);
+    app.fonts
+        .text(s, 40.0, 11.0, "Dashboard", T11, C_TEXT, Wt::Med);
     hit.push((back, Action::DashNav(DashView::Home)));
 
     let (name, page_label) = {
         let board = app.board_doc();
         (
             board.metadata.name.clone(),
-            format!("Page {} · {}", board.active_page_index() + 1, board.current_page().name),
+            format!(
+                "Page {} · {}",
+                board.active_page_index() + 1,
+                board.current_page().name
+            ),
         )
     };
     app.fonts.text(s, 118.0, 11.0, &name, T12, C_TEXT, Wt::Semi);
-    app.fonts.text(s, 118.0, 25.0, "Board · infinite canvas", T10, C_DIM, Wt::Reg);
+    app.fonts.text(
+        s,
+        118.0,
+        25.0,
+        "Board · infinite canvas",
+        T10,
+        C_DIM,
+        Wt::Reg,
+    );
 
     let page = Rect::new(300.0, 7.0, 408.0, 29.0);
     fill_rrect(s, page, 6.0, C_FIELD);
     stroke_rrect(s, page, 6.0, C_LINE, 1.0);
-    app.fonts.text(s, page.x0 + 10.0, page.y0 + 6.0, &page_label, T10, C_TEXT, Wt::Reg);
-    draw_icon(s, "chevron-down", page.x1 - 22.0, page.y0 + 7.0, 14.0, C_DIM);
+    app.fonts.text(
+        s,
+        page.x0 + 10.0,
+        page.y0 + 6.0,
+        &page_label,
+        T10,
+        C_TEXT,
+        Wt::Reg,
+    );
+    draw_icon(
+        s,
+        "chevron-down",
+        page.x1 - 22.0,
+        page.y0 + 7.0,
+        14.0,
+        C_DIM,
+    );
     hit.push((page, Action::BoardNextPage));
     let add_page = Rect::new(414.0, 7.0, 442.0, 29.0);
     fill_rrect(s, add_page, 6.0, C_FIELD);
     stroke_rrect(s, add_page, 6.0, C_LINE, 1.0);
-    draw_icon(s, "plus", add_page.x0 + 12.0, add_page.y0 + 7.0, 14.0, C_DIM);
+    draw_icon(
+        s,
+        "plus",
+        add_page.x0 + 12.0,
+        add_page.y0 + 7.0,
+        14.0,
+        C_DIM,
+    );
     hit.push((add_page, Action::BoardAddPage));
 
     let grid_on = app.board_doc().settings.show_grid;
@@ -82,7 +117,15 @@ fn paint_board_header(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
     fill_rrect(s, grid, 6.0, if grid_on { C_FIELD_2 } else { C_FIELD });
     stroke_rrect(s, grid, 6.0, C_LINE, 1.0);
     draw_icon(s, "grid-2x2", grid.x0 + 8.0, grid.y0 + 6.0, 14.0, C_DIM);
-    app.fonts.text(s, grid.x0 + 29.0, grid.y0 + 6.0, "Grid", T10, C_TEXT, Wt::Reg);
+    app.fonts.text(
+        s,
+        grid.x0 + 29.0,
+        grid.y0 + 6.0,
+        "Grid",
+        T10,
+        C_TEXT,
+        Wt::Reg,
+    );
     hit.push((grid, Action::BoardToggleGrid));
 
     let connectors_on = app.board_doc().settings.show_connectors;
@@ -102,8 +145,15 @@ fn paint_board_header(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         14.0,
         C_DIM,
     );
-    app.fonts
-        .text(s, connectors.x0 + 29.0, connectors.y0 + 6.0, "Links", T10, C_TEXT, Wt::Reg);
+    app.fonts.text(
+        s,
+        connectors.x0 + 29.0,
+        connectors.y0 + 6.0,
+        "Links",
+        T10,
+        C_TEXT,
+        Wt::Reg,
+    );
     hit.push((connectors, Action::BoardToggleConnectors));
 }
 
@@ -190,34 +240,34 @@ fn dashed_line(s: &mut Scene, a: (f64, f64), b: (f64, f64), col: Color, w: f64, 
 pub fn paint_nodes(app: &App, s: &mut Scene, board: &BoardDocument, ox: f64, oy: f64, z: f64) {
     let page = board.current_page();
     for node in &page.nodes {
-            paint_node(app, s, node, ox, oy, z);
-            if page.selection.iter().any(|id| id == node.id()) {
-                let b = node.bounding_box();
-                if b.width() <= 0.5 || b.height() <= 0.5 {
-                    continue;
-                }
-                let (x0, y0) = w2s(b.x0, b.y0, ox, oy, z);
-                let (x1, y1) = w2s(b.x1, b.y1, ox, oy, z);
-                let bounds = Rect::new(x0, y0, x1, y1);
-                s.stroke(
-                    &Stroke::new(2.0),
-                    Affine::IDENTITY,
-                    C_ACCENT,
-                    None,
-                    &RoundedRect::from_rect(bounds, 4.0),
-                );
-                // A small handle makes selection visible even for a very
-                // thin pen path or text label, where an outline alone can be
-                // hard to spot at low zoom.
-                s.fill(
-                    Fill::NonZero,
-                    Affine::IDENTITY,
-                    C_ACCENT,
-                    None,
-                    &Circle::new((x1, y1), 3.5),
-                );
+        paint_node(app, s, node, ox, oy, z);
+        if page.selection.iter().any(|id| id == node.id()) {
+            let b = node.bounding_box();
+            if b.width() <= 0.5 || b.height() <= 0.5 {
+                continue;
             }
+            let (x0, y0) = w2s(b.x0, b.y0, ox, oy, z);
+            let (x1, y1) = w2s(b.x1, b.y1, ox, oy, z);
+            let bounds = Rect::new(x0, y0, x1, y1);
+            s.stroke(
+                &Stroke::new(2.0),
+                Affine::IDENTITY,
+                C_ACCENT,
+                None,
+                &RoundedRect::from_rect(bounds, 4.0),
+            );
+            // A small handle makes selection visible even for a very
+            // thin pen path or text label, where an outline alone can be
+            // hard to spot at low zoom.
+            s.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                C_ACCENT,
+                None,
+                &Circle::new((x1, y1), 3.5),
+            );
         }
+    }
     if board.settings.show_connectors {
         for conn in &page.connectors {
             let (sx, sy) = resolve_attachment(&conn.from, page);

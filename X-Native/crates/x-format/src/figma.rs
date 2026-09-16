@@ -1036,10 +1036,8 @@ mod tests {
         // `components` is renderer-space data; Figma expects unpremultiplied
         // sRGB values. This catches the classic mid-tone regression where a
         // native 128 gray was exported as its linear-light value (~0.216).
-        let value = crate::json::parse(&figma_color_json(Color::from_rgba8(
-            128, 64, 200, 127,
-        )))
-        .expect("color object is valid JSON");
+        let value = crate::json::parse(&figma_color_json(Color::from_rgba8(128, 64, 200, 127)))
+            .expect("color object is valid JSON");
         assert!((n_or(&value, "r", 0.0) - 128.0 / 255.0).abs() < 1e-9);
         assert!((n_or(&value, "g", 0.0) - 64.0 / 255.0).abs() < 1e-9);
         assert!((n_or(&value, "b", 0.0) - 200.0 / 255.0).abs() < 1e-9);

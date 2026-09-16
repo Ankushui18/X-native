@@ -47,12 +47,6 @@ pub use eraser::*;
 pub use parametric::*;
 pub use prototype::*;
 pub use selection::*;
-pub use variable_commands::{
-    apply_all, apply_variable, clear_active_mode, invert_variable, remove_mode_value,
-    remove_variable, rename_variable, set_active_mode, set_alias, set_bool, set_collection,
-    set_color, set_exposed, set_mode_value, set_number, set_string, VarValue, VariableCommand,
-    VariableHistory,
-};
 pub use shape_builder::{
     overlap, path_area, validate, OverlapReport, ShapeBuilderIssue, ShapeBuilderOp, AREA_STEPS,
     DEFAULT_MIN_OVERLAP,
@@ -62,6 +56,12 @@ pub use spatial::*;
 pub use transformed_resize::{
     anchor_norm, corner_at, corner_from_index, corner_index, handle_norm, linear, local_point,
     local_to_world, plan_resize, world_corners, world_point, ResizePlan,
+};
+pub use variable_commands::{
+    apply_all, apply_variable, clear_active_mode, invert_variable, remove_mode_value,
+    remove_variable, rename_variable, set_active_mode, set_alias, set_bool, set_collection,
+    set_color, set_exposed, set_mode_value, set_number, set_string, VarValue, VariableCommand,
+    VariableHistory,
 };
 pub use vector_edit::{
     anchor_at, anchors, bend_anchor, delete_anchors, move_anchors_by, move_handle_in, reverse_path,

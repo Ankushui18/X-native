@@ -35,7 +35,10 @@ mod tests {
         });
         let text = crate::save_x(&d);
         assert!(text.contains("\"parent\":null"), "root serializes null");
-        assert!(text.contains("\"parent\":\"c1\""), "reply serializes its root");
+        assert!(
+            text.contains("\"parent\":\"c1\""),
+            "reply serializes its root"
+        );
         let back = crate::load_x(&text).unwrap();
         assert_eq!(back.comments.len(), 2);
         assert_eq!(back.comments[0].parent, None);
@@ -833,7 +836,10 @@ mod tests {
             assert_eq!(path[2], PathCmd::LineTo(20.0, 20.0));
             assert_eq!(path[3], PathCmd::LineTo(30.0, 20.0)); // h
             assert_eq!(path[4], PathCmd::LineTo(30.0, 30.0)); // v
-            assert_eq!(path[5], PathCmd::CurveTo(25.0, 35.0, 15.0, 35.0, 10.0, 30.0));
+            assert_eq!(
+                path[5],
+                PathCmd::CurveTo(25.0, 35.0, 15.0, 35.0, 10.0, 30.0)
+            );
             assert_eq!(*path.last().unwrap(), PathCmd::Close);
         } else {
             panic!("not a vector")

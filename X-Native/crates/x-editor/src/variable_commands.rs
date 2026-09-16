@@ -333,26 +333,54 @@ fn remove_base(vars: &mut Variables, name: &str, kind: u8) -> bool {
 fn insert_mode(vars: &mut Variables, mode: &str, name: &str, v: &VarValue) {
     match v {
         VarValue::Color(c) => {
-            vars.modes.entry(mode.to_string()).or_default().insert(name.to_string(), *c);
+            vars.modes
+                .entry(mode.to_string())
+                .or_default()
+                .insert(name.to_string(), *c);
         }
         VarValue::Number(n) => {
-            vars.num_modes.entry(mode.to_string()).or_default().insert(name.to_string(), *n);
+            vars.num_modes
+                .entry(mode.to_string())
+                .or_default()
+                .insert(name.to_string(), *n);
         }
         VarValue::Str(s) => {
-            vars.str_modes.entry(mode.to_string()).or_default().insert(name.to_string(), s.clone());
+            vars.str_modes
+                .entry(mode.to_string())
+                .or_default()
+                .insert(name.to_string(), s.clone());
         }
         VarValue::Bool(b) => {
-            vars.bool_modes.entry(mode.to_string()).or_default().insert(name.to_string(), *b);
+            vars.bool_modes
+                .entry(mode.to_string())
+                .or_default()
+                .insert(name.to_string(), *b);
         }
     }
 }
 
 fn remove_mode(vars: &mut Variables, mode: &str, name: &str, kind: u8) -> bool {
     match kind {
-        0 => vars.modes.get_mut(mode).and_then(|t| t.remove(name)).is_some(),
-        1 => vars.num_modes.get_mut(mode).and_then(|t| t.remove(name)).is_some(),
-        2 => vars.str_modes.get_mut(mode).and_then(|t| t.remove(name)).is_some(),
-        _ => vars.bool_modes.get_mut(mode).and_then(|t| t.remove(name)).is_some(),
+        0 => vars
+            .modes
+            .get_mut(mode)
+            .and_then(|t| t.remove(name))
+            .is_some(),
+        1 => vars
+            .num_modes
+            .get_mut(mode)
+            .and_then(|t| t.remove(name))
+            .is_some(),
+        2 => vars
+            .str_modes
+            .get_mut(mode)
+            .and_then(|t| t.remove(name))
+            .is_some(),
+        _ => vars
+            .bool_modes
+            .get_mut(mode)
+            .and_then(|t| t.remove(name))
+            .is_some(),
     }
 }
 
@@ -501,12 +529,7 @@ pub fn clear_active_mode(vars: &Variables) -> Option<VariableCommand> {
 }
 
 /// Snapshot-and-set a mode-scoped override (creates the mode table if absent).
-pub fn set_mode_value(
-    vars: &Variables,
-    name: &str,
-    mode: &str,
-    to: VarValue,
-) -> VariableCommand {
+pub fn set_mode_value(vars: &Variables, name: &str, mode: &str, to: VarValue) -> VariableCommand {
     VariableCommand::SetModeValue {
         name: name.to_string(),
         mode: mode.to_string(),
@@ -677,7 +700,12 @@ mod tests {
         assert!(h.commit(&mut vars, set_color(&vars, "brand", base)));
         assert!(h.commit(
             &mut vars,
-            set_mode_value(&vars, "brand", "dark", VarValue::color_of("#ff0000").unwrap())
+            set_mode_value(
+                &vars,
+                "brand",
+                "dark",
+                VarValue::color_of("#ff0000").unwrap()
+            )
         ));
         assert!(h.commit(&mut vars, set_active_mode(&vars, "dark").unwrap()));
         let active_hex = vars.get("brand").unwrap();
@@ -714,10 +742,16 @@ mod tests {
         h.commit(&mut vars, set_number(&vars, "v", 1.0));
         h.commit(&mut vars, set_string(&vars, "v", "auto"));
         assert_eq!(vars.get("v"), Some(Value::Str("auto".into())));
-        assert!(!vars.numbers.contains_key("v"), "type move clears old table");
+        assert!(
+            !vars.numbers.contains_key("v"),
+            "type move clears old table"
+        );
         h.undo(&mut vars);
         assert_eq!(vars.get("v"), Some(Value::Num(1.0)));
-        assert!(!vars.strings.contains_key("v"), "inverse restores old table exactly");
+        assert!(
+            !vars.strings.contains_key("v"),
+            "inverse restores old table exactly"
+        );
     }
 
     #[test]

@@ -264,10 +264,7 @@ pub fn paint_brush(p: &Paint, vars: &Variables) -> Brush {
 pub fn parse_hex_color(s: &str) -> Option<Color> {
     let s = s.trim().strip_prefix('#').unwrap_or(s.trim());
     let expanded = match s.len() {
-        3 | 4 => s
-            .chars()
-            .flat_map(|c| [c, c])
-            .collect::<String>(),
+        3 | 4 => s.chars().flat_map(|c| [c, c]).collect::<String>(),
         _ => s.to_string(),
     };
     let s = expanded.as_str();
@@ -339,12 +336,7 @@ pub fn parse_css_color(value: &str) -> Option<Color> {
     let saturation = css_percentage(channels[1])?;
     let lightness = css_percentage(channels[2])?;
     let (r, g, b) = hsl_to_srgb(hue, saturation, lightness);
-    Some(Color::from_rgba8(
-        r,
-        g,
-        b,
-        css_alpha(alpha.unwrap_or("1"))?,
-    ))
+    Some(Color::from_rgba8(r, g, b, css_alpha(alpha.unwrap_or("1"))?))
 }
 
 fn css_function_tokens(body: &str) -> Vec<&str> {
@@ -356,7 +348,10 @@ fn css_function_tokens(body: &str) -> Vec<&str> {
         .collect()
 }
 
-fn css_channels_and_alpha<'a>(tokens: &'a [&'a str], rgba: bool) -> Option<([&'a str; 3], Option<&'a str>)> {
+fn css_channels_and_alpha<'a>(
+    tokens: &'a [&'a str],
+    rgba: bool,
+) -> Option<([&'a str; 3], Option<&'a str>)> {
     let slash = tokens.iter().position(|token| *token == "/");
     let (color_tokens, slash_alpha, positional_alpha) = match slash {
         Some(i) => (&tokens[..i], tokens.get(i + 1).copied(), None),
@@ -373,7 +368,8 @@ fn css_channels_and_alpha<'a>(tokens: &'a [&'a str], rgba: bool) -> Option<([&'a
 }
 
 fn css_rgb_channel(token: &str) -> Option<u8> {
-    let value = token.strip_suffix('%')
+    let value = token
+        .strip_suffix('%')
         .map(|v| v.parse::<f64>().ok().map(|n| n * 2.55))
         .unwrap_or_else(|| token.parse::<f64>().ok());
     Some(value?.clamp(0.0, 255.0).round() as u8)
@@ -405,7 +401,13 @@ fn css_hue(token: &str) -> Option<f64> {
     } else {
         (token, 1.0)
     };
-    Some(number.parse::<f64>().ok()?.mul_add(scale, 0.0).rem_euclid(360.0))
+    Some(
+        number
+            .parse::<f64>()
+            .ok()?
+            .mul_add(scale, 0.0)
+            .rem_euclid(360.0),
+    )
 }
 
 fn hsl_to_srgb(hue: f64, saturation: f64, lightness: f64) -> (u8, u8, u8) {
@@ -686,16 +688,33 @@ mod tests {
 
     #[test]
     fn parses_css_hex_short_forms_and_alpha() {
-        assert_eq!(parse_css_color("#abc").unwrap().to_rgba8(), Color::from_rgba8(170, 187, 204, 255).to_rgba8());
-        assert_eq!(parse_css_color("#abcd").unwrap().to_rgba8(), Color::from_rgba8(170, 187, 204, 221).to_rgba8());
-        assert_eq!(parse_css_color("rgba(10, 20, 30, 50%)").unwrap().to_rgba8(), Color::from_rgba8(10, 20, 30, 128).to_rgba8());
-        assert_eq!(parse_css_color("rgb(100% 0% 50% / .25)").unwrap().to_rgba8(), Color::from_rgba8(255, 0, 128, 64).to_rgba8());
+        assert_eq!(
+            parse_css_color("#abc").unwrap().to_rgba8(),
+            Color::from_rgba8(170, 187, 204, 255).to_rgba8()
+        );
+        assert_eq!(
+            parse_css_color("#abcd").unwrap().to_rgba8(),
+            Color::from_rgba8(170, 187, 204, 221).to_rgba8()
+        );
+        assert_eq!(
+            parse_css_color("rgba(10, 20, 30, 50%)").unwrap().to_rgba8(),
+            Color::from_rgba8(10, 20, 30, 128).to_rgba8()
+        );
+        assert_eq!(
+            parse_css_color("rgb(100% 0% 50% / .25)")
+                .unwrap()
+                .to_rgba8(),
+            Color::from_rgba8(255, 0, 128, 64).to_rgba8()
+        );
     }
 
     #[test]
     fn parses_css_named_and_hsl_colors() {
         assert_eq!(parse_css_color("CornflowerBlue").unwrap().to_rgba8().r, 100);
-        assert_eq!(parse_css_color("hsl(0, 100%, 50%)").unwrap().to_rgba8(), Color::from_rgba8(255, 0, 0, 255).to_rgba8());
+        assert_eq!(
+            parse_css_color("hsl(0, 100%, 50%)").unwrap().to_rgba8(),
+            Color::from_rgba8(255, 0, 0, 255).to_rgba8()
+        );
         assert_eq!(parse_css_color("transparent").unwrap().to_rgba8().a, 0);
         assert!(parse_css_color("color(display-p3 1 0 0)").is_none());
     }

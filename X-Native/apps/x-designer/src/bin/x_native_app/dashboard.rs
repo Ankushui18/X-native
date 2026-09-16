@@ -67,7 +67,15 @@ fn paint_template_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Acti
     let card = Rect::new(cx, cy, cx + card_w, cy + card_h);
     fill_rrect(s, card, 12.0, C_PANEL);
     stroke_rrect(s, card, 12.0, C_LINE_2, 1.0);
-    app.fonts.text(s, cx + 24.0, cy + 22.0, "Start from a template", T14, C_TEXT, Wt::Semi);
+    app.fonts.text(
+        s,
+        cx + 24.0,
+        cy + 22.0,
+        "Start from a template",
+        T14,
+        C_TEXT,
+        Wt::Semi,
+    );
     app.fonts.text(
         s,
         cx + 24.0,
@@ -86,13 +94,28 @@ fn paint_template_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Acti
         // template mark: violet chip + glyph
         let chip = Rect::new(row.x0 + 12.0, ry + 10.0, row.x0 + 44.0, ry + 42.0);
         fill_rrect(s, chip, 8.0, C_ACCENT_MUTED);
-        draw_icon(s, "layout-template", chip.x0 + 8.0, chip.y0 + 8.0, 16.0, C_ON_ACCENT);
-        app.fonts.text(s, row.x0 + 58.0, ry + 10.0, name, T13, C_TEXT, Wt::Med);
-        app.fonts.text(s, row.x0 + 58.0, ry + 30.0, blurb, T11, C_DIM, Wt::Reg);
+        draw_icon(
+            s,
+            "layout-template",
+            chip.x0 + 8.0,
+            chip.y0 + 8.0,
+            16.0,
+            C_ON_ACCENT,
+        );
+        app.fonts
+            .text(s, row.x0 + 58.0, ry + 10.0, name, T13, C_TEXT, Wt::Med);
+        app.fonts
+            .text(s, row.x0 + 58.0, ry + 30.0, blurb, T11, C_DIM, Wt::Reg);
         let useb = Rect::new(row.x1 - 76.0, ry + 12.0, row.x1 - 12.0, ry + 40.0);
-        fill_rrect(s, useb, 6.0, if hover(app, useb) { C_LINE_2 } else { C_FIELD });
+        fill_rrect(
+            s,
+            useb,
+            6.0,
+            if hover(app, useb) { C_LINE_2 } else { C_FIELD },
+        );
         stroke_rrect(s, useb, 6.0, C_LINE, 1.0);
-        app.fonts.text_center(s, useb, "Use", T11, C_TEXT, Wt::Med, true);
+        app.fonts
+            .text_center(s, useb, "Use", T11, C_TEXT, Wt::Med, true);
         hit.push((useb, Action::NewFromTemplate(i)));
         hit.push((row, Action::NewFromTemplate(i)));
     }
@@ -122,35 +145,114 @@ fn first_launch_marker() -> Option<std::path::PathBuf> {
 }
 
 fn paint_first_launch(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
-    if app.demo_mode || first_launch_marker().is_some_and(|p| p.exists()) { return; }
+    if app.demo_mode || first_launch_marker().is_some_and(|p| p.exists()) {
+        return;
+    }
     let card = Rect::new(330.0, 170.0, app.win_w - 330.0, 510.0);
-    fill_rect(s, Rect::new(0.0, 40.0, app.win_w, app.win_h), Color::from_rgba8(0, 0, 0, 145));
+    fill_rect(
+        s,
+        Rect::new(0.0, 40.0, app.win_w, app.win_h),
+        Color::from_rgba8(0, 0, 0, 145),
+    );
     fill_rrect(s, card, 14.0, C_PANEL);
     stroke_rrect(s, card, 14.0, C_LINE_2, 1.0);
-    app.fonts.text(s, card.x0 + 32.0, card.y0 + 34.0, "Welcome to X-Native", T20, C_TEXT, Wt::Semi);
-    app.fonts.text(s, card.x0 + 32.0, card.y0 + 72.0, "A quick start for your first design.", T13, C_MUTED, Wt::Reg);
+    app.fonts.text(
+        s,
+        card.x0 + 32.0,
+        card.y0 + 34.0,
+        "Welcome to X-Native",
+        T20,
+        C_TEXT,
+        Wt::Semi,
+    );
+    app.fonts.text(
+        s,
+        card.x0 + 32.0,
+        card.y0 + 72.0,
+        "A quick start for your first design.",
+        T13,
+        C_MUTED,
+        Wt::Reg,
+    );
     let tips = [
-        ("1", "Design", "Create frames, layers, vectors, and auto layouts."),
-        ("2", "Prototype", "Connect screens and test interactions in Flow preview."),
-        ("3", "Ship", "Use variables, components, libraries, and PNG/PDF export."),
+        (
+            "1",
+            "Design",
+            "Create frames, layers, vectors, and auto layouts.",
+        ),
+        (
+            "2",
+            "Prototype",
+            "Connect screens and test interactions in Flow preview.",
+        ),
+        (
+            "3",
+            "Ship",
+            "Use variables, components, libraries, and PNG/PDF export.",
+        ),
     ];
     for (i, (n, title, body)) in tips.into_iter().enumerate() {
         let y = card.y0 + 116.0 + i as f64 * 54.0;
         circle(s, card.x0 + 46.0, y + 9.0, 12.0, C_FIELD_2);
-        app.fonts.text_center(s, Rect::new(card.x0 + 34.0, y - 3.0, card.x0 + 58.0, y + 21.0), n, T10, C_TEXT, Wt::Med, true);
-        app.fonts.text(s, card.x0 + 72.0, y, title, T12, C_TEXT, Wt::Med);
-        app.fonts.text(s, card.x0 + 72.0, y + 19.0, body, T10, C_DIM, Wt::Reg);
+        app.fonts.text_center(
+            s,
+            Rect::new(card.x0 + 34.0, y - 3.0, card.x0 + 58.0, y + 21.0),
+            n,
+            T10,
+            C_TEXT,
+            Wt::Med,
+            true,
+        );
+        app.fonts
+            .text(s, card.x0 + 72.0, y, title, T12, C_TEXT, Wt::Med);
+        app.fonts
+            .text(s, card.x0 + 72.0, y + 19.0, body, T10, C_DIM, Wt::Reg);
     }
-    let sample = Rect::new(card.x0 + 32.0, card.y1 - 56.0, card.x0 + 190.0, card.y1 - 22.0);
+    let sample = Rect::new(
+        card.x0 + 32.0,
+        card.y1 - 56.0,
+        card.x0 + 190.0,
+        card.y1 - 22.0,
+    );
     fill_rrect(s, sample, 7.0, C_TEXT);
-    app.fonts.text_center(s, sample, "Open sample project", T11, C_BG, Wt::Med, true);
+    app.fonts
+        .text_center(s, sample, "Open sample project", T11, C_BG, Wt::Med, true);
     hit.push((sample, Action::OnboardingSample));
-    let blank = Rect::new(card.x0 + 202.0, card.y1 - 56.0, card.x0 + 350.0, card.y1 - 22.0);
+    let blank = Rect::new(
+        card.x0 + 202.0,
+        card.y1 - 56.0,
+        card.x0 + 350.0,
+        card.y1 - 22.0,
+    );
     fill_rrect(s, blank, 7.0, C_FIELD_2);
-    app.fonts.text_center(s, blank, "Start with blank file", T11, C_TEXT, Wt::Med, true);
+    app.fonts.text_center(
+        s,
+        blank,
+        "Start with blank file",
+        T11,
+        C_TEXT,
+        Wt::Med,
+        true,
+    );
     hit.push((blank, Action::OnboardingBlank));
-    app.fonts.text(s, card.x1 - 82.0, card.y1 - 42.0, "Skip", T10, C_DIM, Wt::Reg);
-    hit.push((Rect::new(card.x1 - 100.0, card.y1 - 65.0, card.x1 - 24.0, card.y1 - 12.0), Action::OnboardingDismiss));
+    app.fonts.text(
+        s,
+        card.x1 - 82.0,
+        card.y1 - 42.0,
+        "Skip",
+        T10,
+        C_DIM,
+        Wt::Reg,
+    );
+    hit.push((
+        Rect::new(
+            card.x1 - 100.0,
+            card.y1 - 65.0,
+            card.x1 - 24.0,
+            card.y1 - 12.0,
+        ),
+        Action::OnboardingDismiss,
+    ));
 }
 
 // ------------------------------------------------------------- top bar 40px
@@ -522,8 +624,10 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         fill_rrect(s, ib, 8.0, C_ACCENT_MUTED);
         draw_icon(s, icon, ib.x0 + 7.3, dy + 165.5, 16.0, C_ON_ACCENT);
         // title box top 182.5 (+35), sub top 202 (+54.5)
-        app.fonts.text(s, cx + 17.0, dy + 182.5, title, T13, C_TEXT, Wt::Med);
-        app.fonts.text(s, cx + 17.0, dy + 202.0, sub, T11, C_DIM, Wt::Reg);
+        app.fonts
+            .text(s, cx + 17.0, dy + 182.5, title, T13, C_TEXT, Wt::Med);
+        app.fonts
+            .text(s, cx + 17.0, dy + 202.0, sub, T11, C_DIM, Wt::Reg);
         hit.push((r, acts[i].clone()));
     }
 
@@ -620,13 +724,36 @@ fn paint_recents(
         );
         // Empty states must offer the next action, not only instructions.
         let create = Rect::new(x0, dy + 386.0, x0 + 142.0, dy + 418.0);
-        fill_rrect(s, create, R_ROW, if hover(app, create) { C_FIELD_2 } else { C_TEXT });
-        app.fonts.text_center(s, create, "Create new file", T11, if hover(app, create) { C_TEXT } else { C_BG }, Wt::Med, true);
+        fill_rrect(
+            s,
+            create,
+            R_ROW,
+            if hover(app, create) {
+                C_FIELD_2
+            } else {
+                C_TEXT
+            },
+        );
+        app.fonts.text_center(
+            s,
+            create,
+            "Create new file",
+            T11,
+            if hover(app, create) { C_TEXT } else { C_BG },
+            Wt::Med,
+            true,
+        );
         hit.push((create, Action::NewFile));
         let open = Rect::new(x0 + 150.0, dy + 386.0, x0 + 292.0, dy + 418.0);
-        fill_rrect(s, open, R_ROW, if hover(app, open) { C_FIELD_2 } else { C_PANEL });
+        fill_rrect(
+            s,
+            open,
+            R_ROW,
+            if hover(app, open) { C_FIELD_2 } else { C_PANEL },
+        );
         stroke_rrect(s, open, R_ROW, C_LINE, 1.0);
-        app.fonts.text_center(s, open, "Open existing file", T11, C_TEXT, Wt::Med, true);
+        app.fonts
+            .text_center(s, open, "Open existing file", T11, C_TEXT, Wt::Med, true);
         hit.push((open, Action::ImportFile));
         return;
     }
@@ -657,8 +784,8 @@ fn paint_recents(
                     if let Some(assets) = app.thumb_brush(p) {
                         if let Some(b) = assets.get("thumb") {
                             use vello::kurbo::{Affine, RoundedRect};
-                            let sc = (thumb.width() / f64::from(iw))
-                                .max(thumb.height() / f64::from(ih));
+                            let sc =
+                                (thumb.width() / f64::from(iw)).max(thumb.height() / f64::from(ih));
                             let dw = f64::from(iw) * sc;
                             let dh = f64::from(ih) * sc;
                             s.push_clip_layer(
