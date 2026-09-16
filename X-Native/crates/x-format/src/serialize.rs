@@ -1105,15 +1105,21 @@ pub fn save_x(doc: &Document) -> String {
             .comments
             .iter()
             .map(|c| {
+                let parent = c
+                    .parent
+                    .as_deref()
+                    .map(|p| format!("\"{}\"", esc(p)))
+                    .unwrap_or_else(|| "null".to_string());
                 format!(
-                    "{{\"id\":\"{}\",\"page\":{},\"x\":{},\"y\":{},\"author\":\"{}\",\"text\":\"{}\",\"resolved\":{}}}",
+                    "{{\"id\":\"{}\",\"page\":{},\"x\":{},\"y\":{},\"author\":\"{}\",\"text\":\"{}\",\"resolved\":{},\"parent\":{}}}",
                     esc(&c.id),
                     c.page,
                     c.x,
                     c.y,
                     esc(&c.author),
                     esc(&c.text),
-                    c.resolved
+                    c.resolved,
+                    parent
                 )
             })
             .collect();

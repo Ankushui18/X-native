@@ -10,6 +10,45 @@ mod tests {
     use x_core::{Effect, HPin, VPin};
     use x_editor::{find, find_mut};
 
+    #[test]
+    fn comments_roundtrip_threads_and_load_legacy_files() {
+        let mut d = x_core::Document::default();
+        d.comments.push(x_core::Comment {
+            id: "c1".into(),
+            page: 0,
+            x: 1.0,
+            y: 2.0,
+            author: "ann".into(),
+            text: "root".into(),
+            resolved: false,
+            parent: None,
+        });
+        d.comments.push(x_core::Comment {
+            id: "c2".into(),
+            page: 0,
+            x: 3.0,
+            y: 4.0,
+            author: "bob".into(),
+            text: "reply".into(),
+            resolved: true,
+            parent: Some("c1".into()),
+        });
+        let text = crate::save_x(&d);
+        assert!(text.contains("\"parent\":null"), "root serializes null");
+        assert!(text.contains("\"parent\":\"c1\""), "reply serializes its root");
+        let back = crate::load_x(&text).unwrap();
+        assert_eq!(back.comments.len(), 2);
+        assert_eq!(back.comments[0].parent, None);
+        assert_eq!(back.comments[1].parent.as_deref(), Some("c1"));
+        // pre-thread files carry no parent key — they load with None
+        let legacy = text
+            .replace(",\"parent\":null", "")
+            .replace(",\"parent\":\"c1\"", "");
+        let old = crate::load_x(&legacy).unwrap();
+        assert_eq!(old.comments.len(), 2);
+        assert!(old.comments.iter().all(|c| c.parent.is_none()));
+    }
+
     /// Frames and sections draw their own name as a canvas label (the QA-004
     /// block in scene.rs), and every glyph of that label counts as one path in
     /// the scene stats. The names used in these tests are ASCII, so one glyph

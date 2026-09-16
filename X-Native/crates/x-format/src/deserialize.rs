@@ -1123,6 +1123,7 @@ pub(crate) fn decode_document(v: &V) -> Result<Document, String> {
                 author: c.get("author").and_then(V::str).unwrap_or("").to_string(),
                 text: c.get("text").and_then(V::str).unwrap_or("").to_string(),
                 resolved: c.get("resolved").and_then(V::boolean).unwrap_or(false),
+                parent: c.get("parent").and_then(V::str).map(str::to_string),
             });
         }
     }

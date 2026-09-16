@@ -176,9 +176,10 @@ pub fn apply_style(n: &mut Node, s: &LegacyStyle) {
 }
 
 /// Canvas comment pin (review C18): an anchored discussion bubble.
-/// Comments live per PAGE (world coordinates of the pin anchor) and are
-/// shallow — one message + resolved flag; threading/replies stay out
-/// until the collaboration layer (C17) defines identity.
+/// Comments live per PAGE (world coordinates of the pin anchor). Threads
+/// are FLAT: `parent == None` is a thread root (the pin), replies carry the
+/// root's id — never another reply's — so threads are one level deep and
+/// a root delete removes the whole thread.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Comment {
     pub id: String,
@@ -190,6 +191,8 @@ pub struct Comment {
     pub author: String,
     pub text: String,
     pub resolved: bool,
+    /// `None` for thread roots; `Some(root id)` for replies.
+    pub parent: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
