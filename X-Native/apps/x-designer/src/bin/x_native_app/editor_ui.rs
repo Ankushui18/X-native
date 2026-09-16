@@ -17,8 +17,7 @@ use crate::context_menu::{action_for, ContextMenuItem, ROW_HEIGHT, SEPARATOR_HEI
 use crate::icons::{draw_flow_glyph, draw_icon};
 use crate::paint::*;
 use crate::state::{
-    kind_icon, parse_hex, Action, App, FieldId, LeftTab, NavTab, RightTab, Tool,
-    FRAME_PRESETS,
+    kind_icon, parse_hex, Action, App, FieldId, LeftTab, NavTab, RightTab, Tool, FRAME_PRESETS,
 };
 use crate::theme::*;
 

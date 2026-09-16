@@ -206,7 +206,13 @@ pub struct ContextMenu {
 
 impl ContextMenu {
     pub fn new() -> Self {
-        ContextMenu { open: false, x: 0.0, y: 0.0, width: MENU_WIDTH, items: Vec::new() }
+        ContextMenu {
+            open: false,
+            x: 0.0,
+            y: 0.0,
+            width: MENU_WIDTH,
+            items: Vec::new(),
+        }
     }
 
     /// Open the menu for `target` at screen position `(x, y)`, clamped
@@ -271,9 +277,16 @@ pub fn action_for(action: &ContextAction) -> Option<Action> {
 
 /// Build the items for a target — the single place that decides what
 /// the right-click menu offers.
+/// One enabled menu row for a given action.
+fn ai(a: ContextAction, enabled: bool) -> ContextMenuItem {
+    ContextMenuItem::Action {
+        action: a,
+        enabled,
+    }
+}
+
 pub fn build_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
     use ContextAction::*;
-    let ai = |a: ContextAction, enabled: bool| ContextMenuItem::Action { action: a, enabled };
     match target {
         ContextTarget::CanvasEmpty => vec![
             ai(Paste, true),

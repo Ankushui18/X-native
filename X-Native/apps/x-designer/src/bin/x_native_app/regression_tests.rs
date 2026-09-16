@@ -421,13 +421,9 @@ fn context_menu_items_follow_the_target_model() {
     // Viewport audit P4: the menu is data-driven — items are built from
     // the target, not hardcoded in the painter.
     use crate::context_menu::{
-        action_for,
-        build_menu_items,
-        ContextAction,
-        ContextMenuItem,
-        ContextTarget,
+        action_for, build_menu_items, ContextAction, ContextMenuItem, ContextTarget,
     };
-    let actions_of = |items: Vec<ContextMenuItem>| -> Vec<&ContextAction> {
+    let actions_of = |items: &[ContextMenuItem]| -> Vec<&ContextAction> {
         items
             .iter()
             .filter_map(|it| match it {
@@ -437,7 +433,7 @@ fn context_menu_items_follow_the_target_model() {
             .collect()
     };
     let empty = build_menu_items(&ContextTarget::CanvasEmpty);
-    let empty_actions = actions_of(empty);
+    let empty_actions = actions_of(&empty);
     assert!(empty_actions.contains(&&ContextAction::Paste), "empty canvas must offer paste");
     assert!(
         empty_actions.contains(&&ContextAction::ToggleGrid),
@@ -448,7 +444,7 @@ fn context_menu_items_follow_the_target_model() {
         selected_count: 2,
         contains_group: false,
     });
-    let multi_actions = actions_of(multi);
+    let multi_actions = actions_of(&multi);
     assert!(multi_actions.contains(&&ContextAction::Group), "two selections must offer group");
     assert!(
         !multi_actions.contains(&&ContextAction::Ungroup),
@@ -463,7 +459,7 @@ fn context_menu_items_follow_the_target_model() {
         selected_count: 1,
         contains_group: true,
     });
-    let one_actions = actions_of(one_group);
+    let one_actions = actions_of(&one_group);
     assert!(
         one_actions.contains(&&ContextAction::Ungroup),
         "a group selection must offer ungroup"
