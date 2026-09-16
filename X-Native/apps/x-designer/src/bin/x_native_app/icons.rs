@@ -238,6 +238,106 @@ fn src(name: &str) -> &'static [&'static str] {
         ],
         // Editor frame tool / tree icon — custom # glyph from the HTML
         "frame#" => &["M2 8h20", "M2 16h20", "M8 2v20", "M16 2v20"],
+        "arrow-right" => &["M5 12h14", "m12 5 7 7-7 7"],
+        "arrow-up" => &["M5 12h14", "m12 19-7-7 7-7"],
+        "download" => &[
+            "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4",
+            "m7 10 5 5 5-5",
+            "M12 15V3",
+        ],
+        "file-plus" => &[
+            "M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z",
+            "M14 2v4a2 2 0 0 0 2 2h4",
+            "M12 18v-6",
+            "M9 15h6",
+        ],
+        "folder-open" => &[
+            "m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2",
+        ],
+        "frame" => &["M22 6H2", "M6 2v4", "M6 18v4", "M18 2v4", "M18 18v4"],
+        "keyboard" => &[
+            "M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z",
+            "M6.5 8a.5.5 0 1 0-1 0 .5.5 0 0 0 1 0z",
+            "M10.5 8a.5.5 0 1 0-1 0 .5.5 0 0 0 1 0z",
+            "M14.5 8a.5.5 0 1 0-1 0 .5.5 0 0 0 1 0z",
+            "M8.5 12a.5.5 0 1 0-1 0 .5.5 0 0 0 1 0z",
+            "M12.5 12a.5.5 0 1 0-1 0 .5.5 0 0 0 1 0z",
+            "M16.5 12a.5.5 0 1 0-1 0 .5.5 0 0 0 1 0z",
+            "M7 16h10",
+        ],
+        "layout-list" => &[
+            "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z",
+            "M12 3v18",
+            "M3 9h15",
+            "M3 15h15",
+        ],
+        "maximize" => &[
+            "M8 3H5a2 2 0 0 0-2 2v3",
+            "M21 8V5a2 2 0 0 0-2-2h-3",
+            "M3 16v3a2 2 0 0 0 2 2h3",
+            "M16 21h3a2 2 0 0 0 2-2v-3",
+        ],
+        "mouse-pointer" => &[
+            "M12.586 12.586 19 19",
+            "M3.688 3.037a.497.497 0 0 0-.651.651l6.5 15.999a.501.501 0 0 0 .947-.062l2.56-9.439a.5.5 0 0 1 .283-.283l9.438-2.559a.501.501 0 0 0 .063-.947z",
+        ],
+        "redo" => &[
+            "m15 14 5-5-5-5",
+            "M20 9H9.5A5.5 5.5 0 0 0 4 14.5a5.5 5.5 0 0 0 5.5 5.5H13",
+        ],
+        "eraser" => &[
+            "m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21",
+            "M22 21H7",
+            "m5 11 9 9",
+        ],
+        "reflect-vertical" => &[
+            "M8 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h3",
+            "M16 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3",
+            "M12 20v2",
+            "M12 14v2",
+            "M12 8v2",
+            "M12 2v2",
+        ],
+        "sticky-note" => &[
+            "M15.5 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3Z",
+            "M15 3v6h6",
+        ],
+        "repeat" => &[
+            "m17 2 4 4-4 4",
+            "M3 11v-1a4 4 0 0 1 4-4h14",
+            "m7 22-4-4 4-4",
+            "M21 13v1a4 4 0 0 1-4 4H3",
+        ],
+        "rotate-ccw" => &[
+            "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8",
+            "M3 3v5h5",
+        ],
+        "save" => &[
+            "M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z",
+            "M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7",
+            "M7 3v4a1 1 0 0 0 1 1h7",
+        ],
+        "target" => &[
+            "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z",
+            "M12 6a6 6 0 1 0 0 12 6 6 0 0 0 0-12z",
+            "M12 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4z",
+        ],
+        "trash" => &[
+            "M3 6h18",
+            "M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6",
+            "M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2",
+        ],
+        "undo" => &[
+            "M9 14 4 9l5-5",
+            "M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5 5.5 5.5 0 0 1-5.5 5.5H11",
+        ],
+        "zoom-in" => &[
+            "M21 21l-4.34-4.34",
+            "M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16z",
+            "M11 8v6",
+            "M8 11h6",
+        ],
+        "zoom-out" => &["M21 21l-4.34-4.34", "M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16z", "M8 11h6"],
         _ => &[],
     }
 }
@@ -431,5 +531,107 @@ pub fn draw_flow_glyph(scene: &mut Scene, kind: usize, x: f64, y: f64, color: Co
             rr(scene, 1.0, 10.0, 5.0, 5.0);
             rr(scene, 10.0, 10.0, 5.0, 5.0);
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every icon name the UI references must resolve to at least one
+    /// parsable path. `draw_icon` no-ops silently on a miss, so a name
+    /// dropped from `src()` becomes an empty button with no error —
+    /// this census is the regression net. Keep it in sync when the UI
+    /// starts referencing a new icon.
+    #[test]
+    fn every_referenced_icon_resolves() {
+        let names: &[&str] = &[        "arrow-down",
+        "arrow-left-right",
+        "arrow-right",
+        "arrow-up",
+        "arrow-up-down",
+        "arrow-up-right",
+        "box",
+        "box-select",
+        "check",
+        "chevron-down",
+        "chevron-right",
+        "chevron-up",
+        "chevrons-down",
+        "chevrons-up",
+        "circle",
+        "clipboard",
+        "code",
+        "component",
+        "copy",
+        "copy-plus",
+        "download",
+        "eraser",
+        "eye-off",
+        "file",
+        "file-plus",
+        "file-text",
+        "folder-open",
+        "frame",
+        "frame#",
+        "grid-2x2",
+        "group",
+        "hand",
+        "home",
+        "image",
+        "keyboard",
+        "layout-grid",
+        "layout-list",
+        "layout-template",
+        "lock",
+        "maximize",
+        "maximize-2",
+        "message-circle",
+        "minus",
+        "more-horizontal",
+        "more-vertical",
+        "mouse-pointer",
+        "mouse-pointer-2",
+        "pen-tool",
+        "pencil",
+        "play",
+        "plus",
+        "redo",
+        "reflect-vertical",
+        "repeat",
+        "rotate-ccw",
+        "rotate-cw",
+        "save",
+        "scissors",
+        "search",
+        "sliders-horizontal",
+        "sparkles",
+        "square",
+        "star",
+        "sticky-note",
+        "target",
+        "trash",
+        "trash-2",
+        "type",
+        "undo",
+        "ungroup",
+        "x",
+        "zoom-in",
+        "zoom-out",];
+        for n in names {
+            let data = src(*n);
+            assert!(!data.is_empty(), "icon {n:?} has no src() entry");
+            let parsed = cache()
+                .get(*n)
+                .unwrap_or_else(|| panic!("icon {n:?} missing from cache"));
+            assert!(
+                parsed.len() == data.len(),
+                "icon {n:?}: {}/{} paths failed to parse",
+                data.len() - parsed.len(),
+                data.len()
+            );
+        }
+        assert_eq!(names.len(), 73, "census list drifted — recount when adding icons");
     }
 }
