@@ -158,7 +158,15 @@ pub enum LeftTab {
     Tokens,
 }
 
-/// Navigation bar tab (vertical left-most bar, Figma-style).
+/// Type used by the quick variable creation controls.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum VariableKind {
+    Color,
+    Number,
+    String,
+    Boolean,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum NavTab {
     File,
@@ -181,11 +189,11 @@ impl NavTab {
 
     pub fn label(self) -> &'static str {
         match self {
-            NavTab::File => "Files",
+            NavTab::File => "Layers",
             NavTab::Agents => "Agents",
             NavTab::Assets => "Library",
-            NavTab::Tools => "Bench",
-            NavTab::Variables => "Tokens",
+            NavTab::Tools => "Tokens",
+            NavTab::Variables => "Variables",
         }
     }
 
@@ -373,10 +381,12 @@ pub enum Action {
     /// component properties (A2): add a prop bound to the selected
     /// descendant of a master; remove one from the master's definition
     AddProp(x_native::ComponentPropKind),
+    AddSlot,
     RemoveProp(String),
     /// instance-side edits: toggle a Bool prop / cycle a Swap prop
     // — prototyping (authoring + flow preview) —
     TokensExtractVars,
+    CreateVariable(VariableKind),
     VariantCycle(i32),
     VariantCombine,
     ProtoAdd,
@@ -401,8 +411,10 @@ pub enum Action {
     FlowEnter,
     FlowBack,
     FlowExit,
+    FlowDeviceToggle,
     /// load a .ttf/.otf/.ttc into the canvas font stack
     LoadFont,
+    PublishLibrary,
     ToggleInstanceProp(String),
     /// C21 INSPECT: platform picker + copy-code-to-clipboard
     InspectPlatform(usize),
@@ -416,6 +428,9 @@ pub enum Action {
     BoardAddPage,
     // global / dashboard
     NewFile,
+    OnboardingSample,
+    OnboardingBlank,
+    OnboardingDismiss,
     NewBoard,
     ImportFile,
     OpenRecent(usize),
@@ -467,6 +482,7 @@ pub enum Action {
     TreeLock(String),
     FramePreset(usize),
     Field(FieldId),
+    FontPicker(String),
     FlowBtn(usize),
     ClipContent,
     ExportRun,
@@ -707,6 +723,8 @@ pub enum FieldId {
     /// component property, Text kind (prop name lives in
     /// `App::instance_prop_target`)
     InstanceProp,
+    /// Component master description shown in the inspector.
+    ComponentDescription,
     /// pages panel: active-page inline rename (opened from the page menu)
     PageName,
     /// layers panel: tree search query (row above the tree; audit F8).
@@ -901,6 +919,8 @@ pub struct FlowState {
     pub hover_span: Option<x_native::editor::WhileSpan>,
     /// armed Figma "while pressing" auto-reverse (reverts on release).
     pub press_span: Option<x_native::editor::WhileSpan>,
+    /// Preview device chrome toggle (mobile/tablet frame presentation).
+    pub device_frame: bool,
 }
 
 /// Clipboard for copying/pasting layer properties (Figma parity)
@@ -1222,6 +1242,44 @@ impl OpenDoc {
         d
     }
 
+    /// A small, real learning file used by first-launch onboarding: it has
+    /// two prototype screens, a component, a slot, and variables so the
+    /// welcome walkthrough can be explored instead of showing an empty mock.
+    pub fn getting_started() -> Self {
+        let mut page = Node::frame("getting-started-page", 1440.0, 1024.0);
+        page.name = "Getting Started".into();
+        let mut home = Node::frame("screen-home", 375.0, 812.0);
+        home.name = "Home screen".into();
+        home.transform.x = 80.0;
+        home.transform.y = 80.0;
+        home.fill = Paint::Solid(VelloColor::from_rgb8(0xF8, 0xFA, 0xFC));
+        let mut title = Node::text("welcome-title", 24.0, 32.0, 327.0, 40.0, "Welcome to X-Native");
+        title.bindings.insert("font".into(), APP_DEFAULT_FONT.into());
+        home.children.push(title);
+        let mut button = Node::rect("try-button", 24.0, 120.0, 180.0, 48.0, VelloColor::from_rgb8(0x4F, 0x46, 0xE5));
+        button.name = "Try prototype".into();
+        button.interactions.push(x_native::Interaction::click("screen-detail"));
+        home.children.push(button);
+        let mut detail = Node::frame("screen-detail", 375.0, 812.0);
+        detail.name = "Detail screen".into();
+        detail.transform.x = 520.0;
+        detail.transform.y = 80.0;
+        detail.fill = Paint::Solid(VelloColor::WHITE);
+        detail.children.push(Node::text("detail-title", 24.0, 32.0, 327.0, 40.0, "Prototype destination"));
+        let mut card = Node::component("card-master", "Starter Card", 280.0, 120.0);
+        card.name = "Card component".into();
+        card.props.push(x_native::ComponentProp::Slot { name: "Content".into(), target: "card-master".into(), default: None });
+        card.children.push(Node::text("card-label", 16.0, 16.0, 248.0, 28.0, "Component with a slot"));
+        page.children.extend([home, detail, card]);
+        let editor = Editor::new(page.clone());
+        let mut doc = Document { pages: vec![page], default_font: Some(APP_DEFAULT_FONT.into()), ..Document::default() };
+        doc.variables.colors.insert("color/brand".into(), VelloColor::from_rgb8(0x4F, 0x46, 0xE5));
+        doc.variables.numbers.insert("space/page".into(), 24.0);
+        let mut out = Self::from_document("Getting Started".into(), None, doc);
+        out.editors = vec![editor];
+        out
+    }
+
     pub fn new_blank(name: String) -> Self {
         let mut page = Node::frame(&x_native::fresh_id("page"), 1440.0, 1024.0);
         page.name = "Page 1".into();
@@ -1432,6 +1490,8 @@ pub struct App {
     pub dropdown_lh: bool,
     /// Typography panel: text-style picker (Figma's styles button)
     pub dropdown_text_style: bool,
+    /// Font browser opened from the typography family field.
+    pub font_picker_open: bool,
     /// Viewport rulers (Shift+R). Off by default — the HTML mock has none.
     pub rulers: bool,
     /// DESIGN panel (no selection): editor canvas background
@@ -1541,6 +1601,9 @@ impl App {
     pub fn new() -> Self {
         let mut app = Self::demo();
         app.demo_mode = false;
+        if let Some(theme) = crate::theme::load_persisted_theme() {
+            crate::theme::set_theme(theme);
+        }
         app.smoke_mode = std::env::args_os().any(|a| a == "--smoke-test");
         app.docs.clear();
         app.drafts.clear();
@@ -1602,6 +1665,7 @@ impl App {
             tooltip: Vec::new(),
             dropdown_lh: false,
             dropdown_text_style: false,
+            font_picker_open: false,
             rulers: false,
             // canvas matches the HTML `.canvas` token; grid per the design
             // empty-selection panel (PIXEL GRID COLOR 0070E4 @ 20%)
@@ -2023,6 +2087,36 @@ impl App {
 
     /// Define a new prop on the selected node's master, binding the
     /// selected node as target (Figma's "use selection as property").
+    /// Add a real slot property to the selected node in a component master.
+    /// Slots live on the master node's component-property list and are
+    /// resolved by the engine when an instance supplies slot content.
+    pub fn add_slot(&mut self) {
+        let Some(component) = self.selected_master_name() else { return };
+        let Some(target) = self.doc_ref().selected_id() else { return };
+        let name = {
+            let root = &self.doc_ref().editor_ref().root;
+            let Some(node) = crate::editor_ui::find_node(root, target.as_str()) else { return };
+            let base = if node.name.is_empty() { "Content" } else { &node.name };
+            let mut candidate = base.to_string();
+            let mut n = 2;
+            while crate::editor_ui::find_node(root, target.as_str()).is_some_and(|node|
+                node.props.iter().any(|p| p.name() == candidate)) {
+                candidate = format!("{base} {n}");
+                n += 1;
+            }
+            candidate
+        };
+        let doc = self.doc();
+        doc.checkpoint();
+        doc.editor().mutate_visual_stack(target.as_str(), |node| {
+            node.props.push(x_native::ComponentProp::Slot {
+                name: name.clone(), target: target.clone(), default: None,
+            });
+        });
+        self.mark_dirty();
+        self.status = format!("Added slot '{name}' to {component}");
+    }
+
     pub fn add_prop(&mut self, kind: x_native::ComponentPropKind) {
         let Some(component) = self.selected_master_name() else {
             return;

@@ -34,6 +34,7 @@ pub fn paint(app: &mut App, s: &mut Scene) {
     paint_top_bar(app, s, &mut hit);
     paint_sidebar(app, s, &mut hit);
     paint_main(app, s, &mut hit);
+    paint_first_launch(app, s, &mut hit);
 
     // search text entry (drawn last so the caret overlays)
     if app.dash_search_focus {
@@ -57,6 +58,45 @@ fn search_rect(app: &App) -> Rect {
 fn caret(s: &mut Scene, app: &App, field: Rect) {
     let x = field.x0 + 35.0 + app.fonts.measure(&app.dash_search, T13, Wt::Reg);
     vline(s, x, field.y0 + 7.0, field.y1 - 7.0, C_TEXT);
+}
+
+// ------------------------------------------------------- first-launch guide
+
+fn first_launch_marker() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(std::path::PathBuf::from(home).join(".config/x-native/onboarding-complete"))
+}
+
+fn paint_first_launch(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    if app.demo_mode || first_launch_marker().is_some_and(|p| p.exists()) { return; }
+    let card = Rect::new(330.0, 170.0, app.win_w - 330.0, 510.0);
+    fill_rect(s, Rect::new(0.0, 40.0, app.win_w, app.win_h), Color::from_rgba8(0, 0, 0, 145));
+    fill_rrect(s, card, 14.0, C_PANEL);
+    stroke_rrect(s, card, 14.0, C_LINE_2, 1.0);
+    app.fonts.text(s, card.x0 + 32.0, card.y0 + 34.0, "Welcome to X-Native", T20, C_TEXT, Wt::Semi);
+    app.fonts.text(s, card.x0 + 32.0, card.y0 + 72.0, "A quick start for your first design.", T13, C_MUTED, Wt::Reg);
+    let tips = [
+        ("1", "Design", "Create frames, layers, vectors, and auto layouts."),
+        ("2", "Prototype", "Connect screens and test interactions in Flow preview."),
+        ("3", "Ship", "Use variables, components, libraries, and PNG/PDF export."),
+    ];
+    for (i, (n, title, body)) in tips.into_iter().enumerate() {
+        let y = card.y0 + 116.0 + i as f64 * 54.0;
+        circle(s, card.x0 + 46.0, y + 9.0, 12.0, C_FIELD_2);
+        app.fonts.text_center(s, Rect::new(card.x0 + 34.0, y - 3.0, card.x0 + 58.0, y + 21.0), n, T10, C_TEXT, Wt::Med, true);
+        app.fonts.text(s, card.x0 + 72.0, y, title, T12, C_TEXT, Wt::Med);
+        app.fonts.text(s, card.x0 + 72.0, y + 19.0, body, T10, C_DIM, Wt::Reg);
+    }
+    let sample = Rect::new(card.x0 + 32.0, card.y1 - 56.0, card.x0 + 190.0, card.y1 - 22.0);
+    fill_rrect(s, sample, 7.0, C_TEXT);
+    app.fonts.text_center(s, sample, "Open sample project", T11, C_BG, Wt::Med, true);
+    hit.push((sample, Action::OnboardingSample));
+    let blank = Rect::new(card.x0 + 202.0, card.y1 - 56.0, card.x0 + 350.0, card.y1 - 22.0);
+    fill_rrect(s, blank, 7.0, C_FIELD_2);
+    app.fonts.text_center(s, blank, "Start with blank file", T11, C_TEXT, Wt::Med, true);
+    hit.push((blank, Action::OnboardingBlank));
+    app.fonts.text(s, card.x1 - 82.0, card.y1 - 42.0, "Skip", T10, C_DIM, Wt::Reg);
+    hit.push((Rect::new(card.x1 - 100.0, card.y1 - 65.0, card.x1 - 24.0, card.y1 - 12.0), Action::OnboardingDismiss));
 }
 
 // ------------------------------------------------------------- top bar 40px
@@ -422,11 +462,18 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             stroke_rrect(s, ib, 8.0, C_LINE, 1.0);
             draw_icon(s, icon, ib.x0 + 7.3, dy + 165.5, 16.0, C_DIM);
         }
+        // Make unavailable collaboration explicit on a local first launch;
+        // a disabled action should not look like a broken button.
+        let (shown_title, shown_sub) = if i == 3 && !app.demo_mode {
+            ("Team features", "Coming later")
+        } else {
+            (title, sub)
+        };
         // title box top 182.5 (+35), sub top 202 (+54.5)
         app.fonts
-            .text(s, cx + 17.0, dy + 182.5, title, T13, C_TEXT, Wt::Med);
+            .text(s, cx + 17.0, dy + 182.5, shown_title, T13, C_TEXT, Wt::Med);
         app.fonts
-            .text(s, cx + 17.0, dy + 202.0, sub, T11, C_DIM, Wt::Reg);
+            .text(s, cx + 17.0, dy + 202.0, shown_sub, T11, C_DIM, Wt::Reg);
         if enabled {
             hit.push((r, acts[i].clone()));
         }
@@ -523,6 +570,16 @@ fn paint_recents(
             C_DIM,
             Wt::Reg,
         );
+        // Empty states must offer the next action, not only instructions.
+        let create = Rect::new(x0, dy + 386.0, x0 + 142.0, dy + 418.0);
+        fill_rrect(s, create, R_ROW, if hover(app, create) { C_FIELD_2 } else { C_TEXT });
+        app.fonts.text_center(s, create, "Create new file", T11, if hover(app, create) { C_TEXT } else { C_BG }, Wt::Med, true);
+        hit.push((create, Action::NewFile));
+        let open = Rect::new(x0 + 150.0, dy + 386.0, x0 + 292.0, dy + 418.0);
+        fill_rrect(s, open, R_ROW, if hover(app, open) { C_FIELD_2 } else { C_PANEL });
+        stroke_rrect(s, open, R_ROW, C_LINE, 1.0);
+        app.fonts.text_center(s, open, "Open existing file", T11, C_TEXT, Wt::Med, true);
+        hit.push((open, Action::ImportFile));
         return;
     }
 

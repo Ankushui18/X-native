@@ -25,12 +25,36 @@ step() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 ok()   { printf '    \033[32mok\033[0m %s\n' "$1"; }
 bad()  { printf '    \033[31mFAIL\033[0m %s\n' "$1"; FAILED=$((FAILED + 1)); }
 
+# Fail early and accurately when the host does not provide Rust. Without this
+# preflight, every Cargo-backed step reports a different misleading failure
+# (format, clippy, tests, and CLI) for the same missing executable.
+step "Rust toolchain"
+if command -v "$CARGO" >/dev/null 2>&1; then
+    ok "Cargo available: $(command -v "$CARGO")"
+else
+    bad "Cargo is not installed; install Rust via rustup or the system package manager"
+    printf '      expected command: %s\n' "$CARGO"
+    exit 1
+fi
+
 # Dead code is tracked, not gated: see docs/KNOWN_DEBT.md. This number is a
 # ratchet — fixing a warning means lowering it, adding one means CI complains.
 # Re-measured 16 Sep 2026 after a period in which the tree did not compile and
 # therefore reported nothing: see the "Why the ceiling moved" note in
 # docs/KNOWN_DEBT.md, which itemises all 82.
 DEAD_CODE_CEILING=${DEAD_CODE_CEILING:-82}
+
+# NaN-safe ordering is a correctness invariant: partial_cmp returns None for
+# unordered floats and must never be force-unwrapped in production Rust. Keep
+# the recurring gradient panic from coming back.
+step "NaN ordering guard"
+NAN_MATCHES=$(rg -n --glob '*.rs' 'partial_cmp\([^\n]*\)\.unwrap\(' crates apps || true)
+if [[ -z "$NAN_MATCHES" ]]; then
+    ok "no partial_cmp().unwrap() sites"
+else
+    bad "unsafe partial_cmp().unwrap() found"
+    printf '%s\n' "$NAN_MATCHES" | sed 's/^/      /'
+fi
 
 if [[ $FIX == 1 ]]; then
     step "formatting (cargo fmt)"
