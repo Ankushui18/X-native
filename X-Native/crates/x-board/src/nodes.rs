@@ -116,13 +116,16 @@ impl BoardNode {
                         shape.transform.y + shape.height as f64,
                     ),
                     crate::ShapeType::Circle => {
-                        // Approximate circle as square for hit testing
-                        let radius = (shape.width.min(shape.height)) / 2.0;
+                        // Board rendering treats transform.x/y as the
+                        // top-left of the circle's box, not its centre. The
+                        // old hit box subtracted a radius and therefore made
+                        // the visible node difficult to select (and made the
+                        // connector attachment disagree with the painter).
                         Rect::new(
-                            shape.transform.x - radius as f64,
-                            shape.transform.y - radius as f64,
-                            shape.transform.x + radius as f64,
-                            shape.transform.y + radius as f64,
+                            shape.transform.x,
+                            shape.transform.y,
+                            shape.transform.x + shape.width as f64,
+                            shape.transform.y + shape.height as f64,
                         )
                     }
                     crate::ShapeType::Triangle => Rect::new(
@@ -150,7 +153,14 @@ impl BoardNode {
                     max_y = max_y.max(pt.y as f64);
                 }
 
-                Rect::new(min_x, min_y, max_x, max_y)
+                // The painter adds the node transform to every local point;
+                // include the same origin in hit-testing and selection bounds.
+                Rect::new(
+                    min_x + p.transform.x,
+                    min_y + p.transform.y,
+                    max_x + p.transform.x,
+                    max_y + p.transform.y,
+                )
             }
             Self::TextLabel(t) => {
                 // Approximate text bounds

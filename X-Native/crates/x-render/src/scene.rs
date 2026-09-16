@@ -187,6 +187,93 @@ fn encode_drop_shadows(
     }
 }
 
+/// Encode a vector's ordered visual layers for the legacy/direct sink.
+/// Keeping this lowering next to the IR call site makes both public render
+/// entry points honor the same node model; the canvas path remains the
+/// authoritative geometry implementation while this sink only performs
+/// backend encoding.
+fn encode_vector_layers(
+    scene: &mut Scene,
+    node: &Node,
+    world: Affine,
+    path: &vello::kurbo::BezPath,
+    override_color: Option<Color>,
+    vars: &Variables,
+    stats: &mut SceneStats,
+) {
+    let node_alpha = node.opacity.clamp(0.0, 1.0);
+    for (index, layer) in node.active_fills().iter().enumerate() {
+        if !layer.visible || layer.opacity <= 0.0 {
+            continue;
+        }
+        let paint = if index == 0 {
+            override_color
+                .map(Paint::Solid)
+                .unwrap_or_else(|| layer.paint.clone())
+        } else {
+            layer.paint.clone()
+        };
+        if matches!(&paint, Paint::Solid(color) if color.components[3] == 0.0) {
+            continue;
+        }
+        if let Some(mix) = layer.blend.mix() {
+            scene.push_layer(
+                Fill::NonZero,
+                mix,
+                1.0,
+                Affine::IDENTITY,
+                &bounds(world, node.w, node.h),
+            );
+        }
+        scene.fill(
+            Fill::NonZero,
+            world,
+            &brush_with_alpha(
+                paint_brush(&paint, vars),
+                node_alpha * layer.opacity.clamp(0.0, 1.0),
+            ),
+            None,
+            path,
+        );
+        stats.paths += 1;
+        if layer.blend.mix().is_some() {
+            scene.pop_layer();
+        }
+    }
+    for layer in node.active_strokes().iter() {
+        if !layer.visible || layer.opacity <= 0.0 || layer.stroke.width <= 0.0 {
+            continue;
+        }
+        if matches!(&layer.stroke.paint, Paint::Solid(color) if color.components[3] == 0.0) {
+            continue;
+        }
+        if let Some(mix) = layer.blend.mix() {
+            scene.push_layer(
+                Fill::NonZero,
+                mix,
+                1.0,
+                Affine::IDENTITY,
+                &bounds(world, node.w, node.h),
+            );
+        }
+        let stroke = crate::text_geometry::stroke_style(layer.stroke.width, &layer.options);
+        scene.stroke(
+            &stroke,
+            world,
+            &brush_with_alpha(
+                paint_brush(&layer.stroke.paint, vars),
+                node_alpha * layer.opacity.clamp(0.0, 1.0),
+            ),
+            None,
+            path,
+        );
+        stats.paths += 1;
+        if layer.blend.mix().is_some() {
+            scene.pop_layer();
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn encode(
     scene: &mut Scene,
@@ -329,12 +416,36 @@ fn encode(
             );
             stats.paths += 1;
         }
-        NodeKind::Image { asset, .. } => {
-            if let Some(img) = ctx.assets.and_then(|a| a.get(asset)) {
-                // draw the decoded bitmap scaled into the node's box
-                let sx = node.w / img.image.width as f64;
-                let sy = node.h / img.image.height as f64;
-                scene.draw_image(img, world * Affine::scale_non_uniform(sx, sy));
+        NodeKind::Image {
+            asset,
+            fit,
+            placement,
+        } => {
+            let adjusted = node
+                .image_adjustments
+                .and_then(|adj| ctx.assets.and_then(|a| a.get_adjusted(asset, adj)));
+            let image = adjusted
+                .as_ref()
+                .or_else(|| ctx.assets.and_then(|a| a.get(asset)));
+            if let Some(img) = image {
+                let resolved = x_core::resolve_image_placement(
+                    *fit,
+                    placement,
+                    node.w,
+                    node.h,
+                    img.image.width as f64,
+                    img.image.height as f64,
+                );
+                let box_rect = Rect::new(0.0, 0.0, node.w, node.h).into_path(0.1);
+                scene.push_clip_layer(Fill::NonZero, world, &box_rect);
+                let image_transform = world
+                    * Affine::translate((node.w / 2.0, node.h / 2.0))
+                    * Affine::rotate(node.image_rotation.to_radians())
+                    * Affine::translate((-node.w / 2.0, -node.h / 2.0));
+                for draw in &resolved.draws {
+                    scene.draw_image(img, image_transform * *draw);
+                }
+                scene.pop_layer();
                 stats.paths += 1;
             } else {
                 let shape = Rect::new(0.0, 0.0, node.w, node.h).into_path(0.1);
@@ -482,28 +593,23 @@ fn encode(
             }
         }
         NodeKind::Vector { path } => {
-            // Phase 2.6: real editable vector paths render as filled shapes.
+            // Vectors use the same materialized fill/stroke stacks as the IR
+            // renderer. The old direct encoder read only `node.fill` and
+            // `node.stroke`, which made thumbnails/PDFs disagree with the
+            // canvas as soon as a vector had a second paint, gradient, layer
+            // opacity, blend mode, or custom cap/join.
             if !path.is_empty() {
                 let bez = path_to_bez(path);
                 encode_drop_shadows(scene, node, world, &bez, stats);
-                scene.fill(
-                    Fill::NonZero,
+                encode_vector_layers(
+                    scene,
+                    node,
                     world,
-                    &brush_with_alpha(effective_brush(node, overrides, vars), node.opacity),
-                    None,
                     &bez,
+                    overrides.get(&node.id).and_then(|raw| parse_hex_color(raw)),
+                    vars,
+                    stats,
                 );
-                if node.stroke.width > 0.0 {
-                    scene.stroke(
-                        &vello::kurbo::Stroke::new(node.stroke.width),
-                        world,
-                        &brush_with_alpha(paint_brush(&node.stroke.paint, vars), node.opacity),
-                        None,
-                        &bez,
-                    );
-                    stats.paths += 1;
-                }
-                stats.paths += 1;
             }
         }
         NodeKind::Arc { start, end } => {

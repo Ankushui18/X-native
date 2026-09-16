@@ -66,25 +66,48 @@ pub fn export_svg_ir(
                 h,
                 fit,
                 placement,
+                adjustments,
+                rotation,
                 ..
             } => {
-                let img = assets
-                    .get(asset)
+                let adjusted = adjustments
+                    .as_ref()
+                    .and_then(|adj| assets.get_adjusted(asset, *adj));
+                let img = adjusted
+                    .as_ref()
+                    .or_else(|| assets.get(asset))
                     .ok_or_else(|| format!("missing decoded image {asset}"))?;
                 let (iw, ih) = (img.image.width, img.image.height);
-                let image_id = if let Some(id) = images.get(asset) {
+                let image_key = if let Some(adj) = adjustments {
+                    format!("{asset}#adjusted:{adj:?}")
+                } else {
+                    asset.clone()
+                };
+                let image_id = if let Some(id) = images.get(&image_key) {
                     id.clone()
                 } else {
-                    let record = store
-                        .get(asset)
-                        .ok_or_else(|| format!("missing embedded image {asset}"))?;
-                    if !matches!(record.mime.as_str(), "image/png" | "image/jpeg") {
-                        return Err("SVG embedding supports PNG/JPEG only".into());
-                    }
+                    let (mime, bytes) = if let Some(adjusted) = adjusted.as_ref() {
+                        (
+                            "image/png",
+                            x_render::encode_rgba_png(
+                                adjusted.image.width,
+                                adjusted.image.height,
+                                adjusted.image.data.data(),
+                            )?,
+                        )
+                    } else {
+                        let record = store
+                            .get(asset)
+                            .ok_or_else(|| format!("missing embedded image {asset}"))?;
+                        if !matches!(record.mime.as_str(), "image/png" | "image/jpeg") {
+                            return Err("SVG embedding supports PNG/JPEG only".into());
+                        }
+                        (record.mime.as_str(), record.bytes.clone())
+                    };
                     next += 1;
                     let id = format!("im{next}");
-                    defs.push_str(&format!("<image id=\"{id}\" width=\"{iw}\" height=\"{ih}\" href=\"data:{};base64,{}\"/>\n", record.mime, x_format::base64(&record.bytes)));
-                    images.insert(asset.clone(), id.clone());
+                    defs.push_str(&format!("<image id=\"{id}\" width=\"{iw}\" height=\"{ih}\" href=\"data:{mime};base64,{}\"/>\n", x_format::base64(&bytes)));
+                    images.insert(image_key, id.clone());
                     id
                 };
                 next += 1;
@@ -95,10 +118,14 @@ pub fn export_svg_ir(
                 if resolved.draws.is_empty() {
                     return Err("image tiling exceeds render budget".into());
                 }
+                let image_transform = *transform
+                    * Affine::translate((*w / 2.0, *h / 2.0))
+                    * Affine::rotate(rotation.to_radians())
+                    * Affine::translate((-*w / 2.0, -*h / 2.0));
                 for draw in resolved.draws {
                     body.push_str(&format!(
                         "<use href=\"#{image_id}\" transform=\"{}\"/>\n",
-                        matrix(*transform * draw)
+                        matrix(image_transform * draw)
                     ));
                 }
                 body.push_str("</g>\n");

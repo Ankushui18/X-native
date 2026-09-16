@@ -370,6 +370,54 @@ mod tests {
     }
 
     #[test]
+    fn direct_vector_encoder_honors_visual_stacks_and_stroke_options() {
+        let mut vector = Node::vector(
+            "layered",
+            0.0,
+            0.0,
+            100.0,
+            100.0,
+            vec![
+                PathCmd::MoveTo(0.0, 0.0),
+                PathCmd::LineTo(100.0, 0.0),
+                PathCmd::LineTo(100.0, 100.0),
+                PathCmd::Close,
+            ],
+        );
+        vector.materialize_visual_stacks();
+        vector.fill_layers[0].paint = Paint::LinearGradient {
+            start: (0.0, 0.0),
+            end: (100.0, 0.0),
+            stops: vec![
+                (0.0, Color::from_rgb8(255, 0, 0)),
+                (1.0, Color::from_rgb8(0, 0, 255)),
+            ],
+            space: GradSpace::Srgb,
+        };
+        vector.fill_layers.push(PaintLayer {
+            paint: Paint::Solid(Color::from_rgba8(0, 255, 0, 128)),
+            opacity: 0.5,
+            visible: true,
+            blend: BlendKind::Normal,
+        });
+        vector.stroke_layers.push(StrokeLayer {
+            stroke: Stroke::solid(Color::WHITE, 4.0),
+            opacity: 1.0,
+            visible: true,
+            blend: BlendKind::Normal,
+            options: StrokeOptions {
+                cap_start: StrokeCap::Round,
+                cap_end: StrokeCap::Round,
+                join: StrokeJoin::Round,
+                ..StrokeOptions::default()
+            },
+        });
+        let (scene, stats) = build_scene(&vector, None, &Variables::default());
+        assert_eq!(stats.paths, 3, "two fills plus one stroke");
+        assert_eq!(scene.encoding().n_paths, 3);
+    }
+
+    #[test]
     fn pattern_fill_renders_clipped_image() {
         let path = std::env::temp_dir().join("xnative_pattern_test.png");
         {

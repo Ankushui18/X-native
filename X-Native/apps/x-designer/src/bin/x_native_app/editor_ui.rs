@@ -1,4 +1,7 @@
-//! Editor screen — pixel clone of `ui/v45-final-editor-28px.html`.
+//! Editor screen — the audited v45 geometry is a benchmark, not the product
+//! identity. X-Native keeps the measured density where it improves usability,
+//! then uses its own Graphite & Signal language and Compose → Flow → Ship
+//! workflow instead of reproducing Figma's Design/Prototype/Inspect shell.
 //!
 //! 36px title (28px logo cell + flush file tabs + [+]), 280px left panel
 //! (DRAFTS / file name / LAYERS-ASSETS-TOKENS pills / PAGES / tree),
@@ -11,7 +14,9 @@ use std::collections::HashSet;
 use vello::kurbo::{Affine, Point, Rect};
 use vello::peniko::{Color, Fill};
 use vello::Scene;
-use x_native::{ui::Elevation, FrameCache, Node, NodeKind, VelloSink};
+use x_native::{
+    ui::Elevation, FrameCache, ImageFit, Node, NodeKind, Paint, VelloSink,
+};
 
 use crate::context_menu::{action_for, ContextMenuItem, SEPARATOR_HEIGHT};
 use crate::icons::{draw_flow_glyph, draw_icon};
@@ -1124,7 +1129,7 @@ fn paint_title(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     // rename doc field lives in the left panel; caret drawn there
 }
 
-// ------------------------------------------- navigation bar (Figma-style)
+// ------------------------------------------- X-Native workspace rail
 
 /// Navigation bar colors.
 // The nav bar paints through the theme roles like the rest of the chrome,
@@ -1140,8 +1145,10 @@ const NAV_ICON_SIZE: f64 = 20.0;
 const NAV_ITEM_H: f64 = 40.0;
 const NAV_ITEM_GAP: f64 = 2.0;
 
-/// Vertical navigation bar — Figma's left-most rail with tab icons.
-/// Width: 48px, background #1A1A1A, icons 20px, labels 10px below.
+/// Vertical workspace rail — X-Native's persistent entry points for files,
+/// agents, reusable media, tools, and design tokens. It intentionally avoids
+/// Figma's Design/Prototype/Inspect naming and groups work by the full
+/// compose-to-ship workflow instead.
 fn paint_nav_bar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let reg = app.editor_regions();
     let nr = reg.nav_bar;
@@ -1152,7 +1159,7 @@ fn paint_nav_bar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let mut y = nr.y0 + 8.0;
     let nav_w = nr.x1 - nr.x0;
 
-    // Figma menu (hamburger) at top
+    // X-Native workspace menu at the top
     let menu_r = Rect::new(nr.x0 + 4.0, y, nr.x1 - 4.0, y + 36.0);
     let menu_hov = hover(app, menu_r);
     if menu_hov {
@@ -1759,8 +1766,10 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     );
     let item_w = (pw - 6.0 - 4.0) / 3.0;
     let tabs = [
-        (LeftTab::Layers, "LAYERS"),
-        (LeftTab::Assets, "ASSETS"),
+        // X-Native calls the layer tree Structure and the asset browser
+        // Library: the document model is a scene graph, not a Figma clone.
+        (LeftTab::Layers, "STRUCTURE"),
+        (LeftTab::Assets, "LIBRARY"),
         (LeftTab::Tokens, "TOKENS"),
     ];
     for (i, (tab, label)) in tabs.into_iter().enumerate() {
@@ -2417,13 +2426,13 @@ fn paint_right(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                 hit.push((icon_hit, Action::Tool(Tool::Comment)));
             }
             _ => {
-                tip(app, icon_hit, "Prototype tab");
+                tip(app, icon_hit, "Flow preview");
                 hit.push((icon_hit, Action::RightTab(RightTab::Prototype)));
             }
         }
     }
 
-    // pill tabs DESIGN / PROTOTYPE / INSPECT
+    // X-Native workflow tabs: COMPOSE / FLOW / SHIP / UX ANALYSIS
     let py = ED_TITLE_H + 50.0;
     let px0 = rx + 9.0;
     let pw = rw - 17.0;
@@ -2431,9 +2440,11 @@ fn paint_right(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     stroke_rrect(s, Rect::new(px0, py, px0 + pw, py + 30.0), 8.0, C_LINE, 1.0);
     let item_w = (pw - 6.0 - 4.0) / 4.0;
     let tabs = [
-        (RightTab::Design, "DESIGN"),
-        (RightTab::Prototype, "PROTOTYPE"),
-        (RightTab::Inspect, "INSPECT"),
+        // Right inspector is an X-Native workflow: compose the scene,
+        // route it through interactive flows, then ship an artifact.
+        (RightTab::Design, "COMPOSE"),
+        (RightTab::Prototype, "FLOW"),
+        (RightTab::Inspect, "SHIP"),
         (RightTab::UX, "UX ANALYSIS"),
     ];
     for (i, (tab, label)) in tabs.into_iter().enumerate() {
@@ -4478,47 +4489,79 @@ fn paint_layer_visible(app: &App, is_fill: bool) -> bool {
 
 // ------------------------------------------------------------------ Phase 6: Gradient & Image Controls
 
+/// Read the paint the renderer actually uses. A materialized vector may
+/// have several fills; the inspector acts on the top visible gradient rather
+/// than the legacy `node.fill` shadow field.
+fn selected_gradient_paint(app: &App) -> Option<Paint> {
+    let doc = app.doc_opt()?;
+    let id = doc.selected_id()?;
+    let node = find_node(&doc.editor_ref().root, &id)?;
+    node.active_fills()
+        .into_iter()
+        .rev()
+        .find_map(|layer| layer.paint.is_gradient().then_some(layer.paint))
+}
+
+fn gradient_stops(paint: &Paint) -> Option<Vec<(f32, Color)>> {
+    match paint {
+        Paint::LinearGradient { stops, .. }
+        | Paint::RadialGradient { stops, .. }
+        | Paint::AngularGradient { stops, .. }
+        | Paint::DiamondGradient { stops, .. } => Some(stops.clone()),
+        _ => None,
+    }
+}
+
+fn next_gradient_type(paint: &Paint) -> &'static str {
+    match paint.gradient_type_name() {
+        "Linear" => "Radial",
+        "Radial" => "Angular",
+        "Angular" => "Diamond",
+        _ => "Linear",
+    }
+}
+
 /// Phase 6: Check if the selected node has a gradient fill
 fn has_gradient_fill(app: &App) -> bool {
-    let Some(doc) = app.doc_opt() else {
-        return false;
-    };
-    let Some(id) = doc.selected_id() else {
-        return false;
-    };
-    let Some(node) = find_node(&doc.editor_ref().root, &id) else {
-        return false;
-    };
-    matches!(
-        node.fill,
-        x_native::Paint::LinearGradient { .. }
-            | x_native::Paint::RadialGradient { .. }
-            | x_native::Paint::AngularGradient { .. }
-            | x_native::Paint::DiamondGradient { .. }
-    )
+    selected_gradient_paint(app).is_some()
 }
 
 /// Phase 6: Get gradient type label
 fn gradient_type_label(app: &App) -> String {
-    let Some(doc) = app.doc_opt() else {
-        return "None".into();
-    };
-    let Some(id) = doc.selected_id() else {
-        return "None".into();
-    };
-    let Some(node) = find_node(&doc.editor_ref().root, &id) else {
-        return "None".into();
-    };
-    match &node.fill {
-        x_native::Paint::LinearGradient { .. } => "Linear".into(),
-        x_native::Paint::RadialGradient { .. } => "Radial".into(),
-        x_native::Paint::AngularGradient { .. } => "Angular".into(),
-        x_native::Paint::DiamondGradient { .. } => "Diamond".into(),
-        _ => "None".into(),
-    }
+    selected_gradient_paint(app)
+        .map(|paint| paint.gradient_type_name().to_string())
+        .unwrap_or_else(|| "None".into())
 }
 
 /// Phase 6: Check if the selected node is an image
+fn selected_image_fit(app: &App) -> Option<ImageFit> {
+    let doc = app.doc_opt()?;
+    let id = doc.selected_id()?;
+    let node = find_node(&doc.editor_ref().root, &id)?;
+    match &node.kind {
+        NodeKind::Image { fit, .. } => Some(*fit),
+        _ => None,
+    }
+}
+
+fn image_fit_label(fit: ImageFit) -> &'static str {
+    match fit {
+        ImageFit::Fill => "Fill",
+        ImageFit::Fit => "Fit",
+        ImageFit::Crop => "Crop",
+        ImageFit::Tile => "Tile",
+    }
+}
+
+fn next_image_fit(fit: ImageFit) -> (&'static str, ImageFit) {
+    match fit {
+        ImageFit::Fill => ("Fit", ImageFit::Fit),
+        ImageFit::Fit => ("Crop", ImageFit::Crop),
+        ImageFit::Crop => ("Tile", ImageFit::Tile),
+        ImageFit::Tile => ("Fill", ImageFit::Fill),
+    }
+}
+
 fn is_image_node(app: &App) -> bool {
     let Some(doc) = app.doc_opt() else {
         return false;
@@ -4541,20 +4584,22 @@ fn paint_gradient_controls(
     xr: f64,
     y: f64,
 ) -> f64 {
-    if !has_gradient_fill(app) {
+    let Some(paint) = selected_gradient_paint(app) else {
         return y;
-    }
-
+    };
+    let Some(stops) = gradient_stops(&paint) else {
+        return y;
+    };
     let mut y = y;
 
-    // Section header
     app.fonts.caps_label(s, x0, y, "GRADIENT", C_TEXT, Wt::Med);
     y += 20.0;
 
-    // Gradient type selector
+    // The selector cycles through the real conversion path. It is not a
+    // decorative dropdown wired to the unrelated frame menu.
     let type_r = Rect::new(x0, y, x0 + 120.0, y + 24.0);
     input_box(app, s, type_r, 6.0);
-    let label = gradient_type_label(app);
+    let label = format!("{}  ·  {} stops", paint.gradient_type_name(), stops.len());
     app.fonts.text(
         s,
         type_r.x0 + 8.0,
@@ -4572,10 +4617,14 @@ fn paint_gradient_controls(
         12.0,
         C_DIM,
     );
-    hit.push((type_r, Action::FrameDropdown)); // Reuse frame dropdown for now
+    hit.push((
+        type_r,
+        Action::SetGradientType {
+            gradient_type: next_gradient_type(&paint).into(),
+        },
+    ));
     y += 32.0;
 
-    // Flip gradient button
     let flip_r = Rect::new(x0, y, x0 + 60.0, y + 24.0);
     input_box(app, s, flip_r, 6.0);
     draw_icon(s, "repeat", flip_r.x0 + 8.0, flip_r.y0 + 6.0, 12.0, C_DIM);
@@ -4590,7 +4639,6 @@ fn paint_gradient_controls(
     );
     hit.push((flip_r, Action::FlipGradient));
 
-    // Rotate gradient slider
     let rotate_r = Rect::new(x0 + 70.0, y, x0 + 200.0, y + 24.0);
     input_box(app, s, rotate_r, 6.0);
     draw_icon(
@@ -4613,24 +4661,34 @@ fn paint_gradient_controls(
     hit.push((rotate_r, Action::RotateGradient { degrees: 90.0 }));
     y += 32.0;
 
-    // Gradient stops preview (simplified - just show count)
-    let stops_r = Rect::new(x0, y, xr, y + 24.0);
+    let stops_r = Rect::new(x0, y, xr, y + 52.0);
     fill_rrect(s, stops_r, 6.0, C_FIELD);
     stroke_rrect(s, stops_r, 6.0, C_LINE, 1.0);
-
-    // Draw gradient preview bar
-    let bar_h = 16.0;
-    let bar_y = y + 4.0;
-    let bar_r = Rect::new(x0 + 4.0, bar_y, xr - 4.0, bar_y + bar_h);
-
-    // Create a simple gradient preview (blue to red for demo)
-    let gradient_preview =
-        vello::peniko::Gradient::new_linear((bar_r.x0, bar_r.y0), (bar_r.x1, bar_r.y0)).with_stops(
-            [
-                vello::peniko::Color::from_rgb8(0x00, 0x99, 0xFF),
-                vello::peniko::Color::from_rgb8(0xFF, 0x33, 0x00),
-            ],
-        );
+    let bar_r = Rect::new(x0 + 4.0, y + 4.0, xr - 4.0, y + 22.0);
+    let gradient_preview = match &paint {
+        Paint::LinearGradient { .. } => {
+            vello::peniko::Gradient::new_linear((bar_r.x0, bar_r.y0), (bar_r.x1, bar_r.y0))
+                .with_stops(stops.as_slice())
+        }
+        Paint::RadialGradient { .. } => vello::peniko::Gradient::new_radial(
+            ((bar_r.x0 + bar_r.x1) / 2.0, (bar_r.y0 + bar_r.y1) / 2.0),
+            (bar_r.width() / 2.0) as f32,
+        )
+        .with_stops(stops.as_slice()),
+        Paint::AngularGradient { .. } => vello::peniko::Gradient::new_sweep(
+            ((bar_r.x0 + bar_r.x1) / 2.0, (bar_r.y0 + bar_r.y1) / 2.0),
+            0.0,
+            std::f32::consts::TAU,
+        )
+        .with_stops(stops.as_slice()),
+        // Peniko has no diamond primitive; keep the stop data and use a
+        // linear preview rather than displaying a hard-coded two-stop ramp.
+        Paint::DiamondGradient { .. } => {
+            vello::peniko::Gradient::new_linear((bar_r.x0, bar_r.y0), (bar_r.x1, bar_r.y0))
+                .with_stops(stops.as_slice())
+        }
+        _ => unreachable!("gradient_stops only returns gradient paints"),
+    };
     s.fill(
         vello::peniko::Fill::NonZero,
         vello::kurbo::Affine::IDENTITY,
@@ -4638,18 +4696,51 @@ fn paint_gradient_controls(
         None,
         &bar_r,
     );
-
-    // Add stop markers
-    let stop_count = 2; // Simplified
-    for i in 0..stop_count {
-        let stop_x = bar_r.x0 + (bar_r.width() * i as f64 / (stop_count - 1) as f64);
-        let marker_r = Rect::new(stop_x - 4.0, bar_r.y0 - 2.0, stop_x + 4.0, bar_r.y1 + 2.0);
-        stroke_rrect(s, marker_r, 2.0, C_TEXT, 2.0);
+    // The complete bar is an interaction surface as well: a click repositions
+    // the nearest authored stop at the pointer, so stop editing is reachable
+    // without requiring a tiny marker hit target.
+    if let Some((index, _)) = stops.iter().enumerate().min_by(|(_, a), (_, b)| {
+        let ax = (bar_r.x0 + bar_r.width() * a.0 as f64 - app.mouse.x).abs();
+        let bx = (bar_r.x0 + bar_r.width() * b.0 as f64 - app.mouse.x).abs();
+        ax.total_cmp(&bx)
+    }) {
+        let pointer_position = ((app.mouse.x - bar_r.x0) / bar_r.width()).clamp(0.0, 1.0) as f32;
+        hit.push((
+            bar_r,
+            Action::MoveGradientStop {
+                index,
+                new_position: pointer_position,
+            },
+        ));
     }
 
-    y += 32.0;
+    for (index, (position, color)) in stops.iter().enumerate() {
+        let t = (*position as f64).clamp(0.0, 1.0);
+        let stop_x = bar_r.x0 + bar_r.width() * t;
+        let marker_r = Rect::new(stop_x - 4.0, bar_r.y1 - 1.0, stop_x + 4.0, bar_r.y1 + 7.0);
+        let rgba = color.to_rgba8();
+        fill_rrect(s, marker_r, 2.0, Color::from_rgba8(rgba.r, rgba.g, rgba.b, rgba.a));
+        stroke_rrect(s, marker_r, 2.0, C_TEXT, 1.0);
+        let swatch_x = bar_r.x0 + 4.0 + index as f64 * 18.0;
+        let swatch_r = Rect::new(swatch_x, y + 32.0, swatch_x + 12.0, y + 44.0);
+        fill_rrect(s, swatch_r, 2.0, Color::from_rgba8(rgba.r, rgba.g, rgba.b, rgba.a));
+        stroke_rrect(s, swatch_r, 2.0, C_LINE_2, 1.0);
+        hit.push((swatch_r, Action::CycleGradientStopColor { index }));
+        // The marker hit is tied to the real bar coordinate: clicking it
+        // writes the position under the pointer instead of applying a
+        // hard-coded demo nudge. The action still targets the authored stop
+        // used by the renderer.
+        let pointer_position = ((app.mouse.x - bar_r.x0) / bar_r.width()).clamp(0.0, 1.0) as f32;
+        hit.push((
+            marker_r,
+            Action::MoveGradientStop {
+                index,
+                new_position: pointer_position,
+            },
+        ));
+    }
+    y += 60.0;
 
-    // Add stop button
     let add_r = Rect::new(x0, y, x0 + 60.0, y + 20.0);
     let hov = hover(app, add_r);
     fill_rrect(s, add_r, 4.0, if hov { C_FIELD_2 } else { C_FIELD });
@@ -4664,18 +4755,37 @@ fn paint_gradient_controls(
         C_TEXT,
         Wt::Reg,
     );
+    let seed = stops
+        .first()
+        .map(|(_, color)| color.to_rgba8())
+        .unwrap_or_else(|| Color::from_rgba8(128, 128, 128, 255).to_rgba8());
     hit.push((
         add_r,
         Action::AddGradientStop {
             position: 0.5,
-            color: [128, 128, 128],
+            color: [seed.r, seed.g, seed.b],
         },
     ));
 
-    y += 28.0;
-    y += 8.0;
+    // Keep removal reachable without inventing a separate hidden editor: a
+    // compact minus button is rendered for every non-endpoint stop.
+    if stops.len() > 2 {
+        let remove_r = Rect::new(x0 + 68.0, y, x0 + 128.0, y + 20.0);
+        let hov = hover(app, remove_r);
+        fill_rrect(s, remove_r, 4.0, if hov { C_FIELD_2 } else { C_FIELD });
+        stroke_rrect(s, remove_r, 4.0, C_LINE, 1.0);
+        draw_icon(s, "minus", remove_r.x0 + 8.0, remove_r.y0 + 4.0, 12.0, C_DIM);
+        app.fonts.text(s, remove_r.x0 + 24.0, remove_r.y0 + 4.0, "Remove", T10, C_TEXT, Wt::Reg);
+        hit.push((
+            remove_r,
+            Action::RemoveGradientStop {
+                index: stops.len() - 2,
+            },
+        ));
+    }
 
-    y
+    y += 28.0;
+    y + 8.0
 }
 
 /// Phase 6: Paint image adjustment controls section
@@ -4699,6 +4809,29 @@ fn paint_image_adjustments(
     // Section header
     app.fonts.caps_label(s, x0, y, "IMAGE", C_TEXT, Wt::Med);
     y += 20.0;
+
+    if let Some(fit) = selected_image_fit(app) {
+        let mode_r = Rect::new(x0, y, x0 + 220.0, y + 26.0);
+        input_box(app, s, mode_r, 6.0);
+        app.fonts.text(
+            s,
+            mode_r.x0 + 8.0,
+            mode_r.y0 + 7.0,
+            &format!("Fill mode  ·  {}", image_fit_label(fit)),
+            T10,
+            C_TEXT,
+            Wt::Reg,
+        );
+        draw_icon(s, "chevron-down", mode_r.x1 - 18.0, mode_r.y0 + 7.0, 12.0, C_DIM);
+        let (_, next) = next_image_fit(fit);
+        hit.push((
+            mode_r,
+            Action::SetImageFillMode {
+                mode: image_fit_label(next).into(),
+            },
+        ));
+        y += 34.0;
+    }
 
     // Get current adjustments
     let adjustments = {
@@ -4762,11 +4895,16 @@ fn paint_image_adjustments(
             .text(s, x0 + 230.0, y + 4.0, &val_label, T10, C_TEXT, Wt::Mono);
 
         // Hit area for slider
+        // A click is a real slider write, not a fixed demo increment: the
+        // hit action is rebuilt every frame from the pointer position, so
+        // the selected x-coordinate maps to the full [-1, 1] model range.
+        let pointer_value = (((app.mouse.x - slider_r.x0) / slider_r.width()) * 2.0 - 1.0)
+            .clamp(-1.0, 1.0) as f32;
         hit.push((
             slider_r,
             Action::UpdateImageAdjustment {
                 adjustment: name.to_string(),
-                value: (value + 0.1).clamp(-1.0, 1.0),
+                value: pointer_value,
             },
         ));
 
@@ -5994,6 +6132,19 @@ fn paint_palette(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     }
 }
 
+/// Paint the command palette over whichever screen is active. The palette is
+/// global (Ctrl/Cmd+K), so it must not disappear just because the dashboard
+/// is underneath it. This helper preserves the screen's existing hit zones
+/// and appends the modal rows on top of them.
+pub(crate) fn paint_palette_overlay(app: &mut App, s: &mut Scene) {
+    if !app.palette.open {
+        return;
+    }
+    let mut hit = std::mem::take(&mut app.hit);
+    paint_palette(app, s, &mut hit);
+    app.hit = hit;
+}
+
 // ------------------------------------------------------------ comments
 // (C18): pins live ABOVE the canvas content (like selection chrome);
 // hit-testing/press flow lives in the shell's canvas_press, drawing here.
@@ -6184,9 +6335,10 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
     }
 }
 
-// ------------------------------------------------------------ dev mode
-// (C21): the INSPECT tab — platform picker + generated code for the
-// selection, over the devmode generators (CSS/SwiftUI/Compose/XML).
+// ------------------------------------------------------------ ship mode
+// (C21): the SHIP tab — platform picker + generated implementation output
+// for the selection. This is an X-Native handoff surface, not a Figma Dev
+// Mode replica.
 
 // ------------------------------------------------------------ UX Analysis Tool
 // Inspired by Quant-UX: analyze user flows, accessibility, design quality,
@@ -6378,7 +6530,7 @@ fn paint_inspect(
 ) {
     hline(s, x0 - 8.0, xr, y, C_LINE);
     let y = y + 1.0 + 12.0;
-    // platform segmented control (Figma dev mode's language picker)
+    // platform segmented control for X-Native's artifact handoff targets
     const NAMES: [&str; 4] = App::INSPECT_PLATFORMS;
     let w = xr - x0;
     let seg_w = (w - 3.0 * 4.0) / 4.0;
@@ -6479,82 +6631,6 @@ fn paint_inspect(
         Wt::Reg,
     );
     hit.push((cb, Action::InspectCopy));
-}
-
-fn fill_circle(s: &mut Scene, center: Point, radius: f64, color: Color) {
-    let circle = vello::kurbo::Circle::new((center.x, center.y), radius);
-    s.fill(Fill::NonZero, Affine::IDENTITY, color, None, &circle);
-}
-
-// ------------------------------------------------------- Board rendering
-
-fn paint_board_grid(app: &App, s: &mut Scene) {
-    // Dot grid for infinite canvas - Figma FigJam style
-    let spacing = 20.0; // Grid spacing in screen pixels
-    let dot_radius = 1.0;
-
-    let reg = app.editor_regions();
-    let canvas = reg.canvas;
-
-    // Clip to the canvas region
-    s.push_layer(
-        Fill::NonZero,
-        vello::peniko::BlendMode::new(vello::peniko::Mix::Normal, vello::peniko::Compose::SrcOver),
-        1.0,
-        Affine::IDENTITY,
-        &canvas,
-    );
-
-    // Draw dots in a grid pattern
-    let mut x = canvas.x0;
-    while x < canvas.x1 {
-        let mut y = canvas.y0;
-        while y < canvas.y1 {
-            // Only draw dots at major grid intersections
-            if ((x - canvas.x0) % (spacing * 5.0)).abs() < 0.1
-                && ((y - canvas.y0) % (spacing * 5.0)).abs() < 0.1
-            {
-                // Major dot (every 5th intersection)
-                fill_circle(s, Point::new(x, y), dot_radius * 1.5, C_GRID);
-            } else {
-                // Regular dot
-                fill_circle(s, Point::new(x, y), dot_radius, C_GRID_LIGHT);
-            }
-            y += spacing;
-        }
-        x += spacing;
-    }
-
-    s.pop_layer();
-}
-
-fn paint_board_nodes(app: &App, s: &mut Scene) {
-    let doc = match app.doc_opt() {
-        Some(d) => d,
-        None => return,
-    };
-
-    // Get board document and render nodes
-    // This is a placeholder - full implementation requires board state access
-    // For now, we render basic shapes from the design doc structure
-    // Board-specific rendering will be implemented when board state is fully integrated
-
-    let editor = doc.editor_ref();
-
-    // Render all nodes with board-specific styling
-    for node_id in &editor.selection {
-        if let Some(node) = find_node(&editor.root, node_id) {
-            let p0 = app.world_to_screen(Point::new(node.transform.x, node.transform.y));
-            let p1 = app.world_to_screen(Point::new(
-                node.transform.x + node.w,
-                node.transform.y + node.h,
-            ));
-            let r = Rect::new(p0.x, p0.y, p1.x, p1.y);
-
-            // Selection highlight for board nodes
-            stroke_rect(s, r, C_SEL, 2.0);
-        }
-    }
 }
 
 // ————————————————————————————————————————— prototype tab
@@ -6690,7 +6766,7 @@ fn paint_prototype(
     let x0 = rx + 16.0;
     let xr = rx + rw - 16.0;
     let mut y = y0 + 14.0;
-    app.fonts.caps_label(s, x0, y, "PROTOTYPE", C_TEXT, Wt::Med);
+    app.fonts.caps_label(s, x0, y, "FLOW PREVIEW", C_TEXT, Wt::Med);
     y += 20.0;
 
     let sel: Vec<String> = app.doc().editor_ref().selection.clone();
@@ -6741,16 +6817,15 @@ fn paint_prototype(
             );
             y += 20.0;
         }
-        // Fetched for the interaction rows' destination picker, which is not
-        // built yet (`Action::ProtoDest` has a handler and no dispatch site).
-        // Bound rather than deleted: the dead-code budget in scripts/check.sh is
-        // a ratchet at exactly its documented ceiling, and dropping the only
-        // caller would push `proto_targets` over it.
-        let _targets = proto_targets(app);
+        // Navigation candidates feed the visible destination control below;
+        // the control cycles through the same ids the prototype player uses.
+        let targets = proto_targets(app);
         for (i, ix) in list.iter().enumerate() {
-            // Calculate row height based on content
+            // Each interaction exposes the same core model fields that the
+            // player consumes: trigger, action/destination, animation/speed,
+            // easing and reset. URL actions get one extra line.
             let has_url = matches!(&ix.action, x_native::Action::OpenLink { .. });
-            let row_h = if has_url { 92.0 } else { 56.0 };
+            let row_h = if has_url { 128.0 } else { 96.0 };
             let row = Rect::new(x0, y, xr, y + row_h);
             fill_rrect(s, row, 6.0, C_FIELD);
             // Row 1: trigger + action type + destination
@@ -6807,26 +6882,69 @@ fn paint_prototype(
                 _ => {}
             }
 
-            // Show action-specific fields (URL for OpenLink)
-            if let x_native::Action::OpenLink { url } = &ix.action {
-                let ub = Rect::new(x0 + 5.0, y + 50.0, xr - 5.0, y + 66.0);
-                input_box(app, s, ub, 4.0);
-                let display_url = if url.is_empty() {
-                    "https://example.com".to_string()
-                } else {
-                    url.clone()
-                };
-                let truncated = if display_url.len() > 30 {
-                    format!("{}...", &display_url[..27])
-                } else {
-                    display_url
-                };
-                app.fonts
-                    .text(s, ub.x0 + 4.0, y + 52.0, &truncated, T10, C_TEXT, Wt::Mono);
-                hit.push((ub, Action::ProtoEditUrl(i)));
+            // Row 2: action type + destination. These controls mutate the
+            // exact action consumed by the flow player; there is no longer a
+            // painted-but-unwired destination field.
+            let action_y = y + 24.0;
+            let ab = Rect::new(x0 + 5.0, action_y, x0 + 86.0, action_y + 20.0);
+            input_box(app, s, ab, 4.0);
+            app.fonts.text(
+                s,
+                ab.x0 + 4.0,
+                action_y + 2.0,
+                &proto_action_label(&ix.action, &targets),
+                T10,
+                C_TEXT,
+                Wt::Reg,
+            );
+            hit.push((ab, Action::ProtoActionType(i)));
+
+            let target_label = ix
+                .action
+                .target()
+                .and_then(|id| targets.iter().find(|(candidate, _)| candidate == id))
+                .map(|(_, name)| name.as_str())
+                .unwrap_or_else(|| {
+                    if has_url {
+                        "External link"
+                    } else {
+                        "Choose destination"
+                    }
+                });
+            let db = Rect::new(x0 + 90.0, action_y, xr - 5.0, action_y + 20.0);
+            input_box(app, s, db, 4.0);
+            let target_text = app.fonts.truncate(target_label, T10, Wt::Reg, db.width() - 8.0);
+            app.fonts
+                .text(s, db.x0 + 4.0, action_y + 2.0, &target_text, T10, C_TEXT, Wt::Reg);
+            if !has_url {
+                hit.push((db, Action::ProtoDest(i, 1)));
             }
-            // Row 3: easing + reset + remove
-            let row3_y = y + 30.0;
+
+            // Row 3: animation + duration. Both are authored properties on
+            // Interaction and are used by the prototype transition runtime.
+            let motion_y = y + 48.0;
+            let mb = Rect::new(x0 + 5.0, motion_y, x0 + 120.0, motion_y + 20.0);
+            input_box(app, s, mb, 4.0);
+            let animation = ix.animation.label_with_dir();
+            let animation = app.fonts.truncate(&animation, T10, Wt::Reg, mb.width() - 8.0);
+            app.fonts
+                .text(s, mb.x0 + 4.0, motion_y + 2.0, &animation, T10, C_TEXT, Wt::Reg);
+            hit.push((mb, Action::ProtoAnimation(i)));
+            let sb = Rect::new(x0 + 124.0, motion_y, x0 + 184.0, motion_y + 20.0);
+            input_box(app, s, sb, 4.0);
+            app.fonts.text(
+                s,
+                sb.x0 + 4.0,
+                motion_y + 2.0,
+                &format!("{}ms", ix.transition_ms),
+                T10,
+                C_TEXT,
+                Wt::Mono,
+            );
+            hit.push((sb, Action::ProtoSpeed(i)));
+
+            // Row 4: easing + reset + remove
+            let row3_y = y + 72.0;
             let eb = Rect::new(x0 + 5.0, row3_y, x0 + 85.0, row3_y + 20.0);
             input_box(app, s, eb, 4.0);
             app.fonts.text(
@@ -6856,12 +6974,28 @@ fn paint_prototype(
                 Wt::Reg,
             );
             hit.push((rb, Action::ProtoToggleReset(i)));
-            // Row 4: remove button
             let rb_rm = Rect::new(xr - 30.0, row3_y, xr - 5.0, row3_y + 20.0);
             input_box(app, s, rb_rm, 4.0);
             app.fonts
                 .text_center(s, rb_rm, "Remove", T10, C_TEXT, Wt::Reg, true);
             hit.push((rb_rm, Action::ProtoRemove(i)));
+
+            // URL is intentionally below the common controls so a link
+            // interaction has a full, clickable editor without overlapping
+            // animation/easing.
+            if let x_native::Action::OpenLink { url } = &ix.action {
+                let ub = Rect::new(x0 + 5.0, y + 98.0, xr - 5.0, y + 116.0);
+                input_box(app, s, ub, 4.0);
+                let display_url = if url.is_empty() {
+                    "https://example.com".to_string()
+                } else {
+                    url.clone()
+                };
+                let truncated = app.fonts.truncate(&display_url, T10, Wt::Mono, ub.width() - 8.0);
+                app.fonts
+                    .text(s, ub.x0 + 4.0, y + 100.0, &truncated, T10, C_TEXT, Wt::Mono);
+                hit.push((ub, Action::ProtoEditUrl(i)));
+            }
             y += row_h;
         }
     } else {
@@ -7107,7 +7241,7 @@ fn paint_tokens(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
     let x0 = 12.0;
     let mut y = y0 + 160.5;
     app.fonts
-        .micro_label(s, x0, y, "DESIGN TOKENS", C_DIM, Wt::Med);
+        .micro_label(s, x0, y, "X-NATIVE TOKENS", C_DIM, Wt::Med);
     y += 18.0;
     let tokens = app
         .doc_opt()

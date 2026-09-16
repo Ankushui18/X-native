@@ -73,11 +73,20 @@ pub struct ImportNode {
     /// radians, positive = clockwise in y-down screen space (the native
     /// convention). Importers convert their source's convention here.
     pub rotation: f64,
+    /// Optional source-space affine. Formats such as SVG can carry matrix,
+    /// scale, skew, and rotation-about-a-point transforms that cannot be
+    /// represented by the legacy rotation-only field. Lowering composes this
+    /// with the node's placement and decomposes it into the native transform.
+    pub source_transform: Option<Affine>,
     /// None = "source specified nothing" -> lower() picks the kind default
     pub fill: Option<Paint>,
     /// Primary (first) stroke — (paint, width); Paint so gradient strokes
     /// ride the same vocabulary as fills.
     pub stroke: Option<(Paint, f64)>,
+    /// Stroke geometry options for the primary stroke. Keeping these in the
+    /// shared IR prevents SVG/Figma importers from silently reverting caps,
+    /// joins, and dashes to the renderer defaults.
+    pub stroke_options: Option<StrokeOptions>,
     /// Any strokes beyond the first (Figma/Sketch both support stacking
     /// multiple stroke paints on one layer). Same width convention as
     /// `stroke`; importers that don't support multi-stroke just leave
@@ -109,8 +118,10 @@ impl ImportNode {
             w: 0.0,
             h: 0.0,
             rotation: 0.0,
+            source_transform: None,
             fill: None,
             stroke: None,
+            stroke_options: None,
             extra_strokes: vec![],
             effects: vec![],
             layout: None,
@@ -442,6 +453,12 @@ fn lower_node(
             };
         }
     }
+    if let Some(options) = ir.stroke_options {
+        node.materialize_visual_stacks();
+        if let Some(layer) = node.stroke_layers.first_mut() {
+            layer.options = options;
+        }
+    }
     if !ir.extra_strokes.is_empty() && !matches!(node.kind, NodeKind::Line) {
         node.materialize_visual_stacks();
         for (paint, sw) in &ir.extra_strokes {
@@ -462,7 +479,16 @@ fn lower_node(
     if !ir.name.is_empty() {
         node.name = ir.name.clone();
     }
-    node.transform.rotation = clean(ir.rotation);
+    if let Some(source_transform) = ir.source_transform {
+        // Shape constructors store x/y as the node placement. Compose that
+        // placement into the source matrix before decomposition so SVG
+        // matrix/scale/skew transforms do not lose translation or pivot.
+        node.transform = Transform::from_affine(
+            source_transform * Affine::translate((clean(ir.x), clean(ir.y))),
+        );
+    } else {
+        node.transform.rotation = clean(ir.rotation);
+    }
     node.opacity = if ir.opacity.is_finite() {
         ir.opacity.clamp(0.0, 1.0)
     } else {

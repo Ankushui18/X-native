@@ -20,7 +20,7 @@ use x_native::build_scene_full;
 #[cfg(test)]
 use x_native::fileio::load_x_file;
 use x_native::{
-    bind_style, detach_text_style, resolve_styles, LegacyStyle, Node, NodeKind, Paint, PathCmd,
+    bind_style, detach_text_style, resolve_styles, ImageFit, LegacyStyle, Node, NodeKind, Paint, PathCmd,
     StrokeJoin, TextStyleData,
 };
 
@@ -31,6 +31,31 @@ use crate::state::{
     OpenDoc, PropertyClipboard, Screen, Tool, FRAME_PRESETS,
 };
 use crate::theme::*;
+
+/// Mutate the paint the renderer actually uses. Legacy nodes keep their
+/// single `fill`; materialized nodes paint the top fill layer instead. The
+/// old gradient actions edited only `Node::fill`, so the UI appeared to work
+/// while layered vectors stayed unchanged.
+fn active_fill_paint_mut(node: &mut Node) -> Option<&mut Paint> {
+    if node.visual_stacks_materialized {
+        node.fill_layers.last_mut().map(|layer| &mut layer.paint)
+    } else {
+        Some(&mut node.fill)
+    }
+}
+
+fn selected_is_image(app: &App) -> bool {
+    let Some(doc) = app.doc_opt() else {
+        return false;
+    };
+    let Some(id) = doc.selected_id() else {
+        return false;
+    };
+    matches!(
+        editor_ui::find_node(&doc.editor_ref().root, &id).map(|node| &node.kind),
+        Some(NodeKind::Image { .. })
+    )
+}
 
 struct Gpu {
     device: wgpu::Device,
@@ -3675,9 +3700,35 @@ impl Host {
                     cur: world,
                 });
             }
+            Tool::Zoom => {
+                self.zoom_at(p, 1.2);
+                self.app.status = "Zoom in".into();
+            }
             Tool::Symmetry => {
-                // Symmetry tool click - toggle symmetry axis or show options
-                // For now, just provide feedback that symmetry mode is active
+                // A symmetry click is a real document operation: reflect the
+                // current selection around its local vertical/horizontal
+                // axis. Repeated clicks alternate axes and use the editor
+                // command log, so the action is undoable and survives save.
+                let horizontal = self.app.symmetry_axis == Some('h');
+                let ids = self.app.doc().editor_ref().selection.clone();
+                if ids.is_empty() {
+                    self.app.status = "Select a layer to reflect".into();
+                    return;
+                }
+                let mut changed = 0usize;
+                for id in ids {
+                    if self.app.doc().editor().flip_node(&id, !horizontal) {
+                        changed += 1;
+                    }
+                }
+                if changed > 0 {
+                    self.app.symmetry_axis = Some(if horizontal { 'v' } else { 'h' });
+                    self.app.mark_dirty();
+                    self.app.status = format!(
+                        "Reflected {changed} layer(s) {}",
+                        if horizontal { "horizontally" } else { "vertically" }
+                    );
+                }
             }
             _ => {
                 self.app.drag = Some(Drag::Create {
@@ -3717,6 +3768,21 @@ impl Host {
                 let hit_node = self.app.hit_test_board_node(world);
 
                 if let Some(node_id) = hit_node {
+                    // Keep board selection in the board model so the
+                    // renderer, marquee and move gesture all observe the
+                    // same state. Shift extends the selection like the
+                    // design canvas; a plain click replaces it.
+                    if self.app.shift {
+                        let mut selection = self.app.board_doc().selection().to_vec();
+                        if let Some(pos) = selection.iter().position(|id| id == &node_id) {
+                            selection.remove(pos);
+                        } else {
+                            selection.push(node_id.clone());
+                        }
+                        self.app.board_doc_mut().set_selection(selection);
+                    } else {
+                        self.app.board_doc_mut().set_selection(vec![node_id.clone()]);
+                    }
                     // Start moving the node
                     self.app.drag = Some(Drag::BoardMoveNode {
                         node_id,
@@ -3724,7 +3790,11 @@ impl Host {
                         cur: world,
                     });
                 } else {
-                    // Start marquee selection
+                    // Start marquee selection; a plain empty click clears
+                    // stale selection when the marquee is released.
+                    if !self.app.shift {
+                        self.app.board_doc_mut().set_selection(Vec::new());
+                    }
                     self.app.drag = Some(Drag::BoardMarquee {
                         start: world,
                         cur: world,
@@ -3800,6 +3870,7 @@ impl Host {
                     let board_doc = self.app.board_doc_mut();
                     board_doc.add_node(label);
                     board_doc.set_selection(vec![id]);
+                    self.app.mark_board_dirty();
                 }
 
                 self.app.status = "Text label created".into();
@@ -4248,18 +4319,27 @@ impl Host {
                     if let Some(Drag::BoardMoveNode { cur: c, .. }) = self.app.drag.as_mut() {
                         *c = world;
                     }
-                    // Move the board node
+                    // Move the clicked node and any other selected nodes as
+                    // one gesture. Selection is model-backed, so a Shift
+                    // click followed by a drag behaves like the design
+                    // canvas instead of silently moving only one item.
+                    let selected = self.app.board_doc().selection().to_vec();
+                    let ids: Vec<String> = if selected.is_empty() {
+                        vec![node_id.clone()]
+                    } else {
+                        selected
+                    };
                     let doc = self.app.board_doc_mut();
                     let page = doc.current_page_mut();
                     for node in &mut page.nodes {
-                        if node.id() == &node_id {
+                        if ids.iter().any(|id| id == node.id()) {
                             if let Some(transform) = node.transform_mut() {
                                 transform.x += dx;
                                 transform.y += dy;
                             }
-                            break;
                         }
                     }
+                    self.app.mark_board_dirty();
                 }
             }
             Some(Drag::BoardMarquee { start: _, cur: _ }) => {
@@ -4431,6 +4511,7 @@ impl Host {
                     let doc = self.app.board_doc_mut();
                     doc.add_node(sticky);
                     doc.set_selection(vec![id]);
+                    self.app.mark_board_dirty();
                 }
                 self.app.drag = None;
                 self.app.tool = Tool::Select;
@@ -4456,6 +4537,7 @@ impl Host {
                         let doc = self.app.board_doc_mut();
                         doc.add_node(connector_node);
                         doc.add_connector(connector);
+                        self.app.mark_board_dirty();
                     }
                 }
                 self.app.drag = None;
@@ -4518,6 +4600,7 @@ impl Host {
                     let doc = self.app.board_doc_mut();
                     doc.add_node(pen_node);
                     doc.set_selection(vec![id]);
+                    self.app.mark_board_dirty();
                 }
                 self.app.drag = None;
                 self.app.tool = Tool::Select;
@@ -4561,6 +4644,33 @@ impl Host {
         let y = start.y.min(cur.y);
         let w = (cur.x - start.x).abs();
         let h = (cur.y - start.y).abs();
+
+        // Board rectangle/circle tools share the Drag::Create gesture with
+        // design shapes, but must never insert an x-core Node into the hidden
+        // design page. Route them to the active BoardPage model instead.
+        if self.app.is_board() && matches!(tool, Tool::Rect | Tool::Ellipse) {
+            let node = if tool == Tool::Rect {
+                x_board::BoardNode::Shape(x_board::shapes::BoardShape::rectangle(
+                    x as f32,
+                    y as f32,
+                    w.max(2.0) as f32,
+                    h.max(2.0) as f32,
+                ))
+            } else {
+                let diameter = w.min(h).max(2.0) as f32;
+                x_board::BoardNode::Shape(x_board::shapes::BoardShape::circle(
+                    x as f32, y as f32, diameter,
+                ))
+            };
+            let id = node.id().clone();
+            let board = self.app.board_doc_mut();
+            board.add_node(node);
+            board.set_selection(vec![id]);
+            self.app.mark_board_dirty();
+            self.app.tool = Tool::Select;
+            return;
+        }
+
         let doc = self.app.doc();
         let root_id = doc.editor_ref().root.id.clone();
         let counter = doc
@@ -4711,6 +4821,18 @@ impl Host {
                 let d = self.app.doc();
                 d.scroll_left = (d.scroll_left - dy * 40.0).max(0.0);
             }
+        } else if self.app.screen == Screen::Board {
+            // Boards are an infinite canvas, not a dashboard. The previous
+            // fallback sent wheel events to `dash_scroll`, so board scrolling
+            // appeared to do nothing and left the camera fixed.
+            let f = if dy > 0.0 {
+                1.1
+            } else if dy < 0.0 {
+                1.0 / 1.1
+            } else {
+                return;
+            };
+            self.zoom_at(self.app.mouse, f);
         } else {
             let content = (self.app.recents.len().div_ceil(3) as f64 * 247.0 + 380.0)
                 .max(900.0 + self.app.docs.len() as f64 * 48.0);
@@ -4773,6 +4895,29 @@ impl Host {
             // preview mode: navigation + prototype keys only, rest swallowed
             self.flow_key(&key);
             return;
+        }
+        // The dashboard search is a real text field, not just a painted
+        // placeholder. Handle editing keys before the global shortcut gate so
+        // Backspace and Ctrl/Cmd+A work even when no document is open.
+        if self.app.screen == Screen::Dashboard && self.app.dash_search_focus {
+            match &key {
+                Key::Named(NamedKey::Backspace) => {
+                    use unicode_segmentation::UnicodeSegmentation;
+                    if let Some((at, _)) = self.app.dash_search.grapheme_indices(true).next_back() {
+                        self.app.dash_search.truncate(at);
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::Escape) => {
+                    self.app.dash_search_focus = false;
+                    return;
+                }
+                Key::Character(c) if self.app.ctrl && c.eq_ignore_ascii_case("a") => {
+                    self.app.dash_search.clear();
+                    return;
+                }
+                _ => {}
+            }
         }
         if key == Key::Named(NamedKey::Escape)
             && self.files.active.is_some()
@@ -5275,9 +5420,13 @@ impl Host {
                         } else {
                             self.app.palette.open();
                             self.app.palette.register_standard_commands();
-                            // Update context before showing
-                            let doc = self.app.doc();
-                            self.app.palette.has_selection = !doc.editor_ref().selection.is_empty();
+                            // Update context before showing. The dashboard is
+                            // valid with zero open documents, so do not call
+                            // `doc()` merely to populate palette context.
+                            self.app.palette.has_selection = self
+                                .app
+                                .doc_opt()
+                                .is_some_and(|doc| !doc.editor_ref().selection.is_empty());
                         }
                         return;
                     }
@@ -6956,14 +7105,15 @@ impl Host {
 
     /// Zoom by `factor` anchored at screen point `p` (cursor / center).
     fn zoom_at(&mut self, p: Point, factor: f64) {
-        let reg = self.app.editor_regions();
-        let pt = if reg.canvas.contains(p) {
+        let canvas = if self.app.screen == Screen::Board {
+            self.app.board_regions().canvas
+        } else {
+            self.app.editor_regions().canvas
+        };
+        let pt = if canvas.contains(p) {
             p
         } else {
-            Point::new(
-                (reg.canvas.x0 + reg.canvas.x1) / 2.0,
-                (reg.canvas.y0 + reg.canvas.y1) / 2.0,
-            )
+            Point::new((canvas.x0 + canvas.x1) / 2.0, (canvas.y0 + canvas.y1) / 2.0)
         };
         let before = self.app.screen_to_world(pt);
         self.app.zoom = (self.app.zoom * factor).clamp(0.01, 64.0);
@@ -7428,13 +7578,18 @@ impl Host {
                 if let Some(index) = existing {
                     if activate {
                         self.app.active = index;
-                        self.app.screen = Screen::Editor;
+                        self.app.screen = if self.app.docs[index].board_doc.is_some() {
+                            Screen::Board
+                        } else {
+                            Screen::Editor
+                        };
                     }
                     self.app.status = "File is already open; existing tab kept".into();
                     if tracked {
                         self.app.document_loading = None;
                     }
                 } else {
+                    let is_board = doc.board_doc.is_some();
                     let warnings = doc.asset_warnings();
                     let remember = doc.path.is_some() || doc.source_path.as_ref() == Some(&path);
                     let recent_error = if remember {
@@ -7447,9 +7602,13 @@ impl Host {
                     self.app.docs.push(doc);
                     if activate {
                         self.app.active = self.app.docs.len() - 1;
-                        self.app.screen = Screen::Editor;
-                        self.app.zoom = camera.zoom;
-                        self.app.pan = camera.pan;
+                        self.app.screen = if is_board { Screen::Board } else { Screen::Editor };
+                        if is_board {
+                            self.app.center_view();
+                        } else {
+                            self.app.zoom = camera.zoom;
+                            self.app.pan = camera.pan;
+                        }
                         if let Some(load) = self
                             .app
                             .document_loading
@@ -7885,6 +8044,43 @@ impl Host {
             | Action::LoadingRecover
             | Action::LoadingSaved => {}
             Action::CancelFileOperation => self.cancel_file_job(),
+            Action::BoardToggleGrid => {
+                if self.app.is_board() {
+                    let board = self.app.board_doc_mut();
+                    board.settings.show_grid = !board.settings.show_grid;
+                    self.app.mark_board_dirty();
+                }
+            }
+            Action::BoardToggleConnectors => {
+                if self.app.is_board() {
+                    let board = self.app.board_doc_mut();
+                    board.settings.show_connectors = !board.settings.show_connectors;
+                    self.app.mark_board_dirty();
+                }
+            }
+            Action::BoardNextPage => {
+                if self.app.is_board() {
+                    let next = {
+                        let board = self.app.board_doc();
+                        if board.pages.is_empty() {
+                            0
+                        } else {
+                            (board.active_page_index() + 1) % board.pages.len()
+                        }
+                    };
+                    let board = self.app.board_doc_mut();
+                    board.set_active_page(next);
+                }
+            }
+            Action::BoardAddPage => {
+                if self.app.is_board() {
+                    let next = self.app.board_doc().pages.len() + 1;
+                    let board = self.app.board_doc_mut();
+                    board.add_page(&format!("Page {next}"));
+                    board.set_active_page(board.pages.len().saturating_sub(1));
+                    self.app.mark_board_dirty();
+                }
+            }
             Action::NewFile => self.cmd_new_file(),
             Action::NewBoard => self.cmd_new_board(),
             Action::ImportFile => self.cmd_import_file(),
@@ -9288,9 +9484,16 @@ impl Host {
                     self.app.status = "Select a layer with a gradient fill first".into();
                     return;
                 };
-                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
-                    n.fill.flip();
+                let mut changed = false;
+                let applied = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    if let Some(paint) = active_fill_paint_mut(n) {
+                        if paint.is_gradient() {
+                            paint.flip();
+                            changed = true;
+                        }
+                    }
                 });
+                let changed = applied && changed;
                 if changed {
                     self.app.mark_dirty();
                     self.app.status = "Gradient flipped".into();
@@ -9304,9 +9507,16 @@ impl Host {
                     self.app.status = "Select a layer with a gradient fill first".into();
                     return;
                 };
-                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
-                    n.fill.rotate(degrees);
+                let mut changed = false;
+                let applied = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    if let Some(paint) = active_fill_paint_mut(n) {
+                        if paint.is_gradient() {
+                            paint.rotate(degrees);
+                            changed = true;
+                        }
+                    }
                 });
+                let changed = applied && changed;
                 if changed {
                     self.app.mark_dirty();
                     self.app.status = format!("Gradient rotated by {:.1}°", degrees);
@@ -9321,9 +9531,16 @@ impl Host {
                     return;
                 };
                 let color = x_native::Color::from_rgb8(color[0], color[1], color[2]);
-                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
-                    n.fill.add_stop(position, color);
+                let mut changed = false;
+                let applied = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    if let Some(paint) = active_fill_paint_mut(n) {
+                        if paint.is_gradient() {
+                            paint.add_stop(position, color);
+                            changed = true;
+                        }
+                    }
                 });
+                let changed = applied && changed;
                 if changed {
                     self.app.mark_dirty();
                     self.app.status = "Gradient stop added".into();
@@ -9337,9 +9554,25 @@ impl Host {
                     self.app.status = "Select a layer with a gradient fill first".into();
                     return;
                 };
-                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
-                    n.fill.remove_stop(index);
+                let mut changed = false;
+                let applied = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    if let Some(paint) = active_fill_paint_mut(n) {
+                        let can_remove = match paint {
+                            Paint::LinearGradient { stops, .. }
+                            | Paint::RadialGradient { stops, .. }
+                            | Paint::AngularGradient { stops, .. }
+                            | Paint::DiamondGradient { stops, .. } => {
+                                index < stops.len() && stops.len() > 2
+                            }
+                            _ => false,
+                        };
+                        if can_remove {
+                            paint.remove_stop(index);
+                            changed = true;
+                        }
+                    }
                 });
+                let changed = applied && changed;
                 if changed {
                     self.app.mark_dirty();
                     self.app.status = "Gradient stop removed".into();
@@ -9356,9 +9589,23 @@ impl Host {
                     self.app.status = "Select a layer with a gradient fill first".into();
                     return;
                 };
-                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
-                    n.fill.move_stop(index, new_position);
+                let mut changed = false;
+                let applied = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    if let Some(paint) = active_fill_paint_mut(n) {
+                        let can_move = match paint {
+                            Paint::LinearGradient { stops, .. }
+                            | Paint::RadialGradient { stops, .. }
+                            | Paint::AngularGradient { stops, .. }
+                            | Paint::DiamondGradient { stops, .. } => index < stops.len(),
+                            _ => false,
+                        };
+                        if can_move {
+                            paint.move_stop(index, new_position);
+                            changed = true;
+                        }
+                    }
                 });
+                let changed = applied && changed;
                 if changed {
                     self.app.mark_dirty();
                     self.app.status = "Gradient stop moved".into();
@@ -9367,20 +9614,68 @@ impl Host {
                 }
             }
 
-            Action::SetGradientType { gradient_type } => {
-                // The selection is a precondition here, not an input: converting
-                // between gradient types is not implemented, so this handler
-                // only reports. Binding the id produced an unused variable.
-                if self.app.doc().selected_id().is_none() {
+            Action::CycleGradientStopColor { index } => {
+                let Some(id) = self.app.doc().selected_id() else {
                     self.app.status = "Select a layer with a gradient fill first".into();
                     return;
+                };
+                let palette = [
+                    x_native::Color::from_rgb8(0xFF, 0x4D, 0x6D),
+                    x_native::Color::from_rgb8(0xFF, 0xB7, 0x03),
+                    x_native::Color::from_rgb8(0x2E, 0xCC, 0x71),
+                    x_native::Color::from_rgb8(0x45, 0xB7, 0xE8),
+                    x_native::Color::from_rgb8(0x9B, 0x5D, 0xFF),
+                ];
+                let mut changed = false;
+                let applied = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    let stops = match active_fill_paint_mut(n) {
+                        Some(
+                            Paint::LinearGradient { stops, .. }
+                            | Paint::RadialGradient { stops, .. }
+                            | Paint::AngularGradient { stops, .. }
+                            | Paint::DiamondGradient { stops, .. },
+                        ) => Some(stops),
+                        _ => None,
+                    };
+                    if let Some(stops) = stops {
+                        if let Some((_, color)) = stops.get_mut(index) {
+                            let current = color.to_rgba8();
+                            let current_index = palette
+                                .iter()
+                                .position(|candidate| candidate.to_rgba8() == current)
+                                .unwrap_or(usize::MAX);
+                            *color = palette[(current_index.wrapping_add(1)) % palette.len()];
+                            changed = true;
+                        }
+                    }
+                });
+                let changed = applied && changed;
+                if changed {
+                    self.app.mark_dirty();
+                    self.app.status = "Gradient stop color changed".into();
+                } else {
+                    self.app.status = "Could not change gradient stop color".into();
                 }
-                // This would require converting between gradient types
-                // For now, just show a status message
-                self.app.status = format!(
-                    "Gradient type change to '{}' - requires gradient conversion",
-                    gradient_type
-                );
+            }
+
+            Action::SetGradientType { gradient_type } => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select a layer with a gradient fill first".into();
+                    return;
+                };
+                let mut changed = false;
+                let applied = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    if let Some(paint) = active_fill_paint_mut(n) {
+                        changed = paint.set_gradient_type(&gradient_type);
+                    }
+                });
+                let changed = applied && changed;
+                if changed {
+                    self.app.mark_dirty();
+                    self.app.status = format!("Gradient changed to {gradient_type}");
+                } else {
+                    self.app.status = "Select a gradient fill to change its type".into();
+                }
             }
 
             Action::SetImageAdjustments { adjustments } => {
@@ -9388,6 +9683,10 @@ impl Host {
                     self.app.status = "Select an image layer first".into();
                     return;
                 };
+                if !selected_is_image(&self.app) {
+                    self.app.status = "Image adjustments require an image layer".into();
+                    return;
+                }
                 let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
                     n.image_adjustments = Some(adjustments);
                 });
@@ -9404,6 +9703,25 @@ impl Host {
                     self.app.status = "Select an image layer first".into();
                     return;
                 };
+                if !selected_is_image(&self.app) {
+                    self.app.status = "Image adjustments require an image layer".into();
+                    return;
+                }
+                let valid = matches!(
+                    adjustment.as_str(),
+                    "exposure"
+                        | "contrast"
+                        | "saturation"
+                        | "temperature"
+                        | "tint"
+                        | "highlights"
+                        | "shadows"
+                );
+                if !valid {
+                    self.app.status = format!("Unknown image adjustment '{adjustment}'");
+                    return;
+                }
+                let value = value.clamp(-1.0, 1.0);
                 let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
                     if let Some(ref mut adj) = n.image_adjustments {
                         match adjustment.as_str() {
@@ -9445,6 +9763,10 @@ impl Host {
                     self.app.status = "Select an image layer first".into();
                     return;
                 };
+                if !selected_is_image(&self.app) {
+                    self.app.status = "Image adjustments require an image layer".into();
+                    return;
+                }
                 let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
                     n.image_adjustments = None;
                 });
@@ -9461,6 +9783,10 @@ impl Host {
                     self.app.status = "Select an image layer first".into();
                     return;
                 };
+                if !selected_is_image(&self.app) {
+                    self.app.status = "Image rotation requires an image layer".into();
+                    return;
+                }
                 let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
                     let delta = if clockwise { 90.0 } else { -90.0 };
                     n.image_rotation = (n.image_rotation + delta) % 360.0;
@@ -9482,12 +9808,40 @@ impl Host {
             }
 
             Action::SetImageFillMode { mode } => {
-                // This would require implementing image fill modes in the data model
-                // For now, show a status message
-                self.app.status = format!(
-                    "Image fill mode '{}' - requires fill mode implementation",
-                    mode
-                );
+                let Some(id) = self.app.doc().selected_id() else {
+                    self.app.status = "Select an image layer first".into();
+                    return;
+                };
+                let fit = match mode.trim().to_ascii_lowercase().as_str() {
+                    "fill" | "stretch" => ImageFit::Fill,
+                    "fit" | "contain" => ImageFit::Fit,
+                    "crop" | "cover" => ImageFit::Crop,
+                    "tile" | "tiled" => ImageFit::Tile,
+                    _ => {
+                        self.app.status = format!("Unknown image fill mode '{mode}'");
+                        return;
+                    }
+                };
+                if !selected_is_image(&self.app) {
+                    self.app.status = "Image fill mode requires an image layer".into();
+                    return;
+                }
+                let mut changed = false;
+                let applied = self.app.doc().editor().mutate_visual_stack(&id, |n| {
+                    if let NodeKind::Image { fit: current, .. } = &mut n.kind {
+                        if *current != fit {
+                            *current = fit;
+                            changed = true;
+                        }
+                    }
+                });
+                let changed = applied && changed;
+                if changed {
+                    self.app.mark_dirty();
+                    self.app.status = format!("Image fill mode set to {mode}");
+                } else {
+                    self.app.status = "Select an image layer to change its fill mode".into();
+                }
             }
 
             Action::EnableEyedropper(to_stroke) => {
@@ -11250,7 +11604,10 @@ fn screenshot_screens() {
         let h = app.win_h as u32;
         let mut inner = vello::Scene::new();
         match app.screen {
-            Screen::Dashboard => dashboard::paint(app, &mut inner),
+            Screen::Dashboard => {
+                dashboard::paint(app, &mut inner);
+                editor_ui::paint_palette_overlay(app, &mut inner);
+            },
             Screen::Editor => {
                 editor_ui::paint(app, &mut inner);
                 let reg = app.editor_regions();
@@ -11677,7 +12034,10 @@ fn screenshot_screens_more() {
         let h = app.win_h as u32;
         let mut inner = vello::Scene::new();
         match app.screen {
-            Screen::Dashboard => dashboard::paint(app, &mut inner),
+            Screen::Dashboard => {
+                dashboard::paint(app, &mut inner);
+                editor_ui::paint_palette_overlay(app, &mut inner);
+            },
             Screen::Editor => {
                 editor_ui::paint(app, &mut inner);
                 let reg = app.editor_regions();
@@ -11903,7 +12263,10 @@ fn screenshot_screens_r7() {
         let h = app.win_h as u32;
         let mut inner = vello::Scene::new();
         match app.screen {
-            Screen::Dashboard => dashboard::paint(app, &mut inner),
+            Screen::Dashboard => {
+                dashboard::paint(app, &mut inner);
+                editor_ui::paint_palette_overlay(app, &mut inner);
+            },
             Screen::Editor => {
                 editor_ui::paint(app, &mut inner);
                 let reg = app.editor_regions();
@@ -13002,6 +13365,9 @@ impl App {
         match self.screen {
             Screen::Dashboard => {
                 dashboard::paint(self, &mut inner);
+                // Ctrl/Cmd+K is global. Keep the modal visible and
+                // interactive on the dashboard as well as in the editor.
+                editor_ui::paint_palette_overlay(self, &mut inner);
             }
             Screen::Editor => {
                 editor_ui::paint(self, &mut inner);

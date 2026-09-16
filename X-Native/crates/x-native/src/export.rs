@@ -63,8 +63,18 @@ pub fn prepare_export(
                 path, transform, ..
             } => Some(transform.transform_rect_bbox(path.bounding_box())),
             RenderCommand::Image {
-                transform, w, h, ..
-            } => Some(transform.transform_rect_bbox(Rect::new(0.0, 0.0, *w, *h))),
+                transform,
+                w,
+                h,
+                rotation,
+                ..
+            } => {
+                let image_transform = *transform
+                    * Affine::translate((*w / 2.0, *h / 2.0))
+                    * Affine::rotate(rotation.to_radians())
+                    * Affine::translate((-*w / 2.0, -*h / 2.0));
+                Some(image_transform.transform_rect_bbox(Rect::new(0.0, 0.0, *w, *h)))
+            }
             RenderCommand::PushClip {
                 path, transform, ..
             } => {

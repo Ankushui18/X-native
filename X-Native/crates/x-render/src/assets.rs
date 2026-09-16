@@ -179,6 +179,46 @@ impl Assets {
     pub fn get(&self, name: &str) -> Option<&ImageBrush> {
         self.images.get(name)
     }
+
+    /// Return an adjusted copy for a render command without mutating the
+    /// content-addressed source asset. Image adjustments are document state,
+    /// not cache state, so the original bytes remain reusable by other nodes.
+    pub fn get_adjusted(
+        &self,
+        name: &str,
+        adjustments: x_core::ImageAdjustments,
+    ) -> Option<ImageBrush> {
+        let source = self.images.get(name)?;
+        let adjustments = ImageAdjustments {
+            exposure: adjustments.exposure,
+            contrast: adjustments.contrast,
+            saturation: adjustments.saturation,
+            temperature: adjustments.temperature,
+            tint: adjustments.tint,
+            highlights: adjustments.highlights,
+            shadows: adjustments.shadows,
+        };
+        if !adjustments.has_adjustments() {
+            return Some(source.clone());
+        }
+        let bytes = source.image.data.data();
+        let mut adjusted = Vec::with_capacity(bytes.len());
+        for pixel in bytes.chunks_exact(4) {
+            let color = Color::from_rgba8(pixel[0], pixel[1], pixel[2], pixel[3]);
+            let rgba = adjustments.apply_to_color(color).to_rgba8();
+            adjusted.extend_from_slice(&[rgba.r, rgba.g, rgba.b, rgba.a]);
+        }
+        Some(ImageBrush {
+            image: ImageData {
+                data: Blob::from(adjusted),
+                format: ImageFormat::Rgba8,
+                alpha_type: ImageAlphaType::Alpha,
+                width: source.image.width,
+                height: source.image.height,
+            },
+            sampler: source.sampler.clone(),
+        })
+    }
     /// Sorted asset names (image replace UI / pickers).
     pub fn names(&self) -> Vec<String> {
         let mut v: Vec<String> = self.images.keys().cloned().collect();

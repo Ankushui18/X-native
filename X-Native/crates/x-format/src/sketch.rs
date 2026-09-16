@@ -119,12 +119,15 @@ pub(crate) fn sketch_resizing_constraint(pin: (x_core::HPin, x_core::VPin)) -> u
 }
 
 fn sk_color(c: Color) -> String {
+    // Sketch stores normalized sRGB channels. Go through the byte boundary
+    // explicitly instead of serializing peniko's generic component array.
+    let rgba = c.to_rgba8();
     format!(
         "{{\"red\":{},\"green\":{},\"blue\":{},\"alpha\":{}}}",
-        c.components[0] as f64,
-        c.components[1] as f64,
-        c.components[2] as f64,
-        c.components[3] as f64
+        f64::from(rgba.r) / 255.0,
+        f64::from(rgba.g) / 255.0,
+        f64::from(rgba.b) / 255.0,
+        f64::from(rgba.a) / 255.0
     )
 }
 fn sk_fill(p: &Paint, w: f64, h: f64) -> String {
@@ -372,15 +375,19 @@ fn frame_xywh(v: &V) -> (f64, f64, f64, f64) {
     }
 }
 
-/// Sketch color objects are `{red, green, blue, alpha}` floats in 0..=1 —
-/// directly compatible with peniko's `Color::rgba(f64...)`, no scaling.
+/// Sketch color objects are normalized sRGB floats. Decode them through
+/// `from_rgba8` so import and export use the same explicit byte boundary as
+/// SVG/Figma and do not depend on the renderer color-space marker.
 fn sketch_color(v: &V) -> Option<Color> {
-    Some(Color::new([
-        n_or(v, "red", 0.0) as f32,
-        n_or(v, "green", 0.0) as f32,
-        n_or(v, "blue", 0.0) as f32,
-        n_or(v, "alpha", 1.0) as f32,
-    ]))
+    let byte = |key: &str, default: f64| -> u8 {
+        (n_or(v, key, default).clamp(0.0, 1.0) * 255.0).round() as u8
+    };
+    Some(Color::from_rgba8(
+        byte("red", 0.0),
+        byte("green", 0.0),
+        byte("blue", 0.0),
+        byte("alpha", 1.0),
+    ))
 }
 
 /// UTF-16 unit -> char-index map. Sketch attribute `location`/`length`

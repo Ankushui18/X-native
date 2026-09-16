@@ -26,6 +26,9 @@ pub enum Tool {
     Ellipse,
     Pen,
     Hand,
+    /// Board zoom tool (kept out of the design toolbar, where wheel/shortcuts
+    /// provide zooming; exposed in the board tool rail).
+    Zoom,
     /// C18: comment pin mode (C / palette; not on the audited toolbar)
     Comment,
     /// Vector Eraser - erase parts of paths and shapes
@@ -49,6 +52,7 @@ impl Tool {
             Tool::Ellipse => "circle",
             Tool::Pen => "pen-tool",
             Tool::Hand => "hand",
+            Tool::Zoom => "zoom-in",
             Tool::Comment => "message-circle",
             Tool::Eraser => "eraser",
             Tool::Symmetry => "reflect-vertical",
@@ -77,6 +81,7 @@ impl Tool {
             Tool::Ellipse => "Ellipse",
             Tool::Pen => "Pen",
             Tool::Hand => "Hand",
+            Tool::Zoom => "Zoom",
             Tool::Comment => "Comment",
             Tool::Eraser => "Vector eraser",
             Tool::Symmetry => "Symmetry",
@@ -178,9 +183,9 @@ impl NavTab {
         match self {
             NavTab::File => "Files",
             NavTab::Agents => "Agents",
-            NavTab::Assets => "Assets",
-            NavTab::Tools => "Tools",
-            NavTab::Variables => "Variables",
+            NavTab::Assets => "Library",
+            NavTab::Tools => "Bench",
+            NavTab::Variables => "Tokens",
         }
     }
 
@@ -404,6 +409,11 @@ pub enum Action {
     InspectCopy,
     CycleInstanceSwap(String),
     ResetInstanceProps,
+    // board chrome
+    BoardToggleGrid,
+    BoardToggleConnectors,
+    BoardNextPage,
+    BoardAddPage,
     // global / dashboard
     NewFile,
     NewBoard,
@@ -505,7 +515,7 @@ pub enum Action {
     UxPatterns,
     UxContrast,
     UxResponsive,
-    // Navigation bar (Figma-style)
+    // X-Native workspace rail
     NavTab(NavTab),
     OpenAppMenu,
     AppMenuItem(usize),
@@ -615,6 +625,12 @@ pub enum Action {
     MoveGradientStop {
         index: usize,
         new_position: f32,
+    },
+    /// Cycle the selected stop through X-Native's authored color palette.
+    /// The visible swatch action is intentionally separate from fill-wide
+    /// color editing so a gradient stop never silently recolors the node.
+    CycleGradientStopColor {
+        index: usize,
     },
     /// Change gradient type (linear/radial/angular/diamond)
     SetGradientType {
@@ -1722,6 +1738,13 @@ impl App {
     }
 
     pub fn canvas_transform(&self) -> (f64, f64, f64) {
+        // Boards intentionally use a full-window viewport. Keeping the
+        // transform here (rather than making every pointer handler remember
+        // which screen it is on) makes painting and hit-testing share one
+        // coordinate system.
+        if self.screen == Screen::Board {
+            return self.board_canvas_transform();
+        }
         let c = self.view_canvas();
         // rulers shrink the viewport (content starts after the strips);
         // the flow viewer paints no rulers
@@ -1813,7 +1836,7 @@ impl App {
     /// Hit test board nodes at a world-space point
     pub fn hit_test_board_node(&self, point: Point) -> Option<String> {
         let doc = self.board_doc();
-        let page = doc.pages.first()?;
+        let page = doc.current_page();
 
         // Check nodes in reverse order (top-most first)
         for node in page.nodes.iter().rev() {
@@ -1837,6 +1860,7 @@ impl App {
             Tool::BoardCircle => x_board::BoardTool::Circle,
             Tool::Text => x_board::BoardTool::Text,
             Tool::Hand => x_board::BoardTool::Hand,
+            Tool::Zoom => x_board::BoardTool::Zoom,
             _ => x_board::BoardTool::Select,
         }
     }
@@ -2747,6 +2771,7 @@ impl App {
 
         // Create OpenDoc with board_doc set
         let mut od = OpenDoc::new_blank(format!("Board {}", n));
+        od.doc.kind = x_native::DocumentKind::Board;
         od.board_doc = Some(board_doc);
 
         self.docs.push(od);
@@ -3096,6 +3121,15 @@ impl App {
     }
 
     pub fn center_view(&mut self) {
+        if self.screen == Screen::Board {
+            // Infinite boards have no authored page frame to fit. Put the
+            // world origin near the visual centre so the first created item
+            // is immediately visible and keep the same camera for painting
+            // and pointer hit-testing.
+            self.zoom = 1.0;
+            self.pan = (self.win_w * 0.5, (self.win_h - ED_TITLE_H) * 0.5);
+            return;
+        }
         let camera = crate::loading::ViewConfig::from_app(self).camera(self.doc_opt());
         self.zoom = camera.zoom;
         self.pan = camera.pan;
@@ -3105,6 +3139,23 @@ impl App {
         if let Some(d) = self.docs.get_mut(self.active) {
             d.record_page_changes(self.drag.is_some());
             d.dirty = true;
+        }
+    }
+
+    /// Board mutations do not belong to the design editor's page history.
+    /// Keep the shell's unsaved indicator accurate without manufacturing a
+    /// design-page undo entry for an infinite-canvas gesture.
+    pub fn mark_board_dirty(&mut self) {
+        if let Some(d) = self.docs.get_mut(self.active) {
+            d.dirty = true;
+            // Board edits do not enter the design editor's undo stack, but
+            // they still need a monotonic revision so autosave and recovery
+            // do not mistake a later board mutation for the already-saved
+            // revision.
+            d.history.next_revision = d.history.next_revision.saturating_add(1);
+            d.history.revision = d.history.next_revision;
+            d.history.saved_revision = None;
+            d.last_autosave_revision = None;
         }
     }
 }

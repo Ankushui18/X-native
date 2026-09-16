@@ -404,9 +404,17 @@ impl<'a> RasterSink<'a> {
                     h,
                     fit,
                     placement,
+                    adjustments,
+                    rotation,
                     ..
                 } => {
-                    if let Some(img) = self.assets.and_then(|a| a.get(asset)) {
+                    let adjusted = adjustments
+                        .as_ref()
+                        .and_then(|adj| self.assets.and_then(|a| a.get_adjusted(asset, *adj)));
+                    let image = adjusted
+                        .as_ref()
+                        .or_else(|| self.assets.and_then(|a| a.get(asset)));
+                    if let Some(img) = image {
                         let resolved = x_core::resolve_image_placement(
                             *fit,
                             placement,
@@ -458,8 +466,12 @@ impl<'a> RasterSink<'a> {
                                 .last()
                                 .map(|c| c.blend)
                                 .unwrap_or(ts::BlendMode::SourceOver);
+                            let image_transform = *transform
+                                * Affine::translate((*w / 2.0, *h / 2.0))
+                                * Affine::rotate(rotation.to_radians())
+                                * Affine::translate((-*w / 2.0, -*h / 2.0));
                             for draw in &resolved.draws {
-                                let t = *transform * *draw;
+                                let t = image_transform * *draw;
                                 let paint = ts::PixmapPaint {
                                     blend_mode: blend,
                                     quality: ts::FilterQuality::Bilinear,
@@ -620,6 +632,22 @@ pub enum RasterFormat {
 /// Encode a rendered pixmap to PNG bytes.
 pub fn encode_png(pix: &ts::Pixmap) -> Result<Vec<u8>, String> {
     pix.encode_png().map_err(|e| e.to_string())
+}
+
+/// Encode straight RGBA8 image bytes for vector exports that need to carry a
+/// derived image (for example, an image with non-default adjustments).
+pub fn encode_rgba_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
+    if rgba.len() != (width as usize).saturating_mul(height as usize).saturating_mul(4) {
+        return Err("RGBA byte length does not match image dimensions".into());
+    }
+    let mut out = Vec::new();
+    let mut encoder = png::Encoder::new(&mut out, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
+    writer.write_image_data(rgba).map_err(|e| e.to_string())?;
+    drop(writer);
+    Ok(out)
 }
 
 /// Encode a rendered pixmap to JPG bytes, composited onto white (JPG has no
