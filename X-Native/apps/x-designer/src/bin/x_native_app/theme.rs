@@ -182,7 +182,10 @@ pub const C_SEL_WASH: Color = rgba(role!(focus_ring), 0x42);
 pub const C_EDIT_BORDER: Color = rgba(role!(focus_ring), 0x80);
 /// Tangent handles in vector edit mode.
 pub const C_SEL_HANDLE: Color = rgba(role!(focus_ring), 0x40);
-pub const C_SNAP: Color = Color::from_rgb8(0xF2, 0x4E, 0x1E);
+/// Smart-guide lines while dragging — palette accent-ink violet (the editor
+/// comments expect "blue/purple"). Was #F24E1E, Figma's brand red — a clone
+/// artifact from the reference scrape; role-derived so themes remap it.
+pub const C_SNAP: Color = rgb(role!(accent_ink));
 
 // ------------------------------------------------------------- core palette
 // The legacy brand aliases (GRAPHITE_900 / SIGNAL_100 / VIOLET_500 …) are

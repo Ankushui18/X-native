@@ -419,6 +419,24 @@ pub enum Action {
     /// C21 INSPECT: platform picker + copy-code-to-clipboard
     InspectPlatform(usize),
     InspectCopy,
+    /// Tokens panel variable management (undoable via `var_history`):
+    /// delete a variable, toggle a boolean, nudge a number by `f64`.
+    VarDelete(String),
+    VarToggleBool(String),
+    VarStep(String, f64),
+    /// Undo the last variable-table edit on the open document.
+    VarUndoVars,
+    /// Libraries: pick an updated .xlib for pinned dependency `usize` and
+    /// open the diff review (Assets panel LIBRARIES section).
+    LibCheckUpdate(usize),
+    /// Instance slots: fill `slot` from another selected layer / clear it
+    /// back to the anchor (or the slot's default component).
+    SlotSetFromSelection(String),
+    SlotClear(String),
+    /// Review dialog: repin to the newer library and re-resolve consumers.
+    LibReviewAccept,
+    /// Review dialog: keep the pinned version (also the click-away action).
+    LibReviewClose,
     CycleInstanceSwap(String),
     ResetInstanceProps,
     // board chrome
@@ -439,11 +457,15 @@ pub enum Action {
     DashNav(DashView),
     DashLayout(DashLayout),
     SearchFocus,
-    Upgrade,
     /// UI palette (roles live in crates/x-ui/src/design_system.rs)
     SetTheme(x_native::ui::ThemeId),
     CycleTheme,
-    InviteTeam,
+    /// Dashboard: open the template gallery (also replaced the old dead
+    /// "Invite team" quick card).
+    OpenTemplates,
+    CloseTemplates,
+    /// Dashboard template gallery: create a new document from template `i`.
+    NewFromTemplate(usize),
     AddTeam,
     // editor chrome
     SelectDoc(usize),
@@ -727,6 +749,13 @@ pub enum FieldId {
     ComponentDescription,
     /// pages panel: active-page inline rename (opened from the page menu)
     PageName,
+    /// Tokens panel: variable value editing (target variable lives in
+    /// `App::var_edit_name`, resolved at click from `var_value_rects` —
+    /// same pattern as `InstanceProp`).
+    VarValue,
+    /// Tokens panel: variable name editing (rename-as-alias; same target
+    /// resolution as `VarValue`, from `var_name_rects`).
+    VarName,
     /// layers panel: tree search query (row above the tree; audit F8).
     /// Enter keeps the field open — the query lives in
     /// `OpenDoc::tree_search` and filters the tree live.
@@ -887,6 +916,18 @@ impl NotificationKind {
             NotificationKind::ComponentUpdate => "component",
         }
     }
+}
+
+/// Library update review: a newer .xlib was picked for a pinned dependency
+/// and its diff is awaiting Accept / Keep. `dep_index` points into
+/// `Document::library_deps` at accept time.
+#[derive(Clone)]
+pub struct LibReview {
+    pub dep_index: usize,
+    pub library_id: String,
+    pub path: std::path::PathBuf,
+    pub newer: x_native::Library,
+    pub changes: Vec<x_native::LibraryChange>,
 }
 
 /// Flow-preview state: prototype playback in a chrome-less viewer over the
@@ -1158,9 +1199,13 @@ pub struct OpenDoc {
     pub gap: f64,
     pub pad_h: f64,
     pub pad_v: f64,
-    pub export_format: usize, // 0 PNG 1 JPG 2 SVG 3 PDF
+    pub export_format: usize, // 0 PNG 1 JPG 2 SVG 3 PDF 4 SKETCH
     pub export_scale: usize,  // 0 1x 1 2x
     pub export_suffix: String,
+    /// Undo log for variable-table edits (rename/delete/value), backed by
+    /// `x_editor::variable_commands`. Session-scoped: it does not persist
+    /// with the file (the node-tree undo stack doesn't either).
+    pub var_history: x_native::editor::VariableHistory,
     pub guide_kind: usize, // 0 Square 1 Grid
     pub guide_size: f64,
     /// Whether the selected frame's layout-guide overlay is visible.
@@ -1295,6 +1340,176 @@ impl OpenDoc {
         )
     }
 
+    // ---------------------------------------------------------- templates
+
+    /// Built-in templates for the dashboard gallery: (name, blurb).
+    pub const TEMPLATES: [(&str, &str); 4] = [
+        ("Mobile app flow", "Two linked screens with a working prototype"),
+        ("Landing page", "1440 desktop hero with nav, CTA and feature cards"),
+        ("Design system", "Color variables, swatches and a Button component"),
+        ("Starter board", "Freeform brainstorm canvas for quick ideas"),
+    ];
+
+    fn seed_brand_vars(doc: &mut Document) {
+        doc.variables
+            .colors
+            .insert("color/brand".into(), Color::from_rgb8(0x6B, 0x49, 0xF5));
+        doc.variables.numbers.insert("space/page".into(), 24.0);
+        doc.variables.numbers.insert("radius/card".into(), 12.0);
+    }
+
+    fn text(id: &str, x: f64, y: f64, w: f64, h: f64, s: &str) -> Node {
+        let mut t = Node::text(id, x, y, w, h, s);
+        t.bindings.insert("font".into(), APP_DEFAULT_FONT.into());
+        t
+    }
+
+    /// Build the built-in template `i` as a fresh document COPY (templates
+    /// are code, so every open is independent). `None` out of range.
+    pub fn template_doc(i: usize) -> Option<Self> {
+        let brand = Color::from_rgb8(0x6B, 0x49, 0xF5);
+        match i {
+            0 => {
+                // Mobile app flow: two linked screens + tab bars.
+                let mut page = Node::frame(&x_native::fresh_id("page"), 1440.0, 1024.0);
+                page.name = "Mobile flow".into();
+                let mut home = Node::frame("screen-home", 375.0, 812.0);
+                home.name = "Home".into();
+                home.transform.x = 80.0;
+                home.transform.y = 60.0;
+                home.fill = Paint::Solid(Color::from_rgb8(0xF8, 0xFA, 0xFC));
+                home.children.push(Self::text("m-title", 24.0, 48.0, 327.0, 40.0, "Today"));
+                let mut cta = Node::rect("m-cta", 24.0, 120.0, 327.0, 52.0, brand);
+                cta.name = "Start".into();
+                cta.corner_radii = Some([12.0, 12.0, 12.0, 12.0]);
+                cta.interactions.push(x_native::Interaction::click("screen-detail"));
+                home.children.push(cta);
+                let mut tabs = Node::rect("m-tabs", 0.0, 748.0, 375.0, 64.0, Color::from_rgb8(0x1B, 0x1D, 0x23));
+                tabs.name = "Tab bar".into();
+                home.children.push(tabs);
+                let mut detail = Node::frame("screen-detail", 375.0, 812.0);
+                detail.name = "Detail".into();
+                detail.transform.x = 520.0;
+                detail.transform.y = 60.0;
+                detail.fill = Paint::Solid(Color::WHITE);
+                detail.children.push(Self::text("d-title", 24.0, 48.0, 327.0, 40.0, "Detail"));
+                page.children.extend([home, detail]);
+                let editor = Editor::new(page.clone());
+                let mut doc = Document {
+                    pages: vec![page],
+                    default_font: Some(APP_DEFAULT_FONT.into()),
+                    ..Document::default()
+                };
+                Self::seed_brand_vars(&mut doc);
+                let mut out = Self::from_document("Mobile app flow".into(), None, doc);
+                out.editors = vec![editor];
+                Some(out)
+            }
+            1 => {
+                // Landing page: nav, hero, CTA, feature cards.
+                let mut page = Node::frame(&x_native::fresh_id("page"), 1440.0, 1100.0);
+                page.name = "Landing".into();
+                let mut hero = Node::frame("lp-hero", 1440.0, 900.0);
+                hero.name = "Hero".into();
+                hero.fill = Paint::Solid(Color::from_rgb8(0x0B, 0x0B, 0x0F));
+                let mut nav = Node::rect("lp-nav", 0.0, 0.0, 1440.0, 64.0, Color::from_rgb8(0x1B, 0x1D, 0x23));
+                nav.name = "Nav".into();
+                hero.children.push(nav);
+                hero.children.push(Self::text("lp-brand", 64.0, 18.0, 200.0, 28.0, "X-Native"));
+                hero.children.push(Self::text("lp-h1", 64.0, 260.0, 900.0, 120.0, "Design anything. Ship it native."));
+                hero.children.push(Self::text("lp-sub", 64.0, 400.0, 640.0, 60.0, "A local-first design tool with a plain-JSON file format."));
+                let mut cta = Node::rect("lp-cta", 64.0, 500.0, 220.0, 56.0, brand);
+                cta.name = "Get started".into();
+                cta.corner_radii = Some([12.0, 12.0, 12.0, 12.0]);
+                hero.children.push(cta);
+                for (k, (name, x)) in ["Fast", "Local", "Free"].iter().zip([64.0, 384.0, 704.0]) {
+                    let mut c = Node::rect(&format!("lp-card-{k}"), x, 640.0, 288.0, 160.0, Color::from_rgb8(0x1B, 0x1D, 0x23));
+                    c.name = format!("Feature {name}");
+                    c.corner_radii = Some([12.0, 12.0, 12.0, 12.0]);
+                    hero.children.push(c);
+                }
+                page.children.push(hero);
+                let editor = Editor::new(page.clone());
+                let mut doc = Document {
+                    pages: vec![page],
+                    default_font: Some(APP_DEFAULT_FONT.into()),
+                    ..Document::default()
+                };
+                Self::seed_brand_vars(&mut doc);
+                let mut out = Self::from_document("Landing page".into(), None, doc);
+                out.editors = vec![editor];
+                Some(out)
+            }
+            2 => {
+                // Design system: swatches + type labels + a Button master.
+                let mut page = Node::frame(&x_native::fresh_id("page"), 1440.0, 1024.0);
+                page.name = "Foundations".into();
+                for (k, (name, hex)) in [
+                    ("brand", 0x6B49F5u32),
+                    ("ink", 0x111318),
+                    ("surface", 0xFFFFFF),
+                    ("success", 0x4CD966),
+                    ("danger", 0xEF9A94),
+                ]
+                .iter()
+                .enumerate()
+                {
+                    let x = 64.0 + k as f64 * 200.0;
+                    let mut sw = Node::rect(
+                        &format!("sw-{name}"),
+                        x,
+                        80.0,
+                        160.0,
+                        160.0,
+                        Color::from_rgb8(
+                            (hex >> 16) as u8,
+                            (hex >> 8) as u8,
+                            hex as u8,
+                        ),
+                    );
+                    sw.name = format!("color/{name}");
+                    sw.corner_radii = Some([12.0, 12.0, 12.0, 12.0]);
+                    page.children.push(sw);
+                    page.children
+                        .push(Self::text(&format!("swl-{name}"), x, 252.0, 160.0, 24.0, &format!("color/{name}")));
+                }
+                page.children.push(Self::text("ts-display", 64.0, 360.0, 600.0, 56.0, "Display"));
+                page.children.push(Self::text("ts-h", 64.0, 440.0, 400.0, 40.0, "Heading"));
+                page.children.push(Self::text("ts-body", 64.0, 520.0, 400.0, 24.0, "Body copy for real interfaces."));
+                let mut btn = Node::component("btn-master", "Button", 160.0, 48.0);
+                btn.name = "Button".into();
+                btn.fill = Paint::Solid(brand);
+                btn.corner_radii = Some([10.0, 10.0, 10.0, 10.0]);
+                btn.props.push(x_native::ComponentProp::Text {
+                    name: "Label".into(),
+                    target: "btn-label".into(),
+                    default: "Press me".into(),
+                });
+                btn.children.push(Self::text("btn-label", 16.0, 12.0, 128.0, 24.0, "Press me"));
+                page.children.push(btn);
+                let editor = Editor::new(page.clone());
+                let mut doc = Document {
+                    pages: vec![page],
+                    default_font: Some(APP_DEFAULT_FONT.into()),
+                    ..Document::default()
+                };
+                Self::seed_brand_vars(&mut doc);
+                let mut out = Self::from_document("Design system".into(), None, doc);
+                out.editors = vec![editor];
+                Some(out)
+            }
+            3 => {
+                // Starter board: freeform brainstorm canvas.
+                use x_board::{BoardDocument, BoardKind};
+                let mut od = Self::new_blank("Starter board".into());
+                od.doc.kind = x_native::DocumentKind::Board;
+                od.board_doc = Some(BoardDocument::new("Starter board", BoardKind::Brainstorm));
+                Some(od)
+            }
+            _ => None,
+        }
+    }
+
     pub fn demo_blank(name: String) -> Self {
         let mut page = Node::frame("page-1", 1440.0, 1024.0);
         page.name = "Page 1".into();
@@ -1348,6 +1563,7 @@ impl OpenDoc {
             export_format: 0,
             export_scale: 0,
             export_suffix: String::new(),
+            var_history: Default::default(),
             guide_kind: 0,
             guide_size: 16.0,
             // the canvas grid is OPT-IN: a fresh document opens clean
@@ -1402,6 +1618,7 @@ impl OpenDoc {
             export_format: 0,
             export_scale: 0,
             export_suffix: String::new(),
+            var_history: Default::default(),
             guide_kind: 0,
             guide_size: 16.0,
             // the canvas grid is OPT-IN: a fresh document opens clean
@@ -1446,6 +1663,8 @@ pub struct CommentDraft {
     pub x: f64,
     pub y: f64,
     pub buffer: String,
+    /// `Some(root id)` = this composer posts a reply into that thread.
+    pub parent: Option<String>,
 }
 
 pub struct App {
@@ -1467,6 +1686,13 @@ pub struct App {
     pub user: &'static str,
     pub recents: Vec<RecentFile>,
     pub drafts: Vec<RecentFile>,
+    /// Dashboard thumbnail cache: file path → (mtime validated at read,
+    /// single-image `Assets` under key "thumb"). Filled lazily, one render
+    /// per dashboard frame (see `thumb_pump`), mirrored to a disk cache.
+    pub thumbs: std::collections::HashMap<std::path::PathBuf, (std::time::SystemTime, x_native::Assets)>,
+    /// Files whose thumbnail render failed this session (no retry storm;
+    /// they fall back to the flat watermark card).
+    pub thumb_failed: std::collections::HashSet<std::path::PathBuf>,
     pub dash_view: DashView,
     pub dash_layout: DashLayout,
     pub dash_search: String,
@@ -1538,6 +1764,18 @@ pub struct App {
     pub field_select_all: bool,
     /// the component Text property currently being edited
     pub instance_prop_target: Option<String>,
+    /// Tokens panel: which variable's value field is being edited
+    /// (`FieldId::VarValue`).
+    pub var_edit_name: Option<String>,
+    /// Click→variable resolution for `FieldId::VarValue`, recorded by the
+    /// Tokens panel each paint (same pattern as `last_instance_prop_rect`).
+    pub var_value_rects: Vec<(Rect, String)>,
+    /// Same, for the name slots (`FieldId::VarName` rename).
+    pub var_name_rects: Vec<(Rect, String)>,
+    /// Active library-update review (modal dialog state).
+    pub lib_review: Option<LibReview>,
+    /// Dashboard template gallery (modal).
+    pub template_picker_open: bool,
     /// last JSX produced by Copy-as-code (for tests; the real target is
     /// the system clipboard)
     pub last_copied_code: Option<String>,
@@ -1649,6 +1887,8 @@ impl App {
             user: USER_NAME,
             recents: seed_recents(),
             drafts: seed_drafts(),
+            thumbs: std::collections::HashMap::new(),
+            thumb_failed: std::collections::HashSet::new(),
             dash_view: DashView::Home,
             dash_layout: DashLayout::Grid,
             dash_search: String::new(),
@@ -1690,6 +1930,11 @@ impl App {
             hover_node: None,
             pending_text_edit: None,
             instance_prop_target: None,
+            var_edit_name: None,
+            var_value_rects: Vec::new(),
+            var_name_rects: Vec::new(),
+            lib_review: None,
+            template_picker_open: false,
             last_copied_code: None,
             comment_draft: None,
             open_comment: None,
@@ -2694,7 +2939,7 @@ impl App {
     // (C21): the INSPECT tab's code view over the existing devmode
     // generators (CSS / SwiftUI / Compose / XML)
 
-    pub const INSPECT_PLATFORMS: [&str; 4] = ["CSS", "SwiftUI", "Compose", "XML"];
+    pub const INSPECT_PLATFORMS: [&str; 5] = ["CSS", "SwiftUI", "Compose", "XML", "Tailwind"];
 
     /// Code for the current selection in the current INSPECT platform
     /// (empty string when nothing is selected).
@@ -2713,6 +2958,7 @@ impl App {
             1 => x_native::editor::node_to_swift(n, &doc.doc.variables),
             2 => x_native::editor::node_to_compose(n, &doc.doc.variables),
             3 => x_native::editor::node_to_xml(n, &doc.doc.variables),
+            4 => x_native::selection_to_tailwind(std::slice::from_ref(n)),
             _ => x_native::editor::node_to_css(n, &doc.doc.variables),
         }
     }
@@ -2734,23 +2980,80 @@ impl App {
             author: USER_NAME.to_string(),
             text: text.to_string(),
             resolved: false,
+            parent: None,
         });
         self.mark_dirty();
         id
     }
 
-    pub fn resolve_comment(&mut self, id: &str, resolved: bool) {
+    /// Reply to a comment thread: parents to the ROOT (flat threads — a
+    /// reply to a reply still attaches to the root), inherits the page, and
+    /// anchors near the root pin. `None` when `root_id` is unknown.
+    pub fn post_reply(&mut self, root_id: &str, text: &str) -> Option<String> {
         let doc = self.doc();
-        if !doc
+        let root = doc
             .doc
             .comments
             .iter()
-            .any(|c| c.id == id && c.resolved != resolved)
-        {
+            .find(|c| c.id == root_id)?
+            .clone();
+        let id = x_native::fresh_id("comment");
+        let n = doc
+            .doc
+            .comments
+            .iter()
+            .filter(|c| c.parent.as_deref() == Some(root.id.as_str()))
+            .count();
+        doc.checkpoint();
+        doc.doc.comments.push(x_native::Comment {
+            id: id.clone(),
+            page: root.page,
+            x: root.x + 6.0,
+            y: root.y + 10.0 + n as f64 * 6.0,
+            author: USER_NAME.to_string(),
+            text: text.to_string(),
+            resolved: false,
+            parent: Some(root.id.clone()),
+        });
+        self.mark_dirty();
+        Some(id)
+    }
+
+    /// Number of replies in a thread (0 for unknown ids — and for replies,
+    /// which never have their own replies).
+    pub fn reply_count(&self, root_id: &str) -> usize {
+        self.doc_opt()
+            .map(|d| {
+                d.doc
+                    .comments
+                    .iter()
+                    .filter(|c| c.parent.as_deref() == Some(root_id))
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
+    pub fn resolve_comment(&mut self, id: &str, resolved: bool) {
+        let doc = self.doc();
+        // Thread-wide: resolving a root resolves its replies with it (a
+        // reply id normalizes to its root). One message = one-member thread.
+        let root_id = doc
+            .doc
+            .comments
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| c.parent.clone().unwrap_or_else(|| c.id.clone()));
+        let Some(root_id) = root_id else {
+            return;
+        };
+        let members = |c: &x_native::Comment| {
+            c.id == root_id || c.parent.as_deref() == Some(root_id.as_str())
+        };
+        if !doc.doc.comments.iter().any(|c| members(c) && c.resolved != resolved) {
             return;
         }
         doc.checkpoint();
-        if let Some(c) = doc.doc.comments.iter_mut().find(|c| c.id == id) {
+        for c in doc.doc.comments.iter_mut().filter(|c| members(c)) {
             c.resolved = resolved;
         }
         self.mark_dirty();
@@ -2758,11 +3061,19 @@ impl App {
 
     pub fn delete_comment(&mut self, id: &str) {
         let doc = self.doc();
-        if !doc.doc.comments.iter().any(|c| c.id == id) {
+        let Some(c) = doc.doc.comments.iter().find(|c| c.id == id) else {
             return;
-        }
+        };
+        let is_root = c.parent.is_none();
         doc.checkpoint();
-        doc.doc.comments.retain(|c| c.id != id);
+        if is_root {
+            // deleting a root removes the whole thread
+            doc.doc
+                .comments
+                .retain(|c| c.id != id && c.parent.as_deref() != Some(id));
+        } else {
+            doc.doc.comments.retain(|c| c.id != id);
+        }
         self.mark_dirty();
     }
 
@@ -3762,6 +4073,145 @@ fn collect_ancestor_path(
     path.pop();
     found
 }
+
+// --------------------------------------------------- dashboard thumbnails
+
+impl App {
+    /// (w, h) of the cached thumbnail for `path`, if fresh (the stored mtime
+    /// still matches the file on disk).
+    pub fn thumb_ready(&self, path: &std::path::Path) -> Option<(u32, u32)> {
+        let (mt, assets) = self.thumbs.get(path)?;
+        let cur = std::fs::metadata(path).ok()?.modified().ok()?;
+        if cur != *mt {
+            return None;
+        }
+        let b = assets.get("thumb")?;
+        Some((b.image.width, b.image.height))
+    }
+
+    /// The cached asset bundle for `path` (call after `thumb_ready`).
+    pub fn thumb_brush(&self, path: &std::path::Path) -> Option<&x_native::Assets> {
+        self.thumbs.get(path).map(|(_, a)| a)
+    }
+
+    /// Render at most one pending thumbnail per call (the dashboard calls
+    /// this once per frame, so a wall of new files warms up progressively
+    /// instead of hitching). Skips cached and known-failed entries.
+    pub fn thumb_pump(&mut self, pending: Vec<std::path::PathBuf>) {
+        for p in pending {
+            if self.thumbs.contains_key(&p) || self.thumb_failed.contains(&p) {
+                continue;
+            }
+            self.render_thumb(&p);
+            return;
+        }
+    }
+
+    /// Disk-cache location for a thumbnail: FNV-1a of path + mtime under
+    /// `~/.config/x-native/thumbs/`. `None` without a HOME.
+    fn thumb_cache_file(
+        path: &std::path::Path,
+        mt: &std::time::SystemTime,
+    ) -> Option<std::path::PathBuf> {
+        let home = std::env::var_os("HOME")?;
+        let mut h: u64 = 0xcbf2_9fe4_8422_2325;
+        for b in path.to_string_lossy().as_bytes() {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        let nanos = mt
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        for b in nanos.to_le_bytes() {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        Some(
+            std::path::PathBuf::from(home)
+                .join(".config")
+                .join("x-native")
+                .join("thumbs")
+                .join(format!("{h:016x}.png")),
+        )
+    }
+
+    fn render_thumb(&mut self, path: &std::path::Path) {
+        let fail = |me: &mut Self| {
+            me.thumb_failed.insert(path.to_path_buf());
+        };
+        let Ok(md) = std::fs::metadata(path) else {
+            fail(self);
+            return;
+        };
+        let Ok(mt) = md.modified() else {
+            fail(self);
+            return;
+        };
+        // Warm sessions: a valid disk-cache hit skips the document parse.
+        let cache = Self::thumb_cache_file(path, &mt);
+        if let Some(cf) = &cache {
+            if let Ok(bytes) = std::fs::read(cf) {
+                let mut a = x_native::Assets::new();
+                if a.load_png_bytes("thumb", &bytes).is_ok() {
+                    self.thumbs.insert(path.to_path_buf(), (mt, a));
+                    return;
+                }
+            }
+        }
+        // v1 scope: native documents only (other formats keep the watermark).
+        if path.extension().map(|e| e != "x").unwrap_or(true) {
+            fail(self);
+            return;
+        }
+        let doc = match x_native::fileio::load_x_file(&path.to_string_lossy()) {
+            Ok(d) => d,
+            Err(_) => {
+                fail(self);
+                return;
+            }
+        };
+        let Some(page) = doc.pages.first() else {
+            fail(self);
+            return;
+        };
+        // Same export path as PNG export (prepare_export strips frame-name
+        // labels and outlines text), so the preview cannot drift from the
+        // artifact the user gets. Embedded image assets are not decoded in
+        // this path — v1 previews are text+vector.
+        let Ok(plan) = x_native::prepare_export(page, &doc.variables, None, &self.fonts) else {
+            fail(self);
+            return;
+        };
+        let scale = (340.0 / plan.width.max(plan.height).max(1.0)).clamp(0.05, 1.0);
+        let Ok((png, _, _)) = x_native::export_raster(
+            &plan.tree,
+            plan.width,
+            plan.height,
+            x_native::RasterFormat::Png,
+            scale,
+            None,
+            None,
+            Some(&self.fonts),
+        ) else {
+            fail(self);
+            return;
+        };
+        if let Some(cf) = &cache {
+            if let Some(dir) = cf.parent() {
+                let _ = std::fs::create_dir_all(dir);
+                let _ = std::fs::write(cf, &png);
+            }
+        }
+        let mut a = x_native::Assets::new();
+        if a.load_png_bytes("thumb", &png).is_ok() {
+            self.thumbs.insert(path.to_path_buf(), (mt, a));
+        } else {
+            fail(self);
+        }
+    }
+}
+
 #[cfg(test)]
 impl App {
     /// Explicit deterministic content for old inspector/screenshot fixtures.

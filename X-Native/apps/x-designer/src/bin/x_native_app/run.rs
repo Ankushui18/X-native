@@ -3406,6 +3406,24 @@ impl Host {
                         .filter(|(r2, _)| r2.contains(p))
                         .map(|(_, n)| n.clone());
                 }
+                if matches!(a, Action::Field(FieldId::VarValue)) {
+                    // resolve WHICH variable was clicked from the rects the
+                    // Tokens panel recorded this paint
+                    self.app.var_edit_name = self
+                        .app
+                        .var_value_rects
+                        .iter()
+                        .find(|(r2, _)| r2.contains(p))
+                        .map(|(_, n)| n.clone());
+                }
+                if matches!(a, Action::Field(FieldId::VarName)) {
+                    self.app.var_edit_name = self
+                        .app
+                        .var_name_rects
+                        .iter()
+                        .find(|(r2, _)| r2.contains(p))
+                        .map(|(_, n)| n.clone());
+                }
                 self.dispatch(a);
                 return;
             }
@@ -3518,9 +3536,17 @@ impl Host {
                 let text = d.buffer.trim().to_string();
                 self.app.comment_draft = None;
                 if !text.is_empty() {
-                    let (x, y) = (d.x, d.y);
-                    self.app.post_comment(x, y, &text);
-                    self.app.status = "Comment added".into();
+                    match d.parent.clone() {
+                        Some(root) => {
+                            self.app.post_reply(&root, &text);
+                            self.app.status = "Reply added".into();
+                        }
+                        None => {
+                            let (x, y) = (d.x, d.y);
+                            self.app.post_comment(x, y, &text);
+                            self.app.status = "Comment added".into();
+                        }
+                    }
                 }
                 return;
             }
@@ -3560,6 +3586,59 @@ impl Host {
                     self.app.status = "Comment deleted".into();
                     return;
                 }
+                // reply rows (geometry mirrors paint_comments; ids in paint
+                // order so row i maps to reply i)
+                let reply_n = self.app.reply_count(&id);
+                if reply_n > 0 {
+                    let reply_ids: Vec<String> = {
+                        let doc = self.app.doc();
+                        doc.doc
+                            .comments
+                            .iter()
+                            .filter(|c| c.parent.as_deref() == Some(id.as_str()))
+                            .map(|c| c.id.clone())
+                            .collect()
+                    };
+                    for (i, rid) in reply_ids.iter().enumerate() {
+                        let ry = sp.y - 28.0 + 76.0 + i as f64 * 18.0;
+                        // row body keeps the card open
+                        let row = Rect::new(sp.x + 32.0, ry, sp.x + 32.0 + 248.0 - 24.0, ry + 16.0);
+                        // ✕ rect mirrors paint: card.x1-40 .. card.x1-22
+                        let x_btn = Rect::new(row.x1 - 16.0, ry + 1.0, row.x1 + 2.0, ry + 16.0);
+                        if x_btn.contains(p) {
+                            self.app.delete_comment(rid);
+                            self.app.status = "Reply deleted".into();
+                            return;
+                        }
+                        if row.contains(p) {
+                            return;
+                        }
+                    }
+                    // Reply pill under the rows
+                    let card_x0 = sp.x + 32.0;
+                    let pill_y = sp.y - 28.0 + 76.0 + reply_n as f64 * 18.0 + 2.0;
+                    let reply_btn = Rect::new(card_x0 + 12.0, pill_y, card_x0 + 96.0, pill_y + 24.0);
+                    if reply_btn.contains(p) {
+                        let draft = {
+                            let doc = self.app.doc();
+                            doc.doc
+                                .comments
+                                .iter()
+                                .find(|c| c.id == id)
+                                .map(|c| crate::state::CommentDraft {
+                                    x: c.x,
+                                    y: c.y,
+                                    buffer: String::new(),
+                                    parent: Some(c.id.clone()),
+                                })
+                        };
+                        if let Some(d) = draft {
+                            self.app.comment_draft = Some(d);
+                            self.app.open_comment = None;
+                        }
+                        return;
+                    }
+                }
                 // clicking the card keeps it open; anywhere else closes it
                 let card = Rect::new(sp.x, sp.y - 24.0, sp.x + 240.0, sp.y + 40.0);
                 if card.contains(p) || self.app.comment_at(p) == Some(id.clone()) {
@@ -3580,6 +3659,7 @@ impl Host {
             self.app.comment_draft = Some(crate::state::CommentDraft {
                 x: world.x,
                 y: world.y,
+                parent: None,
                 buffer: String::new(),
             });
             return;
@@ -5034,9 +5114,17 @@ impl Host {
                     let t = d.buffer.trim().to_string();
                     self.app.comment_draft = None;
                     if !t.is_empty() {
-                        let (x, y) = (d.x, d.y);
-                        self.app.post_comment(x, y, &t);
-                        self.app.status = "Comment added".into();
+                        match d.parent.clone() {
+                            Some(root) => {
+                                self.app.post_reply(&root, &t);
+                                self.app.status = "Reply added".into();
+                            }
+                            None => {
+                                let (x, y) = (d.x, d.y);
+                                self.app.post_comment(x, y, &t);
+                                self.app.status = "Comment added".into();
+                            }
+                        }
                     }
                 }
                 (Key::Named(NamedKey::Backspace), _) => {
@@ -5917,6 +6005,10 @@ impl Host {
             }
             "Export PDF" => {
                 self.app.doc().export_format = 3;
+                self.cmd_export(false);
+            }
+            "Export Sketch" => {
+                self.app.doc().export_format = 4;
                 self.cmd_export(false);
             }
             "Copy as code" => self.app.apply_ctx(CtxCmd::CopyAsCode),
@@ -7840,6 +7932,84 @@ impl Host {
         }
     }
 
+    /// Pick an updated .xlib for pinned dependency `i`, diff it against the
+    /// pinned snapshot, and open the review modal. Tries the recorded source
+    /// hint, then `<doc dir>/<library_id>.xlib`, then a file dialog.
+    fn cmd_lib_check_update(&mut self, i: usize) {
+        let (id, source) = {
+            let d = self.app.doc_ref();
+            match d.doc.library_deps.get(i) {
+                Some(dep) => (dep.library_id.clone(), dep.source_path.clone()),
+                None => return,
+            }
+        };
+        let mut candidate: Option<std::path::PathBuf> = None;
+        if !source.is_empty() {
+            let p = std::path::PathBuf::from(&source);
+            if p.is_file() {
+                candidate = Some(p);
+            }
+        }
+        if candidate.is_none() {
+            if let Some(dp) = self.app.doc_ref().path.clone() {
+                if let Some(dir) = dp.parent() {
+                    let p = dir.join(format!("{id}.xlib"));
+                    if p.is_file() {
+                        candidate = Some(p);
+                    }
+                }
+            }
+        }
+        let path = match candidate {
+            Some(p) => p,
+            None => {
+                let Some(p) = rfd::FileDialog::new()
+                    .set_file_name(format!("{id}.xlib"))
+                    .add_filter("X-Native library", &["xlib"])
+                    .pick_file()
+                else {
+                    return;
+                };
+                p
+            }
+        };
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => {
+                self.app.status = format!("Cannot read {}: {e}", path.display());
+                return;
+            }
+        };
+        let newer = match x_native::fileio::load_xlib(&text) {
+            Ok(l) => l,
+            Err(e) => {
+                self.app.status = format!("Not a valid .xlib: {e}");
+                return;
+            }
+        };
+        let changes = {
+            let d = self.app.doc_ref();
+            match d.doc.library_snapshots.get(&id) {
+                Some(pinned) => x_native::diff_library(pinned, &newer),
+                None => {
+                    self.app.status = format!("No pinned snapshot for {id}");
+                    return;
+                }
+            }
+        };
+        if changes.is_empty() {
+            self.app.status = format!("{id}: picked library matches the pinned version");
+            return;
+        }
+        self.app.lib_review = Some(crate::state::LibReview {
+            dep_index: i,
+            library_id: id,
+            path,
+            newer,
+            changes,
+        });
+    }
+
     fn cmd_save(&mut self) {
         if !self.finish_edits() {
             return;
@@ -8061,6 +8231,7 @@ impl Host {
             3 => "pdf",
             2 => "svg",
             1 => "jpg",
+            4 => "sketch",
             _ => "png",
         };
         let Some(path) = rfd::FileDialog::new()
@@ -8257,8 +8428,34 @@ impl Host {
             Action::SearchFocus => {
                 self.app.dash_search_focus = true;
             }
-            Action::Upgrade => self.app.status = "Upgrade — coming soon".into(),
-            Action::InviteTeam => self.app.status = "Invite team — coming soon".into(),
+            Action::OpenTemplates => {
+                self.app.template_picker_open = true;
+            }
+            Action::CloseTemplates => {
+                self.app.template_picker_open = false;
+            }
+            Action::NewFromTemplate(i) => {
+                self.app.template_picker_open = false;
+                if !self.finish_edits() {
+                    return;
+                }
+                let Some(doc) = crate::state::OpenDoc::template_doc(i) else {
+                    return;
+                };
+                let name = crate::state::OpenDoc::TEMPLATES
+                    .get(i)
+                    .map(|(n, _)| n.to_string())
+                    .unwrap_or_default();
+                self.app.docs.push(doc);
+                self.app.active = self.app.docs.len() - 1;
+                self.app.screen = if self.app.is_board() {
+                    crate::state::Screen::Board
+                } else {
+                    crate::state::Screen::Editor
+                };
+                self.app.center_view();
+                self.app.status = format!("New from template: {name}");
+            }
             Action::AddTeam => self.app.status = "Team creation — coming soon".into(),
             Action::SelectDoc(i) => {
                 if !self.finish_edits() {
@@ -9102,7 +9299,7 @@ impl Host {
             }
             Action::CycleExportFormat => {
                 let doc = self.app.doc();
-                doc.export_format = (doc.export_format + 1) % 4;
+                doc.export_format = (doc.export_format + 1) % 5;
             }
             Action::CycleExportScale => {
                 let doc = self.app.doc();
@@ -9198,6 +9395,133 @@ impl Host {
             }
             Action::InspectPlatform(i) => {
                 self.app.inspect_platform = i;
+            }
+            Action::VarDelete(name) => {
+                let d = self.app.doc();
+                if let Some(cmd) = x_native::editor::remove_variable(&d.doc.variables, &name) {
+                    let label = name.clone();
+                    if d.var_history.commit(&mut d.doc.variables, cmd) {
+                        self.app.mark_dirty();
+                        self.app.status = format!("Deleted variable {label}");
+                    }
+                }
+            }
+            Action::VarToggleBool(name) => {
+                let d = self.app.doc();
+                let cur = d.doc.variables.bools.get(&name).copied().unwrap_or(false);
+                let cmd = x_native::editor::set_bool(&d.doc.variables, &name, !cur);
+                if d.var_history.commit(&mut d.doc.variables, cmd) {
+                    self.app.mark_dirty();
+                    self.app.status = format!("{name} = {}", if cur { "false" } else { "true" });
+                }
+            }
+            Action::VarStep(name, delta) => {
+                let d = self.app.doc();
+                let cur = d.doc.variables.numbers.get(&name).copied().unwrap_or(0.0);
+                let cmd = x_native::editor::set_number(&d.doc.variables, &name, cur + delta);
+                if d.var_history.commit(&mut d.doc.variables, cmd) {
+                    self.app.mark_dirty();
+                    self.app.status = format!("{name} = {}", cur + delta);
+                }
+            }
+            Action::VarUndoVars => {
+                let d = self.app.doc();
+                if d.var_history.undo(&mut d.doc.variables) {
+                    self.app.mark_dirty();
+                    self.app.status = "Variable edit undone".into();
+                } else {
+                    self.app.status = "Nothing to undo in variables".into();
+                }
+            }
+            Action::LibCheckUpdate(i) => self.cmd_lib_check_update(i),
+            Action::LibReviewAccept => {
+                let Some(rv) = self.app.lib_review.clone() else {
+                    return;
+                };
+                self.app.lib_review = None;
+                let d = self.app.doc();
+                if rv.dep_index >= d.doc.library_deps.len() {
+                    self.app.status = "Library dependency no longer exists".into();
+                    return;
+                }
+                let doc = &mut d.doc;
+                let id = doc.library_deps[rv.dep_index].library_id.clone();
+                let (changes, updated) = x_native::accept_update(
+                    &mut doc.library_deps[rv.dep_index],
+                    &mut doc.library_snapshots,
+                    &mut doc.pages,
+                    rv.newer,
+                );
+                // Repin integrity + source hint so future checks auto-find
+                // this file (snapshot_hash must cover the NEW snapshot or
+                // load-time verification would flag the document).
+                if let Some(dep) = doc.library_deps.get_mut(rv.dep_index) {
+                    dep.snapshot_hash = x_native::library_hash(
+                        doc.library_snapshots.get(&id).expect("just inserted"),
+                    );
+                    dep.source_path = rv.path.to_string_lossy().into_owned();
+                }
+                let _ = changes;
+                self.app.mark_dirty();
+                self.app.status = format!(
+                    "Library “{id}” updated — {updated} layer(s) re-resolved"
+                );
+            }
+            Action::LibReviewClose => {
+                self.app.lib_review = None;
+            }
+            Action::SlotSetFromSelection(name) => {
+                let Some((iid, comp)) = self.app.selected_instance() else {
+                    return;
+                };
+                let sel = self.app.doc_ref().editor_ref().selection.clone();
+                let Some(content_id) = sel.iter().find(|id| **id != iid).cloned() else {
+                    self.app.status =
+                        "Select the content layer together with the instance".into();
+                    return;
+                };
+                let d = self.app.doc();
+                // Immutable plan: master's slot anchor geometry + content clone.
+                let plan = (|| {
+                    let root = &d.editor_ref().root;
+                    let m = x_native::find_master(root, &comp)?;
+                    let p = m.props.iter().find(|p| {
+                        p.name() == name && matches!(p, x_native::ComponentProp::Slot { .. })
+                    })?;
+                    let x_native::ComponentProp::Slot { target, .. } = p else {
+                        return None;
+                    };
+                    let anchor = crate::editor_ui::find_node(m, target).cloned()?;
+                    let content = crate::editor_ui::find_node(root, &content_id).cloned()?;
+                    Some((anchor, content))
+                })();
+                let Some((anchor, mut content)) = plan else {
+                    self.app.status = format!("Slot {name}: no anchor or content layer");
+                    return;
+                };
+                // Slot content renders in the anchor's place: take its
+                // geometry (substitute_slots clones the content verbatim).
+                content.transform = anchor.transform;
+                content.w = anchor.w;
+                content.h = anchor.h;
+                let content_name = content.name.clone();
+                d.checkpoint();
+                d.editor()
+                    .mutate_visual_stack(&iid, |inst| x_native::set_slot_content(inst, &name, content));
+                self.app.mark_dirty();
+                self.app.status =
+                    format!("Slot {name} ← {content_name}");
+            }
+            Action::SlotClear(name) => {
+                let Some((iid, _)) = self.app.selected_instance() else {
+                    return;
+                };
+                let d = self.app.doc();
+                d.checkpoint();
+                d.editor()
+                    .mutate_visual_stack(&iid, |inst| x_native::clear_slot_content(inst, &name));
+                self.app.mark_dirty();
+                self.app.status = format!("Slot {name} cleared");
             }
             Action::InspectCopy => {
                 let code = self.app.inspect_code();
@@ -10185,6 +10509,60 @@ impl Host {
                     self.apply_auto_layout();
                 }
             }
+            FieldId::VarName => {
+                let Some(old) = self.app.var_edit_name.clone() else {
+                    self.app.status = "No variable targeted".into();
+                    return;
+                };
+                let new = raw.trim().to_string();
+                if new.is_empty() || new == old {
+                    return; // field closes; nothing changed
+                }
+                let d = self.app.doc();
+                match x_native::editor::rename_variable(&d.doc.variables, &old, &new) {
+                    Some(cmd) => {
+                        if d.var_history.commit(&mut d.doc.variables, cmd) {
+                            self.app.mark_dirty();
+                            self.app.status =
+                                format!("{old} renamed to {new} — old references still resolve");
+                        } else {
+                            self.app.status = format!("Rename to {new} changed nothing");
+                        }
+                    }
+                    None => self.app.status = format!("{old}: nothing to rename"),
+                }
+            }
+            FieldId::VarValue => {
+                let Some(name) = self.app.var_edit_name.clone() else {
+                    self.app.status = "No variable targeted".into();
+                    return;
+                };
+                let d = self.app.doc();
+                let raw = raw.trim();
+                let cmd = if !raw.is_empty() {
+                    if let Some(c) = x_native::parse_hex_color(raw) {
+                        x_native::editor::set_color(&d.doc.variables, &name, c)
+                    } else if raw == "true" || raw == "false" {
+                        x_native::editor::set_bool(&d.doc.variables, &name, raw == "true")
+                    } else if let Ok(n2) = raw.parse::<f64>() {
+                        x_native::editor::set_number(&d.doc.variables, &name, n2)
+                    } else {
+                        x_native::editor::set_string(&d.doc.variables, &name, raw)
+                    }
+                } else if let Some(cmd) = x_native::editor::remove_variable(&d.doc.variables, &name)
+                {
+                    cmd
+                } else {
+                    self.app.status = format!("{name}: nothing to clear");
+                    return;
+                };
+                if d.var_history.commit(&mut d.doc.variables, cmd) {
+                    self.app.mark_dirty();
+                    self.app.status = format!("{name} updated");
+                } else {
+                    self.app.status = format!("{name}: no change");
+                }
+            }
             _ => {
                 // node-bound fields
                 self.apply_field_to_selection(f.id, &raw);
@@ -10624,7 +11002,25 @@ fn field_initial(app: &App, f: FieldId) -> String {
                 _ => String::new(),
             }
         }
+        FieldId::VarValue => var_field_initial(
+            &app.doc_ref().doc.variables,
+            app.var_edit_name.as_deref().unwrap_or_default(),
+        ),
+        FieldId::VarName => app.var_edit_name.clone().unwrap_or_default(),
         _ => String::new(),
+    }
+}
+
+/// Current display value of a variable (the VarValue field's seed buffer).
+fn var_field_initial(v: &x_native::Variables, name: &str) -> String {
+    if let Some(c) = v.colors.get(name) {
+        x_native::color_to_hex(*c)
+    } else if let Some(n) = v.numbers.get(name) {
+        fmt(*n)
+    } else if let Some(b) = v.bools.get(name) {
+        b.to_string()
+    } else {
+        v.strings.get(name).cloned().unwrap_or_default()
     }
 }
 
@@ -10645,6 +11041,68 @@ mod tests {
     use crate::dashboard;
     use crate::editor_ui;
     use crate::state::{OpenDoc, RightTab, Screen, Tool};
+
+    #[test]
+    fn comment_threads_reply_resolve_and_delete_cascade() {
+        let mut app = App::demo();
+        let root = app.post_comment(10.0, 10.0, "root");
+        let r1 = app.post_reply(&root, "first").expect("reply posts");
+        app.post_reply(&root, "second").expect("second reply posts");
+        assert_eq!(app.reply_count(&root), 2);
+        // replying to a REPLY still attaches to the thread root (flat)
+        app.post_reply(&r1, "still the root thread").expect("nested reply posts");
+        assert_eq!(app.reply_count(&root), 3);
+        // unknown root is a clean None, not a panic
+        assert!(app.post_reply("nope", "x").is_none());
+        // resolving the root resolves the whole thread
+        app.resolve_comment(&root, true);
+        {
+            let d = app.doc_ref();
+            let thread: Vec<bool> = d
+                .doc
+                .comments
+                .iter()
+                .filter(|c| c.id == root || c.parent.as_deref() == Some(root.as_str()))
+                .map(|c| c.resolved)
+                .collect();
+            assert_eq!(thread.len(), 4);
+            assert!(thread.iter().all(|r| *r), "resolve cascades");
+        }
+        // deleting the root removes the whole thread
+        app.delete_comment(&root);
+        assert_eq!(app.doc_ref().doc.comments.len(), 0);
+        // deleting a single reply leaves the rest of the thread
+        let root2 = app.post_comment(1.0, 1.0, "t2");
+        let ra = app.post_reply(&root2, "a").expect("reply posts");
+        let rb = app.post_reply(&root2, "b").expect("reply posts");
+        app.delete_comment(&ra);
+        assert_eq!(app.reply_count(&root2), 1);
+        assert!(app.doc_ref().doc.comments.iter().any(|c| c.id == rb));
+    }
+
+    #[test]
+    fn templates_catalog_builds_independent_copies() {
+        for (i, (name, blurb)) in OpenDoc::TEMPLATES.iter().enumerate() {
+            assert!(!name.is_empty() && !blurb.is_empty());
+            let d = OpenDoc::template_doc(i)
+                .unwrap_or_else(|| panic!("template {i} ({name}) builds"));
+            if i == 3 {
+                assert!(d.board_doc.is_some(), "board template carries a board");
+                assert_eq!(d.doc.kind, x_native::DocumentKind::Board);
+            } else {
+                assert!(d.board_doc.is_none());
+                assert!(!d.doc.pages.is_empty(), "design template has a page");
+                assert!(
+                    !d.doc.pages[0].children.is_empty(),
+                    "template {i} has content"
+                );
+                // each open is an independent copy: two builds share nothing
+                let d2 = OpenDoc::template_doc(i).unwrap();
+                assert_ne!(d.doc.pages[0].id, d2.doc.pages[0].id);
+            }
+        }
+        assert!(OpenDoc::template_doc(OpenDoc::TEMPLATES.len()).is_none());
+    }
 
     /// Dashboard paints without panicking (fonts may be absent in CI).
     #[test]
@@ -12890,6 +13348,7 @@ fn screenshot_screens_r7() {
         x: 200.0,
         y: 500.0,
         buffer: "Need a lighter shadow".into(),
+        parent: None,
     });
     shoot("editor-comments", &mut app);
 

@@ -552,6 +552,19 @@ impl ExportRequest {
                 Some(&self.decoded),
                 Some(&self.fonts),
             ),
+            4 => {
+                // Sketch bundle: export_sketch consumes a full Document; the
+                // export request carries the page tree + variables + assets,
+                // which is everything the exporter reads.
+                let doc = x_native::Document {
+                    pages: vec![self.root.clone()],
+                    variables: self.variables.clone(),
+                    assets: self.assets.clone(),
+                    ..Default::default()
+                };
+                cancellation::checkpoint()?;
+                x_native::fileio::export_sketch(&doc)
+            }
             0 | 1 => {
                 raster(
                     if self.format == 1 {

@@ -647,3 +647,86 @@ mod snapshot_tests {
             .unwrap();
     }
 }
+
+// ----------------------------------------------------------- font browsing
+
+/// The family name of a registered face stem: strips a trailing numeric
+/// weight suffix (`"Inter-400"` → `"Inter"`). Anything else — `"Inter"`,
+/// `"Inter-Italic"`, `"A-1-400"` (→ `"A-1"`) — keeps its last hyphen segment.
+/// Mirrors the `"Family-<weight>"` stem convention [`FontManager::resolve_font_name`]
+/// documents for bundled static instances.
+pub fn family_of_face(face: &str) -> &str {
+    match face.rsplit_once('-') {
+        Some((fam, suffix)) if !fam.is_empty() && !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) => fam,
+        _ => face,
+    }
+}
+
+/// Group face stems into `(family, faces)` pairs for a font browser:
+/// sorted by family, faces sorted within each family, no duplicates.
+pub fn group_families<'a, I: IntoIterator<Item = &'a str>>(names: I) -> Vec<(String, Vec<String>)> {
+    use std::collections::BTreeMap;
+    let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for n in names {
+        groups
+            .entry(family_of_face(n).to_string())
+            .or_default()
+            .push(n.to_string());
+    }
+    for faces in groups.values_mut() {
+        faces.sort();
+        faces.dedup();
+    }
+    groups.into_iter().collect()
+}
+
+impl FontManager {
+    /// Browser listing: every registered family with its face stems.
+    /// (Families → faces; pair with [`FontManager::font_index`] to load.)
+    pub fn families(&self) -> Vec<(String, Vec<String>)> {
+        group_families(self.family_names())
+    }
+}
+
+#[cfg(test)]
+mod families_tests {
+    use super::*;
+
+    #[test]
+    fn family_of_face_strips_numeric_weights_only() {
+        assert_eq!(family_of_face("Inter-400"), "Inter");
+        assert_eq!(family_of_face("Inter-700"), "Inter");
+        assert_eq!(family_of_face("Inter"), "Inter");
+        assert_eq!(family_of_face("Inter-Italic"), "Inter-Italic");
+        assert_eq!(family_of_face("A-1-400"), "A-1");
+        assert_eq!(family_of_face("Inter-"), "Inter-");
+        assert_eq!(family_of_face("-400"), "-400");
+    }
+
+    #[test]
+    fn group_families_sorts_and_dedups() {
+        let got = group_families(["Roboto-400", "Inter-700", "Inter-400", "Inter", "Roboto-400"]);
+        assert_eq!(
+            got,
+            vec![
+                ("Inter".to_string(), vec!["Inter".to_string(), "Inter-400".to_string(), "Inter-700".to_string()]),
+                ("Roboto".to_string(), vec!["Roboto-400".to_string()]),
+            ]
+        );
+    }
+
+    #[test]
+    fn font_manager_families_groups_registered_stems() {
+        let bytes = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../apps/x-designer/assets/fonts/Inter-400.ttf"
+        ))
+        .to_vec();
+        let mut fm = FontManager::new();
+        fm.load_face_bytes("Inter-400", bytes, 0).unwrap();
+        assert_eq!(
+            fm.families(),
+            vec![("Inter".to_string(), vec!["Inter-400".to_string()])]
+        );
+    }
+}

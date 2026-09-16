@@ -67,6 +67,9 @@ pub fn paint(app: &mut App, s: &mut Scene) {
     if app.palette.open {
         paint_palette(app, s, &mut hit);
     }
+    if app.lib_review.is_some() {
+        paint_lib_review(app, s, &mut hit);
+    }
     paint_color_picker(app, s, &mut hit);
     paint_carets(app, s);
     app.hit = hit;
@@ -3538,16 +3541,24 @@ fn paint_design(
         Some("chevron-down"),
     );
     if app.font_picker_open {
-        let names = app.fonts.fonts.family_names();
+        // family-grouped listing (owned — no borrow held across draws);
+        // picking a FAMILY is enough: rendering resolves it to a face.
+        let fams = app.fonts.fonts.families();
         let popup = Rect::new(fam.x0, fam.y1 + 2.0, fam.x1, fam.y1 + 174.0);
         fill_rrect(s, popup, 6.0, C_PANEL_2);
         stroke_rrect(s, popup, 6.0, C_LINE_2, 1.0);
         app.fonts.micro_label(s, popup.x0 + 10.0, popup.y0 + 14.0, "FONT BROWSER", C_DIM, Wt::Med);
-        for (i, name) in names.iter().take(8).enumerate() {
+        for (i, (fam, faces)) in fams.iter().take(8).enumerate() {
             let row = Rect::new(popup.x0 + 4.0, popup.y0 + 22.0 + i as f64 * 18.0, popup.x1 - 4.0, popup.y0 + 39.0 + i as f64 * 18.0);
             if hover(app, row) { fill_rrect(s, row, 3.0, C_FIELD_2); }
-            app.fonts.text(s, row.x0 + 6.0, row.y0 + 3.0, name, T10, C_TEXT, Wt::Reg);
-            hit.push((row, Action::FontPicker(name.clone())));
+            app.fonts.text(s, row.x0 + 6.0, row.y0 + 3.0, fam, T10, C_TEXT, Wt::Reg);
+            if faces.len() > 1 {
+                let cnt = format!("{} faces", faces.len());
+                let cw = app.fonts.measure(&cnt, T10, Wt::Reg);
+                app.fonts
+                    .text(s, row.x1 - 10.0 - cw, row.y0 + 3.0, &cnt, T10, C_DIM, Wt::Reg);
+            }
+            hit.push((row, Action::FontPicker(fam.clone())));
         }
     }
     let wgt = Rect::new(x0, y0 + 717.5, x0 + 227.0, y0 + 745.5);
@@ -4122,7 +4133,7 @@ fn paint_design(
     y += 1.0 + 12.0;
 
     // --- Export ---------------------------------------------------------
-    let fmts = ["PNG", "JPG", "SVG", "PDF"];
+    let fmts = ["PNG", "JPG", "SVG", "PDF", "SKETCH"];
     let scales = ["1x", "2x"];
     let f_r = Rect::new(rx + pl, y, rx + pl + 56.0, y + 24.0);
     let fmt_label = fmts[app.doc().export_format];
@@ -4278,6 +4289,61 @@ fn paint_design(
                 .text_center(s, rr, "Reset overrides", T10, C_TEXT, Wt::Reg, true);
             hit.push((rr, Action::ResetInstanceProps));
             y += 30.0;
+        }
+        // SLOTS — insertion points declared on the master tree
+        // (ComponentProp::Slot; not part of component_props). Fill from
+        // another selected layer, or clear back to anchor/default.
+        let slots: Vec<(String, Option<String>)> = {
+            let d = app.doc_ref();
+            x_native::find_master(&d.editor_ref().root, &comp)
+                .map(|m| {
+                    m.props
+                        .iter()
+                        .filter_map(|p| match p {
+                            x_native::ComponentProp::Slot { name, default, .. } => {
+                                Some((name.clone(), default.clone()))
+                            }
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        if !slots.is_empty() {
+            app.fonts.micro_label(s, x0, y, "SLOTS", C_DIM, Wt::Med);
+            y += 16.0;
+            for (sname, def) in &slots {
+                let filled = {
+                    let d = app.doc_ref();
+                    crate::editor_ui::find_node(&d.editor_ref().root, iid.as_str())
+                        .and_then(|n| x_native::slot_content(n, sname))
+                        .is_some()
+                };
+                let st = if filled {
+                    "filled".to_string()
+                } else if def.is_some() {
+                    "default".to_string()
+                } else {
+                    "anchor".to_string()
+                };
+                app.fonts
+                    .text(s, x0, y + 6.0, &app.fonts.truncate(sname, T10, Wt::Reg, 90.0), T10, C_TEXT, Wt::Reg);
+                let sw = app.fonts.measure(&st, T10, Wt::Reg);
+                app.fonts
+                    .text(s, xr - 170.0 - sw, y + 7.0, &st, T10, C_MUTED, Wt::Reg);
+                let setb = Rect::new(xr - 164.0, y, xr - 84.0, y + 20.0);
+                fill_rrect(s, setb, 4.0, if hover(app, setb) { C_LINE_2 } else { C_FIELD });
+                stroke_rrect(s, setb, 4.0, C_LINE, 1.0);
+                app.fonts
+                    .text_center(s, setb, "from selection", T10, C_TEXT, Wt::Reg, true);
+                hit.push((setb, Action::SlotSetFromSelection(sname.clone())));
+                let clrb = Rect::new(xr - 78.0, y, xr - 56.0, y + 20.0);
+                fill_rrect(s, clrb, 4.0, if hover(app, clrb) { C_LINE_2 } else { C_FIELD });
+                draw_icon(s, "x", clrb.x0 + 5.0, clrb.y0 + 4.0, 12.0, C_DIM);
+                hit.push((clrb, Action::SlotClear(sname.clone())));
+                y += 26.0;
+            }
+            y += 8.0;
         }
     } else if let Some(master) = master {
         // master side: bind the selected descendant as a new property
@@ -6234,7 +6300,15 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
         .filter(|c| c.page == doc.page)
         .cloned()
         .collect();
-    for c in &comments {
+    // Threads: one pin per ROOT; replies render inside the open card.
+    let replies_of = |id: &str| -> Vec<x_native::Comment> {
+        comments
+            .iter()
+            .filter(|c| c.parent.as_deref() == Some(id))
+            .cloned()
+            .collect()
+    };
+    for c in comments.iter().filter(|c| c.parent.is_none()) {
         let Some(pin) = app.comment_pin_rect(&c.id) else {
             continue;
         };
@@ -6269,6 +6343,35 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
             app.fonts
                 .text_center(s, pin, &initial.to_string(), T11, C_TEXT, Wt::Med, false);
         }
+        // reply count badge (top-right of the pin)
+        let replies = replies_of(&c.id);
+        if !replies.is_empty() {
+            let bc = (pin.x1 - 1.0, pin.y0 + 1.0);
+            s.fill(
+                vello::peniko::Fill::NonZero,
+                vello::kurbo::Affine::IDENTITY,
+                C_SEL,
+                None,
+                &Circle::new(bc, 8.0),
+            );
+            s.stroke(
+                &vello::kurbo::Stroke::new(1.5),
+                vello::kurbo::Affine::IDENTITY,
+                C_PANEL,
+                None,
+                &Circle::new(bc, 8.0),
+            );
+            let n = replies.len().to_string();
+            app.fonts.text_center(
+                s,
+                Rect::new(pin.x1 - 10.0, pin.y0 - 8.0, pin.x1 + 8.0, pin.y0 + 10.0),
+                &n,
+                T10,
+                C_TEXT,
+                Wt::Semi,
+                false,
+            );
+        }
         // collapsed preview bubble on hover (not while its thread is open)
         if hov && !open {
             let w = (app.fonts.measure(&c.text, T10, Wt::Reg) + 24.0).min(240.0);
@@ -6276,12 +6379,23 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
             elev_shadow(s, b, 8.0, Elevation::Floating);
             fill_rrect(s, b, 12.0, C_FIELD);
             stroke_rrect(s, b, 12.0, C_LINE_2, 1.0);
+            let hint = if replies.is_empty() {
+                c.text.clone()
+            } else {
+                format!("{} · {} repl{}", c.text, replies.len(), if replies.len() == 1 { "y" } else { "ies" })
+            };
             app.fonts
-                .text(s, b.x0 + 12.0, b.y0 + 9.0, &c.text, T10, C_TEXT, Wt::Reg);
+                .text(s, b.x0 + 12.0, b.y0 + 9.0, &hint, T10, C_TEXT, Wt::Reg);
         }
-        // open thread popover
+        // open thread popover (grows with the thread)
         if open {
-            let card = Rect::new(pin.x1 + 8.0, pin.y0 - 4.0, pin.x1 + 248.0, pin.y0 + 76.0);
+            let reply_n = replies.len();
+            let card = Rect::new(
+                pin.x1 + 8.0,
+                pin.y0 - 4.0,
+                pin.x1 + 248.0,
+                pin.y0 + 76.0 + reply_n as f64 * 18.0 + 30.0,
+            );
             elev_shadow(s, card, 12.0, Elevation::Floating);
             fill_rrect(s, card, 12.0, C_FIELD);
             stroke_rrect(s, card, 12.0, C_LINE_2, 1.0);
@@ -6333,6 +6447,32 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
             // (sp.x+126, sp.y+6, +42, +24); card.x0 = sp.x+32 and
             // card.y0 = sp.y-28, so the icon centers in that rect
             draw_icon(s, "trash-2", card.x0 + 108.0, card.y0 + 39.0, 14.0, C_DIM);
+            // reply rows (geometry mirrored by `canvas_press` — keep in sync)
+            for (i, r) in replies.iter().enumerate() {
+                let ry = card.y0 + 76.0 + i as f64 * 18.0;
+                hline(s, card.x0 + 10.0, card.x1 - 10.0, ry, C_LINE);
+                app.fonts.text(s, card.x0 + 12.0, ry + 3.0, &r.author, T10, C_DIM, Wt::Med);
+                let shown_r: String = if r.text.chars().count() > 26 {
+                    format!("{}…", r.text.chars().take(26).collect::<String>())
+                } else {
+                    r.text.clone()
+                };
+                app.fonts
+                    .text(s, card.x0 + 76.0, ry + 3.0, &shown_r, T10, C_TEXT, Wt::Reg);
+                // per-reply delete ✕
+                let xb = Rect::new(card.x1 - 40.0, ry + 1.0, card.x1 - 22.0, ry + 16.0);
+                if hover(app, xb) {
+                    fill_rrect(s, xb, 3.0, C_FIELD_2);
+                }
+                draw_icon(s, "x", xb.x0 + 4.0, xb.y0 + 1.0, 12.0, C_DIM);
+            }
+            // Reply pill (opens the composer parented to this thread)
+            let pill_y = card.y0 + 76.0 + reply_n as f64 * 18.0 + 2.0;
+            let rbtn = Rect::new(card.x0 + 12.0, pill_y, card.x0 + 96.0, pill_y + 24.0);
+            fill_rrect(s, rbtn, 6.0, if hover(app, rbtn) { C_FIELD_2 } else { C_PANEL });
+            stroke_rrect(s, rbtn, 6.0, C_LINE_2, 1.0);
+            app.fonts
+                .text_center(s, rbtn, "Reply", T10, C_SEL, Wt::Med, true);
         }
     }
     // the composer (new comment)
@@ -6342,15 +6482,20 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
         elev_shadow(s, card, 12.0, Elevation::Floating);
         fill_rrect(s, card, 12.0, C_FIELD);
         stroke_rrect(s, card, 12.0, C_SEL, 1.0);
-        app.fonts.text(
-            s,
-            card.x0 + 28.0,
-            card.y0 + 10.0,
-            crate::state::USER_NAME,
-            T10,
-            C_DIM,
-            Wt::Med,
-        );
+        let title = match d.parent.as_deref() {
+            Some(root_id) => {
+                let who = app
+                    .doc_opt()
+                    .and_then(|dd| {
+                        dd.doc.comments.iter().find(|c| c.id == root_id)
+                    })
+                    .map(|c| c.author.clone())
+                    .unwrap_or_default();
+                format!("Reply to {who}")
+            }
+            None => crate::state::USER_NAME.to_string(),
+        };
+        app.fonts.text(s, card.x0 + 28.0, card.y0 + 10.0, &title, T10, C_DIM, Wt::Med);
         let shown = if d.buffer.is_empty() {
             "Add a comment…".to_string()
         } else {
@@ -6589,9 +6734,9 @@ fn paint_inspect(
     hline(s, x0 - 8.0, xr, y, C_LINE);
     let y = y + 1.0 + 12.0;
     // platform segmented control for X-Native's artifact handoff targets
-    const NAMES: [&str; 4] = App::INSPECT_PLATFORMS;
+    const NAMES: [&str; 5] = App::INSPECT_PLATFORMS;
     let w = xr - x0;
-    let seg_w = (w - 3.0 * 4.0) / 4.0;
+    let seg_w = (w - 4.0 * 4.0) / 5.0;
     for (i, name) in NAMES.iter().enumerate() {
         let bx = x0 + (seg_w + 4.0) * i as f64;
         let r = Rect::new(bx, y, bx + seg_w, y + 24.0);
@@ -7258,27 +7403,115 @@ fn paint_flow_overlay(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
 
 // ————————————————————————————————————————— assets panel (fonts)
 
+/// Library update review modal: the pinned-vs-newer changeset with
+/// Accept / Keep. Painted last + a full-window scrim hit, so clicks outside
+/// the card close the review (hit resolution takes the LAST painted rect).
+fn paint_lib_review(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    use crate::paint::{fill_rect, fill_rrect, stroke_rrect, Wt};
+    let Some(rv) = app.lib_review.as_ref() else {
+        return;
+    };
+    let card_w = 460.0;
+    let row_h = 22.0;
+    let shown = rv.changes.len().min(8);
+    let card_h = 96.0 + shown as f64 * row_h + if rv.changes.len() > 8 { 18.0 } else { 0.0 };
+    let cx = (app.win_w - card_w) / 2.0;
+    let cy = (app.win_h - card_h).max(60.0) / 2.0;
+    let card = Rect::new(cx, cy, cx + card_w, cy + card_h);
+    // scrim swallows outside clicks
+    hit.push((Rect::new(0.0, 0.0, app.win_w, app.win_h), Action::LibReviewClose));
+    fill_rect(s, Rect::new(0.0, 0.0, app.win_w, app.win_h), C_SCRIM);
+    fill_rrect(s, card, 10.0, C_PANEL);
+    stroke_rrect(s, card, 10.0, C_LINE_2, 1.0);
+    app.fonts.text(
+        s,
+        cx + 20.0,
+        cy + 20.0,
+        &format!("Update library “{}”", rv.library_id),
+        T14,
+        C_TEXT,
+        Wt::Semi,
+    );
+    app.fonts.text(
+        s,
+        cx + 20.0,
+        cy + 42.0,
+        &format!(
+            "{} · {} change{}",
+            rv.path.display(),
+            rv.changes.len(),
+            if rv.changes.len() == 1 { "" } else { "s" }
+        ),
+        T10,
+        C_MUTED,
+        Wt::Reg,
+    );
+    for (i, ch) in rv.changes.iter().take(8).enumerate() {
+        let ry = cy + 64.0 + i as f64 * row_h;
+        let (glyph, label): (&str, String) = match ch {
+            x_native::LibraryChange::StyleAdded(n) => ("plus", format!("Style added: {n}")),
+            x_native::LibraryChange::StyleRemoved(n) => ("x", format!("Style removed: {n}")),
+            x_native::LibraryChange::StyleModified(n) => ("pencil", format!("Style modified: {n}")),
+            x_native::LibraryChange::VariableChanged(n) => ("code", format!("Variable changed: {n}")),
+            x_native::LibraryChange::ComponentAdded(n) => ("plus", format!("Component added: {n}")),
+            x_native::LibraryChange::ComponentRemoved(n) => ("x", format!("Component removed: {n}")),
+        };
+        let icon_c = if label.contains("removed") { C_MUTED } else { C_TEXT };
+        draw_icon(s, glyph, cx + 20.0, ry + 2.0, 12.0, icon_c);
+        app.fonts
+            .text(s, cx + 40.0, ry + 2.0, &label, T11, C_TEXT, Wt::Reg);
+    }
+    if rv.changes.len() > 8 {
+        app.fonts.text(
+            s,
+            cx + 40.0,
+            cy + 64.0 + 8.0 * row_h,
+            &format!("… and {} more", rv.changes.len() - 8),
+            T10,
+            C_DIM,
+            Wt::Reg,
+        );
+    }
+    // footer buttons
+    let by = card.y1 - 40.0;
+    let accept = Rect::new(card.x1 - 168.0, by, card.x1 - 20.0, card.y1 - 14.0);
+    let keep = Rect::new(card.x1 - 292.0, by, card.x1 - 176.0, card.y1 - 14.0);
+    fill_rrect(s, accept, 6.0, if hover(app, accept) { C_LINE_2 } else { C_FIELD_2 });
+    stroke_rrect(s, accept, 6.0, C_LINE_2, 1.0);
+    app.fonts.text_center(s, accept, "Update library", T11, C_TEXT, Wt::Med, true);
+    hit.push((accept, Action::LibReviewAccept));
+    fill_rrect(s, keep, 6.0, C_FIELD);
+    stroke_rrect(s, keep, 6.0, C_LINE, 1.0);
+    app.fonts.text_center(s, keep, "Keep pinned version", T11, C_MUTED, Wt::Reg, true);
+    hit.push((keep, Action::LibReviewClose));
+}
+
 fn paint_assets(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0: f64, lw: f64) {
     let x0 = 12.0;
     let mut y = y0 + 160.5;
     app.fonts.micro_label(s, x0, y, "FONTS", C_DIM, Wt::Med);
     y += 18.0;
-    let names = app.fonts.fonts.family_names();
-    if names.is_empty() {
+    let fams = app.fonts.fonts.families();
+    if fams.is_empty() {
         app.fonts
             .text(s, x0, y, "No faces registered", T10, C_MUTED, Wt::Reg);
         y += 18.0;
     }
-    for nm in names.iter().take(24) {
-        app.fonts.text(s, x0 + 4.0, y, nm, T10, C_TEXT, Wt::Reg);
+    for (fam, faces) in fams.iter().take(24) {
+        let label = if faces.len() > 1 {
+            format!("{fam} ({})", faces.len())
+        } else {
+            fam.clone()
+        };
+        app.fonts.text(s, x0 + 4.0, y, &label, T10, C_TEXT, Wt::Reg);
         y += 16.0;
     }
-    if names.len() > 24 {
+    if fams.len() > 24 {
         app.fonts.text(
             s,
             x0 + 4.0,
             y,
-            &format!("… {} more", names.len() - 24),
+            &format!("… {} more families", fams.len() - 24),
             T10,
             C_MUTED,
             Wt::Reg,
@@ -7307,6 +7540,43 @@ fn paint_assets(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
         C_MUTED,
         Wt::Reg,
     );
+    y += 20.0;
+    // LIBRARIES — pinned document dependencies, each checkable against an
+    // updated .xlib on disk (diff review before anything is repinned).
+    let deps: Vec<(String, u32)> = app
+        .doc_opt()
+        .map(|d| {
+            d.doc
+                .library_deps
+                .iter()
+                .map(|dep| (dep.library_id.clone(), dep.resolved_version))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !deps.is_empty() {
+        app.fonts.micro_label(s, x0, y, "LIBRARIES", C_DIM, Wt::Med);
+        y += 16.0;
+        for (i, (id, ver)) in deps.iter().enumerate() {
+            let row_t = y;
+            let hover_r = Rect::new(x0, row_t, lw - 12.0, row_t + 20.0);
+            if hover(app, hover_r) {
+                fill_rrect(s, hover_r, 4.0, C_ROW_HOVER);
+            }
+            draw_icon(s, "component", x0 + 3.0, row_t + 4.0, 12.0, C_MUTED);
+            let label = app.fonts.truncate(id, T10, Wt::Med, lw - 92.0);
+            app.fonts.text(s, x0 + 20.0, row_t + 3.0, &label, T10, C_TEXT, Wt::Med);
+            let vs = format!("v{ver}");
+            let vw2 = app.fonts.measure(&vs, T10, Wt::Mono);
+            app.fonts.text(s, lw - 74.0 - vw2, row_t + 3.0, &vs, T10, C_MUTED, Wt::Mono);
+            // "check" — picks the updated .xlib and opens the diff review
+            let cb = Rect::new(lw - 66.0, row_t + 2.0, lw - 16.0, row_t + 18.0);
+            fill_rrect(s, cb, 4.0, if hover(app, cb) { C_LINE_2 } else { C_FIELD });
+            app.fonts.text_center(s, cb, "check", T10, C_TEXT, Wt::Reg, true);
+            hit.push((cb, Action::LibCheckUpdate(i)));
+            y += 20.0;
+        }
+        y += 8.0;
+    }
 }
 
 // ————————————————————————————————————————— tokens panel (design audit)
@@ -7315,6 +7585,8 @@ fn paint_tokens(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
     use crate::paint::{fill_rrect, stroke_rrect, Wt};
     let x0 = 12.0;
     let mut y = y0 + 160.5;
+    app.var_value_rects.clear();
+    app.var_name_rects.clear();
     app.fonts
         .micro_label(s, x0, y, "X-NATIVE TOKENS", C_DIM, Wt::Med);
     y += 18.0;
@@ -7428,6 +7700,170 @@ fn paint_tokens(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
         hit.push((br, Action::CreateVariable(kind)));
     }
     y += 66.0;
+
+    // Variable management rows — every entry is live: ✕ deletes (undoable
+    // through the document's variable command log), booleans toggle in place,
+    // numbers step by ±1. Editing names/values as text stays in the document
+    // JSON for now; the undo button below replays `var_history`.
+    let mut rows: Vec<(String, &'static str, String, [u8; 3])> = Vec::new();
+    if let Some(d) = app.doc_opt() {
+        let v = &d.doc.variables;
+        for (_coll, name, kind) in v.catalog().into_iter().take(6) {
+            let (disp, sw) = match kind {
+                "color" => (
+                    v.colors.get(&name).map(|c| x_native::color_to_hex(*c)).unwrap_or_default(),
+                    v.colors
+                        .get(&name)
+                        .map(|c| {
+                            let t = c.to_rgba8();
+                            [t.r, t.g, t.b]
+                        })
+                        .unwrap_or([0x9a, 0x9e, 0xaa]),
+                ),
+                "number" => (
+                    v.numbers.get(&name).map(|n| format!("{n}")).unwrap_or_default(),
+                    [0x9a, 0x9e, 0xaa],
+                ),
+                "string" => (
+                    v.strings.get(&name).cloned().unwrap_or_default(),
+                    [0x9a, 0x9e, 0xaa],
+                ),
+                _ => (
+                    v.bools.get(&name).map(|b| b.to_string()).unwrap_or_default(),
+                    [0x9a, 0x9e, 0xaa],
+                ),
+            };
+            rows.push((name, kind, disp, sw));
+        }
+    }
+    let undo_n = app
+        .doc_opt()
+        .map(|d| d.var_history.undo_len())
+        .unwrap_or(0);
+    if !rows.is_empty() {
+        app.fonts.micro_label(s, x0, y, "VARIABLES", C_DIM, Wt::Med);
+        y += 16.0;
+    }
+    for (name, kind, disp, sw) in rows {
+        let row_t = y;
+        let hover_r = Rect::new(x0, row_t, lw - 12.0, row_t + 20.0);
+        if hover(app, hover_r) {
+            fill_rrect(s, hover_r, 4.0, C_ROW_HOVER);
+        }
+        // kind marker: color swatch or a mono kind letter
+        let kr = Rect::new(x0 + 2.0, row_t + 5.0, x0 + 12.0, row_t + 15.0);
+        if kind == "color" {
+            fill_rrect(s, kr, 3.0, x_native::Color::from_rgb8(sw[0], sw[1], sw[2]));
+            stroke_rrect(s, kr, 3.0, C_LINE_2, 1.0);
+        } else {
+            let glyph = match kind {
+                "number" => "N",
+                "string" => "S",
+                _ => "B",
+            };
+            app.fonts.text_center(s, kr, glyph, T10, C_DIM, Wt::Med, true);
+        }
+        // name slot: click to rename inline (FieldId::VarName; commits as a
+        // rename-as-alias, so old bindings keep resolving).
+        let editing_name = app.field.as_ref().map(|f| f.id) == Some(FieldId::VarName)
+            && app.var_edit_name.as_deref() == Some(name.as_str());
+        let name_shown = if editing_name {
+            app.field
+                .as_ref()
+                .map(|f| f.buffer.clone())
+                .unwrap_or_default()
+        } else {
+            name.clone()
+        };
+        let nw = app.fonts.measure(&name_shown, T10, Wt::Med);
+        app.fonts.text(s, x0 + 18.0, row_t + 3.0, &name_shown, T10, C_TEXT, Wt::Med);
+        let nr = Rect::new(
+            x0 + 16.0,
+            row_t + 1.0,
+            (x0 + 24.0 + nw).min(lw - 84.0),
+            row_t + 19.0,
+        );
+        if editing_name {
+            stroke_rrect(s, nr, 4.0, C_EDIT_BORDER, 1.0);
+        } else if hover(app, nr) {
+            stroke_rrect(s, nr, 4.0, C_LINE_2, 1.0);
+        }
+        app.var_name_rects.push((nr, name.clone()));
+        hit.push((nr, Action::Field(FieldId::VarName)));
+        // value slot: click to edit inline (FieldId::VarValue; the active
+        // buffer renders while the field is open). Bools keep the toggle —
+        // their text form is still editable from the field.
+        let editing_this = app.field.as_ref().map(|f| f.id) == Some(FieldId::VarValue)
+            && app.var_edit_name.as_deref() == Some(name.as_str());
+        let shown = if editing_this {
+            app.field
+                .as_ref()
+                .map(|f| f.buffer.clone())
+                .unwrap_or_default()
+        } else {
+            disp.clone()
+        };
+        let vvw = app.fonts.measure(&shown, T10, Wt::Mono);
+        app.fonts.text(
+            s,
+            lw - 66.0 - vvw,
+            row_t + 3.0,
+            &shown,
+            T10,
+            if editing_this { C_TEXT } else { C_MUTED },
+            Wt::Mono,
+        );
+        if kind != "bool" {
+            let vr = Rect::new(lw - 66.0 - vvw - 4.0, row_t + 1.0, lw - 42.0, row_t + 19.0);
+            if editing_this {
+                stroke_rrect(s, vr, 4.0, C_EDIT_BORDER, 1.0);
+            } else if hover(app, vr) {
+                stroke_rrect(s, vr, 4.0, C_LINE_2, 1.0);
+            }
+            app.var_value_rects.push((vr, name.clone()));
+            hit.push((vr, Action::Field(FieldId::VarValue)));
+        }
+        // kind controls, right-aligned before the delete ✕
+        if kind == "bool" {
+            let tb = Rect::new(lw - 64.0, row_t + 2.0, lw - 38.0, row_t + 18.0);
+            fill_rrect(s, tb, 4.0, if hover(app, tb) { C_LINE_2 } else { C_FIELD });
+            app.fonts.text_center(s, tb, "on/off", T10, C_TEXT, Wt::Reg, true);
+            hit.push((tb, Action::VarToggleBool(name.clone())));
+        } else if kind == "number" {
+            for (j, (glyph, delta)) in [("−", -1.0), ("+", 1.0)].into_iter().enumerate() {
+                let sb = Rect::new(
+                    lw - 64.0 + j as f64 * 14.0,
+                    row_t + 2.0,
+                    lw - 50.0 + j as f64 * 14.0,
+                    row_t + 18.0,
+                );
+                fill_rrect(s, sb, 4.0, if hover(app, sb) { C_LINE_2 } else { C_FIELD });
+                app.fonts.text_center(s, sb, glyph, T10, C_TEXT, Wt::Med, true);
+                hit.push((sb, Action::VarStep(name.clone(), delta)));
+            }
+        }
+        let del = Rect::new(lw - 30.0, row_t + 3.0, lw - 16.0, row_t + 17.0);
+        draw_icon(s, "x", del.x0 + 1.0, del.y0 + 1.0, 12.0, if hover(app, del) { C_TEXT } else { C_DIM });
+        hit.push((del, Action::VarDelete(name)));
+        y += 20.0;
+    }
+    if undo_n > 0 {
+        let ub = Rect::new(x0, y, lw - 12.0, y + 22.0);
+        let hov = hover(app, ub);
+        fill_rrect(s, ub, 5.0, if hov { C_LINE_2 } else { C_FIELD_2 });
+        stroke_rrect(s, ub, 5.0, C_LINE_2, 1.0);
+        app.fonts.text_center(
+            s,
+            ub,
+            &format!("Undo variable edit ({undo_n})"),
+            T10,
+            C_TEXT,
+            Wt::Med,
+            true,
+        );
+        hit.push((ub, Action::VarUndoVars));
+        y += 28.0;
+    }
 
     // UI theme cycle. Palettes live in x-ui (design_system.rs); paint.rs maps
     // every chrome color through the active one, so this repaints the tool.

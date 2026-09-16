@@ -41,7 +41,61 @@ pub fn paint(app: &mut App, s: &mut Scene) {
         caret(s, app, search_rect(app));
     }
 
+    // template gallery modal (topmost; its scrim swallows clicks — the
+    // input pass resolves the LAST painted rect first)
+    if app.template_picker_open {
+        paint_template_picker(app, s, &mut hit);
+    }
+
     app.hit = hit;
+}
+
+/// Template gallery modal: the built-in catalog, each row opens a fresh
+/// document COPY (templates are code, so opens never share state).
+fn paint_template_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    let card_w = 520.0;
+    let row_h = 64.0;
+    let n = App::TEMPLATES.len() as f64;
+    let card_h = 76.0 + n * row_h + 20.0;
+    let cx = (app.win_w - card_w) / 2.0;
+    let cy = ((app.win_h - card_h) / 2.0).max(60.0);
+    hit.push((
+        Rect::new(0.0, 0.0, app.win_w, app.win_h),
+        Action::CloseTemplates,
+    ));
+    fill_rect(s, Rect::new(0.0, 0.0, app.win_w, app.win_h), C_SCRIM);
+    let card = Rect::new(cx, cy, cx + card_w, cy + card_h);
+    fill_rrect(s, card, 12.0, C_PANEL);
+    stroke_rrect(s, card, 12.0, C_LINE_2, 1.0);
+    app.fonts.text(s, cx + 24.0, cy + 22.0, "Start from a template", T14, C_TEXT, Wt::Semi);
+    app.fonts.text(
+        s,
+        cx + 24.0,
+        cy + 46.0,
+        "Opens as a new copy — your files stay independent",
+        T10,
+        C_MUTED,
+        Wt::Reg,
+    );
+    for (i, (name, blurb)) in App::TEMPLATES.iter().enumerate() {
+        let ry = cy + 76.0 + i as f64 * row_h;
+        let row = Rect::new(cx + 12.0, ry, cx + card_w - 12.0, ry + row_h - 8.0);
+        if hover(app, row) {
+            fill_rrect(s, row, 8.0, C_FIELD_2);
+        }
+        // template mark: violet chip + glyph
+        let chip = Rect::new(row.x0 + 12.0, ry + 10.0, row.x0 + 44.0, ry + 42.0);
+        fill_rrect(s, chip, 8.0, C_ACCENT_MUTED);
+        draw_icon(s, "layout-template", chip.x0 + 8.0, chip.y0 + 8.0, 16.0, C_ON_ACCENT);
+        app.fonts.text(s, row.x0 + 58.0, ry + 10.0, name, T13, C_TEXT, Wt::Med);
+        app.fonts.text(s, row.x0 + 58.0, ry + 30.0, blurb, T11, C_DIM, Wt::Reg);
+        let useb = Rect::new(row.x1 - 76.0, ry + 12.0, row.x1 - 12.0, ry + 40.0);
+        fill_rrect(s, useb, 6.0, if hover(app, useb) { C_LINE_2 } else { C_FIELD });
+        stroke_rrect(s, useb, 6.0, C_LINE, 1.0);
+        app.fonts.text_center(s, useb, "Use", T11, C_TEXT, Wt::Med, true);
+        hit.push((useb, Action::NewFromTemplate(i)));
+        hit.push((row, Action::NewFromTemplate(i)));
+    }
 }
 
 fn search_rect(app: &App) -> Rect {
@@ -285,7 +339,9 @@ fn paint_sidebar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         hit.push((r, Action::DashNav(DashView::Home)));
     }
 
-    // upgrade card pinned to bottom — p-3 container, card 235×90 r10
+    // Free/local-first badge (was the "Upgrade to Pro" card — the tool is
+    // free to use, there is nothing to sell). Same geometry as before so the
+    // sidebar keeps its bottom anchor; purely informational, not clickable.
     let card = Rect::new(
         12.0,
         app.win_h - 102.0,
@@ -302,13 +358,12 @@ fn paint_sidebar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     );
     fill_rrect(s, ib, 8.0, Color::from_rgba8(0x1B, 0xCB, 0x55, 51));
     stroke_rrect(s, ib, 8.0, crate::theme::C_LOGO_GREEN.with_alpha(0.3), 1.0);
-    draw_icon(s, "sparkles", ib.x0 + 8.0, ib.y0 + 8.0, 16.0, C_LOGO_GREEN);
-    // title box top 811.3 → card.y0 + 13.3 ; sub top 827.8 → +16.5 after title
+    draw_icon(s, "check", ib.x0 + 8.0, ib.y0 + 8.0, 16.0, C_LOGO_GREEN);
     app.fonts.text(
         s,
         ib.x1 + 8.0,
         card.y0 + 13.3,
-        "Upgrade to Pro",
+        "Free for everyone",
         T11,
         C_TEXT,
         Wt::Med,
@@ -317,23 +372,28 @@ fn paint_sidebar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         s,
         ib.x1 + 8.0,
         card.y0 + 29.8,
-        "Unlimited files",
+        "No account required",
         T10,
         C_DIM,
         Wt::Reg,
     );
-    let ub = Rect::new(
+    // old button slot → plain caption row (not a control, no hit region)
+    let cb = Rect::new(
         card.x0 + 13.0,
         card.y1 - 37.0,
         card.x1 - 13.0,
         card.y1 - 13.0,
     );
-    let hov = hover(app, ub);
-    fill_rrect(s, ub, 6.0, if hov { C_LINE_2 } else { C_FIELD_2 });
-    stroke_rrect(s, ub, 6.0, C_LINE_2, 1.0);
-    app.fonts
-        .text_center(s, ub, "Upgrade", T10, C_TEXT, Wt::Med, true);
-    hit.push((ub, Action::Upgrade));
+    fill_rrect(s, cb, 6.0, C_FIELD_2);
+    app.fonts.text_center(
+        s,
+        cb,
+        "Your files stay on this machine",
+        T10,
+        C_MUTED,
+        Wt::Reg,
+        true,
+    );
 }
 
 // ------------------------------------------------------------- main area
@@ -432,51 +492,39 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             "Infinite canvas for brainstorming",
             false,
         ),
-        ("users", "Invite team", "Not available in this build", false),
+        (
+            "layout-template",
+            "Start from a template",
+            "Mobile, landing, system, board",
+            false,
+        ),
     ];
     let acts = [
         Action::NewFile,
         Action::ImportFile,
         Action::NewBoard,
-        Action::InviteTeam,
+        Action::OpenTemplates,
     ];
     for (i, (icon, title, sub, white)) in cards.into_iter().enumerate() {
         let cx = x0 + (cw + gap) * i as f64;
         let r = Rect::new(cx, dy + 147.5, cx + cw, dy + 235.5);
-        // i == 3 (Invite team) stays a roadmap stub outside demo mode
-        let enabled = app.demo_mode || i < 3;
-        let hov = enabled && hover(app, r);
+        let hov = hover(app, r);
         // .card:hover{transform:translateY(-2px);...} — lift the whole card
         let dy = if hov { dy - 2.0 } else { dy };
         let r = Rect::new(cx, dy + 147.5, cx + cw, dy + 235.5);
         fill_rrect(s, r, R_CARD, if hov { C_PANEL_2 } else { C_PANEL });
-        stroke_rrect(s, r, R_CARD, if hov { C_LINE_2 } else { C_LINE }, 1.0);
-        // icon chip: measured 30.7×18 at (+17, +17) — the reference flex
-        // shrinks the w-8 h-8 chip inside the fixed 88px card
+        // signature: violet hover ring (was the reference's neutral border)
+        stroke_rrect(s, r, R_CARD, if hov { C_SEL } else { C_LINE }, 1.0);
+        // signature: every icon chip wears the brand violet wash (was
+        // white/gray chips copied from the reference mock)
+        let _ = white;
         let ib = Rect::new(cx + 17.0, dy + 164.5, cx + 47.7, dy + 182.5);
-        if white {
-            fill_rrect(s, ib, 8.0, C_TEXT);
-            draw_icon(s, icon, ib.x0 + 7.3, dy + 165.5, 16.0, C_BLACK);
-        } else {
-            fill_rrect(s, ib, 8.0, C_FIELD);
-            stroke_rrect(s, ib, 8.0, C_LINE, 1.0);
-            draw_icon(s, icon, ib.x0 + 7.3, dy + 165.5, 16.0, C_DIM);
-        }
-        // Make unavailable collaboration explicit on a local first launch;
-        // a disabled action should not look like a broken button.
-        let (shown_title, shown_sub) = if i == 3 && !app.demo_mode {
-            ("Team features", "Coming later")
-        } else {
-            (title, sub)
-        };
+        fill_rrect(s, ib, 8.0, C_ACCENT_MUTED);
+        draw_icon(s, icon, ib.x0 + 7.3, dy + 165.5, 16.0, C_ON_ACCENT);
         // title box top 182.5 (+35), sub top 202 (+54.5)
-        app.fonts
-            .text(s, cx + 17.0, dy + 182.5, shown_title, T13, C_TEXT, Wt::Med);
-        app.fonts
-            .text(s, cx + 17.0, dy + 202.0, shown_sub, T11, C_DIM, Wt::Reg);
-        if enabled {
-            hit.push((r, acts[i].clone()));
-        }
+        app.fonts.text(s, cx + 17.0, dy + 182.5, title, T13, C_TEXT, Wt::Med);
+        app.fonts.text(s, cx + 17.0, dy + 202.0, sub, T11, C_DIM, Wt::Reg);
+        hit.push((r, acts[i].clone()));
     }
 
     // visible sections depend on the sidebar view
@@ -587,6 +635,7 @@ fn paint_recents(
         let gap = 16.0;
         let cols = 3.0;
         let cw = ((x1 - x0) - gap * (cols - 1.0)) / cols;
+        let mut thumb_pending: Vec<std::path::PathBuf> = Vec::new();
         for (i, (idx, f)) in files.iter().enumerate() {
             let col = i as f64 % cols;
             let row = (i as f64 / cols).floor();
@@ -597,14 +646,51 @@ fn paint_recents(
             let hov = hover(app, card);
             fill_rrect(s, card, R_CARD, if hov { C_PANEL_2 } else { C_PANEL });
             stroke_rrect(s, card, R_CARD, if hov { C_LINE_2 } else { C_LINE }, 1.0);
-            // thumb 140 tall
+            // thumb 140 tall — live document preview when the file exists on
+            // disk (rendered through the same export pipeline as PNG export),
+            // flat color + watermark otherwise. One render per frame is
+            // pumped at the bottom of paint_recents.
             let thumb = Rect::new(cx + 1.0, cy + 1.0, cx + cw - 1.0, cy + 141.0);
-            fill_rect(s, thumb, f.color);
-            // big X watermark — 28px bold centered
-            let dark_bg = f.color == Color::from_rgb8(0xFF, 0xFF, 0xFF);
-            let wm = if dark_bg { C_BLACK_10 } else { C_WHITE_10 };
-            app.fonts
-                .text_center(s, thumb, "X", T20, wm, Wt::Bold, true);
+            let mut drawn = false;
+            if let Some(p) = f.path.as_ref() {
+                if let Some((iw, ih)) = app.thumb_ready(p) {
+                    if let Some(assets) = app.thumb_brush(p) {
+                        if let Some(b) = assets.get("thumb") {
+                            use vello::kurbo::{Affine, RoundedRect};
+                            let sc = (thumb.width() / f64::from(iw))
+                                .max(thumb.height() / f64::from(ih));
+                            let dw = f64::from(iw) * sc;
+                            let dh = f64::from(ih) * sc;
+                            s.push_clip_layer(
+                                vello::peniko::Fill::NonZero,
+                                Affine::IDENTITY,
+                                &RoundedRect::new(thumb.x0, thumb.y0, thumb.x1, thumb.y1, 8.0)
+                                    .into_path(0.1),
+                            );
+                            s.draw_image(
+                                b,
+                                Affine::translate((
+                                    thumb.x0 + (thumb.width() - dw) / 2.0,
+                                    thumb.y0 + (thumb.height() - dh) / 2.0,
+                                )) * Affine::scale(sc),
+                            );
+                            s.pop_layer();
+                            drawn = true;
+                        }
+                    }
+                }
+            }
+            if !drawn {
+                fill_rect(s, thumb, f.color);
+                // big X watermark — 28px bold centered
+                let dark_bg = f.color == Color::from_rgb8(0xFF, 0xFF, 0xFF);
+                let wm = if dark_bg { C_BLACK_10 } else { C_WHITE_10 };
+                app.fonts
+                    .text_center(s, thumb, "X", T20, wm, Wt::Bold, true);
+                if let Some(p) = &f.path {
+                    thumb_pending.push(p.clone());
+                }
+            }
             let st = Rect::new(
                 thumb.x1 - 32.0,
                 thumb.y0 + 8.0,
@@ -665,6 +751,8 @@ fn paint_recents(
                 mx += 20.0;
             }
         }
+        // warm the thumbnail cache progressively (one render per frame)
+        app.thumb_pump(thumb_pending);
     } else {
         // list layout — same rows as the drafts panel
         let list_h = (files.len() as f64 * DRAFT_ROW_H).max(1.0);
