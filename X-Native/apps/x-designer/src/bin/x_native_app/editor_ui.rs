@@ -17,8 +17,8 @@ use crate::context_menu::{action_for, ContextMenuItem, SEPARATOR_HEIGHT};
 use crate::icons::{draw_flow_glyph, draw_icon};
 use crate::paint::*;
 use crate::state::{
-    kind_icon, parse_hex, Action, App, Drag, FieldId, LeftTab, NavTab, RightTab, Tool,
-    TreeDrop, FRAME_PRESETS,
+    kind_icon, parse_hex, Action, App, Drag, FieldId, LeftTab, NavTab, RightTab, Tool, TreeDrop,
+    FRAME_PRESETS,
 };
 use crate::theme::*;
 
@@ -2167,10 +2167,7 @@ fn collect_tree_rows(app: &App, scroll: f64, height: f64) -> (Vec<RowRef>, f64) 
                 locked: child.locked,
                 hidden: !child.visible,
                 is_section: has && matches!(child.kind, NodeKind::Frame { .. } | NodeKind::Section),
-                can_contain: matches!(
-                    child.kind,
-                    NodeKind::Frame { .. } | NodeKind::Section
-                ),
+                can_contain: matches!(child.kind, NodeKind::Frame { .. } | NodeKind::Section),
             });
         }
         index += 1;
