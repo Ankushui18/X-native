@@ -4300,12 +4300,8 @@ impl App {
         // labels and outlines text), so the preview cannot drift from the
         // artifact the user gets. Embedded image assets are not decoded in
         // this path — v1 previews are text+vector.
-        let Ok(plan) = x_native::prepare_export(
-            page,
-            &doc.variables,
-            None,
-            &self.fonts.fonts,
-        ) else {
+        let Ok(plan) = x_native::prepare_export(page, &doc.variables, None, &self.fonts.fonts)
+        else {
             fail(self);
             return;
         };

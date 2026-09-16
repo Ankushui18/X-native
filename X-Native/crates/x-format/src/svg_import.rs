@@ -1636,8 +1636,7 @@ mod tests {
         assert_eq!(node.fill, Paint::Solid(Color::from_rgb8(0x12, 0x34, 0x56)));
         assert_eq!(node.stroke.width, 4.0);
         assert_eq!(
-            x_core::paint_color(&node.stroke.paint, &Variables::default())
-                .to_rgba8(),
+            x_core::paint_color(&node.stroke.paint, &Variables::default()).to_rgba8(),
             Color::from_rgb8(0xfe, 0xdc, 0xba).to_rgba8()
         );
     }
