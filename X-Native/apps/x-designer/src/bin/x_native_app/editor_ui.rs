@@ -1789,6 +1789,8 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         // with a smaller indent is collapsed
         let mut stack: Vec<(usize, bool)> = Vec::new();
         let mut ry = tree_top - scroll;
+        let mut max_indent = 0usize;
+        let mut last_bottom = tree_top;
         for (mi, mock) in mocks.iter().enumerate() {
             while stack
                 .last()
@@ -1804,6 +1806,8 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             if visible {
                 let r = Rect::new(sx + 8.0, ry, lw - 8.0, ry + TREE_ROW_H);
                 if r.y1 >= tree_top && r.y0 <= tree_bottom {
+                    max_indent = max_indent.max(mock.indent);
+                    last_bottom = r.y1;
                     if mock.selected {
                         fill_rrect(s, r, R_TREE, C_SEL_SOFT);
                     }
@@ -1838,20 +1842,33 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                 ry += TREE_ROW_H + 1.0;
             }
         }
+        tree_indent_guides(s, sx + 16.0, tree_top, last_bottom, max_indent);
         app.scaled = false;
     } else {
         let (rows, total_h) = collect_tree_rows(app, scroll, tree_bottom - tree_top);
+        let mut max_indent = 0usize;
+        let mut last_bottom = tree_top;
         for row in &rows {
             let ry = tree_top + row.index as f64 * (TREE_ROW_H + 1.0) - scroll;
             let r = Rect::new(sx + 8.0, ry, lw - 8.0, ry + TREE_ROW_H);
             if r.y1 >= tree_top && r.y0 <= tree_bottom {
+                max_indent = max_indent.max(row.indent);
+                last_bottom = r.y1;
                 let selected = row.selected;
-                if hover(app, r) || selected {
+                // P5: a section (frame with children) keeps a subtle header
+                // band so the document's hierarchy reads at a glance; hover
+                // steps one surface level up instead of appearing from none.
+                if row.is_section {
+                    fill_rrect(s, r, R_TREE, C_FIELD);
+                }
+                if selected {
+                    fill_rrect(s, r, R_TREE, C_SEL_SOFT);
+                } else if hover(app, r) {
                     fill_rrect(
                         s,
                         r,
                         R_TREE,
-                        if selected { C_SEL_SOFT } else { C_ROW_HOVER },
+                        if row.is_section { C_FIELD_2 } else { C_ROW_HOVER },
                     );
                 }
                 let ix = sx + 8.0 + 8.0 + row.indent as f64 * TREE_INDENT;
@@ -1913,7 +1930,20 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                 }
             }
         }
+        tree_indent_guides(s, sx + 16.0, tree_top, last_bottom, max_indent);
         app.scaled = total_h > tree_bottom - tree_top;
+    }
+}
+
+/// Faint vertical guides at every indent depth below the root — the
+/// hierarchy affordance that makes nesting scannable (drawn after the rows
+/// so the guides sit over the section bands, like the reference tool).
+fn tree_indent_guides(s: &mut Scene, base_x: f64, top: f64, bottom: f64, max_indent: usize) {
+    if bottom <= top {
+        return;
+    }
+    for k in 1..=max_indent.min(12) {
+        vline(s, base_x + k as f64 * TREE_INDENT + 7.0, top, bottom, C_LINE);
     }
 }
 
@@ -1928,6 +1958,9 @@ struct RowRef {
     selected: bool,
     locked: bool,
     hidden: bool,
+    /// A frame/section container — the document's "sections" get a
+    /// persistent header band in the paint layer.
+    is_section: bool,
 }
 
 /// Allocate only visible row metadata. In particular, don't clone vector paths
@@ -1968,6 +2001,7 @@ fn collect_tree_rows(app: &App, scroll: f64, height: f64) -> (Vec<RowRef>, f64) 
                 selected: selected.contains(child.id.as_str()),
                 locked: child.locked,
                 hidden: !child.visible,
+                is_section: has && matches!(child.kind, NodeKind::Frame { .. } | NodeKind::Section),
             });
         }
         index += 1;
@@ -6787,5 +6821,46 @@ mod viewport_row_tests {
         let row = rows.iter().find(|r| r.id == "r9000").unwrap();
         assert!(row.locked && row.selected);
         assert!(rows.iter().find(|r| r.id == "r9001").unwrap().selected);
+    }
+
+    #[test]
+    fn tree_rows_flag_frames_as_sections_but_not_groups() {
+        // P5: frames (the document's sections) carry the section affordance;
+        // plain group containers do not.
+        let mut app = App::new();
+        app.open_blank();
+        let root_id = app.doc().editor_ref().root.id.clone();
+        app.doc()
+            .editor()
+            .insert_node(&root_id, Node::frame("fr1", 300.0, 200.0));
+        app.doc()
+            .editor()
+            .insert_node(&root_id, Node::group("gr1", 300.0, 200.0));
+        app.doc()
+            .editor()
+            .insert_node("fr1", Node::rect("r1", 0.0, 0.0, 10.0, 10.0, x_native::Color::WHITE));
+        app.doc()
+            .editor()
+            .insert_node("gr1", Node::rect("r2", 0.0, 0.0, 10.0, 10.0, x_native::Color::WHITE));
+        let (rows, _) = collect_tree_rows(&app, 0.0, 400.0);
+        assert_eq!(rows.len(), 2, "collapsed containers hide their children");
+        let fr = rows.iter().find(|r| r.id == "fr1").unwrap();
+        assert!(
+            fr.is_section && fr.has_children && fr.indent == 0,
+            "a frame with children is a top-level section"
+        );
+        let gr = rows.iter().find(|r| r.id == "gr1").unwrap();
+        assert!(
+            gr.has_children && !gr.is_section,
+            "a group is a container but not a section"
+        );
+        app.doc().expanded.insert("fr1".into());
+        let (rows, _) = collect_tree_rows(&app, 0.0, 400.0);
+        assert_eq!(rows.len(), 3);
+        let child = rows.iter().find(|r| r.id == "r1").unwrap();
+        assert!(
+            !child.is_section && child.indent == 1,
+            "a leaf child sits one level in"
+        );
     }
 }
