@@ -2919,10 +2919,11 @@ impl App {
         let q = self.find_replace.query.trim().to_string();
         let case = self.find_replace.case_sensitive;
         if !q.is_empty() {
-            let doc = self.doc();
             // the "in selection" toggle scopes the search to the current
             // selection; off = the whole page
-            let sel = if self.find_replace.in_selection {
+            let in_scope = self.find_replace.in_selection;
+            let doc = self.doc();
+            let sel = if in_scope {
                 doc.editor_ref().selection.clone()
             } else {
                 Vec::new()
