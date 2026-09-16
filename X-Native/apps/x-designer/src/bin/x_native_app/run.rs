@@ -3349,6 +3349,24 @@ impl Host {
         for (r, a) in self.app.hit.iter().rev() {
             if r.contains(p) {
                 let a = a.clone();
+                if let Action::TreeRow(id) = &a {
+                    if !id.starts_with("mock:") {
+                        // P12: select on press; a >4px move starts the
+                        // reorder drag, a plain click just selects
+                        let doc = self.app.doc();
+                        doc.mock_layers
+                            .iter_mut()
+                            .for_each(|m| m.selected = false);
+                        doc.editor().selection = vec![id.clone()];
+                        self.app.drag = Some(Drag::TreeRow {
+                            id: id.clone(),
+                            start: p,
+                            active: false,
+                            over: None,
+                        });
+                        return;
+                    }
+                }
                 if matches!(a, Action::Field(FieldId::InstanceProp)) {
                     // resolve WHICH text prop was clicked from the rect the
                     // paint pass recorded
@@ -3824,6 +3842,20 @@ impl Host {
                     *cur = world;
                 }
             }
+            Some(Drag::TreeRow { id, start, active, .. }) => {
+                if !active {
+                    if (p.x - start.x).abs().max((p.y - start.y).abs()) < 4.0 {
+                        return;
+                    }
+                    if let Some(Drag::TreeRow { active, .. }) = self.app.drag.as_mut() {
+                        *active = true;
+                    }
+                }
+                let over = crate::editor_ui::tree_drop_target(&self.app, &id, p);
+                if let Some(Drag::TreeRow { over: o, .. }) = self.app.drag.as_mut() {
+                    *o = over;
+                }
+            }
             // ---- vector edit mode drags: live in the tree, logged once ----
             Some(Drag::VectorPoint { last }) => {
                 let world = self.app.screen_to_world(p);
@@ -4284,6 +4316,15 @@ impl Host {
             }
             Some(Drag::Guide { .. }) => {
                 self.app.guide_release();
+            }
+            // P12: the tree reorder commits on release — one undo step
+            Some(Drag::TreeRow { active, over, .. }) => {
+                if active {
+                    if let Some(drop) = over {
+                        self.app.apply_tree_drop(&drop);
+                    }
+                }
+                self.app.drag = None;
             }
             // pen session continues across clicks (Enter/Esc/close ends it)
             Some(Drag::Pen { .. }) => {}
@@ -5369,6 +5410,10 @@ impl Host {
                     self.app.dropdown_lh = false;
                     self.app.dropdown_text_style = false;
                 } else if self.app.screen == Screen::Editor {
+                    // P12: an in-flight tree drag cancels first
+                    if matches!(self.app.drag, Some(Drag::TreeRow { .. })) {
+                        self.app.drag = None;
+                    }
                     self.app.doc().editor().selection.clear();
                 } else {
                     self.app.dash_search_focus = false;

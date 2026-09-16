@@ -17,7 +17,8 @@ use crate::context_menu::{action_for, ContextMenuItem, SEPARATOR_HEIGHT};
 use crate::icons::{draw_flow_glyph, draw_icon};
 use crate::paint::*;
 use crate::state::{
-    kind_icon, parse_hex, Action, App, FieldId, LeftTab, NavTab, RightTab, Tool, FRAME_PRESETS,
+    kind_icon, parse_hex, Action, App, Drag, FieldId, LeftTab, NavTab, RightTab, Tool,
+    TreeDrop, FRAME_PRESETS,
 };
 use crate::theme::*;
 
@@ -1975,6 +1976,36 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                         },
                     );
                 }
+                // P12: live drag indicator — the dragged row lifts and
+                // the accent line/ring shows where it will land.
+                if let Some(Drag::TreeRow {
+                    id: drag_row,
+                    active: true,
+                    over,
+                    ..
+                }) = &app.drag
+                {
+                    if drag_row == &row.id {
+                        stroke_rrect(s, r, R_TREE, C_ACCENT, 1.5);
+                    }
+                    if let Some(drop) = over {
+                        if drop.row == row.id {
+                            match drop.zone {
+                                0 => fill_rect(
+                                    s,
+                                    Rect::new(r.x0, r.y0 - 1.5, r.x1, r.y0 + 0.5),
+                                    C_ACCENT,
+                                ),
+                                2 => fill_rect(
+                                    s,
+                                    Rect::new(r.x0, r.y1 - 0.5, r.x1, r.y1 + 1.5),
+                                    C_ACCENT,
+                                ),
+                                _ => stroke_rrect(s, r, R_TREE, C_ACCENT, 1.5),
+                            }
+                        }
+                    }
+                }
                 let ix = sx + 8.0 + 8.0 + row.indent as f64 * TREE_INDENT;
                 if row.has_children {
                     let chev = if row.expanded {
@@ -2073,6 +2104,8 @@ struct RowRef {
     /// A frame/section container — the document's "sections" get a
     /// persistent header band in the paint layer.
     is_section: bool,
+    /// P12: accepts child drops (frames & sections, empty or not).
+    can_contain: bool,
 }
 
 /// Allocate only visible row metadata. In particular, don't clone vector paths
@@ -2134,6 +2167,10 @@ fn collect_tree_rows(app: &App, scroll: f64, height: f64) -> (Vec<RowRef>, f64) 
                 locked: child.locked,
                 hidden: !child.visible,
                 is_section: has && matches!(child.kind, NodeKind::Frame { .. } | NodeKind::Section),
+                can_contain: matches!(
+                    child.kind,
+                    NodeKind::Frame { .. } | NodeKind::Section
+                ),
             });
         }
         index += 1;
@@ -2144,6 +2181,94 @@ fn collect_tree_rows(app: &App, scroll: f64, height: f64) -> (Vec<RowRef>, f64) 
         }
     }
     (out, index as f64 * pitch)
+}
+
+/// P12: the tree band's geometry (top, bottom, scroll) — the single
+/// source shared by paint and drag hit-testing, so drop targets can
+/// never drift from the painted rows.
+pub(crate) fn tree_geometry(app: &App) -> Option<(f64, f64, f64)> {
+    if app.ui_minimized {
+        return None;
+    }
+    let doc = app.doc_opt()?;
+    let search_open = app.field.as_ref().map(|f| f.id) == Some(FieldId::TreeSearch)
+        || !doc.tree_search.is_empty();
+    let tree_top = app.pages_band_bottom() + 34.5 + if search_open { 30.0 } else { 0.0 };
+    Some((tree_top, app.win_h - 16.0, doc.scroll_left))
+}
+
+/// P12: the drop target for a layers-tree row drag: the row under
+/// `p`, its zone (0 before, 1 child, 2 after) and the tree coordinates
+/// to commit. Frames/sections accept child drops in the middle band;
+/// leaf rows split before/after at the midpoint. The dragged row and
+/// its descendants are never targets; the mock demo tree has no
+/// reorderable content.
+pub fn tree_drop_target(app: &App, drag_id: &str, p: Point) -> Option<TreeDrop> {
+    let doc = app.doc_opt()?;
+    if !doc.mock_layers.is_empty() {
+        return None;
+    }
+    let (tree_top, tree_bottom, scroll) = tree_geometry(app)?;
+    if p.y < tree_top || p.y >= tree_bottom {
+        return None;
+    }
+    let (rows, _h) = collect_tree_rows(app, scroll, tree_bottom - tree_top);
+    let pitch = TREE_ROW_H + 1.0;
+    let subtree = subtree_ids(app, drag_id);
+    for row in &rows {
+        if row.id == drag_id || subtree.contains(row.id.as_str()) {
+            continue;
+        }
+        let ry = tree_top + row.index as f64 * pitch - scroll;
+        if p.y < ry || p.y > ry + TREE_ROW_H {
+            continue;
+        }
+        let rel = (p.y - ry) / TREE_ROW_H;
+        let zone = if row.can_contain && (0.3..0.7).contains(&rel) {
+            1
+        } else if rel < if row.can_contain { 0.3 } else { 0.5 } {
+            0
+        } else {
+            2
+        };
+        let root = &doc.editor_ref().root;
+        let (parent, index) = crate::state::tree_drop_coords(root, &row.id, zone)?;
+        return Some(TreeDrop {
+            row: row.id.clone(),
+            zone,
+            parent,
+            index,
+        });
+    }
+    None
+}
+
+/// P12: every id inside the subtree rooted at `id` (the root itself
+/// excluded).
+fn subtree_ids(app: &App, id: &str) -> HashSet<String> {
+    let mut out: HashSet<String> = HashSet::new();
+    let Some(doc) = app.doc_opt() else {
+        return out;
+    };
+    let root = &doc.editor_ref().root;
+    if let Some(n) = find_node_in(root, id) {
+        walk_subtree(n, &mut out);
+    }
+    out
+}
+
+fn find_node_in(n: &Node, id: &str) -> Option<&Node> {
+    if n.id == id {
+        return Some(n);
+    }
+    n.children.iter().find_map(|c| find_node_in(c, id))
+}
+
+fn walk_subtree(n: &Node, out: &mut HashSet<String>) {
+    for c in &n.children {
+        out.insert(c.id.clone());
+        walk_subtree(c, out);
+    }
 }
 
 /// F8: record `node` and its path in `found` when it or any descendant
@@ -7039,6 +7164,55 @@ mod viewport_row_tests {
         let row = rows.iter().find(|r| r.id == "r9000").unwrap();
         assert!(row.locked && row.selected);
         assert!(rows.iter().find(|r| r.id == "r9001").unwrap().selected);
+    }
+
+    #[test]
+    fn tree_drop_target_zones_and_exclusions() {
+        let mut app = App::new();
+        app.open_blank();
+        let root_id = app.doc().editor_ref().root.id.clone();
+        app.doc().editor().insert_node(&root_id, Node::frame("fr1", 300.0, 200.0));
+        app.doc().editor().insert_node(&root_id, Node::frame("fr2", 300.0, 200.0));
+        app.doc().editor().insert_node(
+            "fr1",
+            Node::rect("card", 0.0, 0.0, 10.0, 10.0, x_native::Color::WHITE),
+        );
+        app.doc().expanded.insert("fr1".into());
+        let (top, _bottom, _scroll) = tree_geometry(&app).unwrap();
+        let pitch = TREE_ROW_H + 1.0;
+        // rows: fr1 (0), card (1), fr2 (2)
+        let row_top = |idx: usize| top + idx as f64 * pitch;
+        let x = 120.0;
+        let p_before = Point::new(x, row_top(2) + 2.0);
+        let p_inside = Point::new(x, row_top(2) + TREE_ROW_H / 2.0);
+        let p_after = Point::new(x, row_top(2) + TREE_ROW_H - 1.0);
+        let p_leaf = Point::new(x, row_top(1) + TREE_ROW_H / 2.0);
+        let p_own = Point::new(x, row_top(1) + 1.0);
+        let p_out = Point::new(x, top - 10.0);
+        let before = tree_drop_target(&app, "card", p_before);
+        assert_eq!(
+            before.map(|d| (d.zone, d.parent, d.index)),
+            Some((0, root_id.clone(), 1))
+        );
+        let inside = tree_drop_target(&app, "card", p_inside);
+        assert_eq!(
+            inside.map(|d| (d.zone, d.parent, d.index)),
+            Some((1, "fr2".to_string(), 0))
+        );
+        let after = tree_drop_target(&app, "card", p_after);
+        assert_eq!(
+            after.map(|d| (d.zone, d.parent, d.index)),
+            Some((2, root_id.clone(), 2))
+        );
+        // a leaf row never takes a child drop; midpoint falls after
+        let leaf_mid = tree_drop_target(&app, "fr2", p_leaf);
+        assert_eq!(leaf_mid.map(|d| d.zone), Some(2));
+        // the dragged row itself is never a target
+        assert_eq!(tree_drop_target(&app, "card", p_own), None);
+        // descendants are never targets (dragging fr1 over its own child)
+        assert_eq!(tree_drop_target(&app, "fr1", p_own), None);
+        // outside the band
+        assert_eq!(tree_drop_target(&app, "card", p_out), None);
     }
 
     #[test]

@@ -2305,3 +2305,123 @@ fn t17_tab_close_button_closes_the_tab_not_selects_it() {
     assert_eq!(h.app.docs.len(), 1, "pressing ✕ closed the tab");
     assert_eq!(h.app.docs[0].name, "Second");
 }
+
+#[test]
+fn t18_layers_drag_reorder_moves_the_node_with_one_undo() {
+    let mut h = host();
+    let root_id = h.app.doc_ref().editor_ref().root.id.clone();
+    h.app
+        .doc()
+        .editor()
+        .insert_node(&root_id, Node::frame("fr2", 300.0, 200.0));
+    h.app.doc().editor().insert_node(
+        "frame-1",
+        Node::rect("card", 0.0, 0.0, 10.0, 10.0, x_native::Color::WHITE),
+    );
+    h.app.doc().expanded.insert("frame-1".into());
+    h.app.win_w = 1440.0;
+    h.app.win_h = 900.0;
+    h.app.mouse = Point::new(100.0, 300.0);
+
+    // paint fills the hit zones the press handler scans
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let card_r = h
+        .app
+        .hit
+        .iter()
+        .find(|(_, a)| matches!(a, Action::TreeRow(i) if i == "card"))
+        .map(|(r, _)| *r)
+        .expect("card row hit zone");
+    let fr2_r = h
+        .app
+        .hit
+        .iter()
+        .find(|(_, a)| matches!(a, Action::TreeRow(i) if i == "fr2"))
+        .map(|(r, _)| *r)
+        .expect("fr2 row hit zone");
+
+    // press on the card row, drag to fr2's top edge, release
+    h.on_press(Point::new(card_r.x0 + 30.0, card_r.y0 + 1.0));
+    h.on_move(Point::new(fr2_r.x0 + 30.0, fr2_r.y0 + 1.0));
+    h.on_release();
+
+    let ids: Vec<&str> = h
+        .app
+        .doc_ref()
+        .editor_ref()
+        .root
+        .children
+        .iter()
+        .map(|c| c.id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["frame-1", "card", "fr2"], "drop before fr2");
+    assert_eq!(
+        h.app.doc_ref().editor_ref().selection,
+        vec!["card".to_string()]
+    );
+    // one undo step restores the original tree
+    h.app.doc().editor().undo();
+    let ids: Vec<&str> = h
+        .app
+        .doc_ref()
+        .editor_ref()
+        .root
+        .children
+        .iter()
+        .map(|c| c.id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["frame-1", "fr2"]);
+    let f1 = h
+        .app
+        .doc_ref()
+        .editor_ref()
+        .root
+        .children
+        .iter()
+        .find(|c| c.id == "frame-1")
+        .unwrap();
+    assert_eq!(f1.children.len(), 1);
+    assert_eq!(f1.children[0].id, "card");
+}
+
+#[test]
+fn t19_layers_drag_click_without_move_only_selects() {
+    let mut h = host();
+    let root_id = h.app.doc_ref().editor_ref().root.id.clone();
+    h.app
+        .doc()
+        .editor()
+        .insert_node(&root_id, Node::frame("fr2", 300.0, 200.0));
+    h.app.win_w = 1440.0;
+    h.app.win_h = 900.0;
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let fr2_r = h
+        .app
+        .hit
+        .iter()
+        .find(|(_, a)| matches!(a, Action::TreeRow(i) if i == "fr2"))
+        .map(|(r, _)| *r)
+        .expect("fr2 row hit zone");
+    let p = Point::new(fr2_r.x0 + 30.0, fr2_r.y0 + 4.0);
+    h.on_press(p);
+    // a sub-threshold jitter must not start a reorder
+    h.on_move(Point::new(p.x + 2.0, p.y + 1.0));
+    h.on_release();
+    let ids: Vec<&str> = h
+        .app
+        .doc_ref()
+        .editor_ref()
+        .root
+        .children
+        .iter()
+        .map(|c| c.id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["frame-1", "fr2"], "a click is not a drag");
+    assert_eq!(
+        h.app.doc_ref().editor_ref().selection,
+        vec!["fr2".to_string()],
+        "the row click still selects"
+    );
+}

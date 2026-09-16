@@ -918,6 +918,17 @@ pub struct FieldEdit {
 
 // ------------------------------------------------------------ drag / input
 
+/// P12: a resolved layers-tree drop: the hovered row (`row` + `zone`
+/// for the indicator) and the tree coordinates to commit (`parent` +
+/// logical `index`).
+#[derive(Clone, Debug)]
+pub struct TreeDrop {
+    pub row: String,
+    pub zone: u8,
+    pub parent: String,
+    pub index: usize,
+}
+
 #[derive(Clone, Debug)]
 pub enum Drag {
     LeftPanel {
@@ -946,6 +957,15 @@ pub enum Drag {
     Marquee {
         start: Point,
         cur: Point,
+    },
+    /// P12: dragging a layers-tree row. `active` once the pointer moved
+    /// past the threshold; `over` = live drop target (row id, zone:
+    /// 0 before, 1 child, 2 after).
+    TreeRow {
+        id: String,
+        start: Point,
+        active: bool,
+        over: Option<TreeDrop>,
     },
     /// Drag-selecting text inside the open inline editor.
     TextEditSel,
@@ -2864,6 +2884,34 @@ impl App {
         doc.expanded.retain(|id| keep.contains(id));
     }
 
+    /// P12: apply a layers-tree drop (from the active `Drag::TreeRow`):
+    /// reorder the dragged row to the resolved target and keep it
+    /// selected. No-op when there is no live drag or the move is
+    /// invalid/a no-op.
+    pub fn apply_tree_drop(&mut self, drop: &TreeDrop) {
+        let Some(Drag::TreeRow { id, .. }) = self.drag.clone() else {
+            return;
+        };
+        let root = {
+            let doc = self.doc();
+            doc.editor_ref().root.clone()
+        };
+        let Some((from_parent, from_index)) = node_slot(&root, &id) else {
+            return;
+        };
+        let moved = {
+            let doc = self.doc();
+            doc.editor()
+                .reorder_node(&id, &from_parent, from_index, &drop.parent, drop.index)
+        };
+        if moved {
+            let doc = self.doc();
+            doc.editor().selection = vec![id];
+            self.mark_dirty();
+            self.status = "Layer reordered - one undo step".into();
+        }
+    }
+
     pub fn center_view(&mut self) {
         let camera = crate::loading::ViewConfig::from_app(self).camera(self.doc_opt());
         self.zoom = camera.zoom;
@@ -3249,6 +3297,59 @@ pub fn try_import_from_figma_clipboard() -> Option<x_native::Document> {
 
 /// DFS from `node` to `target`, recording the root→target path in
 /// `keep` when found (audit F6: collapse-all keeps selection ancestors).
+/// P12: `(parent id, child index)` of `id` within `root` — a top-level
+/// child reports the root's own id as parent. `None` for the root or an
+/// unknown id.
+pub fn node_slot(root: &Node, id: &str) -> Option<(String, usize)> {
+    fn walk(n: &Node, id: &str) -> Option<(String, usize)> {
+        for (i, c) in n.children.iter().enumerate() {
+            if c.id == id {
+                return Some((n.id.clone(), i));
+            }
+            if let Some(found) = walk(c, id) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    if root.id == id {
+        return None;
+    }
+    walk(root, id)
+}
+
+/// P12: resolve a layers-tree drop `(target row, zone)` into
+/// `(destination parent id, insertion index)`: before/after = the
+/// target's own parent slot; child = append at the end of the target's
+/// children.
+pub fn tree_drop_coords(root: &Node, target: &str, zone: u8) -> Option<(String, usize)> {
+    let (parent, node) = {
+        fn walk(n: &Node, id: &str) -> Option<(Option<&Node>, &Node)> {
+            for c in &n.children {
+                if c.id == id {
+                    return Some((Some(n), c));
+                }
+                if let Some(found) = walk(c, id) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        walk(root, target)?
+    };
+    let pid = parent
+        .map(|p| p.id.clone())
+        .unwrap_or_else(|| root.id.clone());
+    let slot = parent
+        .and_then(|p| p.children.iter().position(|c| c.id == node.id))?;
+    match zone {
+        0 => Some((pid, slot)),
+        2 => Some((pid, slot + 1)),
+        1 => Some((node.id.clone(), node.children.len())),
+        _ => None,
+    }
+}
+
 fn collect_ancestor_path(
     node: &Node,
     target: &str,
@@ -3280,7 +3381,7 @@ impl App {
 
 #[cfg(test)]
 mod tool_shortcut_tests {
-    use super::{App, Color, Node, Tool};
+    use super::{node_slot, tree_drop_coords, App, Color, Node, Tool};
 
     #[test]
     fn design_mode_shortcuts_resolve() {
@@ -3334,6 +3435,25 @@ mod tool_shortcut_tests {
             !app.doc().expanded.contains("f2"),
             "everything else collapses"
         );
+    }
+
+    #[test]
+    fn tree_drop_slots_resolve_parents_and_zones() {
+        let mut fr = Node::frame("fr", 100.0, 100.0);
+        fr.children
+            .push(Node::rect("in", 0.0, 0.0, 10.0, 10.0, Color::WHITE));
+        let root = Node::frame("page", 100.0, 100.0)
+            .child(fr)
+            .child(Node::frame("fr2", 100.0, 100.0));
+        assert_eq!(node_slot(&root, "fr"), Some(("page".into(), 0)));
+        assert_eq!(node_slot(&root, "in"), Some(("fr".into(), 0)));
+        assert_eq!(node_slot(&root, "page"), None);
+        assert_eq!(node_slot(&root, "ghost"), None);
+        // before fr2 = its slot; after = slot + 1; child = append to fr2
+        assert_eq!(tree_drop_coords(&root, "fr2", 0), Some(("page".into(), 1)));
+        assert_eq!(tree_drop_coords(&root, "fr2", 2), Some(("page".into(), 2)));
+        assert_eq!(tree_drop_coords(&root, "fr2", 1), Some(("fr2".into(), 0)));
+        assert_eq!(tree_drop_coords(&root, "ghost", 0), None);
     }
 
     #[test]
