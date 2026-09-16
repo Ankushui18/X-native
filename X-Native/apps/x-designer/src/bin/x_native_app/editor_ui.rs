@@ -6846,12 +6846,14 @@ mod viewport_row_tests {
         app.doc()
             .editor()
             .insert_node(&root_id, Node::group("gr1", 300.0, 200.0));
-        app.doc()
-            .editor()
-            .insert_node("fr1", Node::rect("r1", 0.0, 0.0, 10.0, 10.0, x_native::Color::WHITE));
-        app.doc()
-            .editor()
-            .insert_node("gr1", Node::rect("r2", 0.0, 0.0, 10.0, 10.0, x_native::Color::WHITE));
+        app.doc().editor().insert_node(
+            "fr1",
+            Node::rect("r1", 0.0, 0.0, 10.0, 10.0, x_native::Color::WHITE),
+        );
+        app.doc().editor().insert_node(
+            "gr1",
+            Node::rect("r2", 0.0, 0.0, 10.0, 10.0, x_native::Color::WHITE),
+        );
         let (rows, _) = collect_tree_rows(&app, 0.0, 400.0);
         assert_eq!(rows.len(), 2, "collapsed containers hide their children");
         let fr = rows.iter().find(|r| r.id == "fr1").unwrap();
