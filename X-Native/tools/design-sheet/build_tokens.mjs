@@ -204,7 +204,18 @@ const textRoles = [...textBlock.matchAll(/\("([a-z_]+)"/g)].map((m) => m[1]);
 const payload = { palettes, roleNames, textRoles, scales, typeAliases, appVocab, usage, motionMentions, orphanRoles, colorAliases, colorKind, colorResolved, provenance };
 writeFileSync(OUT('tokens.json'), JSON.stringify(payload, null, 2));
 writeFileSync(OUT('tokens.js'), `window.TOKENS = ${JSON.stringify(payload)};\n`);
-const css = [];
+// The sheet's two pages both link this file, so the app's typeface is declared
+// here: `index.html` used to carry its own copy and `screens.html` had none,
+// which silently drew the whole gallery in the machine's fallback sans.
+const css = [
+  '/* The app typeface, so any page linking this file renders in Inter. */',
+  ...[400, 500, 600, 700].map(
+    (w) =>
+      `@font-face { font-family: Inter; font-weight: ${w}; font-display: swap; ` +
+      `src: url(fonts/inter-latin-${w}-normal.woff2) format('woff2'); }`,
+  ),
+  '',
+];
 for (const [id, roles] of Object.entries(palettes)) {
   css.push(`[data-theme="${id}"] {`);
   for (const [k, v] of Object.entries(roles)) css.push(`  --${k.replace(/_/g, '-')}: ${v};`);

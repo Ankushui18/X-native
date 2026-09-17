@@ -24,8 +24,11 @@ const dom = new JSDOM(readFileSync(new URL('screens.html', dir), 'utf8'), {
 const { window } = dom;
 await new Promise((r) => setTimeout(r, 900));
 const d = window.document;
-const check = (name, ok, detail = '') =>
+const results = [];
+const check = (name, ok, detail = '') => {
+  results.push({ name, ok });
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ' — ' + detail : ''}`);
+};
 
 const screens = window.SCREENS || [];
 check('no script errors', errors.length === 0, errors.join(' | ').slice(0, 200));
@@ -144,4 +147,83 @@ check('every var(--x) the gallery uses is defined', undefinedVars.length === 0, 
 const noText = [...d.querySelectorAll('.card')].filter((c) => c.textContent.trim().length < 80);
 check('no empty card', noText.length === 0, noText.map((c) => c.id).join(', '));
 check('nothing rendered as undefined/NaN', !/undefined|NaN/.test(d.body.textContent));
-process.exit(errors.length || missingChecks.length ? 1 : 0);
+
+// --------------------------------------------------------------- containment
+// jsdom does not lay out, but every box `at()` draws carries its own left, top,
+// width and height, and those numbers are the claim. So containment is checkable
+// without a layout engine: a box must fit inside whichever positioned ancestor it
+// is actually measured against. This is the check that was missing when the
+// minimap was placed with window coordinates inside the positioned canvas — it
+// landed 24px off the bottom of the window and under the right dock — and when
+// the dashboard's main column was drawn from y 0 and sat under the title bar.
+const px = (v) => (typeof v === 'string' && v.endsWith('px') ? parseFloat(v) : null);
+const size = (el) => {
+  const s = window.getComputedStyle(el);
+  const w = px(s.width);
+  const h = px(s.height);
+  return w !== null && h !== null ? { w, h } : null;
+};
+const placed = (el) => {
+  const s = window.getComputedStyle(el);
+  const l = px(s.left);
+  const t = px(s.top);
+  const size_ = size(el);
+  if (l === null || t === null || !size_) return null;
+  return { l, t, ...size_ };
+};
+const escaped = [];
+let measured = 0;
+for (const winEl of d.querySelectorAll('.win')) {
+  const winSize = size(winEl) || { w: AU.window.default[0], h: AU.window.default[1] };
+  for (const el of winEl.querySelectorAll('*')) {
+    if (window.getComputedStyle(el).position !== 'absolute') continue;
+    const box = placed(el);
+    if (!box) continue;
+    let parent = el.parentElement;
+    let frame = { w: winSize.w, h: winSize.h, who: 'the window' };
+    while (parent && parent !== winEl) {
+      if (window.getComputedStyle(parent).position !== 'static') {
+        const s = size(parent);
+        if (s) {
+          frame = { ...s, who: `${parent.tagName.toLowerCase()}.${String(parent.className).split(' ')[0]}` };
+          break;
+        }
+      }
+      parent = parent.parentElement;
+    }
+    measured += 1;
+    const over = Math.round(Math.max(box.l + box.w - frame.w, box.t + box.h - frame.h, -box.l, -box.t));
+    if (over > 2) escaped.push(`${winEl.parentElement.id}/${String(el.className).split(' ')[0] || el.tagName.toLowerCase()} ${over}px past ${frame.who}`);
+  }
+}
+check(
+  'every box a screen draws stays inside the panel it is measured against',
+  escaped.length === 0,
+  escaped.length ? `${escaped.length} escaped: ${escaped.slice(0, 4).join('; ')}` : `${measured} boxes checked`,
+);
+
+// The dashboard is the one screen with two columns under a title bar; both must
+// start below it, and the main column must reach the bottom of the window.
+const dashMain = d.querySelector('#dash-home-grid .win .main');
+const dashSide = d.querySelector('#dash-home-grid .win .sidebar');
+check(
+  'the dashboard columns start under the title bar and reach the bottom',
+  dashMain && dashSide &&
+    dashMain.style.top === `${AU.ui.dashTitleH}px` &&
+    dashSide.style.top === dashMain.style.top &&
+    parseFloat(dashMain.style.top) + parseFloat(dashMain.style.height) === AU.window.default[1],
+  dashMain ? `top ${dashMain.style.top}, height ${dashMain.style.height}` : 'no main column',
+);
+
+// A menu without its surface class is invisible scenery: the sort menu shipped
+// with rows floating over the quick cards until a capture showed it.
+const bareMenus = [...d.querySelectorAll('.win .menu')].filter((m) => !m.closest('.menu-wrap, .popover, .modal, .cmdpalette, .findbar'));
+check(
+  'every menu is drawn on a surface',
+  bareMenus.length === 0,
+  bareMenus.map((m) => m.textContent.trim().split('\n')[0]).join(', ') || 'all wrapped',
+);
+
+const failures = results.filter((r) => !r.ok).length;
+console.log(`\n${results.filter((r) => r.ok).length} PASS, ${failures} FAIL`);
+process.exit(errors.length || missingChecks.length || failures ? 1 : 0);

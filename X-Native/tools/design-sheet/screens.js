@@ -204,13 +204,15 @@ function dashMain({ view = 'Home', layout = 'Grid', selected = [], sortOpen = fa
       <div class="grid3">${files.map(fileCard).join('')}</div>`;
   }
   const sidebar = dashSidebar(view);
+  // `menu-wrap` is what carries the surface, border and radius; without it the
+  // sort menu was a bare grid floating transparently over the quick cards.
   const sortMenu = sortOpen
     ? at(G.dashMx + (x1 - x0) - 460, UI.dashTitleH + 118, 200, 108, `
         <div class="menu">
           <div class="menu-row on"><span>Edited</span>${icon('check', 14)}</div>
           <div class="menu-row"><span>Name</span></div>
           <div class="menu-row"><span>Starred first</span></div>
-        </div>`)
+        </div>`, { class: 'menu-wrap' })
     : '';
   const bulk = selected.length
     ? at(G.dashMx, H - 72, x1 - x0, 48, `
@@ -223,10 +225,13 @@ function dashMain({ view = 'Home', layout = 'Grid', selected = [], sortOpen = fa
           <span class="muted">Esc clears the selection</span>
         </div>`)
     : '';
+  // The main column starts under the title bar, not behind it: dashboard.rs
+  // paints `Rect::new(DASH_SIDE_W, DASH_TITLE_H, win_w, win_h)`. Drawn from y 0
+  // it sits under the top bar and swallows the screen's own heading.
   return win(
     dashTopBar() +
       sidebar +
-      at(G.dashSide, 0, W - G.dashSide, H, `${head}${body}`, {
+      at(G.dashSide, UI.dashTitleH, W - G.dashSide, H - UI.dashTitleH, `${head}${body}`, {
         class: 'main',
         padding: '24px 24px 24px 0',
       }) +
@@ -493,18 +498,24 @@ function canvas({ page = 'Checkout flow', minimap = true, guides = false, connec
           ${connections ? '<span class="proto-link"></span>' : ''}
         </div>
       </div>`;
+  // These two sit inside `.canvas`, which is itself positioned, so their
+  // coordinates must be relative to the canvas — `CANVAS.x1` is a window
+  // coordinate and using it here added the canvas origin a second time, sliding
+  // the minimap under the right dock and off the bottom of the window.
+  const miniX = CANVAS.x1 - CANVAS.x0 - 12 - 176;
+  const miniY = CANVAS.y1 - CANVAS.y0 - 12 - 116;
   const minimapHtml = minimap
-    ? at(CANVAS.x1 - 12 - 176, CANVAS.y1 - 12 - 116, 176, 116, `
+    ? at(miniX, miniY, 176, 116, `
         <span class="mm-close">${icon('x', 12)}</span>
         <span class="mm-node n1"></span><span class="mm-node n2"></span><span class="mm-node n3"></span>
         <span class="mm-view"></span>
         <span class="mm-cap">click or drag to navigate</span>
       `, { class: 'minimap' })
     : '';
+  // Sits just below-right of where the two guides cross (canvas-relative), the
+  // way the app's clamped readout hugs the measurement it describes.
   const readout = guides
-    ? at(CANVAS.x0 + 320, CANVAS.y0 + 176, 168, 24, `<span class="ro">X 256 · gap 16 · Y 128</span>`, {
-        class: 'readout',
-      })
+    ? at(324, 272, 168, 24, `<span class="ro">X 256 · gap 16 · Y 128</span>`, { class: 'readout' })
     : '';
   return at(CANVAS.x0, CANVAS.y0, cw, ch, `
     ${frame}

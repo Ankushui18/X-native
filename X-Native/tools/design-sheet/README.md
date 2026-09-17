@@ -26,7 +26,7 @@ the only job.
 ## Every screen
 
     node check.mjs            # 39 checks: tokens, ladders, palettes, audit
-    node check_screens.mjs    # 16 checks: the screens gallery
+    node check_screens.mjs    # 20 checks: the screens gallery
 
 `screens.html` (with `screens.js`, `screens_app.js`, `screens.css`) draws each
 screen the app ships — dashboard views, the editor with every panel tab, the
@@ -44,7 +44,35 @@ that screen, so a claim can be traced to its source.
 `check_screens.mjs` verifies the claims it can: every screen renders, every
 `module` it names exists on disk, every landmark in its `checks` list is present,
 no screen draws a glyph the icon set lacks, the docks are drawn at the widths
-`audit.js` parsed, and no colour in the gallery is a literal.
+`audit.js` parsed, no colour in the gallery is a literal, every menu is drawn on
+a surface, and every box a screen places fits inside the panel it is measured
+against — the last of these is what caught the minimap sitting under the right
+dock and the dashboard's main column hidden behind its title bar.
+
+## Captures
+
+    npm i puppeteer-core @sparticuz/chromium     # once, anywhere
+    node shots.mjs                               # 26 PNGs at 1440×900 + index.json + shots.html
+    node shots.mjs --only editor-guides          # one screen while you work on it
+    node shots.mjs --theme daylight              # the light palette, into shots/daylight/
+
+`screens.html` draws the screens as DOM, which is enough to check layout and
+wording but is still a drawing. `shots.mjs` puts those drawings in front of a
+real browser engine at scale 1 and writes one PNG per screen, so what a designer
+or a reviewer looks at is pixels, not markup — no GPU and no running app needed.
+`@sparticuz/chromium` carries its own Chromium *and* the shared libraries a bare
+image lacks, which is why the captures work where a system Chrome would not
+start. The script is run from whatever directory has those two packages
+installed; `SHOT_DEPS=/path/to/node_modules` points it elsewhere.
+
+Before it writes anything it measures every box of every screen in the browser
+and refuses to capture a drawing whose boxes escape the window, whose text is
+clipped or which lost an icon (`--force` overrides). The result lands in
+`shots/index.json` as `verified`, next to each file's size and sha256 and the
+renderer version — so the sheet can say which browser produced the pixels.
+
+Only the graphite palette is committed, to keep the repository small; the other
+two are one `--theme` away.
 
 `index.html` + `app.js` render it; the fonts are Inter (OFL) from
 `@fontsource/inter`. Regenerate after changing a scale, a palette or a ceiling —

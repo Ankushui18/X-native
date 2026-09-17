@@ -48,9 +48,21 @@ seven panel tabs, the overlays (⌘K, context menu, paint library, colour picker
 app menu, find, notifications), the board, the flow viewer and the loading
 screen — each drawn at the parsed window size with the module that paints it,
 what to check, and the theme switch repainting all of them. `node
-check_screens.mjs` (16 checks) holds the page to its own claims: screens render,
+check_screens.mjs` (20 checks) holds the page to its own claims: screens render,
 the module named on each card exists, the landmarks are present, no missing
-glyph, and the docks really are drawn at the widths `audit.js` parsed.
+glyph, the docks really are drawn at the widths `audit.js` parsed, every menu
+sits on a surface, and every box a screen places fits inside the panel it is
+measured against.
+
+`shots.html` is the third page, and the one with pixels: `shots.mjs` photographs
+each drawing in a real browser at 1440×900, writes `shots/<id>.png` plus an
+`index.json` (size, sha256, renderer version, verification result) and generates
+`shots.html` over the results. It screens the drawings first — a box that escapes
+the window, clipped text or a missing glyph stops the run — and it needs
+`puppeteer-core` and `@sparticuz/chromium` (which ships the Chromium build and
+its shared libraries) rather than a system browser. This is what review looks at
+when there is no GPU to run the app on; the gallery remains the thing that is
+kept true to the Rust geometry, and the captures are downstream of it.
 
 ## Themes (light, dark, high contrast)
 
