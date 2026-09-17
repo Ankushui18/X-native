@@ -4991,6 +4991,13 @@ impl Host {
             self.flow_key(&key);
             return;
         }
+        // The template gallery is a modal like the color picker or the library
+        // review: Escape closes it, ahead of the dashboard search field and
+        // every global shortcut (click-away was the only way out before).
+        if self.app.template_picker_open && matches!(key, Key::Named(NamedKey::Escape)) {
+            self.app.template_picker_open = false;
+            return;
+        }
         // The dashboard search is a real text field, not just a painted
         // placeholder. Handle editing keys before the global shortcut gate so
         // Backspace and Ctrl/Cmd+A work even when no document is open.
@@ -8489,6 +8496,9 @@ impl Host {
             }
             Action::OpenTemplates => {
                 self.app.template_picker_open = true;
+                // the scrim owns the screen: don't leave the search field
+                // focused (and its caret blinking) behind it
+                self.app.dash_search_focus = false;
             }
             Action::CloseTemplates => {
                 self.app.template_picker_open = false;
@@ -8503,7 +8513,7 @@ impl Host {
                 };
                 let name = crate::state::OpenDoc::TEMPLATES
                     .get(i)
-                    .map(|(n, _)| n.to_string())
+                    .map(|(n, _, _)| n.to_string())
                     .unwrap_or_default();
                 self.app.docs.push(doc);
                 self.app.active = self.app.docs.len() - 1;
@@ -11166,8 +11176,17 @@ mod tests {
 
     #[test]
     fn templates_catalog_builds_independent_copies() {
-        for (i, (name, blurb)) in OpenDoc::TEMPLATES.iter().enumerate() {
+        for (i, (name, blurb, icon)) in OpenDoc::TEMPLATES.iter().enumerate() {
             assert!(!name.is_empty() && !blurb.is_empty());
+            // the gallery paints this name through draw_icon, which is a
+            // silent no-op for an unknown icon (Audit F1): draw one and
+            // require real geometry back, so a typo'd icon fails here
+            let mut probe = vello::Scene::new();
+            crate::icons::draw_icon(&mut probe, icon, 0.0, 0.0, 16.0, x_native::Color::BLACK);
+            assert!(
+                !probe.encoding().path_data.is_empty(),
+                "template {i} ({name}) icon {icon} has no path data"
+            );
             let d =
                 OpenDoc::template_doc(i).unwrap_or_else(|| panic!("template {i} ({name}) builds"));
             if i == 3 {
@@ -11186,6 +11205,13 @@ mod tests {
             }
         }
         assert!(OpenDoc::template_doc(OpenDoc::TEMPLATES.len()).is_none());
+        // and no two rows share a glyph (a column of identical chips is the
+        // thing this catalog was fixed for)
+        let mut glyphs: Vec<&str> = OpenDoc::TEMPLATES.iter().map(|(_, _, i)| *i).collect();
+        let total = glyphs.len();
+        glyphs.sort_unstable();
+        glyphs.dedup();
+        assert_eq!(glyphs.len(), total, "each template row has its own icon");
     }
 
     /// Dashboard paints without panicking (fonts may be absent in CI).

@@ -1385,23 +1385,29 @@ impl OpenDoc {
 
     // ---------------------------------------------------------- templates
 
-    /// Built-in templates for the dashboard gallery: (name, blurb).
-    pub const TEMPLATES: [(&str, &str); 4] = [
+    /// Built-in templates for the dashboard gallery: (name, blurb, icon).
+    /// Each row carries its OWN glyph — the gallery opened with the same
+    /// `layout-template` chip on all four rows, which reads as placeholder art.
+    pub const TEMPLATES: [(&str, &str, &str); 4] = [
         (
             "Mobile app flow",
             "Two linked screens with a working prototype",
+            "frame",
         ),
         (
             "Landing page",
             "1440 desktop hero with nav, CTA and feature cards",
+            "layout-list",
         ),
         (
             "Design system",
             "Color variables, swatches and a Button component",
+            "component",
         ),
         (
             "Starter board",
             "Freeform brainstorm canvas for quick ideas",
+            "sticky-note",
         ),
     ];
 

@@ -85,35 +85,34 @@ fn paint_template_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Acti
         C_MUTED,
         Wt::Reg,
     );
-    for (i, (name, blurb)) in OpenDoc::TEMPLATES.iter().enumerate() {
+    for (i, (name, blurb, icon)) in OpenDoc::TEMPLATES.iter().enumerate() {
         let ry = cy + 76.0 + i as f64 * row_h;
         let row = Rect::new(cx + 12.0, ry, cx + card_w - 12.0, ry + row_h - 8.0);
         if hover(app, row) {
             fill_rrect(s, row, 8.0, C_FIELD_2);
         }
-        // template mark: violet chip + glyph
-        let chip = Rect::new(row.x0 + 12.0, ry + 10.0, row.x0 + 44.0, ry + 42.0);
-        fill_rrect(s, chip, 8.0, C_ACCENT_MUTED);
-        draw_icon(
-            s,
-            "layout-template",
-            chip.x0 + 8.0,
-            chip.y0 + 8.0,
-            16.0,
-            C_ON_ACCENT,
-        );
+        // template mark: violet chip + that template's OWN glyph — four
+        // identical chips in a column read as placeholder art. 32×32 at the
+        // row's vertical center (56px row), so chip, CTA and the text block
+        // all center on the same line.
+        let chip = Rect::new(row.x0 + 12.0, ry + 12.0, row.x0 + 44.0, ry + 44.0);
+        fill_rrect(s, chip, R_ROW, C_ACCENT_MUTED);
+        draw_icon(s, icon, chip.x0 + 8.0, chip.y0 + 8.0, 16.0, C_ON_ACCENT);
         app.fonts
             .text(s, row.x0 + 58.0, ry + 10.0, name, T13, C_TEXT, Wt::Med);
         app.fonts
             .text(s, row.x0 + 58.0, ry + 30.0, blurb, T11, C_DIM, Wt::Reg);
-        let useb = Rect::new(row.x1 - 76.0, ry + 12.0, row.x1 - 12.0, ry + 40.0);
+        // CTA at the app's standard control size (32 tall, R_ROW radius) and
+        // its standard button hover fill — C_LINE_2 is a *border* role, so a
+        // button filled with it looked like a second outline, not a hover.
+        let useb = Rect::new(row.x1 - 76.0, ry + 12.0, row.x1 - 12.0, ry + 44.0);
         fill_rrect(
             s,
             useb,
-            6.0,
-            if hover(app, useb) { C_LINE_2 } else { C_FIELD },
+            R_ROW,
+            if hover(app, useb) { C_FIELD_2 } else { C_FIELD },
         );
-        stroke_rrect(s, useb, 6.0, C_LINE, 1.0);
+        stroke_rrect(s, useb, R_ROW, C_LINE, 1.0);
         app.fonts
             .text_center(s, useb, "Use", T11, C_TEXT, Wt::Med, true);
         hit.push((useb, Action::NewFromTemplate(i)));
@@ -576,29 +575,27 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         hit.push((r, Action::DashLayout(lay)));
     }
 
-    // Quick actions — 4 cards 274×88 at y 147.5, gap 12, radius 12
+    // Quick actions — 4 cards 274×88 at y 147.5, gap 12, radius 12.
+    // The slot geometry is the reference's; the interior is the signature
+    // pass's (square violet chip — see below).
     let gap = 12.0;
     let cw = (x1 - x0 - gap * 3.0) / 4.0;
-    let cards: [(&str, &str, &str, bool); 4] = [
-        ("plus", "New design file", "Start from scratch", true),
+    let cards: [(&str, &str, &str); 4] = [
+        ("plus", "New design file", "Start from scratch"),
+        ("import", "Import file", "SVG, PNG, Sketch, Figma JSON"),
         (
-            "import",
-            "Import file",
-            "SVG, PNG, Sketch, Figma JSON",
-            false,
-        ),
-        (
-            // P14: was the dead "Browse templates" card; boards are real
-            "layout-template",
+            // P14: was the dead "Browse templates" card; boards are real.
+            // sticky-note, not layout-template: the template card beside it
+            // owns that glyph, and two identical chips in one row read as a
+            // rendering bug rather than a family.
+            "sticky-note",
             "New board",
             "Infinite canvas for brainstorming",
-            false,
         ),
         (
             "layout-template",
             "Start from a template",
             "Mobile, landing, system, board",
-            false,
         ),
     ];
     let acts = [
@@ -607,7 +604,7 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         Action::NewBoard,
         Action::OpenTemplates,
     ];
-    for (i, (icon, title, sub, white)) in cards.into_iter().enumerate() {
+    for (i, (icon, title, sub)) in cards.into_iter().enumerate() {
         let cx = x0 + (cw + gap) * i as f64;
         let r = Rect::new(cx, dy + 147.5, cx + cw, dy + 235.5);
         let hov = hover(app, r);
@@ -617,17 +614,22 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         fill_rrect(s, r, R_CARD, if hov { C_PANEL_2 } else { C_PANEL });
         // signature: violet hover ring (was the reference's neutral border)
         stroke_rrect(s, r, R_CARD, if hov { C_SEL } else { C_LINE }, 1.0);
-        // signature: every icon chip wears the brand violet wash (was
-        // white/gray chips copied from the reference mock)
-        let _ = white;
-        let ib = Rect::new(cx + 17.0, dy + 164.5, cx + 47.7, dy + 182.5);
-        fill_rrect(s, ib, 8.0, C_ACCENT_MUTED);
-        draw_icon(s, icon, ib.x0 + 7.3, dy + 165.5, 16.0, C_ON_ACCENT);
-        // title box top 182.5 (+35), sub top 202 (+54.5)
+        // signature: the icon chip is a square violet tile — the same 32×32,
+        // r8, 16px-glyph mark the template-gallery rows wear. The reference
+        // mock's flex had SHRUNK its w-8 h-8 chip to 30.7×18 inside the fixed
+        // 88px card (a wide lozenge: 7.3px side padding, 1px above/below),
+        // and the old clone copied the squash. A square is what that mock was
+        // drawing, so the card's interior re-spaces around it instead of
+        // shipping the artifact. The card slot itself (274×88, gap 12, tag row
+        // top 147.5) is untouched — 10px above the chip, 10px below the copy.
+        let ib = Rect::new(cx + 17.0, dy + 157.5, cx + 49.0, dy + 189.5);
+        fill_rrect(s, ib, R_ROW, C_ACCENT_MUTED);
+        draw_icon(s, icon, ib.x0 + 8.0, ib.y0 + 8.0, 16.0, C_ON_ACCENT);
+        // title box top 189.5 (+42), sub top 209 (+61.5)
         app.fonts
-            .text(s, cx + 17.0, dy + 182.5, title, T13, C_TEXT, Wt::Med);
+            .text(s, cx + 17.0, dy + 189.5, title, T13, C_TEXT, Wt::Med);
         app.fonts
-            .text(s, cx + 17.0, dy + 202.0, sub, T11, C_DIM, Wt::Reg);
+            .text(s, cx + 17.0, dy + 209.0, sub, T11, C_DIM, Wt::Reg);
         hit.push((r, acts[i].clone()));
     }
 

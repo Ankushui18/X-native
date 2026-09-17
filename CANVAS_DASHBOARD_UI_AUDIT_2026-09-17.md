@@ -202,6 +202,23 @@ browser Library: the document model is a scene graph, not a Figma clone."*
   brand (violet icon chips `C_ACCENT_MUTED`/`C_ON_ACCENT` on every card + violet hover ring
   `C_SEL`, replacing the reference's white/gray chips and neutral borders). Sidebar/wordmark
   treatment still open.
+- **Pass-1 cleanup** — DONE 2026-09-17. The accent pass shipped with four leftovers, all fixed:
+  (1) the quick-card icon chip was still the *reference mock's flex artifact* — its `w-8 h-8`
+  tile had been squashed to 30.7×18 inside the fixed 88px card (7.3px side padding, 1px
+  above/below) and the clone copied the squash; it is now a square 32×32/r8/16px mark, the same
+  one the gallery rows wear, with the card interior re-spaced around it (slot 274×88 unchanged).
+  (2) `New board` and `Start from a template` wore the *same* `layout-template` glyph — the
+  template card replaced the old `users` card, and two identical violet chips in one row read as
+  a rendering fault; the board card is `sticky-note` now (the board's own tool icon).
+  (3) gallery rows all drew one glyph — `OpenDoc::TEMPLATES` is `(name, blurb, icon)` and each
+  row carries its own (frame / layout-list / component / sticky-note), pinned by a test that
+  draws every catalog icon and requires geometry back (an unknown name is a silent no-op).
+  (4) the team-badge letter was `C_TEXT` on the saturated team hues — 3.0:1 (blue) and 2.1:1
+  (orange), under the AA floor for 10px bold; it is `C_BLACK`, matching `avatar()`. The gallery's
+  `Use` button also came off 64×28/r6/`C_LINE_2`-hover (a border role used as a button fill) onto
+  the house control: 64×32, `R_ROW`, `C_FIELD_2` hover; chip and CTA now share the row centre
+  line. The gallery is a modal like the color picker and the library review, so Escape closes it
+  (click-away was the only exit), and opening it drops the search field's focus.
 
 **Verification note:** all of today's edits are static-checked (pattern-matched against
 neighboring code, brace-balanced, diff-verified); the sandbox still has no Rust toolchain, so
