@@ -90,6 +90,7 @@ pub fn paint_over(app: &mut App, s: &mut Scene) {
         return;
     }
     paint_canvas_overlays(app, s);
+    paint_minimap(app, s, &mut hit);
     paint_layout_guides(app, s);
     paint_ruler_guides(app, s);
     paint_vector_points(app, s);
@@ -160,19 +161,339 @@ fn paint_ruler_guides(app: &App, s: &mut Scene) {
         .copied()
         .chain(doc.guide_drag)
         .collect::<Vec<(char, f64)>>();
+    let mut readout: Option<(Rect, String)> = None;
     for (ax, c) in guides {
         if ax == 'v' {
             let x = app.world_to_screen(Point::new(c, 0.0)).x;
             if x >= reg.canvas.x0 && x <= reg.canvas.x1 {
                 vline(s, x, reg.canvas.y0, reg.canvas.y1, crate::theme::C_SNAP);
+                if doc.guide_drag.is_some() {
+                    readout = guide_readout(app, 'v', c);
+                }
             }
         } else {
             let y = app.world_to_screen(Point::new(0.0, c)).y;
             if y >= reg.canvas.y0 && y <= reg.canvas.y1 {
                 hline(s, reg.canvas.x0, reg.canvas.x1, y, crate::theme::C_SNAP);
+                if doc.guide_drag.is_some() {
+                    readout = guide_readout(app, 'h', c);
+                }
             }
         }
     }
+    // the numeric readout: a guide you cannot measure is a guess (Figma puts
+    // the value in the ruler; ours floats next to the line it belongs to)
+    if let Some((r, label)) = readout {
+        fill_rrect(s, r, R_SM, C_FIELD);
+        stroke_rrect(s, r, R_SM, C_LINE_2, 1.0);
+        app.fonts
+            .text(s, r.x0 + 6.0, r.y0 + 3.5, &label, T10, C_TEXT, Wt::Mono);
+    }
+}
+
+/// The live readout chip for a guide at world coordinate `c` on `axis`:
+/// where it sits and what it says. `None` when the guide is off the canvas —
+/// the caller then paints nothing. Pure, so the test can ask the same
+/// question the painter asks.
+pub fn guide_readout(app: &App, axis: char, c: f64) -> Option<(Rect, String)> {
+    let reg = app.editor_regions();
+    let label = fmt_num(c.round());
+    let w = app.fonts.measure(&label, T10, Wt::Mono) + 12.0;
+    let r = if axis == 'v' {
+        let x = app.world_to_screen(Point::new(c, 0.0)).x;
+        if x < reg.canvas.x0 || x > reg.canvas.x1 {
+            return None;
+        }
+        Rect::new(
+            x + 6.0,
+            reg.canvas.y0 + RULER_SIZE + 6.0,
+            x + 6.0 + w,
+            reg.canvas.y0 + RULER_SIZE + 24.0,
+        )
+    } else {
+        let y = app.world_to_screen(Point::new(0.0, c)).y;
+        if y < reg.canvas.y0 || y > reg.canvas.y1 {
+            return None;
+        }
+        Rect::new(
+            reg.canvas.x0 + RULER_SIZE + 6.0,
+            y + 6.0,
+            reg.canvas.x0 + RULER_SIZE + 6.0 + w,
+            y + 24.0,
+        )
+    };
+    // keep the chip inside the canvas: a readout clipped by the panel edge
+    // would defeat the point of reading it
+    let r = Rect::new(
+        r.x0.min(reg.canvas.x1 - r.width() - 4.0)
+            .max(reg.canvas.x0 + 2.0),
+        r.y0.min(reg.canvas.y1 - 20.0).max(reg.canvas.y0 + 2.0),
+        r.x1.min(reg.canvas.x1 - 4.0),
+        r.y1.min(reg.canvas.y1 - 4.0),
+    );
+    Some((r, label))
+}
+
+// ------------------------------------------------------------- minimap
+
+const MINIMAP_W: f64 = 176.0;
+const MINIMAP_H: f64 = 116.0;
+const MINIMAP_INSET: f64 = 12.0;
+/// How much of a top-level node is drawn before it is just noise.
+const MINIMAP_MAX_NODES: usize = 400;
+
+/// The world box a page's content occupies: the union of its visible
+/// top-level nodes. `None` when the page is empty — a minimap of nothing is
+/// not a navigation aid, it is a rectangle.
+pub fn page_content_bounds(app: &App) -> Option<Rect> {
+    let d = app.doc_opt()?;
+    let page = d.editors.get(d.page)?;
+    let mut b: Option<Rect> = None;
+    for n in page.root.children.iter().filter(|n| n.visible) {
+        let r = Rect::new(
+            n.transform.x,
+            n.transform.y,
+            n.transform.x + n.w,
+            n.transform.y + n.h,
+        );
+        b = Some(b.map_or(r, |p| p.union(r)));
+    }
+    b
+}
+
+/// The minimap's geometry for this frame: where the panel is, what slice of
+/// the world it shows, and how the two map onto each other. Pure, so the
+/// painter, the pointer test and the press handler all read one thing.
+pub struct MinimapGeom {
+    pub panel: Rect,
+    pub world: Rect,
+}
+
+impl MinimapGeom {
+    /// Panel px per world px (the panel letterboxes the content box).
+    pub fn scale(&self) -> f64 {
+        let s = (self.panel.width() / self.world.width().max(1e-6))
+            .min(self.panel.height() / self.world.height().max(1e-6));
+        s.clamp(1e-6, 64.0)
+    }
+
+    /// The content box as painted inside the panel (centred, letterboxed).
+    fn content(&self) -> Rect {
+        let s = self.scale();
+        let (w, h) = (self.world.width() * s, self.world.height() * s);
+        let x0 = self.panel.x0 + (self.panel.width() - w) / 2.0;
+        let y0 = self.panel.y0 + (self.panel.height() - h) / 2.0;
+        Rect::new(x0, y0, x0 + w, y0 + h)
+    }
+
+    pub fn to_panel(&self, wx: f64, wy: f64) -> Point {
+        let s = self.scale();
+        let c = self.content();
+        Point::new(
+            c.x0 + (wx - self.world.x0) * s,
+            c.y0 + (wy - self.world.y0) * s,
+        )
+    }
+
+    pub fn to_world(&self, p: Point) -> Point {
+        let s = self.scale();
+        let c = self.content();
+        Point::new(
+            self.world.x0 + (p.x - c.x0) / s,
+            self.world.y0 + (p.y - c.y0) / s,
+        )
+    }
+
+    /// The panel's close button — shared by the painter and the press handler,
+    /// so the ✕ that is drawn is the ✕ that works.
+    pub fn close(&self) -> Rect {
+        Rect::new(
+            self.panel.x1 - 20.0,
+            self.panel.y0 + 4.0,
+            self.panel.x1 - 4.0,
+            self.panel.y0 + 20.0,
+        )
+    }
+}
+
+/// The minimap for this frame, or `None` when it is off, the page is empty,
+/// or the screen has its own navigation (boards are infinite by design; the
+/// flow viewer is chrome-less).
+pub fn minimap_geom(app: &App) -> Option<MinimapGeom> {
+    if !app.minimap || app.screen != Screen::Editor || app.flow.is_some() {
+        return None;
+    }
+    let content = page_content_bounds(app)?;
+    let world = content.inflate(
+        (content.width() * 0.06).max(8.0),
+        (content.height() * 0.06).max(8.0),
+    );
+    let reg = app.editor_regions();
+    let w = MINIMAP_W.min(reg.canvas.width() - 40.0).max(96.0);
+    let h = MINIMAP_H.min(reg.canvas.height() - 40.0).max(72.0);
+    let panel = Rect::new(
+        reg.canvas.x1 - MINIMAP_INSET - w,
+        reg.canvas.y1 - MINIMAP_INSET - h,
+        reg.canvas.x1 - MINIMAP_INSET,
+        reg.canvas.y1 - MINIMAP_INSET,
+    );
+    Some(MinimapGeom { panel, world })
+}
+
+/// Does this page have anything to sketch? (The thumbnail and the icon are
+/// mutually exclusive, so the row cannot claim content it does not have.)
+pub(crate) fn page_has_content(app: &App, page_i: usize) -> bool {
+    app.doc_opt()
+        .and_then(|d| d.editors.get(page_i))
+        .is_some_and(|p| p.root.children.iter().any(|n| n.visible))
+}
+
+/// One page's content drawn into `box`: the same mapping the minimap uses,
+/// at thumbnail scale. Used by the PAGES rows so a page can be recognised
+/// before it is opened.
+fn paint_page_sketch(app: &App, s: &mut Scene, page_i: usize, box_: Rect) {
+    let Some(d) = app.doc_opt() else {
+        return;
+    };
+    let Some(page) = d.editors.get(page_i) else {
+        return;
+    };
+    let mut b: Option<Rect> = None;
+    for n in page.root.children.iter().filter(|n| n.visible) {
+        let r = Rect::new(
+            n.transform.x,
+            n.transform.y,
+            n.transform.x + n.w,
+            n.transform.y + n.h,
+        );
+        b = Some(b.map_or(r, |p| p.union(r)));
+    }
+    fill_rrect(s, box_, R_XS, C_BG);
+    stroke_rrect(s, box_, R_XS, C_LINE_2, 1.0);
+    let Some(b) = b else {
+        return;
+    };
+    let s_ = (box_.width() / b.width().max(1.0)).min(box_.height() / b.height().max(1.0));
+    let ox = box_.x0 + (box_.width() - b.width() * s_) / 2.0;
+    let oy = box_.y0 + (box_.height() - b.height() * s_) / 2.0;
+    let clip = box_.inflate(-1.0, -1.0);
+    for n in page.root.children.iter().filter(|n| n.visible).take(24) {
+        let r = Rect::new(
+            ox + (n.transform.x - b.x0) * s_,
+            oy + (n.transform.y - b.y0) * s_,
+            ox + (n.transform.x + n.w - b.x0) * s_,
+            oy + (n.transform.y + n.h - b.y0) * s_,
+        );
+        let r = Rect::new(
+            r.x0.max(clip.x0),
+            r.y0.max(clip.y0),
+            r.x1.min(clip.x1),
+            r.y1.min(clip.y1),
+        );
+        if r.width() <= 0.0 || r.height() <= 0.0 {
+            continue;
+        }
+        // the node's own colour, faint enough to be a sketch
+        let c = x_native::paint_color(&n.fill, &d.doc.variables);
+        fill_rrect(s, r, R_XS, c.multiply_alpha(0.75));
+    }
+}
+
+/// The minimap: the whole page at a glance, with the viewport on it.
+fn paint_minimap(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    let Some(g) = minimap_geom(app) else {
+        return;
+    };
+    let panel = g.panel;
+    elev_shadow(s, panel, 8.0, Elevation::Floating);
+    fill_rrect(s, panel, R_MD, C_PANEL);
+    let hov_panel = hover(app, panel);
+    stroke_rrect(
+        s,
+        panel,
+        R_MD,
+        if hov_panel { C_LINE_2 } else { C_LINE },
+        1.0,
+    );
+
+    // the page itself: every visible top-level node, in its own colour
+    let vars = app.doc_ref().doc.variables.clone();
+    let selected: HashSet<String> = app
+        .doc_ref()
+        .editor_ref()
+        .selection
+        .iter()
+        .cloned()
+        .collect();
+    let nodes: Vec<(Rect, Color, bool)> = {
+        let d = app.doc_ref();
+        match d.editors.get(d.page) {
+            Some(page) => page
+                .root
+                .children
+                .iter()
+                .filter(|n| n.visible)
+                .take(MINIMAP_MAX_NODES)
+                .filter_map(|n| {
+                    let tl = g.to_panel(n.transform.x, n.transform.y);
+                    let br = g.to_panel(n.transform.x + n.w, n.transform.y + n.h);
+                    let r = Rect::new(
+                        tl.x.floor(),
+                        tl.y.floor(),
+                        br.x.ceil().max(tl.x.floor() + 1.0),
+                        br.y.ceil().max(tl.y.floor() + 1.0),
+                    );
+                    let c = x_native::paint_color(&n.fill, &vars);
+                    Some((r, c.multiply_alpha(0.6), selected.contains(&n.id)))
+                })
+                .collect(),
+            None => Vec::new(),
+        }
+    };
+    for (r, c, is_sel) in nodes {
+        fill_rrect(s, r, R_XS, if is_sel { C_SEL } else { c });
+    }
+
+    // the viewport: what the canvas is actually showing, clamped to the panel
+    let reg = app.editor_regions();
+    let tl = app.screen_to_world(Point::new(reg.canvas.x0, reg.canvas.y0));
+    let br = app.screen_to_world(Point::new(reg.canvas.x1, reg.canvas.y1));
+    let (p0, p1) = (g.to_panel(tl.x, tl.y), g.to_panel(br.x, br.y));
+    let view = Rect::new(p0.x, p0.y, p1.x, p1.y);
+    let inside = Rect::new(
+        view.x0.max(panel.x0 + 1.0),
+        view.y0.max(panel.y0 + 1.0),
+        view.x1.min(panel.x1 - 1.0),
+        view.y1.min(panel.y1 - 1.0),
+    );
+    if view.width() > 0.0 && view.height() > 0.0 {
+        fill_rrect(s, inside, R_XS, C_SEL);
+        stroke_rrect(s, inside, R_XS, C_ACCENT, STROKE_RING);
+    }
+
+    // the ✕ that hides it (⇧M brings it back); drawn only when the pointer is
+    // on the panel, so the map stays a map
+    let close = g.close();
+    if hov_panel || hover(app, close) {
+        fill_rrect(
+            s,
+            close,
+            R_SM,
+            if hover(app, close) {
+                C_FIELD_2
+            } else {
+                C_FIELD
+            },
+        );
+        draw_icon(s, "x", close.x0 + 2.0, close.y0 + 2.0, ICON_XS, C_MUTED);
+    }
+    tip(app, close, "Hide minimap (⇧M)");
+    hit.push((close, Action::ToggleMinimap));
+    // registered after the ✕ (reverse scan → the ✕ wins) so any input path
+    // that goes through the hit list gets the same navigation the press
+    // handler gives it
+    let nav = g.to_world(Point::new(panel.center().x, panel.center().y));
+    hit.push((panel, Action::MinimapNav(nav.x, nav.y)));
 }
 
 /// Draw the inspector's layout-guide settings on the selected frame.
@@ -1893,14 +2214,22 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                 stroke_rrect(s, r, R_PAGE, C_LINE_2, 1.0);
             }
         }
-        draw_icon(
-            s,
-            "file",
-            sx + 21.0,
-            r.y0 + 7.0,
-            ICON_XS,
-            if active { C_TEXT } else { C_DIM },
-        );
+        // the row carries a sketch of the page, not a generic file glyph:
+        // a page you can recognise is a page you can switch to (audit §9
+        // item 3 — thumbnails, next to the name they belong to). A page with
+        // nothing on it keeps the plain icon.
+        let thumb = Rect::new(sx + 16.0, r.y0 + 4.0, sx + 38.0, r.y0 + 22.0);
+        paint_page_sketch(app, s, page_i, thumb);
+        if !page_has_content(app, page_i) {
+            draw_icon(
+                s,
+                "file",
+                sx + 21.0,
+                r.y0 + 7.0,
+                ICON_XS,
+                if active { C_TEXT } else { C_DIM },
+            );
+        }
         let page_label = app
             .doc()
             .doc

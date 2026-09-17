@@ -491,6 +491,11 @@ pub enum Action {
     VarStep(String, f64),
     /// Undo the last variable-table edit on the open document.
     VarUndoVars,
+    /// Canvas minimap (audit §9 item 3): the toggle (context menu, ⇧M, or the
+    /// panel's own close button) and a navigation click — the world point that
+    /// should end up centred in the viewport.
+    ToggleMinimap,
+    MinimapNav(f64, f64),
     /// Right-panel paint library (Figma's fill/stroke variable + style
     /// picker): open it for the named row, close it, or apply an entry.
     /// The `bool` is `is_fill` — the row this popover belongs to.
@@ -1156,6 +1161,9 @@ pub enum Drag {
     Guide {
         axis: char,
     },
+    /// Scrubbing the minimap: the viewport follows the pointer, so the whole
+    /// page is reachable without a single pan gesture.
+    Minimap,
     /// Shape-tool drag-create.
     Create {
         tool: Tool,
@@ -1953,6 +1961,9 @@ pub struct App {
     pub font_picker_open: bool,
     /// Viewport rulers (Shift+R). Off by default — the HTML mock has none.
     pub rulers: bool,
+    /// Canvas minimap (⇧M). On by default in the editor: it is the only
+    /// affordance that says where the content is when it is off-screen.
+    pub minimap: bool,
     /// DESIGN panel (no selection): editor canvas background
     pub canvas_bg: Color,
     /// Canvas background opacity % (Figma parity; audit P13)
@@ -2146,6 +2157,7 @@ impl App {
             paint_lib_at: None,
             font_picker_open: false,
             rulers: false,
+            minimap: true,
             // canvas matches the HTML `.canvas` token; grid per the design
             // empty-selection panel (PIXEL GRID COLOR 0070E4 @ 20%)
             canvas_bg: crate::theme::C_CANVAS,

@@ -109,6 +109,37 @@ is the single list of "what is on screen, in what order" — the grid, the table
   own background, and offers only actions that really do something —
   `Remove from recents` says what it is, because the files on disk stay put.
 
+### Canvas aids (minimap, page sketches, guide readout)
+
+Three answers to "where am I?", each built the same way: one pure function
+computes the geometry, and the painter, the pointer grammar and the press
+handler all read it — so what is drawn is what happens.
+
+- **Minimap** (`editor_ui::minimap_geom`, 176×116, inset 12 from the canvas
+  corner, `R_MD` panel, `Floating` elevation). It maps the union of the page's
+  visible top-level nodes into the panel, letterboxed (the sketch never
+  stretches), draws each node in its own fill colour at 60% alpha, marks the
+  selection with `C_SEL`, and rings the live viewport with `C_ACCENT` at
+  `STROKE_RING`. `to_panel`/`to_world` are the only mapping — the press, the
+  scrub and the paint all use them. The pointer says `Grab` on the map and
+  `Grabbing` while scrubbing, `Pointer` on its ✕. ⇧M toggles it; the toggle is
+  also a context-menu row with the same shortcut hint.
+- **Page sketches** (`paint_page_sketch`): every PAGES row draws the page's own
+  content at thumbnail scale instead of a generic file glyph, using the same
+  node→box mapping. A page with nothing on it keeps the plain glyph, because a
+  thumbnail of nothing is a lie.
+- **Guide readout** (`guide_readout`): while a ruler guide is dragged, the chip
+  beside the line shows its world coordinate in `T10` mono on `C_FIELD`, and is
+  clamped to the canvas so the number is always readable. A guide you cannot
+  measure is a guess.
+- **Zoom to fit** (⇧1) fits the *content* box, not the page frame: the frame can
+  be larger than the canvas and loose nodes can sit outside it. An empty page
+  keeps the old frame-centred camera.
+
+None of this paints over the work: the minimap is a floating overlay with its
+own press region (presses inside it never reach the canvas), and it is off in
+the flow viewer and on boards, which have no authored content box to map.
+
 ### Links in the inspector (variables and paint styles)
 
 A paint is either a value or a *link*, and the right panel keeps the two apart.

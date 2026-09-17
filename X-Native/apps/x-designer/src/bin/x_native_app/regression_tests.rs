@@ -2949,3 +2949,259 @@ fn the_paint_library_advertises_itself_and_escape_closes_it() {
         "and does not cost the selection"
     );
 }
+
+// --------------------------------------------------- canvas navigation
+
+/// A host with a page of known content: three rects in a known box.
+fn canvas_host() -> Host {
+    let mut h = host();
+    // the seeded host may carry a demo frame: this page is exactly the three
+    // rects below, so every bound the tests measure is known
+    h.app.doc().editor().root.children.clear();
+    let root_id = h.app.doc_ref().editor_ref().root.id.clone();
+    for (id, x, y, w, hh) in [
+        ("n-a", 100.0, 100.0, 200.0, 100.0),
+        ("n-b", 500.0, 300.0, 400.0, 200.0),
+        ("n-c", 1200.0, 900.0, 100.0, 100.0),
+    ] {
+        h.app.doc().editor().insert_node(
+            &root_id,
+            Node::rect(id, x, y, w, hh, Color::from_rgb8(0x40, 0x50, 0x60)),
+        );
+    }
+    h.app.win_w = 1440.0;
+    h.app.win_h = 900.0;
+    h.app.screen = Screen::Editor;
+    h.app.status.clear();
+    h
+}
+
+/// Every navigation aid has to agree with the content: the minimap's box is
+/// the union of the page's visible nodes, and the viewport lands inside it.
+#[test]
+fn the_minimap_maps_the_pages_content_and_nothing_else() {
+    let mut h = canvas_host();
+    let b = crate::editor_ui::page_content_bounds(&h.app).expect("the page has content");
+    assert_eq!((b.x0, b.y0, b.x1, b.y1), (100.0, 100.0, 1300.0, 1000.0));
+
+    let g = crate::editor_ui::minimap_geom(&h.app).expect("the minimap is on by default");
+    let reg = h.app.editor_regions();
+    assert!(
+        g.panel.x0 >= reg.canvas.x0
+            && g.panel.y0 >= reg.canvas.y0
+            && g.panel.x1 <= reg.canvas.x1
+            && g.panel.y1 <= reg.canvas.y1,
+        "the panel must sit inside the canvas, found {:?} vs {:?}",
+        g.panel,
+        reg.canvas
+    );
+
+    // the mapping is a similarity: content corners land inside the panel and
+    // round-trip back to the world coordinate they came from
+    let tl = g.to_panel(b.x0, b.y0);
+    let br = g.to_panel(b.x1, b.y1);
+    assert!(g.panel.contains(tl) && g.panel.contains(br));
+    let back = g.to_world(tl);
+    assert!((back.x - b.x0).abs() < 0.5 && (back.y - b.y0).abs() < 0.5);
+    // tighter axis keeps the panel's aspect (letterboxed, never stretched)
+    let ratio_world = b.width() / b.height();
+    let ratio_panel = (br.x - tl.x) / (br.y - tl.y);
+    assert!(
+        (ratio_world - ratio_panel).abs() < 0.01,
+        "the sketch must not stretch: {ratio_world} vs {ratio_panel}"
+    );
+
+    // hidden layers are not part of the page's extent
+    let id = "n-c";
+    h.app.doc().editor().set_visible(id, false);
+    let b2 = crate::editor_ui::page_content_bounds(&h.app).expect("two nodes left");
+    assert_eq!((b2.x0, b2.y0, b2.x1, b2.y1), (100.0, 100.0, 900.0, 500.0));
+}
+
+/// A click on the map is a navigation: the point under the pointer ends up in
+/// the middle of the canvas, and scrubbing keeps it there.
+#[test]
+fn scrubbing_the_minimap_moves_the_viewport_where_you_point() {
+    let mut h = canvas_host();
+    let g = crate::editor_ui::minimap_geom(&h.app).unwrap();
+    let reg = h.app.editor_regions();
+    let target = Point::new(800.0, 500.0); // world
+    let on_map = g.to_panel(target.x, target.y);
+    assert!(g.panel.contains(on_map), "the target is on the map");
+
+    h.on_press(on_map);
+    assert!(
+        matches!(h.app.drag, Some(Drag::Minimap)),
+        "a press on the map starts a scrub"
+    );
+    let center = h.app.screen_to_world(Point::new(
+        reg.canvas.x0 + reg.canvas.width() / 2.0,
+        reg.canvas.y0 + reg.canvas.height() / 2.0,
+    ));
+    assert!(
+        (center.x - target.x).abs() < 1.0 && (center.y - target.y).abs() < 1.0,
+        "the pressed point must come to the middle, found {center:?}"
+    );
+
+    // dragging continues the scrub, releasing ends it
+    let root_id = h.app.doc_ref().editor_ref().root.id.clone();
+    h.app.doc().editor().insert_node(
+        &root_id,
+        Node::rect("n-d", 2000.0, 100.0, 100.0, 100.0, Color::BLACK),
+    );
+    let g = crate::editor_ui::minimap_geom(&h.app).unwrap();
+    let move_to = g.to_panel(2100.0, 150.0);
+    h.on_move(move_to);
+    let center = h.app.screen_to_world(Point::new(
+        reg.canvas.x0 + reg.canvas.width() / 2.0,
+        reg.canvas.y0 + reg.canvas.height() / 2.0,
+    ));
+    assert!(
+        center.x > 1500.0,
+        "scrubbing follows the pointer, found x={}",
+        center.x
+    );
+    h.on_release();
+    assert!(h.app.drag.is_none());
+    // the map is a drag surface: it advertises itself as one
+    h.app.mouse = g.panel.center();
+    assert_eq!(cursor_for(&h.app), CursorIcon::Grab);
+    h.app.mouse = g.close().center();
+    assert_eq!(cursor_for(&h.app), CursorIcon::Pointer);
+}
+
+/// ⇧1 must fit what is drawn — the frame can be smaller than the content and
+/// the old fit only knew the frame.
+#[test]
+fn zoom_to_fit_frames_the_content_not_the_canvas() {
+    let mut h = canvas_host();
+    h.app.zoom = 8.0;
+    h.app.pan = (0.0, 0.0);
+    h.zoom_fit();
+    let reg = h.app.editor_regions();
+    let b = crate::editor_ui::page_content_bounds(&h.app).unwrap();
+    // every corner of the content is on screen at the fitted zoom
+    for (wx, wy) in [(b.x0, b.y0), (b.x1, b.y0), (b.x0, b.y1), (b.x1, b.y1)] {
+        let p = h.app.world_to_screen(Point::new(wx, wy));
+        assert!(
+            reg.canvas.contains(p),
+            "corner ({wx}, {wy}) → {p:?} is outside {:?} at zoom {}",
+            reg.canvas,
+            h.app.zoom
+        );
+    }
+    // and it is centred, not clamped to a corner
+    let c = h.app.world_to_screen(b.center());
+    let mid = reg.canvas.center();
+    assert!(
+        (c.x - mid.x).abs() < 1.0 && (c.y - mid.y).abs() < 1.0,
+        "the content centre must be the viewport centre, found {c:?} vs {mid:?}"
+    );
+    // a page with nothing on it keeps the old frame camera
+    let mut empty = host();
+    empty.app.docs[0].editors[0].root.children.clear();
+    empty.zoom_fit();
+    assert!(empty.app.zoom > 0.0, "an empty page still gets a camera");
+}
+
+/// The minimap is optional and its ✕ is the drawn ✕: the toggle round-trips,
+/// the close button closes, and a hidden map takes no presses.
+#[test]
+fn the_minimap_toggles_and_its_close_button_is_real() {
+    let mut h = canvas_host();
+    assert!(h.app.minimap, "on by default in the editor");
+    let g = crate::editor_ui::minimap_geom(&h.app).unwrap();
+    h.on_press(g.close().center());
+    assert!(!h.app.minimap, "the ✕ hides the map");
+    assert!(h.app.status.contains("⇧M"), "and says how to get it back");
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let _ = crate::editor_ui::paint_over(&mut h.app, &mut scene);
+    assert!(
+        crate::editor_ui::minimap_geom(&h.app).is_none(),
+        "a hidden map has no geometry"
+    );
+
+    h.dispatch(Action::ToggleMinimap);
+    assert!(h.app.minimap);
+    let g = crate::editor_ui::minimap_geom(&h.app).unwrap();
+    // a press on the map does not reach the canvas underneath it
+    let before = h.app.doc_ref().editor_ref().selection.clone();
+    h.on_press(g.panel.center());
+    assert_eq!(
+        h.app.doc_ref().editor_ref().selection,
+        before,
+        "the map swallows its own presses"
+    );
+    // an empty page has nothing to map
+    h.app.doc().editor().selection.clear();
+    for id in ["n-a", "n-b", "n-c"] {
+        h.app.doc().editor().set_visible(id, false);
+    }
+    assert!(crate::editor_ui::minimap_geom(&h.app).is_none());
+}
+
+/// A guide you cannot measure is a guess: the readout follows the dragged
+/// line, says its world coordinate, and stays inside the canvas.
+#[test]
+fn the_guide_readout_says_where_the_line_is() {
+    let mut h = canvas_host();
+    h.app.rulers = true;
+    let reg = h.app.editor_regions();
+    let (r, label) = crate::editor_ui::guide_readout(&h.app, 'v', 340.0).expect("on-canvas guide");
+    assert_eq!(label, "340");
+    assert!(
+        r.x0 >= reg.canvas.x0
+            && r.y0 >= reg.canvas.y0
+            && r.x1 <= reg.canvas.x1
+            && r.y1 <= reg.canvas.y1,
+        "the chip must stay on the canvas, found {r:?}"
+    );
+    let line = h.app.world_to_screen(Point::new(340.0, 0.0)).x;
+    assert!(
+        (r.x0 - (line + 6.0)).abs() < 0.01,
+        "the chip sits beside the line it measures"
+    );
+    // an off-canvas guide has no readout to paint
+    assert!(crate::editor_ui::guide_readout(&h.app, 'v', -10_000.0).is_none());
+
+    // and a real drag shows it: the line is in the document, the value on screen
+    h.app.doc().guides_visible = true;
+    h.app.doc().guides.push(('v', 340.0));
+    *h.app.guide_drag() = Some(('v', 512.0));
+    let mut scene = vello::Scene::new();
+    let _ = crate::editor_ui::paint_over(&mut h.app, &mut scene);
+    let (_, live) = crate::editor_ui::guide_readout(&h.app, 'v', 512.0).unwrap();
+    assert_eq!(live, "512", "the readout follows the dragged coordinate");
+}
+
+/// Pages are recognisable before they are opened: a page with content gets a
+/// sketch, an empty one keeps the plain glyph, and the row still switches.
+#[test]
+fn pages_show_a_sketch_and_still_switch() {
+    let mut h = canvas_host();
+    h.dispatch(Action::AddPage);
+    let page1 = h.app.doc().editors.len() - 1;
+    assert!(
+        crate::editor_ui::page_has_content(&h.app, 0),
+        "page 1 has the three rects"
+    );
+    assert!(
+        !crate::editor_ui::page_has_content(&h.app, page1),
+        "page 2 is empty until something is drawn on it"
+    );
+    let mut scene = vello::Scene::new();
+    let _ = crate::editor_ui::paint(&mut h.app, &mut scene);
+    let rows = h.app.pages_rows();
+    let r = rows
+        .iter()
+        .find(|(i, _)| *i == page1)
+        .map(|(_, r)| *r)
+        .expect("the new page has a row");
+    h.on_press(r.center());
+    assert_eq!(
+        h.app.doc().page,
+        page1,
+        "the thumbnail row is still the page switcher"
+    );
+}

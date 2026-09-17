@@ -352,6 +352,7 @@ design system makes the next screen cheap to build.
 | placeholder text | exempt from the audit and failing AA in all three palettes (Graphite 2.56:1) | audited at 4.5:1 like any text role; `#939AA6` / `#5B6274` / `#B8B8B8`, each still dimmer than `text_dim` |
 | panels | the resize seam lit up but said nothing | the seam goes accent and grows a centred grip pill on hover/drag |
 | dashboard | one column of cards, no sort, no multi-select, no bulk actions | the browser is now one list behind paint *and* actions (`visible_files()`): Edited / Name / Starred-first sort with a menu, a table whose NAME / TEAM / EDITED headers are clickable, multi-select (click, ⌘/Ctrl-click, ⌘/Ctrl+A) and a bulk bar that only exists while something is selected; Escape unwinds menu → selection → ring |
+| canvas | no minimap, no page thumbnails, no live guide value, and ⇧1 fitted the frame rather than the content | the minimap (⇧M, context menu, or its own ✕) maps the page's visible nodes and scrubs the viewport; every PAGES row draws a sketch of its own page; a dragged guide shows its world coordinate; ⇧1 fits the content box |
 | right panel | a fill was a hex field and nothing else — the engine had variables (`Paint::Variable`) and paint styles (`bindings["style:paint"]`) with no way to reach either | the fill/stroke row shows **what the paint is linked to** (the variable's or style's name, not the hex it happens to resolve to) and grows the library button: a popover listing the file's colour variables (resolved through the active mode) and paint styles, the layer's current link checked, and a "Detach — keep this colour" row. A bound fill is a link, not a copy: editing the variable repaints every consumer, and detaching freezes the colour that was on screen. Paint styles are fill styles in this engine, so the stroke row offers variables only and says so |
 
 ### The critic's open list — ranked by how much it would lift the product
@@ -360,11 +361,13 @@ design system makes the next screen cheap to build.
 multi-select (item 4) and the right panel's variables-and-styles surface
 (item 3) — see the table above. Each entry keeps what is still missing.*
 
-**1. The canvas reads as an editor but has no spatial navigation aids.**
-No minimap, no "zoom to fit all pages", no page thumbnail strip, and the ruler
-has no live guide readout while dragging (the guide line exists; the numeric
-feedback does not). Figma's ruler + guide readout and its page thumbnails are
-what make a large document feel small.
+**1. The canvas's navigation is in place for one page; multi-page and
+multi-window framing is not.**
+The minimap, the page sketches, the guide readout and content-fit zoom landed
+this pass. Still missing vs Figma: "fit all pages" as one command (the minimap
+maps the current page only), a separate dockable thumbnail rail for large files,
+and the minimap does not yet follow the pointer's *hover* to preview what is
+under the cursor.
 
 **2. The left panel has the panes but not the workflows.**
 LAYERS / ASSETS / TOKENS pills exist, pages are listed, the tree supports

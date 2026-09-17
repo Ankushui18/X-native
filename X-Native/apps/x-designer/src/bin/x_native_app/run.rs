@@ -3602,6 +3602,23 @@ impl Host {
             return;
         }
 
+        // The minimap owns presses inside it: the ✕ closes it, anywhere else
+        // is a scrub (a press that also starts the drag — the map is small,
+        // the gesture should not need two of them).
+        if let Some(g) = crate::editor_ui::minimap_geom(&self.app) {
+            if g.close().contains(p) {
+                self.dispatch(Action::ToggleMinimap);
+                return;
+            }
+            if g.panel.contains(p) {
+                self.commit_field();
+                let w = g.to_world(p);
+                self.center_on_world(w.x, w.y);
+                self.app.drag = Some(Drag::Minimap);
+                return;
+            }
+        }
+
         // chrome hit zones
         for (r, a) in self.app.hit.iter().rev() {
             if r.contains(p) {
@@ -4608,6 +4625,13 @@ impl Host {
                 let world = self.app.screen_to_world(p);
                 let c = if axis == 'v' { world.x } else { world.y };
                 *self.app.guide_drag() = Some((axis, c));
+            }
+            Some(Drag::Minimap) => {
+                // the viewport follows the pointer across the whole page
+                if let Some(g) = crate::editor_ui::minimap_geom(&self.app) {
+                    let w = g.to_world(p);
+                    self.center_on_world(w.x, w.y);
+                }
             }
             // Board-specific drag handlers
             Some(Drag::BoardCreateSticky {
@@ -6005,6 +6029,10 @@ impl Host {
                     }
                     "1" => {
                         self.zoom_fit();
+                        return;
+                    }
+                    "m" | "M" if self.app.shift => {
+                        self.dispatch(Action::ToggleMinimap);
                         return;
                     }
                     // Layer management shortcuts
@@ -7510,7 +7538,33 @@ impl Host {
     }
 
     fn zoom_fit(&mut self) {
-        self.app.center_view();
+        // ⇧1 fits what is DRAWN on the page, not the page frame: the frame can
+        // be bigger than the canvas (so "fit" clipped it) and loose nodes can
+        // sit outside it. Empty page → the frame-centred camera as before.
+        let Some(b) = crate::editor_ui::page_content_bounds(&self.app) else {
+            self.app.center_view();
+            return;
+        };
+        let reg = self.app.editor_regions();
+        let (cw, ch) = (reg.canvas.width(), reg.canvas.height());
+        let pad = 24.0;
+        let z = ((cw - pad * 2.0) / b.width().max(1.0))
+            .min((ch - pad * 2.0) / b.height().max(1.0))
+            .clamp(0.01, 64.0);
+        self.app.zoom = z;
+        self.center_on_world(b.center().x, b.center().y);
+    }
+
+    /// Put world point (`wx`, `wy`) in the middle of the canvas viewport.
+    fn center_on_world(&mut self, wx: f64, wy: f64) {
+        let reg = self.app.editor_regions();
+        let target = Point::new(
+            reg.canvas.x0 + reg.canvas.width() / 2.0,
+            reg.canvas.y0 + reg.canvas.height() / 2.0,
+        );
+        let now = self.app.world_to_screen(Point::new(wx, wy));
+        self.app.pan.0 += target.x - now.x;
+        self.app.pan.1 += target.y - now.y;
     }
 
     /// Zoom by `factor` anchored at screen point `p` (cursor / center).
@@ -9028,6 +9082,15 @@ impl Host {
                 doc.color_picker_fill_open = false;
                 doc.color_picker_stroke_open = false;
             }
+            Action::ToggleMinimap => {
+                self.app.minimap = !self.app.minimap;
+                self.app.status = if self.app.minimap {
+                    "Minimap shown (⇧M hides it)".into()
+                } else {
+                    "Minimap hidden (⇧M brings it back)".into()
+                };
+            }
+            Action::MinimapNav(wx, wy) => self.center_on_world(wx, wy),
             Action::RightTab(t) => {
                 // leaving DESIGN takes the paint library with it: the popover
                 // is anchored to a row that only that tab paints
@@ -11435,6 +11498,9 @@ pub fn cursor_for(app: &App) -> CursorIcon {
         Screen::Board => CursorIcon::Default,
         Screen::Editor => {
             let reg = app.editor_regions();
+            if let Some(c) = minimap_cursor(app) {
+                return c;
+            }
             if crate::editor_ui::paint_lib_rect(app).is_some_and(|r| r.contains(app.mouse)) {
                 // an open popover advertises its rows like any other control
                 CursorIcon::Pointer
@@ -11453,6 +11519,23 @@ pub fn cursor_for(app: &App) -> CursorIcon {
             }
         }
     }
+}
+
+/// What the pointer means over the minimap: grab to scrub, grabbing while it
+/// is being scrubbed, and a click cursor on its close button. `None` when the
+/// pointer is somewhere else — the caller then keeps its own grammar.
+fn minimap_cursor(app: &App) -> Option<CursorIcon> {
+    let g = crate::editor_ui::minimap_geom(app)?;
+    if !g.panel.contains(app.mouse) {
+        return None;
+    }
+    Some(if matches!(app.drag, Some(Drag::Minimap)) {
+        CursorIcon::Grabbing
+    } else if g.close().contains(app.mouse) {
+        CursorIcon::Pointer
+    } else {
+        CursorIcon::Grab
+    })
 }
 
 fn resizer_at(app: &App, p: Point) -> Option<u8> {
