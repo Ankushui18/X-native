@@ -1665,7 +1665,10 @@ mod tests {
         let xc = gc[0].transform.translation().x;
         let xr = gr[0].transform.translation().x;
         assert!(xl < 1.0, "left starts at the origin: {xl}");
-        assert!((xc - xl - (400.0 - w) / 2.0).abs() < 0.5, "center offset {xc}");
+        assert!(
+            (xc - xl - (400.0 - w) / 2.0).abs() < 0.5,
+            "center offset {xc}"
+        );
         assert!((xr - xl - (400.0 - w)).abs() < 0.5, "right offset {xr}");
     }
 
@@ -1692,7 +1695,10 @@ mod tests {
         assert!(g2.len() < g5.len(), "capped block has fewer glyphs");
         // the default style's line box is natural * 1.2
         let nat = (f0.ascent - f0.descent + f0.line_gap) * (24.0 / f0.units_per_em);
-        assert!((h2 - 2.0 * nat * 1.2).abs() < 0.5, "height = 2 line boxes: {h2}");
+        assert!(
+            (h2 - 2.0 * nat * 1.2).abs() < 0.5,
+            "height = 2 line boxes: {h2}"
+        );
     }
 
     /// Paragraph indent shifts the FIRST line of each paragraph only —
@@ -1724,15 +1730,21 @@ mod tests {
                     None => acc.push((y, x)),
                 }
             }
-            acc.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            acc.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
             acc
         };
         let a = minx(&plain);
         let b = minx(&ind);
         assert_eq!(a.len(), b.len(), "indent must not change wrapping");
         assert!(a.len() >= 3, "paragraph 1 must wrap: {} lines", a.len());
-        assert!((b[0].1 - a[0].1 - 30.0).abs() < 0.5, "para 1 first line +30");
-        assert!((b[a.len() - 1].1 - a[a.len() - 1].1 - 30.0).abs() < 0.5, "para 2 first line +30");
+        assert!(
+            (b[0].1 - a[0].1 - 30.0).abs() < 0.5,
+            "para 1 first line +30"
+        );
+        assert!(
+            (b[a.len() - 1].1 - a[a.len() - 1].1 - 30.0).abs() < 0.5,
+            "para 2 first line +30"
+        );
         for i in 1..a.len() - 1 {
             assert!((b[i].1 - a[i].1).abs() < 0.5, "wrapped line {i} unchanged");
         }
@@ -1771,7 +1783,10 @@ mod tests {
         let bb_s = gs[g0.len()].path.bounding_box();
         assert!(bb_u.min_y() > baseline, "underline sits below the baseline");
         assert!(bb_s.max_y() < baseline, "strike sits above the baseline");
-        assert!(bb_u.max_y() - bb_u.min_y() >= 1.0, "underline has thickness");
+        assert!(
+            bb_u.max_y() - bb_u.min_y() >= 1.0,
+            "underline has thickness"
+        );
     }
 
     fn fonts() -> FontManager {

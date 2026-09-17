@@ -4244,8 +4244,15 @@ fn paint_design(
 
     // ---- TEXT FORMATTING (Figma Design parity) ----
     // Vertical alignment (horizontal sits in the button row above)
-    app.fonts
-        .text(s, x0, y0 + 1024.5, "Vertical alignment", T10, C_DIM, Wt::Reg);
+    app.fonts.text(
+        s,
+        x0,
+        y0 + 1024.5,
+        "Vertical alignment",
+        T10,
+        C_DIM,
+        Wt::Reg,
+    );
     let v_align = Rect::new(x0, y0 + 1042.0, x0 + 153.5, y0 + 1070.0);
     input(
         app,
@@ -4313,8 +4320,15 @@ fn paint_design(
         None,
     );
     // Paragraph indent
-    app.fonts
-        .text(s, x0 + 161.5, y0 + 1132.5, "Paragraph indent", T10, C_DIM, Wt::Reg);
+    app.fonts.text(
+        s,
+        x0 + 161.5,
+        y0 + 1132.5,
+        "Paragraph indent",
+        T10,
+        C_DIM,
+        Wt::Reg,
+    );
     let para_indent = Rect::new(x0 + 161.5, y0 + 1150.0, x0 + 315.0, y0 + 1178.0);
     input(
         app,
@@ -4322,7 +4336,11 @@ fn paint_design(
         hit,
         para_indent,
         None,
-        &field_val(app, FieldId::ParagraphIndent, typo_val(app, Typo::ParagraphIndent)),
+        &field_val(
+            app,
+            FieldId::ParagraphIndent,
+            typo_val(app, Typo::ParagraphIndent),
+        ),
         false,
         Some(Action::Field(FieldId::ParagraphIndent)),
         None,

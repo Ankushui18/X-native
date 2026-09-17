@@ -480,10 +480,26 @@ mod tests {
             )
         };
         let left = base(Align::Left, None, 0.0, TextDecoration::None);
-        assert_ne!(left, base(Align::Center, None, 0.0, TextDecoration::None), "align");
-        assert_ne!(left, base(Align::Right, None, 0.0, TextDecoration::None), "align right");
-        assert_ne!(left, base(Align::Left, Some(2), 0.0, TextDecoration::None), "max lines");
-        assert_ne!(left, base(Align::Left, None, 20.0, TextDecoration::None), "indent");
+        assert_ne!(
+            left,
+            base(Align::Center, None, 0.0, TextDecoration::None),
+            "align"
+        );
+        assert_ne!(
+            left,
+            base(Align::Right, None, 0.0, TextDecoration::None),
+            "align right"
+        );
+        assert_ne!(
+            left,
+            base(Align::Left, Some(2), 0.0, TextDecoration::None),
+            "max lines"
+        );
+        assert_ne!(
+            left,
+            base(Align::Left, None, 20.0, TextDecoration::None),
+            "indent"
+        );
         assert_ne!(
             left,
             base(Align::Left, None, 0.0, TextDecoration::Underline),
@@ -494,7 +510,11 @@ mod tests {
             base(Align::Left, None, 0.0, TextDecoration::Strikethrough),
             "strike"
         );
-        assert_eq!(left, base(Align::Left, None, 0.0, TextDecoration::None), "stable");
+        assert_eq!(
+            left,
+            base(Align::Left, None, 0.0, TextDecoration::None),
+            "stable"
+        );
     }
 
     #[test]

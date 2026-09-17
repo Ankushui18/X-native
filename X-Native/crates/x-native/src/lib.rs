@@ -77,8 +77,24 @@ pub fn svg_text_outliner(
             glyphs
         } else {
             let (glyphs, _) = x_text::node_text_outlines_rich(
-                fonts, parts, size, max_width, font, 0.0, 1.2, wrap, 0.0, 0.0, 0.0, false, 0.0,
-                0.0, 0, x_text::Align::Left, None, 0.0,
+                fonts,
+                parts,
+                size,
+                max_width,
+                font,
+                0.0,
+                1.2,
+                wrap,
+                0.0,
+                0.0,
+                0.0,
+                false,
+                0.0,
+                0.0,
+                0,
+                x_text::Align::Left,
+                None,
+                0.0,
                 x_core::TextDecoration::None,
             )?;
             glyphs

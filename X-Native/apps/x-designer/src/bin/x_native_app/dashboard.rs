@@ -671,10 +671,10 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         // .card:hover{transform:translateY(-2px);...} — lift the whole card
         let dy = if hov { dy - 2.0 } else { dy };
         let r = Rect::new(cx, dy + 147.5, cx + cw, dy + 235.5);
-    fill_rrect(s, r, R_CARD, if hov { C_PANEL_2 } else { C_PANEL });
-    // hover: a quiet strong-border ring (hover must not impersonate the
-    // selection colour)
-    stroke_rrect(s, r, R_CARD, if hov { C_LINE_2 } else { C_LINE }, 1.0);
+        fill_rrect(s, r, R_CARD, if hov { C_PANEL_2 } else { C_PANEL });
+        // hover: a quiet strong-border ring (hover must not impersonate the
+        // selection colour)
+        stroke_rrect(s, r, R_CARD, if hov { C_LINE_2 } else { C_LINE }, 1.0);
         // signature: the icon chip is a square violet tile — the same 32×32,
         // r8, 16px-glyph mark the template-gallery rows wear. The reference
         // mock's flex had SHRUNK its w-8 h-8 chip to 30.7×18 inside the fixed

@@ -372,9 +372,7 @@ impl<'a> RasterSink<'a> {
                             // rule the canvas sink applies
                             let dy = match v_align {
                                 x_core::TextAlignVertical::Top => 0.0,
-                                x_core::TextAlignVertical::Middle => {
-                                    (*node_h - height) / 2.0
-                                }
+                                x_core::TextAlignVertical::Middle => (*node_h - height) / 2.0,
                                 x_core::TextAlignVertical::Bottom => *node_h - height,
                             };
                             let vshift = Affine::translate((0.0, dy));
