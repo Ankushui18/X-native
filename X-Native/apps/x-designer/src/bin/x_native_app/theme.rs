@@ -291,8 +291,19 @@ pub const TAB_PAD_R: f64 = 10.0;
 pub const TREE_ROW_H: f64 = 22.0;
 pub const TREE_INDENT: f64 = 12.0;
 pub const INPUT_H: f64 = 28.0;
+/// Dense rows: disclosure / summary toggles ("Advanced" rows, clip content,
+/// Fixed|Fill segments). One step below the standard input.
+pub const DENSE_H: f64 = 24.0;
+/// Checkboxes, switches and inline chips (Hug/Fixed, padding glyph).
+pub const CHIP_H: f64 = 16.0;
 pub const PILL_H: f64 = 30.0;
 pub const SQ_BTN: f64 = 28.0;
+/// Inspector vertical rhythm (Refinement v1, P0-9): row→label 8,
+/// label→control 6, row→row 8, row→hline 12, hline→next section 12.
+/// These name the GAPS; measured y-offsets stay literal.
+pub const ROW_GAP: f64 = SP_3;
+pub const LABEL_GAP: f64 = SP_2;
+pub const SECTION_GAP: f64 = 12.0;
 pub const TOOLBAR_H: f64 = 40.0;
 pub const TOOL_ICON: f64 = 32.0;
 pub const TOOLBAR_BOTTOM: f64 = 20.0;

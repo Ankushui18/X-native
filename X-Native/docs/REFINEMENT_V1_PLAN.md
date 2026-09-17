@@ -98,13 +98,41 @@ Nothing was removed; the secondary properties moved behind a disclosure.
   edge collapses it. Non-layout selections show no toggle (no phantom
   affordance).
 
+### P0-9 · Control heights / spacing / typography standard — DONE (this branch)
+
+One scale, declared in `theme.rs` and applied to the COMPOSE inspector:
+
+- **Heights.** `INPUT_H` 28 = every property row (inputs, dropdowns,
+  action buttons); `SQ_BTN` 28 = square icon buttons; `DENSE_H` 24 =
+  disclosure / summary rows ("Advanced" rows, clip content, Fixed|Fill);
+  `CHIP_H` 16 = checkboxes, switches, inline chips. The outliers are
+  gone: 19px sizing chip, 20px eye button, 22px style buttons, 32px
+  gap / padding rows — all now on the scale.
+- **Rhythm.** `ROW_GAP` 8 (row→row, row→label, row→disclosure),
+  `LABEL_GAP` 6 (label→control), `SECTION_GAP` 12 (content→hline,
+  hline→section). The inspector previously mixed three dialects
+  (header 8 / auto-layout 16+11 / typography 8+5.5 with drift); it is
+  now one grid, and the same constants normalize the fill/stroke/effects
+  tail's cursor math (16px row gaps, 24px section gaps → 8/12).
+- **Side fix.** The alignment card no longer overlaps the advanced
+  band (card 334–418, band 426–450) — a measured-reference leftover.
+- **Typography usage** already sits on the T10–T20 aliases; this pass
+  kept section headers on caps_label and every value on T10/T11.
+- The design sheet's COMPOSE mirror (`screens.js composePanel`) was
+  re-synced to the same geometry, including the line-height row that is
+  now above the fold.
+
+Scope note: dashboard / board / tool-dock control heights are their own
+idioms (card grids, 22px tree rows, 40px toolbar) and belong to the
+P0-4/P0-5 visual-language pass; the standard above is what any of those
+should snap to when they touch property rows.
+
 ### Not yet done (queued)
 - **P0-1/2 · Screen & component contract; x-ui as the component layer.**
   x-ui is currently a token repo the app does not import for widgets;
   Button/Input/Select/Section/LayerRow/etc. land there incrementally.
-- **P0-4/5 · Dashboard + cross-screen visual language pass.**
-- **P0-9 · Control height/spacing/typography audit** (one row height, one
-  label style, one field style per screen).
+- **P0-4/5 · Dashboard + cross-screen visual language pass** (should snap
+  property-row surfaces to the P0-9 standard).
 - **P0-10 · First-time workflow** (Primary: Compose / Flow / Ship;
   Supporting: Structure / Library / Tokens / Variables / Agents / UX).
 - **P1 · Professional editor interaction** (deep select, select-under-cursor,

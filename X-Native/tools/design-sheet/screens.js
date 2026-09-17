@@ -478,16 +478,16 @@ function composePanel() {
 
   // auto layout: label + plus, the four flow diagrams, then the sizing row
   const auto =
-    at(x0, y0 + 177, 120, 18, 'Auto layout', { class: 'lead' }) +
-    at(x0 + 291, y0 + 173, 24, 24, icon('plus', 14), { class: 'sq-btn' }) +
-    at(x0, y0 + 209 - 5, 60, 14, 'Flow', { class: 'grp-t' }) +
+    at(x0, y0 + 179.5, 120, 18, 'Auto layout', { class: 'lead' }) +
+    at(x0 + 291, y0 + 172, 24, 28, icon('plus', 14), { class: 'sq-btn' }) +
+    at(x0, y0 + 208 - 5, 60, 14, 'Flow', { class: 'grp-t' }) +
     [0, 1, 2, 3]
       .map((i) => {
         const fx = x0 + [0, 80.3, 160.5, 240.8][i];
         const gw = i === 1 ? 14 : i === 3 ? 16 : 18;
         return at(
           fx,
-          y0 + 232,
+          y0 + 226,
           74.3,
           28,
           `<span class="gl" style="left:${(74.3 - gw) / 2}px;top:${(28 - (i === 1 ? 18 : 14)) / 2}px;width:${gw}px;height:${i === 1 ? 18 : 14}px">${flowGlyph(i)}</span>`,
@@ -496,14 +496,14 @@ function composePanel() {
       })
       .join('');
   const resizing =
-    at(x0, y0 + 271, 80, 14, 'Resizing', { class: 'grp-t' }) +
+    at(x0, y0 + 262 - 5, 80, 14, 'Resizing', { class: 'grp-t' }) +
     [['W', '320'], ['H', '48']]
       .map(([lab, val], i) => {
         const fx = x0 + 141.5 * i;
         return (
-          insField(fx, y0 + 299, 133.5, 32, { label: lab }) +
-          at(fx + 26, y0 + 307, 61.5, 18, val, { class: 'fv right' }) +
-          at(fx + 93.5, y0 + 305.5, 31, 19, i === 0 ? 'Fixed' : 'Hug', { class: 'chip' })
+          insField(fx, y0 + 280, 133.5, 28, { label: lab }) +
+          at(fx + 26, y0 + 287.8, 61.5, 18, val, { class: 'fv right' }) +
+          at(fx + 93.5, y0 + 286, 31, 16, i === 0 ? 'Fixed' : 'Hug', { class: 'chip' })
         );
       })
       .join('');
@@ -520,7 +520,7 @@ function composePanel() {
   };
   const card = at(
     x0,
-    y0 + 370,
+    y0 + 334,
     84,
     84,
     at(12, 42, 60, 1, '', { class: 'hr2' }) +
@@ -529,58 +529,61 @@ function composePanel() {
     { class: 'align-card' },
   );
   const gapRow = (y, ic, val) =>
-    insField(x0 + 96, y, 219, 32, { left: ic, value: val, end: true });
+    insField(x0 + 96, y, 219, 28, { left: ic, value: val, end: true });
   const align =
-    at(x0, y0 + 347 - 5, 80, 14, 'Alignment', { class: 'grp-t' }) +
-    at(xr - 60, y0 + 342, 60, 14, 'Gap', { class: 'grp-t right' }) +
+    at(x0, y0 + 316 - 5, 80, 14, 'Alignment', { class: 'grp-t' }) +
+    at(xr - 60, y0 + 311, 60, 14, 'Gap', { class: 'grp-t right' }) +
     card +
-    gapRow(y0 + 370, 'arrow-left-right', '12') +
-    gapRow(y0 + 410, 'arrow-up-down', '12');
+    gapRow(y0 + 334, 'arrow-left-right', '12') +
+    gapRow(y0 + 370, 'arrow-up-down', '12');
 
   // padding, clip content, appearance (opacity + radius)
   const padding =
-    at(x0, y0 + 465, 80, 14, 'Padding', { class: 'grp-t' }) +
+    at(x0, y0 + 458 - 5, 80, 14, 'Padding', { class: 'grp-t' }) +
     [0, 1]
       .map((i) => {
         const fx = x0 + 141.5 * i;
         const glyph =
           i === 0
-            ? at(fx + 9, y0 + 501, 16, 16, '', { class: 'pad-glyph' }) +
-              at(fx + 14, y0 + 504, 1, 10, '', { class: 'ink' }) +
-              at(fx + 19, y0 + 504, 1, 10, '', { class: 'ink' })
-            : at(fx + 9, y0 + 501, 16, 16, '', { class: 'pad-glyph' }) +
-              at(fx + 12, y0 + 506, 10, 1, '', { class: 'ink' }) +
-              at(fx + 12, y0 + 511, 10, 1, '', { class: 'ink' });
+            ? at(fx + 9, y0 + 482, 16, 16, '', { class: 'pad-glyph' }) +
+              at(fx + 14, y0 + 485, 1, 10, '', { class: 'ink' }) +
+              at(fx + 19, y0 + 485, 1, 10, '', { class: 'ink' })
+            : at(fx + 9, y0 + 482, 16, 16, '', { class: 'pad-glyph' }) +
+              at(fx + 12, y0 + 487, 10, 1, '', { class: 'ink' }) +
+              at(fx + 12, y0 + 492, 10, 1, '', { class: 'ink' });
         return (
-          insField(fx, y0 + 493, 133.5, 32, {}) + glyph +
-          at(fx + 60, y0 + 501, 65.5, 18, '16', { class: 'fv right' })
+          insField(fx, y0 + 476, 133.5, 28, {}) + glyph +
+          at(fx + 60, y0 + 482, 65.5, 18, '16', { class: 'fv right' })
         );
       })
       .join('');
   const clip =
-    at(x0, y0 + 541.3, 16, 16, at(3, 3, 10, 10, '', { class: 'ink-fill' }), { class: 'checkbox' }) +
-    at(x0 + 24, y0 + 537, 120, 18, 'Clip content', { class: 'muted11' });
+    at(x0, y0 + 516, 16, 16, at(3, 3, 10, 10, '', { class: 'ink-fill' }), { class: 'checkbox' }) +
+    at(x0 + 24, y0 + 515.7, 120, 18, 'Clip content', { class: 'muted11' });
   const appearance =
-    at(x0, y0 + 582.5 - 5, 120, 16, 'Appearance', { class: 'sec-t' }) +
-    at(x0 + 294, y0 + 576, 16, 16, icon('eye', 14)) +
-    insField(x0, y0 + 605.5, 153.5, 28, { label: 'Opacity', value: '100%', end: true }) +
-    insField(x0 + 161.5, y0 + 605.5, 153.5, 28, { label: 'Radius', value: '8', end: true });
+    at(x0, y0 + 569 - 5, 120, 16, 'Appearance', { class: 'sec-t' }) +
+    at(x0 + 293, y0 + 560, 28, 28, icon('eye', 14), { class: 'sq-btn' }) +
+    insField(x0, y0 + 596, 153.5, 28, { label: 'Opacity', value: '100%', end: true }) +
+    insField(x0 + 161.5, y0 + 596, 153.5, 28, { label: 'Radius', value: '8', end: true });
 
-  // typography: family, weight/size, line height (the last row is cut by the fold)
+  // typography: family, weight/size, line height (last row above the fold)
   const typography =
-    at(x0, y0 + 658.5 - 5, 120, 16, 'Typography', { class: 'sec-t' }) +
-    at(x0 + 281, y0 + 654, 16, 16, icon('grid-2x2', 12)) +
-    at(x0 + 303, y0 + 653, 16, 16, icon('plus', 14)) +
-    insField(x0, y0 + 681.5, 315, 28, { value: 'Inter', right: 'chevron-down' }) +
-    insField(x0, y0 + 717.5, 227, 28, { value: 'Medium', right: 'chevron-down' }) +
-    insField(x0 + 235, y0 + 717.5, 80, 28, { value: '13', end: true });
+    at(x0, y0 + 657 - 5, 120, 16, 'Typography', { class: 'sec-t' }) +
+    at(x0 + 281, y0 + 652, 16, 16, icon('grid-2x2', 12)) +
+    at(x0 + 303, y0 + 654, 16, 16, icon('plus', 14)) +
+    insField(x0, y0 + 684, 315, 28, { value: 'Inter', right: 'chevron-down' }) +
+    insField(x0, y0 + 720, 227, 28, { value: 'Medium', right: 'chevron-down' }) +
+    insField(x0 + 235, y0 + 720, 80, 28, { value: '13', end: true }) +
+    at(x0, y0 + 756, 90, 14, 'Line height', { class: 'grp-t' }) +
+    at(x0 + 8, y0 + 774 + 8, 12, 12, icon('type', 12)) +
+    insField(x0, y0 + 774, 153.5, 28, { value: 'Auto', right: 'chevron-down' });
 
   return at(W - RIGHT, TITLE, RIGHT, H - TITLE, `
     ${at(0, 0, 1, H - TITLE, '', { class: 'hr' })}${header}${pills}${hr(88)}
     ${row1}${row2}${row3}${hr(y0 + 160)}
     ${auto}${resizing}
-    ${align}${padding}${clip}${hr(y0 + 569.5)}
-    ${appearance}${hr(y0 + 645.5)}${typography}
+    ${align}${padding}${clip}${hr(y0 + 548)}
+    ${appearance}${hr(y0 + 636)}${typography}
   `, { class: 'panel right-panel' });
 }
 

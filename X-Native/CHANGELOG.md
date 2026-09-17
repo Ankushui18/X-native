@@ -38,6 +38,15 @@ Part of the UI/UX Refinement v1 milestone (see
   regression test pins the role mapping. `apps/x-designer`.
 
 ### Added
+- **One control-height and spacing scale for the inspector (P0-9).**
+  `theme.rs` now declares `DENSE_H` (24, disclosure / summary rows) and
+  `CHIP_H` (16, checkboxes / switches / inline chips) alongside the
+  existing `INPUT_H` (28) / `SQ_BTN` (28), plus the rhythm constants
+  `ROW_GAP` (8), `LABEL_GAP` (6) and `SECTION_GAP` (12). The COMPOSE
+  inspector is re-gridded onto it: every property row is 28px, disclosure
+  rows 24px, chips 16px, with 8/6/12 gaps throughout; the
+  fill/stroke/effects tail's cursor math uses the same constants.
+  `apps/x-designer`.
 - **Progressive disclosure in the inspector (P0-8).** The typography
   section's secondary properties — letter/word spacing, paragraph
   spacing / baseline shift, text case, and the variable-font axes
@@ -52,6 +61,13 @@ Part of the UI/UX Refinement v1 milestone (see
   control as before. `apps/x-designer`.
 
 ### Changed
+- **Inspector control heights de-outliered (P0-9).** The 19px sizing
+  chip, 20px appearance eye button, 22px text-style buttons and 32px
+  gap/padding rows all sit on the 28/24/16 scale now, and the
+  alignment card no longer overlaps the Auto Layout advanced band
+  (a measured-reference leftover from before the disclosure pass).
+  The design sheet's COMPOSE mirror is re-synced to the same geometry,
+  including the line-height row that is now above the fold.
 - **Inspector typography section, no more phantom controls.** Horizontal
   alignment is three working buttons (active state mirrors the render);
   vertical alignment, decoration, max lines and paragraph indent now reach

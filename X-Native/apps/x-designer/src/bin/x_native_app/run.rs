@@ -5162,10 +5162,11 @@ impl Host {
                 };
                 self.zoom_at(p, f);
             } else if reg.right.contains(p) {
-                // clamp to the content: DESIGN column ends ~2050px below
-                // the entry line in the WORST case — both "Advanced"
-                // disclosures (auto layout + typography) expanded, plus the
-                // fill/stroke/effects tail (hand-tuned)
+                // clamp to the content: DESIGN column ends ~2020px below
+                // the entry line in the WORST case (P0-9 grid: both
+                // "Advanced" disclosures expanded puts the fill/stroke/
+                // effects tail at +1278, and the tail itself is the
+                // hand-tuned remainder) — 2050 covers it with room.
                 let max_scroll =
                     (2050.0 - (self.app.win_h - (crate::theme::ED_TITLE_H + 89.0))).max(0.0);
                 let d = self.app.doc();
