@@ -3047,6 +3047,8 @@ pub enum Typo {
     TextCase,
     OpticalSize,
     WidthAxis,
+    MaxLines,
+    ParagraphIndent,
 }
 
 /// px or integer formatter: trims to whole numbers when close.
@@ -3078,6 +3080,8 @@ pub fn typo_val(app: &App, which: Typo) -> String {
             Typo::TextCase => "None".into(),
             Typo::OpticalSize => "Auto".into(),
             Typo::WidthAxis => "Auto".into(),
+            Typo::MaxLines => "Auto".into(),
+            Typo::ParagraphIndent => "0px".into(),
         };
     };
     match which {
@@ -3117,6 +3121,11 @@ pub fn typo_val(app: &App, which: Typo) -> String {
                 "Auto".into()
             }
         }
+        Typo::MaxLines => t
+            .max_lines
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "Auto".into()),
+        Typo::ParagraphIndent => num_str(t.paragraph_indent, "px"),
     }
 }
 
@@ -3348,10 +3357,10 @@ fn paint_design(
     rw: f64,
     y_entry: f64,
 ) {
-    // Absolute geometry from the Chromium audit of v45-final-editor-28px.html
-    // at 1440 (see /home/user/ref/audit-editor.json). `y_entry` is the pixel
-    // right after the pill-tabs divider (abs 125); all offsets below are
-    // audit_y - 125, so the panel is exact at any window size.
+    // Absolute geometry, hand-tuned against a 1440px-wide reference
+    // composition. `y_entry` is the pixel right after the pill-tabs divider
+    // (abs 125); all offsets below are entry-relative, so the panel holds at
+    // any window size.
     let scroll = app.doc().scroll_right;
     let y0 = y_entry - scroll;
     let pl = 12.0;
@@ -3503,25 +3512,27 @@ fn paint_design(
     hline(s, rx, rx + rw, y0 + 160.0, C_LINE);
 
     // ---- auto layout: container +161 ------------------------------------
+    // Section header row (28): label vertically centered, add button on the
+    // standard SQ_BTN square.
     app.fonts
-        .text(s, x0, y0 + 176.8, "Auto layout", T11, C_TEXT, Wt::Med);
-    let addb = Rect::new(xr - 24.0, y0 + 173.0, xr, y0 + 197.0);
+        .text(s, x0, y0 + 179.5, "Auto layout", T11, C_TEXT, Wt::Med);
+    let addb = Rect::new(xr - 24.0, y0 + 172.0, xr, y0 + 200.0);
     let hov = hover(app, addb);
     fill_rrect(s, addb, R_MD, if hov { C_FIELD_2 } else { C_FIELD });
     stroke_rrect(s, addb, R_MD, C_LINE, 1.0);
-    draw_icon(s, "plus", addb.x0 + 5.0, addb.y0 + 5.0, ICON_SM, C_DIM);
+    draw_icon(s, "plus", addb.x0 + 5.0, addb.y0 + 7.0, ICON_SM, C_DIM);
     // The add button must create the same default layout that the Flow
     // controls edit; previously it was painted without a hit target.
     hit.push((addb, Action::AddAutoLayout));
 
     app.fonts
-        .text(s, x0, y0 + 209.0, "Flow", T10, C_DIM, Wt::Reg);
+        .text(s, x0, y0 + 208.0, "Flow", T10, C_DIM, Wt::Reg);
     let flow_xs = [0.0, 80.3, 160.5, 240.8];
     let flow = app.doc().flow;
     let boot_mock = app.doc().flow_boot_mock;
     for (i, &fxs) in flow_xs.iter().enumerate() {
         let fx = x0 + fxs;
-        let fr = Rect::new(fx, y0 + 232.0, fx + 74.3, y0 + 260.0);
+        let fr = Rect::new(fx, y0 + 226.0, fx + 74.3, y0 + 254.0);
         let active = flow == i || (boot_mock && matches!(i, 0 | 2));
         let hov = hover(app, fr);
         fill_rrect(
@@ -3560,7 +3571,7 @@ fn paint_design(
     }
 
     app.fonts
-        .text(s, x0, y0 + 276.0, "Resizing", T10, C_DIM, Wt::Reg);
+        .text(s, x0, y0 + 262.0, "Resizing", T10, C_DIM, Wt::Reg);
     // axis sizing is REAL for auto-layout frames (A5): W chip = main axis
     // when horizontal (cross when vertical), H chip the other; click
     // toggles Hug <-> Fixed. Non-layout frames keep the mock's static chip.
@@ -3578,14 +3589,15 @@ fn paint_design(
         .enumerate()
     {
         let fx = x0 + 141.5 * i as f64;
-        let fr = Rect::new(fx, y0 + 299.0, fx + 133.5, y0 + 331.0);
+        let fr = Rect::new(fx, y0 + 280.0, fx + 133.5, y0 + 308.0);
         input_box(app, s, fr, 8.0);
         app.fonts
-            .text(s, fx + 9.0, y0 + 308.3, axis, T10, C_DIM, Wt::Reg);
+            .text(s, fx + 9.0, y0 + 289.3, axis, T10, C_DIM, Wt::Reg);
         // value stops before the Hug/Fixed chip (chip x0 = fx + 93.5)
         app.fonts
-            .text_right(s, fx + 93.5, y0 + 306.8, &val, T11, C_TEXT, Wt::Mono, 6.0);
-        let chip = Rect::new(fx + 93.5, y0 + 305.5, fx + 124.5, y0 + 324.5);
+            .text_right(s, fx + 93.5, y0 + 287.8, &val, T11, C_TEXT, Wt::Mono, 6.0);
+        // sizing chip: standard CHIP_H, centered in the row
+        let chip = Rect::new(fx + 93.5, y0 + 286.0, fx + 124.5, y0 + 286.0 + CHIP_H);
         let is_main = (i == 0) == horizontal;
         let sizing = if is_main { main_sizing } else { cross_sizing };
         let (label, enabled) = match sizing {
@@ -3615,11 +3627,11 @@ fn paint_design(
         }
     }
     app.fonts
-        .text(s, x0, y0 + 347.0, "Alignment", T10, C_DIM, Wt::Reg);
+        .text(s, x0, y0 + 316.0, "Alignment", T10, C_DIM, Wt::Reg);
     app.fonts
-        .text_right(s, xr, y0 + 347.0, "Gap", T10, C_DIM, Wt::Reg, 0.0);
-    // 9-dot alignment card 84×84 at +370
-    let card = Rect::new(x0, y0 + 370.0, x0 + 84.0, y0 + 454.0);
+        .text_right(s, xr, y0 + 316.0, "Gap", T10, C_DIM, Wt::Reg, 0.0);
+    // 9-dot alignment card 84×84 at +334
+    let card = Rect::new(x0, y0 + 334.0, x0 + 84.0, y0 + 418.0);
     fill_rrect(s, card, R_XL, C_FIELD);
     stroke_rrect(s, card, R_XL, C_LINE, 1.0);
     hline(s, card.x0 + 12.0, card.x1 - 12.0, card.y0 + 42.0, C_LINE_2);
@@ -3647,15 +3659,15 @@ fn paint_design(
             hit.push((hitr, Action::Align(row, col)));
         }
     }
-    // gap column: two 32px fields at x0+96
+    // gap column: two INPUT_H fields at x0+96
     let gx = x0 + 96.0;
-    let g1 = Rect::new(gx, y0 + 370.0, gx + 219.0, y0 + 402.0);
+    let g1 = Rect::new(gx, y0 + 334.0, gx + 219.0, y0 + 362.0);
     input_box(app, s, g1, 8.0);
     draw_icon(
         s,
         "arrow-left-right",
         g1.x0 + 8.0,
-        g1.y0 + 10.0,
+        g1.y0 + 8.0,
         ICON_XS,
         C_DIM,
     );
@@ -3664,41 +3676,27 @@ fn paint_design(
     app.fonts.text_right(
         s,
         g1.x1 - 20.0,
-        g1.y0 + 6.8,
+        g1.y0 + 4.8,
         &gap_val,
         T11,
         C_TEXT,
         Wt::Reg,
         6.0,
     );
-    draw_icon(
-        s,
-        "chevron-down",
-        g1.x1 - 20.0,
-        g1.y0 + 10.0,
-        ICON_XS,
-        C_DIM,
-    );
+    draw_icon(s, "chevron-down", g1.x1 - 20.0, g1.y0 + 8.0, ICON_XS, C_DIM);
     hit.push((g1, Action::Field(FieldId::Gap)));
-    let g2 = Rect::new(gx, y0 + 410.0, gx + 219.0, y0 + 442.0);
+    let g2 = Rect::new(gx, y0 + 370.0, gx + 219.0, y0 + 398.0);
     input_box(app, s, g2, 8.0);
-    draw_icon(
-        s,
-        "arrow-up-down",
-        g2.x0 + 8.0,
-        g2.y0 + 10.0,
-        ICON_XS,
-        C_DIM,
-    );
+    draw_icon(s, "arrow-up-down", g2.x0 + 8.0, g2.y0 + 8.0, ICON_XS, C_DIM);
     // The second gap axis was previously a decorative empty field. Both
     // axes use the engine's single Auto Layout gap value until independent
     // row/column gaps are supported.
     app.fonts
-        .text_right(s, g2.x1, g2.y0 + 6.8, &gap_val, T11, C_TEXT, Wt::Reg, 8.0);
+        .text_right(s, g2.x1, g2.y0 + 4.8, &gap_val, T11, C_TEXT, Wt::Reg, 8.0);
     hit.push((g2, Action::Field(FieldId::Gap)));
 
     app.fonts
-        .text(s, x0, y0 + 470.0, "Padding", T10, C_DIM, Wt::Reg);
+        .text(s, x0, y0 + 458.0, "Padding", T10, C_DIM, Wt::Reg);
     for (i, (fid, val)) in [
         (FieldId::PadH, app.doc().pad_h),
         (FieldId::PadV, app.doc().pad_v),
@@ -3707,9 +3705,9 @@ fn paint_design(
     .enumerate()
     {
         let fx = x0 + 141.5 * i as f64;
-        let pr = Rect::new(fx, y0 + 493.0, fx + 133.5, y0 + 525.0);
+        let pr = Rect::new(fx, y0 + 476.0, fx + 133.5, y0 + 504.0);
         input_box(app, s, pr, 8.0);
-        let g = Rect::new(pr.x0 + 9.0, pr.y0 + 8.0, pr.x0 + 25.0, pr.y0 + 24.0);
+        let g = Rect::new(pr.x0 + 9.0, pr.y0 + 6.0, pr.x0 + 25.0, pr.y0 + 6.0 + CHIP_H);
         stroke_rrect(s, g, R_SM, C_DIM, 1.0);
         if i == 0 {
             vline(s, g.x0 + 5.0, g.y0 + 3.0, g.y1 - 3.0, C_DIM);
@@ -3720,115 +3718,164 @@ fn paint_design(
         }
         let v = field_val(app, fid, fmt_num(val));
         app.fonts
-            .text_right(s, pr.x1, pr.y0 + 6.8, &v, T11, C_TEXT, Wt::Reg, 8.0);
+            .text_right(s, pr.x1, pr.y0 + 4.8, &v, T11, C_TEXT, Wt::Reg, 8.0);
         hit.push((pr, Action::Field(fid)));
     }
 
     // ---- A3/A4 row: Wrap (frame WITH auto-layout) or, for a CHILD of
-    // an auto-layout frame, Fill container + Absolute position. Sits in
-    // the free band under the alignment card — mock geometry unchanged.
-    if sel_layout.is_some() {
-        let wrapping = sel_layout
-            .as_ref()
-            .map(|l| l.wrap == x_native::AutoLayoutWrap::Wrap)
-            .unwrap_or(false);
-        let wb = Rect::new(x0, y0 + 448.0, x0 + 16.0, y0 + 464.0);
-        fill_rrect(s, wb, R_SM, C_FIELD);
-        stroke_rrect(s, wb, R_SM, C_LINE_2, 1.0);
-        if wrapping {
-            fill_rrect(s, wb.inflate(-3.0, -3.0), R_XS, C_TEXT);
-        }
-        app.fonts
-            .text(s, wb.x1 + 8.0, y0 + 447.7, "Wrap", T11, C_MUTED, Wt::Reg);
-        hit.push((
-            Rect::new(x0, y0 + 444.0, x0 + 110.0, y0 + 468.0),
-            Action::ToggleWrap,
-        ));
-    } else if app.selected_parent_has_layout() {
-        // Fixed | Fill segmented control (constraints.grow)
-        let grow = {
-            let d = app.doc();
-            d.selected_id()
-                .and_then(|id| {
-                    fn find_con(
-                        n: &x_native::Node,
-                        id: &str,
-                    ) -> Option<x_native::ChildConstraints> {
-                        for c in &n.children {
-                            if c.id == id {
-                                return Some(c.constraints.clone());
-                            }
-                            if let Some(x) = find_con(c, id) {
-                                return Some(x);
-                            }
-                        }
-                        None
-                    }
-                    find_con(&d.editor_ref().root, &id)
-                })
-                .map(|c| c.grow >= 1.0)
-                .unwrap_or(false)
-        };
-        let seg = Rect::new(x0, y0 + 444.0, x0 + 150.0, y0 + 468.0);
-        let half = Rect::new(seg.x0, seg.y0, seg.x0 + 74.0, seg.y1);
-        let other = Rect::new(half.x1, seg.y0, seg.x1, seg.y1);
-        for (rr, lab, active, act) in [
-            (half, "Fixed", !grow, Action::SetChildFill(false)),
-            (other, "Fill", grow, Action::SetChildFill(true)),
-        ] {
-            fill_rrect(s, rr, R_MD, if active { C_FIELD_2 } else { C_FIELD });
-            stroke_rrect(s, rr, R_MD, if active { C_LINE_2 } else { C_LINE }, 1.0);
-            app.fonts
-                .text_center(s, rr, lab, T10, C_TEXT, Wt::Reg, true);
-            hit.push((rr, act));
-        }
-        // absolute position checkbox
-        let absolute = {
-            let d = app.doc();
-            d.selected_id()
-                .and_then(|id| {
-                    fn find_con(
-                        n: &x_native::Node,
-                        id: &str,
-                    ) -> Option<x_native::ChildConstraints> {
-                        for c in &n.children {
-                            if c.id == id {
-                                return Some(c.constraints.clone());
-                            }
-                            if let Some(x) = find_con(c, id) {
-                                return Some(x);
-                            }
-                        }
-                        None
-                    }
-                    find_con(&d.editor_ref().root, &id)
-                })
-                .map(|c| c.is_absolute)
-                .unwrap_or(false)
-        };
-        let ab = Rect::new(x0 + 162.0, y0 + 448.0, x0 + 178.0, y0 + 464.0);
-        fill_rrect(s, ab, R_SM, C_FIELD);
-        stroke_rrect(s, ab, R_SM, C_LINE_2, 1.0);
-        if absolute {
-            fill_rrect(s, ab.inflate(-3.0, -3.0), R_XS, C_TEXT);
-        }
+    // an auto-layout frame, Fill container + Absolute position. Progressive
+    // disclosure (P0-8): these are the layout section's ADVANCED rows, so
+    // the band shows an "Advanced" toggle until the user opens it. When
+    // open, the chevron at the band's right edge collapses it again.
+    let band = Rect::new(x0, y0 + 426.0, x0 + 315.0, y0 + 426.0 + DENSE_H);
+    let has_advanced = sel_layout.is_some() || app.selected_parent_has_layout();
+    let lav_open = app.layout_advanced_open;
+    if has_advanced && !lav_open {
+        let hov = hover(app, band);
+        draw_icon(
+            s,
+            "chevron-right",
+            band.x0 + 1.0,
+            band.y0 + 6.0,
+            ICON_XS,
+            C_DIM,
+        );
         app.fonts.text(
             s,
-            ab.x1 + 8.0,
-            y0 + 447.7,
-            "Absolute",
-            T11,
-            C_MUTED,
+            band.x0 + 20.0,
+            band.y0 + 5.0,
+            "Advanced",
+            T10,
+            if hov { C_TEXT } else { C_DIM },
             Wt::Reg,
         );
-        hit.push((
-            Rect::new(x0 + 162.0, y0 + 444.0, x0 + 262.0, y0 + 468.0),
-            Action::ToggleChildAbsolute,
-        ));
+        hit.push((band, Action::ToggleLayoutAdvanced));
+    } else if has_advanced {
+        if lav_open {
+            // collapse affordance at the band's right edge (the row's
+            // controls keep their own hit targets)
+            draw_icon(
+                s,
+                "chevron-down",
+                band.x1 - 14.0,
+                band.y0 + 6.0,
+                ICON_XS,
+                C_DIM,
+            );
+            hit.push((
+                Rect::new(band.x1 - 18.0, band.y0, band.x1, band.y1),
+                Action::ToggleLayoutAdvanced,
+            ));
+        }
+        if sel_layout.is_some() {
+            let wrapping = sel_layout
+                .as_ref()
+                .map(|l| l.wrap == x_native::AutoLayoutWrap::Wrap)
+                .unwrap_or(false);
+            let wb = Rect::new(x0, y0 + 430.0, x0 + CHIP_H, y0 + 430.0 + CHIP_H);
+            fill_rrect(s, wb, R_SM, C_FIELD);
+            stroke_rrect(s, wb, R_SM, C_LINE_2, 1.0);
+            if wrapping {
+                fill_rrect(s, wb.inflate(-3.0, -3.0), R_XS, C_TEXT);
+            }
+            app.fonts
+                .text(s, wb.x1 + 8.0, y0 + 429.7, "Wrap", T11, C_MUTED, Wt::Reg);
+            hit.push((
+                Rect::new(x0, y0 + 426.0, x0 + 110.0, y0 + 450.0),
+                Action::ToggleWrap,
+            ));
+        } else if app.selected_parent_has_layout() {
+            // Fixed | Fill segmented control (constraints.grow)
+            let grow = {
+                let d = app.doc();
+                d.selected_id()
+                    .and_then(|id| {
+                        fn find_con(
+                            n: &x_native::Node,
+                            id: &str,
+                        ) -> Option<x_native::ChildConstraints> {
+                            for c in &n.children {
+                                if c.id == id {
+                                    return Some(c.constraints.clone());
+                                }
+                                if let Some(x) = find_con(c, id) {
+                                    return Some(x);
+                                }
+                            }
+                            None
+                        }
+                        find_con(&d.editor_ref().root, &id)
+                    })
+                    .map(|c| c.grow >= 1.0)
+                    .unwrap_or(false)
+            };
+            let seg = Rect::new(x0, y0 + 426.0, x0 + 150.0, y0 + 426.0 + DENSE_H);
+            let half = Rect::new(seg.x0, seg.y0, seg.x0 + 74.0, seg.y1);
+            let other = Rect::new(half.x1, seg.y0, seg.x1, seg.y1);
+            for (rr, lab, active, act) in [
+                (half, "Fixed", !grow, Action::SetChildFill(false)),
+                (other, "Fill", grow, Action::SetChildFill(true)),
+            ] {
+                fill_rrect(s, rr, R_MD, if active { C_FIELD_2 } else { C_FIELD });
+                stroke_rrect(s, rr, R_MD, if active { C_LINE_2 } else { C_LINE }, 1.0);
+                app.fonts
+                    .text_center(s, rr, lab, T10, C_TEXT, Wt::Reg, true);
+                hit.push((rr, act));
+            }
+            // absolute position checkbox
+            let absolute = {
+                let d = app.doc();
+                d.selected_id()
+                    .and_then(|id| {
+                        fn find_con(
+                            n: &x_native::Node,
+                            id: &str,
+                        ) -> Option<x_native::ChildConstraints> {
+                            for c in &n.children {
+                                if c.id == id {
+                                    return Some(c.constraints.clone());
+                                }
+                                if let Some(x) = find_con(c, id) {
+                                    return Some(x);
+                                }
+                            }
+                            None
+                        }
+                        find_con(&d.editor_ref().root, &id)
+                    })
+                    .map(|c| c.is_absolute)
+                    .unwrap_or(false)
+            };
+            let ab = Rect::new(x0 + 162.0, y0 + 430.0, x0 + 178.0, y0 + 430.0 + CHIP_H);
+            fill_rrect(s, ab, R_SM, C_FIELD);
+            stroke_rrect(s, ab, R_SM, C_LINE_2, 1.0);
+            if absolute {
+                fill_rrect(s, ab.inflate(-3.0, -3.0), R_XS, C_TEXT);
+            }
+            app.fonts.text(
+                s,
+                ab.x1 + 8.0,
+                y0 + 429.7,
+                "Absolute",
+                T11,
+                C_MUTED,
+                Wt::Reg,
+            );
+            hit.push((
+                Rect::new(x0 + 162.0, y0 + 426.0, x0 + 262.0, y0 + 450.0),
+                Action::ToggleChildAbsolute,
+            ));
+        }
     }
 
-    // clip content
-    let cb = Rect::new(x0, y0 + 541.3, x0 + 16.0, y0 + 557.3);
+    // clip content: dense (24px) disclosure-style row
+    let clip_row = Rect::new(x0, y0 + 512.0, x0 + 110.0, y0 + 512.0 + DENSE_H);
+    let cb = Rect::new(
+        x0,
+        clip_row.y0 + 4.0,
+        x0 + CHIP_H,
+        clip_row.y0 + 4.0 + CHIP_H,
+    );
     fill_rrect(s, cb, R_SM, C_FIELD);
     stroke_rrect(s, cb, R_SM, C_LINE_2, 1.0);
     if sel.clip {
@@ -3837,23 +3884,21 @@ fn paint_design(
     app.fonts.text(
         s,
         cb.x1 + 8.0,
-        y0 + 541.0,
+        clip_row.y0 + 3.7,
         "Clip content",
         T11,
         C_MUTED,
         Wt::Reg,
     );
-    hit.push((
-        Rect::new(x0, y0 + 537.0, x0 + 110.0, y0 + 561.0),
-        Action::ClipContent,
-    ));
+    hit.push((clip_row, Action::ClipContent));
 
-    hline(s, rx, rx + rw, y0 + 569.5, C_LINE);
+    hline(s, rx, rx + rw, y0 + 548.0, C_LINE);
 
     // ---- appearance -----------------------------------------------------
+    // Section header row (28): caps label centered, eye on the SQ_BTN square.
     app.fonts
-        .caps_label(s, x0, y0 + 582.5, "Appearance", C_TEXT, Wt::Med);
-    let appearance_eye = Rect::new(xr - 22.0, y0 + 576.0, xr, y0 + 596.0);
+        .caps_label(s, x0, y0 + 569.0, "Appearance", C_TEXT, Wt::Med);
+    let appearance_eye = Rect::new(xr - 22.0, y0 + 560.0, xr, y0 + 588.0);
     let selected_visible = {
         let d = app.doc();
         d.selected_id()
@@ -3864,12 +3909,12 @@ fn paint_design(
         s,
         if selected_visible { "eye" } else { "eye-off" },
         xr - 14.0,
-        y0 + 582.0,
+        y0 + 566.0,
         ICON_SM,
         C_DIM,
     );
     hit.push((appearance_eye, Action::ToggleVisible));
-    let opr = Rect::new(x0, y0 + 605.5, x0 + 153.5, y0 + 633.5);
+    let opr = Rect::new(x0, y0 + 596.0, x0 + 153.5, y0 + 624.0);
     input(
         app,
         s,
@@ -3891,13 +3936,13 @@ fn paint_design(
     app.fonts.text(
         s,
         opr.x1 - 8.0 - op_vw,
-        y0 + 611.25,
+        y0 + 601.75,
         &op_val,
         T11,
         C_TEXT,
         Wt::Reg,
     );
-    let rdr = Rect::new(x0 + 161.5, y0 + 605.5, x0 + 315.0, y0 + 633.5);
+    let rdr = Rect::new(x0 + 161.5, y0 + 596.0, x0 + 315.0, y0 + 624.0);
     input(
         app,
         s,
@@ -3914,34 +3959,35 @@ fn paint_design(
     app.fonts.text(
         s,
         rdr.x1 - 8.0 - rd_vw,
-        y0 + 611.25,
+        y0 + 601.75,
         &rd_val,
         T11,
         C_TEXT,
         Wt::Reg,
     );
 
-    hline(s, rx, rx + rw, y0 + 645.5, C_LINE);
+    hline(s, rx, rx + rw, y0 + 636.0, C_LINE);
 
     // Phase 6: Image adjustment controls (only shown for image nodes)
-    let y_after_appearance = y0 + 645.5 + 1.0 + 12.0;
+    let y_after_appearance = y0 + 636.0 + 1.0 + 12.0;
     let y_after_image =
         paint_image_adjustments(app, s, hit, rx + pl, rx + rw - pl, y_after_appearance);
     if y_after_image != y_after_appearance {
         // The image-adjustment block rendered (7 sliders + buttons, ~280px).
         // Its height cannot be folded into `y0` without re-flowing every
-        // audited offset below it, so the sections that follow keep their
-        // audited positions — see the Chromium-audit note atop this function.
+        // offset below it, so the sections that follow keep their reference
+        // positions — see the geometry note atop this function.
     }
 
     // ---- typography -----------------------------------------------------
+    // Section header row (28): caps label centered, both buttons 28px.
     app.fonts
-        .caps_label(s, x0, y0 + 658.5, "Typography", C_TEXT, Wt::Med);
+        .caps_label(s, x0, y0 + 657.0, "Typography", C_TEXT, Wt::Med);
     // Figma's Typography header: the styles button opens the text-style
     // picker, the plus creates a style from the current selection. Both were
     // painted but inert — these rects are what make them buttons.
-    let styles_btn = Rect::new(xr - 38.0, y0 + 654.0, xr - 18.0, y0 + 676.0);
-    let create_btn = Rect::new(xr - 18.0, y0 + 654.0, xr + 2.0, y0 + 676.0);
+    let styles_btn = Rect::new(xr - 38.0, y0 + 648.0, xr - 18.0, y0 + 676.0);
+    let create_btn = Rect::new(xr - 18.0, y0 + 648.0, xr + 2.0, y0 + 676.0);
     let styles_tint = if app.dropdown_text_style || hover(app, styles_btn) {
         C_TEXT
     } else {
@@ -3951,7 +3997,7 @@ fn paint_design(
         s,
         "grid-2x2",
         xr - 14.0 - 8.0 - 12.0,
-        y0 + 659.0,
+        y0 + 654.0,
         ICON_XS,
         styles_tint,
     );
@@ -3960,10 +4006,10 @@ fn paint_design(
     } else {
         C_DIM
     };
-    draw_icon(s, "plus", xr - 14.0, y0 + 658.0, ICON_SM, create_tint);
+    draw_icon(s, "plus", xr - 14.0, y0 + 655.0, ICON_SM, create_tint);
     hit.push((styles_btn, Action::TextStyleDropdown));
     hit.push((create_btn, Action::CreateTextStyle));
-    let fam = Rect::new(x0, y0 + 681.5, x0 + 315.0, y0 + 709.5);
+    let fam = Rect::new(x0, y0 + 684.0, x0 + 315.0, y0 + 712.0);
     input(
         app,
         s,
@@ -4018,7 +4064,7 @@ fn paint_design(
             hit.push((row, Action::FontPicker(fam.clone())));
         }
     }
-    let wgt = Rect::new(x0, y0 + 717.5, x0 + 227.0, y0 + 745.5);
+    let wgt = Rect::new(x0, y0 + 720.0, x0 + 227.0, y0 + 748.0);
     input(
         app,
         s,
@@ -4030,7 +4076,7 @@ fn paint_design(
         Some(Action::Field(FieldId::FontWeight)),
         Some("chevron-down"),
     );
-    let szr = Rect::new(x0 + 235.0, y0 + 717.5, x0 + 315.0, y0 + 745.5);
+    let szr = Rect::new(x0 + 235.0, y0 + 720.0, x0 + 315.0, y0 + 748.0);
     input(
         app,
         s,
@@ -4043,17 +4089,8 @@ fn paint_design(
         Some("chevron-down"),
     );
     app.fonts
-        .text(s, x0, y0 + 753.5, "Line height", T10, C_DIM, Wt::Reg);
-    app.fonts.text(
-        s,
-        x0 + 161.5,
-        y0 + 753.5,
-        "Letter spacing",
-        T10,
-        C_DIM,
-        Wt::Reg,
-    );
-    let lhr = Rect::new(x0, y0 + 771.0, x0 + 153.5, y0 + 799.0);
+        .text(s, x0, y0 + 756.0, "Line height", T10, C_DIM, Wt::Reg);
+    let lhr = Rect::new(x0, y0 + 774.0, x0 + 153.5, y0 + 802.0);
     input_box(app, s, lhr, R_INPUT);
     draw_icon(s, "type", lhr.x0 + 8.0, lhr.y0 + 8.0, ICON_XS, C_DIM);
     // line-height mode affordance (Auto / px / %) — same chevron language
@@ -4083,184 +4120,45 @@ fn paint_design(
     );
     hit.push((lhr, Action::Field(FieldId::LineHeight)));
     hit.push((lh_chev, Action::LhDropdown));
-    let lsr = Rect::new(x0 + 161.5, y0 + 771.0, x0 + 315.0, y0 + 799.0);
-    input(
-        app,
-        s,
-        hit,
-        lsr,
-        None,
-        &field_val(
-            app,
-            FieldId::LetterSpacing,
-            typo_val(app, Typo::LetterSpacing),
-        ),
-        false,
-        Some(Action::Field(FieldId::LetterSpacing)),
-        None,
-    );
-    // row: Word spacing | Para spacing (market-standard typography set)
-    app.fonts
-        .text(s, x0, y0 + 807.0, "Word spacing", T10, C_DIM, Wt::Reg);
-    app.fonts.text(
-        s,
-        x0 + 161.5,
-        y0 + 807.0,
-        "Para spacing",
-        T10,
-        C_DIM,
-        Wt::Reg,
-    );
-    let wsr = Rect::new(x0, y0 + 824.5, x0 + 153.5, y0 + 852.5);
-    input(
-        app,
-        s,
-        hit,
-        wsr,
-        None,
-        &field_val(app, FieldId::WordSpacing, typo_val(app, Typo::WordSpacing)),
-        false,
-        Some(Action::Field(FieldId::WordSpacing)),
-        None,
-    );
-    let psr = Rect::new(x0 + 161.5, y0 + 824.5, x0 + 315.0, y0 + 852.5);
-    input(
-        app,
-        s,
-        hit,
-        psr,
-        None,
-        &field_val(app, FieldId::ParaSpacing, typo_val(app, Typo::ParaSpacing)),
-        false,
-        Some(Action::Field(FieldId::ParaSpacing)),
-        None,
-    );
-    // row: Baseline shift | Text case
-    app.fonts
-        .text(s, x0, y0 + 861.5, "Baseline shift", T10, C_DIM, Wt::Reg);
-    app.fonts
-        .text(s, x0 + 161.5, y0 + 861.5, "Text case", T10, C_DIM, Wt::Reg);
-    let bsr = Rect::new(x0, y0 + 879.0, x0 + 153.5, y0 + 907.0);
-    input(
-        app,
-        s,
-        hit,
-        bsr,
-        None,
-        &field_val(
-            app,
-            FieldId::BaselineShift,
-            typo_val(app, Typo::BaselineShift),
-        ),
-        false,
-        Some(Action::Field(FieldId::BaselineShift)),
-        None,
-    );
-    let tcr = Rect::new(x0 + 161.5, y0 + 879.0, x0 + 315.0, y0 + 907.0);
-    input(
-        app,
-        s,
-        hit,
-        tcr,
-        None,
-        &field_val(app, FieldId::TextCase, typo_val(app, Typo::TextCase)),
-        false,
-        Some(Action::Field(FieldId::TextCase)),
-        Some("chevron-down"),
-    );
 
-    // row: Optical size | Width (variable-font axes; Auto on static faces)
+    // Horizontal alignment: three working buttons. The shaper degrades
+    // Justified to Left, so it is not offered (a phantom state); the active
+    // highlight mirrors what the canvas actually renders.
     app.fonts
-        .text(s, x0, y0 + 916.5, "Optical size", T10, C_DIM, Wt::Reg);
-    app.fonts
-        .text(s, x0 + 161.5, y0 + 916.5, "Width", T10, C_DIM, Wt::Reg);
-    let osr = Rect::new(x0, y0 + 934.0, x0 + 153.5, y0 + 962.0);
-    input(
-        app,
-        s,
-        hit,
-        osr,
-        None,
-        &field_val(app, FieldId::OpticalSize, typo_val(app, Typo::OpticalSize)),
-        false,
-        Some(Action::Field(FieldId::OpticalSize)),
-        None,
-    );
-    let wdr = Rect::new(x0 + 161.5, y0 + 934.0, x0 + 315.0, y0 + 962.0);
-    input(
-        app,
-        s,
-        hit,
-        wdr,
-        None,
-        &field_val(app, FieldId::WidthAxis, typo_val(app, Typo::WidthAxis)),
-        false,
-        Some(Action::Field(FieldId::WidthAxis)),
-        None,
-    );
-
-    app.fonts
-        .text(s, x0, y0 + 970.5, "Alignment", T10, C_DIM, Wt::Reg);
-    // 6 alignment buttons + sliders
-    let al_icons = [
-        Some("align-left"),
-        Some("align-center"),
-        Some("align-right"),
-        None, // "T" text
-        Some("plus"),
-        Some("arrow-down"),
-    ];
-    for (i, ic) in al_icons.into_iter().enumerate() {
+        .text(s, x0, y0 + 810.0, "Alignment", T10, C_DIM, Wt::Reg);
+    let align_now = selected_text_align(app);
+    for (i, (ic, t)) in [
+        ("align-left", x_native::TextAlign::Left),
+        ("align-center", x_native::TextAlign::Center),
+        ("align-right", x_native::TextAlign::Right),
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let bx = x0 + 47.7 * i as f64;
-        let br = Rect::new(bx, y0 + 988.0, bx + 43.8, y0 + 1016.0);
-        let active = i == 0;
+        let br = Rect::new(bx, y0 + 828.0, bx + 43.8, y0 + 856.0);
+        let active = align_now == t;
         if active {
             fill_rrect(s, br, R_MD, C_FIELD_2);
             stroke_rrect(s, br, R_MD, C_LINE_2, 1.0);
         } else {
             input_box(app, s, br, 6.0);
         }
-        match ic {
-            Some(ic) => draw_icon(
-                s,
-                ic,
-                br.x0 + (43.8 - 14.0) / 2.0,
-                br.y0 + 7.0,
-                ICON_SM,
-                if active { C_TEXT } else { C_DIM },
-            ),
-            None => app.fonts.text_center(s, br, "T", T10, C_DIM, Wt::Reg, true),
-        }
+        draw_icon(
+            s,
+            ic,
+            br.x0 + (43.8 - 14.0) / 2.0,
+            br.y0 + 7.0,
+            ICON_SM,
+            if active { C_TEXT } else { C_DIM },
+        );
+        hit.push((br, Action::SetTextAlign(t)));
     }
-    let slb = Rect::new(x0 + 287.0, y0 + 824.5, x0 + 315.0, y0 + 852.5);
-    input_box(app, s, slb, 6.0);
-    draw_icon(
-        s,
-        "sliders-horizontal",
-        slb.x0 + 7.0,
-        slb.y0 + 7.0,
-        ICON_SM,
-        C_DIM,
-    );
 
-    // ---- TEXT FORMATTING (Figma Design parity) ----
-    // Text alignment (horizontal)
+    // Vertical alignment (horizontal sits in the button row above)
     app.fonts
-        .text(s, x0, y0 + 1024.5, "Text alignment", T10, C_DIM, Wt::Reg);
-    let h_align = Rect::new(x0, y0 + 1042.0, x0 + 153.5, y0 + 1070.0);
-    input(
-        app,
-        s,
-        hit,
-        h_align,
-        None,
-        &text_align_label(app),
-        false,
-        Some(Action::CycleTextAlign),
-        Some("chevron-down"),
-    );
-    // Text alignment (vertical)
-    let v_align = Rect::new(x0 + 161.5, y0 + 1042.0, x0 + 315.0, y0 + 1070.0);
+        .text(s, x0, y0 + 864.0, "Vertical alignment", T10, C_DIM, Wt::Reg);
+    let v_align = Rect::new(x0, y0 + 882.0, x0 + 153.5, y0 + 910.0);
     input(
         app,
         s,
@@ -4273,10 +4171,12 @@ fn paint_design(
         Some("chevron-down"),
     );
 
-    // Text decoration
+    // Decoration | Wrap style (the engine's paragraph wrap strategy, "tw")
     app.fonts
-        .text(s, x0, y0 + 1078.5, "Decoration", T10, C_DIM, Wt::Reg);
-    let deco = Rect::new(x0, y0 + 1096.0, x0 + 153.5, y0 + 1124.0);
+        .text(s, x0, y0 + 918.0, "Decoration", T10, C_DIM, Wt::Reg);
+    app.fonts
+        .text(s, x0 + 161.5, y0 + 918.0, "Wrap style", T10, C_DIM, Wt::Reg);
+    let deco = Rect::new(x0, y0 + 936.0, x0 + 153.5, y0 + 964.0);
     input(
         app,
         s,
@@ -4288,106 +4188,227 @@ fn paint_design(
         Some(Action::CycleTextDecoration),
         Some("chevron-down"),
     );
-    // Truncation
-    app.fonts.text(
-        s,
-        x0 + 161.5,
-        y0 + 1078.5,
-        "Truncation",
-        T10,
-        C_DIM,
-        Wt::Reg,
-    );
-    let trunc = Rect::new(x0 + 161.5, y0 + 1096.0, x0 + 315.0, y0 + 1124.0);
-    input(
-        app,
-        s,
-        hit,
-        trunc,
-        None,
-        &text_truncation_label(app),
-        false,
-        Some(Action::CycleTextTruncation),
-        Some("chevron-down"),
-    );
-
-    // List style
-    app.fonts
-        .text(s, x0, y0 + 1132.5, "List style", T10, C_DIM, Wt::Reg);
-    let list = Rect::new(x0, y0 + 1150.0, x0 + 153.5, y0 + 1178.0);
-    input(
-        app,
-        s,
-        hit,
-        list,
-        None,
-        &list_style_label(app),
-        false,
-        Some(Action::CycleListStyle),
-        Some("chevron-down"),
-    );
-    // Wrap style
-    app.fonts.text(
-        s,
-        x0 + 161.5,
-        y0 + 1132.5,
-        "Wrap style",
-        T10,
-        C_DIM,
-        Wt::Reg,
-    );
-    let wrap = Rect::new(x0 + 161.5, y0 + 1150.0, x0 + 315.0, y0 + 1178.0);
+    let wrap = Rect::new(x0 + 161.5, y0 + 936.0, x0 + 315.0, y0 + 964.0);
     input(
         app,
         s,
         hit,
         wrap,
         None,
-        &wrap_style_label(app),
+        &wrap_strategy_label(app),
         false,
-        Some(Action::ToggleTextWrapStyle),
+        Some(Action::CycleTextWrap),
         Some("chevron-down"),
     );
 
-    // Paragraph indent
+    // Max lines | Paragraph indent
     app.fonts
-        .text(s, x0, y0 + 1186.5, "Paragraph indent", T10, C_DIM, Wt::Reg);
-    let para_indent = Rect::new(x0, y0 + 1204.0, x0 + 153.5, y0 + 1232.0);
-    input(
-        app,
+        .text(s, x0, y0 + 972.0, "Max lines", T10, C_DIM, Wt::Reg);
+    app.fonts.text(
         s,
-        hit,
-        para_indent,
-        None,
-        &field_val(app, FieldId::ParagraphIndent, "0px".into()),
-        false,
-        Some(Action::Field(FieldId::ParagraphIndent)),
-        None,
+        x0 + 161.5,
+        y0 + 972.0,
+        "Paragraph indent",
+        T10,
+        C_DIM,
+        Wt::Reg,
     );
-    // Max lines
-    app.fonts
-        .text(s, x0 + 161.5, y0 + 1186.5, "Max lines", T10, C_DIM, Wt::Reg);
-    let max_lines = Rect::new(x0 + 161.5, y0 + 1204.0, x0 + 315.0, y0 + 1232.0);
+    let max_lines = Rect::new(x0, y0 + 990.0, x0 + 153.5, y0 + 1018.0);
     input(
         app,
         s,
         hit,
         max_lines,
         None,
-        &field_val(app, FieldId::MaxLines, "Auto".into()),
+        &field_val(app, FieldId::MaxLines, typo_val(app, Typo::MaxLines)),
         false,
         Some(Action::Field(FieldId::MaxLines)),
         None,
     );
+    let para_indent = Rect::new(x0 + 161.5, y0 + 990.0, x0 + 315.0, y0 + 1018.0);
+    input(
+        app,
+        s,
+        hit,
+        para_indent,
+        None,
+        &field_val(
+            app,
+            FieldId::ParagraphIndent,
+            typo_val(app, Typo::ParagraphIndent),
+        ),
+        false,
+        Some(Action::Field(FieldId::ParagraphIndent)),
+        None,
+    );
+
+    // ---- Advanced disclosure (progressive disclosure, P0-8) -------------
+    // The spacing metrics, baseline shift, case and the variable-font axes
+    // are real, engine-backed properties — but they are not the primary set
+    // (Font / Weight / Size / Line height / Alignment), so they sit behind
+    // a disclosure instead of disappearing.
+    let adv_open = app.typo_advanced_open;
+    let adv = Rect::new(x0, y0 + 1026.0, x0 + 315.0, y0 + 1026.0 + DENSE_H);
+    let adv_hov = hover(app, adv);
+    draw_icon(
+        s,
+        if adv_open {
+            "chevron-down"
+        } else {
+            "chevron-right"
+        },
+        adv.x0 + 1.0,
+        adv.y0 + 6.0,
+        ICON_XS,
+        C_DIM,
+    );
+    app.fonts.text(
+        s,
+        adv.x0 + 20.0,
+        adv.y0 + 5.0,
+        "Advanced",
+        T10,
+        if adv_hov { C_TEXT } else { C_DIM },
+        Wt::Reg,
+    );
+    hit.push((adv, Action::ToggleTypoAdvanced));
+    if adv_open {
+        // Letter spacing | Word spacing
+        app.fonts
+            .text(s, x0, y0 + 1058.0, "Letter spacing", T10, C_DIM, Wt::Reg);
+        app.fonts.text(
+            s,
+            x0 + 161.5,
+            y0 + 1058.0,
+            "Word spacing",
+            T10,
+            C_DIM,
+            Wt::Reg,
+        );
+        let lsr = Rect::new(x0, y0 + 1076.0, x0 + 153.5, y0 + 1104.0);
+        input(
+            app,
+            s,
+            hit,
+            lsr,
+            None,
+            &field_val(
+                app,
+                FieldId::LetterSpacing,
+                typo_val(app, Typo::LetterSpacing),
+            ),
+            false,
+            Some(Action::Field(FieldId::LetterSpacing)),
+            None,
+        );
+        let wsr = Rect::new(x0 + 161.5, y0 + 1076.0, x0 + 315.0, y0 + 1104.0);
+        input(
+            app,
+            s,
+            hit,
+            wsr,
+            None,
+            &field_val(app, FieldId::WordSpacing, typo_val(app, Typo::WordSpacing)),
+            false,
+            Some(Action::Field(FieldId::WordSpacing)),
+            None,
+        );
+        // Paragraph spacing | Baseline shift
+        app.fonts
+            .text(s, x0, y0 + 1112.0, "Paragraph spacing", T10, C_DIM, Wt::Reg);
+        app.fonts.text(
+            s,
+            x0 + 161.5,
+            y0 + 1112.0,
+            "Baseline shift",
+            T10,
+            C_DIM,
+            Wt::Reg,
+        );
+        let psr = Rect::new(x0, y0 + 1130.0, x0 + 153.5, y0 + 1158.0);
+        input(
+            app,
+            s,
+            hit,
+            psr,
+            None,
+            &field_val(app, FieldId::ParaSpacing, typo_val(app, Typo::ParaSpacing)),
+            false,
+            Some(Action::Field(FieldId::ParaSpacing)),
+            None,
+        );
+        let bsr = Rect::new(x0 + 161.5, y0 + 1130.0, x0 + 315.0, y0 + 1158.0);
+        input(
+            app,
+            s,
+            hit,
+            bsr,
+            None,
+            &field_val(
+                app,
+                FieldId::BaselineShift,
+                typo_val(app, Typo::BaselineShift),
+            ),
+            false,
+            Some(Action::Field(FieldId::BaselineShift)),
+            None,
+        );
+        // Text case (small caps rides the same control)
+        app.fonts
+            .text(s, x0, y0 + 1166.0, "Text case", T10, C_DIM, Wt::Reg);
+        let tcr = Rect::new(x0, y0 + 1184.0, x0 + 153.5, y0 + 1212.0);
+        input(
+            app,
+            s,
+            hit,
+            tcr,
+            None,
+            &field_val(app, FieldId::TextCase, typo_val(app, Typo::TextCase)),
+            false,
+            Some(Action::Field(FieldId::TextCase)),
+            Some("chevron-down"),
+        );
+        // Optical size | Width (variable-font axes; Auto on static faces)
+        app.fonts
+            .text(s, x0, y0 + 1220.0, "Optical size", T10, C_DIM, Wt::Reg);
+        app.fonts
+            .text(s, x0 + 161.5, y0 + 1220.0, "Width", T10, C_DIM, Wt::Reg);
+        let osr = Rect::new(x0, y0 + 1238.0, x0 + 153.5, y0 + 1266.0);
+        input(
+            app,
+            s,
+            hit,
+            osr,
+            None,
+            &field_val(app, FieldId::OpticalSize, typo_val(app, Typo::OpticalSize)),
+            false,
+            Some(Action::Field(FieldId::OpticalSize)),
+            None,
+        );
+        let wdr = Rect::new(x0 + 161.5, y0 + 1238.0, x0 + 315.0, y0 + 1266.0);
+        input(
+            app,
+            s,
+            hit,
+            wdr,
+            None,
+            &field_val(app, FieldId::WidthAxis, typo_val(app, Typo::WidthAxis)),
+            false,
+            Some(Action::Field(FieldId::WidthAxis)),
+            None,
+        );
+    }
 
     // ---- fill / stroke / effects / guides continue with the shared tail
-    hline(s, rx, rx + rw, y0 + 1240.5, C_LINE);
-    let mut y = y0 + 1029.5 + 12.0;
+    // (the section's end moves with the disclosure, so does the tail)
+    let tail_top = if adv_open { y0 + 1278.0 } else { y0 + 1062.0 };
+    hline(s, rx, rx + rw, tail_top, C_LINE);
+    let mut y = tail_top + 12.0;
     let inner_w = rw - pl * 2.0;
 
     // --- Fill ----------------------------------------------------------
     section_header(app, s, hit, rx, rw, pl, y, "Fill", true, Action::AddFill);
-    y += 14.0 + 8.0;
+    y += 14.0 + LABEL_GAP;
     y = paint_paint_row(
         app,
         s,
@@ -4401,7 +4422,7 @@ fn paint_design(
         FieldId::FillAlpha,
         true,
     );
-    y += 12.0 + 4.0;
+    y += 12.0 + LABEL_GAP;
 
     // Phase 6: Gradient controls (only shown when fill is a gradient)
     y = paint_gradient_controls(app, s, hit, rx + pl, rx + rw - pl, y);
@@ -4422,7 +4443,7 @@ fn paint_design(
         true,
         Action::AddStroke,
     );
-    y += 14.0 + 8.0;
+    y += 14.0 + LABEL_GAP;
     y = paint_paint_row(
         app,
         s,
@@ -4442,7 +4463,7 @@ fn paint_design(
         .text(s, rx + pl, y, "Position", T10, C_DIM, Wt::Reg);
     app.fonts
         .text(s, rx + pl + half3 + gap, y, "Weight", T10, C_DIM, Wt::Reg);
-    y += 12.0 + 4.0;
+    y += 12.0 + LABEL_GAP;
     let pos = Rect::new(rx + pl, y, rx + pl + half3, y + h);
     input(
         app,
@@ -4492,9 +4513,9 @@ fn paint_design(
         ICON_XS,
         C_DIM,
     );
-    y += h + 12.0 + 4.0;
+    y += h + ROW_GAP;
     hline(s, rx, rx + rw, y, C_LINE);
-    y += 1.0 + 6.0;
+    y += 1.0 + SECTION_GAP;
 
     // --- Effects -------------------------------------------------------
     let eff_h = 40.0;
@@ -4518,7 +4539,7 @@ fn paint_design(
         Rect::new(rx + rw - pl - 18.0, y - 4.0, rx + rw - pl, y + 16.0),
         Action::AddGuide,
     ));
-    y += 14.0 + 8.0;
+    y += 14.0 + LABEL_GAP;
     // P13: the guide overflow was dead; the guides list only ever gains
     // entries, so the honest control is a clear-all button
     let mvb = Rect::new(rx + pl, y, rx + pl + 24.0, y + 28.0);
@@ -4585,7 +4606,7 @@ fn paint_design(
     }
     draw_icon(s, "minus", rm.x0 + 5.0, rm.y0 + 5.0, ICON_SM, C_DIM);
     hit.push((rm, Action::RemoveGuide));
-    y += 28.0 + 12.0 + 4.0;
+    y += 28.0 + SECTION_GAP;
     hline(s, rx, rx + rw, y, C_LINE);
     y += 1.0 + 12.0;
 
@@ -4648,7 +4669,7 @@ fn paint_design(
         Wt::Med,
     );
     hit.push((ex, Action::ExportRun));
-    y += 28.0 + 24.0;
+    y += 28.0 + SECTION_GAP;
 
     // --- COMPONENT (properties) -----------------------------------------
     // Masters define designer-facing properties (bound to the selected
@@ -4656,7 +4677,7 @@ fn paint_design(
     hline(s, rx, rx + rw, y, C_LINE);
     y += 1.0 + 12.0;
     app.fonts.caps_label(s, x0, y, "COMPONENT", C_TEXT, Wt::Med);
-    y += 12.0 + 10.0;
+    y += 12.0 + LABEL_GAP;
     let (master, inst) = (app.selected_master_name(), app.selected_instance());
     if let Some((iid, comp)) = inst {
         // variant switcher for set members (Figma's instance VARIANT row)
@@ -4964,21 +4985,22 @@ fn stroke_position_label(app: &App) -> &'static str {
 }
 
 /// Text formatting labels (Figma Design parity)
-fn text_align_label(app: &App) -> String {
+/// The selected text node's horizontal alignment, mapped onto what the
+/// shaper actually renders (Justified degrades to Left) so the active
+/// button always matches the canvas.
+fn selected_text_align(app: &App) -> x_native::TextAlign {
     let Some(doc) = app.doc_opt() else {
-        return "Left".into();
+        return x_native::TextAlign::Left;
     };
     let Some(id) = doc.selected_id() else {
-        return "Left".into();
+        return x_native::TextAlign::Left;
     };
     let Some(node) = find_node(&doc.editor_ref().root, &id) else {
-        return "Left".into();
+        return x_native::TextAlign::Left;
     };
     match node.text_align {
-        x_native::TextAlign::Left => "Left".into(),
-        x_native::TextAlign::Center => "Center".into(),
-        x_native::TextAlign::Right => "Right".into(),
-        x_native::TextAlign::Justified => "Justified".into(),
+        x_native::TextAlign::Justified => x_native::TextAlign::Left,
+        other => other,
     }
 }
 
@@ -5016,53 +5038,22 @@ fn text_decoration_label(app: &App) -> String {
     }
 }
 
-fn text_truncation_label(app: &App) -> String {
+/// The engine's paragraph wrap strategy (the "tw" binding): Auto / Balance /
+/// Pretty — the same values the shaper actually lays out with.
+fn wrap_strategy_label(app: &App) -> String {
     let Some(doc) = app.doc_opt() else {
-        return "Disabled".into();
+        return "Auto".into();
     };
     let Some(id) = doc.selected_id() else {
-        return "Disabled".into();
+        return "Auto".into();
     };
     let Some(node) = find_node(&doc.editor_ref().root, &id) else {
-        return "Disabled".into();
+        return "Auto".into();
     };
-    match node.text_truncation {
-        x_native::TextTruncation::Disabled => "Disabled".into(),
-        x_native::TextTruncation::End => "End".into(),
-        x_native::TextTruncation::Middle => "Middle".into(),
-    }
-}
-
-fn list_style_label(app: &App) -> String {
-    let Some(doc) = app.doc_opt() else {
-        return "None".into();
-    };
-    let Some(id) = doc.selected_id() else {
-        return "None".into();
-    };
-    let Some(node) = find_node(&doc.editor_ref().root, &id) else {
-        return "None".into();
-    };
-    match node.list_style {
-        x_native::ListStyle::None => "None".into(),
-        x_native::ListStyle::Bulleted => "Bulleted".into(),
-        x_native::ListStyle::Numbered => "Numbered".into(),
-    }
-}
-
-fn wrap_style_label(app: &App) -> String {
-    let Some(doc) = app.doc_opt() else {
-        return "Normal".into();
-    };
-    let Some(id) = doc.selected_id() else {
-        return "Normal".into();
-    };
-    let Some(node) = find_node(&doc.editor_ref().root, &id) else {
-        return "Normal".into();
-    };
-    match node.wrap_style {
-        x_native::WrapStyle::Normal => "Normal".into(),
-        x_native::WrapStyle::BreakWord => "Break Word".into(),
+    match node.text_wrap() {
+        x_native::TextWrap::Auto => "Auto".into(),
+        x_native::TextWrap::Balance => "Balance".into(),
+        x_native::TextWrap::Pretty => "Pretty".into(),
     }
 }
 
@@ -6579,6 +6570,40 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
         if let (Some(q), Some(c)) = (prev, cursor) {
             let sp = app.world_to_screen(*c);
             line(s, q.x, q.y, sp.x, sp.y, C_SEL_SOFT, 1.0);
+        }
+    }
+
+    // First-run empty state (P0-10): an empty canvas says nothing, so the
+    // canvas says it. The hint is pure paint — it leaves the moment the
+    // first frame lands, no flag to clear, no button to dismiss.
+    if !app.is_board()
+        && doc
+            .editors
+            .get(doc.page)
+            .is_some_and(|ed| ed.root.children.is_empty())
+    {
+        let reg = app.editor_regions();
+        let cx = (reg.canvas.x0 + reg.canvas.x1) / 2.0;
+        let cy = (reg.canvas.y0 + reg.canvas.y1) / 2.0;
+        let l1 = "Add your first frame";
+        let l2 = "Pick the frame tool in the dock below, then drag on the canvas.";
+        let l3 = "Then connect screens in FLOW, and export from SHIP.";
+        let w1 = app.fonts.measure(l1, T14, Wt::Med);
+        let w2 = app.fonts.measure(l2, T11, Wt::Reg);
+        let w3 = app.fonts.measure(l3, T11, Wt::Reg);
+        let bw = w1.max(w2).max(w3) + 24.0;
+        // only claim the canvas centre when the hint fits inside it
+        if cx - bw / 2.0 > reg.canvas.x0 + 16.0
+            && cx + bw / 2.0 < reg.canvas.x1 - 16.0
+            && cy - 36.0 > reg.canvas.y0 + 16.0
+            && cy + 34.0 < reg.canvas.y1 - 16.0
+        {
+            app.fonts
+                .text(s, cx - w1 / 2.0, cy - 30.0, l1, T14, C_MUTED, Wt::Med);
+            app.fonts
+                .text(s, cx - w2 / 2.0, cy - 4.0, l2, T11, C_DIM, Wt::Reg);
+            app.fonts
+                .text(s, cx - w3 / 2.0, cy + 16.0, l3, T11, C_DIM, Wt::Reg);
         }
     }
 

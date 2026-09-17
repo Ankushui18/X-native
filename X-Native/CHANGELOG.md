@@ -5,6 +5,114 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-18 (Typography: the Inspector Meets the Engine)
+
+Part of the UI/UX Refinement v1 milestone (see
+[docs/REFINEMENT_V1_PLAN.md](docs/REFINEMENT_V1_PLAN.md)).
+
+### Added
+- **The engine renders what the inspector edits — for every text property.**
+  `TextBlockStyle` (and therefore every shaped cache key) gains `max_lines`,
+  `paragraph_indent` and `decoration`, and the outline entry points take the
+  node's horizontal alignment:
+  - **Alignment** Left/Center/Right shifts every laid-out line; `Justified`
+    degrades to Left (the shaper does not stretch lines — a phantom state is
+    better than a false one).
+  - **Max lines** drops lines beyond the cap *before* placement, so the block
+    height covers exactly what is emitted (CSS `max-lines`).
+  - **Paragraph indent** shifts the first line of each paragraph
+    (CSS `text-indent`); wrapped continuation lines stay at the margin.
+  - **Decoration** draws one rect per line — underline ~0.1em below the
+    baseline, strikethrough ~0.5em above it, thickness ~5% of the line size.
+  - **Vertical alignment** Top/Middle/Bottom places the shaped block inside
+    the node box in every sink (canvas vello, PDF, PNG/JPG raster, SVG
+    outline), so exports agree with the screen.
+  12 new/updated tests: alignment offsets, cap height, per-baseline indent
+  pattern, one rect per line, and cache-key separation for each new field.
+  `crates/x-text`, `crates/x-render`, `crates/x-native`.
+- **`C_FOCUS`** (the `focus_ring` role) as the distinct input-focus colour.
+  Canvas selection now derives from the `selection` role (`#7C5CFC` in
+  Graphite & Signal) instead of `focus_ring`, so selection, focus and hover
+  are three distinguishable states. Dashboard focus ring and open-dropdown
+  border use `C_FOCUS`; the card hover ring drops to `C_LINE_2`. The
+  regression test pins the role mapping. `apps/x-designer`.
+
+### Added
+- **The dashboard speaks X-Native (P0-4).** The sidebar's empty lower half
+  now paints THE WORKFLOW — Compose / Flow / Ship with a one-line sub each —
+  in the local-first and demo variants (informational only, no affordance).
+  The "New design file" quick card now says "Compose, flow, ship — from one
+  file." Phantom affordances are out: the three `more-horizontal` icons
+  that had no hit region and no menu (recents card, list row, drafts row),
+  the "Personal" row's hover fill + chevron with no hit region (now a plain
+  scope label), and the recents view chip's `chevron-down` — it cycles the
+  view, it doesn't drop down, so it now draws `rotate-cw`. The non-demo
+  "Open in this session" list gets the same container idiom as the Drafts
+  panel (rounded card, hline rows, hover wash, file icon, count). The design
+  sheet's dashboard mocks are re-synced to the non-demo reality they had
+  drifted from (sheet-only "All changes saved" chip, demo-only TEAMS,
+  "Recently viewed", old bulk buttons). `apps/x-designer`,
+  `tools/design-sheet`.
+- **First-time workflow narrative (P0-10).** The first-launch onboarding
+  card now names the primary loop **Compose / Flow / Ship** (it said
+  "Design / Prototype / Ship") and names the supporting surfaces once —
+  "Structure, Library, Tokens, Variables, Agents and UX analysis live in
+  the editor docks" — so they can be found later. A blank file used to
+  open to a bare canvas with no affordance; the canvas now shows a
+  centre hint ("Add your first frame — pick the frame tool in the dock
+  below, then drag. Then connect screens in FLOW, and export from
+  SHIP.") that is pure paint keyed on the page having no frames, so it
+  leaves the moment the first frame lands — no flag, no dismiss button.
+  `apps/x-designer`.
+- **One control-height and spacing scale for the inspector (P0-9).**
+  `theme.rs` now declares `DENSE_H` (24, disclosure / summary rows) and
+  `CHIP_H` (16, checkboxes / switches / inline chips) alongside the
+  existing `INPUT_H` (28) / `SQ_BTN` (28), plus the rhythm constants
+  `ROW_GAP` (8), `LABEL_GAP` (6) and `SECTION_GAP` (12). The COMPOSE
+  inspector is re-gridded onto it: every property row is 28px, disclosure
+  rows 24px, chips 16px, with 8/6/12 gaps throughout; the
+  fill/stroke/effects tail's cursor math uses the same constants.
+  `apps/x-designer`.
+- **Progressive disclosure in the inspector (P0-8).** The typography
+  section's secondary properties — letter/word spacing, paragraph
+  spacing / baseline shift, text case, and the variable-font axes
+  (optical size / width) — now sit behind an "Advanced" disclosure
+  (closed by default); the primary set is Font / Weight / Size /
+  Line height / Alignment / Vertical alignment / Decoration / Wrap
+  style / Max lines / Paragraph indent. The Auto Layout section's
+  secondary rows — Wrap for layout frames, Fixed|Fill + Absolute for
+  layout children — sit behind the same disclosure language in their
+  band, with the open state collapsible from the band's right edge.
+  Nothing was removed: every advanced control is the same engine-backed
+  control as before. `apps/x-designer`.
+
+### Changed
+- **Inspector control heights de-outliered (P0-9).** The 19px sizing
+  chip, 20px appearance eye button, 22px text-style buttons and 32px
+  gap/padding rows all sit on the 28/24/16 scale now, and the
+  alignment card no longer overlaps the Auto Layout advanced band
+  (a measured-reference leftover from before the disclosure pass).
+  The design sheet's COMPOSE mirror is re-synced to the same geometry;
+  the line-height row (grid 774–802) sits at the scroll fold, so the
+  sheet's scroll-0 mock ends at weight/size.
+- **Inspector typography section, no more phantom controls.** Horizontal
+  alignment is three working buttons (active state mirrors the render);
+  vertical alignment, decoration, max lines and paragraph indent now reach
+  the engine; the **Wrap style** control was re-wired from the
+  serialization-only `wrap_style` field (Normal/BreakWord — the engine never
+  read it) to the engine's real paragraph wrap strategy (`tw` binding:
+  Auto → Balance → Pretty). **Truncation** and **List style** — editable
+  but unrenderable — are out of the inspector; their model fields stay in
+  the format. Word spacing was being silently dropped by the canvas scene
+  path; it now reads the same `ws` binding as every other sink.
+- **Inspector layout fix.** The fill/stroke/effects tail started at
+  `y0+1041.5`, above the typography rows it was meant to follow, and painted
+  over them. The typography section now ends at 1178, divider at 1190.5,
+  tail at 1202.5, scroll clamp updated to match.
+- **Wording.** Comments describing the UI as a "pixel clone" of a measured
+  HTML reference now say what the constants are: hand-tuned for a 1440px
+  composition. No behaviour change.
+
 ## [Unreleased] — 2026-09-16 (Vector Tools, and the Build They Needed)
 
 ### Added

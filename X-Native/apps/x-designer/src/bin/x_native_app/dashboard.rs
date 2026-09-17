@@ -1,11 +1,9 @@
-//! Dashboard screen — pixel clone of `ui/dashboard-v2.html`.
+//! Dashboard screen.
 //!
-//! Every coordinate below is the measured getBoundingClientRect() of the
-//! Chromium-rendered reference at 1440×900 (see /home/user/ref/audit-dash.json):
+//! Layout constants are hand-tuned for a 1440×900 composition:
 //! top bar h-10 (40), sidebar w-[260px], search 480×32 at y 3.5, quick cards
 //! 274×88 at y 147.5, recents cards 366.7×230.5 at y 307.5, drafts rows h-12.
-//! Text y values are CSS line-box TOPS (Tailwind preflight line-height 1.5)
-//! passed to `TextUi::text`, which renders exactly like the browser.
+//! Text y values are line-box TOPS (1.5 line-height) passed to `TextUi::text`.
 
 use vello::kurbo::Rect;
 use vello::Scene;
@@ -59,11 +57,13 @@ pub fn paint(app: &mut App, s: &mut Scene) {
     }
 
     // Keyboard focus ring: painted from the list just built, under the modal
-    // (a modal owns the interaction) so the two never disagree.
+    // (a modal owns the interaction) so the two never disagree. Focus is the
+    // `focus_ring` role (C_FOCUS) — deliberately distinct from the canvas
+    // selection colour.
     if !app.template_picker_open {
         if let Some(r) = focus_ring(app, &hit) {
             let ring = r.inflate(1.5, 1.5);
-            stroke_rrect(s, ring, R_ROW, C_SEL, STROKE_RING);
+            stroke_rrect(s, ring, R_ROW, C_FOCUS, STROKE_RING);
         }
     }
 
@@ -193,25 +193,41 @@ fn paint_first_launch(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         C_MUTED,
         Wt::Reg,
     );
+    // The primary loop in the product's own naming, plus the supporting
+    // surfaces named once so they can be found later (P0-10).
+    app.fonts.text(
+        s,
+        card.x0 + 32.0,
+        card.y0 + 96.0,
+        "The loop: Compose, then Flow, then Ship.",
+        T11,
+        C_MUTED,
+        Wt::Reg,
+    );
+    app.fonts.text(
+        s,
+        card.x0 + 32.0,
+        card.y0 + 114.0,
+        "Structure, Library, Tokens, Variables, Agents and UX analysis live in the editor docks.",
+        T10,
+        C_DIM,
+        Wt::Reg,
+    );
     let tips = [
         (
             "1",
-            "Design",
-            "Create frames, layers, vectors, and auto layouts.",
+            "Compose",
+            "Frames, layers, vectors and auto layout — the canvas.",
         ),
-        (
-            "2",
-            "Prototype",
-            "Connect screens and test interactions in Flow preview.",
-        ),
+        ("2", "Flow", "Connect screens and preview interactions."),
         (
             "3",
             "Ship",
-            "Use variables, components, libraries, and PNG/PDF export.",
+            "Export PNG, PDF and SVG — with variables and components.",
         ),
     ];
     for (i, (n, title, body)) in tips.into_iter().enumerate() {
-        let y = card.y0 + 116.0 + i as f64 * 54.0;
+        let y = card.y0 + 140.0 + i as f64 * 48.0;
         circle(s, card.x0 + 46.0, y + 9.0, 12.0, C_FIELD_2);
         app.fonts.text_center(
             s,
@@ -360,17 +376,12 @@ fn paint_sidebar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     app.fonts
         .micro_label(s, 36.0, 53.3, "DRAFTS", C_DIM, Wt::Med);
 
-    // Personal row 30px at y 80
-    let pr = Rect::new(8.0, 80.0, DASH_SIDE_W - 8.0, 110.0);
-    if hover(app, pr) {
-        fill_rrect(s, pr, R_MD, C_FIELD);
-    }
+    // "Personal" is the scope label for the nav below, not a control: it has
+    // no hit region, so nothing it paints may suggest one (a hover fill and a
+    // chevron on a row that cannot be clicked or expanded was a phantom).
     circle(s, 23.0, 95.0, 3.0, C_DRAFT_DOT);
     app.fonts
         .text(s, 34.0, 86.0, "Personal", T12, C_TEXT, Wt::Med);
-    if hover(app, pr) {
-        draw_icon(s, "chevron-down", 234.0, 89.0, ICON_XS, C_DIM);
-    }
 
     // nav rows h-8 (32) at y 122/156/190/224, radius 8, px-2
     let navs = [
@@ -426,6 +437,7 @@ fn paint_sidebar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             C_DIM,
             Wt::Reg,
         );
+        paint_workflow(app, s, 372.0);
         return;
     }
     // TEAMS header — label box top 281
@@ -459,6 +471,7 @@ fn paint_sidebar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         }
         hit.push((r, Action::DashNav(DashView::Home)));
     }
+    paint_workflow(app, s, 384.0);
 
     // Free/local-first badge (was the "Upgrade to Pro" card — the tool is
     // free to use, there is nothing to sell). Same geometry as before so the
@@ -517,6 +530,36 @@ fn paint_sidebar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     );
 }
 
+/// The primary loop, painted into the sidebar's empty lower half. The
+/// dashboard is the one screen where COMPOSE / FLOW / SHIP appear nowhere
+/// else, and a returning user (onboarding marker already set) would never
+/// see the loop again — this is where they do. Informational only: no hit
+/// region, no hover, no affordance, so it cannot be a phantom.
+fn paint_workflow(app: &App, s: &mut Scene, y: f64) {
+    app.fonts
+        .micro_label(s, 12.0, y, "THE WORKFLOW", C_DIM, Wt::Med);
+    let steps = [
+        ("1", "Compose", "Frames, auto layout, vectors"),
+        ("2", "Flow", "Connect screens, preview"),
+        ("3", "Ship", "Export PNG, PDF, SVG"),
+    ];
+    for (i, (n, name, sub)) in steps.into_iter().enumerate() {
+        let ry = y + 18.0 + i as f64 * 44.0;
+        circle(s, 26.0, ry + 9.0, 10.0, C_FIELD);
+        app.fonts.text_center(
+            s,
+            Rect::new(16.0, ry - 3.0, 36.0, ry + 21.0),
+            n,
+            T10,
+            C_TEXT,
+            Wt::Med,
+            true,
+        );
+        app.fonts.text(s, 46.0, ry, name, T12, C_TEXT, Wt::Med);
+        app.fonts.text(s, 46.0, ry + 17.0, sub, T10, C_DIM, Wt::Reg);
+    }
+}
+
 // ------------------------------------------------------------- main area
 
 fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
@@ -570,11 +613,12 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let sb = Rect::new(x1 - 320.0, dy + 77.8, x1 - 160.0, dy + 109.8);
     let sb_hot = hover(app, sb) || app.dash_sort_open;
     fill_rrect(s, sb, R_ROW, if sb_hot { C_FIELD_2 } else { C_FIELD });
+    // open dropdown = an active (focused) control, not a canvas selection
     stroke_rrect(
         s,
         sb,
         R_ROW,
-        if app.dash_sort_open { C_SEL } else { C_LINE },
+        if app.dash_sort_open { C_FOCUS } else { C_LINE },
         1.0,
     );
     draw_icon(
@@ -640,7 +684,13 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let gap = 12.0;
     let cw = (x1 - x0 - gap * 3.0) / 4.0;
     let cards: [(&str, &str, &str); 4] = [
-        ("plus", "New design file", "Start from scratch"),
+        // The primary card anchors the loop in its own name: the file you
+        // start here is where Compose / Flow / Ship happen.
+        (
+            "plus",
+            "New design file",
+            "Compose, flow, ship — from one file",
+        ),
         ("import", "Import file", "SVG, PNG, Sketch, Figma JSON"),
         (
             // P14: was the dead "Browse templates" card; boards are real.
@@ -671,8 +721,9 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         let dy = if hov { dy - 2.0 } else { dy };
         let r = Rect::new(cx, dy + 147.5, cx + cw, dy + 235.5);
         fill_rrect(s, r, R_CARD, if hov { C_PANEL_2 } else { C_PANEL });
-        // signature: violet hover ring (was the reference's neutral border)
-        stroke_rrect(s, r, R_CARD, if hov { C_SEL } else { C_LINE }, 1.0);
+        // hover: a quiet strong-border ring (hover must not impersonate the
+        // selection colour)
+        stroke_rrect(s, r, R_CARD, if hov { C_LINE_2 } else { C_LINE }, 1.0);
         // signature: the icon chip is a square violet tile — the same 32×32,
         // r8, 16px-glyph mark the template-gallery rows wear. The reference
         // mock's flex had SHRUNK its w-8 h-8 chip to 30.7×18 inside the fixed
@@ -809,14 +860,10 @@ fn paint_recents(
         C_MUTED,
         Wt::Reg,
     );
-    draw_icon(
-        s,
-        "chevron-down",
-        chip.x1 - 21.0,
-        dy + 273.5,
-        ICON_XS,
-        C_DIM,
-    );
+    // The chip CYCLES the view (Home -> Recents -> Starred -> Trash); it has
+    // no dropdown, so a chevron-down was a phantom affordance. rotate-cw says
+    // what clicking actually does.
+    draw_icon(s, "rotate-cw", chip.x1 - 21.0, dy + 273.5, ICON_XS, C_DIM);
     hit.push((chip, Action::CycleDashView));
 
     let files: Vec<(usize, &RecentFile)> = visible_files(app)
@@ -1020,14 +1067,6 @@ fn paint_recents(
             );
             app.fonts
                 .text(s, cx + 13.0, cy + 173.0, &meta, T11, C_DIM, Wt::Reg);
-            draw_icon(
-                s,
-                "more-horizontal",
-                cx + cw - 28.0,
-                cy + 153.0,
-                ICON_MD,
-                C_DIM,
-            );
             // members — 20px overlapping avatars
             let mut mx = cx + 13.0;
             for m in f.members.iter() {
@@ -1109,9 +1148,9 @@ fn paint_recents(
             );
             app.fonts
                 .text(s, sort_x, r.y0 + 15.8, &f.edited, T11, C_DIM, Wt::Reg);
-            // hover actions, right-aligned: star, then the row menu
-            let star = Rect::new(r.x1 - 64.0, r.y0 + 8.0, r.x1 - 48.0, r.y0 + 24.0);
-            let more = Rect::new(r.x1 - 40.0, r.y0 + 8.0, r.x1 - 24.0, r.y0 + 24.0);
+            // hover action, right-aligned: the star (the "more" menu that
+            // used to sit beside it had no hit region and no menu — gone)
+            let star = Rect::new(r.x1 - 40.0, r.y0 + 8.0, r.x1 - 24.0, r.y0 + 24.0);
             if hover(app, r) || f.starred {
                 draw_icon(
                     s,
@@ -1121,9 +1160,6 @@ fn paint_recents(
                     ICON_MD,
                     if f.starred { C_STAR } else { C_DIM },
                 );
-            }
-            if hover(app, r) {
-                draw_icon(s, "more-horizontal", more.x0, more.y0, ICON_MD, C_DIM);
             }
             hit.push((star, Action::StarRecent(*idx)));
             hit.push((r, Action::OpenRecent(*idx)));
@@ -1143,21 +1179,47 @@ fn paint_drafts(
         let y = dy + 816.5;
         app.fonts
             .text(s, x0, y, "Open in this session", T14, C_TEXT, Wt::Semi);
+        if !app.docs.is_empty() {
+            app.fonts.text_right(
+                s,
+                x1,
+                y + 2.3,
+                &format!("{} open", app.docs.len()),
+                T11,
+                C_DIM,
+                Wt::Reg,
+                0.0,
+            );
+        }
         if app.docs.is_empty() {
             app.fonts
                 .text(s, x0, y + 33.0, "No open documents", T12, C_DIM, Wt::Reg);
+            return;
         }
+        // Same container idiom as the Demo's Drafts panel: one rounded card,
+        // hline-separated rows, hover wash. Bare floating rows read as a
+        // different species of list from every other panel on this screen.
+        let n = app.docs.len() as f64;
+        let panel = Rect::new(x0, y + 30.0, x1, y + 30.0 + 48.0 * n);
+        fill_rrect(s, panel, R_CARD, C_PANEL);
+        stroke_rrect(s, panel, R_CARD, C_LINE, 1.0);
         for (i, doc) in app.docs.iter().enumerate() {
             let r = Rect::new(
                 x0,
                 y + 30.0 + i as f64 * 48.0,
                 x1,
-                y + 78.0 + i as f64 * 48.0,
+                y + 30.0 + (i as f64 + 1.0) * 48.0,
             );
-            fill_rrect(s, r, R_ROW, if hover(app, r) { C_FIELD_2 } else { C_PANEL });
+            if hover(app, r) {
+                fill_rect(s, r, C_FIELD);
+            }
+            if i > 0 {
+                hline(s, x0, x1, r.y0, C_LINE);
+            }
+            draw_icon(s, "file-text", x0 + 16.0, r.y0 + 16.0, ICON_MD, C_DIM);
             let label = format!("{}{}", doc.name, if doc.dirty { " · unsaved" } else { "" });
             app.fonts
-                .text(s, x0 + 16.0, r.y0 + 15.0, &label, T12, C_TEXT, Wt::Med);
+                .text(s, x0 + 45.0, r.y0 + 15.0, &label, T12, C_TEXT, Wt::Med);
             hit.push((r, Action::SelectDoc(i)));
         }
         return;
@@ -1216,7 +1278,9 @@ fn paint_drafts(
         );
         app.fonts
             .text(s, x0 + 45.0, r.y0 + 14.5, &name, T12, C_TEXT, Wt::Med);
-        // edited text right edge at more-icon − 12; more at right pad 16
+        // edited text right-aligned with a 45px pad — symmetric with the
+        // 45px left pad the name uses (the "more" icon that used to claim
+        // the right edge had no hit region and no menu)
         app.fonts.text_right(
             s,
             x1 - 45.0,
@@ -1227,7 +1291,6 @@ fn paint_drafts(
             Wt::Reg,
             0.0,
         );
-        draw_icon(s, "more-horizontal", x1 - 33.0, r.y0 + 16.0, ICON_MD, C_DIM);
         hit.push((r, Action::OpenDraft(*idx)));
     }
 }

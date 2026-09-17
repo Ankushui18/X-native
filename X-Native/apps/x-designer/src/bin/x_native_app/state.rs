@@ -626,18 +626,22 @@ pub enum Action {
     /// Cycle the selected stroke between inside, center, and outside.
     CycleStrokePosition,
     /// Text formatting actions (Figma Design parity)
-    /// Cycle horizontal text alignment: left/center/right/justified
-    CycleTextAlign,
+    /// Set horizontal text alignment. Left/Center/Right only — the shaper
+    /// degrades Justified to Left, so offering it would be a phantom state.
+    SetTextAlign(x_native::TextAlign),
     /// Cycle vertical text alignment: top/middle/bottom
     CycleTextAlignVertical,
-    /// Toggle text decoration: none/underline/strikethrough
+    /// Cycle text decoration: none/underline/strikethrough
     CycleTextDecoration,
-    /// Cycle text truncation: disabled/end/middle
-    CycleTextTruncation,
-    /// Cycle list style: none/bulleted/numbered
-    CycleListStyle,
-    /// Toggle wrap style: normal/break-word
-    ToggleTextWrapStyle,
+    /// Cycle the paragraph wrap strategy (the "tw" binding the engine
+    /// actually shapes with): auto → balance → pretty → auto.
+    CycleTextWrap,
+    /// Progressive disclosure: the typography section's advanced rows
+    /// (letter/word/para spacing, baseline shift, case, variable axes).
+    ToggleTypoAdvanced,
+    /// Progressive disclosure: the auto layout section's advanced rows
+    /// (wrap / fill / absolute).
+    ToggleLayoutAdvanced,
     /// Apply a color chosen from the native color popover.
     PaintPreset(bool, String),
     Align(usize, usize),
@@ -884,22 +888,10 @@ pub enum FieldId {
     TextCase,
     OpticalSize,
     WidthAxis,
-    /// Text alignment (horizontal): left/center/right/justified
-    TextAlign,
-    /// Text alignment (vertical): top/middle/bottom
-    TextAlignVertical,
-    /// Text decoration: none/underline/strikethrough
-    TextDecoration,
-    /// Text truncation: disabled/end/middle
-    TextTruncation,
     /// Maximum lines for text truncation
     MaxLines,
     /// Paragraph indent (first-line indent in pixels)
     ParagraphIndent,
-    /// List style: none/bulleted/numbered
-    ListStyle,
-    /// Text wrap style: normal/break-word
-    TextWrapStyle,
     ExportSuffix,
     GuideSize,
     /// No-selection DESIGN panel: editor canvas background hex
@@ -1278,8 +1270,8 @@ pub struct OpenDoc {
     /// the tree from this hardcoded flat array, intentionally independent
     /// from the canvas board. Empty → render the real document tree.
     pub mock_layers: Vec<MockLayer>,
-    /// Seeded mock tabs keep the audited Chromium tab widths (the browser's
-    /// flex layout inflates them ~2px past the text advances);
+    /// Seeded mock tabs keep reference tab widths (a few px past the text
+    /// advances, like a browser's flex tab layout);
     /// None → derive from the text measure (user-created tabs).
     pub tab_w: Option<f64>,
     pub doc: Document,
@@ -1371,7 +1363,7 @@ impl OpenDoc {
     pub fn demo_doc() -> Self {
         let mut d = OpenDoc::demo_blank("DESIGN_SYSTEM.md".into());
         d.file_label = Some("Liquor Delivery App UI".into());
-        // audited Chromium tab boxes (html-editor.png): 120 | 178 | 128
+        // reference tab widths: 120 | 178 | 128
         d.tab_w = Some(178.0);
         d.flow_boot_mock = true;
         // Two empty pages in front — the mock shows the "Page 3" field and
@@ -1959,6 +1951,12 @@ pub struct App {
     pub paint_lib_at: Option<(f64, f64)>,
     /// Font browser opened from the typography family field.
     pub font_picker_open: bool,
+    /// Typography "Advanced" disclosure (letter/word/para spacing, baseline
+    /// shift, case, variable axes). Progressive disclosure, P0-8: the
+    /// primary set is Font / Weight / Size / Line height / Alignment.
+    pub typo_advanced_open: bool,
+    /// Auto Layout "Advanced" disclosure (Wrap / Fill / Absolute).
+    pub layout_advanced_open: bool,
     /// Viewport rulers (Shift+R). Off by default — the HTML mock has none.
     pub rulers: bool,
     /// Canvas minimap (⇧M). On by default in the editor: it is the only
@@ -2117,7 +2115,7 @@ impl App {
             docs: vec![
                 {
                     let mut d = OpenDoc::demo_blank("Untitled".into());
-                    d.tab_w = Some(120.0); // audited Chromium tab boxes
+                    d.tab_w = Some(120.0); // reference tab width
                     d
                 },
                 OpenDoc::demo_doc(),
@@ -2156,6 +2154,8 @@ impl App {
             paint_lib: None,
             paint_lib_at: None,
             font_picker_open: false,
+            typo_advanced_open: false,
+            layout_advanced_open: false,
             rulers: false,
             minimap: true,
             // canvas matches the HTML `.canvas` token; grid per the design

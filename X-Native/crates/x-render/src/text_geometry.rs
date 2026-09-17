@@ -26,6 +26,10 @@ pub fn shaped_block(
         small_caps,
         optical_size,
         width_axis,
+        align,
+        max_lines,
+        paragraph_indent,
+        decoration,
         runs,
         ..
     } = command
@@ -38,6 +42,8 @@ pub fn shaped_block(
         2 => (lh_value / 100.0 * size / natural).max(0.1),
         _ => *line_height,
     };
+    // alignment: the shaper's own enum (Justified degrades to Left there)
+    let align = x_text::Align::from(*align);
     let key = if runs.is_empty() {
         x_text::TextLayoutKey::new_styled(
             text,
@@ -56,6 +62,10 @@ pub fn shaped_block(
             *optical_size,
             *width_axis,
             *lh_mode,
+            align,
+            *max_lines,
+            *paragraph_indent,
+            *decoration,
         )
     } else {
         x_text::TextLayoutKey::new_rich(
@@ -74,6 +84,10 @@ pub fn shaped_block(
             *optical_size,
             *width_axis,
             *lh_mode,
+            align,
+            *max_lines,
+            *paragraph_indent,
+            *decoration,
         )
     };
     x_text::ShapedTextCache::global().get_or_shape(fm, key)
@@ -91,6 +105,8 @@ pub fn outline_text(tree: &RenderTree, fonts: &x_text::FontManager) -> Result<Re
             brush,
             runs,
             text,
+            v_align,
+            node_h,
             ..
         } = command
         {
@@ -99,10 +115,18 @@ pub fn outline_text(tree: &RenderTree, fonts: &x_text::FontManager) -> Result<Re
             }
             let block = shaped_block(command, fonts)
                 .ok_or_else(|| format!("cannot resolve font for {key}"))?;
+            // same vertical placement the canvas sink applies (Top / Middle /
+            // Bottom inside the node box) so exports agree with the screen
+            let dy = match v_align {
+                x_core::TextAlignVertical::Top => 0.0,
+                x_core::TextAlignVertical::Middle => (*node_h - block.height) / 2.0,
+                x_core::TextAlignVertical::Bottom => *node_h - block.height,
+            };
+            let vshift = Affine::translate((0.0, dy));
             for (i, glyph) in block.glyphs.iter().enumerate() {
                 commands.push(RenderCommand::FillPath {
                     key: format!("{key}/glyph-{i}"),
-                    transform: *transform * glyph.transform,
+                    transform: *transform * vshift * glyph.transform,
                     path: glyph.path.clone(),
                     brush: if !runs.is_empty() && glyph.color.components[3] != 0.0 {
                         Brush::Solid(glyph.color)

@@ -146,6 +146,12 @@ pub fn export_pdf_full(
                 small_caps,
                 optical_size,
                 width_axis,
+                align,
+                v_align,
+                node_h,
+                max_lines,
+                paragraph_indent,
+                decoration,
                 runs,
                 ..
             } => {
@@ -160,11 +166,14 @@ pub fn export_pdf_full(
                         2 => ((*lh_value) / 100.0 * *size / nat).max(0.1),
                         _ => *line_height,
                     };
+                    // alignment: the shaper's own enum (Justified degrades
+                    // to Left there — same rule as every other sink)
+                    let align = x_text::Align::from(*align);
                     // rich runs: per-glyph fill color — the shaped
                     // TRANSPARENT marker means "no explicit color" and
                     // falls back to the command brush (incl. gradients)
                     if !runs.is_empty() {
-                        if let Some((glyphs, _)) = x_text::node_text_outlines_rich(
+                        if let Some((glyphs, height)) = x_text::node_text_outlines_rich(
                             fm,
                             runs,
                             *size,
@@ -180,9 +189,21 @@ pub fn export_pdf_full(
                             *optical_size,
                             *width_axis,
                             *lh_mode,
+                            align,
+                            *max_lines,
+                            *paragraph_indent,
+                            *decoration,
                         ) {
+                            // vertical placement inside the node box, the
+                            // same rule the canvas sink applies
+                            let dy = match v_align {
+                                TextAlignVertical::Top => 0.0,
+                                TextAlignVertical::Middle => (*node_h - height) / 2.0,
+                                TextAlignVertical::Bottom => *node_h - height,
+                            };
+                            let vshift = Affine::translate((0.0, dy));
                             for gl in glyphs {
-                                let full = *transform * gl.transform;
+                                let full = *transform * vshift * gl.transform;
                                 let explicit = gl.color.components[3] > 0.0;
                                 if !explicit {
                                     if let Brush::Gradient(grad) = brush {
@@ -207,7 +228,7 @@ pub fn export_pdf_full(
                             }
                             drew = true;
                         }
-                    } else if let Some((glyphs, _)) = x_text::node_text_outlines_styled(
+                    } else if let Some((glyphs, height)) = x_text::node_text_outlines_styled(
                         fm,
                         text,
                         *size,
@@ -224,11 +245,21 @@ pub fn export_pdf_full(
                         *optical_size,
                         *width_axis,
                         *lh_mode,
+                        align,
+                        *max_lines,
+                        *paragraph_indent,
+                        *decoration,
                     ) {
+                        let dy = match v_align {
+                            TextAlignVertical::Top => 0.0,
+                            TextAlignVertical::Middle => (*node_h - height) / 2.0,
+                            TextAlignVertical::Bottom => *node_h - height,
+                        };
+                        let vshift = Affine::translate((0.0, dy));
                         for gl in glyphs {
                             // full transform = node world * glyph local;
                             // the global top-down flip is already the CTM.
-                            let full = *transform * gl.transform;
+                            let full = *transform * vshift * gl.transform;
                             if let Brush::Gradient(grad) = brush {
                                 if let Some(sh) = shading_for(grad, transform) {
                                     let idx = shadings.len();

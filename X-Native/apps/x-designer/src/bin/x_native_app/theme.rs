@@ -216,20 +216,26 @@ pub const C_LINE_2: Color = rgb(role!(border_strong)); // Strong borders
 
 // ------------------------------------------------------------- state colors
 
-// selection ring on canvas; smart-guide lines while dragging
-pub const C_SEL: Color = rgb(role!(focus_ring));
-pub const C_SEL_SOFT: Color = rgba(role!(focus_ring), A_FAINT);
+// selection ring on canvas; smart-guide lines while dragging. Selection is
+// the `selection` role (deeper violet) — keyboard focus is the distinct
+// `focus_ring` role, so the two states can never be confused.
+pub const C_SEL: Color = rgb(role!(selection));
+pub const C_SEL_SOFT: Color = rgba(role!(selection), A_FAINT);
 /// Wash behind the editor's selected text (stronger than C_SEL_SOFT).
-pub const C_SEL_WASH: Color = rgba(role!(focus_ring), A_MEDIUM);
-/// Border of the in-place text editor (replaces the selection chrome).
+pub const C_SEL_WASH: Color = rgba(role!(selection), A_MEDIUM);
+/// Border of the in-place text editor (replaces the selection chrome; it is
+/// a FOCUS state — the edit is where the pointer/keyboard attention is).
 pub const C_EDIT_BORDER: Color = rgba(role!(focus_ring), A_STRONG);
 /// Tangent handles in vector edit mode: a hair under the soft step, so a
 /// handle never competes with the shape it edits. Kept as its own constant
 /// rather than a new [`AlphaScale`] step — it is the *only* 0x40 in the app.
-pub const C_SEL_HANDLE: Color = rgba(role!(focus_ring), 0x40);
+pub const C_SEL_HANDLE: Color = rgba(role!(selection), 0x40);
+/// Keyboard/UI focus ring (distinct from canvas selection, P0-7): the
+/// lighter `focus_ring` role, used where a control has input focus.
+pub const C_FOCUS: Color = rgb(role!(focus_ring));
 /// Smart-guide lines while dragging — palette accent-ink violet (the editor
-/// comments expect "blue/purple"). Was #F24E1E, Figma's brand red — a clone
-/// artifact from the reference scrape; role-derived so themes remap it.
+/// comments expect "blue/purple"). Was a fixed red hex no theme could remap;
+/// now role-derived.
 // Accent as *ink* (accent-coloured text and glyphs). The accent itself
 // measures 3.13:1 on the panel and 2.80:1 on a raised surface — fine for a
 // fill, under AA for a label — so type and icons take the palette's ink step
@@ -285,8 +291,19 @@ pub const TAB_PAD_R: f64 = 10.0;
 pub const TREE_ROW_H: f64 = 22.0;
 pub const TREE_INDENT: f64 = 12.0;
 pub const INPUT_H: f64 = 28.0;
+/// Dense rows: disclosure / summary toggles ("Advanced" rows, clip content,
+/// Fixed|Fill segments). One step below the standard input.
+pub const DENSE_H: f64 = 24.0;
+/// Checkboxes, switches and inline chips (Hug/Fixed, padding glyph).
+pub const CHIP_H: f64 = 16.0;
 pub const PILL_H: f64 = 30.0;
 pub const SQ_BTN: f64 = 28.0;
+/// Inspector vertical rhythm (Refinement v1, P0-9): row→label 8,
+/// label→control 6, row→row 8, row→hline 12, hline→next section 12.
+/// These name the GAPS; measured y-offsets stay literal.
+pub const ROW_GAP: f64 = SP_3;
+pub const LABEL_GAP: f64 = SP_2;
+pub const SECTION_GAP: f64 = 12.0;
 pub const TOOLBAR_H: f64 = 40.0;
 pub const TOOL_ICON: f64 = 32.0;
 pub const TOOLBAR_BOTTOM: f64 = 20.0;
@@ -368,7 +385,7 @@ pub const STROKE_RING: f64 = StrokeScale::RING;
 // ------------------------------------------------------------- spacing (px)
 // The shared rhythm, one name per step. Use these for the *gaps and padding*
 // the chrome declares (a row's px-2, a stack's gap). Measured layout
-// coordinates stay literal — a pixel-cloned screen's `+17` is data, not a
+// coordinates stay literal — a layout constant's `+17` is data, not a
 // spacing decision, and naming it would hide that.
 pub const SP_1: f64 = SpacingScale::SPACE_1; // 4
 pub const SP_2: f64 = SpacingScale::SPACE_2; // 6

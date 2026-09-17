@@ -21,7 +21,7 @@
 
 use crate::font::FontManager;
 use crate::shaping::{
-    node_text_outlines_rich_uncached, node_text_outlines_styled_uncached, OutlineGlyph,
+    node_text_outlines_rich_uncached, node_text_outlines_styled_uncached, Align, OutlineGlyph,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -60,6 +60,16 @@ pub struct TextLayoutKey {
     /// paragraph wrap mode (x_core::TextWrap as u8): Balance/Pretty
     /// change line breaking, so layouts must not be served cross-mode
     pub wrap: u8,
+    /// horizontal alignment (Align as u8): Center/Right sit at a different
+    /// x than Left, so layouts must not be served cross-align
+    pub align: u8,
+    /// max-lines cap (0 = unlimited): a capped block is shorter and drops
+    /// lines, so caps must not be served uncapped
+    pub max_lines: usize,
+    /// paragraph first-line indent, bits (0.0 = none)
+    pub paragraph_indent_bits: u64,
+    /// decoration (TextDecoration as u8): adds a per-line rect
+    pub decoration: u8,
 }
 
 /// One styled run inside a rich-text layout key (see TextLayoutKey::runs).
@@ -104,6 +114,10 @@ impl TextLayoutKey {
             0.0,
             0.0,
             0,
+            Align::Left,
+            None,
+            0.0,
+            x_core::TextDecoration::None,
         )
     }
 
@@ -126,6 +140,10 @@ impl TextLayoutKey {
         optical_size: f32,
         width_axis: f32,
         lh_mode: u8,
+        align: Align,
+        max_lines: Option<usize>,
+        paragraph_indent: f64,
+        decoration: x_core::TextDecoration,
     ) -> Self {
         Self {
             text: text.to_string(),
@@ -142,6 +160,10 @@ impl TextLayoutKey {
             optical_size_bits: optical_size.to_bits() as u64,
             width_axis_bits: width_axis.to_bits() as u64,
             wrap: wrap as u8,
+            align: align as u8,
+            max_lines: max_lines.unwrap_or(0),
+            paragraph_indent_bits: paragraph_indent.to_bits(),
+            decoration: decoration as u8,
             color: {
                 let rgba = color.to_rgba8();
                 [rgba.r, rgba.g, rgba.b, rgba.a]
@@ -171,6 +193,10 @@ impl TextLayoutKey {
         optical_size: f32,
         width_axis: f32,
         lh_mode: u8,
+        align: Align,
+        max_lines: Option<usize>,
+        paragraph_indent: f64,
+        decoration: x_core::TextDecoration,
     ) -> Self {
         let mut k = Self::new_styled(
             &parts.iter().map(|p| p.text.as_str()).collect::<String>(),
@@ -189,6 +215,10 @@ impl TextLayoutKey {
             optical_size,
             width_axis,
             lh_mode,
+            align,
+            max_lines,
+            paragraph_indent,
+            decoration,
         );
         k.runs = parts
             .iter()
@@ -276,6 +306,22 @@ impl ShapedTextCache {
         let sc = key.small_caps;
         let opsz = f32::from_bits(key.optical_size_bits as u32);
         let wdth = f32::from_bits(key.width_axis_bits as u32);
+        let align = match key.align {
+            1 => Align::Center,
+            2 => Align::Right,
+            _ => Align::Left,
+        };
+        let max_lines = if key.max_lines == 0 {
+            None
+        } else {
+            Some(key.max_lines)
+        };
+        let paragraph_indent = f64::from_bits(key.paragraph_indent_bits);
+        let decoration = match key.decoration {
+            1 => x_core::TextDecoration::Underline,
+            2 => x_core::TextDecoration::Strikethrough,
+            _ => x_core::TextDecoration::None,
+        };
         let (glyphs, height) = if key.runs.is_empty() {
             let wrap = match key.wrap {
                 1 => x_core::TextWrap::Balance,
@@ -299,6 +345,10 @@ impl ShapedTextCache {
                 opsz,
                 wdth,
                 key.lh_mode,
+                align,
+                max_lines,
+                paragraph_indent,
+                decoration,
             )?
         } else {
             // rich path: rebuild the parts from the key (the cache only
@@ -339,6 +389,10 @@ impl ShapedTextCache {
                 opsz,
                 wdth,
                 key.lh_mode,
+                align,
+                max_lines,
+                paragraph_indent,
+                decoration,
             )?
         };
         let block = Arc::new(ShapedBlock { glyphs, height });
@@ -395,6 +449,74 @@ mod tests {
         TextLayoutKey::new(text, size, width, font, Color::BLACK, 0)
     }
 
+    /// The shaping-relevant style fields are in the key: the same text must
+    /// not be served across an alignment / line-cap / indent / decoration
+    /// change, or the canvas would show stale geometry.
+    #[test]
+    fn style_fields_are_part_of_the_key() {
+        use x_core::TextDecoration;
+        let base = |align: Align, max_lines: Option<usize>, indent: f64, deco: TextDecoration| {
+            TextLayoutKey::new_styled(
+                "Hello world",
+                24.0,
+                400.0,
+                None,
+                Color::BLACK,
+                0,
+                0.0,
+                1.2,
+                x_core::TextWrap::Auto,
+                0.0,
+                0.0,
+                0.0,
+                false,
+                0.0,
+                0.0,
+                0,
+                align,
+                max_lines,
+                indent,
+                deco,
+            )
+        };
+        let left = base(Align::Left, None, 0.0, TextDecoration::None);
+        assert_ne!(
+            left,
+            base(Align::Center, None, 0.0, TextDecoration::None),
+            "align"
+        );
+        assert_ne!(
+            left,
+            base(Align::Right, None, 0.0, TextDecoration::None),
+            "align right"
+        );
+        assert_ne!(
+            left,
+            base(Align::Left, Some(2), 0.0, TextDecoration::None),
+            "max lines"
+        );
+        assert_ne!(
+            left,
+            base(Align::Left, None, 20.0, TextDecoration::None),
+            "indent"
+        );
+        assert_ne!(
+            left,
+            base(Align::Left, None, 0.0, TextDecoration::Underline),
+            "underline"
+        );
+        assert_ne!(
+            left,
+            base(Align::Left, None, 0.0, TextDecoration::Strikethrough),
+            "strike"
+        );
+        assert_eq!(
+            left,
+            base(Align::Left, None, 0.0, TextDecoration::None),
+            "stable"
+        );
+    }
+
     #[test]
     fn rich_cache_keys_separate_styled_runs() {
         let styled = vec![x_core::TextPart {
@@ -431,6 +553,10 @@ mod tests {
             0.0,
             0.0,
             0,
+            Align::Left,
+            None,
+            0.0,
+            x_core::TextDecoration::None,
         );
         let k2 = TextLayoutKey::new_rich(
             &plain,
@@ -448,6 +574,10 @@ mod tests {
             0.0,
             0.0,
             0,
+            Align::Left,
+            None,
+            0.0,
+            x_core::TextDecoration::None,
         );
         assert_ne!(k1, k2, "styled vs plain keys differ");
         assert_eq!(
@@ -467,7 +597,11 @@ mod tests {
                 false,
                 0.0,
                 0.0,
-                0
+                0,
+                Align::Left,
+                None,
+                0.0,
+                x_core::TextDecoration::None,
             ),
             "same runs -> same key"
         );
@@ -497,7 +631,11 @@ mod tests {
                 false,
                 0.0,
                 0.0,
-                0
+                0,
+                Align::Left,
+                None,
+                0.0,
+                x_core::TextDecoration::None,
             ))
         );
     }
@@ -542,6 +680,10 @@ mod tests {
             0.0,
             0.0,
             0,
+            Align::Left,
+            None,
+            0.0,
+            x_core::TextDecoration::None,
         );
         let a = c.get_or_shape(&fm, k.clone()).expect("rich shapes");
         let b = c.get_or_shape(&fm, k).expect("second hit");
@@ -587,6 +729,10 @@ mod tests {
             0.0,
             0.0,
             0,
+            Align::Left,
+            None,
+            0.0,
+            x_core::TextDecoration::None,
         )
         .expect("rich outlines");
         assert!(glyphs.len() >= 8, "shaped {} glyphs", glyphs.len());

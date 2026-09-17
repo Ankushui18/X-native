@@ -185,7 +185,7 @@ function renderScales() {
 // Rust binary; it is NOT a screenshot, and the note above it says so.
 function dashboardMock(width, { rows = 3, layout = 'grid', view = 'Home' } = {}) {
   const cards = [
-    ['plus', 'New design file', 'Start from scratch'],
+    ['plus', 'New design file', 'Compose, flow, ship — from one file'],
     ['import', 'Import file', 'SVG, PNG, Sketch, Figma JSON'],
     ['sticky-note', 'New board', 'Infinite canvas for brainstorming'],
     ['layout-template', 'Start from template', 'Mobile, landing, system, board'],
@@ -205,10 +205,6 @@ function dashboardMock(width, { rows = 3, layout = 'grid', view = 'Home' } = {})
     ['clock', 'Recents'],
     ['star', 'Starred'],
     ['trash-2', 'Trash'],
-  ];
-  const teams = [
-    ['L', 'Liquor Delivery', '12'],
-    ['D', 'Design System', ''],
   ];
   // the search is centred in the space between the wordmark group and the
   // right cluster — the same arithmetic as `search_rect()` in dashboard.rs
@@ -230,27 +226,30 @@ function dashboardMock(width, { rows = 3, layout = 'grid', view = 'Home' } = {})
     <div class="titlebar">
       <div class="wordmark"><span class="gl"></span>X-Native</div>
       <div class="search" style="left:${searchX}px; width:480px">
-        ${svgIcon('search', 16)}<span>Search files, templates and commands</span><kbd>⌘K</kbd>
+        ${svgIcon('search', 16)}<span>Search recent local files</span><kbd>⌘K</kbd>
       </div>
+      <span class="btn ghost tb-newfile">${svgIcon('plus', 16)}New file</span>
       <div class="avatar" style="right:16px">A</div>
     </div>
     <div class="sidebar" style="height:${620 - 40}px">
-      <div class="side-head">Personal${svgIcon('chevron-down', 12)}</div>
+      <div class="side-label">${svgIcon('box', 12)}DRAFTS</div>
+      <div class="side-head"><span class="sdot"></span><span>Personal</span></div>
       ${navs
         .map(
           ([icon, label]) =>
             `<div class="side-row${label === view ? ' active' : ''}">${svgIcon(icon, 16)}${label}</div>`,
         )
         .join('')}
-      <div class="side-label">Teams</div>
-      ${teams
+      <div class="side-div"></div>
+      <div class="side-label">LOCAL WORKSPACE</div>
+      <div class="side-block"><b>No account required</b><span>Cloud teams are not available yet</span></div>
+      <div class="side-label">THE WORKFLOW</div>
+      ${[['1', 'Compose', 'Frames, auto layout, vectors'], ['2', 'Flow', 'Connect screens, preview'], ['3', 'Ship', 'Export PNG, PDF, SVG']]
         .map(
-          ([ch, name, count]) =>
-            `<div class="side-row"><span class="tchip">${ch}</span>${name}` +
-            `${count ? `<span class="tcount">${count}</span>` : ''}</div>`,
+          ([n, name, sub]) =>
+            `<div class="wrow"><span class="wnum">${n}</span><div class="wtxt"><b>${name}</b><span>${sub}</span></div></div>`,
         )
         .join('')}
-      <div class="side-chip"><span class="cx">${svgIcon('check', 16)}</span>All changes saved</div>
     </div>
     <div class="main">
       <div class="head">
@@ -273,7 +272,7 @@ function dashboardMock(width, { rows = 3, layout = 'grid', view = 'Home' } = {})
           )
           .join('')}
       </div>
-      <div class="section-h">Recently viewed</div>
+      <div class="recents-head"><b>Recents</b><span class="vchip">${svgIcon('rotate-cw', 12)}All files</span></div>
       ${
         layout === 'list'
           ? `<div class="lpanel">
@@ -300,7 +299,7 @@ function dashboardMock(width, { rows = 3, layout = 'grid', view = 'Home' } = {})
           .join('')}
       </div>`
       }
-      <div class="section-h">Drafts</div>
+      <div class="section-h">Open in this session</div>
       <div class="dpanel">
         ${drafts
           .slice(0, rows)

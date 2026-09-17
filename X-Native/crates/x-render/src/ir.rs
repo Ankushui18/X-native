@@ -62,6 +62,21 @@ pub enum RenderCommand {
         small_caps: bool,
         optical_size: f32,
         width_axis: f32,
+        /// Horizontal alignment. The shaper supports Left/Center/Right;
+        /// Justified degrades to Left (see `x_text::Align::from`).
+        align: x_core::TextAlign,
+        /// Vertical placement of the block inside the node box. A
+        /// PLACEMENT, not a shaping property: every sink computes the
+        /// offset from the shaped block's height and `node_h`.
+        v_align: x_core::TextAlignVertical,
+        /// Text box height (node.h) — what `v_align` places against.
+        node_h: f64,
+        /// CSS max-lines cap (None = unlimited).
+        max_lines: Option<usize>,
+        /// First-line indent of each paragraph, px.
+        paragraph_indent: f64,
+        /// Underline / strikethrough, drawn per line by the shaper.
+        decoration: x_core::TextDecoration,
         runs: Vec<x_core::TextPart>,
     },
     Image {
@@ -349,6 +364,12 @@ fn offset_command(command: &RenderCommand, dx: f64, dy: f64) -> RenderCommand {
             small_caps,
             optical_size,
             width_axis,
+            align,
+            v_align,
+            node_h,
+            max_lines,
+            paragraph_indent,
+            decoration,
             runs,
         } => RenderCommand::Glyphs {
             key: format!("{key}/bg"),
@@ -369,6 +390,12 @@ fn offset_command(command: &RenderCommand, dx: f64, dy: f64) -> RenderCommand {
             small_caps: *small_caps,
             optical_size: *optical_size,
             width_axis: *width_axis,
+            align: *align,
+            v_align: *v_align,
+            node_h: *node_h,
+            max_lines: *max_lines,
+            paragraph_indent: *paragraph_indent,
+            decoration: *decoration,
             runs: runs.clone(),
         },
         RenderCommand::Image {
@@ -733,9 +760,15 @@ fn fingerprint(c: &RenderCommand) -> String {
             optical_size,
             width_axis,
             wrap,
+            align,
+            v_align,
+            node_h,
+            max_lines,
+            paragraph_indent,
+            decoration,
             ..
         } => format!(
-            "g{:?}{text}{size}{max_width}{font:?}{brush:?}{runs:?}{letter_spacing}{line_height}{lh_mode}{lh_value}{word_spacing}{paragraph_spacing}{baseline_shift}{small_caps}{optical_size}{width_axis}{wrap:?}",
+            "g{:?}{text}{size}{max_width}{font:?}{brush:?}{runs:?}{letter_spacing}{line_height}{lh_mode}{lh_value}{word_spacing}{paragraph_spacing}{baseline_shift}{small_caps}{optical_size}{width_axis}{wrap:?}{align:?}{v_align:?}{node_h}{max_lines:?}{paragraph_indent}{decoration:?}",
             transform.as_coeffs()
         ),
         RenderCommand::Image {
@@ -1277,6 +1310,12 @@ fn lower(
                         small_caps,
                         optical_size: opsz,
                         width_axis: wdth,
+                        align: node.text_align,
+                        v_align: node.text_align_vertical,
+                        node_h: node.h,
+                        max_lines: node.max_lines,
+                        paragraph_indent: node.paragraph_indent,
+                        decoration: node.text_decoration,
                         runs,
                     });
                 }
@@ -1382,6 +1421,13 @@ fn lower(
                     small_caps: false,
                     optical_size: 0.0,
                     width_axis: 0.0,
+                    // canvas chrome label: default alignment/placement
+                    align: x_core::TextAlign::Left,
+                    v_align: x_core::TextAlignVertical::Top,
+                    node_h: 0.0,
+                    max_lines: None,
+                    paragraph_indent: 0.0,
+                    decoration: x_core::TextDecoration::None,
                     runs: vec![],
                 });
             }
@@ -1458,6 +1504,13 @@ fn lower(
                     small_caps: false,
                     optical_size: 0.0,
                     width_axis: 0.0,
+                    // canvas chrome label: default alignment/placement
+                    align: x_core::TextAlign::Left,
+                    v_align: x_core::TextAlignVertical::Top,
+                    node_h: 0.0,
+                    max_lines: None,
+                    paragraph_indent: 0.0,
+                    decoration: x_core::TextDecoration::None,
                     runs: vec![],
                 });
             }
@@ -1619,12 +1672,23 @@ impl<'a> VelloSink<'a> {
                     runs,
                     text,
                     size,
+                    v_align,
+                    node_h,
                     ..
                 } => {
                     if let Some(block) = self
                         .fonts
                         .and_then(|fm| crate::text_geometry::shaped_block(cmd, fm))
                     {
+                        // vertical alignment: place the shaped block inside
+                        // the node box (Top/Middle/Bottom) before its glyphs
+                        // are composited into the world transform
+                        let dy = match v_align {
+                            x_core::TextAlignVertical::Top => 0.0,
+                            x_core::TextAlignVertical::Middle => (*node_h - block.height) / 2.0,
+                            x_core::TextAlignVertical::Bottom => *node_h - block.height,
+                        };
+                        let vshift = Affine::translate((0.0, dy));
                         for glyph in &block.glyphs {
                             let b = if !runs.is_empty() && glyph.color.components[3] != 0.0 {
                                 Brush::Solid(glyph.color)
@@ -1633,7 +1697,7 @@ impl<'a> VelloSink<'a> {
                             };
                             scene.fill(
                                 Fill::NonZero,
-                                *transform * glyph.transform,
+                                *transform * vshift * glyph.transform,
                                 &b,
                                 None,
                                 &glyph.path,

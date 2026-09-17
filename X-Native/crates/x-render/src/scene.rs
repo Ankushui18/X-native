@@ -543,17 +543,17 @@ fn encode(
                         } else {
                             build_rich_spans_px(node, content, color, fm, font, fs_px, vars)
                         };
-                        let (n, _) = x_text::encode_rich_text(
-                            scene,
+                        // shape first so the vertical alignment can place the
+                        // block inside the node box before encoding
+                        let (glyphs, height) = x_text::glyph_outlines(
                             fm,
                             &spans,
                             font,
-                            world,
                             &x_text::TextBlockStyle {
                                 lh_mode,
                                 max_width: node.w.max(8.0),
                                 line_height: lh_mult,
-                                align: x_text::Align::Left,
+                                align: x_text::Align::from(node.text_align),
                                 wrap: node.text_wrap(),
                                 paragraph_spacing: node
                                     .bindings
@@ -577,8 +577,27 @@ fn encode(
                                     .get("wdth")
                                     .and_then(|v| v.parse::<f32>().ok())
                                     .unwrap_or(0.0),
+                                max_lines: node.max_lines,
+                                paragraph_indent: node.paragraph_indent,
+                                decoration: node.text_decoration,
                             },
                         );
+                        let dy = match node.text_align_vertical {
+                            x_core::TextAlignVertical::Top => 0.0,
+                            x_core::TextAlignVertical::Middle => (node.h - height) / 2.0,
+                            x_core::TextAlignVertical::Bottom => node.h - height,
+                        };
+                        let vshift = Affine::translate((0.0, dy));
+                        let n = glyphs.len();
+                        for g in &glyphs {
+                            scene.fill(
+                                Fill::NonZero,
+                                world * vshift * g.transform,
+                                g.color,
+                                None,
+                                &g.path,
+                            );
+                        }
                         stats.paths += n;
                     }
                     true
@@ -838,7 +857,14 @@ pub(crate) fn text_needs_styled(node: &Node) -> bool {
         .get("wdth")
         .and_then(|v| v.parse::<f32>().ok())
         .unwrap_or(0.0);
-    sc || opsz > 0.0 || wdth > 0.0 || node.has_explicit_lh()
+    // the fast path renders plain left-set, unclipped, undecorated text;
+    // any node carrying one of these must take the full shaper
+    let typed = node.text_align != x_core::TextAlign::Left
+        || node.text_align_vertical != x_core::TextAlignVertical::Top
+        || node.max_lines.is_some()
+        || node.paragraph_indent != 0.0
+        || node.text_decoration != x_core::TextDecoration::None;
+    sc || opsz > 0.0 || wdth > 0.0 || node.has_explicit_lh() || typed
 }
 
 pub(crate) fn build_rich_spans_px(
@@ -857,6 +883,10 @@ pub(crate) fn build_rich_spans_px(
         .and_then(|name| vars.numbers.get(name))
         .copied()
         .or_else(|| node.bindings.get("ls").and_then(|v| v.parse::<f64>().ok()));
+    // word spacing: node-level only (TextPart carries no run ws), read
+    // exactly like the IR path (ir.rs lower: typo_num("ws")) so the canvas
+    // agrees with exports
+    let node_ws = node.bindings.get("ws").and_then(|v| v.parse::<f64>().ok());
     x_core::resolve_text_parts(text, &node.text_runs)
         .iter()
         .map(|p| {
@@ -865,6 +895,9 @@ pub(crate) fn build_rich_spans_px(
                 .color(p.color.unwrap_or(base_color));
             if let Some(ls) = p.ls.or(node_ls) {
                 span = span.letter_spacing(ls);
+            }
+            if let Some(ws) = node_ws {
+                span = span.word_spacing(ws);
             }
             // Font resolution: the run's family or the node's, at the
             // run's weight (real face switch — static faces ignore wght

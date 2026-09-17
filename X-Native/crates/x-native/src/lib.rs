@@ -77,8 +77,25 @@ pub fn svg_text_outliner(
             glyphs
         } else {
             let (glyphs, _) = x_text::node_text_outlines_rich(
-                fonts, parts, size, max_width, font, 0.0, 1.2, wrap, 0.0, 0.0, 0.0, false, 0.0,
-                0.0, 0,
+                fonts,
+                parts,
+                size,
+                max_width,
+                font,
+                0.0,
+                1.2,
+                wrap,
+                0.0,
+                0.0,
+                0.0,
+                false,
+                0.0,
+                0.0,
+                0,
+                x_text::Align::Left,
+                None,
+                0.0,
+                x_core::TextDecoration::None,
             )?;
             glyphs
         };
@@ -203,7 +220,9 @@ pub fn outline_text_node(
         }
     };
     // empty runs = the plain pipeline, the same branch the canvas/PDF/SVG sinks
-    // take, so all four agree on the glyph geometry
+    // take, so all four agree on the glyph geometry. Alignment, the line
+    // cap, paragraph indent and decoration ride along too — the outline is
+    // the rendered shape, so it must carry everything the canvas renders.
     let glyphs = if parts.is_empty() {
         x_text::node_text_outlines_styled(
             fonts,
@@ -222,8 +241,11 @@ pub fn outline_text_node(
             opsz,
             wdth,
             lh_mode,
+            x_text::Align::from(node.text_align),
+            node.max_lines,
+            node.paragraph_indent,
+            node.text_decoration,
         )?
-        .0
     } else {
         x_text::node_text_outlines_rich(
             fonts,
@@ -241,9 +263,21 @@ pub fn outline_text_node(
             opsz,
             wdth,
             lh_mode,
+            x_text::Align::from(node.text_align),
+            node.max_lines,
+            node.paragraph_indent,
+            node.text_decoration,
         )?
-        .0
     };
+    let (glyphs, block_h) = glyphs;
+    // the sinks place the block vertically inside the node box; the
+    // outline must sit where the text sits
+    let dy = match node.text_align_vertical {
+        TextAlignVertical::Top => 0.0,
+        TextAlignVertical::Middle => (node.h - block_h) / 2.0,
+        TextAlignVertical::Bottom => node.h - block_h,
+    };
+    let vshift = vello::kurbo::Affine::translate((0.0, dy));
     if glyphs.is_empty() {
         return None;
     }
@@ -251,7 +285,7 @@ pub fn outline_text_node(
     let mut cmds: Vec<PathCmd> = vec![];
     for g in &glyphs {
         let mut p = g.path.clone();
-        p.apply_affine(g.transform);
+        p.apply_affine(vshift * g.transform);
         cmds.extend(bez_to_path_cmds(&p));
     }
     if cmds.is_empty() {
