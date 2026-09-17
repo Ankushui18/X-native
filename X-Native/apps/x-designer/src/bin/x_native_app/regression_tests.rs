@@ -2075,7 +2075,9 @@ fn app_ui_colors_are_derived_from_the_shared_palette() {
     assert_eq!(crate::theme::C_ACCENT, crate::theme::rgb(p.accent));
     assert_eq!(crate::theme::C_ON_ACCENT, crate::theme::rgb(p.on_accent));
     assert_eq!(crate::theme::C_LINE, crate::theme::rgb(p.border));
-    assert_eq!(crate::theme::C_SEL, crate::theme::rgb(p.focus_ring));
+    // selection is the `selection` role; keyboard focus is `focus_ring`
+    assert_eq!(crate::theme::C_SEL, crate::theme::rgb(p.selection));
+    assert_eq!(crate::theme::C_FOCUS, crate::theme::rgb(p.focus_ring));
     assert_eq!(rgb(p.text_primary), (0xF2, 0xF3, 0xF7)); // still the brand white
                                                          // toolbar keeps its alpha on top of the role
     let t = crate::theme::C_TOOLBAR.to_rgba8();

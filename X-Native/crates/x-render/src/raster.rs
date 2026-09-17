@@ -328,6 +328,12 @@ impl<'a> RasterSink<'a> {
                     small_caps,
                     optical_size,
                     width_axis,
+                    align,
+                    v_align,
+                    node_h,
+                    max_lines,
+                    paragraph_indent,
+                    decoration,
                     ..
                 } => {
                     let mut drew = false;
@@ -339,7 +345,8 @@ impl<'a> RasterSink<'a> {
                             2 => ((*lh_value) / 100.0 * *size / nat).max(0.1),
                             _ => *line_height,
                         };
-                        if let Some((glyphs, _)) = x_text::node_text_outlines_styled(
+                        let align = x_text::Align::from(*align);
+                        if let Some((glyphs, height)) = x_text::node_text_outlines_styled(
                             fm,
                             text,
                             *size,
@@ -356,10 +363,24 @@ impl<'a> RasterSink<'a> {
                             *optical_size,
                             *width_axis,
                             *lh_mode,
+                            align,
+                            *max_lines,
+                            *paragraph_indent,
+                            *decoration,
                         ) {
+                            // vertical placement inside the node box, the same
+                            // rule the canvas sink applies
+                            let dy = match v_align {
+                                x_core::TextAlignVertical::Top => 0.0,
+                                x_core::TextAlignVertical::Middle => {
+                                    (*node_h - height) / 2.0
+                                }
+                                x_core::TextAlignVertical::Bottom => *node_h - height,
+                            };
+                            let vshift = Affine::translate((0.0, dy));
                             for gl in glyphs {
                                 if let Some(p) = to_path(&gl.path) {
-                                    let full = *transform * gl.transform;
+                                    let full = *transform * vshift * gl.transform;
                                     let mut paint = to_paint(brush);
                                     let mask = self.stack.last().and_then(|c| c.mask.as_ref());
                                     paint.blend_mode = self

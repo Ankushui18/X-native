@@ -1481,6 +1481,8 @@ pub struct TextTypo {
     pub opsz: f32,
     pub width_axis: f32,
     pub font: Option<String>,
+    pub max_lines: Option<usize>,
+    pub paragraph_indent: f64,
 }
 
 impl App {
@@ -2170,6 +2172,8 @@ impl App {
             opsz: get("opsz").unwrap_or(0.0) as f32,
             width_axis: get("wdth").unwrap_or(0.0) as f32,
             font: n.bindings.get("font").cloned(),
+            max_lines: n.max_lines,
+            paragraph_indent: n.paragraph_indent,
         })
     }
 
@@ -5158,10 +5162,11 @@ impl Host {
                 };
                 self.zoom_at(p, f);
             } else if reg.right.contains(p) {
-                // clamp to the content: DESIGN column ends ~1780px below
-                // the entry line (audit tail + margin)
+                // clamp to the content: DESIGN column ends ~1945px below
+                // the entry line (typography section + the fill/stroke/
+                // effects tail, hand-tuned)
                 let max_scroll =
-                    (1780.0 - (self.app.win_h - (crate::theme::ED_TITLE_H + 89.0))).max(0.0);
+                    (1945.0 - (self.app.win_h - (crate::theme::ED_TITLE_H + 89.0))).max(0.0);
                 let d = self.app.doc();
                 d.scroll_right = (d.scroll_right - dy * 40.0).clamp(0.0, max_scroll);
             } else if reg.left.contains(p) {
@@ -9266,18 +9271,15 @@ impl Host {
                     self.app.mark_dirty();
                 }
             }
-            Action::CycleTextAlign => {
+            Action::SetTextAlign(align) => {
                 let Some(id) = self.app.doc().selected_id() else {
                     return;
                 };
-                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
-                    n.text_align = match n.text_align {
-                        x_native::TextAlign::Left => x_native::TextAlign::Center,
-                        x_native::TextAlign::Center => x_native::TextAlign::Right,
-                        x_native::TextAlign::Right => x_native::TextAlign::Justified,
-                        x_native::TextAlign::Justified => x_native::TextAlign::Left,
-                    };
-                });
+                let changed = self
+                    .app
+                    .doc()
+                    .editor()
+                    .mutate_visual_stack(&id, |n| n.text_align = align);
                 if changed {
                     self.app.mark_dirty();
                 }
@@ -9314,44 +9316,27 @@ impl Host {
                     self.app.mark_dirty();
                 }
             }
-            Action::CycleTextTruncation => {
+            Action::CycleTextWrap => {
                 let Some(id) = self.app.doc().selected_id() else {
                     return;
                 };
+                // the engine's wrap strategy rides the "tw" binding (auto /
+                // balance / pretty) — the node's `wrap_style` field is
+                // serialization-only, so this control must edit the binding
+                // to be visible on the canvas
                 let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
-                    n.text_truncation = match n.text_truncation {
-                        x_native::TextTruncation::Disabled => x_native::TextTruncation::End,
-                        x_native::TextTruncation::End => x_native::TextTruncation::Middle,
-                        x_native::TextTruncation::Middle => x_native::TextTruncation::Disabled,
+                    let next = match n.text_wrap() {
+                        x_native::TextWrap::Auto => Some(x_native::TextWrap::Balance),
+                        x_native::TextWrap::Balance => Some(x_native::TextWrap::Pretty),
+                        x_native::TextWrap::Pretty => None,
                     };
-                });
-                if changed {
-                    self.app.mark_dirty();
-                }
-            }
-            Action::CycleListStyle => {
-                let Some(id) = self.app.doc().selected_id() else {
-                    return;
-                };
-                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
-                    n.list_style = match n.list_style {
-                        x_native::ListStyle::None => x_native::ListStyle::Bulleted,
-                        x_native::ListStyle::Bulleted => x_native::ListStyle::Numbered,
-                        x_native::ListStyle::Numbered => x_native::ListStyle::None,
-                    };
-                });
-                if changed {
-                    self.app.mark_dirty();
-                }
-            }
-            Action::ToggleTextWrapStyle => {
-                let Some(id) = self.app.doc().selected_id() else {
-                    return;
-                };
-                let changed = self.app.doc().editor().mutate_visual_stack(&id, |n| {
-                    n.wrap_style = match n.wrap_style {
-                        x_native::WrapStyle::Normal => x_native::WrapStyle::BreakWord,
-                        x_native::WrapStyle::BreakWord => x_native::WrapStyle::Normal,
+                    match next {
+                        Some(w) => {
+                            n.bindings.insert("tw".into(), w.to_str().into());
+                        }
+                        None => {
+                            n.bindings.remove("tw");
+                        }
                     };
                 });
                 if changed {

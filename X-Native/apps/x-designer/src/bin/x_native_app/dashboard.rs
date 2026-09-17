@@ -1,11 +1,9 @@
-//! Dashboard screen — pixel clone of `ui/dashboard-v2.html`.
+//! Dashboard screen.
 //!
-//! Every coordinate below is the measured getBoundingClientRect() of the
-//! Chromium-rendered reference at 1440×900 (see /home/user/ref/audit-dash.json):
+//! Layout constants are hand-tuned for a 1440×900 composition:
 //! top bar h-10 (40), sidebar w-[260px], search 480×32 at y 3.5, quick cards
 //! 274×88 at y 147.5, recents cards 366.7×230.5 at y 307.5, drafts rows h-12.
-//! Text y values are CSS line-box TOPS (Tailwind preflight line-height 1.5)
-//! passed to `TextUi::text`, which renders exactly like the browser.
+//! Text y values are line-box TOPS (1.5 line-height) passed to `TextUi::text`.
 
 use vello::kurbo::Rect;
 use vello::Scene;
@@ -59,11 +57,13 @@ pub fn paint(app: &mut App, s: &mut Scene) {
     }
 
     // Keyboard focus ring: painted from the list just built, under the modal
-    // (a modal owns the interaction) so the two never disagree.
+    // (a modal owns the interaction) so the two never disagree. Focus is the
+    // `focus_ring` role (C_FOCUS) — deliberately distinct from the canvas
+    // selection colour.
     if !app.template_picker_open {
         if let Some(r) = focus_ring(app, &hit) {
             let ring = r.inflate(1.5, 1.5);
-            stroke_rrect(s, ring, R_ROW, C_SEL, STROKE_RING);
+            stroke_rrect(s, ring, R_ROW, C_FOCUS, STROKE_RING);
         }
     }
 
@@ -570,11 +570,12 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let sb = Rect::new(x1 - 320.0, dy + 77.8, x1 - 160.0, dy + 109.8);
     let sb_hot = hover(app, sb) || app.dash_sort_open;
     fill_rrect(s, sb, R_ROW, if sb_hot { C_FIELD_2 } else { C_FIELD });
+    // open dropdown = an active (focused) control, not a canvas selection
     stroke_rrect(
         s,
         sb,
         R_ROW,
-        if app.dash_sort_open { C_SEL } else { C_LINE },
+        if app.dash_sort_open { C_FOCUS } else { C_LINE },
         1.0,
     );
     draw_icon(
@@ -670,9 +671,10 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         // .card:hover{transform:translateY(-2px);...} — lift the whole card
         let dy = if hov { dy - 2.0 } else { dy };
         let r = Rect::new(cx, dy + 147.5, cx + cw, dy + 235.5);
-        fill_rrect(s, r, R_CARD, if hov { C_PANEL_2 } else { C_PANEL });
-        // signature: violet hover ring (was the reference's neutral border)
-        stroke_rrect(s, r, R_CARD, if hov { C_SEL } else { C_LINE }, 1.0);
+    fill_rrect(s, r, R_CARD, if hov { C_PANEL_2 } else { C_PANEL });
+    // hover: a quiet strong-border ring (hover must not impersonate the
+    // selection colour)
+    stroke_rrect(s, r, R_CARD, if hov { C_LINE_2 } else { C_LINE }, 1.0);
         // signature: the icon chip is a square violet tile — the same 32×32,
         // r8, 16px-glyph mark the template-gallery rows wear. The reference
         // mock's flex had SHRUNK its w-8 h-8 chip to 30.7×18 inside the fixed

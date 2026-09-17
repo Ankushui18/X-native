@@ -5,6 +5,57 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-18 (Typography: the Inspector Meets the Engine)
+
+Part of the UI/UX Refinement v1 milestone (see
+[docs/REFINEMENT_V1_PLAN.md](docs/REFINEMENT_V1_PLAN.md)).
+
+### Added
+- **The engine renders what the inspector edits — for every text property.**
+  `TextBlockStyle` (and therefore every shaped cache key) gains `max_lines`,
+  `paragraph_indent` and `decoration`, and the outline entry points take the
+  node's horizontal alignment:
+  - **Alignment** Left/Center/Right shifts every laid-out line; `Justified`
+    degrades to Left (the shaper does not stretch lines — a phantom state is
+    better than a false one).
+  - **Max lines** drops lines beyond the cap *before* placement, so the block
+    height covers exactly what is emitted (CSS `max-lines`).
+  - **Paragraph indent** shifts the first line of each paragraph
+    (CSS `text-indent`); wrapped continuation lines stay at the margin.
+  - **Decoration** draws one rect per line — underline ~0.1em below the
+    baseline, strikethrough ~0.5em above it, thickness ~5% of the line size.
+  - **Vertical alignment** Top/Middle/Bottom places the shaped block inside
+    the node box in every sink (canvas vello, PDF, PNG/JPG raster, SVG
+    outline), so exports agree with the screen.
+  12 new/updated tests: alignment offsets, cap height, per-baseline indent
+  pattern, one rect per line, and cache-key separation for each new field.
+  `crates/x-text`, `crates/x-render`, `crates/x-native`.
+- **`C_FOCUS`** (the `focus_ring` role) as the distinct input-focus colour.
+  Canvas selection now derives from the `selection` role (`#7C5CFC` in
+  Graphite & Signal) instead of `focus_ring`, so selection, focus and hover
+  are three distinguishable states. Dashboard focus ring and open-dropdown
+  border use `C_FOCUS`; the card hover ring drops to `C_LINE_2`. The
+  regression test pins the role mapping. `apps/x-designer`.
+
+### Changed
+- **Inspector typography section, no more phantom controls.** Horizontal
+  alignment is three working buttons (active state mirrors the render);
+  vertical alignment, decoration, max lines and paragraph indent now reach
+  the engine; the **Wrap style** control was re-wired from the
+  serialization-only `wrap_style` field (Normal/BreakWord — the engine never
+  read it) to the engine's real paragraph wrap strategy (`tw` binding:
+  Auto → Balance → Pretty). **Truncation** and **List style** — editable
+  but unrenderable — are out of the inspector; their model fields stay in
+  the format. Word spacing was being silently dropped by the canvas scene
+  path; it now reads the same `ws` binding as every other sink.
+- **Inspector layout fix.** The fill/stroke/effects tail started at
+  `y0+1041.5`, above the typography rows it was meant to follow, and painted
+  over them. The typography section now ends at 1178, divider at 1190.5,
+  tail at 1202.5, scroll clamp updated to match.
+- **Wording.** Comments describing the UI as a "pixel clone" of a measured
+  HTML reference now say what the constants are: hand-tuned for a 1440px
+  composition. No behaviour change.
+
 ## [Unreleased] — 2026-09-16 (Vector Tools, and the Build They Needed)
 
 ### Added

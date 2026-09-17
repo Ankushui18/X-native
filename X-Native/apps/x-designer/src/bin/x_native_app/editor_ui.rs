@@ -3047,6 +3047,8 @@ pub enum Typo {
     TextCase,
     OpticalSize,
     WidthAxis,
+    MaxLines,
+    ParagraphIndent,
 }
 
 /// px or integer formatter: trims to whole numbers when close.
@@ -3078,6 +3080,8 @@ pub fn typo_val(app: &App, which: Typo) -> String {
             Typo::TextCase => "None".into(),
             Typo::OpticalSize => "Auto".into(),
             Typo::WidthAxis => "Auto".into(),
+            Typo::MaxLines => "Auto".into(),
+            Typo::ParagraphIndent => "0px".into(),
         };
     };
     match which {
@@ -3117,6 +3121,11 @@ pub fn typo_val(app: &App, which: Typo) -> String {
                 "Auto".into()
             }
         }
+        Typo::MaxLines => t
+            .max_lines
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "Auto".into()),
+        Typo::ParagraphIndent => num_str(t.paragraph_indent, "px"),
     }
 }
 
@@ -3348,10 +3357,10 @@ fn paint_design(
     rw: f64,
     y_entry: f64,
 ) {
-    // Absolute geometry from the Chromium audit of v45-final-editor-28px.html
-    // at 1440 (see /home/user/ref/audit-editor.json). `y_entry` is the pixel
-    // right after the pill-tabs divider (abs 125); all offsets below are
-    // audit_y - 125, so the panel is exact at any window size.
+    // Absolute geometry, hand-tuned against a 1440px-wide reference
+    // composition. `y_entry` is the pixel right after the pill-tabs divider
+    // (abs 125); all offsets below are entry-relative, so the panel holds at
+    // any window size.
     let scroll = app.doc().scroll_right;
     let y0 = y_entry - scroll;
     let pl = 12.0;
@@ -3930,8 +3939,8 @@ fn paint_design(
     if y_after_image != y_after_appearance {
         // The image-adjustment block rendered (7 sliders + buttons, ~280px).
         // Its height cannot be folded into `y0` without re-flowing every
-        // audited offset below it, so the sections that follow keep their
-        // audited positions — see the Chromium-audit note atop this function.
+        // offset below it, so the sections that follow keep their reference
+        // positions — see the geometry note atop this function.
     }
 
     // ---- typography -----------------------------------------------------
@@ -4201,66 +4210,43 @@ fn paint_design(
 
     app.fonts
         .text(s, x0, y0 + 970.5, "Alignment", T10, C_DIM, Wt::Reg);
-    // 6 alignment buttons + sliders
-    let al_icons = [
-        Some("align-left"),
-        Some("align-center"),
-        Some("align-right"),
-        None, // "T" text
-        Some("plus"),
-        Some("arrow-down"),
-    ];
-    for (i, ic) in al_icons.into_iter().enumerate() {
+    // Horizontal alignment: three working buttons. The shaper degrades
+    // Justified to Left, so it is not offered (a phantom state); the active
+    // highlight mirrors what the canvas actually renders.
+    let align_now = selected_text_align(app);
+    for (i, (ic, t)) in [
+        ("align-left", x_native::TextAlign::Left),
+        ("align-center", x_native::TextAlign::Center),
+        ("align-right", x_native::TextAlign::Right),
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let bx = x0 + 47.7 * i as f64;
         let br = Rect::new(bx, y0 + 988.0, bx + 43.8, y0 + 1016.0);
-        let active = i == 0;
+        let active = align_now == t;
         if active {
             fill_rrect(s, br, R_MD, C_FIELD_2);
             stroke_rrect(s, br, R_MD, C_LINE_2, 1.0);
         } else {
             input_box(app, s, br, 6.0);
         }
-        match ic {
-            Some(ic) => draw_icon(
-                s,
-                ic,
-                br.x0 + (43.8 - 14.0) / 2.0,
-                br.y0 + 7.0,
-                ICON_SM,
-                if active { C_TEXT } else { C_DIM },
-            ),
-            None => app.fonts.text_center(s, br, "T", T10, C_DIM, Wt::Reg, true),
-        }
+        draw_icon(
+            s,
+            ic,
+            br.x0 + (43.8 - 14.0) / 2.0,
+            br.y0 + 7.0,
+            ICON_SM,
+            if active { C_TEXT } else { C_DIM },
+        );
+        hit.push((br, Action::SetTextAlign(t)));
     }
-    let slb = Rect::new(x0 + 287.0, y0 + 824.5, x0 + 315.0, y0 + 852.5);
-    input_box(app, s, slb, 6.0);
-    draw_icon(
-        s,
-        "sliders-horizontal",
-        slb.x0 + 7.0,
-        slb.y0 + 7.0,
-        ICON_SM,
-        C_DIM,
-    );
 
     // ---- TEXT FORMATTING (Figma Design parity) ----
-    // Text alignment (horizontal)
+    // Vertical alignment (horizontal sits in the button row above)
     app.fonts
-        .text(s, x0, y0 + 1024.5, "Text alignment", T10, C_DIM, Wt::Reg);
-    let h_align = Rect::new(x0, y0 + 1042.0, x0 + 153.5, y0 + 1070.0);
-    input(
-        app,
-        s,
-        hit,
-        h_align,
-        None,
-        &text_align_label(app),
-        false,
-        Some(Action::CycleTextAlign),
-        Some("chevron-down"),
-    );
-    // Text alignment (vertical)
-    let v_align = Rect::new(x0 + 161.5, y0 + 1042.0, x0 + 315.0, y0 + 1070.0);
+        .text(s, x0, y0 + 1024.5, "Vertical alignment", T10, C_DIM, Wt::Reg);
+    let v_align = Rect::new(x0, y0 + 1042.0, x0 + 153.5, y0 + 1070.0);
     input(
         app,
         s,
@@ -4273,7 +4259,7 @@ fn paint_design(
         Some("chevron-down"),
     );
 
-    // Text decoration
+    // Decoration
     app.fonts
         .text(s, x0, y0 + 1078.5, "Decoration", T10, C_DIM, Wt::Reg);
     let deco = Rect::new(x0, y0 + 1096.0, x0 + 153.5, y0 + 1124.0);
@@ -4288,101 +4274,63 @@ fn paint_design(
         Some(Action::CycleTextDecoration),
         Some("chevron-down"),
     );
-    // Truncation
+    // Wrap style: the engine's paragraph wrap strategy ("tw" binding)
     app.fonts.text(
         s,
         x0 + 161.5,
         y0 + 1078.5,
-        "Truncation",
-        T10,
-        C_DIM,
-        Wt::Reg,
-    );
-    let trunc = Rect::new(x0 + 161.5, y0 + 1096.0, x0 + 315.0, y0 + 1124.0);
-    input(
-        app,
-        s,
-        hit,
-        trunc,
-        None,
-        &text_truncation_label(app),
-        false,
-        Some(Action::CycleTextTruncation),
-        Some("chevron-down"),
-    );
-
-    // List style
-    app.fonts
-        .text(s, x0, y0 + 1132.5, "List style", T10, C_DIM, Wt::Reg);
-    let list = Rect::new(x0, y0 + 1150.0, x0 + 153.5, y0 + 1178.0);
-    input(
-        app,
-        s,
-        hit,
-        list,
-        None,
-        &list_style_label(app),
-        false,
-        Some(Action::CycleListStyle),
-        Some("chevron-down"),
-    );
-    // Wrap style
-    app.fonts.text(
-        s,
-        x0 + 161.5,
-        y0 + 1132.5,
         "Wrap style",
         T10,
         C_DIM,
         Wt::Reg,
     );
-    let wrap = Rect::new(x0 + 161.5, y0 + 1150.0, x0 + 315.0, y0 + 1178.0);
+    let wrap = Rect::new(x0 + 161.5, y0 + 1096.0, x0 + 315.0, y0 + 1124.0);
     input(
         app,
         s,
         hit,
         wrap,
         None,
-        &wrap_style_label(app),
+        &wrap_strategy_label(app),
         false,
-        Some(Action::ToggleTextWrapStyle),
+        Some(Action::CycleTextWrap),
         Some("chevron-down"),
     );
 
-    // Paragraph indent
-    app.fonts
-        .text(s, x0, y0 + 1186.5, "Paragraph indent", T10, C_DIM, Wt::Reg);
-    let para_indent = Rect::new(x0, y0 + 1204.0, x0 + 153.5, y0 + 1232.0);
-    input(
-        app,
-        s,
-        hit,
-        para_indent,
-        None,
-        &field_val(app, FieldId::ParagraphIndent, "0px".into()),
-        false,
-        Some(Action::Field(FieldId::ParagraphIndent)),
-        None,
-    );
     // Max lines
     app.fonts
-        .text(s, x0 + 161.5, y0 + 1186.5, "Max lines", T10, C_DIM, Wt::Reg);
-    let max_lines = Rect::new(x0 + 161.5, y0 + 1204.0, x0 + 315.0, y0 + 1232.0);
+        .text(s, x0, y0 + 1132.5, "Max lines", T10, C_DIM, Wt::Reg);
+    let max_lines = Rect::new(x0, y0 + 1150.0, x0 + 153.5, y0 + 1178.0);
     input(
         app,
         s,
         hit,
         max_lines,
         None,
-        &field_val(app, FieldId::MaxLines, "Auto".into()),
+        &field_val(app, FieldId::MaxLines, typo_val(app, Typo::MaxLines)),
         false,
         Some(Action::Field(FieldId::MaxLines)),
         None,
     );
+    // Paragraph indent
+    app.fonts
+        .text(s, x0 + 161.5, y0 + 1132.5, "Paragraph indent", T10, C_DIM, Wt::Reg);
+    let para_indent = Rect::new(x0 + 161.5, y0 + 1150.0, x0 + 315.0, y0 + 1178.0);
+    input(
+        app,
+        s,
+        hit,
+        para_indent,
+        None,
+        &field_val(app, FieldId::ParagraphIndent, typo_val(app, Typo::ParagraphIndent)),
+        false,
+        Some(Action::Field(FieldId::ParagraphIndent)),
+        None,
+    );
 
     // ---- fill / stroke / effects / guides continue with the shared tail
-    hline(s, rx, rx + rw, y0 + 1240.5, C_LINE);
-    let mut y = y0 + 1029.5 + 12.0;
+    hline(s, rx, rx + rw, y0 + 1190.5, C_LINE);
+    let mut y = y0 + 1190.5 + 12.0;
     let inner_w = rw - pl * 2.0;
 
     // --- Fill ----------------------------------------------------------
@@ -4964,21 +4912,22 @@ fn stroke_position_label(app: &App) -> &'static str {
 }
 
 /// Text formatting labels (Figma Design parity)
-fn text_align_label(app: &App) -> String {
+/// The selected text node's horizontal alignment, mapped onto what the
+/// shaper actually renders (Justified degrades to Left) so the active
+/// button always matches the canvas.
+fn selected_text_align(app: &App) -> x_native::TextAlign {
     let Some(doc) = app.doc_opt() else {
-        return "Left".into();
+        return x_native::TextAlign::Left;
     };
     let Some(id) = doc.selected_id() else {
-        return "Left".into();
+        return x_native::TextAlign::Left;
     };
     let Some(node) = find_node(&doc.editor_ref().root, &id) else {
-        return "Left".into();
+        return x_native::TextAlign::Left;
     };
     match node.text_align {
-        x_native::TextAlign::Left => "Left".into(),
-        x_native::TextAlign::Center => "Center".into(),
-        x_native::TextAlign::Right => "Right".into(),
-        x_native::TextAlign::Justified => "Justified".into(),
+        x_native::TextAlign::Justified => x_native::TextAlign::Left,
+        other => other,
     }
 }
 
@@ -5016,53 +4965,22 @@ fn text_decoration_label(app: &App) -> String {
     }
 }
 
-fn text_truncation_label(app: &App) -> String {
+/// The engine's paragraph wrap strategy (the "tw" binding): Auto / Balance /
+/// Pretty — the same values the shaper actually lays out with.
+fn wrap_strategy_label(app: &App) -> String {
     let Some(doc) = app.doc_opt() else {
-        return "Disabled".into();
+        return "Auto".into();
     };
     let Some(id) = doc.selected_id() else {
-        return "Disabled".into();
+        return "Auto".into();
     };
     let Some(node) = find_node(&doc.editor_ref().root, &id) else {
-        return "Disabled".into();
+        return "Auto".into();
     };
-    match node.text_truncation {
-        x_native::TextTruncation::Disabled => "Disabled".into(),
-        x_native::TextTruncation::End => "End".into(),
-        x_native::TextTruncation::Middle => "Middle".into(),
-    }
-}
-
-fn list_style_label(app: &App) -> String {
-    let Some(doc) = app.doc_opt() else {
-        return "None".into();
-    };
-    let Some(id) = doc.selected_id() else {
-        return "None".into();
-    };
-    let Some(node) = find_node(&doc.editor_ref().root, &id) else {
-        return "None".into();
-    };
-    match node.list_style {
-        x_native::ListStyle::None => "None".into(),
-        x_native::ListStyle::Bulleted => "Bulleted".into(),
-        x_native::ListStyle::Numbered => "Numbered".into(),
-    }
-}
-
-fn wrap_style_label(app: &App) -> String {
-    let Some(doc) = app.doc_opt() else {
-        return "Normal".into();
-    };
-    let Some(id) = doc.selected_id() else {
-        return "Normal".into();
-    };
-    let Some(node) = find_node(&doc.editor_ref().root, &id) else {
-        return "Normal".into();
-    };
-    match node.wrap_style {
-        x_native::WrapStyle::Normal => "Normal".into(),
-        x_native::WrapStyle::BreakWord => "Break Word".into(),
+    match node.text_wrap() {
+        x_native::TextWrap::Auto => "Auto".into(),
+        x_native::TextWrap::Balance => "Balance".into(),
+        x_native::TextWrap::Pretty => "Pretty".into(),
     }
 }
 

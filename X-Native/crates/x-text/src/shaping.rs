@@ -9,7 +9,7 @@
 
 use crate::font::FontManager;
 use std::collections::HashMap;
-use vello::kurbo::{Affine, BezPath};
+use vello::kurbo::{Affine, BezPath, PathEl};
 use vello::peniko::{Color, Fill};
 use vello::Scene;
 
@@ -665,6 +665,22 @@ pub enum Align {
     Right,
 }
 
+/// Map the document model's alignment onto the shaper's. The model carries a
+/// fourth state (`Justified`) the layout engine does not stretch for yet; it
+/// degrades to Left rather than claim to justify (a justified label over
+/// left-set lines is a phantom control).
+impl From<x_core::TextAlign> for Align {
+    fn from(t: x_core::TextAlign) -> Self {
+        match t {
+            x_core::TextAlign::Left => Align::Left,
+            x_core::TextAlign::Center => Align::Center,
+            x_core::TextAlign::Right => Align::Right,
+            // NOTE: Justified intentionally maps to Left — see above.
+            x_core::TextAlign::Justified => Align::Left,
+        }
+    }
+}
+
 /// Split spans for synthesized small caps: runs of lowercase chars become
 /// UPPERCASED segments at `size * SMALL_CAPS_RATIO`, everything else keeps
 /// the span size. Returns (segment_text, segment_size) pairs so the app's
@@ -711,6 +727,19 @@ pub struct TextBlockStyle {
     pub optical_size: f32,
     /// variable-font width axis (`wdth`, 100 = normal); <= 0 = unused
     pub width_axis: f32,
+    /// cap on the number of wrapped lines (CSS `max-lines`); None =
+    /// unlimited. Lines beyond the cap are dropped and the returned
+    /// block height covers exactly what was emitted.
+    pub max_lines: Option<usize>,
+    /// left indent (px) of the FIRST line of each paragraph
+    /// (CSS `text-indent`). 0 = no indent. Note: wrapping is computed at
+    /// the full max_width and the first line is then shifted — the shifted
+    /// line may overflow the box by the indent amount (CSS reserves the
+    /// indent from the first line's available width; the shift-only
+    /// simplification is what every fast path here can do cheaply).
+    pub paragraph_indent: f64,
+    /// underline / strikethrough, drawn once per line across its width
+    pub decoration: x_core::TextDecoration,
 }
 
 impl Default for TextBlockStyle {
@@ -726,6 +755,9 @@ impl Default for TextBlockStyle {
             small_caps: false,
             optical_size: 0.0,
             width_axis: 0.0,
+            max_lines: None,
+            paragraph_indent: 0.0,
+            decoration: x_core::TextDecoration::None,
         }
     }
 }
@@ -788,13 +820,18 @@ pub fn glyph_outlines(
     } else {
         spans
     };
-    let lines = layout_lines_wrapped(
+    let mut lines = layout_lines_wrapped(
         &mut shaper,
         &spans,
         default_font,
         style.max_width,
         style.wrap,
     );
+    // max-lines: drop everything beyond the cap BEFORE placement, so the
+    // returned height covers exactly what is emitted (CSS max-lines).
+    if let Some(cap) = style.max_lines {
+        lines.truncate(cap);
+    }
     let mut out = vec![];
     let mut y = 0.0f64;
     for (li, line) in lines.iter().enumerate() {
@@ -812,10 +849,18 @@ pub fn glyph_outlines(
             // (ascent+descent) in the line box, baseline on top of it
             (lh_px - (f0.ascent - f0.descent) * fs_sc) / 2.0 + f0.ascent * fs_sc
         } - style.baseline_shift;
+        // paragraph indent (CSS text-indent): the FIRST line of a paragraph.
+        // A line starts a paragraph when it is the block's first line or the
+        // previous line ended one (para_end — explicit \n or end of text).
+        let para_first = li == 0 || lines[li - 1].para_end;
         let x0 = match style.align {
             Align::Left => 0.0,
             Align::Center => (style.max_width - line.width) / 2.0,
             Align::Right => style.max_width - line.width,
+        } + if para_first {
+            style.paragraph_indent
+        } else {
+            0.0
         };
         let mut pen = x0;
         for span in &line.spans {
@@ -837,6 +882,29 @@ pub fn glyph_outlines(
                 }
                 pen += run.width;
             }
+        }
+        // decoration: one rect across the laid-out line, in the line's ink
+        // colour. Underline sits ~0.1em below the baseline, strikethrough
+        // through the x-height (~0.5em above) — the CSS-like defaults that
+        // read well on any face. Thickness ~5% of the line size, min 1px.
+        if style.decoration != x_core::TextDecoration::None && !line.spans.is_empty() {
+            let th = (max_size * 0.05).max(1.0);
+            let line_y = match style.decoration {
+                x_core::TextDecoration::Underline => baseline + max_size * 0.10,
+                x_core::TextDecoration::Strikethrough => baseline - max_size * 0.50,
+                x_core::TextDecoration::None => unreachable!("guarded above"),
+            };
+            let mut path = BezPath::new();
+            path.push(PathEl::MoveTo((x0, line_y)));
+            path.push(PathEl::LineTo((x0 + line.width, line_y)));
+            path.push(PathEl::LineTo((x0 + line.width, line_y + th)));
+            path.push(PathEl::LineTo((x0, line_y + th)));
+            path.push(PathEl::ClosePath);
+            out.push(OutlineGlyph {
+                path,
+                transform: Affine::IDENTITY,
+                color: line.spans[0].color,
+            });
         }
         y += lh;
         // paragraph spacing separates paragraphs — it never pads the block
@@ -895,6 +963,10 @@ pub fn node_text_outlines(
         0.0,
         0.0,
         0,
+        Align::Left,
+        None,
+        0.0,
+        x_core::TextDecoration::None,
     )
 }
 
@@ -918,6 +990,10 @@ pub fn node_text_outlines_styled(
     optical_size: f32,
     width_axis: f32,
     lh_mode: u8,
+    align: Align,
+    max_lines: Option<usize>,
+    paragraph_indent: f64,
+    decoration: x_core::TextDecoration,
 ) -> Option<(Vec<OutlineGlyph>, f64)> {
     // route through the ShapedTextCache: repeated frames/text reuse the
     // shaped block (Arc clone), positions compose OUTSIDE via the world
@@ -940,6 +1016,10 @@ pub fn node_text_outlines_styled(
         optical_size,
         width_axis,
         lh_mode,
+        align,
+        max_lines,
+        paragraph_indent,
+        decoration,
     );
     if let Some(block) = crate::cache::ShapedTextCache::global().get_or_shape(fonts, key) {
         return Some((
@@ -972,6 +1052,10 @@ pub fn node_text_outlines_styled(
         optical_size,
         width_axis,
         lh_mode,
+        align,
+        max_lines,
+        paragraph_indent,
+        decoration,
     )
 }
 
@@ -1001,6 +1085,10 @@ pub fn node_text_outlines_uncached(
         0.0,
         0.0,
         0,
+        Align::Left,
+        None,
+        0.0,
+        x_core::TextDecoration::None,
     )
 }
 
@@ -1027,6 +1115,10 @@ pub fn node_text_outlines_rich(
     optical_size: f32,
     width_axis: f32,
     lh_mode: u8,
+    align: Align,
+    max_lines: Option<usize>,
+    paragraph_indent: f64,
+    decoration: x_core::TextDecoration,
 ) -> Option<(Vec<OutlineGlyph>, f64)> {
     let key = crate::cache::TextLayoutKey::new_rich(
         parts,
@@ -1044,6 +1136,10 @@ pub fn node_text_outlines_rich(
         optical_size,
         width_axis,
         lh_mode,
+        align,
+        max_lines,
+        paragraph_indent,
+        decoration,
     );
     if let Some(block) = crate::cache::ShapedTextCache::global().get_or_shape(fonts, key) {
         return Some((
@@ -1075,6 +1171,10 @@ pub fn node_text_outlines_rich(
         optical_size,
         width_axis,
         lh_mode,
+        align,
+        max_lines,
+        paragraph_indent,
+        decoration,
     )
 }
 
@@ -1115,6 +1215,10 @@ pub fn node_text_outlines_rich_uncached(
     optical_size: f32,
     width_axis: f32,
     lh_mode: u8,
+    align: Align,
+    max_lines: Option<usize>,
+    paragraph_indent: f64,
+    decoration: x_core::TextDecoration,
 ) -> Option<(Vec<OutlineGlyph>, f64)> {
     let default_font = base_font
         .and_then(|n| fonts.resolve_font_name(n))
@@ -1148,13 +1252,16 @@ pub fn node_text_outlines_rich_uncached(
         lh_mode,
         max_width: max_width.max(8.0),
         line_height: lh.max(0.5),
-        align: Align::Left,
+        align,
         wrap,
         paragraph_spacing,
         baseline_shift,
         small_caps,
         optical_size,
         width_axis,
+        max_lines,
+        paragraph_indent,
+        decoration,
     };
     Some(glyph_outlines(fonts, &spans, default_font, &style))
 }
@@ -1195,6 +1302,10 @@ pub fn node_text_outlines_styled_uncached(
     optical_size: f32,
     width_axis: f32,
     lh_mode: u8,
+    align: Align,
+    max_lines: Option<usize>,
+    paragraph_indent: f64,
+    decoration: x_core::TextDecoration,
 ) -> Option<(Vec<OutlineGlyph>, f64)> {
     let chosen = font_name
         .and_then(|n| fonts.resolve_font_name(n))
@@ -1209,13 +1320,16 @@ pub fn node_text_outlines_styled_uncached(
         lh_mode,
         max_width: max_width.max(8.0),
         line_height: lh.max(0.5),
-        align: Align::Left,
+        align,
         wrap,
         paragraph_spacing,
         baseline_shift,
         small_caps,
         optical_size,
         width_axis,
+        max_lines,
+        paragraph_indent,
+        decoration,
     };
     Some(glyph_outlines(fonts, &spans, chosen, &style))
 }
@@ -1291,6 +1405,10 @@ mod tests {
             0.0,
             0.0,
             1,
+            Align::Left,
+            None,
+            0.0,
+            x_core::TextDecoration::None,
         )
         .unwrap();
         let (g0, _) = node_text_outlines_styled(
@@ -1310,6 +1428,10 @@ mod tests {
             0.0,
             0.0,
             0,
+            Align::Left,
+            None,
+            0.0,
+            x_core::TextDecoration::None,
         )
         .unwrap();
         let d = (g0[0].transform.translation().y - g1[0].transform.translation().y).abs();
@@ -1520,6 +1642,136 @@ mod tests {
         // unknown family -> None (caller falls back to default)
         assert_eq!(m.resolve_face("Nope", 400), None);
         assert_eq!(m.resolve_font_name("Nope"), None);
+    }
+
+    /// Center/Right placement shifts every line by the expected offset;
+    /// Left stays at the origin (the shipped pixel contract, unchanged).
+    #[test]
+    fn align_centers_and_right_sets_lines() {
+        let m = fonts();
+        let f = m.default_font().unwrap();
+        let spans = [Span::new("Alignment", 24.0)];
+        let style = |a: Align| TextBlockStyle {
+            align: a,
+            max_width: 400.0,
+            ..Default::default()
+        };
+        let (gl, _) = glyph_outlines(&m, &spans, f, &style(Align::Left));
+        let (gc, _) = glyph_outlines(&m, &spans, f, &style(Align::Center));
+        let (gr, _) = glyph_outlines(&m, &spans, f, &style(Align::Right));
+        let mut sh = Shaper::new(&m);
+        let w = layout_lines(&mut sh, &spans, f, 400.0)[0].width;
+        let xl = gl[0].transform.translation().x;
+        let xc = gc[0].transform.translation().x;
+        let xr = gr[0].transform.translation().x;
+        assert!(xl < 1.0, "left starts at the origin: {xl}");
+        assert!((xc - xl - (400.0 - w) / 2.0).abs() < 0.5, "center offset {xc}");
+        assert!((xr - xl - (400.0 - w)).abs() < 0.5, "right offset {xr}");
+    }
+
+    /// max-lines drops lines beyond the cap; the returned height covers
+    /// exactly the lines that were emitted.
+    #[test]
+    fn max_lines_caps_the_block() {
+        let m = fonts();
+        let f = m.default_font().unwrap();
+        let f0 = &m.fonts[f];
+        let spans = [Span::new("one\ntwo\nthree\nfour\nfive", 24.0)];
+        let full = TextBlockStyle {
+            max_width: 400.0,
+            ..Default::default()
+        };
+        let capped = TextBlockStyle {
+            max_lines: Some(2),
+            max_width: 400.0,
+            ..Default::default()
+        };
+        let (g5, h5) = glyph_outlines(&m, &spans, f, &full);
+        let (g2, h2) = glyph_outlines(&m, &spans, f, &capped);
+        assert!(h2 < h5, "capped block is shorter ({h2} < {h5})");
+        assert!(g2.len() < g5.len(), "capped block has fewer glyphs");
+        // the default style's line box is natural * 1.2
+        let nat = (f0.ascent - f0.descent + f0.line_gap) * (24.0 / f0.units_per_em);
+        assert!((h2 - 2.0 * nat * 1.2).abs() < 0.5, "height = 2 line boxes: {h2}");
+    }
+
+    /// Paragraph indent shifts the FIRST line of each paragraph only —
+    /// wrapped continuation lines stay at the margin. Paragraph 1 is long
+    /// enough to always wrap at 150px; paragraph 2 is a short single line,
+    /// so the first and last baselines are paragraph-first lines and every
+    /// baseline between them is a continuation (font-robust).
+    #[test]
+    fn paragraph_indent_shifts_paragraph_first_lines() {
+        let m = fonts();
+        let f = m.default_font().unwrap();
+        let text = "one two three four five six seven eight nine ten eleven twelve\nzz";
+        let spans = [Span::new(text, 24.0)];
+        let mk = |indent: f64| TextBlockStyle {
+            max_width: 150.0,
+            paragraph_indent: indent,
+            ..Default::default()
+        };
+        let (plain, _) = glyph_outlines(&m, &spans, f, &mk(0.0));
+        let (ind, _) = glyph_outlines(&m, &spans, f, &mk(30.0));
+        // per-baseline minimum x
+        let minx = |glyphs: &[OutlineGlyph]| -> Vec<(f64, f64)> {
+            let mut acc: Vec<(f64, f64)> = vec![];
+            for g in glyphs {
+                let (x, y) = g.transform.translation();
+                match acc.iter_mut().find(|(by, _)| (by - y).abs() < 0.1) {
+                    Some(e) if x < e.1 => e.1 = x,
+                    Some(_) => {}
+                    None => acc.push((y, x)),
+                }
+            }
+            acc.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            acc
+        };
+        let a = minx(&plain);
+        let b = minx(&ind);
+        assert_eq!(a.len(), b.len(), "indent must not change wrapping");
+        assert!(a.len() >= 3, "paragraph 1 must wrap: {} lines", a.len());
+        assert!((b[0].1 - a[0].1 - 30.0).abs() < 0.5, "para 1 first line +30");
+        assert!((b[a.len() - 1].1 - a[a.len() - 1].1 - 30.0).abs() < 0.5, "para 2 first line +30");
+        for i in 1..a.len() - 1 {
+            assert!((b[i].1 - a[i].1).abs() < 0.5, "wrapped line {i} unchanged");
+        }
+    }
+
+    /// Decoration adds exactly one rect per line, in the line's ink colour:
+    /// the underline below the baseline, the strike through it.
+    #[test]
+    fn decoration_draws_one_rect_per_line() {
+        let m = fonts();
+        let f = m.default_font().unwrap();
+        let f0 = &m.fonts[f];
+        let spans = [Span::new("Underline me", 24.0)];
+        let base = TextBlockStyle {
+            max_width: 400.0,
+            ..Default::default()
+        };
+        let under = TextBlockStyle {
+            max_width: 400.0,
+            decoration: x_core::TextDecoration::Underline,
+            ..Default::default()
+        };
+        let strike = TextBlockStyle {
+            max_width: 400.0,
+            decoration: x_core::TextDecoration::Strikethrough,
+            ..Default::default()
+        };
+        let (g0, _) = glyph_outlines(&m, &spans, f, &base);
+        let (gu, _) = glyph_outlines(&m, &spans, f, &under);
+        let (gs, _) = glyph_outlines(&m, &spans, f, &strike);
+        assert_eq!(gu.len(), g0.len() + 1, "one extra rect for one line");
+        assert_eq!(gs.len(), g0.len() + 1);
+        // default-style first baseline: softened ascent at the 1.2 box
+        let baseline = f0.ascent * (24.0 / f0.units_per_em) * 1.2;
+        let bb_u = gu[g0.len()].path.bounding_box();
+        let bb_s = gs[g0.len()].path.bounding_box();
+        assert!(bb_u.min_y() > baseline, "underline sits below the baseline");
+        assert!(bb_s.max_y() < baseline, "strike sits above the baseline");
+        assert!(bb_u.max_y() - bb_u.min_y() >= 1.0, "underline has thickness");
     }
 
     fn fonts() -> FontManager {
