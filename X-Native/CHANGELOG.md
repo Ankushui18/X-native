@@ -38,6 +38,17 @@ Part of the UI/UX Refinement v1 milestone (see
   regression test pins the role mapping. `apps/x-designer`.
 
 ### Added
+- **First-time workflow narrative (P0-10).** The first-launch onboarding
+  card now names the primary loop **Compose / Flow / Ship** (it said
+  "Design / Prototype / Ship") and names the supporting surfaces once —
+  "Structure, Library, Tokens, Variables, Agents and UX analysis live in
+  the editor docks" — so they can be found later. A blank file used to
+  open to a bare canvas with no affordance; the canvas now shows a
+  centre hint ("Add your first frame — pick the frame tool in the dock
+  below, then drag. Then connect screens in FLOW, and export from
+  SHIP.") that is pure paint keyed on the page having no frames, so it
+  leaves the moment the first frame lands — no flag, no dismiss button.
+  `apps/x-designer`.
 - **One control-height and spacing scale for the inspector (P0-9).**
   `theme.rs` now declares `DENSE_H` (24, disclosure / summary rows) and
   `CHIP_H` (16, checkboxes / switches / inline chips) alongside the

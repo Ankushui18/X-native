@@ -193,25 +193,41 @@ fn paint_first_launch(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         C_MUTED,
         Wt::Reg,
     );
+    // The primary loop in the product's own naming, plus the supporting
+    // surfaces named once so they can be found later (P0-10).
+    app.fonts.text(
+        s,
+        card.x0 + 32.0,
+        card.y0 + 96.0,
+        "The loop: Compose, then Flow, then Ship.",
+        T11,
+        C_MUTED,
+        Wt::Reg,
+    );
+    app.fonts.text(
+        s,
+        card.x0 + 32.0,
+        card.y0 + 114.0,
+        "Structure, Library, Tokens, Variables, Agents and UX analysis live in the editor docks.",
+        T10,
+        C_DIM,
+        Wt::Reg,
+    );
     let tips = [
         (
             "1",
-            "Design",
-            "Create frames, layers, vectors, and auto layouts.",
+            "Compose",
+            "Frames, layers, vectors and auto layout — the canvas.",
         ),
-        (
-            "2",
-            "Prototype",
-            "Connect screens and test interactions in Flow preview.",
-        ),
+        ("2", "Flow", "Connect screens and preview interactions."),
         (
             "3",
             "Ship",
-            "Use variables, components, libraries, and PNG/PDF export.",
+            "Export PNG, PDF and SVG — with variables and components.",
         ),
     ];
     for (i, (n, title, body)) in tips.into_iter().enumerate() {
-        let y = card.y0 + 116.0 + i as f64 * 54.0;
+        let y = card.y0 + 140.0 + i as f64 * 48.0;
         circle(s, card.x0 + 46.0, y + 9.0, 12.0, C_FIELD_2);
         app.fonts.text_center(
             s,

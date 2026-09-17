@@ -6573,6 +6573,40 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
         }
     }
 
+    // First-run empty state (P0-10): an empty canvas says nothing, so the
+    // canvas says it. The hint is pure paint — it leaves the moment the
+    // first frame lands, no flag to clear, no button to dismiss.
+    if !app.is_board()
+        && doc
+            .editors
+            .get(doc.page)
+            .is_some_and(|ed| ed.root.children.is_empty())
+    {
+        let reg = app.editor_regions();
+        let cx = (reg.canvas.x0 + reg.canvas.x1) / 2.0;
+        let cy = (reg.canvas.y0 + reg.canvas.y1) / 2.0;
+        let l1 = "Add your first frame";
+        let l2 = "Pick the frame tool in the dock below, then drag on the canvas.";
+        let l3 = "Then connect screens in FLOW, and export from SHIP.";
+        let w1 = app.fonts.measure(l1, T14, Wt::Med);
+        let w2 = app.fonts.measure(l2, T11, Wt::Reg);
+        let w3 = app.fonts.measure(l3, T11, Wt::Reg);
+        let bw = w1.max(w2).max(w3) + 24.0;
+        // only claim the canvas centre when the hint fits inside it
+        if cx - bw / 2.0 > reg.canvas.x0 + 16.0
+            && cx + bw / 2.0 < reg.canvas.x1 - 16.0
+            && cy - 36.0 > reg.canvas.y0 + 16.0
+            && cy + 34.0 < reg.canvas.y1 - 16.0
+        {
+            app.fonts
+                .text(s, cx - w1 / 2.0, cy - 30.0, l1, T14, C_MUTED, Wt::Med);
+            app.fonts
+                .text(s, cx - w2 / 2.0, cy - 4.0, l2, T11, C_DIM, Wt::Reg);
+            app.fonts
+                .text(s, cx - w3 / 2.0, cy + 16.0, l3, T11, C_DIM, Wt::Reg);
+        }
+    }
+
     // comment pins render ABOVE the selection chrome (Figma z-order)
     paint_comments(app, s);
 }

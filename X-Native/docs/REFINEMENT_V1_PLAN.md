@@ -127,14 +127,38 @@ idioms (card grids, 22px tree rows, 40px toolbar) and belong to the
 P0-4/P0-5 visual-language pass; the standard above is what any of those
 should snap to when they touch property rows.
 
+### P0-10 · First-time workflow — DONE (this branch)
+
+The first run must teach the primary loop in the product's own naming and
+leave the supporting surfaces findable — without inventing destinations
+that don't exist:
+
+- **Onboarding card** (first launch, dashboard) now names the steps
+  **Compose / Flow / Ship** (previously "Design / Prototype / Ship" —
+  off-naming), adds the loop line ("The loop: Compose, then Flow, then
+  Ship") and names the supporting surfaces once: "Structure, Library,
+  Tokens, Variables, Agents and UX analysis live in the editor docks."
+  Buttons and the once-only marker are unchanged.
+- **Empty-canvas first-run hint** (editor). A blank file previously opened
+  to a bare canvas with zero affordance. Now, while the current page has
+  no frames, the canvas centre says "Add your first frame — pick the frame
+  tool in the dock below, then drag on the canvas. Then connect screens in
+  FLOW, and export from SHIP." It is pure paint keyed on `root.children`
+  being empty: it leaves the moment the first frame lands — no flag, no
+  dismiss button, nothing to get stale. Boards are excluded.
+- **Not changed on purpose.** The right dock already reads COMPOSE
+  (default) / FLOW / SHIP / UX ANALYSIS and the left dock STRUCTURE /
+  LIBRARY / TOKENS — the primary/supporting order is already right, so
+  P0-10 fixes the *narrative* around those surfaces, not the surfaces.
+  Dashboard quick-action cards and the board's empty state are file/board
+  idioms and belong to the P0-4/P0-5 visual-language pass.
+
 ### Not yet done (queued)
 - **P0-1/2 · Screen & component contract; x-ui as the component layer.**
   x-ui is currently a token repo the app does not import for widgets;
   Button/Input/Select/Section/LayerRow/etc. land there incrementally.
 - **P0-4/5 · Dashboard + cross-screen visual language pass** (should snap
   property-row surfaces to the P0-9 standard).
-- **P0-10 · First-time workflow** (Primary: Compose / Flow / Ship;
-  Supporting: Structure / Library / Tokens / Variables / Agents / UX).
 - **P1 · Professional editor interaction** (deep select, select-under-cursor,
   smart selection, …).
 - **P2 · Polish/motion.**
