@@ -2482,6 +2482,11 @@ fn dashboard_host() -> Host {
     h.app.win_h = 900.0;
     h.app.dash_view = DashView::Home;
     h.app.mouse = Point::new(-100.0, -100.0);
+    // `App::new()` fills `recents` from the machine's store: empty on a fresh
+    // runner, and written by whatever else in this suite happens to be saving a
+    // file while these tests run in parallel. These tests count, sort and select
+    // files, so they get the demo fixture — the same six rows on every run.
+    h.app.recents = App::demo().recents;
     let mut scene = vello::Scene::new();
     dashboard::paint(&mut h.app, &mut scene);
     h
