@@ -37,6 +37,20 @@ Part of the UI/UX Refinement v1 milestone (see
   border use `C_FOCUS`; the card hover ring drops to `C_LINE_2`. The
   regression test pins the role mapping. `apps/x-designer`.
 
+### Added
+- **Progressive disclosure in the inspector (P0-8).** The typography
+  section's secondary properties — letter/word spacing, paragraph
+  spacing / baseline shift, text case, and the variable-font axes
+  (optical size / width) — now sit behind an "Advanced" disclosure
+  (closed by default); the primary set is Font / Weight / Size /
+  Line height / Alignment / Vertical alignment / Decoration / Wrap
+  style / Max lines / Paragraph indent. The Auto Layout section's
+  secondary rows — Wrap for layout frames, Fixed|Fill + Absolute for
+  layout children — sit behind the same disclosure language in their
+  band, with the open state collapsible from the band's right edge.
+  Nothing was removed: every advanced control is the same engine-backed
+  control as before. `apps/x-designer`.
+
 ### Changed
 - **Inspector typography section, no more phantom controls.** Horizontal
   alignment is three working buttons (active state mirrors the render);

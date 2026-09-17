@@ -9,7 +9,7 @@
 
 use crate::font::FontManager;
 use std::collections::HashMap;
-use vello::kurbo::{Affine, BezPath, PathEl};
+use vello::kurbo::{Affine, BezPath, PathEl, Point};
 use vello::peniko::{Color, Fill};
 use vello::Scene;
 
@@ -895,10 +895,10 @@ pub fn glyph_outlines(
                 x_core::TextDecoration::None => unreachable!("guarded above"),
             };
             let mut path = BezPath::new();
-            path.push(PathEl::MoveTo((x0, line_y)));
-            path.push(PathEl::LineTo((x0 + line.width, line_y)));
-            path.push(PathEl::LineTo((x0 + line.width, line_y + th)));
-            path.push(PathEl::LineTo((x0, line_y + th)));
+            path.push(PathEl::MoveTo(Point::new(x0, line_y)));
+            path.push(PathEl::LineTo(Point::new(x0 + line.width, line_y)));
+            path.push(PathEl::LineTo(Point::new(x0 + line.width, line_y + th)));
+            path.push(PathEl::LineTo(Point::new(x0, line_y + th)));
             path.push(PathEl::ClosePath);
             out.push(OutlineGlyph {
                 path,

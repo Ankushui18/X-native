@@ -79,14 +79,26 @@ notes) now describe what they are: hand-tuned constants for a 1440px
 composition. The constants themselves stay — they are data, and the audit
 explicitly does not ask to re-platform the layout.
 
-### Not yet done (queued)
+### P0-8 · Progressive disclosure — DONE (this branch)
 
-- **P0-8 · Progressive disclosure.** Typography inspector: primary =
-  Font / Weight / Size / Line height / Alignment (+ Vertical, Decoration,
-  Wrap, Max lines, Paragraph indent); advanced = letter/word/para spacing,
-  baseline shift, case, variable axes behind an "Advanced ▸" section.
-  Auto Layout section: Direction / Sizing / Alignment / Gap / Padding
-  primary; Wrap/Grow/Shrink/Min-Max/Absolute advanced.
+Nothing was removed; the secondary properties moved behind a disclosure.
+
+- **Typography inspector.** Primary (always visible): Font family, Weight,
+  Size, Line height, Alignment (L/C/R buttons), Vertical alignment,
+  Decoration, Wrap style, Max lines, Paragraph indent. Advanced (behind
+  "Advanced ▸", off by default): Letter/Word spacing, Paragraph spacing /
+  Baseline shift, Text case (small caps rides it), Optical size / Width
+  (variable axes). The section's end — and the fill/stroke/effects tail
+  below it — follow the disclosure state; the scroll clamp covers the
+  worst case.
+- **Auto Layout section.** Flow / Resizing (Hug-Fixed) / Alignment grid /
+  Gap / Padding stay primary. Wrap (layout frames) and Fixed|Fill +
+  Absolute (layout children) are the section's advanced rows: their band
+  now shows an "Advanced" toggle, and the chevron at the band's right
+  edge collapses it. Non-layout selections show no toggle (no phantom
+  affordance).
+
+### Not yet done (queued)
 - **P0-1/2 · Screen & component contract; x-ui as the component layer.**
   x-ui is currently a token repo the app does not import for widgets;
   Button/Input/Select/Section/LayerRow/etc. land there incrementally.

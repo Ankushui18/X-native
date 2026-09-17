@@ -636,6 +636,12 @@ pub enum Action {
     /// Cycle the paragraph wrap strategy (the "tw" binding the engine
     /// actually shapes with): auto → balance → pretty → auto.
     CycleTextWrap,
+    /// Progressive disclosure: the typography section's advanced rows
+    /// (letter/word/para spacing, baseline shift, case, variable axes).
+    ToggleTypoAdvanced,
+    /// Progressive disclosure: the auto layout section's advanced rows
+    /// (wrap / fill / absolute).
+    ToggleLayoutAdvanced,
     /// Apply a color chosen from the native color popover.
     PaintPreset(bool, String),
     Align(usize, usize),
@@ -1945,6 +1951,12 @@ pub struct App {
     pub paint_lib_at: Option<(f64, f64)>,
     /// Font browser opened from the typography family field.
     pub font_picker_open: bool,
+    /// Typography "Advanced" disclosure (letter/word/para spacing, baseline
+    /// shift, case, variable axes). Progressive disclosure, P0-8: the
+    /// primary set is Font / Weight / Size / Line height / Alignment.
+    pub typo_advanced_open: bool,
+    /// Auto Layout "Advanced" disclosure (Wrap / Fill / Absolute).
+    pub layout_advanced_open: bool,
     /// Viewport rulers (Shift+R). Off by default — the HTML mock has none.
     pub rulers: bool,
     /// Canvas minimap (⇧M). On by default in the editor: it is the only
@@ -2142,6 +2154,8 @@ impl App {
             paint_lib: None,
             paint_lib_at: None,
             font_picker_open: false,
+            typo_advanced_open: false,
+            layout_advanced_open: false,
             rulers: false,
             minimap: true,
             // canvas matches the HTML `.canvas` token; grid per the design

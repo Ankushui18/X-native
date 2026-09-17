@@ -5162,11 +5162,12 @@ impl Host {
                 };
                 self.zoom_at(p, f);
             } else if reg.right.contains(p) {
-                // clamp to the content: DESIGN column ends ~1945px below
-                // the entry line (typography section + the fill/stroke/
-                // effects tail, hand-tuned)
+                // clamp to the content: DESIGN column ends ~2050px below
+                // the entry line in the WORST case — both "Advanced"
+                // disclosures (auto layout + typography) expanded, plus the
+                // fill/stroke/effects tail (hand-tuned)
                 let max_scroll =
-                    (1945.0 - (self.app.win_h - (crate::theme::ED_TITLE_H + 89.0))).max(0.0);
+                    (2050.0 - (self.app.win_h - (crate::theme::ED_TITLE_H + 89.0))).max(0.0);
                 let d = self.app.doc();
                 d.scroll_right = (d.scroll_right - dy * 40.0).clamp(0.0, max_scroll);
             } else if reg.left.contains(p) {
@@ -9315,6 +9316,12 @@ impl Host {
                 if changed {
                     self.app.mark_dirty();
                 }
+            }
+            Action::ToggleTypoAdvanced => {
+                self.app.typo_advanced_open = !self.app.typo_advanced_open;
+            }
+            Action::ToggleLayoutAdvanced => {
+                self.app.layout_advanced_open = !self.app.layout_advanced_open;
             }
             Action::CycleTextWrap => {
                 let Some(id) = self.app.doc().selected_id() else {
