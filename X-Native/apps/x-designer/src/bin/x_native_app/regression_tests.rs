@@ -3116,7 +3116,7 @@ fn the_minimap_toggles_and_its_close_button_is_real() {
     assert!(h.app.status.contains("⇧M"), "and says how to get it back");
     let mut scene = vello::Scene::new();
     crate::editor_ui::paint(&mut h.app, &mut scene);
-    let _ = crate::editor_ui::paint_over(&mut h.app, &mut scene);
+    crate::editor_ui::paint_over(&mut h.app, &mut scene);
     assert!(
         crate::editor_ui::minimap_geom(&h.app).is_none(),
         "a hidden map has no geometry"
@@ -3170,7 +3170,7 @@ fn the_guide_readout_says_where_the_line_is() {
     h.app.doc().guides.push(('v', 340.0));
     *h.app.guide_drag() = Some(('v', 512.0));
     let mut scene = vello::Scene::new();
-    let _ = crate::editor_ui::paint_over(&mut h.app, &mut scene);
+    crate::editor_ui::paint_over(&mut h.app, &mut scene);
     let (_, live) = crate::editor_ui::guide_readout(&h.app, 'v', 512.0).unwrap();
     assert_eq!(live, "512", "the readout follows the dragged coordinate");
 }

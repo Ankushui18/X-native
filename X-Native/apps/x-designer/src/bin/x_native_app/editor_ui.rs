@@ -434,9 +434,11 @@ fn paint_minimap(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                 .iter()
                 .filter(|n| n.visible)
                 .take(MINIMAP_MAX_NODES)
-                .filter_map(|n| {
+                .map(|n| {
                     let tl = g.to_panel(n.transform.x, n.transform.y);
                     let br = g.to_panel(n.transform.x + n.w, n.transform.y + n.h);
+                    // at least a device pixel per node: a page of hairlines
+                    // must still be a visible page in the map
                     let r = Rect::new(
                         tl.x.floor(),
                         tl.y.floor(),
@@ -444,7 +446,7 @@ fn paint_minimap(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                         br.y.ceil().max(tl.y.floor() + 1.0),
                     );
                     let c = x_native::paint_color(&n.fill, &vars);
-                    Some((r, c.multiply_alpha(0.6), selected.contains(&n.id)))
+                    (r, c.multiply_alpha(0.6), selected.contains(&n.id))
                 })
                 .collect(),
             None => Vec::new(),
