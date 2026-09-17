@@ -1093,13 +1093,14 @@ mod tests {
             run("theme", &argv(&["audit", "--theme", "light"])).unwrap(),
             0
         );
-        // JSON payload: 47 audited pairs per theme, all passing, valid shape
+        // JSON payload: one row per audited pair per theme, all passing
+        let pairs = ThemeId::Graphite.palette().contrast_pairs().len();
         let (json, failed) = theme_audit_json(&ThemeId::ALL, true);
         assert_eq!(failed, 0);
         assert!(json.starts_with('[') && json.ends_with(']'), "{json}");
         assert_eq!(
             json.matches(r#""pass":true"#).count(),
-            47 * ThemeId::ALL.len()
+            pairs * ThemeId::ALL.len()
         );
         assert!(
             !json.contains(r#""pass":false"#) && !json.contains("NaN"),

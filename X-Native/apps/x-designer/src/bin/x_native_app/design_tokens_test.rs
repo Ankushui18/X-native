@@ -81,7 +81,7 @@ fn split_args(body: &str) -> Vec<String> {
 }
 
 /// Yield `(line, argument list)` for every `callee(` call in `src`.
-fn calls<'a>(src: &'a str, callee: &str) -> Vec<(usize, Vec<String>)> {
+fn calls(src: &str, callee: &str) -> Vec<(usize, Vec<String>)> {
     let needle = format!("{callee}(");
     let mut found = Vec::new();
     let mut i = 0usize;
@@ -113,8 +113,11 @@ fn bare_float(arg: &str) -> Option<f64> {
     a.parse::<f64>().ok()
 }
 
+/// A literal and the line it sits on.
+type Literal = (usize, f64);
+
 /// Every `_rrect` radius / `draw_icon` size that is still written as a number.
-fn raw_geometry(file: &str) -> (Vec<(usize, f64)>, Vec<(usize, f64)>) {
+fn raw_geometry(file: &str) -> (Vec<Literal>, Vec<Literal>) {
     let src = read(file);
     let mut radii = Vec::new();
     let mut icons = Vec::new();

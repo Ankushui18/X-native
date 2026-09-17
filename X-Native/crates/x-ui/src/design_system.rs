@@ -232,6 +232,12 @@ impl ColorTokens {
     /// designer's drawing seam applies these so a theme switch is a single
     /// lookup instead of 600 edited call sites. Identity when `from` is this
     /// palette.
+    /// The `(from, to)` table a theme switch walks, keyed by *source color*
+    /// (that is what the app hands back at paint time). Two roles may share a
+    /// source value — white is the ink on both an accent fill and the danger
+    /// fill — and the first role in `COLOR_ROLES` order wins; the palettes
+    /// keep such shared values mapped to the same target, which the remap
+    /// test in `theme.rs` enforces for every shipped palette.
     pub fn remap_from(&self, from: &ColorTokens) -> Vec<([u8; 3], [u8; 3])> {
         let mut out: Vec<([u8; 3], [u8; 3])> = Vec::new();
         for name in COLOR_ROLES {

@@ -317,8 +317,9 @@ mod tests {
     #[test]
     fn audit_covers_the_whole_role_matrix() {
         // 7 text roles × 6 surfaces + 3 accent labels + 2 indicators
+        // + 1 declared label pair (on-danger ink on the danger fill)
         let pairs = ThemeId::Graphite.palette().contrast_pairs();
-        assert_eq!(pairs.len(), 7 * 6 + 3 + 2, "{pairs:?}");
+        assert_eq!(pairs.len(), 7 * 6 + 3 + 2 + 1, "{pairs:?}");
         assert!(
             pairs.iter().all(|p| p.ratio > 1.0),
             "every pair must compare two real colors"
@@ -342,13 +343,32 @@ mod tests {
     #[test]
     fn remap_is_a_function_and_identity_for_graphite() {
         let g = ColorTokens::GRAPHITE;
-        // no two graphite roles share a value, so the table is a function
+        // The table is keyed by *color*, so two roles may share a value
+        // (white is the ink on both an accent fill and the danger fill) — what
+        // must never happen is two roles sharing a value that remap to
+        // different targets, because then one of them silently repaints with
+        // the other's ink. Check that across every shipped palette.
         let table = ColorTokens::DAYLIGHT.remap_from(&g);
-        assert_eq!(table.len(), ColorTokens::role_names().len());
         let mut seen: Vec<[u8; 3]> = Vec::new();
         for (from, _) in &table {
             assert!(!seen.contains(from), "duplicate source color {from:?}");
             seen.push(*from);
+        }
+        for id in ThemeId::ALL {
+            let to = id.palette();
+            let mut map: Vec<([u8; 3], [u8; 3])> = Vec::new();
+            for name in ColorTokens::role_names() {
+                let (a, b) = (g.role(name).unwrap(), to.role(name).unwrap());
+                match map.iter().find(|(x, _)| *x == a) {
+                    Some((_, prev)) => assert_eq!(
+                        *prev,
+                        b,
+                        "{}: role {name} shares {a:?} but remaps elsewhere",
+                        id.label()
+                    ),
+                    None => map.push((a, b)),
+                }
+            }
         }
         // identity when the target is the same palette
         for (from, to) in ColorTokens::GRAPHITE.remap_from(&g) {

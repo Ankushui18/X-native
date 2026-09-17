@@ -22,9 +22,7 @@ pub const PALETTE_WIDTH: f64 = 480.0;
 pub const PALETTE_MAX_HEIGHT: f64 = 400.0;
 pub const INPUT_HEIGHT: f64 = 40.0;
 pub const ROW_HEIGHT: f64 = 30.0;
-pub const SECTION_HEADER_HEIGHT: f64 = 24.0;
 pub const PADDING: f64 = crate::theme::SP_3;
-pub const ICON_SIZE: f64 = crate::theme::ICON_SM;
 pub const SHORTCUT_TEXT_WIDTH: f64 = 80.0;
 
 // Theme tokens — aliases onto crate::theme (the palette), never literals
