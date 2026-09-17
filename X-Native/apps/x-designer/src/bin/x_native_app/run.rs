@@ -3288,9 +3288,30 @@ impl Host {
         }
 
         if self.app.screen == Screen::Dashboard {
+            // Cmd/Ctrl- or Shift-click extends the selection (Figma's browser
+            // gesture; a plain click still opens, which is the primary action)
+            let extend = self.app.ctrl || self.app.shift;
+            if self.app.dash_sort_open {
+                // a press anywhere that is not a sort row closes the menu
+                let row = self
+                    .app
+                    .hit
+                    .iter()
+                    .rev()
+                    .find(|(r, a)| r.contains(p) && matches!(a, Action::DashSortBy(_)));
+                if row.is_none() {
+                    self.app.dash_sort_open = false;
+                }
+            }
             for (r, a) in self.app.hit.iter().rev() {
                 if r.contains(p) {
                     let a = a.clone();
+                    if extend {
+                        if let Action::OpenRecent(i) = a {
+                            self.dispatch(Action::DashSelect(i));
+                            return;
+                        }
+                    }
                     // focus follows the pointer: clicking a control puts the
                     // keyboard ring on it, clicking a dead area drops it
                     self.app.dash_focus = self
@@ -5061,9 +5082,21 @@ impl Host {
                     self.focus_activate();
                     return;
                 }
-                Key::Named(NamedKey::Escape) if self.app.dash_focus.is_some() => {
-                    self.app.dash_focus = None;
-                    return;
+                Key::Named(NamedKey::Escape) => {
+                    // Escape unwinds in order: the grab, then the ring, then
+                    // the sort menu — never two things at once
+                    if self.app.dash_sort_open {
+                        self.app.dash_sort_open = false;
+                        return;
+                    }
+                    if !self.app.dash_selected.is_empty() {
+                        self.app.dash_selected.clear();
+                        return;
+                    }
+                    if self.app.dash_focus.is_some() {
+                        self.app.dash_focus = None;
+                        return;
+                    }
                 }
                 _ => {}
             }
@@ -5102,6 +5135,13 @@ impl Host {
             if let Key::Character(c) = &key {
                 let c = c.to_lowercase();
                 match c.as_str() {
+                    // "select all" on the dashboard means every file on screen
+                    // (the search field claims Ctrl/Cmd+A while it is focused,
+                    // above this branch)
+                    "a" if self.app.screen == Screen::Dashboard => {
+                        self.dispatch(Action::DashSelectAll);
+                        return;
+                    }
                     "s" => {
                         if self.app.shift {
                             self.cmd_save_as();
@@ -8419,12 +8459,12 @@ impl Host {
 
     // ---------------------------------------------------------- dispatch
 
-    fn dispatch(&mut self, a: Action) {
+    fn dispatch(&mut self, action: Action) {
         if self.app.document_loading.is_some() {
-            self.loading_action(a);
+            self.loading_action(action);
             return;
         }
-        match a {
+        match action {
             Action::LoadingRetry
             | Action::LoadingClose
             | Action::LoadingRecover
@@ -8504,6 +8544,79 @@ impl Host {
                     }
                 }
             }
+            Action::DashSortMenu => {
+                self.app.dash_sort_open = !self.app.dash_sort_open;
+            }
+            Action::DashSortBy(sort) => {
+                self.app.dash_sort = sort;
+                self.app.dash_sort_open = false;
+            }
+            Action::DashSelect(i) => match self.app.dash_selected.iter().position(|s| *s == i) {
+                Some(at) => {
+                    self.app.dash_selected.remove(at);
+                }
+                None => self.app.dash_selected.push(i),
+            },
+            Action::DashSelectAll => {
+                self.app.dash_selected = dashboard::visible_files(&self.app);
+                if self.app.dash_selected.is_empty() {
+                    self.app.status = "Nothing to select here".into();
+                }
+            }
+            Action::DashClearSelection => {
+                self.app.dash_selected.clear();
+            }
+            Action::DashBulkStar | Action::DashBulkUnstar => {
+                let star = matches!(action, Action::DashBulkStar);
+                let targets = self.app.dash_selected.clone();
+                let mut failed = false;
+                for i in targets {
+                    if let Some(r) = self.app.recents.get_mut(i) {
+                        if r.starred == star {
+                            continue;
+                        }
+                        if let Some(path) = &r.path {
+                            if let Err(e) =
+                                x_native::fileio::set_starred(&path.to_string_lossy(), star)
+                            {
+                                self.app.status = format!("Could not update starred files: {e}");
+                                failed = true;
+                                break;
+                            }
+                        }
+                        r.starred = star;
+                    }
+                }
+                if !failed {
+                    self.app.status = format!(
+                        "{} {} file(s)",
+                        if star { "Starred" } else { "Unstarred" },
+                        self.app.dash_selected.len()
+                    );
+                }
+            }
+            Action::DashBulkOpen => {
+                let targets = self.app.dash_selected.clone();
+                for i in targets {
+                    self.dispatch(Action::OpenRecent(i));
+                }
+                self.app.dash_selected.clear();
+            }
+            Action::DashBulkRemove => {
+                let n = self.app.dash_selected.len();
+                let mut keep = vec![true; self.app.recents.len()];
+                for i in &self.app.dash_selected {
+                    if let Some(k) = keep.get_mut(*i) {
+                        *k = false;
+                    }
+                }
+                let mut it = keep.into_iter();
+                self.app.recents.retain(|_| it.next().unwrap_or(true));
+                self.app.dash_selected.clear();
+                self.app.status =
+                    format!("Removed {n} file(s) from recents — the files are still on disk");
+            }
+            Action::DashBarNoop => {}
             Action::StarRecent(i) => {
                 if let Some(r) = self.app.recents.get_mut(i) {
                     let starred = !r.starred;

@@ -94,6 +94,21 @@ The dashboard is a file browser, so it behaves like one:
 Add a control to the dashboard and it is keyboard-reachable for free, because
 focus is derived from the hit list rather than a second list of stops.
 
+**Multi-select and sorting follow the same rule.** `dashboard::visible_files`
+is the single list of "what is on screen, in what order" — the grid, the table,
+"select all" and the bulk actions all read it, so they cannot disagree:
+
+- the sort chip (grid) and the column headers (table) set `DashSort`
+  (`Edited` / `Name` / `Starred first`); the sort key is parsed from the label
+  the UI already shows (`edited_minutes`), so ordering and wording cannot
+  drift, and an unknown label sorts last rather than first;
+- Cmd/Ctrl-click or Shift-click toggles a file's membership, Cmd/Ctrl+A selects
+  everything visible, Escape unwinds one step at a time (menu → selection →
+  ring);
+- the bulk bar only exists while something is selected, swallows presses on its
+  own background, and offers only actions that really do something —
+  `Remove from recents` says what it is, because the files on disk stay put.
+
 ### Ink
 Text and glyphs never take a *fill* role. On a saturated fill:
 `C_ON_ACCENT` (white in the dark and light palettes, black on high contrast),

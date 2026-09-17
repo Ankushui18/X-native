@@ -2579,3 +2579,174 @@ fn pointer_says_what_it_will_do() {
     }
     assert!(pointer >= 3, "only {pointer} controls advertise themselves");
 }
+
+/// The sort key is parsed from the label the UI shows, so the two cannot
+/// disagree; an unknown label sorts last instead of jumping to the top.
+#[test]
+fn edited_labels_sort_by_what_they_say() {
+    use crate::state::edited_minutes;
+    assert_eq!(edited_minutes("Edited 2h ago"), 120);
+    assert_eq!(edited_minutes("Edited 45 min ago"), 45);
+    assert_eq!(edited_minutes("Edited yesterday"), 1440);
+    assert_eq!(edited_minutes("Edited 3 days ago"), 4320);
+    assert_eq!(edited_minutes("Edited 1 week ago"), 10080);
+    assert_eq!(edited_minutes("now"), 0);
+    assert_eq!(edited_minutes("whenever"), u32::MAX);
+    // every seed label parses to something real
+    let app = App::new();
+    for f in app.recents.iter().chain(app.drafts.iter()) {
+        assert!(
+            f.edited_min != u32::MAX,
+            "seed label {:?} does not parse",
+            f.edited
+        );
+    }
+}
+
+#[test]
+fn the_browser_can_be_sorted() {
+    let mut h = dashboard_host();
+    h.app.demo_mode = false; // show every file, not the six-file demo page
+    h.app.dash_sort = DashSort::Edited;
+    let by_edited = dashboard::visible_files(&h.app);
+    let keys: Vec<u32> = by_edited
+        .iter()
+        .map(|i| h.app.recents[*i].edited_min)
+        .collect();
+    assert!(keys.windows(2).all(|w| w[0] <= w[1]), "edited: {keys:?}");
+
+    h.app.dash_sort = DashSort::Name;
+    let by_name = dashboard::visible_files(&h.app);
+    let names: Vec<String> = by_name
+        .iter()
+        .map(|i| h.app.recents[*i].name.to_lowercase())
+        .collect();
+    assert!(names.windows(2).all(|w| w[0] <= w[1]), "name: {names:?}");
+    assert_eq!(
+        by_name.len(),
+        by_edited.len(),
+        "sorting must not drop files"
+    );
+
+    h.app.dash_sort = DashSort::Starred;
+    for i in [0usize, 3] {
+        if let Some(f) = h.app.recents.get_mut(i) {
+            f.starred = true;
+        }
+    }
+    let starred = dashboard::visible_files(&h.app);
+    let star_rank: Vec<bool> = starred.iter().map(|i| h.app.recents[*i].starred).collect();
+    let first_unstarred = star_rank.iter().position(|s| !s).unwrap_or(star_rank.len());
+    assert!(
+        star_rank[..first_unstarred].iter().all(|s| *s),
+        "starred files must float: {star_rank:?}"
+    );
+    assert!(star_rank[first_unstarred..].iter().all(|s| !s));
+
+    // the view filter still applies on top of the sort
+    h.app.dash_view = DashView::Starred;
+    let only_starred = dashboard::visible_files(&h.app);
+    assert!(only_starred.iter().all(|i| h.app.recents[*i].starred));
+}
+
+#[test]
+fn multi_select_and_its_bulk_actions() {
+    let mut h = dashboard_host();
+    h.app.demo_mode = false;
+    let visible = dashboard::visible_files(&h.app);
+    assert!(visible.len() >= 4, "need a few files to select");
+
+    // toggle on, toggle off
+    h.dispatch(Action::DashSelect(visible[0]));
+    assert_eq!(h.app.dash_selected, vec![visible[0]]);
+    h.dispatch(Action::DashSelect(visible[1]));
+    assert_eq!(h.app.dash_selected.len(), 2);
+    h.dispatch(Action::DashSelect(visible[0]));
+    assert_eq!(h.app.dash_selected, vec![visible[1]]);
+
+    // select all = everything on screen, in the order it is on screen
+    h.dispatch(Action::DashSelectAll);
+    assert_eq!(h.app.dash_selected, visible);
+
+    // bulk star writes through to the files' starred flag
+    h.dispatch(Action::DashBulkStar);
+    assert!(visible.iter().all(|i| h.app.recents[*i].starred));
+    h.dispatch(Action::DashBulkUnstar);
+    assert!(visible.iter().all(|i| !h.app.recents[*i].starred));
+
+    // remove drops them from the list and keeps the rest
+    let before = h.app.recents.len();
+    h.dispatch(Action::DashBulkRemove);
+    assert_eq!(h.app.recents.len(), before - visible.len());
+    assert!(
+        h.app.dash_selected.is_empty(),
+        "the bar goes away with them"
+    );
+
+    // clear is the explicit way out
+    h.dispatch(Action::DashSelect(0));
+    h.dispatch(Action::DashClearSelection);
+    assert!(h.app.dash_selected.is_empty());
+}
+
+#[test]
+fn the_bulk_bar_is_only_there_when_something_is_selected() {
+    let mut h = dashboard_host();
+    let has_bar = |h: &Host| h.app.hit.iter().any(|(_, a)| *a == Action::DashBulkStar);
+    assert!(!has_bar(&h), "nothing selected: no bar");
+    h.dispatch(Action::DashSelect(0));
+    let mut scene = vello::Scene::new();
+    dashboard::paint(&mut h.app, &mut scene);
+    assert!(has_bar(&h), "one file selected: the bar is painted");
+    // and its buttons are real targets with real actions
+    for want in [
+        Action::DashBulkStar,
+        Action::DashBulkUnstar,
+        Action::DashBulkOpen,
+        Action::DashBulkRemove,
+        Action::DashClearSelection,
+    ] {
+        assert!(
+            h.app.hit.iter().any(|(_, a)| *a == want),
+            "{want:?} is missing from the bar"
+        );
+    }
+    // the bar swallows presses on its own background
+    assert!(h.app.hit.iter().any(|(_, a)| *a == Action::DashBarNoop));
+}
+
+#[test]
+fn escape_unwinds_the_dashboard_one_step_at_a_time() {
+    let mut h = dashboard_host();
+    h.dispatch(Action::DashSelect(0));
+    h.dispatch(Action::DashSortMenu);
+    h.on_key(Key::Named(NamedKey::Tab), None);
+    assert!(h.app.dash_sort_open);
+    h.on_key(Key::Named(NamedKey::Escape), None);
+    assert!(!h.app.dash_sort_open, "the menu closes first");
+    assert_eq!(h.app.dash_selected.len(), 1, "the selection survives");
+    h.on_key(Key::Named(NamedKey::Escape), None);
+    assert!(h.app.dash_selected.is_empty(), "then the selection clears");
+    assert!(h.app.dash_focus.is_some(), "and the ring is still there");
+    h.on_key(Key::Named(NamedKey::Escape), None);
+    assert!(h.app.dash_focus.is_none(), "then the ring goes");
+}
+
+#[test]
+fn the_sort_menu_picks_an_order_and_closes() {
+    let mut h = dashboard_host();
+    h.dispatch(Action::DashSortMenu);
+    assert!(h.app.dash_sort_open);
+    h.dispatch(Action::DashSortBy(DashSort::Name));
+    assert_eq!(h.app.dash_sort, DashSort::Name);
+    assert!(!h.app.dash_sort_open, "picking an order closes the menu");
+    // the menu rows only exist while it is open
+    h.dispatch(Action::DashSortMenu);
+    let mut scene = vello::Scene::new();
+    dashboard::paint(&mut h.app, &mut scene);
+    assert!(h
+        .app
+        .hit
+        .iter()
+        .any(|(_, a)| matches!(a, Action::DashSortBy(_))));
+}

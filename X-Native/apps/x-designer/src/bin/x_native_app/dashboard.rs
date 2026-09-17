@@ -13,7 +13,7 @@ use x_native::Color;
 
 use crate::icons::draw_icon;
 use crate::paint::*;
-use crate::state::{Action, App, DashLayout, DashView, OpenDoc, RecentFile};
+use crate::state::{Action, App, DashLayout, DashSort, DashView, OpenDoc, RecentFile};
 use crate::theme::*;
 
 /// Left edge of the main column (sidebar 260 + px-6 24).
@@ -45,6 +45,16 @@ pub fn paint(app: &mut App, s: &mut Scene) {
     // input pass resolves the LAST painted rect first)
     if app.template_picker_open {
         paint_template_picker(app, s, &mut hit);
+    }
+
+    // Multi-select bar and the sort menu sit above the page content (their
+    // hits are appended last, so they resolve first) but under the template
+    // modal, which owns the interaction while it is open.
+    if !app.template_picker_open {
+        paint_bulk_bar(app, s, &mut hit);
+        if app.dash_sort_open {
+            paint_sort_menu(app, s, &mut hit);
+        }
     }
 
     // Keyboard focus ring: painted from the list just built, under the modal
@@ -554,6 +564,45 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         Wt::Reg,
     );
 
+    // Sort chip — the grid view has no column headers to click, so the same
+    // choice lives here as a menu. It says what the current order *is*.
+    let sb = Rect::new(x1 - 320.0, dy + 77.8, x1 - 160.0, dy + 109.8);
+    let sb_hot = hover(app, sb) || app.dash_sort_open;
+    fill_rrect(s, sb, R_ROW, if sb_hot { C_FIELD_2 } else { C_FIELD });
+    stroke_rrect(
+        s,
+        sb,
+        R_ROW,
+        if app.dash_sort_open { C_SEL } else { C_LINE },
+        1.0,
+    );
+    draw_icon(
+        s,
+        "arrow-up-down",
+        sb.x0 + 12.0,
+        sb.y0 + 8.0,
+        ICON_MD,
+        C_DIM,
+    );
+    app.fonts.text(
+        s,
+        sb.x0 + 36.0,
+        sb.y0 + 7.0,
+        &format!("Sorted by {}", app.dash_sort.label()),
+        T12,
+        C_MUTED,
+        Wt::Reg,
+    );
+    draw_icon(
+        s,
+        "chevron-down",
+        sb.x1 - 21.0,
+        sb.y0 + 10.0,
+        ICON_XS,
+        C_DIM,
+    );
+    hit.push((sb, Action::DashSortMenu));
+
     // Grid / List toggle — 74×32 + 70×32 at y 77.8, right-aligned
     let gb = Rect::new(x1 - 152.0, dy + 77.8, x1 - 70.0 - 8.0, dy + 109.8);
     let lb = Rect::new(x1 - 70.0, dy + 77.8, x1, dy + 109.8);
@@ -692,6 +741,41 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     }
 }
 
+/// The files the dashboard is showing, in the order it is showing them:
+/// `dash_view` filter → search query → `dash_sort`. Painting and bulk actions
+/// both go through this, so "select all" and "the rows on screen" are the same
+/// list by construction.
+pub fn visible_files(app: &App) -> Vec<usize> {
+    let query = app.dash_search.to_lowercase();
+    let mut idx: Vec<usize> = app
+        .recents
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| match app.dash_view {
+            DashView::Starred => f.starred,
+            DashView::Home | DashView::Recents | DashView::Trash => true,
+        })
+        .filter(|(_, f)| {
+            query.is_empty()
+                || f.name.to_lowercase().contains(&query)
+                || f.team.to_lowercase().contains(&query)
+        })
+        .map(|(i, _)| i)
+        .collect();
+    match app.dash_sort {
+        DashSort::Edited => idx.sort_by_key(|i| app.recents[*i].edited_min),
+        DashSort::Name => idx.sort_by_key(|i| app.recents[*i].name.to_lowercase()),
+        DashSort::Starred => {
+            idx.sort_by_key(|i| (!app.recents[*i].starred, app.recents[*i].edited_min))
+        }
+    }
+    // the demo home page shows six, like the reference; other views show all
+    if !app.demo_mode && app.dash_view == DashView::Home {
+        idx.truncate(6);
+    }
+    idx
+}
+
 fn paint_recents(
     app: &mut App,
     s: &mut Scene,
@@ -734,21 +818,9 @@ fn paint_recents(
     );
     hit.push((chip, Action::CycleDashView));
 
-    let query = app.dash_search.to_lowercase();
-    let files: Vec<(usize, &RecentFile)> = app
-        .recents
-        .iter()
-        .enumerate()
-        .filter(|(_, f)| match app.dash_view {
-            DashView::Starred => f.starred,
-            _ => true,
-        })
-        .filter(|(_, f)| query.is_empty() || f.name.to_lowercase().contains(&query))
-        .take(if !app.demo_mode && app.dash_view == DashView::Home {
-            6
-        } else {
-            usize::MAX
-        })
+    let files: Vec<(usize, &RecentFile)> = visible_files(app)
+        .into_iter()
+        .map(|i| (i, &app.recents[i]))
         .collect();
     if files.is_empty() {
         app.fonts.text(
@@ -818,8 +890,40 @@ fn paint_recents(
             let card = Rect::new(cx, cy, cx + cw, cy + 230.5);
             hit.push((card, Action::OpenRecent(*idx)));
             let hov = hover(app, card);
-            fill_rrect(s, card, R_CARD, if hov { C_PANEL_2 } else { C_PANEL });
-            stroke_rrect(s, card, R_CARD, if hov { C_LINE_2 } else { C_LINE }, 1.0);
+            let selected = app.dash_selected.contains(idx);
+            fill_rrect(
+                s,
+                card,
+                R_CARD,
+                if selected {
+                    C_SELECTION_WASH
+                } else if hov {
+                    C_PANEL_2
+                } else {
+                    C_PANEL
+                },
+            );
+            // selection is a *state*, not a hover: it keeps the accent ring
+            // whether or not the pointer is over it (Figma's browsers do the
+            // same, and a multi-select that fades as you move the mouse is
+            // unusable)
+            stroke_rrect(
+                s,
+                card,
+                R_CARD,
+                if selected {
+                    C_SEL
+                } else if hov {
+                    C_LINE_2
+                } else {
+                    C_LINE
+                },
+                if selected {
+                    STROKE_RING
+                } else {
+                    STROKE_HAIRLINE
+                },
+            );
             // thumb 140 tall — live document preview when the file exists on
             // disk (rendered through the same export pipeline as PNG export),
             // flat color + watermark otherwise. One render per frame is
@@ -863,6 +967,23 @@ fn paint_recents(
                 if let Some(p) = &f.path {
                     thumb_pending.push(p.clone());
                 }
+            }
+            if selected {
+                let mark = Rect::new(
+                    thumb.x0 + 8.0,
+                    thumb.y0 + 8.0,
+                    thumb.x0 + 28.0,
+                    thumb.y0 + 28.0,
+                );
+                circle(s, mark.center().x, mark.center().y, 10.0, C_ACCENT);
+                draw_icon(
+                    s,
+                    "check",
+                    mark.x0 + 2.0,
+                    mark.y0 + 2.0,
+                    ICON_MD,
+                    C_ON_ACCENT,
+                );
             }
             let st = Rect::new(
                 thumb.x1 - 32.0,
@@ -925,6 +1046,32 @@ fn paint_recents(
         let panel = Rect::new(x0, dy + 307.5, x1, dy + 307.5 + list_h);
         fill_rrect(s, panel, R_CARD, C_PANEL);
         stroke_rrect(s, panel, R_CARD, C_LINE, 1.0);
+        // Header row: sorting lives on the column it sorts, the way a table
+        // should behave (the toolbar chip does the same thing, for the grid
+        // view where there are no columns to click).
+        let sort_x = x1 - 250.0;
+        let head = Rect::new(x0, dy + 279.5, x1, dy + 303.5);
+        app.fonts
+            .micro_label(s, x0 + 45.0, dy + 288.0, "NAME", C_DIM, Wt::Med);
+        for (label, key, hx) in [
+            ("TEAM", DashSort::Name, x0 + 320.0),
+            ("EDITED", DashSort::Edited, sort_x),
+        ] {
+            let active = app.dash_sort == key;
+            let hr = Rect::new(hx - 6.0, head.y0, hx + 60.0, head.y1);
+            app.fonts.micro_label(
+                s,
+                hx,
+                dy + 288.0,
+                label,
+                if active { C_TEXT } else { C_DIM },
+                Wt::Med,
+            );
+            if active {
+                draw_icon(s, "chevron-down", hx + 44.0, dy + 287.0, ICON_XS, C_TEXT);
+            }
+            hit.push((hr, Action::DashSortBy(key)));
+        }
         for (i, (idx, f)) in files.iter().enumerate() {
             let r = Rect::new(
                 x0,
@@ -932,33 +1079,52 @@ fn paint_recents(
                 x1,
                 dy + 307.5 + DRAFT_ROW_H * (i + 1) as f64,
             );
-            if hover(app, r) {
+            let selected = app.dash_selected.contains(idx);
+            if selected {
+                fill_rect(s, r, C_SELECTION_WASH);
+            } else if hover(app, r) {
                 fill_rect(s, r, C_FIELD);
             }
             if i > 0 {
                 hline(s, x0, x1, r.y0, C_LINE);
             }
             draw_icon(s, "file-text", r.x0 + 16.0, r.y0 + 16.0, ICON_MD, C_DIM);
+            // the row is as wide as the window; measure the name against the
+            // columns that follow it rather than the whole row
+            let name =
+                app.fonts
+                    .truncate(&f.name, T12, Wt::Med, (x0 + 320.0 - 12.0) - (r.x0 + 45.0));
             app.fonts
-                .text(s, r.x0 + 45.0, r.y0 + 15.0, &f.name, T12, C_TEXT, Wt::Med);
-            app.fonts.text_right(
+                .text(s, r.x0 + 45.0, r.y0 + 15.0, &name, T12, C_TEXT, Wt::Med);
+            app.fonts.text(
                 s,
-                r.x1 - 45.0,
+                x0 + 320.0,
                 r.y0 + 15.8,
-                &format!("{} • {}", f.team, f.edited),
+                &app.fonts
+                    .truncate(&f.team, T11, Wt::Reg, sort_x - (x0 + 320.0) - 12.0),
                 T11,
                 C_DIM,
                 Wt::Reg,
-                0.0,
             );
-            draw_icon(
-                s,
-                "more-horizontal",
-                r.x1 - 33.0,
-                r.y0 + 16.0,
-                ICON_MD,
-                C_DIM,
-            );
+            app.fonts
+                .text(s, sort_x, r.y0 + 15.8, &f.edited, T11, C_DIM, Wt::Reg);
+            // hover actions, right-aligned: star, then the row menu
+            let star = Rect::new(r.x1 - 64.0, r.y0 + 8.0, r.x1 - 48.0, r.y0 + 24.0);
+            let more = Rect::new(r.x1 - 40.0, r.y0 + 8.0, r.x1 - 24.0, r.y0 + 24.0);
+            if hover(app, r) || f.starred {
+                draw_icon(
+                    s,
+                    "star",
+                    star.x0,
+                    star.y0,
+                    ICON_MD,
+                    if f.starred { C_STAR } else { C_DIM },
+                );
+            }
+            if hover(app, r) {
+                draw_icon(s, "more-horizontal", more.x0, more.y0, ICON_MD, C_DIM);
+            }
+            hit.push((star, Action::StarRecent(*idx)));
             hit.push((r, Action::OpenRecent(*idx)));
         }
     }
@@ -1063,6 +1229,135 @@ fn paint_drafts(
         draw_icon(s, "more-horizontal", x1 - 33.0, r.y0 + 16.0, ICON_MD, C_DIM);
         hit.push((r, Action::OpenDraft(*idx)));
     }
+}
+
+/// The sort menu, anchored under the sort chip. Three honest orders; the
+/// active one is marked, and the whole popup closes on Escape or a click away.
+fn paint_sort_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    let x1 = mx1(app);
+    let w = 190.0;
+    let dd = Rect::new(x1 - 24.0 - w, 113.8, x1 - 24.0, 113.8 + 30.0 * 3.0);
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, R_LG, C_FIELD);
+    stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+    for (i, (sort, icon)) in [
+        (DashSort::Edited, "clock"),
+        (DashSort::Name, "type"),
+        (DashSort::Starred, "star"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let r = Rect::new(
+            dd.x0,
+            dd.y0 + 30.0 * i as f64,
+            dd.x1,
+            dd.y0 + 30.0 * (i + 1) as f64,
+        );
+        let active = app.dash_sort == sort;
+        if active || hover(app, r) {
+            fill_rrect(
+                s,
+                r.inflate(-4.0, -2.0),
+                R_MD,
+                if active { C_FIELD_2 } else { C_RAISED },
+            );
+        }
+        draw_icon(
+            s,
+            icon,
+            r.x0 + 12.0,
+            r.y0 + 7.0,
+            ICON_MD,
+            if active { C_TEXT } else { C_DIM },
+        );
+        app.fonts.text(
+            s,
+            r.x0 + 38.0,
+            r.y0 + 6.5,
+            sort.label(),
+            T12,
+            if active { C_TEXT } else { C_MUTED },
+            Wt::Reg,
+        );
+        if active {
+            draw_icon(s, "check", r.x1 - 28.0, r.y0 + 7.0, ICON_MD, C_ACCENT_INK);
+        }
+        hit.push((r, Action::DashSortBy(sort)));
+    }
+}
+
+/// The multi-select bar: what is selected, and the things you can do with it.
+/// It is only painted when something *is* selected, so it never floats over an
+/// empty page, and it sits over the main column (centred on it) like Figma's
+/// selection toolbar.
+fn paint_bulk_bar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    if app.dash_selected.is_empty() {
+        return;
+    }
+    let x0 = MX;
+    let x1 = mx1(app);
+    let h = 44.0;
+    let y0 = app.win_h - 24.0 - h;
+    let n = app.dash_selected.len();
+    let label = format!("{n} selected");
+    let label_w = app.fonts.measure(&label, T12, Wt::Med);
+    let buttons: [(&str, Action); 4] = [
+        ("Star", Action::DashBulkStar),
+        ("Unstar", Action::DashBulkUnstar),
+        ("Open", Action::DashBulkOpen),
+        ("Remove from recents", Action::DashBulkRemove),
+    ];
+    let mut widths = Vec::new();
+    for (name, _) in &buttons {
+        widths.push(app.fonts.measure(name, T11, Wt::Med) + 24.0);
+    }
+    let inner = 16.0 + label_w + 16.0 + 24.0 + widths.iter().sum::<f64>() + 34.0;
+    let bar = Rect::new(
+        x0 + ((x1 - x0) - inner) / 2.0,
+        y0,
+        x0 + ((x1 - x0) - inner) / 2.0 + inner,
+        y0 + h,
+    );
+    elev_shadow(s, bar, 10.0, Elevation::Floating);
+    fill_rrect(s, bar, R_CARD, C_RAISED);
+    stroke_rrect(s, bar, R_CARD, C_LINE_2, 1.0);
+    // swallow presses inside the bar (nothing behind it should react)
+    hit.push((bar, Action::DashBarNoop));
+    app.fonts.text(
+        s,
+        bar.x0 + 16.0,
+        bar.y0 + 14.0,
+        &label,
+        T12,
+        C_TEXT,
+        Wt::Med,
+    );
+    let mut bx = bar.x0 + 16.0 + label_w + 16.0;
+    vline(s, bx - 12.0, bar.y0 + 12.0, bar.y1 - 12.0, C_LINE_2);
+    for (i, (name, act)) in buttons.into_iter().enumerate() {
+        let r = Rect::new(bx, bar.y0 + 8.0, bx + widths[i], bar.y1 - 8.0);
+        let hot = hover(app, r);
+        fill_rrect(s, r, R_ROW, if hot { C_FIELD_2 } else { C_FIELD });
+        let ink = if act == Action::DashBulkRemove {
+            if hot {
+                C_DANGER
+            } else {
+                C_MUTED
+            }
+        } else if hot {
+            C_TEXT
+        } else {
+            C_MUTED
+        };
+        app.fonts.text_center(s, r, name, T11, ink, Wt::Med, true);
+        bx += widths[i] + 4.0;
+        hit.push((r, act));
+    }
+    // clear the selection
+    let clear = Rect::new(bar.x1 - 30.0, bar.y0 + 12.0, bar.x1 - 14.0, bar.y1 - 12.0);
+    draw_icon(s, "x", clear.x0, clear.y0, ICON_MD, C_DIM);
+    hit.push((clear, Action::DashClearSelection));
 }
 
 fn hover(app: &App, r: Rect) -> bool {

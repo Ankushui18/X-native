@@ -231,6 +231,27 @@ pub enum DashLayout {
     List,
 }
 
+/// How the dashboard orders files. Two honest keys (there is no stored file
+/// size to sort by, and inventing one would be a fake control): when it was
+/// last edited, and its name. `Starred` floats the starred files up while
+/// keeping recency inside each group.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DashSort {
+    Edited,
+    Name,
+    Starred,
+}
+
+impl DashSort {
+    pub fn label(self) -> &'static str {
+        match self {
+            DashSort::Edited => "Edited",
+            DashSort::Name => "Name",
+            DashSort::Starred => "Starred first",
+        }
+    }
+}
+
 // ------------------------------------------------------------- frame sizes
 
 /// Frame presets — exact values from the v45 dropdown.
@@ -249,6 +270,10 @@ pub struct RecentFile {
     pub name: String,
     pub team: String,
     pub edited: String,
+    /// The sortable key behind [`RecentFile::edited`], in minutes (larger is
+    /// older). Derived from the label so the human string and the ordering
+    /// cannot disagree — `edited_minutes` is the only parser.
+    pub edited_min: u32,
     pub color: VelloColor,
     pub members: Vec<String>,
     pub starred: bool,
@@ -310,6 +335,44 @@ fn seed_recents() -> Vec<RecentFile> {
     ]
 }
 
+/// "Edited 2h ago" → 120, "yesterday" → 1440, "3 days ago" → 4320.
+/// Unparseable labels sort last rather than first, so a new label can never
+/// silently jump to the top of "Sorted by Edited".
+pub fn edited_minutes(label: &str) -> u32 {
+    let l = label.to_lowercase();
+    let l = l.strip_prefix("edited ").unwrap_or(&l);
+    if l.starts_with("now") {
+        return 0;
+    }
+    if l.starts_with("yesterday") {
+        return 24 * 60;
+    }
+    let mut digits = String::new();
+    for ch in l.chars() {
+        if ch.is_ascii_digit() {
+            digits.push(ch);
+        } else if !digits.is_empty() {
+            break;
+        }
+    }
+    let Ok(n) = digits.parse::<u32>() else {
+        return u32::MAX;
+    };
+    let rest = l.trim_start_matches(|c: char| c.is_ascii_digit() || c == ' ');
+    let unit = rest.split_whitespace().next().unwrap_or("");
+    if unit.starts_with("min") {
+        n
+    } else if unit.starts_with("h") {
+        n * 60
+    } else if unit.starts_with("day") {
+        n * 24 * 60
+    } else if unit.starts_with("week") {
+        n * 7 * 24 * 60
+    } else {
+        u32::MAX
+    }
+}
+
 pub fn rf(
     name: &str,
     team: &str,
@@ -321,6 +384,7 @@ pub fn rf(
     RecentFile {
         name: name.into(),
         team: team.into(),
+        edited_min: edited_minutes(edited),
         edited: edited.into(),
         color,
         members: members.into_iter().map(|c| c.to_string()).collect(),
@@ -343,6 +407,7 @@ fn draft(name: &str, edited: &str, icon: &'static str) -> RecentFile {
     RecentFile {
         name: name.into(),
         team: icon.into(),
+        edited_min: edited_minutes(edited),
         edited: edited.into(),
         color: C_PANEL,
         members: vec![],
@@ -455,6 +520,23 @@ pub enum Action {
     StarRecent(usize),
     OpenDraft(usize),
     DashNav(DashView),
+    /// Open/close the sort menu, pick an order.
+    DashSortMenu,
+    DashSortBy(DashSort),
+    /// Multi-select: toggle one file, select everything visible, clear.
+    DashSelect(usize),
+    DashSelectAll,
+    DashClearSelection,
+    /// Bulk actions on the selection.
+    DashBulkStar,
+    DashBulkUnstar,
+    DashBulkOpen,
+    /// Remove the selected files from *this list* (the files on disk are
+    /// untouched — the label says so).
+    DashBulkRemove,
+    /// The bulk bar swallows clicks inside it: without a hit rect of its own a
+    /// press would fall through to the card behind the bar.
+    DashBarNoop,
     DashLayout(DashLayout),
     SearchFocus,
     /// UI palette (roles live in crates/x-ui/src/design_system.rs)
@@ -1815,6 +1897,14 @@ pub struct App {
     pub thumb_failed: std::collections::HashSet<std::path::PathBuf>,
     pub dash_view: DashView,
     pub dash_layout: DashLayout,
+    pub dash_sort: DashSort,
+    /// Whether the sort menu is open (it is a popup, so it also owns the
+    /// click-away and Escape behaviour).
+    pub dash_sort_open: bool,
+    /// Multi-select over `recents` (indices), the way Figma's browser selects
+    /// several files before acting on them. Empty means "no selection" and the
+    /// bulk bar is not painted at all.
+    pub dash_selected: Vec<usize>,
     pub dash_search: String,
     pub dash_scroll: f64,
     pub dash_search_focus: bool,
@@ -2017,6 +2107,9 @@ impl App {
             thumb_failed: std::collections::HashSet::new(),
             dash_view: DashView::Home,
             dash_layout: DashLayout::Grid,
+            dash_sort: DashSort::Edited,
+            dash_sort_open: false,
+            dash_selected: Vec::new(),
             dash_search: String::new(),
             dash_scroll: 0.0,
             dash_search_focus: false,
