@@ -1498,6 +1498,9 @@ mod tests {
             small_caps: sc,
             optical_size: 0.0,
             width_axis: 0.0,
+            max_lines: None,
+            paragraph_indent: 0.0,
+            decoration: x_core::TextDecoration::None,
         };
         let (g0, h0) = glyph_outlines(&m, &[Span::new("Abc", 20.0).font(f)], f, &style(false));
         let (g1, h1) = glyph_outlines(&m, &[Span::new("Abc", 20.0).font(f)], f, &style(true));
@@ -1528,6 +1531,9 @@ mod tests {
             small_caps: false,
             optical_size: 32.0,
             width_axis: 75.0,
+            max_lines: None,
+            paragraph_indent: 0.0,
+            decoration: x_core::TextDecoration::None,
         };
         let base = TextBlockStyle {
             lh_mode: 0,
@@ -1563,6 +1569,9 @@ mod tests {
             small_caps: false,
             optical_size: 0.0,
             width_axis: 0.0,
+            max_lines: None,
+            paragraph_indent: 0.0,
+            decoration: x_core::TextDecoration::None,
         };
         let (_, h_single0) = glyph_outlines(&m, &[Span::new("one", 20.0).font(f)], f, &style(0.0));
         let (_, h_single1) = glyph_outlines(&m, &[Span::new("one", 20.0).font(f)], f, &style(40.0));
@@ -1596,6 +1605,9 @@ mod tests {
             small_caps: false,
             optical_size: 0.0,
             width_axis: 0.0,
+            max_lines: None,
+            paragraph_indent: 0.0,
+            decoration: x_core::TextDecoration::None,
         };
         let (g0, h0) = glyph_outlines(&m, &[Span::new("Hy", 20.0).font(f)], f, &style(0.0));
         let (g1, h1) = glyph_outlines(&m, &[Span::new("Hy", 20.0).font(f)], f, &style(6.0));
