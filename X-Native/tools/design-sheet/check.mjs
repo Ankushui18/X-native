@@ -114,6 +114,22 @@ check(
   ['NAME', 'TEAM', 'EDITED'].every((t) => wide.includes(t)),
   'column headers present',
 );
+const orphans = window.TOKENS.orphanRoles || [];
+check(
+  'a role no chrome constant names is marked as such',
+  (() => {
+    const marked = [...d.querySelectorAll('#roles .role')].filter((r) =>
+      r.querySelector('.uses.none'),
+    );
+    const named = marked.map((r) => r.querySelector('b').textContent.split(' ')[0].trim());
+    return (
+      marked.length === orphans.length &&
+      orphans.every((o) => named.includes(o)) &&
+      d.getElementById('palette-note').textContent.includes(`${orphans.length} roles`)
+    );
+  })(),
+  `${orphans.length} orphan roles marked`,
+);
 const textRoles = new Set(window.TOKENS.textRoles);
 const ratioCount = d.querySelectorAll('#roles .ratio.pass, #roles .ratio.warn').length;
 check(

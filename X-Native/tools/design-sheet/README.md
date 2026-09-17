@@ -8,7 +8,7 @@ Nothing here is hand-maintained: if it says a value, the code ships that value.
     node build_tokens.mjs     # tokens.{css,js,json} <- crates/x-ui/src/design_system.rs + theme.rs
     node build_audit.mjs      # audit.{js,json} <- the paint code + design_tokens_test.rs
     python3 -m http.server 8000     # then open http://localhost:8000
-    node check.mjs            # jsdom smoke test, 38 checks (needs `npm i jsdom`)
+    node check.mjs            # jsdom smoke test, 39 checks (needs `npm i jsdom`)
 
 The ladders and the two vocabulary tables are read out of the sources, not
 listed here: `build_tokens.mjs` walks every `pub const` in each `impl …Scale`

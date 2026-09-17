@@ -45,11 +45,12 @@ function renderPalette() {
       const worst = Math.min(...surfaces.map((bg) => contrast(p[r], p[bg])));
       const isText = textRoles.has(r);
       const cls = isText ? (worst >= 4.5 ? 'pass' : 'warn') : '';
+      const orphan = (T.orphanRoles || []).includes(r);
       const note = isText ? `${worst.toFixed(2)}:1 worst surface` : 'fill / chrome';
       return `<div class="role">
         <span class="chip" style="background:${p[r]}"></span>
         <span class="meta">
-          <b>${r}</b>
+          <b>${r}${orphan ? ' <span class="uses none">no chrome name</span>' : ''}</b>
           <span>${p[r]} · <span class="ratio ${cls}">${note}</span></span>
         </span>
       </div>`;
@@ -61,7 +62,12 @@ function renderPalette() {
     `${textCount} carry text and show their worst-surface ratio (AA is 4.5:1); ` +
     `the other ${T.roleNames.length - textCount} are fills, rings and washes — a fill is not ` +
     `measured as ink, so they say so instead of showing a number that would mean nothing. ` +
-    `The crate's own test audits every pair.`;
+    `The crate's own test audits every pair.` +
+    (T.orphanRoles && T.orphanRoles.length
+      ? ` ${T.orphanRoles.length} roles — ${T.orphanRoles.join(', ')} — are named by no chrome ` +
+        `constant yet: the palette defines them (and the crate audits the accent fills), but no ` +
+        `screen paints with them today.`
+      : '');
 }
 
 // -------------------------------------------------------------------- ladders

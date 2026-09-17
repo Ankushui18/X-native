@@ -130,6 +130,26 @@ for (const m of app.matchAll(/pub const (C_[A-Z0-9_]+): Color = ([^;]+);/g)) {
 // Two different counts, both honest: what each constant *is* (a forwarding
 // alias is a real thing to know about), and what it lands on after following
 // the chain to the colour that actually paints.
+// Two ways a chrome file can name a role: through a `C_*` constant, or by
+// asking for it directly (`role!(x)`). A role neither of those reaches is not a
+// bug — `accent_hover`/`accent_active` are the crate's accent fills and the
+// palette is allowed to define roles before a screen paints with them — but the
+// sheet should say so rather than let a full-looking palette imply otherwise.
+const roleMentions = new Set();
+for (const f of appFiles) {
+  let src = readFileSync(new URL(f, appDir), 'utf8');
+  const cut = src.indexOf('#[cfg(test)]');
+  if (cut >= 0) src = src.slice(0, cut);
+  for (const m of src.matchAll(/role!\(([a-z_]+)\)/g)) roleMentions.add(m[1]);
+}
+const namedRoles = new Set();
+for (const a of Object.values(colorAliases)) {
+  if (a.role) namedRoles.add(a.role);
+  if (a.resolvedRole) namedRoles.add(a.resolvedRole);
+}
+for (const r of roleMentions) namedRoles.add(r);
+const orphanRoles = roleNames.filter((r) => !namedRoles.has(r));
+
 const colorKind = { role: 0, alias: 0, literal: 0, other: 0 };
 const colorResolved = { role: 0, literal: 0, other: 0 };
 const resolveKind = (alias, seen = new Set()) => {
@@ -181,7 +201,7 @@ const textBlock = xuiTheme.slice(
   xuiTheme.indexOf('];', xuiTheme.indexOf('const TEXT_ROLES')),
 );
 const textRoles = [...textBlock.matchAll(/\("([a-z_]+)"/g)].map((m) => m[1]);
-const payload = { palettes, roleNames, textRoles, scales, typeAliases, appVocab, usage, motionMentions, colorAliases, colorKind, colorResolved, provenance };
+const payload = { palettes, roleNames, textRoles, scales, typeAliases, appVocab, usage, motionMentions, orphanRoles, colorAliases, colorKind, colorResolved, provenance };
 writeFileSync(OUT('tokens.json'), JSON.stringify(payload, null, 2));
 writeFileSync(OUT('tokens.js'), `window.TOKENS = ${JSON.stringify(payload)};\n`);
 const css = [];
@@ -204,6 +224,7 @@ console.log(
       .join(', ') +
     `; type aliases ${Object.values(typeAliases).join('/')}; ` +
     `app vocab entries: ${Object.values(appVocab).reduce((a, b) => a + b.length, 0)}; ` +
+    `roles no chrome constant names: ${orphanRoles.join(' ') || 'none'}; ` +
     `names unused by the chrome: ${Object.entries(usage).filter(([, n]) => n === 0).map(([k]) => k).join(' ') || 'none'}; ` +
     `chrome colours: ${Object.keys(colorAliases).length} ` +
     `(${colorKind.role} role constants, ${colorKind.alias} forwarding, ` +
