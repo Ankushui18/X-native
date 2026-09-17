@@ -25,7 +25,19 @@ then serve the folder — see its README): the three palettes side by side, ever
 ladder, the dashboard at 1440 / 980 / 1920, and the spacing + ratchet audit.
 Because the generators read `design_system.rs`, `theme.rs`, `icons.rs` and
 `design_tokens_test.rs`, the sheet cannot claim a value the code does not ship —
-and `check.mjs` smoke-tests the rendered page in jsdom.
+and `check.mjs` smoke-tests the rendered page in jsdom (38 checks).
+
+Three of those checks are the ones that were missing when the sheet was wrong:
+the ladders are compared against the step count in the `impl` block (the type
+ladder used to show five of seven steps because the generator carried its own
+key list), the chrome's `C_*` colour names are listed against the role each one
+resolves to (43 palette-backed, 14 pinned literals), and the icon names the
+chrome passes to `draw_icon` are checked against `icons.rs` — the call no-ops on
+an unknown name, so a typo there draws nothing at all.
+
+`scripts/check.sh` re-runs the three generators and fails if the committed sheet
+changes, so a scale or palette edit that forgets to regenerate is a gate
+failure rather than a stale page.
 
 ## Themes (light, dark, high contrast)
 

@@ -148,6 +148,35 @@ if [[ $QUICK == 0 ]]; then
         bad "$MISSING dangling doc reference(s)"
     fi
 
+    step "design sheet (regenerate, then diff)"
+    # tools/design-sheet is generated from the same sources this gate compiles,
+    # and it lies silently when it goes stale: the type ladder used to ship five
+    # of the seven steps because the generator carried its own key list. The
+    # generators now read every step from the source, and this step re-runs them
+    # and lets the working tree speak — a palette or scale edit that forgets to
+    # regenerate fails here instead of shipping a sheet that documents the
+    # previous scale. `SHEET_COMMIT` pins the provenance stamp to the committed
+    # one, so a merge commit does not read as a change on every pull request.
+    if command -v node >/dev/null 2>&1; then
+        SHEET=tools/design-sheet
+        STAMP=$(sed -n 's/.*"commit": *"\([0-9a-f]*\)".*/\1/p' "$SHEET/tokens.json" | head -1)
+        if SHEET_COMMIT=${STAMP:-HEAD} node "$SHEET/build_tokens.mjs" >/dev/null 2>&1 &&
+           node "$SHEET/build_audit.mjs" >/dev/null 2>&1 &&
+           node "$SHEET/extract_icons.mjs" >/dev/null 2>&1; then
+            DIRTY=$(git status --porcelain -- "$SHEET")
+            if [[ -z "$DIRTY" ]]; then
+                ok "generators reproduce the committed sheet byte for byte"
+            else
+                bad "the design sheet is out of date — regenerate it"
+                echo "$DIRTY" | head -8 | sed 's/^/      /'
+            fi
+        else
+            bad "a design-sheet generator failed (it is reading the sources — see the error above)"
+        fi
+    else
+        echo "      skipped: no node on PATH (the generators need it)"
+    fi
+
     step "CLI smoke (x_native)"
     if $CARGO build -q -p x-designer --bin x_native 2>/dev/null; then
         TARGET_DIR=${CARGO_TARGET_DIR:-$PWD/target}

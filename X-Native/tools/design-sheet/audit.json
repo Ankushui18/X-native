@@ -186,7 +186,12 @@
       "grid": 213.3,
       "canvas": 312,
       "canvasWorst": 280,
-      "searchSlack": 209
+      "searchSlack": 217.8,
+      "docks": {
+        "left": 412,
+        "right": 240,
+        "canvas": 280
+      }
     },
     {
       "window": 1280,
@@ -194,7 +199,12 @@
       "grid": 313.3,
       "canvas": 612,
       "canvasWorst": 280,
-      "searchSlack": 509
+      "searchSlack": 517.8,
+      "docks": {
+        "left": 480,
+        "right": 472,
+        "canvas": 280
+      }
     },
     {
       "window": 1440,
@@ -202,7 +212,12 @@
       "grid": 366.7,
       "canvas": 772,
       "canvasWorst": 392,
-      "searchSlack": 669
+      "searchSlack": 677.8,
+      "docks": {
+        "left": 480,
+        "right": 520,
+        "canvas": 392
+      }
     },
     {
       "window": 1920,
@@ -210,7 +225,12 @@
       "grid": 526.7,
       "canvas": 1252,
       "canvasWorst": 872,
-      "searchSlack": 1149
+      "searchSlack": 1157.8,
+      "docks": {
+        "left": 480,
+        "right": 520,
+        "canvas": 872
+      }
     },
     {
       "window": 2560,
@@ -218,7 +238,12 @@
       "grid": 740,
       "canvas": 1892,
       "canvasWorst": 1512,
-      "searchSlack": 1789
+      "searchSlack": 1797.8,
+      "docks": {
+        "left": 480,
+        "right": 520,
+        "canvas": 1512
+      }
     }
   ],
   "window": {
@@ -231,18 +256,41 @@
       900
     ]
   },
+  "titleBar": {
+    "pad": 12,
+    "avatar": 32,
+    "gap": 8,
+    "newFile": 97,
+    "searchGap": 12,
+    "searchW": 480,
+    "logoW": 28,
+    "wordmarkW": 57.200000000000045,
+    "measuredX": 460.1,
+    "measuredW": 1440
+  },
   "canvasFloor": 280,
   "docks": {
     "nav": 48,
+    "canvasMin": 280,
     "left": 280,
     "leftRange": [
       200,
       480
     ],
     "right": 340,
+    "rightMin": 240,
     "rightRange": [
       240,
       520
-    ]
+    ],
+    "titleH": 36
+  },
+  "geom": {
+    "nav": 48,
+    "dashSide": 260,
+    "dashMx": 284,
+    "cardGap": 12,
+    "gridGap": 16,
+    "cols": 3
   }
 }

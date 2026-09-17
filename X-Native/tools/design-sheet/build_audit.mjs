@@ -109,6 +109,89 @@ for (const f of ['dashboard.rs', 'editor_ui.rs', 'board_ui.rs', 'command.rs', 'l
   perFile[f] = n;
 }
 
+// Everything the fluid table asserts is read from the file that owns it. A
+// hardcoded copy of `ED_CANVAS_MIN` is exactly how a design sheet starts lying:
+// the number is right the day it is typed and wrong the day the dock changes.
+// `constOf` throws rather than guessing, so a rename fails the generator
+// instead of quietly freezing a stale number onto the sheet.
+const EXACT = (src, name, where) => {
+  // `pub const NAME: f64 = 1.0`, `name: f64 = 1.0,`, `name = 1.0` — the
+  // declaration, the type annotation and the trailing comma all vary. Walk the
+  // lines that mention the name and take the first one that carries a number,
+  // so a `self.name` read elsewhere in the file cannot shadow the declaration.
+  let m = null;
+  const whole = new RegExp('\\b' + name + '\\b'); // LOGO must not match LOGO_CELL_W
+  for (const line of src.split('\n')) {
+    if (!whole.test(line)) continue;
+    const hit = line.match(/[=:]\s*([0-9.]+)/);
+    if (hit) {
+      m = hit;
+      break;
+    }
+  }
+  if (!m) throw new Error(`build_audit: ${name} not found in ${where} — update the sheet`);
+  return parseFloat(m[1]);
+};
+const dashSrc = readFileSync(DIR + 'dashboard.rs', 'utf8');
+const stateSrc = readFileSync(DIR + 'state.rs', 'utf8');
+const geom = {
+  nav: EXACT(stateSrc, 'nav_bar_w', 'state.rs App::new'),
+  dashSide: EXACT(themeSrc, 'DASH_SIDE_W', 'theme.rs'),
+  dashMx: EXACT(dashSrc, 'const MX', 'dashboard.rs'),
+  cardGap: (() => {
+    const m = dashSrc.match(/let gap = ([\d.]+);\n\s*let cw = \(x1 - x0 - gap \* 3\.0\) \/ 4\.0/);
+    if (!m) throw new Error('build_audit: the quick-card row changed shape — update the sheet');
+    return parseFloat(m[1]);
+  })(),
+  gridGap: (() => {
+    const m = dashSrc.match(/let gap = ([\d.]+);\n\s*let cols = 3\.0;/);
+    if (!m) throw new Error('build_audit: the grid card row changed shape — update the sheet');
+    return parseFloat(m[1]);
+  })(),
+  cols: 3,
+};
+
+const docks = {
+  nav: geom.nav,
+  canvasMin: Number(themeSrc.match(/ED_CANVAS_MIN: f64 = ([\d.]+)/)[1]),
+  left: Number(themeSrc.match(/ED_LEFT_W: f64 = ([\d.]+)/)[1]),
+  leftRange: [
+    Number(themeSrc.match(/ED_LEFT_MIN: f64 = ([\d.]+)/)[1]),
+    Number(themeSrc.match(/ED_LEFT_MAX: f64 = ([\d.]+)/)[1]),
+  ],
+  right: Number(themeSrc.match(/ED_RIGHT_W: f64 = ([\d.]+)/)[1]),
+  rightMin: Number(themeSrc.match(/ED_RIGHT_MIN: f64 = ([\d.]+)/)[1]),
+  rightRange: [
+    Number(themeSrc.match(/ED_RIGHT_MIN: f64 = ([\d.]+)/)[1]),
+    Number(themeSrc.match(/ED_RIGHT_MAX: f64 = ([\d.]+)/)[1]),
+  ],
+  titleH: Number(themeSrc.match(/ED_TITLE_H: f64 = ([\d.]+)/)[1]),
+};
+
+// `dashboard::search_rect` in four lines, so the sheet's "search slack" is the
+// app's own arithmetic rather than a pile of magic numbers that look right:
+//   left_end  = 12 + LOGO + 12 + wordmark + 12
+//   right_start = w - 12 - 32 - 8 - new_file_w - 12
+//   x0 = left_end + (right_start - left_end - SEARCH_W) / 2
+// The wordmark width is not a constant in the code — it is measured at runtime
+// from Inter 14/600 with -0.025 tracking. The one measurement the source does
+// record is the reference landing spot ("measured x=460.1 at 1440" beside the
+// function), so the sheet solves the code's own formula for it: change any
+// input and this number moves with it instead of being re-typed by hand.
+const TITLE_BAR = { pad: 12, avatar: 32, gap: 8, newFile: 97, searchGap: 12 };
+const searchW = EXACT(themeSrc, 'SEARCH_W', 'theme.rs');
+const logoW = EXACT(themeSrc, 'LOGO', 'theme.rs');
+const measured = readFileSync(DIR + 'dashboard.rs', 'utf8')
+  .replace(/^\s*\/\/ ?/gm, '') // the reference is written across two comment lines
+  .replace(/\s+/g, ' ') // ...so join them before matching
+  .match(/measured x=([\d.]+) at (\d+)/);
+if (!measured) throw new Error('build_audit: search_rect lost its measured reference — update the sheet');
+const [measuredX, measuredW] = [parseFloat(measured[1]), parseFloat(measured[2])];
+const rightStart = (w) => w - TITLE_BAR.pad - TITLE_BAR.avatar - TITLE_BAR.gap - TITLE_BAR.newFile - TITLE_BAR.searchGap;
+const leftEnd = (wordmark) => TITLE_BAR.pad + logoW + TITLE_BAR.pad + wordmark + TITLE_BAR.pad;
+const wordmarkW = 2 * measuredX - rightStart(measuredW) + searchW - (TITLE_BAR.pad * 3 + logoW);
+const searchSlack = (w) => rightStart(w) - leftEnd(wordmarkW) - searchW;
+
 const auditPayload = {
   ratchet: {
     ceilings,
@@ -130,37 +213,29 @@ const auditPayload = {
       .slice(0, 14),
   },
   fluid: [980, 1280, 1440, 1920, 2560].map((w) => {
-    const main = w - 284 - 24; // mx1 - MX
-    const cards = (main - 12 * 3) / 4;
-    const grid = (main - 16 * 2) / 3;
-    // editor_regions(): the docks yield to the canvas floor
-    const room = Math.max(0, w - 48 - 280);
-    const worstLeft = Math.min(480, Math.max(0, room - 240));
-    const worstRight = Math.min(520, Math.max(0, room - worstLeft));
+    const main = w - geom.dashMx - 24; // mx1 - MX at the default window
+    const cards = (main - geom.cardGap * 3) / 4;
+    const grid = (main - geom.gridGap * (geom.cols - 1)) / geom.cols;
+    // Mirrors `App::editor_regions`: left takes what it wants up to the right
+    // dock's floor, the right takes what is left, and ED_CANVAS_MIN survives.
+    const room = Math.max(0, w - geom.nav - docks.canvasMin);
+    const worstLeft = Math.min(docks.leftRange[1], Math.max(0, room - docks.rightMin));
+    const worstRight = Math.min(docks.rightRange[1], Math.max(0, room - worstLeft));
     return {
       window: w,
       card: Math.round(cards * 10) / 10,
       grid: Math.round(grid * 10) / 10,
-      canvas: w - 48 - 280 - 340,
-      canvasWorst: w - 48 - worstLeft - worstRight,
-      searchSlack: Math.round(w - 12 - 32 - 8 - 97 - 12 - (12 + 28 + 12 + 66 + 12) - 480),
+      canvas: w - geom.nav - docks.left - docks.right,
+      canvasWorst: w - geom.nav - worstLeft - worstRight,
+      searchSlack: Math.round(searchSlack(w) * 10) / 10,
+      docks: { left: worstLeft, right: worstRight, canvas: Math.round(w - geom.nav - worstLeft - worstRight) },
     };
   }),
   window: { min: [980, 680], default: [1440, 900] },
-  canvasFloor: Number(themeSrc.match(/ED_CANVAS_MIN: f64 = ([\d.]+)/)[1]),
-  docks: {
-    nav: 48,
-    left: Number(themeSrc.match(/ED_LEFT_W: f64 = ([\d.]+)/)[1]),
-    leftRange: [
-      Number(themeSrc.match(/ED_LEFT_MIN: f64 = ([\d.]+)/)[1]),
-      Number(themeSrc.match(/ED_LEFT_MAX: f64 = ([\d.]+)/)[1]),
-    ],
-    right: Number(themeSrc.match(/ED_RIGHT_W: f64 = ([\d.]+)/)[1]),
-    rightRange: [
-      Number(themeSrc.match(/ED_RIGHT_MIN: f64 = ([\d.]+)/)[1]),
-      Number(themeSrc.match(/ED_RIGHT_MAX: f64 = ([\d.]+)/)[1]),
-    ],
-  },
+  titleBar: { ...TITLE_BAR, searchW, logoW, wordmarkW, measuredX, measuredW },
+  canvasFloor: docks.canvasMin,
+  docks,
+  geom,
 };
 const OUT = (f) => fileURLToPath(new URL('./' + f, import.meta.url));
 writeFileSync(OUT('audit.json'), JSON.stringify(auditPayload, null, 2));
@@ -168,4 +243,13 @@ writeFileSync(OUT('audit.js'), `window.AUDIT = ${JSON.stringify(auditPayload)};\
 const overColour = PAINTED.filter((f) => colours[f] > (ceilings.colours[f] ?? 0) || ink[f] > (ceilings.ink[f] ?? 0));
 console.log(
   `radii left ${Object.values(radii).reduce((a, b) => a + b, 0)} (canvas-space ${canvasSpace}), raw icons ${Object.values(icons).reduce((a, b) => a + b, 0)}, over-ceiling files: ${overColour.length ? overColour.join(',') : 'none'}, offsets ${totalOffsets} (${Math.round((100 * onLadder) / totalOffsets)}% on ladder)`,
+);
+console.log(
+  `search_rect: wordmark solved at ${wordmarkW.toFixed(1)}px from the measured x=${measuredX} at ${measuredW}; ` +
+    `slack ${[980, 1440, 2560].map((w) => `${w}:${searchSlack(w).toFixed(1)}`).join(' ')}`,
+);
+console.log(
+  `geometry read from source — nav ${geom.nav}, dash sidebar ${geom.dashSide} + mx ${geom.dashMx}, ` +
+    `card gap ${geom.cardGap}, grid gap ${geom.gridGap}; docks ${docks.left}/${docks.right} ` +
+    `(ranges ${docks.leftRange.join('-')}/${docks.rightRange.join('-')}), canvas floor ${docks.canvasMin}`,
 );

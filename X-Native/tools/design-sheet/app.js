@@ -55,8 +55,13 @@ function renderPalette() {
       </div>`;
     })
     .join('');
+  const textCount = T.roleNames.filter((r) => textRoles.has(r)).length;
   document.getElementById('palette-note').textContent =
-    `${T.roleNames.length} roles × ${THEMES.length} palettes, every pair audited by the crate's own test`;
+    `${T.roleNames.length} roles × ${THEMES.length} palettes. ` +
+    `${textCount} carry text and show their worst-surface ratio (AA is 4.5:1); ` +
+    `the other ${T.roleNames.length - textCount} are fills, rings and washes — a fill is not ` +
+    `measured as ink, so they say so instead of showing a number that would mean nothing. ` +
+    `The crate's own test audits every pair.`;
 }
 
 // -------------------------------------------------------------------- ladders
@@ -64,67 +69,115 @@ const bar = (w, v, max, alt = '') =>
   `<span class="bar ${alt}" style="width:${Math.max(2, (w * v) / max)}px"></span><span class="nums">${v}</span>`;
 const rowOf = (label, inner) => `<div class="row"><span class="label">${label}</span>${inner}</div>`;
 
+// How many call sites name this constant. `0` is a fact worth printing: the
+// 16px type step and the fully-round radius exist in the scale but no chrome
+// file spells them, and a reader deciding what to reuse should know that.
+const uses = (name) => {
+  const n = T.usage ? T.usage[name] : undefined;
+  if (n === undefined) return '';
+  return n === 0
+    ? `<span class="uses none" title="declared in theme.rs, named by no call site yet">unused</span>`
+    : `<span class="uses" title="${n} reference${n === 1 ? '' : 's'} in the app sources">×${n}</span>`;
+};
+
 function renderScales() {
   const s = T.scales;
   const type = Object.entries(s.type);
+  const aliasName = (k) => (T.typeAliases ? T.typeAliases[k] || '' : '');
+  // NB: the separator is a middle dot, not whitespace — `alias(k).trim()` would
+  // leave "T10 ·" and the lookup would miss. Keep the bare name for lookups.
+  const alias = (k) => (aliasName(k) ? `${aliasName(k)} · ` : '');
   document.getElementById('l-type').innerHTML =
-    `<div class="nums" style="margin-bottom:2px">type — T${type.map(([, v]) => v).join(' · T')}</div>` +
+    `<div class="nums" style="margin-bottom:2px">type — ${type.length} steps, ` +
+    `${type.map(([k, v]) => `${alias(k)}${v}px`).join(' · ')} (TypographyScale; the chrome names the alias)</div>` +
     type
       .map(([k, v]) =>
-        rowOf(`${k} ${v}px`, `<span class="type" style="font-size:${v}px">Ag — quick brown fox</span>`),
+        rowOf(
+          `${alias(k)}${k.toLowerCase()} ${v}px ${uses(aliasName(k))}`,
+          `<span class="type" style="font-size:${v}px">Ag — quick brown fox</span>`,
+        ),
       )
       .join('');
 
   document.getElementById('l-space').innerHTML =
-    `<div class="nums" style="margin-bottom:2px">spacing — SP_0 .. SP_10</div>` +
+    `<div class="nums" style="margin-bottom:2px">spacing — ${Object.keys(s.spacing).length} steps in SpacingScale; ` +
+    `the chrome's names start at SP_1 (SPACE_0 is the zero, named by nothing)</div>` +
     Object.entries(s.spacing)
-      .map(([k, v]) => rowOf(k.replace('SPACE_', 'SP_').toLowerCase(), bar(160, v, 48)))
-      .join('');
-
-  document.getElementById('l-radius').innerHTML =
-    `<div class="nums" style="margin-bottom:2px">radius — R_NONE .. R_XL</div>` +
-    Object.entries(s.radius)
       .map(([k, v]) =>
-        rowOf(k.toLowerCase(), `<span style="width:64px;height:20px;background:var(--surface-hover);border:1px solid var(--border-strong);border-radius:${v}px"></span><span class="nums">${v}</span>`),
+        rowOf(
+          `${k.replace('SPACE_', 'SP_').toLowerCase()} ${uses(k.replace('SPACE_', 'SP_'))}`,
+          bar(160, v, 48),
+        ),
       )
       .join('');
 
+  document.getElementById('l-radius').innerHTML =
+    `<div class="nums" style="margin-bottom:2px">radius — ${Object.keys(s.radius).length} steps, R_NONE .. R_FULL</div>` +
+    Object.entries(s.radius)
+      .map(([k, v]) =>
+        rowOf(
+          `${k.toLowerCase()} ${uses(`R_${k}`)}`,
+          `<span style="width:64px;height:20px;background:var(--surface-hover);border:1px solid var(--border-strong);border-radius:${v}px"></span><span class="nums">${v}</span>`,
+        ),
+      )
+      .join('');
+
+  const IA = window.ICON_AUDIT;
   document.getElementById('l-icon').innerHTML =
     `<div style="width:100%" class="nums">icons — ICON_XS .. ICON_XL (Lucide, stroke ${s.icon.STROKE})</div>` +
     Object.entries(s.icon)
       .filter(([k]) => k !== 'STROKE')
-      .map(([k, v]) => `<figure>${svgIcon('search', v)}<figcaption>${k} ${v}</figcaption></figure>`)
+      .map(
+        ([k, v]) =>
+          `<figure>${svgIcon('search', v)}<figcaption>${k} ${v} ${uses(k === 'STROKE' ? 'STROKE_ICON' : `ICON_${k}`)}</figcaption></figure>`,
+      )
       .join('') +
     ['plus', 'sticky-note', 'layout-template', 'star']
       .map((n) => `<figure>${svgIcon(n, 18)}<figcaption>${n}</figcaption></figure>`)
-      .join('');
+      .join('') +
+    (IA
+      ? `<div class="nums" style="width:100%; margin-top:6px">` +
+        `${Object.keys(ICONS).length} glyphs in <code>icons.rs</code>; ` +
+        `<b>${IA.used}</b> are named by the chrome (${IA.where}, ${IA.files} files) — ` +
+        (IA.missing.length
+          ? `<span class="ratio warn">${IA.missing.length} name${IA.missing.length === 1 ? '' : 's'} not in the set: ${IA.missing.join(', ')}</span>`
+          : `none of them missing`) +
+        `. ${IA.unused.length} are in the set but not named anywhere yet.</div>`
+      : '');
+  document.body.dataset.iconsMissing = IA ? String(IA.missing.length) : 'n/a';
 
   document.getElementById('l-alpha').innerHTML =
     `<div class="nums" style="margin-bottom:2px">alpha — A_WHISPER .. A_STRONG (0–255)</div>` +
     Object.entries(s.alpha)
       .map(([k, v]) =>
-        rowOf(k.toLowerCase(), `<span class="swatch" style="width:160px;background:color-mix(in srgb, var(--accent) ${((v / 255) * 100).toFixed(0)}%, transparent)"></span><span class="nums">${v} · ${((v / 255) * 100).toFixed(0)}%</span>`),
+        rowOf(`a_${k.toLowerCase()} ${uses('A_' + k)}`, `<span class="swatch" style="width:160px;background:color-mix(in srgb, var(--accent) ${((v / 255) * 100).toFixed(0)}%, transparent)"></span><span class="nums">${v} · ${((v / 255) * 100).toFixed(0)}%</span>`),
       )
       .join('');
 
   document.getElementById('l-stroke').innerHTML =
     `<div class="nums" style="margin-bottom:2px">stroke</div>` +
     Object.entries(s.stroke)
-      .map(([k, v]) => rowOf(k.toLowerCase(), `<span style="width:160px;border-top:${v}px solid var(--text-primary)"></span><span class="nums">${v}px</span>`))
+      .map(([k, v]) => rowOf(`${k.toLowerCase()} ${uses('STROKE_' + k)}`, `<span style="width:160px;border-top:${v}px solid var(--text-primary)"></span><span class="nums">${v}px</span>`))
       .join('');
 
   document.getElementById('l-motion').innerHTML =
-    `<div class="nums" style="margin-bottom:2px">motion — honoured only when reduced-motion is off</div>` +
+    `<div class="nums" style="margin-bottom:2px">motion — honoured only when reduced-motion is off` +
+    (T.motionMentions === 0
+      ? ` · the desktop chrome does not name these yet (they are for the shared crate)`
+      : ` · named ${T.motionMentions}× by the chrome`) +
+    `</div>` +
     Object.entries(s.motion)
       .map(([k, v]) => rowOf(k.replace('_MS', '').toLowerCase(), bar(160, v, 240, 'alt')))
       .join('');
 }
 
 // ------------------------------------------------------------ dashboard mock
-// Absolute geometry: the same numbers the Rust paints, so the sheet shows the
-// real density (sidebar 260, title bar 40, main padding 24, cards 88 tall,
-// grid thumb 140, draft rows 48).
-function dashboardMock(width, { rows = 3 } = {}) {
+// The sheet's OWN markup, laid out with the app's numbers: sidebar 260, title
+// bar 40, nav rows 32 at pitch 34, sort chip and grid/list toggle 32 tall at
+// the right edge of the main column, quick cards 88, grid thumb 140, list rows
+// 48. It exists to show density and the audited pairs in a browser without the
+// Rust binary; it is NOT a screenshot, and the note above it says so.
+function dashboardMock(width, { rows = 3, layout = 'grid', view = 'Home' } = {}) {
   const cards = [
     ['plus', 'New design file', 'Start from scratch'],
     ['import', 'Import file', 'SVG, PNG, Sketch, Figma JSON'],
@@ -140,6 +193,16 @@ function dashboardMock(width, { rows = 3 } = {}) {
     ['file-text', 'Checkout flow', '2 min ago'],
     ['frame', 'Pricing page', '18 min ago'],
     ['component', 'Nav bar', '1h ago'],
+  ];
+  const navs = [
+    ['layout-dashboard', 'Home'],
+    ['clock', 'Recents'],
+    ['star', 'Starred'],
+    ['trash-2', 'Trash'],
+  ];
+  const teams = [
+    ['L', 'Liquor Delivery', '12'],
+    ['D', 'Design System', ''],
   ];
   // the search is centred in the space between the wordmark group and the
   // right cluster — the same arithmetic as `search_rect()` in dashboard.rs
@@ -166,16 +229,33 @@ function dashboardMock(width, { rows = 3 } = {}) {
       <div class="avatar" style="right:16px">A</div>
     </div>
     <div class="sidebar" style="height:${620 - 40}px">
-      <div class="side-row active">${svgIcon('home', 14)}Home</div>
-      <div class="side-row">${svgIcon('clock', 14)}Recents</div>
-      <div class="side-row">${svgIcon('star', 14)}Starred</div>
+      <div class="side-head">Personal${svgIcon('chevron-down', 12)}</div>
+      ${navs
+        .map(
+          ([icon, label]) =>
+            `<div class="side-row${label === view ? ' active' : ''}">${svgIcon(icon, 16)}${label}</div>`,
+        )
+        .join('')}
       <div class="side-label">Teams</div>
-      <div class="side-row">${svgIcon('users', 14)}Product</div>
-      <div class="side-row">${svgIcon('users', 14)}Marketing</div>
+      ${teams
+        .map(
+          ([ch, name, count]) =>
+            `<div class="side-row"><span class="tchip">${ch}</span>${name}` +
+            `${count ? `<span class="tcount">${count}</span>` : ''}</div>`,
+        )
+        .join('')}
       <div class="side-chip"><span class="cx">${svgIcon('check', 16)}</span>All changes saved</div>
     </div>
     <div class="main">
-      <div class="h1">Your design workspace</div>
+      <div class="head">
+        <div class="h1">Your design workspace</div>
+        <div class="grow"></div>
+        <div class="sortchip">${svgIcon('arrow-up-down', 16)}<span>Sorted by Edited</span>${svgIcon('chevron-down', 12)}</div>
+        <div class="seglay">
+          <span class="lay${layout === 'grid' ? ' on' : ''}">${svgIcon('grid-2x2', 16)}Grid</span>
+          <span class="lay${layout === 'list' ? ' on' : ''}">${svgIcon('list', 16)}List</span>
+        </div>
+      </div>
       <div class="cards">
         ${cards
           .map(
@@ -188,7 +268,22 @@ function dashboardMock(width, { rows = 3 } = {}) {
           .join('')}
       </div>
       <div class="section-h">Recently viewed</div>
-      <div class="grid3">
+      ${
+        layout === 'list'
+          ? `<div class="lpanel">
+        <div class="lhead"><span class="lname">NAME</span><span class="lteam">TEAM</span>` +
+            `<span class="ledited on">EDITED${svgIcon('chevron-down', 12)}</span></div>` +
+            files
+              .map(
+                ([c, name, meta]) =>
+                  `<div class="lrow"><span class="ldot" style="background:${c}"></span>` +
+                  `<span class="lname">${name}</span>` +
+                  `<span class="lteam">${meta.split(' · ')[0]}</span>` +
+                  `<span class="ledited">${meta.split(' · ')[1]}</span></div>`,
+              )
+              .join('') +
+            `</div>`
+          : `<div class="grid3">
         ${files
           .map(
             ([c, name, meta]) => `<div class="gcard">
@@ -197,7 +292,8 @@ function dashboardMock(width, { rows = 3 } = {}) {
             </div>`,
           )
           .join('')}
-      </div>
+      </div>`
+      }
       <div class="section-h">Drafts</div>
       <div class="dpanel">
         ${drafts
@@ -212,12 +308,164 @@ function dashboardMock(width, { rows = 3 } = {}) {
   </div>`;
 }
 
-function fit(stageEl, wrapEl, width, height) {
-  stageEl.innerHTML = dashboardMock(width);
-  const k = wrapEl.clientWidth / width;
+function fit(stageEl, wrapEl, width, height, opts) {
+  stageEl.innerHTML = dashboardMock(width, opts);
+  // A zero-width wrapper (hidden section, print, first paint before layout)
+  // used to scale the frame to nothing and set a 0px height — a mock that
+  // silently disappears. Fall back to 1:1; `overflow: hidden` keeps it tidy.
+  const measured = wrapEl.clientWidth;
+  const k = measured > 0 ? measured / width : 1;
   stageEl.style.transform = `scale(${k})`;
-  wrapEl.style.height = `${height * k}px`;
+  wrapEl.style.height = `${Math.round(height * k)}px`;
+  return k;
 }
+
+// ------------------------------------------------------- chrome colour names
+// `C_MUTED` is what the paint code writes; `text_dim` is what the palette
+// audits. This is the join, sorted by the only question worth asking of a
+// chrome colour: does it follow the theme, or is it pinned?
+function alphaOf(name) {
+  if (name == null) return null;
+  if (/^A_[A-Z]+$/.test(name)) return T.scales.alpha[name.slice(2)] ?? null;
+  const n = /^0x/i.test(name) ? parseInt(name, 16) : parseInt(name, 10);
+  return Number.isFinite(n) ? n : null;
+}
+function renderColorAliases() {
+  const A = T.colorAliases || {};
+  const p = palette();
+  const rows = Object.entries(A).map(([alias, a]) => {
+    let cur = alias;
+    const chain = [];
+    const seen = new Set();
+    while (A[cur] && A[cur].kind === 'alias' && !seen.has(cur)) {
+      seen.add(cur);
+      chain.push(cur);
+      cur = A[cur].of;
+    }
+    const end = A[cur] || {};
+    const role = end.kind === 'role' ? end.role : end.resolvedRole;
+    // role and literal both carry `alpha`; an alias carries it resolved
+    const alpha = end.alpha ?? end.resolvedAlpha;
+    const n = alphaOf(alpha);
+    const base = role ? p[role] : end.hex || null;
+    // A wash is its alpha: `C_BLACK_10` drawn opaque would be a black tile, not
+    // the 10% scrim it is.
+    const rgb = base && base.startsWith('#') ? hex(base).join(',') : null;
+    const swatch = !base
+      ? 'transparent'
+      : n != null && rgb && (role || end.kind === 'literal')
+        ? `rgba(${rgb},${(n / 255).toFixed(3)})`
+        : base;
+    return {
+      alias,
+      swatch,
+      role,
+      alpha: alpha ? alpha.replace(/^A_/, '').toLowerCase() : null,
+      hex: base,
+      pixels: role ? p[role] : end.kind === 'literal' ? end.hex : null,
+      follows: Boolean(role),
+      chain: chain.length ? chain.join(' → ') : '',
+      unparsed: end.kind === 'other' ? end.rhs || 'unparsed' : '',
+    };
+  });
+  const follows = rows.filter((r) => r.follows).sort((a, b) => a.alias.localeCompare(b.alias));
+  const pinned = rows.filter((r) => !r.follows).sort((a, b) => a.alias.localeCompare(b.alias));
+  const line = (r) =>
+    `<tr><td class="alias">${r.alias}</td>` +
+    `<td class="chain">${
+      r.role ? r.role + (r.alpha ? ` · ${r.alpha}` : '') : r.unparsed ? r.unparsed : 'literal'
+    }${r.chain ? ` <span class="via">via ${r.chain}</span>` : ''}</td>` +
+    `<td class="px">${r.pixels || '—'}</td>` +
+    `<td class="sw"><span class="swatch" style="background:${r.swatch}"></span></td></tr>`;
+  document.getElementById('colornames').innerHTML =
+    `<div class="card vocab-card">
+      <table class="vocab">
+        <thead><tr><th>alias</th><th>resolves to</th><th style="text-align:right">hex</th><th></th></tr></thead>
+        <tbody>
+          <tr><td colspan="4" class="vocab-family">Follows the palette — ${follows.length}</td></tr>
+          ${follows.map(line).join('')}
+          <tr><td colspan="4" class="vocab-family">Pinned literals — ${pinned.length}</td></tr>
+          ${pinned.map(line).join('')}
+        </tbody>
+      </table>
+    </div>`;
+  const note = document.getElementById('colornames-note');
+  if (note) {
+    note.textContent =
+      `${rows.length} chrome colour constants: ${follows.length} resolve to a palette role ` +
+      `(so they repaint with the theme) and ${pinned.length} are literals that stay put — ` +
+      `scrims, brand and identity colours, ruler ticks and grid dots. ` +
+      `Swatches follow the theme switch.`;
+  }
+  document.body.dataset.pinnedColors = String(pinned.length);
+}
+renderColorAliases();
+
+// ---------------------------------------------------------- chrome vocabulary
+// The generator reads every named constant the chrome uses (`R_CARD`, `SP_2`,
+// `A_SOFT`, `ICON_MD`, `STROKE_RING`); this renders each alias *and* what it
+// resolves to, so "8px card corner" is traceable rather than folklore.
+function renderVocab() {
+  const V = T.appVocab || {};
+  const familyOf = (name) => ({
+    RadiusScale: 'radius',
+    IconScale: 'icon',
+    SpacingScale: 'spacing',
+    AlphaScale: 'alpha',
+    StrokeScale: 'stroke',
+  })[name];
+  const resolve = (family, name, seen = new Set()) => {
+    if (seen.has(name)) return null;
+    seen.add(name);
+    const chain = (V[family] || []).find(([a]) => a === name);
+    if (!chain) return null;
+    const target = chain[1];
+    if (target.includes('::')) {
+      const [struct, step] = target.split('::');
+      const fam = familyOf(struct);
+      const v = T.scales[fam] && T.scales[fam][step];
+      return v === undefined ? null : { value: v, target: [target], family: fam };
+    }
+    const next = resolve(family, target, seen);
+    return next && { ...next, target: [target, ...next.target] };
+  };
+  const unit = (family, v) => (family === 'alpha' ? `${Math.round((v / 255) * 100)}%` : `${v}px`);
+  const families = [
+    ['radius', 'Radius — corners'],
+    ['spacing', 'Spacing — gaps and insets'],
+    ['icon', 'Icon — glyph boxes'],
+    ['stroke', 'Stroke — line weights'],
+    ['alpha', 'Alpha — washes'],
+  ].filter(([f]) => (V[f] || []).length);
+  let broken = 0;
+  document.getElementById('vocab').innerHTML = families
+    .map(([family, label]) => {
+      const rows = V[family]
+        .map(([alias, target]) => {
+          const r = resolve(family, alias);
+          if (!r) broken += 1;
+          const shown = r ? r.target.join(' → ').replace(`${alias} → `, '') : '— unresolved';
+          return `<tr><td class="alias">${alias}</td><td class="chain">${shown}</td>` +
+            `<td class="uses-cell">${uses(alias)}</td>` +
+            `<td class="px">${r ? unit(r.family, r.value) : '<b>?</b>'}</td></tr>`;
+        })
+        .join('');
+      return `<div class="card vocab-card">
+        <table class="vocab">
+          <thead><tr><th>alias</th><th>resolves to</th><th>used</th><th style="text-align:right">value</th></tr></thead>
+          <tbody><tr><td colspan="4" class="vocab-family">${label}</td></tr>${rows}</tbody>
+        </table>
+      </div>`;
+    })
+    .join('');
+  const total = families.reduce((n, [f]) => n + V[f].length, 0);
+  document.getElementById('vocab-note').textContent =
+    `${total} named constants the chrome paints with, each traced to its step — ` +
+    `the ladder above is what they resolve into` +
+    (broken ? ` · ${broken} unresolved` : '');
+  document.body.dataset.vocabBroken = String(broken);
+}
+renderVocab();
 
 // ---------------------------------------------------------------------- audit
 function renderAudit() {
@@ -263,6 +511,13 @@ function renderAudit() {
       )
       .join('')}</table>
     <p style="margin-top:8px">Cards and grid columns are divided from the column, never fixed: 274→${a.fluid[0].card}px across the supported range. The search keeps ${a.fluid[0].searchSlack}px of slack at the minimum window, so it never collides with the right cluster.</p>`;
+  // The "would invert" number is arithmetic on the parsed dock ranges, not a
+  // figure someone typed once: 980 − 48 − 480 − 520 = −68.
+  const docksWidest = {
+    left: a.docks.leftRange[1],
+    right: a.docks.rightRange[1],
+    naive: w.min[0] - a.docks.nav - a.docks.leftRange[1] - a.docks.rightRange[1],
+  };
   document.getElementById('layout').innerHTML = `<h2>Layout bounds</h2>
     <table>
       <tr><td>window</td><td class="num">${w.default[0]}×${w.default[1]} default</td></tr>
@@ -271,8 +526,10 @@ function renderAudit() {
       <tr><td>nav rail</td><td class="num">${a.docks.nav}</td></tr>
       <tr><td>left dock</td><td class="num">${a.docks.left} (${a.docks.leftRange.join('–')})</td></tr>
       <tr><td>right dock</td><td class="num">${a.docks.right} (${a.docks.rightRange.join('–')})</td></tr>
+      <tr><td>title bar search</td><td class="num">${a.titleBar.searchW}×32, wordmark ${a.titleBar.wordmarkW.toFixed(1)}px</td></tr>
     </table>
-    <p style="margin-top:8px">At ${w.min[0]} with both docks at their widest the canvas would invert (−68px) —
+    <p style="margin-top:8px">At ${w.min[0]} with both docks dragged to their widest
+    (${docksWidest.left} + ${docksWidest.right}) the canvas would invert (${docksWidest.naive}px) —
     it now stops at the floor instead, and <code>docks_never_eat_the_canvas</code> pins that across 6 widths × 9 dock pairs.</p>`;
 }
 
@@ -299,15 +556,22 @@ function setTheme(id) {
     b.setAttribute('aria-pressed', String(b.dataset.theme === id)),
   );
   renderPalette();
+  renderColorAliases();
   renderFrames();
 }
 
 function renderFrames() {
   fit(document.getElementById('stage'), document.getElementById('stage-wrap'), 1440, 620);
   fit(document.getElementById('narrow'), document.getElementById('narrow-wrap'), 980, 620);
-  fit(document.getElementById('wide'), document.getElementById('wide-wrap'), 1920, 620);
+  fit(document.getElementById('wide'), document.getElementById('wide-wrap'), 1920, 620, {
+    layout: 'list',
+  });
+  // What this is, exactly: the sheet's markup, the app's numbers. Saying "the
+  // paint code" would be a claim the sheet cannot keep (it is not a capture).
   document.getElementById('dash-note').textContent =
-    `1440×620 of the ${T.provenance.commit} paint code — same slots, same paddings; the sidebar's saved-chip is the audited success pair`;
+    `the sheet's own markup at the ${T.provenance.commit} numbers — sidebar 260, bar 40, ` +
+    `nav rows 32 at pitch 34, sort chip + grid/list toggle 32, cards 88, list rows 48; ` +
+    `the saved-chip is the audited success pair`;
 }
 
 function boot() {
