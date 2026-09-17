@@ -127,17 +127,22 @@ body {
 .tb-right { position: absolute; right: 12px; top: 6px; display: flex; align-items: center; gap: 8px; }
 .avatar { width: 32px; height: 32px; border-radius: 50%; background: var(--accent); color: var(--on-accent); display: grid; place-items: center; font-weight: 600; font-size: 12px; }
 .win .sidebar { border-right: 1px solid var(--border); background: var(--surface); padding: 14px 12px; display: grid; align-content: start; gap: 2px; position: absolute; }
-.side-head { display: flex; align-items: center; justify-content: space-between; height: 32px; padding: 0 8px; font-size: 12px; font-weight: 500; }
+.side-head { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; font-size: 12px; font-weight: 500; }
+/* "Personal" is a scope label, not a control (the app paints no hit region). */
+.sdot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); opacity: .5; flex: 0 0 auto; }
 .side-row { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 8px; border-radius: 8px; font-size: 12px; color: var(--text-dim); }
 .side-row.active { background: var(--surface-elevated); border: 1px solid var(--border); color: var(--text-primary); }
-.side-label { font-size: 10px; letter-spacing: .12em; color: var(--text-dim); padding: 12px 8px 4px; }
-.tchip { width: 18px; height: 18px; border-radius: 4px; background: var(--surface-hover); color: var(--text-secondary); font: 600 10px Inter; display: grid; place-items: center; }
-.tcount { margin-left: auto; font-size: 10px; color: var(--text-dim); }
-.side-chip {
-  margin-top: 14px; display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; border-radius: 8px;
-  background: var(--surface-elevated); border: 1px solid var(--border); font-size: 11px; color: var(--text-dim);
-}
-.side-chip svg { color: var(--success); }
+.side-label { font-size: 10px; letter-spacing: .12em; color: var(--text-dim); padding: 12px 8px 4px; display: flex; align-items: center; gap: 6px; }
+.side-div { height: 1px; background: var(--border); margin: 8px 4px; }
+.side-block { padding: 0 8px 4px 16px; display: grid; gap: 2px; }
+.side-block b { font-size: 12px; font-weight: 500; color: var(--text-primary); }
+.side-block span { font-size: 10px; color: var(--text-dim); }
+/* THE WORKFLOW rows: informational, mirroring paint_workflow (no affordance). */
+.wrow { display: flex; align-items: flex-start; gap: 10px; height: 44px; padding: 0 8px; }
+.wnum { width: 20px; height: 20px; margin-top: 2px; border-radius: 50%; background: var(--surface-elevated); color: var(--text-primary); font-size: 10px; display: grid; place-items: center; flex: 0 0 auto; }
+.wtxt { display: grid; gap: 1px; min-width: 0; }
+.wtxt b { font-size: 12px; font-weight: 500; color: var(--text-primary); }
+.wtxt span { font-size: 10px; color: var(--text-dim); }
 .win .main { background: var(--background); display: grid; align-content: start; gap: 14px; position: absolute; }
 .head { display: flex; align-items: center; gap: 8px; height: 32px; }
 .h1 { font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
@@ -158,6 +163,10 @@ body {
 .qcard b { font-size: 12.5px; font-weight: 500; }
 .qcard span:last-child { font-size: 11px; color: var(--text-dim); }
 .section-h { font-size: 12.5px; font-weight: 600; margin-top: 6px; }
+/* Recents header: the view chip CYCLES (rotate-cw) — it has no dropdown. */
+.recents-head { display: flex; align-items: center; gap: 12px; }
+.recents-head b { font-size: 14px; font-weight: 600; }
+.vchip { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 8px; background: var(--surface-elevated); border: 1px solid var(--border); font-size: 11px; color: var(--text-dim); }
 .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .gcard { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--surface); }
 .thumb { position: relative; height: 141px; display: grid; place-items: center; background: var(--surface-elevated); color: var(--text-dim); }
@@ -185,6 +194,7 @@ body {
   display: flex; align-items: center; gap: 10px; height: 48px; padding: 0 12px; border: 1px solid var(--border);
   border-radius: 12px; background: var(--surface); font-size: 12px;
 }
+.bulk .bkick { margin-left: auto; color: var(--text-dim); display: flex; }
 .menu-wrap, .popover, .modal, .cmdpalette, .findbar { background: var(--surface-elevated); border: 1px solid var(--border); border-radius: 12px; }
 .menu { display: grid; padding: 6px; }
 .menu-row { display: flex; align-items: center; justify-content: space-between; height: 28px; padding: 0 8px; border-radius: 6px; font-size: 12px; }
@@ -202,6 +212,7 @@ body {
 
 /* ---------------------------------------------------------------- editor */
 .win .titlebar { display: flex; align-items: center; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--border); background: var(--surface); position: absolute; }
+.win .titlebar .tb-newfile { position: absolute; right: 56px; top: 4px; height: 32px; }
 .logo-cell { display: flex; align-items: center; padding-right: 10px; border-right: 1px solid var(--border); height: 100%; }
 .win .titlebar .tab { display: flex; align-items: center; gap: 8px; padding: 0 12px; height: 100%; border-right: 1px solid var(--border); color: var(--text-dim); position: absolute; }
 .win .titlebar .tab.on { background: var(--surface-elevated); color: var(--text-primary); }

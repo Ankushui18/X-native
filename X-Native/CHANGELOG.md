@@ -38,6 +38,21 @@ Part of the UI/UX Refinement v1 milestone (see
   regression test pins the role mapping. `apps/x-designer`.
 
 ### Added
+- **The dashboard speaks X-Native (P0-4).** The sidebar's empty lower half
+  now paints THE WORKFLOW — Compose / Flow / Ship with a one-line sub each —
+  in the local-first and demo variants (informational only, no affordance).
+  The "New design file" quick card now says "Compose, flow, ship — from one
+  file." Phantom affordances are out: the three `more-horizontal` icons
+  that had no hit region and no menu (recents card, list row, drafts row),
+  the "Personal" row's hover fill + chevron with no hit region (now a plain
+  scope label), and the recents view chip's `chevron-down` — it cycles the
+  view, it doesn't drop down, so it now draws `rotate-cw`. The non-demo
+  "Open in this session" list gets the same container idiom as the Drafts
+  panel (rounded card, hline rows, hover wash, file icon, count). The design
+  sheet's dashboard mocks are re-synced to the non-demo reality they had
+  drifted from (sheet-only "All changes saved" chip, demo-only TEAMS,
+  "Recently viewed", old bulk buttons). `apps/x-designer`,
+  `tools/design-sheet`.
 - **First-time workflow narrative (P0-10).** The first-launch onboarding
   card now names the primary loop **Compose / Flow / Ship** (it said
   "Design / Prototype / Ship") and names the supporting surfaces once —
@@ -77,8 +92,9 @@ Part of the UI/UX Refinement v1 milestone (see
   gap/padding rows all sit on the 28/24/16 scale now, and the
   alignment card no longer overlaps the Auto Layout advanced band
   (a measured-reference leftover from before the disclosure pass).
-  The design sheet's COMPOSE mirror is re-synced to the same geometry,
-  including the line-height row that is now above the fold.
+  The design sheet's COMPOSE mirror is re-synced to the same geometry;
+  the line-height row (grid 774–802) sits at the scroll fold, so the
+  sheet's scroll-0 mock ends at weight/size.
 - **Inspector typography section, no more phantom controls.** Horizontal
   alignment is three working buttons (active state mirrors the render);
   vertical alignment, decoration, max lines and paragraph indent now reach

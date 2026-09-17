@@ -119,13 +119,49 @@ One scale, declared in `theme.rs` and applied to the COMPOSE inspector:
 - **Typography usage** already sits on the T10–T20 aliases; this pass
   kept section headers on caps_label and every value on T10/T11.
 - The design sheet's COMPOSE mirror (`screens.js composePanel`) was
-  re-synced to the same geometry, including the line-height row that is
-  now above the fold.
+  re-synced to the same geometry. The line-height row (grid 756/774–802)
+  sits at the scroll fold (content N ≤ 775 is visible at scroll 0), so the
+  sheet's scroll-0 mock ends at weight/size — the row is scroll content.
 
 Scope note: dashboard / board / tool-dock control heights are their own
 idioms (card grids, 22px tree rows, 40px toolbar) and belong to the
 P0-4/P0-5 visual-language pass; the standard above is what any of those
 should snap to when they touch property rows.
+
+### P0-4 · Dashboard visually X-Native — DONE (this branch)
+
+The dashboard already spoke the theme's roles and type ladder; the gap was
+phantom affordances, an un-branded lower sidebar, and one off-idiom list:
+
+- **Phantom controls gone.** Three `more-horizontal` icons (recents grid
+  card, list row, drafts row) were painted with no hit region and no menu
+  behind them — removed. The "Personal" sidebar row had a hover fill and a
+  hover chevron but no hit region — demoted to the plain scope label it is.
+  The recents view chip drew a `chevron-down` although clicking it CYCLES
+  the view (no dropdown) — now `rotate-cw`, which is what it does.
+- **THE WORKFLOW in the sidebar.** The sidebar's empty lower half now paints
+  the primary loop — 1 Compose / 2 Flow / 3 Ship, each with a one-line sub —
+  in both the local-first and demo variants. Informational only (no hit
+  region, no hover, no affordance), so it cannot be a phantom; it is where a
+  returning user (onboarding marker already set) sees the loop again.
+- **Primary card names the loop.** The quick-action "New design file" card's
+  sub is now "Compose, flow, ship — from one file" — the entry point says
+  what the file is for.
+- **One list idiom.** The non-demo "Open in this session" panel was bare
+  floating rows (its own species); it now uses the same container as the
+  Drafts panel — rounded card, hline-separated rows, hover wash, file icon,
+  right-aligned count.
+- **Design sheet re-synced** to the non-demo reality both mocks had drifted
+  from: the sheet-only "All changes saved" chip, the demo-only TEAMS list,
+  the "Recently viewed" heading (the app says "Recents" + a view chip), the
+  demo-only search placeholder, and the bulk bar's old Move/Star/Trash
+  buttons (the app has Star / Unstar / Open / Remove from recents) are all
+  corrected; the new workflow rows are drawn in both mocks.
+
+Scope note: the board and the editor's FLOW/SHIP/UX tabs are P0-5's
+cross-screen pass; dashboard control *heights* (32px chips vs the 28px
+inspector rows) are a different idiom (toolbar pills) and are left as is —
+they were never property rows.
 
 ### P0-10 · First-time workflow — DONE (this branch)
 
@@ -157,8 +193,9 @@ that don't exist:
 - **P0-1/2 · Screen & component contract; x-ui as the component layer.**
   x-ui is currently a token repo the app does not import for widgets;
   Button/Input/Select/Section/LayerRow/etc. land there incrementally.
-- **P0-4/5 · Dashboard + cross-screen visual language pass** (should snap
-  property-row surfaces to the P0-9 standard).
+- **P0-5 · Cross-screen visual language pass** — board + the editor's
+  FLOW / SHIP / UX tabs brought onto the editor + dashboard language
+  (property-row surfaces snap to the P0-9 standard).
 - **P1 · Professional editor interaction** (deep select, select-under-cursor,
   smart selection, …).
 - **P2 · Polish/motion.**
