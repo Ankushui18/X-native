@@ -2087,6 +2087,86 @@ fn app_ui_colors_are_derived_from_the_shared_palette() {
     );
 }
 
+// —————————————————————————————————————— screen & component contract (P0-1/2)
+
+/// The app can show three screens, and the component layer holds a contract
+/// row for each. A screen added without one is how a screen ends up with its
+/// own idioms — which is what the cross-screen pass exists to undo.
+#[test]
+fn every_screen_the_app_can_show_is_in_the_contract() {
+    use x_native::ui::{screens, ScreenId};
+
+    for screen in [
+        crate::state::Screen::Dashboard,
+        crate::state::Screen::Editor,
+        crate::state::Screen::Board,
+    ] {
+        let id = match screen {
+            crate::state::Screen::Dashboard => ScreenId::Dashboard,
+            crate::state::Screen::Editor => ScreenId::Editor,
+            crate::state::Screen::Board => ScreenId::Board,
+        };
+        let spec = screens::screen(id).expect("every screen has a contract row");
+        assert_eq!(spec.name, id.name());
+        assert!(!spec.purpose.is_empty());
+        assert!(
+            screens::surfaces_of(id).next().is_some(),
+            "{} owns no surfaces",
+            id.name()
+        );
+    }
+    assert_eq!(
+        screens::SCREENS.len(),
+        3,
+        "the app's Screen enum and the contract must stay in step"
+    );
+}
+
+/// P0-9 moved the control-height scale into the component layer. These
+/// assertions hold the chrome to it: the heights the inspector's rows use are
+/// the scale's, and the two rows the contract still counts as off-standard are
+/// still measured as off-standard (they move in the cross-screen pass).
+#[test]
+fn app_row_heights_are_the_component_layers() {
+    use x_native::ui::metrics;
+
+    assert_eq!(crate::theme::INPUT_H, metrics::CONTROL_H);
+    assert_eq!(crate::theme::DENSE_H, metrics::DENSE_H);
+    assert_eq!(crate::theme::CHIP_H, metrics::CHIP_H);
+    assert_eq!(crate::theme::SQ_BTN, metrics::SQUARE_H);
+    assert_eq!(crate::theme::ROW_GAP, metrics::ROW_GAP);
+    assert_eq!(crate::theme::SECTION_GAP, metrics::SECTION_GAP);
+
+    let rows = [
+        crate::theme::INPUT_H,
+        crate::theme::DENSE_H,
+        crate::theme::CHIP_H,
+        crate::theme::SQ_BTN,
+    ];
+    for h in rows {
+        assert!(
+            metrics::is_control_height(h),
+            "{h} is not a step of the control-height scale"
+        );
+    }
+
+    // the two rows the component contract counts as off-standard today
+    for h in [crate::theme::TREE_ROW_H, crate::theme::DROPDOWN_ROW_H] {
+        assert!(
+            !metrics::is_control_height(h),
+            "{h} is on the scale now — lower OFF_STANDARD_COMPONENTS"
+        );
+    }
+    assert_eq!(
+        metrics::nearest_control_height(crate::theme::TREE_ROW_H),
+        metrics::ControlHeight::Dense
+    );
+    assert_eq!(
+        metrics::nearest_control_height(crate::theme::DROPDOWN_ROW_H),
+        metrics::ControlHeight::Control
+    );
+}
+
 #[test]
 fn theme_resolution_is_identity_until_a_theme_is_selected() {
     use x_native::ui::{ColorTokens, ThemeId};

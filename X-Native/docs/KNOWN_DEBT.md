@@ -165,3 +165,31 @@ step, or to move the registry behind the editor; until then the behaviour that
 *does* hold is pinned by
 `text_styles_create_apply_update_and_detach_end_to_end` in
 `apps/x-designer/src/bin/x_native_app/regression_tests.rs`.
+
+## 11. Two row heights, three panels and six empty states are off the contract
+
+The component contract (`crates/x-ui/src/contract.rs`) and the screen contract
+(`crates/x-ui/src/screens.rs`) count what the cross-screen pass (P0-5) still
+owes, as four ratchets the gate enforces — the registry and the count have to
+agree, so neither can be edited alone:
+
+| Ratchet | Value | What it is |
+|---|---|---|
+| `OFF_STANDARD_SURFACES` | 3 | FLOW, SHIP and UX ANALYSIS own property rows that are not on the control-height scale. |
+| `OFF_STANDARD_COMPONENTS` | 2 | The 22px layer-tree row (should be 24) and the 32px dropdown row (should be 28). |
+| `SILENT_EMPTY_STATES` | 6 | Surfaces that can be empty and say nothing: drafts, STRUCTURE, TOKENS, the SHIP code panel, notifications, the board canvas. |
+| `MIGRATED_TO_X_UI` | 0 | Components whose painter lives in `x-ui`. Every widget is still painted by the designer's chrome. |
+| `DISABLEABLE_COMPONENTS` | 1 | Components that can be unavailable. Only the square icon button can be dimmed; every other control is drawn as always-actionable. |
+
+What it costs: a tree row and a dropdown row are 2px and 4px off the rows they
+sit between, so a panel that mixes them is visibly uneven, and a surface that
+can be empty without saying so leaves the user looking for a control that is
+not there — the failure mode P0-4 and P0-10 were written to remove. The widget
+painters being in the app is not itself a bug; it is why the same component can
+drift apart in two places, which the contract now catches but cannot prevent.
+
+One question the contract surfaced, recorded here so it is answered on purpose:
+a hovered **row** is painted `surface_elevated` (`C_ROW_HOVER`), the same role a
+resting **field** uses (`C_FIELD`), while the state language says hover is
+`surface_hover` — as inputs already do. Either a row hover is its own wash step
+or the contract needs a second hover entry.

@@ -288,22 +288,36 @@ pub const NEW_TAB_W: f64 = 32.0;
 pub const TAB_MIN_W: f64 = 120.0;
 pub const TAB_PAD_L: f64 = 12.0;
 pub const TAB_PAD_R: f64 = 10.0;
+/// Layer-tree rows: 22px, 2px under the standard's dense row. The component
+/// contract (`x_native::ui::contract`) counts it as off-standard; the
+/// cross-screen pass snaps it to 24 with the rows it shares a panel with.
 pub const TREE_ROW_H: f64 = 22.0;
 pub const TREE_INDENT: f64 = 12.0;
-pub const INPUT_H: f64 = 28.0;
+// ——————————————————————————————————————————————— the control-height standard
+// Refinement v1, P0-9. The scale is declared in the component layer
+// (`x_native::ui::metrics`) and imported here rather than restated: every
+// surface that owns property rows — the COMPOSE inspector today, FLOW / SHIP /
+// UX ANALYSIS after the cross-screen pass — then reads one definition, and a
+// row height no scale contains cannot be introduced by editing this file.
+// The values are unchanged; only where they come from moved.
+pub const INPUT_H: f64 = x_native::ui::metrics::CONTROL_H;
 /// Dense rows: disclosure / summary toggles ("Advanced" rows, clip content,
 /// Fixed|Fill segments). One step below the standard input.
-pub const DENSE_H: f64 = 24.0;
+pub const DENSE_H: f64 = x_native::ui::metrics::DENSE_H;
 /// Checkboxes, switches and inline chips (Hug/Fixed, padding glyph).
-pub const CHIP_H: f64 = 16.0;
+pub const CHIP_H: f64 = x_native::ui::metrics::CHIP_H;
 pub const PILL_H: f64 = 30.0;
-pub const SQ_BTN: f64 = 28.0;
+pub const SQ_BTN: f64 = x_native::ui::metrics::SQUARE_H;
 /// Inspector vertical rhythm (Refinement v1, P0-9): row→label 8,
 /// label→control 6, row→row 8, row→hline 12, hline→next section 12.
 /// These name the GAPS; measured y-offsets stay literal.
-pub const ROW_GAP: f64 = SP_3;
+pub const ROW_GAP: f64 = x_native::ui::metrics::ROW_GAP;
+/// The label→control gap. It stays on this file's 6px spacing alias rather
+/// than importing the component layer's: both name the same shared step
+/// (`SpacingScale::SPACE_2`), so there is nothing to drift, and the alias is
+/// the one this file hands to spacing that is not a gap between rows.
 pub const LABEL_GAP: f64 = SP_2;
-pub const SECTION_GAP: f64 = 12.0;
+pub const SECTION_GAP: f64 = x_native::ui::metrics::SECTION_GAP;
 pub const TOOLBAR_H: f64 = 40.0;
 pub const TOOL_ICON: f64 = 32.0;
 pub const TOOLBAR_BOTTOM: f64 = 20.0;

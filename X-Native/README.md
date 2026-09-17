@@ -104,7 +104,11 @@ app shell, home, tool rail, pages + layers, contextual inspector, status bar,
 command palette. Runtime behavior uses real local documents; fixture content is
 available only via `--demo`. See the [capability map](docs/UI_CAPABILITY_MAP.md),
 [icon system](docs/ICON_SYSTEM.md), [product direction](docs/X_NATIVE_PROFESSIONAL_UI.md)
-and [roadmap](docs/X_NATIVE_IMPLEMENTATION_ROADMAP.md).
+and [roadmap](docs/X_NATIVE_IMPLEMENTATION_ROADMAP.md). The chrome is held to a
+contract in `crates/x-ui`: the [screen contract](docs/SCREEN_CONTRACT.md) lists
+every surface and what it owes, and the
+[component contract](docs/COMPONENT_CONTRACT.md) the components they are built
+from — heights, states, hit regions and who paints each one.
 
 ## Build
 
