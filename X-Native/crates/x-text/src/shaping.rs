@@ -9,7 +9,7 @@
 
 use crate::font::FontManager;
 use std::collections::HashMap;
-use vello::kurbo::{Affine, BezPath, PathEl, Point};
+use vello::kurbo::{Affine, BezPath, PathEl, Point, Shape};
 use vello::peniko::{Color, Fill};
 use vello::Scene;
 
@@ -1735,7 +1735,7 @@ mod tests {
         let minx = |glyphs: &[OutlineGlyph]| -> Vec<(f64, f64)> {
             let mut acc: Vec<(f64, f64)> = vec![];
             for g in glyphs {
-                let (x, y) = g.transform.translation();
+                let (x, y) = (g.transform.translation().x, g.transform.translation().y);
                 match acc.iter_mut().find(|(by, _)| (by - y).abs() < 0.1) {
                     Some(e) if x < e.1 => e.1 = x,
                     Some(_) => {}
