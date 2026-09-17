@@ -351,36 +351,40 @@ design system makes the next screen cheap to build.
 | dashboard | Trash was a dead end ("No files in Trash" and nothing else) | real empty state + "Back to Home" action; it also says nothing is removed until you empty it |
 | placeholder text | exempt from the audit and failing AA in all three palettes (Graphite 2.56:1) | audited at 4.5:1 like any text role; `#939AA6` / `#5B6274` / `#B8B8B8`, each still dimmer than `text_dim` |
 | panels | the resize seam lit up but said nothing | the seam goes accent and grows a centred grip pill on hover/drag |
+| dashboard | one column of cards, no sort, no multi-select, no bulk actions | the browser is now one list behind paint *and* actions (`visible_files()`): Edited / Name / Starred-first sort with a menu, a table whose NAME / TEAM / EDITED headers are clickable, multi-select (click, ⌘/Ctrl-click, ⌘/Ctrl+A) and a bulk bar that only exists while something is selected; Escape unwinds menu → selection → ring |
+| right panel | a fill was a hex field and nothing else — the engine had variables (`Paint::Variable`) and paint styles (`bindings["style:paint"]`) with no way to reach either | the fill/stroke row shows **what the paint is linked to** (the variable's or style's name, not the hex it happens to resolve to) and grows the library button: a popover listing the file's colour variables (resolved through the active mode) and paint styles, the layer's current link checked, and a "Detach — keep this colour" row. A bound fill is a link, not a copy: editing the variable repaints every consumer, and detaching freezes the colour that was on screen. Paint styles are fill styles in this engine, so the stroke row offers variables only and says so |
 
 ### The critic's open list — ranked by how much it would lift the product
 
-**1. The dashboard's information architecture is thin for a workspace.**
-There is one column of cards, one 3-up grid and a drafts list. Figma's browser
-carries: a real table view (name / team / edited / size, sortable, with hover
-actions), project grouping with move-between-teams, "shared with me" and team
-sections, multi-select with a bulk bar, and a sort control. Ours has
-`DashView::{Home, Recents, Starred, Trash}` and no sort, no multi-select, no
-project grouping. *This is the largest single gap.*
+*Shipped since this list was written: the dashboard's sorting / table /
+multi-select (item 4) and the right panel's variables-and-styles surface
+(item 3) — see the table above. Each entry keeps what is still missing.*
 
-**2. The canvas reads as an editor but has no spatial navigation aids.**
+**1. The canvas reads as an editor but has no spatial navigation aids.**
 No minimap, no "zoom to fit all pages", no page thumbnail strip, and the ruler
 has no live guide readout while dragging (the guide line exists; the numeric
 feedback does not). Figma's ruler + guide readout and its page thumbnails are
 what make a large document feel small.
 
-**3. The left panel has the panes but not the workflows.**
+**2. The left panel has the panes but not the workflows.**
 LAYERS / ASSETS / TOKENS pills exist, pages are listed, the tree supports
 drag-drop (P12). Missing vs Figma: component *instances* have no "go to main
 component" affordance in the row, assets have no search field, and there is no
 "select matching" / "show all instances" action on a component.
 
-**4. The right panel is the most under-used real estate.**
-Four tabs (COMPOSE / FLOW / SHIP / UX ANALYSIS) with per-node sections. Missing
-vs Figma: **variables and styles editing surface** (the data model exists —
-the audit flagged this before and it is still the biggest feature gap), a
-shared-styles list with "apply to selection", and constraint/auto-layout
-controls that show the resolved values (they exist per-node but the panel does
-not expose the *resolved* box model the way Figma's does).
+**3. The right panel applies variables and styles but still cannot edit a
+style or show the resolved box model.**
+A fill or stroke can now be bound to a colour variable or linked to a paint
+style from the row, and detached without moving a pixel. Variables themselves
+are edited in the left rail (create / delete / rename / toggle / step / undo).
+Still missing vs Figma: updating a paint or effect style *from* the selection
+(text styles already do this), a styles list grouped by library with "apply to
+selection", and constraint/auto-layout controls that show the resolved values
+the panel currently keeps per-node.
+
+**4. The dashboard has no project or team grouping.**
+Sorting, a real table, multi-select and bulk actions landed this pass; grouping
+by project, "move between teams", and a "shared with me" section did not.
 
 **5. Comments and flows are single-threaded.**
 Comments: one open thread at a time, no resolve-all, no filter by author.

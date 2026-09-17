@@ -2657,6 +2657,190 @@ impl App {
         detached
     }
 
+    // -------------------------------------------------------- paint library
+    //
+    // Figma's fill/stroke row carries two kinds of *link*, and this engine has
+    // a representation for both:
+    //
+    //  * a **variable** — `Paint::Variable(name)`, resolved through the
+    //    document's active mode by `paint_color`, so editing the variable
+    //    repaints every layer that binds it;
+    //  * a **paint style** — `bindings["style:paint"] = name`, resolved by
+    //    `resolve_styles` from `Document.styles` (the same link the text
+    //    styles above use for typography).
+    //
+    // Both are edited from the right panel's fill row (`paint_paint_row`)
+    // through the popover in `editor_ui::paint_paint_library`.
+
+    /// The paint a row shows for `id`: the top visual-stack layer when the
+    /// stacks are materialized, else the scalar field.
+    pub fn paint_of(&self, id: &str, is_fill: bool) -> Option<Paint> {
+        let root = &self.doc_ref().editor_ref().root;
+        let n = crate::editor_ui::find_node(root, id)?;
+        Some(if is_fill {
+            match n.fill_layers.last() {
+                Some(l) => l.paint.clone(),
+                None => n.fill.clone(),
+            }
+        } else {
+            match n.stroke_layers.last() {
+                Some(l) => l.stroke.paint.clone(),
+                None => n.stroke.paint.clone(),
+            }
+        })
+    }
+
+    /// Paint style `id` is linked to, if any.
+    pub fn linked_paint_style(&self, id: &str) -> Option<String> {
+        let root = &self.doc_ref().editor_ref().root;
+        crate::editor_ui::find_node(root, id)?
+            .bindings
+            .get("style:paint")
+            .cloned()
+    }
+
+    /// Write `paint` into every selected layer's fill (or stroke). One atomic
+    /// undo step per layer, and both representations are kept in step the way
+    /// `apply_style` does: the scalar field and the top visual-stack layer.
+    pub fn set_paint_on_selection(&mut self, is_fill: bool, paint: Paint) -> usize {
+        let ids: Vec<String> = self.doc_ref().editor_ref().selection.clone();
+        let mut painted = 0usize;
+        for id in ids {
+            let p = paint.clone();
+            let ok = self
+                .doc()
+                .editor()
+                .mutate_visual_stack(id.as_str(), move |n| {
+                    if is_fill {
+                        if let Some(layer) = n.fill_layers.last_mut() {
+                            layer.paint = p.clone();
+                        } else {
+                            n.fill_layers.push(x_native::PaintLayer::new(p.clone()));
+                        }
+                        n.fill = p;
+                    } else {
+                        let mut stroke = n.stroke.clone();
+                        stroke.paint = p;
+                        // a bound stroke with no weight would paint nothing:
+                        // give it the 1px a stroke-colour edit gives one
+                        if stroke.width <= 0.0 {
+                            stroke.width = 1.0;
+                        }
+                        n.stroke = stroke.clone();
+                        if let Some(layer) = n.stroke_layers.last_mut() {
+                            layer.stroke = stroke;
+                        } else {
+                            n.stroke_layers.push(x_native::StrokeLayer::new(stroke));
+                        }
+                    }
+                });
+            if ok {
+                painted += 1;
+            }
+        }
+        painted
+    }
+
+    /// Bind the selection's fill (or stroke) to the colour variable `name`.
+    /// Returns the layers bound; 0 when the variable does not exist.
+    pub fn apply_paint_variable(&mut self, is_fill: bool, name: &str) -> usize {
+        if !self.doc_ref().doc.variables.colors.contains_key(name) {
+            return 0;
+        }
+        let painted = self.set_paint_on_selection(is_fill, Paint::Variable(name.to_string()));
+        if painted > 0 {
+            self.mark_dirty();
+            self.doc().sync();
+        }
+        painted
+    }
+
+    /// Apply the paint style `name` to the selection's fill and link the
+    /// layers to it. Paint styles are *fill* styles in this engine
+    /// (`LegacyStyle::Paint { fill }`), so a stroke row offers variables only.
+    pub fn apply_paint_style(&mut self, name: &str) -> usize {
+        let Some(style) = self.doc_ref().doc.styles.get(name).cloned() else {
+            return 0;
+        };
+        if !matches!(style, LegacyStyle::Paint { .. }) {
+            return 0;
+        }
+        let ids: Vec<String> = self.doc_ref().editor_ref().selection.clone();
+        let mut linked = 0usize;
+        for id in ids {
+            let style = style.clone();
+            let ok = self
+                .doc()
+                .editor()
+                .mutate_visual_stack(id.as_str(), move |n| {
+                    bind_style(n, name, &style);
+                });
+            if ok {
+                linked += 1;
+            }
+        }
+        if linked > 0 {
+            self.mark_dirty();
+            self.doc().sync();
+        }
+        linked
+    }
+
+    /// Detach the selection's fill (or stroke) from whatever it is linked to:
+    /// the `style:paint` binding goes and a variable-backed paint becomes the
+    /// solid colour it resolves to today, so nothing on screen moves.
+    pub fn detach_paint_binding(&mut self, is_fill: bool) -> usize {
+        let ids: Vec<String> = self.doc_ref().editor_ref().selection.clone();
+        let vars = self.doc_ref().doc.variables.clone();
+        let mut detached = 0usize;
+        for id in ids {
+            let linked_style = self.linked_paint_style(id.as_str()).is_some();
+            let is_var = matches!(
+                self.paint_of(id.as_str(), is_fill),
+                Some(Paint::Variable(_))
+            );
+            if !linked_style && !is_var {
+                continue;
+            }
+            // only a variable-backed paint has a colour to freeze; a style
+            // link detaches with the values it already wrote
+            let frozen = if is_var {
+                self.paint_of(id.as_str(), is_fill)
+                    .map(|p| Paint::Solid(x_native::paint_color(&p, &vars)))
+            } else {
+                None
+            };
+            self.doc()
+                .editor()
+                .mutate_visual_stack(id.as_str(), move |n| {
+                    if is_fill {
+                        x_native::detach_style(n, "style:paint");
+                    }
+                    if let Some(p) = frozen.clone() {
+                        if is_fill {
+                            if let Some(layer) = n.fill_layers.last_mut() {
+                                layer.paint = p.clone();
+                            }
+                            n.fill = p;
+                        } else {
+                            let mut stroke = n.stroke.clone();
+                            stroke.paint = p;
+                            n.stroke = stroke.clone();
+                            if let Some(layer) = n.stroke_layers.last_mut() {
+                                layer.stroke = stroke;
+                            }
+                        }
+                    }
+                });
+            detached += 1;
+        }
+        if detached > 0 {
+            self.mark_dirty();
+            self.doc().sync();
+        }
+        detached
+    }
+
     /// Push the selected layer's current typography into the style it is
     /// linked to, then re-resolve every page (Figma's "Update style").
     /// Returns the consumers re-resolved; None when the selection is not
@@ -3349,6 +3533,7 @@ impl Host {
             if self.app.dropdown_text_style {
                 self.app.dropdown_text_style = false;
             }
+            self.app.paint_lib = None;
 
             // chrome hit zones
             for (r, a) in self.app.hit.iter().rev() {
@@ -3404,6 +3589,7 @@ impl Host {
         if self.app.dropdown_text_style {
             self.app.dropdown_text_style = false;
         }
+        self.app.paint_lib = None;
 
         // Color popovers are modal to the inspector. Consume clicks inside
         // the popup and close without editing the canvas when the click lands
@@ -5848,11 +6034,13 @@ impl Host {
                     || self.app.dropdown_zoom
                     || self.app.dropdown_lh
                     || self.app.dropdown_text_style
+                    || self.app.paint_lib.is_some()
                 {
                     self.app.dropdown_frame = false;
                     self.app.dropdown_zoom = false;
                     self.app.dropdown_lh = false;
                     self.app.dropdown_text_style = false;
+                    self.app.paint_lib = None;
                 } else if self.app.screen == Screen::Editor {
                     // P12: an in-flight tree drag cancels first
                     if matches!(self.app.drag, Some(Drag::TreeRow { .. })) {
@@ -9701,6 +9889,44 @@ impl Host {
                     self.app.status = "Nothing to undo in variables".into();
                 }
             }
+            Action::PaintLibToggle(is_fill) => {
+                self.app.paint_lib = if self.app.paint_lib == Some(is_fill) {
+                    None
+                } else {
+                    Some(is_fill)
+                };
+            }
+            Action::PaintLibClose => self.app.paint_lib = None,
+            Action::ApplyPaintVariable(is_fill, name) => {
+                self.app.paint_lib = None;
+                self.app.doc().checkpoint();
+                let n = self.app.apply_paint_variable(is_fill, name.as_str());
+                self.app.status = if n > 0 {
+                    let row = if is_fill { "fill" } else { "stroke" };
+                    format!("Bound the {row} of {n} layer(s) to '{name}'")
+                } else {
+                    format!("No colour variable named '{name}'")
+                };
+            }
+            Action::ApplyPaintStyle(name) => {
+                self.app.paint_lib = None;
+                self.app.doc().checkpoint();
+                let n = self.app.apply_paint_style(name.as_str());
+                self.app.status = if n > 0 {
+                    format!("Applied paint style '{name}' to {n} layer(s)")
+                } else {
+                    format!("'{name}' is not a paint style")
+                };
+            }
+            Action::DetachPaintBinding(is_fill) => {
+                self.app.paint_lib = None;
+                let n = self.app.detach_paint_binding(is_fill);
+                self.app.status = if n > 0 {
+                    format!("Detached {n} layer(s) — the colour stays")
+                } else {
+                    "Nothing in the selection is linked to a variable or style".into()
+                };
+            }
             Action::LibCheckUpdate(i) => self.cmd_lib_check_update(i),
             Action::LibReviewAccept => {
                 let Some(rv) = self.app.lib_review.clone() else {
@@ -11204,7 +11430,10 @@ pub fn cursor_for(app: &App) -> CursorIcon {
         Screen::Board => CursorIcon::Default,
         Screen::Editor => {
             let reg = app.editor_regions();
-            if resizer_at(app, app.mouse).is_some() {
+            if crate::editor_ui::paint_lib_rect(app).is_some_and(|r| r.contains(app.mouse)) {
+                // an open popover advertises its rows like any other control
+                CursorIcon::Pointer
+            } else if resizer_at(app, app.mouse).is_some() {
                 CursorIcon::EwResize
             } else if matches!(app.drag, Some(Drag::Pan { .. })) {
                 CursorIcon::Grabbing

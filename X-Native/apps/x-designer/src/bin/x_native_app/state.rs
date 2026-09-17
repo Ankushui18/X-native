@@ -491,6 +491,17 @@ pub enum Action {
     VarStep(String, f64),
     /// Undo the last variable-table edit on the open document.
     VarUndoVars,
+    /// Right-panel paint library (Figma's fill/stroke variable + style
+    /// picker): open it for the named row, close it, or apply an entry.
+    /// The `bool` is `is_fill` — the row this popover belongs to.
+    PaintLibToggle(bool),
+    PaintLibClose,
+    /// Bind the selected layers' fill/stroke to a colour variable.
+    ApplyPaintVariable(bool, String),
+    /// Apply a named paint style to the selected layers' fill.
+    ApplyPaintStyle(String),
+    /// Detach the variable / paint-style link, keeping the colour it shows.
+    DetachPaintBinding(bool),
     /// Libraries: pick an updated .xlib for pinned dependency `usize` and
     /// open the diff review (Assets panel LIBRARIES section).
     LibCheckUpdate(usize),
@@ -1932,6 +1943,12 @@ pub struct App {
     pub dropdown_lh: bool,
     /// Typography panel: text-style picker (Figma's styles button)
     pub dropdown_text_style: bool,
+    /// Paint library popover: `Some(true)` for the fill row, `Some(false)`
+    /// for the stroke row. Only one panel row at a time (Figma parity).
+    pub paint_lib: Option<bool>,
+    /// Where that popover paints, recorded by the row that opened it (panel
+    /// y depends on the scroll offset, so the row knows the anchor).
+    pub paint_lib_at: Option<(f64, f64)>,
     /// Font browser opened from the typography family field.
     pub font_picker_open: bool,
     /// Viewport rulers (Shift+R). Off by default — the HTML mock has none.
@@ -2125,6 +2142,8 @@ impl App {
             tooltip: Vec::new(),
             dropdown_lh: false,
             dropdown_text_style: false,
+            paint_lib: None,
+            paint_lib_at: None,
             font_picker_open: false,
             rulers: false,
             // canvas matches the HTML `.canvas` token; grid per the design

@@ -2763,3 +2763,189 @@ fn the_sort_menu_picks_an_order_and_closes() {
         .iter()
         .any(|(_, a)| matches!(a, Action::DashSortBy(_))));
 }
+
+// ------------------------------------------------------- paint library
+
+/// A host with one rect selected and a colour variable to bind.
+fn paint_library_host() -> Host {
+    let mut h = host();
+    let root_id = h.app.doc_ref().editor_ref().root.id.clone();
+    let n = Node::rect("v1", 40.0, 40.0, 60.0, 60.0, Color::BLACK);
+    h.app.doc().editor().insert_node(&root_id, n);
+    h.app.doc().editor().selection = vec!["v1".into()];
+    h.app
+        .doc()
+        .doc
+        .variables
+        .colors
+        .insert("brand/signal".into(), Color::from_rgb8(0x2F, 0x6B, 0xFF));
+    h
+}
+
+fn rgba(c: Color) -> (u8, u8, u8, u8) {
+    let p = c.to_rgba8();
+    (p.r, p.g, p.b, p.a)
+}
+
+/// Binding a fill to a variable must be a LINK, not a colour copy: editing the
+/// variable repaints every consumer without touching a node.
+#[test]
+fn a_bound_fill_follows_the_variable_it_names() {
+    let mut h = paint_library_host();
+    h.dispatch(Action::ApplyPaintVariable(true, "brand/signal".into()));
+    let paint = h.app.paint_of("v1", true).expect("v1 exists");
+    assert!(
+        matches!(&paint, Paint::Variable(n) if n == "brand/signal"),
+        "the fill must become the variable, found {paint:?}"
+    );
+    let before = {
+        let vars = &h.app.doc_ref().doc.variables;
+        rgba(x_native::paint_color(&paint, vars))
+    };
+    assert_eq!(before, (0x2F, 0x6B, 0xFF, 255));
+    assert_eq!(
+        h.app
+            .doc_ref()
+            .doc
+            .variables
+            .color("brand/signal", Color::BLACK),
+        Color::from_rgb8(0x2F, 0x6B, 0xFF)
+    );
+
+    // the document owner edits the variable: the layer follows, no node edit
+    h.app
+        .doc()
+        .doc
+        .variables
+        .colors
+        .insert("brand/signal".into(), Color::from_rgb8(0xFF, 0x00, 0x00));
+    let after = {
+        let paint = h.app.paint_of("v1", true).expect("v1 exists");
+        let vars = &h.app.doc_ref().doc.variables;
+        rgba(x_native::paint_color(&paint, vars))
+    };
+    assert_eq!(after, (0xFF, 0x00, 0x00, 255), "the binding is live");
+}
+
+/// Detach keeps the colour that was on screen: the link goes, the pixels stay.
+#[test]
+fn detaching_keeps_the_colour_the_variable_painted() {
+    let mut h = paint_library_host();
+    h.dispatch(Action::ApplyPaintVariable(true, "brand/signal".into()));
+    h.dispatch(Action::DetachPaintBinding(true));
+    let paint = h.app.paint_of("v1", true).expect("v1 exists");
+    assert!(
+        matches!(paint, Paint::Solid(c) if rgba(c) == (0x2F, 0x6B, 0xFF, 255)),
+        "detach must freeze the resolved colour, found {paint:?}"
+    );
+    // and the document is unchanged by a later variable edit
+    h.app
+        .doc()
+        .doc
+        .variables
+        .colors
+        .insert("brand/signal".into(), Color::from_rgb8(0x00, 0xFF, 0x00));
+    let paint = h.app.paint_of("v1", true).expect("v1 exists");
+    assert!(matches!(paint, Paint::Solid(c) if rgba(c) == (0x2F, 0x6B, 0xFF, 255)));
+}
+
+/// A paint style is a fill style: applying it links the layer, and the stroke
+/// row says so instead of offering something that would not work.
+#[test]
+fn a_paint_style_links_the_fill_and_the_stroke_row_says_so() {
+    let mut h = paint_library_host();
+    h.app.doc().doc.styles.insert(
+        "Brand/Primary".into(),
+        x_native::LegacyStyle::Paint {
+            fill: Paint::Solid(Color::from_rgb8(0x11, 0x22, 0x33)),
+        },
+    );
+    h.dispatch(Action::ApplyPaintStyle("Brand/Primary".into()));
+    assert_eq!(
+        h.app.linked_paint_style("v1").as_deref(),
+        Some("Brand/Primary"),
+        "applying a paint style links the layer"
+    );
+    let paint = h.app.paint_of("v1", true).expect("v1 exists");
+    assert!(matches!(paint, Paint::Solid(c) if rgba(c) == (0x11, 0x22, 0x33, 255)));
+
+    // the popover offers the style on the fill row…
+    h.dispatch(Action::PaintLibToggle(true));
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let rows: Vec<Action> = h.app.hit.iter().map(|(_, a)| a.clone()).collect();
+    assert!(
+        rows.iter()
+            .any(|a| matches!(a, Action::ApplyPaintStyle(n) if n == "Brand/Primary")),
+        "the fill popover lists the file's paint styles"
+    );
+    assert!(
+        rows.iter()
+            .any(|a| matches!(a, Action::ApplyPaintVariable(true, n) if n == "brand/signal")),
+        "and its colour variables"
+    );
+
+    // …and only variables on the stroke row
+    h.dispatch(Action::PaintLibToggle(false));
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let rows: Vec<Action> = h.app.hit.iter().map(|(_, a)| a.clone()).collect();
+    assert!(
+        rows.iter()
+            .any(|a| matches!(a, Action::ApplyPaintVariable(false, n) if n == "brand/signal")),
+        "the stroke popover binds variables"
+    );
+    assert!(
+        !rows.iter().any(|a| matches!(a, Action::ApplyPaintStyle(_))),
+        "a fill style must not be offered on a stroke row"
+    );
+}
+
+/// The popover is a real popover: the pointer advertises its rows and Escape
+/// unwinds it before anything else.
+#[test]
+fn the_paint_library_advertises_itself_and_escape_closes_it() {
+    let mut h = paint_library_host();
+    h.dispatch(Action::PaintLibToggle(true));
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let rect = crate::editor_ui::paint_lib_rect(&h.app).expect("the popover has a rect");
+    h.app.mouse = rect.center();
+    assert_eq!(
+        cursor_for(&h.app),
+        CursorIcon::Pointer,
+        "rows inside the popover are clickable"
+    );
+    // the click the user makes: press on the variable's row and it applies
+    let row = h
+        .app
+        .hit
+        .iter()
+        .rev()
+        .find_map(|(r, a)| match a {
+            Action::ApplyPaintVariable(true, n) if n == "brand/signal" => Some(*r),
+            _ => None,
+        })
+        .expect("the variable has a row in the popover");
+    h.on_press(row.center());
+    assert!(
+        matches!(h.app.paint_of("v1", true), Some(Paint::Variable(ref n)) if n == "brand/signal"),
+        "clicking the row binds the fill"
+    );
+    assert_eq!(h.app.paint_lib, None, "and closes the popover");
+
+    // Escape unwinds an open popover before it touches the selection
+    h.dispatch(Action::PaintLibToggle(true));
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    h.on_key(Key::Named(NamedKey::Escape), None);
+    assert_eq!(h.app.paint_lib, None, "Escape closes the popover first");
+    assert!(
+        h.app
+            .doc_ref()
+            .editor_ref()
+            .selection
+            .contains(&"v1".into()),
+        "and does not cost the selection"
+    );
+}

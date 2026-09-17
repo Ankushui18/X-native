@@ -29,6 +29,7 @@ use crate::theme::*;
 
 pub fn paint(app: &mut App, s: &mut Scene) {
     app.tooltip.clear();
+    app.paint_lib_at = None;
     let mut hit: Vec<(Rect, Action)> = Vec::new();
     fill_rect(s, Rect::new(0.0, 0.0, app.win_w, app.win_h), C_BG);
     if app.flow.is_some() {
@@ -61,6 +62,9 @@ pub fn paint(app: &mut App, s: &mut Scene) {
     }
     if app.dropdown_zoom {
         paint_zoom_dropdown(app, s, &mut hit);
+    }
+    if app.paint_lib.is_some() {
+        paint_paint_library(app, s, &mut hit);
     }
     if app.palette.open {
         paint_palette(app, s, &mut hit);
@@ -3002,6 +3006,7 @@ fn paint_design(
     let pl = 12.0;
     let x0 = rx + pl + 1.0; // 1113 @1440: 1px panel border + 12px padding
     if app.doc().editor_ref().selection.is_empty() {
+        app.paint_lib = None;
         paint_design_empty(app, s, hit, x0, rx + rw - pl, y0);
         return;
     }
@@ -5259,8 +5264,9 @@ fn paint_paint_row(
 ) -> f64 {
     let inner_w = rw - pl * 2.0;
     let h = 28.0;
-    // hex field + pipette 24 + alpha % 64 + eye 24 + remove 24, gaps of 8
-    let hex_w = inner_w - 64.0 - 24.0 - 24.0 - 24.0 - 8.0 * 4.0;
+    // hex field + library 24 + pipette 24 + alpha % 64 + eye 24 + remove 24,
+    // gaps of 8 (the library button is Figma's fill-row variable/style picker)
+    let hex_w = inner_w - 64.0 - 24.0 * 4.0 - 8.0 * 5.0;
     let r = Rect::new(rx + pl, y, rx + pl + hex_w, y + h);
     let hov = hover(app, r);
     fill_rrect(s, r, R_MD, if hov { C_INPUT_HOVER } else { C_FIELD });
@@ -5274,7 +5280,29 @@ fn paint_paint_row(
     if hover(app, sw) {
         stroke_rrect(s, sw.inflate(1.5, 1.5), R_SM, C_ACCENT, 1.5);
     }
-    let shown = field_val(app, hex_field, hex.to_string());
+    // A bound fill shows WHAT it is bound to, not the value it happens to
+    // resolve to: the variable's name (Figma's fill row) or the style's.
+    let selected = app.doc().selected_id();
+    let var_name = selected
+        .as_deref()
+        .and_then(|id| match app.paint_of(id, is_fill) {
+            Some(Paint::Variable(n)) => Some(n),
+            _ => None,
+        });
+    let linked_style = selected
+        .as_deref()
+        .and_then(|id| app.linked_paint_style(id));
+    // ...unless the field is open: what the user is typing always wins
+    let editing = app.field.as_ref().is_some_and(|f| f.id == hex_field);
+    let shown = if editing {
+        field_val(app, hex_field, hex.to_string())
+    } else {
+        match (&var_name, &linked_style) {
+            (Some(n), _) => n.clone(),
+            (None, Some(n)) => n.clone(),
+            (None, None) => field_val(app, hex_field, hex.to_string()),
+        }
+    };
     app.fonts
         .text(s, sw.x1 + 8.0, y + 8.0, &shown, T11, C_TEXT, Wt::Mono);
     // Register the broad text field first so the later, smaller swatch hit
@@ -5297,7 +5325,42 @@ fn paint_paint_row(
     );
     tip(app, pd, "Eyedropper: sample a layer's fill / stroke");
     hit.push((pd, Action::EnableEyedropper(!is_fill)));
-    let ar = Rect::new(pd.x1 + 8.0, y, pd.x1 + 8.0 + 64.0, y + h);
+    // the paint library: variables and paint styles for this row
+    let lr = Rect::new(pd.x1 + 8.0, y + 2.0, pd.x1 + 8.0 + 24.0, y + 26.0);
+    let lib_open = app.paint_lib == Some(is_fill);
+    let bound = var_name.is_some() || linked_style.is_some();
+    if hover(app, lr) || lib_open || bound {
+        fill_rrect(s, lr, R_MD, if lib_open { C_SEL } else { C_FIELD_2 });
+    }
+    draw_icon(
+        s,
+        "grid-2x2",
+        lr.x0 + 5.0,
+        lr.y0 + 5.0,
+        ICON_SM,
+        if lib_open {
+            C_ACCENT_INK
+        } else if bound {
+            C_TEXT
+        } else {
+            C_DIM
+        },
+    );
+    tip(
+        app,
+        lr,
+        if bound {
+            "Linked — rebind, or detach to keep this colour"
+        } else {
+            "Bind to a variable / apply a paint style"
+        },
+    );
+    hit.push((lr, Action::PaintLibToggle(is_fill)));
+    if lib_open {
+        // the popover anchors to this row (panel y depends on the scroll)
+        app.paint_lib_at = Some((rx + pl, y + h + 4.0));
+    }
+    let ar = Rect::new(lr.x1 + 8.0, y, lr.x1 + 8.0 + 64.0, y + h);
     input(
         app,
         s,
@@ -5539,6 +5602,230 @@ fn paint_text_style_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, 
         );
         if let Some(a) = action {
             hit.push((r, a));
+        }
+    }
+}
+
+// -------------------------------------------------------- paint library
+
+/// One row of the fill/stroke library popover. `Section` and `Note` are inert;
+/// every `Item` carries the action its click dispatches.
+enum LibRow {
+    Section(&'static str),
+    Note(String),
+    Item {
+        label: String,
+        swatch: Option<Color>,
+        icon: Option<&'static str>,
+        active: bool,
+        action: Action,
+    },
+}
+
+const LIB_W: f64 = 300.0;
+const LIB_ITEM_H: f64 = 26.0;
+const LIB_SECTION_H: f64 = 24.0;
+const LIB_NOTE_H: f64 = 22.0;
+const LIB_MAX_VARS: usize = 8;
+const LIB_MAX_STYLES: usize = 6;
+
+/// The popover's rect and rows for this frame. Pure, so the painter and the
+/// pointer-cursor test read the same thing: what is drawn and what is
+/// clickable cannot disagree (the same rule as the dashboard's hit list).
+fn paint_library(app: &App) -> Option<(Rect, Vec<LibRow>)> {
+    let is_fill = app.paint_lib?;
+    let (ax, ay) = app.paint_lib_at?;
+    let selected = app.doc_ref().selected_id();
+    let bound_var = selected
+        .as_deref()
+        .and_then(|id| match app.paint_of(id, is_fill) {
+            Some(Paint::Variable(n)) => Some(n),
+            _ => None,
+        });
+    let linked_style = selected
+        .as_deref()
+        .and_then(|id| app.linked_paint_style(id));
+
+    // what the file has to offer: colour variables (active mode resolved) and
+    // paint styles, both sorted by name
+    let doc = &app.doc_ref().doc;
+    let vars: Vec<(String, Color)> = doc
+        .variables
+        .catalog()
+        .into_iter()
+        .filter(|(_, _, kind)| *kind == "color")
+        .map(|(_, name, _)| {
+            // resolves aliases and the active mode; the fallback role only
+            // shows if a name vanished between the catalog and this call
+            let c = doc.variables.color(name.as_str(), C_MUTED);
+            (name, c)
+        })
+        .collect();
+    let mut styles: Vec<(String, Color)> = doc
+        .styles
+        .iter()
+        .filter_map(|(name, st)| match st {
+            x_native::LegacyStyle::Paint { fill } => {
+                Some((name.clone(), x_native::paint_color(fill, &doc.variables)))
+            }
+            _ => None,
+        })
+        .collect();
+    styles.sort();
+
+    let mut rows = Vec::new();
+    rows.push(LibRow::Section(if is_fill { "FILL" } else { "STROKE" }));
+    rows.push(LibRow::Section("VARIABLES"));
+    if vars.is_empty() {
+        rows.push(LibRow::Note("No colour variables in this file".into()));
+    } else {
+        for (name, c) in vars.iter().take(LIB_MAX_VARS) {
+            rows.push(LibRow::Item {
+                label: name.clone(),
+                swatch: Some(*c),
+                icon: None,
+                active: bound_var.as_deref() == Some(name.as_str()),
+                action: Action::ApplyPaintVariable(is_fill, name.clone()),
+            });
+        }
+        if vars.len() > LIB_MAX_VARS {
+            let extra = vars.len() - LIB_MAX_VARS;
+            rows.push(LibRow::Note(format!("+{extra} more in Variables (⌥5)")));
+        }
+    }
+    rows.push(LibRow::Section("PAINT STYLES"));
+    if !is_fill {
+        // a paint style is `LegacyStyle::Paint { fill }`: applying one to a
+        // stroke would be a lie, so the stroke row says so instead
+        rows.push(LibRow::Note(
+            "This engine's paint styles are fills — bind a variable here".into(),
+        ));
+    } else if styles.is_empty() {
+        rows.push(LibRow::Note("No paint styles in this file".into()));
+    } else {
+        for (name, c) in styles.iter().take(LIB_MAX_STYLES) {
+            rows.push(LibRow::Item {
+                label: name.clone(),
+                swatch: Some(*c),
+                icon: None,
+                active: linked_style.as_deref() == Some(name.as_str()),
+                action: Action::ApplyPaintStyle(name.clone()),
+            });
+        }
+    }
+    if bound_var.is_some() || linked_style.is_some() {
+        rows.push(LibRow::Item {
+            label: "Detach — keep this colour".into(),
+            swatch: None,
+            icon: Some("x"),
+            active: false,
+            action: Action::DetachPaintBinding(is_fill),
+        });
+    }
+
+    let reg = app.editor_regions();
+    let w = (reg.right.width() - 24.0).clamp(180.0, LIB_W);
+    let h: f64 = rows
+        .iter()
+        .map(|r| match r {
+            LibRow::Section(_) => LIB_SECTION_H,
+            LibRow::Item { .. } => LIB_ITEM_H,
+            LibRow::Note(_) => LIB_NOTE_H,
+        })
+        .sum::<f64>()
+        + 8.0;
+    // the panel's y depends on the scroll offset, so the anchor comes from the
+    // row that opened it; clamp to the window either way
+    let y0 = ay.min(app.win_h - h - 8.0).max(ED_TITLE_H + 4.0);
+    Some((Rect::new(ax, y0, ax + w, y0 + h), rows))
+}
+
+/// The popover's rect — the pointer test in `cursor_for` reads it.
+pub fn paint_lib_rect(app: &App) -> Option<Rect> {
+    paint_library(app).map(|(r, _)| r)
+}
+
+/// Trim `label` until it fits `budget` px at T11 (popovers must not paint
+/// through their own border).
+fn fit_label(app: &App, label: &str, budget: f64) -> String {
+    let mut out: Vec<char> = label.chars().collect();
+    if app.fonts.measure(label, T11, Wt::Reg) <= budget {
+        return label.to_string();
+    }
+    while out.len() > 4 {
+        out.pop();
+        let probe: String = out.iter().collect::<String>() + "…";
+        if app.fonts.measure(&probe, T11, Wt::Reg) <= budget {
+            return probe;
+        }
+    }
+    out.iter().collect()
+}
+
+fn paint_paint_library(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    let Some((dd, rows)) = paint_library(app) else {
+        return;
+    };
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, R_LG, C_FIELD);
+    stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+    // the panel swallows clicks in its own padding: an open popover must not
+    // arm a canvas tool through the gap between two rows
+    hit.push((dd, Action::PaintLibClose));
+    let mut y = dd.y0 + 4.0;
+    let swatch_w = 12.0;
+    for row in rows {
+        match row {
+            LibRow::Section(title) => {
+                app.fonts
+                    .micro_label(s, dd.x0 + 10.0, y + 7.0, title, C_DIM, Wt::Med);
+                y += LIB_SECTION_H;
+            }
+            LibRow::Note(text) => {
+                app.fonts
+                    .text(s, dd.x0 + 10.0, y + 6.0, &text, T10, C_DIM, Wt::Reg);
+                y += LIB_NOTE_H;
+            }
+            LibRow::Item {
+                label,
+                swatch,
+                icon,
+                active,
+                action,
+            } => {
+                let r = Rect::new(dd.x0 + 4.0, y, dd.x1 - 4.0, y + LIB_ITEM_H);
+                let hov = hover(app, r);
+                if hov || active {
+                    fill_rrect(s, r, R_SM, if hov { C_FIELD_2 } else { C_SEL });
+                }
+                let mut tx = r.x0 + 10.0;
+                if let Some(c) = swatch {
+                    let sw = Rect::new(tx, r.y0 + 7.0, tx + swatch_w, r.y0 + 19.0);
+                    fill_rrect(s, sw, R_SM, c);
+                    stroke_rrect(s, sw, R_SM, C_LINE_2, 1.0);
+                    tx = sw.x1 + 8.0;
+                } else if let Some(glyph) = icon {
+                    draw_icon(s, glyph, tx, r.y0 + 6.0, ICON_SM, C_DIM);
+                    tx += 20.0;
+                }
+                let budget = r.x1 - tx - 26.0;
+                let text = fit_label(app, &label, budget);
+                app.fonts.text(
+                    s,
+                    tx,
+                    r.y0 + 9.0,
+                    &text,
+                    T11,
+                    if hov || active { C_TEXT } else { C_MUTED },
+                    Wt::Reg,
+                );
+                if active {
+                    // the binding this layer already carries (Figma's check)
+                    draw_icon(s, "check", r.x1 - 24.0, r.y0 + 6.0, ICON_SM, C_ACCENT_INK);
+                }
+                hit.push((r, action));
+                y += LIB_ITEM_H;
+            }
         }
     }
 }

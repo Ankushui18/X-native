@@ -109,6 +109,35 @@ is the single list of "what is on screen, in what order" — the grid, the table
   own background, and offers only actions that really do something —
   `Remove from recents` says what it is, because the files on disk stay put.
 
+### Links in the inspector (variables and paint styles)
+
+A paint is either a value or a *link*, and the right panel keeps the two apart.
+The engine has carried both representations for a while — `Paint::Variable(name)`
+(one fill bound to a colour variable, resolved through the document's active
+mode) and `bindings["style:paint"]` (a layer linked to a named paint style,
+re-resolved by `resolve_styles`). The fill/stroke row is where they are reached:
+
+- the row shows **what the paint is linked to** — the variable's or the style's
+  name — instead of the hex it happens to resolve to, so "this is `brand/signal`"
+  and "this is `#2F6BFF`" stop looking identical; opening the field to type a
+  hex is the detach gesture, exactly as in Figma;
+- the library button (Figma's four-dot fill icon, `grid-2x2`) opens a popover of
+  the file's colour variables (annotated with the colour they resolve to *now*)
+  and paint styles, with the layer's current link checked, plus
+  `Detach — keep this colour` when something is linked;
+- applying is a *link*, never a copy: editing the variable repaints every layer
+  that binds it, and detaching freezes the colour that was on screen, so a detach
+  never moves a pixel;
+- the popover's rect is computed once per frame and read by both the painter and
+  `cursor_for`, so its rows advertise themselves to the pointer the way every
+  other control does.
+
+Paint styles are *fill* styles in this engine (`LegacyStyle::Paint { fill }`), so
+the stroke row offers variables only and says so in one line rather than
+offering something that would silently do nothing. Variables themselves are
+created, renamed, toggled and stepped in the left rail's VARIABLES section — the
+panel applies them, the rail owns them.
+
 ### Ink
 Text and glyphs never take a *fill* role. On a saturated fill:
 `C_ON_ACCENT` (white in the dark and light palettes, black on high contrast),
