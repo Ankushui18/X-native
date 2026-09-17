@@ -357,20 +357,37 @@ pub struct SpacingScale {
     pub space_10: f64, // 48px
 }
 
+impl SpacingScale {
+    /// The ten steps, usable in `const` contexts: the designer's `theme::SP_*`
+    /// vocabulary derives from these, so a gap is always 4/6/8/12/16/20/24/
+    /// 32/40/48 and the audit below pins the ladder.
+    pub const SPACE_0: f64 = 0.0;
+    pub const SPACE_1: f64 = 4.0;
+    pub const SPACE_2: f64 = 6.0;
+    pub const SPACE_3: f64 = 8.0;
+    pub const SPACE_4: f64 = 12.0;
+    pub const SPACE_5: f64 = 16.0;
+    pub const SPACE_6: f64 = 20.0;
+    pub const SPACE_7: f64 = 24.0;
+    pub const SPACE_8: f64 = 32.0;
+    pub const SPACE_9: f64 = 40.0;
+    pub const SPACE_10: f64 = 48.0;
+}
+
 impl Default for SpacingScale {
     fn default() -> Self {
         Self {
-            space_0: 0.0,
-            space_1: 4.0,
-            space_2: 6.0,
-            space_3: 8.0,
-            space_4: 12.0,
-            space_5: 16.0,
-            space_6: 20.0,
-            space_7: 24.0,
-            space_8: 32.0,
-            space_9: 40.0,
-            space_10: 48.0,
+            space_0: Self::SPACE_0,
+            space_1: Self::SPACE_1,
+            space_2: Self::SPACE_2,
+            space_3: Self::SPACE_3,
+            space_4: Self::SPACE_4,
+            space_5: Self::SPACE_5,
+            space_6: Self::SPACE_6,
+            space_7: Self::SPACE_7,
+            space_8: Self::SPACE_8,
+            space_9: Self::SPACE_9,
+            space_10: Self::SPACE_10,
         }
     }
 }
@@ -890,6 +907,35 @@ mod tests {
                 TypographyScale::LG,
                 TypographyScale::XL,
                 TypographyScale::XXL,
+            ]
+        );
+        let sp = SpacingScale::default();
+        assert_eq!(
+            [
+                sp.space_0,
+                sp.space_1,
+                sp.space_2,
+                sp.space_3,
+                sp.space_4,
+                sp.space_5,
+                sp.space_6,
+                sp.space_7,
+                sp.space_8,
+                sp.space_9,
+                sp.space_10,
+            ],
+            [
+                SpacingScale::SPACE_0,
+                SpacingScale::SPACE_1,
+                SpacingScale::SPACE_2,
+                SpacingScale::SPACE_3,
+                SpacingScale::SPACE_4,
+                SpacingScale::SPACE_5,
+                SpacingScale::SPACE_6,
+                SpacingScale::SPACE_7,
+                SpacingScale::SPACE_8,
+                SpacingScale::SPACE_9,
+                SpacingScale::SPACE_10,
             ]
         );
         let i = IconScale::default();

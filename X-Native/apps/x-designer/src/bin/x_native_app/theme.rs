@@ -19,7 +19,10 @@
 
 use vello::peniko::Color;
 use x_native::text::Span;
-use x_native::ui::{ColorTokens, RadiusScale, ThemeId, TypographyScale};
+use x_native::ui::{
+    AlphaScale, ColorTokens, IconScale, RadiusScale, SpacingScale, StrokeScale, ThemeId,
+    TypographyScale,
+};
 
 /// The palette these constants are derived from.
 const P: ColorTokens = ColorTokens::GRAPHITE;
@@ -352,16 +355,16 @@ pub const STROKE_RING: f64 = StrokeScale::RING;
 // the chrome declares (a row's px-2, a stack's gap). Measured layout
 // coordinates stay literal — a pixel-cloned screen's `+17` is data, not a
 // spacing decision, and naming it would hide that.
-pub const SP_1: f64 = SpacingScale::default().space_1; // 4
-pub const SP_2: f64 = SpacingScale::default().space_2; // 6
-pub const SP_3: f64 = SpacingScale::default().space_3; // 8
-pub const SP_4: f64 = SpacingScale::default().space_4; // 12
-pub const SP_5: f64 = SpacingScale::default().space_5; // 16
-pub const SP_6: f64 = SpacingScale::default().space_6; // 20
-pub const SP_7: f64 = SpacingScale::default().space_7; // 24
-pub const SP_8: f64 = SpacingScale::default().space_8; // 32
-pub const SP_9: f64 = SpacingScale::default().space_9; // 40
-pub const SP_10: f64 = SpacingScale::default().space_10; // 48
+pub const SP_1: f64 = SpacingScale::SPACE_1; // 4
+pub const SP_2: f64 = SpacingScale::SPACE_2; // 6
+pub const SP_3: f64 = SpacingScale::SPACE_3; // 8
+pub const SP_4: f64 = SpacingScale::SPACE_4; // 12
+pub const SP_5: f64 = SpacingScale::SPACE_5; // 16
+pub const SP_6: f64 = SpacingScale::SPACE_6; // 20
+pub const SP_7: f64 = SpacingScale::SPACE_7; // 24
+pub const SP_8: f64 = SpacingScale::SPACE_8; // 32
+pub const SP_9: f64 = SpacingScale::SPACE_9; // 40
+pub const SP_10: f64 = SpacingScale::SPACE_10; // 48
 
 // ------------------------------------------------------- wash alphas (0-255)
 // The five wash steps. A translucent fill names its step instead of carrying
