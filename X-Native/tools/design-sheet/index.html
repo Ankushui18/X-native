@@ -35,6 +35,12 @@
   .logo { width: 24px; height: 24px; border-radius: 4px; background: var(--accent); display: grid; place-items: center; }
   .logo svg { width: 14px; height: 14px; stroke: var(--on-accent); }
 
+  .tops { display: flex; gap: 2px; margin-left: 18px; }
+  .tops a {
+    color: var(--text-dim); text-decoration: none; font-size: 12px; padding: 6px 10px; border-radius: 6px;
+  }
+  .tops a:hover { color: var(--text-primary); background: var(--surface-hover); }
+  .tops a[aria-current=page] { color: var(--text-primary); background: var(--surface-elevated); }
   .seg { display: flex; padding: 2px; gap: 2px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
   .seg button {
     appearance: none; border: 0; background: transparent; color: var(--text-dim);
@@ -178,6 +184,10 @@
       <p id="provenance">generated from the Rust sources</p>
     </div>
   </div>
+  <nav class="tops" aria-label="Design sheet pages">
+    <a href="index.html" aria-current="page">Tokens &amp; audit</a>
+    <a href="screens.html">Every screen</a>
+  </nav>
   <span class="grow"></span>
   <div class="seg" id="themes" role="group" aria-label="Theme"></div>
 </header>

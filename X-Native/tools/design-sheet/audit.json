@@ -292,5 +292,27 @@
     "cardGap": 12,
     "gridGap": 16,
     "cols": 3
+  },
+  "ui": {
+    "titleH": 36,
+    "logoCell": 44,
+    "treeRowH": 22,
+    "inputH": 28,
+    "pillH": 30,
+    "toolbarH": 40,
+    "toolbarBottom": 20,
+    "toolIcon": 32,
+    "menuW": 208,
+    "menuRowH": 28,
+    "appMenuW": 220,
+    "dashTitleH": 40,
+    "draftRowH": 48,
+    "searchW": 480,
+    "searchH": 32,
+    "logo": 28,
+    "cmdPaletteW": 480,
+    "cmdPaletteMaxH": 400,
+    "cmdInputH": 40,
+    "cmdRowH": 30
   }
 }

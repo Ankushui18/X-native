@@ -42,6 +42,16 @@ are marked on their cards rather than left looking painted.
 changes, so a scale or palette edit that forgets to regenerate is a gate
 failure rather than a stale page.
 
+`screens.html` in the same folder is the second page: every screen the app ships
+— the four dashboard views and their empty/selection states, the editor with all
+seven panel tabs, the overlays (⌘K, context menu, paint library, colour picker,
+app menu, find, notifications), the board, the flow viewer and the loading
+screen — each drawn at the parsed window size with the module that paints it,
+what to check, and the theme switch repainting all of them. `node
+check_screens.mjs` (16 checks) holds the page to its own claims: screens render,
+the module named on each card exists, the landmarks are present, no missing
+glyph, and the docks really are drawn at the widths `audit.js` parsed.
+
 ## Themes (light, dark, high contrast)
 
 Three palettes, all shipped, all audited by the crate's own tests:

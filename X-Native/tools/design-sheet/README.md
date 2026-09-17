@@ -23,6 +23,29 @@ any diff, so the sheet cannot fall behind the code. `check.mjs` is the stricter,
 browser-side gate and needs jsdom; it is not run by CI because the Rust gate is
 the only job.
 
+## Every screen
+
+    node check.mjs            # 39 checks: tokens, ladders, palettes, audit
+    node check_screens.mjs    # 16 checks: the screens gallery
+
+`screens.html` (with `screens.js`, `screens_app.js`, `screens.css`) draws each
+screen the app ships — dashboard views, the editor with every panel tab, the
+overlays (⌘K, context menu, paint library, colour picker, app menu, find,
+notifications), the board, the chrome-less flow viewer and the document loading
+screen — at the parsed window size, with the theme switch repainting all of them.
+
+What is real: the window and dock geometry (read from `audit.js`, which
+`build_audit.mjs` parses out of `theme.rs`/`state.rs`), the panel and tab names,
+the tool sets, the menu rows, the copy on the states, and every colour (roles).
+What is not: pixel placement inside panels, the artwork on the canvas, and
+anything the font engine measures. Each card names the Rust module that paints
+that screen, so a claim can be traced to its source.
+
+`check_screens.mjs` verifies the claims it can: every screen renders, every
+`module` it names exists on disk, every landmark in its `checks` list is present,
+no screen draws a glyph the icon set lacks, the docks are drawn at the widths
+`audit.js` parsed, and no colour in the gallery is a literal.
+
 `index.html` + `app.js` render it; the fonts are Inter (OFL) from
 `@fontsource/inter`. Regenerate after changing a scale, a palette or a ceiling —
 the CI ratchet (`design_tokens_test.rs`) is the same source of truth, so a

@@ -151,6 +151,33 @@ const geom = {
   cols: 3,
 };
 
+// Chrome constants the screens gallery draws with — parsed, not retyped, for
+// the same reason the dock table is: a mock that carries its own copy of
+// ED_TITLE_H is a mock that will one day show the previous layout.
+const cmdSrc = readFileSync(DIR + 'command.rs', 'utf8');
+const ui = {
+  titleH: Number(themeSrc.match(/ED_TITLE_H: f64 = ([\d.]+)/)[1]),
+  logoCell: Number(themeSrc.match(/LOGO_CELL_W: f64 = ([\d.]+)/)[1]),
+  treeRowH: Number(themeSrc.match(/TREE_ROW_H: f64 = ([\d.]+)/)[1]),
+  inputH: Number(themeSrc.match(/INPUT_H: f64 = ([\d.]+)/)[1]),
+  pillH: Number(themeSrc.match(/PILL_H: f64 = ([\d.]+)/)[1]),
+  toolbarH: Number(themeSrc.match(/TOOLBAR_H: f64 = ([\d.]+)/)[1]),
+  toolbarBottom: Number(themeSrc.match(/TOOLBAR_BOTTOM: f64 = ([\d.]+)/)[1]),
+  toolIcon: Number(themeSrc.match(/TOOL_ICON: f64 = ([\d.]+)/)[1]),
+  menuW: Number(themeSrc.match(/MENU_WIDTH: f64 = ([\d.]+)/)[1]),
+  menuRowH: Number(themeSrc.match(/MENU_ROW_H: f64 = ([\d.]+)/)[1]),
+  appMenuW: Number(themeSrc.match(/APP_MENU_WIDTH: f64 = ([\d.]+)/)[1]),
+  dashTitleH: Number(themeSrc.match(/DASH_TITLE_H: f64 = ([\d.]+)/)[1]),
+  draftRowH: Number(themeSrc.match(/DRAFT_ROW_H: f64 = ([\d.]+)/)[1]),
+  searchW: Number(themeSrc.match(/SEARCH_W: f64 = ([\d.]+)/)[1]),
+  searchH: Number(themeSrc.match(/SEARCH_H: f64 = ([\d.]+)/)[1]),
+  logo: Number(themeSrc.match(/LOGO: f64 = ([\d.]+)/)[1]),
+  cmdPaletteW: Number(cmdSrc.match(/PALETTE_WIDTH: f64 = ([\d.]+)/)[1]),
+  cmdPaletteMaxH: Number(cmdSrc.match(/PALETTE_MAX_HEIGHT: f64 = ([\d.]+)/)[1]),
+  cmdInputH: Number(cmdSrc.match(/INPUT_HEIGHT: f64 = ([\d.]+)/)[1]),
+  cmdRowH: Number(cmdSrc.match(/ROW_HEIGHT: f64 = ([\d.]+)/)[1]),
+};
+
 const docks = {
   nav: geom.nav,
   canvasMin: Number(themeSrc.match(/ED_CANVAS_MIN: f64 = ([\d.]+)/)[1]),
@@ -236,6 +263,7 @@ const auditPayload = {
   canvasFloor: docks.canvasMin,
   docks,
   geom,
+  ui,
 };
 const OUT = (f) => fileURLToPath(new URL('./' + f, import.meta.url));
 writeFileSync(OUT('audit.json'), JSON.stringify(auditPayload, null, 2));
@@ -247,6 +275,11 @@ console.log(
 console.log(
   `search_rect: wordmark solved at ${wordmarkW.toFixed(1)}px from the measured x=${measuredX} at ${measuredW}; ` +
     `slack ${[980, 1440, 2560].map((w) => `${w}:${searchSlack(w).toFixed(1)}`).join(' ')}`,
+);
+console.log(
+  `chrome constants read from source: title ${ui.titleH}, tree row ${ui.treeRowH}, toolbar ${ui.toolbarH}+${ui.toolbarBottom}, ` +
+    `menu ${ui.menuW}/${ui.menuRowH}, app menu ${ui.appMenuW}, dash title ${ui.dashTitleH}, ` +
+    `command palette ${ui.cmdPaletteW}×${ui.cmdPaletteMaxH}`,
 );
 console.log(
   `geometry read from source — nav ${geom.nav}, dash sidebar ${geom.dashSide} + mx ${geom.dashMx}, ` +
