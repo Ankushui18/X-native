@@ -125,11 +125,20 @@ function dashTopBar() {
   `, { class: 'topbar' });
 }
 
+// The card thumbnail is a document preview when the file is on disk and a flat
+// colour block watermarked with "X" when it is not (dashboard.rs paints the
+// watermark at T20 Bold in C_WHITE_10 / C_BLACK_10). The sheet cannot render a
+// document, so it draws the fallback, which is what a brand-new file shows. The
+// star lives in the thumbnail's top-right corner (x1 − 32 … x1 − 8), not beside
+// the file name.
 function fileCard([ic, name, team, when, star]) {
   return `<div class="gcard">
-    <div class="thumb">${icon(ic, 28)}</div>
+    <div class="thumb">
+      <span class="wm">X</span>
+      ${star ? `<span class="thumb-star">${icon('star', 12)}</span>` : ''}
+    </div>
     <div class="gbody">
-      <div class="gname">${esc(name)}${star ? '<span class="star">★</span>' : ''}</div>
+      <div class="gname">${esc(name)}</div>
       <div class="gmeta">${esc(team)} · ${esc(when)}</div>
     </div>
   </div>`;
@@ -395,40 +404,190 @@ function editorLeftPanel(tab = 'Layers', { pages = 3 } = {}) {
   return at(RAIL, y0, LEFT, H - y0, pill + body, { class: 'panel left-panel' });
 }
 
+// ------------------------------------------------------------------ inspector
+// The COMPOSE tab is drawn from `paint_design` in editor_ui.rs: the same
+// geometry at 1440 (x0 = 1113, xr = 1428, scroll region from y 125, panel top
+// 36), the same section labels and the same rows. Coordinates here are
+// panel-local — subtract (1100, 36) from the absolute numbers in the source.
+//
+// This replaced a set of invented sections ("POSITION / LAYOUT / FILL / STROKE /
+// CORNER RADIUS") that the app never painted: the real panel has no fill or
+// corner-radius section at all (fills live in the paint-library popover) and its
+// group labels are sentence case — "Auto layout", "Flow", "Resizing",
+// "Alignment", "Padding" — with `caps_label` only on "Appearance",
+// "Typography" and friends.
+const insField = (x, y, w, h, o = {}) => {
+  const { label = '', value = '', end = false, left = '', right = '', focus = false } = o;
+  const inner =
+    (left ? icon(left, 12) : '') +
+    (label ? `<span class="lab">${esc(label)}</span>` : '') +
+    (value !== '' ? `<span class="val${end ? ' end' : ''}">${esc(value)}</span>` : '') +
+    (right ? icon(right, 12) : '');
+  return at(x, y, w, h, inner, { class: `field${focus ? ' on' : ''}` });
+};
+
+const hr = (y, x = 0, w = RIGHT) => at(x, y, w, 1, '', { class: 'hr' });
+
+// `draw_flow_glyph` draws four layout diagrams at 18×14 / 14×18 / 18×14 / 16×16.
+const flowGlyph = (i) => {
+  const b = (x, y, w, h) => `<span class="glyph" style="left:${x}px;top:${y}px;width:${w}px;height:${h}px"></span>`;
+  if (i === 0) return b(0, 4, 5, 6) + b(6.5, 4, 5, 6) + b(13, 4, 5, 6);
+  if (i === 1) return b(6, 0, 6, 4) + b(6, 5, 6, 4) + b(6, 10, 6, 4);
+  if (i === 2) return b(0, 2, 5, 5) + b(11, 2, 5, 5) + b(0, 9, 16, 4);
+  return b(0, 0, 7, 6) + b(9, 0, 7, 6) + b(0, 8, 7, 6) + b(9, 8, 7, 6);
+};
+
+function composePanel() {
+  const x0 = 13; // rx + 12 padding + 1 border
+  const xr = 328; // rx + rw − 12
+  const y0 = 89; // scroll region (abs 125) − panel top (36)
+  const half = 135.5;
+  const hit = '196';
+  // header row: avatar 24 at (25, 24) centre, zoom at +45, icons at the right
+  const header =
+    at(13, 12, 24, 24, 'A', { class: 'avatar sm' }) +
+    at(45, 13, 44, 18, '100%', { class: 'zoom' }) +
+    at(284, 16, 16, 16, icon('message-circle', 16)) +
+    at(312, 16, 16, 16, icon('play', 16));
+  const pills = at(
+    9,
+    50,
+    323,
+    30,
+    ['COMPOSE', 'FLOW', 'SHIP', 'UX ANALYSIS']
+      .map((l, i) => `<span class="pill${i === 0 ? ' on' : ''}">${l}</span>`)
+      .join(''),
+    { class: 'pillrow' },
+  );
+
+  // rows 1–4: name + %, W/H, X/Y, rotation (audit pitch 36 from +12)
+  const r1 = y0 + 12;
+  const row1 =
+    insField(x0, r1, 145, 28, { value: 'Checkout', right: 'chevron-down' }) +
+    insField(x0 + 153, r1, 90, 28, { label: '%', value: '100', end: true }) +
+    at(x0 + 251, r1, 28, 28, icon('eye', 12), { class: 'sq-btn' }) +
+    at(x0 + 287, r1, 28, 28, icon('lock', 12), { class: 'sq-btn' });
+  const row2 =
+    insField(x0, r1 + 36, half, 28, { label: 'W', value: '320', end: true }) +
+    insField(x0 + 143.5, r1 + 36, half, 28, { label: 'H', value: '48', end: true }) +
+    at(x0 + 287, r1 + 36, 28, 28, icon('lock', 12), { class: 'sq-btn' });
+  const row3 =
+    insField(x0, r1 + 72, half, 28, { label: 'X', value: hit, end: true }) +
+    insField(x0 + 143.5, r1 + 72, half, 28, { label: 'Y', value: '128', end: true }) +
+    insField(x0, r1 + 108, 140, 28, { left: 'rotate-cw', value: '0', end: true });
+
+  // auto layout: label + plus, the four flow diagrams, then the sizing row
+  const auto =
+    at(x0, y0 + 177, 120, 18, 'Auto layout', { class: 'lead' }) +
+    at(x0 + 291, y0 + 173, 24, 24, icon('plus', 14), { class: 'sq-btn' }) +
+    at(x0, y0 + 209 - 5, 60, 14, 'Flow', { class: 'grp-t' }) +
+    [0, 1, 2, 3]
+      .map((i) => {
+        const fx = x0 + [0, 80.3, 160.5, 240.8][i];
+        const gw = i === 1 ? 14 : i === 3 ? 16 : 18;
+        return at(
+          fx,
+          y0 + 232,
+          74.3,
+          28,
+          `<span class="gl" style="left:${(74.3 - gw) / 2}px;top:${(28 - (i === 1 ? 18 : 14)) / 2}px;width:${gw}px;height:${i === 1 ? 18 : 14}px">${flowGlyph(i)}</span>`,
+          { class: `diag-chip${i === 0 ? ' on' : ''}` },
+        );
+      })
+      .join('');
+  const resizing =
+    at(x0, y0 + 271, 80, 14, 'Resizing', { class: 'grp-t' }) +
+    [['W', '320'], ['H', '48']]
+      .map(([lab, val], i) => {
+        const fx = x0 + 141.5 * i;
+        return (
+          insField(fx, y0 + 299, 133.5, 32, { label: lab }) +
+          at(fx + 26, y0 + 307, 61.5, 18, val, { class: 'fv right' }) +
+          at(fx + 93.5, y0 + 305.5, 31, 19, i === 0 ? 'Fixed' : 'Hug', { class: 'chip' })
+        );
+      })
+      .join('');
+
+  // alignment card + the two gap fields
+  const dot = (r, c) => {
+    const active = r === 0 && (c === 0 || c === 2);
+    const dx = 13.5 + c * 28 - 9;
+    const dy = 13.5 + r * 28 - 9;
+    return (
+      (active ? at(dx, dy, 18, 18, '', { class: 'align-halo' }) : '') +
+      at(dx + 5, dy + 5, 8, 8, '', { class: `align-dot${active ? ' on' : ''}` })
+    );
+  };
+  const card = at(
+    x0,
+    y0 + 370,
+    84,
+    84,
+    at(12, 42, 60, 1, '', { class: 'hr2' }) +
+      at(42, 12, 1, 60, '', { class: 'hr2' }) +
+      [0, 1, 2].map((r) => [0, 1, 2].map((c) => dot(r, c)).join('')).join(''),
+    { class: 'align-card' },
+  );
+  const gapRow = (y, ic, val) =>
+    insField(x0 + 96, y, 219, 32, { left: ic, value: val, end: true });
+  const align =
+    at(x0, y0 + 347 - 5, 80, 14, 'Alignment', { class: 'grp-t' }) +
+    at(xr - 60, y0 + 342, 60, 14, 'Gap', { class: 'grp-t right' }) +
+    card +
+    gapRow(y0 + 370, 'arrow-left-right', '12') +
+    gapRow(y0 + 410, 'arrow-up-down', '12');
+
+  // padding, clip content, appearance (opacity + radius)
+  const padding =
+    at(x0, y0 + 465, 80, 14, 'Padding', { class: 'grp-t' }) +
+    [0, 1]
+      .map((i) => {
+        const fx = x0 + 141.5 * i;
+        const glyph =
+          i === 0
+            ? at(fx + 9, y0 + 501, 16, 16, '', { class: 'pad-glyph' }) +
+              at(fx + 14, y0 + 504, 1, 10, '', { class: 'ink' }) +
+              at(fx + 19, y0 + 504, 1, 10, '', { class: 'ink' })
+            : at(fx + 9, y0 + 501, 16, 16, '', { class: 'pad-glyph' }) +
+              at(fx + 12, y0 + 506, 10, 1, '', { class: 'ink' }) +
+              at(fx + 12, y0 + 511, 10, 1, '', { class: 'ink' });
+        return (
+          insField(fx, y0 + 493, 133.5, 32, {}) + glyph +
+          at(fx + 60, y0 + 501, 65.5, 18, '16', { class: 'fv right' })
+        );
+      })
+      .join('');
+  const clip =
+    at(x0, y0 + 541.3, 16, 16, at(3, 3, 10, 10, '', { class: 'ink-fill' }), { class: 'checkbox' }) +
+    at(x0 + 24, y0 + 537, 120, 18, 'Clip content', { class: 'muted11' });
+  const appearance =
+    at(x0, y0 + 582.5 - 5, 120, 16, 'Appearance', { class: 'sec-t' }) +
+    at(x0 + 294, y0 + 576, 16, 16, icon('eye', 14)) +
+    insField(x0, y0 + 605.5, 153.5, 28, { label: 'Opacity', value: '100%', end: true }) +
+    insField(x0 + 161.5, y0 + 605.5, 153.5, 28, { label: 'Radius', value: '8', end: true });
+
+  // typography: family, weight/size, line height (the last row is cut by the fold)
+  const typography =
+    at(x0, y0 + 658.5 - 5, 120, 16, 'Typography', { class: 'sec-t' }) +
+    at(x0 + 281, y0 + 654, 16, 16, icon('grid-2x2', 12)) +
+    at(x0 + 303, y0 + 653, 16, 16, icon('plus', 14)) +
+    insField(x0, y0 + 681.5, 315, 28, { value: 'Inter', right: 'chevron-down' }) +
+    insField(x0, y0 + 717.5, 227, 28, { value: 'Medium', right: 'chevron-down' }) +
+    insField(x0 + 235, y0 + 717.5, 80, 28, { value: '13', end: true });
+
+  return at(W - RIGHT, TITLE, RIGHT, H - TITLE, `
+    ${at(0, 0, 1, H - TITLE, '', { class: 'hr' })}${header}${pills}${hr(88)}
+    ${row1}${row2}${row3}${hr(y0 + 160)}
+    ${auto}${resizing}
+    ${align}${padding}${clip}${hr(y0 + 569.5)}
+    ${appearance}${hr(y0 + 645.5)}${typography}
+  `, { class: 'panel right-panel' });
+}
+
 function editorRightPanel(tab = 'Design') {
+  if (tab === 'Design') return composePanel();
   let body = '';
-  if (tab === 'Design') {
-    body =
-      section(
-        'Position',
-        `<div class="grid2">${row('X', '196').replace('<b>', '<b class="pink">')}${row('Y', '128')}</div>
-         <div class="grid2">${row('W', '320')}${row('H', '48')}</div>`,
-      ) +
-      section(
-        'Layout',
-        `<div class="grid2">${row('Mode', 'Horizontal')}${row('Gap', '12')}</div>
-         <div class="grid2">${row('Pad L', '16')}${row('Pad R', '16')}</div>`,
-      ) +
-      section(
-        'Fill',
-        `<div class="paint-row"><span class="sw" style="background:var(--accent)"></span>
-          <span class="pl">Accent</span><span class="link">accent</span>
-          <span class="lib-btn" title="Paint library">${icon('grid-2x2', 14)}</span></div>
-         <div class="paint-row"><span class="sw" style="background:var(--surface)"></span>
-          <span class="pl">Surface</span><span class="link">color/surface</span>
-          <span class="lib-btn" title="Paint library">${icon('grid-2x2', 14)}</span></div>`,
-      ) +
-      section(
-        'Stroke',
-        `<div class="paint-row"><span class="sw" style="background:var(--border-strong)"></span>
-          <span class="pl">Border</span><span class="muted">1 px</span>
-          <span class="lib-btn" title="Paint library">${icon('grid-2x2', 14)}</span></div>`,
-      ) +
-      section(
-        'Corner radius',
-        `<div class="grid3">${row('', '8')}${row('', '8')}${row('', '8')}${row('', '8')}</div>`,
-      );
-  } else if (tab === 'Prototype') {
+  if (tab === 'Prototype') {
     body =
       section(
         'Flow starting point',
@@ -476,9 +635,12 @@ function editorRightPanel(tab = 'Design') {
       section('Quality', `<div class="ux-row">${icon('sliders-horizontal', 14)}<span>4 hard-coded radii off the scale</span></div>`);
   }
   return at(W - RIGHT, TITLE, RIGHT, H - TITLE, `
-    <div class="pillrow">${RIGHT_TABS.map(
-      ([key, label]) => `<span class="pill${key === tab ? ' on' : ''}">${label}</span>`,
-    ).join('')}</div>${body}
+    ${at(0, 0, 1, H - TITLE, '', { class: 'hr' })}
+    ${at(10, 10, RIGHT - 20, H - TITLE - 20, `
+      <div class="pillrow">${RIGHT_TABS.map(
+        ([key, label]) => `<span class="pill${key === tab ? ' on' : ''}">${label}</span>`,
+      ).join('')}</div>${body}
+    `, { class: 'tab-body' })}
   `, { class: 'panel right-panel' });
 }
 
@@ -918,9 +1080,23 @@ window.SCREENS = [
     group: 'Editor',
     name: 'Editor · Structure + canvas',
     module: 'editor_ui.rs',
-    what: `Full editor chrome: title bar ${TITLE}, rail ${RAIL}, left dock ${LEFT} (STRUCTURE / LIBRARY / TOKENS), right dock ${RIGHT}, rulers, tool dock ${UI.toolbarH} tall.`,
+    what: `Full editor chrome: title bar ${TITLE}, rail ${RAIL}, left dock ${LEFT} (STRUCTURE / LIBRARY / TOKENS), right dock ${RIGHT}, rulers, tool dock ${UI.toolbarH} tall. The COMPOSE inspector is drawn from paint_design: name + %, W/H, X/Y, rotation, Auto layout, Flow, Resizing, Alignment, Padding, Clip content, Appearance, Typography — fields are filled boxes with no outline until hover, and the value being typed into is ringed.`,
     note: 'Three canvas aids ship in this frame: the minimap (bottom-right, ⇧M or its ✕), page sketches in every PAGES row that has content, and ⇧1 fitting the frame to the page content.',
-    checks: ['STRUCTURE', 'LIBRARY', 'TOKENS', 'COMPOSE', 'minimap', 'PAGES', 'sketch'],
+    checks: [
+      'STRUCTURE',
+      'LIBRARY',
+      'TOKENS',
+      'COMPOSE',
+      'minimap',
+      'PAGES',
+      'sketch',
+      'Auto layout',
+      'Resizing',
+      'Alignment',
+      'Padding',
+      'Appearance',
+      'Typography',
+    ],
     render: () => editorScreen({}),
   },
   {

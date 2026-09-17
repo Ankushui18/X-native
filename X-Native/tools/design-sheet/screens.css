@@ -12,6 +12,10 @@ html {
   --g-sel-wash: color-mix(in srgb, var(--selection) 20%, transparent);
   --g-accent-muted: color-mix(in srgb, var(--accent) 3%, transparent);
   --g-scrim: color-mix(in srgb, var(--background) 62%, transparent);
+  /* `C_EDIT_BORDER` is focus_ring @ A_STRONG (128/255 = 50%); `C_WHITE_10` is
+     text_primary @ 26/255 = 10%, the ink the board thumbnails watermark with. */
+  --g-focus: color-mix(in srgb, var(--focus-ring) 50%, transparent);
+  --g-ink-10: color-mix(in srgb, var(--text-primary) 10%, transparent);
 }
 html, body { margin: 0; }
 body {
@@ -156,7 +160,9 @@ body {
 .section-h { font-size: 12.5px; font-weight: 600; margin-top: 6px; }
 .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .gcard { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--surface); }
-.thumb { height: 141px; display: grid; place-items: center; background: var(--surface-elevated); color: var(--text-dim); }
+.thumb { position: relative; height: 141px; display: grid; place-items: center; background: var(--surface-elevated); color: var(--text-dim); }
+.thumb .wm { font-size: 28px; font-weight: 700; color: var(--g-ink-10); }
+.thumb-star { position: absolute; right: 8px; top: 8px; color: var(--warning); }
 .gbody { border-top: 1px solid var(--border); padding: 8px 10px; display: grid; gap: 1px; }
 .gname { font-size: 12px; font-weight: 500; }
 .gmeta { font-size: 11px; color: var(--text-dim); }
@@ -210,9 +216,14 @@ body {
 .rail-item.on { background: var(--surface-elevated); color: var(--text-primary); border: 1px solid var(--border); }
 .rail-item.on::after { content: ''; position: absolute; left: -4px; top: 8px; bottom: 8px; width: 3px; border-radius: 3px; background: var(--accent); }
 .win .panel { background: var(--surface); border-right: 1px solid var(--border); padding: 10px; display: grid; align-content: start; gap: 10px; position: absolute; }
-.win .right-panel { border-right: 0; border-left: 1px solid var(--border); }
-.pillrow { display: grid; grid-auto-flow: column; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-elevated); }
-.pill { text-align: center; font-size: 9.5px; letter-spacing: .06em; padding: 5px 0; border-radius: 999px; color: var(--text-dim); text-transform: uppercase; }
+/* the divider is a child of the panel (vline at rx in paint_right), not a CSS
+   border: a border would shift every absolutely positioned child by 1px */
+.win .right-panel { border-right: 0; border-left: 0; padding: 0; gap: 0; }
+/* the three list-style tabs (FLOW / SHIP / UX) keep the old 10px inset and stack */
+.tab-body { position: absolute; display: grid; align-content: start; gap: 10px; }
+/* four equal tabs: `item_w = (pw − 6 − 4) / 4` in paint_right */
+.pillrow { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-elevated); }
+.pill { text-align: center; font-size: 10px; font-weight: 600; padding: 5px 0; border-radius: 999px; color: var(--text-dim); }
 .pill.on { background: var(--surface-active); color: var(--text-primary); border: 1px solid var(--border-strong); }
 .tree { display: grid; gap: 1px; }
 .tree-h { font-size: 9.5px; letter-spacing: .12em; color: var(--text-dim); padding: 10px 6px 3px; }
@@ -220,13 +231,56 @@ body {
 .tree-row svg, .page-row svg { color: var(--text-dim); }
 .page-row.on { background: var(--surface-elevated); color: var(--text-primary); border: 1px solid var(--border); }
 .sketch { width: 14px; height: 14px; border-radius: 3px; background: var(--surface-hover); border: 1px solid var(--border-strong); display: block; }
-.field { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 28px; padding: 0 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-elevated); font-size: 11.5px; color: var(--text-dim); }
+/* Inspector field. `input_box` in the app paints a filled box with no hairline
+   at rest — the fill is what separates a field from the panel — and rings the
+   field being typed into (`paint_carets`, C_EDIT_BORDER = focus_ring @ A_STRONG).
+   `.hov` is that hover outline, `.on` the edit ring. */
+.field {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  height: 28px; padding: 0 8px; border-radius: 8px; background: var(--surface-elevated);
+  font-size: 11px; color: var(--text-placeholder);
+}
 .field b { color: var(--text-primary); font-weight: 500; }
+.field .lab { font-size: 10px; color: var(--text-placeholder); }
+.field .val { font-size: 11px; color: var(--text-primary); font-family: ui-monospace, Menlo, monospace; }
+.field .val.end { margin-left: auto; }
+.field.hov { box-shadow: inset 0 0 0 1px var(--border-strong); }
+.field.on { box-shadow: inset 0 0 0 1px var(--g-focus); }
+.field svg { color: var(--text-placeholder); flex: none; }
 .sec { display: grid; gap: 6px; }
-.sec-t { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-dim); }
+/* Section headings: the app's `caps_label` (T10 tracked 0.08em, bright) for
+   panel sections, and plain T10 `text_dim` for the group labels inside one. */
+.sec-t { font-size: 10px; letter-spacing: .08em; color: var(--text-primary); font-weight: 500; }
+.grp-t { font-size: 10px; color: var(--text-dim); }
+/* 9-dot alignment card (84×84, R_XL, dividers at +42, dots on a 28px pitch) */
+.hr { background: var(--border); }
+.hr2 { background: var(--border-strong); }
+.ink { background: var(--text-dim); }
+.ink-fill { background: var(--text-primary); border-radius: 2px; }
+.avatar.sm { width: 24px; height: 24px; font-size: 11px; }
+.zoom { font-size: 11px; color: var(--text-dim); }
+.lead { font-size: 11px; font-weight: 500; }
+.muted11 { font-size: 11px; color: var(--text-dim); }
+.grp-t.right { text-align: right; }
+/* layout diagrams: chip 74.3×28 (R_LG), active chip on C_FIELD_2 + C_LINE_2.
+   Not `.flow-chip` — that name belongs to the flow viewer's bottom bar. */
+.diag-chip { background: var(--surface-elevated); border-radius: 8px; color: var(--text-dim); }
+.diag-chip.on { background: var(--surface-active); box-shadow: inset 0 0 0 1px var(--border-strong); color: var(--text-primary); }
+.gl { position: absolute; }
+.glyph { position: absolute; border: 1px solid currentColor; border-radius: 2px; }
+.fv { position: absolute; font: 400 11px ui-monospace, Menlo, monospace; color: var(--text-primary); }
+.fv.right { text-align: right; }
+.checkbox { border-radius: 4px; background: var(--surface-elevated); box-shadow: inset 0 0 0 1px var(--border-strong); }
+.pad-glyph { border: 1px solid var(--text-dim); border-radius: 4px; }
+.align-card { background: var(--surface-elevated); border-radius: 12px; }
+.align-dot { position: absolute; width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); }
+.align-dot.on { background: var(--text-primary); }
+.align-halo { position: absolute; width: 18px; height: 18px; border-radius: 50%; background: var(--g-ink-10); }
+.chip { display: flex; align-items: center; justify-content: center; border-radius: 4px; background: var(--surface-active); box-shadow: inset 0 0 0 1px var(--border-strong); font-size: 10px; color: var(--text-primary); }
+.sq-btn { display: grid; place-items: center; border-radius: 8px; background: var(--surface-elevated); color: var(--text-dim); }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
-.paint-row { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-elevated); font-size: 11.5px; }
+.paint-row { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px; border-radius: 8px; background: var(--surface-elevated); font-size: 11.5px; }
 .paint-row .pl { flex: 1; }
 .paint-row .link { font: 500 10px ui-monospace, Menlo, monospace; color: var(--text-dim); }
 .paint-row .lib-btn { width: 20px; height: 20px; display: grid; place-items: center; border-radius: 5px; color: var(--text-dim); border: 1px solid var(--border); }

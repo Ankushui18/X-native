@@ -177,6 +177,30 @@ None of this paints over the work: the minimap is a floating overlay with its
 own press region (presses inside it never reach the canvas), and it is off in
 the flow viewer and on boards, which have no authored content box to map.
 
+### Fields, and what an outline means
+
+An inspector field is a **filled box with no outline** (`input_box`): the fill is
+`C_FIELD` on `C_PANEL`, and that contrast is what separates the field from the
+panel behind it. An outline is the *affordance*, so it is drawn only when there
+is something to say — `C_LINE_2` on hover, and `C_EDIT_BORDER` (`focus_ring` at
+`A_STRONG`) around the field currently receiving keystrokes, drawn by
+`paint_carets`. Three fields paint their own edit chrome (the doc-name row and
+the two variables-panel rows) and are left to it rather than ringed twice.
+
+Fields used to carry a hairline at rest. Eight of those in a column made the
+right panel read as a form of eight empty boxes — the outline repeated what the
+fill already said, and the one field a user was typing into looked exactly like
+its seven neighbours.
+
+**Measurements right-align; names do not.** W/H/X/Y, rotation, opacity, radius,
+the gap and padding pairs and the percentage boxes are drawn with `text_right`
+against the field's inner edge (minus the icon slot when the field ends in a
+chevron), so a column of numbers shares one right edge and can be compared at a
+glance. That is the rule `Opacity` and `Radius` already followed by hand; the
+rest now follow it too, and the caret for those fields is placed at the value
+instead of at the label. A mono value in `input()` is taken to *be* a
+measurement, so a new numeric field aligns without its call site saying so.
+
 ### Links in the inspector (variables and paint styles)
 
 A paint is either a value or a *link*, and the right panel keeps the two apart.

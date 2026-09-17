@@ -1,6 +1,6 @@
 {
   "theme": "graphite",
-  "at": "2026-09-17 14:15",
+  "at": "2026-09-17 15:04",
   "browser": "AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.0 Safari/537.36",
   "runtime": "chrome 153.0.8010.0",
   "window": {
@@ -16,7 +16,7 @@
   ],
   "verified": {
     "screens": 26,
-    "boxes": 6885,
+    "boxes": 7863,
     "issues": []
   },
   "screens": [
@@ -35,8 +35,8 @@
         "Start from a template"
       ],
       "file": "shots/dash-home-grid.png",
-      "bytes": 70961,
-      "sha256": "f9fbed79b69b739c",
+      "bytes": 70463,
+      "sha256": "f99595a49149d117",
       "width": 1440,
       "height": 900
     },
@@ -71,8 +71,8 @@
         "Recently viewed"
       ],
       "file": "shots/dash-recents.png",
-      "bytes": 68841,
-      "sha256": "9a6b2d1d482f9967",
+      "bytes": 68326,
+      "sha256": "900d4ddeaaac23aa",
       "width": 1440,
       "height": 900
     },
@@ -161,8 +161,8 @@
         "Retro board"
       ],
       "file": "shots/dash-templates.png",
-      "bytes": 65823,
-      "sha256": "24b36d5390328f99",
+      "bytes": 65056,
+      "sha256": "c14faa6ab19f3c83",
       "width": 1440,
       "height": 900
     },
@@ -171,7 +171,7 @@
       "name": "Editor · Structure + canvas",
       "group": "Editor",
       "module": "editor_ui.rs",
-      "what": "Full editor chrome: title bar 36, rail 48, left dock 280 (STRUCTURE / LIBRARY / TOKENS), right dock 340, rulers, tool dock 40 tall.",
+      "what": "Full editor chrome: title bar 36, rail 48, left dock 280 (STRUCTURE / LIBRARY / TOKENS), right dock 340, rulers, tool dock 40 tall. The COMPOSE inspector is drawn from paint_design: name + %, W/H, X/Y, rotation, Auto layout, Flow, Resizing, Alignment, Padding, Clip content, Appearance, Typography — fields are filled boxes with no outline until hover, and the value being typed into is ringed.",
       "note": "Three canvas aids ship in this frame: the minimap (bottom-right, ⇧M or its ✕), page sketches in every PAGES row that has content, and ⇧1 fitting the frame to the page content.",
       "checks": [
         "STRUCTURE",
@@ -180,11 +180,17 @@
         "COMPOSE",
         "minimap",
         "PAGES",
-        "sketch"
+        "sketch",
+        "Auto layout",
+        "Resizing",
+        "Alignment",
+        "Padding",
+        "Appearance",
+        "Typography"
       ],
       "file": "shots/editor-structure.png",
-      "bytes": 82145,
-      "sha256": "cbec9682c6fc1e38",
+      "bytes": 93535,
+      "sha256": "26e94ae6cfbc502e",
       "width": 1440,
       "height": 900
     },
@@ -201,8 +207,8 @@
         "linked"
       ],
       "file": "shots/editor-library.png",
-      "bytes": 84763,
-      "sha256": "f7dfe3450dd8a8b8",
+      "bytes": 95709,
+      "sha256": "07695096885ce65c",
       "width": 1440,
       "height": 900
     },
@@ -219,8 +225,8 @@
         "undoable"
       ],
       "file": "shots/editor-tokens.png",
-      "bytes": 80600,
-      "sha256": "46151169abb40d80",
+      "bytes": 91907,
+      "sha256": "04263e450a185099",
       "width": 1440,
       "height": 900
     },
@@ -237,8 +243,8 @@
         "Preview flow start"
       ],
       "file": "shots/editor-flow.png",
-      "bytes": 82256,
-      "sha256": "a3d2e6e250ec8b00",
+      "bytes": 82515,
+      "sha256": "1f1dab876ccf63ef",
       "width": 1440,
       "height": 900
     },
@@ -255,8 +261,8 @@
         "variable"
       ],
       "file": "shots/editor-ship.png",
-      "bytes": 81477,
-      "sha256": "478fa14595cd6fd6",
+      "bytes": 81340,
+      "sha256": "3909a27791ff618a",
       "width": 1440,
       "height": 900
     },
@@ -273,8 +279,8 @@
         "pass AA"
       ],
       "file": "shots/editor-ux.png",
-      "bytes": 79154,
-      "sha256": "1c1a5a81b35b06e5",
+      "bytes": 79760,
+      "sha256": "f99fa4acf1f35d50",
       "width": 1440,
       "height": 900
     },
@@ -292,8 +298,8 @@
         "more in Variables"
       ],
       "file": "shots/editor-paint-lib.png",
-      "bytes": 103995,
-      "sha256": "5970bf6645b6b277",
+      "bytes": 115295,
+      "sha256": "5f09c44f6b2e1b6f",
       "width": 1440,
       "height": 900
     },
@@ -309,8 +315,8 @@
         "sguide"
       ],
       "file": "shots/editor-guides.png",
-      "bytes": 84443,
-      "sha256": "19d6b47c3b7a15c9",
+      "bytes": 95668,
+      "sha256": "83ffd752e4011bca",
       "width": 1440,
       "height": 900
     },
@@ -326,8 +332,8 @@
         "fit the page"
       ],
       "file": "shots/editor-empty-page.png",
-      "bytes": 76588,
-      "sha256": "6ee7ae99fbcacd4a",
+      "bytes": 88440,
+      "sha256": "35d0a082ea638b14",
       "width": 1440,
       "height": 900
     },
@@ -344,8 +350,8 @@
         "Prototype"
       ],
       "file": "shots/editor-command.png",
-      "bytes": 92931,
-      "sha256": "f3bd57ef2e23da89",
+      "bytes": 102370,
+      "sha256": "d2ccbbd355eafde2",
       "width": 1440,
       "height": 900
     },
@@ -362,8 +368,8 @@
         "Duplicate"
       ],
       "file": "shots/editor-context.png",
-      "bytes": 90316,
-      "sha256": "bedd670cbfc7b731",
+      "bytes": 101528,
+      "sha256": "48cd31bd95198c2d",
       "width": 1440,
       "height": 900
     },
@@ -380,8 +386,8 @@
         "Opacity"
       ],
       "file": "shots/editor-colour.png",
-      "bytes": 98827,
-      "sha256": "9e16563630638dc7",
+      "bytes": 110225,
+      "sha256": "978fa02801a422d9",
       "width": 1440,
       "height": 900
     },
@@ -398,8 +404,8 @@
         "Preferences"
       ],
       "file": "shots/editor-app-menu.png",
-      "bytes": 81884,
-      "sha256": "a2fd16181eb06440",
+      "bytes": 93079,
+      "sha256": "ee0b1ea1ebf58e9e",
       "width": 1440,
       "height": 900
     },
@@ -415,8 +421,8 @@
         "1 / 4"
       ],
       "file": "shots/editor-find.png",
-      "bytes": 90294,
-      "sha256": "808643987360ef19",
+      "bytes": 101466,
+      "sha256": "c794248c958321eb",
       "width": 1440,
       "height": 900
     },
@@ -432,8 +438,8 @@
         "Undo"
       ],
       "file": "shots/editor-notify.png",
-      "bytes": 95975,
-      "sha256": "8d3df75e939599c2",
+      "bytes": 106362,
+      "sha256": "a95feb1e0eb02ea3",
       "width": 1440,
       "height": 900
     },

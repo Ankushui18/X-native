@@ -36,10 +36,14 @@ screen — at the parsed window size, with the theme switch repainting all of th
 
 What is real: the window and dock geometry (read from `audit.js`, which
 `build_audit.mjs` parses out of `theme.rs`/`state.rs`), the panel and tab names,
-the tool sets, the menu rows, the copy on the states, and every colour (roles).
-What is not: pixel placement inside panels, the artwork on the canvas, and
-anything the font engine measures. Each card names the Rust module that paints
-that screen, so a claim can be traced to its source.
+the tool sets, the menu rows, the copy on the states, the field style (filled, no
+outline until hover, edit ring on the focused field), and every colour (roles).
+The COMPOSE inspector is drawn from the offsets in `paint_design` itself, so its
+rows sit where the app puts them rather than in invented sections. What is not:
+the artwork on the canvas, document thumbnails (the sheet draws the flat-colour
++ `X` fallback a file with no preview shows), and anything the font engine
+measures. Each card names the Rust module that paints that screen, so a claim can
+be traced to its source.
 
 `check_screens.mjs` verifies the claims it can: every screen renders, every
 `module` it names exists on disk, every landmark in its `checks` list is present,

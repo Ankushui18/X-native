@@ -1310,12 +1310,19 @@ fn hover(app: &App, r: Rect) -> bool {
     r.contains(app.mouse)
 }
 
-/// Field/input box with the HTML `.input:hover` state (#1E1E1E bg,
-/// #2A2A2A border) applied on hover
+/// A field: a filled box, outlined only when it is hovered or being typed into.
+///
+/// Fields used to carry a hairline at rest, which made a panel of eight of them
+/// read as a form of eight empty boxes. The fill is what separates a field from
+/// the panel (`C_FIELD` on `C_PANEL`); the outline is the *affordance*, so it is
+/// drawn when there is something to say — on hover here, and as the edit ring
+/// [`paint_carets`] puts around the field currently receiving keystrokes.
 fn input_box(app: &App, s: &mut Scene, r: Rect, radius: f64) {
     let hov = hover(app, r);
     fill_rrect(s, r, radius, if hov { C_INPUT_HOVER } else { C_FIELD });
-    stroke_rrect(s, r, radius, if hov { C_LINE_2 } else { C_LINE }, 1.0);
+    if hov {
+        stroke_rrect(s, r, radius, C_LINE_2, 1.0);
+    }
 }
 
 // ------------------------------------------------------------- canvas bg
@@ -3151,7 +3158,9 @@ fn input(
 ) {
     let hov = hover(app, r);
     fill_rrect(s, r, R_INPUT, if hov { C_INPUT_HOVER } else { C_FIELD });
-    stroke_rrect(s, r, R_INPUT, if hov { C_LINE_2 } else { C_LINE }, 1.0);
+    if hov {
+        stroke_rrect(s, r, R_INPUT, C_LINE_2, 1.0);
+    }
     let mut tx = r.x0 + 8.0;
     if let Some((text, size)) = label {
         // center the CSS line box (1.5em), like flex align-items:center —
@@ -3169,7 +3178,18 @@ fn input(
     // audit: 11px value box top +5.75 inside the 28px field
     let vh = T11 * CSS_LH;
     let vy = r.y0 + (r.y1 - r.y0 - vh) / 2.0;
-    app.fonts.text(s, tx, vy, value, T11, C_TEXT, wt);
+    // A mono value is a measurement (W/H/X/Y). Measurements go on the field's
+    // right edge — minus the icon slot when the field ends in one — so a column
+    // of them shares a right edge and can be compared at a glance instead of
+    // after reading each one. Text fields keep the left-aligned run from the
+    // label, because a name is read from where it starts.
+    if mono {
+        let pad = if right_icon.is_some() { 28.0 } else { 8.0 };
+        app.fonts
+            .text_right(s, r.x1, vy, value, T11, C_TEXT, wt, pad);
+    } else {
+        app.fonts.text(s, tx, vy, value, T11, C_TEXT, wt);
+    }
     if let Some(ic) = right_icon {
         draw_icon(
             s,
@@ -3266,7 +3286,7 @@ fn paint_design_empty(
     app.fonts
         .text(s, fa.x0 + 9.0, y0 + 36.5, "%", T10, C_DIM, Wt::Reg);
     app.fonts
-        .text(s, fa.x0 + 33.5, y0 + 37.8, &bg_alpha, T11, C_TEXT, Wt::Mono);
+        .text_right(s, fa.x1, y0 + 37.8, &bg_alpha, T11, C_TEXT, Wt::Mono, 8.0);
     hit.push((fa, Action::Field(FieldId::CanvasBgAlpha)));
     let eye = Rect::new(f1.x1 - 24.0, f1.y0 + 6.0, f1.x1 - 6.0, f1.y1 - 6.0);
     if hover(app, eye) {
@@ -3316,7 +3336,7 @@ fn paint_design_empty(
         format!("{}", app.grid_pct.round() as i64),
     );
     app.fonts
-        .text(s, f3.x0 + 33.5, y0 + 95.8, &pct_val, T11, C_TEXT, Wt::Mono);
+        .text_right(s, f3.x1, y0 + 95.8, &pct_val, T11, C_TEXT, Wt::Mono, 8.0);
     hit.push((f3, Action::Field(FieldId::GridPct)));
 }
 
@@ -3371,15 +3391,24 @@ fn paint_design(
     input_box(app, s, pct, R_INPUT);
     app.fonts
         .text(s, pct.x0 + 9.0, r1 + 6.5, "%", T10, C_DIM, Wt::Reg);
-    // justify-between: label left, input text left-aligned after it
-    // (audit: '%' box at +9, value at +33.5), chevron right
+    // justify-between: label left ('%' box at +9), value right, chevron right
     let pct_val = field_val(
         app,
         FieldId::Zoom,
         format!("{}", (app.zoom * 100.0).round()),
     );
-    app.fonts
-        .text(s, pct.x0 + 33.5, r1 + 5.8, &pct_val, T11, C_TEXT, Wt::Mono);
+    // ml-auto, like Opacity/Radius: the value hugs the right edge, stopping
+    // short of the chevron (icon left at x1 − 21)
+    app.fonts.text_right(
+        s,
+        pct.x1 - 21.0,
+        r1 + 5.8,
+        &pct_val,
+        T11,
+        C_TEXT,
+        Wt::Mono,
+        4.0,
+    );
     hit.push((pct, Action::Field(FieldId::Zoom)));
     // chevron: audited ink 1337-1344 → icon left = field right − 21
     draw_icon(s, "chevron-down", pct.x1 - 21.0, r1 + 8.0, ICON_XS, C_DIM);
@@ -3468,7 +3497,7 @@ fn paint_design(
     draw_icon(s, "rotate-cw", rr.x0 + 8.0, r4 + 8.0, ICON_XS, C_DIM);
     let rot_val = field_val(app, FieldId::Rotation, fmt_num(sel.rot));
     app.fonts
-        .text(s, rr.x0 + 26.0, r4 + 5.8, &rot_val, T11, C_TEXT, Wt::Mono);
+        .text_right(s, rr.x1, r4 + 5.8, &rot_val, T11, C_TEXT, Wt::Mono, 8.0);
     hit.push((rr, Action::Field(FieldId::Rotation)));
 
     hline(s, rx, rx + rw, y0 + 160.0, C_LINE);
@@ -3553,8 +3582,9 @@ fn paint_design(
         input_box(app, s, fr, 8.0);
         app.fonts
             .text(s, fx + 9.0, y0 + 308.3, axis, T10, C_DIM, Wt::Reg);
+        // value stops before the Hug/Fixed chip (chip x0 = fx + 93.5)
         app.fonts
-            .text(s, fx + 26.0, y0 + 306.8, &val, T11, C_TEXT, Wt::Mono);
+            .text_right(s, fx + 93.5, y0 + 306.8, &val, T11, C_TEXT, Wt::Mono, 6.0);
         let chip = Rect::new(fx + 93.5, y0 + 305.5, fx + 124.5, y0 + 324.5);
         let is_main = (i == 0) == horizontal;
         let sizing = if is_main { main_sizing } else { cross_sizing };
@@ -3631,8 +3661,16 @@ fn paint_design(
     );
     let gap_now = app.doc().gap;
     let gap_val = field_val(app, FieldId::Gap, fmt_num(gap_now));
-    app.fonts
-        .text(s, g1.x0 + 29.0, g1.y0 + 6.8, &gap_val, T11, C_TEXT, Wt::Reg);
+    app.fonts.text_right(
+        s,
+        g1.x1 - 20.0,
+        g1.y0 + 6.8,
+        &gap_val,
+        T11,
+        C_TEXT,
+        Wt::Reg,
+        6.0,
+    );
     draw_icon(
         s,
         "chevron-down",
@@ -3656,7 +3694,7 @@ fn paint_design(
     // axes use the engine's single Auto Layout gap value until independent
     // row/column gaps are supported.
     app.fonts
-        .text(s, g2.x0 + 29.0, g2.y0 + 6.8, &gap_val, T11, C_TEXT, Wt::Reg);
+        .text_right(s, g2.x1, g2.y0 + 6.8, &gap_val, T11, C_TEXT, Wt::Reg, 8.0);
     hit.push((g2, Action::Field(FieldId::Gap)));
 
     app.fonts
@@ -3682,7 +3720,7 @@ fn paint_design(
         }
         let v = field_val(app, fid, fmt_num(val));
         app.fonts
-            .text(s, g.x1 + 5.0, pr.y0 + 6.8, &v, T11, C_TEXT, Wt::Reg);
+            .text_right(s, pr.x1, pr.y0 + 6.8, &v, T11, C_TEXT, Wt::Reg, 8.0);
         hit.push((pr, Action::Field(fid)));
     }
 
@@ -6556,6 +6594,20 @@ fn paint_carets(app: &mut App, s: &mut Scene) {
     for (r, a) in &app.hit {
         if let Action::Field(id) = a {
             if *id == f.id {
+                // The field receiving keystrokes gets an outline. Fields carry
+                // no hairline at rest (see `input_box`), so without this the one
+                // being typed into looked exactly like its seven neighbours.
+                // Three fields paint their own edit chrome — the doc-name row
+                // and the two variables-panel rows — so they are left alone
+                // rather than ringed twice, and the layers search is a 6px box.
+                if !matches!(id, FieldId::DocName | FieldId::VarName | FieldId::VarValue) {
+                    let radius = if matches!(id, FieldId::TreeSearch) {
+                        R_MD
+                    } else {
+                        R_INPUT
+                    };
+                    stroke_rrect(s, *r, radius, EDIT_BORDER, 1.0);
+                }
                 let w = app.fonts.measure(&f.buffer, 11.0, Wt::Mono);
                 let x = match id {
                     FieldId::DocName => r.x0 + 10.0 + w,
@@ -6565,8 +6617,24 @@ fn paint_carets(app: &mut App, s: &mut Scene) {
                     // replace text at +8
                     FieldId::FindQuery => r.x0 + 24.0 + w,
                     FieldId::FindReplace => r.x0 + 8.0 + w,
-                    // % boxes: value text at +33.5 (after the % label)
-                    FieldId::GridPct | FieldId::CanvasBgAlpha => r.x0 + 33.5 + w,
+                    // W/H/X/Y are measurements and sit on the right edge (that
+                    // is what `input` does with a mono value), so the caret does
+                    // too, 8px in from the field's edge
+                    FieldId::W
+                    | FieldId::H
+                    | FieldId::X
+                    | FieldId::Y
+                    | FieldId::Rotation
+                    | FieldId::Opacity
+                    | FieldId::Radius
+                    | FieldId::PadH
+                    | FieldId::PadV
+                    | FieldId::GridPct
+                    | FieldId::CanvasBgAlpha => r.x1 - 8.0 - w,
+                    // the zoom box ends in a chevron (icon left at x1 − 21)
+                    FieldId::Zoom => r.x1 - 25.0 - w,
+                    // gap row: chevron in the first field, clear edge in the second
+                    FieldId::Gap => r.x1 - 26.0 - w,
                     _ => r.x0 + 8.0 + 14.0 + 6.0 + w,
                 };
                 if x < r.x1 - 8.0 {
