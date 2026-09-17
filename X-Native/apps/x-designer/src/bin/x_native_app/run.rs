@@ -3291,10 +3291,24 @@ impl Host {
             for (r, a) in self.app.hit.iter().rev() {
                 if r.contains(p) {
                     let a = a.clone();
+                    // focus follows the pointer: clicking a control puts the
+                    // keyboard ring on it, clicking a dead area drops it
+                    self.app.dash_focus = self
+                        .app
+                        .hit
+                        .iter()
+                        .position(|(hr, ha)| hr == *r && ha == *a)
+                        .and_then(|i| {
+                            dashboard::focus_targets(&self.app)
+                                .iter()
+                                .position(|t| *t == i)
+                        });
+                    self.app.dash_search_focus = false;
                     self.dispatch(a);
                     return;
                 }
             }
+            self.app.dash_focus = None;
             self.app.dash_search_focus = false;
             return;
         }
@@ -5004,6 +5018,55 @@ impl Host {
             self.app.template_picker_open = false;
             return;
         }
+        // The dashboard is reachable by keyboard, not only by pointer: Tab
+        // walks the page's controls (the ring is painted from the same hit
+        // list, see `dashboard::focus_targets`), Enter fires the focused one
+        // through the same dispatch a click uses, Escape drops focus. This
+        // sits ahead of the search-field branch so Tab always means "move on",
+        // even out of a focused search box.
+        if self.app.screen == Screen::Dashboard && !self.app.template_picker_open {
+            let targets = dashboard::focus_targets(&self.app);
+            match &key {
+                Key::Named(NamedKey::Tab) => {
+                    if targets.is_empty() {
+                        return;
+                    }
+                    let next = match self.app.dash_focus {
+                        None => {
+                            if self.app.shift {
+                                targets.len() - 1
+                            } else {
+                                0
+                            }
+                        }
+                        Some(at) => {
+                            if self.app.shift {
+                                at.checked_sub(1).unwrap_or(targets.len() - 1)
+                            } else {
+                                (at + 1) % targets.len()
+                            }
+                        }
+                    };
+                    self.app.dash_focus = Some(next);
+                    // Tab out of the search field: focus follows the ring
+                    self.app.dash_search_focus = false;
+                    self.app.mouse = targets
+                        .get(next)
+                        .map(|i| self.app.hit[*i].0.center())
+                        .unwrap_or(self.app.mouse);
+                    return;
+                }
+                Key::Named(NamedKey::Enter) if self.app.dash_focus.is_some() => {
+                    self.focus_activate();
+                    return;
+                }
+                Key::Named(NamedKey::Escape) if self.app.dash_focus.is_some() => {
+                    self.app.dash_focus = None;
+                    return;
+                }
+                _ => {}
+            }
+        }
         // The dashboard search is a real text field, not just a painted
         // placeholder. Handle editing keys before the global shortcut gate so
         // Backspace and Ctrl/Cmd+A work even when no document is open.
@@ -5917,6 +5980,21 @@ impl Host {
         }
     }
 
+    /// Enter on the dashboard: fire the focused control exactly as a click
+    /// would. Split out from `on_key` so the focus model can be tested without
+    /// a window.
+    fn focus_activate(&mut self) {
+        let Some(at) = self.app.dash_focus else {
+            return;
+        };
+        let Some(i) = dashboard::focus_targets(&self.app).get(at).copied() else {
+            self.app.dash_focus = None;
+            return;
+        };
+        let action = self.app.hit[i].1.clone();
+        self.dispatch(action);
+    }
+
     fn update_cursor(&self, window: &Window) {
         if self.app.document_loading.is_some() {
             window.set_cursor(
@@ -5928,25 +6006,7 @@ impl Host {
             );
             return;
         }
-        let icon = if self.app.screen == Screen::Editor {
-            let reg = self.app.editor_regions();
-            if resizer_at(&self.app, self.app.mouse).is_some() {
-                CursorIcon::EwResize
-            } else if matches!(self.app.drag, Some(Drag::Pan { .. })) {
-                CursorIcon::Grabbing
-            } else if reg.canvas.contains(self.app.mouse) {
-                match self.app.tool {
-                    Tool::Hand => CursorIcon::Grab,
-                    Tool::Select => CursorIcon::Default,
-                    _ => CursorIcon::Crosshair,
-                }
-            } else {
-                CursorIcon::Default
-            }
-        } else {
-            CursorIcon::Default
-        };
-        window.set_cursor(icon);
+        window.set_cursor(cursor_for(&self.app));
     }
 
     // ---------------------------------------------------------- commands
@@ -10998,6 +11058,53 @@ fn world_to_local(root: &Node, target: &str, x: f64, y: f64) -> (f64, f64) {
 }
 
 // ------------------------------------------------------------------ utils
+
+/// What the pointer means at `app.mouse`. A cursor is an affordance: on the
+/// dashboard every control now says "clickable" (the whole file browser used
+/// to render as a plain arrow, including its buttons), the search field says
+/// "type", and the editor keeps its resize / pan / tool grammar.
+pub fn cursor_for(app: &App) -> CursorIcon {
+    if app.document_loading.is_some() {
+        return if crate::loading::hit_action(app, app.mouse).is_some() {
+            CursorIcon::Pointer
+        } else {
+            CursorIcon::Default
+        };
+    }
+    match app.screen {
+        Screen::Dashboard => {
+            if app.template_picker_open || app.palette.open {
+                return CursorIcon::Pointer;
+            }
+            if dashboard::search_rect(app).contains(app.mouse) {
+                return CursorIcon::Text;
+            }
+            // the LAST painted rect wins, exactly like the click dispatch
+            if app.hit.iter().rev().any(|(r, _)| r.contains(app.mouse)) {
+                CursorIcon::Pointer
+            } else {
+                CursorIcon::Default
+            }
+        }
+        Screen::Board => CursorIcon::Default,
+        Screen::Editor => {
+            let reg = app.editor_regions();
+            if resizer_at(app, app.mouse).is_some() {
+                CursorIcon::EwResize
+            } else if matches!(app.drag, Some(Drag::Pan { .. })) {
+                CursorIcon::Grabbing
+            } else if reg.canvas.contains(app.mouse) {
+                match app.tool {
+                    Tool::Hand => CursorIcon::Grab,
+                    Tool::Select => CursorIcon::Default,
+                    _ => CursorIcon::Crosshair,
+                }
+            } else {
+                CursorIcon::Default
+            }
+        }
+    }
+}
 
 fn resizer_at(app: &App, p: Point) -> Option<u8> {
     let reg = app.editor_regions();

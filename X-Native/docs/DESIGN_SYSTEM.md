@@ -75,6 +75,25 @@ lookup — `COLOR_ROLES`, `role()` and the DTCG export are cross-checked, and
 | Border | `STROKE_HAIRLINE 1.0 · STROKE_RING 1.5` | |
 | Motion | `MotionScale` (u32 ms + easing) | `fast 120 · base 180 · slow 240`; honour `DesignSystem::reduced_motion` |
 
+### Keyboard and pointer (dashboard)
+
+The dashboard is a file browser, so it behaves like one:
+
+- **Tab / Shift+Tab** walk its controls in paint order (sidebar → top bar →
+  quick actions → file grid → drafts); the ring is painted from the same hit
+  list the mouse uses (`dashboard::focus_targets`), and Tab out of a focused
+  search box moves the ring rather than inserting a tab;
+- **Enter** fires the focused control through the same `dispatch` a click uses;
+- **Escape** drops the ring; the next Tab starts from the top;
+- a **click** puts the ring on whatever was clicked (focus follows the
+  pointer), so the keyboard and the pointer never disagree;
+- the pointer itself says what it will do: `Text` over the search field,
+  `Pointer` over any control (it was a plain arrow everywhere before —
+  `cursor_for` in `run.rs`).
+
+Add a control to the dashboard and it is keyboard-reachable for free, because
+focus is derived from the hit list rather than a second list of stops.
+
 ### Ink
 Text and glyphs never take a *fill* role. On a saturated fill:
 `C_ON_ACCENT` (white in the dark and light palettes, black on high contrast),
@@ -84,6 +103,15 @@ accent's own colour: `C_ACCENT_INK` (`accent_ink` — the accent itself measures
 label). The ratchet enforces both: a bare `Color::WHITE` used as ink and an
 accent token in the colour slot of `fonts.text` / `text_center` / `draw_icon`
 both fail the build.
+
+**Text roles are audited, including placeholders.** `TEXT_ROLES` in
+`crates/x-ui/src/theme.rs` is the list of roles checked at 4.5:1 against all
+six surfaces — `text_placeholder` used to be exempt as "faint by intent",
+which shipped `#6B6E7A` (2.56:1 on a hover fill). It is now `#939AA6`
+(Graphite, 4.59:1 worst), `#5B6274` (Daylight, 4.93:1) and `#B8B8B8` (high
+contrast, 7.24:1), each still dimmer than its `text_dim` so the hierarchy
+holds. The only remaining exemption is the hairline border pair, which carries
+no meaning on its own.
 
 ### Adding a colour
 A missing colour is a missing **role**, not a new hex at the call site:

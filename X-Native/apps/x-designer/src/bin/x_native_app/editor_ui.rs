@@ -2413,11 +2413,28 @@ fn paint_resizers(app: &App, s: &mut Scene) {
     );
     let l_drag = matches!(app.drag, Some(crate::state::Drag::LeftPanel { .. }));
     let r_drag = matches!(app.drag, Some(crate::state::Drag::RightPanel { .. }));
-    if hover(app, lr) || l_drag {
-        fill_rect(s, lr, C_WHITE_10);
-    }
-    if hover(app, rr) || r_drag {
-        fill_rect(s, rr, C_WHITE_10);
+    // A divider that lights up on hover says "something is here"; a grip says
+    // "drag me". The pill is centred on the seam and the seam itself takes the
+    // accent while hovered or dragged, so the affordance reads at 1px.
+    for (seam, r, hot) in [
+        (reg.sidebar.x1, lr, hover(app, lr) || l_drag),
+        (reg.right.x0, rr, hover(app, rr) || r_drag),
+    ] {
+        if !hot {
+            continue;
+        }
+        fill_rect(
+            s,
+            Rect::new(seam - 0.75, ED_TITLE_H, seam + 0.75, app.win_h),
+            C_SEL,
+        );
+        let grip = Rect::new(
+            seam - 2.0,
+            ED_TITLE_H + (app.win_h - ED_TITLE_H) / 2.0 - 20.0,
+            seam + 2.0,
+            ED_TITLE_H + (app.win_h - ED_TITLE_H) / 2.0 + 20.0,
+        );
+        fill_rrect(s, grip, R_PILL, C_SEL);
     }
 }
 

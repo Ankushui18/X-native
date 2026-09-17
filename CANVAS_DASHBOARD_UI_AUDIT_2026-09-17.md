@@ -335,3 +335,66 @@ used-vs-ceiling per file.
 effectively 100% at the Action level, and the code→UI gaps are a short, named list. The product
 deliberately positions itself against being a Figma clone and mostly succeeds; to finish the
 job: one color, two labels, one dialog, and the variables editing surface.
+
+## 9. "Better than Figma" — a critic's pass over dashboard, canvas, panels and features
+
+The bar is not "as good as Figma". It is: every surface says what it is, every
+control answers the keyboard as well as the pointer, nothing dead-ends, and the
+design system makes the next screen cheap to build.
+
+### What shipped in this pass
+
+| surface | finding | change |
+|---|---|---|
+| dashboard | mouse-only (Tab gated to the editor) | Tab/Shift+Tab cycle the controls (focus derived from the hit list, so new controls are reachable for free), Enter fires, Escape drops, a click moves the ring; ring is `accent @ 1.5px` |
+| dashboard | no pointer affordance at all — the whole browser was a plain arrow | `cursor_for()`: Pointer on every control, Text on the search field, editor keeps resize/pan/tool grammar |
+| dashboard | Trash was a dead end ("No files in Trash" and nothing else) | real empty state + "Back to Home" action; it also says nothing is removed until you empty it |
+| placeholder text | exempt from the audit and failing AA in all three palettes (Graphite 2.56:1) | audited at 4.5:1 like any text role; `#939AA6` / `#5B6274` / `#B8B8B8`, each still dimmer than `text_dim` |
+| panels | the resize seam lit up but said nothing | the seam goes accent and grows a centred grip pill on hover/drag |
+
+### The critic's open list — ranked by how much it would lift the product
+
+**1. The dashboard's information architecture is thin for a workspace.**
+There is one column of cards, one 3-up grid and a drafts list. Figma's browser
+carries: a real table view (name / team / edited / size, sortable, with hover
+actions), project grouping with move-between-teams, "shared with me" and team
+sections, multi-select with a bulk bar, and a sort control. Ours has
+`DashView::{Home, Recents, Starred, Trash}` and no sort, no multi-select, no
+project grouping. *This is the largest single gap.*
+
+**2. The canvas reads as an editor but has no spatial navigation aids.**
+No minimap, no "zoom to fit all pages", no page thumbnail strip, and the ruler
+has no live guide readout while dragging (the guide line exists; the numeric
+feedback does not). Figma's ruler + guide readout and its page thumbnails are
+what make a large document feel small.
+
+**3. The left panel has the panes but not the workflows.**
+LAYERS / ASSETS / TOKENS pills exist, pages are listed, the tree supports
+drag-drop (P12). Missing vs Figma: component *instances* have no "go to main
+component" affordance in the row, assets have no search field, and there is no
+"select matching" / "show all instances" action on a component.
+
+**4. The right panel is the most under-used real estate.**
+Four tabs (COMPOSE / FLOW / SHIP / UX ANALYSIS) with per-node sections. Missing
+vs Figma: **variables and styles editing surface** (the data model exists —
+the audit flagged this before and it is still the biggest feature gap), a
+shared-styles list with "apply to selection", and constraint/auto-layout
+controls that show the resolved values (they exist per-node but the panel does
+not expose the *resolved* box model the way Figma's does).
+
+**5. Comments and flows are single-threaded.**
+Comments: one open thread at a time, no resolve-all, no filter by author.
+Prototype: connections are painted, but there is no "presentation mode" entry
+from the canvas (only from the panel) and no flow-start marker on the frame.
+
+### What is already ahead of Figma (keep it)
+
+- three audited palettes *including* a genuine high-contrast mode (Figma ships
+  light/dark only, and its placeholder greys fail AA);
+- ink roles that make an unreadable label impossible across palettes;
+- a token layer whose literals are ratcheted by a test, with a generated design
+  sheet — Figma has no equivalent guard on its own plugin/mock surfaces;
+- X-Native's own workflow verbs (SHIP / UX ANALYSIS) that Figma does not have;
+- pixel-audited density (22/32/40 row rhythm, Lucide 1.5 stroke, radius ladder)
+  that this pass put on tokens without moving a single measured coordinate.
+

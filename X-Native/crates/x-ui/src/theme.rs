@@ -153,6 +153,10 @@ const TEXT_ROLES: &[(&str, f64)] = &[
     ("success", 4.5),
     ("warning", 4.5),
     ("danger", 4.5),
+    // The placeholder is *text*: a hint the user has to read before typing
+    // over it. It used to be exempt as "faint by intent", which shipped
+    // #6B6E7A (2.56:1 on a hover fill) — under AA in all three palettes.
+    ("text_placeholder", 4.5),
 ];
 
 /// Roles text sits on.
@@ -316,10 +320,10 @@ mod tests {
 
     #[test]
     fn audit_covers_the_whole_role_matrix() {
-        // 7 text roles × 6 surfaces + 3 accent labels + 2 indicators
+        // 8 text roles × 6 surfaces + 3 accent labels + 2 indicators
         // + 1 declared label pair (on-danger ink on the danger fill)
         let pairs = ThemeId::Graphite.palette().contrast_pairs();
-        assert_eq!(pairs.len(), 7 * 6 + 3 + 2 + 1, "{pairs:?}");
+        assert_eq!(pairs.len(), 8 * 6 + 3 + 2 + 1, "{pairs:?}");
         assert!(
             pairs.iter().all(|p| p.ratio > 1.0),
             "every pair must compare two real colors"
@@ -328,9 +332,9 @@ mod tests {
             .iter()
             .any(|p| p.fg == "on_accent" && p.bg == "accent_hover"));
         // Every role is either checked by the audit or explicitly exempt:
-        // hairlines carry no meaning on their own, and placeholder text is
-        // allowed to be faint (WCAG excludes disabled content).
-        const EXEMPT: &[&str] = &["border", "border_strong", "text_placeholder"];
+        // hairlines carry no meaning on their own, so they are the only
+        // exemption left.
+        const EXEMPT: &[&str] = &["border", "border_strong"];
         for name in ColorTokens::role_names() {
             let mentioned = pairs.iter().any(|p| p.fg == *name || p.bg == *name);
             assert!(
@@ -432,7 +436,8 @@ mod tests {
     fn audit_reports_failures_loudly() {
         // a deliberately broken palette: dim text on a busy surface
         let mut broken = ThemeId::Daylight.palette();
-        broken.text_dim = broken.text_placeholder;
+        // dim text on the busiest surface — an unmistakable failure
+        broken.text_dim = broken.surface_hover;
         let audit = broken.contrast_audit();
         assert!(!audit.is_empty(), "the audit must notice");
         assert!(audit.iter().any(|a| a.starts_with("text_dim")), "{audit:?}");

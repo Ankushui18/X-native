@@ -47,6 +47,15 @@ pub fn paint(app: &mut App, s: &mut Scene) {
         paint_template_picker(app, s, &mut hit);
     }
 
+    // Keyboard focus ring: painted from the list just built, under the modal
+    // (a modal owns the interaction) so the two never disagree.
+    if !app.template_picker_open {
+        if let Some(r) = focus_ring(app, &hit) {
+            let ring = r.inflate(1.5, 1.5);
+            stroke_rrect(s, ring, R_ROW, C_SEL, STROKE_RING);
+        }
+    }
+
     app.hit = hit;
 }
 
@@ -124,7 +133,7 @@ fn paint_template_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Acti
     }
 }
 
-fn search_rect(app: &App) -> Rect {
+pub fn search_rect(app: &App) -> Rect {
     // The HTML centers the 480px search inside the flex-1 container between
     // the wordmark group and the right button group — measured x=460.1 at
     // 1440 (NOT the window center).
@@ -646,15 +655,37 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         paint_recents(app, s, hit, x0, x1, dy);
     }
     if view == DashView::Trash {
+        // An empty state is a place to go next, not a wall: it says what is
+        // true (nothing is in the trash) and offers the way back. Trash used
+        // to be a dead end — the only control on screen was the sidebar.
+        let box_ = Rect::new(x0, dy + 251.5, x1, dy + 331.5);
+        app.fonts
+            .text_center(s, box_, "Trash is empty", T14, C_TEXT, Wt::Med, true);
         app.fonts.text_center(
             s,
-            Rect::new(x0, dy + 267.5, x1, dy + 327.5),
-            "No files in Trash",
-            T13,
+            Rect::new(x0, dy + 277.5, x1, dy + 297.5),
+            "Files you delete land here first, and nothing is removed until you empty it.",
+            T11,
             C_DIM,
             Wt::Reg,
             true,
         );
+        let back = Rect::new(
+            (x0 + x1) / 2.0 - 62.0,
+            dy + 321.5,
+            (x0 + x1) / 2.0 + 62.0,
+            dy + 353.5,
+        );
+        fill_rrect(
+            s,
+            back,
+            R_ROW,
+            if hover(app, back) { C_FIELD_2 } else { C_FIELD },
+        );
+        stroke_rrect(s, back, R_ROW, C_LINE, 1.0);
+        app.fonts
+            .text_center(s, back, "Back to Home", T11, C_TEXT, Wt::Med, true);
+        hit.push((back, Action::DashNav(DashView::Home)));
     }
     if app.dash_view == DashView::Home {
         paint_drafts(app, s, hit, x0, x1, dy);
@@ -1036,4 +1067,31 @@ fn paint_drafts(
 
 fn hover(app: &App, r: Rect) -> bool {
     r.contains(app.mouse)
+}
+
+/// The dashboard's keyboard stops: the hit list minus the things that are not
+/// controls (a modal scrim swallows clicks but must not take focus, and a
+/// 10px decoration is not a target). Order is paint order — the sidebar first,
+/// then the top bar's buttons, the quick actions, the file grid and the
+/// drafts — so Tab walks the page the way it reads.
+pub fn focus_targets(app: &App) -> Vec<usize> {
+    let full_w = app.win_w - 1.0;
+    let full_h = app.win_h - 1.0;
+    app.hit
+        .iter()
+        .enumerate()
+        .filter(|(_, (r, _))| {
+            let big = r.width() >= full_w && r.height() >= full_h;
+            !big && r.width() >= 12.0 && r.height() >= 12.0
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Where the ring is: `dash_focus` indexes [`focus_targets`], so the ring can
+/// be painted from the freshly built hit list without a second layout pass.
+fn focus_ring(app: &App, hit: &[(Rect, Action)]) -> Option<Rect> {
+    let targets = focus_targets(app);
+    let at = app.dash_focus?;
+    targets.get(at).map(|i| hit[*i].0)
 }

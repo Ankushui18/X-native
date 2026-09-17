@@ -2471,3 +2471,111 @@ fn docks_never_eat_the_canvas() {
         r.canvas.width()
     );
 }
+
+/// A host sitting on the dashboard, painted once so `hit` is populated.
+fn dashboard_host() -> Host {
+    let mut h = host();
+    h.app.screen = Screen::Dashboard;
+    h.app.docs.clear();
+    h.app.win_w = 1440.0;
+    h.app.win_h = 900.0;
+    h.app.dash_view = DashView::Home;
+    h.app.mouse = Point::new(-100.0, -100.0);
+    let mut scene = vello::Scene::new();
+    dashboard::paint(&mut h.app, &mut scene);
+    h
+}
+
+#[test]
+fn dashboard_is_reachable_by_keyboard() {
+    let mut h = dashboard_host();
+    let targets = dashboard::focus_targets(&h.app);
+    assert!(
+        targets.len() >= 8,
+        "the dashboard must expose its controls to the keyboard, found {}",
+        targets.len()
+    );
+    // every stop is a real target with a real action
+    for i in &targets {
+        let (r, _) = &h.app.hit[*i];
+        assert!(
+            r.width() > 0.0 && r.height() > 0.0,
+            "degenerate focus target"
+        );
+    }
+
+    // Tab from nothing lands on the first stop, Shift+Tab on the last
+    h.on_key(Key::Named(NamedKey::Tab), None);
+    assert_eq!(h.app.dash_focus, Some(0));
+    h.on_key(Key::Named(NamedKey::Tab), None);
+    assert_eq!(h.app.dash_focus, Some(1));
+    h.app.shift = true;
+    h.on_key(Key::Named(NamedKey::Tab), None);
+    assert_eq!(h.app.dash_focus, Some(0));
+    h.app.shift = false;
+    h.on_key(Key::Named(NamedKey::Tab), None);
+    h.on_key(Key::Named(NamedKey::Tab), None);
+    assert_eq!(h.app.dash_focus, Some(2), "Tab must keep moving forward");
+
+    // Escape drops the ring; the next Tab starts over from the top
+    h.on_key(Key::Named(NamedKey::Escape), None);
+    assert_eq!(h.app.dash_focus, None);
+    h.on_key(Key::Named(NamedKey::Tab), None);
+    assert_eq!(h.app.dash_focus, Some(0));
+
+    // Enter on a stop does what clicking it does: walk to "Recents"
+    let recents = h
+        .app
+        .hit
+        .iter()
+        .position(|(_, a)| *a == Action::DashNav(DashView::Recents))
+        .expect("the sidebar has a Recents row");
+    let at = targets.iter().position(|t| *t == recents).unwrap();
+    for _ in 0..targets.len() + 1 {
+        if h.app.dash_focus == Some(at) {
+            break;
+        }
+        h.on_key(Key::Named(NamedKey::Tab), None);
+    }
+    assert_eq!(h.app.dash_focus, Some(at));
+    h.on_key(Key::Named(NamedKey::Enter), None);
+    assert_eq!(
+        h.app.dash_view,
+        DashView::Recents,
+        "Enter fires the focused control"
+    );
+}
+
+#[test]
+fn pointer_says_what_it_will_do() {
+    let mut h = dashboard_host();
+    let reg = h.app.editor_regions();
+    assert!(h.app.hit.len() > 5, "paint populated the hit list");
+
+    // dead space in the main column: nothing to click
+    h.app.mouse = Point::new(reg.sidebar.x1 + 8.0, h.app.win_h - 8.0);
+    let dead = cursor_for(&h.app);
+    // the search field is a text field, in the top bar
+    h.app.mouse = dashboard::search_rect(&h.app).center();
+    assert_eq!(cursor_for(&h.app), CursorIcon::Text);
+    // every control says "clickable"
+    let (rect, _) = h.app.hit[h.app.hit.len() - 1].clone();
+    h.app.mouse = rect.center();
+    assert_eq!(cursor_for(&h.app), CursorIcon::Pointer);
+    assert_ne!(dead, CursorIcon::Text);
+
+    // the dashboard used to render as a plain arrow everywhere — the whole
+    // file browser had no hover affordance at all
+    let mut pointer = 0;
+    for i in 0..h.app.hit.len() {
+        let (r, _) = h.app.hit[i].clone();
+        if r.width() < 40.0 || r.height() < 20.0 {
+            continue;
+        }
+        h.app.mouse = r.center();
+        if cursor_for(&h.app) == CursorIcon::Pointer {
+            pointer += 1;
+        }
+    }
+    assert!(pointer >= 3, "only {pointer} controls advertise themselves");
+}

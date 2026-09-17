@@ -9,6 +9,7 @@ const XUI = new URL('../../crates/x-ui/src/design_system.rs', import.meta.url);
 const APP = new URL('../../apps/x-designer/src/bin/x_native_app/theme.rs', import.meta.url);
 const ds = readFileSync(XUI, 'utf8');
 const app = readFileSync(APP, 'utf8');
+const xuiTheme = readFileSync(new URL('../../crates/x-ui/src/theme.rs', import.meta.url), 'utf8');
 
 const hx = (r, g, b) => '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('');
 
@@ -65,7 +66,13 @@ const provenance = {
   xui: 'crates/x-ui/src/design_system.rs',
   app: 'apps/x-designer/src/bin/x_native_app/theme.rs',
 };
-const payload = { palettes, roleNames, scales, appVocab, provenance };
+// the roles the contrast audit checks as *text* (everything else is a fill)
+const textBlock = xuiTheme.slice(
+  xuiTheme.indexOf('const TEXT_ROLES'),
+  xuiTheme.indexOf('];', xuiTheme.indexOf('const TEXT_ROLES')),
+);
+const textRoles = [...textBlock.matchAll(/\("([a-z_]+)"/g)].map((m) => m[1]);
+const payload = { palettes, roleNames, textRoles, scales, appVocab, provenance };
 writeFileSync(OUT('tokens.json'), JSON.stringify(payload, null, 2));
 writeFileSync(OUT('tokens.js'), `window.TOKENS = ${JSON.stringify(payload)};\n`);
 const css = [];

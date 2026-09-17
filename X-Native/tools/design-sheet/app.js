@@ -36,14 +36,16 @@ const svgIcon = (name, size, cls = '') => {
 // ------------------------------------------------------------------- palette
 function renderPalette() {
   const p = palette();
-  const textRoles = new Set(['text_primary', 'text_secondary', 'text_dim', 'accent_ink']);
-  const surfaces = ['background', 'surface'];
+  // exactly the roles the crate audits as text (TEXT_ROLES in x-ui/theme.rs)
+  const textRoles = new Set(T.textRoles);
+  // the same six surfaces the crate's audit walks
+  const surfaces = ['background', 'canvas', 'surface', 'surface_elevated', 'surface_hover', 'surface_active'];
   document.getElementById('roles').innerHTML = T.roleNames
     .map((r) => {
       const worst = Math.min(...surfaces.map((bg) => contrast(p[r], p[bg])));
       const isText = textRoles.has(r);
       const cls = isText ? (worst >= 4.5 ? 'pass' : 'warn') : '';
-      const note = isText ? `${worst.toFixed(2)}:1 on the darkest surface` : 'fill / chrome';
+      const note = isText ? `${worst.toFixed(2)}:1 worst surface` : 'fill / chrome';
       return `<div class="role">
         <span class="chip" style="background:${p[r]}"></span>
         <span class="meta">

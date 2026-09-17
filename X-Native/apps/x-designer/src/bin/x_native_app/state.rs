@@ -1818,6 +1818,12 @@ pub struct App {
     pub dash_search: String,
     pub dash_scroll: f64,
     pub dash_search_focus: bool,
+    /// Keyboard focus on the dashboard: a position in
+    /// [`dashboard::focus_targets`] (which filters the hit list down to the
+    /// real controls). The dashboard was mouse-only — Tab moves this, Enter
+    /// fires the focused control, Escape drops it, and a click puts it on
+    /// whatever was clicked, so the ring never disagrees with the pointer.
+    pub dash_focus: Option<usize>,
     // editor ui state
     pub left_w: f64,
     pub right_w: f64,
@@ -2014,6 +2020,7 @@ impl App {
             dash_search: String::new(),
             dash_scroll: 0.0,
             dash_search_focus: false,
+            dash_focus: None,
             left_w: ED_LEFT_W,
             right_w: ED_RIGHT_W,
             tool: Tool::Select,
