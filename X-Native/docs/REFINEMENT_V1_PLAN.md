@@ -189,13 +189,57 @@ that don't exist:
   Dashboard quick-action cards and the board's empty state are file/board
   idioms and belong to the P0-4/P0-5 visual-language pass.
 
+### P0-1/2 · Screen & component contract; x-ui as the component layer — DONE (this branch)
+
+x-ui was a token crate: the app imported its palette, type ladder and spacing
+scale, then defined its own control heights, hover colours and widgets — which
+is how one inspector ended up with 19px, 20px, 22px and 32px rows. Four modules
+are now the contract the screens are held to, and the designer imports the
+standard instead of restating it:
+
+- **`metrics`** — the P0-9 control-height and rhythm scale (28 / 24 / 16;
+  8 / 6 / 12) with `is_control_height` and `nearest_control_height`. The
+  designer's `theme.rs` now derives `INPUT_H` / `DENSE_H` / `CHIP_H` /
+  `SQ_BTN` / `ROW_GAP` / `SECTION_GAP` from here — values unchanged, one
+  source — and `app_row_heights_are_the_component_layers` holds it there.
+  (`LABEL_GAP` keeps the file's own spacing alias: both name the same shared
+  step, so there is nothing to drift.)
+- **`state`** — the one state language: selection / hover / focus are three
+  roles, focus is an additive ring (never a replacement for the base state),
+  and every role the module names is checked against `ColorTokens` so it cannot
+  invent a colour no theme can remap.
+- **`screens`** — the three screens and their 31 surfaces: kind, the name it
+  shows, whether it owns property rows, what it says when empty, how it
+  scrolls. Banned labels (`design`, `prototype`, `layers`, …) keep the old
+  vocabulary from leaking back into a panel title.
+- **`contract`** — the 22-component inventory: height, scale step, states, hit
+  region, focus ring, and who paints it today.
+
+Widget *painters* are still in the designer. That was always the "incrementally"
+in this item, and the order follows the surfaces being reworked, not the table:
+the next component to move is whichever one P0-5 touches first (see
+`docs/COMPONENT_CONTRACT.md` §"How a component lands in x-ui").
+
+Five ledgers make what is left measurable instead of aspirational — each a
+ratchet the registry and the count have to agree on, so neither can be edited
+alone:
+
+| Ledger | Value | What it counts |
+|---|---|---|
+| `OFF_STANDARD_SURFACES` | 3 | FLOW, SHIP, UX ANALYSIS rows not on the scale (P0-5). |
+| `OFF_STANDARD_COMPONENTS` | 2 | The 22px tree row and the 32px dropdown row (P0-5). |
+| `SILENT_EMPTY_STATES` | 6 | Surfaces that can be empty and say nothing (P0-5). |
+| `DISABLEABLE_COMPONENTS` | 1 | Components that can be unavailable: the square icon button is the only control the chrome can dim. |
+| `MIGRATED_TO_X_UI` | 0 | Components whose painter lives in x-ui. |
+
+The rules these fields mean are in `docs/SCREEN_CONTRACT.md` (P0-1) and
+`docs/COMPONENT_CONTRACT.md` (P0-2).
+
 ### Not yet done (queued)
-- **P0-1/2 · Screen & component contract; x-ui as the component layer.**
-  x-ui is currently a token repo the app does not import for widgets;
-  Button/Input/Select/Section/LayerRow/etc. land there incrementally.
 - **P0-5 · Cross-screen visual language pass** — board + the editor's
   FLOW / SHIP / UX tabs brought onto the editor + dashboard language
-  (property-row surfaces snap to the P0-9 standard).
+  (property-row surfaces snap to the P0-9 standard; the four ledgers above are
+  its work list).
 - **P1 · Professional editor interaction** (deep select, select-under-cursor,
   smart selection, …).
 - **P2 · Polish/motion.**
@@ -206,3 +250,15 @@ No local toolchain exists in the development sandbox — the gate is CI
 (`scripts/check.sh`): workspace `cargo test`, clippy and fmt. The engine
 slice is test-covered (x-text alignment/cap/indent/decoration + cache-key
 tests; app-level regression tests for the theme role mapping).
+
+P0-1/2 adds tests rather than screenshots: the registry invariants in `x-ui`
+(unique ids, banned labels, the hit-region and hover rules, every scale step
+and every state role traced back to `ColorTokens`), and two app-side assertions
+that the chrome still reads the standard from the component layer
+(`every_screen_the_app_can_show_is_in_the_contract`,
+`app_row_heights_are_the_component_layers`). One gate step had to learn the new
+indirection: `build_audit.mjs` parses `theme.rs` constants instead of retyping
+them, so a constant the app now imports from `x-ui::metrics` is resolved
+through `metrics.rs` — otherwise the sheet reports the number the app used to
+have. The sheet was regenerated, and one usage count moved: the app names
+`SP_3` once less now that `ROW_GAP` is imported.

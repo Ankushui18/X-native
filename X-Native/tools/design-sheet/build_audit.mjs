@@ -7,7 +7,33 @@ const readFileSync = (p, enc) => readSync(p instanceof URL ? fileURLToPath(p) : 
 const DIR = fileURLToPath(new URL('../../apps/x-designer/src/bin/x_native_app/', import.meta.url));
 const XUI = new URL('../../crates/x-ui/src/design_system.rs', import.meta.url);
 const APP_THEME = DIR + 'theme.rs';
+const XUI_METRICS = new URL('../../crates/x-ui/src/metrics.rs', import.meta.url);
 const themeSrc = readFileSync(APP_THEME, 'utf8');
+const metricsSrc = readFileSync(XUI_METRICS, 'utf8');
+
+// A chrome constant is *parsed*, never retyped (see the note above the dock
+// table). Since P0-1 the control-height scale is one of those constants that
+// moved: `theme.rs` imports it from the component layer instead of restating a
+// number, so a right-hand side that names a scale step is resolved through
+// `metrics.rs` — the sheet then documents the scale the app actually uses, and
+// a step renamed in one place fails here instead of silently reading as 0.
+const themeNum = (name) => {
+  const m = themeSrc.match(new RegExp(`${name}: f64 = ([^;]+);`));
+  if (!m) throw new Error(`build_audit: theme.rs has no ${name}`);
+  let rhs = m[1].trim();
+  let hops = 0;
+  while (!/^[\d.]+$/.test(rhs)) {
+    const step = rhs.match(/^(?:x_native::ui::metrics::)?([A-Z_]+)$/);
+    if (!step || hops > 3) {
+      throw new Error(`build_audit: ${name} is neither a number nor a scale step (${rhs})`);
+    }
+    const next = metricsSrc.match(new RegExp(`pub const ${step[1]}: f64 = ([^;]+)`));
+    if (!next) throw new Error(`build_audit: metrics.rs has no ${step[1]}`);
+    rhs = next[1].trim();
+    hops += 1;
+  }
+  return Number(rhs);
+};
 
 const production = (src) => {
   const i = src.indexOf('#[cfg(test)]');
@@ -156,22 +182,22 @@ const geom = {
 // ED_TITLE_H is a mock that will one day show the previous layout.
 const cmdSrc = readFileSync(DIR + 'command.rs', 'utf8');
 const ui = {
-  titleH: Number(themeSrc.match(/ED_TITLE_H: f64 = ([\d.]+)/)[1]),
-  logoCell: Number(themeSrc.match(/LOGO_CELL_W: f64 = ([\d.]+)/)[1]),
-  treeRowH: Number(themeSrc.match(/TREE_ROW_H: f64 = ([\d.]+)/)[1]),
-  inputH: Number(themeSrc.match(/INPUT_H: f64 = ([\d.]+)/)[1]),
-  pillH: Number(themeSrc.match(/PILL_H: f64 = ([\d.]+)/)[1]),
-  toolbarH: Number(themeSrc.match(/TOOLBAR_H: f64 = ([\d.]+)/)[1]),
-  toolbarBottom: Number(themeSrc.match(/TOOLBAR_BOTTOM: f64 = ([\d.]+)/)[1]),
-  toolIcon: Number(themeSrc.match(/TOOL_ICON: f64 = ([\d.]+)/)[1]),
-  menuW: Number(themeSrc.match(/MENU_WIDTH: f64 = ([\d.]+)/)[1]),
-  menuRowH: Number(themeSrc.match(/MENU_ROW_H: f64 = ([\d.]+)/)[1]),
-  appMenuW: Number(themeSrc.match(/APP_MENU_WIDTH: f64 = ([\d.]+)/)[1]),
-  dashTitleH: Number(themeSrc.match(/DASH_TITLE_H: f64 = ([\d.]+)/)[1]),
-  draftRowH: Number(themeSrc.match(/DRAFT_ROW_H: f64 = ([\d.]+)/)[1]),
-  searchW: Number(themeSrc.match(/SEARCH_W: f64 = ([\d.]+)/)[1]),
-  searchH: Number(themeSrc.match(/SEARCH_H: f64 = ([\d.]+)/)[1]),
-  logo: Number(themeSrc.match(/LOGO: f64 = ([\d.]+)/)[1]),
+  titleH: themeNum('ED_TITLE_H'),
+  logoCell: themeNum('LOGO_CELL_W'),
+  treeRowH: themeNum('TREE_ROW_H'),
+  inputH: themeNum('INPUT_H'),
+  pillH: themeNum('PILL_H'),
+  toolbarH: themeNum('TOOLBAR_H'),
+  toolbarBottom: themeNum('TOOLBAR_BOTTOM'),
+  toolIcon: themeNum('TOOL_ICON'),
+  menuW: themeNum('MENU_WIDTH'),
+  menuRowH: themeNum('MENU_ROW_H'),
+  appMenuW: themeNum('APP_MENU_WIDTH'),
+  dashTitleH: themeNum('DASH_TITLE_H'),
+  draftRowH: themeNum('DRAFT_ROW_H'),
+  searchW: themeNum('SEARCH_W'),
+  searchH: themeNum('SEARCH_H'),
+  logo: themeNum('LOGO'),
   cmdPaletteW: Number(cmdSrc.match(/PALETTE_WIDTH: f64 = ([\d.]+)/)[1]),
   cmdPaletteMaxH: Number(cmdSrc.match(/PALETTE_MAX_HEIGHT: f64 = ([\d.]+)/)[1]),
   cmdInputH: Number(cmdSrc.match(/INPUT_HEIGHT: f64 = ([\d.]+)/)[1]),
@@ -180,19 +206,19 @@ const ui = {
 
 const docks = {
   nav: geom.nav,
-  canvasMin: Number(themeSrc.match(/ED_CANVAS_MIN: f64 = ([\d.]+)/)[1]),
-  left: Number(themeSrc.match(/ED_LEFT_W: f64 = ([\d.]+)/)[1]),
+  canvasMin: themeNum('ED_CANVAS_MIN'),
+  left: themeNum('ED_LEFT_W'),
   leftRange: [
-    Number(themeSrc.match(/ED_LEFT_MIN: f64 = ([\d.]+)/)[1]),
-    Number(themeSrc.match(/ED_LEFT_MAX: f64 = ([\d.]+)/)[1]),
+    themeNum('ED_LEFT_MIN'),
+    themeNum('ED_LEFT_MAX'),
   ],
-  right: Number(themeSrc.match(/ED_RIGHT_W: f64 = ([\d.]+)/)[1]),
-  rightMin: Number(themeSrc.match(/ED_RIGHT_MIN: f64 = ([\d.]+)/)[1]),
+  right: themeNum('ED_RIGHT_W'),
+  rightMin: themeNum('ED_RIGHT_MIN'),
   rightRange: [
-    Number(themeSrc.match(/ED_RIGHT_MIN: f64 = ([\d.]+)/)[1]),
-    Number(themeSrc.match(/ED_RIGHT_MAX: f64 = ([\d.]+)/)[1]),
+    themeNum('ED_RIGHT_MIN'),
+    themeNum('ED_RIGHT_MAX'),
   ],
-  titleH: Number(themeSrc.match(/ED_TITLE_H: f64 = ([\d.]+)/)[1]),
+  titleH: themeNum('ED_TITLE_H'),
 };
 
 // `dashboard::search_rect` in four lines, so the sheet's "search slack" is the

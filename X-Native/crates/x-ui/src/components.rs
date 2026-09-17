@@ -9,17 +9,21 @@ use crate::{UiRect, UiTree, WidgetId, WidgetKind};
 
 // ============================================================= Constants
 
+// The control-height scale is declared once, in `metrics`, so the retained-mode
+// components here and the designer's immediate-mode chrome cannot drift apart.
+// A panel header is not a property row, so it keeps its own height.
+
 /// Standard control height for all inputs and buttons
-pub const CONTROL_HEIGHT: f64 = 28.0;
+pub const CONTROL_HEIGHT: f64 = crate::metrics::CONTROL_H;
 
 /// Standard row height for lists and trees
-pub const ROW_HEIGHT: f64 = 24.0;
+pub const ROW_HEIGHT: f64 = crate::metrics::DENSE_H;
 
 /// Panel header height
 pub const PANEL_HEADER_H: f64 = 32.0;
 
 /// Inspector section header height
-pub const SECTION_HEADER_H: f64 = 24.0;
+pub const SECTION_HEADER_H: f64 = crate::metrics::DENSE_H;
 
 // ================================================================ Button
 

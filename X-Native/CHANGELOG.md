@@ -113,6 +113,42 @@ Part of the UI/UX Refinement v1 milestone (see
   HTML reference now say what the constants are: hand-tuned for a 1440px
   composition. No behaviour change.
 
+### Added
+- **The screen & component contract, in `x-ui` (P0-1/P0-2).** `x-ui` was a
+  token crate: the app imported its palette, type ladder and spacing scale, and
+  then defined its own control heights, hover colours and widgets — which is how
+  one inspector ended up with 19px, 20px, 22px and 32px rows. It now owns the
+  contract the screens are held to:
+  - **`metrics`** — the control-height and rhythm standard (28 / 24 / 16;
+    8 / 6 / 12) with `is_control_height` / `nearest_control_height`. The
+    designer's `INPUT_H`, `DENSE_H`, `CHIP_H`, `SQ_BTN`, `ROW_GAP` and
+    `SECTION_GAP` are derived from it — same values, one source — and
+    `app_row_heights_are_the_component_layers` holds the app to it.
+  - **`state`** — selection, hover and focus as three palette roles, with
+    focus an *additive* ring rather than a replacement for the base state.
+    Every role it names is checked against `ColorTokens`.
+  - **`screens`** — the 3 screens and their 31 surfaces: kind, the label it
+    shows, whether it owns property rows, what it says when empty, how it
+    scrolls. Banned labels keep the pre-rename vocabulary (`design`,
+    `prototype`, `layers`, …) out of a panel title.
+  - **`contract`** — the 22-component inventory: height, scale step, states,
+    hit region, focus ring, and who paints it today.
+  Four ratchets turn the cross-screen pass into a work list the gate can count:
+  `OFF_STANDARD_SURFACES` 3 (FLOW / SHIP / UX ANALYSIS),
+  `OFF_STANDARD_COMPONENTS` 2 (the 22px tree row, the 32px dropdown row),
+  `SILENT_EMPTY_STATES` 6, `MIGRATED_TO_X_UI` 0. The rules these fields mean
+  are in `docs/SCREEN_CONTRACT.md` and `docs/COMPONENT_CONTRACT.md`.
+  `crates/x-ui`, `apps/x-designer`.
+
+### Changed
+- **The design sheet's audit generator follows constants it can no longer read
+  off `theme.rs`.** `build_audit.mjs` parses the chrome's constants instead of
+  retyping them; a constant the app now imports from `x-ui::metrics`
+  (`INPUT_H`) is resolved through `metrics.rs`, so the sheet cannot report the
+  number the app used to have. The sheet was regenerated — one usage count
+  moved (`SP_3`, once `ROW_GAP` stopped naming it) and no audit value changed.
+  `X-Native/tools/design-sheet`.
+
 ## [Unreleased] — 2026-09-16 (Vector Tools, and the Build They Needed)
 
 ### Added

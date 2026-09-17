@@ -23,10 +23,31 @@
 //!         │
 //!    All Application Screens
 //! ```
+//!
+//! ## The contract layer
+//!
+//! Four modules are the contract the screens are held to, not widgets:
+//!
+//! - [`metrics`] — the control-height and rhythm standard every property-row
+//!   surface snaps to (Refinement v1, P0-9). The designer's `theme.rs`
+//!   re-derives its geometry from here rather than restating a number.
+//! - [`state`] — one state language: selection, hover and focus are three
+//!   different roles, and focus is a ring on top of the base state (P0-7).
+//! - [`screens`] — the screen and surface registry: what every surface is
+//!   called, whether it owns property rows, and what it says when empty (P0-1).
+//! - [`contract`] — the component inventory: height, step, states, hit region
+//!   and who paints it, with ledgers for what is still off-standard (P0-2).
+//!
+//! Rules, inventories and the migration order are written up in
+//! `docs/SCREEN_CONTRACT.md` and `docs/COMPONENT_CONTRACT.md`.
 
 pub mod components;
 pub mod containers;
+pub mod contract;
 pub mod design_system;
+pub mod metrics;
+pub mod screens;
+pub mod state;
 pub mod status_bar;
 pub mod theme;
 
@@ -40,10 +61,24 @@ pub use containers::{
     Dropdown, DropdownEvent, Menu, MenuItem, Modal, ModalEvent, ScrollView, TooltipState,
     MENU_ROW_H, MENU_W,
 };
+pub use contract::{
+    component, ComponentId, ComponentKind, ComponentSpec, Owner, COMPONENTS, COMPONENT_VARIANTS,
+    MIGRATED_TO_X_UI, OFF_STANDARD_COMPONENTS,
+};
 pub use design_system::{
     AlphaScale, ColorTokens, DesignSystem, Elevation, IconScale, InteractionState, MotionScale,
     RadiusScale, Shadow, ShadowScale, SpacingScale, StrokeScale, TypographyScale, COLOR_ROLES,
 };
+pub use metrics::{
+    is_control_height, nearest_control_height, ControlHeight, CHIP_H, CONTROL_H, CONTROL_HEIGHTS,
+    DENSE_H, LABEL_GAP, ROW_GAP, SECTION_GAP, SQUARE_H,
+};
+pub use screens::{
+    row_height, screen, surface, surfaces_of, EmptyState, ScreenId, ScreenSpec, ScrollRule,
+    SurfaceId, SurfaceKind, SurfaceSpec, BANNED_LABELS, OFF_STANDARD_SURFACES, SCREENS,
+    SILENT_EMPTY_STATES, SURFACES, SURFACE_VARIANTS,
+};
+pub use state::{resolve, Ring, StatePaint, WidgetState, STATE_ROLES};
 pub use status_bar::{
     BreadcrumbPath, BreadcrumbSegment, ConnectionStatus, CursorState, EntityId, NotificationLevel,
     NotificationQueue, PerformanceMetrics, ProgressOperation, SelectionBounds, SelectionSummary,
