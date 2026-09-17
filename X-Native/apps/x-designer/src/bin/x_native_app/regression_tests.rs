@@ -2593,14 +2593,26 @@ fn edited_labels_sort_by_what_they_say() {
     assert_eq!(edited_minutes("Edited 1 week ago"), 10080);
     assert_eq!(edited_minutes("now"), 0);
     assert_eq!(edited_minutes("whenever"), u32::MAX);
-    // every seed label parses to something real
+    // Every seeded row stores the parse of the label it shows, because both
+    // come from `edited_minutes`. A row may sort as unknown, but only when it
+    // really is one: a file on disk we have never opened ("Open from disk").
     let app = App::new();
     for f in app.recents.iter().chain(app.drafts.iter()) {
-        assert!(
-            f.edited_min != u32::MAX,
-            "seed label {:?} does not parse",
+        assert_eq!(
+            f.edited_min,
+            edited_minutes(&f.edited),
+            "seed {:?} stores {:?} but its label says {:?}",
+            f.name,
+            f.edited_min,
             f.edited
         );
+        if f.edited_min == u32::MAX {
+            assert!(
+                f.path.is_some(),
+                "only a never-opened file may sort as unknown: {:?}",
+                f.name
+            );
+        }
     }
 }
 
