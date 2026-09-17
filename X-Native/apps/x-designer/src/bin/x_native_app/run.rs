@@ -9029,6 +9029,11 @@ impl Host {
                 doc.color_picker_stroke_open = false;
             }
             Action::RightTab(t) => {
+                // leaving DESIGN takes the paint library with it: the popover
+                // is anchored to a row that only that tab paints
+                if t != crate::state::RightTab::Design {
+                    self.app.paint_lib = None;
+                }
                 self.app.doc().right_tab = t;
             }
             Action::VariantCycle(dir) => {
