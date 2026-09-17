@@ -168,6 +168,12 @@ const SURFACE_ROLES: &[&str] = &[
 /// Accent fills — `on_accent` is the only text drawn on them.
 const ACCENT_FILLS: &[&str] = &["accent", "accent_hover", "accent_active"];
 
+/// (label role, fill role) pairs for saturated tiles that carry text — a
+/// count badge, a primary button. A fill is *not* text and does not get the
+/// text-contrast exemption: whatever is drawn on it must clear 4.5:1, which is
+/// why `danger_fill` exists as a role instead of an invented hex at the badge.
+const LABEL_FILLS: &[(&str, &str)] = &[("on_danger", "danger_fill")];
+
 /// Non-text indicators: 3:1 (WCAG 1.4.11), not 4.5:1.
 const INDICATOR_ROLES: &[&str] = &["selection", "focus_ring"];
 
@@ -197,6 +203,11 @@ impl ColorTokens {
         }
         for bg in ACCENT_FILLS {
             if let Some(p) = pair(self, "on_accent", bg, 4.5) {
+                out.push(p);
+            }
+        }
+        for (fg, bg) in LABEL_FILLS {
+            if let Some(p) = pair(self, fg, bg, 4.5) {
                 out.push(p);
             }
         }

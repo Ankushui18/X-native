@@ -148,6 +148,11 @@ pub const C_INPUT_HOVER: Color = rgb(role!(surface_hover)); // Input hover state
 pub const C_ROW_HOVER: Color = rgb(role!(surface_elevated)); // Row hover state
 pub const C_TOOLBAR: Color = rgba(role!(surface), 230); // Toolbar with transparency
 pub const C_SCRIM: Color = Color::from_rgba8(0x00, 0x00, 0x00, 145); // Modal/palette overlay
+/// Wash under a control that floats on top of *user content* (the recents
+/// card's star, a thumbnail's overflow) — black at the standard wash step, so
+/// it reads on a light thumbnail without a per-card decision. Not themeable:
+/// it separates chrome from artwork, and artwork must not repaint with a theme.
+pub const C_DISC_SCRIM: Color = Color::from_rgba8(0x00, 0x00, 0x00, A_SOFT);
 pub const C_BASE: Color = C_BG; // Alias for chrome.rs
 pub const C_RAISED: Color = C_PANEL_2; // Raised surface
 pub const C_EDGE: Color = C_LINE; // Edge/border color
@@ -155,10 +160,29 @@ pub const C_EDGE: Color = C_LINE; // Edge/border color
 // ------------------------------------------------------------------- accents
 
 pub const C_ACCENT: Color = rgb(role!(accent)); // Primary accent (fill)
-pub const C_ACCENT_MUTED: Color = rgba(role!(accent), 0x33); // Muted accent
+/// The standard accent wash (icon chips, selected palette row).
+pub const C_ACCENT_MUTED: Color = rgba(role!(accent), A_SOFT);
 /// Unread-notification wash on the nav bar (accent at a whisper of alpha).
-pub const C_UNREAD_WASH: Color = rgba(role!(accent), 0x08);
+pub const C_UNREAD_WASH: Color = rgba(role!(accent), A_WHISPER);
 pub const C_ON_ACCENT: Color = rgb(role!(on_accent)); // Text on accent
+/// Success wash: the free/local-first badge tile on the dashboard. A role so
+/// the *tile's* hue follows the theme's success color instead of hard-coding
+/// the logo green at a call site.
+pub const C_SUCCESS: Color = rgb(role!(success));
+pub const C_SUCCESS_WASH: Color = rgba(role!(success), A_SOFT);
+/// Edge of a success tile — one step above the fill so the tile reads on a
+/// panel without a second colour role.
+pub const C_SUCCESS_EDGE: Color = rgba(role!(success), A_MEDIUM);
+/// A status badge fill (unread count, error count) and its label. The text
+/// role `danger` is deliberately pale so it stays legible *on* a surface; a
+/// saturated tile needs the opposite, and its label is pinned at 4.5:1 by the
+/// palette audit (`LABEL_FILLS`).
+pub const C_DANGER_FILL: Color = rgb(role!(danger_fill));
+pub const C_ON_DANGER: Color = rgb(role!(on_danger));
+/// Selection washes in *content* space (the board's marquee): the same pair
+/// the canvas uses, on the `selection` role rather than the focus ring.
+pub const C_SELECTION_WASH: Color = rgba(role!(selection), A_SOFT);
+pub const C_SELECTION_EDGE: Color = rgba(role!(selection), A_STRONG);
 
 // ------------------------------------------------------------------ textual
 
@@ -168,7 +192,12 @@ pub const C_DIM: Color = rgb(role!(text_placeholder)); // Dimmed text
 pub const C_PLACEHOLDER: Color = rgb(role!(text_placeholder)); // Placeholder text
 pub const C_ZINC_400: Color = rgb(role!(text_dim)); // Tree names
 pub const C_FAINT: Color = C_MUTED; // Faint text (legacy name)
+/// Pure black ink for text on a saturated fill (avatar + team initials,
+/// on-accent labels, badge counts) and for on-canvas guides. A primitive, not
+/// a surface role: no palette may make black-on-accent unreadable.
 pub const C_BLACK: Color = Color::from_rgb8(0x00, 0x00, 0x00);
+// Watermarks sit *on the user's artwork*, so they are the one place a text
+// color is used at a wash alpha rather than a wash step's own role.
 pub const C_BLACK_10: Color = Color::from_rgba8(0x00, 0x00, 0x00, 26); // dark watermark
 pub const C_WHITE_10: Color = rgba(role!(text_primary), 26); // light watermark
 
@@ -181,12 +210,14 @@ pub const C_LINE_2: Color = rgb(role!(border_strong)); // Strong borders
 
 // selection ring on canvas; smart-guide lines while dragging
 pub const C_SEL: Color = rgb(role!(focus_ring));
-pub const C_SEL_SOFT: Color = rgba(role!(focus_ring), 0x14);
+pub const C_SEL_SOFT: Color = rgba(role!(focus_ring), A_FAINT);
 /// Wash behind the editor's selected text (stronger than C_SEL_SOFT).
-pub const C_SEL_WASH: Color = rgba(role!(focus_ring), 0x42);
+pub const C_SEL_WASH: Color = rgba(role!(focus_ring), A_MEDIUM);
 /// Border of the in-place text editor (replaces the selection chrome).
-pub const C_EDIT_BORDER: Color = rgba(role!(focus_ring), 0x80);
-/// Tangent handles in vector edit mode.
+pub const C_EDIT_BORDER: Color = rgba(role!(focus_ring), A_STRONG);
+/// Tangent handles in vector edit mode: a hair under the soft step, so a
+/// handle never competes with the shape it edits. Kept as its own constant
+/// rather than a new [`AlphaScale`] step — it is the *only* 0x40 in the app.
 pub const C_SEL_HANDLE: Color = rgba(role!(focus_ring), 0x40);
 /// Smart-guide lines while dragging — palette accent-ink violet (the editor
 /// comments expect "blue/purple"). Was #F24E1E, Figma's brand red — a clone
@@ -212,7 +243,7 @@ pub const C_STAR: Color = Color::from_rgb8(0xFF, 0xEB, 0x3B); // Starred items
 pub const RULER_SIZE: f64 = 22.0;
 pub const C_RULER_BG: Color = C_PANEL; // Matches side panels
 pub const C_RULER_BORDER: Color = C_LINE; // Matches panel borders
-pub const C_RULER_TICK: Color = Color::from_rgb8(0x66, 0x66, 0x66);
+pub const C_RULER_TICK: Color = Color::from_rgb8(0x66, 0x66, 0x66); // tick marks (canvas guide color)
 pub const C_RULER_TEXT: Color = rgb(role!(text_dim)); // ruler labels
 
 // Board grid colors
@@ -265,11 +296,15 @@ pub const LOGO: f64 = 28.0;
 // One name per step, derived from the shared `x-ui` scale: a corner is
 // always 2/4/6/8/12. The semantic aliases below name the intent (input,
 // card, toolbar…) so call sites read as usage, not geometry.
+pub const R_NONE: f64 = RadiusScale::NONE;
 pub const R_XS: f64 = RadiusScale::XS;
 pub const R_SM: f64 = RadiusScale::SM;
 pub const R_MD: f64 = RadiusScale::MD;
 pub const R_LG: f64 = RadiusScale::LG;
 pub const R_XL: f64 = RadiusScale::XL;
+/// A fully round cap (the renderer clamps it to half the shorter side), for
+/// pills drawn as rounded rects instead of with the `circle` helper.
+pub const R_FULL: f64 = RadiusScale::FULL;
 
 pub const R_INPUT: f64 = R_LG;
 pub const R_SEARCH: f64 = R_XL;
@@ -293,7 +328,50 @@ pub const T11: f64 = TypographyScale::SM;
 pub const T12: f64 = TypographyScale::BASE;
 pub const T13: f64 = TypographyScale::MD;
 pub const T14: f64 = TypographyScale::LG;
+pub const T16: f64 = TypographyScale::XL;
 pub const T20: f64 = TypographyScale::XXL;
+
+// --------------------------------------------------------------- icons (px)
+// One name per optical size, derived from the shared icon scale. `draw_icon`
+// strokes at a constant 1.5px at any of these, so a size step is the only
+// knob — pass ICON_*, never a literal.
+pub const ICON_XS: f64 = IconScale::XS; // 12 — metadata rows
+pub const ICON_SM: f64 = IconScale::SM; // 14 — standard controls
+pub const ICON_MD: f64 = IconScale::MD; // 16 — primary controls
+pub const ICON_LG: f64 = IconScale::LG; // 18 — important actions
+pub const ICON_XL: f64 = IconScale::XL; // 24 — major icons
+/// The one stroke weight for icons ([`IconScale`]'s constant).
+pub const STROKE_ICON: f64 = IconScale::STROKE;
+/// Hairline width for separators, card borders and field outlines.
+pub const STROKE_HAIRLINE: f64 = StrokeScale::HAIRLINE;
+/// Width of a selection/focus ring (heavier than a hairline on purpose).
+pub const STROKE_RING: f64 = StrokeScale::RING;
+
+// ------------------------------------------------------------- spacing (px)
+// The shared rhythm, one name per step. Use these for the *gaps and padding*
+// the chrome declares (a row's px-2, a stack's gap). Measured layout
+// coordinates stay literal — a pixel-cloned screen's `+17` is data, not a
+// spacing decision, and naming it would hide that.
+pub const SP_1: f64 = SpacingScale::default().space_1; // 4
+pub const SP_2: f64 = SpacingScale::default().space_2; // 6
+pub const SP_3: f64 = SpacingScale::default().space_3; // 8
+pub const SP_4: f64 = SpacingScale::default().space_4; // 12
+pub const SP_5: f64 = SpacingScale::default().space_5; // 16
+pub const SP_6: f64 = SpacingScale::default().space_6; // 20
+pub const SP_7: f64 = SpacingScale::default().space_7; // 24
+pub const SP_8: f64 = SpacingScale::default().space_8; // 32
+pub const SP_9: f64 = SpacingScale::default().space_9; // 40
+pub const SP_10: f64 = SpacingScale::default().space_10; // 48
+
+// ------------------------------------------------------- wash alphas (0-255)
+// The five wash steps. A translucent fill names its step instead of carrying
+// a bare `0x33`: `rgba(role, A_SOFT)` reads as "the standard wash", and a
+// reviewer can tell a new wash from a reused one at a glance.
+pub const A_WHISPER: u8 = AlphaScale::WHISPER; // 0x08
+pub const A_FAINT: u8 = AlphaScale::FAINT; // 0x14
+pub const A_SOFT: u8 = AlphaScale::SOFT; // 0x33
+pub const A_MEDIUM: u8 = AlphaScale::MEDIUM; // 0x42
+pub const A_STRONG: u8 = AlphaScale::STRONG; // 0x80
 
 /// Create a color from RGBA8 values (for rich-text run colors).
 pub fn color_from_rgba8(r: u8, g: u8, b: u8) -> vello::peniko::Color {

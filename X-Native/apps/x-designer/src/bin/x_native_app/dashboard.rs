@@ -65,8 +65,8 @@ fn paint_template_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Acti
     ));
     fill_rect(s, Rect::new(0.0, 0.0, app.win_w, app.win_h), C_SCRIM);
     let card = Rect::new(cx, cy, cx + card_w, cy + card_h);
-    fill_rrect(s, card, 12.0, C_PANEL);
-    stroke_rrect(s, card, 12.0, C_LINE_2, 1.0);
+    fill_rrect(s, card, R_XL, C_PANEL);
+    stroke_rrect(s, card, R_XL, C_LINE_2, 1.0);
     app.fonts.text(
         s,
         cx + 24.0,
@@ -89,7 +89,7 @@ fn paint_template_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Acti
         let ry = cy + 76.0 + i as f64 * row_h;
         let row = Rect::new(cx + 12.0, ry, cx + card_w - 12.0, ry + row_h - 8.0);
         if hover(app, row) {
-            fill_rrect(s, row, 8.0, C_FIELD_2);
+            fill_rrect(s, row, R_LG, C_FIELD_2);
         }
         // template mark: violet chip + that template's OWN glyph — four
         // identical chips in a column read as placeholder art. 32×32 at the
@@ -97,7 +97,7 @@ fn paint_template_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Acti
         // all center on the same line.
         let chip = Rect::new(row.x0 + 12.0, ry + 12.0, row.x0 + 44.0, ry + 44.0);
         fill_rrect(s, chip, R_ROW, C_ACCENT_MUTED);
-        draw_icon(s, icon, chip.x0 + 8.0, chip.y0 + 8.0, 16.0, C_ON_ACCENT);
+        draw_icon(s, icon, chip.x0 + 8.0, chip.y0 + 8.0, ICON_MD, C_ON_ACCENT);
         app.fonts
             .text(s, row.x0 + 58.0, ry + 10.0, name, T13, C_TEXT, Wt::Med);
         app.fonts
@@ -148,13 +148,9 @@ fn paint_first_launch(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         return;
     }
     let card = Rect::new(330.0, 170.0, app.win_w - 330.0, 510.0);
-    fill_rect(
-        s,
-        Rect::new(0.0, 40.0, app.win_w, app.win_h),
-        Color::from_rgba8(0, 0, 0, 145),
-    );
-    fill_rrect(s, card, 14.0, C_PANEL);
-    stroke_rrect(s, card, 14.0, C_LINE_2, 1.0);
+    fill_rect(s, Rect::new(0.0, 40.0, app.win_w, app.win_h), C_SCRIM);
+    fill_rrect(s, card, R_XL, C_PANEL);
+    stroke_rrect(s, card, R_XL, C_LINE_2, 1.0);
     app.fonts.text(
         s,
         card.x0 + 32.0,
@@ -213,7 +209,7 @@ fn paint_first_launch(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         card.x0 + 190.0,
         card.y1 - 22.0,
     );
-    fill_rrect(s, sample, 7.0, C_TEXT);
+    fill_rrect(s, sample, R_ROW, C_TEXT);
     app.fonts
         .text_center(s, sample, "Open sample project", T11, C_BG, Wt::Med, true);
     hit.push((sample, Action::OnboardingSample));
@@ -223,7 +219,7 @@ fn paint_first_launch(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         card.x0 + 350.0,
         card.y1 - 22.0,
     );
-    fill_rrect(s, blank, 7.0, C_FIELD_2);
+    fill_rrect(s, blank, R_ROW, C_FIELD_2);
     app.fonts.text_center(
         s,
         blank,
@@ -279,7 +275,7 @@ fn paint_top_bar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         },
         1.0,
     );
-    draw_icon(s, "search", sr.x0 + 12.0, sr.y0 + 8.0, 16.0, C_DIM);
+    draw_icon(s, "search", sr.x0 + 12.0, sr.y0 + 8.0, ICON_MD, C_DIM);
     let tx = sr.x0 + 35.0;
     let label = if app.dash_search.is_empty() {
         if app.demo_mode {
@@ -299,7 +295,7 @@ fn paint_top_bar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         .text(s, tx, sr.y0 + 6.3, label, T13, color, Wt::Reg);
     // ⌘K badge 31×21 at right pad 12, y 9
     let br = Rect::new(sr.x1 - 43.0, 9.0, sr.x1 - 12.0, 30.0);
-    stroke_rrect(s, br, 4.0, C_LINE, 1.0);
+    stroke_rrect(s, br, R_SM, C_LINE, 1.0);
     app.fonts
         .text_center(s, br, "⌘K", T10, C_DIM, Wt::Reg, true);
     hit.push((sr, Action::SearchFocus));
@@ -314,7 +310,7 @@ fn paint_top_bar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let hov = hover(app, nb);
     fill_rrect(s, nb, R_ROW, if hov { C_FIELD_2 } else { C_FIELD });
     stroke_rrect(s, nb, R_ROW, C_LINE, 1.0);
-    draw_icon(s, "plus", nb.x0 + 12.0, nb.y0 + 8.0, 16.0, C_TEXT);
+    draw_icon(s, "plus", nb.x0 + 12.0, nb.y0 + 8.0, ICON_MD, C_TEXT);
     app.fonts
         .text(s, nb.x0 + 36.0, 10.5, "New file", T12, C_TEXT, Wt::Med);
     hit.push((nb, Action::NewFile));
@@ -335,21 +331,21 @@ fn paint_sidebar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     vline(s, DASH_SIDE_W - 1.0, DASH_TITLE_H, app.win_h, C_LINE);
 
     // DRAFTS header row — label box top 53.3
-    fill_rrect(s, Rect::new(12.0, 52.0, 28.0, 68.0), 4.0, C_FIELD);
-    draw_icon(s, "box", 16.0, 56.0, 12.0, C_DIM);
+    fill_rrect(s, Rect::new(12.0, 52.0, 28.0, 68.0), R_SM, C_FIELD);
+    draw_icon(s, "box", 16.0, 56.0, ICON_XS, C_DIM);
     app.fonts
         .micro_label(s, 36.0, 53.3, "DRAFTS", C_DIM, Wt::Med);
 
     // Personal row 30px at y 80
     let pr = Rect::new(8.0, 80.0, DASH_SIDE_W - 8.0, 110.0);
     if hover(app, pr) {
-        fill_rrect(s, pr, 6.0, C_FIELD);
+        fill_rrect(s, pr, R_MD, C_FIELD);
     }
     circle(s, 23.0, 95.0, 3.0, C_DRAFT_DOT);
     app.fonts
         .text(s, 34.0, 86.0, "Personal", T12, C_TEXT, Wt::Med);
     if hover(app, pr) {
-        draw_icon(s, "chevron-down", 234.0, 89.0, 12.0, C_DIM);
+        draw_icon(s, "chevron-down", 234.0, 89.0, ICON_XS, C_DIM);
     }
 
     // nav rows h-8 (32) at y 122/156/190/224, radius 8, px-2
@@ -374,7 +370,7 @@ fn paint_sidebar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             icon,
             16.0,
             y + 8.0,
-            16.0,
+            ICON_MD,
             if active { C_TEXT } else { C_DIM },
         );
         app.fonts.text(
@@ -412,7 +408,7 @@ fn paint_sidebar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     app.fonts
         .micro_label(s, 12.0, 281.0, "TEAMS", C_DIM, Wt::Med);
     let plus_r = Rect::new(234.0, 273.75, 248.0, 287.75);
-    draw_icon(s, "plus", 234.0, 280.75, 14.0, C_DIM);
+    draw_icon(s, "plus", 234.0, 280.75, ICON_SM, C_DIM);
     hit.push((plus_r, Action::AddTeam));
 
     // team rows h-8 at y 302.5 / 336.5
@@ -457,9 +453,9 @@ fn paint_sidebar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         card.x0 + 45.0,
         card.y0 + 45.0,
     );
-    fill_rrect(s, ib, 8.0, Color::from_rgba8(0x1B, 0xCB, 0x55, 51));
-    stroke_rrect(s, ib, 8.0, crate::theme::C_LOGO_GREEN.with_alpha(0.3), 1.0);
-    draw_icon(s, "check", ib.x0 + 8.0, ib.y0 + 8.0, 16.0, C_LOGO_GREEN);
+    fill_rrect(s, ib, R_ROW, C_SUCCESS_WASH);
+    stroke_rrect(s, ib, R_ROW, C_SUCCESS_EDGE, STROKE_HAIRLINE);
+    draw_icon(s, "check", ib.x0 + 8.0, ib.y0 + 8.0, ICON_MD, C_SUCCESS);
     app.fonts.text(
         s,
         ib.x1 + 8.0,
@@ -485,7 +481,7 @@ fn paint_sidebar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         card.x1 - 13.0,
         card.y1 - 13.0,
     );
-    fill_rrect(s, cb, 6.0, C_FIELD_2);
+    fill_rrect(s, cb, R_MD, C_FIELD_2);
     app.fonts.text_center(
         s,
         cb,
@@ -560,7 +556,7 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             icon,
             r.x0 + 12.0,
             r.y0 + 8.0,
-            16.0,
+            ICON_MD,
             if active { C_TEXT } else { C_DIM },
         );
         app.fonts.text(
@@ -624,7 +620,7 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         // top 147.5) is untouched — 10px above the chip, 10px below the copy.
         let ib = Rect::new(cx + 17.0, dy + 157.5, cx + 49.0, dy + 189.5);
         fill_rrect(s, ib, R_ROW, C_ACCENT_MUTED);
-        draw_icon(s, icon, ib.x0 + 8.0, ib.y0 + 8.0, 16.0, C_ON_ACCENT);
+        draw_icon(s, icon, ib.x0 + 8.0, ib.y0 + 8.0, ICON_MD, C_ON_ACCENT);
         // title box top 189.5 (+42), sub top 209 (+61.5)
         app.fonts
             .text(s, cx + 17.0, dy + 189.5, title, T13, C_TEXT, Wt::Med);
@@ -675,8 +671,8 @@ fn paint_recents(
         DashView::Trash => "Trash",
     };
     let chip = Rect::new(chip_l, dy + 267.5, chip_l + 75.0, dy + 291.5);
-    fill_rrect(s, chip, 6.0, C_FIELD);
-    stroke_rrect(s, chip, 6.0, C_LINE, 1.0);
+    fill_rrect(s, chip, R_MD, C_FIELD);
+    stroke_rrect(s, chip, R_MD, C_LINE, 1.0);
     app.fonts.text(
         s,
         chip.x0 + 9.0,
@@ -686,7 +682,14 @@ fn paint_recents(
         C_MUTED,
         Wt::Reg,
     );
-    draw_icon(s, "chevron-down", chip.x1 - 21.0, dy + 273.5, 12.0, C_DIM);
+    draw_icon(
+        s,
+        "chevron-down",
+        chip.x1 - 21.0,
+        dy + 273.5,
+        ICON_XS,
+        C_DIM,
+    );
     hit.push((chip, Action::CycleDashView));
 
     let query = app.dash_search.to_lowercase();
@@ -826,24 +829,18 @@ fn paint_recents(
                 thumb.y0 + 32.0,
             );
             if hov {
-                circle(
-                    s,
-                    st.x0 + 12.0,
-                    st.y0 + 12.0,
-                    12.0,
-                    Color::from_rgba8(0, 0, 0, 51),
-                );
+                circle(s, st.x0 + 12.0, st.y0 + 12.0, 12.0, C_DISC_SCRIM);
                 draw_icon(
                     s,
                     "star",
                     st.x0 + 5.0,
                     st.y0 + 5.0,
-                    14.0,
+                    ICON_SM,
                     if f.starred { C_STAR } else { C_TEXT },
                 );
                 hit.push((st, Action::StarRecent(*idx)));
             } else if f.starred {
-                draw_icon(s, "star", st.x0 + 5.0, st.y0 + 5.0, 14.0, C_STAR);
+                draw_icon(s, "star", st.x0 + 5.0, st.y0 + 5.0, ICON_SM, C_STAR);
             }
             // body: name top +153, meta +173, avatars +197.5 (all card-relative)
             let name = app
@@ -865,7 +862,7 @@ fn paint_recents(
                 "more-horizontal",
                 cx + cw - 28.0,
                 cy + 153.0,
-                16.0,
+                ICON_MD,
                 C_DIM,
             );
             // members — 20px overlapping avatars
@@ -900,7 +897,7 @@ fn paint_recents(
             if i > 0 {
                 hline(s, x0, x1, r.y0, C_LINE);
             }
-            draw_icon(s, "file-text", r.x0 + 16.0, r.y0 + 16.0, 16.0, C_DIM);
+            draw_icon(s, "file-text", r.x0 + 16.0, r.y0 + 16.0, ICON_MD, C_DIM);
             app.fonts
                 .text(s, r.x0 + 45.0, r.y0 + 15.0, &f.name, T12, C_TEXT, Wt::Med);
             app.fonts.text_right(
@@ -913,7 +910,14 @@ fn paint_recents(
                 Wt::Reg,
                 0.0,
             );
-            draw_icon(s, "more-horizontal", r.x1 - 33.0, r.y0 + 16.0, 16.0, C_DIM);
+            draw_icon(
+                s,
+                "more-horizontal",
+                r.x1 - 33.0,
+                r.y0 + 16.0,
+                ICON_MD,
+                C_DIM,
+            );
             hit.push((r, Action::OpenRecent(*idx)));
         }
     }
@@ -992,7 +996,7 @@ fn paint_drafts(
             hline(s, x0, x1, r.y0, C_LINE);
         }
         // px-4: icon 16 at +16, name at +45 (16+16+12 gap), name top +14.5
-        draw_icon(s, d.icon, x0 + 16.0, r.y0 + 16.0, 16.0, C_DIM);
+        draw_icon(s, d.icon, x0 + 16.0, r.y0 + 16.0, ICON_MD, C_DIM);
         app.fonts
             .text(s, x0 + 45.0, r.y0 + 14.5, &d.name, T12, C_TEXT, Wt::Med);
         // edited text right edge at more-icon − 12; more at right pad 16
@@ -1006,7 +1010,7 @@ fn paint_drafts(
             Wt::Reg,
             0.0,
         );
-        draw_icon(s, "more-horizontal", x1 - 33.0, r.y0 + 16.0, 16.0, C_DIM);
+        draw_icon(s, "more-horizontal", x1 - 33.0, r.y0 + 16.0, ICON_MD, C_DIM);
         hit.push((r, Action::OpenDraft(*idx)));
     }
 }

@@ -49,9 +49,9 @@ fn paint_board_header(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         && app.mouse.y >= back.y0
         && app.mouse.y <= back.y1
     {
-        fill_rrect(s, back, 6.0, C_FIELD_2);
+        fill_rrect(s, back, R_MD, C_FIELD_2);
     }
-    draw_icon(s, "undo", 18.0, 13.0, 16.0, C_DIM);
+    draw_icon(s, "undo", 18.0, 13.0, ICON_MD, C_DIM);
     app.fonts
         .text(s, 40.0, 11.0, "Dashboard", T11, C_TEXT, Wt::Med);
     hit.push((back, Action::DashNav(DashView::Home)));
@@ -79,8 +79,8 @@ fn paint_board_header(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
     );
 
     let page = Rect::new(300.0, 7.0, 408.0, 29.0);
-    fill_rrect(s, page, 6.0, C_FIELD);
-    stroke_rrect(s, page, 6.0, C_LINE, 1.0);
+    fill_rrect(s, page, R_MD, C_FIELD);
+    stroke_rrect(s, page, R_MD, C_LINE, 1.0);
     app.fonts.text(
         s,
         page.x0 + 10.0,
@@ -95,28 +95,28 @@ fn paint_board_header(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         "chevron-down",
         page.x1 - 22.0,
         page.y0 + 7.0,
-        14.0,
+        ICON_SM,
         C_DIM,
     );
     hit.push((page, Action::BoardNextPage));
     let add_page = Rect::new(414.0, 7.0, 442.0, 29.0);
-    fill_rrect(s, add_page, 6.0, C_FIELD);
-    stroke_rrect(s, add_page, 6.0, C_LINE, 1.0);
+    fill_rrect(s, add_page, R_MD, C_FIELD);
+    stroke_rrect(s, add_page, R_MD, C_LINE, 1.0);
     draw_icon(
         s,
         "plus",
         add_page.x0 + 12.0,
         add_page.y0 + 7.0,
-        14.0,
+        ICON_SM,
         C_DIM,
     );
     hit.push((add_page, Action::BoardAddPage));
 
     let grid_on = app.board_doc().settings.show_grid;
     let grid = Rect::new(app.win_w - 190.0, 7.0, app.win_w - 112.0, 29.0);
-    fill_rrect(s, grid, 6.0, if grid_on { C_FIELD_2 } else { C_FIELD });
-    stroke_rrect(s, grid, 6.0, C_LINE, 1.0);
-    draw_icon(s, "grid-2x2", grid.x0 + 8.0, grid.y0 + 6.0, 14.0, C_DIM);
+    fill_rrect(s, grid, R_MD, if grid_on { C_FIELD_2 } else { C_FIELD });
+    stroke_rrect(s, grid, R_MD, C_LINE, 1.0);
+    draw_icon(s, "grid-2x2", grid.x0 + 8.0, grid.y0 + 6.0, ICON_SM, C_DIM);
     app.fonts.text(
         s,
         grid.x0 + 29.0,
@@ -133,16 +133,16 @@ fn paint_board_header(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
     fill_rrect(
         s,
         connectors,
-        6.0,
+        R_MD,
         if connectors_on { C_FIELD_2 } else { C_FIELD },
     );
-    stroke_rrect(s, connectors, 6.0, C_LINE, 1.0);
+    stroke_rrect(s, connectors, R_MD, C_LINE, 1.0);
     draw_icon(
         s,
         "arrow-left-right",
         connectors.x0 + 8.0,
         connectors.y0 + 6.0,
-        14.0,
+        ICON_SM,
         C_DIM,
     );
     app.fonts.text(
@@ -529,7 +529,7 @@ pub fn paint_over(app: &mut App, s: &mut Scene) {
             s.fill(
                 Fill::NonZero,
                 Affine::IDENTITY,
-                Color::from_rgba8(0x7C, 0x5C, 0xFC, 40),
+                crate::theme::C_SELECTION_WASH,
                 None,
                 &r,
             );
@@ -546,7 +546,7 @@ pub fn paint_over(app: &mut App, s: &mut Scene) {
                 s,
                 (ax, ay),
                 (bx, by),
-                Color::from_rgba8(0x7C, 0x5C, 0xFC, 160),
+                crate::theme::C_SELECTION_EDGE,
                 2.0,
                 5.0,
             );
@@ -620,7 +620,7 @@ fn paint_board_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, crate:
             t.icon(),
             r.x0 + (TOOL_ICON - 16.0) / 2.0,
             r.y0 + (TOOL_ICON - 16.0) / 2.0,
-            16.0,
+            ICON_MD,
             if active { C_BG } else { C_DIM },
         );
         hit.push((r, crate::state::Action::Tool(*t)));

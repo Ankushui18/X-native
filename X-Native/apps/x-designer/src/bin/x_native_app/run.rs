@@ -11182,7 +11182,7 @@ mod tests {
             // silent no-op for an unknown icon (Audit F1): draw one and
             // require real geometry back, so a typo'd icon fails here
             let mut probe = vello::Scene::new();
-            crate::icons::draw_icon(&mut probe, icon, 0.0, 0.0, 16.0, x_native::Color::BLACK);
+            crate::icons::draw_icon(&mut probe, icon, 0.0, 0.0, ICON_MD, x_native::Color::BLACK);
             assert!(
                 !probe.encoding().path_data.is_empty(),
                 "template {i} ({name}) icon {icon} has no path data"
@@ -14063,7 +14063,7 @@ fn paint_feedback(app: &mut App, scene: &mut Scene) {
         .text(scene, 12.0, y + 5.0, &message, T10, C_TEXT, Wt::Reg);
     if app.file_job.as_ref().is_some_and(|j| j.cancelable) {
         let rect = Rect::new(app.win_w - 88.0, y + 2.0, app.win_w - 8.0, app.win_h - 2.0);
-        crate::paint::fill_rrect(scene, rect, 4.0, C_FIELD_2);
+        crate::paint::fill_rrect(scene, rect, R_SM, C_FIELD_2);
         app.fonts
             .text_center(scene, rect, "Cancel", T10, C_TEXT, Wt::Med, true);
         app.hit.push((rect, Action::CancelFileOperation));
@@ -14090,6 +14090,10 @@ fn paint_feedback(app: &mut App, scene: &mut Scene) {
 #[cfg(test)]
 #[path = "regression_tests.rs"]
 mod audit_regressions;
+
+#[cfg(test)]
+#[path = "design_tokens_test.rs"]
+mod design_tokens;
 
 impl App {
     /// The logical-frame path used by the native window and CPU profiling.
