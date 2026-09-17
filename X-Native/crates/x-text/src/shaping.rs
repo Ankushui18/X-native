@@ -9,7 +9,7 @@
 
 use crate::font::FontManager;
 use std::collections::HashMap;
-use vello::kurbo::{Affine, BezPath, PathEl, Point, Shape};
+use vello::kurbo::{Affine, BezPath, PathEl, Point};
 use vello::peniko::{Color, Fill};
 use vello::Scene;
 
@@ -1337,6 +1337,7 @@ pub fn node_text_outlines_styled_uncached(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vello::kurbo::Shape;
 
     /// Explicit PX mode positions the FIRST baseline with the CSS
     /// half-leading model (content area centered in the line box); the
