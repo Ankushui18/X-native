@@ -17,6 +17,51 @@ apps/x-designer/.../theme.rs              <- the app's names for them   v
    design_tokens_test.rs                  <- the ratchet that keeps call sites honest
 ```
 
+## The sheet
+
+`X-Native/tools/design-sheet/` is a live page generated from these sources
+(`node extract_icons.mjs && node build_tokens.mjs && node build_audit.mjs`,
+then serve the folder — see its README): the three palettes side by side, every
+ladder, the dashboard at 1440 / 980 / 1920, and the spacing + ratchet audit.
+Because the generators read `design_system.rs`, `theme.rs`, `icons.rs` and
+`design_tokens_test.rs`, the sheet cannot claim a value the code does not ship —
+and `check.mjs` smoke-tests the rendered page in jsdom.
+
+## Themes (light, dark, high contrast)
+
+Three palettes, all shipped, all audited by the crate's own tests:
+
+| id | label | for | notes |
+|---|---|---|---|
+| `Graphite` | dark | the default, and the palette every app constant is authored in | |
+| `Daylight` | light | bright rooms, projectors, screen sharing | white surfaces, darker accent, hairlines carry the structure |
+| `HighContrast` | high contrast | low vision / accessibility settings | yellow accent with **black** ink, 7:1+ pairs |
+
+Switching is a first-class action, not a debug flag: `Action::SetTheme(id)`,
+`Action::CycleTheme` (the toolbar button), the ⌘K verbs `Theme: Daylight
+(light)` / `Theme: High Contrast`, and the choice is persisted to
+`~/.config/x-native/theme` (`set_theme` / `load_persisted_theme`).
+
+How it works, and what it means for new code:
+
+- every constant in `theme.rs` is authored in Graphite and resolved through
+  `role!()` → `ColorTokens`; at paint time `resolve()` maps a colour onto the
+  active palette **by value** through the role table (`remap_color` keeps
+  alpha, so washes and scrims stay washes and scrims);
+- therefore a colour built from a role follows the theme automatically, and a
+  colour built from a literal does not — that is the point of the ratchet's
+  "say why in a comment" rule for literals;
+- ink is a role in every palette (`C_ON_ACCENT`, `C_ON_DANGER`, `C_BLACK`,
+  `C_ACCENT_INK`) precisely so no palette can produce black-on-black or
+  white-on-yellow;
+- the brand set (logo green, avatar and team hues, draft dot, markdown badge,
+  canvas guides, watermarks) deliberately does **not** follow the theme: a
+  theme must never repaint the user's artwork.
+
+If you add a role, it exists in all three palettes or it does not compile a
+lookup — `COLOR_ROLES`, `role()` and the DTCG export are cross-checked, and
+`every_shipped_palette_is_aa_clean` re-runs the contrast audit for each.
+
 ## The vocabularies
 
 | Needs | Use | Steps |
@@ -89,6 +134,38 @@ Current ceilings (2026-09-17) — colours: dashboard 2, editor_ui 13, board_ui 3
 loading 1, command 0, paint 2, run 4, state 22, icons 0, theme 24; ink:
 editor_ui 3, state 3, everything else 0 (a document default is content, so
 those whites stay and say so).
+
+## Spacing, padding and resize
+
+Measured from the paint code (`node build_audit.mjs` prints this): 616 literal
+offsets, **46% on the ladder** (4/6/8/12/16/20/24/32/40/48). The rest are
+deliberately not gaps — they are optical nudges like centring a 14px glyph in a
+32px chip `(32−14)/2 = 9`, which are arithmetic about a box, not spacing about a
+layout. The rule for new chrome:
+
+- container padding comes from `SP_*` (8 for palette rows, 12 for panel
+  interiors, 16–24 for page/card padding);
+- centring inside a known box may stay arithmetic — write it as arithmetic
+  when the box is a token, and it will follow a UI-scale change;
+- the pixel-cloned dashboard keeps its measured interiors (a comment says so
+  per site) — those numbers came from a browser, and naming one `SP_5` would
+  hide that.
+
+**Resize.** The window opens at 1440×900 and has a 980×680 minimum. Everything
+that divides a column is fluid, never fixed: the quick-action row is
+`(mx1 − MX − 3·gap)/4` — **274px at 1440, 159px at 980** — and the 3-up grid is
+`(… − 2·gap)/3`, 366.7 → 213.3. Two consequences are enforced:
+
+- **text is measured against its container.** Any string that sits in a fluid
+  box goes through `fonts.truncate(…)`; at the reference width nothing
+  truncates, and a narrow window ellipsises instead of painting over the
+  neighbouring card (quick cards, recent-file meta, gallery rows, draft rows);
+- **the docks yield to the canvas.** The nav rail plus the two panels may not
+  take the canvas below `ED_CANVAS_MIN` (280px): `editor_regions()` derives the
+  regions from the window and the panel widths, the resizer stops at the floor,
+  and `docks_never_eat_the_canvas` pins 6 window widths × 9 dock pairs. Before
+  this, dragging both panels wide at the minimum window produced a canvas of
+  −68px (an inverted rect handed to paint and hit-testing).
 
 ## What is *not* tokenised, on purpose
 

@@ -2426,3 +2426,48 @@ fn t19_layers_drag_click_without_move_only_selects() {
         "the row click still selects"
     );
 }
+
+/// The two docks share the window with the canvas, both are resizable, and both
+/// extremes are reachable (drag a panel wide, then shrink the window). The
+/// layout has to degrade to the canvas floor — never invert the canvas rect or
+/// let a dock paint over its neighbour.
+#[test]
+fn docks_never_eat_the_canvas() {
+    let mut app = App::new();
+    for win_w in [980.0, 1024.0, 1280.0, 1440.0, 1920.0, 2560.0] {
+        app.win_w = win_w;
+        for left_w in [ED_LEFT_MIN, ED_LEFT_W, ED_LEFT_MAX] {
+            for right_w in [ED_RIGHT_MIN, ED_RIGHT_W, ED_RIGHT_MAX] {
+                app.left_w = left_w;
+                app.right_w = right_w;
+                let r = app.editor_regions();
+                assert!(
+                    r.canvas.x1 >= r.canvas.x0,
+                    "canvas inverted at {win_w} with docks {left_w}/{right_w}: {:?}",
+                    r.canvas
+                );
+                assert!(
+                    r.left.x1 <= r.canvas.x0 + 0.001,
+                    "left dock over the canvas"
+                );
+                assert!(
+                    r.canvas.x1 <= r.right.x0 + 0.001,
+                    "right dock over the canvas"
+                );
+                assert!(r.right.x1 <= win_w + 0.001, "right dock past the window");
+                assert!(r.canvas.width() >= 1.0, "canvas collapsed at {win_w}");
+            }
+        }
+    }
+    // the floor itself: the widest allowed docks at the minimum window still
+    // leave exactly ED_CANVAS_MIN of canvas
+    app.win_w = 980.0;
+    app.left_w = ED_LEFT_MAX;
+    app.right_w = ED_RIGHT_MAX;
+    let r = app.editor_regions();
+    assert!(
+        (r.canvas.width() - ED_CANVAS_MIN).abs() < 0.001,
+        "want the canvas floor, got {}",
+        r.canvas.width()
+    );
+}

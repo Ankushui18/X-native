@@ -4055,10 +4055,16 @@ impl Host {
         }
         match self.app.drag.clone() {
             Some(Drag::LeftPanel { start_x, start_w }) => {
-                self.app.left_w = (start_w + p.x - start_x).clamp(ED_LEFT_MIN, ED_LEFT_MAX);
+                // stop where the canvas floor starts rather than storing a
+                // width the regions would only clamp back at paint time
+                let room = self.app.win_w - self.app.nav_bar_w - ED_CANVAS_MIN;
+                let max = ED_LEFT_MAX.min(room - self.app.right_w).max(ED_LEFT_MIN);
+                self.app.left_w = (start_w + p.x - start_x).clamp(ED_LEFT_MIN, max);
             }
             Some(Drag::RightPanel { start_x, start_w }) => {
-                self.app.right_w = (start_w - (p.x - start_x)).clamp(ED_RIGHT_MIN, ED_RIGHT_MAX);
+                let room = self.app.win_w - self.app.nav_bar_w - ED_CANVAS_MIN;
+                let max = ED_RIGHT_MAX.min(room - self.app.left_w).max(ED_RIGHT_MIN);
+                self.app.right_w = (start_w - (p.x - start_x)).clamp(ED_RIGHT_MIN, max);
             }
             Some(Drag::Pan { start, start_pan }) => {
                 self.app.pan = (start_pan.0 + p.x - start.x, start_pan.1 + p.y - start.y);

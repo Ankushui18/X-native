@@ -265,6 +265,11 @@ pub const LOGO_CELL_W: f64 = 44.0;
 pub const ED_LEFT_W: f64 = 280.0;
 pub const ED_LEFT_MIN: f64 = 200.0;
 pub const ED_LEFT_MAX: f64 = 480.0;
+/// The canvas keeps at least this much width: the two docks (nav rail + left
+/// panel + right panel) may not eat it however wide the panels are dragged or
+/// however far the window is shrunk. `editor_regions` is the single place that
+/// enforces it, so no paint or hit-test path can see an inverted canvas.
+pub const ED_CANVAS_MIN: f64 = 280.0;
 pub const ED_RIGHT_W: f64 = 340.0;
 pub const ED_RIGHT_MIN: f64 = 240.0;
 pub const ED_RIGHT_MAX: f64 = 520.0;

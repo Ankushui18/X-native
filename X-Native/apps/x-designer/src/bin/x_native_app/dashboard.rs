@@ -98,10 +98,14 @@ fn paint_template_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Acti
         let chip = Rect::new(row.x0 + 12.0, ry + 12.0, row.x0 + 44.0, ry + 44.0);
         fill_rrect(s, chip, R_ROW, C_ACCENT_MUTED);
         draw_icon(s, icon, chip.x0 + 8.0, chip.y0 + 8.0, ICON_MD, C_ON_ACCENT);
+        // the row is as wide as the window; keep the copy clear of the CTA
+        let text_w = (row.x1 - 76.0) - (row.x0 + 58.0) - 12.0;
+        let name = app.fonts.truncate(name, T13, Wt::Med, text_w);
+        let blurb = app.fonts.truncate(blurb, T11, Wt::Reg, text_w);
         app.fonts
-            .text(s, row.x0 + 58.0, ry + 10.0, name, T13, C_TEXT, Wt::Med);
+            .text(s, row.x0 + 58.0, ry + 10.0, &name, T13, C_TEXT, Wt::Med);
         app.fonts
-            .text(s, row.x0 + 58.0, ry + 30.0, blurb, T11, C_DIM, Wt::Reg);
+            .text(s, row.x0 + 58.0, ry + 30.0, &blurb, T11, C_DIM, Wt::Reg);
         // CTA at the app's standard control size (32 tall, R_ROW radius) and
         // its standard button hover fill — C_LINE_2 is a *border* role, so a
         // button filled with it looked like a second outline, not a hover.
@@ -621,11 +625,18 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         let ib = Rect::new(cx + 17.0, dy + 157.5, cx + 49.0, dy + 189.5);
         fill_rrect(s, ib, R_ROW, C_ACCENT_MUTED);
         draw_icon(s, icon, ib.x0 + 8.0, ib.y0 + 8.0, ICON_MD, C_ON_ACCENT);
-        // title box top 189.5 (+42), sub top 209 (+61.5)
+        // title box top 189.5 (+42), sub top 209 (+61.5). The slot is fluid
+        // (`cw` is derived from the window: 274 at 1440, 159 at the 980
+        // minimum), so both lines are measured against it — at the reference
+        // width nothing truncates, and a narrow window ellipsises instead of
+        // painting over the neighbouring card.
+        let text_w = cw - 34.0;
+        let title = app.fonts.truncate(title, T13, Wt::Med, text_w);
+        let sub = app.fonts.truncate(sub, T11, Wt::Reg, text_w);
         app.fonts
-            .text(s, cx + 17.0, dy + 189.5, title, T13, C_TEXT, Wt::Med);
+            .text(s, cx + 17.0, dy + 189.5, &title, T13, C_TEXT, Wt::Med);
         app.fonts
-            .text(s, cx + 17.0, dy + 209.0, sub, T11, C_DIM, Wt::Reg);
+            .text(s, cx + 17.0, dy + 209.0, &sub, T11, C_DIM, Wt::Reg);
         hit.push((r, acts[i].clone()));
     }
 
@@ -848,15 +859,14 @@ fn paint_recents(
                 .truncate(&f.name, T12, Wt::Med, cw - 24.0 - 16.0 - 8.0);
             app.fonts
                 .text(s, cx + 13.0, cy + 153.0, &name, T12, C_TEXT, Wt::Med);
-            app.fonts.text(
-                s,
-                cx + 13.0,
-                cy + 173.0,
+            let meta = app.fonts.truncate(
                 &format!("{} • {}", f.team, f.edited),
                 T11,
-                C_DIM,
                 Wt::Reg,
+                cw - 26.0,
             );
+            app.fonts
+                .text(s, cx + 13.0, cy + 173.0, &meta, T11, C_DIM, Wt::Reg);
             draw_icon(
                 s,
                 "more-horizontal",
@@ -997,8 +1007,17 @@ fn paint_drafts(
         }
         // px-4: icon 16 at +16, name at +45 (16+16+12 gap), name top +14.5
         draw_icon(s, d.icon, x0 + 16.0, r.y0 + 16.0, ICON_MD, C_DIM);
+        // the row spans the window and the timestamp is right-aligned, so the
+        // name is measured against what is actually left of it
+        let edited_w = app.fonts.measure(&d.edited, T11, Wt::Reg);
+        let name = app.fonts.truncate(
+            &d.name,
+            T12,
+            Wt::Med,
+            (x1 - 45.0 - edited_w - 12.0) - (x0 + 45.0),
+        );
         app.fonts
-            .text(s, x0 + 45.0, r.y0 + 14.5, &d.name, T12, C_TEXT, Wt::Med);
+            .text(s, x0 + 45.0, r.y0 + 14.5, &name, T12, C_TEXT, Wt::Med);
         // edited text right edge at more-icon − 12; more at right pad 16
         app.fonts.text_right(
             s,

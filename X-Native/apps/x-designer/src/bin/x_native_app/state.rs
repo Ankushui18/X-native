@@ -2129,29 +2129,25 @@ impl App {
     }
 
     pub fn editor_regions(&self) -> EdRegions {
-        let left_total = if self.ui_minimized {
-            self.nav_bar_w
-        } else {
-            // `left_w` is the live width — Drag::LeftPanel resizes it;
-            // the old static field made the resize a visual no-op
-            self.nav_bar_w + self.left_w
-        };
+        // `left_w`/`right_w` are the live widths — Drag::LeftPanel/RightPanel
+        // resize them; the old static field made the resize a visual no-op.
+        // They share the window with the canvas, and both are reachable
+        // extremes (drag a panel wide, then shrink the window), so this is the
+        // one place that guarantees the canvas never inverts: the left dock
+        // yields to the right dock's minimum, then the right takes what is
+        // left over. Panels therefore stop at the floor instead of overlapping
+        // each other and painting the canvas backwards.
+        let want_left = if self.ui_minimized { 0.0 } else { self.left_w };
+        let room = (self.win_w - self.nav_bar_w - ED_CANVAS_MIN).max(0.0);
+        let left = want_left.min((room - ED_RIGHT_MIN).max(0.0));
+        let right = self.right_w.min((room - left).max(0.0));
+        let left_total = self.nav_bar_w + left;
         EdRegions {
             left: Rect::new(0.0, ED_TITLE_H, left_total, self.win_h),
             nav_bar: Rect::new(0.0, ED_TITLE_H, self.nav_bar_w, self.win_h),
             sidebar: Rect::new(self.nav_bar_w, ED_TITLE_H, left_total, self.win_h),
-            right: Rect::new(
-                self.win_w - self.right_w,
-                ED_TITLE_H,
-                self.win_w,
-                self.win_h,
-            ),
-            canvas: Rect::new(
-                left_total,
-                ED_TITLE_H,
-                self.win_w - self.right_w,
-                self.win_h,
-            ),
+            right: Rect::new(self.win_w - right, ED_TITLE_H, self.win_w, self.win_h),
+            canvas: Rect::new(left_total, ED_TITLE_H, self.win_w - right, self.win_h),
         }
     }
 

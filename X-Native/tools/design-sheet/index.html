@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en" data-theme="graphite">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>X-Native — design system</title>
+<link rel="stylesheet" href="tokens.css">
+<style>
+  @font-face { font-family: Inter; font-weight: 400; font-display: swap; src: url(fonts/inter-latin-400-normal.woff2) format('woff2'); }
+  @font-face { font-family: Inter; font-weight: 500; font-display: swap; src: url(fonts/inter-latin-500-normal.woff2) format('woff2'); }
+  @font-face { font-family: Inter; font-weight: 600; font-display: swap; src: url(fonts/inter-latin-600-normal.woff2) format('woff2'); }
+  @font-face { font-family: Inter; font-weight: 700; font-display: swap; src: url(fonts/inter-latin-700-normal.woff2) format('woff2'); }
+
+  /* The page itself is built from the palette it documents. */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--background); color: var(--text-primary);
+    font: 400 14px/1.5 Inter, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent-ink); }
+  h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.025em; margin: 0; }
+  h2 { font-size: 14px; font-weight: 600; margin: 0 0 2px; }
+  p  { margin: 0; color: var(--text-dim); font-size: 12px; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--text-secondary); }
+
+  header {
+    position: sticky; top: 0; z-index: 10;
+    display: flex; align-items: center; gap: 12px; padding: 12px 24px;
+    background: var(--background); border-bottom: 1px solid var(--border);
+  }
+  .grow { flex: 1; }
+  .mark { display: flex; align-items: center; gap: 12px; }
+  .logo { width: 24px; height: 24px; border-radius: 4px; background: var(--accent); display: grid; place-items: center; }
+  .logo svg { width: 14px; height: 14px; stroke: var(--on-accent); }
+
+  .seg { display: flex; padding: 2px; gap: 2px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+  .seg button {
+    appearance: none; border: 0; background: transparent; color: var(--text-dim);
+    font: 500 12px Inter; padding: 6px 12px; border-radius: 6px; cursor: pointer;
+  }
+  .seg button[aria-pressed=true] { background: var(--accent); color: var(--on-accent); }
+  .seg button:hover { color: var(--text-primary); }
+  .seg button[aria-pressed=true]:hover { color: var(--on-accent); }
+
+  main { padding: 24px; display: grid; gap: 24px; }
+  section { display: grid; gap: 12px; }
+  .section-head { display: flex; align-items: baseline; gap: 12px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .grid { display: grid; gap: 12px; }
+
+  /* ---- colour sheet ---- */
+  .roles { display: grid; grid-template-columns: repeat(auto-fill, minmax(232px, 1fr)); gap: 8px; }
+  .role { display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-elevated); }
+  .chip { width: 32px; height: 32px; border-radius: 6px; border: 1px solid var(--border-strong); flex: 0 0 auto; }
+  .role .meta { display: grid; gap: 1px; min-width: 0; }
+  .role b { font-weight: 500; font-size: 12px; color: var(--text-primary); }
+  .role span { font-size: 11px; color: var(--text-dim); }
+  .ratio { font-variant-numeric: tabular-nums; }
+  .ratio.pass { color: var(--success); }
+  .ratio.warn { color: var(--warning); }
+
+  /* ---- ladders ---- */
+  .ladder { display: grid; gap: 6px; }
+  .row { display: flex; align-items: center; gap: 12px; }
+  .row .label { width: 132px; flex: 0 0 auto; font-size: 11px; color: var(--text-dim); }
+  .bar { height: 20px; border-radius: 4px; background: var(--accent); opacity: .85; }
+  .bar.alt { background: var(--selection); }
+  .nums { font-size: 11px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  .swatch { height: 20px; border-radius: 4px; border: 1px solid var(--border-strong); }
+  .icons { display: flex; align-items: flex-end; gap: 16px; }
+  .icons figure { margin: 0; display: grid; gap: 4px; justify-items: center; }
+  .icons svg { stroke: var(--text-primary); fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+  .icons figcaption { font-size: 10px; color: var(--text-dim); }
+  .type div { line-height: 1.2; }
+
+  /* ---- dashboard mock: the real geometry, scaled to fit ---- */
+  .stage-wrap { position: relative; width: 100%; overflow: hidden; border-radius: 12px; border: 1px solid var(--border); }
+  .stage { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+  .win { width: 1440px; height: 900px; background: var(--background); position: relative; overflow: hidden; font-size: 12px; }
+  .win.tight { height: 620px; }
+  .titlebar { position: absolute; inset: 0 0 auto 0; height: 40px; border-bottom: 1px solid var(--border); display: flex; align-items: center; }
+  .wordmark { position: absolute; left: 12px; top: 12px; display: flex; align-items: center; gap: 12px; font-weight: 600; font-size: 14px; letter-spacing: -0.025em; }
+  .wordmark .gl { width: 16px; height: 16px; border-radius: 4px; background: var(--accent); }
+  .search { position: absolute; top: 3.5px; height: 32px; border-radius: 12px; background: var(--surface-elevated); border: 1px solid var(--border); display: flex; align-items: center; gap: 8px; padding: 0 12px; color: var(--text-placeholder); font-size: 12px; }
+  .search kbd { margin-left: auto; font: 500 10px Inter; color: var(--text-dim); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+  .avatar { position: absolute; top: 8px; width: 24px; height: 24px; border-radius: 9999px; background: var(--accent); color: var(--on-accent); font: 600 11px Inter; display: grid; place-items: center; }
+  .sidebar { position: absolute; left: 0; top: 40px; bottom: 0; width: 260px; border-right: 1px solid var(--border); padding: 16px 12px; display: grid; align-content: start; gap: 2px; }
+  .side-row { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 8px; border-radius: 6px; color: var(--text-dim); font-size: 12px; }
+  .side-row.active { background: var(--surface-elevated); color: var(--text-primary); }
+  .side-label { margin: 12px 8px 4px; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--text-dim); }
+  .side-chip { margin-top: auto; display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; background: color-mix(in srgb, var(--success) 20%, transparent); border: 1px solid color-mix(in srgb, var(--success) 26%, transparent); color: var(--text-primary); font-size: 11px; }
+  .side-chip .cx { width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; background: color-mix(in srgb, var(--success) 20%, transparent); }
+  .side-chip svg { width: 16px; height: 16px; stroke: var(--success); fill: none; stroke-width: 1.5; stroke-linecap: round; }
+  .main { position: absolute; left: 260px; right: 0; top: 40px; bottom: 0; padding: 24px; }
+  .h1 { font-size: 16px; font-weight: 600; letter-spacing: -0.025em; }
+  .cards { display: flex; gap: 12px; margin-top: 24px; }
+  .qcard { flex: 1 1 0; min-width: 0; height: 88px; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); padding: 10px 17px; }
+  .qcard.hov { border-color: var(--focus-ring); }
+  .qchip { width: 32px; height: 32px; border-radius: 8px; background: color-mix(in srgb, var(--accent) 20%, transparent); display: grid; place-items: center; }
+  .qchip svg { width: 16px; height: 16px; stroke: var(--on-accent); fill: none; stroke-width: 1.5; stroke-linecap: round; }
+  .qtitle { margin-top: 10px; font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .qsub { font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .section-h { margin: 28px 0 10px; font-size: 13px; font-weight: 500; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .gcard { border-radius: 12px; background: var(--surface); border: 1px solid var(--border); overflow: hidden; }
+  .thumb { height: 140px; display: grid; place-items: center; font: 700 20px Inter; color: var(--text-dim); }
+  .gbody { padding: 12px 13px; display: grid; gap: 4px; }
+  .gname { font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gmeta { font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .drafts { margin-top: 28px; }
+  .dpanel { border-radius: 12px; background: var(--surface); border: 1px solid var(--border); overflow: hidden; }
+  .drow { display: flex; align-items: center; gap: 13px; height: 48px; padding: 0 16px; border-top: 1px solid var(--border); }
+  .drow:first-child { border-top: 0; }
+  .drow svg { width: 16px; height: 16px; stroke: var(--text-dim); fill: none; stroke-width: 1.5; }
+  .dname { flex: 1 1 auto; min-width: 0; font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dedit { font-size: 11px; color: var(--text-dim); }
+
+  /* ---- tables ---- */
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--text-dim); font-weight: 500; font-size: 11px; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .pill { display: inline-block; padding: 1px 6px; border-radius: 9999px; font-size: 10px; border: 1px solid var(--border-strong); color: var(--text-dim); }
+  .pill.ok { color: var(--success); border-color: rgba(76,217,102,.4); }
+  .pill.no { color: var(--warning); border-color: rgba(240,173,78,.4); }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="mark">
+    <span class="logo"><svg viewBox="0 0 24 24" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></span>
+    <div>
+      <h1>X-Native design system</h1>
+      <p id="provenance">generated from the Rust sources</p>
+    </div>
+  </div>
+  <span class="grow"></span>
+  <div class="seg" id="themes" role="group" aria-label="Theme"></div>
+</header>
+
+<main>
+  <section>
+    <div class="section-head"><h2>Palette</h2><p id="palette-note"></p></div>
+    <div class="roles" id="roles"></div>
+  </section>
+
+  <section>
+    <div class="section-head"><h2>Scales</h2><p>every step the chrome may name — ladders are pinned by tests in <code>crates/x-ui</code></p></div>
+    <div class="cols">
+      <div class="card grid" style="gap:14px">
+        <div class="ladder" id="l-type"></div>
+        <div class="ladder" id="l-space"></div>
+      </div>
+      <div class="card grid" style="gap:14px">
+        <div class="ladder" id="l-radius"></div>
+        <div class="icons" id="l-icon"></div>
+        <div class="ladder" id="l-alpha"></div>
+        <div class="ladder" id="l-stroke"></div>
+        <div class="ladder" id="l-motion"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><h2>Dashboard</h2><p id="dash-note"></p></div>
+    <div class="stage-wrap" id="stage-wrap">
+      <div class="stage" id="stage"></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><h2>Fluid layout</h2><p>the dashboard at the supported extremes, same code path — the card row divides whatever the column gives it</p></div>
+    <div class="cols">
+      <div class="stage-wrap" id="narrow-wrap"><div class="stage" id="narrow"></div></div>
+      <div class="stage-wrap" id="wide-wrap"><div class="stage" id="wide"></div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><h2>Spacing audit</h2><p id="space-note"></p></div>
+    <div class="cols">
+      <div class="card"><table id="offsets"></table></div>
+      <div class="card grid" style="align-content:start; gap:10px">
+        <div id="ratchet"></div>
+        <div id="fluid"></div>
+        <div id="layout"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><h2>Padding, margin and resize rules</h2></div>
+    <div class="card grid" style="gap:8px" id="rules"></div>
+  </section>
+</main>
+
+<script src="tokens.js"></script>
+<script src="audit.js"></script>
+<script src="icons.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
