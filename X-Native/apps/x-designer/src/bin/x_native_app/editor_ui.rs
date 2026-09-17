@@ -320,7 +320,7 @@ impl MinimapGeom {
 /// or the screen has its own navigation (boards are infinite by design; the
 /// flow viewer is chrome-less).
 pub fn minimap_geom(app: &App) -> Option<MinimapGeom> {
-    if !app.minimap || app.screen != Screen::Editor || app.flow.is_some() {
+    if !app.minimap || app.screen != crate::state::Screen::Editor || app.flow.is_some() {
         return None;
     }
     let content = page_content_bounds(app)?;
