@@ -3191,7 +3191,7 @@ fn pages_show_a_sketch_and_still_switch() {
         "page 2 is empty until something is drawn on it"
     );
     let mut scene = vello::Scene::new();
-    let _ = crate::editor_ui::paint(&mut h.app, &mut scene);
+    crate::editor_ui::paint(&mut h.app, &mut scene);
     let rows = h.app.pages_rows();
     let r = rows
         .iter()
