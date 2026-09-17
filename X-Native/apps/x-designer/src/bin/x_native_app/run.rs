@@ -3297,7 +3297,8 @@ impl Host {
                         .app
                         .hit
                         .iter()
-                        .position(|(hr, ha)| hr == r && ha == a)
+                        // `a` is the clone made above, so compare the reference
+                        .position(|(hr, ha)| hr == r && ha == &a)
                         .and_then(|i| {
                             dashboard::focus_targets(&self.app)
                                 .iter()
