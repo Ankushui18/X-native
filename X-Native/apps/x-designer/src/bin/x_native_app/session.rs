@@ -374,6 +374,9 @@ impl App {
                         .to_string_lossy()
                         .into_owned(),
                     team: "Local file".into(),
+                    // no timestamp until the file is opened; sorts last under
+                    // "Edited", which is the honest place for "unknown"
+                    edited_min: u32::MAX,
                     edited: "Open from disk".into(),
                     color: crate::theme::C_DIM,
                     members: vec![],

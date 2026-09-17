@@ -180,6 +180,11 @@ pub const C_SUCCESS_EDGE: Color = rgba(role!(success), A_MEDIUM);
 /// role `danger` is deliberately pale so it stays legible *on* a surface; a
 /// saturated tile needs the opposite, and its label is pinned at 4.5:1 by the
 /// palette audit (`LABEL_FILLS`).
+// Destructive *labels* (a Remove button's hover ink) take the palette's danger
+// role; it is audited against all six surfaces like any other text, which is
+// why this is `danger` and not `danger_fill` (a fill role, 5.4:1 only with its
+// own on-danger ink).
+pub const C_DANGER_INK: Color = rgb(role!(danger));
 pub const C_DANGER_FILL: Color = rgb(role!(danger_fill));
 pub const C_ON_DANGER: Color = rgb(role!(on_danger));
 /// Selection washes in *content* space (the board's marquee): the same pair

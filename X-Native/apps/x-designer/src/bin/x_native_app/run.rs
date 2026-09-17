@@ -9236,6 +9236,7 @@ impl Host {
                     crate::state::RecentFile {
                         name,
                         team: "file".into(),
+                        edited_min: 0, // "Just now"
                         edited: "Just now".into(),
                         color: crate::theme::C_PANEL,
                         members: vec![],

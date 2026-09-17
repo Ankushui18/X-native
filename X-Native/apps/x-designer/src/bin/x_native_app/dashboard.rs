@@ -9,6 +9,7 @@
 
 use vello::kurbo::Rect;
 use vello::Scene;
+use x_native::ui::Elevation;
 use x_native::Color;
 
 use crate::icons::draw_icon;
@@ -1341,7 +1342,7 @@ fn paint_bulk_bar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         fill_rrect(s, r, R_ROW, if hot { C_FIELD_2 } else { C_FIELD });
         let ink = if act == Action::DashBulkRemove {
             if hot {
-                C_DANGER
+                C_DANGER_INK
             } else {
                 C_MUTED
             }

@@ -1,5 +1,6 @@
 //! Release-blocker regression tests from the independent audit, plus session policy tests.
 use super::*;
+use crate::state::DashSort;
 use x_native::{Color, PaintLayer, RenderCommand, Variables};
 
 fn host() -> Host {
