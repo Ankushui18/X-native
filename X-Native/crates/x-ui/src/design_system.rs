@@ -55,6 +55,14 @@ pub struct ColorTokens {
     pub warning: [u8; 3],
     /// Danger as text (destructive menu items) and as an icon stroke.
     pub danger: [u8; 3],
+    /// Danger as a FILL (an unread/error badge). The text role above is
+    /// deliberately pale so it stays legible *on* a surface; a badge needs the
+    /// opposite — a saturated tile whose label is [`ColorTokens::on_danger`].
+    /// Before this role existed the chrome invented its own badge red and
+    /// shipped 3.5:1 white-on-red labels.
+    pub danger_fill: [u8; 3],
+    /// Text drawn on a danger fill.
+    pub on_danger: [u8; 3],
 }
 
 /// Every role name, in the order the remap table, the audit and the DTCG
@@ -82,6 +90,8 @@ pub const COLOR_ROLES: &[&str] = &[
     "success",
     "warning",
     "danger",
+    "danger_fill",
+    "on_danger",
 ];
 
 impl ColorTokens {
@@ -99,7 +109,7 @@ impl ColorTokens {
         text_primary: [0xf2, 0xf3, 0xf7],
         text_secondary: [0xb0, 0xb5, 0xc1],
         text_dim: [0x9a, 0x9e, 0xaa],
-        text_placeholder: [0x6b, 0x6e, 0x7a],
+        text_placeholder: [0x93, 0x9a, 0xa6],
         accent: [0x6b, 0x49, 0xf5],
         accent_hover: [0x5b, 0x3c, 0xe0],
         accent_active: [0x4a, 0x2f, 0xc4],
@@ -110,6 +120,8 @@ impl ColorTokens {
         success: [0x4c, 0xd9, 0x66],
         warning: [0xf0, 0xad, 0x4e],
         danger: [0xef, 0x9a, 0x94],
+        danger_fill: [0xc0, 0x39, 0x2b],
+        on_danger: [0xff, 0xff, 0xff],
     };
 
     /// Daylight — for bright rooms, projectors and screen sharing. Text and
@@ -126,7 +138,7 @@ impl ColorTokens {
         text_primary: [0x1b, 0x1d, 0x23],
         text_secondary: [0x4e, 0x54, 0x60],
         text_dim: [0x5a, 0x5f, 0x6b],
-        text_placeholder: [0x8a, 0x8f, 0x9a],
+        text_placeholder: [0x5b, 0x62, 0x74],
         accent: [0x4a, 0x2f, 0xc4],
         accent_hover: [0x3f, 0x27, 0x99],
         accent_active: [0x33, 0x1e, 0x7c],
@@ -137,6 +149,8 @@ impl ColorTokens {
         success: [0x16, 0x6b, 0x2e],
         warning: [0x8a, 0x5a, 0x00],
         danger: [0xb3, 0x24, 0x2b],
+        danger_fill: [0xc0, 0x39, 0x2b],
+        on_danger: [0xff, 0xff, 0xff],
     };
 
     /// Pure black with maximum separation, for low-vision users.
@@ -163,6 +177,8 @@ impl ColorTokens {
         success: [0x7f, 0xff, 0x9f],
         warning: [0xff, 0xe0, 0x8a],
         danger: [0xff, 0xa3, 0xa3],
+        danger_fill: [0xff, 0x9a, 0x8f],
+        on_danger: [0x00, 0x00, 0x00],
     };
 
     /// Look a role up by name (an entry of [`COLOR_ROLES`]).
@@ -190,6 +206,8 @@ impl ColorTokens {
             "success" => self.success,
             "warning" => self.warning,
             "danger" => self.danger,
+            "danger_fill" => self.danger_fill,
+            "on_danger" => self.on_danger,
             _ => return None,
         })
     }
@@ -214,6 +232,12 @@ impl ColorTokens {
     /// designer's drawing seam applies these so a theme switch is a single
     /// lookup instead of 600 edited call sites. Identity when `from` is this
     /// palette.
+    /// The `(from, to)` table a theme switch walks, keyed by *source color*
+    /// (that is what the app hands back at paint time). Two roles may share a
+    /// source value — white is the ink on both an accent fill and the danger
+    /// fill — and the first role in `COLOR_ROLES` order wins; the palettes
+    /// keep such shared values mapped to the same target, which the remap
+    /// test in `theme.rs` enforces for every shipped palette.
     pub fn remap_from(&self, from: &ColorTokens) -> Vec<([u8; 3], [u8; 3])> {
         let mut out: Vec<([u8; 3], [u8; 3])> = Vec::new();
         for name in COLOR_ROLES {
@@ -339,20 +363,37 @@ pub struct SpacingScale {
     pub space_10: f64, // 48px
 }
 
+impl SpacingScale {
+    /// The ten steps, usable in `const` contexts: the designer's `theme::SP_*`
+    /// vocabulary derives from these, so a gap is always 4/6/8/12/16/20/24/
+    /// 32/40/48 and the audit below pins the ladder.
+    pub const SPACE_0: f64 = 0.0;
+    pub const SPACE_1: f64 = 4.0;
+    pub const SPACE_2: f64 = 6.0;
+    pub const SPACE_3: f64 = 8.0;
+    pub const SPACE_4: f64 = 12.0;
+    pub const SPACE_5: f64 = 16.0;
+    pub const SPACE_6: f64 = 20.0;
+    pub const SPACE_7: f64 = 24.0;
+    pub const SPACE_8: f64 = 32.0;
+    pub const SPACE_9: f64 = 40.0;
+    pub const SPACE_10: f64 = 48.0;
+}
+
 impl Default for SpacingScale {
     fn default() -> Self {
         Self {
-            space_0: 0.0,
-            space_1: 4.0,
-            space_2: 6.0,
-            space_3: 8.0,
-            space_4: 12.0,
-            space_5: 16.0,
-            space_6: 20.0,
-            space_7: 24.0,
-            space_8: 32.0,
-            space_9: 40.0,
-            space_10: 48.0,
+            space_0: Self::SPACE_0,
+            space_1: Self::SPACE_1,
+            space_2: Self::SPACE_2,
+            space_3: Self::SPACE_3,
+            space_4: Self::SPACE_4,
+            space_5: Self::SPACE_5,
+            space_6: Self::SPACE_6,
+            space_7: Self::SPACE_7,
+            space_8: Self::SPACE_8,
+            space_9: Self::SPACE_9,
+            space_10: Self::SPACE_10,
         }
     }
 }
@@ -371,15 +412,28 @@ pub struct IconScale {
     pub stroke_width: f64,
 }
 
+impl IconScale {
+    /// The five optical sizes, usable in `const` contexts: the app's
+    /// `ICON_*` vocabulary derives from these, so an icon is always 12/14/
+    /// 16/18/24 and the audit below pins the ladder.
+    pub const XS: f64 = 12.0;
+    pub const SM: f64 = 14.0;
+    pub const MD: f64 = 16.0;
+    pub const LG: f64 = 18.0;
+    pub const XL: f64 = 24.0;
+    /// Stroke weight, constant across sizes ([`IconScale::stroke_width`]).
+    pub const STROKE: f64 = 1.5;
+}
+
 impl Default for IconScale {
     fn default() -> Self {
         Self {
-            size_xs: 12.0,
-            size_sm: 14.0,
-            size_md: 16.0,
-            size_lg: 18.0,
-            size_xl: 24.0,
-            stroke_width: 1.5,
+            size_xs: Self::XS,
+            size_sm: Self::SM,
+            size_md: Self::MD,
+            size_lg: Self::LG,
+            size_xl: Self::XL,
+            stroke_width: Self::STROKE,
         }
     }
 }
@@ -571,6 +625,116 @@ impl Elevation {
     }
 }
 
+// ==================================================== Wash & Alpha System
+
+/// Alpha steps for the translucent washes the chrome composites over a
+/// surface — scrims, hover discs, selection washes, focus borders, unread
+/// tints. Every one of them used to be a bare `0x33`/`0x42` at its call site,
+/// which made "how strong is a wash here?" unanswerable from the palette.
+///
+/// The step names describe the intent, so a new wash should reuse a step
+/// rather than invent a number: if none of the five fit, the wash is
+/// probably a new *role* ([`ColorTokens`]) rather than a new alpha.
+#[derive(Debug, Clone, Copy)]
+pub struct AlphaScale {
+    pub whisper: u8, // 0x08 — barely-there tint (unread row)
+    pub faint: u8,   // 0x14 — soft wash (selected text behind chrome)
+    pub soft: u8,    // 0x33 — the standard wash (icon chips, hover discs)
+    pub medium: u8,  // 0x42 — emphasis wash (canvas text selection)
+    pub strong: u8,  // 0x80 — a border/edge that must read as a line
+}
+
+impl Default for AlphaScale {
+    fn default() -> Self {
+        Self {
+            whisper: Self::WHISPER,
+            faint: Self::FAINT,
+            soft: Self::SOFT,
+            medium: Self::MEDIUM,
+            strong: Self::STRONG,
+        }
+    }
+}
+
+impl AlphaScale {
+    /// The five steps, usable in `const` contexts (the app's `A_*` vocabulary
+    /// derives from these).
+    pub const WHISPER: u8 = 0x08;
+    pub const FAINT: u8 = 0x14;
+    pub const SOFT: u8 = 0x33;
+    pub const MEDIUM: u8 = 0x42;
+    pub const STRONG: u8 = 0x80;
+}
+
+// ============================================================ Stroke System
+
+/// Stroke widths. The chrome draws hairlines at 1.0 — the minimum that
+/// survives rasterisation at 1× — and rings at 1.5 so a selected chip's
+/// outline is not confused with a divider.
+#[derive(Debug, Clone, Copy)]
+pub struct StrokeScale {
+    pub hairline: f64,
+    pub ring: f64,
+}
+
+impl Default for StrokeScale {
+    fn default() -> Self {
+        Self {
+            hairline: Self::HAIRLINE,
+            ring: Self::RING,
+        }
+    }
+}
+
+impl StrokeScale {
+    pub const HAIRLINE: f64 = 1.0;
+    pub const RING: f64 = 1.5;
+}
+
+// ============================================================ Motion System
+
+/// Motion tokens: durations in milliseconds plus the easing curves the app is
+/// allowed to use. Nothing tweens today (hover states are painted instantly),
+/// but a duration that is invented at a call site is exactly the kind of
+/// divergence this system exists to prevent, so the set is fixed here first.
+///
+/// [`DesignSystem::reduced_motion`] is the contract: when it is true, a
+/// duration is read as 0 and transitions collapse to their end state.
+#[derive(Debug, Clone, Copy)]
+pub struct MotionScale {
+    /// Instant feedback: a press, a toggle.
+    pub fast: u32,
+    /// The default: hover lifts, menu fades.
+    pub base: u32,
+    /// Larger surfaces: modals, panels sliding in.
+    pub slow: u32,
+    /// The one easing for entry/exit; a linear curve is never correct for
+    /// position.
+    pub standard_easing: &'static str,
+    /// Easing for things that move within the layout (reorder, resize).
+    pub emphasized_easing: &'static str,
+}
+
+impl Default for MotionScale {
+    fn default() -> Self {
+        Self {
+            fast: Self::FAST_MS,
+            base: Self::BASE_MS,
+            slow: Self::SLOW_MS,
+            standard_easing: Self::STANDARD_EASING,
+            emphasized_easing: Self::EMPHASIZED_EASING,
+        }
+    }
+}
+
+impl MotionScale {
+    pub const FAST_MS: u32 = 120;
+    pub const BASE_MS: u32 = 180;
+    pub const SLOW_MS: u32 = 240;
+    pub const STANDARD_EASING: &'static str = "cubic-bezier(0.2, 0, 0, 1)";
+    pub const EMPHASIZED_EASING: &'static str = "cubic-bezier(0.4, 0, 0.2, 1)";
+}
+
 // =================================================== Interaction States
 
 /// All interactive components must support these states.
@@ -602,6 +766,9 @@ pub struct DesignSystem {
     pub icons: IconScale,
     pub radius: RadiusScale,
     pub shadows: ShadowScale,
+    pub alpha: AlphaScale,
+    pub stroke: StrokeScale,
+    pub motion: MotionScale,
 
     /// Which palette these tokens came from.
     pub theme_id: crate::theme::ThemeId,
@@ -619,6 +786,9 @@ impl Default for DesignSystem {
             icons: IconScale::default(),
             radius: RadiusScale::default(),
             shadows: ShadowScale::default(),
+            alpha: AlphaScale::default(),
+            stroke: StrokeScale::default(),
+            motion: MotionScale::default(),
             theme_id: crate::theme::ThemeId::Graphite,
             scale: 1.0,
             high_contrast: false,
@@ -745,6 +915,161 @@ mod tests {
                 TypographyScale::XXL,
             ]
         );
+        let sp = SpacingScale::default();
+        assert_eq!(
+            [
+                sp.space_0,
+                sp.space_1,
+                sp.space_2,
+                sp.space_3,
+                sp.space_4,
+                sp.space_5,
+                sp.space_6,
+                sp.space_7,
+                sp.space_8,
+                sp.space_9,
+                sp.space_10,
+            ],
+            [
+                SpacingScale::SPACE_0,
+                SpacingScale::SPACE_1,
+                SpacingScale::SPACE_2,
+                SpacingScale::SPACE_3,
+                SpacingScale::SPACE_4,
+                SpacingScale::SPACE_5,
+                SpacingScale::SPACE_6,
+                SpacingScale::SPACE_7,
+                SpacingScale::SPACE_8,
+                SpacingScale::SPACE_9,
+                SpacingScale::SPACE_10,
+            ]
+        );
+        let i = IconScale::default();
+        assert_eq!(
+            [
+                i.size_xs,
+                i.size_sm,
+                i.size_md,
+                i.size_lg,
+                i.size_xl,
+                i.stroke_width
+            ],
+            [
+                IconScale::XS,
+                IconScale::SM,
+                IconScale::MD,
+                IconScale::LG,
+                IconScale::XL,
+                IconScale::STROKE
+            ]
+        );
+        let a = AlphaScale::default();
+        assert_eq!(
+            [a.whisper, a.faint, a.soft, a.medium, a.strong],
+            [
+                AlphaScale::WHISPER,
+                AlphaScale::FAINT,
+                AlphaScale::SOFT,
+                AlphaScale::MEDIUM,
+                AlphaScale::STRONG
+            ]
+        );
+        let s = StrokeScale::default();
+        assert_eq!(
+            [s.hairline, s.ring],
+            [StrokeScale::HAIRLINE, StrokeScale::RING]
+        );
+        let m = MotionScale::default();
+        assert_eq!(
+            [m.fast, m.base, m.slow],
+            [
+                MotionScale::FAST_MS,
+                MotionScale::BASE_MS,
+                MotionScale::SLOW_MS
+            ]
+        );
+    }
+
+    /// A scale is an ordered ladder: an out-of-order step means two tokens
+    /// that look different in code are the same (or inverted) in pixels, and
+    /// every `match` on a step silently lies.
+    #[test]
+    fn every_scale_is_monotonic() {
+        let r = RadiusScale::default();
+        let radii = [r.none, r.xs, r.sm, r.md, r.lg, r.xl];
+        assert!(radii.windows(2).all(|w| w[0] < w[1]), "radii: {radii:?}");
+
+        let t = TypographyScale::default();
+        let type_steps = [
+            t.size_xs,
+            t.size_sm,
+            t.size_base,
+            t.size_md,
+            t.size_lg,
+            t.size_xl,
+            t.size_xxl,
+        ];
+        assert!(
+            type_steps.windows(2).all(|w| w[0] < w[1]),
+            "type: {type_steps:?}"
+        );
+
+        let i = IconScale::default();
+        let icons = [i.size_xs, i.size_sm, i.size_md, i.size_lg, i.size_xl];
+        // distinct, and never below the 1px-per-step floor that makes an
+        // "optical size" meaningful at all
+        assert!(
+            icons.windows(2).all(|w| w[0] < w[1] && w[1] - w[0] >= 2.0),
+            "icons: {icons:?}"
+        );
+
+        let sp = SpacingScale::default();
+        let space = [
+            sp.space_1,
+            sp.space_2,
+            sp.space_3,
+            sp.space_4,
+            sp.space_5,
+            sp.space_6,
+            sp.space_7,
+            sp.space_8,
+            sp.space_9,
+            sp.space_10,
+        ];
+        assert!(space.windows(2).all(|w| w[0] < w[1]), "space: {space:?}");
+
+        let a = AlphaScale::default();
+        let alphas = [a.whisper, a.faint, a.soft, a.medium, a.strong];
+        assert!(alphas.windows(2).all(|w| w[0] < w[1]), "alpha: {alphas:?}");
+
+        let m = MotionScale::default();
+        assert!(m.fast < m.base && m.base < m.slow, "motion: {m:?}");
+    }
+
+    /// The aggregate is the object screens are handed, so a scale that is not
+    /// wired into `DesignSystem` is invisible to every consumer — this pins
+    /// the whole set in one place.
+    #[test]
+    fn design_system_carries_every_scale() {
+        let ds = DesignSystem::default();
+        assert_eq!(ds.spacing.space_4, SpacingScale::default().space_4);
+        assert_eq!(ds.typography.size_base, TypographyScale::BASE);
+        assert_eq!(ds.radius.lg, RadiusScale::LG);
+        assert_eq!(ds.icons.size_md, IconScale::MD);
+        assert_eq!(ds.alpha.soft, AlphaScale::SOFT);
+        assert_eq!(ds.stroke.hairline, StrokeScale::HAIRLINE);
+        assert_eq!(ds.motion.base, MotionScale::BASE_MS);
+        assert!(ds.shadows.md.is_some());
+        // the accessibility knobs travel with the system, not with the theme
+        assert_eq!(ds.scale, 1.0);
+        assert!(!ds.reduced_motion);
+        let hc = DesignSystem::high_contrast();
+        assert!(hc.high_contrast);
+        assert_eq!(hc.theme_id, crate::theme::ThemeId::HighContrast);
+        // and the legacy `Theme` view agrees with it (one-way conversion)
+        let t: crate::Theme = (&hc).into();
+        assert!(t.high_contrast);
+        assert_eq!(t.id, hc.theme_id);
     }
 
     #[test]

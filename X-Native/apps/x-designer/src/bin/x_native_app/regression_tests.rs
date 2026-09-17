@@ -1,5 +1,6 @@
 //! Release-blocker regression tests from the independent audit, plus session policy tests.
 use super::*;
+use crate::state::DashSort;
 use x_native::{Color, PaintLayer, RenderCommand, Variables};
 
 fn host() -> Host {
@@ -2424,5 +2425,788 @@ fn t19_layers_drag_click_without_move_only_selects() {
         h.app.doc_ref().editor_ref().selection,
         vec!["fr2".to_string()],
         "the row click still selects"
+    );
+}
+
+/// The two docks share the window with the canvas, both are resizable, and both
+/// extremes are reachable (drag a panel wide, then shrink the window). The
+/// layout has to degrade to the canvas floor — never invert the canvas rect or
+/// let a dock paint over its neighbour.
+#[test]
+fn docks_never_eat_the_canvas() {
+    let mut app = App::new();
+    for win_w in [980.0, 1024.0, 1280.0, 1440.0, 1920.0, 2560.0] {
+        app.win_w = win_w;
+        for left_w in [ED_LEFT_MIN, ED_LEFT_W, ED_LEFT_MAX] {
+            for right_w in [ED_RIGHT_MIN, ED_RIGHT_W, ED_RIGHT_MAX] {
+                app.left_w = left_w;
+                app.right_w = right_w;
+                let r = app.editor_regions();
+                assert!(
+                    r.canvas.x1 >= r.canvas.x0,
+                    "canvas inverted at {win_w} with docks {left_w}/{right_w}: {:?}",
+                    r.canvas
+                );
+                assert!(
+                    r.left.x1 <= r.canvas.x0 + 0.001,
+                    "left dock over the canvas"
+                );
+                assert!(
+                    r.canvas.x1 <= r.right.x0 + 0.001,
+                    "right dock over the canvas"
+                );
+                assert!(r.right.x1 <= win_w + 0.001, "right dock past the window");
+                assert!(r.canvas.width() >= 1.0, "canvas collapsed at {win_w}");
+            }
+        }
+    }
+    // the floor itself: the widest allowed docks at the minimum window still
+    // leave exactly ED_CANVAS_MIN of canvas
+    app.win_w = 980.0;
+    app.left_w = ED_LEFT_MAX;
+    app.right_w = ED_RIGHT_MAX;
+    let r = app.editor_regions();
+    assert!(
+        (r.canvas.width() - ED_CANVAS_MIN).abs() < 0.001,
+        "want the canvas floor, got {}",
+        r.canvas.width()
+    );
+}
+
+/// A host sitting on the dashboard, painted once so `hit` is populated.
+fn dashboard_host() -> Host {
+    let mut h = host();
+    h.app.screen = Screen::Dashboard;
+    h.app.docs.clear();
+    h.app.win_w = 1440.0;
+    h.app.win_h = 900.0;
+    h.app.dash_view = DashView::Home;
+    h.app.mouse = Point::new(-100.0, -100.0);
+    // `App::new()` fills `recents` from the machine's store: empty on a fresh
+    // runner, and written by whatever else in this suite happens to be saving a
+    // file while these tests run in parallel. These tests count, sort and select
+    // files, so they get the demo fixture — the same six rows on every run.
+    h.app.recents = App::demo().recents;
+    let mut scene = vello::Scene::new();
+    dashboard::paint(&mut h.app, &mut scene);
+    h
+}
+
+#[test]
+fn dashboard_is_reachable_by_keyboard() {
+    let mut h = dashboard_host();
+    let targets = dashboard::focus_targets(&h.app);
+    assert!(
+        targets.len() >= 8,
+        "the dashboard must expose its controls to the keyboard, found {}",
+        targets.len()
+    );
+    // every stop is a real target with a real action
+    for i in &targets {
+        let (r, _) = &h.app.hit[*i];
+        assert!(
+            r.width() > 0.0 && r.height() > 0.0,
+            "degenerate focus target"
+        );
+    }
+
+    // Tab from nothing lands on the first stop, Shift+Tab on the last
+    h.on_key(Key::Named(NamedKey::Tab), None);
+    assert_eq!(h.app.dash_focus, Some(0));
+    h.on_key(Key::Named(NamedKey::Tab), None);
+    assert_eq!(h.app.dash_focus, Some(1));
+    h.app.shift = true;
+    h.on_key(Key::Named(NamedKey::Tab), None);
+    assert_eq!(h.app.dash_focus, Some(0));
+    h.app.shift = false;
+    h.on_key(Key::Named(NamedKey::Tab), None);
+    h.on_key(Key::Named(NamedKey::Tab), None);
+    assert_eq!(h.app.dash_focus, Some(2), "Tab must keep moving forward");
+
+    // Escape drops the ring; the next Tab starts over from the top
+    h.on_key(Key::Named(NamedKey::Escape), None);
+    assert_eq!(h.app.dash_focus, None);
+    h.on_key(Key::Named(NamedKey::Tab), None);
+    assert_eq!(h.app.dash_focus, Some(0));
+
+    // Enter on a stop does what clicking it does: walk to "Recents"
+    let recents = h
+        .app
+        .hit
+        .iter()
+        .position(|(_, a)| *a == Action::DashNav(DashView::Recents))
+        .expect("the sidebar has a Recents row");
+    let at = targets.iter().position(|t| *t == recents).unwrap();
+    for _ in 0..targets.len() + 1 {
+        if h.app.dash_focus == Some(at) {
+            break;
+        }
+        h.on_key(Key::Named(NamedKey::Tab), None);
+    }
+    assert_eq!(h.app.dash_focus, Some(at));
+    h.on_key(Key::Named(NamedKey::Enter), None);
+    assert_eq!(
+        h.app.dash_view,
+        DashView::Recents,
+        "Enter fires the focused control"
+    );
+}
+
+#[test]
+fn pointer_says_what_it_will_do() {
+    let mut h = dashboard_host();
+    let reg = h.app.editor_regions();
+    assert!(h.app.hit.len() > 5, "paint populated the hit list");
+
+    // dead space in the main column: nothing to click
+    h.app.mouse = Point::new(reg.sidebar.x1 + 8.0, h.app.win_h - 8.0);
+    let dead = cursor_for(&h.app);
+    // the search field is a text field, in the top bar
+    h.app.mouse = dashboard::search_rect(&h.app).center();
+    assert_eq!(cursor_for(&h.app), CursorIcon::Text);
+    // every control says "clickable"
+    let (rect, _) = h.app.hit[h.app.hit.len() - 1].clone();
+    h.app.mouse = rect.center();
+    assert_eq!(cursor_for(&h.app), CursorIcon::Pointer);
+    assert_ne!(dead, CursorIcon::Text);
+
+    // the dashboard used to render as a plain arrow everywhere — the whole
+    // file browser had no hover affordance at all
+    let mut pointer = 0;
+    for i in 0..h.app.hit.len() {
+        let (r, _) = h.app.hit[i].clone();
+        if r.width() < 40.0 || r.height() < 20.0 {
+            continue;
+        }
+        h.app.mouse = r.center();
+        if cursor_for(&h.app) == CursorIcon::Pointer {
+            pointer += 1;
+        }
+    }
+    assert!(pointer >= 3, "only {pointer} controls advertise themselves");
+}
+
+/// The sort key is parsed from the label the UI shows, so the two cannot
+/// disagree; an unknown label sorts last instead of jumping to the top.
+#[test]
+fn edited_labels_sort_by_what_they_say() {
+    use crate::state::edited_minutes;
+    assert_eq!(edited_minutes("Edited 2h ago"), 120);
+    assert_eq!(edited_minutes("Edited 45 min ago"), 45);
+    assert_eq!(edited_minutes("Edited yesterday"), 1440);
+    assert_eq!(edited_minutes("Edited 3 days ago"), 4320);
+    assert_eq!(edited_minutes("Edited 1 week ago"), 10080);
+    assert_eq!(edited_minutes("now"), 0);
+    assert_eq!(edited_minutes("whenever"), u32::MAX);
+    // Every seeded row stores the parse of the label it shows, because both
+    // come from `edited_minutes`. A row may sort as unknown, but only when it
+    // really is one: a file on disk we have never opened ("Open from disk").
+    let app = App::new();
+    for f in app.recents.iter().chain(app.drafts.iter()) {
+        assert_eq!(
+            f.edited_min,
+            edited_minutes(&f.edited),
+            "seed {:?} stores {:?} but its label says {:?}",
+            f.name,
+            f.edited_min,
+            f.edited
+        );
+        if f.edited_min == u32::MAX {
+            assert!(
+                f.path.is_some(),
+                "only a never-opened file may sort as unknown: {:?}",
+                f.name
+            );
+        }
+    }
+}
+
+#[test]
+fn the_browser_can_be_sorted() {
+    let mut h = dashboard_host();
+    h.app.demo_mode = false; // show every file, not the six-file demo page
+    h.app.dash_sort = DashSort::Edited;
+    let by_edited = dashboard::visible_files(&h.app);
+    let keys: Vec<u32> = by_edited
+        .iter()
+        .map(|i| h.app.recents[*i].edited_min)
+        .collect();
+    assert!(keys.windows(2).all(|w| w[0] <= w[1]), "edited: {keys:?}");
+
+    h.app.dash_sort = DashSort::Name;
+    let by_name = dashboard::visible_files(&h.app);
+    let names: Vec<String> = by_name
+        .iter()
+        .map(|i| h.app.recents[*i].name.to_lowercase())
+        .collect();
+    assert!(names.windows(2).all(|w| w[0] <= w[1]), "name: {names:?}");
+    assert_eq!(
+        by_name.len(),
+        by_edited.len(),
+        "sorting must not drop files"
+    );
+
+    h.app.dash_sort = DashSort::Starred;
+    for i in [0usize, 3] {
+        if let Some(f) = h.app.recents.get_mut(i) {
+            f.starred = true;
+        }
+    }
+    let starred = dashboard::visible_files(&h.app);
+    let star_rank: Vec<bool> = starred.iter().map(|i| h.app.recents[*i].starred).collect();
+    let first_unstarred = star_rank.iter().position(|s| !s).unwrap_or(star_rank.len());
+    assert!(
+        star_rank[..first_unstarred].iter().all(|s| *s),
+        "starred files must float: {star_rank:?}"
+    );
+    assert!(star_rank[first_unstarred..].iter().all(|s| !s));
+
+    // the view filter still applies on top of the sort
+    h.app.dash_view = DashView::Starred;
+    let only_starred = dashboard::visible_files(&h.app);
+    assert!(only_starred.iter().all(|i| h.app.recents[*i].starred));
+}
+
+#[test]
+fn multi_select_and_its_bulk_actions() {
+    let mut h = dashboard_host();
+    h.app.demo_mode = false;
+    let visible = dashboard::visible_files(&h.app);
+    assert!(visible.len() >= 4, "need a few files to select");
+
+    // toggle on, toggle off
+    h.dispatch(Action::DashSelect(visible[0]));
+    assert_eq!(h.app.dash_selected, vec![visible[0]]);
+    h.dispatch(Action::DashSelect(visible[1]));
+    assert_eq!(h.app.dash_selected.len(), 2);
+    h.dispatch(Action::DashSelect(visible[0]));
+    assert_eq!(h.app.dash_selected, vec![visible[1]]);
+
+    // select all = everything on screen, in the order it is on screen
+    h.dispatch(Action::DashSelectAll);
+    assert_eq!(h.app.dash_selected, visible);
+
+    // bulk star writes through to the files' starred flag
+    h.dispatch(Action::DashBulkStar);
+    assert!(visible.iter().all(|i| h.app.recents[*i].starred));
+    h.dispatch(Action::DashBulkUnstar);
+    assert!(visible.iter().all(|i| !h.app.recents[*i].starred));
+
+    // remove drops them from the list and keeps the rest
+    let before = h.app.recents.len();
+    h.dispatch(Action::DashBulkRemove);
+    assert_eq!(h.app.recents.len(), before - visible.len());
+    assert!(
+        h.app.dash_selected.is_empty(),
+        "the bar goes away with them"
+    );
+
+    // clear is the explicit way out
+    h.dispatch(Action::DashSelect(0));
+    h.dispatch(Action::DashClearSelection);
+    assert!(h.app.dash_selected.is_empty());
+}
+
+#[test]
+fn the_bulk_bar_is_only_there_when_something_is_selected() {
+    let mut h = dashboard_host();
+    let has_bar = |h: &Host| h.app.hit.iter().any(|(_, a)| *a == Action::DashBulkStar);
+    assert!(!has_bar(&h), "nothing selected: no bar");
+    h.dispatch(Action::DashSelect(0));
+    let mut scene = vello::Scene::new();
+    dashboard::paint(&mut h.app, &mut scene);
+    assert!(has_bar(&h), "one file selected: the bar is painted");
+    // and its buttons are real targets with real actions
+    for want in [
+        Action::DashBulkStar,
+        Action::DashBulkUnstar,
+        Action::DashBulkOpen,
+        Action::DashBulkRemove,
+        Action::DashClearSelection,
+    ] {
+        assert!(
+            h.app.hit.iter().any(|(_, a)| *a == want),
+            "{want:?} is missing from the bar"
+        );
+    }
+    // the bar swallows presses on its own background
+    assert!(h.app.hit.iter().any(|(_, a)| *a == Action::DashBarNoop));
+}
+
+#[test]
+fn escape_unwinds_the_dashboard_one_step_at_a_time() {
+    let mut h = dashboard_host();
+    h.dispatch(Action::DashSelect(0));
+    h.dispatch(Action::DashSortMenu);
+    h.on_key(Key::Named(NamedKey::Tab), None);
+    assert!(h.app.dash_sort_open);
+    h.on_key(Key::Named(NamedKey::Escape), None);
+    assert!(!h.app.dash_sort_open, "the menu closes first");
+    assert_eq!(h.app.dash_selected.len(), 1, "the selection survives");
+    h.on_key(Key::Named(NamedKey::Escape), None);
+    assert!(h.app.dash_selected.is_empty(), "then the selection clears");
+    assert!(h.app.dash_focus.is_some(), "and the ring is still there");
+    h.on_key(Key::Named(NamedKey::Escape), None);
+    assert!(h.app.dash_focus.is_none(), "then the ring goes");
+}
+
+#[test]
+fn the_sort_menu_picks_an_order_and_closes() {
+    let mut h = dashboard_host();
+    h.dispatch(Action::DashSortMenu);
+    assert!(h.app.dash_sort_open);
+    h.dispatch(Action::DashSortBy(DashSort::Name));
+    assert_eq!(h.app.dash_sort, DashSort::Name);
+    assert!(!h.app.dash_sort_open, "picking an order closes the menu");
+    // the menu rows only exist while it is open
+    h.dispatch(Action::DashSortMenu);
+    let mut scene = vello::Scene::new();
+    dashboard::paint(&mut h.app, &mut scene);
+    assert!(h
+        .app
+        .hit
+        .iter()
+        .any(|(_, a)| matches!(a, Action::DashSortBy(_))));
+}
+
+// ------------------------------------------------------- paint library
+
+/// A host with one rect selected and a colour variable to bind.
+fn paint_library_host() -> Host {
+    let mut h = host();
+    let root_id = h.app.doc_ref().editor_ref().root.id.clone();
+    let n = Node::rect("v1", 40.0, 40.0, 60.0, 60.0, Color::BLACK);
+    h.app.doc().editor().insert_node(&root_id, n);
+    h.app.doc().editor().selection = vec!["v1".into()];
+    h.app
+        .doc()
+        .doc
+        .variables
+        .colors
+        .insert("brand/signal".into(), Color::from_rgb8(0x2F, 0x6B, 0xFF));
+    h
+}
+
+fn rgba(c: Color) -> (u8, u8, u8, u8) {
+    let p = c.to_rgba8();
+    (p.r, p.g, p.b, p.a)
+}
+
+/// Binding a fill to a variable must be a LINK, not a colour copy: editing the
+/// variable repaints every consumer without touching a node.
+#[test]
+fn a_bound_fill_follows_the_variable_it_names() {
+    let mut h = paint_library_host();
+    h.dispatch(Action::ApplyPaintVariable(true, "brand/signal".into()));
+    let paint = h.app.paint_of("v1", true).expect("v1 exists");
+    assert!(
+        matches!(&paint, Paint::Variable(n) if n == "brand/signal"),
+        "the fill must become the variable, found {paint:?}"
+    );
+    let before = {
+        let vars = &h.app.doc_ref().doc.variables;
+        rgba(x_native::paint_color(&paint, vars))
+    };
+    assert_eq!(before, (0x2F, 0x6B, 0xFF, 255));
+    assert_eq!(
+        h.app
+            .doc_ref()
+            .doc
+            .variables
+            .color("brand/signal", Color::BLACK),
+        Color::from_rgb8(0x2F, 0x6B, 0xFF)
+    );
+
+    // the document owner edits the variable: the layer follows, no node edit
+    h.app
+        .doc()
+        .doc
+        .variables
+        .colors
+        .insert("brand/signal".into(), Color::from_rgb8(0xFF, 0x00, 0x00));
+    let after = {
+        let paint = h.app.paint_of("v1", true).expect("v1 exists");
+        let vars = &h.app.doc_ref().doc.variables;
+        rgba(x_native::paint_color(&paint, vars))
+    };
+    assert_eq!(after, (0xFF, 0x00, 0x00, 255), "the binding is live");
+}
+
+/// Detach keeps the colour that was on screen: the link goes, the pixels stay.
+#[test]
+fn detaching_keeps_the_colour_the_variable_painted() {
+    let mut h = paint_library_host();
+    h.dispatch(Action::ApplyPaintVariable(true, "brand/signal".into()));
+    h.dispatch(Action::DetachPaintBinding(true));
+    let paint = h.app.paint_of("v1", true).expect("v1 exists");
+    assert!(
+        matches!(paint, Paint::Solid(c) if rgba(c) == (0x2F, 0x6B, 0xFF, 255)),
+        "detach must freeze the resolved colour, found {paint:?}"
+    );
+    // and the document is unchanged by a later variable edit
+    h.app
+        .doc()
+        .doc
+        .variables
+        .colors
+        .insert("brand/signal".into(), Color::from_rgb8(0x00, 0xFF, 0x00));
+    let paint = h.app.paint_of("v1", true).expect("v1 exists");
+    assert!(matches!(paint, Paint::Solid(c) if rgba(c) == (0x2F, 0x6B, 0xFF, 255)));
+}
+
+/// A paint style is a fill style: applying it links the layer, and the stroke
+/// row says so instead of offering something that would not work.
+#[test]
+fn a_paint_style_links_the_fill_and_the_stroke_row_says_so() {
+    let mut h = paint_library_host();
+    h.app.doc().doc.styles.insert(
+        "Brand/Primary".into(),
+        x_native::LegacyStyle::Paint {
+            fill: Paint::Solid(Color::from_rgb8(0x11, 0x22, 0x33)),
+        },
+    );
+    h.dispatch(Action::ApplyPaintStyle("Brand/Primary".into()));
+    assert_eq!(
+        h.app.linked_paint_style("v1").as_deref(),
+        Some("Brand/Primary"),
+        "applying a paint style links the layer"
+    );
+    let paint = h.app.paint_of("v1", true).expect("v1 exists");
+    assert!(matches!(paint, Paint::Solid(c) if rgba(c) == (0x11, 0x22, 0x33, 255)));
+
+    // the popover offers the style on the fill row…
+    h.dispatch(Action::PaintLibToggle(true));
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let rows: Vec<Action> = h.app.hit.iter().map(|(_, a)| a.clone()).collect();
+    assert!(
+        rows.iter()
+            .any(|a| matches!(a, Action::ApplyPaintStyle(n) if n == "Brand/Primary")),
+        "the fill popover lists the file's paint styles"
+    );
+    assert!(
+        rows.iter()
+            .any(|a| matches!(a, Action::ApplyPaintVariable(true, n) if n == "brand/signal")),
+        "and its colour variables"
+    );
+
+    // …and only variables on the stroke row
+    h.dispatch(Action::PaintLibToggle(false));
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let rows: Vec<Action> = h.app.hit.iter().map(|(_, a)| a.clone()).collect();
+    assert!(
+        rows.iter()
+            .any(|a| matches!(a, Action::ApplyPaintVariable(false, n) if n == "brand/signal")),
+        "the stroke popover binds variables"
+    );
+    assert!(
+        !rows.iter().any(|a| matches!(a, Action::ApplyPaintStyle(_))),
+        "a fill style must not be offered on a stroke row"
+    );
+}
+
+/// The popover is a real popover: the pointer advertises its rows and Escape
+/// unwinds it before anything else.
+#[test]
+fn the_paint_library_advertises_itself_and_escape_closes_it() {
+    let mut h = paint_library_host();
+    h.dispatch(Action::PaintLibToggle(true));
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let rect = crate::editor_ui::paint_lib_rect(&h.app).expect("the popover has a rect");
+    h.app.mouse = rect.center();
+    assert_eq!(
+        cursor_for(&h.app),
+        CursorIcon::Pointer,
+        "rows inside the popover are clickable"
+    );
+    // the click the user makes: press on the variable's row and it applies
+    let row = h
+        .app
+        .hit
+        .iter()
+        .rev()
+        .find_map(|(r, a)| match a {
+            Action::ApplyPaintVariable(true, n) if n == "brand/signal" => Some(*r),
+            _ => None,
+        })
+        .expect("the variable has a row in the popover");
+    h.on_press(row.center());
+    assert!(
+        matches!(h.app.paint_of("v1", true), Some(Paint::Variable(ref n)) if n == "brand/signal"),
+        "clicking the row binds the fill"
+    );
+    assert_eq!(h.app.paint_lib, None, "and closes the popover");
+
+    // Escape unwinds an open popover before it touches the selection
+    h.dispatch(Action::PaintLibToggle(true));
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    h.on_key(Key::Named(NamedKey::Escape), None);
+    assert_eq!(h.app.paint_lib, None, "Escape closes the popover first");
+    assert!(
+        h.app
+            .doc_ref()
+            .editor_ref()
+            .selection
+            .contains(&"v1".into()),
+        "and does not cost the selection"
+    );
+}
+
+// --------------------------------------------------- canvas navigation
+
+/// A host with a page of known content: three rects in a known box.
+fn canvas_host() -> Host {
+    let mut h = host();
+    // the seeded host may carry a demo frame: this page is exactly the three
+    // rects below, so every bound the tests measure is known
+    h.app.doc().editor().root.children.clear();
+    let root_id = h.app.doc_ref().editor_ref().root.id.clone();
+    for (id, x, y, w, hh) in [
+        ("n-a", 100.0, 100.0, 200.0, 100.0),
+        ("n-b", 500.0, 300.0, 400.0, 200.0),
+        ("n-c", 1200.0, 900.0, 100.0, 100.0),
+    ] {
+        h.app.doc().editor().insert_node(
+            &root_id,
+            Node::rect(id, x, y, w, hh, Color::from_rgb8(0x40, 0x50, 0x60)),
+        );
+    }
+    h.app.win_w = 1440.0;
+    h.app.win_h = 900.0;
+    h.app.screen = Screen::Editor;
+    h.app.status.clear();
+    h
+}
+
+/// Every navigation aid has to agree with the content: the minimap's box is
+/// the union of the page's visible nodes, and the viewport lands inside it.
+#[test]
+fn the_minimap_maps_the_pages_content_and_nothing_else() {
+    let mut h = canvas_host();
+    let b = crate::editor_ui::page_content_bounds(&h.app).expect("the page has content");
+    assert_eq!((b.x0, b.y0, b.x1, b.y1), (100.0, 100.0, 1300.0, 1000.0));
+
+    let g = crate::editor_ui::minimap_geom(&h.app).expect("the minimap is on by default");
+    let reg = h.app.editor_regions();
+    assert!(
+        g.panel.x0 >= reg.canvas.x0
+            && g.panel.y0 >= reg.canvas.y0
+            && g.panel.x1 <= reg.canvas.x1
+            && g.panel.y1 <= reg.canvas.y1,
+        "the panel must sit inside the canvas, found {:?} vs {:?}",
+        g.panel,
+        reg.canvas
+    );
+
+    // the mapping is a similarity: content corners land inside the panel and
+    // round-trip back to the world coordinate they came from
+    let tl = g.to_panel(b.x0, b.y0);
+    let br = g.to_panel(b.x1, b.y1);
+    assert!(g.panel.contains(tl) && g.panel.contains(br));
+    let back = g.to_world(tl);
+    assert!((back.x - b.x0).abs() < 0.5 && (back.y - b.y0).abs() < 0.5);
+    // tighter axis keeps the panel's aspect (letterboxed, never stretched)
+    let ratio_world = b.width() / b.height();
+    let ratio_panel = (br.x - tl.x) / (br.y - tl.y);
+    assert!(
+        (ratio_world - ratio_panel).abs() < 0.01,
+        "the sketch must not stretch: {ratio_world} vs {ratio_panel}"
+    );
+
+    // hidden layers are not part of the page's extent
+    let id = "n-c";
+    h.app.doc().editor().set_visible(id, false);
+    let b2 = crate::editor_ui::page_content_bounds(&h.app).expect("two nodes left");
+    assert_eq!((b2.x0, b2.y0, b2.x1, b2.y1), (100.0, 100.0, 900.0, 500.0));
+}
+
+/// A click on the map is a navigation: the point under the pointer ends up in
+/// the middle of the canvas, and scrubbing keeps it there.
+#[test]
+fn scrubbing_the_minimap_moves_the_viewport_where_you_point() {
+    let mut h = canvas_host();
+    let g = crate::editor_ui::minimap_geom(&h.app).unwrap();
+    let reg = h.app.editor_regions();
+    let target = Point::new(800.0, 500.0); // world
+    let on_map = g.to_panel(target.x, target.y);
+    assert!(g.panel.contains(on_map), "the target is on the map");
+
+    h.on_press(on_map);
+    assert!(
+        matches!(h.app.drag, Some(Drag::Minimap)),
+        "a press on the map starts a scrub"
+    );
+    let center = h.app.screen_to_world(Point::new(
+        reg.canvas.x0 + reg.canvas.width() / 2.0,
+        reg.canvas.y0 + reg.canvas.height() / 2.0,
+    ));
+    assert!(
+        (center.x - target.x).abs() < 1.0 && (center.y - target.y).abs() < 1.0,
+        "the pressed point must come to the middle, found {center:?}"
+    );
+
+    // dragging continues the scrub, releasing ends it
+    let root_id = h.app.doc_ref().editor_ref().root.id.clone();
+    h.app.doc().editor().insert_node(
+        &root_id,
+        Node::rect("n-d", 2000.0, 100.0, 100.0, 100.0, Color::BLACK),
+    );
+    let g = crate::editor_ui::minimap_geom(&h.app).unwrap();
+    let move_to = g.to_panel(2100.0, 150.0);
+    h.on_move(move_to);
+    let center = h.app.screen_to_world(Point::new(
+        reg.canvas.x0 + reg.canvas.width() / 2.0,
+        reg.canvas.y0 + reg.canvas.height() / 2.0,
+    ));
+    assert!(
+        center.x > 1500.0,
+        "scrubbing follows the pointer, found x={}",
+        center.x
+    );
+    h.on_release();
+    assert!(h.app.drag.is_none());
+    // the map is a drag surface: it advertises itself as one
+    h.app.mouse = g.panel.center();
+    assert_eq!(cursor_for(&h.app), CursorIcon::Grab);
+    h.app.mouse = g.close().center();
+    assert_eq!(cursor_for(&h.app), CursorIcon::Pointer);
+}
+
+/// ⇧1 must fit what is drawn — the frame can be smaller than the content and
+/// the old fit only knew the frame.
+#[test]
+fn zoom_to_fit_frames_the_content_not_the_canvas() {
+    let mut h = canvas_host();
+    h.app.zoom = 8.0;
+    h.app.pan = (0.0, 0.0);
+    h.zoom_fit();
+    let reg = h.app.editor_regions();
+    let b = crate::editor_ui::page_content_bounds(&h.app).unwrap();
+    // every corner of the content is on screen at the fitted zoom
+    for (wx, wy) in [(b.x0, b.y0), (b.x1, b.y0), (b.x0, b.y1), (b.x1, b.y1)] {
+        let p = h.app.world_to_screen(Point::new(wx, wy));
+        assert!(
+            reg.canvas.contains(p),
+            "corner ({wx}, {wy}) → {p:?} is outside {:?} at zoom {}",
+            reg.canvas,
+            h.app.zoom
+        );
+    }
+    // and it is centred, not clamped to a corner
+    let c = h.app.world_to_screen(b.center());
+    let mid = reg.canvas.center();
+    assert!(
+        (c.x - mid.x).abs() < 1.0 && (c.y - mid.y).abs() < 1.0,
+        "the content centre must be the viewport centre, found {c:?} vs {mid:?}"
+    );
+    // a page with nothing on it keeps the old frame camera
+    let mut empty = host();
+    empty.app.docs[0].editors[0].root.children.clear();
+    empty.zoom_fit();
+    assert!(empty.app.zoom > 0.0, "an empty page still gets a camera");
+}
+
+/// The minimap is optional and its ✕ is the drawn ✕: the toggle round-trips,
+/// the close button closes, and a hidden map takes no presses.
+#[test]
+fn the_minimap_toggles_and_its_close_button_is_real() {
+    let mut h = canvas_host();
+    assert!(h.app.minimap, "on by default in the editor");
+    let g = crate::editor_ui::minimap_geom(&h.app).unwrap();
+    h.on_press(g.close().center());
+    assert!(!h.app.minimap, "the ✕ hides the map");
+    assert!(h.app.status.contains("⇧M"), "and says how to get it back");
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    crate::editor_ui::paint_over(&mut h.app, &mut scene);
+    assert!(
+        crate::editor_ui::minimap_geom(&h.app).is_none(),
+        "a hidden map has no geometry"
+    );
+
+    h.dispatch(Action::ToggleMinimap);
+    assert!(h.app.minimap);
+    let g = crate::editor_ui::minimap_geom(&h.app).unwrap();
+    // a press on the map does not reach the canvas underneath it
+    let before = h.app.doc_ref().editor_ref().selection.clone();
+    h.on_press(g.panel.center());
+    assert_eq!(
+        h.app.doc_ref().editor_ref().selection,
+        before,
+        "the map swallows its own presses"
+    );
+    // an empty page has nothing to map
+    h.app.doc().editor().selection.clear();
+    for id in ["n-a", "n-b", "n-c"] {
+        h.app.doc().editor().set_visible(id, false);
+    }
+    assert!(crate::editor_ui::minimap_geom(&h.app).is_none());
+}
+
+/// A guide you cannot measure is a guess: the readout follows the dragged
+/// line, says its world coordinate, and stays inside the canvas.
+#[test]
+fn the_guide_readout_says_where_the_line_is() {
+    let mut h = canvas_host();
+    h.app.rulers = true;
+    let reg = h.app.editor_regions();
+    let (r, label) = crate::editor_ui::guide_readout(&h.app, 'v', 340.0).expect("on-canvas guide");
+    assert_eq!(label, "340");
+    assert!(
+        r.x0 >= reg.canvas.x0
+            && r.y0 >= reg.canvas.y0
+            && r.x1 <= reg.canvas.x1
+            && r.y1 <= reg.canvas.y1,
+        "the chip must stay on the canvas, found {r:?}"
+    );
+    let line = h.app.world_to_screen(Point::new(340.0, 0.0)).x;
+    assert!(
+        (r.x0 - (line + 6.0)).abs() < 0.01,
+        "the chip sits beside the line it measures"
+    );
+    // an off-canvas guide has no readout to paint
+    assert!(crate::editor_ui::guide_readout(&h.app, 'v', -10_000.0).is_none());
+
+    // and a real drag shows it: the line is in the document, the value on screen
+    h.app.doc().guides_visible = true;
+    h.app.doc().guides.push(('v', 340.0));
+    *h.app.guide_drag() = Some(('v', 512.0));
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint_over(&mut h.app, &mut scene);
+    let (_, live) = crate::editor_ui::guide_readout(&h.app, 'v', 512.0).unwrap();
+    assert_eq!(live, "512", "the readout follows the dragged coordinate");
+}
+
+/// Pages are recognisable before they are opened: a page with content gets a
+/// sketch, an empty one keeps the plain glyph, and the row still switches.
+#[test]
+fn pages_show_a_sketch_and_still_switch() {
+    let mut h = canvas_host();
+    h.dispatch(Action::AddPage);
+    let page1 = h.app.doc().editors.len() - 1;
+    assert!(
+        crate::editor_ui::page_has_content(&h.app, 0),
+        "page 1 has the three rects"
+    );
+    assert!(
+        !crate::editor_ui::page_has_content(&h.app, page1),
+        "page 2 is empty until something is drawn on it"
+    );
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let rows = h.app.pages_rows();
+    let r = rows
+        .iter()
+        .find(|(i, _)| *i == page1)
+        .map(|(_, r)| *r)
+        .expect("the new page has a row");
+    h.on_press(r.center());
+    assert_eq!(
+        h.app.doc().page,
+        page1,
+        "the thumbnail row is still the page switcher"
     );
 }

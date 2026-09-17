@@ -599,6 +599,11 @@ impl TextUi {
     }
 
     /// Team badge: rounded square + centered letter.
+    ///
+    /// The letter is [`C_BLACK`], like [`TextUi::avatar`]'s initial: badges sit
+    /// on the saturated team hues (#5B7CFF blue, #FF7A45 orange), where light
+    /// text measures 3.0:1 and 2.1:1 — both under the WCAG-AA 4.5:1 floor for
+    /// text this small. Black clears them (5.8:1 / 8.1:1).
     #[allow(clippy::too_many_arguments)]
     pub fn badge(
         &self,
@@ -616,7 +621,7 @@ impl TextUi {
         let w = self.measure(ch, fs, Wt::Bold);
         let cap = self.cap_height(font, fs);
         let baseline = y + (size + cap) / 2.0;
-        let spans = [Span::new(ch, fs).color(C_TEXT).font(font)];
+        let spans = [Span::new(ch, fs).color(C_BLACK).font(font)];
         self.draw_spans_baseline(s, &spans, font, x + (size - w) / 2.0, baseline);
     }
 }

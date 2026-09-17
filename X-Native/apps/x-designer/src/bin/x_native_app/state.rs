@@ -231,6 +231,27 @@ pub enum DashLayout {
     List,
 }
 
+/// How the dashboard orders files. Two honest keys (there is no stored file
+/// size to sort by, and inventing one would be a fake control): when it was
+/// last edited, and its name. `Starred` floats the starred files up while
+/// keeping recency inside each group.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DashSort {
+    Edited,
+    Name,
+    Starred,
+}
+
+impl DashSort {
+    pub fn label(self) -> &'static str {
+        match self {
+            DashSort::Edited => "Edited",
+            DashSort::Name => "Name",
+            DashSort::Starred => "Starred first",
+        }
+    }
+}
+
 // ------------------------------------------------------------- frame sizes
 
 /// Frame presets — exact values from the v45 dropdown.
@@ -249,6 +270,10 @@ pub struct RecentFile {
     pub name: String,
     pub team: String,
     pub edited: String,
+    /// The sortable key behind [`RecentFile::edited`], in minutes (larger is
+    /// older). Derived from the label so the human string and the ordering
+    /// cannot disagree — `edited_minutes` is the only parser.
+    pub edited_min: u32,
     pub color: VelloColor,
     pub members: Vec<String>,
     pub starred: bool,
@@ -310,6 +335,44 @@ fn seed_recents() -> Vec<RecentFile> {
     ]
 }
 
+/// "Edited 2h ago" → 120, "yesterday" → 1440, "3 days ago" → 4320.
+/// Unparseable labels sort last rather than first, so a new label can never
+/// silently jump to the top of "Sorted by Edited".
+pub fn edited_minutes(label: &str) -> u32 {
+    let l = label.to_lowercase();
+    let l = l.strip_prefix("edited ").unwrap_or(&l);
+    if l.starts_with("now") {
+        return 0;
+    }
+    if l.starts_with("yesterday") {
+        return 24 * 60;
+    }
+    let mut digits = String::new();
+    for ch in l.chars() {
+        if ch.is_ascii_digit() {
+            digits.push(ch);
+        } else if !digits.is_empty() {
+            break;
+        }
+    }
+    let Ok(n) = digits.parse::<u32>() else {
+        return u32::MAX;
+    };
+    let rest = l.trim_start_matches(|c: char| c.is_ascii_digit() || c == ' ');
+    let unit = rest.split_whitespace().next().unwrap_or("");
+    if unit.starts_with("min") {
+        n
+    } else if unit.starts_with("h") {
+        n * 60
+    } else if unit.starts_with("day") {
+        n * 24 * 60
+    } else if unit.starts_with("week") {
+        n * 7 * 24 * 60
+    } else {
+        u32::MAX
+    }
+}
+
 pub fn rf(
     name: &str,
     team: &str,
@@ -321,6 +384,7 @@ pub fn rf(
     RecentFile {
         name: name.into(),
         team: team.into(),
+        edited_min: edited_minutes(edited),
         edited: edited.into(),
         color,
         members: members.into_iter().map(|c| c.to_string()).collect(),
@@ -343,6 +407,7 @@ fn draft(name: &str, edited: &str, icon: &'static str) -> RecentFile {
     RecentFile {
         name: name.into(),
         team: icon.into(),
+        edited_min: edited_minutes(edited),
         edited: edited.into(),
         color: C_PANEL,
         members: vec![],
@@ -426,6 +491,22 @@ pub enum Action {
     VarStep(String, f64),
     /// Undo the last variable-table edit on the open document.
     VarUndoVars,
+    /// Canvas minimap (audit §9 item 3): the toggle (context menu, ⇧M, or the
+    /// panel's own close button) and a navigation click — the world point that
+    /// should end up centred in the viewport.
+    ToggleMinimap,
+    MinimapNav(f64, f64),
+    /// Right-panel paint library (Figma's fill/stroke variable + style
+    /// picker): open it for the named row, close it, or apply an entry.
+    /// The `bool` is `is_fill` — the row this popover belongs to.
+    PaintLibToggle(bool),
+    PaintLibClose,
+    /// Bind the selected layers' fill/stroke to a colour variable.
+    ApplyPaintVariable(bool, String),
+    /// Apply a named paint style to the selected layers' fill.
+    ApplyPaintStyle(String),
+    /// Detach the variable / paint-style link, keeping the colour it shows.
+    DetachPaintBinding(bool),
     /// Libraries: pick an updated .xlib for pinned dependency `usize` and
     /// open the diff review (Assets panel LIBRARIES section).
     LibCheckUpdate(usize),
@@ -455,6 +536,23 @@ pub enum Action {
     StarRecent(usize),
     OpenDraft(usize),
     DashNav(DashView),
+    /// Open/close the sort menu, pick an order.
+    DashSortMenu,
+    DashSortBy(DashSort),
+    /// Multi-select: toggle one file, select everything visible, clear.
+    DashSelect(usize),
+    DashSelectAll,
+    DashClearSelection,
+    /// Bulk actions on the selection.
+    DashBulkStar,
+    DashBulkUnstar,
+    DashBulkOpen,
+    /// Remove the selected files from *this list* (the files on disk are
+    /// untouched — the label says so).
+    DashBulkRemove,
+    /// The bulk bar swallows clicks inside it: without a hit rect of its own a
+    /// press would fall through to the card behind the bar.
+    DashBarNoop,
     DashLayout(DashLayout),
     SearchFocus,
     /// UI palette (roles live in crates/x-ui/src/design_system.rs)
@@ -1063,6 +1161,9 @@ pub enum Drag {
     Guide {
         axis: char,
     },
+    /// Scrubbing the minimap: the viewport follows the pointer, so the whole
+    /// page is reachable without a single pan gesture.
+    Minimap,
     /// Shape-tool drag-create.
     Create {
         tool: Tool,
@@ -1385,23 +1486,29 @@ impl OpenDoc {
 
     // ---------------------------------------------------------- templates
 
-    /// Built-in templates for the dashboard gallery: (name, blurb).
-    pub const TEMPLATES: [(&str, &str); 4] = [
+    /// Built-in templates for the dashboard gallery: (name, blurb, icon).
+    /// Each row carries its OWN glyph — the gallery opened with the same
+    /// `layout-template` chip on all four rows, which reads as placeholder art.
+    pub const TEMPLATES: [(&str, &str, &str); 4] = [
         (
             "Mobile app flow",
             "Two linked screens with a working prototype",
+            "frame",
         ),
         (
             "Landing page",
             "1440 desktop hero with nav, CTA and feature cards",
+            "layout-list",
         ),
         (
             "Design system",
             "Color variables, swatches and a Button component",
+            "component",
         ),
         (
             "Starter board",
             "Freeform brainstorm canvas for quick ideas",
+            "sticky-note",
         ),
     ];
 
@@ -1809,9 +1916,23 @@ pub struct App {
     pub thumb_failed: std::collections::HashSet<std::path::PathBuf>,
     pub dash_view: DashView,
     pub dash_layout: DashLayout,
+    pub dash_sort: DashSort,
+    /// Whether the sort menu is open (it is a popup, so it also owns the
+    /// click-away and Escape behaviour).
+    pub dash_sort_open: bool,
+    /// Multi-select over `recents` (indices), the way Figma's browser selects
+    /// several files before acting on them. Empty means "no selection" and the
+    /// bulk bar is not painted at all.
+    pub dash_selected: Vec<usize>,
     pub dash_search: String,
     pub dash_scroll: f64,
     pub dash_search_focus: bool,
+    /// Keyboard focus on the dashboard: a position in
+    /// [`dashboard::focus_targets`] (which filters the hit list down to the
+    /// real controls). The dashboard was mouse-only — Tab moves this, Enter
+    /// fires the focused control, Escape drops it, and a click puts it on
+    /// whatever was clicked, so the ring never disagrees with the pointer.
+    pub dash_focus: Option<usize>,
     // editor ui state
     pub left_w: f64,
     pub right_w: f64,
@@ -1830,10 +1951,19 @@ pub struct App {
     pub dropdown_lh: bool,
     /// Typography panel: text-style picker (Figma's styles button)
     pub dropdown_text_style: bool,
+    /// Paint library popover: `Some(true)` for the fill row, `Some(false)`
+    /// for the stroke row. Only one panel row at a time (Figma parity).
+    pub paint_lib: Option<bool>,
+    /// Where that popover paints, recorded by the row that opened it (panel
+    /// y depends on the scroll offset, so the row knows the anchor).
+    pub paint_lib_at: Option<(f64, f64)>,
     /// Font browser opened from the typography family field.
     pub font_picker_open: bool,
     /// Viewport rulers (Shift+R). Off by default — the HTML mock has none.
     pub rulers: bool,
+    /// Canvas minimap (⇧M). On by default in the editor: it is the only
+    /// affordance that says where the content is when it is off-screen.
+    pub minimap: bool,
     /// DESIGN panel (no selection): editor canvas background
     pub canvas_bg: Color,
     /// Canvas background opacity % (Figma parity; audit P13)
@@ -2005,9 +2135,13 @@ impl App {
             thumb_failed: std::collections::HashSet::new(),
             dash_view: DashView::Home,
             dash_layout: DashLayout::Grid,
+            dash_sort: DashSort::Edited,
+            dash_sort_open: false,
+            dash_selected: Vec::new(),
             dash_search: String::new(),
             dash_scroll: 0.0,
             dash_search_focus: false,
+            dash_focus: None,
             left_w: ED_LEFT_W,
             right_w: ED_RIGHT_W,
             tool: Tool::Select,
@@ -2019,8 +2153,11 @@ impl App {
             tooltip: Vec::new(),
             dropdown_lh: false,
             dropdown_text_style: false,
+            paint_lib: None,
+            paint_lib_at: None,
             font_picker_open: false,
             rulers: false,
+            minimap: true,
             // canvas matches the HTML `.canvas` token; grid per the design
             // empty-selection panel (PIXEL GRID COLOR 0070E4 @ 20%)
             canvas_bg: crate::theme::C_CANVAS,
@@ -2123,29 +2260,25 @@ impl App {
     }
 
     pub fn editor_regions(&self) -> EdRegions {
-        let left_total = if self.ui_minimized {
-            self.nav_bar_w
-        } else {
-            // `left_w` is the live width — Drag::LeftPanel resizes it;
-            // the old static field made the resize a visual no-op
-            self.nav_bar_w + self.left_w
-        };
+        // `left_w`/`right_w` are the live widths — Drag::LeftPanel/RightPanel
+        // resize them; the old static field made the resize a visual no-op.
+        // They share the window with the canvas, and both are reachable
+        // extremes (drag a panel wide, then shrink the window), so this is the
+        // one place that guarantees the canvas never inverts: the left dock
+        // yields to the right dock's minimum, then the right takes what is
+        // left over. Panels therefore stop at the floor instead of overlapping
+        // each other and painting the canvas backwards.
+        let want_left = if self.ui_minimized { 0.0 } else { self.left_w };
+        let room = (self.win_w - self.nav_bar_w - ED_CANVAS_MIN).max(0.0);
+        let left = want_left.min((room - ED_RIGHT_MIN).max(0.0));
+        let right = self.right_w.min((room - left).max(0.0));
+        let left_total = self.nav_bar_w + left;
         EdRegions {
             left: Rect::new(0.0, ED_TITLE_H, left_total, self.win_h),
             nav_bar: Rect::new(0.0, ED_TITLE_H, self.nav_bar_w, self.win_h),
             sidebar: Rect::new(self.nav_bar_w, ED_TITLE_H, left_total, self.win_h),
-            right: Rect::new(
-                self.win_w - self.right_w,
-                ED_TITLE_H,
-                self.win_w,
-                self.win_h,
-            ),
-            canvas: Rect::new(
-                left_total,
-                ED_TITLE_H,
-                self.win_w - self.right_w,
-                self.win_h,
-            ),
+            right: Rect::new(self.win_w - right, ED_TITLE_H, self.win_w, self.win_h),
+            canvas: Rect::new(left_total, ED_TITLE_H, self.win_w - right, self.win_h),
         }
     }
 

@@ -252,8 +252,8 @@ pub fn paint_at(app: &mut App, scene: &mut Scene, load: &LoadingScreen, elapsed:
     app.fonts
         .text(scene, 114.0, 23.0, "/  DOCUMENT", T10, C_DIM, Wt::Reg);
     let card = card_rect(app);
-    fill_rrect(scene, card, 12.0, C_PANEL);
-    stroke_rrect(scene, card, 12.0, C_LINE_2, 1.0);
+    fill_rrect(scene, card, R_XL, C_PANEL);
+    stroke_rrect(scene, card, R_XL, C_LINE_2, 1.0);
     let cx = (card.x0 + card.x1) / 2.0;
     let icon = Point::new(cx, card.y0 + 48.0);
     if load.animates() {
@@ -370,11 +370,11 @@ pub fn paint_at(app: &mut App, scene: &mut Scene, load: &LoadingScreen, elapsed:
     for (i, (rect, label, action)) in button_rects(app).into_iter().enumerate() {
         let focus = i == load.focused_button;
         let hover = rect.contains(app.mouse);
-        fill_rrect(scene, rect, 6.0, if hover { C_FIELD_2 } else { C_FIELD });
+        fill_rrect(scene, rect, R_MD, if hover { C_FIELD_2 } else { C_FIELD });
         stroke_rrect(
             scene,
             rect,
-            6.0,
+            R_MD,
             if focus { C_LOGO_GREEN } else { C_LINE_2 },
             1.0,
         );

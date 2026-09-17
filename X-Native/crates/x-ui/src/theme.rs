@@ -153,6 +153,10 @@ const TEXT_ROLES: &[(&str, f64)] = &[
     ("success", 4.5),
     ("warning", 4.5),
     ("danger", 4.5),
+    // The placeholder is *text*: a hint the user has to read before typing
+    // over it. It used to be exempt as "faint by intent", which shipped
+    // #6B6E7A (2.56:1 on a hover fill) — under AA in all three palettes.
+    ("text_placeholder", 4.5),
 ];
 
 /// Roles text sits on.
@@ -167,6 +171,12 @@ const SURFACE_ROLES: &[&str] = &[
 
 /// Accent fills — `on_accent` is the only text drawn on them.
 const ACCENT_FILLS: &[&str] = &["accent", "accent_hover", "accent_active"];
+
+/// (label role, fill role) pairs for saturated tiles that carry text — a
+/// count badge, a primary button. A fill is *not* text and does not get the
+/// text-contrast exemption: whatever is drawn on it must clear 4.5:1, which is
+/// why `danger_fill` exists as a role instead of an invented hex at the badge.
+const LABEL_FILLS: &[(&str, &str)] = &[("on_danger", "danger_fill")];
 
 /// Non-text indicators: 3:1 (WCAG 1.4.11), not 4.5:1.
 const INDICATOR_ROLES: &[&str] = &["selection", "focus_ring"];
@@ -197,6 +207,11 @@ impl ColorTokens {
         }
         for bg in ACCENT_FILLS {
             if let Some(p) = pair(self, "on_accent", bg, 4.5) {
+                out.push(p);
+            }
+        }
+        for (fg, bg) in LABEL_FILLS {
+            if let Some(p) = pair(self, fg, bg, 4.5) {
                 out.push(p);
             }
         }
@@ -305,9 +320,10 @@ mod tests {
 
     #[test]
     fn audit_covers_the_whole_role_matrix() {
-        // 7 text roles × 6 surfaces + 3 accent labels + 2 indicators
+        // 8 text roles × 6 surfaces + 3 accent labels + 2 indicators
+        // + 1 declared label pair (on-danger ink on the danger fill)
         let pairs = ThemeId::Graphite.palette().contrast_pairs();
-        assert_eq!(pairs.len(), 7 * 6 + 3 + 2, "{pairs:?}");
+        assert_eq!(pairs.len(), 8 * 6 + 3 + 2 + 1, "{pairs:?}");
         assert!(
             pairs.iter().all(|p| p.ratio > 1.0),
             "every pair must compare two real colors"
@@ -316,9 +332,9 @@ mod tests {
             .iter()
             .any(|p| p.fg == "on_accent" && p.bg == "accent_hover"));
         // Every role is either checked by the audit or explicitly exempt:
-        // hairlines carry no meaning on their own, and placeholder text is
-        // allowed to be faint (WCAG excludes disabled content).
-        const EXEMPT: &[&str] = &["border", "border_strong", "text_placeholder"];
+        // hairlines carry no meaning on their own, so they are the only
+        // exemption left.
+        const EXEMPT: &[&str] = &["border", "border_strong"];
         for name in ColorTokens::role_names() {
             let mentioned = pairs.iter().any(|p| p.fg == *name || p.bg == *name);
             assert!(
@@ -331,13 +347,32 @@ mod tests {
     #[test]
     fn remap_is_a_function_and_identity_for_graphite() {
         let g = ColorTokens::GRAPHITE;
-        // no two graphite roles share a value, so the table is a function
+        // The table is keyed by *color*, so two roles may share a value
+        // (white is the ink on both an accent fill and the danger fill) — what
+        // must never happen is two roles sharing a value that remap to
+        // different targets, because then one of them silently repaints with
+        // the other's ink. Check that across every shipped palette.
         let table = ColorTokens::DAYLIGHT.remap_from(&g);
-        assert_eq!(table.len(), ColorTokens::role_names().len());
         let mut seen: Vec<[u8; 3]> = Vec::new();
         for (from, _) in &table {
             assert!(!seen.contains(from), "duplicate source color {from:?}");
             seen.push(*from);
+        }
+        for id in ThemeId::ALL {
+            let to = id.palette();
+            let mut map: Vec<([u8; 3], [u8; 3])> = Vec::new();
+            for name in ColorTokens::role_names() {
+                let (a, b) = (g.role(name).unwrap(), to.role(name).unwrap());
+                match map.iter().find(|(x, _)| *x == a) {
+                    Some((_, prev)) => assert_eq!(
+                        *prev,
+                        b,
+                        "{}: role {name} shares {a:?} but remaps elsewhere",
+                        id.label()
+                    ),
+                    None => map.push((a, b)),
+                }
+            }
         }
         // identity when the target is the same palette
         for (from, to) in ColorTokens::GRAPHITE.remap_from(&g) {
@@ -401,7 +436,8 @@ mod tests {
     fn audit_reports_failures_loudly() {
         // a deliberately broken palette: dim text on a busy surface
         let mut broken = ThemeId::Daylight.palette();
-        broken.text_dim = broken.text_placeholder;
+        // dim text on the busiest surface — an unmistakable failure
+        broken.text_dim = broken.surface_hover;
         let audit = broken.contrast_audit();
         assert!(!audit.is_empty(), "the audit must notice");
         assert!(audit.iter().any(|a| a.starts_with("text_dim")), "{audit:?}");

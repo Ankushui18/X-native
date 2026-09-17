@@ -2657,6 +2657,190 @@ impl App {
         detached
     }
 
+    // -------------------------------------------------------- paint library
+    //
+    // Figma's fill/stroke row carries two kinds of *link*, and this engine has
+    // a representation for both:
+    //
+    //  * a **variable** — `Paint::Variable(name)`, resolved through the
+    //    document's active mode by `paint_color`, so editing the variable
+    //    repaints every layer that binds it;
+    //  * a **paint style** — `bindings["style:paint"] = name`, resolved by
+    //    `resolve_styles` from `Document.styles` (the same link the text
+    //    styles above use for typography).
+    //
+    // Both are edited from the right panel's fill row (`paint_paint_row`)
+    // through the popover in `editor_ui::paint_paint_library`.
+
+    /// The paint a row shows for `id`: the top visual-stack layer when the
+    /// stacks are materialized, else the scalar field.
+    pub fn paint_of(&self, id: &str, is_fill: bool) -> Option<Paint> {
+        let root = &self.doc_ref().editor_ref().root;
+        let n = crate::editor_ui::find_node(root, id)?;
+        Some(if is_fill {
+            match n.fill_layers.last() {
+                Some(l) => l.paint.clone(),
+                None => n.fill.clone(),
+            }
+        } else {
+            match n.stroke_layers.last() {
+                Some(l) => l.stroke.paint.clone(),
+                None => n.stroke.paint.clone(),
+            }
+        })
+    }
+
+    /// Paint style `id` is linked to, if any.
+    pub fn linked_paint_style(&self, id: &str) -> Option<String> {
+        let root = &self.doc_ref().editor_ref().root;
+        crate::editor_ui::find_node(root, id)?
+            .bindings
+            .get("style:paint")
+            .cloned()
+    }
+
+    /// Write `paint` into every selected layer's fill (or stroke). One atomic
+    /// undo step per layer, and both representations are kept in step the way
+    /// `apply_style` does: the scalar field and the top visual-stack layer.
+    pub fn set_paint_on_selection(&mut self, is_fill: bool, paint: Paint) -> usize {
+        let ids: Vec<String> = self.doc_ref().editor_ref().selection.clone();
+        let mut painted = 0usize;
+        for id in ids {
+            let p = paint.clone();
+            let ok = self
+                .doc()
+                .editor()
+                .mutate_visual_stack(id.as_str(), move |n| {
+                    if is_fill {
+                        if let Some(layer) = n.fill_layers.last_mut() {
+                            layer.paint = p.clone();
+                        } else {
+                            n.fill_layers.push(x_native::PaintLayer::new(p.clone()));
+                        }
+                        n.fill = p;
+                    } else {
+                        let mut stroke = n.stroke.clone();
+                        stroke.paint = p;
+                        // a bound stroke with no weight would paint nothing:
+                        // give it the 1px a stroke-colour edit gives one
+                        if stroke.width <= 0.0 {
+                            stroke.width = 1.0;
+                        }
+                        n.stroke = stroke.clone();
+                        if let Some(layer) = n.stroke_layers.last_mut() {
+                            layer.stroke = stroke;
+                        } else {
+                            n.stroke_layers.push(x_native::StrokeLayer::new(stroke));
+                        }
+                    }
+                });
+            if ok {
+                painted += 1;
+            }
+        }
+        painted
+    }
+
+    /// Bind the selection's fill (or stroke) to the colour variable `name`.
+    /// Returns the layers bound; 0 when the variable does not exist.
+    pub fn apply_paint_variable(&mut self, is_fill: bool, name: &str) -> usize {
+        if !self.doc_ref().doc.variables.colors.contains_key(name) {
+            return 0;
+        }
+        let painted = self.set_paint_on_selection(is_fill, Paint::Variable(name.to_string()));
+        if painted > 0 {
+            self.mark_dirty();
+            self.doc().sync();
+        }
+        painted
+    }
+
+    /// Apply the paint style `name` to the selection's fill and link the
+    /// layers to it. Paint styles are *fill* styles in this engine
+    /// (`LegacyStyle::Paint { fill }`), so a stroke row offers variables only.
+    pub fn apply_paint_style(&mut self, name: &str) -> usize {
+        let Some(style) = self.doc_ref().doc.styles.get(name).cloned() else {
+            return 0;
+        };
+        if !matches!(style, LegacyStyle::Paint { .. }) {
+            return 0;
+        }
+        let ids: Vec<String> = self.doc_ref().editor_ref().selection.clone();
+        let mut linked = 0usize;
+        for id in ids {
+            let style = style.clone();
+            let ok = self
+                .doc()
+                .editor()
+                .mutate_visual_stack(id.as_str(), move |n| {
+                    bind_style(n, name, &style);
+                });
+            if ok {
+                linked += 1;
+            }
+        }
+        if linked > 0 {
+            self.mark_dirty();
+            self.doc().sync();
+        }
+        linked
+    }
+
+    /// Detach the selection's fill (or stroke) from whatever it is linked to:
+    /// the `style:paint` binding goes and a variable-backed paint becomes the
+    /// solid colour it resolves to today, so nothing on screen moves.
+    pub fn detach_paint_binding(&mut self, is_fill: bool) -> usize {
+        let ids: Vec<String> = self.doc_ref().editor_ref().selection.clone();
+        let vars = self.doc_ref().doc.variables.clone();
+        let mut detached = 0usize;
+        for id in ids {
+            let linked_style = self.linked_paint_style(id.as_str()).is_some();
+            let is_var = matches!(
+                self.paint_of(id.as_str(), is_fill),
+                Some(Paint::Variable(_))
+            );
+            if !linked_style && !is_var {
+                continue;
+            }
+            // only a variable-backed paint has a colour to freeze; a style
+            // link detaches with the values it already wrote
+            let frozen = if is_var {
+                self.paint_of(id.as_str(), is_fill)
+                    .map(|p| Paint::Solid(x_native::paint_color(&p, &vars)))
+            } else {
+                None
+            };
+            self.doc()
+                .editor()
+                .mutate_visual_stack(id.as_str(), move |n| {
+                    if is_fill {
+                        x_native::detach_style(n, "style:paint");
+                    }
+                    if let Some(p) = frozen.clone() {
+                        if is_fill {
+                            if let Some(layer) = n.fill_layers.last_mut() {
+                                layer.paint = p.clone();
+                            }
+                            n.fill = p;
+                        } else {
+                            let mut stroke = n.stroke.clone();
+                            stroke.paint = p;
+                            n.stroke = stroke.clone();
+                            if let Some(layer) = n.stroke_layers.last_mut() {
+                                layer.stroke = stroke;
+                            }
+                        }
+                    }
+                });
+            detached += 1;
+        }
+        if detached > 0 {
+            self.mark_dirty();
+            self.doc().sync();
+        }
+        detached
+    }
+
     /// Push the selected layer's current typography into the style it is
     /// linked to, then re-resolve every page (Figma's "Update style").
     /// Returns the consumers re-resolved; None when the selection is not
@@ -3288,13 +3472,49 @@ impl Host {
         }
 
         if self.app.screen == Screen::Dashboard {
+            // Cmd/Ctrl- or Shift-click extends the selection (Figma's browser
+            // gesture; a plain click still opens, which is the primary action)
+            let extend = self.app.ctrl || self.app.shift;
+            if self.app.dash_sort_open {
+                // a press anywhere that is not a sort row closes the menu
+                let row = self
+                    .app
+                    .hit
+                    .iter()
+                    .rev()
+                    .find(|(r, a)| r.contains(p) && matches!(a, Action::DashSortBy(_)));
+                if row.is_none() {
+                    self.app.dash_sort_open = false;
+                }
+            }
             for (r, a) in self.app.hit.iter().rev() {
                 if r.contains(p) {
                     let a = a.clone();
+                    if extend {
+                        if let Action::OpenRecent(i) = a {
+                            self.dispatch(Action::DashSelect(i));
+                            return;
+                        }
+                    }
+                    // focus follows the pointer: clicking a control puts the
+                    // keyboard ring on it, clicking a dead area drops it
+                    self.app.dash_focus = self
+                        .app
+                        .hit
+                        .iter()
+                        // `a` is the clone made above, so compare the reference
+                        .position(|(hr, ha)| hr == r && ha == &a)
+                        .and_then(|i| {
+                            dashboard::focus_targets(&self.app)
+                                .iter()
+                                .position(|t| *t == i)
+                        });
+                    self.app.dash_search_focus = false;
                     self.dispatch(a);
                     return;
                 }
             }
+            self.app.dash_focus = None;
             self.app.dash_search_focus = false;
             return;
         }
@@ -3313,6 +3533,7 @@ impl Host {
             if self.app.dropdown_text_style {
                 self.app.dropdown_text_style = false;
             }
+            self.app.paint_lib = None;
 
             // chrome hit zones
             for (r, a) in self.app.hit.iter().rev() {
@@ -3368,6 +3589,7 @@ impl Host {
         if self.app.dropdown_text_style {
             self.app.dropdown_text_style = false;
         }
+        self.app.paint_lib = None;
 
         // Color popovers are modal to the inspector. Consume clicks inside
         // the popup and close without editing the canvas when the click lands
@@ -3378,6 +3600,23 @@ impl Host {
         if self.app.color_picker_popup.is_some() && !color_popup_hit {
             self.dispatch(Action::CloseColorPicker);
             return;
+        }
+
+        // The minimap owns presses inside it: the ✕ closes it, anywhere else
+        // is a scrub (a press that also starts the drag — the map is small,
+        // the gesture should not need two of them).
+        if let Some(g) = crate::editor_ui::minimap_geom(&self.app) {
+            if g.close().contains(p) {
+                self.dispatch(Action::ToggleMinimap);
+                return;
+            }
+            if g.panel.contains(p) {
+                self.commit_field();
+                let w = g.to_world(p);
+                self.center_on_world(w.x, w.y);
+                self.app.drag = Some(Drag::Minimap);
+                return;
+            }
         }
 
         // chrome hit zones
@@ -4055,10 +4294,16 @@ impl Host {
         }
         match self.app.drag.clone() {
             Some(Drag::LeftPanel { start_x, start_w }) => {
-                self.app.left_w = (start_w + p.x - start_x).clamp(ED_LEFT_MIN, ED_LEFT_MAX);
+                // stop where the canvas floor starts rather than storing a
+                // width the regions would only clamp back at paint time
+                let room = self.app.win_w - self.app.nav_bar_w - ED_CANVAS_MIN;
+                let max = ED_LEFT_MAX.min(room - self.app.right_w).max(ED_LEFT_MIN);
+                self.app.left_w = (start_w + p.x - start_x).clamp(ED_LEFT_MIN, max);
             }
             Some(Drag::RightPanel { start_x, start_w }) => {
-                self.app.right_w = (start_w - (p.x - start_x)).clamp(ED_RIGHT_MIN, ED_RIGHT_MAX);
+                let room = self.app.win_w - self.app.nav_bar_w - ED_CANVAS_MIN;
+                let max = ED_RIGHT_MAX.min(room - self.app.left_w).max(ED_RIGHT_MIN);
+                self.app.right_w = (start_w - (p.x - start_x)).clamp(ED_RIGHT_MIN, max);
             }
             Some(Drag::Pan { start, start_pan }) => {
                 self.app.pan = (start_pan.0 + p.x - start.x, start_pan.1 + p.y - start.y);
@@ -4380,6 +4625,13 @@ impl Host {
                 let world = self.app.screen_to_world(p);
                 let c = if axis == 'v' { world.x } else { world.y };
                 *self.app.guide_drag() = Some((axis, c));
+            }
+            Some(Drag::Minimap) => {
+                // the viewport follows the pointer across the whole page
+                if let Some(g) = crate::editor_ui::minimap_geom(&self.app) {
+                    let w = g.to_world(p);
+                    self.center_on_world(w.x, w.y);
+                }
             }
             // Board-specific drag handlers
             Some(Drag::BoardCreateSticky {
@@ -4991,6 +5243,74 @@ impl Host {
             self.flow_key(&key);
             return;
         }
+        // The template gallery is a modal like the color picker or the library
+        // review: Escape closes it, ahead of the dashboard search field and
+        // every global shortcut (click-away was the only way out before).
+        if self.app.template_picker_open && matches!(key, Key::Named(NamedKey::Escape)) {
+            self.app.template_picker_open = false;
+            return;
+        }
+        // The dashboard is reachable by keyboard, not only by pointer: Tab
+        // walks the page's controls (the ring is painted from the same hit
+        // list, see `dashboard::focus_targets`), Enter fires the focused one
+        // through the same dispatch a click uses, Escape drops focus. This
+        // sits ahead of the search-field branch so Tab always means "move on",
+        // even out of a focused search box.
+        if self.app.screen == Screen::Dashboard && !self.app.template_picker_open {
+            let targets = dashboard::focus_targets(&self.app);
+            match &key {
+                Key::Named(NamedKey::Tab) => {
+                    if targets.is_empty() {
+                        return;
+                    }
+                    let next = match self.app.dash_focus {
+                        None => {
+                            if self.app.shift {
+                                targets.len() - 1
+                            } else {
+                                0
+                            }
+                        }
+                        Some(at) => {
+                            if self.app.shift {
+                                at.checked_sub(1).unwrap_or(targets.len() - 1)
+                            } else {
+                                (at + 1) % targets.len()
+                            }
+                        }
+                    };
+                    self.app.dash_focus = Some(next);
+                    // Tab out of the search field: focus follows the ring
+                    self.app.dash_search_focus = false;
+                    self.app.mouse = targets
+                        .get(next)
+                        .map(|i| self.app.hit[*i].0.center())
+                        .unwrap_or(self.app.mouse);
+                    return;
+                }
+                Key::Named(NamedKey::Enter) if self.app.dash_focus.is_some() => {
+                    self.focus_activate();
+                    return;
+                }
+                Key::Named(NamedKey::Escape) => {
+                    // Escape unwinds in order: the grab, then the ring, then
+                    // the sort menu — never two things at once
+                    if self.app.dash_sort_open {
+                        self.app.dash_sort_open = false;
+                        return;
+                    }
+                    if !self.app.dash_selected.is_empty() {
+                        self.app.dash_selected.clear();
+                        return;
+                    }
+                    if self.app.dash_focus.is_some() {
+                        self.app.dash_focus = None;
+                        return;
+                    }
+                }
+                _ => {}
+            }
+        }
         // The dashboard search is a real text field, not just a painted
         // placeholder. Handle editing keys before the global shortcut gate so
         // Backspace and Ctrl/Cmd+A work even when no document is open.
@@ -5025,6 +5345,13 @@ impl Host {
             if let Key::Character(c) = &key {
                 let c = c.to_lowercase();
                 match c.as_str() {
+                    // "select all" on the dashboard means every file on screen
+                    // (the search field claims Ctrl/Cmd+A while it is focused,
+                    // above this branch)
+                    "a" if self.app.screen == Screen::Dashboard => {
+                        self.dispatch(Action::DashSelectAll);
+                        return;
+                    }
                     "s" => {
                         if self.app.shift {
                             self.cmd_save_as();
@@ -5704,6 +6031,10 @@ impl Host {
                         self.zoom_fit();
                         return;
                     }
+                    "m" | "M" if self.app.shift => {
+                        self.dispatch(Action::ToggleMinimap);
+                        return;
+                    }
                     // Layer management shortcuts
                     "r" | "R" if self.app.shift => {
                         self.dispatch(Action::RenumberSelection);
@@ -5731,11 +6062,13 @@ impl Host {
                     || self.app.dropdown_zoom
                     || self.app.dropdown_lh
                     || self.app.dropdown_text_style
+                    || self.app.paint_lib.is_some()
                 {
                     self.app.dropdown_frame = false;
                     self.app.dropdown_zoom = false;
                     self.app.dropdown_lh = false;
                     self.app.dropdown_text_style = false;
+                    self.app.paint_lib = None;
                 } else if self.app.screen == Screen::Editor {
                     // P12: an in-flight tree drag cancels first
                     if matches!(self.app.drag, Some(Drag::TreeRow { .. })) {
@@ -5904,6 +6237,21 @@ impl Host {
         }
     }
 
+    /// Enter on the dashboard: fire the focused control exactly as a click
+    /// would. Split out from `on_key` so the focus model can be tested without
+    /// a window.
+    fn focus_activate(&mut self) {
+        let Some(at) = self.app.dash_focus else {
+            return;
+        };
+        let Some(i) = dashboard::focus_targets(&self.app).get(at).copied() else {
+            self.app.dash_focus = None;
+            return;
+        };
+        let action = self.app.hit[i].1.clone();
+        self.dispatch(action);
+    }
+
     fn update_cursor(&self, window: &Window) {
         if self.app.document_loading.is_some() {
             window.set_cursor(
@@ -5915,25 +6263,7 @@ impl Host {
             );
             return;
         }
-        let icon = if self.app.screen == Screen::Editor {
-            let reg = self.app.editor_regions();
-            if resizer_at(&self.app, self.app.mouse).is_some() {
-                CursorIcon::EwResize
-            } else if matches!(self.app.drag, Some(Drag::Pan { .. })) {
-                CursorIcon::Grabbing
-            } else if reg.canvas.contains(self.app.mouse) {
-                match self.app.tool {
-                    Tool::Hand => CursorIcon::Grab,
-                    Tool::Select => CursorIcon::Default,
-                    _ => CursorIcon::Crosshair,
-                }
-            } else {
-                CursorIcon::Default
-            }
-        } else {
-            CursorIcon::Default
-        };
-        window.set_cursor(icon);
+        window.set_cursor(cursor_for(&self.app));
     }
 
     // ---------------------------------------------------------- commands
@@ -7208,7 +7538,33 @@ impl Host {
     }
 
     fn zoom_fit(&mut self) {
-        self.app.center_view();
+        // ⇧1 fits what is DRAWN on the page, not the page frame: the frame can
+        // be bigger than the canvas (so "fit" clipped it) and loose nodes can
+        // sit outside it. Empty page → the frame-centred camera as before.
+        let Some(b) = crate::editor_ui::page_content_bounds(&self.app) else {
+            self.app.center_view();
+            return;
+        };
+        let reg = self.app.editor_regions();
+        let (cw, ch) = (reg.canvas.width(), reg.canvas.height());
+        let pad = 24.0;
+        let z = ((cw - pad * 2.0) / b.width().max(1.0))
+            .min((ch - pad * 2.0) / b.height().max(1.0))
+            .clamp(0.01, 64.0);
+        self.app.zoom = z;
+        self.center_on_world(b.center().x, b.center().y);
+    }
+
+    /// Put world point (`wx`, `wy`) in the middle of the canvas viewport.
+    fn center_on_world(&mut self, wx: f64, wy: f64) {
+        let reg = self.app.editor_regions();
+        let target = Point::new(
+            reg.canvas.x0 + reg.canvas.width() / 2.0,
+            reg.canvas.y0 + reg.canvas.height() / 2.0,
+        );
+        let now = self.app.world_to_screen(Point::new(wx, wy));
+        self.app.pan.0 += target.x - now.x;
+        self.app.pan.1 += target.y - now.y;
     }
 
     /// Zoom by `factor` anchored at screen point `p` (cursor / center).
@@ -8345,12 +8701,12 @@ impl Host {
 
     // ---------------------------------------------------------- dispatch
 
-    fn dispatch(&mut self, a: Action) {
+    fn dispatch(&mut self, action: Action) {
         if self.app.document_loading.is_some() {
-            self.loading_action(a);
+            self.loading_action(action);
             return;
         }
-        match a {
+        match action {
             Action::LoadingRetry
             | Action::LoadingClose
             | Action::LoadingRecover
@@ -8430,6 +8786,79 @@ impl Host {
                     }
                 }
             }
+            Action::DashSortMenu => {
+                self.app.dash_sort_open = !self.app.dash_sort_open;
+            }
+            Action::DashSortBy(sort) => {
+                self.app.dash_sort = sort;
+                self.app.dash_sort_open = false;
+            }
+            Action::DashSelect(i) => match self.app.dash_selected.iter().position(|s| *s == i) {
+                Some(at) => {
+                    self.app.dash_selected.remove(at);
+                }
+                None => self.app.dash_selected.push(i),
+            },
+            Action::DashSelectAll => {
+                self.app.dash_selected = dashboard::visible_files(&self.app);
+                if self.app.dash_selected.is_empty() {
+                    self.app.status = "Nothing to select here".into();
+                }
+            }
+            Action::DashClearSelection => {
+                self.app.dash_selected.clear();
+            }
+            Action::DashBulkStar | Action::DashBulkUnstar => {
+                let star = matches!(action, Action::DashBulkStar);
+                let targets = self.app.dash_selected.clone();
+                let mut failed = false;
+                for i in targets {
+                    if let Some(r) = self.app.recents.get_mut(i) {
+                        if r.starred == star {
+                            continue;
+                        }
+                        if let Some(path) = &r.path {
+                            if let Err(e) =
+                                x_native::fileio::set_starred(&path.to_string_lossy(), star)
+                            {
+                                self.app.status = format!("Could not update starred files: {e}");
+                                failed = true;
+                                break;
+                            }
+                        }
+                        r.starred = star;
+                    }
+                }
+                if !failed {
+                    self.app.status = format!(
+                        "{} {} file(s)",
+                        if star { "Starred" } else { "Unstarred" },
+                        self.app.dash_selected.len()
+                    );
+                }
+            }
+            Action::DashBulkOpen => {
+                let targets = self.app.dash_selected.clone();
+                for i in targets {
+                    self.dispatch(Action::OpenRecent(i));
+                }
+                self.app.dash_selected.clear();
+            }
+            Action::DashBulkRemove => {
+                let n = self.app.dash_selected.len();
+                let mut keep = vec![true; self.app.recents.len()];
+                for i in &self.app.dash_selected {
+                    if let Some(k) = keep.get_mut(*i) {
+                        *k = false;
+                    }
+                }
+                let mut it = keep.into_iter();
+                self.app.recents.retain(|_| it.next().unwrap_or(true));
+                self.app.dash_selected.clear();
+                self.app.status =
+                    format!("Removed {n} file(s) from recents — the files are still on disk");
+            }
+            Action::DashBarNoop => {}
             Action::StarRecent(i) => {
                 if let Some(r) = self.app.recents.get_mut(i) {
                     let starred = !r.starred;
@@ -8489,6 +8918,9 @@ impl Host {
             }
             Action::OpenTemplates => {
                 self.app.template_picker_open = true;
+                // the scrim owns the screen: don't leave the search field
+                // focused (and its caret blinking) behind it
+                self.app.dash_search_focus = false;
             }
             Action::CloseTemplates => {
                 self.app.template_picker_open = false;
@@ -8503,7 +8935,7 @@ impl Host {
                 };
                 let name = crate::state::OpenDoc::TEMPLATES
                     .get(i)
-                    .map(|(n, _)| n.to_string())
+                    .map(|(n, _, _)| n.to_string())
                     .unwrap_or_default();
                 self.app.docs.push(doc);
                 self.app.active = self.app.docs.len() - 1;
@@ -8650,7 +9082,21 @@ impl Host {
                 doc.color_picker_fill_open = false;
                 doc.color_picker_stroke_open = false;
             }
+            Action::ToggleMinimap => {
+                self.app.minimap = !self.app.minimap;
+                self.app.status = if self.app.minimap {
+                    "Minimap shown (⇧M hides it)".into()
+                } else {
+                    "Minimap hidden (⇧M brings it back)".into()
+                };
+            }
+            Action::MinimapNav(wx, wy) => self.center_on_world(wx, wy),
             Action::RightTab(t) => {
+                // leaving DESIGN takes the paint library with it: the popover
+                // is anchored to a row that only that tab paints
+                if t != crate::state::RightTab::Design {
+                    self.app.paint_lib = None;
+                }
                 self.app.doc().right_tab = t;
             }
             Action::VariantCycle(dir) => {
@@ -9046,6 +9492,7 @@ impl Host {
                     crate::state::RecentFile {
                         name,
                         team: "file".into(),
+                        edited_min: 0, // "Just now"
                         edited: "Just now".into(),
                         color: crate::theme::C_PANEL,
                         members: vec![],
@@ -9509,6 +9956,44 @@ impl Host {
                 } else {
                     self.app.status = "Nothing to undo in variables".into();
                 }
+            }
+            Action::PaintLibToggle(is_fill) => {
+                self.app.paint_lib = if self.app.paint_lib == Some(is_fill) {
+                    None
+                } else {
+                    Some(is_fill)
+                };
+            }
+            Action::PaintLibClose => self.app.paint_lib = None,
+            Action::ApplyPaintVariable(is_fill, name) => {
+                self.app.paint_lib = None;
+                self.app.doc().checkpoint();
+                let n = self.app.apply_paint_variable(is_fill, name.as_str());
+                self.app.status = if n > 0 {
+                    let row = if is_fill { "fill" } else { "stroke" };
+                    format!("Bound the {row} of {n} layer(s) to '{name}'")
+                } else {
+                    format!("No colour variable named '{name}'")
+                };
+            }
+            Action::ApplyPaintStyle(name) => {
+                self.app.paint_lib = None;
+                self.app.doc().checkpoint();
+                let n = self.app.apply_paint_style(name.as_str());
+                self.app.status = if n > 0 {
+                    format!("Applied paint style '{name}' to {n} layer(s)")
+                } else {
+                    format!("'{name}' is not a paint style")
+                };
+            }
+            Action::DetachPaintBinding(is_fill) => {
+                self.app.paint_lib = None;
+                let n = self.app.detach_paint_binding(is_fill);
+                self.app.status = if n > 0 {
+                    format!("Detached {n} layer(s) — the colour stays")
+                } else {
+                    "Nothing in the selection is linked to a variable or style".into()
+                };
             }
             Action::LibCheckUpdate(i) => self.cmd_lib_check_update(i),
             Action::LibReviewAccept => {
@@ -10983,6 +11468,76 @@ fn world_to_local(root: &Node, target: &str, x: f64, y: f64) -> (f64, f64) {
 
 // ------------------------------------------------------------------ utils
 
+/// What the pointer means at `app.mouse`. A cursor is an affordance: on the
+/// dashboard every control now says "clickable" (the whole file browser used
+/// to render as a plain arrow, including its buttons), the search field says
+/// "type", and the editor keeps its resize / pan / tool grammar.
+pub fn cursor_for(app: &App) -> CursorIcon {
+    if app.document_loading.is_some() {
+        return if crate::loading::hit_action(app, app.mouse).is_some() {
+            CursorIcon::Pointer
+        } else {
+            CursorIcon::Default
+        };
+    }
+    match app.screen {
+        Screen::Dashboard => {
+            if app.template_picker_open || app.palette.open {
+                return CursorIcon::Pointer;
+            }
+            if dashboard::search_rect(app).contains(app.mouse) {
+                return CursorIcon::Text;
+            }
+            // the LAST painted rect wins, exactly like the click dispatch
+            if app.hit.iter().rev().any(|(r, _)| r.contains(app.mouse)) {
+                CursorIcon::Pointer
+            } else {
+                CursorIcon::Default
+            }
+        }
+        Screen::Board => CursorIcon::Default,
+        Screen::Editor => {
+            let reg = app.editor_regions();
+            if let Some(c) = minimap_cursor(app) {
+                return c;
+            }
+            if crate::editor_ui::paint_lib_rect(app).is_some_and(|r| r.contains(app.mouse)) {
+                // an open popover advertises its rows like any other control
+                CursorIcon::Pointer
+            } else if resizer_at(app, app.mouse).is_some() {
+                CursorIcon::EwResize
+            } else if matches!(app.drag, Some(Drag::Pan { .. })) {
+                CursorIcon::Grabbing
+            } else if reg.canvas.contains(app.mouse) {
+                match app.tool {
+                    Tool::Hand => CursorIcon::Grab,
+                    Tool::Select => CursorIcon::Default,
+                    _ => CursorIcon::Crosshair,
+                }
+            } else {
+                CursorIcon::Default
+            }
+        }
+    }
+}
+
+/// What the pointer means over the minimap: grab to scrub, grabbing while it
+/// is being scrubbed, and a click cursor on its close button. `None` when the
+/// pointer is somewhere else — the caller then keeps its own grammar.
+fn minimap_cursor(app: &App) -> Option<CursorIcon> {
+    let g = crate::editor_ui::minimap_geom(app)?;
+    if !g.panel.contains(app.mouse) {
+        return None;
+    }
+    Some(if matches!(app.drag, Some(Drag::Minimap)) {
+        CursorIcon::Grabbing
+    } else if g.close().contains(app.mouse) {
+        CursorIcon::Pointer
+    } else {
+        CursorIcon::Grab
+    })
+}
+
 fn resizer_at(app: &App, p: Point) -> Option<u8> {
     let reg = app.editor_regions();
     if p.y < ED_TITLE_H {
@@ -11166,8 +11721,17 @@ mod tests {
 
     #[test]
     fn templates_catalog_builds_independent_copies() {
-        for (i, (name, blurb)) in OpenDoc::TEMPLATES.iter().enumerate() {
+        for (i, (name, blurb, icon)) in OpenDoc::TEMPLATES.iter().enumerate() {
             assert!(!name.is_empty() && !blurb.is_empty());
+            // the gallery paints this name through draw_icon, which is a
+            // silent no-op for an unknown icon (Audit F1): draw one and
+            // require real geometry back, so a typo'd icon fails here
+            let mut probe = vello::Scene::new();
+            crate::icons::draw_icon(&mut probe, icon, 0.0, 0.0, ICON_MD, x_native::Color::BLACK);
+            assert!(
+                !probe.encoding().path_data.is_empty(),
+                "template {i} ({name}) icon {icon} has no path data"
+            );
             let d =
                 OpenDoc::template_doc(i).unwrap_or_else(|| panic!("template {i} ({name}) builds"));
             if i == 3 {
@@ -11186,6 +11750,13 @@ mod tests {
             }
         }
         assert!(OpenDoc::template_doc(OpenDoc::TEMPLATES.len()).is_none());
+        // and no two rows share a glyph (a column of identical chips is the
+        // thing this catalog was fixed for)
+        let mut glyphs: Vec<&str> = OpenDoc::TEMPLATES.iter().map(|(_, _, i)| *i).collect();
+        let total = glyphs.len();
+        glyphs.sort_unstable();
+        glyphs.dedup();
+        assert_eq!(glyphs.len(), total, "each template row has its own icon");
     }
 
     /// Dashboard paints without panicking (fonts may be absent in CI).
@@ -14037,7 +14608,7 @@ fn paint_feedback(app: &mut App, scene: &mut Scene) {
         .text(scene, 12.0, y + 5.0, &message, T10, C_TEXT, Wt::Reg);
     if app.file_job.as_ref().is_some_and(|j| j.cancelable) {
         let rect = Rect::new(app.win_w - 88.0, y + 2.0, app.win_w - 8.0, app.win_h - 2.0);
-        crate::paint::fill_rrect(scene, rect, 4.0, C_FIELD_2);
+        crate::paint::fill_rrect(scene, rect, R_SM, C_FIELD_2);
         app.fonts
             .text_center(scene, rect, "Cancel", T10, C_TEXT, Wt::Med, true);
         app.hit.push((rect, Action::CancelFileOperation));
@@ -14064,6 +14635,10 @@ fn paint_feedback(app: &mut App, scene: &mut Scene) {
 #[cfg(test)]
 #[path = "regression_tests.rs"]
 mod audit_regressions;
+
+#[cfg(test)]
+#[path = "design_tokens_test.rs"]
+mod design_tokens;
 
 impl App {
     /// The logical-frame path used by the native window and CPU profiling.

@@ -61,6 +61,9 @@ pub enum ContextAction {
     // View
     SelectAll,
     ToggleGrid,
+    /// Canvas minimap (⇧M) — the navigation aid for a page larger than the
+    /// viewport.
+    ToggleMinimap,
 }
 
 impl ContextAction {
@@ -90,6 +93,7 @@ impl ContextAction {
             Self::OutlineText => "Outline text",
             Self::SelectAll => "Select all",
             Self::ToggleGrid => "Toggle grid",
+            Self::ToggleMinimap => "Toggle minimap",
         }
     }
 
@@ -120,6 +124,7 @@ impl ContextAction {
             Self::OutlineText => "type",
             Self::SelectAll => "box-select",
             Self::ToggleGrid => "grid-2x2",
+            Self::ToggleMinimap => "layout-dashboard",
         }
     }
 
@@ -149,6 +154,7 @@ impl ContextAction {
             Self::Lock => Some("⇧⌘L"),
             Self::Hide => Some("⇧⌘H"),
             Self::SelectAll => Some("⌘A"),
+            Self::ToggleMinimap => Some("⇧M"),
             _ => None,
         }
     }
@@ -268,6 +274,7 @@ pub fn action_for(action: &ContextAction) -> Option<Action> {
         Hide => Action::Ctx(CtxCmd::HideSel),
         SelectAll => Action::Ctx(CtxCmd::SelectAll),
         ToggleGrid => Action::ToggleGuideVisibility,
+        ToggleMinimap => Action::ToggleMinimap,
     })
 }
 
@@ -290,6 +297,7 @@ pub fn build_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             ai(SelectAll, true),
             ContextMenuItem::Separator,
             ai(ToggleGrid, true),
+            ai(ToggleMinimap, true),
         ],
         ContextTarget::CanvasSelection {
             selected_count,
@@ -394,6 +402,10 @@ mod tests {
             actions.contains(&&ContextAction::ToggleGrid),
             "empty canvas must offer the grid toggle"
         );
+        assert!(
+            actions.contains(&&ContextAction::ToggleMinimap),
+            "empty canvas must offer the minimap toggle"
+        );
     }
 
     #[test]
@@ -447,6 +459,10 @@ mod tests {
         assert_eq!(
             action_for(&ContextAction::ToggleGrid),
             Some(Action::ToggleGuideVisibility)
+        );
+        assert_eq!(
+            action_for(&ContextAction::ToggleMinimap),
+            Some(Action::ToggleMinimap)
         );
     }
 }
