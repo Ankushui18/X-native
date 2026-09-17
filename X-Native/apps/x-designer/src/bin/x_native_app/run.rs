@@ -3297,7 +3297,7 @@ impl Host {
                         .app
                         .hit
                         .iter()
-                        .position(|(hr, ha)| hr == *r && ha == *a)
+                        .position(|(hr, ha)| hr == r && ha == a)
                         .and_then(|i| {
                             dashboard::focus_targets(&self.app)
                                 .iter()

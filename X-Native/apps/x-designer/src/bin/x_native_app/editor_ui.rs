@@ -2416,9 +2416,9 @@ fn paint_resizers(app: &App, s: &mut Scene) {
     // A divider that lights up on hover says "something is here"; a grip says
     // "drag me". The pill is centred on the seam and the seam itself takes the
     // accent while hovered or dragged, so the affordance reads at 1px.
-    for (seam, r, hot) in [
-        (reg.sidebar.x1, lr, hover(app, lr) || l_drag),
-        (reg.right.x0, rr, hover(app, rr) || r_drag),
+    for (seam, hot) in [
+        (reg.sidebar.x1, hover(app, lr) || l_drag),
+        (reg.right.x0, hover(app, rr) || r_drag),
     ] {
         if !hot {
             continue;
