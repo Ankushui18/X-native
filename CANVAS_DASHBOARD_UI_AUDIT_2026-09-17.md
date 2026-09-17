@@ -220,11 +220,70 @@ browser Library: the document model is a scene graph, not a Figma clone."*
   line. The gallery is a modal like the color picker and the library review, so Escape closes it
   (click-away was the only exit), and opening it drops the search field's focus.
 
-**Verification note:** all of today's edits are static-checked (pattern-matched against
-neighboring code, brace-balanced, diff-verified); the sandbox still has no Rust toolchain, so
-first compile remains pending on restored build infra.
-4. Optionally consolidate on `fire_action` (retire the duplicated `Player` loop) and verify
-   SmartAnimate interpolation end-to-end in Flow preview.
+**Verification note:** the fixes above are verified by CI (`scripts/check.sh`: rustfmt, clippy
+with the dead-code ceiling, `cargo test --workspace`); the sandbox itself has no Rust toolchain,
+so CI is the compile gate.
+
+## 7. Design-system pass — the question "do we have one, and is it used everywhere?"
+
+**Answer before this pass:** we had one and we were not using it everywhere. `crates/x-ui/
+src/design_system.rs` owned color roles plus type/radius/spacing/icon/shadow scales, all tested —
+but outside x-ui the scales were almost unreferenced (SpacingScale 0 call sites, ShadowScale 0,
+DesignSystem 0, IconScale 3, RadiusScale 6, TypographyScale 7) while the app painted through
+`theme.rs` aliases: ~90 raw colors, ~230 numeric radii, ~90 numeric icon sizes. The system
+existed; the chrome had drifted around it, and two of the ten things the chrome needed (an alpha
+ladder, a stroke width) had no home at all, so call sites invented values (`#FF3B30` for a badge,
+`0x33` washes, 1px-or-1.5px borders).
+
+**What is in the system now** (`X-Native/docs/DESIGN_SYSTEM.md` is the how-to):
+
+- `AlphaScale` 8/20/51/66/128, `StrokeScale` hairline 1.0 / ring 1.5, `MotionScale` 120/180/240ms
+  with the two easing curves, and const steps on `IconScale` and `SpacingScale` (a `const` cannot
+  call `Default::default()`); `DesignSystem` carries every scale, and tests pin the ladders,
+  prove each is monotonic, and prove the struct carries them all.
+- two roles the chrome was missing, `danger_fill` + `on_danger`, with the new `LABEL_FILLS`
+  contrast pair: the shipped badge was `#FF3B30` (white label 3.55:1, under AA); `#C0392B` is
+5.44:1, and high contrast gets `#FF9A8F` + black at 10.27:1.
+- the app vocabulary: `R_*` (ladder + intent aliases), `ICON_XS..XL`, `SP_1..SP_10`, `A_*`,
+  `STROKE_*`, `T16`, `R_NONE`, `C_ACCENT_INK`, `C_SUCCESS[+WASH/EDGE]`, `C_SELECTION_[WASH/EDGE]`,
+  `C_DISC_SCRIM` — 102 named steps, all derived from the palette.
+
+**What the sweep changed** (pixels preserved except the itemised snaps below): 260 numeric
+radii found in the production paint code, 14 kept because they round document space (vector
+anchors at 1.0/1.5, one mock frame at 18.0) and 246 moved onto `R_*`; 111 numeric `draw_icon`
+sizes, all moved onto `ICON_*`; 64 raw colour literals in the paint code, 10 of which became
+roles (one of them a new definition, `C_DISC_SCRIM`), leaving 55 that are the user's content,
+the brand set, or a scrim — and each of those now says why in a comment, checked by the
+ratchet. Every wash, scrim and status paint is a role. Per file: theme.rs 19, state.rs 20,
+editor_ui.rs 12, board_ui.rs 2, dashboard.rs 1, paint.rs 1. Radii
+snapped onto the 2/4/6/8/12 ladder and itemised: 5.0→6 (11 sites), 3.0→4 (14), 10.0→8 (6),
+7.0→`R_ROW` 8 (2, dashboard thumbnails), 14.0→12 (1 corner — the template-picker card, fill +
+stroke), 0.5→0 (1, a chip the renderer was clamping to a square corner anyway). Icons: 10.0→
+`ICON_XS` 12 (5 sites), 11.0→`ICON_XS` (1, with its x-inset 1→2 to stay centred), 13.0→`ICON_SM`
+14 (2). Colors fixed on evidence: the success chip's wash was the *brand* green `#1BCB55` @51
+(now the success role `#4CD966`, same alpha; border alpha 76→66), the board marquee's wash/edge
+were hand-typed violet at alpha 40/160 (now `C_SELECTION_WASH`/`_EDGE`, same `#7C5CFC` hue, alpha
+51/128), two editor check-marks `#4CBB7A`→`C_SUCCESS`, a resolved-comment pin `#6B7280`→`C_DIM`
+(3.9:1→6.3:1), and the unread badge off `#FF3B30`.
+
+**Ink fixes the audit implied** (all three invisible in High Contrast, none visible in Graphite):
+the unread count was `Color::WHITE` on the danger fill — 2.04:1 in HC (black now, 10.27:1); the
+find bar's `Aa` / box-select toggles were white on the accent — 1.43:1 in HC (`C_ON_ACCENT`,
+14.67:1, white in the other two palettes so unchanged there); "Mark all read" and the
+notification glyph were painted *in* the accent — 3.13:1 on the panel, 2.80:1 on a raised row
+(`C_ACCENT_INK` = `accent_ink`, 6.0–7.8:1; Graphite's violet goes `#6B49F5`→`#B4A4FF` at those
+two spots).
+
+**The ratchet that keeps it** (`design_tokens_test.rs`, four rules over the production paint
+code): no numeric `draw_icon` size; no numeric radius off the documented canvas-space list
+(vector anchors at 1.0/1.5, one mock frame at 18.0); a per-file ceiling on raw color literals and
+on bare `Color::WHITE`/`BLACK` ink; and no accent token in the colour slot of `fonts.text` /
+`text_center` / `draw_icon`. Ceilings are a ratchet — lower them, never raise them.
+
+**Deliberately not tokenised:** measured coordinates in the pixel-cloned dashboard (naming a
+browser measurement `SP_5` would hide where the number came from) and document-space corners.
+**Open, unchanged from §6:** the placeholder color (`#6B6E7A` at 2.98:1, the one audited contrast
+miss left) and the dashboard's keyboard/focus model (Tab is still gated to the editor).
 
 **Bottom line.** Canvas and dashboard are real, wired software — UI→code connectivity is
 effectively 100% at the Action level, and the code→UI gaps are a short, named list. The product
