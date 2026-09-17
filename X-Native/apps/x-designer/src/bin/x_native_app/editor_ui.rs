@@ -5671,7 +5671,8 @@ fn paint_library(app: &App) -> Option<(Rect, Vec<LibRow>)> {
             _ => None,
         })
         .collect();
-    styles.sort();
+    // by name: a Color is not Ord (and sorting by colour would be useless)
+    styles.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut rows = Vec::new();
     rows.push(LibRow::Section(if is_fill { "FILL" } else { "STROKE" }));
