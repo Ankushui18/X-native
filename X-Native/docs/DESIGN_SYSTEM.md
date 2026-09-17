@@ -30,6 +30,16 @@ apps/x-designer/.../theme.rs              <- the app's names for them   v
 | Border | `STROKE_HAIRLINE 1.0 · STROKE_RING 1.5` | |
 | Motion | `MotionScale` (u32 ms + easing) | `fast 120 · base 180 · slow 240`; honour `DesignSystem::reduced_motion` |
 
+### Ink
+Text and glyphs never take a *fill* role. On a saturated fill:
+`C_ON_ACCENT` (white in the dark and light palettes, black on high contrast),
+`C_ON_DANGER` for the unread badge, `C_BLACK` on a brand/team hue. In the
+accent's own colour: `C_ACCENT_INK` (`accent_ink` — the accent itself measures
+3.13:1 on the panel and 2.80:1 on a raised surface, so it is a fill, not a
+label). The ratchet enforces both: a bare `Color::WHITE` used as ink and an
+accent token in the colour slot of `fonts.text` / `text_center` / `draw_icon`
+both fail the build.
+
 ### Adding a colour
 A missing colour is a missing **role**, not a new hex at the call site:
 
@@ -68,13 +78,17 @@ first `#[cfg(test)]`) and fails the build when:
 
 - any `draw_icon` size is numeric — the ladder is the only knob;
 - any `_rrect` radius is numeric **and off the documented canvas-space list**;
+- a file's bare `Color::WHITE` / `Color::BLACK` count exceeds its ink ceiling;
+- type or a glyph is painted in an accent token instead of `C_ACCENT_INK`;
 - a file's raw-colour count exceeds its ceiling (a ratchet: lower it when you
   fix one, never raise it);
 - a `pub const C_*` in `theme.rs` is a literal with no comment saying why it is
   not a role.
 
-Current ceilings (2026-09-17): dashboard 2, editor_ui 13, board_ui 3,
-loading 1, command 0, paint 2, run 4, state 22, icons 0, theme 24.
+Current ceilings (2026-09-17) — colours: dashboard 2, editor_ui 13, board_ui 3,
+loading 1, command 0, paint 2, run 4, state 22, icons 0, theme 24; ink:
+editor_ui 3, state 3, everything else 0 (a document default is content, so
+those whites stay and say so).
 
 ## What is *not* tokenised, on purpose
 

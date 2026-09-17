@@ -1284,7 +1284,7 @@ fn paint_nav_bar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             badge.y0 + 3.0,
             &count,
             8.0,
-            Color::WHITE,
+            C_ON_DANGER,
             Wt::Bold,
         );
     }
@@ -1561,7 +1561,7 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         "Aa",
         9.0,
         if app.find_replace.case_sensitive {
-            Color::WHITE
+            C_ON_ACCENT
         } else {
             C_DIM
         },
@@ -1580,7 +1580,7 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         sel_r.y0 + 1.0,
         ICON_XS,
         if app.find_replace.in_selection {
-            Color::WHITE
+            C_ON_ACCENT
         } else {
             C_DIM
         },
@@ -1626,7 +1626,7 @@ fn paint_notifications(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action
             mark_all_r.y0 + 4.0,
             "Mark all read",
             T10,
-            C_NAV_ACTIVE,
+            C_ACCENT_INK,
             Wt::Reg,
         );
         hit.push((mark_all_r, Action::MarkAllNotificationsRead));
@@ -1646,7 +1646,7 @@ fn paint_notifications(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action
             nr.x0 + 8.0,
             nr.y0 + 6.0,
             ICON_SM,
-            if notif.read { C_DIM } else { C_NAV_ACTIVE },
+            if notif.read { C_DIM } else { C_ACCENT_INK },
         );
         let msg = app
             .fonts

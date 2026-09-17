@@ -7,7 +7,8 @@
 //!
 //! * a numeric corner radius in `fill_rrect` / `stroke_rrect`,
 //! * a numeric optical size in `draw_icon`,
-//! * a raw `Color::from_rgb8` / `from_rgba8` in a paint path.
+//! * a raw `Color::from_rgb8` / `from_rgba8` in a paint path,
+//! * a bare `Color::WHITE` / `Color::BLACK` used as ink.
 //!
 //! The ceilings are a ratchet, like `DEAD_CODE_CEILING` in
 //! `scripts/check.sh`: fixing a literal means lowering the number here,
@@ -35,6 +36,36 @@ const PAINTED: &[(&str, usize)] = &[
     ("icons.rs", 0),
     ("theme.rs", 24),
 ];
+
+/// Ink on a *fill* must be a role: `C_ON_ACCENT` (white in the dark and light
+/// palettes, black on high contrast), `C_ON_DANGER` for the unread badge, or
+/// `C_BLACK` for ink on a brand/team hue. A bare `Color::WHITE` looks right in
+/// Graphite and paints white-on-yellow in High Contrast — that is how the
+/// unread badge and the find toggles shipped. `state.rs`/`editor_ui.rs` keep a
+/// couple of whites because a document default (an unparsable hex, a new
+/// shape's fill) is the user's content, not the chrome.
+const INK: &[(&str, usize)] = &[
+    // (file, bare WHITE/BLACK ceiling)
+    ("dashboard.rs", 0),
+    ("editor_ui.rs", 3),
+    ("board_ui.rs", 0),
+    ("loading.rs", 0),
+    ("command.rs", 0),
+    ("paint.rs", 0),
+    ("run.rs", 0),
+    ("state.rs", 3),
+    ("icons.rs", 0),
+    ("theme.rs", 0),
+];
+
+/// The accent is a *fill*: as ink it measures 3.13:1 on the panel (2.80:1 on a
+/// raised surface), under AA for a label, so type and glyphs take the palette's
+/// `accent_ink` step. `(callee, colour argument)` — the slot the colour sits in.
+const INK_CALLEES: &[(&str, usize)] = &[("fonts.text", 5), ("text_center", 4), ("draw_icon", 5)];
+
+/// Tokens that must not be handed to those slots. Fills, rings, marquees and
+/// guides may use them (a 1.5px selection ring is a graphic, not a label).
+const NOT_INK: &[&str] = &["C_ACCENT", "C_NAV_ACTIVE", "MATCH_HIGHLIGHT"];
 
 /// Corner radii that are allowed to stay literal, because they round something
 /// in *document* space: vector anchors and their handles (1.0/1.5) and one
@@ -103,6 +134,29 @@ fn calls(src: &str, callee: &str) -> Vec<(usize, Vec<String>)> {
         i = k;
     }
     found
+}
+
+/// Does `text` mention `token` as a whole identifier? (`C_ACCENT` must not
+/// match inside `C_ACCENT_MUTED` / `C_ON_ACCENT`.)
+fn mentions(text: &str, token: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = text[from..].find(token) {
+        let at = from + rel;
+        let end = at + token.len();
+        let before = at
+            .checked_sub(1)
+            .and_then(|i| bytes.get(i))
+            .is_none_or(|c| !c.is_ascii_alphanumeric() && *c != b'_');
+        let after = bytes
+            .get(end)
+            .is_none_or(|c| !c.is_ascii_alphanumeric() && *c != b'_');
+        if before && after {
+            return true;
+        }
+        from = end;
+    }
+    false
 }
 
 fn bare_float(arg: &str) -> Option<f64> {
@@ -174,7 +228,20 @@ fn chrome_paints_through_the_design_tokens() {
          document-space corners may use {CANVAS_SPACE_RADII:?}. Offenders: {offenders:?}"
     );
 
-    // 3. colours: the ceilings are a ratchet — lower them, never raise them
+    // 3. ink: white/black as a *fill* ink is a role, not a literal
+    for (file, ceiling) in INK {
+        let src = read(file);
+        // deliberate substring count, so this matches the numbers the
+        // ceiling table was derived from (`Color::WHITE` / `Color::BLACK`)
+        let found = src.matches("Color::WHITE").count() + src.matches("Color::BLACK").count();
+        assert!(
+            found <= *ceiling,
+            "{file}: {found} bare WHITE/BLACK inks (ceiling {ceiling}) — on a saturated fill use \
+             C_ON_ACCENT / C_ON_DANGER / C_BLACK, which follow the palette"
+        );
+    }
+
+    // 4. colours: the ceilings are a ratchet — lower them, never raise them
     for (file, ceiling) in PAINTED {
         let found = raw_colours(file);
         assert!(
@@ -183,6 +250,27 @@ fn chrome_paints_through_the_design_tokens() {
              use a role from `crate::theme` (add one to ColorTokens if the role is missing)",
             found.len()
         );
+    }
+}
+
+#[test]
+fn accent_type_uses_the_ink_step() {
+    for (file, _) in PAINTED {
+        let src = read(file);
+        for (callee, slot) in INK_CALLEES {
+            for (line, args) in calls(&src, callee) {
+                let Some(colour) = args.get(*slot) else {
+                    continue;
+                };
+                for token in NOT_INK {
+                    assert!(
+                        !mentions(colour, token),
+                        "{file}:{line} paints {token} as ink ({callee}) — the accent is a fill; \
+                         text and glyphs take C_ACCENT_INK (accent_ink), which the palette audits"
+                    );
+                }
+            }
+        }
     }
 }
 

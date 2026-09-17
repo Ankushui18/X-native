@@ -34,7 +34,6 @@ const BG_ROW_SELECTED: Color = crate::theme::C_ACCENT_MUTED;
 const BG_SECTION: Color = crate::theme::C_BASE;
 const TEXT_MUTED: Color = crate::theme::C_FAINT;
 const TEXT_SHORTCUT: Color = crate::theme::C_DIM;
-const MATCH_HIGHLIGHT: Color = crate::theme::C_ACCENT;
 
 // ═══════════════════════════════════════════════════════════
 // Command Categories

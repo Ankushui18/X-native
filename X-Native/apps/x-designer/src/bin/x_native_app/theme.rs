@@ -225,7 +225,12 @@ pub const C_SEL_HANDLE: Color = rgba(role!(focus_ring), 0x40);
 /// Smart-guide lines while dragging — palette accent-ink violet (the editor
 /// comments expect "blue/purple"). Was #F24E1E, Figma's brand red — a clone
 /// artifact from the reference scrape; role-derived so themes remap it.
-pub const C_SNAP: Color = rgb(role!(accent_ink));
+// Accent as *ink* (accent-coloured text and glyphs). The accent itself
+// measures 3.13:1 on the panel and 2.80:1 on a raised surface — fine for a
+// fill, under AA for a label — so type and icons take the palette's ink step
+// (6.0:1+). Canvas guides use the same step, hence the legacy alias.
+pub const C_ACCENT_INK: Color = rgb(role!(accent_ink));
+pub const C_SNAP: Color = C_ACCENT_INK;
 
 // ------------------------------------------------------------- core palette
 // The legacy brand aliases (GRAPHITE_900 / SIGNAL_100 / VIOLET_500 …) are
