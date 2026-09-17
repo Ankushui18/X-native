@@ -359,9 +359,20 @@ if (ONLY) {
   process.exit(0);
 }
 
+// Re-capturing an unchanged sheet must not churn the commit: if every file came
+// back byte-identical, keep the previous capture's timestamp so `index.json` and
+// `shots.html` stay stable too. The stamp describes the pixels, not the run.
+const indexPath = join(OUT, 'index.json');
+const prev = existsSync(indexPath) ? JSON.parse(readFileSync(indexPath, 'utf8')) : null;
+const sameAsBefore =
+  prev &&
+  prev.theme === THEME &&
+  prev.screens?.length === shots.length &&
+  prev.screens.every((p, i) => p.id === shots[i].id && p.sha256 === shots[i].sha256 && p.bytes === shots[i].bytes);
+
 const index = {
   theme: THEME,
-  at: new Date().toISOString().slice(0, 16).replace('T', ' '),
+  at: sameAsBefore ? prev.at : new Date().toISOString().slice(0, 16).replace('T', ' '),
   browser: ua.replace(/^Mozilla\/5\.0 \(X11; Linux x86_64\) /, ''),
   runtime: `chrome ${/HeadlessChrome\/([\d.]+)/.exec(ua)?.[1] || '?'}`,
   window: { width: W, height: H },
@@ -369,7 +380,7 @@ const index = {
   verified: { screens: data.screens.length, boxes: audit.boxes, issues: audit.screens },
   screens: shots,
 };
-writeFileSync(join(OUT, 'index.json'), JSON.stringify(index, null, 2) + '\n');
+writeFileSync(indexPath, JSON.stringify(index, null, 2) + '\n');
 if (THEME === 'graphite') writeFileSync(join(DIR, 'shots.html'), sheetHtml(index));
 
 const total = shots.reduce((n, s) => n + s.bytes, 0);
