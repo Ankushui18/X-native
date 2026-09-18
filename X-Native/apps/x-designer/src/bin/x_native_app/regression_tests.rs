@@ -4625,3 +4625,75 @@ fn the_flow_viewer_paints_no_status_band_over_the_prototype() {
         "the flow viewer must keep every pixel for the document"
     );
 }
+
+/// Figma's Constraints block — the beginner course's "Frame presets and
+/// constraints" chapter, end to end: the panel's menu writes the layer's pin,
+/// the block exists only for a layer INSIDE a frame, and a corner drag of that
+/// frame then carries the pinned layers with it in one undo step.
+#[test]
+fn constraints_carry_a_frames_layers_through_its_resize() {
+    use crate::state::ConstraintAxis;
+    let mut h = host();
+    // a bar pinned to the bottom edge, a chip pinned to the right one
+    h.app.doc().editor().insert_node(
+        "frame-1",
+        Node::rect("bar", 10.0, 380.0, 355.0, 30.0, Color::WHITE),
+    );
+    h.app.doc().editor().insert_node(
+        "frame-1",
+        Node::rect("chip", 345.0, 10.0, 20.0, 20.0, Color::WHITE),
+    );
+    // a top-level layer has no Constraints block: its parent is the page, and
+    // Figma's table is about the frame you resize
+    h.app.doc().editor().selection = vec!["frame-1".into()];
+    assert!(crate::editor_ui::constraint_row(&h.app, ConstraintAxis::Horizontal).is_none());
+    assert!(crate::editor_ui::constraint_row(&h.app, ConstraintAxis::Vertical).is_none());
+    // inside the frame it does, and the panel's own menu writes the pin
+    h.app.doc().editor().selection = vec!["bar".into()];
+    assert_eq!(
+        crate::editor_ui::constraint_row(&h.app, ConstraintAxis::Vertical),
+        Some((0, "Top"))
+    );
+    h.dispatch(Action::ConstraintDropdown(ConstraintAxis::Vertical));
+    assert_eq!(h.app.dropdown_constraint, Some(ConstraintAxis::Vertical));
+    h.dispatch(Action::SetConstraint(ConstraintAxis::Vertical, 1));
+    assert_eq!(h.app.dropdown_constraint, None, "picking closes the menu");
+    h.app.doc().editor().selection = vec!["chip".into()];
+    h.dispatch(Action::SetConstraint(ConstraintAxis::Horizontal, 1));
+    assert_eq!(
+        crate::editor_ui::constraint_row(&h.app, ConstraintAxis::Horizontal),
+        Some((1, "Right"))
+    );
+    // frame-1 is (0,60) 375x420: grab the bottom-right handle and drag it out
+    // by 100 x 100
+    h.app.doc().editor().selection = vec!["frame-1".into()];
+    let depth0 = h.app.doc_ref().editor_ref().undo_depth();
+    let grab = h.resize_grab(Point::new(375.0, 480.0)).expect("corner grab");
+    h.app.drag = Some(grab);
+    h.on_move(h.app.world_to_screen(Point::new(475.0, 580.0)));
+    h.on_release();
+    let root = &h.app.doc_ref().editor_ref().root;
+    let f1 = find_node_clone(root, "frame-1").unwrap();
+    assert_eq!((f1.w, f1.h), (475.0, 520.0));
+    // the bar keeps its 10px inset from the bottom edge, the chip its own from
+    // the right edge: the pins did the work
+    let bar = find_node_clone(root, "bar").unwrap();
+    assert_eq!(
+        bar.transform.y,
+        480.0,
+        "the bar stayed pinned to the bottom"
+    );
+    let chip = find_node_clone(root, "chip").unwrap();
+    assert_eq!(
+        chip.transform.x,
+        445.0,
+        "the chip stayed pinned to the right"
+    );
+    // one gesture, one undo step: the frame and its layers come back together
+    assert_eq!(h.app.doc_ref().editor_ref().undo_depth(), depth0 + 1);
+    h.app.doc().editor().undo();
+    let root = &h.app.doc_ref().editor_ref().root;
+    assert_eq!(find_node_clone(root, "frame-1").unwrap().w, 375.0);
+    assert_eq!(find_node_clone(root, "bar").unwrap().transform.y, 380.0);
+    assert_eq!(find_node_clone(root, "chip").unwrap().transform.x, 345.0);
+}

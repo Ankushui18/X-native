@@ -422,6 +422,44 @@ impl Editor {
             self.push(vec![cmd]);
         }
     }
+
+    /// Resize a node the way the canvas does (Figma's Constraints): the node
+    /// takes the new size and the layers inside it answer their pins — in the
+    /// SAME undo entry, so one Ctrl+Z puts the whole picture back.
+    pub fn resize_with_constraints(&mut self, id: &str, w: f64, h: f64) -> bool {
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        let (ow, oh) = (n.w, n.h);
+        let kids = if constrains_children(n) {
+            n.children.clone()
+        } else {
+            Vec::new()
+        };
+        let mut cmds = vec![Command::Resize {
+            id: id.into(),
+            from: (ow, oh),
+            to: (w, h),
+        }];
+        pin_commands(&kids, w, h, ow, oh, &mut cmds);
+        self.push_cmds(cmds);
+        true
+    }
+
+    /// Set a layer's resize constraints — the two pins Figma's Constraints
+    /// block exposes. Undoable; `false` when the layer is gone or already
+    /// answers that way.
+    pub fn set_pin(&mut self, id: &str, h: HPin, v: VPin) -> bool {
+        let Some(n) = find(&self.root, id).filter(|n| n.pin != (h, v)) else {
+            return false;
+        };
+        let before = Box::new(n.clone());
+        let mut after = n.clone();
+        after.pin = (h, v);
+        after.dirty = true;
+        self.push_replace(id, before, after);
+        true
+    }
     pub fn rotate(&mut self, id: &str, angle: f64) {
         if let Some(n) = find(&self.root, id) {
             let cmd = Command::Rotate {

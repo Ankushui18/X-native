@@ -63,6 +63,9 @@ pub fn paint(app: &mut App, s: &mut Scene) {
     if app.dropdown_zoom {
         paint_zoom_dropdown(app, s, &mut hit);
     }
+    if let Some(axis) = app.dropdown_constraint {
+        paint_constraint_dropdown(app, s, &mut hit, axis);
+    }
     if app.paint_lib.is_some() {
         paint_paint_library(app, s, &mut hit);
     }
@@ -5107,7 +5110,100 @@ fn paint_design(
         );
         y += 18.0;
     }
-    let _ = y;
+    paint_constraints(app, s, hit, x0, xr, y);
+}
+
+/// Figma's Constraints block — the panel half of the beginner course's "Frame
+/// presets and constraints" chapter: two dropdowns, one per axis, at the end of
+/// the Design column. Figma shows the block for a layer INSIDE a frame (the
+/// frame is what gets resized), which is why `pin_of_selection` refuses a
+/// top-level layer even though our page node is a frame too.
+fn paint_constraints(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    x0: f64,
+    xr: f64,
+    y0: f64,
+) {
+    if pin_of_selection(app).is_none() {
+        return;
+    }
+    let mut y = y0 + 1.0 + 12.0;
+    app.fonts.caps_label(s, x0, y, "CONSTRAINTS", C_TEXT, Wt::Med);
+    y += 12.0 + LABEL_GAP;
+    for axis in [
+        crate::state::ConstraintAxis::Horizontal,
+        crate::state::ConstraintAxis::Vertical,
+    ] {
+        let Some((row, _)) = constraint_row(app, axis) else {
+            continue;
+        };
+        app.fonts.text(s, x0, y + 6.5, axis.label(), T10, C_DIM, Wt::Reg);
+        let fr = Rect::new(x0 + 74.0, y, xr, y + INPUT_H);
+        if app.dropdown_constraint == Some(axis) {
+            // the menu anchors under the field it belongs to; the panel
+            // scrolls, so the painter records where the field landed
+            app.constraint_dd_anchor = (fr.x0, fr.y1);
+        }
+        input(
+            app,
+            s,
+            hit,
+            fr,
+            None,
+            axis.labels()[row],
+            false,
+            Some(Action::ConstraintDropdown(axis)),
+            Some("chevron-down"),
+        );
+        y += INPUT_H + 6.0;
+    }
+}
+
+/// The selected layer's constraint on one axis: the menu row Figma highlights
+/// plus the label the field shows. `None` when the layer has no Constraints
+/// block at all.
+pub fn constraint_row(
+    app: &App,
+    axis: crate::state::ConstraintAxis,
+) -> Option<(usize, &'static str)> {
+    let (hp, vp) = pin_of_selection(app)?;
+    let row = match axis {
+        crate::state::ConstraintAxis::Horizontal => {
+            crate::state::CONSTRAINT_H.iter().position(|(_, p)| *p == hp)
+        }
+        crate::state::ConstraintAxis::Vertical => {
+            crate::state::CONSTRAINT_V.iter().position(|(_, p)| *p == vp)
+        }
+    }?;
+    Some((row, axis.labels()[row]))
+}
+
+/// The selected layer's two pins, present only when that layer sits inside a
+/// frame.
+fn pin_of_selection(app: &App) -> Option<(x_native::HPin, x_native::VPin)> {
+    let d = app.doc_ref();
+    let root = &d.editor_ref().root;
+    let id = d.selected_id()?;
+    let parent = parent_of(root, &id, None)?;
+    if parent.id == root.id || !matches!(parent.kind, NodeKind::Frame { .. }) {
+        return None;
+    }
+    find_node(root, &id).map(|n| n.pin)
+}
+
+/// The layer's nearest ancestor, `None` when the layer is the page itself.
+fn parent_of<'a>(root: &'a Node, id: &str, parent: Option<&'a Node>) -> Option<&'a Node> {
+    if root.id == id {
+        return parent;
+    }
+    for c in &root.children {
+        if let Some(p) = parent_of(c, id, Some(root)) {
+            return Some(p);
+        }
+    }
+    None
 }
 
 fn sq_btn_small(app: &mut App, s: &mut Scene, x: f64, y: f64, icon: &str) {
@@ -6019,6 +6115,48 @@ fn paint_frame_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Actio
         app.fonts
             .text(s, r.x1 - 10.0 - dw, r.y0 + 11.0, &dims, T10, C_DIM, Wt::Reg);
         hit.push((r, Action::FramePreset(i)));
+    }
+}
+
+/// Figma's Constraints menu: the five answers for one axis, anchored under the
+/// field that opened it. Picking one writes the layer's pin (`set_pin`), which
+/// is what the next resize of the frame will answer.
+fn paint_constraint_dropdown(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    axis: crate::state::ConstraintAxis,
+) {
+    let (ax, ay) = app.constraint_dd_anchor;
+    let dd = Rect::new(ax, ay + 4.0, ax + 200.0, ay + 4.0 + 5.0 * DROPDOWN_ROW_H);
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, R_LG, C_FIELD);
+    stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+    let current = constraint_row(app, axis).map(|(row, _)| row);
+    for (i, label) in axis.labels().into_iter().enumerate() {
+        let r = Rect::new(
+            dd.x0,
+            dd.y0 + DROPDOWN_ROW_H * i as f64,
+            dd.x1,
+            dd.y0 + DROPDOWN_ROW_H * (i + 1) as f64,
+        );
+        let hov = hover(app, r);
+        if hov || current == Some(i) {
+            fill_rect(s, r, if hov { C_FIELD_2 } else { C_FIELD });
+        }
+        app.fonts.text(
+            s,
+            r.x0 + 10.0,
+            r.y0 + 9.0,
+            label,
+            T11,
+            if current == Some(i) { C_TEXT } else { C_MUTED },
+            Wt::Reg,
+        );
+        if current == Some(i) {
+            draw_icon(s, "check", r.x1 - 22.0, r.y0 + 8.0, ICON_XS, C_TEXT);
+        }
+        hit.push((r, Action::SetConstraint(axis, i)));
     }
 }
 

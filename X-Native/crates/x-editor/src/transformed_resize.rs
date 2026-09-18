@@ -248,11 +248,21 @@ impl Editor {
         };
         let from = ((n.w, n.h), (n.transform.x, n.transform.y));
         let to = ((plan.w, plan.h), (plan.x, plan.y));
-        self.push_cmds(vec![Command::ResizeTransformed {
+        // Figma answers a frame resize with its children's constraints, so the
+        // pinned layers move/stretch in the SAME undo entry as the frame.
+        let kids = if constrains_children(n) && (plan.w != n.w || plan.h != n.h) {
+            n.children.clone()
+        } else {
+            Vec::new()
+        };
+        let mut cmds = Vec::new();
+        pin_commands(&kids, plan.w, plan.h, n.w, n.h, &mut cmds);
+        cmds.push(Command::ResizeTransformed {
             id: id.into(),
             from,
             to,
-        }]);
+        });
+        self.push_cmds(cmds);
         true
     }
 }
@@ -260,7 +270,7 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use x_core::{Color, Node, Transform};
+    use x_core::{Color, HPin, Node, Transform, VPin};
 
     fn rect(x: f64, y: f64, w: f64, h: f64) -> Node {
         Node::rect("r", x, y, w, h, Color::from_rgb8(10, 20, 30))
@@ -428,6 +438,59 @@ mod tests {
         assert_eq!((back.w, back.h), (n.w, n.h));
         assert!((back.transform.x - n.transform.x).abs() < 1e-12);
         assert!((back.transform.y - n.transform.y).abs() < 1e-12);
+    }
+
+    /// A layer with constraints set, for the frame tests below.
+    fn pinned(id: &str, x: f64, y: f64, w: f64, h: f64, hp: HPin, vp: VPin) -> Node {
+        let mut n = Node::rect(id, x, y, w, h, Color::WHITE);
+        n.pin = (hp, vp);
+        n
+    }
+
+    fn at(root: &Node, id: &str) -> (f64, f64, f64, f64) {
+        let c = find(root, id).expect("child");
+        (c.transform.x, c.transform.y, c.w, c.h)
+    }
+
+    /// Dragging a frame's corner is a constraints resize: the layers inside
+    /// follow their pins, in the same undo entry as the frame itself.
+    #[test]
+    fn a_frame_hands_the_corner_drag_to_its_pinned_children() {
+        let mut f = Node::frame("f", 200.0, 100.0);
+        let right = pinned("right", 150.0, 0.0, 40.0, 20.0, HPin::Right, VPin::Top);
+        let foot = pinned("foot", 0.0, 70.0, 40.0, 20.0, HPin::Left, VPin::Bottom);
+        let band = pinned("band", 10.0, 10.0, 180.0, 10.0, HPin::StretchH, VPin::Top);
+        f.children = vec![right, foot, band];
+        let mut ed = Editor::new(f);
+        assert!(ed.resize_transformed("f", Corner::BottomRight, 300.0, 150.0, false, 1.0));
+        assert_eq!((ed.root.w, ed.root.h), (300.0, 150.0));
+        assert_eq!(at(&ed.root, "right"), (250.0, 0.0, 40.0, 20.0));
+        assert_eq!(at(&ed.root, "foot"), (0.0, 120.0, 40.0, 20.0));
+        assert_eq!(at(&ed.root, "band"), (10.0, 10.0, 280.0, 10.0));
+        // one undo, and the frame and its pinned layers go back together
+        ed.undo();
+        assert_eq!((ed.root.w, ed.root.h), (200.0, 100.0));
+        assert_eq!(at(&ed.root, "right"), (150.0, 0.0, 40.0, 20.0));
+        assert_eq!(at(&ed.root, "foot"), (0.0, 70.0, 40.0, 20.0));
+        assert_eq!(at(&ed.root, "band"), (10.0, 10.0, 180.0, 10.0));
+    }
+
+    /// A group is not a constraints container: its children keep their own
+    /// positions and the group's box just grows.
+    #[test]
+    fn a_group_drag_leaves_its_children_alone() {
+        let mut g = Node::group("g", 100.0, 100.0);
+        let kid = pinned("kid", 60.0, 60.0, 10.0, 10.0, HPin::Right, VPin::Bottom);
+        g.children = vec![kid];
+        let mut page = Node::frame("page", 800.0, 600.0);
+        page.children = vec![g];
+        let mut ed = Editor::new(page);
+        assert!(ed.resize_transformed("g", Corner::BottomRight, 200.0, 200.0, false, 1.0));
+        assert_eq!(
+            (ed.root.children[0].w, ed.root.children[0].h),
+            (200.0, 200.0)
+        );
+        assert_eq!(at(&ed.root, "kid"), (60.0, 60.0, 10.0, 10.0));
     }
 
     #[test]

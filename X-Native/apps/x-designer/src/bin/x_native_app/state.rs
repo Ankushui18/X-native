@@ -587,6 +587,7 @@ fn is_toggle_row(a: &Action) -> bool {
             | Action::ClipContent
             | Action::PaintLibToggle(_)
             | Action::FrameDropdown
+            | Action::ConstraintDropdown(_)
             | Action::ZoomMenu
             | Action::LhDropdown
             | Action::TextStyleDropdown
@@ -606,6 +607,53 @@ fn is_toggle_row(a: &Action) -> bool {
             | Action::Field(FieldId::FontFamily)
     )
 }
+
+/// The two axes Figma's Constraints block speaks in: one dropdown each, five
+/// answers each. The labels and pins are the table from the beginner course's
+/// "Frame presets and constraints" — the first dropdown manages the horizontal
+/// position, the second the vertical one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConstraintAxis {
+    Horizontal,
+    Vertical,
+}
+
+impl ConstraintAxis {
+    /// The row's label in the panel ("Horizontal" / "Vertical").
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Horizontal => "Horizontal",
+            Self::Vertical => "Vertical",
+        }
+    }
+
+    /// The menu's labels, in the order the dropdown lists them. The pin that
+    /// goes with each one lives in `CONSTRAINT_H` / `CONSTRAINT_V`.
+    pub fn labels(self) -> [&'static str; 5] {
+        match self {
+            Self::Horizontal => CONSTRAINT_H.map(|(label, _)| label),
+            Self::Vertical => CONSTRAINT_V.map(|(label, _)| label),
+        }
+    }
+}
+
+/// Figma's Constraints menu, horizontal axis: label + pin, in menu order.
+pub const CONSTRAINT_H: [(&str, x_native::HPin); 5] = [
+    ("Left", x_native::HPin::Left),
+    ("Right", x_native::HPin::Right),
+    ("Left & Right", x_native::HPin::StretchH),
+    ("Center", x_native::HPin::CenterH),
+    ("Scale", x_native::HPin::ScaleH),
+];
+
+/// Figma's Constraints menu, vertical axis.
+pub const CONSTRAINT_V: [(&str, x_native::VPin); 5] = [
+    ("Top", x_native::VPin::Top),
+    ("Bottom", x_native::VPin::Bottom),
+    ("Top & Bottom", x_native::VPin::StretchV),
+    ("Center", x_native::VPin::CenterV),
+    ("Scale", x_native::VPin::ScaleV),
+];
 
 /// Every interactive zone records one of these; `run.rs` dispatches them.
 #[derive(Clone, Debug, PartialEq)]
@@ -775,6 +823,11 @@ pub enum Action {
     RenameStart,
     // inspector
     FrameDropdown,
+    /// Open/close one axis of Figma's Constraints block (a layer inside a
+    /// frame). One flag for both axes: only one menu is ever open.
+    ConstraintDropdown(ConstraintAxis),
+    /// Constraints menu item: row index into `CONSTRAINT_H` / `CONSTRAINT_V`.
+    SetConstraint(ConstraintAxis, usize),
     /// Toggle the zoom menu (right-panel header; audit F4)
     ZoomMenu,
     /// Zoom-menu item: 0 in, 1 out, 2 100%, 3 selection, 4 fit
@@ -2116,6 +2169,12 @@ pub struct App {
     /// prototype flow preview (None = normal editing)
     pub flow: Option<FlowState>,
     pub dropdown_frame: bool,
+    /// Open axis of the Constraints block (`None` = closed)
+    pub dropdown_constraint: Option<ConstraintAxis>,
+    /// Screen anchor of the open Constraints field, recorded while the panel
+    /// paints: the panel scrolls, so a hard-coded offset would drift away
+    /// from the field it belongs to.
+    pub constraint_dd_anchor: (f64, f64),
     /// Zoom menu open (right-panel header, audit F4)
     pub dropdown_zoom: bool,
     /// Hover labels registered this frame (P10); paint_tooltip draws
@@ -2355,6 +2414,8 @@ impl App {
             field: None,
             flow: None,
             dropdown_frame: false,
+            dropdown_constraint: None,
+            constraint_dd_anchor: (0.0, 0.0),
             dropdown_zoom: false,
             tooltip: Vec::new(),
             dropdown_lh: false,

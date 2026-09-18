@@ -3640,6 +3640,7 @@ impl Host {
             if self.app.dropdown_frame {
                 self.app.dropdown_frame = false;
             }
+            self.app.dropdown_constraint = None;
             if self.app.dropdown_zoom {
                 self.app.dropdown_zoom = false;
             }
@@ -3693,6 +3694,7 @@ impl Host {
         if self.app.dropdown_frame {
             self.app.dropdown_frame = false;
         }
+        self.app.dropdown_constraint = None;
         if self.app.dropdown_zoom {
             self.app.dropdown_zoom = false;
         }
@@ -4799,7 +4801,10 @@ impl Host {
                         });
                     }
                     doc.editor().move_node(id, nx - tx, ny - ty);
-                    doc.editor().resize(id, nw, nh);
+                    // a frame inside the marquee hands the resize to its own
+                    // pinned layers (Figma's Constraints), same as a corner
+                    // drag of that frame on its own
+                    doc.editor().resize_with_constraints(id, nw, nh);
                 }
                 self.app.mark_dirty();
             }
@@ -6474,12 +6479,14 @@ impl Host {
                     || self.app.dropdown_zoom
                     || self.app.dropdown_lh
                     || self.app.dropdown_text_style
+                    || self.app.dropdown_constraint.is_some()
                     || self.app.paint_lib.is_some()
                 {
                     self.app.dropdown_frame = false;
                     self.app.dropdown_zoom = false;
                     self.app.dropdown_lh = false;
                     self.app.dropdown_text_style = false;
+                    self.app.dropdown_constraint = None;
                     self.app.paint_lib = None;
                 } else if self.app.screen == Screen::Editor {
                     // P12: an in-flight tree drag cancels first
@@ -9995,6 +10002,42 @@ impl Host {
                 });
             }
             Action::FrameDropdown => self.app.dropdown_frame = !self.app.dropdown_frame,
+            Action::ConstraintDropdown(axis) => {
+                // one menu at a time: the open axis is the state, and pressing
+                // the field again closes it
+                self.app.dropdown_constraint = if self.app.dropdown_constraint == Some(axis) {
+                    None
+                } else {
+                    Some(axis)
+                };
+            }
+            Action::SetConstraint(axis, row) => {
+                self.app.dropdown_constraint = None;
+                let Some(id) = self.app.doc_ref().selected_id() else {
+                    return;
+                };
+                let (hp, vp) = {
+                    let doc = self.app.doc();
+                    match crate::editor_ui::find_node(&doc.editor_ref().root, &id) {
+                        Some(n) => n.pin,
+                        None => return,
+                    }
+                };
+                let (hp, vp, label) = match axis {
+                    crate::state::ConstraintAxis::Horizontal => {
+                        let (label, hp) = crate::state::CONSTRAINT_H[row];
+                        (hp, vp, label)
+                    }
+                    crate::state::ConstraintAxis::Vertical => {
+                        let (label, vp) = crate::state::CONSTRAINT_V[row];
+                        (hp, vp, label)
+                    }
+                };
+                if self.app.doc().editor().set_pin(&id, hp, vp) {
+                    self.app.mark_dirty();
+                    self.app.status = format!("Constraint set: {label}");
+                }
+            }
             Action::ZoomMenu => self.app.dropdown_zoom = !self.app.dropdown_zoom,
             Action::ZoomStep(i) => {
                 self.app.dropdown_zoom = false;

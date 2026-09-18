@@ -5,6 +5,31 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-18 (Constraints)
+
+Figma's **Constraints** block — the beginner course's fourth chapter, "Frame presets and
+constraints" — is the two-dropdown table in the Design tab that decides how a layer
+answers the resize of the frame it sits in. The engine had the table
+(`x_editor::constraints::apply_constraints`, Phase 2.12) and one caller, the inspector's
+W/H fields; the canvas never answered it, and nothing in the app could set a pin.
+
+### Added
+- **The panel's CONSTRAINTS block** — one row per axis, Figma's five answers each
+  (Left / Right / Left & Right / Center / Scale, Top / Bottom / Top & Bottom / Center /
+  Scale), from the single table in `state.rs::CONSTRAINT_H` / `CONSTRAINT_V`; picking one
+  writes `Node::pin` through `Editor::set_pin` (undoable) and the block only appears for a
+  layer inside a frame, which is what the course describes.
+- **`x_editor::pin_deltas`** — the pin table as one solver, shared by both writers.
+- **`x_editor::pin_commands`** — the same solver as `Move`/`Resize` commands, so a frame's
+  corner drag carries its pinned layers inside the same undo entry.
+- **`Editor::resize_with_constraints`** — the resize the canvas uses (a multi-layer drag
+  included) when a frame is in the selection.
+
+### Changed
+- **`apply_constraints` recurses into nested frames only** — a child that actually
+  changed size hands the resize on to its own pinned children, and a group (which
+  resizes with its own contents) is refused, matching what Figma's table covers.
+
 ## [Unreleased] — 2026-09-18 (The Pencil tool)
 
 Figma's **Pencil (⇧P)** is a freehand stroke that lands as an editable vector path. The
