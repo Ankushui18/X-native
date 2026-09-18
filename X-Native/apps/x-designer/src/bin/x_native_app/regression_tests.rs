@@ -1663,15 +1663,18 @@ fn the_scale_panel_and_the_body_drag_scale_the_selection() {
     h.dispatch(Action::ScaleCell(99));
     assert_eq!(h.app.scale_cell, 8, "a stray cell clamps to the last one");
 
-    // a 100x100 rect on the page, clear of frame-1
-    let depth0 = h.app.doc_ref().editor_ref().undo_depth();
+    // a 100x100 rect on the page (space = Figma's "prevent nesting", so the
+    // panel's numbers below are page coordinates)
+    h.app.space_pan = true;
     h.finish_create(
         Tool::Rect,
         Point::new(500.0, 20.0),
         Point::new(600.0, 120.0),
     );
+    h.app.space_pan = false;
     let sel = h.app.doc_ref().editor_ref().selection.clone();
     h.app.tool = Tool::Scale;
+    let depth0 = h.app.doc_ref().editor_ref().undo_depth();
 
     // the multiplier, about the centre cell: it halves and stays centred
     h.dispatch(Action::ScaleCell(4));
@@ -1706,13 +1709,25 @@ fn the_scale_panel_and_the_body_drag_scale_the_selection() {
         (reg.canvas.y0 + reg.canvas.y1) / 2.0,
     );
     let centre = h.app.screen_to_world(Point::new(cx, cy));
+    h.app.space_pan = true;
     h.finish_create(
         Tool::Rect,
         Point::new(centre.x - 50.0, centre.y - 50.0),
         Point::new(centre.x + 50.0, centre.y + 50.0),
     );
+    h.app.space_pan = false;
     let sel = h.app.doc_ref().editor_ref().selection.clone();
     let depth1 = h.app.doc_ref().editor_ref().undo_depth();
+    // the box's far corner, in the space the drag will scale about
+    let (far_x0, far_y0, wide0) = {
+        let root = &h.app.doc_ref().editor_ref().root;
+        let before = find_node_clone(root, &sel[0]).expect("the fresh rect");
+        (
+            before.transform.x + before.w,
+            before.transform.y + before.h,
+            before.w,
+        )
+    };
     h.app.tool = Tool::Scale;
     let press = Point::new(centre.x - 30.0, centre.y - 30.0);
     h.on_press(h.app.world_to_screen(press));
@@ -1725,14 +1740,13 @@ fn the_scale_panel_and_the_body_drag_scale_the_selection() {
     h.on_release();
     let root = &h.app.doc_ref().editor_ref().root;
     let grown = find_node_clone(root, &sel[0]).expect("the dragged rect");
-    assert!(grown.w > 100.0, "the box grew: {}", grown.w);
+    assert!(grown.w > wide0, "the box grew: {}", grown.w);
     let square = (grown.w - grown.h).abs();
     assert!(square < 1e-6, "a scale keeps the ratio");
-    let far = (centre.x + 50.0, centre.y + 50.0);
     let far_x = grown.transform.x + grown.w;
     let far_y = grown.transform.y + grown.h;
-    assert!((far_x - far.0).abs() < 0.5, "the far corner stayed put");
-    assert!((far_y - far.1).abs() < 0.5, "the far corner stayed put");
+    assert!((far_x - far_x0).abs() < 0.5, "the far corner stayed put");
+    assert!((far_y - far_y0).abs() < 0.5, "the far corner stayed put");
     assert_eq!(h.app.doc_ref().editor_ref().undo_depth(), depth1 + 1);
     h.app.doc().editor().undo();
     let root = &h.app.doc_ref().editor_ref().root;
