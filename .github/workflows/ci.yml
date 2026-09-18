@@ -79,6 +79,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: X-Native
+          # Both jobs compile the same workspace; without a shared key each pays
+          # for its own cold build of wgpu/vello.
+          shared-key: x-native
 
       # `bash scripts/check.sh`, not `./scripts/check.sh`: the script is
       # committed 100644 (non-executable), so the direct form fails with
@@ -211,6 +214,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: X-Native
+          # Both jobs compile the same workspace; without a shared key each pays
+          # for its own cold build of wgpu/vello.
+          shared-key: x-native
 
       # Diagnostic only: when the adapter is missing, this line says which
       # drivers the loader can see, which is the difference between "no lavapipe"
@@ -218,8 +224,37 @@ jobs:
       - name: Vulkan adapter (diagnostic, never fatal)
         run: vulkaninfo --summary || true
 
+      # The output goes to a file and then into a PR comment: the raw step log is
+      # served from blob storage (unreachable from some tooling), so a panic here
+      # would otherwise be invisible to whoever has to fix it.
       - name: Opt-in GPU + screenshot tests
-        run: cargo test --workspace --locked -- --ignored
+        run: |
+          set +e
+          cargo test --workspace --locked -- --ignored > /tmp/visual.log 2>&1
+          status=$?
+          tail -c 6000 /tmp/visual.log || true
+          exit $status
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          number=$(gh pr list --head "$GITHUB_REF_NAME" --state open \
+                     --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$number" ] && [ -f /tmp/visual.log ]; then
+            {
+              echo "Screenshots job failed on \`${GITHUB_SHA:0:7}\` — the opt-in tests' own output:"
+              echo
+              echo '~~~'
+              grep -aE 'test .* FAILED|panicked at|^assertion|^ *left:|^ *right:|error(\[|:)|no adapter' \
+                /tmp/visual.log | head -60
+              echo '~~~'
+            } > /tmp/visual-comment.md
+            gh pr comment "$number" --body-file /tmp/visual-comment.md || true
+          fi
+          exit 0
 
       - name: Upload the screenshots (also when the tests fail)
         if: always()
