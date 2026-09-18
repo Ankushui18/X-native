@@ -367,40 +367,82 @@ function editorLeftPanel(tab = 'Layers', { pages = 3 } = {}) {
           .join('')}
       </div>`;
   } else if (tab === 'Assets') {
+    // Mirrors `paint_assets`: the faces the render stack knows, the two font
+    // actions, then the document's linked libraries (id + pinned version +
+    // the per-library "check" pill that opens the diff review).
     body = `
-      <div class="field"><span>Search assets</span><b class="kbd">\u2318F</b></div>
-      <div class="assethd">THIS FILE · 12</div>
-      <div class="assetgrid">
-        ${['image', 'image', 'component', 'component', 'sticky-note', 'frame']
-          .map((ic) => `<span class="asset">${icon(ic, 18)}</span>`)
-          .join('')}
-      </div>
-      <div class="assethd">LIBRARIES</div>
-      ${[
-        ['Design System', '142 components'],
-        ['Marketing kit', '38 components'],
-      ]
-        .map(
-          ([name, sub]) =>
-            `<div class="librow">${icon('component', 16)}<span><b>${esc(name)}</b><em>${esc(sub)}</em></span>${badge('linked', 'ok')}</div>`,
-        )
-        .join('')}`;
-  } else {
-    body = `
-      <div class="vars">
+      <div class="tree">
+        <div class="tree-h">FONTS</div>
         ${[
-          ['pipette', 'color/accent', T.palettes.graphite.accent, 'color'],
-          ['pipette', 'color/surface', T.palettes.graphite.surface, 'color'],
-          ['sliders-horizontal', 'space/4', '12', 'number'],
-          ['type', 'font/size/md', '13', 'string'],
+          ['Inter', 4],
+          ['Geist Mono', 2],
+          ['Source Serif', 1],
         ]
           .map(
-            ([ic, name, value, group]) =>
-              `<div class="var-row">${icon(ic, 14)}
-                <span class="vname">${esc(name)}</span><span class="vval">${esc(value)}</span></div>`,
+            ([fam, n]) =>
+              `<div class="lrow-plain"><span>${esc(n > 1 ? `${fam} (${n})` : fam)}</span></div>`,
           )
           .join('')}
-        <div class="var-hint">Variable edits are undoable (⌘Z) and rebind every instance.</div>
+        <div class="lbtn">Load Font…</div>
+        <div class="lbtn raised">Publish library…</div>
+        <div class="lnote">TTF / OTF / TTC; text layers can then use it by name</div>
+        <div class="tree-h">LIBRARIES</div>
+        ${[
+          ['design-system', 3],
+          ['marketing-kit', 2],
+        ]
+          .map(
+            ([id, ver]) => `<div class="librow">${icon('component', 14)}
+              <span class="lname">${esc(id)}</span>
+              <em class="lver">v${ver}</em><span class="check">check</span></div>`,
+          )
+          .join('')}
+      </div>`;
+  } else {
+    // Mirrors `paint_tokens`: the palette/type/spacing the document already
+    // paints with, the extract action, the four create-kind buttons and the
+    // variable rows (name slot + value slot + delete).
+    body = `
+      <div class="tree">
+        <div class="tree-h">X-NATIVE TOKENS</div>
+        ${[
+          ['text_primary', 12],
+          ['background', 8],
+          ['accent', 5],
+        ]
+          .map(
+            ([role, n]) =>
+              `<div class="tokrow"><span class="sw" style="background:var(--${role.replace('_', '-')})"></span><span class="tokhex">${esc(T.palettes.graphite[role])}</span><em>×${n}</em></div>`,
+          )
+          .join('')}
+        <div class="tree-h">TYPE SCALE</div>
+        <div class="lrow-plain mono">16 · 13 · 12 · 10</div>
+        <div class="lrow-plain mono dim">spacing: 12 · 8 · 6</div>
+        <div class="lbtn raised">Generate variables from tokens</div>
+        <div class="tree-h">NEW VARIABLE</div>
+        <div class="kindgrid">
+          ${['Color', 'Number', 'String', 'Boolean']
+            .map((k) => `<span class="lbtn">${k}</span>`)
+            .join('')}
+        </div>
+        <div class="tree-h">VARIABLES</div>
+        ${[
+          ['color/accent', T.palettes.graphite.accent, 'color'],
+          ['space/4', null, 'number'],
+          ['font/size/md', null, 'string'],
+        ]
+          .map(
+            ([name, sw, kind]) => `<div class="varrow">
+              ${
+                sw
+                  ? `<span class="sw" style="background:${sw}"></span>`
+                  : `<span class="sw letter">${{ number: 'N', string: 'S', color: 'C' }[kind]}</span>`
+              }
+              <span class="tokhex">${esc(name)}</span>${icon('x', 12)}</div>`,
+          )
+          .join('')}
+        <div class="lbtn raised">Undo variable edit (2)</div>
+        <div class="lbtn raised">Theme: Graphite (dark)</div>
       </div>`;
   }
   return at(RAIL, y0, LEFT, H - y0, pill + body, { class: 'panel left-panel' });
@@ -833,9 +875,10 @@ function ovColourPicker() {
 }
 
 function ovAppMenu() {
-  // Mirrors `paint_app_menu` in editor_ui.rs row for row: the three theme
-  // rows name the palettes (and tick the active one) instead of a single
-  // "Dark mode" row that cycled them, and Help reopens the welcome card.
+  // Mirrors `paint_app_menu` in editor_ui.rs row for row: the theme rows name
+  // the palettes (and tick the active one) instead of a single "Dark mode" row
+  // that cycled them, and Help reopens the welcome card. Two theme rows,
+  // because two palettes ship — the row index is what the app dispatches.
   const rows = [
     ['New file', '⌘N'],
     ['Open file…', '⌘O'],
@@ -851,7 +894,6 @@ function ovAppMenu() {
     ['—'],
     ['Theme: Graphite (dark)', '✓'],
     ['Theme: Daylight (light)', ''],
-    ['Theme: High Contrast', ''],
     ['—'],
     ['Welcome & shortcuts', '?'],
   ];
@@ -1118,9 +1160,9 @@ window.SCREENS = [
     group: 'Editor',
     name: 'Editor · Library',
     module: 'editor_ui.rs',
-    what: 'Left dock on LIBRARY: assets in this file, then linked libraries.',
+    what: 'Left dock on LIBRARY: the faces the render stack knows (Load Font…) and the libraries this document is linked to, each with its pinned version and a check pill.',
     note: 'The left tabs are STRUCTURE / LIBRARY / TOKENS — X-Native names its own model (scene graph, not a Figma clone).',
-    checks: ['LIBRARY', 'LIBRARIES', 'linked'],
+    checks: ['LIBRARY', 'FONTS', 'Load Font…', 'LIBRARIES', 'check'],
     render: () => editorScreen({ leftTab: 'Assets' }),
   },
   {
@@ -1128,9 +1170,9 @@ window.SCREENS = [
     group: 'Editor',
     name: 'Editor · Tokens',
     module: 'editor_ui.rs',
-    what: 'Left dock on TOKENS: the document variables, grouped by kind.',
+    what: 'Left dock on TOKENS: what the document already paints with (colours, type scale, spacing), the extract-to-variables action, the four create-kind buttons and every variable with its delete ✕.',
     note: 'Variable edits route through the undo log; the inspector shows the variable name beside any bound fill.',
-    checks: ['TOKENS', 'color/accent', 'undoable'],
+    checks: ['TOKENS', 'TYPE SCALE', 'NEW VARIABLE', 'VARIABLES'],
     render: () => editorScreen({ leftTab: 'Tokens' }),
   },
   {
@@ -1228,7 +1270,7 @@ window.SCREENS = [
     group: 'Overlays',
     name: 'App menu',
     module: 'editor_ui.rs',
-    what: `The hamburger menu, ${UI.appMenuW} wide: file actions, export, find, theme, preferences.`,
+    what: `The hamburger menu, ${UI.appMenuW} wide: file actions, export, find, the two theme rows, and the welcome card.`,
     note: 'Every row here is a real action; shortcuts are shown only where the app binds them.',
     checks: ['New file', 'Export as…', 'Theme: Graphite (dark)', 'Welcome & shortcuts'],
     render: () => editorScreen({ overlay: ovAppMenu() }),

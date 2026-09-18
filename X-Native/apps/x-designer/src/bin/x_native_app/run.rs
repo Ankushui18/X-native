@@ -6369,7 +6369,6 @@ impl Host {
                     | "Back to dashboard"
                     | "Theme: Graphite (dark)"
                     | "Theme: Daylight (light)"
-                    | "Theme: High Contrast"
             )
         {
             self.app.status = "Open a document to use this command".into();
@@ -6384,7 +6383,6 @@ impl Host {
             "Lint document" => self.cmd_lint(),
             "Theme: Graphite (dark)" => self.apply_theme(x_native::ui::ThemeId::Graphite),
             "Theme: Daylight (light)" => self.apply_theme(x_native::ui::ThemeId::Daylight),
-            "Theme: High Contrast" => self.apply_theme(x_native::ui::ThemeId::HighContrast),
             "Help: welcome & shortcuts" => self.dispatch(Action::ShowWelcome),
             "Preview prototype" => {
                 if self.app.flow.is_some() {
@@ -9461,10 +9459,11 @@ impl Host {
                     } // Find…
                     12 => self.apply_theme(x_native::ui::ThemeId::Graphite),
                     13 => self.apply_theme(x_native::ui::ThemeId::Daylight),
-                    14 => self.apply_theme(x_native::ui::ThemeId::HighContrast),
                     // Welcome & shortcuts — the first-launch card, on
-                    // demand (it used to be reachable exactly once, ever)
-                    16 => self.dispatch(Action::ShowWelcome),
+                    // demand (it used to be reachable exactly once, ever).
+                    // 15, not 16: the row ids are menu indices and the
+                    // retired High Contrast row sat between them.
+                    15 => self.dispatch(Action::ShowWelcome),
                     _ => {}
                 }
             }

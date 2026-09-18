@@ -96,8 +96,6 @@ Graphite (dark): 47 pair(s) checked, headroom 1.08×
   WCAG AA: all pairs pass
 Daylight (light): 47 pair(s) checked, headroom 1.06×
   WCAG AA: all pairs pass
-High Contrast: 47 pair(s) checked, headroom 1.67×
-  WCAG AA: all pairs pass
 ```
 
 Exit **4** if any pair falls below its floor — which is what makes "add a

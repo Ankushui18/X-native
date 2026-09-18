@@ -13,7 +13,7 @@
 //! ## Runtime themes
 //!
 //! The app paints through [`resolve`], which maps a Graphite-authored color
-//! onto the active palette ([`ThemeId::Daylight`], [`ThemeId::HighContrast`]).
+//! onto the active palette ([`ThemeId::Daylight`]).
 //! With the default theme active it is an atomic load and an early return, so
 //! there is no per-frame cost for the feature.
 

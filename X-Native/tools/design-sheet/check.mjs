@@ -51,7 +51,14 @@ const check = (name, ok, detail = '') => console.log(`${ok ? 'PASS' : 'FAIL'}  $
 check('no script errors', errors.length === 0, errors.join(' | '));
 const roles = d.querySelectorAll('#roles .role');
 check('palette sheet rendered', roles.length === 24, `${roles.length} roles`);
-check('three themes offered', d.querySelectorAll('#themes button').length === 3);
+// the sheet offers exactly what the crate ships: `ThemeId::ALL` is two, and
+// the retired high-contrast palette is gone from tokens.json as well
+check('two themes offered', d.querySelectorAll('#themes button').length === 2);
+check(
+  'the sheet ships no retired palette',
+  !('hc' in window.TOKENS.palettes) && Object.keys(window.TOKENS.palettes).length === 2,
+  Object.keys(window.TOKENS.palettes).join(', '),
+);
 check('theme switch repaints', (() => {
   d.querySelector('#themes button[data-theme=daylight]').click();
   const hex = d.querySelector('#roles .chip').style.background;
@@ -222,12 +229,12 @@ check(
   'colour swatches are live (theme-aware)',
   (() => {
     const before = d.querySelector('#colornames .swatch').getAttribute('style');
-    d.querySelector('#themes button[data-theme=hc]').click();
+    d.querySelector('#themes button[data-theme=daylight]').click();
     const after = d.querySelector('#colornames .swatch').getAttribute('style');
     d.querySelector('#themes button[data-theme=graphite]').click();
     return before !== after;
   })(),
-  'HC swatch differs from Graphite',
+  'Daylight swatch differs from Graphite',
 );
 const used = new Set(
   [...`${html}${appJs}`.matchAll(/var\(--([a-z0-9-]+)\)/g)].map((m) => m[1]),

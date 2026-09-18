@@ -10,6 +10,38 @@ are the crate versions in `Cargo.toml`, which still drift (see
 Part of the UI/UX Refinement v1 milestone (see
 [docs/REFINEMENT_V1_PLAN.md](docs/REFINEMENT_V1_PLAN.md)).
 
+### Removed
+- **High Contrast is gone — the product ships two palettes.** The owner asked
+  for "just graphite and day mode", so the third palette is *deleted*, not
+  hidden: `ThemeId::HighContrast`, `ColorTokens::HIGH_CONTRAST`, the
+  `DesignSystem::high_contrast` flag and `high_contrast()` constructors, the
+  context-menu row, the command-palette verb, the CLI's sample output and the
+  design sheet's swatch/`hc` tokens. `ThemeId::ALL` is `[Graphite, Daylight]`,
+  `parse`/`next`/`label`/`slug` walk those two, and `check.mjs` fails the build
+  if a retired palette ever reappears in `tokens.json`. A settings file written
+  by an older build (`~/.config/x-native/theme` = `high-contrast`) parses to
+  `None` and falls back to Graphite rather than resolving to a palette that no
+  longer exists. `crates/x-ui`, `apps/x-designer`, `tools/design-sheet`, docs.
+
+### Fixed
+- **Daylight: chrome that was inked as if it were dark.** Twelve sites painted
+  a fill and an ink that only agreed in Graphite; the worst were an icon on an
+  accent *wash* (white on a pale tint, 1.42:1 in Daylight), a black glyph on a
+  solid accent fill (2.49:1) and an `accent_ink` glyph on the accent itself
+  (1.09:1 — invisible). Each now names the role its fill implies: wash →
+  `C_ACCENT_INK` (6.49:1), solid accent → `C_ON_ACCENT` (8.42:1), hover fills →
+  `C_FIELD_2`. Full table in
+  [docs/FIXES_2026-09-18_THEMES_AND_LEFT_RAIL.md](docs/FIXES_2026-09-18_THEMES_AND_LEFT_RAIL.md).
+- **The left rail: every row's text and glyphs on the row's centre line.** The
+  rail placed labels and icons by hand-computed offsets, and a third of them
+  were a fraction of a pixel to several pixels off the middle of the row they
+  belong to (the DRAFTS glyph sat on its box's bottom edge, the LAYERS label
+  2.5px below the two buttons beside it, the PAGES `+` 0.7px low, a page glyph
+  2px right of its thumbnail's centre, the search-field ✕ 2px low). The rail now
+  derives every vertical placement from the box that contains it
+  (`paint::line_top` / `glyph_top` / `glyph_left`, `paint.rs:210-229`), and
+  the values are pinned by `paint::centring_tests`. `apps/x-designer`.
+
 ### Added
 - **The engine renders what the inspector edits — for every text property.**
   `TextBlockStyle` (and therefore every shaped cache key) gains `max_lines`,

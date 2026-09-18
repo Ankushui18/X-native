@@ -202,6 +202,30 @@ pub fn elev_shadow(s: &mut Scene, r: Rect, radius: f64, elev: x_native::ui::Elev
 /// Every vertical placement in the ui/ HTML derives from it.
 pub const CSS_LH: f64 = 1.5;
 
+/// Top of a `size`-tall box centred in a `height`-tall row. The chrome's own
+/// version of `align-items: center`: a row 20 tall with a 12px glyph starts
+/// it at 4, a row 26 tall with a 16.5px line box at 4.75 — written as a call
+/// rather than as the number, because a hand-computed centring offset is
+/// exactly the kind of literal that drifts when the row height changes.
+pub fn centre_in(size: f64, height: f64) -> f64 {
+    (height - size) / 2.0
+}
+
+/// Top of a one-line text box of `size` (CSS line-height) centred in `r`.
+pub fn line_top(r: Rect, size: f64) -> f64 {
+    r.y0 + centre_in(size * CSS_LH, r.height())
+}
+
+/// Top of a `size`-tall glyph centred in `r` (an icon has no line box).
+pub fn glyph_top(r: Rect, size: f64) -> f64 {
+    r.y0 + centre_in(size, r.height())
+}
+
+/// Left of a `size`-wide glyph centred in `r`.
+pub fn glyph_left(r: Rect, size: f64) -> f64 {
+    r.x0 + centre_in(size, r.width())
+}
+
 /// Weight of a chrome label (Inter 400/500/600 per the HTML); `Mono`
 /// routes to JetBrains Mono (W/H/X/Y values, hex codes, percentages).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -671,5 +695,47 @@ mod cache_tests {
             ui.measure("cached", 12.0, Wt::Reg),
             ui.measure("cached", 12.01, Wt::Reg)
         );
+    }
+}
+
+#[cfg(test)]
+mod centring_tests {
+    use super::*;
+
+    /// The chrome's rows put text and glyphs on a common centre line by
+    /// arithmetic, not by hand. These are the numbers the left rail paints at
+    /// (the LAYERS tree row and a 26px page row), pinned here so a change to
+    /// the helpers cannot silently shift the panel: the placement helpers and
+    /// the rows they place into have to be checked together.
+    #[test]
+    fn a_glyph_and_a_label_share_the_row_middle() {
+        let row = Rect::new(0.0, 10.0, 100.0, 10.0 + 22.0); // tree row
+        // a 12px glyph in a 22px row starts 5px in, not on the top edge
+        assert_eq!(glyph_top(row, ICON_XS), 15.0);
+        // an 11px label carries a 16.5px line box (CSS preflight), so its top
+        // is 2.75px into the row — the number the tree rows paint at
+        assert_eq!(T11 * CSS_LH, 16.5);
+        assert_eq!(line_top(row, T11), 12.75);
+        // both boxes are centred on the same line
+        assert_eq!(
+            glyph_top(row, ICON_XS) + ICON_XS / 2.0,
+            line_top(row, T11) + T11 * CSS_LH / 2.0
+        );
+    }
+
+    #[test]
+    fn a_glyph_centres_in_its_own_button_and_in_the_row_it_sits_in() {
+        // the 14×18 hover button beside a layer row: a 12px glyph is 1 in
+        // from the left and 3 down from the button top
+        let chip = Rect::new(0.0, 10.0, 14.0, 10.0 + 18.0);
+        assert_eq!(glyph_left(chip, ICON_XS), 1.0);
+        assert_eq!(glyph_top(chip, ICON_XS), 13.0);
+        // an 18px thumbnail box centred in a 26px page row, with a 12px page
+        // glyph centred inside it — 7px from the row top
+        let row = Rect::new(0.0, 10.0, 120.0, 10.0 + 26.0);
+        let thumb_top = row.y0 + centre_in(18.0, row.height());
+        assert_eq!(thumb_top, 14.0);
+        assert_eq!(thumb_top + centre_in(ICON_XS, 18.0), 17.0);
+        assert_eq!(thumb_top + centre_in(ICON_XS, 18.0) - row.y0, 7.0);
     }
 }

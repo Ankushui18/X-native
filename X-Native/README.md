@@ -72,22 +72,22 @@ record is the one that has actually been executed.
 Interface color is a set of 22 semantic roles in
 [`crates/x-ui/src/design_system.rs`](crates/x-ui/src/design_system.rs) —
 surfaces, text levels, accent fills, label-on-fill, selection and focus
-indicators, state colors — instantiated as three palettes: **Graphite** (dark,
-the default), **Daylight** (light, for shared screens and bright rooms) and
-**High Contrast** (pure black, maximum separation). The application paints
+indicators, state colors — instantiated as two palettes: **Graphite** (dark,
+the default) and **Daylight** (light, for shared screens and bright rooms).
+The application paints
 through them: `theme::resolve` maps a Graphite-authored chrome color onto the
 active palette at draw time, so switching repaints every panel, row and label —
 and leaves what you drew alone, because artwork, smart guides and watermarks are
 not roles.
 
-Switch it from the TOKENS panel button, or `⌘K` → `Theme: Daylight (light)` /
-`Theme: High Contrast`. What keeps the light and high-contrast palettes honest
-is an audit, not a vibe: every text role is measured against every surface it can
+Switch it from the TOKENS panel button, the ticked rows in the app menu, or
+`⌘K` → `Theme: Daylight (light)`. What keeps the palettes honest is an audit,
+not a vibe: every text role is measured against every surface it can
 land on (plus labels on accent fills, and the 3:1 floor for non-text indicators)
 using the WCAG 2.1 contrast formula.
 
 ```bash
-x_native theme audit                      # all three palettes, exit 4 on failure
+x_native theme audit                      # both palettes, exit 4 on failure
 x_native theme audit --theme daylight --json
 x_native theme tokens --theme daylight -o ui-tokens.json   # import as variables
 ```

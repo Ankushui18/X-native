@@ -117,7 +117,10 @@ fn paint_template_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Acti
         // all center on the same line.
         let chip = Rect::new(row.x0 + 12.0, ry + 12.0, row.x0 + 44.0, ry + 44.0);
         fill_rrect(s, chip, R_ROW, C_ACCENT_MUTED);
-        draw_icon(s, icon, chip.x0 + 8.0, chip.y0 + 8.0, ICON_MD, C_ON_ACCENT);
+        // ink on a *wash* is accent_ink, not on_accent: the wash is a pale
+        // tint in Daylight, where white type is invisible (on_accent is the
+        // label on a *solid* accent fill)
+        draw_icon(s, icon, chip.x0 + 8.0, chip.y0 + 8.0, ICON_MD, C_ACCENT_INK);
         // the row is as wide as the window; keep the copy clear of the CTA
         let text_w = (row.x1 - 76.0) - (row.x0 + 58.0) - 12.0;
         let name = app.fonts.truncate(name, T13, Wt::Med, text_w);
@@ -737,7 +740,8 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         // top 147.5) is untouched — 10px above the chip, 10px below the copy.
         let ib = Rect::new(cx + 17.0, dy + 157.5, cx + 49.0, dy + 189.5);
         fill_rrect(s, ib, R_ROW, C_ACCENT_MUTED);
-        draw_icon(s, icon, ib.x0 + 8.0, ib.y0 + 8.0, ICON_MD, C_ON_ACCENT);
+        // wash fill → accent_ink (see the template rows above)
+        draw_icon(s, icon, ib.x0 + 8.0, ib.y0 + 8.0, ICON_MD, C_ACCENT_INK);
         // title box top 189.5 (+42), sub top 209 (+61.5). The slot is fluid
         // (`cw` is derived from the window: 274 at 1440, 159 at the 980
         // minimum), so both lines are measured against it — at the reference

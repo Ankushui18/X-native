@@ -319,6 +319,24 @@ body {
 .vname { flex: 1; font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
 .vval { color: var(--text-dim); font-size: 11px; }
 .var-hint { font-size: 10.5px; color: var(--text-dim); padding: 6px 2px 0; line-height: 1.5; }
+/* Library / Tokens band rows, mirroring paint_assets / paint_tokens: a 16px
+   font row, a 26px action button, a 20px library/variable row. */
+.lrow-plain { height: 16px; display: flex; align-items: center; font-size: 10.5px; color: var(--text-primary); }
+.lrow-plain.mono { font-family: ui-monospace, Menlo, monospace; }
+.lrow-plain.dim { color: var(--text-dim); }
+.lnote { font-size: 10.5px; color: var(--text-dim); padding: 4px 0 6px; }
+.lbtn { height: 26px; display: grid; place-items: center; margin-top: 8px; border: 1px solid var(--border-strong); border-radius: 6px; font-size: 10.5px; font-weight: 500; color: var(--text-primary); }
+.lbtn.raised { background: var(--surface-active); }
+.librow .lname { flex: 1; font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+.librow .lver { color: var(--text-dim); font-family: ui-monospace, Menlo, monospace; }
+.librow .check { width: 50px; height: 16px; display: grid; place-items: center; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--surface-elevated); font-size: 10.5px; }
+.kindgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; }
+.tokrow, .varrow { height: 20px; display: flex; align-items: center; gap: 8px; font-size: 10.5px; }
+.tokrow em, .varrow em { margin-left: auto; font-style: normal; color: var(--text-dim); }
+.tokrow .sw { width: 12px; height: 12px; border-radius: 4px; border: 1px solid var(--border-strong); flex: none; }
+.varrow .sw { width: 10px; height: 10px; border-radius: 4px; border: 1px solid var(--border-strong); flex: none; }
+.varrow .sw.letter { display: grid; place-items: center; font-size: 10px; color: var(--text-dim); }
+.tokhex { font-family: ui-monospace, Menlo, monospace; color: var(--text-primary); }
 .win .canvas { background: var(--canvas); overflow: hidden; position: absolute; }
 .artboard { position: absolute; left: 240px; top: 120px; width: 420px; height: 420px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px; }
 .ab-name { position: absolute; top: -20px; left: 0; font-size: 10.5px; color: var(--text-dim); }

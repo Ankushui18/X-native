@@ -51,11 +51,10 @@ function boot() {
     : '';
   el('dim').textContent = `${WINW}×${AU.window.default[1]}`;
 
-  // theme switch — the same three palettes the app ships
+  // theme switch — the same two palettes the app ships
   el('themes').innerHTML = [
     ['graphite', 'Graphite'],
     ['daylight', 'Daylight'],
-    ['hc', 'High contrast'],
   ]
     .map(
       ([id, label]) =>

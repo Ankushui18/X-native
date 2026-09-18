@@ -76,7 +76,7 @@ check(
   [...d.querySelectorAll('#nav-list a')].every((a) => d.getElementById(a.dataset.target)),
   `${d.querySelectorAll('#nav-list a').length} links`,
 );
-check('theme switch offers three palettes', d.querySelectorAll('#themes button').length === 3);
+check('theme switch offers two palettes', d.querySelectorAll('#themes button').length === 2);
 check(
   'theme switch repaints a screen',
   (() => {

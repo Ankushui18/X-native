@@ -16,7 +16,10 @@ const hx = (r, g, b) => '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0
 
 // ---- palettes -------------------------------------------------------------
 const palettes = {};
-for (const [name, id] of [['GRAPHITE', 'graphite'], ['DAYLIGHT', 'daylight'], ['HIGH_CONTRAST', 'hc']]) {
+// two palettes ship; a third `pub const X: Self = Self { … }` in the source
+// would be read here automatically only if it were listed — `check.mjs`
+// pins the count the sheet offers against `ThemeId::ALL`.
+for (const [name, id] of [['GRAPHITE', 'graphite'], ['DAYLIGHT', 'daylight']]) {
   const start = ds.indexOf(`pub const ${name}: Self = Self {`);
   const body = ds.slice(start, ds.indexOf('};', start));
   const roles = {};

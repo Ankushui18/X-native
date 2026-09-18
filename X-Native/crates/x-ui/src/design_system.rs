@@ -153,34 +153,6 @@ impl ColorTokens {
         on_danger: [0xff, 0xff, 0xff],
     };
 
-    /// Pure black with maximum separation, for low-vision users.
-    pub const HIGH_CONTRAST: Self = Self {
-        background: [0x00, 0x00, 0x00],
-        canvas: [0x00, 0x00, 0x00],
-        surface: [0x0a, 0x0a, 0x0a],
-        surface_elevated: [0x14, 0x14, 0x14],
-        surface_hover: [0x1f, 0x1f, 0x1f],
-        surface_active: [0x2a, 0x2a, 0x2a],
-        border: [0x8a, 0x8a, 0x8a],
-        border_strong: [0xc8, 0xc8, 0xc8],
-        text_primary: [0xff, 0xff, 0xff],
-        text_secondary: [0xe6, 0xe6, 0xe6],
-        text_dim: [0xd0, 0xd0, 0xd0],
-        text_placeholder: [0xb8, 0xb8, 0xb8],
-        accent: [0xff, 0xd4, 0x00],
-        accent_hover: [0xff, 0xe0, 0x4a],
-        accent_active: [0xe6, 0xbd, 0x00],
-        accent_ink: [0xff, 0xeb, 0x3b],
-        on_accent: [0x00, 0x00, 0x00],
-        selection: [0xff, 0xeb, 0x3b],
-        focus_ring: [0xff, 0xff, 0x00],
-        success: [0x7f, 0xff, 0x9f],
-        warning: [0xff, 0xe0, 0x8a],
-        danger: [0xff, 0xa3, 0xa3],
-        danger_fill: [0xff, 0x9a, 0x8f],
-        on_danger: [0x00, 0x00, 0x00],
-    };
-
     /// Look a role up by name (an entry of [`COLOR_ROLES`]).
     pub fn role(&self, name: &str) -> Option<[u8; 3]> {
         Some(match name {
@@ -216,7 +188,6 @@ impl ColorTokens {
         match id {
             crate::theme::ThemeId::Graphite => Self::GRAPHITE,
             crate::theme::ThemeId::Daylight => Self::DAYLIGHT,
-            crate::theme::ThemeId::HighContrast => Self::HIGH_CONTRAST,
         }
     }
 
@@ -265,9 +236,6 @@ impl ColorTokens {
         [to[0], to[1], to[2], c[3]]
     }
 
-    pub const fn high_contrast() -> Self {
-        Self::HIGH_CONTRAST
-    }
 }
 
 impl Default for ColorTokens {
@@ -773,7 +741,6 @@ pub struct DesignSystem {
     /// Which palette these tokens came from.
     pub theme_id: crate::theme::ThemeId,
     pub scale: f64, // Global UI scale (accessibility)
-    pub high_contrast: bool,
     pub reduced_motion: bool,
 }
 
@@ -791,7 +758,6 @@ impl Default for DesignSystem {
             motion: MotionScale::default(),
             theme_id: crate::theme::ThemeId::Graphite,
             scale: 1.0,
-            high_contrast: false,
             reduced_motion: false,
         }
     }
@@ -803,7 +769,6 @@ impl DesignSystem {
         Self {
             colors: ColorTokens::for_theme(id),
             theme_id: id,
-            high_contrast: id == crate::theme::ThemeId::HighContrast,
             ..Default::default()
         }
     }
@@ -812,12 +777,6 @@ impl DesignSystem {
     pub fn set_theme(&mut self, id: crate::theme::ThemeId) {
         self.colors = ColorTokens::for_theme(id);
         self.theme_id = id;
-        self.high_contrast = id == crate::theme::ThemeId::HighContrast;
-    }
-
-    /// Create high contrast version
-    pub fn high_contrast() -> Self {
-        Self::with_theme(crate::theme::ThemeId::HighContrast)
     }
 
     /// Apply scale factor to a value
@@ -869,7 +828,6 @@ impl From<&DesignSystem> for Theme {
             id: ds.theme_id,
             colors: ds.colors,
             scale: ds.scale,
-            high_contrast: ds.high_contrast,
             reduced_motion: ds.reduced_motion,
         }
     }
@@ -1063,13 +1021,13 @@ mod tests {
         // the accessibility knobs travel with the system, not with the theme
         assert_eq!(ds.scale, 1.0);
         assert!(!ds.reduced_motion);
-        let hc = DesignSystem::high_contrast();
-        assert!(hc.high_contrast);
-        assert_eq!(hc.theme_id, crate::theme::ThemeId::HighContrast);
+        let light = DesignSystem::with_theme(crate::theme::ThemeId::Daylight);
+        assert_eq!(light.theme_id, crate::theme::ThemeId::Daylight);
+        assert_eq!(light.colors, ColorTokens::DAYLIGHT);
         // and the legacy `Theme` view agrees with it (one-way conversion)
-        let t: crate::Theme = (&hc).into();
-        assert!(t.high_contrast);
-        assert_eq!(t.id, hc.theme_id);
+        let t: crate::Theme = (&light).into();
+        assert_eq!(t.id, light.theme_id);
+        assert_eq!(t.colors, light.colors);
     }
 
     #[test]

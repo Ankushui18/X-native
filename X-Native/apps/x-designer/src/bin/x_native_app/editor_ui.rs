@@ -1637,9 +1637,11 @@ fn paint_app_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let mw = APP_MENU_WIDTH;
     // P14: every item is wired — file items route to the same commands as
     // their shortcuts; items without an implementation were removed.
-    // The three theme rows name the palettes and tick the active one: the
-    // old single "Dark mode" row *cycled* them, so a click meant to switch
-    // the app to dark could land on Daylight.
+    // The theme rows name the palettes and tick the active one: the old
+    // single "Dark mode" row *cycled* them, so a click meant to switch the
+    // app to dark could land on Daylight. Two rows, because two palettes
+    // ship — the index of every row below is what `AppMenuItem` dispatches,
+    // so a row removed here is a row removed in `run.rs` too.
     let active = crate::theme::active_theme();
     let tick = move |id: x_native::ui::ThemeId| -> &'static str {
         if active == id {
@@ -1663,7 +1665,6 @@ fn paint_app_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         ("", "", false), // separator
         ("Theme: Graphite (dark)", tick(x_native::ui::ThemeId::Graphite), true),
         ("Theme: Daylight (light)", tick(x_native::ui::ThemeId::Daylight), true),
-        ("Theme: High Contrast", tick(x_native::ui::ThemeId::HighContrast), true),
         ("", "", false), // separator
         ("Welcome & shortcuts", "?", true),
     ];
@@ -1743,7 +1744,7 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         s,
         "search",
         search_r.x0 + 6.0,
-        search_r.y0 + 5.0,
+        glyph_top(search_r, ICON_SM),
         ICON_SM,
         C_DIM,
     );
@@ -1769,7 +1770,7 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
     app.fonts.text(
         s,
         search_r.x0 + 24.0,
-        search_r.y0 + 4.0,
+        line_top(search_r, T11),
         &query,
         T11,
         qc,
@@ -1787,7 +1788,7 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         app.fonts.text(
             s,
             search_r.x1 - 60.0 - mtw,
-            search_r.y0 + 5.0,
+            line_top(search_r, T10),
             &match_text,
             T10,
             C_DIM,
@@ -1806,12 +1807,19 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
             search_r.x1 - 4.0,
             search_r.y1 - 2.0,
         );
-        draw_icon(s, "chevron-up", prev_r.x0, prev_r.y0 + 2.0, ICON_XS, C_DIM);
+        draw_icon(
+            s,
+            "chevron-up",
+            glyph_left(prev_r, ICON_XS),
+            glyph_top(prev_r, ICON_XS),
+            ICON_XS,
+            C_DIM,
+        );
         draw_icon(
             s,
             "chevron-down",
-            next_r.x0,
-            next_r.y0 + 2.0,
+            glyph_left(next_r, ICON_XS),
+            glyph_top(next_r, ICON_XS),
             ICON_XS,
             C_DIM,
         );
@@ -1822,7 +1830,14 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
     }
     // Close button
     let close_r = Rect::new(fx + fw - 20.0, fy + 2.0, fx + fw - 4.0, fy + 18.0);
-    draw_icon(s, "x", close_r.x0 + 4.0, close_r.y0 + 4.0, ICON_XS, C_DIM);
+    draw_icon(
+        s,
+        "x",
+        glyph_left(close_r, ICON_XS),
+        glyph_top(close_r, ICON_XS),
+        ICON_XS,
+        C_DIM,
+    );
     tip(app, close_r, "Close find & replace");
     hit.push((close_r, Action::CloseFind));
 
@@ -1854,7 +1869,7 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         app.fonts.text(
             s,
             replace_r.x0 + 8.0,
-            replace_r.y0 + 4.0,
+            line_top(replace_r, T11),
             &rep_text,
             T11,
             rc,
@@ -1870,7 +1885,7 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         app.fonts.text(
             s,
             repl_all_r.x0 + 6.0,
-            repl_all_r.y0 + 3.0,
+            line_top(repl_all_r, T10),
             "Replace all",
             T10,
             C_TEXT,
@@ -1883,7 +1898,7 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         app.fonts.text(
             s,
             repl_r.x0 + 6.0,
-            repl_r.y0 + 3.0,
+            line_top(repl_r, T10),
             "Replace",
             T10,
             C_TEXT,
@@ -1906,7 +1921,7 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
     app.fonts.text(
         s,
         case_r.x0 + 2.0,
-        case_r.y0,
+        line_top(case_r, 9.0),
         "Aa",
         9.0,
         if app.find_replace.case_sensitive {
@@ -2045,23 +2060,22 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     // x-offset: sidebar starts at nav_bar_w (old code assumed x=0)
     let sx = sidebar.x0;
 
-    // DRAFTS header
-    fill_rrect(
+    // DRAFTS header — one 16px box; the glyph and the label's line box are
+    // both centred in it instead of being hand-placed (the glyph used to sit
+    // on the box's bottom edge).
+    let dbox = Rect::new(sx + 12.0, y0 + 12.0, sx + 28.0, y0 + 28.0);
+    fill_rrect(s, dbox, R_SM, C_FIELD);
+    stroke_rrect(s, dbox, R_SM, C_LINE, 1.0);
+    draw_icon(
         s,
-        Rect::new(sx + 12.0, y0 + 12.0, sx + 28.0, y0 + 28.0),
-        R_SM,
-        C_FIELD,
+        "box",
+        glyph_left(dbox, ICON_XS),
+        glyph_top(dbox, ICON_XS),
+        ICON_XS,
+        C_DIM,
     );
-    stroke_rrect(
-        s,
-        Rect::new(sx + 12.0, y0 + 12.0, sx + 28.0, y0 + 28.0),
-        R_SM,
-        C_LINE,
-        1.0,
-    );
-    draw_icon(s, "box", sx + 16.0, y0 + 16.0, ICON_XS, C_DIM);
     app.fonts
-        .micro_label(s, sx + 36.0, y0 + 13.3, "DRAFTS", C_DIM, Wt::Med);
+        .micro_label(s, sx + 36.0, line_top(dbox, T10), "DRAFTS", C_DIM, Wt::Med);
 
     // file name row (editable) — the mock's file-name-text, independent
     // from the active tab name
@@ -2072,6 +2086,9 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             d.dirty,
         )
     };
+    // One 23.5px row (75…98.5): the line box, the draft dot and the pencil
+    // all centre on its middle — the offsets below are row-relative, not
+    // eyeballed (row centre = ny + 8.75).
     let ny = y0 + 42.0; // name text box top 78
     let nr = Rect::new(sx + 8.0, ny - 3.0, lw - 8.0, ny + 20.5);
     if app.field.as_ref().map(|f| f.id) == Some(FieldId::DocName) {
@@ -2090,19 +2107,26 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             1.0,
         );
         app.fonts
-            .text(s, sx + 18.0, ny, &editing, T11, C_TEXT, Wt::Med);
+            .text(s, sx + 18.0, line_top(nr, T11), &editing, T11, C_TEXT, Wt::Med);
     } else {
         if hover(app, nr) {
             // .editable:hover — bg #1A1A1A, border #2A2A2A, radius 4
             fill_rrect(s, nr, R_SM, C_FIELD);
             stroke_rrect(s, nr, R_SM, C_LINE_2, 1.0);
         }
-        circle(s, sx + 15.0, ny + 8.3, 3.0, C_DRAFT_DOT);
+        circle(s, sx + 15.0, nr.center().y, 3.0, C_DRAFT_DOT);
         let shown = app.fonts.truncate(&name, T11, Wt::Med, lw - 24.0 - 40.0);
         app.fonts
-            .text(s, sx + 26.0, ny, &shown, T11, C_TEXT, Wt::Med);
+            .text(s, sx + 26.0, line_top(nr, T11), &shown, T11, C_TEXT, Wt::Med);
         if hover(app, nr) {
-            draw_icon(s, "pencil", lw - 25.0, ny + 2.3, ICON_XS, C_DIM);
+            draw_icon(
+                s,
+                "pencil",
+                lw - 25.0,
+                glyph_top(nr, ICON_XS),
+                ICON_XS,
+                C_DIM,
+            );
         }
     }
     hit.push((nr, Action::RenameStart));
@@ -2193,13 +2217,25 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         return;
     }
 
+    // LIBRARY and TOKENS own the band below the pill tabs. They used to be
+    // painted *under* the pages band — at an absolute x = 12, i.e. over the
+    // nav rail, and 50px lower than the tab strip — so the PAGES list, the
+    // LAYERS header and the tree all landed on top of them. One band at a
+    // time now: the tab picks the content, and the content starts where the
+    // Layers tab's first section label starts.
     let y = y0 + 120.5; // PAGES label top 156.5
-
-    if app.doc().left_tab == LeftTab::Assets {
-        paint_assets(app, s, hit, y0 + 108.0, lw);
-    }
-    if app.doc().left_tab == LeftTab::Tokens {
-        paint_tokens(app, s, hit, y0 + 108.0, lw);
+    match app.doc().left_tab {
+        LeftTab::Assets => {
+            paint_assets(app, s, hit, y, sx, lw);
+            app.page_field_rect = None;
+            return;
+        }
+        LeftTab::Tokens => {
+            paint_tokens(app, s, hit, y, sx, lw);
+            app.page_field_rect = None;
+            return;
+        }
+        LeftTab::Layers => {}
     }
 
     // PAGES section — a real page LIST (viewport audit P2): every page is
@@ -2208,8 +2244,17 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     // fixed single field) and the LAYERS band below anchors to its bottom.
     app.fonts
         .micro_label(s, sx + 12.0, y, "PAGES", C_DIM, Wt::Med);
-    let addp = Rect::new(lw - 25.0, y + 0.8, lw - 13.0, y + 12.8);
-    draw_icon(s, "plus", addp.x0, y + 0.8, ICON_XS, C_DIM);
+    // the add button is exactly one line box tall, so its glyph centres on
+    // the PAGES label it sits beside
+    let addp = Rect::new(lw - 26.0, y, lw - 14.0, y + T10 * CSS_LH);
+    draw_icon(
+        s,
+        "plus",
+        glyph_left(addp, ICON_XS),
+        glyph_top(addp, ICON_XS),
+        ICON_XS,
+        C_DIM,
+    );
     tip(app, addp, "Add page");
     hit.push((addp, Action::AddPage));
 
@@ -2228,7 +2273,7 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             }
             let more = format!("+{} more", page_count - 3);
             app.fonts
-                .text(s, sx + 41.0, r.y0 + 5.2, &more, T11, C_DIM, Wt::Reg);
+                .text(s, sx + 41.0, line_top(r, T11), &more, T11, C_DIM, Wt::Reg);
             continue;
         }
         let active = page_i == cur_page;
@@ -2248,8 +2293,8 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             draw_icon(
                 s,
                 "file",
-                sx + 21.0,
-                r.y0 + 7.0,
+                glyph_left(thumb, ICON_XS),
+                glyph_top(thumb, ICON_XS),
                 ICON_XS,
                 if active { C_TEXT } else { C_DIM },
             );
@@ -2268,18 +2313,30 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         if field_id == Some(FieldId::PageName) && active {
             let editing = app.field.as_ref().unwrap().buffer.clone();
             app.fonts
-                .text(s, sx + 41.0, r.y0 + 5.2, &editing, T11, C_TEXT, Wt::Reg);
+                .text(s, sx + 41.0, line_top(r, T11), &editing, T11, C_TEXT, Wt::Reg);
             hit.push((r, Action::Field(FieldId::PageName)));
         } else {
             let max_nw = (r.x1 - sx - 41.0 - 26.0).max(16.0);
             let shown = app.fonts.truncate(&page_label, T11, Wt::Reg, max_nw);
             let shown_color = if active { C_TEXT } else { C_MUTED };
             app.fonts
-                .text(s, sx + 41.0, r.y0 + 5.2, &shown, T11, shown_color, Wt::Reg);
+                .text(s, sx + 41.0, line_top(r, T11), &shown, T11, shown_color, Wt::Reg);
         }
         if !active && hover(app, r) && page_count > 1 {
-            let tr = Rect::new(lw - 30.0, r.y0 + 5.0, lw - 12.0, r.y0 + 21.0);
-            draw_icon(s, "trash-2", tr.x0, r.y0 + 6.0, ICON_XS, C_DIM);
+            let tr = Rect::new(
+                lw - 30.0,
+                r.y0 + centre_in(16.0, r.height()),
+                lw - 12.0,
+                r.y0 + centre_in(16.0, r.height()) + 16.0,
+            );
+            draw_icon(
+                s,
+                "trash-2",
+                glyph_left(tr, ICON_XS),
+                glyph_top(tr, ICON_XS),
+                ICON_XS,
+                C_DIM,
+            );
             tip(app, tr, "Delete page");
             hit.push((tr, Action::DeletePage(page_i)));
         }
@@ -2291,23 +2348,41 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let band_bottom = app.pages_band_bottom();
     hline(s, sx, lw, band_bottom + 12.0, C_LINE);
     let ly = band_bottom + 25.0;
+    // One 16px header row holds the label and both buttons, so all three share
+    // a centre line; the label used to sit 2.5px lower than the buttons it is
+    // in line with (it was placed by top edge, not centre).
+    let hrow = Rect::new(sx + 12.0, ly - 3.0, lw, ly + 13.0);
     app.fonts
-        .micro_label(s, sx + 12.0, ly, "LAYERS", C_DIM, Wt::Med);
+        .micro_label(s, sx + 12.0, line_top(hrow, T10), "LAYERS", C_DIM, Wt::Med);
     // F8: the search icon was dead — it opens the tree search field
-    let srch = Rect::new(lw - 28.0, ly - 3.0, lw - 12.0, ly + 13.0);
+    let srch = Rect::new(lw - 28.0, hrow.y0, lw - 12.0, hrow.y1);
     if hover(app, srch) {
         fill_rrect(s, srch, R_SM, C_FIELD_2);
     }
-    draw_icon(s, "search", lw - 25.0, ly, ICON_XS, C_DIM);
+    draw_icon(
+        s,
+        "search",
+        glyph_left(srch, ICON_XS),
+        glyph_top(srch, ICON_XS),
+        ICON_XS,
+        C_DIM,
+    );
     tip(app, srch, "Search layers");
     hit.push((srch, Action::Field(FieldId::TreeSearch)));
     // F6: collapse-all (Figma parity) — the selection's ancestors stay
     // open; it sits left of search
-    let cpl = Rect::new(lw - 46.0, ly - 3.0, lw - 30.0, ly + 13.0);
+    let cpl = Rect::new(lw - 46.0, hrow.y0, lw - 30.0, hrow.y1);
     if hover(app, cpl) {
         fill_rrect(s, cpl, R_SM, C_FIELD_2);
     }
-    draw_icon(s, "chevrons-down", lw - 43.0, ly, ICON_XS, C_DIM);
+    draw_icon(
+        s,
+        "chevrons-down",
+        glyph_left(cpl, ICON_XS),
+        glyph_top(cpl, ICON_XS),
+        ICON_XS,
+        C_DIM,
+    );
     tip(app, cpl, "Collapse all layers");
     hit.push((cpl, Action::CollapseAllLayers));
 
@@ -2318,7 +2393,14 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     if search_open {
         let sr = Rect::new(sx + 4.0, ly + 12.0, sx + lw - 4.0, ly + 12.0 + 24.0);
         input_box(app, s, sr, 6.0);
-        draw_icon(s, "search", sr.x0 + 8.0, sr.y0 + 6.0, ICON_XS, C_DIM);
+        draw_icon(
+            s,
+            "search",
+            sr.x0 + 8.0,
+            glyph_top(sr, ICON_XS),
+            ICON_XS,
+            C_DIM,
+        );
         let q = if app.field.as_ref().map(|f| f.id) == Some(FieldId::TreeSearch) {
             app.field.as_ref().unwrap().buffer.clone()
         } else {
@@ -2329,12 +2411,19 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                 .fonts
                 .truncate(&q, T11, Wt::Reg, (sr.width() - 40.0).max(16.0));
             app.fonts
-                .text(s, sr.x0 + 26.0, sr.y0 + 6.5, &shown, T11, C_TEXT, Wt::Reg);
+                .text(s, sr.x0 + 26.0, line_top(sr, T11), &shown, T11, C_TEXT, Wt::Reg);
             let clr = Rect::new(sr.x1 - 20.0, sr.y0 + 2.0, sr.x1 - 6.0, sr.y1 - 2.0);
             if hover(app, clr) {
                 fill_rrect(s, clr, R_SM, C_FIELD_2);
             }
-            draw_icon(s, "x", clr.x0 + 2.0, clr.y0 + 2.0, ICON_XS, C_DIM);
+            draw_icon(
+                s,
+                "x",
+                glyph_left(clr, ICON_XS),
+                glyph_top(clr, ICON_XS),
+                ICON_XS,
+                C_DIM,
+            );
             hit.push((clr, Action::TreeSearchClear));
         }
         hit.push((sr, Action::Field(FieldId::TreeSearch)));
@@ -2417,12 +2506,19 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                     "chevron-right"
                 };
                 let cr = Rect::new(ix, r.y0, ix + 14.0, r.y1);
-                draw_icon(s, chev, ix + 1.0, r.y0 + 5.0, ICON_XS, C_DIM);
+                draw_icon(
+                    s,
+                    chev,
+                    glyph_left(cr, ICON_XS),
+                    glyph_top(cr, ICON_XS),
+                    ICON_XS,
+                    C_DIM,
+                );
                 Some(cr)
             } else {
                 None
             };
-            draw_icon(s, row.icon, ix + 14.0, r.y0 + 5.0, ICON_XS, C_DIM);
+            draw_icon(s, row.icon, ix + 14.0, glyph_top(r, ICON_XS), ICON_XS, C_DIM);
             let nx = ix + 14.0 + 12.0 + 4.0;
             let max_nw = lw - 8.0 - nx - 8.0;
             let shown = app
@@ -2431,7 +2527,7 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             app.fonts.text(
                 s,
                 nx,
-                r.y0 + (TREE_ROW_H - T11 * CSS_LH) / 2.0,
+                line_top(r, T11),
                 &shown,
                 T11,
                 if selected { C_TEXT } else { C_ZINC_400 },
@@ -2450,8 +2546,8 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                 draw_icon(
                     s,
                     if hidden { "eye-off" } else { "eye" },
-                    ey.x0 + 1.0,
-                    r.y0 + 5.0,
+                    glyph_left(ey, ICON_XS),
+                    glyph_top(ey, ICON_XS),
                     ICON_XS,
                     if hidden { C_TEXT } else { C_DIM },
                 );
@@ -2463,8 +2559,8 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                 draw_icon(
                     s,
                     "lock",
-                    lr.x0 + 1.0,
-                    r.y0 + 5.0,
+                    glyph_left(lr, ICON_XS),
+                    glyph_top(lr, ICON_XS),
                     ICON_XS,
                     if locked { C_TEXT } else { C_DIM },
                 );
@@ -4788,7 +4884,16 @@ fn paint_design(
                     R_SM,
                     if hover(app, clrb) { C_LINE_2 } else { C_FIELD },
                 );
-                draw_icon(s, "x", clrb.x0 + 5.0, clrb.y0 + 4.0, ICON_XS, C_DIM);
+                draw_icon(
+                    s,
+                    "x",
+                    clrb.x0 + 5.0,
+                    clrb.y0 + 4.0,
+                    ICON_XS,
+                    // C_DIM on the hover fill is 2.9:1 in Daylight (below the
+                    // 3:1 floor for a glyph); text_primary reads in both
+                    if hover(app, clrb) { C_TEXT } else { C_DIM },
+                );
                 hit.push((clrb, Action::SlotClear(sname.clone())));
                 y += 26.0;
             }
@@ -5635,7 +5740,7 @@ fn paint_paint_row(
         pd.x0 + 5.0,
         pd.y0 + 5.0,
         ICON_SM,
-        if drop_armed { C_TEXT } else { C_DIM },
+        if drop_armed { C_ON_ACCENT } else { C_DIM },
     );
     tip(app, pd, "Eyedropper: sample a layer's fill / stroke");
     hit.push((pd, Action::EnableEyedropper(!is_fill)));
@@ -5653,7 +5758,9 @@ fn paint_paint_row(
         lr.y0 + 5.0,
         ICON_SM,
         if lib_open {
-            C_ACCENT_INK
+            // solid selection fill → the palette's on_accent ink; accent_ink
+            // is the ink for accent on a *surface*, and washed out here
+            C_ON_ACCENT
         } else if bound {
             C_TEXT
         } else {
@@ -6111,7 +6218,10 @@ fn paint_paint_library(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action
                 let r = Rect::new(dd.x0 + 4.0, y, dd.x1 - 4.0, y + LIB_ITEM_H);
                 let hov = hover(app, r);
                 if hov || active {
-                    fill_rrect(s, r, R_SM, if hov { C_FIELD_2 } else { C_SEL });
+                    // hover = raised surface; bound = selection *wash*, not
+                    // the solid selection colour: that is near-black in
+                    // Daylight, and the label on it disappears
+                    fill_rrect(s, r, R_SM, if hov { C_FIELD_2 } else { C_SEL_WASH });
                 }
                 let mut tx = r.x0 + 10.0;
                 if let Some(c) = swatch {
@@ -6207,7 +6317,11 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             r.x0 + (TOOL_ICON - 16.0) / 2.0,
             r.y0 + (TOOL_ICON - 16.0) / 2.0,
             ICON_MD,
-            if active { C_BLACK } else { C_DIM },
+            // the active chip is *inverted*: fill text_primary, ink
+            // background — the same pair the dashboard's primary button
+            // uses. A literal black ink vanished on Daylight, whose
+            // text_primary is near-black.
+            if active { C_BG } else { C_DIM },
         );
         let sc = t.shortcut_hint(app.is_board());
         let tl = if sc.is_empty() {
@@ -6304,9 +6418,13 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
                 let reg = app.editor_regions();
                 if by + 16.0 <= reg.canvas.y1 {
                     let br = Rect::new(cx - bw / 2.0, by, cx + bw / 2.0, by + 16.0);
-                    fill_rrect(s, br, R_SM, C_SEL);
+                    // accent + on_accent: the audited label-on-fill pair
+                    // (5.4:1 Graphite, 8.4:1 Daylight). text_primary on the
+                    // selection colour was 4.0:1 in Graphite and 2.0:1 in
+                    // Daylight — a drag readout you cannot read.
+                    fill_rrect(s, br, R_SM, C_ACCENT);
                     app.fonts
-                        .text(s, br.x0 + 6.0, by + 0.5, &label, 10.0, C_TEXT, Wt::Mono);
+                        .text(s, br.x0 + 6.0, by + 0.5, &label, 10.0, C_ON_ACCENT, Wt::Mono);
                 }
             }
         }
@@ -6788,10 +6906,6 @@ pub fn palette_commands() -> Vec<Command> {
             shortcut: "",
         },
         Command {
-            label: "Theme: High Contrast",
-            shortcut: "",
-        },
-        Command {
             label: "Preview prototype",
             shortcut: "⌘ ⏎",
         },
@@ -7264,7 +7378,7 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
                 pill,
                 label,
                 T10,
-                if c.resolved { C_MUTED } else { C_SEL },
+                if c.resolved { C_MUTED } else { C_ACCENT_INK },
                 Wt::Med,
                 true,
             );
@@ -7310,7 +7424,7 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
             );
             stroke_rrect(s, rbtn, R_MD, C_LINE_2, 1.0);
             app.fonts
-                .text_center(s, rbtn, "Reply", T10, C_SEL, Wt::Med, true);
+                .text_center(s, rbtn, "Reply", T10, C_ACCENT_INK, Wt::Med, true);
         }
     }
     // the composer (new comment)
@@ -7367,10 +7481,13 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
             card.y0 + 58.0,
         );
         let hov_p = hover(app, post);
-        fill_rrect(s, post, R_MD, if hov_p { C_SEL } else { C_PANEL });
+        // outline button: the accent is the *border* and the ink, never a
+        // fill behind its own colour (hovering used to fill it solid and
+        // paint the label in the same purple — the word "Post" vanished)
+        fill_rrect(s, post, R_MD, if hov_p { C_FIELD_2 } else { C_PANEL });
         stroke_rrect(s, post, R_MD, C_SEL, 1.0);
         app.fonts
-            .text_center(s, post, "Post", T10, C_SEL, Wt::Med, true);
+            .text_center(s, post, "Post", T10, C_ACCENT_INK, Wt::Med, true);
         // author dot anchored at the pin
         s.fill(
             vello::peniko::Fill::NonZero,
@@ -8424,9 +8541,21 @@ fn paint_lib_review(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>)
     hit.push((keep, Action::LibReviewClose));
 }
 
-fn paint_assets(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0: f64, lw: f64) {
-    let x0 = 12.0;
-    let mut y = y0 + 160.5;
+/// The LIBRARY tab's band: the faces the render stack knows, then the
+/// document's linked libraries. `y0` is the first section label's line box
+/// and `sx` the left dock's left edge — the band is *inside* the dock, so
+/// every x is dock-relative (it used to be a window-absolute 12, which put
+/// the whole panel on top of the nav rail).
+fn paint_assets(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    y0: f64,
+    sx: f64,
+    lw: f64,
+) {
+    let x0 = sx + 12.0;
+    let mut y = y0;
     app.fonts.micro_label(s, x0, y, "FONTS", C_DIM, Wt::Med);
     y += 18.0;
     let fams = app.fonts.fonts.families();
@@ -8513,11 +8642,11 @@ fn paint_assets(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
             draw_icon(s, "component", x0 + 3.0, row_t + 4.0, ICON_XS, C_MUTED);
             let label = app.fonts.truncate(id, T10, Wt::Med, lw - 92.0);
             app.fonts
-                .text(s, x0 + 20.0, row_t + 3.0, &label, T10, C_TEXT, Wt::Med);
+                .text(s, x0 + 20.0, line_top(hover_r, T10), &label, T10, C_TEXT, Wt::Med);
             let vs = format!("v{ver}");
             let vw2 = app.fonts.measure(&vs, T10, Wt::Mono);
             app.fonts
-                .text(s, lw - 74.0 - vw2, row_t + 3.0, &vs, T10, C_MUTED, Wt::Mono);
+                .text(s, lw - 74.0 - vw2, line_top(hover_r, T10), &vs, T10, C_MUTED, Wt::Mono);
             // "check" — picks the updated .xlib and opens the diff review
             let cb = Rect::new(lw - 66.0, row_t + 2.0, lw - 16.0, row_t + 18.0);
             fill_rrect(s, cb, R_SM, if hover(app, cb) { C_LINE_2 } else { C_FIELD });
@@ -8530,10 +8659,19 @@ fn paint_assets(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
 
 // ————————————————————————————————————————— tokens panel (design audit)
 
-fn paint_tokens(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0: f64, lw: f64) {
+/// The TOKENS tab's band: what the document already paints with. Same
+/// dock-relative rule as [`paint_assets`].
+fn paint_tokens(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    y0: f64,
+    sx: f64,
+    lw: f64,
+) {
     use crate::paint::{fill_rrect, stroke_rrect, Wt};
-    let x0 = 12.0;
-    let mut y = y0 + 160.5;
+    let x0 = sx + 12.0;
+    let mut y = y0;
     app.var_value_rects.clear();
     app.var_name_rects.clear();
     app.fonts
@@ -8556,7 +8694,13 @@ fn paint_tokens(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
         y += 18.0;
     }
     for (hex, count) in tokens.colors.iter().take(7) {
-        let sw = Rect::new(x0 + 4.0, y + 1.0, x0 + 16.0, y + 13.0);
+        // the 12px swatch centres on the 15px line box it labels
+        let sw = Rect::new(
+            x0 + 4.0,
+            y + centre_in(ICON_XS, T10 * CSS_LH),
+            x0 + 16.0,
+            y + centre_in(ICON_XS, T10 * CSS_LH) + ICON_XS,
+        );
         if let Some(c) = x_native::parse_hex_color(hex) {
             fill_rrect(s, sw, R_SM, c);
             stroke_rrect(s, sw, R_SM, C_LINE_2, 1.0);
@@ -8564,8 +8708,9 @@ fn paint_tokens(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
         app.fonts.text(s, x0 + 24.0, y, hex, T10, C_TEXT, Wt::Mono);
         let cnt = format!("×{count}");
         let cw = app.fonts.measure(&cnt, T10, Wt::Reg);
+        // the count rides the same baseline as the hex it counts
         app.fonts
-            .text(s, lw - 12.0 - cw, y + 1.6, &cnt, T10, C_MUTED, Wt::Reg);
+            .text(s, lw - 12.0 - cw, y, &cnt, T10, C_MUTED, Wt::Reg);
         y += 18.0;
     }
     if !tokens.font_sizes.is_empty() {
@@ -8603,7 +8748,9 @@ fn paint_tokens(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
         .unwrap_or(0);
     y += 2.0;
     let br = Rect::new(x0, y, lw - 12.0, y + 26.0);
-    let hov = hover(app, br);
+    // nothing to extract = a disabled control: it keeps its resting fill on
+    // hover (a hover wash also dropped the muted label to 3.05:1 in Daylight)
+    let hov = hover(app, br) && !tokens.colors.is_empty();
     fill_rrect(s, br, R_MD, if hov { C_LINE_2 } else { C_FIELD_2 });
     stroke_rrect(s, br, R_MD, C_LINE_2, 1.0);
     app.fonts.text_center(
@@ -8639,7 +8786,11 @@ fn paint_tokens(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
         (VariableKind::String, "String"),
         (VariableKind::Boolean, "Boolean"),
     ];
-    let bw = (lw - 16.0) / 2.0;
+    // both buttons live inside the dock's 12px insets: (right - left - gap)/2.
+    // `lw` is the dock's right edge, so the width cannot be derived from it
+    // alone — the old `(lw - 16) / 2` assumed a dock that started at x = 0
+    // and pushed the right column 48px past the panel edge.
+    let bw = ((lw - 12.0) - x0 - 4.0) / 2.0;
     for (i, (kind, label)) in kinds.into_iter().enumerate() {
         let bx = x0 + (i % 2) as f64 * (bw + 4.0);
         let by = y + (i / 2) as f64 * 30.0;
@@ -8740,7 +8891,7 @@ fn paint_tokens(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
         };
         let nw = app.fonts.measure(&name_shown, T10, Wt::Med);
         app.fonts
-            .text(s, x0 + 18.0, row_t + 3.0, &name_shown, T10, C_TEXT, Wt::Med);
+            .text(s, x0 + 18.0, line_top(hover_r, T10), &name_shown, T10, C_TEXT, Wt::Med);
         let nr = Rect::new(
             x0 + 16.0,
             row_t + 1.0,
@@ -8771,7 +8922,7 @@ fn paint_tokens(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
         app.fonts.text(
             s,
             lw - 66.0 - vvw,
-            row_t + 3.0,
+            line_top(hover_r, T10),
             &shown,
             T10,
             if editing_this { C_TEXT } else { C_MUTED },
