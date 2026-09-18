@@ -126,10 +126,26 @@ not selecting the elements in the right panel"*. The audit behind the fixes
   and a press inside the text field you are already editing moves the caret
   instead of re-opening the field and discarding the typed buffer
   (`pressing_inside_the_open_text_field_keeps_what_was_typed`). The parity
-  contract moves those rows from *open* to *pinned*: **19 pinned, 7 open**, and the
-  open list still names what is not built — ⌥⌘A select-matching-layers, the
-  per-frame "Show name" switch, presentation mode, the Section title pill, instance
-  internals, label stripping on export, and the status row.
+  contract moves those rows from *open* to *pinned*.
+- **⌥⌘A selects matching layers, and the rule is Figma's.** The shortcut this
+  app documented was ⇧⌥⌘M while the variant's own comment claimed Figma's ⌥⌘A,
+  so ⌥⌘A now works (⇧⌥⌘M stays as an alias). The rule underneath was
+  kind + child-count + dimensions, which matched any two same-sized frames and
+  missed the matching layer in a frame that had been resized: it is now the same
+  layer **by name and by place in the structure**, scoped the way Figma scopes it
+  — a layer inside a **Section** only matches layers in that section, and a
+  page's own top-level layer is inside no frame or group to match across
+  (`find_matching_nodes`; `select_matching_finds_the_same_layer_and_never_crosses_a_section`,
+  `select_matching_never_crosses_a_section_boundary`,
+  `option_command_a_selects_the_matching_layer_in_the_other_frame`).
+- **⇧⏎ no longer selects the page.** Figma's layer walk — ⏎ child, ⇧⏎ parent,
+  ⇥/⇧⇥ sibling — walked one step too far: from a top-level object the parent is
+  the PAGE, so the page root became the selection and the inspector then
+  described the canvas instead of a layer
+  (`enter_tab_and_shift_enter_walk_the_layers_the_way_figma_documents`).
+- The parity contract is now **24 pinned, 4 open**, and the open list is exactly
+  what is still not built: the per-frame "Show name" switch, presentation mode,
+  the Section title pill, and the canvas status row.
 - **The audit** — root causes, a Figma-vs-X-Native behaviour table with sources,
   and the honest list of what is still open.
 

@@ -6069,6 +6069,12 @@ impl Host {
                         self.dispatch(Action::SelectMatching);
                         return;
                     }
+                    // Figma's own binding for Select matching layers is ⌥⌘A;
+                    // ⇧⌥⌘M above stays as the alias this app shipped with.
+                    "a" | "A" if self.app.alt => {
+                        self.dispatch(Action::SelectMatching);
+                        return;
+                    }
                     "c" | "C" if self.app.alt => {
                         self.dispatch(Action::CopyProperties);
                         return;
@@ -10298,10 +10304,17 @@ impl Host {
                     }
                 };
                 match matched {
-                    Some(ids) if !ids.is_empty() => {
+                    Some(ids) if ids.len() > 1 => {
                         let count = ids.len();
                         self.app.doc().editor().selection = ids;
                         self.app.status = format!("Selected {count} matching layers");
+                    }
+                    Some(_) => {
+                        // a page's top-level layer, or one whose container holds
+                        // no counterpart: Figma matches an object inside a frame
+                        // or group
+                        self.app.status =
+                            "No matching layers in the other frames and groups".into();
                     }
                     _ => {
                         self.app.status = "Select exactly one layer to find matching".into();
@@ -10460,7 +10473,13 @@ impl Host {
                 let parent = {
                     let editor = self.app.doc().editor();
                     match editor.selection.len() {
-                        1 => editor.get_parent_id(&editor.selection[0].clone()),
+                        1 => editor
+                            .get_parent_id(&editor.selection[0].clone())
+                            // the page is not a layer: Figma walks up to the
+                            // top-level object and stops there. Without this the
+                            // page root became the selection, and the inspector
+                            // then described the canvas instead of a layer.
+                            .filter(|p| *p != editor.root.id),
                         _ => None,
                     }
                 };

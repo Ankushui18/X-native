@@ -2814,23 +2814,103 @@ impl Editor {
         ids
     }
 
-    /// Find all nodes that match the structure of the given node
+    /// Figma's "matching objects": the SAME layer — by name and by its place in
+    /// the structure — as it exists in the other frames and groups of the same
+    /// scope. "Matching objects are identical layers that exist across more than
+    /// one frame or group", and identity is a name, not a size: a search bar that
+    /// was resized in one frame still matches. (This used to compare kind, child
+    /// count and dimensions, which matched any two same-sized frames and missed
+    /// the matching layer in a frame that had been resized.)
+    ///
+    /// Scope follows Figma as well: a layer inside a **Section** only matches
+    /// layers in that section ("Objects with sections can only match with other
+    /// objects in that section"), otherwise it matches across the page's
+    /// top-level frames and groups. The template itself is included, so the
+    /// selection is never empty for a layer that has a container to match in; a
+    /// top-level layer (nothing to match within) returns itself alone.
+    ///
+    /// Names are the identity, so the first name+kind match at each step of the
+    /// path wins when one container holds two layers with the same name.
     pub fn find_matching_nodes(&self, template: &Node) -> Vec<&Node> {
-        let mut matches = Vec::new();
-        fn find_matches<'a>(node: &'a Node, template: &Node, matches: &mut Vec<&'a Node>) {
-            // Compare structure (kind, children count, dimensions)
-            if std::mem::discriminant(&node.kind) == std::mem::discriminant(&template.kind)
-                && node.children.len() == template.children.len()
-                && (node.w - template.w).abs() < 0.1
-                && (node.h - template.h).abs() < 0.1
-            {
-                matches.push(node);
+        /// The chain of nodes from the root down to `id`, inclusive.
+        fn chain_to<'a>(node: &'a Node, id: &str, out: &mut Vec<&'a Node>) -> bool {
+            if node.id == id {
+                out.push(node);
+                return true;
             }
             for child in &node.children {
-                find_matches(child, template, matches);
+                if chain_to(child, id, out) {
+                    out.push(node);
+                    return true;
+                }
+            }
+            false
+        }
+        /// The first child matching each `(name, kind)` step, then one level down.
+        fn resolve<'a>(
+            container: &'a Node,
+            path: &[(&str, std::mem::Discriminant<NodeKind>)],
+        ) -> Option<&'a Node> {
+            let mut cursor = container;
+            for (name, kind) in path {
+                cursor = cursor
+                    .children
+                    .iter()
+                    .find(|c| c.name == *name && std::mem::discriminant(&c.kind) == *kind)?;
+            }
+            Some(cursor)
+        }
+
+        let mut chain = Vec::new();
+        if !chain_to(&self.root, &template.id, &mut chain) {
+            return Vec::new();
+        }
+        chain.reverse(); // root .. template
+        if chain.len() < 3 {
+            // a top-level layer: Figma asks for "an object inside a frame or
+            // group", and a page's own objects have nothing to match across
+            return vec![template];
+        }
+        // The template's container, and the section that scopes the match: each
+        // Section on the chain moves the container one level down, to the
+        // section's own child that holds the template.
+        let mut own_from = 1;
+        let mut section: Option<&Node> = None;
+        for (i, node) in chain.iter().take(chain.len() - 1).enumerate() {
+            if matches!(node.kind, NodeKind::Section) {
+                own_from = i + 1;
+                section = Some(*node);
             }
         }
-        find_matches(&self.root, template, &mut matches);
+        // Figma's precondition, verbatim: "Select an object inside a frame or
+        // group." A page's top-level layer, or a frame sitting directly in a
+        // Section, has no container to be matched across, and an empty relative
+        // path would otherwise make every container a "match".
+        let parent = chain[chain.len() - 2];
+        if !matches!(parent.kind, NodeKind::Frame { .. } | NodeKind::Group) {
+            return vec![template];
+        }
+        let own_container = chain[own_from];
+        let path: Vec<(&str, std::mem::Discriminant<NodeKind>)> = chain[own_from + 1..]
+            .iter()
+            .map(|n| (n.name.as_str(), std::mem::discriminant(&n.kind)))
+            .collect();
+        let containers: &[Node] = match section {
+            Some(s) => &s.children,
+            None => &self.root.children,
+        };
+        let mut matches = vec![template];
+        for container in containers {
+            if container.id == own_container.id {
+                continue;
+            }
+            if !matches!(container.kind, NodeKind::Frame { .. } | NodeKind::Group) {
+                continue;
+            }
+            if let Some(found) = resolve(container, &path) {
+                matches.push(found);
+            }
+        }
         matches
     }
 

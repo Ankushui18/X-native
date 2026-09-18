@@ -286,6 +286,83 @@ mod tests {
         assert_eq!(hit_test(&d, Point::new(105.0, 110.0)), None); // original spot now empty
     }
 
+    /// A page with two top-level frames that each hold the same two layers —
+    /// the shape Figma's "matching objects" is about (a search bar, a title).
+    fn two_frames(extra: Node) -> Node {
+        let layer = |id: &str, name: &str| {
+            let mut n = Node::rect(id, 10.0, 20.0, 80.0, 40.0, Color::WHITE);
+            n.name = name.into();
+            n
+        };
+        let left = Node::frame("Left", 200.0, 200.0)
+            .child(layer("l-title", "Title"))
+            .child(layer("l-body", "Body"));
+        let mut right = Node::frame("Right", 200.0, 200.0)
+            .child(layer("r-title", "Title"))
+            .child(layer("r-body", "Body"));
+        right.transform.x = 300.0;
+        Node::frame("page", 800.0, 600.0)
+            .child(left)
+            .child(right)
+            .child(extra)
+    }
+
+    /// Figma's Select matching layers: the same layer in the page's other frames
+    /// and groups — matched by name and place, not by size.
+    #[test]
+    fn select_matching_finds_the_same_layer_and_never_crosses_a_section() {
+        let extra = Node::rect("loose", 0.0, 400.0, 40.0, 40.0, Color::BLACK);
+        let e = Editor::new(two_frames(extra));
+        let template = e.get_node("l-title").unwrap().clone();
+        let matched: Vec<String> = e
+            .find_matching_nodes(&template)
+            .into_iter()
+            .map(|n| n.id.clone())
+            .collect();
+        assert_eq!(
+            matched,
+            vec!["l-title".to_string(), "r-title".to_string()],
+            "one Title per frame, matched by name and place"
+        );
+        let loose = e.get_node("loose").unwrap().clone();
+        assert_eq!(
+            e.find_matching_nodes(&loose).len(),
+            1,
+            "a page's own top-level layer is inside no frame or group to match across"
+        );
+    }
+
+    #[test]
+    fn select_matching_never_crosses_a_section_boundary() {
+        let heading = |id: &str| {
+            let mut n = Node::rect(id, 10.0, 10.0, 80.0, 40.0, Color::WHITE);
+            n.name = "Heading".into();
+            n
+        };
+        let s1 = Node::frame("S1", 200.0, 200.0).child(heading("s1-heading"));
+        let mut s2 = Node::frame("S2", 200.0, 200.0).child(heading("s2-heading"));
+        s2.transform.x = 250.0;
+        let mut outside = Node::frame("Outside", 200.0, 200.0).child(heading("o-heading"));
+        outside.transform.y = 300.0;
+        let mut band = Node::section("Band", 700.0, 300.0);
+        band.name = "Band".into();
+        let doc = Node::frame("page", 800.0, 800.0)
+            .child(band.child(s1).child(s2))
+            .child(outside);
+        let e = Editor::new(doc);
+        let template = e.get_node("s1-heading").unwrap().clone();
+        let matched: Vec<String> = e
+            .find_matching_nodes(&template)
+            .into_iter()
+            .map(|n| n.id.clone())
+            .collect();
+        assert_eq!(
+            matched,
+            vec!["s1-heading".to_string(), "s2-heading".to_string()],
+            "the same Heading in the section's other frame, and nothing outside it"
+        );
+    }
+
     #[test]
     fn marquee_selects_intersecting() {
         let mut e = Editor::new(doc());

@@ -3086,6 +3086,79 @@ fn canvas_host() -> Host {
 /// selection, and a *second* Shift-click on the same layer removes it again
 /// ("Click an object a second time while holding Shift to remove it from the
 /// current selection"). A plain click still replaces the whole selection.
+/// Figma binds Select matching layers to ⌥⌘A (the variant's doc comment said so
+/// while the only binding was ⇧⌥⌘M), and the rule is Figma's: the same layer —
+/// by name and place, not by size — in the other frames of the scope.
+#[test]
+fn option_command_a_selects_the_matching_layer_in_the_other_frame() {
+    let mut h = canvas_host();
+    let layer = |id: &str, x: f64| {
+        let mut n = Node::rect(id, x, 20.0, 80.0, 40.0, Color::WHITE);
+        n.name = "Title".into();
+        n
+    };
+    let left = Node::frame("left", 200.0, 200.0)
+        .child(layer("l-title", 10.0))
+        .child(layer("l-body", 10.0));
+    let mut right = Node::frame("right", 200.0, 200.0).child(layer("r-title", 10.0));
+    right.transform.x = 300.0;
+    h.app.doc().editor().root = Node::frame("page", 800.0, 600.0).child(left).child(right);
+    h.app.doc().editor().selection = vec!["l-title".into()];
+
+    h.app.alt = true;
+    h.app.ctrl = true;
+    h.on_key(Key::Character("a".into()), None);
+    h.app.alt = false;
+    h.app.ctrl = false;
+
+    let sel = h.app.doc_ref().editor_ref().selection.clone();
+    assert_eq!(
+        sel,
+        vec!["l-title".to_string(), "r-title".to_string()],
+        "the Title in the other frame, and nothing else"
+    );
+    assert!(h.app.status.contains("2 matching"), "{}", h.app.status);
+}
+
+/// Figma's layer walk — "Select Child ⏎ / Select Parent ⇧⏎ / Select Next
+/// Sibling ⇥ / Select Previous Sibling ⇧⇥" — and the page is not a layer to
+/// walk up into.
+#[test]
+fn enter_tab_and_shift_enter_walk_the_layers_the_way_figma_documents() {
+    let rect = |id: &str| Node::rect(id, 0.0, 0.0, 40.0, 40.0, Color::WHITE);
+    let mut h = canvas_host();
+    h.app.doc().editor().root = Node::frame("page", 800.0, 600.0)
+        .child(
+            Node::frame("f", 200.0, 200.0)
+                .child(Node::group("g", 100.0, 100.0).child(rect("r1")).child(rect("r2"))),
+        )
+        .child(rect("other"));
+    let sel = |h: &Host| h.app.doc_ref().editor_ref().selection.clone();
+
+    h.app.doc().editor().selection = vec!["f".into()];
+    h.on_key(Key::Named(NamedKey::Enter), None); // ⏎ = one level down
+    assert_eq!(sel(&h), vec!["g".to_string()], "⏎ selects the child");
+    h.dispatch(Action::SelectChild);
+    assert_eq!(sel(&h), vec!["r1".to_string()], "⏎ again goes deeper");
+    h.dispatch(Action::SelectParent);
+    assert_eq!(sel(&h), vec!["g".to_string()], "⇧⏎ climbs to the parent");
+
+    h.app.doc().editor().selection = vec!["f".into()];
+    h.dispatch(Action::SelectNextSibling);
+    assert_eq!(sel(&h), vec!["other".to_string()], "⇥ is the next sibling");
+    h.dispatch(Action::SelectPrevSibling);
+    assert_eq!(sel(&h), vec!["f".to_string()], "⇧⇥ is the previous one");
+
+    // a top-level layer has no layer above it: ⇧⏎ must not promote the PAGE
+    h.app.doc().editor().selection = vec!["other".into()];
+    h.dispatch(Action::SelectParent);
+    assert_eq!(
+        sel(&h),
+        vec!["other".to_string()],
+        "the page root is not a selectable layer"
+    );
+}
+
 #[test]
 fn shift_click_adds_and_a_second_shift_click_removes_from_the_selection() {
     let mut h = canvas_host();
