@@ -1698,7 +1698,8 @@ fn the_slice_tool_draws_an_export_region() {
     let mut h = host();
     // S is the Slice tool in design mode; in a board it is still the sticky note
     assert_eq!(Tool::from_shortcut("s", false, false), Some(Tool::Slice));
-    assert_eq!(Tool::from_shortcut("s", false, true), Some(Tool::BoardSticky));
+    let in_board = Tool::from_shortcut("s", false, true);
+    assert_eq!(in_board, Some(Tool::BoardSticky));
     assert_eq!(Tool::Slice.shortcut_hint(false), "S");
     assert_eq!(Tool::Slice.label(), "Slice");
     assert!(crate::editor_ui::palette_commands()
@@ -1717,11 +1718,10 @@ fn the_slice_tool_draws_an_export_region() {
     let root = &h.app.doc_ref().editor_ref().root;
     let sl = find_node_clone(root, &sel[0]).unwrap();
     assert!(matches!(sl.kind, NodeKind::Slice), "a Slice node landed");
-    assert_eq!(
-        (sl.transform.x, sl.transform.y, sl.w, sl.h),
-        (500.0, 20.0, 60.0, 40.0)
-    );
-    assert!(sl.name.starts_with("Slice "), "named in the layers panel");
+    let at = (sl.transform.x, sl.transform.y, sl.w, sl.h);
+    assert_eq!(at, (500.0, 20.0, 60.0, 40.0));
+    let named = sl.name.starts_with("Slice ");
+    assert!(named, "named in the layers panel");
     assert_eq!(h.app.tool, Tool::Select, "the tool returns to Move");
 
     // the same draw-it-in rule as every other tool: a slice drawn over a

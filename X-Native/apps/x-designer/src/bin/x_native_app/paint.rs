@@ -56,14 +56,7 @@ pub fn stroke_rect(s: &mut Scene, r: Rect, c: Color, w: f64) {
 /// A dashed rectangle outline. Slices are regions, not layers, and Figma draws
 /// them dashed so they cannot be mistaken for one — the app's other helpers
 /// take solid rects, so this lays the dashes down as short runs.
-pub fn stroke_rect_dashed(
-    s: &mut Scene,
-    r: Rect,
-    c: Color,
-    w: f64,
-    dash: f64,
-    gap: f64,
-) {
+pub fn stroke_rect_dashed(s: &mut Scene, r: Rect, c: Color, w: f64, dash: f64, gap: f64) {
     let step = (dash + gap).max(1.0);
     let dash = dash.max(1.0);
     let mut x = r.x0;

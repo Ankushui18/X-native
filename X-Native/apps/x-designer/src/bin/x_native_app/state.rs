@@ -4149,7 +4149,8 @@ pub struct BoardRegions {
 
 // ------------------------------------------------------------ node helpers
 
-/// Layer-type icon per the v45 mapping.
+/// Layer-type icon per the v45 mapping. Every kind is listed on purpose: a new
+/// `NodeKind` should fail to compile here rather than silently become a box.
 pub fn kind_icon(k: &NodeKind) -> &'static str {
     match k {
         NodeKind::Frame { .. } => "frame#",
@@ -4161,7 +4162,6 @@ pub fn kind_icon(k: &NodeKind) -> &'static str {
         NodeKind::Component { .. } | NodeKind::Instance { .. } => "component",
         NodeKind::Image { .. } => "image",
         NodeKind::Slice => "scissors",
-        _ => "box",
     }
 }
 
@@ -5031,7 +5031,8 @@ mod tool_shortcut_tests {
         // unclaimed keys; S is the Slice tool in design mode and a sticky
         // note in boards, so it answers in both
         assert_eq!(Tool::from_shortcut("s", false, false), Some(Tool::Slice));
-        assert_eq!(Tool::from_shortcut("s", false, true), Some(Tool::BoardSticky));
+        let in_board = Tool::from_shortcut("s", false, true);
+        assert_eq!(in_board, Some(Tool::BoardSticky));
         assert_eq!(Tool::from_shortcut("q", false, false), None);
     }
 }
