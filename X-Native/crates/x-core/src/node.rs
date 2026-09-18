@@ -215,7 +215,11 @@ pub fn brush_outline(
     for i in 0..n {
         let (px, py) = dense[i];
         let (ax, ay) = if i == 0 { dense[0] } else { dense[i - 1] };
-        let (bx, by) = if i + 1 == n { dense[n - 1] } else { dense[i + 1] };
+        let (bx, by) = if i + 1 == n {
+            dense[n - 1]
+        } else {
+            dense[i + 1]
+        };
         let (mut tx, mut ty) = (bx - ax, by - ay);
         let len = tx.hypot(ty);
         if len < 1e-9 {

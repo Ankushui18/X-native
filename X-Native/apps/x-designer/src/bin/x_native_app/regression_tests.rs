@@ -1801,10 +1801,7 @@ fn the_pencil_draws_a_smoothed_stroke() {
 #[test]
 fn the_brush_paints_a_mark() {
     let mut h = host();
-    assert_eq!(
-        Tool::from_shortcut("b", true, false),
-        Some(Tool::Brush)
-    );
+    assert_eq!(Tool::from_shortcut("b", true, false), Some(Tool::Brush));
     assert_eq!(Tool::from_shortcut("b", true, true), None, "design-only");
     assert_eq!(Tool::Brush.shortcut_hint(false), "⇧B");
     assert_eq!(Tool::Brush.label(), "Brush");
