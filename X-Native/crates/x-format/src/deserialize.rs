@@ -1,6 +1,7 @@
 use crate::json::{P, V};
 #[allow(unused_imports)]
 use crate::*;
+use x_core::booleans::{COUNT_MAX, COUNT_MIN, STAR_RATIO};
 use x_core::document::LegacyStyle;
 use x_core::*;
 
@@ -308,8 +309,8 @@ fn parse_grid(v: Option<&V>) -> Option<x_core::GridLayout> {
 /// Figma's Count is "minimum is three and the maximum is 60": a file that
 /// says otherwise loads clamped rather than wrong.
 fn count(v: Option<&V>) -> usize {
-    let n = v.and_then(V::num).unwrap_or(x_core::booleans::COUNT_MIN as f64) as usize;
-    n.clamp(x_core::booleans::COUNT_MIN, x_core::booleans::COUNT_MAX)
+    let n = v.and_then(V::num).unwrap_or(COUNT_MIN as f64) as usize;
+    n.clamp(COUNT_MIN, COUNT_MAX)
 }
 
 fn parse_kind(v: &V) -> NodeKind {
@@ -334,7 +335,7 @@ fn parse_kind(v: &V) -> NodeKind {
             ratio: v
                 .get("ratio")
                 .and_then(V::num)
-                .unwrap_or(x_core::booleans::STAR_RATIO)
+                .unwrap_or(STAR_RATIO)
                 .clamp(0.05, 0.95),
         },
         "line" => NodeKind::Line,

@@ -2140,7 +2140,11 @@ fn the_polygon_and_star_tools_count_their_sides() {
     // two handles: the Count and the Ratio
     let handles = crate::state::shape_handles(&star);
     assert_eq!(handles.len(), 2, "Count and Ratio");
-    assert!(handles.iter().any(|(p, _)| *p == crate::state::ShapePart::Ratio));
+    let named = handles.iter().map(|(p, _)| *p).collect::<Vec<_>>();
+    assert!(
+        named.contains(&crate::state::ShapePart::Ratio),
+        "the Ratio handle"
+    );
 
     // the Ratio field is a percentage, and it never moves the box either
     set_field(&mut h, FieldId::StarRatio, "25");
