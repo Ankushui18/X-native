@@ -215,7 +215,6 @@ mod tests {
         assert_eq!(save_x(&loaded), text);
     }
 
-    #[test]
     /// Figma's per-frame "Show name" switch is a document property, so it must
     /// survive a save/load — and a file written before the flag existed must
     /// still show names (the reader defaults to true).
@@ -242,6 +241,7 @@ mod tests {
         assert!(find(&back.pages[0], "quiet").unwrap().show_name);
     }
 
+    #[test]
     fn x_format_roundtrips_everything() {
         let doc = sample_doc();
         let text = save_x(&doc);
