@@ -7,9 +7,7 @@
 //! inside its bounds rather than rendering the (empty) slice node.
 
 use x_native::text::FontManager;
-use x_native::{
-    prepare_export, Color, Node, RenderCommand, Variables,
-};
+use x_native::{prepare_export, Color, Node, RenderCommand, Variables};
 
 /// page 800x600 → a 50x50 red rect at (20, 30) → a 40x40 slice over its corner.
 fn page() -> Node {
@@ -59,9 +57,8 @@ fn an_empty_slice_still_exports_its_size() {
     let fonts = FontManager::new();
     let vars = Variables::default();
     let ids = vec!["empty".to_string()];
-    let doc = Node::frame("page", 800.0, 600.0).child(Node::slice(
-        "empty", 700.0, 500.0, 30.0, 20.0,
-    ));
+    let doc =
+        Node::frame("page", 800.0, 600.0).child(Node::slice("empty", 700.0, 500.0, 30.0, 20.0));
     let plan = prepare_export(&doc, &vars, Some(&ids), &fonts).expect("size only");
     // the page's own background still overlaps the region (Figma's rule takes
     // anything that does); what matters is that the slice sets the canvas
