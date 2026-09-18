@@ -138,10 +138,14 @@ not selecting the elements in the right panel"*. The audit behind the fixes
   (`find_matching_nodes`; `select_matching_finds_the_same_layer_and_never_crosses_a_section`,
   `select_matching_never_crosses_a_section_boundary`,
   `option_command_a_selects_the_matching_layer_in_the_other_frame`).
-- **⇧⏎ no longer selects the page.** Figma's layer walk — ⏎ child, ⇧⏎ parent,
-  ⇥/⇧⇥ sibling — walked one step too far: from a top-level object the parent is
-  the PAGE, so the page root became the selection and the inspector then
-  described the canvas instead of a layer
+- **Figma's layer walk works, end to end: ⏎ child, ⇧⏎ parent, ⇥/⇧⇥ sibling.**
+  Two defects made it untrue. ⏎ was claimed by the vector-anchor editor for ANY
+  single selection and then returned — on a frame the dispatch did nothing and the
+  key was swallowed, so `Action::SelectChild` was unreachable for every
+  non-vector layer; the key is now claimed only when the layer really is a vector.
+  And ⇧⏎ walked one step too far: from a top-level object the parent is the PAGE,
+  so the page root became the selection and the inspector described the canvas
+  instead of a layer
   (`enter_tab_and_shift_enter_walk_the_layers_the_way_figma_documents`).
 - The parity contract is now **24 pinned, 4 open**, and the open list is exactly
   what is still not built: the per-frame "Show name" switch, presentation mode,
