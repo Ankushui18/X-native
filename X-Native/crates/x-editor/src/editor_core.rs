@@ -284,12 +284,17 @@ impl Editor {
             }
         }
     }
+    /// Figma's plain marquee: the page's top-level objects only.
     pub fn marquee(&mut self, rect: Rect) {
-        self.selection = hit_test_rect(&self.root, rect, false);
+        self.selection = hit_test_rect(&self.root, rect, false, false);
+    }
+    /// Figma's ⌘/Ctrl-drag marquee: the nested layers answer too.
+    pub fn marquee_deep(&mut self, rect: Rect) {
+        self.selection = hit_test_rect(&self.root, rect, false, true);
     }
     /// Figma Alt-drag marquee: select only fully-contained nodes.
     pub fn marquee_contained(&mut self, rect: Rect) {
-        self.selection = hit_test_rect(&self.root, rect, true);
+        self.selection = hit_test_rect(&self.root, rect, true, false);
     }
 
     // -- undoable ops ------------------------------------------------------

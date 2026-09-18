@@ -3502,6 +3502,7 @@ impl Host {
         self.app.drag = Some(Drag::Marquee {
             start: world,
             cur: world,
+            deep: self.app.ctrl,
         });
     }
 
@@ -4138,6 +4139,10 @@ impl Host {
                     self.app.drag = Some(Drag::Marquee {
                         start: world,
                         cur: world,
+                        // the ⌘/Ctrl modifier is read once, at press, and
+                        // rides on the gesture: what the drag started as is
+                        // what it commits when the button comes up.
+                        deep: self.app.ctrl,
                     });
                 }
             }
@@ -4902,7 +4907,7 @@ impl Host {
         }
         self.app.snap_lines.clear();
         match self.app.drag.clone() {
-            Some(Drag::Marquee { start, cur }) => {
+            Some(Drag::Marquee { start, cur, deep }) => {
                 let r = Rect::new(
                     start.x.min(cur.x),
                     start.y.min(cur.y),
@@ -4910,7 +4915,13 @@ impl Host {
                     start.y.max(cur.y),
                 );
                 if r.width() > 2.0 || r.height() > 2.0 {
-                    self.app.doc().editor().marquee(r);
+                    // Figma: the plain drag answers with the page's top-level
+                    // objects, the ⌘/Ctrl drag with the nested layers too.
+                    if deep {
+                        self.app.doc().editor().marquee_deep(r);
+                    } else {
+                        self.app.doc().editor().marquee(r);
+                    }
                 }
                 self.app.drag = None;
             }

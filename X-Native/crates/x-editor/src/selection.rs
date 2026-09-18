@@ -86,8 +86,19 @@ pub fn hit_test(root: &Node, point: Point) -> Option<String> {
 /// page/canvas is excluded (it can't be marquee-selected, like Figma).
 /// `contained`: Figma's Alt-drag mode — only nodes FULLY inside the rect are
 /// selected (default is overlap/intersection).
-pub fn hit_test_rect(root: &Node, rect: Rect, contained: bool) -> Vec<String> {
-    fn walk(node: &Node, parent: Affine, rect: Rect, contained: bool, out: &mut Vec<String>) {
+/// `deep`: Figma's ⌘/Ctrl-drag mode. Without it only the page's TOP-LEVEL
+/// objects answer — a marquee over a frame picks the frame, never the layers
+/// nested inside it — and with it the walk keeps descending, which is the one
+/// thing the ⌘/Ctrl drag adds to a plain marquee.
+pub fn hit_test_rect(root: &Node, rect: Rect, contained: bool, deep: bool) -> Vec<String> {
+    fn walk(
+        node: &Node,
+        parent: Affine,
+        rect: Rect,
+        contained: bool,
+        deep: bool,
+        out: &mut Vec<String>,
+    ) {
         if !node.visible {
             return;
         }
@@ -103,14 +114,16 @@ pub fn hit_test_rect(root: &Node, rect: Rect, contained: bool) -> Vec<String> {
                 out.push(node.id.clone());
             }
         }
-        for child in &node.children {
-            walk(child, world, rect, contained, out);
+        if deep {
+            for child in &node.children {
+                walk(child, world, rect, contained, deep, out);
+            }
         }
     }
     let mut out = vec![];
     let root_world = Affine::IDENTITY * root.transform.matrix(root.w, root.h);
     for child in &root.children {
-        walk(child, root_world, rect, contained, &mut out);
+        walk(child, root_world, rect, contained, deep, &mut out);
     }
     out
 }

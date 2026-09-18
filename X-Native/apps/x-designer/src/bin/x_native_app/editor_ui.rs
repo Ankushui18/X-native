@@ -6701,7 +6701,7 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
     // screen space before it is drawn. Drawing the raw world pair put the
     // band somewhere other than the cursor as soon as the canvas was panned
     // or zoomed.
-    if let Some(crate::state::Drag::Marquee { start, cur }) = &app.drag {
+    if let Some(crate::state::Drag::Marquee { start, cur, .. }) = &app.drag {
         let a = app.world_to_screen(*start);
         let b = app.world_to_screen(*cur);
         let r = Rect::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y));

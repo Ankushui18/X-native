@@ -1204,10 +1204,13 @@ pub enum Drag {
         /// Ctrl+Z reverts the whole drag).
         base_depth: usize,
     },
-    /// Rubber-band selection.
+    /// Rubber-band selection. `deep` is the ⌘/Ctrl modifier read at press: it
+    /// decides whether layers nested inside a frame can answer, which is the
+    /// one thing Figma's ⌘-drag marquee adds to a plain one.
     Marquee {
         start: Point,
         cur: Point,
+        deep: bool,
     },
     /// P12: dragging a layers-tree row. `active` once the pointer moved
     /// past the threshold; `over` = live drop target (row id, zone:

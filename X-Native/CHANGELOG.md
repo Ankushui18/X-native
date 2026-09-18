@@ -114,6 +114,20 @@ not selecting the elements in the right panel"*. The audit behind the fixes
   frame silent. It is proven to bite: a one-line control that removed the root gate
   failed it with `above the page: expected no name, darkest 229` alongside eight
   other tests guarding the same rule. `crates/x-render`.
+- **Three canvas gestures now do what Figma documents, each pinned by a test.**
+  Shift-click adds a layer to the selection and a second Shift-click takes it back
+  out (`shift_click_adds_and_a_second_shift_click_removes_from_the_selection`); a
+  marquee drag on empty canvas answers with the page's **top-level** objects, while
+  holding ⌘/Ctrl is what lets the layers nested inside a frame answer
+  (`hit_test_rect(.., deep)`, `Editor::marquee_deep`, `Drag::Marquee { deep }`) —
+  a plain drag over a frame used to select the frame *and* everything inside it;
+  and a press inside the text field you are already editing moves the caret
+  instead of re-opening the field and discarding the typed buffer
+  (`pressing_inside_the_open_text_field_keeps_what_was_typed`). The parity
+  contract moves those rows from *open* to *pinned*: **19 pinned, 7 open**, and the
+  open list still names what is not built — ⌥⌘A select-matching-layers, the
+  per-frame "Show name" switch, presentation mode, the Section title pill, instance
+  internals, label stripping on export, and the status row.
 - **The audit** — root causes, a Figma-vs-X-Native behaviour table with sources,
   and the honest list of what is still open.
 

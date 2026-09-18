@@ -305,6 +305,31 @@ mod tests {
     }
 
     #[test]
+    fn a_plain_marquee_stops_at_the_page_top_level_and_the_deep_one_does_not() {
+        // page > outer frame > inner rect
+        let inner = Node::rect("inner", 40.0, 40.0, 60.0, 60.0, Color::WHITE);
+        let mut outer = Node::frame("outer", 300.0, 300.0);
+        outer.transform.x = 20.0;
+        outer.transform.y = 20.0;
+        outer.children.push(inner);
+        let page = Node::frame("page", 400.0, 400.0).child(outer);
+        let mut e = Editor::new(page);
+        let all = Rect::new(0.0, 0.0, 400.0, 400.0);
+        e.marquee(all);
+        assert_eq!(
+            e.selection,
+            vec!["outer".to_string()],
+            "a plain drag answers with the page's top-level object"
+        );
+        e.marquee_deep(all);
+        assert_eq!(
+            e.selection,
+            vec!["outer".to_string(), "inner".to_string()],
+            "the deep drag reaches the layer nested inside it"
+        );
+    }
+
+    #[test]
     fn skew_and_origin_are_undoable() {
         let mut e = Editor::new(doc());
         e.skew("a", 0.3, -0.2);

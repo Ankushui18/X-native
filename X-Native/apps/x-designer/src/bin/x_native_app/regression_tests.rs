@@ -3082,6 +3082,125 @@ fn canvas_host() -> Host {
     h
 }
 
+/// Figma, "Select multiple layers — Canvas": `Shift`-click adds a layer to the
+/// selection, and a *second* Shift-click on the same layer removes it again
+/// ("Click an object a second time while holding Shift to remove it from the
+/// current selection"). A plain click still replaces the whole selection.
+#[test]
+fn shift_click_adds_and_a_second_shift_click_removes_from_the_selection() {
+    let mut h = canvas_host();
+    let a = h.app.world_to_screen(Point::new(200.0, 150.0)); // n-a
+    let b = h.app.world_to_screen(Point::new(700.0, 400.0)); // n-b
+    let click = |h: &mut Host, p: Point| {
+        h.app.last_click = None; // a fresh click, never a double-click
+        h.app.mouse = p;
+        h.on_press(p);
+        h.on_release();
+    };
+
+    click(&mut h, a);
+    assert_eq!(
+        h.app.doc_ref().editor_ref().selection,
+        vec!["n-a".to_string()],
+        "a plain click selects the one layer"
+    );
+    h.app.shift = true;
+    click(&mut h, b);
+    assert_eq!(
+        h.app.doc_ref().editor_ref().selection,
+        vec!["n-a".to_string(), "n-b".to_string()],
+        "Shift-click adds"
+    );
+    click(&mut h, b);
+    assert_eq!(
+        h.app.doc_ref().editor_ref().selection,
+        vec!["n-a".to_string()],
+        "a second Shift-click removes that layer again"
+    );
+    h.app.shift = false;
+    click(&mut h, b);
+    assert_eq!(
+        h.app.doc_ref().editor_ref().selection,
+        vec!["n-b".to_string()],
+        "a plain click replaces the selection"
+    );
+}
+
+/// Figma, "Selection marquee": dragging on empty canvas selects the page's
+/// top-level objects — "To select nested layers, hold down the modifier key
+/// and drag the marquee across the objects". Without it, a marquee over a
+/// frame answers with the frame, never with the layers inside it.
+#[test]
+fn command_drag_marquee_reaches_nested_layers_while_a_plain_drag_stops_at_the_frame() {
+    let mut h = canvas_host();
+    h.app.doc().editor().root.children.clear();
+    let root_id = h.app.doc_ref().editor_ref().root.id.clone();
+    let mut frame = Node::frame("m-frame", 300.0, 200.0);
+    frame.transform.x = 100.0;
+    frame.transform.y = 100.0;
+    let child = Node::rect("m-child", 40.0, 40.0, 60.0, 60.0, Color::WHITE);
+    frame.children.push(child);
+    h.app.doc().editor().insert_node(&root_id, frame);
+
+    let from = h.app.world_to_screen(Point::new(10.0, 10.0));
+    let to = h.app.world_to_screen(Point::new(430.0, 330.0));
+    let reg = h.app.editor_regions();
+    assert!(
+        reg.canvas.contains(from) && reg.canvas.contains(to),
+        "the drag has to run inside the canvas"
+    );
+    let drag = |h: &mut Host, deep: bool| {
+        h.app.ctrl = deep;
+        h.app.last_click = None;
+        h.app.mouse = from;
+        h.on_press(from);
+        h.app.mouse = to;
+        h.on_move(to);
+        h.on_release();
+        h.app.ctrl = false;
+    };
+
+    drag(&mut h, false);
+    assert_eq!(
+        h.app.doc_ref().editor_ref().selection,
+        vec!["m-frame".to_string()],
+        "a plain marquee answers with the frame, not the layer inside it"
+    );
+    drag(&mut h, true);
+    assert_eq!(
+        h.app.doc_ref().editor_ref().selection,
+        vec!["m-frame".to_string(), "m-child".to_string()],
+        "the ⌘/Ctrl drag reaches the layer nested inside the frame"
+    );
+}
+
+/// Figma: clicking inside the field you are already editing moves the caret to
+/// the click. The press must keep the buffer you have typed — re-seeding it
+/// from the layer's committed text would drop the edit on the floor.
+#[test]
+fn pressing_inside_the_open_text_field_keeps_what_was_typed() {
+    let mut h = host();
+    h.app.doc().editor().root.children.clear();
+    let root_id = h.app.doc_ref().editor_ref().root.id.clone();
+    let text = Node::text("t-1", 60.0, 60.0, 200.0, 40.0, "hi");
+    h.app.doc().editor().insert_node(&root_id, text);
+    h.app.begin_text_edit("t-1".into(), "hi".into());
+    h.app.text_insert("X");
+    assert_eq!(h.app.text_buffer, "hiX");
+
+    let r = h.app.text_edit_rect().expect("the inline editor has a rect");
+    let p = Point::new(r.x0 + 3.0, (r.y0 + r.y1) / 2.0);
+    h.app.last_click = None;
+    h.app.mouse = p;
+    h.on_press(p);
+    assert_eq!(
+        h.app.text_edit.as_deref(),
+        Some("t-1"),
+        "the press landed in the editor, it did not open a different field"
+    );
+    assert_eq!(h.app.text_buffer, "hiX", "the typed buffer survived the press");
+}
+
 /// Every navigation aid has to agree with the content: the minimap's box is
 /// the union of the page's visible nodes, and the viewport lands inside it.
 #[test]
