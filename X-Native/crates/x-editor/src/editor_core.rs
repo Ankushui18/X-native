@@ -2831,7 +2831,7 @@ impl Editor {
     ///
     /// Names are the identity, so the first name+kind match at each step of the
     /// path wins when one container holds two layers with the same name.
-    pub fn find_matching_nodes(&self, template: &Node) -> Vec<&Node> {
+    pub fn find_matching_nodes<'a>(&'a self, template: &'a Node) -> Vec<&'a Node> {
         /// The chain of nodes from the root down to `id`, inclusive.
         fn chain_to<'a>(node: &'a Node, id: &str, out: &mut Vec<&'a Node>) -> bool {
             if node.id == id {

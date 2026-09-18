@@ -3129,8 +3129,11 @@ fn enter_tab_and_shift_enter_walk_the_layers_the_way_figma_documents() {
     let mut h = canvas_host();
     h.app.doc().editor().root = Node::frame("page", 800.0, 600.0)
         .child(
-            Node::frame("f", 200.0, 200.0)
-                .child(Node::group("g", 100.0, 100.0).child(rect("r1")).child(rect("r2"))),
+            Node::frame("f", 200.0, 200.0).child(
+                Node::group("g", 100.0, 100.0)
+                    .child(rect("r1"))
+                    .child(rect("r2")),
+            ),
         )
         .child(rect("other"));
     let sel = |h: &Host| h.app.doc_ref().editor_ref().selection.clone();
