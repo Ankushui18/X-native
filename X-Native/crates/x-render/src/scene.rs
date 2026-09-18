@@ -275,6 +275,9 @@ fn encode_vector_layers(
     }
 }
 
+/// `in_frame` mirrors `ir::lower`'s flag: true when a FRAME already encloses
+/// this node in this render, so the direct encoder draws the same labels the IR
+/// path draws (Figma names a page's outermost frames only).
 #[allow(clippy::too_many_arguments)]
 fn encode(
     scene: &mut Scene,
@@ -286,9 +289,6 @@ fn encode(
     registry: &ComponentRegistry,
     overrides: &HashMap<String, String>,
     depth: u32,
-    /// Mirrors `ir::lower`'s flag: true when a FRAME already encloses this
-    /// node in this render, so the direct encoder draws the same labels the
-    /// IR path draws (Figma names a page's outermost frames only).
     in_frame: bool,
     ctx: &EncodeCtx,
 ) {

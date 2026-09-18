@@ -946,6 +946,13 @@ pub fn build_render_tree_slice(
     Some((tree, node.w, node.h))
 }
 
+/// `in_frame`: true when a FRAME (not the page, not a Section) already encloses
+/// this node in THIS render. Figma only draws a name for a page's outermost
+/// frames — "when nesting frames to organize them, only the top-level /
+/// outermost frame title is shown" (frames inside a Section reset the flag) —
+/// so a frame nested in a frame stays silent. It also keeps a nested frame's
+/// label from being cropped away by its parent's clip scope, since the label
+/// now sits ABOVE the frame.
 #[allow(clippy::too_many_arguments)]
 fn lower(
     node: &Node,
@@ -957,13 +964,6 @@ fn lower(
     tree: &mut RenderTree,
     path: &str,
     hidden: Option<&str>,
-    /// True when a FRAME (not the page, not a Section) already encloses this
-    /// node in THIS render. Figma only draws a name for a page's outermost
-    /// frames — "when nesting frames to organize them, only the top-level /
-    /// outermost frame title is shown" (and for frames inside a Section,
-    /// which reset the flag) — so a frame nested in a frame stays silent.
-    /// It also keeps a nested frame's label from being cropped away by its
-    /// parent's clip scope, since the label now sits ABOVE the frame.
     in_frame: bool,
 ) {
     // typed traversal overrides (visible / opacity / swap), same semantics
