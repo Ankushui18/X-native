@@ -13,8 +13,8 @@ fn prepare_slice_export(
     vars: &Variables,
     fonts: &x_text::FontManager,
 ) -> Result<ExportPlan, String> {
-    let (tree, width, height) = x_render::ir::build_render_tree_slice(root, id, vars)
-        .ok_or("slice no longer exists")?;
+    let (tree, width, height) =
+        x_render::ir::build_render_tree_slice(root, id, vars).ok_or("slice no longer exists")?;
     let mut tree = tree;
     // same chrome strip as every other export: a slice must never capture a
     // frame's on-canvas name label

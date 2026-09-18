@@ -5323,13 +5323,8 @@ impl Host {
                 // the screen for export, even if it's not organized into a
                 // single group." The node draws nothing; the export path
                 // flattens whatever overlaps it.
-                let mut sl = Node::slice(
-                    &x_native::fresh_id("slice"),
-                    x,
-                    y,
-                    w.max(2.0),
-                    h.max(2.0),
-                );
+                let mut sl =
+                    Node::slice(&x_native::fresh_id("slice"), x, y, w.max(2.0), h.max(2.0));
                 sl.name = format!("Slice {n}");
                 sl
             }
