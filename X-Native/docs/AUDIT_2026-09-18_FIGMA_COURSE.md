@@ -118,7 +118,8 @@ Frame selection (⌥⌘G), which now have a tool, a palette entry and a shortcut
 * **The Scale tool (K) exists** — the engine could always scale a subtree
   (`Editor::scale_node`, Phase 2.3), but nothing on the canvas reached it. `Tool::Scale`
   now sits beside Move in the toolbar and in the palette, `K` selects it, and the same
-  four corner handles the Move tool uses now scale the box *and* everything inside it:
+  four corner handles the Move tool uses now scale the box *and* everything inside it —
+  `V` or a bare `Esc` goes back to Move, with the selection still there:
   child offsets, stroke weight and dashes, corner radii, text size/leading, effect
   distances, auto-layout padding/gap. The anchor is the corner diagonally opposite the
   handle you grabbed — Figma's fixed point — and the whole drag is one undo step. A

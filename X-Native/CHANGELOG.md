@@ -8,13 +8,14 @@ are the crate versions in `Cargo.toml`, which still drift (see
 ## [Unreleased] — 2026-09-18 (The Scale tool, and Frame selection)
 
 Figma's **Scale tool (K)** and **Frame selection (⌥⌘G)** were already in the engine —
-`Editor::scale_node` carried a test, `Editor::frame_selection` carried three — with **no
+`Editor::scale_node` carried a test, `Editor::frame_selection` carried two — with **no
 caller anywhere in the app**: no tool, no shortcut, no palette entry. Both are reachable
 now, and the scale was taught Figma's own list of what travels with the box.
 
 ### Added
 - **`Tool::Scale` (K) — the box scales, and everything inside it scales with it.** The
-  Scale tool sits beside Move in the toolbar and in the palette, `K` selects it, and the
+  Scale tool sits beside Move in the toolbar and in the palette, `K` selects it (`V` and a
+  bare `Esc` bring Move back, selection intact), and the
   same four corner handles the Move tool uses now grow the layer itself: child offsets,
   stroke weight and dash patterns, corner radii, text size and leading, effect distances,
   and auto-layout padding/gap. The anchor is the corner **diagonally opposite** the

@@ -6365,8 +6365,15 @@ impl Host {
                     // P12: an in-flight tree drag cancels first
                     if matches!(self.app.drag, Some(Drag::TreeRow { .. })) {
                         self.app.drag = None;
+                    } else if self.app.tool == Tool::Scale {
+                        // Figma's Esc leaves the Scale tool the way V does —
+                        // the selection survives until a second Esc, and a
+                        // drag already in flight still ends through its own
+                        // release (which merges it into one undo step)
+                        self.app.tool = Tool::Select;
+                    } else {
+                        self.app.doc().editor().selection.clear();
                     }
-                    self.app.doc().editor().selection.clear();
                 } else {
                     self.app.dash_search_focus = false;
                 }

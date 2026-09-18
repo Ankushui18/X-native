@@ -1562,6 +1562,10 @@ fn the_scale_tool_grows_a_layer_from_the_corner_you_are_not_holding() {
     assert!(crate::editor_ui::palette_commands()
         .iter()
         .any(|c| c.label == "Scale tool"));
+    // …and Esc is the other way back to Move, with the selection intact
+    h.app.tool = Tool::Scale;
+    h.on_key(Key::Named(NamedKey::Escape), None);
+    assert_eq!(h.app.tool, Tool::Select, "Esc leaves the Scale tool");
 
     h.app.doc().editor().selection = vec!["frame-1".into()];
     h.app.doc().editor().mutate_visual_stack("frame-1", |n| {
