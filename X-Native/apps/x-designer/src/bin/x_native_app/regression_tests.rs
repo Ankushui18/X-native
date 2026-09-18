@@ -1381,6 +1381,113 @@ fn prototype_panel_lists_interaction_rows() {
         .any(|(_, a)| matches!(a, Action::FlowEnter)));
 }
 
+/// Figma's canvas connection gesture — the course's own chapter, "FD4B: Add
+/// prototype connections": the Prototype tab puts "a blue circle on [the
+/// selected layer's] edge", and it "changes to a blue plus that we can use to
+/// add a new connection". Drag it to another frame and "Figma will snap the
+/// connection noodle to the [frame] when you get close enough. Release your
+/// cursor to complete the connection." The frame the flow starts from gets "a
+/// small blue label … named Flow 1", a connection is an object you can select
+/// and Delete, and dragging one onto empty canvas writes nothing.
+#[test]
+fn the_plus_on_a_layers_edge_draws_a_connection() {
+    let mut h = host();
+    {
+        let d = h.app.doc();
+        let root_id = d.editor_ref().root.id.clone();
+        let mut f1 = Node::frame("c1", 300.0, 200.0);
+        f1.name = "Home".into();
+        f1.is_starting_point = true;
+        let mut f2 = Node::frame("c2", 300.0, 200.0);
+        f2.name = "Case study".into();
+        f2.transform.x = 400.0;
+        d.editor().insert_node(&root_id, f1);
+        d.editor().insert_node(&root_id, f2);
+        let mut go = Node::rect("go", 20.0, 20.0, 80.0, 30.0, Color::from_rgb8(9, 9, 9));
+        go.name = "Go".into();
+        d.editor().insert_node("c1", go);
+    }
+    h.app.doc().right_tab = crate::state::RightTab::Prototype;
+    h.app.doc().editor().selection = vec!["go".into()];
+    let root = &h.app.doc_ref().editor_ref().root;
+    assert!(crate::editor_ui::page_connections(root).is_empty());
+    let go = find_node_clone(root, "go").unwrap();
+    let anchor = Point::new(go.transform.x + go.w, go.transform.y + go.h / 2.0);
+    assert_eq!(anchor, Point::new(100.0, 35.0), "the right edge, centred");
+
+    // with the pointer on the circle the plus is up, and it is a hit zone
+    let p = h.app.world_to_screen(anchor);
+    h.app.mouse = p;
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    assert!(
+        h.app.hit.iter().any(|(_, a)| matches!(a, Action::ConnMenu)),
+        "the plus is there to drag"
+    );
+
+    // the drag: nothing snaps halfway, the frame snaps when the pointer is in it
+    h.on_press(p);
+    assert!(
+        matches!(h.app.drag, Some(Drag::ConnDrag { .. })),
+        "the press takes the anchor"
+    );
+    h.on_move(h.app.world_to_screen(Point::new(250.0, 35.0)));
+    assert!(
+        matches!(&h.app.drag, Some(Drag::ConnDrag { target: None, .. })),
+        "no frame under the halfway point"
+    );
+    h.on_move(h.app.world_to_screen(Point::new(450.0, 100.0)));
+    let snapped = matches!(
+        &h.app.drag,
+        Some(Drag::ConnDrag { target: Some(t), .. }) if t == "c2"
+    );
+    assert!(snapped, "the noodle snaps to the frame under the pointer");
+    h.on_release();
+    let conns = crate::editor_ui::page_connections(&h.app.doc_ref().editor_ref().root);
+    assert_eq!(conns.len(), 1, "one connection was written");
+    let ends = (conns[0].src.as_str(), conns[0].dest.as_str());
+    assert_eq!(ends, ("go", "c2"));
+    assert_eq!(h.app.status, "On click → Case study (smart animate, 350ms)");
+
+    // "a small blue label ... named Flow 1" on the frame the flow starts from
+    let root = &h.app.doc_ref().editor_ref().root;
+    assert_eq!(
+        crate::editor_ui::flow_name(root, "c1").as_deref(),
+        Some("Flow 1")
+    );
+    let not_a_start = crate::editor_ui::flow_name(root, "c2");
+    assert!(not_a_start.is_none(), "not a flow start");
+
+    // a press on the noodle selects that connection, and Delete removes it
+    let mid = h.app.world_to_screen(Point::new(250.0, 35.0));
+    h.app.mouse = mid;
+    h.on_press(mid);
+    assert_eq!(h.app.conn_sel, Some(0), "the noodle is an object");
+    h.on_key(Key::Named(NamedKey::Delete), None);
+    assert!(
+        crate::editor_ui::page_connections(&h.app.doc_ref().editor_ref().root).is_empty(),
+        "Delete removes the selected connection, not the layer"
+    );
+    h.app.doc().editor().undo();
+    assert_eq!(
+        crate::editor_ui::page_connections(&h.app.doc_ref().editor_ref().root).len(),
+        1,
+        "one undo brings it back"
+    );
+
+    // "click and drag the connection to an empty space on the canvas": nothing
+    // is written
+    h.on_press(h.app.world_to_screen(anchor));
+    h.on_move(h.app.world_to_screen(Point::new(1000.0, 500.0)));
+    h.on_release();
+    assert_eq!(
+        crate::editor_ui::page_connections(&h.app.doc_ref().editor_ref().root).len(),
+        1,
+        "a drop on empty canvas is not a connection"
+    );
+    assert_eq!(h.app.status, "Connection dropped");
+}
+
 /// Figma's rule for a NEW object, from the Frames article: *"Click inside an
 /// existing frame to add a 100 x 100 nested frame"* — the shape tools behave the
 /// same way, so a shape drawn over a frame joins that frame (nested frames

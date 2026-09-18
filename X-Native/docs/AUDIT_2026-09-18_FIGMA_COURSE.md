@@ -169,6 +169,12 @@ selection (⌥⌘G), which now have a tool, a palette entry and a shortcut — t
 * **Two engine rules came out of this pass**: `scale_nodes_about` refuses a factor of
   zero or less (a drag past the anchor must not mirror the layer) and skips a listed
   node whose ANCESTOR is listed too — scaling both would scale the child twice.
+* **Prototype connections are made on the canvas** (the course's "Add prototype
+  connections" chapter). The sidebar could already write interactions; the gesture the
+  chapter teaches — the plus on the selected layer's edge, dragged until the noodle snaps
+  to a frame — was not there, nor the flow label that names the frame a flow starts from,
+  nor Figma's "select the connection and press Delete". The connection list has one owner
+  (`editor_ui::page_connections`), so the canvas, Delete and the label cannot disagree.
 * **The arc properties on an ellipse** (course chapter 26, "Turn an ellipse into an
   arc"). The engine's `NodeKind::Arc` had been rendered, hit-tested and exported since
   the vector pass with no caller; the course's route to it — the Sweep handle on hover,

@@ -94,6 +94,7 @@ pub fn paint_over(app: &mut App, s: &mut Scene) {
     }
     paint_canvas_overlays(app, s);
     paint_arc_handles(app, s);
+    paint_conn_hover_menu(app, s);
     paint_minimap(app, s, &mut hit);
     paint_layout_guides(app, s);
     paint_ruler_guides(app, s);
@@ -101,6 +102,7 @@ pub fn paint_over(app: &mut App, s: &mut Scene) {
     paint_smart_guides(app, s);
     paint_text_editor(app, s);
     paint_proto_connections(app, s);
+    paint_conn_anchor(app, s, &mut hit);
     paint_rulers(app, s);
     paint_toolbar(app, s, &mut hit);
     paint_context_menu(app, s, &mut hit);
@@ -627,6 +629,213 @@ fn paint_smart_guides(app: &App, s: &mut Scene) {
 /// Prototype connection arrows ("noodles") between frames.
 /// Draws colored bezier curves connecting source nodes to their destinations,
 /// following Figma's prototype visualization style.
+/// One prototype connection on the page: the layer carrying the interaction
+/// and the frame it leads to. The canvas, the "select it and press Delete"
+/// path and the flow-label rule all read the same list.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Conn {
+    pub src: String,
+    pub dest: String,
+}
+
+/// Every connection on the page, in paint order. `effective_interactions` is
+/// the engine's own resolver, so a component instance's inherited interactions
+/// show up here exactly as they do in the viewer.
+pub(crate) fn page_connections(root: &x_native::Node) -> Vec<Conn> {
+    fn walk(n: &x_native::Node, out: &mut Vec<Conn>) {
+        for ix in x_native::effective_interactions(n) {
+            if let Some(dest) = proto_dest_of(&ix.action) {
+                out.push(Conn {
+                    src: n.id.clone(),
+                    dest,
+                });
+            }
+        }
+        for c in &n.children {
+            walk(c, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, &mut out);
+    out
+}
+
+/// Figma's anchor: the circle sits on the RIGHT edge of the layer's own box,
+/// vertically centred — the point the connection gestures take hold of.
+pub(crate) fn conn_anchor_point(n: &x_native::Node) -> Point {
+    Point::new(n.transform.x + n.w, n.transform.y + n.h / 2.0)
+}
+
+/// The top-level frame containing a world point, with its box: where a snapped
+/// connection lands.
+pub(crate) fn frame_under(root: &x_native::Node, p: Point) -> Option<(String, Rect)> {
+    let mut found = None;
+    for c in &root.children {
+        if !matches!(c.kind, x_native::NodeKind::Frame { .. }) || !c.visible {
+            continue;
+        }
+        let r = Rect::new(
+            c.transform.x,
+            c.transform.y,
+            c.transform.x + c.w,
+            c.transform.y + c.h,
+        );
+        if r.contains(p) {
+            found = Some((c.id.clone(), r));
+        }
+    }
+    found
+}
+
+/// A frame's flow name: "Flow 1" for the first flow on the page, in the order
+/// the frames appear — "Figma also added a small blue label to our home page
+/// frame and named it Flow 1." `None` when the frame starts no flow.
+pub(crate) fn flow_name(root: &x_native::Node, id: &str) -> Option<String> {
+    let mut n = 0;
+    for c in &root.children {
+        if c.is_starting_point {
+            n += 1;
+            if c.id == id {
+                return Some(format!("Flow {n}"));
+            }
+        }
+    }
+    None
+}
+
+/// Whether any layer on the page carries a connection.
+pub(crate) fn page_has_connections(root: &x_native::Node) -> bool {
+    !page_connections(root).is_empty()
+}
+
+/// Is `p` (SCREEN space) near the noodle from `a` to `b`?
+pub(crate) fn near_noodle(a: Point, b: Point, p: Point, tol: f64) -> bool {
+    let (dx, dy) = (b.x - a.x, b.y - a.y);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 <= 1e-9 {
+        0.0
+    } else {
+        (((p.x - a.x) * dx + (p.y - a.y) * dy) / len2).clamp(0.0, 1.0)
+    };
+    let (cx, cy) = (a.x + dx * t, a.y + dy * t);
+    ((p.x - cx).powi(2) + (p.y - cy).powi(2)).sqrt() <= tol
+}
+
+/// The world point the pointer would snap to: the connection's own anchor.
+fn conn_world(app: &App, id: &str) -> Option<Point> {
+    let doc = app.doc_opt()?;
+    let root = &doc.editor_ref().root;
+    crate::run::node_world(root, id).map(|m| m * conn_anchor_point(find_node(root, id)?))
+}
+
+/// Figma's connection anchor: on the Prototype tab a blue circle sits on the
+/// selected layer's edge, and it turns into a plus you can drag. The plus is
+/// the first step of the same gesture, so opening it arms the drag itself.
+fn paint_conn_anchor(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    let Some(doc) = app.doc_opt() else { return };
+    if doc.right_tab != RightTab::Prototype {
+        return;
+    }
+    let Some(id) = app.doc_ref().selected_id() else {
+        return;
+    };
+    let Some(p) = conn_world(app, &id) else {
+        return;
+    };
+    let c = app.world_to_screen(p);
+    let hovered = ((app.mouse.x - c.x).powi(2) + (app.mouse.y - c.y).powi(2)).sqrt() <= 12.0;
+    if hovered {
+        // the plus: this is the handle you drag towards the destination
+        circle(s, c.x, c.y, 6.0, C_SEL);
+        draw_icon(s, "plus", c.x - 4.0, c.y - 4.0, 8.0, C_ON_ACCENT);
+        let r = Rect::new(c.x - 7.0, c.y - 7.0, c.x + 7.0, c.y + 7.0);
+        hit.push((r, Action::ConnMenu));
+    } else {
+        circle(s, c.x, c.y, 5.0, C_SEL);
+        ring(s, c.x, c.y, 5.0, C_ON_ACCENT, 1.0);
+    }
+}
+
+/// The hover menu on the anchor circle: Figma's little action list. Ours holds
+/// the one entry that is a gesture here, because the sidebar already lists the
+/// interactions themselves.
+fn paint_conn_hover_menu(app: &App, s: &mut Scene) {
+    if !app.conn_menu {
+        return;
+    }
+    let Some(id) = app.doc_opt().and_then(|_| app.doc_ref().selected_id()) else {
+        return;
+    };
+    let Some(p) = conn_world(app, &id) else { return };
+    let c = app.world_to_screen(p);
+    let r = Rect::new(c.x + 14.0, c.y - 12.0, c.x + 150.0, c.y + 14.0);
+    elev_shadow(s, r, 8.0, Elevation::Floating);
+    fill_rrect(s, r, R_MD, C_TEXT);
+    app.fonts.text(
+        s,
+        r.x0 + 8.0,
+        r.y0 + 6.0,
+        "Drag to connect",
+        T10,
+        C_BASE,
+        Wt::Reg,
+    );
+}
+
+/// The noodle being dragged: a straight blue line to the pointer, snapped to
+/// the frame under it when there is one — and the destination outlined, the
+/// moment it is a candidate.
+fn paint_conn_drag(app: &App, s: &mut Scene) {
+    if let Some(crate::state::Drag::ConnDrag { src, target, .. }) = &app.drag {
+        let Some(a) = conn_world(app, src) else { return };
+        let a = app.world_to_screen(a);
+        let (b, aimed) = match target {
+            Some(id) => match conn_world(app, id) {
+                Some(p) => (app.world_to_screen(p), Some(id.as_str())),
+                None => (app.mouse, None),
+            },
+            None => (app.mouse, None),
+        };
+        line(s, a.x, a.y, b.x, b.y, C_SEL, 2.0);
+        circle(s, a.x, a.y, 5.0, C_SEL);
+        // the arrowhead
+        let (dx, dy) = (b.x - a.x, b.y - a.y);
+        let len = (dx * dx + dy * dy).sqrt().max(1e-6);
+        let (ux, uy) = (dx / len, dy / len);
+        let (px, py) = (-uy, ux);
+        let head = 8.0;
+        line(
+            s,
+            b.x - ux * head + px * head * 0.5,
+            b.y - uy * head + py * head * 0.5,
+            b.x,
+            b.y,
+            C_SEL,
+            2.0,
+        );
+        line(
+            s,
+            b.x - ux * head - px * head * 0.5,
+            b.y - uy * head - py * head * 0.5,
+            b.x,
+            b.y,
+            C_SEL,
+            2.0,
+        );
+        if let Some(id) = aimed {
+            let doc = app.doc_ref();
+            if let Some(n) = find_node(&doc.editor_ref().root, id) {
+                let p0 = app.world_to_screen(Point::new(n.transform.x, n.transform.y));
+                let p1 = app.world_to_screen(Point::new(
+                    n.transform.x + n.w,
+                    n.transform.y + n.h,
+                ));
+                stroke_rect(s, Rect::new(p0.x, p0.y, p1.x, p1.y), C_SEL, 2.0);
+            }
+        }
+    }
+}
+
 fn paint_proto_connections(app: &App, s: &mut Scene) {
     // Only show connections when on the Prototype tab and we have a selection.
     // `app.doc()` takes `&mut self` and this painter only holds `&App`, so the
@@ -672,6 +881,8 @@ fn paint_proto_connections(app: &App, s: &mut Scene) {
     }
 
     // Draw each connection as a curved arrow
+    let connections = page_connections(root);
+    let selected = app.conn_sel.and_then(|i| connections.get(i)).cloned();
     for (source_id, ix) in &all_interactions {
         let dest_id = match &ix.action {
             x_native::Action::Navigate { destination } => Some(destination.as_str()),
@@ -710,10 +921,18 @@ fn paint_proto_connections(app: &App, s: &mut Scene) {
 
         // Draw bezier curve (simplified as a line with control points)
         let mid_x = (x0 + x1) / 2.0;
-        let color = crate::theme::C_SNAP; // Use the snap color (blue/purple)
-        line(s, x0, y0, mid_x, y0, color, 1.5);
-        line(s, mid_x, y0, mid_x, y1, color, 1.5);
-        line(s, mid_x, y1, x1, y1, color, 1.5);
+        let mut color = crate::theme::C_SNAP; // Use the snap color (blue/purple)
+        let mut weight = 1.5;
+        // the connection a press selected draws bold: Delete acts on it
+        if let Some(sel) = &selected {
+            if sel.src == *source_id && sel.dest == dest_id {
+                color = C_SEL;
+                weight = 2.5;
+            }
+        }
+        line(s, x0, y0, mid_x, y0, color, weight);
+        line(s, mid_x, y0, mid_x, y1, color, weight);
+        line(s, mid_x, y1, x1, y1, color, weight);
 
         // Draw arrowhead at destination
         let arrow_size = 6.0;
@@ -739,6 +958,42 @@ fn paint_proto_connections(app: &App, s: &mut Scene) {
 
         // Draw small circle at source
         circle(s, x0, y0, 4.0, color);
+    }
+
+    // "Figma also added a small blue label to our home page frame and named it
+    // Flow 1" — the label belongs to the frame the flow STARTS from, so it
+    // appears with the flow's first connection and names the flow, not the
+    // connection.
+    let mut drawn: Vec<String> = Vec::new();
+    for conn in &connections {
+        if drawn.contains(&conn.src) {
+            continue;
+        }
+        drawn.push(conn.src.clone());
+        let Some(name) = flow_name(root, &conn.src) else {
+            continue;
+        };
+        let Some(rect) = find_node_bounds(root, &conn.src) else {
+            continue;
+        };
+        let p0 = app.world_to_screen(Point::new(rect.x0, rect.y0));
+        let p1 = app.world_to_screen(Point::new(rect.x1, rect.y1));
+        let b = Rect::new(p0.x, p0.y, p1.x, p1.y);
+        if !b.contains(app.mouse) || app.flow.is_some() {
+            continue;
+        }
+        let tw = app.fonts.measure(&name, T10, Wt::Med) + 14.0;
+        let chip = Rect::new(b.x0, b.y0 - 20.0, b.x0 + tw, b.y0 - 2.0);
+        fill_rrect(s, chip, R_SM, C_SEL);
+        app.fonts.text(
+            s,
+            chip.x0 + 7.0,
+            chip.y0 + 3.0,
+            &name,
+            T10,
+            C_ON_ACCENT,
+            Wt::Med,
+        );
     }
 }
 

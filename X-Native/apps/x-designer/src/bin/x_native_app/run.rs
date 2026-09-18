@@ -4125,6 +4125,13 @@ impl Host {
             // answer for the same four handles — so it selects, hovers and
             // marquees exactly like it, and only the grab differs.
             Tool::Select | Tool::Scale => {
+                // Figma's canvas connections: the circle on a selected
+                // layer's edge, and the noodles themselves. Both are canvas
+                // objects rather than pixels of the layer under them.
+                if let Some(dr) = self.conn_press(world) {
+                    self.app.drag = Some(dr);
+                    return;
+                }
                 // Figma's arc handles belong to the LAYER, not to a tool:
                 // whatever else this press might have been about, grabbing one
                 // of them sweeps, starts or rings the layer.
@@ -4555,6 +4562,71 @@ impl Host {
             parts,
             applied: 1.0,
         })
+    }
+
+    /// Figma's canvas connection gesture: the anchor circle on the selected
+    /// layer's edge, and a press ON an existing noodle — which selects that
+    /// connection so Delete can remove it.
+    fn conn_press(&mut self, world: Point) -> Option<Drag> {
+        let src = self.conn_anchor()?;
+        let edge = self.conn_anchor_world(&src)?;
+        let d = ((edge.x - world.x).powi(2) + (edge.y - world.y).powi(2)).sqrt();
+        if d <= CONN_ANCHOR_TOL / self.app.zoom {
+            return Some(Drag::ConnDrag {
+                src,
+                cur: world,
+                target: None,
+            });
+        }
+        if let Some(i) = self.conn_hit(world) {
+            self.app.conn_sel = Some(i);
+        }
+        None
+    }
+
+    /// The layer Figma anchors a connection to: the selection, or the layer
+    /// under the pointer. A group can carry an interaction too, so any layer
+    /// qualifies — unlike a frame, which is only ever the destination.
+    fn conn_anchor(&self) -> Option<String> {
+        let doc = self.app.doc_opt()?;
+        let editor = doc.editor_ref();
+        if editor.selection.len() == 1 {
+            return Some(editor.selection[0].clone());
+        }
+        let hover = self.app.hover_node.clone()?;
+        crate::editor_ui::find_node(&editor.root, &hover)?;
+        Some(hover)
+    }
+
+    /// Where the anchor circle sits in world space: on the RIGHT edge of the
+    /// layer's box, vertically centred — Figma's own placement.
+    fn conn_anchor_world(&self, id: &str) -> Option<Point> {
+        let doc = self.app.doc_opt()?;
+        let root = &doc.editor_ref().root;
+        let n = crate::editor_ui::find_node(root, id)?;
+        let m = node_world(root, id)?;
+        Some(m * crate::editor_ui::conn_anchor_point(n))
+    }
+
+    /// The connection under a world point, as an index into the page's
+    /// connections — what a press selects and Delete removes.
+    fn conn_hit(&self, world: Point) -> Option<usize> {
+        let doc = self.app.doc_opt()?;
+        let root = &doc.editor_ref().root;
+        let zoom = self.app.zoom.max(1e-6);
+        for (i, conn) in crate::editor_ui::page_connections(root).iter().enumerate() {
+            let (a, b) = (
+                self.conn_anchor_world(&conn.src)?,
+                self.conn_anchor_world(&conn.dest)?,
+            );
+            let (p0, p1) = (self.app.world_to_screen(a), self.app.world_to_screen(b));
+            let tol = CONN_LINE_TOL;
+            if crate::editor_ui::near_noodle(p0, p1, self.app.mouse, tol) {
+                return Some(i);
+            }
+            let _ = zoom;
+        }
+        None
     }
 
     /// Figma's arc handles under the pointer, if any: the sweep, the start and
@@ -5010,6 +5082,24 @@ impl Host {
                     }
                     self.app.mark_dirty();
                 }
+            }
+            Some(Drag::ConnDrag { src, .. }) => {
+                let world = self.app.screen_to_world(p);
+                // "Figma will snap the connection noodle to the [frame] when
+                // you get close enough" — the destination is a top-level
+                // frame whose box the pointer is inside, nearest edge wins.
+                let target = {
+                    let doc = self.app.doc_opt().map(|d| d.editor_ref().root.clone());
+                    doc.as_ref().and_then(|root| {
+                        crate::editor_ui::frame_under(root, world).map(|(id, _)| id)
+                    })
+                };
+                let snapped = target.filter(|id| *id != src);
+                if let Some(Drag::ConnDrag { cur, target, .. }) = self.app.drag.as_mut() {
+                    *cur = world;
+                    *target = snapped;
+                }
+                self.app.mark_dirty();
             }
             Some(Drag::ArcHandle {
                 id,
@@ -5508,6 +5598,36 @@ impl Host {
             }
             // a scale is one gesture too: every move pushed its own
             // ReplaceNode, and one Ctrl+Z must undo the whole drag
+            Some(Drag::ConnDrag { src, target, .. }) => {
+                self.app.drag = None;
+                let Some(dest) = target else {
+                    // "click and drag the connection to an empty space on the
+                    // canvas, and release it" — nothing is written
+                    self.app.status = "Connection dropped".into();
+                    return;
+                };
+                let name = {
+                    let doc = self.app.doc_ref();
+                    crate::editor_ui::find_node(&doc.editor_ref().root, &dest)
+                        .map(|n| n.name.clone())
+                        .unwrap_or_default()
+                };
+                let id = src.clone();
+                let dest2 = dest.clone();
+                let wrote = {
+                    let doc = self.app.doc();
+                    let mut list = crate::editor_ui::find_node(&doc.editor_ref().root, &id)
+                        .map(x_native::effective_interactions)
+                        .unwrap_or_default();
+                    list.push(x_native::Interaction::click(&dest2));
+                    doc.editor().set_node_interactions(&id, list)
+                };
+                if wrote {
+                    self.app.conn_sel = None;
+                    self.app.mark_dirty();
+                    self.app.status = format!("On click → {name} (smart animate, 350ms)");
+                }
+            }
             Some(Drag::ScaleSel { base_depth, .. })
             | Some(Drag::ScaleBody { base_depth, .. })
             | Some(Drag::ArcHandle { base_depth, .. }) => {
@@ -6842,6 +6962,13 @@ impl Host {
             }
             Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace) => {
                 if self.app.screen == Screen::Editor {
+                    // Figma: a selected connection is an object of its own —
+                    // "you can select it and press Delete to remove it" — and
+                    // it goes first, before the layers underneath.
+                    if self.app.conn_sel.is_some() {
+                        self.apply(Action::ConnDelete);
+                        return;
+                    }
                     self.app.doc().editor().delete_selection();
                     self.app.mark_dirty();
                 }
@@ -10358,6 +10485,56 @@ impl Host {
                     Some(axis)
                 };
             }
+            Action::ConnMenu => {
+                self.app.conn_menu = !self.app.conn_menu;
+            }
+            Action::ConnStart => {
+                self.app.conn_menu = false;
+                if let Some(src) = self.conn_anchor() {
+                    let cur = self
+                        .conn_anchor_world(&src)
+                        .unwrap_or(Point::new(0.0, 0.0));
+                    self.app.drag = Some(Drag::ConnDrag {
+                        src,
+                        cur,
+                        target: None,
+                    });
+                }
+            }
+            Action::ConnDelete => {
+                let Some(i) = self.app.conn_sel else {
+                    return;
+                };
+                let conn = {
+                    let doc = self.app.doc_ref();
+                    crate::editor_ui::page_connections(&doc.editor_ref().root)
+                        .get(i)
+                        .cloned()
+                };
+                let Some(conn) = conn else {
+                    self.app.conn_sel = None;
+                    return;
+                };
+                let wrote = {
+                    let doc = self.app.doc();
+                    let mut list = crate::editor_ui::find_node(&doc.editor_ref().root, &conn.src)
+                        .map(x_native::effective_interactions)
+                        .unwrap_or_default();
+                    let before = list.len();
+                    list.retain(|ix| crate::editor_ui::proto_dest_of(&ix.action)
+                        != Some(conn.dest.clone()));
+                    if list.len() == before {
+                        false
+                    } else {
+                        doc.editor().set_node_interactions(&conn.src, list)
+                    }
+                };
+                if wrote {
+                    self.app.conn_sel = None;
+                    self.app.mark_dirty();
+                    self.app.status = "Connection removed".into();
+                }
+            }
             Action::ScaleCell(cell) => {
                 self.app.scale_cell = cell.min(crate::state::SCALE_CELLS - 1);
             }
@@ -12487,6 +12664,13 @@ pub(crate) fn selection_box(root: &Node, ids: &[String]) -> Option<(f64, f64, f6
 
 /// How close the pointer has to be to an arc handle, in screen pixels.
 const ARC_HANDLE_TOL: f64 = 9.0;
+
+/// How close the pointer has to be to a connection's anchor circle, in screen
+/// pixels — the circle is 6px across, plus the same forgiveness Figma gives it.
+const CONN_ANCHOR_TOL: f64 = 10.0;
+
+/// How close a press has to be to a noodle to select that connection.
+const CONN_LINE_TOL: f64 = 6.0;
 
 /// A layer's world transform — its ancestors' matrices and its own. The arc
 /// handles are drawn, hit-tested and dragged through THIS, so they sit on the

@@ -1105,6 +1105,13 @@ pub enum Action {
     SetConstraint(ConstraintAxis, usize),
     /// Scale panel: pick an anchor cell (Figma's nine-point box).
     ScaleCell(usize),
+    /// The canvas connection circle: open the hover menu Figma shows on it.
+    ConnMenu,
+    /// The hover menu's action: arm the connection DRAG (Figma's blue plus).
+    ConnStart,
+    /// Delete the selected connection (Figma: "you can select it and press
+    /// Delete to remove it").
+    ConnDelete,
     /// Toggle the zoom menu (right-panel header; audit F4)
     ZoomMenu,
     /// Zoom-menu item: 0 in, 1 out, 2 100%, 3 selection, 4 fit
@@ -1753,6 +1760,16 @@ pub enum Drag {
         base_depth: usize,
         parts: Vec<(String, f64, f64)>, // (id, anchor x, anchor y) in parent space
         applied: f64,
+    },
+    /// Figma's canvas connection gesture: the circle on the selected layer's
+    /// edge, dragged towards another frame. "Figma will snap the connection
+    /// noodle to the Case study frame when you get close enough. Release your
+    /// cursor to complete the connection."
+    ConnDrag {
+        src: String,
+        cur: Point,
+        /// The frame the noodle is currently snapped to, if any.
+        target: Option<String>,
     },
     /// Figma's arc handles on an ellipse or an arc (K is not involved: the
     /// handles belong to the layer, and they are dragged with the Move tool —
@@ -2638,6 +2655,11 @@ pub struct App {
     /// Scale panel: which of the nine anchor cells stays put (4 = centre, the
     /// cell Figma's panel opens on).
     pub scale_cell: usize,
+    /// The connection a press on a canvas noodle selected — what Delete
+    /// removes, as a index into `editor_ui::page_connections` for this frame.
+    pub conn_sel: Option<usize>,
+    /// Whether the anchor circle's hover menu is open.
+    pub conn_menu: bool,
     pub zoom: f64,
     pub pan: (f64, f64),
     pub ctrl: bool,
@@ -2817,6 +2839,8 @@ impl App {
             // Phase 5: Shape Builder state
             aspect_ratio_locked: false,
             scale_cell: 4,
+            conn_sel: None,
+            conn_menu: false,
             zoom: 1.0,
             pan: (0.0, 0.0),
             ctrl: false,

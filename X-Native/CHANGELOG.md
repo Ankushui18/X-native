@@ -5,6 +5,27 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-18 (Prototype connections on the canvas)
+
+Figma's connections are drawn ON the canvas — the course's chapter "Add prototype
+connections" walks through the whole gesture — and until now ours could only be
+built from the sidebar's plus button. This is the gesture, the flow label and the
+deletion, i.e. the parts of the chapter that are canvas behaviour.
+
+- **The plus on the layer's edge.** On the Prototype tab a blue circle sits on the
+  selected layer's right edge; with the pointer on it, it becomes the plus you
+  drag. "Hover over the blue circle on the button layer's edge until a blue plus
+  icon appears" — and this build's plus is the first step of the drag itself.
+- **Drag it to another frame.** The noodle follows the pointer, and it SNAPS to
+  the top-level frame under it; the frame is outlined while it is the candidate.
+  Release writes `On click → <frame>` (smart animate, 350ms), the same interaction
+  the sidebar's "+ Add" writes. A drop on empty canvas writes nothing.
+- **The flow label.** "Figma also added a small blue label to our home page frame
+  and named it Flow 1" — the label rides the first frame a flow starts from, and
+  is numbered in page order, so it appears with the flow's first connection.
+- **Select it and press Delete.** A press on a noodle selects that connection
+  (drawn bold) and Delete removes it — not the layer under it — in one undo step.
+
 ## [Unreleased] — 2026-09-18 (The arc properties on an ellipse)
 
 The engine has carried `NodeKind::Arc` — the geometry the renderer, the hit
