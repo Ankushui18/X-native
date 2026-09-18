@@ -735,8 +735,7 @@ fn encode(
                 } else {
                     node.name.as_str()
                 };
-                let label_color =
-                    crate::ir::label_ink().multiply_alpha(node.opacity);
+                let label_color = crate::ir::label_ink().multiply_alpha(node.opacity);
                 let t = world * Affine::translate((0.0, crate::ir::LABEL_ABOVE_Y));
                 let drew = if let Some(fm) = ctx.fonts {
                     if let Some(font) = fm.default_font() {
@@ -800,8 +799,7 @@ fn encode(
                 } else {
                     node.name.as_str()
                 };
-                let label_color =
-                    crate::ir::label_ink().multiply_alpha(node.opacity);
+                let label_color = crate::ir::label_ink().multiply_alpha(node.opacity);
                 let t = world * Affine::translate((0.0, crate::ir::LABEL_ABOVE_Y));
                 let drew = if let Some(fm) = ctx.fonts {
                     if let Some(font) = fm.default_font() {
