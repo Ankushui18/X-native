@@ -926,7 +926,10 @@ fn paint_context_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         .x
         .min(reg.canvas.x1 - w - 4.0)
         .max(reg.canvas.x0 + 4.0);
-    let my = anchor.y.min(app.status_band().y0 - h - 4.0).max(reg.canvas.y0 + 4.0);
+    let my = anchor
+        .y
+        .min(app.status_band().y0 - h - 4.0)
+        .max(reg.canvas.y0 + 4.0);
     let panel = Rect::new(mx, my, mx + w, my + h);
     elev_shadow(s, panel, 10.0, Elevation::Floating);
     fill_rrect(s, panel, R_LG, C_FIELD);

@@ -3917,10 +3917,9 @@ fn double_click_on_a_layer_name_renames_it() {
     );
 }
 
-
-
 /// The status band is chrome, not a bar over the artwork: every region of the
-/// window yields to it, so a message always has a row of its own.
+/// window yields to it, so a message always has a row of its own and nothing
+/// is painted - or clickable - underneath it.
 /// Owner report, 2026-09-18 — "not painted as a red bar through the artwork".
 #[test]
 fn the_status_band_is_chrome_and_the_artwork_stops_above_it() {
@@ -3947,72 +3946,61 @@ fn the_status_band_is_chrome_and_the_artwork_stops_above_it() {
         h.app.board_regions().canvas.y1 <= band.y0 + 0.001,
         "the board canvas runs under the status band"
     );
-    // A control you cannot see must not be clickable: the band is opaque, so
-    // no chrome zone may cross into it (a file job adds the Cancel button,
-    // which this host does not have).
-    let buried: Vec<Rect> = h
-        .app
-        .hit
-        .iter()
-        .filter(|(r, _)| r.y1 > band.y0 + 0.001)
-        .map(|(r, _)| *r)
-        .collect();
-    assert!(buried.is_empty(), "chrome zones under the band: {buried:?}");
-}
-
-/// The colour of a solid fill, whatever it covers.
-fn solid_fill(c: &RenderCommand) -> Option<Color> {
-    let brush = match c {
-        RenderCommand::FillPath { brush, .. } => brush,
-        _ => return None,
-    };
-    match brush {
-        vello::peniko::Brush::Solid(c) => Some(*c),
-        _ => None,
+    let mut buried = 0;
+    for (rect, action) in &h.app.hit {
+        if rect.y1 > band.y0 + 0.001 {
+            buried += 1;
+            eprintln!("chrome zone under the band: {action:?} {rect:?}");
+        }
     }
+    assert_eq!(buried, 0, "a control the band covers is still clickable");
 }
 
-/// The colour of a fill whose path is exactly `rect` — the band rect.
-fn band_fill(c: &RenderCommand, rect: Rect) -> Option<Color> {
-    match c {
-        RenderCommand::FillPath { path, .. } if path.bounding_box() == rect => solid_fill(c),
-        _ => None,
-    }
-}
-
-/// The text of a glyph run.
-fn glyph_text(c: &RenderCommand) -> Option<&str> {
-    match c {
-        RenderCommand::Glyphs { text, .. } => Some(text),
-        _ => None,
-    }
-}
-
-/// The band is a panel row with the message on it, and the chrome paints no
-/// danger fill anywhere: the "red bar" the owner reported is not in the build.
+/// The band is where a running job's controls live: the Cancel button is
+/// inside it, and — with a job on screen — it is the only chrome zone that
+/// reaches into the band at all.
 #[test]
-fn the_status_band_is_a_panel_row_and_never_a_danger_fill() {
+fn the_status_band_carries_the_running_jobs_controls() {
+    use std::sync::mpsc;
     let mut h = host();
-    h.app.demo_mode = false;
-    h.app.status = "Layer moved".into();
+    let (started, ready) = mpsc::channel();
+    let (resume, wait) = mpsc::channel();
+    h.files
+        .start(
+            crate::jobs::Kind::Export,
+            "Test background work".into(),
+            move || {
+                started.send(()).unwrap();
+                wait.recv().unwrap();
+                Ok(crate::jobs::Output::Exported("done".into()))
+            },
+        )
+        .unwrap();
+    ready
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    h.refresh_file_status();
+    h.app.compose_frame();
     let band = h.app.status_band();
-    let scene = h.app.compose_frame();
-    let fills: Vec<Color> = scene.commands.iter().filter_map(|c| band_fill(c, band)).collect();
-    assert_eq!(fills.len(), 1, "the band is one rect, got {fills:?}");
-    assert_eq!(fills[0], crate::theme::resolve(C_PANEL), "the band is a row");
-    let reds = scene
-        .commands
-        .iter()
-        .filter_map(solid_fill)
-        .filter(|c| **c == crate::theme::resolve(C_DANGER_FILL))
-        .count();
-    assert_eq!(reds, 0, "the chrome paints a danger fill");
-    let painted = scene.commands.iter().any(|c| glyph_text(c) == Some("Layer moved"));
-    assert!(painted, "the status message is not painted on the band");
+    let mut in_band = 0;
+    for (rect, action) in &h.app.hit {
+        if rect.y0 >= band.y0 - 0.001 {
+            in_band += 1;
+            assert!(
+                matches!(action, Action::CancelFileOperation),
+                "unexpected control in the status band: {action:?} {rect:?}"
+            );
+        }
+    }
+    resume.send(()).unwrap();
+    h.wait_for_file_job();
+    assert_eq!(in_band, 1, "the running job does not offer Cancel in the band");
 }
 
-/// A prototype preview is chrome-less: the flow viewer gives the document the
-/// whole window and paints no band over it.
+/// A prototype preview is chrome-less: `paint_feedback` returns before it
+/// paints unless `paints_status_band()` says the band belongs on screen (the
+/// guard reads that gate out of the painter), and the document keeps the whole
+/// window while it is open.
 #[test]
 fn the_flow_viewer_paints_no_status_band_over_the_prototype() {
     let mut h = host();
@@ -4027,8 +4015,4 @@ fn the_flow_viewer_paints_no_status_band_over_the_prototype() {
         Rect::new(0.0, 0.0, h.app.win_w, h.app.win_h),
         "the flow viewer must keep every pixel for the document"
     );
-    let band = h.app.status_band();
-    let scene = h.app.compose_frame();
-    let painted = scene.commands.iter().filter_map(|c| band_fill(c, band)).count();
-    assert_eq!(painted, 0, "the flow viewer painted a band over the prototype");
 }

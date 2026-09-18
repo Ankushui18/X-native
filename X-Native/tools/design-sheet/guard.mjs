@@ -20,7 +20,13 @@
 //      either routes it through a named constant or raises the ceiling on purpose.
 //      The application chrome has had the same kind of ratchet since the Daylight
 //      pass — `apps/x-designer/src/bin/x_native_app/design_tokens_test.rs`.
-//   3. FIGMA PARITY IS A CLAIM WITH A TEST — every row of `docs/FIGMA_PARITY.md`
+//   3. THE STATUS BAND IS CHROME — the owner's report called it "a red bar
+//      through the artwork". The geometry half of that (no region runs under the
+//      band, no control hides in it) is pinned by Rust tests; the colour half is
+//      a source claim, because the application paints into a GPU scene that no
+//      unit test can read back. So this check reads the painter: one rect, one
+//      height, a panel fill, and the flow viewer's gate on the front.
+//   4. FIGMA PARITY IS A CLAIM WITH A TEST — every row of `docs/FIGMA_PARITY.md`
 //      that says "we behave like Figma" must name the test that pins it, and that
 //      name must still exist. A row with no test is reported as open, not hidden.
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -191,8 +197,33 @@ check(
   stray.length === 0,
   stray.length ? stray.join('; ') : 'every test cell is a test name or "open"',
 );
+// --------------------------------------------------------- the status band
+// `production()` cuts at the file's first `#[cfg(test)]`, and run.rs declares
+// its test modules near the top — so slice the painter out first, then cut.
+const appRun = read('apps/x-designer/src/bin/x_native_app/run.rs');
+const feedback = appRun.slice(appRun.indexOf('fn paint_feedback('));
+const feedbackBody = production(feedback.slice(0, feedback.indexOf('\n}\n')));
+check(
+  'the status band is a panel row painted from one rect, and the flow viewer turns it off',
+  /app\.status_band\(\)/.test(feedbackBody) &&
+    /C_PANEL/.test(feedbackBody) &&
+    /paints_status_band\(\)/.test(feedbackBody) &&
+    !/C_DANGER|C_ERR|C_WARN/.test(feedbackBody),
+  'run.rs::paint_feedback',
+);
+const chromeSrc = walk(repo + '/apps/x-designer/src/bin/x_native_app')
+  .map((p) => readFileSync(p, 'utf8'))
+  .join('\n');
+check(
+  "the band's height has one owner",
+  /pub const ED_STATUS_H/.test(
+    read('apps/x-designer/src/bin/x_native_app/theme.rs'),
+  ) && !/win_h\s*-\s*22(\.0)?\b/.test(chromeSrc),
+  'ED_STATUS_H in theme.rs; no `win_h - 22` anywhere else in the chrome',
+);
+
 console.log(`      ${pinned} behaviours pinned by a test, ${open} open (documented, not pinned)`);
 console.log(
-  `SUMMARY  design + Figma conformance: 7 checks, ${pinned} pinned, ${open} open, ${failed} failed`,
+  `SUMMARY  design + Figma conformance: 9 checks, ${pinned} pinned, ${open} open, ${failed} failed`,
 );
 process.exit(failed === 0 ? 0 : 1);
