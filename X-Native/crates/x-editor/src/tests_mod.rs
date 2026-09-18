@@ -1773,7 +1773,11 @@ mod tests {
         assert_eq!(binding_px(t, "fs"), 28.0);
         assert_eq!(binding_px(t, "ls"), 2.0);
         assert_eq!(binding_px(t, "lhpx"), 40.0);
-        assert_eq!(binding_px(t, "lhp"), 150.0, "a percent line height is relative");
+        assert_eq!(
+            binding_px(t, "lhp"),
+            150.0,
+            "a percent line height is relative"
+        );
         assert_eq!(t.paragraph_indent, 12.0);
         assert_eq!(t.text_runs[0].size, Some(20.0));
         assert_eq!(t.text_runs[0].ls, Some(1.0));

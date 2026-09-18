@@ -1567,6 +1567,7 @@ fn the_scale_tool_grows_a_layer_from_the_corner_you_are_not_holding() {
     h.app.doc().editor().mutate_visual_stack("frame-1", |n| {
         n.stroke.width = 2.0;
     });
+    let depth0 = h.app.doc_ref().editor_ref().undo_depth();
     // frame-1 is (0, 60) 375x420. Grab the BOTTOM-RIGHT handle, which pins
     // the top-left corner, and drag to exactly twice the box.
     let grab = h.scale_grab(Point::new(375.0, 480.0)).expect("corner grab");
@@ -1583,12 +1584,23 @@ fn the_scale_tool_grows_a_layer_from_the_corner_you_are_not_holding() {
         f1.stroke.width, 4.0,
         "the stroke must travel with the box, unlike a Move-tool resize"
     );
-    // the whole drag is ONE undo step, not one per move event
+    // the whole drag is ONE editor step, not one per move event — the same
+    // rule `t16_layer_drag_merges_into_one_undo_step` pins for a move drag.
+    // (The document history records coarser entries at UI-action boundaries,
+    // so the claim is checked where the gesture actually lands.)
     h.on_release();
-    h.app.doc().undo_document();
+    assert_eq!(
+        h.app.doc_ref().editor_ref().undo_depth(),
+        depth0 + 1,
+        "the drag must merge into one undo step"
+    );
+    h.app.doc().editor().undo();
     let f1 = find_node_clone(&h.app.doc_ref().editor_ref().root, "frame-1").unwrap();
     assert_eq!((f1.w, f1.h), (375.0, 420.0));
-    assert_eq!(f1.stroke.width, 2.0);
+    assert_eq!(
+        f1.stroke.width, 2.0,
+        "one undo restores the pre-drag state, stroke included"
+    );
 }
 
 /// ⌥⌘G is Figma's Frame selection: the selection goes into a NEW frame sized

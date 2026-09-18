@@ -874,12 +874,13 @@ impl Editor {
             }
             scale_effect_both(&mut n.effects, &mut n.effect_layers, f, scale_effect);
             // auto layout: padding and gap travel with the frame
-            if let NodeKind::Frame { layout } = &mut n.kind {
-                if let Some(layout) = layout {
-                    layout.gap *= f;
-                    for side in layout.padding.iter_mut() {
-                        *side *= f;
-                    }
+            if let NodeKind::Frame {
+                layout: Some(layout),
+            } = &mut n.kind
+            {
+                layout.gap *= f;
+                for side in layout.padding.iter_mut() {
+                    *side *= f;
                 }
             }
             for grid in &mut n.layout_grids {
