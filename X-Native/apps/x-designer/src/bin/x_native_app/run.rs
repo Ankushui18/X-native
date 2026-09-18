@@ -14756,9 +14756,14 @@ impl App {
 
 fn paint_feedback(app: &mut App, scene: &mut Scene) {
     use crate::paint::{fill_rect, hline, Wt};
-    let y = app.win_h - 22.0;
-    fill_rect(scene, Rect::new(0.0, y, app.win_w, app.win_h), C_PANEL);
-    hline(scene, 0.0, app.win_w, y, C_LINE);
+    if !app.paints_status_band() {
+        // the flow viewer is chrome-less: the prototype gets every pixel
+        return;
+    }
+    let band = app.status_band();
+    let y = band.y0;
+    fill_rect(scene, band, C_PANEL);
+    hline(scene, band.x0, band.x1, y, C_LINE);
     let prefix = if app.demo_mode {
         "DEMO · sample content · "
     } else {
@@ -14784,7 +14789,7 @@ fn paint_feedback(app: &mut App, scene: &mut Scene) {
     app.fonts
         .text(scene, 12.0, y + 5.0, &message, T10, C_TEXT, Wt::Reg);
     if app.file_job.as_ref().is_some_and(|j| j.cancelable) {
-        let rect = Rect::new(app.win_w - 88.0, y + 2.0, app.win_w - 8.0, app.win_h - 2.0);
+        let rect = Rect::new(app.win_w - 88.0, y + 2.0, app.win_w - 8.0, band.y1 - 2.0);
         crate::paint::fill_rrect(scene, rect, R_SM, C_FIELD_2);
         app.fonts
             .text_center(scene, rect, "Cancel", T10, C_TEXT, Wt::Med, true);

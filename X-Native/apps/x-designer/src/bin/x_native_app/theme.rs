@@ -272,6 +272,11 @@ pub const C_GRID_LIGHT: Color = Color::from_rgba8(0x4A, 0x4D, 0x58, 60); // Fain
 // --------------------------------------------------------------- geometry
 // Editor dimensions
 pub const ED_TITLE_H: f64 = 36.0;
+
+/// Height of the status band — the one chrome row that spans the window at its
+/// bottom (`run.rs::paint_feedback`). `state.rs` owns the rect; every region
+/// ends above it, so a message can never be painted *through* the artwork.
+pub const ED_STATUS_H: f64 = 22.0;
 pub const LOGO_CELL_W: f64 = 44.0;
 pub const ED_LEFT_W: f64 = 280.0;
 pub const ED_LEFT_MIN: f64 = 200.0;

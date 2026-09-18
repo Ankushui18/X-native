@@ -101,6 +101,30 @@ not selecting the elements in the right panel"*. The audit behind the fixes
   (`a_frame_that_switches_its_name_off_emits_no_label`,
   `the_show_name_row_toggles_a_frame_name_undoably_and_only_for_frames`,
   `show_name_roundtrips_and_defaults_to_true_for_older_files`).
+
+### Changed
+- **The status message got a row of its own instead of a bar over the artwork.**
+  The band was painted last, over the bottom 22px of the canvas — the canvas
+  region ran to the window's bottom edge, so a status line could sit on top of
+  the document (the owner's "painted through the artwork"). The band is now a
+  chrome row that everything yields to: `App::status_band()` is the one rect,
+  `ED_STATUS_H` is the one height, and every region of the window (canvas,
+  panels, board) ends at its top edge, so nothing can be drawn underneath it.
+  The chrome that anchored to the window's bottom edge now anchors to the band
+  instead — the layers tree, the right panel's scroll clip, the notification
+  bell, the notifications panel and every popover clamp — so no control is
+  painted (and clickable) where the band covers it, and a test asserts that no
+  chrome hit zone crosses into the band. Two things fell out of giving the band
+  an owner: the flow viewer is
+  chrome-less (`App::paints_status_band()` gates `paint_feedback`), so a
+  prototype preview keeps every pixel; and the reported *red* bar does not
+  exist — the one `C_DANGER_FILL` in the chrome is the 10px unread badge on the
+  notification bell, and the guard test now asserts it stays that way
+  (`the_status_band_is_chrome_and_the_artwork_stops_above_it`,
+  `the_status_band_is_a_panel_row_and_never_a_danger_fill`,
+  `the_flow_viewer_paints_no_status_band_over_the_prototype`).
+  `apps/x-designer`.
+
 ### Added
 - **A design + Figma conformance guard** (`tools/design-sheet/guard.mjs`, run by
   `scripts/check.sh` on every push): a colour literal in two files is two owners of

@@ -3916,3 +3916,119 @@ fn double_click_on_a_layer_name_renames_it() {
         "n-b"
     );
 }
+
+
+
+/// The status band is chrome, not a bar over the artwork: every region of the
+/// window yields to it, so a message always has a row of its own.
+/// Owner report, 2026-09-18 — "not painted as a red bar through the artwork".
+#[test]
+fn the_status_band_is_chrome_and_the_artwork_stops_above_it() {
+    let mut h = host();
+    h.app.compose_frame(); // paint the chrome, which builds its hit zones
+    let band = h.app.status_band();
+    assert_eq!(band.x0, 0.0, "the band spans the window");
+    assert_eq!(band.x1, h.app.win_w, "the band spans the window");
+    assert_eq!(band.height(), ED_STATUS_H);
+    let r = h.app.editor_regions();
+    for (name, rect) in [
+        ("canvas", r.canvas),
+        ("left panel", r.left),
+        ("nav bar", r.nav_bar),
+        ("sidebar", r.sidebar),
+        ("right panel", r.right),
+    ] {
+        assert!(
+            rect.y1 <= band.y0 + 0.001,
+            "the {name} runs under the status band: {rect:?} vs {band:?}"
+        );
+    }
+    assert!(
+        h.app.board_regions().canvas.y1 <= band.y0 + 0.001,
+        "the board canvas runs under the status band"
+    );
+    // A control you cannot see must not be clickable: the band is opaque, so
+    // no chrome zone may cross into it (a file job adds the Cancel button,
+    // which this host does not have).
+    let buried: Vec<Rect> = h
+        .app
+        .hit
+        .iter()
+        .filter(|(r, _)| r.y1 > band.y0 + 0.001)
+        .map(|(r, _)| *r)
+        .collect();
+    assert!(buried.is_empty(), "chrome zones under the band: {buried:?}");
+}
+
+/// The colour of a solid fill, whatever it covers.
+fn solid_fill(c: &RenderCommand) -> Option<Color> {
+    let brush = match c {
+        RenderCommand::FillPath { brush, .. } => brush,
+        _ => return None,
+    };
+    match brush {
+        vello::peniko::Brush::Solid(c) => Some(*c),
+        _ => None,
+    }
+}
+
+/// The colour of a fill whose path is exactly `rect` — the band rect.
+fn band_fill(c: &RenderCommand, rect: Rect) -> Option<Color> {
+    match c {
+        RenderCommand::FillPath { path, .. } if path.bounding_box() == rect => solid_fill(c),
+        _ => None,
+    }
+}
+
+/// The text of a glyph run.
+fn glyph_text(c: &RenderCommand) -> Option<&str> {
+    match c {
+        RenderCommand::Glyphs { text, .. } => Some(text),
+        _ => None,
+    }
+}
+
+/// The band is a panel row with the message on it, and the chrome paints no
+/// danger fill anywhere: the "red bar" the owner reported is not in the build.
+#[test]
+fn the_status_band_is_a_panel_row_and_never_a_danger_fill() {
+    let mut h = host();
+    h.app.demo_mode = false;
+    h.app.status = "Layer moved".into();
+    let band = h.app.status_band();
+    let scene = h.app.compose_frame();
+    let fills: Vec<Color> = scene.commands.iter().filter_map(|c| band_fill(c, band)).collect();
+    assert_eq!(fills.len(), 1, "the band is one rect, got {fills:?}");
+    assert_eq!(fills[0], crate::theme::resolve(C_PANEL), "the band is a row");
+    let reds = scene
+        .commands
+        .iter()
+        .filter_map(solid_fill)
+        .filter(|c| **c == crate::theme::resolve(C_DANGER_FILL))
+        .count();
+    assert_eq!(reds, 0, "the chrome paints a danger fill");
+    let painted = scene.commands.iter().any(|c| glyph_text(c) == Some("Layer moved"));
+    assert!(painted, "the status message is not painted on the band");
+}
+
+/// A prototype preview is chrome-less: the flow viewer gives the document the
+/// whole window and paints no band over it.
+#[test]
+fn the_flow_viewer_paints_no_status_band_over_the_prototype() {
+    let mut h = host();
+    let root = h.app.doc().editor_ref().root.id.clone();
+    h.app.flow = Some(crate::state::FlowState {
+        current: root,
+        ..Default::default()
+    });
+    assert!(!h.app.paints_status_band());
+    assert_eq!(
+        h.app.view_canvas(),
+        Rect::new(0.0, 0.0, h.app.win_w, h.app.win_h),
+        "the flow viewer must keep every pixel for the document"
+    );
+    let band = h.app.status_band();
+    let scene = h.app.compose_frame();
+    let painted = scene.commands.iter().filter_map(|c| band_fill(c, band)).count();
+    assert_eq!(painted, 0, "the flow viewer painted a band over the prototype");
+}

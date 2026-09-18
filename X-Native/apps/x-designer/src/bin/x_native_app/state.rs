@@ -2355,13 +2355,29 @@ impl App {
         let left = want_left.min((room - ED_RIGHT_MIN).max(0.0));
         let right = self.right_w.min((room - left).max(0.0));
         let left_total = self.nav_bar_w + left;
+        // Chrome yields to chrome: the status band owns the bottom of the
+        // window, so no region (and therefore no artwork) runs underneath it.
+        let bottom = self.status_band().y0.max(ED_TITLE_H);
         EdRegions {
-            left: Rect::new(0.0, ED_TITLE_H, left_total, self.win_h),
-            nav_bar: Rect::new(0.0, ED_TITLE_H, self.nav_bar_w, self.win_h),
-            sidebar: Rect::new(self.nav_bar_w, ED_TITLE_H, left_total, self.win_h),
-            right: Rect::new(self.win_w - right, ED_TITLE_H, self.win_w, self.win_h),
-            canvas: Rect::new(left_total, ED_TITLE_H, self.win_w - right, self.win_h),
+            left: Rect::new(0.0, ED_TITLE_H, left_total, bottom),
+            nav_bar: Rect::new(0.0, ED_TITLE_H, self.nav_bar_w, bottom),
+            sidebar: Rect::new(self.nav_bar_w, ED_TITLE_H, left_total, bottom),
+            right: Rect::new(self.win_w - right, ED_TITLE_H, self.win_w, bottom),
+            canvas: Rect::new(left_total, ED_TITLE_H, self.win_w - right, bottom),
         }
+    }
+
+    /// The status band: the one row the window reserves for a message. It is
+    /// both the message's background and its hit zone, and it is a *row* — the
+    /// regions above stop at its top edge rather than painting under it.
+    pub fn status_band(&self) -> Rect {
+        Rect::new(0.0, self.win_h - ED_STATUS_H, self.win_w, self.win_h)
+    }
+
+    /// The band is chrome. The chrome-less flow viewer (a prototype preview)
+    /// gives the document every pixel and paints no band at all.
+    pub fn paints_status_band(&self) -> bool {
+        self.flow.is_none()
     }
 
     /// The rect the document viewport occupies: the canvas region while
@@ -2457,7 +2473,7 @@ impl App {
     /// Board-specific regions (no side panels for infinite canvas)
     pub fn board_regions(&self) -> BoardRegions {
         BoardRegions {
-            canvas: Rect::new(0.0, ED_TITLE_H, self.win_w, self.win_h),
+            canvas: Rect::new(0.0, ED_TITLE_H, self.win_w, self.status_band().y0.max(ED_TITLE_H)),
         }
     }
 

@@ -134,7 +134,7 @@ fn paint_tooltip(app: &App, s: &mut Scene) {
     if x + tw > app.win_w - 8.0 {
         x = (mouse.x - tw - 10.0).max(8.0);
     }
-    if y + th > app.win_h - 8.0 {
+    if y + th > app.status_band().y0 - 8.0 {
         y = (mouse.y - th - 12.0).max(8.0);
     }
     let tr = Rect::new(x, y, x + tw, y + th);
@@ -926,7 +926,7 @@ fn paint_context_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         .x
         .min(reg.canvas.x1 - w - 4.0)
         .max(reg.canvas.x0 + 4.0);
-    let my = anchor.y.min(app.win_h - h - 4.0).max(reg.canvas.y0 + 4.0);
+    let my = anchor.y.min(app.status_band().y0 - h - 4.0).max(reg.canvas.y0 + 4.0);
     let panel = Rect::new(mx, my, mx + w, my + h);
     elev_shadow(s, panel, 10.0, Elevation::Floating);
     fill_rrect(s, panel, R_LG, C_FIELD);
@@ -1002,7 +1002,7 @@ fn paint_context_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         } else {
             left
         };
-        let sy = (pr.y0 + 2.0).min(app.win_h - sh - 4.0);
+        let sy = (pr.y0 + 2.0).min(app.status_band().y0 - sh - 4.0);
         let sp = Rect::new(sx, sy, sx + w, sy + sh);
         elev_shadow(s, sp, 10.0, Elevation::Floating);
         fill_rrect(s, sp, R_LG, C_FIELD);
@@ -1092,7 +1092,7 @@ fn paint_page_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) 
     let row_h = MENU_ROW_H;
     let h = items.len() as f64 * row_h + 10.0;
     let mx = anchor.x.min(app.win_w - w - 4.0).max(4.0);
-    let my = anchor.y.min(app.win_h - h - 4.0).max(4.0);
+    let my = anchor.y.min(app.status_band().y0 - h - 4.0).max(4.0);
     let panel = Rect::new(mx, my, mx + w, my + h);
     elev_shadow(s, panel, 10.0, Elevation::Floating);
     fill_rrect(s, panel, R_LG, C_FIELD);
@@ -1580,7 +1580,7 @@ fn paint_nav_bar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     }
 
     // Spacer to push notifications to bottom
-    y = app.win_h - 52.0;
+    y = nr.y1 - 52.0;
 
     // Notifications bell at bottom
     let bell_r = Rect::new(nr.x0 + 4.0, y, nr.x1 - 4.0, y + 40.0);
@@ -1967,7 +1967,7 @@ fn paint_notifications(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action
     }
     let reg = app.editor_regions();
     let nx = reg.nav_bar.x1 + 4.0;
-    let ny = app.win_h - 200.0;
+    let ny = reg.nav_bar.y1 - 200.0;
     let nw = 280.0;
     let nh = 180.0;
     let panel = Rect::new(nx, ny, nx + nw, ny + nh);
@@ -2481,7 +2481,7 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
 
     // tree (scrollable)
     let tree_top = band_bottom + 34.5 + if search_open { 30.0 } else { 0.0 };
-    let tree_bottom = app.win_h - 16.0;
+    let tree_bottom = app.status_band().y0 - 16.0;
     let scroll = app.doc().scroll_left;
     let (rows, total_h) = collect_tree_rows(app, scroll, tree_bottom - tree_top);
     let mut max_indent = 0usize;
@@ -2773,7 +2773,7 @@ pub(crate) fn tree_geometry(app: &App) -> Option<(f64, f64, f64)> {
     let search_open = app.field.as_ref().map(|f| f.id) == Some(FieldId::TreeSearch)
         || !doc.tree_search.is_empty();
     let tree_top = app.pages_band_bottom() + 34.5 + if search_open { 30.0 } else { 0.0 };
-    Some((tree_top, app.win_h - 16.0, doc.scroll_left))
+    Some((tree_top, app.status_band().y0 - 16.0, doc.scroll_left))
 }
 
 /// P12: the drop target for a layers-tree row drag: the row under
@@ -3020,7 +3020,7 @@ fn paint_right(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     // The HTML panel scrolls its content UNDER the pinned header (X/Y,
     // pill tabs, divider) — clip the scrolling region so scrolled rows
     // never overdraw the chrome, and drop hit rects that left the view.
-    let clip = Rect::new(rx, y, reg.right.x1, app.win_h);
+    let clip = Rect::new(rx, y, reg.right.x1, reg.right.y1);
     let hit0 = hit.len();
     s.push_layer(
         vello::peniko::Fill::NonZero,
@@ -6275,7 +6275,7 @@ fn paint_library(app: &App) -> Option<(Rect, Vec<LibRow>)> {
         + 8.0;
     // the panel's y depends on the scroll offset, so the anchor comes from the
     // row that opened it; clamp to the window either way
-    let y0 = ay.min(app.win_h - h - 8.0).max(ED_TITLE_H + 4.0);
+    let y0 = ay.min(app.status_band().y0 - h - 8.0).max(ED_TITLE_H + 4.0);
     Some((Rect::new(ax, y0, ax + w, y0 + h), rows))
 }
 
