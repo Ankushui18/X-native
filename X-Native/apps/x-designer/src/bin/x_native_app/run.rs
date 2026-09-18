@@ -3157,7 +3157,7 @@ impl App {
     /// swallowed anyway — Figma's "Select Child ⏎" was unreachable for every
     /// non-vector layer. Claiming the key only where the engine will act on it is
     /// what lets ⏎ fall through to `Action::SelectChild`.
-    pub fn enter_edit_targets_vector(&self) -> bool {
+    pub fn enter_edit_targets_vector(&mut self) -> bool {
         let doc = self.doc();
         doc.selected_id()
             .and_then(|id| crate::editor_ui::find_node(&doc.editor_ref().root, id.as_str()))
