@@ -4893,10 +4893,8 @@ impl Host {
                         let step = std::f64::consts::FRAC_PI_4;
                         let angle = (dy.atan2(dx) / step).round() * step;
                         let len = dx.hypot(dy);
-                        world = Point::new(
-                            start.x + angle.cos() * len,
-                            start.y + angle.sin() * len,
-                        );
+                        world =
+                            Point::new(start.x + angle.cos() * len, start.y + angle.sin() * len);
                     } else {
                         let m = dx.abs().max(dy.abs());
                         world = Point::new(start.x + dx.signum() * m, start.y + dy.signum() * m);

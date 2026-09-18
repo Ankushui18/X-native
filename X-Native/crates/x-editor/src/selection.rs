@@ -19,7 +19,7 @@ pub fn hit_test(root: &Node, point: Point) -> Option<String> {
         // so later hits simply overwrite `out`.
         if !node.locked {
             let local = world.inverse() * point;
-            let inside = match node.kind {
+            let inside = match &node.kind {
                 NodeKind::Ellipse => {
                     let (rx, ry) = (node.w / 2.0, node.h / 2.0);
                     let (dx, dy) = ((local.x - rx) / rx, (local.y - ry) / ry);
@@ -69,10 +69,7 @@ pub fn hit_test(root: &Node, point: Point) -> Option<String> {
                     if !filled && ink <= 2.0 {
                         near_path(path, local) <= ink / 2.0 + 4.0
                     } else {
-                        local.x >= 0.0
-                            && local.y >= 0.0
-                            && local.x <= node.w
-                            && local.y <= node.h
+                        local.x >= 0.0 && local.y >= 0.0 && local.x <= node.w && local.y <= node.h
                     }
                 }
                 // Plain Groups have no paintable body (no fill/stroke of their
