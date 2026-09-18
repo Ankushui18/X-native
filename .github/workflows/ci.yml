@@ -195,6 +195,12 @@ jobs:
     defaults:
       run:
         working-directory: X-Native
+    env:
+      # `loading_screen_visuals` is ignored with "output directory must be
+      # supplied": this is that directory. The three screenshot fixtures write to
+      # the default (`screenshots/` beside the crate), which the artifact step
+      # collects from `X-Native/apps/x-designer/screenshots` either way.
+      X_NATIVE_LOADING_PREVIEW_DIR: apps/x-designer/screenshots/loading
     steps:
       - uses: actions/checkout@v4
 
