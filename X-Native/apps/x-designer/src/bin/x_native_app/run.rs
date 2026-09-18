@@ -12378,9 +12378,18 @@ pub(crate) fn selection_box(root: &Node, ids: &[String]) -> Option<(f64, f64, f6
 fn parse_scale(raw: &str) -> Option<f64> {
     let t = raw.trim().to_ascii_lowercase();
     if let Some(n) = t.strip_suffix('x') {
-        return n.trim().parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0);
+        return n
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|v| v.is_finite() && *v > 0.0);
     }
-    let n = t.strip_suffix('%').unwrap_or(&t).trim().parse::<f64>().ok()?;
+    let n = t
+        .strip_suffix('%')
+        .unwrap_or(&t)
+        .trim()
+        .parse::<f64>()
+        .ok()?;
     (n.is_finite() && n > 0.0).then_some(n / 100.0)
 }
 
