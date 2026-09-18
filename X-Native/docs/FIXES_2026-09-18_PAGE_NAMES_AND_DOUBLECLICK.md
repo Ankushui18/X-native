@@ -60,9 +60,14 @@ deleted.
 **What changed.**
 
 * `App::commit_page_rename` writes `doc.pages[i].name` and mirrors it onto the
-  root frame (some surfaces read the root directly — flow labels, thumbnails, SVG
-  ids); the guard now compares the PAGE's name, so "the page already says this" is
-  what refuses a rename.
+  root frame; the guard now compares the PAGE's name, so "the page already says
+  this" is what refuses a rename. **Why both sides**: the page list is a derived
+  view. `OpenDoc::snapshot` — called by every `checkpoint`, i.e. at every
+  transaction boundary — calls `sync()`, which rebuilds `doc.pages` from the
+  editors' roots, so writing only one of the two copies loses the name at the next
+  transaction (the CI run caught exactly that in this pass's own fixture). The
+  durable fix for the model is to stop keeping two copies; until then, every
+  rename writes both and the *editor root* is the source of truth.
 * `App::delete_page(i)` is the single delete: it removes the clicked page, never
   the last one, clamps the active index, drops that page's comments and shifts the
   rest. Both the rail's ✕ and the page menu call it.
@@ -150,29 +155,48 @@ the pass itself came out and are fixed:
 | NaN-ordering guard | `rg 'partial_cmp\(.*\)\.unwrap\(' crates apps` | clean |
 | Docs references | every `docs/*.md` named in Rust sources | all exist |
 
-### What was *not* executed — stated plainly
+### Verified by the real gate (CI), not by inspection
 
-There is no Rust toolchain in this sandbox, so **no `cargo` command ran**: not
-`cargo build`, not `cargo test`, not `cargo fmt`, not `cargo clippy`. Every claim
-about Rust behaviour above is from reading the code, from the new tests (written to
-fail on the old behaviour), and from the repo's own node-based gates. Two things
-therefore cannot be closed from here:
+This sandbox has no Rust toolchain and cannot install one — `static.rust-lang.org`
+and `crates.io` are unreachable from it — so the repository's own
+[`Fix` workflow](.github/workflows/fix.yml), which exists for exactly this case,
+was started with a `[ci-fix]` commit. It ran `cargo fmt --all` (this tree had
+**never** been through rustfmt; the formatting-only commit is
+`f2123e3 "Apply cargo fmt to the workspace"`), re-ran the whole gate, and
+published the log to this PR.
 
-* `GOLDEN_KIND_HASH` in `crates/x-native/tests/golden_project.rs` is knowingly
-  stale (`GOLDEN_COMMANDS` is re-pinned 52 → 51 in the source; the hash needs one
-  real run). The constant's comment carries the exact command and what to paste.
-* `cargo clippy`'s dead-code ratchet (ceiling 82, `scripts/check.sh`) — the
-  watermark removal and the `+N more` sentinel leave some constants
-  (`C_BLACK_10`, the watermark helpers' friends) unreferenced in `run.rs`; the
-  ceiling is intended to absorb this, but the number must be read from a real run
-  before it is quoted.
+That log is where the pass's real defects were found — three of them in the tests,
+one in the source:
 
-First commands on a machine with the toolchain:
+| what failed | what it actually was | fix |
+| --- | --- | --- |
+| `cargo test` — 10 errors, `ir.rs` + `scene.rs` | `///` on a function *parameter* ("documentation comments cannot be applied to function parameters") | the `in_frame` text documents the function, not the parameter |
+| `every_page_in_the_window_…` expected `[1,2,3,4]` | the window is `top = min(page, n − PAGES_MAX_ROWS)` = 2, so `[2,3,4,5]`: the active page is visible *and* the tail is aligned | expectation corrected, and the selected page is asserted to have a row |
+| `page_delete_removes_the_clicked_page_…` saw `Some(SelectPage(0))` | the ✕ is a **hover** affordance (as in Figma) and its zone only exists for a hovered row, so the reverse scan found the row | the test hovers the row before painting |
+| the same test then read `"Page 2"` where it wrote `"Detail"` | **a real property of the model**, not a test artefact: `OpenDoc::snapshot` (run by every `checkpoint`, including the one inside `delete_page`) calls `sync()`, which rebuilds `doc.pages` from the editors' roots. The page list is a *derived* view — the editor root is the source of truth, which is why `commit_page_rename` writes both | the fixture names both sides, like the app does |
+| `a_frame_name_labels_…` pinned `/Hero/label` | a key is the node's PATH plus the slot, and the path carries ancestor names: `/Page 1/Hero/label` | assertion corrected |
+| `golden_render_ir_matches_pinned_shape` | the stale hash, as documented | re-pinned to `0xcd250bfffae4f4a6`, the value that run printed, alongside `commands=51 (pinned 51)` |
+
+The gate is now **green on this pull request**:
+
+```
+scripts/check.sh   pass   1m20s
+```
+
+which covers, in one run: `cargo fmt --check`, `cargo clippy --workspace
+--all-targets` with the dead-code ratchet reported as **55 / ceiling 82** (the
+watermark removal and the sentinel row are inside the budget), `cargo test
+--workspace --locked`, the docs-reference check, the design-sheet
+regenerate-and-diff, and the CLI smoke (`--version`, `--help`,
+`theme audit` — both palettes WCAG AA — `lint --list-rules`, and the exit-2 usage
+path). The only step that was skipped is `Fix`'s optional clippy autofix, by
+design.
+
+On your own machine the same claim is one command:
 
 ```
 cd X-Native
-./scripts/check.sh                 # fmt, clippy + ratchet, tests, docs, generators, CLI smoke
-cargo test --workspace             # the same suite, straight
+bash scripts/check.sh
 ```
 
 ### Manual check-list for a build (each line is one of the complaints)

@@ -48,6 +48,25 @@ and is gone.
 
 ### 1.2 The page and the canvas root are the same object, so "page" and "frame" blur
 
+There are **three** things called "page" in this codebase, and two of them are the
+same value:
+
+| name | what it is |
+| --- | --- |
+| `doc.pages[i]` | the page list in the document — a **derived** copy |
+| `editors[i].root` | the actual page frame the canvas renders — the **source of truth** |
+| `OpenDoc::page` | which index is active (`App::active` is a different thing again: the active *document*) |
+
+`OpenDoc::sync()` is one line — `self.doc.pages = self.editors.iter().map(|e|
+e.root.clone()).collect()` — and `snapshot()` calls it, so **every `checkpoint`**
+(a document transaction, an undo point, a page delete, a page add) rebuilds the
+page list from the editors' roots. A rename that writes only `doc.pages[i].name`
+is therefore undone by the next transaction; `App::commit_page_rename` writes both
+sides for that reason. This is the mechanism behind "why is the page name used for
+renaming pages" — the two copies blur, and the *editor root* wins. It is also the
+mechanism a first version of this pass's own delete test tripped over, which the
+CI log caught (see §4.5).
+
 `doc.pages[i]` is a `Node::frame`, and `doc.editors[i].root` is a **clone** of it.
 Consequences that produced the owner's second complaint:
 
@@ -316,38 +335,38 @@ the right labels in the right place, but cannot hide one. It needs a document
 field (serialized), a checkbox in the inspector and both encoders to honour it —
 a feature, not a defect fix.
 
-### 4.4 Golden kind hash
+### 4.4 Golden kind hash — closed
 
-`GOLDEN_COMMANDS` is re-pinned to 51 in the source. `GOLDEN_KIND_HASH` cannot be
-computed without a Rust toolchain, so the comment at the constant says exactly how
-to obtain it:
+Both constants are re-pinned from a real run: `GOLDEN_COMMANDS = 51` and
+`GOLDEN_KIND_HASH = 0xcd25_0bff_fae4_f4a6`, which is what the gate printed —
+`GOLDEN DRIFT: commands=51 (pinned 51), kind_hash=0xcd250bfffae4f4a6 (pinned
+0xe1560b27ca1a6fbd)`. The document itself did not move (no geometry, no paint);
+only the removed root label.
 
-```
-cargo test -p x-native --test golden_project golden_render_ir_matches_pinned_shape
-```
+### 4.5 Where the verification actually happened
 
-The panic prints the drift listing and the new hash; paste it over the constant.
-Nothing else about the document moved (no geometry, no paint).
+Not in this sandbox: it has no Rust toolchain and cannot install one
+(`static.rust-lang.org` and `crates.io` are unreachable). So the repository's own
+`Fix` workflow — which exists for exactly this case and which the second half of
+the honest version of this section is about — was started with a `[ci-fix]`
+commit. It ran `cargo fmt --all` (the tree had never been through rustfmt: that
+commit is `f2123e3`), re-ran the whole gate, and published the log to the PR.
 
-### 4.5 Not executed here
+That log found five things, four of them in this pass's own tests and one in the
+source (`///` on a function parameter — rejected by rustc). All five are fixed,
+and the gate is **green on the PR**: `scripts/check.sh — pass (1m20s)`, covering
+`cargo fmt --check`, `cargo clippy --workspace --all-targets` with **dead code
+55 / ceiling 82**, `cargo test --workspace --locked`, the docs-reference check,
+the design-sheet regenerate-and-diff, and the CLI smoke. The per-item table is in
+[`FIXES_2026-09-18_PAGE_NAMES_AND_DOUBLECLICK.md`](FIXES_2026-09-18_PAGE_NAMES_AND_DOUBLECLICK.md).
 
-This sandbox has no Rust toolchain, so **no `cargo` command was run**: every claim
-above is from reading the code and from the existing node-based design-sheet
-checks. The first thing to run on a machine with the toolchain is:
-
-```
-./scripts/check.sh          # full suite + dead-code ceiling
-cargo test --workspace
-```
-
-and, for the visual claims:
+The four owner complaints each have at least one test that fails if the fix is
+reverted, and those tests now run on CI — which is the cheapest way to prove them
+fixed. For the visual claims, on a machine with a GPU:
 
 ```
 cargo test -p x-designer --bin x_native_app -- --ignored   # screenshots
 ```
-
-The four owner complaints each have at least one test that fails if the fix is
-reverted, which is the cheapest way to prove them fixed on a real build.
 
 ### 4.6 Selection *inside* an instance
 

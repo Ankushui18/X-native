@@ -81,9 +81,16 @@ not selecting the elements in the right panel"*. The audit behind the fixes
 
 ### Changed
 - `GOLDEN_COMMANDS` in `crates/x-native/tests/golden_project.rs` drops 52 → 51
-  (the document's `/golden/label` command is gone). `GOLDEN_KIND_HASH` needs one
-  `cargo test` run to re-pin; the constant's comment says exactly which test and
-  what to paste.
+  (the document's `/golden/label` command is gone) and `GOLDEN_KIND_HASH` is
+  re-pinned to `0xcd25_0bff_fae4_f4a6` — the value the gate itself printed
+  (`commands=51 (pinned 51)` in the drift listing).
+- **The gate is green on CI**: `scripts/check.sh` runs `cargo fmt --check`,
+  `cargo clippy --workspace --all-targets` (**dead code 55 / ceiling 82**),
+  `cargo test --workspace --locked`, the docs-reference check, the design-sheet
+  regenerate-and-diff step and the CLI smoke in one pass. Four test expectations
+  and one `///`-on-a-parameter error in this change were found and fixed by that
+  run, not by inspection — the table is in
+  [docs/FIXES_2026-09-18_PAGE_NAMES_AND_DOUBLECLICK.md](docs/FIXES_2026-09-18_PAGE_NAMES_AND_DOUBLECLICK.md).
 
 ## [Unreleased] — 2026-09-18 (Typography: the Inspector Meets the Engine)
 
