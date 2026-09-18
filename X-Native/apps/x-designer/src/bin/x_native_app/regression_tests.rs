@@ -3994,7 +3994,10 @@ fn the_status_band_carries_the_running_jobs_controls() {
     }
     resume.send(()).unwrap();
     h.wait_for_file_job();
-    assert_eq!(in_band, 1, "the running job does not offer Cancel in the band");
+    assert_eq!(
+        in_band, 1,
+        "the running job does not offer Cancel in the band"
+    );
 }
 
 /// A prototype preview is chrome-less: `paint_feedback` returns before it

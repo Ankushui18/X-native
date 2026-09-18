@@ -2473,7 +2473,12 @@ impl App {
     /// Board-specific regions (no side panels for infinite canvas)
     pub fn board_regions(&self) -> BoardRegions {
         BoardRegions {
-            canvas: Rect::new(0.0, ED_TITLE_H, self.win_w, self.status_band().y0.max(ED_TITLE_H)),
+            canvas: Rect::new(
+                0.0,
+                ED_TITLE_H,
+                self.win_w,
+                self.status_band().y0.max(ED_TITLE_H),
+            ),
         }
     }
 
