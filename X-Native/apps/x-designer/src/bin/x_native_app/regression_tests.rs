@@ -448,11 +448,7 @@ fn drawing_with_no_container_selected_lands_at_the_page_root() {
     // only frames / groups / sections can capture — but since the draw-it-in
     // rule the DRAW POINT decides first, so aim at empty canvas
     h.app.doc().editor().selection = vec![r.id.clone()];
-    h.finish_create(
-        Tool::Rect,
-        Point::new(500.0, 20.0),
-        Point::new(540.0, 40.0),
-    );
+    h.finish_create(Tool::Rect, Point::new(500.0, 20.0), Point::new(540.0, 40.0));
     let root = &h.app.doc_ref().editor_ref().root;
     assert_eq!(
         root.children.len(),
@@ -1490,7 +1486,10 @@ fn holding_space_while_drawing_keeps_the_shape_on_the_page() {
     h.finish_create(Tool::Rect, Point::new(40.0, 120.0), Point::new(80.0, 150.0));
     let root = &h.app.doc_ref().editor_ref().root;
     assert!(
-        find_node_clone(root, "frame-1").unwrap().children.is_empty(),
+        find_node_clone(root, "frame-1")
+            .unwrap()
+            .children
+            .is_empty(),
         "space did not stop the nesting"
     );
     assert_eq!(root.children.len(), 2, "the shape must land on the page");
