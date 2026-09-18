@@ -169,16 +169,17 @@ selection (⌥⌘G), which now have a tool, a palette entry and a shortcut — t
 * **Two engine rules came out of this pass**: `scale_nodes_about` refuses a factor of
   zero or less (a drag past the anchor must not mirror the layer) and skips a listed
   node whose ANCESTOR is listed too — scaling both would scale the child twice.
+* **The Scale tool's panel, its anchor box and its body drag.** Figma's article describes
+  three ways to scale, and this pass adds the two the build was missing: the right sidebar's
+  **Scale** section while K is active (a multiplier, W/H fields that keep the ratio, and the
+  nine-point anchor box) and a drag on the object's **bounding box** itself. `state.rs::scale_grab_factor`
+  is the one projection rule — the corner grab is its special case — and `run.rs::selection_box`
+  is the one box the panel, the handles and the body drag all measure, so the three surfaces
+  cannot drift apart.
 
 ## 5. Honestly not built
 
 Ordered by how visible they are, not by how hard they are:
 
-1. **The Scale panel's numbers, and the scale tool's body drag** — Figma's help says
-   "Hover over the object's bounding box to make the [scale] cursor appear. Then,
-   click-and-drag to resize", plus a *multiplier* and an *anchor box* in the right
-   sidebar. Ours scales from the four corner handles (the same ones the Move tool
-   resizes with) and dragging the body of an object still moves it, so the gesture is
-   there but not the whole surface; typing "50%" or picking an anchor is not.
-2. **Community and Teams** in the file browser, and sharing in the editor. These need a
+1. **Community and Teams** in the file browser, and sharing in the editor. These need a
    backend; the build is local-first.

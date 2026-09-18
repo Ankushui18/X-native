@@ -5,6 +5,31 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-18 (The Scale panel, and the body drag)
+
+Figma's Scale tool is a panel as much as a gesture: while **K** is the active tool the
+right sidebar shows the **Scale** section — a width and a height field, a scale
+multiplier, and a nine-point anchor box — and the object's own bounding box answers a
+drag. Ours had the four corner handles and nothing else.
+
+- **The panel** — `FieldId::ScaleFactor` / `ScaleW` / `ScaleH`, painted by
+  `editor_ui::paint_scale_block` and shown only while the Scale tool is active, like
+  Figma's own. The multiplier takes a percentage ("150%", or a bare "150") or an
+  explicit factor ("1.5x"); the W and H fields take a dimension and the OTHER field
+  follows, because a scale is proportional — both commit through the same
+  `Editor::scale_nodes_about` the drag uses, so panel and canvas cannot disagree.
+- **The anchor box** — `state::scale_cell_anchor`, nine cells, centre by default — is the
+  fixed point of every panel scale: the panel paints the nine points, `Action::ScaleCell`
+  moves it, and the multiplier and the dimension fields both read it.
+- **The body drag** — `Drag::ScaleBody`: with K, a press INSIDE the box scales it instead
+  of moving it. The anchor is the corner opposite the nearest one to the press and the
+  press point itself rides the pointer; `state::scale_grab_factor` is the ONE projection
+  rule, with the handle grab expressed as its special case (`state::corner_point`), so the
+  two gestures cannot drift apart. One gesture is still one undo entry.
+- `run.rs::selection_box` is the one place the selection's box is measured — for the
+  handles, the body drag and the panel — and `state::nearest_corner` is the small table
+  that decides which corner a body press scales about.
+
 ## [Unreleased] — 2026-09-18 (Line and Arrow)
 
 Figma's shape menu keeps the **Line** and the **Arrow** on one key — L draws the line, ⇧L

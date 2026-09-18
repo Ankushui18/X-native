@@ -4133,6 +4133,14 @@ impl Host {
                     self.app.drag = Some(dr);
                     return;
                 }
+                // The Scale tool's other gesture: a press INSIDE the box
+                // scales it. On the canvas K never moves a layer.
+                if tool == Tool::Scale {
+                    if let Some(dr) = self.scale_body_grab(world) {
+                        self.app.drag = Some(dr);
+                        return;
+                    }
+                }
                 let hit_id = {
                     let doc = self.app.doc();
                     let root = doc.editor_ref().root.clone();
@@ -4194,6 +4202,14 @@ impl Host {
                             .click_select(world, shift, deep_click);
                     }
                     self.app.mark_dirty();
+                    // …and with K a fresh object scales from the press too:
+                    // the click selected it, so the box is there to grab.
+                    if tool == Tool::Scale {
+                        if let Some(dr) = self.scale_body_grab(world) {
+                            self.app.drag = Some(dr);
+                            return;
+                        }
+                    }
                     self.app.drag = Some(Drag::MoveSel {
                         last: world,
                         base_depth: self.app.doc().editor_ref().undo_depth(),
@@ -4513,21 +4529,7 @@ impl Host {
             return None;
         }
         let base_depth = editor.undo_depth();
-        let mut bbox: Option<(f64, f64, f64, f64)> = None;
-        for id in &editor.selection {
-            let n = crate::editor_ui::find_node(&editor.root, id.as_str())?;
-            let r = (n.transform.x, n.transform.y, n.w, n.h);
-            bbox = Some(match bbox {
-                None => r,
-                Some(b) => (
-                    b.0.min(r.0),
-                    b.1.min(r.1),
-                    (b.0 + b.2).max(r.0 + r.2) - b.0.min(r.0),
-                    (b.1 + b.3).max(r.1 + r.3) - b.1.min(r.1),
-                ),
-            });
-        }
-        let orig = bbox?;
+        let orig = selection_box(&editor.root, &editor.selection)?;
         let (x, y, w, h) = orig;
         let corner = [(x, y), (x + w, y), (x, y + h), (x + w, y + h)]
             .iter()
@@ -4546,6 +4548,66 @@ impl Host {
             parts,
             applied: 1.0,
         })
+    }
+
+    /// The Scale tool's BODY drag (K) — Figma: "Hover over the object's
+    /// bounding box to make the cursor appear. Then, click-and-drag to
+    /// resize." The press point itself rides the pointer, and the corner
+    /// opposite the nearest one to it stays put, exactly as a handle grab does
+    /// with its own corner.
+    fn scale_body_grab(&mut self, world: Point) -> Option<Drag> {
+        let doc = self.app.doc();
+        let editor = doc.editor_ref();
+        let orig = selection_box(&editor.root, &editor.selection)?;
+        let (x, y, w, h) = orig;
+        if world.x < x || world.y < y || world.x > x + w || world.y > y + h {
+            return None;
+        }
+        let nearest = crate::state::nearest_corner(orig, world);
+        let anchor = crate::state::scale_anchor(orig, nearest);
+        let parts: Vec<(String, f64, f64)> = editor
+            .selection
+            .iter()
+            .map(|id| (id.clone(), anchor.0, anchor.1))
+            .collect();
+        let base_depth = editor.undo_depth();
+        Some(Drag::ScaleBody {
+            orig,
+            anchor,
+            grab: world,
+            base_depth,
+            parts,
+            applied: 1.0,
+        })
+    }
+
+    /// Apply a scale factor to the selection about the Scale panel's anchor
+    /// cell. `editor.scale_nodes_about` is the ONE writer, so the panel, the
+    /// multiplier and the canvas cannot drift apart, and the whole selection
+    /// lands in one undo step.
+    fn apply_scale_factor(&mut self, factor: f64) -> bool {
+        if !factor.is_finite() || factor <= 0.0 || (factor - 1.0).abs() < 1e-9 {
+            return false;
+        }
+        let cell = self.app.scale_cell;
+        let parts = {
+            let doc = self.app.doc();
+            let editor = doc.editor_ref();
+            let Some(orig) = selection_box(&editor.root, &editor.selection) else {
+                return false;
+            };
+            let (ax, ay) = crate::state::scale_cell_anchor(orig, cell);
+            editor
+                .selection
+                .iter()
+                .map(|id| (id.clone(), ax, ay))
+                .collect::<Vec<_>>()
+        };
+        let scaled = self.app.doc().editor().scale_nodes_about(&parts, factor);
+        if scaled {
+            self.app.mark_dirty();
+        }
+        scaled
     }
 
     fn on_move(&mut self, p: Point) {
@@ -4874,6 +4936,33 @@ impl Host {
                 };
                 if scaled {
                     if let Some(Drag::ScaleSel { applied, .. }) = self.app.drag.as_mut() {
+                        *applied = factor;
+                    }
+                    self.app.mark_dirty();
+                }
+            }
+            Some(Drag::ScaleBody {
+                anchor,
+                grab,
+                applied,
+                parts,
+                ..
+            }) => {
+                let world = self.app.screen_to_world(p);
+                let factor = crate::state::scale_grab_factor(anchor, grab, world);
+                // the same incremental rule as the handle drag: what is on
+                // screen is already scaled by `applied`, so the next step
+                // applies the ratio, and the gesture stays one undo entry
+                let rel = factor / applied;
+                if (rel - 1.0).abs() < 1e-4 {
+                    return;
+                }
+                let scaled = {
+                    let doc = self.app.doc();
+                    doc.editor().scale_nodes_about(&parts, rel)
+                };
+                if scaled {
+                    if let Some(Drag::ScaleBody { applied, .. }) = self.app.drag.as_mut() {
                         *applied = factor;
                     }
                     self.app.mark_dirty();
@@ -5329,7 +5418,8 @@ impl Host {
             }
             // a scale is one gesture too: every move pushed its own
             // ReplaceNode, and one Ctrl+Z must undo the whole drag
-            Some(Drag::ScaleSel { base_depth, .. }) => {
+            Some(Drag::ScaleSel { base_depth, .. })
+            | Some(Drag::ScaleBody { base_depth, .. }) => {
                 let doc = self.app.doc();
                 let editor = doc.editor();
                 editor.merge_last(editor.undo_depth().saturating_sub(base_depth));
@@ -10177,6 +10267,9 @@ impl Host {
                     Some(axis)
                 };
             }
+            Action::ScaleCell(cell) => {
+                self.app.scale_cell = cell.min(crate::state::SCALE_CELLS - 1);
+            }
             Action::SetConstraint(axis, row) => {
                 self.app.dropdown_constraint = None;
                 let Some(id) = self.app.doc_ref().selected_id() else {
@@ -11975,6 +12068,36 @@ impl Host {
                     self.app.mark_dirty();
                 }
             }
+            FieldId::ScaleFactor => {
+                if let Some(f) = parse_scale(raw) {
+                    if self.apply_scale_factor(f) {
+                        self.app.status = format!("Scaled to {}%", (f * 100.0).round() as i64);
+                    }
+                }
+            }
+            FieldId::ScaleW | FieldId::ScaleH => {
+                // Figma: type a dimension, and "the other dimension field will
+                // automatically update" — the factor is the ratio the box has
+                // to reach, and the engine's proportional scale does the rest.
+                let current = {
+                    let doc = self.app.doc();
+                    selection_box(&doc.editor_ref().root, &doc.editor_ref().selection).map(|o| {
+                        if id == FieldId::ScaleW {
+                            o.2
+                        } else {
+                            o.3
+                        }
+                    })
+                };
+                let asked = num(raw).filter(|v| *v > 0.0);
+                if let (Some(cur), Some(asked)) = (current.filter(|c| *c > 0.0), asked) {
+                    let ratio = asked / cur;
+                    if self.apply_scale_factor(ratio) {
+                        let pct = (ratio * 100.0).round() as i64;
+                        self.app.status = format!("Scaled to {}%", pct);
+                    }
+                }
+            }
             _ => {
                 if self.app.route_typo_panel_field(id, raw) {
                     self.app.mark_dirty();
@@ -12229,6 +12352,39 @@ fn resizer_at(app: &App, p: Point) -> Option<u8> {
     None
 }
 
+/// The selection's box in parent space — what the Scale tool's handles, its
+/// body drag and the Scale panel's anchor cells all measure against. `None`
+/// when nothing is selected or an id no longer resolves.
+pub(crate) fn selection_box(root: &Node, ids: &[String]) -> Option<(f64, f64, f64, f64)> {
+    let mut bbox: Option<(f64, f64, f64, f64)> = None;
+    for id in ids {
+        let n = crate::editor_ui::find_node(root, id.as_str())?;
+        let r = (n.transform.x, n.transform.y, n.w, n.h);
+        bbox = Some(match bbox {
+            None => r,
+            Some(b) => (
+                b.0.min(r.0),
+                b.1.min(r.1),
+                (b.0 + b.2).max(r.0 + r.2) - b.0.min(r.0),
+                (b.1 + b.3).max(r.1 + r.3) - b.1.min(r.1),
+            ),
+        });
+    }
+    bbox
+}
+
+/// The Scale panel's multiplier as a factor: a percentage ("150%", or a bare
+/// "150"), or an explicit multiplier ("1.5x"). `None` when the text is not a
+/// positive number — the field then simply closes, like an empty W field.
+fn parse_scale(raw: &str) -> Option<f64> {
+    let t = raw.trim().to_ascii_lowercase();
+    if let Some(n) = t.strip_suffix('x') {
+        return n.trim().parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0);
+    }
+    let n = t.strip_suffix('%').unwrap_or(&t).trim().parse::<f64>().ok()?;
+    (n.is_finite() && n > 0.0).then_some(n / 100.0)
+}
+
 fn count_kind(root: &Node) -> usize {
     fn walk(n: &Node, out: &mut usize) {
         *out += 1;
@@ -12305,6 +12461,16 @@ fn field_initial(app: &App, f: FieldId) -> String {
         FieldId::GridColor => editor_ui::hex6(app.grid_color),
         FieldId::GridPct => format!("{}", app.grid_pct.round() as i64),
         FieldId::Zoom => format!("{}", (app.zoom * 100.0).round() as i64),
+        FieldId::ScaleFactor => {
+            let live = match &app.drag {
+                Some(crate::state::Drag::ScaleSel { applied, .. })
+                | Some(crate::state::Drag::ScaleBody { applied, .. }) => *applied,
+                _ => 1.0,
+            };
+            format!("{}%", (live * 100.0).round() as i64)
+        }
+        FieldId::ScaleW => fmt(s.w),
+        FieldId::ScaleH => fmt(s.h),
         FieldId::ComponentDescription => app
             .doc_ref()
             .selected_id()

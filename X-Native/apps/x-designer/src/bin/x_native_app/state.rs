@@ -345,41 +345,87 @@ pub fn scale_anchor(orig: (f64, f64, f64, f64), corner: usize) -> (f64, f64) {
     }
 }
 
-/// The Scale tool's drag rule, shared by the live preview and the commit (the
-/// same arrangement as `create_rect`): `factor` is the pointer's projection
-/// onto the diagonal from the anchor to the grabbed corner, so the box follows
-/// the pointer and stays uniform — Figma's Scale is proportional by
-/// definition, and 1.0 means "unmoved". A collapse is clamped rather than
-/// flipped: dragging past the anchor must not mirror the layer.
+/// The Scale panel's anchor box, as nine cells read row by row from the top
+/// left — the middle one (4) is what the panel opens on, exactly as Figma's
+/// screenshot shows it. ONE table: the panel paints it, the multiplier and the
+/// dimension fields read it, and the canvas body drag uses `nearest_corner`
+/// instead (Figma anchors a drag to the corner opposite the pointer).
+pub const SCALE_CELLS: usize = 9;
+
+/// The fixed point of a panel scale: which side of the box stays put.
+pub fn scale_cell_anchor(orig: (f64, f64, f64, f64), cell: usize) -> (f64, f64) {
+    let (x, y, w, h) = orig;
+    let cell = cell.min(SCALE_CELLS - 1);
+    let xs = [x, x + w / 2.0, x + w];
+    let ys = [y, y + h / 2.0, y + h];
+    (xs[cell % 3], ys[cell / 3])
+}
+
+/// The corner a handle grab takes hold of: 0 top-left, 1 top-right, 2
+/// bottom-left, 3 bottom-right. `scale_anchor` is its opposite — the fixed
+/// point of the same grab.
+pub fn corner_point(orig: (f64, f64, f64, f64), corner: usize) -> Point {
+    let (x, y, w, h) = orig;
+    match corner {
+        0 => Point::new(x, y),
+        1 => Point::new(x + w, y),
+        2 => Point::new(x, y + h),
+        _ => Point::new(x + w, y + h),
+    }
+}
+
+/// The corner of the box nearest `p` — which corner a body drag scales about
+/// (the opposite one stays put, like a handle grab).
+pub fn nearest_corner(orig: (f64, f64, f64, f64), p: Point) -> usize {
+    let (x, y, w, h) = orig;
+    match (p.x - x > w / 2.0, p.y - y > h / 2.0) {
+        (false, false) => 0,
+        (true, false) => 1,
+        (false, true) => 2,
+        (true, true) => 3,
+    }
+}
+
+/// The projection rule behind EVERY scale gesture, with the grab point in
+/// place of the grabbed corner: `factor` is where the pointer lands on the ray
+/// from the anchor through the grab, so the grabbed point rides the pointer
+/// and the box stays uniform — Figma's Scale is proportional by definition,
+/// and 1.0 means "unmoved". A collapse is clamped rather than flipped:
+/// dragging past the anchor must not mirror the layer.
+pub fn scale_grab_factor(anchor: (f64, f64), grab: Point, pointer: Point) -> f64 {
+    let (ux, uy) = (grab.x - anchor.0, grab.y - anchor.1);
+    let denom = ux * ux + uy * uy;
+    if denom <= 1e-9 {
+        return 1.0;
+    }
+    let f = ((pointer.x - anchor.0) * ux + (pointer.y - anchor.1) * uy) / denom;
+    f.max(MIN_SCALE)
+}
+
+/// The Scale tool's handle rule, shared by the live preview and the commit:
+/// the grab is the corner the pointer holds, the anchor the one opposite it.
 pub fn scale_drag_factor(
     orig: (f64, f64, f64, f64),
     corner: usize,
     pointer: Point,
 ) -> (f64, (f64, f64)) {
-    let (x, y, w, h) = orig;
-    let (gx, gy) = match corner {
-        0 => (x, y),
-        1 => (x + w, y),
-        2 => (x, y + h),
-        _ => (x + w, y + h),
-    };
-    let (ax, ay) = scale_anchor(orig, corner);
-    let (ux, uy) = (gx - ax, gy - ay);
-    let denom = ux * ux + uy * uy;
-    if denom <= 1e-9 {
-        return (1.0, (ax, ay));
-    }
-    let f = ((pointer.x - ax) * ux + (pointer.y - ay) * uy) / denom;
-    (f.max(MIN_SCALE), (ax, ay))
+    let anchor = scale_anchor(orig, corner);
+    let grab = corner_point(orig, corner);
+    (scale_grab_factor(anchor, grab, pointer), anchor)
 }
 
-/// The box a scale of `factor` about the anchor maps `orig` onto — the paint
-/// half of `scale_drag_factor`.
-pub fn scaled_box(orig: (f64, f64, f64, f64), corner: usize, factor: f64) -> Rect {
+/// The box a scale of `factor` about `anchor` maps `orig` onto — the paint
+/// half of both drag rules.
+pub fn scaled_box_about(orig: (f64, f64, f64, f64), anchor: (f64, f64), factor: f64) -> Rect {
     let (x, y, w, h) = orig;
-    let (ax, ay) = scale_anchor(orig, corner);
+    let (ax, ay) = anchor;
     let (nx, ny) = (ax + (x - ax) * factor, ay + (y - ay) * factor);
     Rect::new(nx, ny, nx + w * factor, ny + h * factor)
+}
+
+/// The box a handle grab's scale maps `orig` onto.
+pub fn scaled_box(orig: (f64, f64, f64, f64), corner: usize, factor: f64) -> Rect {
+    scaled_box_about(orig, scale_anchor(orig, corner), factor)
 }
 
 /// Smallest factor a drag may commit: below this the layer is invisible and
@@ -946,6 +992,8 @@ pub enum Action {
     ConstraintDropdown(ConstraintAxis),
     /// Constraints menu item: row index into `CONSTRAINT_H` / `CONSTRAINT_V`.
     SetConstraint(ConstraintAxis, usize),
+    /// Scale panel: pick an anchor cell (Figma's nine-point box).
+    ScaleCell(usize),
     /// Toggle the zoom menu (right-panel header; audit F4)
     ZoomMenu,
     /// Zoom-menu item: 0 in, 1 out, 2 100%, 3 selection, 4 fit
@@ -1228,6 +1276,16 @@ pub enum FieldId {
     /// `App::var_edit_name`, resolved at click from `var_value_rects` —
     /// same pattern as `InstanceProp`).
     VarValue,
+    /// Scale panel: the multiplier. A percentage on screen ("100%"); a bare
+    /// number is read as one, and an `x` suffix as a plain multiplier.
+    ScaleFactor,
+    /// Scale panel: the width field. Typing a number scales the selection so
+    /// the box BECOMES that width — proportionally, which is the whole
+    /// difference from the inspector's own W (Figma: "the other dimension
+    /// field will automatically update").
+    ScaleW,
+    /// Scale panel: the height field, the width's mirror.
+    ScaleH,
     /// Tokens panel: variable name editing (rename-as-alias; same target
     /// resolution as `VarValue`, from `var_name_rects`).
     VarName,
@@ -1559,6 +1617,19 @@ pub enum Drag {
         corner: usize,
         orig: (f64, f64, f64, f64), // x, y, w, h at drag start
         start: Point,
+        base_depth: usize,
+        parts: Vec<(String, f64, f64)>, // (id, anchor x, anchor y) in parent space
+        applied: f64,
+    },
+    /// Scale-tool BODY drag (K): Figma's "hover over the object's bounding box
+    /// ... then click-and-drag to resize". The anchor is the corner opposite
+    /// the nearest one to the press, and the press point itself rides the
+    /// pointer — the panel's anchor box is a setting for its multiplier and
+    /// dimension fields, not for the canvas gesture.
+    ScaleBody {
+        orig: (f64, f64, f64, f64), // x, y, w, h at drag start
+        anchor: (f64, f64),
+        grab: Point,
         base_depth: usize,
         parts: Vec<(String, f64, f64)>, // (id, anchor x, anchor y) in parent space
         applied: f64,
@@ -2429,6 +2500,9 @@ pub struct App {
     /// Inspector W/H lock state; kept at app level because it is UI intent,
     /// not a document property.
     pub aspect_ratio_locked: bool,
+    /// Scale panel: which of the nine anchor cells stays put (4 = centre, the
+    /// cell Figma's panel opens on).
+    pub scale_cell: usize,
     pub zoom: f64,
     pub pan: (f64, f64),
     pub ctrl: bool,
@@ -2607,6 +2681,7 @@ impl App {
             vector_edit_mode: VectorEditMode::default(),
             // Phase 5: Shape Builder state
             aspect_ratio_locked: false,
+            scale_cell: 4,
             zoom: 1.0,
             pan: (0.0, 0.0),
             ctrl: false,

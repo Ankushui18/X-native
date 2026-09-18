@@ -5111,7 +5111,111 @@ fn paint_design(
         y += 18.0;
     }
     let y = paint_brush_styles(app, s, hit, x0, xr, y);
+    let y = paint_scale_block(app, s, hit, x0, xr, y);
     paint_constraints(app, s, hit, x0, xr, y);
+}
+
+/// The Scale tool's panel (K) — Figma's Scale section in the right sidebar:
+/// the width and height fields (type one and the other follows, because a
+/// scale is proportional), the multiplier, and the anchor box that decides
+/// which side of the box stays put. Shown while the tool is active, like
+/// Figma's own panel, and read from the same `state` tables the action
+/// handlers write.
+fn paint_scale_block(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    x0: f64,
+    xr: f64,
+    y0: f64,
+) -> f64 {
+    // Figma's Scale panel is the Move panel's, while K is the active tool:
+    // press V and the Size section comes back.
+    if app.tool != crate::state::Tool::Scale {
+        return y0;
+    }
+    // W/H describe the SELECTION's box — the same box the multiplier and the
+    // dimension fields scale about — not the primary layer's own size.
+    let (bw, bh) = {
+        let doc = app.doc_ref();
+        let editor = doc.editor_ref();
+        let Some(b) = crate::run::selection_box(&editor.root, &editor.selection) else {
+            return y0;
+        };
+        (b.2, b.3)
+    };
+    let mut y = y0 + 1.0 + 12.0;
+    app.fonts.caps_label(s, x0, y, "SCALE", C_TEXT, Wt::Med);
+    y += 12.0 + LABEL_GAP;
+    let half = (xr - x0 - 8.0) / 2.0;
+    let wr = Rect::new(x0, y, x0 + half, y + INPUT_H);
+    input(
+        app,
+        s,
+        hit,
+        wr,
+        Some(("W", T10)),
+        &field_val(app, FieldId::ScaleW, fmt_num(bw)),
+        true,
+        Some(Action::Field(FieldId::ScaleW)),
+        None,
+    );
+    let hr = Rect::new(x0 + half + 8.0, y, xr, y + INPUT_H);
+    input(
+        app,
+        s,
+        hit,
+        hr,
+        Some(("H", T10)),
+        &field_val(app, FieldId::ScaleH, fmt_num(bh)),
+        true,
+        Some(Action::Field(FieldId::ScaleH)),
+        None,
+    );
+    y += INPUT_H + 6.0;
+    let live = live_scale(app);
+    let shown = format!("{}%", (live * 100.0).round() as i64);
+    let mr = Rect::new(x0, y, xr, y + INPUT_H);
+    input(
+        app,
+        s,
+        hit,
+        mr,
+        Some(("Scale", T10)),
+        &field_val(app, FieldId::ScaleFactor, shown),
+        true,
+        Some(Action::Field(FieldId::ScaleFactor)),
+        None,
+    );
+    y += INPUT_H + 10.0;
+    // the anchor box: Figma's nine points, the active one filled — the cell
+    // the multiplier and the dimension fields scale about
+    let pitch = 14.0;
+    let gx = (x0 + xr) / 2.0 - pitch;
+    for cell in 0..crate::state::SCALE_CELLS {
+        let cx = gx + (cell % 3) as f64 * pitch;
+        let cy = y + (cell / 3) as f64 * pitch;
+        if app.scale_cell == cell {
+            circle(s, cx, cy, 3.5, C_TEXT);
+        } else {
+            ring(s, cx, cy, 3.0, C_LINE_2, 1.0);
+        }
+        let cr = Rect::new(cx - 7.0, cy - 7.0, cx + 7.0, cy + 7.0);
+        hit.push((cr, Action::ScaleCell(cell)));
+    }
+    // the box's own height, so the next section starts under it
+    y + 34.0
+}
+
+/// The multiplier a scale gesture has reached: what the Scale panel shows
+/// while a drag is in flight (Figma's own field tracks the canvas), and 1.0
+/// when nothing is being dragged.
+fn live_scale(app: &App) -> f64 {
+    match &app.drag {
+        Some(crate::state::Drag::ScaleSel { applied, .. })
+        | Some(crate::state::Drag::ScaleBody { applied, .. }) => *applied,
+        _ => 1.0,
+    }
 }
 
 /// The Brush's styles, at the end of the Design column. Figma Draw puts the

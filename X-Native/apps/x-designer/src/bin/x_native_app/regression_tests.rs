@@ -25,6 +25,17 @@ fn temp(name: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("x-native-audit-{}-{name}", std::process::id()))
 }
 
+/// Type `text` into one of the inspector's numeric fields: focus it, select
+/// all, replace the buffer, commit with ⏎ — what a user does.
+fn set_field(h: &mut Host, id: FieldId, text: &str) {
+    h.dispatch(Action::Field(id));
+    h.app.ctrl = true;
+    h.on_key(Key::Character("a".into()), None);
+    h.app.ctrl = false;
+    h.on_text(text);
+    h.on_key(Key::Named(NamedKey::Enter), None);
+}
+
 fn begin_text(h: &mut Host, text: &str) {
     let root_id = h.app.doc().editor_ref().root.id.clone();
     h.app.doc().editor().insert_node(
@@ -1605,6 +1616,129 @@ fn the_scale_tool_grows_a_layer_from_the_corner_you_are_not_holding() {
         f1.stroke.width, 2.0,
         "one undo restores the pre-drag state, stroke included"
     );
+}
+
+/// The Scale panel's own tables: nine anchor cells and the corner a body drag
+/// scales about — plus the proof that the handle rule and the body rule are the
+/// SAME projection, so the two gestures cannot drift apart.
+#[test]
+fn the_scale_tables_are_figmas_nine_points() {
+    let bx = (10.0, 20.0, 100.0, 60.0);
+    assert_eq!(crate::state::scale_cell_anchor(bx, 0), (10.0, 20.0));
+    assert_eq!(crate::state::scale_cell_anchor(bx, 4), (60.0, 50.0));
+    assert_eq!(crate::state::scale_cell_anchor(bx, 8), (110.0, 80.0));
+    let near = |p: Point| crate::state::nearest_corner(bx, p);
+    assert_eq!(near(Point::new(12.0, 22.0)), 0);
+    assert_eq!(near(Point::new(108.0, 22.0)), 1);
+    assert_eq!(near(Point::new(12.0, 78.0)), 2);
+    assert_eq!(near(Point::new(108.0, 78.0)), 3);
+    // one projection, two gestures: the handle grab's factor IS the general
+    // rule's, with the grabbed corner as the grab point
+    let corner = 1;
+    let anchor = crate::state::scale_anchor(bx, corner);
+    let grab = crate::state::corner_point(bx, corner);
+    let pointer = Point::new(500.0, 33.0);
+    let (f, a) = crate::state::scale_drag_factor(bx, corner, pointer);
+    assert_eq!(a, anchor);
+    assert_eq!(f, crate::state::scale_grab_factor(anchor, grab, pointer));
+    // a drag past the anchor is clamped, never mirrored
+    let flat = crate::state::scale_grab_factor(
+        (0.0, 0.0),
+        Point::new(10.0, 0.0),
+        Point::new(-1.0, 0.0),
+    );
+    assert_eq!(flat, crate::state::MIN_SCALE);
+}
+
+/// The Scale tool's second half — the panel and the body drag. Figma's page:
+/// "Use the scale multiplier, in the Scale panel … type a multiplier in the
+/// text field and press Enter"; "Use either the width or height fields … The
+/// other dimension field will automatically update"; "Hover over the object's
+/// bounding box to make the cursor appear. Then, click-and-drag to resize";
+/// and the anchor box "tells Figma which side of the object to stay put".
+#[test]
+fn the_scale_panel_and_the_body_drag_scale_the_selection() {
+    let mut h = host();
+    assert_eq!(h.app.scale_cell, 4, "the panel opens on the centre");
+    h.dispatch(Action::ScaleCell(99));
+    assert_eq!(h.app.scale_cell, 8, "a stray cell clamps to the last one");
+
+    // a 100x100 rect on the page, clear of frame-1
+    let depth0 = h.app.doc_ref().editor_ref().undo_depth();
+    h.finish_create(
+        Tool::Rect,
+        Point::new(500.0, 20.0),
+        Point::new(600.0, 120.0),
+    );
+    let sel = h.app.doc_ref().editor_ref().selection.clone();
+    h.app.tool = Tool::Scale;
+
+    // the multiplier, about the centre cell: it halves and stays centred
+    h.dispatch(Action::ScaleCell(4));
+    set_field(&mut h, FieldId::ScaleFactor, "50%");
+    let root = &h.app.doc_ref().editor_ref().root;
+    let half = find_node_clone(root, &sel[0]).expect("the rect is there");
+    assert_eq!((half.transform.x, half.transform.y), (525.0, 45.0));
+    assert_eq!((half.w, half.h), (50.0, 50.0));
+    assert_eq!(h.app.doc_ref().editor_ref().undo_depth(), depth0 + 1);
+    h.app.doc().editor().undo();
+
+    // about the top-left cell, 200% leaves the top-left where it was
+    h.dispatch(Action::ScaleCell(0));
+    set_field(&mut h, FieldId::ScaleFactor, "200%");
+    let root = &h.app.doc_ref().editor_ref().root;
+    let big = find_node_clone(root, &sel[0]).expect("the rect is there");
+    assert_eq!((big.transform.x, big.transform.y), (500.0, 20.0));
+    assert_eq!((big.w, big.h), (200.0, 200.0));
+
+    // the W field is the same scale by another route — and H follows it
+    set_field(&mut h, FieldId::ScaleW, "300");
+    let root = &h.app.doc_ref().editor_ref().root;
+    let wide = find_node_clone(root, &sel[0]).expect("the rect is there");
+    assert_eq!((wide.w, wide.h), (300.0, 300.0), "both fields follow");
+    assert_eq!((wide.transform.x, wide.transform.y), (500.0, 20.0));
+
+    // the body drag: on the canvas K never moves a layer — a press inside the
+    // box scales it about the corner OPPOSITE the nearest one to the press
+    let reg = h.app.editor_regions();
+    let (cx, cy) = (
+        (reg.canvas.x0 + reg.canvas.x1) / 2.0,
+        (reg.canvas.y0 + reg.canvas.y1) / 2.0,
+    );
+    let centre = h.app.screen_to_world(Point::new(cx, cy));
+    h.finish_create(
+        Tool::Rect,
+        Point::new(centre.x - 50.0, centre.y - 50.0),
+        Point::new(centre.x + 50.0, centre.y + 50.0),
+    );
+    let sel = h.app.doc_ref().editor_ref().selection.clone();
+    let depth1 = h.app.doc_ref().editor_ref().undo_depth();
+    h.app.tool = Tool::Scale;
+    let press = Point::new(centre.x - 30.0, centre.y - 30.0);
+    h.on_press(h.app.world_to_screen(press));
+    assert!(
+        matches!(&h.app.drag, Some(Drag::ScaleBody { .. })),
+        "K scales the body; it never moves a layer"
+    );
+    let nudged = Point::new(centre.x - 33.0, centre.y - 33.0);
+    h.on_move(h.app.world_to_screen(nudged));
+    h.on_release();
+    let root = &h.app.doc_ref().editor_ref().root;
+    let grown = find_node_clone(root, &sel[0]).expect("the dragged rect");
+    assert!(grown.w > 100.0, "the box grew: {}", grown.w);
+    let square = (grown.w - grown.h).abs();
+    assert!(square < 1e-6, "a scale keeps the ratio");
+    let far = (centre.x + 50.0, centre.y + 50.0);
+    let far_x = grown.transform.x + grown.w;
+    let far_y = grown.transform.y + grown.h;
+    assert!((far_x - far.0).abs() < 0.5, "the far corner stayed put");
+    assert!((far_y - far.1).abs() < 0.5, "the far corner stayed put");
+    assert_eq!(h.app.doc_ref().editor_ref().undo_depth(), depth1 + 1);
+    h.app.doc().editor().undo();
+    let root = &h.app.doc_ref().editor_ref().root;
+    let back = find_node_clone(root, &sel[0]).expect("the rect is back");
+    let box_back = (100.0, 100.0);
+    assert_eq!((back.w, back.h), box_back, "one undo restores the box");
 }
 
 /// ⌥⌘G is Figma's Frame selection: the selection goes into a NEW frame sized
