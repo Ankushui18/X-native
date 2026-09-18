@@ -276,6 +276,25 @@ mod tests {
     }
 
     #[test]
+    fn hit_test_answers_on_a_polygons_and_stars_ink() {
+        // Figma's Polygon and Star are outlines that fill a box whose shape
+        // does not follow them (the page: "the blue bounding box around the
+        // shape is below the bottom of the shape"). A click in the corner of
+        // that box is NOT on the shape — the shape's own ink answers, like
+        // the ellipse's.
+        let d = Node::frame("page", 400.0, 400.0)
+            .child(Node::poly("tri", 100.0, 100.0, 100.0, 100.0, 3, Color::WHITE))
+            .child(Node::star("s", 250.0, 100.0, 100.0, 100.0, 5, 0.382, Color::WHITE));
+        // the triangle: apex at the top, its lowest edge a quarter above the
+        // box's bottom — inside answers, the box's empty bottom-left does not
+        assert_eq!(hit_test(&d, Point::new(150.0, 140.0)), Some("tri".into()));
+        assert_eq!(hit_test(&d, Point::new(105.0, 195.0)), None);
+        // the star: the centre answers, the notch beside the box corner misses
+        assert_eq!(hit_test(&d, Point::new(300.0, 150.0)), Some("s".into()));
+        assert_eq!(hit_test(&d, Point::new(345.0, 195.0)), None);
+    }
+
+    #[test]
     fn hit_test_respects_rotation() {
         let d = Node::frame("page", 400.0, 400.0).child(
             Node::rect("r", 100.0, 100.0, 100.0, 20.0, Color::WHITE)

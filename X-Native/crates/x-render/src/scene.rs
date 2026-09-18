@@ -636,6 +636,53 @@ fn encode(
                 );
             }
         }
+        NodeKind::Poly { sides } => {
+            // polygon primitive: the same box-local outline the Boolean ops and
+            // the export read, filled + stroked like any other shape
+            let bez = path_to_bez(&x_core::booleans::poly_path_cmds(node.w, node.h, *sides));
+            encode_drop_shadows(scene, node, world, &bez, stats);
+            scene.fill(
+                Fill::NonZero,
+                world,
+                &brush_with_alpha(effective_brush(node, overrides, vars), node.opacity),
+                None,
+                &bez,
+            );
+            if node.stroke.width > 0.0 {
+                scene.stroke(
+                    &vello::kurbo::Stroke::new(node.stroke.width),
+                    world,
+                    &brush_with_alpha(paint_brush(&node.stroke.paint, vars), node.opacity),
+                    None,
+                    &bez,
+                );
+                stats.paths += 1;
+            }
+            stats.paths += 1;
+        }
+        NodeKind::Star { points, ratio } => {
+            let cmds = x_core::booleans::star_path_cmds(node.w, node.h, *points, *ratio);
+            let bez = path_to_bez(&cmds);
+            encode_drop_shadows(scene, node, world, &bez, stats);
+            scene.fill(
+                Fill::NonZero,
+                world,
+                &brush_with_alpha(effective_brush(node, overrides, vars), node.opacity),
+                None,
+                &bez,
+            );
+            if node.stroke.width > 0.0 {
+                scene.stroke(
+                    &vello::kurbo::Stroke::new(node.stroke.width),
+                    world,
+                    &brush_with_alpha(paint_brush(&node.stroke.paint, vars), node.opacity),
+                    None,
+                    &bez,
+                );
+                stats.paths += 1;
+            }
+            stats.paths += 1;
+        }
         NodeKind::Arc { start, end, ratio } => {
             // arc primitive: the shared wedge/ring outline, filled + stroked
             let bez = path_to_bez(&x_core::booleans::arc_path_cmds(

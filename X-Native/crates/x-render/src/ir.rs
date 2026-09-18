@@ -250,6 +250,12 @@ fn mask_path_of(n: &Node) -> Option<BezPath> {
         NodeKind::Arc { start, end, ratio } => Some(path_to_bez(&x_core::booleans::arc_path_cmds(
             n.w, n.h, *start, *end, *ratio,
         ))),
+        NodeKind::Poly { sides } => Some(path_to_bez(&x_core::booleans::poly_path_cmds(
+            n.w, n.h, *sides,
+        ))),
+        NodeKind::Star { points, ratio } => Some(path_to_bez(&x_core::booleans::star_path_cmds(
+            n.w, n.h, *points, *ratio,
+        ))),
         NodeKind::Rect { radius } => {
             let r = *radius;
             Some(if r > 0.0 {
@@ -1199,6 +1205,35 @@ fn lower(
             let shape = path_to_bez(&x_core::booleans::arc_path_cmds(
                 node.w, node.h, *start, *end, *ratio,
             ));
+            let override_color = overrides.get(&node.id).and_then(|raw| parse_hex_color(raw));
+            emit_visual_layers(
+                tree,
+                node,
+                &key,
+                world,
+                &shape,
+                vars,
+                opacity,
+                override_color,
+            );
+        }
+        NodeKind::Poly { sides } => {
+            let shape = path_to_bez(&x_core::booleans::poly_path_cmds(node.w, node.h, *sides));
+            let override_color = overrides.get(&node.id).and_then(|raw| parse_hex_color(raw));
+            emit_visual_layers(
+                tree,
+                node,
+                &key,
+                world,
+                &shape,
+                vars,
+                opacity,
+                override_color,
+            );
+        }
+        NodeKind::Star { points, ratio } => {
+            let cmds = x_core::booleans::star_path_cmds(node.w, node.h, *points, *ratio);
+            let shape = path_to_bez(&cmds);
             let override_color = overrides.get(&node.id).and_then(|raw| parse_hex_color(raw));
             emit_visual_layers(
                 tree,

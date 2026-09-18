@@ -450,6 +450,8 @@ pub fn node_to_path(n: &Node) -> Option<Vec<PathCmd>> {
                 PathCmd::Close,
             ])
         }
+        NodeKind::Poly { sides } => Some(poly_path_cmds(n.w, n.h, *sides)),
+        NodeKind::Star { points, ratio } => Some(star_path_cmds(n.w, n.h, *points, *ratio)),
         NodeKind::Line => Some(vec![PathCmd::MoveTo(0.0, 0.0), PathCmd::LineTo(n.w, n.h)]),
         _ => None,
     }
@@ -538,6 +540,88 @@ fn arc_segments(cmds: &mut Vec<PathCmd>, w: f64, h: f64, from: f64, sweep: f64, 
             y1,
         ));
     }
+}
+
+/// The Count bounds Figma documents for both a polygon's sides and a star's
+/// points: "The minimum is three and the maximum is 60."
+pub const COUNT_MIN: usize = 3;
+pub const COUNT_MAX: usize = 60;
+
+/// Figma's default star is "a five pointed star with ten sides"; the inner
+/// points sit at 38.2% of the radius, the classic five-point star.
+pub const STAR_RATIO: f64 = 0.382;
+
+fn clamp_count(n: usize) -> usize {
+    n.clamp(COUNT_MIN, COUNT_MAX)
+}
+
+fn ring_cmds(pts: &[(f64, f64)]) -> Vec<PathCmd> {
+    let mut out = Vec::with_capacity(pts.len() + 2);
+    for (i, p) in pts.iter().enumerate() {
+        if i == 0 {
+            out.push(PathCmd::MoveTo(p.0, p.1));
+        } else {
+            out.push(PathCmd::LineTo(p.0, p.1));
+        }
+    }
+    out.push(PathCmd::Close);
+    out
+}
+
+/// Figma's Polygon: `sides` vertices on the ellipse inscribed in the box, the
+/// first one at the top — "the default shape for the polygon tool is a
+/// triangle" — walking clockwise. LOCAL node space, like the arc's geometry,
+/// so the shape is an appearance of the box and never resizes it.
+pub fn poly_path_cmds(w: f64, h: f64, sides: usize) -> Vec<PathCmd> {
+    let n = clamp_count(sides);
+    let pts: Vec<(f64, f64)> = (0..n)
+        .map(|k| arc_point(w, h, -90.0 + 360.0 * k as f64 / n as f64, 1.0))
+        .collect();
+    ring_cmds(&pts)
+}
+
+/// Figma's Star: `points` outer vertices with the inner ones at `ratio` of the
+/// radius between them, so a five-point star has ten vertices. The first
+/// vertex is at the top, like the polygon's.
+pub fn star_path_cmds(w: f64, h: f64, points: usize, ratio: f64) -> Vec<PathCmd> {
+    let n = clamp_count(points);
+    let inner = ratio.clamp(0.05, 0.95);
+    let pts: Vec<(f64, f64)> = (0..n * 2)
+        .map(|k| {
+            let frac = if k % 2 == 0 { 1.0 } else { inner };
+            arc_point(w, h, -90.0 + 180.0 * k as f64 / n as f64, frac)
+        })
+        .collect();
+    ring_cmds(&pts)
+}
+
+/// Is the LOCAL point (x, y) on the shape: inside the filled outline, or
+/// within `tol` of it so the stroke is grabbable? The polygon and the star are
+/// both simple polygons, so one crossing test on the flattened path answers
+/// for either.
+pub fn path_hit(cmds: &[PathCmd], x: f64, y: f64, tol: f64) -> bool {
+    let polys = path_to_polylines(cmds, 2);
+    if path_is_closed(cmds) && point_in(&polys, x, y) {
+        return true;
+    }
+    polys.iter().any(|poly| {
+        let n = poly.len();
+        (0..n).any(|i| {
+            let (a, b) = (poly[i], poly[(i + 1) % n]);
+            dist_to_seg(a, b, (x, y)) <= tol
+        })
+    })
+}
+
+fn dist_to_seg(a: (f64, f64), b: (f64, f64), p: (f64, f64)) -> f64 {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 <= 1e-12 {
+        0.0
+    } else {
+        (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0)
+    };
+    ((p.0 - (a.0 + dx * t)).powi(2) + (p.1 - (a.1 + dy * t)).powi(2)).sqrt()
 }
 
 // ---------------------------------------------- outline-stroke geometry
@@ -1015,6 +1099,68 @@ mod tests {
                 .count(),
             3,
             "-200 deg -> 3 segments, same count the other way"
+        );
+    }
+
+    #[test]
+    fn a_polygon_is_a_ring_of_sides_whose_first_is_the_top() {
+        // Figma: "an enclosed shape that is made up of any number of straight
+        // lines", a triangle by default — every vertex on the box's rim, in
+        // the box's own space, so the box never becomes the shape.
+        let cmds = poly_path_cmds(100.0, 100.0, 3);
+        assert_eq!(cmds.len(), 4, "three vertices and the Close");
+        assert!(
+            matches!(cmds[0], PathCmd::MoveTo(x, y) if (x - 50.0).abs() < 1e-9 && y.abs() < 1e-9),
+            "the first vertex is the top of the box"
+        );
+        let verts: Vec<(f64, f64)> = cmds
+            .iter()
+            .filter_map(|c| match c {
+                PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => Some((*x, *y)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(verts.len(), 3, "a triangle has three");
+        for (x, y) in &verts {
+            let (dx, dy) = ((*x - 50.0) / 50.0, (*y - 50.0) / 50.0);
+            let r = (dx * dx + dy * dy).sqrt();
+            assert!((r - 1.0).abs() < 1e-9, "vertex {x},{y} sits on the rim");
+        }
+        assert!(matches!(cmds.last(), Some(PathCmd::Close)));
+        // Figma's Count is clamped to 3..60 whatever the caller says
+        assert_eq!(poly_path_cmds(100.0, 100.0, 1).len(), 4, "the floor is 3");
+        assert_eq!(
+            poly_path_cmds(100.0, 100.0, 200).len(),
+            COUNT_MAX + 1,
+            "the ceiling is 60"
+        );
+    }
+
+    #[test]
+    fn a_star_alternates_outside_points_with_ratio_inside_ones() {
+        // "The default will be a five pointed star with ten sides": five
+        // outside vertices on the rim, five at the Ratio between them.
+        let cmds = star_path_cmds(100.0, 100.0, 5, STAR_RATIO);
+        assert_eq!(cmds.len(), 11, "ten sides and the Close");
+        assert!(matches!(cmds.last(), Some(PathCmd::Close)));
+        let verts: Vec<(f64, f64)> = cmds
+            .iter()
+            .filter_map(|c| match c {
+                PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => Some((*x, *y)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(verts.len(), 10, "five points and five notches");
+        for (k, (x, y)) in verts.iter().enumerate() {
+            let (dx, dy) = ((*x - 50.0) / 50.0, (*y - 50.0) / 50.0);
+            let r = (dx * dx + dy * dy).sqrt();
+            let want = if k % 2 == 0 { 1.0 } else { STAR_RATIO };
+            assert!((r - want).abs() < 1e-9, "vertex {k} at {r}, not {want}");
+        }
+        assert_eq!(
+            star_path_cmds(100.0, 100.0, 7, 0.2).len(),
+            15,
+            "seven points is fifteen sides"
         );
     }
 

@@ -305,6 +305,13 @@ fn parse_grid(v: Option<&V>) -> Option<x_core::GridLayout> {
     })
 }
 
+/// Figma's Count is "minimum is three and the maximum is 60": a file that
+/// says otherwise loads clamped rather than wrong.
+fn count(v: Option<&V>) -> usize {
+    let n = v.and_then(V::num).unwrap_or(x_core::booleans::COUNT_MIN as f64) as usize;
+    n.clamp(x_core::booleans::COUNT_MIN, x_core::booleans::COUNT_MAX)
+}
+
 fn parse_kind(v: &V) -> NodeKind {
     match v.get("t").and_then(V::str).unwrap_or("frame") {
         "group" => NodeKind::Group,
@@ -318,6 +325,17 @@ fn parse_kind(v: &V) -> NodeKind {
             end: v.get("end").and_then(V::num).unwrap_or(270.0),
             // files written before the arc had a ratio are solid wedges
             ratio: v.get("ratio").and_then(V::num).unwrap_or(0.0),
+        },
+        "poly" => NodeKind::Poly {
+            sides: count(v.get("sides")),
+        },
+        "star" => NodeKind::Star {
+            points: count(v.get("points")),
+            ratio: v
+                .get("ratio")
+                .and_then(V::num)
+                .unwrap_or(x_core::booleans::STAR_RATIO)
+                .clamp(0.05, 0.95),
         },
         "line" => NodeKind::Line,
         "text" => NodeKind::Text {
@@ -1351,6 +1369,8 @@ fn validate_native_nodes(pages: &[V]) -> Result<(), String> {
                     | "rect"
                     | "ellipse"
                     | "arc"
+                    | "poly"
+                    | "star"
                     | "line"
                     | "text"
                     | "image"

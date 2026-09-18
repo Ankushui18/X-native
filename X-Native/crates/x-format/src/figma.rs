@@ -196,6 +196,11 @@ fn export_node(n: &x_core::Node, parent: (f64, f64)) -> String {
                 )))
             ),
         ),
+        NodeKind::Poly { sides } => ("POLYGON", format!(",\"pointCount\":{sides}")),
+        NodeKind::Star { points, ratio } => (
+            "STAR",
+            format!(",\"pointCount\":{points},\"starInnerScale\":{ratio}"),
+        ),
         NodeKind::Line => ("LINE", String::new()),
         NodeKind::Text { text } => {
             let font = n

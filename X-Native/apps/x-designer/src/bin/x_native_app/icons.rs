@@ -55,6 +55,9 @@ const ICONS: &[(&str, &[&str])] = &[
         "M10 16H4a1 1 0 0 0-1 1v3a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-3a1 1 0 0 0-1-1z",
     ]),
     ("clock", &["M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z", "M12 6v6l4 2"]),
+    ("triangle", &[
+        "M13.73 4a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z",
+    ]),
     ("star", &[
         "M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z",
     ]),
@@ -547,6 +550,7 @@ mod tests {
             "target",
             "trash",
             "trash-2",
+            "triangle",
             "type",
             "undo",
             "ungroup",
@@ -569,7 +573,7 @@ mod tests {
         }
         assert_eq!(
             names.len(),
-            75,
+            76,
             "census list drifted — recount when adding icons"
         );
     }

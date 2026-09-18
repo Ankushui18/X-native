@@ -94,6 +94,7 @@ pub fn paint_over(app: &mut App, s: &mut Scene) {
     }
     paint_canvas_overlays(app, s);
     paint_arc_handles(app, s);
+    paint_shape_handles(app, s);
     paint_conn_drag(app, s);
     paint_minimap(app, s, &mut hit);
     paint_layout_guides(app, s);
@@ -154,6 +155,56 @@ fn paint_arc_handles(app: &App, s: &mut Scene) {
         app.fonts
             .text_center(s, chip, &label, T10, C_BASE, Wt::Med, true);
     }
+}
+
+/// Figma's Count handle — and, on a star, its Ratio handle — on the polygon or
+/// star the pointer is on, or the one that is selected, drawn through the
+/// layer's world matrix like the arc's handles: "the small, round count handle
+/// next to the shape". While either is being dragged the value reads out in a
+/// chip above the shape.
+fn paint_shape_handles(app: &App, s: &mut Scene) {
+    let Some((id, _)) = crate::state::shape_target(app) else {
+        return;
+    };
+    let doc = app.doc_ref();
+    let root = &doc.editor_ref().root;
+    let Some(n) = find_node(root, &id) else {
+        return;
+    };
+    let Some(m) = crate::run::node_world(root, &id) else {
+        return;
+    };
+    for (part, local) in crate::state::shape_handles(n) {
+        let p = app.world_to_screen(m * local);
+        circle(s, p.x, p.y, 4.0, C_TEXT);
+        ring(s, p.x, p.y, 4.0, C_SEL, 1.5);
+        if part == crate::state::ShapePart::Ratio {
+            circle(s, p.x, p.y, 1.4, C_SEL);
+        }
+    }
+    let Some(crate::state::Drag::ShapeHandle { part, .. }) = &app.drag else {
+        return;
+    };
+    let label = match part {
+        crate::state::ShapePart::Ratio => match crate::state::star_props(n) {
+            Some((_, ratio)) => format!("{}%", (ratio * 100.0).round() as i64),
+            None => String::new(),
+        },
+        crate::state::ShapePart::Count => crate::state::shape_count(n)
+            .map(|c| format!("{c}"))
+            .unwrap_or_default(),
+    };
+    if label.is_empty() {
+        return;
+    }
+    let c = app.world_to_screen(m * Point::new(n.w / 2.0, n.h / 2.0));
+    let tw = app.fonts.measure(&label, T10, Wt::Reg) + 12.0;
+    let chip_x = c.x - tw / 2.0;
+    let chip_y = c.y - n.h * app.zoom / 2.0 - 26.0;
+    let chip = Rect::new(chip_x, chip_y, chip_x + tw, chip_y + 18.0);
+    fill_rrect(s, chip, R_SM, C_TEXT);
+    app.fonts
+        .text_center(s, chip, &label, T10, C_BASE, Wt::Med, true);
 }
 
 /// P10: the hover label for the control under the cursor. The
@@ -5433,6 +5484,7 @@ fn paint_design(
     let y = paint_brush_styles(app, s, hit, x0, xr, y);
     let y = paint_scale_block(app, s, hit, x0, xr, y);
     let y = paint_arc_block(app, s, hit, x0, xr, y);
+    let y = paint_shape_block(app, s, hit, x0, xr, y);
     paint_constraints(app, s, hit, x0, xr, y);
 }
 
@@ -5476,6 +5528,73 @@ fn paint_arc_block(
             format!("{}", (ratio * 100.0).round() as i64),
         ),
     ];
+    for (i, (id, label, fallback)) in fields.iter().enumerate() {
+        let fx = x0 + (w + gap) * i as f64;
+        let r = Rect::new(fx, y, fx + w, y + INPUT_H);
+        input(
+            app,
+            s,
+            hit,
+            r,
+            Some((*label, T10)),
+            &field_val(app, *id, fallback.clone()),
+            true,
+            Some(Action::Field(*id)),
+            None,
+        );
+    }
+    y += INPUT_H + 6.0;
+    y
+}
+
+/// Figma's Count — and, on a star, its Ratio — in the Appearance section,
+/// beside the arc's properties: "you can easily change the number of polygon
+/// sides in the Design panel input by typing in a number or using the ↑ or ↓
+/// keys in the Appearance block." A polygon has the Count alone; a star has
+/// the Count and the Ratio, both 3..60 and 0..100 in Figma's own ranges.
+fn paint_shape_block(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    x0: f64,
+    xr: f64,
+    y0: f64,
+) -> f64 {
+    let shape = {
+        let doc = app.doc_ref();
+        let editor = doc.editor_ref();
+        if editor.selection.len() != 1 {
+            None
+        } else {
+            find_node(&editor.root, &editor.selection[0]).and_then(crate::state::shape_of)
+        }
+    };
+    let Some((kind, count)) = shape else {
+        return y0;
+    };
+    let (caps, fields): (&str, Vec<(FieldId, &str, String)>) = match &kind {
+        NodeKind::Poly { .. } => (
+            "POLYGON",
+            vec![(FieldId::ShapeCount, "Count", fmt_num(count as f64))],
+        ),
+        NodeKind::Star { ratio, .. } => (
+            "STAR",
+            vec![
+                (FieldId::ShapeCount, "Count", fmt_num(count as f64)),
+                (
+                    FieldId::StarRatio,
+                    "Ratio",
+                    format!("{}", (ratio * 100.0).round() as i64),
+                ),
+            ],
+        ),
+        _ => return y0,
+    };
+    let mut y = y0 + 1.0 + 12.0;
+    app.fonts.caps_label(s, x0, y, caps, C_TEXT, Wt::Med);
+    y += 12.0 + LABEL_GAP;
+    let gap = 8.0;
+    let w = (xr - x0 - gap * 2.0) / 3.0;
     for (i, (id, label, fallback)) in fields.iter().enumerate() {
         let fx = x0 + (w + gap) * i as f64;
         let r = Rect::new(fx, y, fx + w, y + INPUT_H);
@@ -7110,6 +7229,8 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             Tool::Ellipse,
             Tool::Line,
             Tool::Arrow,
+            Tool::Poly,
+            Tool::Star,
             Tool::Pen,
             Tool::Pencil,
             Tool::Brush,
@@ -7119,12 +7240,12 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             Tool::Hand,
         ]
     };
-    // Audited (canvas 280..1100 @900): container 631×40 r12 at bottom-5
+    // Audited (canvas 280..1100 @900): container 703×40 r12 at bottom-5
     // (y = win_h − 60); icons 32px pitch 36 starting +7; divider mid-gap
-    // after sixteen tools (Scale, the Slice tool, the Pencil, Figma Draw's
-    // Brush, and the Line and Arrow joined the row); palette btn at +592 from
-    // container left.
-    let bar_w = 631.0;
+    // after eighteen tools (Scale, the Slice tool, the Pencil, Figma Draw's
+    // Brush, the Line and Arrow, and Figma's Polygon and Star joined the
+    // row); palette btn at +664 from container left.
+    let bar_w = 703.0;
     let bar_x0 = reg.canvas.x0 + (reg.canvas.x1 - reg.canvas.x0 - bar_w) / 2.0;
     let bar_y0 = app.win_h - TOOLBAR_BOTTOM - TOOLBAR_H;
     let bar = Rect::new(bar_x0, bar_y0, bar_x0 + bar_w, bar_y0 + TOOLBAR_H);
@@ -7163,15 +7284,15 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         tip(app, r, &tl);
         hit.push((r, Action::Tool(*t)));
     }
-    // divider between the last tool (ends +579) and palette (+592)
-    let dx = bar.x0 + 587.5;
+    // divider between the last tool (ends +651) and palette (+664)
+    let dx = bar.x0 + 659.5;
     fill_rect(
         s,
         Rect::new(dx, bar.y0 + 10.0, dx + 1.0, bar.y1 - 10.0),
         C_LINE_2,
     );
     // search → palette
-    let sx = bar.x0 + 592.0;
+    let sx = bar.x0 + 664.0;
     let sr = Rect::new(sx, bar.y0 + 4.0, sx + TOOL_ICON, bar.y0 + 4.0 + TOOL_ICON);
     if hover(app, sr) {
         fill_rrect(s, sr, R_TOOL_ICON, C_FIELD_2);
@@ -7553,6 +7674,29 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
             } else {
                 fill_rect(s, r, C_SEL_SOFT);
                 stroke_rect(s, r, C_SEL, 1.0);
+            }
+            if matches!(*tool, Tool::Poly | Tool::Star) {
+                // Figma previews the shape itself, so the Count is visible
+                // while you size it — the same rule the Line and Arrow
+                // previews follow: one transform away from the node that
+                // lands.
+                let cmds = if *tool == Tool::Poly {
+                    x_native::booleans::poly_path_cmds(
+                        wr.width(),
+                        wr.height(),
+                        x_native::booleans::COUNT_MIN,
+                    )
+                } else {
+                    x_native::booleans::star_path_cmds(
+                        wr.width(),
+                        wr.height(),
+                        x_native::booleans::COUNT_MIN + 2,
+                        x_native::booleans::STAR_RATIO,
+                    )
+                };
+                let p = screen_path(app, &cmds, wr.x0, wr.y0);
+                crate::paint::fill_path(s, &p, C_SEL_SOFT);
+                crate::paint::stroke_path(s, &p, C_SEL, 1.5);
             }
             let label = format!("{} × {}", wr.width().round(), wr.height().round());
             (r, label)
@@ -7979,6 +8123,14 @@ pub fn palette_commands() -> Vec<Command> {
         Command {
             label: "Arrow tool",
             shortcut: "⇧L",
+        },
+        Command {
+            label: "Polygon tool",
+            shortcut: "",
+        },
+        Command {
+            label: "Star tool",
+            shortcut: "",
         },
         Command {
             label: "Pen tool",

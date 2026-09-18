@@ -5,6 +5,43 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-19 (Polygon and Star)
+
+Figma's shape menu carries two shapes that count their own geometry, and both were
+missing here: the **Polygon** ("an enclosed shape that is made up of any number of
+straight lines", "the default shape for the polygon tool is a triangle") and the
+**Star** ("polygons that are arranged in a star shape … the default will be a five
+pointed star with ten sides"). There was no `NodeKind` for either, so nothing could
+draw, hit-test, export or round-trip one.
+
+- **Two tools in the shape menu.** Polygon and Star sit on the toolbar beside the
+  shapes and in the command palette ("Polygon tool", "Star tool"); a drag draws one —
+  three sides, or five points with the inner ones at Figma's default ratio. ⇧ keeps
+  the box square and ⌥ draws from the centre, the shared shape-tool rule.
+- **Count and Ratio in the Appearance section.** A polygon shows Count; a star shows
+  Count and Ratio — "How many points there are to the star. The minimum is three and
+  the maximum is 60" and "The distance of the inner points of the star from the
+  center. This is represented as percentage of the star's diameter". Typing 200
+  clamps to 60, typing 1 clamps to 3.
+- **The canvas handles.** The Count handle rides the shape's rightmost vertex and the
+  star's Ratio handle its rightmost inner vertex. Dragging the Count inwards removes
+  points and out past the rim adds them (the number reads out in a chip while you
+  drag); the Ratio handle sets the inner fraction. Both are appearance only: "the blue
+  bounding box around the shape is below the bottom of the shape … to remain a
+  consistent shape or size, when additional points are added" — the box never moves,
+  Flatten is still what makes it hug (the arc's own rule).
+- **Everything downstream knows them.** The renderer and mask path, the hit test
+  (the shape's own ink answers, not its box), SVG / Figma / Sketch export, codegen
+  (`clipPath: 'polygon(…)'`), the `.x` format (`{"t":"poly","sides":n}` and
+  `{"t":"star","points":n,"ratio":r}`) and the MCP kind labels.
+
+**Divergences:** Figma's star also has a **Radius** handle ("allows you to round the
+points of the star") and double-click **Edit object** point editing; this build has
+neither, so a star's points stay sharp and the vertices are not editable one by one.
+A `.fig` binary still drops `STAR`/`REGULAR_POLYGON` on import (it did before this
+change), and JSON import flattens both to a Vector — Polygon and Star are exported,
+and round-trip through our own format.
+
 ## [Unreleased] — 2026-09-18 (Prototype connections on the canvas)
 
 Figma's connections are drawn ON the canvas — the course's chapter "Add prototype

@@ -51,6 +51,22 @@ pub fn hit_test(root: &Node, point: Point) -> Option<String> {
                         in_arc && r <= 1.0 + slop && r >= ratio - slop
                     }
                 }
+                // Figma's polygon and star are closed outlines: the shape's
+                // own ink answers the click — a click in the corner of the
+                // triangle's box is NOT on the triangle — and the stroke's
+                // slop rides on the boundary.
+                NodeKind::Poly { sides } => x_core::booleans::path_hit(
+                    &x_core::booleans::poly_path_cmds(node.w, node.h, *sides),
+                    local.x,
+                    local.y,
+                    node.stroke.width.max(4.0) / 2.0 + 4.0,
+                ),
+                NodeKind::Star { points, ratio } => x_core::booleans::path_hit(
+                    &x_core::booleans::star_path_cmds(node.w, node.h, *points, *ratio),
+                    local.x,
+                    local.y,
+                    node.stroke.width.max(4.0) / 2.0 + 4.0,
+                ),
                 // A vector's box is a wrapper, not its ink: a Line's box is 0
                 // units high, so the box test would only ever answer on its
                 // exact edge. A path with no fill count under it — a stroke

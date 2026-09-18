@@ -449,6 +449,17 @@ pub enum NodeKind {
         end: f64,
         ratio: f64,
     },
+    /// Figma's Polygon: "an enclosed shape that is made up of any number of
+    /// straight lines", three of them by default.
+    Poly {
+        sides: usize,
+    },
+    /// Figma's Star: `points` outer vertices with the inner ones at `ratio` of
+    /// the radius between them, so five points read as "ten sides".
+    Star {
+        points: usize,
+        ratio: f64,
+    },
     Line,
     Text {
         text: String,
@@ -1343,6 +1354,42 @@ impl Node {
         Self::base(
             id,
             NodeKind::Arc { start, end, ratio },
+            x,
+            y,
+            w,
+            h,
+            Paint::Solid(fill),
+        )
+    }
+    pub fn poly(id: &str, x: f64, y: f64, w: f64, h: f64, sides: usize, fill: Color) -> Self {
+        Self::base(
+            id,
+            NodeKind::Poly {
+                sides: sides.clamp(crate::booleans::COUNT_MIN, crate::booleans::COUNT_MAX),
+            },
+            x,
+            y,
+            w,
+            h,
+            Paint::Solid(fill),
+        )
+    }
+    pub fn star(
+        id: &str,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        points: usize,
+        ratio: f64,
+        fill: Color,
+    ) -> Self {
+        Self::base(
+            id,
+            NodeKind::Star {
+                points: points.clamp(crate::booleans::COUNT_MIN, crate::booleans::COUNT_MAX),
+                ratio: ratio.clamp(0.05, 0.95),
+            },
             x,
             y,
             w,

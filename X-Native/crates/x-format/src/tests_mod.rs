@@ -387,6 +387,54 @@ mod tests {
         assert_eq!(save_x(&loaded), text);
     }
 
+    /// Figma's Polygon and Star survive a save/load with their Count and
+    /// Ratio: the two are the shape, not a drawing of it.
+    #[test]
+    fn polygon_and_star_roundtrip_through_x_format() {
+        let mut doc = Document::new();
+        let page = Node::frame("page-1", 800.0, 600.0)
+            .child(Node::poly(
+                "p",
+                10.0,
+                20.0,
+                120.0,
+                120.0,
+                6,
+                Color::from_rgb8(255, 255, 255),
+            ))
+            .child(Node::star(
+                "s",
+                200.0,
+                20.0,
+                80.0,
+                90.0,
+                7,
+                0.42,
+                Color::from_rgb8(0, 0, 0),
+            ));
+        doc.pages.push(page);
+        let text = save_x(&doc);
+        assert!(text.contains("\"t\":\"poly\""), "the count is written");
+        assert!(text.contains("\"t\":\"star\""), "the star is written");
+        let loaded = load_x(&text).expect("load");
+        let p = find(&loaded.pages[0], "p").expect("the polygon survives");
+        assert!(matches!(p.kind, NodeKind::Poly { sides: 6 }), "six sides");
+        let s = find(&loaded.pages[0], "s").expect("the star survives");
+        match s.kind {
+            NodeKind::Star { points, ratio } => {
+                assert_eq!(points, 7, "seven points");
+                assert!((ratio - 0.42).abs() < 1e-9, "the ratio: {ratio}");
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            (s.transform.x, s.transform.y, s.w, s.h),
+            (200.0, 20.0, 80.0, 90.0)
+        );
+        // determinism
+        assert_eq!(save_x(&loaded), text);
+    }
+
     #[test]
     fn export_settings_roundtrip_through_x_format() {
         let mut doc = Document::new();

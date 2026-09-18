@@ -443,6 +443,8 @@ fn kind_label(n: &Node) -> &'static str {
         NodeKind::Instance { .. } => "instance",
         NodeKind::Ellipse => "ellipse",
         NodeKind::Arc { .. } => "arc",
+        NodeKind::Poly { .. } => "polygon",
+        NodeKind::Star { .. } => "star",
         NodeKind::Line => "line",
         NodeKind::Vector { .. } => "vector",
         _ => "node",

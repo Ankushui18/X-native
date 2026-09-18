@@ -336,6 +336,11 @@ pub fn validate_admission(doc: &Document) -> Result<(), String> {
                     numbers(&[*start, *end, *ratio])?;
                     1
                 }
+                NodeKind::Star { ratio, .. } => {
+                    numbers(&[*ratio])?;
+                    1
+                }
+                NodeKind::Poly { .. } => 1,
                 NodeKind::Image {
                     placement,
                     asset,

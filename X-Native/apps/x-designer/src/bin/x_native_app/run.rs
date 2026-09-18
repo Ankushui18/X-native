@@ -4139,6 +4139,12 @@ impl Host {
                     self.app.drag = Some(dr);
                     return;
                 }
+                // Figma's polygon and star handles ride their own shapes, so
+                // the arc's grab above can never answer for them.
+                if let Some(dr) = self.shape_grab(world) {
+                    self.app.drag = Some(dr);
+                    return;
+                }
                 // corner handles win when there's a single selection
                 if let Some(dr) = match tool {
                     Tool::Scale => self.scale_grab(world),
@@ -4672,6 +4678,49 @@ impl Host {
         })
     }
 
+    /// Figma's Count handle (and, on a star, the Ratio handle) under the
+    /// pointer: the same tolerance and the same "the handle sits on the layer,
+    /// so taking hold of it selects it" rule as the arc's handles.
+    fn shape_grab(&mut self, world: Point) -> Option<Drag> {
+        let (id, _) = crate::state::shape_target(&self.app)?;
+        let (count, handles, m) = {
+            let doc = self.app.doc_ref();
+            let root = &doc.editor_ref().root;
+            let n = crate::editor_ui::find_node(root, &id)?;
+            let m = node_world(root, &id)?;
+            (crate::state::shape_count(n)?, crate::state::shape_handles(n), m)
+        };
+        let tol = ARC_HANDLE_TOL / self.app.zoom;
+        let mut best: Option<(crate::state::ShapePart, f64)> = None;
+        for (part, local) in &handles {
+            let h = m * *local;
+            let d = ((h.x - world.x).powi(2) + (h.y - world.y).powi(2)).sqrt();
+            if d <= tol && best.is_none_or(|(_, bd)| d < bd) {
+                best = Some((*part, d));
+            }
+        }
+        let (part, _) = best?;
+        let base_depth = self.app.doc_ref().editor_ref().undo_depth();
+        let f0 = {
+            let doc = self.app.doc_ref();
+            let root = &doc.editor_ref().root;
+            let local = m.inverse() * world;
+            match crate::editor_ui::find_node(root, &id) {
+                Some(n) => crate::state::shape_radial_at(n.w, n.h, local),
+                None => 0.0,
+            }
+        };
+        // the handle sits on the layer, so taking hold of it selects it too
+        self.app.doc().editor().selection = vec![id.clone()];
+        Some(Drag::ShapeHandle {
+            id,
+            part,
+            count,
+            f0,
+            base_depth,
+        })
+    }
+
     /// The Scale tool's BODY drag (K) — Figma: "Hover over the object's
     /// bounding box to make the cursor appear. Then, click-and-drag to
     /// resize." The press point itself rides the pointer, and the corner
@@ -5111,6 +5160,47 @@ impl Host {
                     *target = snapped;
                 }
                 self.app.mark_dirty();
+            }
+            Some(Drag::ShapeHandle {
+                id,
+                part,
+                count,
+                f0,
+                ..
+            }) => {
+                let world = self.app.screen_to_world(p);
+                let probe = {
+                    let doc = self.app.doc_ref();
+                    let root = &doc.editor_ref().root;
+                    crate::editor_ui::find_node(root, &id)
+                        .and_then(|n| node_world(root, &id).map(|m| (n.w, n.h, m)))
+                };
+                let Some((w, h, m)) = probe else {
+                    return;
+                };
+                let local = m.inverse() * world;
+                let f = crate::state::shape_radial_at(w, h, local);
+                let wrote = {
+                    let doc = self.app.doc();
+                    match part {
+                        crate::state::ShapePart::Count => {
+                            // outwards adds points, inwards removes them —
+                            // `f` is unclamped, so a drag past the rim counts
+                            let moved = (f - f0) * crate::state::COUNT_DRAG_SPAN;
+                            let asked = (*count as f64 + moved).round().clamp(
+                                x_native::booleans::COUNT_MIN as f64,
+                                x_native::booleans::COUNT_MAX as f64,
+                            );
+                            crate::state::set_shape_count(doc.editor(), &id, asked as usize)
+                        }
+                        crate::state::ShapePart::Ratio => {
+                            crate::state::set_star_ratio(doc.editor(), &id, f)
+                        }
+                    }
+                };
+                if wrote {
+                    self.app.mark_dirty();
+                }
             }
             Some(Drag::ArcHandle {
                 id,
@@ -5641,7 +5731,8 @@ impl Host {
             }
             Some(Drag::ScaleSel { base_depth, .. })
             | Some(Drag::ScaleBody { base_depth, .. })
-            | Some(Drag::ArcHandle { base_depth, .. }) => {
+            | Some(Drag::ArcHandle { base_depth, .. })
+            | Some(Drag::ShapeHandle { base_depth, .. }) => {
                 let doc = self.app.doc();
                 let editor = doc.editor();
                 editor.merge_last(editor.undo_depth().saturating_sub(base_depth));
@@ -5889,6 +5980,33 @@ impl Host {
                 // really draws — the pencil's own path
                 v.materialize_visual_stacks();
                 v
+            }
+            Tool::Poly => {
+                let mut p = Node::poly(
+                    &x_native::fresh_id("polygon"),
+                    x,
+                    y,
+                    w.max(2.0),
+                    h.max(2.0),
+                    x_native::booleans::COUNT_MIN,
+                    x_native::Color::from_rgb8(0xFF, 0xFF, 0xFF),
+                );
+                p.name = format!("{} {n}", tool.label());
+                p
+            }
+            Tool::Star => {
+                let mut st = Node::star(
+                    &x_native::fresh_id("star"),
+                    x,
+                    y,
+                    w.max(2.0),
+                    h.max(2.0),
+                    x_native::booleans::COUNT_MIN + 2,
+                    x_native::booleans::STAR_RATIO,
+                    x_native::Color::from_rgb8(0xFF, 0xFF, 0xFF),
+                );
+                st.name = format!("{} {n}", tool.label());
+                st
             }
             Tool::Slice => {
                 // Figma: "The Slice tool lets you specify a specific region of
@@ -6957,6 +7075,8 @@ impl Host {
                             | Tool::Brush
                             | Tool::Line
                             | Tool::Arrow
+                            | Tool::Poly
+                            | Tool::Star
                     ) {
                         // Figma's Esc leaves the active drawing tool (Scale,
                         // Slice) the way V does —
@@ -7305,6 +7425,8 @@ impl Host {
             "Ellipse tool" => self.app.tool = Tool::Ellipse,
             "Line tool" => self.app.tool = Tool::Line,
             "Arrow tool" => self.app.tool = Tool::Arrow,
+            "Polygon tool" => self.app.tool = Tool::Poly,
+            "Star tool" => self.app.tool = Tool::Star,
             "Pen tool" => self.app.tool = Tool::Pen,
             "Pencil tool" => self.app.tool = Tool::Pencil,
             "Brush tool" => self.app.tool = Tool::Brush,
@@ -12396,6 +12518,21 @@ impl Host {
                     self.app.mark_dirty();
                 }
             }
+            FieldId::ShapeCount | FieldId::StarRatio => {
+                // Figma's Count and Ratio, on the layer's own shape: the box
+                // never moves, which is what makes them non-destructive.
+                let Some(v) = num(raw) else { return };
+                let count = v.max(0.0).round() as usize;
+                let wrote = if id == FieldId::StarRatio {
+                    crate::state::set_star_ratio(doc.editor(), node_id.as_str(), v / 100.0)
+                } else {
+                    crate::state::set_shape_count(doc.editor(), node_id.as_str(), count)
+                };
+                if wrote {
+                    self.app.status = "Appearance updated".into();
+                    self.app.mark_dirty();
+                }
+            }
             _ => {
                 if self.app.route_typo_panel_field(id, raw) {
                     self.app.mark_dirty();
@@ -12834,6 +12971,25 @@ fn field_initial(app: &App, f: FieldId) -> String {
                 FieldId::ArcStart => fmt(start),
                 FieldId::ArcSweep => fmt(sweep),
                 _ => format!("{}", (ratio * 100.0).round() as i64),
+            }
+        }
+        FieldId::ShapeCount | FieldId::StarRatio => {
+            let node = crate::editor_ui::find_node(
+                &app.doc_ref().editor_ref().root,
+                app.doc_ref().selected_id().unwrap_or_default().as_str(),
+            );
+            let Some(n) = node else {
+                return String::new();
+            };
+            if f == FieldId::StarRatio {
+                match crate::state::star_props(n) {
+                    Some((_, ratio)) => format!("{}", (ratio * 100.0).round() as i64),
+                    None => String::new(),
+                }
+            } else {
+                crate::state::shape_count(n)
+                    .map(|c| c.to_string())
+                    .unwrap_or_default()
             }
         }
         FieldId::ComponentDescription => app

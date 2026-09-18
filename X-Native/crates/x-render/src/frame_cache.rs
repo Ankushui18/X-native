@@ -325,6 +325,15 @@ fn hash_subtree(n: &Node) -> (u64, bool, bool) {
                 fmix(h, *end);
                 fmix(h, *ratio);
             }
+            NodeKind::Poly { sides } => {
+                mix(h, 29);
+                mix(h, *sides as u64);
+            }
+            NodeKind::Star { points, ratio } => {
+                mix(h, 30);
+                mix(h, *points as u64);
+                fmix(h, *ratio);
+            }
             NodeKind::Line => mix(h, 25),
             NodeKind::Text { text } => {
                 mix(h, 26);

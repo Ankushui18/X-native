@@ -34,6 +34,14 @@ pub enum Tool {
     /// Figma's Arrow tool (⇧L): the same segment, ending in the solid head
     /// the shape menu's arrow draws.
     Arrow,
+    /// Figma's Polygon tool, from the shape tools menu: "an enclosed shape
+    /// that is made up of any number of straight lines", a triangle by
+    /// default. Its Count lives in the Appearance section, like the arc's
+    /// properties.
+    Poly,
+    /// Figma's Star tool: "polygons that are arranged in a star shape", five
+    /// points by default, with a Count and a Ratio in the Appearance section.
+    Star,
     Pen,
     Hand,
     /// Board zoom tool (kept out of the design toolbar, where wheel/shortcuts
@@ -77,6 +85,8 @@ impl Tool {
             Tool::Ellipse => "circle",
             Tool::Line => "line",
             Tool::Arrow => "arrow-up-right",
+            Tool::Poly => "triangle",
+            Tool::Star => "star",
             Tool::Pen => "pen-tool",
             Tool::Pencil => "pencil",
             Tool::Brush => "brush",
@@ -112,6 +122,8 @@ impl Tool {
             Tool::Ellipse => "Ellipse",
             Tool::Line => "Line",
             Tool::Arrow => "Arrow",
+            Tool::Poly => "Polygon",
+            Tool::Star => "Star",
             Tool::Pen => "Pen",
             Tool::Pencil => "Pencil",
             Tool::Brush => "Brush",
@@ -517,12 +529,20 @@ pub fn arc_angle_at(w: f64, h: f64, local: Point) -> f64 {
     (local.y - cy).atan2(local.x - cx).to_degrees()
 }
 
+/// How far out the pointer is, as a fraction of the radius — 1.0 on the rim,
+/// 0 at the centre. Ellipse-normalised, so a rim point reads 1.0 whatever the
+/// box's aspect. Unclamped on purpose: the Count handle measures motion on
+/// both sides of the rim, so outwards has to keep growing.
+pub fn shape_radial_at(w: f64, h: f64, local: Point) -> f64 {
+    let (rx, ry) = ((w / 2.0).max(1e-6), (h / 2.0).max(1e-6));
+    let (dx, dy) = ((local.x - rx) / rx, (local.y - ry) / ry);
+    (dx * dx + dy * dy).sqrt()
+}
+
 /// How far out the pointer is, as a fraction of the radius — what dragging the
 /// Ratio handle sets. Never quite 1: a ring with no width is not a shape.
 pub fn arc_ratio_at(w: f64, h: f64, local: Point) -> f64 {
-    let (rx, ry) = ((w / 2.0).max(1e-6), (h / 2.0).max(1e-6));
-    let (dx, dy) = ((local.x - rx) / rx, (local.y - ry) / ry);
-    ((dx * dx + dy * dy).sqrt()).clamp(0.0, 0.99)
+    shape_radial_at(w, h, local).clamp(0.0, 0.99)
 }
 
 /// Write arc properties onto a layer, turning a solid ellipse into the arc
@@ -541,6 +561,147 @@ pub fn set_arc(
         return false;
     }
     editor.mutate_visual_stack(id, |n| n.kind = NodeKind::Arc { start, end, ratio })
+}
+
+/// How far a Count handle drag travels, in units of the shape's own radius:
+/// half a radius outwards adds this many points, half a radius inwards takes
+/// them away. Size-independent, the way every other canvas handle is.
+pub const COUNT_DRAG_SPAN: f64 = 20.0;
+
+/// The polygon's sides, if the layer is one — Figma's Count.
+pub fn poly_sides(n: &Node) -> Option<usize> {
+    match &n.kind {
+        NodeKind::Poly { sides } => Some(*sides),
+        _ => None,
+    }
+}
+
+/// A star's points and inner ratio, if the layer is one — Figma's Count and
+/// Ratio on the same layer.
+pub fn star_props(n: &Node) -> Option<(usize, f64)> {
+    match &n.kind {
+        NodeKind::Star { points, ratio } => Some((*points, *ratio)),
+        _ => None,
+    }
+}
+
+/// A layer's Count, whichever of Figma's two counting shapes it is.
+pub fn shape_count(n: &Node) -> Option<usize> {
+    poly_sides(n).or_else(|| star_props(n).map(|(points, _)| points))
+}
+
+/// A layer's kind and Count together, for the Appearance block that shows it.
+pub fn shape_of(n: &Node) -> Option<(NodeKind, usize)> {
+    shape_count(n).map(|count| (n.kind.clone(), count))
+}
+
+/// Which of Figma's polygon and star handles a drag has hold of.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ShapePart {
+    /// "How many points there are to the star" (a polygon's sides): the
+    /// min/max are 3 and 60 for both.
+    Count,
+    /// The star only: "the distance of the inner points of the star from the
+    /// center", as a share of the radius.
+    Ratio,
+}
+
+/// Figma's polygon and star handles in the LAYER'S OWN box space: the Count
+/// handle rides the shape's rightmost outer vertex — "the small, round count
+/// handle next to the shape" — and a star's Ratio handle rides the rightmost
+/// INNER vertex, the point whose distance from the centre is the Ratio. The
+/// same table paints them, hit-tests them and drives the drag.
+pub fn shape_handles(n: &Node) -> Vec<(ShapePart, Point)> {
+    let rightmost = |mut pts: Vec<Point>| -> Option<Point> {
+        pts.sort_by(|a, b| a.x.total_cmp(&b.x));
+        pts.pop()
+    };
+    let at = |deg: f64, frac: f64| {
+        let (x, y) = x_native::booleans::arc_point(n.w, n.h, deg, frac);
+        Point::new(x, y)
+    };
+    match &n.kind {
+        NodeKind::Poly { sides } => {
+            let outer: Vec<Point> = (0..*sides)
+                .map(|k| at(-90.0 + 360.0 * k as f64 / *sides as f64, 1.0))
+                .collect();
+            rightmost(outer)
+                .map(|p| vec![(ShapePart::Count, p)])
+                .unwrap_or_default()
+        }
+        NodeKind::Star { points, ratio } => {
+            let outer: Vec<Point> = (0..*points)
+                .map(|k| at(-90.0 + 360.0 * k as f64 / *points as f64, 1.0))
+                .collect();
+            let inner: Vec<Point> = (0..*points)
+                .map(|k| at(-90.0 + 180.0 * (2 * k + 1) as f64 / *points as f64, *ratio))
+                .collect();
+            let mut out: Vec<(ShapePart, Point)> = vec![];
+            if let Some(p) = rightmost(outer) {
+                out.push((ShapePart::Count, p));
+            }
+            if let Some(p) = rightmost(inner) {
+                out.push((ShapePart::Ratio, p));
+            }
+            out
+        }
+        _ => vec![],
+    }
+}
+
+/// The layer Figma's Count and Ratio handles belong to: the single selected
+/// polygon or star, else the layer under the cursor — the same rule as the
+/// arc's handles, and for the same reason (Figma shows the handle on hover).
+pub fn shape_target(app: &App) -> Option<(String, bool)> {
+    if app.tool != Tool::Select {
+        return None;
+    }
+    let doc = app.doc_opt()?;
+    let sel = &doc.editor_ref().selection;
+    if sel.len() == 1 {
+        let n = crate::editor_ui::find_node(&doc.editor_ref().root, &sel[0])?;
+        if shape_count(n).is_some() {
+            return Some((sel[0].clone(), true));
+        }
+    }
+    let hover = app.hover_node.clone()?;
+    let n = crate::editor_ui::find_node(&doc.editor_ref().root, &hover)?;
+    shape_count(n).map(|_| (hover, false))
+}
+
+/// Write a polygon's or star's Count, in whichever of the two kinds the layer
+/// already is. The box is untouched — the Count is appearance, not size — and
+/// the engine clamps it to Figma's 3..60. `false` when the id is neither (so
+/// nothing is written and nothing is undone).
+pub fn set_shape_count(editor: &mut x_native::editor::Editor, id: &str, count: usize) -> bool {
+    let count = count.clamp(x_native::booleans::COUNT_MIN, x_native::booleans::COUNT_MAX);
+    let kind = x_native::editor::find(&editor.root, id).map(|n| n.kind.clone());
+    match kind {
+        Some(NodeKind::Poly { .. }) => {
+            editor.mutate_visual_stack(id, |n| n.kind = NodeKind::Poly { sides: count })
+        }
+        Some(NodeKind::Star { ratio, .. }) => editor.mutate_visual_stack(id, |n| {
+            n.kind = NodeKind::Star {
+                points: count,
+                ratio,
+            }
+        }),
+        _ => false,
+    }
+}
+
+/// Write a star's Ratio — Figma's "distance of the inner points … from the
+/// center", clamped clear of a degenerate star. `false` for anything that is
+/// not a star.
+pub fn set_star_ratio(editor: &mut x_native::editor::Editor, id: &str, ratio: f64) -> bool {
+    let points = match x_native::editor::find(&editor.root, id).and_then(star_props) {
+        Some((points, _)) => points,
+        None => return false,
+    };
+    let ratio = ratio.clamp(0.05, 0.95);
+    editor.mutate_visual_stack(id, |n| {
+        n.kind = NodeKind::Star { points, ratio };
+    })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1412,6 +1573,12 @@ pub enum FieldId {
     /// Arc properties: the fraction of the radius cut out of the middle, on
     /// screen a percentage (Figma's Ratio; 0 is a solid wedge, 85 a thin ring).
     ArcRatio,
+    /// Figma's Count, on the two shapes that carry one: a polygon's sides, a
+    /// star's points. Both are 3..60 and neither moves the box.
+    ShapeCount,
+    /// Figma's Ratio on a star: the inner points' distance from the centre, on
+    /// screen a percentage of the radius.
+    StarRatio,
     /// Tokens panel: variable name editing (rename-as-alias; same target
     /// resolution as `VarValue`, from `var_name_rects`).
     VarName,
@@ -1772,6 +1939,16 @@ pub enum Drag {
     },
     /// Figma's arc handles on an ellipse or an arc (K is not involved: the
     /// handles belong to the layer, and they are dragged with the Move tool —
+    /// A polygon's or star's Count handle — and, on a star, its Ratio handle.
+    /// `f0` is the pointer's radial fraction when the press took hold, so the
+    /// Count gesture is measured from where the drag began.
+    ShapeHandle {
+        id: String,
+        part: ShapePart,
+        count: usize,
+        f0: f64,
+        base_depth: usize,
+    },
     /// "hover your cursor over the ellipse until you see the Arc handle").
     /// The kind of the layer is written on every move, so what is on screen is
     /// already the shape the release commits; the box never moves.
@@ -4609,6 +4786,8 @@ pub fn kind_icon(k: &NodeKind) -> &'static str {
         NodeKind::Group | NodeKind::Section => "layout-grid",
         NodeKind::Text { .. } => "type",
         NodeKind::Ellipse => "circle",
+        NodeKind::Poly { .. } => "triangle",
+        NodeKind::Star { .. } => "star",
         NodeKind::Vector { .. } | NodeKind::Arc { .. } | NodeKind::Line => "pen-tool",
         NodeKind::Component { .. } | NodeKind::Instance { .. } => "component",
         NodeKind::Image { .. } => "image",

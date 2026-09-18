@@ -1991,6 +1991,182 @@ fn the_arc_handles_and_fields_turn_an_ellipse_into_a_ring() {
     assert!((ratio - 0.15).abs() < 1e-6, "one undo restores the ring");
 }
 
+/// Figma's two counting shapes: the Polygon ("an enclosed shape that is made
+/// up of any number of straight lines", a triangle by default) and the Star
+/// ("polygons that are arranged in a star shape … five pointed … with ten
+/// sides"). Both are drawn with their tools, counted in the Appearance
+/// fields, and reshaped by their canvas handles — and the box never moves,
+/// the same rule the arc's properties obey.
+#[test]
+fn the_polygon_and_star_tools_count_their_sides() {
+    let mut h = host();
+    let reg = h.app.editor_regions();
+    let (cx, cy) = (
+        (reg.canvas.x0 + reg.canvas.x1) / 2.0,
+        (reg.canvas.y0 + reg.canvas.y1) / 2.0,
+    );
+    // the two tools are on the row and in the palette
+    assert_eq!(Tool::Poly.icon(), "triangle");
+    assert_eq!(Tool::Star.icon(), "star");
+    assert_eq!(Tool::Poly.label(), "Polygon");
+    assert_eq!(Tool::Star.label(), "Star");
+    assert_eq!(Tool::from_shortcut("p", false, false), Some(Tool::Pen));
+    assert!(crate::editor_ui::palette_commands()
+        .iter()
+        .any(|c| c.label == "Polygon tool"));
+
+    // a drag with the Polygon tool: Figma's default triangle
+    h.app.tool = Tool::Poly;
+    h.on_press(Point::new(cx - 60.0, cy - 60.0));
+    h.on_move(Point::new(cx + 60.0, cy + 60.0));
+    h.on_release();
+    let sel = h.app.doc_ref().editor_ref().selection.clone();
+    let poly = find_node_clone(&h.app.doc_ref().editor_ref().root, &sel[0]).unwrap();
+    assert!(poly.name.starts_with("Polygon "), "named for the layers");
+    assert_eq!(crate::state::poly_sides(&poly), Some(3), "a triangle");
+    let (px, py, pw, ph) = (poly.transform.x, poly.transform.y, poly.w, poly.h);
+    assert_eq!((pw.round(), ph.round()), (120.0, 120.0), "the drag's box");
+    assert_eq!(h.app.tool, Tool::Select, "the tool hands back to Move");
+    let cmds = x_native::booleans::poly_path_cmds(pw, ph, 3);
+    assert_eq!(cmds.len(), 4, "three vertices and a Close");
+    assert!(matches!(cmds.last(), Some(PathCmd::Close)));
+
+    // its one canvas handle rides the shape's rightmost vertex
+    let handles = crate::state::shape_handles(&poly);
+    assert_eq!(handles.len(), 1, "the Count handle alone");
+    assert_eq!(handles[0].0, crate::state::ShapePart::Count);
+
+    // the Count field, Figma's "typing in a number": 200 clamps to 60
+    set_field(&mut h, FieldId::ShapeCount, "200");
+    let poly = find_node_clone(&h.app.doc_ref().editor_ref().root, &sel[0]).unwrap();
+    assert_eq!(
+        crate::state::poly_sides(&poly),
+        Some(x_native::booleans::COUNT_MAX),
+        "clamped to Figma's maximum"
+    );
+    set_field(&mut h, FieldId::ShapeCount, "6");
+    let poly = find_node_clone(&h.app.doc_ref().editor_ref().root, &sel[0]).unwrap();
+    assert_eq!(crate::state::poly_sides(&poly), Some(6), "a hexagon");
+    assert_eq!(
+        (poly.transform.x, poly.transform.y, poly.w, poly.h),
+        (px, py, pw, ph),
+        "the box never moves: the Count is appearance, not size"
+    );
+
+    // the Count handle: dragged to the centre the count falls to the minimum,
+    // and the whole gesture is one undo step like every other canvas drag
+    let depth = h.app.doc_ref().editor_ref().undo_depth();
+    let handle = crate::state::shape_handles(&poly)[0].1;
+    h.on_press(h.app.world_to_screen(Point::new(px + handle.x, py + handle.y)));
+    assert!(
+        matches!(
+            h.app.drag,
+            Some(Drag::ShapeHandle {
+                part: crate::state::ShapePart::Count,
+                ..
+            })
+        ),
+        "the count handle takes the press"
+    );
+    let centre = h.app.world_to_screen(Point::new(px + pw / 2.0, py + ph / 2.0));
+    h.on_move(centre);
+    h.on_release();
+    let poly = find_node_clone(&h.app.doc_ref().editor_ref().root, &sel[0]).unwrap();
+    assert_eq!(
+        crate::state::poly_sides(&poly),
+        Some(x_native::booleans::COUNT_MIN),
+        "dragged to the centre: the minimum"
+    );
+    assert_eq!(
+        h.app.doc_ref().editor_ref().undo_depth(), depth + 1,
+        "one undo step"
+    );
+    h.app.doc().editor().undo();
+    let poly = find_node_clone(&h.app.doc_ref().editor_ref().root, &sel[0]).unwrap();
+    assert_eq!(crate::state::poly_sides(&poly), Some(6), "and one undo");
+
+    // and the other way: a drag OUT past the rim adds points — half a radius
+    // beyond it is half the span's 20, so six sides become sixteen
+    let depth = h.app.doc_ref().editor_ref().undo_depth();
+    let handle = crate::state::shape_handles(&poly)[0].1;
+    h.on_press(h.app.world_to_screen(Point::new(px + handle.x, py + handle.y)));
+    h.on_move(h.app.world_to_screen(Point::new(px + pw * 1.25, py + ph / 2.0)));
+    h.on_release();
+    let poly = find_node_clone(&h.app.doc_ref().editor_ref().root, &sel[0]).unwrap();
+    assert_eq!(
+        crate::state::poly_sides(&poly),
+        Some(16), "half a radius out"
+    );
+    assert_eq!(
+        h.app.doc_ref().editor_ref().undo_depth(), depth + 1,
+        "one undo step"
+    );
+    h.app.doc().editor().undo();
+    let poly = find_node_clone(&h.app.doc_ref().editor_ref().root, &sel[0]).unwrap();
+    assert_eq!(
+        crate::state::poly_sides(&poly),
+        Some(6), "one undo takes it back"
+    );
+
+    // the Star tool: five points, "ten sides", the inner points at the ratio
+    h.app.tool = Tool::Star;
+    h.on_press(Point::new(cx - 50.0, cy - 50.0));
+    h.on_move(Point::new(cx + 50.0, cy + 50.0));
+    h.on_release();
+    let sel = h.app.doc_ref().editor_ref().selection.clone();
+    let star = find_node_clone(&h.app.doc_ref().editor_ref().root, &sel[0]).unwrap();
+    assert!(star.name.starts_with("Star "), "named for the layers panel");
+    let (points, ratio) = crate::state::star_props(&star).expect("a star");
+    assert_eq!(points, 5, "a five pointed star");
+    assert!(
+        (ratio - x_native::booleans::STAR_RATIO).abs() < 1e-9,
+        "the inner points at Figma's default ratio"
+    );
+    let (sx, sy, sw, sh) = (star.transform.x, star.transform.y, star.w, star.h);
+    let cmds = x_native::booleans::star_path_cmds(sw, sh, points, ratio);
+    assert_eq!(cmds.len(), 11, "ten sides and the Close");
+
+    // two handles: the Count and the Ratio
+    let handles = crate::state::shape_handles(&star);
+    assert_eq!(handles.len(), 2, "Count and Ratio");
+    assert!(handles.iter().any(|(p, _)| *p == crate::state::ShapePart::Ratio));
+
+    // the Ratio field is a percentage, and it never moves the box either
+    set_field(&mut h, FieldId::StarRatio, "25");
+    let star = find_node_clone(&h.app.doc_ref().editor_ref().root, &sel[0]).unwrap();
+    let (points, ratio) = crate::state::star_props(&star).unwrap();
+    assert_eq!(points, 5, "the Count is untouched");
+    assert!((ratio - 0.25).abs() < 1e-6, "a quarter of the radius");
+
+    // dragging the Ratio handle out to half the radius sets 50%
+    let handle = crate::state::shape_handles(&star)
+        .into_iter()
+        .find(|(p, _)| *p == crate::state::ShapePart::Ratio)
+        .map(|(_, p)| p)
+        .expect("a star shows the Ratio handle");
+    h.on_press(h.app.world_to_screen(Point::new(sx + handle.x, sy + handle.y)));
+    assert!(
+        matches!(
+            h.app.drag,
+            Some(Drag::ShapeHandle {
+                part: crate::state::ShapePart::Ratio,
+                ..
+            })
+        ),
+        "the ratio handle takes the press"
+    );
+    let half = h.app.world_to_screen(Point::new(sx + sw / 2.0 + sw / 4.0, sy + sh / 2.0));
+    h.on_move(half);
+    h.on_release();
+    let star = find_node_clone(&h.app.doc_ref().editor_ref().root, &sel[0]).unwrap();
+    let (_, ratio) = crate::state::star_props(&star).unwrap();
+    assert!((ratio - 0.5).abs() < 1e-6, "dragged to half the radius");
+    assert_eq!(
+        (star.transform.x, star.transform.y, star.w, star.h),
+        (sx, sy, sw, sh), "and the box is untouched"
+    );
+}
+
 /// ⌥⌘G is Figma's Frame selection: the selection goes into a NEW frame sized
 /// to the members' collective bounds, with their positions preserved. The
 /// engine had this since the wrap-selection refactor; nothing could reach it.

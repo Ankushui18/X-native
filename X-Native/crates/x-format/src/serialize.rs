@@ -548,6 +548,10 @@ fn kind_json(k: &NodeKind) -> String {
         NodeKind::Arc { start, end, ratio } => {
             format!("{{\"t\":\"arc\",\"start\":{start},\"end\":{end},\"ratio\":{ratio}}}")
         }
+        NodeKind::Poly { sides } => format!("{{\"t\":\"poly\",\"sides\":{sides}}}"),
+        NodeKind::Star { points, ratio } => {
+            format!("{{\"t\":\"star\",\"points\":{points},\"ratio\":{ratio}}}")
+        }
         NodeKind::Line => "{\"t\":\"line\"}".into(),
         NodeKind::Text { text } => format!("{{\"t\":\"text\",\"text\":\"{}\"}}", esc(text)),
         NodeKind::Image { asset, fit, placement } => {

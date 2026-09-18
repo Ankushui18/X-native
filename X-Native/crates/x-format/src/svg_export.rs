@@ -272,6 +272,22 @@ fn mask_shape_svg(n: &Node) -> String {
                 n.transform.y
             )
         ),
+        NodeKind::Poly { sides } => format!(
+            "<path d=\"{}\" fill=\"white\"/>",
+            path_cmds_d(
+                &x_core::booleans::poly_path_cmds(n.w, n.h, *sides),
+                n.transform.x,
+                n.transform.y
+            )
+        ),
+        NodeKind::Star { points, ratio } => format!(
+            "<path d=\"{}\" fill=\"white\"/>",
+            path_cmds_d(
+                &x_core::booleans::star_path_cmds(n.w, n.h, *points, *ratio),
+                n.transform.x,
+                n.transform.y
+            )
+        ),
         _ => String::new(),
     }
 }
@@ -552,6 +568,58 @@ fn svg_node(
                 "<text x=\"14\" y=\"28\" font-size=\"18\" font-family=\"sans-serif\" fill=\"#4b5563\">{}</text>",
                 name.replace('&', "&amp;").replace('<', "&lt;")
             ));
+        }
+        // polygon and star: the shape's own outline, fill + stroke
+        NodeKind::Poly { sides } => {
+            let d = path_cmds_d(&x_core::booleans::poly_path_cmds(n.w, n.h, *sides), 0.0, 0.0);
+            for layer in n.active_fills() {
+                let fill = svg_fill(&layer.paint, vars, defs, grad_id, assets);
+                body.push_str(&format!(
+                    "<path d=\"{}\" fill=\"{}\" opacity=\"{}\"{}/>",
+                    d.trim_end(),
+                    fill,
+                    layer.opacity,
+                    svg_blend(layer.blend)
+                ));
+            }
+            for layer in n.active_strokes() {
+                let stroke = svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets);
+                body.push_str(&format!(
+                    "<path d=\"{}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" opacity=\"{}\"{}{}/>",
+                    d.trim_end(),
+                    stroke,
+                    layer.stroke.width,
+                    layer.opacity,
+                    svg_blend(layer.blend),
+                    svg_stroke_options(&layer)
+                ));
+            }
+        }
+        NodeKind::Star { points, ratio } => {
+            let cmds = x_core::booleans::star_path_cmds(n.w, n.h, *points, *ratio);
+            let d = path_cmds_d(&cmds, 0.0, 0.0);
+            for layer in n.active_fills() {
+                let fill = svg_fill(&layer.paint, vars, defs, grad_id, assets);
+                body.push_str(&format!(
+                    "<path d=\"{}\" fill=\"{}\" opacity=\"{}\"{}/>",
+                    d.trim_end(),
+                    fill,
+                    layer.opacity,
+                    svg_blend(layer.blend)
+                ));
+            }
+            for layer in n.active_strokes() {
+                let stroke = svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets);
+                body.push_str(&format!(
+                    "<path d=\"{}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" opacity=\"{}\"{}{}/>",
+                    d.trim_end(),
+                    stroke,
+                    layer.stroke.width,
+                    layer.opacity,
+                    svg_blend(layer.blend),
+                    svg_stroke_options(&layer)
+                ));
+            }
         }
         // arc: same fill/stroke emission as a plain vector path
         NodeKind::Arc { start, end, ratio } => {
