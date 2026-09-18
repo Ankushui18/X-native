@@ -842,11 +842,18 @@ impl Editor {
             n.w *= f;
             n.h *= f;
             n.stroke.width *= f;
-            // text: glyphs grow with the box (the Scale tool's whole point —
-            // the Move tool's handles leave font size alone)
-            n.font_size *= f;
-            n.line_height *= f;
-            n.letter_spacing *= f;
+            // Text metrics are px values in the BINDINGS — `fs` point size,
+            // `ls` tracking, `ps`/`pi` paragraph distance, `lhpx` an absolute
+            // line height — so the Scale tool takes them with the box. That is
+            // the whole difference from the Move tool's handles, which leave
+            // font size alone. The other line-height modes are relative and
+            // follow by construction: a percentage rides the size up on its
+            // own and a multiple never was px.
+            for key in ["fs", "ls", "ps", "pi", "lhpx"] {
+                if let Some(px) = n.bindings.get(key).and_then(|v| v.parse::<f64>().ok()) {
+                    n.bindings.insert(key.into(), (px * f).to_string());
+                }
+            }
             n.paragraph_spacing *= f;
             n.paragraph_indent *= f;
             for run in &mut n.text_runs {

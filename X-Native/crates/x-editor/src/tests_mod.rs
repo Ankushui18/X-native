@@ -1706,6 +1706,16 @@ mod tests {
         assert!(!e.scale_node("f", 0.0));
     }
 
+    /// A node binding read as a number. Text metrics are px values in the
+    /// bindings (`fs`, `ls`, `lhpx`, …) rather than typed fields, so the scale
+    /// tests have to read them the way the renderer does.
+    fn binding_px(n: &Node, k: &str) -> f64 {
+        n.bindings
+            .get(k)
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or_else(|| panic!("binding {k} is not a number"))
+    }
+
     #[test]
     fn scale_tool_takes_text_effects_and_layout_with_it() {
         // Figma's Scale tool (K) is not a resize: stroke weight, corner
@@ -1718,9 +1728,15 @@ mod tests {
         dashed.options.dash_offset = 1.0;
         inner.stroke_layers.push(dashed);
         let mut label = Node::text("t", 0.0, 0.0, 60.0, 20.0, "hi");
-        label.font_size = 14.0;
-        label.line_height = 20.0;
-        label.letter_spacing = 1.0;
+        for (k, v) in [("fs", "14"), ("ls", "1"), ("lhpx", "20"), ("lhp", "150")] {
+            label.bindings.insert(k.into(), v.into());
+        }
+        label.paragraph_indent = 6.0;
+        label.text_runs.push(TextRun {
+            size: Some(10.0),
+            ls: Some(0.5),
+            ..Default::default()
+        });
         let frame = Node::frame("f", 200.0, 100.0)
             .auto_layout(AutoLayout {
                 direction: LayoutDirection::Vertical,
@@ -1754,13 +1770,16 @@ mod tests {
         assert_eq!(r.stroke_layers[0].options.dash, vec![8.0, 4.0]);
         assert_eq!(r.stroke_layers[0].options.dash_offset, 2.0);
         let t = find(&e.root, "t").unwrap();
-        assert_eq!(
-            (t.font_size, t.line_height, t.letter_spacing),
-            (28.0, 40.0, 2.0)
-        );
+        assert_eq!(binding_px(t, "fs"), 28.0);
+        assert_eq!(binding_px(t, "ls"), 2.0);
+        assert_eq!(binding_px(t, "lhpx"), 40.0);
+        assert_eq!(binding_px(t, "lhp"), 150.0, "a percent line height is relative");
+        assert_eq!(t.paragraph_indent, 12.0);
+        assert_eq!(t.text_runs[0].size, Some(20.0));
+        assert_eq!(t.text_runs[0].ls, Some(1.0));
         e.undo();
         assert_eq!(find(&e.root, "f").unwrap().w, 200.0);
-        assert_eq!(find(&e.root, "t").unwrap().font_size, 14.0);
+        assert_eq!(binding_px(find(&e.root, "t").unwrap(), "fs"), 14.0);
     }
 
     #[test]
@@ -1811,12 +1830,16 @@ mod tests {
 
         // a node listed TOGETHER WITH ITS ANCESTOR scales exactly once: the
         // subtree pass already carries it
-        let mut e2 = Editor::new(
-            Node::frame("page", 800.0, 600.0).child(
-                Node::frame("f", 100.0, 100.0)
-                    .child(Node::rect("r", 10.0, 10.0, 20.0, 20.0, Color::WHITE)),
-            ),
-        );
+        let mut e2 = Editor::new(Node::frame("page", 800.0, 600.0).child(
+            Node::frame("f", 100.0, 100.0).child(Node::rect(
+                "r",
+                10.0,
+                10.0,
+                20.0,
+                20.0,
+                Color::WHITE,
+            )),
+        ));
         assert!(e2.scale_nodes_about(&[("f".into(), 0.0, 0.0), ("r".into(), 0.0, 0.0)], 2.0));
         assert_eq!(find(&e2.root, "f").unwrap().w, 200.0);
         let r = find(&e2.root, "r").unwrap();
