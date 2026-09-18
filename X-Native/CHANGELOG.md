@@ -120,7 +120,9 @@ not selecting the elements in the right panel"*. The audit behind the fixes
   marquee drag on empty canvas answers with the page's **top-level** objects, while
   holding ⌘/Ctrl is what lets the layers nested inside a frame answer
   (`hit_test_rect(.., deep)`, `Editor::marquee_deep`, `Drag::Marquee { deep }`) —
-  a plain drag over a frame used to select the frame *and* everything inside it;
+  a plain drag over a frame used to select the frame *and* everything inside it,
+  and a Group answers like any other layer now that the scan stopped skipping it
+  at every depth (only a *click* passes through a group's empty area, as before);
   and a press inside the text field you are already editing moves the caret
   instead of re-opening the field and discarding the typed buffer
   (`pressing_inside_the_open_text_field_keeps_what_was_typed`). The parity

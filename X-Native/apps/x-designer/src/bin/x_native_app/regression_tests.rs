@@ -3188,7 +3188,10 @@ fn pressing_inside_the_open_text_field_keeps_what_was_typed() {
     h.app.text_insert("X");
     assert_eq!(h.app.text_buffer, "hiX");
 
-    let r = h.app.text_edit_rect().expect("the inline editor has a rect");
+    let r = h
+        .app
+        .text_edit_rect()
+        .expect("the inline editor has a rect");
     let p = Point::new(r.x0 + 3.0, (r.y0 + r.y1) / 2.0);
     h.app.last_click = None;
     h.app.mouse = p;
@@ -3198,7 +3201,10 @@ fn pressing_inside_the_open_text_field_keeps_what_was_typed() {
         Some("t-1"),
         "the press landed in the editor, it did not open a different field"
     );
-    assert_eq!(h.app.text_buffer, "hiX", "the typed buffer survived the press");
+    assert_eq!(
+        h.app.text_buffer, "hiX",
+        "the typed buffer survived the press"
+    );
 }
 
 /// Every navigation aid has to agree with the content: the minimap's box is

@@ -330,6 +330,22 @@ mod tests {
     }
 
     #[test]
+    fn a_group_answers_a_marquee_like_any_other_layer() {
+        // A Group has bounds, so a marquee selects it (Figma); only a *click*
+        // passes through a group's empty area to what is beneath.
+        let mark = Node::rect("k", 0.0, 0.0, 30.0, 30.0, Color::WHITE);
+        let group = Node::group("g", 100.0, 100.0).child(mark);
+        let page = Node::frame("page", 200.0, 200.0).child(group);
+        let mut e = Editor::new(page);
+        e.marquee(Rect::new(0.0, 0.0, 200.0, 200.0));
+        assert_eq!(
+            e.selection,
+            vec!["g".to_string()],
+            "the group is the page's top-level object"
+        );
+    }
+
+    #[test]
     fn skew_and_origin_are_undoable() {
         let mut e = Editor::new(doc());
         e.skew("a", 0.3, -0.2);

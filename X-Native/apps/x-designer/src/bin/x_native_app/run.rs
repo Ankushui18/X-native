@@ -1176,12 +1176,19 @@ mod run_fns_tests {
         app.doc().editor().delete_selection();
         assert_eq!(app.doc().editor_ref().root.children.len(), kids_before);
 
-        // 7) marquee selects overlapping nodes
+        // 7) the marquee answers with the page's TOP-LEVEL objects (Figma's
+        //    plain drag); the deep one is what reaches inside the group
         app.doc().editor().selection.clear();
         app.doc()
             .editor()
             .marquee(vello::kurbo::Rect::new(0.0, 0.0, 1000.0, 1000.0));
-        assert!(app.doc().editor_ref().selection.len() >= 2, "marquee hit");
+        let plain = app.doc().editor_ref().selection.len();
+        assert!(plain >= 1, "the plain marquee hit the top-level group");
+        app.doc()
+            .editor()
+            .marquee_deep(vello::kurbo::Rect::new(0.0, 0.0, 1000.0, 1000.0));
+        let deep = app.doc().editor_ref().selection.len();
+        assert!(deep > plain, "the deep marquee reaches inside the group");
 
         // 8) text tool click-to-create starts inline edit with content
         app.tool = Tool::Text;

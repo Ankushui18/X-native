@@ -83,7 +83,8 @@ pub fn hit_test(root: &Node, point: Point) -> Option<String> {
 }
 
 /// All node ids whose world AABB is selected by the marquee `rect`. The root
-/// page/canvas is excluded (it can't be marquee-selected, like Figma).
+/// page/canvas is excluded (it can't be marquee-selected, like Figma), and a
+/// locked node is skipped; a Group answers like any other layer.
 /// `contained`: Figma's Alt-drag mode — only nodes FULLY inside the rect are
 /// selected (default is overlap/intersection).
 /// `deep`: Figma's ⌘/Ctrl-drag mode. Without it only the page's TOP-LEVEL
@@ -103,7 +104,10 @@ pub fn hit_test_rect(root: &Node, rect: Rect, contained: bool, deep: bool) -> Ve
             return;
         }
         let world = parent * node.transform.matrix(node.w, node.h);
-        if !node.locked && !matches!(node.kind, NodeKind::Group) {
+        // A Group has bounds like any other layer, so it answers a marquee —
+        // Figma selects a group that way. It is a *click* that falls through a
+        // group's empty area (see `hit_test`, where a Group has no body).
+        if !node.locked {
             let b = bounds(world, node.w, node.h);
             let hit = if contained {
                 b.x0 >= rect.x0 && b.x1 <= rect.x1 && b.y0 >= rect.y0 && b.y1 <= rect.y1
