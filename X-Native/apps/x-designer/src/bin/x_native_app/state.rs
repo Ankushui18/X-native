@@ -28,6 +28,12 @@ pub enum Tool {
     Text,
     Rect,
     Ellipse,
+    /// Figma's Line tool (L): one straight segment in any direction, whose
+    /// only paint is its stroke — a horizontal line's box is 0 units high.
+    Line,
+    /// Figma's Arrow tool (⇧L): the same segment, ending in the solid head
+    /// the shape menu's arrow draws.
+    Arrow,
     Pen,
     Hand,
     /// Board zoom tool (kept out of the design toolbar, where wheel/shortcuts
@@ -69,6 +75,8 @@ impl Tool {
             Tool::Text => "type",
             Tool::Rect => "square",
             Tool::Ellipse => "circle",
+            Tool::Line => "line",
+            Tool::Arrow => "arrow-up-right",
             Tool::Pen => "pen-tool",
             Tool::Pencil => "pencil",
             Tool::Brush => "brush",
@@ -102,6 +110,8 @@ impl Tool {
             Tool::Text => "Text",
             Tool::Rect => "Rectangle",
             Tool::Ellipse => "Ellipse",
+            Tool::Line => "Line",
+            Tool::Arrow => "Arrow",
             Tool::Pen => "Pen",
             Tool::Pencil => "Pencil",
             Tool::Brush => "Brush",
@@ -129,6 +139,8 @@ impl Tool {
             ("t", false),
             ("r", false),
             ("o", false),
+            ("l", false),
+            ("l", true),
             ("p", true),
             ("b", true),
             ("p", false),
@@ -170,6 +182,11 @@ impl Tool {
             ("t", _) => Some(Tool::Text),
             ("r", _) => Some(Tool::Rect),
             ("o", _) => Some(Tool::Ellipse),
+            // Figma's shape menu keeps the line and the arrow on one key: L is
+            // the Line, ⇧L the Arrow. Like the Scale, Slice, Pencil and Brush
+            // tools both are design-only — a board uses its own connector.
+            ("l", true) if !board => Some(Tool::Arrow),
+            ("l", _) if !board => Some(Tool::Line),
             // Figma's Pencil shares P with the Pen (⇧P, the creation-tools
             // menu) and, like the Scale and Slice tools, it is design-only:
             // a board draws freehand with its own pen.
@@ -197,6 +214,29 @@ pub fn pencil_ink() -> x_native::Color {
 
 /// A new sketch's stroke weight (Figma's default).
 pub const PENCIL_WEIGHT: f64 = 3.0;
+
+/// The Line and Arrow tools' ink: Figma's new line is a 1px stroke, drawn in
+/// the light ink this canvas needs — the pencil's own rule, so the two tools
+/// cannot drift and the chrome's colour ratchet gains no new literal. ONE
+/// source for the live preview and the node that lands.
+pub fn line_ink() -> x_native::Color {
+    pencil_ink()
+}
+
+/// A new line's stroke weight (Figma's default for the tool).
+pub const LINE_WEIGHT: f64 = 1.0;
+
+/// The Line and Arrow tools' endpoints — the same ⌥ rule `create_rect` uses
+/// (hold Option to draw from the centre), so the preview and the commit cannot
+/// disagree about the segment.
+pub fn create_line(start: Point, cur: Point, from_center: bool) -> ((f64, f64), (f64, f64)) {
+    let (dx, dy) = (cur.x - start.x, cur.y - start.y);
+    if from_center {
+        ((start.x - dx, start.y - dy), (start.x + dx, start.y + dy))
+    } else {
+        ((start.x, start.y), (cur.x, cur.y))
+    }
+}
 
 /// Freehand simplification, in world units. A hand's wobble is smaller than
 /// this, and the engine's fit turns the rest into editable curves.

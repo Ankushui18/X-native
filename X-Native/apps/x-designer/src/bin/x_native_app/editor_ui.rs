@@ -6624,6 +6624,8 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             Tool::Text,
             Tool::Rect,
             Tool::Ellipse,
+            Tool::Line,
+            Tool::Arrow,
             Tool::Pen,
             Tool::Pencil,
             Tool::Brush,
@@ -6633,11 +6635,12 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             Tool::Hand,
         ]
     };
-    // Audited (canvas 280..1100 @900): container 559×40 r12 at bottom-5
+    // Audited (canvas 280..1100 @900): container 631×40 r12 at bottom-5
     // (y = win_h − 60); icons 32px pitch 36 starting +7; divider mid-gap
-    // after fourteen tools (Scale, the Slice tool, the Pencil and Figma Draw's
-    // Brush joined the row); palette btn at +520 from container left.
-    let bar_w = 559.0;
+    // after sixteen tools (Scale, the Slice tool, the Pencil, Figma Draw's
+    // Brush, and the Line and Arrow joined the row); palette btn at +592 from
+    // container left.
+    let bar_w = 631.0;
     let bar_x0 = reg.canvas.x0 + (reg.canvas.x1 - reg.canvas.x0 - bar_w) / 2.0;
     let bar_y0 = app.win_h - TOOLBAR_BOTTOM - TOOLBAR_H;
     let bar = Rect::new(bar_x0, bar_y0, bar_x0 + bar_w, bar_y0 + TOOLBAR_H);
@@ -6676,15 +6679,15 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         tip(app, r, &tl);
         hit.push((r, Action::Tool(*t)));
     }
-    // divider between the last tool (ends +507) and palette (+520)
-    let dx = bar.x0 + 515.5;
+    // divider between the last tool (ends +579) and palette (+592)
+    let dx = bar.x0 + 587.5;
     fill_rect(
         s,
         Rect::new(dx, bar.y0 + 10.0, dx + 1.0, bar.y1 - 10.0),
         C_LINE_2,
     );
     // search → palette
-    let sx = bar.x0 + 520.0;
+    let sx = bar.x0 + 592.0;
     let sr = Rect::new(sx, bar.y0 + 4.0, sx + TOOL_ICON, bar.y0 + 4.0 + TOOL_ICON);
     if hover(app, sr) {
         fill_rrect(s, sr, R_TOOL_ICON, C_FIELD_2);
@@ -7024,21 +7027,52 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
     // shape-tool create — Figma shows the pending shape and its size while you
     // drag ("You'll see the rectangle's dimensions underneath the bottom
     // edge"). The rect comes from `state::create_rect`, the same rule the commit
-    // uses, ⌥ included, so the preview cannot disagree with what lands.
+    // uses, ⌥ included, so the preview cannot disagree with what lands — and the
+    // Line and Arrow tools go through the engine's own path builders for the
+    // same reason: the preview IS the node that lands, one transform away.
     if let Some(crate::state::Drag::Create { tool, start, cur }) = &app.drag {
         let reg = app.editor_regions();
-        let wr = crate::state::create_rect(*start, *cur, app.alt);
-        let a = app.world_to_screen(Point::new(wr.x0, wr.y0));
-        let b = app.world_to_screen(Point::new(wr.x1, wr.y1));
-        let r = Rect::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y));
-        if *tool == Tool::Slice {
-            // a slice is a region, not a shape: dashed, never filled
-            stroke_rect_dashed(s, r, C_SEL, 1.0, 6.0, 4.0);
+        let (r, label) = if matches!(tool, Tool::Line | Tool::Arrow) {
+            let (a, b) = crate::state::create_line(*start, *cur, app.alt);
+            let arrow = *tool == Tool::Arrow;
+            let cmds = if arrow {
+                x_native::arrow_path(a, b, crate::state::LINE_WEIGHT)
+            } else {
+                x_native::line_path(a, b)
+            };
+            let p = screen_path(app, &cmds, 0.0, 0.0);
+            let ink = crate::state::line_ink();
+            let w = (crate::state::LINE_WEIGHT * app.zoom).max(1.0);
+            crate::paint::stroke_path(s, &p, ink, w);
+            if arrow {
+                crate::paint::fill_path(s, &p, ink);
+            }
+            let (bx0, by0, bw, bh) = x_native::path_bounds(&cmds);
+            let a0 = app.world_to_screen(Point::new(bx0, by0));
+            let a1 = app.world_to_screen(Point::new(bx0 + bw, by0 + bh));
+            let box_r = Rect::new(
+                a0.x.min(a1.x),
+                a0.y.min(a1.y),
+                a0.x.max(a1.x),
+                a0.y.max(a1.y),
+            );
+            let label = format!("{} × {}", bw.round(), bh.round());
+            (box_r, label)
         } else {
-            fill_rect(s, r, C_SEL_SOFT);
-            stroke_rect(s, r, C_SEL, 1.0);
-        }
-        let label = format!("{} × {}", wr.width().round(), wr.height().round());
+            let wr = crate::state::create_rect(*start, *cur, app.alt);
+            let a = app.world_to_screen(Point::new(wr.x0, wr.y0));
+            let b = app.world_to_screen(Point::new(wr.x1, wr.y1));
+            let r = Rect::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y));
+            if *tool == Tool::Slice {
+                // a slice is a region, not a shape: dashed, never filled
+                stroke_rect_dashed(s, r, C_SEL, 1.0, 6.0, 4.0);
+            } else {
+                fill_rect(s, r, C_SEL_SOFT);
+                stroke_rect(s, r, C_SEL, 1.0);
+            }
+            let label = format!("{} × {}", wr.width().round(), wr.height().round());
+            (r, label)
+        };
         let tw = app.fonts.measure(&label, T10, Wt::Reg) + 12.0;
         let bx = r.x0.min(reg.canvas.x1 - tw - 4.0).max(reg.canvas.x0 + 4.0);
         let chip = Rect::new(bx, r.y1 + 6.0, bx + tw, r.y1 + 24.0);
@@ -7453,6 +7487,14 @@ pub fn palette_commands() -> Vec<Command> {
         Command {
             label: "Ellipse tool",
             shortcut: "O",
+        },
+        Command {
+            label: "Line tool",
+            shortcut: "L",
+        },
+        Command {
+            label: "Arrow tool",
+            shortcut: "⇧L",
         },
         Command {
             label: "Pen tool",

@@ -24,6 +24,7 @@ const ICONS: &[(&str, &[&str])] = &[
     ("search", &["M21 21l-4.34-4.34", "M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16z"]),
     ("plus", &["M5 12h14", "M12 5v14"]),
     ("minus", &["M5 12h14"]),
+    ("line", &["M5 19 19 5"]),
     ("x", &["M18 6 6 18", "m6 6 12 12"]),
     ("chevron-down", &["m6 9 6 6 6-6"]),
     ("chevron-up", &["m18 15-6-6-6 6"]),
@@ -516,6 +517,7 @@ mod tests {
             "layout-grid",
             "layout-list",
             "layout-template",
+            "line",
             "lock",
             "maximize",
             "maximize-2",
@@ -567,7 +569,7 @@ mod tests {
         }
         assert_eq!(
             names.len(),
-            74,
+            75,
             "census list drifted — recount when adding icons"
         );
     }

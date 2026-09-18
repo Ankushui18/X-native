@@ -174,13 +174,11 @@ selection (⌥⌘G), which now have a tool, a palette entry and a shortcut — t
 
 Ordered by how visible they are, not by how hard they are:
 
-1. **Line / Arrow tools** (L / ⇧L) — a one-drag line or arrow. Stroke caps exist
-   (`Stroke cap: round / square / butt / arrow`), but the tools themselves do not.
-3. **The Scale panel's numbers, and the scale tool's body drag** — Figma's help says
+1. **The Scale panel's numbers, and the scale tool's body drag** — Figma's help says
    "Hover over the object's bounding box to make the [scale] cursor appear. Then,
    click-and-drag to resize", plus a *multiplier* and an *anchor box* in the right
    sidebar. Ours scales from the four corner handles (the same ones the Move tool
    resizes with) and dragging the body of an object still moves it, so the gesture is
    there but not the whole surface; typing "50%" or picking an anchor is not.
-4. **Community and Teams** in the file browser, and sharing in the editor. These need a
+2. **Community and Teams** in the file browser, and sharing in the editor. These need a
    backend; the build is local-first.

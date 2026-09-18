@@ -250,6 +250,45 @@ pub fn brush_outline(
     out
 }
 
+/// The Line tool's geometry: one straight segment from `a` to `b`. Figma's
+/// line is "lines in any direction" — a stroked path, so a horizontal line's
+/// box is 0 units high rather than a shape's minimum.
+pub fn line_path(a: (f64, f64), b: (f64, f64)) -> Vec<PathCmd> {
+    vec![PathCmd::MoveTo(a.0, a.1), PathCmd::LineTo(b.0, b.1)]
+}
+
+/// An arrowhead's length in stroke weights, the floor under it (a 1px arrow
+/// still has to read as an arrow), and its half-width against that length.
+/// Constants, so the live preview and the node that lands cannot disagree.
+pub const ARROW_HEAD_LEN: f64 = 4.0;
+pub const ARROW_HEAD_MIN: f64 = 12.0;
+pub const ARROW_HEAD_HALF: f64 = 0.4;
+
+/// The Arrow tool's geometry: the same segment, closed by the solid head
+/// Figma's arrow ends in. The head is a triangle at `b` — `weight * 4` long,
+/// never shorter than 12 units — and the shaft stops at the head's base so its
+/// cap cannot peek past the tip. A degenerate drag is just a line.
+pub fn arrow_path(a: (f64, f64), b: (f64, f64), weight: f64) -> Vec<PathCmd> {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let len = dx.hypot(dy);
+    if len < 1e-9 {
+        return line_path(a, b);
+    }
+    let head = (weight * ARROW_HEAD_LEN).max(ARROW_HEAD_MIN).min(len);
+    let (ux, uy) = (dx / len, dy / len);
+    let (nx, ny) = (-uy, ux);
+    let (bx, by) = (b.0 - ux * head, b.1 - uy * head);
+    let half = head * ARROW_HEAD_HALF;
+    vec![
+        PathCmd::MoveTo(a.0, a.1),
+        PathCmd::LineTo(bx, by),
+        PathCmd::MoveTo(b.0, b.1),
+        PathCmd::LineTo(bx + nx * half, by + ny * half),
+        PathCmd::LineTo(bx - nx * half, by - ny * half),
+        PathCmd::Close,
+    ]
+}
+
 /// The bounding box of a path command list, as `(x, y, w, h)`. Cubic control
 /// points count: a curve never leaves the hull of its control points, so the
 /// box is an honest wrapper for geometry the curve can reach, and an empty path
@@ -1987,6 +2026,80 @@ mod brush_tests {
             brush_outline(&spine(), 0.0, 1.0, 0.3, 1.5).is_empty(),
             "no width, no mark"
         );
+    }
+}
+
+#[cfg(test)]
+mod line_tests {
+    use super::*;
+
+    /// A horizontal segment at y = 40, 100 units long.
+    fn span() -> ((f64, f64), (f64, f64)) {
+        ((0.0, 40.0), (100.0, 40.0))
+    }
+
+    /// The path's points, rounded to two decimals so the head's arithmetic
+    /// (4.8, 35.2 …) compares like the geometry it is.
+    fn points(p: &[PathCmd]) -> Vec<(f64, f64)> {
+        p.iter()
+            .filter_map(|c| match c {
+                PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => {
+                    Some(((x * 100.0).round() / 100.0, (y * 100.0).round() / 100.0))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_line_is_the_segment_between_its_endpoints() {
+        let p = line_path((10.0, 20.0), (60.0, 80.0));
+        assert_eq!(p.len(), 2);
+        assert_eq!(p[0], PathCmd::MoveTo(10.0, 20.0));
+        assert_eq!(p[1], PathCmd::LineTo(60.0, 80.0));
+        assert_eq!(path_bounds(&p), (10.0, 20.0, 50.0, 60.0));
+    }
+
+    #[test]
+    fn a_horizontal_line_is_a_box_with_no_height() {
+        // Figma's own line layer: the box is the segment, H and all.
+        let (a, b) = span();
+        assert_eq!(path_bounds(&line_path(a, b)), (0.0, 40.0, 100.0, 0.0));
+    }
+
+    #[test]
+    fn the_head_sits_on_the_end_and_scales_with_the_weight() {
+        let (a, b) = span();
+        // 1px: the floor (12) beats 4 x weight, so the base is 12 back
+        let thin = arrow_path(a, b, 1.0);
+        assert_eq!(
+            points(&thin),
+            vec![
+                (0.0, 40.0),
+                (88.0, 40.0),
+                (100.0, 40.0),
+                (88.0, 44.8),
+                (88.0, 35.2)
+            ]
+        );
+        assert_eq!(thin[5], PathCmd::Close, "the head is a closed triangle");
+        // a heavier stroke buys a longer head: 5 x 4 = 20, so the base is 80
+        let heavy = arrow_path(a, b, 5.0);
+        assert_eq!(points(&heavy)[1], (80.0, 40.0));
+        assert_eq!(points(&heavy)[3], (80.0, 48.0));
+        assert_eq!(points(&heavy)[4], (80.0, 32.0));
+    }
+
+    #[test]
+    fn a_head_never_grows_past_a_short_segment() {
+        let p = arrow_path((0.0, 0.0), (5.0, 0.0), 1.0);
+        assert_eq!(points(&p)[1], (0.0, 0.0), "the base stays on the spine");
+    }
+
+    #[test]
+    fn a_degenerate_arrow_is_a_line() {
+        let p = arrow_path((5.0, 5.0), (5.0, 5.0), 1.0);
+        assert_eq!(p, line_path((5.0, 5.0), (5.0, 5.0)));
     }
 }
 

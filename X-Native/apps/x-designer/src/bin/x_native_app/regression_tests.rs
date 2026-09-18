@@ -1901,6 +1901,119 @@ fn the_brush_paints_a_mark() {
     assert_eq!(h.app.tool, Tool::Select, "Esc leaves the Brush");
 }
 
+/// Figma's shape menu keeps the line and the arrow on one key: L is the Line,
+/// ⇧L the Arrow. Both draw a STROKED PATH — the segment is the geometry rather
+/// than a box, so a horizontal line is 0 units high — and both are design-only,
+/// land where they are drawn, and hand the canvas back to the Move tool.
+#[test]
+fn the_line_and_arrow_tools_draw_stroked_paths() {
+    let mut h = host();
+    assert_eq!(Tool::from_shortcut("l", false, false), Some(Tool::Line));
+    assert_eq!(Tool::from_shortcut("l", true, false), Some(Tool::Arrow));
+    assert_eq!(Tool::from_shortcut("l", false, true), None, "design-only");
+    assert_eq!(Tool::Line.shortcut_hint(false), "L");
+    assert_eq!(Tool::Arrow.shortcut_hint(false), "⇧L");
+    assert_eq!(Tool::Line.icon(), "line");
+    assert_eq!(Tool::Arrow.icon(), "arrow-up-right");
+    assert!(crate::editor_ui::palette_commands()
+        .iter()
+        .any(|c| c.label == "Line tool"));
+
+    // a real drag: press, move, release — one segment, one undo entry
+    let reg = h.app.editor_regions();
+    let (cx, cy) = (
+        (reg.canvas.x0 + reg.canvas.x1) / 2.0,
+        (reg.canvas.y0 + reg.canvas.y1) / 2.0,
+    );
+    let depth0 = h.app.doc_ref().editor_ref().undo_depth();
+    h.app.tool = Tool::Line;
+    h.on_press(Point::new(cx - 100.0, cy));
+    h.on_move(Point::new(cx + 100.0, cy));
+    h.on_release();
+    let sel = h.app.doc_ref().editor_ref().selection.clone();
+    assert_eq!(sel.len(), 1, "the segment is the selection");
+    let root = &h.app.doc_ref().editor_ref().root;
+    let v = find_node_clone(root, &sel[0]).expect("the segment landed");
+    assert!(v.name.starts_with("Line "), "named in the layers panel");
+    let empty = matches!(&v.fill, Paint::Solid(c) if c.components[3] == 0.0);
+    assert!(empty, "a line is not filled");
+    assert_eq!(v.stroke.width, crate::state::LINE_WEIGHT);
+    let path = match &v.kind {
+        NodeKind::Vector { path } => path,
+        _ => unreachable!(),
+    };
+    let (ax, ay) = match path[0] {
+        PathCmd::MoveTo(x, y) => (x, y),
+        _ => unreachable!(),
+    };
+    assert!(ax.abs() < 0.5 && ay.abs() < 0.5);
+    let (ex, ey) = match path[1] {
+        PathCmd::LineTo(x, y) => (x, y),
+        _ => unreachable!(),
+    };
+    assert!(ey.abs() < 0.5, "the drag is the segment");
+    assert!((ex - v.w).abs() < 0.5, "and the box is its span");
+    assert!(v.h <= 1.0, "a horizontal line has no height");
+    assert_eq!(h.app.doc_ref().editor_ref().undo_depth(), depth0 + 1);
+    assert_eq!(h.app.tool, Tool::Select, "the tool hands back to Move");
+
+    // ⇧ snaps the DIRECTION to 45° steps, keeping the pointer's length: a
+    // shallow drag lands flat
+    h.app.tool = Tool::Line;
+    h.on_press(Point::new(cx - 100.0, cy + 40.0));
+    h.app.shift = true;
+    h.on_move(Point::new(cx + 100.0, cy + 62.0));
+    h.on_release();
+    h.app.shift = false;
+    let sel = h.app.doc_ref().editor_ref().selection.clone();
+    let root = &h.app.doc_ref().editor_ref().root;
+    let flat = find_node_clone(root, &sel[0]).expect("the snapped segment landed");
+    let snap_path = match &flat.kind {
+        NodeKind::Vector { path } => path,
+        _ => unreachable!(),
+    };
+    let (_, fy) = match snap_path[1] {
+        PathCmd::LineTo(x, y) => (x, y),
+        _ => unreachable!(),
+    };
+    assert!(fy.abs() < 0.5, "⇧ flattened the angle: {fy}");
+    assert!(flat.h <= 1.0, "so the box is flat too");
+
+    // ⇧L: the same segment, closed by the solid head
+    h.finish_create(
+        Tool::Arrow,
+        Point::new(60.0, 620.0),
+        Point::new(180.0, 660.0),
+    );
+    let sel = h.app.doc_ref().editor_ref().selection.clone();
+    let root = &h.app.doc_ref().editor_ref().root;
+    let a = find_node_clone(root, &sel[0]).expect("the arrow landed");
+    assert!(a.name.starts_with("Arrow "), "named in the layers panel");
+    let arrow_path = match &a.kind {
+        NodeKind::Vector { path } => path,
+        _ => unreachable!(),
+    };
+    assert_eq!(arrow_path.len(), 6, "the shaft and the head");
+    assert!(matches!(arrow_path.last(), Some(PathCmd::Close)));
+    let solid = matches!(&a.fill, Paint::Solid(c) if c.components[3] > 0.0);
+    assert!(solid, "the head is solid ink");
+
+    // the draw-it-in rule holds for the pair: a line STARTED inside frame-1
+    // (world 0,60 375×420) joins the frame
+    h.finish_create(
+        Tool::Line,
+        Point::new(60.0, 200.0),
+        Point::new(200.0, 240.0),
+    );
+    let sel = h.app.doc_ref().editor_ref().selection.clone();
+    let root = &h.app.doc_ref().editor_ref().root;
+    let f1 = find_node_clone(root, "frame-1").expect("frame-1");
+    assert!(
+        find_node_clone(&f1, &sel[0]).is_some(),
+        "drawn into the frame"
+    );
+}
+
 #[test]
 fn the_slice_tool_draws_an_export_region() {
     let mut h = host();

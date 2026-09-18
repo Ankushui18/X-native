@@ -5,6 +5,32 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-18 (Line and Arrow)
+
+Figma's shape menu keeps the **Line** and the **Arrow** on one key — L draws the line, ⇧L
+the arrow — and both are now on the canvas: the segment IS the geometry, so a horizontal
+line is a layer 0 units high rather than a box, and the arrow closes that same spine with
+a solid head.
+
+- `x_core::line_path(a, b)` is the two endpoints; `x_core::arrow_path(a, b, weight)` closes
+  the shaft with a filled triangular head — `4 × weight` long, never under 12 units, never
+  longer than the segment itself, so a short drag stays an arrow and a degenerate one is a
+  plain line.
+- `Tool::Line` / `Tool::Arrow` (L / ⇧L, design-only like the Scale, Slice, Pencil and Brush
+  tools) are the dock's fifteenth and sixteenth tools, two palette rows, and Esc leaves them.
+- One drag = one `NodeKind::Vector` named "Line n" / "Arrow n", in the tool's 1px ink (the
+  arrow's fill is that ink, a line's fill is transparent), re-origined onto
+  `x_core::path_bounds` so the layer's box wraps the ink, drawn inside the frame it was
+  drawn in (Space opts out), and one insert = one undo step.
+- ⌥ draws from the centre like the shape tools; ⇧ snaps the drag's DIRECTION to 45° steps
+  and keeps the pointer's length — a line's proportion is an angle, not a square.
+- `x_editor::hit_test` answers a stroke-only path (a line's box has no height to click) by
+  the distance to the path's ink, and keeps the box test for filled paths, so the pencil's
+  and brush's marks still click anywhere inside their box.
+- The live preview builds the same `PathCmd`s the commit does, one transform apart, so the
+  arrow on screen while dragging is the arrow that lands. The icon set gains the `line`
+  glyph (the arrow reuses `arrow-up-right`), and its census moves to 75.
+
 ## [Unreleased] — 2026-09-18 (Brush)
 
 Figma Draw's **Brush** — the tool beside the Pencil in the same toolbar — is now on the

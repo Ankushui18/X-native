@@ -132,6 +132,30 @@ pub fn line(s: &mut Scene, x0: f64, y0: f64, x1: f64, y1: f64, c: Color, w: f64)
     );
 }
 
+/// Stroke an arbitrary path — the shape previews and the pencil's and brush's
+/// own overlays use it, so a preview and the layer it becomes agree by
+/// construction.
+pub fn stroke_path(s: &mut Scene, p: &BezPath, c: Color, w: f64) {
+    s.stroke(
+        &Stroke::new(w),
+        Affine::IDENTITY,
+        crate::theme::resolve(c),
+        None,
+        p,
+    );
+}
+
+/// Fill an arbitrary path (the arrow head's solid triangle).
+pub fn fill_path(s: &mut Scene, p: &BezPath, c: Color) {
+    s.fill(
+        Fill::NonZero,
+        Affine::IDENTITY,
+        crate::theme::resolve(c),
+        None,
+        p,
+    );
+}
+
 pub fn circle(s: &mut Scene, cx: f64, cy: f64, r: f64, c: Color) {
     let mut p = BezPath::new();
     p.move_to((cx + r, cy));

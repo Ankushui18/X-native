@@ -49,6 +49,32 @@ pub fn hit_test(root: &Node, point: Point) -> Option<String> {
                         on_ring && in_arc
                     }
                 }
+                // A vector's box is a wrapper, not its ink: a Line's box is 0
+                // units high, so the box test would only ever answer on its
+                // exact edge. A path with no fill count under it — a stroke
+                // this thin is what the Line and Arrow tools land — is clicked
+                // the way the arc is, with the stroke's own slop; a filled
+                // path (the pencil's and brush's marks, a closed shape) keeps
+                // the box test.
+                NodeKind::Vector { path } => {
+                    let ink = node
+                        .active_strokes()
+                        .iter()
+                        .map(|l| l.stroke.width)
+                        .fold(node.stroke.width, f64::max);
+                    let filled = match &node.fill {
+                        Paint::Solid(c) => c.components[3] > 0.0,
+                        _ => true,
+                    };
+                    if !filled && ink <= 2.0 {
+                        near_path(path, local) <= ink / 2.0 + 4.0
+                    } else {
+                        local.x >= 0.0
+                            && local.y >= 0.0
+                            && local.x <= node.w
+                            && local.y <= node.h
+                    }
+                }
                 // Plain Groups have no paintable body (no fill/stroke of their
                 // own in Figma's model), so clicks pass through empty group
                 // area to whatever is beneath. Frames, master Components, and
@@ -80,6 +106,50 @@ pub fn hit_test(root: &Node, point: Point) -> Option<String> {
         walk(child, world, point, &mut out);
     }
     out
+}
+
+/// The distance from `p` to the segment `a`–`b`.
+fn dist_to_segment(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let len2 = dx * dx + dy * dy;
+    if len2 < 1e-12 {
+        return ((p.0 - a.0).powi(2) + (p.1 - a.1).powi(2)).sqrt();
+    }
+    let t = (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0);
+    let cx = a.0 + dx * t;
+    let cy = a.1 + dy * t;
+    ((p.0 - cx).powi(2) + (p.1 - cy).powi(2)).sqrt()
+}
+
+/// How far `p` is from a path's ink. Each cubic is measured against its
+/// control polygon, which contains the curve — so a click beside a curvy path
+/// counts rather than being missed.
+fn near_path(path: &[PathCmd], p: Point) -> f64 {
+    let (mut cur, mut start) = ((0.0, 0.0), (0.0, 0.0));
+    let mut best = f64::MAX;
+    for c in path {
+        match *c {
+            PathCmd::MoveTo(x, y) => {
+                cur = (x, y);
+                start = (x, y);
+            }
+            PathCmd::LineTo(x, y) => {
+                best = best.min(dist_to_segment((p.x, p.y), cur, (x, y)));
+                cur = (x, y);
+            }
+            PathCmd::CurveTo(x1, y1, x2, y2, x, y) => {
+                best = best.min(dist_to_segment((p.x, p.y), cur, (x1, y1)));
+                best = best.min(dist_to_segment((p.x, p.y), (x1, y1), (x2, y2)));
+                best = best.min(dist_to_segment((p.x, p.y), (x2, y2), (x, y)));
+                cur = (x, y);
+            }
+            PathCmd::Close => {
+                best = best.min(dist_to_segment((p.x, p.y), cur, start));
+                cur = start;
+            }
+        }
+    }
+    best
 }
 
 /// All node ids whose world AABB is selected by the marquee `rect`. The root

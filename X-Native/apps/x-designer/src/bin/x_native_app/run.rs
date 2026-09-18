@@ -4879,14 +4879,28 @@ impl Host {
                     self.app.mark_dirty();
                 }
             }
-            Some(Drag::Create { start, .. }) => {
+            Some(Drag::Create { tool, start, .. }) => {
                 let mut world = self.app.screen_to_world(p);
-                // ⇧ constrains to square / circle
+                // ⇧ constrains the shape tools to a square / circle. A line's
+                // "proportion" is an ANGLE instead, so the Line and Arrow tools
+                // snap their direction to 45° steps and keep the pointer's
+                // length — Figma's own ⇧ on that pair.
+                let line = matches!(tool, Tool::Line | Tool::Arrow);
                 if self.app.shift {
                     let dx = world.x - start.x;
                     let dy = world.y - start.y;
-                    let m = dx.abs().max(dy.abs());
-                    world = Point::new(start.x + dx.signum() * m, start.y + dy.signum() * m);
+                    if line {
+                        let step = std::f64::consts::FRAC_PI_4;
+                        let angle = (dy.atan2(dx) / step).round() * step;
+                        let len = dx.hypot(dy);
+                        world = Point::new(
+                            start.x + angle.cos() * len,
+                            start.y + angle.sin() * len,
+                        );
+                    } else {
+                        let m = dx.abs().max(dy.abs());
+                        world = Point::new(start.x + dx.signum() * m, start.y + dy.signum() * m);
+                    }
                 }
                 if let Some(Drag::Create { cur, .. }) = self.app.drag.as_mut() {
                     *cur = world;
@@ -5455,7 +5469,7 @@ impl Host {
         // One rule for the pending rect (⌥ draws from the centre), shared with
         // the live preview, so the shape that lands is the shape on screen.
         let rect = crate::state::create_rect(start, cur, self.app.alt);
-        let (x, y, w, h) = (rect.x0, rect.y0, rect.width(), rect.height());
+        let (mut x, mut y, w, h) = (rect.x0, rect.y0, rect.width(), rect.height());
 
         // Board rectangle/circle tools share the Drag::Create gesture with
         // design shapes, but must never insert an x-core Node into the hidden
@@ -5525,6 +5539,46 @@ impl Host {
                 );
                 e.name = format!("Ellipse {n}");
                 e
+            }
+            Tool::Line | Tool::Arrow => {
+                // Figma's line and arrow are stroked paths, not boxes: the two
+                // endpoints ARE the geometry, and the arrow's head is part of
+                // the path. Both re-origin onto their own box the way a
+                // freehand mark does, so the layer's box wraps the ink.
+                let (a, b) = crate::state::create_line(start, cur, self.app.alt);
+                let arrow = tool == Tool::Arrow;
+                let mut path = if arrow {
+                    x_native::arrow_path(a, b, crate::state::LINE_WEIGHT)
+                } else {
+                    x_native::line_path(a, b)
+                };
+                let (bx, by, bw, bh) = x_native::path_bounds(&path);
+                if bx != 0.0 || by != 0.0 {
+                    x_native::shift_path(&mut path, -bx, -by);
+                }
+                x = bx;
+                y = by;
+                let ink = crate::state::line_ink();
+                let mut v = Node::vector(
+                    &x_native::fresh_id(if arrow { "arrow" } else { "line" }),
+                    bx,
+                    by,
+                    bw.max(1.0),
+                    bh.max(1.0),
+                    path,
+                );
+                v.name = format!("{} {n}", tool.label());
+                // the head is solid ink; a plain line has no fill at all
+                v.fill = if arrow {
+                    Paint::Solid(ink)
+                } else {
+                    Paint::Solid(x_native::Color::TRANSPARENT)
+                };
+                v.stroke = x_native::Stroke::solid(ink, crate::state::LINE_WEIGHT);
+                // materialized so the inspector shows the stroke the line
+                // really draws — the pencil's own path
+                v.materialize_visual_stacks();
+                v
             }
             Tool::Slice => {
                 // Figma: "The Slice tool lets you specify a specific region of
@@ -6587,7 +6641,12 @@ impl Host {
                         self.app.drag = None;
                     } else if matches!(
                         self.app.tool,
-                        Tool::Scale | Tool::Slice | Tool::Pencil | Tool::Brush
+                        Tool::Scale
+                            | Tool::Slice
+                            | Tool::Pencil
+                            | Tool::Brush
+                            | Tool::Line
+                            | Tool::Arrow
                     ) {
                         // Figma's Esc leaves the active drawing tool (Scale,
                         // Slice) the way V does —
@@ -6927,6 +6986,8 @@ impl Host {
             "Text tool" => self.app.tool = Tool::Text,
             "Rectangle tool" => self.app.tool = Tool::Rect,
             "Ellipse tool" => self.app.tool = Tool::Ellipse,
+            "Line tool" => self.app.tool = Tool::Line,
+            "Arrow tool" => self.app.tool = Tool::Arrow,
             "Pen tool" => self.app.tool = Tool::Pen,
             "Pencil tool" => self.app.tool = Tool::Pencil,
             "Brush tool" => self.app.tool = Tool::Brush,
@@ -13420,6 +13481,8 @@ mod tests {
         assert_eq!(Tool::Text.icon(), "type");
         assert_eq!(Tool::Rect.icon(), "square");
         assert_eq!(Tool::Ellipse.icon(), "circle");
+        assert_eq!(Tool::Line.icon(), "line");
+        assert_eq!(Tool::Arrow.icon(), "arrow-up-right");
         assert_eq!(Tool::Pen.icon(), "pen-tool");
         assert_eq!(Tool::Pencil.icon(), "pencil");
         assert_eq!(Tool::Brush.icon(), "brush");
