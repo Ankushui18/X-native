@@ -165,8 +165,8 @@ was started with a `[ci-fix]` commit. It ran `cargo fmt --all` (this tree had
 `f2123e3 "Apply cargo fmt to the workspace"`), re-ran the whole gate, and
 published the log to this PR.
 
-That log is where the pass's real defects were found — three of them in the tests,
-one in the source:
+That log is where the pass's real defects were found — one in the source, four in
+this pass's own tests, and one constant that was documented as needing the run:
 
 | what failed | what it actually was | fix |
 | --- | --- | --- |
