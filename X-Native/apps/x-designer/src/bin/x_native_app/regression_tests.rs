@@ -2083,7 +2083,8 @@ fn the_polygon_and_star_tools_count_their_sides() {
         "dragged to the centre: the minimum"
     );
     assert_eq!(
-        h.app.doc_ref().editor_ref().undo_depth(), depth + 1,
+        h.app.doc_ref().editor_ref().undo_depth(),
+        depth + 1,
         "one undo step"
     );
     h.app.doc().editor().undo();
@@ -2106,17 +2107,20 @@ fn the_polygon_and_star_tools_count_their_sides() {
     let poly = find_node_clone(&h.app.doc_ref().editor_ref().root, &sel[0]).unwrap();
     assert_eq!(
         crate::state::poly_sides(&poly),
-        Some(16), "half a radius out"
+        Some(16),
+        "half a radius out"
     );
     assert_eq!(
-        h.app.doc_ref().editor_ref().undo_depth(), depth + 1,
+        h.app.doc_ref().editor_ref().undo_depth(),
+        depth + 1,
         "one undo step"
     );
     h.app.doc().editor().undo();
     let poly = find_node_clone(&h.app.doc_ref().editor_ref().root, &sel[0]).unwrap();
     assert_eq!(
         crate::state::poly_sides(&poly),
-        Some(6), "one undo takes it back"
+        Some(6),
+        "one undo takes it back"
     );
 
     // the Star tool: five points, "ten sides", the inner points at the ratio
@@ -2183,7 +2187,8 @@ fn the_polygon_and_star_tools_count_their_sides() {
     assert!((ratio - 0.5).abs() < 1e-6, "dragged to half the radius");
     assert_eq!(
         (star.transform.x, star.transform.y, star.w, star.h),
-        (sx, sy, sw, sh), "and the box is untouched"
+        (sx, sy, sw, sh),
+        "and the box is untouched"
     );
 }
 

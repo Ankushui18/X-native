@@ -571,7 +571,11 @@ fn svg_node(
         }
         // polygon and star: the shape's own outline, fill + stroke
         NodeKind::Poly { sides } => {
-            let d = path_cmds_d(&x_core::booleans::poly_path_cmds(n.w, n.h, *sides), 0.0, 0.0);
+            let d = path_cmds_d(
+                &x_core::booleans::poly_path_cmds(n.w, n.h, *sides),
+                0.0,
+                0.0,
+            );
             for layer in n.active_fills() {
                 let fill = svg_fill(&layer.paint, vars, defs, grad_id, assets);
                 body.push_str(&format!(

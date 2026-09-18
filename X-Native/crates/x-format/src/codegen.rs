@@ -56,8 +56,16 @@ fn clip_path_of(node: &Node) -> String {
     let mut parts: Vec<String> = Vec::new();
     for c in &cmds {
         if let x_core::PathCmd::MoveTo(x, y) | x_core::PathCmd::LineTo(x, y) = c {
-            let px = if node.w > 0.0 { x / node.w * 100.0 } else { 0.0 };
-            let py = if node.h > 0.0 { y / node.h * 100.0 } else { 0.0 };
+            let px = if node.w > 0.0 {
+                x / node.w * 100.0
+            } else {
+                0.0
+            };
+            let py = if node.h > 0.0 {
+                y / node.h * 100.0
+            } else {
+                0.0
+            };
             parts.push(format!("{}% {}%", n(px), n(py)));
         }
     }

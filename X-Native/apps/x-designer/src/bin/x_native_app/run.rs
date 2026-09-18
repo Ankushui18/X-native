@@ -4688,7 +4688,11 @@ impl Host {
             let root = &doc.editor_ref().root;
             let n = crate::editor_ui::find_node(root, &id)?;
             let m = node_world(root, &id)?;
-            (crate::state::shape_count(n)?, crate::state::shape_handles(n), m)
+            (
+                crate::state::shape_count(n)?,
+                crate::state::shape_handles(n),
+                m,
+            )
         };
         let tol = ARC_HANDLE_TOL / self.app.zoom;
         let mut best: Option<(crate::state::ShapePart, f64)> = None;

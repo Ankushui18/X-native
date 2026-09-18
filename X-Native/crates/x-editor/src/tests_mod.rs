@@ -283,8 +283,25 @@ mod tests {
         // that box is NOT on the shape — the shape's own ink answers, like
         // the ellipse's.
         let d = Node::frame("page", 400.0, 400.0)
-            .child(Node::poly("tri", 100.0, 100.0, 100.0, 100.0, 3, Color::WHITE))
-            .child(Node::star("s", 250.0, 100.0, 100.0, 100.0, 5, 0.382, Color::WHITE));
+            .child(Node::poly(
+                "tri",
+                100.0,
+                100.0,
+                100.0,
+                100.0,
+                3,
+                Color::WHITE,
+            ))
+            .child(Node::star(
+                "s",
+                250.0,
+                100.0,
+                100.0,
+                100.0,
+                5,
+                0.382,
+                Color::WHITE,
+            ));
         // the triangle: apex at the top, its lowest edge a quarter above the
         // box's bottom — inside answers, the box's empty bottom-left does not
         assert_eq!(hit_test(&d, Point::new(150.0, 140.0)), Some("tri".into()));
