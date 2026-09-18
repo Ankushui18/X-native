@@ -3068,79 +3068,6 @@ impl App {
         self.mark_dirty();
     }
 
-    /// Commit a pencil stroke: the sampled points become ONE vector layer —
-    /// smoothed into curves by the engine's fit, stroked with the tool's
-    /// defaults — placed by the same draw-it-in rule the shape tools use and
-    /// pushed as a single undo step (one insert).
-    ///
-    /// The tool is deliberately left alone: Figma's pencil "stays active until
-    /// you select another tool or press Esc", which is the one place it parts
-    /// company with the shape tools.
-    fn finish_pencil(&mut self, pts: Vec<Point>) {
-        if pts.len() < 2 {
-            return;
-        }
-        let (min_x, min_y, max_x, max_y) = pts.iter().fold(
-            (
-                f64::INFINITY,
-                f64::INFINITY,
-                f64::NEG_INFINITY,
-                f64::NEG_INFINITY,
-            ),
-            |(x0, y0, x1, y1), p| (x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y)),
-        );
-        let local: Vec<(f64, f64)> = pts.iter().map(|p| (p.x - min_x, p.y - min_y)).collect();
-        let path = x_native::freehand_path(&local, crate::state::PENCIL_SMOOTHING);
-        if path.is_empty() {
-            return;
-        }
-        let mut v = Node::vector(
-            &x_native::fresh_id("pencil"),
-            min_x,
-            min_y,
-            (max_x - min_x).max(1.0),
-            (max_y - min_y).max(1.0),
-            path,
-        );
-        let n = {
-            let doc = self.app.doc();
-            doc.editors
-                .iter()
-                .map(|e| count_kind(&e.root))
-                .sum::<usize>()
-                + 1
-        };
-        v.name = format!("Pencil {n}");
-        v.fill = Paint::Solid(x_native::Color::TRANSPARENT);
-        let ink = crate::state::pencil_ink();
-        v.stroke = x_native::Stroke::solid(ink, crate::state::PENCIL_WEIGHT);
-        // A materialized stack is where the end-point style lives, and Figma's
-        // pencil is explicit about it: a ROUND 3px stroke.
-        v.materialize_visual_stacks();
-        if let Some(layer) = v.stroke_layers.first_mut() {
-            layer.options.cap_start = x_native::StrokeCap::Round;
-            layer.options.cap_end = x_native::StrokeCap::Round;
-        }
-        let id = v.id.clone();
-        let doc = self.app.doc();
-        let root_id = doc.editor_ref().root.id.clone();
-        // the same draw-it-in rule as the shape tools, with the same Space
-        // opt-out (Space while drawing keeps the sketch on the page)
-        let place = if self.app.space_pan {
-            None
-        } else {
-            container_under(&doc.editor_ref().root, pts[0])
-        };
-        let parent = place.unwrap_or_else(|| root_id.clone());
-        let (lx, ly) = world_to_local(&doc.editor_ref().root, &parent, min_x, min_y);
-        v.transform.x = lx;
-        v.transform.y = ly;
-        doc.editor().insert_node(&parent, v);
-        doc.editor().selection = vec![id];
-        drop(doc);
-        self.app.mark_dirty();
-    }
-
     /// Figma hover: track the layer under the cursor (select tool, no
     /// drag, no inline edit). Selected layers report None — their chrome
     /// already shows.
@@ -5343,6 +5270,79 @@ impl Host {
                 }
             }
         }
+    }
+
+    /// Commit a pencil stroke: the sampled points become ONE vector layer —
+    /// smoothed into curves by the engine's fit, stroked with the tool's
+    /// defaults — placed by the same draw-it-in rule the shape tools use and
+    /// pushed as a single undo step (one insert).
+    ///
+    /// The tool is deliberately left alone: Figma's pencil "stays active until
+    /// you select another tool or press Esc", which is the one place it parts
+    /// company with the shape tools.
+    fn finish_pencil(&mut self, pts: Vec<Point>) {
+        if pts.len() < 2 {
+            return;
+        }
+        let (min_x, min_y, max_x, max_y) = pts.iter().fold(
+            (
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NEG_INFINITY,
+            ),
+            |(x0, y0, x1, y1), p| (x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y)),
+        );
+        let local: Vec<(f64, f64)> = pts.iter().map(|p| (p.x - min_x, p.y - min_y)).collect();
+        let path = x_native::freehand_path(&local, crate::state::PENCIL_SMOOTHING);
+        if path.is_empty() {
+            return;
+        }
+        let mut v = Node::vector(
+            &x_native::fresh_id("pencil"),
+            min_x,
+            min_y,
+            (max_x - min_x).max(1.0),
+            (max_y - min_y).max(1.0),
+            path,
+        );
+        let n = {
+            let doc = self.app.doc();
+            doc.editors
+                .iter()
+                .map(|e| count_kind(&e.root))
+                .sum::<usize>()
+                + 1
+        };
+        v.name = format!("Pencil {n}");
+        v.fill = Paint::Solid(x_native::Color::TRANSPARENT);
+        let ink = crate::state::pencil_ink();
+        v.stroke = x_native::Stroke::solid(ink, crate::state::PENCIL_WEIGHT);
+        // A materialized stack is where the end-point style lives, and Figma's
+        // pencil is explicit about it: a ROUND 3px stroke.
+        v.materialize_visual_stacks();
+        if let Some(layer) = v.stroke_layers.first_mut() {
+            layer.options.cap_start = x_native::StrokeCap::Round;
+            layer.options.cap_end = x_native::StrokeCap::Round;
+        }
+        let id = v.id.clone();
+        let doc = self.app.doc();
+        let root_id = doc.editor_ref().root.id.clone();
+        // the same draw-it-in rule as the shape tools, with the same Space
+        // opt-out (Space while drawing keeps the sketch on the page)
+        let place = if self.app.space_pan {
+            None
+        } else {
+            container_under(&doc.editor_ref().root, pts[0])
+        };
+        let parent = place.unwrap_or_else(|| root_id.clone());
+        let (lx, ly) = world_to_local(&doc.editor_ref().root, &parent, min_x, min_y);
+        v.transform.x = lx;
+        v.transform.y = ly;
+        doc.editor().insert_node(&parent, v);
+        doc.editor().selection = vec![id];
+        drop(doc);
+        self.app.mark_dirty();
     }
 
     fn finish_create(&mut self, tool: Tool, start: Point, cur: Point) {
