@@ -288,10 +288,11 @@ mod tests {
 
     #[test]
     fn hit_test_reaches_a_thin_lines_ink() {
-        // Figma's Line: a horizontal segment in a box 0 units high. The box
-        // test would answer only on its exact edge, so the stroke's own slop
-        // answers instead — and a FILLED path keeps the box test, which is
-        // what the pencil's and brush's marks want.
+        // Figma's Line: a horizontal segment in a hairline box. What the tool
+        // lands is stroked, never filled, so the click is answered by the
+        // distance to the ink — the box alone would only answer on its edge.
+        // A FILLED path keeps the box test, which is what the pencil's and
+        // brush's marks want.
         let mut line = Node::vector(
             "line",
             100.0,
@@ -300,6 +301,7 @@ mod tests {
             0.0,
             line_path((0.0, 0.0), (200.0, 0.0)),
         );
+        line.fill = Paint::Solid(Color::TRANSPARENT);
         line.stroke = Stroke::solid(Color::WHITE, 1.0);
         let mut mark = Node::vector(
             "mark",
@@ -310,9 +312,7 @@ mod tests {
             line_path((0.0, 0.0), (200.0, 100.0)),
         );
         mark.fill = Paint::Solid(Color::WHITE);
-        let d = Node::frame("page", 800.0, 600.0)
-            .child(line)
-            .child(mark);
+        let d = Node::frame("page", 800.0, 600.0).child(line).child(mark);
         let on = Point::new(200.0, 100.0);
         assert_eq!(hit_test(&d, on), Some("line".into()));
         let above = Point::new(200.0, 104.0);
