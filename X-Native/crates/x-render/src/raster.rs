@@ -966,6 +966,80 @@ mod tests {
             "corner should be white = {r},{g},{b}"
         );
     }
+
+    /// PIXELS, not command lists: the canvas names a page's OUTERMOST frames and
+    /// never the page itself, which is the "page name on the artboard" complaint.
+    ///
+    /// The page root is shifted down by `GUTTER`, so the band ABOVE it — where a
+    /// root label would be painted — is inside the bitmap as well as the page
+    /// itself, and both are read back:
+    ///
+    /// * the gutter above the page: nothing (the root used to be labelled like
+    ///   any other frame),
+    /// * the page's own top edge: nothing (where the page name used to sit,
+    ///   inside the artwork, before names moved to the gutter),
+    /// * the gutter above the outermost frame: that frame's name,
+    /// * the gutter above a frame nested inside it: nothing,
+    /// * the gutter above a Section: the section's name.
+    ///
+    /// No font manager is attached, so a label rasterizes as its placeholder box
+    /// — exactly the question here ("was a name painted?") — and no GPU is
+    /// needed: this sink is tiny-skia.
+    #[test]
+    fn canvas_pixels_name_the_outermost_frames_and_never_the_page() {
+        const GUTTER: f64 = 40.0;
+        let (w, h) = (400.0, 300.0 + GUTTER);
+
+        fn check(darkest: u8, want_ink: bool, what: &str) {
+            if want_ink {
+                assert!(darkest < 245, "{what}: expected a name, darkest {darkest}");
+            } else {
+                assert!(darkest > 245, "{what}: expected no name, darkest {darkest}");
+            }
+        }
+
+        // `middle` sits 50px down inside `hero`, so its own gutter (where a
+        // nested frame's name would go) cannot overlap the hero's name.
+        let mut middle = Node::frame("middle", 60.0, 40.0);
+        middle.transform.y = 50.0;
+        let mut hero = Node::frame("hero", 160.0, 100.0).child(middle);
+        hero.transform.x = 40.0;
+        hero.transform.y = 40.0;
+        let mut band = Node::section("band", 120.0, 80.0);
+        band.name = "Band".into();
+        band.transform.x = 240.0;
+        band.transform.y = 40.0;
+        let mut page = Node::frame("page", w, h).child(hero).child(band);
+        page.transform.y = GUTTER;
+
+        let tree = crate::ir::build_render_tree_with_hidden(&page, &Variables::default(), None);
+        let sink = RasterSink::new(None, None, w, h, 1.0, Some(Color::WHITE));
+        let pix = sink.expect("sink").render(&tree);
+
+        // "ink": the darkest pixel in a band, ignoring transparent pixels
+        let ink = |x0: u32, y0: u32, x1: u32, y1: u32| {
+            let mut darkest = 255u8;
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let (r, g, b, a) = sample_px(&pix, x, y);
+                    if a > 8 {
+                        let avg = (u32::from(r) + u32::from(g) + u32::from(b)) / 3;
+                        darkest = darkest.min(avg as u8);
+                    }
+                }
+            }
+            darkest
+        };
+
+        // A name sits 26px above its frame, so a gutter band is
+        // `origin - 26 .. origin - 8`; the page's top edge is where the page
+        // name used to be painted instead.
+        check(ink(0, 14, 400, 32), false, "above the page");
+        check(ink(0, 41, 240, 53), false, "page corner");
+        check(ink(40, 54, 180, 72), true, "frame name");
+        check(ink(40, 104, 80, 122), false, "nested frame");
+        check(ink(240, 54, 340, 72), true, "section name");
+    }
 }
 
 #[cfg(test)]
