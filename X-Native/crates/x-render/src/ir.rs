@@ -39,6 +39,72 @@ pub fn label_ink() -> Color {
     Color::from_rgba8(0x4b, 0x55, 0x63, 0xff)
 }
 
+/// Figma draws a Section's name as a **filled chip in the section's own colour**,
+/// not as a bare frame-style label — and, unlike a frame name, a section's chip IS
+/// part of its export. These are the chip's numbers, in the section's own
+/// coordinate space (the chip sits in the gutter above the section's top-left
+/// corner, `SECTION_PILL_GAP` clear of its edge).
+pub const SECTION_LABEL_SIZE: f64 = 12.0;
+pub const SECTION_PILL_H: f64 = 20.0;
+pub const SECTION_PILL_PAD_X: f64 = 7.0;
+pub const SECTION_PILL_R: f64 = 6.0;
+pub const SECTION_PILL_GAP: f64 = 4.0;
+
+/// Top of the chip, relative to the section's origin (negative = above it).
+pub fn section_pill_top() -> f64 {
+    -(SECTION_PILL_H + SECTION_PILL_GAP)
+}
+
+/// Where the label's line box starts inside the chip, so the text is centred.
+pub const SECTION_PILL_TEXT_DY: f64 = (SECTION_PILL_H - SECTION_LABEL_SIZE * 1.2) / 2.0;
+
+/// The chip's fill — the section hue at FULL opacity, because the section itself
+/// is a 5% wash and a wash is invisible in a 20px chip.
+pub fn section_pill_fill() -> Color {
+    x_core::section_hue()
+}
+
+/// Ink ON the chip. Not `label_ink()`: that grey is for a label sitting on the
+/// canvas background, and it measures unreadable on this fill.
+pub fn section_pill_ink() -> Color {
+    Color::from_rgb8(0xf8, 0xfa, 0xfc)
+}
+
+/// Width of the chip for `name`.
+///
+/// The IR is built WITHOUT a font manager — glyphs are resolved later, by the
+/// sink — so this width is estimated, and the estimate is the ONE rule: the
+/// direct scene encoder (exports, thumbnails, PDF) calls it too, so a chip is the
+/// same size on the canvas and in an export. Wide (CJK / fullwidth) characters
+/// count as one em, everything else as 0.55 em.
+pub fn section_pill_width(name: &str) -> f64 {
+    let ems: f64 = name
+        .chars()
+        .map(|c| if is_wide_char(c) { 1.0 } else { 0.55 })
+        .sum();
+    ems * SECTION_LABEL_SIZE + 2.0 * SECTION_PILL_PAD_X
+}
+
+fn is_wide_char(c: char) -> bool {
+    matches!(c,
+        '\u{1100}'..='\u{115f}'   // Hangul Jamo
+        | '\u{2e80}'..='\u{a4cf}' // CJK radicals … Yi
+        | '\u{ac00}'..='\u{d7a3}' // Hangul syllables
+        | '\u{f900}'..='\u{faff}' // CJK compatibility ideographs
+        | '\u{fe30}'..='\u{fe4f}' // CJK compatibility forms
+        | '\u{ff00}'..='\u{ff60}' // fullwidth forms
+        | '\u{ffe0}'..='\u{ffe6}' // fullwidth signs
+        | '\u{2_0000}'..='\u{3_fffd}') // CJK ext. B and beyond
+}
+
+/// The chip's rect in the section's own space, clamped so it never grows past the
+/// section it names.
+pub fn section_pill_rect(name: &str, section_w: f64) -> Rect {
+    let longest = (section_w - 2.0 * SECTION_PILL_PAD_X).max(SECTION_PILL_H);
+    let w = section_pill_width(name).min(longest);
+    Rect::new(0.0, section_pill_top(), w, section_pill_top() + SECTION_PILL_H)
+}
+
 /// One drawable unit, fully resolved. No document types leak through
 /// except geometry/paint primitives.
 #[derive(Debug, Clone)]
@@ -1394,12 +1460,29 @@ fn lower(
                 } else {
                     node.name.as_str()
                 };
+                // the chip first, then the label ON it: Figma's section title is
+                // a filled tag in the section's own colour, not a bare label
+                tree.commands.push(RenderCommand::FillPath {
+                    key: format!("{key}/pill"),
+                    transform: world,
+                    path: RoundedRect::from_rect(
+                        section_pill_rect(name, node.w),
+                        RoundedRectRadii::new(SECTION_PILL_R),
+                    )
+                    .into_path(0.1),
+                    brush: layer_brush(&Paint::Solid(section_pill_fill()), vars, opacity),
+                });
+                // `/chip`, NOT `/label`: a frame's name is canvas chrome and the
+                // exporter strips it, while a section's title is part of the
+                // section's own artwork and exports with it (Figma). Same suffix
+                // would have exported a solid tag with no text on it.
                 tree.commands.push(RenderCommand::Glyphs {
-                    key: format!("{key}/label"),
-                    transform: world * Affine::translate((0.0, LABEL_ABOVE_Y)),
+                    key: format!("{key}/chip"),
+                    transform: world
+                        * Affine::translate((SECTION_PILL_PAD_X, section_pill_top() + SECTION_PILL_TEXT_DY)),
                     text: name.to_string(),
-                    size: LABEL_SIZE,
-                    brush: layer_brush(&Paint::Solid(label_ink()), vars, opacity),
+                    size: SECTION_LABEL_SIZE,
+                    brush: layer_brush(&Paint::Solid(section_pill_ink()), vars, opacity),
                     max_width: (node.w - 20.0).max(8.0),
                     font: None,
                     letter_spacing: 0.0,
@@ -2025,6 +2108,76 @@ mod tests {
                     .any(|c| matches!(c, RenderCommand::Glyphs { text, .. } if text == "Card")),
             "a section and the frame inside it both keep their names"
         );
+    }
+
+    /// A Section's name is a filled chip in the section's own colour — not a bare
+    /// frame-style label — and the chip is sized to the name it carries.
+    #[test]
+    fn a_section_name_is_a_chip_sized_to_the_name() {
+        let mut band = Node::section("band", 300.0, 200.0);
+        band.name = "Band".into();
+        let page = Node::frame("Page", 400.0, 300.0).child(band);
+        let t = build_render_tree(&page, &Variables::default());
+        fn is_pill(c: &RenderCommand) -> bool {
+            matches!(c, RenderCommand::FillPath { key, .. } if key.ends_with("/pill"))
+        }
+        fn is_label(c: &RenderCommand) -> bool {
+            matches!(c, RenderCommand::Glyphs { key, .. } if key.ends_with("/chip"))
+        }
+        let pill = t.commands.iter().find(|c| is_pill(c)).expect("chip");
+        let RenderCommand::FillPath {
+            key,
+            transform,
+            path,
+            brush,
+        } = pill
+        else {
+            unreachable!()
+        };
+        assert_eq!(key, "/Page/band/pill");
+        // "Band" = 4 narrow chars (0.55 em) at 12px + 2 × 7px of padding
+        let want = 4.0 * 0.55 * SECTION_LABEL_SIZE + 2.0 * SECTION_PILL_PAD_X;
+        assert!((section_pill_width("Band") - want).abs() < 1e-9);
+        let bounds = path.bounding_box();
+        assert!((bounds.width() - want).abs() < 0.01, "{bounds:?}");
+        assert!((bounds.height() - SECTION_PILL_H).abs() < 0.01, "{bounds:?}");
+        assert!(
+            bounds.y1 <= 0.0,
+            "the chip sits in the gutter above the section: {bounds:?}"
+        );
+        let t0 = transform.translation();
+        assert!((t0.x - 0.0).abs() < 1e-9 && (t0.y - 0.0).abs() < 1e-9, "in section space");
+        assert!(matches!(brush, Brush::Solid(c) if *c == section_pill_fill()));
+        // the label follows the chip, on the chip: pill ink, chip size, inside it
+        let (index_pill, index_label) = (
+            t.commands.iter().position(is_pill).unwrap(),
+            t.commands.iter().position(is_label).unwrap(),
+        );
+        assert!(index_pill < index_label, "the chip is painted under its label");
+        match &t.commands[index_label] {
+            RenderCommand::Glyphs {
+                transform,
+                size,
+                brush,
+                text,
+                ..
+            } => {
+                assert_eq!(text, "Band");
+                assert_eq!(*size, SECTION_LABEL_SIZE);
+                assert!(matches!(brush, Brush::Solid(c) if *c == section_pill_ink()));
+                let tl = transform.translation();
+                assert!(tl.x >= SECTION_PILL_PAD_X - 1e-9, "on the chip: {tl:?}");
+                assert!(
+                    tl.y + SECTION_LABEL_SIZE <= bounds.y1 + SECTION_PILL_H,
+                    "the label is on the chip"
+                );
+                assert!(tl.y >= bounds.y0, "the label is not above the chip");
+            }
+            other => panic!("expected Glyphs, got {other:?}"),
+        }
+        // a long name is clamped: the chip never grows past the section
+        let tiny = section_pill_rect("a very long section name indeed", 40.0);
+        assert!(tiny.width() <= 40.0, "{tiny:?}");
     }
 
     /// Figma's per-frame **Show name** switch is the third gate on a frame

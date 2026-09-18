@@ -1041,6 +1041,12 @@ mod tests {
         check(ink(40, 54, 180, 72), true, "frame name");
         check(ink(40, 104, 80, 122), false, "nested frame");
         check(ink(240, 54, 340, 72), true, "section name");
+        // Figma paints a section's name as a chip in the section's own colour, and
+        // the chip stops where the name stops — this is that, in pixels: the chip
+        // band is well darker than the label grey, and nothing is painted past the
+        // name (the section itself starts 4px below the chip).
+        check(ink(240, 56, 270, 76), true, "the section chip");
+        check(ink(300, 56, 360, 76), false, "nothing past the chip");
     }
 }
 

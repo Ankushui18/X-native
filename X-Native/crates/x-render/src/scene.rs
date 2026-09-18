@@ -789,20 +789,37 @@ fn encode(
                 );
                 stats.paths += 1;
             }
-            // header label: node name in the gutter ABOVE the section's
-            // top-left corner — a name is canvas chrome, so it never sits on
-            // the content it names (matches ir.rs). A section is labelled
-            // wherever it appears, unlike a frame (Figma: "in sections, frame
-            // name is always visible"); only the root of the render is silent,
-            // because on the canvas the root is the page itself.
+            // Header: Figma draws a Section's name as a filled chip in the
+            // section's own colour, and — unlike a frame name, which is chrome —
+            // a section's chip IS part of its export. The geometry comes from
+            // `crate::ir::section_pill_*`, so the direct encoder and the IR
+            // encoder draw the same chip. A section is labelled wherever it
+            // appears (Figma: "in sections, frame name is always visible"); only
+            // the root of the render is silent, because on the canvas the root is
+            // the page itself.
             if depth > 0 {
                 let name = if node.name.is_empty() {
                     "Section"
                 } else {
                     node.name.as_str()
                 };
-                let label_color = crate::ir::label_ink().multiply_alpha(node.opacity);
-                let t = world * Affine::translate((0.0, crate::ir::LABEL_ABOVE_Y));
+                let pill = crate::ir::section_pill_rect(name, node.w);
+                let shape =
+                    RoundedRect::from_rect(pill, RoundedRectRadii::new(crate::ir::SECTION_PILL_R))
+                        .into_path(0.1);
+                scene.fill(
+                    Fill::NonZero,
+                    world,
+                    crate::ir::section_pill_fill().multiply_alpha(node.opacity),
+                    None,
+                    &shape,
+                );
+                let label_color = crate::ir::section_pill_ink().multiply_alpha(node.opacity);
+                let t = world
+                    * Affine::translate((
+                        crate::ir::SECTION_PILL_PAD_X,
+                        crate::ir::section_pill_top() + crate::ir::SECTION_PILL_TEXT_DY,
+                    ));
                 let drew = if let Some(fm) = ctx.fonts {
                     if let Some(font) = fm.default_font() {
                         stats.paths += fm.encode_text_block(
@@ -810,7 +827,7 @@ fn encode(
                             name,
                             t,
                             font,
-                            crate::ir::LABEL_SIZE,
+                            crate::ir::SECTION_LABEL_SIZE,
                             Some((node.w - 20.0).max(8.0)),
                             label_color,
                         );
@@ -822,8 +839,13 @@ fn encode(
                     false
                 };
                 if !drew {
-                    stats.paths +=
-                        x_text::encode_text(scene, name, t, crate::ir::LABEL_SIZE, label_color);
+                    stats.paths += x_text::encode_text(
+                        scene,
+                        name,
+                        t,
+                        crate::ir::SECTION_LABEL_SIZE,
+                        label_color,
+                    );
                 }
             }
         }

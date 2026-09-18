@@ -66,7 +66,7 @@ const production = (src) => {
 const CEILINGS = {
   'crates/x-core/src/fallbacks.rs': 2, // the two greys themselves, named
   'crates/x-core/src/node.rs': 3, // section wash + section stroke + the text default
-  'crates/x-render/src/ir.rs': 1, // `label_ink()`
+  'crates/x-render/src/ir.rs': 2, // `label_ink()` + the section chip's ink
   'crates/x-render/src/raster.rs': 1, // the no-font text placeholder box
   'crates/x-render/src/stress.rs': 2, // a benchmark scene's content, not chrome
 };

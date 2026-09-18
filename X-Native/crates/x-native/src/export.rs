@@ -22,12 +22,17 @@ pub fn prepare_export(
             .ok_or("selection no longer exists")?,
         None => x_render::build_render_tree(root, vars),
     };
-    // Frame/Section NAMES are canvas chrome (like the canvas grid): they
-    // help identify layers while editing but are never part of the
-    // exported artwork — Figma exports frame names out of the output too.
-    // Stripping here (before outlining) keeps label glyph outlines out of
-    // BOTH the export content and the computed bounds, in one place, for
-    // every export format (PNG / SVG / PDF / clipboard image).
+    // A FRAME's name is canvas chrome (like the canvas grid): it helps identify
+    // layers while editing but is never part of the exported artwork — Figma
+    // exports frame names out of the output too. Stripping here (before
+    // outlining) keeps label glyph outlines out of BOTH the export content and
+    // the computed bounds, in one place, for every export format (PNG / SVG /
+    // PDF / clipboard image).
+    //
+    // A SECTION is different, and its slot name says so: the title chip is part
+    // of the section's own artwork and exports with it (`/pill` + `/chip`), which
+    // is also why the two do not share the `/label` suffix — stripping the chip's
+    // text would have left a solid, wordless tag in the output.
     let tree = {
         let mut t = tree;
         t.commands

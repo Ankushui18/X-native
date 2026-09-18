@@ -366,6 +366,14 @@ pub struct Node {
     pub image_rotation: f64,
 }
 
+/// The colour a Section is drawn in — ONE owner. The section's wash, its stroke
+/// and the title chip the renderer paints all derive from this hue; they used to
+/// be two copies of `0x62, 0x74, 0x8b` in this file and a third in the renderer,
+/// which is what `tools/design-sheet/guard.mjs` exists to catch.
+pub fn section_hue() -> Color {
+    Color::from_rgb8(0x62, 0x74, 0x8b)
+}
+
 impl Node {
     /// Clone this node's own state without walking/allocating its descendants.
     /// Parent shells and registry carriers use this on the hot path.
@@ -1052,11 +1060,12 @@ impl Node {
             0.0,
             w,
             h,
-            Paint::Solid(Color::from_rgba8(0x62, 0x74, 0x8b, 0x0d)),
+            // the section's wash: its hue at 5%
+            Paint::Solid(section_hue().multiply_alpha(13.0 / 255.0)),
         );
         n.name = "Section".into();
         n.corner_radii = Some([8.0; 4]);
-        n.stroke.paint = Paint::Solid(Color::from_rgba8(0x62, 0x74, 0x8b, 0x5a));
+        n.stroke.paint = Paint::Solid(section_hue().multiply_alpha(90.0 / 255.0));
         n.stroke.width = 1.0;
         n
     }

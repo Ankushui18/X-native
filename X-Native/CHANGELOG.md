@@ -78,6 +78,17 @@ not selecting the elements in the right panel"*. The audit behind the fixes
   `crates/x-render`.
 
 ### Added
+- **A Section's name is the chip Figma draws, not a frame-style label.** It was a
+  grey 18px label in the gutter, identical to a frame's; it is now a rounded chip in
+  the section's own colour, sized to the name (with a per-character estimate that
+  the direct encoder shares, so the canvas and an export draw the same chip) and
+  clamped so it never grows past the section it names. Two consequences worth
+  naming: a section's chip and its title **export** with the section, while a frame
+  name stays chrome — the two therefore have different slots (`/pill` + `/chip` vs
+  `/label`), because stripping a chip's text would have left a solid, wordless tag
+  in the output; and the section hue now has ONE owner (`x_core::section_hue()`),
+  which the conformance guard demanded the moment the renderer needed it too.
+  `crates/x-render`, `crates/x-core`, `crates/x-native`.
 - **Figma's per-frame "Show name" switch.** `Node::show_name` (default `true`) is
   the third and last gate on a frame's name label — after "not the render root" and
   "not nested inside another frame" — applied in both encoders, so the canvas, the
