@@ -319,10 +319,11 @@ fn hash_subtree(n: &Node) -> (u64, bool, bool) {
                 mix(h, 28);
                 smix(h, &n.name);
             }
-            NodeKind::Arc { start, end } => {
+            NodeKind::Arc { start, end, ratio } => {
                 mix(h, 27);
                 fmix(h, *start);
                 fmix(h, *end);
+                fmix(h, *ratio);
             }
             NodeKind::Line => mix(h, 25),
             NodeKind::Text { text } => {

@@ -93,6 +93,7 @@ pub fn paint_over(app: &mut App, s: &mut Scene) {
         return;
     }
     paint_canvas_overlays(app, s);
+    paint_arc_handles(app, s);
     paint_minimap(app, s, &mut hit);
     paint_layout_guides(app, s);
     paint_ruler_guides(app, s);
@@ -109,6 +110,48 @@ pub fn paint_over(app: &mut App, s: &mut Scene) {
     paint_notifications(app, s, &mut hit);
     paint_tooltip(app, s);
     app.hit = hit;
+}
+
+/// Figma's arc handles on the layer the pointer is on — or the layer that is
+/// selected — drawn through the layer's WORLD matrix, the same one the grab
+/// hit-tests, so a nested or rotated layer's handles sit on its arc. A solid
+/// ellipse shows the single Sweep handle ("a single handle will appear on the
+/// right-hand side"); an arc shows all three, the Start handle carrying the
+/// dot Figma gives it. While one is being dragged the sweep reads out as a
+/// percentage, which is Figma's own tooltip.
+fn paint_arc_handles(app: &App, s: &mut Scene) {
+    let Some((id, _)) = crate::state::arc_target(app) else {
+        return;
+    };
+    let doc = app.doc_ref();
+    let Some(n) = find_node(&doc.editor_ref().root, &id) else {
+        return;
+    };
+    let Some(m) = crate::run::node_world(&doc.editor_ref().root, &id) else {
+        return;
+    };
+    for (part, local) in crate::state::arc_handles(n) {
+        let p = app.world_to_screen(m * local);
+        circle(s, p.x, p.y, 4.0, C_TEXT);
+        ring(s, p.x, p.y, 4.0, C_SEL, 1.5);
+        if part == crate::state::ArcPart::Start {
+            // "the Start handle (which has a dot inside it)"
+            circle(s, p.x, p.y, 1.4, C_SEL);
+        }
+    }
+    if let Some(crate::state::Drag::ArcHandle { start, end, .. }) = &app.drag {
+        let sweep = x_native::booleans::arc_sweep(*start, *end);
+        let label = format!("{}%", (sweep.abs() / 3.6).round() as i64);
+        let (cx, cy) = (n.transform.x + n.w / 2.0, n.transform.y + n.h / 2.0);
+        let c = app.world_to_screen(Point::new(cx, cy));
+        let tw = app.fonts.measure(&label, T10, Wt::Reg) + 12.0;
+        let chip_x = c.x - tw / 2.0;
+        let chip_y = c.y - n.h * app.zoom / 2.0 - 26.0;
+        let chip = Rect::new(chip_x, chip_y, chip_x + tw, chip_y + 18.0);
+        fill_rrect(s, chip, R_SM, C_TEXT);
+        app.fonts
+            .text_center(s, chip, &label, T10, C_BASE, Wt::Med, true);
+    }
 }
 
 /// P10: the hover label for the control under the cursor. The
@@ -5112,7 +5155,63 @@ fn paint_design(
     }
     let y = paint_brush_styles(app, s, hit, x0, xr, y);
     let y = paint_scale_block(app, s, hit, x0, xr, y);
+    let y = paint_arc_block(app, s, hit, x0, xr, y);
     paint_constraints(app, s, hit, x0, xr, y);
+}
+
+/// Figma's arc properties, in the Appearance section of the right sidebar:
+/// where the sweep begins, how far it runs, and how much of the middle is cut
+/// away. Shown for an ellipse as well as for an arc — the defaults are the
+/// whole circle, and typing is one of the two ways Figma's own lesson uses
+/// ("select the ellipse and use either method to change the properties").
+fn paint_arc_block(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    x0: f64,
+    xr: f64,
+    y0: f64,
+) -> f64 {
+    let props = {
+        let doc = app.doc_ref();
+        let editor = doc.editor_ref();
+        if editor.selection.len() != 1 {
+            None
+        } else {
+            find_node(&editor.root, &editor.selection[0]).and_then(crate::state::arc_props)
+        }
+    };
+    let Some((start, end, ratio)) = props else {
+        return y0;
+    };
+    let sweep = x_native::booleans::arc_sweep(start, end);
+    let mut y = y0 + 1.0 + 12.0;
+    app.fonts.caps_label(s, x0, y, "ARC", C_TEXT, Wt::Med);
+    y += 12.0 + LABEL_GAP;
+    let gap = 8.0;
+    let w = (xr - x0 - gap * 2.0) / 3.0;
+    let fields: [(FieldId, &str, String); 3] = [
+        (FieldId::ArcStart, "Start", fmt_num(start)),
+        (FieldId::ArcSweep, "Sweep", fmt_num(sweep)),
+        (FieldId::ArcRatio, "Ratio", format!("{}", (ratio * 100.0).round() as i64)),
+    ];
+    for (i, (id, label, fallback)) in fields.iter().enumerate() {
+        let fx = x0 + (w + gap) * i as f64;
+        let r = Rect::new(fx, y, fx + w, y + INPUT_H);
+        input(
+            app,
+            s,
+            hit,
+            r,
+            Some((*label, T10)),
+            &field_val(app, *id, fallback.clone()),
+            true,
+            Some(Action::Field(*id)),
+            None,
+        );
+    }
+    y += INPUT_H + 6.0;
+    y
 }
 
 /// The Scale tool's panel (K) — Figma's Scale section in the right sidebar:

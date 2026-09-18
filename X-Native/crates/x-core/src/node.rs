@@ -436,11 +436,18 @@ pub enum NodeKind {
     /// node's `name`, drawn as a header by the renderer. Children render
     /// inside; behaves like a Frame for hit-testing/marquee/ungroup.
     Section,
-    /// Elliptical arc: start/end angles in degrees (y-down space, 0 = east,
-    /// increasing clockwise on screen). start == end means the full ellipse.
+    /// Figma's arc properties on an ellipse: the sweep runs from `start` to
+    /// `end` degrees (y-down space, 0 = east, clockwise when `end > start`,
+    /// and the other way when it is smaller) and `ratio` is the fraction of
+    /// the radius the middle is cut back to — 0 is a solid wedge through the
+    /// centre, 0.85 a thin ring. Equal angles are the full ellipse. All three
+    /// are appearance, not size: the layer's box does not move when they
+    /// change (Figma: "the shape's bounding box stayed the same size to
+    /// preserve space in case we wanted to change the arc again").
     Arc {
         start: f64,
         end: f64,
+        ratio: f64,
     },
     Line,
     Text {
@@ -1318,8 +1325,9 @@ impl Node {
         n.stroke.width = 1.0;
         n
     }
-    /// Shape constructors mirror their Figma counterparts; the angle pair
-    /// is intrinsic to an arc, so the arity is what it is.
+    /// Shape constructors mirror their Figma counterparts; the arc's own
+    /// properties — where it starts, how far it sweeps and how much of the
+    /// middle is cut away — are intrinsic to it, so the arity is what it is.
     #[allow(clippy::too_many_arguments)]
     pub fn arc(
         id: &str,
@@ -1329,11 +1337,12 @@ impl Node {
         h: f64,
         start: f64,
         end: f64,
+        ratio: f64,
         fill: Color,
     ) -> Self {
         Self::base(
             id,
-            NodeKind::Arc { start, end },
+            NodeKind::Arc { start, end, ratio },
             x,
             y,
             w,

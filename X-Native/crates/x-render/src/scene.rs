@@ -636,10 +636,14 @@ fn encode(
                 );
             }
         }
-        NodeKind::Arc { start, end } => {
-            // arc primitive: shared bezier geometry, chord fill + stroke
+        NodeKind::Arc { start, end, ratio } => {
+            // arc primitive: the shared wedge/ring outline, filled + stroked
             let bez = path_to_bez(&x_core::booleans::arc_path_cmds(
-                node.w, node.h, *start, *end,
+                node.w,
+                node.h,
+                *start,
+                *end,
+                *ratio,
             ));
             encode_drop_shadows(scene, node, world, &bez, stats);
             scene.fill(

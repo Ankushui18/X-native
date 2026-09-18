@@ -1750,6 +1750,127 @@ fn the_scale_panel_and_the_body_drag_scale_the_selection() {
     assert_eq!((back.w, back.h), box_back, "one undo restores the box");
 }
 
+/// Figma's arc properties on an ellipse — the course's own chapter 26
+/// ("FD4B: Turn an ellipse into an arc"): hover for the Sweep handle, drag it,
+/// then Start and Ratio appear, and the same three are fields in the right
+/// sidebar. The whole thing is non-destructive: "the shape's bounding box
+/// stayed the same size to preserve space in case we wanted to change the arc
+/// again", and Flatten is what makes the box hug the geometry.
+#[test]
+fn the_arc_handles_and_fields_turn_an_ellipse_into_a_ring() {
+    let mut h = host();
+    let reg = h.app.editor_regions();
+    let cx = (reg.canvas.x0 + reg.canvas.x1) / 2.0;
+    let cy = (reg.canvas.y0 + reg.canvas.y1) / 2.0;
+    let centre = h.app.screen_to_world(Point::new(cx, cy));
+    h.app.space_pan = true;
+    h.finish_create(
+        Tool::Ellipse,
+        Point::new(centre.x - 50.0, centre.y - 50.0),
+        Point::new(centre.x + 50.0, centre.y + 50.0),
+    );
+    h.app.space_pan = false;
+    let id = h.app.doc_ref().editor_ref().selection[0].clone();
+    let (ox, oy) = {
+        let n = find_node_clone(&h.app.doc_ref().editor_ref().root, &id).unwrap();
+        (n.transform.x, n.transform.y)
+    };
+
+    // a solid ellipse offers exactly ONE handle, at 0 — "when you hover over
+    // the circle, a single handle will appear on the right-hand side"
+    let n = find_node_clone(&h.app.doc_ref().editor_ref().root, &id).unwrap();
+    let handles = crate::state::arc_handles(&n);
+    assert_eq!(handles.len(), 1, "the Sweep handle alone");
+    assert_eq!(handles[0].0, crate::state::ArcPart::Sweep);
+    assert_eq!(handles[0].1, Point::new(100.0, 50.0), "the 0 point, east");
+
+    // the Move tool owns it; another tool keeps its own gesture
+    h.app.tool = Tool::Ellipse;
+    assert!(
+        crate::state::arc_target(&h.app).is_none(),
+        "not while a shape tool is drawing"
+    );
+    h.app.tool = Tool::Select;
+    assert!(crate::state::arc_target(&h.app).is_some());
+
+    // drag the Sweep handle a quarter of the way round: a pie
+    let east = h.app.world_to_screen(Point::new(ox + 100.0, oy + 50.0));
+    let south = h.app.world_to_screen(Point::new(ox + 50.0, oy + 100.0));
+    h.on_press(east);
+    assert!(
+        matches!(
+            h.app.drag,
+            Some(Drag::ArcHandle {
+                part: crate::state::ArcPart::Sweep,
+                ..
+            })
+        ),
+        "the handle takes the press"
+    );
+    h.on_move(south);
+    h.on_release();
+    let node = find_node_clone(&h.app.doc_ref().editor_ref().root, &id).unwrap();
+    let (start, end, ratio) = crate::state::arc_props(&node).unwrap();
+    assert!(
+        (start - 0.0).abs() < 1e-6 && (end - 90.0).abs() < 1e-6 && ratio == 0.0,
+        "a quarter sweep: {start} {end} {ratio}"
+    );
+    assert_eq!(
+        (node.w, node.h),
+        (100.0, 100.0),
+        "the box never moves: the properties are appearance, not size"
+    );
+    // …and the other two handles appear with it
+    let handles = crate::state::arc_handles(&node);
+    assert_eq!(handles.len(), 3, "Sweep, Start and Ratio");
+    assert_eq!(handles[1].0, crate::state::ArcPart::Start);
+    assert_eq!(
+        handles[2].1,
+        Point::new(50.0, 50.0),
+        "the Ratio handle starts at the centre of the circle"
+    );
+
+    // the fields: FD4B's own numbers (Start 180, Sweep 25, Ratio 15)
+    set_field(&mut h, FieldId::ArcStart, "180");
+    set_field(&mut h, FieldId::ArcSweep, "25");
+    set_field(&mut h, FieldId::ArcRatio, "15");
+    let node = find_node_clone(&h.app.doc_ref().editor_ref().root, &id).unwrap();
+    let (start, end, ratio) = crate::state::arc_props(&node).unwrap();
+    assert!((start - 180.0).abs() < 1e-6, "start: {start}");
+    assert!(
+        (x_native::booleans::arc_sweep(start, end) - 25.0).abs() < 1e-6,
+        "sweep: {end}"
+    );
+    assert!((ratio - 0.15).abs() < 1e-6, "ratio: {ratio}");
+    assert_eq!((node.w, node.h), (100.0, 100.0), "still the same box");
+
+    // the Ratio handle is dragged out from the centre: a ring
+    let (ox, oy) = (node.transform.x, node.transform.y);
+    h.on_press(h.app.world_to_screen(Point::new(ox + 25.0, oy + 50.0)));
+    assert!(
+        matches!(
+            h.app.drag,
+            Some(Drag::ArcHandle {
+                part: crate::state::ArcPart::Ratio,
+                ..
+            })
+        ),
+        "the ratio handle takes the press"
+    );
+    let rim = h.app.world_to_screen(Point::new(ox + 75.0, oy + 50.0));
+    h.on_move(rim);
+    h.on_release();
+    let node = find_node_clone(&h.app.doc_ref().editor_ref().root, &id).unwrap();
+    let (_, _, ratio) = crate::state::arc_props(&node).unwrap();
+    assert!((ratio - 0.5).abs() < 1e-6, "dragged to half the radius: {ratio}");
+    assert_eq!((node.w, node.h), (100.0, 100.0), "and the box is untouched");
+    // the whole gesture is one undo step, like every other canvas drag
+    h.app.doc().editor().undo();
+    let node = find_node_clone(&h.app.doc_ref().editor_ref().root, &id).unwrap();
+    let (_, _, ratio) = crate::state::arc_props(&node).unwrap();
+    assert!((ratio - 0.15).abs() < 1e-6, "one undo restores the ring");
+}
+
 /// ⌥⌘G is Figma's Frame selection: the selection goes into a NEW frame sized
 /// to the members' collective bounds, with their positions preserved. The
 /// engine had this since the wrap-selection refactor; nothing could reach it.

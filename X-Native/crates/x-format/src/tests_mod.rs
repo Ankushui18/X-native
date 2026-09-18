@@ -1425,6 +1425,7 @@ mod tests {
             60.0,
             30.0,
             240.0,
+            0.25,
             Color::WHITE,
         ));
         let mut doc = Document::new();
@@ -1436,11 +1437,15 @@ mod tests {
             text.contains(r#""start":30"#) || text.contains(r#""start":30.0"#),
             "{text}"
         );
+        assert!(
+            text.contains(r#""ratio":0.25"#),
+            "the arc's ratio is written: {text}"
+        );
         let back = load_x(&text).expect("load");
-        let NodeKind::Arc { start, end } = &back.pages[0].children[0].kind else {
+        let NodeKind::Arc { start, end, ratio } = &back.pages[0].children[0].kind else {
             panic!("not an arc after round-trip");
         };
-        assert_eq!((*start, *end), (30.0, 240.0));
+        assert_eq!((*start, *end, *ratio), (30.0, 240.0, 0.25));
     }
 
     #[test]

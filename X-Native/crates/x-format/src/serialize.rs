@@ -545,8 +545,8 @@ fn kind_json(k: &NodeKind) -> String {
         NodeKind::Section => "{\"t\":\"section\"}".into(),
         NodeKind::Rect { radius } => format!("{{\"t\":\"rect\",\"radius\":{radius}}}"),
         NodeKind::Ellipse => "{\"t\":\"ellipse\"}".into(),
-        NodeKind::Arc { start, end } => {
-            format!("{{\"t\":\"arc\",\"start\":{start},\"end\":{end}}}")
+        NodeKind::Arc { start, end, ratio } => {
+            format!("{{\"t\":\"arc\",\"start\":{start},\"end\":{end},\"ratio\":{ratio}}}")
         }
         NodeKind::Line => "{\"t\":\"line\"}".into(),
         NodeKind::Text { text } => format!("{{\"t\":\"text\",\"text\":\"{}\"}}", esc(text)),

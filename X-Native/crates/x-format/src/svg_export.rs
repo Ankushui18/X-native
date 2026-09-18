@@ -264,10 +264,10 @@ fn mask_shape_svg(n: &Node) -> String {
             "<path d=\"{}\" fill=\"white\"/>",
             path_cmds_d(path, n.transform.x, n.transform.y)
         ),
-        NodeKind::Arc { start, end } => format!(
+        NodeKind::Arc { start, end, ratio } => format!(
             "<path d=\"{}\" fill=\"white\"/>",
             path_cmds_d(
-                &x_core::booleans::arc_path_cmds(n.w, n.h, *start, *end),
+                &x_core::booleans::arc_path_cmds(n.w, n.h, *start, *end, *ratio),
                 n.transform.x,
                 n.transform.y
             )
@@ -554,9 +554,9 @@ fn svg_node(
             ));
         }
         // arc: same fill/stroke emission as a plain vector path
-        NodeKind::Arc { start, end } => {
+        NodeKind::Arc { start, end, ratio } => {
             let d = path_cmds_d(
-                &x_core::booleans::arc_path_cmds(n.w, n.h, *start, *end),
+                &x_core::booleans::arc_path_cmds(n.w, n.h, *start, *end, *ratio),
                 0.0,
                 0.0,
             );

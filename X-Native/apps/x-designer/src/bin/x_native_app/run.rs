@@ -4125,6 +4125,13 @@ impl Host {
             // answer for the same four handles — so it selects, hovers and
             // marquees exactly like it, and only the grab differs.
             Tool::Select | Tool::Scale => {
+                // Figma's arc handles belong to the LAYER, not to a tool:
+                // whatever else this press might have been about, grabbing one
+                // of them sweeps, starts or rings the layer.
+                if let Some(dr) = self.arc_grab(world) {
+                    self.app.drag = Some(dr);
+                    return;
+                }
                 // corner handles win when there's a single selection
                 if let Some(dr) = match tool {
                     Tool::Scale => self.scale_grab(world),
@@ -4550,6 +4557,42 @@ impl Host {
         })
     }
 
+    /// Figma's arc handles under the pointer, if any: the sweep, the start and
+    /// the ratio, on the ellipse or arc the selection or the hover points at.
+    /// The tolerance is a screen distance — what the pointer can grab is what
+    /// the canvas drew.
+    fn arc_grab(&mut self, world: Point) -> Option<Drag> {
+        let (id, _) = crate::state::arc_target(&self.app)?;
+        let (props, handles, m) = {
+            let doc = self.app.doc_ref();
+            let root = &doc.editor_ref().root;
+            let n = crate::editor_ui::find_node(root, &id)?;
+            let m = node_world(root, &id)?;
+            (crate::state::arc_props(n)?, crate::state::arc_handles(n), m)
+        };
+        let tol = ARC_HANDLE_TOL / self.app.zoom;
+        let mut best: Option<(crate::state::ArcPart, f64)> = None;
+        for (part, local) in &handles {
+            let h = m * *local;
+            let d = ((h.x - world.x).powi(2) + (h.y - world.y).powi(2)).sqrt();
+            if d <= tol && best.is_none_or(|(_, bd)| d < bd) {
+                best = Some((*part, d));
+            }
+        }
+        let (part, _) = best?;
+        let base_depth = self.app.doc_ref().editor_ref().undo_depth();
+        // the handle sits on the layer, so taking hold of it selects it too
+        self.app.doc().editor().selection = vec![id.clone()];
+        Some(Drag::ArcHandle {
+            id,
+            part,
+            start: props.0,
+            end: props.1,
+            ratio: props.2,
+            base_depth,
+        })
+    }
+
     /// The Scale tool's BODY drag (K) — Figma: "Hover over the object's
     /// bounding box to make the cursor appear. Then, click-and-drag to
     /// resize." The press point itself rides the pointer, and the corner
@@ -4965,6 +5008,52 @@ impl Host {
                     if let Some(Drag::ScaleBody { applied, .. }) = self.app.drag.as_mut() {
                         *applied = factor;
                     }
+                    self.app.mark_dirty();
+                }
+            }
+            Some(Drag::ArcHandle {
+                id,
+                part,
+                start,
+                end,
+                ratio,
+                ..
+            }) => {
+                let world = self.app.screen_to_world(p);
+                let Some((w, h, m)) = ({
+                    let doc = self.app.doc_ref();
+                    let root = &doc.editor_ref().root;
+                    let n = crate::editor_ui::find_node(root, &id)?;
+                    node_world(root, &id).map(|m| (n.w, n.h, m))
+                }) else {
+                    return;
+                };
+                // the pointer in the layer's own box space: the angle and the
+                // distance there are the arc's own properties
+                let local = m.inverse() * world;
+                let (ns, ne, nr) = match part {
+                    // Sweep: the end follows the pointer, so dragging it back
+                    // to where it started is the full circle again — Figma's
+                    // "drag the Sweep handle back to meet the start position,
+                    // to close the ring"
+                    crate::state::ArcPart::Sweep => {
+                        (start, crate::state::arc_angle_at(w, h, local), ratio)
+                    }
+                    // Start: the arc keeps its sweep and moves with the handle
+                    crate::state::ArcPart::Start => {
+                        let s = crate::state::arc_angle_at(w, h, local);
+                        (s, s + x_native::booleans::arc_sweep(start, end), ratio)
+                    }
+                    // Ratio: how far out the handle was dragged
+                    crate::state::ArcPart::Ratio => {
+                        (start, end, crate::state::arc_ratio_at(w, h, local))
+                    }
+                };
+                let wrote = {
+                    let doc = self.app.doc();
+                    crate::state::set_arc(doc.editor(), &id, ns, ne, nr)
+                };
+                if wrote {
                     self.app.mark_dirty();
                 }
             }
@@ -5418,7 +5507,9 @@ impl Host {
             }
             // a scale is one gesture too: every move pushed its own
             // ReplaceNode, and one Ctrl+Z must undo the whole drag
-            Some(Drag::ScaleSel { base_depth, .. }) | Some(Drag::ScaleBody { base_depth, .. }) => {
+            Some(Drag::ScaleSel { base_depth, .. })
+            | Some(Drag::ScaleBody { base_depth, .. })
+            | Some(Drag::ArcHandle { base_depth, .. }) => {
                 let doc = self.app.doc();
                 let editor = doc.editor();
                 editor.merge_last(editor.undo_depth().saturating_sub(base_depth));
@@ -12097,6 +12188,28 @@ impl Host {
                     }
                 }
             }
+            FieldId::ArcStart | FieldId::ArcSweep | FieldId::ArcRatio => {
+                // Figma's Appearance fields, on the layer's own arc: the box
+                // never moves, which is what makes them non-destructive.
+                let Some(v) = num(raw) else { return };
+                let Some((start, end, ratio)) = crate::editor_ui::find_node(
+                    &doc.editor_ref().root,
+                    node_id.as_str(),
+                )
+                .and_then(crate::state::arc_props) else {
+                    return;
+                };
+                let sweep = x_native::booleans::arc_sweep(start, end);
+                let (ns, ne, nr) = match id {
+                    FieldId::ArcStart => (v, v + sweep, ratio),
+                    FieldId::ArcSweep => (start, start + sweep_from_text(raw, v), ratio),
+                    _ => (start, end, (v / 100.0).clamp(0.0, 0.99)),
+                };
+                if crate::state::set_arc(doc.editor(), node_id.as_str(), ns, ne, nr) {
+                    self.app.status = "Arc updated".into();
+                    self.app.mark_dirty();
+                }
+            }
             _ => {
                 if self.app.route_typo_panel_field(id, raw) {
                     self.app.mark_dirty();
@@ -12372,6 +12485,41 @@ pub(crate) fn selection_box(root: &Node, ids: &[String]) -> Option<(f64, f64, f6
     bbox
 }
 
+/// How close the pointer has to be to an arc handle, in screen pixels.
+const ARC_HANDLE_TOL: f64 = 9.0;
+
+/// A layer's world transform — its ancestors' matrices and its own. The arc
+/// handles are drawn, hit-tested and dragged through THIS, so they sit on the
+/// arc the renderer draws even when the layer is nested or rotated.
+pub(crate) fn node_world(root: &Node, id: &str) -> Option<Affine> {
+    fn rec(n: &Node, id: &str, acc: Affine, out: &mut Option<Affine>) {
+        let m = acc * n.transform.matrix(n.w, n.h);
+        if n.id == id {
+            *out = Some(m);
+            return;
+        }
+        for c in &n.children {
+            rec(c, id, m, out);
+            if out.is_some() {
+                return;
+            }
+        }
+    }
+    let mut out = None;
+    rec(root, id, Affine::IDENTITY, &mut out);
+    out
+}
+
+/// The sweep a field commit asks for: degrees, or a share of the whole circle
+/// when the text says so — Figma's own tooltip reads the sweep as a percentage.
+fn sweep_from_text(raw: &str, v: f64) -> f64 {
+    if raw.trim().ends_with('%') {
+        v / 100.0 * 360.0
+    } else {
+        v
+    }
+}
+
 /// The Scale panel's multiplier as a factor: a percentage ("150%", or a bare
 /// "150"), or an explicit multiplier ("1.5x"). `None` when the text is not a
 /// positive number — the field then simply closes, like an empty W field.
@@ -12479,6 +12627,22 @@ fn field_initial(app: &App, f: FieldId) -> String {
         }
         FieldId::ScaleW => fmt(s.w),
         FieldId::ScaleH => fmt(s.h),
+        FieldId::ArcStart | FieldId::ArcSweep | FieldId::ArcRatio => {
+            let props = crate::editor_ui::find_node(
+                &app.doc_ref().editor_ref().root,
+                app.doc_ref().selected_id().unwrap_or_default().as_str(),
+            )
+            .and_then(crate::state::arc_props);
+            let Some((start, end, ratio)) = props else {
+                return String::new();
+            };
+            let sweep = x_native::booleans::arc_sweep(start, end);
+            match f {
+                FieldId::ArcStart => fmt(start),
+                FieldId::ArcSweep => fmt(sweep),
+                _ => format!("{}", (ratio * 100.0).round() as i64),
+            }
+        }
         FieldId::ComponentDescription => app
             .doc_ref()
             .selected_id()

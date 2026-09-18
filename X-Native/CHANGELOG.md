@@ -5,6 +5,41 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-18 (The arc properties on an ellipse)
+
+The engine has carried `NodeKind::Arc` — the geometry the renderer, the hit
+test, SVG/Figma/Sketch export and flatten all read — since the vector pass,
+with no way to make one. Figma's route is on the ellipse itself: the course's
+chapter 26, "Turn an ellipse into an arc".
+
+- **The Sweep handle, on hover.** Figma: "When you hover over the circle, a
+  single handle will appear on the right-hand side" — and dragging it up or
+  down changes the sweep, "a positive percentage" one way and a negative one
+  the other. Ours is drawn, hit-tested and dragged through the layer's world
+  transform, so a nested or rotated ellipse's handle sits on its arc.
+- **Start and Ratio**, once the sweep is broken: the Start handle "has a dot
+  inside it", and the Ratio handle starts "at the center of the circle" and
+  turns it into a ring.
+- **The three fields** in the right sidebar's Appearance section — Figma's own
+  Start / Sweep / Ratio, in degrees (a `%` on the sweep is a share of the
+  circle) and as a percentage for the ratio. Both halves write the same
+  properties, and one gesture is one undo step.
+- **The box never moves.** Figma: "Changing the ellipse's arc properties only
+  altered its appearance on the canvas, not the shape's actual dimensions …
+  the shape's bounding box stayed the same size to preserve space in case we
+  wanted to change the arc again." A solid ellipse becomes an arc on the first
+  drag, and its 100x100 box is still 100x100 afterwards; Flatten (⇧⌘E's
+  command, ⌘E) is what makes the box hug the geometry.
+- `x_core::booleans::arc_path_cmds(w, h, start, end, ratio)` is now the whole
+  shape: the outer arc, the seam to the inner edge and the inner arc back, the
+  other way round so NonZero winding leaves the ring's hole. A wedge closes
+  through the centre; equal angles are still the full circle, and the sweep is
+  SIGNED rather than folded with `rem_euclid`, which is what makes a handle
+  dragged the other way round read negative.
+- `arc_point` is the one place the geometry and the handles agree, and the arc
+  answers clicks as the filled region it is: the gap passes through to whatever
+  is under it, and a ring's hole does too.
+
 ## [Unreleased] — 2026-09-18 (The Scale panel, and the body drag)
 
 Figma's Scale tool is a panel as much as a gesture: while **K** is the active tool the

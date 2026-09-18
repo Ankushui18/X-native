@@ -316,6 +316,8 @@ fn parse_kind(v: &V) -> NodeKind {
         "arc" => NodeKind::Arc {
             start: v.get("start").and_then(V::num).unwrap_or(0.0),
             end: v.get("end").and_then(V::num).unwrap_or(270.0),
+            // files written before the arc had a ratio are solid wedges
+            ratio: v.get("ratio").and_then(V::num).unwrap_or(0.0),
         },
         "line" => NodeKind::Line,
         "text" => NodeKind::Text {

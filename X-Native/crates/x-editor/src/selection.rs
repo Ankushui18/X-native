@@ -25,10 +25,12 @@ pub fn hit_test(root: &Node, point: Point) -> Option<String> {
                     let (dx, dy) = ((local.x - rx) / rx, (local.y - ry) / ry);
                     dx * dx + dy * dy <= 1.0
                 }
-                // Arcs hit as a band around the swept part of the ellipse
-                // ring (stroke-aware slop), not the full interior — clicks
-                // in the empty bite pass through to whatever is beneath.
-                NodeKind::Arc { start, end } => {
+                // Figma's arc is a FILLED region — the wedge through the
+                // centre, or the ring its ratio leaves — so its own area
+                // answers the click and both the gap and the ring's hole pass
+                // through to whatever is underneath, like an ellipse with a
+                // bite taken out. The stroke's slop rides on the boundary.
+                NodeKind::Arc { start, end, ratio } => {
                     let (rx, ry) = (node.w / 2.0, node.h / 2.0);
                     if rx < 1e-6 || ry < 1e-6 {
                         false
@@ -36,17 +38,17 @@ pub fn hit_test(root: &Node, point: Point) -> Option<String> {
                         let (dx, dy) = (local.x - rx, local.y - ry);
                         let (nx, ny) = (dx / rx, dy / ry);
                         let r = (nx * nx + ny * ny).sqrt();
-                        let tol = ((node.stroke.width.max(4.0) / 2.0 + 4.0) / rx.min(ry))
+                        let slop = ((node.stroke.width.max(4.0) / 2.0 + 4.0) / rx.min(ry))
                             .clamp(0.02, 0.5);
-                        let on_ring = (r - 1.0).abs() <= tol;
-                        let ang = dy.atan2(dx).to_degrees().rem_euclid(360.0);
-                        let sweep = (end - start).rem_euclid(360.0);
-                        let in_arc = if sweep == 0.0 {
-                            true
+                        let sweep = x_core::booleans::arc_sweep(*start, *end);
+                        let ang = dy.atan2(dx).to_degrees();
+                        let along = if sweep >= 0.0 {
+                            (ang - start).rem_euclid(360.0)
                         } else {
-                            (ang - start).rem_euclid(360.0) <= sweep
+                            (start - ang).rem_euclid(360.0)
                         };
-                        on_ring && in_arc
+                        let in_arc = sweep.abs() >= 360.0 - 1e-9 || along <= sweep.abs();
+                        in_arc && r <= 1.0 + slop && r >= ratio - slop
                     }
                 }
                 // A vector's box is a wrapper, not its ink: a Line's box is 0

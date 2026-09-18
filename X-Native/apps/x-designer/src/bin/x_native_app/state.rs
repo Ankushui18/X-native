@@ -432,6 +432,117 @@ pub fn scaled_box(orig: (f64, f64, f64, f64), corner: usize, factor: f64) -> Rec
 /// the anchor sits on top of its own edge, so 0.02 is as far as a drag goes.
 pub const MIN_SCALE: f64 = 0.02;
 
+/// Which of Figma's three arc handles a drag has hold of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArcPart {
+    /// The handle you meet first: drag it to change the sweep. On a solid
+    /// ellipse it is the only one, and it sits at 0 — "a single handle will
+    /// appear on the right-hand side".
+    Sweep,
+    /// The handle with a dot inside it: where the arc begins.
+    Start,
+    /// The handle that turns the circle into a ring: its distance from the
+    /// centre is the ratio.
+    Ratio,
+}
+
+/// A layer's arc properties, in the engine's own terms: `(start, end, ratio)`.
+/// A solid ellipse reads as the full sweep — Figma's arc properties describe
+/// every ellipse, the defaults are just 0 / 360 / 0. `None` for anything that
+/// is not an ellipse or an arc.
+pub fn arc_props(n: &Node) -> Option<(f64, f64, f64)> {
+    match &n.kind {
+        NodeKind::Ellipse => Some((0.0, 0.0, 0.0)),
+        NodeKind::Arc { start, end, ratio } => Some((*start, *end, *ratio)),
+        _ => None,
+    }
+}
+
+/// Whether the layer still draws a whole circle: Figma only grows the Start
+/// and Ratio handles once the sweep has been broken.
+pub fn arc_is_full(start: f64, end: f64, ratio: f64) -> bool {
+    let sweep = x_native::booleans::arc_sweep(start, end);
+    sweep.abs() >= 360.0 - 1e-6 && ratio <= 1e-6
+}
+
+/// Figma's arc handles in the LAYER'S OWN box space (0..w, 0..h): the Sweep
+/// handle at the end of the sweep, the Start handle at its beginning, and the
+/// Ratio handle at the middle of the sweep on the inner edge — "at the center
+/// of the circle" while there is no ring to ride on. The same table paints
+/// them, hit-tests them and drives the drag.
+pub fn arc_handles(n: &Node) -> Vec<(ArcPart, Point)> {
+    let Some((start, end, ratio)) = arc_props(n) else {
+        return vec![];
+    };
+    let sweep = x_native::booleans::arc_sweep(start, end);
+    let at = |deg: f64, frac: f64| {
+        let (x, y) = x_native::booleans::arc_point(n.w, n.h, deg, frac);
+        Point::new(x, y)
+    };
+    let mut out = vec![(ArcPart::Sweep, at(end, 1.0))];
+    if !arc_is_full(start, end, ratio) {
+        out.push((ArcPart::Start, at(start, 1.0)));
+        out.push((ArcPart::Ratio, at(start + sweep / 2.0, ratio)));
+    }
+    out
+}
+
+/// The layer Figma's arc handles belong to: the single selected ellipse or
+/// arc, else the layer under the cursor — Figma shows the handle on hover,
+/// before anything is selected.
+pub fn arc_target(app: &App) -> Option<(String, bool)> {
+    // the handles belong to the Move tool, the way Figma's do: another tool
+    // has its own gesture for the same pointer
+    if app.tool != Tool::Select {
+        return None;
+    }
+    let doc = app.doc_opt()?;
+    let sel = &doc.editor_ref().selection;
+    if sel.len() == 1 {
+        let n = crate::editor_ui::find_node(&doc.editor_ref().root, &sel[0])?;
+        if arc_props(n).is_some() {
+            return Some((sel[0].clone(), true));
+        }
+    }
+    let hover = app.hover_node.clone()?;
+    let n = crate::editor_ui::find_node(&doc.editor_ref().root, &hover)?;
+    arc_props(n).map(|_| (hover, false))
+}
+
+/// The pointer's angle about a layer's centre, in the layer's own box space —
+/// 0 at the right-hand point and growing clockwise, the convention the engine's
+/// arc geometry and Figma's own handle both use.
+pub fn arc_angle_at(w: f64, h: f64, local: Point) -> f64 {
+    let (cx, cy) = (w / 2.0, h / 2.0);
+    (local.y - cy).atan2(local.x - cx).to_degrees()
+}
+
+/// How far out the pointer is, as a fraction of the radius — what dragging the
+/// Ratio handle sets. Never quite 1: a ring with no width is not a shape.
+pub fn arc_ratio_at(w: f64, h: f64, local: Point) -> f64 {
+    let (rx, ry) = ((w / 2.0).max(1e-6), (h / 2.0).max(1e-6));
+    let (dx, dy) = ((local.x - rx) / rx, (local.y - ry) / ry);
+    ((dx * dx + dy * dy).sqrt()).clamp(0.0, 0.99)
+}
+
+/// Write arc properties onto a layer, turning a solid ellipse into the arc
+/// that carries them. The box is untouched: these are appearance, not size —
+/// the same rule that makes Figma's arc non-destructive. `false` when the id
+/// is not an ellipse or an arc (nothing is written, so nothing is undone).
+pub fn set_arc(
+    editor: &mut x_native::editor::Editor,
+    id: &str,
+    start: f64,
+    end: f64,
+    ratio: f64,
+) -> bool {
+    let ok = x_native::editor::find(&editor.root, id).is_some_and(|n| arc_props(n).is_some());
+    if !ok {
+        return false;
+    }
+    editor.mutate_visual_stack(id, |n| n.kind = NodeKind::Arc { start, end, ratio })
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Screen {
     Dashboard,
@@ -1286,6 +1397,15 @@ pub enum FieldId {
     ScaleW,
     /// Scale panel: the height field, the width's mirror.
     ScaleH,
+    /// Arc properties (Figma's Appearance section): where the sweep begins,
+    /// in degrees.
+    ArcStart,
+    /// Arc properties: how far the sweep runs, in degrees — a `%` is read as
+    /// a share of the circle.
+    ArcSweep,
+    /// Arc properties: the fraction of the radius cut out of the middle, on
+    /// screen a percentage (Figma's Ratio; 0 is a solid wedge, 85 a thin ring).
+    ArcRatio,
     /// Tokens panel: variable name editing (rename-as-alias; same target
     /// resolution as `VarValue`, from `var_name_rects`).
     VarName,
@@ -1633,6 +1753,21 @@ pub enum Drag {
         base_depth: usize,
         parts: Vec<(String, f64, f64)>, // (id, anchor x, anchor y) in parent space
         applied: f64,
+    },
+    /// Figma's arc handles on an ellipse or an arc (K is not involved: the
+    /// handles belong to the layer, and they are dragged with the Move tool —
+    /// "hover your cursor over the ellipse until you see the Arc handle").
+    /// The kind of the layer is written on every move, so what is on screen is
+    /// already the shape the release commits; the box never moves.
+    ArcHandle {
+        id: String,
+        part: ArcPart,
+        /// The arc as it was when the drag started — every move recomputes
+        /// from these, so the gesture cannot accumulate rounding.
+        start: f64,
+        end: f64,
+        ratio: f64,
+        base_depth: usize,
     },
     /// Pen-tool polyline in progress (world-space points).
     Pen {

@@ -169,6 +169,13 @@ selection (⌥⌘G), which now have a tool, a palette entry and a shortcut — t
 * **Two engine rules came out of this pass**: `scale_nodes_about` refuses a factor of
   zero or less (a drag past the anchor must not mirror the layer) and skips a listed
   node whose ANCESTOR is listed too — scaling both would scale the child twice.
+* **The arc properties on an ellipse** (course chapter 26, "Turn an ellipse into an
+  arc"). The engine's `NodeKind::Arc` had been rendered, hit-tested and exported since
+  the vector pass with no caller; the course's route to it — the Sweep handle on hover,
+  then Start and Ratio, or the three fields in the Appearance section — is now on the
+  canvas, and the properties stay what Figma says they are: appearance. The layer's box
+  does not move when the arc changes; Flatten is the documented way to make it hug the
+  geometry, and the flattened shape is the `Vector` the engine's own flatten produces.
 * **The Scale tool's panel, its anchor box and its body drag.** Figma's article describes
   three ways to scale, and this pass adds the two the build was missing: the right sidebar's
   **Scale** section while K is active (a multiplier, W/H fields that keep the ratio, and the
