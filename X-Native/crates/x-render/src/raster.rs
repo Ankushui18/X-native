@@ -1041,12 +1041,17 @@ mod tests {
         check(ink(40, 54, 180, 72), true, "frame name");
         check(ink(40, 104, 80, 122), false, "nested frame");
         check(ink(240, 54, 340, 72), true, "section name");
-        // Figma paints a section's name as a chip in the section's own colour, and
-        // the chip stops where the name stops — this is that, in pixels: the chip
-        // band is well darker than the label grey, and nothing is painted past the
-        // name (the section itself starts 4px below the chip).
-        check(ink(240, 56, 270, 76), true, "the section chip");
-        check(ink(300, 56, 360, 76), false, "nothing past the chip");
+        // Figma paints a section's name as a chip in the section's own colour,
+        // sized to the name. This is that, in pixels — and it is asked by COLOUR,
+        // not by "any ink": with no font manager attached the sink paints a grey
+        // placeholder box as wide as the label's `max_width` (≈229 on white),
+        // which is lighter than the chip's own fill (≈118). So:
+        //   * where the chip is: something as dark as the chip,
+        //   * past where the name ends: the chip's colour is NOT there.
+        let chip = ink(240, 56, 270, 76);
+        assert!(chip < 150, "the chip paints its own colour, darkest {chip}");
+        let past = ink(300, 56, 360, 76);
+        assert!(past > 200, "the chip stops with its name, darkest {past}");
     }
 }
 

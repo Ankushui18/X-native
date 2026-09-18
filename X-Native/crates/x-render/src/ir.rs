@@ -2153,13 +2153,19 @@ mod tests {
         assert!((section_pill_width("Band") - want).abs() < 1e-9);
         let bounds = path.bounding_box();
         assert!((bounds.width() - want).abs() < 0.01, "{bounds:?}");
-        assert!((bounds.height() - SECTION_PILL_H).abs() < 0.01, "{bounds:?}");
+        assert!(
+            (bounds.height() - SECTION_PILL_H).abs() < 0.01,
+            "{bounds:?}"
+        );
         assert!(
             bounds.y1 <= 0.0,
             "the chip sits in the gutter above the section: {bounds:?}"
         );
         let t0 = transform.translation();
-        assert!((t0.x - 0.0).abs() < 1e-9 && (t0.y - 0.0).abs() < 1e-9, "in section space");
+        assert!(
+            (t0.x - 0.0).abs() < 1e-9 && (t0.y - 0.0).abs() < 1e-9,
+            "in section space"
+        );
         assert!(matches!(brush, Brush::Solid(c) if *c == section_pill_fill()));
         // the label follows the chip, on the chip: pill ink, chip size, inside it
         let (index_pill, index_label) = (
