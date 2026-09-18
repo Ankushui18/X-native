@@ -5342,7 +5342,8 @@ impl Host {
         v.transform.y = ly;
         doc.editor().insert_node(&parent, v);
         doc.editor().selection = vec![id];
-        drop(doc);
+        // `doc` is a &mut borrow: it ends at its last use, so `mark_dirty`'s
+        // &mut self borrow is free (dropping the reference would do nothing)
         self.app.mark_dirty();
     }
 

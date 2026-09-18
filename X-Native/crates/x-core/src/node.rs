@@ -1657,20 +1657,27 @@ mod freehand_tests {
 
     #[test]
     fn samples_become_smooth_cubics() {
-        // a straight drag: one cubic per surviving segment, and a flat line
-        // stays flat because the control points stay on it
-        let path = freehand_path(&[(0.0, 0.0), (5.0, 0.0), (10.0, 0.0)], 0.1);
+        // a bent drag: RDP keeps the bend and the fit turns both segments into
+        // cubics whose endpoints are the surviving samples
+        let path = freehand_path(&[(0.0, 0.0), (5.0, 0.0), (10.0, 6.0)], 0.1);
         assert_eq!(path.len(), 3, "MoveTo plus one curve per segment");
         let first = match path[0] {
             PathCmd::MoveTo(x, y) => (x, y),
             _ => panic!("a path starts with a MoveTo"),
         };
         assert_eq!(first, (0.0, 0.0));
-        let curve = match path[1] {
-            PathCmd::CurveTo(c1x, c1y, c2x, c2y, x, y) => (c1x, c1y, c2x, c2y, x, y),
-            _ => panic!("the fit must emit curves, not lines"),
-        };
-        assert_eq!(curve, (0.0, 0.0, 10.0, 0.0, 5.0, 0.0));
+        let mut ends = Vec::new();
+        for c in &path[1..] {
+            match c {
+                PathCmd::CurveTo(_, _, _, _, x, y) => ends.push((*x, *y)),
+                _ => panic!("the fit must emit curves, not lines"),
+            }
+        }
+        assert_eq!(ends, vec![(5.0, 0.0), (10.0, 6.0)]);
+        // a straight drag needs ONE segment: the middle sample sits on the
+        // chord, and dropping it is exactly what the simplify pass is for
+        let straight = freehand_path(&[(0.0, 0.0), (5.0, 0.0), (10.0, 0.0)], 0.1);
+        assert_eq!(straight.len(), 2);
     }
 
     #[test]

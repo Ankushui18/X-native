@@ -173,14 +173,6 @@ impl Tool {
     }
 }
 
-/// The rect a shape-tool drag commits — ONE rule for the live preview and the
-/// node that lands, so what you see while dragging is what you get.
-///
-/// * ⇧ (constrain to a square/circle) is applied to the drag's `cur` as it
-///   moves, so it is already in `cur` here;
-/// * ⌥ / Alt draws FROM THE CENTRE (Figma's shape tools), so the point the
-///   drag started on is the centre, not a corner;
-/// * either way the rect is normalised, so dragging up/left is the same drag.
 /// The Pencil's ink. Figma: "the pencil tool sketches with a round 3px stroke
 /// weight in black, unless you're sketching on a dark canvas or frame" — this
 /// canvas is dark and every other shape tool in it draws with the light ink, so
@@ -197,6 +189,14 @@ pub const PENCIL_WEIGHT: f64 = 3.0;
 /// this, and the engine's fit turns the rest into editable curves.
 pub const PENCIL_SMOOTHING: f64 = 1.5;
 
+/// The rect a shape-tool drag commits — ONE rule for the live preview and the
+/// node that lands, so what you see while dragging is what you get.
+///
+/// * ⇧ (constrain to a square/circle) is applied to the drag's `cur` as it
+///   moves, so it is already in `cur` here;
+/// * ⌥ / Alt draws FROM THE CENTRE (Figma's shape tools), so the point the
+///   drag started on is the centre, not a corner;
+/// * either way the rect is normalised, so dragging up/left is the same drag.
 pub fn create_rect(start: Point, cur: Point, from_center: bool) -> Rect {
     let (dx, dy) = (cur.x - start.x, cur.y - start.y);
     if from_center {
