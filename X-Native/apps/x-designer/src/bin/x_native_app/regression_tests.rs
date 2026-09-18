@@ -1366,6 +1366,169 @@ fn prototype_panel_lists_interaction_rows() {
         .any(|(_, a)| matches!(a, Action::FlowEnter)));
 }
 
+/// Figma's rule for a NEW object, from the Frames article: *"Click inside an
+/// existing frame to add a 100 x 100 nested frame"* — the shape tools behave the
+/// same way, so a shape drawn over a frame joins that frame (nested frames
+/// included) and a shape drawn on empty canvas stays on the page.
+#[test]
+fn a_shape_drawn_over_a_frame_joins_that_frame() {
+    let mut h = host();
+    assert!(h.app.doc_ref().editor_ref().selection.is_empty());
+    // the demo page holds frame-1 at world (0, 60), 375 x 420
+    h.finish_create(Tool::Rect, Point::new(40.0, 120.0), Point::new(80.0, 150.0));
+    let root = &h.app.doc_ref().editor_ref().root;
+    assert_eq!(root.children.len(), 1, "no new root sibling");
+    let f1 = find_node_clone(root, "frame-1").unwrap();
+    assert_eq!(f1.children.len(), 1, "the rect did not join frame-1");
+    let r = &f1.children[0];
+    assert_eq!(
+        (r.transform.x, r.transform.y),
+        (40.0, 60.0),
+        "the rect must be placed in the frame's own space"
+    );
+    // outside the frame again: the page owns it
+    h.app.doc().editor().selection.clear();
+    h.finish_create(Tool::Rect, Point::new(500.0, 20.0), Point::new(560.0, 50.0));
+    let root = &h.app.doc_ref().editor_ref().root;
+    assert_eq!(root.children.len(), 2, "drawn beside the frame, not in it");
+    let f1 = find_node_clone(root, "frame-1").unwrap();
+    assert_eq!(f1.children.len(), 1);
+}
+
+/// A nested frame takes the new layer over the frame that holds it — the
+/// DEEPEST container wins — and a group never captures one (Figma's containers
+/// are frames and sections; a group adopting a layer would re-flow it).
+#[test]
+fn the_deepest_container_wins_and_a_group_does_not_capture() {
+    let mut h = host();
+    let root_id = h.app.doc_ref().editor_ref().root.id.clone();
+    let mut outer = Node::frame("outer", 300.0, 300.0);
+    outer.name = "Outer".into();
+    h.app.doc().editor().insert_node(&root_id, outer);
+    let mut inner = Node::frame("inner", 100.0, 100.0);
+    inner.name = "Inner".into();
+    inner.transform.x = 50.0;
+    inner.transform.y = 50.0;
+    h.app.doc().editor().insert_node("outer", inner);
+    let mut grp = Node::group("grp", 60.0, 60.0);
+    grp.transform.x = 400.0;
+    grp.transform.y = 20.0;
+    h.app.doc().editor().insert_node(&root_id, grp);
+    h.app.doc().editor().selection.clear();
+
+    // inside the nested frame: the nested frame wins
+    h.finish_create(Tool::Rect, Point::new(80.0, 80.0), Point::new(100.0, 100.0));
+    let root = &h.app.doc_ref().editor_ref().root;
+    assert_eq!(
+        find_node_clone(root, "inner").unwrap().children.len(),
+        1,
+        "the nested frame did not take the new layer"
+    );
+    assert!(find_node_clone(root, "outer").unwrap().children.len() == 1);
+    // over the group: the page keeps it
+    h.app.doc().editor().selection.clear();
+    h.finish_create(Tool::Rect, Point::new(410.0, 30.0), Point::new(430.0, 50.0));
+    let root = &h.app.doc_ref().editor_ref().root;
+    assert!(
+        find_node_clone(root, "grp").unwrap().children.is_empty(),
+        "a group captured a new layer"
+    );
+    assert_eq!(root.children.len(), 4, "the page kept the shape");
+}
+
+/// A container you cannot select is a container you cannot draw into: a hidden
+/// or locked frame is skipped, exactly like the canvas click that would have
+/// selected it.
+#[test]
+fn a_hidden_or_locked_frame_does_not_take_the_shape() {
+    let mut h = host();
+    h.app.doc().editor().set_locked("frame-1", true);
+    h.app.doc().editor().selection.clear();
+    h.finish_create(Tool::Rect, Point::new(40.0, 120.0), Point::new(80.0, 150.0));
+    let root = &h.app.doc_ref().editor_ref().root;
+    assert!(
+        find_node_clone(root, "frame-1").unwrap().children.is_empty(),
+        "a locked frame captured the shape"
+    );
+    assert_eq!(root.children.len(), 2, "the page kept it");
+    // unlock, then hide: same answer
+    h.app.doc().editor().set_locked("frame-1", false);
+    h.app.doc().editor().set_visible("frame-1", false);
+    h.app.doc().editor().selection.clear();
+    h.finish_create(Tool::Rect, Point::new(40.0, 120.0), Point::new(80.0, 150.0));
+    let root = &h.app.doc_ref().editor_ref().root;
+    assert!(
+        find_node_clone(root, "frame-1").unwrap().children.is_empty(),
+        "a hidden frame captured the shape"
+    );
+    assert_eq!(root.children.len(), 3, "the page kept it");
+}
+
+/// Figma's "prevent nesting" modifier, from their own tip: *"To prevent an
+/// object from being nested, hold the Spacebar while dragging."* Space is also
+/// this app's pan key, and a pan started BEFORE the press cannot be running —
+/// the create drag owns the pointer — so the two never fight.
+#[test]
+fn holding_space_while_drawing_keeps_the_shape_on_the_page() {
+    let mut h = host();
+    h.app.doc().editor().selection.clear();
+    h.app.space_pan = true;
+    h.finish_create(Tool::Rect, Point::new(40.0, 120.0), Point::new(80.0, 150.0));
+    let root = &h.app.doc_ref().editor_ref().root;
+    assert!(
+        find_node_clone(root, "frame-1").unwrap().children.is_empty(),
+        "space did not stop the nesting"
+    );
+    assert_eq!(root.children.len(), 2, "the shape must land on the page");
+    h.app.space_pan = false;
+}
+
+/// Figma's shape-tool modifiers, from the Shape tools article: *"Hold down
+/// Shift when dragging to create perfect squares, circles and polygons. Hold
+/// down Option / Alt to create and resize shapes from their center."* One rule
+/// serves the preview and the commit, so ⌥ cannot mean two things.
+#[test]
+fn shape_tool_modifiers_build_the_rect_the_preview_shows() {
+    use crate::state::create_rect;
+    let a = Point::new(100.0, 100.0);
+    let up_left = Point::new(60.0, 70.0);
+    let plain = create_rect(a, up_left, false);
+    assert_eq!(
+        (plain.x0, plain.y0, plain.x1, plain.y1),
+        (60.0, 70.0, 100.0, 100.0)
+    );
+    let centred = create_rect(a, up_left, true);
+    assert_eq!(
+        (centred.x0, centred.y0, centred.x1, centred.y1),
+        (60.0, 70.0, 140.0, 130.0),
+        "⌥ makes the press point the centre"
+    );
+    assert_eq!(
+        (centred.width(), centred.height()),
+        (2.0 * plain.width(), 2.0 * plain.height())
+    );
+    // and the commit agrees with the rule, down to the pixel
+    let mut h = host();
+    h.app.doc().editor().selection.clear();
+    h.app.alt = true;
+    h.finish_create(
+        Tool::Rect,
+        Point::new(500.0, 300.0),
+        Point::new(520.0, 310.0),
+    );
+    let root = &h.app.doc_ref().editor_ref().root;
+    let r = root
+        .children
+        .iter()
+        .find(|n| n.id != "frame-1")
+        .expect("the shape");
+    assert_eq!(
+        (r.transform.x, r.transform.y, r.w, r.h),
+        (480.0, 290.0, 40.0, 20.0)
+    );
+    h.app.alt = false;
+}
+
 /// Figma's layers panel puts an eye and a padlock on the row you hover; they
 /// stay while the state is on, and a locked layer stops answering the canvas.
 /// (Figma interface — "You can lock and unlock each layer … click on the

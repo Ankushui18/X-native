@@ -19,6 +19,32 @@ Every "in this tree" cell was checked in the source at the line named, not assum
 a screenshot. "not reproduced" means the source claims something the code does the other
 way, or does not do at all.
 
+## 0. How the tools behave on the canvas
+
+The question behind the file-interface table below is not *which buttons exist* but
+*what a tool does when you use it on the canvas*. That is what this table answers, and
+every "in this tree" cell is the source that implements it.
+
+| tool (Figma) | what it does on Figma's canvas | in this tree |
+| --- | --- | --- |
+| **Move / select** (V) | click selects the top-level object, drag moves it, shift-click adds, marquee on empty canvas, double-click or ⏎ descends one level, ⌘-click deep-selects | `Tool::Select`; `x-editor::hit_test` + `hit_test_rect`; `drill_into`; parity rows 1–7 |
+| **Scale** (K) | resize WITHOUT distortion — text sizes and stroke weights follow the box | not built; resizing scales the box only (listed below) |
+| **Frame** (F) | click on empty canvas = a top-level frame (100×100, then the last size used); **click INSIDE a frame = a nested frame there**; drag = custom size; ⌥⌘G frames the selection | `Tool::Frame`; nesting now by *where you draw* (`container_under`); ⌥⌘G is not bound |
+| **Slice** | an object whose only job is to be exported | not built (any selection can be exported) |
+| **Rectangle** (R) / **Ellipse** (O) | drag creates; ⇧ square/circle; ⌥ from the centre; the size is shown while dragging; **drawn over a frame it joins that frame**; space while dragging prevents nesting | `Tool::Rect` / `Tool::Ellipse`; all four rules now, via `state::create_rect` + `container_under` + `space_pan` |
+| **Line** (L) / **Arrow** (⇧L) | drag in any direction; stroke settings in the right panel | `Tool::Pen` + line nodes; no arrow caps yet |
+| **Pen** (P) | click to place points, drag for curves, click the first point to close, Esc leaves it open; draws INSIDE a frame | `Tool::Pen` (click = anchor, drag = handle, close on the anchor); nests by the same rule now |
+| **Pencil / Brush** | freehand drawing, and the strokes can be smoothed into a vector network | not built (listed below) |
+| **Text** (T) | drag makes a fixed-size text box, click makes one that grows with the text; double-click a text layer to edit in place | `Tool::Text` (drag = box, click = auto width); in-place editing with caret, selection and wrapping |
+| **Hand** (H) / space | pan; space held anywhere gives the hand cursor | `Tool::Hand`, `space_pan`, `Drag::Pan` |
+| **Comment** (C) | drop a pin, thread replies | `Tool::Comment` + pages' comment pins |
+| **Zoom** | ⌘/Ctrl + wheel, ⌘0 / ⌘1 / ⌘2, or the zoom menu | wheel zoom at the pointer, `Action::ZoomMenu` (in / out / 100% / selection / fit) |
+| **Nudge** | arrow keys move 1px, ⇧ 10px | arrow-key nudge with ⇧ big-nudge |
+
+Two rules in that table were NOT in this build and are now (see §4): a new layer joins
+the container you draw it in, and the shape tools' modifiers (⇧ constrain, ⌥ from the
+centre, live size readout).
+
 ## 1. The file interface, element by element
 
 | what the source says | in this tree | verdict |
@@ -62,6 +88,22 @@ way, or does not do at all.
 
 ## 4. What this pass changed
 
+* **A new layer joins the container you draw it in.** The rule was "the shape lands
+  inside the selected container, else on the page", so drawing a rect on top of a
+  frame put it beside the frame (and Figma builds the frame you are working on).
+  `run.rs::container_under` now answers from the canvas instead: the deepest
+  **visible, unlocked** frame or section under the point the drag started from — a
+  nested frame beats its parent, a group or an instance never captures, and paint
+  order settles overlaps, exactly like a click. Holding **space** while dragging is
+  Figma's own "prevent nesting" modifier, so the escape hatch is the documented one
+  rather than a new binding. The selected-container path stays as the fallback, which
+  is what keeps a group and an auto-layout frame behaving as before.
+* **The shape tools' modifiers are Figma's, and the preview proves it.** ⇧ was already
+  constraining the drag to a square/circle; **⌥ now draws from the centre**, and one
+  function (`state::create_rect`) builds the rect for both the live preview and the
+  node that lands — so ⌥ cannot mean one thing while dragging and another on release.
+  While a shape tool is dragging, the canvas now shows the pending rect **and its
+  size** underneath it, which is what Figma shows and what this build was missing.
 * **Present** now means present (the ▶ in the panel header), and a presentation paints
   the artwork alone: `FrameCache::set_presenting` + `ir::strip_canvas_chrome` remove the
   canvas chrome — frame names (`/label`) and section title chips (`/pill` + `/chip`) —
@@ -77,15 +119,14 @@ way, or does not do at all.
 
 Ordered by how visible they are, not by how hard they are:
 
-1. **A shape drawn over a frame joins that frame** (Figma's frame-first rule). Ours joins
-   the page root unless the frame is the selection. Changing it moves existing
-   behaviour, so it wants its own pass with the ⌘-override (draw above the frame) and a
-   test per case.
-2. **Scale tool** — resize without distortion (Figma's Scale resizes text and stroke
-   widths with the box). Ours scales only the box.
-3. **Slice tool** — an object whose only job is to be exported. We export any selection,
+1. **Scale tool (K)** — resize without distortion: Figma's scale resizes text and stroke
+   widths with the box. Ours scales only the box.
+2. **Slice tool** — an object whose only job is to be exported. We export any selection,
    which covers the use case but not the layer.
-4. **Pencil tool** — freehand. `Tool::Eraser` and `Tool::Symmetry` exist; freehand does
-   not.
+3. **Pencil / Brush tool** — freehand (and Figma's "smooth" pass that turns a freehand
+   stroke into a vector network). `Tool::Eraser` and `Tool::Symmetry` exist; freehand
+   does not.
+4. **Frame around the selection (⌥⌘G)** and **line / arrow tools with caps** — both
+   small, both absent.
 5. **Community and Teams** in the file browser, and sharing in the editor. These need a
    backend; the build is local-first.

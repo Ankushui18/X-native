@@ -95,11 +95,11 @@
       40,
       48
     ],
-    "total": 685,
-    "onLadder": 335,
+    "total": 688,
+    "onLadder": 338,
     "perFile": {
       "dashboard.rs": 129,
-      "editor_ui.rs": 515,
+      "editor_ui.rs": 518,
       "board_ui.rs": 21,
       "command.rs": 0,
       "loading.rs": 20,
@@ -114,12 +114,12 @@
       },
       {
         "value": 4,
-        "count": 66,
+        "count": 67,
         "onLadder": true
       },
       {
         "value": 6,
-        "count": 50,
+        "count": 51,
         "onLadder": true
       },
       {
@@ -154,7 +154,7 @@
       },
       {
         "value": 24,
-        "count": 19,
+        "count": 20,
         "onLadder": true
       },
       {

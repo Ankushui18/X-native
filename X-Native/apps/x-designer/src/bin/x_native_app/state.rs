@@ -144,6 +144,33 @@ impl Tool {
     }
 }
 
+/// The rect a shape-tool drag commits — ONE rule for the live preview and the
+/// node that lands, so what you see while dragging is what you get.
+///
+/// * ⇧ (constrain to a square/circle) is applied to the drag's `cur` as it
+///   moves, so it is already in `cur` here;
+/// * ⌥ / Alt draws FROM THE CENTRE (Figma's shape tools), so the point the
+///   drag started on is the centre, not a corner;
+/// * either way the rect is normalised, so dragging up/left is the same drag.
+pub fn create_rect(start: Point, cur: Point, from_center: bool) -> Rect {
+    let (dx, dy) = (cur.x - start.x, cur.y - start.y);
+    if from_center {
+        Rect::new(
+            start.x - dx.abs(),
+            start.y - dy.abs(),
+            start.x + dx.abs(),
+            start.y + dy.abs(),
+        )
+    } else {
+        Rect::new(
+            start.x.min(cur.x),
+            start.y.min(cur.y),
+            start.x.max(cur.x),
+            start.y.max(cur.y),
+        )
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Screen {
     Dashboard,

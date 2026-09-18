@@ -103,6 +103,26 @@ not selecting the elements in the right panel"*. The audit behind the fixes
   `show_name_roundtrips_and_defaults_to_true_for_older_files`).
 
 ### Added
+- **A new layer joins the container you draw it in.** Figma's rule ("click inside an
+  existing frame to add a nested frame"; the shape tools behave the same way) was not
+  this build's: a rect drawn on top of a frame landed *beside* it unless the frame
+  happened to be selected. The canvas now decides — `run.rs::container_under` finds the
+  deepest **visible, unlocked** frame or section under the point the drag started from,
+  a nested frame beats the frame that holds it, and a group or an instance never
+  captures a layer (their structure is not theirs to change). Holding **space** while
+  dragging is Figma's documented "prevent nesting", so the shape stays on the page. The
+  selected-container path remains as the fallback, which is what keeps a group and an
+  auto-layout frame behaving exactly as before
+  (`a_shape_drawn_over_a_frame_joins_that_frame`,
+  `the_deepest_container_wins_and_a_group_does_not_capture`,
+  `a_hidden_or_locked_frame_does_not_take_the_shape`,
+  `holding_space_while_drawing_keeps_the_shape_on_the_page`).
+- **The shape tools' modifiers, and a live size readout.** ⇧ already constrained a drag
+  to a square or circle; **⌥ now draws from the centre**, and one function
+  (`state::create_rect`) builds the rect for both the pending shape on screen and the
+  node that lands, so the two cannot disagree. While a shape tool drags, the canvas
+  paints the rect and its size under it, the way Figma does
+  (`shape_tool_modifiers_build_the_rect_the_preview_shows`). `apps/x-designer`.
 - **Presentation mode, and a Present control that means it.** The ▶ in the panel
   header used to be a shortcut to the Prototype *tab*; it now starts the file's
   prototype the way Figma's Present does, and a presentation paints the artwork

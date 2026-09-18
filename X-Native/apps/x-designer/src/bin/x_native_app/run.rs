@@ -5149,10 +5149,10 @@ impl Host {
     }
 
     fn finish_create(&mut self, tool: Tool, start: Point, cur: Point) {
-        let x = start.x.min(cur.x);
-        let y = start.y.min(cur.y);
-        let w = (cur.x - start.x).abs();
-        let h = (cur.y - start.y).abs();
+        // One rule for the pending rect (⌥ draws from the centre), shared with
+        // the live preview, so the shape that lands is the shape on screen.
+        let rect = crate::state::create_rect(start, cur, self.app.alt);
+        let (x, y, w, h) = (rect.x0, rect.y0, rect.width(), rect.height());
 
         // Board rectangle/circle tools share the Drag::Create gesture with
         // design shapes, but must never insert an x-core Node into the hidden
@@ -5245,34 +5245,50 @@ impl Host {
         // with a frame selected builds the frame. Previously every drawn
         // node was forced onto the page root, so artboards could never
         // receive content (viewport audit P2).
+        // Space held during the drag is Figma's "prevent nesting" modifier: the
+        // object stays on the page even when it is drawn over a frame.
+        let no_nest = self.app.space_pan;
         let (parent_id, parent_auto_layout) = {
             let doc = self.app.doc();
             let root = &doc.editor_ref().root;
-            let sel = &doc.editor_ref().selection;
-            if sel.len() == 1 {
-                let p = crate::editor_ui::find_node(root, &sel[0]);
-                if let Some(p) = p {
-                    let is_container = matches!(
-                        p.kind,
-                        x_native::NodeKind::Frame { .. }
-                            | x_native::NodeKind::Group
-                            | x_native::NodeKind::Section
-                    );
-                    if is_container {
-                        let (lx, ly) = world_to_local(root, &p.id, x, y);
-                        node.transform.x = lx;
-                        node.transform.y = ly;
-                        let auto_layout =
-                            matches!(&p.kind, x_native::NodeKind::Frame { layout: Some(_) });
-                        (p.id.clone(), auto_layout)
-                    } else {
-                        (root_id.clone(), false)
-                    }
-                } else {
-                    (root_id.clone(), false)
-                }
+            // Figma's rule for a NEW object: it joins the container you draw it
+            // in — the deepest visible, unlocked frame or section under the
+            // point the drag STARTED from. Drawing with exactly one container
+            // selected still builds that container (viewport audit P2), which is
+            // also what keeps the auto-layout flow honest for a group.
+            let by_place = if no_nest {
+                None
             } else {
-                (root_id.clone(), false)
+                container_under(root, start)
+            };
+            let mut picked = by_place;
+            if picked.is_none() {
+                let sel = &doc.editor_ref().selection;
+                if sel.len() == 1 {
+                    if let Some(p) = crate::editor_ui::find_node(root, &sel[0]) {
+                        if matches!(
+                            p.kind,
+                            x_native::NodeKind::Frame { .. }
+                                | x_native::NodeKind::Group
+                                | x_native::NodeKind::Section
+                        ) {
+                            picked = Some(p.id.clone());
+                        }
+                    }
+                }
+            }
+            match picked {
+                Some(id) => {
+                    let (lx, ly) = world_to_local(root, &id, x, y);
+                    node.transform.x = lx;
+                    node.transform.y = ly;
+                    let auto_layout = match crate::editor_ui::find_node(root, &id) {
+                        Some(p) => matches!(&p.kind, x_native::NodeKind::Frame { layout: Some(_) }),
+                        None => false,
+                    };
+                    (id, auto_layout)
+                }
+                None => (root_id.clone(), false),
             }
         };
         self.app.doc().editor().insert_node(&parent_id, node);
@@ -11620,6 +11636,47 @@ fn blank_editing_text(root: &mut Node, eid: Option<&str>) {
 /// a child's transform lives in: the inverse of the ancestor chain's
 /// transform product. Drawing into a selected frame needs this so the new
 /// node lands where the pointer was, in the frame's own coordinates.
+/// The container a NEW object drawn at `p` joins — Figma's rule, and the one
+/// its shape tools follow: *"Click inside an existing frame to add a 100 x 100
+/// nested frame"*, and the rect/ellipse tools behave the same way.
+///
+/// * the DEEPEST container wins — a nested frame takes the new layer over the
+///   frame that holds it;
+/// * only VISIBLE, UNLOCKED containers capture: you cannot draw into a layer
+///   you cannot select, and `x-editor::hit_test` already skips a locked node
+///   for the same reason;
+/// * a GROUP never captures (Figma's containers are frames and sections; a
+///   group adopting a layer would silently re-flow it), and neither does an
+///   INSTANCE, whose structure belongs to its component;
+/// * paint order decides between overlapping containers, exactly like a click.
+fn container_under(root: &Node, p: Point) -> Option<String> {
+    fn rec(n: &Node, acc: Affine, p: Point, out: &mut Option<String>) {
+        if !n.visible || n.locked {
+            return;
+        }
+        let m = acc * n.transform.matrix(n.w, n.h);
+        let local = m.inverse() * p;
+        if local.x < 0.0 || local.y < 0.0 || local.x > n.w || local.y > n.h {
+            return;
+        }
+        if matches!(
+            n.kind,
+            x_native::NodeKind::Frame { .. } | x_native::NodeKind::Section
+        ) {
+            *out = Some(n.id.clone());
+        }
+        for c in &n.children {
+            rec(c, m, p, out);
+        }
+    }
+    let mut out = None;
+    let m = root.transform.matrix(root.w, root.h);
+    for c in &root.children {
+        rec(c, m, p, &mut out);
+    }
+    out
+}
+
 fn world_to_local(root: &Node, target: &str, x: f64, y: f64) -> (f64, f64) {
     fn rec(n: &Node, id: &str, acc: Affine, pt: (f64, f64), out: &mut Option<(f64, f64)>) {
         // `acc` is the world matrix of `n`'s parent; multiplying in `n`'s

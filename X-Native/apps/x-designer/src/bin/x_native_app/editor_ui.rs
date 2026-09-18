@@ -6759,6 +6759,26 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
         fill_rect(s, r, C_SEL_SOFT);
         stroke_rect(s, r, C_SEL, 1.0);
     }
+    // shape-tool create — Figma shows the pending shape and its size while you
+    // drag ("You'll see the rectangle's dimensions underneath the bottom
+    // edge"). The rect comes from `state::create_rect`, the same rule the commit
+    // uses, ⌥ included, so the preview cannot disagree with what lands.
+    if let Some(crate::state::Drag::Create { start, cur, .. }) = &app.drag {
+        let reg = app.editor_regions();
+        let wr = crate::state::create_rect(*start, *cur, app.alt);
+        let a = app.world_to_screen(Point::new(wr.x0, wr.y0));
+        let b = app.world_to_screen(Point::new(wr.x1, wr.y1));
+        let r = Rect::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y));
+        fill_rect(s, r, C_SEL_SOFT);
+        stroke_rect(s, r, C_SEL, 1.0);
+        let label = format!("{} × {}", wr.width().round(), wr.height().round());
+        let tw = app.fonts.measure(&label, T10, Wt::Reg) + 12.0;
+        let bx = r.x0.min(reg.canvas.x1 - tw - 4.0).max(reg.canvas.x0 + 4.0);
+        let chip = Rect::new(bx, r.y1 + 6.0, bx + tw, r.y1 + 24.0);
+        fill_rrect(s, chip, R_SM, C_TEXT);
+        app.fonts
+            .text_center(s, chip, &label, T10, C_BASE, Wt::Med, true);
+    }
     // pen preview
     if let Some(crate::state::Drag::Pen { points, cursor }) = &app.drag {
         let mut prev: Option<Point> = None;
