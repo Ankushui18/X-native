@@ -1958,9 +1958,13 @@ mod tests {
                 max_width,
                 ..
             } => {
-                // the frame's own id is part of its path, so the label key is
-                // "/Hero/label" — not "/label", which is the root's slot
-                assert_eq!(key, "/Hero/label");
+                // A key is the node's PATH plus the slot: the path carries
+                // every ancestor's name, so this frame's label slot is
+                // "/Page 1/Hero/label". (The root is not labelled, but it is
+                // still a path segment — a rooted path is what keeps two
+                // same-named frames in different branches apart in the cache.)
+                assert_eq!(key, "/Page 1/Hero/label");
+                assert!(key.ends_with("/Hero/label"), "{key}");
                 // the frame's world origin (40, 60) plus the label offset: left
                 // edge aligned with the frame, 26px of gutter above it
                 let t = transform.translation();

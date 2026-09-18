@@ -3363,10 +3363,17 @@ fn every_page_in_the_window_is_clickable_and_the_window_follows_the_page() {
     h.dispatch(Action::SelectPage(3));
     assert_eq!(h.app.doc_ref().page, 3, "the row selects its own page");
     let rows = h.app.pages_rows();
+    // the window follows the active page and clamps against the tail:
+    // top = min(page, n - PAGES_MAX_ROWS) = min(3, 2) = 2, so page 3 is the
+    // second row and the LAST page is on screen too
     assert_eq!(
         rows.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
-        vec![1, 2, 3, 4],
-        "the window slid by exactly one row"
+        vec![2, 3, 4, 5],
+        "the window follows the page and clamps at the tail"
+    );
+    assert!(
+        rows.iter().any(|(i, _)| *i == 3),
+        "the page just selected has a row"
     );
     // the last page is a real row, and it is the one the ✕ can delete
     h.dispatch(Action::SelectPage(5));
@@ -3446,7 +3453,12 @@ fn page_delete_removes_the_clicked_page_and_never_the_last_one() {
         d.doc.pages[2].name = "Settings".into();
         d.page = 2;
     }
-    // the ✕ on the first row exists while another page is active
+    // The ✕ is a HOVER affordance (Figma paints it on the row the pointer is
+    // on), so the pointer has to be over the row when the paint pass runs —
+    // the zone only exists for a hovered row.
+    let rows0 = h.app.pages_rows();
+    let row0 = rows0.iter().find(|(i, _)| *i == 0).map(|(_, r)| *r).unwrap();
+    h.app.mouse = row0.center();
     crate::editor_ui::paint(&mut h.app, &mut scene);
     let rows = h.app.pages_rows();
     let row0 = rows.iter().find(|(i, _)| *i == 0).map(|(_, r)| *r).unwrap();

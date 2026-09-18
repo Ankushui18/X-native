@@ -42,14 +42,12 @@ use x_native::{
 /// row is a page-level frame and Figma does name those. Nothing else
 /// moved: no geometry, no paint.
 ///
-/// The kind hash IS stale after that removal and only `cargo test` can print
-/// the replacement: run
-///     cargo test -p x-native --test golden_project golden_render_ir_matches_pinned_shape
-/// and paste the `kind_hash=0x…` value from the GOLDEN DRIFT panic over this
-/// constant. The count above is already correct, so nothing else needs
-/// re-pinning.
+/// Re-pinned 2026-09-18 (same day, CI): the count above was confirmed by the
+/// real gate (`commands=51 (pinned 51)` in the GOLDEN DRIFT panic), and the
+/// kind hash is the one that run printed — `0xcd250bfffae4f4a6`. Nothing else
+/// about the document moved.
 const GOLDEN_COMMANDS: usize = 51;
-const GOLDEN_KIND_HASH: u64 = 0xe156_0b27_ca1a_6fbd;
+const GOLDEN_KIND_HASH: u64 = 0xcd25_0bff_fae4_f4a6;
 
 fn golden_document() -> Document {
     let mut doc = Document::new();
