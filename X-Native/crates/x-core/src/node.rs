@@ -1114,7 +1114,7 @@ impl Node {
             y,
             w,
             h,
-            Paint::Solid(Color::from_rgb8(0xdd, 0xdd, 0xdd)),
+            Paint::Solid(crate::fallbacks::missing_asset_grey()),
         )
     }
     pub fn vector(id: &str, x: f64, y: f64, w: f64, h: f64, path: Vec<PathCmd>) -> Self {

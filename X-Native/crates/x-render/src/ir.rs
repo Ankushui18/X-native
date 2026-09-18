@@ -28,6 +28,17 @@ pub const LABEL_ABOVE_Y: f64 = -26.0;
 /// into a scene by an export/thumbnail.
 pub const LABEL_SIZE: f64 = 18.0;
 
+/// Ink of a canvas name label (`LABEL_ABOVE_Y` / `LABEL_SIZE` above). ONE owner
+/// for "which grey": the IR encoder and the direct scene encoder both call this,
+/// for their Frame and their Section arm alike. It used to be written out at four
+/// sites across the two encoders and they had already drifted — the scene's Frame
+/// arm faded a name to 70% while the other three did not, so the same frame's name
+/// was a different grey on the canvas than in an export. The contract this sits
+/// under — and the tests that pin it — is docs/FIGMA_PARITY.md.
+pub fn label_ink() -> Color {
+    Color::from_rgba8(0x4b, 0x55, 0x63, 0xff)
+}
+
 /// One drawable unit, fully resolved. No document types leak through
 /// except geometry/paint primitives.
 #[derive(Debug, Clone)]
@@ -284,7 +295,7 @@ fn layer_brush(paint: &Paint, vars: &Variables, opacity: f32) -> Brush {
         // via clip + tiled image; this gray is the fallback for strokes,
         // text fills and lines (patterns can't clip a stroke region)
         Paint::Pattern { .. } => {
-            Brush::Solid(Color::from_rgb8(0x99, 0x99, 0x99).multiply_alpha(opacity))
+            Brush::Solid(x_core::fallbacks::pattern_fallback_grey().multiply_alpha(opacity))
         }
     }
 }
@@ -1389,7 +1400,7 @@ fn lower(
                     text: name.to_string(),
                     size: LABEL_SIZE,
                     brush: layer_brush(
-                        &Paint::Solid(Color::from_rgba8(0x4b, 0x55, 0x63, 0xff)),
+                        &Paint::Solid(label_ink()),
                         vars,
                         opacity,
                     ),
@@ -1482,7 +1493,7 @@ fn lower(
                     text: name.to_string(),
                     size: LABEL_SIZE,
                     brush: layer_brush(
-                        &Paint::Solid(Color::from_rgba8(0x4b, 0x55, 0x63, 0xff)),
+                        &Paint::Solid(label_ink()),
                         vars,
                         opacity,
                     ),
@@ -1760,7 +1771,7 @@ impl<'a> VelloSink<'a> {
                         scene.fill(
                             Fill::NonZero,
                             *transform,
-                            Color::from_rgb8(0xdd, 0xdd, 0xdd),
+                            x_core::fallbacks::missing_asset_grey(),
                             None,
                             &Rect::new(0.0, 0.0, *w, *h).into_path(0.1),
                         );

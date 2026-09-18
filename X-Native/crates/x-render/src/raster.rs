@@ -507,12 +507,14 @@ impl<'a> RasterSink<'a> {
                             }
                         }
                     } else {
-                        // missing asset: gray box (matches the Vello sink)
+                        // missing asset: the same grey the Vello sink paints — one
+                        // decision, `x_core::fallbacks`, not two that agree today
                         if let Some(p) =
                             to_path(&vello::kurbo::Rect::new(0.0, 0.0, *w, *h).into_path(0.1))
                         {
                             let mut paint = ts::Paint::default();
-                            paint.set_color(ts::Color::from_rgba8(0xdd, 0xdd, 0xdd, 0xff));
+                            let grey = x_core::fallbacks::missing_asset_grey();
+                            paint.set_color(to_color(grey));
                             let mask = self.stack.last().and_then(|c| c.mask.as_ref());
                             paint.blend_mode = self
                                 .stack

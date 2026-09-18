@@ -177,6 +177,24 @@ if [[ $QUICK == 0 ]]; then
         echo "      skipped: no node on PATH (the generators need it)"
     fi
 
+    step "design + Figma conformance (guard)"
+    # The sheet steps above prove the sheet matches the sources. This proves the
+    # *decisions* do: one owner per colour literal in the engine, a ratchet on the
+    # literals that remain, every icon the chrome asks for, and every behaviour
+    # docs/FIGMA_PARITY.md claims to copy from Figma still naming the test that
+    # pins it. Dependency-free (node:fs only), so unlike the jsdom sheets it runs
+    # on a bare runner.
+    if command -v node >/dev/null 2>&1; then
+        if GUARD_LOG=$(node tools/design-sheet/guard.mjs 2>&1); then
+            ok "$(printf '%s\n' "$GUARD_LOG" | tail -1 | sed 's/^SUMMARY  //')"
+        else
+            bad "a design or Figma-parity rule is broken"
+            printf '%s\n' "$GUARD_LOG" | grep -E '^FAIL' | head -12 | sed 's/^/      /'
+        fi
+    else
+        echo "      skipped: no node on PATH (the guard needs it)"
+    fi
+
     step "CLI smoke (x_native)"
     if $CARGO build -q -p x-designer --bin x_native 2>/dev/null; then
         TARGET_DIR=${CARGO_TARGET_DIR:-$PWD/target}

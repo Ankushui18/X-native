@@ -66,7 +66,27 @@ not selecting the elements in the right panel"*. The audit behind the fixes
   to select one level of nesting down"), instead of jumping to the deepest leaf in
   one gesture; ⌘/Ctrl-click still deep-selects in one press.
 
+### Fixed
+- **One owner per design decision.** Three decisions were written out at more than
+  one site and had already drifted or were held together by a comment: the canvas
+  name label's ink (four sites across two encoders — one arm faded a name to 70%
+  while the other three did not, so the same frame's name was a different grey on
+  the canvas than in an export), the missing-asset grey (three sites, one of them
+  annotated *"matches the Vello sink"*), and the pattern fallback grey (two sites).
+  Each is now one definition — `ir.rs::label_ink()` and
+  `crates/x-core/src/fallbacks.rs` — used everywhere. `crates/x-core`,
+  `crates/x-render`.
+
 ### Added
+- **A design + Figma conformance guard** (`tools/design-sheet/guard.mjs`, run by
+  `scripts/check.sh` on every push): a colour literal in two files is two owners of
+  one decision and fails; engine-chrome literals are bounded by per-file ceilings
+  that only go down (the app chrome already had this in `design_tokens_test.rs`);
+  every icon name the chrome asks for must exist (a typo ships as a blank space);
+  and every row of the parity contract must name the test that pins it.
+- **`docs/FIGMA_PARITY.md`** — the behaviours we claim to copy from Figma, each with
+  its source, the file that owns the decision in our code, and the test that pins
+  it; plus the honest list of what is claimed but not yet pinned.
 - **Double-click a page name to rename it** (Figma's second rename path, next to
   the page menu) and **double-click a layer name in the Layers panel to rename it
   inline** (`FieldId::LayerName`, `Action::LayerRename`): Enter commits through the
