@@ -44,11 +44,7 @@ fn export_strips_frame_names_and_keeps_a_sections_title_chip() {
         .child(Node::frame("Hero", 100.0, 80.0))
         .child(band);
     let tree = build_render_tree(&doc, &Variables::default());
-    let keys: Vec<String> = tree
-        .commands
-        .iter()
-        .filter_map(|c| c.key().map(str::to_string))
-        .collect();
+    let keys: Vec<String> = tree.commands.iter().map(|c| c.key().to_string()).collect();
     assert!(
         keys.iter().any(|k| k.ends_with("/Hero/label")),
         "the frame's name is in the canvas tree: {keys:?}"

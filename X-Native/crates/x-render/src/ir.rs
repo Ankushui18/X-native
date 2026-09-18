@@ -102,7 +102,12 @@ fn is_wide_char(c: char) -> bool {
 pub fn section_pill_rect(name: &str, section_w: f64) -> Rect {
     let longest = (section_w - 2.0 * SECTION_PILL_PAD_X).max(SECTION_PILL_H);
     let w = section_pill_width(name).min(longest);
-    Rect::new(0.0, section_pill_top(), w, section_pill_top() + SECTION_PILL_H)
+    Rect::new(
+        0.0,
+        section_pill_top(),
+        w,
+        section_pill_top() + SECTION_PILL_H,
+    )
 }
 
 /// One drawable unit, fully resolved. No document types leak through
@@ -1484,7 +1489,10 @@ fn lower(
                 tree.commands.push(RenderCommand::Glyphs {
                     key: format!("{key}/chip"),
                     transform: world
-                        * Affine::translate((SECTION_PILL_PAD_X, section_pill_top() + SECTION_PILL_TEXT_DY)),
+                        * Affine::translate((
+                            SECTION_PILL_PAD_X,
+                            section_pill_top() + SECTION_PILL_TEXT_DY,
+                        )),
                     text: name.to_string(),
                     size: SECTION_LABEL_SIZE,
                     brush: layer_brush(&Paint::Solid(section_pill_ink()), vars, opacity),
