@@ -34,6 +34,7 @@ every "in this tree" cell is the source that implements it.
 | **Rectangle** (R) / **Ellipse** (O) | drag creates; ⇧ square/circle; ⌥ from the centre; the size is shown while dragging; **drawn over a frame it joins that frame**; space while dragging prevents nesting | `Tool::Rect` / `Tool::Ellipse`; all four rules now, via `state::create_rect` + `container_under` + `space_pan` |
 | **Line** (L) / **Arrow** (⇧L) | drag in any direction; stroke settings in the right panel | `Tool::Pen` + line nodes; no arrow caps yet |
 | **Pen** (P) | click to place points, drag for curves, click the first point to close, Esc leaves it open; draws INSIDE a frame | `Tool::Pen` (click = anchor, drag = handle, close on the anchor); nests by the same rule now |
+| **Pencil** (⇧P) | freehand: click and drag to sketch, smoothed as you go, with "a round 3px stroke weight"; the tool STAYS active until another tool or Esc | `Tool::Pencil` samples the pointer, `x_core::freehand_path` fits the samples into editable curves, and one stroke is one undo step |
 | **Pencil / Brush** | freehand drawing, and the strokes can be smoothed into a vector network | not built (listed below) |
 | **Text** (T) | drag makes a fixed-size text box, click makes one that grows with the text; double-click a text layer to edit in place | `Tool::Text` (drag = box, click = auto width); in-place editing with caret, selection and wrapping |
 | **Hand** (H) / space | pan; space held anywhere gives the hand cursor | `Tool::Hand`, `space_pan`, `Drag::Pan` |
@@ -41,11 +42,12 @@ every "in this tree" cell is the source that implements it.
 | **Zoom** | ⌘/Ctrl + wheel, ⌘0 / ⌘1 / ⌘2, or the zoom menu | wheel zoom at the pointer, `Action::ZoomMenu` (in / out / 100% / selection / fit) |
 | **Nudge** | arrow keys move 1px, ⇧ 10px | arrow-key nudge with ⇧ big-nudge |
 
-Four rows changed since this table was written (see §4): a new layer joins the
+Five rows changed since this table was written (see §4): a new layer joins the
 container you draw it in, the shape tools' modifiers (⇧ constrain, ⌥ from the centre,
 live size readout), the two tools that were engine-only — the Scale tool (K) and Frame
-selection (⌥⌘G), which now have a tool, a palette entry and a shortcut — and the Slice
-tool (S), which had a node kind and an export path but no way to draw one.
+selection (⌥⌘G), which now have a tool, a palette entry and a shortcut — the Slice tool
+(S), which had a node kind and an export path but no way to draw one, and the Pencil
+(⇧P), whose freehand fit had been sitting in the engine under a "(pencil tool)" note.
 
 ## 1. The file interface, element by element
 
@@ -137,6 +139,15 @@ tool (S), which had a node kind and an export path but no way to draw one.
   own bounds (and a slice with nothing under it still exports its size), while a selection that
   mixes a slice with other layers is refused with a reason — this build writes one file per
   export, so it must not silently drop half the selection.
+* **The Pencil (⇧P) draws freehand.** Figma's own page for it is short and exact: the
+  toolbar's creation-tools menu (⇧P), "Click and drag on the canvas to sketch", "a round
+  3px stroke weight ... unless you're sketching on a dark canvas or frame", and "the
+  pencil tool stays active until you select another tool or press Esc" — all three are
+  what the tool does here, with the ink flipped to the light one because this canvas is
+  dark. `x_core::freehand_path` is the second half of the engine's `simplify_polyline`
+  (which has said "(pencil tool)" since the vector pass, with no caller); the stroke it
+  produces is a normal `NodeKind::Vector`, so the existing vector edit mode edits it
+  point by point.
 * **A slice answers canvas clicks like any other layer** — the engine's hit test was left
   alone; the dashed outline and the name chip are how you find one. (Our rule, not Figma's:
   their slices are reached through the Layers panel and their edge.)
@@ -148,9 +159,9 @@ tool (S), which had a node kind and an export path but no way to draw one.
 
 Ordered by how visible they are, not by how hard they are:
 
-1. **Pencil / Brush tool** — freehand (and Figma's "smooth" pass that turns a freehand
-   stroke into a vector network). `Tool::Eraser` and `Tool::Symmetry` exist; freehand
-   does not.
+1. **Brush** — the textured brush Figma Draw puts beside the Pencil. The Pencil itself
+   is built (⇧P → `Tool::Pencil`, smoothed into editable curves), so what is missing is
+   the brush's texture and colour styles, not the freehand stroke.
 2. **Line / Arrow tools** (L / ⇧L) — a one-drag line or arrow. Stroke caps exist
    (`Stroke cap: round / square / butt / arrow`), but the tools themselves do not.
 3. **The Scale panel's numbers, and the scale tool's body drag** — Figma's help says

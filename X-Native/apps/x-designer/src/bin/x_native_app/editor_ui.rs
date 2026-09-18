@@ -6409,17 +6409,18 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             Tool::Rect,
             Tool::Ellipse,
             Tool::Pen,
+            Tool::Pencil,
             Tool::Eraser,
             Tool::Symmetry,
             Tool::Comment,
             Tool::Hand,
         ]
     };
-    // Audited (canvas 280..1100 @900): container 487×40 r12 at bottom-5
+    // Audited (canvas 280..1100 @900): container 523×40 r12 at bottom-5
     // (y = win_h − 60); icons 32px pitch 36 starting +7; divider mid-gap
-    // after twelve tools (Scale and the Slice tool joined the row); palette
-    // btn at +448 from container left.
-    let bar_w = 487.0;
+    // after thirteen tools (Scale, the Slice tool and the Pencil joined the
+    // row); palette btn at +484 from container left.
+    let bar_w = 523.0;
     let bar_x0 = reg.canvas.x0 + (reg.canvas.x1 - reg.canvas.x0 - bar_w) / 2.0;
     let bar_y0 = app.win_h - TOOLBAR_BOTTOM - TOOLBAR_H;
     let bar = Rect::new(bar_x0, bar_y0, bar_x0 + bar_w, bar_y0 + TOOLBAR_H);
@@ -6458,15 +6459,15 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         tip(app, r, &tl);
         hit.push((r, Action::Tool(*t)));
     }
-    // divider between hand (ends +435) and palette (+448)
-    let dx = bar.x0 + 443.5;
+    // divider between hand (ends +471) and palette (+484)
+    let dx = bar.x0 + 479.5;
     fill_rect(
         s,
         Rect::new(dx, bar.y0 + 10.0, dx + 1.0, bar.y1 - 10.0),
         C_LINE_2,
     );
     // search → palette
-    let sx = bar.x0 + 448.0;
+    let sx = bar.x0 + 484.0;
     let sr = Rect::new(sx, bar.y0 + 4.0, sx + TOOL_ICON, bar.y0 + 4.0 + TOOL_ICON);
     if hover(app, sr) {
         fill_rrect(s, sr, R_TOOL_ICON, C_FIELD_2);
@@ -6870,6 +6871,21 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
         }
     }
 
+    // pencil preview: the stroke is the ink, so it is drawn in the ink — the
+    // same colour and the same weight `finish_pencil` commits, scaled by zoom
+    if let Some(crate::state::Drag::Pencil { points }) = &app.drag {
+        let w = (crate::state::PENCIL_WEIGHT * app.zoom).clamp(1.0, 48.0);
+        let ink = crate::state::pencil_ink();
+        let mut prev: Option<Point> = None;
+        for p in points {
+            let sp = app.world_to_screen(*p);
+            if let Some(q) = prev {
+                line(s, q.x, q.y, sp.x, sp.y, ink, w);
+            }
+            prev = Some(sp);
+        }
+    }
+
     // First-run empty state (P0-10): an empty canvas says nothing, so the
     // canvas says it. The hint is pure paint — it leaves the moment the
     // first frame lands, no flag to clear, no button to dismiss.
@@ -7195,6 +7211,10 @@ pub fn palette_commands() -> Vec<Command> {
         Command {
             label: "Pen tool",
             shortcut: "P",
+        },
+        Command {
+            label: "Pencil tool",
+            shortcut: "⇧P",
         },
         Command {
             label: "Hand tool",

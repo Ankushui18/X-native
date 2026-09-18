@@ -41,6 +41,10 @@ pub enum Tool {
     /// draws nothing itself — exporting it captures the flattened canvas
     /// content inside its bounds.
     Slice,
+    /// Figma's Pencil (⇧P): a freehand stroke, smoothed into an editable
+    /// vector path, and a tool that "stays active until you select another
+    /// tool or press Esc".
+    Pencil,
     /// Symmetry Mirror - mirror drawing across axis
     Symmetry,
     /// Board-specific tools
@@ -61,6 +65,7 @@ impl Tool {
             Tool::Rect => "square",
             Tool::Ellipse => "circle",
             Tool::Pen => "pen-tool",
+            Tool::Pencil => "pencil",
             Tool::Hand => "hand",
             Tool::Zoom => "zoom-in",
             Tool::Comment => "message-circle",
@@ -92,6 +97,7 @@ impl Tool {
             Tool::Rect => "Rectangle",
             Tool::Ellipse => "Ellipse",
             Tool::Pen => "Pen",
+            Tool::Pencil => "Pencil",
             Tool::Hand => "Hand",
             Tool::Zoom => "Zoom",
             Tool::Comment => "Comment",
@@ -116,6 +122,7 @@ impl Tool {
             ("t", false),
             ("r", false),
             ("o", false),
+            ("p", true),
             ("p", false),
             ("h", false),
             ("c", false),
@@ -155,6 +162,10 @@ impl Tool {
             ("t", _) => Some(Tool::Text),
             ("r", _) => Some(Tool::Rect),
             ("o", _) => Some(Tool::Ellipse),
+            // Figma's Pencil shares P with the Pen (⇧P, the creation-tools
+            // menu) and, like the Scale and Slice tools, it is design-only:
+            // a board draws freehand with its own pen.
+            ("p", true) if !board => Some(Tool::Pencil),
             ("p", _) => Some(Tool::Pen),
             ("h", _) => Some(Tool::Hand),
             _ => None,
@@ -170,6 +181,22 @@ impl Tool {
 /// * ⌥ / Alt draws FROM THE CENTRE (Figma's shape tools), so the point the
 ///   drag started on is the centre, not a corner;
 /// * either way the rect is normalised, so dragging up/left is the same drag.
+/// The Pencil's ink. Figma: "the pencil tool sketches with a round 3px stroke
+/// weight in black, unless you're sketching on a dark canvas or frame" — this
+/// canvas is dark and every other shape tool in it draws with the light ink, so
+/// a sketch does too. ONE source for the live preview and the node that lands,
+/// so the two cannot drift.
+pub fn pencil_ink() -> x_native::Color {
+    x_native::Color::from_rgb8(0xFF, 0xFF, 0xFF)
+}
+
+/// A new sketch's stroke weight (Figma's default).
+pub const PENCIL_WEIGHT: f64 = 3.0;
+
+/// Freehand simplification, in world units. A hand's wobble is smaller than
+/// this, and the engine's fit turns the rest into editable curves.
+pub const PENCIL_SMOOTHING: f64 = 1.5;
+
 pub fn create_rect(start: Point, cur: Point, from_center: bool) -> Rect {
     let (dx, dy) = (cur.x - start.x, cur.y - start.y);
     if from_center {
@@ -1430,6 +1457,12 @@ pub enum Drag {
     BoardPan {
         start: Point,
         start_pan: (f64, f64),
+    },
+    /// Pencil: the freehand stroke in progress. Points are world space; the
+    /// layer it joins is decided on release by the same draw-it-in rule every
+    /// other creation tool follows.
+    Pencil {
+        points: Vec<Point>,
     },
     /// Board: Pen tool freehand drawing.
     BoardPen {
@@ -4808,6 +4841,7 @@ mod tool_shortcut_tests {
         assert_eq!(d("r", false), Some(Tool::Rect));
         assert_eq!(d("o", false), Some(Tool::Ellipse));
         assert_eq!(d("p", false), Some(Tool::Pen));
+        assert_eq!(d("p", true), Some(Tool::Pencil));
         assert_eq!(d("k", false), Some(Tool::Scale));
         assert_eq!(d("s", false), Some(Tool::Slice));
         assert_eq!(d("h", false), Some(Tool::Hand));
@@ -5008,6 +5042,7 @@ mod tool_shortcut_tests {
     fn tool_labels_and_hints_follow_mode() {
         assert_eq!(Tool::Select.label(), "Move");
         assert_eq!(Tool::Eraser.label(), "Vector eraser");
+        assert_eq!(Tool::Pencil.label(), "Pencil");
         assert_eq!(Tool::Select.shortcut_hint(false), "V");
         assert_eq!(Tool::Eraser.shortcut_hint(false), "⇧E");
         assert_eq!(Tool::Symmetry.shortcut_hint(true), "");

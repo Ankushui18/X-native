@@ -93,6 +93,30 @@ pub fn simplify_polyline(pts: &[(f64, f64)], eps: f64) -> Vec<(f64, f64)> {
     }
 }
 
+/// Freehand path fitting (pencil tool): the sampled stroke is simplified with
+/// [`simplify_polyline`] and every surviving point becomes a smooth cubic
+/// through its neighbours — a Catmull-Rom pass with the classic 1/6
+/// control-point offsets, so the wobble a hand produces comes out as curves the
+/// vector editor can still edit point by point. Points are node-local; the
+/// caller owns the origin. Fewer than two points is not a path.
+pub fn freehand_path(pts: &[(f64, f64)], eps: f64) -> Vec<PathCmd> {
+    let simple = simplify_polyline(pts, eps);
+    if simple.len() < 2 {
+        return Vec::new();
+    }
+    let mut path = vec![PathCmd::MoveTo(simple[0].0, simple[0].1)];
+    for i in 0..simple.len() - 1 {
+        let p0 = simple[i.saturating_sub(1)];
+        let p1 = simple[i];
+        let p2 = simple[i + 1];
+        let p3 = simple[(i + 2).min(simple.len() - 1)];
+        let c1 = (p1.0 + (p2.0 - p0.0) / 6.0, p1.1 + (p2.1 - p0.1) / 6.0);
+        let c2 = (p2.0 - (p3.0 - p1.0) / 6.0, p2.1 - (p3.1 - p1.1) / 6.0);
+        path.push(PathCmd::CurveTo(c1.0, c1.1, c2.0, c2.1, p2.0, p2.1));
+    }
+    path
+}
+
 pub fn path_to_bez(cmds: &[PathCmd]) -> kurbo::BezPath {
     let mut p = kurbo::BezPath::new();
     for c in cmds {
@@ -1624,6 +1648,51 @@ mod simplify_tests {
         assert_eq!(simplify_polyline(&[(1.0, 1.0)], 1.0), vec![(1.0, 1.0)]);
         let pts = vec![(0.0, 0.0), (1.0, 0.1), (2.0, 0.0)];
         assert_eq!(simplify_polyline(&pts, 0.0), pts, "eps 0 keeps everything");
+    }
+}
+
+#[cfg(test)]
+mod freehand_tests {
+    use super::*;
+
+    #[test]
+    fn samples_become_smooth_cubics() {
+        // a straight drag: one cubic per surviving segment, and a flat line
+        // stays flat because the control points stay on it
+        let path = freehand_path(&[(0.0, 0.0), (5.0, 0.0), (10.0, 0.0)], 0.1);
+        assert_eq!(path.len(), 3, "MoveTo plus one curve per segment");
+        let first = match path[0] {
+            PathCmd::MoveTo(x, y) => (x, y),
+            _ => panic!("a path starts with a MoveTo"),
+        };
+        assert_eq!(first, (0.0, 0.0));
+        let curve = match path[1] {
+            PathCmd::CurveTo(c1x, c1y, c2x, c2y, x, y) => (c1x, c1y, c2x, c2y, x, y),
+            _ => panic!("the fit must emit curves, not lines"),
+        };
+        assert_eq!(curve, (0.0, 0.0, 10.0, 0.0, 5.0, 0.0));
+    }
+
+    #[test]
+    fn the_wobble_a_bigger_eps_cannot_see_is_dropped() {
+        // one stray sample a fifth of a unit off the line, then a real corner
+        let pts = [(0.0, 0.0), (5.0, 0.2), (10.0, 0.0), (10.0, 10.0)];
+        let tight = freehand_path(&pts, 0.05);
+        let loose = freehand_path(&pts, 1.0);
+        assert!(tight.len() > loose.len(), "a bigger eps keeps fewer nodes");
+        assert_eq!(loose.len(), 3, "three surviving points = two curves");
+        let last = match loose[2] {
+            PathCmd::CurveTo(_, _, _, _, x, y) => (x, y),
+            _ => panic!("the fit must emit curves, not lines"),
+        };
+        assert_eq!(last, (10.0, 10.0), "the corner itself is kept");
+    }
+
+    #[test]
+    fn two_points_are_a_path_and_fewer_are_not() {
+        assert!(freehand_path(&[], 1.0).is_empty());
+        assert!(freehand_path(&[(3.0, 4.0)], 1.0).is_empty());
+        assert_eq!(freehand_path(&[(0.0, 0.0), (1.0, 1.0)], 1.0).len(), 2);
     }
 }
 

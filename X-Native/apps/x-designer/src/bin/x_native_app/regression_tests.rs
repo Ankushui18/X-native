@@ -1693,6 +1693,93 @@ fn frame_selection_refuses_an_empty_selection_and_grouping_still_groups() {
 /// The slice is a leaf that draws nothing itself — the editor marks it with a
 /// dashed outline and its name, and exporting it captures what overlaps it
 /// (that half is pinned in `crates/x-native/tests/slice_export.rs`).
+/// ⇧P is the Pencil: a freehand stroke lands as ONE smoothed vector layer,
+/// stroked with the tool's round 3px ink, in the container the stroke started
+/// in — and the pencil STAYS the active tool, which is the one thing Figma's
+/// own page is explicit about.
+#[test]
+fn the_pencil_draws_a_smoothed_stroke() {
+    let mut h = host();
+    assert_eq!(Tool::from_shortcut("p", true, false), Some(Tool::Pencil));
+    assert_eq!(Tool::from_shortcut("p", false, false), Some(Tool::Pen));
+    assert_eq!(Tool::Pencil.shortcut_hint(false), "⇧P");
+    assert!(crate::editor_ui::palette_commands()
+        .iter()
+        .any(|c| c.label == "Pencil tool"));
+
+    // one stroke: press, three moves, release — all inside the canvas
+    let reg = h.app.editor_regions();
+    let (cx, cy) = (
+        (reg.canvas.x0 + reg.canvas.x1) / 2.0,
+        (reg.canvas.y0 + reg.canvas.y1) / 2.0,
+    );
+    let depth0 = h.app.doc_ref().editor_ref().undo_depth();
+    h.app.tool = Tool::Pencil;
+    h.on_press(Point::new(cx, cy));
+    h.on_move(Point::new(cx + 40.0, cy + 14.0));
+    h.on_move(Point::new(cx + 74.0, cy - 22.0));
+    h.on_move(Point::new(cx + 104.0, cy + 6.0));
+    h.on_release();
+
+    let sel = h.app.doc_ref().editor_ref().selection.clone();
+    assert_eq!(sel.len(), 1, "the stroke is the selection");
+    let root = &h.app.doc_ref().editor_ref().root;
+    let id = sel[0].clone();
+    let v = find_node_clone(root, &id).expect("the stroke landed");
+    assert!(matches!(v.kind, NodeKind::Vector { .. }), "a vector landed");
+    assert!(v.name.starts_with("Pencil "), "named in the layers panel");
+    let path = match &v.kind {
+        NodeKind::Vector { path } => path,
+        _ => unreachable!(),
+    };
+    assert!(path.len() >= 3, "a stroke is a path, not a point");
+    assert!(
+        path.iter().any(|c| matches!(c, PathCmd::CurveTo(..))),
+        "the samples are smoothed into curves"
+    );
+    assert_eq!(v.stroke.width, crate::state::PENCIL_WEIGHT);
+    let filled = matches!(&v.fill, Paint::Solid(c) if c.components[3] > 0.0);
+    assert!(!filled, "a sketch is a line, not a blob");
+    let cap = v
+        .stroke_layers
+        .first()
+        .map(|l| (l.options.cap_start, l.options.cap_end));
+    assert_eq!(
+        cap,
+        Some((x_native::StrokeCap::Round, x_native::StrokeCap::Round))
+    );
+    assert_eq!(h.app.tool, Tool::Pencil, "the pencil stays active");
+
+    // one stroke is ONE undo step, and undoing it takes the whole path away
+    assert_eq!(
+        h.app.doc_ref().editor_ref().undo_depth(),
+        depth0 + 1,
+        "the whole stroke is one entry"
+    );
+    h.app.doc().editor().undo();
+    let root = &h.app.doc_ref().editor_ref().root;
+    assert!(find_node_clone(root, &sel[0]).is_none(), "one undo removes it");
+
+    // the draw-it-in rule holds for the pencil too: a stroke STARTED inside
+    // frame-1 (world 0,60 375x420) joins the frame
+    let w = |x: f64, y: f64| h.app.world_to_screen(Point::new(x, y));
+    h.on_press(w(100.0, 200.0));
+    h.on_move(w(150.0, 230.0));
+    h.on_move(w(200.0, 210.0));
+    h.on_release();
+    let sel = h.app.doc_ref().editor_ref().selection.clone();
+    let root = &h.app.doc_ref().editor_ref().root;
+    let f1 = find_node_clone(root, "frame-1").expect("frame-1");
+    assert!(
+        find_node_clone(f1, &sel[0]).is_some(),
+        "the stroke joined the frame it was drawn in"
+    );
+
+    // Esc leaves the pencil (Figma: "until you select another tool or Esc")
+    h.on_key(Key::Named(NamedKey::Escape), None);
+    assert_eq!(h.app.tool, Tool::Select, "Esc leaves the Pencil");
+}
+
 #[test]
 fn the_slice_tool_draws_an_export_region() {
     let mut h = host();

@@ -5,6 +5,28 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-18 (The Pencil tool)
+
+Figma's **Pencil (⇧P)** is a freehand stroke that lands as an editable vector path. The
+engine had the first half of it — `simplify_polyline`, whose doc comment has said
+"(pencil tool)" since the vector pass — with no caller, and the canvas had no freehand
+tool at all.
+
+### Added
+- **`Tool::Pencil` (⇧P)** — design-only (a board keeps freehand on its own pen), the
+  thirteenth tool in the dock, a palette row, and a tool that stays active between
+  strokes the way Figma's does, leaving only for another tool or `Esc`.
+- **`x_core::freehand_path(points, eps)`** — the tested half of the fit: the samples are
+  simplified with `simplify_polyline` and each surviving point becomes a smooth cubic
+  through its neighbours (a Catmull-Rom pass with 1/6 control offsets), so a sketch is
+  curves the vector editor can edit point by point rather than a chain of segments.
+- **The stroke is a normal vector layer**: `NodeKind::Vector`, named for the layers
+  panel, selected when it lands, drawn inside the frame it was drawn in (the same
+  draw-it-in rule as every other creation tool, Space included), and one insert = one
+  undo step. Its stroke is Figma's default — a round 3px ink — materialized as an
+  ordered stroke layer, so the inspector shows the stroke the sketch actually has
+  (`the_pencil_draws_a_smoothed_stroke`, plus three engine tests for the fit).
+
 ## [Unreleased] — 2026-09-18 (The Slice tool)
 
 Figma's **Slice tool (S)** had an engine behind it and no door: `NodeKind::Slice`,
