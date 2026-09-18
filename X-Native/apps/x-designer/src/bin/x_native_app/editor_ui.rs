@@ -9257,7 +9257,8 @@ fn paint_prototype(
             };
             if let Some(name) = dest {
                 let arrow = Rect::new(x0 + 100.0, action_y, x0 + 114.0, action_y + 20.0);
-                app.fonts.text(arrow.x0, action_y + 2.0, "→", T10, C_MUTED, Wt::Reg);
+                app.fonts
+                    .text(arrow.x0, action_y + 2.0, "→", T10, C_MUTED, Wt::Reg);
                 let db = Rect::new(arrow.x1, action_y, xr - 5.0, action_y + 20.0);
                 input_box(app, s, db, 4.0);
                 let target_text = app.fonts.truncate(name, T10, Wt::Reg, db.width() - 8.0);
@@ -9282,7 +9283,9 @@ fn paint_prototype(
             let mb = Rect::new(x0 + 5.0, motion_y, x0 + 95.0, motion_y + 20.0);
             input_box(app, s, mb, 4.0);
             let animation = ix.animation.label();
-            let animation = app.fonts.truncate(animation, T10, Wt::Reg, mb.width() - 8.0);
+            let animation = app
+                .fonts
+                .truncate(animation, T10, Wt::Reg, mb.width() - 8.0);
             app.fonts.text(
                 s,
                 mb.x0 + 4.0,
