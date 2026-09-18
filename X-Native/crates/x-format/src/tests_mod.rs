@@ -52,15 +52,6 @@ mod tests {
         assert!(old.comments.iter().all(|c| c.parent.is_none()));
     }
 
-    /// Frames and sections draw their own name as a canvas label (the QA-004
-    /// block in scene.rs), and every glyph of that label counts as one path in
-    /// the scene stats. The names used in these tests are ASCII, so one glyph
-    /// per character — spell the label out instead of hardcoding the sum, so a
-    /// renamed fixture shows up as a label change, not as a mystery off-by-N.
-    fn label_paths(name: &str) -> usize {
-        name.chars().count()
-    }
-
     fn sample_doc() -> Document {
         let mut doc = Document::new();
         doc.variables
@@ -886,9 +877,11 @@ mod tests {
         assert_eq!(count_kind(&re, &|k| matches!(k, NodeKind::Rect { .. })), 1);
         assert_eq!(count_kind(&re, &|k| matches!(k, NodeKind::Ellipse)), 1);
         let (_, s) = x_render::build_scene(&re, None, &Variables::default());
-        // rect + ellipse, plus the imported root frame's own name label: the
-        // importer names the root after its id ("svg-root")
-        assert_eq!(s.paths, 2 + label_paths("svg-root"));
+        // rect + ellipse — and nothing for the imported root frame: the
+        // importer names the root after its id ("svg-root"), and the root of
+        // a render is never a labelled object (a page name must not be
+        // painted across the artboard)
+        assert_eq!(s.paths, 2);
     }
 
     #[test]

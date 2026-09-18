@@ -53,6 +53,7 @@ pub fn build_scene_full(
         &registry,
         &empty,
         0,
+        false,
         &ctx,
     );
     (scene, stats)
@@ -285,6 +286,10 @@ fn encode(
     registry: &ComponentRegistry,
     overrides: &HashMap<String, String>,
     depth: u32,
+    /// Mirrors `ir::lower`'s flag: true when a FRAME already encloses this
+    /// node in this render, so the direct encoder draws the same labels the
+    /// IR path draws (Figma names a page's outermost frames only).
+    in_frame: bool,
     ctx: &EncodeCtx,
 ) {
     stats.nodes += 1;
@@ -677,6 +682,8 @@ fn encode(
                             registry,
                             &node.overrides,
                             depth + 1,
+                            // a master's internal frames are never named
+                            true,
                             ctx,
                         );
                     }
@@ -713,36 +720,46 @@ fn encode(
                 frame_clip_shape = Some(shape);
             }
 
-            // QA-004 FIX: Render frame name label (same as Section nodes)
-            // This ensures frame names appear on the canvas like in Figma
-            let name = if node.name.is_empty() {
-                "Frame"
-            } else {
-                node.name.as_str()
-            };
-            let label_color =
-                Color::from_rgba8(0x4b, 0x55, 0x63, 0xff).multiply_alpha(node.opacity.min(0.7));
-            let t = world * Affine::translate((14.0, 20.0));
-            let drew = if let Some(fm) = ctx.fonts {
-                if let Some(font) = fm.default_font() {
-                    stats.paths += fm.encode_text_block(
-                        scene,
-                        name,
-                        t,
-                        font,
-                        14.0,
-                        Some((node.w - 20.0).max(8.0)),
-                        label_color,
-                    );
-                    true
+            // QA-004: a frame's name is drawn like a section's — in the
+            // gutter ABOVE the frame's top-left corner, never inside the
+            // frame's own content, and never for
+            //   * the root of the render (on the canvas the root is the page,
+            //     whose name belongs in the pages list; it used to print
+            //     across an empty artboard and stay there after everything on
+            //     the page was deleted), or
+            //   * a frame nested inside another frame (Figma names a page's
+            //     outermost frames only — `in_frame`).
+            if depth > 0 && !in_frame {
+                let name = if node.name.is_empty() {
+                    "Frame"
+                } else {
+                    node.name.as_str()
+                };
+                let label_color =
+                    Color::from_rgba8(0x4b, 0x55, 0x63, 0xff).multiply_alpha(node.opacity.min(0.7));
+                let t = world * Affine::translate((0.0, crate::ir::LABEL_ABOVE_Y));
+                let drew = if let Some(fm) = ctx.fonts {
+                    if let Some(font) = fm.default_font() {
+                        stats.paths += fm.encode_text_block(
+                            scene,
+                            name,
+                            t,
+                            font,
+                            crate::ir::LABEL_SIZE,
+                            Some((node.w - 20.0).max(8.0)),
+                            label_color,
+                        );
+                        true
+                    } else {
+                        false
+                    }
                 } else {
                     false
+                };
+                if !drew {
+                    stats.paths +=
+                        x_text::encode_text(scene, name, t, crate::ir::LABEL_SIZE, label_color);
                 }
-            } else {
-                false
-            };
-            if !drew {
-                stats.paths += x_text::encode_text(scene, name, t, 16.0, label_color);
             }
         }
         NodeKind::Section => {
@@ -771,35 +788,43 @@ fn encode(
                 );
                 stats.paths += 1;
             }
-            // header label: node name, 18px, padded top-left
-            let name = if node.name.is_empty() {
-                "Section"
-            } else {
-                node.name.as_str()
-            };
-            let label_color =
-                Color::from_rgba8(0x4b, 0x55, 0x63, 0xff).multiply_alpha(node.opacity);
-            let t = world * Affine::translate((14.0, 10.0));
-            let drew = if let Some(fm) = ctx.fonts {
-                if let Some(font) = fm.default_font() {
-                    stats.paths += fm.encode_text_block(
-                        scene,
-                        name,
-                        t,
-                        font,
-                        18.0,
-                        Some((node.w - 20.0).max(8.0)),
-                        label_color,
-                    );
-                    true
+            // header label: node name in the gutter ABOVE the section's
+            // top-left corner — a name is canvas chrome, so it never sits on
+            // the content it names (matches ir.rs). A section is labelled
+            // wherever it appears, unlike a frame (Figma: "in sections, frame
+            // name is always visible"); only the root of the render is silent,
+            // because on the canvas the root is the page itself.
+            if depth > 0 {
+                let name = if node.name.is_empty() {
+                    "Section"
+                } else {
+                    node.name.as_str()
+                };
+                let label_color =
+                    Color::from_rgba8(0x4b, 0x55, 0x63, 0xff).multiply_alpha(node.opacity);
+                let t = world * Affine::translate((0.0, crate::ir::LABEL_ABOVE_Y));
+                let drew = if let Some(fm) = ctx.fonts {
+                    if let Some(font) = fm.default_font() {
+                        stats.paths += fm.encode_text_block(
+                            scene,
+                            name,
+                            t,
+                            font,
+                            crate::ir::LABEL_SIZE,
+                            Some((node.w - 20.0).max(8.0)),
+                            label_color,
+                        );
+                        true
+                    } else {
+                        false
+                    }
                 } else {
                     false
+                };
+                if !drew {
+                    stats.paths +=
+                        x_text::encode_text(scene, name, t, crate::ir::LABEL_SIZE, label_color);
                 }
-            } else {
-                false
-            };
-            if !drew {
-                stats.paths += x_text::encode_text(scene, name, t, 20.0, label_color);
             }
         }
         NodeKind::Group | NodeKind::Component { .. } | NodeKind::Slice => {}
@@ -823,9 +848,29 @@ fn encode(
         let z_b = b.z_index.unwrap_or(0);
         z_a.cmp(&z_b).then(i_a.cmp(i_b)) // stable sort: equal z_index preserves document order
     });
+    // same nesting rule as `ir::lower`: a frame's children count as "inside a
+    // frame" unless this frame IS the render root (the page), and a Section
+    // resets the flag so frames sitting in a section keep their names
+    let child_in_frame = if matches!(node.kind, NodeKind::Frame { .. }) {
+        depth > 0
+    } else if matches!(node.kind, NodeKind::Section) {
+        false
+    } else {
+        in_frame
+    };
     for (_, child) in indexed_children {
         encode(
-            scene, child, world, viewport, vars, stats, registry, overrides, depth, ctx,
+            scene,
+            child,
+            world,
+            viewport,
+            vars,
+            stats,
+            registry,
+            overrides,
+            depth,
+            child_in_frame,
+            ctx,
         );
     }
     if frame_clip_shape.is_some() {

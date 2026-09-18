@@ -3507,7 +3507,37 @@ impl Host {
         });
     }
 
+    /// A press on a Layers-panel row: select it, and arm the reorder drag that
+    /// a >4px move turns into a real reorder (P12). Shared by the row's own hit
+    /// zone and the name zone inside it, so dragging a layer by its NAME works
+    /// exactly like dragging it by the rest of the row.
+    fn tree_row_press(&mut self, id: String, p: Point) {
+        let doc = self.app.doc();
+        doc.editor().selection = vec![id.clone()];
+        self.app.drag = Some(Drag::TreeRow {
+            id,
+            start: p,
+            active: false,
+            over: None,
+        });
+    }
+
     fn on_press(&mut self, p: Point) {
+        // A double-click must not undo the press it repeats. Chrome presses on
+        // a toggle row FLIP state — the fill row's colour swatch opens the
+        // picker (`ToggleColorPicker`), the library button opens the variable
+        // /style list (`PaintLibToggle`), a component prop ticks on and off —
+        // and the second press used to reach the popover the first one had
+        // just opened, hit the "click away closes it" rule, and shut it again.
+        // That flash is what "double-clicking does not select the colours and
+        // the boxes/components we created" looks like; a genuine single click
+        // (or two clicks more than 350 ms apart) still toggles.
+        if self.app.last_chrome.map(|(_, _, t)| t).unwrap_or(false)
+            && self.app.is_repeat_chrome_click(p)
+        {
+            self.app.last_chrome = None;
+            return;
+        }
         if self.app.document_loading.is_some() {
             if let Some(action) = crate::loading::hit_action(&self.app, p) {
                 self.loading_action(action);
@@ -3686,16 +3716,7 @@ impl Host {
             if r.contains(p) {
                 let a = a.clone();
                 if let Action::TreeRow(id) = &a {
-                    // P12: select on press; a >4px move starts the
-                    // reorder drag, a plain click just selects
-                    let doc = self.app.doc();
-                    doc.editor().selection = vec![id.clone()];
-                    self.app.drag = Some(Drag::TreeRow {
-                        id: id.clone(),
-                        start: p,
-                        active: false,
-                        over: None,
-                    });
+                    self.tree_row_press(id.clone(), p);
                     return;
                 }
                 if matches!(a, Action::Field(FieldId::InstanceProp)) {
@@ -3726,6 +3747,44 @@ impl Host {
                         .find(|(r2, _)| r2.contains(p))
                         .map(|(_, n)| n.clone());
                 }
+                // Figma semantics for panel chrome: a row in the inspector,
+                // the rail or a popover is a SINGLE-click affordance, and the
+                // second press of a double-click must never undo the first.
+                // Toggle-class rows used to dispatch twice — a colour popover
+                // opened and closed, a component prop ticked and unticked —
+                // which is what "double-clicking does not select the colours
+                // and the boxes/components we created" looks like. (Those
+                // repeats are swallowed at the top of `on_press`.) What is left
+                // here are the two Figma DOUBLE-CLICK affordances: a page name
+                // in the Pages list and a layer name in the Layers panel.
+                let dbl = self.app.is_repeat_chrome_click(p);
+                if let Action::LayerRename(id) = &a {
+                    if dbl && !self.app.shift {
+                        if !self.finish_edits() {
+                            return;
+                        }
+                        self.app.begin_layer_rename(id.clone());
+                        self.app.last_chrome = None;
+                        return;
+                    }
+                    // a single press behaves exactly like the rest of the row
+                    self.tree_row_press(id.clone(), p);
+                    self.app.last_chrome = Some((std::time::Instant::now(), p, false));
+                    return;
+                }
+                if let Action::SelectPage(i) = a {
+                    if dbl && !self.app.shift {
+                        // same preconditions SelectPage itself has: a pending
+                        // field edit commits before the page under it changes
+                        if !self.finish_edits() {
+                            return;
+                        }
+                        self.app.begin_page_rename(i);
+                        self.app.last_chrome = None;
+                        return;
+                    }
+                }
+                self.app.last_chrome = Some((std::time::Instant::now(), p, a.is_toggle_row()));
                 self.dispatch(a);
                 return;
             }
@@ -4015,7 +4074,8 @@ impl Host {
                     let root = doc.editor_ref().root.clone();
                     x_native::editor::hit_test(&root, world)
                 };
-                // double-click: deep-select into groups / inline-edit text
+                // double-click: drill one level in (or inline-edit text);
+                // ⌘-click is the one-press deep select
                 let dbl = self.app.is_double_click(p);
                 self.app.last_click = Some((std::time::Instant::now(), p));
                 // ⌘-click reaches through groups to the exact nested layer,
@@ -4049,13 +4109,22 @@ impl Host {
                 }
                 if let Some(_id) = hit_id {
                     let shift = self.app.shift;
-                    let deep = dbl || deep_click;
                     // ⌥-drag: duplicate the selection, then drag the copy
                     if self.app.alt {
                         self.app.doc().editor().duplicate_selection((0.0, 0.0));
                         self.app.mark_dirty();
                     }
-                    self.app.doc().editor().click_select(world, shift, deep);
+                    // Double-click DRILLS IN ONE LEVEL (Figma), it does not
+                    // jump to the deepest leaf: from the page's frame you land
+                    // on the group you clicked, and a second double-click
+                    // lands on the shape inside it. `deep_click` (⌘/ctrl) still
+                    // reaches the exact nested layer in one press, which is the
+                    // other half of Figma's selection story.
+                    if dbl && !shift {
+                        self.app.doc().editor().drill_into(world);
+                    } else {
+                        self.app.doc().editor().click_select(world, shift, deep_click);
+                    }
                     self.app.mark_dirty();
                     self.app.drag = Some(Drag::MoveSel {
                         last: world,
@@ -5260,6 +5329,7 @@ impl Host {
             f.id,
             FieldId::DocName
                 | FieldId::PageName
+                | FieldId::LayerName
                 | FieldId::TreeSearch
                 | FieldId::InstanceProp
                 | FieldId::FillHex
@@ -5650,8 +5720,11 @@ impl Host {
                         self.app.context_menu.close();
                         return;
                     }
+                    // Esc CANCELS: the buffer is dropped without committing, so
+                    // the inline-rename target is dropped with it
                     self.app.field = None;
                     self.app.field_select_all = false;
+                    self.app.layer_edit_id = None;
                     return;
                 }
                 (Key::Named(NamedKey::Backspace), _) => {
@@ -9596,10 +9669,20 @@ impl Host {
                 if !self.finish_edits() {
                     return;
                 }
-                if i < self.app.doc_ref().editors.len() {
-                    self.app.doc().page = i;
-                    self.app.page_menu_cmd(crate::state::PageMenuCmd::Delete);
+                // delete the row that was clicked — the old body switched to
+                // the page first (`page = i`) and then deleted "the active
+                // page", so ✕ on a background page stole the selection before
+                // removing anything, and ✕ on the active page was unreachable
+                // because the trash was only painted for inactive rows.
+                if self.app.delete_page(i) {
+                    self.app.status = "Deleted page".into();
                 }
+            }
+            Action::LayerRename(id) => {
+                // the press handler above owns this action (single press =
+                // select, repeat = rename); a dispatched one just selects
+                let doc = self.app.doc();
+                doc.editor().selection = vec![id];
             }
             Action::TreeRow(id) => {
                 let doc = self.app.doc();
@@ -9739,6 +9822,16 @@ impl Host {
                 if f == FieldId::FontFamily {
                     self.app.font_picker_open = !self.app.font_picker_open;
                     self.app.field = None;
+                } else if self.app.field.as_ref().map(|e| e.id) == Some(f) {
+                    // already editing THIS field: keep the buffer. Re-reading
+                    // `field_initial` here discarded what had been typed, so
+                    // the second press of a double-click inside a numeric or
+                    // hex field — the gesture people use to select the whole
+                    // value — wiped the edit instead. Figma selects the text
+                    // and leaves it alone; the caret jump from `text_edit`
+                    // would otherwise fight `field_select_all`.
+                    self.app.field_select_all = true;
+                    self.app.text_edit = None;
                 } else {
                     let buffer = field_initial(&self.app, f);
                     self.app.field_select_all = true;
@@ -11012,6 +11105,11 @@ impl Host {
         };
         self.app.field = None;
         self.app.field_select_all = false;
+        // the tree's name zone paints the edit box only while the field is
+        // open, so the target only lives as long as the field does
+        if f.id != FieldId::LayerName {
+            self.app.layer_edit_id = None;
+        }
         let raw = f.buffer.trim().to_string();
         match f.id {
             FieldId::DocName => {
@@ -11024,6 +11122,20 @@ impl Host {
             }
             FieldId::PageName => {
                 self.app.commit_page_rename(&raw);
+            }
+            FieldId::LayerName => {
+                // Figma: Enter (or clicking away) applies, Esc cancels — the
+                // cancel path clears the field without committing, so an empty
+                // or unchanged name here is simply a no-op.
+                if let Some(id) = self.app.layer_edit_id.take() {
+                    let renamed = {
+                        let doc = self.app.doc();
+                        doc.editor().rename_node(id.as_str(), &raw)
+                    };
+                    if renamed {
+                        self.app.mark_dirty();
+                    }
+                }
             }
             FieldId::TreeSearch => {
                 // search stays open after Enter (Figma): the query lives
@@ -11415,26 +11527,6 @@ impl Host {
     }
 }
 
-/// Soft shadow + `black/10` 28px name watermark for empty top-level
-/// frames — the `bg-white rounded-[8px] shadow-2xl` canvas-frame look
-/// from the v45 HTML with zero children.
-/// Screen-space rects + labels of empty top-level frames (the v45 mock's
-/// `bg-white rounded-[8px] shadow-2xl` hero frame with its watermark label).
-fn frame_watermarks(app: &App, root: &x_native::Node) -> Vec<(vello::kurbo::Rect, String)> {
-    let mut out = Vec::new();
-    for f in &root.children {
-        if matches!(f.kind, NodeKind::Frame { .. }) && f.children.is_empty() {
-            let p0 = app.world_to_screen(Point::new(f.transform.x, f.transform.y));
-            let p1 = app.world_to_screen(Point::new(f.transform.x + f.w, f.transform.y + f.h));
-            let r = vello::kurbo::Rect::new(p0.x, p0.y, p1.x, p1.y);
-            out.push((r, f.name.clone()));
-        }
-    }
-    out
-}
-
-/// Pass 1 — drop shadow BEHIND the document (CSS box-shadow semantics:
-/// the frame's own fill occludes the shadow's interior).
 /// The inline editor paints the live buffer itself — blank the edited
 /// node's own (stale) text in the scene clone so the two never double-print.
 #[cfg(test)]
@@ -11452,31 +11544,6 @@ fn blank_editing_text(root: &mut Node, eid: Option<&str>) {
         }
     }
     walk(root, eid);
-}
-
-fn watermark_shadows(app: &App, inner: &mut Scene, root: &x_native::Node) {
-    for (r, _) in frame_watermarks(app, root) {
-        crate::paint::elev_shadow(inner, r, 8.0, x_native::ui::Elevation::Raised);
-    }
-}
-
-/// Pass 2 — watermark label ON TOP of the document (black/10, 20px bold).
-fn watermark_labels(app: &App, inner: &mut Scene, root: &x_native::Node) {
-    for (r, label) in frame_watermarks(app, root) {
-        let cx = (r.x0 + r.x1) / 2.0;
-        let cy = (r.y0 + r.y1) / 2.0;
-        let w = app.fonts.measure(&label, T20, crate::paint::Wt::Bold);
-        // audit: 20px bold box top = frame_center − 15 (half the 1.5em box)
-        app.fonts.text(
-            inner,
-            cx - w / 2.0,
-            cy - crate::paint::CSS_LH * T20 / 2.0,
-            &label,
-            T20,
-            C_BLACK_10,
-            crate::paint::Wt::Semi,
-        );
-    }
 }
 
 /// A world coordinate expressed in the local space of `target` — the space
@@ -11629,6 +11696,14 @@ fn field_initial(app: &App, f: FieldId) -> String {
     use crate::editor_ui::sel_info;
     let s = sel_info(app);
     match f {
+        FieldId::LayerName => {
+            let d = app.doc_ref();
+            app.layer_edit_id
+                .as_deref()
+                .and_then(|id| crate::editor_ui::find_node(&d.editor_ref().root, id))
+                .map(|n| n.name.clone())
+                .unwrap_or_default()
+        }
         FieldId::TreeSearch => app.doc_ref().tree_search.clone(),
         FieldId::FindQuery => app.find_replace.query.clone(),
         FieldId::FindReplace => app.find_replace.replace.clone(),
@@ -12944,7 +13019,6 @@ fn screenshot_screens() {
                 let (doc_scene, _) =
                     build_scene_full(&root, None, &vars, None, Some(&app.fonts.fonts));
                 let (ox, oy, z) = app.canvas_transform();
-                watermark_shadows(app, &mut inner, &root);
                 inner.push_layer(
                     vello::peniko::Fill::NonZero,
                     vello::peniko::BlendMode::new(
@@ -12956,7 +13030,6 @@ fn screenshot_screens() {
                     &reg.canvas,
                 );
                 inner.append(&doc_scene, Some(Affine::translate((ox, oy)).then_scale(z)));
-                watermark_labels(app, &mut inner, &root);
                 inner.pop_layer();
                 editor_ui::paint_over(app, &mut inner);
             }
@@ -13374,7 +13447,6 @@ fn screenshot_screens_more() {
                 let (doc_scene, _) =
                     build_scene_full(&root, None, &vars, None, Some(&app.fonts.fonts));
                 let (ox, oy, z) = app.canvas_transform();
-                watermark_shadows(app, &mut inner, &root);
                 inner.push_layer(
                     vello::peniko::Fill::NonZero,
                     vello::peniko::BlendMode::new(
@@ -13386,7 +13458,6 @@ fn screenshot_screens_more() {
                     &reg.canvas,
                 );
                 inner.append(&doc_scene, Some(Affine::translate((ox, oy)).then_scale(z)));
-                watermark_labels(app, &mut inner, &root);
                 inner.pop_layer();
                 editor_ui::paint_over(app, &mut inner);
             }
@@ -13603,7 +13674,6 @@ fn screenshot_screens_r7() {
                 let (doc_scene, _) =
                     build_scene_full(&root, None, &vars, None, Some(&app.fonts.fonts));
                 let (ox, oy, z) = app.canvas_transform();
-                watermark_shadows(app, &mut inner, &root);
                 inner.push_layer(
                     vello::peniko::Fill::NonZero,
                     vello::peniko::BlendMode::new(
@@ -13615,7 +13685,6 @@ fn screenshot_screens_r7() {
                     &reg.canvas,
                 );
                 inner.append(&doc_scene, Some(Affine::translate((ox, oy)).then_scale(z)));
-                watermark_labels(app, &mut inner, &root);
                 inner.pop_layer();
                 editor_ui::paint_over(app, &mut inner);
             }
@@ -14704,9 +14773,6 @@ impl App {
                 let canvas = self.view_canvas();
                 if !self.docs.is_empty() {
                     let doc_scene = self.canvas_scene();
-                    if self.demo_mode {
-                        watermark_shadows(self, &mut inner, &self.doc_ref().editor_ref().root);
-                    }
                     inner.push_layer(
                         vello::peniko::Fill::NonZero,
                         vello::peniko::BlendMode::new(
@@ -14718,10 +14784,6 @@ impl App {
                         &canvas,
                     );
                     inner.append(&doc_scene, Some(self.canvas_affine()));
-                    // empty-frame watermark: node name in black/10, 20px bold
-                    if self.demo_mode {
-                        watermark_labels(self, &mut inner, &self.doc_ref().editor_ref().root);
-                    }
                     inner.pop_layer();
                 }
                 editor_ui::paint_over(self, &mut inner);

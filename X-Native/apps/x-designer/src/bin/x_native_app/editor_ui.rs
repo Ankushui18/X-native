@@ -2261,21 +2261,20 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let page_count = app.doc().editors.len();
     let cur_page = app.doc().page;
     let rows = app.pages_rows();
-    // right-click zone = the whole band (paint + input share pages_rows)
-    let (bx0, by0) = (rows[0].1.x0, rows[0].1.y0);
-    let (bx1, by1) = (rows[rows.len() - 1].1.x1, rows[rows.len() - 1].1.y1);
-    app.page_field_rect = Some(Rect::new(bx0, by0, bx1, by1));
-    for (page_i, r) in rows {
-        let overflow = page_i >= page_count; // the "+N more" sentinel row
-        if overflow {
-            if hover(app, r) {
-                fill_rrect(s, r, R_PAGE, C_ROW_HOVER);
-            }
-            let more = format!("+{} more", page_count - 3);
-            app.fonts
-                .text(s, sx + 41.0, line_top(r, T11), &more, T11, C_DIM, Wt::Reg);
-            continue;
+    // Every page is reachable: the window follows the active page (the old
+    // `+N more` sentinel row was not a real page, so pages past the 3rd
+    // could not be selected, renamed or deleted).
+    // right-click zone = the whole band (paint + input share pages_rows). A
+    // document always has at least one page, but a corrupt load must not take
+    // the paint pass down with it.
+    match (rows.first(), rows.last()) {
+        (Some(first), Some(last)) => {
+            app.page_field_rect =
+                Some(Rect::new(first.1.x0, first.1.y0, last.1.x1, last.1.y1));
         }
+        _ => app.page_field_rect = None,
+    }
+    for (page_i, r) in rows {
         let active = page_i == cur_page;
         if active || hover(app, r) {
             fill_rrect(s, r, R_PAGE, if active { C_FIELD_2 } else { C_ROW_HOVER });
@@ -2306,9 +2305,16 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             .get(page_i)
             .map(|p| p.name.clone())
             .unwrap_or_else(|| format!("Page {}", page_i + 1));
+        // Hit order inside the row matters: zones are scanned in REVERSE, so
+        // the row is registered FIRST and the specific zones on top of it —
+        // the ✕/rename below must beat `SelectPage`, never the other way
+        // round. (The trash used to be pushed before the row, which is why
+        // clicking Delete selected the page instead of deleting it — the same
+        // mistake the layer chevron had.)
+        hit.push((r, Action::SelectPage(page_i)));
         // inline rename state (opened from the page menu): the ACTIVE row
-        // shows the buffer; the Field hit zone is pushed BEFORE SelectPage
-        // so clicks still select
+        // shows the buffer, and the field zone sits above the row zone so a
+        // click puts the caret back in the name being renamed
         let field_id = app.field.as_ref().map(|f| f.id);
         if field_id == Some(FieldId::PageName) && active {
             let editing = app.field.as_ref().unwrap().buffer.clone();
@@ -2322,7 +2328,10 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             app.fonts
                 .text(s, sx + 41.0, line_top(r, T11), &shown, T11, shown_color, Wt::Reg);
         }
-        if !active && hover(app, r) && page_count > 1 {
+        // the delete affordance appears on any row (the ACTIVE page is
+        // deletable too — Figma lets you delete the page you are on), but
+        // never when it would leave the document with no page at all
+        if hover(app, r) && page_count > 1 {
             let tr = Rect::new(
                 lw - 30.0,
                 r.y0 + centre_in(16.0, r.height()),
@@ -2340,7 +2349,6 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             tip(app, tr, "Delete page");
             hit.push((tr, Action::DeletePage(page_i)));
         }
-        hit.push((r, Action::SelectPage(page_i)));
     }
 
     // divider + LAYERS header anchored to the measured band bottom (the
@@ -2521,19 +2529,40 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             draw_icon(s, row.icon, ix + 14.0, glyph_top(r, ICON_XS), ICON_XS, C_DIM);
             let nx = ix + 14.0 + 12.0 + 4.0;
             let max_nw = lw - 8.0 - nx - 8.0;
-            let shown = app
-                .fonts
-                .truncate(&row.name, T11, Wt::Reg, max_nw.max(16.0));
+            // Inline rename (Figma: double-click a layer name). The field's
+            // buffer is what the user is typing, so it wins over the node's
+            // stored name; the name zone is registered AFTER the row so the
+            // reverse scan finds it first.
+            let editing = app.field.as_ref().is_some_and(|f| f.id == FieldId::LayerName)
+                && app.layer_edit_id.as_deref() == Some(row.id.as_str());
+            let shown = if editing {
+                app.field.as_ref().unwrap().buffer.clone()
+            } else {
+                app.fonts
+                    .truncate(&row.name, T11, Wt::Reg, max_nw.max(16.0))
+            };
+            if editing {
+                // a real input box, so the edit state is unmistakable
+                let er = Rect::new(nx - 4.0, r.y0 + 1.0, lw - 12.0, r.y1 - 1.0);
+                fill_rrect(s, er, R_SM, C_FIELD);
+                stroke_rrect(s, er, R_SM, C_ACCENT, 1.0);
+            }
             app.fonts.text(
                 s,
                 nx,
                 line_top(r, T11),
                 &shown,
                 T11,
-                if selected { C_TEXT } else { C_ZINC_400 },
+                if selected || editing {
+                    C_TEXT
+                } else {
+                    C_ZINC_400
+                },
                 Wt::Reg,
             );
             hit.push((r, Action::TreeRow(row.id.clone())));
+            let name_zone = Rect::new(nx, r.y0, lw - 12.0, r.y1);
+            hit.push((name_zone, Action::LayerRename(row.id.clone())));
             if let Some(cr) = chevron {
                 hit.push((cr, Action::TreeToggle(row.id.clone())));
             }

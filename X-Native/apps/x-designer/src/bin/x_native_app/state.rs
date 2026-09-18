@@ -419,6 +419,67 @@ fn draft(name: &str, edited: &str, icon: &'static str) -> RecentFile {
 
 // ----------------------------------------------------------------- actions
 
+/// Panel affordances that FLIP a piece of state rather than repeat an
+/// action. Two presses inside the double-click window leave them where they
+/// started, which reads as "the double-click did nothing" — `run.rs`'s chrome
+/// dispatch counts a repeat press of one of these once per window.
+///
+/// Row SELECTION (`TreeRow`, `SelectPage`, `LayerRename`) is deliberately not
+/// in this set: a second press there is the rename gesture and has to reach the
+/// dispatcher. Steppers (zoom, alignment, gap, duplication) are not in it
+/// either — repeating those is exactly what the user asked for.
+impl Action {
+    pub fn is_toggle_row(&self) -> bool {
+        is_toggle_row(self)
+    }
+}
+
+fn is_toggle_row(a: &Action) -> bool {
+    matches!(
+        a,
+        Action::ToggleWrap
+            | Action::ToggleMainSizing
+            | Action::ToggleCrossSizing
+            | Action::ToggleAspectRatio
+            | Action::ToggleChildAbsolute
+            | Action::ToggleInstanceProp(_)
+            | Action::ToggleLayoutAdvanced
+            | Action::ToggleTypoAdvanced
+            | Action::ToggleVisible
+            | Action::ToggleLock
+            | Action::TreeVisible(_)
+            | Action::TreeLock(_)
+            | Action::TreeToggle(_)
+            | Action::TogglePaintVisibility(_)
+            | Action::ToggleGuide(_)
+            | Action::ToggleGuideVisibility
+            | Action::ToggleCanvasBgVisibility
+            | Action::ToggleMinimap
+            | Action::ToggleColorPicker(_)
+            | Action::ToggleVectorHandles
+            | Action::ClipContent
+            | Action::PaintLibToggle(_)
+            | Action::FrameDropdown
+            | Action::ZoomMenu
+            | Action::LhDropdown
+            | Action::TextStyleDropdown
+            | Action::PaletteToggle
+            | Action::OpenAppMenu
+            | Action::ToggleNotifications
+            | Action::ToggleFindInSelection
+            | Action::ToggleCaseSensitive
+            | Action::DashSortMenu
+            | Action::BoardToggleGrid
+            | Action::BoardToggleConnectors
+            | Action::VarToggleBool(_)
+            | Action::FlowDeviceToggle
+            // the font-family row is the one `Action::Field` that FLIPS a
+            // popover instead of opening an edit buffer (run.rs dispatch):
+            // a double-click would open the picker and shut it again
+            | Action::Field(FieldId::FontFamily)
+    )
+}
+
 /// Every interactive zone records one of these; `run.rs` dispatches them.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
@@ -580,6 +641,10 @@ pub enum Action {
     DeletePage(usize),
     TreeRow(String),
     TreeToggle(String),
+    /// A layer's NAME zone in the Layers panel: a single press selects the row
+    /// (same as `TreeRow`), a second press inside the double-click window opens
+    /// the name for inline editing — Figma's rename gesture.
+    LayerRename(String),
     RenameStart,
     // inspector
     FrameDropdown,
@@ -862,6 +927,9 @@ pub enum FieldId {
     /// Tokens panel: variable name editing (rename-as-alias; same target
     /// resolution as `VarValue`, from `var_name_rects`).
     VarName,
+    /// layers panel: inline layer rename, opened by double-clicking a layer
+    /// NAME (Figma). The node being renamed lives in `App::layer_edit_id`.
+    LayerName,
     /// layers panel: tree search query (row above the tree; audit F8).
     /// Enter keeps the field open — the query lives in
     /// `OpenDoc::tree_search` and filters the tree live.
@@ -1939,6 +2007,15 @@ pub struct App {
     pub snap_lines: Vec<(f64, char)>,
     /// Last click (instant + screen pos) for double-click detection
     pub last_click: Option<(std::time::Instant, Point)>,
+    /// Last CHROME press: instant, screen pos, and whether it hit a
+    /// toggle-class row. Chrome presses deliberately do not touch
+    /// `last_click` (that one belongs to the canvas), so the panels keep
+    /// their own record — the repeat-press guard and the page rows'
+    /// double-click rename both read it (`run.rs` chrome dispatch).
+    pub last_chrome: Option<(std::time::Instant, Point, bool)>,
+    /// Node being renamed inline by `FieldId::LayerName` (the tree's name zone
+    /// resolves to this id; the field itself only carries the buffer).
+    pub layer_edit_id: Option<String>,
     /// Node being inline-edited
     pub text_edit: Option<String>,
     /// Rich-text styling of the OPEN inline editor (char-index runs over
@@ -2044,6 +2121,13 @@ pub struct App {
     pub welcome_open: bool,
 }
 
+/// How many page rows the rail shows at once. The band is part of the fixed
+/// left rail, so the list is WINDOWED: `pages_rows` slides the window with the
+/// active page, so every page stays reachable (the old code swapped the last
+/// row for a sentinel `n` — an index one past the end of `pages` — so with
+/// more than 3 pages the 4th was never drawn and never deletable).
+pub(crate) const PAGES_MAX_ROWS: usize = 4;
+
 pub const USER_NAME: &str = "You";
 
 impl App {
@@ -2138,6 +2222,8 @@ impl App {
             align: (0, 2),
             snap_lines: Vec::new(),
             last_click: None,
+            last_chrome: None,
+            layer_edit_id: None,
             text_edit: None,
             text_runs_edit: Vec::new(),
             text_caret: 0,
@@ -2199,23 +2285,46 @@ impl App {
 
     // ------------------------------------------------------------- regions
 
+    /// True when `p` is the second press of a double-click on the CHROME: a
+    /// press within 350 ms and 4 px of the last one — the same window the
+    /// canvas uses (`Host::is_double_click`), measured from the chrome's own
+    /// record because the canvas owns `last_click`.
+    pub fn is_repeat_chrome_click(&self, p: Point) -> bool {
+        self.last_chrome
+            .map(|(t, q, _)| {
+                t.elapsed().as_millis() < 350
+                    && (p.x - q.x).abs() < 4.0
+                    && (p.y - q.y).abs() < 4.0
+            })
+            .unwrap_or(false)
+    }
+
     /// PAGES list band geometry — ONE source of truth shared by paint and
     /// hit-testing. Rows start where the old single page field did
-    /// (y0+142), 26px tall, max 4 rows; more pages collapse into a
-    /// "+N more" row whose index is the page COUNT (a sentinel).
+    /// (y0+142), 26px tall, at most `PAGES_MAX_ROWS` of them; the window
+    /// follows the active page, so every page stays reachable and deletable.
     pub fn pages_rows(&self) -> Vec<(usize, Rect)> {
         const ROW_H: f64 = 26.0;
-        const MAX_ROWS: usize = 4;
         let y0 = ED_TITLE_H;
         let sidebar = self.editor_regions().sidebar;
         let sx = sidebar.x0;
         let lw = sidebar.x1;
         let n = self.doc_ref().editors.len();
-        let count = n.min(MAX_ROWS);
-        let overflow = n > MAX_ROWS;
-        (0..count)
+        if n == 0 {
+            return Vec::new();
+        }
+        // Top row of the window. It follows the ACTIVE PAGE (`OpenDoc::page` —
+        // `App::active` is the active DOCUMENT, not the page) once the page
+        // walks past the last visible row, then clamps so the last page is
+        // always on screen. Every page is therefore reachable by selecting it
+        // (menu, keyboard, or the row above it).
+        let top = self
+            .doc_ref()
+            .page
+            .min(n.saturating_sub(PAGES_MAX_ROWS));
+        (0..PAGES_MAX_ROWS.min(n))
             .map(|i| {
-                let page_i = if overflow && i == MAX_ROWS - 1 { n } else { i };
+                let page_i = top + i;
                 let ry = y0 + 142.0 + i as f64 * ROW_H;
                 (page_i, Rect::new(sx + 12.0, ry, lw - 13.0, ry + ROW_H))
             })
@@ -2225,9 +2334,8 @@ impl App {
     /// Bottom of the PAGES band (header label at y0+120.5, then the rows).
     pub fn pages_band_bottom(&self) -> f64 {
         const ROW_H: f64 = 26.0;
-        const MAX_ROWS: usize = 4;
         let n = self.doc_ref().editors.len();
-        let count = n.clamp(1, MAX_ROWS);
+        let count = n.clamp(1, PAGES_MAX_ROWS);
         ED_TITLE_H + 142.0 + count as f64 * ROW_H
     }
 
@@ -2825,6 +2933,17 @@ impl App {
         self.mark_dirty();
     }
 
+    /// Rename the ACTIVE page. The page's name lives in `doc.pages[i].name`
+    /// — that is the list the rail shows, the field edits, and the undo
+    /// history records. The page's ROOT frame carries the same string purely
+    /// as a mirror, because a handful of surfaces read a root's name directly
+    /// (flow labels via `editor_ui::flow_locate`, thumbnails, SVG ids); the
+    /// mirror is one-way, so a page rename can never be mistaken for a frame
+    /// rename — the bug where the artboard's frame name WAS the page name.
+    ///
+    /// Compared against the page name, not the root's: the old guard tested
+    /// `root.name`, so renaming a page back to its mirrored frame name was
+    /// silently rejected.
     pub fn commit_page_rename(&mut self, raw: &str) -> bool {
         let raw = raw.trim().to_string();
         if raw.is_empty() {
@@ -2832,11 +2951,17 @@ impl App {
         }
         {
             let doc = self.doc();
-            if doc.editor_ref().root.name == raw {
+            let i = doc.page;
+            let current = doc
+                .doc
+                .pages
+                .get(i)
+                .map(|p| p.name.clone())
+                .unwrap_or_default();
+            if current == raw {
                 return false;
             }
             doc.checkpoint();
-            let i = doc.page;
             if let Some(p) = doc.doc.pages.get_mut(i) {
                 p.name = raw.clone();
             }
@@ -2846,6 +2971,89 @@ impl App {
         }
         self.mark_dirty();
         true
+    }
+
+    /// Open layer `id` for inline rename (Figma: double-click the layer's name
+    /// in the Layers panel). The selection follows, so the inspector and the
+    /// canvas agree with what is being renamed.
+    pub fn begin_layer_rename(&mut self, id: String) {
+        let name = {
+            let doc = self.doc();
+            // read the name out FIRST: the find borrows the tree, the
+            // selection write needs it mutably
+            let found = crate::editor_ui::find_node(&doc.editor_ref().root, id.as_str())
+                .map(|n| n.name.clone());
+            let Some(name) = found else {
+                return;
+            };
+            doc.editor().selection = vec![id.clone()];
+            name
+        };
+        self.layer_edit_id = Some(id);
+        self.field_select_all = true;
+        self.field = Some(FieldEdit {
+            id: FieldId::LayerName,
+            buffer: name,
+        });
+    }
+
+    /// Open page `i` for inline rename (Figma: double-click a page NAME in
+    /// the Pages list). Selecting and editing in one step, because the field
+    /// zone only exists on the ACTIVE row — a rename that did not also select
+    /// would open a field the hit-test cannot reach.
+    pub fn begin_page_rename(&mut self, i: usize) {
+        let name = {
+            let doc = self.doc();
+            if i >= doc.editors.len() {
+                return;
+            }
+            doc.page = i;
+            doc.doc
+                .pages
+                .get(i)
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| format!("Page {}", i + 1))
+        };
+        self.field_select_all = true;
+        self.field = Some(FieldEdit {
+            id: FieldId::PageName,
+            buffer: name,
+        });
+        self.page_menu = None;
+    }
+
+    /// Delete page `i` — the rail's ✕, which must work on ANY row including
+    /// the page you are looking at (Figma allows both). Deleting a page that
+    /// is not the active one leaves the selection alone; deleting the active
+    /// one clamps it to the last remaining page. The last page cannot be
+    /// deleted: a document with no page has nothing to render.
+    pub fn delete_page(&mut self, i: usize) -> bool {
+        let deleted = {
+            let doc = self.doc();
+            if doc.editors.len() <= 1 || i >= doc.editors.len() {
+                false
+            } else {
+                doc.checkpoint();
+                doc.editors.remove(i);
+                doc.doc.pages.remove(i);
+                doc.doc.comments.retain(|c| c.page != i);
+                for c in &mut doc.doc.comments {
+                    if c.page > i {
+                        c.page -= 1;
+                    }
+                }
+                if doc.page > i {
+                    doc.page -= 1;
+                } else if doc.page == i {
+                    doc.page = doc.page.min(doc.editors.len() - 1);
+                }
+                true
+            }
+        };
+        if deleted {
+            self.mark_dirty();
+        }
+        deleted
     }
 
     pub fn page_menu_cmd(&mut self, cmd: PageMenuCmd) {
@@ -2921,27 +3129,12 @@ impl App {
                 self.mark_dirty();
             }
             PageMenuCmd::Delete => {
-                let mut deleted = false;
-                {
-                    let doc = self.doc();
-                    if doc.editors.len() > 1 {
-                        doc.checkpoint();
-                        let i = doc.page;
-                        doc.editors.remove(i);
-                        doc.doc.pages.remove(i);
-                        doc.doc.comments.retain(|c| c.page != i);
-                        for c in &mut doc.doc.comments {
-                            if c.page > i {
-                                c.page -= 1;
-                            }
-                        }
-                        doc.page = doc.page.min(doc.editors.len() - 1);
-                        deleted = true;
-                    }
-                }
-                if deleted {
-                    self.mark_dirty();
-                }
+                // one implementation, shared with the rail's ✕ (see
+                // `App::delete_page`): the old copy here was the ONLY delete
+                // path, refused at one page, and unreachable for the active
+                // page from the rail.
+                let i = self.doc_ref().page;
+                self.delete_page(i);
             }
             PageMenuCmd::MoveUp => {
                 let moved = {

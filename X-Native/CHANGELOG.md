@@ -5,6 +5,86 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-18 (Canvas chrome: one rule for names, real double-click)
+
+Follow-up to the owner's report — *"why is the page name shown as the canvas frame
+name, and it stays after I delete the frame"*, *"why is the page name used for
+renaming pages, the pages are not getting deleted properly"*, *"double-clicking is
+not selecting the elements in the right panel"*. The audit behind the fixes
+(Figma vs X-Native, and why this class of bug kept coming back) is
+[docs/AUDIT_2026-09-18_FIGMA_PARITY.md](docs/AUDIT_2026-09-18_FIGMA_PARITY.md).
+
+### Removed
+- **The page name is no longer painted on the artboard.** A canvas name label was
+  emitted for *every* frame, including the render root — and on the canvas the
+  root is the PAGE. That is the "frame name" that stayed after everything on the
+  page was deleted. The root of a render is now unlabelled in both encoders, so
+  the page's name lives only in the pages list (and, on an export or a thumbnail,
+  the exported object's name no longer lands in its own artwork).
+  `crates/x-render`.
+- **Frames nested inside other frames are unnamed**, matching Figma ("when nesting
+  frames to organize them, only the top-level / outermost frame title is shown").
+  A frame inside a **Section** keeps its name (Figma: frame names stay visible in
+  sections), as do master-internal frames' absence — an instance's internals are
+  silent. `crates/x-render`.
+- **The empty-frame name watermark** (`frame_watermarks` / `watermark_shadows` /
+  `watermark_labels`): it painted a node's name in 28px `black/10` across every
+  empty top-level frame in demo mode — the same defect class as the page-name
+  label, one layer up. `apps/x-designer`.
+- **`build_render_tree_bucket_shell`**: the second lowering entry existed only to
+  disagree with the first about the root's label. `build_render_tree_with_hidden`
+  is now the sole entry, used by the canvas buckets, exports and previews alike.
+
+### Fixed
+- **Names are chrome, so they sit above the frame, not on it.** A frame or section
+  name is drawn in the gutter above its top-left corner (`LABEL_ABOVE_Y = -26`)
+  instead of inside the artwork at `(14, 10)`, and one constant (`LABEL_SIZE`)
+  replaces the 14/18/20 px disagreement between the two encoders and the two arms.
+- **Renaming a page is a page operation.** `commit_page_rename` writes
+  `doc.pages[i].name` and mirrors it onto the root frame (some surfaces read a
+  root's name directly — flow labels, thumbnails, SVG ids); the guard compares the
+  PAGE's name, so the no-op case is "the page already says this" instead of
+  comparing against the mirror.
+- **Deleting a page deletes the page you clicked.** One implementation
+  (`App::delete_page`) serves the rail's ✕ and the page menu; it no longer selects
+  the row first, the ✕ appears on the active row too (Figma allows both), and the
+  last page is still protected. The ✕ hit zone now wins over the row's
+  `SelectPage` (zones are scanned in reverse; the row must be pushed first).
+- **Every page is reachable.** The Pages band windows over the list
+  (`PAGES_MAX_ROWS`) instead of replacing its last row with a sentinel whose index
+  was the page COUNT — pages past the 3rd had no row and could not be selected,
+  renamed or deleted.
+- **A double-click in the chrome is a single click.** Toggle-class rows (the fill
+  colour swatch, the fill/stroke variable-style library, component prop switches,
+  disclosure toggles, popover buttons) are counted once per double-click window,
+  so the popover the first press opened is not shut by the second. Steppers and
+  Add-row still repeat. `apps/x-designer`.
+- **Re-opening the field you are already editing keeps your text** — the second
+  press of a double-click in a numeric or hex field used to re-seed the buffer
+  from the document and discard what had been typed.
+- **Canvas double-click drills one level**, as Figma documents ("double-click …
+  to select one level of nesting down"), instead of jumping to the deepest leaf in
+  one gesture; ⌘/Ctrl-click still deep-selects in one press.
+
+### Added
+- **Double-click a page name to rename it** (Figma's second rename path, next to
+  the page menu) and **double-click a layer name in the Layers panel to rename it
+  inline** (`FieldId::LayerName`, `Action::LayerRename`): Enter commits through the
+  engine's undoable `rename_node`, Esc cancels without touching the document, and
+  a single press still selects the row and arms the reorder drag.
+- Regression tests for all of the above, in the form that fails if the old
+  behaviour returns: the renderer's root/nesting/section label rules, the page
+  rename + delete paths, the ✕-beats-the-row hit order, the windowed page list,
+  the counted-once panel toggle, and both rename gestures.
+- **The audit** — root causes, a Figma-vs-X-Native behaviour table with sources,
+  and the honest list of what is still open.
+
+### Changed
+- `GOLDEN_COMMANDS` in `crates/x-native/tests/golden_project.rs` drops 52 → 51
+  (the document's `/golden/label` command is gone). `GOLDEN_KIND_HASH` needs one
+  `cargo test` run to re-pin; the constant's comment says exactly which test and
+  what to paste.
+
 ## [Unreleased] — 2026-09-18 (Typography: the Inspector Meets the Engine)
 
 Part of the UI/UX Refinement v1 milestone (see

@@ -248,33 +248,27 @@ fn t13_canvas_and_export_must_encode_the_same_fill_stack() {
         .count();
     assert_eq!(export_fills, 2);
     let canvas = h.app.canvas_scene();
-    // canvas = the export's fills + the root frame's name label glyphs
-    // (QA-004). The label's path count must be MEASURED, not assumed:
-    // real font outlines (Inter in the app) are multi-contour, so one
-    // character can emit several glyph paths. Render the root alone
-    // (fill + label, no children) through the same font-aware sink the
-    // canvas uses, and subtract its fills.
+    // canvas == export, path for path: the render root is the PAGE, and a
+    // page is not a labelled object. (It used to add the root's name label —
+    // QA-004 — which printed the page name across an empty artboard and
+    // survived deleting every frame on the page.) The label's glyph paths are
+    // measured through the same font-aware sink the canvas uses, so this keeps
+    // failing if anything starts painting a name for the root again.
     let shell = h.app.doc_ref().editor_ref().root.shallow_clone();
-    let shell_tree = build_render_tree(&shell, &Variables::default());
-    let shell_fills = shell_tree
-        .commands
-        .iter()
-        .filter(|c| matches!(c, RenderCommand::FillPath { .. }))
-        .count();
-    let label_scene = x_native::VelloSink {
+    let shell_scene = x_native::VelloSink {
         assets: None,
         fonts: Some(&h.app.fonts.fonts),
     }
-    .render(&shell_tree);
-    let label_paths = label_scene.encoding().n_paths as usize - shell_fills;
-    assert!(
-        label_paths > 0,
-        "the root frame's name label must render on the canvas"
+    .render(&build_render_tree(&shell, &Variables::default()));
+    assert_eq!(
+        shell_scene.encoding().n_paths,
+        0,
+        "the page root must contribute no paths at all (no name label)"
     );
     assert_eq!(
         canvas.encoding().n_paths as usize,
-        export_fills + label_paths,
-        "canvas paths = export fills + frame-name label"
+        export_fills,
+        "canvas paths = export fills (no page-name label)"
     );
 }
 
@@ -490,16 +484,38 @@ fn pages_list_shows_every_page_with_measured_band() {
 }
 
 #[test]
-fn pages_list_collapses_beyond_four_pages() {
+fn pages_list_windows_beyond_four_pages_and_keeps_every_page_reachable() {
+    // The band holds 4 rows. Past that it WINDOWS rather than collapsing into
+    // a "+N more" sentinel row: the sentinel carried the page COUNT as its
+    // index — an out-of-range `pages` entry — so pages past the 3rd could not
+    // be selected, renamed or deleted at all ("the pages are not getting
+    // deleted properly").
     let mut h = host();
     for _ in 0..5 {
         h.dispatch(Action::AddPage);
     }
-    // 6 pages → 3 real rows + a "+3 more" sentinel (index = page count)
     let rows = h.app.pages_rows();
-    assert_eq!(rows.len(), 4);
-    assert_eq!(rows[3].0, 6, "the overflow row is the sentinel");
-    assert!((h.app.pages_band_bottom() - rows[3].1.y1).abs() < 1e-9);
+    assert_eq!(rows.len(), 4, "the band still holds four rows");
+    let n = h.app.doc_ref().editors.len();
+    assert_eq!(n, 6);
+    // AddPage made the new page active, so the window has followed it and
+    // clamped at the tail: the LAST page always has a real row
+    assert_eq!(h.app.doc_ref().page, n - 1);
+    assert_eq!(rows[0].0, n - 4, "window follows the active page");
+    assert_eq!(rows[3].0, n - 1, "the last page is always a real row");
+    // every page index is addressable by SOME row across the window positions
+    let mut seen = std::collections::BTreeSet::new();
+    for page in 0..n {
+        h.app.doc().page = page;
+        for (page_i, _) in h.app.pages_rows() {
+            assert!(page_i < n, "no out-of-range rows (got {page_i} of {n})");
+            seen.insert(page_i);
+        }
+    }
+    assert_eq!(seen.len(), n, "every page gets a row at some scroll position");
+    h.app.doc().page = n - 1;
+    assert_eq!(h.app.pages_rows()[0].0, n - 4, "no tail gap");
+    assert!((h.app.pages_band_bottom() - h.app.pages_rows()[3].1.y1).abs() < 1e-9);
 }
 
 #[test]
@@ -3289,5 +3305,354 @@ fn pages_show_a_sketch_and_still_switch() {
         h.app.doc().page,
         page1,
         "the thumbnail row is still the page switcher"
+    );
+}
+
+// -------------------------------------------------------------- phase 4b
+// A bug found while auditing the audit: the page window was following the
+// active DOCUMENT (`App::active`) instead of the active PAGE, so on a document
+// whose page count differed from its index the visible rows addressed the
+// wrong pages. Pinned here. (A page-less document is not a state the app can
+// reach — `App::editor_ref` requires one editor — so the band's empty-list
+// guard is defensive only and has no test.)
+
+/// The page window scrolls with the ACTIVE PAGE, and every page can be
+/// selected, renamed and deleted by clicking its row — the reason the window
+/// exists is that pages one can see are pages one can click.
+#[test]
+fn every_page_in_the_window_is_clickable_and_the_window_follows_the_page() {
+    let mut h = canvas_host();
+    h.dispatch(Action::AddPage);
+    h.dispatch(Action::AddPage);
+    h.dispatch(Action::AddPage);
+    h.dispatch(Action::AddPage);
+    h.dispatch(Action::AddPage);
+    let n = h.app.doc_ref().editors.len();
+    assert_eq!(n, 6, "home + five added");
+    // the document index is not the page index: a second document with a
+    // different page count is what the old code got wrong
+    h.app.active = 0;
+    h.app.doc().page = 0;
+    let rows = h.app.pages_rows();
+    assert_eq!(rows.len(), 4, "the band holds PAGES_MAX_ROWS rows");
+    assert_eq!(
+        rows[0].0, 0,
+        "a page at the head of the list is on screen, not scrolled away"
+    );
+    assert!(
+        !rows.iter().any(|(i, _)| *i >= n),
+        "no row addresses a page that does not exist"
+    );
+    // clicking row 3 selects page 3; the window then shows 1..=4
+    let r3 = rows[3].1;
+    h.app.mouse = r3.center();
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let hit = h
+        .app
+        .hit
+        .iter()
+        .rev()
+        .find(|(r, _)| r.contains(r3.center()))
+        .map(|(_, a)| a.clone());
+    assert_eq!(hit, Some(Action::SelectPage(3)), "the fourth row is page 3");
+    h.dispatch(Action::SelectPage(3));
+    assert_eq!(h.app.doc_ref().page, 3, "the row selects its own page");
+    let rows = h.app.pages_rows();
+    assert_eq!(
+        rows.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+        vec![1, 2, 3, 4],
+        "the window slid by exactly one row"
+    );
+    // the last page is a real row, and it is the one the ✕ can delete
+    h.dispatch(Action::SelectPage(5));
+    let rows = h.app.pages_rows();
+    assert_eq!(
+        rows.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+        vec![2, 3, 4, 5],
+        "the tail is clamped, never padded"
+    );
+    assert_eq!(rows[3].0, n - 1, "the last page owns the last row");
+    h.dispatch(Action::DeletePage(n - 1));
+    assert_eq!(h.app.doc_ref().editors.len(), n - 1);
+}
+
+// ---------------------------------------------------------------- phase 4
+// The owner's four complaints after the theme/rail work: a page name painted
+// as the canvas frame name (and surviving the deletion of its content), page
+// rename/delete coupling the page to its frame, and double-clicks in the
+// panels not selecting anything.
+
+/// Rename a page — the page carries the name, the root frame mirrors it.
+/// The "page name is used for renaming pages" report: the row and the field
+/// read `doc.pages[i].name`, and the frame is only ever a mirror, so a frame
+/// rename can no longer pass itself off as a page rename.
+#[test]
+fn page_rename_names_the_page_and_mirrors_the_root() {
+    let mut h = canvas_host();
+    h.dispatch(Action::AddPage);
+    let i = h.app.doc().page;
+    h.dispatch(Action::PageMenu(crate::state::PageMenuCmd::Rename));
+    assert!(matches!(
+        h.app.field.as_ref().map(|f| f.id),
+        Some(FieldId::PageName)
+    ));
+    assert_eq!(
+        h.app.field.as_ref().unwrap().buffer,
+        h.app.doc_ref().doc.pages[i].name,
+        "the field opens on the PAGE's name"
+    );
+    assert!(h.app.commit_page_rename("Pricing"));
+    {
+        let d = h.app.doc();
+        assert_eq!(d.doc.pages[i].name, "Pricing", "the page is the name");
+        assert_eq!(d.editors[i].root.name, "Pricing", "the root mirrors it");
+        assert_ne!(d.doc.pages[0].name, "Pricing", "only the active page");
+    }
+    // the guard compares the PAGE's name, so the no-op case is "the page
+    // already says this" — the old guard compared the ROOT's name and could
+    // therefore accept a rename that changed nothing, or reject a real one
+    assert!(!h.app.commit_page_rename("Pricing"), "same name is a no-op");
+    assert!(
+        h.app.commit_page_rename("Pricing v2"),
+        "a different name applies"
+    );
+    assert_eq!(h.app.doc_ref().doc.pages[i].name, "Pricing v2");
+    assert!(
+        !h.app.commit_page_rename("   "),
+        "an empty name is refused, not applied"
+    );
+    assert_eq!(h.app.doc_ref().doc.pages[i].name, "Pricing v2");
+}
+
+/// The rail's ✕ deletes the row that was clicked — the active page too.
+/// It used to select the page first and then delete "the active page", while
+/// the trash was only painted on inactive rows: a background page's ✕ stole
+/// the selection, and the page you were looking at could not be deleted.
+#[test]
+fn page_delete_removes_the_clicked_page_and_never_the_last_one() {
+    let mut h = canvas_host();
+    let mut scene = vello::Scene::new();
+    h.dispatch(Action::AddPage);
+    h.dispatch(Action::AddPage);
+    {
+        let d = h.app.doc();
+        d.doc.pages[0].name = "Home".into();
+        d.doc.pages[1].name = "Detail".into();
+        d.doc.pages[2].name = "Settings".into();
+        d.page = 2;
+    }
+    // the ✕ on the first row exists while another page is active
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let rows = h.app.pages_rows();
+    let row0 = rows.iter().find(|(i, _)| *i == 0).map(|(_, r)| *r).unwrap();
+    let trash = Rect::new(
+        h.app.editor_regions().sidebar.x1 - 30.0,
+        row0.y0 + 5.0,
+        h.app.editor_regions().sidebar.x1 - 12.0,
+        row0.y0 + 21.0,
+    );
+    assert_eq!(
+        h.app
+            .hit
+            .iter()
+            .rev()
+            .find(|(r, _)| r.contains(trash.center()))
+            .map(|(_, a)| a.clone()),
+        Some(Action::DeletePage(0)),
+        "the ✕ must win over the row's SelectPage, not the other way round"
+    );
+    // deleting a BACKGROUND page leaves the selection alone
+    h.dispatch(Action::DeletePage(0));
+    {
+        let d = h.app.doc();
+        assert_eq!(d.editors.len(), 2);
+        assert_eq!(d.doc.pages[0].name, "Detail", "the clicked row is gone");
+        assert_eq!(
+            d.page, 1,
+            "the ACTIVE page stays active — only its index shifts"
+        );
+    }
+    // deleting the ACTIVE page clamps the index
+    h.dispatch(Action::DeletePage(1));
+    {
+        let d = h.app.doc();
+        assert_eq!(d.editors.len(), 1);
+        assert_eq!(d.doc.pages[0].name, "Detail");
+        assert_eq!(d.page, 0);
+    }
+    // the last page stays: a document with no page has nothing to render
+    h.dispatch(Action::DeletePage(0));
+    assert_eq!(h.app.doc_ref().editors.len(), 1, "the last page survives");
+}
+
+/// A double-click in the chrome is a single click: it must not flip a toggle
+/// twice. This is the mechanism behind "double-clicking does not select the
+/// colours and the boxes/components we created" — the fill row's colour
+/// popover used to open and shut, a component prop ticked and unticked.
+#[test]
+fn double_click_on_a_panel_toggle_counts_once() {
+    let mut h = canvas_host();
+    h.app.doc().editor().selection.clear();
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let p = h
+        .app
+        .hit
+        .iter()
+        .find(|(_, a)| *a == Action::ToggleCanvasBgVisibility)
+        .map(|(r, _)| r.center())
+        .expect("the no-selection panel shows the canvas-background eye");
+    let before = h.app.canvas_bg_visible;
+    h.on_press(p);
+    assert_eq!(h.app.canvas_bg_visible, !before, "single click toggles");
+    h.on_press(p);
+    assert_eq!(
+        h.app.canvas_bg_visible,
+        !before,
+        "the second press of a double-click is swallowed"
+    );
+    // ...and a deliberate third press is a fresh single click
+    h.app.last_chrome = None;
+    h.on_press(p);
+    assert_eq!(h.app.canvas_bg_visible, before, "the next click toggles");
+    // a repeat that is MEANT to repeat still does: Add-page steppers, zoom
+    // steps and the like are not toggle rows
+    assert!(!Action::ZoomStep(0).is_toggle_row());
+    assert!(!Action::AddPage.is_toggle_row());
+    assert!(Action::PaintLibToggle(true).is_toggle_row());
+    assert!(Action::Field(FieldId::FontFamily).is_toggle_row());
+}
+
+/// Figma: double-clicking a page NAME in the Pages list opens it for rename.
+#[test]
+fn double_click_on_a_page_name_opens_its_rename_field() {
+    let mut h = canvas_host();
+    h.dispatch(Action::AddPage);
+    h.app.doc().doc.pages[1].name = "Detail".into();
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let row1 = h
+        .app
+        .pages_rows()
+        .iter()
+        .find(|(i, _)| *i == 1)
+        .map(|(_, r)| *r)
+        .expect("page 2 has a row");
+    // a single press only selects
+    h.on_press(row1.center());
+    assert_eq!(h.app.doc().page, 1);
+    assert!(h.app.field.is_none(), "one click does not open the field");
+    // the second press within the window opens the name for editing
+    h.on_press(row1.center());
+    assert!(matches!(
+        h.app.field.as_ref().map(|f| f.id),
+        Some(FieldId::PageName)
+    ));
+    assert_eq!(h.app.field.as_ref().unwrap().buffer, "Detail");
+    assert!(h.app.field_select_all, "the name opens selected");
+}
+
+/// Every page is reachable from the rail, however many there are: the band
+/// windows over the list instead of stranding pages behind a "+N more"
+/// sentinel whose index was the page COUNT (out of range, so the 4th page and
+/// beyond could not be selected, renamed or deleted at all).
+#[test]
+fn pages_past_the_fourth_are_selectable_and_deletable() {
+    let mut h = canvas_host();
+    for _ in 0..6 {
+        h.dispatch(Action::AddPage);
+    }
+    let n = h.app.doc_ref().editors.len();
+    assert_eq!(n, 7);
+    let mut scene = vello::Scene::new();
+    for i in 0..n {
+        h.app.doc().page = i;
+        crate::editor_ui::paint(&mut h.app, &mut scene);
+        let rows = h.app.pages_rows();
+        assert!(rows.iter().all(|(pi, _)| *pi < n), "no sentinel rows");
+        assert!(
+            rows.iter().any(|(pi, _)| *pi == i),
+            "page {i} has a row while it is active"
+        );
+        let (_, r) = rows.iter().find(|(pi, _)| *pi == i).unwrap();
+        assert!(r.y1 <= h.app.pages_band_bottom() + 1e-9);
+    }
+    // and deleting from anywhere in the list works
+    h.app.doc().page = 6;
+    assert!(h.app.delete_page(6));
+    assert_eq!(h.app.doc_ref().editors.len(), 6);
+}
+
+/// Figma: double-clicking a layer NAME in the Layers panel renames it inline.
+/// This is the panel-side half of "double-clicking does not select the elements
+/// in the right panel" — the row selected, but the second press did nothing.
+#[test]
+fn double_click_on_a_layer_name_renames_it() {
+    let mut h = canvas_host();
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let (zone, _) = h
+        .app
+        .hit
+        .iter()
+        .find(|(_, a)| *a == Action::LayerRename("n-b".into()))
+        .cloned()
+        .expect("the layer's name zone is a hit target");
+    // one press selects (and arms the reorder drag, like the rest of the row)
+    h.on_press(zone.center());
+    {
+        let d = h.app.doc();
+        assert_eq!(d.editor_ref().selection, vec!["n-b".to_string()]);
+        assert!(h.app.field.is_none(), "one press does not open the field");
+        assert!(matches!(h.app.drag, Some(Drag::TreeRow { .. })));
+    }
+    h.app.drag = None;
+    // the second press within the window opens the name for editing
+    h.on_press(zone.center());
+    assert!(matches!(
+        h.app.field.as_ref().map(|f| f.id),
+        Some(FieldId::LayerName)
+    ));
+    assert_eq!(h.app.layer_edit_id.as_deref(), Some("n-b"));
+    assert_eq!(h.app.field.as_ref().unwrap().buffer, "n-b");
+    // Enter commits through the normal field path, undoably
+    h.app.field.as_mut().unwrap().buffer = "Header bar".into();
+    assert!(h.finish_edits());
+    {
+        let d = h.app.doc();
+        let n = crate::editor_ui::find_node(&d.editor_ref().root, "n-b").unwrap();
+        assert_eq!(n.name, "Header bar");
+    }
+    assert!(h.app.layer_edit_id.is_none(), "the target is cleared");
+    h.app.doc().editor().undo();
+    {
+        let d = h.app.doc();
+        let n = crate::editor_ui::find_node(&d.editor_ref().root, "n-b").unwrap();
+        assert_eq!(n.name, "n-b", "the rename is undoable");
+    }
+    // Escape cancels: the buffer is dropped without touching the document
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let zone = h
+        .app
+        .hit
+        .iter()
+        .find(|(_, a)| *a == Action::LayerRename("n-b".into()))
+        .map(|(r, _)| *r)
+        .expect("name zone persists");
+    h.on_press(zone.center());
+    h.on_press(zone.center());
+    assert!(h.app.field.is_some());
+    h.app.field.as_mut().unwrap().buffer = "Discarded".into();
+    h.on_key(Key::Named(NamedKey::Escape), None);
+    assert!(h.app.field.is_none());
+    assert!(h.app.layer_edit_id.is_none());
+    let d = h.app.doc();
+    assert_eq!(
+        crate::editor_ui::find_node(&d.editor_ref().root, "n-b")
+            .unwrap()
+            .name,
+        "n-b"
     );
 }
