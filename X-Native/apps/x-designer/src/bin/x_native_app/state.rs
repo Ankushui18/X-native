@@ -45,6 +45,11 @@ pub enum Tool {
     /// vector path, and a tool that "stays active until you select another
     /// tool or press Esc".
     Pencil,
+    /// Figma Draw's Brush, beside the Pencil in the same toolbar: the same
+    /// freehand gesture and the same vector points, but the mark is painted
+    /// rather than drawn — the article's "add texture and color for a more
+    /// organic, hand-painted appearance".
+    Brush,
     /// Symmetry Mirror - mirror drawing across axis
     Symmetry,
     /// Board-specific tools
@@ -66,6 +71,7 @@ impl Tool {
             Tool::Ellipse => "circle",
             Tool::Pen => "pen-tool",
             Tool::Pencil => "pencil",
+            Tool::Brush => "brush",
             Tool::Hand => "hand",
             Tool::Zoom => "zoom-in",
             Tool::Comment => "message-circle",
@@ -98,6 +104,7 @@ impl Tool {
             Tool::Ellipse => "Ellipse",
             Tool::Pen => "Pen",
             Tool::Pencil => "Pencil",
+            Tool::Brush => "Brush",
             Tool::Hand => "Hand",
             Tool::Zoom => "Zoom",
             Tool::Comment => "Comment",
@@ -123,6 +130,7 @@ impl Tool {
             ("r", false),
             ("o", false),
             ("p", true),
+            ("b", true),
             ("p", false),
             ("h", false),
             ("c", false),
@@ -166,6 +174,11 @@ impl Tool {
             // menu) and, like the Scale and Slice tools, it is design-only:
             // a board draws freehand with its own pen.
             ("p", true) if !board => Some(Tool::Pencil),
+            // Figma Draw's Brush: the pencil's freehand gesture with a painted
+            // mark. The article puts the two in one toolbar and names no
+            // shortcut for either, so ⇧B sits beside ⇧P; like the Scale, Slice
+            // and Pencil tools it is design-only.
+            ("b", true) if !board => Some(Tool::Brush),
             ("p", _) => Some(Tool::Pen),
             ("h", _) => Some(Tool::Hand),
             _ => None,
@@ -188,6 +201,69 @@ pub const PENCIL_WEIGHT: f64 = 3.0;
 /// Freehand simplification, in world units. A hand's wobble is smaller than
 /// this, and the engine's fit turns the rest into editable curves.
 pub const PENCIL_SMOOTHING: f64 = 1.5;
+
+/// The ink both freehand tools draw with. The pencil's page says black "unless
+/// you're sketching on a dark canvas or frame", the brush's says it "adds
+/// texture and color" on top of the pencil's line, and this canvas is dark — so
+/// the brush's default is the light ink the pencil already uses.
+pub fn brush_ink() -> x_native::Color {
+    pencil_ink()
+}
+
+/// Figma Draw's brush styles. Their page's "Create brush" turns a closed vector
+/// shape into a style that is stretched or scattered along a stroke; this build
+/// has no brush-style library, so the three styles that ship are the outline's
+/// own profile — how wide the mark is, how far its ends taper, and how rough
+/// its two edges are. The live preview and the layer the stroke lands as read
+/// this one table, so what is on screen is what is committed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BrushStyle {
+    /// A loaded round brush: full width, ends that come to a point.
+    Ink,
+    /// A marker: one width from end to end, clean edges.
+    Marker,
+    /// A dry brush: a thin body and a lot of grain.
+    Dry,
+}
+
+impl BrushStyle {
+    pub const ALL: [BrushStyle; 3] = [BrushStyle::Ink, BrushStyle::Marker, BrushStyle::Dry];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BrushStyle::Ink => "Ink",
+            BrushStyle::Marker => "Marker",
+            BrushStyle::Dry => "Dry",
+        }
+    }
+
+    /// The mark's full width, in world units.
+    pub fn width(self) -> f64 {
+        match self {
+            BrushStyle::Ink => 12.0,
+            BrushStyle::Marker => 8.0,
+            BrushStyle::Dry => 14.0,
+        }
+    }
+
+    /// How far the mark's ends thin (0 = a marker's constant width).
+    pub fn taper(self) -> f64 {
+        match self {
+            BrushStyle::Ink => 1.0,
+            BrushStyle::Marker => 0.0,
+            BrushStyle::Dry => 1.6,
+        }
+    }
+
+    /// How rough the mark's two edges are.
+    pub fn grain(self) -> f64 {
+        match self {
+            BrushStyle::Ink => 0.25,
+            BrushStyle::Marker => 0.05,
+            BrushStyle::Dry => 0.7,
+        }
+    }
+}
 
 /// The rect a shape-tool drag commits — ONE rule for the live preview and the
 /// node that lands, so what you see while dragging is what you get.
@@ -809,6 +885,8 @@ pub enum Action {
     SelectDoc(usize),
     CloseDoc(usize),
     Tool(Tool),
+    /// Pick the Brush's style (the secondary toolbar's "style" control).
+    SetBrushStyle(BrushStyle),
     LeftTab(LeftTab),
     RightTab(RightTab),
     AddPage,
@@ -1517,6 +1595,11 @@ pub enum Drag {
     Pencil {
         points: Vec<Point>,
     },
+    /// Brush: the painted stroke in progress. Sampled exactly like the pencil's
+    /// — the two tools share the gesture and differ in the mark they leave.
+    Brush {
+        points: Vec<Point>,
+    },
     /// Board: Pen tool freehand drawing.
     BoardPen {
         id: String,
@@ -2164,6 +2247,9 @@ pub struct App {
     pub left_w: f64,
     pub right_w: f64,
     pub tool: Tool,
+    /// The Brush's style (Figma Draw's "stroke style"): which mark the tool
+    /// paints. A tool setting, not a document one — it survives the stroke.
+    pub brush_style: BrushStyle,
     pub drag: Option<Drag>,
     pub field: Option<FieldEdit>,
     /// prototype flow preview (None = normal editing)
@@ -2410,6 +2496,7 @@ impl App {
             left_w: ED_LEFT_W,
             right_w: ED_RIGHT_W,
             tool: Tool::Select,
+            brush_style: BrushStyle::Ink,
             drag: None,
             field: None,
             flow: None,

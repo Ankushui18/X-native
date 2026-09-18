@@ -117,6 +117,189 @@ pub fn freehand_path(pts: &[(f64, f64)], eps: f64) -> Vec<PathCmd> {
     path
 }
 
+/// A brush edge is sampled every this many world units, and a mark never keeps
+/// more than this many samples — a very long drag must not write a
+/// thousand-point path.
+const BRUSH_SAMPLE: f64 = 2.0;
+const BRUSH_MAX_SAMPLES: f64 = 320.0;
+
+/// The half-width profile of a brush mark: a point at each end for a taper of
+/// 1, the full width all the way along for 0 (a marker), a thin body for more.
+fn brush_profile(t: f64, taper: f64) -> f64 {
+    if taper <= 0.0 {
+        return 1.0;
+    }
+    (std::f64::consts::PI * t).sin().clamp(0.0, 1.0).powf(taper)
+}
+
+/// Step along a polyline, emitting a point every `step` units (both endpoints
+/// always survive), so an edge can be offset at a uniform resolution.
+fn resample(pts: &[(f64, f64)], step: f64) -> Vec<(f64, f64)> {
+    let mut out = vec![pts[0]];
+    let mut carry = 0.0;
+    for w in pts.windows(2) {
+        let (x0, y0) = w[0];
+        let (x1, y1) = w[1];
+        let seg = (x1 - x0).hypot(y1 - y0);
+        if seg < 1e-9 {
+            continue;
+        }
+        let mut d = step - carry;
+        while d < seg {
+            let f = d / seg;
+            out.push((x0 + (x1 - x0) * f, y0 + (y1 - y0) * f));
+            d += step;
+        }
+        carry = seg - (d - step);
+    }
+    out.push(*pts.last().unwrap());
+    out
+}
+
+/// A light moving average: the resampled spine loses the corners a two-pixel
+/// sample pitch leaves behind, without the ringing a spline fit can add.
+fn smooth(pts: &[(f64, f64)], passes: usize) -> Vec<(f64, f64)> {
+    let mut cur = pts.to_vec();
+    for _ in 0..passes {
+        let mut next = cur.clone();
+        for i in 1..cur.len().saturating_sub(1) {
+            let (ax, ay) = cur[i - 1];
+            let (bx, by) = cur[i];
+            let (cx, cy) = cur[i + 1];
+            next[i] = (
+                (ax + 2.0 * bx + cx) / 4.0,
+                (ay + 2.0 * by + cy) / 4.0,
+            );
+        }
+        cur = next;
+    }
+    cur
+}
+
+/// A brush mark (Figma Draw's brush tool): the freehand centreline widened into
+/// a CLOSED outline, so the stroke is a filled vector rather than a line.
+///
+/// Figma's brush is a *style* applied along the path — a stretch brush
+/// elongates a source shape down the length of the stroke — and the two things
+/// our renderer can do with a path are stroke it and fill it. The style is
+/// therefore the outline itself: a width that tapers toward the ends, and a
+/// bristle grain on both edges. `width` is the mark's full width at its
+/// thickest, `taper` how far the ends thin, `grain` how rough the edges are —
+/// and nothing here is random, so the same points and style always give the
+/// same mark. Fewer than two points, or no width, is not a mark.
+pub fn brush_outline(
+    pts: &[(f64, f64)],
+    width: f64,
+    taper: f64,
+    grain: f64,
+    eps: f64,
+) -> Vec<PathCmd> {
+    if width <= 0.0 {
+        return Vec::new();
+    }
+    let spine = simplify_polyline(pts, eps);
+    if spine.len() < 2 {
+        return Vec::new();
+    }
+    let total: f64 = spine
+        .windows(2)
+        .map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1))
+        .sum();
+    let step = (total / BRUSH_MAX_SAMPLES).max(BRUSH_SAMPLE);
+    let dense = smooth(&resample(&spine, step), 2);
+    let n = dense.len();
+    if n < 2 {
+        return Vec::new();
+    }
+    let mut left: Vec<(f64, f64)> = Vec::with_capacity(n);
+    let mut right: Vec<(f64, f64)> = Vec::with_capacity(n);
+    for i in 0..n {
+        let (px, py) = dense[i];
+        let (ax, ay) = if i == 0 { dense[0] } else { dense[i - 1] };
+        let (bx, by) = if i + 1 == n { dense[n - 1] } else { dense[i + 1] };
+        let (mut tx, mut ty) = (bx - ax, by - ay);
+        let len = tx.hypot(ty);
+        if len < 1e-9 {
+            tx = 1.0;
+            ty = 0.0;
+        } else {
+            tx /= len;
+            ty /= len;
+        }
+        let t = i as f64 / (n - 1) as f64;
+        let base = (width / 2.0) * brush_profile(t, taper);
+        // the bristles: two waves that never line up, one per edge
+        let k = i as f64;
+        let gl = 1.0 + grain * 0.45 * (k * 2.399).sin();
+        let gr = 1.0 + grain * 0.45 * (k * 1.713 + 1.04).cos();
+        left.push((px - ty * base * gl, py + tx * base * gl));
+        right.push((px + ty * base * gr, py - tx * base * gr));
+    }
+    let mut out = Vec::with_capacity(2 * n + 2);
+    out.push(PathCmd::MoveTo(left[0].0, left[0].1));
+    for p in &left[1..] {
+        out.push(PathCmd::LineTo(p.0, p.1));
+    }
+    for p in right.iter().rev() {
+        out.push(PathCmd::LineTo(p.0, p.1));
+    }
+    out.push(PathCmd::Close);
+    out
+}
+
+/// The bounding box of a path command list, as `(x, y, w, h)`. Cubic control
+/// points count: a curve never leaves the hull of its control points, so the
+/// box is an honest wrapper for geometry the curve can reach, and an empty path
+/// is a zero box at the origin.
+pub fn path_bounds(cmds: &[PathCmd]) -> (f64, f64, f64, f64) {
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    {
+        let mut add = |x: f64, y: f64| {
+            x0 = x0.min(x);
+            y0 = y0.min(y);
+            x1 = x1.max(x);
+            y1 = y1.max(y);
+        };
+        for c in cmds {
+            match c {
+                PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => add(*x, *y),
+                PathCmd::CurveTo(a, b, c, d, x, y) => {
+                    add(*a, *b);
+                    add(*c, *d);
+                    add(*x, *y);
+                }
+                PathCmd::Close => {}
+            }
+        }
+    }
+    if x0 > x1 {
+        return (0.0, 0.0, 0.0, 0.0);
+    }
+    (x0, y0, x1 - x0, y1 - y0)
+}
+
+/// Move every point of a path by `(dx, dy)` — used to re-origin a mark onto its
+/// own box before it becomes a layer.
+pub fn shift_path(cmds: &mut [PathCmd], dx: f64, dy: f64) {
+    for c in cmds {
+        match c {
+            PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => {
+                *x += dx;
+                *y += dy;
+            }
+            PathCmd::CurveTo(a, b, c, d, x, y) => {
+                *a += dx;
+                *b += dy;
+                *c += dx;
+                *d += dy;
+                *x += dx;
+                *y += dy;
+            }
+            PathCmd::Close => {}
+        }
+    }
+}
+
 pub fn path_to_bez(cmds: &[PathCmd]) -> kurbo::BezPath {
     let mut p = kurbo::BezPath::new();
     for c in cmds {
@@ -1700,6 +1883,100 @@ mod freehand_tests {
         assert!(freehand_path(&[], 1.0).is_empty());
         assert!(freehand_path(&[(3.0, 4.0)], 1.0).is_empty());
         assert_eq!(freehand_path(&[(0.0, 0.0), (1.0, 1.0)], 1.0).len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod brush_tests {
+    use super::*;
+
+    /// The spine the tests draw with: 100 units along x, sampled every 2.
+    fn spine() -> Vec<(f64, f64)> {
+        (0..=50).map(|i| (i as f64 * 2.0, 0.0)).collect()
+    }
+
+    /// Every point the outline visits, in path order (the shape's two edges).
+    fn points(path: &[PathCmd]) -> Vec<(f64, f64)> {
+        path.iter()
+            .filter_map(|c| match c {
+                PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => Some((*x, *y)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The vertical span of the edge points near `x`.
+    fn span_at(pts: &[(f64, f64)], x: f64) -> f64 {
+        let (lo, hi) = pts
+            .iter()
+            .filter(|p| (p.0 - x).abs() < 3.0)
+            .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
+        hi - lo
+    }
+
+    #[test]
+    fn a_mark_is_a_closed_band_around_the_spine() {
+        let path = brush_outline(&spine(), 20.0, 0.0, 0.0, 0.1);
+        assert!(
+            matches!(path.first(), Some(PathCmd::MoveTo(_, _))),
+            "a mark starts on one edge"
+        );
+        assert!(matches!(path.last(), Some(PathCmd::Close)), "and closes");
+        let pts = points(&path);
+        assert!(pts.len() > 20, "the edges are sampled, not two straight lines");
+        // a marker (taper 0) is the full width from end to end
+        assert!(span_at(&pts, 0.0) > 19.0, "full width at the tip");
+        assert!(span_at(&pts, 50.0) > 19.0, "and in the middle");
+        // and it stops where the spine stops
+        assert!(pts.iter().all(|p| (-0.6..=100.6).contains(&p.0)));
+    }
+
+    #[test]
+    fn taper_thins_both_ends() {
+        let pts = points(&brush_outline(&spine(), 20.0, 1.0, 0.0, 0.1));
+        assert!(span_at(&pts, 1.0) < 3.0, "the tip comes to a point");
+        assert!(span_at(&pts, 50.0) > 19.0, "the belly keeps the full width");
+    }
+
+    #[test]
+    fn grain_roughens_the_edges_and_is_never_random() {
+        let a = points(&brush_outline(&spine(), 20.0, 0.0, 0.3, 0.1));
+        let b = points(&brush_outline(&spine(), 20.0, 0.0, 0.3, 0.1));
+        assert_eq!(a, b, "the same style is the same mark");
+        let clean = points(&brush_outline(&spine(), 20.0, 0.0, 0.0, 0.1));
+        assert_eq!(a.len(), clean.len());
+        assert!(a.iter().zip(&clean).any(|(x, y)| x.1 != y.1), "grain moves an edge");
+    }
+
+    #[test]
+    fn the_box_wraps_the_geometry_and_shifting_moves_it() {
+        let path = vec![
+            PathCmd::MoveTo(10.0, 4.0),
+            PathCmd::CurveTo(20.0, 0.0, 30.0, 40.0, 40.0, 10.0),
+            PathCmd::Close,
+        ];
+        // control points count: the curve can reach y=40 even though no
+        // endpoint does
+        assert_eq!(path_bounds(&path), (10.0, 0.0, 30.0, 40.0));
+        assert_eq!(path_bounds(&[]), (0.0, 0.0, 0.0, 0.0));
+        let mut moved = path.clone();
+        shift_path(&mut moved, -10.0, 5.0);
+        assert_eq!(path_bounds(&moved), (0.0, 5.0, 30.0, 40.0));
+        if let PathCmd::CurveTo(a, b, ..) = moved[1] {
+            assert_eq!((a, b), (10.0, 5.0), "control points move too");
+        } else {
+            panic!("the curve survived the shift");
+        }
+    }
+
+    #[test]
+    fn fewer_than_two_points_is_not_a_mark() {
+        assert!(brush_outline(&[], 20.0, 1.0, 0.3, 1.5).is_empty());
+        assert!(brush_outline(&[(0.0, 0.0)], 20.0, 1.0, 0.3, 1.5).is_empty());
+        assert!(
+            brush_outline(&spine(), 0.0, 1.0, 0.3, 1.5).is_empty(),
+            "no width, no mark"
+        );
     }
 }
 

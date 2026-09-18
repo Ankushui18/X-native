@@ -1795,6 +1795,109 @@ fn the_pencil_draws_a_smoothed_stroke() {
     assert_eq!(h.app.tool, Tool::Select, "Esc leaves the Pencil");
 }
 
+/// Figma Draw's Brush (⇧B): the pencil's freehand gesture in a different mark —
+/// a closed, filled outline whose width, taper and grain come from the style the
+/// panel (and the palette) sets, landed as one layer in one undo step.
+#[test]
+fn the_brush_paints_a_mark() {
+    let mut h = host();
+    assert_eq!(Tool::from_shortcut("b", true, false), Some(Tool::Brush));
+    assert_eq!(Tool::from_shortcut("b", true, true), None, "design-only");
+    assert_eq!(Tool::Brush.shortcut_hint(false), "⇧B");
+    assert_eq!(Tool::Brush.label(), "Brush");
+    assert_eq!(Tool::Brush.icon(), "brush");
+    assert!(crate::editor_ui::palette_commands()
+        .iter()
+        .any(|c| c.label == "Brush tool"));
+    assert!(crate::editor_ui::palette_commands()
+        .iter()
+        .any(|c| c.label == "Brush style: Dry"));
+
+    // one mark: press, three moves, release — all inside the canvas
+    let reg = h.app.editor_regions();
+    let (cx, cy) = (
+        (reg.canvas.x0 + reg.canvas.x1) / 2.0,
+        (reg.canvas.y0 + reg.canvas.y1) / 2.0,
+    );
+    let depth0 = h.app.doc_ref().editor_ref().undo_depth();
+    h.app.tool = Tool::Brush;
+    h.on_press(Point::new(cx, cy));
+    h.on_move(Point::new(cx + 40.0, cy + 14.0));
+    h.on_move(Point::new(cx + 74.0, cy - 22.0));
+    h.on_move(Point::new(cx + 104.0, cy + 6.0));
+    h.on_release();
+
+    let sel = h.app.doc_ref().editor_ref().selection.clone();
+    assert_eq!(sel.len(), 1, "the mark is the selection");
+    let root = &h.app.doc_ref().editor_ref().root;
+    let v = find_node_clone(root, &sel[0]).expect("the mark landed");
+    assert!(matches!(v.kind, NodeKind::Vector { .. }), "a vector landed");
+    assert!(v.name.starts_with("Brush "), "named in the layers panel");
+    let path = match &v.kind {
+        NodeKind::Vector { path } => path,
+        _ => unreachable!(),
+    };
+    // the mark is an outline, and the brush PAINTS it — the pencil beside it
+    // strokes a centreline instead
+    assert!(matches!(path.last(), Some(PathCmd::Close)), "the mark closes");
+    assert!(path.len() > 20, "both edges are sampled");
+    let filled = matches!(&v.fill, Paint::Solid(c) if c.components[3] > 0.0);
+    assert!(filled, "a brush mark is filled");
+    assert_eq!(v.stroke.width, 0.0, "and carries no stroke of its own");
+    // the layer's box wraps the ink, not just the line it was drawn along
+    let ink_w = h.app.brush_style.width();
+    assert!(v.h >= ink_w - 1.0, "the box holds the mark's body: {}", v.h);
+    assert_eq!(h.app.tool, Tool::Brush, "the brush stays active");
+    assert_eq!(
+        h.app.doc_ref().editor_ref().undo_depth(),
+        depth0 + 1,
+        "one mark, one entry"
+    );
+    h.app.doc().editor().undo();
+    let root = &h.app.doc_ref().editor_ref().root;
+    assert!(
+        find_node_clone(root, &sel[0]).is_none(),
+        "one undo removes it"
+    );
+
+    // the style is a tool setting (the panel's row and the palette both write
+    // it), and it changes the mark the next stroke paints
+    h.dispatch(Action::SetBrushStyle(BrushStyle::Marker));
+    assert_eq!(h.app.brush_style, BrushStyle::Marker);
+    assert_eq!(h.app.status, "Brush style: Marker");
+    h.on_press(h.app.world_to_screen(Point::new(60.0, 300.0)));
+    h.on_move(h.app.world_to_screen(Point::new(160.0, 300.0)));
+    h.on_move(h.app.world_to_screen(Point::new(260.0, 300.0)));
+    h.on_release();
+    let sel = h.app.doc_ref().editor_ref().selection.clone();
+    let root = &h.app.doc_ref().editor_ref().root;
+    let marker = find_node_clone(root, &sel[0]).expect("the marker mark landed");
+    assert!(
+        (marker.h - BrushStyle::Marker.width()).abs() < 1.5,
+        "a marker holds one width end to end: {}",
+        marker.h
+    );
+    assert!(marker.w > 190.0, "and runs the length of the drag");
+
+    // the draw-it-in rule holds for the brush too: a mark STARTED inside
+    // frame-1 (world 0,60 375x420) joins the frame
+    h.on_press(h.app.world_to_screen(Point::new(100.0, 200.0)));
+    h.on_move(h.app.world_to_screen(Point::new(150.0, 230.0)));
+    h.on_move(h.app.world_to_screen(Point::new(200.0, 210.0)));
+    h.on_release();
+    let sel = h.app.doc_ref().editor_ref().selection.clone();
+    let root = &h.app.doc_ref().editor_ref().root;
+    let f1 = find_node_clone(root, "frame-1").expect("frame-1");
+    assert!(
+        find_node_clone(&f1, &sel[0]).is_some(),
+        "the mark joined the frame it was drawn in"
+    );
+
+    // Esc leaves the brush, exactly as it leaves the pencil
+    h.on_key(Key::Named(NamedKey::Escape), None);
+    assert_eq!(h.app.tool, Tool::Select, "Esc leaves the Brush");
+}
+
 #[test]
 fn the_slice_tool_draws_an_export_region() {
     let mut h = host();

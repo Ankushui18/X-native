@@ -118,6 +118,18 @@ selection (⌥⌘G), which now have a tool, a palette entry and a shortcut — t
   test asserts that presenting **invalidates** the cached scene instead of serving the
   editor's labelled one.
 * **Constraints are now a canvas behaviour, not an engine table.** `x_editor::constraints::apply_constraints` has existed since Phase 2.12 with a test and exactly one caller — the inspector's W/H fields — and no way at all to SET a pin: no `HPin` appears anywhere in the app. The Design column now ends with Figma's **CONSTRAINTS** block (Horizontal and Vertical, the five answers each), the rows come from one table (`CONSTRAINT_H` / `CONSTRAINT_V`), and the table is what the solver reads. `pin_deltas` is that solver written once; `apply_constraints` applies it in place for the inspector and `pin_commands` writes it as `Move`/`Resize` commands so the frame's own corner drag carries its pinned layers in the SAME undo entry (one Ctrl+Z puts the whole picture back). A child whose size actually changed hands the resize on to its own children, so a nested frame is pinned inside a pinned frame, and a group is refused: Figma's table is about layers inside frames, which is also why the block does not appear for a layer sitting on the page.
+* **Figma Draw's Brush is built, as an outline.** The article's brush "add[s] texture
+  and color" on top of the pencil's line, sets the stroke's fill/weight/style in the
+  secondary toolbar, and repeats the brush styles in the right sidebar's advanced stroke
+  settings. `Tool::Brush` (⇧B) shares the pencil's gesture, sampler and draw-it-in
+  landing, and differs in the mark: `x_core::brush_outline` closes the freehand centreline
+  into a filled outline whose half-width tapers with the style and whose two edges carry a
+  deterministic grain; `state::BrushStyle` (Ink / Marker / Dry) is the one table the live
+  preview, the panel's BRUSH STYLE block and the landed layer read. **Divergence**: Figma's
+  styles are user-made shapes stretched or scattered along a stroke (a brush library, with
+  "Create brush" from a closed vector layer, file-scoped). This build has three styles that
+  ship, not a library — the outline is the style — and it has no ⇧⌘-style brush sampling
+  (⌘/Ctrl-click on an existing stroke).
 * **The layers row toggles are pinned**: hover shows the eye and the padlock, they stay
   while the state is on, and a locked layer stops answering canvas clicks.
 * **The Scale tool (K) exists** — the engine could always scale a subtree
@@ -162,10 +174,7 @@ selection (⌥⌘G), which now have a tool, a palette entry and a shortcut — t
 
 Ordered by how visible they are, not by how hard they are:
 
-1. **Brush** — the textured brush Figma Draw puts beside the Pencil. The Pencil itself
-   is built (⇧P → `Tool::Pencil`, smoothed into editable curves), so what is missing is
-   the brush's texture and colour styles, not the freehand stroke.
-2. **Line / Arrow tools** (L / ⇧L) — a one-drag line or arrow. Stroke caps exist
+1. **Line / Arrow tools** (L / ⇧L) — a one-drag line or arrow. Stroke caps exist
    (`Stroke cap: round / square / butt / arrow`), but the tools themselves do not.
 3. **The Scale panel's numbers, and the scale tool's body drag** — Figma's help says
    "Hover over the object's bounding box to make the [scale] cursor appear. Then,

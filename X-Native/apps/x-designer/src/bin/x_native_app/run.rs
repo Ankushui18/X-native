@@ -27,8 +27,8 @@ use x_native::{
 use crate::dashboard;
 use crate::editor_ui;
 use crate::state::{
-    push_system_clipboard, Action, App, CtxCmd, DashView, Drag, FieldEdit, FieldId, NavTab,
-    OpenDoc, PropertyClipboard, Screen, Tool, FRAME_PRESETS,
+    push_system_clipboard, Action, App, BrushStyle, CtxCmd, DashView, Drag, FieldEdit, FieldId,
+    NavTab, OpenDoc, PropertyClipboard, Screen, Tool, FRAME_PRESETS,
 };
 use crate::theme::*;
 
@@ -65,6 +65,41 @@ struct Gpu {
     config: wgpu::SurfaceConfiguration,
     target: wgpu::TextureView,
     blitter: wgpu::util::TextureBlitter,
+}
+
+/// The points of the freehand stroke in progress, whichever of the two
+/// freehand tools owns it.
+fn freehand_points_mut(drag: Option<&mut Drag>) -> Option<&mut Vec<Point>> {
+    match drag? {
+        Drag::Pencil { points } | Drag::Brush { points } => Some(points),
+        _ => None,
+    }
+}
+
+/// Which freehand mark a stroke commits as. The Pencil and the Brush share the
+/// gesture, the sampler and the landing; this is the one place they differ.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Freehand {
+    Pencil,
+    Brush,
+}
+
+impl Freehand {
+    /// The id prefix a fresh layer gets (`pencil-7`, `brush-7`).
+    fn id_prefix(self) -> &'static str {
+        match self {
+            Freehand::Pencil => "pencil",
+            Freehand::Brush => "brush",
+        }
+    }
+
+    /// The name it shows in the layers panel.
+    fn layer_name(self) -> &'static str {
+        match self {
+            Freehand::Pencil => "Pencil",
+            Freehand::Brush => "Brush",
+        }
+    }
 }
 
 struct Host {
@@ -4234,6 +4269,13 @@ impl Host {
                     points: vec![world],
                 });
             }
+            Tool::Brush => {
+                // The brush is the same gesture; the mark it leaves is the
+                // difference (see `finish_brush`).
+                self.app.drag = Some(Drag::Brush {
+                    points: vec![world],
+                });
+            }
             _ => {
                 self.app.drag = Some(Drag::Create {
                     tool,
@@ -4856,25 +4898,28 @@ impl Host {
                     *cursor = Some(world);
                 }
             }
-            Some(Drag::Pencil { .. }) => {
+            Some(Drag::Pencil { .. }) | Some(Drag::Brush { .. }) => {
                 // Sample the pointer, not the mouse events: one point per two
                 // screen px keeps the fit honest at any zoom, and the engine's
-                // own simplify pass drops what the eye cannot see anyway.
+                // own simplify pass drops what the eye cannot see anyway. (The
+                // match above cloned the drag, so the points are taken from the
+                // LIVE one — a clone would swallow every sample.)
                 let world = self.app.screen_to_world(p);
                 let step = 2.0 / self.app.zoom.max(0.01);
-                // ⇧ while drawing is Figma's "draw in a straight line": the
-                // stroke collapses to the line from where it started
+                // ⇧ while drawing is Figma's "to draw a straight line, hold
+                // Shift": the stroke collapses to the line from where it began
                 let straight = self.app.shift;
-                if let Some(Drag::Pencil { points }) = self.app.drag.as_mut() {
-                    if straight {
-                        points.truncate(1);
-                    }
-                    let far = points
-                        .last()
-                        .is_none_or(|l| (l.x - world.x).hypot(l.y - world.y) >= step);
-                    if far {
-                        points.push(world);
-                    }
+                let Some(points) = freehand_points_mut(self.app.drag.as_mut()) else {
+                    return;
+                };
+                if straight {
+                    points.truncate(1);
+                }
+                let far = points
+                    .last()
+                    .is_none_or(|l| (l.x - world.x).hypot(l.y - world.y) >= step);
+                if far {
+                    points.push(world);
                 }
             }
             Some(Drag::Erase { .. }) => {
@@ -5119,6 +5164,11 @@ impl Host {
                 self.app.drag = None;
                 self.finish_pencil(points);
             }
+            // the brush commits the same way, and stays active the same way
+            Some(Drag::Brush { points }) => {
+                self.app.drag = None;
+                self.finish_brush(points);
+            }
             // eraser stroke ends on release - apply the erasure
             Some(Drag::Erase { .. }) => {
                 self.app.doc().editor().eraser_end();
@@ -5283,19 +5333,32 @@ impl Host {
         }
     }
 
-    /// Commit a pencil stroke: the sampled points become ONE vector layer —
-    /// smoothed into curves by the engine's fit, stroked with the tool's
-    /// defaults — placed by the same draw-it-in rule the shape tools use and
-    /// pushed as a single undo step (one insert).
-    ///
-    /// The tool is deliberately left alone: Figma's pencil "stays active until
-    /// you select another tool or press Esc", which is the one place it parts
-    /// company with the shape tools.
+    /// Commit a pencil stroke: the sampled points become ONE vector layer.
     fn finish_pencil(&mut self, pts: Vec<Point>) {
+        self.finish_freehand(pts, Freehand::Pencil);
+    }
+
+    /// Commit a brush mark: the same gesture, and the same one-layer,
+    /// one-undo-step landing, but the layer is the painted outline.
+    fn finish_brush(&mut self, pts: Vec<Point>) {
+        self.finish_freehand(pts, Freehand::Brush);
+    }
+
+    /// Commit one freehand stroke as ONE vector layer, placed by the same
+    /// draw-it-in rule the shape tools use and pushed as a single undo step
+    /// (one insert). The tool is deliberately left alone: Figma's pencil
+    /// "stays active until you select another tool or press Esc", and Figma
+    /// Draw's brush is the tool beside it in the same toolbar.
+    ///
+    /// The Pencil keeps the smoothed centreline and strokes it; the Brush fills
+    /// its outline. Both read their ink and weight from ONE table
+    /// (`state::pencil_ink` / `state::BrushStyle`), so the live preview and the
+    /// layer that lands cannot drift apart.
+    fn finish_freehand(&mut self, pts: Vec<Point>, kind: Freehand) {
         if pts.len() < 2 {
             return;
         }
-        let (min_x, min_y, max_x, max_y) = pts.iter().fold(
+        let (min_x, min_y, _max_x, _max_y) = pts.iter().fold(
             (
                 f64::INFINITY,
                 f64::INFINITY,
@@ -5305,16 +5368,36 @@ impl Host {
             |(x0, y0, x1, y1), p| (x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y)),
         );
         let local: Vec<(f64, f64)> = pts.iter().map(|p| (p.x - min_x, p.y - min_y)).collect();
-        let path = x_native::freehand_path(&local, crate::state::PENCIL_SMOOTHING);
+        let style = self.app.brush_style;
+        let mut path = match kind {
+            Freehand::Pencil => x_native::freehand_path(&local, crate::state::PENCIL_SMOOTHING),
+            Freehand::Brush => x_native::brush_outline(
+                &local,
+                style.width(),
+                style.taper(),
+                style.grain(),
+                crate::state::PENCIL_SMOOTHING,
+            ),
+        };
         if path.is_empty() {
             return;
         }
+        // The layer's box is the MARK's own. A brush's ink reaches half a width
+        // past the centreline it was drawn along (and the fitted cubics of a
+        // pencil stroke can bow past the samples), so a box taken from the
+        // points alone would be smaller than the geometry it describes — and
+        // the selection box, the panel's W/H and a frame's clip all read it.
+        let (bx, by, bw, bh) = x_native::path_bounds(&path);
+        if bx != 0.0 || by != 0.0 {
+            x_native::shift_path(&mut path, -bx, -by);
+        }
+        let (min_x, min_y) = (min_x + bx, min_y + by);
         let mut v = Node::vector(
-            &x_native::fresh_id("pencil"),
+            &x_native::fresh_id(kind.id_prefix()),
             min_x,
             min_y,
-            (max_x - min_x).max(1.0),
-            (max_y - min_y).max(1.0),
+            bw.max(1.0),
+            bh.max(1.0),
             path,
         );
         let n = {
@@ -5325,16 +5408,26 @@ impl Host {
                 .sum::<usize>()
                 + 1
         };
-        v.name = format!("Pencil {n}");
-        v.fill = Paint::Solid(x_native::Color::TRANSPARENT);
-        let ink = crate::state::pencil_ink();
-        v.stroke = x_native::Stroke::solid(ink, crate::state::PENCIL_WEIGHT);
-        // A materialized stack is where the end-point style lives, and Figma's
-        // pencil is explicit about it: a ROUND 3px stroke.
-        v.materialize_visual_stacks();
-        if let Some(layer) = v.stroke_layers.first_mut() {
-            layer.options.cap_start = x_native::StrokeCap::Round;
-            layer.options.cap_end = x_native::StrokeCap::Round;
+        v.name = format!("{} {n}", kind.layer_name());
+        match kind {
+            Freehand::Pencil => {
+                v.fill = Paint::Solid(x_native::Color::TRANSPARENT);
+                let ink = crate::state::pencil_ink();
+                v.stroke = x_native::Stroke::solid(ink, crate::state::PENCIL_WEIGHT);
+                // A materialized stack is where the end-point style lives, and
+                // Figma's pencil is explicit about it: a ROUND 3px stroke.
+                v.materialize_visual_stacks();
+                if let Some(layer) = v.stroke_layers.first_mut() {
+                    layer.options.cap_start = x_native::StrokeCap::Round;
+                    layer.options.cap_end = x_native::StrokeCap::Round;
+                }
+            }
+            Freehand::Brush => {
+                // The mark IS the outline, so the layer is filled with the
+                // brush's ink and has no stroke of its own.
+                v.fill = Paint::Solid(crate::state::brush_ink());
+                v.stroke = x_native::Stroke::solid(x_native::Color::TRANSPARENT, 0.0);
+            }
         }
         let id = v.id.clone();
         // read the Space opt-out BEFORE the document guard: the guard borrows
@@ -6492,7 +6585,10 @@ impl Host {
                     // P12: an in-flight tree drag cancels first
                     if matches!(self.app.drag, Some(Drag::TreeRow { .. })) {
                         self.app.drag = None;
-                    } else if matches!(self.app.tool, Tool::Scale | Tool::Slice | Tool::Pencil) {
+                    } else if matches!(
+                        self.app.tool,
+                        Tool::Scale | Tool::Slice | Tool::Pencil | Tool::Brush
+                    ) {
                         // Figma's Esc leaves the active drawing tool (Scale,
                         // Slice) the way V does —
                         // the selection survives until a second Esc, and a
@@ -6833,6 +6929,13 @@ impl Host {
             "Ellipse tool" => self.app.tool = Tool::Ellipse,
             "Pen tool" => self.app.tool = Tool::Pen,
             "Pencil tool" => self.app.tool = Tool::Pencil,
+            "Brush tool" => self.app.tool = Tool::Brush,
+            // Figma Draw's secondary toolbar sets the stroke's style; the
+            // palette is this build's keyboard route to the same setting, and
+            // the brush block in the panel is the pointer's
+            "Brush style: Ink" => self.app.brush_style = BrushStyle::Ink,
+            "Brush style: Marker" => self.app.brush_style = BrushStyle::Marker,
+            "Brush style: Dry" => self.app.brush_style = BrushStyle::Dry,
             "Hand tool" => self.app.tool = Tool::Hand,
             // audit F7: these labels were misspelled (and In/Out missing),
             // so four advertised palette commands ran nothing
@@ -9402,6 +9505,10 @@ impl Host {
                 self.request_close_doc(i);
             }
             Action::Tool(t) => self.app.tool = t,
+            Action::SetBrushStyle(style) => {
+                self.app.brush_style = style;
+                self.app.status = format!("Brush style: {}", style.label());
+            }
             Action::LeftTab(t) => {
                 self.app.doc().left_tab = t;
             }
@@ -13315,6 +13422,7 @@ mod tests {
         assert_eq!(Tool::Ellipse.icon(), "circle");
         assert_eq!(Tool::Pen.icon(), "pen-tool");
         assert_eq!(Tool::Pencil.icon(), "pencil");
+        assert_eq!(Tool::Brush.icon(), "brush");
         assert_eq!(Tool::Hand.icon(), "hand");
     }
 

@@ -5110,7 +5110,88 @@ fn paint_design(
         );
         y += 18.0;
     }
+    let y = paint_brush_styles(app, s, hit, x0, xr, y);
     paint_constraints(app, s, hit, x0, xr, y);
+}
+
+/// The Brush's styles, at the end of the Design column. Figma Draw puts the
+/// stroke's "fill, weight, and style" in the secondary toolbar and repeats the
+/// brush styles in the right sidebar's advanced stroke settings; the panel half
+/// is the one this build has — shown while the brush is the active tool, which
+/// is when the choice has a meaning. Returns the y the next block starts at.
+fn paint_brush_styles(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    x0: f64,
+    xr: f64,
+    y0: f64,
+) -> f64 {
+    if app.tool != Tool::Brush {
+        return y0;
+    }
+    let mut y = y0 + 1.0 + 12.0;
+    app.fonts
+        .caps_label(s, x0, y, "BRUSH STYLE", C_TEXT, Wt::Med);
+    y += 12.0 + LABEL_GAP;
+    for style in crate::state::BrushStyle::ALL {
+        let r = Rect::new(x0, y, xr, y + INPUT_H);
+        let active = app.brush_style == style;
+        if active || hover(app, r) {
+            fill_rrect(s, r, R_SM, if active { C_FIELD_2 } else { C_FIELD });
+        }
+        app.fonts
+            .text(s, x0 + 8.0, y + 5.0, style.label(), T11, C_TEXT, Wt::Reg);
+        // the mark the style paints, in the row it belongs to
+        let len = (style.width() * 1.6).clamp(10.0, 40.0);
+        let cy = y + INPUT_H / 2.0;
+        line(
+            s,
+            xr - 10.0 - len,
+            cy,
+            xr - 10.0,
+            cy,
+            if active { C_TEXT } else { C_MUTED },
+            (style.width() / 4.0).max(1.0),
+        );
+        hit.push((r, Action::SetBrushStyle(style)));
+        y += INPUT_H + 6.0;
+    }
+    y
+}
+
+/// Map an engine path — in node-local units at (ox, oy) — onto the canvas.
+fn screen_path(
+    app: &App,
+    cmds: &[x_native::PathCmd],
+    ox: f64,
+    oy: f64,
+) -> vello::kurbo::BezPath {
+    let mut path = vello::kurbo::BezPath::new();
+    let at = |x: f64, y: f64| {
+        let q = app.world_to_screen(Point::new(ox + x, oy + y));
+        (q.x, q.y)
+    };
+    for c in cmds {
+        match c {
+            x_native::PathCmd::MoveTo(x, y) => {
+                let (x, y) = at(*x, *y);
+                path.move_to((x, y));
+            }
+            x_native::PathCmd::LineTo(x, y) => {
+                let (x, y) = at(*x, *y);
+                path.line_to((x, y));
+            }
+            x_native::PathCmd::CurveTo(a, b, c2, d, x, y) => {
+                let a = at(*a, *b);
+                let b = at(*c2, *d);
+                let c2 = at(*x, *y);
+                path.curve_to(a, b, c2);
+            }
+            x_native::PathCmd::Close => path.close_path(),
+        }
+    }
+    path
 }
 
 /// Figma's Constraints block — the panel half of the beginner course's "Frame
@@ -6550,17 +6631,18 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             Tool::Ellipse,
             Tool::Pen,
             Tool::Pencil,
+            Tool::Brush,
             Tool::Eraser,
             Tool::Symmetry,
             Tool::Comment,
             Tool::Hand,
         ]
     };
-    // Audited (canvas 280..1100 @900): container 523×40 r12 at bottom-5
+    // Audited (canvas 280..1100 @900): container 559×40 r12 at bottom-5
     // (y = win_h − 60); icons 32px pitch 36 starting +7; divider mid-gap
-    // after thirteen tools (Scale, the Slice tool and the Pencil joined the
-    // row); palette btn at +484 from container left.
-    let bar_w = 523.0;
+    // after fourteen tools (Scale, the Slice tool, the Pencil and Figma Draw's
+    // Brush joined the row); palette btn at +520 from container left.
+    let bar_w = 559.0;
     let bar_x0 = reg.canvas.x0 + (reg.canvas.x1 - reg.canvas.x0 - bar_w) / 2.0;
     let bar_y0 = app.win_h - TOOLBAR_BOTTOM - TOOLBAR_H;
     let bar = Rect::new(bar_x0, bar_y0, bar_x0 + bar_w, bar_y0 + TOOLBAR_H);
@@ -6599,15 +6681,15 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         tip(app, r, &tl);
         hit.push((r, Action::Tool(*t)));
     }
-    // divider between hand (ends +471) and palette (+484)
-    let dx = bar.x0 + 479.5;
+    // divider between the last tool (ends +507) and palette (+520)
+    let dx = bar.x0 + 515.5;
     fill_rect(
         s,
         Rect::new(dx, bar.y0 + 10.0, dx + 1.0, bar.y1 - 10.0),
         C_LINE_2,
     );
     // search → palette
-    let sx = bar.x0 + 484.0;
+    let sx = bar.x0 + 520.0;
     let sr = Rect::new(sx, bar.y0 + 4.0, sx + TOOL_ICON, bar.y0 + 4.0 + TOOL_ICON);
     if hover(app, sr) {
         fill_rrect(s, sr, R_TOOL_ICON, C_FIELD_2);
@@ -7026,6 +7108,33 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
         }
     }
 
+    // brush preview: the mark is the OUTLINE the release will commit — same
+    // style, same fit, filled with the same ink — so what is on screen is what
+    // lands. It is built the way the layer will be, one code path further down.
+    if let Some(crate::state::Drag::Brush { points }) = &app.drag {
+        let (min_x, min_y) = points.iter().fold(
+            (f64::INFINITY, f64::INFINITY),
+            |(x0, y0), p| (x0.min(p.x), y0.min(p.y)),
+        );
+        let local: Vec<(f64, f64)> = points.iter().map(|p| (p.x - min_x, p.y - min_y)).collect();
+        let st = app.brush_style;
+        let cmds = x_native::brush_outline(
+            &local,
+            st.width(),
+            st.taper(),
+            st.grain(),
+            crate::state::PENCIL_SMOOTHING,
+        );
+        let path = screen_path(app, &cmds, min_x, min_y);
+        s.fill(
+            vello::peniko::Fill::NonZero,
+            vello::kurbo::Affine::IDENTITY,
+            crate::state::brush_ink(),
+            None,
+            &path,
+        );
+    }
+
     // First-run empty state (P0-10): an empty canvas says nothing, so the
     // canvas says it. The hint is pure paint — it leaves the moment the
     // first frame lands, no flag to clear, no button to dismiss.
@@ -7355,6 +7464,22 @@ pub fn palette_commands() -> Vec<Command> {
         Command {
             label: "Pencil tool",
             shortcut: "⇧P",
+        },
+        Command {
+            label: "Brush tool",
+            shortcut: "⇧B",
+        },
+        Command {
+            label: "Brush style: Ink",
+            shortcut: "",
+        },
+        Command {
+            label: "Brush style: Marker",
+            shortcut: "",
+        },
+        Command {
+            label: "Brush style: Dry",
+            shortcut: "",
         },
         Command {
             label: "Hand tool",

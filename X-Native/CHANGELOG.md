@@ -5,6 +5,33 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-18 (Brush)
+
+Figma Draw's **Brush** — the tool beside the Pencil in the same toolbar — is now on the
+canvas: ⇧B selects it, the gesture is the pencil's, and the mark it leaves is a painted
+outline whose width, taper and edge grain come from the selected style.
+
+- `x_core::brush_outline(points, width, taper, grain, eps)` turns a freehand stroke into a
+  CLOSED path: the centreline is simplified, resampled at a uniform pitch, smoothed, then
+  offset to both sides by a half-width that tapers toward the ends and carries a
+  deterministic bristle grain (no randomness — the same points and style always give the
+  same mark). `x_core::path_bounds` / `shift_path` re-origin it onto its own box.
+- `Tool::Brush` (⇧B, design-only like the Pencil) is the dock's fourteenth tool, a palette
+  row ("Brush tool"), and Esc leaves it; it stays active between strokes.
+- One mark = one `NodeKind::Vector`, named "Brush n", filled with the brush's ink and
+  stroked with nothing (the mark IS the outline), selected when it lands, drawn inside the
+  frame it was drawn in (Space opts out), and one insert = one undo step.
+- `state::BrushStyle` — Ink, Marker, Dry — is the one table the live preview and the landed
+  layer read; the Design column shows a **BRUSH STYLE** block while the brush is active
+  (Figma keeps the style in the secondary toolbar and in the right sidebar's stroke
+  settings), and the palette carries one row per style.
+- The layer's box is the MARK's own: the ink reaches half a width past the centreline, so a
+  box taken from the sampled points alone would be smaller than the geometry it describes
+  (the selection box, the panel's W/H and a frame's clip all read it).
+- Documented divergence: Figma's brush styles are user-made shapes stretched or scattered
+  along a stroke ("Create brush" from a closed vector layer, file-scoped); this build ships
+  three styles rather than a library, and does not sample a style off an existing stroke.
+
 ## [Unreleased] — 2026-09-18 (Constraints)
 
 Figma's **Constraints** block — the beginner course's fourth chapter, "Frame presets and
