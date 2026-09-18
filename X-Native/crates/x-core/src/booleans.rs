@@ -969,7 +969,8 @@ mod tests {
         // the wedge form has no inner edge at all
         let wedge = arc_path_cmds(100.0, 100.0, 0.0, 180.0, 0.0);
         assert_eq!(
-            wedge.iter()
+            wedge
+                .iter()
                 .filter(|c| matches!(c, PathCmd::CurveTo(..)))
                 .count(),
             2
@@ -999,7 +1000,8 @@ mod tests {
         // 200-deg sweep -> 3 segments (ceil(200/90))
         let sweep = arc_path_cmds(80.0, 40.0, 10.0, 210.0, 0.0);
         assert_eq!(
-            sweep.iter()
+            sweep
+                .iter()
                 .filter(|c| matches!(c, PathCmd::CurveTo(..)))
                 .count(),
             3
