@@ -5,6 +5,40 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-18 (The Scale tool, and Frame selection)
+
+Figma's **Scale tool (K)** and **Frame selection (⌥⌘G)** were already in the engine —
+`Editor::scale_node` carried a test, `Editor::frame_selection` carried three — with **no
+caller anywhere in the app**: no tool, no shortcut, no palette entry. Both are reachable
+now, and the scale was taught Figma's own list of what travels with the box.
+
+### Added
+- **`Tool::Scale` (K) — the box scales, and everything inside it scales with it.** The
+  Scale tool sits beside Move in the toolbar and in the palette, `K` selects it, and the
+  same four corner handles the Move tool uses now grow the layer itself: child offsets,
+  stroke weight and dash patterns, corner radii, text size and leading, effect distances,
+  and auto-layout padding/gap. The anchor is the corner **diagonally opposite** the
+  handle you grabbed — Figma's fixed point, so the layer grows from the corner you are
+  not holding — and one rule (`state::scale_drag_factor`, plus `scaled_box` for the paint)
+  drives both the live ratio chip and the commit
+  (`the_scale_tool_grows_a_layer_from_the_corner_you_are_not_holding`,
+  `scale_tool_takes_text_effects_and_layout_with_it`). `apps/x-designer`,
+  `crates/x-editor`.
+- **⌥⌘G frames the selection.** Figma's Frame selection shortcut now reaches
+  `Editor::frame_selection`: the selection goes into a new Frame sized to the members'
+  collective bounds, a single layer included, and the members keep their page positions
+  (`option_command_g_wraps_the_selection_in_a_frame_like_figma`). An empty selection is
+  refused with a reason instead of making an empty frame, and ⌘G without ⌥ still groups.
+- **`Editor::scale_nodes_about`** — a multi-layer scale is ONE gesture: one
+  `ReplaceNode` per selected root, pushed as a single undo step, and a listed node whose
+  ancestor is listed too is skipped rather than scaled twice
+  (`scale_about_an_anchor_pins_it_and_is_one_undo_step`).
+
+### Fixed
+- **A locked layer is not scaled.** Figma's scale article is explicit ("with the
+  exception of locked layers"); the rule is enforced in the engine, not only in the
+  selection.
+
 ## [Unreleased] — 2026-09-18 (Canvas chrome: one rule for names, real double-click)
 
 Follow-up to the owner's report — *"why is the page name shown as the canvas frame

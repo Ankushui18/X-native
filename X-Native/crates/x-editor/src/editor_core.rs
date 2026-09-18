@@ -788,17 +788,52 @@ impl Editor {
     }
 
     /// Phase 2.3 (Scale tool): scale a node AND its whole subtree
-    /// uniformly — sizes, child offsets, strokes, corner radii. One
-    /// undoable ReplaceNode.
+    /// uniformly — sizes, child offsets, strokes, corner radii, text, effects
+    /// and auto layout. One undoable ReplaceNode. The anchor is the node's own
+    /// origin, so a node scales IN PLACE (Figma's numeric scale).
     pub fn scale_node(&mut self, id: &str, factor: f64) -> bool {
-        if factor <= 0.0 {
-            return false;
-        }
         let Some(n) = find(&self.root, id) else {
             return false;
         };
-        let before = Box::new(n.clone());
-        let mut after = n.clone();
+        let (ax, ay) = (n.transform.x, n.transform.y);
+        self.scale_nodes_about(&[(id.to_string(), ax, ay)], factor)
+    }
+
+    /// Figma's Scale tool (K): scale every listed node — and its subtree — by
+    /// `factor` about `(ax, ay)`, a point of that node's PARENT space (the
+    /// space `transform.x/y` live in). The anchor is the fixed point of the
+    /// mapping, which is what pins the corner you are not dragging: grab the
+    /// bottom-right handle and the top-left corner stays exactly where it was.
+    ///
+    /// A listed node whose ANCESTOR is also listed is skipped — its scale is
+    /// already part of that subtree's, and applying both would scale it twice.
+    /// Every `ReplaceNode` goes into ONE undo step, so scaling a ten-layer
+    /// selection is a single Ctrl+Z.
+    ///
+    /// What travels with the size is Figma's list, not just w/h: child
+    /// offsets, stroke weight, dashes, corner radius, text size and leading,
+    /// the distances inside effects, and auto-layout padding/gap.
+    pub fn scale_nodes_about(&mut self, parts: &[(String, f64, f64)], factor: f64) -> bool {
+        if parts.is_empty() || !factor.is_finite() || factor <= 0.0 {
+            return false;
+        }
+        if factor == 1.0 {
+            return true;
+        }
+        // Shadows and blurs are distances, so they scale with the box. A
+        // noise AMOUNT is a ratio — 0.4 grain is 0.4 grain at any size.
+        fn scale_effect(e: &mut Effect, f: f64) {
+            match e {
+                Effect::DropShadow { dx, dy, blur, .. }
+                | Effect::InnerShadow { dx, dy, blur, .. } => {
+                    *dx *= f;
+                    *dy *= f;
+                    *blur *= f;
+                }
+                Effect::LayerBlur { radius } | Effect::BackgroundBlur { radius } => *radius *= f,
+                Effect::Noise { .. } => {}
+            }
+        }
         fn scale_subtree(n: &mut Node, f: f64, scale_own_pos: bool) {
             if scale_own_pos {
                 n.transform.x *= f;
@@ -807,6 +842,44 @@ impl Editor {
             n.w *= f;
             n.h *= f;
             n.stroke.width *= f;
+            // text: glyphs grow with the box (the Scale tool's whole point —
+            // the Move tool's handles leave font size alone)
+            n.font_size *= f;
+            n.line_height *= f;
+            n.letter_spacing *= f;
+            n.paragraph_spacing *= f;
+            n.paragraph_indent *= f;
+            for run in &mut n.text_runs {
+                if let Some(size) = &mut run.size {
+                    *size *= f;
+                }
+                if let Some(ls) = &mut run.ls {
+                    *ls *= f;
+                }
+            }
+            // stroke stacks: weight and the dash/gap pattern are distances
+            for layer in &mut n.stroke_layers {
+                layer.stroke.width *= f;
+                for d in layer.options.dash.iter_mut() {
+                    *d *= f;
+                }
+                layer.options.dash_offset *= f;
+            }
+            scale_effect_both(&mut n.effects, &mut n.effect_layers, f, scale_effect);
+            // auto layout: padding and gap travel with the frame
+            if let NodeKind::Frame { layout } = &mut n.kind {
+                if let Some(layout) = layout {
+                    layout.gap *= f;
+                    for side in layout.padding.iter_mut() {
+                        *side *= f;
+                    }
+                }
+            }
+            for grid in &mut n.layout_grids {
+                grid.gutter *= f;
+                grid.margin *= f;
+                grid.cell *= f;
+            }
             if let NodeKind::Rect { radius } = &mut n.kind {
                 *radius *= f;
             }
@@ -818,11 +891,11 @@ impl Editor {
             if let NodeKind::Vector { path } = &mut n.kind {
                 for c in path.iter_mut() {
                     match c {
-                        x_core::PathCmd::MoveTo(x, y) | x_core::PathCmd::LineTo(x, y) => {
+                        PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => {
                             *x *= f;
                             *y *= f;
                         }
-                        x_core::PathCmd::CurveTo(x1, y1, x2, y2, x, y) => {
+                        PathCmd::CurveTo(x1, y1, x2, y2, x, y) => {
                             *x1 *= f;
                             *y1 *= f;
                             *x2 *= f;
@@ -830,7 +903,7 @@ impl Editor {
                             *x *= f;
                             *y *= f;
                         }
-                        x_core::PathCmd::Close => {}
+                        PathCmd::Close => {}
                     }
                 }
             }
@@ -838,14 +911,64 @@ impl Editor {
                 scale_subtree(c, f, true);
             }
         }
-        // the root of the scale keeps its own x/y (scales in place)
-        scale_subtree(&mut after, factor, false);
-        let cmd = Command::ReplaceNode {
-            id: id.into(),
-            before,
-            after: Box::new(after),
-        };
-        self.push(vec![cmd]);
+        // The legacy `effects` list and the ordered `effect_layers` stack are
+        // two encodings of the same idea; a node may carry either or both,
+        // and each entry scales exactly once.
+        fn scale_effect_both(
+            legacy: &mut [Effect],
+            layers: &mut [EffectLayer],
+            f: f64,
+            one: fn(&mut Effect, f64),
+        ) {
+            for e in legacy.iter_mut() {
+                one(e, f);
+            }
+            for layer in layers.iter_mut() {
+                one(&mut layer.effect, f);
+            }
+        }
+        // Is `id` inside a subtree that the same gesture already scales?
+        fn nested_in_listed(n: &Node, id: &str, listed: &[&str], ancestor_listed: bool) -> bool {
+            if n.id == id {
+                return ancestor_listed;
+            }
+            let now = ancestor_listed || listed.contains(&n.id.as_str());
+            n.children
+                .iter()
+                .any(|c| nested_in_listed(c, id, listed, now))
+        }
+
+        let listed: Vec<&str> = parts.iter().map(|(id, _, _)| id.as_str()).collect();
+        let mut cmds = Vec::new();
+        for (id, ax, ay) in parts {
+            if nested_in_listed(&self.root, id, &listed, false) {
+                continue;
+            }
+            let Some(n) = find(&self.root, id) else {
+                continue;
+            };
+            // Figma: "You can scale any object, with the exception of locked
+            // layers and layers nested inside a component instance." A locked
+            // layer refuses every gesture, so it is skipped here too.
+            if n.locked {
+                continue;
+            }
+            let before = Box::new(n.clone());
+            let mut after = n.clone();
+            // the anchor is the fixed point: x' = ax + (x - ax) * f
+            after.transform.x = ax + (n.transform.x - ax) * factor;
+            after.transform.y = ay + (n.transform.y - ay) * factor;
+            scale_subtree(&mut after, factor, false);
+            cmds.push(Command::ReplaceNode {
+                id: id.clone(),
+                before,
+                after: Box::new(after),
+            });
+        }
+        if cmds.is_empty() {
+            return false;
+        }
+        self.push(cmds);
         true
     }
 
@@ -1103,9 +1226,6 @@ impl Editor {
         }
     }
 
-    /// Figma "Frame selection" (⌥⌘G / ⌘⇧A): wrap the current selection in a
-    /// new Frame sized to the members' collective AABB. Works with a single
-    /// node (unlike group, which needs 2+). Snapshot-undo, like group.
     /// Wrap the current selection in a labelled Section container.
     pub fn section_selection(&mut self, section_id: &str) {
         if section_id.is_empty() || find(&self.root, section_id).is_some() {
@@ -1147,6 +1267,9 @@ impl Editor {
         }
     }
 
+    /// Figma "Frame selection" (⌥⌘G): wrap the current selection in a new
+    /// Frame sized to the members' collective AABB. Works with a single node
+    /// (unlike group, which needs 2+). Snapshot-undo, like group.
     pub fn frame_selection(&mut self, frame_id: &str) {
         if frame_id.is_empty() || find(&self.root, frame_id).is_some() {
             return;

@@ -4084,9 +4084,15 @@ impl Host {
                     start_pan: self.app.pan,
                 });
             }
-            Tool::Select => {
+            // The Scale tool (K) is the Move tool's twin with a different
+            // answer for the same four handles — so it selects, hovers and
+            // marquees exactly like it, and only the grab differs.
+            Tool::Select | Tool::Scale => {
                 // corner handles win when there's a single selection
-                if let Some(dr) = self.resize_grab(world) {
+                if let Some(dr) = match tool {
+                    Tool::Scale => self.scale_grab(world),
+                    _ => self.resize_grab(world),
+                } {
                     self.app.drag = Some(dr);
                     return;
                 }
@@ -4131,7 +4137,8 @@ impl Host {
                 if let Some(_id) = hit_id {
                     let shift = self.app.shift;
                     // ⌥-drag: duplicate the selection, then drag the copy
-                    if self.app.alt {
+                    // (the Scale tool has no such gesture: it scales)
+                    if self.app.alt && tool == Tool::Select {
                         self.app.doc().editor().duplicate_selection((0.0, 0.0));
                         self.app.mark_dirty();
                     }
@@ -4439,6 +4446,57 @@ impl Host {
         })
     }
 
+    /// The Scale tool (K) grabs the SAME four corner handles the Move tool
+    /// grabs and pins the DIAGONALLY OPPOSITE corner: that anchor is the fixed
+    /// point of the mapping (see `state::scale_drag_factor`), which is what makes
+    /// the box grow from the corner you are not holding. The `parts` list is
+    /// built here, once — the anchor never moves, so every move of the gesture
+    /// reuses it.
+    fn scale_grab(&mut self, world: Point) -> Option<Drag> {
+        // read the zoom BEFORE taking the document: `doc()` borrows the app
+        // mutably, and the handle tolerance needs both
+        let tol = 6.0 / self.app.zoom.max(0.01);
+        let doc = self.app.doc();
+        let editor = doc.editor_ref();
+        if editor.selection.is_empty() {
+            return None;
+        }
+        let base_depth = editor.undo_depth();
+        let mut bbox: Option<(f64, f64, f64, f64)> = None;
+        for id in &editor.selection {
+            let n = crate::editor_ui::find_node(&editor.root, id.as_str())?;
+            let r = (n.transform.x, n.transform.y, n.w, n.h);
+            bbox = Some(match bbox {
+                None => r,
+                Some(b) => (
+                    b.0.min(r.0),
+                    b.1.min(r.1),
+                    (b.0 + b.2).max(r.0 + r.2) - b.0.min(r.0),
+                    (b.1 + b.3).max(r.1 + r.3) - b.1.min(r.1),
+                ),
+            });
+        }
+        let orig = bbox?;
+        let (x, y, w, h) = orig;
+        let corner = [(x, y), (x + w, y), (x, y + h), (x + w, y + h)]
+            .iter()
+            .position(|(cx, cy)| (world.x - cx).abs() <= tol && (world.y - cy).abs() <= tol)?;
+        let (ax, ay) = crate::state::scale_anchor(orig, corner);
+        let parts: Vec<(String, f64, f64)> = editor
+            .selection
+            .iter()
+            .map(|id| (id.clone(), ax, ay))
+            .collect();
+        Some(Drag::ScaleSel {
+            corner,
+            orig,
+            start: world,
+            base_depth,
+            parts,
+            applied: 1.0,
+        })
+    }
+
     fn on_move(&mut self, p: Point) {
         if self.app.document_loading.is_some() {
             return;
@@ -4737,6 +4795,35 @@ impl Host {
                     doc.editor().resize(id, nw, nh);
                 }
                 self.app.mark_dirty();
+            }
+            Some(Drag::ScaleSel {
+                corner,
+                orig,
+                applied,
+                parts,
+                ..
+            }) => {
+                let world = self.app.screen_to_world(p);
+                let (factor, _) = crate::state::scale_drag_factor(orig, corner, world);
+                // The gesture is incremental: what is on screen has already
+                // been scaled by `applied`, so the next step applies the
+                // RATIO. Compounding the ratios lands on the same box the
+                // absolute factor would, and each step is a real edit (so
+                // release merges them into one undo step, like a move).
+                let rel = factor / applied;
+                if (rel - 1.0).abs() < 1e-4 {
+                    return;
+                }
+                let scaled = {
+                    let doc = self.app.doc();
+                    doc.editor().scale_nodes_about(&parts, rel)
+                };
+                if scaled {
+                    if let Some(Drag::ScaleSel { applied, .. }) = self.app.drag.as_mut() {
+                        *applied = factor;
+                    }
+                    self.app.mark_dirty();
+                }
             }
             Some(Drag::Create { start, .. }) => {
                 let mut world = self.app.screen_to_world(p);
@@ -5133,6 +5220,14 @@ impl Host {
             // Layer corner-resize ends on release: same one-gesture =
             // one-step merge as MoveSel.
             Some(Drag::ResizeSel { base_depth, .. }) => {
+                let doc = self.app.doc();
+                let editor = doc.editor();
+                editor.merge_last(editor.undo_depth().saturating_sub(base_depth));
+                self.app.drag = None;
+            }
+            // a scale is one gesture too: every move pushed its own
+            // ReplaceNode, and one Ctrl+Z must undo the whole drag
+            Some(Drag::ScaleSel { base_depth, .. }) => {
                 let doc = self.app.doc();
                 let editor = doc.editor();
                 editor.merge_last(editor.undo_depth().saturating_sub(base_depth));
@@ -6155,6 +6250,12 @@ impl Host {
                         self.app.mark_dirty();
                         return;
                     }
+                    // ⌥⌘G — Frame selection (Figma's own shortcut: it wraps
+                    // the selection in a frame sized to what you selected)
+                    "g" | "G" if self.app.alt => {
+                        self.app.apply_ctx(CtxCmd::FrameSelection);
+                        return;
+                    }
                     "g" | "G" => {
                         let shift = self.app.shift;
                         let doc = self.app.doc();
@@ -6589,6 +6690,7 @@ impl Host {
                 self.app.doc().redo_document();
             }
             "Select tool" => self.app.tool = Tool::Select,
+            "Scale tool" => self.app.tool = Tool::Scale,
             "Frame tool" => self.app.tool = Tool::Frame,
             "Text tool" => self.app.tool = Tool::Text,
             "Rectangle tool" => self.app.tool = Tool::Rect,
@@ -6624,6 +6726,7 @@ impl Host {
                 doc.editor().group_selection(&x_native::fresh_id("group"));
                 self.app.mark_dirty();
             }
+            "Frame selection" => self.app.apply_ctx(CtxCmd::FrameSelection),
             "Bring to front" => {
                 let doc = self.app.doc();
                 if let Some(id) = doc.selected_id() {
@@ -11632,10 +11735,6 @@ fn blank_editing_text(root: &mut Node, eid: Option<&str>) {
     walk(root, eid);
 }
 
-/// A world coordinate expressed in the local space of `target` — the space
-/// a child's transform lives in: the inverse of the ancestor chain's
-/// transform product. Drawing into a selected frame needs this so the new
-/// node lands where the pointer was, in the frame's own coordinates.
 /// The container a NEW object drawn at `p` joins — Figma's rule, and the one
 /// its shape tools follow: *"Click inside an existing frame to add a 100 x 100
 /// nested frame"*, and the rect/ellipse tools behave the same way.
@@ -11677,6 +11776,10 @@ fn container_under(root: &Node, p: Point) -> Option<String> {
     out
 }
 
+/// A world coordinate expressed in the local space of `target` — the space
+/// a child's transform lives in: the inverse of the ancestor chain's
+/// transform product. Drawing into a selected frame needs this so the new
+/// node lands where the pointer was, in the frame's own coordinates.
 fn world_to_local(root: &Node, target: &str, x: f64, y: f64) -> (f64, f64) {
     fn rec(n: &Node, id: &str, acc: Affine, pt: (f64, f64), out: &mut Option<(f64, f64)>) {
         // `acc` is the world matrix of `n`'s parent; multiplying in `n`'s

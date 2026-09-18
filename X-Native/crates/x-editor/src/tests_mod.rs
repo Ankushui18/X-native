@@ -1707,6 +1707,126 @@ mod tests {
     }
 
     #[test]
+    fn scale_tool_takes_text_effects_and_layout_with_it() {
+        // Figma's Scale tool (K) is not a resize: stroke weight, corner
+        // radius, font size, effect distances and auto-layout spacing all
+        // travel with the box. This is that whole list, on one node.
+        let mut inner = Node::rect("r", 10.0, 20.0, 30.0, 40.0, Color::WHITE).radius(8.0);
+        inner.stroke.width = 2.0;
+        let mut dashed = StrokeLayer::new(Stroke::solid(Color::BLACK, 2.0));
+        dashed.options.dash = vec![4.0, 2.0];
+        dashed.options.dash_offset = 1.0;
+        inner.stroke_layers.push(dashed);
+        let mut label = Node::text("t", 0.0, 0.0, 60.0, 20.0, "hi");
+        label.font_size = 14.0;
+        label.line_height = 20.0;
+        label.letter_spacing = 1.0;
+        let frame = Node::frame("f", 200.0, 100.0)
+            .auto_layout(AutoLayout {
+                direction: LayoutDirection::Vertical,
+                gap: 12.0,
+                padding: [8.0, 8.0, 4.0, 4.0],
+                ..Default::default()
+            })
+            .effect(Effect::LayerBlur { radius: 6.0 })
+            .child(inner)
+            .child(label);
+        let mut e = Editor::new(Node::frame("page", 800.0, 600.0).child(frame));
+        assert!(e.scale_node("f", 2.0));
+        let f = find(&e.root, "f").unwrap();
+        assert_eq!((f.w, f.h), (400.0, 200.0));
+        let layout = match &f.kind {
+            NodeKind::Frame { layout } => layout.clone().expect("frame lost its layout"),
+            other => panic!("frame kind lost: {other:?}"),
+        };
+        assert_eq!(layout.gap, 24.0);
+        assert_eq!(layout.padding, [16.0, 16.0, 8.0, 8.0]);
+        assert!(matches!(
+            f.effects.as_slice(),
+            [Effect::LayerBlur { radius }] if *radius == 12.0
+        ));
+        let r = find(&e.root, "r").unwrap();
+        assert_eq!((r.transform.x, r.transform.y), (20.0, 40.0));
+        assert_eq!((r.w, r.h), (60.0, 80.0));
+        assert!(matches!(r.kind, NodeKind::Rect { radius } if radius == 16.0));
+        assert_eq!(r.stroke.width, 4.0);
+        assert_eq!(r.stroke_layers[0].stroke.width, 4.0);
+        assert_eq!(r.stroke_layers[0].options.dash, vec![8.0, 4.0]);
+        assert_eq!(r.stroke_layers[0].options.dash_offset, 2.0);
+        let t = find(&e.root, "t").unwrap();
+        assert_eq!(
+            (t.font_size, t.line_height, t.letter_spacing),
+            (28.0, 40.0, 2.0)
+        );
+        e.undo();
+        assert_eq!(find(&e.root, "f").unwrap().w, 200.0);
+        assert_eq!(find(&e.root, "t").unwrap().font_size, 14.0);
+    }
+
+    #[test]
+    fn scale_about_an_anchor_pins_it_and_is_one_undo_step() {
+        // The anchor is the FIXED POINT: scaling a node about its own
+        // top-left corner must leave that corner exactly where it was, which
+        // is what makes Figma's corner drag feel like it grows from the
+        // opposite handle.
+        let mut e = Editor::new(doc());
+        assert!(e.scale_nodes_about(&[("a".into(), 10.0, 10.0)], 2.0));
+        let a = find(&e.root, "a").unwrap();
+        assert_eq!((a.transform.x, a.transform.y), (10.0, 10.0));
+        assert_eq!((a.w, a.h), (200.0, 100.0));
+        e.undo();
+
+        // a multi-layer scale: everything moves and grows against the same
+        // shared anchor, and the whole gesture is ONE undo step
+        let depth = e.undo_depth();
+        assert!(e.scale_nodes_about(&[("a".into(), 0.0, 0.0), ("b".into(), 0.0, 0.0)], 0.5));
+        let a = find(&e.root, "a").unwrap();
+        assert_eq!(
+            (a.transform.x, a.transform.y, a.w, a.h),
+            (5.0, 5.0, 50.0, 25.0)
+        );
+        let b = find(&e.root, "b").unwrap();
+        assert_eq!(
+            (b.transform.x, b.transform.y, b.w, b.h),
+            (100.0, 5.0, 50.0, 25.0)
+        );
+        assert_eq!(e.undo_depth(), depth + 1, "one gesture, one undo step");
+        // Figma's exception, from the Scale tool article: a LOCKED layer is
+        // not scaled. Lock "b" and repeat: only "a" moves.
+        e.undo();
+        e.set_locked("b", true);
+        assert!(e.scale_nodes_about(&[("a".into(), 0.0, 0.0), ("b".into(), 0.0, 0.0)], 0.5));
+        assert_eq!(find(&e.root, "a").unwrap().w, 50.0);
+        assert_eq!(
+            find(&e.root, "b").unwrap().w,
+            100.0,
+            "a locked layer must not scale"
+        );
+        e.undo();
+        assert_eq!(find(&e.root, "a").unwrap().w, 100.0);
+        assert_eq!(find(&e.root, "b").unwrap().w, 100.0);
+        // zero/negative factors are refused, like scale_node
+        assert!(!e.scale_nodes_about(&[("a".into(), 0.0, 0.0)], 0.0));
+        assert!(!e.scale_nodes_about(&[], 2.0));
+
+        // a node listed TOGETHER WITH ITS ANCESTOR scales exactly once: the
+        // subtree pass already carries it
+        let mut e2 = Editor::new(
+            Node::frame("page", 800.0, 600.0).child(
+                Node::frame("f", 100.0, 100.0)
+                    .child(Node::rect("r", 10.0, 10.0, 20.0, 20.0, Color::WHITE)),
+            ),
+        );
+        assert!(e2.scale_nodes_about(&[("f".into(), 0.0, 0.0), ("r".into(), 0.0, 0.0)], 2.0));
+        assert_eq!(find(&e2.root, "f").unwrap().w, 200.0);
+        let r = find(&e2.root, "r").unwrap();
+        assert_eq!(
+            (r.transform.x, r.transform.y, r.w, r.h),
+            (20.0, 20.0, 40.0, 40.0)
+        );
+    }
+
+    #[test]
     fn set_prototype_is_undoable() {
         let mut e = Editor::new(doc());
         e.set_prototype(

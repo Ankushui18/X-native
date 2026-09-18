@@ -20,6 +20,10 @@ use vello::peniko::Color as VelloColor;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tool {
     Select,
+    /// Figma's Scale tool (K): the same four corner handles as the Move tool,
+    /// but the whole layer scales with them — stroke weight, corner radius,
+    /// text size, effects and auto-layout spacing travel with the box.
+    Scale,
     Frame,
     Text,
     Rect,
@@ -46,6 +50,7 @@ impl Tool {
     pub fn icon(self) -> &'static str {
         match self {
             Tool::Select => "mouse-pointer-2",
+            Tool::Scale => "maximize",
             Tool::Frame => "frame#",
             Tool::Text => "type",
             Tool::Rect => "square",
@@ -75,6 +80,7 @@ impl Tool {
     pub fn label(self) -> &'static str {
         match self {
             Tool::Select => "Move",
+            Tool::Scale => "Scale",
             Tool::Frame => "Frame",
             Tool::Text => "Text",
             Tool::Rect => "Rectangle",
@@ -99,6 +105,7 @@ impl Tool {
     pub fn shortcut_hint(self, board: bool) -> String {
         const KEYS: &[(&str, bool)] = &[
             ("v", false),
+            ("k", false),
             ("f", false),
             ("t", false),
             ("r", false),
@@ -133,6 +140,8 @@ impl Tool {
             ("r", _) if board => Some(Tool::BoardRect),
             ("o", _) if board => Some(Tool::BoardCircle),
             ("v", _) => Some(Tool::Select),
+            // Figma's Scale tool; boards have their own model, no scale there
+            ("k", _) if !board => Some(Tool::Scale),
             ("f", _) => Some(Tool::Frame),
             ("t", _) => Some(Tool::Text),
             ("r", _) => Some(Tool::Rect),
@@ -170,6 +179,60 @@ pub fn create_rect(start: Point, cur: Point, from_center: bool) -> Rect {
         )
     }
 }
+
+/// The corner a scale about `corner` pins: the one diagonally OPPOSITE the
+/// handle the pointer grabbed. That is Figma's fixed point — grab the
+/// bottom-right handle and the top-left corner does not move.
+pub fn scale_anchor(orig: (f64, f64, f64, f64), corner: usize) -> (f64, f64) {
+    let (x, y, w, h) = orig;
+    match corner {
+        0 => (x + w, y + h),
+        1 => (x, y + h),
+        2 => (x + w, y),
+        _ => (x, y),
+    }
+}
+
+/// The Scale tool's drag rule, shared by the live preview and the commit (the
+/// same arrangement as `create_rect`): `factor` is the pointer's projection
+/// onto the diagonal from the anchor to the grabbed corner, so the box follows
+/// the pointer and stays uniform — Figma's Scale is proportional by
+/// definition, and 1.0 means "unmoved". A collapse is clamped rather than
+/// flipped: dragging past the anchor must not mirror the layer.
+pub fn scale_drag_factor(
+    orig: (f64, f64, f64, f64),
+    corner: usize,
+    pointer: Point,
+) -> (f64, (f64, f64)) {
+    let (x, y, w, h) = orig;
+    let (gx, gy) = match corner {
+        0 => (x, y),
+        1 => (x + w, y),
+        2 => (x, y + h),
+        _ => (x + w, y + h),
+    };
+    let (ax, ay) = scale_anchor(orig, corner);
+    let (ux, uy) = (gx - ax, gy - ay);
+    let denom = ux * ux + uy * uy;
+    if denom <= 1e-9 {
+        return (1.0, (ax, ay));
+    }
+    let f = ((pointer.x - ax) * ux + (pointer.y - ay) * uy) / denom;
+    (f.max(MIN_SCALE), (ax, ay))
+}
+
+/// The box a scale of `factor` about the anchor maps `orig` onto — the paint
+/// half of `scale_drag_factor`.
+pub fn scaled_box(orig: (f64, f64, f64, f64), corner: usize, factor: f64) -> Rect {
+    let (x, y, w, h) = orig;
+    let (ax, ay) = scale_anchor(orig, corner);
+    let (nx, ny) = (ax + (x - ax) * factor, ay + (y - ay) * factor);
+    Rect::new(nx, ny, nx + w * factor, ny + h * factor)
+}
+
+/// Smallest factor a drag may commit: below this the layer is invisible and
+/// the anchor sits on top of its own edge, so 0.02 is as far as a drag goes.
+pub const MIN_SCALE: f64 = 0.02;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Screen {
@@ -920,6 +983,9 @@ pub enum CtxCmd {
     Delete,
     Group,
     Ungroup,
+    /// Figma's Frame selection (⌥⌘G): wrap the selection in a new Frame sized
+    /// to the members' collective bounds.
+    FrameSelection,
     MakeComponent,
     /// boolean combine of the two selected shapes (engine boolean_selected)
     Union,
@@ -1276,6 +1342,19 @@ pub enum Drag {
         /// Undo-stack depth at press; release merges the per-event resize
         /// entries into ONE undo step (see `MoveSel::base_depth`).
         base_depth: usize,
+    },
+    /// Scale-tool drag (K): the selection box grows about the corner the
+    /// pointer is NOT holding. `parts` is built once at press — the anchor is
+    /// the fixed point of the mapping, so it never moves, and `applied` is the
+    /// factor already committed by this gesture (each move applies the RATIO
+    /// to what is on screen, which is what keeps the drag incremental).
+    ScaleSel {
+        corner: usize,
+        orig: (f64, f64, f64, f64), // x, y, w, h at drag start
+        start: Point,
+        base_depth: usize,
+        parts: Vec<(String, f64, f64)>, // (id, anchor x, anchor y) in parent space
+        applied: f64,
     },
     /// Pen-tool polyline in progress (world-space points).
     Pen {
@@ -3309,6 +3388,15 @@ impl App {
                     doc.editor().ungroup(&id);
                 }
             }
+            FrameSelection => {
+                if doc.editor_ref().selection.is_empty() {
+                    refusal = Some("Select at least one layer to frame it".into());
+                } else {
+                    // the engine sizes the frame to the members' collective
+                    // bounds and re-parents them with their positions kept
+                    doc.editor().frame_selection(&x_native::fresh_id("frame"));
+                }
+            }
             MakeComponent => {
                 let n = doc.editor().component_names().len() + 1;
                 doc.editor().make_component(&format!("Component {n}"));
@@ -4710,6 +4798,7 @@ mod tool_shortcut_tests {
         assert_eq!(d("r", false), Some(Tool::Rect));
         assert_eq!(d("o", false), Some(Tool::Ellipse));
         assert_eq!(d("p", false), Some(Tool::Pen));
+        assert_eq!(d("k", false), Some(Tool::Scale));
         assert_eq!(d("h", false), Some(Tool::Hand));
         assert_eq!(d("c", false), Some(Tool::Comment));
         assert_eq!(d("m", false), Some(Tool::Symmetry));

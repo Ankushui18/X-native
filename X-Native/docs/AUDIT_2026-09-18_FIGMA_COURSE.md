@@ -28,8 +28,8 @@ every "in this tree" cell is the source that implements it.
 | tool (Figma) | what it does on Figma's canvas | in this tree |
 | --- | --- | --- |
 | **Move / select** (V) | click selects the top-level object, drag moves it, shift-click adds, marquee on empty canvas, double-click or ⏎ descends one level, ⌘-click deep-selects | `Tool::Select`; `x-editor::hit_test` + `hit_test_rect`; `drill_into`; parity rows 1–7 |
-| **Scale** (K) | resize WITHOUT distortion — text sizes and stroke weights follow the box | not built; resizing scales the box only (listed below) |
-| **Frame** (F) | click on empty canvas = a top-level frame (100×100, then the last size used); **click INSIDE a frame = a nested frame there**; drag = custom size; ⌥⌘G frames the selection | `Tool::Frame`; nesting now by *where you draw* (`container_under`); ⌥⌘G is not bound |
+| **Scale** (K) | resize WITHOUT distortion — "Any blurs or strokes will scale as well", text sizes follow the box, a locked layer is refused, and the box grows from the corner you are not holding | `Tool::Scale` + `state::scale_drag_factor` / `scaled_box` + `Editor::scale_nodes_about` (w/h, child offsets, strokes and dashes, radii, text size/leading, effect distances, auto-layout padding/gap) |
+| **Frame** (F) | click on empty canvas = a top-level frame (100×100, then the last size used); **click INSIDE a frame = a nested frame there**; drag = custom size; ⌥⌘G frames the selection | `Tool::Frame`; nesting now by *where you draw* (`container_under`); ⌥⌘G now frames the selection |
 | **Slice** | an object whose only job is to be exported | not built (any selection can be exported) |
 | **Rectangle** (R) / **Ellipse** (O) | drag creates; ⇧ square/circle; ⌥ from the centre; the size is shown while dragging; **drawn over a frame it joins that frame**; space while dragging prevents nesting | `Tool::Rect` / `Tool::Ellipse`; all four rules now, via `state::create_rect` + `container_under` + `space_pan` |
 | **Line** (L) / **Arrow** (⇧L) | drag in any direction; stroke settings in the right panel | `Tool::Pen` + line nodes; no arrow caps yet |
@@ -41,9 +41,10 @@ every "in this tree" cell is the source that implements it.
 | **Zoom** | ⌘/Ctrl + wheel, ⌘0 / ⌘1 / ⌘2, or the zoom menu | wheel zoom at the pointer, `Action::ZoomMenu` (in / out / 100% / selection / fit) |
 | **Nudge** | arrow keys move 1px, ⇧ 10px | arrow-key nudge with ⇧ big-nudge |
 
-Two rules in that table were NOT in this build and are now (see §4): a new layer joins
-the container you draw it in, and the shape tools' modifiers (⇧ constrain, ⌥ from the
-centre, live size readout).
+Three rows changed since this table was written (see §4): a new layer joins the
+container you draw it in, the shape tools' modifiers (⇧ constrain, ⌥ from the centre,
+live size readout), and the two tools that were engine-only — the Scale tool (K) and
+Frame selection (⌥⌘G), which now have a tool, a palette entry and a shortcut.
 
 ## 1. The file interface, element by element
 
@@ -114,19 +115,38 @@ centre, live size readout).
   editor's labelled one.
 * **The layers row toggles are pinned**: hover shows the eye and the padlock, they stay
   while the state is on, and a locked layer stops answering canvas clicks.
+* **The Scale tool (K) exists** — the engine could always scale a subtree
+  (`Editor::scale_node`, Phase 2.3), but nothing on the canvas reached it. `Tool::Scale`
+  now sits beside Move in the toolbar and in the palette, `K` selects it, and the same
+  four corner handles the Move tool uses now scale the box *and* everything inside it:
+  child offsets, stroke weight and dashes, corner radii, text size/leading, effect
+  distances, auto-layout padding/gap. The anchor is the corner diagonally opposite the
+  handle you grabbed — Figma's fixed point — and the whole drag is one undo step. A
+  locked layer is skipped, because Figma's own article refuses it.
+* **⌥⌘G frames the selection** — `Editor::frame_selection` and `Command::FrameSelection`
+  had been in the engine since the wrap-selection refactor with tests and no caller; the
+  shortcut and the palette entry now reach them. The frame is the members' collective
+  AABB, single layers included, and the members keep their page positions.
+* **Two engine rules came out of this pass**: `scale_nodes_about` refuses a factor of
+  zero or less (a drag past the anchor must not mirror the layer) and skips a listed
+  node whose ANCESTOR is listed too — scaling both would scale the child twice.
 
 ## 5. Honestly not built
 
 Ordered by how visible they are, not by how hard they are:
 
-1. **Scale tool (K)** — resize without distortion: Figma's scale resizes text and stroke
-   widths with the box. Ours scales only the box.
-2. **Slice tool** — an object whose only job is to be exported. We export any selection,
+1. **Slice tool** — an object whose only job is to be exported. We export any selection,
    which covers the use case but not the layer.
-3. **Pencil / Brush tool** — freehand (and Figma's "smooth" pass that turns a freehand
+2. **Pencil / Brush tool** — freehand (and Figma's "smooth" pass that turns a freehand
    stroke into a vector network). `Tool::Eraser` and `Tool::Symmetry` exist; freehand
    does not.
-4. **Frame around the selection (⌥⌘G)** and **line / arrow tools with caps** — both
-   small, both absent.
+3. **Line / Arrow tools** (L / ⇧L) — a one-drag line or arrow. Stroke caps exist
+   (`Stroke cap: round / square / butt / arrow`), but the tools themselves do not.
+4. **The Scale panel's numbers, and the scale tool's body drag** — Figma's help says
+   "Hover over the object's bounding box to make the [scale] cursor appear. Then,
+   click-and-drag to resize", plus a *multiplier* and an *anchor box* in the right
+   sidebar. Ours scales from the four corner handles (the same ones the Move tool
+   resizes with) and dragging the body of an object still moves it, so the gesture is
+   there but not the whole surface; typing "50%" or picking an anchor is not.
 5. **Community and Teams** in the file browser, and sharing in the editor. These need a
    backend; the build is local-first.

@@ -6402,6 +6402,7 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         // before; the toolbar is the tool hub)
         &[
             Tool::Select,
+            Tool::Scale,
             Tool::Frame,
             Tool::Text,
             Tool::Rect,
@@ -6413,10 +6414,11 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             Tool::Hand,
         ]
     };
-    // Audited (canvas 280..1100 @900): container 415×40 r12 at bottom-5
+    // Audited (canvas 280..1100 @900): container 451×40 r12 at bottom-5
     // (y = win_h − 60); icons 32px pitch 36 starting +7; divider mid-gap
-    // after ten tools; palette btn at +376 from container left.
-    let bar_w = 415.0;
+    // after eleven tools (the Scale tool joined the row); palette btn at
+    // +412 from container left.
+    let bar_w = 451.0;
     let bar_x0 = reg.canvas.x0 + (reg.canvas.x1 - reg.canvas.x0 - bar_w) / 2.0;
     let bar_y0 = app.win_h - TOOLBAR_BOTTOM - TOOLBAR_H;
     let bar = Rect::new(bar_x0, bar_y0, bar_x0 + bar_w, bar_y0 + TOOLBAR_H);
@@ -6455,15 +6457,15 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         tip(app, r, &tl);
         hit.push((r, Action::Tool(*t)));
     }
-    // divider between hand (ends +363) and palette (+376)
-    let dx = bar.x0 + 371.5;
+    // divider between hand (ends +399) and palette (+412)
+    let dx = bar.x0 + 407.5;
     fill_rect(
         s,
         Rect::new(dx, bar.y0 + 10.0, dx + 1.0, bar.y1 - 10.0),
         C_LINE_2,
     );
     // search → palette
-    let sx = bar.x0 + 376.0;
+    let sx = bar.x0 + 412.0;
     let sr = Rect::new(sx, bar.y0 + 4.0, sx + TOOL_ICON, bar.y0 + 4.0 + TOOL_ICON);
     if hover(app, sr) {
         fill_rrect(s, sr, R_TOOL_ICON, C_FIELD_2);
@@ -6772,6 +6774,31 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
         fill_rect(s, r, C_SEL_SOFT);
         stroke_rect(s, r, C_SEL, 1.0);
         let label = format!("{} × {}", wr.width().round(), wr.height().round());
+        let tw = app.fonts.measure(&label, T10, Wt::Reg) + 12.0;
+        let bx = r.x0.min(reg.canvas.x1 - tw - 4.0).max(reg.canvas.x0 + 4.0);
+        let chip = Rect::new(bx, r.y1 + 6.0, bx + tw, r.y1 + 24.0);
+        fill_rrect(s, chip, R_SM, C_TEXT);
+        app.fonts
+            .text_center(s, chip, &label, T10, C_BASE, Wt::Med, true);
+    }
+    // scale-tool drag (K) — the same deal as the create preview: the box the
+    // gesture will commit, drawn through `state::scaled_box`, with the ratio
+    // Figma shows while you scale. Outline only, no fill: this is the
+    // selection's own box moving, not a new shape being drawn.
+    if let Some(crate::state::Drag::ScaleSel {
+        corner,
+        orig,
+        applied,
+        ..
+    }) = &app.drag
+    {
+        let reg = app.editor_regions();
+        let wb = crate::state::scaled_box(*orig, *corner, *applied);
+        let a = app.world_to_screen(Point::new(wb.x0, wb.y0));
+        let b = app.world_to_screen(Point::new(wb.x1, wb.y1));
+        let r = Rect::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y));
+        stroke_rect(s, r, C_SEL, 1.0);
+        let label = format!("{}%", (*applied * 100.0).round() as i64);
         let tw = app.fonts.measure(&label, T10, Wt::Reg) + 12.0;
         let bx = r.x0.min(reg.canvas.x1 - tw - 4.0).max(reg.canvas.x0 + 4.0);
         let chip = Rect::new(bx, r.y1 + 6.0, bx + tw, r.y1 + 24.0);
@@ -7095,6 +7122,10 @@ pub fn palette_commands() -> Vec<Command> {
             shortcut: "V",
         },
         Command {
+            label: "Scale tool",
+            shortcut: "K",
+        },
+        Command {
             label: "Frame tool",
             shortcut: "F",
         },
@@ -7141,6 +7172,10 @@ pub fn palette_commands() -> Vec<Command> {
         Command {
             label: "Group selection",
             shortcut: "⌘ G",
+        },
+        Command {
+            label: "Frame selection",
+            shortcut: "⌥ ⌘ G",
         },
         Command {
             label: "Ungroup",

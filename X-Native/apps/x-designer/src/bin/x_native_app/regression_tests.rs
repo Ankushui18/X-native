@@ -1546,6 +1546,133 @@ fn shape_tool_modifiers_build_the_rect_the_preview_shows() {
 /// stay while the state is on, and a locked layer stops answering the canvas.
 /// (Figma interface — "You can lock and unlock each layer … click on the
 /// Padlock icon that appears next to the layer name when you hover".)
+/// Figma's Scale tool (K): the Move tool's four corner handles with a
+/// different fixed point — the corner you are NOT holding — and a box that
+/// takes the strokes, radii and text with it instead of stretching around
+/// them. Escape hatch: V gets you back to the Move tool.
+#[test]
+fn the_scale_tool_grows_a_layer_from_the_corner_you_are_not_holding() {
+    let mut h = host();
+    // K is the tool, in design mode only (boards have their own model)
+    assert_eq!(Tool::from_shortcut("k", false, false), Some(Tool::Scale));
+    assert_eq!(Tool::from_shortcut("k", false, true), None);
+    assert_eq!(Tool::Scale.shortcut_hint(false), "K");
+    assert_eq!(Tool::Scale.label(), "Scale");
+    // and it is discoverable, not keyboard-only: the palette lists it
+    assert!(crate::editor_ui::palette_commands()
+        .iter()
+        .any(|c| c.label == "Scale tool"));
+
+    h.app.doc().editor().selection = vec!["frame-1".into()];
+    h.app.doc().editor().mutate_visual_stack("frame-1", |n| {
+        n.stroke.width = 2.0;
+    });
+    // frame-1 is (0, 60) 375x420. Grab the BOTTOM-RIGHT handle, which pins
+    // the top-left corner, and drag to exactly twice the box.
+    let grab = h.scale_grab(Point::new(375.0, 480.0)).expect("corner grab");
+    h.app.drag = Some(grab);
+    h.on_move(h.app.world_to_screen(Point::new(750.0, 900.0)));
+    let f1 = find_node_clone(&h.app.doc_ref().editor_ref().root, "frame-1").unwrap();
+    assert_eq!(
+        (f1.transform.x, f1.transform.y),
+        (0.0, 60.0),
+        "the anchor corner moved"
+    );
+    assert_eq!((f1.w, f1.h), (750.0, 840.0));
+    assert_eq!(
+        f1.stroke.width, 4.0,
+        "the stroke must travel with the box, unlike a Move-tool resize"
+    );
+    // the whole drag is ONE undo step, not one per move event
+    h.on_release();
+    h.app.doc().undo_document();
+    let f1 = find_node_clone(&h.app.doc_ref().editor_ref().root, "frame-1").unwrap();
+    assert_eq!((f1.w, f1.h), (375.0, 420.0));
+    assert_eq!(f1.stroke.width, 2.0);
+}
+
+/// ⌥⌘G is Figma's Frame selection: the selection goes into a NEW frame sized
+/// to the members' collective bounds, with their positions preserved. The
+/// engine had this since the wrap-selection refactor; nothing could reach it.
+#[test]
+fn option_command_g_wraps_the_selection_in_a_frame_like_figma() {
+    let mut h = host();
+    h.finish_create(Tool::Rect, Point::new(500.0, 20.0), Point::new(560.0, 50.0));
+    let ids: Vec<String> = h
+        .app
+        .doc_ref()
+        .editor_ref()
+        .root
+        .children
+        .iter()
+        .map(|c| c.id.clone())
+        .collect();
+    assert_eq!(ids.len(), 2, "frame-1 + the new rect");
+    h.app.doc().editor().selection = ids;
+    h.app.ctrl = true;
+    h.app.alt = true;
+    h.on_key(Key::Character("g".into()), Some("g"));
+    h.app.ctrl = false;
+    h.app.alt = false;
+    let root = &h.app.doc_ref().editor_ref().root;
+    assert_eq!(root.children.len(), 1, "the members did not move inside");
+    let frame = &root.children[0];
+    assert!(matches!(frame.kind, NodeKind::Frame { .. }));
+    // the frame IS the collective bounds: (0,60)+375x420 with (500,20)+60x30
+    assert_eq!(
+        (frame.transform.x, frame.transform.y, frame.w, frame.h),
+        (0.0, 20.0, 560.0, 460.0)
+    );
+    assert_eq!(frame.children.len(), 2);
+    // and the members keep the place they had on the page: frame-1 sat 40px
+    // below the new frame's top edge, and it still does
+    let inner = find_node_clone(frame, "frame-1").unwrap();
+    assert_eq!((inner.transform.x, inner.transform.y), (0.0, 40.0));
+    assert_eq!((inner.w, inner.h), (375.0, 420.0));
+    // the new frame is what you are left holding, like Figma
+    assert_eq!(
+        h.app.doc_ref().editor_ref().selection,
+        vec![frame.id.clone()]
+    );
+}
+
+#[test]
+fn frame_selection_refuses_an_empty_selection_and_grouping_still_groups() {
+    let mut h = host();
+    h.app.ctrl = true;
+    h.app.alt = true;
+    h.on_key(Key::Character("g".into()), Some("g"));
+    assert!(
+        h.app.status.contains("Select at least one"),
+        "empty selection: {}",
+        h.app.status
+    );
+    assert_eq!(h.app.doc_ref().editor_ref().root.children.len(), 1);
+
+    // ⌘G without ⌥ is untouched by the new arm: two siblings still GROUP
+    // (Figma's own shortcut), they do not become a frame
+    h.finish_create(Tool::Rect, Point::new(500.0, 20.0), Point::new(560.0, 50.0));
+    let ids: Vec<String> = h
+        .app
+        .doc_ref()
+        .editor_ref()
+        .root
+        .children
+        .iter()
+        .map(|c| c.id.clone())
+        .collect();
+    h.app.doc().editor().selection = ids;
+    h.app.alt = false;
+    h.on_key(Key::Character("g".into()), Some("g"));
+    h.app.ctrl = false;
+    let root = &h.app.doc_ref().editor_ref().root;
+    assert_eq!(root.children.len(), 1);
+    assert!(
+        matches!(root.children[0].kind, NodeKind::Group),
+        "⌘G must still group"
+    );
+}
+
 #[test]
 fn a_layer_row_hides_and_locks_the_layer_like_figmas_eye_and_padlock() {
     let mut h = host();
