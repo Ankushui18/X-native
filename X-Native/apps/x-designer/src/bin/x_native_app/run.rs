@@ -4568,6 +4568,13 @@ impl Host {
     /// layer's edge, and a press ON an existing noodle — which selects that
     /// connection so Delete can remove it.
     fn conn_press(&mut self, world: Point, screen: Point) -> Option<Drag> {
+        // "Switch to the Prototype tab ... Now when we select the button, a new
+        // option appears on the canvas—a blue circle on its edge." The gesture
+        // belongs to that tab: on the Design tab the layer's edge carries its
+        // own handles (an arc's, a scale's) and they must win their presses.
+        if self.app.doc_ref().right_tab != crate::state::RightTab::Prototype {
+            return None;
+        }
         let src = self.conn_anchor()?;
         let edge = self.conn_anchor_world(&src)?;
         let d = ((edge.x - world.x).powi(2) + (edge.y - world.y).powi(2)).sqrt();
