@@ -2057,7 +2057,10 @@ fn the_polygon_and_star_tools_count_their_sides() {
     // and the whole gesture is one undo step like every other canvas drag
     let depth = h.app.doc_ref().editor_ref().undo_depth();
     let handle = crate::state::shape_handles(&poly)[0].1;
-    h.on_press(h.app.world_to_screen(Point::new(px + handle.x, py + handle.y)));
+    h.on_press(
+        h.app
+            .world_to_screen(Point::new(px + handle.x, py + handle.y)),
+    );
     assert!(
         matches!(
             h.app.drag,
@@ -2068,7 +2071,9 @@ fn the_polygon_and_star_tools_count_their_sides() {
         ),
         "the count handle takes the press"
     );
-    let centre = h.app.world_to_screen(Point::new(px + pw / 2.0, py + ph / 2.0));
+    let centre = h
+        .app
+        .world_to_screen(Point::new(px + pw / 2.0, py + ph / 2.0));
     h.on_move(centre);
     h.on_release();
     let poly = find_node_clone(&h.app.doc_ref().editor_ref().root, &sel[0]).unwrap();
@@ -2089,8 +2094,14 @@ fn the_polygon_and_star_tools_count_their_sides() {
     // beyond it is half the span's 20, so six sides become sixteen
     let depth = h.app.doc_ref().editor_ref().undo_depth();
     let handle = crate::state::shape_handles(&poly)[0].1;
-    h.on_press(h.app.world_to_screen(Point::new(px + handle.x, py + handle.y)));
-    h.on_move(h.app.world_to_screen(Point::new(px + pw * 1.25, py + ph / 2.0)));
+    h.on_press(
+        h.app
+            .world_to_screen(Point::new(px + handle.x, py + handle.y)),
+    );
+    h.on_move(
+        h.app
+            .world_to_screen(Point::new(px + pw * 1.25, py + ph / 2.0)),
+    );
     h.on_release();
     let poly = find_node_clone(&h.app.doc_ref().editor_ref().root, &sel[0]).unwrap();
     assert_eq!(
@@ -2144,7 +2155,10 @@ fn the_polygon_and_star_tools_count_their_sides() {
         .find(|(p, _)| *p == crate::state::ShapePart::Ratio)
         .map(|(_, p)| p)
         .expect("a star shows the Ratio handle");
-    h.on_press(h.app.world_to_screen(Point::new(sx + handle.x, sy + handle.y)));
+    h.on_press(
+        h.app
+            .world_to_screen(Point::new(sx + handle.x, sy + handle.y)),
+    );
     assert!(
         matches!(
             h.app.drag,
@@ -2155,7 +2169,9 @@ fn the_polygon_and_star_tools_count_their_sides() {
         ),
         "the ratio handle takes the press"
     );
-    let half = h.app.world_to_screen(Point::new(sx + sw / 2.0 + sw / 4.0, sy + sh / 2.0));
+    let half = h
+        .app
+        .world_to_screen(Point::new(sx + sw / 2.0 + sw / 4.0, sy + sh / 2.0));
     h.on_move(half);
     h.on_release();
     let star = find_node_clone(&h.app.doc_ref().editor_ref().root, &sel[0]).unwrap();

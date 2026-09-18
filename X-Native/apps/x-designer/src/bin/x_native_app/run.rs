@@ -5187,7 +5187,7 @@ impl Host {
                             // outwards adds points, inwards removes them —
                             // `f` is unclamped, so a drag past the rim counts
                             let moved = (f - f0) * crate::state::COUNT_DRAG_SPAN;
-                            let asked = (*count as f64 + moved).round().clamp(
+                            let asked = (count as f64 + moved).round().clamp(
                                 x_native::booleans::COUNT_MIN as f64,
                                 x_native::booleans::COUNT_MAX as f64,
                             );
