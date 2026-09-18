@@ -2970,8 +2970,11 @@ fn paint_right(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                 hit.push((icon_hit, Action::Tool(Tool::Comment)));
             }
             _ => {
-                tip(app, icon_hit, "Flow preview");
-                hit.push((icon_hit, Action::RightTab(RightTab::Prototype)));
+                // Figma's toolbar has one ▶ and it PRESENTS. Ours opened the
+                // Prototype tab and left the viewer to a button inside it — the
+                // panel is still one click away on the FLOW pill.
+                tip(app, icon_hit, "Present");
+                hit.push((icon_hit, Action::FlowEnter));
             }
         }
     }
@@ -8430,6 +8433,7 @@ fn paint_flow_overlay(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         // a fresh cache per overlay: the relocated clone must never share
         // entries with the authored-position document render
         let mut cache = FrameCache::new();
+        cache.set_presenting(true);
         let scene = cache.render(&placed, &flow.vars, &sink);
         s.append(scene, Some(aff));
     }

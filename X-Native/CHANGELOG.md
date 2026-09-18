@@ -102,6 +102,27 @@ not selecting the elements in the right panel"*. The audit behind the fixes
   `the_show_name_row_toggles_a_frame_name_undoably_and_only_for_frames`,
   `show_name_roundtrips_and_defaults_to_true_for_older_files`).
 
+### Added
+- **Presentation mode, and a Present control that means it.** The ▶ in the panel
+  header used to be a shortcut to the Prototype *tab*; it now starts the file's
+  prototype the way Figma's Present does, and a presentation paints the artwork
+  alone: `FrameCache::set_presenting` + `ir::strip_canvas_chrome` drop the canvas
+  chrome — a frame's name (`/label`) and a Section's title chip (`/pill` +
+  `/chip`) — from the canvas render and from the prototype's relocated overlays.
+  The engine's lowering still runs once for both pictures; only the gate differs,
+  and the flag is a render mode, not a document property, so nothing is written to
+  the file. Flipping it drops the cached scene instead of serving the editor's
+  labelled one (`presenting_invalidates_the_cached_scene`). The two encoder rules
+  now share one owner: `ir::is_frame_name_label` is what the exporter strips and
+  what a presentation hides, `ir::is_canvas_chrome` adds the section chip that
+  only a presentation hides. `crates/x-render`, `crates/x-native`,
+  `apps/x-designer`.
+- **The layers panel's eye and padlock are pinned.** They appear on the row you
+  hover, stay while the state is on, and a locked layer stops answering the
+  canvas — Figma's behaviour, now a test rather than a habit
+  (`a_layer_row_hides_and_locks_the_layer_like_figmas_eye_and_padlock`).
+  `apps/x-designer`.
+
 ### Changed
 - **The status message got a row of its own instead of a bar over the artwork.**
   The band was painted last, over the bottom 22px of the canvas — the canvas

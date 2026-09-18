@@ -69,6 +69,8 @@ So the rule is now mechanical instead of remembered:
 | Double-clicking a name renames it where it is written (page rows, layer rows) | [Create and manage pages](https://help.figma.com/hc/en-us/articles/360038511293-Create-and-manage-pages) | `FieldId::LayerName`, `Action::LayerRename` | `double_click_on_a_layer_name_renames_it`, `double_click_on_a_page_name_opens_its_rename_field` |
 | A panel row's height and its hit zone are the same box, so a click cannot land in a gap | owner report, 2026-09-18 | `editor_ui.rs` row geometry | `app_row_heights_are_the_component_layers` |
 | Clicking inside the text field you are already editing moves the caret; it does not re-open the field and throw the typed buffer away | owner report, 2026-09-18 | `run.rs::on_press` returns from the in-editor caret branch before any re-seed | `pressing_inside_the_open_text_field_keeps_what_was_typed` |
+| **Present** starts a presentation of the file's prototype, and a presentation paints the artwork alone — no frame names, no section chips, no canvas chrome at all | [Figma Design for beginners](https://help.figma.com/hc/en-us/sections/30880632542743) (the toolbar's Present) · [Show frame name in prototype](https://forum.figma.com/suggest-a-feature-11/show-frame-name-in-prototype-32523) | `FrameCache::set_presenting` + `ir::strip_canvas_chrome`; the → `Action::FlowEnter` control and `run.rs::canvas_scene` | `the_header_play_button_presents_the_prototype`, `a_presentation_strips_the_canvas_chrome_and_keeps_the_artwork`, `presenting_invalidates_the_cached_scene` |
+| A layer row carries Figma's eye and padlock: they appear on the row you hover, stay while the state is on, and a locked layer stops answering the canvas | [Figma Design for beginners](https://help.figma.com/hc/en-us/sections/30880632542743) · [Figma interface — basic information](https://firmbee.com/figma-interface-basic-information-figma-for-beginners-2) | `editor_ui.rs` row toggles (`Action::TreeVisible` / `Action::TreeLock`), `x-editor::hit_test` | `a_layer_row_hides_and_locks_the_layer_like_figmas_eye_and_padlock` |
 | A status message gets a row of its own: the chrome reserves the window's bottom band for it, no danger fill is painted in the chrome, and the flow viewer paints no band at all | owner report, 2026-09-18 | `state.rs::status_band` (the one rect) + `paints_status_band`, `run.rs::paint_feedback` (the one painter) | `the_status_band_is_chrome_and_the_artwork_stops_above_it`, `the_status_band_carries_the_running_jobs_controls`, `the_flow_viewer_paints_no_status_band_over_the_prototype` |
 
 ## 3. Open — claimed, or fixed, but not pinned yet
@@ -78,8 +80,6 @@ guard counts it.
 
 | behaviour | Figma source | our rule (owner) | pinned by |
 | --- | --- | --- | --- |
-
-| Frame names are not drawn in presentation mode | [Show frame name in prototype](https://forum.figma.com/suggest-a-feature-11/show-frame-name-in-prototype-32523) | not built: there is no presentation mode yet — the preview chrome is a device frame only | open |
 
 ## 4. Running it
 

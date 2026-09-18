@@ -14743,6 +14743,10 @@ impl App {
             d.frame_cache = x_native::FrameCache::new();
         }
         d.frame_cache.set_hidden_text(self.text_edit.as_deref());
+        // the flow viewer IS a presentation: no canvas chrome (Figma draws no
+        // frame names in presentation mode, and the canvas around the presented
+        // frame is not on screen at all)
+        d.frame_cache.set_presenting(self.flow.is_some());
         let root = &d.editors[d.page].root;
         let sink = x_native::VelloSink {
             assets: Some(&d.assets),

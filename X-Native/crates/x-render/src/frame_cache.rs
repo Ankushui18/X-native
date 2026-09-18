@@ -489,6 +489,10 @@ pub struct FrameCacheStats {
 pub struct FrameCache {
     font_epoch: Option<u64>,
     hidden_text: Option<String>,
+    /// Presentation mode: the artwork only, without the canvas chrome (frame
+    /// names, section title chips). A render MODE, not a document property, so
+    /// the document stays exactly as authored while it is on.
+    presenting: bool,
     doc_hash: u64,
     /// child id -> (subtree hash, cached world bounds) — bounds only
     /// recompute when the subtree hash moves (drag = 1 recompute/frame)
@@ -513,6 +517,29 @@ impl FrameCache {
             self.scene = None;
             self.segments.clear();
         }
+    }
+
+    /// A presentation paints the artwork alone: Figma draws no frame names in
+    /// presentation mode, and there is no canvas around a presented frame for a
+    /// section chip to label. Flipping the flag drops the cached scene (it is a
+    /// different picture), it is not a second cache key.
+    pub fn set_presenting(&mut self, presenting: bool) {
+        if self.presenting != presenting {
+            self.presenting = presenting;
+            self.scene = None;
+            self.segments.clear();
+        }
+    }
+
+    /// Lower one node for the canvas under this cache's current mode: the inline
+    /// editor's hidden text, and — while presenting — no canvas chrome.
+    fn lower_canvas(&self, node: &Node, vars: &Variables) -> crate::ir::RenderTree {
+        let mut tree =
+            crate::ir::build_render_tree_with_hidden(node, vars, self.hidden_text.as_deref());
+        if self.presenting {
+            crate::ir::strip_canvas_chrome(&mut tree);
+        }
+        tree
     }
 
     pub fn render(&mut self, root: &Node, vars: &Variables, sink: &VelloSink) -> &Scene {
@@ -625,8 +652,7 @@ impl FrameCache {
         {
             self.segments.clear();
             let t1 = std::time::Instant::now();
-            let tree =
-                crate::ir::build_render_tree_with_hidden(root, vars, self.hidden_text.as_deref());
+            let tree = self.lower_canvas(root, vars);
             let lower_ms = t1.elapsed().as_secs_f32() * 1000.0;
             let t2 = std::time::Instant::now();
             let scene = sink.render(&tree);
@@ -652,11 +678,7 @@ impl FrameCache {
         const BUCKET: usize = 512;
         let t1 = std::time::Instant::now();
         let shell_only = root.shallow_clone();
-        let shell_scene = sink.render(&crate::ir::build_render_tree_with_hidden(
-            &shell_only,
-            vars,
-            self.hidden_text.as_deref(),
-        ));
+        let shell_scene = sink.render(&self.lower_canvas(&shell_only, vars));
         let root_world = root.transform.matrix(root.w, root.h);
         let rw = root_world.as_coeffs();
         let mut reused = 0usize;
@@ -730,11 +752,7 @@ impl FrameCache {
                     // children. The root is never labelled (it is the page),
                     // so there is no per-bucket label to overdraw — the shell
                     // scene above and this one agree by construction.
-                    let sub_tree = crate::ir::build_render_tree_with_hidden(
-                        &lower_shell,
-                        vars,
-                        self.hidden_text.as_deref(),
-                    );
+                    let sub_tree = self.lower_canvas(&lower_shell, vars);
                     lower_shell.children.truncate(shell_base_len);
                     lower_ms += tl.elapsed().as_secs_f32() * 1000.0;
                     let te = std::time::Instant::now();
@@ -1080,6 +1098,50 @@ mod reliability_tests {
         cache.render(&page, &vars, &sink);
         assert!(cache.stats.full_hit);
     }
+    /// Presenting is a different picture, not a second cache key: flipping the
+    /// flag drops the cached scene instead of serving the editor's labelled one.
+    #[test]
+    fn presenting_invalidates_the_cached_scene() {
+        let page = Node::frame("page", 200.0, 200.0)
+            .child(Node::frame("hero", 100.0, 60.0).child(Node::rect(
+                "r",
+                4.0,
+                4.0,
+                20.0,
+                20.0,
+                Color::WHITE,
+            )));
+        let vars = Variables::default();
+        let sink = VelloSink {
+            assets: None,
+            fonts: None,
+        };
+        let mut cache = FrameCache::new();
+        cache.render(&page, &vars, &sink);
+        let encoded = cache.encode_count;
+        cache.render(&page, &vars, &sink);
+        assert!(cache.stats.full_hit, "an unchanged page is a cache hit");
+        cache.set_presenting(true);
+        cache.render(&page, &vars, &sink);
+        assert!(
+            !cache.stats.full_hit,
+            "the presentation hit the editor's scene"
+        );
+        assert!(
+            cache.encode_count > encoded,
+            "the presentation reused encoded segments"
+        );
+        // leaving the presentation is the editor's picture again
+        cache.render(&page, &vars, &sink);
+        assert!(cache.stats.full_hit, "presenting left the cache cold");
+        cache.set_presenting(false);
+        cache.render(&page, &vars, &sink);
+        assert!(
+            !cache.stats.full_hit,
+            "the editor hit the presentation's scene"
+        );
+    }
+
     #[test]
     fn inline_exclusion_changes_only_the_view_and_invalidates_cached_scene() {
         let page = Node::frame("page", 100.0, 100.0)

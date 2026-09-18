@@ -36,7 +36,7 @@ pub fn prepare_export(
     let tree = {
         let mut t = tree;
         t.commands
-            .retain(|c| !matches!(c, RenderCommand::Glyphs { key, .. } if key.ends_with("/label")));
+            .retain(|c| !x_render::ir::is_frame_name_label(c.key()));
         t
     };
     let mut tree = x_render::text_geometry::outline_text(&tree, fonts)?;

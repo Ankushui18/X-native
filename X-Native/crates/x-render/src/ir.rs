@@ -898,6 +898,33 @@ pub fn build_render_tree(root: &Node, vars: &Variables) -> RenderTree {
 /// `build_render_tree` path both come through here, so the label rules in
 /// `lower` apply everywhere at once — there is no second "bucket shell" entry
 /// that could disagree about which names get painted.
+/// A frame's name label — the one key the exporter strips and a presentation
+/// hides. One predicate, because the export rule and the presentation rule must
+/// agree about *which* command is a name.
+pub fn is_frame_name_label(key: &str) -> bool {
+    key.ends_with("/label")
+}
+
+/// Which commands are CANVAS CHROME — painted to identify a layer while editing,
+/// never part of the artwork:
+///
+/// * `/label` — a frame's name, in the gutter above it;
+/// * `/pill` + `/chip` — a Section's title chip.
+///
+/// The two objects differ in an EXPORT: Figma exports a section's title with the
+/// section, so only the label is stripped there. A PRESENTATION has no canvas to
+/// identify anything on, so `strip_canvas_chrome` takes both.
+pub fn is_canvas_chrome(key: &str) -> bool {
+    is_frame_name_label(key) || key.ends_with("/pill") || key.ends_with("/chip")
+}
+
+/// Drop the canvas chrome from a lowered tree. A presentation paints the
+/// artwork: Figma does not draw frame names in presentation mode, and the
+/// canvas around a presented frame is not on screen at all.
+pub fn strip_canvas_chrome(tree: &mut RenderTree) {
+    tree.commands.retain(|c| !is_canvas_chrome(c.key()));
+}
+
 pub fn build_render_tree_with_hidden(
     root: &Node,
     vars: &Variables,
@@ -2120,6 +2147,53 @@ mod tests {
                     .iter()
                     .any(|c| matches!(c, RenderCommand::Glyphs { text, .. } if text == "Card")),
             "a section and the frame inside it both keep their names"
+        );
+    }
+
+    /// A presentation paints the artwork, not the canvas chrome: a frame's name
+    /// label and a Section's title chip both go, and nothing else does.
+    #[test]
+    fn a_presentation_strips_the_canvas_chrome_and_keeps_the_artwork() {
+        let mut band = Node::section("band", 300.0, 200.0);
+        band.name = "Band".into();
+        let mut hero = Node::frame("hero", 200.0, 120.0);
+        hero.name = "Hero".into();
+        let page = Node::frame("Page", 400.0, 300.0)
+            .child(hero.child(Node::rect("r", 4.0, 4.0, 20.0, 20.0, Color::WHITE)))
+            .child(band);
+        let mut tree = build_render_tree(&page, &Variables::default());
+        let chrome: Vec<String> = tree
+            .commands
+            .iter()
+            .filter(|c| is_canvas_chrome(c.key()))
+            .map(|c| c.key().to_string())
+            .collect();
+        assert!(
+            chrome.iter().any(|k| is_frame_name_label(k)),
+            "no frame name to strip: {chrome:?}"
+        );
+        assert!(
+            chrome.iter().any(|k| k.ends_with("/pill")),
+            "no section chip to strip: {chrome:?}"
+        );
+        let artwork = tree
+            .commands
+            .iter()
+            .filter(|c| !is_canvas_chrome(c.key()))
+            .count();
+        assert!(artwork > 0, "the fixture has no artwork to keep");
+        strip_canvas_chrome(&mut tree);
+        assert!(
+            !tree.commands.iter().any(|c| is_canvas_chrome(c.key())),
+            "canvas chrome survived the presentation"
+        );
+        assert_eq!(
+            tree.commands
+                .iter()
+                .filter(|c| !is_canvas_chrome(c.key()))
+                .count(),
+            artwork,
+            "the artwork went with the chrome"
         );
     }
 

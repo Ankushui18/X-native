@@ -1366,6 +1366,129 @@ fn prototype_panel_lists_interaction_rows() {
         .any(|(_, a)| matches!(a, Action::FlowEnter)));
 }
 
+/// Figma's layers panel puts an eye and a padlock on the row you hover; they
+/// stay while the state is on, and a locked layer stops answering the canvas.
+/// (Figma interface — "You can lock and unlock each layer … click on the
+/// Padlock icon that appears next to the layer name when you hover".)
+#[test]
+fn a_layer_row_hides_and_locks_the_layer_like_figmas_eye_and_padlock() {
+    let mut h = host();
+    h.app.mouse = Point::new(0.0, 0.0);
+    let root_id = h.app.doc().editor_ref().root.id.clone();
+    let mut hero = Node::frame("hero", 300.0, 200.0);
+    hero.name = "Hero".into();
+    h.app.doc().editor().insert_node(&root_id, hero);
+    h.app.doc().editor().insert_node(
+        "hero",
+        Node::rect("card", 10.0, 10.0, 40.0, 30.0, Color::WHITE),
+    );
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let row = h
+        .app
+        .hit
+        .iter()
+        .find(|(_, a)| *a == Action::TreeRow("hero".into()))
+        .map(|(r, _)| *r)
+        .expect("the frame has a layers row");
+    // Figma shows the toggles on hover, not always
+    assert!(
+        !h.app
+            .hit
+            .iter()
+            .any(|(_, a)| matches!(a, Action::TreeLock(id) if id == "hero")),
+        "the padlock is painted on a row that is not hovered"
+    );
+    h.app.mouse = row.center();
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    assert!(
+        h.app
+            .hit
+            .iter()
+            .any(|(_, a)| matches!(a, Action::TreeLock(id) if id == "hero")),
+        "the hovered row has no padlock"
+    );
+    assert!(
+        h.app
+            .hit
+            .iter()
+            .any(|(_, a)| matches!(a, Action::TreeVisible(id) if id == "hero")),
+        "the hovered row has no eye"
+    );
+
+    // the eye hides the layer, and the icon stays while the state is on
+    h.dispatch(Action::TreeVisible("hero".into()));
+    let visible = |h: &Host| {
+        crate::editor_ui::find_node(&h.app.doc_ref().editor_ref().root, "hero")
+            .map(|n| n.visible)
+            .unwrap_or(true)
+    };
+    assert!(!visible(&h), "the eye did not hide the layer");
+    h.app.mouse = Point::new(0.0, 0.0);
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    assert!(
+        h.app
+            .hit
+            .iter()
+            .any(|(_, a)| matches!(a, Action::TreeVisible(id) if id == "hero")),
+        "a hidden layer lost its eye when the pointer left the row"
+    );
+    h.dispatch(Action::TreeVisible("hero".into()));
+    assert!(visible(&h), "the eye did not bring the layer back");
+
+    // the padlock locks it, and a locked layer stops answering the canvas
+    h.dispatch(Action::TreeLock("hero".into()));
+    assert!(
+        crate::editor_ui::find_node(&h.app.doc_ref().editor_ref().root, "hero")
+            .map(|n| n.locked)
+            .unwrap_or(false),
+        "the padlock did not lock the layer"
+    );
+    let hit = {
+        let d = h.app.doc();
+        let root = d.editor_ref().root.clone();
+        // inside the frame, outside the card it holds
+        x_native::editor::hit_test(&root, Point::new(250.0, 180.0))
+    };
+    assert_ne!(hit.as_deref(), Some("hero"), "a locked layer answered a click");
+}
+
+/// Figma's toolbar has one ▶ and it presents the file. Ours opened the
+/// Prototype tab; the ▶ now enters the viewer, and the panel stays one click
+/// away on the FLOW pill.
+#[test]
+fn the_header_play_button_presents_the_prototype() {
+    let mut h = host();
+    proto_doc(&mut h);
+    h.app.doc().right_tab = crate::state::RightTab::Design;
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let zone = h
+        .app
+        .hit
+        .iter()
+        .find(|(_, a)| *a == Action::FlowEnter)
+        .map(|(r, _)| *r)
+        .expect("the header ▶ is not a Present control");
+    h.app.mouse = zone.center();
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    assert!(
+        h.app
+            .tooltip
+            .iter()
+            .any(|(r, t)| *r == zone && t == "Present"),
+        "the ▶ is not labelled Present: {:?}",
+        h.app.tooltip
+    );
+    assert!(h.app.flow.is_none());
+    h.dispatch(Action::FlowEnter);
+    assert!(h.app.flow.is_some(), "the ▶ did not present");
+    assert!(!h.app.paints_status_band(), "a presentation paints no chrome");
+}
+
 #[test]
 fn prototype_authoring_writes_and_undoes() {
     let mut h = host();
