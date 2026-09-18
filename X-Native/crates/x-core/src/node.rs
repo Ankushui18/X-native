@@ -166,10 +166,9 @@ fn smooth(pts: &[(f64, f64)], passes: usize) -> Vec<(f64, f64)> {
             let (ax, ay) = cur[i - 1];
             let (bx, by) = cur[i];
             let (cx, cy) = cur[i + 1];
-            next[i] = (
-                (ax + 2.0 * bx + cx) / 4.0,
-                (ay + 2.0 * by + cy) / 4.0,
-            );
+            let nx = (ax + 2.0 * bx + cx) / 4.0;
+            let ny = (ay + 2.0 * by + cy) / 4.0;
+            next[i] = (nx, ny);
         }
         cur = next;
     }
@@ -1923,7 +1922,10 @@ mod brush_tests {
         );
         assert!(matches!(path.last(), Some(PathCmd::Close)), "and closes");
         let pts = points(&path);
-        assert!(pts.len() > 20, "the edges are sampled, not two straight lines");
+        assert!(
+            pts.len() > 20,
+            "the two edges are sampled, not two straight lines"
+        );
         // a marker (taper 0) is the full width from end to end
         assert!(span_at(&pts, 0.0) > 19.0, "full width at the tip");
         assert!(span_at(&pts, 50.0) > 19.0, "and in the middle");
@@ -1935,7 +1937,7 @@ mod brush_tests {
     fn taper_thins_both_ends() {
         let pts = points(&brush_outline(&spine(), 20.0, 1.0, 0.0, 0.1));
         assert!(span_at(&pts, 1.0) < 3.0, "the tip comes to a point");
-        assert!(span_at(&pts, 50.0) > 19.0, "the belly keeps the full width");
+        assert!(span_at(&pts, 50.0) > 19.0, "the belly holds its width");
     }
 
     #[test]
@@ -1945,7 +1947,10 @@ mod brush_tests {
         assert_eq!(a, b, "the same style is the same mark");
         let clean = points(&brush_outline(&spine(), 20.0, 0.0, 0.0, 0.1));
         assert_eq!(a.len(), clean.len());
-        assert!(a.iter().zip(&clean).any(|(x, y)| x.1 != y.1), "grain moves an edge");
+        assert!(
+            a.iter().zip(&clean).any(|(x, y)| x.1 != y.1),
+            "grain moves an edge"
+        );
     }
 
     #[test]
@@ -1972,7 +1977,8 @@ mod brush_tests {
     #[test]
     fn fewer_than_two_points_is_not_a_mark() {
         assert!(brush_outline(&[], 20.0, 1.0, 0.3, 1.5).is_empty());
-        assert!(brush_outline(&[(0.0, 0.0)], 20.0, 1.0, 0.3, 1.5).is_empty());
+        let none = brush_outline(&[(0.0, 0.0)], 20.0, 1.0, 0.3, 1.5);
+        assert!(none.is_empty());
         assert!(
             brush_outline(&spine(), 0.0, 1.0, 0.3, 1.5).is_empty(),
             "no width, no mark"

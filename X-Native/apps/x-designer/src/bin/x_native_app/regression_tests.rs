@@ -1801,7 +1801,10 @@ fn the_pencil_draws_a_smoothed_stroke() {
 #[test]
 fn the_brush_paints_a_mark() {
     let mut h = host();
-    assert_eq!(Tool::from_shortcut("b", true, false), Some(Tool::Brush));
+    assert_eq!(
+        Tool::from_shortcut("b", true, false),
+        Some(Tool::Brush)
+    );
     assert_eq!(Tool::from_shortcut("b", true, true), None, "design-only");
     assert_eq!(Tool::Brush.shortcut_hint(false), "⇧B");
     assert_eq!(Tool::Brush.label(), "Brush");
@@ -1831,7 +1834,7 @@ fn the_brush_paints_a_mark() {
     assert_eq!(sel.len(), 1, "the mark is the selection");
     let root = &h.app.doc_ref().editor_ref().root;
     let v = find_node_clone(root, &sel[0]).expect("the mark landed");
-    assert!(matches!(v.kind, NodeKind::Vector { .. }), "a vector landed");
+    assert!(matches!(v.kind, NodeKind::Vector { .. }), "a vector");
     assert!(v.name.starts_with("Brush "), "named in the layers panel");
     let path = match &v.kind {
         NodeKind::Vector { path } => path,
@@ -1839,14 +1842,17 @@ fn the_brush_paints_a_mark() {
     };
     // the mark is an outline, and the brush PAINTS it — the pencil beside it
     // strokes a centreline instead
-    assert!(matches!(path.last(), Some(PathCmd::Close)), "the mark closes");
+    assert!(
+        matches!(path.last(), Some(PathCmd::Close)),
+        "the mark closes into itself"
+    );
     assert!(path.len() > 20, "both edges are sampled");
     let filled = matches!(&v.fill, Paint::Solid(c) if c.components[3] > 0.0);
     assert!(filled, "a brush mark is filled");
     assert_eq!(v.stroke.width, 0.0, "and carries no stroke of its own");
     // the layer's box wraps the ink, not just the line it was drawn along
     let ink_w = h.app.brush_style.width();
-    assert!(v.h >= ink_w - 1.0, "the box holds the mark's body: {}", v.h);
+    assert!(v.h >= ink_w - 1.0, "the box holds the mark: {}", v.h);
     assert_eq!(h.app.tool, Tool::Brush, "the brush stays active");
     assert_eq!(
         h.app.doc_ref().editor_ref().undo_depth(),
@@ -1871,7 +1877,7 @@ fn the_brush_paints_a_mark() {
     h.on_release();
     let sel = h.app.doc_ref().editor_ref().selection.clone();
     let root = &h.app.doc_ref().editor_ref().root;
-    let marker = find_node_clone(root, &sel[0]).expect("the marker mark landed");
+    let marker = find_node_clone(root, &sel[0]).expect("the marker landed");
     assert!(
         (marker.h - BrushStyle::Marker.width()).abs() < 1.5,
         "a marker holds one width end to end: {}",

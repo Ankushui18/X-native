@@ -5161,12 +5161,7 @@ fn paint_brush_styles(
 }
 
 /// Map an engine path — in node-local units at (ox, oy) — onto the canvas.
-fn screen_path(
-    app: &App,
-    cmds: &[x_native::PathCmd],
-    ox: f64,
-    oy: f64,
-) -> vello::kurbo::BezPath {
+fn screen_path(app: &App, cmds: &[x_native::PathCmd], ox: f64, oy: f64) -> vello::kurbo::BezPath {
     let mut path = vello::kurbo::BezPath::new();
     let at = |x: f64, y: f64| {
         let q = app.world_to_screen(Point::new(ox + x, oy + y));
@@ -7112,10 +7107,12 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
     // style, same fit, filled with the same ink — so what is on screen is what
     // lands. It is built the way the layer will be, one code path further down.
     if let Some(crate::state::Drag::Brush { points }) = &app.drag {
-        let (min_x, min_y) = points.iter().fold(
-            (f64::INFINITY, f64::INFINITY),
-            |(x0, y0), p| (x0.min(p.x), y0.min(p.y)),
-        );
+        let mut min_x = f64::INFINITY;
+        let mut min_y = f64::INFINITY;
+        for p in points {
+            min_x = min_x.min(p.x);
+            min_y = min_y.min(p.y);
+        }
         let local: Vec<(f64, f64)> = points.iter().map(|p| (p.x - min_x, p.y - min_y)).collect();
         let st = app.brush_style;
         let cmds = x_native::brush_outline(
