@@ -3086,6 +3086,45 @@ fn canvas_host() -> Host {
 /// selection, and a *second* Shift-click on the same layer removes it again
 /// ("Click an object a second time while holding Shift to remove it from the
 /// current selection"). A plain click still replaces the whole selection.
+/// Figma's Layer → "Show name": the switch lives where the layer is described,
+/// changes only what the canvas paints, and undoes like every other property.
+#[test]
+fn the_show_name_row_toggles_a_frame_name_undoably_and_only_for_frames() {
+    let mut h = canvas_host();
+    h.app.doc().editor().root = Node::frame("page", 800.0, 600.0)
+        .child(Node::frame("f", 200.0, 150.0))
+        .child(Node::rect("r", 0.0, 0.0, 40.0, 40.0, Color::WHITE));
+    h.app.doc().editor().selection = vec!["f".into()];
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let p = h
+        .app
+        .hit
+        .iter()
+        .find(|(_, a)| *a == Action::ToggleShowName)
+        .map(|(r, _)| r.center())
+        .expect("the Show name row is painted for a frame");
+    h.on_press(p);
+    let shown = |h: &Host| {
+        x_native::editor::find(&h.app.doc_ref().editor_ref().root, "f")
+            .unwrap()
+            .show_name
+    };
+    assert!(!shown(&h), "the checkbox switches the frame's name off");
+    assert!(h.app.doc().editor().undo(), "the switch is undoable");
+    assert!(shown(&h), "undo restores the name");
+    assert!(h.app.status.contains("hidden") || h.app.status.contains("shown"));
+
+    // a rectangle has no frame name to switch, so it gets no row
+    h.app.doc().editor().selection = vec!["r".into()];
+    let mut scene2 = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene2);
+    assert!(
+        h.app.hit.iter().all(|(_, a)| *a != Action::ToggleShowName),
+        "the switch belongs to frames; a rectangle is not offered it"
+    );
+}
+
 /// Figma binds Select matching layers to ⌥⌘A (the variant's doc comment said so
 /// while the only binding was ⇧⌥⌘M), and the rule is Figma's: the same layer —
 /// by name and place, not by size — in the other frames of the scope.

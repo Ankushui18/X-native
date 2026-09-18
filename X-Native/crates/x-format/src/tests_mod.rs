@@ -216,6 +216,29 @@ mod tests {
     }
 
     #[test]
+    /// Figma's per-frame "Show name" switch is a document property, so it must
+    /// survive a save/load — and a file written before the flag existed must
+    /// still show names (the reader defaults to true).
+    #[test]
+    fn show_name_roundtrips_and_defaults_to_true_for_older_files() {
+        let mut page = Node::frame("Page 1", 400.0, 300.0)
+            .child(Node::frame("quiet", 100.0, 80.0))
+            .child(Node::frame("loud", 100.0, 80.0));
+        page.children[0].show_name = false;
+        let mut doc = Document::new();
+        doc.pages.push(page);
+        let text = save_x(&doc);
+        // the flag is written only when it is off, so nothing else moved
+        assert!(text.contains("\"show_name\":false"), "the off switch is written");
+        let loaded = load_x(&text).expect("load");
+        assert!(!find(&loaded.pages[0], "quiet").unwrap().show_name);
+        assert!(find(&loaded.pages[0], "loud").unwrap().show_name);
+        // an older file has no key at all: names are shown, as they always were
+        let legacy = text.replace(",\"show_name\":false", "");
+        let back = load_x(&legacy).expect("load legacy");
+        assert!(find(&back.pages[0], "quiet").unwrap().show_name);
+    }
+
     fn x_format_roundtrips_everything() {
         let doc = sample_doc();
         let text = save_x(&doc);

@@ -447,6 +447,7 @@ fn is_toggle_row(a: &Action) -> bool {
             | Action::ToggleTypoAdvanced
             | Action::ToggleVisible
             | Action::ToggleLock
+            | Action::ToggleShowName
             | Action::TreeVisible(_)
             | Action::TreeLock(_)
             | Action::TreeToggle(_)
@@ -690,6 +691,9 @@ pub enum Action {
     PaletteRun(usize),
     ToggleVisible,
     ToggleLock,
+    /// Figma's right sidebar (Layer → "Show name"): paint this frame's name on
+    /// the canvas, or don't. Frames only; Sections always show theirs.
+    ToggleShowName,
     /// Toggle visibility of the primary fill or stroke layer.
     TogglePaintVisibility(bool),
     /// Cycle the selected stroke between inside, center, and outside.

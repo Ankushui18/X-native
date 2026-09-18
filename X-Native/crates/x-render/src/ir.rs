@@ -1473,7 +1473,10 @@ fn lower(
             // "not the root" test the traversal already carries; `!in_frame`
             // drops the names of frames nested inside other frames (see the
             // parameter).
-            if !path.is_empty() && !in_frame {
+            // ...and the frame may switch its own name OFF (Figma's right
+            // sidebar: Layer → "Show name"), which is the third and last gate on
+            // a frame label.
+            if !path.is_empty() && !in_frame && node.show_name {
                 let name = if node.name.is_empty() {
                     "Frame"
                 } else {
@@ -2022,6 +2025,32 @@ mod tests {
                     .any(|c| matches!(c, RenderCommand::Glyphs { text, .. } if text == "Card")),
             "a section and the frame inside it both keep their names"
         );
+    }
+
+    /// Figma's per-frame **Show name** switch is the third gate on a frame
+    /// label, after "not the root" and "not nested in a frame": the frame is
+    /// still named by the rules, it just stops painting the name.
+    #[test]
+    fn a_frame_that_switches_its_name_off_emits_no_label() {
+        let mut page = Node::frame("Page 1", 400.0, 300.0)
+            .child(Node::frame("Shown", 100.0, 80.0))
+            .child(Node::frame("Hidden", 100.0, 80.0));
+        page.children[1].show_name = false;
+        let t = build_render_tree(&page, &Variables::default());
+        let labels: Vec<&str> = t
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                RenderCommand::Glyphs { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(labels, vec!["Shown"], "the hidden frame paints no name");
+        // ...and it is the frame's own switch, not the page's: with it back on
+        // both labels are emitted again
+        page.children[1].show_name = true;
+        let t2 = build_render_tree(&page, &Variables::default());
+        assert_eq!(t2.commands.len(), t.commands.len() + 1);
     }
 
     #[test]

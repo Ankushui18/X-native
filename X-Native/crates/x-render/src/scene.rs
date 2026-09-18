@@ -728,8 +728,10 @@ fn encode(
             //     across an empty artboard and stay there after everything on
             //     the page was deleted), or
             //   * a frame nested inside another frame (Figma names a page's
-            //     outermost frames only — `in_frame`).
-            if depth > 0 && !in_frame {
+            //     outermost frames only — `in_frame`), or
+            //   * a frame whose own **Show name** switch is off (Figma's right
+            //     sidebar: Layer → "Show name").
+            if depth > 0 && !in_frame && node.show_name {
                 let name = if node.name.is_empty() {
                     "Frame"
                 } else {

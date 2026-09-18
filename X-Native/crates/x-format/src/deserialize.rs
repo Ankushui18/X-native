@@ -528,6 +528,7 @@ pub(crate) fn parse_node(v: &V) -> Node {
     n.h = v.get("h").and_then(V::num).unwrap_or(0.0);
     n.opacity = v.get("opacity").and_then(V::num).unwrap_or(1.0) as f32;
     n.visible = v.get("visible").and_then(V::boolean).unwrap_or(true);
+    n.show_name = v.get("show_name").and_then(V::boolean).unwrap_or(true);
     n.locked = v.get("locked").and_then(V::boolean).unwrap_or(false);
     n.is_mask = v.get("mask").and_then(V::boolean).unwrap_or(false);
     n.fill = v

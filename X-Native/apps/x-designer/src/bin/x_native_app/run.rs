@@ -9891,6 +9891,23 @@ impl Host {
                 doc.flow_boot_mock = false;
                 self.apply_auto_layout();
             }
+            Action::ToggleShowName => {
+                let doc = self.app.doc();
+                if let Some(id) = doc.selected_id() {
+                    if let Some(n) = x_native::editor::find(&doc.editor_ref().root, &id) {
+                        if matches!(n.kind, NodeKind::Frame { .. }) {
+                            let show = !n.show_name;
+                            doc.editor().set_show_name(&id, show);
+                            self.app.mark_dirty();
+                            self.app.status = if show {
+                                "Frame name is shown on the canvas".into()
+                            } else {
+                                "Frame name is hidden on the canvas".into()
+                            };
+                        }
+                    }
+                }
+            }
             Action::ClipContent => {
                 let doc = self.app.doc();
                 if let Some(id) = doc.selected_id() {

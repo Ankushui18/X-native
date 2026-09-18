@@ -891,6 +891,20 @@ impl Editor {
         true
     }
 
+    /// Figma's per-frame **Show name** switch: whether the canvas paints this
+    /// frame's name label. Undoable, like every other layer property.
+    pub fn set_show_name(&mut self, id: &str, show: bool) -> bool {
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        let before = Box::new(n.clone());
+        let mut after = n.clone();
+        after.show_name = show;
+        after.dirty = true;
+        self.push_replace(id, before, after);
+        true
+    }
+
     /// Set a frame's scroll offset (authoring/preview state, undoable).
     pub fn set_scroll(&mut self, id: &str, x: f64, y: f64) -> bool {
         let Some(n) = find(&self.root, id) else {

@@ -3059,6 +3059,8 @@ pub struct Sel {
     pub stroke: String,
     pub stroke_w: f64,
     pub clip: bool,
+    /// Figma's Layer → "Show name": whether the canvas paints this frame's name.
+    pub show_name: bool,
 }
 
 pub fn sel_info(app: &App) -> Sel {
@@ -3079,6 +3081,7 @@ pub fn sel_info(app: &App) -> Sel {
             stroke: "000000".into(),
             stroke_w: 0.0,
             clip: false,
+            show_name: true,
         };
     };
     let root = &doc.editor_ref().root;
@@ -3097,6 +3100,7 @@ pub fn sel_info(app: &App) -> Sel {
             stroke: "000000".into(),
             stroke_w: 0.0,
             clip: false,
+            show_name: true,
         };
     };
     let radius = n.corner_radii.map(|c| c[0]).unwrap_or(match n.kind {
@@ -3104,6 +3108,7 @@ pub fn sel_info(app: &App) -> Sel {
         _ => 0.0,
     });
     let clip = matches_frame_clip(n);
+    let show_name = n.show_name;
     Sel {
         is_frame: matches!(n.kind, NodeKind::Frame { .. }),
         name: n.name.clone(),
@@ -3122,6 +3127,7 @@ pub fn sel_info(app: &App) -> Sel {
             n.stroke.width
         },
         clip,
+        show_name,
     }
 }
 
@@ -4022,6 +4028,31 @@ fn paint_design(
         Wt::Reg,
     );
     hit.push((clip_row, Action::ClipContent));
+
+    // Figma's right sidebar puts "Show name" in the Layer section; our panel is
+    // one dense band there, so it sits beside "Clip content" in the same row —
+    // same 24px checkbox, same ink, no geometry moved. Frames only: a Section
+    // always shows its own name, and no other layer has one to switch off.
+    if sel.is_frame {
+        let sn_x = x0 + 150.0;
+        let sn_row = Rect::new(sn_x, clip_row.y0, sn_x + 118.0, clip_row.y0 + DENSE_H);
+        let sn_cb = Rect::new(sn_x, clip_row.y0 + 4.0, sn_x + CHIP_H, clip_row.y0 + 4.0 + CHIP_H);
+        fill_rrect(s, sn_cb, R_SM, C_FIELD);
+        stroke_rrect(s, sn_cb, R_SM, C_LINE_2, 1.0);
+        if sel.show_name {
+            fill_rrect(s, sn_cb.inflate(-3.0, -3.0), R_XS, C_TEXT);
+        }
+        app.fonts.text(
+            s,
+            sn_cb.x1 + 8.0,
+            clip_row.y0 + 3.7,
+            "Show name",
+            T11,
+            C_MUTED,
+            Wt::Reg,
+        );
+        hit.push((sn_row, Action::ToggleShowName));
+    }
 
     hline(s, rx, rx + rw, y0 + 548.0, C_LINE);
 

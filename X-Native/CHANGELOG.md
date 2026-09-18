@@ -78,6 +78,19 @@ not selecting the elements in the right panel"*. The audit behind the fixes
   `crates/x-render`.
 
 ### Added
+- **Figma's per-frame "Show name" switch.** `Node::show_name` (default `true`) is
+  the third and last gate on a frame's name label — after "not the render root" and
+  "not nested inside another frame" — applied in both encoders, so the canvas, the
+  exports and the thumbnails agree about it. The inspector paints a **Show name**
+  checkbox beside **Clip content** in the same dense band (no geometry moved) and
+  only for frames, because a Section always shows its own name; toggling it is
+  undoable (`Editor::set_show_name`) and reports itself in the status line. The
+  flag is written to the document **only when it is off**, so every file saved
+  before this existed is unchanged, and the reader defaults to `true`
+  (`a_frame_that_switches_its_name_off_emits_no_label`,
+  `the_show_name_row_toggles_a_frame_name_undoably_and_only_for_frames`,
+  `show_name_roundtrips_and_defaults_to_true_for_older_files`).
+### Added
 - **A design + Figma conformance guard** (`tools/design-sheet/guard.mjs`, run by
   `scripts/check.sh` on every push): a colour literal in two files is two owners of
   one decision and fails; engine-chrome literals are bounded by per-file ceilings

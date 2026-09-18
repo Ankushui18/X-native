@@ -272,6 +272,12 @@ pub struct Node {
     pub visible: bool,
     /// Phase 2: editor lock (excluded from hit testing).
     pub locked: bool,
+    /// Figma's per-frame **Show name** switch: whether the canvas paints this
+    /// frame's name label in the gutter above it. The naming RULES (only a
+    /// page's outermost frames, none inside a frame, Sections always) decide
+    /// where a name may appear; this decides whether it does. `true` is the
+    /// default and the load default, so an older file shows names as before.
+    pub show_name: bool,
     pub prototype: Option<PrototypeAction>,
     pub overrides: HashMap<String, String>,
     /// Phase 4.7: per-corner radii [tl, tr, br, bl]; overrides Rect's uniform radius.
@@ -963,6 +969,7 @@ impl Node {
             dirty: true,
             visible: true,
             locked: false,
+            show_name: true,
             prototype: None,
             overrides: HashMap::new(),
             corner_radii: None,

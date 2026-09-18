@@ -583,6 +583,11 @@ pub(crate) fn node_json(n: &Node, out: &mut String) {
     if n.name != n.id {
         out.push_str(&format!(",\"name\":\"{}\"", esc(&n.name)));
     }
+    // written only when it is off, exactly like `name` above: `true` is the
+    // default, so every document saved before this flag existed is unchanged
+    if !n.show_name {
+        out.push_str(",\"show_name\":false");
+    }
     if n.transform.scale_x != 1.0 || n.transform.scale_y != 1.0 {
         out.push_str(&format!(
             ",\"scale\":[{},{}]",
