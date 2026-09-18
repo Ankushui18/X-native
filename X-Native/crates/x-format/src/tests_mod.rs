@@ -229,7 +229,10 @@ mod tests {
         doc.pages.push(page);
         let text = save_x(&doc);
         // the flag is written only when it is off, so nothing else moved
-        assert!(text.contains("\"show_name\":false"), "the off switch is written");
+        assert!(
+            text.contains("\"show_name\":false"),
+            "the off switch is written"
+        );
         let loaded = load_x(&text).expect("load");
         assert!(!find(&loaded.pages[0], "quiet").unwrap().show_name);
         assert!(find(&loaded.pages[0], "loud").unwrap().show_name);

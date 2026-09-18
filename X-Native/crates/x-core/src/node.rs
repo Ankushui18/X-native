@@ -388,6 +388,7 @@ impl Node {
             dirty: self.dirty,
             visible: self.visible,
             locked: self.locked,
+            show_name: self.show_name,
             prototype: self.prototype.clone(),
             overrides: self.overrides.clone(),
             corner_radii: self.corner_radii,

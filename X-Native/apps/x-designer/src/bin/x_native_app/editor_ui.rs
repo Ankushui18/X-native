@@ -4036,7 +4036,12 @@ fn paint_design(
     if sel.is_frame {
         let sn_x = x0 + 150.0;
         let sn_row = Rect::new(sn_x, clip_row.y0, sn_x + 118.0, clip_row.y0 + DENSE_H);
-        let sn_cb = Rect::new(sn_x, clip_row.y0 + 4.0, sn_x + CHIP_H, clip_row.y0 + 4.0 + CHIP_H);
+        let sn_cb = Rect::new(
+            sn_x,
+            clip_row.y0 + 4.0,
+            sn_x + CHIP_H,
+            clip_row.y0 + 4.0 + CHIP_H,
+        );
         fill_rrect(s, sn_cb, R_SM, C_FIELD);
         stroke_rrect(s, sn_cb, R_SM, C_LINE_2, 1.0);
         if sel.show_name {
