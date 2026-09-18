@@ -9244,7 +9244,8 @@ fn paint_prototype(
                 x_native::Action::Navigate { destination }
                 | x_native::Action::ScrollTo { destination }
                 | x_native::Action::OpenOverlay {
-                    overlay: destination, ..
+                    overlay: destination,
+                    ..
                 }
                 | x_native::Action::SwapOverlay {
                     overlay: destination,
@@ -9256,15 +9257,7 @@ fn paint_prototype(
             };
             if let Some(name) = dest {
                 let arrow = Rect::new(x0 + 100.0, action_y, x0 + 114.0, action_y + 20.0);
-                app.fonts.text(
-                    s,
-                    arrow.x0,
-                    action_y + 2.0,
-                    "→",
-                    T10,
-                    C_MUTED,
-                    Wt::Reg,
-                );
+                app.fonts.text(arrow.x0, action_y + 2.0, "→", T10, C_MUTED, Wt::Reg);
                 let db = Rect::new(arrow.x1, action_y, xr - 5.0, action_y + 20.0);
                 input_box(app, s, db, 4.0);
                 let target_text = app.fonts.truncate(name, T10, Wt::Reg, db.width() - 8.0);
