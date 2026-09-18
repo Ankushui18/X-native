@@ -1452,7 +1452,11 @@ fn a_layer_row_hides_and_locks_the_layer_like_figmas_eye_and_padlock() {
         // inside the frame, outside the card it holds
         x_native::editor::hit_test(&root, Point::new(250.0, 180.0))
     };
-    assert_ne!(hit.as_deref(), Some("hero"), "a locked layer answered a click");
+    assert_ne!(
+        hit.as_deref(),
+        Some("hero"),
+        "a locked layer answered a click"
+    );
 }
 
 /// Figma's toolbar has one ▶ and it presents the file. Ours opened the
@@ -1486,7 +1490,10 @@ fn the_header_play_button_presents_the_prototype() {
     assert!(h.app.flow.is_none());
     h.dispatch(Action::FlowEnter);
     assert!(h.app.flow.is_some(), "the ▶ did not present");
-    assert!(!h.app.paints_status_band(), "a presentation paints no chrome");
+    assert!(
+        !h.app.paints_status_band(),
+        "a presentation paints no chrome"
+    );
 }
 
 #[test]
