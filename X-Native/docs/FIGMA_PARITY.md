@@ -99,8 +99,17 @@ shrink by deletion. Closing one means adding the test that pins it, or the code.
 
 ```
 node tools/design-sheet/guard.mjs          # 7 checks: literals, owners, icons, parity
-bash scripts/check.sh                      # the same check inside the gate
+bash scripts/check.sh                      # the same checks inside the gate
 ```
 
 A failing canvas literal prints the file and the value; a failing parity row prints
 the test name it could not find.
+
+The gate cannot see the screen, so the *visual* half runs as its own CI job,
+`Screenshots (software Vulkan)`: it installs lavapipe (Mesa's software Vulkan
+driver), runs the six `#[ignore]`d GPU/screenshot tests, and uploads the PNGs the
+fixtures write (`apps/x-designer/screenshots`, plus the loading previews the job
+tells `loading_screen_visuals` to write with `X_NATIVE_LOADING_PREVIEW_DIR`) as the
+`screenshots` artifact. A design regression is then a picture in the run, not a
+sentence in a report. Three of the fixtures render the canvas, the inspector and
+the board; `gpu_target.rs` pins the render-target contract they run on.
