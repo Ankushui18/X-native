@@ -4128,7 +4128,7 @@ impl Host {
                 // Figma's canvas connections: the circle on a selected
                 // layer's edge, and the noodles themselves. Both are canvas
                 // objects rather than pixels of the layer under them.
-                if let Some(dr) = self.conn_press(world) {
+                if let Some(dr) = self.conn_press(world, p) {
                     self.app.drag = Some(dr);
                     return;
                 }
@@ -4567,7 +4567,7 @@ impl Host {
     /// Figma's canvas connection gesture: the anchor circle on the selected
     /// layer's edge, and a press ON an existing noodle — which selects that
     /// connection so Delete can remove it.
-    fn conn_press(&mut self, world: Point) -> Option<Drag> {
+    fn conn_press(&mut self, world: Point, screen: Point) -> Option<Drag> {
         let src = self.conn_anchor()?;
         let edge = self.conn_anchor_world(&src)?;
         let d = ((edge.x - world.x).powi(2) + (edge.y - world.y).powi(2)).sqrt();
@@ -4578,7 +4578,7 @@ impl Host {
                 target: None,
             });
         }
-        if let Some(i) = self.conn_hit(world) {
+        if let Some(i) = self.conn_hit(screen) {
             self.app.conn_sel = Some(i);
         }
         None
@@ -4610,21 +4610,21 @@ impl Host {
 
     /// The connection under a world point, as an index into the page's
     /// connections — what a press selects and Delete removes.
-    fn conn_hit(&self, world: Point) -> Option<usize> {
+    fn conn_hit(&self, screen: Point) -> Option<usize> {
         let doc = self.app.doc_opt()?;
         let root = &doc.editor_ref().root;
-        let zoom = self.app.zoom.max(1e-6);
-        for (i, conn) in crate::editor_ui::page_connections(root).iter().enumerate() {
-            let (a, b) = (
-                self.conn_anchor_world(&conn.src)?,
-                self.conn_anchor_world(&conn.dest)?,
-            );
+        let conns = crate::editor_ui::page_connections(root);
+        for (i, conn) in conns.iter().enumerate() {
+            let Some(a) = self.conn_anchor_world(&conn.src) else {
+                continue;
+            };
+            let Some(b) = self.conn_anchor_world(&conn.dest) else {
+                continue;
+            };
             let (p0, p1) = (self.app.world_to_screen(a), self.app.world_to_screen(b));
-            let tol = CONN_LINE_TOL;
-            if crate::editor_ui::near_noodle(p0, p1, self.app.mouse, tol) {
+            if crate::editor_ui::near_noodle(p0, p1, screen, CONN_LINE_TOL) {
                 return Some(i);
             }
-            let _ = zoom;
         }
         None
     }
@@ -5086,15 +5086,19 @@ impl Host {
             Some(Drag::ConnDrag { src, .. }) => {
                 let world = self.app.screen_to_world(p);
                 // "Figma will snap the connection noodle to the [frame] when
-                // you get close enough" — the destination is a top-level
-                // frame whose box the pointer is inside, nearest edge wins.
-                let target = {
+                // you get close enough" — the destination is the top-level
+                // frame whose box the pointer is in. The frame the source
+                // lives in is not one: the drag starts inside it, so it would
+                // swallow every attempt.
+                let snapped = {
                     let doc = self.app.doc_opt().map(|d| d.editor_ref().root.clone());
                     doc.as_ref().and_then(|root| {
-                        crate::editor_ui::frame_under(root, world).map(|(id, _)| id)
+                        let home = crate::editor_ui::containing_frame(root, &src);
+                        crate::editor_ui::frame_under(root, world)
+                            .map(|(id, _)| id)
+                            .filter(|id| Some(id) != home.as_ref())
                     })
                 };
-                let snapped = target.filter(|id| *id != src);
                 if let Some(Drag::ConnDrag { cur, target, .. }) = self.app.drag.as_mut() {
                     *cur = world;
                     *target = snapped;
@@ -6966,7 +6970,7 @@ impl Host {
                     // "you can select it and press Delete to remove it" — and
                     // it goes first, before the layers underneath.
                     if self.app.conn_sel.is_some() {
-                        self.apply(Action::ConnDelete);
+                        self.dispatch(Action::ConnDelete);
                         return;
                     }
                     self.app.doc().editor().delete_selection();
@@ -10485,11 +10489,10 @@ impl Host {
                     Some(axis)
                 };
             }
+            // The plus press: "a blue plus that we can use to add a new
+            // connection" — pressing it takes hold of the anchor, and the drag
+            // from there is the gesture.
             Action::ConnMenu => {
-                self.app.conn_menu = !self.app.conn_menu;
-            }
-            Action::ConnStart => {
-                self.app.conn_menu = false;
                 if let Some(src) = self.conn_anchor() {
                     let cur = self
                         .conn_anchor_world(&src)

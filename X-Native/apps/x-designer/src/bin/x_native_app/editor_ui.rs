@@ -94,7 +94,7 @@ pub fn paint_over(app: &mut App, s: &mut Scene) {
     }
     paint_canvas_overlays(app, s);
     paint_arc_handles(app, s);
-    paint_conn_hover_menu(app, s);
+    paint_conn_drag(app, s);
     paint_minimap(app, s, &mut hit);
     paint_layout_guides(app, s);
     paint_ruler_guides(app, s);
@@ -687,6 +687,21 @@ pub(crate) fn frame_under(root: &x_native::Node, p: Point) -> Option<(String, Re
     found
 }
 
+/// The top-level frame a layer lives in — including the layer itself when it
+/// IS a frame. A connection never snaps to this one during the drag: the drag
+/// starts inside it, so it would swallow every attempt.
+pub(crate) fn containing_frame(root: &x_native::Node, id: &str) -> Option<String> {
+    for c in &root.children {
+        if !matches!(c.kind, x_native::NodeKind::Frame { .. }) {
+            continue;
+        }
+        if c.id == id || find_node(c, id).is_some() {
+            return Some(c.id.clone());
+        }
+    }
+    None
+}
+
 /// A frame's flow name: "Flow 1" for the first flow on the page, in the order
 /// the frames appear — "Figma also added a small blue label to our home page
 /// frame and named it Flow 1." `None` when the frame starts no flow.
@@ -725,15 +740,19 @@ pub(crate) fn near_noodle(a: Point, b: Point, p: Point, tol: f64) -> bool {
 fn conn_world(app: &App, id: &str) -> Option<Point> {
     let doc = app.doc_opt()?;
     let root = &doc.editor_ref().root;
-    crate::run::node_world(root, id).map(|m| m * conn_anchor_point(find_node(root, id)?))
+    let n = find_node(root, id)?;
+    crate::run::node_world(root, id).map(|m| m * conn_anchor_point(n))
 }
 
 /// Figma's connection anchor: on the Prototype tab a blue circle sits on the
-/// selected layer's edge, and it turns into a plus you can drag. The plus is
-/// the first step of the same gesture, so opening it arms the drag itself.
+/// selected layer's edge, and "if we hover over it, it changes to a blue plus
+/// that we can use to add a new connection" — the press on that plus is the
+/// first step of the drag, so pressing it arms the gesture.
 fn paint_conn_anchor(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
-    let Some(doc) = app.doc_opt() else { return };
-    if doc.right_tab != RightTab::Prototype {
+    // the same shared-borrow read the noodle painter does: this one only has
+    // `&mut App` because it records the hit zone
+    let on_proto_tab = app.doc_opt().map(|d| d.right_tab == RightTab::Prototype);
+    if on_proto_tab != Some(true) {
         return;
     }
     let Some(id) = app.doc_ref().selected_id() else {
@@ -750,36 +769,23 @@ fn paint_conn_anchor(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>
         draw_icon(s, "plus", c.x - 4.0, c.y - 4.0, 8.0, C_ON_ACCENT);
         let r = Rect::new(c.x - 7.0, c.y - 7.0, c.x + 7.0, c.y + 7.0);
         hit.push((r, Action::ConnMenu));
+        // and the hint, while the pointer is on it
+        let tw = app.fonts.measure("Drag to connect", T10, Wt::Reg) + 12.0;
+        let chip = Rect::new(c.x + 12.0, c.y - 10.0, c.x + 12.0 + tw, c.y + 10.0);
+        fill_rrect(s, chip, R_SM, C_TEXT);
+        app.fonts.text(
+            s,
+            chip.x0 + 6.0,
+            chip.y0 + 4.0,
+            "Drag to connect",
+            T10,
+            C_BASE,
+            Wt::Reg,
+        );
     } else {
         circle(s, c.x, c.y, 5.0, C_SEL);
         ring(s, c.x, c.y, 5.0, C_ON_ACCENT, 1.0);
     }
-}
-
-/// The hover menu on the anchor circle: Figma's little action list. Ours holds
-/// the one entry that is a gesture here, because the sidebar already lists the
-/// interactions themselves.
-fn paint_conn_hover_menu(app: &App, s: &mut Scene) {
-    if !app.conn_menu {
-        return;
-    }
-    let Some(id) = app.doc_opt().and_then(|_| app.doc_ref().selected_id()) else {
-        return;
-    };
-    let Some(p) = conn_world(app, &id) else { return };
-    let c = app.world_to_screen(p);
-    let r = Rect::new(c.x + 14.0, c.y - 12.0, c.x + 150.0, c.y + 14.0);
-    elev_shadow(s, r, 8.0, Elevation::Floating);
-    fill_rrect(s, r, R_MD, C_TEXT);
-    app.fonts.text(
-        s,
-        r.x0 + 8.0,
-        r.y0 + 6.0,
-        "Drag to connect",
-        T10,
-        C_BASE,
-        Wt::Reg,
-    );
 }
 
 /// The noodle being dragged: a straight blue line to the pointer, snapped to
@@ -787,7 +793,9 @@ fn paint_conn_hover_menu(app: &App, s: &mut Scene) {
 /// moment it is a candidate.
 fn paint_conn_drag(app: &App, s: &mut Scene) {
     if let Some(crate::state::Drag::ConnDrag { src, target, .. }) = &app.drag {
-        let Some(a) = conn_world(app, src) else { return };
+        let Some(a) = conn_world(app, src) else {
+            return;
+        };
         let a = app.world_to_screen(a);
         let (b, aimed) = match target {
             Some(id) => match conn_world(app, id) {

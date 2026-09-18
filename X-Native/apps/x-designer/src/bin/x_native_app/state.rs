@@ -1105,10 +1105,9 @@ pub enum Action {
     SetConstraint(ConstraintAxis, usize),
     /// Scale panel: pick an anchor cell (Figma's nine-point box).
     ScaleCell(usize),
-    /// The canvas connection circle: open the hover menu Figma shows on it.
+    /// The plus on the selected layer's edge — the press that begins the
+    /// connection drag.
     ConnMenu,
-    /// The hover menu's action: arm the connection DRAG (Figma's blue plus).
-    ConnStart,
     /// Delete the selected connection (Figma: "you can select it and press
     /// Delete to remove it").
     ConnDelete,
@@ -2656,10 +2655,8 @@ pub struct App {
     /// cell Figma's panel opens on).
     pub scale_cell: usize,
     /// The connection a press on a canvas noodle selected — what Delete
-    /// removes, as a index into `editor_ui::page_connections` for this frame.
+    /// removes, as an index into `editor_ui::page_connections` for this page.
     pub conn_sel: Option<usize>,
-    /// Whether the anchor circle's hover menu is open.
-    pub conn_menu: bool,
     pub zoom: f64,
     pub pan: (f64, f64),
     pub ctrl: bool,
@@ -2840,7 +2837,6 @@ impl App {
             aspect_ratio_locked: false,
             scale_cell: 4,
             conn_sel: None,
-            conn_menu: false,
             zoom: 1.0,
             pan: (0.0, 0.0),
             ctrl: false,
