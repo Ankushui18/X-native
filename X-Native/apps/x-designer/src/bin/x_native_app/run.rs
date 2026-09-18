@@ -4572,7 +4572,7 @@ impl Host {
         let edge = self.conn_anchor_world(&src)?;
         let d = ((edge.x - world.x).powi(2) + (edge.y - world.y).powi(2)).sqrt();
         if d <= CONN_ANCHOR_TOL / self.app.zoom {
-            return Some(Drag::ConnDrag {
+            return Some(Drag::ProtoConnect {
                 src,
                 cur: world,
                 target: None,
@@ -5083,7 +5083,7 @@ impl Host {
                     self.app.mark_dirty();
                 }
             }
-            Some(Drag::ConnDrag { src, .. }) => {
+            Some(Drag::ProtoConnect { src, .. }) => {
                 let world = self.app.screen_to_world(p);
                 // "Figma will snap the connection noodle to the [frame] when
                 // you get close enough" — the destination is the top-level
@@ -5099,7 +5099,7 @@ impl Host {
                             .filter(|id| Some(id) != home.as_ref())
                     })
                 };
-                if let Some(Drag::ConnDrag { cur, target, .. }) = self.app.drag.as_mut() {
+                if let Some(Drag::ProtoConnect { cur, target, .. }) = self.app.drag.as_mut() {
                     *cur = world;
                     *target = snapped;
                 }
@@ -5602,7 +5602,7 @@ impl Host {
             }
             // a scale is one gesture too: every move pushed its own
             // ReplaceNode, and one Ctrl+Z must undo the whole drag
-            Some(Drag::ConnDrag { src, target, .. }) => {
+            Some(Drag::ProtoConnect { src, target, .. }) => {
                 self.app.drag = None;
                 let Some(dest) = target else {
                     // "click and drag the connection to an empty space on the
@@ -10494,10 +10494,8 @@ impl Host {
             // from there is the gesture.
             Action::ConnMenu => {
                 if let Some(src) = self.conn_anchor() {
-                    let cur = self
-                        .conn_anchor_world(&src)
-                        .unwrap_or(Point::new(0.0, 0.0));
-                    self.app.drag = Some(Drag::ConnDrag {
+                    let cur = self.conn_anchor_world(&src).unwrap_or(Point::new(0.0, 0.0));
+                    self.app.drag = Some(Drag::ProtoConnect {
                         src,
                         cur,
                         target: None,

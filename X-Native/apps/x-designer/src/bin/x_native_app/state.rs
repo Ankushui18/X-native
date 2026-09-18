@@ -1764,7 +1764,7 @@ pub enum Drag {
     /// edge, dragged towards another frame. "Figma will snap the connection
     /// noodle to the Case study frame when you get close enough. Release your
     /// cursor to complete the connection."
-    ConnDrag {
+    ProtoConnect {
         src: String,
         cur: Point,
         /// The frame the noodle is currently snapped to, if any.

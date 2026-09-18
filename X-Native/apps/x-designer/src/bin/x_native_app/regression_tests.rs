@@ -1419,7 +1419,7 @@ fn the_plus_on_a_layers_edge_draws_a_connection() {
     let p = h.app.world_to_screen(anchor);
     h.app.mouse = p;
     let mut scene = vello::Scene::new();
-    crate::editor_ui::paint(&mut h.app, &mut scene);
+    crate::editor_ui::paint_over(&mut h.app, &mut scene);
     assert!(
         h.app.hit.iter().any(|(_, a)| matches!(a, Action::ConnMenu)),
         "the plus is there to drag"
@@ -1428,18 +1428,18 @@ fn the_plus_on_a_layers_edge_draws_a_connection() {
     // the drag: nothing snaps halfway, the frame snaps when the pointer is in it
     h.on_press(p);
     assert!(
-        matches!(h.app.drag, Some(Drag::ConnDrag { .. })),
+        matches!(h.app.drag, Some(Drag::ProtoConnect { .. })),
         "the press takes the anchor"
     );
     h.on_move(h.app.world_to_screen(Point::new(250.0, 35.0)));
     assert!(
-        matches!(&h.app.drag, Some(Drag::ConnDrag { target: None, .. })),
+        matches!(&h.app.drag, Some(Drag::ProtoConnect { target: None, .. })),
         "no frame under the halfway point"
     );
     h.on_move(h.app.world_to_screen(Point::new(450.0, 100.0)));
     let snapped = matches!(
         &h.app.drag,
-        Some(Drag::ConnDrag { target: Some(t), .. }) if t == "c2"
+        Some(Drag::ProtoConnect { target: Some(t), .. }) if t == "c2"
     );
     assert!(snapped, "the noodle snaps to the frame under the pointer");
     h.on_release();

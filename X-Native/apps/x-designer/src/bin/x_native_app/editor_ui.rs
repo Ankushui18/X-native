@@ -723,16 +723,27 @@ pub(crate) fn page_has_connections(root: &x_native::Node) -> bool {
     !page_connections(root).is_empty()
 }
 
-/// Is `p` (SCREEN space) near the noodle from `a` to `b`?
+/// Is `p` (SCREEN space) near the noodle from `a` to `b`? The noodle is the
+/// shape the canvas draws — out of the source, across, and into the
+/// destination — so the hit test walks the same three segments.
 pub(crate) fn near_noodle(a: Point, b: Point, p: Point, tol: f64) -> bool {
-    let (dx, dy) = (b.x - a.x, b.y - a.y);
+    let mid = (a.x + b.x) / 2.0;
+    let corners = [a, Point::new(mid, a.y), Point::new(mid, b.y), b];
+    corners
+        .windows(2)
+        .any(|pair| near_segment(pair[0], pair[1], p, tol))
+}
+
+/// Distance from `p` to the segment `s`–`e`, in the same units.
+fn near_segment(s: Point, e: Point, p: Point, tol: f64) -> bool {
+    let (dx, dy) = (e.x - s.x, e.y - s.y);
     let len2 = dx * dx + dy * dy;
     let t = if len2 <= 1e-9 {
         0.0
     } else {
-        (((p.x - a.x) * dx + (p.y - a.y) * dy) / len2).clamp(0.0, 1.0)
+        (((p.x - s.x) * dx + (p.y - s.y) * dy) / len2).clamp(0.0, 1.0)
     };
-    let (cx, cy) = (a.x + dx * t, a.y + dy * t);
+    let (cx, cy) = (s.x + dx * t, s.y + dy * t);
     ((p.x - cx).powi(2) + (p.y - cy).powi(2)).sqrt() <= tol
 }
 
@@ -751,8 +762,11 @@ fn conn_world(app: &App, id: &str) -> Option<Point> {
 fn paint_conn_anchor(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     // the same shared-borrow read the noodle painter does: this one only has
     // `&mut App` because it records the hit zone
-    let on_proto_tab = app.doc_opt().map(|d| d.right_tab == RightTab::Prototype);
-    if on_proto_tab != Some(true) {
+    let on_proto_tab = app
+        .doc_opt()
+        .map(|d| d.right_tab == RightTab::Prototype)
+        .unwrap_or(false);
+    if !on_proto_tab {
         return;
     }
     let Some(id) = app.doc_ref().selected_id() else {
@@ -765,8 +779,9 @@ fn paint_conn_anchor(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>
     let hovered = ((app.mouse.x - c.x).powi(2) + (app.mouse.y - c.y).powi(2)).sqrt() <= 12.0;
     if hovered {
         // the plus: this is the handle you drag towards the destination
-        circle(s, c.x, c.y, 6.0, C_SEL);
-        draw_icon(s, "plus", c.x - 4.0, c.y - 4.0, 8.0, C_ON_ACCENT);
+        circle(s, c.x, c.y, 7.5, C_SEL);
+        let half = ICON_XS / 2.0;
+        draw_icon(s, "plus", c.x - half, c.y - half, ICON_XS, C_ON_ACCENT);
         let r = Rect::new(c.x - 7.0, c.y - 7.0, c.x + 7.0, c.y + 7.0);
         hit.push((r, Action::ConnMenu));
         // and the hint, while the pointer is on it
@@ -792,7 +807,7 @@ fn paint_conn_anchor(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>
 /// the frame under it when there is one — and the destination outlined, the
 /// moment it is a candidate.
 fn paint_conn_drag(app: &App, s: &mut Scene) {
-    if let Some(crate::state::Drag::ConnDrag { src, target, .. }) = &app.drag {
+    if let Some(crate::state::Drag::ProtoConnect { src, target, .. }) = &app.drag {
         let Some(a) = conn_world(app, src) else {
             return;
         };
@@ -834,10 +849,7 @@ fn paint_conn_drag(app: &App, s: &mut Scene) {
             let doc = app.doc_ref();
             if let Some(n) = find_node(&doc.editor_ref().root, id) {
                 let p0 = app.world_to_screen(Point::new(n.transform.x, n.transform.y));
-                let p1 = app.world_to_screen(Point::new(
-                    n.transform.x + n.w,
-                    n.transform.y + n.h,
-                ));
+                let p1 = app.world_to_screen(Point::new(n.transform.x + n.w, n.transform.y + n.h));
                 stroke_rect(s, Rect::new(p0.x, p0.y, p1.x, p1.y), C_SEL, 2.0);
             }
         }
