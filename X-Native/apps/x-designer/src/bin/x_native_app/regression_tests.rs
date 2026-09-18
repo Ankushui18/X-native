@@ -512,7 +512,11 @@ fn pages_list_windows_beyond_four_pages_and_keeps_every_page_reachable() {
             seen.insert(page_i);
         }
     }
-    assert_eq!(seen.len(), n, "every page gets a row at some scroll position");
+    assert_eq!(
+        seen.len(),
+        n,
+        "every page gets a row at some scroll position"
+    );
     h.app.doc().page = n - 1;
     assert_eq!(h.app.pages_rows()[0].0, n - 4, "no tail gap");
     assert!((h.app.pages_band_bottom() - h.app.pages_rows()[3].1.y1).abs() < 1e-9);
@@ -3508,8 +3512,7 @@ fn double_click_on_a_panel_toggle_counts_once() {
     assert_eq!(h.app.canvas_bg_visible, !before, "single click toggles");
     h.on_press(p);
     assert_eq!(
-        h.app.canvas_bg_visible,
-        !before,
+        h.app.canvas_bg_visible, !before,
         "the second press of a double-click is swallowed"
     );
     // ...and a deliberate third press is a fresh single click

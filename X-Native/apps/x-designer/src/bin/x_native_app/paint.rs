@@ -710,7 +710,7 @@ mod centring_tests {
     #[test]
     fn a_glyph_and_a_label_share_the_row_middle() {
         let row = Rect::new(0.0, 10.0, 100.0, 10.0 + 22.0); // tree row
-        // a 12px glyph in a 22px row starts 5px in, not on the top edge
+                                                            // a 12px glyph in a 22px row starts 5px in, not on the top edge
         assert_eq!(glyph_top(row, ICON_XS), 15.0);
         // an 11px label carries a 16.5px line box (CSS preflight), so its top
         // is 2.75px into the row — the number the tree rows paint at

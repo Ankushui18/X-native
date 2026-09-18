@@ -1929,14 +1929,20 @@ mod tests {
         let mut hero = Node::frame("Hero", 300.0, 100.0);
         hero.transform.x = 40.0;
         hero.transform.y = 60.0;
-        let page = Node::frame("Page 1", 400.0, 300.0).child(
-            hero.child(Node::rect("r", 0.0, 0.0, 10.0, 10.0, Color::WHITE)),
-        );
+        let page = Node::frame("Page 1", 400.0, 300.0).child(hero.child(Node::rect(
+            "r",
+            0.0,
+            0.0,
+            10.0,
+            10.0,
+            Color::WHITE,
+        )));
         let tree = build_render_tree(&page, &Variables::default());
         assert!(
-            !tree.commands.iter().any(
-                |c| matches!(c, RenderCommand::Glyphs { text, .. } if text == "Page 1")
-            ),
+            !tree
+                .commands
+                .iter()
+                .any(|c| matches!(c, RenderCommand::Glyphs { text, .. } if text == "Page 1")),
             "the root (the page) must never be labelled"
         );
         let label = tree
@@ -1996,15 +2002,17 @@ mod tests {
         // frame names stay visible inside sections)
         let mut band = Node::section("Band", 300.0, 200.0);
         band.name = "Band".into(); // `Node::section` names itself "Section"
-        let sect = Node::frame("Page", 400.0, 300.0)
-            .child(band.child(Node::frame("Card", 100.0, 80.0)));
+        let sect =
+            Node::frame("Page", 400.0, 300.0).child(band.child(Node::frame("Card", 100.0, 80.0)));
         let t4 = build_render_tree(&sect, &Variables::default());
         assert!(
-            t4.commands.iter().any(
-                |c| matches!(c, RenderCommand::Glyphs { text, .. } if text == "Band")
-            ) && t4.commands.iter().any(
-                |c| matches!(c, RenderCommand::Glyphs { text, .. } if text == "Card")
-            ),
+            t4.commands
+                .iter()
+                .any(|c| matches!(c, RenderCommand::Glyphs { text, .. } if text == "Band"))
+                && t4
+                    .commands
+                    .iter()
+                    .any(|c| matches!(c, RenderCommand::Glyphs { text, .. } if text == "Card")),
             "a section and the frame inside it both keep their names"
         );
     }
@@ -2210,10 +2218,7 @@ mod tests {
         // image?"); an exported subtree therefore carries no `/label` command,
         // not even for a frame nested in the exported one.
         assert!(
-            !tree
-                .commands
-                .iter()
-                .any(|c| c.key().ends_with("/label")),
+            !tree.commands.iter().any(|c| c.key().ends_with("/label")),
             "exported trees carry no canvas name labels: {:?}",
             tree.commands.iter().map(|c| c.key()).collect::<Vec<_>>()
         );

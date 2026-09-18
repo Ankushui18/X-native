@@ -3483,9 +3483,7 @@ impl Host {
         let Some(origin) = self.app.right_origin else {
             return;
         };
-        if self.app.right_dragging
-            || (p.x - origin.x).abs().max((p.y - origin.y).abs()) <= 4.0
-        {
+        if self.app.right_dragging || (p.x - origin.x).abs().max((p.y - origin.y).abs()) <= 4.0 {
             return;
         }
         self.app.right_dragging = true;
@@ -4123,7 +4121,10 @@ impl Host {
                     if dbl && !shift {
                         self.app.doc().editor().drill_into(world);
                     } else {
-                        self.app.doc().editor().click_select(world, shift, deep_click);
+                        self.app
+                            .doc()
+                            .editor()
+                            .click_select(world, shift, deep_click);
                     }
                     self.app.mark_dirty();
                     self.app.drag = Some(Drag::MoveSel {

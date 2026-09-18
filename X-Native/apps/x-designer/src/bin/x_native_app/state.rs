@@ -2292,9 +2292,7 @@ impl App {
     pub fn is_repeat_chrome_click(&self, p: Point) -> bool {
         self.last_chrome
             .map(|(t, q, _)| {
-                t.elapsed().as_millis() < 350
-                    && (p.x - q.x).abs() < 4.0
-                    && (p.y - q.y).abs() < 4.0
+                t.elapsed().as_millis() < 350 && (p.x - q.x).abs() < 4.0 && (p.y - q.y).abs() < 4.0
             })
             .unwrap_or(false)
     }
@@ -2318,10 +2316,7 @@ impl App {
         // walks past the last visible row, then clamps so the last page is
         // always on screen. Every page is therefore reachable by selecting it
         // (menu, keyboard, or the row above it).
-        let top = self
-            .doc_ref()
-            .page
-            .min(n.saturating_sub(PAGES_MAX_ROWS));
+        let top = self.doc_ref().page.min(n.saturating_sub(PAGES_MAX_ROWS));
         (0..PAGES_MAX_ROWS.min(n))
             .map(|i| {
                 let page_i = top + i;

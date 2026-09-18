@@ -1663,8 +1663,16 @@ fn paint_app_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         ("Export as…", "⇧⌘E", true),
         ("Find…", "⇧⌘F", true),
         ("", "", false), // separator
-        ("Theme: Graphite (dark)", tick(x_native::ui::ThemeId::Graphite), true),
-        ("Theme: Daylight (light)", tick(x_native::ui::ThemeId::Daylight), true),
+        (
+            "Theme: Graphite (dark)",
+            tick(x_native::ui::ThemeId::Graphite),
+            true,
+        ),
+        (
+            "Theme: Daylight (light)",
+            tick(x_native::ui::ThemeId::Daylight),
+            true,
+        ),
         ("", "", false), // separator
         ("Welcome & shortcuts", "?", true),
     ];
@@ -2106,8 +2114,15 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             C_LINE_2,
             1.0,
         );
-        app.fonts
-            .text(s, sx + 18.0, line_top(nr, T11), &editing, T11, C_TEXT, Wt::Med);
+        app.fonts.text(
+            s,
+            sx + 18.0,
+            line_top(nr, T11),
+            &editing,
+            T11,
+            C_TEXT,
+            Wt::Med,
+        );
     } else {
         if hover(app, nr) {
             // .editable:hover — bg #1A1A1A, border #2A2A2A, radius 4
@@ -2116,8 +2131,15 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         }
         circle(s, sx + 15.0, nr.center().y, 3.0, C_DRAFT_DOT);
         let shown = app.fonts.truncate(&name, T11, Wt::Med, lw - 24.0 - 40.0);
-        app.fonts
-            .text(s, sx + 26.0, line_top(nr, T11), &shown, T11, C_TEXT, Wt::Med);
+        app.fonts.text(
+            s,
+            sx + 26.0,
+            line_top(nr, T11),
+            &shown,
+            T11,
+            C_TEXT,
+            Wt::Med,
+        );
         if hover(app, nr) {
             draw_icon(
                 s,
@@ -2269,8 +2291,7 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     // the paint pass down with it.
     match (rows.first(), rows.last()) {
         (Some(first), Some(last)) => {
-            app.page_field_rect =
-                Some(Rect::new(first.1.x0, first.1.y0, last.1.x1, last.1.y1));
+            app.page_field_rect = Some(Rect::new(first.1.x0, first.1.y0, last.1.x1, last.1.y1));
         }
         _ => app.page_field_rect = None,
     }
@@ -2318,15 +2339,29 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         let field_id = app.field.as_ref().map(|f| f.id);
         if field_id == Some(FieldId::PageName) && active {
             let editing = app.field.as_ref().unwrap().buffer.clone();
-            app.fonts
-                .text(s, sx + 41.0, line_top(r, T11), &editing, T11, C_TEXT, Wt::Reg);
+            app.fonts.text(
+                s,
+                sx + 41.0,
+                line_top(r, T11),
+                &editing,
+                T11,
+                C_TEXT,
+                Wt::Reg,
+            );
             hit.push((r, Action::Field(FieldId::PageName)));
         } else {
             let max_nw = (r.x1 - sx - 41.0 - 26.0).max(16.0);
             let shown = app.fonts.truncate(&page_label, T11, Wt::Reg, max_nw);
             let shown_color = if active { C_TEXT } else { C_MUTED };
-            app.fonts
-                .text(s, sx + 41.0, line_top(r, T11), &shown, T11, shown_color, Wt::Reg);
+            app.fonts.text(
+                s,
+                sx + 41.0,
+                line_top(r, T11),
+                &shown,
+                T11,
+                shown_color,
+                Wt::Reg,
+            );
         }
         // the delete affordance appears on any row (the ACTIVE page is
         // deletable too — Figma lets you delete the page you are on), but
@@ -2418,8 +2453,15 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             let shown = app
                 .fonts
                 .truncate(&q, T11, Wt::Reg, (sr.width() - 40.0).max(16.0));
-            app.fonts
-                .text(s, sr.x0 + 26.0, line_top(sr, T11), &shown, T11, C_TEXT, Wt::Reg);
+            app.fonts.text(
+                s,
+                sr.x0 + 26.0,
+                line_top(sr, T11),
+                &shown,
+                T11,
+                C_TEXT,
+                Wt::Reg,
+            );
             let clr = Rect::new(sr.x1 - 20.0, sr.y0 + 2.0, sr.x1 - 6.0, sr.y1 - 2.0);
             if hover(app, clr) {
                 fill_rrect(s, clr, R_SM, C_FIELD_2);
@@ -2526,14 +2568,24 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             } else {
                 None
             };
-            draw_icon(s, row.icon, ix + 14.0, glyph_top(r, ICON_XS), ICON_XS, C_DIM);
+            draw_icon(
+                s,
+                row.icon,
+                ix + 14.0,
+                glyph_top(r, ICON_XS),
+                ICON_XS,
+                C_DIM,
+            );
             let nx = ix + 14.0 + 12.0 + 4.0;
             let max_nw = lw - 8.0 - nx - 8.0;
             // Inline rename (Figma: double-click a layer name). The field's
             // buffer is what the user is typing, so it wins over the node's
             // stored name; the name zone is registered AFTER the row so the
             // reverse scan finds it first.
-            let editing = app.field.as_ref().is_some_and(|f| f.id == FieldId::LayerName)
+            let editing = app
+                .field
+                .as_ref()
+                .is_some_and(|f| f.id == FieldId::LayerName)
                 && app.layer_edit_id.as_deref() == Some(row.id.as_str());
             let shown = if editing {
                 app.field.as_ref().unwrap().buffer.clone()
@@ -6452,8 +6504,15 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
                     // selection colour was 4.0:1 in Graphite and 2.0:1 in
                     // Daylight — a drag readout you cannot read.
                     fill_rrect(s, br, R_SM, C_ACCENT);
-                    app.fonts
-                        .text(s, br.x0 + 6.0, by + 0.5, &label, 10.0, C_ON_ACCENT, Wt::Mono);
+                    app.fonts.text(
+                        s,
+                        br.x0 + 6.0,
+                        by + 0.5,
+                        &label,
+                        10.0,
+                        C_ON_ACCENT,
+                        Wt::Mono,
+                    );
                 }
             }
         }
@@ -6645,12 +6704,7 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
     if let Some(crate::state::Drag::Marquee { start, cur }) = &app.drag {
         let a = app.world_to_screen(*start);
         let b = app.world_to_screen(*cur);
-        let r = Rect::new(
-            a.x.min(b.x),
-            a.y.min(b.y),
-            a.x.max(b.x),
-            a.y.max(b.y),
-        );
+        let r = Rect::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y));
         fill_rect(s, r, C_SEL_SOFT);
         stroke_rect(s, r, C_SEL, 1.0);
     }
@@ -8670,12 +8724,26 @@ fn paint_assets(
             }
             draw_icon(s, "component", x0 + 3.0, row_t + 4.0, ICON_XS, C_MUTED);
             let label = app.fonts.truncate(id, T10, Wt::Med, lw - 92.0);
-            app.fonts
-                .text(s, x0 + 20.0, line_top(hover_r, T10), &label, T10, C_TEXT, Wt::Med);
+            app.fonts.text(
+                s,
+                x0 + 20.0,
+                line_top(hover_r, T10),
+                &label,
+                T10,
+                C_TEXT,
+                Wt::Med,
+            );
             let vs = format!("v{ver}");
             let vw2 = app.fonts.measure(&vs, T10, Wt::Mono);
-            app.fonts
-                .text(s, lw - 74.0 - vw2, line_top(hover_r, T10), &vs, T10, C_MUTED, Wt::Mono);
+            app.fonts.text(
+                s,
+                lw - 74.0 - vw2,
+                line_top(hover_r, T10),
+                &vs,
+                T10,
+                C_MUTED,
+                Wt::Mono,
+            );
             // "check" — picks the updated .xlib and opens the diff review
             let cb = Rect::new(lw - 66.0, row_t + 2.0, lw - 16.0, row_t + 18.0);
             fill_rrect(s, cb, R_SM, if hover(app, cb) { C_LINE_2 } else { C_FIELD });
@@ -8919,8 +8987,15 @@ fn paint_tokens(
             name.clone()
         };
         let nw = app.fonts.measure(&name_shown, T10, Wt::Med);
-        app.fonts
-            .text(s, x0 + 18.0, line_top(hover_r, T10), &name_shown, T10, C_TEXT, Wt::Med);
+        app.fonts.text(
+            s,
+            x0 + 18.0,
+            line_top(hover_r, T10),
+            &name_shown,
+            T10,
+            C_TEXT,
+            Wt::Med,
+        );
         let nr = Rect::new(
             x0 + 16.0,
             row_t + 1.0,

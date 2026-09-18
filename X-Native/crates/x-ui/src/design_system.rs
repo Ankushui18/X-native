@@ -235,7 +235,6 @@ impl ColorTokens {
             .unwrap_or(rgb);
         [to[0], to[1], to[2], c[3]]
     }
-
 }
 
 impl Default for ColorTokens {
