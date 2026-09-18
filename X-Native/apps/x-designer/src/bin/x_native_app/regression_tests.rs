@@ -444,13 +444,14 @@ fn drawing_with_no_container_selected_lands_at_the_page_root() {
     assert_eq!(root.children.len(), 2, "rect + the demo frame");
     let r = root.children.iter().find(|n| n.id != "frame-1").unwrap();
     assert_eq!((r.transform.x, r.transform.y), (10.0, 10.0));
-    // and selecting a non-container (a plain rect) also must not nest:
-    // only frames / groups / sections are drop targets
+    // and selecting a non-container (a plain rect) is never a drop target:
+    // only frames / groups / sections can capture — but since the draw-it-in
+    // rule the DRAW POINT decides first, so aim at empty canvas
     h.app.doc().editor().selection = vec![r.id.clone()];
     h.finish_create(
         Tool::Rect,
-        Point::new(120.0, 120.0),
-        Point::new(160.0, 140.0),
+        Point::new(500.0, 20.0),
+        Point::new(540.0, 40.0),
     );
     let root = &h.app.doc_ref().editor_ref().root;
     assert_eq!(
@@ -458,6 +459,13 @@ fn drawing_with_no_container_selected_lands_at_the_page_root() {
         3,
         "non-container selection → root again"
     );
+    // the same non-container selection, drawn over frame-1, still joins the
+    // frame: where you draw beats what is selected
+    h.finish_create(Tool::Rect, Point::new(40.0, 120.0), Point::new(80.0, 150.0));
+    let root = &h.app.doc_ref().editor_ref().root;
+    assert_eq!(root.children.len(), 3, "the selection did not capture");
+    let f1 = find_node_clone(root, "frame-1").unwrap();
+    assert_eq!(f1.children.len(), 1, "the draw point decided the parent");
 }
 
 #[test]
@@ -1447,7 +1455,10 @@ fn a_hidden_or_locked_frame_does_not_take_the_shape() {
     h.finish_create(Tool::Rect, Point::new(40.0, 120.0), Point::new(80.0, 150.0));
     let root = &h.app.doc_ref().editor_ref().root;
     assert!(
-        find_node_clone(root, "frame-1").unwrap().children.is_empty(),
+        find_node_clone(root, "frame-1")
+            .unwrap()
+            .children
+            .is_empty(),
         "a locked frame captured the shape"
     );
     assert_eq!(root.children.len(), 2, "the page kept it");
@@ -1458,7 +1469,10 @@ fn a_hidden_or_locked_frame_does_not_take_the_shape() {
     h.finish_create(Tool::Rect, Point::new(40.0, 120.0), Point::new(80.0, 150.0));
     let root = &h.app.doc_ref().editor_ref().root;
     assert!(
-        find_node_clone(root, "frame-1").unwrap().children.is_empty(),
+        find_node_clone(root, "frame-1")
+            .unwrap()
+            .children
+            .is_empty(),
         "a hidden frame captured the shape"
     );
     assert_eq!(root.children.len(), 3, "the page kept it");
