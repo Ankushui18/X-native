@@ -5,6 +5,29 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-19 (Prototype panel: the row's words, the direction arrows)
+
+The owner's reference screenshots of Figma's prototype editor name every field —
+**Trigger: On drag**, **Action: Navigate to**, **Destination: footer_section**,
+**Animation: Move In**, **Direction: ← → ↓ ↑**, **Easing: Ease out**,
+**Duration: 300ms** — and two of those were not the words on our panel.
+
+- **The interaction row reads Figma's way.** The second pill used to repeat the
+  destination; it now names the *action* — "Navigate to", "Scroll to", "Open
+  overlay", "Swap overlay", "Close overlay", "Open link", "Go back", "Set
+  variable", "Set mode", "Conditional" — and an arrow introduces the thing it
+  acts on. An action with nothing to point at (Go back, Close overlay, Conditional)
+  has no destination control at all, where a "Choose destination" placeholder used
+  to sit. `proto_action_label`, the old second source of truth for those strings,
+  is gone with it.
+- **Figma's four direction arrows.** The animation row shows the animation's own
+  name ("Move in") and, beside it, ← → ↓ ↑. Only a Move in / Move out has a side,
+  so only then do the arrows light up and take a press; the lit one is the side in
+  force, and a press sets it (`Action::ProtoDirection` → `Host::proto_direction_set`).
+  The pill still cycles animation and direction together for the fast path.
+- **"Flow starting point".** The start-point row in the panel says Figma's phrase
+  instead of "Start flow here".
+
 ## [Unreleased] — 2026-09-19 (Polygon and Star)
 
 Figma's shape menu carries two shapes that count their own geometry, and both were

@@ -9040,41 +9040,6 @@ pub(crate) fn proto_trigger_label(t: &x_native::Trigger) -> &'static str {
     }
 }
 
-pub(crate) fn proto_action_label(a: &x_native::Action, targets: &[(String, String)]) -> String {
-    // x_core's prototype Action; the app's own Action is `crate::state::Action`
-    use x_native::Action as A;
-    match a {
-        A::Navigate { destination } | A::ScrollTo { destination } => targets
-            .iter()
-            .find(|(id, _)| id == destination)
-            .map(|(_, n)| n.as_str())
-            .unwrap_or(destination)
-            .to_string(),
-        A::OpenOverlay { overlay, position } => {
-            let name = targets
-                .iter()
-                .find(|(id, _)| id == overlay)
-                .map(|(_, n)| n.as_str())
-                .unwrap_or(overlay);
-            format!("{} ({})", name, position.label())
-        }
-        A::SwapOverlay { overlay } => {
-            let name = targets
-                .iter()
-                .find(|(id, _)| id == overlay)
-                .map(|(_, n)| n.as_str())
-                .unwrap_or(overlay);
-            format!("{} (swap)", name)
-        }
-        A::CloseOverlay => "Close overlay".into(),
-        A::OpenLink { url } => format!("Open {url}"),
-        A::Back => "Go back".into(),
-        A::SetVar { name, .. } => format!("Set {name}"),
-        A::SetMode { mode } => format!("Mode → {mode}"),
-        A::Cond { .. } => "Conditional".into(),
-    }
-}
-
 pub(crate) fn proto_dest_of(a: &x_native::Action) -> Option<String> {
     match a {
         x_native::Action::Navigate { destination } | x_native::Action::ScrollTo { destination } => {
@@ -9089,13 +9054,13 @@ pub(crate) fn proto_dest_of(a: &x_native::Action) -> Option<String> {
 pub(crate) fn proto_action_type_label(a: &x_native::Action) -> &'static str {
     use x_native::Action as A;
     match a {
-        A::Navigate { .. } => "Navigate",
-        A::OpenOverlay { .. } => "Overlay",
+        A::Navigate { .. } => "Navigate to",
+        A::OpenOverlay { .. } => "Open overlay",
         A::SwapOverlay { .. } => "Swap overlay",
         A::CloseOverlay => "Close overlay",
         A::OpenLink { .. } => "Open link",
         A::ScrollTo { .. } => "Scroll to",
-        A::Back => "Back",
+        A::Back => "Go back",
         A::SetVar { .. } => "Set variable",
         A::SetMode { .. } => "Set mode",
         A::Cond { .. } => "Conditional",
@@ -9145,8 +9110,15 @@ fn paint_prototype(
         if n.is_starting_point {
             fill_rrect(s, cb.inflate(-3.5, -3.5), R_XS, C_TEXT);
         }
-        app.fonts
-            .text(s, cb.x1 + 8.0, y, "Start flow here", T11, C_TEXT, Wt::Reg);
+        app.fonts.text(
+            s,
+            cb.x1 + 8.0,
+            y,
+            "Flow starting point",
+            T11,
+            C_TEXT,
+            Wt::Reg,
+        );
         hit.push((
             Rect::new(x0, y - 6.0, x0 + 190.0, y + 22.0),
             Action::ProtoToggleStart,
@@ -9243,62 +9215,81 @@ fn paint_prototype(
                 _ => {}
             }
 
-            // Row 2: action type + destination. These controls mutate the
-            // exact action consumed by the flow player; there is no longer a
-            // painted-but-unwired destination field.
+            // Row 2: the action's own name, an arrow, and what it acts on —
+            // Figma's interaction editor in one line ("Action: Navigate to" …
+            // "Destination: footer_section"). An action with nothing to point
+            // at (Go back, Close overlay) has no destination, so no arrow.
             let action_y = y + 24.0;
-            let ab = Rect::new(x0 + 5.0, action_y, x0 + 86.0, action_y + 20.0);
+            let ab = Rect::new(x0 + 5.0, action_y, x0 + 96.0, action_y + 20.0);
             input_box(app, s, ab, 4.0);
             app.fonts.text(
                 s,
                 ab.x0 + 4.0,
                 action_y + 2.0,
-                &proto_action_label(&ix.action, &targets),
+                proto_action_type_label(&ix.action),
                 T10,
                 C_TEXT,
                 Wt::Reg,
             );
             hit.push((ab, Action::ProtoActionType(i)));
 
-            let target_label = ix
-                .action
-                .target()
-                .and_then(|id| targets.iter().find(|(candidate, _)| candidate == id))
-                .map(|(_, name)| name.as_str())
-                .unwrap_or_else(|| {
-                    if has_url {
-                        "External link"
-                    } else {
-                        "Choose destination"
-                    }
-                });
-            let db = Rect::new(x0 + 90.0, action_y, xr - 5.0, action_y + 20.0);
-            input_box(app, s, db, 4.0);
-            let target_text = app
-                .fonts
-                .truncate(target_label, T10, Wt::Reg, db.width() - 8.0);
-            app.fonts.text(
-                s,
-                db.x0 + 4.0,
-                action_y + 2.0,
-                &target_text,
-                T10,
-                C_TEXT,
-                Wt::Reg,
-            );
-            if !has_url {
+            fn name_of<'a>(targets: &'a [(String, String)], id: &'a str) -> &'a str {
+                targets
+                    .iter()
+                    .find(|(candidate, _)| candidate == id)
+                    .map(|(_, name)| name.as_str())
+                    .unwrap_or(id)
+            }
+            let dest: Option<&str> = match &ix.action {
+                x_native::Action::Navigate { destination }
+                | x_native::Action::ScrollTo { destination }
+                | x_native::Action::OpenOverlay {
+                    overlay: destination, ..
+                }
+                | x_native::Action::SwapOverlay {
+                    overlay: destination,
+                } => Some(name_of(&targets, destination)),
+                x_native::Action::SetVar { name, .. } => Some(name.as_str()),
+                x_native::Action::SetMode { mode } => Some(mode.as_str()),
+                // a link's URL owns the row below this one
+                _ => None,
+            };
+            if let Some(name) = dest {
+                let arrow = Rect::new(x0 + 100.0, action_y, x0 + 114.0, action_y + 20.0);
+                app.fonts.text(
+                    s,
+                    arrow.x0,
+                    action_y + 2.0,
+                    "→",
+                    T10,
+                    C_MUTED,
+                    Wt::Reg,
+                );
+                let db = Rect::new(arrow.x1, action_y, xr - 5.0, action_y + 20.0);
+                input_box(app, s, db, 4.0);
+                let target_text = app.fonts.truncate(name, T10, Wt::Reg, db.width() - 8.0);
+                app.fonts.text(
+                    s,
+                    db.x0 + 4.0,
+                    action_y + 2.0,
+                    &target_text,
+                    T10,
+                    C_TEXT,
+                    Wt::Reg,
+                );
                 hit.push((db, Action::ProtoDest(i, 1)));
             }
 
-            // Row 3: animation + duration. Both are authored properties on
-            // Interaction and are used by the prototype transition runtime.
+            // Row 3: the animation, its direction, and the duration — Figma's
+            // "Animation: Move In" with the four arrows beside it. Only a Move
+            // in / Move out has a direction, so only then do the arrows light
+            // up, take a press and mean anything; the pill still cycles all of
+            // them, directions included.
             let motion_y = y + 48.0;
-            let mb = Rect::new(x0 + 5.0, motion_y, x0 + 120.0, motion_y + 20.0);
+            let mb = Rect::new(x0 + 5.0, motion_y, x0 + 95.0, motion_y + 20.0);
             input_box(app, s, mb, 4.0);
-            let animation = ix.animation.label_with_dir();
-            let animation = app
-                .fonts
-                .truncate(&animation, T10, Wt::Reg, mb.width() - 8.0);
+            let animation = ix.animation.label();
+            let animation = app.fonts.truncate(animation, T10, Wt::Reg, mb.width() - 8.0);
             app.fonts.text(
                 s,
                 mb.x0 + 4.0,
@@ -9309,7 +9300,35 @@ fn paint_prototype(
                 Wt::Reg,
             );
             hit.push((mb, Action::ProtoAnimation(i)));
-            let sb = Rect::new(x0 + 124.0, motion_y, x0 + 184.0, motion_y + 20.0);
+            let dir_now = ix.animation.dir_str();
+            let arrows = [
+                ("←", x_native::Direction::Left),
+                ("→", x_native::Direction::Right),
+                ("↑", x_native::Direction::Top),
+                ("↓", x_native::Direction::Bottom),
+            ];
+            for (k, &(glyph, dir)) in arrows.iter().enumerate() {
+                let bx = x0 + 99.0 + k as f64 * 20.0;
+                let b = Rect::new(bx, motion_y, bx + 18.0, motion_y + 20.0);
+                input_box(app, s, b, 4.0);
+                let lit = dir_now == Some(dir.to_str());
+                app.fonts.text_center(
+                    s,
+                    b,
+                    glyph,
+                    T10,
+                    if lit { C_TEXT } else { C_DIM },
+                    if lit { Wt::Med } else { Wt::Reg },
+                    true,
+                );
+                if dir_now.is_some() {
+                    hit.push((b, Action::ProtoDirection(i, dir)));
+                }
+            }
+            // `xr` clamps the right end: the panel is resizable down to
+            // ED_RIGHT_MIN, and a row that ran past it would paint over the
+            // dock's own padding (the panel's clip hides it, not the pill).
+            let sb = Rect::new(x0 + 181.0, motion_y, (x0 + 241.0).min(xr), motion_y + 20.0);
             input_box(app, s, sb, 4.0);
             app.fonts.text(
                 s,

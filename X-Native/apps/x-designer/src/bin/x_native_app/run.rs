@@ -7714,6 +7714,21 @@ impl Host {
         });
     }
 
+    /// The direction arrows: they pick the side a Move in / Move out enters
+    /// from. Figma shows them only for an animation that has one, and so does
+    /// the row — but a press that arrives anyway leaves the others alone.
+    fn proto_direction_set(&mut self, i: usize, dir: x_native::Direction) {
+        self.proto_edit(move |l| {
+            if let Some(ix) = l.get_mut(i) {
+                ix.animation = match ix.animation {
+                    x_native::Animation::MoveIn(_) => x_native::Animation::MoveIn(dir),
+                    x_native::Animation::MoveOut(_) => x_native::Animation::MoveOut(dir),
+                    other => other,
+                };
+            }
+        });
+    }
+
     fn proto_action_type_cycle(&mut self, i: usize) {
         let targets = crate::editor_ui::proto_targets(&self.app);
         self.proto_edit(move |l| {
@@ -10216,6 +10231,7 @@ impl Host {
             Action::ProtoDest(i, dir) => self.proto_dest_cycle(i, dir),
             Action::ProtoSpeed(i) => self.proto_speed_cycle(i),
             Action::ProtoAnimation(i) => self.proto_animation_cycle(i),
+            Action::ProtoDirection(i, dir) => self.proto_direction_set(i, dir),
             Action::ProtoActionType(i) => self.proto_action_type_cycle(i),
             Action::ProtoEditDelay(i) => self.proto_edit_delay(i),
             Action::ProtoEditKey(i) => self.proto_edit_key(i),

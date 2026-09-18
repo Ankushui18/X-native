@@ -1381,6 +1381,77 @@ fn prototype_panel_lists_interaction_rows() {
         .any(|(_, a)| matches!(a, Action::FlowEnter)));
 }
 
+/// Figma's interaction editor, in our row: the action's own name on the left
+/// ("Navigate to", "Go back"), then an arrow and the thing it acts on — and
+/// nothing after the name at all when the action has no destination. Beside
+/// the animation sit Figma's four direction arrows, which set the side a Move
+/// in / Move out enters from; they only take a press when there is a side.
+#[test]
+fn the_prototype_row_names_the_action_and_its_arrows_set_the_side() {
+    let mut h = host();
+    proto_doc(&mut h);
+    h.app.doc().right_tab = crate::state::RightTab::Prototype;
+    {
+        let d = h.app.doc();
+        let e = d.editor();
+        let n = x_native::editor::find_mut(&mut e.root, "btn").unwrap();
+        n.interactions[0].animation = x_native::Animation::MoveIn(x_native::Direction::Left);
+    }
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    assert_eq!(
+        h.app
+            .hit
+            .iter()
+            .filter(|(_, a)| matches!(a, Action::ProtoDirection(0, _)))
+            .count(),
+        4,
+        "the four arrows"
+    );
+    let action_box = h
+        .app
+        .hit
+        .iter()
+        .find(|(_, a)| matches!(a, Action::ProtoActionType(0)))
+        .map(|(r, _)| *r)
+        .expect("the action pill");
+    let dest_box = h
+        .app
+        .hit
+        .iter()
+        .find(|(_, a)| matches!(a, Action::ProtoDest(0, 1)))
+        .map(|(r, _)| *r)
+        .expect("the destination control");
+    assert!(
+        dest_box.x0 > action_box.x1,
+        "the destination sits past the arrow"
+    );
+    h.dispatch(Action::ProtoDirection(0, x_native::Direction::Top));
+    let n = find_node_clone(&h.app.doc_ref().editor_ref().root, "btn").unwrap();
+    assert_eq!(
+        n.interactions[0].animation,
+        x_native::Animation::MoveIn(x_native::Direction::Top),
+        "the arrow set the side"
+    );
+
+    // an action with nothing to point at has no arrow and no control
+    {
+        let d = h.app.doc();
+        let e = d.editor();
+        let n = x_native::editor::find_mut(&mut e.root, "btn").unwrap();
+        n.interactions[0].action = x_native::Action::Back;
+    }
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    assert!(
+        !h.app
+            .hit
+            .iter()
+            .any(|(_, a)| matches!(a, Action::ProtoDest(0, 1))),
+        "no destination, no control"
+    );
+}
+
 /// Figma's canvas connection gesture — the course's own chapter, "FD4B: Add
 /// prototype connections": the Prototype tab puts "a blue circle on [the
 /// selected layer's] edge", and it "changes to a blue plus that we can use to

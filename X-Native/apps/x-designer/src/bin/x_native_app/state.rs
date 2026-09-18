@@ -1130,6 +1130,8 @@ pub enum Action {
     ProtoDest(usize, i32),
     ProtoSpeed(usize),
     ProtoAnimation(usize),
+    /// Figma's four arrows beside a Move in / Move out: the side it enters from.
+    ProtoDirection(usize, x_native::Direction),
     ProtoActionType(usize),
     ProtoEasing(usize),
     ProtoToggleReset(usize),
