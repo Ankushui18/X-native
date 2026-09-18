@@ -1102,15 +1102,16 @@ mod reliability_tests {
     /// flag drops the cached scene instead of serving the editor's labelled one.
     #[test]
     fn presenting_invalidates_the_cached_scene() {
-        let page = Node::frame("page", 200.0, 200.0)
-            .child(Node::frame("hero", 100.0, 60.0).child(Node::rect(
+        let page = Node::frame("page", 200.0, 200.0).child(
+            Node::frame("hero", 100.0, 60.0).child(Node::rect(
                 "r",
                 4.0,
                 4.0,
                 20.0,
                 20.0,
                 Color::WHITE,
-            )));
+            )),
+        );
         let vars = Variables::default();
         let sink = VelloSink {
             assets: None,
