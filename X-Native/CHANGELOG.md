@@ -23,8 +23,9 @@ tool at all.
 - **The stroke is a normal vector layer**: `NodeKind::Vector`, named for the layers
   panel, selected when it lands, drawn inside the frame it was drawn in (the same
   draw-it-in rule as every other creation tool, Space included), and one insert = one
-  undo step. Its stroke is Figma's default — a round 3px ink — materialized as an
-  ordered stroke layer, so the inspector shows the stroke the sketch actually has
+  undo step. Holding ⇧ while drawing collapses the stroke to a straight line, the tip
+  on the same help page. Its stroke is Figma's default — a round 3px ink — materialized
+  as an ordered stroke layer, so the inspector shows the stroke the sketch actually has
   (`the_pencil_draws_a_smoothed_stroke`, plus three engine tests for the fit).
 
 ## [Unreleased] — 2026-09-18 (The Slice tool)

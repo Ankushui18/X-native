@@ -1773,6 +1773,23 @@ fn the_pencil_draws_a_smoothed_stroke() {
         "the stroke joined the frame it was drawn in"
     );
 
+    // ⇧ while drawing is the page's "draw in a straight line": two samples,
+    // one cubic — a straight segment, not a freehand wobbler
+    h.app.shift = true;
+    h.on_press(h.app.world_to_screen(Point::new(60.0, 300.0)));
+    h.on_move(h.app.world_to_screen(Point::new(160.0, 340.0)));
+    h.on_move(h.app.world_to_screen(Point::new(260.0, 380.0)));
+    h.on_release();
+    h.app.shift = false;
+    let sel = h.app.doc_ref().editor_ref().selection.clone();
+    let root = &h.app.doc_ref().editor_ref().root;
+    let line = find_node_clone(root, &sel[0]).expect("the line landed");
+    let line_path = match &line.kind {
+        NodeKind::Vector { path } => path,
+        _ => unreachable!(),
+    };
+    assert_eq!(line_path.len(), 2, "⇧ collapses the stroke to one segment");
+
     // Esc leaves the pencil (Figma: "until you select another tool or Esc")
     h.on_key(Key::Named(NamedKey::Escape), None);
     assert_eq!(h.app.tool, Tool::Select, "Esc leaves the Pencil");

@@ -4857,7 +4857,13 @@ impl Host {
                 // own simplify pass drops what the eye cannot see anyway.
                 let world = self.app.screen_to_world(p);
                 let step = 2.0 / self.app.zoom.max(0.01);
+                // ⇧ while drawing is Figma's "draw in a straight line": the
+                // stroke collapses to the line from where it started
+                let straight = self.app.shift;
                 if let Some(Drag::Pencil { points }) = self.app.drag.as_mut() {
+                    if straight {
+                        points.truncate(1);
+                    }
                     let far = points
                         .last()
                         .is_none_or(|l| (l.x - world.x).hypot(l.y - world.y) >= step);

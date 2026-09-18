@@ -147,7 +147,8 @@ selection (⌥⌘G), which now have a tool, a palette entry and a shortcut — t
   dark. `x_core::freehand_path` is the second half of the engine's `simplify_polyline`
   (which has said "(pencil tool)" since the vector pass, with no caller); the stroke it
   produces is a normal `NodeKind::Vector`, so the existing vector edit mode edits it
-  point by point.
+  point by point — and holding ⇧ while drawing collapses the stroke to a straight line,
+  which is the page's own tip.
 * **A slice answers canvas clicks like any other layer** — the engine's hit test was left
   alone; the dashed outline and the name chip are how you find one. (Our rule, not Figma's:
   their slices are reached through the Layers panel and their edge.)
