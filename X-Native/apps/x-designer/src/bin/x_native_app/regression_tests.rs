@@ -1642,11 +1642,8 @@ fn the_scale_tables_are_figmas_nine_points() {
     assert_eq!(a, anchor);
     assert_eq!(f, crate::state::scale_grab_factor(anchor, grab, pointer));
     // a drag past the anchor is clamped, never mirrored
-    let flat = crate::state::scale_grab_factor(
-        (0.0, 0.0),
-        Point::new(10.0, 0.0),
-        Point::new(-1.0, 0.0),
-    );
+    let flat =
+        crate::state::scale_grab_factor((0.0, 0.0), Point::new(10.0, 0.0), Point::new(-1.0, 0.0));
     assert_eq!(flat, crate::state::MIN_SCALE);
 }
 
@@ -1704,10 +1701,8 @@ fn the_scale_panel_and_the_body_drag_scale_the_selection() {
     // the body drag: on the canvas K never moves a layer — a press inside the
     // box scales it about the corner OPPOSITE the nearest one to the press
     let reg = h.app.editor_regions();
-    let (cx, cy) = (
-        (reg.canvas.x0 + reg.canvas.x1) / 2.0,
-        (reg.canvas.y0 + reg.canvas.y1) / 2.0,
-    );
+    let cx = (reg.canvas.x0 + reg.canvas.x1) / 2.0;
+    let cy = (reg.canvas.y0 + reg.canvas.y1) / 2.0;
     let centre = h.app.screen_to_world(Point::new(cx, cy));
     h.app.space_pan = true;
     h.finish_create(

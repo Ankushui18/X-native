@@ -5418,8 +5418,7 @@ impl Host {
             }
             // a scale is one gesture too: every move pushed its own
             // ReplaceNode, and one Ctrl+Z must undo the whole drag
-            Some(Drag::ScaleSel { base_depth, .. })
-            | Some(Drag::ScaleBody { base_depth, .. }) => {
+            Some(Drag::ScaleSel { base_depth, .. }) | Some(Drag::ScaleBody { base_depth, .. }) => {
                 let doc = self.app.doc();
                 let editor = doc.editor();
                 editor.merge_last(editor.undo_depth().saturating_sub(base_depth));
