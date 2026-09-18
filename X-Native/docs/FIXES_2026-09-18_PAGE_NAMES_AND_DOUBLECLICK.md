@@ -199,6 +199,57 @@ cd X-Native
 bash scripts/check.sh
 ```
 
+### Verified on pixels, by the gate itself (as far as this sandbox goes)
+
+The look of a real window is still not verifiable here. The three screenshot tests
+(`screenshot_screens`, its `_more` and `_r7` companions) are `#[ignore]`d and build
+their renderer as wgpu + vello with `use_cpu: false` / `force_fallback_adapter:
+true`, so they need a software Vulkan driver (lavapipe) *and* a Rust toolchain —
+neither exists in this sandbox. The same is true of the other three `#[ignore]`d
+tests (`gpu_target.rs`, `loading_tests.rs`, `regression_tests.rs`).
+
+The pixels themselves, however, can be checked without a GPU:
+`crates/x-render/src/raster.rs` already owns a tiny-skia sink, so a plain
+(non-`#[ignore]`d) test there runs inside the ordinary gate.
+`canvas_pixels_name_the_outermost_frames_and_never_the_page` rasterizes a page
+holding an outermost frame, a frame nested inside it and a Section, shifts the page
+down 40 px so the band *above* it is inside the bitmap too, and reads both bands
+back:
+
+| where | expected | why |
+| --- | --- | --- |
+| the gutter above the page root | clean | the root is never named — complaint 1 |
+| the page's own top edge | clean | where the page name used to be painted, over the artwork |
+| the gutter above the outermost frame | named | Figma names outermost frames |
+| the gutter above a frame nested inside it | clean | Figma is silent for nested frames |
+| the gutter above a Section | named | Figma always shows section names |
+
+No font manager is attached, so a label rasterizes as its placeholder box — which
+is exactly the question being asked of a band: **was a name painted here?**
+
+That the test can fail is not assumed; it was demonstrated. A deliberate negative
+control removed the root gate in `ir.rs` (`!path.is_empty() && !in_frame` →
+`!in_frame`, commit `72f4c9c`) and the gate went red:
+
+```
+thread 'raster::tests::canvas_pixels_name_the_outermost_frames_and_never_the_page'
+panicked at crates/x-render/src/raster.rs:997:17:
+above the page: expected no name, darkest 229
+```
+
+Nine tests failed in all, i.e. the rule is guarded from several directions:
+`ir::tests::a_frame_name_labels_the_gutter_above_it_and_never_the_root`,
+`ir::tests::build_render_tree_of_renders_subtree_at_origin`,
+`frame_cache::tests::segmented_output_matches_reference_lowering`,
+`frame_cache::reliability_tests::nested_master_is_available_in_every_bucket_and_painted_once`,
+`frame_cache::reliability_tests::inline_exclusion_changes_only_the_view_and_invalidates_cached_scene`,
+`tests_mod::tests::slot_content_replaces_anchor_in_rendered_instance`,
+`golden_render_ir_matches_pinned_shape` (the pinned hash) and the app's
+`t13_canvas_and_export_must_encode_the_same_fill_stack` (*"the page root must
+contribute no paths at all (no name label): left: 4"*). The control commit was then
+reverted — the branch tip carries the fix, not the control — and the run is green
+again.
+
 ### Manual check-list for a build (each line is one of the complaints)
 
 1. Open a file, delete every frame on the page: the canvas is empty — no name is

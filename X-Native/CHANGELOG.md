@@ -76,6 +76,13 @@ not selecting the elements in the right panel"*. The audit behind the fixes
   behaviour returns: the renderer's root/nesting/section label rules, the page
   rename + delete paths, the ✕-beats-the-row hit order, the windowed page list,
   the counted-once panel toggle, and both rename gestures.
+- **The canvas name rules are verified on pixels, not only on the command list**:
+  a non-`#[ignore]`d `RasterSink` (tiny-skia) test rasterizes a page holding an
+  outermost frame, a nested frame and a Section and reads the bands back — the page
+  and its top edge clean, the outermost frame and the Section named, the nested
+  frame silent. It is proven to bite: a one-line control that removed the root gate
+  failed it with `above the page: expected no name, darkest 229` alongside eight
+  other tests guarding the same rule. `crates/x-render`.
 - **The audit** — root causes, a Figma-vs-X-Native behaviour table with sources,
   and the honest list of what is still open.
 
