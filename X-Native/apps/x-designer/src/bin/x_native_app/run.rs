@@ -10016,7 +10016,7 @@ impl Host {
                 let Some(id) = self.app.doc_ref().selected_id() else {
                     return;
                 };
-                let (hp, vp) = {
+                let before = {
                     let doc = self.app.doc();
                     match crate::editor_ui::find_node(&doc.editor_ref().root, &id) {
                         Some(n) => n.pin,
@@ -10026,17 +10026,19 @@ impl Host {
                 let (hp, vp, label) = match axis {
                     crate::state::ConstraintAxis::Horizontal => {
                         let (label, hp) = crate::state::CONSTRAINT_H[row];
-                        (hp, vp, label)
+                        (hp, before.1, label)
                     }
                     crate::state::ConstraintAxis::Vertical => {
                         let (label, vp) = crate::state::CONSTRAINT_V[row];
-                        (hp, vp, label)
+                        (before.0, vp, label)
                     }
                 };
-                if self.app.doc().editor().set_pin(&id, hp, vp) {
-                    self.app.mark_dirty();
-                    self.app.status = format!("Constraint set: {label}");
+                if (hp, vp) == before {
+                    return;
                 }
+                self.app.doc().editor().set_pin(&id, hp, vp);
+                self.app.mark_dirty();
+                self.app.status = format!("Constraint set: {label}");
             }
             Action::ZoomMenu => self.app.dropdown_zoom = !self.app.dropdown_zoom,
             Action::ZoomStep(i) => {

@@ -5130,7 +5130,8 @@ fn paint_constraints(
         return;
     }
     let mut y = y0 + 1.0 + 12.0;
-    app.fonts.caps_label(s, x0, y, "CONSTRAINTS", C_TEXT, Wt::Med);
+    app.fonts
+        .caps_label(s, x0, y, "CONSTRAINTS", C_TEXT, Wt::Med);
     y += 12.0 + LABEL_GAP;
     for axis in [
         crate::state::ConstraintAxis::Horizontal,
@@ -5139,7 +5140,8 @@ fn paint_constraints(
         let Some((row, _)) = constraint_row(app, axis) else {
             continue;
         };
-        app.fonts.text(s, x0, y + 6.5, axis.label(), T10, C_DIM, Wt::Reg);
+        app.fonts
+            .text(s, x0, y + 6.5, axis.label(), T10, C_DIM, Wt::Reg);
         let fr = Rect::new(x0 + 74.0, y, xr, y + INPUT_H);
         if app.dropdown_constraint == Some(axis) {
             // the menu anchors under the field it belongs to; the panel
