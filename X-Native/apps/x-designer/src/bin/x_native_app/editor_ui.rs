@@ -5172,12 +5172,12 @@ pub fn constraint_row(
 ) -> Option<(usize, &'static str)> {
     let (hp, vp) = pin_of_selection(app)?;
     let row = match axis {
-        crate::state::ConstraintAxis::Horizontal => {
-            crate::state::CONSTRAINT_H.iter().position(|(_, p)| *p == hp)
-        }
-        crate::state::ConstraintAxis::Vertical => {
-            crate::state::CONSTRAINT_V.iter().position(|(_, p)| *p == vp)
-        }
+        crate::state::ConstraintAxis::Horizontal => crate::state::CONSTRAINT_H
+            .iter()
+            .position(|(_, p)| *p == hp),
+        crate::state::ConstraintAxis::Vertical => crate::state::CONSTRAINT_V
+            .iter()
+            .position(|(_, p)| *p == vp),
     }?;
     Some((row, axis.labels()[row]))
 }

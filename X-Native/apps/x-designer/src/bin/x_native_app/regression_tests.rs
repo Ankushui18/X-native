@@ -4668,8 +4668,9 @@ fn constraints_carry_a_frames_layers_through_its_resize() {
     // by 100 x 100
     h.app.doc().editor().selection = vec!["frame-1".into()];
     let depth0 = h.app.doc_ref().editor_ref().undo_depth();
-    let grab = h.resize_grab(Point::new(375.0, 480.0)).expect("corner grab");
-    h.app.drag = Some(grab);
+    let grab = h.resize_grab(Point::new(375.0, 480.0));
+    assert!(grab.is_some(), "the bottom-right corner is grabbable");
+    h.app.drag = grab;
     h.on_move(h.app.world_to_screen(Point::new(475.0, 580.0)));
     h.on_release();
     let root = &h.app.doc_ref().editor_ref().root;
