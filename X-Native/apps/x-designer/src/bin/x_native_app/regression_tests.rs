@@ -3447,21 +3447,26 @@ fn page_delete_removes_the_clicked_page_and_never_the_last_one() {
     h.dispatch(Action::AddPage);
     h.dispatch(Action::AddPage);
     {
+        // A page's name lives in its EDITOR's root: `OpenDoc::snapshot` (run by
+        // every `checkpoint`) rebuilds `doc.pages` from the editors with
+        // `sync()`, so a name written only into `doc.pages` is gone at the next
+        // transaction — which is exactly what the first version of this fixture
+        // did, and what `App::commit_page_rename` writes both sides to avoid.
         let d = h.app.doc();
-        d.doc.pages[0].name = "Home".into();
-        d.doc.pages[1].name = "Detail".into();
-        d.doc.pages[2].name = "Settings".into();
+        for (i, name) in ["Home", "Detail", "Settings"].iter().enumerate() {
+            d.doc.pages[i].name = (*name).into();
+            d.editors[i].root.name = (*name).into();
+        }
         d.page = 2;
     }
     // The ✕ is a HOVER affordance (Figma paints it on the row the pointer is
     // on), so the pointer has to be over the row when the paint pass runs —
-    // the zone only exists for a hovered row.
-    let rows0 = h.app.pages_rows();
-    let row0 = rows0.iter().find(|(i, _)| *i == 0).map(|(_, r)| *r).unwrap();
-    h.app.mouse = row0.center();
-    crate::editor_ui::paint(&mut h.app, &mut scene);
+    // the zone only exists for a hovered row. Row geometry does not depend on
+    // the paint pass, so it is read once, before it.
     let rows = h.app.pages_rows();
     let row0 = rows.iter().find(|(i, _)| *i == 0).map(|(_, r)| *r).unwrap();
+    h.app.mouse = row0.center();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
     let trash = Rect::new(
         h.app.editor_regions().sidebar.x1 - 30.0,
         row0.y0 + 5.0,
