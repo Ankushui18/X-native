@@ -5326,11 +5326,12 @@ impl Host {
             layer.options.cap_end = x_native::StrokeCap::Round;
         }
         let id = v.id.clone();
+        // read the Space opt-out BEFORE the document guard: the guard borrows
+        // the app, and the rule is the one the shape tools use
+        let no_nest = self.app.space_pan;
         let doc = self.app.doc();
         let root_id = doc.editor_ref().root.id.clone();
-        // the same draw-it-in rule as the shape tools, with the same Space
-        // opt-out (Space while drawing keeps the sketch on the page)
-        let place = if self.app.space_pan {
+        let place = if no_nest {
             None
         } else {
             container_under(&doc.editor_ref().root, pts[0])

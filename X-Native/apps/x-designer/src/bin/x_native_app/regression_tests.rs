@@ -1727,10 +1727,7 @@ fn the_pencil_draws_a_smoothed_stroke() {
     let id = sel[0].clone();
     let v = find_node_clone(root, &id).expect("the stroke landed");
     assert!(matches!(v.kind, NodeKind::Vector { .. }), "a vector landed");
-    assert!(
-        v.name.starts_with("Pencil "),
-        "named in the layers panel"
-    );
+    assert!(v.name.starts_with("Pencil "), "named in the layers panel");
     let path = match &v.kind {
         NodeKind::Vector { path } => path,
         _ => unreachable!(),
@@ -1772,7 +1769,7 @@ fn the_pencil_draws_a_smoothed_stroke() {
     let root = &h.app.doc_ref().editor_ref().root;
     let f1 = find_node_clone(root, "frame-1").expect("frame-1");
     assert!(
-        find_node_clone(f1, &sel[0]).is_some(),
+        find_node_clone(&f1, &sel[0]).is_some(),
         "the stroke joined the frame it was drawn in"
     );
 
