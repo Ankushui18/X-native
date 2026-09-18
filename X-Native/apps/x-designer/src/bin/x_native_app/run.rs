@@ -12193,11 +12193,10 @@ impl Host {
                 // Figma's Appearance fields, on the layer's own arc: the box
                 // never moves, which is what makes them non-destructive.
                 let Some(v) = num(raw) else { return };
-                let Some((start, end, ratio)) = crate::editor_ui::find_node(
-                    &doc.editor_ref().root,
-                    node_id.as_str(),
-                )
-                .and_then(crate::state::arc_props) else {
+                let Some((start, end, ratio)) =
+                    crate::editor_ui::find_node(&doc.editor_ref().root, node_id.as_str())
+                        .and_then(crate::state::arc_props)
+                else {
                     return;
                 };
                 let sweep = x_native::booleans::arc_sweep(start, end);

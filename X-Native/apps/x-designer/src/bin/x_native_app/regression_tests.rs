@@ -1844,9 +1844,16 @@ fn the_arc_handles_and_fields_turn_an_ellipse_into_a_ring() {
     assert!((ratio - 0.15).abs() < 1e-6, "ratio: {ratio}");
     assert_eq!((node.w, node.h), (100.0, 100.0), "still the same box");
 
-    // the Ratio handle is dragged out from the centre: a ring
+    // the Ratio handle is dragged out from the centre: a ring. Its handle is
+    // where the one handle table says it is — the test asks, not assumes.
     let (ox, oy) = (node.transform.x, node.transform.y);
-    h.on_press(h.app.world_to_screen(Point::new(ox + 25.0, oy + 50.0)));
+    let ratio_local = crate::state::arc_handles(&node)
+        .into_iter()
+        .find(|(p, _)| *p == crate::state::ArcPart::Ratio)
+        .map(|(_, p)| p)
+        .expect("an arc shows the Ratio handle");
+    let press = Point::new(ox + ratio_local.x, oy + ratio_local.y);
+    h.on_press(h.app.world_to_screen(press));
     assert!(
         matches!(
             h.app.drag,

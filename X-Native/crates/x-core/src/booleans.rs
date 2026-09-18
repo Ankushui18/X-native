@@ -436,9 +436,7 @@ pub fn node_to_path(n: &Node) -> Option<Vec<PathCmd>> {
                 ])
             }
         }
-        NodeKind::Arc { start, end, ratio } => {
-            Some(arc_path_cmds(n.w, n.h, *start, *end, *ratio))
-        }
+        NodeKind::Arc { start, end, ratio } => Some(arc_path_cmds(n.w, n.h, *start, *end, *ratio)),
         NodeKind::Ellipse => {
             let (rx, ry) = (n.w / 2.0, n.h / 2.0);
             let (kx, ky) = (0.5523 * rx, 0.5523 * ry);
