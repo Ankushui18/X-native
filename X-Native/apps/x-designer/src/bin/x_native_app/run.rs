@@ -10522,8 +10522,9 @@ impl Host {
                         .map(x_native::effective_interactions)
                         .unwrap_or_default();
                     let before = list.len();
-                    list.retain(|ix| crate::editor_ui::proto_dest_of(&ix.action)
-                        != Some(conn.dest.clone()));
+                    list.retain(|ix| {
+                        crate::editor_ui::proto_dest_of(&ix.action) != Some(conn.dest.clone())
+                    });
                     if list.len() == before {
                         false
                     } else {

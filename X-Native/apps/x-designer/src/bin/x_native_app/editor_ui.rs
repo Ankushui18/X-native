@@ -661,9 +661,11 @@ pub(crate) fn page_connections(root: &x_native::Node) -> Vec<Conn> {
 }
 
 /// Figma's anchor: the circle sits on the RIGHT edge of the layer's own box,
-/// vertically centred — the point the connection gestures take hold of.
+/// vertically centred — the point the connection gestures take hold of. It is
+/// in the layer's OWN space, because the caller maps it through `node_world`,
+/// which already carries the layer's transform.
 pub(crate) fn conn_anchor_point(n: &x_native::Node) -> Point {
-    Point::new(n.transform.x + n.w, n.transform.y + n.h / 2.0)
+    Point::new(n.w, n.h / 2.0)
 }
 
 /// The top-level frame containing a world point, with its box: where a snapped

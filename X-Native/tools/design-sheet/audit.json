@@ -40,7 +40,7 @@
     },
     "icons": {
       "dashboard.rs": 0,
-      "editor_ui.rs": 1,
+      "editor_ui.rs": 0,
       "board_ui.rs": 0,
       "loading.rs": 0,
       "command.rs": 0,

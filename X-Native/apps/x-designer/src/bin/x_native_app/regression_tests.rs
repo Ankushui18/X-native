@@ -1412,8 +1412,11 @@ fn the_plus_on_a_layers_edge_draws_a_connection() {
     let root = &h.app.doc_ref().editor_ref().root;
     assert!(crate::editor_ui::page_connections(root).is_empty());
     let go = find_node_clone(root, "go").unwrap();
-    let anchor = Point::new(go.transform.x + go.w, go.transform.y + go.h / 2.0);
-    assert_eq!(anchor, Point::new(100.0, 35.0), "the right edge, centred");
+    let local = crate::editor_ui::conn_anchor_point(&go);
+    assert_eq!(local, Point::new(80.0, 15.0), "the layer's own right edge");
+    let anchor = Point::new(go.transform.x + local.x, go.transform.y + local.y);
+    let on_the_page = Point::new(100.0, 35.0);
+    assert_eq!(anchor, on_the_page, "where the circle sits on the page");
 
     // with the pointer on the circle the plus is up, and it is a hit zone
     let p = h.app.world_to_screen(anchor);
