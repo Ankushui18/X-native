@@ -2172,7 +2172,10 @@ mod tests {
             t.commands.iter().position(is_pill).unwrap(),
             t.commands.iter().position(is_label).unwrap(),
         );
-        assert!(index_pill < index_label, "the chip is painted under its label");
+        assert!(
+            index_pill < index_label,
+            "the chip is painted under its label"
+        );
         match &t.commands[index_label] {
             RenderCommand::Glyphs {
                 transform,
