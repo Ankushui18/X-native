@@ -804,9 +804,12 @@ fn encode(
                     node.name.as_str()
                 };
                 let pill = crate::ir::section_pill_rect(name, node.w);
-                let shape =
-                    RoundedRect::from_rect(pill, RoundedRectRadii::new(crate::ir::SECTION_PILL_R))
-                        .into_path(0.1);
+                let radius = crate::ir::SECTION_PILL_R;
+                let shape = RoundedRect::from_rect(
+                    pill,
+                    RoundedRectRadii::new(radius, radius, radius, radius),
+                )
+                .into_path(0.1);
                 scene.fill(
                     Fill::NonZero,
                     world,

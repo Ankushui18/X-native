@@ -1467,7 +1467,12 @@ fn lower(
                     transform: world,
                     path: RoundedRect::from_rect(
                         section_pill_rect(name, node.w),
-                        RoundedRectRadii::new(SECTION_PILL_R),
+                        RoundedRectRadii::new(
+                            SECTION_PILL_R,
+                            SECTION_PILL_R,
+                            SECTION_PILL_R,
+                            SECTION_PILL_R,
+                        ),
                     )
                     .into_path(0.1),
                     brush: layer_brush(&Paint::Solid(section_pill_fill()), vars, opacity),
