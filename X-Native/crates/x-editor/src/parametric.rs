@@ -29,7 +29,7 @@
 
 #[allow(unused_imports)]
 use crate::*;
-use crate::{apply_constraints, find_mut, Editor};
+use crate::{apply_constraints, constrains_children, find_mut, Editor};
 use x_core::{apply_auto_layout, Node, NodeKind, Sizing, Value, Variables};
 
 /// The size axes a node can bind to a number variable.
@@ -191,7 +191,9 @@ impl Editor {
             clamp_radii(n);
             report.vars_updated = write_back_size(vars, n);
             // dependents inside this node: pinned children follow the new box
-            if !n.children.is_empty() {
+            // (only a frame owns a constraint table — a group's layers just
+            // move with it)
+            if constrains_children(n) && !n.children.is_empty() {
                 apply_constraints(n, old_w, old_h);
             }
             // A Fixed auto-layout frame distributes its children within the

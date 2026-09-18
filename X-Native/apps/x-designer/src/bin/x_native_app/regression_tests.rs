@@ -4680,14 +4680,12 @@ fn constraints_carry_a_frames_layers_through_its_resize() {
     // the right edge: the pins did the work
     let bar = find_node_clone(root, "bar").unwrap();
     assert_eq!(
-        bar.transform.y,
-        480.0,
+        bar.transform.y, 480.0,
         "the bar stayed pinned to the bottom"
     );
     let chip = find_node_clone(root, "chip").unwrap();
     assert_eq!(
-        chip.transform.x,
-        445.0,
+        chip.transform.x, 445.0,
         "the chip stayed pinned to the right"
     );
     // one gesture, one undo step: the frame and its layers come back together
