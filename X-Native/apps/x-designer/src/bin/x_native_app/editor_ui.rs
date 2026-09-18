@@ -5193,7 +5193,11 @@ fn paint_arc_block(
     let fields: [(FieldId, &str, String); 3] = [
         (FieldId::ArcStart, "Start", fmt_num(start)),
         (FieldId::ArcSweep, "Sweep", fmt_num(sweep)),
-        (FieldId::ArcRatio, "Ratio", format!("{}", (ratio * 100.0).round() as i64)),
+        (
+            FieldId::ArcRatio,
+            "Ratio",
+            format!("{}", (ratio * 100.0).round() as i64),
+        ),
     ];
     for (i, (id, label, fallback)) in fields.iter().enumerate() {
         let fx = x0 + (w + gap) * i as f64;

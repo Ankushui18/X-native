@@ -1862,7 +1862,10 @@ fn the_arc_handles_and_fields_turn_an_ellipse_into_a_ring() {
     h.on_release();
     let node = find_node_clone(&h.app.doc_ref().editor_ref().root, &id).unwrap();
     let (_, _, ratio) = crate::state::arc_props(&node).unwrap();
-    assert!((ratio - 0.5).abs() < 1e-6, "dragged to half the radius: {ratio}");
+    assert!(
+        (ratio - 0.5).abs() < 1e-6,
+        "dragged to half the radius: {ratio}"
+    );
     assert_eq!((node.w, node.h), (100.0, 100.0), "and the box is untouched");
     // the whole gesture is one undo step, like every other canvas drag
     h.app.doc().editor().undo();

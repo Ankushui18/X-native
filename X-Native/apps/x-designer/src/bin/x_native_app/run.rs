@@ -5020,12 +5020,13 @@ impl Host {
                 ..
             }) => {
                 let world = self.app.screen_to_world(p);
-                let Some((w, h, m)) = ({
+                let probe = {
                     let doc = self.app.doc_ref();
                     let root = &doc.editor_ref().root;
-                    let n = crate::editor_ui::find_node(root, &id)?;
-                    node_world(root, &id).map(|m| (n.w, n.h, m))
-                }) else {
+                    crate::editor_ui::find_node(root, &id)
+                        .and_then(|n| node_world(root, &id).map(|m| (n.w, n.h, m)))
+                };
+                let Some((w, h, m)) = probe else {
                     return;
                 };
                 // the pointer in the layer's own box space: the angle and the
