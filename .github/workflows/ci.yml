@@ -64,6 +64,18 @@ jobs:
           rustfmt --version
           cargo clippy --version
 
+      # The design sheet's own two checks import jsdom — the repository's only
+      # node dependency (tools/design-sheet/package.json). Node is pinned because
+      # jsdom 30 requires 22.22.2+/24.15+, which the runner's default is not.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: X-Native/tools/design-sheet/package-lock.json
+
+      - name: Design-sheet dependencies (jsdom)
+        run: npm ci --prefix tools/design-sheet --no-audit --no-fund
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: X-Native
@@ -165,3 +177,56 @@ jobs:
             } > /tmp/ci-comment.md
             gh pr comment "$number" --body-file /tmp/ci-comment.md || true
           fi
+
+  # The one layer scripts/check.sh cannot reach. The six `#[ignore]`d tests build
+  # wgpu with `force_fallback_adapter` and vello with `use_cpu: false`, so they
+  # need a Vulkan driver: lavapipe (Mesa's software implementation) is that
+  # driver. This job installs it, runs exactly the ignored set, and uploads the
+  # PNGs the screenshot fixtures write — a design regression then shows up as an
+  # artifact a human can look at, which is the only check that catches "the canvas
+  # is ugly now" as opposed to "an assertion failed".
+  visual:
+    name: Screenshots (software Vulkan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: X-Native
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux build dependencies + lavapipe
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libssl-dev \
+            libx11-dev libxcb1-dev libxkbcommon-dev libwayland-dev libudev-dev \
+            mesa-vulkan-drivers libvulkan1 vulkan-tools
+
+      - name: Toolchain (1.98.1)
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal
+          rustup show active-toolchain
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: X-Native
+
+      # Diagnostic only: when the adapter is missing, this line says which
+      # drivers the loader can see, which is the difference between "no lavapipe"
+      # and "lavapipe present but wgpu refused it".
+      - name: Vulkan adapter (diagnostic, never fatal)
+        run: vulkaninfo --summary || true
+
+      - name: Opt-in GPU + screenshot tests
+        run: cargo test --workspace --locked -- --ignored
+
+      - name: Upload the screenshots (also when the tests fail)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: |
+            X-Native/apps/x-designer/screenshots
+            X-Native/screenshots
+          if-no-files-found: warn

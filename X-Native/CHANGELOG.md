@@ -87,6 +87,17 @@ not selecting the elements in the right panel"*. The audit behind the fixes
 - **`docs/FIGMA_PARITY.md`** — the behaviours we claim to copy from Figma, each with
   its source, the file that owns the decision in our code, and the test that pins
   it; plus the honest list of what is claimed but not yet pinned.
+- **The design sheet's own 60 assertions now run in the gate.** `check.mjs` (40)
+  and `check_screens.mjs` (20) — the ladders read back against
+  `design_system.rs`, orphan roles, contrast pairs, `var()` coverage, no raw colour
+  literals in the gallery, every screen's landmarks — needed jsdom and were
+  therefore run by hand. `tools/design-sheet/package.json` plus an `npm ci` step in
+  CI put them inside `scripts/check.sh`: a missing jsdom *fails* the gate in CI
+  (locally it prints how to install it).
+- **A `Screenshots (software Vulkan)` CI job** — installs lavapipe, runs the six
+  `#[ignore]`d GPU/screenshot tests, and uploads the PNGs the fixtures write as
+  artifacts, so a visual design regression is a download away instead of
+  unverifiable. This is the layer `scripts/check.sh` cannot reach on a CPU runner.
 - **Double-click a page name to rename it** (Figma's second rename path, next to
   the page menu) and **double-click a layer name in the Layers panel to rename it
   inline** (`FieldId::LayerName`, `Action::LayerRename`): Enter commits through the

@@ -1,0 +1,12 @@
+{
+  "name": "x-native-design-sheet",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Dependencies for the design sheet's own two jsdom checks (check.mjs, check_screens.mjs). The generators, extract_icons.mjs and guard.mjs are dependency-free on purpose, so a bare runner can run them.",
+  "devDependencies": {
+    "jsdom": "^30.1.0"
+  },
+  "scripts": {
+    "check": "node check.mjs && node check_screens.mjs"
+  }
+}

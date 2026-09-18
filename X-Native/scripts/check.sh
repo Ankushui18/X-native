@@ -195,6 +195,32 @@ if [[ $QUICK == 0 ]]; then
         echo "      skipped: no node on PATH (the guard needs it)"
     fi
 
+    step "design sheet assertions (jsdom)"
+    # check.mjs and check_screens.mjs are the sheet's own 40 + 20 assertions: the
+    # ladders read against design_system.rs, orphan roles, contrast pairs, no raw
+    # colour literals in the gallery, every screen's landmarks. They need jsdom —
+    # the repository's only node dependency — so CI installs it (`npm ci --prefix
+    # tools/design-sheet`) and FAILS the gate when it is missing instead of
+    # skipping the assertions silently. Locally, a missing jsdom is a note.
+    if command -v node >/dev/null 2>&1; then
+        if (cd tools/design-sheet && node -e "import('jsdom')" >/dev/null 2>&1); then
+            for sheet in check.mjs check_screens.mjs; do
+                if SHEET_LOG=$(cd tools/design-sheet && node "$sheet" 2>&1); then
+                    ok "$sheet — $(printf '%s\n' "$SHEET_LOG" | grep -c '^PASS') PASS"
+                else
+                    bad "$sheet — $(printf '%s\n' "$SHEET_LOG" | grep -c '^FAIL') FAIL"
+                    printf '%s\n' "$SHEET_LOG" | grep '^FAIL' | head -10 | sed 's/^/      /'
+                fi
+            done
+        elif [[ "${CI:-}" == "true" ]]; then
+            bad "jsdom is not installed (CI must run: npm ci --prefix tools/design-sheet)"
+        else
+            echo "      skipped: jsdom is not installed (npm ci --prefix tools/design-sheet)"
+        fi
+    else
+        echo "      skipped: no node on PATH"
+    fi
+
     step "CLI smoke (x_native)"
     if $CARGO build -q -p x-designer --bin x_native 2>/dev/null; then
         TARGET_DIR=${CARGO_TARGET_DIR:-$PWD/target}
