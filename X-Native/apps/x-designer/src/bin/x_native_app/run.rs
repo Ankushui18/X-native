@@ -253,11 +253,14 @@ impl ApplicationHandler for Host {
                 if matches!(self.app.drag, Some(Drag::Pan { .. })) {
                     self.app.drag = None;
                 }
+                self.app.right_origin = None;
+                self.app.right_dragging = false;
                 window.request_redraw();
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let p = Point::new(position.x / self.scale, position.y / self.scale);
                 self.app.mouse = p;
+                self.right_drag_move(p);
                 self.on_move(p);
                 self.update_cursor(&window);
                 window.request_redraw();
@@ -270,7 +273,15 @@ impl ApplicationHandler for Host {
                 let p = self.app.mouse;
                 match button {
                     MouseButton::Left => self.on_press(p),
-                    MouseButton::Right => self.on_right_press(p),
+                    MouseButton::Right => {
+                        // Figma's gesture: a right click opens the menu, a
+                        // right DRAG marquees. Which one it is is decided by
+                        // the first few pixels of travel (see
+                        // `right_drag_move`).
+                        self.app.right_origin = Some(p);
+                        self.app.right_dragging = false;
+                        self.on_right_press(p);
+                    }
                     MouseButton::Middle
                         if self.app.screen == Screen::Editor
                             && self.app.document_loading.is_none()
@@ -301,6 +312,21 @@ impl ApplicationHandler for Host {
                 if matches!(self.app.drag, Some(Drag::Pan { .. })) {
                     self.app.drag = None;
                 }
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Right,
+                ..
+            } => {
+                let dragged = self.app.right_dragging;
+                self.app.right_origin = None;
+                self.app.right_dragging = false;
+                if dragged {
+                    // the marquee the right-drag opened is committed by the
+                    // same release path a left drag uses
+                    self.on_release();
+                }
+                window.request_redraw();
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 self.on_wheel(delta);
@@ -3449,6 +3475,38 @@ impl Host {
         }
     }
 
+    /// A right-button DRAG is a marquee (Figma's gesture), a right CLICK is
+    /// the context menu. The gesture is decided here, on the first few
+    /// pixels of travel: the menu the press opened is dismissed and the
+    /// marquee the drag opened commits on release.
+    fn right_drag_move(&mut self, p: Point) {
+        let Some(origin) = self.app.right_origin else {
+            return;
+        };
+        if self.app.right_dragging
+            || (p.x - origin.x).abs().max((p.y - origin.y).abs()) <= 4.0
+        {
+            return;
+        }
+        self.app.right_dragging = true;
+        self.app.context_menu.close();
+        self.app.page_menu = None;
+        if self.app.screen != Screen::Editor
+            || self.app.flow.is_some()
+            || self.app.document_loading.is_some()
+            || !self.app.editor_regions().canvas.contains(origin)
+        {
+            return;
+        }
+        // exactly what a left drag on empty canvas does
+        let world = self.app.screen_to_world(origin);
+        self.app.doc().editor().selection.clear();
+        self.app.drag = Some(Drag::Marquee {
+            start: world,
+            cur: world,
+        });
+    }
+
     fn on_press(&mut self, p: Point) {
         if self.app.document_loading.is_some() {
             if let Some(action) = crate::loading::hit_action(&self.app, p) {
@@ -3628,20 +3686,17 @@ impl Host {
             if r.contains(p) {
                 let a = a.clone();
                 if let Action::TreeRow(id) = &a {
-                    if !id.starts_with("mock:") {
-                        // P12: select on press; a >4px move starts the
-                        // reorder drag, a plain click just selects
-                        let doc = self.app.doc();
-                        doc.mock_layers.iter_mut().for_each(|m| m.selected = false);
-                        doc.editor().selection = vec![id.clone()];
-                        self.app.drag = Some(Drag::TreeRow {
-                            id: id.clone(),
-                            start: p,
-                            active: false,
-                            over: None,
-                        });
-                        return;
-                    }
+                    // P12: select on press; a >4px move starts the
+                    // reorder drag, a plain click just selects
+                    let doc = self.app.doc();
+                    doc.editor().selection = vec![id.clone()];
+                    self.app.drag = Some(Drag::TreeRow {
+                        id: id.clone(),
+                        start: p,
+                        active: false,
+                        over: None,
+                    });
+                    return;
                 }
                 if matches!(a, Action::Field(FieldId::InstanceProp)) {
                     // resolve WHICH text prop was clicked from the rect the
@@ -6330,6 +6385,7 @@ impl Host {
             "Theme: Graphite (dark)" => self.apply_theme(x_native::ui::ThemeId::Graphite),
             "Theme: Daylight (light)" => self.apply_theme(x_native::ui::ThemeId::Daylight),
             "Theme: High Contrast" => self.apply_theme(x_native::ui::ThemeId::HighContrast),
+            "Help: welcome & shortcuts" => self.dispatch(Action::ShowWelcome),
             "Preview prototype" => {
                 if self.app.flow.is_some() {
                     self.app.flow = None;
@@ -8757,7 +8813,13 @@ impl Host {
                 }
             }
             Action::NewFile => self.cmd_new_file(),
+            Action::ShowWelcome => {
+                self.app.welcome_open = true;
+                self.app.screen = crate::state::Screen::Dashboard;
+                self.app.status = "Welcome & shortcuts".into();
+            }
             Action::OnboardingSample => {
+                self.app.welcome_open = false;
                 mark_onboarding_complete();
                 let doc = crate::state::OpenDoc::getting_started();
                 self.app.docs.push(doc);
@@ -8766,10 +8828,14 @@ impl Host {
                 self.app.center_view();
             }
             Action::OnboardingBlank => {
+                self.app.welcome_open = false;
                 mark_onboarding_complete();
                 self.cmd_new_file();
             }
-            Action::OnboardingDismiss => mark_onboarding_complete(),
+            Action::OnboardingDismiss => {
+                self.app.welcome_open = false;
+                mark_onboarding_complete();
+            }
             Action::NewBoard => self.cmd_new_board(),
             Action::ImportFile => self.cmd_import_file(),
             Action::OpenRecent(i) => {
@@ -9393,11 +9459,12 @@ impl Host {
                     10 => {
                         self.dispatch(Action::OpenFind);
                     } // Find…
-                    12 => {
-                        // Dark mode toggle
-                        let next = crate::theme::active_theme().next();
-                        self.apply_theme(next);
-                    }
+                    12 => self.apply_theme(x_native::ui::ThemeId::Graphite),
+                    13 => self.apply_theme(x_native::ui::ThemeId::Daylight),
+                    14 => self.apply_theme(x_native::ui::ThemeId::HighContrast),
+                    // Welcome & shortcuts — the first-launch card, on
+                    // demand (it used to be reachable exactly once, ever)
+                    16 => self.dispatch(Action::ShowWelcome),
                     _ => {}
                 }
             }
@@ -9536,30 +9603,10 @@ impl Host {
                 }
             }
             Action::TreeRow(id) => {
-                if let Some(i) = id.strip_prefix("mock:") {
-                    // v45 mock rows: selection is purely visual (like the
-                    // HTML's selectLayer), independent of the document
-                    let i: usize = i.parse().unwrap_or(usize::MAX);
-                    let doc = self.app.doc();
-                    doc.editor().selection.clear();
-                    for (j, m) in doc.mock_layers.iter_mut().enumerate() {
-                        m.selected = j == i;
-                    }
-                } else {
-                    let doc = self.app.doc();
-                    doc.mock_layers.iter_mut().for_each(|m| m.selected = false);
-                    doc.editor().selection = vec![id];
-                }
+                let doc = self.app.doc();
+                doc.editor().selection = vec![id];
             }
             Action::TreeToggle(id) => {
-                if let Some(i) = id.strip_prefix("mock:") {
-                    let i: usize = i.parse().unwrap_or(usize::MAX);
-                    let doc = self.app.doc();
-                    if let Some(m) = doc.mock_layers.get_mut(i) {
-                        m.expanded = !m.expanded;
-                    }
-                    return;
-                }
                 let doc = self.app.doc();
                 if doc.expanded.contains(&id) {
                     doc.expanded.remove(&id);
@@ -13681,7 +13728,6 @@ fn screenshot_screens_r7() {
     app.center_view();
     {
         let doc = app.doc();
-        doc.mock_layers.clear();
         let root_id = doc.editor_ref().root.id.clone();
         let mut r = x_native::Node::rect(
             "r1",

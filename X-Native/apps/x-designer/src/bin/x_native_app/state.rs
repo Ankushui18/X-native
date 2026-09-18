@@ -530,6 +530,10 @@ pub enum Action {
     OnboardingSample,
     OnboardingBlank,
     OnboardingDismiss,
+    /// Re-open the welcome / quick-start card from the app menu, the ⌘K
+    /// palette or Help. Dismissing it writes the onboarding marker, which
+    /// used to mean "seen once, unreachable forever after".
+    ShowWelcome,
     NewBoard,
     ImportFile,
     OpenRecent(usize),
@@ -1266,10 +1270,6 @@ pub struct OpenDoc {
     /// — the mock keeps it independent from the active tab name; None
     /// falls back to `name`.
     pub file_label: Option<String>,
-    /// v45 mock left-panel layers (HTML `layers` const). The mock renders
-    /// the tree from this hardcoded flat array, intentionally independent
-    /// from the canvas board. Empty → render the real document tree.
-    pub mock_layers: Vec<MockLayer>,
     /// Seeded mock tabs keep reference tab widths (a few px past the text
     /// advances, like a browser's flex tab layout);
     /// None → derive from the text measure (user-created tabs).
@@ -1317,49 +1317,11 @@ pub struct OpenDoc {
     pub color_picker_stroke_open: bool,
 }
 
-/// One row of the v45 mock's left-panel layers array (HTML `layers` const):
-/// flat display data with explicit indents — e.g. `section-header` renders
-/// at indent 2 under an indent-1 `pay-row` that itself has no chevron.
-#[derive(Debug, Clone)]
-pub struct MockLayer {
-    pub name: String,
-    pub icon: &'static str,
-    pub indent: usize,
-    pub expanded: bool,
-    pub has_children: bool,
-    pub selected: bool,
-}
-
-fn demo_layers() -> Vec<MockLayer> {
-    let m = |name: &str, icon: &'static str, indent: usize, expanded: bool, has_children: bool| {
-        MockLayer {
-            name: name.into(),
-            icon,
-            indent,
-            expanded,
-            has_children,
-            selected: false,
-        }
-    };
-    vec![
-        m("Board", "frame#", 0, false, false),
-        m("order-details", "layout-grid", 0, false, true),
-        m("Header", "type", 1, false, false),
-        m("Content", "layout-grid", 1, false, false),
-        m("Rectangle 12", "square", 0, false, false),
-        m("payment-methods", "layout-grid", 0, true, true),
-        m("pay-row", "frame#", 1, false, false),
-        m("section-header", "type", 2, false, false),
-        m("pay-row", "frame#", 1, true, true),
-        m("Ellipse 3", "circle", 2, false, false),
-        m("Vector", "pen-tool", 2, false, false),
-    ]
-}
-
 impl OpenDoc {
     /// The v45 HTML editor mock's boot document: file "Liquor Delivery App
-    /// UI" on Page 3 of 3, the Frame board (375×420 @ 0,60) as content, and
-    /// the mock layers array for the left panel.
+    /// UI" on Page 3 of 3 with the Frame board (375×420 @ 0,60) as content.
+    /// The left panel renders this document's real tree — there is no
+    /// separate mock layer list to drift from it.
     pub fn demo_doc() -> Self {
         let mut d = OpenDoc::demo_blank("DESIGN_SYSTEM.md".into());
         d.file_label = Some("Liquor Delivery App UI".into());
@@ -1376,7 +1338,6 @@ impl OpenDoc {
             d.doc.pages.insert(n - 1, p);
         }
         d.page = 2;
-        d.mock_layers = demo_layers();
         d
     }
 
@@ -1756,7 +1717,6 @@ impl OpenDoc {
             frame_cache: x_native::FrameCache::new(),
             prepared_canvas: None,
             file_label: None,
-            mock_layers: Vec::new(),
             tab_w: None,
             doc,
             editors: vec![editor],
@@ -1811,7 +1771,6 @@ impl OpenDoc {
             frame_cache: x_native::FrameCache::new(),
             prepared_canvas: None,
             file_label: None,
-            mock_layers: Vec::new(),
             tab_w: None,
             doc,
             editors,
@@ -2073,6 +2032,16 @@ pub struct App {
     pub mouse: Point,
     /// Space held → drag pans the canvas (legacy behavior, kept).
     pub space_pan: bool,
+    /// Where the right button went down (screen space). `Some` while it is
+    /// held: a right CLICK opens the context menu, a right DRAG marquees
+    /// (Figma's gesture), so the press point has to survive the drag.
+    pub right_origin: Option<Point>,
+    /// The right button has travelled far enough to count as a drag — the
+    /// context menu has been dismissed and the marquee owns the gesture.
+    pub right_dragging: bool,
+    /// The welcome / quick-start card is open on demand (Help). The card
+    /// also shows once on a fresh install, but it is reachable afterwards.
+    pub welcome_open: bool,
 }
 
 pub const USER_NAME: &str = "You";
@@ -2222,6 +2191,9 @@ impl App {
             scaled: false,
             mouse: Point::ZERO,
             space_pan: false,
+            right_origin: None,
+            right_dragging: false,
+            welcome_open: false,
         }
     }
 

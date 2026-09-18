@@ -1636,7 +1636,18 @@ fn paint_app_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let my = reg.nav_bar.y0 + 8.0;
     let mw = APP_MENU_WIDTH;
     // P14: every item is wired — file items route to the same commands as
-    // their shortcuts; items without an implementation were removed
+    // their shortcuts; items without an implementation were removed.
+    // The three theme rows name the palettes and tick the active one: the
+    // old single "Dark mode" row *cycled* them, so a click meant to switch
+    // the app to dark could land on Daylight.
+    let active = crate::theme::active_theme();
+    let tick = move |id: x_native::ui::ThemeId| -> &'static str {
+        if active == id {
+            "✓"
+        } else {
+            ""
+        }
+    };
     let items: Vec<(&str, &str, bool)> = vec![
         ("New file", "⌘N", true),
         ("Open file…", "⌘O", true),
@@ -1650,7 +1661,11 @@ fn paint_app_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         ("Export as…", "⇧⌘E", true),
         ("Find…", "⇧⌘F", true),
         ("", "", false), // separator
-        ("Dark mode", "", true),
+        ("Theme: Graphite (dark)", tick(x_native::ui::ThemeId::Graphite), true),
+        ("Theme: Daylight (light)", tick(x_native::ui::ThemeId::Daylight), true),
+        ("Theme: High Contrast", tick(x_native::ui::ThemeId::HighContrast), true),
+        ("", "", false), // separator
+        ("Welcome & shortcuts", "?", true),
     ];
     let row_h = DROPDOWN_ROW_H;
     let mut h = 8.0;
@@ -2329,194 +2344,137 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let tree_top = band_bottom + 34.5 + if search_open { 30.0 } else { 0.0 };
     let tree_bottom = app.win_h - 16.0;
     let scroll = app.doc().scroll_left;
-    if !app.doc().mock_layers.is_empty() {
-        // v45 mock: render the hardcoded layers array (same row geometry as
-        // the real tree)
-        let mocks = app.doc().mock_layers.clone();
-        // flat-array tree visibility: a row is hidden while any ancestor
-        // with a smaller indent is collapsed
-        let mut stack: Vec<(usize, bool)> = Vec::new();
-        let mut ry = tree_top - scroll;
-        let mut max_indent = 0usize;
-        let mut last_bottom = tree_top;
-        for (mi, mock) in mocks.iter().enumerate() {
-            while stack
-                .last()
-                .map(|(i, _)| *i >= mock.indent)
-                .unwrap_or(false)
+    let (rows, total_h) = collect_tree_rows(app, scroll, tree_bottom - tree_top);
+    let mut max_indent = 0usize;
+    let mut last_bottom = tree_top;
+    for row in &rows {
+        let ry = tree_top + row.index as f64 * (TREE_ROW_H + 1.0) - scroll;
+        let r = Rect::new(sx + 8.0, ry, lw - 8.0, ry + TREE_ROW_H);
+        if r.y1 >= tree_top && r.y0 <= tree_bottom {
+            max_indent = max_indent.max(row.indent);
+            last_bottom = r.y1;
+            let selected = row.selected;
+            // P5: a section (frame with children) keeps a subtle header
+            // band so the document's hierarchy reads at a glance; hover
+            // steps one surface level up instead of appearing from none.
+            if row.is_section {
+                fill_rrect(s, r, R_TREE, C_FIELD);
+            }
+            if selected {
+                fill_rrect(s, r, R_TREE, C_SEL_SOFT);
+            } else if hover(app, r) {
+                fill_rrect(
+                    s,
+                    r,
+                    R_TREE,
+                    if row.is_section {
+                        C_FIELD_2
+                    } else {
+                        C_ROW_HOVER
+                    },
+                );
+            }
+            // P12: live drag indicator — the dragged row lifts and
+            // the accent line/ring shows where it will land.
+            if let Some(Drag::TreeRow {
+                id: drag_row,
+                active: true,
+                over,
+                ..
+            }) = &app.drag
             {
-                stack.pop();
-            }
-            let visible = stack.iter().all(|(_, e)| *e);
-            if mock.has_children {
-                stack.push((mock.indent, mock.expanded));
-            }
-            if visible {
-                let r = Rect::new(sx + 8.0, ry, lw - 8.0, ry + TREE_ROW_H);
-                if r.y1 >= tree_top && r.y0 <= tree_bottom {
-                    max_indent = max_indent.max(mock.indent);
-                    last_bottom = r.y1;
-                    if mock.selected {
-                        fill_rrect(s, r, R_TREE, C_SEL_SOFT);
-                    }
-                    let ix = sx + 8.0 + 8.0 + mock.indent as f64 * TREE_INDENT;
-                    if mock.has_children {
-                        let chev = if mock.expanded {
-                            "chevron-down"
-                        } else {
-                            "chevron-right"
-                        };
-                        let cr = Rect::new(ix, r.y0, ix + 14.0, r.y1);
-                        draw_icon(s, chev, ix + 1.0, r.y0 + 5.0, ICON_XS, C_DIM);
-                        hit.push((cr, Action::TreeToggle(format!("mock:{mi}"))));
-                    }
-                    draw_icon(s, mock.icon, ix + 14.0, r.y0 + 5.0, ICON_XS, C_DIM);
-                    let nx = ix + 14.0 + 12.0 + 4.0;
-                    let max_nw = lw - 8.0 - nx - 8.0;
-                    let shown = app
-                        .fonts
-                        .truncate(&mock.name, T11, Wt::Reg, max_nw.max(16.0));
-                    app.fonts.text(
-                        s,
-                        nx,
-                        r.y0 + (TREE_ROW_H - T11 * CSS_LH) / 2.0,
-                        &shown,
-                        T11,
-                        if mock.selected { C_TEXT } else { C_ZINC_400 },
-                        Wt::Reg,
-                    );
-                    hit.push((r, Action::TreeRow(format!("mock:{mi}"))));
+                if drag_row == &row.id {
+                    stroke_rrect(s, r, R_TREE, C_ACCENT, 1.5);
                 }
-                ry += TREE_ROW_H + 1.0;
-            }
-        }
-        tree_indent_guides(s, sx + 16.0, tree_top, last_bottom, max_indent);
-        app.scaled = false;
-    } else {
-        let (rows, total_h) = collect_tree_rows(app, scroll, tree_bottom - tree_top);
-        let mut max_indent = 0usize;
-        let mut last_bottom = tree_top;
-        for row in &rows {
-            let ry = tree_top + row.index as f64 * (TREE_ROW_H + 1.0) - scroll;
-            let r = Rect::new(sx + 8.0, ry, lw - 8.0, ry + TREE_ROW_H);
-            if r.y1 >= tree_top && r.y0 <= tree_bottom {
-                max_indent = max_indent.max(row.indent);
-                last_bottom = r.y1;
-                let selected = row.selected;
-                // P5: a section (frame with children) keeps a subtle header
-                // band so the document's hierarchy reads at a glance; hover
-                // steps one surface level up instead of appearing from none.
-                if row.is_section {
-                    fill_rrect(s, r, R_TREE, C_FIELD);
-                }
-                if selected {
-                    fill_rrect(s, r, R_TREE, C_SEL_SOFT);
-                } else if hover(app, r) {
-                    fill_rrect(
-                        s,
-                        r,
-                        R_TREE,
-                        if row.is_section {
-                            C_FIELD_2
-                        } else {
-                            C_ROW_HOVER
-                        },
-                    );
-                }
-                // P12: live drag indicator — the dragged row lifts and
-                // the accent line/ring shows where it will land.
-                if let Some(Drag::TreeRow {
-                    id: drag_row,
-                    active: true,
-                    over,
-                    ..
-                }) = &app.drag
-                {
-                    if drag_row == &row.id {
-                        stroke_rrect(s, r, R_TREE, C_ACCENT, 1.5);
-                    }
-                    if let Some(drop) = over {
-                        if drop.row == row.id {
-                            match drop.zone {
-                                0 => fill_rect(
-                                    s,
-                                    Rect::new(r.x0, r.y0 - 1.5, r.x1, r.y0 + 0.5),
-                                    C_ACCENT,
-                                ),
-                                2 => fill_rect(
-                                    s,
-                                    Rect::new(r.x0, r.y1 - 0.5, r.x1, r.y1 + 1.5),
-                                    C_ACCENT,
-                                ),
-                                _ => stroke_rrect(s, r, R_TREE, C_ACCENT, 1.5),
-                            }
+                if let Some(drop) = over {
+                    if drop.row == row.id {
+                        match drop.zone {
+                            0 => fill_rect(
+                                s,
+                                Rect::new(r.x0, r.y0 - 1.5, r.x1, r.y0 + 0.5),
+                                C_ACCENT,
+                            ),
+                            2 => fill_rect(
+                                s,
+                                Rect::new(r.x0, r.y1 - 0.5, r.x1, r.y1 + 1.5),
+                                C_ACCENT,
+                            ),
+                            _ => stroke_rrect(s, r, R_TREE, C_ACCENT, 1.5),
                         }
                     }
                 }
-                let ix = sx + 8.0 + 8.0 + row.indent as f64 * TREE_INDENT;
-                if row.has_children {
-                    let chev = if row.expanded {
-                        "chevron-down"
-                    } else {
-                        "chevron-right"
-                    };
-                    let cr = Rect::new(ix, r.y0, ix + 14.0, r.y1);
-                    draw_icon(s, chev, ix + 1.0, r.y0 + 5.0, ICON_XS, C_DIM);
-                    hit.push((cr, Action::TreeToggle(row.id.clone())));
+            }
+            let ix = sx + 8.0 + 8.0 + row.indent as f64 * TREE_INDENT;
+            // Figma's disclosure: the chevron is its OWN target, so a click
+            // on it folds the node instead of selecting the row. Hit zones
+            // are scanned in reverse (most specific last) and the chevron
+            // sits inside the row rect — so it is registered *after* the row
+            // below, not before it.
+            let chevron = if row.has_children {
+                let chev = if row.expanded {
+                    "chevron-down"
                 } else {
-                    let _ = 12.0; // 12px spacer per the HTML
-                }
-                draw_icon(s, row.icon, ix + 14.0, r.y0 + 5.0, ICON_XS, C_DIM);
-                let nx = ix + 14.0 + 12.0 + 4.0;
-                let max_nw = lw - 8.0 - nx - 8.0;
-                let shown = app
-                    .fonts
-                    .truncate(&row.name, T11, Wt::Reg, max_nw.max(16.0));
-                app.fonts.text(
+                    "chevron-right"
+                };
+                let cr = Rect::new(ix, r.y0, ix + 14.0, r.y1);
+                draw_icon(s, chev, ix + 1.0, r.y0 + 5.0, ICON_XS, C_DIM);
+                Some(cr)
+            } else {
+                None
+            };
+            draw_icon(s, row.icon, ix + 14.0, r.y0 + 5.0, ICON_XS, C_DIM);
+            let nx = ix + 14.0 + 12.0 + 4.0;
+            let max_nw = lw - 8.0 - nx - 8.0;
+            let shown = app
+                .fonts
+                .truncate(&row.name, T11, Wt::Reg, max_nw.max(16.0));
+            app.fonts.text(
+                s,
+                nx,
+                r.y0 + (TREE_ROW_H - T11 * CSS_LH) / 2.0,
+                &shown,
+                T11,
+                if selected { C_TEXT } else { C_ZINC_400 },
+                Wt::Reg,
+            );
+            hit.push((r, Action::TreeRow(row.id.clone())));
+            if let Some(cr) = chevron {
+                hit.push((cr, Action::TreeToggle(row.id.clone())));
+            }
+            // Figma row toggles: eye / padlock on hover (persistent when
+            // the state is on); they sit above the row hit (reversed scan)
+            let (locked, hidden) = (row.locked, row.hidden);
+            let row_hover = hover(app, r);
+            if row_hover || hidden {
+                let ey = Rect::new(lw - 8.0 - 34.0, r.y0 + 2.0, lw - 8.0 - 20.0, r.y1 - 2.0);
+                draw_icon(
                     s,
-                    nx,
-                    r.y0 + (TREE_ROW_H - T11 * CSS_LH) / 2.0,
-                    &shown,
-                    T11,
-                    if selected { C_TEXT } else { C_ZINC_400 },
-                    Wt::Reg,
+                    if hidden { "eye-off" } else { "eye" },
+                    ey.x0 + 1.0,
+                    r.y0 + 5.0,
+                    ICON_XS,
+                    if hidden { C_TEXT } else { C_DIM },
                 );
-                hit.push((r, Action::TreeRow(row.id.clone())));
-                // Figma row toggles: eye / padlock on hover (persistent when
-                // the state is on); sit above the row hit (reversed scan)
-                let (locked, hidden) = (row.locked, row.hidden);
-                let row_hover = hover(app, r);
-                if row_hover || hidden {
-                    let ey = Rect::new(lw - 8.0 - 34.0, r.y0 + 2.0, lw - 8.0 - 20.0, r.y1 - 2.0);
-                    draw_icon(
-                        s,
-                        if hidden { "eye-off" } else { "eye" },
-                        ey.x0 + 1.0,
-                        r.y0 + 5.0,
-                        ICON_XS,
-                        if hidden { C_TEXT } else { C_DIM },
-                    );
-                    tip(app, ey, "Show / hide layer");
-                    hit.push((ey, Action::TreeVisible(row.id.clone())));
-                }
-                if row_hover || locked {
-                    let lr = Rect::new(lw - 8.0 - 18.0, r.y0 + 2.0, lw - 8.0 - 4.0, r.y1 - 2.0);
-                    draw_icon(
-                        s,
-                        "lock",
-                        lr.x0 + 1.0,
-                        r.y0 + 5.0,
-                        ICON_XS,
-                        if locked { C_TEXT } else { C_DIM },
-                    );
-                    tip(app, lr, "Lock / unlock layer");
-                    hit.push((lr, Action::TreeLock(row.id.clone())));
-                }
+                tip(app, ey, "Show / hide layer");
+                hit.push((ey, Action::TreeVisible(row.id.clone())));
+            }
+            if row_hover || locked {
+                let lr = Rect::new(lw - 8.0 - 18.0, r.y0 + 2.0, lw - 8.0 - 4.0, r.y1 - 2.0);
+                draw_icon(
+                    s,
+                    "lock",
+                    lr.x0 + 1.0,
+                    r.y0 + 5.0,
+                    ICON_XS,
+                    if locked { C_TEXT } else { C_DIM },
+                );
+                tip(app, lr, "Lock / unlock layer");
+                hit.push((lr, Action::TreeLock(row.id.clone())));
             }
         }
-        tree_indent_guides(s, sx + 16.0, tree_top, last_bottom, max_indent);
-        app.scaled = total_h > tree_bottom - tree_top;
     }
+    tree_indent_guides(s, sx + 16.0, tree_top, last_bottom, max_indent);
+    app.scaled = total_h > tree_bottom - tree_top;
 }
 
 /// Faint vertical guides at every indent depth below the root — the
@@ -2645,13 +2603,9 @@ pub(crate) fn tree_geometry(app: &App) -> Option<(f64, f64, f64)> {
 /// `p`, its zone (0 before, 1 child, 2 after) and the tree coordinates
 /// to commit. Frames/sections accept child drops in the middle band;
 /// leaf rows split before/after at the midpoint. The dragged row and
-/// its descendants are never targets; the mock demo tree has no
-/// reorderable content.
+/// its descendants are never targets.
 pub fn tree_drop_target(app: &App, drag_id: &str, p: Point) -> Option<TreeDrop> {
     let doc = app.doc_opt()?;
-    if !doc.mock_layers.is_empty() {
-        return None;
-    }
     let (tree_top, tree_bottom, scroll) = tree_geometry(app)?;
     if p.y < tree_top || p.y >= tree_bottom {
         return None;
@@ -6536,13 +6490,19 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
             wy += 1.0;
         }
     }
-    // marquee
+    // marquee — the drag stores WORLD corners (the same pair `marquee()`
+    // hit-tests with on release), so the band has to be projected into
+    // screen space before it is drawn. Drawing the raw world pair put the
+    // band somewhere other than the cursor as soon as the canvas was panned
+    // or zoomed.
     if let Some(crate::state::Drag::Marquee { start, cur }) = &app.drag {
+        let a = app.world_to_screen(*start);
+        let b = app.world_to_screen(*cur);
         let r = Rect::new(
-            start.x.min(cur.x),
-            start.y.min(cur.y),
-            start.x.max(cur.x),
-            start.y.max(cur.y),
+            a.x.min(b.x),
+            a.y.min(b.y),
+            a.x.max(b.x),
+            a.y.max(b.y),
         );
         fill_rect(s, r, C_SEL_SOFT);
         stroke_rect(s, r, C_SEL, 1.0);
@@ -7030,6 +6990,10 @@ pub fn palette_commands() -> Vec<Command> {
         Command {
             label: "Hide selection",
             shortcut: "⇧⌘ H",
+        },
+        Command {
+            label: "Help: welcome & shortcuts",
+            shortcut: "?",
         },
     ]
 }

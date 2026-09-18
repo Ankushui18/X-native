@@ -833,19 +833,27 @@ function ovColourPicker() {
 }
 
 function ovAppMenu() {
+  // Mirrors `paint_app_menu` in editor_ui.rs row for row: the three theme
+  // rows name the palettes (and tick the active one) instead of a single
+  // "Dark mode" row that cycled them, and Help reopens the welcome card.
   const rows = [
     ['New file', '⌘N'],
     ['Open file…', '⌘O'],
-    ['Open version…', ''],
+    ['—'],
     ['Save', '⌘S'],
     ['Save as…', '⇧⌘S'],
+    ['Open version…', ''],
     ['Duplicate file', ''],
+    ['Move to drafts', ''],
     ['—'],
     ['Export as…', '⇧⌘E'],
     ['Find…', '⇧⌘F'],
     ['—'],
-    ['Dark mode', ''],
-    ['Preferences', ''],
+    ['Theme: Graphite (dark)', '✓'],
+    ['Theme: Daylight (light)', ''],
+    ['Theme: High Contrast', ''],
+    ['—'],
+    ['Welcome & shortcuts', '?'],
   ];
   return at(RAIL + 4, TITLE + 44, UI.appMenuW, rows.length * UI.menuRowH + 12, `
     <div class="menu">
@@ -1222,7 +1230,7 @@ window.SCREENS = [
     module: 'editor_ui.rs',
     what: `The hamburger menu, ${UI.appMenuW} wide: file actions, export, find, theme, preferences.`,
     note: 'Every row here is a real action; shortcuts are shown only where the app binds them.',
-    checks: ['New file', 'Export as…', 'Preferences'],
+    checks: ['New file', 'Export as…', 'Theme: Graphite (dark)', 'Welcome & shortcuts'],
     render: () => editorScreen({ overlay: ovAppMenu() }),
   },
   {

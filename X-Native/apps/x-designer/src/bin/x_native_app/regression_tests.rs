@@ -543,7 +543,6 @@ fn new_session_and_new_document_have_no_mock_content() {
     assert!(app.recents.iter().all(|r| r.path.is_some()));
     app.open_blank();
     assert!(app.doc_ref().editor_ref().root.children.is_empty());
-    assert!(app.doc_ref().mock_layers.is_empty());
 }
 
 #[test]

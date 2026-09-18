@@ -168,7 +168,10 @@ fn first_launch_marker() -> Option<std::path::PathBuf> {
 }
 
 fn paint_first_launch(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
-    if app.demo_mode || first_launch_marker().is_some_and(|p| p.exists()) {
+    // Shown once on a fresh install (the marker records that), and on
+    // demand afterwards — Help ▸ Welcome & shortcuts sets `welcome_open`,
+    // so the guide is never a one-shot.
+    if app.demo_mode || (first_launch_marker().is_some_and(|p| p.exists()) && !app.welcome_open) {
         return;
     }
     let card = Rect::new(330.0, 170.0, app.win_w - 330.0, 510.0);
