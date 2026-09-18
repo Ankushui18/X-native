@@ -37,6 +37,10 @@ pub enum Tool {
     Comment,
     /// Vector Eraser - erase parts of paths and shapes
     Eraser,
+    /// Figma's Slice tool (S): a region whose only job is to be exported. It
+    /// draws nothing itself — exporting it captures the flattened canvas
+    /// content inside its bounds.
+    Slice,
     /// Symmetry Mirror - mirror drawing across axis
     Symmetry,
     /// Board-specific tools
@@ -52,6 +56,7 @@ impl Tool {
             Tool::Select => "mouse-pointer-2",
             Tool::Scale => "maximize",
             Tool::Frame => "frame#",
+            Tool::Slice => "scissors",
             Tool::Text => "type",
             Tool::Rect => "square",
             Tool::Ellipse => "circle",
@@ -82,6 +87,7 @@ impl Tool {
             Tool::Select => "Move",
             Tool::Scale => "Scale",
             Tool::Frame => "Frame",
+            Tool::Slice => "Slice",
             Tool::Text => "Text",
             Tool::Rect => "Rectangle",
             Tool::Ellipse => "Ellipse",
@@ -142,6 +148,9 @@ impl Tool {
             ("v", _) => Some(Tool::Select),
             // Figma's Scale tool; boards have their own model, no scale there
             ("k", _) if !board => Some(Tool::Scale),
+            // Figma's Slice tool — also design-only: a board draws its own
+            // shapes and has no export region
+            ("s", _) if !board => Some(Tool::Slice),
             ("f", _) => Some(Tool::Frame),
             ("t", _) => Some(Tool::Text),
             ("r", _) => Some(Tool::Rect),
@@ -4151,6 +4160,7 @@ pub fn kind_icon(k: &NodeKind) -> &'static str {
         NodeKind::Vector { .. } | NodeKind::Arc { .. } | NodeKind::Line => "pen-tool",
         NodeKind::Component { .. } | NodeKind::Instance { .. } => "component",
         NodeKind::Image { .. } => "image",
+        NodeKind::Slice => "scissors",
         _ => "box",
     }
 }
@@ -4799,6 +4809,7 @@ mod tool_shortcut_tests {
         assert_eq!(d("o", false), Some(Tool::Ellipse));
         assert_eq!(d("p", false), Some(Tool::Pen));
         assert_eq!(d("k", false), Some(Tool::Scale));
+        assert_eq!(d("s", false), Some(Tool::Slice));
         assert_eq!(d("h", false), Some(Tool::Hand));
         assert_eq!(d("c", false), Some(Tool::Comment));
         assert_eq!(d("m", false), Some(Tool::Symmetry));
@@ -5000,6 +5011,9 @@ mod tool_shortcut_tests {
         assert_eq!(Tool::Select.shortcut_hint(false), "V");
         assert_eq!(Tool::Eraser.shortcut_hint(false), "⇧E");
         assert_eq!(Tool::Symmetry.shortcut_hint(true), "");
+        assert_eq!(Tool::Slice.shortcut_hint(false), "S");
+        assert_eq!(Tool::Slice.label(), "Slice");
+        assert_eq!(Tool::Slice.shortcut_hint(true), "");
         assert_eq!(Tool::BoardSticky.shortcut_hint(true), "S");
         assert_eq!(Tool::BoardSticky.shortcut_hint(false), "");
         assert_eq!(Tool::Comment.shortcut_hint(true), "");
@@ -5014,8 +5028,10 @@ mod tool_shortcut_tests {
         assert_eq!(Tool::from_shortcut("e", false, false), None);
         // baseline keys stay shift-tolerant (pre-refactor behavior)
         assert_eq!(Tool::from_shortcut("r", true, false), Some(Tool::Rect));
-        // unclaimed keys
-        assert_eq!(Tool::from_shortcut("s", false, false), None);
+        // unclaimed keys; S is the Slice tool in design mode and a sticky
+        // note in boards, so it answers in both
+        assert_eq!(Tool::from_shortcut("s", false, false), Some(Tool::Slice));
+        assert_eq!(Tool::from_shortcut("s", false, true), Some(Tool::BoardSticky));
         assert_eq!(Tool::from_shortcut("q", false, false), None);
     }
 }

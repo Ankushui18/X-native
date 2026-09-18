@@ -1689,6 +1689,61 @@ fn frame_selection_refuses_an_empty_selection_and_grouping_still_groups() {
     );
 }
 
+/// Figma's Slice tool (S): draw a region whose only job is to be exported.
+/// The slice is a leaf that draws nothing itself — the editor marks it with a
+/// dashed outline and its name, and exporting it captures what overlaps it
+/// (that half is pinned in `crates/x-native/tests/slice_export.rs`).
+#[test]
+fn the_slice_tool_draws_an_export_region() {
+    let mut h = host();
+    // S is the Slice tool in design mode; in a board it is still the sticky note
+    assert_eq!(Tool::from_shortcut("s", false, false), Some(Tool::Slice));
+    assert_eq!(Tool::from_shortcut("s", false, true), Some(Tool::BoardSticky));
+    assert_eq!(Tool::Slice.shortcut_hint(false), "S");
+    assert_eq!(Tool::Slice.label(), "Slice");
+    assert!(crate::editor_ui::palette_commands()
+        .iter()
+        .any(|c| c.label == "Slice tool"));
+
+    // drawn over empty canvas: on the page, named for the layers panel,
+    // selected, and the tool goes back to Move like every other shape tool
+    h.finish_create(
+        Tool::Slice,
+        Point::new(500.0, 20.0),
+        Point::new(560.0, 60.0),
+    );
+    let sel = h.app.doc_ref().editor_ref().selection.clone();
+    assert_eq!(sel.len(), 1, "the new slice is the selection");
+    let root = &h.app.doc_ref().editor_ref().root;
+    let sl = find_node_clone(root, &sel[0]).unwrap();
+    assert!(matches!(sl.kind, NodeKind::Slice), "a Slice node landed");
+    assert_eq!(
+        (sl.transform.x, sl.transform.y, sl.w, sl.h),
+        (500.0, 20.0, 60.0, 40.0)
+    );
+    assert!(sl.name.starts_with("Slice "), "named in the layers panel");
+    assert_eq!(h.app.tool, Tool::Select, "the tool returns to Move");
+
+    // the same draw-it-in rule as every other tool: a slice drawn over a
+    // frame joins that frame, in the frame's local space
+    h.finish_create(
+        Tool::Slice,
+        Point::new(40.0, 120.0),
+        Point::new(100.0, 160.0),
+    );
+    let root = &h.app.doc_ref().editor_ref().root;
+    let f1 = find_node_clone(root, "frame-1").unwrap();
+    assert_eq!(f1.children.len(), 1, "the slice joined frame-1");
+    let inner = &f1.children[0];
+    assert!(matches!(inner.kind, NodeKind::Slice));
+    assert_eq!((inner.transform.x, inner.transform.y), (40.0, 60.0));
+
+    // and Esc leaves the tool, like the Scale tool
+    h.app.tool = Tool::Slice;
+    h.on_key(Key::Named(NamedKey::Escape), None);
+    assert_eq!(h.app.tool, Tool::Select, "Esc leaves the Slice tool");
+}
+
 #[test]
 fn a_layer_row_hides_and_locks_the_layer_like_figmas_eye_and_padlock() {
     let mut h = host();

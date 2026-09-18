@@ -6404,6 +6404,7 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             Tool::Select,
             Tool::Scale,
             Tool::Frame,
+            Tool::Slice,
             Tool::Text,
             Tool::Rect,
             Tool::Ellipse,
@@ -6414,11 +6415,11 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             Tool::Hand,
         ]
     };
-    // Audited (canvas 280..1100 @900): container 451×40 r12 at bottom-5
+    // Audited (canvas 280..1100 @900): container 487×40 r12 at bottom-5
     // (y = win_h − 60); icons 32px pitch 36 starting +7; divider mid-gap
-    // after eleven tools (the Scale tool joined the row); palette btn at
-    // +412 from container left.
-    let bar_w = 451.0;
+    // after twelve tools (Scale and the Slice tool joined the row); palette
+    // btn at +448 from container left.
+    let bar_w = 487.0;
     let bar_x0 = reg.canvas.x0 + (reg.canvas.x1 - reg.canvas.x0 - bar_w) / 2.0;
     let bar_y0 = app.win_h - TOOLBAR_BOTTOM - TOOLBAR_H;
     let bar = Rect::new(bar_x0, bar_y0, bar_x0 + bar_w, bar_y0 + TOOLBAR_H);
@@ -6457,15 +6458,15 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         tip(app, r, &tl);
         hit.push((r, Action::Tool(*t)));
     }
-    // divider between hand (ends +399) and palette (+412)
-    let dx = bar.x0 + 407.5;
+    // divider between hand (ends +435) and palette (+448)
+    let dx = bar.x0 + 443.5;
     fill_rect(
         s,
         Rect::new(dx, bar.y0 + 10.0, dx + 1.0, bar.y1 - 10.0),
         C_LINE_2,
     );
     // search → palette
-    let sx = bar.x0 + 412.0;
+    let sx = bar.x0 + 448.0;
     let sr = Rect::new(sx, bar.y0 + 4.0, sx + TOOL_ICON, bar.y0 + 4.0 + TOOL_ICON);
     if hover(app, sr) {
         fill_rrect(s, sr, R_TOOL_ICON, C_FIELD_2);
@@ -6484,7 +6485,48 @@ pub(crate) fn size_badge_visible(bb: &Rect) -> bool {
     bb.width() > 0.5 && bb.height() > 0.5
 }
 
+/// Figma keeps slices visible as regions rather than layers: a dashed outline
+/// per slice plus the slice's name, which is also how you reach one on the
+/// canvas. Editor chrome only — nothing here reaches an export (`prepare_export`
+/// builds its tree from the document, and the frame-name label strip skips
+/// keys this painter never emits).
+fn paint_slice_chrome(app: &mut App, s: &mut Scene) {
+    let Some(doc) = app.doc_opt() else {
+        return;
+    };
+    let mut slices: Vec<(String, Rect)> = vec![];
+    fn walk(n: &Node, ox: f64, oy: f64, out: &mut Vec<(String, Rect)>) {
+        let (x, y) = (ox + n.transform.x, oy + n.transform.y);
+        if n.visible && matches!(n.kind, NodeKind::Slice) {
+            out.push((n.name.clone(), Rect::new(x, y, x + n.w, y + n.h)));
+        }
+        for c in &n.children {
+            walk(c, x, y, out);
+        }
+    }
+    for c in &doc.editor_ref().root.children {
+        walk(c, 0.0, 0.0, &mut slices);
+    }
+    if slices.is_empty() {
+        return;
+    }
+    let reg = app.editor_regions();
+    for (name, wr) in slices {
+        let a = app.world_to_screen(Point::new(wr.x0, wr.y0));
+        let b = app.world_to_screen(Point::new(wr.x1, wr.y1));
+        let r = Rect::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y));
+        stroke_rect_dashed(s, r, C_SEL, 1.0, 6.0, 4.0);
+        let tw = app.fonts.measure(&name, T10, Wt::Reg) + 12.0;
+        let cy = (r.y0 - 18.0).max(reg.canvas.y0 + 2.0);
+        let chip = Rect::new(r.x0, cy, r.x0 + tw, cy + 16.0);
+        fill_rrect(s, chip, R_SM, C_TEXT);
+        app.fonts
+            .text_center(s, chip, &name, T10, C_BASE, Wt::Med, true);
+    }
+}
+
 fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
+    paint_slice_chrome(app, s);
     let doc = match app.doc_opt() {
         Some(d) => d,
         None => return,
@@ -6765,14 +6807,19 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
     // drag ("You'll see the rectangle's dimensions underneath the bottom
     // edge"). The rect comes from `state::create_rect`, the same rule the commit
     // uses, ⌥ included, so the preview cannot disagree with what lands.
-    if let Some(crate::state::Drag::Create { start, cur, .. }) = &app.drag {
+    if let Some(crate::state::Drag::Create { tool, start, cur }) = &app.drag {
         let reg = app.editor_regions();
         let wr = crate::state::create_rect(*start, *cur, app.alt);
         let a = app.world_to_screen(Point::new(wr.x0, wr.y0));
         let b = app.world_to_screen(Point::new(wr.x1, wr.y1));
         let r = Rect::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y));
-        fill_rect(s, r, C_SEL_SOFT);
-        stroke_rect(s, r, C_SEL, 1.0);
+        if *tool == Tool::Slice {
+            // a slice is a region, not a shape: dashed, never filled
+            stroke_rect_dashed(s, r, C_SEL, 1.0, 6.0, 4.0);
+        } else {
+            fill_rect(s, r, C_SEL_SOFT);
+            stroke_rect(s, r, C_SEL, 1.0);
+        }
         let label = format!("{} × {}", wr.width().round(), wr.height().round());
         let tw = app.fonts.measure(&label, T10, Wt::Reg) + 12.0;
         let bx = r.x0.min(reg.canvas.x1 - tw - 4.0).max(reg.canvas.x0 + 4.0);
@@ -7128,6 +7175,10 @@ pub fn palette_commands() -> Vec<Command> {
         Command {
             label: "Frame tool",
             shortcut: "F",
+        },
+        Command {
+            label: "Slice tool",
+            shortcut: "S",
         },
         Command {
             label: "Text tool",

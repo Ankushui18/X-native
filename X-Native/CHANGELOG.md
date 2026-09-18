@@ -5,6 +5,30 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-18 (The Slice tool)
+
+Figma's **Slice tool (S)** had an engine behind it and no door: `NodeKind::Slice`,
+`build_render_tree_slice` and the `.x` round-trip were all there, but nothing on the
+canvas could draw a slice, so the export path could never be reached from a layer that
+exists only to be exported.
+
+### Added
+- **`Tool::Slice` (S)** — drag a region; it lands as a slice named for the layers panel,
+  selected, and the tool returns to Move (`V`/`Esc` leave it like the other drawing
+  tools). The toolbar has a twelfth tool, the palette has "Slice tool", and the layers
+  row carries the scissors icon a slice deserves.
+- **Slice chrome**: every visible slice is drawn as a dashed outline with its name above
+  it — the region is a region, not a layer, and a slice drag previews dashed and unfilled
+  for the same reason.
+- **A slice exports the region it covers.** `prepare_export` now builds the slice's tree
+  through `build_render_tree_slice`: the flattened page content inside its bounds,
+  re-origined to (0, 0), with the slice's own size as the canvas — Figma's "anything that
+  overlaps the slice will be exported". An empty slice still exports its size (a
+  transparent image); a selection that mixes a slice with other layers is refused with a
+  reason instead of silently exporting half of it
+  (`a_slice_exports_the_content_inside_its_bounds`, `an_empty_slice_still_exports_its_size`,
+  `a_mixed_selection_refuses_to_guess`, `the_slice_tool_draws_an_export_region`).
+
 ## [Unreleased] — 2026-09-18 (The Scale tool, and Frame selection)
 
 Figma's **Scale tool (K)** and **Frame selection (⌥⌘G)** were already in the engine —

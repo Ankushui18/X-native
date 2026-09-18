@@ -30,7 +30,7 @@ every "in this tree" cell is the source that implements it.
 | **Move / select** (V) | click selects the top-level object, drag moves it, shift-click adds, marquee on empty canvas, double-click or ⏎ descends one level, ⌘-click deep-selects | `Tool::Select`; `x-editor::hit_test` + `hit_test_rect`; `drill_into`; parity rows 1–7 |
 | **Scale** (K) | resize WITHOUT distortion — "Any blurs or strokes will scale as well", text sizes follow the box, a locked layer is refused, and the box grows from the corner you are not holding | `Tool::Scale` + `state::scale_drag_factor` / `scaled_box` + `Editor::scale_nodes_about` (w/h, child offsets, strokes and dashes, radii, text size/leading, effect distances, auto-layout padding/gap) |
 | **Frame** (F) | click on empty canvas = a top-level frame (100×100, then the last size used); **click INSIDE a frame = a nested frame there**; drag = custom size; ⌥⌘G frames the selection | `Tool::Frame`; nesting now by *where you draw* (`container_under`); ⌥⌘G now frames the selection |
-| **Slice** | an object whose only job is to be exported | not built (any selection can be exported) |
+| **Slice** (S) | a region whose only job is to be exported — "even if it's not organized into a single group"; with Contents Only off, anything overlapping it is exported | `Tool::Slice` draws one; the editor marks it dashed and names it, and `prepare_export` exports the flattened content inside its bounds (one slice per export) |
 | **Rectangle** (R) / **Ellipse** (O) | drag creates; ⇧ square/circle; ⌥ from the centre; the size is shown while dragging; **drawn over a frame it joins that frame**; space while dragging prevents nesting | `Tool::Rect` / `Tool::Ellipse`; all four rules now, via `state::create_rect` + `container_under` + `space_pan` |
 | **Line** (L) / **Arrow** (⇧L) | drag in any direction; stroke settings in the right panel | `Tool::Pen` + line nodes; no arrow caps yet |
 | **Pen** (P) | click to place points, drag for curves, click the first point to close, Esc leaves it open; draws INSIDE a frame | `Tool::Pen` (click = anchor, drag = handle, close on the anchor); nests by the same rule now |
@@ -41,10 +41,11 @@ every "in this tree" cell is the source that implements it.
 | **Zoom** | ⌘/Ctrl + wheel, ⌘0 / ⌘1 / ⌘2, or the zoom menu | wheel zoom at the pointer, `Action::ZoomMenu` (in / out / 100% / selection / fit) |
 | **Nudge** | arrow keys move 1px, ⇧ 10px | arrow-key nudge with ⇧ big-nudge |
 
-Three rows changed since this table was written (see §4): a new layer joins the
+Four rows changed since this table was written (see §4): a new layer joins the
 container you draw it in, the shape tools' modifiers (⇧ constrain, ⌥ from the centre,
-live size readout), and the two tools that were engine-only — the Scale tool (K) and
-Frame selection (⌥⌘G), which now have a tool, a palette entry and a shortcut.
+live size readout), the two tools that were engine-only — the Scale tool (K) and Frame
+selection (⌥⌘G), which now have a tool, a palette entry and a shortcut — and the Slice
+tool (S), which had a node kind and an export path but no way to draw one.
 
 ## 1. The file interface, element by element
 
@@ -128,6 +129,17 @@ Frame selection (⌥⌘G), which now have a tool, a palette entry and a shortcut
   had been in the engine since the wrap-selection refactor with tests and no caller; the
   shortcut and the palette entry now reach them. The frame is the members' collective
   AABB, single layers included, and the members keep their page positions.
+* **The Slice tool (S) draws the export region Figma's article describes.** `NodeKind::Slice`
+  and `x_render::ir::build_render_tree_slice` had both existed since Phase 2 with tests and no
+  caller; now the tool draws a slice, the tool returns to Move, `Esc` leaves it, the layers row
+  carries the scissors icon, and the canvas marks every slice with a dashed outline and its
+  name. The export side is wired too: a selected slice flattens whatever overlaps it into its
+  own bounds (and a slice with nothing under it still exports its size), while a selection that
+  mixes a slice with other layers is refused with a reason — this build writes one file per
+  export, so it must not silently drop half the selection.
+* **A slice answers canvas clicks like any other layer** — the engine's hit test was left
+  alone; the dashed outline and the name chip are how you find one. (Our rule, not Figma's:
+  their slices are reached through the Layers panel and their edge.)
 * **Two engine rules came out of this pass**: `scale_nodes_about` refuses a factor of
   zero or less (a drag past the anchor must not mirror the layer) and skips a listed
   node whose ANCESTOR is listed too — scaling both would scale the child twice.
@@ -136,18 +148,16 @@ Frame selection (⌥⌘G), which now have a tool, a palette entry and a shortcut
 
 Ordered by how visible they are, not by how hard they are:
 
-1. **Slice tool** — an object whose only job is to be exported. We export any selection,
-   which covers the use case but not the layer.
-2. **Pencil / Brush tool** — freehand (and Figma's "smooth" pass that turns a freehand
+1. **Pencil / Brush tool** — freehand (and Figma's "smooth" pass that turns a freehand
    stroke into a vector network). `Tool::Eraser` and `Tool::Symmetry` exist; freehand
    does not.
-3. **Line / Arrow tools** (L / ⇧L) — a one-drag line or arrow. Stroke caps exist
+2. **Line / Arrow tools** (L / ⇧L) — a one-drag line or arrow. Stroke caps exist
    (`Stroke cap: round / square / butt / arrow`), but the tools themselves do not.
-4. **The Scale panel's numbers, and the scale tool's body drag** — Figma's help says
+3. **The Scale panel's numbers, and the scale tool's body drag** — Figma's help says
    "Hover over the object's bounding box to make the [scale] cursor appear. Then,
    click-and-drag to resize", plus a *multiplier* and an *anchor box* in the right
    sidebar. Ours scales from the four corner handles (the same ones the Move tool
    resizes with) and dragging the body of an object still moves it, so the gesture is
    there but not the whole surface; typing "50%" or picking an anchor is not.
-5. **Community and Teams** in the file browser, and sharing in the editor. These need a
+4. **Community and Teams** in the file browser, and sharing in the editor. These need a
    backend; the build is local-first.

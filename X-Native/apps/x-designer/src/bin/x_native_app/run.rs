@@ -5318,6 +5318,21 @@ impl Host {
                 e.name = format!("Ellipse {n}");
                 e
             }
+            Tool::Slice => {
+                // Figma: "The Slice tool lets you specify a specific region of
+                // the screen for export, even if it's not organized into a
+                // single group." The node draws nothing; the export path
+                // flattens whatever overlaps it.
+                let mut sl = Node::slice(
+                    &x_native::fresh_id("slice"),
+                    x,
+                    y,
+                    w.max(2.0),
+                    h.max(2.0),
+                );
+                sl.name = format!("Slice {n}");
+                sl
+            }
             Tool::Text => {
                 // Figma: a new text object starts EMPTY (placeholder only);
                 // committing empty deletes it
@@ -6365,8 +6380,9 @@ impl Host {
                     // P12: an in-flight tree drag cancels first
                     if matches!(self.app.drag, Some(Drag::TreeRow { .. })) {
                         self.app.drag = None;
-                    } else if self.app.tool == Tool::Scale {
-                        // Figma's Esc leaves the Scale tool the way V does —
+                    } else if matches!(self.app.tool, Tool::Scale | Tool::Slice) {
+                        // Figma's Esc leaves the active drawing tool (Scale,
+                        // Slice) the way V does —
                         // the selection survives until a second Esc, and a
                         // drag already in flight still ends through its own
                         // release (which merges it into one undo step)
@@ -6650,6 +6666,7 @@ impl Host {
             }
             "Copy as code" => self.app.apply_ctx(CtxCmd::CopyAsCode),
             "Comment tool" => self.app.tool = Tool::Comment,
+            "Slice tool" => self.app.tool = Tool::Slice,
             "Union selection" => self.app.apply_ctx(CtxCmd::Union),
             "Subtract selection" => self.app.apply_ctx(CtxCmd::Subtract),
             "Intersect selection" => self.app.apply_ctx(CtxCmd::Intersect),
