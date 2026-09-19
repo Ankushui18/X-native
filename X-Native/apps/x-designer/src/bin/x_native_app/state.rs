@@ -4212,7 +4212,8 @@ impl App {
                     // the engine sizes the section to the members' collective
                     // bounds, lifts them to the canvas when a frame or group
                     // held them, and keeps their place on the page
-                    doc.editor().section_selection(&x_native::fresh_id("section"));
+                    doc.editor()
+                        .section_selection(&x_native::fresh_id("section"));
                 }
             }
             MakeComponent => {

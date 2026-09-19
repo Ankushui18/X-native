@@ -26,11 +26,7 @@ fn next_copy_id(taken: &mut std::collections::HashSet<String>, old: &str) -> Str
 /// rotation, scale or skew. The Section rules below deal in translations, so
 /// anything else is refused rather than guessed.
 fn plain_translation(t: &Transform) -> bool {
-    t.rotation == 0.0
-        && t.scale_x == 1.0
-        && t.scale_y == 1.0
-        && t.skew_x == 0.0
-        && t.skew_y == 0.0
+    t.rotation == 0.0 && t.scale_x == 1.0 && t.scale_y == 1.0 && t.skew_x == 0.0 && t.skew_y == 0.0
 }
 
 /// The PAGE position of a node's origin: its own translation plus every
@@ -1496,7 +1492,7 @@ impl Editor {
         let Some(parent_id) = parent_of(&self.root, section_id) else {
             return 0;
         };
-        let mut taken: Vec<(String, f64, f64)> = vec![];
+        let mut taken: Vec<String> = vec![];
         {
             let Some(parent) = find(&self.root, &parent_id) else {
                 return 0;
@@ -1512,7 +1508,7 @@ impl Editor {
                     && c.transform.x + c.w <= sx + sw + 0.5
                     && c.transform.y + c.h <= sy + sh + 0.5;
                 if inside {
-                    taken.push((c.id.clone(), c.transform.x, c.transform.y));
+                    taken.push(c.id.clone());
                 }
             }
         }
@@ -1520,7 +1516,7 @@ impl Editor {
             return 0;
         }
         let mut cmds: Vec<Command> = vec![];
-        for (k, (id, x, y)) in taken.iter().enumerate() {
+        for (k, id) in taken.iter().enumerate() {
             cmds.push(Command::ReorderNode {
                 id: id.clone(),
                 from_parent: parent_id.clone(),
@@ -1528,10 +1524,13 @@ impl Editor {
                 to_parent: section_id.to_string(),
                 index: k,
             });
+            // a sibling of the section is a page-level node, so its position
+            // on the page IS its local one: joining the section is a shift by
+            // the section's own origin, and its place on the page is kept
             cmds.push(Command::Move {
                 id: id.clone(),
-                dx: sx - x,
-                dy: sy - y,
+                dx: -sx,
+                dy: -sy,
             });
         }
         let n = taken.len();

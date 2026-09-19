@@ -28,7 +28,9 @@ section a section rather than a frame.
   the canvas by default. Sections can contain all layer types, including other
   sections, but cannot be contained within frames or groups."* `Editor::insert_nodes`
   refuses a Section into a Frame or a Group, and the reorder command refuses to
-  move one there, so no path in the app can build the forbidden tree.
+  move one there, so no path in the app can build the forbidden tree — the page
+  is itself a frame in this model, so the canvas is exempt by identity, not by
+  kind, and a drawn section reaches it.
 - **Wrap in new section.** The canvas's right-click menu carries Figma's own
   row. A selection already on the canvas — or inside another section — is
   wrapped where it stands; one inside a frame or a group is **lifted** to the
