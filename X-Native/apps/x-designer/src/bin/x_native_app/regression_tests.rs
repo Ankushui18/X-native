@@ -2338,7 +2338,12 @@ fn big_png(name: &str) -> std::path::PathBuf {
 fn the_place_image_tool_places_at_the_click_and_sizes_by_drag() {
     let mut h = host();
     let path = place_png("place-click.png");
-    h.place_images(&[path.clone()]);
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .expect("the fixture has a name")
+        .to_string();
+    h.place_images(std::slice::from_ref(&path));
 
     // the picker registered the bytes and armed the tool
     assert_eq!(h.app.tool, Tool::PlaceImage);
@@ -2353,7 +2358,7 @@ fn the_place_image_tool_places_at_the_click_and_sizes_by_drag() {
         .get(asset.as_str())
         .expect("registered");
     assert_eq!(rec.dimensions, Some((32, 24)), "probed from the header");
-    assert_eq!(rec.name, "place-click.png");
+    assert_eq!(rec.name, file_name, "the store keeps the file's own name");
 
     // a click (no drag) drops the file's own size, centred where it landed
     let at = Point::new(500.0, 400.0);
@@ -2364,7 +2369,7 @@ fn the_place_image_tool_places_at_the_click_and_sizes_by_drag() {
     assert_eq!((img.w, img.h), (32.0, 24.0), "the image's own size");
     assert_eq!(img.transform.x, at.x - 16.0);
     assert_eq!(img.transform.y, at.y - 12.0);
-    assert_eq!(img.name, "place-click.png", "Figma names it after the file");
+    assert_eq!(img.name, file_name, "Figma names the layer after the file");
     assert!(h.app.placing_images.is_empty(), "the queue drained");
     assert_eq!(h.app.tool, Tool::Select, "one image, one placement");
     h.app.doc().editor().undo();
@@ -2382,7 +2387,7 @@ fn the_place_image_tool_places_at_the_click_and_sizes_by_drag() {
         Node::rect("plate", 300.0, 300.0, 120.0, 80.0, Color::WHITE),
     );
     h.app.doc().editor().selection.clear();
-    h.place_images(&[path.clone()]);
+    h.place_images(std::slice::from_ref(&path));
     assert_eq!(h.app.tool, Tool::PlaceImage, "nothing was selected to fill");
     h.finish_create(
         Tool::PlaceImage,
@@ -2430,7 +2435,7 @@ fn placing_an_image_fills_the_selected_shape_or_swaps_the_picture() {
     );
     h.app.doc().editor().selection = vec!["plate".into()];
     let path = place_png("place-fill.png");
-    h.place_images(&[path.clone()]);
+    h.place_images(std::slice::from_ref(&path));
 
     assert!(
         h.app.placing_images.is_empty(),
@@ -2470,7 +2475,7 @@ fn escape_drops_a_pending_image_placement() {
     let mut h = host();
     let path = place_png("place-esc.png");
     h.app.doc().editor().selection.clear();
-    h.place_images(&[path.clone()]);
+    h.place_images(std::slice::from_ref(&path));
     assert_eq!(h.app.tool, Tool::PlaceImage);
     h.on_key(Key::Named(NamedKey::Escape), None);
     assert!(h.app.placing_images.is_empty());
