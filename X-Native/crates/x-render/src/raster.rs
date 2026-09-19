@@ -1000,12 +1000,12 @@ mod tests {
             let pix = sink.render(&tree);
             sample_px(&pix, 30, 30)
         };
-        let (r, b, _, _) = sample(CanvasStacking::LastOnTop);
+        let (r, _, b, _) = sample(CanvasStacking::LastOnTop);
         assert!(
             b > r,
             "last on top: the second layer wins the overlap, got {r},{b}"
         );
-        let (r, b, _, _) = sample(CanvasStacking::FirstOnTop);
+        let (r, _, b, _) = sample(CanvasStacking::FirstOnTop);
         assert!(
             r > b,
             "first on top: the first layer wins the overlap, got {r},{b}"

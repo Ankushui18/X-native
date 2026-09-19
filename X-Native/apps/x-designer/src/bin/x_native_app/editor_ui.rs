@@ -4330,10 +4330,7 @@ fn paint_design(
             ));
             // Figma's auto-layout settings carry **canvas stacking**: "Next to
             // canvas stacking, select: First on top / Last on top."
-            let stacking = sel_layout
-                .as_ref()
-                .map(|l| l.canvas_stacking)
-                .unwrap_or_default();
+            let stacking = sel_layout.as_ref().map(|l| l.canvas_stacking).unwrap_or_default();
             let sr = Rect::new(x0 + 120.0, y0 + 426.0, x0 + 283.0, y0 + 426.0 + DENSE_H);
             let shov = hover(app, sr);
             app.fonts.text(
@@ -6976,27 +6973,17 @@ fn paint_layout_axis_dropdown(
         (layout.min_height, layout.max_height)
     };
     let sizing_is_hug = sizing == x_native::Sizing::Hug;
+    let pick_fixed = Action::SetAxisSizing(is_w, x_native::Sizing::Fixed);
+    let pick_hug = Action::SetAxisSizing(is_w, x_native::Sizing::Hug);
+    let add_min = Action::AddAxisLimit(is_w, false);
+    let add_max = Action::AddAxisLimit(is_w, true);
+    let clear = Action::ClearAxisLimits(is_w);
     let rows: Vec<(String, Action)> = vec![
-        (
-            format!("Fixed {label}"),
-            Action::SetAxisSizing(is_w, x_native::Sizing::Fixed),
-        ),
-        (
-            "Hug contents".to_string(),
-            Action::SetAxisSizing(is_w, x_native::Sizing::Hug),
-        ),
-        (
-            format!("Add min {label}"),
-            Action::AddAxisLimit(is_w, false),
-        ),
-        (
-            format!("Add max {label}"),
-            Action::AddAxisLimit(is_w, true),
-        ),
-        (
-            "Remove min and max".to_string(),
-            Action::ClearAxisLimits(is_w),
-        ),
+        (format!("Fixed {label}"), pick_fixed),
+        ("Hug contents".to_string(), pick_hug),
+        (format!("Add min {label}"), add_min),
+        (format!("Add max {label}"), add_max),
+        ("Remove min and max".to_string(), clear),
     ];
     // which row wears the tick: the sizing option in force, and any limit set
     let ticked = |r: usize| match r {
@@ -7053,7 +7040,10 @@ fn paint_stacking_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Ac
         .selected_layout()
         .map(|l| l.canvas_stacking)
         .unwrap_or_default();
-    let list = [x_native::CanvasStacking::FirstOnTop, x_native::CanvasStacking::LastOnTop];
+    let list = [
+        x_native::CanvasStacking::FirstOnTop,
+        x_native::CanvasStacking::LastOnTop,
+    ];
     let (ax, ay) = app.stacking_dd_anchor;
     let w = 168.0;
     let h = DROPDOWN_ROW_H * list.len() as f64;

@@ -645,8 +645,8 @@ pub fn paint_order(node: &Node) -> Vec<usize> {
 }
 
 /// `paint_order` as ranks: `ranks[i]` is the position child `i` paints in
-/// (0 = bottom-most). Renderers that already have their own sort — `scene.rs`
-/// orders by `z_index` — use this as the tie-break, so the canvas-stacking
+/// (0 = bottom-most). A sink that already has its own sort — the Vello scene
+/// orders by `z_index` — uses this as the tie-break, so the canvas-stacking
 /// rule still has exactly one implementation.
 pub fn paint_ranks(node: &Node) -> Vec<usize> {
     let mut ranks = vec![0usize; node.children.len()];
