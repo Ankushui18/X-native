@@ -37,7 +37,7 @@ recon task, not a settled fact.
 | 3 Keyboard | 35 | 23 | 5 | 6 | 1 | 0 |
 | 4 Menus & palettes | 10 | 9 | 0 | 1 | 0 | 0 |
 | 5 Layers, pages, sections | 14 | 12 | 1 | 1 | 0 | 0 |
-| 6 Frame & shape properties | 20 | 17 | 1 | 2 | 0 | 0 |
+| 6 Frame & shape properties | 20 | 18 | 1 | 1 | 0 | 0 |
 | 7 Auto layout | 16 | 14 | 1 | 1 | 0 | 0 |
 | 8 Fill, stroke, effects, colour | 25 | 21 | 1 | 3 | 0 | 0 |
 | 9 Images | 9 | 6 | 3 | 0 | 0 | 0 |
@@ -52,7 +52,7 @@ recon task, not a settled fact.
 | 18 Design language (look of the app itself) | 12 | 1 | 5 | 6 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **339** | **242** | **51** | **27** | **16** | **3** |
+| **total** | **339** | **243** | **51** | **26** | **16** | **3** |
 
 The 27 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
@@ -239,7 +239,7 @@ Appearance (opacity, radius, clip), Fill, Stroke, Effects, Export.
 | 6.17 | Guides (rulers) | drag guides, clear all | `GUIDES`, `AddGuide`, `Clear all guides` | MATCH |
 | 6.18 | Effects list | multiple, per-effect blend, visibility | see §8 | MATCH |
 | 6.19 | Export settings | per-layer | see §16 | MATCH |
-| 6.20 | **Blend mode picker** | per fill/stroke/effect/layer, 16 modes | `BlendKind` in the model, **no picker in the UI** | **MISSING** |
+| 6.20 | Blend mode picker | per fill/stroke/effect/layer, Figma's mode words and order, **Pass through** layer-only | the Appearance row's dropdown plus one on every fill, stroke and effect row (`BlendKind::layer_modes` / `paint_modes`, `Editor::set_layer_blend` / `set_paint_layer_blend` / `set_effect_layer_blend`) | MATCH |
 
 ## 7. Auto layout
 
@@ -577,12 +577,17 @@ rendering it.
 
 ### Wave 1b — the missing behaviours, in owner-visible order
 
-4. **The Effects list** (8.16–8.20) — today the section is a header and a `+` that adds
-   one drop shadow. Figma's is a list: drop shadow / inner shadow (with **spread**),
-   layer blur, background blur, noise, each with visibility, colour, and reorder.
-   The engine already carries every variant.
-5. **Blend-mode picker** (6.20, 8.10) — `BlendKind` exists per paint, stroke, effect and
-   layer; nothing in the UI sets it.
+4. ~~**The Effects list** (8.16–8.20)~~ — **delivered**: the Effects section is a
+   list of each effect with its own type dropdown, settings, eye, duplicate and
+   remove, reordered by dragging a row. Pinned by
+   `the_effects_list_is_the_stack_and_every_write_is_one_undo_step` and
+   `the_effects_section_lists_every_effect_with_figmas_controls`.
+5. ~~**Blend-mode picker** (6.20, 8.10)~~ — **delivered**: writable on a layer,
+   a fill/stroke and a shadow or noise effect, with **Pass through** a
+   layer-only mode. Pinned by
+   `the_blend_menus_offer_figmas_modes_and_write_the_choice` and
+   `pass_through_is_a_layer_mode_only`. Figma's **Glass** and **Texture** types
+   (8.23, 8.24) and the per-type caps (8.25) remain.
 6. ~~**Sections authoring** (5.8)~~ — **delivered**: the Section tool (⇧S, sharing
    the toolbar slot with Frame), **Wrap in new section**, lift-to-canvas when the
    selection sits in a frame or a group, the take-in that follows the draw, and the
