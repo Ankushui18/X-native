@@ -6559,7 +6559,7 @@ fn selection_menu(h: &Host) -> Vec<crate::context_menu::ContextMenuItem> {
 #[test]
 fn double_clicking_inside_an_instance_selects_the_layer_there() {
     let (mut h, inst) = instance_host();
-    let vars = h.app.vars.clone();
+    let vars = h.app.doc_ref().doc.variables.clone();
 
     // the label sits at (12, 12) inside an instance placed at (40, 300)
     let layer = h
@@ -6597,7 +6597,7 @@ fn double_clicking_inside_an_instance_selects_the_layer_there() {
 #[test]
 fn the_panel_shows_the_instance_copy_of_a_layer_inside_it() {
     let (mut h, _inst) = instance_host();
-    let vars = h.app.vars.clone();
+    let vars = h.app.doc_ref().doc.variables.clone();
     h.app
         .doc()
         .editor()

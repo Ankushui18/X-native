@@ -4275,7 +4275,7 @@ impl Host {
                     // instance, and a click while already inside moves the
                     // scope to whatever is under the cursor. A click outside
                     // the instance leaves it, the way Esc does.
-                    let vars = self.app.vars.clone();
+                    let vars = self.app.doc_ref().doc.variables.clone();
                     let entered = self.app.doc().editor_ref().instance_scope.is_some();
                     if dbl && !shift {
                         match self.app.doc().editor().enter_instance(world, &vars) {
