@@ -6079,7 +6079,6 @@ impl Host {
                 // its own kind: a labelled container with a tinted body.
                 let sid = x_native::fresh_id("section");
                 let mut sec = Node::section(&sid, w.max(8.0), h.max(8.0));
-                sec.name = format!("Section {n}");
                 sec.transform.x = x;
                 sec.transform.y = y;
                 sec

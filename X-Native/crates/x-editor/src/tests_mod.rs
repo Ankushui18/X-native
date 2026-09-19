@@ -883,7 +883,6 @@ mod tests {
         assert!(!e.insert_node("gr", Node::section("sec3", 40.0, 40.0)));
         assert!(!e.reorder_node("sec1", "page", 0, "fr", 0));
         assert!(!e.reorder_node("sec1", "page", 0, "gr", 0));
-        assert!(!e.reorder_node("sec1", "page", 0, "fr", 0));
         // ordinary layers still move into a container
         assert!(e.reorder_node("fr", "page", 0, "gr", 0));
     }

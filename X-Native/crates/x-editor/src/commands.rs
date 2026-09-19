@@ -294,7 +294,10 @@ pub(crate) fn apply(root: &mut Node, cmd: &Command) -> bool {
                 .unwrap_or(false)
             {
                 if let Some(tp) = find(root, to_parent) {
-                    if matches!(tp.kind, NodeKind::Frame { .. } | NodeKind::Group) {
+                    // the canvas is a frame in this model: exempt by identity
+                    if to_parent != &root.id
+                        && matches!(tp.kind, NodeKind::Frame { .. } | NodeKind::Group)
+                    {
                         return false;
                     }
                 }

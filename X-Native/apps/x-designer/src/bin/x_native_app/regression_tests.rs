@@ -6130,13 +6130,13 @@ fn the_section_tool_is_shift_s_and_shares_the_frame_slot() {
 #[test]
 fn the_section_tool_draws_on_the_canvas_and_takes_what_it_covers() {
     let mut h = host();
-    h.finish_create(Tool::Frame, Point::new(100.0, 100.0), Point::new(300.0, 260.0));
-    let frame_id = h.app.doc_ref().editor_ref().selection[0].clone();
-    assert_eq!(h.app.doc_ref().editor_ref().root.children.len(), 1);
+    // the demo page carries one frame: the canvas origin (0, 60), 375 x 420
+    let frame_id = h.app.doc_ref().editor_ref().root.children[0].id.clone();
+    assert_eq!(frame_id, "frame-1");
     h.finish_create(
         Tool::Section,
-        Point::new(80.0, 80.0),
-        Point::new(420.0, 320.0),
+        Point::new(0.0, 60.0),
+        Point::new(375.0, 480.0),
     );
     let root = &h.app.doc_ref().editor_ref().root;
     assert_eq!(root.children.len(), 1, "the section is a page-level layer");
@@ -6145,14 +6145,14 @@ fn the_section_tool_draws_on_the_canvas_and_takes_what_it_covers() {
     assert_eq!(sec.name, "Section");
     assert_eq!(
         (sec.transform.x, sec.transform.y),
-        (80.0, 80.0),
+        (0.0, 60.0),
         "drawn where the drag was, in page space"
     );
     assert_eq!(sec.children.len(), 1, "the frame it covered joined it");
     assert_eq!(sec.children[0].id, frame_id);
     assert_eq!(
         (sec.children[0].transform.x, sec.children[0].transform.y),
-        (20.0, 20.0),
+        (0.0, 0.0),
         "and kept its place on the page"
     );
     // the whole gesture is ONE undo step: the frame is back on the page
@@ -6163,7 +6163,7 @@ fn the_section_tool_draws_on_the_canvas_and_takes_what_it_covers() {
     assert_eq!(root.children[0].id, frame_id);
     assert_eq!(
         (root.children[0].transform.x, root.children[0].transform.y),
-        (100.0, 100.0)
+        (0.0, 60.0)
     );
 }
 
@@ -6188,12 +6188,20 @@ fn the_canvas_menu_wraps_a_selection_in_a_section() {
     });
     assert!(offers, "Figma's wrap row is on the canvas menu");
 
+    // drawn over the demo page's frame, so the rect lands in it (frame-local)
     let mut h = host();
-    h.finish_create(Tool::Frame, Point::new(100.0, 100.0), Point::new(300.0, 260.0));
-    let frame_id = h.app.doc_ref().editor_ref().selection[0].clone();
-    // the frame is selected, so the rect is drawn INSIDE it (frame-local)
-    h.finish_create(Tool::Rect, Point::new(120.0, 120.0), Point::new(180.0, 180.0));
+    h.finish_create(
+        Tool::Rect,
+        Point::new(120.0, 120.0),
+        Point::new(180.0, 180.0),
+    );
     let rect_id = h.app.doc_ref().editor_ref().selection[0].clone();
+    {
+        let root = &h.app.doc_ref().editor_ref().root;
+        assert_eq!(root.children.len(), 1, "the page still holds just frame-1");
+        assert_eq!(root.children[0].id, "frame-1");
+        assert_eq!(root.children[0].children.len(), 1, "the rect joined it");
+    }
     h.app.doc().editor().selection = vec![rect_id.clone()];
     h.app.apply_ctx(crate::state::CtxCmd::SectionSelection);
 
@@ -6209,7 +6217,7 @@ fn the_canvas_menu_wraps_a_selection_in_a_section() {
     let frame = root
         .children
         .iter()
-        .find(|c| c.id == frame_id)
+        .find(|c| c.id == "frame-1")
         .expect("the frame is still on the page");
     assert!(frame.children.is_empty(), "the frame gave the layer up");
     // and the layer kept its place on the PAGE, not the frame's

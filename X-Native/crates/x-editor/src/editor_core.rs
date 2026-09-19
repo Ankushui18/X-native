@@ -2055,8 +2055,10 @@ impl Editor {
         }
         // Figma's rule, enforced where the tree is written rather than in each
         // caller: a section is a top-level element and "cannot be contained
-        // within frames or groups".
-        if matches!(parent.kind, NodeKind::Frame { .. } | NodeKind::Group)
+        // within frames or groups". The page is a frame in this model, so the
+        // canvas itself is exempt BY IDENTITY, not by kind.
+        if parent_id != self.root.id
+            && matches!(parent.kind, NodeKind::Frame { .. } | NodeKind::Group)
             && nodes.iter().any(has_section)
         {
             return false;
