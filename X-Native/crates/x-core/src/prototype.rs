@@ -6,6 +6,8 @@
 //! timing and an [`Animation`] preset. Frames can also be marked as flow
 //! starting points via [`Node::is_starting_point`].
 
+use crate::Node;
+
 /// When an interaction fires.
 ///
 /// The press trio mirrors Figma: `OnPress` is "while pressing" (fires on
@@ -967,6 +969,93 @@ pub struct Interaction {
     /// If true, object states (scroll position, form inputs, etc.) are
     /// reset when this interaction fires.
     pub reset_on_navigate: bool,
+    /// Figma's **Animate matching layers** tick, in the interaction's own
+    /// animation section (help 360039818874). On: the two screens' layers are
+    /// matched by name *and* hierarchy, the matches smart-animate their
+    /// differences, and everything else takes [`Interaction::animation`]. Off
+    /// by default, the way Figma's box starts.
+    pub animate_matching_layers: bool,
+}
+
+/// What the transition does with one layer of the destination screen when
+/// **Animate matching layers** is on (help 360039818874).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LayerTransition {
+    /// The layer matches one in the outgoing screen — same name, same place in
+    /// the hierarchy — so its differences animate instead of the screen's
+    /// transition. `from` is the outgoing layer's id.
+    SmartAnimate { from: String },
+    /// Nothing matched: a new layer dissolves in.
+    Dissolve,
+    /// Matched, but fixed or sticky: it holds still, with no transition at all.
+    Hold,
+}
+
+/// One destination layer's place in the plan, in document order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LayerPlan {
+    pub to: String,
+    pub name: String,
+    pub transition: LayerTransition,
+}
+
+/// Figma's matching rule, in one place: two layers match when their **names**
+/// and their **hierarchy** — the chain of ancestor names from the screen, which
+/// is how Figma writes it — are equal ([help 360039818874](https://help.figma.com/hc/en-us/articles/360039818874)).
+///
+/// The decisions this returns are the article's four cases:
+///
+/// * matched, not fixed → [`LayerTransition::SmartAnimate`]: the layer's
+///   differences animate and the rest of the screen uses the interaction's own
+///   transition;
+/// * matched, fixed or sticky → [`LayerTransition::Hold`]: no transition;
+/// * no match → [`LayerTransition::Dissolve`], which is also what a fixed layer
+///   with no match does (it can't hold a position it never had).
+///
+/// The screen roots themselves are not matched — a screen is not one of its own
+/// layers — so a layer's path starts at its parent.
+pub fn matching_layers(from: &Node, to: &Node) -> Vec<LayerPlan> {
+    use std::collections::HashMap;
+
+    /// The outgoing screen's layers by name path; the alias keeps both
+    /// signatures short enough to read in one line.
+    type Index<'a> = HashMap<Vec<String>, &'a Node>;
+
+    fn index<'a>(n: &'a Node, path: &mut Vec<String>, out: &mut Index<'a>) {
+        for c in &n.children {
+            path.push(c.name.clone());
+            out.insert(path.clone(), c);
+            index(c, path, out);
+            path.pop();
+        }
+    }
+    let mut by_path = Index::new();
+    index(from, &mut Vec::new(), &mut by_path);
+
+    fn plan(n: &Node, path: &mut Vec<String>, by_path: &Index<'_>, out: &mut Vec<LayerPlan>) {
+        for c in &n.children {
+            path.push(c.name.clone());
+            let held = crate::ScrollPosition::of(&c.constraints)
+                != crate::ScrollPosition::ScrollWithParent;
+            let transition = match by_path.get(path) {
+                Some(m) if held => LayerTransition::Hold,
+                Some(m) => LayerTransition::SmartAnimate {
+                    from: m.id.clone(),
+                },
+                None => LayerTransition::Dissolve,
+            };
+            out.push(LayerPlan {
+                to: c.id.clone(),
+                name: c.name.clone(),
+                transition,
+            });
+            plan(c, path, by_path, out);
+            path.pop();
+        }
+    }
+    let mut out = Vec::new();
+    plan(to, &mut Vec::new(), &by_path, &mut out);
+    out
 }
 
 impl Interaction {
@@ -982,6 +1071,7 @@ impl Interaction {
             animation: Animation::SmartAnimate,
             easing: Easing::EaseInOut,
             reset_on_navigate: false,
+            animate_matching_layers: false,
         }
     }
 
@@ -1001,6 +1091,7 @@ impl Interaction {
             animation,
             easing: Easing::EaseInOut,
             reset_on_navigate: false,
+            animate_matching_layers: false,
         }
     }
 
@@ -1020,6 +1111,7 @@ impl Interaction {
             animation,
             easing,
             reset_on_navigate: false,
+            animate_matching_layers: false,
         }
     }
 
@@ -1053,6 +1145,7 @@ pub fn effective_interactions(node: &crate::Node) -> Vec<Interaction> {
             animation: Animation::SmartAnimate,
             easing: Easing::EaseInOut,
             reset_on_navigate: false,
+            animate_matching_layers: false,
         }];
     }
     vec![]
@@ -1143,7 +1236,7 @@ pub fn delayed_interactions(node: &crate::Node) -> Vec<(String, u32, Interaction
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Node;
+    use crate::{Color, Node};
 
     #[test]
     fn effective_interactions_prefers_rich_model_and_merges_legacy() {
@@ -1169,6 +1262,7 @@ mod tests {
                 animation: Animation::Instant,
                 easing: Easing::Linear,
                 reset_on_navigate: false,
+                animate_matching_layers: false,
             });
         let eff2 = effective_interactions(&n2);
         assert_eq!(eff2.len(), 1);
@@ -1446,6 +1540,67 @@ mod tests {
         assert_eq!(vars.numbers["page"], 10.0); // cap hit before the SetVar
     }
 
+    /// "Animate matching layers" is Figma's rule about which layers of the
+    /// destination screen animate on their own (help 360039818874): name plus
+    /// hierarchy decides, matched fixed layers hold, new layers dissolve in.
+    #[test]
+    fn matching_layers_follows_names_hierarchy_and_fixed() {
+        fn titled(id: &str, name: &str, child: &str, child_name: &str) -> Node {
+            let mut f = Node::frame(id, 100.0, 80.0);
+            f.name = name.into();
+            let mut c = Node::rect(child, 0.0, 0.0, 20.0, 8.0, Color::WHITE);
+            c.name = child_name.into();
+            f.child(c)
+        }
+        let mut pinned_from = Node::rect("pinned-from", 0.0, 90.0, 40.0, 20.0, Color::WHITE);
+        pinned_from.name = "Pinned".into();
+        let from = Node::frame("Home", 300.0, 200.0)
+            .child(titled("card-from", "Card", "title-from", "Title"))
+            .child(titled("old-from", "Old", "old-title-from", "Title"))
+            .child(pinned_from);
+
+        let mut pinned = Node::rect("pinned-to", 0.0, 90.0, 40.0, 20.0, Color::WHITE);
+        pinned.name = "Pinned".into();
+        pinned.constraints.fixed = true;
+        let mut ghost = Node::rect("ghost-to", 60.0, 90.0, 40.0, 20.0, Color::WHITE);
+        ghost.name = "Ghost".into();
+        ghost.constraints.fixed = true;
+        let mut fresh = Node::rect("fresh-to", 0.0, 120.0, 40.0, 20.0, Color::WHITE);
+        fresh.name = "Fresh".into();
+        let mut moved = titled("card-to", "Card", "title-to", "Title");
+        moved.w = 120.0;
+        let to = Node::frame("Detail", 300.0, 200.0)
+            .child(moved)
+            .child(titled("new-to", "New", "new-title-to", "Title"))
+            .child(pinned)
+            .child(ghost)
+            .child(fresh);
+
+        // document order, parents before their children: [card, title, bar,
+        // new]; the decisions are Figma's four cases in that order
+        let plan = matching_layers(&from, &to);
+        assert_eq!(plan.len(), 4, "every destination layer is planned");
+        assert_eq!(plan[0].to, "card-b");
+        assert_eq!(plan[0].name, "Card", "document order, parents first");
+        assert_eq!(
+            plan[0].transition,
+            LayerTransition::SmartAnimate {
+                from: "card-a".into(),
+            }
+        );
+        // the child matches through the hierarchy, not through the screens
+        assert_eq!(
+            plan[1].transition,
+            LayerTransition::SmartAnimate {
+                from: "title-a".into(),
+            }
+        );
+        // matched but fixed: no transition at all
+        assert_eq!(plan[2].transition, LayerTransition::Hold);
+        // a layer the outgoing screen never had dissolves in
+        assert_eq!(plan[3].transition, LayerTransition::Dissolve);
+    }
+
     #[test]
     fn keydown_and_move_animations_roundtrip_strings() {
         assert_eq!(Trigger::KeyDown { key: "a".into() }.to_str(), "key");
@@ -1513,6 +1668,7 @@ mod tests {
                     animation: Animation::Instant,
                     easing: Easing::Linear,
                     reset_on_navigate: false,
+                    animate_matching_layers: false,
                 },
             ),
         );
@@ -1531,6 +1687,7 @@ mod tests {
                 animation: Animation::Instant,
                 easing: Easing::Linear,
                 reset_on_navigate: false,
+                animate_matching_layers: false,
             }),
         );
         assert!(find_key_interaction(&page2, "Enter").is_some());
@@ -1640,6 +1797,7 @@ mod tests {
                         animation: Animation::Instant,
                         easing: Easing::Linear,
                         reset_on_navigate: false,
+                        animate_matching_layers: false,
                     },
                 ),
             )

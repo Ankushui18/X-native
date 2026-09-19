@@ -1113,6 +1113,11 @@ pub const PROTO_OVERFLOW_VALUES: [Option<x_native::Overflow>; 4] = [
     Some(x_native::Overflow::ScrollBoth),
 ];
 
+/// Figma's **Animate matching layers** tick (help 360039818874), in one
+/// place: the panel paints this word and its test reads it, so the two cannot
+/// drift.
+pub const PROTO_MATCHING_LABEL: &str = "Animate matching layers";
+
 /// Figma's Position menu, in the menu's own order.
 pub const PROTO_POSITION_LABELS: [&str; 3] = ["Scroll with parent", "Fixed", "Sticky"];
 pub const PROTO_POSITION_VALUES: [x_native::ScrollPosition; 3] = [
@@ -1223,6 +1228,9 @@ pub enum Action {
     ProtoTrigger(usize),
     ProtoDest(usize, i32),
     ProtoSpeed(usize),
+    /// Figma's **Animate matching layers** tick, in the interaction's
+    /// animation section (help 360039818874).
+    ProtoToggleMatching(usize),
     ProtoAnimation(usize),
     /// Figma's four arrows beside a Move in / Move out: the side it enters from.
     ProtoDirection(usize, x_native::Direction),
@@ -1884,6 +1892,10 @@ pub struct FlowState {
     pub press_span: Option<x_native::editor::WhileSpan>,
     /// Preview device chrome toggle (mobile/tablet frame presentation).
     pub device_frame: bool,
+    /// the running Figma **Animate matching layers** transition, when the
+    /// last navigation asked for one — the shared engine's tick, so the
+    /// viewer and the editor player cannot disagree on its shape.
+    pub tick: Option<x_native::editor::SmartTick>,
 }
 
 /// Clipboard for copying/pasting layer properties (Figma parity)

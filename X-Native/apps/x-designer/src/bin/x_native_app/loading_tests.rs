@@ -29,6 +29,7 @@ fn host() -> Host {
         close_after_job: false,
         pending_open: None,
         next_loading_frame: Instant::now(),
+        next_proto_frame: Instant::now(),
     }
 }
 fn path(name: &str) -> PathBuf {

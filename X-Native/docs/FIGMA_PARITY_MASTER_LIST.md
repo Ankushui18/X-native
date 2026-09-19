@@ -45,16 +45,16 @@ recon task, not a settled fact.
 | 11 Vector editing & booleans | 20 | 14 | 5 | 1 | 0 | 0 |
 | 12 Components, instances, styles | 20 | 13 | 4 | 3 | 0 | 0 |
 | 13 Variables & modes | 9 | 6 | 3 | 0 | 0 | 0 |
-| 14 Prototype | 30 | 19 | 9 | 1 | 0 | 1 |
+| 14 Prototype | 30 | 19 | 10 | 0 | 0 | 1 |
 | 15 Inspect, dev mode, codegen | 9 | 5 | 3 | 1 | 0 | 0 |
 | 16 Export & import | 12 | 11 | 1 | 0 | 0 | 0 |
 | 17 Canvas view & navigation | 14 | 9 | 2 | 1 | 1 | 1 |
 | 18 Design language (look of the app itself) | 12 | 1 | 5 | 6 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **334** | **223** | **54** | **38** | **16** | **3** |
+| **total** | **334** | **223** | **55** | **37** | **16** | **3** |
 
-The 38 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
+The 37 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
 the brief.
 
@@ -416,7 +416,7 @@ scroll behaviour, flows and flow starting points, device preview.
 | 14.9 | Move in/out direction | 4 arrows next to the mode | `ProtoDirection`, four arrows | MATCH |
 | 14.10 | Easing | linear, ease in/out/in-out, custom bezier, spring presets | `Easing` + custom | MATCH |
 | 14.11 | Duration & delay | numeric | `ProtoEditDelay`, speed pill | MATCH |
-| 14.12 | **Animate matching layers** | tick that opts into matching by layer name | not built | **MISSING** (delta 2) |
+| 14.12 | **Animate matching layers** | a tick in the interaction's animation section: on, the two screens' layers are matched by **name and hierarchy**, matches smart-animate their differences, a layer that matched nothing **dissolves in**, a matched **fixed** layer gets no transition at all; Figma gives overlay actions no smart animate ([help 360039818874](https://help.figma.com/hc/en-us/articles/360039818874)) | `x_core::prototype::matching_layers` is the rule (path of ancestor names, `SmartAnimate { from }` / `Dissolve` / `Hold`) and `x_core::smart_animate::interpolate_matching_layers` is the in-between state; `Interaction::animate_matching_layers` rides the file (`"smartmatch"`); the panel's tick (`PROTO_MATCHING_LABEL`) writes it; `x_native::editor::arm_smart_tick` freezes the plan on navigation and `SmartTick` runs the clock the viewer repaints on — dissolving the arriving layers at the tick's alpha | `matching_layers_follows_names_hierarchy_and_fixed`, `matching_layers_interpolate_by_name_not_id`, `the_matching_layers_tick_survives_the_round_trip_and_stays_off_when_absent`, `the_interaction_row_carries_figmas_matching_layers_tick`, `the_matching_layers_tick_arms_on_a_navigation_and_dissolves_new_layers` | PARTIAL |
 | 14.13 | Per-frame scroll behaviour | Prototype tab → **Scroll behavior**: a frame carries **Overflow** — *No scrolling / Horizontal / Vertical / Both directions* — an object on a scrolling frame carries **Position** — *Scroll with parent / Fixed / Sticky*; the preview scrolls the frame with the wheel ([help 360039818734](https://help.figma.com/hc/en-us/articles/360039818734)) | `state.rs` `PROTO_OVERFLOW_*` / `PROTO_POSITION_*` tables + `scrollable_ancestor`; `x_core::scroll_extent`; `Editor::set_scroll_position` / `set_scroll_preview`; `flow_scroll_wheel` / `flow_clear_scroll` / `flow_pan_to` | MATCH |
 | 14.14 | Overlay position | 9 anchors + manual | `OverlayPosition` + `Manual` | MATCH |
 | 14.15 | Overlay background | colour + opacity, "close on click outside" | background + dismiss path | MATCH |
@@ -562,7 +562,13 @@ rendering it.
 2. ~~**Trigger row short form** (14.5)~~ — **delivered**: one owner
    (`Trigger::label`), Figma's words, a trigger menu that reaches all twelve
    kinds (Mouse down included) and a pill measured to its own text.
-3. **Animate matching layers tick** (14.12) — opt-in for smart-animate matching.
+3. ~~**Animate matching layers tick** (14.12)~~ — **delivered**: the tick in the
+   interaction's animation section, the name-and-hierarchy matching rule, the
+   plan frozen on navigation and the clock the viewer dissolves arriving
+   layers on. Remaining delta: the **morph of a matched pair** is computed
+   (`interpolate_matching_layers`) but not painted — the viewer shows one
+   screen at a time, so there is no outgoing screen to animate against.
+   Pinned by `the_matching_layers_tick_arms_on_a_navigation_and_dissolves_new_layers`.
 
 ### Wave 1b — the missing behaviours, in owner-visible order
 

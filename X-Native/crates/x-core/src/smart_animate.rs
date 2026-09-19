@@ -99,6 +99,56 @@ pub fn interpolate_frames(
     result
 }
 
+/// Smart-animate the destination screen against the screen it replaced at
+/// progress `t`, using Figma's own matching rule — name and hierarchy, the
+/// rule behind **Animate matching layers** (help 360039818874) and behind the
+/// Smart animate preset. The result is keyed by the DESTINATION layer's id, so
+/// a renderer painting the new screen can pull each layer's in-between out of
+/// the map:
+///
+/// * a matched layer morphs — position, size, opacity, rotation, corner
+///   radius, fill — from its counterpart, exactly as [`interpolate_frames`]
+///   morphs nodes that share an id;
+/// * a layer that matched nothing *dissolves in*: it starts transparent and
+///   reaches its own opacity at `t = 1`;
+/// * a fixed layer that matched is not in the map at all: Figma gives it no
+///   transition, so the renderer paints it where it is for the whole tick.
+///
+/// [`matching_layers`]: crate::prototype::matching_layers
+pub fn interpolate_matching_layers(
+    from: &Node,
+    to: &Node,
+    t: f64,
+) -> HashMap<String, InterpolatedNode> {
+    let t = t.clamp(0.0, 1.0);
+    let mut from_nodes = HashMap::new();
+    let mut to_nodes = HashMap::new();
+    collect_nodes(from, &mut from_nodes);
+    collect_nodes(to, &mut to_nodes);
+    let mut result = HashMap::new();
+    for layer in crate::prototype::matching_layers(from, to) {
+        let Some(now) = to_nodes.get(&layer.to) else {
+            continue;
+        };
+        match &layer.transition {
+            crate::prototype::LayerTransition::SmartAnimate { from: src } => {
+                if let Some(before) = from_nodes.get(src) {
+                    result.insert(layer.to.clone(), interpolate_node(before, now, t));
+                }
+            }
+            // "A new dest layer dissolves in" — and so does a fixed layer
+            // with nothing to match, which has no position to hold.
+            crate::prototype::LayerTransition::Dissolve => {
+                let mut arriving = now.clone();
+                arriving.opacity = now.opacity * t as f32;
+                result.insert(layer.to.clone(), arriving);
+            }
+            crate::prototype::LayerTransition::Hold => {}
+        }
+    }
+    result
+}
+
 /// Linearly interpolate between two node states.
 fn interpolate_node(from: &InterpolatedNode, to: &InterpolatedNode, t: f64) -> InterpolatedNode {
     InterpolatedNode {
@@ -261,6 +311,56 @@ mod tests {
         let result = interpolate_frames(&from, &to, 0.5);
         let interp = result.get("a").unwrap();
         assert!((interp.opacity - 0.5).abs() < 0.01);
+    }
+
+    /// The tick's half of Smart animate: layers matched by name and
+    /// hierarchy morph, new ones dissolve in, and a matched fixed layer is
+    /// left alone — Figma's cases (help 360039818874).
+    #[test]
+    fn matching_layers_interpolate_by_name_not_id() {
+        fn layer(id: &str, name: &str, x: f64, y: f64, w: f64, h: f64) -> Node {
+            let mut n = make_rect(id, x, y, w, h, Color::BLACK);
+            n.name = name.into();
+            n
+        }
+        let mut pinned = layer("bar-b", "Bar", 0.0, 150.0, 40.0, 40.0);
+        pinned.constraints.fixed = true;
+        let from = Node::frame("Home", 300.0, 200.0)
+            .child(
+                layer("card-a", "Card", 0.0, 0.0, 40.0, 40.0)
+                    .child(layer("title-a", "Title", 0.0, 0.0, 40.0, 10.0)),
+            )
+            .child(layer("bar-a", "Bar", 0.0, 150.0, 40.0, 40.0))
+            .child(layer("gone-a", "Gone", 60.0, 0.0, 10.0, 10.0));
+        let to = Node::frame("Detail", 300.0, 200.0)
+            .child(
+                layer("card-b", "Card", 40.0, 20.0, 80.0, 80.0)
+                    .child(layer("title-b", "Title", 8.0, 8.0, 64.0, 10.0)),
+            )
+            .child(pinned)
+            .child(layer("new-b", "New", 200.0, 0.0, 20.0, 20.0));
+
+        let mid = interpolate_matching_layers(&from, &to, 0.5);
+        // matched by name and place: halfway between the two layouts
+        let card = mid.get("card-b").expect("the matched card morphs");
+        assert!((card.x - 20.0).abs() < 0.01, "moved halfway");
+        assert!((card.y - 10.0).abs() < 0.01);
+        assert!((card.w - 60.0).abs() < 0.01, "grew halfway");
+        assert!((card.h - 60.0).abs() < 0.01);
+        // its child matches through the hierarchy, not through the screens
+        let title = mid.get("title-b").expect("the child matches under Card");
+        assert!((title.x - 4.0).abs() < 0.01);
+        assert!((title.w - 52.0).abs() < 0.01);
+        // a layer the outgoing screen never had arrives transparent, in place
+        let fresh = mid.get("new-b").expect("a new layer dissolves in");
+        assert!((fresh.opacity - 0.5).abs() < 0.01);
+        assert!((fresh.x - 200.0).abs() < 0.01, "it arrives where it lives");
+        // matched but fixed: no transition, so nothing to interpolate
+        assert_eq!(mid.get("bar-b"), None, "a fixed match holds still");
+        // the map is keyed by destination id, and outgoing-only layers are
+        // simply not part of the new screen's picture
+        assert_eq!(mid.get("card-a"), None);
+        assert_eq!(mid.get("gone-a"), None);
     }
 
     #[test]

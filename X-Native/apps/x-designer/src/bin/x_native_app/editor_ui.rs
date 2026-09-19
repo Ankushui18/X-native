@@ -9317,7 +9317,12 @@ fn paint_prototype(
             // player consumes: trigger, action/destination, animation/speed,
             // easing and reset. URL actions get one extra line.
             let has_url = matches!(&ix.action, x_native::Action::OpenLink { .. });
-            let row_h = if has_url { 128.0 } else { 96.0 };
+            // Row 5 is Figma's "Animate matching layers" tick. It sits under
+            // the URL field rather than beside the animation controls: at the
+            // panel's minimum width the motion row is already full (the pill,
+            // the four arrows and the duration), and Figma gives the tick a
+            // full-width line of its own too.
+            let row_h = if has_url { 146.0 } else { 120.0 };
             let row = Rect::new(x0, y, xr, y + row_h);
             fill_rrect(s, row, R_MD, C_FIELD);
             // Row 1: the trigger, then whatever it carries. Figma's trigger
@@ -9571,6 +9576,31 @@ fn paint_prototype(
                     .text(s, ub.x0 + 4.0, y + 100.0, &truncated, T10, C_TEXT, Wt::Mono);
                 hit.push((ub, Action::ProtoEditUrl(i)));
             }
+
+            // Figma's tick, in the interaction's own animation section: on,
+            // the two screens' layers are matched by name and hierarchy and
+            // the matches animate their differences; off (the box's own
+            // default), the interaction's animation is what happens.
+            let tick_y = y + if has_url { 122.0 } else { 96.0 };
+            let cb = Rect::new(x0 + 5.0, tick_y + 1.0, x0 + 21.0, tick_y + 17.0);
+            fill_rrect(s, cb, R_SM, C_FIELD);
+            stroke_rrect(s, cb, R_SM, C_LINE_2, 1.0);
+            if ix.animate_matching_layers {
+                fill_rrect(s, cb.inflate(-3.5, -3.5), R_XS, C_TEXT);
+            }
+            app.fonts.text(
+                s,
+                cb.x1 + 8.0,
+                tick_y + 1.0,
+                crate::state::PROTO_MATCHING_LABEL,
+                T10,
+                C_TEXT,
+                Wt::Reg,
+            );
+            hit.push((
+                Rect::new(x0 + 5.0, tick_y, (x0 + 205.0).min(xr - 5.0), tick_y + 18.0),
+                Action::ProtoToggleMatching(i),
+            ));
             y += row_h;
         }
 
@@ -9695,6 +9725,38 @@ pub(crate) fn flow_locate(app: &App, id: &str) -> Option<(usize, Rect, String)> 
         }
     }
     None
+}
+
+/// The preview's own lookup: the node with `id` in whichever page carries it
+/// (`None` when no page does). [`flow_locate`] answers the same question for
+/// the viewport geometry; this one hands back the layer itself, which is what
+/// the "Animate matching layers" tick reads the two screens from.
+pub(crate) fn flow_node<'a>(app: &'a App, id: &str) -> Option<&'a x_native::Node> {
+    let d = app.doc_opt()?;
+    for ed in &d.editors {
+        if let Some(n) = find_node_in(&ed.root, id) {
+            return Some(n);
+        }
+    }
+    None
+}
+
+/// Apply a running **Animate matching layers** tick to one screen: a layer
+/// that matched nothing is on its way in, so it carries the tick's alpha.
+/// The rest of the plan is the renderer's — a matched pair's in-between state
+/// is `x_core::smart_animate::interpolate_matching_layers`, and a matched
+/// fixed layer has no transition to paint at all.
+///
+/// The caller passes a clone (see `Host::canvas_scene`): the tick is preview
+/// state, and a file must never see it.
+pub(crate) fn paint_tick_tree(n: &mut x_native::Node, tick: &x_native::editor::SmartTick) {
+    let alpha = tick.layer_alpha(&n.id);
+    if alpha < 1.0 {
+        n.opacity *= alpha;
+    }
+    for c in &mut n.children {
+        paint_tick_tree(c, tick);
+    }
 }
 
 fn paint_flow_overlay(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {

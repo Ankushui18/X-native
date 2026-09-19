@@ -5,6 +5,54 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-19 (Prototype: Animate matching layers)
+
+Figma's Prototype tab has a tick in the interaction's animation section and one
+sentence of behaviour behind it. The tick is now ours, the sentence is the
+engine's, and the preview runs the part of it a single-screen viewer can show
+honestly.
+
+- **The rule, in one place.** `x_core::prototype::matching_layers` decides each
+  destination layer by Figma's own test — **name** *and* **hierarchy** (the
+  chain of ancestor names), never by id: a match smart-animates its differences
+  (`LayerTransition::SmartAnimate { from }`), a layer that matched nothing
+  dissolves in (`Dissolve`), and a matched **fixed or sticky** layer gets no
+  transition at all (`Hold`) — all four cases of help 360039818874, including
+  the one that reads backwards at first: a *fixed* layer with nothing to match
+  dissolves rather than holding, because it has no position to hold.
+- **The transition itself.** `x_core::smart_animate::interpolate_matching_layers`
+  is the in-between state at any progress: matched pairs morph (position, size,
+  opacity, rotation, corner radius, fill) through the existing SmartAnimate
+  interpolators, arriving layers fade from transparent in their own place, and
+  a held layer is simply absent from the map. The module's old `interpolate_frames`
+  matched by id, which two different screens never share; this is the matching
+  Figma documents, and the id-matched engine is left untouched for the callers
+  that key on identity.
+- **The tick is part of the interaction.** `Interaction::animate_matching_layers`
+  is off by default, panel-writable, undoable, and on the file as
+  `"smartmatch":true` — written only when it is on, so files that predate the
+  tick keep meaning what they meant and load as off rather than as an error.
+- **The clock.** `x_native::editor::arm_smart_tick` freezes the plan at the
+  navigation (overlays excepted: Figma gives them no smart animate) and
+  `SmartTick` runs it for the interaction's own `transition_ms`. The app
+  advances one 16 ms frame at a time in the idle loop and repaints while it
+  runs; a navigation that does not ask for a tick clears whatever was running.
+- **What the viewer paints.** `editor_ui::paint_tick_tree` multiplies the
+  arriving layers' alpha into a *clone* of the page — the tick is preview state
+  and never touches the file — so new layers dissolve in over the interaction's
+  own duration. The morph of a matched pair is computed but not painted yet:
+  the viewer shows one screen at a time, so there is no outgoing screen to
+  animate against. That single delta is what keeps row 14.12 at `PARTIAL`.
+- **Panel.** A full-width checkbox row — `Animate matching layers`, Figma's
+  words — under the URL field, so it never crowds the pill, the four direction
+  arrows and the duration on the motion row; the status line reports the new
+  state (`Animate matching layers: on`).
+- **Tests.** `matching_layers_follows_names_hierarchy_and_fixed`,
+  `matching_layers_interpolate_by_name_not_id`,
+  `the_matching_layers_tick_survives_the_round_trip_and_stays_off_when_absent`,
+  `the_interaction_row_carries_figmas_matching_layers_tick`,
+  `the_matching_layers_tick_arms_on_a_navigation_and_dissolves_new_layers`.
+
 ## [Unreleased] — 2026-09-19 (Prototype: the trigger control, in Figma's words)
 
 The panel's first control was a cycle through six triggers whose words lived in

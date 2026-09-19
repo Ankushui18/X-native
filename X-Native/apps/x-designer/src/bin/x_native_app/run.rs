@@ -112,6 +112,9 @@ struct Host {
     close_after_job: bool,
     pending_open: Option<crate::jobs::OpenRequest>,
     next_loading_frame: std::time::Instant,
+    /// next frame of a running "Animate matching layers" transition, ms pace
+    /// — the same 16 ms step the loading screen animates on.
+    next_proto_frame: std::time::Instant,
 }
 
 pub fn run() {
@@ -131,6 +134,7 @@ pub fn run() {
         close_after_job: false,
         pending_open: None,
         next_loading_frame: std::time::Instant::now(),
+        next_proto_frame: std::time::Instant::now(),
     };
     let _ = event_loop.run_app(&mut host);
 }
@@ -492,6 +496,22 @@ impl ApplicationHandler for Host {
             if let Some(next) = next {
                 wake = wake.min(next);
             }
+        }
+        // the "Animate matching layers" tick runs on the same clock: one
+        // frame at a time while it lasts, and a wake-up for the next one
+        if self.app.flow.as_ref().is_some_and(|f| {
+            matches!(&f.tick, Some(tick) if tick.running())
+        }) {
+            if now >= self.next_proto_frame {
+                // the frame that finishes still repaints: its layers are at
+                // full strength, which is a different picture
+                self.flow_advance_tick(16);
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+                self.next_proto_frame = now + std::time::Duration::from_millis(16);
+            }
+            wake = wake.min(self.next_proto_frame);
         }
         event_loop.set_control_flow(ControlFlow::WaitUntil(wake));
     }
@@ -7933,6 +7953,26 @@ impl Host {
         });
     }
 
+    /// Figma's **Animate matching layers** tick: on, the two screens' layers
+    /// are matched by name and hierarchy and the matches animate their
+    /// differences; off — the box's own default — the interaction's animation
+    /// is what happens between them (help 360039818874). It only means
+    /// anything for a navigation: Figma gives overlay actions no smart animate
+    /// at all, and [`x_native::editor::arm_smart_tick`] respects that.
+    fn proto_toggle_matching(&mut self, i: usize) {
+        let mut on = false;
+        self.proto_edit(|l| {
+            if let Some(ix) = l.get_mut(i) {
+                ix.animate_matching_layers = !ix.animate_matching_layers;
+                on = ix.animate_matching_layers;
+            }
+        });
+        // the status reports what the box now says, so the panel and the line
+        // agree even with the row scrolled out of sight
+        let word = if on { "on" } else { "off" };
+        self.app.status = format!("Animate matching layers: {word}");
+    }
+
     fn flow_enter(&mut self) {
         let sel = self.app.doc().editor_ref().selection.clone();
         let targets = crate::editor_ui::proto_targets(&self.app);
@@ -8395,6 +8435,7 @@ impl Host {
         let Some(mut f) = self.app.flow.take() else {
             return x_native::editor::FireEffect::default();
         };
+        let origin = f.current.clone();
         let known = |id: &str| crate::editor_ui::flow_locate(&self.app, id).is_some();
         let effect = x_native::editor::fire_action(
             &mut f.current,
@@ -8409,6 +8450,16 @@ impl Host {
             f.hovered = None;
             f.dragging = false;
             f.drag_fired = false;
+            // Figma's "Animate matching layers" tick: the plan is frozen here,
+            // while both screens are still at hand, and the viewer paints from
+            // it until the interaction's own duration runs out. A navigation
+            // that does not ask for one clears whatever was running.
+            let from = crate::editor_ui::flow_node(&self.app, &origin);
+            let to = crate::editor_ui::flow_node(&self.app, &f.current);
+            f.tick = match (from, to) {
+                (Some(from), Some(to)) => x_native::editor::arm_smart_tick(ix, from, to),
+                _ => None,
+            };
         }
         self.app.flow = Some(f);
         // "Reset scroll position": the interaction asked for the next screen to
@@ -8615,6 +8666,21 @@ impl Host {
     /// Fire due `AfterDelay` triggers in arm order. A navigation cancels
     /// the remaining due timers (the new screen re-arms its own); delays
     /// whose overlay closed are disarmed. Returns how many fired.
+    /// Figma's **Animate matching layers** tick: advance the running
+    /// transition by one frame and report whether it is still running. The
+    /// viewer paints from the plan while it is (see
+    /// [`crate::editor_ui::paint_tick_tree`]), which is what the frame clock
+    /// above wakes it for.
+    fn flow_advance_tick(&mut self, dt_ms: u32) -> bool {
+        let Some(f) = self.app.flow.as_mut() else {
+            return false;
+        };
+        match f.tick.as_mut() {
+            Some(tick) => tick.advance(dt_ms),
+            None => false,
+        }
+    }
+
     fn flow_tick(&mut self, now: std::time::Instant) -> usize {
         if self.app.flow.is_none() {
             return 0;
@@ -8644,6 +8710,7 @@ impl Host {
                 animation: x_native::Animation::Instant,
                 easing: x_native::Easing::Linear,
                 reset_on_navigate: false,
+                animate_matching_layers: false,
             };
             let effect = self.flow_fire(&ix);
             if effect.fired() {
@@ -10400,6 +10467,7 @@ impl Host {
                 self.proto_set_trigger(i, row);
             }
             Action::ProtoDest(i, dir) => self.proto_dest_cycle(i, dir),
+            Action::ProtoToggleMatching(i) => self.proto_toggle_matching(i),
             Action::ProtoSpeed(i) => self.proto_speed_cycle(i),
             Action::ProtoAnimation(i) => self.proto_animation_cycle(i),
             Action::ProtoDirection(i, dir) => self.proto_direction_set(i, dir),
@@ -16174,7 +16242,24 @@ impl App {
         // frame names in presentation mode, and the canvas around the presented
         // frame is not on screen at all)
         d.frame_cache.set_presenting(self.flow.is_some());
-        let root = &d.editors[d.page].root;
+        // Figma's "Animate matching layers" tick, as far as one screen can
+        // show it: a layer that matched nothing is on its way in, so this
+        // frame it carries the tick's alpha. The clone is what keeps the file
+        // untouched — the tick is preview state, never document state.
+        let tick = self
+            .flow
+            .as_ref()
+            .and_then(|f| f.tick.as_ref())
+            .filter(|t| t.running());
+        let mut ticking;
+        let root = match tick {
+            Some(tick) => {
+                ticking = d.editors[d.page].root.clone();
+                crate::editor_ui::paint_tick_tree(&mut ticking, tick);
+                &ticking
+            }
+            None => &d.editors[d.page].root,
+        };
         let sink = x_native::VelloSink {
             assets: Some(&d.assets),
             fonts: Some(&self.fonts.fonts),

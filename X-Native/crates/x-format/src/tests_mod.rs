@@ -508,6 +508,7 @@ mod tests {
                     animation: Animation::Dissolve,
                     easing: Easing::Linear,
                     reset_on_navigate: false,
+                    animate_matching_layers: false,
                 })
                 .starting_point(true),
         );
@@ -554,6 +555,7 @@ mod tests {
                 animation: Animation::Instant,
                 easing: Easing::Linear,
                 reset_on_navigate: false,
+                animate_matching_layers: false,
             })
             .collect();
         doc.pages
@@ -593,6 +595,42 @@ mod tests {
         assert_eq!(save_x(&loaded), text);
     }
 
+    /// Figma's "Animate matching layers" tick (help 360039818874) is part of
+    /// the interaction, and off is what a file that predates the tick means:
+    /// the word is written only when the box is on, so nothing older changes
+    /// meaning on the way in.
+    #[test]
+    fn the_matching_layers_tick_survives_the_round_trip_and_stays_off_when_absent() {
+        let mut doc = Document::new();
+        let mut hot = Node::rect("hot", 0.0, 0.0, 120.0, 40.0, Color::from_rgb8(0, 0, 255));
+        let mut on = Interaction::click("other");
+        on.animate_matching_layers = true;
+        hot.interactions = vec![on];
+        let page = Node::frame("page-1", 800.0, 600.0).child(hot);
+        doc.pages.push(page);
+        let text = save_x(&doc);
+        assert!(
+            text.contains("\"smartmatch\":true"),
+            "the tick is on the wire only while it is on"
+        );
+        let loaded = load_x(&text).expect("load");
+        let hot = find(&loaded.pages[0], "hot").expect("hot survives");
+        assert!(hot.interactions[0].animate_matching_layers);
+
+        // a file written with the box off carries no word at all, and one
+        // that never had it loads as off rather than as an error
+        let mut plain = Document::new();
+        let mut cold = Node::rect("cold", 0.0, 0.0, 120.0, 40.0, Color::from_rgb8(0, 0, 255));
+        cold.interactions = vec![Interaction::click("other")];
+        let page = Node::frame("page-1", 800.0, 600.0).child(cold);
+        plain.pages.push(page);
+        let off = save_x(&plain);
+        assert!(!off.contains("smartmatch"));
+        let reloaded = load_x(&off).expect("load");
+        let cold = find(&reloaded.pages[0], "cold").expect("cold survives");
+        assert!(!cold.interactions[0].animate_matching_layers);
+    }
+
     #[test]
     fn openlink_and_mouseup_roundtrip_through_x_format() {
         let mut doc = Document::new();
@@ -608,6 +646,7 @@ mod tests {
                     animation: Animation::Instant,
                     easing: Easing::Linear,
                     reset_on_navigate: false,
+                    animate_matching_layers: false,
                 },
             ),
         );
@@ -1767,6 +1806,7 @@ mod tests {
             animation: Animation::MoveIn(Direction::Bottom),
             easing: Easing::Linear,
             reset_on_navigate: false,
+            animate_matching_layers: false,
         };
         if let Some(n) = doc.pages[0].children.first_mut() {
             n.interactions.push(logic);

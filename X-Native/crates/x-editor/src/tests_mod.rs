@@ -217,6 +217,7 @@ mod tests {
                 animation: Animation::Instant,
                 easing: Easing::Linear,
                 reset_on_navigate: false,
+                animate_matching_layers: false,
             },
         ];
         assert!(e.set_interactions("a", interactions.clone()));
@@ -2932,6 +2933,7 @@ mod component_and_proto_engine {
             animation: Animation::Instant,
             easing: Easing::Linear,
             reset_on_navigate: false,
+            animate_matching_layers: false,
         }];
         let mut p = Player::new(&root, "root");
         // click inside the instance rect (0,100)-(100,140)
@@ -2962,6 +2964,7 @@ mod component_and_proto_engine {
             animation: Animation::Instant,
             easing: Easing::Linear,
             reset_on_navigate: false,
+            animate_matching_layers: false,
         }];
         root.children[0].children.push(go); // inside m1 @ (0,0)
         root.children[1].children.push(ret); // inside m2 @ (200,0)

@@ -446,8 +446,15 @@ fn interaction_json(i: &Interaction) -> String {
     } else {
         String::new()
     };
+    // Figma's "Animate matching layers" tick. Absent means off, so files that
+    // predate the tick carry on meaning what they meant.
+    let smart = if i.animate_matching_layers {
+        ",\"smartmatch\":true".to_string()
+    } else {
+        String::new()
+    };
     format!(
-        "{{\"trigger\":\"{}\",\"action\":\"{}\",\"ms\":{},\"anim\":\"{}\"{}{}{}{}{}{}{}}}",
+        "{{\"trigger\":\"{}\",\"action\":\"{}\",\"ms\":{},\"anim\":\"{}\"{}{}{}{}{}{}{}{}}}",
         i.trigger.to_str(),
         i.action.kind(),
         i.transition_ms,
@@ -458,7 +465,8 @@ fn interaction_json(i: &Interaction) -> String {
         py,
         delay,
         extra,
-        actions_field
+        actions_field,
+        smart
     )
 }
 /// Grid layout JSON: {"cols":[..],"rows":[..],"cgap":N,"rgap":N,"pad":[l,r,t,b]}.

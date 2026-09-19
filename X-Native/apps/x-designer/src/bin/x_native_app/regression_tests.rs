@@ -18,6 +18,7 @@ fn host() -> Host {
         close_after_job: false,
         pending_open: None,
         next_loading_frame: std::time::Instant::now(),
+        next_proto_frame: std::time::Instant::now(),
     }
 }
 
@@ -1563,6 +1564,143 @@ fn the_prototype_row_names_the_action_and_its_arrows_set_the_side() {
     );
 }
 
+/// Figma's **Animate matching layers** tick (help 360039818874) is a control
+/// in the interaction's own animation section. Ours is a full-width line under
+/// the URL field — never over the pill, arrows and duration beside it — and a
+/// press writes the flag through the same path as every other row.
+#[test]
+fn the_interaction_row_carries_figmas_matching_layers_tick() {
+    let mut h = host();
+    h.app.win_w = 1200.0;
+    h.app.win_h = 1400.0;
+    proto_doc(&mut h);
+    h.app.doc().editor().selection = vec!["btn".into()];
+    h.app.doc().right_tab = crate::state::RightTab::Prototype;
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let row = h
+        .app
+        .hit
+        .iter()
+        .find(|(_, a)| matches!(a, Action::ProtoToggleMatching(0)))
+        .map(|(r, _)| *r)
+        .expect("the Animate matching layers row");
+    let speed = h
+        .app
+        .hit
+        .iter()
+        .find(|(_, a)| matches!(a, Action::ProtoSpeed(0)))
+        .map(|(r, _)| *r)
+        .expect("the duration field");
+    let remove = h
+        .app
+        .hit
+        .iter()
+        .find(|(_, a)| matches!(a, Action::ProtoRemove(0)))
+        .map(|(r, _)| *r)
+        .expect("the remove button");
+    assert!(row.y0 >= speed.y1, "the tick gets a line of its own");
+    assert!(row.x1 <= remove.x1, "and stays inside the panel");
+    // Figma's words, from the one label the panel owns
+    assert_eq!(crate::state::PROTO_MATCHING_LABEL, "Animate matching layers");
+
+    // the box writes the flag, and the status says what it now reads
+    h.dispatch(Action::ProtoToggleMatching(0));
+    let flag = {
+        let d = h.app.doc();
+        let n = x_native::editor::find(&d.editor_ref().root, "btn").unwrap();
+        n.interactions[0].animate_matching_layers
+    };
+    assert!(flag, "a press turns the tick on");
+    assert_eq!(h.app.status, "Animate matching layers: on");
+    h.dispatch(Action::ProtoToggleMatching(0));
+    let flag = {
+        let d = h.app.doc();
+        let n = x_native::editor::find(&d.editor_ref().root, "btn").unwrap();
+        n.interactions[0].animate_matching_layers
+    };
+    assert!(!flag, "and again turns it off");
+    assert_eq!(h.app.status, "Animate matching layers: off");
+}
+
+/// The tick on the clock: a navigation that asks for one freezes the pairing
+/// of the two screens, the viewer dissolves the layers that matched nothing at
+/// the tick's alpha while the matched ones already sit at their destination,
+/// and a navigation without the tick clears whatever was running (help
+/// 360039818874).
+#[test]
+fn the_matching_layers_tick_arms_on_a_navigation_and_dissolves_new_layers() {
+    let mut h = host();
+    {
+        let d = h.app.doc();
+        let root_id = d.editor_ref().root.id.clone();
+        let mut f1 = Node::frame("f1", 300.0, 200.0);
+        f1.name = "Home".into();
+        let mut f2 = Node::frame("f2", 300.0, 200.0);
+        f2.name = "Detail".into();
+        f2.transform.x = 400.0;
+        d.editor().insert_node(&root_id, f1);
+        d.editor().insert_node(&root_id, f2);
+        let mut card = Node::rect("card1", 10.0, 10.0, 80.0, 40.0, Color::BLACK);
+        card.name = "Card".into();
+        d.editor().insert_node("f1", card);
+        let mut card2 = Node::rect("card2", 40.0, 30.0, 120.0, 60.0, Color::BLACK);
+        card2.name = "Card".into();
+        d.editor().insert_node("f2", card2);
+        let mut fresh = Node::rect("fresh", 10.0, 120.0, 40.0, 20.0, Color::BLACK);
+        fresh.name = "Fresh".into();
+        d.editor().insert_node("f2", fresh);
+    }
+    h.app.doc().editor().selection = vec!["f1".into()];
+    h.dispatch(Action::FlowEnter);
+    assert!(h.app.flow.is_some(), "the preview opened");
+
+    let mut ix = x_native::Interaction::click("f2");
+    ix.animate_matching_layers = true;
+    ix.transition_ms = 300;
+    let effect = h.flow_fire(&ix);
+    assert_eq!(effect.navigated.as_deref(), Some("f2"));
+    let flow = h.app.flow.as_ref().expect("the preview");
+    let tick = flow.tick.clone().expect("a tick");
+    assert_eq!(tick.plan.len(), 2, "both layers of the new screen");
+    assert_eq!(tick.plan[0].to, "card2");
+    assert_eq!(tick.plan[1].to, "fresh");
+    assert_eq!(tick.matched(), 1, "the card matches by name");
+    assert_eq!(tick.arriving(), 1, "the fresh layer is new");
+    assert_eq!(tick.pair("card2"), Some("card1"));
+    assert!(tick.running(), "300 ms of transition to run");
+    assert_eq!(tick.dissolve_alpha(), 0.0, "it arrives from nothing");
+
+    // the viewer paints the arriving layer at the tick's alpha, and the match
+    // already at its destination state
+    h.flow_advance_tick(60);
+    let flow = h.app.flow.as_ref().expect("the preview");
+    let tick = flow.tick.clone().expect("a tick");
+    assert!(tick.dissolve_alpha() > 0.0 && tick.dissolve_alpha() < 1.0);
+    let mut tree = h.app.doc().editor_ref().root.clone();
+    crate::editor_ui::paint_tick_tree(&mut tree, &tick);
+    let fresh = find_node_clone(&tree, "fresh").unwrap();
+    assert!(fresh.opacity < 1.0, "on its way in");
+    assert!((fresh.opacity - tick.dissolve_alpha()).abs() < 0.001);
+    let card = find_node_clone(&tree, "card2").unwrap();
+    assert!(
+        card.opacity >= 1.0,
+        "a matched layer is not the one dissolving"
+    );
+
+    // the clock ends with the interaction's own duration
+    h.flow_advance_tick(400);
+    let flow = h.app.flow.as_ref().expect("the preview");
+    let tick = flow.tick.clone().expect("a tick");
+    assert!(!tick.running(), "the transition is over");
+    assert_eq!(tick.dissolve_alpha(), 1.0, "and the layer has arrived");
+
+    // a navigation that does not ask for the tick clears it
+    let plain = x_native::Interaction::click("f1");
+    h.flow_fire(&plain);
+    assert!(h.app.flow.as_ref().unwrap().tick.is_none());
+}
+
 /// Figma's Prototype-tab **Scroll behavior** block (help 360039818734): a
 /// frame has an **Overflow** menu — "No scrolling / Horizontal / Vertical /
 /// Both directions" — and the preview then really scrolls it, clamped to the
@@ -1724,6 +1862,7 @@ fn the_scroll_behaviour_rows_write_the_frames_overflow_and_a_layers_position() {
         actions: vec![],
         easing: x_native::Easing::Linear,
         reset_on_navigate: reset,
+        animate_matching_layers: false,
     };
     h.flow_fire(&nav(false));
     assert_eq!(
@@ -3241,6 +3380,7 @@ fn player_doc(h: &mut Host) {
         actions: vec![],
         easing: Easing::Linear,
         reset_on_navigate: false,
+        animate_matching_layers: false,
     };
     let delay = |ms: u32, action: Action| Interaction {
         trigger: Trigger::AfterDelay { ms },
@@ -3250,6 +3390,7 @@ fn player_doc(h: &mut Host) {
         actions: vec![],
         easing: Easing::Linear,
         reset_on_navigate: false,
+        animate_matching_layers: false,
     };
     f1.interactions = vec![
         key,
@@ -3301,6 +3442,7 @@ fn player_doc(h: &mut Host) {
             actions: vec![],
             easing: Easing::Linear,
             reset_on_navigate: false,
+            animate_matching_layers: false,
         },
         Interaction {
             trigger: Trigger::MouseLeave,
@@ -3310,6 +3452,7 @@ fn player_doc(h: &mut Host) {
             actions: vec![],
             easing: Easing::Linear,
             reset_on_navigate: false,
+            animate_matching_layers: false,
         },
     ];
     d.editor().insert_node("f1", hov);
@@ -3324,6 +3467,7 @@ fn player_doc(h: &mut Host) {
         actions: vec![],
         easing: Easing::Linear,
         reset_on_navigate: false,
+        animate_matching_layers: false,
     }];
     d.editor().insert_node("f1", drg);
     let mut set = rect("set", 20.0, 140.0);
@@ -3338,6 +3482,7 @@ fn player_doc(h: &mut Host) {
         actions: vec![],
         easing: Easing::Linear,
         reset_on_navigate: false,
+        animate_matching_layers: false,
     }];
     d.editor().insert_node("f1", set);
     // while-hovering navigate (110..190, 20..50): returns on leave
@@ -3352,6 +3497,7 @@ fn player_doc(h: &mut Host) {
         actions: vec![],
         easing: Easing::Linear,
         reset_on_navigate: false,
+        animate_matching_layers: false,
     }];
     d.editor().insert_node("f1", wh);
     // while-pressing overlay (200..280, 20..50) + mouse-up set-var
@@ -3368,6 +3514,7 @@ fn player_doc(h: &mut Host) {
             actions: vec![],
             easing: Easing::Linear,
             reset_on_navigate: false,
+            animate_matching_layers: false,
         },
         Interaction {
             trigger: Trigger::MouseUp,
@@ -3380,6 +3527,7 @@ fn player_doc(h: &mut Host) {
             actions: vec![],
             easing: Easing::Linear,
             reset_on_navigate: false,
+            animate_matching_layers: false,
         },
     ];
     d.editor().insert_node("f1", pu);
@@ -3396,6 +3544,7 @@ fn player_doc(h: &mut Host) {
         actions: vec![],
         easing: Easing::Linear,
         reset_on_navigate: false,
+        animate_matching_layers: false,
     }];
     d.editor().insert_node("f1", md);
     let mut gate = rect("gate", 20.0, 60.0); // f2-local → world (420..500, 60..90)
@@ -3420,6 +3569,7 @@ fn player_doc(h: &mut Host) {
         actions: vec![],
         easing: Easing::Linear,
         reset_on_navigate: false,
+        animate_matching_layers: false,
     }];
     d.editor().insert_node("f2", gate);
     let mut shut = Node::rect("shut", 10.0, 10.0, 60.0, 30.0, Color::from_rgb8(9, 9, 9));
@@ -3431,6 +3581,7 @@ fn player_doc(h: &mut Host) {
         actions: vec![],
         easing: Easing::Linear,
         reset_on_navigate: false,
+        animate_matching_layers: false,
     }];
     d.editor().insert_node("dlg", shut);
     d.doc.variables.numbers.insert("n".into(), 1.0);
@@ -3640,6 +3791,7 @@ fn player_scrollto_pans_without_navigating() {
         actions: vec![],
         easing: Easing::Linear,
         reset_on_navigate: false,
+        animate_matching_layers: false,
     };
     h.flow_fire(&ix);
     assert_eq!(h.app.flow.as_ref().unwrap().current, "f1");
@@ -3668,6 +3820,7 @@ fn player_swap_without_overlay_navigates_without_history() {
         actions: vec![],
         easing: Easing::Linear,
         reset_on_navigate: false,
+        animate_matching_layers: false,
     };
     h.flow_fire(&ix);
     assert_eq!(h.app.flow.as_ref().unwrap().current, "f2");
@@ -3694,6 +3847,7 @@ fn player_openlink_reports_url_without_leaving() {
         actions: vec![],
         easing: Easing::Linear,
         reset_on_navigate: false,
+        animate_matching_layers: false,
     };
     // headless: no window, so no browser spawns — the URL just reports
     let effect = h.flow_fire(&ix);
