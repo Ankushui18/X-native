@@ -1854,18 +1854,29 @@ mod tests {
             matches!(&inst.kind, NodeKind::Instance { component } if component == "Widget/Primary")
         );
 
-        // undo unwinds the renames one component at a time (reverse order)
-        assert!(e.undo());
-        assert!(
-            matches!(&find(&e.root, "Danger-1").unwrap().kind, NodeKind::Instance { component } if component == "Button/Danger")
-        );
-        assert!(
-            matches!(&find(&e.root, "Primary-1").unwrap().kind, NodeKind::Instance { component } if component == "Widget/Primary")
-        );
+        // the combine is ONE entry: undo takes back both renames and the frame
         assert!(e.undo());
         assert!(
             matches!(&find(&e.root, "Primary-1").unwrap().kind, NodeKind::Instance { component } if component == "Button/Primary")
         );
+        assert!(
+            matches!(&find(&e.root, "Danger-1").unwrap().kind, NodeKind::Instance { component } if component == "Button/Danger")
+        );
+        assert_eq!(
+            variants_of(&e.root, "Widget").len(),
+            0,
+            "the set frame went back with the renames"
+        );
+
+        // …and the next undo is the FIRST combine, never a half-renamed tree
+        assert!(e.undo());
+        assert!(
+            matches!(&find(&e.root, "Primary-1").unwrap().kind, NodeKind::Instance { component } if component == "Primary")
+        );
+        assert!(
+            matches!(&find(&e.root, "Danger-1").unwrap().kind, NodeKind::Instance { component } if component == "Danger")
+        );
+        assert_eq!(variants_of(&e.root, "Button").len(), 0);
     }
 
     #[test]
@@ -2597,6 +2608,26 @@ mod tests {
         assert!(x_core::is_variant_set(set));
         assert_eq!(e.root.children.len(), 1, "no second frame was built");
         assert_eq!(x_core::variants_of(&e.root, "Button").len(), 2);
+    }
+
+    /// The page is never the set: loose masters on the canvas get a frame of
+    /// their own even when the page happens to hold nothing else.
+    #[test]
+    fn combining_loose_masters_never_turns_the_page_into_the_set() {
+        let mut e = Editor::new(
+            Node::frame("r", 600.0, 400.0)
+                .child(Node::component("ca", "Primary", 120.0, 44.0))
+                .child(Node::component("cb", "Ghost", 120.0, 44.0)),
+        );
+        e.selection = vec!["ca".into(), "cb".into()];
+        assert_eq!(e.combine_as_variants("Button"), 2);
+
+        assert_eq!(e.root.name, "r", "the page keeps its name");
+        assert_eq!(e.root.children.len(), 1, "one set beside them");
+        let set = &e.root.children[0];
+        assert!(x_core::is_variant_set(set));
+        assert_eq!(set.name, "Button");
+        assert_eq!(set.children.len(), 2);
     }
 
     /// The predicate the whole model rests on: all components, one set prefix.

@@ -2772,7 +2772,13 @@ impl Editor {
         let mut after = self.root.clone();
 
         // --- the container: an existing frame, or a new one around them
+        // A container that already holds nothing but the selection becomes the
+        // set. The page itself is not a container in that sense — Figma never
+        // turns the canvas into a set — so loose masters get a frame of their
+        // own even when the page holds nothing else.
+        let page_id = self.root.id.clone();
         let holds_only_the_selection = common_parent_id(&after, &ids)
+            .filter(|pid| *pid != page_id)
             .and_then(|pid| find(&after, &pid).map(|p| (pid, p)))
             .filter(|(_, p)| {
                 matches!(p.kind, NodeKind::Frame { .. } | NodeKind::Section)

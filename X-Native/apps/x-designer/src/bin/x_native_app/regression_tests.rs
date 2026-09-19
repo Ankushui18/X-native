@@ -3959,9 +3959,18 @@ fn variant_combine_groups_masters() {
     }
     h.dispatch(Action::VariantCombine);
     let d = h.app.doc();
-    let names: Vec<String> = d
+    // Figma (help 360056440594): "Figma will add all components to a single
+    // component set", and a set "can only contain components" — so the masters
+    // are not just renamed, they end up inside one set frame.
+    let set = d
         .editor_ref()
         .root
+        .children
+        .iter()
+        .find(|c| x_native::is_variant_set(c))
+        .expect("a component set frame");
+    assert_eq!(set.children.len(), 2, "both masters went in");
+    let names: Vec<String> = set
         .children
         .iter()
         .filter_map(|c| match &c.kind {
