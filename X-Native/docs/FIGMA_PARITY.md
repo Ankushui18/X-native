@@ -20,6 +20,12 @@ So the rule is now mechanical instead of remembered:
    pixels back (no GPU, runs in the ordinary gate). See
    `canvas_pixels_name_the_outermost_frames_and_never_the_page`.
 
+The **master list** — every tool, gesture, panel, key and format we have, each row
+matched to Figma with a status — is
+[docs/FIGMA_PARITY_MASTER_LIST.md](FIGMA_PARITY_MASTER_LIST.md). It is the work
+queue: an increment either closes a row there or it does not happen. The sections
+below are the rows already strong enough to name an owner and a test.
+
 ## 1. The owners
 
 | decision | owner |

@@ -5,6 +5,31 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-19 (The master list: everything, matched to Figma)
+
+The owner asked for one list: *"every tool, every feature, even drag too, function
+etc, and match them to Figma … to 100% match … and match our design to Figma's
+design as well … use Figma-type exact icons."*
+
+- **`docs/FIGMA_PARITY_MASTER_LIST.md`** is that list — **334 rows** across 20
+  surfaces (tools, canvas gestures/drag, keyboard, menus, layers/pages/sections,
+  frame properties, auto layout, fill/stroke/effects/colour, images, text, vector
+  editing, components/instances/styles, variables, prototype, inspect/codegen,
+  export/import, view & navigation, the app's own design language, comments, and
+  what we have beyond Figma). Each row names Figma's behaviour with a source, where
+  ours lives, and one status: **MATCH 221 · PARTIAL 55 · MISSING 39 · EXTRA 16 ·
+  OUT 3**. `MATCH` is claimed only where a test pins it; every divergence inside
+  `PARTIAL` and every `MISSING` row is spelled out.
+- **The list corrects three of our own assumptions while writing it.** The effects
+  section is a header and a `+` that adds one drop shadow — `LayerBlur`,
+  `BackgroundBlur` and `Noise` are in the model and unreachable from the UI; masks
+  are honoured by the renderer and pinned by `mask_semantics.rs` but nothing sets
+  `is_mask`; and `corner_radii`, `corner_smoothing` and `TextList` are model-only.
+  Those, plus the blend-mode picker, are now Wave 1b of the queue.
+- **`docs/FIGMA_PARITY.md`** points at the list and keeps its own §2 rows as the
+  subset strong enough to name an owner and a test, so the two can never drift into
+  two different pictures of the same product.
+
 ## [Unreleased] — 2026-09-19 (Prototype panel: the row's words, the direction arrows)
 
 The owner's reference screenshots of Figma's prototype editor name every field —
