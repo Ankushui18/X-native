@@ -299,6 +299,35 @@ mod tests {
         assert_eq!(hit_test(&d, Point::new(500.0, 500.0)), None);
     }
 
+    /// Figma's **canvas stacking** (help 31289464393751) changes the canvas
+    /// only: in a *First on top* auto-layout frame the first child paints last,
+    /// so that is the layer a click finds — the hit test walks the same
+    /// `paint_order` the viewer paints.
+    #[test]
+    fn the_hit_test_follows_canvas_stacking() {
+        let mut row = Node::frame("root", 400.0, 400.0)
+            .auto_layout(AutoLayout {
+                direction: LayoutDirection::Horizontal,
+                canvas_stacking: CanvasStacking::LastOnTop,
+                ..Default::default()
+            })
+            .child(Node::rect("under", 0.0, 0.0, 100.0, 100.0, Color::WHITE))
+            .child(Node::rect("over", 0.0, 0.0, 100.0, 100.0, Color::WHITE));
+        assert_eq!(
+            hit_test(&row, Point::new(50.0, 50.0)),
+            Some("over".into()),
+            "document order puts the last child on top"
+        );
+        if let NodeKind::Frame { layout: Some(l) } = &mut row.kind {
+            l.canvas_stacking = CanvasStacking::FirstOnTop;
+        }
+        assert_eq!(
+            hit_test(&row, Point::new(50.0, 50.0)),
+            Some("under".into()),
+            "First on top puts the first child on top, so the click finds it"
+        );
+    }
+
     #[test]
     fn hit_test_respects_ellipse_shape_and_lock() {
         let mut d = doc();

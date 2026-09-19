@@ -6288,3 +6288,184 @@ fn a_section_dragged_over_a_layer_takes_it_in() {
     );
     assert!(find_node_clone(root, &rect_id).is_some());
 }
+
+/// A frame with an auto layout, selected — the state the layout panel's new
+/// controls need.
+fn layout_host() -> Host {
+    let mut h = host();
+    h.app.doc().editor().selection = vec!["frame-1".into()];
+    h.dispatch(Action::AddAutoLayout);
+    assert!(
+        h.app.selected_layout().is_some(),
+        "the demo frame took the layout"
+    );
+    h
+}
+
+/// Figma's **Width**/**Height** dropdown (help 360040451373): the sizing rows
+/// and, in the same menu, "Add min width" / "Add max width" — min and max are
+/// "an additional setting that can be used at the same time as other resizing
+/// properties" — plus "Remove min and max" to take them away again.
+#[test]
+fn the_width_menu_carries_figmas_sizing_and_min_max_rows() {
+    let mut h = layout_host();
+    assert_eq!(
+        h.app.selected_layout().unwrap().sizing,
+        x_native::Sizing::Fixed,
+        "a demo frame is fixed to start with"
+    );
+
+    // the chip opens the menu rather than flipping the sizing in place
+    h.dispatch(Action::LayoutAxisMenu(true));
+    assert_eq!(h.app.dropdown_layout_axis, Some(true));
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let row = |a: Action| h.app.hit.iter().find(|(_, x)| *x == a).map(|(r, _)| *r);
+    let fixed = row(Action::SetAxisSizing(true, x_native::Sizing::Fixed));
+    let hug = row(Action::SetAxisSizing(true, x_native::Sizing::Hug));
+    let add_min = row(Action::AddAxisLimit(true, false));
+    let add_max = row(Action::AddAxisLimit(true, true));
+    let clear = row(Action::ClearAxisLimits(true));
+    assert!(fixed.is_some(), "Fixed width is a row");
+    assert!(hug.is_some(), "Hug contents is a row");
+    assert!(add_min.is_some(), "Add min width is a row");
+    assert!(add_max.is_some(), "Add max width is a row");
+    assert!(clear.is_some(), "Remove min and max is a row");
+    // a list, not a cycle: five rows, in Figma's order, none on top of another
+    let ys: Vec<f64> = [fixed, hug, add_min, add_max, clear]
+        .into_iter()
+        .flatten()
+        .map(|r| r.y0)
+        .collect();
+    assert_eq!(ys.len(), 5);
+    let mut sorted = ys.clone();
+    sorted.sort_by(f64::total_cmp);
+    assert_eq!(ys, sorted, "the rows stack in Figma's order");
+
+    // choosing a sizing writes the axis its menu belongs to, and closes it:
+    // a vertical frame lays out top-to-bottom, so the Height field is the main
+    // axis and the Width field the cross one
+    h.dispatch(Action::SetAxisSizing(true, x_native::Sizing::Hug));
+    assert_eq!(h.app.dropdown_layout_axis, None);
+    let l = h.app.selected_layout().unwrap();
+    assert_eq!(l.cross_sizing, Some(x_native::Sizing::Hug));
+    assert_eq!(l.sizing, x_native::Sizing::Fixed, "the height is untouched");
+    // ...and the HEIGHT menu writes the main axis
+    h.dispatch(Action::LayoutAxisMenu(false));
+    h.dispatch(Action::SetAxisSizing(false, x_native::Sizing::Hug));
+    assert_eq!(h.app.selected_layout().unwrap().sizing, x_native::Sizing::Hug);
+}
+
+/// "From the new field that appears, enter a value": the menu's Add rows
+/// create the limit and open the field that edits it, the row it paints is a
+/// hit zone, the layout obeys the number, and "Remove min and max" clears it.
+#[test]
+fn a_min_and_max_width_are_added_from_the_menu_and_clamp_the_frame() {
+    let mut h = layout_host();
+    let before = crate::editor_ui::sel_info(&h.app).w;
+    h.dispatch(Action::LayoutAxisMenu(true));
+    h.dispatch(Action::AddAxisLimit(true, false));
+    assert_eq!(
+        h.app.selected_layout().unwrap().min_width,
+        Some(before.round()),
+        "the new minimum starts at the frame's own width"
+    );
+    assert!(
+        matches!(h.app.field.as_ref().map(|f| f.id), Some(FieldId::MinWidth)),
+        "the field the menu created is open for typing"
+    );
+
+    // typing a value writes the limit...
+    set_field(&mut h, FieldId::MinWidth, "700");
+    assert_eq!(h.app.selected_layout().unwrap().min_width, Some(700.0));
+    // ...and the layout obeys it on the next solve
+    let vars = h.app.doc().doc.variables.clone();
+    {
+        let e = h.app.doc().editor();
+        x_native::apply_layout_recursive(&mut e.root, &vars);
+    }
+    let w = crate::editor_ui::find_node(&h.app.doc_ref().editor_ref().root, "frame-1")
+        .unwrap()
+        .w;
+    assert_eq!(w, 700.0, "the minimum is a floor under the frame");
+
+    // the field row is painted, and it is a hit zone
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let mut has_min = false;
+    let mut has_max = false;
+    for (_, a) in h.app.hit.iter() {
+        if *a == Action::Field(FieldId::MinWidth) {
+            has_min = true;
+        }
+        if *a == Action::Field(FieldId::MaxWidth) {
+            has_max = true;
+        }
+    }
+    assert!(has_min, "the min field has a row of its own");
+    assert!(!has_max, "an unset maximum draws no field");
+
+    // a maximum joins it, and "Remove min and max" clears both
+    h.dispatch(Action::LayoutAxisMenu(true));
+    h.dispatch(Action::AddAxisLimit(true, true));
+    assert!(h.app.selected_layout().unwrap().max_width.is_some());
+    h.dispatch(Action::LayoutAxisMenu(true));
+    h.dispatch(Action::ClearAxisLimits(true));
+    let l = h.app.selected_layout().unwrap();
+    assert_eq!((l.min_width, l.max_width), (None, None));
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let mut field_row = false;
+    for (_, a) in h.app.hit.iter() {
+        if matches!(a, Action::Field(FieldId::MinWidth | FieldId::MaxWidth)) {
+            field_row = true;
+        }
+    }
+    assert!(!field_row, "with no limits set, the row is gone");
+}
+
+/// Figma's **canvas stacking** (help 31289464393751) sits in the auto-layout
+/// settings and offers its own two orders; the menu writes the frame's own
+/// setting and the status line reads back the one in force.
+#[test]
+fn the_canvas_stacking_menu_writes_figmas_two_orders() {
+    let mut h = layout_host();
+    assert_eq!(
+        h.app.selected_layout().unwrap().canvas_stacking,
+        x_native::CanvasStacking::LastOnTop,
+        "last on top is Figma's default"
+    );
+    h.dispatch(Action::StackingMenu);
+    assert!(h.app.dropdown_stacking);
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let mut orders = 0;
+    let mut first_row = false;
+    for (_, a) in h.app.hit.iter() {
+        if let Action::SetCanvasStacking(order) = a {
+            orders += 1;
+            if *order == x_native::CanvasStacking::FirstOnTop {
+                first_row = true;
+            }
+        }
+    }
+    assert_eq!(orders, 2, "two orders, in Figma's words");
+    assert!(first_row, "First on top is reachable");
+    h.dispatch(Action::SetCanvasStacking(
+        x_native::CanvasStacking::FirstOnTop,
+    ));
+    assert!(!h.app.dropdown_stacking, "picking closes the menu");
+    assert_eq!(
+        h.app.selected_layout().unwrap().canvas_stacking,
+        x_native::CanvasStacking::FirstOnTop
+    );
+    assert!(h.app.status.contains("First on top"), "{}", h.app.status);
+    // the other order is one more pick away, and it writes back too
+    h.dispatch(Action::StackingMenu);
+    h.dispatch(Action::SetCanvasStacking(x_native::CanvasStacking::LastOnTop));
+    assert_eq!(
+        h.app.selected_layout().unwrap().canvas_stacking,
+        x_native::CanvasStacking::LastOnTop
+    );
+    assert!(h.app.status.contains("Last on top"), "{}", h.app.status);
+}

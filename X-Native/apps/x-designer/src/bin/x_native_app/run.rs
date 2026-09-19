@@ -3726,6 +3726,8 @@ impl Host {
                 self.app.dropdown_frame = false;
             }
             self.app.dropdown_constraint = None;
+            self.app.dropdown_layout_axis = None;
+            self.app.dropdown_stacking = false;
             if self.app.dropdown_zoom {
                 self.app.dropdown_zoom = false;
             }
@@ -3780,6 +3782,8 @@ impl Host {
             self.app.dropdown_frame = false;
         }
         self.app.dropdown_constraint = None;
+        self.app.dropdown_layout_axis = None;
+        self.app.dropdown_stacking = false;
         if self.app.dropdown_zoom {
             self.app.dropdown_zoom = false;
         }
@@ -7162,6 +7166,8 @@ impl Host {
                     || self.app.dropdown_lh
                     || self.app.dropdown_text_style
                     || self.app.dropdown_constraint.is_some()
+                    || self.app.dropdown_layout_axis.is_some()
+                    || self.app.dropdown_stacking
                     || self.app.paint_lib.is_some()
                 {
                     self.app.dropdown_frame = false;
@@ -7169,6 +7175,8 @@ impl Host {
                     self.app.dropdown_lh = false;
                     self.app.dropdown_text_style = false;
                     self.app.dropdown_constraint = None;
+                    self.app.dropdown_layout_axis = None;
+                    self.app.dropdown_stacking = false;
                     self.app.paint_lib = None;
                 } else if self.app.screen == Screen::Editor {
                     // P12: an in-flight tree drag cancels first
@@ -11374,23 +11382,83 @@ impl Host {
                     }
                 });
             }
-            Action::ToggleMainSizing => {
+            Action::LayoutAxisMenu(is_w) => {
+                // one panel menu at a time
+                let open = self.app.dropdown_layout_axis != Some(is_w);
+                self.app.dropdown_layout_axis = if open { Some(is_w) } else { None };
+                self.app.dropdown_stacking = false;
+                self.app.dropdown_constraint = None;
+            }
+            Action::SetAxisSizing(is_w, sizing) => {
+                self.app.dropdown_layout_axis = None;
                 self.app.modify_selected_layout(|l| {
-                    l.sizing = match l.sizing {
-                        x_native::Sizing::Hug => x_native::Sizing::Fixed,
-                        _ => x_native::Sizing::Hug,
+                    // the frame's own `sizing` is the MAIN axis; the W field is
+                    // the main one only while the frame runs horizontally
+                    let horizontal = l.direction == x_native::LayoutDirection::Horizontal;
+                    if is_w == horizontal {
+                        l.sizing = sizing;
+                    } else {
+                        l.cross_sizing = Some(sizing);
                     }
                 });
+                self.app.status = format!("Sizing: {}", sizing_word(sizing));
             }
-            Action::ToggleCrossSizing => {
+            Action::AddAxisLimit(is_w, is_max) => {
+                self.app.dropdown_layout_axis = None;
+                let (w, h) = {
+                    let s = crate::editor_ui::sel_info(&self.app);
+                    (s.w, s.h)
+                };
+                let cur = (if is_w { w } else { h }).max(1.0).round();
                 self.app.modify_selected_layout(|l| {
-                    let cur = l.cross_sizing.unwrap_or(l.sizing);
-                    let next = match cur {
-                        x_native::Sizing::Hug => x_native::Sizing::Fixed,
-                        _ => x_native::Sizing::Hug,
+                    let (min, max) = if is_w {
+                        (&mut l.min_width, &mut l.max_width)
+                    } else {
+                        (&mut l.min_height, &mut l.max_height)
                     };
-                    l.cross_sizing = Some(next);
+                    if is_max {
+                        *max = Some(cur);
+                    } else {
+                        *min = Some(cur);
+                    }
                 });
+                // "From the new field that appears, enter a value" — the row
+                // opens on the field the menu just created
+                let fid = match (is_w, is_max) {
+                    (true, false) => FieldId::MinWidth,
+                    (true, true) => FieldId::MaxWidth,
+                    (false, false) => FieldId::MinHeight,
+                    (false, true) => FieldId::MaxHeight,
+                };
+                self.dispatch(Action::Field(fid));
+                let axis = if is_w { "width" } else { "height" };
+                self.app.status = format!("Added {} {axis}", if is_max { "max" } else { "min" });
+            }
+            Action::ClearAxisLimits(is_w) => {
+                self.app.dropdown_layout_axis = None;
+                self.app.modify_selected_layout(|l| {
+                    if is_w {
+                        l.min_width = None;
+                        l.max_width = None;
+                    } else {
+                        l.min_height = None;
+                        l.max_height = None;
+                    }
+                });
+                self.app.status = format!(
+                    "Removed min and max {}",
+                    if is_w { "width" } else { "height" }
+                );
+            }
+            Action::StackingMenu => {
+                let open = !self.app.dropdown_stacking;
+                self.app.dropdown_stacking = open;
+                self.app.dropdown_layout_axis = None;
+            }
+            Action::SetCanvasStacking(v) => {
+                self.app.dropdown_stacking = false;
+                self.app.modify_selected_layout(|l| l.canvas_stacking = v);
+                self.app.status = format!("Canvas stacking: {}", v.label());
             }
             Action::SetChildFill(fill) => {
                 self.app.modify_child_constraints(|c| {
@@ -12611,6 +12679,18 @@ impl Host {
                     self.app.zoom = (v / 100.0).clamp(0.01, 64.0);
                 }
             }
+            FieldId::MinWidth | FieldId::MaxWidth | FieldId::MinHeight | FieldId::MaxHeight => {
+                // an empty field clears its own limit, a number sets it —
+                // Figma's fields behave the same way, and the Width/Height
+                // menu's "Remove min and max" is the row that clears the pair
+                let v = raw.parse::<f64>().ok().filter(|n| n.is_finite());
+                self.app.modify_selected_layout(|l| match f.id {
+                    FieldId::MinWidth => l.min_width = v,
+                    FieldId::MaxWidth => l.max_width = v,
+                    FieldId::MinHeight => l.min_height = v,
+                    _ => l.max_height = v,
+                });
+            }
             FieldId::Gap | FieldId::PadH | FieldId::PadV => {
                 if let Some(v) = raw.parse::<f64>().ok().filter(|n| n.is_finite()) {
                     match f.id {
@@ -13244,6 +13324,16 @@ fn parse_scale(raw: &str) -> Option<f64> {
     (n.is_finite() && n > 0.0).then_some(n / 100.0)
 }
 
+/// Figma's word for one axis's resizing choice — the same words the Width /
+/// Height menu uses ("Fixed width" / "Hug contents"), so the status line and
+/// the menu cannot drift.
+fn sizing_word(s: x_native::Sizing) -> &'static str {
+    match s {
+        x_native::Sizing::Hug => "Hug contents",
+        _ => "Fixed",
+    }
+}
+
 fn count_kind(root: &Node) -> usize {
     fn walk(n: &Node, out: &mut usize) {
         *out += 1;
@@ -13315,6 +13405,16 @@ fn field_initial(app: &App, f: FieldId) -> String {
         FieldId::FillAlpha => "100".into(),
         FieldId::StrokeHex => s.stroke.clone(),
         FieldId::StrokeWeight => fmt(if s.stroke_w > 0.0 { s.stroke_w } else { 1.0 }),
+        FieldId::MinWidth | FieldId::MaxWidth | FieldId::MinHeight | FieldId::MaxHeight => {
+            let l = app.selected_layout();
+            let v = l.and_then(|l| match f {
+                FieldId::MinWidth => l.min_width,
+                FieldId::MaxWidth => l.max_width,
+                FieldId::MinHeight => l.min_height,
+                _ => l.max_height,
+            });
+            v.map(fmt).unwrap_or_default()
+        }
         FieldId::GuideSize => fmt(app.doc_opt().map(|d| d.guide_size).unwrap_or(16.0)),
         FieldId::CanvasBg => editor_ui::hex6(app.canvas_bg),
         FieldId::GridColor => editor_ui::hex6(app.grid_color),

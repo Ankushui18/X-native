@@ -66,6 +66,12 @@ pub fn paint(app: &mut App, s: &mut Scene) {
     if let Some(axis) = app.dropdown_constraint {
         paint_constraint_dropdown(app, s, &mut hit, axis);
     }
+    if let Some(is_w) = app.dropdown_layout_axis {
+        paint_layout_axis_dropdown(app, s, &mut hit, is_w);
+    }
+    if app.dropdown_stacking {
+        paint_stacking_dropdown(app, s, &mut hit);
+    }
     if let Some(which) = app.dropdown_proto_scroll {
         paint_proto_scroll_dropdown(app, s, &mut hit, which);
     }
@@ -4122,6 +4128,9 @@ fn paint_design(
         // sizing chip: standard CHIP_H, centered in the row
         let chip = Rect::new(fx + 93.5, y0 + 286.0, fx + 124.5, y0 + 286.0 + CHIP_H);
         let is_main = (i == 0) == horizontal;
+        // the menu belongs to the FIELD, so it carries the W/H axis, not
+        // main/cross: for a vertical frame the Width field is the cross one
+        let is_w = i == 0;
         let sizing = if is_main { main_sizing } else { cross_sizing };
         let (label, enabled) = match sizing {
             Some(s) => (
@@ -4138,15 +4147,27 @@ fn paint_design(
         stroke_rrect(s, chip, R_SM, C_LINE_2, 1.0);
         app.fonts
             .text_center(s, chip, label, T10, C_TEXT, Wt::Reg, true);
+        // Figma's sizing control is a dropdown: "Open the Width dropdown to
+        // find Add min width and Add max width."
         if enabled {
-            hit.push((
-                chip,
-                if is_main {
-                    Action::ToggleMainSizing
-                } else {
-                    Action::ToggleCrossSizing
-                },
-            ));
+            if app.dropdown_layout_axis == Some(is_w) {
+                // the menu anchors under the chip it belongs to; the panel
+                // scrolls, so the painter records where the chip landed
+                app.layout_axis_dd_anchor = (chip.x0, chip.y1);
+            }
+            hit.push((chip, Action::LayoutAxisMenu(is_w)));
+        }
+        // Figma: "If an object contains a min or max setting, its respective
+        // width or height icon will gain two lines, one on each side."
+        let limited = match sel_layout.as_ref().map(|l| (l, is_w)) {
+            Some((l, true)) => l.min_width.is_some() || l.max_width.is_some(),
+            Some((l, false)) => l.min_height.is_some() || l.max_height.is_some(),
+            None => false,
+        };
+        if limited {
+            let lx = fx + 4.0;
+            hline(s, lx, lx + 8.0, y0 + 288.4, C_TEXT);
+            hline(s, lx, lx + 8.0, y0 + 299.6, C_TEXT);
         }
     }
     app.fonts
@@ -4307,6 +4328,38 @@ fn paint_design(
                 Rect::new(x0, y0 + 426.0, x0 + 110.0, y0 + 450.0),
                 Action::ToggleWrap,
             ));
+            // Figma's auto-layout settings carry **canvas stacking**: "Next to
+            // canvas stacking, select: First on top / Last on top."
+            let stacking = sel_layout
+                .as_ref()
+                .map(|l| l.canvas_stacking)
+                .unwrap_or_default();
+            let sr = Rect::new(x0 + 120.0, y0 + 426.0, x0 + 283.0, y0 + 426.0 + DENSE_H);
+            let shov = hover(app, sr);
+            app.fonts.text(
+                s,
+                sr.x0 + 2.0,
+                sr.y0 + 3.7,
+                "Canvas stacking",
+                T11,
+                if shov { C_TEXT } else { C_MUTED },
+                Wt::Reg,
+            );
+            app.fonts.text_right(
+                s,
+                sr.x1 - 14.0,
+                sr.y0 + 3.7,
+                stacking.label(),
+                T11,
+                C_TEXT,
+                Wt::Reg,
+                0.0,
+            );
+            draw_icon(s, "chevron-down", sr.x1 - 12.0, sr.y0 + 4.6, ICON_XS, C_DIM);
+            if app.dropdown_stacking {
+                app.stacking_dd_anchor = (sr.x0, sr.y1);
+            }
+            hit.push((sr, Action::StackingMenu));
         } else if app.selected_parent_has_layout() {
             // Fixed | Fill segmented control (constraints.grow)
             let grow = {
@@ -4388,6 +4441,50 @@ fn paint_design(
                 Rect::new(x0 + 162.0, y0 + 426.0, x0 + 262.0, y0 + 450.0),
                 Action::ToggleChildAbsolute,
             ));
+        }
+    }
+
+    // ---- Figma's min/max dimension fields, directly below the W/H row they
+    // belong to: "From the new field that appears, enter a value." Only the
+    // limits that are SET are drawn — the Width/Height menu is the way to add
+    // one — and the row appears only when there is one, so a frame that never
+    // used min/max keeps the panel's geometry exactly as it was.
+    let limits: Vec<(FieldId, &str, f64)> = {
+        let mut out = vec![];
+        if let Some(l) = sel_layout.as_ref() {
+            for (fid, label, v) in [
+                (FieldId::MinWidth, "min W", l.min_width),
+                (FieldId::MaxWidth, "max W", l.max_width),
+                (FieldId::MinHeight, "min H", l.min_height),
+                (FieldId::MaxHeight, "max H", l.max_height),
+            ] {
+                if let Some(v) = v {
+                    out.push((fid, label, v));
+                }
+            }
+        }
+        out
+    };
+    if !limits.is_empty() {
+        let fw = (283.0 - 6.0 * (limits.len() as f64 - 1.0)) / limits.len() as f64;
+        for (k, (fid, label, v)) in limits.iter().enumerate() {
+            let fr = Rect::new(
+                x0 + (fw + 6.0) * k as f64,
+                y0 + 458.0,
+                x0 + (fw + 6.0) * k as f64 + fw,
+                y0 + 458.0 + INPUT_H,
+            );
+            input(
+                app,
+                s,
+                hit,
+                fr,
+                Some((*label, T10)),
+                &field_val(app, *fid, fmt_num(*v)),
+                mono,
+                Some(Action::Field(*fid)),
+                None,
+            );
         }
     }
 
@@ -6844,6 +6941,156 @@ fn paint_constraint_dropdown(
             draw_icon(s, "check", r.x1 - 22.0, r.y0 + 8.0, ICON_XS, C_TEXT);
         }
         hit.push((r, Action::SetConstraint(axis, i)));
+    }
+}
+
+/// Figma's **Width**/**Height** dropdown on an auto-layout frame
+/// (help 360040451373). The sizing choices live here — "Fixed width", "Hug
+/// contents" — and so do the min/max rows: "Open the Width dropdown to find
+/// **Add min width** and **Add max width**", and to take them away "choose
+/// **Remove min and max**". The words are built from the axis the menu belongs
+/// to, so the Width menu never says "height".
+fn paint_layout_axis_dropdown(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    is_w: bool,
+) {
+    let Some(layout) = app.selected_layout() else {
+        return;
+    };
+    // the sizing the axis currently shows: for a horizontal frame the Width
+    // field IS the main axis; for a vertical one it is the cross axis
+    let horizontal = layout.direction == x_native::LayoutDirection::Horizontal;
+    let main = is_w == horizontal;
+    // the frame's own `sizing` is the MAIN axis; `cross_sizing` the other one
+    let sizing = if main {
+        layout.sizing
+    } else {
+        layout.cross_sizing.unwrap_or(layout.sizing)
+    };
+    let label = if is_w { "width" } else { "height" };
+    let (min, max) = if is_w {
+        (layout.min_width, layout.max_width)
+    } else {
+        (layout.min_height, layout.max_height)
+    };
+    let sizing_is_hug = sizing == x_native::Sizing::Hug;
+    let rows: Vec<(String, Action)> = vec![
+        (
+            format!("Fixed {label}"),
+            Action::SetAxisSizing(is_w, x_native::Sizing::Fixed),
+        ),
+        (
+            "Hug contents".to_string(),
+            Action::SetAxisSizing(is_w, x_native::Sizing::Hug),
+        ),
+        (
+            format!("Add min {label}"),
+            Action::AddAxisLimit(is_w, false),
+        ),
+        (
+            format!("Add max {label}"),
+            Action::AddAxisLimit(is_w, true),
+        ),
+        (
+            "Remove min and max".to_string(),
+            Action::ClearAxisLimits(is_w),
+        ),
+    ];
+    // which row wears the tick: the sizing option in force, and any limit set
+    let ticked = |r: usize| match r {
+        0 => !sizing_is_hug,
+        1 => sizing_is_hug,
+        2 => min.is_some(),
+        3 => max.is_some(),
+        _ => false,
+    };
+    let (ax, ay) = app.layout_axis_dd_anchor;
+    let w = 184.0;
+    let h = DROPDOWN_ROW_H * rows.len() as f64;
+    let dx = ax.min((app.win_w - w - 8.0).max(8.0)).max(8.0);
+    let mut dy = ay + 4.0;
+    if dy + h > app.win_h - 8.0 {
+        dy = (ay - 4.0 - h).max(8.0);
+    }
+    let dd = Rect::new(dx, dy, dx + w, dy + h);
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, R_LG, C_FIELD);
+    stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+    for (i, (text, action)) in rows.into_iter().enumerate() {
+        let r = Rect::new(
+            dd.x0,
+            dd.y0 + DROPDOWN_ROW_H * i as f64,
+            dd.x1,
+            dd.y0 + DROPDOWN_ROW_H * (i + 1) as f64,
+        );
+        let hov = hover(app, r);
+        if hov {
+            fill_rect(s, r, C_FIELD_2);
+        }
+        app.fonts.text(
+            s,
+            r.x0 + 10.0,
+            r.y0 + 9.0,
+            &text,
+            T11,
+            if ticked(i) { C_TEXT } else { C_MUTED },
+            Wt::Reg,
+        );
+        if ticked(i) {
+            draw_icon(s, "check", r.x1 - 22.0, r.y0 + 8.0, ICON_XS, C_TEXT);
+        }
+        hit.push((r, action));
+    }
+}
+
+/// Figma's **canvas stacking** menu (help 31289464393751): the two orders, in
+/// Figma's words — "First on top: the first layer in the stack will be on top",
+/// "Last on top: the last layer in the stack will be on top".
+fn paint_stacking_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    let current = app
+        .selected_layout()
+        .map(|l| l.canvas_stacking)
+        .unwrap_or_default();
+    let list = [x_native::CanvasStacking::FirstOnTop, x_native::CanvasStacking::LastOnTop];
+    let (ax, ay) = app.stacking_dd_anchor;
+    let w = 168.0;
+    let h = DROPDOWN_ROW_H * list.len() as f64;
+    let dx = ax.min((app.win_w - w - 8.0).max(8.0)).max(8.0);
+    let mut dy = ay + 4.0;
+    if dy + h > app.win_h - 8.0 {
+        dy = (ay - 4.0 - h).max(8.0);
+    }
+    let dd = Rect::new(dx, dy, dx + w, dy + h);
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, R_LG, C_FIELD);
+    stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+    for (i, v) in list.into_iter().enumerate() {
+        let r = Rect::new(
+            dd.x0,
+            dd.y0 + DROPDOWN_ROW_H * i as f64,
+            dd.x1,
+            dd.y0 + DROPDOWN_ROW_H * (i + 1) as f64,
+        );
+        let hov = hover(app, r);
+        let on = current == v;
+        if hov || on {
+            fill_rect(s, r, if hov { C_FIELD_2 } else { C_FIELD });
+        }
+        app.fonts.text(
+            s,
+            r.x0 + 10.0,
+            r.y0 + 9.0,
+            v.label(),
+            T11,
+            if on { C_TEXT } else { C_MUTED },
+            Wt::Reg,
+        );
+        if on {
+            draw_icon(s, "check", r.x1 - 22.0, r.y0 + 8.0, ICON_XS, C_TEXT);
+        }
+        hit.push((r, Action::SetCanvasStacking(v)));
     }
 }
 

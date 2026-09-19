@@ -1009,8 +1009,6 @@ fn is_toggle_row(a: &Action) -> bool {
     matches!(
         a,
         Action::ToggleWrap
-            | Action::ToggleMainSizing
-            | Action::ToggleCrossSizing
             | Action::ToggleAspectRatio
             | Action::ToggleChildAbsolute
             | Action::ToggleInstanceProp(_)
@@ -1214,9 +1212,21 @@ pub enum Action {
     AddAutoLayout,
     /// auto-layout wrap toggle (selected frame's own layout)
     ToggleWrap,
-    /// main/cross axis Hug<->Fixed (selected frame's own layout)
-    ToggleMainSizing,
-    ToggleCrossSizing,
+    /// Figma's **Width**/**Height** dropdown on an auto-layout frame
+    /// (help 360040451373): the sizing choice plus the min/max rows, which are
+    /// an ADDITIONAL setting — "Minimum and maximum dimensions is an
+    /// additional setting that can be used at the same time as other resizing
+    /// properties". `true` is the Width field, `false` the Height one.
+    LayoutAxisMenu(bool),
+    /// One row of that menu: Fixed … / Hug contents.
+    SetAxisSizing(bool, x_native::Sizing),
+    /// "Add min width" / "Add max width" — the axis, then min (`true`) or max.
+    AddAxisLimit(bool, bool),
+    /// "Remove min and max" for the axis.
+    ClearAxisLimits(bool),
+    /// The auto-layout settings' **canvas stacking** menu (help 31289464393751).
+    StackingMenu,
+    SetCanvasStacking(x_native::CanvasStacking),
     /// Lock the W/H inspector fields to the current aspect ratio.
     ToggleAspectRatio,
     /// selected CHILD of an auto-layout frame: Fill container vs Fixed
@@ -1732,6 +1742,12 @@ pub enum FieldId {
     Gap,
     PadH,
     PadV,
+    /// Figma's min/max dimensions on an auto-layout frame: the two fields the
+    /// Width/Height dropdown's "Add min …"/"Add max …" rows create.
+    MinWidth,
+    MaxWidth,
+    MinHeight,
+    MaxHeight,
     FontFamily,
     FontWeight,
     FontSize,
@@ -2847,6 +2863,16 @@ pub struct App {
     /// `Trigger::all` is the list it shows.
     pub dropdown_proto_trigger: Option<usize>,
     pub proto_trigger_dd_anchor: (f64, f64),
+    /// Open auto-layout **Width**/**Height** menu (`true` = the Width field)
+    /// and the screen anchor its chip recorded while painting. Figma's W/H
+    /// control is a dropdown (help 360040451373), and its min/max rows live in
+    /// it — "Open the Width dropdown to find Add min width and Add max width".
+    pub dropdown_layout_axis: Option<bool>,
+    pub layout_axis_dd_anchor: (f64, f64),
+    /// Open **canvas stacking** menu and its anchor, in the auto-layout
+    /// settings band (help 31289464393751: "Next to canvas stacking, select").
+    pub dropdown_stacking: bool,
+    pub stacking_dd_anchor: (f64, f64),
     /// Zoom menu open (right-panel header, audit F4)
     pub dropdown_zoom: bool,
     /// Hover labels registered this frame (P10); paint_tooltip draws
@@ -3119,6 +3145,10 @@ impl App {
             proto_scroll_dd_anchor: (0.0, 0.0),
             dropdown_proto_trigger: None,
             proto_trigger_dd_anchor: (0.0, 0.0),
+            dropdown_layout_axis: None,
+            layout_axis_dd_anchor: (0.0, 0.0),
+            dropdown_stacking: false,
+            stacking_dd_anchor: (0.0, 0.0),
             dropdown_zoom: false,
             tooltip: Vec::new(),
             dropdown_lh: false,

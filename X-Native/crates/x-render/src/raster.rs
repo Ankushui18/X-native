@@ -791,7 +791,9 @@ fn check_work_budget(tree: &RenderTree, w: u32, h: u32) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::ir::{build_render_tree, build_render_tree_slice};
-    use x_core::{Node, Variables};
+    use x_core::{
+        apply_layout_recursive, AutoLayout, CanvasStacking, LayoutDirection, Node, Variables,
+    };
 
     fn doc() -> Node {
         Node::frame("page", 200.0, 100.0)
@@ -969,6 +971,47 @@ mod tests {
         );
     }
 
+    /// Figma's **canvas stacking** (help 31289464393751) on the pixels: in a
+    /// stack of overlapping layers the LAST one is on top by default, and
+    /// *First on top* puts the first one there instead. The setting changes the
+    /// canvas only — the layer list is the same either way.
+    #[test]
+    fn canvas_stacking_decides_which_layer_paints_on_top() {
+        fn two_overlapping(stacking: CanvasStacking) -> Node {
+            let mut frame = Node::frame("stack", 100.0, 100.0)
+                .auto_layout(AutoLayout {
+                    direction: LayoutDirection::Horizontal,
+                    gap: -40.0,
+                    canvas_stacking: stacking,
+                    ..Default::default()
+                })
+                .child(Node::rect("first", 0.0, 0.0, 60.0, 60.0, Color::from_rgb8(255, 0, 0)))
+                .child(Node::rect("last", 0.0, 0.0, 60.0, 60.0, Color::from_rgb8(0, 0, 255)));
+            // the solver places the two layers over each other: gap -40 with two
+            // 60-wide children leaves a 20px strip where both are painted
+            apply_layout_recursive(&mut frame, &Variables::default());
+            frame
+        }
+        let sample = |stacking: CanvasStacking| {
+            let page = Node::frame("page", 100.0, 100.0).child(two_overlapping(stacking));
+            let tree = build_render_tree(&page, &Variables::default());
+            let sink = RasterSink::new(None, None, 100.0, 100.0, 1.0, Some(Color::WHITE))
+                .expect("sink");
+            let pix = sink.render(&tree);
+            sample_px(&pix, 30, 30)
+        };
+        let (r, b, _, _) = sample(CanvasStacking::LastOnTop);
+        assert!(
+            b > r,
+            "last on top: the second layer wins the overlap, got {r},{b}"
+        );
+        let (r, b, _, _) = sample(CanvasStacking::FirstOnTop);
+        assert!(
+            r > b,
+            "first on top: the first layer wins the overlap, got {r},{b}"
+        );
+    }
+
     /// PIXELS, not command lists: the canvas names a page's OUTERMOST frames and
     /// never the page itself, which is the "page name on the artboard" complaint.
     ///
@@ -987,6 +1030,7 @@ mod tests {
     /// No font manager is attached, so a label rasterizes as its placeholder box
     /// — exactly the question here ("was a name painted?") — and no GPU is
     /// needed: this sink is tiny-skia.
+
     #[test]
     fn canvas_pixels_name_the_outermost_frames_and_never_the_page() {
         const GUTTER: f64 = 40.0;

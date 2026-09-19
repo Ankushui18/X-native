@@ -7,8 +7,10 @@ use x_core::*;
 // -------------------------------------------------------------- hit testing
 
 /// Topmost hittable node id at `point` (world coords). Children are on top
-/// of parents; later siblings are on top of earlier ones (paint order).
-/// Locked / hidden nodes (and their subtrees, if hidden) are skipped.
+/// of parents; the last one PAINTED is the one you hit, so this walks
+/// `paint_order` — document order normally, reversed in an auto-layout frame
+/// whose canvas stacking is *First on top*. Locked / hidden nodes (and their
+/// subtrees, if hidden) are skipped.
 pub fn hit_test(root: &Node, point: Point) -> Option<String> {
     fn walk(node: &Node, parent: Affine, point: Point, out: &mut Option<String>) {
         if !node.visible {
@@ -109,16 +111,16 @@ pub fn hit_test(root: &Node, point: Point) -> Option<String> {
                 *out = Some(node.id.clone());
             }
         }
-        for child in &node.children {
-            walk(child, world, point, out);
+        for i in paint_order(node) {
+            walk(&node.children[i], world, point, out);
         }
     }
     let mut out = None;
     // The document root is the canvas, not a selectable object. Nested
     // frames/components remain hittable via `walk`.
     let world = Affine::IDENTITY * root.transform.matrix(root.w, root.h);
-    for child in &root.children {
-        walk(child, world, point, &mut out);
+    for i in paint_order(root) {
+        walk(&root.children[i], world, point, &mut out);
     }
     out
 }

@@ -1752,7 +1752,11 @@ fn lower(
         in_frame
     };
     let mut mask_layers = 0usize;
-    for child in &node.children {
+    // child paint order: document order, or the reverse of it in an
+    // auto-layout frame whose canvas stacking is First on top (one owner:
+    // `x_core::auto_layout::paint_order`)
+    for ci in paint_order(node) {
+        let child = &node.children[ci];
         if child.is_mask && child.visible {
             // masks paint nothing themselves; they clip following siblings
             if let Some(mask_path) = mask_path_of(child) {

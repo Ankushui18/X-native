@@ -66,7 +66,7 @@ pub fn apply_auto_layout(node: &mut Node, vars: &Variables) {
 
     if let Some(g) = &layout.grid {
         // CSS-grid mode (Figma Grid): the stack solver is bypassed; the
-        // min/max clamp below still applies to HUG frames.
+        // min/max clamp below still applies to the frame's own axes.
         crate::grid::apply_grid_layout(node, &layout, g);
     } else if layout.wrap == AutoLayoutWrap::Wrap {
         layout_wrapped(node, &layout, gap, eff_padding);
@@ -74,28 +74,30 @@ pub fn apply_auto_layout(node: &mut Node, vars: &Variables) {
         layout_flow(node, &layout, gap, eff_padding);
     }
 
-    // Min/max constraints clamp a HUG frame's final extent (Figma: fixed
-    // frames are explicit, so min/max only ever bound hug growth).
-    if layout.sizing == Sizing::Hug {
-        if let Some(mn) = layout.min_width {
-            node.w = node.w.max(mn);
-        }
-        if let Some(mx) = layout.max_width {
-            node.w = node.w.max(min_w).min(mx);
-        }
-        if let Some(mn) = layout.min_height {
-            node.h = node.h.max(mn);
-        }
-        if let Some(mx) = layout.max_height {
-            node.h = node.h.max(min_h).min(mx);
-        }
-        // Hug frames still respect the padding minimum
-        if node.w < min_w {
-            node.w = min_w;
-        }
-        if node.h < min_h {
-            node.h = min_h;
-        }
+    // Min/max dimensions clamp the frame's own axes. Figma: "Minimum and
+    // maximum dimensions is an additional setting that can be used at the
+    // same time as other resizing properties" (help 360040451373), so this is
+    // not a hug-only rule — a Fixed frame is bounded the same way. A maximum
+    // can never cut into the padding, and the minimum wins when the two
+    // cross, since that is the setting Figma reads last.
+    if let Some(mx) = layout.max_width {
+        node.w = node.w.min(mx.max(min_w));
+    }
+    if let Some(mn) = layout.min_width {
+        node.w = node.w.max(mn);
+    }
+    if let Some(mx) = layout.max_height {
+        node.h = node.h.min(mx.max(min_h));
+    }
+    if let Some(mn) = layout.min_height {
+        node.h = node.h.max(mn);
+    }
+    // neither axis may fall under its own padding total
+    if node.w < min_w {
+        node.w = min_w;
+    }
+    if node.h < min_h {
+        node.h = min_h;
     }
     node.dirty = false;
 }
@@ -619,4 +621,47 @@ pub fn apply_layout_recursive(node: &mut Node, vars: &Variables) {
         apply_layout_recursive(child, vars);
     }
     apply_auto_layout(node, vars);
+}
+
+/// The order a container's children are PAINTED in — indices into
+/// `node.children`, bottom-most first (the painter's algorithm).
+///
+/// Figma's **canvas stacking** (help 31289464393751): "When multiple layers
+/// have negative spacing creating a stack, the last object … will be on top by
+/// default. You can change the visual order of the stack as seen on the
+/// canvas" — *First on top* paints the first child last, so it lands on top.
+/// The setting is a canvas-only change: the layer list keeps its own order.
+///
+/// This is the ONE owner of child paint order. The viewer, the IR encoder and
+/// the hit test all walk it, so the layer you see on top is the layer you
+/// click — and a frame that has never touched the setting keeps document
+/// order exactly as before.
+pub fn paint_order(node: &Node) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..node.children.len()).collect();
+    if paints_first_on_top(node) {
+        order.reverse();
+    }
+    order
+}
+
+/// `paint_order` as ranks: `ranks[i]` is the position child `i` paints in
+/// (0 = bottom-most). Renderers that already have their own sort — `scene.rs`
+/// orders by `z_index` — use this as the tie-break, so the canvas-stacking
+/// rule still has exactly one implementation.
+pub fn paint_ranks(node: &Node) -> Vec<usize> {
+    let mut ranks = vec![0usize; node.children.len()];
+    for (k, i) in paint_order(node).iter().enumerate() {
+        ranks[*i] = k;
+    }
+    ranks
+}
+
+/// Does this container paint its FIRST child on top? True only for an
+/// auto-layout frame whose canvas stacking is *First on top*; every other
+/// layer in the document keeps the usual painter's order.
+pub fn paints_first_on_top(node: &Node) -> bool {
+    matches!(
+        &node.kind,
+        NodeKind::Frame { layout: Some(l) } if l.canvas_stacking == CanvasStacking::FirstOnTop
+    )
 }

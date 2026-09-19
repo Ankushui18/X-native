@@ -38,7 +38,7 @@ recon task, not a settled fact.
 | 4 Menus & palettes | 10 | 9 | 0 | 1 | 0 | 0 |
 | 5 Layers, pages, sections | 14 | 12 | 1 | 1 | 0 | 0 |
 | 6 Frame & shape properties | 20 | 16 | 2 | 2 | 0 | 0 |
-| 7 Auto layout | 16 | 12 | 1 | 3 | 0 | 0 |
+| 7 Auto layout | 16 | 14 | 1 | 1 | 0 | 0 |
 | 8 Fill, stroke, effects, colour | 22 | 15 | 6 | 1 | 0 | 0 |
 | 9 Images | 9 | 5 | 2 | 2 | 0 | 0 |
 | 10 Text & typography | 18 | 15 | 2 | 1 | 0 | 0 |
@@ -52,9 +52,9 @@ recon task, not a settled fact.
 | 18 Design language (look of the app itself) | 12 | 1 | 5 | 6 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **334** | **224** | **55** | **36** | **16** | **3** |
+| **total** | **334** | **226** | **55** | **34** | **16** | **3** |
 
-The 36 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
+The 34 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
 the brief.
 
@@ -220,7 +220,7 @@ Appearance (opacity, radius, clip), Fill, Stroke, Effects, Export.
 | # | Item | Figma | Ours | Status |
 | --- | --- | --- | --- | --- |
 | 6.1 | Position X/Y, rotate angle | numeric, scrubbable | `Position` rows + rotate field | MATCH |
-| 6.2 | Width/Height + Resizing | Fixed / Hug / Fill per axis | `Sizing`, `ToggleMainSizing` etc. | MATCH |
+| 6.2 | Width/Height + Resizing | Fixed / Hug / Fill per axis, chosen from the Width/Height dropdown | `Sizing`, `Action::LayoutAxisMenu` / `SetAxisSizing` | MATCH |
 | 6.3 | Constraints | 5 H × 5 V options, "ignore constraints" `⌃` | `Constraints` section, `SetConstraint` (`2ebb068`) | MATCH |
 | 6.4 | Corner radius | one value; independent corners via the expand | uniform radius in the panel; per-corner `corner_radii` exists in the model, the UI reads only `[0]` | PARTIAL |
 | 6.5 | Corner smoothing | continuous (squircle) corners, 0–100% | `corner_smoothing: f64` is in the model and unimplemented in the UI | PARTIAL |
@@ -256,8 +256,8 @@ position, canvas stacking, "distribute", `⇧A` to add.
 | 7.6 | Wrap + wrap alignment | yes | `ToggleWrap` | MATCH |
 | 7.7 | Sizing per axis | Fixed / Hug / Fill, both axes | `Sizing`, `ToggleChildFill` | MATCH |
 | 7.8 | Absolute position in a layout | "❖ absolute, `⌥`" | `ToggleChildAbsolute` | MATCH |
-| 7.9 | **Min / Max width & height** | per axis, with a tick | not implemented | **MISSING** |
-| 7.10 | **Canvas stacking** | last on top / first on top | not implemented | **MISSING** |
+| 7.9 | **Min / Max width & height** | per axis, from the W/H dropdown: **Add min width** / **Add max width** (and the height pair), the value typed into the field that appears, the axis icon gaining "two lines, one on each side", **Remove min and max** to clear; *"an additional setting that can be used at the same time as other resizing properties"* ([help 360040451373](https://help.figma.com/hc/en-us/articles/360040451373)) | `Action::LayoutAxisMenu` / `AddAxisLimit` / `ClearAxisLimits` / `SetAxisSizing`, `FieldId::Min|Max{Width,Height}`, and `AutoLayout::{min,max}_{width,height}` clamped by `apply_auto_layout` for every sizing; pinned by `min_and_max_dimensions_clamp_either_sizing`, `the_width_menu_carries_figmas_sizing_and_min_max_rows`, `a_min_and_max_width_are_added_from_the_menu_and_clamp_the_frame` | MATCH |
+| 7.10 | **Canvas stacking** | **First on top** / **Last on top** in the auto-layout settings; "the order of layers in the layers panel stays the same. Canvas stacking is solely a visual change that happens on the canvas" ([help 31289464393751](https://help.figma.com/hc/en-us/articles/31289464393751)) | `x_core::paint_order` / `paints_first_on_top` is the one owner of child paint order, walked by the Vello scene, the render IR and `hit_test`; `Action::StackingMenu` / `SetCanvasStacking`; pinned by `canvas_stacking_reverses_the_paint_order_and_never_the_layer_list`, `canvas_stacking_decides_which_layer_paints_on_top`, `the_hit_test_follows_canvas_stacking`, `the_canvas_stacking_menu_writes_figmas_two_orders` | MATCH |
 | 7.11 | Baseline alignment | cross-axis baseline | `CrossAlign::Baseline` in the model; *verify* the UI exposes it | PARTIAL |
 | 7.12 | Space between via distribute | "distribute spacing" | align/distribute row | MATCH |
 | 7.13 | Text resizing inside layout | hug/fill text | text sizing path | MATCH |
@@ -590,7 +590,12 @@ rendering it.
     this is a UI pass with a renderer already able to draw it.
 11. Instance select-inside + push-to-main (12.11, 12.12), and component sets as a node
     (12.19).
-12. Auto layout min/max size + canvas stacking (7.9, 7.10).
+12. ~~**Auto layout min/max size + canvas stacking** (7.9, 7.10)~~ — **delivered**: the
+    Width/Height dropdown's sizing and min/max rows (with the field they create and the
+    marks on the axis icon), and canvas stacking as one paint-order rule the viewer, the
+    IR encoder and the hit test all read. Pinned by
+    `the_width_menu_carries_figmas_sizing_and_min_max_rows` and
+    `canvas_stacking_decides_which_layer_paints_on_top`.
 13. Text lists + resize-to-fit (10.14, 10.15); keyboard completions `N`/`⇧N`, `⌘R`
     rename, `⌘⇧K` component, `⇧A` auto layout, `⇧E` tab toggle, the `⌃⇧?` shortcuts
     panel (3.23–3.31).

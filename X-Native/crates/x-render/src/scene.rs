@@ -912,13 +912,16 @@ fn encode(
     if matches!(node.kind, NodeKind::Instance { .. }) {
         return;
     }
-    // Sort children by z_index for paint order (higher z_index paints on top).
-    // Children without z_index (None) use document order at z=0.
+    // Sort children for paint order: z_index first (higher paints on top),
+    // then the container's own canvas stacking — `paint_order` is the one
+    // owner of that rule, and for a frame that has not touched the setting it
+    // is document order, exactly as before.
+    let ranks = paint_ranks(node);
     let mut indexed_children: Vec<(usize, &Node)> = node.children.iter().enumerate().collect();
     indexed_children.sort_by(|(i_a, a), (i_b, b)| {
         let z_a = a.z_index.unwrap_or(0);
         let z_b = b.z_index.unwrap_or(0);
-        z_a.cmp(&z_b).then(i_a.cmp(i_b)) // stable sort: equal z_index preserves document order
+        z_a.cmp(&z_b).then(ranks[*i_a].cmp(&ranks[*i_b]))
     });
     // same nesting rule as `ir::lower`: a frame's children count as "inside a
     // frame" unless this frame IS the render root (the page), and a Section

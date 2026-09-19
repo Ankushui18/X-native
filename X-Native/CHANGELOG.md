@@ -5,6 +5,42 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-19 (Auto layout: min/max dimensions and canvas stacking)
+
+Two rows of Figma's auto-layout block were carried by the model but reachable
+from nothing — min/max dimensions and canvas stacking. Both are now in the
+panel, in Figma's words, with the engine rule behind each one named in one
+place.
+
+- **The Width/Height dropdown.** Figma's sizing control is a dropdown, not a
+  toggle: *"Open the Width dropdown to find Add min width and Add max width."*
+  The panel's Hug/Fixed chip now opens that menu, with the two sizing rows
+  ("Fixed width" / "Hug contents", and the height's own words) and the min/max
+  rows beneath them, ticking the ones in force.
+- **Min/max dimensions.** *"Minimum and maximum dimensions is an additional
+  setting that can be used at the same time as other resizing properties"* — an
+  Add row writes the frame's current size as the limit and opens the field that
+  edits it (*"From the new field that appears, enter a value"*), the axis icon
+  gains *"two lines, one on each side"*, **Remove min and max** clears the pair,
+  and an empty field drops its own limit. `apply_auto_layout` now clamps
+  min/max for every sizing rather than only for Hug — a Fixed frame is bounded
+  the same way — while the padding floor still wins over a maximum that is
+  smaller than the padding.
+- **Canvas stacking.** *"When multiple layers have negative spacing creating a
+  stack, the last object … will be on top by default"*, and the auto-layout
+  settings offer **First on top** / **Last on top** instead. The rule lives in
+  `x_core::auto_layout::paint_order` — the ONE owner of child paint order —
+  which the Vello scene, the render IR and `hit_test` all walk, so the layer
+  you see on top is the layer you click. It is a canvas-only setting: "the
+  order of layers in the layers panel stays the same."
+- **Tests.** `min_and_max_dimensions_clamp_either_sizing`,
+  `canvas_stacking_reverses_the_paint_order_and_never_the_layer_list`,
+  `canvas_stacking_decides_which_layer_paints_on_top` (pixels, through the
+  tiny-skia sink), `the_hit_test_follows_canvas_stacking`,
+  `the_width_menu_carries_figmas_sizing_and_min_max_rows`,
+  `a_min_and_max_width_are_added_from_the_menu_and_clamp_the_frame`,
+  `the_canvas_stacking_menu_writes_figmas_two_orders`.
+
 ## [Unreleased] — 2026-09-19 (Sections)
 
 A Section is Figma's labelled container for a region of the canvas — "a great
