@@ -64,6 +64,56 @@ pub struct EncodeCtx<'a> {
     pub fonts: Option<&'a x_text::FontManager>,
 }
 
+/// The ink of outline view — the hairline that draws each layer's outline
+/// instead of its paint. White, the wireframe ink outline mode reads with on
+/// the dark canvas. A named peniko constant, so it carries no literal of its
+/// own for the design sheet to own.
+pub const OUTLINE_COLOR: Color = Color::WHITE;
+
+/// Figma's outline mode (⌘Y): a stripped **copy** of `root` in which the
+/// canvas renders each layer as a wireframe — fills, images, blends and
+/// effects are not painted, only the outline. Per node: the fill, stroke and
+/// effect stacks (and the legacy single-paint fallback) are cleared, the
+/// blend goes back to Normal, and the stroke becomes a solid hairline in
+/// [`OUTLINE_COLOR`] at `width` — the app passes `1.0 / zoom`, so the line
+/// stays ≈1 screen pixel at any zoom. Image and Text nodes paint themselves
+/// (a bitmap, glyphs) and would swallow the stroke, so they become plain
+/// `Rect { radius: 0.0 }` — the layer's own box (the named delta: Figma
+/// outlines the glyphs). Children are stripped recursively, so an instance
+/// resolves from the stripped registry — the master's children in the copy —
+/// and nothing in the original document moves. A render mode, not a document
+/// property: the same contract `FrameCache` keeps for `presenting` and
+/// `hidden_text`.
+///
+/// The ONE exception to "per node": the render ROOT. On the canvas the root
+/// is the PAGE, and the page is not a layer — Figma's outline mode outlines
+/// layers, and our page frame is the canvas itself, so outlining it would
+/// ring the whole window.
+pub fn outline_view(root: &Node, width: f64) -> Node {
+    let mut n = strip_for_outlines(root, width);
+    n.stroke = Stroke::default();
+    n
+}
+
+fn strip_for_outlines(node: &Node, width: f64) -> Node {
+    let mut n = node.clone();
+    if matches!(n.kind, NodeKind::Image { .. } | NodeKind::Text { .. }) {
+        n.kind = NodeKind::Rect { radius: 0.0 };
+    }
+    n.fill = Paint::Solid(Color::TRANSPARENT);
+    n.fill_layers.clear();
+    n.stroke_layers.clear();
+    n.effect_layers.clear();
+    n.effects.clear();
+    n.visual_stacks_materialized = false;
+    n.blend = BlendKind::default();
+    n.stroke = Stroke::solid(OUTLINE_COLOR, width);
+    for c in n.children.iter_mut() {
+        *c = strip_for_outlines(c, width);
+    }
+    n
+}
+
 fn shape_for_rect(node: &Node, radius: f64) -> vello::kurbo::BezPath {
     let radii = if let Some([tl, tr, br, bl]) = node.corner_radii {
         [tl, tr, br, bl]

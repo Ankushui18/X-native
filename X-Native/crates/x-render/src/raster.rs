@@ -1113,6 +1113,80 @@ mod tests {
         let past = ink(300, 56, 360, 76);
         assert!(past > 200, "the chip stops with its name, darkest {past}");
     }
+
+    /// PIXELS: outline mode (⌘Y) paints the wireframe. A page of paint — a
+    /// filled rect, a filled ellipse over it, an image and a text layer —
+    /// comes back with none of its paint: the centres read the canvas
+    /// background, and the only ink anywhere is the hairline outline. The
+    /// same page rendered normally paints its fills, so the fixture cannot
+    /// be empty and pass by accident.
+    #[test]
+    fn outline_mode_paints_only_the_wireframe() {
+        const BG: Color = Color::from_rgb8(40, 40, 40);
+        let page = Node::frame("page", 100.0, 100.0)
+            .child(Node::rect(
+                "r",
+                20.0,
+                20.0,
+                60.0,
+                60.0,
+                Color::from_rgb8(255, 0, 0),
+            ))
+            .child(Node::ellipse(
+                "e",
+                35.0,
+                35.0,
+                30.0,
+                30.0,
+                Color::from_rgb8(0, 0, 255),
+            ))
+            .child(Node::image("i", 75.0, 5.0, 20.0, 20.0, "no-asset"))
+            .child(Node::text("t", 30.0, 70.0, 40.0, 12.0, "Hi"));
+
+        // control: the same page, rendered normally, paints its fills —
+        // the ellipse covers the centre, so the centre must be blue
+        let normal = build_render_tree(&page, &Variables::default());
+        let pn = RasterSink::new(None, None, 100.0, 100.0, 1.0, Some(BG)).unwrap();
+        let pn = pn.render(&normal);
+        let (r, g, b, _) = sample_px(&pn, 50, 50);
+        assert!(
+            b > 100 && b > r,
+            "the fixture paints its fill, got {r},{g},{b}"
+        );
+
+        // outline mode: the stripped copy, at a 2-unit hairline
+        let stripped = crate::outline_view(&page, 2.0);
+        let tree = build_render_tree(&stripped, &Variables::default());
+        let pix = RasterSink::new(None, None, 100.0, 100.0, 1.0, Some(BG)).unwrap();
+        let pix = pix.render(&tree);
+
+        let is_bg = |p: (u8, u8, u8, u8), what: &str| {
+            assert!(
+                p.0 < 60 && p.1 < 60 && p.2 < 60,
+                "{what}: expected the canvas background, got {:?} (paint leaked)",
+                p
+            );
+        };
+        let is_outline = |p: (u8, u8, u8, u8), what: &str| {
+            assert!(
+                p.0 > 200 && p.1 > 200 && p.2 > 200,
+                "{what}: expected the outline hairline, got {p:?}"
+            );
+        };
+        // the rect's and the ellipse's fills are gone — the centre is the
+        // background, not red and not blue
+        is_bg(sample_px(&pix, 50, 50), "the rect/ellipse centre");
+        // the image is gone — its box centre is the background, not the
+        // missing-asset grey a normal render would paint
+        is_bg(sample_px(&pix, 85, 15), "the image centre");
+        // the text's glyphs are gone — its box centre is the background
+        is_bg(sample_px(&pix, 50, 76), "the text centre");
+        // and the only ink is the hairline, on the layers' own edges
+        is_outline(sample_px(&pix, 20, 50), "the rect's left edge");
+        is_outline(sample_px(&pix, 80, 50), "the rect's right edge");
+        is_outline(sample_px(&pix, 35, 50), "the ellipse's left edge");
+        is_outline(sample_px(&pix, 75, 15), "the image box's left edge");
+    }
 }
 
 #[cfg(test)]

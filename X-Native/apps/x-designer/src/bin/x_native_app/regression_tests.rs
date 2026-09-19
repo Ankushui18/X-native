@@ -8918,3 +8918,183 @@ fn the_image_section_flip_buttons_write_the_placement() {
     assert!(both.flip_h && both.flip_v);
     assert_eq!(h.app.status, "Flipped vertically");
 }
+
+/// Figma's **outline mode** (⌘Y, designlab Figma 101 "Tips and Tricks":
+/// *"Show outlines — to toggle outlines on and off, ⌘Y"*): the canvas
+/// renders each layer as a wireframe — fills, images, blends and effects are
+/// not painted — and the document is left exactly as authored. A view state
+/// on the app, not an edit: no undo entry, no document byte changes, and the
+/// old ⌘Y-as-redo arm is gone (redo is Figma's ⇧⌘Z, and nothing pinned ⌘Y).
+#[test]
+fn cmd_y_toggles_outline_view_and_never_touches_the_document() {
+    let mut h = host();
+    let root = h.app.doc().editor_ref().root.id.clone();
+    h.app.doc().editor().insert_node(
+        &root,
+        Node::rect("paint", 0.0, 0.0, 100.0, 60.0, Color::from_rgb8(255, 0, 0)),
+    );
+    h.app
+        .doc()
+        .editor()
+        .insert_node(&root, Node::image("pic", 0.0, 80.0, 60.0, 40.0, "no-asset"));
+    // leave a redoable step on the stack: the OLD ⌘Y arm used to consume it
+    h.app.doc().undo_document();
+    h.app.doc().undo_document();
+    assert!(
+        find_node_clone(&h.app.doc_ref().editor_ref().root, "paint").is_none(),
+        "both inserts undone"
+    );
+    let depth = h.app.doc_ref().editor_ref().undo_depth();
+    let before = x_native::fileio::save_x(&h.app.doc_ref().doc);
+
+    // ⌘Y turns the view on — and touches nothing
+    h.app.ctrl = true;
+    h.on_key(Key::Character("y".into()), None);
+    h.app.ctrl = false;
+    assert!(h.app.outlines, "⌘Y turns outline view on");
+    assert_eq!(h.app.status, "Outline view on");
+    assert_eq!(
+        h.app.doc_ref().editor_ref().undo_depth(),
+        depth,
+        "a view toggle lands no undo entry"
+    );
+    assert!(
+        find_node_clone(&h.app.doc_ref().editor_ref().root, "paint").is_none(),
+        "⌘Y is no longer redo: the undone insert stays undone"
+    );
+    assert_eq!(
+        x_native::fileio::save_x(&h.app.doc_ref().doc),
+        before,
+        "the document bytes are untouched"
+    );
+
+    // ⇧⌘Z is still the redo key
+    h.app.ctrl = true;
+    h.app.shift = true;
+    h.on_key(Key::Character("z".into()), None);
+    h.app.shift = false;
+    h.app.ctrl = false;
+    assert!(
+        find_node_clone(&h.app.doc_ref().editor_ref().root, "pic").is_some(),
+        "⇧⌘Z still redoes"
+    );
+
+    // and the second ⌘Y puts the view back
+    h.app.ctrl = true;
+    h.on_key(Key::Character("y".into()), None);
+    h.app.ctrl = false;
+    assert!(!h.app.outlines, "⌘Y toggles back off");
+    assert_eq!(h.app.status, "Outline view off");
+}
+
+/// The canvas the outline mode paints: a stripped copy at the hairline. The
+/// wireframe's own render tree is the read-back — no image command (the
+/// image became its box), the hairlines in its place. The canvas scene is a
+/// different picture from the editor's, and because the hairline width is
+/// `1.0 / zoom` a different zoom is a different picture too: this small
+/// page's visible set does not change between the zooms, so only the width
+/// moves the hash.
+#[test]
+fn outline_mode_hairs_the_canvas_and_paints_no_image() {
+    let mut h = host();
+    let mut page = Node::frame("page", 200.0, 200.0);
+    page.children.push(Node::rect(
+        "r",
+        10.0,
+        10.0,
+        80.0,
+        80.0,
+        Color::from_rgb8(255, 0, 0),
+    ));
+    page.children
+        .push(Node::image("i", 120.0, 10.0, 60.0, 60.0, "no-asset"));
+    h.app.doc().editor().root = page;
+
+    // the document's own tree carries exactly one image command; the
+    // wireframe copy the canvas renders carries none — hairlines instead
+    let doc = h.app.doc_ref();
+    let doc_tree = x_native::build_render_tree(&doc.editor_ref().root, &doc.doc.variables);
+    let stripped = x_native::outline_view(&doc.editor_ref().root, 1.0);
+    let wire = x_native::build_render_tree(&stripped, &doc.doc.variables);
+    let images = |t: &x_native::RenderTree| {
+        t.commands
+            .iter()
+            .filter(|c| matches!(c, x_native::RenderCommand::Image { .. }))
+            .count()
+    };
+    assert_eq!(images(&doc_tree), 1, "the image is in the document's tree");
+    assert_eq!(
+        images(&wire),
+        0,
+        "outline view paints no image — it is a box now"
+    );
+    let strokes = wire
+        .commands
+        .iter()
+        .filter(|c| matches!(c, x_native::RenderCommand::StrokePath { .. }))
+        .count();
+    assert!(strokes > 0, "the hairline outlines are drawn");
+
+    // on the canvas: the wireframe is a different picture from the editor's
+    let normal = h.app.canvas_scene();
+    assert!(normal.encoding().n_paths > 0, "the canvas encodes the page");
+    h.app.outlines = true;
+    let outlined = h.app.canvas_scene();
+    assert!(
+        !h.app.doc_ref().frame_cache.stats.full_hit,
+        "outline mode renders the stripped copy, not the editor's picture"
+    );
+    assert!(outlined.encoding().n_paths > 0, "the hairlines encode");
+    // the hairline is 1/zoom: a different zoom is a different picture, so the
+    // cache must re-render rather than serve the old width
+    h.app.zoom = 2.0;
+    h.app.canvas_scene();
+    assert!(
+        !h.app.doc_ref().frame_cache.stats.full_hit,
+        "the hairline follows the zoom"
+    );
+    h.app.zoom = 1.0;
+    // off again: the editor's own picture comes back
+    h.app.outlines = false;
+    h.app.canvas_scene();
+    assert!(
+        !h.app.doc_ref().frame_cache.stats.full_hit,
+        "back in the editor, the fills paint again"
+    );
+    // the document itself was never touched by any of this
+    assert!(
+        matches!(
+            h.app.doc_ref().editor_ref().root.children[1].kind,
+            NodeKind::Image { .. }
+        ),
+        "the image node is still an image in the document"
+    );
+}
+
+/// The shortcuts panel carries outline mode's row: the key the sheet names is
+/// the key that runs while the sheet is open, and the sheet stays open for
+/// the next key — the way Figma's panel invites you to try them.
+#[test]
+fn the_shortcut_sheet_carries_the_outline_view_key() {
+    let mut h = host();
+    h.app.shift = true;
+    h.on_key(Key::Character("?".into()), None);
+    h.app.shift = false;
+    assert!(h.app.shortcuts_open, "⇧? opens the sheet");
+    h.app.ctrl = true;
+    h.on_key(Key::Character("y".into()), None);
+    h.app.ctrl = false;
+    assert!(
+        h.app.outlines,
+        "the ⌘Y the sheet names runs while the sheet is open"
+    );
+    assert!(
+        h.app.shortcuts_open,
+        "the sheet stays open for the next key"
+    );
+    // a press anywhere else closes it, as before
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    h.dispatch(Action::CloseShortcuts);
+    assert!(!h.app.shortcuts_open);
+}

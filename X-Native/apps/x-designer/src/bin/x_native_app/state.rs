@@ -2109,6 +2109,11 @@ pub enum Action {
     /// Figma's right sidebar (Layer → "Show name"): paint this frame's name on
     /// the canvas, or don't. Frames only; Sections always show theirs.
     ToggleShowName,
+    /// Figma's outline mode (⌘Y, designlab Figma 101 "Tips and Tricks"): the
+    /// canvas renders each layer as a wireframe — fills, images, blends and
+    /// effects are not painted, only the outline. A view toggle on the app,
+    /// never a document edit.
+    ToggleOutlines,
     /// Toggle visibility of the primary fill or stroke layer.
     TogglePaintVisibility(bool),
     /// Cycle the selected stroke between inside, center, and outside.
@@ -3948,6 +3953,12 @@ pub struct App {
     pub conn_sel: Option<usize>,
     pub zoom: f64,
     pub pan: (f64, f64),
+    /// Figma's outline mode (⌘Y, designlab Figma 101 "Tips and Tricks"):
+    /// the canvas renders each layer as a wireframe — fills, images, blends
+    /// and effects are not painted, only the outline. A render mode, not a
+    /// document property: the document, its undo history and the exporters
+    /// are untouched while it is on.
+    pub outlines: bool,
     pub ctrl: bool,
     pub shift: bool,
     /// Alt/Option held (⌥-drag = duplicate)
@@ -4374,6 +4385,7 @@ impl App {
             conn_sel: None,
             zoom: 1.0,
             pan: (0.0, 0.0),
+            outlines: false,
             ctrl: false,
             alt: false,
             shift: false,

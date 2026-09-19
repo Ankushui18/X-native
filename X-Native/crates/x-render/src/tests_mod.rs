@@ -922,3 +922,169 @@ fn explicit_line_height_routes_to_styled_pipeline() {
     legacy.bindings.insert("lh".into(), "1.5".into());
     assert!(super::text_needs_styled(&legacy));
 }
+
+#[cfg(test)]
+mod outline_view_tests {
+    use super::*;
+    use crate::ir::RenderCommand;
+    use vello::peniko::Brush;
+
+    /// The wireframe contract of `outline_view`: per node, no fill, no
+    /// effects, a Normal blend, and the one hairline stroke; Image and Text
+    /// become the plain box they own; geometry, ids and nesting are kept;
+    /// the source document is never touched.
+    #[test]
+    fn outline_view_is_a_wireframe_copy_of_the_document() {
+        let mut card = Node::rect("card", 10.0, 10.0, 40.0, 40.0, Color::from_rgb8(0xff, 0, 0));
+        card.corner_radii = Some([4.0; 4]);
+        card.blend = BlendKind::Multiply;
+        card.effects.push(Effect::DropShadow {
+            dx: 3.0,
+            dy: 5.0,
+            blur: 8.0,
+            color: Color::from_rgba8(0, 0, 0, 128),
+        });
+        card.visual_stacks_materialized = true;
+        card.fill_layers = vec![PaintLayer::new(Paint::Solid(Color::from_rgb8(0xff, 0, 0)))];
+        card.stroke_layers = vec![StrokeLayer::new(Stroke::solid(Color::WHITE, 2.0))];
+        let inner = Node::ellipse("inner", 5.0, 5.0, 20.0, 20.0, Color::from_rgb8(0, 0xff, 0));
+        let page = Node::frame("page", 200.0, 200.0)
+            .child(card.child(inner))
+            .child(Node::text("t", 60.0, 10.0, 80.0, 20.0, "hello"))
+            .child(Node::image("i", 60.0, 60.0, 40.0, 40.0, "asset-1"));
+
+        let stripped = outline_view(&page, 2.5);
+
+        // the source document keeps its paint, its kinds and its stacks
+        assert_eq!(page.children[0].blend, BlendKind::Multiply);
+        assert_eq!(page.children[0].effects.len(), 1);
+        assert_eq!(page.children[0].fill_layers.len(), 1);
+        assert!(matches!(page.children[1].kind, NodeKind::Text { .. }));
+        assert!(matches!(page.children[2].kind, NodeKind::Image { .. }));
+
+        let check = |n: &Node, what: &str| {
+            assert!(
+                matches!(&n.fill, Paint::Solid(c) if *c == Color::TRANSPARENT),
+                "{what}: the fill is cleared, got {:?}",
+                n.fill
+            );
+            assert!(
+                n.effects.is_empty() && n.effect_layers.is_empty(),
+                "{what}: the effects are cleared"
+            );
+            assert_eq!(n.blend, BlendKind::Normal, "{what}: the blend is Normal");
+            assert_eq!(
+                n.stroke,
+                Stroke::solid(OUTLINE_COLOR, 2.5),
+                "{what}: the stroke is the hairline outline"
+            );
+            assert_eq!(
+                n.active_fills(),
+                vec![PaintLayer::new(Paint::Solid(Color::TRANSPARENT))],
+                "{what}: nothing paints a fill"
+            );
+            let strokes = n.active_strokes();
+            assert_eq!(
+                strokes,
+                vec![StrokeLayer::new(Stroke::solid(OUTLINE_COLOR, 2.5))],
+                "{what}: exactly one outline stroke"
+            );
+        };
+        // the render root is the page — and the page is not a layer, so it
+        // keeps no outline of its own (everything under it does)
+        assert_eq!(
+            stripped.stroke,
+            Stroke::default(),
+            "the page itself is not outlined"
+        );
+        check(&stripped.children[0], "card");
+        check(&stripped.children[0].children[0], "inner");
+
+        // geometry, ids and nesting are the copy's — not a rewrite
+        assert_eq!(stripped.id, page.id);
+        assert_eq!(stripped.children[0].corner_radii, Some([4.0; 4]));
+        assert_eq!(stripped.children[0].transform.x, 10.0);
+        assert_eq!(stripped.children[0].children[0].id, "inner");
+        // Image and Text paint themselves and would swallow the stroke:
+        // they become the plain box they own (the named delta: Figma
+        // outlines the glyphs, we outline the text layer's box)
+        assert!(
+            matches!(
+                stripped.children[1].kind,
+                NodeKind::Rect { radius } if radius == 0.0
+            ),
+            "text becomes its box"
+        );
+        assert!(
+            matches!(
+                stripped.children[2].kind,
+                NodeKind::Rect { radius } if radius == 0.0
+            ),
+            "image becomes its box"
+        );
+    }
+
+    /// An instance resolves from the STRIPPED registry: the master's
+    /// children in the copy are the ones resolved, so an instance's chip is
+    /// a wireframe like everything else — no blue fill, only the outline.
+    #[test]
+    fn outline_view_strips_the_instances_master_too() {
+        let mut master = Node::component("m", "Chip", 40.0, 20.0);
+        master.visible = false;
+        master.children.push(Node::rect(
+            "chip-bg",
+            0.0,
+            0.0,
+            40.0,
+            20.0,
+            Color::from_rgb8(0, 0, 0xff),
+        ));
+        let page = Node::frame("page", 100.0, 100.0)
+            .child(master)
+            .child(Node::instance("i", "Chip", 10.0, 40.0, 40.0, 20.0));
+        let stripped = outline_view(&page, 1.0);
+        let tree = crate::ir::build_render_tree(&stripped, &Variables::default());
+        // the instance's chip carries the outline stroke…
+        let chip_stroke = tree
+            .commands
+            .iter()
+            .find_map(|c| match c {
+                RenderCommand::StrokePath {
+                    key, brush, width, ..
+                } if key.contains("chip-bg") => Some((brush.clone(), *width)),
+                _ => None,
+            })
+            .expect("the resolved chip is outlined");
+        assert!(
+            matches!(chip_stroke.0, Brush::Solid(c) if c == OUTLINE_COLOR),
+            "outline ink, got {:?}",
+            chip_stroke.0
+        );
+        assert_eq!(chip_stroke.1, 1.0, "at the hairline width");
+        // …and no fill from the master's blue
+        let fills: Vec<&Brush> = tree
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                RenderCommand::FillPath { brush, .. } => Some(brush),
+                _ => None,
+            })
+            .collect();
+        let blue = Color::from_rgb8(0, 0, 0xff);
+        let any_blue = fills
+            .iter()
+            .any(|b| matches!(b, Brush::Solid(x) if *x == blue));
+        assert!(!any_blue, "the master's blue fill must not paint");
+        // …and no image or glyph command at all
+        let image_or_glyph = tree.commands.iter().any(|c| {
+            matches!(
+                c,
+                RenderCommand::Image { .. } | RenderCommand::Glyphs { .. }
+            )
+        });
+        assert!(
+            !image_or_glyph,
+            "the wireframe carries no image or glyph command"
+        );
+    }
+}
