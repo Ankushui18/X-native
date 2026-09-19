@@ -511,7 +511,6 @@ impl Default for ExportSettings {
     }
 }
 
-#[derive(Debug, Clone)]
 /// Figma's mask **type** — the Mask section's dropdown (help
 /// 360040450253; plugin API `MaskType`). A mask keys the masked result on the
 /// mask layer itself: Alpha on its opacity, Vector on its fill/stroke
@@ -591,6 +590,7 @@ fn luminance(c: &Color) -> f32 {
     (0.2126 * r + 0.7152 * g + 0.0722 * b).clamp(0.0, 1.0)
 }
 
+#[derive(Debug, Clone)]
 pub struct Node {
     /// Stable identity: the key every reference (prototype destinations,
     /// instance overrides, render keys, selection) points at. Never changes
