@@ -985,8 +985,22 @@ mod tests {
                     canvas_stacking: stacking,
                     ..Default::default()
                 })
-                .child(Node::rect("first", 0.0, 0.0, 60.0, 60.0, Color::from_rgb8(255, 0, 0)))
-                .child(Node::rect("last", 0.0, 0.0, 60.0, 60.0, Color::from_rgb8(0, 0, 255)));
+                .child(Node::rect(
+                    "first",
+                    0.0,
+                    0.0,
+                    60.0,
+                    60.0,
+                    Color::from_rgb8(255, 0, 0),
+                ))
+                .child(Node::rect(
+                    "last",
+                    0.0,
+                    0.0,
+                    60.0,
+                    60.0,
+                    Color::from_rgb8(0, 0, 255),
+                ));
             // the solver places the two layers over each other: gap -40 with two
             // 60-wide children leaves a 20px strip where both are painted
             apply_layout_recursive(&mut frame, &Variables::default());
