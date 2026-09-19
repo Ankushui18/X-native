@@ -6465,7 +6465,9 @@ fn the_canvas_stacking_menu_writes_figmas_two_orders() {
     assert!(h.app.status.contains("First on top"), "{}", h.app.status);
     // the other order is one more pick away, and it writes back too
     h.dispatch(Action::StackingMenu);
-    h.dispatch(Action::SetCanvasStacking(x_native::CanvasStacking::LastOnTop));
+    h.dispatch(Action::SetCanvasStacking(
+        x_native::CanvasStacking::LastOnTop,
+    ));
     assert_eq!(
         h.app.selected_layout().unwrap().canvas_stacking,
         x_native::CanvasStacking::LastOnTop

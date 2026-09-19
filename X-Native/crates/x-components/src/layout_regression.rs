@@ -734,7 +734,10 @@ fn min_and_max_dimensions_clamp_either_sizing() {
         })
         .child(Node::rect("tiny", 0.0, 0.0, 5.0, 5.0, Color::WHITE));
     apply_layout_recursive(&mut small, &Variables::default());
-    assert_eq!(small.w, 40.0, "40 of padding is the smallest a frame can be");
+    assert_eq!(
+        small.w, 40.0,
+        "40 of padding is the smallest a frame can be"
+    );
 
     // the vertical axis answers the same way
     let mut tall = Node::frame("tl", 30.0, 30.0);
