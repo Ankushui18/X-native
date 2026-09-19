@@ -6859,8 +6859,7 @@ fn proto_scroll_row(
 ) {
     let (x0, xr) = span;
     let (caption, value, menu) = field;
-    app.fonts
-        .text(s, x0, y + 6.5, caption, T10, C_DIM, Wt::Reg);
+    app.fonts.text(s, x0, y + 6.5, caption, T10, C_DIM, Wt::Reg);
     let fr = Rect::new(x0 + 74.0, y, xr, y + INPUT_H);
     if app.dropdown_proto_scroll == Some(menu) {
         app.proto_scroll_dd_anchor = (fr.x0, fr.y1);

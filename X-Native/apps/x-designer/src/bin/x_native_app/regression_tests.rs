@@ -1478,8 +1478,10 @@ fn the_scroll_behaviour_rows_write_the_frames_overflow_and_a_layers_position() {
         f.overflow = x_native::Overflow::ScrollY;
         f.is_starting_point = true;
         d.editor().insert_node(&root_id, f);
-        d.editor()
-            .insert_node("sc", Node::rect("tall", 0.0, 0.0, 100.0, 400.0, Color::WHITE));
+        d.editor().insert_node(
+            "sc",
+            Node::rect("tall", 0.0, 0.0, 100.0, 400.0, Color::WHITE),
+        );
         d.editor()
             .insert_node("sc", Node::rect("nav", 0.0, 0.0, 100.0, 20.0, Color::WHITE));
         // a frame that does NOT scroll: its children have no Position row
