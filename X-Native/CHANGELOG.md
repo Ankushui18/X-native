@@ -5,6 +5,41 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-19 (Masks)
+
+Figma's masks (`360040450253`): *"Masks sit below the layers they affect, and apply
+to all layers above them"*, *"any layer can be a mask"*, and the design panel's
+**Mask** section switches the mask's **type** — *Alpha*, *Vector*, *Luminance*. The
+model, the file format and the renderer already carried `is_mask` and pinned it with
+tests; there was no way to set it from the UI at all.
+
+- **Authoring.** `Editor::use_as_mask` is the ONE writer: `⌘⌥M` (Figma's own
+  shortcut), the canvas menu's **Use as mask** row and the sidebar row all call it.
+  One layer selected flips its own flag; several are wrapped in the mask object
+  Figma creates — a group whose bottom layer is the mask — in ONE undo entry
+  (`merge_last`), and the mask object is what the gesture selects. Pressing it again
+  on a mask object clears its mask, so one gesture is the toggle.
+- **The stack survives.** The selection is z-ordered before grouping, because
+  `group_selection` keeps the caller's order: the mask has to land at the bottom
+  (paint order is document order) or the clip would hide the wrong layers.
+- **The type.** `x_core::MaskType` (Alpha, the default; Vector; Luminance) rides on
+  `Node::mask_type`, on the file as `maskType`, into the frame cache's hash, and into
+  the right panel's **Mask** section — the dropdown Figma puts there, with the current
+  type checked. A layer that is not a mask yet gets Figma's *Use as mask* row in that
+  same slot.
+- **What the types do.** The IR's mask scope is the clip *plus* the mask's own
+  opacity: **Vector** ignores translucency (the documented *"any translucency is
+  ignored"*), **Alpha** scales by the mask fill's alpha × the layer's opacity, and
+  **Luminance** by the fill's relative luminance — a black mask hides everything, a
+  white one hides nothing. Exact for a single solid fill; a gradient, blur or image
+  mask clips hard instead of per pixel, which is the named delta.
+- **Any layer.** `mask_path_of` fell back to `None` for text, images, groups and
+  frames, so those masks silently did nothing; it now clips them to their bounds — a
+  superset of Figma's per-pixel coverage, and the second named delta.
+- **Not built.** *View → Mask outlines* (the green boundaries), the layers-panel mask
+  glyph and the arrows Figma draws over the masked layers, and per-pixel mask
+  compositing.
+
 ## [Unreleased] — 2026-09-19 (Rotate on canvas)
 
 Figma's canvas rotate (`360039956914`): *"Hover just outside one of the layer's

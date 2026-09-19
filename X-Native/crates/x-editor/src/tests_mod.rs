@@ -822,6 +822,59 @@ mod tests {
     }
 
     #[test]
+    fn use_as_mask_makes_the_bottom_layer_the_mask() {
+        let mut e = Editor::new(doc());
+        // click order is not z-order: `a` sits UNDER `b`
+        e.selection = vec!["b".into(), "a".into()];
+        assert_eq!(e.use_as_mask("m1"), Some(true));
+        let m = find(&e.root, "m1").expect("Figma's mask object (help 360040450253)");
+        assert_eq!(
+            m.children.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b"],
+            "the stack keeps its z-order, the mask first"
+        );
+        assert!(m.children[0].is_mask, "the bottom layer masks the rest");
+        assert!(!m.children[1].is_mask);
+        assert_eq!(e.selection, vec!["m1".to_string()]);
+        // the object and its mask are ONE gesture
+        assert!(e.undo());
+        assert!(
+            find(&e.root, "m1").is_none(),
+            "the mask object undoes with it"
+        );
+        assert!(!find(&e.root, "a").unwrap().is_mask);
+    }
+
+    #[test]
+    fn use_as_mask_toggles_one_layer_and_its_type_is_undoable() {
+        let mut e = Editor::new(doc());
+        e.selection = vec!["a".into()];
+        assert_eq!(e.use_as_mask("m1"), Some(true), "one layer is its own mask");
+        assert!(find(&e.root, "a").unwrap().is_mask);
+        assert!(find(&e.root, "m1").is_none(), "no group for a single layer");
+        assert_eq!(
+            e.mask_type_of_selection(),
+            Some(MaskType::Alpha),
+            "Figma's default is Alpha"
+        );
+        // the Mask section's dropdown, and a non-mask takes no type
+        assert!(e.set_mask_type(MaskType::Vector));
+        assert_eq!(e.mask_type_of_selection(), Some(MaskType::Vector));
+        assert_eq!(e.use_as_mask("m1"), Some(false), "asking again clears it");
+        assert!(!find(&e.root, "a").unwrap().is_mask);
+        assert!(
+            !e.set_mask_type(MaskType::Luminance),
+            "not a mask: nothing to set"
+        );
+        assert!(e.undo());
+        assert!(
+            find(&e.root, "a").unwrap().is_mask,
+            "the clear is one entry"
+        );
+        assert_eq!(e.mask_type_of_selection(), Some(MaskType::Vector));
+    }
+
+    #[test]
     fn select_similar_matches_kind_and_fill() {
         let mut e = Editor::new(doc());
         // a second RED rect elsewhere in the tree

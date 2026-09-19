@@ -5149,6 +5149,15 @@ fn paint_design(
     let mut y = tail_top + 12.0;
     let inner_w = rw - pl * 2.0;
 
+    // --- Mask ----------------------------------------------------------
+    // Figma keeps the mask controls with the appearance rows (help
+    // 360040450253): the row that makes a mask, or the type dropdown of the
+    // mask that is selected — above Fill, below Appearance.
+    if let Some(ny) = paint_mask_section(app, s, hit, rx, rw, pl, y) {
+        hline(s, rx, rx + rw, ny - 6.0, C_LINE);
+        y = ny + 6.0;
+    }
+
     // --- Fill ----------------------------------------------------------
     section_header(app, s, hit, rx, rw, pl, y, "Fill", true, Action::AddFill);
     y += 14.0 + LABEL_GAP;
@@ -6086,6 +6095,120 @@ fn sq_btn_small(app: &mut App, s: &mut Scene, x: f64, y: f64, icon: &str) {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Figma's **Mask** row and section (help 360040450253). A layer that is not
+/// a mask yet gets the row Figma puts in the sidebar for a single selection —
+/// *Use as mask*; a layer that is one gets the section and its **type**
+/// dropdown — *Alpha*, *Vector*, *Luminance*. `None` means there is nothing to
+/// show for this selection.
+fn paint_mask_section(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    rx: f64,
+    rw: f64,
+    pl: f64,
+    y: f64,
+) -> Option<f64> {
+    app.mask_row = None;
+    let (is_mask, kind) = mask_section_state(app)?;
+    if !is_mask {
+        let row = Rect::new(rx + pl, y - 4.0, rx + rw - pl, y + 20.0);
+        if hover(app, row) {
+            fill_rrect(s, row, R_XS, C_ROW_HOVER);
+        }
+        app.fonts
+            .text(s, row.x0 + 2.0, y, "Use as mask", T10, C_TEXT, Wt::Reg);
+        app.mask_row = Some(row);
+        hit.push((row, Action::UseAsMask));
+        return Some(row.y1 + 10.0);
+    }
+    app.fonts.caps_label(s, rx + pl, y, "Mask", C_TEXT, Wt::Med);
+    let y = y + 14.0 + LABEL_GAP;
+    let row = Rect::new(rx + pl, y - 3.0, rx + rw - pl, y + 21.0);
+    app.mask_row = Some(row);
+    fill_rrect(
+        s,
+        row,
+        R_XS,
+        if hover(app, row) {
+            C_ROW_HOVER
+        } else {
+            C_FIELD
+        },
+    );
+    stroke_rrect(s, row, R_XS, C_LINE, 1.0);
+    app.fonts
+        .text(s, row.x0 + 8.0, y + 2.0, kind.label(), T10, C_TEXT, Wt::Reg);
+    draw_icon(s, "chevron-down", row.x1 - 18.0, y + 3.0, ICON_XS, C_DIM);
+    hit.push((row, Action::ToggleMaskType));
+    if app.mask_type_open {
+        app.blend_dd_anchor = (row.x0, row.y0);
+    }
+    Some(row.y1 + 12.0)
+}
+
+/// What the Mask row needs: whether the section speaks for a mask (the
+/// selected layer, or the mask inside a selected mask object) and the type its
+/// dropdown shows.
+fn mask_section_state(app: &App) -> Option<(bool, x_native::MaskType)> {
+    let doc = app.doc_opt()?;
+    let id = doc.selected_id()?;
+    let ed = doc.editor_ref();
+    let target = ed.mask_section_target(&id)?;
+    let node = find_node(&ed.root, target.as_str())?;
+    Some((node.is_mask, node.mask_type))
+}
+
+/// Figma's Mask-section type dropdown (help 360040450253): Alpha, Vector,
+/// Luminance, with the current one checked. Same geometry as the blend menus,
+/// anchored on the row that opened it.
+fn paint_mask_type_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    let (ax, ay) = app.blend_dd_anchor;
+    let items = x_native::MaskType::all();
+    let w = 176.0;
+    let h = DROPDOWN_ROW_H * items.len() as f64;
+    let x0 = ax.min((app.win_w - w - 8.0).max(8.0)).max(8.0);
+    let mut y0 = ay + 4.0;
+    if y0 + h > app.win_h - 8.0 {
+        y0 = (ay - 4.0 - h).max(8.0);
+    }
+    let dd = Rect::new(x0, y0, x0 + w, y0 + h);
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, R_LG, C_FIELD);
+    stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+    let current = app
+        .doc_ref()
+        .editor_ref()
+        .mask_type_of_selection()
+        .unwrap_or(x_native::MaskType::Alpha);
+    for (k, m) in items.iter().enumerate() {
+        let r = Rect::new(
+            dd.x0,
+            dd.y0 + DROPDOWN_ROW_H * k as f64,
+            dd.x1,
+            dd.y0 + DROPDOWN_ROW_H * (k + 1) as f64,
+        );
+        let hov = hover(app, r);
+        let on = *m == current;
+        if hov {
+            fill_rect(s, r, C_FIELD_2);
+        }
+        app.fonts.text(
+            s,
+            r.x0 + 10.0,
+            r.y0 + 9.0,
+            m.label(),
+            T11,
+            if on { C_TEXT } else { C_MUTED },
+            Wt::Reg,
+        );
+        if on {
+            draw_icon(s, "check", r.x1 - 22.0, r.y0 + 8.0, ICON_XS, C_TEXT);
+        }
+        hit.push((r, Action::SetMaskType(*m)));
+    }
+}
+
 fn section_header(
     app: &mut App,
     s: &mut Scene,
@@ -8032,6 +8155,26 @@ pub fn scroll_effects_into_view(app: &mut App) {
     }
 }
 
+/// Bring the Mask row into the panel viewport. Same reasoning as
+/// `scroll_effects_into_view` above: the Mask section sits with the appearance
+/// rows, below the fold at scroll 0, and `paint_right` drops the hit rects of
+/// rows that leave the viewport — a test that means to *click* the row has to
+/// make the scroll a user makes.
+pub fn scroll_mask_into_view(app: &mut App) {
+    let mut scene = vello::Scene::new();
+    paint(app, &mut scene);
+    let Some(row) = app.mask_row else {
+        return;
+    };
+    let top = crate::theme::ED_TITLE_H + 89.0;
+    let need = row.y0 - 12.0 - (top + 8.0);
+    if need > 0.0 {
+        app.doc().scroll_right += need;
+        let mut scene = vello::Scene::new();
+        paint(app, &mut scene);
+    }
+}
+
 /// Figma's Effects list — the section that replaced a header and a `+`.
 ///
 /// One row per effect carrying its **type dropdown** (Figma: *"The Drop shadow
@@ -8273,6 +8416,10 @@ fn paint_effects_section(
 /// menu hang past the panel's edge and still take clicks, the way the frame,
 /// line-height and text-style dropdowns do.
 fn paint_effects_menus(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    if app.mask_type_open {
+        paint_mask_type_menu(app, s, hit);
+        return;
+    }
     if app.effect_add_open {
         let (ax1, ay) = app.effect_add_anchor;
         let anchor = Rect::new(ax1 - 18.0, ay - 24.0, ax1, ay + 8.0);

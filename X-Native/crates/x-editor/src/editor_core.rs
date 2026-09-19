@@ -578,6 +578,127 @@ impl Editor {
         }
     }
 
+    /// Figma's *Use as mask* (`⌘⌥M`; help 360040450253): the bottom-most
+    /// selected layer becomes the mask for the layers above it. With several
+    /// layers selected Figma wraps them in the mask object it creates — a
+    /// group carrying the mask — and that group becomes the selection; a
+    /// single layer just flips its own flag. Asking again on a selection that
+    /// is all masks clears them, so one gesture is the toggle.
+    ///
+    /// `Some(true)` means a mask was applied, `Some(false)` that one was
+    /// removed, `None` that the selection could not take a mask at all.
+    pub fn use_as_mask(&mut self, group_id: &str) -> Option<bool> {
+        if self.selection.is_empty() {
+            return None;
+        }
+        let targets: Vec<String> = self
+            .selection
+            .clone()
+            .iter()
+            .filter_map(|id| self.mask_section_target(id))
+            .collect();
+        if targets.len() == self.selection.len() {
+            let mut cleared = false;
+            for id in targets {
+                cleared |= self.set_mask(&id, false);
+            }
+            return cleared.then_some(false);
+        }
+        if self.selection.len() == 1 {
+            let id = self.selection[0].clone();
+            return self.set_mask(&id, true).then_some(true);
+        }
+        // The mask object's stack is the selection's z-order: park the
+        // bottom layer first, where `group_selection` puts the first entry
+        // and where the clip rule looks for the mask.
+        if let Some(parent) = find_parent_mut(&mut self.root, &self.selection[0]) {
+            let mut ordered: Vec<(usize, String)> = self
+                .selection
+                .iter()
+                .filter_map(|id| {
+                    parent
+                        .children
+                        .iter()
+                        .position(|c| &c.id == id)
+                        .map(|i| (i, id.clone()))
+                })
+                .collect();
+            if ordered.len() == self.selection.len() {
+                ordered.sort_by_key(|(i, _)| *i);
+                self.selection = ordered.into_iter().map(|(_, id)| id).collect();
+            }
+        }
+        self.group_selection(group_id);
+        let bottom = find(&self.root, group_id)
+            .and_then(|g| g.children.first())
+            .map(|c| c.id.clone());
+        let Some(bottom) = bottom else {
+            return None;
+        };
+        let masked = self.set_mask(&bottom, true);
+        if masked {
+            // one gesture, one undo entry: the mask object and its mask
+            self.merge_last(2);
+        }
+        masked.then_some(true)
+    }
+
+    /// Set or clear one layer's mask flag. One `ReplaceNode`, so one undo
+    /// entry — the parity sheet's mask rows lean on that.
+    pub fn set_mask(&mut self, id: &str, v: bool) -> bool {
+        if let Some(n) = find(&self.root, id).filter(|n| n.is_mask != v) {
+            let mut after = n.clone();
+            after.is_mask = v;
+            return self.replace_node(id, after);
+        }
+        false
+    }
+
+    /// The layer the Mask section speaks for: a selected mask, or the mask at
+    /// the bottom of a selected mask object — Figma selects the object it just
+    /// created, and its Mask section still drives that mask's type.
+    pub fn mask_section_target(&self, id: &str) -> Option<String> {
+        let n = find(&self.root, id)?;
+        if n.is_mask {
+            return Some(id.to_string());
+        }
+        n.children
+            .first()
+            .filter(|c| c.is_mask)
+            .map(|c| c.id.clone())
+    }
+
+    /// Figma's **Mask** section (help 360040450253): the type the mask is
+    /// applied by. The section speaks for the whole selection, so every
+    /// selected mask takes the choice.
+    pub fn set_mask_type(&mut self, kind: MaskType) -> bool {
+        let ids: Vec<String> = self
+            .selection
+            .clone()
+            .iter()
+            .filter_map(|id| self.mask_section_target(id))
+            .collect();
+        let mut done = false;
+        for id in ids {
+            if let Some(n) = find(&self.root, &id).filter(|n| n.is_mask && n.mask_type != kind) {
+                let mut after = n.clone();
+                after.mask_type = kind;
+                done |= self.replace_node(&id, after);
+            }
+        }
+        done
+    }
+
+    /// The type the Mask section's dropdown shows: the primary selection's,
+    /// when it is a mask at all.
+    pub fn mask_type_of_selection(&self) -> Option<MaskType> {
+        self.selection
+            .last()
+            .and_then(|id| self.mask_section_target(id))
+            .and_then(|id| find(&self.root, &id))
+            .map(|n| n.mask_type)
+    }
+
     pub fn move_selection(&mut self, dx: f64, dy: f64) {
         let ids: Vec<String> = self
             .selection

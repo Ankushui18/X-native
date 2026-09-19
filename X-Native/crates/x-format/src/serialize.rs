@@ -767,6 +767,9 @@ pub(crate) fn node_json(n: &Node, out: &mut String) {
     }
     if n.is_mask {
         out.push_str(",\"mask\":true");
+        if n.mask_type != MaskType::Alpha {
+            out.push_str(&format!(",\"maskType\":\"{}\"", n.mask_type.key()));
+        }
     }
     if let Some(b) = n.baseline {
         out.push_str(&format!(",\"baseline\":{b}"));

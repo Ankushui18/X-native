@@ -512,6 +512,85 @@ impl Default for ExportSettings {
 }
 
 #[derive(Debug, Clone)]
+/// Figma's mask **type** — the Mask section's dropdown (help
+/// 360040450253; plugin API `MaskType`). A mask keys the masked result on the
+/// mask layer itself: Alpha on its opacity, Vector on its fill/stroke
+/// outlines (translucency ignored), Luminance on its brightness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MaskType {
+    /// *"the opacity of the mask … higher opacity reveals more"* — Figma's
+    /// default.
+    #[default]
+    Alpha,
+    /// *"the shape of the mask"* — any area past 0% opacity counts as fully
+    /// opaque.
+    Vector,
+    /// *"the brightness of the mask"* — white shows, black hides.
+    Luminance,
+}
+
+impl MaskType {
+    /// The word the Mask section shows.
+    pub fn label(self) -> &'static str {
+        match self {
+            MaskType::Alpha => "Alpha",
+            MaskType::Vector => "Vector",
+            MaskType::Luminance => "Luminance",
+        }
+    }
+
+    /// The dropdown's rows, in the order the plugin API lists them.
+    pub fn all() -> [MaskType; 3] {
+        [MaskType::Alpha, MaskType::Vector, MaskType::Luminance]
+    }
+
+    /// File-format key: a node's `maskType`.
+    pub fn key(self) -> &'static str {
+        match self {
+            MaskType::Alpha => "alpha",
+            MaskType::Vector => "vector",
+            MaskType::Luminance => "luminance",
+        }
+    }
+
+    /// Parse a file-format key; unknown words read as the default.
+    pub fn from_key(s: &str) -> Option<MaskType> {
+        match s {
+            "alpha" => Some(MaskType::Alpha),
+            "vector" => Some(MaskType::Vector),
+            "luminance" => Some(MaskType::Luminance),
+            _ => None,
+        }
+    }
+
+    /// How much of the masked scope this mask lets through. Vector ignores the
+    /// mask's own translucency; Alpha uses the mask fill's alpha; Luminance
+    /// uses the fill's relative luminance. A non-solid fill (gradient, image,
+    /// variable) stays at 1.0 — the renderer composites a mask as one scope,
+    /// not per pixel, which is the named delta on the parity sheet.
+    pub fn mask_alpha(self, fill: &Paint, node_opacity: f32) -> f32 {
+        let a = match self {
+            MaskType::Vector => 1.0,
+            MaskType::Alpha => match fill {
+                Paint::Solid(c) => c.components[3],
+                _ => 1.0,
+            },
+            MaskType::Luminance => match fill {
+                Paint::Solid(c) => luminance(c) * c.components[3],
+                _ => 1.0,
+            },
+        };
+        (a * node_opacity).clamp(0.0, 1.0)
+    }
+}
+
+/// Relative luminance of a solid colour — the Rec. 709 weights on its sRGB
+/// channels, the figure Figma's own docs call "luminance".
+fn luminance(c: &Color) -> f32 {
+    let [r, g, b, _] = c.components;
+    (0.2126 * r + 0.7152 * g + 0.0722 * b).clamp(0.0, 1.0)
+}
+
 pub struct Node {
     /// Stable identity: the key every reference (prototype destinations,
     /// instance overrides, render keys, selection) points at. Never changes
@@ -573,6 +652,9 @@ pub struct Node {
     /// Masks: when true, this node clips its FOLLOWING SIBLINGS inside
     /// the same parent (mask semantics semantics, simplified).
     pub is_mask: bool,
+    /// Which of Figma's mask types this layer is when `is_mask` is set — the
+    /// Mask section's dropdown.
+    pub mask_type: MaskType,
     /// P1: variable bindings — property -> variable name.
     /// Supported keys: "radius", "opacity", "fontsize", "w", "h".
     /// ("fill" binds via Paint::Variable; gap/padding via AutoLayout vars.)
@@ -700,6 +782,7 @@ impl Node {
             constraints: self.constraints.clone(),
             z_index: self.z_index,
             is_mask: self.is_mask,
+            mask_type: self.mask_type,
             bindings: self.bindings.clone(),
             text_metrics: self.text_metrics.clone(),
             text_runs: self.text_runs.clone(),
@@ -1279,6 +1362,7 @@ impl Node {
             blend: BlendKind::Normal,
             effects: vec![],
             is_mask: false,
+            mask_type: MaskType::default(),
             pin: (HPin::Left, VPin::Top),
             constraints: ChildConstraints::default(),
             z_index: None,
@@ -1634,6 +1718,11 @@ impl Node {
     }
     pub fn mask(mut self, v: bool) -> Self {
         self.is_mask = v;
+        self
+    }
+    /// Figma's Mask section: the type this mask is applied by.
+    pub fn mask_type(mut self, t: MaskType) -> Self {
+        self.mask_type = t;
         self
     }
     pub fn child(mut self, n: Node) -> Self {

@@ -1092,6 +1092,7 @@ fn is_toggle_row(a: &Action) -> bool {
             | Action::ToggleEffectSettings(_)
             | Action::ToggleEffectBlend(_)
             | Action::ToggleLayerBlend
+            | Action::ToggleMaskType
             | Action::TogglePaintBlend(_)
             | Action::ToggleVectorHandles
             | Action::ClipContent
@@ -1573,6 +1574,12 @@ pub enum Action {
     SetLayerBlend(x_native::BlendKind),
     TogglePaintBlend(PaintTarget),
     SetPaintBlend(PaintTarget, x_native::BlendKind),
+    /// Figma's **Use as mask** (`⌘⌥M`; help 360040450253) — the bottom-most
+    /// selected layer becomes the mask for the layers above it.
+    UseAsMask,
+    /// The Mask section's type dropdown: Alpha, Vector, Luminance.
+    ToggleMaskType,
+    SetMaskType(x_native::MaskType),
     /// Pressing an effect row (not its buttons) arms the reorder drag.
     EffectRow(usize),
     /// UX Analysis actions (Quant-UX inspired)
@@ -3173,6 +3180,8 @@ pub struct App {
     pub effect_settings: Option<usize>,
     pub effect_blend_open: Option<usize>,
     pub layer_blend_open: bool,
+    /// The Mask section's type dropdown is open (Figma's Mask section).
+    pub mask_type_open: bool,
     pub paint_blend_open: Option<PaintTarget>,
     /// Where a blend menu anchors, recorded by the paint pass.
     pub blend_dd_anchor: (f64, f64),
@@ -3186,6 +3195,9 @@ pub struct App {
     /// targets for reordering by dragging a row, which is Figma's gesture:
     /// *"you click and drag the handles to reorder the effects"*.
     pub effect_rows: Vec<Rect>,
+    /// The Mask row's rect from the last paint — the anchor the panel scrolls
+    /// to when the Mask section has to be reached (tests, screenshots).
+    pub mask_row: Option<Rect>,
     /// The row a drag is over while reordering.
     pub effect_drag_over: Option<usize>,
     pub status: String,
@@ -3405,11 +3417,13 @@ impl App {
             effect_settings: None,
             effect_blend_open: None,
             layer_blend_open: false,
+            mask_type_open: false,
             paint_blend_open: None,
             blend_dd_anchor: (0.0, 0.0),
             effect_add_anchor: (0.0, 0.0),
             rotation_origin_on: false,
             effect_rows: Vec::new(),
+            mask_row: None,
             effect_drag_over: None,
             status: String::from("Ready"),
             nav_tab: NavTab::File,
@@ -5297,6 +5311,7 @@ impl App {
         self.effect_kind_open = None;
         self.effect_blend_open = None;
         self.layer_blend_open = false;
+        self.mask_type_open = false;
         self.paint_blend_open = None;
     }
 

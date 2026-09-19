@@ -68,6 +68,11 @@ pub enum ContextAction {
     /// (help 9771500257687), so a selection drawn in one is lifted first.
     WrapInSection,
     MakeComponent,
+    /// Figma's *Use as mask* (help 360040450253): the bottom-most selected
+    /// layer masks the layers above it. The row is the one gesture — the
+    /// engine's `use_as_mask` clears the flag when the selection already is
+    /// a mask object.
+    UseAsMask,
     BringToFront,
     BringForward,
     SendBackward,
@@ -117,6 +122,7 @@ impl ContextAction {
             Self::Ungroup => "Ungroup",
             Self::WrapInSection => "Wrap in new section",
             Self::MakeComponent => "Make component",
+            Self::UseAsMask => "Use as mask",
             Self::BringToFront => "Bring to front",
             Self::BringForward => "Bring forward",
             Self::SendBackward => "Send backward",
@@ -163,6 +169,7 @@ impl ContextAction {
             Self::Ungroup => "ungroup",
             Self::WrapInSection => "section",
             Self::MakeComponent => "component",
+            Self::UseAsMask => "square",
             Self::BringToFront => "chevrons-up",
             Self::BringForward => "chevron-up",
             Self::SendBackward => "chevron-down",
@@ -197,6 +204,7 @@ impl ContextAction {
             Self::Group => Some("⌘G"),
             Self::Ungroup => Some("⇧⌘G"),
             Self::MakeComponent => Some("⌘⌥K"),
+            Self::UseAsMask => Some("⌘⌥M"),
             Self::BringToFront => Some("⇧⌘]"),
             Self::BringForward => Some("⌘]"),
             Self::SendBackward => Some("⌘["),
@@ -317,6 +325,7 @@ pub fn action_for(action: &ContextAction) -> Option<Action> {
         Ungroup => Action::Ctx(CtxCmd::Ungroup),
         WrapInSection => Action::Ctx(CtxCmd::SectionSelection),
         MakeComponent => Action::Ctx(CtxCmd::MakeComponent),
+        UseAsMask => Action::UseAsMask,
         BringToFront => Action::Ctx(CtxCmd::ToFront),
         BringForward => Action::Ctx(CtxCmd::BringFwd),
         SendBackward => Action::Ctx(CtxCmd::SendBack),
@@ -382,6 +391,7 @@ pub fn build_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             }
             items.push(ai(WrapInSection, true));
             items.push(ai(MakeComponent, true));
+            items.push(ai(UseAsMask, true));
             items.push(ContextMenuItem::Separator);
             items.push(ContextMenuItem::Submenu {
                 label: "Arrange",
@@ -522,6 +532,21 @@ mod tests {
             .iter()
             .any(|it| matches!(it, ContextMenuItem::Submenu { label, .. } if *label == "Boolean"));
         assert!(has_bool, "two selections must offer the boolean submenu");
+    }
+
+    #[test]
+    fn the_selection_menu_offers_use_as_mask() {
+        let items = build_menu_items(&ContextTarget::CanvasSelection {
+            selected_count: 1,
+            contains_group: false,
+            instance: None,
+        });
+        let actions = actions_of(&items);
+        assert!(
+            actions.contains(&&ContextAction::UseAsMask),
+            "Figma's Use as mask row, help 360040450253"
+        );
+        assert_eq!(ContextAction::UseAsMask.shortcut(), Some("⌘⌥M"));
     }
 
     #[test]

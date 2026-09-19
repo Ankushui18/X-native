@@ -1095,12 +1095,21 @@ mod tests {
         }
         doc.pages.push(
             Node::frame("p", 400.0, 300.0)
-                .child(Node::ellipse("m", 0.0, 0.0, 50.0, 50.0, Color::WHITE).mask(true))
+                .child(
+                    Node::ellipse("m", 0.0, 0.0, 50.0, 50.0, Color::WHITE)
+                        .mask(true)
+                        .mask_type(MaskType::Vector),
+                )
                 .child(img),
         );
         let loaded = load_x(&save_x(&doc)).unwrap();
         let m = find(&loaded.pages[0], "m").unwrap();
         assert!(m.is_mask, "mask flag must roundtrip");
+        assert_eq!(
+            m.mask_type,
+            MaskType::Vector,
+            "the Mask section's type must roundtrip"
+        );
         let i = find(&loaded.pages[0], "img").unwrap();
         assert!(
             matches!(

@@ -2270,6 +2270,111 @@ fn rotate_host() -> (Host, String) {
     (h, id)
 }
 
+/// A page with two stacked rects, nothing selected — the fixture the mask
+/// tests build the selection on.
+fn mask_host() -> Host {
+    let mut h = host();
+    let root = h.app.doc().editor_ref().root.id.clone();
+    for (id, x, y) in [("under", 40.0, 40.0), ("over", 80.0, 80.0)] {
+        h.app
+            .doc()
+            .editor()
+            .insert_node(&root, Node::rect(id, x, y, 80.0, 80.0, Color::WHITE));
+    }
+    h
+}
+
+/// Figma's **Use as mask** (help 360040450253): `⌘⌥M` — or the menu row —
+/// turns the bottom layer of the selection into the mask for the layers above
+/// it, and the same gesture on a mask object clears it again.
+#[test]
+fn the_mask_shortcut_masks_the_bottom_layer() {
+    let mut h = mask_host();
+    {
+        let d = h.app.doc();
+        d.editor().selection = vec!["over".into(), "under".into()];
+    }
+    h.app.ctrl = true;
+    h.app.alt = true;
+    h.on_key(Key::Character("m".into()), None);
+    h.app.ctrl = false;
+    h.app.alt = false;
+
+    let root = h.app.doc_ref().editor_ref().root.clone();
+    let under = find_node_clone(&root, "under").expect("under");
+    assert!(under.is_mask, "the bottom layer masks the rest");
+    assert!(!find_node_clone(&root, "over").unwrap().is_mask);
+    assert_eq!(
+        under.mask_type,
+        x_native::MaskType::Alpha,
+        "Figma's default"
+    );
+    assert!(h.app.status.starts_with("Mask applied"), "{}", h.app.status);
+
+    // the same gesture on the mask object clears its mask
+    h.app.ctrl = true;
+    h.app.alt = true;
+    h.on_key(Key::Character("m".into()), None);
+    h.app.ctrl = false;
+    h.app.alt = false;
+    assert!(
+        !find_node_clone(&root, "under").unwrap().is_mask,
+        "asking again clears the mask"
+    );
+    assert_eq!(h.app.status, "Mask removed");
+}
+
+/// Figma's **Mask** section (help 360040450253): a layer that is not a mask
+/// gets the *Use as mask* row, a mask gets the section and its type dropdown —
+/// *Alpha*, *Vector*, *Luminance*.
+#[test]
+fn the_mask_section_switches_the_masks_type() {
+    let mut h = mask_host();
+    h.app.doc().editor().selection = vec!["over".into()];
+    crate::editor_ui::scroll_mask_into_view(&mut h.app);
+    assert!(
+        h.app.hit.iter().any(|(_, a)| *a == Action::UseAsMask),
+        "a layer that is not a mask gets Figma's Use as mask row"
+    );
+    assert!(!h.app.hit.iter().any(|(_, a)| *a == Action::ToggleMaskType));
+
+    h.dispatch(Action::UseAsMask);
+    crate::editor_ui::scroll_mask_into_view(&mut h.app);
+    assert!(
+        h.app.hit.iter().any(|(_, a)| *a == Action::ToggleMaskType),
+        "the Mask section shows its type dropdown"
+    );
+
+    h.dispatch(Action::ToggleMaskType);
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    for kind in x_native::MaskType::all() {
+        assert!(
+            h.app
+                .hit
+                .iter()
+                .any(|(_, a)| *a == Action::SetMaskType(kind)),
+            "{kind:?} is a row of the dropdown"
+        );
+    }
+    h.dispatch(Action::SetMaskType(x_native::MaskType::Vector));
+    assert_eq!(h.app.status, "Mask type: Vector");
+    assert_eq!(
+        find_node_clone(&h.app.doc_ref().editor_ref().root, "over")
+            .unwrap()
+            .mask_type,
+        x_native::MaskType::Vector
+    );
+    // the choice closes the popover
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    assert!(!h
+        .app
+        .hit
+        .iter()
+        .any(|(_, a)| matches!(a, Action::SetMaskType(_))));
+}
+
 /// Figma's canvas rotate (`360039956914`): *"Hover just outside one of the
 /// layer's bounds until the icon appears. Click and drag to rotate your
 /// selection."* The zone is outside the corners — the inside of a layer still

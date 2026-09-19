@@ -244,6 +244,10 @@ impl RenderTree {
 }
 
 /// A mask node's clip geometry (vector path / rect / ellipse).
+/// Figma: *"any layer can be a mask"* (help 360040450253). Kinds with an
+/// outline of their own use it; the rest — text, images, groups, frames,
+/// instances — clip to their bounds, a superset of Figma's per-pixel
+/// coverage (glyph coverage, image alpha) and the named delta there.
 fn mask_path_of(n: &Node) -> Option<BezPath> {
     match &n.kind {
         NodeKind::Vector { path } if !path.is_empty() => Some(path_to_bez(path)),
@@ -268,7 +272,23 @@ fn mask_path_of(n: &Node) -> Option<BezPath> {
             let (rx, ry) = (n.w / 2.0, n.h / 2.0);
             Some(vello::kurbo::Ellipse::new((rx, ry), (rx, ry), 0.0).into_path(0.1))
         }
-        _ => None,
+        _ => Some(Rect::new(0.0, 0.0, n.w, n.h).into_path(0.1)),
+    }
+}
+
+/// The uniform alpha Figma's mask type asks for. Container masks have no fill
+/// of their own to key on (a group or frame reveals where its children
+/// painted), so only a leaf's own paint scales the scope; those stay at 1.0
+/// and the clip does the work.
+fn mask_scope_alpha(n: &Node) -> f32 {
+    match n.kind {
+        NodeKind::Frame { .. }
+        | NodeKind::Group
+        | NodeKind::Section
+        | NodeKind::Component { .. }
+        | NodeKind::Instance { .. }
+        | NodeKind::Slice => 1.0,
+        _ => n.mask_type.mask_alpha(&n.fill, n.opacity),
     }
 }
 
@@ -1767,6 +1787,23 @@ fn lower(
                     path: mask_path,
                 });
                 mask_layers += 1;
+                // Figma's mask types (help 360040450253; the Mask section's
+                // dropdown): Vector is outline only, so the clip above is the
+                // whole story. Alpha and Luminance key the masked result on
+                // the mask's own opacity / brightness, which for a single
+                // solid fill is one uniform figure — scale the scope by it.
+                // (Per-pixel alpha, gradients and image masks are the named
+                // delta: this compositor has no mask layer.)
+                let alpha = mask_scope_alpha(child);
+                if alpha < 1.0 {
+                    tree.commands.push(RenderCommand::PushLayer {
+                        key: format!("{key}/{}#mask-alpha", child.id),
+                        mix: Mix::Normal,
+                        alpha,
+                        bounds: Rect::new(-1e12, -1e12, 1e12, 1e12),
+                    });
+                    mask_layers += 1;
+                }
             }
             continue;
         }

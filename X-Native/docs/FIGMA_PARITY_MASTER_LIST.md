@@ -349,7 +349,7 @@ position, canvas stacking, "distribute", `⇧A` to add.
 | 11.10 | Simplify | yes | `SimplifyVector` | MATCH |
 | 11.11 | Offset path | Figma has offset for vectors | `OffsetVector` | MATCH |
 | 11.12 | Delete & heal | `⇧⌫` after point select | `DeleteVectorPoints` deletes; *verify* heal semantics | PARTIAL |
-| 11.13 | Masks | `⌘⌥M` use as mask, inverted | `is_mask` is honoured by the renderer and pinned by `mask_semantics.rs` — **there is no way to set it from the UI** | PARTIAL |
+| 11.13 | Masks | `⌘⌥M` use as mask, the **Mask** section's type dropdown (*Alpha / Vector / Luminance*), any layer can be a mask | `⌘⌥M`, the canvas-menu row and the sidebar row all call `Editor::use_as_mask` (a multi-selection becomes Figma's mask object in ONE undo entry, and the second press clears it); `Node::mask_type` carries the section's choice and the IR scales the masked scope by the mask's own alpha (Alpha) or luminance (Luminance), ignoring it for Vector; `mask_path_of` falls back to the layer's bounds, so text, images and groups mask too. **Not built:** per-pixel alpha (a blurred or gradient mask clips hard), *View → Mask outlines*, the layers-panel mask glyph and its arrows | PARTIAL |
 | 11.14 | Pen: click-drag curves | yes | yes | MATCH |
 | 11.15 | Pen: close path | click the first point | yes | MATCH |
 | 11.16 | **Pen: edit while drawing** | exit/`Esc`, reopen, continue | our pen commits on finish; *verify* continue-a-path | PARTIAL |
@@ -596,7 +596,21 @@ rendering it.
    `option_r_moves_the_rotation_origin_and_the_pivot_follows`,
    `rotating_a_selection_orbits_every_layer_about_the_pivot` and
    `the_angle_convention_counts_back_down_past_180`.
-8. Masks authoring (11.13) — `⌘⌥M` use-as-mask, plus inverted masks.
+8. ~~**Masks authoring** (11.13)~~ — **delivered**: `⌘⌥M` (or the canvas menu's
+   **Use as mask** row, or the sidebar row) makes the bottom layer of the selection
+   the mask for the layers above it — a multi-selection is wrapped in the mask object
+   Figma creates, as ONE undo entry — and the same gesture clears it again; the
+   **Mask** section carries the type dropdown (*Alpha*, *Vector*, *Luminance*), and
+   the renderer scales the masked scope by the mask's own alpha or luminance (Vector
+   ignores translucency, exactly as documented). Figma's *View → Mask outlines*, the
+   layers-panel mask glyph with the arrows over the masked layers, and per-pixel alpha
+   (blurred, gradient and image masks) are the honest remainder. Pinned by
+   `use_as_mask_makes_the_bottom_layer_the_mask`,
+   `use_as_mask_toggles_one_layer_and_its_type_is_undoable`,
+   `mask_types_scale_the_masked_scope`,
+   `the_mask_shortcut_masks_the_bottom_layer`,
+   `the_mask_section_switches_the_masks_type` and
+   `the_selection_menu_offers_use_as_mask`.
 9. Place-image tool + crop (1.17, 2.25, 2.26, 9.5).
 10. Per-corner radii + **corner smoothing** (6.4, 6.5) — both fields are in the model;
     this is a UI pass with a renderer already able to draw it.

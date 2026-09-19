@@ -7266,6 +7266,13 @@ impl Host {
                         self.dispatch(Action::InverseSelection);
                         return;
                     }
+                    // ⌘⌥M — Use as mask (Figma's own shortcut, help
+                    // 360040450253). The ⇧⌥⌘M alias below stays Select
+                    // matching layers.
+                    "m" | "M" if self.app.alt && !self.app.shift => {
+                        self.dispatch(Action::UseAsMask);
+                        return;
+                    }
                     "m" | "M" if self.app.shift && self.app.alt => {
                         self.dispatch(Action::SelectMatching);
                         return;
@@ -11711,6 +11718,33 @@ impl Host {
                 let open = !self.app.layer_blend_open;
                 self.app.close_panel_menus();
                 self.app.layer_blend_open = open;
+            }
+            Action::UseAsMask => {
+                let masked = self
+                    .app
+                    .doc()
+                    .editor()
+                    .use_as_mask(&x_native::fresh_id("mask"));
+                if let Some(masked) = masked {
+                    self.app.mark_dirty();
+                    self.app.status = if masked {
+                        "Mask applied - pick a type in the Mask section".into()
+                    } else {
+                        "Mask removed".into()
+                    };
+                }
+            }
+            Action::ToggleMaskType => {
+                let open = !self.app.mask_type_open;
+                self.app.close_panel_menus();
+                self.app.mask_type_open = open;
+            }
+            Action::SetMaskType(kind) => {
+                self.app.mask_type_open = false;
+                if self.app.doc().editor().set_mask_type(kind) {
+                    self.app.mark_dirty();
+                    self.app.status = format!("Mask type: {}", kind.label());
+                }
             }
             Action::ToggleRotationOrigin => {
                 self.app.rotation_origin_on = !self.app.rotation_origin_on;

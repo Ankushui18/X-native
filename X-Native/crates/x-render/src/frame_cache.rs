@@ -223,6 +223,7 @@ fn hash_subtree(n: &Node) -> (u64, bool, bool) {
         fmix(h, n.opacity as f64);
         mix(h, n.visible as u64);
         mix(h, (n.is_mask as u64) << 1);
+        mix(h, (n.mask_type as u64) << 3);
         mix(h, (n.blend as u64) << 2);
         if let Some(cr) = n.corner_radii {
             for v in cr {

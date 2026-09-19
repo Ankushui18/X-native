@@ -92,6 +92,10 @@ fn parse_stops(v: &V) -> Vec<(f32, Color)> {
         .unwrap_or_default()
 }
 
+fn parse_mask_type(v: Option<&str>) -> MaskType {
+    v.and_then(MaskType::from_key).unwrap_or(MaskType::Alpha)
+}
+
 fn parse_blend(v: Option<&str>) -> BlendKind {
     match v {
         Some("darken") => BlendKind::Darken,
@@ -552,6 +556,7 @@ pub(crate) fn parse_node(v: &V) -> Node {
     n.show_name = v.get("show_name").and_then(V::boolean).unwrap_or(true);
     n.locked = v.get("locked").and_then(V::boolean).unwrap_or(false);
     n.is_mask = v.get("mask").and_then(V::boolean).unwrap_or(false);
+    n.mask_type = parse_mask_type(v.get("maskType").and_then(V::str));
     n.fill = v
         .get("fill")
         .map(parse_paint)
