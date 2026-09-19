@@ -6487,7 +6487,12 @@ fn instance_host() -> (Host, String) {
         "lbl", 12.0, 12.0, 80.0, 20.0, "Click me",
     ));
     master.children.push(x_native::Node::rect(
-        "ico", 96.0, 14.0, 16.0, 16.0, Color::WHITE,
+        "ico",
+        96.0,
+        14.0,
+        16.0,
+        16.0,
+        Color::WHITE,
     ));
     h.app.doc().editor().insert_node(&root_id, master);
     h.app.doc().editor().selection = vec!["lbl".into()];
@@ -6515,9 +6520,7 @@ fn menu_actions(
             crate::context_menu::ContextMenuItem::Action { action, enabled } => {
                 out.push((action.clone(), *enabled));
             }
-            crate::context_menu::ContextMenuItem::Submenu {
-                enabled, items, ..
-            } => {
+            crate::context_menu::ContextMenuItem::Submenu { enabled, items, .. } => {
                 for (a, e) in menu_actions(items) {
                     out.push((a, e && *enabled));
                 }
@@ -6571,7 +6574,10 @@ fn the_canvas_menu_carries_figmas_instance_actions() {
     assert!(!offers_main, "a plain selection has no instance rows");
 
     let (mut h, inst) = instance_host();
-    let info = h.app.context_instance().expect("the selection is an instance");
+    let info = h
+        .app
+        .context_instance()
+        .expect("the selection is an instance");
     assert_eq!(info.id, inst);
     assert_eq!(info.component, "Button");
     assert!(info.in_file, "the master is in this document");
@@ -6700,7 +6706,10 @@ fn resetting_one_change_leaves_the_others_alone() {
     h.dispatch(Action::ResetInstanceChange(target.clone()));
     let overrides = {
         let root = &h.app.doc_ref().editor_ref().root;
-        crate::editor_ui::find_node(root, &inst).unwrap().overrides.clone()
+        crate::editor_ui::find_node(root, &inst)
+            .unwrap()
+            .overrides
+            .clone()
     };
     assert!(!overrides.contains_key(&target), "that change is gone");
     assert!(
@@ -6718,7 +6727,10 @@ fn resetting_one_change_leaves_the_others_alone() {
     h.dispatch(Action::ResetInstanceChange("ico".into()));
     let overrides = {
         let root = &h.app.doc_ref().editor_ref().root;
-        crate::editor_ui::find_node(root, &inst).unwrap().overrides.clone()
+        crate::editor_ui::find_node(root, &inst)
+            .unwrap()
+            .overrides
+            .clone()
     };
     assert!(overrides.is_empty(), "all changes cleared");
 }

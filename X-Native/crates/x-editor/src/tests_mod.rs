@@ -2433,7 +2433,11 @@ mod tests {
                 Color::from_rgb8(0x11, 0x22, 0x33),
             ));
         let mut inst = Node::instance("i1", "Button", 10.0, 10.0, 120.0, 44.0);
-        x_core::set_override(&mut inst, "lbl", x_core::OverrideValue::Text("Hello".into()));
+        x_core::set_override(
+            &mut inst,
+            "lbl",
+            x_core::OverrideValue::Text("Hello".into()),
+        );
         x_core::set_override(
             &mut inst,
             "ico",
@@ -2466,7 +2470,10 @@ mod tests {
         );
         e.undo();
         assert!(
-            crate::find(&e.root, "i1").unwrap().overrides.contains_key("lbl"),
+            crate::find(&e.root, "i1")
+                .unwrap()
+                .overrides
+                .contains_key("lbl"),
             "the single reset unwinds"
         );
 

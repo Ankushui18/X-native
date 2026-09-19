@@ -15,8 +15,8 @@
 //! serialization surface and is converted losslessly both ways.
 
 use crate::{
-    color_to_hex, find_node, parse_hex_color, Color, Node, NodeKind, Paint, PaintLayer, StrokeLayer,
-    Variables,
+    color_to_hex, find_node, parse_hex_color, Color, Node, NodeKind, Paint, PaintLayer,
+    StrokeLayer, Variables,
 };
 use std::collections::HashMap;
 
@@ -1130,9 +1130,9 @@ mod tests {
         set_override(&mut inst, "outer", OverrideValue::Opacity(0.5));
         set_override(&mut inst, "inner", OverrideValue::Visible(false));
         let mut outer = Node::group("outer", 100.0, 60.0);
-        outer.children.push(Node::rect(
-            "inner", 0.0, 0.0, 10.0, 10.0, Color::WHITE,
-        ));
+        outer
+            .children
+            .push(Node::rect("inner", 0.0, 0.0, 10.0, 10.0, Color::WHITE));
         inst.children.push(outer);
 
         // selecting the group resets what the group and its children carry
