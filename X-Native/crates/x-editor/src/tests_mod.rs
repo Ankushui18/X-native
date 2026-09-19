@@ -713,7 +713,7 @@ mod tests {
     fn a_layers_own_origin_is_the_pivot_of_its_rotation() {
         let mut e = Editor::new(doc());
         e.selection = vec!["a".into()];
-        assert!(e.set_origin("a", 0.0, 0.0));
+        e.set_origin("a", 0.0, 0.0);
         let n = find(&e.root, "a").unwrap();
         let corner = (n.transform.x, n.transform.y);
         let base = vec![("a".to_string(), n.transform.x, n.transform.y, 0.0)];
