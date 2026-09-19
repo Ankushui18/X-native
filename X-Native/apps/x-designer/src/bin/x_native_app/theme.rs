@@ -220,6 +220,11 @@ pub const C_LINE_2: Color = rgb(role!(border_strong)); // Strong borders
 // the `selection` role (deeper violet) — keyboard focus is the distinct
 // `focus_ring` role, so the two states can never be confused.
 pub const C_SEL: Color = rgb(role!(selection));
+/// Component sets. Figma's default look for a set is a dashed violet stroke
+/// with no fill; this design system's accent IS the violet, so the set chrome
+/// asks the theme for it rather than hard-coding a hex no theme could remap
+/// (the same reason `C_SEL` exists).
+pub const C_SET: Color = C_ACCENT;
 pub const C_SEL_SOFT: Color = rgba(role!(selection), A_FAINT);
 /// Wash behind the editor's selected text (stronger than C_SEL_SOFT).
 pub const C_SEL_WASH: Color = rgba(role!(selection), A_MEDIUM);

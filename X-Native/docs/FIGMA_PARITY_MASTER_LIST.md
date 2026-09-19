@@ -43,7 +43,7 @@ recon task, not a settled fact.
 | 9 Images | 9 | 5 | 2 | 2 | 0 | 0 |
 | 10 Text & typography | 18 | 15 | 2 | 1 | 0 | 0 |
 | 11 Vector editing & booleans | 20 | 14 | 5 | 1 | 0 | 0 |
-| 12 Components, instances, styles | 21 | 17 | 3 | 1 | 0 | 0 |
+| 12 Components, instances, styles | 21 | 18 | 3 | 0 | 0 | 0 |
 | 13 Variables & modes | 9 | 6 | 3 | 0 | 0 | 0 |
 | 14 Prototype | 30 | 19 | 10 | 0 | 0 | 1 |
 | 15 Inspect, dev mode, codegen | 9 | 5 | 3 | 1 | 0 | 0 |
@@ -52,9 +52,9 @@ recon task, not a settled fact.
 | 18 Design language (look of the app itself) | 12 | 1 | 5 | 6 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **335** | **230** | **54** | **32** | **16** | **3** |
+| **total** | **335** | **231** | **54** | **31** | **16** | **3** |
 
-The 32 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
+The 31 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
 the brief.
 
@@ -380,7 +380,7 @@ go to main, publish library, styles.
 | 12.16 | Dependency graph / cycle guard | Figma forbids cycles | `DependencyGraph::would_cycle` | MATCH |
 | 12.17 | Styles: colour/text/effect/grid | 4 kinds | colour + text (+ grid) | PARTIAL |
 | 12.18 | Swap on canvas drag | yes | *verify* the drag-and-drop swap gesture | PARTIAL |
-| 12.19 | **Component sets as a first-class node** | set node in the tree | variant strings, not a set node | **MISSING** |
+| 12.19 | Component sets as a first-class node | a set is a frame holding **only** components, dashed violet stroke with no fill, one row in the tree, variants named by their value — [help 360056440594](https://help.figma.com/hc/en-us/articles/360056440594) | `x_core::variant_set_members` / `is_variant_set` (all children variants of ONE set prefix); `combine_as_variants` builds the frame, moves the masters in and renames them in **one undo entry**; `paint_variant_chrome` draws the outline + name chip; a set row reads as one row and its variants by value | MATCH |
 | 12.21 | Several overrides on one layer | a layer inside an instance can carry a text **and** a fill change: the Reset list is per property, so one layer can appear more than once — [help 360039150733](https://help.figma.com/hc/en-us/articles/360039150733) | `Node::overrides` is `layer -> one encoded value` (the `.x` string form), so the last write on a layer wins and `instance_changes` lists one per layer | PARTIAL |
 | 12.20 | Team/community library browsing | yes | library list, review sheet | MATCH |
 
@@ -589,7 +589,17 @@ rendering it.
 9. Place-image tool + crop (1.17, 2.25, 2.26, 9.5).
 10. Per-corner radii + **corner smoothing** (6.4, 6.5) — both fields are in the model;
     this is a UI pass with a renderer already able to draw it.
-11. Component sets as a node (12.19) — the last row of the instances item.
+11. ~~**Component sets as a node** (12.19)~~ — **delivered**, the last row of the
+    instances item: a set is a frame that holds nothing but the variants of one prefix,
+    "Combine as variants" builds that frame (reusing one that already holds only the
+    selection) and moves the masters in as **one undo entry**, the tree shows one row per
+    set with the component-set glyph and names each variant by its value, and the canvas
+    draws Figma's dashed violet outline with the set's name under it. Pinned by
+    `combining_two_masters_builds_a_set_frame_that_holds_them`,
+    `a_frame_holding_only_the_selection_becomes_the_set`,
+    `a_set_is_all_variants_and_nothing_else`,
+    `a_component_set_reads_as_one_row_and_its_variants_by_value` and
+    `a_component_set_paints_its_dashed_outline_and_name`.
     ***Push changes to main component*** (12.12), ***Go to main component*** (12.4) and the
     per-property **Reset** flyout (12.13) — **delivered**: one engine rule pushes the
     instance's appearance overrides into its master (a swap is not pushed), the canvas

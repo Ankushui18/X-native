@@ -9,7 +9,7 @@
 //! (DESIGN/PROTOTYPE/INSPECT with Size+Position, Auto layout, Appearance,
 //! Typography, Fill, Stroke, Effects, GUIDES, Export).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use vello::kurbo::{Point, Rect};
 use vello::peniko::Color;
@@ -3096,6 +3096,31 @@ fn collect_tree_rows(app: &App, scroll: f64, height: f64) -> (Vec<RowRef>, f64) 
         .iter()
         .map(String::as_str)
         .collect();
+    // Component sets read as ONE row (Figma): the frame is the set, its
+    // variants are its children, and a variant's row shows its own value
+    // ("Primary") rather than the component name ("Button/Primary").
+    let mut set_frames: HashSet<&str> = HashSet::new();
+    let mut set_variants: HashMap<&str, &str> = HashMap::new();
+    fn collect_sets<'a>(
+        n: &'a Node,
+        frames: &mut HashSet<&'a str>,
+        variants: &mut HashMap<&'a str, &'a str>,
+    ) {
+        if x_native::is_variant_set(n) {
+            frames.insert(n.id.as_str());
+            for c in &n.children {
+                if let NodeKind::Component { name } = &c.kind {
+                    if let Some((_, v)) = x_native::variant_set(name) {
+                        variants.insert(c.id.as_str(), v);
+                    }
+                }
+            }
+        }
+        for c in &n.children {
+            collect_sets(c, frames, variants);
+        }
+    }
+    collect_sets(&doc.editor_ref().root, &mut set_frames, &mut set_variants);
     let mut out = Vec::with_capacity(last.saturating_sub(first).min(128) + 1);
     // F8: a non-empty query renders matches plus their ancestor chain
     let ql = doc.tree_search.trim().to_lowercase();
@@ -3128,10 +3153,17 @@ fn collect_tree_rows(app: &App, scroll: f64, height: f64) -> (Vec<RowRef>, f64) 
             continue;
         }
         if (first..=last).contains(&index) {
+            let variant = set_variants.get(child.id.as_str()).copied();
             out.push(RowRef {
                 id: child.id.clone(),
-                name: child.name.clone(),
-                icon: kind_icon(&child.kind),
+                name: variant
+                    .map(str::to_string)
+                    .unwrap_or_else(|| child.name.clone()),
+                icon: if variant.is_some() || set_frames.contains(child.id.as_str()) {
+                    "component"
+                } else {
+                    kind_icon(&child.kind)
+                },
                 index,
                 indent,
                 has_children: has,
@@ -7784,8 +7816,62 @@ fn paint_slice_chrome(app: &mut App, s: &mut Scene) {
     }
 }
 
+/// Figma's default look for a component set: a dashed violet stroke with no
+/// fill around the set, the same stroke around each variant inside it, and the
+/// set's name on a chip under the set's bottom-left corner. Editor chrome only
+/// — nothing here reaches an export.
+fn paint_variant_chrome(app: &mut App, s: &mut Scene) {
+    let Some(doc) = app.doc_opt() else {
+        return;
+    };
+    let mut sets: Vec<(String, Rect, Vec<Rect>)> = vec![];
+    fn walk(n: &Node, ox: f64, oy: f64, out: &mut Vec<(String, Rect, Vec<Rect>)>) {
+        let (x, y) = (ox + n.transform.x, oy + n.transform.y);
+        if n.visible && x_native::is_variant_set(n) {
+            let kids = n
+                .children
+                .iter()
+                .map(|c| {
+                    let (cx, cy) = (x + c.transform.x, y + c.transform.y);
+                    Rect::new(cx, cy, cx + c.w, cy + c.h)
+                })
+                .collect();
+            out.push((n.name.clone(), Rect::new(x, y, x + n.w, y + n.h), kids));
+        }
+        for c in &n.children {
+            walk(c, x, y, out);
+        }
+    }
+    for c in &doc.editor_ref().root.children {
+        walk(c, 0.0, 0.0, &mut sets);
+    }
+    if sets.is_empty() {
+        return;
+    }
+    let reg = app.editor_regions();
+    let to_screen = |wr: Rect| {
+        let a = app.world_to_screen(Point::new(wr.x0, wr.y0));
+        let b = app.world_to_screen(Point::new(wr.x1, wr.y1));
+        Rect::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y))
+    };
+    for (name, wr, kids) in sets {
+        for kw in kids {
+            stroke_rect_dashed(s, to_screen(kw), C_SET, 1.0, 6.0, 4.0);
+        }
+        let r = to_screen(wr);
+        stroke_rect_dashed(s, r, C_SET, 1.0, 6.0, 4.0);
+        let tw = app.fonts.measure(&name, T10, Wt::Reg) + 12.0;
+        let cy = (r.y1 + 2.0).min(reg.canvas.y1 - 18.0);
+        let chip = Rect::new(r.x0, cy, r.x0 + tw, cy + 16.0);
+        fill_rrect(s, chip, R_SM, C_SET);
+        app.fonts
+            .text_center(s, chip, &name, T10, C_ON_ACCENT, Wt::Med, true);
+    }
+}
+
 fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
     paint_slice_chrome(app, s);
+    paint_variant_chrome(app, s);
     let doc = match app.doc_opt() {
         Some(d) => d,
         None => return,
@@ -10908,6 +10994,76 @@ mod viewport_row_tests {
         app.doc().tree_search.clear();
         let (rows, _) = collect_tree_rows(&app, 0.0, 400.0);
         assert_eq!(rows.len(), 2, "cleared query → both top frames again");
+    }
+
+    /// Figma (help 360056440594): a set reads as ONE row, its variants are the
+    /// rows inside it, and a variant is named by its value.
+    #[test]
+    fn a_component_set_reads_as_one_row_and_its_variants_by_value() {
+        let mut app = App::new();
+        app.open_blank();
+        let root_id = app.doc().editor_ref().root.id.clone();
+        app.doc().editor().insert_node(
+            &root_id,
+            Node::frame("set1", 300.0, 100.0)
+                .child(Node::component("ca", "Button/Primary", 120.0, 44.0))
+                .child(Node::component("cb", "Button/Ghost", 120.0, 44.0)),
+        );
+        app.doc().editor().rename_node("set1", "Button");
+
+        let (rows, _) = collect_tree_rows(&app, 0.0, 400.0);
+        assert_eq!(rows.len(), 1, "a set is one row");
+        assert_eq!(rows[0].id, "set1");
+        assert_eq!(rows[0].name, "Button", "the set's own name");
+        assert_eq!(rows[0].icon, "component", "…and the component-set glyph");
+
+        app.doc().expanded.insert("set1".into());
+        let (rows, _) = collect_tree_rows(&app, 0.0, 400.0);
+        let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["Button", "Primary", "Ghost"]);
+        assert!(rows.iter().all(|r| r.icon == "component"));
+
+        // a frame that is NOT a set keeps the frame affordance
+        app.doc().editor().insert_node(
+            &root_id,
+            Node::frame("fr1", 300.0, 200.0).child(Node::component("cc", "Solo", 10.0, 10.0)),
+        );
+        let (rows, _) = collect_tree_rows(&app, 0.0, 400.0);
+        let fr = rows
+            .iter()
+            .find(|r| r.id == "fr1")
+            .expect("the plain frame");
+        assert_eq!(fr.icon, "frame#", "one plain master is not a set");
+    }
+
+    /// The set's canvas chrome — Figma's dashed violet outline plus the set's
+    /// name — draws for a set and for nothing else.
+    #[test]
+    fn a_component_set_paints_its_dashed_outline_and_name() {
+        let mut app = App::new();
+        app.open_blank();
+        let root_id = app.doc().editor_ref().root.id.clone();
+        app.doc().editor().insert_node(
+            &root_id,
+            Node::frame("set1", 300.0, 100.0)
+                .child(Node::component("ca", "Button/Primary", 120.0, 44.0))
+                .child(Node::component("cb", "Button/Ghost", 120.0, 44.0)),
+        );
+        app.doc().editor().rename_node("set1", "Button");
+        let mut scene = vello::Scene::new();
+        paint_variant_chrome(&mut app, &mut scene);
+        assert!(scene.encoding().n_paths > 0, "the set draws");
+
+        let mut plain = App::new();
+        plain.open_blank();
+        let root_id = plain.doc().editor_ref().root.id.clone();
+        plain.doc().editor().insert_node(
+            &root_id,
+            Node::frame("fr1", 300.0, 100.0).child(Node::component("ca", "Primary", 120.0, 44.0)),
+        );
+        let mut scene = vello::Scene::new();
+        paint_variant_chrome(&mut plain, &mut scene);
+        assert_eq!(scene.encoding().n_paths, 0, "a plain frame is not a set");
     }
 
     #[test]

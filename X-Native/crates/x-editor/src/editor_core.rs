@@ -2715,54 +2715,29 @@ impl Editor {
         if new.is_empty() || old == new {
             return false;
         }
-        if self.component_names().iter().any(|c| c == new) {
-            return false;
-        }
-        let Some(master) = find_master(&self.root, old) else {
-            return false;
-        };
-        let old_id = master.id.clone();
-        let new_id = format!("comp-{new}");
-        if find(&self.root, &new_id).is_some() {
-            return false;
-        }
         let before = Box::new(self.root.clone());
         let mut after = self.root.clone();
-        if let Some(m) = find_mut(&mut after, &old_id) {
-            if let NodeKind::Component { name } = &mut m.kind {
-                *name = new.to_string();
-            }
-            m.id = new_id.clone();
-            m.name = new_id.clone(); // master display name follows its id
+        if !rename_master_in(&mut after, old, new) {
+            return false;
         }
-        fn rewrite(n: &mut Node, old: &str, new: &str) {
-            if let NodeKind::Instance { component } = &mut n.kind {
-                if component == old {
-                    *component = new.to_string();
-                }
-            }
-            for v in n.overrides.values_mut() {
-                if let Some(OverrideValue::Swap(c)) = OverrideValue::decode(v) {
-                    if c == old {
-                        *v = OverrideValue::Swap(new.to_string()).encode();
-                    }
-                }
-            }
-            for c in &mut n.children {
-                rewrite(c, old, new);
-            }
-        }
-        rewrite(&mut after, old, new);
         let root_id = self.root.id.clone();
         self.push_replace(&root_id, before, after);
         true
     }
 
-    /// Combine the selected components into one variant set: each selected
-    /// instance/master's component is renamed to `{set}/{variant}` (the variant
-    /// name keeps the component's original name, or its existing variant part
-    /// when already a variant). Returns how many components were renamed.
+    /// Combine the selected components into one variant set. The set is a
+    /// **frame holding the masters** — which is what makes Figma's rule "a set
+    /// can contain only components" true by construction. A frame that already
+    /// holds nothing but the selection becomes the set; otherwise a new frame
+    /// is built around them. Each master is renamed to `{set}/{variant}` (the
+    /// variant part keeps its own name) and every instance follows the rename.
+    /// One undo entry for the whole combine. Returns how many masters the set
+    /// holds.
     pub fn combine_as_variants(&mut self, set_name: &str) -> usize {
+        let set_name = set_name.trim();
+        if set_name.is_empty() {
+            return 0;
+        }
         let mut names: Vec<String> = vec![];
         for id in &self.selection {
             if let Some(n) = find(&self.root, id) {
@@ -2781,17 +2756,90 @@ impl Editor {
         if names.len() < 2 {
             return 0;
         }
+        let mut ids: Vec<String> = vec![];
+        for n in &names {
+            if let Some(m) = find_master(&self.root, n) {
+                if !ids.contains(&m.id) {
+                    ids.push(m.id.clone());
+                }
+            }
+        }
+        if ids.len() < 2 {
+            return 0;
+        }
+
+        let before = Box::new(self.root.clone());
+        let mut after = self.root.clone();
+
+        // --- the container: an existing frame, or a new one around them
+        let holds_only_the_selection = common_parent_id(&after, &ids)
+            .and_then(|pid| find(&after, &pid).map(|p| (pid, p)))
+            .filter(|(_, p)| {
+                matches!(p.kind, NodeKind::Frame { .. } | NodeKind::Section)
+                    && p.children.len() == ids.len()
+                    && p.children.iter().all(|c| ids.contains(&c.id))
+            })
+            .map(|(pid, _)| pid);
+        if let Some(pid) = holds_only_the_selection {
+            if let Some(p) = find_mut(&mut after, &pid) {
+                p.name = set_name.to_string();
+            }
+        } else {
+            let mut bounds: Option<(f64, f64, f64, f64)> = None;
+            for id in &ids {
+                if let Some(m) = find(&after, id) {
+                    let (x, y) = (m.transform.x, m.transform.y);
+                    bounds = Some(match bounds {
+                        None => (x, y, x + m.w, y + m.h),
+                        Some((x0, y0, x1, y1)) => {
+                            (x0.min(x), y0.min(y), x1.max(x + m.w), y1.max(y + m.h))
+                        }
+                    });
+                }
+            }
+            let (bx, by, bw, bh) = bounds.unwrap_or((0.0, 0.0, 0.0, 0.0));
+            // the first master's slot: the set takes its place in the tree
+            let home = ids.first().and_then(|id| {
+                find_parent_mut(&mut after, id).map(|p| {
+                    (
+                        p.id.clone(),
+                        p.children.iter().position(|c| c.id == *id).unwrap_or(0),
+                    )
+                })
+            });
+            let mut set = Node::frame(&format!("set-{set_name}"), bw, bh);
+            set.name = set_name.to_string();
+            set.transform.x = bx;
+            set.transform.y = by;
+            for id in &ids {
+                if let Some(mut m) = take_node(&mut after, id) {
+                    m.transform.x -= bx;
+                    m.transform.y -= by;
+                    set.children.push(m);
+                }
+            }
+            match home.and_then(|(pid, idx)| find_mut(&mut after, &pid).map(|p| (p, idx))) {
+                Some((p, idx)) => p.children.insert(idx.min(p.children.len()), set),
+                None => after.children.push(set),
+            }
+        }
+
+        // --- the variant names
         let mut done = 0;
-        for c in names {
+        for c in &names {
             let variant = c
                 .split_once('/')
                 .map(|(_, v)| v.to_string())
                 .unwrap_or_else(|| c.clone());
-            let new = format!("{set_name}/{variant}");
-            if self.rename_component(&c, &new) {
+            if rename_master_in(&mut after, c, &format!("{set_name}/{variant}")) {
                 done += 1;
             }
         }
+        if done == 0 {
+            return 0;
+        }
+        let root_id = self.root.id.clone();
+        self.push_replace(&root_id, before, after);
         done
     }
 
@@ -3338,6 +3386,94 @@ impl Editor {
 // stack's back: an operation either pushes exactly one undo entry or pushes
 // nothing at all.
 // ---------------------------------------------------------------------------
+
+/// Rename every reference to a component — `Instance { component }` and the
+/// `Swap` overrides — from `old` to `new`. The other half of
+/// [`Editor::rename_component`], shared with [`Editor::combine_as_variants`] so
+/// combining can never leave an instance pointing at a name that is gone.
+fn rename_component_refs(n: &mut Node, old: &str, new: &str) {
+    if let NodeKind::Instance { component } = &mut n.kind {
+        if component == old {
+            *component = new.to_string();
+        }
+    }
+    for v in n.overrides.values_mut() {
+        if let Some(OverrideValue::Swap(c)) = OverrideValue::decode(v) {
+            if c == old {
+                *v = OverrideValue::Swap(new.to_string()).encode();
+            }
+        }
+    }
+    for c in &mut n.children {
+        rename_component_refs(c, old, new);
+    }
+}
+
+/// Rename a master inside `root`: its component name, its id, its display name
+/// and every reference to it. `false` when the master is missing or the name is
+/// already taken. One undo entry is the caller's business — this works on a
+/// tree so a whole combine can be a single replace.
+fn rename_master_in(root: &mut Node, old: &str, new: &str) -> bool {
+    if old == new || find_master(root, new).is_some() {
+        return false;
+    }
+    let Some(master) = find_master(root, old) else {
+        return false;
+    };
+    let old_id = master.id.clone();
+    let new_id = format!("comp-{new}");
+    if find(root, &new_id).is_some() {
+        return false;
+    }
+    if let Some(m) = find_mut(root, &old_id) {
+        if let NodeKind::Component { name } = &mut m.kind {
+            *name = new.to_string();
+        }
+        m.id = new_id.clone();
+        m.name = new_id.clone(); // master display name follows its id
+    }
+    rename_component_refs(root, old, new);
+    true
+}
+
+/// The id of the node that is the parent of EVERY id — `None` when they do not
+/// share one. Combining uses it to decide whether an existing frame can become
+/// the set or a new one has to be built.
+fn common_parent_id(root: &Node, ids: &[String]) -> Option<String> {
+    fn parent_of<'a>(n: &'a Node, id: &str) -> Option<&'a Node> {
+        if n.children.iter().any(|c| c.id == id) {
+            return Some(n);
+        }
+        n.children.iter().find_map(|c| parent_of(c, id))
+    }
+    let first = ids.first()?;
+    let p = parent_of(root, first)?;
+    if ids
+        .iter()
+        .skip(1)
+        .all(|id| parent_of(root, id).is_some_and(|q| q.id == p.id))
+    {
+        Some(p.id.clone())
+    } else {
+        None
+    }
+}
+
+/// Detach a node from the tree, children intact.
+fn take_node(root: &mut Node, id: &str) -> Option<Node> {
+    fn walk(n: &mut Node, id: &str) -> Option<Node> {
+        if let Some(i) = n.children.iter().position(|c| c.id == id) {
+            return Some(n.children.remove(i));
+        }
+        for c in &mut n.children {
+            if let Some(found) = walk(c, id) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    walk(root, id)
+}
 
 impl Editor {
     /// Enter vector edit mode on a vector node. Refuses anything that is not a

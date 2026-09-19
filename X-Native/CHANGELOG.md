@@ -5,6 +5,37 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-19 (Component sets)
+
+Figma's component set is not a fourth kind of node: it is a **frame that holds
+nothing but components** (`360056440594`). This engine only had variant *names*
+(`Set/Variant`), so "combine as variants" renamed masters wherever they lay and
+the result was a set in name only — the tree showed loose frames, and nothing
+stopped a rect from living among the variants.
+
+- **The predicate.** `x_core::variant_set_members(frame)` answers the set a frame
+  *is*: every child a `Component` named `Set/Variant`, all with one set prefix.
+  `is_variant_set` is the same question with a bool answer, and it is what the
+  "a set can contain only components" rule falls out of.
+- **Combine builds the node.** `Editor::combine_as_variants` now creates the set
+  frame around the selection (or reuses a frame that already holds nothing but the
+  selection), moves the masters in with their positions made relative, renames them
+  `{set}/{variant}` and rewrites every instance reference — **one undo entry** for
+  the whole combine. `Editor::rename_component` keeps its behaviour and now shares
+  the same `rename_master_in` / `rename_component_refs` helpers.
+- **The tree.** A set reads as one row with the component-set glyph, its variants
+  as the rows inside it, and each variant by its own value (`Primary`, not
+  `Button/Primary`).
+- **The canvas.** `paint_variant_chrome` draws Figma's default look for a set: a
+  dashed violet stroke with no fill, the same stroke around each variant, and the
+  set's name on a chip under its bottom-left corner. `C_SET` is the themed alias
+  (the design system's accent *is* the violet), so no theme can leave it stale.
+- Tests: `combining_two_masters_builds_a_set_frame_that_holds_them`,
+  `a_frame_holding_only_the_selection_becomes_the_set`,
+  `a_set_is_all_variants_and_nothing_else`,
+  `a_component_set_reads_as_one_row_and_its_variants_by_value`,
+  `a_component_set_paints_its_dashed_outline_and_name`.
+
 ## [Unreleased] — 2026-09-19 (Instances: select inside)
 
 Figma lets you reach *into* an instance: *"you can change the properties of any

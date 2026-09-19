@@ -2517,6 +2517,123 @@ mod tests {
         Editor::new(Node::frame("r", 500.0, 500.0).child(master).child(inst))
     }
 
+    /// Two masters and an instance of the first, none of them grouped: the
+    /// fixture `combine_as_variants` works on.
+    fn variant_fixture() -> Editor {
+        let a = Node::component("ca", "Primary", 120.0, 44.0)
+            .child(Node::text("lbl", 12.0, 12.0, 80.0, 20.0, "Click"));
+        let b = Node::component("cb", "Ghost", 120.0, 44.0);
+        let inst = Node::instance("i1", "Primary", 300.0, 40.0, 120.0, 44.0);
+        Editor::new(Node::frame("r", 600.0, 400.0).child(a).child(b).child(inst))
+    }
+
+    /// Figma (help 360056440594): a set is a frame that contains **only**
+    /// components, and combining puts the variants inside one.
+    #[test]
+    fn combining_two_masters_builds_a_set_frame_that_holds_them() {
+        let mut e = variant_fixture();
+        e.selection = vec!["ca".into(), "cb".into()];
+        assert_eq!(e.combine_as_variants("Button"), 2, "both masters went in");
+
+        let set = e
+            .root
+            .children
+            .iter()
+            .find(|c| c.name == "Button")
+            .expect("the set frame");
+        assert!(
+            x_core::is_variant_set(set),
+            "a set holds nothing but variants"
+        );
+        let (prefix, members) = x_core::variant_set_members(set).expect("members");
+        assert_eq!(prefix, "Button");
+        assert_eq!(
+            members.iter().map(|(v, _)| *v).collect::<Vec<_>>(),
+            vec!["Primary", "Ghost"],
+            "the declared order is the tree order"
+        );
+
+        // the masters were renamed, and the instance followed the rename
+        assert!(x_core::find_master(&e.root, "Button/Primary").is_some());
+        assert!(x_core::find_master(&e.root, "Button/Ghost").is_some());
+        assert!(
+            x_core::find_master(&e.root, "Primary").is_none(),
+            "the old name is gone"
+        );
+        let inst = x_core::find(&e.root, "i1").expect("the instance");
+        assert!(
+            matches!(&inst.kind, NodeKind::Instance { component } if component == "Button/Primary"),
+            "the instance points at the new name"
+        );
+
+        // the set took the first master's slot; ids and inner layers survive
+        assert_eq!(e.root.children[0].id, "set-Button");
+        assert_eq!(e.root.children[0].children[0].id, "comp-Button/Primary");
+        assert_eq!(e.root.children[0].children[0].children[0].id, "lbl");
+
+        // one undo entry for the whole combine
+        assert!(e.undo());
+        assert!(x_core::find_master(&e.root, "Primary").is_some());
+        assert!(x_core::find_master(&e.root, "Button/Primary").is_none());
+        assert!(
+            e.root.children.iter().all(|c| c.name != "Button"),
+            "the set frame is gone again"
+        );
+    }
+
+    /// A frame that already holds nothing but the selection IS the set — Figma
+    /// reuses it rather than nesting a second frame.
+    #[test]
+    fn a_frame_holding_only_the_selection_becomes_the_set() {
+        let holder = Node::frame("holder", 300.0, 200.0)
+            .child(Node::component("ca", "Primary", 120.0, 44.0))
+            .child(Node::component("cb", "Ghost", 120.0, 44.0));
+        let mut e = Editor::new(Node::frame("r", 600.0, 400.0).child(holder));
+        e.selection = vec!["ca".into(), "cb".into()];
+        assert_eq!(e.combine_as_variants("Button"), 2);
+
+        let set = crate::find(&e.root, "holder").expect("the original frame");
+        assert_eq!(set.name, "Button", "the frame took the set's name");
+        assert!(x_core::is_variant_set(set));
+        assert_eq!(e.root.children.len(), 1, "no second frame was built");
+        assert_eq!(x_core::variants_of(&e.root, "Button").len(), 2);
+    }
+
+    /// The predicate the whole model rests on: all components, one set prefix.
+    #[test]
+    fn a_set_is_all_variants_and_nothing_else() {
+        let set = Node::frame("s", 300.0, 100.0)
+            .child(Node::component("ca", "Button/Primary", 120.0, 44.0))
+            .child(Node::component("cb", "Button/Ghost", 120.0, 44.0));
+        assert!(x_core::is_variant_set(&set));
+        assert_eq!(x_core::variant_set_members(&set).unwrap().0, "Button");
+
+        // one shape anywhere inside and it is just a frame again
+        let mixed = set
+            .clone()
+            .child(Node::rect("r1", 0.0, 0.0, 10.0, 10.0, Color::WHITE));
+        assert!(
+            !x_core::is_variant_set(&mixed),
+            "a set contains only components"
+        );
+
+        // two sets in one frame is not a set either
+        let two_sets = set.child(Node::component("cc", "Other/Hover", 120.0, 44.0));
+        assert!(
+            !x_core::is_variant_set(&two_sets),
+            "one set prefix, not two"
+        );
+
+        assert!(
+            !x_core::is_variant_set(&Node::frame("empty", 10.0, 10.0)),
+            "an empty frame has no variants to be a set of"
+        );
+        assert!(
+            !x_core::is_variant_set(&Node::component("plain", "Plain", 10.0, 10.0)),
+            "a master that is not a variant is not a set either"
+        );
+    }
+
     /// Figma (help 360039150733): *"you can change the properties of any layer
     /// within an instance"* — double-clicking inside an instance selects the
     /// layer under the cursor, which for this engine is the master layer the

@@ -630,6 +630,36 @@ pub fn variant_set(component_name: &str) -> Option<(&str, &str)> {
     component_name.split_once('/')
 }
 
+/// The variant set a frame **is**: every child is a component master named
+/// `Set/Variant` and they all share one set prefix. Figma's set is not its own
+/// kind of node — it is a frame holding variants — so the rule that "a set can
+/// contain only components" falls straight out of this predicate.
+pub fn variant_set_members(frame: &Node) -> Option<(&str, Vec<(&str, &str)>)> {
+    if frame.children.is_empty() {
+        return None;
+    }
+    let mut set: Option<&str> = None;
+    let mut out = Vec::new();
+    for c in &frame.children {
+        let NodeKind::Component { name } = &c.kind else {
+            return None;
+        };
+        let (s, v) = variant_set(name)?;
+        match set {
+            None => set = Some(s),
+            Some(prev) if prev == s => {}
+            Some(_) => return None,
+        }
+        out.push((v, name.as_str()));
+    }
+    set.map(|s| (s, out))
+}
+
+/// Is this frame a component set (see [`variant_set_members`])?
+pub fn is_variant_set(frame: &Node) -> bool {
+    variant_set_members(frame).is_some()
+}
+
 /// All variants of a set present in the document.
 pub fn variants_of<'a>(root: &'a Node, set: &str) -> Vec<&'a str> {
     let mut out = vec![];
