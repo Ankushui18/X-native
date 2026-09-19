@@ -773,10 +773,18 @@ fn canvas_stacking_reverses_the_paint_order_and_never_the_layer_list() {
             .child(Node::rect("c", 0.0, 0.0, 40.0, 40.0, Color::WHITE))
     };
     let last = row(CanvasStacking::LastOnTop);
-    assert_eq!(paint_order(&last), vec![0, 1, 2], "last on top is document order");
+    assert_eq!(
+        paint_order(&last),
+        vec![0, 1, 2],
+        "last on top is document order"
+    );
     assert!(!paints_first_on_top(&last));
     let first = row(CanvasStacking::FirstOnTop);
-    assert_eq!(paint_order(&first), vec![2, 1, 0], "first on top paints back to front");
+    assert_eq!(
+        paint_order(&first),
+        vec![2, 1, 0],
+        "first on top paints back to front"
+    );
     assert!(paints_first_on_top(&first));
     // the layer list itself is untouched by the canvas-only setting
     let ids: Vec<&str> = first.children.iter().map(|c| c.id.as_str()).collect();
