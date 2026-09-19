@@ -947,14 +947,7 @@ mod outline_view_tests {
         card.visual_stacks_materialized = true;
         card.fill_layers = vec![PaintLayer::new(Paint::Solid(Color::from_rgb8(0xff, 0, 0)))];
         card.stroke_layers = vec![StrokeLayer::new(Stroke::solid(Color::WHITE, 2.0))];
-        let inner = Node::ellipse(
-            "inner",
-            5.0,
-            5.0,
-            20.0,
-            20.0,
-            Color::from_rgb8(0, 0xff, 0),
-        );
+        let inner = Node::ellipse("inner", 5.0, 5.0, 20.0, 20.0, Color::from_rgb8(0, 0xff, 0));
         let page = Node::frame("page", 200.0, 200.0)
             .child(card.child(inner))
             .child(Node::text("t", 60.0, 10.0, 80.0, 20.0, "hello"))
@@ -1046,14 +1039,9 @@ mod outline_view_tests {
             20.0,
             Color::from_rgb8(0, 0, 0xff),
         ));
-        let page = Node::frame("page", 100.0, 100.0).child(master).child(Node::instance(
-            "i",
-            "Chip",
-            10.0,
-            40.0,
-            40.0,
-            20.0,
-        ));
+        let page = Node::frame("page", 100.0, 100.0)
+            .child(master)
+            .child(Node::instance("i", "Chip", 10.0, 40.0, 40.0, 20.0));
         let stripped = outline_view(&page, 1.0);
         let tree = crate::ir::build_render_tree(&stripped, &Variables::default());
         // the instance's chip carries the outline stroke…

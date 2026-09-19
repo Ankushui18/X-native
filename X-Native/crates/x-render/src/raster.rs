@@ -1149,7 +1149,10 @@ mod tests {
         let pn = RasterSink::new(None, None, 100.0, 100.0, 1.0, Some(BG)).unwrap();
         let pn = pn.render(&normal);
         let (r, g, b, _) = sample_px(&pn, 50, 50);
-        assert!(b > 100 && b > r, "the fixture paints its fill, got {r},{g},{b}");
+        assert!(
+            b > 100 && b > r,
+            "the fixture paints its fill, got {r},{g},{b}"
+        );
 
         // outline mode: the stripped copy, at a 2-unit hairline
         let stripped = crate::outline_view(&page, 2.0);
