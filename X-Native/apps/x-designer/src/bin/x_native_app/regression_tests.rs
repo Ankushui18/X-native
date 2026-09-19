@@ -8227,7 +8227,7 @@ fn the_layer_keys_are_figmas_rename_auto_layout_and_component() {
     h.app.shift = true;
     h.on_key(Key::Character("A".into()), None);
     h.app.shift = false;
-    assert!(h.app.doc_ref().selected_layout().is_some(), "auto layout");
+    assert!(h.app.selected_layout().is_some(), "auto layout");
     assert_eq!(h.app.status, "Auto Layout added");
 
     // ⌥⌘K: the selection becomes a component
