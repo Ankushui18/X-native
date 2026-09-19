@@ -2566,17 +2566,13 @@ mod tests {
             .expect("inside the instance");
 
         e.set_text("lbl", "Hello");
-        e.set_visible("lbl", false);
-        e.set_opacity("ico", 0.4);
-
         let inst = crate::find(&e.root, "i1").unwrap();
-        assert!(inst.overrides.contains_key("lbl"), "text + visibility");
         assert!(
-            !inst.overrides.contains_key("ico"),
-            "the icon is not inside the scoped layer"
+            inst.overrides.contains_key("lbl"),
+            "the label is overridden"
         );
 
-        // the master keeps its own values…
+        // the master keeps its own value…
         let NodeKind::Text { text } = &crate::find(&e.root, "lbl").unwrap().kind else {
             panic!("label is a text layer")
         };
@@ -2588,7 +2584,58 @@ mod tests {
             panic!("the resolved layer is the text")
         };
         assert_eq!(text, "Hello");
+
+        // another property, on another layer of the same instance
+        e.enter_instance(Point::new(205.0, 222.0), &vars)
+            .expect("the icon is inside the instance too");
+        e.set_visible("ico", false);
+        assert!(crate::find(&e.root, "i1")
+            .unwrap()
+            .overrides
+            .contains_key("ico"));
+        let resolved = e.scoped_layer(&vars).expect("the icon resolves");
         assert!(!resolved.visible, "the visibility override is resolved too");
+        assert!(
+            crate::find(&e.root, "ico").unwrap().visible,
+            "the master's icon is untouched"
+        );
+
+        // a layer outside the scope is edited the ordinary way
+        e.set_opacity("r", 0.5);
+        assert_eq!(
+            crate::find(&e.root, "i1").unwrap().overrides.len(),
+            2,
+            "still just the two overrides"
+        );
+        assert_eq!(crate::find(&e.root, "r").unwrap().opacity, 0.5);
+    }
+
+    /// One layer carries **one** override at a time: the engine stores a single
+    /// encoded value per layer (the shape the `.x` files carry), so a second
+    /// property written on the same layer replaces the first. Figma keeps the
+    /// two side by side and lists both; this is the model's known limit, pinned
+    /// so it cannot change silently.
+    #[test]
+    fn a_second_write_on_the_same_layer_replaces_its_override() {
+        let mut e = scoped_fixture();
+        let vars = Variables::default();
+        e.enter_instance(Point::new(120.0, 220.0), &vars)
+            .expect("inside the instance");
+        e.set_text("lbl", "Hello");
+        e.set_visible("lbl", false);
+
+        let inst = crate::find(&e.root, "i1").unwrap();
+        assert_eq!(inst.overrides.len(), 1, "one value per layer");
+        let changes = e.instance_changes("i1");
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].property, "Visible");
+
+        let resolved = e.scoped_layer(&vars).expect("the scoped layer resolves");
+        let NodeKind::Text { text } = &resolved.kind else {
+            panic!("the resolved layer is the text")
+        };
+        assert_eq!(text, "Click me", "the text override was replaced");
+        assert!(!resolved.visible);
     }
 
     /// Figma's list of what an instance does NOT let you override starts with

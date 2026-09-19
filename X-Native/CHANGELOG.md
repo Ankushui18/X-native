@@ -34,11 +34,17 @@ become a place the editor can be: a scope.
 - **The panel.** `sel_info` reads the instance's resolved copy of the layer while
   the scope holds it, so the fields show the values the canvas is painting — and
   the writes they dispatch land back as overrides.
+- **Known limit, now pinned.** `Node::overrides` holds *one* encoded value per
+  layer (the `.x` string form), so a second property written on the same layer
+  replaces the first: Figma keeps a text change and a fill change side by side.
+  `a_second_write_on_the_same_layer_replaces_its_override` states it, the master
+  list carries it as row 12.21 `PARTIAL`, and lifting it is a file-format change.
 - Tests: `selecting_inside_an_instance_picks_the_layer_under_the_cursor`,
   `editing_inside_an_instance_stores_an_override`,
   `position_is_not_overridable_inside_an_instance`,
   `a_fill_that_cannot_be_an_override_inside_an_instance_is_refused`,
   `an_override_written_inside_an_instance_is_one_undo_step`,
+  `a_second_write_on_the_same_layer_replaces_its_override`,
   `double_clicking_inside_an_instance_selects_the_layer_there`,
   `the_panel_shows_the_instance_copy_of_a_layer_inside_it`.
 
