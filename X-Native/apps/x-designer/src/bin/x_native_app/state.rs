@@ -7,7 +7,10 @@ use std::path::PathBuf;
 
 use vello::kurbo::{Point, Rect};
 use x_native::editor::Editor;
-use x_native::{Color, Document, Node, NodeKind, Paint, StrokeJoin, Variables, APP_DEFAULT_FONT};
+use x_native::{
+    Color, Document, Node, NodeKind, Paint, StrokeCap, StrokeJoin, StrokeOptions, Variables,
+    APP_DEFAULT_FONT,
+};
 
 use crate::command::CommandPalette;
 use crate::context_menu::ContextMenu;
@@ -298,6 +301,227 @@ pub enum BrushStyle {
     Marker,
     /// A dry brush: a thin body and a lot of grain.
     Dry,
+}
+
+/// Figma's **Stroke style** (help 360049283914): the three rows its Advanced
+/// stroke settings offer. The document stores a dash pattern and nothing else,
+/// so the style is DERIVED from that pattern — one owner for "which style is
+/// this stroke?", read by the panel's rows, by the writer that changes it and
+/// by the tests.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StrokeStyleKind {
+    /// No dash pattern: a continuous line.
+    Solid,
+    /// A uniform pair — dash, gap. What Figma's **Dashed** style writes.
+    Dashed,
+    /// Anything else: Figma's **Custom** pattern (`10, 5, 5, 5`).
+    Custom,
+}
+
+impl StrokeStyleKind {
+    pub const ALL: [StrokeStyleKind; 3] = [
+        StrokeStyleKind::Solid,
+        StrokeStyleKind::Dashed,
+        StrokeStyleKind::Custom,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            StrokeStyleKind::Solid => "Solid",
+            StrokeStyleKind::Dashed => "Dashed",
+            StrokeStyleKind::Custom => "Custom",
+        }
+    }
+
+    /// The style a dash pattern IS. The rule is the model's own shape rather
+    /// than a stored flag: an empty pattern is Solid, a pair is Dashed, and
+    /// anything longer is Custom — so a pattern typed into the **Dashes**
+    /// field can never leave the panel claiming a style the layer has not got.
+    pub fn of(dash: &[f64]) -> StrokeStyleKind {
+        match dash.len() {
+            0 => StrokeStyleKind::Solid,
+            2 => StrokeStyleKind::Dashed,
+            _ => StrokeStyleKind::Custom,
+        }
+    }
+
+    /// The pattern this row writes. `current` is what the layer carries, so
+    /// moving between Dashed and Custom keeps the numbers already chosen
+    /// instead of resetting them to ours.
+    pub fn pattern(self, current: &[f64]) -> Vec<f64> {
+        match self {
+            StrokeStyleKind::Solid => Vec::new(),
+            StrokeStyleKind::Dashed => match current {
+                [d, g, ..] => vec![*d, *g],
+                _ => vec![DASH_DEFAULT, GAP_DEFAULT],
+            },
+            StrokeStyleKind::Custom => match current {
+                // a pair IS Dashed by definition, so Custom repeats it: the
+                // line is drawn identically and the pattern field is open
+                [d, g] => vec![*d, *g, *d, *g],
+                [] => DASHES_DEFAULT.to_vec(),
+                pattern => pattern.to_vec(),
+            },
+        }
+    }
+}
+
+/// The Dashed style's two numbers, in px. The article gives the fields
+/// (*"Enter the length you want for the Dash, in pixels"*) and no defaults, so
+/// these are ours — the same pair the engine's own dash fixtures carry.
+pub const DASH_DEFAULT: f64 = 8.0;
+pub const GAP_DEFAULT: f64 = 4.0;
+
+/// The **Custom** row's starting pattern: Figma's own example of the syntax is
+/// *"10, 20, 10, 20, 80, 20, 10, 100"*, and a shorter one keeps the field
+/// readable while still being a pattern rather than a dashed pair.
+pub const DASHES_DEFAULT: [f64; 4] = [10.0, 5.0, 5.0, 5.0];
+
+/// The three joins Figma names in **Advanced stroke settings** (help
+/// 360049283914: *"Miter"*, *"Bevel"*, *"Round"*), in the order it lists them.
+pub const STROKE_JOINS: [StrokeJoin; 3] = [StrokeJoin::Miter, StrokeJoin::Bevel, StrokeJoin::Round];
+
+/// The caps Figma's **End point** menu offers (help 360049283914: *"**None**:
+/// no cap…", "**Round (default)**…", "**Square**…"*). The model also stores the
+/// two heads the arrow tool draws (`Arrow`/`Triangle`), but a line's head is
+/// GEOMETRY here — `arrow_path` — and the renderers paint those two as a butt
+/// end, so the menu offers what it can actually paint and the rest is named in
+/// the section's deltas.
+pub const STROKE_CAPS: [StrokeCap; 3] = [StrokeCap::None, StrokeCap::Round, StrokeCap::Square];
+
+pub fn stroke_join_label(join: StrokeJoin) -> &'static str {
+    match join {
+        StrokeJoin::Miter => "Miter",
+        StrokeJoin::Bevel => "Bevel",
+        StrokeJoin::Round => "Round",
+    }
+}
+
+/// The name of a cap, in Figma's words — **None** is the butt end it paints.
+pub fn stroke_cap_label(cap: StrokeCap) -> &'static str {
+    match cap {
+        StrokeCap::None => "None",
+        StrokeCap::Round => "Round",
+        StrokeCap::Square => "Square",
+        StrokeCap::Arrow => "Arrow",
+        StrokeCap::Triangle => "Triangle",
+    }
+}
+
+/// Figma's **Miter angle** is the angle the miter join is cut at; the model
+/// stores SVG's miter limit, and the two are one relation — `limit = 1 / sin(angle / 2)`.
+/// The field, the renderer and the tests read these two functions and nothing
+/// else, so a typed angle cannot mean something different from the canvas's.
+pub const MITTER_ANGLE_MIN: f64 = 1.0;
+pub const MITTER_ANGLE_MAX: f64 = 179.0;
+
+pub fn miter_angle_to_limit(deg: f64) -> f64 {
+    let a = deg.clamp(MITTER_ANGLE_MIN, MITTER_ANGLE_MAX).to_radians();
+    1.0 / (a / 2.0).sin()
+}
+
+pub fn miter_limit_to_angle(limit: f64) -> f64 {
+    2.0 * (1.0 / limit.max(1.0)).asin().to_degrees()
+}
+
+/// The miter limit Figma's own default angle (28.96°) works out to — the 4.0
+/// the model already carries, which is why the conversion is the honest way to
+/// show the field.
+pub fn miter_angle_default() -> f64 {
+    miter_limit_to_angle(4.0)
+}
+
+/// One row of Figma's **Advanced stroke settings** panel (help 360049283914).
+/// The panel IS this list: the card's height, the painter and the tests all
+/// read the same rows, so a row cannot go missing from one of them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StrokePanelRow {
+    /// a small caps label — "STROKE STYLE" / "JOIN" / "END POINTS"
+    Caps(&'static str),
+    /// Solid / Dashed / Custom
+    Style(StrokeStyleKind),
+    /// the Dashed style's two fields
+    Dash,
+    Gap,
+    /// the Custom style's pattern field
+    Dashes,
+    /// Miter / Bevel / Round
+    Join(StrokeJoin),
+    /// the Miter angle, which only a Miter join has
+    Miter,
+    /// the **Start** (`false`) / **End** (`true`) point row
+    End(bool),
+}
+
+impl StrokePanelRow {
+    /// How tall a row is: a caps label is a label, a choice is a row, a field
+    /// is a label over a box.
+    pub fn height(self) -> f64 {
+        match self {
+            StrokePanelRow::Caps(_) => 26.0,
+            StrokePanelRow::Dash
+            | StrokePanelRow::Gap
+            | StrokePanelRow::Dashes
+            | StrokePanelRow::Miter => 44.0,
+            StrokePanelRow::Style(_) | StrokePanelRow::Join(_) | StrokePanelRow::End(_) => 28.0,
+        }
+    }
+}
+
+/// The rows the panel shows for a stroke: the three style rows always, the
+/// **Dash**/**Gap** pair for Dashed, the **Dashes** pattern for Custom, the
+/// three joins always, the **Miter angle** for a Miter join, and both end-point
+/// rows — which is Figma's own content, since the panel exists to hold what the
+/// Stroke section has no room for.
+pub fn stroke_panel_rows(kind: StrokeStyleKind, join: StrokeJoin) -> Vec<StrokePanelRow> {
+    use StrokePanelRow::*;
+    let mut rows = vec![Caps("STROKE STYLE")];
+    rows.extend(StrokeStyleKind::ALL.map(Style));
+    match kind {
+        StrokeStyleKind::Solid => {}
+        StrokeStyleKind::Dashed => rows.extend([Dash, Gap]),
+        StrokeStyleKind::Custom => rows.push(Dashes),
+    }
+    rows.push(Caps("JOIN"));
+    rows.extend(STROKE_JOINS.map(Join));
+    if join == StrokeJoin::Miter {
+        rows.push(Miter);
+    }
+    rows.push(Caps("END POINTS"));
+    rows.extend([End(false), End(true)]);
+    rows
+}
+
+/// The panel's card height: the rows' own heights plus the card's padding.
+pub fn stroke_panel_height(rows: &[StrokePanelRow]) -> f64 {
+    10.0 + rows.iter().map(|r| r.height()).sum::<f64>() + 10.0
+}
+
+/// The selected layer's stroke options, read through [`node_stroke_options`]
+/// — the one answer the Stroke section, its Advanced stroke settings panel and
+/// the writers all share, so the panel cannot show numbers the canvas is not
+/// drawing.
+pub fn sel_stroke(app: &App) -> StrokeOptions {
+    let Some(doc) = app.doc_opt() else {
+        return StrokeOptions::default();
+    };
+    let Some(id) = doc.selected_id() else {
+        return StrokeOptions::default();
+    };
+    crate::editor_ui::find_node(&doc.editor_ref().root, id.as_str())
+        .map(node_stroke_options)
+        .unwrap_or_default()
+}
+
+/// The selected layer's stroke options — the first stroke layer's, the same
+/// one the Stroke section's weight field reads, and the defaults a layer with
+/// no stroke layer yet would get (so the panel shows Figma's own numbers
+/// before the first edit writes anything).
+pub fn node_stroke_options(n: &Node) -> StrokeOptions {
+    n.stroke_layers
+        .first()
+        .map(|l| l.options.clone())
+        .unwrap_or_default()
 }
 
 impl BrushStyle {
@@ -1440,6 +1664,8 @@ fn is_toggle_row(a: &Action) -> bool {
             | Action::ToggleEffectSettings(_)
             | Action::ToggleEffectBlend(_)
             | Action::ToggleLayerBlend
+            | Action::ToggleStrokeStyle
+            | Action::ToggleStrokeCap(_)
             | Action::ToggleListStyle
             | Action::ToggleTextResize
             | Action::ToggleMaskType
@@ -1849,6 +2075,18 @@ pub enum Action {
     /// Push the selection's typography into the style it is linked to and
     /// re-resolve every consumer (Figma's "Update style")
     UpdateTextStyleFromSelection,
+    /// Figma's **Advanced stroke settings** panel (help 360049283914): the
+    /// style icon in the Stroke section opens it, the icon closes it.
+    ToggleStrokeStyle,
+    /// One of the panel's three style rows — Solid, Dashed, Custom. What it
+    /// writes is the dash pattern behind the row.
+    SetStrokeStyle(StrokeStyleKind),
+    /// One of the panel's three join rows (Miter / Bevel / Round).
+    SetStrokeJoin(StrokeJoin),
+    /// The **Start point** / **End point** row's menu: `true` is the end.
+    ToggleStrokeCap(bool),
+    /// A cap chosen in that menu — named, with the row showing what it paints.
+    SetStrokeCapEnd(bool, StrokeCap),
     /// layer row hover toggles (Figma): eye / padlock
     TreeVisible(String),
     TreeLock(String),
@@ -2242,6 +2480,14 @@ pub enum FieldId {
     StrokeHex,
     StrokeAlpha,
     StrokeWeight,
+    /// Figma's **Dash** and **Gap** (the Dashed style's two numbers), and the
+    /// **Dashes** pattern the Custom style takes (`10, 5, 5, 5`).
+    StrokeDash,
+    StrokeGap,
+    StrokeDashes,
+    /// Figma's **Miter angle**, in degrees: the field speaks the angle, the
+    /// model stores the limit `miter_angle_to_limit` derives from it.
+    StrokeMiter,
     Gap,
     PadH,
     PadV,
@@ -3621,6 +3867,16 @@ pub struct App {
     pub mask_type_open: bool,
     /// Figma's **List style** picker is open (the type-details block).
     pub list_style_open: bool,
+    /// Figma's **Advanced stroke settings** panel is open (help 360049283914)
+    /// — the style icon in the Stroke section.
+    pub stroke_style_open: bool,
+    /// Where that panel hangs from, recorded by the panel pass.
+    pub stroke_style_anchor: (f64, f64),
+    /// The open **Start point**/**End point** menu: `Some(false)` for the
+    /// start, `Some(true)` for the end. Figma's cap chooser is a dropdown on
+    /// the row, so the menu anchors to the row the panel painted.
+    pub stroke_cap_open: Option<bool>,
+    pub stroke_cap_anchor: (f64, f64),
     /// Figma's corner-radius panel is open (the **Independent corners** row).
     pub corner_open: bool,
     /// Where that panel hangs from, recorded by the panel pass.
@@ -4031,6 +4287,10 @@ impl App {
             layer_blend_open: false,
             mask_type_open: false,
             list_style_open: false,
+            stroke_style_open: false,
+            stroke_style_anchor: (0.0, 0.0),
+            stroke_cap_open: None,
+            stroke_cap_anchor: (0.0, 0.0),
             corner_open: false,
             corner_anchor: (0.0, 0.0),
             corner_slider: None,
@@ -5983,6 +6243,8 @@ impl App {
         self.layer_blend_open = false;
         self.mask_type_open = false;
         self.list_style_open = false;
+        self.stroke_style_open = false;
+        self.stroke_cap_open = None;
         self.corner_open = false;
         self.corner_slider = None;
         self.paint_blend_open = None;
@@ -6958,5 +7220,172 @@ mod measure_tests {
             "a layer inside another has no gap to read"
         );
         assert!(measure_between(a, a).is_empty(), "and neither has itself");
+    }
+}
+
+#[cfg(test)]
+mod stroke_panel_tests {
+    use super::*;
+
+    /// Figma's **Dashes** syntax is the pattern itself — *"dash, gap, dash,
+    /// gap..."* — and the style is what the pattern IS: an empty one is Solid,
+    /// a pair is Dashed, a longer list Custom. That is the whole reason the
+    /// style is derived rather than stored.
+    #[test]
+    fn the_stroke_style_is_what_the_pattern_is() {
+        assert_eq!(StrokeStyleKind::of(&[]), StrokeStyleKind::Solid);
+        assert_eq!(
+            StrokeStyleKind::of(&[10.0, 4.0]),
+            StrokeStyleKind::Dashed,
+            "a pair is the Dashed style"
+        );
+        assert_eq!(
+            StrokeStyleKind::of(&[10.0, 5.0, 5.0, 5.0]),
+            StrokeStyleKind::Custom
+        );
+        // the rows' own words are Figma's, in the order its panel lists them
+        assert_eq!(
+            StrokeStyleKind::ALL.map(|k| k.label()),
+            ["Solid", "Dashed", "Custom"]
+        );
+    }
+
+    /// Moving between the rows keeps the numbers the designer chose: Dashed
+    /// takes the first pair of whatever is there, Custom repeats a pair it is
+    /// handed (the line is drawn identically) and keeps a real pattern as it is.
+    #[test]
+    fn the_style_rows_carry_the_numbers_over() {
+        assert!(StrokeStyleKind::Solid.pattern(&[10.0, 4.0]).is_empty());
+        assert_eq!(
+            StrokeStyleKind::Dashed.pattern(&[10.0, 4.0]),
+            vec![10.0, 4.0]
+        );
+        assert_eq!(
+            StrokeStyleKind::Dashed.pattern(&[]),
+            vec![DASH_DEFAULT, GAP_DEFAULT],
+            "with nothing to carry, the row's own defaults"
+        );
+        assert_eq!(
+            StrokeStyleKind::Custom.pattern(&[10.0, 4.0]),
+            vec![10.0, 4.0, 10.0, 4.0],
+            "a pair repeats, so the line it draws is the one it drew"
+        );
+        assert_eq!(
+            StrokeStyleKind::Custom.pattern(&[10.0, 5.0, 5.0, 5.0]),
+            vec![10.0, 5.0, 5.0, 5.0]
+        );
+        assert_eq!(
+            StrokeStyleKind::Custom.pattern(&[]),
+            DASHES_DEFAULT.to_vec()
+        );
+        // whatever a row writes, the panel reads that style back: no pattern
+        // can leave the rows claiming a style the layer has not got
+        for kind in StrokeStyleKind::ALL {
+            for current in [
+                vec![],
+                vec![10.0, 4.0],
+                vec![10.0, 5.0, 5.0, 5.0],
+                vec![1.0, 2.0, 3.0],
+            ] {
+                let written = kind.pattern(&current);
+                assert_eq!(StrokeStyleKind::of(&written), kind, "{kind:?} {current:?}");
+            }
+        }
+    }
+
+    /// Figma's **Miter angle** and the model's miter limit are one relation:
+    /// its own default angle works out to the 4.0 the model already carries,
+    /// and the round trip through both directions is exact.
+    #[test]
+    fn the_miter_angle_is_the_limit_it_stands_for() {
+        assert!((miter_angle_default() - 28.96).abs() < 0.01);
+        assert!((miter_angle_to_limit(28.96) - 4.0).abs() < 0.001);
+        for deg in [5.0, 28.96, 60.0, 120.0, 179.0] {
+            let back = miter_limit_to_angle(miter_angle_to_limit(deg));
+            assert!((back - deg).abs() < 1e-6, "{deg} -> {back}");
+        }
+        assert!(miter_angle_to_limit(0.0) >= 1.0, "clamped, never infinite");
+    }
+
+    /// The panel's rows are Figma's own content, and they follow the stroke's
+    /// style and join: the Dashed pair only for Dashed, the pattern only for
+    /// Custom, the Miter angle only for a Miter join, and both end-point rows
+    /// always — with the two caps labels the article's panel carries.
+    #[test]
+    fn the_panel_shows_the_rows_the_stroke_has_settings_for() {
+        let rows = |k, j| stroke_panel_rows(k, j);
+        let labels: Vec<&str> = rows(StrokeStyleKind::Solid, StrokeJoin::Miter)
+            .iter()
+            .filter_map(|r| match r {
+                StrokePanelRow::Caps(l) => Some(*l),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(labels, ["STROKE STYLE", "JOIN", "END POINTS"]);
+
+        let solid = rows(StrokeStyleKind::Solid, StrokeJoin::Miter);
+        assert!(
+            !solid.contains(&StrokePanelRow::Dash),
+            "Solid has no dashes"
+        );
+        assert!(!solid.contains(&StrokePanelRow::Dashes));
+        assert!(solid.contains(&StrokePanelRow::Miter));
+
+        let dashed = rows(StrokeStyleKind::Dashed, StrokeJoin::Bevel);
+        assert!(dashed.contains(&StrokePanelRow::Dash) && dashed.contains(&StrokePanelRow::Gap));
+        assert!(
+            !dashed.contains(&StrokePanelRow::Dashes),
+            "the pair, not a pattern"
+        );
+        assert!(
+            !dashed.contains(&StrokePanelRow::Miter),
+            "a Bevel join has no miter angle — the field belongs to Miter"
+        );
+
+        let custom = rows(StrokeStyleKind::Custom, StrokeJoin::Round);
+        assert!(custom.contains(&StrokePanelRow::Dashes));
+        assert!(!custom.contains(&StrokePanelRow::Dash));
+        assert!(
+            custom.contains(&StrokePanelRow::End(false))
+                && custom.contains(&StrokePanelRow::End(true))
+        );
+
+        // the card is its rows: no row can be drawn outside the panel
+        let h = stroke_panel_height(&custom);
+        let rows_h: f64 = custom.iter().map(|r| r.height()).sum();
+        assert_eq!(h, rows_h + 20.0, "the rows plus the card's padding");
+    }
+
+    /// The two menus are *named* lists — Figma's own words for the joins and
+    /// the ends (help 360049283914) — so the pins here are the names, not just
+    /// the count of rows.
+    #[test]
+    fn the_join_and_cap_rows_are_figmas_names() {
+        assert_eq!(
+            STROKE_JOINS.map(stroke_join_label),
+            ["Miter", "Bevel", "Round"]
+        );
+        assert_eq!(
+            STROKE_CAPS.map(stroke_cap_label),
+            ["None", "Round", "Square"]
+        );
+        assert_eq!(
+            STROKE_CAPS.len(),
+            3,
+            "the two head caps are geometry here, not ends"
+        );
+    }
+
+    /// The writer reads the same list the panel shows, so the numbers a row
+    /// carries are the numbers the layer gets.
+    #[test]
+    fn the_stroke_options_default_to_figmas_own_numbers() {
+        let n = Node::rect("r", 0.0, 0.0, 10.0, 10.0, Color::WHITE);
+        let o = node_stroke_options(&n);
+        assert!(o.dash.is_empty(), "a fresh layer has no dashes");
+        assert_eq!(o.join, StrokeJoin::Miter, "Figma's default join");
+        assert!((miter_limit_to_angle(o.miter_limit) - miter_angle_default()).abs() < 1e-9);
+        assert_eq!(o.cap_start, StrokeCap::None, "a butt end by default");
+        assert_eq!(o.cap_end, StrokeCap::None);
     }
 }

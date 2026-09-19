@@ -4816,12 +4816,54 @@ impl Host {
         })
     }
 
-    /// Figma's canvas **corner radius handle** (help 360050986854): a white
-    /// dot just INSIDE a corner of a single rectangle or frame. The corner's own
-    /// square is excluded by the zone itself, so a press on the outline still
-    /// resizes and a press inside rounds; ⌥ rounds only the corner being held
-    /// (rectangles only, as Figma's own canvas gesture is), a plain drag the
-    /// whole shape.
+    /// Write the selected layers' stroke options — one writer for every row
+    /// of Figma's **Advanced stroke settings** panel (help 360049283914) and of
+    /// the Stroke section above it. The visual stacks are materialized first
+    /// and the stroke layer seeded from `stroke` when the layer has none, the
+    /// same contract the engine's own cap setters have.
+    ///
+    /// A layer already carrying the options `f` would write is SKIPPED, so a
+    /// click on the row a stroke already answers with never lands an undo
+    /// entry; `false` when nothing was written at all.
+    fn edit_stroke_options(&mut self, f: impl Fn(&mut x_native::StrokeOptions) + Copy) -> bool {
+        let ids = self.app.doc().editor().selection.clone();
+        if ids.is_empty() {
+            self.app.status = "Select a layer with a stroke first".into();
+            return false;
+        }
+        let mut changed = 0usize;
+        for id in &ids {
+            let before = {
+                let doc = self.app.doc();
+                crate::editor_ui::find_node(&doc.editor_ref().root, id.as_str())
+                    .map(crate::state::node_stroke_options)
+            };
+            let mut probe = before.clone().unwrap_or_default();
+            f(&mut probe);
+            if before.as_ref() == Some(&probe) {
+                continue;
+            }
+            let doc = self.app.doc();
+            let done = doc.editor().mutate_visual_stack(id, |n| {
+                n.materialize_visual_stacks();
+                if n.stroke_layers.is_empty() {
+                    let seed = n.stroke.clone();
+                    n.stroke_layers.push(x_native::StrokeLayer::new(seed));
+                }
+                if let Some(layer) = n.stroke_layers.first_mut() {
+                    f(&mut layer.options);
+                }
+            });
+            if done {
+                changed += 1;
+            }
+        }
+        if changed > 0 {
+            self.app.mark_dirty();
+        }
+        changed > 0
+    }
+
     /// ⌘⇧8 / ⌘⇧7 (help 360040449773): the selected text layers take that
     /// list style, or give it back when they already carry it.
     fn toggle_list_style(&mut self, style: x_native::ListStyle) {
@@ -4836,6 +4878,12 @@ impl Host {
         self.dispatch(Action::SetListStyle(next));
     }
 
+    /// Figma's canvas **corner radius handle** (help 360050986854): a white
+    /// dot just INSIDE a corner of a single rectangle or frame. The corner's own
+    /// square is excluded by the zone itself, so a press on the outline still
+    /// resizes and a press inside rounds; ⌥ rounds only the corner being held
+    /// (rectangles only, as Figma's own canvas gesture is), a plain drag the
+    /// whole shape.
     fn radius_grab(&mut self, world: Point) -> Option<Drag> {
         let zoom = self.app.zoom.max(1e-3);
         let alt = self.app.alt;
@@ -12406,6 +12454,77 @@ impl Host {
                     self.app.mark_dirty();
                 }
             }
+            Action::ToggleStrokeStyle => {
+                // Figma's **Advanced stroke settings** (help 360049283914):
+                // the icon in the Stroke section opens the panel, one popover
+                // at a time like the panel's other menus.
+                let open = !self.app.stroke_style_open;
+                self.app.close_panel_menus();
+                self.app.stroke_style_open = open;
+                self.app.status = if open {
+                    "Advanced stroke settings".into()
+                } else {
+                    String::new()
+                };
+            }
+            Action::SetStrokeStyle(kind) => {
+                // the row writes the PATTERN behind it, carrying over the
+                // numbers the stroke already has (`StrokeStyleKind::pattern`)
+                let current = crate::state::sel_stroke(&self.app).dash;
+                let pattern = kind.pattern(&current);
+                if self.edit_stroke_options(|o| o.dash = pattern.clone()) {
+                    self.app.status = format!("Stroke style: {}", kind.label());
+                }
+            }
+            Action::SetStrokeJoin(join) => {
+                if self.edit_stroke_options(move |o| o.join = join) {
+                    self.app.status = format!("Join: {}", crate::state::stroke_join_label(join));
+                }
+            }
+            Action::ToggleStrokeCap(end) => {
+                // the menu hangs off the row it belongs to; the panel stays
+                // open under it, which is what a dropdown on a row means
+                let open = if self.app.stroke_cap_open == Some(end) {
+                    None
+                } else {
+                    Some(end)
+                };
+                self.app.close_panel_menus();
+                self.app.stroke_cap_open = open;
+                if open.is_some() {
+                    self.app.stroke_style_open = true;
+                }
+            }
+            Action::SetStrokeCapEnd(end, cap) => {
+                self.app.stroke_cap_open = None;
+                let ids = self.app.doc().editor().selection.clone();
+                if ids.is_empty() {
+                    self.app.status = "Select a layer with a stroke first".into();
+                    return;
+                }
+                let mut changed = 0usize;
+                for id in &ids {
+                    let editor = self.app.doc().editor();
+                    let done = if end {
+                        editor.set_stroke_cap_end(id, cap)
+                    } else {
+                        editor.set_stroke_cap_start(id, cap)
+                    };
+                    if done {
+                        changed += 1;
+                    }
+                }
+                if changed > 0 {
+                    self.app.mark_dirty();
+                    self.app.status = format!(
+                        "{} point: {}",
+                        if end { "End" } else { "Start" },
+                        crate::state::stroke_cap_label(cap)
+                    );
+                } else {
+                    self.app.status = "That end already uses that cap".into();
+                }
+            }
             Action::AddStroke => {
                 let doc = self.app.doc();
                 if let Some(id) = doc.selected_id() {
@@ -14353,6 +14472,63 @@ impl Host {
                     }
                 }
             }
+            FieldId::StrokeDash | FieldId::StrokeGap => {
+                // Figma's **Dash** and **Gap** (help 360049283914) are the two
+                // numbers of the Dashed style's pair; typing into either one
+                // from a Solid stroke opens the pair at its defaults.
+                let Some(v) = num(raw).filter(|v| *v > 0.0) else {
+                    return;
+                };
+                let which = usize::from(id == FieldId::StrokeGap);
+                let current = crate::state::sel_stroke(&self.app).dash;
+                let mut pattern = if current.len() < 2 {
+                    vec![crate::state::DASH_DEFAULT, crate::state::GAP_DEFAULT]
+                } else {
+                    current
+                };
+                pattern.truncate(2);
+                pattern[which] = v;
+                if self.edit_stroke_options(|o| o.dash = pattern.clone()) {
+                    self.app.status = "Stroke dashes updated".into();
+                }
+            }
+            FieldId::StrokeDashes => {
+                // Figma's **Dashes** field takes the pattern itself — *"dash,
+                // gap, dash, gap..."* — so what is typed is parsed into the
+                // vector the renderer draws.
+                let parsed: Option<Vec<f64>> = raw
+                    .split([',', ' '])
+                    .filter(|s| !s.trim().is_empty())
+                    .map(|s| {
+                        s.trim()
+                            .parse::<f64>()
+                            .ok()
+                            .filter(|v| v.is_finite() && *v >= 0.0)
+                    })
+                    .collect();
+                let Some(pattern) = parsed else {
+                    return;
+                };
+                if pattern.len() > 16 {
+                    return;
+                }
+                if self.edit_stroke_options(|o| o.dash = pattern.clone()) {
+                    self.app.status = if pattern.is_empty() {
+                        "Stroke style: Solid".into()
+                    } else {
+                        format!("Dashes: {pattern:?}")
+                    };
+                }
+            }
+            FieldId::StrokeMiter => {
+                // Figma's **Miter angle**, in degrees; the model stores the
+                // miter limit its own relation derives (state::miter_angle_to_limit)
+                let Some(deg) = num(raw) else { return };
+                let limit = crate::state::miter_angle_to_limit(deg);
+                if self.edit_stroke_options(move |o| o.miter_limit = limit) {
+                    self.app.status = format!("Miter angle: {deg}°");
+                }
+            }
             FieldId::ParagraphIndent => {
                 if let Some(v) = num(raw) {
                     doc.editor().mutate_visual_stack(&node_id, |n| {
@@ -14889,6 +15065,26 @@ fn field_initial(app: &App, f: FieldId) -> String {
         FieldId::FillAlpha => "100".into(),
         FieldId::StrokeHex => s.stroke.clone(),
         FieldId::StrokeWeight => fmt(if s.stroke_w > 0.0 { s.stroke_w } else { 1.0 }),
+        FieldId::StrokeDash | FieldId::StrokeGap => {
+            // the field opens on the number the panel is showing, like every
+            // other field in the section
+            let dash = crate::state::sel_stroke(app).dash;
+            let v = if f == FieldId::StrokeDash {
+                dash.first().copied().unwrap_or(crate::state::DASH_DEFAULT)
+            } else {
+                dash.get(1).copied().unwrap_or(crate::state::GAP_DEFAULT)
+            };
+            fmt(v)
+        }
+        FieldId::StrokeDashes => crate::state::sel_stroke(app)
+            .dash
+            .iter()
+            .map(|d| fmt(*d))
+            .collect::<Vec<_>>()
+            .join(", "),
+        FieldId::StrokeMiter => fmt(crate::state::miter_limit_to_angle(
+            crate::state::sel_stroke(app).miter_limit,
+        )),
         FieldId::MinWidth | FieldId::MaxWidth | FieldId::MinHeight | FieldId::MaxHeight => {
             let l = app.selected_layout();
             let v = l.and_then(|l| match f {

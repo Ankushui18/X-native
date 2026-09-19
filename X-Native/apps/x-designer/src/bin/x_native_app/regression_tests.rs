@@ -8545,3 +8545,270 @@ fn space_moves_the_box_mid_resize_and_the_resize_resumes_from_there() {
     h.on_release();
     assert!(h.app.drag.is_none());
 }
+
+/// Figma's **Advanced stroke settings** (help 360049283914) — the panel behind
+/// the Stroke section's style icon. Its rows are named and show what they
+/// paint, and each one writes the stroke it stands for; the panel's own shape
+/// follows the stroke it is describing (the Dashed pair only for Dashed, the
+/// pattern only for Custom, the Miter angle only for a Miter join).
+#[test]
+fn the_advanced_stroke_panel_opens_from_the_section_and_writes_the_styles() {
+    let mut h = host();
+    let root_id = {
+        let doc = h.app.doc();
+        doc.editor_ref().root.id.clone()
+    };
+
+    // a layer with no stroke has nothing for the panel to describe
+    let r = Node::rect("s", 100.0, 100.0, 120.0, 80.0, Color::from_rgb8(20, 20, 20));
+    h.app.doc().editor().insert_node(&root_id, r);
+    h.app.doc().editor().selection = vec!["s".into()];
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    assert!(
+        !h.app
+            .hit
+            .iter()
+            .any(|(_, a)| *a == Action::ToggleStrokeStyle),
+        "no stroke, no Advanced stroke settings"
+    );
+
+    h.app
+        .doc()
+        .editor()
+        .add_stroke_layer("s", x_native::Stroke::solid(Color::BLACK, 2.0));
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let icon = h
+        .app
+        .hit
+        .iter()
+        .find(|(_, a)| *a == Action::ToggleStrokeStyle)
+        .map(|(r, _)| *r)
+        .expect("the Stroke section offers Advanced stroke settings");
+
+    let actions = |h: &Host| -> Vec<Action> { h.app.hit.iter().map(|(_, a)| a.clone()).collect() };
+    let count = |v: &[Action], f: fn(&Action) -> bool| v.iter().filter(|a| f(a)).count();
+
+    h.on_press(icon.center());
+    assert!(h.app.stroke_style_open, "the icon opens the panel");
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let rows = actions(&h);
+    assert_eq!(
+        count(&rows, |a| matches!(a, Action::SetStrokeStyle(_))),
+        3,
+        "Solid / Dashed / Custom"
+    );
+    assert_eq!(
+        count(&rows, |a| matches!(a, Action::SetStrokeJoin(_))),
+        3,
+        "Miter / Bevel / Round"
+    );
+    assert!(
+        rows.iter()
+            .any(|a| matches!(a, Action::ToggleStrokeCap(false)))
+            && rows
+                .iter()
+                .any(|a| matches!(a, Action::ToggleStrokeCap(true))),
+        "both end-point rows are there"
+    );
+    assert!(
+        rows.iter()
+            .any(|a| matches!(a, Action::Field(FieldId::StrokeMiter))),
+        "Miter is the default join, so its angle has a row"
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|a| matches!(a, Action::Field(FieldId::StrokeDash))),
+        "a Solid stroke has no Dash row"
+    );
+
+    // the rows write the pattern behind them, carrying the numbers over
+    let options = |h: &Host| {
+        find_node_clone(&h.app.doc_ref().editor_ref().root, "s")
+            .unwrap()
+            .stroke_layers[0]
+            .options
+            .clone()
+    };
+    h.dispatch(Action::SetStrokeStyle(
+        crate::state::StrokeStyleKind::Dashed,
+    ));
+    assert_eq!(
+        options(&h).dash,
+        vec![crate::state::DASH_DEFAULT, crate::state::GAP_DEFAULT]
+    );
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let rows = actions(&h);
+    assert!(
+        rows.iter()
+            .any(|a| matches!(a, Action::Field(FieldId::StrokeDash)))
+            && rows
+                .iter()
+                .any(|a| matches!(a, Action::Field(FieldId::StrokeGap))),
+        "Dashed owns the Dash and Gap fields"
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|a| matches!(a, Action::Field(FieldId::StrokeDashes))),
+        "…and not the Custom pattern field"
+    );
+
+    // a second click on the style the stroke already carries writes nothing
+    let depth = h.app.doc_ref().editor_ref().undo_depth();
+    h.dispatch(Action::SetStrokeStyle(
+        crate::state::StrokeStyleKind::Dashed,
+    ));
+    assert_eq!(
+        h.app.doc_ref().editor_ref().undo_depth(),
+        depth,
+        "the row a stroke already answers with never lands an undo entry"
+    );
+
+    // Custom keeps the pair it was handed — the same line, a longer pattern —
+    // so its own field opens with a pattern rather than a pair
+    h.dispatch(Action::SetStrokeStyle(
+        crate::state::StrokeStyleKind::Custom,
+    ));
+    let d = options(&h).dash;
+    assert_eq!(d, vec![8.0, 4.0, 8.0, 4.0], "the pair, repeated");
+    assert_eq!(
+        crate::state::StrokeStyleKind::of(&d),
+        crate::state::StrokeStyleKind::Custom
+    );
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let rows = actions(&h);
+    assert!(
+        rows.iter()
+            .any(|a| matches!(a, Action::Field(FieldId::StrokeDashes))),
+        "Custom owns the pattern field"
+    );
+    assert!(!rows
+        .iter()
+        .any(|a| matches!(a, Action::Field(FieldId::StrokeDash))));
+
+    // and Solid takes the dashes away again
+    h.dispatch(Action::SetStrokeStyle(crate::state::StrokeStyleKind::Solid));
+    assert!(options(&h).dash.is_empty(), "Solid is no pattern at all");
+    assert!(h.app.status.contains("Solid"), "{}", h.app.status);
+}
+
+/// The panel's other half: the **Join** rows and the **Miter angle** the Miter
+/// join owns, the **Dashes** pattern the Custom style takes, and the two
+/// end-point menus — each of which names its rows (help 360049283914).
+#[test]
+fn the_stroke_panel_writes_the_join_the_angle_the_pattern_and_the_ends() {
+    let mut h = host();
+    let root_id = {
+        let doc = h.app.doc();
+        doc.editor_ref().root.id.clone()
+    };
+    let r = Node::rect("s", 100.0, 100.0, 120.0, 80.0, Color::from_rgb8(20, 20, 20));
+    h.app.doc().editor().insert_node(&root_id, r);
+    h.app.doc().editor().selection = vec!["s".into()];
+    h.app
+        .doc()
+        .editor()
+        .add_stroke_layer("s", x_native::Stroke::solid(Color::BLACK, 2.0));
+    h.dispatch(Action::ToggleStrokeStyle);
+    assert!(h.app.stroke_style_open);
+
+    let options = |h: &Host| {
+        find_node_clone(&h.app.doc_ref().editor_ref().root, "s")
+            .unwrap()
+            .stroke_layers[0]
+            .options
+            .clone()
+    };
+    let mut scene = vello::Scene::new();
+
+    // the join rows write the join, and the angle's row belongs to Miter alone
+    h.dispatch(Action::SetStrokeJoin(x_native::StrokeJoin::Round));
+    assert_eq!(options(&h).join, x_native::StrokeJoin::Round);
+    assert!(h.app.status.contains("Round"), "{}", h.app.status);
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    assert!(
+        !h.app
+            .hit
+            .iter()
+            .any(|(_, a)| *a == Action::Field(FieldId::StrokeMiter)),
+        "a Round join has no miter angle"
+    );
+    h.dispatch(Action::SetStrokeJoin(x_native::StrokeJoin::Miter));
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    assert!(h
+        .app
+        .hit
+        .iter()
+        .any(|(_, a)| *a == Action::Field(FieldId::StrokeMiter)));
+
+    // the field speaks Figma's degrees; the model keeps the limit they mean
+    h.dispatch(Action::Field(FieldId::StrokeMiter));
+    h.app.field.as_mut().unwrap().buffer = "60".into();
+    assert!(h.finish_edits());
+    let limit = options(&h).miter_limit;
+    assert!(
+        (limit - crate::state::miter_angle_to_limit(60.0)).abs() < 1e-9,
+        "60° is the limit the relation derives: {limit}"
+    );
+
+    // the Dashed pair, one field per number
+    h.dispatch(Action::SetStrokeStyle(
+        crate::state::StrokeStyleKind::Dashed,
+    ));
+    h.dispatch(Action::Field(FieldId::StrokeDash));
+    h.app.field.as_mut().unwrap().buffer = "12".into();
+    assert!(h.finish_edits());
+    assert_eq!(options(&h).dash, vec![12.0, 4.0]);
+    h.dispatch(Action::Field(FieldId::StrokeGap));
+    h.app.field.as_mut().unwrap().buffer = "6".into();
+    assert!(h.finish_edits());
+    assert_eq!(options(&h).dash, vec![12.0, 6.0]);
+
+    // the Custom pattern is the Dashes field's own syntax: dash, gap, dash, gap
+    h.dispatch(Action::SetStrokeStyle(
+        crate::state::StrokeStyleKind::Custom,
+    ));
+    h.dispatch(Action::Field(FieldId::StrokeDashes));
+    h.app.field.as_mut().unwrap().buffer = "10, 5, 5, 5".into();
+    assert!(h.finish_edits());
+    assert_eq!(options(&h).dash, vec![10.0, 5.0, 5.0, 5.0]);
+    assert!(h.app.status.contains("10"), "{}", h.app.status);
+
+    // the End point row opens a menu that names its three ends, and picking
+    // one writes only that end: the other keeps its own cap
+    h.dispatch(Action::ToggleStrokeCap(true));
+    assert!(
+        h.app.stroke_style_open,
+        "the panel stays open under its menu"
+    );
+    assert_eq!(h.app.stroke_cap_open, Some(true));
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let mut rows = 0;
+    let mut round_row = None;
+    for (r, a) in h.app.hit.iter() {
+        if let Action::SetStrokeCapEnd(true, cap) = a {
+            rows += 1;
+            if *cap == x_native::StrokeCap::Round {
+                round_row = Some(*r);
+            }
+        }
+    }
+    assert_eq!(rows, 3, "None / Round / Square, each named");
+    h.on_press(round_row.expect("the menu has a Round row").center());
+    let o = options(&h);
+    assert_eq!(o.cap_end, x_native::StrokeCap::Round, "the end was written");
+    assert_eq!(o.cap_start, x_native::StrokeCap::None, "the start was not");
+    assert_eq!(h.app.stroke_cap_open, None, "picking closes the menu");
+    assert!(h.app.stroke_style_open, "…and leaves the panel up");
+    assert!(h.app.status.contains("End point"), "{}", h.app.status);
+
+    // opening the panel is one popover at a time, like the panel's others
+    h.dispatch(Action::ToggleListStyle);
+    assert!(h.app.list_style_open);
+    h.dispatch(Action::ToggleStrokeStyle);
+    assert!(h.app.stroke_style_open && !h.app.list_style_open);
+    h.dispatch(Action::ToggleStrokeStyle);
+    assert!(!h.app.stroke_style_open, "the icon closes it again");
+}

@@ -5356,18 +5356,7 @@ fn paint_design(
     y += 1.0 + 12.0;
 
     // --- Stroke --------------------------------------------------------
-    section_header(
-        app,
-        s,
-        hit,
-        rx,
-        rw,
-        pl,
-        y,
-        "Stroke",
-        true,
-        Action::AddStroke,
-    );
+    stroke_section_header(app, s, hit, rx, rw, pl, y);
     y += 14.0 + LABEL_GAP;
     y = paint_paint_row(
         app,
@@ -6324,6 +6313,352 @@ fn paint_mask_section(
 /// (help 360040449773).
 fn list_style_label(app: &App) -> String {
     typo_val(app, Typo::ListStyle)
+}
+
+/// The Stroke section's header (help 360049283914): the title, the **Advanced
+/// stroke settings** icon Figma puts in the section, and the `+` that adds a
+/// stroke. The icon only shows once the layer HAS a stroke — Figma's own panel
+/// lives inside the Stroke section, which a layer without one has not got.
+fn stroke_section_header(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    rx: f64,
+    rw: f64,
+    pl: f64,
+    y: f64,
+) {
+    app.fonts
+        .caps_label(s, rx + pl, y, "Stroke", C_TEXT, Wt::Med);
+    if sel_info(app).stroke_w > 0.0 {
+        let sr = Rect::new(
+            rx + rw - pl - 14.0 - 8.0 - 12.0,
+            y - 4.0,
+            rx + rw - pl - 18.0,
+            y + 16.0,
+        );
+        if app.stroke_style_open || hover(app, sr) {
+            fill_rrect(
+                s,
+                sr,
+                R_SM,
+                if app.stroke_style_open {
+                    C_FIELD_2
+                } else {
+                    C_ROW_HOVER
+                },
+            );
+        }
+        draw_icon(
+            s,
+            "sliders-horizontal",
+            sr.x0,
+            y,
+            ICON_XS,
+            if app.stroke_style_open { C_TEXT } else { C_DIM },
+        );
+        tip(app, sr, "Advanced stroke settings");
+        hit.push((sr, Action::ToggleStrokeStyle));
+        if app.stroke_style_open {
+            app.stroke_style_anchor = (sr.x1, sr.y1);
+        }
+    }
+    draw_icon(s, "plus", rx + rw - pl - 14.0, y - 1.0, ICON_SM, C_DIM);
+    hit.push((
+        Rect::new(rx + rw - pl - 18.0, y - 4.0, rx + rw - pl, y + 16.0),
+        Action::AddStroke,
+    ));
+}
+
+/// A short sample line for a stroke row, drawn through the canvas's own stroke
+/// construction — what a row shows is what the layer would draw.
+fn stroke_sample(s: &mut Scene, options: &x_native::StrokeOptions, r: Rect, c: Color) {
+    let cy = (r.y0 + r.y1) / 2.0;
+    let mut p = vello::kurbo::BezPath::new();
+    p.move_to((r.x0, cy));
+    p.line_to((r.x1, cy));
+    stroke_path_options(s, &p, c, 2.0, options);
+}
+
+/// Figma's **Advanced stroke settings** panel (help 360049283914) — the
+/// popover behind the Stroke section's style icon. Its rows are
+/// `state::stroke_panel_rows`, which is also where the card's height comes
+/// from, so the panel and its contents are one list; and every row that shows
+/// a line draws it through `stroke_path_options`, the canvas's own stroke.
+fn paint_stroke_style_panel(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    let opts = crate::state::sel_stroke(app);
+    let kind = crate::state::StrokeStyleKind::of(&opts.dash);
+    let rows = crate::state::stroke_panel_rows(kind, opts.join);
+    let (ax, ay) = app.stroke_style_anchor;
+    let w = 236.0;
+    let h = crate::state::stroke_panel_height(&rows);
+    let x1 = (ax + 6.0).min(app.win_w - 8.0).max(w + 8.0);
+    let x0 = x1 - w;
+    let mut y0 = ay + 4.0;
+    if y0 + h > app.win_h - 8.0 {
+        y0 = (ay - h - 20.0).max(8.0);
+    }
+    let dd = Rect::new(x0, y0, x0 + w, y0 + h);
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, R_LG, C_FIELD);
+    stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+    let mut y = dd.y0 + 10.0;
+    for row in rows {
+        y = paint_stroke_row(app, s, hit, dd, y, row, &opts, kind);
+    }
+}
+
+/// One row of the panel: a caps label, a named choice with the line it paints,
+/// or a label over the field that holds its number.
+#[allow(clippy::too_many_arguments)]
+fn paint_stroke_row(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    dd: Rect,
+    y: f64,
+    row: crate::state::StrokePanelRow,
+    opts: &x_native::StrokeOptions,
+    kind: crate::state::StrokeStyleKind,
+) -> f64 {
+    use crate::state::StrokePanelRow as R;
+    let pad = 10.0;
+    let choice = |app: &App, y: f64, on: bool| {
+        let r = Rect::new(dd.x0 + pad - 4.0, y + 1.0, dd.x1 - pad + 4.0, y + 27.0);
+        (r, on || hover(app, r))
+    };
+    match row {
+        R::Caps(label) => {
+            app.fonts
+                .caps_label(s, dd.x0 + pad, y + 8.0, label, C_TEXT, Wt::Med);
+            y + 26.0
+        }
+        R::Style(k) => {
+            let on = k == kind;
+            let (r, hot) = choice(app, y, on);
+            if hot {
+                fill_rrect(s, r, R_SM, if on { C_FIELD_2 } else { C_ROW_HOVER });
+            }
+            app.fonts.text(
+                s,
+                r.x0 + 8.0,
+                y + 7.5,
+                k.label(),
+                T11,
+                if on { C_TEXT } else { C_MUTED },
+                Wt::Reg,
+            );
+            // the row shows the line it would write, pattern and all
+            let mut probe = opts.clone();
+            probe.dash = k.pattern(&opts.dash);
+            stroke_sample(
+                s,
+                &probe,
+                Rect::new(r.x1 - 84.0, y + 8.0, r.x1 - 32.0, y + 20.0),
+                if on { C_TEXT } else { C_MUTED },
+            );
+            if on {
+                draw_icon(s, "check", r.x1 - 22.0, y + 8.0, ICON_XS, C_TEXT);
+            }
+            hit.push((r, Action::SetStrokeStyle(k)));
+            y + 28.0
+        }
+        R::Join(j) => {
+            let on = j == opts.join;
+            let (r, hot) = choice(app, y, on);
+            if hot {
+                fill_rrect(s, r, R_SM, if on { C_FIELD_2 } else { C_ROW_HOVER });
+            }
+            app.fonts.text(
+                s,
+                r.x0 + 8.0,
+                y + 7.5,
+                crate::state::stroke_join_label(j),
+                T11,
+                if on { C_TEXT } else { C_MUTED },
+                Wt::Reg,
+            );
+            // the corner the join makes, at the angle's own limit
+            let mut probe = opts.clone();
+            probe.join = j;
+            probe.dash.clear();
+            probe.cap_start = x_native::StrokeCap::None;
+            probe.cap_end = x_native::StrokeCap::None;
+            let mut p = vello::kurbo::BezPath::new();
+            p.move_to((r.x1 - 78.0, y + 21.0));
+            p.line_to((r.x1 - 58.0, y + 7.0));
+            p.line_to((r.x1 - 38.0, y + 21.0));
+            stroke_path_options(s, &p, if on { C_TEXT } else { C_MUTED }, 3.0, &probe);
+            if on {
+                draw_icon(s, "check", r.x1 - 22.0, y + 8.0, ICON_XS, C_TEXT);
+            }
+            hit.push((r, Action::SetStrokeJoin(j)));
+            y + 28.0
+        }
+        R::End(end) => {
+            let cur = if end { opts.cap_end } else { opts.cap_start };
+            let open = app.stroke_cap_open == Some(end);
+            let (r, hot) = choice(app, y, open);
+            if hot {
+                fill_rrect(s, r, R_SM, if open { C_FIELD_2 } else { C_ROW_HOVER });
+            }
+            app.fonts.text(
+                s,
+                r.x0 + 8.0,
+                y + 7.5,
+                if end { "End point" } else { "Start point" },
+                T10,
+                C_DIM,
+                Wt::Reg,
+            );
+            let name = crate::state::stroke_cap_label(cur);
+            let nw = app.fonts.measure(name, T11, Wt::Reg);
+            app.fonts
+                .text(s, r.x1 - 26.0 - nw, y + 7.5, name, T11, C_TEXT, Wt::Reg);
+            draw_icon(s, "chevron-down", r.x1 - 18.0, y + 7.0, ICON_XS, C_DIM);
+            hit.push((r, Action::ToggleStrokeCap(end)));
+            if open {
+                app.stroke_cap_anchor = (r.x0, r.y1);
+            }
+            y + 28.0
+        }
+        R::Dash | R::Gap => {
+            let (label, id, value) = if row == R::Dash {
+                (
+                    "Dash",
+                    FieldId::StrokeDash,
+                    opts.dash
+                        .first()
+                        .copied()
+                        .unwrap_or(crate::state::DASH_DEFAULT),
+                )
+            } else {
+                (
+                    "Gap",
+                    FieldId::StrokeGap,
+                    opts.dash
+                        .get(1)
+                        .copied()
+                        .unwrap_or(crate::state::GAP_DEFAULT),
+                )
+            };
+            app.fonts
+                .text(s, dd.x0 + pad, y + 4.0, label, T10, C_DIM, Wt::Reg);
+            let r = Rect::new(dd.x0 + pad, y + 16.0, dd.x1 - pad, y + 44.0);
+            input(
+                app,
+                s,
+                hit,
+                r,
+                None,
+                &field_val(app, id, fmt_num(value)),
+                false,
+                Some(Action::Field(id)),
+                None,
+            );
+            y + 44.0
+        }
+        R::Dashes => {
+            app.fonts
+                .text(s, dd.x0 + pad, y + 4.0, "Dashes", T10, C_DIM, Wt::Reg);
+            let shown = opts
+                .dash
+                .iter()
+                .map(|d| fmt_num(*d))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let r = Rect::new(dd.x0 + pad, y + 16.0, dd.x1 - pad, y + 44.0);
+            input(
+                app,
+                s,
+                hit,
+                r,
+                None,
+                &field_val(app, FieldId::StrokeDashes, shown),
+                false,
+                Some(Action::Field(FieldId::StrokeDashes)),
+                None,
+            );
+            y + 44.0
+        }
+        R::Miter => {
+            app.fonts
+                .text(s, dd.x0 + pad, y + 4.0, "Miter angle", T10, C_DIM, Wt::Reg);
+            let shown = fmt_num(crate::state::miter_limit_to_angle(opts.miter_limit));
+            let r = Rect::new(dd.x0 + pad, y + 16.0, dd.x1 - pad, y + 44.0);
+            input(
+                app,
+                s,
+                hit,
+                r,
+                Some(("°", T10)),
+                &field_val(app, FieldId::StrokeMiter, shown),
+                false,
+                Some(Action::Field(FieldId::StrokeMiter)),
+                None,
+            );
+            y + 44.0
+        }
+    }
+}
+
+/// The **Start point** / **End point** menu (help 360049283914: *"Choose an
+/// option from the **End point** menu"*). Every row is named and shows the end
+/// it paints, drawn through the canvas's own stroke construction.
+fn paint_stroke_cap_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    let Some(end) = app.stroke_cap_open else {
+        return;
+    };
+    let (ax, ay) = app.stroke_cap_anchor;
+    let items = crate::state::STROKE_CAPS;
+    let w = 176.0;
+    let h = DROPDOWN_ROW_H * items.len() as f64;
+    let x0 = ax.min((app.win_w - w - 8.0).max(8.0)).max(8.0);
+    let mut y0 = ay + 4.0;
+    if y0 + h > app.win_h - 8.0 {
+        y0 = (ay - 4.0 - h).max(8.0);
+    }
+    let dd = Rect::new(x0, y0, x0 + w, y0 + h);
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, R_LG, C_FIELD);
+    stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+    let opts = crate::state::sel_stroke(app);
+    let current = if end { opts.cap_end } else { opts.cap_start };
+    for (k, cap) in items.iter().enumerate() {
+        let r = Rect::new(
+            dd.x0,
+            dd.y0 + DROPDOWN_ROW_H * k as f64,
+            dd.x1,
+            dd.y0 + DROPDOWN_ROW_H * (k + 1) as f64,
+        );
+        let on = *cap == current;
+        if hover(app, r) {
+            fill_rect(s, r, C_FIELD_2);
+        }
+        app.fonts.text(
+            s,
+            r.x0 + 10.0,
+            r.y0 + 9.0,
+            crate::state::stroke_cap_label(*cap),
+            T11,
+            if on { C_TEXT } else { C_MUTED },
+            Wt::Reg,
+        );
+        let mut probe = opts.clone();
+        probe.dash.clear();
+        probe.cap_start = *cap;
+        probe.cap_end = *cap;
+        stroke_sample(
+            s,
+            &probe,
+            Rect::new(r.x1 - 66.0, r.y0 + 4.0, r.x1 - 30.0, r.y1 - 4.0),
+            if on { C_TEXT } else { C_MUTED },
+        );
+        if on {
+            draw_icon(s, "check", r.x1 - 18.0, r.y0 + 8.0, ICON_XS, C_TEXT);
+        }
+        hit.push((r, Action::SetStrokeCapEnd(end, *cap)));
+    }
 }
 
 /// Figma's **List style** picker (help 360040449773): *"Bulleted and
@@ -8891,6 +9226,16 @@ fn paint_shortcuts_panel(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Acti
 /// menu hang past the panel's edge and still take clicks, the way the frame,
 /// line-height and text-style dropdowns do.
 fn paint_effects_menus(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    // Figma's Advanced stroke settings, and its own End point dropdown on top
+    // of it: the panel paints first so the row the menu hangs from has
+    // recorded its anchor this frame as well.
+    if app.stroke_style_open {
+        paint_stroke_style_panel(app, s, hit);
+        if app.stroke_cap_open.is_some() {
+            paint_stroke_cap_menu(app, s, hit);
+        }
+        return;
+    }
     if app.corner_open {
         paint_corner_popover(app, s, hit);
         return;

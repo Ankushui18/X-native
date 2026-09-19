@@ -5,6 +5,47 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-19 (Advanced stroke settings)
+
+[Apply and adjust stroke properties](https://help.figma.com/hc/en-us/articles/360049283914)
+— master row 8.15, the third of wave-1b item 14. *"Navigate to the **Stroke** section in
+the right sidebar and select **Advanced stroke settings**"*: the panel Figma puts behind
+the style icon, with named rows that show what they paint.
+
+- **The panel's rows are one list.** `state::stroke_panel_rows(kind, join)` is what the
+  card draws AND what its height comes from, so a row cannot go missing from either —
+  and it follows the stroke it describes: the three style rows always, the **Dash** and
+  **Gap** pair only for **Dashed**, the **Dashes** pattern field only for **Custom**, the
+  three joins always, the **Miter angle** only for a **Miter** join, and both end-point
+  rows.
+- **The style is derived, not stored.** `StrokeStyleKind::of` reads the model's own
+  shape — an empty pattern is Solid, a pair is Dashed, anything longer is Custom — so a
+  pattern typed into the Dashes field can never leave the panel claiming a style the
+  layer has not got. `StrokeStyleKind::pattern` carries the numbers over when a designer
+  moves between the rows (a pair repeats into a Custom pattern, which draws the same
+  line).
+- **One writer.** `Host::edit_stroke_options` materializes the visual stacks, seeds the
+  stroke layer from `stroke` when the layer has none, and **skips** a layer that already
+  carries the options the row would write, so clicking the row a stroke already answers
+  with never lands an undo entry. The Dash/Gap/Dashes/Miter-angle fields commit through
+  the same writer, and the Miter angle the field speaks is `1 / sin(angle / 2)` — the
+  relation the renderer's miter limit is.
+- **Previews that cannot lie.** Every row that shows a line draws it through
+  `paint::stroke_path_options`, built from the same caps/join/miter/dash pieces
+  `x_render::text_geometry::stroke_style` builds for the canvas. The **Start point** and
+  **End point** rows open `paint_stroke_cap_menu`, whose rows are named (None / Round /
+  Square) and show the end each one paints; picking one writes only that end.
+- **Row 8.13 corrected.** Building the cap menu turned up a claim the canvas cannot
+  honour: `Arrow` and `Triangle` are stored in the model and round-trip through the file
+  format, but both renderers map them to a butt end, and a head here is geometry
+  (`arrow_path`, what the Arrow tool draws). The row now says `PARTIAL` with that named,
+  which is the same scoreboard arithmetic — 8.15 up, 8.13 down.
+- Docs in the same change: row 8.15 `MATCH`, row 8.13 `PARTIAL` (named), wave-1b item 14
+  updated, a `FIGMA_PARITY.md` row, this entry, the sheet regenerated with `guard.mjs` at
+  **10 checks / 67 pinned / 0 open / 0 failed**. **Not built:** Figma's separate **Dash
+  cap**, its **Individual strokes** list, its Dynamic/Brush tabs, and the two head caps
+  a line cannot yet end in.
+
 ## [Unreleased] — 2026-09-19 (Space moves the box mid-resize)
 
 [Edit vector layers](https://help.figma.com/hc/en-us/articles/360039957634) — master

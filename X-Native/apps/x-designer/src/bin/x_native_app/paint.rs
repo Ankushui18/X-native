@@ -7,7 +7,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
-use vello::kurbo::{Affine, BezPath, Rect, RoundedRect, Stroke};
+use vello::kurbo::{Affine, BezPath, Cap, Join, Rect, RoundedRect, Stroke};
 use vello::peniko::{Color, Fill};
 use vello::Scene;
 use x_native::text::{glyph_outlines, Align, FontManager, Span, TextBlockStyle};
@@ -143,6 +143,38 @@ pub fn stroke_path(s: &mut Scene, p: &BezPath, c: Color, w: f64) {
         None,
         p,
     );
+}
+
+/// Stroke a path with a stroke's own options — caps, join, miter limit and
+/// dashes — the same construction `x_render::text_geometry::stroke_style`
+/// builds for the canvas, so a stroke-style row's preview and the layer it
+/// describes agree by construction rather than by hand.
+pub fn stroke_path_options(
+    s: &mut Scene,
+    p: &BezPath,
+    c: Color,
+    w: f64,
+    options: &x_native::StrokeOptions,
+) {
+    let cap = |cap| match cap {
+        x_native::StrokeCap::Round => Cap::Round,
+        x_native::StrokeCap::Square => Cap::Square,
+        _ => Cap::Butt,
+    };
+    let join = match options.join {
+        x_native::StrokeJoin::Round => Join::Round,
+        x_native::StrokeJoin::Bevel => Join::Bevel,
+        x_native::StrokeJoin::Miter => Join::Miter,
+    };
+    let mut stroke = Stroke::new(w)
+        .with_start_cap(cap(options.cap_start))
+        .with_end_cap(cap(options.cap_end))
+        .with_join(join)
+        .with_miter_limit(options.miter_limit);
+    if !options.dash.is_empty() {
+        stroke = stroke.with_dashes(options.dash_offset, options.dash.iter().copied());
+    }
+    s.stroke(&stroke, Affine::IDENTITY, crate::theme::resolve(c), None, p);
 }
 
 /// Fill an arbitrary path (the arrow head's solid triangle).

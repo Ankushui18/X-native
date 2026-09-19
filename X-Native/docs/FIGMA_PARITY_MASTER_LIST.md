@@ -282,9 +282,9 @@ position, canvas stacking, "distribute", `⇧A` to add.
 | 8.10 | Blend mode | every **layer**, every **fill / stroke** and a shadow or noise effect can carry one — *"Each layer, fill, or effect can only have one blend mode applied"*; **Pass through** leads the layer list ("the default mode for layers") and is absent from the paint and effect lists ("Pass through cannot be applied to fills or effects"); 18 more modes in Figma's own order and words — [help 360040667874](https://help.figma.com/hc/en-us/articles/360040667874) | `x_core::BlendKind::{label, layer_modes, paint_modes, row_in}` is the ONE owner of the mode words and the two lists (the layer menu is the paint menu with Pass through in front); `Editor::{set_layer_blend, set_paint_layer_blend, set_effect_layer_blend}` are the three writers, each refusing Pass through where Figma does; the Appearance row, the paint popover's **Apply blend mode** and every effect row's blend read those lists | MATCH |
 | 8.11 | Stroke colour / weight | yes | `AddStroke`, weight field | MATCH |
 | 8.12 | Stroke position | inside / centre / outside | `CycleStrokePosition` | MATCH |
-| 8.13 | Stroke cap & join | 3 caps, 3 joins, arrow/triangle caps | `StrokeCap` (5 incl. Arrow/Triangle), `StrokeJoin` | MATCH |
+| 8.13 | Stroke cap & join | 3 caps, 3 joins, arrow/triangle caps | `StrokeCap::None`/`Round`/`Square` and all three `StrokeJoin`s are painted and reachable from the Advanced stroke settings panel; **the two head caps are not**: `Arrow`/`Triangle` round-trip through the format but `raster.rs` and `text_geometry.rs` map them to a butt end, and a head is geometry here (`arrow_path`, what the Arrow tool draws) | PARTIAL |
 | 8.14 | Dashes | dash pattern editor | dash support in paint model | MATCH |
-| 8.15 | **Stroke "Edit style" panel** | named caps/joins/dashes preview | ours cycles instead of a menu | PARTIAL |
+| 8.15 | **Stroke "Advanced stroke settings"** | *"navigate to the **Stroke** section in the right sidebar and select **Advanced stroke settings**"* (`360049283914`): **Stroke style** rows (Solid / Dashed / Custom), the Dashed style's **Dash**/**Gap**, the Custom **Dashes** pattern, the three **joins** with a **Miter angle**, and the **Start point**/**End point** menus | the style icon in the Stroke section opens `paint_stroke_style_panel` — its rows are `state::stroke_panel_rows` (also the card's height), every row is named and previews what it paints through `paint::stroke_path_options`, and every writer goes through `Host::edit_stroke_options`; the two end rows open `paint_stroke_cap_menu` | MATCH |
 | 8.16 | Effects: drop / inner shadow | | | [Apply effects to layers](https://help.figma.com/hc/en-us/articles/360041488473) — *"Click the **Effects** section in the right sidebar"*, *"The **Drop shadow** effect is selected by default. Use the dropdown to switch"*, X / Y / **Fill** / Blur / Spread, *"you can toggle the visibility of individual effects"*, *"You can also duplicate the effect"*, *"click and drag the handles to reorder the effects"* | one row per effect carrying its type dropdown, its **Effect settings** (**X**, **Y**, **Blur**, and the shadow's **Fill** swatch that opens the real colour popover targeted at that effect), its own eye, duplicate and remove; `+` opens Figma's five types | MATCH |
 | 8.17 | Effects: layer blur | Radius | a row of type **Layer blur** with its Radius field, reachable from the `+` menu and the row's own dropdown | MATCH |
 | 8.18 | Effects: background blur | Radius | a row of type **Background blur** with its Radius field | MATCH |
@@ -722,14 +722,17 @@ rendering it.
     keyboard completions that finished the item (3.23–3.31: `⇧E`, `⌘R`, `⌥⌘K`,
     `⇧A`, `N`/`⇧N`, `⌘\`, `⇧⌘\`, `⌘/`, `⇧?`, and the `⌘⌥M` row §28 had already
     built) moved the whole of section 3's remainder into `MATCH`.
-14. Stroke-style panel (8.15); image flip toggle (9.7); outlines mode (17.7).
+14. Image flip toggle (9.7); outlines mode (17.7).
     Two halves of this item are delivered: row 2.24 is `MATCH`
     (`App::measure_spans`, `paint_measure`, pinned by
     `option_measures_the_gap_to_the_layer_under_the_cursor` and the geometry's
     own `measure_reads_both_axes_of_a_diagonal_pair` /
     `a_shared_band_anchors_the_line_and_an_overlap_reads_nothing`) and so is
     row 2.12 (`Drag::ResizeSel`'s `space`/`offset` riders, pinned by
-    `space_moves_the_box_mid_resize_and_the_resize_resumes_from_there`).
+    `space_moves_the_box_mid_resize_and_the_resize_resumes_from_there`), and so
+    is row 8.15 (`paint_stroke_style_panel` and the cap menu, pinned by
+    `the_advanced_stroke_panel_opens_from_the_section_and_writes_the_styles` and
+    `the_stroke_panel_writes_the_join_the_angle_the_pattern_and_the_ends`).
 15. Clean-up layers (5.9) — chapter 4's lesson.
 
 ### Wave 2 — design parity ("no design issue")
