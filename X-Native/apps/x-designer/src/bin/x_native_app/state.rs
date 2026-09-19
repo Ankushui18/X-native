@@ -25,6 +25,11 @@ pub enum Tool {
     /// text size, effects and auto-layout spacing travel with the box.
     Scale,
     Frame,
+    /// Figma's Section tool (⇧S): a labelled container whose whole job is to
+    /// hold other layers. "Sections in Figma Design are a top-level element on
+    /// the canvas by default. Sections can contain all layer types, including
+    /// other sections, but cannot be contained within frames or groups."
+    Section,
     Text,
     Rect,
     Ellipse,
@@ -79,6 +84,7 @@ impl Tool {
             Tool::Select => "mouse-pointer-2",
             Tool::Scale => "maximize",
             Tool::Frame => "frame#",
+            Tool::Section => "section",
             Tool::Slice => "scissors",
             Tool::Text => "type",
             Tool::Rect => "square",
@@ -116,6 +122,7 @@ impl Tool {
             Tool::Select => "Move",
             Tool::Scale => "Scale",
             Tool::Frame => "Frame",
+            Tool::Section => "Section",
             Tool::Slice => "Slice",
             Tool::Text => "Text",
             Tool::Rect => "Rectangle",
@@ -160,6 +167,7 @@ impl Tool {
             ("c", false),
             ("m", false),
             ("s", false),
+            ("s", true),
             ("e", true),
         ];
         for (k, sh) in KEYS {
@@ -188,7 +196,10 @@ impl Tool {
             // Figma's Scale tool; boards have their own model, no scale there
             ("k", _) if !board => Some(Tool::Scale),
             // Figma's Slice tool — also design-only: a board draws its own
-            // shapes and has no export region
+            // shapes and has no export region. Sections live on the canvas,
+            // so they are design-only too, and they take ⇧S (Figma's own
+            // key for the tool, beside the frame's F).
+            ("s", true) if !board => Some(Tool::Section),
             ("s", _) if !board => Some(Tool::Slice),
             ("f", _) => Some(Tool::Frame),
             ("t", _) => Some(Tool::Text),
@@ -1632,6 +1643,10 @@ pub enum CtxCmd {
     /// Figma's Frame selection (⌥⌘G): wrap the selection in a new Frame sized
     /// to the members' collective bounds.
     FrameSelection,
+    /// Figma's "Wrap in new section": wrap the selection in a labelled
+    /// Section. Sections are canvas elements, so a selection inside a frame
+    /// or a group is lifted to the canvas first, keeping its place.
+    SectionSelection,
     MakeComponent,
     /// boolean combine of the two selected shapes (engine boolean_selected)
     Union,
@@ -2803,6 +2818,10 @@ pub struct App {
     pub left_w: f64,
     pub right_w: f64,
     pub tool: Tool,
+    /// Which of the frame slot's two tools the toolbar draws when the active
+    /// tool is neither: Figma keeps the frame and the section on ONE slot and
+    /// shows whichever you used last.
+    pub frame_cluster: Tool,
     /// The Brush's style (Figma Draw's "stroke style"): which mark the tool
     /// paints. A tool setting, not a document one — it survives the stroke.
     pub brush_style: BrushStyle,
@@ -3004,6 +3023,25 @@ pub(crate) const PAGES_MAX_ROWS: usize = 4;
 pub const USER_NAME: &str = "You";
 
 impl App {
+    /// The tool the toolbar's frame slot draws: the active frame-or-section
+    /// tool when one of them is active, otherwise the one used last. Figma's
+    /// slot works the same way, with a caret that switches by hand.
+    pub fn frame_slot(&self) -> Tool {
+        match self.tool {
+            Tool::Frame | Tool::Section => self.tool,
+            _ => self.frame_cluster,
+        }
+    }
+
+    /// Select a tool, remembering the frame slot's choice so the slot can
+    /// show the section after the tool has moved on.
+    pub fn select_tool(&mut self, t: Tool) {
+        if matches!(t, Tool::Frame | Tool::Section) {
+            self.frame_cluster = t;
+        }
+        self.tool = t;
+    }
+
     pub fn new() -> Self {
         let mut app = Self::demo();
         app.demo_mode = false;
@@ -3069,6 +3107,7 @@ impl App {
             left_w: ED_LEFT_W,
             right_w: ED_RIGHT_W,
             tool: Tool::Select,
+            frame_cluster: Tool::Frame,
             brush_style: BrushStyle::Ink,
             drag: None,
             field: None,
@@ -4166,6 +4205,16 @@ impl App {
                     doc.editor().frame_selection(&x_native::fresh_id("frame"));
                 }
             }
+            SectionSelection => {
+                if doc.editor_ref().selection.is_empty() {
+                    refusal = Some("Select at least one layer to wrap in a section".into());
+                } else {
+                    // the engine sizes the section to the members' collective
+                    // bounds, lifts them to the canvas when a frame or group
+                    // held them, and keeps their place on the page
+                    doc.editor().section_selection(&x_native::fresh_id("section"));
+                }
+            }
             MakeComponent => {
                 let n = doc.editor().component_names().len() + 1;
                 doc.editor().make_component(&format!("Component {n}"));
@@ -4915,7 +4964,8 @@ pub fn kind_icon(k: &NodeKind) -> &'static str {
     match k {
         NodeKind::Frame { .. } => "frame#",
         NodeKind::Rect { .. } => "square",
-        NodeKind::Group | NodeKind::Section => "layout-grid",
+        NodeKind::Group => "layout-grid",
+        NodeKind::Section => "section",
         NodeKind::Text { .. } => "type",
         NodeKind::Ellipse => "circle",
         NodeKind::Poly { .. } => "triangle",

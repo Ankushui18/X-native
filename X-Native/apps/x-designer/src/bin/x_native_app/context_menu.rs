@@ -43,6 +43,10 @@ pub enum ContextAction {
     // Object
     Group,
     Ungroup,
+    /// Figma's "Wrap in new section" — the selection goes into a labelled
+    /// Section on the canvas. Sections cannot live inside frames or groups
+    /// (help 9771500257687), so a selection drawn in one is lifted first.
+    WrapInSection,
     MakeComponent,
     BringToFront,
     BringForward,
@@ -77,6 +81,7 @@ impl ContextAction {
             Self::CopyAsCode => "Copy as code",
             Self::Group => "Group selection",
             Self::Ungroup => "Ungroup",
+            Self::WrapInSection => "Wrap in new section",
             Self::MakeComponent => "Make component",
             Self::BringToFront => "Bring to front",
             Self::BringForward => "Bring forward",
@@ -108,6 +113,7 @@ impl ContextAction {
             Self::CopyAsCode => "code",
             Self::Group => "group",
             Self::Ungroup => "ungroup",
+            Self::WrapInSection => "section",
             Self::MakeComponent => "component",
             Self::BringToFront => "chevrons-up",
             Self::BringForward => "chevron-up",
@@ -258,6 +264,7 @@ pub fn action_for(action: &ContextAction) -> Option<Action> {
         Delete => Action::Ctx(CtxCmd::Delete),
         Group => Action::Ctx(CtxCmd::Group),
         Ungroup => Action::Ctx(CtxCmd::Ungroup),
+        WrapInSection => Action::Ctx(CtxCmd::SectionSelection),
         MakeComponent => Action::Ctx(CtxCmd::MakeComponent),
         BringToFront => Action::Ctx(CtxCmd::ToFront),
         BringForward => Action::Ctx(CtxCmd::BringFwd),
@@ -317,6 +324,7 @@ pub fn build_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             if *contains_group {
                 items.push(ai(Ungroup, true));
             }
+            items.push(ai(WrapInSection, true));
             items.push(ai(MakeComponent, true));
             items.push(ContextMenuItem::Separator);
             items.push(ContextMenuItem::Submenu {

@@ -7378,43 +7378,48 @@ fn paint_paint_library(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action
 fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let reg = app.editor_regions();
 
-    // Choose tool set based on document type
+    // Choose tool set based on document type. The design row keeps eighteen
+    // icons: Figma keeps the frame and the section on ONE toolbar slot and
+    // draws whichever of the two you used last (F / ⇧S switch it, and the
+    // palette names both), so the audited geometry below still holds.
+    let board_tools = [
+        Tool::Select,
+        Tool::BoardSticky,
+        Tool::BoardConnector,
+        Tool::Pen,
+        Tool::BoardRect,
+        Tool::BoardCircle,
+        Tool::Text,
+        Tool::Hand,
+    ];
+    // Design tools for artboard-based work — the full tool set
+    // (audit F2: eraser, symmetry and comment were keyboard-only
+    // before; the toolbar is the tool hub)
+    let mut design_tools = [
+        Tool::Select,
+        Tool::Scale,
+        Tool::Frame,
+        Tool::Slice,
+        Tool::Text,
+        Tool::Rect,
+        Tool::Ellipse,
+        Tool::Line,
+        Tool::Arrow,
+        Tool::Poly,
+        Tool::Star,
+        Tool::Pen,
+        Tool::Pencil,
+        Tool::Brush,
+        Tool::Eraser,
+        Tool::Symmetry,
+        Tool::Comment,
+        Tool::Hand,
+    ];
+    design_tools[2] = app.frame_slot();
     let tools: &[Tool] = if app.is_board() {
-        // Board tools for infinite canvas
-        &[
-            Tool::Select,
-            Tool::BoardSticky,
-            Tool::BoardConnector,
-            Tool::Pen,
-            Tool::BoardRect,
-            Tool::BoardCircle,
-            Tool::Text,
-            Tool::Hand,
-        ]
+        &board_tools
     } else {
-        // Design tools for artboard-based work — the full tool set
-        // (audit F2: eraser, symmetry and comment were keyboard-only
-        // before; the toolbar is the tool hub)
-        &[
-            Tool::Select,
-            Tool::Scale,
-            Tool::Frame,
-            Tool::Slice,
-            Tool::Text,
-            Tool::Rect,
-            Tool::Ellipse,
-            Tool::Line,
-            Tool::Arrow,
-            Tool::Poly,
-            Tool::Star,
-            Tool::Pen,
-            Tool::Pencil,
-            Tool::Brush,
-            Tool::Eraser,
-            Tool::Symmetry,
-            Tool::Comment,
-            Tool::Hand,
-        ]
+        &design_tools
     };
     // Audited (canvas 280..1100 @900): container 703×40 r12 at bottom-5
     // (y = win_h − 60); icons 32px pitch 36 starting +7; divider mid-gap
@@ -8277,6 +8282,10 @@ pub fn palette_commands() -> Vec<Command> {
             shortcut: "F",
         },
         Command {
+            label: "Section tool",
+            shortcut: "⇧ S",
+        },
+        Command {
             label: "Slice tool",
             shortcut: "S",
         },
@@ -8363,6 +8372,10 @@ pub fn palette_commands() -> Vec<Command> {
         Command {
             label: "Frame selection",
             shortcut: "⌥ ⌘ G",
+        },
+        Command {
+            label: "Wrap in new section",
+            shortcut: "",
         },
         Command {
             label: "Ungroup",

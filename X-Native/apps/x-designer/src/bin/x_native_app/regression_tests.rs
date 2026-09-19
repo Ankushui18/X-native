@@ -6080,3 +6080,143 @@ fn constraints_carry_a_frames_layers_through_its_resize() {
     assert_eq!(find_node_clone(root, "bar").unwrap().transform.y, 380.0);
     assert_eq!(find_node_clone(root, "chip").unwrap().transform.x, 345.0);
 }
+
+/// Figma's Section tool: "Click Section in the toolbar or use the keyboard
+/// shortcut ⇧ Shift S" (help 9771500257687), and the toolbar keeps the frame
+/// and the section on ONE slot, drawing whichever of the two you used last.
+#[test]
+fn the_section_tool_is_shift_s_and_shares_the_frame_slot() {
+    assert_eq!(
+        Tool::from_shortcut("s", false, false),
+        Some(Tool::Slice),
+        "S is still the Slice tool"
+    );
+    assert_eq!(
+        Tool::from_shortcut("s", true, false),
+        Some(Tool::Section),
+        "⇧S is the Section tool"
+    );
+    assert_eq!(
+        Tool::from_shortcut("s", true, true),
+        Some(Tool::BoardSticky),
+        "a board has no section tool"
+    );
+    assert_eq!(Tool::Section.label(), "Section");
+    assert_eq!(Tool::Section.icon(), "section");
+    assert_eq!(Tool::Section.shortcut_hint(false), "⇧S");
+    // the slot's memory: the last of the pair that was used
+    let mut h = host();
+    h.app.select_tool(Tool::Section);
+    assert_eq!(h.app.frame_slot(), Tool::Section);
+    h.app.select_tool(Tool::Select);
+    assert_eq!(
+        h.app.frame_slot(),
+        Tool::Section,
+        "the slot keeps the last of the pair"
+    );
+    h.app.select_tool(Tool::Frame);
+    assert_eq!(h.app.frame_slot(), Tool::Frame);
+    // and ⇧S through the real key handler selects it
+    h.app.shift = true;
+    h.on_character("S");
+    h.app.shift = false;
+    assert_eq!(h.app.tool, Tool::Section);
+}
+
+/// The section tool's drag: the section lands on the canvas even when it is
+/// drawn over a frame ("Sections ... cannot be contained within frames or
+/// groups"), and the frame it covers joins it — "you can also click and drag a
+/// section over the objects you want to add to it". One gesture, one undo step.
+#[test]
+fn the_section_tool_draws_on_the_canvas_and_takes_what_it_covers() {
+    let mut h = host();
+    h.finish_create(Tool::Frame, Point::new(100.0, 100.0), Point::new(300.0, 260.0));
+    let frame_id = h.app.doc_ref().editor_ref().selection[0].clone();
+    assert_eq!(h.app.doc_ref().editor_ref().root.children.len(), 1);
+    h.finish_create(
+        Tool::Section,
+        Point::new(80.0, 80.0),
+        Point::new(420.0, 320.0),
+    );
+    let root = &h.app.doc_ref().editor_ref().root;
+    assert_eq!(root.children.len(), 1, "the section is a page-level layer");
+    let sec = &root.children[0];
+    assert!(matches!(sec.kind, NodeKind::Section), "kind is Section");
+    assert_eq!(sec.name, "Section");
+    assert_eq!(
+        (sec.transform.x, sec.transform.y),
+        (80.0, 80.0),
+        "drawn where the drag was, in page space"
+    );
+    assert_eq!(sec.children.len(), 1, "the frame it covered joined it");
+    assert_eq!(sec.children[0].id, frame_id);
+    assert_eq!(
+        (sec.children[0].transform.x, sec.children[0].transform.y),
+        (20.0, 20.0),
+        "and kept its place on the page"
+    );
+    // the whole gesture is ONE undo step: the frame is back on the page
+    assert!(h.app.doc().editor().undo());
+    let root = &h.app.doc_ref().editor_ref().root;
+    assert_eq!(root.children.len(), 1);
+    assert!(matches!(root.children[0].kind, NodeKind::Frame { .. }));
+    assert_eq!(root.children[0].id, frame_id);
+    assert_eq!(
+        (root.children[0].transform.x, root.children[0].transform.y),
+        (100.0, 100.0)
+    );
+}
+
+/// Figma's "Wrap in new section" is on the canvas menu for a selection, and
+/// it produces a real section: with the layer held by a frame, the wrap lifts
+/// it to the canvas first and the frame gives it up.
+#[test]
+fn the_canvas_menu_wraps_a_selection_in_a_section() {
+    use crate::context_menu::{build_menu_items, ContextAction, ContextMenuItem, ContextTarget};
+    let items = build_menu_items(&ContextTarget::CanvasSelection {
+        selected_count: 2,
+        contains_group: false,
+    });
+    let offers = items.iter().any(|it| {
+        matches!(
+            it,
+            ContextMenuItem::Action {
+                action: ContextAction::WrapInSection,
+                enabled: true,
+            }
+        )
+    });
+    assert!(offers, "Figma's wrap row is on the canvas menu");
+
+    let mut h = host();
+    h.finish_create(Tool::Frame, Point::new(100.0, 100.0), Point::new(300.0, 260.0));
+    let frame_id = h.app.doc_ref().editor_ref().selection[0].clone();
+    // the frame is selected, so the rect is drawn INSIDE it (frame-local)
+    h.finish_create(Tool::Rect, Point::new(120.0, 120.0), Point::new(180.0, 180.0));
+    let rect_id = h.app.doc_ref().editor_ref().selection[0].clone();
+    h.app.doc().editor().selection = vec![rect_id.clone()];
+    h.app.apply_ctx(crate::state::CtxCmd::SectionSelection);
+
+    let root = &h.app.doc_ref().editor_ref().root;
+    let sec = root
+        .children
+        .iter()
+        .find(|c| matches!(c.kind, NodeKind::Section))
+        .expect("the wrap made a section");
+    assert_eq!(sec.name, "Section");
+    assert_eq!(sec.children.len(), 1);
+    assert_eq!(sec.children[0].id, rect_id);
+    let frame = root
+        .children
+        .iter()
+        .find(|c| c.id == frame_id)
+        .expect("the frame is still on the page");
+    assert!(frame.children.is_empty(), "the frame gave the layer up");
+    // and the layer kept its place on the PAGE, not the frame's
+    let m = node_world(root, &rect_id).expect("world matrix");
+    let p = m * Point::new(0.0, 0.0);
+    assert!(
+        (p.x - 120.0).abs() < 0.001 && (p.y - 120.0).abs() < 0.001,
+        "lifted layer sits where it was drawn: {p:?}"
+    );
+}

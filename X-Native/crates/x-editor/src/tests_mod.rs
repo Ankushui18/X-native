@@ -821,6 +821,130 @@ mod tests {
         assert_eq!(e.root.children.len(), 3, "a, b and the untouched ellipse c");
     }
 
+    /// Sections are canvas elements: "Sections in Figma Design are a
+    /// top-level element on the canvas by default. Sections can contain all
+    /// layer types, including other sections, but cannot be contained within
+    /// frames or groups." Wrapping a selection that lives inside a frame
+    /// therefore LIFTS it to the canvas, keeping its place on the page.
+    #[test]
+    fn a_section_lifts_layers_out_of_a_frame_and_keeps_their_place() {
+        let mut fr = Node::frame("fr", 300.0, 200.0)
+            .child(Node::rect("r1", 10.0, 20.0, 100.0, 40.0, Color::WHITE))
+            .child(Node::rect("r2", 150.0, 120.0, 60.0, 40.0, Color::WHITE));
+        fr.transform.x = 60.0;
+        fr.transform.y = 40.0;
+        let board = Node::frame("page", 800.0, 600.0)
+            .child(fr)
+            .child(Node::ellipse("e", 10.0, 10.0, 20.0, 20.0, Color::WHITE));
+        let mut e = Editor::new(board);
+        e.selection = vec!["r1".into(), "r2".into()];
+        e.section_selection("sec1");
+        // the section is on the PAGE, around the union of the members
+        let sec = find(&e.root, "sec1").expect("section exists");
+        assert!(matches!(sec.kind, NodeKind::Section));
+        assert_eq!(sec.children.len(), 2);
+        assert_eq!((sec.transform.x, sec.transform.y), (70.0, 60.0));
+        assert_eq!((sec.w, sec.h), (200.0, 140.0));
+        // the frame gave its layers up
+        assert!(find(&e.root, "fr").unwrap().children.is_empty());
+        // and the layers kept their place on the page, expressed in the
+        // section's own space now
+        let r1 = find(&e.root, "r1").unwrap();
+        assert_eq!((r1.transform.x, r1.transform.y), (0.0, 0.0));
+        let r2 = find(&e.root, "r2").unwrap();
+        assert_eq!((r2.transform.x, r2.transform.y), (140.0, 100.0));
+        // one undo puts everything back inside the frame
+        assert!(e.undo());
+        assert!(find(&e.root, "sec1").is_none());
+        let fr = find(&e.root, "fr").unwrap();
+        assert_eq!(fr.children.len(), 2);
+        assert_eq!(find(&e.root, "r1").unwrap().transform.x, 10.0);
+    }
+
+    /// The rule is enforced where the tree is written, not in each caller: a
+    /// section cannot be inserted into a frame or a group, and the tree's own
+    /// drag (the reorder command) refuses to move one in either.
+    #[test]
+    fn a_section_never_lands_inside_a_frame_or_a_group() {
+        let board = Node::frame("page", 800.0, 600.0)
+            .child(Node::frame("fr", 300.0, 200.0))
+            .child(Node::group("gr", 100.0, 100.0).child(Node::rect(
+                "g1",
+                0.0,
+                0.0,
+                20.0,
+                20.0,
+                Color::WHITE,
+            )));
+        let mut e = Editor::new(board);
+        e.insert_node("page", Node::section("sec1", 200.0, 120.0));
+        assert!(e.get_node("sec1").is_some());
+        assert!(!e.insert_node("fr", Node::section("sec2", 40.0, 40.0)));
+        assert!(!e.insert_node("gr", Node::section("sec3", 40.0, 40.0)));
+        assert!(!e.reorder_node("sec1", "page", 0, "fr", 0));
+        assert!(!e.reorder_node("sec1", "page", 0, "gr", 0));
+        assert!(!e.reorder_node("sec1", "page", 0, "fr", 0));
+        // ordinary layers still move into a container
+        assert!(e.reorder_node("fr", "page", 0, "gr", 0));
+    }
+
+    /// "You can also click and drag a section over the objects you want to add
+    /// to it" — a layer the section completely covers joins it, keeping its
+    /// place on the canvas; one it only partly covers stays on the page.
+    #[test]
+    fn a_section_takes_in_the_layers_it_covers() {
+        let board = Node::frame("page", 800.0, 600.0)
+            .child(Node::rect("in", 40.0, 40.0, 60.0, 60.0, Color::WHITE))
+            .child(Node::rect("edge", 190.0, 40.0, 60.0, 60.0, Color::WHITE));
+        let mut e = Editor::new(board);
+        let mut sec = Node::section("sec1", 200.0, 200.0);
+        sec.transform.x = 20.0;
+        sec.transform.y = 20.0;
+        e.insert_node("page", sec);
+        assert_eq!(
+            e.section_absorb("sec1"),
+            1,
+            "the covered layer joined, the straddling one stayed"
+        );
+        assert_eq!(find(&e.root, "sec1").unwrap().children.len(), 1);
+        assert_eq!(find(&e.root, "in").unwrap().transform.x, 20.0);
+        assert_eq!(find(&e.root, "edge").unwrap().transform.x, 190.0);
+        assert!(e.undo());
+        assert_eq!(find(&e.root, "in").unwrap().transform.x, 40.0);
+        assert!(find(&e.root, "sec1").unwrap().children.is_empty());
+    }
+
+    /// Figma's second delete — ⌘⌫ on a Mac, Ctrl+Backspace on Windows: "To
+    /// delete a section without deleting its contents". The container goes,
+    /// its layers stay on the canvas where they were drawn.
+    #[test]
+    fn deleting_a_section_can_keep_its_layers() {
+        let board = Node::frame("page", 800.0, 600.0)
+            .child(Node::rect("keep1", 10.0, 10.0, 40.0, 40.0, Color::WHITE))
+            .child(Node::rect("keep2", 60.0, 10.0, 40.0, 40.0, Color::WHITE));
+        let mut e = Editor::new(board);
+        e.insert_node("page", Node::section("sec1", 120.0, 80.0));
+        {
+            let sec = find_mut(&mut e.root, "sec1").expect("section");
+            sec.transform.x = 5.0;
+            sec.transform.y = 5.0;
+        }
+        assert_eq!(e.section_absorb("sec1"), 2);
+        e.selection = vec!["sec1".into()];
+        assert_eq!(e.delete_keeping_contents(), 2);
+        assert!(find(&e.root, "sec1").is_none(), "the section is gone");
+        let k1 = find(&e.root, "keep1").unwrap();
+        assert_eq!((k1.transform.x, k1.transform.y), (10.0, 10.0));
+        let k2 = find(&e.root, "keep2").unwrap();
+        assert_eq!((k2.transform.x, k2.transform.y), (60.0, 10.0));
+        assert!(e.undo());
+        assert!(
+            find(&e.root, "sec1").is_some(),
+            "undo brings the section back"
+        );
+        assert_eq!(find(&e.root, "sec1").unwrap().children.len(), 2);
+    }
+
     #[test]
     fn frame_selection_wraps_and_is_undoable() {
         let mut e = Editor::new(doc());

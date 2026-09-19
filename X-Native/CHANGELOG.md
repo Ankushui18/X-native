@@ -5,6 +5,53 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-19 (Sections)
+
+A Section is Figma's labelled container for a region of the canvas — "a great
+way to organize and label areas of your canvas, making it easier to navigate
+and present your work". The model, the renderer and the hit test already knew
+the kind; what was missing was any way to make one, and the rules that make a
+section a section rather than a frame.
+
+- **The tool.** `Tool::Section`, Figma's `⇧S`: *"Click Section in the toolbar or
+  use the keyboard shortcut ⇧ Shift S. Click and drag the location of the canvas
+  where you'd like the section to go."* It draws on the canvas whatever
+  container is under the drag — a section is a top-level element, so the draw
+  cannot land it inside a frame.
+- **One key, two tools, one memory.** Figma keeps Section in the same toolbar
+  slot as Frame; press `F` after `⇧S` and you get the Frame back, press `⇧S`
+  again and you get the Section. `App::frame_slot` is that memory and
+  `App::select_tool` is the one door every tool choice goes through (the
+  toolbar, the palette rows, the keyboard, `Action::Tool`); the palette carries
+  `Section tool` beside `Frame tool`.
+- **Cannot be nested.** *"Sections in Figma Design are a top-level element on
+  the canvas by default. Sections can contain all layer types, including other
+  sections, but cannot be contained within frames or groups."* `Editor::insert_nodes`
+  refuses a Section into a Frame or a Group, and the reorder command refuses to
+  move one there, so no path in the app can build the forbidden tree.
+- **Wrap in new section.** The canvas's right-click menu carries Figma's own
+  row. A selection already on the canvas — or inside another section — is
+  wrapped where it stands; one inside a frame or a group is **lifted** to the
+  canvas with its place kept: the members' page positions are computed first,
+  the section is drawn around them, and each member is moved by the difference,
+  as one undo step. A rotated or scaled ancestor stops the lift and changes
+  nothing, because that subtree's page position is a matrix rather than a point.
+- **A section takes in what it covers.** *"You can also click and drag a section
+  over the objects you want to add to it."* The drag that drew the section did
+  exactly that: `Editor::section_absorb` moves every unlocked sibling the section
+  fully covers into it, keeping its place, merged with the draw into one undo.
+- **Two deletes.** `Delete` takes the section and its contents; `Ctrl+Backspace`
+  (`⌘⌫` on a Mac) takes the container and keeps its contents, promoted to the
+  canvas with their place on it. Plain layers answer the ordinary delete either
+  way. The status line reports how many layers were kept.
+- **Tests.** `the_section_tool_is_shift_s_and_shares_the_frame_slot`,
+  `the_section_tool_draws_on_the_canvas_and_takes_what_it_covers`,
+  `the_canvas_menu_wraps_a_selection_in_a_section`,
+  `a_section_lifts_layers_out_of_a_frame_and_keeps_their_place`,
+  `a_section_never_lands_inside_a_frame_or_a_group`,
+  `a_section_takes_in_the_layers_it_covers`,
+  `deleting_a_section_can_keep_its_layers`.
+
 ## [Unreleased] — 2026-09-19 (Prototype: Animate matching layers)
 
 Figma's Prototype tab has a tick in the interaction's animation section and one

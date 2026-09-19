@@ -36,7 +36,7 @@ recon task, not a settled fact.
 | 2 Canvas gestures (drag) | 28 | 22 | 0 | 5 | 1 | 0 |
 | 3 Keyboard | 34 | 22 | 5 | 6 | 1 | 0 |
 | 4 Menus & palettes | 10 | 9 | 0 | 1 | 0 | 0 |
-| 5 Layers, pages, sections | 14 | 11 | 1 | 2 | 0 | 0 |
+| 5 Layers, pages, sections | 14 | 12 | 1 | 1 | 0 | 0 |
 | 6 Frame & shape properties | 20 | 16 | 2 | 2 | 0 | 0 |
 | 7 Auto layout | 16 | 12 | 1 | 3 | 0 | 0 |
 | 8 Fill, stroke, effects, colour | 22 | 15 | 6 | 1 | 0 | 0 |
@@ -52,9 +52,9 @@ recon task, not a settled fact.
 | 18 Design language (look of the app itself) | 12 | 1 | 5 | 6 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **334** | **223** | **55** | **37** | **16** | **3** |
+| **total** | **334** | **224** | **55** | **36** | **16** | **3** |
 
-The 37 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
+The 36 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
 the brief.
 
@@ -204,7 +204,7 @@ sections, groups and frames").
 | 5.5 | Rename | `⌘R` or double-click | `LayerRename`, `RenameStart` | MATCH |
 | 5.6 | Group / ungroup / frame selection | `⌘G` `⇧⌘G` `⌥⌘G` | same | MATCH |
 | 5.7 | Select all with same property | "Select matching" | `SelectMatching` | MATCH |
-| 5.8 | **Sections** | labelled container, distinct hit/hue, arrow key nav | `NodeKind::Section` exists and renders; **no way to create one** | **MISSING** (authoring) |
+| 5.8 | **Sections** | labelled container, distinct hit/hue, arrow key nav; place one with the Section tool (`⇧S`) or **Wrap in new section** (right-click); "sections … cannot be contained within frames or groups"; a section takes in the layers it is dragged or drawn over; `Delete` removes it **and its contents**, `⌘⌫`/`Ctrl+Backspace` **without** them ([help 9771500257687](https://help.figma.com/hc/en-us/articles/9771500257687)) | `Tool::Section` (⇧S, sharing `App::frame_slot` with Frame through `App::select_tool`), `Editor::section_selection` / `lift_into_section` / `section_absorb` / `delete_keeping_contents`, `CtxCmd::SectionSelection`; pinned by `a_section_lifts_layers_out_of_a_frame_and_keeps_their_place`, `a_section_never_lands_inside_a_frame_or_a_group`, `a_section_takes_in_the_layers_it_covers`, `deleting_a_section_can_keep_its_layers`, `the_section_tool_is_shift_s_and_shares_the_frame_slot`, `the_section_tool_draws_on_the_canvas_and_takes_what_it_covers`, `the_canvas_menu_wraps_a_selection_in_a_section` | MATCH |
 | 5.9 | Clean up layers | chapter 4 lesson: flatten redundant nests, rename for handoff | `CleanupLayers`? no — nothing in code | **MISSING** |
 | 5.10 | Duplicate naming | Figma: "… copy" style naming on duplicate | ours uses another suffix | PARTIAL |
 | 5.11 | Per-frame "Show name" | toggle on the frame | `ToggleShowName` | MATCH |
@@ -578,8 +578,10 @@ rendering it.
    The engine already carries every variant.
 5. **Blend-mode picker** (6.20, 8.10) — `BlendKind` exists per paint, stroke, effect and
    layer; nothing in the UI sets it.
-6. Sections authoring (5.8) — tool + tree row + panel; the model, renderer and hit test
-   already treat `Section` as a labelled container.
+6. ~~**Sections authoring** (5.8)~~ — **delivered**: the Section tool (⇧S, sharing
+   the toolbar slot with Frame), **Wrap in new section**, lift-to-canvas when the
+   selection sits in a frame or a group, the take-in that follows the draw, and the
+   two deletes. Pinned by `the_section_tool_draws_on_the_canvas_and_takes_what_it_covers`.
 7. Rotate on canvas (2.23) — handle outside the corner, `⇧` = 15° steps. The numeric
    field and `Editor::rotate` already exist, so this is handle + gesture only.
 8. Masks authoring (11.13) — `⌘⌥M` use-as-mask, plus inverted masks.

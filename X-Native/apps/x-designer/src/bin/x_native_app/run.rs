@@ -6072,6 +6072,18 @@ impl Host {
                 sl.name = format!("Slice {n}");
                 sl
             }
+            Tool::Section => {
+                // Figma: "Click Section in the toolbar or use the keyboard
+                // shortcut ⇧ Shift S. Click and drag the location of the
+                // canvas where you'd like the section to go." The section is
+                // its own kind: a labelled container with a tinted body.
+                let sid = x_native::fresh_id("section");
+                let mut sec = Node::section(&sid, w.max(8.0), h.max(8.0));
+                sec.name = format!("Section {n}");
+                sec.transform.x = x;
+                sec.transform.y = y;
+                sec
+            }
             Tool::Text => {
                 // Figma: a new text object starts EMPTY (placeholder only);
                 // committing empty deletes it
@@ -6097,6 +6109,10 @@ impl Host {
         // Space held during the drag is Figma's "prevent nesting" modifier: the
         // object stays on the page even when it is drawn over a frame.
         let no_nest = self.app.space_pan;
+        // A section is a canvas element and "cannot be contained within
+        // frames or groups" (help 9771500257687), so the Section tool ignores
+        // the container under the drag the way Space-held drawing does.
+        let on_canvas = tool == Tool::Section;
         let (parent_id, parent_auto_layout) = {
             let doc = self.app.doc();
             let root = &doc.editor_ref().root;
@@ -6105,13 +6121,13 @@ impl Host {
             // point the drag STARTED from. Drawing with exactly one container
             // selected still builds that container (viewport audit P2), which is
             // also what keeps the auto-layout flow honest for a group.
-            let by_place = if no_nest {
+            let by_place = if no_nest || on_canvas {
                 None
             } else {
                 container_under(root, start)
             };
             let mut picked = by_place;
-            if picked.is_none() {
+            if picked.is_none() && !on_canvas {
                 let sel = &doc.editor_ref().selection;
                 if sel.len() == 1 {
                     if let Some(p) = crate::editor_ui::find_node(root, &sel[0]) {
@@ -6149,6 +6165,16 @@ impl Host {
             let par = x_native::editor::find_mut(&mut e.root, &parent_id);
             if let Some(par) = par {
                 x_native::apply_layout_recursive(par, &vars);
+            }
+        }
+        // Figma: "You can also click and drag a section over the objects you
+        // want to add to it" — the drag that DREW the section did exactly
+        // that, so every layer it covers joins it, keeping its place. The
+        // insert and the take-in are one undo step.
+        if tool == Tool::Section {
+            let moved = self.app.doc().editor().section_absorb(&id);
+            if moved > 0 {
+                self.app.doc().editor().merge_last(2);
             }
         }
         self.app.doc().editor().selection = vec![id.clone()];
@@ -7159,8 +7185,21 @@ impl Host {
                         self.dispatch(Action::ConnDelete);
                         return;
                     }
-                    self.app.doc().editor().delete_selection();
-                    self.app.mark_dirty();
+                    if self.app.ctrl {
+                        // Figma's second delete — ⌘⌫ on a Mac, Ctrl+Backspace
+                        // on Windows: "To delete a section without deleting
+                        // its contents" (help 9771500257687). A frame or a
+                        // group answers the same way; plain layers just go.
+                        let moved = self.app.doc().editor().delete_keeping_contents();
+                        self.app.mark_dirty();
+                        if moved > 0 {
+                            self.app.status =
+                                format!("Removed without contents - {moved} layer(s) kept");
+                        }
+                    } else {
+                        self.app.doc().editor().delete_selection();
+                        self.app.mark_dirty();
+                    }
                 }
             }
             // Layer-tree navigation (Figma): Tab cycles siblings, ⇧Tab goes the
@@ -7230,7 +7269,7 @@ impl Host {
             let tool_key = c.to_lowercase();
             let board_mode = self.app.is_board();
             if let Some(t) = Tool::from_shortcut(&tool_key, self.app.shift, board_mode) {
-                self.app.tool = t;
+                self.app.select_tool(t);
                 return;
             }
             if self.app.shift {
@@ -7479,7 +7518,8 @@ impl Host {
             }
             "Select tool" => self.app.tool = Tool::Select,
             "Scale tool" => self.app.tool = Tool::Scale,
-            "Frame tool" => self.app.tool = Tool::Frame,
+            "Frame tool" => self.app.select_tool(Tool::Frame),
+            "Section tool" => self.app.select_tool(Tool::Section),
             "Text tool" => self.app.tool = Tool::Text,
             "Rectangle tool" => self.app.tool = Tool::Rect,
             "Ellipse tool" => self.app.tool = Tool::Ellipse,
@@ -7527,6 +7567,7 @@ impl Host {
                 self.app.mark_dirty();
             }
             "Frame selection" => self.app.apply_ctx(CtxCmd::FrameSelection),
+            "Wrap in new section" => self.app.apply_ctx(CtxCmd::SectionSelection),
             "Bring to front" => {
                 let doc = self.app.doc();
                 if let Some(id) = doc.selected_id() {
@@ -10258,7 +10299,7 @@ impl Host {
             Action::CloseDoc(i) => {
                 self.request_close_doc(i);
             }
-            Action::Tool(t) => self.app.tool = t,
+            Action::Tool(t) => self.app.select_tool(t),
             Action::SetBrushStyle(style) => {
                 self.app.brush_style = style;
                 self.app.status = format!("Brush style: {}", style.label());

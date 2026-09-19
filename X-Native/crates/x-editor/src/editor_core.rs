@@ -22,6 +22,55 @@ fn next_copy_id(taken: &mut std::collections::HashSet<String>, old: &str) -> Str
     candidate
 }
 
+/// True when a transform only says WHERE a node sits: translation without
+/// rotation, scale or skew. The Section rules below deal in translations, so
+/// anything else is refused rather than guessed.
+fn plain_translation(t: &Transform) -> bool {
+    t.rotation == 0.0
+        && t.scale_x == 1.0
+        && t.scale_y == 1.0
+        && t.skew_x == 0.0
+        && t.skew_y == 0.0
+}
+
+/// The PAGE position of a node's origin: its own translation plus every
+/// ancestor's. `None` when an ancestor is not a plain translation — its
+/// children's page position is a matrix, not a point.
+fn page_pos(n: &Node, id: &str) -> Option<(f64, f64)> {
+    for c in &n.children {
+        if c.id == id {
+            return Some((c.transform.x, c.transform.y));
+        }
+        if let Some((x, y)) = page_pos(c, id) {
+            if !plain_translation(&c.transform) {
+                return None;
+            }
+            return Some((c.transform.x + x, c.transform.y + y));
+        }
+    }
+    None
+}
+
+/// The id of a node's direct parent, if it has one.
+fn parent_of(n: &Node, id: &str) -> Option<String> {
+    for c in &n.children {
+        if c.id == id {
+            return Some(n.id.clone());
+        }
+        if let Some(p) = parent_of(c, id) {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Does a subtree carry a Section anywhere? Figma's rule is about the
+/// container itself: "Sections ... cannot be contained within frames or
+/// groups", and a frame cannot be given one through the back door either.
+fn has_section(n: &Node) -> bool {
+    matches!(n.kind, NodeKind::Section) || n.children.iter().any(has_section)
+}
+
 /// Overlay a rich-text style onto CHAR range `[start, end)` within `runs`:
 /// existing runs are clipped around the range and any part they cover is
 /// dropped, then a fresh run for the range is appended (the renderer's
@@ -1289,6 +1338,14 @@ impl Editor {
     }
 
     /// Wrap the current selection in a labelled Section container.
+    ///
+    /// Figma's own rule stands behind the two paths here: "Sections in Figma
+    /// Design are a top-level element on the canvas by default. Sections can
+    /// contain all layer types, including other sections, but cannot be
+    /// contained within frames or groups." A selection that already lives on
+    /// the canvas — or inside another section — is wrapped in place; one that
+    /// lives inside a frame or a group is LIFTED to the canvas first, keeping
+    /// its place, so the section lands around it rather than inside a frame.
     pub fn section_selection(&mut self, section_id: &str) {
         if section_id.is_empty() || find(&self.root, section_id).is_some() {
             return;
@@ -1296,12 +1353,20 @@ impl Editor {
         if self.selection.is_empty() {
             return;
         }
-        let snapshot = self.root.clone();
         let first = self.selection[0].clone();
         let parent_id = match find_parent_mut(&mut self.root, &first) {
             Some(p) => p.id.clone(),
             None => return,
         };
+        let allowed = match find(&self.root, &parent_id) {
+            Some(p) => matches!(p.kind, NodeKind::Section),
+            None => return,
+        };
+        if !allowed && parent_id != self.root.id {
+            self.lift_into_section(section_id);
+            return;
+        }
+        let snapshot = self.root.clone();
         let indices: Vec<usize> = {
             // stale parent id (undo/redo race, async UI): no-op, not a panic
             let Some(p) = find(&self.root, &parent_id) else {
@@ -1327,6 +1392,220 @@ impl Editor {
             self.clear_redo_history();
             self.selection = vec![section_id.to_string()];
         }
+    }
+
+    /// Wrap a selection that sits inside a frame or a group in a Section that
+    /// lands on the canvas. The members keep their place on the page — their
+    /// page positions are computed first, the section is drawn around them,
+    /// and each member is moved into it by the difference. A rotated or
+    /// scaled ancestor stops the lift and nothing changes: the page position
+    /// of that subtree is a matrix, and a wrong lift would be worse than none.
+    fn lift_into_section(&mut self, section_id: &str) -> bool {
+        /// One member of the lift: where it is now and where it sits on the
+        /// page. `from_index` is resolved by id at apply, so it cannot drift.
+        struct Placed {
+            id: String,
+            from_parent: String,
+            from_index: usize,
+            px: f64,
+            py: f64,
+            lx: f64,
+            ly: f64,
+            w: f64,
+            h: f64,
+        }
+        let members = self.selected_roots();
+        if members.is_empty() {
+            return false;
+        }
+        let mut placed: Vec<Placed> = vec![];
+        for id in &members {
+            let Some((px, py)) = page_pos(&self.root, id) else {
+                return false;
+            };
+            let Some(n) = find(&self.root, id) else {
+                return false;
+            };
+            let Some(from_parent) = parent_of(&self.root, id) else {
+                return false;
+            };
+            let Some(from_index) = find(&self.root, &from_parent)
+                .and_then(|p| p.children.iter().position(|c| c.id == *id))
+            else {
+                return false;
+            };
+            placed.push(Placed {
+                id: id.clone(),
+                from_parent,
+                from_index,
+                px,
+                py,
+                lx: n.transform.x,
+                ly: n.transform.y,
+                w: n.w,
+                h: n.h,
+            });
+        }
+        let x0 = placed.iter().map(|p| p.px).fold(f64::INFINITY, f64::min);
+        let y0 = placed.iter().map(|p| p.py).fold(f64::INFINITY, f64::min);
+        let x1 = placed.iter().map(|p| p.px + p.w).fold(f64::NEG_INFINITY, f64::max);
+        let y1 = placed.iter().map(|p| p.py + p.h).fold(f64::NEG_INFINITY, f64::max);
+        let mut sec = Node::section(section_id, x1 - x0, y1 - y0);
+        sec.transform.x = x0;
+        sec.transform.y = y0;
+        let mut cmds = vec![Command::Insert {
+            parent_id: self.root.id.clone(),
+            index: self.root.children.len(),
+            node: sec,
+        }];
+        for (k, p) in placed.iter().enumerate() {
+            cmds.push(Command::ReorderNode {
+                id: p.id.clone(),
+                from_parent: p.from_parent.clone(),
+                from_index: p.from_index,
+                to_parent: section_id.into(),
+                index: k,
+            });
+            // the reorder keeps the member's local transform: this moves it
+            // from where it was inside its frame to where it was on the page
+            cmds.push(Command::Move {
+                id: p.id.clone(),
+                dx: p.px - x0 - p.lx,
+                dy: p.py - y0 - p.ly,
+            });
+        }
+        self.push(cmds);
+        self.selection = vec![section_id.to_string()];
+        true
+    }
+
+    /// Figma's "Add objects to a section": "You can also click and drag a
+    /// section over the objects you want to add to it." Every SIBLING layer
+    /// the section completely covers — section, frame, shape or text — joins
+    /// it, keeping its place on the canvas. This is the one rule behind both
+    /// the drag that creates a section over a design and the drag that moves
+    /// one onto it. Returns how many layers moved; 0 is the common answer.
+    pub fn section_absorb(&mut self, section_id: &str) -> usize {
+        let Some(sec) = find(&self.root, section_id) else {
+            return 0;
+        };
+        if !matches!(sec.kind, NodeKind::Section) || !plain_translation(&sec.transform) {
+            return 0;
+        }
+        let (sx, sy, sw, sh) = (sec.transform.x, sec.transform.y, sec.w, sec.h);
+        let Some(parent_id) = parent_of(&self.root, section_id) else {
+            return 0;
+        };
+        let mut taken: Vec<(String, f64, f64)> = vec![];
+        {
+            let Some(parent) = find(&self.root, &parent_id) else {
+                return 0;
+            };
+            for c in &parent.children {
+                // a locked layer stays where it is, and a rotated one cannot
+                // be placed inside the section's own frame of reference
+                if c.id == section_id || c.locked || !plain_translation(&c.transform) {
+                    continue;
+                }
+                let inside = c.transform.x >= sx - 0.5
+                    && c.transform.y >= sy - 0.5
+                    && c.transform.x + c.w <= sx + sw + 0.5
+                    && c.transform.y + c.h <= sy + sh + 0.5;
+                if inside {
+                    taken.push((c.id.clone(), c.transform.x, c.transform.y));
+                }
+            }
+        }
+        if taken.is_empty() {
+            return 0;
+        }
+        let mut cmds: Vec<Command> = vec![];
+        for (k, (id, x, y)) in taken.iter().enumerate() {
+            cmds.push(Command::ReorderNode {
+                id: id.clone(),
+                from_parent: parent_id.clone(),
+                from_index: k, // resolved by id at apply
+                to_parent: section_id.to_string(),
+                index: k,
+            });
+            cmds.push(Command::Move {
+                id: id.clone(),
+                dx: sx - x,
+                dy: sy - y,
+            });
+        }
+        let n = taken.len();
+        self.push(cmds);
+        n
+    }
+
+    /// Figma's second delete — "To delete a section without deleting its
+    /// contents", Command+Delete on a Mac and Control+Backspace on Windows:
+    /// the container goes, its children stay, promoted to the container's
+    /// parent with their place on the canvas kept. Plain layers, containers
+    /// with nothing to keep, and rotated containers (whose children's page
+    /// positions are a matrix) delete the ordinary way. Returns how many
+    /// layers were promoted.
+    pub fn delete_keeping_contents(&mut self) -> usize {
+        let mut cmds: Vec<Command> = vec![];
+        let mut promoted = 0usize;
+        for id in self.selected_roots() {
+            let Some(node) = find(&self.root, &id).cloned() else {
+                continue;
+            };
+            let container = matches!(
+                node.kind,
+                NodeKind::Group | NodeKind::Section | NodeKind::Frame { .. }
+            );
+            let ordinary =
+                !container || node.children.is_empty() || !plain_translation(&node.transform);
+            if ordinary {
+                if let Some(p) = find_parent_mut(&mut self.root, &id) {
+                    if let Some(i) = p.children.iter().position(|c| c.id == id) {
+                        cmds.push(Command::Delete {
+                            parent_id: p.id.clone(),
+                            index: i,
+                            node: p.children[i].clone(),
+                        });
+                    }
+                }
+                continue;
+            }
+            let Some(parent_id) = parent_of(&self.root, &id) else {
+                continue;
+            };
+            let Some(index) = find(&self.root, &parent_id)
+                .and_then(|p| p.children.iter().position(|c| c.id == id))
+            else {
+                continue;
+            };
+            let (ox, oy) = (node.transform.x, node.transform.y);
+            cmds.push(Command::Delete {
+                parent_id: parent_id.clone(),
+                index,
+                node: node.clone(),
+            });
+            for (k, child) in node.children.iter().enumerate() {
+                cmds.push(Command::Insert {
+                    parent_id: parent_id.clone(),
+                    index: index + k,
+                    node: child.clone(),
+                });
+                if ox != 0.0 || oy != 0.0 {
+                    cmds.push(Command::Move {
+                        id: child.id.clone(),
+                        dx: ox,
+                        dy: oy,
+                    });
+                }
+            }
+            promoted += node.children.len();
+        }
+        if !cmds.is_empty() {
+            self.push(cmds);
+        }
+        self.selection.clear();
+        promoted
     }
 
     /// Figma "Frame selection" (⌥⌘G): wrap the current selection in a new
@@ -1772,6 +2051,14 @@ impl Editor {
             return false;
         };
         if nodes.is_empty() {
+            return false;
+        }
+        // Figma's rule, enforced where the tree is written rather than in each
+        // caller: a section is a top-level element and "cannot be contained
+        // within frames or groups".
+        if matches!(parent.kind, NodeKind::Frame { .. } | NodeKind::Group)
+            && nodes.iter().any(has_section)
+        {
             return false;
         }
         let base = parent.children.len();

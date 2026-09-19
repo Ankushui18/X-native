@@ -258,6 +258,12 @@ const ICONS: &[(&str, &[&str])] = &[
         "m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2",
     ]),
     ("frame", &["M22 6H2", "M6 2v4", "M6 18v4", "M18 2v4", "M18 18v4"]),
+    // Figma's Section: a rounded container with its title's first stroke
+    // inside the top-left corner — the labelled box the tool draws.
+    ("section", &[
+        "M6 3h12a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3z",
+        "M6.5 7.5h6",
+    ]),
     ("keyboard", &[
         "M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z",
         "M6.5 8a.5.5 0 1 0-1 0 .5.5 0 0 0 1 0z",
@@ -542,6 +548,7 @@ mod tests {
             "save",
             "scissors",
             "search",
+            "section",
             "sliders-horizontal",
             "sparkles",
             "square",
@@ -573,7 +580,7 @@ mod tests {
         }
         assert_eq!(
             names.len(),
-            76,
+            77,
             "census list drifted — recount when adding icons"
         );
     }

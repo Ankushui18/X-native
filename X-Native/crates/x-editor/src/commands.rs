@@ -286,6 +286,19 @@ pub(crate) fn apply(root: &mut Node, cmd: &Command) -> bool {
             to_parent,
             index,
         } => {
+            // Figma's rule: a section is a top-level element on the canvas and
+            // "cannot be contained within frames or groups" — a drop into one
+            // bounces rather than quietly nesting it.
+            if find(root, id)
+                .map(|n| matches!(n.kind, NodeKind::Section))
+                .unwrap_or(false)
+            {
+                if let Some(tp) = find(root, to_parent) {
+                    if matches!(tp.kind, NodeKind::Frame { .. } | NodeKind::Group) {
+                        return false;
+                    }
+                }
+            }
             let node = {
                 let Some(p) = find_mut(root, from_parent) else {
                     return false;
