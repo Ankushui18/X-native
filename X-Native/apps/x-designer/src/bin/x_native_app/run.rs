@@ -2492,31 +2492,6 @@ impl App {
         self.autosize_text_node(id)
     }
 
-    /// True when a resize press at `p` belongs to the resize-to-fit gesture
-    /// (a second press on a single text layer's corner handle), in which case
-    /// that layer has just been fit to its content.
-    fn fit_text_at(&mut self, world: Point) -> bool {
-        let id = {
-            let doc = self.app.doc();
-            let editor = doc.editor_ref();
-            if editor.selection.len() != 1 {
-                return false;
-            }
-            let id = editor.selection[0].clone();
-            match crate::editor_ui::find_node(&editor.root, id.as_str()) {
-                Some(n) if matches!(n.kind, NodeKind::Text { .. }) => id,
-                _ => return false,
-            }
-        };
-        // the handle has to be under the press, or this is not the gesture
-        if self.resize_grab(world).is_none() {
-            return false;
-        }
-        self.fit_text_to_content(&id);
-        self.app.status = "Auto width - box fit to the text".into();
-        true
-    }
-
     /// The Layout section's **Resizing** control for a text layer (help
     /// 27378154668951): Fixed size pins the box, Auto width fits it again.
     pub fn toggle_text_resize(&mut self) -> bool {
@@ -4746,6 +4721,31 @@ impl Host {
     /// Within 6px of a corner handle of the selection → start a
     /// corner resize. Corner idx: 0 TL, 1 TR, 2 BL, 3 BR.
     /// Supports multi-selection by resizing all selected items together.
+    /// True when a resize press at `p` belongs to the resize-to-fit gesture
+    /// (a second press on a single text layer's corner handle), in which case
+    /// that layer has just been fit to its content.
+    fn fit_text_at(&mut self, world: Point) -> bool {
+        let id = {
+            let doc = self.app.doc();
+            let editor = doc.editor_ref();
+            if editor.selection.len() != 1 {
+                return false;
+            }
+            let id = editor.selection[0].clone();
+            match crate::editor_ui::find_node(&editor.root, id.as_str()) {
+                Some(n) if matches!(n.kind, NodeKind::Text { .. }) => id,
+                _ => return false,
+            }
+        };
+        // the handle has to be under the press, or this is not the gesture
+        if self.resize_grab(world).is_none() {
+            return false;
+        }
+        self.app.fit_text_to_content(&id);
+        self.app.status = "Auto width - box fit to the text".into();
+        true
+    }
+
     fn resize_grab(&mut self, world: Point) -> Option<Drag> {
         let doc = self.app.doc();
         let editor = doc.editor_ref();

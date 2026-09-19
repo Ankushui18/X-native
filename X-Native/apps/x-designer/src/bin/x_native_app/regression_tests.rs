@@ -8011,6 +8011,8 @@ fn list_host() -> (Host, String) {
 /// shortcuts toggle the style the way Figma's own do.
 #[test]
 fn the_list_style_picker_writes_the_layer_and_its_render_tree() {
+    use crate::editor_ui::{typo_val, Typo};
+
     let (mut h, root_id) = list_host();
     assert_eq!(
         h.app.doc_ref().editor_ref().list_style_of_selection(),

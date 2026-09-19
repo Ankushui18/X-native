@@ -4118,7 +4118,6 @@ impl App {
         &mut self.doc().guide_drag
     }
 
-    /// Immutable document access (paint paths).
     /// The selected layer, when it is a text layer (the panels' question).
     pub fn selected_text_id(&self) -> Option<String> {
         self.doc_ref().selected_text_id()
@@ -4130,6 +4129,7 @@ impl App {
         self.doc_ref().is_text_fixed()
     }
 
+    /// Immutable document access (paint paths).
     pub fn doc_ref(&self) -> &OpenDoc {
         self.docs
             .get(self.active)
