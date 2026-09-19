@@ -1444,8 +1444,14 @@ impl Editor {
         }
         let x0 = placed.iter().map(|p| p.px).fold(f64::INFINITY, f64::min);
         let y0 = placed.iter().map(|p| p.py).fold(f64::INFINITY, f64::min);
-        let x1 = placed.iter().map(|p| p.px + p.w).fold(f64::NEG_INFINITY, f64::max);
-        let y1 = placed.iter().map(|p| p.py + p.h).fold(f64::NEG_INFINITY, f64::max);
+        let x1 = placed
+            .iter()
+            .map(|p| p.px + p.w)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let y1 = placed
+            .iter()
+            .map(|p| p.py + p.h)
+            .fold(f64::NEG_INFINITY, f64::max);
         let mut sec = Node::section(section_id, x1 - x0, y1 - y0);
         sec.transform.x = x0;
         sec.transform.y = y0;
