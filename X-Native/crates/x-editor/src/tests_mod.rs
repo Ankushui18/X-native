@@ -2560,7 +2560,7 @@ mod tests {
             x_core::find_master(&e.root, "Primary").is_none(),
             "the old name is gone"
         );
-        let inst = x_core::find(&e.root, "i1").expect("the instance");
+        let inst = crate::find(&e.root, "i1").expect("the instance");
         assert!(
             matches!(&inst.kind, NodeKind::Instance { component } if component == "Button/Primary"),
             "the instance points at the new name"
