@@ -1131,12 +1131,7 @@ mod tests {
         set_override(&mut inst, "inner", OverrideValue::Visible(false));
         let mut outer = Node::group("outer", 100.0, 60.0);
         outer.children.push(Node::rect(
-            "inner",
-            0.0,
-            0.0,
-            10.0,
-            10.0,
-            Color::WHITE,
+            "inner", 0.0, 0.0, 10.0, 10.0, Color::WHITE,
         ));
         inst.children.push(outer);
 

@@ -2433,11 +2433,7 @@ mod tests {
                 Color::from_rgb8(0x11, 0x22, 0x33),
             ));
         let mut inst = Node::instance("i1", "Button", 10.0, 10.0, 120.0, 44.0);
-        x_core::set_override(
-            &mut inst,
-            "lbl",
-            x_core::OverrideValue::Text("Hello".into()),
-        );
+        x_core::set_override(&mut inst, "lbl", x_core::OverrideValue::Text("Hello".into()));
         x_core::set_override(
             &mut inst,
             "ico",

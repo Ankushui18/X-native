@@ -6484,20 +6484,10 @@ fn instance_host() -> (Host, String) {
     let root_id = h.app.doc().editor_ref().root.id.clone();
     let mut master = x_native::Node::component("def", "Button", 120.0, 44.0);
     master.children.push(x_native::Node::text(
-        "lbl",
-        12.0,
-        12.0,
-        80.0,
-        20.0,
-        "Click me",
+        "lbl", 12.0, 12.0, 80.0, 20.0, "Click me",
     ));
     master.children.push(x_native::Node::rect(
-        "ico",
-        96.0,
-        14.0,
-        16.0,
-        16.0,
-        Color::WHITE,
+        "ico", 96.0, 14.0, 16.0, 16.0, Color::WHITE,
     ));
     h.app.doc().editor().insert_node(&root_id, master);
     h.app.doc().editor().selection = vec!["lbl".into()];
