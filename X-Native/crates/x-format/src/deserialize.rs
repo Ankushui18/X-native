@@ -878,7 +878,7 @@ pub(crate) fn parse_node(v: &V) -> Node {
                     .get("smartmatch")
                     .and_then(V::boolean)
                     .unwrap_or(false),
-            };
+            });
         }
     }
     n.is_starting_point = v.get("start").and_then(V::boolean).unwrap_or(false);

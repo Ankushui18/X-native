@@ -1602,7 +1602,10 @@ fn the_interaction_row_carries_figmas_matching_layers_tick() {
     assert!(row.y0 >= speed.y1, "the tick gets a line of its own");
     assert!(row.x1 <= remove.x1, "and stays inside the panel");
     // Figma's words, from the one label the panel owns
-    assert_eq!(crate::state::PROTO_MATCHING_LABEL, "Animate matching layers");
+    assert_eq!(
+        crate::state::PROTO_MATCHING_LABEL,
+        "Animate matching layers"
+    );
 
     // the box writes the flag, and the status says what it now reads
     h.dispatch(Action::ProtoToggleMatching(0));

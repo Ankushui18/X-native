@@ -499,9 +499,7 @@ impl ApplicationHandler for Host {
         }
         // the "Animate matching layers" tick runs on the same clock: one
         // frame at a time while it lasts, and a wake-up for the next one
-        if self.app.flow.as_ref().is_some_and(|f| {
-            matches!(&f.tick, Some(tick) if tick.running())
-        }) {
+        if self.flow_ticking() {
             if now >= self.next_proto_frame {
                 // the frame that finishes still repaints: its layers are at
                 // full strength, which is a different picture
@@ -8666,6 +8664,15 @@ impl Host {
     /// Fire due `AfterDelay` triggers in arm order. A navigation cancels
     /// the remaining due timers (the new screen re-arms its own); delays
     /// whose overlay closed are disarmed. Returns how many fired.
+    /// Is a "matching layers" transition mid-flight? This is the frame
+    /// clock's own question — the viewer repaints while the answer is yes.
+    fn flow_ticking(&self) -> bool {
+        let Some(f) = self.app.flow.as_ref() else {
+            return false;
+        };
+        f.tick.as_ref().is_some_and(|t| t.running())
+    }
+
     /// Figma's **Animate matching layers** tick: advance the running
     /// transition by one frame and report whether it is still running. The
     /// viewer paints from the plan while it is (see
