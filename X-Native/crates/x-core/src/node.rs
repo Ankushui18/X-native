@@ -633,6 +633,32 @@ pub struct Node {
     pub image_rotation: f64,
 }
 
+/// The scroll range of a frame: how far its content reaches past its own box,
+/// per axis, never negative. Figma's prototype scrolling moves the content
+/// inside the frame by up to this much before it stops
+/// ([Prototype scroll and overflow behavior], help article 360039818734).
+///
+/// `fixed` and `sticky` children are excluded: they do not scroll with the
+/// content ("Figma will move it above the other layers … it's not possible to
+/// position scrolling objects above fixed layers"). Rotation is not modelled —
+/// a child contributes its box in the frame's own space — and only content
+/// reaching past the RIGHT / BOTTOM edge adds range, which is the long-page
+/// case scrolling exists for.
+///
+/// [Prototype scroll and overflow behavior]: https://help.figma.com/hc/en-us/articles/360039818734
+pub fn scroll_extent(frame: &Node) -> (f64, f64) {
+    let mut mx = 0.0f64;
+    let mut my = 0.0f64;
+    for c in &frame.children {
+        if c.constraints.fixed || c.constraints.sticky {
+            continue;
+        }
+        mx = mx.max(c.transform.x + c.w);
+        my = my.max(c.transform.y + c.h);
+    }
+    ((mx - frame.w).max(0.0), (my - frame.h).max(0.0))
+}
+
 /// The colour a Section is drawn in — ONE owner. The section's wash, its stroke
 /// and the title chip the renderer paints all derive from this hue; they used to
 /// be two copies of `0x62, 0x74, 0x8b` in this file and a third in the renderer,
@@ -2252,5 +2278,41 @@ mod layout_grid_tests {
         );
         assert_eq!(apply_text_case("same", None), "same");
         assert_eq!(apply_text_case("same", Some("nonesuch")), "same");
+    }
+}
+
+#[cfg(test)]
+mod scroll_extent_tests {
+    use super::*;
+
+    #[test]
+    fn content_past_the_frame_decides_the_range() {
+        let f = Node::frame("f", 200.0, 120.0)
+            .child(Node::rect("short", 0.0, 0.0, 100.0, 60.0, Color::WHITE))
+            .child(Node::rect("tall", 0.0, 0.0, 100.0, 400.0, Color::WHITE));
+        let (ex, ey) = scroll_extent(&f);
+        assert_eq!(ex, 0.0, "nothing reaches past the right edge");
+        assert_eq!(ey, 280.0, "400 of content in a 120 frame");
+    }
+
+    #[test]
+    fn fixed_and_sticky_children_do_not_extend_the_range() {
+        let mut pinned = Node::rect("nav", 0.0, 300.0, 200.0, 40.0, Color::WHITE);
+        pinned.constraints.fixed = true;
+        let mut head = Node::rect("head", 0.0, 500.0, 200.0, 40.0, Color::WHITE);
+        head.constraints.sticky = true;
+        let f = Node::frame("f", 200.0, 120.0)
+            .child(Node::rect("body", 0.0, 0.0, 200.0, 200.0, Color::WHITE))
+            .child(pinned)
+            .child(head);
+        // the body alone decides it: 200 - 120
+        assert_eq!(scroll_extent(&f), (0.0, 80.0));
+    }
+
+    #[test]
+    fn a_frame_that_fits_its_content_does_not_scroll() {
+        let f = Node::frame("f", 300.0, 200.0)
+            .child(Node::rect("a", 10.0, 10.0, 100.0, 100.0, Color::WHITE));
+        assert_eq!(scroll_extent(&f), (0.0, 0.0));
     }
 }

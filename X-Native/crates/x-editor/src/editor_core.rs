@@ -1059,6 +1059,37 @@ impl Editor {
         true
     }
 
+    /// Set one layer's **scroll position** inside its scrolling frame —
+    /// Figma's Prototype-tab "Scroll behavior → Position" (Scroll with parent
+    /// / Fixed / Sticky). One undoable ReplaceNode, like every other layer
+    /// property; the flags it writes are the ones the renderer already honours.
+    pub fn set_scroll_position(&mut self, id: &str, pos: x_core::ScrollPosition) -> bool {
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        let before = Box::new(n.clone());
+        let mut after = n.clone();
+        pos.apply(&mut after.constraints);
+        after.dirty = true;
+        self.push_replace(id, before, after);
+        true
+    }
+
+    /// The preview's own scroll offset for a frame. This is **view state, not a
+    /// document edit**: the flow player writes it in place (no command, no undo
+    /// entry) and clears it when the preview opens and closes, the way the
+    /// preview owns its copy of the variables. Authoring scroll uses
+    /// [`Editor::set_scroll`], which is undoable.
+    pub fn set_scroll_preview(&mut self, id: &str, x: f64, y: f64) -> bool {
+        match find_mut(&mut self.root, id) {
+            Some(n) => {
+                n.scroll = (x, y);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Set a frame's scroll offset (authoring/preview state, undoable).
     pub fn set_scroll(&mut self, id: &str, x: f64, y: f64) -> bool {
         let Some(n) = find(&self.root, id) else {

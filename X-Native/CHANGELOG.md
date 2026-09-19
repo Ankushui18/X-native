@@ -5,6 +5,55 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-19 (Prototype: the per-frame scroll behavior)
+
+The last functional gap in the prototyping chapter of the course, and delta 3 of the
+owner's prototype comparison: Figma's **Scroll behavior** block.
+
+- **The frame's Overflow menu is real.** A selected frame's Prototype tab gets the
+  block Figma shows — `SCROLL BEHAVIOR` with an **Overflow** field — and the menu is
+  Figma's own list: *No scrolling / Horizontal / Vertical / Both directions*
+  (help 360039818734). The field writes the frame's `Overflow`, which the renderer
+  already honoured, so this connects the setting that existed to the UI that never
+  did it.
+- **"No scrolling" is the clip state, not `Visible`.** Figma keeps clipping and
+  scrolling in two places; our `Overflow` enum carries both, so the translation is
+  explicit in one function (`proto_overflow_for_row`) and a frame that was scrolling
+  returns to *clipping*, not to a frame with content spilling out of it.
+- **The Position menu, only where Figma shows it.** *Scroll with parent / Fixed /
+  Sticky* — "You can only apply one scroll position to each layer", and only for "an
+  object … on a frame that has scroll overflow applied". `scrollable_ancestor` owns
+  that rule: no scrolling frame above the layer, no Position row. The flags it writes
+  are the `fixed`/`sticky` pair the renderer has honoured all along, and
+  `ScrollPosition::of/apply` is the one view of the two, so the menu and the field
+  cannot disagree.
+- **The preview really scrolls.** In the flow viewer the wheel now moves the frame's
+  content — the deepest scrolling frame under the pointer, clamped to the range the
+  content sticks out past the frame's box (`x_core::scroll_extent`, which excludes
+  fixed and sticky children because they do not scroll). A Vertical frame ignores the
+  horizontal delta and the other way round; a "No scrolling" frame falls through.
+- **Scroll offsets belong to the preview, not the document.** `Editor::set_scroll_preview`
+  writes them in place — no command, no undo entry — and every offset is handed back
+  when the preview opens or closes (the chip, `Q`, `Esc` past the first screen).
+  `Editor::set_scroll_position` is the document edit and is one undo step, like every
+  other layer property.
+- **"Reset scroll position" now does something.** The interaction's own switch (the
+  panel's `Reset: On`) clears the preview's offsets when it navigates: Figma — "Without
+  Preserve scroll position checked, Frame 2 will load from the top of the frame".
+  Our default stays *preserve* ("Reset: Off"), which is a documented divergence from
+  Figma's default; the switch itself is now honoured either way.
+- **`ScrollTo` inside a scrolling frame scrolls the frame** to bring its destination to
+  the top of the box, camera untouched, instead of panning the viewer — "you can select
+  direct children of scrollable frames" (forum, 2024). Outside a scrolling frame it
+  still pans, as before.
+
+**Tests:** `the_scroll_behaviour_rows_write_the_frames_overflow_and_a_layers_position`
+(panel rows, both menus, the writes, the preview's wheel and its clamp, the reset
+switch), `scroll_position_is_a_document_edit_and_the_preview_offset_is_not` (the undo
+split), `content_past_the_frame_decides_the_range`,
+`the_position_menu_reads_and_writes_the_two_flags`, and the master list's row 14.13 is
+closed.
+
 ## [Unreleased] — 2026-09-19 (The master list: everything, matched to Figma)
 
 The owner asked for one list: *"every tool, every feature, even drag too, function

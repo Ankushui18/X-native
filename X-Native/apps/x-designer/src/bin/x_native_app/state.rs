@@ -1089,6 +1089,104 @@ pub const CONSTRAINT_V: [(&str, x_native::VPin); 5] = [
     ("Scale", x_native::VPin::ScaleV),
 ];
 
+/// Which of the Prototype tab's two **Scroll behavior** menus is open
+/// (Figma shows them in one block: "Overflow" on a frame, "Position" on an
+/// object that sits on a scrolling frame).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ProtoScrollMenu {
+    Overflow,
+    Position,
+}
+
+/// Figma's Overflow menu, in the menu's own order. `None` is "No scrolling":
+/// it returns the frame to the clip state the Design tab's Clip content tick
+/// owns, because our `Overflow` enum carries the clip as well as the scroll
+/// (Figma keeps the two as separate settings — see the master list, row 14.13).
+/// Labels and values are two parallel tables so the panel can read the captions
+/// as a slice without collecting one.
+pub const PROTO_OVERFLOW_LABELS: [&str; 4] = [
+    "No scrolling",
+    "Horizontal",
+    "Vertical",
+    "Both directions",
+];
+pub const PROTO_OVERFLOW_VALUES: [Option<x_native::Overflow>; 4] = [
+    None,
+    Some(x_native::Overflow::ScrollX),
+    Some(x_native::Overflow::ScrollY),
+    Some(x_native::Overflow::ScrollBoth),
+];
+
+/// Figma's Position menu, in the menu's own order.
+pub const PROTO_POSITION_LABELS: [&str; 3] = ["Scroll with parent", "Fixed", "Sticky"];
+pub const PROTO_POSITION_VALUES: [x_native::ScrollPosition; 3] = [
+    x_native::ScrollPosition::ScrollWithParent,
+    x_native::ScrollPosition::Fixed,
+    x_native::ScrollPosition::Sticky,
+];
+
+/// Which Overflow row the frame's current setting shows.
+pub fn proto_overflow_row(o: x_native::Overflow) -> usize {
+    for (i, v) in PROTO_OVERFLOW_VALUES.iter().enumerate() {
+        if *v == Some(o) {
+            return i;
+        }
+    }
+    0
+}
+
+/// What a press on Overflow row `row` writes. "No scrolling" needs the frame's
+/// current value: a frame that was scrolling is still clipping, so it lands on
+/// `Clip` rather than `Visible`.
+pub fn proto_overflow_for_row(row: usize, current: x_native::Overflow) -> x_native::Overflow {
+    match PROTO_OVERFLOW_VALUES[row] {
+        Some(v) => v,
+        None => {
+            if current == x_native::Overflow::Visible {
+                x_native::Overflow::Visible
+            } else {
+                x_native::Overflow::Clip
+            }
+        }
+    }
+}
+
+/// Which Position row the layer's flags show.
+pub fn proto_position_row(c: &x_native::ChildConstraints) -> usize {
+    let pos = x_native::ScrollPosition::of(c);
+    for (i, p) in PROTO_POSITION_VALUES.iter().enumerate() {
+        if *p == pos {
+            return i;
+        }
+    }
+    0
+}
+
+/// The nearest ancestor frame of `id` whose Overflow scrolls — Figma shows the
+/// Position row only for an object "on a frame that has scroll overflow
+/// applied" (help 360039818734). Returns the frame's id.
+pub fn scrollable_ancestor(root: &x_native::Node, id: &str) -> Option<String> {
+    let mut best: Option<String> = None;
+    fn walk(n: &x_native::Node, id: &str, best: &mut Option<String>) -> bool {
+        if n.id == id {
+            return true;
+        }
+        for c in &n.children {
+            if walk(c, id, best) {
+                // the NEAREST scrolling frame: the first ancestor to unwind
+                // wins, so an outer scrollable frame cannot overwrite it
+                if best.is_none() && n.overflow.scrollable() {
+                    *best = Some(n.id.clone());
+                }
+                return true;
+            }
+        }
+        false
+    }
+    walk(root, id, &mut best);
+    best
+}
+
 /// Every interactive zone records one of these; `run.rs` dispatches them.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
@@ -1145,6 +1243,11 @@ pub enum Action {
     ProtoEditUrl(usize),
     ProtoEditVideoTime(usize),
     ProtoToggleStart,
+    /// Figma's Prototype-tab **Scroll behavior** menus: which one opens, and
+    /// the row a press picked in it.
+    ProtoScrollMenu(ProtoScrollMenu),
+    ProtoSetOverflow(usize),
+    ProtoSetPosition(usize),
     FlowEnter,
     FlowBack,
     FlowExit,
@@ -2702,6 +2805,11 @@ pub struct App {
     /// paints: the panel scrolls, so a hard-coded offset would drift away
     /// from the field it belongs to.
     pub constraint_dd_anchor: (f64, f64),
+    /// Open Prototype-tab Scroll behavior menu (`None` = closed), and the
+    /// screen anchor its field recorded while painting — same reason as the
+    /// Constraints field above.
+    pub dropdown_proto_scroll: Option<ProtoScrollMenu>,
+    pub proto_scroll_dd_anchor: (f64, f64),
     /// Zoom menu open (right-panel header, audit F4)
     pub dropdown_zoom: bool,
     /// Hover labels registered this frame (P10); paint_tooltip draws
@@ -2950,6 +3058,8 @@ impl App {
             dropdown_frame: false,
             dropdown_constraint: None,
             constraint_dd_anchor: (0.0, 0.0),
+            dropdown_proto_scroll: None,
+            proto_scroll_dd_anchor: (0.0, 0.0),
             dropdown_zoom: false,
             tooltip: Vec::new(),
             dropdown_lh: false,

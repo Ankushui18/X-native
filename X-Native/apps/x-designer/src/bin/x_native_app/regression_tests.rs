@@ -25,6 +25,16 @@ fn temp(name: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("x-native-audit-{}-{name}", std::process::id()))
 }
 
+/// Does the chrome currently publish a hit rect for this Prototype-tab scroll
+/// menu? A field and its open menu both push the same action, so one question
+/// answers "is the row there" and "did the press land on it".
+fn shows_menu(h: &Host, which: crate::state::ProtoScrollMenu) -> bool {
+    h.app
+        .hit
+        .iter()
+        .any(|(_, a)| *a == Action::ProtoScrollMenu(which))
+}
+
 /// Type `text` into one of the inspector's numeric fields: focus it, select
 /// all, replace the buffer, commit with ⏎ — what a user does.
 fn set_field(h: &mut Host, id: FieldId, text: &str) {
@@ -1449,6 +1459,192 @@ fn the_prototype_row_names_the_action_and_its_arrows_set_the_side() {
             .iter()
             .any(|(_, a)| matches!(a, Action::ProtoDest(0, 1))),
         "no destination, no control"
+    );
+}
+
+/// Figma's Prototype-tab **Scroll behavior** block (help 360039818734): a
+/// frame has an **Overflow** menu — "No scrolling / Horizontal / Vertical /
+/// Both directions" — and the preview then really scrolls it, clamped to the
+/// content that sticks out past the frame; an object that sits on a frame that
+/// scrolls has a **Position** menu instead — "Scroll with parent / Fixed /
+/// Sticky" — which is the FIXED/STICKY pair the renderer already honours.
+#[test]
+fn the_scroll_behaviour_rows_write_the_frames_overflow_and_a_layers_position() {
+    let mut h = host();
+    {
+        let d = h.app.doc();
+        let root_id = d.editor_ref().root.id.clone();
+        let mut f = Node::frame("sc", 100.0, 100.0);
+        f.overflow = x_native::Overflow::ScrollY;
+        f.is_starting_point = true;
+        d.editor().insert_node(&root_id, f);
+        d.editor()
+            .insert_node("sc", Node::rect("tall", 0.0, 0.0, 100.0, 400.0, Color::WHITE));
+        d.editor()
+            .insert_node("sc", Node::rect("nav", 0.0, 0.0, 100.0, 20.0, Color::WHITE));
+        // a frame that does NOT scroll: its children have no Position row
+        let mut plain = Node::frame("plain", 100.0, 100.0);
+        plain.transform.x = 400.0;
+        d.editor().insert_node(&root_id, plain);
+        d.editor()
+            .insert_node("plain", Node::rect("inner", 0.0, 0.0, 40.0, 40.0, Color::WHITE));
+    }
+
+    // the frame row: Overflow, showing what the frame carries
+    h.app.doc().editor().selection = vec!["sc".into()];
+    h.app.doc().right_tab = crate::state::RightTab::Prototype;
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    use crate::state::ProtoScrollMenu;
+    assert!(shows_menu(&h, ProtoScrollMenu::Overflow), "the Overflow field");
+    assert!(!shows_menu(&h, ProtoScrollMenu::Position), "a top-level frame has no Position row");
+
+    // the menu lists Figma's four options and writes the one pressed
+    h.dispatch(Action::ProtoScrollMenu(ProtoScrollMenu::Overflow));
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    assert_eq!(
+        h.app
+            .hit
+            .iter()
+            .filter(|(_, a)| matches!(a, Action::ProtoSetOverflow(_)))
+            .count(),
+        4,
+        "No scrolling / Horizontal / Vertical / Both directions"
+    );
+    h.dispatch(Action::ProtoSetOverflow(2));
+    assert_eq!(
+        find_node_clone(&h.app.doc_ref().editor_ref().root, "sc")
+            .unwrap()
+            .overflow,
+        x_native::Overflow::ScrollY,
+        "the row wrote the frame's overflow"
+    );
+    assert!(h.app.dropdown_proto_scroll.is_none(), "the menu closed");
+
+    // "No scrolling" returns to the clip state, not to Visible
+    h.dispatch(Action::ProtoSetOverflow(0));
+    assert_eq!(
+        find_node_clone(&h.app.doc_ref().editor_ref().root, "sc")
+            .unwrap()
+            .overflow,
+        x_native::Overflow::Clip
+    );
+    h.dispatch(Action::ProtoSetOverflow(2));
+
+    // a layer on the scrolling frame: Position, and it pins
+    h.app.doc().editor().selection = vec!["nav".into()];
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    assert!(
+        shows_menu(&h, ProtoScrollMenu::Position),
+        "the Position row for a layer on a scrolling frame"
+    );
+    assert!(
+        !shows_menu(&h, ProtoScrollMenu::Overflow),
+        "a rect is not a frame, so it has no Overflow row"
+    );
+    h.dispatch(Action::ProtoSetPosition(1));
+    let n = find_node_clone(&h.app.doc_ref().editor_ref().root, "nav").unwrap();
+    assert!(n.constraints.fixed && !n.constraints.sticky, "Fixed");
+    h.dispatch(Action::ProtoSetPosition(2));
+    let n = find_node_clone(&h.app.doc_ref().editor_ref().root, "nav").unwrap();
+    assert!(n.constraints.sticky && !n.constraints.fixed, "Sticky");
+    h.dispatch(Action::ProtoSetPosition(0));
+    let n = find_node_clone(&h.app.doc_ref().editor_ref().root, "nav").unwrap();
+    assert!(!n.constraints.fixed && !n.constraints.sticky, "back to Scroll with parent");
+
+    // a layer on a frame that does not scroll has no Position row at all
+    h.app.doc().editor().selection = vec!["inner".into()];
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    assert!(
+        !shows_menu(&h, ProtoScrollMenu::Position),
+        "Position needs a frame whose overflow scrolls"
+    );
+
+    // the preview scrolls the frame with the wheel, inside the frame only
+    h.app.doc().editor().selection = vec!["sc".into()];
+    h.dispatch(Action::FlowEnter);
+    assert!(h.app.flow.is_some(), "the preview opened");
+    assert_eq!(h.app.flow.as_ref().unwrap().current, "sc");
+    h.app.mouse = h.app.world_to_screen(Point::new(50.0, 50.0));
+    h.on_wheel(winit::event::MouseScrollDelta::LineDelta(0.0, -3.0));
+    let sc = find_node_clone(&h.app.doc_ref().editor_ref().root, "sc").unwrap();
+    assert_eq!(sc.scroll, (0.0, 120.0), "three lines of vertical scroll");
+    // a vertical frame ignores the horizontal delta
+    h.on_wheel(winit::event::MouseScrollDelta::LineDelta(2.0, 0.0));
+    assert_eq!(
+        find_node_clone(&h.app.doc_ref().editor_ref().root, "sc")
+            .unwrap()
+            .scroll,
+        (0.0, 120.0)
+    );
+    // and stops at the end of the content: 400 of content in a 100 frame
+    h.on_wheel(winit::event::MouseScrollDelta::LineDelta(0.0, -20.0));
+    assert_eq!(
+        find_node_clone(&h.app.doc_ref().editor_ref().root, "sc")
+            .unwrap()
+            .scroll,
+        (0.0, 300.0),
+        "clamped to the scroll range"
+    );
+    // the wheel outside the frame does nothing
+    h.app.mouse = h.app.world_to_screen(Point::new(900.0, 900.0));
+    h.on_wheel(winit::event::MouseScrollDelta::LineDelta(0.0, -5.0));
+    assert_eq!(
+        find_node_clone(&h.app.doc_ref().editor_ref().root, "sc")
+            .unwrap()
+            .scroll,
+        (0.0, 300.0)
+    );
+    // an interaction that asks to reset the scroll position navigates with
+    // every offset back at zero, and one that preserves it leaves it alone
+    let nav = |reset: bool| x_native::Interaction {
+        trigger: x_native::Trigger::OnClick,
+        action: x_native::Action::Navigate {
+            destination: "plain".into(),
+        },
+        transition_ms: 0,
+        animation: x_native::Animation::Instant,
+        actions: vec![],
+        easing: x_native::Easing::Linear,
+        reset_on_navigate: reset,
+    };
+    h.flow_fire(&nav(false));
+    assert_eq!(
+        find_node_clone(&h.app.doc_ref().editor_ref().root, "sc")
+            .unwrap()
+            .scroll,
+        (0.0, 300.0),
+        "Reset: Off preserves the scroll position"
+    );
+    h.flow_fire(&nav(true));
+    assert_eq!(
+        find_node_clone(&h.app.doc_ref().editor_ref().root, "sc")
+            .unwrap()
+            .scroll,
+        (0.0, 0.0),
+        "Reset: On loads the next screen from the top"
+    );
+
+    // leaving the preview puts the document back the way it was, even when the
+    // frame is deep in its content at the time
+    h.app.mouse = h.app.world_to_screen(Point::new(50.0, 50.0));
+    h.on_wheel(winit::event::MouseScrollDelta::LineDelta(0.0, -8.0));
+    assert_eq!(
+        find_node_clone(&h.app.doc_ref().editor_ref().root, "sc")
+            .unwrap()
+            .scroll,
+        (0.0, 300.0)
+    );
+    h.dispatch(Action::FlowExit);
+    assert_eq!(
+        find_node_clone(&h.app.doc_ref().editor_ref().root, "sc")
+            .unwrap()
+            .scroll,
+        (0.0, 0.0),
+        "the preview owns the scroll, and gives it back"
     );
 }
 

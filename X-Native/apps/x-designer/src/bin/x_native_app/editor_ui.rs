@@ -66,6 +66,9 @@ pub fn paint(app: &mut App, s: &mut Scene) {
     if let Some(axis) = app.dropdown_constraint {
         paint_constraint_dropdown(app, s, &mut hit, axis);
     }
+    if let Some(which) = app.dropdown_proto_scroll {
+        paint_proto_scroll_dropdown(app, s, &mut hit, which);
+    }
     if app.paint_lib.is_some() {
         paint_paint_library(app, s, &mut hit);
     }
@@ -6841,6 +6844,112 @@ fn paint_constraint_dropdown(
     }
 }
 
+/// One row of Figma's Scroll behavior block: the label on the left and the
+/// field that opens `menu` on the right, inside the panel's padding. `field`
+/// is (caption, the value the field shows, the menu it opens). The anchor is
+/// recorded while the field paints, so the open menu lands under the field it
+/// belongs to even when the panel has been scrolled.
+fn proto_scroll_row(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    span: (f64, f64),
+    y: f64,
+    field: (&str, &str, crate::state::ProtoScrollMenu),
+) {
+    let (x0, xr) = span;
+    let (caption, value, menu) = field;
+    app.fonts
+        .text(s, x0, y + 6.5, caption, T10, C_DIM, Wt::Reg);
+    let fr = Rect::new(x0 + 74.0, y, xr, y + INPUT_H);
+    if app.dropdown_proto_scroll == Some(menu) {
+        app.proto_scroll_dd_anchor = (fr.x0, fr.y1);
+    }
+    input(
+        app,
+        s,
+        hit,
+        fr,
+        None,
+        value,
+        false,
+        Some(Action::ProtoScrollMenu(menu)),
+        Some("chevron-down"),
+    );
+}
+
+/// Figma's **Scroll behavior** menu, anchored under the field that opened it:
+/// the Overflow options on a frame, the Position options on an object that
+/// sits on a frame that scrolls. Same design language as the Constraints menu,
+/// and the same one-owner rule — the labels come from the tables in `state.rs`
+/// that the field itself reads, so the field and its menu cannot disagree.
+fn paint_proto_scroll_dropdown(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    which: crate::state::ProtoScrollMenu,
+) {
+    use crate::state::ProtoScrollMenu;
+    // the selected layer decides both the captions and which row is ticked,
+    // so the menu and the field it opened from read the same tables
+    let node = {
+        let sel = app.doc_ref().selected_id();
+        match sel {
+            Some(id) => {
+                let root = &app.doc_ref().editor_ref().root;
+                find_node(root, &id).cloned()
+            }
+            None => None,
+        }
+    };
+    let mut current = 0usize;
+    if let Some(n) = &node {
+        current = match which {
+            ProtoScrollMenu::Overflow => crate::state::proto_overflow_row(n.overflow),
+            ProtoScrollMenu::Position => crate::state::proto_position_row(&n.constraints),
+        };
+    }
+    let labels: &[&str] = match which {
+        ProtoScrollMenu::Overflow => &crate::state::PROTO_OVERFLOW_LABELS,
+        ProtoScrollMenu::Position => &crate::state::PROTO_POSITION_LABELS,
+    };
+    let (ax, ay) = app.proto_scroll_dd_anchor;
+    let h = DROPDOWN_ROW_H * labels.len() as f64;
+    let dd = Rect::new(ax, ay + 4.0, ax + 200.0, ay + 4.0 + h);
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, R_LG, C_FIELD);
+    stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+    for (i, label) in labels.iter().enumerate() {
+        let r = Rect::new(
+            dd.x0,
+            dd.y0 + DROPDOWN_ROW_H * i as f64,
+            dd.x1,
+            dd.y0 + DROPDOWN_ROW_H * (i + 1) as f64,
+        );
+        let hov = hover(app, r);
+        if hov || current == i {
+            fill_rect(s, r, if hov { C_FIELD_2 } else { C_FIELD });
+        }
+        app.fonts.text(
+            s,
+            r.x0 + 10.0,
+            r.y0 + 9.0,
+            label,
+            T11,
+            if current == i { C_TEXT } else { C_MUTED },
+            Wt::Reg,
+        );
+        if current == i {
+            draw_icon(s, "check", r.x1 - 22.0, r.y0 + 8.0, ICON_XS, C_TEXT);
+        }
+        let action = match which {
+            ProtoScrollMenu::Overflow => Action::ProtoSetOverflow(i),
+            ProtoScrollMenu::Position => Action::ProtoSetPosition(i),
+        };
+        hit.push((r, action));
+    }
+}
+
 /// Line-height mode menu (Figma): Auto / Pixels / Percent, anchored under
 /// the Line height field. Same design language as the frame dropdown.
 fn paint_lh_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
@@ -9393,6 +9502,48 @@ fn paint_prototype(
                 hit.push((ub, Action::ProtoEditUrl(i)));
             }
             y += row_h;
+        }
+
+        // Figma's Scroll behavior block, below the interactions. A frame gets
+        // the Overflow menu ("No scrolling / Horizontal / Vertical / Both
+        // directions"); an object that sits on a frame whose Overflow scrolls
+        // gets the Position menu ("Scroll with parent / Fixed / Sticky"), which
+        // is the row the reference screenshots show for a selected child; a
+        // frame inside another scrolling frame gets both. "You can only apply
+        // overflow behavior to frames", and Position needs "an object … on a
+        // frame that has scroll overflow applied" (help 360039818734).
+        let is_frame = matches!(n.kind, x_native::NodeKind::Frame { .. });
+        // a frame can still sit inside another scrolling frame, so both rows
+        // can apply to one layer
+        let on_scroller = {
+            let root = &app.doc_ref().editor_ref().root;
+            crate::state::scrollable_ancestor(root, &n.id).is_some()
+        };
+        if is_frame || on_scroller {
+            y += 8.0;
+            app.fonts
+                .caps_label(s, x0, y, "SCROLL BEHAVIOR", C_TEXT, Wt::Med);
+            y += 12.0 + LABEL_GAP;
+            if is_frame {
+                let row = crate::state::proto_overflow_row(n.overflow);
+                let field = (
+                    "Overflow",
+                    crate::state::PROTO_OVERFLOW_LABELS[row],
+                    crate::state::ProtoScrollMenu::Overflow,
+                );
+                proto_scroll_row(app, s, hit, (x0, xr), y, field);
+                y += INPUT_H + 6.0;
+            }
+            if on_scroller {
+                let row = crate::state::proto_position_row(&n.constraints);
+                let field = (
+                    "Position",
+                    crate::state::PROTO_POSITION_LABELS[row],
+                    crate::state::ProtoScrollMenu::Position,
+                );
+                proto_scroll_row(app, s, hit, (x0, xr), y, field);
+                y += INPUT_H + 6.0;
+            }
         }
     } else {
         let hint = if sel.len() == 1 {

@@ -254,6 +254,40 @@ mod tests {
         assert!(!e.set_overflow("nope", Overflow::Clip));
     }
 
+    /// Figma's Prototype-tab scroll settings, at the engine boundary: the
+    /// **Position** menu (Scroll with parent / Fixed / Sticky) is a document
+    /// edit and goes on the undo stack, while the preview's own scroll offset
+    /// is view state — the player writes it and gives it back, and no undo
+    /// entry is spent on it.
+    #[test]
+    fn scroll_position_is_a_document_edit_and_the_preview_offset_is_not() {
+        let mut e = Editor::new(doc());
+        let base = e.undo_depth();
+        assert!(e.set_scroll_position("a", ScrollPosition::Sticky));
+        assert_eq!(
+            ScrollPosition::of(&find(&e.root, "a").unwrap().constraints),
+            ScrollPosition::Sticky
+        );
+        assert_eq!(e.undo_depth(), base + 1, "the menu is one undo step");
+        e.undo();
+        assert_eq!(
+            ScrollPosition::of(&find(&e.root, "a").unwrap().constraints),
+            ScrollPosition::ScrollWithParent,
+            "undo takes the position back"
+        );
+
+        // the preview's offset is not a command
+        let base = e.undo_depth();
+        assert!(e.set_scroll_preview("a", 0.0, 120.0));
+        assert_eq!(find(&e.root, "a").unwrap().scroll, (0.0, 120.0));
+        assert_eq!(e.undo_depth(), base, "no undo entry for a preview scroll");
+        assert!(e.set_scroll_preview("a", 0.0, 0.0));
+        assert_eq!(find(&e.root, "a").unwrap().scroll, (0.0, 0.0));
+
+        assert!(!e.set_scroll_position("nope", ScrollPosition::Fixed));
+        assert!(!e.set_scroll_preview("nope", 1.0, 1.0));
+    }
+
     #[test]
     fn hit_test_finds_topmost() {
         let d = Node::frame("page", 800.0, 600.0)

@@ -565,6 +565,38 @@ fn compute_snap(
     (dx, dy, lines)
 }
 
+/// The frame the preview's wheel will scroll: its id, where its content sits
+/// now, how far it can go, and which variant it carries.
+struct ScrollTarget {
+    id: String,
+    scroll: (f64, f64),
+    extent: (f64, f64),
+    overflow: x_native::Overflow,
+}
+
+/// The deepest frame under `p` (world space) whose Overflow says it scrolls.
+/// Child offsets accumulate down the tree, so nesting works; rotation is not
+/// modelled, exactly like `x_core::scroll_extent`.
+fn scroll_frame_at(root: &x_native::Node, p: Point) -> Option<ScrollTarget> {
+    fn walk(n: &x_native::Node, ox: f64, oy: f64, p: Point, best: &mut Option<ScrollTarget>) {
+        let inside = p.x >= ox && p.x <= ox + n.w && p.y >= oy && p.y <= oy + n.h;
+        if n.overflow.scrollable() && inside {
+            *best = Some(ScrollTarget {
+                id: n.id.clone(),
+                scroll: n.scroll,
+                extent: x_native::scroll_extent(n),
+                overflow: n.overflow,
+            });
+        }
+        for c in &n.children {
+            walk(c, ox + c.transform.x, oy + c.transform.y, p, best);
+        }
+    }
+    let mut best = None;
+    walk(root, 0.0, 0.0, p, &mut best);
+    best
+}
+
 // ------------------------------------------------------- rich-text editing
 
 #[cfg(test)]
@@ -6115,7 +6147,12 @@ impl Host {
             return;
         }
         if self.app.flow.is_some() {
-            // the viewer fits each screen; there is nothing to zoom/pan
+            // The viewer fits each screen, so there is nothing to zoom or pan —
+            // but Figma's prototype scrolling lives INSIDE the frame: "Vertical
+            // scrolling allows users to swipe or scroll up and down", and only
+            // a frame whose Overflow says it scrolls answers the wheel
+            // (help 360039818734). A wheel anywhere else still does nothing.
+            self.flow_scroll_wheel(delta);
             return;
         }
         let dy = match delta {
@@ -7347,6 +7384,7 @@ impl Host {
             "Help: welcome & shortcuts" => self.dispatch(Action::ShowWelcome),
             "Preview prototype" => {
                 if self.app.flow.is_some() {
+                    self.flow_clear_scroll();
                     self.app.flow = None;
                 } else {
                     self.flow_enter();
@@ -7933,6 +7971,7 @@ impl Host {
             return;
         }
         let vars = self.app.doc().doc.variables.clone();
+        self.flow_clear_scroll();
         self.app.flow = Some(crate::state::FlowState {
             current: current.clone(),
             vars,
@@ -7964,13 +8003,111 @@ impl Host {
         );
     }
 
+    /// Figma's prototype scrolling, driven by the wheel: the deepest frame
+    /// under the pointer whose Overflow scrolls takes the delta, clamped to
+    /// the range its content sticks out past its own box
+    /// (`x_core::scroll_extent`). A frame set to Vertical ignores the
+    /// horizontal delta and the other way round; "No scrolling" frames are
+    /// skipped, so the wheel falls through to the frame behind them.
+    fn flow_scroll_wheel(&mut self, delta: MouseScrollDelta) {
+        let (dx, dy) = match delta {
+            MouseScrollDelta::LineDelta(x, y) => (x as f64, y as f64),
+            MouseScrollDelta::PixelDelta(p) => (p.x / 40.0, p.y / 40.0),
+        };
+        if dx == 0.0 && dy == 0.0 {
+            return;
+        }
+        let p = self.app.screen_to_world(self.app.mouse);
+        let target = {
+            let d = self.app.doc();
+            scroll_frame_at(&d.editor_ref().root, p)
+        };
+        let Some(target) = target else {
+            return;
+        };
+        let mut sx = target.scroll.0;
+        let mut sy = target.scroll.1;
+        if target.overflow != x_native::Overflow::ScrollX {
+            sy = (sy - dy * 40.0).clamp(0.0, target.extent.1);
+        }
+        if target.overflow != x_native::Overflow::ScrollY {
+            sx = (sx - dx * 40.0).clamp(0.0, target.extent.0);
+        }
+        if (sx, sy) == target.scroll {
+            return;
+        }
+        self.app
+            .doc()
+            .editor()
+            .set_scroll_preview(&target.id, sx, sy);
+    }
+
+    /// The preview owns the scroll offsets while it runs, and gives the
+    /// document back exactly as it found it when the preview closes (Figma
+    /// calls the other choice "Preserve scroll position": unchecked — our
+    /// `reset_on_navigate`, the panel's "Reset: On" — the next screen "will
+    /// load from the top of the frame").
+    fn flow_clear_scroll(&mut self) {
+        let ids: Vec<String> = {
+            let root = &self.app.doc_ref().editor_ref().root;
+            fn walk(n: &x_native::Node, out: &mut Vec<String>) {
+                if n.scroll != (0.0, 0.0) {
+                    out.push(n.id.clone());
+                }
+                for c in &n.children {
+                    walk(c, out);
+                }
+            }
+            let mut out = Vec::new();
+            walk(root, &mut out);
+            out
+        };
+        if ids.is_empty() {
+            return;
+        }
+        let d = self.app.doc();
+        for id in ids {
+            d.editor().set_scroll_preview(&id, 0.0, 0.0);
+        }
+    }
+
     /// Pan so node `id` lands centered in the viewer, KEEPING the current
     /// zoom — Figma "scroll to" pans within the screen instead of
     /// navigating. Page-switches when the node lives elsewhere.
+    ///
+    /// When the destination sits inside a frame that scrolls, this is instead
+    /// the scroll Figma documents for that action — "you can select direct
+    /// children of scrollable frames" — so the frame's own content moves and
+    /// the camera stays put. The element is brought to the TOP of the frame's
+    /// box, clamped to the range the content allows.
     fn flow_pan_to(&mut self, id: &str) {
         let Some((page, r, _)) = crate::editor_ui::flow_locate(&self.app, id) else {
             return;
         };
+        // Inside a scrolling frame the action scrolls that frame and the camera
+        // never moves: the destination's own offset inside the frame, both in
+        // world space so nesting depth does not matter, brought to the top of
+        // the frame's box and clamped to what the content allows.
+        let mut scrolled: Option<(String, f64, f64)> = None;
+        {
+            let root = &self.app.doc_ref().editor_ref().root;
+            if let Some(fid) = crate::state::scrollable_ancestor(root, id) {
+                if let Some(frame) = crate::editor_ui::find_node(root, &fid) {
+                    let (ex, ey) = x_native::scroll_extent(frame);
+                    if let Some(frame_rect) = crate::editor_ui::flow_locate(&self.app, &fid) {
+                        let fr = frame_rect.1;
+                        let nx = (r.x0 - fr.x0).clamp(0.0, ex);
+                        let ny = (r.y0 - fr.y0).clamp(0.0, ey);
+                        scrolled = Some((fid, nx, ny));
+                    }
+                }
+            }
+        }
+        if let Some((fid, nx, ny)) = scrolled {
+            let d = self.app.doc();
+            d.editor().set_scroll_preview(&fid, nx, ny);
+            return;
+        }
         let d = self.app.doc();
         if d.page != page {
             d.page = page;
@@ -8032,6 +8169,7 @@ impl Host {
                 self.arm_flow_delays();
             }
             None => {
+                self.flow_clear_scroll();
                 self.app.flow = None;
                 self.app.status = "Flow preview ended".into();
             }
@@ -8257,6 +8395,12 @@ impl Host {
             f.drag_fired = false;
         }
         self.app.flow = Some(f);
+        // "Reset scroll position": the interaction asked for the next screen to
+        // load from the top of its frame, so every offset the preview owns goes
+        // back to zero before the new screen is shown.
+        if effect.navigated.is_some() && ix.reset_on_navigate {
+            self.flow_clear_scroll();
+        }
         if effect.navigated.is_some() {
             let cur = self
                 .app
@@ -8394,6 +8538,7 @@ impl Host {
                 return;
             }
             Key::Character(c) if c.eq_ignore_ascii_case("q") => {
+                self.flow_clear_scroll();
                 self.app.flow = None;
                 self.app.status = "Flow preview ended".into();
                 return;
@@ -10260,9 +10405,52 @@ impl Host {
                     .to_string();
                 }
             }
+            // Figma's Prototype-tab "Scroll behavior" block: the frame's
+            // Overflow menu, and the Position menu for an object that sits on
+            // a frame that scrolls.
+            Action::ProtoScrollMenu(which) => {
+                let open = self.app.dropdown_proto_scroll != Some(which);
+                self.app.dropdown_proto_scroll = if open { Some(which) } else { None };
+            }
+            Action::ProtoSetOverflow(row) => {
+                self.app.dropdown_proto_scroll = None;
+                let Some(id) = self.app.doc_ref().selected_id() else {
+                    return;
+                };
+                let current = {
+                    let root = &self.app.doc_ref().editor_ref().root;
+                    match crate::editor_ui::find_node(root, &id) {
+                        Some(n) => n.overflow,
+                        None => return,
+                    }
+                };
+                if row >= crate::state::PROTO_OVERFLOW_VALUES.len() {
+                    return;
+                }
+                let ov = crate::state::proto_overflow_for_row(row, current);
+                if self.app.doc().editor().set_overflow(&id, ov) {
+                    let label = crate::state::PROTO_OVERFLOW_LABELS[row];
+                    self.app.mark_dirty();
+                    self.app.status = format!("Overflow: {label}");
+                }
+            }
+            Action::ProtoSetPosition(row) => {
+                self.app.dropdown_proto_scroll = None;
+                let Some(id) = self.app.doc_ref().selected_id() else {
+                    return;
+                };
+                let Some(pos) = crate::state::PROTO_POSITION_VALUES.get(row).copied() else {
+                    return;
+                };
+                if self.app.doc().editor().set_scroll_position(&id, pos) {
+                    self.app.mark_dirty();
+                    self.app.status = format!("Scroll position: {}", pos.label());
+                }
+            }
             Action::FlowEnter => self.flow_enter(),
             Action::FlowBack => self.flow_back(),
             Action::FlowExit => {
+                self.flow_clear_scroll();
                 self.app.flow = None;
                 self.app.status = "Flow preview ended".into();
             }

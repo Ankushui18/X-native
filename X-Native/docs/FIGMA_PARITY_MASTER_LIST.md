@@ -37,7 +37,7 @@ recon task, not a settled fact.
 | 3 Keyboard | 34 | 22 | 5 | 6 | 1 | 0 |
 | 4 Menus & palettes | 10 | 9 | 0 | 1 | 0 | 0 |
 | 5 Layers, pages, sections | 14 | 11 | 1 | 2 | 0 | 0 |
-| 6 Frame & shape properties | 20 | 15 | 3 | 2 | 0 | 0 |
+| 6 Frame & shape properties | 20 | 16 | 2 | 2 | 0 | 0 |
 | 7 Auto layout | 16 | 12 | 1 | 3 | 0 | 0 |
 | 8 Fill, stroke, effects, colour | 22 | 15 | 6 | 1 | 0 | 0 |
 | 9 Images | 9 | 5 | 2 | 2 | 0 | 0 |
@@ -45,16 +45,16 @@ recon task, not a settled fact.
 | 11 Vector editing & booleans | 20 | 14 | 5 | 1 | 0 | 0 |
 | 12 Components, instances, styles | 20 | 13 | 4 | 3 | 0 | 0 |
 | 13 Variables & modes | 9 | 6 | 3 | 0 | 0 | 0 |
-| 14 Prototype | 30 | 17 | 10 | 2 | 0 | 1 |
+| 14 Prototype | 30 | 18 | 10 | 1 | 0 | 1 |
 | 15 Inspect, dev mode, codegen | 9 | 5 | 3 | 1 | 0 | 0 |
 | 16 Export & import | 12 | 11 | 1 | 0 | 0 | 0 |
 | 17 Canvas view & navigation | 14 | 9 | 2 | 1 | 1 | 1 |
 | 18 Design language (look of the app itself) | 12 | 1 | 5 | 6 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **334** | **221** | **55** | **39** | **16** | **3** |
+| **total** | **334** | **222** | **55** | **38** | **16** | **3** |
 
-The 39 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
+The 38 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
 the brief.
 
@@ -417,7 +417,7 @@ scroll behaviour, flows and flow starting points, device preview.
 | 14.10 | Easing | linear, ease in/out/in-out, custom bezier, spring presets | `Easing` + custom | MATCH |
 | 14.11 | Duration & delay | numeric | `ProtoEditDelay`, speed pill | MATCH |
 | 14.12 | **Animate matching layers** | tick that opts into matching by layer name | not built | **MISSING** (delta 2) |
-| 14.13 | **Per-frame scroll behaviour** | Overflow scrolling / None / Fixed; scroll direction + "position fixed" | **no code at all** — `ScrollTo`/`flow_pan_to` are the flow player's pan | **MISSING** (delta 3, authorized) |
+| 14.13 | Per-frame scroll behaviour | Prototype tab → **Scroll behavior**: a frame carries **Overflow** — *No scrolling / Horizontal / Vertical / Both directions* — an object on a scrolling frame carries **Position** — *Scroll with parent / Fixed / Sticky*; the preview scrolls the frame with the wheel ([help 360039818734](https://help.figma.com/hc/en-us/articles/360039818734)) | `state.rs` `PROTO_OVERFLOW_*` / `PROTO_POSITION_*` tables + `scrollable_ancestor`; `x_core::scroll_extent`; `Editor::set_scroll_position` / `set_scroll_preview`; `flow_scroll_wheel` / `flow_clear_scroll` / `flow_pan_to` | MATCH |
 | 14.14 | Overlay position | 9 anchors + manual | `OverlayPosition` + `Manual` | MATCH |
 | 14.15 | Overlay background | colour + opacity, "close on click outside" | background + dismiss path | MATCH |
 | 14.16 | Flow starting points | per frame, named flows | "Flow starting point" row + `FlowEnter` | MATCH |
@@ -427,7 +427,7 @@ scroll behaviour, flows and flow starting points, device preview.
 | 14.20 | Keyboard/gamepad triggers | yes | `KeyDown` trigger + `ProtoEditKey` | MATCH |
 | 14.21 | Video triggers | play from time, on hit/end | `WhenVideoHits/Ends`, `ProtoEditVideoTime` | MATCH |
 | 14.22 | URL actions | open link in new tab | `OpenLink`, `ProtoEditUrl` | MATCH |
-| 14.23 | Reset scroll position on navigate | yes | *verify* | PARTIAL (verify) |
+| 14.23 | Reset scroll position on navigate | checked (the default) → "Frame 2 will load from the top of the frame"; unchecked = **Preserve scroll position**, and only Instant/Dissolve offer the choice | the interaction's own switch works (`reset_on_navigate`, the panel's `Reset: On`) — but our default is *preserve*, the opposite of Figma's | PARTIAL |
 | 14.24 | **Scroll to + scroll position on load** | "Scroll to" with an anchor and offset | `ScrollTo` exists as an action; *verify* whose offset semantics match | PARTIAL |
 | 14.25 | Smart animate | animates matching layers between frames | `smart_animate.rs` + gate-covered | PARTIAL — matching is heuristic, no "animate matching layers" opt-in |
 | 14.26 | Copy a connection | copy/paste onto another frame | not implemented (documented) | PARTIAL |
@@ -555,10 +555,10 @@ rendering it.
 
 ### Wave 1a — prototype, already authorized (finish first)
 
-1. **Per-frame scroll behaviour** (14.13) — the one functional gap in the prototype
-   chapter: Overflow scrolling (vertical/horizontal/both), None, Fixed; scroll
-   direction; "position fixed" for sticky children. Panel row per frame + player
-   honouring it. *(Owner-authorized, next increment.)*
+1. ~~**Per-frame scroll behaviour** (14.13)~~ — **delivered** in this branch:
+   the Overflow and Position menus, the preview's wheel scroll clamped to the
+   content, `ScrollTo` scrolling the frame it lives in, and the reset switch.
+   Pinned by `the_scroll_behaviour_rows_write_the_frames_overflow_and_a_layers_position`.
 2. **Trigger row short form** (14.5) — "On drag" etc. as Figma writes them.
 3. **Animate matching layers tick** (14.12) — opt-in for smart-animate matching.
 
