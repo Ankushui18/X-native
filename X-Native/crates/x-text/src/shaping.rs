@@ -1890,7 +1890,9 @@ mod tests {
         let (numbered, hn) = glyph_outlines(&m, &spans, f, &mk(x_core::ListStyle::Numbered));
         // two items, so two markers on top of the same text
         assert_eq!(bulleted.len(), plain.len() + 2, "one bullet per item");
-        assert_eq!(numbered.len(), plain.len() + 2, "one counter per item");
+        // "1." and "2." — a counter is two glyphs, a bullet one, so two
+        // numbered items add four outlines where two bullets add two
+        assert_eq!(numbered.len(), plain.len() + 4, "one counter per item");
         assert_eq!(hp, hb, "the marker column does not move the block height");
         assert_eq!(hb, hn);
         // the first line's own text starts one marker column in
