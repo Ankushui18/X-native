@@ -8937,7 +8937,6 @@ fn cmd_y_toggles_outline_view_and_never_touches_the_document() {
         .doc()
         .editor()
         .insert_node(&root, Node::image("pic", 0.0, 80.0, 60.0, 40.0, "no-asset"));
-    let depth = h.app.doc_ref().editor_ref().undo_depth();
     // leave a redoable step on the stack: the OLD ⌘Y arm used to consume it
     h.app.doc().undo_document();
     h.app.doc().undo_document();
@@ -8945,6 +8944,7 @@ fn cmd_y_toggles_outline_view_and_never_touches_the_document() {
         find_node_clone(&h.app.doc_ref().editor_ref().root, "paint").is_none(),
         "both inserts undone"
     );
+    let depth = h.app.doc_ref().editor_ref().undo_depth();
     let before = x_native::fileio::save_x(&h.app.doc_ref().doc);
 
     // ⌘Y turns the view on — and touches nothing
@@ -8998,8 +8998,14 @@ fn cmd_y_toggles_outline_view_and_never_touches_the_document() {
 fn outline_mode_hairs_the_canvas_and_paints_no_image() {
     let mut h = host();
     let mut page = Node::frame("page", 200.0, 200.0);
-    page.children
-        .push(Node::rect("r", 10.0, 10.0, 80.0, 80.0, Color::from_rgb8(255, 0, 0)));
+    page.children.push(Node::rect(
+        "r",
+        10.0,
+        10.0,
+        80.0,
+        80.0,
+        Color::from_rgb8(255, 0, 0),
+    ));
     page.children.push(Node::image("i", 120.0, 10.0, 60.0, 60.0, "no-asset"));
     h.app.doc().editor().root = page;
 
@@ -9010,7 +9016,10 @@ fn outline_mode_hairs_the_canvas_and_paints_no_image() {
     let stripped = x_native::outline_view(&doc.editor_ref().root, 1.0);
     let wire = x_native::build_render_tree(&stripped, &doc.doc.variables);
     let images = |t: &x_native::RenderTree| {
-        t.commands.iter().filter(|c| matches!(c, x_native::RenderCommand::Image { .. })).count()
+        t.commands
+            .iter()
+            .filter(|c| matches!(c, x_native::RenderCommand::Image { .. }))
+            .count()
     };
     assert_eq!(images(&doc_tree), 1, "the image is in the document's tree");
     assert_eq!(images(&wire), 0, "outline view paints no image — it is a box now");
