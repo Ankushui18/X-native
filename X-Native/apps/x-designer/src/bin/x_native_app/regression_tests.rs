@@ -7989,3 +7989,191 @@ fn resetting_one_change_leaves_the_others_alone() {
     };
     assert!(overrides.is_empty(), "all changes cleared");
 }
+
+/// A document with one text layer, selected: the fixture the three list tests
+/// below share.
+fn list_host() -> (Host, String) {
+    let mut h = host();
+    let root_id = {
+        let doc = h.app.doc();
+        doc.editor_ref().root.id.clone()
+    };
+    let mut t = Node::text("list-t", 60.0, 60.0, 220.0, 60.0, "one\ntwo");
+    t.name = "List".into();
+    h.app.doc().editor().insert_node(&root_id, t);
+    h.app.doc().editor().selection = vec!["list-t".into()];
+    (h, root_id)
+}
+
+/// Figma's text lists (help 360040449773): the type-details block's **List
+/// style** picker writes the layer, the write reaches the render tree (so
+/// every sink that shapes the command draws the markers), and the ⌘⇧8 / ⌘⇧7
+/// shortcuts toggle the style the way Figma's own do.
+#[test]
+fn the_list_style_picker_writes_the_layer_and_its_render_tree() {
+    let (mut h, root_id) = list_host();
+    assert_eq!(
+        h.app.doc_ref().editor_ref().list_style_of_selection(),
+        Some(x_native::ListStyle::None),
+        "a plain text layer starts on None"
+    );
+
+    // the field's words are the picker's three rows
+    assert_eq!(typo_val(&h.app, Typo::ListStyle), "None");
+
+    h.dispatch(Action::ToggleListStyle);
+    assert!(h.app.list_style_open, "the picker opens");
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    for style in x_native::ListStyle::all() {
+        assert!(
+            h.app
+                .hit
+                .iter()
+                .any(|(_, a)| *a == Action::SetListStyle(style)),
+            "{style:?} is a row of the picker"
+        );
+    }
+
+    h.dispatch(Action::SetListStyle(x_native::ListStyle::Numbered));
+    assert_eq!(h.app.status, "List style: Numbered");
+    assert!(!h.app.list_style_open, "the choice closes the picker");
+    assert_eq!(typo_val(&h.app, Typo::ListStyle), "Numbered");
+    assert_eq!(
+        find_node_clone(&h.app.doc_ref().editor_ref().root, "list-t")
+            .unwrap()
+            .list_style,
+        x_native::ListStyle::Numbered
+    );
+
+    // the command every sink shapes carries the style, the indentation and
+    // the two markers come from the shaper (help 360040449773)
+    let root = h.app.doc_ref().editor_ref().root.clone();
+    let tree = x_native::build_render_tree(&root, &Default::default());
+    assert!(
+        tree.commands.iter().any(|c| matches!(c,
+            RenderCommand::Glyphs { text, list, .. }
+                if text == "one\ntwo" && *list == x_native::ListStyle::Numbered)),
+        "the render tree carries the list style"
+    );
+
+    // ⌘⇧8 / ⌘⇧7: the same shortcut on a layer that already carries the
+    // style gives it back, exactly like the picker's own None row
+    h.toggle_list_style(x_native::ListStyle::Numbered);
+    assert_eq!(
+        h.app.doc_ref().editor_ref().list_style_of_selection(),
+        Some(x_native::ListStyle::None)
+    );
+    h.toggle_list_style(x_native::ListStyle::Bulleted);
+    assert_eq!(
+        h.app.doc_ref().editor_ref().list_style_of_selection(),
+        Some(x_native::ListStyle::Bulleted)
+    );
+
+    // a non-text layer has no list: the write is a no-op, not an entry
+    h.app.doc().editor().insert_node(
+        &root_id,
+        Node::rect("plain", 0.0, 200.0, 40.0, 40.0, Color::from_rgb8(9, 9, 9)),
+    );
+    h.app.doc().editor().selection = vec!["plain".into()];
+    let depth = h.app.doc().editor().undo_depth();
+    h.dispatch(Action::SetListStyle(x_native::ListStyle::Bulleted));
+    assert_eq!(h.app.doc_ref().editor_ref().list_style_of_selection(), None);
+    assert_eq!(h.app.doc().editor().undo_depth(), depth, "no entry written");
+}
+
+/// The marker column is real geometry, not a glyph in the text: the box of an
+/// auto-width list is wider than the same text without one by the column
+/// (`LIST_MARKER_GAP`), and the two items of a numbered list get 1. and 2.
+#[test]
+fn a_list_widens_the_auto_box_by_its_marker_column() {
+    let mut h = host();
+    let root_id = {
+        let doc = h.app.doc();
+        doc.editor_ref().root.id.clone()
+    };
+    let t = Node::text("lt", 40.0, 40.0, 200.0, 60.0, "one\ntwo");
+    h.app.doc().editor().insert_node(&root_id, t);
+    h.app.doc().editor().selection = vec!["lt".into()];
+    assert!(h.app.autosize_text_node("lt"));
+    let w_plain = find_node_clone(&h.app.doc_ref().editor_ref().root, "lt")
+        .unwrap()
+        .w;
+    h.dispatch(Action::SetListStyle(x_native::ListStyle::Bulleted));
+    assert!(h.app.autosize_text_node("lt"), "auto width re-fits the box");
+    let n = find_node_clone(&h.app.doc_ref().editor_ref().root, "lt").unwrap();
+    assert!(
+        (n.w - w_plain - x_native::LIST_MARKER_GAP).abs() < 2.0,
+        "the box gained the marker column: {w_plain} -> {}",
+        n.w
+    );
+}
+
+/// Figma's text resizing (help 27378154668951): *"When you manually change a
+/// layer's dimensions in the canvas, Figma will also update the resizing
+/// property to Fixed size"* — and the way back to **Auto width** is the
+/// handle gesture, which fits the box to the text again.
+#[test]
+fn a_manual_resize_pins_a_text_layer_and_the_handle_gesture_fits_it() {
+    let mut h = host();
+    let root_id = {
+        let doc = h.app.doc();
+        doc.editor_ref().root.id.clone()
+    };
+    let t = Node::text("tx", 40.0, 40.0, 200.0, 60.0, "one two three four");
+    h.app.doc().editor().insert_node(&root_id, t);
+    h.app.doc().editor().selection = vec!["tx".into()];
+    h.app.autosize_text_node("tx");
+    let w_auto = find_node_clone(&h.app.doc_ref().editor_ref().root, "tx")
+        .unwrap()
+        .w;
+    assert!(!h.app.is_text_fixed(), "auto width by default");
+    assert_eq!(h.app.selected_text_id().as_deref(), Some("tx"));
+
+    // a manual canvas resize of a text layer pins it (Figma fixed size)
+    {
+        let n = find_node_clone(&h.app.doc_ref().editor_ref().root, "tx").unwrap();
+        let (x, y, w, hh) = (n.transform.x, n.transform.y, n.w, n.h);
+        h.app.drag = Some(Drag::ResizeSel {
+            corner: 3,
+            orig: (x, y, w, hh),
+            start: Point::new(x + w, y + hh),
+            base_depth: 0,
+        });
+        let target = Point::new(x + w + 180.0, y + hh);
+        h.on_move(h.app.world_to_screen(target));
+        h.on_release();
+    }
+    assert!(h.app.is_text_fixed(), "the manual resize pinned the box");
+    let w_fixed = find_node_clone(&h.app.doc_ref().editor_ref().root, "tx")
+        .unwrap()
+        .w;
+    assert!(w_fixed >= w_auto, "the box grew: {w_auto} -> {w_fixed}");
+
+    // and the gesture that hands it back: a second press on the corner
+    // handle inside the double-click window
+    let (x, y, w, hh) = {
+        let n = find_node_clone(&h.app.doc_ref().editor_ref().root, "tx").unwrap();
+        (n.transform.x, n.transform.y, n.w, n.h)
+    };
+    let corner = Point::new(x + w, y + hh);
+    let p = h.app.world_to_screen(corner);
+    h.app.last_click = Some((std::time::Instant::now(), p));
+    assert!(h.app.is_double_click(p), "inside the window");
+    assert!(h.fit_text_at(corner), "the corner handle takes the gesture");
+    assert!(!h.app.is_text_fixed(), "Auto width again");
+    let w_back = find_node_clone(&h.app.doc_ref().editor_ref().root, "tx")
+        .unwrap()
+        .w;
+    assert!(w_back < w_fixed, "the box hugged the text again");
+
+    // the same control from the Layout section's Resizing chip
+    h.dispatch(Action::ToggleTextResize);
+    assert!(h.app.is_text_fixed(), "Fixed size");
+    h.dispatch(Action::ToggleTextResize);
+    assert!(!h.app.is_text_fixed(), "Auto width");
+    let w_fit = find_node_clone(&h.app.doc_ref().editor_ref().root, "tx")
+        .unwrap()
+        .w;
+    assert!(w_fit <= w_back);
+}

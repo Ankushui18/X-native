@@ -5,6 +5,44 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-19 (Text lists and resize-to-fit)
+
+Figma's [Create bulleted and numbered lists](https://help.figma.com/hc/en-us/articles/360040449773)
+and [Adjust text dimensions and resizing](https://help.figma.com/hc/en-us/articles/27378154668951):
+*"You can use ⌘ Command Shift 8 to turn an individual text selection or
+multiple text layers into a bulleted list"*, the **List style** property in
+the type details, *"When you manually change a layer's dimensions in the
+canvas, Figma will also update the resizing property to Fixed size"*, and the
+handle gesture that hands the box back to **Auto width**.
+
+- **The property.** `ListStyle` (none / bulleted / numbered) was in the model
+  and nowhere else; `Editor::set_list_style` is now its writer (a no-op is
+  refused, so an unchanged style is not an undo entry) behind the Typography
+  block's **List style** field, whose picker lists Figma's three rows, and
+  behind `⌘⇧8` / `⌘⇧7` — the same shortcut pressed again gives the style
+  back, which is the picker's own **None** row.
+- **The markers.** One owner, in the shaper: `TextBlockStyle::list` takes the
+  marker column (`LIST_MARKER_GAP`) off the wrap width, indents the text into
+  it and shapes the item's bullet or its **1-based counter** in the column, in
+  the line's own ink and at the line's type size — *"changes to the weight of
+  your text will apply to the bullet or the counter"*. Because it lives inside
+  `glyph_outlines`, the canvas, the raster sink, the PDF sink and the SVG
+  exporter draw the same list, and `TextLayoutKey::list` keeps a bulleted
+  block from being served a plain cached layout. A `ListStyle::None` block is
+  byte-identical to the layout it had before this change.
+- **Resize to fit.** `tm` is the resizing property (**Fixed size** when it
+  says `fixed`, absent means auto width). Every hand-resize of a text layer
+  writes it, and the way back is Figma's gesture: a second press on the
+  layer's box handle inside the double-click window (`Host::fit_text_at`)
+  clears it and re-fits the box to the text through `autosize_text_node`,
+  which now carries the marker column too. The Layout section's **Resizing**
+  chip shows the mode for a text layer and flips the two modes
+  (`Action::ToggleTextResize`).
+- **Not built:** list indentation levels (`Tab` / `⌘]`), **List spacing**, the
+  hanging-quotes / hanging-lists toggles, counters rotating
+  numbers → letters → roman per level and `⌥8`; and **Auto height** as a third
+  mode of the resizing control.
+
 ## [Unreleased] — 2026-09-19 (Corner radius and smoothing)
 
 Figma's

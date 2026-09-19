@@ -41,7 +41,7 @@ recon task, not a settled fact.
 | 7 Auto layout | 16 | 14 | 1 | 1 | 0 | 0 |
 | 8 Fill, stroke, effects, colour | 25 | 21 | 1 | 3 | 0 | 0 |
 | 9 Images | 9 | 6 | 3 | 0 | 0 | 0 |
-| 10 Text & typography | 18 | 15 | 2 | 1 | 0 | 0 |
+| 10 Text & typography | 18 | 17 | 1 | 0 | 0 | 0 |
 | 11 Vector editing & booleans | 20 | 14 | 5 | 1 | 0 | 0 |
 | 12 Components, instances, styles | 21 | 18 | 3 | 0 | 0 | 0 |
 | 13 Variables & modes | 9 | 6 | 3 | 0 | 0 | 0 |
@@ -52,7 +52,7 @@ recon task, not a settled fact.
 | 18 Design language (look of the app itself) | 12 | 1 | 5 | 6 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **339** | **243** | **51** | **26** | **16** | **3** |
+| **total** | **339** | **245** | **50** | **25** | **16** | **3** |
 
 The 27 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
@@ -327,8 +327,8 @@ position, canvas stacking, "distribute", `⇧A` to add.
 | 10.11 | Text styles | create/apply/detach/update | `CreateTextStyle`, `ApplyTextStyle`, `UpdateTextStyleFromSelection` | MATCH |
 | 10.12 | Bold/italic shortcuts | `⌘B`, `⌘I`, `⌘U` | `⌘B`, `⌘I` only | PARTIAL |
 | 10.13 | Inline editing | double-click, select ranges | `text_edit`, `TextEditSel` | MATCH |
-| 10.14 | **List styles** | bulleted / numbered lists | `TextList::{Bulleted, Numbered}` is in the model, no UI control | PARTIAL |
-| 10.15 | **Resize to fit** | double-click the size handle to fit text | not implemented | **MISSING** |
+| 10.14 | **List styles** | bulleted / numbered lists; `⌘⇧8` / `⌘⇧7`, **List style** in the type details, markers drawn by the shaper | `ListStyle`, `Editor::set_list_style`, the picker + `⌘⇧8`/`⌘⇧7` | MATCH |
+| 10.15 | **Resize to fit** | double-click the size handle to fit text; a manual resize sets **Fixed size** | `Host::fit_text_to_content` / `fit_text_at` / `toggle_text_resize` | MATCH |
 | 10.16 | Baseline shift / optical size | advanced typography | present in the Advanced block | MATCH |
 | 10.17 | Missing-font handling | prompt + fallback | fallback module (`fallbacks.rs`) | MATCH |
 | 10.18 | Type scale / ramp helper | Figma Styles panel | `TYPE SCALE` section | MATCH |
@@ -704,9 +704,23 @@ rendering it.
     IR encoder and the hit test all read. Pinned by
     `the_width_menu_carries_figmas_sizing_and_min_max_rows` and
     `canvas_stacking_decides_which_layer_paints_on_top`.
-13. Text lists + resize-to-fit (10.14, 10.15); keyboard completions `N`/`⇧N`, `⌘R`
-    rename, `⌘⇧K` component, `⇧A` auto layout, `⇧E` tab toggle, the `⌃⇧?` shortcuts
-    panel (3.23–3.31).
+13. ~~**Text lists + resize-to-fit** (10.14, 10.15)~~ — **delivered**: one **List
+    style** property on the type-details block (none / bulleted / numbered) with
+    Figma's `⌘⇧8` / `⌘⇧7` shortcuts, and the shaper draws the marker — the bullet or
+    the 1-based counter — in a marker column the text is indented into, so every sink
+    (canvas, raster, PDF, SVG) shows the same list; the resize-to-fit gesture
+    (double-clicking a text layer's box handle) hands a manually resized, **Fixed
+    size** layer back to Auto width. Pinned by
+    `the_list_style_picker_writes_the_layer_and_its_render_tree`,
+    `a_list_widens_the_auto_box_by_its_marker_column`,
+    `a_list_item_gets_a_marker_column_and_a_counter` and
+    `a_manual_resize_pins_a_text_layer_and_the_handle_gesture_fits_it`.
+    The honest remainder of the article: indentation levels with `Tab`/`⌘]`, **List
+    spacing**, the hanging-quotes / hanging-lists toggles, counters rotating
+    numbers → letters → roman per level, and `⌥8`; of the resizing article: **Auto
+    height** as a third mode of the Layout section's Resizing control. Keyboard
+    completions `N`/`⇧N`, `⌘R` rename, `⌘⇧K` component, `⇧A` auto layout, `⇧E` tab
+    toggle, the `⌃⇧?` shortcuts panel (3.23–3.31) are the rest of this item.
 14. Measure with `⌥` (2.24); `Space`-during-resize (2.12); stroke-style panel (8.15);
     image flip toggle (9.7); outlines mode (17.7).
 15. Clean-up layers (5.9) — chapter 4's lesson.

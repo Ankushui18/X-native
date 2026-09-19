@@ -1361,6 +1361,8 @@ fn is_toggle_row(a: &Action) -> bool {
             | Action::ToggleEffectSettings(_)
             | Action::ToggleEffectBlend(_)
             | Action::ToggleLayerBlend
+            | Action::ToggleListStyle
+            | Action::ToggleTextResize
             | Action::ToggleMaskType
             | Action::ToggleCorners
             | Action::TogglePaintBlend(_)
@@ -1850,6 +1852,13 @@ pub enum Action {
     /// The Mask section's type dropdown: Alpha, Vector, Luminance.
     ToggleMaskType,
     SetMaskType(x_native::MaskType),
+    /// Figma's **List style** picker in the type-details block (help
+    /// 360040449773): none, bulleted, numbered.
+    ToggleListStyle,
+    SetListStyle(x_native::ListStyle),
+    /// The Layout section's **Resizing** control for a text layer (help
+    /// 27378154668951): Fixed size <-> Auto width.
+    ToggleTextResize,
     /// Figma's **Independent corners** toggle on the radius row (help
     /// 360050986854): opens the corner-radius panel — four fields and the
     /// smoothing slider.
@@ -3271,6 +3280,25 @@ impl OpenDoc {
     pub fn selected_id(&self) -> Option<String> {
         self.editor_ref().selection.last().cloned()
     }
+
+    /// The selected layer, when it is a text layer.
+    pub fn selected_text_id(&self) -> Option<String> {
+        let id = self.selected_id()?;
+        crate::editor_ui::find_node(&self.editor_ref().root, id.as_str())
+            .filter(|n| matches!(n.kind, NodeKind::Text { .. }))
+            .map(|_| id)
+    }
+
+    /// True when the selected layer is text on Figma's **Fixed size**
+    /// (help 27378154668951). The `tm` binding is the resizing property;
+    /// absent means auto width.
+    pub fn is_text_fixed(&self) -> bool {
+        let Some(id) = self.selected_text_id() else {
+            return false;
+        };
+        crate::editor_ui::find_node(&self.editor_ref().root, id.as_str())
+            .is_some_and(|n| n.bindings.get("tm").map(String::as_str) == Some("fixed"))
+    }
 }
 
 // ---------------------------------------------------------------- app root
@@ -3499,6 +3527,8 @@ pub struct App {
     pub layer_blend_open: bool,
     /// The Mask section's type dropdown is open (Figma's Mask section).
     pub mask_type_open: bool,
+    /// Figma's **List style** picker is open (the type-details block).
+    pub list_style_open: bool,
     /// Figma's corner-radius panel is open (the **Independent corners** row).
     pub corner_open: bool,
     /// Where that panel hangs from, recorded by the panel pass.
@@ -3901,6 +3931,7 @@ impl App {
             effect_blend_open: None,
             layer_blend_open: false,
             mask_type_open: false,
+            list_style_open: false,
             corner_open: false,
             corner_anchor: (0.0, 0.0),
             corner_slider: None,
@@ -4088,6 +4119,17 @@ impl App {
     }
 
     /// Immutable document access (paint paths).
+    /// The selected layer, when it is a text layer (the panels' question).
+    pub fn selected_text_id(&self) -> Option<String> {
+        self.doc_ref().selected_text_id()
+    }
+
+    /// True when the selected layer is text on Figma's **Fixed size**
+    /// (help 27378154668951).
+    pub fn is_text_fixed(&self) -> bool {
+        self.doc_ref().is_text_fixed()
+    }
+
     pub fn doc_ref(&self) -> &OpenDoc {
         self.docs
             .get(self.active)
@@ -5800,6 +5842,7 @@ impl App {
         self.effect_blend_open = None;
         self.layer_blend_open = false;
         self.mask_type_open = false;
+        self.list_style_open = false;
         self.corner_open = false;
         self.corner_slider = None;
         self.paint_blend_open = None;

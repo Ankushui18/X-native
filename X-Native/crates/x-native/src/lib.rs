@@ -245,6 +245,7 @@ pub fn outline_text_node(
             node.max_lines,
             node.paragraph_indent,
             node.text_decoration,
+            node.list_style,
         )?
     } else {
         x_text::node_text_outlines_rich(
@@ -267,6 +268,7 @@ pub fn outline_text_node(
             node.max_lines,
             node.paragraph_indent,
             node.text_decoration,
+            node.list_style,
         )?
     };
     let (glyphs, block_h) = glyphs;

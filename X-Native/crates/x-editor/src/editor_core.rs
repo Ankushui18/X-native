@@ -687,6 +687,40 @@ impl Editor {
         done
     }
 
+    /// Figma's **List style** (help 360040449773): the selected text layers
+    /// take the style — the shaper then reserves a marker column and draws
+    /// the bullet or the counter in it. Layers that are not text are left
+    /// alone, and a write that changes nothing is not an entry.
+    pub fn set_list_style(&mut self, style: ListStyle) -> bool {
+        let ids: Vec<String> = self
+            .selection
+            .clone()
+            .into_iter()
+            .filter(|id| {
+                find(&self.root, id).is_some_and(|n| matches!(n.kind, NodeKind::Text { .. }))
+            })
+            .collect();
+        let mut done = false;
+        for id in ids {
+            if let Some(n) = find(&self.root, &id).filter(|n| n.list_style != style) {
+                let mut after = n.clone();
+                after.list_style = style;
+                done |= self.replace_node(&id, after);
+            }
+        }
+        done
+    }
+
+    /// The list style the type-details block shows: the primary selection's,
+    /// when that layer is text at all.
+    pub fn list_style_of_selection(&self) -> Option<ListStyle> {
+        self.selection
+            .last()
+            .and_then(|id| find(&self.root, id))
+            .filter(|n| matches!(n.kind, NodeKind::Text { .. }))
+            .map(|n| n.list_style)
+    }
+
     /// The type the Mask section's dropdown shows: the primary selection's,
     /// when it is a mask at all.
     pub fn mask_type_of_selection(&self) -> Option<MaskType> {

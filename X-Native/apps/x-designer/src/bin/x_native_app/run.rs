@@ -1601,6 +1601,7 @@ pub struct TextTypo {
     pub font: Option<String>,
     pub max_lines: Option<usize>,
     pub paragraph_indent: f64,
+    pub list_style: x_native::ListStyle,
 }
 
 impl App {
@@ -2292,6 +2293,7 @@ impl App {
             font: n.bindings.get("font").cloned(),
             max_lines: n.max_lines,
             paragraph_indent: n.paragraph_indent,
+            list_style: n.list_style,
         })
     }
 
@@ -2385,6 +2387,7 @@ impl App {
                         .map(String::as_str)
                         .unwrap_or("auto")
                         .to_string(),
+                    n.list_style,
                 )),
                 _ => None,
             })
@@ -2396,7 +2399,7 @@ impl App {
             Some("fixed") | None => return false,
             _ => {}
         }
-        let (text, _, fs, lh_binding, _) = info.unwrap();
+        let (text, _, fs, lh_binding, _, list) = info.unwrap();
         // line-height MODE -> effective natural multiplier
         let nat = self.natural_line_height(fs).max(0.1);
         let (ls, ws, ps, tc, lh) = {
@@ -2444,7 +2447,15 @@ impl App {
                 .map(|n| n.w)
                 .unwrap_or(0.0)
         };
-        let (nw, nh) = ((line_w + 3.0).ceil(), (block_h + 0.5).ceil());
+        // a list's box hugs the marker column as well as the text: the
+        // shaper reserves `LIST_MARKER_GAP` off the wrap width, so an
+        // auto-width box has to carry it
+        let gap = if list == x_native::ListStyle::None {
+            0.0
+        } else {
+            x_native::LIST_MARKER_GAP
+        };
+        let (nw, nh) = ((line_w + gap + 3.0).ceil(), (block_h + 0.5).ceil());
         let doc = self.doc();
         doc.editor().mutate_visual_stack(id, |n| {
             n.bindings
@@ -2463,6 +2474,77 @@ impl App {
         }
         self.mark_dirty();
         changed
+    }
+
+    /// Figma's **Resize to fit** / auto-width gesture (help 27378154668951):
+    /// *"When you manually change a layer's dimensions in the canvas, Figma
+    /// will also update the resizing property to Fixed size"* — so the way
+    /// back to **Auto width** is a gesture of its own: double-clicking a text
+    /// layer's bounding-box handle leaves Auto width, and the box hugs its
+    /// content again.
+    pub fn fit_text_to_content(&mut self, id: &str) -> bool {
+        {
+            let doc = self.doc();
+            doc.editor().mutate_visual_stack(id, |n| {
+                n.bindings.insert("tm".into(), "auto".into());
+            });
+        }
+        self.autosize_text_node(id)
+    }
+
+    /// True when a resize press at `p` belongs to the resize-to-fit gesture
+    /// (a second press on a single text layer's corner handle), in which case
+    /// that layer has just been fit to its content.
+    fn fit_text_at(&mut self, world: Point) -> bool {
+        let id = {
+            let doc = self.app.doc();
+            let editor = doc.editor_ref();
+            if editor.selection.len() != 1 {
+                return false;
+            }
+            let id = editor.selection[0].clone();
+            match crate::editor_ui::find_node(&editor.root, id.as_str()) {
+                Some(n) if matches!(n.kind, NodeKind::Text { .. }) => id,
+                _ => return false,
+            }
+        };
+        // the handle has to be under the press, or this is not the gesture
+        if self.resize_grab(world).is_none() {
+            return false;
+        }
+        self.fit_text_to_content(&id);
+        self.app.status = "Auto width - box fit to the text".into();
+        true
+    }
+
+    /// The Layout section's **Resizing** control for a text layer (help
+    /// 27378154668951): Fixed size pins the box, Auto width fits it again.
+    pub fn toggle_text_resize(&mut self) -> bool {
+        let info = {
+            let doc = self.doc();
+            doc.selected_id().and_then(|id| {
+                crate::editor_ui::find_node(&doc.editor_ref().root, id.as_str())
+                    .filter(|n| matches!(n.kind, NodeKind::Text { .. }))
+                    .map(|n| {
+                        (
+                            id,
+                            n.bindings.get("tm").map(String::as_str) == Some("fixed"),
+                        )
+                    })
+            })
+        };
+        match info {
+            Some((id, true)) => self.fit_text_to_content(&id),
+            Some((id, false)) => {
+                let doc = self.doc();
+                doc.editor().mutate_visual_stack(&id, |n| {
+                    n.bindings.insert("tm".into(), "fixed".into());
+                });
+                self.mark_dirty();
+                true
+            }
+            None => false,
+        }
     }
 
     /// Typography field commit (family / weight / size / line height /
@@ -4297,11 +4379,22 @@ impl Host {
                         return;
                     }
                 }
+                // Figma's resize-to-fit: a second press on a text layer's
+                // corner handle (help 27378154668951) leaves **Auto width**,
+                // so the box hugs the text again after a fixed-size resize.
+                if tool == Tool::Select && self.app.is_double_click(p) && self.fit_text_at(world) {
+                    self.app.last_click = Some((std::time::Instant::now(), p));
+                    return;
+                }
                 // corner handles win when there's a single selection
                 if let Some(dr) = match tool {
                     Tool::Scale => self.scale_grab(world),
                     _ => self.resize_grab(world),
                 } {
+                    // a handle press is a click: without this the SECOND
+                    // press inside the double-click window could never be
+                    // read as the resize-to-fit gesture above
+                    self.app.last_click = Some((std::time::Instant::now(), p));
                     self.app.drag = Some(dr);
                     return;
                 }
@@ -4727,6 +4820,20 @@ impl Host {
     /// resizes and a press inside rounds; ⌥ rounds only the corner being held
     /// (rectangles only, as Figma's own canvas gesture is), a plain drag the
     /// whole shape.
+    /// ⌘⇧8 / ⌘⇧7 (help 360040449773): the selected text layers take that
+    /// list style, or give it back when they already carry it.
+    fn toggle_list_style(&mut self, style: x_native::ListStyle) {
+        let next = {
+            let doc = self.app.doc();
+            if doc.editor().list_style_of_selection() == Some(style) {
+                x_native::ListStyle::None
+            } else {
+                style
+            }
+        };
+        self.dispatch(Action::SetListStyle(next));
+    }
+
     fn radius_grab(&mut self, world: Point) -> Option<Drag> {
         let zoom = self.app.zoom.max(1e-3);
         let alt = self.app.alt;
@@ -7479,6 +7586,21 @@ impl Host {
                     }
                     "h" | "H" if self.app.shift => {
                         self.app.apply_ctx(CtxCmd::HideSel);
+                        return;
+                    }
+                    // ⇧⌘8 / ⇧⌘7 — Figma's list shortcuts (help
+                    // 360040449773): *"You can use ⌘ Command Shift 8 to turn
+                    // an individual text selection or multiple text layers
+                    // into a bulleted list"* — 7 is the numbered one. Pressing
+                    // the same shortcut on a layer that already carries that
+                    // style gives it back, which is the answer the picker's
+                    // own **None** row gives.
+                    "8" | "*" if self.app.shift => {
+                        self.toggle_list_style(x_native::ListStyle::Bulleted);
+                        return;
+                    }
+                    "7" | "&" if self.app.shift => {
+                        self.toggle_list_style(x_native::ListStyle::Numbered);
                         return;
                     }
                     // ⇧⌘K — Place image (Figma's shortcut; the ⌘K command
@@ -12233,6 +12355,34 @@ impl Host {
                 if self.app.doc().editor().set_mask_type(kind) {
                     self.app.mark_dirty();
                     self.app.status = format!("Mask type: {}", kind.label());
+                }
+            }
+            Action::ToggleListStyle => {
+                // Figma's **List style** picker in the type-details block
+                // (help 360040449773): the same three rows the Type panel
+                // shows, and the same open/close contract as the blend menus.
+                let open = !self.app.list_style_open;
+                self.app.close_panel_menus();
+                self.app.list_style_open = open;
+            }
+            Action::SetListStyle(style) => {
+                self.app.list_style_open = false;
+                if self.app.doc().editor().set_list_style(style) {
+                    self.app.mark_dirty();
+                    self.app.status = format!("List style: {}", style.label());
+                }
+            }
+            Action::ToggleTextResize => {
+                // Figma's ***Resizing*** control (help 27378154668951):
+                // **Fixed size** pins the box, **Auto width** fits it to the
+                // text again.
+                if self.app.toggle_text_resize() {
+                    self.app.mark_dirty();
+                    self.app.status = if self.app.is_text_fixed() {
+                        "Fixed size".into()
+                    } else {
+                        "Auto width".into()
+                    };
                 }
             }
             Action::ToggleCorners => {

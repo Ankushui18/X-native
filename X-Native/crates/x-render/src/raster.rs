@@ -334,6 +334,7 @@ impl<'a> RasterSink<'a> {
                     max_lines,
                     paragraph_indent,
                     decoration,
+                    list,
                     ..
                 } => {
                     let mut drew = false;
@@ -367,6 +368,7 @@ impl<'a> RasterSink<'a> {
                             *max_lines,
                             *paragraph_indent,
                             *decoration,
+                            *list,
                         ) {
                             // vertical placement inside the node box, the same
                             // rule the canvas sink applies

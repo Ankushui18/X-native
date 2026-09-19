@@ -3703,6 +3703,9 @@ pub enum Typo {
     WidthAxis,
     MaxLines,
     ParagraphIndent,
+    /// Figma's **List style** (help 360040449773) — not a typed field but a
+    /// picker, so this only names the current style.
+    ListStyle,
 }
 
 /// px or integer formatter: trims to whole numbers when close.
@@ -3736,6 +3739,7 @@ pub fn typo_val(app: &App, which: Typo) -> String {
             Typo::WidthAxis => "Auto".into(),
             Typo::MaxLines => "Auto".into(),
             Typo::ParagraphIndent => "0px".into(),
+            Typo::ListStyle => "None".into(),
         };
     };
     match which {
@@ -3780,6 +3784,7 @@ pub fn typo_val(app: &App, which: Typo) -> String {
             .map(|v| v.to_string())
             .unwrap_or_else(|| "Auto".into()),
         Typo::ParagraphIndent => num_str(t.paragraph_indent, "px"),
+        Typo::ListStyle => t.list_style.label().to_string(),
     }
 }
 
@@ -4257,15 +4262,35 @@ fn paint_design(
         // main/cross: for a vertical frame the Width field is the cross one
         let is_w = i == 0;
         let sizing = if is_main { main_sizing } else { cross_sizing };
-        let (label, enabled) = match sizing {
-            Some(s) => (
-                match s {
-                    x_native::Sizing::Hug => "Hug",
-                    _ => "Fixed",
+        // a TEXT layer answers this row with Figma's ***Resizing*** property
+        // (help 27378154668951) instead of an auto-layout Hug/Fixed: the
+        // Width field's chip flips Fixed size <-> Auto width, and the Height
+        // field's chip has nothing to say (text height follows the wrap).
+        let text_sel = app.selected_text_id().is_some();
+        let (label, enabled) = if text_sel {
+            (
+                if is_w {
+                    if app.is_text_fixed() {
+                        "Fixed"
+                    } else {
+                        "Auto"
+                    }
+                } else {
+                    "Auto"
                 },
-                true,
-            ),
-            None => ("Hug", false),
+                is_w,
+            )
+        } else {
+            match sizing {
+                Some(s) => (
+                    match s {
+                        x_native::Sizing::Hug => "Hug",
+                        _ => "Fixed",
+                    },
+                    true,
+                ),
+                None => ("Hug", false),
+            }
         };
         let chov = enabled && hover(app, chip);
         fill_rrect(s, chip, R_SM, if chov { C_INPUT_HOVER } else { C_FIELD_2 });
@@ -4275,12 +4300,16 @@ fn paint_design(
         // Figma's sizing control is a dropdown: "Open the Width dropdown to
         // find Add min width and Add max width."
         if enabled {
-            if app.dropdown_layout_axis == Some(is_w) {
-                // the menu anchors under the chip it belongs to; the panel
-                // scrolls, so the painter records where the chip landed
-                app.layout_axis_dd_anchor = (chip.x0, chip.y1);
+            if text_sel {
+                hit.push((chip, Action::ToggleTextResize));
+            } else {
+                if app.dropdown_layout_axis == Some(is_w) {
+                    // the menu anchors under the chip it belongs to; the panel
+                    // scrolls, so the painter records where the chip landed
+                    app.layout_axis_dd_anchor = (chip.x0, chip.y1);
+                }
+                hit.push((chip, Action::LayoutAxisMenu(is_w)));
             }
-            hit.push((chip, Action::LayoutAxisMenu(is_w)));
         }
         // Figma: "If an object contains a min or max setting, its respective
         // width or height icon will gain two lines, one on each side."
@@ -5230,12 +5259,32 @@ fn paint_design(
             Some(Action::Field(FieldId::TextCase)),
             Some("chevron-down"),
         );
+        // List style — Figma's text-list property (help 360040449773):
+        // *"Use the List style property to apply a list style to a text
+        // layer"*. None / Bulleted / Numbered behind one picker.
+        app.fonts
+            .text(s, x0, y0 + 1260.0, "List style", T10, C_DIM, Wt::Reg);
+        let lsr = Rect::new(x0, y0 + 1278.0, x0 + 153.5, y0 + 1306.0);
+        input(
+            app,
+            s,
+            hit,
+            lsr,
+            None,
+            &list_style_label(app),
+            false,
+            Some(Action::ToggleListStyle),
+            Some("chevron-down"),
+        );
+        if app.list_style_open {
+            app.blend_dd_anchor = (lsr.x0, lsr.y1);
+        }
         // Optical size | Width (variable-font axes; Auto on static faces)
         app.fonts
-            .text(s, x0, y0 + 1260.0, "Optical size", T10, C_DIM, Wt::Reg);
+            .text(s, x0, y0 + 1314.0, "Optical size", T10, C_DIM, Wt::Reg);
         app.fonts
-            .text(s, x0 + 161.5, y0 + 1260.0, "Width", T10, C_DIM, Wt::Reg);
-        let osr = Rect::new(x0, y0 + 1278.0, x0 + 153.5, y0 + 1306.0);
+            .text(s, x0 + 161.5, y0 + 1314.0, "Width", T10, C_DIM, Wt::Reg);
+        let osr = Rect::new(x0, y0 + 1332.0, x0 + 153.5, y0 + 1360.0);
         input(
             app,
             s,
@@ -5247,7 +5296,7 @@ fn paint_design(
             Some(Action::Field(FieldId::OpticalSize)),
             None,
         );
-        let wdr = Rect::new(x0 + 161.5, y0 + 1278.0, x0 + 315.0, y0 + 1306.0);
+        let wdr = Rect::new(x0 + 161.5, y0 + 1332.0, x0 + 315.0, y0 + 1360.0);
         input(
             app,
             s,
@@ -5263,7 +5312,7 @@ fn paint_design(
 
     // ---- fill / stroke / effects / guides continue with the shared tail
     // (the section's end moves with the disclosure, so does the tail)
-    let tail_top = if adv_open { y0 + 1318.0 } else { y0 + 1102.0 };
+    let tail_top = if adv_open { y0 + 1372.0 } else { y0 + 1102.0 };
     hline(s, rx, rx + rw, tail_top, C_LINE);
     let mut y = tail_top + 12.0;
     let inner_w = rw - pl * 2.0;
@@ -6264,6 +6313,62 @@ fn paint_mask_section(
         app.blend_dd_anchor = (row.x0, row.y0);
     }
     Some(row.y1 + 12.0)
+}
+
+/// The **List style** field's words — the same three the picker lists
+/// (help 360040449773).
+fn list_style_label(app: &App) -> String {
+    typo_val(app, Typo::ListStyle)
+}
+
+/// Figma's **List style** picker (help 360040449773): *"Bulleted and
+/// numbered lists can be applied … using the List style property"* — the three
+/// rows tick the one the layer carries.
+fn paint_list_style_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    let (ax, ay) = app.blend_dd_anchor;
+    let items = x_native::ListStyle::all();
+    let w = 176.0;
+    let h = DROPDOWN_ROW_H * items.len() as f64;
+    let x0 = ax.min((app.win_w - w - 8.0).max(8.0)).max(8.0);
+    let mut y0 = ay + 4.0;
+    if y0 + h > app.win_h - 8.0 {
+        y0 = (ay - 4.0 - h).max(8.0);
+    }
+    let dd = Rect::new(x0, y0, x0 + w, y0 + h);
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, R_LG, C_FIELD);
+    stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+    let current = app
+        .doc_ref()
+        .editor_ref()
+        .list_style_of_selection()
+        .unwrap_or(x_native::ListStyle::None);
+    for (k, m) in items.iter().enumerate() {
+        let r = Rect::new(
+            dd.x0,
+            dd.y0 + DROPDOWN_ROW_H * k as f64,
+            dd.x1,
+            dd.y0 + DROPDOWN_ROW_H * (k + 1) as f64,
+        );
+        let hov = hover(app, r);
+        let on = *m == current;
+        if hov {
+            fill_rect(s, r, C_FIELD_2);
+        }
+        app.fonts.text(
+            s,
+            r.x0 + 10.0,
+            r.y0 + 9.0,
+            m.label(),
+            T11,
+            if on { C_TEXT } else { C_MUTED },
+            Wt::Reg,
+        );
+        if on {
+            draw_icon(s, "check", r.x1 - 22.0, r.y0 + 8.0, ICON_XS, C_TEXT);
+        }
+        hit.push((r, Action::SetListStyle(*m)));
+    }
 }
 
 /// What the Mask row needs: whether the section speaks for a mask (the
@@ -8712,6 +8817,10 @@ fn paint_effects_menus(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action
     }
     if app.mask_type_open {
         paint_mask_type_menu(app, s, hit);
+        return;
+    }
+    if app.list_style_open {
+        paint_list_style_menu(app, s, hit);
         return;
     }
     if app.effect_add_open {

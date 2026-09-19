@@ -152,6 +152,7 @@ pub fn export_pdf_full(
                 max_lines,
                 paragraph_indent,
                 decoration,
+                list,
                 runs,
                 ..
             } => {
@@ -193,6 +194,7 @@ pub fn export_pdf_full(
                             *max_lines,
                             *paragraph_indent,
                             *decoration,
+                            *list,
                         ) {
                             // vertical placement inside the node box, the
                             // same rule the canvas sink applies
@@ -249,6 +251,7 @@ pub fn export_pdf_full(
                         *max_lines,
                         *paragraph_indent,
                         *decoration,
+                        *list,
                     ) {
                         let dy = match v_align {
                             TextAlignVertical::Top => 0.0,

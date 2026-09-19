@@ -171,6 +171,9 @@ pub enum RenderCommand {
         paragraph_indent: f64,
         /// Underline / strikethrough, drawn per line by the shaper.
         decoration: x_core::TextDecoration,
+        /// Figma's list style: the shaper reserves a marker column and
+        /// draws the bullet or counter in it (help 360040449773).
+        list: x_core::ListStyle,
         runs: Vec<x_core::TextPart>,
     },
     Image {
@@ -490,6 +493,7 @@ fn offset_command(command: &RenderCommand, dx: f64, dy: f64) -> RenderCommand {
             max_lines,
             paragraph_indent,
             decoration,
+            list,
             runs,
         } => RenderCommand::Glyphs {
             key: format!("{key}/bg"),
@@ -516,6 +520,7 @@ fn offset_command(command: &RenderCommand, dx: f64, dy: f64) -> RenderCommand {
             max_lines: *max_lines,
             paragraph_indent: *paragraph_indent,
             decoration: *decoration,
+            list: *list,
             runs: runs.clone(),
         },
         RenderCommand::Image {
@@ -886,9 +891,10 @@ fn fingerprint(c: &RenderCommand) -> String {
             max_lines,
             paragraph_indent,
             decoration,
+            list,
             ..
         } => format!(
-            "g{:?}{text}{size}{max_width}{font:?}{brush:?}{runs:?}{letter_spacing}{line_height}{lh_mode}{lh_value}{word_spacing}{paragraph_spacing}{baseline_shift}{small_caps}{optical_size}{width_axis}{wrap:?}{align:?}{v_align:?}{node_h}{max_lines:?}{paragraph_indent}{decoration:?}",
+            "g{:?}{text}{size}{max_width}{font:?}{brush:?}{runs:?}{letter_spacing}{line_height}{lh_mode}{lh_value}{word_spacing}{paragraph_spacing}{baseline_shift}{small_caps}{optical_size}{width_axis}{wrap:?}{align:?}{v_align:?}{node_h}{max_lines:?}{paragraph_indent}{decoration:?}{list:?}",
             transform.as_coeffs()
         ),
         RenderCommand::Image {
@@ -1464,6 +1470,7 @@ fn lower(
                         max_lines: node.max_lines,
                         paragraph_indent: node.paragraph_indent,
                         decoration: node.text_decoration,
+                        list: node.list_style,
                         runs,
                     });
                 }
@@ -1598,6 +1605,7 @@ fn lower(
                     max_lines: None,
                     paragraph_indent: 0.0,
                     decoration: x_core::TextDecoration::None,
+                    list: x_core::ListStyle::None,
                     runs: vec![],
                 });
             }
@@ -1690,6 +1698,7 @@ fn lower(
                     max_lines: None,
                     paragraph_indent: 0.0,
                     decoration: x_core::TextDecoration::None,
+                    list: x_core::ListStyle::None,
                     runs: vec![],
                 });
             }

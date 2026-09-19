@@ -1049,6 +1049,40 @@ impl ListStyle {
             _ => Self::None,
         }
     }
+    /// Figma's words for the three rows of the list-style picker
+    /// (help 360040449773): *"Selecting the No list property … removes any
+    /// current list styling"*.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Bulleted => "Bulleted",
+            Self::Numbered => "Numbered",
+        }
+    }
+    /// The three rows, in Figma's order: none, bulleted, numbered.
+    pub fn all() -> [ListStyle; 3] {
+        [Self::None, Self::Bulleted, Self::Numbered]
+    }
+}
+
+/// The width of a list item's marker column, in px: the room a bullet or a
+/// counter takes before the text's own left edge. One owner — the shaper
+/// reserves it from the wrap width and draws the marker in it, the app's
+/// measurement adds it back so an auto-width box hugs marker + text.
+pub const LIST_MARKER_GAP: f64 = 16.0;
+
+/// The marker a list ITEM carries, `item` counting from 1 (the same
+/// 1-based counter Figma shows): a bullet for a bulleted list, the counter
+/// for a numbered one — *"numbered list counters rotate between numbers,
+/// alphabetical characters, and roman numerals with each indentation"* is
+/// Figma's deeper nesting, one level of numbering here — and nothing at all
+/// for a plain paragraph.
+pub fn list_marker(style: ListStyle, item: usize) -> Option<String> {
+    match style {
+        ListStyle::None => None,
+        ListStyle::Bulleted => Some("\u{2022}".to_string()),
+        ListStyle::Numbered => Some(format!("{item}.")),
+    }
 }
 
 /// Text wrap style for line breaking.
@@ -2367,6 +2401,31 @@ mod layout_grid_tests {
         );
         assert_eq!(apply_text_case("same", None), "same");
         assert_eq!(apply_text_case("same", Some("nonesuch")), "same");
+    }
+
+    /// Figma's list styles (help 360040449773): three rows in their order,
+    /// a bullet for the unordered list, a 1-based counter for the ordered
+    /// one, and nothing for a plain paragraph.
+    #[test]
+    fn the_list_styles_are_figmas_three_and_their_markers_count() {
+        assert_eq!(
+            ListStyle::all().map(ListStyle::label),
+            ["None", "Bulleted", "Numbered"]
+        );
+        assert_eq!(
+            ListStyle::all().map(ListStyle::to_str),
+            ["none", "bulleted", "numbered"]
+        );
+        assert_eq!(ListStyle::parse("bulleted"), ListStyle::Bulleted);
+        assert_eq!(ListStyle::parse("nonesuch"), ListStyle::None);
+        assert_eq!(list_marker(ListStyle::None, 1), None);
+        assert_eq!(
+            list_marker(ListStyle::Bulleted, 4).as_deref(),
+            Some("\u{2022}")
+        );
+        assert_eq!(list_marker(ListStyle::Numbered, 1).as_deref(), Some("1."));
+        assert_eq!(list_marker(ListStyle::Numbered, 12).as_deref(), Some("12."));
+        assert_eq!(LIST_MARKER_GAP, 16.0);
     }
 }
 

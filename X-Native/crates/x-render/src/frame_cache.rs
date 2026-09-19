@@ -339,6 +339,9 @@ fn hash_subtree(n: &Node) -> (u64, bool, bool) {
             NodeKind::Text { text } => {
                 mix(h, 26);
                 smix(h, text);
+                // the list style decides the marker column and the wrap
+                // width, so a bulleted frame is not a plain frame
+                mix(h, n.list_style as u64);
                 // typography bindings (fs/ls/lh/ws/ps/bs/tc/fw/font) change
                 // glyphs without changing `text`
                 for (k, v) in &n.bindings {

@@ -585,6 +585,7 @@ fn encode(
                                 max_lines: node.max_lines,
                                 paragraph_indent: node.paragraph_indent,
                                 decoration: node.text_decoration,
+                                list: node.list_style,
                             },
                         );
                         let dy = match node.text_align_vertical {
@@ -983,7 +984,10 @@ pub(crate) fn text_needs_styled(node: &Node) -> bool {
         || node.text_align_vertical != x_core::TextAlignVertical::Top
         || node.max_lines.is_some()
         || node.paragraph_indent != 0.0
-        || node.text_decoration != x_core::TextDecoration::None;
+        || node.text_decoration != x_core::TextDecoration::None
+        // a list takes the styled path too: the fast path has no marker
+        // column and would drop the bullets
+        || node.list_style != x_core::ListStyle::None;
     sc || opsz > 0.0 || wdth > 0.0 || node.has_explicit_lh() || typed
 }
 

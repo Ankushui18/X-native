@@ -740,6 +740,10 @@ pub struct TextBlockStyle {
     pub paragraph_indent: f64,
     /// underline / strikethrough, drawn once per line across its width
     pub decoration: x_core::TextDecoration,
+    /// Figma's list style (help 360040449773): a bullet or a counter in a
+    /// `LIST_MARKER_GAP`-wide column before the text, which is itself
+    /// indented by that column. `None` = an ordinary paragraph.
+    pub list: x_core::ListStyle,
 }
 
 impl Default for TextBlockStyle {
@@ -758,6 +762,7 @@ impl Default for TextBlockStyle {
             max_lines: None,
             paragraph_indent: 0.0,
             decoration: x_core::TextDecoration::None,
+            list: x_core::ListStyle::None,
         }
     }
 }
@@ -820,13 +825,17 @@ pub fn glyph_outlines(
     } else {
         spans
     };
-    let mut lines = layout_lines_wrapped(
-        &mut shaper,
-        &spans,
-        default_font,
-        style.max_width,
-        style.wrap,
-    );
+    // Figma's list styles (help 360040449773) take a marker column off
+    // the wrap width: the text is indented by it and the marker is drawn
+    // in it, so a list wraps exactly as the same text without one and a
+    // `ListStyle::None` block is byte-identical to history.
+    let list_indent = if style.list == x_core::ListStyle::None {
+        0.0
+    } else {
+        x_core::LIST_MARKER_GAP
+    };
+    let avail = (style.max_width - list_indent).max(8.0);
+    let mut lines = layout_lines_wrapped(&mut shaper, &spans, default_font, avail, style.wrap);
     // max-lines: drop everything beyond the cap BEFORE placement, so the
     // returned height covers exactly what is emitted (CSS max-lines).
     if let Some(cap) = style.max_lines {
@@ -834,6 +843,8 @@ pub fn glyph_outlines(
     }
     let mut out = vec![];
     let mut y = 0.0f64;
+    // the 1-based item counter a numbered list shows
+    let mut item = 0usize;
     for (li, line) in lines.iter().enumerate() {
         let max_size = line.spans.iter().map(|s| s.size).fold(12.0, f64::max);
         let f0 = &fonts.fonts[default_font];
@@ -853,15 +864,22 @@ pub fn glyph_outlines(
         // A line starts a paragraph when it is the block's first line or the
         // previous line ended one (para_end — explicit \n or end of text).
         let para_first = li == 0 || lines[li - 1].para_end;
-        let x0 = match style.align {
+        if para_first {
+            item += 1;
+        }
+        // the marker's column starts where the un-indented text would
+        // have started, so Left/Center/Right all keep the marker beside
+        // their own line; the text's pen is one gap further in
+        let marker_x = match style.align {
             Align::Left => 0.0,
-            Align::Center => (style.max_width - line.width) / 2.0,
-            Align::Right => style.max_width - line.width,
+            Align::Center => (avail - line.width) / 2.0,
+            Align::Right => avail - line.width,
         } + if para_first {
             style.paragraph_indent
         } else {
             0.0
         };
+        let x0 = marker_x + list_indent;
         let mut pen = x0;
         for span in &line.spans {
             for run in shaper.shape_span(span, default_font) {
@@ -881,6 +899,35 @@ pub fn glyph_outlines(
                     x += g.x_advance;
                 }
                 pen += run.width;
+            }
+        }
+        // the marker itself: the item's bullet or counter, in the line's
+        // own ink and at the line's type size, shaped through the same
+        // shaper as the text so every sink draws it identically
+        if para_first {
+            if let Some(marker) = x_core::list_marker(style.list, item) {
+                let mut mspan = Span::new(&marker, max_size);
+                if let Some(first) = line.spans.first() {
+                    mspan = mspan.color(first.color);
+                    mspan.font = first.font;
+                }
+                for run in shaper.shape_span(&mspan, default_font) {
+                    let f = &fonts.fonts[run.font];
+                    let scale = run.size / f.units_per_em;
+                    let mut x = marker_x;
+                    for g in &run.glyphs {
+                        if let Some(outline) = f.outline(g.glyph_id) {
+                            let t = Affine::translate((x + g.x_offset, baseline - g.y_offset))
+                                * Affine::scale_non_uniform(scale, -scale);
+                            out.push(OutlineGlyph {
+                                path: outline,
+                                transform: t,
+                                color: run.color,
+                            });
+                        }
+                        x += g.x_advance;
+                    }
+                }
             }
         }
         // decoration: one rect across the laid-out line, in the line's ink
@@ -967,6 +1014,7 @@ pub fn node_text_outlines(
         None,
         0.0,
         x_core::TextDecoration::None,
+        x_core::ListStyle::None,
     )
 }
 
@@ -994,6 +1042,7 @@ pub fn node_text_outlines_styled(
     max_lines: Option<usize>,
     paragraph_indent: f64,
     decoration: x_core::TextDecoration,
+    list: x_core::ListStyle,
 ) -> Option<(Vec<OutlineGlyph>, f64)> {
     // route through the ShapedTextCache: repeated frames/text reuse the
     // shaped block (Arc clone), positions compose OUTSIDE via the world
@@ -1020,6 +1069,7 @@ pub fn node_text_outlines_styled(
         max_lines,
         paragraph_indent,
         decoration,
+        list,
     );
     if let Some(block) = crate::cache::ShapedTextCache::global().get_or_shape(fonts, key) {
         return Some((
@@ -1056,6 +1106,7 @@ pub fn node_text_outlines_styled(
         max_lines,
         paragraph_indent,
         decoration,
+        list,
     )
 }
 
@@ -1089,6 +1140,7 @@ pub fn node_text_outlines_uncached(
         None,
         0.0,
         x_core::TextDecoration::None,
+        x_core::ListStyle::None,
     )
 }
 
@@ -1119,6 +1171,7 @@ pub fn node_text_outlines_rich(
     max_lines: Option<usize>,
     paragraph_indent: f64,
     decoration: x_core::TextDecoration,
+    list: x_core::ListStyle,
 ) -> Option<(Vec<OutlineGlyph>, f64)> {
     let key = crate::cache::TextLayoutKey::new_rich(
         parts,
@@ -1140,6 +1193,7 @@ pub fn node_text_outlines_rich(
         max_lines,
         paragraph_indent,
         decoration,
+        list,
     );
     if let Some(block) = crate::cache::ShapedTextCache::global().get_or_shape(fonts, key) {
         return Some((
@@ -1175,6 +1229,7 @@ pub fn node_text_outlines_rich(
         max_lines,
         paragraph_indent,
         decoration,
+        list,
     )
 }
 
@@ -1219,6 +1274,7 @@ pub fn node_text_outlines_rich_uncached(
     max_lines: Option<usize>,
     paragraph_indent: f64,
     decoration: x_core::TextDecoration,
+    list: x_core::ListStyle,
 ) -> Option<(Vec<OutlineGlyph>, f64)> {
     let default_font = base_font
         .and_then(|n| fonts.resolve_font_name(n))
@@ -1262,6 +1318,7 @@ pub fn node_text_outlines_rich_uncached(
         max_lines,
         paragraph_indent,
         decoration,
+        list,
     };
     Some(glyph_outlines(fonts, &spans, default_font, &style))
 }
@@ -1306,6 +1363,7 @@ pub fn node_text_outlines_styled_uncached(
     max_lines: Option<usize>,
     paragraph_indent: f64,
     decoration: x_core::TextDecoration,
+    list: x_core::ListStyle,
 ) -> Option<(Vec<OutlineGlyph>, f64)> {
     let chosen = font_name
         .and_then(|n| fonts.resolve_font_name(n))
@@ -1330,6 +1388,7 @@ pub fn node_text_outlines_styled_uncached(
         max_lines,
         paragraph_indent,
         decoration,
+        list,
     };
     Some(glyph_outlines(fonts, &spans, chosen, &style))
 }
@@ -1410,6 +1469,7 @@ mod tests {
             None,
             0.0,
             x_core::TextDecoration::None,
+            x_core::ListStyle::None,
         )
         .unwrap();
         let (g0, _) = node_text_outlines_styled(
@@ -1433,6 +1493,7 @@ mod tests {
             None,
             0.0,
             x_core::TextDecoration::None,
+            x_core::ListStyle::None,
         )
         .unwrap();
         let d = (g0[0].transform.translation().y - g1[0].transform.translation().y).abs();
@@ -1502,6 +1563,7 @@ mod tests {
             max_lines: None,
             paragraph_indent: 0.0,
             decoration: x_core::TextDecoration::None,
+            list: x_core::ListStyle::None,
         };
         let (g0, h0) = glyph_outlines(&m, &[Span::new("Abc", 20.0).font(f)], f, &style(false));
         let (g1, h1) = glyph_outlines(&m, &[Span::new("Abc", 20.0).font(f)], f, &style(true));
@@ -1535,6 +1597,7 @@ mod tests {
             max_lines: None,
             paragraph_indent: 0.0,
             decoration: x_core::TextDecoration::None,
+            list: x_core::ListStyle::None,
         };
         let base = TextBlockStyle {
             lh_mode: 0,
@@ -1573,6 +1636,7 @@ mod tests {
             max_lines: None,
             paragraph_indent: 0.0,
             decoration: x_core::TextDecoration::None,
+            list: x_core::ListStyle::None,
         };
         let (_, h_single0) = glyph_outlines(&m, &[Span::new("one", 20.0).font(f)], f, &style(0.0));
         let (_, h_single1) = glyph_outlines(&m, &[Span::new("one", 20.0).font(f)], f, &style(40.0));
@@ -1609,6 +1673,7 @@ mod tests {
             max_lines: None,
             paragraph_indent: 0.0,
             decoration: x_core::TextDecoration::None,
+            list: x_core::ListStyle::None,
         };
         let (g0, h0) = glyph_outlines(&m, &[Span::new("Hy", 20.0).font(f)], f, &style(0.0));
         let (g1, h1) = glyph_outlines(&m, &[Span::new("Hy", 20.0).font(f)], f, &style(6.0));
@@ -1799,6 +1864,48 @@ mod tests {
         assert!(
             bb_u.max_y() - bb_u.min_y() >= 1.0,
             "underline has thickness"
+        );
+    }
+
+    /// Figma's lists (help 360040449773): every list item's text is indented
+    /// by the marker column, the bullet or the 1-based counter is drawn in
+    /// it, and the block's height does not move. A `ListStyle::None` block is
+    /// the plain layout, byte for byte.
+    #[test]
+    fn a_list_item_gets_a_marker_column_and_a_counter() {
+        let m = fonts();
+        let f = m.default_font().unwrap();
+        let spans = [Span::new("one\ntwo", 20.0).font(f)];
+        let mk = |list| TextBlockStyle {
+            lh_mode: 0,
+            max_width: 400.0,
+            line_height: 1.2,
+            align: Align::Left,
+            wrap: x_core::TextWrap::Auto,
+            list,
+            ..Default::default()
+        };
+        let (plain, hp) = glyph_outlines(&m, &spans, f, &mk(x_core::ListStyle::None));
+        let (bulleted, hb) = glyph_outlines(&m, &spans, f, &mk(x_core::ListStyle::Bulleted));
+        let (numbered, hn) = glyph_outlines(&m, &spans, f, &mk(x_core::ListStyle::Numbered));
+        // two items, so two markers on top of the same text
+        assert_eq!(bulleted.len(), plain.len() + 2, "one bullet per item");
+        assert_eq!(numbered.len(), plain.len() + 2, "one counter per item");
+        assert_eq!(hp, hb, "the marker column does not move the block height");
+        assert_eq!(hb, hn);
+        // the first line's own text starts one marker column in
+        let tx = |g: &OutlineGlyph| g.transform.as_coeffs()[4];
+        assert!(tx(&plain[0]).abs() < 0.01, "plain text starts at the edge");
+        assert!(
+            (tx(&bulleted[0]) - x_core::LIST_MARKER_GAP).abs() < 0.01,
+            "a list item's text sits one column in: {}",
+            tx(&bulleted[0])
+        );
+        assert!((tx(&numbered[0]) - x_core::LIST_MARKER_GAP).abs() < 0.01);
+        // the counter is 1-based and counts the ITEMS, not the lines
+        assert_eq!(
+            x_core::list_marker(x_core::ListStyle::Numbered, 2).as_deref(),
+            Some("2.")
         );
     }
 
