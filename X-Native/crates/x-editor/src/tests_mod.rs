@@ -655,6 +655,96 @@ mod tests {
         assert!(matches!(&find(&e.root, "t").unwrap().kind, NodeKind::Text{text} if text=="OLD"));
     }
 
+    /// Figma's canvas rotate: every selected layer turns with the gesture, the
+    /// whole gesture is ONE undo entry (the app merges the moves on release),
+    /// and the default pivot is the selection's centre.
+    #[test]
+    fn rotating_a_selection_orbits_every_layer_about_the_pivot() {
+        let mut e = Editor::new(doc());
+        e.selection = vec!["a".into(), "b".into()];
+        let base: Vec<(String, f64, f64, f64)> = ["a", "b"]
+            .iter()
+            .map(|id| {
+                let n = find(&e.root, id).unwrap();
+                (
+                    (*id).to_string(),
+                    n.transform.x,
+                    n.transform.y,
+                    n.transform.rotation,
+                )
+            })
+            .collect();
+        // the selection box is x 10..300, y 10..60 → its centre is (155, 35)
+        let depth = e.undo_depth();
+        assert!(e.rotate_selection_from(&base, (155.0, 35.0), 90f64.to_radians()));
+        assert_eq!(e.undo_depth(), depth + 1, "one gesture, one entry");
+        let a = find(&e.root, "a").unwrap();
+        // a's centre (60, 35) is 95 left of the pivot: a quarter turn puts it
+        // 95 ABOVE (y 35 - 95 = -60), with the box unchanged
+        assert!((a.transform.rotation - 90f64.to_radians()).abs() < 1e-9);
+        assert!(
+            (a.transform.x + 50.0 - 155.0).abs() < 1e-9,
+            "x: {}",
+            a.transform.x
+        );
+        assert!(
+            (a.transform.y + 25.0 + 60.0).abs() < 1e-9,
+            "y: {}",
+            a.transform.y
+        );
+        assert_eq!((a.w, a.h), (100.0, 50.0), "rotation never resizes");
+        // …and asking again with the same base is idempotent, not cumulative:
+        // this is what makes a live drag's last move the one that stands
+        assert!(e.rotate_selection_from(&base, (155.0, 35.0), 45f64.to_radians()));
+        let a = find(&e.root, "a").unwrap();
+        assert!((a.transform.rotation - 45f64.to_radians()).abs() < 1e-9);
+        e.undo();
+        let a = find(&e.root, "a").unwrap();
+        assert_eq!(
+            (a.transform.x, a.transform.y, a.transform.rotation),
+            (10.0, 10.0, 0.0)
+        );
+    }
+
+    /// A layer whose own rotation origin the user moved turns about *that*
+    /// point, and the panel's field takes Figma's angle range for the whole
+    /// selection at once.
+    #[test]
+    fn a_layers_own_origin_is_the_pivot_of_its_rotation() {
+        let mut e = Editor::new(doc());
+        e.selection = vec!["a".into()];
+        assert!(e.set_origin("a", 0.0, 0.0));
+        let n = find(&e.root, "a").unwrap();
+        let corner = (n.transform.x, n.transform.y);
+        let base = vec![("a".to_string(), n.transform.x, n.transform.y, 0.0)];
+        assert!(e.rotate_selection_from(&base, corner, 30f64.to_radians()));
+        let n = find(&e.root, "a").unwrap();
+        assert!(
+            (n.transform.x - 10.0).abs() < 1e-9,
+            "top-left pinned: {}",
+            n.transform.x
+        );
+        assert!(
+            (n.transform.y - 10.0).abs() < 1e-9,
+            "top-left pinned: {}",
+            n.transform.y
+        );
+        assert!((n.transform.rotation - 30f64.to_radians()).abs() < 1e-9);
+
+        // the field: 195° is stored as -165° (Figma's own example), on every
+        // selected layer, as one entry
+        e.selection = vec!["a".into(), "b".into()];
+        let depth = e.undo_depth();
+        assert!(e.set_selection_rotation(195.0));
+        assert_eq!(e.undo_depth(), depth + 1);
+        for id in ["a", "b"] {
+            let r = find(&e.root, id).unwrap().transform.rotation.to_degrees();
+            assert!((r + 165.0).abs() < 1e-9, "{id} at {r}");
+        }
+        e.undo();
+        assert!(find(&e.root, "b").unwrap().transform.rotation == 0.0);
+    }
+
     #[test]
     fn set_corners_is_undoable_uniform_and_per_corner() {
         let mut e = Editor::new(doc());

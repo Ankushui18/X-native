@@ -368,6 +368,67 @@ pub fn scale_anchor(orig: (f64, f64, f64, f64), corner: usize) -> (f64, f64) {
     }
 }
 
+/// How far outside a corner Figma's rotate zone reaches, in SCREEN pixels.
+/// The resize handle's own 6px is the inner edge of the ring, so the two
+/// gestures never fight over the same pixel — and the zone is *outside* the
+/// bounds, which is what the help page asks for: *"Hover just outside one of
+/// the layer's bounds until the icon appears."*
+pub const ROTATE_RING: f64 = 22.0;
+
+/// The radius of the rotation-origin target: a 6px dot with the same
+/// forgiveness Figma gives its own handles.
+pub const ORIGIN_TARGET_R: f64 = 8.0;
+
+/// `⇧` snaps a canvas rotation: *"Hold down Shift to snap rotation values to
+/// increments of 15."*
+pub const ROTATE_SNAP_DEG: f64 = 15.0;
+
+/// Which corner's rotate ring the pointer is in, if any. `b` is `x, y, w, h`
+/// in the same space as `p`, `ring` the outer radius of the zone and `handle`
+/// the inner one (the resize handle's tolerance). A point INSIDE the bounds is
+/// never in the ring, however close to a corner it is — the inside of a layer
+/// belongs to selection, marquee and the move drag.
+pub fn rotate_corner_at(
+    b: (f64, f64, f64, f64),
+    p: Point,
+    ring: f64,
+    handle: f64,
+) -> Option<usize> {
+    let inside = p.x >= b.0 && p.x <= b.0 + b.2 && p.y >= b.1 && p.y <= b.1 + b.3;
+    if inside {
+        return None;
+    }
+    let corners = [
+        (b.0, b.1),
+        (b.0 + b.2, b.1),
+        (b.0, b.1 + b.3),
+        (b.0 + b.2, b.1 + b.3),
+    ];
+    let mut best: Option<(usize, f64)> = None;
+    for (i, (cx, cy)) in corners.iter().enumerate() {
+        let d = ((p.x - cx) * (p.x - cx) + (p.y - cy) * (p.y - cy)).sqrt();
+        if d <= ring && d > handle && best.is_none_or(|(_, bd)| d < bd) {
+            best = Some((i, d));
+        }
+    }
+    best.map(|(i, _)| i)
+}
+
+/// The point a selection turns about: the layer's own transform-origin when one
+/// layer is selected — Figma's *"change an object's rotation origin"* — and the
+/// centre of the selection box otherwise, which is Figma's default *"Figma uses
+/// the horizontal and vertical center of the current selection as the point of
+/// rotation"*.
+pub fn rotation_pivot(n: Option<&x_native::Node>, b: (f64, f64, f64, f64)) -> (f64, f64) {
+    match n {
+        Some(n) => {
+            let (px, py) = n.transform.pivot(n.w, n.h);
+            (n.transform.x + px, n.transform.y + py)
+        }
+        None => (b.0 + b.2 / 2.0, b.1 + b.3 / 2.0),
+    }
+}
+
 /// The Scale panel's anchor box, as nine cells read row by row from the top
 /// left — the middle one (4) is what the panel opens on, exactly as Figma's
 /// screenshot shows it. ONE table: the panel paints it, the multiplier and the
@@ -1507,6 +1568,8 @@ pub enum Action {
     /// Figma's **Apply blend mode** in the Appearance section, and the same
     /// control inside a fill's or stroke's colour popover.
     ToggleLayerBlend,
+    /// `⌥R` — reveal/hide Figma's rotation-origin target for the selection.
+    ToggleRotationOrigin,
     SetLayerBlend(x_native::BlendKind),
     TogglePaintBlend(PaintTarget),
     SetPaintBlend(PaintTarget, x_native::BlendKind),
@@ -2155,6 +2218,26 @@ pub enum Drag {
         base_depth: usize,
         parts: Vec<(String, f64, f64)>, // (id, anchor x, anchor y) in parent space
         applied: f64,
+    },
+    /// Figma's canvas rotate (`360039956914`): *"Hover just outside one of the
+    /// layer's bounds until the icon appears. Click and drag to rotate your
+    /// selection … Hold down Shift to snap rotation values to increments of
+    /// 15."* `base` is the selection as it stood at the press and `acc` the
+    /// angle swept so far, so every move asks for the TOTAL delta from the
+    /// press — the last move wins, and a pointer that crosses ±180° keeps
+    /// turning instead of jumping a circle.
+    RotateSel {
+        pivot: (f64, f64),
+        last: f64,
+        acc: f64,
+        base: Vec<(String, f64, f64, f64)>, // (id, x, y, rotation) at the press
+        base_depth: usize,
+    },
+    /// The rotation-origin target (`⌥R`): *"Click and drag the target to move
+    /// the rotation origin."* Written live through `Editor::set_origin`, and
+    /// merged into one undo entry on release like every other gesture here.
+    RotationOrigin {
+        base_depth: usize,
     },
     /// Scale-tool BODY drag (K): Figma's "hover over the object's bounding box
     /// ... then click-and-drag to resize". The anchor is the corner opposite
@@ -3096,6 +3179,9 @@ pub struct App {
     /// Where the Effects `+` menu anchors, recorded by the panel pass: the
     /// menu itself paints in the popover pass, above the panel's clip.
     pub effect_add_anchor: (f64, f64),
+    /// `⌥R`: the rotation-origin target is showing, so the canvas offers it to
+    /// drag. Figma's shortcut, and Figma's name for the thing it reveals.
+    pub rotation_origin_on: bool,
     /// The effect rows the paint pass laid out (top to bottom) — the drop
     /// targets for reordering by dragging a row, which is Figma's gesture:
     /// *"you click and drag the handles to reorder the effects"*.
@@ -3322,6 +3408,7 @@ impl App {
             paint_blend_open: None,
             blend_dd_anchor: (0.0, 0.0),
             effect_add_anchor: (0.0, 0.0),
+            rotation_origin_on: false,
             effect_rows: Vec::new(),
             effect_drag_over: None,
             status: String::from("Ready"),

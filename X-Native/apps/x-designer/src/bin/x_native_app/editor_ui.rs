@@ -8428,6 +8428,24 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
         }
     }
 
+    // ⌥R — Figma's rotation origin: "use the keyboard shortcut ⌥R to reveal
+    // the rotation origin", and then "click and drag the target to move the
+    // rotation origin". One target, on the single selection's pivot, drawn in
+    // SCREEN space so it keeps its size at every zoom.
+    if app.rotation_origin_on {
+        if let [id] = sel.as_slice() {
+            if let Some(n) = find_node(&doc.editor_ref().root, id.as_str()) {
+                let box_ = (n.transform.x, n.transform.y, n.w, n.h);
+                let (px, py) = crate::state::rotation_pivot(Some(n), box_);
+                let c = app.world_to_screen(Point::new(px, py));
+                let r = crate::state::ORIGIN_TARGET_R;
+                ring(s, c.x, c.y, r, C_ACCENT, 1.5);
+                hline(s, c.x - r - 5.0, c.x + r + 5.0, c.y, C_ACCENT);
+                vline(s, c.x, c.y - r - 5.0, c.y + r + 5.0, C_ACCENT);
+            }
+        }
+    }
+
     // size badge: "W × H" under the selection (Figma), hidden while editing
     if app.text_edit.is_none() && !sel.is_empty() {
         let mut bb: Option<Rect> = None;

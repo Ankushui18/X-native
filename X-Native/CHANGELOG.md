@@ -5,6 +5,43 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-19 (Rotate on canvas)
+
+Figma's canvas rotate (`360039956914`): *"Hover just outside one of the layer's
+bounds until the icon appears. Click and drag to rotate your selection … Hold
+down Shift to snap rotation values to increments of 15."* Ours had the angle in
+the object panel and nothing on the canvas at all.
+
+- **The zone sits outside the corners.** `state::rotate_corner_at` owns it: it
+  reaches `ROTATE_RING` (22 screen px) out from a corner and starts past the
+  resize handle's own 6 px (`HANDLE_TOL`), so one press is a resize or a rotate
+  and never both. A point *inside* the bounds is never a rotate, so selecting,
+  marqueeing and the move drag are untouched.
+- **The pivot.** `state::rotation_pivot` is one layer's own transform origin when
+  a single layer is selected — the thing `⌥R` moves — and the centre of the
+  selection box otherwise, which is the documented default: *"Figma uses the
+  horizontal and vertical center of the current selection as the point of
+  rotation by default."*
+- **The gesture.** `Drag::RotateSel` records the selection at the press and the
+  angle swept so far, so every move asks for the TOTAL delta — the last move wins
+  instead of compounding — and a pointer that crosses ±180° keeps turning rather
+  than jumping a circle. `⇧` snaps the resulting angle to 15°; the release merges
+  the drag into ONE undo entry and reports `Rotated N°`.
+- **The field takes Figma's range.** `Editor::set_selection_rotation` applies the
+  angle to every selected layer as one entry and normalizes the way the help page
+  describes — *"going 15° past 180° will give you an angle of -165°"* — with
+  `x_core::normalize_degrees` the one owner of that convention and
+  `Transform::rotate_about` the orbit itself.
+- **`⌥R`.** `Action::ToggleRotationOrigin` reveals Figma's **rotation origin**
+  (*"use the keyboard shortcut ⌥R to reveal the rotation origin"*); the target on
+  the layer is dragged through `Drag::RotationOrigin` → `Editor::set_origin`, and
+  the next rotate turns about it. The arm is asked for before the tool table, so
+  `⌥R` never reads as the Rectangle tool.
+- **Named deltas.** Figma's bespoke rotate *cursor* over the ring is not drawn —
+  winit has no rotate glyph and this canvas shows no hover cursors for its other
+  handles either — and the ring follows a transformed layer's rendered corners
+  rather than a glyph that animates as you hover.
+
 ## [Unreleased] — 2026-09-19 (Effects list and blend modes)
 
 Figma's Effects section is a **list**, and `360041488473` says exactly how to

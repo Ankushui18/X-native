@@ -633,6 +633,86 @@ impl Editor {
         self.push_cmds(cmds);
         true
     }
+    /// Figma's rotation field (`360039956914`): the angle applies to *every*
+    /// selected layer, and what is stored follows the panel's convention —
+    /// `(-180, 180]`, counting back down past 180 in the direction you came
+    /// from. One undo entry for the whole selection.
+    pub fn set_selection_rotation(&mut self, deg: f64) -> bool {
+        let ids: Vec<String> = self
+            .selection
+            .iter()
+            .filter(|id| !self.scope_owns(id))
+            .cloned()
+            .collect();
+        let to = normalize_degrees(deg).to_radians();
+        let cmds: Vec<Command> = ids
+            .iter()
+            .filter_map(|id| {
+                let n = find(&self.root, id)?;
+                Some(Command::Rotate {
+                    id: id.clone(),
+                    from: n.transform.rotation,
+                    to,
+                })
+            })
+            .collect();
+        if cmds.is_empty() {
+            return false;
+        }
+        self.push(cmds);
+        true
+    }
+
+    /// Figma's canvas rotate: every selected layer turns about `pivot` by
+    /// `delta` radians. `base` is the selection as it stood when the gesture
+    /// began (`id → x, y, rotation`), so a live drag can ask for the *total*
+    /// delta on every move — the last move wins instead of compounding, and the
+    /// app merges the gesture into one undo entry on release.
+    ///
+    /// The pivot is `(x + origin_x·w, y + origin_y·h)` for a layer whose own
+    /// origin the user moved, and the selection's centre otherwise — which is
+    /// Figma's rule: *"Figma uses the horizontal and vertical center of the
+    /// current selection as the point of rotation by default. You can change an
+    /// object's rotation origin so that it will rotate around a different
+    /// point."*
+    pub fn rotate_selection_from(
+        &mut self,
+        base: &[(String, f64, f64, f64)],
+        pivot: (f64, f64),
+        delta: f64,
+    ) -> bool {
+        let mut cmds: Vec<Command> = Vec::new();
+        for (id, bx, by, brot) in base {
+            if self.scope_owns(id) {
+                continue;
+            }
+            let Some(n) = find(&self.root, id) else {
+                continue;
+            };
+            let (w, h) = (n.w, n.h);
+            let mut t = n.transform;
+            t.x = *bx;
+            t.y = *by;
+            t.rotation = *brot;
+            t.rotate_about(w, h, pivot, delta);
+            cmds.push(Command::Rotate {
+                id: id.clone(),
+                from: n.transform.rotation,
+                to: normalize_degrees(t.rotation.to_degrees()).to_radians(),
+            });
+            cmds.push(Command::Move {
+                id: id.clone(),
+                dx: t.x - n.transform.x,
+                dy: t.y - n.transform.y,
+            });
+        }
+        if cmds.is_empty() {
+            return false;
+        }
+        self.push(cmds);
+        true
+    }
+
     pub fn rotate(&mut self, id: &str, angle: f64) {
         if let Some(n) = find(&self.root, id) {
             let cmd = Command::Rotate {

@@ -2251,6 +2251,179 @@ fn the_scale_tool_grows_a_layer_from_the_corner_you_are_not_holding() {
     );
 }
 
+/// A 120 × 80 rect at the middle of the canvas, selected — the fixture the
+/// rotate tests use: Figma's ring lives *outside* the bounds, so the press has
+/// to land on the canvas to be a canvas gesture at all.
+fn rotate_host() -> (Host, String) {
+    let mut h = host();
+    let reg = h.app.editor_regions();
+    let c = h.app.screen_to_world(Point::new(
+        (reg.canvas.x0 + reg.canvas.x1) / 2.0,
+        (reg.canvas.y0 + reg.canvas.y1) / 2.0,
+    ));
+    h.finish_create(
+        Tool::Rect,
+        Point::new(c.x - 60.0, c.y - 40.0),
+        Point::new(c.x + 60.0, c.y + 40.0),
+    );
+    let id = h.app.doc_ref().editor_ref().selection[0].clone();
+    (h, id)
+}
+
+/// Figma's canvas rotate (`360039956914`): *"Hover just outside one of the
+/// layer's bounds until the icon appears. Click and drag to rotate your
+/// selection."* The zone is outside the corners — the inside of a layer still
+/// selects and moves — Figma's default pivot is the selection's centre, and the
+/// whole gesture is ONE undo entry.
+#[test]
+fn the_rotate_ring_turns_the_selection_about_its_centre() {
+    let (mut h, id) = rotate_host();
+    let (x, y, w, h_) = {
+        let n = find_node_clone(&h.app.doc_ref().editor_ref().root, &id).unwrap();
+        (n.transform.x, n.transform.y, n.w, n.h)
+    };
+    let centre = (x + w / 2.0, y + h_ / 2.0);
+    let depth0 = h.app.doc_ref().editor_ref().undo_depth();
+    // the zone reaches 22 screen px out, and starts past the 6px resize handle
+    let z = h.app.zoom.max(0.01);
+    let grab = Point::new(x + w + 10.0 / z, y + h_ + 10.0 / z);
+
+    // a press just INSIDE the corner is selection / move, never a rotate
+    assert!(
+        h.rotate_grab(Point::new(x + w - 1.0, y + h_ - 1.0))
+            .is_none(),
+        "the inside of the bounds belongs to select and move"
+    );
+    match h.rotate_grab(grab) {
+        Some(Drag::RotateSel { pivot, .. }) => {
+            assert_eq!(pivot, centre, "Figma's default pivot is the centre")
+        }
+        _ => panic!("the ring is outside the bottom-right corner"),
+    }
+
+    // a quarter turn: from the corner's 45° to straight down from the pivot
+    h.on_press(h.app.world_to_screen(grab));
+    assert!(matches!(h.app.drag, Some(Drag::RotateSel { .. })));
+    let r = (grab.x - centre.0).hypot(grab.y - centre.1);
+    h.on_move(h.app.world_to_screen(Point::new(centre.0, centre.1 + r)));
+    let n = find_node_clone(&h.app.doc_ref().editor_ref().root, &id).unwrap();
+    assert!(
+        (n.transform.rotation.to_degrees() - 45.0).abs() < 1e-6,
+        "45°: {}",
+        n.transform.rotation.to_degrees()
+    );
+    assert!(
+        (n.transform.x + n.w / 2.0 - centre.0).abs() < 1e-6,
+        "the pivot held"
+    );
+    assert!(
+        (n.transform.y + n.h / 2.0 - centre.1).abs() < 1e-6,
+        "the pivot held"
+    );
+
+    h.on_release();
+    assert_eq!(
+        h.app.doc_ref().editor_ref().undo_depth(),
+        depth0 + 1,
+        "the drag merges into one undo step"
+    );
+    assert!(
+        h.app.status.contains("Rotated 45"),
+        "status: {}",
+        h.app.status
+    );
+    h.app.doc().editor().undo();
+    let n = find_node_clone(&h.app.doc_ref().editor_ref().root, &id).unwrap();
+    assert_eq!(n.transform.rotation, 0.0);
+}
+
+/// *"Hold down Shift to snap rotation values to increments of 15."*
+#[test]
+fn shift_snaps_a_canvas_rotation_to_fifteen_degrees() {
+    let (mut h, id) = rotate_host();
+    let (x, y, w, h_) = {
+        let n = find_node_clone(&h.app.doc_ref().editor_ref().root, &id).unwrap();
+        (n.transform.x, n.transform.y, n.w, n.h)
+    };
+    let centre = (x + w / 2.0, y + h_ / 2.0);
+    let z = h.app.zoom.max(0.01);
+    let grab = Point::new(x + w + 10.0 / z, y + h_ + 10.0 / z);
+    let r = (grab.x - centre.0).hypot(grab.y - centre.1);
+    let start = (grab.y - centre.1).atan2(grab.x - centre.0);
+
+    h.on_press(h.app.world_to_screen(grab));
+    h.app.shift = true;
+    // 37° round from the press: the nearest step of 15° is 30°
+    let a = start + 37f64.to_radians();
+    h.on_move(
+        h.app
+            .world_to_screen(Point::new(centre.0 + r * a.cos(), centre.1 + r * a.sin())),
+    );
+    let n = find_node_clone(&h.app.doc_ref().editor_ref().root, &id).unwrap();
+    assert!(
+        (n.transform.rotation.to_degrees() - 30.0).abs() < 1e-6,
+        "snapped to 30°: {}",
+        n.transform.rotation.to_degrees()
+    );
+    h.app.shift = false;
+    h.on_release();
+}
+
+/// `⌥R` reveals Figma's rotation origin, and the target moves it: *"use the
+/// keyboard shortcut ⌥R to reveal the rotation origin … Click and drag the
+/// target to move the rotation origin."* The next canvas rotate then turns
+/// about that point instead of the centre.
+#[test]
+fn option_r_moves_the_rotation_origin_and_the_pivot_follows() {
+    let mut h = host();
+    h.app.doc().editor().selection = vec!["frame-1".into()];
+    let depth0 = h.app.doc_ref().editor_ref().undo_depth();
+    // without ⌥R there is no target on the canvas
+    assert!(h.rotation_origin_grab(Point::new(187.5, 270.0)).is_none());
+
+    // Tool letters resolve through Tool::from_shortcut, where R is the
+    // Rectangle tool — so the ⌥ arm has to be asked for before the table
+    h.app.alt = true;
+    h.on_key(Key::Character("r".into()), None);
+    h.app.alt = false;
+    assert!(h.app.rotation_origin_on, "⌥R reveals the target");
+    assert_eq!(h.app.tool, Tool::Select, "⌥R is not the Rectangle tool");
+
+    // the target sits on the layer's own origin — frame-1's centre
+    let grab = h
+        .rotation_origin_grab(Point::new(187.5, 270.0))
+        .expect("the target takes the press");
+    h.app.drag = Some(grab);
+    h.on_move(h.app.world_to_screen(Point::new(0.0, 60.0)));
+    let n = find_node_clone(&h.app.doc_ref().editor_ref().root, "frame-1").unwrap();
+    assert_eq!(
+        (n.transform.origin_x, n.transform.origin_y),
+        (0.0, 0.0),
+        "dragged to the layer's top-left corner"
+    );
+    h.on_release();
+    assert_eq!(
+        h.app.doc_ref().editor_ref().undo_depth(),
+        depth0 + 1,
+        "moving the origin is one undo step"
+    );
+
+    // the moved origin is the pivot the next rotate turns about
+    let z = h.app.zoom.max(0.01);
+    match h.rotate_grab(Point::new(375.0 + 10.0 / z, 480.0 + 10.0 / z)) {
+        Some(Drag::RotateSel { pivot, .. }) => {
+            assert_eq!(pivot, (0.0, 60.0), "the layer's own origin");
+        }
+        _ => panic!("the ring is outside the bottom-right corner"),
+    }
+    // …and ⌥R again hides it, leaving the Move tool where it was
+    h.app.alt = true;
+    h.on_key(Key::Character("r".into()), None);
+    h.app.alt = false;
+    assert!(!h.app.rotation_origin_on);
+    assert_eq!(h.app.tool, Tool::Select);
+}
+
 /// The Scale panel's own tables: nine anchor cells and the corner a body drag
 /// scales about — plus the proof that the handle rule and the body rule are the
 /// SAME projection, so the two gestures cannot drift apart.

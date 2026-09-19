@@ -4211,6 +4211,20 @@ impl Host {
                     self.app.drag = Some(dr);
                     return;
                 }
+                // ⌥R's origin target sits on the layer, so it is asked for
+                // before anything that would move or select.
+                if let Some(dr) = self.rotation_origin_grab(world) {
+                    self.app.drag = Some(dr);
+                    return;
+                }
+                // The rotate ring is OUTSIDE the bounds, so it is asked before
+                // the corner handles: a press in the ring can never be a resize.
+                if tool == Tool::Select {
+                    if let Some(dr) = self.rotate_grab(world) {
+                        self.app.drag = Some(dr);
+                        return;
+                    }
+                }
                 // Figma's arc handles belong to the LAYER, not to a tool:
                 // whatever else this press might have been about, grabbing one
                 // of them sweeps, starts or rings the layer.
@@ -4615,7 +4629,7 @@ impl Host {
 
         let (x, y, w, h) = bounds;
         // proximity in SCREEN px
-        let tol = 6.0 / self.app.zoom.max(0.01);
+        let tol = HANDLE_TOL / self.app.zoom.max(0.01);
         let corners = [(x, y), (x + w, y), (x, y + h), (x + w, y + h)];
         // A transformed layer's handles are NOT at the corners of its
         // axis-aligned box: the renderer draws the node through
@@ -4639,6 +4653,88 @@ impl Host {
         })
     }
 
+    /// Figma's canvas rotate: the ring *just outside* a corner of the bounds
+    /// (`360039956914`). It is asked BEFORE the corner handles so a press in
+    /// the ring can never be read as a resize, and it refuses the inside of the
+    /// bounds so a press there still selects or moves.
+    fn rotate_grab(&mut self, world: Point) -> Option<Drag> {
+        let ring = crate::state::ROTATE_RING / self.app.zoom.max(0.01);
+        let handle = HANDLE_TOL / self.app.zoom.max(0.01);
+        let doc = self.app.doc();
+        let editor = doc.editor_ref();
+        if editor.selection.is_empty() {
+            return None;
+        }
+        let box_ = selection_box(&editor.root, &editor.selection)?;
+        // a rotated layer's ring follows the four corners the renderer draws
+        let single = match editor.selection.as_slice() {
+            [id] => crate::editor_ui::find_node(&editor.root, id),
+            _ => None,
+        };
+        let bounds = match single {
+            Some(n) if crate::editor_ui::is_transformed(n) => {
+                let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+                for (x, y) in x_native::editor::world_corners(n) {
+                    x0 = x0.min(x);
+                    y0 = y0.min(y);
+                    x1 = x1.max(x);
+                    y1 = y1.max(y);
+                }
+                (x0, y0, x1 - x0, y1 - y0)
+            }
+            _ => box_,
+        };
+        crate::state::rotate_corner_at(bounds, world, ring, handle)?;
+        let base_depth = editor.undo_depth();
+        let pivot = crate::state::rotation_pivot(single, box_);
+        let base: Vec<(String, f64, f64, f64)> = editor
+            .selection
+            .iter()
+            .filter_map(|id| {
+                crate::editor_ui::find_node(&editor.root, id).map(|n| {
+                    (
+                        id.clone(),
+                        n.transform.x,
+                        n.transform.y,
+                        n.transform.rotation,
+                    )
+                })
+            })
+            .collect();
+        let last = (world.y - pivot.1).atan2(world.x - pivot.0);
+        Some(Drag::RotateSel {
+            pivot,
+            last,
+            acc: 0.0,
+            base,
+            base_depth,
+        })
+    }
+
+    /// `⌥R` shows the rotation-origin target; this is the press that takes it.
+    /// Figma: *"Click and drag the target to move the rotation origin."*
+    fn rotation_origin_grab(&mut self, world: Point) -> Option<Drag> {
+        if !self.app.rotation_origin_on {
+            return None;
+        }
+        let r = crate::state::ORIGIN_TARGET_R / self.app.zoom.max(0.01);
+        let doc = self.app.doc();
+        let editor = doc.editor_ref();
+        let [id] = editor.selection.as_slice() else {
+            return None;
+        };
+        let n = crate::editor_ui::find_node(&editor.root, id)?;
+        let (px, py) =
+            crate::state::rotation_pivot(Some(n), (n.transform.x, n.transform.y, n.w, n.h));
+        let target = Point::new(px, py);
+        if (world.x - target.x).hypot(world.y - target.y) > r {
+            return None;
+        }
+        Some(Drag::RotationOrigin {
+            base_depth: editor.undo_depth(),
+        })
+    }
+
     /// The Scale tool (K) grabs the SAME four corner handles the Move tool
     /// grabs and pins the DIAGONALLY OPPOSITE corner: that anchor is the fixed
     /// point of the mapping (see `state::scale_drag_factor`), which is what makes
@@ -4648,7 +4744,7 @@ impl Host {
     fn scale_grab(&mut self, world: Point) -> Option<Drag> {
         // read the zoom BEFORE taking the document: `doc()` borrows the app
         // mutably, and the handle tolerance needs both
-        let tol = 6.0 / self.app.zoom.max(0.01);
+        let tol = HANDLE_TOL / self.app.zoom.max(0.01);
         let doc = self.app.doc();
         let editor = doc.editor_ref();
         if editor.selection.is_empty() {
@@ -5241,6 +5337,65 @@ impl Host {
                         *applied = factor;
                     }
                     self.app.mark_dirty();
+                }
+            }
+            // ---- canvas rotate: the pointer's angle about the pivot, snapped
+            // to 15° while ⇧ is held. Every move asks for the TOTAL delta from
+            // the press, so the layers turn with the pointer instead of winding
+            // up in circles.
+            Some(Drag::RotateSel {
+                pivot,
+                last,
+                acc,
+                base,
+                ..
+            }) => {
+                let world = self.app.screen_to_world(p);
+                let now = (world.y - pivot.1).atan2(world.x - pivot.0);
+                // unwrap the step: a pointer that crosses the ±180° line keeps
+                // turning instead of jumping a whole circle
+                let mut step = now - last;
+                while step > std::f64::consts::PI {
+                    step -= std::f64::consts::TAU;
+                }
+                while step < -std::f64::consts::PI {
+                    step += std::f64::consts::TAU;
+                }
+                let total = acc + step;
+                let applied = if self.app.shift {
+                    // "Hold down Shift to snap rotation values to increments of 15"
+                    let snap = crate::state::ROTATE_SNAP_DEG.to_radians();
+                    (total / snap).round() * snap
+                } else {
+                    total
+                };
+                if self
+                    .app
+                    .doc()
+                    .editor()
+                    .rotate_selection_from(&base, pivot, applied)
+                {
+                    if let Some(Drag::RotateSel { last, acc, .. }) = self.app.drag.as_mut() {
+                        *last = now;
+                        *acc = total;
+                    }
+                    self.app.mark_dirty();
+                }
+            }
+            // ---- ⌥R's origin target: the pivot follows the pointer, live
+            Some(Drag::RotationOrigin { .. }) => {
+                let world = self.app.screen_to_world(p);
+                let doc = self.app.doc();
+                let id = doc.editor_ref().selection.first().cloned();
+                if let Some(id) = id {
+                    let box_ = crate::editor_ui::find_node(&doc.editor_ref().root, &id)
+                        .map(|n| (n.transform.x, n.transform.y, n.w.max(1e-6), n.h.max(1e-6)));
+                    if let Some((x, y, w, h)) = box_ {
+                        let ox = ((world.x - x) / w).clamp(0.0, 1.0);
+                        let oy = ((world.y - y) / h).clamp(0.0, 1.0);
+                        doc.editor().set_origin(&id, ox, oy);
+                        self.app.mark_dirty();
+                    }
                 }
             }
             Some(Drag::ScaleBody {
@@ -5884,10 +6039,26 @@ impl Host {
             Some(Drag::ScaleSel { base_depth, .. })
             | Some(Drag::ScaleBody { base_depth, .. })
             | Some(Drag::ArcHandle { base_depth, .. })
-            | Some(Drag::ShapeHandle { base_depth, .. }) => {
+            | Some(Drag::ShapeHandle { base_depth, .. })
+            | Some(Drag::RotationOrigin { base_depth }) => {
                 let doc = self.app.doc();
                 let editor = doc.editor();
                 editor.merge_last(editor.undo_depth().saturating_sub(base_depth));
+                self.app.drag = None;
+            }
+            Some(Drag::RotateSel { base_depth, .. }) => {
+                let deg = {
+                    let doc = self.app.doc();
+                    let editor = doc.editor();
+                    editor.merge_last(editor.undo_depth().saturating_sub(base_depth));
+                    editor
+                        .selection
+                        .first()
+                        .and_then(|id| crate::editor_ui::find_node(&editor.root, id))
+                        .map(|n| n.transform.rotation.to_degrees())
+                        .unwrap_or(0.0)
+                };
+                self.app.status = format!("Rotated {}°", deg.round());
                 self.app.drag = None;
             }
             _ => {
@@ -7389,6 +7560,14 @@ impl Host {
                 } else {
                     "Rulers off".into()
                 };
+                return;
+            }
+            // ⌥R — Figma's rotation origin: "use the keyboard shortcut ⌥R to
+            // reveal the rotation origin", then "click and drag the target to
+            // move" it. Asked for before the tool table so ⌥R never reads as
+            // the Rectangle tool.
+            if self.app.alt && c.eq_ignore_ascii_case("r") {
+                self.dispatch(Action::ToggleRotationOrigin);
                 return;
             }
             // Tool shortcuts — the mode-aware table lives in
@@ -11533,6 +11712,15 @@ impl Host {
                 self.app.close_panel_menus();
                 self.app.layer_blend_open = open;
             }
+            Action::ToggleRotationOrigin => {
+                self.app.rotation_origin_on = !self.app.rotation_origin_on;
+                self.app.drag = None;
+                self.app.status = if self.app.rotation_origin_on {
+                    "Rotation origin on - drag the target to move it".into()
+                } else {
+                    "Rotation origin off".into()
+                };
+            }
             Action::SetLayerBlend(blend) => {
                 self.app.layer_blend_open = false;
                 let Some(id) = self.app.doc().selected_id() else {
@@ -13134,7 +13322,9 @@ impl Host {
             }
             FieldId::Rotation => {
                 if let Some(deg) = num(raw) {
-                    doc.editor().rotate(&node_id, deg.to_radians());
+                    // the field takes the whole selection and Figma's range:
+                    // past 180 the count runs back down (195° → -165°)
+                    doc.editor().set_selection_rotation(deg);
                     self.app.mark_dirty();
                 }
             }
@@ -13578,6 +13768,11 @@ pub(crate) fn selection_box(root: &Node, ids: &[String]) -> Option<(f64, f64, f6
     }
     bbox
 }
+
+/// How close the pointer has to be to a corner handle, in screen pixels. It
+/// is the inner edge of the rotate ring, so a press can be a resize or a
+/// rotate but never both (`360039956914`).
+const HANDLE_TOL: f64 = 6.0;
 
 /// How close the pointer has to be to an arc handle, in screen pixels.
 const ARC_HANDLE_TOL: f64 = 9.0;

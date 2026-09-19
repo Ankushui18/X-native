@@ -33,8 +33,8 @@ recon task, not a settled fact.
 | surface | rows | MATCH | PARTIAL | MISSING | EXTRA | OUT |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | 1 Tools (toolbar & shape menu) | 24 | 15 | 2 | 2 | 5 | 0 |
-| 2 Canvas gestures (drag) | 28 | 22 | 0 | 5 | 1 | 0 |
-| 3 Keyboard | 34 | 22 | 5 | 6 | 1 | 0 |
+| 2 Canvas gestures (drag) | 28 | 23 | 0 | 4 | 1 | 0 |
+| 3 Keyboard | 35 | 23 | 5 | 6 | 1 | 0 |
 | 4 Menus & palettes | 10 | 9 | 0 | 1 | 0 | 0 |
 | 5 Layers, pages, sections | 14 | 12 | 1 | 1 | 0 | 0 |
 | 6 Frame & shape properties | 20 | 16 | 2 | 2 | 0 | 0 |
@@ -52,7 +52,7 @@ recon task, not a settled fact.
 | 18 Design language (look of the app itself) | 12 | 1 | 5 | 6 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **338** | **237** | **49** | **33** | **16** | **3** |
+| **total** | **339** | **239** | **49** | **32** | **16** | **3** |
 
 The 33 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
@@ -126,7 +126,7 @@ Figma's canvas is a small set of gestures with modifiers; the shape-tool drags a
 | 2.20 | Layer-tree drag | reorder, drop before/on/after | `Drag::TreeRow` + `TreeDrop` | MATCH |
 | 2.21 | Inline text drag-select | select a range with the pointer | `Drag::TextEditSel` | MATCH |
 | 2.22 | Vector point drag | move anchors, handles | vector-edit pointer path | MATCH |
-| 2.23 | **Rotate on canvas** | hover outside a corner → rotate cursor, drag rotates; `⇧` snaps 15° | no rotate handle anywhere — rotation is an object-panel angle only | **MISSING** |
+| 2.23 | **Rotate on canvas** | hover outside a corner → rotate cursor, drag rotates; `⇧` snaps 15°; `⌥R` moves the origin | `Drag::RotateSel` + `state::rotate_corner_at` (a ring *outside* the corner, past the resize handle), `⇧` = 15° steps, `Drag::RotationOrigin` for the `⌥R` target | MATCH |
 | 2.24 | **`⌥` measure** | hold `⌥` and point to read the distance to the selection | not implemented | **MISSING** |
 | 2.25 | **Crop image** | double-click an image → crop handles | `ImageFillMode`/`image_transform` exist, no crop gesture | **MISSING** |
 | 2.26 | **Place & size image** | image tool drag places at that size | n/a (no image tool) | **MISSING** |
@@ -173,6 +173,7 @@ Figma's shortcut list is in the shortcuts panel (`360040328653`, tabbed, live-hi
 | 3.32 | `⌘K` | link/copy-as? (Figma uses it for links in text) | our palette | EXTRA |
 | 3.33 | `⇧P`, `B` etc. inside text | bold/italic/underline, size steps | `⌘B`, `⌘I` in the inline editor | PARTIAL — no `⌘U`, no `⇧⌘<`/`>` size steps |
 | 3.34 | `⌘⏎` / `⌃⌥⌘⏎` | present / present with settings | flow preview key exists | PARTIAL |
+| 3.35 | `⌥R` | reveal the rotation origin; drag its target to move it | `Action::ToggleRotationOrigin`, `Drag::RotationOrigin` (`360039956914`) | MATCH |
 
 ## 4. Menus & palettes
 
@@ -219,7 +220,7 @@ Appearance (opacity, radius, clip), Fill, Stroke, Effects, Export.
 
 | # | Item | Figma | Ours | Status |
 | --- | --- | --- | --- | --- |
-| 6.1 | Position X/Y, rotate angle | numeric, scrubbable | `Position` rows + rotate field | MATCH |
+| 6.1 | Position X/Y, rotate angle | numeric, scrubbable | `Position` rows + the rotate field (`FieldId::Rotation` → `Editor::set_selection_rotation`, Figma's (−180, 180]) | MATCH |
 | 6.2 | Width/Height + Resizing | Fixed / Hug / Fill per axis, chosen from the Width/Height dropdown | `Sizing`, `Action::LayoutAxisMenu` / `SetAxisSizing` | MATCH |
 | 6.3 | Constraints | 5 H × 5 V options, "ignore constraints" `⌃` | `Constraints` section, `SetConstraint` (`2ebb068`) | MATCH |
 | 6.4 | Corner radius | one value; independent corners via the expand | uniform radius in the panel; per-corner `corner_radii` exists in the model, the UI reads only `[0]` | PARTIAL |
@@ -586,8 +587,15 @@ rendering it.
    the toolbar slot with Frame), **Wrap in new section**, lift-to-canvas when the
    selection sits in a frame or a group, the take-in that follows the draw, and the
    two deletes. Pinned by `the_section_tool_draws_on_the_canvas_and_takes_what_it_covers`.
-7. Rotate on canvas (2.23) — handle outside the corner, `⇧` = 15° steps. The numeric
-   field and `Editor::rotate` already exist, so this is handle + gesture only.
+7. ~~**Rotate on canvas** (2.23)~~ — **delivered**: the ring outside the corners
+   (past the resize handle, never inside the bounds), the ⇧ 15° snap, Figma's
+   centre-or-own-origin pivot, the `⌥R` **rotation origin** target that moves it,
+   and the panel's field taking Figma's (−180, 180] convention. Pinned by
+   `the_rotate_ring_turns_the_selection_about_its_centre`,
+   `shift_snaps_a_canvas_rotation_to_fifteen_degrees`,
+   `option_r_moves_the_rotation_origin_and_the_pivot_follows`,
+   `rotating_a_selection_orbits_every_layer_about_the_pivot` and
+   `the_angle_convention_counts_back_down_past_180`.
 8. Masks authoring (11.13) — `⌘⌥M` use-as-mask, plus inverted masks.
 9. Place-image tool + crop (1.17, 2.25, 2.26, 9.5).
 10. Per-corner radii + **corner smoothing** (6.4, 6.5) — both fields are in the model;
