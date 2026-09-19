@@ -8271,7 +8271,8 @@ fn paint_effects_section(
             y = sy;
         }
     }
-    y += 6.0
+    y += 6.0;
+    y
 }
 
 /// The inspector's own popovers — the layer / paint / effect blend menus and an
