@@ -24,18 +24,30 @@ use x_native::{
 /// The pinned golden values. When a deliberate engine change moves them,
 /// update HERE with a commit message explaining why.
 ///
-/// Re-pinned 2026-09-16 (frame-name canvas labels, QA-004): every frame
-/// and section now lowers its name as a header Glyphs command, so this
-/// document gained exactly TWO new glyph commands — `/golden/label` (the
-/// page root) and `/golden/row/label` (the auto-layout row). Reviewed
-/// against the CI drift listing: 50 = reviewed command-by-command (37 are
-/// the deliberate gaussian blur taps for `grad`'s DropShadow, the rest
-/// map 1:1 onto the document's real content — auto-layout row, component
+/// History. 2026-09-16 (frame-name canvas labels, QA-004): every frame
+/// and section lowered its name as a header Glyphs command, which added
+/// `/golden/label` (the page root) and `/golden/row/label` (the
+/// auto-layout row) and took the count to 52. The 50 before them were
+/// reviewed against the CI drift listing command-by-command: 37 are the
+/// deliberate gaussian blur taps for `grad`'s DropShadow, the rest map
+/// 1:1 onto the document's real content — auto-layout row, component
 /// master + instance with text override, gradient fill, mask clip +
-/// image, variable-bound fill, title glyphs, boolean union, pop), plus
-/// the two new name labels = 52.
-const GOLDEN_COMMANDS: usize = 52;
-const GOLDEN_KIND_HASH: u64 = 0xe156_0b27_ca1a_6fbd;
+/// image, variable-bound fill, title glyphs, boolean union, pop.
+///
+/// Re-pinned again 2026-09-18 (canvas chrome audit): the render ROOT is never a
+/// labelled object — on the canvas the root is the PAGE, and its name
+/// belongs in the pages list, not painted across the artboard. The
+/// document's `/golden/label` command is gone, so the count drops by
+/// exactly one (51); `/golden/row/label` stays, because the auto-layout
+/// row is a page-level frame and Figma does name those. Nothing else
+/// moved: no geometry, no paint.
+///
+/// Re-pinned 2026-09-18 (same day, CI): the count above was confirmed by the
+/// real gate (`commands=51 (pinned 51)` in the GOLDEN DRIFT panic), and the
+/// kind hash is the one that run printed — `0xcd250bfffae4f4a6`. Nothing else
+/// about the document moved.
+const GOLDEN_COMMANDS: usize = 51;
+const GOLDEN_KIND_HASH: u64 = 0xcd25_0bff_fae4_f4a6;
 
 fn golden_document() -> Document {
     let mut doc = Document::new();

@@ -42,6 +42,79 @@ fn assert_clip_wraps(tree: &x_native::RenderTree, inner: &str) {
     assert!(pi > ii, "pop {pi} must close after {inner} {ii}: {ks:?}");
 }
 
+/// The alpha scope a mask pushes: one `PushLayer` per mask whose type asks
+/// for a uniform figure. Everything else in these fixtures paints at 1.0, so
+/// the list is the mask's own alpha.
+fn mask_alphas(tree: &x_native::RenderTree) -> Vec<f32> {
+    tree.commands
+        .iter()
+        .filter_map(|c| match c {
+            RenderCommand::PushLayer { alpha, .. } => Some(*alpha),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Figma's Mask-section types (help 360040450253): Vector is outline only —
+/// *"the mask's translucency is ignored"* — while Alpha and Luminance key the
+/// masked result on the mask's own opacity / brightness.
+#[test]
+fn mask_types_scale_the_masked_scope() {
+    let doc = |kind: x_native::MaskType, fill: Color, opacity: f32| {
+        let mut m = Node::rect("m", 0.0, 0.0, 100.0, 100.0, fill)
+            .mask(true)
+            .mask_type(kind);
+        m.opacity = opacity;
+        Node::frame("page", 400.0, 300.0)
+            .child(m)
+            .child(Node::image("photo", 0.0, 0.0, 200.0, 150.0, "checker"))
+    };
+    let half_black = Color::new([0.0, 0.0, 0.0, 0.5]);
+
+    // Vector: the clip is the whole story, translucency or not
+    let tree = build_render_tree(
+        &doc(x_native::MaskType::Vector, half_black, 1.0),
+        &Variables::default(),
+    );
+    assert_clip_wraps(&tree, "image");
+    assert!(mask_alphas(&tree).is_empty(), "Vector ignores opacity");
+
+    // Alpha: the mask fill's own alpha scales the scope
+    let tree = build_render_tree(
+        &doc(x_native::MaskType::Alpha, half_black, 1.0),
+        &Variables::default(),
+    );
+    assert_clip_wraps(&tree, "image");
+    assert_eq!(mask_alphas(&tree), vec![0.5], "50% fill reveals half");
+
+    // …and the mask layer's own opacity multiplies in (0% reveals nothing)
+    let tree = build_render_tree(
+        &doc(x_native::MaskType::Alpha, half_black, 0.0),
+        &Variables::default(),
+    );
+    assert_eq!(mask_alphas(&tree), vec![0.0], "an invisible mask hides all");
+
+    // Luminance: the fill's brightness — black hides, so 0.0
+    let tree = build_render_tree(
+        &doc(x_native::MaskType::Luminance, half_black, 1.0),
+        &Variables::default(),
+    );
+    assert_clip_wraps(&tree, "image");
+    assert_eq!(mask_alphas(&tree), vec![0.0], "black masks nothing through");
+
+    // a container mask has no fill of its own to key on: the clip does the work
+    let mut group =
+        Node::group("g", 0.0, 0.0).child(Node::rect("gm", 0.0, 0.0, 40.0, 40.0, Color::WHITE));
+    group.is_mask = true;
+    group.mask_type = x_native::MaskType::Alpha;
+    let doc2 = Node::frame("page", 400.0, 300.0)
+        .child(group)
+        .child(Node::image("photo", 0.0, 0.0, 200.0, 150.0, "checker"));
+    let tree = build_render_tree(&doc2, &Variables::default());
+    assert_clip_wraps(&tree, "image");
+    assert!(mask_alphas(&tree).is_empty(), "a group keeps full alpha");
+}
+
 #[test]
 fn mask_clips_image_sibling() {
     let doc = Node::frame("page", 400.0, 300.0)

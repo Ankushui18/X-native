@@ -52,15 +52,6 @@ mod tests {
         assert!(old.comments.iter().all(|c| c.parent.is_none()));
     }
 
-    /// Frames and sections draw their own name as a canvas label (the QA-004
-    /// block in scene.rs), and every glyph of that label counts as one path in
-    /// the scene stats. The names used in these tests are ASCII, so one glyph
-    /// per character — spell the label out instead of hardcoding the sum, so a
-    /// renamed fixture shows up as a label change, not as a mystery off-by-N.
-    fn label_paths(name: &str) -> usize {
-        name.chars().count()
-    }
-
     fn sample_doc() -> Document {
         let mut doc = Document::new();
         doc.variables
@@ -224,6 +215,32 @@ mod tests {
         assert_eq!(save_x(&loaded), text);
     }
 
+    /// Figma's per-frame "Show name" switch is a document property, so it must
+    /// survive a save/load — and a file written before the flag existed must
+    /// still show names (the reader defaults to true).
+    #[test]
+    fn show_name_roundtrips_and_defaults_to_true_for_older_files() {
+        let mut page = Node::frame("Page 1", 400.0, 300.0)
+            .child(Node::frame("quiet", 100.0, 80.0))
+            .child(Node::frame("loud", 100.0, 80.0));
+        page.children[0].show_name = false;
+        let mut doc = Document::new();
+        doc.pages.push(page);
+        let text = save_x(&doc);
+        // the flag is written only when it is off, so nothing else moved
+        assert!(
+            text.contains("\"show_name\":false"),
+            "the off switch is written"
+        );
+        let loaded = load_x(&text).expect("load");
+        assert!(!find(&loaded.pages[0], "quiet").unwrap().show_name);
+        assert!(find(&loaded.pages[0], "loud").unwrap().show_name);
+        // an older file has no key at all: names are shown, as they always were
+        let legacy = text.replace(",\"show_name\":false", "");
+        let back = load_x(&legacy).expect("load legacy");
+        assert!(find(&back.pages[0], "quiet").unwrap().show_name);
+    }
+
     #[test]
     fn x_format_roundtrips_everything() {
         let doc = sample_doc();
@@ -370,6 +387,54 @@ mod tests {
         assert_eq!(save_x(&loaded), text);
     }
 
+    /// Figma's Polygon and Star survive a save/load with their Count and
+    /// Ratio: the two are the shape, not a drawing of it.
+    #[test]
+    fn polygon_and_star_roundtrip_through_x_format() {
+        let mut doc = Document::new();
+        let page = Node::frame("page-1", 800.0, 600.0)
+            .child(Node::poly(
+                "p",
+                10.0,
+                20.0,
+                120.0,
+                120.0,
+                6,
+                Color::from_rgb8(255, 255, 255),
+            ))
+            .child(Node::star(
+                "s",
+                200.0,
+                20.0,
+                80.0,
+                90.0,
+                7,
+                0.42,
+                Color::from_rgb8(0, 0, 0),
+            ));
+        doc.pages.push(page);
+        let text = save_x(&doc);
+        assert!(text.contains("\"t\":\"poly\""), "the count is written");
+        assert!(text.contains("\"t\":\"star\""), "the star is written");
+        let loaded = load_x(&text).expect("load");
+        let p = find(&loaded.pages[0], "p").expect("the polygon survives");
+        assert!(matches!(p.kind, NodeKind::Poly { sides: 6 }), "six sides");
+        let s = find(&loaded.pages[0], "s").expect("the star survives");
+        match s.kind {
+            NodeKind::Star { points, ratio } => {
+                assert_eq!(points, 7, "seven points");
+                assert!((ratio - 0.42).abs() < 1e-9, "the ratio: {ratio}");
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            (s.transform.x, s.transform.y, s.w, s.h),
+            (200.0, 20.0, 80.0, 90.0)
+        );
+        // determinism
+        assert_eq!(save_x(&loaded), text);
+    }
+
     #[test]
     fn export_settings_roundtrip_through_x_format() {
         let mut doc = Document::new();
@@ -443,6 +508,7 @@ mod tests {
                     animation: Animation::Dissolve,
                     easing: Easing::Linear,
                     reset_on_navigate: false,
+                    animate_matching_layers: false,
                 })
                 .starting_point(true),
         );
@@ -470,6 +536,101 @@ mod tests {
         assert_eq!(save_x(&loaded), text);
     }
 
+    /// Every trigger word the engine can write, read back with the value it
+    /// carries. The reader used to know nine of the twelve words, so a mouse
+    /// down trigger and both video triggers came back as On click — and a
+    /// video hit's time was never written at all.
+    #[test]
+    fn every_trigger_word_and_its_parameter_survive_the_round_trip() {
+        let mut doc = Document::new();
+        let mut hot = Node::rect("hot", 0.0, 0.0, 120.0, 40.0, Color::from_rgb8(0, 0, 255));
+        hot.interactions = Trigger::all()
+            .iter()
+            .cloned()
+            .map(|trigger| Interaction {
+                trigger,
+                action: Action::CloseOverlay,
+                actions: vec![],
+                transition_ms: 0,
+                animation: Animation::Instant,
+                easing: Easing::Linear,
+                reset_on_navigate: false,
+                animate_matching_layers: false,
+            })
+            .collect();
+        doc.pages
+            .push(Node::frame("page-1", 800.0, 600.0).child(hot));
+        let text = save_x(&doc);
+        let loaded = load_x(&text).expect("load");
+        let hot = find(&loaded.pages[0], "hot").expect("hot survives");
+        let list = &hot.interactions;
+        let kinds: Vec<&str> = list.iter().map(|i| i.trigger.to_str()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "click",
+                "drag",
+                "hover",
+                "press",
+                "key",
+                "enter",
+                "leave",
+                "mousedown",
+                "mouseup",
+                "delay",
+                "video-hit",
+                "video-end",
+            ]
+        );
+        // the parameters ride with their words
+        assert_eq!(
+            hot.interactions[4].trigger,
+            Trigger::KeyDown { key: "".into() }
+        );
+        assert_eq!(hot.interactions[9].trigger, Trigger::AfterDelay { ms: 800 });
+        assert_eq!(
+            hot.interactions[10].trigger,
+            Trigger::WhenVideoHits { time: 0.0 }
+        );
+        assert_eq!(save_x(&loaded), text);
+    }
+
+    /// Figma's "Animate matching layers" tick (help 360039818874) is part of
+    /// the interaction, and off is what a file that predates the tick means:
+    /// the word is written only when the box is on, so nothing older changes
+    /// meaning on the way in.
+    #[test]
+    fn the_matching_layers_tick_survives_the_round_trip_and_stays_off_when_absent() {
+        let mut doc = Document::new();
+        let mut hot = Node::rect("hot", 0.0, 0.0, 120.0, 40.0, Color::from_rgb8(0, 0, 255));
+        let mut on = Interaction::click("other");
+        on.animate_matching_layers = true;
+        hot.interactions = vec![on];
+        let page = Node::frame("page-1", 800.0, 600.0).child(hot);
+        doc.pages.push(page);
+        let text = save_x(&doc);
+        assert!(
+            text.contains("\"smartmatch\":true"),
+            "the tick is on the wire only while it is on"
+        );
+        let loaded = load_x(&text).expect("load");
+        let hot = find(&loaded.pages[0], "hot").expect("hot survives");
+        assert!(hot.interactions[0].animate_matching_layers);
+
+        // a file written with the box off carries no word at all, and one
+        // that never had it loads as off rather than as an error
+        let mut plain = Document::new();
+        let mut cold = Node::rect("cold", 0.0, 0.0, 120.0, 40.0, Color::from_rgb8(0, 0, 255));
+        cold.interactions = vec![Interaction::click("other")];
+        let page = Node::frame("page-1", 800.0, 600.0).child(cold);
+        plain.pages.push(page);
+        let off = save_x(&plain);
+        assert!(!off.contains("smartmatch"));
+        let reloaded = load_x(&off).expect("load");
+        let cold = find(&reloaded.pages[0], "cold").expect("cold survives");
+        assert!(!cold.interactions[0].animate_matching_layers);
+    }
+
     #[test]
     fn openlink_and_mouseup_roundtrip_through_x_format() {
         let mut doc = Document::new();
@@ -485,6 +646,7 @@ mod tests {
                     animation: Animation::Instant,
                     easing: Easing::Linear,
                     reset_on_navigate: false,
+                    animate_matching_layers: false,
                 },
             ),
         );
@@ -886,9 +1048,11 @@ mod tests {
         assert_eq!(count_kind(&re, &|k| matches!(k, NodeKind::Rect { .. })), 1);
         assert_eq!(count_kind(&re, &|k| matches!(k, NodeKind::Ellipse)), 1);
         let (_, s) = x_render::build_scene(&re, None, &Variables::default());
-        // rect + ellipse, plus the imported root frame's own name label: the
-        // importer names the root after its id ("svg-root")
-        assert_eq!(s.paths, 2 + label_paths("svg-root"));
+        // rect + ellipse — and nothing for the imported root frame: the
+        // importer names the root after its id ("svg-root"), and the root of
+        // a render is never a labelled object (a page name must not be
+        // painted across the artboard)
+        assert_eq!(s.paths, 2);
     }
 
     #[test]
@@ -931,12 +1095,21 @@ mod tests {
         }
         doc.pages.push(
             Node::frame("p", 400.0, 300.0)
-                .child(Node::ellipse("m", 0.0, 0.0, 50.0, 50.0, Color::WHITE).mask(true))
+                .child(
+                    Node::ellipse("m", 0.0, 0.0, 50.0, 50.0, Color::WHITE)
+                        .mask(true)
+                        .mask_type(MaskType::Vector),
+                )
                 .child(img),
         );
         let loaded = load_x(&save_x(&doc)).unwrap();
         let m = find(&loaded.pages[0], "m").unwrap();
         assert!(m.is_mask, "mask flag must roundtrip");
+        assert_eq!(
+            m.mask_type,
+            MaskType::Vector,
+            "the Mask section's type must roundtrip"
+        );
         let i = find(&loaded.pages[0], "img").unwrap();
         assert!(
             matches!(
@@ -1406,6 +1579,7 @@ mod tests {
             60.0,
             30.0,
             240.0,
+            0.25,
             Color::WHITE,
         ));
         let mut doc = Document::new();
@@ -1417,11 +1591,15 @@ mod tests {
             text.contains(r#""start":30"#) || text.contains(r#""start":30.0"#),
             "{text}"
         );
+        assert!(
+            text.contains(r#""ratio":0.25"#),
+            "the arc's ratio is written: {text}"
+        );
         let back = load_x(&text).expect("load");
-        let NodeKind::Arc { start, end } = &back.pages[0].children[0].kind else {
+        let NodeKind::Arc { start, end, ratio } = &back.pages[0].children[0].kind else {
             panic!("not an arc after round-trip");
         };
-        assert_eq!((*start, *end), (30.0, 240.0));
+        assert_eq!((*start, *end, *ratio), (30.0, 240.0, 0.25));
     }
 
     #[test]
@@ -1637,6 +1815,7 @@ mod tests {
             animation: Animation::MoveIn(Direction::Bottom),
             easing: Easing::Linear,
             reset_on_navigate: false,
+            animate_matching_layers: false,
         };
         if let Some(n) = doc.pages[0].children.first_mut() {
             n.interactions.push(logic);

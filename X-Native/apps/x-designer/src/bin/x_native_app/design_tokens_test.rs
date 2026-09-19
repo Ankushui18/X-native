@@ -37,13 +37,22 @@ const PAINTED: &[(&str, usize)] = &[
     ("theme.rs", 24),
 ];
 
-/// Ink on a *fill* must be a role: `C_ON_ACCENT` (white in the dark and light
-/// palettes, black on high contrast), `C_ON_DANGER` for the unread badge, or
-/// `C_BLACK` for ink on a brand/team hue. A bare `Color::WHITE` looks right in
-/// Graphite and paints white-on-yellow in High Contrast — that is how the
-/// unread badge and the find toggles shipped. `state.rs`/`editor_ui.rs` keep a
-/// couple of whites because a document default (an unparsable hex, a new
-/// shape's fill) is the user's content, not the chrome.
+/// Ink on a *fill* must be a role: `C_ON_ACCENT` on a **solid** accent /
+/// selection fill, `C_ACCENT_INK` for accent-coloured *labels* on a surface or
+/// on a translucent accent *wash*, `C_ON_DANGER` for the unread badge, or
+/// `C_BLACK` for ink on a brand/team hue.
+///
+/// Both halves of that sentence are lessons from Daylight. A bare
+/// `Color::WHITE` looks right in Graphite and paints white-on-white in
+/// Daylight (that is how the unread badge and the find toggles shipped), and
+/// `C_ON_ACCENT` on an *accent wash* does the same thing more subtly: the wash
+/// is a pale tint in the light palette, so a white glyph on it measured 1.42:1
+/// (the dashboard's template chips). Solid fill → `on_accent`; wash or surface
+/// → `accent_ink`, which the palette audits against every surface role.
+///
+/// `state.rs`/`editor_ui.rs` keep a couple of whites because a document
+/// default (an unparsable hex, a new shape's fill) is the user's content, not
+/// the chrome.
 const INK: &[(&str, usize)] = &[
     // (file, bare WHITE/BLACK ceiling)
     ("dashboard.rs", 0),
@@ -60,12 +69,20 @@ const INK: &[(&str, usize)] = &[
 
 /// The accent is a *fill*: as ink it measures 3.13:1 on the panel (2.80:1 on a
 /// raised surface), under AA for a label, so type and glyphs take the palette's
-/// `accent_ink` step. `(callee, colour argument)` — the slot the colour sits in.
+/// `accent_ink` step. The selection colour is the same story — 3.45:1 on a
+/// raised surface in Graphite and 2.00:1 on the solid fill in Daylight — so it
+/// is a fill too. `(callee, colour argument)` — the slot the colour sits in.
 const INK_CALLEES: &[(&str, usize)] = &[("fonts.text", 5), ("text_center", 4), ("draw_icon", 5)];
 
 /// Tokens that must not be handed to those slots. Fills, rings, marquees and
 /// guides may use them (a 1.5px selection ring is a graphic, not a label).
-const NOT_INK: &[&str] = &["C_ACCENT", "C_NAV_ACTIVE", "MATCH_HIGHLIGHT"];
+const NOT_INK: &[&str] = &[
+    "C_ACCENT",
+    "C_NAV_ACTIVE",
+    "C_SEL",
+    "C_SELECTION_EDGE",
+    "MATCH_HIGHLIGHT",
+];
 
 /// Corner radii that are allowed to stay literal, because they round something
 /// in *document* space: vector anchors and their handles (1.0/1.5) and one

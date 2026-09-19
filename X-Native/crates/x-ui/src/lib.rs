@@ -99,7 +99,6 @@ pub struct Theme {
     pub colors: ColorTokens,
     /// global UI scale (accessibility: scalable UI)
     pub scale: f64,
-    pub high_contrast: bool,
     pub reduced_motion: bool,
 }
 
@@ -115,16 +114,11 @@ impl Theme {
             id,
             colors: id.palette(),
             scale: 1.0,
-            high_contrast: id == ThemeId::HighContrast,
             reduced_motion: false,
         }
     }
 
-    pub fn high_contrast() -> Self {
-        Self::new(ThemeId::HighContrast)
-    }
-
-    /// Flip dark ↔ light (High Contrast cycles to Graphite).
+    /// Flip dark ↔ light — the two shipped palettes, nothing else.
     pub fn flipped(&self) -> Self {
         let mut t = Self::new(self.id.next());
         t.scale = self.scale;
@@ -900,12 +894,13 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(first_rect(&ops2).w, first_rect(&ops1).w * 2.0);
-        // high contrast palette switches colors
-        t.theme = Theme::high_contrast();
+        // the light palette switches colors: primary ink becomes the dark
+        // `text_primary` step instead of the dark theme's near-white
+        t.theme = Theme::new(ThemeId::Daylight);
         let ops3 = paint(&t);
         assert!(ops3
             .iter()
-            .any(|o| matches!(o, PaintOp::Text { color, .. } if *color == [255, 255, 255])));
+            .any(|o| matches!(o, PaintOp::Text { color, .. } if *color == [0x1b, 0x1d, 0x23])));
     }
 
     #[test]

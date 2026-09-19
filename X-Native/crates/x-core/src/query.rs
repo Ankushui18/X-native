@@ -21,6 +21,8 @@ pub fn kind_label(n: &Node) -> &'static str {
         NodeKind::Instance { .. } => "INSTANCE",
         NodeKind::Slice => "SLICE",
         NodeKind::Arc { .. } => "ARC",
+        NodeKind::Poly { .. } => "POLYGON",
+        NodeKind::Star { .. } => "STAR",
     }
 }
 

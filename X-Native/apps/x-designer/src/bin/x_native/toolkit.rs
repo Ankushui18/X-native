@@ -212,7 +212,7 @@ theme tokens [--theme ID] [-o OUT.json]
 
 The UI themes ship inside the tool as semantic color roles, so they can be
 audited and exported like any design file. IDs: graphite (dark, default),
-daylight (light), high-contrast. `audit` checks every text role against every
+daylight (light). `audit` checks every text role against every
 surface it can be painted on, plus labels on accent fills and the two
 indicator rings, using the WCAG 2.1 contrast formula (4.5:1 text, 3:1 UI
 indicators). `tokens` writes the palette as W3C DTCG JSON: import it as
@@ -1106,9 +1106,9 @@ mod tests {
             !json.contains(r#""pass":false"#) && !json.contains("NaN"),
             "{json}"
         );
-        let (one, _) = theme_audit_json(&[ThemeId::HighContrast], true);
+        let (one, _) = theme_audit_json(&[ThemeId::Daylight], true);
         assert!(one.starts_with('{') && one.ends_with('}'));
-        assert!(one.contains(r#""theme":"high-contrast""#), "{one}");
+        assert!(one.contains(r#""theme":"daylight""#), "{one}");
         assert!(
             one.contains(r#""fg":"on_accent""#),
             "labels on fills must be audited"

@@ -30,6 +30,7 @@ pub fn shaped_block(
         max_lines,
         paragraph_indent,
         decoration,
+        list,
         runs,
         ..
     } = command
@@ -66,6 +67,7 @@ pub fn shaped_block(
             *max_lines,
             *paragraph_indent,
             *decoration,
+            *list,
         )
     } else {
         x_text::TextLayoutKey::new_rich(
@@ -88,6 +90,7 @@ pub fn shaped_block(
             *max_lines,
             *paragraph_indent,
             *decoration,
+            *list,
         )
     };
     x_text::ShapedTextCache::global().get_or_shape(fm, key)

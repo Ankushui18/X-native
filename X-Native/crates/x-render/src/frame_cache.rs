@@ -223,6 +223,7 @@ fn hash_subtree(n: &Node) -> (u64, bool, bool) {
         fmix(h, n.opacity as f64);
         mix(h, n.visible as u64);
         mix(h, (n.is_mask as u64) << 1);
+        mix(h, (n.mask_type as u64) << 3);
         mix(h, (n.blend as u64) << 2);
         if let Some(cr) = n.corner_radii {
             for v in cr {
@@ -286,8 +287,10 @@ fn hash_subtree(n: &Node) -> (u64, bool, bool) {
         match &n.kind {
             NodeKind::Frame { layout } => {
                 mix(h, 21);
-                // the frame's name is a canvas label (QA-004) — a rename
-                // must invalidate the cached segment, exactly like Section
+                // a frame's name is a canvas label when the frame is one of
+                // the names the canvas draws (outermost frames and sections) —
+                // a rename must invalidate the cached segment, exactly like
+                // Section
                 smix(h, &n.name);
                 if let Some(l) = layout {
                     fmix(h, l.gap);
@@ -317,15 +320,28 @@ fn hash_subtree(n: &Node) -> (u64, bool, bool) {
                 mix(h, 28);
                 smix(h, &n.name);
             }
-            NodeKind::Arc { start, end } => {
+            NodeKind::Arc { start, end, ratio } => {
                 mix(h, 27);
                 fmix(h, *start);
                 fmix(h, *end);
+                fmix(h, *ratio);
+            }
+            NodeKind::Poly { sides } => {
+                mix(h, 29);
+                mix(h, *sides as u64);
+            }
+            NodeKind::Star { points, ratio } => {
+                mix(h, 30);
+                mix(h, *points as u64);
+                fmix(h, *ratio);
             }
             NodeKind::Line => mix(h, 25),
             NodeKind::Text { text } => {
                 mix(h, 26);
                 smix(h, text);
+                // the list style decides the marker column and the wrap
+                // width, so a bulleted frame is not a plain frame
+                mix(h, n.list_style as u64);
                 // typography bindings (fs/ls/lh/ws/ps/bs/tc/fw/font) change
                 // glyphs without changing `text`
                 for (k, v) in &n.bindings {
@@ -487,6 +503,10 @@ pub struct FrameCacheStats {
 pub struct FrameCache {
     font_epoch: Option<u64>,
     hidden_text: Option<String>,
+    /// Presentation mode: the artwork only, without the canvas chrome (frame
+    /// names, section title chips). A render MODE, not a document property, so
+    /// the document stays exactly as authored while it is on.
+    presenting: bool,
     doc_hash: u64,
     /// child id -> (subtree hash, cached world bounds) — bounds only
     /// recompute when the subtree hash moves (drag = 1 recompute/frame)
@@ -511,6 +531,29 @@ impl FrameCache {
             self.scene = None;
             self.segments.clear();
         }
+    }
+
+    /// A presentation paints the artwork alone: Figma draws no frame names in
+    /// presentation mode, and there is no canvas around a presented frame for a
+    /// section chip to label. Flipping the flag drops the cached scene (it is a
+    /// different picture), it is not a second cache key.
+    pub fn set_presenting(&mut self, presenting: bool) {
+        if self.presenting != presenting {
+            self.presenting = presenting;
+            self.scene = None;
+            self.segments.clear();
+        }
+    }
+
+    /// Lower one node for the canvas under this cache's current mode: the inline
+    /// editor's hidden text, and — while presenting — no canvas chrome.
+    fn lower_canvas(&self, node: &Node, vars: &Variables) -> crate::ir::RenderTree {
+        let mut tree =
+            crate::ir::build_render_tree_with_hidden(node, vars, self.hidden_text.as_deref());
+        if self.presenting {
+            crate::ir::strip_canvas_chrome(&mut tree);
+        }
+        tree
     }
 
     pub fn render(&mut self, root: &Node, vars: &Variables, sink: &VelloSink) -> &Scene {
@@ -623,8 +666,7 @@ impl FrameCache {
         {
             self.segments.clear();
             let t1 = std::time::Instant::now();
-            let tree =
-                crate::ir::build_render_tree_with_hidden(root, vars, self.hidden_text.as_deref());
+            let tree = self.lower_canvas(root, vars);
             let lower_ms = t1.elapsed().as_secs_f32() * 1000.0;
             let t2 = std::time::Instant::now();
             let scene = sink.render(&tree);
@@ -650,11 +692,7 @@ impl FrameCache {
         const BUCKET: usize = 512;
         let t1 = std::time::Instant::now();
         let shell_only = root.shallow_clone();
-        let shell_scene = sink.render(&crate::ir::build_render_tree_with_hidden(
-            &shell_only,
-            vars,
-            self.hidden_text.as_deref(),
-        ));
+        let shell_scene = sink.render(&self.lower_canvas(&shell_only, vars));
         let root_world = root.transform.matrix(root.w, root.h);
         let rw = root_world.as_coeffs();
         let mut reused = 0usize;
@@ -724,14 +762,11 @@ impl FrameCache {
                             lower_shell.children.push(child.clone());
                         }
                     }
-                    // bucket shell: the root's name label is painted exactly
-                    // once by the shell scene above — re-emitting it here
-                    // would overdraw it once per bucket
-                    let sub_tree = crate::ir::build_render_tree_bucket_shell(
-                        &lower_shell,
-                        vars,
-                        self.hidden_text.as_deref(),
-                    );
+                    // a bucket shell lowers the root plus ONE bucket of its
+                    // children. The root is never labelled (it is the page),
+                    // so there is no per-bucket label to overdraw — the shell
+                    // scene above and this one agree by construction.
+                    let sub_tree = self.lower_canvas(&lower_shell, vars);
                     lower_shell.children.truncate(shell_base_len);
                     lower_ms += tl.elapsed().as_secs_f32() * 1000.0;
                     let te = std::time::Instant::now();
@@ -907,9 +942,9 @@ mod tests {
         let mut fc2 = FrameCache::new();
         fc2.render(&page, &vars, &sink);
         assert_eq!(fc2.segments.len(), 1, "3 children fit one bucket");
-        // reference sanity: 3 child paint commands + the root frame's
-        // name label (QA-004) were lowered
-        assert_eq!(reference.commands.len(), 4);
+        // reference sanity: the 3 child paint commands, and nothing else — the
+        // root frame (the page) contributes no name label
+        assert_eq!(reference.commands.len(), 3);
     }
 }
 
@@ -1077,6 +1112,51 @@ mod reliability_tests {
         cache.render(&page, &vars, &sink);
         assert!(cache.stats.full_hit);
     }
+    /// Presenting is a different picture, not a second cache key: flipping the
+    /// flag drops the cached scene instead of serving the editor's labelled one.
+    #[test]
+    fn presenting_invalidates_the_cached_scene() {
+        let page = Node::frame("page", 200.0, 200.0).child(
+            Node::frame("hero", 100.0, 60.0).child(Node::rect(
+                "r",
+                4.0,
+                4.0,
+                20.0,
+                20.0,
+                Color::WHITE,
+            )),
+        );
+        let vars = Variables::default();
+        let sink = VelloSink {
+            assets: None,
+            fonts: None,
+        };
+        let mut cache = FrameCache::new();
+        cache.render(&page, &vars, &sink);
+        let encoded = cache.encode_count;
+        cache.render(&page, &vars, &sink);
+        assert!(cache.stats.full_hit, "an unchanged page is a cache hit");
+        cache.set_presenting(true);
+        cache.render(&page, &vars, &sink);
+        assert!(
+            !cache.stats.full_hit,
+            "the presentation hit the editor's scene"
+        );
+        assert!(
+            cache.encode_count > encoded,
+            "the presentation reused encoded segments"
+        );
+        // leaving the presentation is the editor's picture again
+        cache.render(&page, &vars, &sink);
+        assert!(cache.stats.full_hit, "presenting left the cache cold");
+        cache.set_presenting(false);
+        cache.render(&page, &vars, &sink);
+        assert!(
+            !cache.stats.full_hit,
+            "the editor hit the presentation's scene"
+        );
+    }
+
     #[test]
     fn inline_exclusion_changes_only_the_view_and_invalidates_cached_scene() {
         let page = Node::frame("page", 100.0, 100.0)
@@ -1089,11 +1169,14 @@ mod reliability_tests {
         let mut cache = FrameCache::new();
         let paths = cache.render(&page, &vars, &sink).encoding().n_paths;
         cache.set_hidden_text(Some("text"));
-        // hiding the edited TEXT node blanks its glyphs; the frame's own
-        // name label (QA-004) is chrome, not a text node, so it stays
+        // hiding the edited TEXT node blanks its glyphs, and there is nothing
+        // else in the scene: the render root is the page, and a page's name is
+        // never painted on the canvas (it belongs in the pages list). The old
+        // expectation here was `page.name.chars().count()` glyph paths — the
+        // page name, printed across an empty artboard.
         assert_eq!(
             cache.render(&page, &vars, &sink).encoding().n_paths,
-            page.name.chars().count() as u32,
+            0,
             "only the text node's glyphs are hidden"
         );
         cache.set_hidden_text(None);

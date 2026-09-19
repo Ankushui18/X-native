@@ -9,7 +9,7 @@
 //! (DESIGN/PROTOTYPE/INSPECT with Size+Position, Auto layout, Appearance,
 //! Typography, Fill, Stroke, Effects, GUIDES, Export).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use vello::kurbo::{Point, Rect};
 use vello::peniko::Color;
@@ -30,6 +30,8 @@ use crate::theme::*;
 pub fn paint(app: &mut App, s: &mut Scene) {
     app.tooltip.clear();
     app.paint_lib_at = None;
+    // the corner popover records its slider track every paint it is open
+    app.corner_slider = None;
     let mut hit: Vec<(Rect, Action)> = Vec::new();
     fill_rect(s, Rect::new(0.0, 0.0, app.win_w, app.win_h), C_BG);
     if app.flow.is_some() {
@@ -63,6 +65,22 @@ pub fn paint(app: &mut App, s: &mut Scene) {
     if app.dropdown_zoom {
         paint_zoom_dropdown(app, s, &mut hit);
     }
+    if let Some(axis) = app.dropdown_constraint {
+        paint_constraint_dropdown(app, s, &mut hit, axis);
+    }
+    if let Some(is_w) = app.dropdown_layout_axis {
+        paint_layout_axis_dropdown(app, s, &mut hit, is_w);
+    }
+    if app.dropdown_stacking {
+        paint_stacking_dropdown(app, s, &mut hit);
+    }
+    if let Some(which) = app.dropdown_proto_scroll {
+        paint_proto_scroll_dropdown(app, s, &mut hit, which);
+    }
+    if let Some(i) = app.dropdown_proto_trigger {
+        paint_proto_trigger_dropdown(app, s, &mut hit, i);
+    }
+    paint_effects_menus(app, s, &mut hit);
     if app.paint_lib.is_some() {
         paint_paint_library(app, s, &mut hit);
     }
@@ -73,6 +91,9 @@ pub fn paint(app: &mut App, s: &mut Scene) {
         paint_lib_review(app, s, &mut hit);
     }
     paint_color_picker(app, s, &mut hit);
+    if app.shortcuts_open {
+        paint_shortcuts_panel(app, s, &mut hit);
+    }
     paint_carets(app, s);
     app.hit = hit;
     let _ = reg;
@@ -90,13 +111,19 @@ pub fn paint_over(app: &mut App, s: &mut Scene) {
         return;
     }
     paint_canvas_overlays(app, s);
+    paint_arc_handles(app, s);
+    paint_shape_handles(app, s);
+    paint_crop_chrome(app, s);
+    paint_conn_drag(app, s);
     paint_minimap(app, s, &mut hit);
     paint_layout_guides(app, s);
     paint_ruler_guides(app, s);
     paint_vector_points(app, s);
     paint_smart_guides(app, s);
+    paint_measure(app, s);
     paint_text_editor(app, s);
     paint_proto_connections(app, s);
+    paint_conn_anchor(app, s, &mut hit);
     paint_rulers(app, s);
     paint_toolbar(app, s, &mut hit);
     paint_context_menu(app, s, &mut hit);
@@ -106,6 +133,174 @@ pub fn paint_over(app: &mut App, s: &mut Scene) {
     paint_notifications(app, s, &mut hit);
     paint_tooltip(app, s);
     app.hit = hit;
+}
+
+/// Figma's arc handles on the layer the pointer is on — or the layer that is
+/// selected — drawn through the layer's WORLD matrix, the same one the grab
+/// hit-tests, so a nested or rotated layer's handles sit on its arc. A solid
+/// ellipse shows the single Sweep handle ("a single handle will appear on the
+/// right-hand side"); an arc shows all three, the Start handle carrying the
+/// dot Figma gives it. While one is being dragged the sweep reads out as a
+/// percentage, which is Figma's own tooltip.
+fn paint_arc_handles(app: &App, s: &mut Scene) {
+    let Some((id, _)) = crate::state::arc_target(app) else {
+        return;
+    };
+    let doc = app.doc_ref();
+    let Some(n) = find_node(&doc.editor_ref().root, &id) else {
+        return;
+    };
+    let Some(m) = crate::run::node_world(&doc.editor_ref().root, &id) else {
+        return;
+    };
+    for (part, local) in crate::state::arc_handles(n) {
+        let p = app.world_to_screen(m * local);
+        circle(s, p.x, p.y, 4.0, C_TEXT);
+        ring(s, p.x, p.y, 4.0, C_SEL, 1.5);
+        if part == crate::state::ArcPart::Start {
+            // "the Start handle (which has a dot inside it)"
+            circle(s, p.x, p.y, 1.4, C_SEL);
+        }
+    }
+    if let Some(crate::state::Drag::ArcHandle { start, end, .. }) = &app.drag {
+        let sweep = x_native::booleans::arc_sweep(*start, *end);
+        let label = format!("{}%", (sweep.abs() / 3.6).round() as i64);
+        let (cx, cy) = (n.transform.x + n.w / 2.0, n.transform.y + n.h / 2.0);
+        let c = app.world_to_screen(Point::new(cx, cy));
+        let tw = app.fonts.measure(&label, T10, Wt::Reg) + 12.0;
+        let chip_x = c.x - tw / 2.0;
+        let chip_y = c.y - n.h * app.zoom / 2.0 - 26.0;
+        let chip = Rect::new(chip_x, chip_y, chip_x + tw, chip_y + 18.0);
+        fill_rrect(s, chip, R_SM, C_TEXT);
+        app.fonts
+            .text_center(s, chip, &label, T10, C_BASE, Wt::Med, true);
+    }
+}
+
+/// Figma's crop mode on the canvas (help 360040675194): the crop frame
+/// around the image layer, a handle on each corner, and the picture's own
+/// edges inside it — so a drag that pinches the frame about the opposite
+/// corner reads as the crop it is. While a corner is held the zoom reads out
+/// in a chip, which is the crop value the page's slider carries in the panel.
+fn paint_crop_chrome(app: &App, s: &mut Scene) {
+    let Some(session) = app.crop.as_ref() else {
+        return;
+    };
+    let doc = app.doc_ref();
+    let root = &doc.editor_ref().root;
+    let Some(n) = find_node(root, &session.id) else {
+        return;
+    };
+    let Some(m) = crate::run::node_world(root, &session.id) else {
+        return;
+    };
+    let corners = crate::state::crop_corners((0.0, 0.0, n.w, n.h));
+    let screen: Vec<Point> = corners
+        .iter()
+        .map(|(x, y)| app.world_to_screen(m * Point::new(*x, *y)))
+        .collect();
+    for i in 0..4 {
+        let a = screen[i];
+        let b = screen[(i + 1) % 4];
+        line(s, a.x, a.y, b.x, b.y, C_SEL, 1.5);
+    }
+    // the picture's own edges: what the frame is cropping, and what a corner
+    // drag pinches
+    if let NodeKind::Image {
+        fit,
+        placement,
+        asset,
+    } = &n.kind
+    {
+        let (iw, ih) = app.image_natural_size(asset).unwrap_or((n.w, n.h));
+        if let Some(a) = x_native::resolve_image_placement(*fit, placement, n.w, n.h, iw, ih)
+            .draws
+            .first()
+        {
+            let p0 = *a * Point::new(0.0, 0.0);
+            let p1 = *a * Point::new(iw, ih);
+            let local = [(p0.x, p0.y), (p1.x, p0.y), (p1.x, p1.y), (p0.x, p1.y)];
+            for i in 0..4 {
+                let a = app.world_to_screen(m * Point::new(local[i].0, local[i].1));
+                let b =
+                    app.world_to_screen(m * Point::new(local[(i + 1) % 4].0, local[(i + 1) % 4].1));
+                line(s, a.x, a.y, b.x, b.y, C_DIM, 1.0);
+            }
+        }
+    }
+    // Figma's corner handles: white squares on the blue frame
+    for p in &screen {
+        let r = Rect::new(
+            p.x - HANDLE_HALF,
+            p.y - HANDLE_HALF,
+            p.x + HANDLE_HALF,
+            p.y + HANDLE_HALF,
+        );
+        fill_rrect(s, r, 1.0, C_BASE);
+        stroke_rect(s, r, C_SEL, 1.0);
+    }
+    // while a corner is held the zoom reads out, like the arc's sweep chip
+    if matches!(app.drag, Some(Drag::Crop { .. })) {
+        if let NodeKind::Image { placement, .. } = &n.kind {
+            let label = format!("{}%", (placement.scale * 100.0).round() as i64);
+            let c = app.world_to_screen(m * Point::new(n.w / 2.0, 0.0));
+            let tw = app.fonts.measure(&label, T10, Wt::Reg) + 12.0;
+            let chip = Rect::new(c.x - tw / 2.0, c.y - 26.0, c.x + tw / 2.0, c.y - 8.0);
+            fill_rrect(s, chip, R_SM, C_TEXT);
+            app.fonts
+                .text_center(s, chip, &label, T10, C_BASE, Wt::Med, true);
+        }
+    }
+}
+
+/// Figma's Count handle — and, on a star, its Ratio handle — on the polygon or
+/// star the pointer is on, or the one that is selected, drawn through the
+/// layer's world matrix like the arc's handles: "the small, round count handle
+/// next to the shape". While either is being dragged the value reads out in a
+/// chip above the shape.
+fn paint_shape_handles(app: &App, s: &mut Scene) {
+    let Some((id, _)) = crate::state::shape_target(app) else {
+        return;
+    };
+    let doc = app.doc_ref();
+    let root = &doc.editor_ref().root;
+    let Some(n) = find_node(root, &id) else {
+        return;
+    };
+    let Some(m) = crate::run::node_world(root, &id) else {
+        return;
+    };
+    for (part, local) in crate::state::shape_handles(n) {
+        let p = app.world_to_screen(m * local);
+        circle(s, p.x, p.y, 4.0, C_TEXT);
+        ring(s, p.x, p.y, 4.0, C_SEL, 1.5);
+        if part == crate::state::ShapePart::Ratio {
+            circle(s, p.x, p.y, 1.4, C_SEL);
+        }
+    }
+    let Some(crate::state::Drag::ShapeHandle { part, .. }) = &app.drag else {
+        return;
+    };
+    let label = match part {
+        crate::state::ShapePart::Ratio => match crate::state::star_props(n) {
+            Some((_, ratio)) => format!("{}%", (ratio * 100.0).round() as i64),
+            None => String::new(),
+        },
+        crate::state::ShapePart::Count => crate::state::shape_count(n)
+            .map(|c| format!("{c}"))
+            .unwrap_or_default(),
+    };
+    if label.is_empty() {
+        return;
+    }
+    let c = app.world_to_screen(m * Point::new(n.w / 2.0, n.h / 2.0));
+    let tw = app.fonts.measure(&label, T10, Wt::Reg) + 12.0;
+    let chip_x = c.x - tw / 2.0;
+    let chip_y = c.y - n.h * app.zoom / 2.0 - 26.0;
+    let chip = Rect::new(chip_x, chip_y, chip_x + tw, chip_y + 18.0);
+    fill_rrect(s, chip, R_SM, C_TEXT);
+    app.fonts
+        .text_center(s, chip, &label, T10, C_BASE, Wt::Med, true);
 }
 
 /// P10: the hover label for the control under the cursor. The
@@ -134,7 +329,7 @@ fn paint_tooltip(app: &App, s: &mut Scene) {
     if x + tw > app.win_w - 8.0 {
         x = (mouse.x - tw - 10.0).max(8.0);
     }
-    if y + th > app.win_h - 8.0 {
+    if y + th > app.status_band().y0 - 8.0 {
         y = (mouse.y - th - 12.0).max(8.0);
     }
     let tr = Rect::new(x, y, x + tw, y + th);
@@ -581,6 +776,235 @@ fn paint_smart_guides(app: &App, s: &mut Scene) {
 /// Prototype connection arrows ("noodles") between frames.
 /// Draws colored bezier curves connecting source nodes to their destinations,
 /// following Figma's prototype visualization style.
+/// One prototype connection on the page: the layer carrying the interaction
+/// and the frame it leads to. The canvas, the "select it and press Delete"
+/// path and the flow-label rule all read the same list.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Conn {
+    pub src: String,
+    pub dest: String,
+}
+
+/// Every connection on the page, in paint order. `effective_interactions` is
+/// the engine's own resolver, so a component instance's inherited interactions
+/// show up here exactly as they do in the viewer.
+pub(crate) fn page_connections(root: &x_native::Node) -> Vec<Conn> {
+    fn walk(n: &x_native::Node, out: &mut Vec<Conn>) {
+        for ix in x_native::effective_interactions(n) {
+            if let Some(dest) = proto_dest_of(&ix.action) {
+                out.push(Conn {
+                    src: n.id.clone(),
+                    dest,
+                });
+            }
+        }
+        for c in &n.children {
+            walk(c, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, &mut out);
+    out
+}
+
+/// Figma's anchor: the circle sits on the RIGHT edge of the layer's own box,
+/// vertically centred — the point the connection gestures take hold of. It is
+/// in the layer's OWN space, because the caller maps it through `node_world`,
+/// which already carries the layer's transform.
+pub(crate) fn conn_anchor_point(n: &x_native::Node) -> Point {
+    Point::new(n.w, n.h / 2.0)
+}
+
+/// The top-level frame containing a world point, with its box: where a snapped
+/// connection lands.
+pub(crate) fn frame_under(root: &x_native::Node, p: Point) -> Option<(String, Rect)> {
+    let mut found = None;
+    for c in &root.children {
+        if !matches!(c.kind, x_native::NodeKind::Frame { .. }) || !c.visible {
+            continue;
+        }
+        let r = Rect::new(
+            c.transform.x,
+            c.transform.y,
+            c.transform.x + c.w,
+            c.transform.y + c.h,
+        );
+        if r.contains(p) {
+            found = Some((c.id.clone(), r));
+        }
+    }
+    found
+}
+
+/// The top-level frame a layer lives in — including the layer itself when it
+/// IS a frame. A connection never snaps to this one during the drag: the drag
+/// starts inside it, so it would swallow every attempt.
+pub(crate) fn containing_frame(root: &x_native::Node, id: &str) -> Option<String> {
+    for c in &root.children {
+        if !matches!(c.kind, x_native::NodeKind::Frame { .. }) {
+            continue;
+        }
+        if c.id == id || find_node(c, id).is_some() {
+            return Some(c.id.clone());
+        }
+    }
+    None
+}
+
+/// A frame's flow name: "Flow 1" for the first flow on the page, in the order
+/// the frames appear — "Figma also added a small blue label to our home page
+/// frame and named it Flow 1." `None` when the frame starts no flow.
+pub(crate) fn flow_name(root: &x_native::Node, id: &str) -> Option<String> {
+    let mut n = 0;
+    for c in &root.children {
+        if c.is_starting_point {
+            n += 1;
+            if c.id == id {
+                return Some(format!("Flow {n}"));
+            }
+        }
+    }
+    None
+}
+
+/// Whether any layer on the page carries a connection.
+pub(crate) fn page_has_connections(root: &x_native::Node) -> bool {
+    !page_connections(root).is_empty()
+}
+
+/// Is `p` (SCREEN space) near the noodle from `a` to `b`? The noodle is the
+/// shape the canvas draws — out of the source, across, and into the
+/// destination — so the hit test walks the same three segments.
+pub(crate) fn near_noodle(a: Point, b: Point, p: Point, tol: f64) -> bool {
+    let mid = (a.x + b.x) / 2.0;
+    let corners = [a, Point::new(mid, a.y), Point::new(mid, b.y), b];
+    corners
+        .windows(2)
+        .any(|pair| near_segment(pair[0], pair[1], p, tol))
+}
+
+/// Distance from `p` to the segment `s`–`e`, in the same units.
+fn near_segment(s: Point, e: Point, p: Point, tol: f64) -> bool {
+    let (dx, dy) = (e.x - s.x, e.y - s.y);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 <= 1e-9 {
+        0.0
+    } else {
+        (((p.x - s.x) * dx + (p.y - s.y) * dy) / len2).clamp(0.0, 1.0)
+    };
+    let (cx, cy) = (s.x + dx * t, s.y + dy * t);
+    ((p.x - cx).powi(2) + (p.y - cy).powi(2)).sqrt() <= tol
+}
+
+/// The world point the pointer would snap to: the connection's own anchor.
+fn conn_world(app: &App, id: &str) -> Option<Point> {
+    let doc = app.doc_opt()?;
+    let root = &doc.editor_ref().root;
+    let n = find_node(root, id)?;
+    crate::run::node_world(root, id).map(|m| m * conn_anchor_point(n))
+}
+
+/// Figma's connection anchor: on the Prototype tab a blue circle sits on the
+/// selected layer's edge, and "if we hover over it, it changes to a blue plus
+/// that we can use to add a new connection" — the press on that plus is the
+/// first step of the drag, so pressing it arms the gesture.
+fn paint_conn_anchor(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    // the same shared-borrow read the noodle painter does: this one only has
+    // `&mut App` because it records the hit zone
+    let on_proto_tab = app
+        .doc_opt()
+        .map(|d| d.right_tab == RightTab::Prototype)
+        .unwrap_or(false);
+    if !on_proto_tab {
+        return;
+    }
+    let Some(id) = app.doc_ref().selected_id() else {
+        return;
+    };
+    let Some(p) = conn_world(app, &id) else {
+        return;
+    };
+    let c = app.world_to_screen(p);
+    let hovered = ((app.mouse.x - c.x).powi(2) + (app.mouse.y - c.y).powi(2)).sqrt() <= 12.0;
+    if hovered {
+        // the plus: this is the handle you drag towards the destination
+        circle(s, c.x, c.y, 7.5, C_SEL);
+        let half = ICON_XS / 2.0;
+        draw_icon(s, "plus", c.x - half, c.y - half, ICON_XS, C_ON_ACCENT);
+        let r = Rect::new(c.x - 7.0, c.y - 7.0, c.x + 7.0, c.y + 7.0);
+        hit.push((r, Action::ConnMenu));
+        // and the hint, while the pointer is on it
+        let tw = app.fonts.measure("Drag to connect", T10, Wt::Reg) + 12.0;
+        let chip = Rect::new(c.x + 12.0, c.y - 10.0, c.x + 12.0 + tw, c.y + 10.0);
+        fill_rrect(s, chip, R_SM, C_TEXT);
+        app.fonts.text(
+            s,
+            chip.x0 + 6.0,
+            chip.y0 + 4.0,
+            "Drag to connect",
+            T10,
+            C_BASE,
+            Wt::Reg,
+        );
+    } else {
+        circle(s, c.x, c.y, 5.0, C_SEL);
+        ring(s, c.x, c.y, 5.0, C_ON_ACCENT, 1.0);
+    }
+}
+
+/// The noodle being dragged: a straight blue line to the pointer, snapped to
+/// the frame under it when there is one — and the destination outlined, the
+/// moment it is a candidate.
+fn paint_conn_drag(app: &App, s: &mut Scene) {
+    if let Some(crate::state::Drag::ProtoConnect { src, target, .. }) = &app.drag {
+        let Some(a) = conn_world(app, src) else {
+            return;
+        };
+        let a = app.world_to_screen(a);
+        let (b, aimed) = match target {
+            Some(id) => match conn_world(app, id) {
+                Some(p) => (app.world_to_screen(p), Some(id.as_str())),
+                None => (app.mouse, None),
+            },
+            None => (app.mouse, None),
+        };
+        line(s, a.x, a.y, b.x, b.y, C_SEL, 2.0);
+        circle(s, a.x, a.y, 5.0, C_SEL);
+        // the arrowhead
+        let (dx, dy) = (b.x - a.x, b.y - a.y);
+        let len = (dx * dx + dy * dy).sqrt().max(1e-6);
+        let (ux, uy) = (dx / len, dy / len);
+        let (px, py) = (-uy, ux);
+        let head = 8.0;
+        line(
+            s,
+            b.x - ux * head + px * head * 0.5,
+            b.y - uy * head + py * head * 0.5,
+            b.x,
+            b.y,
+            C_SEL,
+            2.0,
+        );
+        line(
+            s,
+            b.x - ux * head - px * head * 0.5,
+            b.y - uy * head - py * head * 0.5,
+            b.x,
+            b.y,
+            C_SEL,
+            2.0,
+        );
+        if let Some(id) = aimed {
+            let doc = app.doc_ref();
+            if let Some(n) = find_node(&doc.editor_ref().root, id) {
+                let p0 = app.world_to_screen(Point::new(n.transform.x, n.transform.y));
+                let p1 = app.world_to_screen(Point::new(n.transform.x + n.w, n.transform.y + n.h));
+                stroke_rect(s, Rect::new(p0.x, p0.y, p1.x, p1.y), C_SEL, 2.0);
+            }
+        }
+    }
+}
+
 fn paint_proto_connections(app: &App, s: &mut Scene) {
     // Only show connections when on the Prototype tab and we have a selection.
     // `app.doc()` takes `&mut self` and this painter only holds `&App`, so the
@@ -626,6 +1050,8 @@ fn paint_proto_connections(app: &App, s: &mut Scene) {
     }
 
     // Draw each connection as a curved arrow
+    let connections = page_connections(root);
+    let selected = app.conn_sel.and_then(|i| connections.get(i)).cloned();
     for (source_id, ix) in &all_interactions {
         let dest_id = match &ix.action {
             x_native::Action::Navigate { destination } => Some(destination.as_str()),
@@ -664,10 +1090,18 @@ fn paint_proto_connections(app: &App, s: &mut Scene) {
 
         // Draw bezier curve (simplified as a line with control points)
         let mid_x = (x0 + x1) / 2.0;
-        let color = crate::theme::C_SNAP; // Use the snap color (blue/purple)
-        line(s, x0, y0, mid_x, y0, color, 1.5);
-        line(s, mid_x, y0, mid_x, y1, color, 1.5);
-        line(s, mid_x, y1, x1, y1, color, 1.5);
+        let mut color = crate::theme::C_SNAP; // Use the snap color (blue/purple)
+        let mut weight = 1.5;
+        // the connection a press selected draws bold: Delete acts on it
+        if let Some(sel) = &selected {
+            if sel.src == *source_id && sel.dest == dest_id {
+                color = C_SEL;
+                weight = 2.5;
+            }
+        }
+        line(s, x0, y0, mid_x, y0, color, weight);
+        line(s, mid_x, y0, mid_x, y1, color, weight);
+        line(s, mid_x, y1, x1, y1, color, weight);
 
         // Draw arrowhead at destination
         let arrow_size = 6.0;
@@ -693,6 +1127,42 @@ fn paint_proto_connections(app: &App, s: &mut Scene) {
 
         // Draw small circle at source
         circle(s, x0, y0, 4.0, color);
+    }
+
+    // "Figma also added a small blue label to our home page frame and named it
+    // Flow 1" — the label belongs to the frame the flow STARTS from, so it
+    // appears with the flow's first connection and names the flow, not the
+    // connection.
+    let mut drawn: Vec<String> = Vec::new();
+    for conn in &connections {
+        if drawn.contains(&conn.src) {
+            continue;
+        }
+        drawn.push(conn.src.clone());
+        let Some(name) = flow_name(root, &conn.src) else {
+            continue;
+        };
+        let Some(rect) = find_node_bounds(root, &conn.src) else {
+            continue;
+        };
+        let p0 = app.world_to_screen(Point::new(rect.x0, rect.y0));
+        let p1 = app.world_to_screen(Point::new(rect.x1, rect.y1));
+        let b = Rect::new(p0.x, p0.y, p1.x, p1.y);
+        if !b.contains(app.mouse) || app.flow.is_some() {
+            continue;
+        }
+        let tw = app.fonts.measure(&name, T10, Wt::Med) + 14.0;
+        let chip = Rect::new(b.x0, b.y0 - 20.0, b.x0 + tw, b.y0 - 2.0);
+        fill_rrect(s, chip, R_SM, C_SEL);
+        app.fonts.text(
+            s,
+            chip.x0 + 7.0,
+            chip.y0 + 3.0,
+            &name,
+            T10,
+            C_ON_ACCENT,
+            Wt::Med,
+        );
     }
 }
 
@@ -926,7 +1396,10 @@ fn paint_context_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         .x
         .min(reg.canvas.x1 - w - 4.0)
         .max(reg.canvas.x0 + 4.0);
-    let my = anchor.y.min(app.win_h - h - 4.0).max(reg.canvas.y0 + 4.0);
+    let my = anchor
+        .y
+        .min(app.status_band().y0 - h - 4.0)
+        .max(reg.canvas.y0 + 4.0);
     let panel = Rect::new(mx, my, mx + w, my + h);
     elev_shadow(s, panel, 10.0, Elevation::Floating);
     fill_rrect(s, panel, R_LG, C_FIELD);
@@ -948,9 +1421,10 @@ fn paint_context_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
                     fill_rrect(s, r, R_MD, C_FIELD_2);
                 }
                 let ic = if *enabled { C_TEXT } else { C_DIM };
+                let lab: &str = action.dynamic_label().unwrap_or(action.label());
                 draw_icon(s, action.icon(), r.x0 + 8.0, r.y0 + 7.0, ICON_SM, ic);
                 app.fonts
-                    .text(s, r.x0 + 30.0, r.y0 + 6.8, action.label(), T11, ic, Wt::Reg);
+                    .text(s, r.x0 + 30.0, r.y0 + 6.8, lab, T11, ic, Wt::Reg);
                 if let Some(sc) = action.shortcut() {
                     app.fonts.text_right(
                         s,
@@ -1002,7 +1476,7 @@ fn paint_context_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         } else {
             left
         };
-        let sy = (pr.y0 + 2.0).min(app.win_h - sh - 4.0);
+        let sy = (pr.y0 + 2.0).min(app.status_band().y0 - sh - 4.0);
         let sp = Rect::new(sx, sy, sx + w, sy + sh);
         elev_shadow(s, sp, 10.0, Elevation::Floating);
         fill_rrect(s, sp, R_LG, C_FIELD);
@@ -1016,9 +1490,10 @@ fn paint_context_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
                     fill_rrect(s, r, R_MD, C_FIELD_2);
                 }
                 let ic = if *enabled { C_TEXT } else { C_DIM };
+                let lab: &str = action.dynamic_label().unwrap_or(action.label());
                 draw_icon(s, action.icon(), r.x0 + 8.0, r.y0 + 7.0, ICON_SM, ic);
                 app.fonts
-                    .text(s, r.x0 + 30.0, r.y0 + 6.8, action.label(), T11, ic, Wt::Reg);
+                    .text(s, r.x0 + 30.0, r.y0 + 6.8, lab, T11, ic, Wt::Reg);
                 if let Some(sc) = action.shortcut() {
                     app.fonts.text_right(
                         s,
@@ -1092,7 +1567,7 @@ fn paint_page_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) 
     let row_h = MENU_ROW_H;
     let h = items.len() as f64 * row_h + 10.0;
     let mx = anchor.x.min(app.win_w - w - 4.0).max(4.0);
-    let my = anchor.y.min(app.win_h - h - 4.0).max(4.0);
+    let my = anchor.y.min(app.status_band().y0 - h - 4.0).max(4.0);
     let panel = Rect::new(mx, my, mx + w, my + h);
     elev_shadow(s, panel, 10.0, Elevation::Floating);
     fill_rrect(s, panel, R_LG, C_FIELD);
@@ -1580,7 +2055,7 @@ fn paint_nav_bar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     }
 
     // Spacer to push notifications to bottom
-    y = app.win_h - 52.0;
+    y = nr.y1 - 52.0;
 
     // Notifications bell at bottom
     let bell_r = Rect::new(nr.x0 + 4.0, y, nr.x1 - 4.0, y + 40.0);
@@ -1636,10 +2111,24 @@ fn paint_app_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let my = reg.nav_bar.y0 + 8.0;
     let mw = APP_MENU_WIDTH;
     // P14: every item is wired — file items route to the same commands as
-    // their shortcuts; items without an implementation were removed
+    // their shortcuts; items without an implementation were removed.
+    // The theme rows name the palettes and tick the active one: the old
+    // single "Dark mode" row *cycled* them, so a click meant to switch the
+    // app to dark could land on Daylight. Two rows, because two palettes
+    // ship — the index of every row below is what `AppMenuItem` dispatches,
+    // so a row removed here is a row removed in `run.rs` too.
+    let active = crate::theme::active_theme();
+    let tick = move |id: x_native::ui::ThemeId| -> &'static str {
+        if active == id {
+            "✓"
+        } else {
+            ""
+        }
+    };
     let items: Vec<(&str, &str, bool)> = vec![
         ("New file", "⌘N", true),
         ("Open file…", "⌘O", true),
+        ("Place image…", "⇧⌘K", true),
         ("", "", false), // separator
         ("Save", "⌘S", true),
         ("Save as…", "⇧⌘S", true),
@@ -1650,7 +2139,18 @@ fn paint_app_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         ("Export as…", "⇧⌘E", true),
         ("Find…", "⇧⌘F", true),
         ("", "", false), // separator
-        ("Dark mode", "", true),
+        (
+            "Theme: Graphite (dark)",
+            tick(x_native::ui::ThemeId::Graphite),
+            true,
+        ),
+        (
+            "Theme: Daylight (light)",
+            tick(x_native::ui::ThemeId::Daylight),
+            true,
+        ),
+        ("", "", false), // separator
+        ("Welcome & shortcuts", "?", true),
     ];
     let row_h = DROPDOWN_ROW_H;
     let mut h = 8.0;
@@ -1728,7 +2228,7 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         s,
         "search",
         search_r.x0 + 6.0,
-        search_r.y0 + 5.0,
+        glyph_top(search_r, ICON_SM),
         ICON_SM,
         C_DIM,
     );
@@ -1754,7 +2254,7 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
     app.fonts.text(
         s,
         search_r.x0 + 24.0,
-        search_r.y0 + 4.0,
+        line_top(search_r, T11),
         &query,
         T11,
         qc,
@@ -1772,7 +2272,7 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         app.fonts.text(
             s,
             search_r.x1 - 60.0 - mtw,
-            search_r.y0 + 5.0,
+            line_top(search_r, T10),
             &match_text,
             T10,
             C_DIM,
@@ -1791,12 +2291,19 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
             search_r.x1 - 4.0,
             search_r.y1 - 2.0,
         );
-        draw_icon(s, "chevron-up", prev_r.x0, prev_r.y0 + 2.0, ICON_XS, C_DIM);
+        draw_icon(
+            s,
+            "chevron-up",
+            glyph_left(prev_r, ICON_XS),
+            glyph_top(prev_r, ICON_XS),
+            ICON_XS,
+            C_DIM,
+        );
         draw_icon(
             s,
             "chevron-down",
-            next_r.x0,
-            next_r.y0 + 2.0,
+            glyph_left(next_r, ICON_XS),
+            glyph_top(next_r, ICON_XS),
             ICON_XS,
             C_DIM,
         );
@@ -1807,7 +2314,14 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
     }
     // Close button
     let close_r = Rect::new(fx + fw - 20.0, fy + 2.0, fx + fw - 4.0, fy + 18.0);
-    draw_icon(s, "x", close_r.x0 + 4.0, close_r.y0 + 4.0, ICON_XS, C_DIM);
+    draw_icon(
+        s,
+        "x",
+        glyph_left(close_r, ICON_XS),
+        glyph_top(close_r, ICON_XS),
+        ICON_XS,
+        C_DIM,
+    );
     tip(app, close_r, "Close find & replace");
     hit.push((close_r, Action::CloseFind));
 
@@ -1839,7 +2353,7 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         app.fonts.text(
             s,
             replace_r.x0 + 8.0,
-            replace_r.y0 + 4.0,
+            line_top(replace_r, T11),
             &rep_text,
             T11,
             rc,
@@ -1855,7 +2369,7 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         app.fonts.text(
             s,
             repl_all_r.x0 + 6.0,
-            repl_all_r.y0 + 3.0,
+            line_top(repl_all_r, T10),
             "Replace all",
             T10,
             C_TEXT,
@@ -1868,7 +2382,7 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         app.fonts.text(
             s,
             repl_r.x0 + 6.0,
-            repl_r.y0 + 3.0,
+            line_top(repl_r, T10),
             "Replace",
             T10,
             C_TEXT,
@@ -1891,7 +2405,7 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
     app.fonts.text(
         s,
         case_r.x0 + 2.0,
-        case_r.y0,
+        line_top(case_r, 9.0),
         "Aa",
         9.0,
         if app.find_replace.case_sensitive {
@@ -1929,7 +2443,7 @@ fn paint_notifications(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action
     }
     let reg = app.editor_regions();
     let nx = reg.nav_bar.x1 + 4.0;
-    let ny = app.win_h - 200.0;
+    let ny = reg.nav_bar.y1 - 200.0;
     let nw = 280.0;
     let nh = 180.0;
     let panel = Rect::new(nx, ny, nx + nw, ny + nh);
@@ -2015,8 +2529,9 @@ fn paint_notifications(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action
 
 fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let reg = app.editor_regions();
-    // If UI is minimized, hide the sidebar
-    if app.ui_minimized {
+    // If UI is minimized, hide the sidebar — `left_minimized` is the ⇧⌘\
+    // half of the same idea: the LEFT panel goes, the inspector stays
+    if app.ui_minimized || app.left_minimized {
         return;
     }
     let sidebar = reg.sidebar;
@@ -2030,23 +2545,22 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     // x-offset: sidebar starts at nav_bar_w (old code assumed x=0)
     let sx = sidebar.x0;
 
-    // DRAFTS header
-    fill_rrect(
+    // DRAFTS header — one 16px box; the glyph and the label's line box are
+    // both centred in it instead of being hand-placed (the glyph used to sit
+    // on the box's bottom edge).
+    let dbox = Rect::new(sx + 12.0, y0 + 12.0, sx + 28.0, y0 + 28.0);
+    fill_rrect(s, dbox, R_SM, C_FIELD);
+    stroke_rrect(s, dbox, R_SM, C_LINE, 1.0);
+    draw_icon(
         s,
-        Rect::new(sx + 12.0, y0 + 12.0, sx + 28.0, y0 + 28.0),
-        R_SM,
-        C_FIELD,
+        "box",
+        glyph_left(dbox, ICON_XS),
+        glyph_top(dbox, ICON_XS),
+        ICON_XS,
+        C_DIM,
     );
-    stroke_rrect(
-        s,
-        Rect::new(sx + 12.0, y0 + 12.0, sx + 28.0, y0 + 28.0),
-        R_SM,
-        C_LINE,
-        1.0,
-    );
-    draw_icon(s, "box", sx + 16.0, y0 + 16.0, ICON_XS, C_DIM);
     app.fonts
-        .micro_label(s, sx + 36.0, y0 + 13.3, "DRAFTS", C_DIM, Wt::Med);
+        .micro_label(s, sx + 36.0, line_top(dbox, T10), "DRAFTS", C_DIM, Wt::Med);
 
     // file name row (editable) — the mock's file-name-text, independent
     // from the active tab name
@@ -2057,6 +2571,9 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             d.dirty,
         )
     };
+    // One 23.5px row (75…98.5): the line box, the draft dot and the pencil
+    // all centre on its middle — the offsets below are row-relative, not
+    // eyeballed (row centre = ny + 8.75).
     let ny = y0 + 42.0; // name text box top 78
     let nr = Rect::new(sx + 8.0, ny - 3.0, lw - 8.0, ny + 20.5);
     if app.field.as_ref().map(|f| f.id) == Some(FieldId::DocName) {
@@ -2074,20 +2591,41 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             C_LINE_2,
             1.0,
         );
-        app.fonts
-            .text(s, sx + 18.0, ny, &editing, T11, C_TEXT, Wt::Med);
+        app.fonts.text(
+            s,
+            sx + 18.0,
+            line_top(nr, T11),
+            &editing,
+            T11,
+            C_TEXT,
+            Wt::Med,
+        );
     } else {
         if hover(app, nr) {
             // .editable:hover — bg #1A1A1A, border #2A2A2A, radius 4
             fill_rrect(s, nr, R_SM, C_FIELD);
             stroke_rrect(s, nr, R_SM, C_LINE_2, 1.0);
         }
-        circle(s, sx + 15.0, ny + 8.3, 3.0, C_DRAFT_DOT);
+        circle(s, sx + 15.0, nr.center().y, 3.0, C_DRAFT_DOT);
         let shown = app.fonts.truncate(&name, T11, Wt::Med, lw - 24.0 - 40.0);
-        app.fonts
-            .text(s, sx + 26.0, ny, &shown, T11, C_TEXT, Wt::Med);
+        app.fonts.text(
+            s,
+            sx + 26.0,
+            line_top(nr, T11),
+            &shown,
+            T11,
+            C_TEXT,
+            Wt::Med,
+        );
         if hover(app, nr) {
-            draw_icon(s, "pencil", lw - 25.0, ny + 2.3, ICON_XS, C_DIM);
+            draw_icon(
+                s,
+                "pencil",
+                lw - 25.0,
+                glyph_top(nr, ICON_XS),
+                ICON_XS,
+                C_DIM,
+            );
         }
     }
     hit.push((nr, Action::RenameStart));
@@ -2178,13 +2716,25 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         return;
     }
 
+    // LIBRARY and TOKENS own the band below the pill tabs. They used to be
+    // painted *under* the pages band — at an absolute x = 12, i.e. over the
+    // nav rail, and 50px lower than the tab strip — so the PAGES list, the
+    // LAYERS header and the tree all landed on top of them. One band at a
+    // time now: the tab picks the content, and the content starts where the
+    // Layers tab's first section label starts.
     let y = y0 + 120.5; // PAGES label top 156.5
-
-    if app.doc().left_tab == LeftTab::Assets {
-        paint_assets(app, s, hit, y0 + 108.0, lw);
-    }
-    if app.doc().left_tab == LeftTab::Tokens {
-        paint_tokens(app, s, hit, y0 + 108.0, lw);
+    match app.doc().left_tab {
+        LeftTab::Assets => {
+            paint_assets(app, s, hit, y, sx, lw);
+            app.page_field_rect = None;
+            return;
+        }
+        LeftTab::Tokens => {
+            paint_tokens(app, s, hit, y, sx, lw);
+            app.page_field_rect = None;
+            return;
+        }
+        LeftTab::Layers => {}
     }
 
     // PAGES section — a real page LIST (viewport audit P2): every page is
@@ -2193,29 +2743,36 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     // fixed single field) and the LAYERS band below anchors to its bottom.
     app.fonts
         .micro_label(s, sx + 12.0, y, "PAGES", C_DIM, Wt::Med);
-    let addp = Rect::new(lw - 25.0, y + 0.8, lw - 13.0, y + 12.8);
-    draw_icon(s, "plus", addp.x0, y + 0.8, ICON_XS, C_DIM);
+    // the add button is exactly one line box tall, so its glyph centres on
+    // the PAGES label it sits beside
+    let addp = Rect::new(lw - 26.0, y, lw - 14.0, y + T10 * CSS_LH);
+    draw_icon(
+        s,
+        "plus",
+        glyph_left(addp, ICON_XS),
+        glyph_top(addp, ICON_XS),
+        ICON_XS,
+        C_DIM,
+    );
     tip(app, addp, "Add page");
     hit.push((addp, Action::AddPage));
 
     let page_count = app.doc().editors.len();
     let cur_page = app.doc().page;
     let rows = app.pages_rows();
-    // right-click zone = the whole band (paint + input share pages_rows)
-    let (bx0, by0) = (rows[0].1.x0, rows[0].1.y0);
-    let (bx1, by1) = (rows[rows.len() - 1].1.x1, rows[rows.len() - 1].1.y1);
-    app.page_field_rect = Some(Rect::new(bx0, by0, bx1, by1));
-    for (page_i, r) in rows {
-        let overflow = page_i >= page_count; // the "+N more" sentinel row
-        if overflow {
-            if hover(app, r) {
-                fill_rrect(s, r, R_PAGE, C_ROW_HOVER);
-            }
-            let more = format!("+{} more", page_count - 3);
-            app.fonts
-                .text(s, sx + 41.0, r.y0 + 5.2, &more, T11, C_DIM, Wt::Reg);
-            continue;
+    // Every page is reachable: the window follows the active page (the old
+    // `+N more` sentinel row was not a real page, so pages past the 3rd
+    // could not be selected, renamed or deleted).
+    // right-click zone = the whole band (paint + input share pages_rows). A
+    // document always has at least one page, but a corrupt load must not take
+    // the paint pass down with it.
+    match (rows.first(), rows.last()) {
+        (Some(first), Some(last)) => {
+            app.page_field_rect = Some(Rect::new(first.1.x0, first.1.y0, last.1.x1, last.1.y1));
         }
+        _ => app.page_field_rect = None,
+    }
+    for (page_i, r) in rows {
         let active = page_i == cur_page;
         if active || hover(app, r) {
             fill_rrect(s, r, R_PAGE, if active { C_FIELD_2 } else { C_ROW_HOVER });
@@ -2233,8 +2790,8 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             draw_icon(
                 s,
                 "file",
-                sx + 21.0,
-                r.y0 + 7.0,
+                glyph_left(thumb, ICON_XS),
+                glyph_top(thumb, ICON_XS),
                 ICON_XS,
                 if active { C_TEXT } else { C_DIM },
             );
@@ -2246,29 +2803,64 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             .get(page_i)
             .map(|p| p.name.clone())
             .unwrap_or_else(|| format!("Page {}", page_i + 1));
+        // Hit order inside the row matters: zones are scanned in REVERSE, so
+        // the row is registered FIRST and the specific zones on top of it —
+        // the ✕/rename below must beat `SelectPage`, never the other way
+        // round. (The trash used to be pushed before the row, which is why
+        // clicking Delete selected the page instead of deleting it — the same
+        // mistake the layer chevron had.)
+        hit.push((r, Action::SelectPage(page_i)));
         // inline rename state (opened from the page menu): the ACTIVE row
-        // shows the buffer; the Field hit zone is pushed BEFORE SelectPage
-        // so clicks still select
+        // shows the buffer, and the field zone sits above the row zone so a
+        // click puts the caret back in the name being renamed
         let field_id = app.field.as_ref().map(|f| f.id);
         if field_id == Some(FieldId::PageName) && active {
             let editing = app.field.as_ref().unwrap().buffer.clone();
-            app.fonts
-                .text(s, sx + 41.0, r.y0 + 5.2, &editing, T11, C_TEXT, Wt::Reg);
+            app.fonts.text(
+                s,
+                sx + 41.0,
+                line_top(r, T11),
+                &editing,
+                T11,
+                C_TEXT,
+                Wt::Reg,
+            );
             hit.push((r, Action::Field(FieldId::PageName)));
         } else {
             let max_nw = (r.x1 - sx - 41.0 - 26.0).max(16.0);
             let shown = app.fonts.truncate(&page_label, T11, Wt::Reg, max_nw);
             let shown_color = if active { C_TEXT } else { C_MUTED };
-            app.fonts
-                .text(s, sx + 41.0, r.y0 + 5.2, &shown, T11, shown_color, Wt::Reg);
+            app.fonts.text(
+                s,
+                sx + 41.0,
+                line_top(r, T11),
+                &shown,
+                T11,
+                shown_color,
+                Wt::Reg,
+            );
         }
-        if !active && hover(app, r) && page_count > 1 {
-            let tr = Rect::new(lw - 30.0, r.y0 + 5.0, lw - 12.0, r.y0 + 21.0);
-            draw_icon(s, "trash-2", tr.x0, r.y0 + 6.0, ICON_XS, C_DIM);
+        // the delete affordance appears on any row (the ACTIVE page is
+        // deletable too — Figma lets you delete the page you are on), but
+        // never when it would leave the document with no page at all
+        if hover(app, r) && page_count > 1 {
+            let tr = Rect::new(
+                lw - 30.0,
+                r.y0 + centre_in(16.0, r.height()),
+                lw - 12.0,
+                r.y0 + centre_in(16.0, r.height()) + 16.0,
+            );
+            draw_icon(
+                s,
+                "trash-2",
+                glyph_left(tr, ICON_XS),
+                glyph_top(tr, ICON_XS),
+                ICON_XS,
+                C_DIM,
+            );
             tip(app, tr, "Delete page");
             hit.push((tr, Action::DeletePage(page_i)));
         }
-        hit.push((r, Action::SelectPage(page_i)));
     }
 
     // divider + LAYERS header anchored to the measured band bottom (the
@@ -2276,23 +2868,41 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let band_bottom = app.pages_band_bottom();
     hline(s, sx, lw, band_bottom + 12.0, C_LINE);
     let ly = band_bottom + 25.0;
+    // One 16px header row holds the label and both buttons, so all three share
+    // a centre line; the label used to sit 2.5px lower than the buttons it is
+    // in line with (it was placed by top edge, not centre).
+    let hrow = Rect::new(sx + 12.0, ly - 3.0, lw, ly + 13.0);
     app.fonts
-        .micro_label(s, sx + 12.0, ly, "LAYERS", C_DIM, Wt::Med);
+        .micro_label(s, sx + 12.0, line_top(hrow, T10), "LAYERS", C_DIM, Wt::Med);
     // F8: the search icon was dead — it opens the tree search field
-    let srch = Rect::new(lw - 28.0, ly - 3.0, lw - 12.0, ly + 13.0);
+    let srch = Rect::new(lw - 28.0, hrow.y0, lw - 12.0, hrow.y1);
     if hover(app, srch) {
         fill_rrect(s, srch, R_SM, C_FIELD_2);
     }
-    draw_icon(s, "search", lw - 25.0, ly, ICON_XS, C_DIM);
+    draw_icon(
+        s,
+        "search",
+        glyph_left(srch, ICON_XS),
+        glyph_top(srch, ICON_XS),
+        ICON_XS,
+        C_DIM,
+    );
     tip(app, srch, "Search layers");
     hit.push((srch, Action::Field(FieldId::TreeSearch)));
     // F6: collapse-all (Figma parity) — the selection's ancestors stay
     // open; it sits left of search
-    let cpl = Rect::new(lw - 46.0, ly - 3.0, lw - 30.0, ly + 13.0);
+    let cpl = Rect::new(lw - 46.0, hrow.y0, lw - 30.0, hrow.y1);
     if hover(app, cpl) {
         fill_rrect(s, cpl, R_SM, C_FIELD_2);
     }
-    draw_icon(s, "chevrons-down", lw - 43.0, ly, ICON_XS, C_DIM);
+    draw_icon(
+        s,
+        "chevrons-down",
+        glyph_left(cpl, ICON_XS),
+        glyph_top(cpl, ICON_XS),
+        ICON_XS,
+        C_DIM,
+    );
     tip(app, cpl, "Collapse all layers");
     hit.push((cpl, Action::CollapseAllLayers));
 
@@ -2303,7 +2913,14 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     if search_open {
         let sr = Rect::new(sx + 4.0, ly + 12.0, sx + lw - 4.0, ly + 12.0 + 24.0);
         input_box(app, s, sr, 6.0);
-        draw_icon(s, "search", sr.x0 + 8.0, sr.y0 + 6.0, ICON_XS, C_DIM);
+        draw_icon(
+            s,
+            "search",
+            sr.x0 + 8.0,
+            glyph_top(sr, ICON_XS),
+            ICON_XS,
+            C_DIM,
+        );
         let q = if app.field.as_ref().map(|f| f.id) == Some(FieldId::TreeSearch) {
             app.field.as_ref().unwrap().buffer.clone()
         } else {
@@ -2313,13 +2930,27 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             let shown = app
                 .fonts
                 .truncate(&q, T11, Wt::Reg, (sr.width() - 40.0).max(16.0));
-            app.fonts
-                .text(s, sr.x0 + 26.0, sr.y0 + 6.5, &shown, T11, C_TEXT, Wt::Reg);
+            app.fonts.text(
+                s,
+                sr.x0 + 26.0,
+                line_top(sr, T11),
+                &shown,
+                T11,
+                C_TEXT,
+                Wt::Reg,
+            );
             let clr = Rect::new(sr.x1 - 20.0, sr.y0 + 2.0, sr.x1 - 6.0, sr.y1 - 2.0);
             if hover(app, clr) {
                 fill_rrect(s, clr, R_SM, C_FIELD_2);
             }
-            draw_icon(s, "x", clr.x0 + 2.0, clr.y0 + 2.0, ICON_XS, C_DIM);
+            draw_icon(
+                s,
+                "x",
+                glyph_left(clr, ICON_XS),
+                glyph_top(clr, ICON_XS),
+                ICON_XS,
+                C_DIM,
+            );
             hit.push((clr, Action::TreeSearchClear));
         }
         hit.push((sr, Action::Field(FieldId::TreeSearch)));
@@ -2327,196 +2958,177 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
 
     // tree (scrollable)
     let tree_top = band_bottom + 34.5 + if search_open { 30.0 } else { 0.0 };
-    let tree_bottom = app.win_h - 16.0;
+    let tree_bottom = app.status_band().y0 - 16.0;
     let scroll = app.doc().scroll_left;
-    if !app.doc().mock_layers.is_empty() {
-        // v45 mock: render the hardcoded layers array (same row geometry as
-        // the real tree)
-        let mocks = app.doc().mock_layers.clone();
-        // flat-array tree visibility: a row is hidden while any ancestor
-        // with a smaller indent is collapsed
-        let mut stack: Vec<(usize, bool)> = Vec::new();
-        let mut ry = tree_top - scroll;
-        let mut max_indent = 0usize;
-        let mut last_bottom = tree_top;
-        for (mi, mock) in mocks.iter().enumerate() {
-            while stack
-                .last()
-                .map(|(i, _)| *i >= mock.indent)
-                .unwrap_or(false)
+    let (rows, total_h) = collect_tree_rows(app, scroll, tree_bottom - tree_top);
+    let mut max_indent = 0usize;
+    let mut last_bottom = tree_top;
+    for row in &rows {
+        let ry = tree_top + row.index as f64 * (TREE_ROW_H + 1.0) - scroll;
+        let r = Rect::new(sx + 8.0, ry, lw - 8.0, ry + TREE_ROW_H);
+        if r.y1 >= tree_top && r.y0 <= tree_bottom {
+            max_indent = max_indent.max(row.indent);
+            last_bottom = r.y1;
+            let selected = row.selected;
+            // P5: a section (frame with children) keeps a subtle header
+            // band so the document's hierarchy reads at a glance; hover
+            // steps one surface level up instead of appearing from none.
+            if row.is_section {
+                fill_rrect(s, r, R_TREE, C_FIELD);
+            }
+            if selected {
+                fill_rrect(s, r, R_TREE, C_SEL_SOFT);
+            } else if hover(app, r) {
+                fill_rrect(
+                    s,
+                    r,
+                    R_TREE,
+                    if row.is_section {
+                        C_FIELD_2
+                    } else {
+                        C_ROW_HOVER
+                    },
+                );
+            }
+            // P12: live drag indicator — the dragged row lifts and
+            // the accent line/ring shows where it will land.
+            if let Some(Drag::TreeRow {
+                id: drag_row,
+                active: true,
+                over,
+                ..
+            }) = &app.drag
             {
-                stack.pop();
-            }
-            let visible = stack.iter().all(|(_, e)| *e);
-            if mock.has_children {
-                stack.push((mock.indent, mock.expanded));
-            }
-            if visible {
-                let r = Rect::new(sx + 8.0, ry, lw - 8.0, ry + TREE_ROW_H);
-                if r.y1 >= tree_top && r.y0 <= tree_bottom {
-                    max_indent = max_indent.max(mock.indent);
-                    last_bottom = r.y1;
-                    if mock.selected {
-                        fill_rrect(s, r, R_TREE, C_SEL_SOFT);
-                    }
-                    let ix = sx + 8.0 + 8.0 + mock.indent as f64 * TREE_INDENT;
-                    if mock.has_children {
-                        let chev = if mock.expanded {
-                            "chevron-down"
-                        } else {
-                            "chevron-right"
-                        };
-                        let cr = Rect::new(ix, r.y0, ix + 14.0, r.y1);
-                        draw_icon(s, chev, ix + 1.0, r.y0 + 5.0, ICON_XS, C_DIM);
-                        hit.push((cr, Action::TreeToggle(format!("mock:{mi}"))));
-                    }
-                    draw_icon(s, mock.icon, ix + 14.0, r.y0 + 5.0, ICON_XS, C_DIM);
-                    let nx = ix + 14.0 + 12.0 + 4.0;
-                    let max_nw = lw - 8.0 - nx - 8.0;
-                    let shown = app
-                        .fonts
-                        .truncate(&mock.name, T11, Wt::Reg, max_nw.max(16.0));
-                    app.fonts.text(
-                        s,
-                        nx,
-                        r.y0 + (TREE_ROW_H - T11 * CSS_LH) / 2.0,
-                        &shown,
-                        T11,
-                        if mock.selected { C_TEXT } else { C_ZINC_400 },
-                        Wt::Reg,
-                    );
-                    hit.push((r, Action::TreeRow(format!("mock:{mi}"))));
+                if drag_row == &row.id {
+                    stroke_rrect(s, r, R_TREE, C_ACCENT, 1.5);
                 }
-                ry += TREE_ROW_H + 1.0;
-            }
-        }
-        tree_indent_guides(s, sx + 16.0, tree_top, last_bottom, max_indent);
-        app.scaled = false;
-    } else {
-        let (rows, total_h) = collect_tree_rows(app, scroll, tree_bottom - tree_top);
-        let mut max_indent = 0usize;
-        let mut last_bottom = tree_top;
-        for row in &rows {
-            let ry = tree_top + row.index as f64 * (TREE_ROW_H + 1.0) - scroll;
-            let r = Rect::new(sx + 8.0, ry, lw - 8.0, ry + TREE_ROW_H);
-            if r.y1 >= tree_top && r.y0 <= tree_bottom {
-                max_indent = max_indent.max(row.indent);
-                last_bottom = r.y1;
-                let selected = row.selected;
-                // P5: a section (frame with children) keeps a subtle header
-                // band so the document's hierarchy reads at a glance; hover
-                // steps one surface level up instead of appearing from none.
-                if row.is_section {
-                    fill_rrect(s, r, R_TREE, C_FIELD);
-                }
-                if selected {
-                    fill_rrect(s, r, R_TREE, C_SEL_SOFT);
-                } else if hover(app, r) {
-                    fill_rrect(
-                        s,
-                        r,
-                        R_TREE,
-                        if row.is_section {
-                            C_FIELD_2
-                        } else {
-                            C_ROW_HOVER
-                        },
-                    );
-                }
-                // P12: live drag indicator — the dragged row lifts and
-                // the accent line/ring shows where it will land.
-                if let Some(Drag::TreeRow {
-                    id: drag_row,
-                    active: true,
-                    over,
-                    ..
-                }) = &app.drag
-                {
-                    if drag_row == &row.id {
-                        stroke_rrect(s, r, R_TREE, C_ACCENT, 1.5);
-                    }
-                    if let Some(drop) = over {
-                        if drop.row == row.id {
-                            match drop.zone {
-                                0 => fill_rect(
-                                    s,
-                                    Rect::new(r.x0, r.y0 - 1.5, r.x1, r.y0 + 0.5),
-                                    C_ACCENT,
-                                ),
-                                2 => fill_rect(
-                                    s,
-                                    Rect::new(r.x0, r.y1 - 0.5, r.x1, r.y1 + 1.5),
-                                    C_ACCENT,
-                                ),
-                                _ => stroke_rrect(s, r, R_TREE, C_ACCENT, 1.5),
-                            }
+                if let Some(drop) = over {
+                    if drop.row == row.id {
+                        match drop.zone {
+                            0 => fill_rect(
+                                s,
+                                Rect::new(r.x0, r.y0 - 1.5, r.x1, r.y0 + 0.5),
+                                C_ACCENT,
+                            ),
+                            2 => fill_rect(
+                                s,
+                                Rect::new(r.x0, r.y1 - 0.5, r.x1, r.y1 + 1.5),
+                                C_ACCENT,
+                            ),
+                            _ => stroke_rrect(s, r, R_TREE, C_ACCENT, 1.5),
                         }
                     }
                 }
-                let ix = sx + 8.0 + 8.0 + row.indent as f64 * TREE_INDENT;
-                if row.has_children {
-                    let chev = if row.expanded {
-                        "chevron-down"
-                    } else {
-                        "chevron-right"
-                    };
-                    let cr = Rect::new(ix, r.y0, ix + 14.0, r.y1);
-                    draw_icon(s, chev, ix + 1.0, r.y0 + 5.0, ICON_XS, C_DIM);
-                    hit.push((cr, Action::TreeToggle(row.id.clone())));
+            }
+            let ix = sx + 8.0 + 8.0 + row.indent as f64 * TREE_INDENT;
+            // Figma's disclosure: the chevron is its OWN target, so a click
+            // on it folds the node instead of selecting the row. Hit zones
+            // are scanned in reverse (most specific last) and the chevron
+            // sits inside the row rect — so it is registered *after* the row
+            // below, not before it.
+            let chevron = if row.has_children {
+                let chev = if row.expanded {
+                    "chevron-down"
                 } else {
-                    let _ = 12.0; // 12px spacer per the HTML
-                }
-                draw_icon(s, row.icon, ix + 14.0, r.y0 + 5.0, ICON_XS, C_DIM);
-                let nx = ix + 14.0 + 12.0 + 4.0;
-                let max_nw = lw - 8.0 - nx - 8.0;
-                let shown = app
-                    .fonts
-                    .truncate(&row.name, T11, Wt::Reg, max_nw.max(16.0));
-                app.fonts.text(
+                    "chevron-right"
+                };
+                let cr = Rect::new(ix, r.y0, ix + 14.0, r.y1);
+                draw_icon(
                     s,
-                    nx,
-                    r.y0 + (TREE_ROW_H - T11 * CSS_LH) / 2.0,
-                    &shown,
-                    T11,
-                    if selected { C_TEXT } else { C_ZINC_400 },
-                    Wt::Reg,
+                    chev,
+                    glyph_left(cr, ICON_XS),
+                    glyph_top(cr, ICON_XS),
+                    ICON_XS,
+                    C_DIM,
                 );
-                hit.push((r, Action::TreeRow(row.id.clone())));
-                // Figma row toggles: eye / padlock on hover (persistent when
-                // the state is on); sit above the row hit (reversed scan)
-                let (locked, hidden) = (row.locked, row.hidden);
-                let row_hover = hover(app, r);
-                if row_hover || hidden {
-                    let ey = Rect::new(lw - 8.0 - 34.0, r.y0 + 2.0, lw - 8.0 - 20.0, r.y1 - 2.0);
-                    draw_icon(
-                        s,
-                        if hidden { "eye-off" } else { "eye" },
-                        ey.x0 + 1.0,
-                        r.y0 + 5.0,
-                        ICON_XS,
-                        if hidden { C_TEXT } else { C_DIM },
-                    );
-                    tip(app, ey, "Show / hide layer");
-                    hit.push((ey, Action::TreeVisible(row.id.clone())));
-                }
-                if row_hover || locked {
-                    let lr = Rect::new(lw - 8.0 - 18.0, r.y0 + 2.0, lw - 8.0 - 4.0, r.y1 - 2.0);
-                    draw_icon(
-                        s,
-                        "lock",
-                        lr.x0 + 1.0,
-                        r.y0 + 5.0,
-                        ICON_XS,
-                        if locked { C_TEXT } else { C_DIM },
-                    );
-                    tip(app, lr, "Lock / unlock layer");
-                    hit.push((lr, Action::TreeLock(row.id.clone())));
-                }
+                Some(cr)
+            } else {
+                None
+            };
+            draw_icon(
+                s,
+                row.icon,
+                ix + 14.0,
+                glyph_top(r, ICON_XS),
+                ICON_XS,
+                C_DIM,
+            );
+            let nx = ix + 14.0 + 12.0 + 4.0;
+            let max_nw = lw - 8.0 - nx - 8.0;
+            // Inline rename (Figma: double-click a layer name). The field's
+            // buffer is what the user is typing, so it wins over the node's
+            // stored name; the name zone is registered AFTER the row so the
+            // reverse scan finds it first.
+            let editing = app
+                .field
+                .as_ref()
+                .is_some_and(|f| f.id == FieldId::LayerName)
+                && app.layer_edit_id.as_deref() == Some(row.id.as_str());
+            let shown = if editing {
+                app.field.as_ref().unwrap().buffer.clone()
+            } else {
+                app.fonts
+                    .truncate(&row.name, T11, Wt::Reg, max_nw.max(16.0))
+            };
+            if editing {
+                // a real input box, so the edit state is unmistakable
+                let er = Rect::new(nx - 4.0, r.y0 + 1.0, lw - 12.0, r.y1 - 1.0);
+                fill_rrect(s, er, R_SM, C_FIELD);
+                stroke_rrect(s, er, R_SM, C_ACCENT, 1.0);
+            }
+            app.fonts.text(
+                s,
+                nx,
+                line_top(r, T11),
+                &shown,
+                T11,
+                if selected || editing {
+                    C_TEXT
+                } else {
+                    C_ZINC_400
+                },
+                Wt::Reg,
+            );
+            hit.push((r, Action::TreeRow(row.id.clone())));
+            let name_zone = Rect::new(nx, r.y0, lw - 12.0, r.y1);
+            hit.push((name_zone, Action::LayerRename(row.id.clone())));
+            if let Some(cr) = chevron {
+                hit.push((cr, Action::TreeToggle(row.id.clone())));
+            }
+            // Figma row toggles: eye / padlock on hover (persistent when
+            // the state is on); they sit above the row hit (reversed scan)
+            let (locked, hidden) = (row.locked, row.hidden);
+            let row_hover = hover(app, r);
+            if row_hover || hidden {
+                let ey = Rect::new(lw - 8.0 - 34.0, r.y0 + 2.0, lw - 8.0 - 20.0, r.y1 - 2.0);
+                draw_icon(
+                    s,
+                    if hidden { "eye-off" } else { "eye" },
+                    glyph_left(ey, ICON_XS),
+                    glyph_top(ey, ICON_XS),
+                    ICON_XS,
+                    if hidden { C_TEXT } else { C_DIM },
+                );
+                tip(app, ey, "Show / hide layer");
+                hit.push((ey, Action::TreeVisible(row.id.clone())));
+            }
+            if row_hover || locked {
+                let lr = Rect::new(lw - 8.0 - 18.0, r.y0 + 2.0, lw - 8.0 - 4.0, r.y1 - 2.0);
+                draw_icon(
+                    s,
+                    "lock",
+                    glyph_left(lr, ICON_XS),
+                    glyph_top(lr, ICON_XS),
+                    ICON_XS,
+                    if locked { C_TEXT } else { C_DIM },
+                );
+                tip(app, lr, "Lock / unlock layer");
+                hit.push((lr, Action::TreeLock(row.id.clone())));
             }
         }
-        tree_indent_guides(s, sx + 16.0, tree_top, last_bottom, max_indent);
-        app.scaled = total_h > tree_bottom - tree_top;
     }
+    tree_indent_guides(s, sx + 16.0, tree_top, last_bottom, max_indent);
+    app.scaled = total_h > tree_bottom - tree_top;
 }
 
 /// Faint vertical guides at every indent depth below the root — the
@@ -2570,6 +3182,31 @@ fn collect_tree_rows(app: &App, scroll: f64, height: f64) -> (Vec<RowRef>, f64) 
         .iter()
         .map(String::as_str)
         .collect();
+    // Component sets read as ONE row (Figma): the frame is the set, its
+    // variants are its children, and a variant's row shows its own value
+    // ("Primary") rather than the component name ("Button/Primary").
+    let mut set_frames: HashSet<&str> = HashSet::new();
+    let mut set_variants: HashMap<&str, &str> = HashMap::new();
+    fn collect_sets<'a>(
+        n: &'a Node,
+        frames: &mut HashSet<&'a str>,
+        variants: &mut HashMap<&'a str, &'a str>,
+    ) {
+        if x_native::is_variant_set(n) {
+            frames.insert(n.id.as_str());
+            for c in &n.children {
+                if let NodeKind::Component { name } = &c.kind {
+                    if let Some((_, v)) = x_native::variant_set(name) {
+                        variants.insert(c.id.as_str(), v);
+                    }
+                }
+            }
+        }
+        for c in &n.children {
+            collect_sets(c, frames, variants);
+        }
+    }
+    collect_sets(&doc.editor_ref().root, &mut set_frames, &mut set_variants);
     let mut out = Vec::with_capacity(last.saturating_sub(first).min(128) + 1);
     // F8: a non-empty query renders matches plus their ancestor chain
     let ql = doc.tree_search.trim().to_lowercase();
@@ -2602,10 +3239,17 @@ fn collect_tree_rows(app: &App, scroll: f64, height: f64) -> (Vec<RowRef>, f64) 
             continue;
         }
         if (first..=last).contains(&index) {
+            let variant = set_variants.get(child.id.as_str()).copied();
             out.push(RowRef {
                 id: child.id.clone(),
-                name: child.name.clone(),
-                icon: kind_icon(&child.kind),
+                name: variant
+                    .map(str::to_string)
+                    .unwrap_or_else(|| child.name.clone()),
+                icon: if variant.is_some() || set_frames.contains(child.id.as_str()) {
+                    "component"
+                } else {
+                    kind_icon(&child.kind)
+                },
                 index,
                 indent,
                 has_children: has,
@@ -2631,27 +3275,23 @@ fn collect_tree_rows(app: &App, scroll: f64, height: f64) -> (Vec<RowRef>, f64) 
 /// source shared by paint and drag hit-testing, so drop targets can
 /// never drift from the painted rows.
 pub(crate) fn tree_geometry(app: &App) -> Option<(f64, f64, f64)> {
-    if app.ui_minimized {
+    if app.ui_minimized || app.left_minimized {
         return None;
     }
     let doc = app.doc_opt()?;
     let search_open = app.field.as_ref().map(|f| f.id) == Some(FieldId::TreeSearch)
         || !doc.tree_search.is_empty();
     let tree_top = app.pages_band_bottom() + 34.5 + if search_open { 30.0 } else { 0.0 };
-    Some((tree_top, app.win_h - 16.0, doc.scroll_left))
+    Some((tree_top, app.status_band().y0 - 16.0, doc.scroll_left))
 }
 
 /// P12: the drop target for a layers-tree row drag: the row under
 /// `p`, its zone (0 before, 1 child, 2 after) and the tree coordinates
 /// to commit. Frames/sections accept child drops in the middle band;
 /// leaf rows split before/after at the midpoint. The dragged row and
-/// its descendants are never targets; the mock demo tree has no
-/// reorderable content.
+/// its descendants are never targets.
 pub fn tree_drop_target(app: &App, drag_id: &str, p: Point) -> Option<TreeDrop> {
     let doc = app.doc_opt()?;
-    if !doc.mock_layers.is_empty() {
-        return None;
-    }
     let (tree_top, tree_bottom, scroll) = tree_geometry(app)?;
     if p.y < tree_top || p.y >= tree_bottom {
         return None;
@@ -2836,8 +3476,11 @@ fn paint_right(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                 hit.push((icon_hit, Action::Tool(Tool::Comment)));
             }
             _ => {
-                tip(app, icon_hit, "Flow preview");
-                hit.push((icon_hit, Action::RightTab(RightTab::Prototype)));
+                // Figma's toolbar has one ▶ and it PRESENTS. Ours opened the
+                // Prototype tab and left the viewer to a button inside it — the
+                // panel is still one click away on the FLOW pill.
+                tip(app, icon_hit, "Present");
+                hit.push((icon_hit, Action::FlowEnter));
             }
         }
     }
@@ -2889,7 +3532,7 @@ fn paint_right(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     // The HTML panel scrolls its content UNDER the pinned header (X/Y,
     // pill tabs, divider) — clip the scrolling region so scrolled rows
     // never overdraw the chrome, and drop hit rects that left the view.
-    let clip = Rect::new(rx, y, reg.right.x1, app.win_h);
+    let clip = Rect::new(rx, y, reg.right.x1, reg.right.y1);
     let hit0 = hit.len();
     s.push_layer(
         vello::peniko::Fill::NonZero,
@@ -2928,6 +3571,8 @@ pub struct Sel {
     pub stroke: String,
     pub stroke_w: f64,
     pub clip: bool,
+    /// Figma's Layer → "Show name": whether the canvas paints this frame's name.
+    pub show_name: bool,
 }
 
 pub fn sel_info(app: &App) -> Sel {
@@ -2948,10 +3593,21 @@ pub fn sel_info(app: &App) -> Sel {
             stroke: "000000".into(),
             stroke_w: 0.0,
             clip: false,
+            show_name: true,
         };
     };
     let root = &doc.editor_ref().root;
-    let Some(n) = find_node(root, &id) else {
+    // Figma's *select inside*: while a layer inside an instance is selected,
+    // the panel shows the instance's resolved copy of it — the values the
+    // canvas is painting — and every write below goes back as an override.
+    let resolved = doc
+        .editor_ref()
+        .instance_scope
+        .as_ref()
+        .filter(|(_, layer)| layer == &id)
+        .and_then(|_| doc.editor_ref().scoped_layer(vars));
+    let node = resolved.or_else(|| find_node(root, &id).cloned());
+    let Some(n) = node.as_ref() else {
         return Sel {
             is_frame: false,
             name: "Page".into(),
@@ -2966,6 +3622,7 @@ pub fn sel_info(app: &App) -> Sel {
             stroke: "000000".into(),
             stroke_w: 0.0,
             clip: false,
+            show_name: true,
         };
     };
     let radius = n.corner_radii.map(|c| c[0]).unwrap_or(match n.kind {
@@ -2973,6 +3630,7 @@ pub fn sel_info(app: &App) -> Sel {
         _ => 0.0,
     });
     let clip = matches_frame_clip(n);
+    let show_name = n.show_name;
     Sel {
         is_frame: matches!(n.kind, NodeKind::Frame { .. }),
         name: n.name.clone(),
@@ -2991,6 +3649,7 @@ pub fn sel_info(app: &App) -> Sel {
             n.stroke.width
         },
         clip,
+        show_name,
     }
 }
 
@@ -3049,6 +3708,9 @@ pub enum Typo {
     WidthAxis,
     MaxLines,
     ParagraphIndent,
+    /// Figma's **List style** (help 360040449773) — not a typed field but a
+    /// picker, so this only names the current style.
+    ListStyle,
 }
 
 /// px or integer formatter: trims to whole numbers when close.
@@ -3082,6 +3744,7 @@ pub fn typo_val(app: &App, which: Typo) -> String {
             Typo::WidthAxis => "Auto".into(),
             Typo::MaxLines => "Auto".into(),
             Typo::ParagraphIndent => "0px".into(),
+            Typo::ListStyle => "None".into(),
         };
     };
     match which {
@@ -3126,6 +3789,7 @@ pub fn typo_val(app: &App, which: Typo) -> String {
             .map(|v| v.to_string())
             .unwrap_or_else(|| "Auto".into()),
         Typo::ParagraphIndent => num_str(t.paragraph_indent, "px"),
+        Typo::ListStyle => t.list_style.label().to_string(),
     }
 }
 
@@ -3599,31 +4263,70 @@ fn paint_design(
         // sizing chip: standard CHIP_H, centered in the row
         let chip = Rect::new(fx + 93.5, y0 + 286.0, fx + 124.5, y0 + 286.0 + CHIP_H);
         let is_main = (i == 0) == horizontal;
+        // the menu belongs to the FIELD, so it carries the W/H axis, not
+        // main/cross: for a vertical frame the Width field is the cross one
+        let is_w = i == 0;
         let sizing = if is_main { main_sizing } else { cross_sizing };
-        let (label, enabled) = match sizing {
-            Some(s) => (
-                match s {
-                    x_native::Sizing::Hug => "Hug",
-                    _ => "Fixed",
+        // a TEXT layer answers this row with Figma's ***Resizing*** property
+        // (help 27378154668951) instead of an auto-layout Hug/Fixed: the
+        // Width field's chip flips Fixed size <-> Auto width, and the Height
+        // field's chip has nothing to say (text height follows the wrap).
+        let text_sel = app.selected_text_id().is_some();
+        let (label, enabled) = if text_sel {
+            (
+                if is_w {
+                    if app.is_text_fixed() {
+                        "Fixed"
+                    } else {
+                        "Auto"
+                    }
+                } else {
+                    "Auto"
                 },
-                true,
-            ),
-            None => ("Hug", false),
+                is_w,
+            )
+        } else {
+            match sizing {
+                Some(s) => (
+                    match s {
+                        x_native::Sizing::Hug => "Hug",
+                        _ => "Fixed",
+                    },
+                    true,
+                ),
+                None => ("Hug", false),
+            }
         };
         let chov = enabled && hover(app, chip);
         fill_rrect(s, chip, R_SM, if chov { C_INPUT_HOVER } else { C_FIELD_2 });
         stroke_rrect(s, chip, R_SM, C_LINE_2, 1.0);
         app.fonts
             .text_center(s, chip, label, T10, C_TEXT, Wt::Reg, true);
+        // Figma's sizing control is a dropdown: "Open the Width dropdown to
+        // find Add min width and Add max width."
         if enabled {
-            hit.push((
-                chip,
-                if is_main {
-                    Action::ToggleMainSizing
-                } else {
-                    Action::ToggleCrossSizing
-                },
-            ));
+            if text_sel {
+                hit.push((chip, Action::ToggleTextResize));
+            } else {
+                if app.dropdown_layout_axis == Some(is_w) {
+                    // the menu anchors under the chip it belongs to; the panel
+                    // scrolls, so the painter records where the chip landed
+                    app.layout_axis_dd_anchor = (chip.x0, chip.y1);
+                }
+                hit.push((chip, Action::LayoutAxisMenu(is_w)));
+            }
+        }
+        // Figma: "If an object contains a min or max setting, its respective
+        // width or height icon will gain two lines, one on each side."
+        let limited = match sel_layout.as_ref().map(|l| (l, is_w)) {
+            Some((l, true)) => l.min_width.is_some() || l.max_width.is_some(),
+            Some((l, false)) => l.min_height.is_some() || l.max_height.is_some(),
+            None => false,
+        };
+        if limited {
+            let lx = fx + 4.0;
+            hline(s, lx, lx + 8.0, y0 + 288.4, C_TEXT);
+            hline(s, lx, lx + 8.0, y0 + 299.6, C_TEXT);
         }
     }
     app.fonts
@@ -3784,6 +4487,38 @@ fn paint_design(
                 Rect::new(x0, y0 + 426.0, x0 + 110.0, y0 + 450.0),
                 Action::ToggleWrap,
             ));
+            // Figma's auto-layout settings carry **canvas stacking**: "Next to
+            // canvas stacking, select: First on top / Last on top."
+            let stacking = sel_layout
+                .as_ref()
+                .map(|l| l.canvas_stacking)
+                .unwrap_or_default();
+            let sr = Rect::new(x0 + 120.0, y0 + 426.0, x0 + 283.0, y0 + 426.0 + DENSE_H);
+            let shov = hover(app, sr);
+            app.fonts.text(
+                s,
+                sr.x0 + 2.0,
+                sr.y0 + 3.7,
+                "Canvas stacking",
+                T11,
+                if shov { C_TEXT } else { C_MUTED },
+                Wt::Reg,
+            );
+            app.fonts.text_right(
+                s,
+                sr.x1 - 14.0,
+                sr.y0 + 3.7,
+                stacking.label(),
+                T11,
+                C_TEXT,
+                Wt::Reg,
+                0.0,
+            );
+            draw_icon(s, "chevron-down", sr.x1 - 12.0, sr.y0 + 4.6, ICON_XS, C_DIM);
+            if app.dropdown_stacking {
+                app.stacking_dd_anchor = (sr.x0, sr.y1);
+            }
+            hit.push((sr, Action::StackingMenu));
         } else if app.selected_parent_has_layout() {
             // Fixed | Fill segmented control (constraints.grow)
             let grow = {
@@ -3868,6 +4603,50 @@ fn paint_design(
         }
     }
 
+    // ---- Figma's min/max dimension fields, directly below the W/H row they
+    // belong to: "From the new field that appears, enter a value." Only the
+    // limits that are SET are drawn — the Width/Height menu is the way to add
+    // one — and the row appears only when there is one, so a frame that never
+    // used min/max keeps the panel's geometry exactly as it was.
+    let limits: Vec<(FieldId, &str, f64)> = {
+        let mut out = vec![];
+        if let Some(l) = sel_layout.as_ref() {
+            for (fid, label, v) in [
+                (FieldId::MinWidth, "min W", l.min_width),
+                (FieldId::MaxWidth, "max W", l.max_width),
+                (FieldId::MinHeight, "min H", l.min_height),
+                (FieldId::MaxHeight, "max H", l.max_height),
+            ] {
+                if let Some(v) = v {
+                    out.push((fid, label, v));
+                }
+            }
+        }
+        out
+    };
+    if !limits.is_empty() {
+        let fw = (283.0 - 6.0 * (limits.len() as f64 - 1.0)) / limits.len() as f64;
+        for (k, (fid, label, v)) in limits.iter().enumerate() {
+            let fr = Rect::new(
+                x0 + (fw + 6.0) * k as f64,
+                y0 + 458.0,
+                x0 + (fw + 6.0) * k as f64 + fw,
+                y0 + 458.0 + INPUT_H,
+            );
+            input(
+                app,
+                s,
+                hit,
+                fr,
+                Some((*label, T10)),
+                &field_val(app, *fid, fmt_num(*v)),
+                mono,
+                Some(Action::Field(*fid)),
+                None,
+            );
+        }
+    }
+
     // clip content: dense (24px) disclosure-style row
     let clip_row = Rect::new(x0, y0 + 512.0, x0 + 110.0, y0 + 512.0 + DENSE_H);
     let cb = Rect::new(
@@ -3891,6 +4670,36 @@ fn paint_design(
         Wt::Reg,
     );
     hit.push((clip_row, Action::ClipContent));
+
+    // Figma's right sidebar puts "Show name" in the Layer section; our panel is
+    // one dense band there, so it sits beside "Clip content" in the same row —
+    // same 24px checkbox, same ink, no geometry moved. Frames only: a Section
+    // always shows its own name, and no other layer has one to switch off.
+    if sel.is_frame {
+        let sn_x = x0 + 150.0;
+        let sn_row = Rect::new(sn_x, clip_row.y0, sn_x + 118.0, clip_row.y0 + DENSE_H);
+        let sn_cb = Rect::new(
+            sn_x,
+            clip_row.y0 + 4.0,
+            sn_x + CHIP_H,
+            clip_row.y0 + 4.0 + CHIP_H,
+        );
+        fill_rrect(s, sn_cb, R_SM, C_FIELD);
+        stroke_rrect(s, sn_cb, R_SM, C_LINE_2, 1.0);
+        if sel.show_name {
+            fill_rrect(s, sn_cb.inflate(-3.0, -3.0), R_XS, C_TEXT);
+        }
+        app.fonts.text(
+            s,
+            sn_cb.x1 + 8.0,
+            clip_row.y0 + 3.7,
+            "Show name",
+            T11,
+            C_MUTED,
+            Wt::Reg,
+        );
+        hit.push((sn_row, Action::ToggleShowName));
+    }
 
     hline(s, rx, rx + rw, y0 + 548.0, C_LINE);
 
@@ -3942,34 +4751,121 @@ fn paint_design(
         C_TEXT,
         Wt::Reg,
     );
-    let rdr = Rect::new(x0 + 161.5, y0 + 596.0, x0 + 315.0, y0 + 624.0);
-    input(
-        app,
+    // Figma's Appearance row pairs **Opacity** with **Blend mode**; the corner
+    // radius keeps a row of its own below. The layer's blend is a dropdown of
+    // the 19 layer modes — Pass through first, because it is the layer default.
+    let bdr = Rect::new(x0 + 161.5, y0 + 596.0, x0 + 315.0, y0 + 624.0);
+    let layer_blend = {
+        let d = app.doc();
+        d.selected_id()
+            .and_then(|id| find_node(&d.editor_ref().root, &id).map(|n| n.blend))
+            .unwrap_or(x_native::BlendKind::Normal)
+    };
+    let blend_open = app.layer_blend_open;
+    let bhov = hover(app, bdr);
+    fill_rrect(
         s,
-        hit,
-        rdr,
-        Some(("Radius", T10)),
-        "",
-        false,
-        Some(Action::Field(FieldId::Radius)),
-        None,
+        bdr,
+        R_INPUT,
+        if bhov || blend_open {
+            C_FIELD_2
+        } else {
+            C_FIELD
+        },
     );
+    app.fonts
+        .text(s, bdr.x0 + 8.0, bdr.y0 + 6.0, "Blend", T10, C_TEXT, Wt::Reg);
+    let bval = layer_blend.label();
+    let bvw = app.fonts.measure(bval, T11, Wt::Reg);
+    app.fonts.text(
+        s,
+        bdr.x1 - 20.0 - bvw,
+        bdr.y0 + 7.0,
+        bval,
+        T11,
+        C_DIM,
+        Wt::Reg,
+    );
+    draw_icon(
+        s,
+        "chevron-down",
+        bdr.x1 - 8.0 - 10.0,
+        bdr.y0 + 8.0,
+        ICON_XS,
+        C_DIM,
+    );
+    hit.push((bdr, Action::ToggleLayerBlend));
+    if blend_open {
+        app.blend_dd_anchor = (bdr.x0, bdr.y1);
+    }
+
+    // Figma's radius row (help 360050986854): the **Independent corners**
+    // toggle sits at the field's left edge — a square with one rounded corner
+    // — and the field is named after what it rounds.
+    let rdr = Rect::new(x0, y0 + 636.0, x0 + 315.0, y0 + 664.0);
+    let rhov = hover(app, rdr);
+    fill_rrect(s, rdr, R_INPUT, if rhov { C_INPUT_HOVER } else { C_FIELD });
+    if rhov {
+        stroke_rrect(s, rdr, R_INPUT, C_LINE_2, 1.0);
+    }
+    let corners_btn = Rect::new(rdr.x0 + 4.0, rdr.y0, rdr.x0 + 24.0, rdr.y1);
+    let btn_hov = hover(app, corners_btn);
+    if btn_hov || app.corner_open {
+        fill_rrect(
+            s,
+            corners_btn,
+            R_SM,
+            if app.corner_open {
+                C_FIELD_2
+            } else {
+                C_ROW_HOVER
+            },
+        );
+    }
+    draw_icon(
+        s,
+        "square-round-corner",
+        corners_btn.x0 + 4.0,
+        corners_btn.y0 + 8.0,
+        ICON_XS,
+        if app.corner_open || btn_hov {
+            C_TEXT
+        } else {
+            C_DIM
+        },
+    );
+    app.fonts.text(
+        s,
+        rdr.x0 + 28.0,
+        y0 + 642.5,
+        "Corner radius",
+        T10,
+        C_DIM,
+        Wt::Reg,
+    );
+    hit.push((rdr, Action::Field(FieldId::Radius)));
+    // the toggle is pushed AFTER the field: the reverse scan is what lets a
+    // press on the icon open the corner panel instead of the text field
+    hit.push((corners_btn, Action::ToggleCorners));
     let rd_val = field_val(app, FieldId::Radius, fmt_num(sel.radius));
     let rd_vw = app.fonts.measure(&rd_val, T11, Wt::Reg);
     app.fonts.text(
         s,
         rdr.x1 - 8.0 - rd_vw,
-        y0 + 601.75,
+        y0 + 641.75,
         &rd_val,
         T11,
         C_TEXT,
         Wt::Reg,
     );
+    if app.corner_open {
+        app.corner_anchor = (rdr.x0, rdr.y1);
+    }
 
-    hline(s, rx, rx + rw, y0 + 636.0, C_LINE);
+    hline(s, rx, rx + rw, y0 + 676.0, C_LINE);
 
     // Phase 6: Image adjustment controls (only shown for image nodes)
-    let y_after_appearance = y0 + 636.0 + 1.0 + 12.0;
+    let y_after_appearance = y0 + 676.0 + 1.0 + 12.0;
     let y_after_image =
         paint_image_adjustments(app, s, hit, rx + pl, rx + rw - pl, y_after_appearance);
     if y_after_image != y_after_appearance {
@@ -3982,12 +4878,12 @@ fn paint_design(
     // ---- typography -----------------------------------------------------
     // Section header row (28): caps label centered, both buttons 28px.
     app.fonts
-        .caps_label(s, x0, y0 + 657.0, "Typography", C_TEXT, Wt::Med);
+        .caps_label(s, x0, y0 + 697.0, "Typography", C_TEXT, Wt::Med);
     // Figma's Typography header: the styles button opens the text-style
     // picker, the plus creates a style from the current selection. Both were
     // painted but inert — these rects are what make them buttons.
-    let styles_btn = Rect::new(xr - 38.0, y0 + 648.0, xr - 18.0, y0 + 676.0);
-    let create_btn = Rect::new(xr - 18.0, y0 + 648.0, xr + 2.0, y0 + 676.0);
+    let styles_btn = Rect::new(xr - 38.0, y0 + 688.0, xr - 18.0, y0 + 716.0);
+    let create_btn = Rect::new(xr - 18.0, y0 + 688.0, xr + 2.0, y0 + 716.0);
     let styles_tint = if app.dropdown_text_style || hover(app, styles_btn) {
         C_TEXT
     } else {
@@ -3997,7 +4893,7 @@ fn paint_design(
         s,
         "grid-2x2",
         xr - 14.0 - 8.0 - 12.0,
-        y0 + 654.0,
+        y0 + 694.0,
         ICON_XS,
         styles_tint,
     );
@@ -4006,10 +4902,10 @@ fn paint_design(
     } else {
         C_DIM
     };
-    draw_icon(s, "plus", xr - 14.0, y0 + 655.0, ICON_SM, create_tint);
+    draw_icon(s, "plus", xr - 14.0, y0 + 695.0, ICON_SM, create_tint);
     hit.push((styles_btn, Action::TextStyleDropdown));
     hit.push((create_btn, Action::CreateTextStyle));
-    let fam = Rect::new(x0, y0 + 684.0, x0 + 315.0, y0 + 712.0);
+    let fam = Rect::new(x0, y0 + 724.0, x0 + 315.0, y0 + 752.0);
     input(
         app,
         s,
@@ -4064,7 +4960,7 @@ fn paint_design(
             hit.push((row, Action::FontPicker(fam.clone())));
         }
     }
-    let wgt = Rect::new(x0, y0 + 720.0, x0 + 227.0, y0 + 748.0);
+    let wgt = Rect::new(x0, y0 + 760.0, x0 + 227.0, y0 + 788.0);
     input(
         app,
         s,
@@ -4076,7 +4972,7 @@ fn paint_design(
         Some(Action::Field(FieldId::FontWeight)),
         Some("chevron-down"),
     );
-    let szr = Rect::new(x0 + 235.0, y0 + 720.0, x0 + 315.0, y0 + 748.0);
+    let szr = Rect::new(x0 + 235.0, y0 + 760.0, x0 + 315.0, y0 + 788.0);
     input(
         app,
         s,
@@ -4089,8 +4985,8 @@ fn paint_design(
         Some("chevron-down"),
     );
     app.fonts
-        .text(s, x0, y0 + 756.0, "Line height", T10, C_DIM, Wt::Reg);
-    let lhr = Rect::new(x0, y0 + 774.0, x0 + 153.5, y0 + 802.0);
+        .text(s, x0, y0 + 796.0, "Line height", T10, C_DIM, Wt::Reg);
+    let lhr = Rect::new(x0, y0 + 814.0, x0 + 153.5, y0 + 842.0);
     input_box(app, s, lhr, R_INPUT);
     draw_icon(s, "type", lhr.x0 + 8.0, lhr.y0 + 8.0, ICON_XS, C_DIM);
     // line-height mode affordance (Auto / px / %) — same chevron language
@@ -4125,7 +5021,7 @@ fn paint_design(
     // Justified to Left, so it is not offered (a phantom state); the active
     // highlight mirrors what the canvas actually renders.
     app.fonts
-        .text(s, x0, y0 + 810.0, "Alignment", T10, C_DIM, Wt::Reg);
+        .text(s, x0, y0 + 850.0, "Alignment", T10, C_DIM, Wt::Reg);
     let align_now = selected_text_align(app);
     for (i, (ic, t)) in [
         ("align-left", x_native::TextAlign::Left),
@@ -4136,7 +5032,7 @@ fn paint_design(
     .enumerate()
     {
         let bx = x0 + 47.7 * i as f64;
-        let br = Rect::new(bx, y0 + 828.0, bx + 43.8, y0 + 856.0);
+        let br = Rect::new(bx, y0 + 868.0, bx + 43.8, y0 + 896.0);
         let active = align_now == t;
         if active {
             fill_rrect(s, br, R_MD, C_FIELD_2);
@@ -4157,8 +5053,8 @@ fn paint_design(
 
     // Vertical alignment (horizontal sits in the button row above)
     app.fonts
-        .text(s, x0, y0 + 864.0, "Vertical alignment", T10, C_DIM, Wt::Reg);
-    let v_align = Rect::new(x0, y0 + 882.0, x0 + 153.5, y0 + 910.0);
+        .text(s, x0, y0 + 904.0, "Vertical alignment", T10, C_DIM, Wt::Reg);
+    let v_align = Rect::new(x0, y0 + 922.0, x0 + 153.5, y0 + 950.0);
     input(
         app,
         s,
@@ -4173,10 +5069,10 @@ fn paint_design(
 
     // Decoration | Wrap style (the engine's paragraph wrap strategy, "tw")
     app.fonts
-        .text(s, x0, y0 + 918.0, "Decoration", T10, C_DIM, Wt::Reg);
+        .text(s, x0, y0 + 958.0, "Decoration", T10, C_DIM, Wt::Reg);
     app.fonts
-        .text(s, x0 + 161.5, y0 + 918.0, "Wrap style", T10, C_DIM, Wt::Reg);
-    let deco = Rect::new(x0, y0 + 936.0, x0 + 153.5, y0 + 964.0);
+        .text(s, x0 + 161.5, y0 + 958.0, "Wrap style", T10, C_DIM, Wt::Reg);
+    let deco = Rect::new(x0, y0 + 976.0, x0 + 153.5, y0 + 1004.0);
     input(
         app,
         s,
@@ -4188,7 +5084,7 @@ fn paint_design(
         Some(Action::CycleTextDecoration),
         Some("chevron-down"),
     );
-    let wrap = Rect::new(x0 + 161.5, y0 + 936.0, x0 + 315.0, y0 + 964.0);
+    let wrap = Rect::new(x0 + 161.5, y0 + 976.0, x0 + 315.0, y0 + 1004.0);
     input(
         app,
         s,
@@ -4203,17 +5099,17 @@ fn paint_design(
 
     // Max lines | Paragraph indent
     app.fonts
-        .text(s, x0, y0 + 972.0, "Max lines", T10, C_DIM, Wt::Reg);
+        .text(s, x0, y0 + 1012.0, "Max lines", T10, C_DIM, Wt::Reg);
     app.fonts.text(
         s,
         x0 + 161.5,
-        y0 + 972.0,
+        y0 + 1012.0,
         "Paragraph indent",
         T10,
         C_DIM,
         Wt::Reg,
     );
-    let max_lines = Rect::new(x0, y0 + 990.0, x0 + 153.5, y0 + 1018.0);
+    let max_lines = Rect::new(x0, y0 + 1030.0, x0 + 153.5, y0 + 1058.0);
     input(
         app,
         s,
@@ -4225,7 +5121,7 @@ fn paint_design(
         Some(Action::Field(FieldId::MaxLines)),
         None,
     );
-    let para_indent = Rect::new(x0 + 161.5, y0 + 990.0, x0 + 315.0, y0 + 1018.0);
+    let para_indent = Rect::new(x0 + 161.5, y0 + 1030.0, x0 + 315.0, y0 + 1058.0);
     input(
         app,
         s,
@@ -4248,7 +5144,7 @@ fn paint_design(
     // (Font / Weight / Size / Line height / Alignment), so they sit behind
     // a disclosure instead of disappearing.
     let adv_open = app.typo_advanced_open;
-    let adv = Rect::new(x0, y0 + 1026.0, x0 + 315.0, y0 + 1026.0 + DENSE_H);
+    let adv = Rect::new(x0, y0 + 1066.0, x0 + 315.0, y0 + 1066.0 + DENSE_H);
     let adv_hov = hover(app, adv);
     draw_icon(
         s,
@@ -4275,17 +5171,17 @@ fn paint_design(
     if adv_open {
         // Letter spacing | Word spacing
         app.fonts
-            .text(s, x0, y0 + 1058.0, "Letter spacing", T10, C_DIM, Wt::Reg);
+            .text(s, x0, y0 + 1098.0, "Letter spacing", T10, C_DIM, Wt::Reg);
         app.fonts.text(
             s,
             x0 + 161.5,
-            y0 + 1058.0,
+            y0 + 1098.0,
             "Word spacing",
             T10,
             C_DIM,
             Wt::Reg,
         );
-        let lsr = Rect::new(x0, y0 + 1076.0, x0 + 153.5, y0 + 1104.0);
+        let lsr = Rect::new(x0, y0 + 1116.0, x0 + 153.5, y0 + 1144.0);
         input(
             app,
             s,
@@ -4301,7 +5197,7 @@ fn paint_design(
             Some(Action::Field(FieldId::LetterSpacing)),
             None,
         );
-        let wsr = Rect::new(x0 + 161.5, y0 + 1076.0, x0 + 315.0, y0 + 1104.0);
+        let wsr = Rect::new(x0 + 161.5, y0 + 1116.0, x0 + 315.0, y0 + 1144.0);
         input(
             app,
             s,
@@ -4315,17 +5211,17 @@ fn paint_design(
         );
         // Paragraph spacing | Baseline shift
         app.fonts
-            .text(s, x0, y0 + 1112.0, "Paragraph spacing", T10, C_DIM, Wt::Reg);
+            .text(s, x0, y0 + 1152.0, "Paragraph spacing", T10, C_DIM, Wt::Reg);
         app.fonts.text(
             s,
             x0 + 161.5,
-            y0 + 1112.0,
+            y0 + 1152.0,
             "Baseline shift",
             T10,
             C_DIM,
             Wt::Reg,
         );
-        let psr = Rect::new(x0, y0 + 1130.0, x0 + 153.5, y0 + 1158.0);
+        let psr = Rect::new(x0, y0 + 1170.0, x0 + 153.5, y0 + 1198.0);
         input(
             app,
             s,
@@ -4337,7 +5233,7 @@ fn paint_design(
             Some(Action::Field(FieldId::ParaSpacing)),
             None,
         );
-        let bsr = Rect::new(x0 + 161.5, y0 + 1130.0, x0 + 315.0, y0 + 1158.0);
+        let bsr = Rect::new(x0 + 161.5, y0 + 1170.0, x0 + 315.0, y0 + 1198.0);
         input(
             app,
             s,
@@ -4355,8 +5251,8 @@ fn paint_design(
         );
         // Text case (small caps rides the same control)
         app.fonts
-            .text(s, x0, y0 + 1166.0, "Text case", T10, C_DIM, Wt::Reg);
-        let tcr = Rect::new(x0, y0 + 1184.0, x0 + 153.5, y0 + 1212.0);
+            .text(s, x0, y0 + 1206.0, "Text case", T10, C_DIM, Wt::Reg);
+        let tcr = Rect::new(x0, y0 + 1224.0, x0 + 153.5, y0 + 1252.0);
         input(
             app,
             s,
@@ -4368,12 +5264,32 @@ fn paint_design(
             Some(Action::Field(FieldId::TextCase)),
             Some("chevron-down"),
         );
+        // List style — Figma's text-list property (help 360040449773):
+        // *"Use the List style property to apply a list style to a text
+        // layer"*. None / Bulleted / Numbered behind one picker.
+        app.fonts
+            .text(s, x0, y0 + 1260.0, "List style", T10, C_DIM, Wt::Reg);
+        let lsr = Rect::new(x0, y0 + 1278.0, x0 + 153.5, y0 + 1306.0);
+        input(
+            app,
+            s,
+            hit,
+            lsr,
+            None,
+            &list_style_label(app),
+            false,
+            Some(Action::ToggleListStyle),
+            Some("chevron-down"),
+        );
+        if app.list_style_open {
+            app.blend_dd_anchor = (lsr.x0, lsr.y1);
+        }
         // Optical size | Width (variable-font axes; Auto on static faces)
         app.fonts
-            .text(s, x0, y0 + 1220.0, "Optical size", T10, C_DIM, Wt::Reg);
+            .text(s, x0, y0 + 1314.0, "Optical size", T10, C_DIM, Wt::Reg);
         app.fonts
-            .text(s, x0 + 161.5, y0 + 1220.0, "Width", T10, C_DIM, Wt::Reg);
-        let osr = Rect::new(x0, y0 + 1238.0, x0 + 153.5, y0 + 1266.0);
+            .text(s, x0 + 161.5, y0 + 1314.0, "Width", T10, C_DIM, Wt::Reg);
+        let osr = Rect::new(x0, y0 + 1332.0, x0 + 153.5, y0 + 1360.0);
         input(
             app,
             s,
@@ -4385,7 +5301,7 @@ fn paint_design(
             Some(Action::Field(FieldId::OpticalSize)),
             None,
         );
-        let wdr = Rect::new(x0 + 161.5, y0 + 1238.0, x0 + 315.0, y0 + 1266.0);
+        let wdr = Rect::new(x0 + 161.5, y0 + 1332.0, x0 + 315.0, y0 + 1360.0);
         input(
             app,
             s,
@@ -4401,10 +5317,19 @@ fn paint_design(
 
     // ---- fill / stroke / effects / guides continue with the shared tail
     // (the section's end moves with the disclosure, so does the tail)
-    let tail_top = if adv_open { y0 + 1278.0 } else { y0 + 1062.0 };
+    let tail_top = if adv_open { y0 + 1372.0 } else { y0 + 1102.0 };
     hline(s, rx, rx + rw, tail_top, C_LINE);
     let mut y = tail_top + 12.0;
     let inner_w = rw - pl * 2.0;
+
+    // --- Mask ----------------------------------------------------------
+    // Figma keeps the mask controls with the appearance rows (help
+    // 360040450253): the row that makes a mask, or the type dropdown of the
+    // mask that is selected — above Fill, below Appearance.
+    if let Some(ny) = paint_mask_section(app, s, hit, rx, rw, pl, y) {
+        hline(s, rx, rx + rw, ny - 6.0, C_LINE);
+        y = ny + 6.0;
+    }
 
     // --- Fill ----------------------------------------------------------
     section_header(app, s, hit, rx, rw, pl, y, "Fill", true, Action::AddFill);
@@ -4518,15 +5443,9 @@ fn paint_design(
     y += 1.0 + SECTION_GAP;
 
     // --- Effects -------------------------------------------------------
-    let eff_h = 40.0;
-    app.fonts
-        .caps_label(s, rx + pl, y + 10.0, "Effects", C_TEXT, Wt::Med);
-    draw_icon(s, "plus", rx + rw - pl - 14.0, y + 9.0, ICON_SM, C_DIM);
-    hit.push((
-        Rect::new(rx + rw - pl - 18.0, y, rx + rw - pl, y + 32.0),
-        Action::AddEffect,
-    ));
-    y += eff_h;
+    // Figma's list: one row per effect, each with its type dropdown, its
+    // *Effect settings*, its own eye and its own blend; drag a row to reorder.
+    y = paint_effects_section(app, s, hit, rx, rw, pl, y);
     hline(s, rx, rx + rw, y, C_LINE);
     y += 1.0 + 12.0;
 
@@ -4834,7 +5753,16 @@ fn paint_design(
                     R_SM,
                     if hover(app, clrb) { C_LINE_2 } else { C_FIELD },
                 );
-                draw_icon(s, "x", clrb.x0 + 5.0, clrb.y0 + 4.0, ICON_XS, C_DIM);
+                draw_icon(
+                    s,
+                    "x",
+                    clrb.x0 + 5.0,
+                    clrb.y0 + 4.0,
+                    ICON_XS,
+                    // C_DIM on the hover fill is 2.9:1 in Daylight (below the
+                    // 3:1 floor for a glyph); text_primary reads in both
+                    if hover(app, clrb) { C_TEXT } else { C_DIM },
+                );
                 hit.push((clrb, Action::SlotClear(sname.clone())));
                 y += 26.0;
             }
@@ -4925,7 +5853,410 @@ fn paint_design(
         );
         y += 18.0;
     }
-    let _ = y;
+    let y = paint_brush_styles(app, s, hit, x0, xr, y);
+    let y = paint_scale_block(app, s, hit, x0, xr, y);
+    let y = paint_arc_block(app, s, hit, x0, xr, y);
+    let y = paint_shape_block(app, s, hit, x0, xr, y);
+    paint_constraints(app, s, hit, x0, xr, y);
+}
+
+/// Figma's arc properties, in the Appearance section of the right sidebar:
+/// where the sweep begins, how far it runs, and how much of the middle is cut
+/// away. Shown for an ellipse as well as for an arc — the defaults are the
+/// whole circle, and typing is one of the two ways Figma's own lesson uses
+/// ("select the ellipse and use either method to change the properties").
+fn paint_arc_block(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    x0: f64,
+    xr: f64,
+    y0: f64,
+) -> f64 {
+    let props = {
+        let doc = app.doc_ref();
+        let editor = doc.editor_ref();
+        if editor.selection.len() != 1 {
+            None
+        } else {
+            find_node(&editor.root, &editor.selection[0]).and_then(crate::state::arc_props)
+        }
+    };
+    let Some((start, end, ratio)) = props else {
+        return y0;
+    };
+    let sweep = x_native::booleans::arc_sweep(start, end);
+    let mut y = y0 + 1.0 + 12.0;
+    app.fonts.caps_label(s, x0, y, "ARC", C_TEXT, Wt::Med);
+    y += 12.0 + LABEL_GAP;
+    let gap = 8.0;
+    let w = (xr - x0 - gap * 2.0) / 3.0;
+    let fields: [(FieldId, &str, String); 3] = [
+        (FieldId::ArcStart, "Start", fmt_num(start)),
+        (FieldId::ArcSweep, "Sweep", fmt_num(sweep)),
+        (
+            FieldId::ArcRatio,
+            "Ratio",
+            format!("{}", (ratio * 100.0).round() as i64),
+        ),
+    ];
+    for (i, (id, label, fallback)) in fields.iter().enumerate() {
+        let fx = x0 + (w + gap) * i as f64;
+        let r = Rect::new(fx, y, fx + w, y + INPUT_H);
+        input(
+            app,
+            s,
+            hit,
+            r,
+            Some((*label, T10)),
+            &field_val(app, *id, fallback.clone()),
+            true,
+            Some(Action::Field(*id)),
+            None,
+        );
+    }
+    y += INPUT_H + 6.0;
+    y
+}
+
+/// Figma's Count — and, on a star, its Ratio — in the Appearance section,
+/// beside the arc's properties: "you can easily change the number of polygon
+/// sides in the Design panel input by typing in a number or using the ↑ or ↓
+/// keys in the Appearance block." A polygon has the Count alone; a star has
+/// the Count and the Ratio, both 3..60 and 0..100 in Figma's own ranges.
+fn paint_shape_block(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    x0: f64,
+    xr: f64,
+    y0: f64,
+) -> f64 {
+    let shape = {
+        let doc = app.doc_ref();
+        let editor = doc.editor_ref();
+        if editor.selection.len() != 1 {
+            None
+        } else {
+            find_node(&editor.root, &editor.selection[0]).and_then(crate::state::shape_of)
+        }
+    };
+    let Some((kind, count)) = shape else {
+        return y0;
+    };
+    let (caps, fields): (&str, Vec<(FieldId, &str, String)>) = match &kind {
+        NodeKind::Poly { .. } => (
+            "POLYGON",
+            vec![(FieldId::ShapeCount, "Count", fmt_num(count as f64))],
+        ),
+        NodeKind::Star { ratio, .. } => (
+            "STAR",
+            vec![
+                (FieldId::ShapeCount, "Count", fmt_num(count as f64)),
+                (
+                    FieldId::StarRatio,
+                    "Ratio",
+                    format!("{}", (ratio * 100.0).round() as i64),
+                ),
+            ],
+        ),
+        _ => return y0,
+    };
+    let mut y = y0 + 1.0 + 12.0;
+    app.fonts.caps_label(s, x0, y, caps, C_TEXT, Wt::Med);
+    y += 12.0 + LABEL_GAP;
+    let gap = 8.0;
+    let w = (xr - x0 - gap * 2.0) / 3.0;
+    for (i, (id, label, fallback)) in fields.iter().enumerate() {
+        let fx = x0 + (w + gap) * i as f64;
+        let r = Rect::new(fx, y, fx + w, y + INPUT_H);
+        input(
+            app,
+            s,
+            hit,
+            r,
+            Some((*label, T10)),
+            &field_val(app, *id, fallback.clone()),
+            true,
+            Some(Action::Field(*id)),
+            None,
+        );
+    }
+    y += INPUT_H + 6.0;
+    y
+}
+
+/// The Scale tool's panel (K) — Figma's Scale section in the right sidebar:
+/// the width and height fields (type one and the other follows, because a
+/// scale is proportional), the multiplier, and the anchor box that decides
+/// which side of the box stays put. Shown while the tool is active, like
+/// Figma's own panel, and read from the same `state` tables the action
+/// handlers write.
+fn paint_scale_block(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    x0: f64,
+    xr: f64,
+    y0: f64,
+) -> f64 {
+    // Figma's Scale panel is the Move panel's, while K is the active tool:
+    // press V and the Size section comes back.
+    if app.tool != crate::state::Tool::Scale {
+        return y0;
+    }
+    // W/H describe the SELECTION's box — the same box the multiplier and the
+    // dimension fields scale about — not the primary layer's own size.
+    let (bw, bh) = {
+        let doc = app.doc_ref();
+        let editor = doc.editor_ref();
+        let Some(b) = crate::run::selection_box(&editor.root, &editor.selection) else {
+            return y0;
+        };
+        (b.2, b.3)
+    };
+    let mut y = y0 + 1.0 + 12.0;
+    app.fonts.caps_label(s, x0, y, "SCALE", C_TEXT, Wt::Med);
+    y += 12.0 + LABEL_GAP;
+    let half = (xr - x0 - 8.0) / 2.0;
+    let wr = Rect::new(x0, y, x0 + half, y + INPUT_H);
+    input(
+        app,
+        s,
+        hit,
+        wr,
+        Some(("W", T10)),
+        &field_val(app, FieldId::ScaleW, fmt_num(bw)),
+        true,
+        Some(Action::Field(FieldId::ScaleW)),
+        None,
+    );
+    let hr = Rect::new(x0 + half + 8.0, y, xr, y + INPUT_H);
+    input(
+        app,
+        s,
+        hit,
+        hr,
+        Some(("H", T10)),
+        &field_val(app, FieldId::ScaleH, fmt_num(bh)),
+        true,
+        Some(Action::Field(FieldId::ScaleH)),
+        None,
+    );
+    y += INPUT_H + 6.0;
+    let live = live_scale(app);
+    let shown = format!("{}%", (live * 100.0).round() as i64);
+    let mr = Rect::new(x0, y, xr, y + INPUT_H);
+    input(
+        app,
+        s,
+        hit,
+        mr,
+        Some(("Scale", T10)),
+        &field_val(app, FieldId::ScaleFactor, shown),
+        true,
+        Some(Action::Field(FieldId::ScaleFactor)),
+        None,
+    );
+    y += INPUT_H + 10.0;
+    // the anchor box: Figma's nine points, the active one filled — the cell
+    // the multiplier and the dimension fields scale about
+    let pitch = 14.0;
+    let gx = (x0 + xr) / 2.0 - pitch;
+    for cell in 0..crate::state::SCALE_CELLS {
+        let cx = gx + (cell % 3) as f64 * pitch;
+        let cy = y + (cell / 3) as f64 * pitch;
+        if app.scale_cell == cell {
+            circle(s, cx, cy, 3.5, C_TEXT);
+        } else {
+            ring(s, cx, cy, 3.0, C_LINE_2, 1.0);
+        }
+        let cr = Rect::new(cx - 7.0, cy - 7.0, cx + 7.0, cy + 7.0);
+        hit.push((cr, Action::ScaleCell(cell)));
+    }
+    // the box's own height, so the next section starts under it
+    y + 34.0
+}
+
+/// The multiplier a scale gesture has reached: what the Scale panel shows
+/// while a drag is in flight (Figma's own field tracks the canvas), and 1.0
+/// when nothing is being dragged.
+fn live_scale(app: &App) -> f64 {
+    match &app.drag {
+        Some(crate::state::Drag::ScaleSel { applied, .. })
+        | Some(crate::state::Drag::ScaleBody { applied, .. }) => *applied,
+        _ => 1.0,
+    }
+}
+
+/// The Brush's styles, at the end of the Design column. Figma Draw puts the
+/// stroke's "fill, weight, and style" in the secondary toolbar and repeats the
+/// brush styles in the right sidebar's advanced stroke settings; the panel half
+/// is the one this build has — shown while the brush is the active tool, which
+/// is when the choice has a meaning. Returns the y the next block starts at.
+fn paint_brush_styles(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    x0: f64,
+    xr: f64,
+    y0: f64,
+) -> f64 {
+    if app.tool != Tool::Brush {
+        return y0;
+    }
+    let mut y = y0 + 1.0 + 12.0;
+    app.fonts
+        .caps_label(s, x0, y, "BRUSH STYLE", C_TEXT, Wt::Med);
+    y += 12.0 + LABEL_GAP;
+    for style in crate::state::BrushStyle::ALL {
+        let r = Rect::new(x0, y, xr, y + INPUT_H);
+        let active = app.brush_style == style;
+        if active || hover(app, r) {
+            fill_rrect(s, r, R_SM, if active { C_FIELD_2 } else { C_FIELD });
+        }
+        app.fonts
+            .text(s, x0 + 8.0, y + 5.0, style.label(), T11, C_TEXT, Wt::Reg);
+        // the mark the style paints, in the row it belongs to
+        let len = (style.width() * 1.6).clamp(10.0, 40.0);
+        let cy = y + INPUT_H / 2.0;
+        line(
+            s,
+            xr - 10.0 - len,
+            cy,
+            xr - 10.0,
+            cy,
+            if active { C_TEXT } else { C_MUTED },
+            (style.width() / 4.0).max(1.0),
+        );
+        hit.push((r, Action::SetBrushStyle(style)));
+        y += INPUT_H + 6.0;
+    }
+    y
+}
+
+/// Map an engine path — in node-local units at (ox, oy) — onto the canvas.
+fn screen_path(app: &App, cmds: &[x_native::PathCmd], ox: f64, oy: f64) -> vello::kurbo::BezPath {
+    let mut path = vello::kurbo::BezPath::new();
+    let at = |x: f64, y: f64| {
+        let q = app.world_to_screen(Point::new(ox + x, oy + y));
+        (q.x, q.y)
+    };
+    for c in cmds {
+        match c {
+            x_native::PathCmd::MoveTo(x, y) => {
+                let (x, y) = at(*x, *y);
+                path.move_to((x, y));
+            }
+            x_native::PathCmd::LineTo(x, y) => {
+                let (x, y) = at(*x, *y);
+                path.line_to((x, y));
+            }
+            x_native::PathCmd::CurveTo(a, b, c2, d, x, y) => {
+                let a = at(*a, *b);
+                let b = at(*c2, *d);
+                let c2 = at(*x, *y);
+                path.curve_to(a, b, c2);
+            }
+            x_native::PathCmd::Close => path.close_path(),
+        }
+    }
+    path
+}
+
+/// Figma's Constraints block — the panel half of the beginner course's "Frame
+/// presets and constraints" chapter: two dropdowns, one per axis, at the end of
+/// the Design column. Figma shows the block for a layer INSIDE a frame (the
+/// frame is what gets resized), which is why `pin_of_selection` refuses a
+/// top-level layer even though our page node is a frame too.
+fn paint_constraints(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    x0: f64,
+    xr: f64,
+    y0: f64,
+) {
+    if pin_of_selection(app).is_none() {
+        return;
+    }
+    let mut y = y0 + 1.0 + 12.0;
+    app.fonts
+        .caps_label(s, x0, y, "CONSTRAINTS", C_TEXT, Wt::Med);
+    y += 12.0 + LABEL_GAP;
+    for axis in [
+        crate::state::ConstraintAxis::Horizontal,
+        crate::state::ConstraintAxis::Vertical,
+    ] {
+        let Some((row, _)) = constraint_row(app, axis) else {
+            continue;
+        };
+        app.fonts
+            .text(s, x0, y + 6.5, axis.label(), T10, C_DIM, Wt::Reg);
+        let fr = Rect::new(x0 + 74.0, y, xr, y + INPUT_H);
+        if app.dropdown_constraint == Some(axis) {
+            // the menu anchors under the field it belongs to; the panel
+            // scrolls, so the painter records where the field landed
+            app.constraint_dd_anchor = (fr.x0, fr.y1);
+        }
+        input(
+            app,
+            s,
+            hit,
+            fr,
+            None,
+            axis.labels()[row],
+            false,
+            Some(Action::ConstraintDropdown(axis)),
+            Some("chevron-down"),
+        );
+        y += INPUT_H + 6.0;
+    }
+}
+
+/// The selected layer's constraint on one axis: the menu row Figma highlights
+/// plus the label the field shows. `None` when the layer has no Constraints
+/// block at all.
+pub fn constraint_row(
+    app: &App,
+    axis: crate::state::ConstraintAxis,
+) -> Option<(usize, &'static str)> {
+    let (hp, vp) = pin_of_selection(app)?;
+    let row = match axis {
+        crate::state::ConstraintAxis::Horizontal => crate::state::CONSTRAINT_H
+            .iter()
+            .position(|(_, p)| *p == hp),
+        crate::state::ConstraintAxis::Vertical => crate::state::CONSTRAINT_V
+            .iter()
+            .position(|(_, p)| *p == vp),
+    }?;
+    Some((row, axis.labels()[row]))
+}
+
+/// The selected layer's two pins, present only when that layer sits inside a
+/// frame.
+fn pin_of_selection(app: &App) -> Option<(x_native::HPin, x_native::VPin)> {
+    let d = app.doc_ref();
+    let root = &d.editor_ref().root;
+    let id = d.selected_id()?;
+    let parent = parent_of(root, &id, None)?;
+    if parent.id == root.id || !matches!(parent.kind, NodeKind::Frame { .. }) {
+        return None;
+    }
+    find_node(root, &id).map(|n| n.pin)
+}
+
+/// The layer's nearest ancestor, `None` when the layer is the page itself.
+fn parent_of<'a>(root: &'a Node, id: &str, parent: Option<&'a Node>) -> Option<&'a Node> {
+    if root.id == id {
+        return parent;
+    }
+    for c in &root.children {
+        if let Some(p) = parent_of(c, id, Some(root)) {
+            return Some(p);
+        }
+    }
+    None
 }
 
 fn sq_btn_small(app: &mut App, s: &mut Scene, x: f64, y: f64, icon: &str) {
@@ -4937,6 +6268,316 @@ fn sq_btn_small(app: &mut App, s: &mut Scene, x: f64, y: f64, icon: &str) {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Figma's **Mask** row and section (help 360040450253). A layer that is not
+/// a mask yet gets the row Figma puts in the sidebar for a single selection —
+/// *Use as mask*; a layer that is one gets the section and its **type**
+/// dropdown — *Alpha*, *Vector*, *Luminance*. `None` means there is nothing to
+/// show for this selection.
+fn paint_mask_section(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    rx: f64,
+    rw: f64,
+    pl: f64,
+    y: f64,
+) -> Option<f64> {
+    app.mask_row = None;
+    let (is_mask, kind) = mask_section_state(app)?;
+    if !is_mask {
+        let row = Rect::new(rx + pl, y - 4.0, rx + rw - pl, y + 20.0);
+        if hover(app, row) {
+            fill_rrect(s, row, R_XS, C_ROW_HOVER);
+        }
+        app.fonts
+            .text(s, row.x0 + 2.0, y, "Use as mask", T10, C_TEXT, Wt::Reg);
+        app.mask_row = Some(row);
+        hit.push((row, Action::UseAsMask));
+        return Some(row.y1 + 10.0);
+    }
+    app.fonts.caps_label(s, rx + pl, y, "Mask", C_TEXT, Wt::Med);
+    let y = y + 14.0 + LABEL_GAP;
+    let row = Rect::new(rx + pl, y - 3.0, rx + rw - pl, y + 21.0);
+    app.mask_row = Some(row);
+    fill_rrect(
+        s,
+        row,
+        R_XS,
+        if hover(app, row) {
+            C_ROW_HOVER
+        } else {
+            C_FIELD
+        },
+    );
+    stroke_rrect(s, row, R_XS, C_LINE, 1.0);
+    app.fonts
+        .text(s, row.x0 + 8.0, y + 2.0, kind.label(), T10, C_TEXT, Wt::Reg);
+    draw_icon(s, "chevron-down", row.x1 - 18.0, y + 3.0, ICON_XS, C_DIM);
+    hit.push((row, Action::ToggleMaskType));
+    if app.mask_type_open {
+        app.blend_dd_anchor = (row.x0, row.y0);
+    }
+    Some(row.y1 + 12.0)
+}
+
+/// The **List style** field's words — the same three the picker lists
+/// (help 360040449773).
+fn list_style_label(app: &App) -> String {
+    typo_val(app, Typo::ListStyle)
+}
+
+/// Figma's **List style** picker (help 360040449773): *"Bulleted and
+/// numbered lists can be applied … using the List style property"* — the three
+/// rows tick the one the layer carries.
+fn paint_list_style_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    let (ax, ay) = app.blend_dd_anchor;
+    let items = x_native::ListStyle::all();
+    let w = 176.0;
+    let h = DROPDOWN_ROW_H * items.len() as f64;
+    let x0 = ax.min((app.win_w - w - 8.0).max(8.0)).max(8.0);
+    let mut y0 = ay + 4.0;
+    if y0 + h > app.win_h - 8.0 {
+        y0 = (ay - 4.0 - h).max(8.0);
+    }
+    let dd = Rect::new(x0, y0, x0 + w, y0 + h);
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, R_LG, C_FIELD);
+    stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+    let current = app
+        .doc_ref()
+        .editor_ref()
+        .list_style_of_selection()
+        .unwrap_or(x_native::ListStyle::None);
+    for (k, m) in items.iter().enumerate() {
+        let r = Rect::new(
+            dd.x0,
+            dd.y0 + DROPDOWN_ROW_H * k as f64,
+            dd.x1,
+            dd.y0 + DROPDOWN_ROW_H * (k + 1) as f64,
+        );
+        let hov = hover(app, r);
+        let on = *m == current;
+        if hov {
+            fill_rect(s, r, C_FIELD_2);
+        }
+        app.fonts.text(
+            s,
+            r.x0 + 10.0,
+            r.y0 + 9.0,
+            m.label(),
+            T11,
+            if on { C_TEXT } else { C_MUTED },
+            Wt::Reg,
+        );
+        if on {
+            draw_icon(s, "check", r.x1 - 22.0, r.y0 + 8.0, ICON_XS, C_TEXT);
+        }
+        hit.push((r, Action::SetListStyle(*m)));
+    }
+}
+
+/// What the Mask row needs: whether the section speaks for a mask (the
+/// selected layer, or the mask inside a selected mask object) and the type its
+/// dropdown shows.
+fn mask_section_state(app: &App) -> Option<(bool, x_native::MaskType)> {
+    let doc = app.doc_opt()?;
+    let id = doc.selected_id()?;
+    let ed = doc.editor_ref();
+    let node = find_node(&ed.root, id.as_str())?;
+    // a selected mask object speaks for the mask at its bottom; anything else
+    // speaks for itself, which is what puts the *Use as mask* row there
+    let target = ed
+        .mask_section_target(&id)
+        .and_then(|t| find_node(&ed.root, t.as_str()))
+        .unwrap_or(node);
+    Some((target.is_mask, target.mask_type))
+}
+
+/// Figma's **Corner radius details** panel (help 360050986854): the four
+/// independent-corner fields in a 2×2 grid — tl/tr over bl/br, the order the
+/// model stores — and the corner-smoothing slider with its `iOS` shortcut at
+/// 60%. It hangs under the radius row it was opened from and floats over the
+/// sections below it, like every other popover this panel owns.
+fn paint_corner_popover(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    let (radii, smoothing) = {
+        let Some(doc) = app.doc_opt() else {
+            return;
+        };
+        let Some(id) = doc.selected_id() else {
+            return;
+        };
+        let Some(n) = find_node(&doc.editor_ref().root, id.as_str()) else {
+            return;
+        };
+        (crate::state::node_corner_radii(n), n.corner_smoothing)
+    };
+    let (ax, ay) = app.corner_anchor;
+    let w = 224.0;
+    let x0 = ax.min((app.win_w - w - 8.0).max(8.0)).max(8.0);
+    let dd = Rect::new(x0, ay + 4.0, x0 + w, ay + 4.0 + 132.0);
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, R_LG, C_FIELD);
+    stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+
+    // the four corner fields, in the grid Figma paints them in
+    for (i, (col, row)) in [
+        (0usize, (0usize, 0usize)),
+        (1, (1, 0)),
+        (3, (0, 1)),
+        (2, (1, 1)),
+    ] {
+        let r = Rect::new(
+            dd.x0 + 10.0 + col as f64 * 106.0,
+            dd.y0 + 10.0 + row as f64 * 34.0,
+            dd.x0 + 110.0 + col as f64 * 106.0,
+            dd.y0 + 38.0 + row as f64 * 34.0,
+        );
+        let hov = hover(app, r);
+        fill_rrect(s, r, R_INPUT, if hov { C_INPUT_HOVER } else { C_FIELD_2 });
+        let editing = app
+            .field
+            .as_ref()
+            .is_some_and(|f| f.id == FieldId::CornerRadius(i));
+        paint_corner_glyph(
+            s,
+            Point::new(r.x0 + 8.0, r.y0 + 8.0),
+            i,
+            if editing { C_TEXT } else { C_DIM },
+        );
+        let v = field_val(app, FieldId::CornerRadius(i), fmt_num(radii[i]));
+        let vw = app.fonts.measure(&v, T11, Wt::Reg);
+        app.fonts
+            .text(s, r.x1 - 8.0 - vw, r.y0 + 5.75, &v, T11, C_TEXT, Wt::Reg);
+        hit.push((r, Action::Field(FieldId::CornerRadius(i))));
+    }
+
+    // corner smoothing: the label, Figma's `iOS` chip, the slider and its
+    // percentage
+    let sy = dd.y0 + 78.0;
+    app.fonts.text(
+        s,
+        dd.x0 + 10.0,
+        sy + 4.0,
+        "Corner smoothing",
+        T10,
+        C_DIM,
+        Wt::Reg,
+    );
+    let ios = Rect::new(dd.x1 - 46.0, sy, dd.x1 - 10.0, sy + 20.0);
+    let ihov = hover(app, ios);
+    fill_rrect(s, ios, R_MD, if ihov { C_FIELD_2 } else { C_FIELD });
+    stroke_rrect(s, ios, R_MD, C_LINE, 1.0);
+    app.fonts
+        .text_center(s, ios, "iOS", T10, C_TEXT, Wt::Reg, true);
+    hit.push((ios, Action::CornerSmoothingIos));
+    let track = Rect::new(dd.x0 + 10.0, sy + 26.0, dd.x1 - 58.0, sy + 32.0);
+    fill_rrect(s, track, R_SM, C_FIELD_2);
+    let knob_x = track.x0 + track.width() * smoothing.clamp(0.0, 1.0);
+    fill_rrect(
+        s,
+        Rect::new(
+            track.x0,
+            track.y0 + 2.0,
+            knob_x.max(track.x0),
+            track.y1 - 2.0,
+        ),
+        R_XS,
+        C_ACCENT,
+    );
+    fill_rrect(
+        s,
+        Rect::new(knob_x - 4.5, sy + 21.0, knob_x + 4.5, sy + 37.0),
+        R_FULL,
+        C_TEXT,
+    );
+    let pct = format!("{}%", (smoothing * 100.0).round() as i64);
+    let pw = app.fonts.measure(&pct, T11, Wt::Reg);
+    app.fonts
+        .text(s, dd.x1 - 10.0 - pw, sy + 24.0, &pct, T11, C_TEXT, Wt::Reg);
+    app.corner_slider = Some(track);
+    hit.push((
+        track.inflate(0.0, 9.0),
+        Action::SetCornerSmoothing(crate::state::slider_fraction(track, app.mouse.x)),
+    ));
+}
+
+/// The corner mark in one of the four corner fields: two 1.5px strokes meeting
+/// at that corner of a 12px box — "⌐", "¬", "L" and their mirrors.
+fn paint_corner_glyph(s: &mut Scene, at: Point, corner: usize, tint: Color) {
+    let (x0, y0) = (at.x, at.y);
+    let (x1, y1) = (x0 + 12.0, y0 + 12.0);
+    let (h, v) = match corner {
+        0 => (
+            (x0 + 1.0, y0 + 1.0, x1, y0 + 1.0),
+            (x0 + 1.0, y0 + 1.0, x0 + 1.0, y1),
+        ),
+        1 => (
+            (x0, y0 + 1.0, x1 - 1.0, y0 + 1.0),
+            (x1 - 1.0, y0 + 1.0, x1 - 1.0, y1),
+        ),
+        3 => (
+            (x0 + 1.0, y1 - 1.0, x1, y1 - 1.0),
+            (x0 + 1.0, y0, x0 + 1.0, y1 - 1.0),
+        ),
+        _ => (
+            (x0, y1 - 1.0, x1 - 1.0, y1 - 1.0),
+            (x1 - 1.0, y0, x1 - 1.0, y1 - 1.0),
+        ),
+    };
+    line(s, h.0, h.1, h.2, h.3, tint, 1.5);
+    line(s, v.0, v.1, v.2, v.3, tint, 1.5);
+}
+
+/// Figma's Mask-section type dropdown (help 360040450253): Alpha, Vector,
+/// Luminance, with the current one checked. Same geometry as the blend menus,
+/// anchored on the row that opened it.
+fn paint_mask_type_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    let (ax, ay) = app.blend_dd_anchor;
+    let items = x_native::MaskType::all();
+    let w = 176.0;
+    let h = DROPDOWN_ROW_H * items.len() as f64;
+    let x0 = ax.min((app.win_w - w - 8.0).max(8.0)).max(8.0);
+    let mut y0 = ay + 4.0;
+    if y0 + h > app.win_h - 8.0 {
+        y0 = (ay - 4.0 - h).max(8.0);
+    }
+    let dd = Rect::new(x0, y0, x0 + w, y0 + h);
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, R_LG, C_FIELD);
+    stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+    let current = app
+        .doc_ref()
+        .editor_ref()
+        .mask_type_of_selection()
+        .unwrap_or(x_native::MaskType::Alpha);
+    for (k, m) in items.iter().enumerate() {
+        let r = Rect::new(
+            dd.x0,
+            dd.y0 + DROPDOWN_ROW_H * k as f64,
+            dd.x1,
+            dd.y0 + DROPDOWN_ROW_H * (k + 1) as f64,
+        );
+        let hov = hover(app, r);
+        let on = *m == current;
+        if hov {
+            fill_rect(s, r, C_FIELD_2);
+        }
+        app.fonts.text(
+            s,
+            r.x0 + 10.0,
+            r.y0 + 9.0,
+            m.label(),
+            T11,
+            if on { C_TEXT } else { C_MUTED },
+            Wt::Reg,
+        );
+        if on {
+            draw_icon(s, "check", r.x1 - 22.0, r.y0 + 8.0, ICON_XS, C_TEXT);
+        }
+        hit.push((r, Action::SetMaskType(*m)));
+    }
+}
+
 fn section_header(
     app: &mut App,
     s: &mut Scene,
@@ -5468,6 +7109,37 @@ fn paint_image_adjustments(
         y += 34.0;
     }
 
+    // Figma's crop mode puts a **Crop** section under the image's own rows
+    // (help 360040675194): the layer is being cropped, and **Resize to fit**
+    // puts it back to the whole picture — one button, one undo entry.
+    if app.crop.is_some() {
+        app.fonts.caps_label(s, x0, y, "CROP", C_TEXT, Wt::Med);
+        y += 20.0;
+        let fit_r = Rect::new(x0, y, x0 + 220.0, y + 26.0);
+        input_box(app, s, fit_r, 6.0);
+        app.fonts.text(
+            s,
+            fit_r.x0 + 8.0,
+            fit_r.y0 + 7.0,
+            "Resize to fit",
+            T10,
+            C_TEXT,
+            Wt::Reg,
+        );
+        hit.push((fit_r, Action::CropResizeToFit));
+        y += 34.0;
+        app.fonts.text(
+            s,
+            x0,
+            y,
+            "Drag a corner to crop - Enter applies, Esc cancels",
+            T10,
+            C_DIM,
+            Wt::Reg,
+        );
+        y += 18.0;
+    }
+
     // Get current adjustments
     let adjustments = {
         let doc = app.doc();
@@ -5668,7 +7340,14 @@ fn paint_paint_row(
     // Register the broad text field first so the later, smaller swatch hit
     // wins during reverse hit-testing.
     hit.push((r, Action::Field(hex_field)));
-    hit.push((sw, Action::ToggleColorPicker(is_fill)));
+    hit.push((
+        sw,
+        Action::ToggleColorPicker(if is_fill {
+            crate::state::PaintTarget::Fill
+        } else {
+            crate::state::PaintTarget::Stroke
+        }),
+    ));
     // P14: eyedropper — sample a layer's paint (was an unreachable action)
     let pd = Rect::new(r.x1 + 8.0, y + 2.0, r.x1 + 8.0 + 24.0, y + 26.0);
     let drop_armed = app.eyedropper == Some(!is_fill);
@@ -5681,7 +7360,7 @@ fn paint_paint_row(
         pd.x0 + 5.0,
         pd.y0 + 5.0,
         ICON_SM,
-        if drop_armed { C_TEXT } else { C_DIM },
+        if drop_armed { C_ON_ACCENT } else { C_DIM },
     );
     tip(app, pd, "Eyedropper: sample a layer's fill / stroke");
     hit.push((pd, Action::EnableEyedropper(!is_fill)));
@@ -5699,7 +7378,9 @@ fn paint_paint_row(
         lr.y0 + 5.0,
         ICON_SM,
         if lib_open {
-            C_ACCENT_INK
+            // solid selection fill → the palette's on_accent ink; accent_ink
+            // is the ink for accent on a *surface*, and washed out here
+            C_ON_ACCENT
         } else if bound {
             C_TEXT
         } else {
@@ -5838,6 +7519,361 @@ fn paint_frame_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Actio
     }
 }
 
+/// Figma's Constraints menu: the five answers for one axis, anchored under the
+/// field that opened it. Picking one writes the layer's pin (`set_pin`), which
+/// is what the next resize of the frame will answer.
+fn paint_constraint_dropdown(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    axis: crate::state::ConstraintAxis,
+) {
+    let (ax, ay) = app.constraint_dd_anchor;
+    let dd = Rect::new(ax, ay + 4.0, ax + 200.0, ay + 4.0 + 5.0 * DROPDOWN_ROW_H);
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, R_LG, C_FIELD);
+    stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+    let current = constraint_row(app, axis).map(|(row, _)| row);
+    for (i, label) in axis.labels().into_iter().enumerate() {
+        let r = Rect::new(
+            dd.x0,
+            dd.y0 + DROPDOWN_ROW_H * i as f64,
+            dd.x1,
+            dd.y0 + DROPDOWN_ROW_H * (i + 1) as f64,
+        );
+        let hov = hover(app, r);
+        if hov || current == Some(i) {
+            fill_rect(s, r, if hov { C_FIELD_2 } else { C_FIELD });
+        }
+        app.fonts.text(
+            s,
+            r.x0 + 10.0,
+            r.y0 + 9.0,
+            label,
+            T11,
+            if current == Some(i) { C_TEXT } else { C_MUTED },
+            Wt::Reg,
+        );
+        if current == Some(i) {
+            draw_icon(s, "check", r.x1 - 22.0, r.y0 + 8.0, ICON_XS, C_TEXT);
+        }
+        hit.push((r, Action::SetConstraint(axis, i)));
+    }
+}
+
+/// Figma's **Width**/**Height** dropdown on an auto-layout frame
+/// (help 360040451373). The sizing choices live here — "Fixed width", "Hug
+/// contents" — and so do the min/max rows: "Open the Width dropdown to find
+/// **Add min width** and **Add max width**", and to take them away "choose
+/// **Remove min and max**". The words are built from the axis the menu belongs
+/// to, so the Width menu never says "height".
+fn paint_layout_axis_dropdown(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    is_w: bool,
+) {
+    let Some(layout) = app.selected_layout() else {
+        return;
+    };
+    // the sizing the axis currently shows: for a horizontal frame the Width
+    // field IS the main axis; for a vertical one it is the cross axis
+    let horizontal = layout.direction == x_native::LayoutDirection::Horizontal;
+    let main = is_w == horizontal;
+    // the frame's own `sizing` is the MAIN axis; `cross_sizing` the other one
+    let sizing = if main {
+        layout.sizing
+    } else {
+        layout.cross_sizing.unwrap_or(layout.sizing)
+    };
+    let label = if is_w { "width" } else { "height" };
+    let (min, max) = if is_w {
+        (layout.min_width, layout.max_width)
+    } else {
+        (layout.min_height, layout.max_height)
+    };
+    let sizing_is_hug = sizing == x_native::Sizing::Hug;
+    let pick_fixed = Action::SetAxisSizing(is_w, x_native::Sizing::Fixed);
+    let pick_hug = Action::SetAxisSizing(is_w, x_native::Sizing::Hug);
+    let add_min = Action::AddAxisLimit(is_w, false);
+    let add_max = Action::AddAxisLimit(is_w, true);
+    let clear = Action::ClearAxisLimits(is_w);
+    let rows: Vec<(String, Action)> = vec![
+        (format!("Fixed {label}"), pick_fixed),
+        ("Hug contents".to_string(), pick_hug),
+        (format!("Add min {label}"), add_min),
+        (format!("Add max {label}"), add_max),
+        ("Remove min and max".to_string(), clear),
+    ];
+    // which row wears the tick: the sizing option in force, and any limit set
+    let ticked = |r: usize| match r {
+        0 => !sizing_is_hug,
+        1 => sizing_is_hug,
+        2 => min.is_some(),
+        3 => max.is_some(),
+        _ => false,
+    };
+    let (ax, ay) = app.layout_axis_dd_anchor;
+    let w = 184.0;
+    let h = DROPDOWN_ROW_H * rows.len() as f64;
+    let dx = ax.min((app.win_w - w - 8.0).max(8.0)).max(8.0);
+    let mut dy = ay + 4.0;
+    if dy + h > app.win_h - 8.0 {
+        dy = (ay - 4.0 - h).max(8.0);
+    }
+    let dd = Rect::new(dx, dy, dx + w, dy + h);
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, R_LG, C_FIELD);
+    stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+    for (i, (text, action)) in rows.into_iter().enumerate() {
+        let r = Rect::new(
+            dd.x0,
+            dd.y0 + DROPDOWN_ROW_H * i as f64,
+            dd.x1,
+            dd.y0 + DROPDOWN_ROW_H * (i + 1) as f64,
+        );
+        let hov = hover(app, r);
+        if hov {
+            fill_rect(s, r, C_FIELD_2);
+        }
+        app.fonts.text(
+            s,
+            r.x0 + 10.0,
+            r.y0 + 9.0,
+            &text,
+            T11,
+            if ticked(i) { C_TEXT } else { C_MUTED },
+            Wt::Reg,
+        );
+        if ticked(i) {
+            draw_icon(s, "check", r.x1 - 22.0, r.y0 + 8.0, ICON_XS, C_TEXT);
+        }
+        hit.push((r, action));
+    }
+}
+
+/// Figma's **canvas stacking** menu (help 31289464393751): the two orders, in
+/// Figma's words — "First on top: the first layer in the stack will be on top",
+/// "Last on top: the last layer in the stack will be on top".
+fn paint_stacking_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    let current = app
+        .selected_layout()
+        .map(|l| l.canvas_stacking)
+        .unwrap_or_default();
+    let list = [
+        x_native::CanvasStacking::FirstOnTop,
+        x_native::CanvasStacking::LastOnTop,
+    ];
+    let (ax, ay) = app.stacking_dd_anchor;
+    let w = 168.0;
+    let h = DROPDOWN_ROW_H * list.len() as f64;
+    let dx = ax.min((app.win_w - w - 8.0).max(8.0)).max(8.0);
+    let mut dy = ay + 4.0;
+    if dy + h > app.win_h - 8.0 {
+        dy = (ay - 4.0 - h).max(8.0);
+    }
+    let dd = Rect::new(dx, dy, dx + w, dy + h);
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, R_LG, C_FIELD);
+    stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+    for (i, v) in list.into_iter().enumerate() {
+        let r = Rect::new(
+            dd.x0,
+            dd.y0 + DROPDOWN_ROW_H * i as f64,
+            dd.x1,
+            dd.y0 + DROPDOWN_ROW_H * (i + 1) as f64,
+        );
+        let hov = hover(app, r);
+        let on = current == v;
+        if hov || on {
+            fill_rect(s, r, if hov { C_FIELD_2 } else { C_FIELD });
+        }
+        app.fonts.text(
+            s,
+            r.x0 + 10.0,
+            r.y0 + 9.0,
+            v.label(),
+            T11,
+            if on { C_TEXT } else { C_MUTED },
+            Wt::Reg,
+        );
+        if on {
+            draw_icon(s, "check", r.x1 - 22.0, r.y0 + 8.0, ICON_XS, C_TEXT);
+        }
+        hit.push((r, Action::SetCanvasStacking(v)));
+    }
+}
+
+/// Figma's **trigger menu**, anchored under the pill that opened it. The
+/// control is a dropdown, not a cycle (help 360040315773 calls it "the trigger
+/// control"): the list is `Trigger::all`, so the delay, key, mouse-down and
+/// video triggers are reachable from the panel rather than only the six
+/// pointer ones, and each row's words come from `Trigger::label` — the same
+/// owner the pill reads, so menu and field cannot disagree.
+fn paint_proto_trigger_dropdown(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    i: usize,
+) {
+    let list = x_native::Trigger::all();
+    // which row is ticked: the selected layer's own interaction `i`
+    let current = match app.doc_ref().selected_id() {
+        Some(id) => {
+            let root = &app.doc_ref().editor_ref().root;
+            find_node(root, &id)
+                .and_then(|n| x_native::effective_interactions(n).into_iter().nth(i))
+                .map(|ix| ix.trigger.row())
+        }
+        None => None,
+    };
+    let (ax, ay) = app.proto_trigger_dd_anchor;
+    let h = DROPDOWN_ROW_H * list.len() as f64;
+    let w = 176.0;
+    let x0 = ax.min((app.win_w - w - 8.0).max(8.0)).max(8.0);
+    // twelve rows is taller than the room under the field in most windows, so
+    // the menu flips above the pill rather than running off the screen
+    let mut y0 = ay + 4.0;
+    if y0 + h > app.win_h - 8.0 {
+        y0 = (ay - 4.0 - h).max(8.0);
+    }
+    let dd = Rect::new(x0, y0, x0 + w, y0 + h);
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, R_LG, C_FIELD);
+    stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+    for (k, t) in list.iter().enumerate() {
+        let r = Rect::new(
+            dd.x0,
+            dd.y0 + DROPDOWN_ROW_H * k as f64,
+            dd.x1,
+            dd.y0 + DROPDOWN_ROW_H * (k + 1) as f64,
+        );
+        let hov = hover(app, r);
+        let on = current == Some(k);
+        if hov || on {
+            fill_rect(s, r, if hov { C_FIELD_2 } else { C_FIELD });
+        }
+        app.fonts.text(
+            s,
+            r.x0 + 10.0,
+            r.y0 + 9.0,
+            t.label(),
+            T11,
+            if on { C_TEXT } else { C_MUTED },
+            Wt::Reg,
+        );
+        if on {
+            draw_icon(s, "check", r.x1 - 22.0, r.y0 + 8.0, ICON_XS, C_TEXT);
+        }
+        hit.push((r, Action::ProtoSetTrigger(i, k)));
+    }
+}
+
+/// One row of Figma's Scroll behavior block: the label on the left and the
+/// field that opens `menu` on the right, inside the panel's padding. `field`
+/// is (caption, the value the field shows, the menu it opens). The anchor is
+/// recorded while the field paints, so the open menu lands under the field it
+/// belongs to even when the panel has been scrolled.
+fn proto_scroll_row(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    span: (f64, f64),
+    y: f64,
+    field: (&str, &str, crate::state::ProtoScrollMenu),
+) {
+    let (x0, xr) = span;
+    let (caption, value, menu) = field;
+    app.fonts.text(s, x0, y + 6.5, caption, T10, C_DIM, Wt::Reg);
+    let fr = Rect::new(x0 + 74.0, y, xr, y + INPUT_H);
+    if app.dropdown_proto_scroll == Some(menu) {
+        app.proto_scroll_dd_anchor = (fr.x0, fr.y1);
+    }
+    input(
+        app,
+        s,
+        hit,
+        fr,
+        None,
+        value,
+        false,
+        Some(Action::ProtoScrollMenu(menu)),
+        Some("chevron-down"),
+    );
+}
+
+/// Figma's **Scroll behavior** menu, anchored under the field that opened it:
+/// the Overflow options on a frame, the Position options on an object that
+/// sits on a frame that scrolls. Same design language as the Constraints menu,
+/// and the same one-owner rule — the labels come from the tables in `state.rs`
+/// that the field itself reads, so the field and its menu cannot disagree.
+fn paint_proto_scroll_dropdown(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    which: crate::state::ProtoScrollMenu,
+) {
+    use crate::state::ProtoScrollMenu;
+    // the selected layer decides both the captions and which row is ticked,
+    // so the menu and the field it opened from read the same tables
+    let node = {
+        let sel = app.doc_ref().selected_id();
+        match sel {
+            Some(id) => {
+                let root = &app.doc_ref().editor_ref().root;
+                find_node(root, &id).cloned()
+            }
+            None => None,
+        }
+    };
+    let mut current = 0usize;
+    if let Some(n) = &node {
+        current = match which {
+            ProtoScrollMenu::Overflow => crate::state::proto_overflow_row(n.overflow),
+            ProtoScrollMenu::Position => crate::state::proto_position_row(&n.constraints),
+        };
+    }
+    let labels: &[&str] = match which {
+        ProtoScrollMenu::Overflow => &crate::state::PROTO_OVERFLOW_LABELS,
+        ProtoScrollMenu::Position => &crate::state::PROTO_POSITION_LABELS,
+    };
+    let (ax, ay) = app.proto_scroll_dd_anchor;
+    let h = DROPDOWN_ROW_H * labels.len() as f64;
+    let dd = Rect::new(ax, ay + 4.0, ax + 200.0, ay + 4.0 + h);
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, R_LG, C_FIELD);
+    stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+    for (i, label) in labels.iter().enumerate() {
+        let r = Rect::new(
+            dd.x0,
+            dd.y0 + DROPDOWN_ROW_H * i as f64,
+            dd.x1,
+            dd.y0 + DROPDOWN_ROW_H * (i + 1) as f64,
+        );
+        let hov = hover(app, r);
+        if hov || current == i {
+            fill_rect(s, r, if hov { C_FIELD_2 } else { C_FIELD });
+        }
+        app.fonts.text(
+            s,
+            r.x0 + 10.0,
+            r.y0 + 9.0,
+            label,
+            T11,
+            if current == i { C_TEXT } else { C_MUTED },
+            Wt::Reg,
+        );
+        if current == i {
+            draw_icon(s, "check", r.x1 - 22.0, r.y0 + 8.0, ICON_XS, C_TEXT);
+        }
+        let action = match which {
+            ProtoScrollMenu::Overflow => Action::ProtoSetOverflow(i),
+            ProtoScrollMenu::Position => Action::ProtoSetPosition(i),
+        };
+        hit.push((r, action));
+    }
+}
+
 /// Line-height mode menu (Figma): Auto / Pixels / Percent, anchored under
 /// the Line height field. Same design language as the frame dropdown.
 fn paint_lh_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
@@ -5850,7 +7886,7 @@ fn paint_lh_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>
                                   // menu 89px above the Line-height field it belongs to.
     let y_entry = crate::theme::ED_TITLE_H + 89.0;
     // the typography rows scroll with the panel
-    let fy = y_entry + 771.0 - app.doc().scroll_right;
+    let fy = y_entry + 811.0 - app.doc().scroll_right;
     let dd = Rect::new(x0, fy + 28.0, x0 + 153.5, fy + 28.0 + 3.0 * DROPDOWN_ROW_H);
     elev_shadow(s, dd, 8.0, Elevation::Floating);
     fill_rrect(s, dd, R_LG, C_FIELD);
@@ -5893,7 +7929,7 @@ fn paint_text_style_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, 
     let reg = app.editor_regions();
     let x0 = reg.right.x0 + 13.0; // panel border + padding (cols x0)
     let y_entry = crate::theme::ED_TITLE_H + 89.0;
-    let fy = y_entry + 658.5 - app.doc().scroll_right;
+    let fy = y_entry + 698.5 - app.doc().scroll_right;
 
     let names: Vec<String> = {
         let doc = app.doc();
@@ -6097,7 +8133,7 @@ fn paint_library(app: &App) -> Option<(Rect, Vec<LibRow>)> {
         + 8.0;
     // the panel's y depends on the scroll offset, so the anchor comes from the
     // row that opened it; clamp to the window either way
-    let y0 = ay.min(app.win_h - h - 8.0).max(ED_TITLE_H + 4.0);
+    let y0 = ay.min(app.status_band().y0 - h - 8.0).max(ED_TITLE_H + 4.0);
     Some((Rect::new(ax, y0, ax + w, y0 + h), rows))
 }
 
@@ -6157,7 +8193,10 @@ fn paint_paint_library(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action
                 let r = Rect::new(dd.x0 + 4.0, y, dd.x1 - 4.0, y + LIB_ITEM_H);
                 let hov = hover(app, r);
                 if hov || active {
-                    fill_rrect(s, r, R_SM, if hov { C_FIELD_2 } else { C_SEL });
+                    // hover = raised surface; bound = selection *wash*, not
+                    // the solid selection colour: that is near-black in
+                    // Daylight, and the label on it disappears
+                    fill_rrect(s, r, R_SM, if hov { C_FIELD_2 } else { C_SEL_WASH });
                 }
                 let mut tx = r.x0 + 10.0;
                 if let Some(c) = swatch {
@@ -6196,40 +8235,55 @@ fn paint_paint_library(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action
 fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let reg = app.editor_regions();
 
-    // Choose tool set based on document type
+    // Choose tool set based on document type. The design row keeps eighteen
+    // icons: Figma keeps the frame and the section on ONE toolbar slot and
+    // draws whichever of the two you used last (F / ⇧S switch it, and the
+    // palette names both), so the audited geometry below still holds.
+    let board_tools = [
+        Tool::Select,
+        Tool::BoardSticky,
+        Tool::BoardConnector,
+        Tool::Pen,
+        Tool::BoardRect,
+        Tool::BoardCircle,
+        Tool::Text,
+        Tool::Hand,
+    ];
+    // Design tools for artboard-based work — the full tool set
+    // (audit F2: eraser, symmetry and comment were keyboard-only
+    // before; the toolbar is the tool hub)
+    let mut design_tools = [
+        Tool::Select,
+        Tool::Scale,
+        Tool::Frame,
+        Tool::Slice,
+        Tool::Text,
+        Tool::Rect,
+        Tool::Ellipse,
+        Tool::Line,
+        Tool::Arrow,
+        Tool::Poly,
+        Tool::Star,
+        Tool::Pen,
+        Tool::Pencil,
+        Tool::Brush,
+        Tool::Eraser,
+        Tool::Symmetry,
+        Tool::Comment,
+        Tool::Hand,
+    ];
+    design_tools[2] = app.frame_slot();
     let tools: &[Tool] = if app.is_board() {
-        // Board tools for infinite canvas
-        &[
-            Tool::Select,
-            Tool::BoardSticky,
-            Tool::BoardConnector,
-            Tool::Pen,
-            Tool::BoardRect,
-            Tool::BoardCircle,
-            Tool::Text,
-            Tool::Hand,
-        ]
+        &board_tools
     } else {
-        // Design tools for artboard-based work — the full tool set
-        // (audit F2: eraser, symmetry and comment were keyboard-only
-        // before; the toolbar is the tool hub)
-        &[
-            Tool::Select,
-            Tool::Frame,
-            Tool::Text,
-            Tool::Rect,
-            Tool::Ellipse,
-            Tool::Pen,
-            Tool::Eraser,
-            Tool::Symmetry,
-            Tool::Comment,
-            Tool::Hand,
-        ]
+        &design_tools
     };
-    // Audited (canvas 280..1100 @900): container 415×40 r12 at bottom-5
+    // Audited (canvas 280..1100 @900): container 703×40 r12 at bottom-5
     // (y = win_h − 60); icons 32px pitch 36 starting +7; divider mid-gap
-    // after ten tools; palette btn at +376 from container left.
-    let bar_w = 415.0;
+    // after eighteen tools (Scale, the Slice tool, the Pencil, Figma Draw's
+    // Brush, the Line and Arrow, and Figma's Polygon and Star joined the
+    // row); palette btn at +664 from container left.
+    let bar_w = 703.0;
     let bar_x0 = reg.canvas.x0 + (reg.canvas.x1 - reg.canvas.x0 - bar_w) / 2.0;
     let bar_y0 = app.win_h - TOOLBAR_BOTTOM - TOOLBAR_H;
     let bar = Rect::new(bar_x0, bar_y0, bar_x0 + bar_w, bar_y0 + TOOLBAR_H);
@@ -6253,7 +8307,11 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             r.x0 + (TOOL_ICON - 16.0) / 2.0,
             r.y0 + (TOOL_ICON - 16.0) / 2.0,
             ICON_MD,
-            if active { C_BLACK } else { C_DIM },
+            // the active chip is *inverted*: fill text_primary, ink
+            // background — the same pair the dashboard's primary button
+            // uses. A literal black ink vanished on Daylight, whose
+            // text_primary is near-black.
+            if active { C_BG } else { C_DIM },
         );
         let sc = t.shortcut_hint(app.is_board());
         let tl = if sc.is_empty() {
@@ -6264,15 +8322,15 @@ fn paint_toolbar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         tip(app, r, &tl);
         hit.push((r, Action::Tool(*t)));
     }
-    // divider between hand (ends +363) and palette (+376)
-    let dx = bar.x0 + 371.5;
+    // divider between the last tool (ends +651) and palette (+664)
+    let dx = bar.x0 + 659.5;
     fill_rect(
         s,
         Rect::new(dx, bar.y0 + 10.0, dx + 1.0, bar.y1 - 10.0),
         C_LINE_2,
     );
     // search → palette
-    let sx = bar.x0 + 376.0;
+    let sx = bar.x0 + 664.0;
     let sr = Rect::new(sx, bar.y0 + 4.0, sx + TOOL_ICON, bar.y0 + 4.0 + TOOL_ICON);
     if hover(app, sr) {
         fill_rrect(s, sr, R_TOOL_ICON, C_FIELD_2);
@@ -6291,7 +8349,729 @@ pub(crate) fn size_badge_visible(bb: &Rect) -> bool {
     bb.width() > 0.5 && bb.height() > 0.5
 }
 
+/// Figma keeps slices visible as regions rather than layers: a dashed outline
+/// per slice plus the slice's name, which is also how you reach one on the
+/// canvas. Editor chrome only — nothing here reaches an export (`prepare_export`
+/// builds its tree from the document, and the frame-name label strip skips
+/// keys this painter never emits).
+fn paint_slice_chrome(app: &mut App, s: &mut Scene) {
+    let Some(doc) = app.doc_opt() else {
+        return;
+    };
+    let mut slices: Vec<(String, Rect)> = vec![];
+    fn walk(n: &Node, ox: f64, oy: f64, out: &mut Vec<(String, Rect)>) {
+        let (x, y) = (ox + n.transform.x, oy + n.transform.y);
+        if n.visible && matches!(n.kind, NodeKind::Slice) {
+            out.push((n.name.clone(), Rect::new(x, y, x + n.w, y + n.h)));
+        }
+        for c in &n.children {
+            walk(c, x, y, out);
+        }
+    }
+    for c in &doc.editor_ref().root.children {
+        walk(c, 0.0, 0.0, &mut slices);
+    }
+    if slices.is_empty() {
+        return;
+    }
+    let reg = app.editor_regions();
+    for (name, wr) in slices {
+        let a = app.world_to_screen(Point::new(wr.x0, wr.y0));
+        let b = app.world_to_screen(Point::new(wr.x1, wr.y1));
+        let r = Rect::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y));
+        stroke_rect_dashed(s, r, C_SEL, 1.0, 6.0, 4.0);
+        let tw = app.fonts.measure(&name, T10, Wt::Reg) + 12.0;
+        let cy = (r.y0 - 18.0).max(reg.canvas.y0 + 2.0);
+        let chip = Rect::new(r.x0, cy, r.x0 + tw, cy + 16.0);
+        fill_rrect(s, chip, R_SM, C_TEXT);
+        app.fonts
+            .text_center(s, chip, &name, T10, C_BASE, Wt::Med, true);
+    }
+}
+
+/// Figma's default look for a component set: a dashed violet stroke with no
+/// fill around the set, the same stroke around each variant inside it, and the
+/// set's name on a chip under the set's bottom-left corner. Editor chrome only
+/// — nothing here reaches an export.
+fn paint_variant_chrome(app: &mut App, s: &mut Scene) {
+    let Some(doc) = app.doc_opt() else {
+        return;
+    };
+    let mut sets: Vec<(String, Rect, Vec<Rect>)> = vec![];
+    fn walk(n: &Node, ox: f64, oy: f64, out: &mut Vec<(String, Rect, Vec<Rect>)>) {
+        let (x, y) = (ox + n.transform.x, oy + n.transform.y);
+        if n.visible && x_native::is_variant_set(n) {
+            let kids = n
+                .children
+                .iter()
+                .map(|c| {
+                    let (cx, cy) = (x + c.transform.x, y + c.transform.y);
+                    Rect::new(cx, cy, cx + c.w, cy + c.h)
+                })
+                .collect();
+            out.push((n.name.clone(), Rect::new(x, y, x + n.w, y + n.h), kids));
+        }
+        for c in &n.children {
+            walk(c, x, y, out);
+        }
+    }
+    for c in &doc.editor_ref().root.children {
+        walk(c, 0.0, 0.0, &mut sets);
+    }
+    if sets.is_empty() {
+        return;
+    }
+    let reg = app.editor_regions();
+    let to_screen = |wr: Rect| {
+        let a = app.world_to_screen(Point::new(wr.x0, wr.y0));
+        let b = app.world_to_screen(Point::new(wr.x1, wr.y1));
+        Rect::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y))
+    };
+    for (name, wr, kids) in sets {
+        for kw in kids {
+            stroke_rect_dashed(s, to_screen(kw), C_SET, 1.0, 6.0, 4.0);
+        }
+        let r = to_screen(wr);
+        stroke_rect_dashed(s, r, C_SET, 1.0, 6.0, 4.0);
+        let tw = app.fonts.measure(&name, T10, Wt::Reg) + 12.0;
+        let cy = (r.y1 + 2.0).min(reg.canvas.y1 - 18.0);
+        let chip = Rect::new(r.x0, cy, r.x0 + tw, cy + 16.0);
+        fill_rrect(s, chip, R_SM, C_SET);
+        app.fonts
+            .text_center(s, chip, &name, T10, C_ON_ACCENT, Wt::Med, true);
+    }
+}
+
+// ------------------------------------------------------------ effects list
+
+/// One row's place for the drag: the index whose row the pointer is inside.
+/// `None` outside the list, so a drag that leaves it commits nothing.
+pub fn effect_drop_index(app: &App, p: Point) -> Option<usize> {
+    app.effect_rows
+        .iter()
+        .position(|r| p.y >= r.y0 && p.y <= r.y1)
+}
+
+/// The blend a paint popover is currently showing: the effect's own blend, or
+/// the first fill's / stroke's. Used by the popover's *Apply blend mode* row.
+fn paint_target_blend(app: &App, t: crate::state::PaintTarget) -> x_native::BlendKind {
+    let Some(id) = app.doc_ref().selected_id() else {
+        return x_native::BlendKind::Normal;
+    };
+    match t {
+        crate::state::PaintTarget::Effect(i) => app
+            .effect_layers_of(&id)
+            .get(i)
+            .map(|l| l.blend)
+            .unwrap_or(x_native::BlendKind::Normal),
+        target => {
+            let d = app.doc_ref();
+            crate::editor_ui::find_node(&d.editor_ref().root, &id)
+                .and_then(|n| {
+                    // the two layer lists are different types: one branch each
+                    if target.is_fill() {
+                        n.fill_layers.first().map(|l| l.blend)
+                    } else {
+                        n.stroke_layers.first().map(|l| l.blend)
+                    }
+                })
+                .unwrap_or(x_native::BlendKind::Normal)
+        }
+    }
+}
+
+/// Figma's blend dropdown. `modes` is the list for the thing being blended —
+/// the layer's 19 (Pass through first) or a paint's 18 (no Pass through) — so
+/// one painter serves the layer row, the popover and every effect row.
+fn paint_blend_menu(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    modes: &[x_native::BlendKind],
+    current: x_native::BlendKind,
+    make: impl Fn(x_native::BlendKind) -> Action,
+) {
+    let (ax, ay) = app.blend_dd_anchor;
+    let w = 176.0;
+    let h = DROPDOWN_ROW_H * modes.len() as f64;
+    let x0 = ax.min((app.win_w - w - 8.0).max(8.0)).max(8.0);
+    let mut y0 = ay + 4.0;
+    if y0 + h > app.win_h - 8.0 {
+        y0 = (ay - 4.0 - h).max(8.0);
+    }
+    let dd = Rect::new(x0, y0, x0 + w, y0 + h);
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, R_LG, C_FIELD);
+    stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+    for (k, m) in modes.iter().enumerate() {
+        let r = Rect::new(
+            dd.x0,
+            dd.y0 + DROPDOWN_ROW_H * k as f64,
+            dd.x1,
+            dd.y0 + DROPDOWN_ROW_H * (k + 1) as f64,
+        );
+        let hov = hover(app, r);
+        let on = *m == current;
+        if hov {
+            fill_rect(s, r, C_FIELD_2);
+        }
+        app.fonts.text(
+            s,
+            r.x0 + 10.0,
+            r.y0 + 9.0,
+            m.label(),
+            T11,
+            if on { C_TEXT } else { C_MUTED },
+            Wt::Reg,
+        );
+        if on {
+            draw_icon(s, "check", r.x1 - 22.0, r.y0 + 8.0, ICON_XS, C_TEXT);
+        }
+        hit.push((r, make(*m)));
+    }
+}
+
+/// Scroll the right panel until the Effects section is at the top of the
+/// panel viewport. The section is the tail of the DESIGN column, so at scroll 0
+/// it lives below the fold — and the panel drops hit rects that leave the
+/// viewport (see `paint_right`), so anything that means to *click* its rows —
+/// a test, a screenshot — has to make the same scroll a user makes to reach
+/// them. (It stays out of the file's test tail on purpose: the design-sheet
+/// scan reads each file only up to that marker, and this one sits mid-file.)
+pub fn scroll_effects_into_view(app: &mut App) {
+    let mut scene = vello::Scene::new();
+    paint(app, &mut scene);
+    let Some(first) = app.effect_rows.first().copied() else {
+        return;
+    };
+    // the panel's scroll region starts one pixel under this divider
+    let top = crate::theme::ED_TITLE_H + 89.0;
+    // the header (and its `+`) sits just above the first row
+    let need = first.y0 - 34.0 - (top + 8.0);
+    if need > 0.0 {
+        app.doc().scroll_right += need;
+        let mut scene = vello::Scene::new();
+        paint(app, &mut scene);
+    }
+}
+
+/// Bring the Mask row into the panel viewport. Same reasoning as
+/// `scroll_effects_into_view` above: the Mask section sits with the appearance
+/// rows, below the fold at scroll 0, and `paint_right` drops the hit rects of
+/// rows that leave the viewport — a test that means to *click* the row has to
+/// make the scroll a user makes.
+pub fn scroll_mask_into_view(app: &mut App) {
+    let mut scene = vello::Scene::new();
+    paint(app, &mut scene);
+    let Some(row) = app.mask_row else {
+        return;
+    };
+    let top = crate::theme::ED_TITLE_H + 89.0;
+    let need = row.y0 - 12.0 - (top + 8.0);
+    if need > 0.0 {
+        app.doc().scroll_right += need;
+        let mut scene = vello::Scene::new();
+        paint(app, &mut scene);
+    }
+}
+
+/// Figma's Effects list — the section that replaced a header and a `+`.
+///
+/// One row per effect carrying its **type dropdown** (Figma: *"The Drop shadow
+/// effect is selected by default. Use the dropdown to switch to Inner shadow /
+/// Layer Blur / Background Blur"*), its **Effect settings** disclosure, its own
+/// eye (*"you can toggle the visibility of individual effects"*) and its own
+/// blend (*"You can apply blend modes to inner shadows, drop shadows, and noise
+/// effects"*). The `+` opens the five types. Rows are pressed and dragged to
+/// reorder, which is Figma's gesture.
+fn paint_effects_section(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    rx: f64,
+    rw: f64,
+    pl: f64,
+    y: f64,
+) -> f64 {
+    let mut y = y;
+    let x0 = rx + pl;
+    let xr = rx + rw - pl;
+    section_header(
+        app,
+        s,
+        hit,
+        rx,
+        rw,
+        pl,
+        y,
+        "Effects",
+        false,
+        Action::ToggleEffectAdd,
+    );
+    y += 14.0 + LABEL_GAP;
+    // the `+` menu is a popover, not panel content: it is drawn in the popover
+    // pass (`paint_effects_menus`) so it can hang past the panel's edge — and
+    // so its rows stay clickable — exactly like the panel's other dropdowns.
+    app.effect_add_anchor = (xr, y);
+
+    let Some(id) = app.doc_ref().selected_id() else {
+        return y;
+    };
+    let layers = app.effect_layers_of(&id);
+    app.effect_rows.clear();
+    if layers.is_empty() {
+        app.fonts.text(s, x0, y, "No effects", T10, C_DIM, Wt::Reg);
+        y += 20.0;
+        return y;
+    }
+
+    for (i, layer) in layers.iter().enumerate() {
+        if i > 0 {
+            hline(s, rx, rx + rw, y - 6.0, C_LINE);
+        }
+        let row = Rect::new(x0, y, xr, y + 24.0);
+        app.effect_rows.push(row);
+        if app.effect_drag_over == Some(i) {
+            fill_rrect(s, row, R_SM, C_SEL_WASH);
+        } else if hover(app, row) {
+            fill_rrect(s, row, R_SM, C_ROW_HOVER);
+        }
+        hit.push((row, Action::EffectRow(i)));
+
+        // the type dropdown: the row's own words, and the type's icon
+        let kind = layer.effect.kind();
+        draw_icon(s, kind.icon(), x0 + 2.0, y + 6.0, ICON_XS, C_MUTED);
+        draw_icon(s, "chevron-down", x0 + 18.0, y + 7.0, ICON_XS, C_DIM);
+        app.fonts
+            .text(s, x0 + 34.0, y + 5.0, kind.label(), T11, C_TEXT, Wt::Reg);
+        hit.push((
+            Rect::new(x0, y, x0 + 132.0, y + 24.0),
+            Action::ToggleEffectKind(i),
+        ));
+        if app.effect_kind_open == Some(i) {
+            app.blend_dd_anchor = (x0 + 2.0, y + 22.0);
+        }
+
+        // the row's own buttons: Eye, Duplicate, Effect settings, Remove
+        let mut bx = xr - 24.0;
+        let remove = Rect::new(bx, y + 2.0, bx + 20.0, y + 22.0);
+        if hover(app, remove) {
+            fill_rrect(s, remove, R_SM, C_FIELD_2);
+        }
+        draw_icon(s, "minus", remove.x0 + 4.0, remove.y0 + 5.0, ICON_XS, C_DIM);
+        hit.push((remove, Action::RemoveEffect(i)));
+        bx -= 24.0;
+        let gear = Rect::new(bx, y + 2.0, bx + 20.0, y + 22.0);
+        let gear_on = app.effect_settings == Some(i);
+        if hover(app, gear) || gear_on {
+            fill_rrect(s, gear, R_SM, if gear_on { C_FIELD_2 } else { C_ROW_HOVER });
+        }
+        draw_icon(
+            s,
+            "sliders-horizontal",
+            gear.x0 + 4.0,
+            gear.y0 + 5.0,
+            ICON_XS,
+            C_DIM,
+        );
+        tip(app, gear, "Effect settings");
+        hit.push((gear, Action::ToggleEffectSettings(i)));
+        bx -= 24.0;
+        let dup = Rect::new(bx, y + 2.0, bx + 20.0, y + 22.0);
+        if hover(app, dup) {
+            fill_rrect(s, dup, R_SM, C_FIELD_2);
+        }
+        draw_icon(s, "copy", dup.x0 + 4.0, dup.y0 + 5.0, ICON_XS, C_DIM);
+        tip(app, dup, "Duplicate effect");
+        hit.push((dup, Action::DuplicateEffect(i)));
+        bx -= 24.0;
+        let eye = Rect::new(bx, y + 2.0, bx + 20.0, y + 22.0);
+        if hover(app, eye) || !layer.visible {
+            fill_rrect(s, eye, R_SM, C_FIELD_2);
+        }
+        draw_icon(
+            s,
+            if layer.visible { "eye" } else { "eye-off" },
+            eye.x0 + 4.0,
+            eye.y0 + 5.0,
+            ICON_XS,
+            if layer.visible { C_DIM } else { C_TEXT },
+        );
+        tip(app, eye, "Toggle effect visibility");
+        hit.push((eye, Action::ToggleEffectVisible(i)));
+        y += 28.0;
+
+        if app.effect_settings == Some(i) {
+            // Figma's *Effect settings*: the type's own rows. Which fields
+            // exist comes from the model, so a Blur shows Radius and Noise
+            // shows Density without the panel carrying a second table.
+            let mut sy = y;
+            let fields = layer.effect.fields();
+            let cols: Vec<(x_native::EffectField, String)> = fields
+                .iter()
+                .map(|f| (*f, fmt_num(layer.effect.field(*f))))
+                .collect();
+            let col_w = 76.0;
+            let gap_w = 8.0;
+            // labels
+            for (k, (f, _)) in cols.iter().enumerate() {
+                let cx = x0 + k as f64 * (col_w + gap_w);
+                if cx + col_w > xr {
+                    break;
+                }
+                app.fonts.text(s, cx, sy, f.label(), T10, C_DIM, Wt::Reg);
+            }
+            sy += 12.0 + LABEL_GAP;
+            for (k, (f, v)) in cols.iter().enumerate() {
+                let cx = x0 + k as f64 * (col_w + gap_w);
+                if cx + col_w > xr {
+                    break;
+                }
+                let r = Rect::new(cx, sy, cx + col_w, sy + 24.0);
+                let fid = crate::state::FieldId::for_effect(i, *f);
+                let shown = field_val(app, fid, v.clone());
+                input(
+                    app,
+                    s,
+                    hit,
+                    r,
+                    None,
+                    &shown,
+                    true,
+                    Some(Action::Field(fid)),
+                    None,
+                );
+            }
+            sy += 24.0 + 8.0;
+
+            // a shadow's **Fill**: the swatch opens the real colour popover,
+            // and its target is this effect (never the layer's fill)
+            if let Some(color) = layer.effect.color() {
+                let fr = Rect::new(x0, sy, x0 + 96.0, sy + 24.0);
+                fill_rrect(s, fr, R_MD, C_FIELD);
+                if hover(app, fr) {
+                    stroke_rrect(s, fr, R_MD, C_LINE_2, 1.0);
+                }
+                let sw = Rect::new(fr.x0 + 4.0, sy + 4.0, fr.x0 + 20.0, sy + 20.0);
+                fill_rrect(s, sw, R_XS, color);
+                stroke_rrect(s, sw, R_XS, C_LINE_2, 1.0);
+                app.fonts
+                    .text(s, fr.x0 + 26.0, sy + 5.0, "Fill", T10, C_DIM, Wt::Reg);
+                hit.push((
+                    sw,
+                    Action::ToggleColorPicker(crate::state::PaintTarget::Effect(i)),
+                ));
+                sy += 24.0 + 8.0;
+            }
+
+            // the effect's own **blend** (Figma: shadows, inner shadows, noise)
+            let blend_row = Rect::new(x0, sy, xr, sy + 24.0);
+            if hover(app, blend_row) {
+                fill_rrect(s, blend_row, R_MD, C_FIELD_2);
+            }
+            app.fonts.text(
+                s,
+                blend_row.x0 + 8.0,
+                sy + 5.0,
+                "Blend",
+                T10,
+                C_TEXT,
+                Wt::Reg,
+            );
+            let bl = layer.blend.label();
+            let blw = app.fonts.measure(bl, T11, Wt::Reg);
+            app.fonts.text(
+                s,
+                blend_row.x1 - 20.0 - blw,
+                sy + 4.0,
+                bl,
+                T11,
+                C_DIM,
+                Wt::Reg,
+            );
+            draw_icon(
+                s,
+                "chevron-down",
+                blend_row.x1 - 16.0,
+                sy + 7.0,
+                ICON_XS,
+                C_DIM,
+            );
+            hit.push((blend_row, Action::ToggleEffectBlend(i)));
+            if app.effect_blend_open == Some(i) {
+                app.blend_dd_anchor = (blend_row.x0, blend_row.y1);
+            }
+            sy += 24.0 + 8.0;
+            y = sy;
+        }
+    }
+    y += 6.0;
+    y
+}
+
+/// Figma's keyboard-shortcuts panel: the sheet `⇧?` opens (the help page's
+/// `⌃⇧?`; this host reports the character, not the Control key). Two columns
+/// of the keys this host actually answers to, and a full-window scrim pushed
+/// LAST so the reverse scan finds it before the canvas behind it.
+fn paint_shortcuts_panel(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    const ROWS: &[(&str, &str)] = &[
+        ("V", "Move"),
+        ("F", "Frame"),
+        ("R", "Rectangle"),
+        ("O", "Ellipse"),
+        ("T", "Text"),
+        ("P", "Pen"),
+        ("K", "Scale"),
+        ("H", "Hand"),
+        ("C", "Comment"),
+        ("\u{21e7}1", "Zoom to fit"),
+        ("\u{21e7}2", "Zoom to selection"),
+        ("N / \u{21e7}N", "Next / previous frame"),
+        ("\u{21e7}E", "Design / Prototype"),
+        ("\u{21e7}A", "Add auto layout"),
+        ("\u{2318}R", "Rename layer"),
+        ("\u{2318}G / \u{21e7}\u{2318}G", "Group / ungroup"),
+        ("\u{2318}D", "Duplicate"),
+        ("\u{2325}\u{2318}M", "Use as mask"),
+        ("\u{2325}\u{2318}K", "Create component"),
+        ("\u{21e7}\u{2318}K", "Place image"),
+        ("\u{2318}/", "Quick actions"),
+        ("\u{2318}K", "Command palette"),
+        (
+            "\u{2318}\u{21e7}8 / \u{2318}\u{21e7}7",
+            "Bulleted / numbered list",
+        ),
+        ("\u{2318}\\", "Hide UI"),
+        ("\u{21e7}\u{2318}\\", "Hide left panel"),
+        ("\u{21e7}?", "This panel"),
+    ];
+    const COLS: usize = 2;
+    const ROW_H: f64 = 22.0;
+    let per_col = ROWS.len().div_ceil(COLS);
+    let w = 560.0;
+    let h = 56.0 + per_col as f64 * ROW_H + 16.0;
+    let x0 = ((app.win_w - w) / 2.0).max(8.0);
+    let y0 = ((app.win_h - h) / 2.0).max(8.0);
+    let panel = Rect::new(
+        x0,
+        y0,
+        (x0 + w).min(app.win_w - 8.0),
+        (y0 + h).min(app.win_h - 8.0),
+    );
+    elev_shadow(s, panel, 12.0, Elevation::Floating);
+    fill_rrect(s, panel, R_LG, C_PANEL);
+    stroke_rrect(s, panel, R_LG, C_LINE_2, 1.0);
+    app.fonts.text(
+        s,
+        panel.x0 + 16.0,
+        panel.y0 + 14.0,
+        "Keyboard shortcuts",
+        T13,
+        C_TEXT,
+        Wt::Med,
+    );
+    let col_w = (panel.x1 - panel.x0) / COLS as f64;
+    for (i, (key, what)) in ROWS.iter().enumerate() {
+        let rx = panel.x0 + 16.0 + (i / per_col) as f64 * col_w;
+        let ry = panel.y0 + 46.0 + (i % per_col) as f64 * ROW_H;
+        app.fonts.text(s, rx, ry, key, T11, C_TEXT, Wt::Med);
+        app.fonts
+            .text(s, rx + 116.0, ry, what, T11, C_MUTED, Wt::Reg);
+    }
+    hit.push((
+        Rect::new(0.0, 0.0, app.win_w, app.win_h),
+        Action::CloseShortcuts,
+    ));
+}
+
+/// The Effects popovers: the section's `+` menu, a row's type menu, a row's
+/// blend menu, the layer's **Apply blend mode** menu and a fill's or stroke's
+/// blend menu. They paint in the popover pass — after the panel's clip layer
+/// has been popped and after its hit filter has run — which is what lets a
+/// menu hang past the panel's edge and still take clicks, the way the frame,
+/// line-height and text-style dropdowns do.
+fn paint_effects_menus(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    if app.corner_open {
+        paint_corner_popover(app, s, hit);
+        return;
+    }
+    if app.mask_type_open {
+        paint_mask_type_menu(app, s, hit);
+        return;
+    }
+    if app.list_style_open {
+        paint_list_style_menu(app, s, hit);
+        return;
+    }
+    if app.effect_add_open {
+        let (ax1, ay) = app.effect_add_anchor;
+        let anchor = Rect::new(ax1 - 18.0, ay - 24.0, ax1, ay + 8.0);
+        let items = x_native::EffectKind::all();
+        let w = 176.0;
+        let h = DROPDOWN_ROW_H * items.len() as f64;
+        let x = anchor.x1 - w;
+        let mut dy = anchor.y1 + 4.0;
+        if dy + h > app.win_h - 8.0 {
+            dy = (anchor.y0 - 4.0 - h).max(8.0);
+        }
+        let dd = Rect::new(x, dy, x + w, dy + h);
+        elev_shadow(s, dd, 8.0, Elevation::Floating);
+        fill_rrect(s, dd, R_LG, C_FIELD);
+        stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+        for (k, kind) in items.iter().enumerate() {
+            let r = Rect::new(
+                dd.x0,
+                dd.y0 + DROPDOWN_ROW_H * k as f64,
+                dd.x1,
+                dd.y0 + DROPDOWN_ROW_H * (k + 1) as f64,
+            );
+            if hover(app, r) {
+                fill_rect(s, r, C_FIELD_2);
+            }
+            draw_icon(s, kind.icon(), r.x0 + 10.0, r.y0 + 8.0, ICON_XS, C_MUTED);
+            app.fonts.text(
+                s,
+                r.x0 + 30.0,
+                r.y0 + 9.0,
+                kind.label(),
+                T11,
+                C_TEXT,
+                Wt::Reg,
+            );
+            hit.push((r, Action::AddEffect(*kind)));
+        }
+    }
+    if app.layer_blend_open {
+        let Some(id) = app.doc_ref().selected_id() else {
+            return;
+        };
+        let cur = find_node(&app.doc_ref().editor_ref().root, &id)
+            .map(|n| n.blend)
+            .unwrap_or(x_native::BlendKind::Normal);
+        paint_blend_menu(
+            app,
+            s,
+            hit,
+            &x_native::BlendKind::layer_modes(),
+            cur,
+            Action::SetLayerBlend,
+        );
+    } else if let Some(t) = app.paint_blend_open {
+        let cur = paint_target_blend(app, t);
+        paint_blend_menu(
+            app,
+            s,
+            hit,
+            &x_native::BlendKind::paint_modes(),
+            cur,
+            move |m| Action::SetPaintBlend(t, m),
+        );
+    } else if let Some(i) = app.effect_blend_open {
+        let cur = app
+            .doc_ref()
+            .selected_id()
+            .and_then(|id| app.effect_layers_of(&id).get(i).map(|l| l.blend))
+            .unwrap_or(x_native::BlendKind::Normal);
+        paint_blend_menu(
+            app,
+            s,
+            hit,
+            &x_native::BlendKind::paint_modes(),
+            cur,
+            move |m| Action::SetEffectBlend(i, m),
+        );
+    } else if let Some(i) = app.effect_kind_open {
+        let (ax, ay) = app.blend_dd_anchor;
+        let items = x_native::EffectKind::all();
+        let w = 176.0;
+        let h = DROPDOWN_ROW_H * items.len() as f64;
+        let x0 = ax.min((app.win_w - w - 8.0).max(8.0)).max(8.0);
+        let mut y0 = ay + 4.0;
+        if y0 + h > app.win_h - 8.0 {
+            y0 = (ay - 4.0 - h).max(8.0);
+        }
+        let dd = Rect::new(x0, y0, x0 + w, y0 + h);
+        elev_shadow(s, dd, 8.0, Elevation::Floating);
+        fill_rrect(s, dd, R_LG, C_FIELD);
+        stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+        let cur = app
+            .doc_ref()
+            .selected_id()
+            .and_then(|id| app.effect_layers_of(&id).get(i).map(|l| l.effect.kind()));
+        for (k, kind) in items.iter().enumerate() {
+            let r = Rect::new(
+                dd.x0,
+                dd.y0 + DROPDOWN_ROW_H * k as f64,
+                dd.x1,
+                dd.y0 + DROPDOWN_ROW_H * (k + 1) as f64,
+            );
+            let hov = hover(app, r);
+            let on = cur == Some(*kind);
+            if hov {
+                fill_rect(s, r, C_FIELD_2);
+            }
+            app.fonts.text(
+                s,
+                r.x0 + 10.0,
+                r.y0 + 9.0,
+                kind.label(),
+                T11,
+                if on { C_TEXT } else { C_MUTED },
+                Wt::Reg,
+            );
+            if on {
+                draw_icon(s, "check", r.x1 - 22.0, r.y0 + 8.0, ICON_XS, C_TEXT);
+            }
+            hit.push((r, Action::SetEffectKind(i, *kind)));
+        }
+    }
+}
+
+/// Figma's **⌥ measure** (help 360039956974): *"a red line between the two
+/// objects, as well as horizontal and vertical measurements"*. The spans are
+/// `App::measure_spans`' answer — the painter draws them and measures nothing
+/// itself — in screen space, with the short end ticks Figma draws and the
+/// value at the line's middle.
+fn paint_measure(app: &App, s: &mut Scene) {
+    for m in app.measure_spans() {
+        let (p0, p1) = if m.horizontal {
+            (
+                app.world_to_screen(Point::new(m.from, m.at)),
+                app.world_to_screen(Point::new(m.to, m.at)),
+            )
+        } else {
+            (
+                app.world_to_screen(Point::new(m.at, m.from)),
+                app.world_to_screen(Point::new(m.at, m.to)),
+            )
+        };
+        line(s, p0.x, p0.y, p1.x, p1.y, C_MEASURE, 1.0);
+        let cap = 4.0;
+        for p in [p0, p1] {
+            if m.horizontal {
+                line(s, p.x, p.y - cap, p.x, p.y + cap, C_MEASURE, 1.0);
+            } else {
+                line(s, p.x - cap, p.y, p.x + cap, p.y, C_MEASURE, 1.0);
+            }
+        }
+        let label = format!("{}", m.gap.round() as i64);
+        let (mx, my) = ((p0.x + p1.x) / 2.0, (p0.y + p1.y) / 2.0);
+        let w = app.fonts.measure(&label, T11, Wt::Med);
+        app.fonts.text(
+            s,
+            mx - w / 2.0,
+            if m.horizontal { my - 18.0 } else { my + 6.0 },
+            &label,
+            T11,
+            C_MEASURE,
+            Wt::Med,
+        );
+    }
+}
+
 fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
+    paint_slice_chrome(app, s);
+    paint_variant_chrome(app, s);
     let doc = match app.doc_opt() {
         Some(d) => d,
         None => return,
@@ -6304,18 +9084,41 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
     // selection outlines + handles
     let sel = doc.editor_ref().selection.clone();
 
-    // Figma hover: subtle outline on the layer under the cursor
+    // Figma hover: subtle outline on the layer under the cursor — and while
+    // ⌥ is held, the measure gesture's own red outline of the layer it reads
+    // (help 360039956974). The box is the layer's WORLD box, so a nested or
+    // rotated layer is outlined where it is drawn.
     if let Some(hid) = app.hover_node.clone() {
         if !sel.contains(&hid) && app.text_edit.as_deref() != Some(hid.as_str()) {
-            if let Some(n) = find_node(&doc.editor_ref().root, hid.as_str()) {
-                let p0 = app.world_to_screen(Point::new(n.transform.x, n.transform.y));
-                let p1 = app.world_to_screen(Point::new(n.transform.x + n.w, n.transform.y + n.h));
+            if let Some((x, y, w, h)) =
+                crate::run::world_rect_of(&doc.editor_ref().root, hid.as_str())
+            {
+                let p0 = app.world_to_screen(Point::new(x, y));
+                let p1 = app.world_to_screen(Point::new(x + w, y + h));
                 stroke_rect(
                     s,
                     Rect::new(p0.x, p0.y, p1.x, p1.y).inflate(1.5, 1.5),
-                    C_SEL,
+                    if app.alt { C_MEASURE } else { C_SEL },
                     1.5,
                 );
+            }
+        }
+    }
+
+    // ⌥R — Figma's rotation origin: "use the keyboard shortcut ⌥R to reveal
+    // the rotation origin", and then "click and drag the target to move the
+    // rotation origin". One target, on the single selection's pivot, drawn in
+    // SCREEN space so it keeps its size at every zoom.
+    if app.rotation_origin_on {
+        if let [id] = sel.as_slice() {
+            if let Some(n) = find_node(&doc.editor_ref().root, id.as_str()) {
+                let box_ = (n.transform.x, n.transform.y, n.w, n.h);
+                let (px, py) = crate::state::rotation_pivot(Some(n), box_);
+                let c = app.world_to_screen(Point::new(px, py));
+                let r = crate::state::ORIGIN_TARGET_R;
+                ring(s, c.x, c.y, r, C_ACCENT, 1.5);
+                hline(s, c.x - r - 5.0, c.x + r + 5.0, c.y, C_ACCENT);
+                vline(s, c.x, c.y - r - 5.0, c.y + r + 5.0, C_ACCENT);
             }
         }
     }
@@ -6350,9 +9153,20 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
                 let reg = app.editor_regions();
                 if by + 16.0 <= reg.canvas.y1 {
                     let br = Rect::new(cx - bw / 2.0, by, cx + bw / 2.0, by + 16.0);
-                    fill_rrect(s, br, R_SM, C_SEL);
-                    app.fonts
-                        .text(s, br.x0 + 6.0, by + 0.5, &label, 10.0, C_TEXT, Wt::Mono);
+                    // accent + on_accent: the audited label-on-fill pair
+                    // (5.4:1 Graphite, 8.4:1 Daylight). text_primary on the
+                    // selection colour was 4.0:1 in Graphite and 2.0:1 in
+                    // Daylight — a drag readout you cannot read.
+                    fill_rrect(s, br, R_SM, C_ACCENT);
+                    app.fonts.text(
+                        s,
+                        br.x0 + 6.0,
+                        by + 0.5,
+                        &label,
+                        10.0,
+                        C_ON_ACCENT,
+                        Wt::Mono,
+                    );
                 }
             }
         }
@@ -6364,6 +9178,39 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
             continue;
         }
         if let Some(n) = find_node(&doc.editor_ref().root, id) {
+            // Figma's corner radius handle (help 360050986854): a white dot
+            // with a blue ring, sitting on the corner's arc INSIDE the bounds —
+            // the square handles own the outline itself. It shows while the
+            // pointer is in a corner's zone, and stays while a drag holds it.
+            if sel.len() == 1 && matches!(n.kind, NodeKind::Rect { .. } | NodeKind::Frame { .. }) {
+                if let Some(m) = crate::run::node_world(&doc.editor_ref().root, id.as_str()) {
+                    let held = match &app.drag {
+                        Some(Drag::RadiusCorner { corner, .. }) => Some(*corner),
+                        _ => None,
+                    };
+                    let zone = held.or_else(|| {
+                        if app.tool != Tool::Select {
+                            return None;
+                        }
+                        let local = m.inverse() * app.screen_to_world(app.mouse);
+                        crate::state::radius_handle_at(
+                            (0.0, 0.0, n.w, n.h),
+                            local,
+                            app.zoom,
+                            crate::state::node_corner_radii(n),
+                        )
+                    });
+                    if let Some(c) = zone {
+                        let radii = crate::state::node_corner_radii(n);
+                        let local =
+                            crate::state::radius_handle_point((0.0, 0.0, n.w, n.h), c, radii[c]);
+                        let p = app.world_to_screen(m * local);
+                        let r = Rect::new(p.x - 4.5, p.y - 4.5, p.x + 4.5, p.y + 4.5);
+                        fill_rrect(s, r, R_FULL, C_TEXT);
+                        stroke_rrect(s, r, R_FULL, C_SEL, 1.5);
+                    }
+                }
+            }
             // A transformed node is outlined through its REAL corners, the
             // same four the renderer produces and the same four the resize
             // grab hit-tests — one geometry for paint and input.
@@ -6536,14 +9383,15 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
             wy += 1.0;
         }
     }
-    // marquee
-    if let Some(crate::state::Drag::Marquee { start, cur }) = &app.drag {
-        let r = Rect::new(
-            start.x.min(cur.x),
-            start.y.min(cur.y),
-            start.x.max(cur.x),
-            start.y.max(cur.y),
-        );
+    // marquee — the drag stores WORLD corners (the same pair `marquee()`
+    // hit-tests with on release), so the band has to be projected into
+    // screen space before it is drawn. Drawing the raw world pair put the
+    // band somewhere other than the cursor as soon as the canvas was panned
+    // or zoomed.
+    if let Some(crate::state::Drag::Marquee { start, cur, .. }) = &app.drag {
+        let a = app.world_to_screen(*start);
+        let b = app.world_to_screen(*cur);
+        let r = Rect::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y));
         fill_rect(s, r, C_SEL_SOFT);
         stroke_rect(s, r, C_SEL, 1.0);
     }
@@ -6555,6 +9403,110 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
         let r = Rect::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y));
         fill_rect(s, r, C_SEL_SOFT);
         stroke_rect(s, r, C_SEL, 1.0);
+    }
+    // shape-tool create — Figma shows the pending shape and its size while you
+    // drag ("You'll see the rectangle's dimensions underneath the bottom
+    // edge"). The rect comes from `state::create_rect`, the same rule the commit
+    // uses, ⌥ included, so the preview cannot disagree with what lands — and the
+    // Line and Arrow tools go through the engine's own path builders for the
+    // same reason: the preview IS the node that lands, one transform away.
+    if let Some(crate::state::Drag::Create { tool, start, cur }) = &app.drag {
+        let reg = app.editor_regions();
+        let (r, label) = if matches!(tool, Tool::Line | Tool::Arrow) {
+            let (a, b) = crate::state::create_line(*start, *cur, app.alt);
+            let arrow = *tool == Tool::Arrow;
+            let cmds = if arrow {
+                x_native::arrow_path(a, b, crate::state::LINE_WEIGHT)
+            } else {
+                x_native::line_path(a, b)
+            };
+            let p = screen_path(app, &cmds, 0.0, 0.0);
+            let ink = crate::state::line_ink();
+            let w = (crate::state::LINE_WEIGHT * app.zoom).max(1.0);
+            crate::paint::stroke_path(s, &p, ink, w);
+            if arrow {
+                crate::paint::fill_path(s, &p, ink);
+            }
+            let (bx0, by0, bw, bh) = x_native::path_bounds(&cmds);
+            let a0 = app.world_to_screen(Point::new(bx0, by0));
+            let a1 = app.world_to_screen(Point::new(bx0 + bw, by0 + bh));
+            let box_r = Rect::new(
+                a0.x.min(a1.x),
+                a0.y.min(a1.y),
+                a0.x.max(a1.x),
+                a0.y.max(a1.y),
+            );
+            let label = format!("{} × {}", bw.round(), bh.round());
+            (box_r, label)
+        } else {
+            let wr = crate::state::create_rect(*start, *cur, app.alt);
+            let a = app.world_to_screen(Point::new(wr.x0, wr.y0));
+            let b = app.world_to_screen(Point::new(wr.x1, wr.y1));
+            let r = Rect::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y));
+            if *tool == Tool::Slice {
+                // a slice is a region, not a shape: dashed, never filled
+                stroke_rect_dashed(s, r, C_SEL, 1.0, 6.0, 4.0);
+            } else {
+                fill_rect(s, r, C_SEL_SOFT);
+                stroke_rect(s, r, C_SEL, 1.0);
+            }
+            if matches!(*tool, Tool::Poly | Tool::Star) {
+                // Figma previews the shape itself, so the Count is visible
+                // while you size it — the same rule the Line and Arrow
+                // previews follow: one transform away from the node that
+                // lands.
+                let cmds = if *tool == Tool::Poly {
+                    x_native::booleans::poly_path_cmds(
+                        wr.width(),
+                        wr.height(),
+                        x_native::booleans::COUNT_MIN,
+                    )
+                } else {
+                    x_native::booleans::star_path_cmds(
+                        wr.width(),
+                        wr.height(),
+                        x_native::booleans::COUNT_MIN + 2,
+                        x_native::booleans::STAR_RATIO,
+                    )
+                };
+                let p = screen_path(app, &cmds, wr.x0, wr.y0);
+                crate::paint::fill_path(s, &p, C_SEL_SOFT);
+                crate::paint::stroke_path(s, &p, C_SEL, 1.5);
+            }
+            let label = format!("{} × {}", wr.width().round(), wr.height().round());
+            (r, label)
+        };
+        let tw = app.fonts.measure(&label, T10, Wt::Reg) + 12.0;
+        let bx = r.x0.min(reg.canvas.x1 - tw - 4.0).max(reg.canvas.x0 + 4.0);
+        let chip = Rect::new(bx, r.y1 + 6.0, bx + tw, r.y1 + 24.0);
+        fill_rrect(s, chip, R_SM, C_TEXT);
+        app.fonts
+            .text_center(s, chip, &label, T10, C_BASE, Wt::Med, true);
+    }
+    // scale-tool drag (K) — the same deal as the create preview: the box the
+    // gesture will commit, drawn through `state::scaled_box`, with the ratio
+    // Figma shows while you scale. Outline only, no fill: this is the
+    // selection's own box moving, not a new shape being drawn.
+    if let Some(crate::state::Drag::ScaleSel {
+        corner,
+        orig,
+        applied,
+        ..
+    }) = &app.drag
+    {
+        let reg = app.editor_regions();
+        let wb = crate::state::scaled_box(*orig, *corner, *applied);
+        let a = app.world_to_screen(Point::new(wb.x0, wb.y0));
+        let b = app.world_to_screen(Point::new(wb.x1, wb.y1));
+        let r = Rect::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y));
+        stroke_rect(s, r, C_SEL, 1.0);
+        let label = format!("{}%", (*applied * 100.0).round() as i64);
+        let tw = app.fonts.measure(&label, T10, Wt::Reg) + 12.0;
+        let bx = r.x0.min(reg.canvas.x1 - tw - 4.0).max(reg.canvas.x0 + 4.0);
+        let chip = Rect::new(bx, r.y1 + 6.0, bx + tw, r.y1 + 24.0);
+        fill_rrect(s, chip, R_SM, C_TEXT);
+        app.fonts
+            .text_center(s, chip, &label, T10, C_BASE, Wt::Med, true);
     }
     // pen preview
     if let Some(crate::state::Drag::Pen { points, cursor }) = &app.drag {
@@ -6571,6 +9523,50 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
             let sp = app.world_to_screen(*c);
             line(s, q.x, q.y, sp.x, sp.y, C_SEL_SOFT, 1.0);
         }
+    }
+
+    // pencil preview: the stroke is the ink, so it is drawn in the ink — the
+    // same colour and the same weight `finish_pencil` commits, scaled by zoom
+    if let Some(crate::state::Drag::Pencil { points }) = &app.drag {
+        let w = (crate::state::PENCIL_WEIGHT * app.zoom).clamp(1.0, 48.0);
+        let ink = crate::state::pencil_ink();
+        let mut prev: Option<Point> = None;
+        for p in points {
+            let sp = app.world_to_screen(*p);
+            if let Some(q) = prev {
+                line(s, q.x, q.y, sp.x, sp.y, ink, w);
+            }
+            prev = Some(sp);
+        }
+    }
+
+    // brush preview: the mark is the OUTLINE the release will commit — same
+    // style, same fit, filled with the same ink — so what is on screen is what
+    // lands. It is built the way the layer will be, one code path further down.
+    if let Some(crate::state::Drag::Brush { points }) = &app.drag {
+        let mut min_x = f64::INFINITY;
+        let mut min_y = f64::INFINITY;
+        for p in points {
+            min_x = min_x.min(p.x);
+            min_y = min_y.min(p.y);
+        }
+        let local: Vec<(f64, f64)> = points.iter().map(|p| (p.x - min_x, p.y - min_y)).collect();
+        let st = app.brush_style;
+        let cmds = x_native::brush_outline(
+            &local,
+            st.width(),
+            st.taper(),
+            st.grain(),
+            crate::state::PENCIL_SMOOTHING,
+        );
+        let path = screen_path(app, &cmds, min_x, min_y);
+        s.fill(
+            vello::peniko::Fill::NonZero,
+            vello::kurbo::Affine::IDENTITY,
+            crate::state::brush_ink(),
+            None,
+            &path,
+        );
     }
 
     // First-run empty state (P0-10): an empty canvas says nothing, so the
@@ -6652,6 +9648,7 @@ fn paint_carets(app: &mut App, s: &mut Scene) {
                     | FieldId::Rotation
                     | FieldId::Opacity
                     | FieldId::Radius
+                    | FieldId::CornerRadius(_)
                     | FieldId::PadH
                     | FieldId::PadV
                     | FieldId::GridPct
@@ -6682,7 +9679,7 @@ pub(crate) fn color_picker_rect(app: &App) -> Option<Rect> {
         return None;
     }
     let w = 244.0;
-    let h = 250.0;
+    let h = 286.0;
     let x_left = anchor.x0 - w - 8.0;
     let x = if x_left >= 8.0 {
         x_left
@@ -6697,9 +9694,10 @@ pub(crate) fn color_picker_rect(app: &App) -> Option<Rect> {
 }
 
 fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
-    let Some((is_fill, _, open)) = app.color_picker_popup.as_ref().cloned() else {
+    let Some((paint_target, _, open)) = app.color_picker_popup.as_ref().cloned() else {
         return;
     };
+    let is_fill = paint_target.is_fill();
     if !open || app.doc_opt().is_none() {
         return;
     }
@@ -6707,8 +9705,32 @@ fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         return;
     };
     let info = sel_info(app);
-    let current = parse_hex(if is_fill { &info.fill } else { &info.stroke })
-        .unwrap_or(if is_fill { Color::WHITE } else { Color::BLACK });
+    // The popover's subject: a fill, a stroke, or an effect's **Fill** row.
+    let current = match paint_target {
+        crate::state::PaintTarget::Effect(i) => app
+            .doc_ref()
+            .selected_id()
+            .and_then(|id| {
+                app.effect_layers_of(&id)
+                    .get(i)
+                    .and_then(|l| l.effect.color())
+            })
+            // a shadow always carries a Fill (black at 25% by default), so
+            // this only stands in for a blur or noise with no Fill to show
+            .unwrap_or(C_TEXT),
+        target => {
+            let hex = if target.is_fill() {
+                &info.fill
+            } else {
+                &info.stroke
+            };
+            parse_hex(hex).unwrap_or(if target.is_fill() {
+                Color::WHITE
+            } else {
+                Color::BLACK
+            })
+        }
+    };
     elev_shadow(s, panel, 14.0, Elevation::Floating);
     fill_rrect(s, panel, R_LG, C_FIELD);
     stroke_rrect(s, panel, R_LG, C_LINE_2, 1.0);
@@ -6765,6 +9787,52 @@ fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         Wt::Reg,
     );
 
+    // Figma: *"Open the color picker in the Fill or Stroke sections of the
+    // right sidebar, then click Apply blend mode"* — a paint's blend lives in
+    // this popover, next to the colour it applies to.
+    let brow = Rect::new(
+        panel.x0 + 14.0,
+        panel.y1 - 34.0,
+        panel.x1 - 14.0,
+        panel.y1 - 10.0,
+    );
+    if hover(app, brow) {
+        fill_rrect(s, brow, R_MD, C_FIELD_2);
+    }
+    app.fonts.text(
+        s,
+        brow.x0 + 8.0,
+        brow.y0 + 7.0,
+        "Apply blend mode",
+        T10,
+        C_TEXT,
+        Wt::Reg,
+    );
+    let cur_blend = paint_target_blend(app, paint_target);
+    let cb = cur_blend.label();
+    let cbw = app.fonts.measure(cb, T10, Wt::Reg);
+    app.fonts.text(
+        s,
+        brow.x1 - 20.0 - cbw,
+        brow.y0 + 7.0,
+        cb,
+        T10,
+        C_DIM,
+        Wt::Reg,
+    );
+    draw_icon(
+        s,
+        "chevron-down",
+        brow.x1 - 16.0,
+        brow.y0 + 8.0,
+        ICON_XS,
+        C_DIM,
+    );
+    hit.push((brow, Action::TogglePaintBlend(paint_target)));
+    if app.paint_blend_open == Some(paint_target) {
+        app.blend_dd_anchor = (brow.x0, brow.y0);
+    }
+
     const PRESETS: [&str; 16] = [
         "FFFFFF", "F2F3F7", "D9DCE5", "9A9EAA", "6B6E7A", "343842", "1B1D23", "000000", "FF3B30",
         "FF9500", "FFCC00", "34C759", "00A3FF", "5856D6", "AF52DE", "FF2D55",
@@ -6789,7 +9857,7 @@ fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         } else {
             stroke_rrect(s, r, R_MD, C_LINE, 1.0);
         }
-        hit.push((r, Action::PaintPreset(is_fill, hex.to_string())));
+        hit.push((r, Action::PaintPreset(paint_target, hex.to_string())));
     }
 }
 
@@ -6816,6 +9884,10 @@ pub fn palette_commands() -> Vec<Command> {
             shortcut: "⌘ I",
         },
         Command {
+            label: "Place image…",
+            shortcut: "⇧⌘K",
+        },
+        Command {
             label: "Lint document",
             shortcut: "",
         },
@@ -6825,10 +9897,6 @@ pub fn palette_commands() -> Vec<Command> {
         },
         Command {
             label: "Theme: Graphite (dark)",
-            shortcut: "",
-        },
-        Command {
-            label: "Theme: High Contrast",
             shortcut: "",
         },
         Command {
@@ -6876,8 +9944,20 @@ pub fn palette_commands() -> Vec<Command> {
             shortcut: "V",
         },
         Command {
+            label: "Scale tool",
+            shortcut: "K",
+        },
+        Command {
             label: "Frame tool",
             shortcut: "F",
+        },
+        Command {
+            label: "Section tool",
+            shortcut: "⇧ S",
+        },
+        Command {
+            label: "Slice tool",
+            shortcut: "S",
         },
         Command {
             label: "Text tool",
@@ -6892,8 +9972,44 @@ pub fn palette_commands() -> Vec<Command> {
             shortcut: "O",
         },
         Command {
+            label: "Line tool",
+            shortcut: "L",
+        },
+        Command {
+            label: "Arrow tool",
+            shortcut: "⇧L",
+        },
+        Command {
+            label: "Polygon tool",
+            shortcut: "",
+        },
+        Command {
+            label: "Star tool",
+            shortcut: "",
+        },
+        Command {
             label: "Pen tool",
             shortcut: "P",
+        },
+        Command {
+            label: "Pencil tool",
+            shortcut: "⇧P",
+        },
+        Command {
+            label: "Brush tool",
+            shortcut: "⇧B",
+        },
+        Command {
+            label: "Brush style: Ink",
+            shortcut: "",
+        },
+        Command {
+            label: "Brush style: Marker",
+            shortcut: "",
+        },
+        Command {
+            label: "Brush style: Dry",
+            shortcut: "",
         },
         Command {
             label: "Hand tool",
@@ -6922,6 +10038,14 @@ pub fn palette_commands() -> Vec<Command> {
         Command {
             label: "Group selection",
             shortcut: "⌘ G",
+        },
+        Command {
+            label: "Frame selection",
+            shortcut: "⌥ ⌘ G",
+        },
+        Command {
+            label: "Wrap in new section",
+            shortcut: "",
         },
         Command {
             label: "Ungroup",
@@ -7030,6 +10154,10 @@ pub fn palette_commands() -> Vec<Command> {
         Command {
             label: "Hide selection",
             shortcut: "⇧⌘ H",
+        },
+        Command {
+            label: "Help: welcome & shortcuts",
+            shortcut: "?",
         },
     ]
 }
@@ -7300,7 +10428,7 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
                 pill,
                 label,
                 T10,
-                if c.resolved { C_MUTED } else { C_SEL },
+                if c.resolved { C_MUTED } else { C_ACCENT_INK },
                 Wt::Med,
                 true,
             );
@@ -7346,7 +10474,7 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
             );
             stroke_rrect(s, rbtn, R_MD, C_LINE_2, 1.0);
             app.fonts
-                .text_center(s, rbtn, "Reply", T10, C_SEL, Wt::Med, true);
+                .text_center(s, rbtn, "Reply", T10, C_ACCENT_INK, Wt::Med, true);
         }
     }
     // the composer (new comment)
@@ -7403,10 +10531,13 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
             card.y0 + 58.0,
         );
         let hov_p = hover(app, post);
-        fill_rrect(s, post, R_MD, if hov_p { C_SEL } else { C_PANEL });
+        // outline button: the accent is the *border* and the ink, never a
+        // fill behind its own colour (hovering used to fill it solid and
+        // paint the label in the same purple — the word "Post" vanished)
+        fill_rrect(s, post, R_MD, if hov_p { C_FIELD_2 } else { C_PANEL });
         stroke_rrect(s, post, R_MD, C_SEL, 1.0);
         app.fonts
-            .text_center(s, post, "Post", T10, C_SEL, Wt::Med, true);
+            .text_center(s, post, "Post", T10, C_ACCENT_INK, Wt::Med, true);
         // author dot anchored at the pin
         s.fill(
             vello::peniko::Fill::NonZero,
@@ -7751,58 +10882,6 @@ pub(crate) fn proto_targets(app: &App) -> Vec<(String, String)> {
     out
 }
 
-pub(crate) fn proto_trigger_label(t: &x_native::Trigger) -> &'static str {
-    use x_native::Trigger as T;
-    match t {
-        T::OnClick => "On click",
-        T::OnHover => "While hovering",
-        T::MouseEnter => "Mouse enter",
-        T::MouseLeave => "Mouse leave",
-        T::OnPress => "While pressing",
-        T::MouseUp => "Mouse up",
-        T::OnDrag => "On drag",
-        T::AfterDelay { .. } => "After delay",
-        T::KeyDown { .. } => "Key pressed",
-        T::WhenVideoHits { .. } => "Video hits",
-        T::WhenVideoEnds => "Video ends",
-    }
-}
-
-pub(crate) fn proto_action_label(a: &x_native::Action, targets: &[(String, String)]) -> String {
-    // x_core's prototype Action; the app's own Action is `crate::state::Action`
-    use x_native::Action as A;
-    match a {
-        A::Navigate { destination } | A::ScrollTo { destination } => targets
-            .iter()
-            .find(|(id, _)| id == destination)
-            .map(|(_, n)| n.as_str())
-            .unwrap_or(destination)
-            .to_string(),
-        A::OpenOverlay { overlay, position } => {
-            let name = targets
-                .iter()
-                .find(|(id, _)| id == overlay)
-                .map(|(_, n)| n.as_str())
-                .unwrap_or(overlay);
-            format!("{} ({})", name, position.label())
-        }
-        A::SwapOverlay { overlay } => {
-            let name = targets
-                .iter()
-                .find(|(id, _)| id == overlay)
-                .map(|(_, n)| n.as_str())
-                .unwrap_or(overlay);
-            format!("{} (swap)", name)
-        }
-        A::CloseOverlay => "Close overlay".into(),
-        A::OpenLink { url } => format!("Open {url}"),
-        A::Back => "Go back".into(),
-        A::SetVar { name, .. } => format!("Set {name}"),
-        A::SetMode { mode } => format!("Mode → {mode}"),
-        A::Cond { .. } => "Conditional".into(),
-    }
-}
-
 pub(crate) fn proto_dest_of(a: &x_native::Action) -> Option<String> {
     match a {
         x_native::Action::Navigate { destination } | x_native::Action::ScrollTo { destination } => {
@@ -7817,13 +10896,13 @@ pub(crate) fn proto_dest_of(a: &x_native::Action) -> Option<String> {
 pub(crate) fn proto_action_type_label(a: &x_native::Action) -> &'static str {
     use x_native::Action as A;
     match a {
-        A::Navigate { .. } => "Navigate",
-        A::OpenOverlay { .. } => "Overlay",
+        A::Navigate { .. } => "Navigate to",
+        A::OpenOverlay { .. } => "Open overlay",
         A::SwapOverlay { .. } => "Swap overlay",
         A::CloseOverlay => "Close overlay",
         A::OpenLink { .. } => "Open link",
         A::ScrollTo { .. } => "Scroll to",
-        A::Back => "Back",
+        A::Back => "Go back",
         A::SetVar { .. } => "Set variable",
         A::SetMode { .. } => "Set mode",
         A::Cond { .. } => "Conditional",
@@ -7873,8 +10952,15 @@ fn paint_prototype(
         if n.is_starting_point {
             fill_rrect(s, cb.inflate(-3.5, -3.5), R_XS, C_TEXT);
         }
-        app.fonts
-            .text(s, cb.x1 + 8.0, y, "Start flow here", T11, C_TEXT, Wt::Reg);
+        app.fonts.text(
+            s,
+            cb.x1 + 8.0,
+            y,
+            "Flow starting point",
+            T11,
+            C_TEXT,
+            Wt::Reg,
+        );
         hit.push((
             Rect::new(x0, y - 6.0, x0 + 190.0, y + 22.0),
             Action::ProtoToggleStart,
@@ -7914,119 +11000,159 @@ fn paint_prototype(
             // player consumes: trigger, action/destination, animation/speed,
             // easing and reset. URL actions get one extra line.
             let has_url = matches!(&ix.action, x_native::Action::OpenLink { .. });
-            let row_h = if has_url { 128.0 } else { 96.0 };
+            // Row 5 is Figma's "Animate matching layers" tick. It sits under
+            // the URL field rather than beside the animation controls: at the
+            // panel's minimum width the motion row is already full (the pill,
+            // the four arrows and the duration), and Figma gives the tick a
+            // full-width line of its own too.
+            let row_h = if has_url { 146.0 } else { 120.0 };
             let row = Rect::new(x0, y, xr, y + row_h);
             fill_rrect(s, row, R_MD, C_FIELD);
-            // Row 1: trigger + action type + destination
-            let tb = Rect::new(x0 + 5.0, y + 4.0, x0 + 75.0, y + 20.0);
+            // Row 1: the trigger, then whatever it carries. Figma's trigger
+            // control is a dropdown whose field sizes to its own words (help
+            // 360040315773), so the pill is measured rather than fixed: the
+            // longest name still leaves the parameter its room inside the row,
+            // and the text truncates rather than overdrawing the field beside
+            // it — which is what a fixed 70 px pill did at "When video hits".
+            let pw = match &ix.trigger {
+                x_native::Trigger::KeyDown { .. } => 96.0,
+                _ => 60.0,
+            };
+            let label = ix.trigger.label();
+            let want = app.fonts.measure(label, T10, Wt::Reg) + 10.0;
+            let room = ((xr - x0) - (pw + 15.0)).max(56.0);
+            let tw = want.clamp(56.0, room);
+            let tx1 = (x0 + 5.0 + tw).min(xr - 5.0);
+            let tb = Rect::new(x0 + 5.0, y + 4.0, tx1, y + 20.0);
+            if app.dropdown_proto_trigger == Some(i) {
+                app.proto_trigger_dd_anchor = (tb.x0, tb.y1);
+            }
             input_box(app, s, tb, 4.0);
-            app.fonts.text(
-                s,
-                tb.x0 + 4.0,
-                y + 6.0,
-                proto_trigger_label(&ix.trigger),
-                T10,
-                C_TEXT,
-                Wt::Reg,
-            );
+            let shown = app.fonts.truncate(label, T10, Wt::Reg, tb.width() - 8.0);
+            app.fonts
+                .text(s, tb.x0 + 4.0, y + 6.0, &shown, T10, C_TEXT, Wt::Reg);
             hit.push((tb, Action::ProtoTrigger(i)));
 
-            // Show trigger-specific fields (delay for AfterDelay, key for KeyDown, time for WhenVideoHits)
+            // The parameter a "when" trigger carries — Figma's delay, key or
+            // video time — starts where the pill ends, not at a fixed offset.
+            let px = tb.x1 + 5.0;
+            let pb = Rect::new(px, y + 4.0, (px + pw).min(xr - 5.0), y + 20.0);
             match &ix.trigger {
                 x_native::Trigger::AfterDelay { ms } => {
-                    let db = Rect::new(x0 + 80.0, y + 4.0, x0 + 140.0, y + 20.0);
-                    input_box(app, s, db, 4.0);
+                    input_box(app, s, pb, 4.0);
                     app.fonts.text(
                         s,
-                        db.x0 + 4.0,
+                        pb.x0 + 4.0,
                         y + 6.0,
                         &format!("{}ms", ms),
                         T10,
                         C_TEXT,
                         Wt::Mono,
                     );
-                    hit.push((db, Action::ProtoEditDelay(i)));
+                    hit.push((pb, Action::ProtoEditDelay(i)));
                 }
                 x_native::Trigger::KeyDown { key } => {
-                    let kb = Rect::new(x0 + 80.0, y + 4.0, x0 + 140.0, y + 20.0);
-                    input_box(app, s, kb, 4.0);
+                    input_box(app, s, pb, 4.0);
+                    // Figma's key control reads "Click to select" until a key
+                    // is recorded; ours cycles the common keys, so the empty
+                    // state carries the same invitation.
+                    let (text, ink) = if key.is_empty() {
+                        ("Click to select".to_string(), C_DIM)
+                    } else {
+                        (key.clone(), C_TEXT)
+                    };
+                    let shown = app.fonts.truncate(&text, T10, Wt::Mono, pb.width() - 8.0);
                     app.fonts
-                        .text(s, kb.x0 + 4.0, y + 6.0, key, T10, C_TEXT, Wt::Mono);
-                    hit.push((kb, Action::ProtoEditKey(i)));
+                        .text(s, pb.x0 + 4.0, y + 6.0, &shown, T10, ink, Wt::Mono);
+                    hit.push((pb, Action::ProtoEditKey(i)));
                 }
                 x_native::Trigger::WhenVideoHits { time } => {
-                    let vb = Rect::new(x0 + 80.0, y + 4.0, x0 + 140.0, y + 20.0);
-                    input_box(app, s, vb, 4.0);
+                    input_box(app, s, pb, 4.0);
                     app.fonts.text(
                         s,
-                        vb.x0 + 4.0,
+                        pb.x0 + 4.0,
                         y + 6.0,
                         &format!("{:.1}s", time),
                         T10,
                         C_TEXT,
                         Wt::Mono,
                     );
-                    hit.push((vb, Action::ProtoEditVideoTime(i)));
+                    hit.push((pb, Action::ProtoEditVideoTime(i)));
                 }
                 _ => {}
             }
 
-            // Row 2: action type + destination. These controls mutate the
-            // exact action consumed by the flow player; there is no longer a
-            // painted-but-unwired destination field.
+            // Row 2: the action's own name, an arrow, and what it acts on —
+            // Figma's interaction editor in one line ("Action: Navigate to" …
+            // "Destination: footer_section"). An action with nothing to point
+            // at (Go back, Close overlay) has no destination, so no arrow.
             let action_y = y + 24.0;
-            let ab = Rect::new(x0 + 5.0, action_y, x0 + 86.0, action_y + 20.0);
+            let ab = Rect::new(x0 + 5.0, action_y, x0 + 96.0, action_y + 20.0);
             input_box(app, s, ab, 4.0);
             app.fonts.text(
                 s,
                 ab.x0 + 4.0,
                 action_y + 2.0,
-                &proto_action_label(&ix.action, &targets),
+                proto_action_type_label(&ix.action),
                 T10,
                 C_TEXT,
                 Wt::Reg,
             );
             hit.push((ab, Action::ProtoActionType(i)));
 
-            let target_label = ix
-                .action
-                .target()
-                .and_then(|id| targets.iter().find(|(candidate, _)| candidate == id))
-                .map(|(_, name)| name.as_str())
-                .unwrap_or_else(|| {
-                    if has_url {
-                        "External link"
-                    } else {
-                        "Choose destination"
-                    }
-                });
-            let db = Rect::new(x0 + 90.0, action_y, xr - 5.0, action_y + 20.0);
-            input_box(app, s, db, 4.0);
-            let target_text = app
-                .fonts
-                .truncate(target_label, T10, Wt::Reg, db.width() - 8.0);
-            app.fonts.text(
-                s,
-                db.x0 + 4.0,
-                action_y + 2.0,
-                &target_text,
-                T10,
-                C_TEXT,
-                Wt::Reg,
-            );
-            if !has_url {
+            fn name_of<'a>(targets: &'a [(String, String)], id: &'a str) -> &'a str {
+                targets
+                    .iter()
+                    .find(|(candidate, _)| candidate == id)
+                    .map(|(_, name)| name.as_str())
+                    .unwrap_or(id)
+            }
+            let dest: Option<&str> = match &ix.action {
+                x_native::Action::Navigate { destination }
+                | x_native::Action::ScrollTo { destination }
+                | x_native::Action::OpenOverlay {
+                    overlay: destination,
+                    ..
+                }
+                | x_native::Action::SwapOverlay {
+                    overlay: destination,
+                } => Some(name_of(&targets, destination)),
+                x_native::Action::SetVar { name, .. } => Some(name.as_str()),
+                x_native::Action::SetMode { mode } => Some(mode.as_str()),
+                // a link's URL owns the row below this one
+                _ => None,
+            };
+            if let Some(name) = dest {
+                let arrow = Rect::new(x0 + 100.0, action_y, x0 + 114.0, action_y + 20.0);
+                app.fonts
+                    .text(s, arrow.x0, action_y + 2.0, "→", T10, C_MUTED, Wt::Reg);
+                let db = Rect::new(arrow.x1, action_y, xr - 5.0, action_y + 20.0);
+                input_box(app, s, db, 4.0);
+                let target_text = app.fonts.truncate(name, T10, Wt::Reg, db.width() - 8.0);
+                app.fonts.text(
+                    s,
+                    db.x0 + 4.0,
+                    action_y + 2.0,
+                    &target_text,
+                    T10,
+                    C_TEXT,
+                    Wt::Reg,
+                );
                 hit.push((db, Action::ProtoDest(i, 1)));
             }
 
-            // Row 3: animation + duration. Both are authored properties on
-            // Interaction and are used by the prototype transition runtime.
+            // Row 3: the animation, its direction, and the duration — Figma's
+            // "Animation: Move In" with the four arrows beside it. Only a Move
+            // in / Move out has a direction, so only then do the arrows light
+            // up, take a press and mean anything; the pill still cycles all of
+            // them, directions included.
             let motion_y = y + 48.0;
-            let mb = Rect::new(x0 + 5.0, motion_y, x0 + 120.0, motion_y + 20.0);
+            let mb = Rect::new(x0 + 5.0, motion_y, x0 + 95.0, motion_y + 20.0);
             input_box(app, s, mb, 4.0);
-            let animation = ix.animation.label_with_dir();
+            let animation = ix.animation.label();
             let animation = app
                 .fonts
-                .truncate(&animation, T10, Wt::Reg, mb.width() - 8.0);
+                .truncate(animation, T10, Wt::Reg, mb.width() - 8.0);
             app.fonts.text(
                 s,
                 mb.x0 + 4.0,
@@ -8037,7 +11163,35 @@ fn paint_prototype(
                 Wt::Reg,
             );
             hit.push((mb, Action::ProtoAnimation(i)));
-            let sb = Rect::new(x0 + 124.0, motion_y, x0 + 184.0, motion_y + 20.0);
+            let dir_now = ix.animation.dir_str();
+            let arrows = [
+                ("←", x_native::Direction::Left),
+                ("→", x_native::Direction::Right),
+                ("↑", x_native::Direction::Top),
+                ("↓", x_native::Direction::Bottom),
+            ];
+            for (k, &(glyph, dir)) in arrows.iter().enumerate() {
+                let bx = x0 + 99.0 + k as f64 * 20.0;
+                let b = Rect::new(bx, motion_y, bx + 18.0, motion_y + 20.0);
+                input_box(app, s, b, 4.0);
+                let lit = dir_now == Some(dir.to_str());
+                app.fonts.text_center(
+                    s,
+                    b,
+                    glyph,
+                    T10,
+                    if lit { C_TEXT } else { C_DIM },
+                    if lit { Wt::Med } else { Wt::Reg },
+                    true,
+                );
+                if dir_now.is_some() {
+                    hit.push((b, Action::ProtoDirection(i, dir)));
+                }
+            }
+            // `xr` clamps the right end: the panel is resizable down to
+            // ED_RIGHT_MIN, and a row that ran past it would paint over the
+            // dock's own padding (the panel's clip hides it, not the pill).
+            let sb = Rect::new(x0 + 181.0, motion_y, (x0 + 241.0).min(xr), motion_y + 20.0);
             input_box(app, s, sb, 4.0);
             app.fonts.text(
                 s,
@@ -8105,7 +11259,74 @@ fn paint_prototype(
                     .text(s, ub.x0 + 4.0, y + 100.0, &truncated, T10, C_TEXT, Wt::Mono);
                 hit.push((ub, Action::ProtoEditUrl(i)));
             }
+
+            // Figma's tick, in the interaction's own animation section: on,
+            // the two screens' layers are matched by name and hierarchy and
+            // the matches animate their differences; off (the box's own
+            // default), the interaction's animation is what happens.
+            let tick_y = y + if has_url { 122.0 } else { 96.0 };
+            let cb = Rect::new(x0 + 5.0, tick_y + 1.0, x0 + 21.0, tick_y + 17.0);
+            fill_rrect(s, cb, R_SM, C_FIELD);
+            stroke_rrect(s, cb, R_SM, C_LINE_2, 1.0);
+            if ix.animate_matching_layers {
+                fill_rrect(s, cb.inflate(-3.5, -3.5), R_XS, C_TEXT);
+            }
+            app.fonts.text(
+                s,
+                cb.x1 + 8.0,
+                tick_y + 1.0,
+                crate::state::PROTO_MATCHING_LABEL,
+                T10,
+                C_TEXT,
+                Wt::Reg,
+            );
+            hit.push((
+                Rect::new(x0 + 5.0, tick_y, (x0 + 205.0).min(xr - 5.0), tick_y + 18.0),
+                Action::ProtoToggleMatching(i),
+            ));
             y += row_h;
+        }
+
+        // Figma's Scroll behavior block, below the interactions. A frame gets
+        // the Overflow menu ("No scrolling / Horizontal / Vertical / Both
+        // directions"); an object that sits on a frame whose Overflow scrolls
+        // gets the Position menu ("Scroll with parent / Fixed / Sticky"), which
+        // is the row the reference screenshots show for a selected child; a
+        // frame inside another scrolling frame gets both. "You can only apply
+        // overflow behavior to frames", and Position needs "an object … on a
+        // frame that has scroll overflow applied" (help 360039818734).
+        let is_frame = matches!(n.kind, x_native::NodeKind::Frame { .. });
+        // a frame can still sit inside another scrolling frame, so both rows
+        // can apply to one layer
+        let on_scroller = {
+            let root = &app.doc_ref().editor_ref().root;
+            crate::state::scrollable_ancestor(root, &n.id).is_some()
+        };
+        if is_frame || on_scroller {
+            y += 8.0;
+            app.fonts
+                .caps_label(s, x0, y, "SCROLL BEHAVIOR", C_TEXT, Wt::Med);
+            y += 12.0 + LABEL_GAP;
+            if is_frame {
+                let row = crate::state::proto_overflow_row(n.overflow);
+                let field = (
+                    "Overflow",
+                    crate::state::PROTO_OVERFLOW_LABELS[row],
+                    crate::state::ProtoScrollMenu::Overflow,
+                );
+                proto_scroll_row(app, s, hit, (x0, xr), y, field);
+                y += INPUT_H + 6.0;
+            }
+            if on_scroller {
+                let row = crate::state::proto_position_row(&n.constraints);
+                let field = (
+                    "Position",
+                    crate::state::PROTO_POSITION_LABELS[row],
+                    crate::state::ProtoScrollMenu::Position,
+                );
+                proto_scroll_row(app, s, hit, (x0, xr), y, field);
+                y += INPUT_H + 6.0;
+            }
         }
     } else {
         let hint = if sel.len() == 1 {
@@ -8189,6 +11410,38 @@ pub(crate) fn flow_locate(app: &App, id: &str) -> Option<(usize, Rect, String)> 
     None
 }
 
+/// The preview's own lookup: the node with `id` in whichever page carries it
+/// (`None` when no page does). [`flow_locate`] answers the same question for
+/// the viewport geometry; this one hands back the layer itself, which is what
+/// the "Animate matching layers" tick reads the two screens from.
+pub(crate) fn flow_node<'a>(app: &'a App, id: &str) -> Option<&'a x_native::Node> {
+    let d = app.doc_opt()?;
+    for ed in &d.editors {
+        if let Some(n) = find_node_in(&ed.root, id) {
+            return Some(n);
+        }
+    }
+    None
+}
+
+/// Apply a running **Animate matching layers** tick to one screen: a layer
+/// that matched nothing is on its way in, so it carries the tick's alpha.
+/// The rest of the plan is the renderer's — a matched pair's in-between state
+/// is `x_core::smart_animate::interpolate_matching_layers`, and a matched
+/// fixed layer has no transition to paint at all.
+///
+/// The caller passes a clone (see `Host::canvas_scene`): the tick is preview
+/// state, and a file must never see it.
+pub(crate) fn paint_tick_tree(n: &mut x_native::Node, tick: &x_native::editor::SmartTick) {
+    let alpha = tick.layer_alpha(&n.id);
+    if alpha < 1.0 {
+        n.opacity *= alpha;
+    }
+    for c in &mut n.children {
+        paint_tick_tree(c, tick);
+    }
+}
+
 fn paint_flow_overlay(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let Some(flow) = app.flow.clone() else { return };
     let Some((_, wr, name)) = flow_locate(app, &flow.current) else {
@@ -8227,6 +11480,7 @@ fn paint_flow_overlay(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         // a fresh cache per overlay: the relocated clone must never share
         // entries with the authored-position document render
         let mut cache = FrameCache::new();
+        cache.set_presenting(true);
         let scene = cache.render(&placed, &flow.vars, &sink);
         s.append(scene, Some(aff));
     }
@@ -8460,9 +11714,21 @@ fn paint_lib_review(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>)
     hit.push((keep, Action::LibReviewClose));
 }
 
-fn paint_assets(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0: f64, lw: f64) {
-    let x0 = 12.0;
-    let mut y = y0 + 160.5;
+/// The LIBRARY tab's band: the faces the render stack knows, then the
+/// document's linked libraries. `y0` is the first section label's line box
+/// and `sx` the left dock's left edge — the band is *inside* the dock, so
+/// every x is dock-relative (it used to be a window-absolute 12, which put
+/// the whole panel on top of the nav rail).
+fn paint_assets(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    y0: f64,
+    sx: f64,
+    lw: f64,
+) {
+    let x0 = sx + 12.0;
+    let mut y = y0;
     app.fonts.micro_label(s, x0, y, "FONTS", C_DIM, Wt::Med);
     y += 18.0;
     let fams = app.fonts.fonts.families();
@@ -8548,12 +11814,26 @@ fn paint_assets(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
             }
             draw_icon(s, "component", x0 + 3.0, row_t + 4.0, ICON_XS, C_MUTED);
             let label = app.fonts.truncate(id, T10, Wt::Med, lw - 92.0);
-            app.fonts
-                .text(s, x0 + 20.0, row_t + 3.0, &label, T10, C_TEXT, Wt::Med);
+            app.fonts.text(
+                s,
+                x0 + 20.0,
+                line_top(hover_r, T10),
+                &label,
+                T10,
+                C_TEXT,
+                Wt::Med,
+            );
             let vs = format!("v{ver}");
             let vw2 = app.fonts.measure(&vs, T10, Wt::Mono);
-            app.fonts
-                .text(s, lw - 74.0 - vw2, row_t + 3.0, &vs, T10, C_MUTED, Wt::Mono);
+            app.fonts.text(
+                s,
+                lw - 74.0 - vw2,
+                line_top(hover_r, T10),
+                &vs,
+                T10,
+                C_MUTED,
+                Wt::Mono,
+            );
             // "check" — picks the updated .xlib and opens the diff review
             let cb = Rect::new(lw - 66.0, row_t + 2.0, lw - 16.0, row_t + 18.0);
             fill_rrect(s, cb, R_SM, if hover(app, cb) { C_LINE_2 } else { C_FIELD });
@@ -8566,10 +11846,19 @@ fn paint_assets(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
 
 // ————————————————————————————————————————— tokens panel (design audit)
 
-fn paint_tokens(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0: f64, lw: f64) {
+/// The TOKENS tab's band: what the document already paints with. Same
+/// dock-relative rule as [`paint_assets`].
+fn paint_tokens(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    y0: f64,
+    sx: f64,
+    lw: f64,
+) {
     use crate::paint::{fill_rrect, stroke_rrect, Wt};
-    let x0 = 12.0;
-    let mut y = y0 + 160.5;
+    let x0 = sx + 12.0;
+    let mut y = y0;
     app.var_value_rects.clear();
     app.var_name_rects.clear();
     app.fonts
@@ -8592,7 +11881,13 @@ fn paint_tokens(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
         y += 18.0;
     }
     for (hex, count) in tokens.colors.iter().take(7) {
-        let sw = Rect::new(x0 + 4.0, y + 1.0, x0 + 16.0, y + 13.0);
+        // the 12px swatch centres on the 15px line box it labels
+        let sw = Rect::new(
+            x0 + 4.0,
+            y + centre_in(ICON_XS, T10 * CSS_LH),
+            x0 + 16.0,
+            y + centre_in(ICON_XS, T10 * CSS_LH) + ICON_XS,
+        );
         if let Some(c) = x_native::parse_hex_color(hex) {
             fill_rrect(s, sw, R_SM, c);
             stroke_rrect(s, sw, R_SM, C_LINE_2, 1.0);
@@ -8600,8 +11895,9 @@ fn paint_tokens(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
         app.fonts.text(s, x0 + 24.0, y, hex, T10, C_TEXT, Wt::Mono);
         let cnt = format!("×{count}");
         let cw = app.fonts.measure(&cnt, T10, Wt::Reg);
+        // the count rides the same baseline as the hex it counts
         app.fonts
-            .text(s, lw - 12.0 - cw, y + 1.6, &cnt, T10, C_MUTED, Wt::Reg);
+            .text(s, lw - 12.0 - cw, y, &cnt, T10, C_MUTED, Wt::Reg);
         y += 18.0;
     }
     if !tokens.font_sizes.is_empty() {
@@ -8639,7 +11935,9 @@ fn paint_tokens(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
         .unwrap_or(0);
     y += 2.0;
     let br = Rect::new(x0, y, lw - 12.0, y + 26.0);
-    let hov = hover(app, br);
+    // nothing to extract = a disabled control: it keeps its resting fill on
+    // hover (a hover wash also dropped the muted label to 3.05:1 in Daylight)
+    let hov = hover(app, br) && !tokens.colors.is_empty();
     fill_rrect(s, br, R_MD, if hov { C_LINE_2 } else { C_FIELD_2 });
     stroke_rrect(s, br, R_MD, C_LINE_2, 1.0);
     app.fonts.text_center(
@@ -8675,7 +11973,11 @@ fn paint_tokens(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
         (VariableKind::String, "String"),
         (VariableKind::Boolean, "Boolean"),
     ];
-    let bw = (lw - 16.0) / 2.0;
+    // both buttons live inside the dock's 12px insets: (right - left - gap)/2.
+    // `lw` is the dock's right edge, so the width cannot be derived from it
+    // alone — the old `(lw - 16) / 2` assumed a dock that started at x = 0
+    // and pushed the right column 48px past the panel edge.
+    let bw = ((lw - 12.0) - x0 - 4.0) / 2.0;
     for (i, (kind, label)) in kinds.into_iter().enumerate() {
         let bx = x0 + (i % 2) as f64 * (bw + 4.0);
         let by = y + (i / 2) as f64 * 30.0;
@@ -8775,8 +12077,15 @@ fn paint_tokens(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
             name.clone()
         };
         let nw = app.fonts.measure(&name_shown, T10, Wt::Med);
-        app.fonts
-            .text(s, x0 + 18.0, row_t + 3.0, &name_shown, T10, C_TEXT, Wt::Med);
+        app.fonts.text(
+            s,
+            x0 + 18.0,
+            line_top(hover_r, T10),
+            &name_shown,
+            T10,
+            C_TEXT,
+            Wt::Med,
+        );
         let nr = Rect::new(
             x0 + 16.0,
             row_t + 1.0,
@@ -8807,7 +12116,7 @@ fn paint_tokens(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>, y0:
         app.fonts.text(
             s,
             lw - 66.0 - vvw,
-            row_t + 3.0,
+            line_top(hover_r, T10),
             &shown,
             T10,
             if editing_this { C_TEXT } else { C_MUTED },
@@ -9017,6 +12326,76 @@ mod viewport_row_tests {
         app.doc().tree_search.clear();
         let (rows, _) = collect_tree_rows(&app, 0.0, 400.0);
         assert_eq!(rows.len(), 2, "cleared query → both top frames again");
+    }
+
+    /// Figma (help 360056440594): a set reads as ONE row, its variants are the
+    /// rows inside it, and a variant is named by its value.
+    #[test]
+    fn a_component_set_reads_as_one_row_and_its_variants_by_value() {
+        let mut app = App::new();
+        app.open_blank();
+        let root_id = app.doc().editor_ref().root.id.clone();
+        app.doc().editor().insert_node(
+            &root_id,
+            Node::frame("set1", 300.0, 100.0)
+                .child(Node::component("ca", "Button/Primary", 120.0, 44.0))
+                .child(Node::component("cb", "Button/Ghost", 120.0, 44.0)),
+        );
+        app.doc().editor().rename_node("set1", "Button");
+
+        let (rows, _) = collect_tree_rows(&app, 0.0, 400.0);
+        assert_eq!(rows.len(), 1, "a set is one row");
+        assert_eq!(rows[0].id, "set1");
+        assert_eq!(rows[0].name, "Button", "the set's own name");
+        assert_eq!(rows[0].icon, "component", "…and the component-set glyph");
+
+        app.doc().expanded.insert("set1".into());
+        let (rows, _) = collect_tree_rows(&app, 0.0, 400.0);
+        let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["Button", "Primary", "Ghost"]);
+        assert!(rows.iter().all(|r| r.icon == "component"));
+
+        // a frame that is NOT a set keeps the frame affordance
+        app.doc().editor().insert_node(
+            &root_id,
+            Node::frame("fr1", 300.0, 200.0).child(Node::component("cc", "Solo", 10.0, 10.0)),
+        );
+        let (rows, _) = collect_tree_rows(&app, 0.0, 400.0);
+        let fr = rows
+            .iter()
+            .find(|r| r.id == "fr1")
+            .expect("the plain frame");
+        assert_eq!(fr.icon, "frame#", "one plain master is not a set");
+    }
+
+    /// The set's canvas chrome — Figma's dashed violet outline plus the set's
+    /// name — draws for a set and for nothing else.
+    #[test]
+    fn a_component_set_paints_its_dashed_outline_and_name() {
+        let mut app = App::new();
+        app.open_blank();
+        let root_id = app.doc().editor_ref().root.id.clone();
+        app.doc().editor().insert_node(
+            &root_id,
+            Node::frame("set1", 300.0, 100.0)
+                .child(Node::component("ca", "Button/Primary", 120.0, 44.0))
+                .child(Node::component("cb", "Button/Ghost", 120.0, 44.0)),
+        );
+        app.doc().editor().rename_node("set1", "Button");
+        let mut scene = vello::Scene::new();
+        paint_variant_chrome(&mut app, &mut scene);
+        assert!(scene.encoding().n_paths > 0, "the set draws");
+
+        let mut plain = App::new();
+        plain.open_blank();
+        let root_id = plain.doc().editor_ref().root.id.clone();
+        plain.doc().editor().insert_node(
+            &root_id,
+            Node::frame("fr1", 300.0, 100.0).child(Node::component("ca", "Primary", 120.0, 44.0)),
+        );
+        let mut scene = vello::Scene::new();
+        paint_variant_chrome(&mut plain, &mut scene);
+        assert_eq!(scene.encoding().n_paths, 0, "a plain frame is not a set");
     }
 
     #[test]

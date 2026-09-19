@@ -372,9 +372,15 @@ fn nested_action_json(a: &Action) -> String {
 }
 
 fn interaction_json(i: &Interaction) -> String {
+    // A trigger's parameter rides beside its word. Every trigger that carries
+    // one writes it here — the reader in `deserialize.rs` knows all twelve
+    // words (`Trigger::to_str`) and the fields that go with them; a word this
+    // writer emits but that reader does not know comes back as On click, which
+    // is how the video triggers used to lose their kind on the way in.
     let delay = match &i.trigger {
         Trigger::AfterDelay { ms } => format!(",\"delay_ms\":{ms}"),
         Trigger::KeyDown { key } => format!(",\"key\":\"{}\"", esc(key)),
+        Trigger::WhenVideoHits { time } => format!(",\"video_time\":{time}"),
         _ => String::new(),
     };
     // direction suffix for Move in / Move out ("movein-left")
@@ -440,8 +446,15 @@ fn interaction_json(i: &Interaction) -> String {
     } else {
         String::new()
     };
+    // Figma's "Animate matching layers" tick. Absent means off, so files that
+    // predate the tick carry on meaning what they meant.
+    let smart = if i.animate_matching_layers {
+        ",\"smartmatch\":true".to_string()
+    } else {
+        String::new()
+    };
     format!(
-        "{{\"trigger\":\"{}\",\"action\":\"{}\",\"ms\":{},\"anim\":\"{}\"{}{}{}{}{}{}{}}}",
+        "{{\"trigger\":\"{}\",\"action\":\"{}\",\"ms\":{},\"anim\":\"{}\"{}{}{}{}{}{}{}{}}}",
         i.trigger.to_str(),
         i.action.kind(),
         i.transition_ms,
@@ -452,7 +465,8 @@ fn interaction_json(i: &Interaction) -> String {
         py,
         delay,
         extra,
-        actions_field
+        actions_field,
+        smart
     )
 }
 /// Grid layout JSON: {"cols":[..],"rows":[..],"cgap":N,"rgap":N,"pad":[l,r,t,b]}.
@@ -545,8 +559,12 @@ fn kind_json(k: &NodeKind) -> String {
         NodeKind::Section => "{\"t\":\"section\"}".into(),
         NodeKind::Rect { radius } => format!("{{\"t\":\"rect\",\"radius\":{radius}}}"),
         NodeKind::Ellipse => "{\"t\":\"ellipse\"}".into(),
-        NodeKind::Arc { start, end } => {
-            format!("{{\"t\":\"arc\",\"start\":{start},\"end\":{end}}}")
+        NodeKind::Arc { start, end, ratio } => {
+            format!("{{\"t\":\"arc\",\"start\":{start},\"end\":{end},\"ratio\":{ratio}}}")
+        }
+        NodeKind::Poly { sides } => format!("{{\"t\":\"poly\",\"sides\":{sides}}}"),
+        NodeKind::Star { points, ratio } => {
+            format!("{{\"t\":\"star\",\"points\":{points},\"ratio\":{ratio}}}")
         }
         NodeKind::Line => "{\"t\":\"line\"}".into(),
         NodeKind::Text { text } => format!("{{\"t\":\"text\",\"text\":\"{}\"}}", esc(text)),
@@ -582,6 +600,11 @@ pub(crate) fn node_json(n: &Node, out: &mut String) {
     ));
     if n.name != n.id {
         out.push_str(&format!(",\"name\":\"{}\"", esc(&n.name)));
+    }
+    // written only when it is off, exactly like `name` above: `true` is the
+    // default, so every document saved before this flag existed is unchanged
+    if !n.show_name {
+        out.push_str(",\"show_name\":false");
     }
     if n.transform.scale_x != 1.0 || n.transform.scale_y != 1.0 {
         out.push_str(&format!(
@@ -744,6 +767,9 @@ pub(crate) fn node_json(n: &Node, out: &mut String) {
     }
     if n.is_mask {
         out.push_str(",\"mask\":true");
+        if n.mask_type != MaskType::Alpha {
+            out.push_str(&format!(",\"maskType\":\"{}\"", n.mask_type.key()));
+        }
     }
     if let Some(b) = n.baseline {
         out.push_str(&format!(",\"baseline\":{b}"));

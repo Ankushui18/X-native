@@ -7,6 +7,133 @@ use x_core::*;
 
 // ------------------------------------------------------- prototype playback
 
+/// How long a layer that matched nothing takes to dissolve in (ms): short
+/// enough to read as a dissolve rather than a fade-in, and capped by the
+/// interaction's own duration when that is shorter.
+pub const TICK_FADE_MS: u32 = 120;
+
+/// A running **Animate matching layers** transition (help 360039818874): the
+/// destination screen's layers, what the tick decided for each, and how far it
+/// has got.
+///
+/// The decisions are the model's ([`x_core::prototype::matching_layers`]) and
+/// are frozen when the navigation fires, so the tick cannot disagree with the
+/// screens as they were at that moment. What the tick adds is the clock every
+/// host shares: it runs for the interaction's own `transition_ms`, it reports
+/// the eased-in alpha for layers that are arriving, and it stops — Figma runs
+/// the transition once per navigation, not on a loop.
+///
+/// The interpolation itself is
+/// [`x_core::smart_animate::interpolate_matching_layers`], which takes this
+/// tick's [`SmartTick::progress`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct SmartTick {
+    /// the destination's layers, in document order (parents first)
+    pub plan: Vec<x_core::LayerPlan>,
+    /// the interaction's transition, ms
+    pub total_ms: u32,
+    /// ms since the navigation fired
+    pub elapsed_ms: u32,
+}
+
+impl SmartTick {
+    /// The interaction's progress, 0 → 1. Easing is the renderer's to apply:
+    /// the tick's clock is the plain one Figma animates against.
+    pub fn progress(&self) -> f64 {
+        if self.total_ms == 0 {
+            return 1.0;
+        }
+        (self.elapsed_ms as f64 / self.total_ms as f64).clamp(0.0, 1.0)
+    }
+
+    /// How long an arriving layer takes: [`TICK_FADE_MS`], or the whole
+    /// transition when the interaction asks for less than that.
+    pub fn fade_ms(&self) -> u32 {
+        self.total_ms.min(TICK_FADE_MS)
+    }
+
+    /// Still running? False from the moment the interaction's duration is up,
+    /// which is also when the viewer can stop repainting.
+    pub fn running(&self) -> bool {
+        self.elapsed_ms < self.total_ms
+    }
+
+    /// Advance the clock; returns whether the tick is still running.
+    pub fn advance(&mut self, dt_ms: u32) -> bool {
+        self.elapsed_ms = self.elapsed_ms.saturating_add(dt_ms);
+        self.running()
+    }
+
+    /// The alpha a destination layer paints with: a layer that matched nothing
+    /// is on its way in, so it fades over [`SmartTick::fade_ms`]; a matched
+    /// pair and a matched fixed layer paint at full strength (the pair's
+    /// in-between state comes from the interpolation map, and the fixed layer
+    /// has no transition at all).
+    pub fn layer_alpha(&self, to: &str) -> f32 {
+        match self.plan.iter().find(|p| p.to == to) {
+            Some(x_core::LayerPlan {
+                transition: x_core::LayerTransition::Dissolve,
+                ..
+            }) => self.dissolve_alpha(),
+            _ => 1.0,
+        }
+    }
+
+    /// The working alpha for the layers that are arriving: 0 → 1 over
+    /// [`SmartTick::fade_ms`].
+    pub fn dissolve_alpha(&self) -> f32 {
+        let fade = self.fade_ms();
+        if fade == 0 {
+            return 1.0;
+        }
+        (self.elapsed_ms as f32 / fade as f32).clamp(0.0, 1.0)
+    }
+
+    /// The outgoing layer a destination layer animates from, when they matched.
+    pub fn pair(&self, to: &str) -> Option<&str> {
+        let hit = self.plan.iter().find(|p| p.to == to)?;
+        match &hit.transition {
+            x_core::LayerTransition::SmartAnimate { from } => Some(from.as_str()),
+            _ => None,
+        }
+    }
+
+    /// How many destination layers matched and smart-animate their differences.
+    pub fn matched(&self) -> usize {
+        self.plan
+            .iter()
+            .filter(|p| matches!(p.transition, x_core::LayerTransition::SmartAnimate { .. }))
+            .count()
+    }
+
+    /// How many destination layers are arriving (matched nothing, so they
+    /// dissolve in).
+    pub fn arriving(&self) -> usize {
+        self.plan
+            .iter()
+            .filter(|p| p.transition == x_core::LayerTransition::Dissolve)
+            .count()
+    }
+}
+
+/// Arm the tick for a navigation that just happened, from one screen to
+/// another: `None` when the interaction does not ask for it — the tick starts
+/// off, the way Figma's box does — when the action is an overlay, which Figma
+/// gives no smart animate at all, or when the two ids are the same screen.
+pub fn arm_smart_tick(ix: &Interaction, from: &Node, to: &Node) -> Option<SmartTick> {
+    if !ix.animate_matching_layers || from.id == to.id {
+        return None;
+    }
+    if !matches!(&ix.action, Action::Navigate { .. } | Action::Back) {
+        return None;
+    }
+    Some(SmartTick {
+        plan: x_core::matching_layers(from, to),
+        total_ms: ix.transition_ms,
+        elapsed_ms: 0,
+    })
+}
+
 /// One open overlay: the frame floating above the current screen, and
 /// where it is anchored (see [`overlay_offset`]).
 #[derive(Debug, Clone, PartialEq)]
@@ -343,6 +470,9 @@ pub struct Player<'a> {
     drag_fired: bool,
     hover_span: Option<WhileSpan>,
     press_span: Option<WhileSpan>,
+    /// the running "Animate matching layers" transition, when the last
+    /// navigation asked for one (see [`arm_smart_tick`]).
+    pub tick: Option<SmartTick>,
 }
 impl<'a> Player<'a> {
     pub fn new(doc: &'a Node, start: &str) -> Self {
@@ -359,6 +489,7 @@ impl<'a> Player<'a> {
             drag_fired: false,
             hover_span: None,
             press_span: None,
+            tick: None,
         };
         p.arm_delays();
         p
@@ -376,6 +507,7 @@ impl<'a> Player<'a> {
     /// hover and re-arm delays when the screen changed.
     fn fire(&mut self, ix: &Interaction) -> FireEffect {
         let doc = self.doc;
+        let origin = self.current.clone();
         let effect = fire_action(
             &mut self.current,
             &mut self.stack,
@@ -388,6 +520,14 @@ impl<'a> Player<'a> {
         if effect.navigated.is_some() {
             self.hovered = None;
             self.arm_delays();
+            // every navigation re-decides the tick: the new screen's plan
+            // when the interaction asks for one, nothing when it does not
+            let from = find(doc, &origin);
+            let to = find(doc, &self.current);
+            self.tick = match (from, to) {
+                (Some(from), Some(to)) => arm_smart_tick(ix, from, to),
+                _ => None,
+            };
         } else if effect.overlays_changed {
             self.arm_overlay_delays();
         }
@@ -656,7 +796,11 @@ impl<'a> Player<'a> {
             if !orphaned {
                 self.hovered = Some(hit.clone());
             }
-            self.fire_trigger(&hit, Trigger::OnPress)
+            let mut fired = self.fire_trigger(&hit, Trigger::OnPress);
+            // Mouse down is the press itself: permanent and one-way, where
+            // "while pressing" arms the release that unwinds it
+            fired |= self.fire_trigger(&hit, Trigger::MouseDown);
+            fired
         } else {
             false
         }
@@ -889,6 +1033,7 @@ mod tests {
                     actions: vec![],
                     easing: Easing::Linear,
                     reset_on_navigate: false,
+                    animate_matching_layers: false,
                 },
             ))
             .child(btn(
@@ -905,6 +1050,7 @@ mod tests {
                     actions: vec![],
                     easing: Easing::Linear,
                     reset_on_navigate: false,
+                    animate_matching_layers: false,
                 },
             ))
             .child(btn(
@@ -918,6 +1064,7 @@ mod tests {
                     actions: vec![],
                     easing: Easing::Linear,
                     reset_on_navigate: false,
+                    animate_matching_layers: false,
                 },
             ))
             .child(btn(
@@ -934,6 +1081,7 @@ mod tests {
                     actions: vec![],
                     easing: Easing::Linear,
                     reset_on_navigate: false,
+                    animate_matching_layers: false,
                 },
             ));
         let detail = Node::frame("detail", 400.0, 300.0)
@@ -948,6 +1096,7 @@ mod tests {
                     actions: vec![],
                     easing: Easing::Linear,
                     reset_on_navigate: false,
+                    animate_matching_layers: false,
                 },
             ))
             .child(btn(
@@ -963,6 +1112,7 @@ mod tests {
                     actions: vec![],
                     easing: Easing::Linear,
                     reset_on_navigate: false,
+                    animate_matching_layers: false,
                 },
             ))
             .child(btn(
@@ -979,6 +1129,7 @@ mod tests {
                     actions: vec![],
                     easing: Easing::Linear,
                     reset_on_navigate: false,
+                    animate_matching_layers: false,
                 },
             ));
         let mut dlg = Node::frame("dlg", 160.0, 100.0).child(btn(
@@ -992,6 +1143,7 @@ mod tests {
                 actions: vec![],
                 easing: Easing::Linear,
                 reset_on_navigate: false,
+                animate_matching_layers: false,
             },
         ));
         // authored far from home: overlay hit-testing must use the RENDERED
@@ -1259,6 +1411,35 @@ mod tests {
         assert_eq!(p.key("a"), None);
     }
 
+    /// Figma's Mouse down is the press itself: permanent and one-way, where
+    /// While pressing arms the release that unwinds it (help 360040315773).
+    /// The player fires it from `press`, beside `OnPress`; `release` leaves it
+    /// standing.
+    #[test]
+    fn player_mouse_down_navigates_on_press_and_release_keeps_it() {
+        let mut md = Node::rect("md", 10.0, 20.0, 60.0, 30.0, Color::WHITE);
+        md.interactions = vec![Interaction {
+            trigger: Trigger::MouseDown,
+            action: Action::Navigate {
+                destination: "detail".into(),
+            },
+            transition_ms: 0,
+            animation: Animation::Instant,
+            actions: vec![],
+            easing: Easing::Linear,
+            reset_on_navigate: false,
+            animate_matching_layers: false,
+        }];
+        let root = Node::frame("root", 1000.0, 600.0)
+            .child(Node::frame("home", 400.0, 300.0).child(md))
+            .child(Node::frame("detail", 400.0, 300.0));
+        let mut p = Player::new(&root, "home");
+        assert!(p.press(Point::new(30.0, 35.0)), "Mouse down fires");
+        assert_eq!(p.current, "detail");
+        p.release(Point::new(30.0, 35.0));
+        assert_eq!(p.current, "detail", "the release keeps it");
+    }
+
     #[test]
     fn player_hover_navigate_autoreverses_on_leave() {
         let root = player_doc();
@@ -1287,6 +1468,7 @@ mod tests {
                 actions: vec![],
                 easing: Easing::Linear,
                 reset_on_navigate: false,
+                animate_matching_layers: false,
             }),
         );
         let root = Node::frame("root", 1000.0, 600.0)

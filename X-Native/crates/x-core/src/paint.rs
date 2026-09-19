@@ -580,6 +580,74 @@ pub enum BlendKind {
     PassThrough,
 }
 impl BlendKind {
+    /// Figma's own words for the mode (`Apply blend modes…`). ONE owner: the
+    /// panel pill, the menu and any export read this, so a name can never
+    /// drift between the control and the list it opens.
+    pub fn label(self) -> &'static str {
+        match self {
+            BlendKind::PassThrough => "Pass through",
+            BlendKind::Normal => "Normal",
+            BlendKind::Darken => "Darken",
+            BlendKind::Multiply => "Multiply",
+            BlendKind::PlusDarker => "Plus darker",
+            BlendKind::ColorBurn => "Color burn",
+            BlendKind::Lighten => "Lighten",
+            BlendKind::Screen => "Screen",
+            BlendKind::PlusLighter => "Plus lighter",
+            BlendKind::ColorDodge => "Color dodge",
+            BlendKind::Overlay => "Overlay",
+            BlendKind::SoftLight => "Soft light",
+            BlendKind::HardLight => "Hard light",
+            BlendKind::Difference => "Difference",
+            BlendKind::Exclusion => "Exclusion",
+            BlendKind::Hue => "Hue",
+            BlendKind::Saturation => "Saturation",
+            BlendKind::Color => "Color",
+            BlendKind::Luminosity => "Luminosity",
+        }
+    }
+
+    /// The dropdown for a **layer**, in Figma's order: *"Pass through is the
+    /// default mode for layers"*, and it leads the list.
+    pub fn layer_modes() -> Vec<BlendKind> {
+        let mut v = vec![BlendKind::PassThrough];
+        v.extend(BlendKind::paint_modes());
+        v
+    }
+
+    /// The dropdown for a fill, a stroke or an effect. **No Pass through** —
+    /// *"Pass through cannot be applied to fills or effects."* Same 18 modes
+    /// and the same order otherwise, so the two menus differ by exactly the
+    /// one row Figma's documentation says they differ by.
+    pub fn paint_modes() -> Vec<BlendKind> {
+        vec![
+            BlendKind::Normal,
+            BlendKind::Darken,
+            BlendKind::Multiply,
+            BlendKind::PlusDarker,
+            BlendKind::ColorBurn,
+            BlendKind::Lighten,
+            BlendKind::Screen,
+            BlendKind::PlusLighter,
+            BlendKind::ColorDodge,
+            BlendKind::Overlay,
+            BlendKind::SoftLight,
+            BlendKind::HardLight,
+            BlendKind::Difference,
+            BlendKind::Exclusion,
+            BlendKind::Hue,
+            BlendKind::Saturation,
+            BlendKind::Color,
+            BlendKind::Luminosity,
+        ]
+    }
+
+    /// Figma's menu order for a list, or `None` when the mode is not in it
+    /// (a `Pass through` on a paint cannot be ticked because it cannot be set).
+    pub fn row_in(modes: &[BlendKind], kind: BlendKind) -> Option<usize> {
+        modes.iter().position(|m| *m == kind)
+    }
+
     pub fn mix(self) -> Option<Mix> {
         match self {
             BlendKind::Normal => None,
@@ -638,6 +706,176 @@ pub enum Effect {
     },
 }
 
+/// The effect types this engine carries, in Figma's dropdown order (`Apply
+/// effects to layers`: *"Drop shadow"*, *"Inner shadow"*, *"Layer blur"*,
+/// *"Background blur"*, *"Noise"*). `Glass` and `Texture` are Figma's two
+/// newer types and are not in the model — see the master list rows 8.23/8.24.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectKind {
+    DropShadow,
+    InnerShadow,
+    LayerBlur,
+    BackgroundBlur,
+    Noise,
+}
+
+impl EffectKind {
+    /// The add menu and the row's type dropdown, in Figma's order.
+    pub fn all() -> [EffectKind; 5] {
+        [
+            EffectKind::DropShadow,
+            EffectKind::InnerShadow,
+            EffectKind::LayerBlur,
+            EffectKind::BackgroundBlur,
+            EffectKind::Noise,
+        ]
+    }
+    /// Figma's words for the type, the ONE owner of them.
+    pub fn label(self) -> &'static str {
+        match self {
+            EffectKind::DropShadow => "Drop shadow",
+            EffectKind::InnerShadow => "Inner shadow",
+            EffectKind::LayerBlur => "Layer blur",
+            EffectKind::BackgroundBlur => "Background blur",
+            EffectKind::Noise => "Noise",
+        }
+    }
+    /// The icon name this type wears (the app's vocabulary).
+    pub fn icon(self) -> &'static str {
+        match self {
+            EffectKind::DropShadow | EffectKind::InnerShadow => "box",
+            EffectKind::LayerBlur => "sparkles",
+            EffectKind::BackgroundBlur => "layout-template",
+            EffectKind::Noise => "grid-2x2",
+        }
+    }
+}
+
+/// One numeric row of an effect's settings block, in Figma's words and order:
+/// shadows show **X**, **Y**, **Blur**; blurs show **Radius**; noise shows
+/// **Density**.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectField {
+    X,
+    Y,
+    Blur,
+    Radius,
+    Density,
+}
+
+impl EffectField {
+    pub fn label(self) -> &'static str {
+        match self {
+            EffectField::X => "X",
+            EffectField::Y => "Y",
+            EffectField::Blur => "Blur",
+            EffectField::Radius => "Radius",
+            EffectField::Density => "Density",
+        }
+    }
+}
+
+impl Effect {
+    pub fn kind(&self) -> EffectKind {
+        match self {
+            Effect::DropShadow { .. } => EffectKind::DropShadow,
+            Effect::InnerShadow { .. } => EffectKind::InnerShadow,
+            Effect::LayerBlur { .. } => EffectKind::LayerBlur,
+            Effect::BackgroundBlur { .. } => EffectKind::BackgroundBlur,
+            Effect::Noise { .. } => EffectKind::Noise,
+        }
+    }
+
+    /// A new effect of `kind` with Figma's own starting values: a shadow
+    /// starts at `X 0 / Y 4 / Blur 4` in 25% black (Figma's drop shadow
+    /// default), a blur at a small radius, noise at a light density.
+    pub fn default_of(kind: EffectKind) -> Effect {
+        match kind {
+            EffectKind::DropShadow => Effect::DropShadow {
+                dx: 0.0,
+                dy: 4.0,
+                blur: 4.0,
+                color: Color::from_rgba8(0, 0, 0, 64),
+            },
+            EffectKind::InnerShadow => Effect::InnerShadow {
+                dx: 0.0,
+                dy: 4.0,
+                blur: 4.0,
+                color: Color::from_rgba8(0, 0, 0, 64),
+            },
+            EffectKind::LayerBlur => Effect::LayerBlur { radius: 4.0 },
+            EffectKind::BackgroundBlur => Effect::BackgroundBlur { radius: 8.0 },
+            EffectKind::Noise => Effect::Noise {
+                amount: 0.25,
+                seed: 1,
+            },
+        }
+    }
+
+    /// The numeric settings this effect shows, in the order Figma shows them.
+    /// The panel builds its block from this, so a type can never grow a field
+    /// the model has no place for (or lose one it has).
+    pub fn fields(&self) -> Vec<EffectField> {
+        match self {
+            Effect::DropShadow { .. } | Effect::InnerShadow { .. } => {
+                vec![EffectField::X, EffectField::Y, EffectField::Blur]
+            }
+            Effect::LayerBlur { .. } | Effect::BackgroundBlur { .. } => vec![EffectField::Radius],
+            Effect::Noise { .. } => vec![EffectField::Density],
+        }
+    }
+
+    pub fn field(&self, f: EffectField) -> f64 {
+        match (self, f) {
+            (Effect::DropShadow { dx, .. }, EffectField::X)
+            | (Effect::InnerShadow { dx, .. }, EffectField::X) => *dx,
+            (Effect::DropShadow { dy, .. }, EffectField::Y)
+            | (Effect::InnerShadow { dy, .. }, EffectField::Y) => *dy,
+            (Effect::DropShadow { blur, .. }, EffectField::Blur)
+            | (Effect::InnerShadow { blur, .. }, EffectField::Blur) => *blur,
+            (Effect::LayerBlur { radius }, EffectField::Radius)
+            | (Effect::BackgroundBlur { radius }, EffectField::Radius) => *radius,
+            (Effect::Noise { amount, .. }, EffectField::Density) => *amount as f64,
+            _ => 0.0,
+        }
+    }
+
+    /// Write a field. A field the effect does not carry is ignored rather than
+    /// silently landing somewhere else.
+    pub fn set_field(&mut self, f: EffectField, v: f64) {
+        match (self, f) {
+            (Effect::DropShadow { dx, .. }, EffectField::X)
+            | (Effect::InnerShadow { dx, .. }, EffectField::X) => *dx = v,
+            (Effect::DropShadow { dy, .. }, EffectField::Y)
+            | (Effect::InnerShadow { dy, .. }, EffectField::Y) => *dy = v,
+            (Effect::DropShadow { blur, .. }, EffectField::Blur)
+            | (Effect::InnerShadow { blur, .. }, EffectField::Blur) => *blur = v.max(0.0),
+            (Effect::LayerBlur { radius }, EffectField::Radius)
+            | (Effect::BackgroundBlur { radius }, EffectField::Radius) => *radius = v.max(0.0),
+            (Effect::Noise { amount, .. }, EffectField::Density) => {
+                *amount = (v as f32).clamp(0.0, 1.0)
+            }
+            _ => {}
+        }
+    }
+
+    /// The shadow's **Fill** (Figma calls a shadow's colour a paint). `None`
+    /// for the effect types that have no colour.
+    pub fn color(&self) -> Option<Color> {
+        match self {
+            Effect::DropShadow { color, .. } | Effect::InnerShadow { color, .. } => Some(*color),
+            _ => None,
+        }
+    }
+
+    pub fn set_color(&mut self, c: Color) {
+        match self {
+            Effect::DropShadow { color, .. } | Effect::InnerShadow { color, .. } => *color = c,
+            _ => {}
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct EffectLayer {
     pub effect: Effect,
@@ -659,6 +897,93 @@ impl EffectLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Figma (help 360040667874) writes the mode list out in order, and says
+    /// the one thing that separates the two dropdowns: *"Pass through cannot be
+    /// applied to fills or effects"* while it IS the default for layers.
+    #[test]
+    fn the_blend_lists_are_figmas_and_pass_through_is_layer_only() {
+        let words = [
+            "Darken",
+            "Multiply",
+            "Plus darker",
+            "Color burn",
+            "Lighten",
+            "Screen",
+            "Plus lighter",
+            "Color dodge",
+            "Overlay",
+            "Soft light",
+            "Hard light",
+            "Difference",
+            "Exclusion",
+            "Hue",
+            "Saturation",
+            "Color",
+            "Luminosity",
+        ];
+        let paints = BlendKind::paint_modes();
+        assert_eq!(paints.len(), 18);
+        assert_eq!(paints[0], BlendKind::Normal, "Normal is the paint default");
+        assert!(
+            !paints.contains(&BlendKind::PassThrough),
+            "Pass through cannot be applied to fills or effects"
+        );
+        let names: Vec<&str> = paints[1..].iter().map(|m| m.label()).collect();
+        assert_eq!(names, words, "Figma's order, after Normal");
+
+        let layers = BlendKind::layer_modes();
+        assert_eq!(layers.len(), 19);
+        assert_eq!(layers[0], BlendKind::PassThrough);
+        assert_eq!(
+            &layers[1..],
+            &paints[..],
+            "one extra row, not a second list"
+        );
+
+        assert_eq!(BlendKind::row_in(&layers, BlendKind::PassThrough), Some(0));
+        assert_eq!(BlendKind::row_in(&paints, BlendKind::PassThrough), None);
+    }
+
+    /// The five types this engine carries, in Figma's dropdown order, each with
+    /// its own starting values and its own settings rows.
+    #[test]
+    fn the_effect_kinds_are_figmas_five_with_their_own_fields() {
+        let kinds = EffectKind::all();
+        let labels: Vec<&str> = kinds.iter().map(|k| k.label()).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "Drop shadow",
+                "Inner shadow",
+                "Layer blur",
+                "Background blur",
+                "Noise"
+            ]
+        );
+        for k in kinds {
+            let e = Effect::default_of(k);
+            assert_eq!(e.kind(), k, "a default carries its own kind");
+            let expect = match k {
+                EffectKind::DropShadow | EffectKind::InnerShadow => {
+                    vec![EffectField::X, EffectField::Y, EffectField::Blur]
+                }
+                EffectKind::LayerBlur | EffectKind::BackgroundBlur => vec![EffectField::Radius],
+                EffectKind::Noise => vec![EffectField::Density],
+            };
+            assert_eq!(e.fields(), expect, "{} rows", k.label());
+            assert_eq!(
+                e.color().is_some(),
+                matches!(k, EffectKind::DropShadow | EffectKind::InnerShadow),
+                "only a shadow carries a Fill"
+            );
+        }
+        // a shadow's documented defaults: X 0, Y 4, Blur 4
+        let d = Effect::default_of(EffectKind::DropShadow);
+        assert_eq!(d.field(EffectField::X), 0.0);
+        assert_eq!(d.field(EffectField::Y), 4.0);
+        assert_eq!(d.field(EffectField::Blur), 4.0);
+    }
 
     #[test]
     fn densify_oklab_keeps_endpoints_and_count() {

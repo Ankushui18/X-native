@@ -11,10 +11,10 @@
 //!
 //! [`ColorTokens::contrast_audit`] walks every text role over every surface
 //! role it can land on and reports pairs below the WCAG 2.1 AA floor (4.5:1
-//! for body text, 3:1 for non-text indicators such as the focus ring). All
-//! three shipped palettes pass, and `every_shipped_palette_is_aa_clean` pins
-//! that — which is what makes "add a theme" a safe operation instead of a
-//! guessing game.
+//! for body text, 3:1 for non-text indicators such as the focus ring). Both
+//! shipped palettes pass, and `every_shipped_palette_is_aa_clean` pins that —
+//! which is what makes "add a theme" a safe operation instead of a guessing
+//! game.
 
 use crate::design_system::{ColorTokens, COLOR_ROLES};
 
@@ -25,18 +25,18 @@ pub enum ThemeId {
     Graphite,
     /// Light theme for daylight work and screen sharing.
     Daylight,
-    /// Pure black with maximum separation, for low-vision users.
-    HighContrast,
 }
 
 impl ThemeId {
-    pub const ALL: [ThemeId; 3] = [ThemeId::Graphite, ThemeId::Daylight, ThemeId::HighContrast];
+    /// Every shipped palette. The app offers exactly these — a third
+    /// palette is a product decision (a menu row, a design-sheet swatch, a
+    /// persisted slug), not something a tool adds on its own.
+    pub const ALL: [ThemeId; 2] = [ThemeId::Graphite, ThemeId::Daylight];
 
     pub fn label(self) -> &'static str {
         match self {
             ThemeId::Graphite => "Graphite (dark)",
             ThemeId::Daylight => "Daylight (light)",
-            ThemeId::HighContrast => "High Contrast",
         }
     }
 
@@ -45,19 +45,19 @@ impl ThemeId {
         match self {
             ThemeId::Graphite => "graphite",
             ThemeId::Daylight => "daylight",
-            ThemeId::HighContrast => "high-contrast",
         }
     }
 
     /// Accepts the slug, the label, and the conventional `dark`/`light`
     /// aliases. Unknown names return `None` so callers can report instead of
-    /// silently falling back.
+    /// silently falling back — including the retired `high-contrast` slug,
+    /// which a settings file written by an older build may still carry (the
+    /// caller then falls back to the default palette).
     pub fn parse(s: &str) -> Option<ThemeId> {
         let t = s.trim().to_lowercase().replace(' ', "-");
         match t.as_str() {
             "graphite" | "dark" | "default" => return Some(ThemeId::Graphite),
             "daylight" | "light" => return Some(ThemeId::Daylight),
-            "high-contrast" | "hc" | "contrast" => return Some(ThemeId::HighContrast),
             _ => {}
         }
         // labels carry a qualifier ("Graphite (dark)"); accept the leading
@@ -69,7 +69,6 @@ impl ThemeId {
         {
             "graphite" => Some(ThemeId::Graphite),
             "daylight" => Some(ThemeId::Daylight),
-            "high" => Some(ThemeId::HighContrast),
             _ => None,
         }
     }
@@ -82,12 +81,13 @@ impl ThemeId {
         ColorTokens::for_theme(self)
     }
 
-    /// Next theme in the cycle (the "flip the UI" shortcut).
+    /// Next theme in the cycle (the "flip the UI" shortcut): a flip between
+    /// the two palettes, so holding the shortcut can never land on a palette
+    /// the user did not ask for.
     pub fn next(self) -> ThemeId {
         match self {
             ThemeId::Graphite => ThemeId::Daylight,
-            ThemeId::Daylight => ThemeId::HighContrast,
-            ThemeId::HighContrast => ThemeId::Graphite,
+            ThemeId::Daylight => ThemeId::Graphite,
         }
     }
 }
@@ -392,14 +392,16 @@ mod tests {
     fn palettes_are_actually_distinct() {
         let g = ThemeId::Graphite.palette();
         let l = ThemeId::Daylight.palette();
-        let h = ThemeId::HighContrast.palette();
         assert_ne!(g.background, l.background, "light theme must differ");
         assert!(
             luminance(l.background) > luminance(g.background),
             "daylight must be the light one"
         );
-        assert!(luminance(h.background) < 0.02, "high contrast is black");
-        assert_ne!(g, h);
+        // exactly two palettes ship: dark and light, no third option hidden
+        // behind a cycle
+        assert_eq!(ThemeId::ALL.len(), 2);
+        assert_eq!(ThemeId::Graphite.next(), ThemeId::Daylight);
+        assert_eq!(ThemeId::Daylight.next(), ThemeId::Graphite);
     }
 
     #[test]
@@ -410,10 +412,13 @@ mod tests {
         }
         assert_eq!(ThemeId::parse("dark"), Some(ThemeId::Graphite));
         assert_eq!(ThemeId::parse("LIGHT"), Some(ThemeId::Daylight));
-        assert_eq!(ThemeId::parse("High Contrast"), Some(ThemeId::HighContrast));
         assert_eq!(ThemeId::parse("nonsense"), None);
+        // the retired slug is refused rather than silently defaulted: the
+        // caller (a settings loader) decides what to do about it
+        assert_eq!(ThemeId::parse("high-contrast"), None);
+        assert_eq!(ThemeId::parse("High Contrast"), None);
         assert_eq!(ThemeId::Graphite.next(), ThemeId::Daylight);
-        assert_eq!(ThemeId::HighContrast.next(), ThemeId::Graphite);
+        assert_eq!(ThemeId::Daylight.next(), ThemeId::Graphite);
         assert!(ThemeId::Graphite.is_dark() && !ThemeId::Daylight.is_dark());
     }
 

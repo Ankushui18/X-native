@@ -53,6 +53,7 @@ pub fn build_scene_full(
         &registry,
         &empty,
         0,
+        false,
         &ctx,
     );
     (scene, stats)
@@ -274,6 +275,9 @@ fn encode_vector_layers(
     }
 }
 
+/// `in_frame` mirrors `ir::lower`'s flag: true when a FRAME already encloses
+/// this node in this render, so the direct encoder draws the same labels the IR
+/// path draws (Figma names a page's outermost frames only).
 #[allow(clippy::too_many_arguments)]
 fn encode(
     scene: &mut Scene,
@@ -285,6 +289,7 @@ fn encode(
     registry: &ComponentRegistry,
     overrides: &HashMap<String, String>,
     depth: u32,
+    in_frame: bool,
     ctx: &EncodeCtx,
 ) {
     stats.nodes += 1;
@@ -580,6 +585,7 @@ fn encode(
                                 max_lines: node.max_lines,
                                 paragraph_indent: node.paragraph_indent,
                                 decoration: node.text_decoration,
+                                list: node.list_style,
                             },
                         );
                         let dy = match node.text_align_vertical {
@@ -631,10 +637,57 @@ fn encode(
                 );
             }
         }
-        NodeKind::Arc { start, end } => {
-            // arc primitive: shared bezier geometry, chord fill + stroke
+        NodeKind::Poly { sides } => {
+            // polygon primitive: the same box-local outline the Boolean ops and
+            // the export read, filled + stroked like any other shape
+            let bez = path_to_bez(&x_core::booleans::poly_path_cmds(node.w, node.h, *sides));
+            encode_drop_shadows(scene, node, world, &bez, stats);
+            scene.fill(
+                Fill::NonZero,
+                world,
+                &brush_with_alpha(effective_brush(node, overrides, vars), node.opacity),
+                None,
+                &bez,
+            );
+            if node.stroke.width > 0.0 {
+                scene.stroke(
+                    &vello::kurbo::Stroke::new(node.stroke.width),
+                    world,
+                    &brush_with_alpha(paint_brush(&node.stroke.paint, vars), node.opacity),
+                    None,
+                    &bez,
+                );
+                stats.paths += 1;
+            }
+            stats.paths += 1;
+        }
+        NodeKind::Star { points, ratio } => {
+            let cmds = x_core::booleans::star_path_cmds(node.w, node.h, *points, *ratio);
+            let bez = path_to_bez(&cmds);
+            encode_drop_shadows(scene, node, world, &bez, stats);
+            scene.fill(
+                Fill::NonZero,
+                world,
+                &brush_with_alpha(effective_brush(node, overrides, vars), node.opacity),
+                None,
+                &bez,
+            );
+            if node.stroke.width > 0.0 {
+                scene.stroke(
+                    &vello::kurbo::Stroke::new(node.stroke.width),
+                    world,
+                    &brush_with_alpha(paint_brush(&node.stroke.paint, vars), node.opacity),
+                    None,
+                    &bez,
+                );
+                stats.paths += 1;
+            }
+            stats.paths += 1;
+        }
+        NodeKind::Arc { start, end, ratio } => {
+            // arc primitive: the shared wedge/ring outline, filled + stroked
             let bez = path_to_bez(&x_core::booleans::arc_path_cmds(
-                node.w, node.h, *start, *end,
+                node.w, node.h, *start, *end, *ratio,
             ));
             encode_drop_shadows(scene, node, world, &bez, stats);
             scene.fill(
@@ -677,6 +730,8 @@ fn encode(
                             registry,
                             &node.overrides,
                             depth + 1,
+                            // a master's internal frames are never named
+                            true,
                             ctx,
                         );
                     }
@@ -713,36 +768,47 @@ fn encode(
                 frame_clip_shape = Some(shape);
             }
 
-            // QA-004 FIX: Render frame name label (same as Section nodes)
-            // This ensures frame names appear on the canvas like in Figma
-            let name = if node.name.is_empty() {
-                "Frame"
-            } else {
-                node.name.as_str()
-            };
-            let label_color =
-                Color::from_rgba8(0x4b, 0x55, 0x63, 0xff).multiply_alpha(node.opacity.min(0.7));
-            let t = world * Affine::translate((14.0, 20.0));
-            let drew = if let Some(fm) = ctx.fonts {
-                if let Some(font) = fm.default_font() {
-                    stats.paths += fm.encode_text_block(
-                        scene,
-                        name,
-                        t,
-                        font,
-                        14.0,
-                        Some((node.w - 20.0).max(8.0)),
-                        label_color,
-                    );
-                    true
+            // QA-004: a frame's name is drawn like a section's — in the
+            // gutter ABOVE the frame's top-left corner, never inside the
+            // frame's own content, and never for
+            //   * the root of the render (on the canvas the root is the page,
+            //     whose name belongs in the pages list; it used to print
+            //     across an empty artboard and stay there after everything on
+            //     the page was deleted), or
+            //   * a frame nested inside another frame (Figma names a page's
+            //     outermost frames only — `in_frame`), or
+            //   * a frame whose own **Show name** switch is off (Figma's right
+            //     sidebar: Layer → "Show name").
+            if depth > 0 && !in_frame && node.show_name {
+                let name = if node.name.is_empty() {
+                    "Frame"
+                } else {
+                    node.name.as_str()
+                };
+                let label_color = crate::ir::label_ink().multiply_alpha(node.opacity);
+                let t = world * Affine::translate((0.0, crate::ir::LABEL_ABOVE_Y));
+                let drew = if let Some(fm) = ctx.fonts {
+                    if let Some(font) = fm.default_font() {
+                        stats.paths += fm.encode_text_block(
+                            scene,
+                            name,
+                            t,
+                            font,
+                            crate::ir::LABEL_SIZE,
+                            Some((node.w - 20.0).max(8.0)),
+                            label_color,
+                        );
+                        true
+                    } else {
+                        false
+                    }
                 } else {
                     false
+                };
+                if !drew {
+                    stats.paths +=
+                        x_text::encode_text(scene, name, t, crate::ir::LABEL_SIZE, label_color);
                 }
-            } else {
-                false
-            };
-            if !drew {
-                stats.paths += x_text::encode_text(scene, name, t, 16.0, label_color);
             }
         }
         NodeKind::Section => {
@@ -771,35 +837,67 @@ fn encode(
                 );
                 stats.paths += 1;
             }
-            // header label: node name, 18px, padded top-left
-            let name = if node.name.is_empty() {
-                "Section"
-            } else {
-                node.name.as_str()
-            };
-            let label_color =
-                Color::from_rgba8(0x4b, 0x55, 0x63, 0xff).multiply_alpha(node.opacity);
-            let t = world * Affine::translate((14.0, 10.0));
-            let drew = if let Some(fm) = ctx.fonts {
-                if let Some(font) = fm.default_font() {
-                    stats.paths += fm.encode_text_block(
+            // Header: Figma draws a Section's name as a filled chip in the
+            // section's own colour, and — unlike a frame name, which is chrome —
+            // a section's chip IS part of its export. The geometry comes from
+            // `crate::ir::section_pill_*`, so the direct encoder and the IR
+            // encoder draw the same chip. A section is labelled wherever it
+            // appears (Figma: "in sections, frame name is always visible"); only
+            // the root of the render is silent, because on the canvas the root is
+            // the page itself.
+            if depth > 0 {
+                let name = if node.name.is_empty() {
+                    "Section"
+                } else {
+                    node.name.as_str()
+                };
+                let pill = crate::ir::section_pill_rect(name, node.w);
+                let radius = crate::ir::SECTION_PILL_R;
+                let shape = RoundedRect::from_rect(
+                    pill,
+                    RoundedRectRadii::new(radius, radius, radius, radius),
+                )
+                .into_path(0.1);
+                scene.fill(
+                    Fill::NonZero,
+                    world,
+                    crate::ir::section_pill_fill().multiply_alpha(node.opacity),
+                    None,
+                    &shape,
+                );
+                let label_color = crate::ir::section_pill_ink().multiply_alpha(node.opacity);
+                let t = world
+                    * Affine::translate((
+                        crate::ir::SECTION_PILL_PAD_X,
+                        crate::ir::section_pill_top() + crate::ir::SECTION_PILL_TEXT_DY,
+                    ));
+                let drew = if let Some(fm) = ctx.fonts {
+                    if let Some(font) = fm.default_font() {
+                        stats.paths += fm.encode_text_block(
+                            scene,
+                            name,
+                            t,
+                            font,
+                            crate::ir::SECTION_LABEL_SIZE,
+                            Some((node.w - 20.0).max(8.0)),
+                            label_color,
+                        );
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                if !drew {
+                    stats.paths += x_text::encode_text(
                         scene,
                         name,
                         t,
-                        font,
-                        18.0,
-                        Some((node.w - 20.0).max(8.0)),
+                        crate::ir::SECTION_LABEL_SIZE,
                         label_color,
                     );
-                    true
-                } else {
-                    false
                 }
-            } else {
-                false
-            };
-            if !drew {
-                stats.paths += x_text::encode_text(scene, name, t, 20.0, label_color);
             }
         }
         NodeKind::Group | NodeKind::Component { .. } | NodeKind::Slice => {}
@@ -815,17 +913,40 @@ fn encode(
     if matches!(node.kind, NodeKind::Instance { .. }) {
         return;
     }
-    // Sort children by z_index for paint order (higher z_index paints on top).
-    // Children without z_index (None) use document order at z=0.
+    // Sort children for paint order: z_index first (higher paints on top),
+    // then the container's own canvas stacking — `paint_order` is the one
+    // owner of that rule, and for a frame that has not touched the setting it
+    // is document order, exactly as before.
+    let ranks = paint_ranks(node);
     let mut indexed_children: Vec<(usize, &Node)> = node.children.iter().enumerate().collect();
     indexed_children.sort_by(|(i_a, a), (i_b, b)| {
         let z_a = a.z_index.unwrap_or(0);
         let z_b = b.z_index.unwrap_or(0);
-        z_a.cmp(&z_b).then(i_a.cmp(i_b)) // stable sort: equal z_index preserves document order
+        z_a.cmp(&z_b).then(ranks[*i_a].cmp(&ranks[*i_b]))
     });
+    // same nesting rule as `ir::lower`: a frame's children count as "inside a
+    // frame" unless this frame IS the render root (the page), and a Section
+    // resets the flag so frames sitting in a section keep their names
+    let child_in_frame = if matches!(node.kind, NodeKind::Frame { .. }) {
+        depth > 0
+    } else if matches!(node.kind, NodeKind::Section) {
+        false
+    } else {
+        in_frame
+    };
     for (_, child) in indexed_children {
         encode(
-            scene, child, world, viewport, vars, stats, registry, overrides, depth, ctx,
+            scene,
+            child,
+            world,
+            viewport,
+            vars,
+            stats,
+            registry,
+            overrides,
+            depth,
+            child_in_frame,
+            ctx,
         );
     }
     if frame_clip_shape.is_some() {
@@ -863,7 +984,10 @@ pub(crate) fn text_needs_styled(node: &Node) -> bool {
         || node.text_align_vertical != x_core::TextAlignVertical::Top
         || node.max_lines.is_some()
         || node.paragraph_indent != 0.0
-        || node.text_decoration != x_core::TextDecoration::None;
+        || node.text_decoration != x_core::TextDecoration::None
+        // a list takes the styled path too: the fast path has no marker
+        // column and would drop the bullets
+        || node.list_style != x_core::ListStyle::None;
     sc || opsz > 0.0 || wdth > 0.0 || node.has_explicit_lh() || typed
 }
 

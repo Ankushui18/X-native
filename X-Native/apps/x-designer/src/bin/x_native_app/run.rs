@@ -27,8 +27,8 @@ use x_native::{
 use crate::dashboard;
 use crate::editor_ui;
 use crate::state::{
-    push_system_clipboard, Action, App, CtxCmd, DashView, Drag, FieldEdit, FieldId, NavTab,
-    OpenDoc, PropertyClipboard, Screen, Tool, FRAME_PRESETS,
+    push_system_clipboard, Action, App, BrushStyle, CtxCmd, DashView, Drag, FieldEdit, FieldId,
+    NavTab, OpenDoc, PropertyClipboard, Screen, Tool, FRAME_PRESETS,
 };
 use crate::theme::*;
 
@@ -67,6 +67,41 @@ struct Gpu {
     blitter: wgpu::util::TextureBlitter,
 }
 
+/// The points of the freehand stroke in progress, whichever of the two
+/// freehand tools owns it.
+fn freehand_points_mut(drag: Option<&mut Drag>) -> Option<&mut Vec<Point>> {
+    match drag? {
+        Drag::Pencil { points } | Drag::Brush { points } => Some(points),
+        _ => None,
+    }
+}
+
+/// Which freehand mark a stroke commits as. The Pencil and the Brush share the
+/// gesture, the sampler and the landing; this is the one place they differ.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Freehand {
+    Pencil,
+    Brush,
+}
+
+impl Freehand {
+    /// The id prefix a fresh layer gets (`pencil-7`, `brush-7`).
+    fn id_prefix(self) -> &'static str {
+        match self {
+            Freehand::Pencil => "pencil",
+            Freehand::Brush => "brush",
+        }
+    }
+
+    /// The name it shows in the layers panel.
+    fn layer_name(self) -> &'static str {
+        match self {
+            Freehand::Pencil => "Pencil",
+            Freehand::Brush => "Brush",
+        }
+    }
+}
+
 struct Host {
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
@@ -77,6 +112,9 @@ struct Host {
     close_after_job: bool,
     pending_open: Option<crate::jobs::OpenRequest>,
     next_loading_frame: std::time::Instant,
+    /// next frame of a running "Animate matching layers" transition, ms pace
+    /// — the same 16 ms step the loading screen animates on.
+    next_proto_frame: std::time::Instant,
 }
 
 pub fn run() {
@@ -96,6 +134,7 @@ pub fn run() {
         close_after_job: false,
         pending_open: None,
         next_loading_frame: std::time::Instant::now(),
+        next_proto_frame: std::time::Instant::now(),
     };
     let _ = event_loop.run_app(&mut host);
 }
@@ -253,11 +292,14 @@ impl ApplicationHandler for Host {
                 if matches!(self.app.drag, Some(Drag::Pan { .. })) {
                     self.app.drag = None;
                 }
+                self.app.right_origin = None;
+                self.app.right_dragging = false;
                 window.request_redraw();
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let p = Point::new(position.x / self.scale, position.y / self.scale);
                 self.app.mouse = p;
+                self.right_drag_move(p);
                 self.on_move(p);
                 self.update_cursor(&window);
                 window.request_redraw();
@@ -270,7 +312,15 @@ impl ApplicationHandler for Host {
                 let p = self.app.mouse;
                 match button {
                     MouseButton::Left => self.on_press(p),
-                    MouseButton::Right => self.on_right_press(p),
+                    MouseButton::Right => {
+                        // Figma's gesture: a right click opens the menu, a
+                        // right DRAG marquees. Which one it is is decided by
+                        // the first few pixels of travel (see
+                        // `right_drag_move`).
+                        self.app.right_origin = Some(p);
+                        self.app.right_dragging = false;
+                        self.on_right_press(p);
+                    }
                     MouseButton::Middle
                         if self.app.screen == Screen::Editor
                             && self.app.document_loading.is_none()
@@ -301,6 +351,21 @@ impl ApplicationHandler for Host {
                 if matches!(self.app.drag, Some(Drag::Pan { .. })) {
                     self.app.drag = None;
                 }
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Right,
+                ..
+            } => {
+                let dragged = self.app.right_dragging;
+                self.app.right_origin = None;
+                self.app.right_dragging = false;
+                if dragged {
+                    // the marquee the right-drag opened is committed by the
+                    // same release path a left drag uses
+                    self.on_release();
+                }
+                window.request_redraw();
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 self.on_wheel(delta);
@@ -432,6 +497,20 @@ impl ApplicationHandler for Host {
                 wake = wake.min(next);
             }
         }
+        // the "Animate matching layers" tick runs on the same clock: one
+        // frame at a time while it lasts, and a wake-up for the next one
+        if self.flow_ticking() {
+            if now >= self.next_proto_frame {
+                // the frame that finishes still repaints: its layers are at
+                // full strength, which is a different picture
+                self.flow_advance_tick(16);
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+                self.next_proto_frame = now + std::time::Duration::from_millis(16);
+            }
+            wake = wake.min(self.next_proto_frame);
+        }
         event_loop.set_control_flow(ControlFlow::WaitUntil(wake));
     }
 }
@@ -502,6 +581,38 @@ fn compute_snap(
         dy += adj;
     }
     (dx, dy, lines)
+}
+
+/// The frame the preview's wheel will scroll: its id, where its content sits
+/// now, how far it can go, and which variant it carries.
+struct ScrollTarget {
+    id: String,
+    scroll: (f64, f64),
+    extent: (f64, f64),
+    overflow: x_native::Overflow,
+}
+
+/// The deepest frame under `p` (world space) whose Overflow says it scrolls.
+/// Child offsets accumulate down the tree, so nesting works; rotation is not
+/// modelled, exactly like `x_core::scroll_extent`.
+fn scroll_frame_at(root: &x_native::Node, p: Point) -> Option<ScrollTarget> {
+    fn walk(n: &x_native::Node, ox: f64, oy: f64, p: Point, best: &mut Option<ScrollTarget>) {
+        let inside = p.x >= ox && p.x <= ox + n.w && p.y >= oy && p.y <= oy + n.h;
+        if n.overflow.scrollable() && inside {
+            *best = Some(ScrollTarget {
+                id: n.id.clone(),
+                scroll: n.scroll,
+                extent: x_native::scroll_extent(n),
+                overflow: n.overflow,
+            });
+        }
+        for c in &n.children {
+            walk(c, ox + c.transform.x, oy + c.transform.y, p, best);
+        }
+    }
+    let mut best = None;
+    walk(root, 0.0, 0.0, p, &mut best);
+    best
 }
 
 // ------------------------------------------------------- rich-text editing
@@ -1150,12 +1261,19 @@ mod run_fns_tests {
         app.doc().editor().delete_selection();
         assert_eq!(app.doc().editor_ref().root.children.len(), kids_before);
 
-        // 7) marquee selects overlapping nodes
+        // 7) the marquee answers with the page's TOP-LEVEL objects (Figma's
+        //    plain drag); the deep one is what reaches inside the group
         app.doc().editor().selection.clear();
         app.doc()
             .editor()
             .marquee(vello::kurbo::Rect::new(0.0, 0.0, 1000.0, 1000.0));
-        assert!(app.doc().editor_ref().selection.len() >= 2, "marquee hit");
+        let plain = app.doc().editor_ref().selection.len();
+        assert!(plain >= 1, "the plain marquee hit the top-level group");
+        app.doc()
+            .editor()
+            .marquee_deep(vello::kurbo::Rect::new(0.0, 0.0, 1000.0, 1000.0));
+        let deep = app.doc().editor_ref().selection.len();
+        assert!(deep > plain, "the deep marquee reaches inside the group");
 
         // 8) text tool click-to-create starts inline edit with content
         app.tool = Tool::Text;
@@ -1483,6 +1601,7 @@ pub struct TextTypo {
     pub font: Option<String>,
     pub max_lines: Option<usize>,
     pub paragraph_indent: f64,
+    pub list_style: x_native::ListStyle,
 }
 
 impl App {
@@ -2174,6 +2293,7 @@ impl App {
             font: n.bindings.get("font").cloned(),
             max_lines: n.max_lines,
             paragraph_indent: n.paragraph_indent,
+            list_style: n.list_style,
         })
     }
 
@@ -2267,6 +2387,7 @@ impl App {
                         .map(String::as_str)
                         .unwrap_or("auto")
                         .to_string(),
+                    n.list_style,
                 )),
                 _ => None,
             })
@@ -2278,7 +2399,7 @@ impl App {
             Some("fixed") | None => return false,
             _ => {}
         }
-        let (text, _, fs, lh_binding, _) = info.unwrap();
+        let (text, _, fs, lh_binding, _, list) = info.unwrap();
         // line-height MODE -> effective natural multiplier
         let nat = self.natural_line_height(fs).max(0.1);
         let (ls, ws, ps, tc, lh) = {
@@ -2326,7 +2447,15 @@ impl App {
                 .map(|n| n.w)
                 .unwrap_or(0.0)
         };
-        let (nw, nh) = ((line_w + 3.0).ceil(), (block_h + 0.5).ceil());
+        // a list's box hugs the marker column as well as the text: the
+        // shaper reserves `LIST_MARKER_GAP` off the wrap width, so an
+        // auto-width box has to carry it
+        let gap = if list == x_native::ListStyle::None {
+            0.0
+        } else {
+            x_native::LIST_MARKER_GAP
+        };
+        let (nw, nh) = ((line_w + gap + 3.0).ceil(), (block_h + 0.5).ceil());
         let doc = self.doc();
         doc.editor().mutate_visual_stack(id, |n| {
             n.bindings
@@ -2345,6 +2474,52 @@ impl App {
         }
         self.mark_dirty();
         changed
+    }
+
+    /// Figma's **Resize to fit** / auto-width gesture (help 27378154668951):
+    /// *"When you manually change a layer's dimensions in the canvas, Figma
+    /// will also update the resizing property to Fixed size"* — so the way
+    /// back to **Auto width** is a gesture of its own: double-clicking a text
+    /// layer's bounding-box handle leaves Auto width, and the box hugs its
+    /// content again.
+    pub fn fit_text_to_content(&mut self, id: &str) -> bool {
+        {
+            let doc = self.doc();
+            doc.editor().mutate_visual_stack(id, |n| {
+                n.bindings.insert("tm".into(), "auto".into());
+            });
+        }
+        self.autosize_text_node(id)
+    }
+
+    /// The Layout section's **Resizing** control for a text layer (help
+    /// 27378154668951): Fixed size pins the box, Auto width fits it again.
+    pub fn toggle_text_resize(&mut self) -> bool {
+        let info = {
+            let doc = self.doc();
+            doc.selected_id().and_then(|id| {
+                crate::editor_ui::find_node(&doc.editor_ref().root, id.as_str())
+                    .filter(|n| matches!(n.kind, NodeKind::Text { .. }))
+                    .map(|n| {
+                        (
+                            id,
+                            n.bindings.get("tm").map(String::as_str) == Some("fixed"),
+                        )
+                    })
+            })
+        };
+        match info {
+            Some((id, true)) => self.fit_text_to_content(&id),
+            Some((id, false)) => {
+                let doc = self.doc();
+                doc.editor().mutate_visual_stack(&id, |n| {
+                    n.bindings.insert("tm".into(), "fixed".into());
+                });
+                self.mark_dirty();
+                true
+            }
+            None => false,
+        }
     }
 
     /// Typography field commit (family / weight / size / line height /
@@ -3116,6 +3291,21 @@ impl App {
     }
 
     /// Enter on a single selected Text node starts inline editing.
+    /// Whether ⏎ should open the anchor editor: true only for a single selected
+    /// **vector** layer.
+    ///
+    /// The mode-entry branch below used to claim ⏎ for ANY single selection and
+    /// then `return`, so on a frame the dispatch did nothing and the key was
+    /// swallowed anyway — Figma's "Select Child ⏎" was unreachable for every
+    /// non-vector layer. Claiming the key only where the engine will act on it is
+    /// what lets ⏎ fall through to `Action::SelectChild`.
+    pub fn enter_edit_targets_vector(&mut self) -> bool {
+        let doc = self.doc();
+        doc.selected_id()
+            .and_then(|id| crate::editor_ui::find_node(&doc.editor_ref().root, id.as_str()))
+            .is_some_and(|n| matches!(n.kind, NodeKind::Vector { .. }))
+    }
+
     pub fn enter_edit_selected(&mut self) -> bool {
         if self.text_edit.is_some() {
             return false;
@@ -3404,10 +3594,12 @@ impl Host {
                     .map(|n| matches!(n.kind, K::Group))
                     .unwrap_or(false)
             };
+            let instance = self.app.context_instance();
             let target = if sel_count > 0 {
                 crate::context_menu::ContextTarget::CanvasSelection {
                     selected_count: sel_count,
                     contains_group,
+                    instance,
                 }
             } else {
                 crate::context_menu::ContextTarget::CanvasEmpty
@@ -3449,7 +3641,91 @@ impl Host {
         }
     }
 
+    /// A right-button DRAG is a marquee (Figma's gesture), a right CLICK is
+    /// the context menu. The gesture is decided here, on the first few
+    /// pixels of travel: the menu the press opened is dismissed and the
+    /// marquee the drag opened commits on release.
+    fn right_drag_move(&mut self, p: Point) {
+        let Some(origin) = self.app.right_origin else {
+            return;
+        };
+        if self.app.right_dragging || (p.x - origin.x).abs().max((p.y - origin.y).abs()) <= 4.0 {
+            return;
+        }
+        self.app.right_dragging = true;
+        self.app.context_menu.close();
+        self.app.page_menu = None;
+        if self.app.screen != Screen::Editor
+            || self.app.flow.is_some()
+            || self.app.document_loading.is_some()
+            || !self.app.editor_regions().canvas.contains(origin)
+        {
+            return;
+        }
+        // exactly what a left drag on empty canvas does
+        let world = self.app.screen_to_world(origin);
+        self.app.doc().editor().selection.clear();
+        self.app.drag = Some(Drag::Marquee {
+            start: world,
+            cur: world,
+            deep: self.app.ctrl,
+        });
+    }
+
+    /// A press on a Layers-panel row: select it, and arm the reorder drag that
+    /// a >4px move turns into a real reorder (P12). Shared by the row's own hit
+    /// zone and the name zone inside it, so dragging a layer by its NAME works
+    /// exactly like dragging it by the rest of the row.
+    fn effect_count(&self, id: &str) -> usize {
+        self.app.effect_layers_of(id).len()
+    }
+
+    fn effect_layer(&self, id: &str, i: usize) -> Option<x_native::EffectLayer> {
+        self.app.effect_layers_of(id).into_iter().nth(i)
+    }
+
+    /// Figma reorders effects by dragging a row (*"you click and drag the
+    /// handles to reorder the effects"*). A press on a row arms the drag; the
+    /// move turns it into a reorder once it passes the threshold, and the
+    /// release commits it as one undo entry.
+    fn effect_row_press(&mut self, index: usize) {
+        self.app.effect_settings = Some(index);
+        self.app.drag = Some(Drag::EffectRow {
+            from: index,
+            start: self.app.mouse,
+            active: false,
+            over: None,
+        });
+    }
+
+    /// One popover at a time in the inspector, the way its other menus behave.
+    fn tree_row_press(&mut self, id: String, p: Point) {
+        let doc = self.app.doc();
+        doc.editor().selection = vec![id.clone()];
+        self.app.drag = Some(Drag::TreeRow {
+            id,
+            start: p,
+            active: false,
+            over: None,
+        });
+    }
+
     fn on_press(&mut self, p: Point) {
+        // A double-click must not undo the press it repeats. Chrome presses on
+        // a toggle row FLIP state — the fill row's colour swatch opens the
+        // picker (`ToggleColorPicker`), the library button opens the variable
+        // /style list (`PaintLibToggle`), a component prop ticks on and off —
+        // and the second press used to reach the popover the first one had
+        // just opened, hit the "click away closes it" rule, and shut it again.
+        // That flash is what "double-clicking does not select the colours and
+        // the boxes/components we created" looks like; a genuine single click
+        // (or two clicks more than 350 ms apart) still toggles.
+        if self.app.last_chrome.map(|(_, _, t)| t).unwrap_or(false)
+            && self.app.is_repeat_chrome_click(p)
+        {
+            self.app.last_chrome = None;
+            return;
+        }
         if self.app.document_loading.is_some() {
             if let Some(action) = crate::loading::hit_action(&self.app, p) {
                 self.loading_action(action);
@@ -3531,6 +3807,9 @@ impl Host {
             if self.app.dropdown_frame {
                 self.app.dropdown_frame = false;
             }
+            self.app.dropdown_constraint = None;
+            self.app.dropdown_layout_axis = None;
+            self.app.dropdown_stacking = false;
             if self.app.dropdown_zoom {
                 self.app.dropdown_zoom = false;
             }
@@ -3584,6 +3863,9 @@ impl Host {
         if self.app.dropdown_frame {
             self.app.dropdown_frame = false;
         }
+        self.app.dropdown_constraint = None;
+        self.app.dropdown_layout_axis = None;
+        self.app.dropdown_stacking = false;
         if self.app.dropdown_zoom {
             self.app.dropdown_zoom = false;
         }
@@ -3628,20 +3910,8 @@ impl Host {
             if r.contains(p) {
                 let a = a.clone();
                 if let Action::TreeRow(id) = &a {
-                    if !id.starts_with("mock:") {
-                        // P12: select on press; a >4px move starts the
-                        // reorder drag, a plain click just selects
-                        let doc = self.app.doc();
-                        doc.mock_layers.iter_mut().for_each(|m| m.selected = false);
-                        doc.editor().selection = vec![id.clone()];
-                        self.app.drag = Some(Drag::TreeRow {
-                            id: id.clone(),
-                            start: p,
-                            active: false,
-                            over: None,
-                        });
-                        return;
-                    }
+                    self.tree_row_press(id.clone(), p);
+                    return;
                 }
                 if matches!(a, Action::Field(FieldId::InstanceProp)) {
                     // resolve WHICH text prop was clicked from the rect the
@@ -3671,6 +3941,52 @@ impl Host {
                         .find(|(r2, _)| r2.contains(p))
                         .map(|(_, n)| n.clone());
                 }
+                // Figma semantics for panel chrome: a row in the inspector,
+                // the rail or a popover is a SINGLE-click affordance, and the
+                // second press of a double-click must never undo the first.
+                // Toggle-class rows used to dispatch twice — a colour popover
+                // opened and closed, a component prop ticked and unticked —
+                // which is what "double-clicking does not select the colours
+                // and the boxes/components we created" looks like. (Those
+                // repeats are swallowed at the top of `on_press`.) What is left
+                // here are the two Figma DOUBLE-CLICK affordances: a page name
+                // in the Pages list and a layer name in the Layers panel.
+                let dbl = self.app.is_repeat_chrome_click(p);
+                if let Action::LayerRename(id) = &a {
+                    if dbl && !self.app.shift {
+                        if !self.finish_edits() {
+                            return;
+                        }
+                        self.app.begin_layer_rename(id.clone());
+                        self.app.last_chrome = None;
+                        return;
+                    }
+                    // a single press behaves exactly like the rest of the row
+                    self.tree_row_press(id.clone(), p);
+                    self.app.last_chrome = Some((std::time::Instant::now(), p, false));
+                    return;
+                }
+                if let Action::SelectPage(i) = a {
+                    if dbl && !self.app.shift {
+                        // same preconditions SelectPage itself has: a pending
+                        // field edit commits before the page under it changes
+                        if !self.finish_edits() {
+                            return;
+                        }
+                        self.app.begin_page_rename(i);
+                        self.app.last_chrome = None;
+                        return;
+                    }
+                }
+                if matches!(a, Action::SetCornerSmoothing(_)) {
+                    // the slider is a drag, not just a click: the press takes
+                    // the track and every move re-reads the value from x
+                    if let Some(track) = self.app.corner_slider {
+                        let base_depth = self.app.doc_ref().editor_ref().undo_depth();
+                        self.app.drag = Some(Drag::CornerSmooth { track, base_depth });
+                    }
+                }
+                self.app.last_chrome = Some((std::time::Instant::now(), p, a.is_toggle_row()));
                 self.dispatch(a);
                 return;
             }
@@ -3928,6 +4244,47 @@ impl Host {
         }
         self.commit_field();
         let world = self.app.screen_to_world(p);
+        // Figma's crop mode owns the canvas while it is open (help
+        // 360040675194): a corner handle crops, the inside of the frame
+        // repositions the picture, and a click anywhere else applies it —
+        // *"Click on the canvas or press Enter to apply your changes"*.
+        if let Some(session) = self.app.crop.clone() {
+            let grabbed = {
+                let doc = self.app.doc_ref();
+                let root = &doc.editor_ref().root;
+                crate::editor_ui::find_node(root, &session.id)
+                    .cloned()
+                    .and_then(|n| {
+                        let m = crate::run::node_world(root, &session.id)?;
+                        let local = m.inverse() * world;
+                        let b = (0.0, 0.0, n.w, n.h);
+                        let tol = crate::state::CROP_TOUCH / self.app.zoom.max(1e-3);
+                        match crate::state::crop_corner_at(b, local, tol) {
+                            Some(corner) => Some(corner),
+                            None if crate::state::crop_inside(b, local) => {
+                                Some(crate::state::CROP_PAN)
+                            }
+                            None => None,
+                        }
+                    })
+            };
+            match grabbed {
+                Some(corner) => {
+                    let base_depth = self.app.doc_ref().editor_ref().undo_depth();
+                    self.app.drag = Some(Drag::Crop {
+                        corner,
+                        start: world,
+                        base_depth,
+                    });
+                }
+                // a press that misses the frame is Figma's own apply
+                None => {
+                    self.app.crop_apply();
+                }
+            }
+            self.app.last_click = Some((std::time::Instant::now(), p));
+            return;
+        }
         let tool = self.app.tool;
         if self.app.space_pan && tool != Tool::Pen {
             self.app.drag = Some(Drag::Pan {
@@ -3949,18 +4306,88 @@ impl Host {
                     start_pan: self.app.pan,
                 });
             }
-            Tool::Select => {
-                // corner handles win when there's a single selection
-                if let Some(dr) = self.resize_grab(world) {
+            // The Scale tool (K) is the Move tool's twin with a different
+            // answer for the same four handles — so it selects, hovers and
+            // marquees exactly like it, and only the grab differs.
+            Tool::Select | Tool::Scale => {
+                // Figma's canvas connections: the circle on a selected
+                // layer's edge, and the noodles themselves. Both are canvas
+                // objects rather than pixels of the layer under them.
+                if let Some(dr) = self.conn_press(world, p) {
                     self.app.drag = Some(dr);
                     return;
+                }
+                // ⌥R's origin target sits on the layer, so it is asked for
+                // before anything that would move or select.
+                if let Some(dr) = self.rotation_origin_grab(world) {
+                    self.app.drag = Some(dr);
+                    return;
+                }
+                // The rotate ring is OUTSIDE the bounds, so it is asked before
+                // the corner handles: a press in the ring can never be a resize.
+                if tool == Tool::Select {
+                    if let Some(dr) = self.rotate_grab(world) {
+                        self.app.drag = Some(dr);
+                        return;
+                    }
+                }
+                // Figma's arc handles belong to the LAYER, not to a tool:
+                // whatever else this press might have been about, grabbing one
+                // of them sweeps, starts or rings the layer.
+                if let Some(dr) = self.arc_grab(world) {
+                    self.app.drag = Some(dr);
+                    return;
+                }
+                // Figma's polygon and star handles ride their own shapes, so
+                // the arc's grab above can never answer for them.
+                if let Some(dr) = self.shape_grab(world) {
+                    self.app.drag = Some(dr);
+                    return;
+                }
+                // Figma's corner radius handle rides INSIDE the corner — the
+                // corner's own square is excluded by its zone — so it is asked
+                // before the resize handles: on the outline you resize, a press
+                // inside rounds the shape (help 360050986854).
+                if tool == Tool::Select {
+                    if let Some(dr) = self.radius_grab(world) {
+                        self.app.drag = Some(dr);
+                        return;
+                    }
+                }
+                // Figma's resize-to-fit: a second press on a text layer's
+                // corner handle (help 27378154668951) leaves **Auto width**,
+                // so the box hugs the text again after a fixed-size resize.
+                if tool == Tool::Select && self.app.is_double_click(p) && self.fit_text_at(world) {
+                    self.app.last_click = Some((std::time::Instant::now(), p));
+                    return;
+                }
+                // corner handles win when there's a single selection
+                if let Some(dr) = match tool {
+                    Tool::Scale => self.scale_grab(world),
+                    _ => self.resize_grab(world),
+                } {
+                    // a handle press is a click: without this the SECOND
+                    // press inside the double-click window could never be
+                    // read as the resize-to-fit gesture above
+                    self.app.last_click = Some((std::time::Instant::now(), p));
+                    self.app.drag = Some(dr);
+                    return;
+                }
+                // The Scale tool's other gesture: a press INSIDE the box
+                // scales it. On the canvas K never moves a layer.
+                if tool == Tool::Scale {
+                    if let Some(dr) = self.scale_body_grab(world) {
+                        self.app.drag = Some(dr);
+                        return;
+                    }
                 }
                 let hit_id = {
                     let doc = self.app.doc();
                     let root = doc.editor_ref().root.clone();
                     x_native::editor::hit_test(&root, world)
                 };
-                // double-click: deep-select into groups / inline-edit text
+                // double-click: drill one level in (or inline-edit text);
+                // ⌘-click is the one-press deep select
                 let dbl = self.app.is_double_click(p);
                 self.app.last_click = Some((std::time::Instant::now(), p));
                 // ⌘-click reaches through groups to the exact nested layer,
@@ -3984,6 +4411,15 @@ impl Host {
                             return;
                         }
                     }
+                    // Figma's crop mode opens on the image layer a double
+                    // click lands on — *"Double-click the image layer to
+                    // enter crop mode"* (help 360040675194)
+                    if let Some(id) = hit_id.clone() {
+                        if self.app.begin_crop(&id) {
+                            self.app.doc().editor().selection = vec![id];
+                            return;
+                        }
+                    }
                 }
                 // click on ALREADY-SELECTED text: caret on release
                 // (a drag still moves; plain select/move otherwise)
@@ -3994,14 +4430,62 @@ impl Host {
                 }
                 if let Some(_id) = hit_id {
                     let shift = self.app.shift;
-                    let deep = dbl || deep_click;
                     // ⌥-drag: duplicate the selection, then drag the copy
-                    if self.app.alt {
+                    // (the Scale tool has no such gesture: it scales)
+                    if self.app.alt && tool == Tool::Select {
                         self.app.doc().editor().duplicate_selection((0.0, 0.0));
                         self.app.mark_dirty();
                     }
-                    self.app.doc().editor().click_select(world, shift, deep);
+                    // Double-click DRILLS IN ONE LEVEL (Figma), it does not
+                    // jump to the deepest leaf: from the page's frame you land
+                    // on the group you clicked, and a second double-click
+                    // lands on the shape inside it. `deep_click` (⌘/ctrl) still
+                    // reaches the exact nested layer in one press, which is the
+                    // other half of Figma's selection story.
+                    //
+                    // Instances come first: Figma's *select inside* means a
+                    // double-click there selects the layer **within** the
+                    // instance, and a click while already inside moves the
+                    // scope to whatever is under the cursor. A click outside
+                    // the instance leaves it, the way Esc does.
+                    let vars = self.app.doc_ref().doc.variables.clone();
+                    let entered = self.app.doc().editor_ref().instance_scope.is_some();
+                    if dbl && !shift {
+                        match self.app.doc().editor().enter_instance(world, &vars) {
+                            Some(layer) => self.app.enter_instance_status(&layer),
+                            None => {
+                                self.app.doc().editor().drill_into(world);
+                            }
+                        }
+                    } else if entered {
+                        // already inside: this click moves the scope to
+                        // whatever the cursor is over, and a click outside the
+                        // instance leaves it (Esc does the same)
+                        match self.app.doc().editor().enter_instance(world, &vars) {
+                            Some(layer) => self.app.enter_instance_status(&layer),
+                            None => {
+                                self.app.doc().editor().exit_instance();
+                                self.app
+                                    .doc()
+                                    .editor()
+                                    .click_select(world, shift, deep_click);
+                            }
+                        }
+                    } else {
+                        self.app
+                            .doc()
+                            .editor()
+                            .click_select(world, shift, deep_click);
+                    }
                     self.app.mark_dirty();
+                    // …and with K a fresh object scales from the press too:
+                    // the click selected it, so the box is there to grab.
+                    if tool == Tool::Scale {
+                        if let Some(dr) = self.scale_body_grab(world) {
+                            self.app.drag = Some(dr);
+                            return;
+                        }
+                    }
                     self.app.drag = Some(Drag::MoveSel {
                         last: world,
                         base_depth: self.app.doc().editor_ref().undo_depth(),
@@ -4013,6 +4497,10 @@ impl Host {
                     self.app.drag = Some(Drag::Marquee {
                         start: world,
                         cur: world,
+                        // the ⌘/Ctrl modifier is read once, at press, and
+                        // rides on the gesture: what the drag started as is
+                        // what it commits when the button comes up.
+                        deep: self.app.ctrl,
                     });
                 }
             }
@@ -4065,6 +4553,20 @@ impl Host {
                         }
                     );
                 }
+            }
+            Tool::Pencil => {
+                // Figma's pencil is not a create-drag: it samples a freehand
+                // stroke, so the points (not a corner pair) are the gesture.
+                self.app.drag = Some(Drag::Pencil {
+                    points: vec![world],
+                });
+            }
+            Tool::Brush => {
+                // The brush is the same gesture; the mark it leaves is the
+                // difference (see `finish_brush`).
+                self.app.drag = Some(Drag::Brush {
+                    points: vec![world],
+                });
             }
             _ => {
                 self.app.drag = Some(Drag::Create {
@@ -4219,6 +4721,31 @@ impl Host {
     /// Within 6px of a corner handle of the selection → start a
     /// corner resize. Corner idx: 0 TL, 1 TR, 2 BL, 3 BR.
     /// Supports multi-selection by resizing all selected items together.
+    /// True when a resize press at `p` belongs to the resize-to-fit gesture
+    /// (a second press on a single text layer's corner handle), in which case
+    /// that layer has just been fit to its content.
+    fn fit_text_at(&mut self, world: Point) -> bool {
+        let id = {
+            let doc = self.app.doc();
+            let editor = doc.editor_ref();
+            if editor.selection.len() != 1 {
+                return false;
+            }
+            let id = editor.selection[0].clone();
+            match crate::editor_ui::find_node(&editor.root, id.as_str()) {
+                Some(n) if matches!(n.kind, NodeKind::Text { .. }) => id,
+                _ => return false,
+            }
+        };
+        // the handle has to be under the press, or this is not the gesture
+        if self.resize_grab(world).is_none() {
+            return false;
+        }
+        self.app.fit_text_to_content(&id);
+        self.app.status = "Auto width - box fit to the text".into();
+        true
+    }
+
     fn resize_grab(&mut self, world: Point) -> Option<Drag> {
         let doc = self.app.doc();
         let editor = doc.editor_ref();
@@ -4263,7 +4790,7 @@ impl Host {
 
         let (x, y, w, h) = bounds;
         // proximity in SCREEN px
-        let tol = 6.0 / self.app.zoom.max(0.01);
+        let tol = HANDLE_TOL / self.app.zoom.max(0.01);
         let corners = [(x, y), (x + w, y), (x, y + h), (x + w, y + h)];
         // A transformed layer's handles are NOT at the corners of its
         // axis-aligned box: the renderer draws the node through
@@ -4284,7 +4811,454 @@ impl Host {
             orig: (x, y, w, h),
             start: world,
             base_depth,
+            space: None,
+            offset: (0.0, 0.0),
         })
+    }
+
+    /// Figma's canvas **corner radius handle** (help 360050986854): a white
+    /// dot just INSIDE a corner of a single rectangle or frame. The corner's own
+    /// square is excluded by the zone itself, so a press on the outline still
+    /// resizes and a press inside rounds; ⌥ rounds only the corner being held
+    /// (rectangles only, as Figma's own canvas gesture is), a plain drag the
+    /// whole shape.
+    /// ⌘⇧8 / ⌘⇧7 (help 360040449773): the selected text layers take that
+    /// list style, or give it back when they already carry it.
+    fn toggle_list_style(&mut self, style: x_native::ListStyle) {
+        let next = {
+            let doc = self.app.doc();
+            if doc.editor().list_style_of_selection() == Some(style) {
+                x_native::ListStyle::None
+            } else {
+                style
+            }
+        };
+        self.dispatch(Action::SetListStyle(next));
+    }
+
+    fn radius_grab(&mut self, world: Point) -> Option<Drag> {
+        let zoom = self.app.zoom.max(1e-3);
+        let alt = self.app.alt;
+        let doc = self.app.doc();
+        let editor = doc.editor_ref();
+        let [id] = editor.selection.as_slice() else {
+            return None;
+        };
+        let n = crate::editor_ui::find_node(&editor.root, id.as_str())?;
+        // the panel treats a frame's corners as independent too; the ⌥
+        // single-corner canvas drag is the one that stops at rectangles
+        let rect = matches!(n.kind, NodeKind::Rect { .. });
+        if !rect && !matches!(n.kind, NodeKind::Frame { .. }) {
+            return None;
+        }
+        let m = crate::run::node_world(&editor.root, id)?;
+        let local = m.inverse() * world;
+        let radii = crate::state::node_corner_radii(n);
+        let corner = crate::state::radius_handle_at((0.0, 0.0, n.w, n.h), local, zoom, radii)?;
+        let start_r = radii[corner];
+        let uniform = !alt || !rect;
+        let base_depth = editor.undo_depth();
+        Some(Drag::RadiusCorner {
+            corner,
+            start: world,
+            start_r,
+            uniform,
+            base_depth,
+        })
+    }
+
+    /// One corner-radius drag: the radius is the handle's travel along the
+    /// corner's inward diagonal, measured from where the press took hold, so a
+    /// press a pixel off the dot never jumps the value. Clamped at zero and at
+    /// half the box's shorter side — Figma's own ceiling.
+    fn radius_drag(
+        &mut self,
+        corner: usize,
+        start: Point,
+        start_r: f64,
+        cur: Point,
+        uniform: bool,
+    ) -> bool {
+        let (id, b) = {
+            let doc = self.app.doc_ref();
+            let Some(id) = doc.selected_id() else {
+                return false;
+            };
+            let Some(n) = crate::editor_ui::find_node(&doc.editor_ref().root, id.as_str()) else {
+                return false;
+            };
+            (id, (0.0, 0.0, n.w, n.h))
+        };
+        let (start_l, cur_l) = {
+            let doc = self.app.doc_ref();
+            let Some(m) = crate::run::node_world(&doc.editor_ref().root, &id) else {
+                return false;
+            };
+            let inv = m.inverse();
+            (inv * start, inv * cur)
+        };
+        let (cx, cy) = crate::state::radius_corners(b)[corner.min(3)];
+        let (ux, uy) = crate::state::radius_inward(corner);
+        let along = |p: Point| (p.x - cx) * ux + (p.y - cy) * uy;
+        let raw = start_r + (along(cur_l) - along(start_l)) / crate::state::RADIUS_HANDLE_FRAC;
+        let r = raw.clamp(0.0, b.2.min(b.3) / 2.0);
+        let doc = self.app.doc();
+        if uniform {
+            doc.editor().set_uniform_radius(&id, r)
+        } else {
+            doc.editor().set_corner_radius(&id, corner.min(3), r)
+        }
+    }
+
+    /// One smoothing write: the slider's click, its drag and the `iOS` chip all
+    /// land here, so the panel cannot drift from the engine.
+    fn set_corner_smoothing(&mut self, v: f64) -> bool {
+        let wrote = {
+            let doc = self.app.doc();
+            let Some(id) = doc.selected_id() else {
+                return false;
+            };
+            doc.editor().set_corner_smoothing(&id, v)
+        };
+        if wrote {
+            self.app.mark_dirty();
+            self.app.status = format!("Corner smoothing {}%", (v * 100.0).round() as i64);
+        }
+        wrote
+    }
+
+    /// Figma's canvas rotate: the ring *just outside* a corner of the bounds
+    /// (`360039956914`). It is asked BEFORE the corner handles so a press in
+    /// the ring can never be read as a resize, and it refuses the inside of the
+    /// bounds so a press there still selects or moves.
+    fn rotate_grab(&mut self, world: Point) -> Option<Drag> {
+        let ring = crate::state::ROTATE_RING / self.app.zoom.max(0.01);
+        let handle = HANDLE_TOL / self.app.zoom.max(0.01);
+        let doc = self.app.doc();
+        let editor = doc.editor_ref();
+        if editor.selection.is_empty() {
+            return None;
+        }
+        let box_ = selection_box(&editor.root, &editor.selection)?;
+        // a rotated layer's ring follows the four corners the renderer draws
+        let single = match editor.selection.as_slice() {
+            [id] => crate::editor_ui::find_node(&editor.root, id),
+            _ => None,
+        };
+        let bounds = match single {
+            Some(n) if crate::editor_ui::is_transformed(n) => {
+                let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+                for (x, y) in x_native::editor::world_corners(n) {
+                    x0 = x0.min(x);
+                    y0 = y0.min(y);
+                    x1 = x1.max(x);
+                    y1 = y1.max(y);
+                }
+                (x0, y0, x1 - x0, y1 - y0)
+            }
+            _ => box_,
+        };
+        crate::state::rotate_corner_at(bounds, world, ring, handle)?;
+        let base_depth = editor.undo_depth();
+        let pivot = crate::state::rotation_pivot(single, box_);
+        let base: Vec<(String, f64, f64, f64)> = editor
+            .selection
+            .iter()
+            .filter_map(|id| {
+                crate::editor_ui::find_node(&editor.root, id).map(|n| {
+                    (
+                        id.clone(),
+                        n.transform.x,
+                        n.transform.y,
+                        n.transform.rotation,
+                    )
+                })
+            })
+            .collect();
+        let last = (world.y - pivot.1).atan2(world.x - pivot.0);
+        Some(Drag::RotateSel {
+            pivot,
+            last,
+            acc: 0.0,
+            base,
+            base_depth,
+        })
+    }
+
+    /// `⌥R` shows the rotation-origin target; this is the press that takes it.
+    /// Figma: *"Click and drag the target to move the rotation origin."*
+    fn rotation_origin_grab(&mut self, world: Point) -> Option<Drag> {
+        if !self.app.rotation_origin_on {
+            return None;
+        }
+        let r = crate::state::ORIGIN_TARGET_R / self.app.zoom.max(0.01);
+        let doc = self.app.doc();
+        let editor = doc.editor_ref();
+        let [id] = editor.selection.as_slice() else {
+            return None;
+        };
+        let n = crate::editor_ui::find_node(&editor.root, id)?;
+        let (px, py) =
+            crate::state::rotation_pivot(Some(n), (n.transform.x, n.transform.y, n.w, n.h));
+        let target = Point::new(px, py);
+        if (world.x - target.x).hypot(world.y - target.y) > r {
+            return None;
+        }
+        Some(Drag::RotationOrigin {
+            base_depth: editor.undo_depth(),
+        })
+    }
+
+    /// The Scale tool (K) grabs the SAME four corner handles the Move tool
+    /// grabs and pins the DIAGONALLY OPPOSITE corner: that anchor is the fixed
+    /// point of the mapping (see `state::scale_drag_factor`), which is what makes
+    /// the box grow from the corner you are not holding. The `parts` list is
+    /// built here, once — the anchor never moves, so every move of the gesture
+    /// reuses it.
+    fn scale_grab(&mut self, world: Point) -> Option<Drag> {
+        // read the zoom BEFORE taking the document: `doc()` borrows the app
+        // mutably, and the handle tolerance needs both
+        let tol = HANDLE_TOL / self.app.zoom.max(0.01);
+        let doc = self.app.doc();
+        let editor = doc.editor_ref();
+        if editor.selection.is_empty() {
+            return None;
+        }
+        let base_depth = editor.undo_depth();
+        let orig = selection_box(&editor.root, &editor.selection)?;
+        let (x, y, w, h) = orig;
+        let corner = [(x, y), (x + w, y), (x, y + h), (x + w, y + h)]
+            .iter()
+            .position(|(cx, cy)| (world.x - cx).abs() <= tol && (world.y - cy).abs() <= tol)?;
+        let (ax, ay) = crate::state::scale_anchor(orig, corner);
+        let parts: Vec<(String, f64, f64)> = editor
+            .selection
+            .iter()
+            .map(|id| (id.clone(), ax, ay))
+            .collect();
+        Some(Drag::ScaleSel {
+            corner,
+            orig,
+            start: world,
+            base_depth,
+            parts,
+            applied: 1.0,
+        })
+    }
+
+    /// Figma's canvas connection gesture: the anchor circle on the selected
+    /// layer's edge, and a press ON an existing noodle — which selects that
+    /// connection so Delete can remove it.
+    fn conn_press(&mut self, world: Point, screen: Point) -> Option<Drag> {
+        // "Switch to the Prototype tab ... Now when we select the button, a new
+        // option appears on the canvas—a blue circle on its edge." The gesture
+        // belongs to that tab: on the Design tab the layer's edge carries its
+        // own handles (an arc's, a scale's) and they must win their presses.
+        if self.app.doc_ref().right_tab != crate::state::RightTab::Prototype {
+            return None;
+        }
+        let src = self.conn_anchor()?;
+        let edge = self.conn_anchor_world(&src)?;
+        let d = ((edge.x - world.x).powi(2) + (edge.y - world.y).powi(2)).sqrt();
+        if d <= CONN_ANCHOR_TOL / self.app.zoom {
+            return Some(Drag::ProtoConnect {
+                src,
+                cur: world,
+                target: None,
+            });
+        }
+        if let Some(i) = self.conn_hit(screen) {
+            self.app.conn_sel = Some(i);
+        }
+        None
+    }
+
+    /// The layer Figma anchors a connection to: the selection, or the layer
+    /// under the pointer. A group can carry an interaction too, so any layer
+    /// qualifies — unlike a frame, which is only ever the destination.
+    fn conn_anchor(&self) -> Option<String> {
+        let doc = self.app.doc_opt()?;
+        let editor = doc.editor_ref();
+        if editor.selection.len() == 1 {
+            return Some(editor.selection[0].clone());
+        }
+        let hover = self.app.hover_node.clone()?;
+        crate::editor_ui::find_node(&editor.root, &hover)?;
+        Some(hover)
+    }
+
+    /// Where the anchor circle sits in world space: on the RIGHT edge of the
+    /// layer's box, vertically centred — Figma's own placement.
+    fn conn_anchor_world(&self, id: &str) -> Option<Point> {
+        let doc = self.app.doc_opt()?;
+        let root = &doc.editor_ref().root;
+        let n = crate::editor_ui::find_node(root, id)?;
+        let m = node_world(root, id)?;
+        Some(m * crate::editor_ui::conn_anchor_point(n))
+    }
+
+    /// The connection under a world point, as an index into the page's
+    /// connections — what a press selects and Delete removes.
+    fn conn_hit(&self, screen: Point) -> Option<usize> {
+        let doc = self.app.doc_opt()?;
+        let root = &doc.editor_ref().root;
+        let conns = crate::editor_ui::page_connections(root);
+        for (i, conn) in conns.iter().enumerate() {
+            let Some(a) = self.conn_anchor_world(&conn.src) else {
+                continue;
+            };
+            let Some(b) = self.conn_anchor_world(&conn.dest) else {
+                continue;
+            };
+            let (p0, p1) = (self.app.world_to_screen(a), self.app.world_to_screen(b));
+            if crate::editor_ui::near_noodle(p0, p1, screen, CONN_LINE_TOL) {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Figma's arc handles under the pointer, if any: the sweep, the start and
+    /// the ratio, on the ellipse or arc the selection or the hover points at.
+    /// The tolerance is a screen distance — what the pointer can grab is what
+    /// the canvas drew.
+    fn arc_grab(&mut self, world: Point) -> Option<Drag> {
+        let (id, _) = crate::state::arc_target(&self.app)?;
+        let (props, handles, m) = {
+            let doc = self.app.doc_ref();
+            let root = &doc.editor_ref().root;
+            let n = crate::editor_ui::find_node(root, &id)?;
+            let m = node_world(root, &id)?;
+            (crate::state::arc_props(n)?, crate::state::arc_handles(n), m)
+        };
+        let tol = ARC_HANDLE_TOL / self.app.zoom;
+        let mut best: Option<(crate::state::ArcPart, f64)> = None;
+        for (part, local) in &handles {
+            let h = m * *local;
+            let d = ((h.x - world.x).powi(2) + (h.y - world.y).powi(2)).sqrt();
+            if d <= tol && best.is_none_or(|(_, bd)| d < bd) {
+                best = Some((*part, d));
+            }
+        }
+        let (part, _) = best?;
+        let base_depth = self.app.doc_ref().editor_ref().undo_depth();
+        // the handle sits on the layer, so taking hold of it selects it too
+        self.app.doc().editor().selection = vec![id.clone()];
+        Some(Drag::ArcHandle {
+            id,
+            part,
+            start: props.0,
+            end: props.1,
+            ratio: props.2,
+            base_depth,
+        })
+    }
+
+    /// Figma's Count handle (and, on a star, the Ratio handle) under the
+    /// pointer: the same tolerance and the same "the handle sits on the layer,
+    /// so taking hold of it selects it" rule as the arc's handles.
+    fn shape_grab(&mut self, world: Point) -> Option<Drag> {
+        let (id, _) = crate::state::shape_target(&self.app)?;
+        let (count, handles, m) = {
+            let doc = self.app.doc_ref();
+            let root = &doc.editor_ref().root;
+            let n = crate::editor_ui::find_node(root, &id)?;
+            let m = node_world(root, &id)?;
+            (
+                crate::state::shape_count(n)?,
+                crate::state::shape_handles(n),
+                m,
+            )
+        };
+        let tol = ARC_HANDLE_TOL / self.app.zoom;
+        let mut best: Option<(crate::state::ShapePart, f64)> = None;
+        for (part, local) in &handles {
+            let h = m * *local;
+            let d = ((h.x - world.x).powi(2) + (h.y - world.y).powi(2)).sqrt();
+            if d <= tol && best.is_none_or(|(_, bd)| d < bd) {
+                best = Some((*part, d));
+            }
+        }
+        let (part, _) = best?;
+        let base_depth = self.app.doc_ref().editor_ref().undo_depth();
+        let f0 = {
+            let doc = self.app.doc_ref();
+            let root = &doc.editor_ref().root;
+            let local = m.inverse() * world;
+            match crate::editor_ui::find_node(root, &id) {
+                Some(n) => crate::state::shape_radial_at(n.w, n.h, local),
+                None => 0.0,
+            }
+        };
+        // the handle sits on the layer, so taking hold of it selects it too
+        self.app.doc().editor().selection = vec![id.clone()];
+        Some(Drag::ShapeHandle {
+            id,
+            part,
+            count,
+            f0,
+            base_depth,
+        })
+    }
+
+    /// The Scale tool's BODY drag (K) — Figma: "Hover over the object's
+    /// bounding box to make the cursor appear. Then, click-and-drag to
+    /// resize." The press point itself rides the pointer, and the corner
+    /// opposite the nearest one to it stays put, exactly as a handle grab does
+    /// with its own corner.
+    fn scale_body_grab(&mut self, world: Point) -> Option<Drag> {
+        let doc = self.app.doc();
+        let editor = doc.editor_ref();
+        let orig = selection_box(&editor.root, &editor.selection)?;
+        let (x, y, w, h) = orig;
+        if world.x < x || world.y < y || world.x > x + w || world.y > y + h {
+            return None;
+        }
+        let nearest = crate::state::nearest_corner(orig, world);
+        let anchor = crate::state::scale_anchor(orig, nearest);
+        let parts: Vec<(String, f64, f64)> = editor
+            .selection
+            .iter()
+            .map(|id| (id.clone(), anchor.0, anchor.1))
+            .collect();
+        let base_depth = editor.undo_depth();
+        Some(Drag::ScaleBody {
+            orig,
+            anchor,
+            grab: world,
+            base_depth,
+            parts,
+            applied: 1.0,
+        })
+    }
+
+    /// Apply a scale factor to the selection about the Scale panel's anchor
+    /// cell. `editor.scale_nodes_about` is the ONE writer, so the panel, the
+    /// multiplier and the canvas cannot drift apart, and the whole selection
+    /// lands in one undo step.
+    fn apply_scale_factor(&mut self, factor: f64) -> bool {
+        if !factor.is_finite() || factor <= 0.0 || (factor - 1.0).abs() < 1e-9 {
+            return false;
+        }
+        let cell = self.app.scale_cell;
+        let parts = {
+            let doc = self.app.doc();
+            let editor = doc.editor_ref();
+            let Some(orig) = selection_box(&editor.root, &editor.selection) else {
+                return false;
+            };
+            let (ax, ay) = crate::state::scale_cell_anchor(orig, cell);
+            editor
+                .selection
+                .iter()
+                .map(|id| (id.clone(), ax, ay))
+                .collect::<Vec<_>>()
+        };
+        let scaled = self.app.doc().editor().scale_nodes_about(&parts, factor);
+        if scaled {
+            self.app.mark_dirty();
+        }
+        scaled
     }
 
     fn on_move(&mut self, p: Point) {
@@ -4343,6 +5317,27 @@ impl Host {
                 }
                 let over = crate::editor_ui::tree_drop_target(&self.app, &id, p);
                 if let Some(Drag::TreeRow { over: o, .. }) = self.app.drag.as_mut() {
+                    *o = over;
+                }
+            }
+            // ---- effects list: the same drag, inside the inspector
+            Some(Drag::EffectRow {
+                from,
+                start,
+                active,
+                ..
+            }) => {
+                if !active {
+                    if (p.x - start.x).abs().max((p.y - start.y).abs()) < 4.0 {
+                        return;
+                    }
+                    if let Some(Drag::EffectRow { active, .. }) = self.app.drag.as_mut() {
+                        *active = true;
+                    }
+                }
+                let over = crate::editor_ui::effect_drop_index(&self.app, p);
+                self.app.effect_drag_over = over.filter(|o| *o != from);
+                if let Some(Drag::EffectRow { over: o, .. }) = self.app.drag.as_mut() {
                     *o = over;
                 }
             }
@@ -4417,6 +5412,33 @@ impl Host {
                     *cur = world;
                 }
             }
+            // a crop drag re-resolves the placement from the placement the
+            // press started with, so every move is absolute and the corner
+            // follows the pointer without drift
+            Some(Drag::Crop { corner, start, .. }) => {
+                let world = self.app.screen_to_world(p);
+                let alt = self.app.alt;
+                self.crop_drag(corner, start, world, alt);
+            }
+            // Figma's corner radius handle: every move re-reads the radius
+            // from the pointer's travel along the corner's diagonal
+            Some(Drag::RadiusCorner {
+                corner,
+                start,
+                start_r,
+                uniform,
+                ..
+            }) => {
+                let world = self.app.screen_to_world(p);
+                if self.radius_drag(corner, start, start_r, world, uniform) {
+                    self.app.mark_dirty();
+                }
+            }
+            // the smoothing slider's drag
+            Some(Drag::CornerSmooth { track, .. }) => {
+                let v = crate::state::slider_fraction(track, p.x);
+                self.set_corner_smoothing(v);
+            }
             Some(Drag::ResizeSel {
                 corner,
                 orig: (ox, oy, ow, oh),
@@ -4424,6 +5446,59 @@ impl Host {
                 ..
             }) => {
                 let world = self.app.screen_to_world(p);
+
+                // Figma's **Space while resizing** (master row 2.12; the
+                // keyboard table's *"Move while resizing — Space"*, and the
+                // vector article's *"Hold Space while in the middle of another
+                // action to move the points. Release Space to return to the
+                // previous action"* — the same rule for layers): while `Space`
+                // is held the box travels with the pointer and keeps the size
+                // it has. The first event after `Space` goes down only sets the
+                // anchor, so the box never jumps on the way in, and the travel
+                // is `smart_move` — the call the plain drag uses, one snapping
+                // rule for both.
+                if self.app.space_pan {
+                    let last = match &self.app.drag {
+                        Some(Drag::ResizeSel { space, .. }) => *space,
+                        _ => None,
+                    };
+                    match last {
+                        Some(prev) => {
+                            let (dx, dy) = (world.x - prev.x, world.y - prev.y);
+                            if dx != 0.0 || dy != 0.0 {
+                                self.smart_move(dx, dy);
+                                if let Some(Drag::ResizeSel { space, offset, .. }) =
+                                    self.app.drag.as_mut()
+                                {
+                                    *space = Some(world);
+                                    offset.0 += dx;
+                                    offset.1 += dy;
+                                }
+                            }
+                        }
+                        None => {
+                            if let Some(Drag::ResizeSel { space, .. }) = self.app.drag.as_mut() {
+                                *space = Some(world);
+                            }
+                        }
+                    }
+                    return;
+                }
+
+                // `Space` let go: the move stands, and the resize runs from
+                // where the box now is. `orig` and `start` travel with the same
+                // offset, so the pointer keeps its grip on the corner it took
+                // hold of; until `Space` is ever used the offset is zero and
+                // this is the arithmetic, byte for byte, that it always was.
+                let (sx, sy) = match self.app.drag.as_mut() {
+                    Some(Drag::ResizeSel { space, offset, .. }) => {
+                        *space = None;
+                        *offset
+                    }
+                    _ => (0.0, 0.0),
+                };
+                let start = Point::new(start.x + sx, start.y + sy);
+                let (ox, oy) = (ox + sx, oy + sy);
 
                 // ONE layer, dragged by a corner: resize in the node's own
                 // frame. The engine keeps the opposite corner pinned in world
@@ -4582,18 +5657,258 @@ impl Host {
                         });
                     }
                     doc.editor().move_node(id, nx - tx, ny - ty);
-                    doc.editor().resize(id, nw, nh);
+                    // a frame inside the marquee hands the resize to its own
+                    // pinned layers (Figma's Constraints), same as a corner
+                    // drag of that frame on its own
+                    doc.editor().resize_with_constraints(id, nw, nh);
                 }
                 self.app.mark_dirty();
             }
-            Some(Drag::Create { start, .. }) => {
+            Some(Drag::ScaleSel {
+                corner,
+                orig,
+                applied,
+                parts,
+                ..
+            }) => {
+                let world = self.app.screen_to_world(p);
+                let (factor, _) = crate::state::scale_drag_factor(orig, corner, world);
+                // The gesture is incremental: what is on screen has already
+                // been scaled by `applied`, so the next step applies the
+                // RATIO. Compounding the ratios lands on the same box the
+                // absolute factor would, and each step is a real edit (so
+                // release merges them into one undo step, like a move).
+                let rel = factor / applied;
+                if (rel - 1.0).abs() < 1e-4 {
+                    return;
+                }
+                let scaled = {
+                    let doc = self.app.doc();
+                    doc.editor().scale_nodes_about(&parts, rel)
+                };
+                if scaled {
+                    if let Some(Drag::ScaleSel { applied, .. }) = self.app.drag.as_mut() {
+                        *applied = factor;
+                    }
+                    self.app.mark_dirty();
+                }
+            }
+            // ---- canvas rotate: the pointer's angle about the pivot, snapped
+            // to 15° while ⇧ is held. Every move asks for the TOTAL delta from
+            // the press, so the layers turn with the pointer instead of winding
+            // up in circles.
+            Some(Drag::RotateSel {
+                pivot,
+                last,
+                acc,
+                base,
+                ..
+            }) => {
+                let world = self.app.screen_to_world(p);
+                let now = (world.y - pivot.1).atan2(world.x - pivot.0);
+                // unwrap the step: a pointer that crosses the ±180° line keeps
+                // turning instead of jumping a whole circle
+                let mut step = now - last;
+                while step > std::f64::consts::PI {
+                    step -= std::f64::consts::TAU;
+                }
+                while step < -std::f64::consts::PI {
+                    step += std::f64::consts::TAU;
+                }
+                let total = acc + step;
+                let applied = if self.app.shift {
+                    // "Hold down Shift to snap rotation values to increments of 15"
+                    let snap = crate::state::ROTATE_SNAP_DEG.to_radians();
+                    (total / snap).round() * snap
+                } else {
+                    total
+                };
+                if self
+                    .app
+                    .doc()
+                    .editor()
+                    .rotate_selection_from(&base, pivot, applied)
+                {
+                    if let Some(Drag::RotateSel { last, acc, .. }) = self.app.drag.as_mut() {
+                        *last = now;
+                        *acc = total;
+                    }
+                    self.app.mark_dirty();
+                }
+            }
+            // ---- ⌥R's origin target: the pivot follows the pointer, live
+            Some(Drag::RotationOrigin { .. }) => {
+                let world = self.app.screen_to_world(p);
+                let doc = self.app.doc();
+                let id = doc.editor_ref().selection.first().cloned();
+                if let Some(id) = id {
+                    let box_ = crate::editor_ui::find_node(&doc.editor_ref().root, &id)
+                        .map(|n| (n.transform.x, n.transform.y, n.w.max(1e-6), n.h.max(1e-6)));
+                    if let Some((x, y, w, h)) = box_ {
+                        let ox = ((world.x - x) / w).clamp(0.0, 1.0);
+                        let oy = ((world.y - y) / h).clamp(0.0, 1.0);
+                        doc.editor().set_origin(&id, ox, oy);
+                        self.app.mark_dirty();
+                    }
+                }
+            }
+            Some(Drag::ScaleBody {
+                anchor,
+                grab,
+                applied,
+                parts,
+                ..
+            }) => {
+                let world = self.app.screen_to_world(p);
+                let factor = crate::state::scale_grab_factor(anchor, grab, world);
+                // the same incremental rule as the handle drag: what is on
+                // screen is already scaled by `applied`, so the next step
+                // applies the ratio, and the gesture stays one undo entry
+                let rel = factor / applied;
+                if (rel - 1.0).abs() < 1e-4 {
+                    return;
+                }
+                let scaled = {
+                    let doc = self.app.doc();
+                    doc.editor().scale_nodes_about(&parts, rel)
+                };
+                if scaled {
+                    if let Some(Drag::ScaleBody { applied, .. }) = self.app.drag.as_mut() {
+                        *applied = factor;
+                    }
+                    self.app.mark_dirty();
+                }
+            }
+            Some(Drag::ProtoConnect { src, .. }) => {
+                let world = self.app.screen_to_world(p);
+                // "Figma will snap the connection noodle to the [frame] when
+                // you get close enough" — the destination is the top-level
+                // frame whose box the pointer is in. The frame the source
+                // lives in is not one: the drag starts inside it, so it would
+                // swallow every attempt.
+                let snapped = {
+                    let doc = self.app.doc_opt().map(|d| d.editor_ref().root.clone());
+                    doc.as_ref().and_then(|root| {
+                        let home = crate::editor_ui::containing_frame(root, &src);
+                        crate::editor_ui::frame_under(root, world)
+                            .map(|(id, _)| id)
+                            .filter(|id| Some(id) != home.as_ref())
+                    })
+                };
+                if let Some(Drag::ProtoConnect { cur, target, .. }) = self.app.drag.as_mut() {
+                    *cur = world;
+                    *target = snapped;
+                }
+                self.app.mark_dirty();
+            }
+            Some(Drag::ShapeHandle {
+                id,
+                part,
+                count,
+                f0,
+                ..
+            }) => {
+                let world = self.app.screen_to_world(p);
+                let probe = {
+                    let doc = self.app.doc_ref();
+                    let root = &doc.editor_ref().root;
+                    crate::editor_ui::find_node(root, &id)
+                        .and_then(|n| node_world(root, &id).map(|m| (n.w, n.h, m)))
+                };
+                let Some((w, h, m)) = probe else {
+                    return;
+                };
+                let local = m.inverse() * world;
+                let f = crate::state::shape_radial_at(w, h, local);
+                let wrote = {
+                    let doc = self.app.doc();
+                    match part {
+                        crate::state::ShapePart::Count => {
+                            // outwards adds points, inwards removes them —
+                            // `f` is unclamped, so a drag past the rim counts
+                            let moved = (f - f0) * crate::state::COUNT_DRAG_SPAN;
+                            let asked = (count as f64 + moved).round().clamp(
+                                x_native::booleans::COUNT_MIN as f64,
+                                x_native::booleans::COUNT_MAX as f64,
+                            );
+                            crate::state::set_shape_count(doc.editor(), &id, asked as usize)
+                        }
+                        crate::state::ShapePart::Ratio => {
+                            crate::state::set_star_ratio(doc.editor(), &id, f)
+                        }
+                    }
+                };
+                if wrote {
+                    self.app.mark_dirty();
+                }
+            }
+            Some(Drag::ArcHandle {
+                id,
+                part,
+                start,
+                end,
+                ratio,
+                ..
+            }) => {
+                let world = self.app.screen_to_world(p);
+                let probe = {
+                    let doc = self.app.doc_ref();
+                    let root = &doc.editor_ref().root;
+                    crate::editor_ui::find_node(root, &id)
+                        .and_then(|n| node_world(root, &id).map(|m| (n.w, n.h, m)))
+                };
+                let Some((w, h, m)) = probe else {
+                    return;
+                };
+                // the pointer in the layer's own box space: the angle and the
+                // distance there are the arc's own properties
+                let local = m.inverse() * world;
+                let (ns, ne, nr) = match part {
+                    // Sweep: the end follows the pointer, so dragging it back
+                    // to where it started is the full circle again — Figma's
+                    // "drag the Sweep handle back to meet the start position,
+                    // to close the ring"
+                    crate::state::ArcPart::Sweep => {
+                        (start, crate::state::arc_angle_at(w, h, local), ratio)
+                    }
+                    // Start: the arc keeps its sweep and moves with the handle
+                    crate::state::ArcPart::Start => {
+                        let s = crate::state::arc_angle_at(w, h, local);
+                        (s, s + x_native::booleans::arc_sweep(start, end), ratio)
+                    }
+                    // Ratio: how far out the handle was dragged
+                    crate::state::ArcPart::Ratio => {
+                        (start, end, crate::state::arc_ratio_at(w, h, local))
+                    }
+                };
+                let wrote = {
+                    let doc = self.app.doc();
+                    crate::state::set_arc(doc.editor(), &id, ns, ne, nr)
+                };
+                if wrote {
+                    self.app.mark_dirty();
+                }
+            }
+            Some(Drag::Create { tool, start, .. }) => {
                 let mut world = self.app.screen_to_world(p);
-                // ⇧ constrains to square / circle
+                // ⇧ constrains the shape tools to a square / circle. A line's
+                // "proportion" is an ANGLE instead, so the Line and Arrow tools
+                // snap their direction to 45° steps and keep the pointer's
+                // length — Figma's own ⇧ on that pair.
+                let line = matches!(tool, Tool::Line | Tool::Arrow);
                 if self.app.shift {
                     let dx = world.x - start.x;
                     let dy = world.y - start.y;
-                    let m = dx.abs().max(dy.abs());
-                    world = Point::new(start.x + dx.signum() * m, start.y + dy.signum() * m);
+                    if line {
+                        let step = std::f64::consts::FRAC_PI_4;
+                        let angle = (dy.atan2(dx) / step).round() * step;
+                        let len = dx.hypot(dy);
+                        world =
+                            Point::new(start.x + angle.cos() * len, start.y + angle.sin() * len);
+                    } else {
+                        let m = dx.abs().max(dy.abs());
+                        world = Point::new(start.x + dx.signum() * m, start.y + dy.signum() * m);
+                    }
                 }
                 if let Some(Drag::Create { cur, .. }) = self.app.drag.as_mut() {
                     *cur = world;
@@ -4603,6 +5918,30 @@ impl Host {
                 let world = self.app.screen_to_world(p);
                 if let Some(Drag::Pen { cursor, .. }) = self.app.drag.as_mut() {
                     *cursor = Some(world);
+                }
+            }
+            Some(Drag::Pencil { .. }) | Some(Drag::Brush { .. }) => {
+                // Sample the pointer, not the mouse events: one point per two
+                // screen px keeps the fit honest at any zoom, and the engine's
+                // own simplify pass drops what the eye cannot see anyway. (The
+                // match above cloned the drag, so the points are taken from the
+                // LIVE one — a clone would swallow every sample.)
+                let world = self.app.screen_to_world(p);
+                let step = 2.0 / self.app.zoom.max(0.01);
+                // ⇧ while drawing is Figma's "to draw a straight line, hold
+                // Shift": the stroke collapses to the line from where it began
+                let straight = self.app.shift;
+                let Some(points) = freehand_points_mut(self.app.drag.as_mut()) else {
+                    return;
+                };
+                if straight {
+                    points.truncate(1);
+                }
+                let far = points
+                    .last()
+                    .is_none_or(|l| (l.x - world.x).hypot(l.y - world.y) >= step);
+                if far {
+                    points.push(world);
                 }
             }
             Some(Drag::Erase { .. }) => {
@@ -4777,7 +6116,7 @@ impl Host {
         }
         self.app.snap_lines.clear();
         match self.app.drag.clone() {
-            Some(Drag::Marquee { start, cur }) => {
+            Some(Drag::Marquee { start, cur, deep }) => {
                 let r = Rect::new(
                     start.x.min(cur.x),
                     start.y.min(cur.y),
@@ -4785,7 +6124,13 @@ impl Host {
                     start.y.max(cur.y),
                 );
                 if r.width() > 2.0 || r.height() > 2.0 {
-                    self.app.doc().editor().marquee(r);
+                    // Figma: the plain drag answers with the page's top-level
+                    // objects, the ⌘/Ctrl drag with the nested layers too.
+                    if deep {
+                        self.app.doc().editor().marquee_deep(r);
+                    } else {
+                        self.app.doc().editor().marquee(r);
+                    }
                 }
                 self.app.drag = None;
             }
@@ -4823,6 +6168,26 @@ impl Host {
             Some(Drag::Guide { .. }) => {
                 self.app.guide_release();
             }
+            // the effects list: a reorder that passed the threshold commits
+            // here, as ONE undo entry
+            Some(Drag::EffectRow {
+                from, active, over, ..
+            }) => {
+                self.app.effect_drag_over = None;
+                if active {
+                    if let Some(to) = over.filter(|t| *t != from) {
+                        let sel = self.app.doc().selected_id();
+                        if let Some(id) = sel {
+                            if self.app.doc().editor().move_effect_layer(&id, from, to) {
+                                self.app.mark_dirty();
+                                self.app.effect_settings = Some(to);
+                                self.app.status = "Effect reordered".into();
+                            }
+                        }
+                    }
+                }
+                self.app.drag = None;
+            }
             // P12: the tree reorder commits on release — one undo step
             Some(Drag::TreeRow { active, over, .. }) => {
                 if active {
@@ -4834,6 +6199,18 @@ impl Host {
             }
             // pen session continues across clicks (Enter/Esc/close ends it)
             Some(Drag::Pen { .. }) => {}
+            // a pencil stroke commits on release — and the PENCIL stays the
+            // active tool, which is the one thing its help page is explicit
+            // about ("stays active until you select another tool or press Esc")
+            Some(Drag::Pencil { points }) => {
+                self.app.drag = None;
+                self.finish_pencil(points);
+            }
+            // the brush commits the same way, and stays active the same way
+            Some(Drag::Brush { points }) => {
+                self.app.drag = None;
+                self.finish_brush(points);
+            }
             // eraser stroke ends on release - apply the erasure
             Some(Drag::Erase { .. }) => {
                 self.app.doc().editor().eraser_end();
@@ -4965,6 +6342,7 @@ impl Host {
                     let editor = doc.editor();
                     editor.merge_last(editor.undo_depth().saturating_sub(base_depth));
                 }
+                self.section_take_in_after_move(base_depth);
                 self.app.drag = None;
                 // a click (no movement) on already-selected text still
                 // places the caret — the gesture pushed nothing to merge
@@ -4972,12 +6350,102 @@ impl Host {
                     self.app.mark_dirty();
                 }
             }
+            // A corner-radius drag ends on release: one gesture, one entry
+            Some(Drag::RadiusCorner { base_depth, .. }) => {
+                let doc = self.app.doc();
+                let editor = doc.editor();
+                editor.merge_last(editor.undo_depth().saturating_sub(base_depth));
+                self.app.drag = None;
+            }
+            // the smoothing slider is one gesture too
+            Some(Drag::CornerSmooth { base_depth, .. }) => {
+                let doc = self.app.doc();
+                let editor = doc.editor();
+                editor.merge_last(editor.undo_depth().saturating_sub(base_depth));
+                self.app.drag = None;
+            }
+            // A crop drag ends on release, but the SESSION stays open: Figma
+            // applies the crop on Enter or a click outside, so this drag's
+            // entries fold into one and the session's total is what Apply
+            // merges.
+            Some(Drag::Crop { base_depth, .. }) => {
+                let made = {
+                    let editor = self.app.doc().editor();
+                    let made = editor.undo_depth().saturating_sub(base_depth);
+                    editor.merge_last(made);
+                    made
+                };
+                if made > 0 {
+                    if let Some(s) = self.app.crop.as_mut() {
+                        s.steps += 1;
+                    }
+                    self.app.mark_dirty();
+                }
+                self.app.drag = None;
+            }
             // Layer corner-resize ends on release: same one-gesture =
             // one-step merge as MoveSel.
             Some(Drag::ResizeSel { base_depth, .. }) => {
                 let doc = self.app.doc();
                 let editor = doc.editor();
                 editor.merge_last(editor.undo_depth().saturating_sub(base_depth));
+                self.app.drag = None;
+            }
+            // a scale is one gesture too: every move pushed its own
+            // ReplaceNode, and one Ctrl+Z must undo the whole drag
+            Some(Drag::ProtoConnect { src, target, .. }) => {
+                self.app.drag = None;
+                let Some(dest) = target else {
+                    // "click and drag the connection to an empty space on the
+                    // canvas, and release it" — nothing is written
+                    self.app.status = "Connection dropped".into();
+                    return;
+                };
+                let name = {
+                    let doc = self.app.doc_ref();
+                    crate::editor_ui::find_node(&doc.editor_ref().root, &dest)
+                        .map(|n| n.name.clone())
+                        .unwrap_or_default()
+                };
+                let id = src.clone();
+                let dest2 = dest.clone();
+                let wrote = {
+                    let doc = self.app.doc();
+                    let mut list = crate::editor_ui::find_node(&doc.editor_ref().root, &id)
+                        .map(x_native::effective_interactions)
+                        .unwrap_or_default();
+                    list.push(x_native::Interaction::click(&dest2));
+                    doc.editor().set_node_interactions(&id, list)
+                };
+                if wrote {
+                    self.app.conn_sel = None;
+                    self.app.mark_dirty();
+                    self.app.status = format!("On click → {name} (smart animate, 350ms)");
+                }
+            }
+            Some(Drag::ScaleSel { base_depth, .. })
+            | Some(Drag::ScaleBody { base_depth, .. })
+            | Some(Drag::ArcHandle { base_depth, .. })
+            | Some(Drag::ShapeHandle { base_depth, .. })
+            | Some(Drag::RotationOrigin { base_depth }) => {
+                let doc = self.app.doc();
+                let editor = doc.editor();
+                editor.merge_last(editor.undo_depth().saturating_sub(base_depth));
+                self.app.drag = None;
+            }
+            Some(Drag::RotateSel { base_depth, .. }) => {
+                let deg = {
+                    let doc = self.app.doc();
+                    let editor = doc.editor();
+                    editor.merge_last(editor.undo_depth().saturating_sub(base_depth));
+                    editor
+                        .selection
+                        .first()
+                        .and_then(|id| crate::editor_ui::find_node(&editor.root, id))
+                        .map(|n| n.transform.rotation.to_degrees())
+                        .unwrap_or(0.0)
+                };
+                self.app.status = format!("Rotated {}°", deg.round());
                 self.app.drag = None;
             }
             _ => {
@@ -4990,11 +6458,151 @@ impl Host {
         }
     }
 
+    /// Commit a pencil stroke: the sampled points become ONE vector layer.
+    fn finish_pencil(&mut self, pts: Vec<Point>) {
+        self.finish_freehand(pts, Freehand::Pencil);
+    }
+
+    /// Commit a brush mark: the same gesture, and the same one-layer,
+    /// one-undo-step landing, but the layer is the painted outline.
+    fn finish_brush(&mut self, pts: Vec<Point>) {
+        self.finish_freehand(pts, Freehand::Brush);
+    }
+
+    /// Commit one freehand stroke as ONE vector layer, placed by the same
+    /// draw-it-in rule the shape tools use and pushed as a single undo step
+    /// (one insert). The tool is deliberately left alone: Figma's pencil
+    /// "stays active until you select another tool or press Esc", and Figma
+    /// Draw's brush is the tool beside it in the same toolbar.
+    ///
+    /// The Pencil keeps the smoothed centreline and strokes it; the Brush fills
+    /// its outline. Both read their ink and weight from ONE table
+    /// (`state::pencil_ink` / `state::BrushStyle`), so the live preview and the
+    /// layer that lands cannot drift apart.
+    fn finish_freehand(&mut self, pts: Vec<Point>, kind: Freehand) {
+        if pts.len() < 2 {
+            return;
+        }
+        let (min_x, min_y, _max_x, _max_y) = pts.iter().fold(
+            (
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NEG_INFINITY,
+            ),
+            |(x0, y0, x1, y1), p| (x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y)),
+        );
+        let local: Vec<(f64, f64)> = pts.iter().map(|p| (p.x - min_x, p.y - min_y)).collect();
+        let style = self.app.brush_style;
+        let mut path = match kind {
+            Freehand::Pencil => x_native::freehand_path(&local, crate::state::PENCIL_SMOOTHING),
+            Freehand::Brush => x_native::brush_outline(
+                &local,
+                style.width(),
+                style.taper(),
+                style.grain(),
+                crate::state::PENCIL_SMOOTHING,
+            ),
+        };
+        if path.is_empty() {
+            return;
+        }
+        // The layer's box is the MARK's own. A brush's ink reaches half a width
+        // past the centreline it was drawn along (and the fitted cubics of a
+        // pencil stroke can bow past the samples), so a box taken from the
+        // points alone would be smaller than the geometry it describes — and
+        // the selection box, the panel's W/H and a frame's clip all read it.
+        let (bx, by, bw, bh) = x_native::path_bounds(&path);
+        if bx != 0.0 || by != 0.0 {
+            x_native::shift_path(&mut path, -bx, -by);
+        }
+        let (min_x, min_y) = (min_x + bx, min_y + by);
+        let mut v = Node::vector(
+            &x_native::fresh_id(kind.id_prefix()),
+            min_x,
+            min_y,
+            bw.max(1.0),
+            bh.max(1.0),
+            path,
+        );
+        let n = {
+            let doc = self.app.doc();
+            doc.editors
+                .iter()
+                .map(|e| count_kind(&e.root))
+                .sum::<usize>()
+                + 1
+        };
+        v.name = format!("{} {n}", kind.layer_name());
+        match kind {
+            Freehand::Pencil => {
+                v.fill = Paint::Solid(x_native::Color::TRANSPARENT);
+                let ink = crate::state::pencil_ink();
+                v.stroke = x_native::Stroke::solid(ink, crate::state::PENCIL_WEIGHT);
+                // A materialized stack is where the end-point style lives, and
+                // Figma's pencil is explicit about it: a ROUND 3px stroke.
+                v.materialize_visual_stacks();
+                if let Some(layer) = v.stroke_layers.first_mut() {
+                    layer.options.cap_start = x_native::StrokeCap::Round;
+                    layer.options.cap_end = x_native::StrokeCap::Round;
+                }
+            }
+            Freehand::Brush => {
+                // The mark IS the outline, so the layer is filled with the
+                // brush's ink and has no stroke of its own.
+                v.fill = Paint::Solid(crate::state::brush_ink());
+                v.stroke = x_native::Stroke::solid(x_native::Color::TRANSPARENT, 0.0);
+            }
+        }
+        let id = v.id.clone();
+        // read the Space opt-out BEFORE the document guard: the guard borrows
+        // the app, and the rule is the one the shape tools use
+        let no_nest = self.app.space_pan;
+        let doc = self.app.doc();
+        let root_id = doc.editor_ref().root.id.clone();
+        let place = if no_nest {
+            None
+        } else {
+            container_under(&doc.editor_ref().root, pts[0])
+        };
+        let parent = place.unwrap_or_else(|| root_id.clone());
+        let (lx, ly) = world_to_local(&doc.editor_ref().root, &parent, min_x, min_y);
+        v.transform.x = lx;
+        v.transform.y = ly;
+        doc.editor().insert_node(&parent, v);
+        doc.editor().selection = vec![id];
+        // `doc` is a &mut borrow: it ends at its last use, so `mark_dirty`'s
+        // &mut self borrow is free (dropping the reference would do nothing)
+        self.app.mark_dirty();
+    }
+
+    /// Figma: "You can also click and drag a section over the objects you want
+    /// to add to it." Called when a move gesture ends: a single selected
+    /// section that actually moved takes in the layers it now covers, and the
+    /// whole gesture — the drag and the take-in — reads as one undo step.
+    fn section_take_in_after_move(&mut self, base_depth: usize) {
+        let doc = self.app.doc_ref();
+        let editor = doc.editor_ref();
+        if editor.undo_depth() <= base_depth || editor.selection.len() != 1 {
+            return;
+        }
+        let Some(n) = crate::editor_ui::find_node(&editor.root, &editor.selection[0]) else {
+            return;
+        };
+        if !matches!(n.kind, x_native::NodeKind::Section) {
+            return;
+        }
+        let sid = n.id.clone();
+        if self.app.doc().editor().section_absorb(&sid) > 0 {
+            self.app.doc().editor().merge_last(2);
+        }
+    }
+
     fn finish_create(&mut self, tool: Tool, start: Point, cur: Point) {
-        let x = start.x.min(cur.x);
-        let y = start.y.min(cur.y);
-        let w = (cur.x - start.x).abs();
-        let h = (cur.y - start.y).abs();
+        // One rule for the pending rect (⌥ draws from the centre), shared with
+        // the live preview, so the shape that lands is the shape on screen.
+        let rect = crate::state::create_rect(start, cur, self.app.alt);
+        let (mut x, mut y, w, h) = (rect.x0, rect.y0, rect.width(), rect.height());
 
         // Board rectangle/circle tools share the Drag::Create gesture with
         // design shapes, but must never insert an x-core Node into the hidden
@@ -5065,6 +6673,94 @@ impl Host {
                 e.name = format!("Ellipse {n}");
                 e
             }
+            Tool::Line | Tool::Arrow => {
+                // Figma's line and arrow are stroked paths, not boxes: the two
+                // endpoints ARE the geometry, and the arrow's head is part of
+                // the path. Both re-origin onto their own box the way a
+                // freehand mark does, so the layer's box wraps the ink.
+                let (a, b) = crate::state::create_line(start, cur, self.app.alt);
+                let arrow = tool == Tool::Arrow;
+                let mut path = if arrow {
+                    x_native::arrow_path(a, b, crate::state::LINE_WEIGHT)
+                } else {
+                    x_native::line_path(a, b)
+                };
+                let (bx, by, bw, bh) = x_native::path_bounds(&path);
+                if bx != 0.0 || by != 0.0 {
+                    x_native::shift_path(&mut path, -bx, -by);
+                }
+                x = bx;
+                y = by;
+                let ink = crate::state::line_ink();
+                let mut v = Node::vector(
+                    &x_native::fresh_id(if arrow { "arrow" } else { "line" }),
+                    bx,
+                    by,
+                    bw.max(1.0),
+                    bh.max(1.0),
+                    path,
+                );
+                v.name = format!("{} {n}", tool.label());
+                // the head is solid ink; a plain line has no fill at all
+                v.fill = if arrow {
+                    Paint::Solid(ink)
+                } else {
+                    Paint::Solid(x_native::Color::TRANSPARENT)
+                };
+                v.stroke = x_native::Stroke::solid(ink, crate::state::LINE_WEIGHT);
+                // materialized so the inspector shows the stroke the line
+                // really draws — the pencil's own path
+                v.materialize_visual_stacks();
+                v
+            }
+            Tool::Poly => {
+                let mut p = Node::poly(
+                    &x_native::fresh_id("polygon"),
+                    x,
+                    y,
+                    w.max(2.0),
+                    h.max(2.0),
+                    x_native::booleans::COUNT_MIN,
+                    x_native::Color::from_rgb8(0xFF, 0xFF, 0xFF),
+                );
+                p.name = format!("{} {n}", tool.label());
+                p
+            }
+            Tool::Star => {
+                let mut st = Node::star(
+                    &x_native::fresh_id("star"),
+                    x,
+                    y,
+                    w.max(2.0),
+                    h.max(2.0),
+                    x_native::booleans::COUNT_MIN + 2,
+                    x_native::booleans::STAR_RATIO,
+                    x_native::Color::from_rgb8(0xFF, 0xFF, 0xFF),
+                );
+                st.name = format!("{} {n}", tool.label());
+                st
+            }
+            Tool::Slice => {
+                // Figma: "The Slice tool lets you specify a specific region of
+                // the screen for export, even if it's not organized into a
+                // single group." The node draws nothing; the export path
+                // flattens whatever overlaps it.
+                let mut sl =
+                    Node::slice(&x_native::fresh_id("slice"), x, y, w.max(2.0), h.max(2.0));
+                sl.name = format!("Slice {n}");
+                sl
+            }
+            Tool::Section => {
+                // Figma: "Click Section in the toolbar or use the keyboard
+                // shortcut ⇧ Shift S. Click and drag the location of the
+                // canvas where you'd like the section to go." The section is
+                // its own kind: a labelled container with a tinted body.
+                let sid = x_native::fresh_id("section");
+                let mut sec = Node::section(&sid, w.max(8.0), h.max(8.0));
+                sec.transform.x = x;
+                sec.transform.y = y;
+                sec
+            }
             Tool::Text => {
                 // Figma: a new text object starts EMPTY (placeholder only);
                 // committing empty deletes it
@@ -5077,6 +6773,59 @@ impl Host {
                 t.bindings.insert("font".into(), default_font);
                 t
             }
+            Tool::PlaceImage => {
+                // the queue is the asset; the arm is only reachable with one
+                let Some(asset) = self.app.placing_images.first().cloned() else {
+                    return;
+                };
+                // Figma drops a click at the file's own size and a drag at the
+                // size you draw, so the two differ by the gesture, not a mode
+                let zoom = self.app.zoom.max(1e-3);
+                let click =
+                    (cur.x - start.x).abs() * zoom < 4.0 && (cur.y - start.y).abs() * zoom < 4.0;
+                // A click lands ON something and Figma fills whatever is under
+                // it; only empty canvas drops a new image layer. Groups and
+                // the page have no fill of their own, so they place as well.
+                if click {
+                    let target = {
+                        let root = &self.app.doc_ref().editor_ref().root;
+                        x_native::editor::hit_test(root, start).filter(|id| {
+                            *id != root.id
+                                && editor_ui::find_node(root, id)
+                                    .is_some_and(|n| !matches!(n.kind, NodeKind::Group))
+                        })
+                    };
+                    if let Some(id) = target {
+                        self.fill_with_image(&id, &asset);
+                        self.app.doc().editor().selection = vec![id];
+                        self.place_image_taken();
+                        return;
+                    }
+                }
+                let (nw, nh) = self
+                    .app
+                    .image_natural_size(&asset)
+                    .unwrap_or((200.0, 150.0));
+                // Figma scales an asset past 4096 px down proportionally
+                // before it lands (help 360040028034)
+                let cap = (crate::state::PLACE_MAX_DIM / nw.max(nh)).min(1.0);
+                let (iw, ih) = (nw * cap, nh * cap);
+                let (bx, by, bw, bh) = if click {
+                    (start.x - iw / 2.0, start.y - ih / 2.0, iw, ih)
+                } else {
+                    (x, y, w, h)
+                };
+                let mut img = Node::image(
+                    &x_native::fresh_id("image"),
+                    bx,
+                    by,
+                    bw.max(1.0),
+                    bh.max(1.0),
+                    &asset,
+                );
+                img.name = self.app.image_label(&asset);
+                img
+            }
             _ => return,
         };
         let id = node.id.clone();
@@ -5087,34 +6836,54 @@ impl Host {
         // with a frame selected builds the frame. Previously every drawn
         // node was forced onto the page root, so artboards could never
         // receive content (viewport audit P2).
+        // Space held during the drag is Figma's "prevent nesting" modifier: the
+        // object stays on the page even when it is drawn over a frame.
+        let no_nest = self.app.space_pan;
+        // A section is a canvas element and "cannot be contained within
+        // frames or groups" (help 9771500257687), so the Section tool ignores
+        // the container under the drag the way Space-held drawing does.
+        let on_canvas = tool == Tool::Section;
         let (parent_id, parent_auto_layout) = {
             let doc = self.app.doc();
             let root = &doc.editor_ref().root;
-            let sel = &doc.editor_ref().selection;
-            if sel.len() == 1 {
-                let p = crate::editor_ui::find_node(root, &sel[0]);
-                if let Some(p) = p {
-                    let is_container = matches!(
-                        p.kind,
-                        x_native::NodeKind::Frame { .. }
-                            | x_native::NodeKind::Group
-                            | x_native::NodeKind::Section
-                    );
-                    if is_container {
-                        let (lx, ly) = world_to_local(root, &p.id, x, y);
-                        node.transform.x = lx;
-                        node.transform.y = ly;
-                        let auto_layout =
-                            matches!(&p.kind, x_native::NodeKind::Frame { layout: Some(_) });
-                        (p.id.clone(), auto_layout)
-                    } else {
-                        (root_id.clone(), false)
-                    }
-                } else {
-                    (root_id.clone(), false)
-                }
+            // Figma's rule for a NEW object: it joins the container you draw it
+            // in — the deepest visible, unlocked frame or section under the
+            // point the drag STARTED from. Drawing with exactly one container
+            // selected still builds that container (viewport audit P2), which is
+            // also what keeps the auto-layout flow honest for a group.
+            let by_place = if no_nest || on_canvas {
+                None
             } else {
-                (root_id.clone(), false)
+                container_under(root, start)
+            };
+            let mut picked = by_place;
+            if picked.is_none() && !on_canvas {
+                let sel = &doc.editor_ref().selection;
+                if sel.len() == 1 {
+                    if let Some(p) = crate::editor_ui::find_node(root, &sel[0]) {
+                        if matches!(
+                            p.kind,
+                            x_native::NodeKind::Frame { .. }
+                                | x_native::NodeKind::Group
+                                | x_native::NodeKind::Section
+                        ) {
+                            picked = Some(p.id.clone());
+                        }
+                    }
+                }
+            }
+            match picked {
+                Some(id) => {
+                    let (lx, ly) = world_to_local(root, &id, x, y);
+                    node.transform.x = lx;
+                    node.transform.y = ly;
+                    let auto_layout = match crate::editor_ui::find_node(root, &id) {
+                        Some(p) => matches!(&p.kind, x_native::NodeKind::Frame { layout: Some(_) }),
+                        None => false,
+                    };
+                    (id, auto_layout)
+                }
+                None => (root_id.clone(), false),
             }
         };
         self.app.doc().editor().insert_node(&parent_id, node);
@@ -5128,12 +6897,27 @@ impl Host {
                 x_native::apply_layout_recursive(par, &vars);
             }
         }
+        // Figma: "You can also click and drag a section over the objects you
+        // want to add to it" — the drag that DREW the section did exactly
+        // that, so every layer it covers joins it, keeping its place. The
+        // insert and the take-in are one undo step.
+        if tool == Tool::Section {
+            let moved = self.app.doc().editor().section_absorb(&id);
+            if moved > 0 {
+                self.app.doc().editor().merge_last(2);
+            }
+        }
         self.app.doc().editor().selection = vec![id.clone()];
         self.app.mark_dirty();
         self.app.tool = Tool::Select;
         // click/drag with the Text tool drops a text node and starts editing it
         if tool == Tool::Text {
             self.app.begin_text_edit(id, String::new());
+        }
+        // the picked files are a queue: one leaves it per placement, and the
+        // tool stays armed until the last one is down
+        if tool == Tool::PlaceImage {
+            self.place_image_taken();
         }
     }
 
@@ -5142,7 +6926,12 @@ impl Host {
             return;
         }
         if self.app.flow.is_some() {
-            // the viewer fits each screen; there is nothing to zoom/pan
+            // The viewer fits each screen, so there is nothing to zoom or pan —
+            // but Figma's prototype scrolling lives INSIDE the frame: "Vertical
+            // scrolling allows users to swipe or scroll up and down", and only
+            // a frame whose Overflow says it scrolls answers the wheel
+            // (help 360039818734). A wheel anywhere else still does nothing.
+            self.flow_scroll_wheel(delta);
             return;
         }
         let dy = match delta {
@@ -5205,6 +6994,7 @@ impl Host {
             f.id,
             FieldId::DocName
                 | FieldId::PageName
+                | FieldId::LayerName
                 | FieldId::TreeSearch
                 | FieldId::InstanceProp
                 | FieldId::FillHex
@@ -5255,6 +7045,11 @@ impl Host {
         // every global shortcut (click-away was the only way out before).
         if self.app.template_picker_open && matches!(key, Key::Named(NamedKey::Escape)) {
             self.app.template_picker_open = false;
+            return;
+        }
+        // the shortcuts panel is the topmost sheet: Esc closes it first
+        if self.app.shortcuts_open && matches!(key, Key::Named(NamedKey::Escape)) {
+            self.app.shortcuts_open = false;
             return;
         }
         // The dashboard is reachable by keyboard, not only by pointer: Tab
@@ -5595,8 +7390,11 @@ impl Host {
                         self.app.context_menu.close();
                         return;
                     }
+                    // Esc CANCELS: the buffer is dropped without committing, so
+                    // the inline-rename target is dropped with it
                     self.app.field = None;
                     self.app.field_select_all = false;
+                    self.app.layer_edit_id = None;
                     return;
                 }
                 (Key::Named(NamedKey::Backspace), _) => {
@@ -5758,11 +7556,11 @@ impl Host {
                 && !self.app.ctrl
                 && !self.app.alt
                 && !self.app.shift
-                && self.app.doc().editor_ref().selection.len() == 1
+                && self.app.enter_edit_targets_vector()
             {
-                // a single selected layer: Enter edits its anchors when it is a
-                // vector (the engine refuses anything else). Text was already
-                // claimed by `enter_edit_selected` above.
+                // a single selected VECTOR layer: Enter edits its anchors. Text
+                // was already claimed by `enter_edit_selected` above, and
+                // everything else keeps falling through to ⏎ = select child.
                 self.dispatch(Action::EnterVectorEditMode);
                 return;
             }
@@ -5831,9 +7629,27 @@ impl Host {
                         self.app.nav_tab = NavTab::Variables;
                         return;
                     }
-                    // ⇧⌘\ — minimize UI
+                    // ⇧⌘\ — hide the left panel only (Figma's key for it);
+                    // ⌘\ below hides the UI
                     "\\" if self.app.shift => {
+                        self.app.left_minimized = !self.app.left_minimized;
+                        let hidden = self.app.left_minimized;
+                        self.app.status = if hidden {
+                            "Left panel hidden".into()
+                        } else {
+                            "Left panel shown".into()
+                        };
+                        return;
+                    }
+                    // ⌘\ — hide UI (Figma's shortcut)
+                    "\\" => {
                         self.app.ui_minimized = !self.app.ui_minimized;
+                        let hidden = self.app.ui_minimized;
+                        self.app.status = if hidden {
+                            "UI hidden - ⌘\\ brings it back".into()
+                        } else {
+                            "UI shown".into()
+                        };
                         return;
                     }
                     // ⇧⌘F — find
@@ -5850,21 +7666,40 @@ impl Host {
                         self.app.apply_ctx(CtxCmd::HideSel);
                         return;
                     }
+                    // ⇧⌘8 / ⇧⌘7 — Figma's list shortcuts (help
+                    // 360040449773): *"You can use ⌘ Command Shift 8 to turn
+                    // an individual text selection or multiple text layers
+                    // into a bulleted list"* — 7 is the numbered one. Pressing
+                    // the same shortcut on a layer that already carries that
+                    // style gives it back, which is the answer the picker's
+                    // own **None** row gives.
+                    "8" | "*" if self.app.shift => {
+                        self.toggle_list_style(x_native::ListStyle::Bulleted);
+                        return;
+                    }
+                    "7" | "&" if self.app.shift => {
+                        self.toggle_list_style(x_native::ListStyle::Numbered);
+                        return;
+                    }
+                    // ⇧⌘K — Place image (Figma's shortcut; the ⌘K command
+                    // palette below keeps its own key)
+                    "k" | "K" if self.app.alt => {
+                        // the context menu's own path, so the key and the menu
+                        // cannot drift (MakeComponent is a CtxCmd, not an
+                        // Action)
+                        self.app.apply_ctx(CtxCmd::MakeComponent);
+                        return;
+                    }
+                    "k" | "K" if self.app.shift => {
+                        self.cmd_place_image();
+                        return;
+                    }
+                    "/" => {
+                        self.toggle_palette();
+                        return;
+                    }
                     "k" | "K" => {
-                        // Toggle command palette with full initialization
-                        if self.app.palette.open {
-                            self.app.palette.close();
-                        } else {
-                            self.app.palette.open();
-                            self.app.palette.register_standard_commands();
-                            // Update context before showing. The dashboard is
-                            // valid with zero open documents, so do not call
-                            // `doc()` merely to populate palette context.
-                            self.app.palette.has_selection = self
-                                .app
-                                .doc_opt()
-                                .is_some_and(|doc| !doc.editor_ref().selection.is_empty());
-                        }
+                        self.toggle_palette();
                         return;
                     }
                     "n" | "N" => {
@@ -5918,7 +7753,20 @@ impl Host {
                         self.dispatch(Action::InverseSelection);
                         return;
                     }
+                    // ⌘⌥M — Use as mask (Figma's own shortcut, help
+                    // 360040450253). The ⇧⌥⌘M alias below stays Select
+                    // matching layers.
+                    "m" | "M" if self.app.alt && !self.app.shift => {
+                        self.dispatch(Action::UseAsMask);
+                        return;
+                    }
                     "m" | "M" if self.app.shift && self.app.alt => {
+                        self.dispatch(Action::SelectMatching);
+                        return;
+                    }
+                    // Figma's own binding for Select matching layers is ⌥⌘A;
+                    // ⇧⌥⌘M above stays as the alias this app shipped with.
+                    "a" | "A" if self.app.alt => {
                         self.dispatch(Action::SelectMatching);
                         return;
                     }
@@ -5969,6 +7817,12 @@ impl Host {
                         let doc = self.app.doc();
                         doc.editor().duplicate_selection((12.0, 12.0));
                         self.app.mark_dirty();
+                        return;
+                    }
+                    // ⌥⌘G — Frame selection (Figma's own shortcut: it wraps
+                    // the selection in a frame sized to what you selected)
+                    "g" | "G" if self.app.alt => {
+                        self.app.apply_ctx(CtxCmd::FrameSelection);
                         return;
                     }
                     "g" | "G" => {
@@ -6042,6 +7896,12 @@ impl Host {
                         self.dispatch(Action::ToggleMinimap);
                         return;
                     }
+                    // ⌘R — rename the selected layer (Figma's shortcut for
+                    // it); ⇧⌘R keeps this host's renumber
+                    "r" | "R" if !self.app.shift => {
+                        self.rename_selected_layer();
+                        return;
+                    }
                     // Layer management shortcuts
                     "r" | "R" if self.app.shift => {
                         self.dispatch(Action::RenumberSelection);
@@ -6069,27 +7929,91 @@ impl Host {
                     || self.app.dropdown_zoom
                     || self.app.dropdown_lh
                     || self.app.dropdown_text_style
+                    || self.app.dropdown_constraint.is_some()
+                    || self.app.dropdown_layout_axis.is_some()
+                    || self.app.dropdown_stacking
                     || self.app.paint_lib.is_some()
                 {
                     self.app.dropdown_frame = false;
                     self.app.dropdown_zoom = false;
                     self.app.dropdown_lh = false;
                     self.app.dropdown_text_style = false;
+                    self.app.dropdown_constraint = None;
+                    self.app.dropdown_layout_axis = None;
+                    self.app.dropdown_stacking = false;
                     self.app.paint_lib = None;
+                } else if !self.app.placing_images.is_empty() {
+                    // a pending image placement is the newest thing on the
+                    // canvas, so Esc spends itself on it — the second Esc
+                    // clears the selection as usual
+                    self.app.cancel_image_placement();
+                } else if self.app.crop.is_some() {
+                    self.app.crop_cancel();
                 } else if self.app.screen == Screen::Editor {
                     // P12: an in-flight tree drag cancels first
                     if matches!(self.app.drag, Some(Drag::TreeRow { .. })) {
                         self.app.drag = None;
+                    } else if matches!(
+                        self.app.tool,
+                        Tool::Scale
+                            | Tool::Slice
+                            | Tool::Pencil
+                            | Tool::Brush
+                            | Tool::Line
+                            | Tool::Arrow
+                            | Tool::Poly
+                            | Tool::Star
+                    ) {
+                        // Figma's Esc leaves the active drawing tool (Scale,
+                        // Slice) the way V does —
+                        // the selection survives until a second Esc, and a
+                        // drag already in flight still ends through its own
+                        // release (which merges it into one undo step)
+                        self.app.tool = Tool::Select;
+                    } else if self.app.doc().editor().exit_instance() {
+                        // Figma: inside an instance Esc steps out of it first —
+                        // the instance comes back under the cursor rather than
+                        // the selection being thrown away.
+                        self.app.status = "Left the instance".into();
+                    } else {
+                        self.app.doc().editor().selection.clear();
                     }
-                    self.app.doc().editor().selection.clear();
                 } else {
                     self.app.dash_search_focus = false;
                 }
             }
             Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace) => {
                 if self.app.screen == Screen::Editor {
-                    self.app.doc().editor().delete_selection();
-                    self.app.mark_dirty();
+                    // Figma's own way to throw the rest of a bulk pick away:
+                    // *"To discard any remaining images or videos, press
+                    // Delete"* (help 360040028034) — it goes before the
+                    // selection, which has nothing to delete yet
+                    if !self.app.placing_images.is_empty() {
+                        self.app.cancel_image_placement();
+                        return;
+                    }
+                    // Figma: a selected connection is an object of its own —
+                    // "you can select it and press Delete to remove it" — and
+                    // it goes first, before the layers underneath.
+                    if self.app.conn_sel.is_some() {
+                        self.dispatch(Action::ConnDelete);
+                        return;
+                    }
+                    if self.app.ctrl {
+                        // Figma's second delete — ⌘⌫ on a Mac, Ctrl+Backspace
+                        // on Windows: "To delete a section without deleting
+                        // its contents" (help 9771500257687). A frame or a
+                        // group answers the same way; plain layers just go.
+                        let moved = self.app.doc().editor().delete_keeping_contents();
+                        self.app.mark_dirty();
+                        if moved > 0 {
+                            self.app.status =
+                                format!("Removed without contents - {moved} layer(s) kept");
+                        }
+                    } else {
+                        self.app.doc().editor().delete_selection();
+                        self.app.mark_dirty();
+                    }
                 }
             }
             // Layer-tree navigation (Figma): Tab cycles siblings, ⇧Tab goes the
@@ -6111,6 +8035,11 @@ impl Host {
                 }
             }
             Key::Named(NamedKey::Enter) => {
+                if self.app.crop.is_some() {
+                    // *"press Enter to apply your changes"*
+                    self.app.crop_apply();
+                    return;
+                }
                 if self.app.screen == Screen::Editor {
                     self.dispatch(Action::SelectChild);
                 }
@@ -6143,6 +8072,37 @@ impl Host {
 
     fn on_character(&mut self, c: &str) {
         if self.app.screen == Screen::Editor && !self.app.ctrl {
+            // ⇧E — toggle the Design and Prototype tabs (Figma's shortcut,
+            // help 360040314193)
+            if self.app.shift && c == "E" {
+                self.toggle_right_tab();
+                return;
+            }
+            // ⇧A — add auto layout (Figma's shortcut; plain A stays free)
+            if self.app.shift && c == "A" {
+                self.dispatch(Action::AddAutoLayout);
+                return;
+            }
+            // N / ⇧N — zoom to the next / previous frame (Figma's walk)
+            if c == "n" {
+                self.zoom_to_frame(1);
+                return;
+            }
+            if self.app.shift && c == "N" {
+                self.zoom_to_frame(-1);
+                return;
+            }
+            // ⇧? — the keyboard-shortcuts panel
+            if c == "?" {
+                self.app.shortcuts_open = !self.app.shortcuts_open;
+                let open = self.app.shortcuts_open;
+                self.app.status = if open {
+                    "Keyboard shortcuts".into()
+                } else {
+                    "Shortcuts panel closed".into()
+                };
+                return;
+            }
             // Shift+R toggles the viewport rulers (⇧R types "R")
             if self.app.shift && c == "R" {
                 self.app.rulers = !self.app.rulers;
@@ -6153,13 +8113,21 @@ impl Host {
                 };
                 return;
             }
+            // ⌥R — Figma's rotation origin: "use the keyboard shortcut ⌥R to
+            // reveal the rotation origin", then "click and drag the target to
+            // move" it. Asked for before the tool table so ⌥R never reads as
+            // the Rectangle tool.
+            if self.app.alt && c.eq_ignore_ascii_case("r") {
+                self.dispatch(Action::ToggleRotationOrigin);
+                return;
+            }
             // Tool shortcuts — the mode-aware table lives in
             // Tool::from_shortcut (audit F3); there is no second copy.
             // The ⇧R ruler arm above stays first so it keeps its key.
             let tool_key = c.to_lowercase();
             let board_mode = self.app.is_board();
             if let Some(t) = Tool::from_shortcut(&tool_key, self.app.shift, board_mode) {
-                self.app.tool = t;
+                self.app.select_tool(t);
                 return;
             }
             if self.app.shift {
@@ -6314,7 +8282,6 @@ impl Host {
                     | "Back to dashboard"
                     | "Theme: Graphite (dark)"
                     | "Theme: Daylight (light)"
-                    | "Theme: High Contrast"
             )
         {
             self.app.status = "Open a document to use this command".into();
@@ -6326,12 +8293,14 @@ impl Host {
             "New file" => self.cmd_new_file(),
             "Open…" => self.cmd_open_file(),
             "Import…" => self.cmd_import_file(),
+            "Place image…" => self.cmd_place_image(),
             "Lint document" => self.cmd_lint(),
             "Theme: Graphite (dark)" => self.apply_theme(x_native::ui::ThemeId::Graphite),
             "Theme: Daylight (light)" => self.apply_theme(x_native::ui::ThemeId::Daylight),
-            "Theme: High Contrast" => self.apply_theme(x_native::ui::ThemeId::HighContrast),
+            "Help: welcome & shortcuts" => self.dispatch(Action::ShowWelcome),
             "Preview prototype" => {
                 if self.app.flow.is_some() {
+                    self.flow_clear_scroll();
                     self.app.flow = None;
                 } else {
                     self.flow_enter();
@@ -6359,6 +8328,7 @@ impl Host {
             }
             "Copy as code" => self.app.apply_ctx(CtxCmd::CopyAsCode),
             "Comment tool" => self.app.tool = Tool::Comment,
+            "Slice tool" => self.app.tool = Tool::Slice,
             "Union selection" => self.app.apply_ctx(CtxCmd::Union),
             "Subtract selection" => self.app.apply_ctx(CtxCmd::Subtract),
             "Intersect selection" => self.app.apply_ctx(CtxCmd::Intersect),
@@ -6406,11 +8376,25 @@ impl Host {
                 self.app.doc().redo_document();
             }
             "Select tool" => self.app.tool = Tool::Select,
-            "Frame tool" => self.app.tool = Tool::Frame,
+            "Scale tool" => self.app.tool = Tool::Scale,
+            "Frame tool" => self.app.select_tool(Tool::Frame),
+            "Section tool" => self.app.select_tool(Tool::Section),
             "Text tool" => self.app.tool = Tool::Text,
             "Rectangle tool" => self.app.tool = Tool::Rect,
             "Ellipse tool" => self.app.tool = Tool::Ellipse,
+            "Line tool" => self.app.tool = Tool::Line,
+            "Arrow tool" => self.app.tool = Tool::Arrow,
+            "Polygon tool" => self.app.tool = Tool::Poly,
+            "Star tool" => self.app.tool = Tool::Star,
             "Pen tool" => self.app.tool = Tool::Pen,
+            "Pencil tool" => self.app.tool = Tool::Pencil,
+            "Brush tool" => self.app.tool = Tool::Brush,
+            // Figma Draw's secondary toolbar sets the stroke's style; the
+            // palette is this build's keyboard route to the same setting, and
+            // the brush block in the panel is the pointer's
+            "Brush style: Ink" => self.app.brush_style = BrushStyle::Ink,
+            "Brush style: Marker" => self.app.brush_style = BrushStyle::Marker,
+            "Brush style: Dry" => self.app.brush_style = BrushStyle::Dry,
             "Hand tool" => self.app.tool = Tool::Hand,
             // audit F7: these labels were misspelled (and In/Out missing),
             // so four advertised palette commands ran nothing
@@ -6441,6 +8425,8 @@ impl Host {
                 doc.editor().group_selection(&x_native::fresh_id("group"));
                 self.app.mark_dirty();
             }
+            "Frame selection" => self.app.apply_ctx(CtxCmd::FrameSelection),
+            "Wrap in new section" => self.app.apply_ctx(CtxCmd::SectionSelection),
             "Bring to front" => {
                 let doc = self.app.doc();
                 if let Some(id) = doc.selected_id() {
@@ -6582,19 +8568,29 @@ impl Host {
         self.app.status = format!("On click → {dname} (smart animate, 350ms)");
     }
 
-    fn proto_trigger_cycle(&mut self, i: usize) {
+    /// Write the trigger a press picked in Figma's trigger menu. The list is
+    /// `Trigger::all`, so the menu reaches every trigger the engine carries —
+    /// the old cycle only ever visited the six pointer ones and left the
+    /// delay, key and video triggers unreachable from the panel. The value a
+    /// "when" trigger starts from (a delay's milliseconds, a video hit's time)
+    /// comes from the same row, and the parameter field beside the pill edits
+    /// it from there.
+    fn proto_set_trigger(&mut self, i: usize, row: usize) {
+        let Some(trigger) = x_native::Trigger::all().get(row).cloned() else {
+            return;
+        };
+        let label = trigger.label();
+        let had_selection = self.proto_selected_id().is_some();
         self.proto_edit(move |l| {
             if let Some(ix) = l.get_mut(i) {
-                ix.trigger = match ix.trigger {
-                    x_native::Trigger::OnClick => x_native::Trigger::OnHover,
-                    x_native::Trigger::OnHover => x_native::Trigger::MouseEnter,
-                    x_native::Trigger::MouseEnter => x_native::Trigger::MouseLeave,
-                    x_native::Trigger::MouseLeave => x_native::Trigger::OnPress,
-                    x_native::Trigger::OnPress => x_native::Trigger::MouseUp,
-                    _ => x_native::Trigger::OnClick,
-                };
+                ix.trigger = trigger;
             }
         });
+        // proto_edit writes its own "select a layer" message when there is
+        // nothing to write to; only speak when the write had a target
+        if had_selection {
+            self.app.status = format!("Trigger: {label}");
+        }
     }
 
     fn proto_dest_cycle(&mut self, i: usize, dir: i32) {
@@ -6679,6 +8675,21 @@ impl Host {
                         x_native::Direction::Bottom => x_native::Animation::SlideOut,
                     },
                     x_native::Animation::SlideOut => x_native::Animation::Instant,
+                };
+            }
+        });
+    }
+
+    /// The direction arrows: they pick the side a Move in / Move out enters
+    /// from. Figma shows them only for an animation that has one, and so does
+    /// the row — but a press that arrives anyway leaves the others alone.
+    fn proto_direction_set(&mut self, i: usize, dir: x_native::Direction) {
+        self.proto_edit(move |l| {
+            if let Some(ix) = l.get_mut(i) {
+                ix.animation = match ix.animation {
+                    x_native::Animation::MoveIn(_) => x_native::Animation::MoveIn(dir),
+                    x_native::Animation::MoveOut(_) => x_native::Animation::MoveOut(dir),
+                    other => other,
                 };
             }
         });
@@ -6840,6 +8851,26 @@ impl Host {
         });
     }
 
+    /// Figma's **Animate matching layers** tick: on, the two screens' layers
+    /// are matched by name and hierarchy and the matches animate their
+    /// differences; off — the box's own default — the interaction's animation
+    /// is what happens between them (help 360039818874). It only means
+    /// anything for a navigation: Figma gives overlay actions no smart animate
+    /// at all, and [`x_native::editor::arm_smart_tick`] respects that.
+    fn proto_toggle_matching(&mut self, i: usize) {
+        let mut on = false;
+        self.proto_edit(|l| {
+            if let Some(ix) = l.get_mut(i) {
+                ix.animate_matching_layers = !ix.animate_matching_layers;
+                on = ix.animate_matching_layers;
+            }
+        });
+        // the status reports what the box now says, so the panel and the line
+        // agree even with the row scrolled out of sight
+        let word = if on { "on" } else { "off" };
+        self.app.status = format!("Animate matching layers: {word}");
+    }
+
     fn flow_enter(&mut self) {
         let sel = self.app.doc().editor_ref().selection.clone();
         let targets = crate::editor_ui::proto_targets(&self.app);
@@ -6888,6 +8919,7 @@ impl Host {
             return;
         }
         let vars = self.app.doc().doc.variables.clone();
+        self.flow_clear_scroll();
         self.app.flow = Some(crate::state::FlowState {
             current: current.clone(),
             vars,
@@ -6919,13 +8951,111 @@ impl Host {
         );
     }
 
+    /// Figma's prototype scrolling, driven by the wheel: the deepest frame
+    /// under the pointer whose Overflow scrolls takes the delta, clamped to
+    /// the range its content sticks out past its own box
+    /// (`x_core::scroll_extent`). A frame set to Vertical ignores the
+    /// horizontal delta and the other way round; "No scrolling" frames are
+    /// skipped, so the wheel falls through to the frame behind them.
+    fn flow_scroll_wheel(&mut self, delta: MouseScrollDelta) {
+        let (dx, dy) = match delta {
+            MouseScrollDelta::LineDelta(x, y) => (x as f64, y as f64),
+            MouseScrollDelta::PixelDelta(p) => (p.x / 40.0, p.y / 40.0),
+        };
+        if dx == 0.0 && dy == 0.0 {
+            return;
+        }
+        let p = self.app.screen_to_world(self.app.mouse);
+        let target = {
+            let d = self.app.doc();
+            scroll_frame_at(&d.editor_ref().root, p)
+        };
+        let Some(target) = target else {
+            return;
+        };
+        let mut sx = target.scroll.0;
+        let mut sy = target.scroll.1;
+        if target.overflow != x_native::Overflow::ScrollX {
+            sy = (sy - dy * 40.0).clamp(0.0, target.extent.1);
+        }
+        if target.overflow != x_native::Overflow::ScrollY {
+            sx = (sx - dx * 40.0).clamp(0.0, target.extent.0);
+        }
+        if (sx, sy) == target.scroll {
+            return;
+        }
+        self.app
+            .doc()
+            .editor()
+            .set_scroll_preview(&target.id, sx, sy);
+    }
+
+    /// The preview owns the scroll offsets while it runs, and gives the
+    /// document back exactly as it found it when the preview closes (Figma
+    /// calls the other choice "Preserve scroll position": unchecked — our
+    /// `reset_on_navigate`, the panel's "Reset: On" — the next screen "will
+    /// load from the top of the frame").
+    fn flow_clear_scroll(&mut self) {
+        let ids: Vec<String> = {
+            let root = &self.app.doc_ref().editor_ref().root;
+            fn walk(n: &x_native::Node, out: &mut Vec<String>) {
+                if n.scroll != (0.0, 0.0) {
+                    out.push(n.id.clone());
+                }
+                for c in &n.children {
+                    walk(c, out);
+                }
+            }
+            let mut out = Vec::new();
+            walk(root, &mut out);
+            out
+        };
+        if ids.is_empty() {
+            return;
+        }
+        let d = self.app.doc();
+        for id in ids {
+            d.editor().set_scroll_preview(&id, 0.0, 0.0);
+        }
+    }
+
     /// Pan so node `id` lands centered in the viewer, KEEPING the current
     /// zoom — Figma "scroll to" pans within the screen instead of
     /// navigating. Page-switches when the node lives elsewhere.
+    ///
+    /// When the destination sits inside a frame that scrolls, this is instead
+    /// the scroll Figma documents for that action — "you can select direct
+    /// children of scrollable frames" — so the frame's own content moves and
+    /// the camera stays put. The element is brought to the TOP of the frame's
+    /// box, clamped to the range the content allows.
     fn flow_pan_to(&mut self, id: &str) {
         let Some((page, r, _)) = crate::editor_ui::flow_locate(&self.app, id) else {
             return;
         };
+        // Inside a scrolling frame the action scrolls that frame and the camera
+        // never moves: the destination's own offset inside the frame, both in
+        // world space so nesting depth does not matter, brought to the top of
+        // the frame's box and clamped to what the content allows.
+        let mut scrolled: Option<(String, f64, f64)> = None;
+        {
+            let root = &self.app.doc_ref().editor_ref().root;
+            if let Some(fid) = crate::state::scrollable_ancestor(root, id) {
+                if let Some(frame) = crate::editor_ui::find_node(root, &fid) {
+                    let (ex, ey) = x_native::scroll_extent(frame);
+                    if let Some(frame_rect) = crate::editor_ui::flow_locate(&self.app, &fid) {
+                        let fr = frame_rect.1;
+                        let nx = (r.x0 - fr.x0).clamp(0.0, ex);
+                        let ny = (r.y0 - fr.y0).clamp(0.0, ey);
+                        scrolled = Some((fid, nx, ny));
+                    }
+                }
+            }
+        }
+        if let Some((fid, nx, ny)) = scrolled {
+            let d = self.app.doc();
+            d.editor().set_scroll_preview(&fid, nx, ny);
+            return;
+        }
         let d = self.app.doc();
         if d.page != page {
             d.page = page;
@@ -6966,7 +9096,13 @@ impl Host {
                 f.hovered = Some(hit.clone());
             }
         }
+        // The press fires Figma's three press-time triggers. Mouse down sits
+        // between them because it is the press itself: While pressing arms the
+        // auto-reverse above (it reverts when the press ends), On click and
+        // Mouse down are permanent — releasing fires Mouse up, in
+        // `flow_release`, and never undoes either of them.
         self.flow_fire_trigger(&hit, x_native::Trigger::OnPress);
+        self.flow_fire_trigger(&hit, x_native::Trigger::MouseDown);
         self.flow_fire_trigger(&hit, x_native::Trigger::OnClick);
     }
 
@@ -6987,6 +9123,7 @@ impl Host {
                 self.arm_flow_delays();
             }
             None => {
+                self.flow_clear_scroll();
                 self.app.flow = None;
                 self.app.status = "Flow preview ended".into();
             }
@@ -7196,6 +9333,7 @@ impl Host {
         let Some(mut f) = self.app.flow.take() else {
             return x_native::editor::FireEffect::default();
         };
+        let origin = f.current.clone();
         let known = |id: &str| crate::editor_ui::flow_locate(&self.app, id).is_some();
         let effect = x_native::editor::fire_action(
             &mut f.current,
@@ -7210,8 +9348,24 @@ impl Host {
             f.hovered = None;
             f.dragging = false;
             f.drag_fired = false;
+            // Figma's "Animate matching layers" tick: the plan is frozen here,
+            // while both screens are still at hand, and the viewer paints from
+            // it until the interaction's own duration runs out. A navigation
+            // that does not ask for one clears whatever was running.
+            let from = crate::editor_ui::flow_node(&self.app, &origin);
+            let to = crate::editor_ui::flow_node(&self.app, &f.current);
+            f.tick = match (from, to) {
+                (Some(from), Some(to)) => x_native::editor::arm_smart_tick(ix, from, to),
+                _ => None,
+            };
         }
         self.app.flow = Some(f);
+        // "Reset scroll position": the interaction asked for the next screen to
+        // load from the top of its frame, so every offset the preview owns goes
+        // back to zero before the new screen is shown.
+        if effect.navigated.is_some() && ix.reset_on_navigate {
+            self.flow_clear_scroll();
+        }
         if effect.navigated.is_some() {
             let cur = self
                 .app
@@ -7349,6 +9503,7 @@ impl Host {
                 return;
             }
             Key::Character(c) if c.eq_ignore_ascii_case("q") => {
+                self.flow_clear_scroll();
                 self.app.flow = None;
                 self.app.status = "Flow preview ended".into();
                 return;
@@ -7409,6 +9564,30 @@ impl Host {
     /// Fire due `AfterDelay` triggers in arm order. A navigation cancels
     /// the remaining due timers (the new screen re-arms its own); delays
     /// whose overlay closed are disarmed. Returns how many fired.
+    /// Is a "matching layers" transition mid-flight? This is the frame
+    /// clock's own question — the viewer repaints while the answer is yes.
+    fn flow_ticking(&self) -> bool {
+        let Some(f) = self.app.flow.as_ref() else {
+            return false;
+        };
+        f.tick.as_ref().is_some_and(|t| t.running())
+    }
+
+    /// Figma's **Animate matching layers** tick: advance the running
+    /// transition by one frame and report whether it is still running. The
+    /// viewer paints from the plan while it is (see
+    /// [`crate::editor_ui::paint_tick_tree`]), which is what the frame clock
+    /// above wakes it for.
+    fn flow_advance_tick(&mut self, dt_ms: u32) -> bool {
+        let Some(f) = self.app.flow.as_mut() else {
+            return false;
+        };
+        match f.tick.as_mut() {
+            Some(tick) => tick.advance(dt_ms),
+            None => false,
+        }
+    }
+
     fn flow_tick(&mut self, now: std::time::Instant) -> usize {
         if self.app.flow.is_none() {
             return 0;
@@ -7438,6 +9617,7 @@ impl Host {
                 animation: x_native::Animation::Instant,
                 easing: x_native::Easing::Linear,
                 reset_on_navigate: false,
+                animate_matching_layers: false,
             };
             let effect = self.flow_fire(&ix);
             if effect.fired() {
@@ -7574,6 +9754,111 @@ impl Host {
         self.app.pan.1 += target.y - now.y;
     }
 
+    /// Fit a world rect into the canvas, filling `fill` of it —
+    /// ⇧2's fit and the frame walk's fit are the same arithmetic.
+    fn zoom_to_rect(&mut self, x0: f64, y0: f64, x1: f64, y1: f64, fill: f64) {
+        let reg = self.app.editor_regions();
+        let cw = reg.canvas.x1 - reg.canvas.x0;
+        let ch = reg.canvas.y1 - reg.canvas.y0;
+        let z = ((cw / (x1 - x0).max(1.0)).min(ch / (y1 - y0).max(1.0)) * fill).clamp(0.01, 64.0);
+        self.app.zoom = z;
+        self.app.pan = (
+            reg.canvas.x0 + cw / 2.0 - (x0 + x1) / 2.0 * z,
+            reg.canvas.y0 + ch / 2.0 - (y0 + y1) / 2.0 * z,
+        );
+    }
+
+    /// N / ⇧N — zoom to the next / previous frame (help 360040328653). The
+    /// walk starts from the frame the canvas centre is inside, so repeated
+    /// presses visit the page in document order and wrap at either end.
+    fn zoom_to_frame(&mut self, step: i32) {
+        let frames: Vec<(String, String, f64, f64, f64, f64)> = {
+            let doc = self.app.doc();
+            let root = &doc.editor_ref().root;
+            root.children
+                .iter()
+                .filter(|n| matches!(n.kind, NodeKind::Frame { .. }))
+                .map(|n| {
+                    (
+                        n.id.clone(),
+                        n.name.clone(),
+                        n.transform.x,
+                        n.transform.y,
+                        n.w,
+                        n.h,
+                    )
+                })
+                .collect()
+        };
+        if frames.is_empty() {
+            self.app.status = "No frames on this page".into();
+            return;
+        }
+        let reg = self.app.editor_regions();
+        let centre = self.app.screen_to_world(Point::new(
+            (reg.canvas.x0 + reg.canvas.x1) / 2.0,
+            (reg.canvas.y0 + reg.canvas.y1) / 2.0,
+        ));
+        let at = frames.iter().position(|(_, _, x, y, w, h)| {
+            centre.x >= *x && centre.x <= x + w && centre.y >= *y && centre.y <= y + h
+        });
+        let next = match at {
+            Some(i) => (i as i32 + step).rem_euclid(frames.len() as i32) as usize,
+            None if step > 0 => 0,
+            None => frames.len() - 1,
+        };
+        let (_, name, x, y, w, h) = frames[next].clone();
+        self.zoom_to_rect(x, y, x + w, y + h, 0.9);
+        self.app.status = format!("Frame: {name}");
+    }
+
+    /// ⇧E — Figma's Design ↔ Prototype toggle (help 360040314193). Inspect is
+    /// a third tab on this host and the toggle leaves it alone.
+    fn toggle_right_tab(&mut self) {
+        use crate::state::RightTab;
+        let tab = if self.app.doc_ref().right_tab == RightTab::Prototype {
+            RightTab::Design
+        } else {
+            RightTab::Prototype
+        };
+        self.dispatch(Action::RightTab(tab));
+        self.app.status = if tab == RightTab::Prototype {
+            "Prototype tab".into()
+        } else {
+            "Design tab".into()
+        };
+    }
+
+    /// ⌘K / ⌘/ — the command palette, with its context refreshed before it
+    /// opens.
+    fn toggle_palette(&mut self) {
+        if self.app.palette.open {
+            self.app.palette.close();
+            return;
+        }
+        self.app.palette.open();
+        self.app.palette.register_standard_commands();
+        // Update context before showing. The dashboard is valid with zero
+        // open documents, so do not call `doc()` merely to populate it.
+        self.app.palette.has_selection = self
+            .app
+            .doc_opt()
+            .is_some_and(|doc| !doc.editor_ref().selection.is_empty());
+    }
+
+    /// ⌘R — Figma's rename: the selected layer's name becomes a field edit.
+    fn rename_selected_layer(&mut self) {
+        let Some(id) = self.app.doc_ref().selected_id() else {
+            self.app.status = "Select the layer to rename first".into();
+            return;
+        };
+        if !self.finish_edits() {
+            return;
+        }
+        self.app.begin_layer_rename(id);
+        self.app.status = "Renaming the layer".into();
+    }
+
     /// Zoom by `factor` anchored at screen point `p` (cursor / center).
     fn zoom_at(&mut self, p: Point, factor: f64) {
         let canvas = if self.app.screen == Screen::Board {
@@ -7612,15 +9897,7 @@ impl Host {
             }
         }
         let Some((x0, y0, x1, y1)) = bb else { return };
-        let reg = self.app.editor_regions();
-        let cw = reg.canvas.x1 - reg.canvas.x0;
-        let ch = reg.canvas.y1 - reg.canvas.y0;
-        let z = ((cw / (x1 - x0).max(1.0)).min(ch / (y1 - y0).max(1.0)) * 0.6).clamp(0.01, 64.0);
-        self.app.zoom = z;
-        self.app.pan = (
-            reg.canvas.x0 + cw / 2.0 - (x0 + x1) / 2.0 * z - 0.0,
-            reg.canvas.y0 + ch / 2.0 - (y0 + y1) / 2.0 * z,
-        );
+        self.zoom_to_rect(x0, y0, x1, y1, 0.6);
     }
 
     fn cmd_new_file(&mut self) {
@@ -8256,6 +10533,184 @@ impl Host {
         }
     }
 
+    /// File → Place image, and Figma's ⇧⌘K: pick one or more images, then
+    /// place them — *"place one or more image files in sequence"*.
+    fn cmd_place_image(&mut self) {
+        let picked = rfd::FileDialog::new()
+            .set_title("Place image")
+            .add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp"])
+            .pick_files();
+        let Some(paths) = picked else {
+            return;
+        };
+        self.place_images(&paths);
+    }
+
+    /// The half of `cmd_place_image` that does not need a dialog: register the
+    /// bytes, then either fill the selection with the image or arm the
+    /// placement tool with the queue.
+    fn place_images(&mut self, paths: &[std::path::PathBuf]) {
+        if self.app.doc_opt().is_none() {
+            self.app.status = "Open a document to place an image".into();
+            return;
+        }
+        let mut ids: Vec<String> = Vec::new();
+        for path in paths {
+            let Ok(bytes) = std::fs::read(path) else {
+                continue;
+            };
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("image")
+                .to_string();
+            let id =
+                self.app
+                    .doc()
+                    .doc
+                    .assets
+                    .register(&name, bytes, x_native::AssetSource::Embedded);
+            ids.push(id);
+        }
+        if ids.is_empty() {
+            self.app.status = "No image could be read".into();
+            return;
+        }
+        // Figma applies the image to the selection when there is one:
+        // *"Select an existing object on the canvas to replace its fill with
+        // the image or video"* (help 360040028034). Anything else arms the
+        // tool, which places one file per click or drag.
+        if ids.len() == 1 && self.apply_image_to_selection(&ids[0]) {
+            return;
+        }
+        self.app.placing_images = ids;
+        self.app.select_tool(Tool::PlaceImage);
+        self.app.status = if self.app.placing_images.len() == 1 {
+            "Click to place at the image's size, or drag to draw it".into()
+        } else {
+            format!(
+                "Click to place each image - {} picked",
+                self.app.placing_images.len()
+            )
+        };
+    }
+
+    /// Put a picked image on the selected layer. `false` when there is
+    /// nothing to apply it to, so the caller falls through to the placement
+    /// tool.
+    fn apply_image_to_selection(&mut self, asset: &str) -> bool {
+        let Some(id) = self.app.doc().selected_id() else {
+            return false;
+        };
+        self.fill_with_image(&id, asset);
+        true
+    }
+
+    /// Put an image on one layer the way Figma does when the image lands on
+    /// something: an image layer takes the new picture — its crop and fit mode
+    /// survive, they describe how the layer shows a picture, not which one
+    /// (help 360040675194) — and anything else takes it as a fill.
+    fn fill_with_image(&mut self, id: &str, asset: &str) {
+        let is_image = {
+            let root = &self.app.doc_ref().editor_ref().root;
+            matches!(
+                editor_ui::find_node(root, id).map(|n| &n.kind),
+                Some(NodeKind::Image { .. })
+            )
+        };
+        if is_image {
+            if self.app.doc().editor().set_image_asset(id, asset) {
+                self.app.mark_dirty();
+                self.app.status = "Image replaced".into();
+            } else {
+                self.app.status = "That image is already in place".into();
+            }
+            return;
+        }
+        self.app.doc().editor().set_fill(
+            id,
+            x_native::Paint::Pattern {
+                asset: asset.to_string(),
+                fit: ImageFit::Fill,
+            },
+        );
+        self.app.mark_dirty();
+        self.app.status = format!(
+            "Filled with {} - Fill mode is Fill",
+            self.app.image_label(asset)
+        );
+    }
+
+    /// The mouse-move half of a crop drag (help 360040675194): the picture
+    /// scales about the corner opposite the one being held — ⌥ moves both
+    /// sides, so the anchor is the frame's centre — or is pushed around inside
+    /// the frame when the press was inside it. Everything resolves in the
+    /// LAYER's own space, so a rotated layer crops in its own frame.
+    fn crop_drag(&mut self, corner: usize, start: Point, cur: Point, alt: bool) -> bool {
+        let Some(session) = self.app.crop.clone() else {
+            return false;
+        };
+        let (id, orig, box_wh, image_wh, fit) = {
+            let doc = self.app.doc_ref();
+            let Some(n) = crate::editor_ui::find_node(&doc.editor_ref().root, &session.id) else {
+                return false;
+            };
+            let NodeKind::Image {
+                fit,
+                placement,
+                asset,
+            } = &n.kind
+            else {
+                return false;
+            };
+            let Some((iw, ih)) = self.app.image_natural_size(asset) else {
+                return false;
+            };
+            (session.id.clone(), *placement, (n.w, n.h), (iw, ih), *fit)
+        };
+        let (start_l, cur_l) = {
+            let doc = self.app.doc_ref();
+            let Some(m) = crate::run::node_world(&doc.editor_ref().root, &id) else {
+                return false;
+            };
+            let inv = m.inverse();
+            (inv * start, inv * cur)
+        };
+        let next = crate::state::crop_placement_from(
+            &orig, box_wh, image_wh, corner, start_l, cur_l, alt, fit,
+        );
+        if next == orig {
+            return false;
+        }
+        if !self.app.doc().editor().set_image_placement(&id, next) {
+            return false;
+        }
+        if let Some(s) = self.app.crop.as_mut() {
+            s.steps += 1;
+        }
+        true
+    }
+
+    /// One file leaves the place-image queue per placement. The tool stays
+    /// armed while others are left — Figma places them one after another —
+    /// and hands the cursor back to Select with the last one.
+    fn place_image_taken(&mut self) {
+        if self.app.placing_images.is_empty() {
+            return;
+        }
+        self.app.placing_images.remove(0);
+        if self.app.placing_images.is_empty() {
+            self.app.tool = Tool::Select;
+            self.app.status = "Image placed".into();
+        } else {
+            self.app.tool = Tool::PlaceImage;
+            self.app.status = format!(
+                "Image placed - {} left to place",
+                self.app.placing_images.len()
+            );
+        }
+    }
+
     fn cmd_import_file(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
             .add_filter(
@@ -8757,7 +11212,13 @@ impl Host {
                 }
             }
             Action::NewFile => self.cmd_new_file(),
+            Action::ShowWelcome => {
+                self.app.welcome_open = true;
+                self.app.screen = crate::state::Screen::Dashboard;
+                self.app.status = "Welcome & shortcuts".into();
+            }
             Action::OnboardingSample => {
+                self.app.welcome_open = false;
                 mark_onboarding_complete();
                 let doc = crate::state::OpenDoc::getting_started();
                 self.app.docs.push(doc);
@@ -8766,10 +11227,14 @@ impl Host {
                 self.app.center_view();
             }
             Action::OnboardingBlank => {
+                self.app.welcome_open = false;
                 mark_onboarding_complete();
                 self.cmd_new_file();
             }
-            Action::OnboardingDismiss => mark_onboarding_complete(),
+            Action::OnboardingDismiss => {
+                self.app.welcome_open = false;
+                mark_onboarding_complete();
+            }
             Action::NewBoard => self.cmd_new_board(),
             Action::ImportFile => self.cmd_import_file(),
             Action::OpenRecent(i) => {
@@ -8968,7 +11433,11 @@ impl Host {
             Action::CloseDoc(i) => {
                 self.request_close_doc(i);
             }
-            Action::Tool(t) => self.app.tool = t,
+            Action::Tool(t) => self.app.select_tool(t),
+            Action::SetBrushStyle(style) => {
+                self.app.brush_style = style;
+                self.app.status = format!("Brush style: {}", style.label());
+            }
             Action::LeftTab(t) => {
                 self.app.doc().left_tab = t;
             }
@@ -9020,29 +11489,36 @@ impl Host {
                 let next = crate::theme::active_theme().next();
                 self.apply_theme(next);
             }
-            Action::ToggleColorPicker(is_fill) => {
+            Action::ToggleColorPicker(target) => {
+                // The popover is ONE control; its target says where the colour
+                // lands — a fill, a stroke, or an effect's Fill row.
+                let same = self
+                    .app
+                    .color_picker_popup
+                    .as_ref()
+                    .is_some_and(|(t, _, _)| *t == target);
+                let effect_fill = matches!(target, crate::state::PaintTarget::Effect(_));
                 let (fill_open, stroke_open) = {
                     let doc = self.app.doc();
-                    if is_fill {
-                        doc.color_picker_fill_open = !doc.color_picker_fill_open;
-                        if doc.color_picker_fill_open {
-                            doc.color_picker_stroke_open = false;
-                        }
+                    if same {
+                        doc.color_picker_fill_open = false;
+                        doc.color_picker_stroke_open = false;
+                    } else if target.is_fill() {
+                        doc.color_picker_fill_open = true;
+                        doc.color_picker_stroke_open = false;
                     } else {
-                        doc.color_picker_stroke_open = !doc.color_picker_stroke_open;
-                        if doc.color_picker_stroke_open {
-                            doc.color_picker_fill_open = false;
-                        }
+                        doc.color_picker_fill_open = false;
+                        doc.color_picker_stroke_open = !effect_fill;
                     }
                     (doc.color_picker_fill_open, doc.color_picker_stroke_open)
                 };
-                if fill_open || stroke_open {
+                if !same && (fill_open || stroke_open || effect_fill) {
                     // Keep the popup anchored to the actual click instead of
                     // the retired chrome renderer. The active editor painter
                     // owns the popup and appends its own hit targets.
                     let p = self.app.mouse;
                     self.app.color_picker_popup =
-                        Some((is_fill, Rect::new(p.x, p.y, p.x + 1.0, p.y + 1.0), true));
+                        Some((target, Rect::new(p.x, p.y, p.x + 1.0, p.y + 1.0), true));
                 } else {
                     self.app.color_picker_popup = None;
                 }
@@ -9053,7 +11529,7 @@ impl Host {
                 doc.color_picker_stroke_open = false;
                 self.app.color_picker_popup = None;
             }
-            Action::PaintPreset(is_fill, hex) => {
+            Action::PaintPreset(target, hex) => {
                 let Some(color) = crate::state::parse_hex(&hex) else {
                     self.app.status = "Invalid color preset".into();
                     return;
@@ -9062,6 +11538,16 @@ impl Host {
                     self.app.status = "Select a layer before changing its color".into();
                     return;
                 };
+                // An effect's **Fill** row: the colour belongs to the effect,
+                // never to the layer's own fill (Figma's shadow Fill).
+                if let crate::state::PaintTarget::Effect(i) = target {
+                    if self.app.doc().editor().set_effect_color(&id, i, color) {
+                        self.app.mark_dirty();
+                        self.app.status = "Effect colour updated".into();
+                    }
+                    return;
+                }
+                let is_fill = target.is_fill();
                 let info = crate::editor_ui::sel_info(&self.app);
                 let changed = if is_fill {
                     self.app.doc().editor().set_fill(&id, Paint::Solid(color));
@@ -9168,10 +11654,22 @@ impl Host {
                     l.remove(i);
                 }
             }),
-            Action::ProtoTrigger(i) => self.proto_trigger_cycle(i),
+            Action::ProtoTrigger(i) => {
+                // Figma's trigger control is a dropdown; the panel shows one
+                // menu at a time, so opening this one closes the scroll row's
+                let open = self.app.dropdown_proto_trigger != Some(i);
+                self.app.dropdown_proto_trigger = if open { Some(i) } else { None };
+                self.app.dropdown_proto_scroll = None;
+            }
+            Action::ProtoSetTrigger(i, row) => {
+                self.app.dropdown_proto_trigger = None;
+                self.proto_set_trigger(i, row);
+            }
             Action::ProtoDest(i, dir) => self.proto_dest_cycle(i, dir),
+            Action::ProtoToggleMatching(i) => self.proto_toggle_matching(i),
             Action::ProtoSpeed(i) => self.proto_speed_cycle(i),
             Action::ProtoAnimation(i) => self.proto_animation_cycle(i),
+            Action::ProtoDirection(i, dir) => self.proto_direction_set(i, dir),
             Action::ProtoActionType(i) => self.proto_action_type_cycle(i),
             Action::ProtoEditDelay(i) => self.proto_edit_delay(i),
             Action::ProtoEditKey(i) => self.proto_edit_key(i),
@@ -9200,9 +11698,53 @@ impl Host {
                     .to_string();
                 }
             }
+            // Figma's Prototype-tab "Scroll behavior" block: the frame's
+            // Overflow menu, and the Position menu for an object that sits on
+            // a frame that scrolls.
+            Action::ProtoScrollMenu(which) => {
+                let open = self.app.dropdown_proto_scroll != Some(which);
+                self.app.dropdown_proto_scroll = if open { Some(which) } else { None };
+                self.app.dropdown_proto_trigger = None;
+            }
+            Action::ProtoSetOverflow(row) => {
+                self.app.dropdown_proto_scroll = None;
+                let Some(id) = self.app.doc_ref().selected_id() else {
+                    return;
+                };
+                let current = {
+                    let root = &self.app.doc_ref().editor_ref().root;
+                    match crate::editor_ui::find_node(root, &id) {
+                        Some(n) => n.overflow,
+                        None => return,
+                    }
+                };
+                if row >= crate::state::PROTO_OVERFLOW_VALUES.len() {
+                    return;
+                }
+                let ov = crate::state::proto_overflow_for_row(row, current);
+                if self.app.doc().editor().set_overflow(&id, ov) {
+                    let label = crate::state::PROTO_OVERFLOW_LABELS[row];
+                    self.app.mark_dirty();
+                    self.app.status = format!("Overflow: {label}");
+                }
+            }
+            Action::ProtoSetPosition(row) => {
+                self.app.dropdown_proto_scroll = None;
+                let Some(id) = self.app.doc_ref().selected_id() else {
+                    return;
+                };
+                let Some(pos) = crate::state::PROTO_POSITION_VALUES.get(row).copied() else {
+                    return;
+                };
+                if self.app.doc().editor().set_scroll_position(&id, pos) {
+                    self.app.mark_dirty();
+                    self.app.status = format!("Scroll position: {}", pos.label());
+                }
+            }
             Action::FlowEnter => self.flow_enter(),
             Action::FlowBack => self.flow_back(),
             Action::FlowExit => {
+                self.flow_clear_scroll();
                 self.app.flow = None;
                 self.app.status = "Flow preview ended".into();
             }
@@ -9380,24 +11922,27 @@ impl Host {
                         self.app.open_blank();
                     } // New file
                     1 => self.cmd_open_file(),    // Open file…
-                    3 => self.cmd_save(),         // Save
-                    4 => self.cmd_save_as(),      // Save as…
-                    5 => self.cmd_open_version(), // Open archived version
-                    6 => {
+                    2 => self.cmd_place_image(),  // Place image…
+                    4 => self.cmd_save(),         // Save
+                    5 => self.cmd_save_as(),      // Save as…
+                    6 => self.cmd_open_version(), // Open archived version
+                    7 => {
                         self.dispatch(Action::FileDuplicate);
                     } // Duplicate file
-                    7 => {
+                    8 => {
                         self.dispatch(Action::FileMoveToDrafts);
                     } // Move to drafts
-                    9 => self.cmd_export(false),  // Export as…
-                    10 => {
+                    10 => self.cmd_export(false), // Export as…
+                    11 => {
                         self.dispatch(Action::OpenFind);
                     } // Find…
-                    12 => {
-                        // Dark mode toggle
-                        let next = crate::theme::active_theme().next();
-                        self.apply_theme(next);
-                    }
+                    13 => self.apply_theme(x_native::ui::ThemeId::Graphite),
+                    14 => self.apply_theme(x_native::ui::ThemeId::Daylight),
+                    // Welcome & shortcuts — the first-launch card, on
+                    // demand (it used to be reachable exactly once, ever).
+                    // 16, not 17: the row ids are menu indices and the
+                    // retired High Contrast row sat between them.
+                    16 => self.dispatch(Action::ShowWelcome),
                     _ => {}
                 }
             }
@@ -9530,36 +12075,26 @@ impl Host {
                 if !self.finish_edits() {
                     return;
                 }
-                if i < self.app.doc_ref().editors.len() {
-                    self.app.doc().page = i;
-                    self.app.page_menu_cmd(crate::state::PageMenuCmd::Delete);
+                // delete the row that was clicked — the old body switched to
+                // the page first (`page = i`) and then deleted "the active
+                // page", so ✕ on a background page stole the selection before
+                // removing anything, and ✕ on the active page was unreachable
+                // because the trash was only painted for inactive rows.
+                if self.app.delete_page(i) {
+                    self.app.status = "Deleted page".into();
                 }
+            }
+            Action::LayerRename(id) => {
+                // the press handler above owns this action (single press =
+                // select, repeat = rename); a dispatched one just selects
+                let doc = self.app.doc();
+                doc.editor().selection = vec![id];
             }
             Action::TreeRow(id) => {
-                if let Some(i) = id.strip_prefix("mock:") {
-                    // v45 mock rows: selection is purely visual (like the
-                    // HTML's selectLayer), independent of the document
-                    let i: usize = i.parse().unwrap_or(usize::MAX);
-                    let doc = self.app.doc();
-                    doc.editor().selection.clear();
-                    for (j, m) in doc.mock_layers.iter_mut().enumerate() {
-                        m.selected = j == i;
-                    }
-                } else {
-                    let doc = self.app.doc();
-                    doc.mock_layers.iter_mut().for_each(|m| m.selected = false);
-                    doc.editor().selection = vec![id];
-                }
+                let doc = self.app.doc();
+                doc.editor().selection = vec![id];
             }
             Action::TreeToggle(id) => {
-                if let Some(i) = id.strip_prefix("mock:") {
-                    let i: usize = i.parse().unwrap_or(usize::MAX);
-                    let doc = self.app.doc();
-                    if let Some(m) = doc.mock_layers.get_mut(i) {
-                        m.expanded = !m.expanded;
-                    }
-                    return;
-                }
                 let doc = self.app.doc();
                 if doc.expanded.contains(&id) {
                     doc.expanded.remove(&id);
@@ -9567,6 +12102,8 @@ impl Host {
                     doc.expanded.insert(id);
                 }
             }
+            // the shortcuts panel's scrim: a press outside the sheet
+            Action::CloseShortcuts => self.app.shortcuts_open = false,
             Action::RenameStart => {
                 let d = self.app.doc();
                 let name = d.file_label.clone().unwrap_or_else(|| d.name.clone());
@@ -9577,6 +12114,95 @@ impl Host {
                 });
             }
             Action::FrameDropdown => self.app.dropdown_frame = !self.app.dropdown_frame,
+            Action::ConstraintDropdown(axis) => {
+                // one menu at a time: the open axis is the state, and pressing
+                // the field again closes it
+                self.app.dropdown_constraint = if self.app.dropdown_constraint == Some(axis) {
+                    None
+                } else {
+                    Some(axis)
+                };
+            }
+            // The plus press: "a blue plus that we can use to add a new
+            // connection" — pressing it takes hold of the anchor, and the drag
+            // from there is the gesture.
+            Action::ConnMenu => {
+                if let Some(src) = self.conn_anchor() {
+                    let cur = self.conn_anchor_world(&src).unwrap_or(Point::new(0.0, 0.0));
+                    self.app.drag = Some(Drag::ProtoConnect {
+                        src,
+                        cur,
+                        target: None,
+                    });
+                }
+            }
+            Action::ConnDelete => {
+                let Some(i) = self.app.conn_sel else {
+                    return;
+                };
+                let conn = {
+                    let doc = self.app.doc_ref();
+                    crate::editor_ui::page_connections(&doc.editor_ref().root)
+                        .get(i)
+                        .cloned()
+                };
+                let Some(conn) = conn else {
+                    self.app.conn_sel = None;
+                    return;
+                };
+                let wrote = {
+                    let doc = self.app.doc();
+                    let mut list = crate::editor_ui::find_node(&doc.editor_ref().root, &conn.src)
+                        .map(x_native::effective_interactions)
+                        .unwrap_or_default();
+                    let before = list.len();
+                    list.retain(|ix| {
+                        crate::editor_ui::proto_dest_of(&ix.action) != Some(conn.dest.clone())
+                    });
+                    if list.len() == before {
+                        false
+                    } else {
+                        doc.editor().set_node_interactions(&conn.src, list)
+                    }
+                };
+                if wrote {
+                    self.app.conn_sel = None;
+                    self.app.mark_dirty();
+                    self.app.status = "Connection removed".into();
+                }
+            }
+            Action::ScaleCell(cell) => {
+                self.app.scale_cell = cell.min(crate::state::SCALE_CELLS - 1);
+            }
+            Action::SetConstraint(axis, row) => {
+                self.app.dropdown_constraint = None;
+                let Some(id) = self.app.doc_ref().selected_id() else {
+                    return;
+                };
+                let before = {
+                    let doc = self.app.doc();
+                    match crate::editor_ui::find_node(&doc.editor_ref().root, &id) {
+                        Some(n) => n.pin,
+                        None => return,
+                    }
+                };
+                let (hp, vp, label) = match axis {
+                    crate::state::ConstraintAxis::Horizontal => {
+                        let (label, hp) = crate::state::CONSTRAINT_H[row];
+                        (hp, before.1, label)
+                    }
+                    crate::state::ConstraintAxis::Vertical => {
+                        let (label, vp) = crate::state::CONSTRAINT_V[row];
+                        (before.0, vp, label)
+                    }
+                };
+                if (hp, vp) == before {
+                    return;
+                }
+                self.app.doc().editor().set_pin(&id, hp, vp);
+                self.app.mark_dirty();
+                self.app.status = format!("Constraint set: {label}");
+            }
             Action::ZoomMenu => self.app.dropdown_zoom = !self.app.dropdown_zoom,
             Action::ZoomStep(i) => {
                 self.app.dropdown_zoom = false;
@@ -9693,6 +12319,16 @@ impl Host {
                 if f == FieldId::FontFamily {
                     self.app.font_picker_open = !self.app.font_picker_open;
                     self.app.field = None;
+                } else if self.app.field.as_ref().map(|e| e.id) == Some(f) {
+                    // already editing THIS field: keep the buffer. Re-reading
+                    // `field_initial` here discarded what had been typed, so
+                    // the second press of a double-click inside a numeric or
+                    // hex field — the gesture people use to select the whole
+                    // value — wiped the edit instead. Figma selects the text
+                    // and leaves it alone; the caret jump from `text_edit`
+                    // would otherwise fight `field_select_all`.
+                    self.app.field_select_all = true;
+                    self.app.text_edit = None;
                 } else {
                     let buffer = field_initial(&self.app, f);
                     self.app.field_select_all = true;
@@ -9711,6 +12347,23 @@ impl Host {
                 doc.flow = i;
                 doc.flow_boot_mock = false;
                 self.apply_auto_layout();
+            }
+            Action::ToggleShowName => {
+                let doc = self.app.doc();
+                if let Some(id) = doc.selected_id() {
+                    if let Some(n) = x_native::editor::find(&doc.editor_ref().root, &id) {
+                        if matches!(n.kind, NodeKind::Frame { .. }) {
+                            let show = !n.show_name;
+                            doc.editor().set_show_name(&id, show);
+                            self.app.mark_dirty();
+                            self.app.status = if show {
+                                "Frame name is shown on the canvas".into()
+                            } else {
+                                "Frame name is hidden on the canvas".into()
+                            };
+                        }
+                    }
+                }
             }
             Action::ClipContent => {
                 let doc = self.app.doc();
@@ -9770,22 +12423,258 @@ impl Host {
                     self.app.mark_dirty();
                 }
             }
-            Action::AddEffect => {
+            Action::ToggleEffectAdd => {
+                let open = !self.app.effect_add_open;
+                self.app.close_panel_menus();
+                self.app.effect_add_open = open;
+            }
+            Action::AddEffect(kind) => {
+                self.app.effect_add_open = false;
                 let Some(id) = self.app.doc().selected_id() else {
                     self.app.status = "Select a layer before adding an effect".into();
                     return;
                 };
-                let effect = x_native::Effect::DropShadow {
-                    dx: 0.0,
-                    dy: 4.0,
-                    blur: 12.0,
-                    color: x_native::Color::from_rgba8(0, 0, 0, 96),
-                };
-                if self.app.doc().editor().add_effect_layer(&id, effect) {
+                if self
+                    .app
+                    .doc()
+                    .editor()
+                    .add_effect_layer(&id, x_native::Effect::default_of(kind))
+                {
+                    let n = self.effect_count(&id);
                     self.app.mark_dirty();
-                    self.app.status = "Drop shadow added".into();
+                    self.app.effect_settings = Some(n.saturating_sub(1));
+                    self.app.status = format!("{} added", kind.label());
                 }
             }
+            Action::ToggleEffectKind(i) => {
+                let open = if self.app.effect_kind_open == Some(i) {
+                    None
+                } else {
+                    Some(i)
+                };
+                self.app.close_panel_menus();
+                self.app.effect_kind_open = open;
+            }
+            Action::SetEffectKind(i, kind) => {
+                self.app.effect_kind_open = None;
+                let Some(id) = self.app.doc().selected_id() else {
+                    return;
+                };
+                if self.app.doc().editor().set_effect_kind(&id, i, kind) {
+                    self.app.mark_dirty();
+                    self.app.status = format!("Effect {}", kind.label());
+                }
+            }
+            Action::ToggleEffectSettings(i) => {
+                let open = if self.app.effect_settings == Some(i) {
+                    None
+                } else {
+                    Some(i)
+                };
+                self.app.close_panel_menus();
+                self.app.effect_settings = open;
+            }
+            Action::ToggleEffectVisible(i) => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    return;
+                };
+                let now = self
+                    .effect_layer(&id, i)
+                    .map(|l| !l.visible)
+                    .unwrap_or(false);
+                if self
+                    .app
+                    .doc()
+                    .editor()
+                    .set_effect_layer_visible(&id, i, now)
+                {
+                    self.app.mark_dirty();
+                }
+            }
+            Action::RemoveEffect(i) => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    return;
+                };
+                if self.app.doc().editor().remove_effect_layer(&id, i) {
+                    self.app.mark_dirty();
+                    if self.app.effect_settings == Some(i) {
+                        self.app.effect_settings = None;
+                    }
+                    self.app.status = "Effect removed".into();
+                }
+            }
+            Action::DuplicateEffect(i) => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    return;
+                };
+                if self.app.doc().editor().duplicate_effect_layer(&id, i) {
+                    self.app.mark_dirty();
+                    self.app.effect_settings = Some(i + 1);
+                    self.app.status = "Effect duplicated".into();
+                }
+            }
+            Action::ToggleEffectBlend(i) => {
+                let open = if self.app.effect_blend_open == Some(i) {
+                    None
+                } else {
+                    Some(i)
+                };
+                self.app.close_panel_menus();
+                self.app.effect_blend_open = open;
+            }
+            Action::SetEffectBlend(i, blend) => {
+                self.app.effect_blend_open = None;
+                let Some(id) = self.app.doc().selected_id() else {
+                    return;
+                };
+                if self
+                    .app
+                    .doc()
+                    .editor()
+                    .set_effect_layer_blend(&id, i, blend)
+                {
+                    self.app.mark_dirty();
+                    self.app.status = format!("Effect blend: {}", blend.label());
+                }
+            }
+            Action::ToggleLayerBlend => {
+                let open = !self.app.layer_blend_open;
+                self.app.close_panel_menus();
+                self.app.layer_blend_open = open;
+            }
+            Action::UseAsMask => {
+                let masked = self
+                    .app
+                    .doc()
+                    .editor()
+                    .use_as_mask(&x_native::fresh_id("mask"));
+                if let Some(masked) = masked {
+                    self.app.mark_dirty();
+                    self.app.status = if masked {
+                        "Mask applied - pick a type in the Mask section".into()
+                    } else {
+                        "Mask removed".into()
+                    };
+                }
+            }
+            Action::ToggleMaskType => {
+                let open = !self.app.mask_type_open;
+                self.app.close_panel_menus();
+                self.app.mask_type_open = open;
+            }
+            Action::SetMaskType(kind) => {
+                self.app.mask_type_open = false;
+                if self.app.doc().editor().set_mask_type(kind) {
+                    self.app.mark_dirty();
+                    self.app.status = format!("Mask type: {}", kind.label());
+                }
+            }
+            Action::ToggleListStyle => {
+                // Figma's **List style** picker in the type-details block
+                // (help 360040449773): the same three rows the Type panel
+                // shows, and the same open/close contract as the blend menus.
+                let open = !self.app.list_style_open;
+                self.app.close_panel_menus();
+                self.app.list_style_open = open;
+            }
+            Action::SetListStyle(style) => {
+                self.app.list_style_open = false;
+                if self.app.doc().editor().set_list_style(style) {
+                    self.app.mark_dirty();
+                    self.app.status = format!("List style: {}", style.label());
+                }
+            }
+            Action::ToggleTextResize => {
+                // Figma's ***Resizing*** control (help 27378154668951):
+                // **Fixed size** pins the box, **Auto width** fits it to the
+                // text again.
+                if self.app.toggle_text_resize() {
+                    self.app.mark_dirty();
+                    self.app.status = if self.app.is_text_fixed() {
+                        "Fixed size".into()
+                    } else {
+                        "Auto width".into()
+                    };
+                }
+            }
+            Action::ToggleCorners => {
+                // Figma's **Independent corners** row (help 360050986854): it
+                // opens the corner-radius panel, and closing it quits that
+                // panel's fields — they belong to it.
+                let open = !self.app.corner_open;
+                self.app.close_panel_menus();
+                self.app.corner_open = open;
+                if open {
+                    self.app.status = "Corner radius - one field per corner, and smoothing".into();
+                } else {
+                    if matches!(
+                        self.app.field.as_ref().map(|f| f.id),
+                        Some(FieldId::CornerRadius(_))
+                    ) {
+                        self.app.field = None;
+                    }
+                    self.app.status = String::new();
+                }
+            }
+            Action::SetCornerSmoothing(v) => {
+                self.set_corner_smoothing(v);
+            }
+            Action::CornerSmoothingIos => {
+                // Figma's chip: "click iOS to set corner smoothing to 60%"
+                self.dispatch(Action::SetCornerSmoothing(0.6));
+            }
+            Action::ToggleRotationOrigin => {
+                self.app.rotation_origin_on = !self.app.rotation_origin_on;
+                self.app.drag = None;
+                self.app.status = if self.app.rotation_origin_on {
+                    "Rotation origin on - drag the target to move it".into()
+                } else {
+                    "Rotation origin off".into()
+                };
+            }
+            Action::SetLayerBlend(blend) => {
+                self.app.layer_blend_open = false;
+                let Some(id) = self.app.doc().selected_id() else {
+                    return;
+                };
+                if self.app.doc().editor().set_layer_blend(&id, blend) {
+                    self.app.mark_dirty();
+                    self.app.status = format!("Blend mode: {}", blend.label());
+                }
+            }
+            Action::TogglePaintBlend(t) => {
+                let open = if self.app.paint_blend_open == Some(t) {
+                    None
+                } else {
+                    Some(t)
+                };
+                self.app.close_panel_menus();
+                self.app.paint_blend_open = open;
+            }
+            Action::SetPaintBlend(t, blend) => {
+                self.app.paint_blend_open = None;
+                let Some(id) = self.app.doc().selected_id() else {
+                    return;
+                };
+                let done = match t {
+                    crate::state::PaintTarget::Effect(i) => self
+                        .app
+                        .doc()
+                        .editor()
+                        .set_effect_layer_blend(&id, i, blend),
+                    target => self.app.doc().editor().set_paint_layer_blend(
+                        &id,
+                        target.is_fill(),
+                        0,
+                        blend,
+                    ),
+                };
+                if done {
+                    self.app.mark_dirty();
+                    self.app.status = format!("Blend mode: {}", blend.label());
+                }
+            }
+            Action::EffectRow(i) => self.effect_row_press(i),
             Action::AddGuide => {
                 // drop a vertical guide at the canvas center
                 let reg = self.app.editor_regions();
@@ -9853,23 +12742,83 @@ impl Host {
                     }
                 });
             }
-            Action::ToggleMainSizing => {
+            Action::LayoutAxisMenu(is_w) => {
+                // one panel menu at a time
+                let open = self.app.dropdown_layout_axis != Some(is_w);
+                self.app.dropdown_layout_axis = if open { Some(is_w) } else { None };
+                self.app.dropdown_stacking = false;
+                self.app.dropdown_constraint = None;
+            }
+            Action::SetAxisSizing(is_w, sizing) => {
+                self.app.dropdown_layout_axis = None;
                 self.app.modify_selected_layout(|l| {
-                    l.sizing = match l.sizing {
-                        x_native::Sizing::Hug => x_native::Sizing::Fixed,
-                        _ => x_native::Sizing::Hug,
+                    // the frame's own `sizing` is the MAIN axis; the W field is
+                    // the main one only while the frame runs horizontally
+                    let horizontal = l.direction == x_native::LayoutDirection::Horizontal;
+                    if is_w == horizontal {
+                        l.sizing = sizing;
+                    } else {
+                        l.cross_sizing = Some(sizing);
                     }
                 });
+                self.app.status = format!("Sizing: {}", sizing_word(sizing));
             }
-            Action::ToggleCrossSizing => {
+            Action::AddAxisLimit(is_w, is_max) => {
+                self.app.dropdown_layout_axis = None;
+                let (w, h) = {
+                    let s = crate::editor_ui::sel_info(&self.app);
+                    (s.w, s.h)
+                };
+                let cur = (if is_w { w } else { h }).max(1.0).round();
                 self.app.modify_selected_layout(|l| {
-                    let cur = l.cross_sizing.unwrap_or(l.sizing);
-                    let next = match cur {
-                        x_native::Sizing::Hug => x_native::Sizing::Fixed,
-                        _ => x_native::Sizing::Hug,
+                    let (min, max) = if is_w {
+                        (&mut l.min_width, &mut l.max_width)
+                    } else {
+                        (&mut l.min_height, &mut l.max_height)
                     };
-                    l.cross_sizing = Some(next);
+                    if is_max {
+                        *max = Some(cur);
+                    } else {
+                        *min = Some(cur);
+                    }
                 });
+                // "From the new field that appears, enter a value" — the row
+                // opens on the field the menu just created
+                let fid = match (is_w, is_max) {
+                    (true, false) => FieldId::MinWidth,
+                    (true, true) => FieldId::MaxWidth,
+                    (false, false) => FieldId::MinHeight,
+                    (false, true) => FieldId::MaxHeight,
+                };
+                self.dispatch(Action::Field(fid));
+                let axis = if is_w { "width" } else { "height" };
+                self.app.status = format!("Added {} {axis}", if is_max { "max" } else { "min" });
+            }
+            Action::ClearAxisLimits(is_w) => {
+                self.app.dropdown_layout_axis = None;
+                self.app.modify_selected_layout(|l| {
+                    if is_w {
+                        l.min_width = None;
+                        l.max_width = None;
+                    } else {
+                        l.min_height = None;
+                        l.max_height = None;
+                    }
+                });
+                self.app.status = format!(
+                    "Removed min and max {}",
+                    if is_w { "width" } else { "height" }
+                );
+            }
+            Action::StackingMenu => {
+                let open = !self.app.dropdown_stacking;
+                self.app.dropdown_stacking = open;
+                self.app.dropdown_layout_axis = None;
+            }
+            Action::SetCanvasStacking(v) => {
+                self.app.dropdown_stacking = false;
+                self.app.modify_selected_layout(|l| l.canvas_stacking = v);
+                self.app.status = format!("Canvas stacking: {}", v.label());
             }
             Action::SetChildFill(fill) => {
                 self.app.modify_child_constraints(|c| {
@@ -10095,6 +13044,37 @@ impl Host {
                     self.app.reset_instance_props(&iid);
                 }
             }
+            // Figma's instance More-actions menu (help 360039150733).
+            Action::GoToMainComponent => {
+                if let Some(master) = self.app.go_to_main_component() {
+                    let name = {
+                        let doc = self.app.doc();
+                        crate::editor_ui::find_node(&doc.editor_ref().root, &master)
+                            .map(|n| n.name.clone())
+                            .unwrap_or_default()
+                    };
+                    self.app.status = format!("Selected main component {name}");
+                    // Figma opens the master's file "to the location of the
+                    // main component"; in one file that means the viewport
+                    // travels to it.
+                    self.zoom_to_selection();
+                }
+            }
+            Action::PushChangesToMain => {
+                if let Some((iid, component)) = self.app.selected_instance() {
+                    let changed = self.app.push_instance_overrides(&iid);
+                    self.app.status = if changed == 0 {
+                        "Nothing to push — this instance has no overrides".to_string()
+                    } else {
+                        format!("Pushed {changed} layer(s) to {component}")
+                    };
+                }
+            }
+            Action::ResetInstanceChange(target) => {
+                if self.app.reset_instance_change(&target) {
+                    self.app.status = "Reset one change".into();
+                }
+            }
             Action::PaletteToggle => {
                 self.app.palette.open();
                 self.app.palette.query.clear();
@@ -10140,10 +13120,17 @@ impl Host {
                     }
                 };
                 match matched {
-                    Some(ids) if !ids.is_empty() => {
+                    Some(ids) if ids.len() > 1 => {
                         let count = ids.len();
                         self.app.doc().editor().selection = ids;
                         self.app.status = format!("Selected {count} matching layers");
+                    }
+                    Some(_) => {
+                        // a page's top-level layer, or one whose container holds
+                        // no counterpart: Figma matches an object inside a frame
+                        // or group
+                        self.app.status =
+                            "No matching layers in the other frames and groups".into();
                     }
                     _ => {
                         self.app.status = "Select exactly one layer to find matching".into();
@@ -10302,7 +13289,13 @@ impl Host {
                 let parent = {
                     let editor = self.app.doc().editor();
                     match editor.selection.len() {
-                        1 => editor.get_parent_id(&editor.selection[0].clone()),
+                        1 => editor
+                            .get_parent_id(&editor.selection[0].clone())
+                            // the page is not a layer: Figma walks up to the
+                            // top-level object and stops there. Without this the
+                            // page root became the selection, and the inspector
+                            // then described the canvas instead of a layer.
+                            .filter(|p| *p != editor.root.id),
                         _ => None,
                     }
                 };
@@ -10838,6 +13831,15 @@ impl Host {
                 }
             }
 
+            Action::CropApply => {
+                self.app.crop_apply();
+            }
+            Action::CropCancel => {
+                self.app.crop_cancel();
+            }
+            Action::CropResizeToFit => {
+                self.app.crop_resize_to_fit();
+            }
             Action::SetImageFillMode { mode } => {
                 let Some(id) = self.app.doc().selected_id() else {
                     self.app.status = "Select an image layer first".into();
@@ -10870,6 +13872,13 @@ impl Host {
                 if changed {
                     self.app.mark_dirty();
                     self.app.status = format!("Image fill mode set to {mode}");
+                    // Figma's third way into crop mode: the fill mode becoming
+                    // **Crop** is what cropping an image looks like from the
+                    // panel, so the crop frame opens with it
+                    // (help 360040675194)
+                    if fit == ImageFit::Crop {
+                        self.app.begin_crop(&id);
+                    }
                 } else {
                     self.app.status = "Select an image layer to change its fill mode".into();
                 }
@@ -10966,6 +13975,11 @@ impl Host {
         };
         self.app.field = None;
         self.app.field_select_all = false;
+        // the tree's name zone paints the edit box only while the field is
+        // open, so the target only lives as long as the field does
+        if f.id != FieldId::LayerName {
+            self.app.layer_edit_id = None;
+        }
         let raw = f.buffer.trim().to_string();
         match f.id {
             FieldId::DocName => {
@@ -10978,6 +13992,20 @@ impl Host {
             }
             FieldId::PageName => {
                 self.app.commit_page_rename(&raw);
+            }
+            FieldId::LayerName => {
+                // Figma: Enter (or clicking away) applies, Esc cancels — the
+                // cancel path clears the field without committing, so an empty
+                // or unchanged name here is simply a no-op.
+                if let Some(id) = self.app.layer_edit_id.take() {
+                    let renamed = {
+                        let doc = self.app.doc();
+                        doc.editor().rename_node(id.as_str(), &raw)
+                    };
+                    if renamed {
+                        self.app.mark_dirty();
+                    }
+                }
             }
             FieldId::TreeSearch => {
                 // search stays open after Enter (Figma): the query lives
@@ -11058,6 +14086,18 @@ impl Host {
                     self.app.zoom = (v / 100.0).clamp(0.01, 64.0);
                 }
             }
+            FieldId::MinWidth | FieldId::MaxWidth | FieldId::MinHeight | FieldId::MaxHeight => {
+                // an empty field clears its own limit, a number sets it —
+                // Figma's fields behave the same way, and the Width/Height
+                // menu's "Remove min and max" is the row that clears the pair
+                let v = raw.parse::<f64>().ok().filter(|n| n.is_finite());
+                self.app.modify_selected_layout(|l| match f.id {
+                    FieldId::MinWidth => l.min_width = v,
+                    FieldId::MaxWidth => l.max_width = v,
+                    FieldId::MinHeight => l.min_height = v,
+                    _ => l.max_height = v,
+                });
+            }
             FieldId::Gap | FieldId::PadH | FieldId::PadV => {
                 if let Some(v) = raw.parse::<f64>().ok().filter(|n| n.is_finite()) {
                     match f.id {
@@ -11130,6 +14170,32 @@ impl Host {
     }
 
     fn apply_field_to_selection(&mut self, id: FieldId, raw: &str) {
+        // Effects list: one numeric setting of one effect (X / Y / Blur /
+        // Radius / Density). Resolved from the field itself, so the panel's
+        // rows and this writer can never disagree about which is which.
+        if let Some((index, field)) = id.effect_target() {
+            let v = raw
+                .trim()
+                .trim_end_matches('%')
+                .trim_end_matches("px")
+                .trim()
+                .parse::<f64>()
+                .ok()
+                .filter(|n| n.is_finite());
+            let Some(v) = v else { return };
+            let Some(node_id) = self.app.doc().selected_id() else {
+                return;
+            };
+            if self
+                .app
+                .doc()
+                .editor()
+                .set_effect_field(&node_id, index, field, v)
+            {
+                self.app.mark_dirty();
+            }
+            return;
+        }
         let info = crate::editor_ui::sel_info(&self.app);
         let aspect_ratio_locked = self.app.aspect_ratio_locked;
         let sel = self.app.doc().selected_id();
@@ -11183,7 +14249,9 @@ impl Host {
             }
             FieldId::Rotation => {
                 if let Some(deg) = num(raw) {
-                    doc.editor().rotate(&node_id, deg.to_radians());
+                    // the field takes the whole selection and Figma's range:
+                    // past 180 the count runs back down (195° → -165°)
+                    doc.editor().set_selection_rotation(deg);
                     self.app.mark_dirty();
                 }
             }
@@ -11196,8 +14264,22 @@ impl Host {
             }
             FieldId::Radius => {
                 if let Some(v) = num(raw) {
-                    doc.editor().set_corners(&node_id, v.max(0.0), None);
-                    self.app.mark_dirty();
+                    // the row is the shape's single value; on a frame that
+                    // value lives as four equal corners
+                    if doc.editor().set_uniform_radius(&node_id, v.max(0.0)) {
+                        self.app.mark_dirty();
+                    }
+                }
+            }
+            FieldId::CornerRadius(corner) => {
+                if let Some(v) = num(raw) {
+                    // Figma's **Independent corners**: this field's corner only
+                    if doc
+                        .editor()
+                        .set_corner_radius(&node_id, corner.min(3), v.max(0.0))
+                    {
+                        self.app.mark_dirty();
+                    }
                 }
             }
             FieldId::FillHex => {
@@ -11287,6 +14369,72 @@ impl Host {
                     self.app.mark_dirty();
                 }
             }
+            FieldId::ScaleFactor => {
+                if let Some(f) = parse_scale(raw) {
+                    if self.apply_scale_factor(f) {
+                        self.app.status = format!("Scaled to {}%", (f * 100.0).round() as i64);
+                    }
+                }
+            }
+            FieldId::ScaleW | FieldId::ScaleH => {
+                // Figma: type a dimension, and "the other dimension field will
+                // automatically update" — the factor is the ratio the box has
+                // to reach, and the engine's proportional scale does the rest.
+                let current = {
+                    let doc = self.app.doc();
+                    selection_box(&doc.editor_ref().root, &doc.editor_ref().selection).map(|o| {
+                        if id == FieldId::ScaleW {
+                            o.2
+                        } else {
+                            o.3
+                        }
+                    })
+                };
+                let asked = num(raw).filter(|v| *v > 0.0);
+                if let (Some(cur), Some(asked)) = (current.filter(|c| *c > 0.0), asked) {
+                    let ratio = asked / cur;
+                    if self.apply_scale_factor(ratio) {
+                        let pct = (ratio * 100.0).round() as i64;
+                        self.app.status = format!("Scaled to {}%", pct);
+                    }
+                }
+            }
+            FieldId::ArcStart | FieldId::ArcSweep | FieldId::ArcRatio => {
+                // Figma's Appearance fields, on the layer's own arc: the box
+                // never moves, which is what makes them non-destructive.
+                let Some(v) = num(raw) else { return };
+                let Some((start, end, ratio)) =
+                    crate::editor_ui::find_node(&doc.editor_ref().root, node_id.as_str())
+                        .and_then(crate::state::arc_props)
+                else {
+                    return;
+                };
+                let sweep = x_native::booleans::arc_sweep(start, end);
+                let (ns, ne, nr) = match id {
+                    FieldId::ArcStart => (v, v + sweep, ratio),
+                    FieldId::ArcSweep => (start, start + sweep_from_text(raw, v), ratio),
+                    _ => (start, end, (v / 100.0).clamp(0.0, 0.99)),
+                };
+                if crate::state::set_arc(doc.editor(), node_id.as_str(), ns, ne, nr) {
+                    self.app.status = "Arc updated".into();
+                    self.app.mark_dirty();
+                }
+            }
+            FieldId::ShapeCount | FieldId::StarRatio => {
+                // Figma's Count and Ratio, on the layer's own shape: the box
+                // never moves, which is what makes them non-destructive.
+                let Some(v) = num(raw) else { return };
+                let count = v.max(0.0).round() as usize;
+                let wrote = if id == FieldId::StarRatio {
+                    crate::state::set_star_ratio(doc.editor(), node_id.as_str(), v / 100.0)
+                } else {
+                    crate::state::set_shape_count(doc.editor(), node_id.as_str(), count)
+                };
+                if wrote {
+                    self.app.status = "Appearance updated".into();
+                    self.app.mark_dirty();
+                }
+            }
             _ => {
                 if self.app.route_typo_panel_field(id, raw) {
                     self.app.mark_dirty();
@@ -11369,26 +14517,6 @@ impl Host {
     }
 }
 
-/// Soft shadow + `black/10` 28px name watermark for empty top-level
-/// frames — the `bg-white rounded-[8px] shadow-2xl` canvas-frame look
-/// from the v45 HTML with zero children.
-/// Screen-space rects + labels of empty top-level frames (the v45 mock's
-/// `bg-white rounded-[8px] shadow-2xl` hero frame with its watermark label).
-fn frame_watermarks(app: &App, root: &x_native::Node) -> Vec<(vello::kurbo::Rect, String)> {
-    let mut out = Vec::new();
-    for f in &root.children {
-        if matches!(f.kind, NodeKind::Frame { .. }) && f.children.is_empty() {
-            let p0 = app.world_to_screen(Point::new(f.transform.x, f.transform.y));
-            let p1 = app.world_to_screen(Point::new(f.transform.x + f.w, f.transform.y + f.h));
-            let r = vello::kurbo::Rect::new(p0.x, p0.y, p1.x, p1.y);
-            out.push((r, f.name.clone()));
-        }
-    }
-    out
-}
-
-/// Pass 1 — drop shadow BEHIND the document (CSS box-shadow semantics:
-/// the frame's own fill occludes the shadow's interior).
 /// The inline editor paints the live buffer itself — blank the edited
 /// node's own (stale) text in the scene clone so the two never double-print.
 #[cfg(test)]
@@ -11408,29 +14536,45 @@ fn blank_editing_text(root: &mut Node, eid: Option<&str>) {
     walk(root, eid);
 }
 
-fn watermark_shadows(app: &App, inner: &mut Scene, root: &x_native::Node) {
-    for (r, _) in frame_watermarks(app, root) {
-        crate::paint::elev_shadow(inner, r, 8.0, x_native::ui::Elevation::Raised);
+/// The container a NEW object drawn at `p` joins — Figma's rule, and the one
+/// its shape tools follow: *"Click inside an existing frame to add a 100 x 100
+/// nested frame"*, and the rect/ellipse tools behave the same way.
+///
+/// * the DEEPEST container wins — a nested frame takes the new layer over the
+///   frame that holds it;
+/// * only VISIBLE, UNLOCKED containers capture: you cannot draw into a layer
+///   you cannot select, and `x-editor::hit_test` already skips a locked node
+///   for the same reason;
+/// * a GROUP never captures (Figma's containers are frames and sections; a
+///   group adopting a layer would silently re-flow it), and neither does an
+///   INSTANCE, whose structure belongs to its component;
+/// * paint order decides between overlapping containers, exactly like a click.
+fn container_under(root: &Node, p: Point) -> Option<String> {
+    fn rec(n: &Node, acc: Affine, p: Point, out: &mut Option<String>) {
+        if !n.visible || n.locked {
+            return;
+        }
+        let m = acc * n.transform.matrix(n.w, n.h);
+        let local = m.inverse() * p;
+        if local.x < 0.0 || local.y < 0.0 || local.x > n.w || local.y > n.h {
+            return;
+        }
+        if matches!(
+            n.kind,
+            x_native::NodeKind::Frame { .. } | x_native::NodeKind::Section
+        ) {
+            *out = Some(n.id.clone());
+        }
+        for c in &n.children {
+            rec(c, m, p, out);
+        }
     }
-}
-
-/// Pass 2 — watermark label ON TOP of the document (black/10, 20px bold).
-fn watermark_labels(app: &App, inner: &mut Scene, root: &x_native::Node) {
-    for (r, label) in frame_watermarks(app, root) {
-        let cx = (r.x0 + r.x1) / 2.0;
-        let cy = (r.y0 + r.y1) / 2.0;
-        let w = app.fonts.measure(&label, T20, crate::paint::Wt::Bold);
-        // audit: 20px bold box top = frame_center − 15 (half the 1.5em box)
-        app.fonts.text(
-            inner,
-            cx - w / 2.0,
-            cy - crate::paint::CSS_LH * T20 / 2.0,
-            &label,
-            T20,
-            C_BLACK_10,
-            crate::paint::Wt::Semi,
-        );
+    let mut out = None;
+    let m = root.transform.matrix(root.w, root.h);
+    for c in &root.children {
+        rec(c, m, p, &mut out);
     }
+    out
 }
 
 /// A world coordinate expressed in the local space of `target` — the space
@@ -11545,6 +14689,125 @@ fn resizer_at(app: &App, p: Point) -> Option<u8> {
     None
 }
 
+/// The selection's box in parent space — what the Scale tool's handles, its
+/// body drag and the Scale panel's anchor cells all measure against. `None`
+/// when nothing is selected or an id no longer resolves.
+pub(crate) fn selection_box(root: &Node, ids: &[String]) -> Option<(f64, f64, f64, f64)> {
+    let mut bbox: Option<(f64, f64, f64, f64)> = None;
+    for id in ids {
+        let n = crate::editor_ui::find_node(root, id.as_str())?;
+        let r = (n.transform.x, n.transform.y, n.w, n.h);
+        bbox = Some(match bbox {
+            None => r,
+            Some(b) => (
+                b.0.min(r.0),
+                b.1.min(r.1),
+                (b.0 + b.2).max(r.0 + r.2) - b.0.min(r.0),
+                (b.1 + b.3).max(r.1 + r.3) - b.1.min(r.1),
+            ),
+        });
+    }
+    bbox
+}
+
+/// How close the pointer has to be to a corner handle, in screen pixels. It
+/// is the inner edge of the rotate ring, so a press can be a resize or a
+/// rotate but never both (`360039956914`).
+const HANDLE_TOL: f64 = 6.0;
+
+/// How close the pointer has to be to an arc handle, in screen pixels.
+const ARC_HANDLE_TOL: f64 = 9.0;
+
+/// How close the pointer has to be to a connection's anchor circle, in screen
+/// pixels — the circle is 6px across, plus the same forgiveness Figma gives it.
+const CONN_ANCHOR_TOL: f64 = 10.0;
+
+/// How close a press has to be to a noodle to select that connection.
+const CONN_LINE_TOL: f64 = 6.0;
+
+/// A layer's world transform — its ancestors' matrices and its own. The arc
+/// handles are drawn, hit-tested and dragged through THIS, so they sit on the
+/// arc the renderer draws even when the layer is nested or rotated.
+pub(crate) fn node_world(root: &Node, id: &str) -> Option<Affine> {
+    fn rec(n: &Node, id: &str, acc: Affine, out: &mut Option<Affine>) {
+        let m = acc * n.transform.matrix(n.w, n.h);
+        if n.id == id {
+            *out = Some(m);
+            return;
+        }
+        for c in &n.children {
+            rec(c, id, m, out);
+            if out.is_some() {
+                return;
+            }
+        }
+    }
+    let mut out = None;
+    rec(root, id, Affine::IDENTITY, &mut out);
+    out
+}
+
+/// A layer's world-space BOUNDING BOX: `node_world`'s affine applied to the
+/// node's four corners, so a nested or rotated layer measures where it is
+/// drawn rather than where its parent-relative transform happens to sit.
+pub(crate) fn world_rect_of(root: &Node, id: &str) -> Option<(f64, f64, f64, f64)> {
+    let n = crate::editor_ui::find_node(root, id)?;
+    let m = node_world(root, id)?;
+    let corner = |x: f64, y: f64| m * Point::new(x, y);
+    let pts = [
+        corner(0.0, 0.0),
+        corner(n.w, 0.0),
+        corner(n.w, n.h),
+        corner(0.0, n.h),
+    ];
+    let x0 = pts.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
+    let x1 = pts.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max);
+    let y0 = pts.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
+    let y1 = pts.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
+    Some((x0, y0, x1 - x0, y1 - y0))
+}
+
+/// The sweep a field commit asks for: degrees, or a share of the whole circle
+/// when the text says so — Figma's own tooltip reads the sweep as a percentage.
+fn sweep_from_text(raw: &str, v: f64) -> f64 {
+    if raw.trim().ends_with('%') {
+        v / 100.0 * 360.0
+    } else {
+        v
+    }
+}
+
+/// The Scale panel's multiplier as a factor: a percentage ("150%", or a bare
+/// "150"), or an explicit multiplier ("1.5x"). `None` when the text is not a
+/// positive number — the field then simply closes, like an empty W field.
+fn parse_scale(raw: &str) -> Option<f64> {
+    let t = raw.trim().to_ascii_lowercase();
+    if let Some(n) = t.strip_suffix('x') {
+        return n
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|v| v.is_finite() && *v > 0.0);
+    }
+    let n = t
+        .strip_suffix('%')
+        .unwrap_or(&t)
+        .trim()
+        .parse::<f64>()
+        .ok()?;
+    (n.is_finite() && n > 0.0).then_some(n / 100.0)
+}
+
+/// Figma's word for one axis's resizing choice — the same words the Width /
+/// Height menu uses ("Fixed width" / "Hug contents"), so the status line and
+/// the menu cannot drift.
+fn sizing_word(s: x_native::Sizing) -> &'static str {
+    match s {
+        x_native::Sizing::Hug => "Hug contents",
+        _ => "Fixed",
+    }
+}
+
 fn count_kind(root: &Node) -> usize {
     fn walk(n: &Node, out: &mut usize) {
         *out += 1;
@@ -11583,6 +14846,14 @@ fn field_initial(app: &App, f: FieldId) -> String {
     use crate::editor_ui::sel_info;
     let s = sel_info(app);
     match f {
+        FieldId::LayerName => {
+            let d = app.doc_ref();
+            app.layer_edit_id
+                .as_deref()
+                .and_then(|id| crate::editor_ui::find_node(&d.editor_ref().root, id))
+                .map(|n| n.name.clone())
+                .unwrap_or_default()
+        }
         FieldId::TreeSearch => app.doc_ref().tree_search.clone(),
         FieldId::FindQuery => app.find_replace.query.clone(),
         FieldId::FindReplace => app.find_replace.replace.clone(),
@@ -11604,15 +14875,80 @@ fn field_initial(app: &App, f: FieldId) -> String {
         FieldId::Rotation => fmt(s.rot),
         FieldId::Opacity => format!("{}", (s.opacity * 100.0).round() as i64),
         FieldId::Radius => fmt(s.radius),
+        FieldId::CornerRadius(corner) => {
+            // Figma's **Independent corners**: each field reads its own corner
+            let d = app.doc_ref();
+            let v = d
+                .selected_id()
+                .and_then(|id| crate::editor_ui::find_node(&d.editor_ref().root, id.as_str()))
+                .map(|n| crate::state::node_corner_radii(n)[corner.min(3)])
+                .unwrap_or(0.0);
+            fmt(v)
+        }
         FieldId::FillHex => s.fill.clone(),
         FieldId::FillAlpha => "100".into(),
         FieldId::StrokeHex => s.stroke.clone(),
         FieldId::StrokeWeight => fmt(if s.stroke_w > 0.0 { s.stroke_w } else { 1.0 }),
+        FieldId::MinWidth | FieldId::MaxWidth | FieldId::MinHeight | FieldId::MaxHeight => {
+            let l = app.selected_layout();
+            let v = l.and_then(|l| match f {
+                FieldId::MinWidth => l.min_width,
+                FieldId::MaxWidth => l.max_width,
+                FieldId::MinHeight => l.min_height,
+                _ => l.max_height,
+            });
+            v.map(fmt).unwrap_or_default()
+        }
         FieldId::GuideSize => fmt(app.doc_opt().map(|d| d.guide_size).unwrap_or(16.0)),
         FieldId::CanvasBg => editor_ui::hex6(app.canvas_bg),
         FieldId::GridColor => editor_ui::hex6(app.grid_color),
         FieldId::GridPct => format!("{}", app.grid_pct.round() as i64),
         FieldId::Zoom => format!("{}", (app.zoom * 100.0).round() as i64),
+        FieldId::ScaleFactor => {
+            let live = match &app.drag {
+                Some(crate::state::Drag::ScaleSel { applied, .. })
+                | Some(crate::state::Drag::ScaleBody { applied, .. }) => *applied,
+                _ => 1.0,
+            };
+            format!("{}%", (live * 100.0).round() as i64)
+        }
+        FieldId::ScaleW => fmt(s.w),
+        FieldId::ScaleH => fmt(s.h),
+        FieldId::ArcStart | FieldId::ArcSweep | FieldId::ArcRatio => {
+            let props = crate::editor_ui::find_node(
+                &app.doc_ref().editor_ref().root,
+                app.doc_ref().selected_id().unwrap_or_default().as_str(),
+            )
+            .and_then(crate::state::arc_props);
+            let Some((start, end, ratio)) = props else {
+                return String::new();
+            };
+            let sweep = x_native::booleans::arc_sweep(start, end);
+            match f {
+                FieldId::ArcStart => fmt(start),
+                FieldId::ArcSweep => fmt(sweep),
+                _ => format!("{}", (ratio * 100.0).round() as i64),
+            }
+        }
+        FieldId::ShapeCount | FieldId::StarRatio => {
+            let node = crate::editor_ui::find_node(
+                &app.doc_ref().editor_ref().root,
+                app.doc_ref().selected_id().unwrap_or_default().as_str(),
+            );
+            let Some(n) = node else {
+                return String::new();
+            };
+            if f == FieldId::StarRatio {
+                match crate::state::star_props(n) {
+                    Some((_, ratio)) => format!("{}", (ratio * 100.0).round() as i64),
+                    None => String::new(),
+                }
+            } else {
+                crate::state::shape_count(n)
+                    .map(|c| c.to_string())
+                    .unwrap_or_default()
+            }
+        }
         FieldId::ComponentDescription => app
             .doc_ref()
             .selected_id()
@@ -12787,7 +16123,11 @@ mod tests {
         assert_eq!(Tool::Text.icon(), "type");
         assert_eq!(Tool::Rect.icon(), "square");
         assert_eq!(Tool::Ellipse.icon(), "circle");
+        assert_eq!(Tool::Line.icon(), "line");
+        assert_eq!(Tool::Arrow.icon(), "arrow-up-right");
         assert_eq!(Tool::Pen.icon(), "pen-tool");
+        assert_eq!(Tool::Pencil.icon(), "pencil");
+        assert_eq!(Tool::Brush.icon(), "brush");
         assert_eq!(Tool::Hand.icon(), "hand");
     }
 
@@ -12898,7 +16238,6 @@ fn screenshot_screens() {
                 let (doc_scene, _) =
                     build_scene_full(&root, None, &vars, None, Some(&app.fonts.fonts));
                 let (ox, oy, z) = app.canvas_transform();
-                watermark_shadows(app, &mut inner, &root);
                 inner.push_layer(
                     vello::peniko::Fill::NonZero,
                     vello::peniko::BlendMode::new(
@@ -12910,7 +16249,6 @@ fn screenshot_screens() {
                     &reg.canvas,
                 );
                 inner.append(&doc_scene, Some(Affine::translate((ox, oy)).then_scale(z)));
-                watermark_labels(app, &mut inner, &root);
                 inner.pop_layer();
                 editor_ui::paint_over(app, &mut inner);
             }
@@ -13248,6 +16586,7 @@ fn screenshot_screens() {
             crate::context_menu::ContextTarget::CanvasSelection {
                 selected_count: 1,
                 contains_group: false,
+                instance: None,
             },
             700.0,
             500.0,
@@ -13328,7 +16667,6 @@ fn screenshot_screens_more() {
                 let (doc_scene, _) =
                     build_scene_full(&root, None, &vars, None, Some(&app.fonts.fonts));
                 let (ox, oy, z) = app.canvas_transform();
-                watermark_shadows(app, &mut inner, &root);
                 inner.push_layer(
                     vello::peniko::Fill::NonZero,
                     vello::peniko::BlendMode::new(
@@ -13340,7 +16678,6 @@ fn screenshot_screens_more() {
                     &reg.canvas,
                 );
                 inner.append(&doc_scene, Some(Affine::translate((ox, oy)).then_scale(z)));
-                watermark_labels(app, &mut inner, &root);
                 inner.pop_layer();
                 editor_ui::paint_over(app, &mut inner);
             }
@@ -13557,7 +16894,6 @@ fn screenshot_screens_r7() {
                 let (doc_scene, _) =
                     build_scene_full(&root, None, &vars, None, Some(&app.fonts.fonts));
                 let (ox, oy, z) = app.canvas_transform();
-                watermark_shadows(app, &mut inner, &root);
                 inner.push_layer(
                     vello::peniko::Fill::NonZero,
                     vello::peniko::BlendMode::new(
@@ -13569,7 +16905,6 @@ fn screenshot_screens_r7() {
                     &reg.canvas,
                 );
                 inner.append(&doc_scene, Some(Affine::translate((ox, oy)).then_scale(z)));
-                watermark_labels(app, &mut inner, &root);
                 inner.pop_layer();
                 editor_ui::paint_over(app, &mut inner);
             }
@@ -13681,7 +17016,6 @@ fn screenshot_screens_r7() {
     app.center_view();
     {
         let doc = app.doc();
-        doc.mock_layers.clear();
         let root_id = doc.editor_ref().root.id.clone();
         let mut r = x_native::Node::rect(
             "r1",
@@ -13965,6 +17299,52 @@ fn screenshot_screens_r7() {
     // scroll the DESIGN column so the COMPONENT section is in view
     app.doc().scroll_right = 860.0;
     shoot("editor-component-props", &mut app);
+
+    // 27. Effects list (Figma's Effects section, help 360041488473): two
+    //     effects on one layer, the first row's *Effect settings* open — X, Y,
+    //     Blur and the shadow's Fill swatch — and the panel scrolled to the
+    //     section, which is the tail of the DESIGN column.
+    let mut app = App::demo();
+    app.win_w = 1440.0;
+    app.win_h = 900.0;
+    app.screen = Screen::Editor;
+    app.center_view();
+    {
+        let doc = app.doc();
+        let root_id = doc.editor_ref().root.id.clone();
+        doc.editor().insert_node(
+            &root_id,
+            Node::rect(
+                "fx-card",
+                300.0,
+                220.0,
+                260.0,
+                180.0,
+                x_native::Color::WHITE,
+            ),
+        );
+        doc.editor().add_effect_layer(
+            "fx-card",
+            x_native::Effect::default_of(x_native::EffectKind::DropShadow),
+        );
+        doc.editor().add_effect_layer(
+            "fx-card",
+            x_native::Effect::default_of(x_native::EffectKind::LayerBlur),
+        );
+        doc.editor().selection = vec!["fx-card".into()];
+    }
+    editor_ui::scroll_effects_into_view(&mut app);
+    app.effect_settings = Some(0);
+    shoot("editor-effects", &mut app);
+
+    // 28. the same section with its popovers open: the `+` menu (Figma's five
+    //     types) and the first row's blend menu (Figma's shadow modes — no
+    //     *Pass through*, which "cannot be applied to fills or effects")
+    app.effect_add_open = true;
+    shoot("editor-effects-menu", &mut app);
+    app.effect_add_open = false;
+    app.effect_blend_open = Some(0);
+    shoot("editor-effects-blend", &mut app);
 
     // 26. r15 C18: comment pins — resolved pin, open thread popover, and
     //     the new-comment composer, all above the canvas content
@@ -14559,7 +17939,28 @@ impl App {
             d.frame_cache = x_native::FrameCache::new();
         }
         d.frame_cache.set_hidden_text(self.text_edit.as_deref());
-        let root = &d.editors[d.page].root;
+        // the flow viewer IS a presentation: no canvas chrome (Figma draws no
+        // frame names in presentation mode, and the canvas around the presented
+        // frame is not on screen at all)
+        d.frame_cache.set_presenting(self.flow.is_some());
+        // Figma's "Animate matching layers" tick, as far as one screen can
+        // show it: a layer that matched nothing is on its way in, so this
+        // frame it carries the tick's alpha. The clone is what keeps the file
+        // untouched — the tick is preview state, never document state.
+        let tick = self
+            .flow
+            .as_ref()
+            .and_then(|f| f.tick.as_ref())
+            .filter(|t| t.running());
+        let mut ticking;
+        let root = match tick {
+            Some(tick) => {
+                ticking = d.editors[d.page].root.clone();
+                crate::editor_ui::paint_tick_tree(&mut ticking, tick);
+                &ticking
+            }
+            None => &d.editors[d.page].root,
+        };
         let sink = x_native::VelloSink {
             assets: Some(&d.assets),
             fonts: Some(&self.fonts.fonts),
@@ -14572,9 +17973,14 @@ impl App {
 
 fn paint_feedback(app: &mut App, scene: &mut Scene) {
     use crate::paint::{fill_rect, hline, Wt};
-    let y = app.win_h - 22.0;
-    fill_rect(scene, Rect::new(0.0, y, app.win_w, app.win_h), C_PANEL);
-    hline(scene, 0.0, app.win_w, y, C_LINE);
+    if !app.paints_status_band() {
+        // the flow viewer is chrome-less: the prototype gets every pixel
+        return;
+    }
+    let band = app.status_band();
+    let y = band.y0;
+    fill_rect(scene, band, C_PANEL);
+    hline(scene, band.x0, band.x1, y, C_LINE);
     let prefix = if app.demo_mode {
         "DEMO · sample content · "
     } else {
@@ -14600,7 +18006,7 @@ fn paint_feedback(app: &mut App, scene: &mut Scene) {
     app.fonts
         .text(scene, 12.0, y + 5.0, &message, T10, C_TEXT, Wt::Reg);
     if app.file_job.as_ref().is_some_and(|j| j.cancelable) {
-        let rect = Rect::new(app.win_w - 88.0, y + 2.0, app.win_w - 8.0, app.win_h - 2.0);
+        let rect = Rect::new(app.win_w - 88.0, y + 2.0, app.win_w - 8.0, band.y1 - 2.0);
         crate::paint::fill_rrect(scene, rect, R_SM, C_FIELD_2);
         app.fonts
             .text_center(scene, rect, "Cancel", T10, C_TEXT, Wt::Med, true);
@@ -14659,9 +18065,6 @@ impl App {
                 let canvas = self.view_canvas();
                 if !self.docs.is_empty() {
                     let doc_scene = self.canvas_scene();
-                    if self.demo_mode {
-                        watermark_shadows(self, &mut inner, &self.doc_ref().editor_ref().root);
-                    }
                     inner.push_layer(
                         vello::peniko::Fill::NonZero,
                         vello::peniko::BlendMode::new(
@@ -14673,10 +18076,6 @@ impl App {
                         &canvas,
                     );
                     inner.append(&doc_scene, Some(self.canvas_affine()));
-                    // empty-frame watermark: node name in black/10, 20px bold
-                    if self.demo_mode {
-                        watermark_labels(self, &mut inner, &self.doc_ref().editor_ref().root);
-                    }
                     inner.pop_layer();
                 }
                 editor_ui::paint_over(self, &mut inner);

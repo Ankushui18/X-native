@@ -196,12 +196,21 @@ pub(crate) fn apply(root: &mut Node, cmd: &Command) -> bool {
         }
         Command::SetCorners { id, to, .. } => {
             if let Some(n) = find_mut(root, id) {
+                // Apply is LITERAL: `to.1` is the per-corner array the node
+                // should carry, `None` meaning it has none. A frame's "uniform
+                // radius is four equal corners" is the WRITER's rule
+                // (`Editor::set_corners`), not this clause's — that is what
+                // lets undo tell a frame that had no radius from one whose
+                // four corners happen to be zero.
+                if !matches!(n.kind, NodeKind::Rect { .. } | NodeKind::Frame { .. }) {
+                    return false;
+                }
                 if let NodeKind::Rect { radius } = &mut n.kind {
                     *radius = to.0.max(0.0);
-                    n.corner_radii = to.1.map(|c| c.map(|v| v.max(0.0)));
-                    n.dirty = true;
-                    return true;
                 }
+                n.corner_radii = to.1.map(|c| c.map(|v| v.max(0.0)));
+                n.dirty = true;
+                return true;
             }
             false
         }
@@ -286,6 +295,22 @@ pub(crate) fn apply(root: &mut Node, cmd: &Command) -> bool {
             to_parent,
             index,
         } => {
+            // Figma's rule: a section is a top-level element on the canvas and
+            // "cannot be contained within frames or groups" — a drop into one
+            // bounces rather than quietly nesting it.
+            if find(root, id)
+                .map(|n| matches!(n.kind, NodeKind::Section))
+                .unwrap_or(false)
+            {
+                if let Some(tp) = find(root, to_parent) {
+                    // the canvas is a frame in this model: exempt by identity
+                    if to_parent != &root.id
+                        && matches!(tp.kind, NodeKind::Frame { .. } | NodeKind::Group)
+                    {
+                        return false;
+                    }
+                }
+            }
             let node = {
                 let Some(p) = find_mut(root, from_parent) else {
                     return false;

@@ -93,6 +93,255 @@ pub fn simplify_polyline(pts: &[(f64, f64)], eps: f64) -> Vec<(f64, f64)> {
     }
 }
 
+/// Freehand path fitting (pencil tool): the sampled stroke is simplified with
+/// [`simplify_polyline`] and every surviving point becomes a smooth cubic
+/// through its neighbours — a Catmull-Rom pass with the classic 1/6
+/// control-point offsets, so the wobble a hand produces comes out as curves the
+/// vector editor can still edit point by point. Points are node-local; the
+/// caller owns the origin. Fewer than two points is not a path.
+pub fn freehand_path(pts: &[(f64, f64)], eps: f64) -> Vec<PathCmd> {
+    let simple = simplify_polyline(pts, eps);
+    if simple.len() < 2 {
+        return Vec::new();
+    }
+    let mut path = vec![PathCmd::MoveTo(simple[0].0, simple[0].1)];
+    for i in 0..simple.len() - 1 {
+        let p0 = simple[i.saturating_sub(1)];
+        let p1 = simple[i];
+        let p2 = simple[i + 1];
+        let p3 = simple[(i + 2).min(simple.len() - 1)];
+        let c1 = (p1.0 + (p2.0 - p0.0) / 6.0, p1.1 + (p2.1 - p0.1) / 6.0);
+        let c2 = (p2.0 - (p3.0 - p1.0) / 6.0, p2.1 - (p3.1 - p1.1) / 6.0);
+        path.push(PathCmd::CurveTo(c1.0, c1.1, c2.0, c2.1, p2.0, p2.1));
+    }
+    path
+}
+
+/// A brush edge is sampled every this many world units, and a mark never keeps
+/// more than this many samples — a very long drag must not write a
+/// thousand-point path.
+const BRUSH_SAMPLE: f64 = 2.0;
+const BRUSH_MAX_SAMPLES: f64 = 320.0;
+
+/// The half-width profile of a brush mark: a point at each end for a taper of
+/// 1, the full width all the way along for 0 (a marker), a thin body for more.
+fn brush_profile(t: f64, taper: f64) -> f64 {
+    if taper <= 0.0 {
+        return 1.0;
+    }
+    (std::f64::consts::PI * t).sin().clamp(0.0, 1.0).powf(taper)
+}
+
+/// Step along a polyline, emitting a point every `step` units (both endpoints
+/// always survive), so an edge can be offset at a uniform resolution.
+fn resample(pts: &[(f64, f64)], step: f64) -> Vec<(f64, f64)> {
+    let mut out = vec![pts[0]];
+    let mut carry = 0.0;
+    for w in pts.windows(2) {
+        let (x0, y0) = w[0];
+        let (x1, y1) = w[1];
+        let seg = (x1 - x0).hypot(y1 - y0);
+        if seg < 1e-9 {
+            continue;
+        }
+        let mut d = step - carry;
+        while d < seg {
+            let f = d / seg;
+            out.push((x0 + (x1 - x0) * f, y0 + (y1 - y0) * f));
+            d += step;
+        }
+        carry = seg - (d - step);
+    }
+    out.push(*pts.last().unwrap());
+    out
+}
+
+/// A light moving average: the resampled spine loses the corners a two-pixel
+/// sample pitch leaves behind, without the ringing a spline fit can add.
+fn smooth(pts: &[(f64, f64)], passes: usize) -> Vec<(f64, f64)> {
+    let mut cur = pts.to_vec();
+    for _ in 0..passes {
+        let mut next = cur.clone();
+        for i in 1..cur.len().saturating_sub(1) {
+            let (ax, ay) = cur[i - 1];
+            let (bx, by) = cur[i];
+            let (cx, cy) = cur[i + 1];
+            let nx = (ax + 2.0 * bx + cx) / 4.0;
+            let ny = (ay + 2.0 * by + cy) / 4.0;
+            next[i] = (nx, ny);
+        }
+        cur = next;
+    }
+    cur
+}
+
+/// A brush mark (Figma Draw's brush tool): the freehand centreline widened into
+/// a CLOSED outline, so the stroke is a filled vector rather than a line.
+///
+/// Figma's brush is a *style* applied along the path — a stretch brush
+/// elongates a source shape down the length of the stroke — and the two things
+/// our renderer can do with a path are stroke it and fill it. The style is
+/// therefore the outline itself: a width that tapers toward the ends, and a
+/// bristle grain on both edges. `width` is the mark's full width at its
+/// thickest, `taper` how far the ends thin, `grain` how rough the edges are —
+/// and nothing here is random, so the same points and style always give the
+/// same mark. Fewer than two points, or no width, is not a mark.
+pub fn brush_outline(
+    pts: &[(f64, f64)],
+    width: f64,
+    taper: f64,
+    grain: f64,
+    eps: f64,
+) -> Vec<PathCmd> {
+    if width <= 0.0 {
+        return Vec::new();
+    }
+    let spine = simplify_polyline(pts, eps);
+    if spine.len() < 2 {
+        return Vec::new();
+    }
+    let total: f64 = spine
+        .windows(2)
+        .map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1))
+        .sum();
+    let step = (total / BRUSH_MAX_SAMPLES).max(BRUSH_SAMPLE);
+    let dense = smooth(&resample(&spine, step), 2);
+    let n = dense.len();
+    if n < 2 {
+        return Vec::new();
+    }
+    let mut left: Vec<(f64, f64)> = Vec::with_capacity(n);
+    let mut right: Vec<(f64, f64)> = Vec::with_capacity(n);
+    for i in 0..n {
+        let (px, py) = dense[i];
+        let (ax, ay) = if i == 0 { dense[0] } else { dense[i - 1] };
+        let (bx, by) = if i + 1 == n {
+            dense[n - 1]
+        } else {
+            dense[i + 1]
+        };
+        let (mut tx, mut ty) = (bx - ax, by - ay);
+        let len = tx.hypot(ty);
+        if len < 1e-9 {
+            tx = 1.0;
+            ty = 0.0;
+        } else {
+            tx /= len;
+            ty /= len;
+        }
+        let t = i as f64 / (n - 1) as f64;
+        let base = (width / 2.0) * brush_profile(t, taper);
+        // the bristles: two waves that never line up, one per edge
+        let k = i as f64;
+        let gl = 1.0 + grain * 0.45 * (k * 2.399).sin();
+        let gr = 1.0 + grain * 0.45 * (k * 1.713 + 1.04).cos();
+        left.push((px - ty * base * gl, py + tx * base * gl));
+        right.push((px + ty * base * gr, py - tx * base * gr));
+    }
+    let mut out = Vec::with_capacity(2 * n + 2);
+    out.push(PathCmd::MoveTo(left[0].0, left[0].1));
+    for p in &left[1..] {
+        out.push(PathCmd::LineTo(p.0, p.1));
+    }
+    for p in right.iter().rev() {
+        out.push(PathCmd::LineTo(p.0, p.1));
+    }
+    out.push(PathCmd::Close);
+    out
+}
+
+/// The Line tool's geometry: one straight segment from `a` to `b`. Figma's
+/// line is "lines in any direction" — a stroked path, so a horizontal line's
+/// box is 0 units high rather than a shape's minimum.
+pub fn line_path(a: (f64, f64), b: (f64, f64)) -> Vec<PathCmd> {
+    vec![PathCmd::MoveTo(a.0, a.1), PathCmd::LineTo(b.0, b.1)]
+}
+
+/// An arrowhead's length in stroke weights, the floor under it (a 1px arrow
+/// still has to read as an arrow), and its half-width against that length.
+/// Constants, so the live preview and the node that lands cannot disagree.
+pub const ARROW_HEAD_LEN: f64 = 4.0;
+pub const ARROW_HEAD_MIN: f64 = 12.0;
+pub const ARROW_HEAD_HALF: f64 = 0.4;
+
+/// The Arrow tool's geometry: the same segment, closed by the solid head
+/// Figma's arrow ends in. The head is a triangle at `b` — `weight * 4` long,
+/// never shorter than 12 units — and the shaft stops at the head's base so its
+/// cap cannot peek past the tip. A degenerate drag is just a line.
+pub fn arrow_path(a: (f64, f64), b: (f64, f64), weight: f64) -> Vec<PathCmd> {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let len = dx.hypot(dy);
+    if len < 1e-9 {
+        return line_path(a, b);
+    }
+    let head = (weight * ARROW_HEAD_LEN).max(ARROW_HEAD_MIN).min(len);
+    let (ux, uy) = (dx / len, dy / len);
+    let (nx, ny) = (-uy, ux);
+    let (bx, by) = (b.0 - ux * head, b.1 - uy * head);
+    let half = head * ARROW_HEAD_HALF;
+    vec![
+        PathCmd::MoveTo(a.0, a.1),
+        PathCmd::LineTo(bx, by),
+        PathCmd::MoveTo(b.0, b.1),
+        PathCmd::LineTo(bx + nx * half, by + ny * half),
+        PathCmd::LineTo(bx - nx * half, by - ny * half),
+        PathCmd::Close,
+    ]
+}
+
+/// The bounding box of a path command list, as `(x, y, w, h)`. Cubic control
+/// points count: a curve never leaves the hull of its control points, so the
+/// box is an honest wrapper for geometry the curve can reach, and an empty path
+/// is a zero box at the origin.
+pub fn path_bounds(cmds: &[PathCmd]) -> (f64, f64, f64, f64) {
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    {
+        let mut add = |x: f64, y: f64| {
+            x0 = x0.min(x);
+            y0 = y0.min(y);
+            x1 = x1.max(x);
+            y1 = y1.max(y);
+        };
+        for c in cmds {
+            match c {
+                PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => add(*x, *y),
+                PathCmd::CurveTo(a, b, c, d, x, y) => {
+                    add(*a, *b);
+                    add(*c, *d);
+                    add(*x, *y);
+                }
+                PathCmd::Close => {}
+            }
+        }
+    }
+    if x0 > x1 {
+        return (0.0, 0.0, 0.0, 0.0);
+    }
+    (x0, y0, x1 - x0, y1 - y0)
+}
+
+/// Move every point of a path by `(dx, dy)` — used to re-origin a mark onto its
+/// own box before it becomes a layer.
+pub fn shift_path(cmds: &mut [PathCmd], dx: f64, dy: f64) {
+    for c in cmds {
+        match c {
+            PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => {
+                *x += dx;
+                *y += dy;
+            }
+            PathCmd::CurveTo(a, b, c, d, x, y) => {
+                *a += dx;
+                *b += dy;
+                *c += dx;
+                *d += dy;
+                *x += dx;
+                *y += dy;
+            }
+            PathCmd::Close => {}
+        }
+    }
+}
+
 pub fn path_to_bez(cmds: &[PathCmd]) -> kurbo::BezPath {
     let mut p = kurbo::BezPath::new();
     for c in cmds {
@@ -187,11 +436,29 @@ pub enum NodeKind {
     /// node's `name`, drawn as a header by the renderer. Children render
     /// inside; behaves like a Frame for hit-testing/marquee/ungroup.
     Section,
-    /// Elliptical arc: start/end angles in degrees (y-down space, 0 = east,
-    /// increasing clockwise on screen). start == end means the full ellipse.
+    /// Figma's arc properties on an ellipse: the sweep runs from `start` to
+    /// `end` degrees (y-down space, 0 = east, clockwise when `end > start`,
+    /// and the other way when it is smaller) and `ratio` is the fraction of
+    /// the radius the middle is cut back to — 0 is a solid wedge through the
+    /// centre, 0.85 a thin ring. Equal angles are the full ellipse. All three
+    /// are appearance, not size: the layer's box does not move when they
+    /// change (Figma: "the shape's bounding box stayed the same size to
+    /// preserve space in case we wanted to change the arc again").
     Arc {
         start: f64,
         end: f64,
+        ratio: f64,
+    },
+    /// Figma's Polygon: "an enclosed shape that is made up of any number of
+    /// straight lines", three of them by default.
+    Poly {
+        sides: usize,
+    },
+    /// Figma's Star: `points` outer vertices with the inner ones at `ratio` of
+    /// the radius between them, so five points read as "ten sides".
+    Star {
+        points: usize,
+        ratio: f64,
     },
     Line,
     Text {
@@ -244,6 +511,85 @@ impl Default for ExportSettings {
     }
 }
 
+/// Figma's mask **type** — the Mask section's dropdown (help
+/// 360040450253; plugin API `MaskType`). A mask keys the masked result on the
+/// mask layer itself: Alpha on its opacity, Vector on its fill/stroke
+/// outlines (translucency ignored), Luminance on its brightness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MaskType {
+    /// *"the opacity of the mask … higher opacity reveals more"* — Figma's
+    /// default.
+    #[default]
+    Alpha,
+    /// *"the shape of the mask"* — any area past 0% opacity counts as fully
+    /// opaque.
+    Vector,
+    /// *"the brightness of the mask"* — white shows, black hides.
+    Luminance,
+}
+
+impl MaskType {
+    /// The word the Mask section shows.
+    pub fn label(self) -> &'static str {
+        match self {
+            MaskType::Alpha => "Alpha",
+            MaskType::Vector => "Vector",
+            MaskType::Luminance => "Luminance",
+        }
+    }
+
+    /// The dropdown's rows, in the order the plugin API lists them.
+    pub fn all() -> [MaskType; 3] {
+        [MaskType::Alpha, MaskType::Vector, MaskType::Luminance]
+    }
+
+    /// File-format key: a node's `maskType`.
+    pub fn key(self) -> &'static str {
+        match self {
+            MaskType::Alpha => "alpha",
+            MaskType::Vector => "vector",
+            MaskType::Luminance => "luminance",
+        }
+    }
+
+    /// Parse a file-format key; unknown words read as the default.
+    pub fn from_key(s: &str) -> Option<MaskType> {
+        match s {
+            "alpha" => Some(MaskType::Alpha),
+            "vector" => Some(MaskType::Vector),
+            "luminance" => Some(MaskType::Luminance),
+            _ => None,
+        }
+    }
+
+    /// How much of the masked scope this mask lets through. Vector ignores the
+    /// mask's own translucency; Alpha uses the mask fill's alpha; Luminance
+    /// uses the fill's relative luminance. A non-solid fill (gradient, image,
+    /// variable) stays at 1.0 — the renderer composites a mask as one scope,
+    /// not per pixel, which is the named delta on the parity sheet.
+    pub fn mask_alpha(self, fill: &Paint, node_opacity: f32) -> f32 {
+        let a = match self {
+            MaskType::Vector => 1.0,
+            MaskType::Alpha => match fill {
+                Paint::Solid(c) => c.components[3],
+                _ => 1.0,
+            },
+            MaskType::Luminance => match fill {
+                Paint::Solid(c) => luminance(c) * c.components[3],
+                _ => 1.0,
+            },
+        };
+        (a * node_opacity).clamp(0.0, 1.0)
+    }
+}
+
+/// Relative luminance of a solid colour — the Rec. 709 weights on its sRGB
+/// channels, the figure Figma's own docs call "luminance".
+fn luminance(c: &Color) -> f32 {
+    let [r, g, b, _] = c.components;
+    (0.2126 * r + 0.7152 * g + 0.0722 * b).clamp(0.0, 1.0)
+}
+
 #[derive(Debug, Clone)]
 pub struct Node {
     /// Stable identity: the key every reference (prototype destinations,
@@ -272,6 +618,12 @@ pub struct Node {
     pub visible: bool,
     /// Phase 2: editor lock (excluded from hit testing).
     pub locked: bool,
+    /// Figma's per-frame **Show name** switch: whether the canvas paints this
+    /// frame's name label in the gutter above it. The naming RULES (only a
+    /// page's outermost frames, none inside a frame, Sections always) decide
+    /// where a name may appear; this decides whether it does. `true` is the
+    /// default and the load default, so an older file shows names as before.
+    pub show_name: bool,
     pub prototype: Option<PrototypeAction>,
     pub overrides: HashMap<String, String>,
     /// Phase 4.7: per-corner radii [tl, tr, br, bl]; overrides Rect's uniform radius.
@@ -300,6 +652,9 @@ pub struct Node {
     /// Masks: when true, this node clips its FOLLOWING SIBLINGS inside
     /// the same parent (mask semantics semantics, simplified).
     pub is_mask: bool,
+    /// Which of Figma's mask types this layer is when `is_mask` is set — the
+    /// Mask section's dropdown.
+    pub mask_type: MaskType,
     /// P1: variable bindings — property -> variable name.
     /// Supported keys: "radius", "opacity", "fontsize", "w", "h".
     /// ("fill" binds via Paint::Variable; gap/padding via AutoLayout vars.)
@@ -360,6 +715,40 @@ pub struct Node {
     pub image_rotation: f64,
 }
 
+/// The scroll range of a frame: how far its content reaches past its own box,
+/// per axis, never negative. Figma's prototype scrolling moves the content
+/// inside the frame by up to this much before it stops
+/// ([Prototype scroll and overflow behavior], help article 360039818734).
+///
+/// `fixed` and `sticky` children are excluded: they do not scroll with the
+/// content ("Figma will move it above the other layers … it's not possible to
+/// position scrolling objects above fixed layers"). Rotation is not modelled —
+/// a child contributes its box in the frame's own space — and only content
+/// reaching past the RIGHT / BOTTOM edge adds range, which is the long-page
+/// case scrolling exists for.
+///
+/// [Prototype scroll and overflow behavior]: https://help.figma.com/hc/en-us/articles/360039818734
+pub fn scroll_extent(frame: &Node) -> (f64, f64) {
+    let mut mx = 0.0f64;
+    let mut my = 0.0f64;
+    for c in &frame.children {
+        if c.constraints.fixed || c.constraints.sticky {
+            continue;
+        }
+        mx = mx.max(c.transform.x + c.w);
+        my = my.max(c.transform.y + c.h);
+    }
+    ((mx - frame.w).max(0.0), (my - frame.h).max(0.0))
+}
+
+/// The colour a Section is drawn in — ONE owner. The section's wash, its stroke
+/// and the title chip the renderer paints all derive from this hue; they used to
+/// be two copies of `0x62, 0x74, 0x8b` in this file and a third in the renderer,
+/// which is what `tools/design-sheet/guard.mjs` exists to catch.
+pub fn section_hue() -> Color {
+    Color::from_rgb8(0x62, 0x74, 0x8b)
+}
+
 impl Node {
     /// Clone this node's own state without walking/allocating its descendants.
     /// Parent shells and registry carriers use this on the hot path.
@@ -382,6 +771,7 @@ impl Node {
             dirty: self.dirty,
             visible: self.visible,
             locked: self.locked,
+            show_name: self.show_name,
             prototype: self.prototype.clone(),
             overrides: self.overrides.clone(),
             corner_radii: self.corner_radii,
@@ -392,6 +782,7 @@ impl Node {
             constraints: self.constraints.clone(),
             z_index: self.z_index,
             is_mask: self.is_mask,
+            mask_type: self.mask_type,
             bindings: self.bindings.clone(),
             text_metrics: self.text_metrics.clone(),
             text_runs: self.text_runs.clone(),
@@ -657,6 +1048,40 @@ impl ListStyle {
             "numbered" => Self::Numbered,
             _ => Self::None,
         }
+    }
+    /// Figma's words for the three rows of the list-style picker
+    /// (help 360040449773): *"Selecting the No list property … removes any
+    /// current list styling"*.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Bulleted => "Bulleted",
+            Self::Numbered => "Numbered",
+        }
+    }
+    /// The three rows, in Figma's order: none, bulleted, numbered.
+    pub fn all() -> [ListStyle; 3] {
+        [Self::None, Self::Bulleted, Self::Numbered]
+    }
+}
+
+/// The width of a list item's marker column, in px: the room a bullet or a
+/// counter takes before the text's own left edge. One owner — the shaper
+/// reserves it from the wrap width and draws the marker in it, the app's
+/// measurement adds it back so an auto-width box hugs marker + text.
+pub const LIST_MARKER_GAP: f64 = 16.0;
+
+/// The marker a list ITEM carries, `item` counting from 1 (the same
+/// 1-based counter Figma shows): a bullet for a bulleted list, the counter
+/// for a numbered one — *"numbered list counters rotate between numbers,
+/// alphabetical characters, and roman numerals with each indentation"* is
+/// Figma's deeper nesting, one level of numbering here — and nothing at all
+/// for a plain paragraph.
+pub fn list_marker(style: ListStyle, item: usize) -> Option<String> {
+    match style {
+        ListStyle::None => None,
+        ListStyle::Bulleted => Some("\u{2022}".to_string()),
+        ListStyle::Numbered => Some(format!("{item}.")),
     }
 }
 
@@ -963,6 +1388,7 @@ impl Node {
             dirty: true,
             visible: true,
             locked: false,
+            show_name: true,
             prototype: None,
             overrides: HashMap::new(),
             corner_radii: None,
@@ -970,6 +1396,7 @@ impl Node {
             blend: BlendKind::Normal,
             effects: vec![],
             is_mask: false,
+            mask_type: MaskType::default(),
             pin: (HPin::Left, VPin::Top),
             constraints: ChildConstraints::default(),
             z_index: None,
@@ -1044,16 +1471,18 @@ impl Node {
             0.0,
             w,
             h,
-            Paint::Solid(Color::from_rgba8(0x62, 0x74, 0x8b, 0x0d)),
+            // the section's wash: its hue at 5%
+            Paint::Solid(section_hue().multiply_alpha(13.0 / 255.0)),
         );
         n.name = "Section".into();
         n.corner_radii = Some([8.0; 4]);
-        n.stroke.paint = Paint::Solid(Color::from_rgba8(0x62, 0x74, 0x8b, 0x5a));
+        n.stroke.paint = Paint::Solid(section_hue().multiply_alpha(90.0 / 255.0));
         n.stroke.width = 1.0;
         n
     }
-    /// Shape constructors mirror their Figma counterparts; the angle pair
-    /// is intrinsic to an arc, so the arity is what it is.
+    /// Shape constructors mirror their Figma counterparts; the arc's own
+    /// properties — where it starts, how far it sweeps and how much of the
+    /// middle is cut away — are intrinsic to it, so the arity is what it is.
     #[allow(clippy::too_many_arguments)]
     pub fn arc(
         id: &str,
@@ -1063,11 +1492,48 @@ impl Node {
         h: f64,
         start: f64,
         end: f64,
+        ratio: f64,
         fill: Color,
     ) -> Self {
         Self::base(
             id,
-            NodeKind::Arc { start, end },
+            NodeKind::Arc { start, end, ratio },
+            x,
+            y,
+            w,
+            h,
+            Paint::Solid(fill),
+        )
+    }
+    pub fn poly(id: &str, x: f64, y: f64, w: f64, h: f64, sides: usize, fill: Color) -> Self {
+        Self::base(
+            id,
+            NodeKind::Poly {
+                sides: sides.clamp(crate::booleans::COUNT_MIN, crate::booleans::COUNT_MAX),
+            },
+            x,
+            y,
+            w,
+            h,
+            Paint::Solid(fill),
+        )
+    }
+    pub fn star(
+        id: &str,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        points: usize,
+        ratio: f64,
+        fill: Color,
+    ) -> Self {
+        Self::base(
+            id,
+            NodeKind::Star {
+                points: points.clamp(crate::booleans::COUNT_MIN, crate::booleans::COUNT_MAX),
+                ratio: ratio.clamp(0.05, 0.95),
+            },
             x,
             y,
             w,
@@ -1114,7 +1580,7 @@ impl Node {
             y,
             w,
             h,
-            Paint::Solid(Color::from_rgb8(0xdd, 0xdd, 0xdd)),
+            Paint::Solid(crate::fallbacks::missing_asset_grey()),
         )
     }
     pub fn vector(id: &str, x: f64, y: f64, w: f64, h: f64, path: Vec<PathCmd>) -> Self {
@@ -1286,6 +1752,11 @@ impl Node {
     }
     pub fn mask(mut self, v: bool) -> Self {
         self.is_mask = v;
+        self
+    }
+    /// Figma's Mask section: the type this mask is applied by.
+    pub fn mask_type(mut self, t: MaskType) -> Self {
+        self.mask_type = t;
         self
     }
     pub fn child(mut self, n: Node) -> Self {
@@ -1611,6 +2082,233 @@ mod simplify_tests {
 }
 
 #[cfg(test)]
+mod freehand_tests {
+    use super::*;
+
+    #[test]
+    fn samples_become_smooth_cubics() {
+        // a bent drag: RDP keeps the bend and the fit turns both segments into
+        // cubics whose endpoints are the surviving samples
+        let path = freehand_path(&[(0.0, 0.0), (5.0, 0.0), (10.0, 6.0)], 0.1);
+        assert_eq!(path.len(), 3, "MoveTo plus one curve per segment");
+        let first = match path[0] {
+            PathCmd::MoveTo(x, y) => (x, y),
+            _ => panic!("a path starts with a MoveTo"),
+        };
+        assert_eq!(first, (0.0, 0.0));
+        let mut ends = Vec::new();
+        for c in &path[1..] {
+            match c {
+                PathCmd::CurveTo(_, _, _, _, x, y) => ends.push((*x, *y)),
+                _ => panic!("the fit must emit curves, not lines"),
+            }
+        }
+        assert_eq!(ends, vec![(5.0, 0.0), (10.0, 6.0)]);
+        // a straight drag needs ONE segment: the middle sample sits on the
+        // chord, and dropping it is exactly what the simplify pass is for
+        let straight = freehand_path(&[(0.0, 0.0), (5.0, 0.0), (10.0, 0.0)], 0.1);
+        assert_eq!(straight.len(), 2);
+    }
+
+    #[test]
+    fn the_wobble_a_bigger_eps_cannot_see_is_dropped() {
+        // one stray sample a fifth of a unit off the line, then a real corner
+        let pts = [(0.0, 0.0), (5.0, 0.2), (10.0, 0.0), (10.0, 10.0)];
+        let tight = freehand_path(&pts, 0.05);
+        let loose = freehand_path(&pts, 1.0);
+        assert!(tight.len() > loose.len(), "a bigger eps keeps fewer nodes");
+        assert_eq!(loose.len(), 3, "three surviving points = two curves");
+        let last = match loose[2] {
+            PathCmd::CurveTo(_, _, _, _, x, y) => (x, y),
+            _ => panic!("the fit must emit curves, not lines"),
+        };
+        assert_eq!(last, (10.0, 10.0), "the corner itself is kept");
+    }
+
+    #[test]
+    fn two_points_are_a_path_and_fewer_are_not() {
+        assert!(freehand_path(&[], 1.0).is_empty());
+        assert!(freehand_path(&[(3.0, 4.0)], 1.0).is_empty());
+        assert_eq!(freehand_path(&[(0.0, 0.0), (1.0, 1.0)], 1.0).len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod brush_tests {
+    use super::*;
+
+    /// The spine the tests draw with: 100 units along x, sampled every 2.
+    fn spine() -> Vec<(f64, f64)> {
+        (0..=50).map(|i| (i as f64 * 2.0, 0.0)).collect()
+    }
+
+    /// Every point the outline visits, in path order (the shape's two edges).
+    fn points(path: &[PathCmd]) -> Vec<(f64, f64)> {
+        path.iter()
+            .filter_map(|c| match c {
+                PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => Some((*x, *y)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The vertical span of the edge points near `x`.
+    fn span_at(pts: &[(f64, f64)], x: f64) -> f64 {
+        let (lo, hi) = pts
+            .iter()
+            .filter(|p| (p.0 - x).abs() < 3.0)
+            .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
+        hi - lo
+    }
+
+    #[test]
+    fn a_mark_is_a_closed_band_around_the_spine() {
+        let path = brush_outline(&spine(), 20.0, 0.0, 0.0, 0.1);
+        assert!(
+            matches!(path.first(), Some(PathCmd::MoveTo(_, _))),
+            "a mark starts on one edge"
+        );
+        assert!(matches!(path.last(), Some(PathCmd::Close)), "and closes");
+        let pts = points(&path);
+        assert!(
+            pts.len() > 20,
+            "the two edges are sampled, not two straight lines"
+        );
+        // a marker (taper 0) is the full width from end to end
+        assert!(span_at(&pts, 0.0) > 19.0, "full width at the tip");
+        assert!(span_at(&pts, 50.0) > 19.0, "and in the middle");
+        // and it stops where the spine stops
+        assert!(pts.iter().all(|p| (-0.6..=100.6).contains(&p.0)));
+    }
+
+    #[test]
+    fn taper_thins_both_ends() {
+        let pts = points(&brush_outline(&spine(), 20.0, 1.0, 0.0, 0.1));
+        assert!(span_at(&pts, 1.0) < 3.0, "the tip comes to a point");
+        assert!(span_at(&pts, 50.0) > 19.0, "the belly holds its width");
+    }
+
+    #[test]
+    fn grain_roughens_the_edges_and_is_never_random() {
+        let a = points(&brush_outline(&spine(), 20.0, 0.0, 0.3, 0.1));
+        let b = points(&brush_outline(&spine(), 20.0, 0.0, 0.3, 0.1));
+        assert_eq!(a, b, "the same style is the same mark");
+        let clean = points(&brush_outline(&spine(), 20.0, 0.0, 0.0, 0.1));
+        assert_eq!(a.len(), clean.len());
+        assert!(
+            a.iter().zip(&clean).any(|(x, y)| x.1 != y.1),
+            "grain moves an edge"
+        );
+    }
+
+    #[test]
+    fn the_box_wraps_the_geometry_and_shifting_moves_it() {
+        let path = vec![
+            PathCmd::MoveTo(10.0, 4.0),
+            PathCmd::CurveTo(20.0, 0.0, 30.0, 40.0, 40.0, 10.0),
+            PathCmd::Close,
+        ];
+        // control points count: the curve can reach y=40 even though no
+        // endpoint does
+        assert_eq!(path_bounds(&path), (10.0, 0.0, 30.0, 40.0));
+        assert_eq!(path_bounds(&[]), (0.0, 0.0, 0.0, 0.0));
+        let mut moved = path.clone();
+        shift_path(&mut moved, -10.0, 5.0);
+        assert_eq!(path_bounds(&moved), (0.0, 5.0, 30.0, 40.0));
+        if let PathCmd::CurveTo(a, b, ..) = moved[1] {
+            assert_eq!((a, b), (10.0, 5.0), "control points move too");
+        } else {
+            panic!("the curve survived the shift");
+        }
+    }
+
+    #[test]
+    fn fewer_than_two_points_is_not_a_mark() {
+        assert!(brush_outline(&[], 20.0, 1.0, 0.3, 1.5).is_empty());
+        let none = brush_outline(&[(0.0, 0.0)], 20.0, 1.0, 0.3, 1.5);
+        assert!(none.is_empty());
+        assert!(
+            brush_outline(&spine(), 0.0, 1.0, 0.3, 1.5).is_empty(),
+            "no width, no mark"
+        );
+    }
+}
+
+#[cfg(test)]
+mod line_tests {
+    use super::*;
+
+    /// A horizontal segment at y = 40, 100 units long.
+    fn span() -> ((f64, f64), (f64, f64)) {
+        ((0.0, 40.0), (100.0, 40.0))
+    }
+
+    /// The path's points, rounded to two decimals so the head's arithmetic
+    /// (4.8, 35.2 …) compares like the geometry it is.
+    fn points(p: &[PathCmd]) -> Vec<(f64, f64)> {
+        p.iter()
+            .filter_map(|c| match c {
+                PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => {
+                    Some(((x * 100.0).round() / 100.0, (y * 100.0).round() / 100.0))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_line_is_the_segment_between_its_endpoints() {
+        let p = line_path((10.0, 20.0), (60.0, 80.0));
+        assert_eq!(p.len(), 2);
+        assert_eq!(p[0], PathCmd::MoveTo(10.0, 20.0));
+        assert_eq!(p[1], PathCmd::LineTo(60.0, 80.0));
+        assert_eq!(path_bounds(&p), (10.0, 20.0, 50.0, 60.0));
+    }
+
+    #[test]
+    fn a_horizontal_line_is_a_box_with_no_height() {
+        // Figma's own line layer: the box is the segment, H and all.
+        let (a, b) = span();
+        assert_eq!(path_bounds(&line_path(a, b)), (0.0, 40.0, 100.0, 0.0));
+    }
+
+    #[test]
+    fn the_head_sits_on_the_end_and_scales_with_the_weight() {
+        let (a, b) = span();
+        // 1px: the floor (12) beats 4 x weight, so the base is 12 back
+        let thin = arrow_path(a, b, 1.0);
+        assert_eq!(
+            points(&thin),
+            vec![
+                (0.0, 40.0),
+                (88.0, 40.0),
+                (100.0, 40.0),
+                (88.0, 44.8),
+                (88.0, 35.2)
+            ]
+        );
+        assert_eq!(thin[5], PathCmd::Close, "the head is a closed triangle");
+        // a heavier stroke buys a longer head: 5 x 4 = 20, so the base is 80
+        let heavy = arrow_path(a, b, 5.0);
+        assert_eq!(points(&heavy)[1], (80.0, 40.0));
+        assert_eq!(points(&heavy)[3], (80.0, 48.0));
+        assert_eq!(points(&heavy)[4], (80.0, 32.0));
+    }
+
+    #[test]
+    fn a_head_never_grows_past_a_short_segment() {
+        let p = arrow_path((0.0, 0.0), (5.0, 0.0), 1.0);
+        assert_eq!(points(&p)[1], (0.0, 0.0), "the base stays on the spine");
+    }
+
+    #[test]
+    fn a_degenerate_arrow_is_a_line() {
+        let p = arrow_path((5.0, 5.0), (5.0, 5.0), 1.0);
+        assert_eq!(p, line_path((5.0, 5.0), (5.0, 5.0)));
+    }
+}
+
+#[cfg(test)]
 mod layout_grid_tests {
     use super::*;
 
@@ -1703,5 +2401,72 @@ mod layout_grid_tests {
         );
         assert_eq!(apply_text_case("same", None), "same");
         assert_eq!(apply_text_case("same", Some("nonesuch")), "same");
+    }
+
+    /// Figma's list styles (help 360040449773): three rows in their order,
+    /// a bullet for the unordered list, a 1-based counter for the ordered
+    /// one, and nothing for a plain paragraph.
+    #[test]
+    fn the_list_styles_are_figmas_three_and_their_markers_count() {
+        assert_eq!(
+            ListStyle::all().map(ListStyle::label),
+            ["None", "Bulleted", "Numbered"]
+        );
+        assert_eq!(
+            ListStyle::all().map(ListStyle::to_str),
+            ["none", "bulleted", "numbered"]
+        );
+        assert_eq!(ListStyle::parse("bulleted"), ListStyle::Bulleted);
+        assert_eq!(ListStyle::parse("nonesuch"), ListStyle::None);
+        assert_eq!(list_marker(ListStyle::None, 1), None);
+        assert_eq!(
+            list_marker(ListStyle::Bulleted, 4).as_deref(),
+            Some("\u{2022}")
+        );
+        assert_eq!(list_marker(ListStyle::Numbered, 1).as_deref(), Some("1."));
+        assert_eq!(list_marker(ListStyle::Numbered, 12).as_deref(), Some("12."));
+        assert_eq!(LIST_MARKER_GAP, 16.0);
+    }
+}
+
+#[cfg(test)]
+mod scroll_extent_tests {
+    use super::*;
+
+    #[test]
+    fn content_past_the_frame_decides_the_range() {
+        let f = Node::frame("f", 200.0, 120.0)
+            .child(Node::rect("short", 0.0, 0.0, 100.0, 60.0, Color::WHITE))
+            .child(Node::rect("tall", 0.0, 0.0, 100.0, 400.0, Color::WHITE));
+        let (ex, ey) = scroll_extent(&f);
+        assert_eq!(ex, 0.0, "nothing reaches past the right edge");
+        assert_eq!(ey, 280.0, "400 of content in a 120 frame");
+    }
+
+    #[test]
+    fn fixed_and_sticky_children_do_not_extend_the_range() {
+        let mut pinned = Node::rect("nav", 0.0, 300.0, 200.0, 40.0, Color::WHITE);
+        pinned.constraints.fixed = true;
+        let mut head = Node::rect("head", 0.0, 500.0, 200.0, 40.0, Color::WHITE);
+        head.constraints.sticky = true;
+        let f = Node::frame("f", 200.0, 120.0)
+            .child(Node::rect("body", 0.0, 0.0, 200.0, 200.0, Color::WHITE))
+            .child(pinned)
+            .child(head);
+        // the body alone decides it: 200 - 120
+        assert_eq!(scroll_extent(&f), (0.0, 80.0));
+    }
+
+    #[test]
+    fn a_frame_that_fits_its_content_does_not_scroll() {
+        let f = Node::frame("f", 300.0, 200.0).child(Node::rect(
+            "a",
+            10.0,
+            10.0,
+            100.0,
+            100.0,
+            Color::WHITE,
+        ));
+        assert_eq!(scroll_extent(&f), (0.0, 0.0));
     }
 }

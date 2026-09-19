@@ -21,7 +21,27 @@ pub enum ContextTarget {
         selected_count: usize,
         /// Any selected node is a group (enables Ungroup).
         contains_group: bool,
+        /// The instance the selection is, when it is one: the master name,
+        /// whether that master lives in this file, and the layers carrying an
+        /// override (Figma's More-actions menu, help 360039150733).
+        instance: Option<InstanceMenu>,
     },
+}
+
+/// What the instance section of the selection menu needs. Built by the app
+/// from the engine, so the menu itself stays data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstanceMenu {
+    /// The instance node's id.
+    pub id: String,
+    /// The component it follows — Figma's *"hover over the name … to see Go
+    /// to main component in library"*.
+    pub component: String,
+    /// The master is in this document, so *Go to main component* and *Push
+    /// changes to main component* are both available.
+    pub in_file: bool,
+    /// One override per entry: (target layer id, the property's own word).
+    pub changes: Vec<(String, String)>,
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -43,7 +63,16 @@ pub enum ContextAction {
     // Object
     Group,
     Ungroup,
+    /// Figma's "Wrap in new section" — the selection goes into a labelled
+    /// Section on the canvas. Sections cannot live inside frames or groups
+    /// (help 9771500257687), so a selection drawn in one is lifted first.
+    WrapInSection,
     MakeComponent,
+    /// Figma's *Use as mask* (help 360040450253): the bottom-most selected
+    /// layer masks the layers above it. The row is the one gesture — the
+    /// engine's `use_as_mask` clears the flag when the selection already is
+    /// a mask object.
+    UseAsMask,
     BringToFront,
     BringForward,
     SendBackward,
@@ -64,6 +93,20 @@ pub enum ContextAction {
     /// Canvas minimap (⇧M) — the navigation aid for a page larger than the
     /// viewport.
     ToggleMinimap,
+    // Instance (Figma's More-actions menu)
+    /// *"Go to main component"* — select the master (help 360038665934).
+    GoToMainComponent,
+    /// *"Push changes to main component"* (help 360039150733).
+    PushChangesToMain,
+    /// A row of the Reset flyout: *"Reset > Reset [property]"* — the label
+    /// names the layer and the property it carries, so it is data, not a
+    /// static string.
+    ResetChange {
+        target: String,
+        label: String,
+    },
+    /// *"Reset > Reset all changes"*.
+    ResetAllChanges,
 }
 
 impl ContextAction {
@@ -77,7 +120,9 @@ impl ContextAction {
             Self::CopyAsCode => "Copy as code",
             Self::Group => "Group selection",
             Self::Ungroup => "Ungroup",
+            Self::WrapInSection => "Wrap in new section",
             Self::MakeComponent => "Make component",
+            Self::UseAsMask => "Use as mask",
             Self::BringToFront => "Bring to front",
             Self::BringForward => "Bring forward",
             Self::SendBackward => "Send backward",
@@ -94,6 +139,20 @@ impl ContextAction {
             Self::SelectAll => "Select all",
             Self::ToggleGrid => "Toggle grid",
             Self::ToggleMinimap => "Toggle minimap",
+            Self::GoToMainComponent => "Go to main component",
+            Self::PushChangesToMain => "Push changes to main component",
+            Self::ResetAllChanges => "Reset all changes",
+            // the one action whose label is data; `dynamic_label` serves it
+            Self::ResetChange { .. } => "Reset change",
+        }
+    }
+
+    /// The label when it is not static (the Reset rows, which name the layer
+    /// and the property they clear).
+    pub fn dynamic_label(&self) -> Option<&str> {
+        match self {
+            Self::ResetChange { label, .. } => Some(label.as_str()),
+            _ => None,
         }
     }
 
@@ -108,7 +167,9 @@ impl ContextAction {
             Self::CopyAsCode => "code",
             Self::Group => "group",
             Self::Ungroup => "ungroup",
+            Self::WrapInSection => "section",
             Self::MakeComponent => "component",
+            Self::UseAsMask => "square",
             Self::BringToFront => "chevrons-up",
             Self::BringForward => "chevron-up",
             Self::SendBackward => "chevron-down",
@@ -125,6 +186,9 @@ impl ContextAction {
             Self::SelectAll => "box-select",
             Self::ToggleGrid => "grid-2x2",
             Self::ToggleMinimap => "layout-dashboard",
+            Self::GoToMainComponent => "component",
+            Self::PushChangesToMain => "arrow-up-right",
+            Self::ResetChange { .. } | Self::ResetAllChanges => "rotate-ccw",
         }
     }
 
@@ -140,6 +204,7 @@ impl ContextAction {
             Self::Group => Some("⌘G"),
             Self::Ungroup => Some("⇧⌘G"),
             Self::MakeComponent => Some("⌘⌥K"),
+            Self::UseAsMask => Some("⌘⌥M"),
             Self::BringToFront => Some("⇧⌘]"),
             Self::BringForward => Some("⌘]"),
             Self::SendBackward => Some("⌘["),
@@ -258,7 +323,9 @@ pub fn action_for(action: &ContextAction) -> Option<Action> {
         Delete => Action::Ctx(CtxCmd::Delete),
         Group => Action::Ctx(CtxCmd::Group),
         Ungroup => Action::Ctx(CtxCmd::Ungroup),
+        WrapInSection => Action::Ctx(CtxCmd::SectionSelection),
         MakeComponent => Action::Ctx(CtxCmd::MakeComponent),
+        UseAsMask => Action::UseAsMask,
         BringToFront => Action::Ctx(CtxCmd::ToFront),
         BringForward => Action::Ctx(CtxCmd::BringFwd),
         SendBackward => Action::Ctx(CtxCmd::SendBack),
@@ -275,6 +342,10 @@ pub fn action_for(action: &ContextAction) -> Option<Action> {
         SelectAll => Action::Ctx(CtxCmd::SelectAll),
         ToggleGrid => Action::ToggleGuideVisibility,
         ToggleMinimap => Action::ToggleMinimap,
+        GoToMainComponent => Action::GoToMainComponent,
+        PushChangesToMain => Action::PushChangesToMain,
+        ResetChange { target, .. } => Action::ResetInstanceChange(target.clone()),
+        ResetAllChanges => Action::ResetInstanceProps,
     })
 }
 
@@ -302,6 +373,7 @@ pub fn build_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
         ContextTarget::CanvasSelection {
             selected_count,
             contains_group,
+            instance,
         } => {
             let mut items = vec![
                 ai(Cut, true),
@@ -317,7 +389,9 @@ pub fn build_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             if *contains_group {
                 items.push(ai(Ungroup, true));
             }
+            items.push(ai(WrapInSection, true));
             items.push(ai(MakeComponent, true));
+            items.push(ai(UseAsMask, true));
             items.push(ContextMenuItem::Separator);
             items.push(ContextMenuItem::Submenu {
                 label: "Arrange",
@@ -345,6 +419,36 @@ pub fn build_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
                         ai(BooleanExclude, true),
                     ],
                 });
+            }
+            // Figma's instance More-actions menu (help 360039150733). The two
+            // master rows need the master to be in this file; the Reset flyout
+            // *"only lists properties that have changes applied"* and ends with
+            // *"Reset all changes"*.
+            if let Some(inst) = instance {
+                let pushable = inst.in_file && !inst.changes.is_empty();
+                items.push(ContextMenuItem::Separator);
+                items.push(ai(GoToMainComponent, inst.in_file));
+                items.push(ai(PushChangesToMain, pushable));
+                if !inst.changes.is_empty() {
+                    let mut rows: Vec<ContextMenuItem> = inst
+                        .changes
+                        .iter()
+                        .map(|(target, property)| ContextMenuItem::Action {
+                            action: ResetChange {
+                                target: target.clone(),
+                                label: property.clone(),
+                            },
+                            enabled: true,
+                        })
+                        .collect();
+                    rows.push(ai(ResetAllChanges, true));
+                    items.push(ContextMenuItem::Submenu {
+                        label: "Reset",
+                        icon: "history",
+                        enabled: true,
+                        items: rows,
+                    });
+                }
             }
             items.push(ContextMenuItem::Separator);
             items.push(ai(OutlineStroke, true));
@@ -413,6 +517,7 @@ mod tests {
         let items = build_menu_items(&ContextTarget::CanvasSelection {
             selected_count: 2,
             contains_group: false,
+            instance: None,
         });
         let actions = actions_of(&items);
         assert!(
@@ -430,10 +535,26 @@ mod tests {
     }
 
     #[test]
+    fn the_selection_menu_offers_use_as_mask() {
+        let items = build_menu_items(&ContextTarget::CanvasSelection {
+            selected_count: 1,
+            contains_group: false,
+            instance: None,
+        });
+        let actions = actions_of(&items);
+        assert!(
+            actions.contains(&&ContextAction::UseAsMask),
+            "Figma's Use as mask row, help 360040450253"
+        );
+        assert_eq!(ContextAction::UseAsMask.shortcut(), Some("⌘⌥M"));
+    }
+
+    #[test]
     fn single_group_selection_offers_ungroup_not_group() {
         let items = build_menu_items(&ContextTarget::CanvasSelection {
             selected_count: 1,
             contains_group: true,
+            instance: None,
         });
         let actions = actions_of(&items);
         assert!(

@@ -201,7 +201,23 @@ fn sk_layer(n: &x_core::Node) -> String {
             ("symbolInstance", format!(",\"symbolID\":\"{}\",\"overrideValues\":[{}]", esc(component), ovs))
         }
         NodeKind::Rect { radius } => ("rectangle",format!(",\"fixedRadius\":{radius}")), NodeKind::Ellipse => ("oval",String::new()),
-        NodeKind::Arc { start, end } => { let (points, closed) = sk_path_points(&x_core::booleans::arc_path_cmds(n.w, n.h, *start, *end), n.w, n.h); ("shapePath", format!(",\"isClosed\":{closed},\"points\":[{points}]")) },
+        NodeKind::Arc { start, end, ratio } => { let (points, closed) = sk_path_points(&x_core::booleans::arc_path_cmds(n.w, n.h, *start, *end, *ratio), n.w, n.h); ("shapePath", format!(",\"isClosed\":{closed},\"points\":[{points}]")) },
+        NodeKind::Poly { sides } => {
+            let cmds = x_core::booleans::poly_path_cmds(n.w, n.h, *sides);
+            let (points, closed) = sk_path_points(&cmds, n.w, n.h);
+            (
+                "shapePath",
+                format!(",\"isClosed\":{closed},\"points\":[{points}]"),
+            )
+        }
+        NodeKind::Star { points, ratio } => {
+            let cmds = x_core::booleans::star_path_cmds(n.w, n.h, *points, *ratio);
+            let (points, closed) = sk_path_points(&cmds, n.w, n.h);
+            (
+                "shapePath",
+                format!(",\"isClosed\":{closed},\"points\":[{points}]"),
+            )
+        },
         NodeKind::Line => ("shapePath", ",\"isClosed\":false,\"points\":[{\"_class\":\"curvePoint\",\"point\":\"{0, 0}\"},{\"_class\":\"curvePoint\",\"point\":\"{1, 1}\"}]".to_string()),
         NodeKind::Text { text } => {
             // base attribute run (location 0): font name/size (h IS the

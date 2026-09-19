@@ -10,15 +10,6 @@ mod tests {
     use super::*;
     use x_core::{Color, Node};
 
-    /// Frames and sections draw their own name as a canvas label (the QA-004
-    /// block in scene.rs), and every glyph of that label counts as one path in
-    /// the scene stats. The names used in these tests are ASCII, so one glyph
-    /// per character — spell the label out instead of hardcoding the sum, so a
-    /// renamed fixture shows up as a label change, not as a mystery off-by-N.
-    fn label_paths(name: &str) -> usize {
-        name.chars().count()
-    }
-
     fn doc() -> Node {
         Node::frame("page", 800.0, 600.0)
             .child(Node::rect(
@@ -226,6 +217,7 @@ mod tests {
                 animation: Animation::Instant,
                 easing: Easing::Linear,
                 reset_on_navigate: false,
+                animate_matching_layers: false,
             },
         ];
         assert!(e.set_interactions("a", interactions.clone()));
@@ -263,6 +255,40 @@ mod tests {
         assert!(!e.set_overflow("nope", Overflow::Clip));
     }
 
+    /// Figma's Prototype-tab scroll settings, at the engine boundary: the
+    /// **Position** menu (Scroll with parent / Fixed / Sticky) is a document
+    /// edit and goes on the undo stack, while the preview's own scroll offset
+    /// is view state — the player writes it and gives it back, and no undo
+    /// entry is spent on it.
+    #[test]
+    fn scroll_position_is_a_document_edit_and_the_preview_offset_is_not() {
+        let mut e = Editor::new(doc());
+        let base = e.undo_depth();
+        assert!(e.set_scroll_position("a", ScrollPosition::Sticky));
+        assert_eq!(
+            ScrollPosition::of(&find(&e.root, "a").unwrap().constraints),
+            ScrollPosition::Sticky
+        );
+        assert_eq!(e.undo_depth(), base + 1, "the menu is one undo step");
+        e.undo();
+        assert_eq!(
+            ScrollPosition::of(&find(&e.root, "a").unwrap().constraints),
+            ScrollPosition::ScrollWithParent,
+            "undo takes the position back"
+        );
+
+        // the preview's offset is not a command
+        let base = e.undo_depth();
+        assert!(e.set_scroll_preview("a", 0.0, 120.0));
+        assert_eq!(find(&e.root, "a").unwrap().scroll, (0.0, 120.0));
+        assert_eq!(e.undo_depth(), base, "no undo entry for a preview scroll");
+        assert!(e.set_scroll_preview("a", 0.0, 0.0));
+        assert_eq!(find(&e.root, "a").unwrap().scroll, (0.0, 0.0));
+
+        assert!(!e.set_scroll_position("nope", ScrollPosition::Fixed));
+        assert!(!e.set_scroll_preview("nope", 1.0, 1.0));
+    }
+
     #[test]
     fn hit_test_finds_topmost() {
         let d = Node::frame("page", 800.0, 600.0)
@@ -271,6 +297,35 @@ mod tests {
         assert_eq!(hit_test(&d, Point::new(75.0, 75.0)), Some("over".into()));
         assert_eq!(hit_test(&d, Point::new(25.0, 25.0)), Some("under".into()));
         assert_eq!(hit_test(&d, Point::new(500.0, 500.0)), None);
+    }
+
+    /// Figma's **canvas stacking** (help 31289464393751) changes the canvas
+    /// only: in a *First on top* auto-layout frame the first child paints last,
+    /// so that is the layer a click finds — the hit test walks the same
+    /// `paint_order` the viewer paints.
+    #[test]
+    fn the_hit_test_follows_canvas_stacking() {
+        let mut row = Node::frame("root", 400.0, 400.0)
+            .auto_layout(AutoLayout {
+                direction: LayoutDirection::Horizontal,
+                canvas_stacking: CanvasStacking::LastOnTop,
+                ..Default::default()
+            })
+            .child(Node::rect("under", 0.0, 0.0, 100.0, 100.0, Color::WHITE))
+            .child(Node::rect("over", 0.0, 0.0, 100.0, 100.0, Color::WHITE));
+        assert_eq!(
+            hit_test(&row, Point::new(50.0, 50.0)),
+            Some("over".into()),
+            "document order puts the last child on top"
+        );
+        if let NodeKind::Frame { layout: Some(l) } = &mut row.kind {
+            l.canvas_stacking = CanvasStacking::FirstOnTop;
+        }
+        assert_eq!(
+            hit_test(&row, Point::new(50.0, 50.0)),
+            Some("under".into()),
+            "First on top puts the first child on top, so the click finds it"
+        );
     }
 
     #[test]
@@ -285,6 +340,42 @@ mod tests {
     }
 
     #[test]
+    fn hit_test_answers_on_a_polygons_and_stars_ink() {
+        // Figma's Polygon and Star are outlines that fill a box whose shape
+        // does not follow them (the page: "the blue bounding box around the
+        // shape is below the bottom of the shape"). A click in the corner of
+        // that box is NOT on the shape — the shape's own ink answers, like
+        // the ellipse's.
+        let d = Node::frame("page", 400.0, 400.0)
+            .child(Node::poly(
+                "tri",
+                100.0,
+                100.0,
+                100.0,
+                100.0,
+                3,
+                Color::WHITE,
+            ))
+            .child(Node::star(
+                "s",
+                250.0,
+                100.0,
+                100.0,
+                100.0,
+                5,
+                0.382,
+                Color::WHITE,
+            ));
+        // the triangle: apex at the top, its lowest edge a quarter above the
+        // box's bottom — inside answers, the box's empty bottom-left does not
+        assert_eq!(hit_test(&d, Point::new(150.0, 140.0)), Some("tri".into()));
+        assert_eq!(hit_test(&d, Point::new(105.0, 195.0)), None);
+        // the star: the centre answers, the notch beside the box corner misses
+        assert_eq!(hit_test(&d, Point::new(300.0, 150.0)), Some("s".into()));
+        assert_eq!(hit_test(&d, Point::new(345.0, 195.0)), None);
+    }
+
+    #[test]
     fn hit_test_respects_rotation() {
         let d = Node::frame("page", 400.0, 400.0).child(
             Node::rect("r", 100.0, 100.0, 100.0, 20.0, Color::WHITE)
@@ -293,6 +384,120 @@ mod tests {
         // rotated 90° about center (150,110): occupies x∈[140,160], y∈[60,160]
         assert_eq!(hit_test(&d, Point::new(150.0, 70.0)), Some("r".into()));
         assert_eq!(hit_test(&d, Point::new(105.0, 110.0)), None); // original spot now empty
+    }
+
+    #[test]
+    fn hit_test_reaches_a_thin_lines_ink() {
+        // Figma's Line: a horizontal segment in a hairline box. What the tool
+        // lands is stroked, never filled, so the click is answered by the
+        // distance to the ink — the box alone would only answer on its edge.
+        // A FILLED path keeps the box test, which is what the pencil's and
+        // brush's marks want.
+        let mut line = Node::vector(
+            "line",
+            100.0,
+            100.0,
+            200.0,
+            0.0,
+            line_path((0.0, 0.0), (200.0, 0.0)),
+        );
+        line.fill = Paint::Solid(Color::TRANSPARENT);
+        line.stroke = Stroke::solid(Color::WHITE, 1.0);
+        let mut mark = Node::vector(
+            "mark",
+            100.0,
+            300.0,
+            200.0,
+            100.0,
+            line_path((0.0, 0.0), (200.0, 100.0)),
+        );
+        mark.fill = Paint::Solid(Color::WHITE);
+        let d = Node::frame("page", 800.0, 600.0).child(line).child(mark);
+        let on = Point::new(200.0, 100.0);
+        assert_eq!(hit_test(&d, on), Some("line".into()));
+        let above = Point::new(200.0, 104.0);
+        assert_eq!(hit_test(&d, above), Some("line".into()));
+        assert_eq!(hit_test(&d, Point::new(200.0, 120.0)), None);
+        // the filled mark answers from inside its box, well off its path
+        let inside = Point::new(150.0, 380.0);
+        assert_eq!(hit_test(&d, inside), Some("mark".into()));
+    }
+
+    /// A page with two top-level frames that each hold the same two layers —
+    /// the shape Figma's "matching objects" is about (a search bar, a title).
+    fn two_frames(extra: Node) -> Node {
+        let layer = |id: &str, name: &str| {
+            let mut n = Node::rect(id, 10.0, 20.0, 80.0, 40.0, Color::WHITE);
+            n.name = name.into();
+            n
+        };
+        let left = Node::frame("Left", 200.0, 200.0)
+            .child(layer("l-title", "Title"))
+            .child(layer("l-body", "Body"));
+        let mut right = Node::frame("Right", 200.0, 200.0)
+            .child(layer("r-title", "Title"))
+            .child(layer("r-body", "Body"));
+        right.transform.x = 300.0;
+        Node::frame("page", 800.0, 600.0)
+            .child(left)
+            .child(right)
+            .child(extra)
+    }
+
+    /// Figma's Select matching layers: the same layer in the page's other frames
+    /// and groups — matched by name and place, not by size.
+    #[test]
+    fn select_matching_finds_the_same_layer_and_never_crosses_a_section() {
+        let extra = Node::rect("loose", 0.0, 400.0, 40.0, 40.0, Color::BLACK);
+        let e = Editor::new(two_frames(extra));
+        let template = e.get_node("l-title").unwrap().clone();
+        let matched: Vec<String> = e
+            .find_matching_nodes(&template)
+            .into_iter()
+            .map(|n| n.id.clone())
+            .collect();
+        assert_eq!(
+            matched,
+            vec!["l-title".to_string(), "r-title".to_string()],
+            "one Title per frame, matched by name and place"
+        );
+        let loose = e.get_node("loose").unwrap().clone();
+        assert_eq!(
+            e.find_matching_nodes(&loose).len(),
+            1,
+            "a page's own top-level layer is inside no frame or group to match across"
+        );
+    }
+
+    #[test]
+    fn select_matching_never_crosses_a_section_boundary() {
+        let heading = |id: &str| {
+            let mut n = Node::rect(id, 10.0, 10.0, 80.0, 40.0, Color::WHITE);
+            n.name = "Heading".into();
+            n
+        };
+        let s1 = Node::frame("S1", 200.0, 200.0).child(heading("s1-heading"));
+        let mut s2 = Node::frame("S2", 200.0, 200.0).child(heading("s2-heading"));
+        s2.transform.x = 250.0;
+        let mut outside = Node::frame("Outside", 200.0, 200.0).child(heading("o-heading"));
+        outside.transform.y = 300.0;
+        let mut band = Node::section("Band", 700.0, 300.0);
+        band.name = "Band".into();
+        let doc = Node::frame("page", 800.0, 800.0)
+            .child(band.child(s1).child(s2))
+            .child(outside);
+        let e = Editor::new(doc);
+        let template = e.get_node("s1-heading").unwrap().clone();
+        let matched: Vec<String> = e
+            .find_matching_nodes(&template)
+            .into_iter()
+            .map(|n| n.id.clone())
+            .collect();
+        assert_eq!(
+            matched,
+            vec!["s1-heading".to_string(), "s2-heading".to_string()],
+            "the same Heading in the section's other frame, and nothing outside it"
+        );
     }
 
     #[test]
@@ -311,6 +516,47 @@ mod tests {
         // a rect that clips a's right edge (110 > 60) contains nothing
         e.marquee_contained(Rect::new(0.0, 0.0, 60.0, 100.0));
         assert!(e.selection.is_empty());
+    }
+
+    #[test]
+    fn a_plain_marquee_stops_at_the_page_top_level_and_the_deep_one_does_not() {
+        // page > outer frame > inner rect
+        let inner = Node::rect("inner", 40.0, 40.0, 60.0, 60.0, Color::WHITE);
+        let mut outer = Node::frame("outer", 300.0, 300.0);
+        outer.transform.x = 20.0;
+        outer.transform.y = 20.0;
+        outer.children.push(inner);
+        let page = Node::frame("page", 400.0, 400.0).child(outer);
+        let mut e = Editor::new(page);
+        let all = Rect::new(0.0, 0.0, 400.0, 400.0);
+        e.marquee(all);
+        assert_eq!(
+            e.selection,
+            vec!["outer".to_string()],
+            "a plain drag answers with the page's top-level object"
+        );
+        e.marquee_deep(all);
+        assert_eq!(
+            e.selection,
+            vec!["outer".to_string(), "inner".to_string()],
+            "the deep drag reaches the layer nested inside it"
+        );
+    }
+
+    #[test]
+    fn a_group_answers_a_marquee_like_any_other_layer() {
+        // A Group has bounds, so a marquee selects it (Figma); only a *click*
+        // passes through a group's empty area to what is beneath.
+        let mark = Node::rect("k", 0.0, 0.0, 30.0, 30.0, Color::WHITE);
+        let group = Node::group("g", 100.0, 100.0).child(mark);
+        let page = Node::frame("page", 200.0, 200.0).child(group);
+        let mut e = Editor::new(page);
+        e.marquee(Rect::new(0.0, 0.0, 200.0, 200.0));
+        assert_eq!(
+            e.selection,
+            vec!["g".to_string()],
+            "the group is the page's top-level object"
+        );
     }
 
     #[test]
@@ -409,6 +655,98 @@ mod tests {
         assert!(matches!(&find(&e.root, "t").unwrap().kind, NodeKind::Text{text} if text=="OLD"));
     }
 
+    /// Figma's canvas rotate: every selected layer turns with the gesture, the
+    /// whole gesture is ONE undo entry (the app merges the moves on release),
+    /// and the default pivot is the selection's centre.
+    #[test]
+    fn rotating_a_selection_orbits_every_layer_about_the_pivot() {
+        let mut e = Editor::new(doc());
+        e.selection = vec!["a".into(), "b".into()];
+        let base: Vec<(String, f64, f64, f64)> = ["a", "b"]
+            .iter()
+            .map(|id| {
+                let n = find(&e.root, id).unwrap();
+                (
+                    (*id).to_string(),
+                    n.transform.x,
+                    n.transform.y,
+                    n.transform.rotation,
+                )
+            })
+            .collect();
+        // the selection box is x 10..300, y 10..60 → its centre is (155, 35)
+        let depth = e.undo_depth();
+        assert!(e.rotate_selection_from(&base, (155.0, 35.0), 90f64.to_radians()));
+        assert_eq!(e.undo_depth(), depth + 1, "one gesture, one entry");
+        let a = find(&e.root, "a").unwrap();
+        // a's centre (60, 35) is 95 left of the pivot: a quarter turn puts it
+        // 95 ABOVE (y 35 - 95 = -60), with the box unchanged
+        assert!((a.transform.rotation - 90f64.to_radians()).abs() < 1e-9);
+        assert!(
+            (a.transform.x + 50.0 - 155.0).abs() < 1e-9,
+            "x: {}",
+            a.transform.x
+        );
+        assert!(
+            (a.transform.y + 25.0 + 60.0).abs() < 1e-9,
+            "y: {}",
+            a.transform.y
+        );
+        assert_eq!((a.w, a.h), (100.0, 50.0), "rotation never resizes");
+        // …and asking again with the same base is idempotent, not cumulative:
+        // this is what makes a live drag's last move the one that stands
+        assert!(e.rotate_selection_from(&base, (155.0, 35.0), 45f64.to_radians()));
+        let a = find(&e.root, "a").unwrap();
+        assert!((a.transform.rotation - 45f64.to_radians()).abs() < 1e-9);
+        // a second gesture is a second entry, so it takes two undos to get back
+        e.undo();
+        e.undo();
+        let a = find(&e.root, "a").unwrap();
+        assert_eq!(
+            (a.transform.x, a.transform.y, a.transform.rotation),
+            (10.0, 10.0, 0.0)
+        );
+    }
+
+    /// A layer whose own rotation origin the user moved turns about *that*
+    /// point, and the panel's field takes Figma's angle range for the whole
+    /// selection at once.
+    #[test]
+    fn a_layers_own_origin_is_the_pivot_of_its_rotation() {
+        let mut e = Editor::new(doc());
+        e.selection = vec!["a".into()];
+        e.set_origin("a", 0.0, 0.0);
+        let n = find(&e.root, "a").unwrap();
+        let corner = (n.transform.x, n.transform.y);
+        let base = vec![("a".to_string(), n.transform.x, n.transform.y, 0.0)];
+        assert!(e.rotate_selection_from(&base, corner, 30f64.to_radians()));
+        let n = find(&e.root, "a").unwrap();
+        assert!(
+            (n.transform.x - 10.0).abs() < 1e-9,
+            "top-left pinned: {}",
+            n.transform.x
+        );
+        assert!(
+            (n.transform.y - 10.0).abs() < 1e-9,
+            "top-left pinned: {}",
+            n.transform.y
+        );
+        assert!((n.transform.rotation - 30f64.to_radians()).abs() < 1e-9);
+
+        // the field: 195° is stored as -165° (Figma's own example), on every
+        // selected layer, as one entry
+        e.selection = vec!["a".into(), "b".into()];
+        let depth = e.undo_depth();
+        assert!(e.set_selection_rotation(195.0));
+        assert_eq!(e.undo_depth(), depth + 1);
+        for id in ["a", "b"] {
+            let r = find(&e.root, id).unwrap().transform.rotation.to_degrees();
+            assert!((r + 165.0).abs() < 1e-9, "{id} at {r}");
+        }
+        e.undo();
+        assert!(find(&e.root, "b").unwrap().transform.rotation == 0.0);
+    }
+
     #[test]
     fn set_corners_is_undoable_uniform_and_per_corner() {
         let mut e = Editor::new(doc());
@@ -449,6 +787,39 @@ mod tests {
     }
 
     #[test]
+    fn corner_radius_extends_to_frames_and_smoothing_is_one_entry() {
+        let mut e = Editor::new(doc());
+        // a frame takes a uniform radius as four equal corners, and undo
+        // puts it back the way it was
+        assert!(e.set_uniform_radius("page", 8.0));
+        assert_eq!(find(&e.root, "page").unwrap().corner_radii, Some([8.0; 4]));
+        assert!(e.undo());
+        assert!(find(&e.root, "page").unwrap().corner_radii.is_none());
+
+        // one corner at a time: the uniform value the rect keeps is the base
+        assert!(e.set_uniform_radius("a", 10.0));
+        assert!(e.set_corner_radius("a", 2, 24.0));
+        assert_eq!(
+            find(&e.root, "a").unwrap().corner_radii,
+            Some([10.0, 10.0, 24.0, 10.0])
+        );
+        match find(&e.root, "a").unwrap().kind {
+            NodeKind::Rect { radius } => assert_eq!(radius, 10.0),
+            _ => panic!("a should be a rect"),
+        }
+        assert!(!e.set_corner_radius("a", 9, 4.0), "only four corners");
+
+        // smoothing: clamped to 0..=1, one entry per write
+        let depth = e.undo_depth();
+        assert!(e.set_corner_smoothing("a", 0.6));
+        assert_eq!(e.undo_depth(), depth + 1);
+        assert!((find(&e.root, "a").unwrap().corner_smoothing - 0.6).abs() < 1e-9);
+        assert!(e.set_corner_smoothing("a", 9.0));
+        assert!((find(&e.root, "a").unwrap().corner_smoothing - 1.0).abs() < 1e-9);
+        assert!(!e.set_corner_smoothing("missing", 0.5), "no such layer");
+    }
+
+    #[test]
     fn delete_and_undo_restores_at_same_index() {
         let mut e = Editor::new(doc());
         e.selection = vec!["b".into()];
@@ -481,6 +852,142 @@ mod tests {
         assert!(e.undo());
         assert!(find(&e.root, "g1").is_none());
         assert_eq!(find(&e.root, "a").unwrap().transform.x, 10.0);
+    }
+
+    #[test]
+    fn use_as_mask_makes_the_bottom_layer_the_mask() {
+        let mut e = Editor::new(doc());
+        // click order is not z-order: `a` sits UNDER `b`
+        e.selection = vec!["b".into(), "a".into()];
+        assert_eq!(e.use_as_mask("m1"), Some(true));
+        let m = find(&e.root, "m1").expect("Figma's mask object (help 360040450253)");
+        assert_eq!(
+            m.children.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b"],
+            "the stack keeps its z-order, the mask first"
+        );
+        assert!(m.children[0].is_mask, "the bottom layer masks the rest");
+        assert!(!m.children[1].is_mask);
+        assert_eq!(e.selection, vec!["m1".to_string()]);
+        // the object and its mask are ONE gesture
+        assert!(e.undo());
+        assert!(
+            find(&e.root, "m1").is_none(),
+            "the mask object undoes with it"
+        );
+        assert!(!find(&e.root, "a").unwrap().is_mask);
+    }
+
+    #[test]
+    fn use_as_mask_toggles_one_layer_and_its_type_is_undoable() {
+        let mut e = Editor::new(doc());
+        e.selection = vec!["a".into()];
+        assert_eq!(e.use_as_mask("m1"), Some(true), "one layer is its own mask");
+        assert!(find(&e.root, "a").unwrap().is_mask);
+        assert!(find(&e.root, "m1").is_none(), "no group for a single layer");
+        assert_eq!(
+            e.mask_type_of_selection(),
+            Some(MaskType::Alpha),
+            "Figma's default is Alpha"
+        );
+        // the Mask section's dropdown, and a non-mask takes no type
+        assert!(e.set_mask_type(MaskType::Vector));
+        assert_eq!(e.mask_type_of_selection(), Some(MaskType::Vector));
+        assert_eq!(e.use_as_mask("m1"), Some(false), "asking again clears it");
+        assert!(!find(&e.root, "a").unwrap().is_mask);
+        assert!(
+            !e.set_mask_type(MaskType::Luminance),
+            "not a mask: nothing to set"
+        );
+        assert!(e.undo());
+        assert!(
+            find(&e.root, "a").unwrap().is_mask,
+            "the clear is one entry"
+        );
+        assert_eq!(e.mask_type_of_selection(), Some(MaskType::Vector));
+    }
+
+    #[test]
+    fn set_image_asset_swaps_the_picture_and_keeps_the_crop() {
+        let mut img = Node::image("img", 0.0, 0.0, 40.0, 30.0, "first.png");
+        if let NodeKind::Image { fit, placement, .. } = &mut img.kind {
+            *fit = ImageFit::Crop;
+            placement.scale = 2.0;
+            placement.focal = (0.25, 0.75);
+        }
+        let mut e = Editor::new(Node::frame("page", 400.0, 400.0).child(img));
+        e.selection = vec!["img".into()];
+        assert!(e.set_image_asset("img", "second.png"));
+        match &find(&e.root, "img").unwrap().kind {
+            NodeKind::Image {
+                asset,
+                fit,
+                placement,
+            } => {
+                assert_eq!(asset, "second.png", "the picture is the new file");
+                assert_eq!(*fit, ImageFit::Crop, "how it shows does not change");
+                assert_eq!(placement.focal, (0.25, 0.75));
+                assert_eq!(placement.scale, 2.0);
+            }
+            other => panic!("image: {other:?}"),
+        }
+        let depth = e.undo_depth();
+        assert!(
+            !e.set_image_asset("img", "second.png"),
+            "same file: no edit"
+        );
+        assert_eq!(e.undo_depth(), depth, "and no undo entry");
+        assert!(
+            !e.set_image_asset("page", "third.png"),
+            "not an image layer"
+        );
+        assert!(e.undo());
+        match &find(&e.root, "img").unwrap().kind {
+            NodeKind::Image { asset, .. } => assert_eq!(asset, "first.png"),
+            other => panic!("image: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_image_crop_writers_are_one_entry_each() {
+        let img = Node::image("img", 0.0, 0.0, 40.0, 30.0, "pic.png");
+        let mut e = Editor::new(Node::frame("page", 400.0, 400.0).child(img));
+        e.selection = vec!["img".into()];
+        assert!(e.set_image_fit("img", ImageFit::Crop));
+        let depth = e.undo_depth();
+        assert!(
+            !e.set_image_fit("img", ImageFit::Crop),
+            "same mode: no edit"
+        );
+        assert_eq!(e.undo_depth(), depth, "and no undo entry");
+        assert!(e.set_image_placement(
+            "img",
+            ImagePlacement {
+                scale: 2.0,
+                ..ImagePlacement::default()
+            }
+        ));
+        assert!(e.fit_image_to_picture("img", 800.0, 600.0));
+        let n = find(&e.root, "img").unwrap();
+        assert_eq!((n.w, n.h), (800.0, 600.0), "the layer is the picture");
+        match &n.kind {
+            NodeKind::Image { fit, placement, .. } => {
+                assert_eq!(*fit, ImageFit::Crop);
+                assert_eq!(placement.scale, 1.0, "the crop is clean");
+                assert_eq!(placement.focal, (0.5, 0.5));
+            }
+            other => panic!("image: {other:?}"),
+        }
+        assert!(
+            !e.set_image_placement("page", ImagePlacement::default()),
+            "the page is not an image layer"
+        );
+        assert!(
+            !e.fit_image_to_picture("img", 800.0, 600.0),
+            "already there"
+        );
+        assert!(e.undo(), "one undo takes the fit back");
+        assert_eq!(find(&e.root, "img").unwrap().w, 40.0);
     }
 
     #[test]
@@ -602,6 +1109,129 @@ mod tests {
         assert!(e.ungroup("sec1"));
         assert!(find(&e.root, "sec1").is_none());
         assert_eq!(e.root.children.len(), 3, "a, b and the untouched ellipse c");
+    }
+
+    /// Sections are canvas elements: "Sections in Figma Design are a
+    /// top-level element on the canvas by default. Sections can contain all
+    /// layer types, including other sections, but cannot be contained within
+    /// frames or groups." Wrapping a selection that lives inside a frame
+    /// therefore LIFTS it to the canvas, keeping its place on the page.
+    #[test]
+    fn a_section_lifts_layers_out_of_a_frame_and_keeps_their_place() {
+        let mut fr = Node::frame("fr", 300.0, 200.0)
+            .child(Node::rect("r1", 10.0, 20.0, 100.0, 40.0, Color::WHITE))
+            .child(Node::rect("r2", 150.0, 120.0, 60.0, 40.0, Color::WHITE));
+        fr.transform.x = 60.0;
+        fr.transform.y = 40.0;
+        let board = Node::frame("page", 800.0, 600.0)
+            .child(fr)
+            .child(Node::ellipse("e", 10.0, 10.0, 20.0, 20.0, Color::WHITE));
+        let mut e = Editor::new(board);
+        e.selection = vec!["r1".into(), "r2".into()];
+        e.section_selection("sec1");
+        // the section is on the PAGE, around the union of the members
+        let sec = find(&e.root, "sec1").expect("section exists");
+        assert!(matches!(sec.kind, NodeKind::Section));
+        assert_eq!(sec.children.len(), 2);
+        assert_eq!((sec.transform.x, sec.transform.y), (70.0, 60.0));
+        assert_eq!((sec.w, sec.h), (200.0, 140.0));
+        // the frame gave its layers up
+        assert!(find(&e.root, "fr").unwrap().children.is_empty());
+        // and the layers kept their place on the page, expressed in the
+        // section's own space now
+        let r1 = find(&e.root, "r1").unwrap();
+        assert_eq!((r1.transform.x, r1.transform.y), (0.0, 0.0));
+        let r2 = find(&e.root, "r2").unwrap();
+        assert_eq!((r2.transform.x, r2.transform.y), (140.0, 100.0));
+        // one undo puts everything back inside the frame
+        assert!(e.undo());
+        assert!(find(&e.root, "sec1").is_none());
+        let fr = find(&e.root, "fr").unwrap();
+        assert_eq!(fr.children.len(), 2);
+        assert_eq!(find(&e.root, "r1").unwrap().transform.x, 10.0);
+    }
+
+    /// The rule is enforced where the tree is written, not in each caller: a
+    /// section cannot be inserted into a frame or a group, and the tree's own
+    /// drag (the reorder command) refuses to move one in either.
+    #[test]
+    fn a_section_never_lands_inside_a_frame_or_a_group() {
+        let board = Node::frame("page", 800.0, 600.0)
+            .child(Node::frame("fr", 300.0, 200.0))
+            .child(Node::group("gr", 100.0, 100.0).child(Node::rect(
+                "g1",
+                0.0,
+                0.0,
+                20.0,
+                20.0,
+                Color::WHITE,
+            )));
+        let mut e = Editor::new(board);
+        e.insert_node("page", Node::section("sec1", 200.0, 120.0));
+        assert!(e.get_node("sec1").is_some());
+        assert!(!e.insert_node("fr", Node::section("sec2", 40.0, 40.0)));
+        assert!(!e.insert_node("gr", Node::section("sec3", 40.0, 40.0)));
+        assert!(!e.reorder_node("sec1", "page", 0, "fr", 0));
+        assert!(!e.reorder_node("sec1", "page", 0, "gr", 0));
+        // ordinary layers still move into a container
+        assert!(e.reorder_node("fr", "page", 0, "gr", 0));
+    }
+
+    /// "You can also click and drag a section over the objects you want to add
+    /// to it" — a layer the section completely covers joins it, keeping its
+    /// place on the canvas; one it only partly covers stays on the page.
+    #[test]
+    fn a_section_takes_in_the_layers_it_covers() {
+        let board = Node::frame("page", 800.0, 600.0)
+            .child(Node::rect("in", 40.0, 40.0, 60.0, 60.0, Color::WHITE))
+            .child(Node::rect("edge", 190.0, 40.0, 60.0, 60.0, Color::WHITE));
+        let mut e = Editor::new(board);
+        let mut sec = Node::section("sec1", 200.0, 200.0);
+        sec.transform.x = 20.0;
+        sec.transform.y = 20.0;
+        e.insert_node("page", sec);
+        assert_eq!(
+            e.section_absorb("sec1"),
+            1,
+            "the covered layer joined, the straddling one stayed"
+        );
+        assert_eq!(find(&e.root, "sec1").unwrap().children.len(), 1);
+        assert_eq!(find(&e.root, "in").unwrap().transform.x, 20.0);
+        assert_eq!(find(&e.root, "edge").unwrap().transform.x, 190.0);
+        assert!(e.undo());
+        assert_eq!(find(&e.root, "in").unwrap().transform.x, 40.0);
+        assert!(find(&e.root, "sec1").unwrap().children.is_empty());
+    }
+
+    /// Figma's second delete — ⌘⌫ on a Mac, Ctrl+Backspace on Windows: "To
+    /// delete a section without deleting its contents". The container goes,
+    /// its layers stay on the canvas where they were drawn.
+    #[test]
+    fn deleting_a_section_can_keep_its_layers() {
+        let board = Node::frame("page", 800.0, 600.0)
+            .child(Node::rect("keep1", 10.0, 10.0, 40.0, 40.0, Color::WHITE))
+            .child(Node::rect("keep2", 60.0, 10.0, 40.0, 40.0, Color::WHITE));
+        let mut e = Editor::new(board);
+        e.insert_node("page", Node::section("sec1", 120.0, 80.0));
+        {
+            let sec = find_mut(&mut e.root, "sec1").expect("section");
+            sec.transform.x = 5.0;
+            sec.transform.y = 5.0;
+        }
+        assert_eq!(e.section_absorb("sec1"), 2);
+        e.selection = vec!["sec1".into()];
+        assert_eq!(e.delete_keeping_contents(), 2);
+        assert!(find(&e.root, "sec1").is_none(), "the section is gone");
+        let k1 = find(&e.root, "keep1").unwrap();
+        assert_eq!((k1.transform.x, k1.transform.y), (10.0, 10.0));
+        let k2 = find(&e.root, "keep2").unwrap();
+        assert_eq!((k2.transform.x, k2.transform.y), (60.0, 10.0));
+        assert!(e.undo());
+        assert!(
+            find(&e.root, "sec1").is_some(),
+            "undo brings the section back"
+        );
+        assert_eq!(find(&e.root, "sec1").unwrap().children.len(), 2);
     }
 
     #[test]
@@ -1167,7 +1797,7 @@ mod tests {
         let mid = smart_animate(&from, &to, 0.25);
         let (_, s) = x_render::build_scene(&mid, None, &Variables::default());
         // the interpolated box, plus the morph frame's own name label
-        assert_eq!(s.paths, 1 + label_paths("s1"));
+        assert_eq!(s.paths, 1);
     }
 
     #[test]
@@ -1261,13 +1891,14 @@ mod tests {
         assert!(master.children.iter().any(|c| c.id == "a"));
         // rendering resolves the instance -> master children paths
         let (_, s) = x_render::build_scene(&e.root, None, &Variables::default());
-        // c (ellipse) + 2 resolved members + the page frame's label
-        assert_eq!(s.paths, 3 + label_paths("page"));
+        // c (ellipse) + 2 resolved members — the page frame is the root of
+        // the render, so it contributes no name label
+        assert_eq!(s.paths, 3);
         // stamp two more instances
         let id2 = e.place_instance("Card", 400.0, 300.0).unwrap();
         assert_eq!(id2, "Card-2");
         let (_, s) = x_render::build_scene(&e.root, None, &Variables::default());
-        assert_eq!(s.paths, 5 + label_paths("page"));
+        assert_eq!(s.paths, 5);
         // editing the MASTER's child updates every instance render
         assert_eq!(e.component_names(), vec!["Card".to_string()]);
         // undo the placement, then undo the componentization entirely
@@ -1484,18 +2115,29 @@ mod tests {
             matches!(&inst.kind, NodeKind::Instance { component } if component == "Widget/Primary")
         );
 
-        // undo unwinds the renames one component at a time (reverse order)
-        assert!(e.undo());
-        assert!(
-            matches!(&find(&e.root, "Danger-1").unwrap().kind, NodeKind::Instance { component } if component == "Button/Danger")
-        );
-        assert!(
-            matches!(&find(&e.root, "Primary-1").unwrap().kind, NodeKind::Instance { component } if component == "Widget/Primary")
-        );
+        // the combine is ONE entry: undo takes back both renames and the frame
         assert!(e.undo());
         assert!(
             matches!(&find(&e.root, "Primary-1").unwrap().kind, NodeKind::Instance { component } if component == "Button/Primary")
         );
+        assert!(
+            matches!(&find(&e.root, "Danger-1").unwrap().kind, NodeKind::Instance { component } if component == "Button/Danger")
+        );
+        assert_eq!(
+            variants_of(&e.root, "Widget").len(),
+            0,
+            "the set frame went back with the renames"
+        );
+
+        // …and the next undo is the FIRST combine, never a half-renamed tree
+        assert!(e.undo());
+        assert!(
+            matches!(&find(&e.root, "Primary-1").unwrap().kind, NodeKind::Instance { component } if component == "Primary")
+        );
+        assert!(
+            matches!(&find(&e.root, "Danger-1").unwrap().kind, NodeKind::Instance { component } if component == "Danger")
+        );
+        assert_eq!(variants_of(&e.root, "Button").len(), 0);
     }
 
     #[test]
@@ -1594,6 +2236,153 @@ mod tests {
         assert_eq!(find(&e.root, "r").unwrap().w, 50.0);
         // zero/negative factor rejected
         assert!(!e.scale_node("f", 0.0));
+    }
+
+    /// A node binding read as a number. Text metrics are px values in the
+    /// bindings (`fs`, `ls`, `lhpx`, …) rather than typed fields, so the scale
+    /// tests have to read them the way the renderer does.
+    fn binding_px(n: &Node, k: &str) -> f64 {
+        n.bindings
+            .get(k)
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or_else(|| panic!("binding {k} is not a number"))
+    }
+
+    #[test]
+    fn scale_tool_takes_text_effects_and_layout_with_it() {
+        // Figma's Scale tool (K) is not a resize: stroke weight, corner
+        // radius, font size, effect distances and auto-layout spacing all
+        // travel with the box. This is that whole list, on one node.
+        let mut inner = Node::rect("r", 10.0, 20.0, 30.0, 40.0, Color::WHITE).radius(8.0);
+        inner.stroke.width = 2.0;
+        let mut dashed = StrokeLayer::new(Stroke::solid(Color::BLACK, 2.0));
+        dashed.options.dash = vec![4.0, 2.0];
+        dashed.options.dash_offset = 1.0;
+        inner.stroke_layers.push(dashed);
+        let mut label = Node::text("t", 0.0, 0.0, 60.0, 20.0, "hi");
+        for (k, v) in [("fs", "14"), ("ls", "1"), ("lhpx", "20"), ("lhp", "150")] {
+            label.bindings.insert(k.into(), v.into());
+        }
+        label.paragraph_indent = 6.0;
+        label.text_runs.push(TextRun {
+            size: Some(10.0),
+            ls: Some(0.5),
+            ..Default::default()
+        });
+        let frame = Node::frame("f", 200.0, 100.0)
+            .auto_layout(AutoLayout {
+                direction: LayoutDirection::Vertical,
+                gap: 12.0,
+                padding: [8.0, 8.0, 4.0, 4.0],
+                ..Default::default()
+            })
+            .effect(Effect::LayerBlur { radius: 6.0 })
+            .child(inner)
+            .child(label);
+        let mut e = Editor::new(Node::frame("page", 800.0, 600.0).child(frame));
+        assert!(e.scale_node("f", 2.0));
+        let f = find(&e.root, "f").unwrap();
+        assert_eq!((f.w, f.h), (400.0, 200.0));
+        let layout = match &f.kind {
+            NodeKind::Frame { layout } => layout.clone().expect("frame lost its layout"),
+            other => panic!("frame kind lost: {other:?}"),
+        };
+        assert_eq!(layout.gap, 24.0);
+        assert_eq!(layout.padding, [16.0, 16.0, 8.0, 8.0]);
+        assert!(matches!(
+            f.effects.as_slice(),
+            [Effect::LayerBlur { radius }] if *radius == 12.0
+        ));
+        let r = find(&e.root, "r").unwrap();
+        assert_eq!((r.transform.x, r.transform.y), (20.0, 40.0));
+        assert_eq!((r.w, r.h), (60.0, 80.0));
+        assert!(matches!(r.kind, NodeKind::Rect { radius } if radius == 16.0));
+        assert_eq!(r.stroke.width, 4.0);
+        assert_eq!(r.stroke_layers[0].stroke.width, 4.0);
+        assert_eq!(r.stroke_layers[0].options.dash, vec![8.0, 4.0]);
+        assert_eq!(r.stroke_layers[0].options.dash_offset, 2.0);
+        let t = find(&e.root, "t").unwrap();
+        assert_eq!(binding_px(t, "fs"), 28.0);
+        assert_eq!(binding_px(t, "ls"), 2.0);
+        assert_eq!(binding_px(t, "lhpx"), 40.0);
+        assert_eq!(
+            binding_px(t, "lhp"),
+            150.0,
+            "a percent line height is relative"
+        );
+        assert_eq!(t.paragraph_indent, 12.0);
+        assert_eq!(t.text_runs[0].size, Some(20.0));
+        assert_eq!(t.text_runs[0].ls, Some(1.0));
+        e.undo();
+        assert_eq!(find(&e.root, "f").unwrap().w, 200.0);
+        assert_eq!(binding_px(find(&e.root, "t").unwrap(), "fs"), 14.0);
+    }
+
+    #[test]
+    fn scale_about_an_anchor_pins_it_and_is_one_undo_step() {
+        // The anchor is the FIXED POINT: scaling a node about its own
+        // top-left corner must leave that corner exactly where it was, which
+        // is what makes Figma's corner drag feel like it grows from the
+        // opposite handle.
+        let mut e = Editor::new(doc());
+        assert!(e.scale_nodes_about(&[("a".into(), 10.0, 10.0)], 2.0));
+        let a = find(&e.root, "a").unwrap();
+        assert_eq!((a.transform.x, a.transform.y), (10.0, 10.0));
+        assert_eq!((a.w, a.h), (200.0, 100.0));
+        e.undo();
+
+        // a multi-layer scale: everything moves and grows against the same
+        // shared anchor, and the whole gesture is ONE undo step
+        let depth = e.undo_depth();
+        assert!(e.scale_nodes_about(&[("a".into(), 0.0, 0.0), ("b".into(), 0.0, 0.0)], 0.5));
+        let a = find(&e.root, "a").unwrap();
+        assert_eq!(
+            (a.transform.x, a.transform.y, a.w, a.h),
+            (5.0, 5.0, 50.0, 25.0)
+        );
+        let b = find(&e.root, "b").unwrap();
+        assert_eq!(
+            (b.transform.x, b.transform.y, b.w, b.h),
+            (100.0, 5.0, 50.0, 25.0)
+        );
+        assert_eq!(e.undo_depth(), depth + 1, "one gesture, one undo step");
+        // Figma's exception, from the Scale tool article: a LOCKED layer is
+        // not scaled. Lock "b" and repeat: only "a" moves.
+        e.undo();
+        e.set_locked("b", true);
+        assert!(e.scale_nodes_about(&[("a".into(), 0.0, 0.0), ("b".into(), 0.0, 0.0)], 0.5));
+        assert_eq!(find(&e.root, "a").unwrap().w, 50.0);
+        assert_eq!(
+            find(&e.root, "b").unwrap().w,
+            100.0,
+            "a locked layer must not scale"
+        );
+        e.undo();
+        assert_eq!(find(&e.root, "a").unwrap().w, 100.0);
+        assert_eq!(find(&e.root, "b").unwrap().w, 100.0);
+        // zero/negative factors are refused, like scale_node
+        assert!(!e.scale_nodes_about(&[("a".into(), 0.0, 0.0)], 0.0));
+        assert!(!e.scale_nodes_about(&[], 2.0));
+
+        // a node listed TOGETHER WITH ITS ANCESTOR scales exactly once: the
+        // subtree pass already carries it
+        let mut e2 = Editor::new(Node::frame("page", 800.0, 600.0).child(
+            Node::frame("f", 100.0, 100.0).child(Node::rect(
+                "r",
+                10.0,
+                10.0,
+                20.0,
+                20.0,
+                Color::WHITE,
+            )),
+        ));
+        assert!(e2.scale_nodes_about(&[("f".into(), 0.0, 0.0), ("r".into(), 0.0, 0.0)], 2.0));
+        assert_eq!(find(&e2.root, "f").unwrap().w, 200.0);
+        let r = find(&e2.root, "r").unwrap();
+        assert_eq!(
+            (r.transform.x, r.transform.y, r.w, r.h),
+            (20.0, 20.0, 40.0, 40.0)
+        );
     }
 
     #[test]
@@ -1898,6 +2687,605 @@ mod tests {
         e.undo();
         let n = crate::find(&e.root, "i1").unwrap();
         assert_eq!(n.overrides.len(), 1, "reset undone");
+    }
+
+    /// Figma's instance More-actions menu (help 360039150733) at the engine
+    /// layer: the change list, a one-property reset, and **push changes to
+    /// main component** — each one command-log step, so ⌘Z takes it back.
+    #[test]
+    fn pushing_changes_to_main_and_resetting_one_change_are_undoable() {
+        let master = Node::component("def", "Button", 120.0, 44.0)
+            .child(Node::text("lbl", 0.0, 0.0, 80.0, 16.0, "Click me"))
+            .child(Node::rect(
+                "ico",
+                96.0,
+                0.0,
+                16.0,
+                16.0,
+                Color::from_rgb8(0x11, 0x22, 0x33),
+            ));
+        let mut inst = Node::instance("i1", "Button", 10.0, 10.0, 120.0, 44.0);
+        x_core::set_override(
+            &mut inst,
+            "lbl",
+            x_core::OverrideValue::Text("Hello".into()),
+        );
+        x_core::set_override(
+            &mut inst,
+            "ico",
+            x_core::OverrideValue::Fill(Color::from_rgb8(0xab, 0xcd, 0xef)),
+        );
+        let mut e = Editor::new(Node::frame("r", 500.0, 500.0).child(master).child(inst));
+
+        // the list the Reset flyout prints
+        let changes = e.instance_changes("i1");
+        assert_eq!(changes.len(), 2);
+        assert_eq!(
+            (changes[0].node.as_str(), changes[0].property),
+            ("ico", "Fill")
+        );
+        assert_eq!(
+            (changes[1].node.as_str(), changes[1].property),
+            ("lbl", "Text")
+        );
+        // a node that is not an instance has no changes to list
+        assert!(e.instance_changes("r").is_empty());
+
+        // "Reset > Reset [property]": only that layer's override goes
+        assert!(e.reset_one_override("i1", "lbl"));
+        let n = crate::find(&e.root, "i1").unwrap();
+        assert!(!n.overrides.contains_key("lbl"));
+        assert!(n.overrides.contains_key("ico"), "the other change stays");
+        assert!(
+            !e.reset_one_override("i1", "lbl"),
+            "nothing left to reset on that layer"
+        );
+        e.undo();
+        assert!(
+            crate::find(&e.root, "i1")
+                .unwrap()
+                .overrides
+                .contains_key("lbl"),
+            "the single reset unwinds"
+        );
+
+        // "Push changes to main component"
+        let pushed = e.push_overrides_to_main("i1");
+        assert_eq!(pushed, 2, "text + fill are pushable");
+        let NodeKind::Text { text } = &crate::find(&e.root, "lbl").unwrap().kind else {
+            panic!("label is a text layer")
+        };
+        assert_eq!(text, "Hello", "the master carries the instance's text now");
+        assert!(matches!(
+            &crate::find(&e.root, "ico").unwrap().fill,
+            x_core::Paint::Solid(c) if *c == Color::from_rgb8(0xab, 0xcd, 0xef)
+        ));
+        // pushing is one undo step
+        e.undo();
+        let NodeKind::Text { text } = &crate::find(&e.root, "lbl").unwrap().kind else {
+            panic!("label is a text layer")
+        };
+        assert_eq!(text, "Click me", "the push unwinds in one step");
+
+        // a node that is not an instance pushes nothing
+        assert_eq!(e.push_overrides_to_main("r"), 0);
+        assert_eq!(e.push_overrides_to_main("nope"), 0);
+    }
+
+    /// A Button master with a label and an icon, and one instance of it — the
+    /// fixture Figma's *select inside* behaves on.
+    fn scoped_fixture() -> Editor {
+        let master = Node::component("def", "Button", 120.0, 44.0)
+            .child(Node::text("lbl", 12.0, 12.0, 80.0, 20.0, "Click me"))
+            .child(Node::rect(
+                "ico",
+                96.0,
+                14.0,
+                16.0,
+                16.0,
+                Color::from_rgb8(0x11, 0x22, 0x33),
+            ));
+        let inst = Node::instance("i1", "Button", 100.0, 200.0, 120.0, 44.0);
+        Editor::new(Node::frame("r", 500.0, 500.0).child(master).child(inst))
+    }
+
+    /// Figma (help 360041488473): the Effects section is a **list** — add a
+    /// type, switch a row's type, hide it, edit its settings, duplicate it,
+    /// reorder it, remove it — and every write is one undo entry.
+    #[test]
+    fn the_effects_list_is_the_stack_and_every_write_is_one_undo_step() {
+        let mut e = Editor::new(Node::frame("r", 400.0, 300.0).child(Node::rect(
+            "r1",
+            0.0,
+            0.0,
+            40.0,
+            40.0,
+            Color::WHITE,
+        )));
+
+        assert!(e.add_effect_layer("r1", Effect::default_of(EffectKind::DropShadow)));
+        assert!(e.add_effect_layer("r1", Effect::default_of(EffectKind::LayerBlur)));
+        let n = find(&e.root, "r1").unwrap();
+        assert_eq!(n.effect_layers.len(), 2, "the stack");
+        assert_eq!(n.effects.len(), 2, "the legacy list follows the stack");
+
+        // the second effect becomes noise; its fields are the noise fields
+        assert!(e.set_effect_kind("r1", 1, EffectKind::Noise));
+        let n = find(&e.root, "r1").unwrap();
+        assert_eq!(n.effect_layers[1].effect.kind(), EffectKind::Noise);
+        assert_eq!(
+            n.effect_layers[1].effect.fields(),
+            vec![EffectField::Density],
+            "a blur's Radius row became the noise's Density row"
+        );
+
+        // settings: X / Y / Blur on the shadow, Density on the noise
+        assert!(e.set_effect_field("r1", 0, EffectField::X, 2.0));
+        assert!(e.set_effect_field("r1", 0, EffectField::Blur, 9.0));
+        assert!(e.set_effect_field("r1", 1, EffectField::Density, 0.6));
+        assert!(e.set_effect_color("r1", 0, Color::from_rgba8(255, 0, 0, 128)));
+        // a field the effect does not carry is ignored, not misdirected
+        assert!(e.set_effect_field("r1", 1, EffectField::Blur, 5.0));
+        let n = find(&e.root, "r1").unwrap();
+        assert_eq!(n.effect_layers[0].effect.field(EffectField::X), 2.0);
+        assert_eq!(n.effect_layers[0].effect.field(EffectField::Blur), 9.0);
+        assert_eq!(
+            n.effect_layers[0].effect.color(),
+            Some(Color::from_rgba8(255, 0, 0, 128))
+        );
+        // the stack holds f32, so the round-trip is f32-accurate (0.6 → the
+        // nearest f32, which is what the panel prints back as 60%)
+        assert_eq!(
+            n.effect_layers[1].effect.field(EffectField::Density),
+            f64::from(0.6_f32)
+        );
+
+        // per-effect visibility: hidden, but the settings stay
+        assert!(e.set_effect_layer_visible("r1", 0, false));
+        let n = find(&e.root, "r1").unwrap();
+        assert!(!n.effect_layers[0].visible);
+        assert_eq!(n.effect_layers[0].effect.field(EffectField::Blur), 9.0);
+        assert_eq!(n.active_effects().len(), 1, "only the noise paints");
+
+        // duplicate in place, then reorder by one
+        assert!(e.duplicate_effect_layer("r1", 0));
+        assert_eq!(find(&e.root, "r1").unwrap().effect_layers.len(), 3);
+        assert!(e.move_effect_layer("r1", 0, 2));
+        let n = find(&e.root, "r1").unwrap();
+        assert_eq!(n.effect_layers[2].effect.kind(), EffectKind::DropShadow);
+
+        // …and one click is one undo entry: removing takes back one step
+        assert!(e.remove_effect_layer("r1", 2));
+        assert_eq!(find(&e.root, "r1").unwrap().effect_layers.len(), 2);
+        assert!(e.undo());
+        assert_eq!(find(&e.root, "r1").unwrap().effect_layers.len(), 3);
+    }
+
+    /// Somebody clicking a row that is gone writes nothing at all — no silent
+    /// no-op undo entry, no write into a neighbour's settings.
+    #[test]
+    fn an_effect_write_past_the_end_changes_nothing() {
+        let mut e = Editor::new(Node::frame("r", 400.0, 300.0).child(Node::rect(
+            "r1",
+            0.0,
+            0.0,
+            40.0,
+            40.0,
+            Color::WHITE,
+        )));
+        assert!(e.add_effect_layer("r1", Effect::default_of(EffectKind::DropShadow)));
+        let depth = e.undo_depth();
+        assert!(!e.set_effect_field("r1", 1, EffectField::X, 4.0));
+        assert!(!e.set_effect_kind("r1", 7, EffectKind::Noise));
+        assert!(!e.remove_effect_layer("r1", 3));
+        assert!(!e.set_effect_color("r1", 4, Color::WHITE));
+        assert_eq!(e.undo_depth(), depth, "nothing was pushed");
+    }
+
+    /// A blend picked on a paint the user never touched still lands: the node's
+    /// flat fill *is* layer 0, and the write materializes the stack to say so.
+    #[test]
+    fn a_fill_blend_materializes_the_stack_first() {
+        let mut e = Editor::new(Node::frame("r", 400.0, 300.0).child(Node::rect(
+            "r1",
+            0.0,
+            0.0,
+            40.0,
+            40.0,
+            Color::WHITE,
+        )));
+        assert!(!find(&e.root, "r1").unwrap().visual_stacks_materialized);
+        assert!(e.set_paint_layer_blend("r1", true, 0, BlendKind::Multiply));
+        let n = find(&e.root, "r1").unwrap();
+        assert_eq!(n.fill_layers.len(), 1, "the flat fill became layer 0");
+        assert_eq!(n.fill_layers[0].blend, BlendKind::Multiply);
+        // a stroke that was never set is still refused — there is no paint there
+        assert!(!e.set_paint_layer_blend("r1", false, 0, BlendKind::Multiply));
+    }
+
+    /// A blur has no colour: the shadow's Fill field cannot land on it.
+    #[test]
+    fn only_a_shadow_carries_a_fill() {
+        let mut e = Editor::new(Node::frame("r", 400.0, 300.0).child(Node::rect(
+            "r1",
+            0.0,
+            0.0,
+            40.0,
+            40.0,
+            Color::WHITE,
+        )));
+        assert!(e.add_effect_layer("r1", Effect::default_of(EffectKind::LayerBlur)));
+        assert!(!e.set_effect_color("r1", 0, Color::from_rgba8(9, 9, 9, 255)));
+        assert_eq!(
+            find(&e.root, "r1").unwrap().effect_layers[0].effect.color(),
+            None
+        );
+    }
+
+    /// Figma (help 360040667874): *"Pass through cannot be applied to fills or
+    /// effects"*, and it IS allowed on a layer, where it is also the default.
+    #[test]
+    fn pass_through_is_a_layer_mode_only() {
+        let mut e = Editor::new(Node::frame("r", 400.0, 300.0).child(Node::rect(
+            "r1",
+            0.0,
+            0.0,
+            40.0,
+            40.0,
+            Color::WHITE,
+        )));
+        assert!(e.add_effect_layer("r1", Effect::default_of(EffectKind::DropShadow)));
+        assert!(e.set_layer_blend("r1", BlendKind::PassThrough));
+        assert_eq!(find(&e.root, "r1").unwrap().blend, BlendKind::PassThrough);
+
+        assert!(!e.set_paint_layer_blend("r1", true, 0, BlendKind::PassThrough));
+        assert!(!e.set_effect_layer_blend("r1", 0, BlendKind::PassThrough));
+        assert!(e.set_paint_layer_blend("r1", true, 0, BlendKind::Multiply));
+        assert!(e.set_effect_layer_blend("r1", 0, BlendKind::Screen));
+        let n = find(&e.root, "r1").unwrap();
+        assert_eq!(n.fill_layers[0].blend, BlendKind::Multiply);
+        assert_eq!(n.effect_layers[0].blend, BlendKind::Screen);
+        // a paint index that does not exist is refused, not created
+        assert!(!e.set_paint_layer_blend("r1", true, 5, BlendKind::Darken));
+    }
+
+    /// Two masters and an instance of the first, none of them grouped: the
+    /// fixture `combine_as_variants` works on.
+    fn variant_fixture() -> Editor {
+        let a = Node::component("ca", "Primary", 120.0, 44.0)
+            .child(Node::text("lbl", 12.0, 12.0, 80.0, 20.0, "Click"));
+        let b = Node::component("cb", "Ghost", 120.0, 44.0);
+        let inst = Node::instance("i1", "Primary", 300.0, 40.0, 120.0, 44.0);
+        Editor::new(Node::frame("r", 600.0, 400.0).child(a).child(b).child(inst))
+    }
+
+    /// Figma (help 360056440594): a set is a frame that contains **only**
+    /// components, and combining puts the variants inside one.
+    #[test]
+    fn combining_two_masters_builds_a_set_frame_that_holds_them() {
+        let mut e = variant_fixture();
+        e.selection = vec!["ca".into(), "cb".into()];
+        assert_eq!(e.combine_as_variants("Button"), 2, "both masters went in");
+
+        let set = e
+            .root
+            .children
+            .iter()
+            .find(|c| c.name == "Button")
+            .expect("the set frame");
+        assert!(
+            x_core::is_variant_set(set),
+            "a set holds nothing but variants"
+        );
+        let (prefix, members) = x_core::variant_set_members(set).expect("members");
+        assert_eq!(prefix, "Button");
+        assert_eq!(
+            members.iter().map(|(v, _)| *v).collect::<Vec<_>>(),
+            vec!["Primary", "Ghost"],
+            "the declared order is the tree order"
+        );
+
+        // the masters were renamed, and the instance followed the rename
+        assert!(x_core::find_master(&e.root, "Button/Primary").is_some());
+        assert!(x_core::find_master(&e.root, "Button/Ghost").is_some());
+        assert!(
+            x_core::find_master(&e.root, "Primary").is_none(),
+            "the old name is gone"
+        );
+        let inst = crate::find(&e.root, "i1").expect("the instance");
+        assert!(
+            matches!(&inst.kind, NodeKind::Instance { component } if component == "Button/Primary"),
+            "the instance points at the new name"
+        );
+
+        // the set took the first master's slot; ids and inner layers survive
+        assert_eq!(e.root.children[0].id, "set-Button");
+        assert_eq!(e.root.children[0].children[0].id, "comp-Button/Primary");
+        assert_eq!(e.root.children[0].children[0].children[0].id, "lbl");
+
+        // one undo entry for the whole combine
+        assert!(e.undo());
+        assert!(x_core::find_master(&e.root, "Primary").is_some());
+        assert!(x_core::find_master(&e.root, "Button/Primary").is_none());
+        assert!(
+            e.root.children.iter().all(|c| c.name != "Button"),
+            "the set frame is gone again"
+        );
+    }
+
+    /// A frame that already holds nothing but the selection IS the set — Figma
+    /// reuses it rather than nesting a second frame.
+    #[test]
+    fn a_frame_holding_only_the_selection_becomes_the_set() {
+        let holder = Node::frame("holder", 300.0, 200.0)
+            .child(Node::component("ca", "Primary", 120.0, 44.0))
+            .child(Node::component("cb", "Ghost", 120.0, 44.0));
+        let mut e = Editor::new(Node::frame("r", 600.0, 400.0).child(holder));
+        e.selection = vec!["ca".into(), "cb".into()];
+        assert_eq!(e.combine_as_variants("Button"), 2);
+
+        let set = crate::find(&e.root, "holder").expect("the original frame");
+        assert_eq!(set.name, "Button", "the frame took the set's name");
+        assert!(x_core::is_variant_set(set));
+        assert_eq!(e.root.children.len(), 1, "no second frame was built");
+        assert_eq!(x_core::variants_of(&e.root, "Button").len(), 2);
+    }
+
+    /// The page is never the set: loose masters on the canvas get a frame of
+    /// their own even when the page happens to hold nothing else.
+    #[test]
+    fn combining_loose_masters_never_turns_the_page_into_the_set() {
+        let mut e = Editor::new(
+            Node::frame("r", 600.0, 400.0)
+                .child(Node::component("ca", "Primary", 120.0, 44.0))
+                .child(Node::component("cb", "Ghost", 120.0, 44.0)),
+        );
+        e.selection = vec!["ca".into(), "cb".into()];
+        assert_eq!(e.combine_as_variants("Button"), 2);
+
+        assert_eq!(e.root.name, "r", "the page keeps its name");
+        assert_eq!(e.root.children.len(), 1, "one set beside them");
+        let set = &e.root.children[0];
+        assert!(x_core::is_variant_set(set));
+        assert_eq!(set.name, "Button");
+        assert_eq!(set.children.len(), 2);
+    }
+
+    /// The predicate the whole model rests on: all components, one set prefix.
+    #[test]
+    fn a_set_is_all_variants_and_nothing_else() {
+        let set = Node::frame("s", 300.0, 100.0)
+            .child(Node::component("ca", "Button/Primary", 120.0, 44.0))
+            .child(Node::component("cb", "Button/Ghost", 120.0, 44.0));
+        assert!(x_core::is_variant_set(&set));
+        assert_eq!(x_core::variant_set_members(&set).unwrap().0, "Button");
+
+        // one shape anywhere inside and it is just a frame again
+        let mixed = set
+            .clone()
+            .child(Node::rect("r1", 0.0, 0.0, 10.0, 10.0, Color::WHITE));
+        assert!(
+            !x_core::is_variant_set(&mixed),
+            "a set contains only components"
+        );
+
+        // two sets in one frame is not a set either
+        let two_sets = set.child(Node::component("cc", "Other/Hover", 120.0, 44.0));
+        assert!(
+            !x_core::is_variant_set(&two_sets),
+            "one set prefix, not two"
+        );
+
+        assert!(
+            !x_core::is_variant_set(&Node::frame("empty", 10.0, 10.0)),
+            "an empty frame has no variants to be a set of"
+        );
+        assert!(
+            !x_core::is_variant_set(&Node::component("plain", "Plain", 10.0, 10.0)),
+            "a master that is not a variant is not a set either"
+        );
+    }
+
+    /// Figma (help 360039150733): *"you can change the properties of any layer
+    /// within an instance"* — double-clicking inside an instance selects the
+    /// layer under the cursor, which for this engine is the master layer the
+    /// override will name.
+    #[test]
+    fn selecting_inside_an_instance_picks_the_layer_under_the_cursor() {
+        let mut e = scoped_fixture();
+        let vars = Variables::default();
+
+        let layer = e.enter_instance(Point::new(120.0, 220.0), &vars);
+        assert_eq!(
+            layer.as_deref(),
+            Some("lbl"),
+            "the label is under the point"
+        );
+        assert_eq!(e.selection, vec!["lbl".to_string()]);
+        assert_eq!(
+            e.instance_scope.as_ref().map(|(i, _)| i.as_str()),
+            Some("i1")
+        );
+
+        // the icon sits further right; entering there moves the scope
+        let layer = e.enter_instance(Point::new(205.0, 222.0), &vars);
+        assert_eq!(layer.as_deref(), Some("ico"));
+        assert_eq!(
+            e.instance_scope.as_ref().map(|(_, l)| l.as_str()),
+            Some("ico")
+        );
+
+        // a point outside the instance is not "inside" anything
+        assert_eq!(e.enter_instance(Point::new(400.0, 400.0), &vars), None);
+
+        // …and Esc (exit_instance) puts the instance back under the cursor
+        assert!(e.exit_instance());
+        assert_eq!(e.selection, vec!["i1".to_string()]);
+        assert!(e.instance_scope.is_none());
+        assert!(!e.exit_instance(), "there is nothing left to leave");
+    }
+
+    /// The write rule: a property change aimed at a layer inside the instance
+    /// becomes the instance's override, and the master keeps its own value.
+    #[test]
+    fn editing_inside_an_instance_stores_an_override() {
+        let mut e = scoped_fixture();
+        let vars = Variables::default();
+        e.enter_instance(Point::new(120.0, 220.0), &vars)
+            .expect("inside the instance");
+
+        e.set_text("lbl", "Hello");
+        let inst = crate::find(&e.root, "i1").unwrap();
+        assert!(
+            inst.overrides.contains_key("lbl"),
+            "the label is overridden"
+        );
+
+        // the master keeps its own value…
+        let NodeKind::Text { text } = &crate::find(&e.root, "lbl").unwrap().kind else {
+            panic!("label is a text layer")
+        };
+        assert_eq!(text, "Click me", "the master is untouched");
+
+        // …and the resolved layer shows what the canvas paints
+        let resolved = e.scoped_layer(&vars).expect("the scoped layer resolves");
+        let NodeKind::Text { text } = &resolved.kind else {
+            panic!("the resolved layer is the text")
+        };
+        assert_eq!(text, "Hello");
+
+        // another property, on another layer of the same instance
+        e.enter_instance(Point::new(205.0, 222.0), &vars)
+            .expect("the icon is inside the instance too");
+        e.set_visible("ico", false);
+        assert!(crate::find(&e.root, "i1")
+            .unwrap()
+            .overrides
+            .contains_key("ico"));
+        let resolved = e.scoped_layer(&vars).expect("the icon resolves");
+        assert!(!resolved.visible, "the visibility override is resolved too");
+        assert!(
+            crate::find(&e.root, "ico").unwrap().visible,
+            "the master's icon is untouched"
+        );
+
+        // a layer outside the scope is edited the ordinary way
+        e.set_opacity("r", 0.5);
+        assert_eq!(
+            crate::find(&e.root, "i1").unwrap().overrides.len(),
+            2,
+            "still just the two overrides"
+        );
+        assert_eq!(crate::find(&e.root, "r").unwrap().opacity, 0.5);
+    }
+
+    /// One layer carries **one** override at a time: the engine stores a single
+    /// encoded value per layer (the shape the `.x` files carry), so a second
+    /// property written on the same layer replaces the first. Figma keeps the
+    /// two side by side and lists both; this is the model's known limit, pinned
+    /// so it cannot change silently.
+    #[test]
+    fn a_second_write_on_the_same_layer_replaces_its_override() {
+        let mut e = scoped_fixture();
+        let vars = Variables::default();
+        e.enter_instance(Point::new(120.0, 220.0), &vars)
+            .expect("inside the instance");
+        e.set_text("lbl", "Hello");
+        e.set_visible("lbl", false);
+
+        let inst = crate::find(&e.root, "i1").unwrap();
+        assert_eq!(inst.overrides.len(), 1, "one value per layer");
+        let changes = e.instance_changes("i1");
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].property, "Visible");
+
+        let resolved = e.scoped_layer(&vars).expect("the scoped layer resolves");
+        let NodeKind::Text { text } = &resolved.kind else {
+            panic!("the resolved layer is the text")
+        };
+        assert_eq!(text, "Click me", "the text override was replaced");
+        assert!(!resolved.visible);
+    }
+
+    /// Figma's list of what an instance does NOT let you override starts with
+    /// position and constraints: a layer inside an instance does not move.
+    #[test]
+    fn position_is_not_overridable_inside_an_instance() {
+        let mut e = scoped_fixture();
+        let vars = Variables::default();
+        e.enter_instance(Point::new(120.0, 220.0), &vars)
+            .expect("inside the instance");
+
+        let before = crate::find(&e.root, "lbl").unwrap().transform.x;
+        e.move_selection(30.0, 40.0);
+        e.move_node("lbl", 5.0, 5.0);
+        e.resize("lbl", 10.0, 10.0);
+        assert_eq!(
+            crate::find(&e.root, "lbl").unwrap().transform.x,
+            before,
+            "the master's layout is not an override"
+        );
+        assert!(crate::find(&e.root, "i1").unwrap().overrides.is_empty());
+
+        // outside the scope the same calls move the node as usual
+        assert!(e.exit_instance());
+        e.move_node("lbl", 5.0, 5.0);
+        assert_eq!(
+            crate::find(&e.root, "lbl").unwrap().transform.x,
+            before + 5.0
+        );
+    }
+
+    /// A paint the override model has no shape for (a variable reference, a
+    /// gradient) is refused rather than written into the master.
+    #[test]
+    fn a_fill_that_cannot_be_an_override_inside_an_instance_is_refused() {
+        let mut e = scoped_fixture();
+        let vars = Variables::default();
+        e.enter_instance(Point::new(205.0, 222.0), &vars)
+            .expect("inside the instance");
+        let before = crate::find(&e.root, "ico").unwrap().fill.clone();
+
+        e.set_fill("ico", Paint::Variable("brand".into()));
+        assert_eq!(
+            crate::find(&e.root, "ico").unwrap().fill,
+            before,
+            "the master keeps its fill"
+        );
+        assert!(crate::find(&e.root, "i1").unwrap().overrides.is_empty());
+
+        // a solid fill is the kind that does become an override
+        e.set_fill("ico", Paint::Solid(Color::WHITE));
+        assert_eq!(
+            crate::find(&e.root, "i1").unwrap().overrides.len(),
+            1,
+            "one override, on the instance"
+        );
+    }
+
+    /// Each write inside an instance is its own undo step, and the scope is
+    /// view state: undo takes the override back without leaving the instance.
+    #[test]
+    fn an_override_written_inside_an_instance_is_one_undo_step() {
+        let mut e = scoped_fixture();
+        let vars = Variables::default();
+        e.enter_instance(Point::new(120.0, 220.0), &vars)
+            .expect("inside the instance");
+        e.set_text("lbl", "Hello");
+        assert_eq!(crate::find(&e.root, "i1").unwrap().overrides.len(), 1);
+
+        e.undo();
+        assert!(
+            crate::find(&e.root, "i1").unwrap().overrides.is_empty(),
+            "one step back"
+        );
+        assert_eq!(
+            e.instance_scope.as_ref().map(|(_, l)| l.as_str()),
+            Some("lbl"),
+            "the scope is not part of the document"
+        );
+        e.redo();
+        assert_eq!(crate::find(&e.root, "i1").unwrap().overrides.len(), 1);
     }
 
     #[test]
@@ -2568,6 +3956,7 @@ mod component_and_proto_engine {
             animation: Animation::Instant,
             easing: Easing::Linear,
             reset_on_navigate: false,
+            animate_matching_layers: false,
         }];
         let mut p = Player::new(&root, "root");
         // click inside the instance rect (0,100)-(100,140)
@@ -2598,6 +3987,7 @@ mod component_and_proto_engine {
             animation: Animation::Instant,
             easing: Easing::Linear,
             reset_on_navigate: false,
+            animate_matching_layers: false,
         }];
         root.children[0].children.push(go); // inside m1 @ (0,0)
         root.children[1].children.push(ret); // inside m2 @ (200,0)

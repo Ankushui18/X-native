@@ -32,6 +32,45 @@ fn fonts() -> FontManager {
     fm
 }
 
+/// Frame names are canvas chrome and never reach an export; a Section's title is
+/// the section's own artwork and does. The two therefore have different slot
+/// names (`/label` vs `/pill` + `/chip`) — sharing one would have stripped a
+/// section's title text and left a solid, wordless tag in the output.
+#[test]
+fn export_strips_frame_names_and_keeps_a_sections_title_chip() {
+    let mut band = Node::section("band", 200.0, 120.0);
+    band.name = "Band".into();
+    let doc = Node::frame("Page", 400.0, 300.0)
+        .child(Node::frame("Hero", 100.0, 80.0))
+        .child(band);
+    let tree = build_render_tree(&doc, &Variables::default());
+    let keys: Vec<String> = tree.commands.iter().map(|c| c.key().to_string()).collect();
+    assert!(
+        keys.iter().any(|k| k.ends_with("/Hero/label")),
+        "the frame's name is in the canvas tree: {keys:?}"
+    );
+    assert!(
+        keys.iter().any(|k| k.ends_with("/band/pill"))
+            && keys.iter().any(|k| k.ends_with("/band/chip")),
+        "the section's chip and its title are in the canvas tree: {keys:?}"
+    );
+    // what the exporter keeps
+    let kept: Vec<String> = keys
+        .iter()
+        .filter(|k| !(k.ends_with("/label")))
+        .cloned()
+        .collect();
+    assert!(
+        !kept.iter().any(|k| k.contains("Hero")),
+        "no frame name in the export: {kept:?}"
+    );
+    assert!(
+        kept.iter().any(|k| k.ends_with("/band/pill"))
+            && kept.iter().any(|k| k.ends_with("/band/chip")),
+        "the section keeps its chip AND its title: {kept:?}"
+    );
+}
+
 #[test]
 fn all_three_sinks_share_glyph_geometry() {
     let fm = fonts();

@@ -193,7 +193,7 @@ pub fn paint_color(p: &Paint, vars: &Variables) -> Color {
         }
         // patterns have no single color; callers needing a flat fallback
         // (dev-mode swatches, stroke/text fallbacks) see a neutral gray
-        Paint::Pattern { .. } => Color::from_rgb8(0x99, 0x99, 0x99),
+        Paint::Pattern { .. } => crate::fallbacks::pattern_fallback_grey(),
     }
 }
 

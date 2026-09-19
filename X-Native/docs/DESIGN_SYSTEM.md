@@ -8,7 +8,7 @@ that is the bug the next reviewer will find. Every one of them has a name in
 
 ```
 crates/x-ui/src/design_system.rs          <- the scales (owner)      |
-   ColorTokens::GRAPHITE/DAYLIGHT/HIGH_CONTRAST                          |
+   ColorTokens::GRAPHITE/DAYLIGHT                                        |
    TypographyScale · SpacingScale · IconScale · RadiusScale ·            |  tests pin every
    ShadowScale · AlphaScale · StrokeScale · MotionScale                  |  ladder + the AA audit
 crates/x-ui/src/theme.rs                  <- the WCAG audit + remap     |
@@ -21,7 +21,7 @@ apps/x-designer/.../theme.rs              <- the app's names for them   v
 
 `X-Native/tools/design-sheet/` is a live page generated from these sources
 (`node extract_icons.mjs && node build_tokens.mjs && node build_audit.mjs`,
-then serve the folder — see its README): the three palettes side by side, every
+then serve the folder — see its README): the two palettes side by side, every
 ladder, the dashboard at 1440 / 980 / 1920, and the spacing + ratchet audit.
 Because the generators read `design_system.rs`, `theme.rs`, `icons.rs` and
 `design_tokens_test.rs`, the sheet cannot claim a value the code does not ship —
@@ -64,20 +64,22 @@ its shared libraries) rather than a system browser. This is what review looks at
 when there is no GPU to run the app on; the gallery remains the thing that is
 kept true to the Rust geometry, and the captures are downstream of it.
 
-## Themes (light, dark, high contrast)
+## Themes (dark, light)
 
-Three palettes, all shipped, all audited by the crate's own tests:
+Two palettes, both shipped, both audited by the crate's own tests:
 
 | id | label | for | notes |
 |---|---|---|---|
 | `Graphite` | dark | the default, and the palette every app constant is authored in | |
 | `Daylight` | light | bright rooms, projectors, screen sharing | white surfaces, darker accent, hairlines carry the structure |
-| `HighContrast` | high contrast | low vision / accessibility settings | yellow accent with **black** ink, 7:1+ pairs |
 
 Switching is a first-class action, not a debug flag: `Action::SetTheme(id)`,
-`Action::CycleTheme` (the toolbar button), the ⌘K verbs `Theme: Daylight
-(light)` / `Theme: High Contrast`, and the choice is persisted to
-`~/.config/x-native/theme` (`set_theme` / `load_persisted_theme`).
+`Action::CycleTheme` (the toolbar button, which flips between the two),
+the ⌘K verbs `Theme: Daylight (light)` / `Theme: Graphite (dark)`, and the
+choice is persisted to `~/.config/x-native/theme` (`set_theme` /
+`load_persisted_theme`). `ThemeId::ALL` is the list every surface draws from —
+a theme added there must be added everywhere, which is exactly why a retired
+one is deleted rather than hidden.
 
 How it works, and what it means for new code:
 
@@ -88,14 +90,15 @@ How it works, and what it means for new code:
 - therefore a colour built from a role follows the theme automatically, and a
   colour built from a literal does not — that is the point of the ratchet's
   "say why in a comment" rule for literals;
-- ink is a role in every palette (`C_ON_ACCENT`, `C_ON_DANGER`, `C_BLACK`,
+- ink is a role in every palette (`C_ON_ACCENT`, `C_ON_DANGER`,
   `C_ACCENT_INK`) precisely so no palette can produce black-on-black or
-  white-on-yellow;
+  white-on-white — the toolbar's active-tool chip, for instance, fills with
+  `C_ACCENT` and inks with `C_ON_ACCENT`, never a literal;
 - the brand set (logo green, avatar and team hues, draft dot, markdown badge,
   canvas guides, watermarks) deliberately does **not** follow the theme: a
   theme must never repaint the user's artwork.
 
-If you add a role, it exists in all three palettes or it does not compile a
+If you add a role, it exists in both palettes or it does not compile a
 lookup — `COLOR_ROLES`, `role()` and the DTCG export are cross-checked, and
 `every_shipped_palette_is_aa_clean` re-runs the contrast audit for each.
 
@@ -232,7 +235,7 @@ panel applies them, the rail owns them.
 
 ### Ink
 Text and glyphs never take a *fill* role. On a saturated fill:
-`C_ON_ACCENT` (white in the dark and light palettes, black on high contrast),
+`C_ON_ACCENT` (white in both palettes — the accent is a saturated fill, not a wash),
 `C_ON_DANGER` for the unread badge, `C_BLACK` on a brand/team hue. In the
 accent's own colour: `C_ACCENT_INK` (`accent_ink` — the accent itself measures
 3.13:1 on the panel and 2.80:1 on a raised surface, so it is a fill, not a
@@ -254,7 +257,7 @@ A missing colour is a missing **role**, not a new hex at the call site:
 
 1. add the role to `ColorTokens` (a `[u8; 3]`) **and** to `COLOR_ROLES` **and**
    to `ColorTokens::role()`;
-2. give it a value in all three palettes (Graphite/Daylight/HighContrast);
+2. give it a value in both palettes (Graphite/Daylight);
 3. if text is drawn on it, add the pair to the audit in
    `crates/x-ui/src/theme.rs` (`TEXT_ROLES`, `ACCENT_FILLS` or `LABEL_FILLS`);
 4. expose it in `apps/.../theme.rs` as `pub const C_… = rgb(role!(…))`.

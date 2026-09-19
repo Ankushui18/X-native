@@ -450,13 +450,15 @@ mod tests {
 
     #[test]
     fn arc_flattens_and_outlines() {
-        let mut a = x_core::Node::arc("a", 0.0, 0.0, 100.0, 100.0, 0.0, 270.0, Color::BLACK);
+        let mut a = x_core::Node::arc("a", 0.0, 0.0, 100.0, 100.0, 0.0, 270.0, 0.0, Color::BLACK);
         a.stroke.paint = x_core::Paint::Solid(Color::from_rgb8(1, 2, 3));
         a.stroke.width = 6.0;
         let page = x_core::Node::frame("page", 400.0, 300.0).child(a);
         let mut ed = crate::Editor::new(page);
 
-        // flatten: arc -> editable vector, 3 quarter curves
+        // flatten: arc -> editable vector, 3 quarter curves + the closes the
+        // wedge/ring outline needs (Figma's Flatten is what makes the box hug
+        // the shape; the arc itself keeps its own box)
         ed.selection = vec!["a".into()];
         let id = ed.flatten_selected().expect("flatten arc");
         let n = crate::find(&ed.root, &id).unwrap();
@@ -470,10 +472,13 @@ mod tests {
             3,
             "270-deg sweep -> 3 curve segments"
         );
-        assert!(!path.iter().any(|c| matches!(c, PathCmd::Close)));
+        assert!(
+            path.iter().filter(|c| matches!(c, PathCmd::Close)).count() == 1,
+            "a wedge is one closed region"
+        );
 
         // outline stroke on a fresh arc: filled band, stroke paint as fill
-        let mut b = x_core::Node::arc("b", 0.0, 0.0, 100.0, 100.0, 0.0, 180.0, Color::BLACK);
+        let mut b = x_core::Node::arc("b", 0.0, 0.0, 100.0, 100.0, 0.0, 180.0, 0.0, Color::BLACK);
         b.stroke.paint = x_core::Paint::Solid(Color::from_rgb8(4, 5, 6));
         b.stroke.width = 4.0;
         let page2 = x_core::Node::frame("page", 400.0, 300.0).child(b);
@@ -484,8 +489,10 @@ mod tests {
         let x_core::NodeKind::Vector { path: p2 } = &n2.kind else {
             panic!("not a vector")
         };
-        // open arc -> one closed quad band
-        assert_eq!(p2.iter().filter(|c| matches!(c, PathCmd::Close)).count(), 1);
+        // a closed path outlines as TWO bands: the outer edge forward and the
+        // inner edge back (an open one would be a single quad) — now that the
+        // arc's own outline is closed, that is what its stroke traces
+        assert_eq!(p2.iter().filter(|c| matches!(c, PathCmd::Close)).count(), 2);
         assert_eq!(
             n2.fill,
             x_core::Paint::Solid(Color::from_rgb8(4, 5, 6)),
