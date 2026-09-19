@@ -12255,17 +12255,7 @@ impl Host {
                 }
             }
             Action::SetCornerSmoothing(v) => {
-                let wrote = {
-                    let doc = self.app.doc();
-                    let Some(id) = doc.selected_id() else {
-                        return;
-                    };
-                    doc.editor().set_corner_smoothing(&id, *v as f64)
-                };
-                if wrote {
-                    self.app.mark_dirty();
-                    self.app.status = format!("Corner smoothing {}%", (*v * 100.0).round() as i64);
-                }
+                self.set_corner_smoothing(v);
             }
             Action::CornerSmoothingIos => {
                 // Figma's chip: "click iOS to set corner smoothing to 60%"
