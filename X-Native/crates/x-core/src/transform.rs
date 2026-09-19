@@ -158,33 +158,41 @@ mod rotation_tests {
     /// rotation about any other point orbits it. Both fall out of the same call.
     #[test]
     fn rotating_about_the_origin_pins_it_and_about_anything_else_orbits_it() {
-        let mut t = Transform::default();
-        // a 100 × 50 box at (10, 20), origin at its centre
-        t.x = 10.0;
-        t.y = 20.0;
         let (w, h) = (100.0, 50.0);
+        // a 100 × 50 box at (10, 20), origin at its centre
+        let mut t = Transform {
+            x: 10.0,
+            y: 20.0,
+            ..Transform::default()
+        };
         let own = (t.x + t.pivot(w, h).0, t.y + t.pivot(w, h).1);
         t.rotate_about(w, h, own, 90f64.to_radians());
         assert!((t.x - 10.0).abs() < 1e-9, "x: {}", t.x);
         assert!((t.y - 20.0).abs() < 1e-9, "y: {}", t.y);
         assert!((t.rotation - 90f64.to_radians()).abs() < 1e-12);
 
-        // a quarter turn about the top-left corners swaps the box's offset
-        let mut u = Transform::default();
-        u.x = 10.0;
-        u.y = 20.0;
+        // a quarter turn about the top-left corner orbits the centre: the
+        // offset (50, 25) turns to (-25, 50) in the renderer's own space
+        // (`linear` is `Affine::rotate`, y down), so the centre lands at
+        // (10 - 25, 20 + 50) = (-15, 70)
+        let mut u = Transform {
+            x: 10.0,
+            y: 20.0,
+            ..Transform::default()
+        };
         let tl = (10.0, 20.0);
         u.rotate_about(w, h, tl, 90f64.to_radians());
-        // the centre went from (60, 45) to (60 - 25, 45 - 50) = (35, -5)
-        assert!((u.x + 50.0 - 35.0).abs() < 1e-9, "centre x: {}", u.x + 50.0);
-        assert!((u.y + 25.0 + 5.0).abs() < 1e-9, "centre y: {}", u.y + 25.0);
+        assert!((u.x + 50.0 + 15.0).abs() < 1e-9, "centre x: {}", u.x + 50.0);
+        assert!((u.y + 25.0 - 70.0).abs() < 1e-9, "centre y: {}", u.y + 25.0);
 
         // a moved origin is the pivot too — same call, and the pin still holds
-        let mut v = Transform::default();
-        v.x = 10.0;
-        v.y = 20.0;
-        v.origin_x = 0.0;
-        v.origin_y = 0.0;
+        let mut v = Transform {
+            x: 10.0,
+            y: 20.0,
+            origin_x: 0.0,
+            origin_y: 0.0,
+            ..Transform::default()
+        };
         let corner = (v.x, v.y);
         v.rotate_about(w, h, corner, 30f64.to_radians());
         assert!((v.x - 10.0).abs() < 1e-9, "odd origin x: {}", v.x);

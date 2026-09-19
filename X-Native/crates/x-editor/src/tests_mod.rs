@@ -698,6 +698,8 @@ mod tests {
         assert!(e.rotate_selection_from(&base, (155.0, 35.0), 45f64.to_radians()));
         let a = find(&e.root, "a").unwrap();
         assert!((a.transform.rotation - 45f64.to_radians()).abs() < 1e-9);
+        // a second gesture is a second entry, so it takes two undos to get back
+        e.undo();
         e.undo();
         let a = find(&e.root, "a").unwrap();
         assert_eq!(

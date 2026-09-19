@@ -2301,11 +2301,17 @@ fn the_rotate_ring_turns_the_selection_about_its_centre() {
         _ => panic!("the ring is outside the bottom-right corner"),
     }
 
-    // a quarter turn: from the corner's 45° to straight down from the pivot
+    // a quarter turn from wherever the press landed: same radius, +90° on
+    // from the corner the ring was grabbed in
     h.on_press(h.app.world_to_screen(grab));
     assert!(matches!(h.app.drag, Some(Drag::RotateSel { .. })));
     let r = (grab.x - centre.0).hypot(grab.y - centre.1);
-    h.on_move(h.app.world_to_screen(Point::new(centre.0, centre.1 + r)));
+    let start = (grab.y - centre.1).atan2(grab.x - centre.0);
+    let a = start + std::f64::consts::FRAC_PI_2;
+    h.on_move(
+        h.app
+            .world_to_screen(Point::new(centre.0 + r * a.cos(), centre.1 + r * a.sin())),
+    );
     let n = find_node_clone(&h.app.doc_ref().editor_ref().root, &id).unwrap();
     assert!(
         (n.transform.rotation.to_degrees() - 45.0).abs() < 1e-6,
@@ -2328,7 +2334,7 @@ fn the_rotate_ring_turns_the_selection_about_its_centre() {
         "the drag merges into one undo step"
     );
     assert!(
-        h.app.status.contains("Rotated 45"),
+        h.app.status.contains("Rotated 90"),
         "status: {}",
         h.app.status
     );

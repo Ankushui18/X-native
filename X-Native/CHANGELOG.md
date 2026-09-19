@@ -40,7 +40,13 @@ the object panel and nothing on the canvas at all.
 - **Named deltas.** Figma's bespoke rotate *cursor* over the ring is not drawn —
   winit has no rotate glyph and this canvas shows no hover cursors for its other
   handles either — and the ring follows a transformed layer's rendered corners
-  rather than a glyph that animates as you hover.
+  rather than a glyph that animates as you hover. The stored angle's **sign**
+  follows the renderer's own convention (`linear` is `Affine::rotate` on a y-down
+  canvas), so our field counts *clockwise-positive* where Figma's counts
+  counter-clockwise; the gesture's direction is right either way (the layer
+  follows the pointer). Master list 6.1 is now PARTIAL on that, and the display
+  conversion is a Wave-2 design-parity task, because flipping the stored sign
+  would move the renderer, the exporters and the hit test together.
 
 ## [Unreleased] — 2026-09-19 (Effects list and blend modes)
 

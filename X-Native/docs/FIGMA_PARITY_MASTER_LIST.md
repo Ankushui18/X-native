@@ -37,7 +37,7 @@ recon task, not a settled fact.
 | 3 Keyboard | 35 | 23 | 5 | 6 | 1 | 0 |
 | 4 Menus & palettes | 10 | 9 | 0 | 1 | 0 | 0 |
 | 5 Layers, pages, sections | 14 | 12 | 1 | 1 | 0 | 0 |
-| 6 Frame & shape properties | 20 | 16 | 2 | 2 | 0 | 0 |
+| 6 Frame & shape properties | 20 | 15 | 3 | 2 | 0 | 0 |
 | 7 Auto layout | 16 | 14 | 1 | 1 | 0 | 0 |
 | 8 Fill, stroke, effects, colour | 25 | 21 | 1 | 3 | 0 | 0 |
 | 9 Images | 9 | 5 | 2 | 2 | 0 | 0 |
@@ -52,7 +52,7 @@ recon task, not a settled fact.
 | 18 Design language (look of the app itself) | 12 | 1 | 5 | 6 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **339** | **239** | **49** | **32** | **16** | **3** |
+| **total** | **339** | **238** | **50** | **32** | **16** | **3** |
 
 The 33 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
@@ -220,7 +220,7 @@ Appearance (opacity, radius, clip), Fill, Stroke, Effects, Export.
 
 | # | Item | Figma | Ours | Status |
 | --- | --- | --- | --- | --- |
-| 6.1 | Position X/Y, rotate angle | numeric, scrubbable | `Position` rows + the rotate field (`FieldId::Rotation` → `Editor::set_selection_rotation`, Figma's (−180, 180]) | MATCH |
+| 6.1 | Position X/Y, rotate angle | numeric, scrubbable | `Position` rows + the rotate field (`FieldId::Rotation` → `Editor::set_selection_rotation`, Figma's (−180, 180]) | PARTIAL — the sign counts clockwise-positive (the renderer's y-down `Affine::rotate`), where Figma's counts counter-clockwise |
 | 6.2 | Width/Height + Resizing | Fixed / Hug / Fill per axis, chosen from the Width/Height dropdown | `Sizing`, `Action::LayoutAxisMenu` / `SetAxisSizing` | MATCH |
 | 6.3 | Constraints | 5 H × 5 V options, "ignore constraints" `⌃` | `Constraints` section, `SetConstraint` (`2ebb068`) | MATCH |
 | 6.4 | Corner radius | one value; independent corners via the expand | uniform radius in the panel; per-corner `corner_radii` exists in the model, the UI reads only `[0]` | PARTIAL |
@@ -648,10 +648,14 @@ rendering it.
     with the census test and the design sheet kept green (18.10).
 18. Panel geometry pass: header 40 px, section headers, the Design tab's row order
     matching Figma's (Position → Layout → Appearance → Fill → Stroke → Effects → Export).
+19. The rotation **sign** (6.1): Figma's field counts counter-clockwise-positive and
+    ours follows the renderer's y-down convention. One display conversion (the field
+    and every other readout of the angle), with the stored sign unchanged, so the
+    renderer and the exporters keep their meaning.
 
 ### Wave 3 — better than Figma (only after 1 and 2 are done)
 
-19. Differentiation on top of parity: our boards, agents, UX analysis, minimap, MCP,
+20. Differentiation on top of parity: our boards, agents, UX analysis, minimap, MCP,
     tokens, and any Figma behaviour we choose to beat.
 
 ### Definition of done, per step
