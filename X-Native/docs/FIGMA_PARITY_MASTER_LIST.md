@@ -40,7 +40,7 @@ recon task, not a settled fact.
 | 6 Frame & shape properties | 20 | 18 | 1 | 1 | 0 | 0 |
 | 7 Auto layout | 16 | 14 | 1 | 1 | 0 | 0 |
 | 8 Fill, stroke, effects, colour | 25 | 21 | 1 | 3 | 0 | 0 |
-| 9 Images | 9 | 6 | 3 | 0 | 0 | 0 |
+| 9 Images | 9 | 7 | 2 | 0 | 0 | 0 |
 | 10 Text & typography | 18 | 17 | 1 | 0 | 0 | 0 |
 | 11 Vector editing & booleans | 20 | 14 | 5 | 1 | 0 | 0 |
 | 12 Components, instances, styles | 21 | 18 | 3 | 0 | 0 | 0 |
@@ -52,7 +52,7 @@ recon task, not a settled fact.
 | 18 Design language (look of the app itself) | 12 | 1 | 5 | 6 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **339** | **256** | **47** | **17** | **16** | **3** |
+| **total** | **339** | **257** | **46** | **17** | **16** | **3** |
 
 The 17 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
@@ -306,7 +306,7 @@ position, canvas stacking, "distribute", `⇧A` to add.
 | 9.4 | Rotate 90° steps | yes | `RotateImage`, `image_rotation` | MATCH |
 | 9.5 | **Crop gesture** | double-click → crop | `begin_crop` on the double-clicked image (also when the fill mode becomes **Crop**), `crop_drag` for the corner/inside drags, `crop_apply`/`crop_cancel` on ⏎/Esc and a click outside, all resolved through `resolve_image_placement` | MATCH |
 | 9.6 | **Place-image tool** | image tool with drag sizing | `⇧⌘K` / File → Place image / command search; a multi-file pick queues, one file per placement, `Delete` discards the rest; a click on a layer fills it, an image layer swaps its picture and keeps its crop | MATCH |
-| 9.7 | Flip H/V | yes | `ImagePlacement::flip_h/flip_v` in the engine, no UI toggle seen | PARTIAL |
+| 9.7 | **Flip H/V** | *"Use the right-click menu to apply a flip transformation, or the keyboard shortcuts"* — **Flip horizontal: ⇧H**, **Flip vertical: ⇧V** (`360039956914`) | `⇧H`/`⇧V` (`run.rs::on_character`, ahead of the tool table — the Hand and the Move tool keep the plain `H`/`V`), the selection menu's **Flip horizontal** / **Flip vertical** rows (only when the selection carries an image), and the Image section's two buttons beside Rotate 90°; all three reach `App::flip_images` → `Editor::set_image_placement`, which toggles `flip_h`/`flip_v` and folds a multi-layer selection into ONE undo entry. **Not built:** flipping a vector or a group (the engine's flip lives on the image placement) | MATCH |
 | 9.8 | Copy/paste image between files | yes | clipboard path | MATCH |
 | 9.9 | Video fill | Figma supports video paint | not built | PARTIAL (documented) |
 
@@ -722,17 +722,23 @@ rendering it.
     keyboard completions that finished the item (3.23–3.31: `⇧E`, `⌘R`, `⌥⌘K`,
     `⇧A`, `N`/`⇧N`, `⌘\`, `⇧⌘\`, `⌘/`, `⇧?`, and the `⌘⌥M` row §28 had already
     built) moved the whole of section 3's remainder into `MATCH`.
-14. Image flip toggle (9.7); outlines mode (17.7).
-    Two halves of this item are delivered: row 2.24 is `MATCH`
-    (`App::measure_spans`, `paint_measure`, pinned by
+14. Outlines mode (17.7) — the item's last row.
+    Its other rows are delivered: 2.24 is `MATCH` (`App::measure_spans`,
+    `paint_measure`, pinned by
     `option_measures_the_gap_to_the_layer_under_the_cursor` and the geometry's
     own `measure_reads_both_axes_of_a_diagonal_pair` /
-    `a_shared_band_anchors_the_line_and_an_overlap_reads_nothing`) and so is
-    row 2.12 (`Drag::ResizeSel`'s `space`/`offset` riders, pinned by
-    `space_moves_the_box_mid_resize_and_the_resize_resumes_from_there`), and so
-    is row 8.15 (`paint_stroke_style_panel` and the cap menu, pinned by
+    `a_shared_band_anchors_the_line_and_an_overlap_reads_nothing`); 2.12
+    (`Drag::ResizeSel`'s `space`/`offset` riders, pinned by
+    `space_moves_the_box_mid_resize_and_the_resize_resumes_from_there`); 8.15
+    (`paint_stroke_style_panel` and the cap menu, pinned by
     `the_advanced_stroke_panel_opens_from_the_section_and_writes_the_styles` and
-    `the_stroke_panel_writes_the_join_the_angle_the_pattern_and_the_ends`).
+    `the_stroke_panel_writes_the_join_the_angle_the_pattern_and_the_ends`); and
+    9.7 (`App::flip_images` — ⇧H/⇧V, the selection menu's rows and the Image
+    section's buttons, pinned by
+    `shift_h_and_shift_v_flip_the_image_about_its_axis`,
+    `the_flip_covers_the_selection_in_one_undo_entry`,
+    `the_image_section_flip_buttons_write_the_placement` and
+    `the_selection_menu_offers_flip_rows_for_an_image`).
 15. Clean-up layers (5.9) — chapter 4's lesson.
 
 ### Wave 2 — design parity ("no design issue")

@@ -5,6 +5,30 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-19 (Image flip)
+
+[Adjust alignment, rotation, position, and dimensions](https://help.figma.com/hc/en-us/articles/360039956914)
+— master row 9.7, the item-14 row that was engine-only. *"Use the right-click menu to apply a flip
+transformation, or the keyboard shortcuts: **Flip horizontal: ⇧ Shift H** · **Flip vertical: ⇧ Shift
+V**"*.
+
+- **⇧H / ⇧V are the transform's keys, not the tool table's.** `Tool::from_shortcut` had been handing
+  the shifted forms to the Hand and the Move tool; it answers the plain keys now, and the flip arms
+  run before the table — which is Figma's own assignment (`H` hand, `V` move, the shifted keys for
+  the transform).
+- **One write, three ways in.** `App::flip_images` toggles `ImagePlacement::flip_h` / `flip_v`
+  through `Editor::set_image_placement` and folds a multi-layer selection into ONE undo entry. The
+  ⇧H / ⇧V keys, the selection menu's **Flip horizontal** / **Flip vertical** rows (shown when the
+  selection carries an image) and the two buttons the Image section paints beside Rotate 90° all
+  reach it; the buttons record their row so a test or a screenshot can scroll the section into view
+  the way a user does.
+- **Not built:** flipping a vector or a group — the engine's flip lives on the image placement, so
+  the shortcut is inert for the rest of the document.
+
+Two glyphs land with it (`flip-horizontal`, `flip-vertical` — Lucide's pair, in `icons.rs` and its
+census). Docs in the same change: row 9.7 `MATCH`, section 9 at **7 / 2**, the grand total
+re-derived (**339 / 257 / 46 / 17 / 16 / 3**), a `FIGMA_PARITY.md` row and the wave-1b note.
+
 ## [Unreleased] — 2026-09-19 (Advanced stroke settings)
 
 [Apply and adjust stroke properties](https://help.figma.com/hc/en-us/articles/360049283914)

@@ -206,7 +206,9 @@ impl Tool {
             ("s", _) if board => Some(Tool::BoardSticky),
             ("r", _) if board => Some(Tool::BoardRect),
             ("o", _) if board => Some(Tool::BoardCircle),
-            ("v", _) => Some(Tool::Select),
+            // ⇧V is Figma's flip vertical (help 360039956914), so only the
+            // plain key is the Move tool here.
+            ("v", false) => Some(Tool::Select),
             // Figma's Scale tool; boards have their own model, no scale there
             ("k", _) if !board => Some(Tool::Scale),
             // Figma's Slice tool — also design-only: a board draws its own
@@ -234,7 +236,8 @@ impl Tool {
             // and Pencil tools it is design-only.
             ("b", true) if !board => Some(Tool::Brush),
             ("p", _) => Some(Tool::Pen),
-            ("h", _) => Some(Tool::Hand),
+            // …and ⇧H is the flip horizontal — the Hand keeps the plain key.
+            ("h", false) => Some(Tool::Hand),
             _ => None,
         }
     }
@@ -2325,6 +2328,13 @@ pub enum Action {
     RotateImage {
         clockwise: bool,
     },
+    /// Figma's **Flip horizontal** / **Flip vertical** (help 360039956914:
+    /// *"Flip horizontal: ⇧ Shift H … Flip vertical: ⇧ Shift V"*). Image
+    /// layers only: the flip the engine carries lives on `ImagePlacement`,
+    /// so a vector or a group has nothing to hold it yet.
+    FlipImage {
+        horizontal: bool,
+    },
     /// Set image fill mode (fill/fit/crop/tile)
     SetImageFillMode {
         mode: String,
@@ -3897,6 +3907,9 @@ pub struct App {
     /// reason: the panel drops hit rects that leave its viewport, so reaching
     /// the icon means scrolling the section in (`scroll_stroke_into_view`).
     pub stroke_row: Option<Rect>,
+    /// The Image section's **Flip horizontal** button, recorded for the same
+    /// reason (`scroll_image_into_view`).
+    pub image_row: Option<Rect>,
     /// Figma's Place image queue: the assets picked with ⇧⌘K, in order. The
     /// place-image tool is armed while this is non-empty, and one file leaves
     /// it per placement.
@@ -4067,6 +4080,46 @@ impl App {
         });
         self.status = "Cropping - drag a corner, Enter to apply, Esc to cancel".into();
         true
+    }
+
+    /// Figma's **Flip horizontal** / **Flip vertical** (help 360039956914).
+    /// ⇧H / ⇧V, the right-click rows and the Image section's buttons all reach
+    /// this. Every image layer in the selection mirrors on the asked axis and
+    /// the whole gesture lands as ONE undo entry — the fold `crop_apply` makes
+    /// for a multi-write session.
+    pub fn flip_images(&mut self, horizontal: bool) -> usize {
+        let ids: Vec<String> = self.doc().editor_ref().selection.clone();
+        let mut wrote = 0usize;
+        for id in &ids {
+            let Some(next) = self.flipped_placement(id.as_str(), horizontal) else {
+                continue;
+            };
+            if self.doc().editor().set_image_placement(id.as_str(), next) {
+                wrote += 1;
+            }
+        }
+        if wrote > 1 {
+            self.doc().editor().merge_last(wrote);
+        }
+        wrote
+    }
+
+    /// The placement a layer would carry after the flip, when it is an image
+    /// layer — the read half of `flip_images`, kept apart so the borrow of the
+    /// document ends before the write starts.
+    fn flipped_placement(&self, id: &str, horizontal: bool) -> Option<x_native::ImagePlacement> {
+        let doc = self.doc_ref();
+        let node = crate::editor_ui::find_node(&doc.editor_ref().root, id)?;
+        let NodeKind::Image { placement, .. } = &node.kind else {
+            return None;
+        };
+        let mut next = *placement;
+        if horizontal {
+            next.flip_h = !next.flip_h;
+        } else {
+            next.flip_v = !next.flip_v;
+        }
+        Some(next)
     }
 
     /// Apply the crop: the session's writes become one undo entry, which is
@@ -4298,6 +4351,7 @@ impl App {
             effect_rows: Vec::new(),
             mask_row: None,
             stroke_row: None,
+            image_row: None,
             placing_images: Vec::new(),
             crop: None,
             effect_drag_over: None,
@@ -6950,6 +7004,10 @@ mod tool_shortcut_tests {
         assert_eq!(d("c", false), Some(Tool::Comment));
         assert_eq!(d("m", false), Some(Tool::Symmetry));
         assert_eq!(d("e", false), Some(Tool::Eraser));
+        // the shifted forms belong to the transform (help 360039956914),
+        // not to the tool table
+        assert_eq!(d("h", true), None);
+        assert_eq!(d("v", true), None);
     }
 
     #[test]

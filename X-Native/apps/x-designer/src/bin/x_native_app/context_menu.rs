@@ -25,6 +25,10 @@ pub enum ContextTarget {
         /// whether that master lives in this file, and the layers carrying an
         /// override (Figma's More-actions menu, help 360039150733).
         instance: Option<InstanceMenu>,
+        /// Any selected layer is an image. Figma's **Flip horizontal /
+        /// vertical** rows (help 360039956914) are shown for one, because the
+        /// flip the engine carries lives on the image placement.
+        has_image: bool,
     },
 }
 
@@ -73,6 +77,11 @@ pub enum ContextAction {
     /// engine's `use_as_mask` clears the flag when the selection already is
     /// a mask object.
     UseAsMask,
+    /// Figma's **Flip horizontal** (⇧H) — *"Use the right-click menu to apply
+    /// a flip transformation, or the keyboard shortcuts"* (help 360039956914).
+    FlipHorizontal,
+    /// Figma's **Flip vertical** (⇧V).
+    FlipVertical,
     BringToFront,
     BringForward,
     SendBackward,
@@ -123,6 +132,8 @@ impl ContextAction {
             Self::WrapInSection => "Wrap in new section",
             Self::MakeComponent => "Make component",
             Self::UseAsMask => "Use as mask",
+            Self::FlipHorizontal => "Flip horizontal",
+            Self::FlipVertical => "Flip vertical",
             Self::BringToFront => "Bring to front",
             Self::BringForward => "Bring forward",
             Self::SendBackward => "Send backward",
@@ -170,6 +181,8 @@ impl ContextAction {
             Self::WrapInSection => "section",
             Self::MakeComponent => "component",
             Self::UseAsMask => "square",
+            Self::FlipHorizontal => "flip-horizontal",
+            Self::FlipVertical => "flip-vertical",
             Self::BringToFront => "chevrons-up",
             Self::BringForward => "chevron-up",
             Self::SendBackward => "chevron-down",
@@ -205,6 +218,8 @@ impl ContextAction {
             Self::Ungroup => Some("⇧⌘G"),
             Self::MakeComponent => Some("⌘⌥K"),
             Self::UseAsMask => Some("⌘⌥M"),
+            Self::FlipHorizontal => Some("⇧H"),
+            Self::FlipVertical => Some("⇧V"),
             Self::BringToFront => Some("⇧⌘]"),
             Self::BringForward => Some("⌘]"),
             Self::SendBackward => Some("⌘["),
@@ -326,6 +341,8 @@ pub fn action_for(action: &ContextAction) -> Option<Action> {
         WrapInSection => Action::Ctx(CtxCmd::SectionSelection),
         MakeComponent => Action::Ctx(CtxCmd::MakeComponent),
         UseAsMask => Action::UseAsMask,
+        FlipHorizontal => Action::FlipImage { horizontal: true },
+        FlipVertical => Action::FlipImage { horizontal: false },
         BringToFront => Action::Ctx(CtxCmd::ToFront),
         BringForward => Action::Ctx(CtxCmd::BringFwd),
         SendBackward => Action::Ctx(CtxCmd::SendBack),
@@ -374,6 +391,7 @@ pub fn build_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             selected_count,
             contains_group,
             instance,
+            has_image,
         } => {
             let mut items = vec![
                 ai(Cut, true),
@@ -392,6 +410,12 @@ pub fn build_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             items.push(ai(WrapInSection, true));
             items.push(ai(MakeComponent, true));
             items.push(ai(UseAsMask, true));
+            // Figma's transform rows, for a selection that carries an image
+            // (help 360039956914) — no dead row for the rest.
+            if *has_image {
+                items.push(ai(FlipHorizontal, true));
+                items.push(ai(FlipVertical, true));
+            }
             items.push(ContextMenuItem::Separator);
             items.push(ContextMenuItem::Submenu {
                 label: "Arrange",
@@ -517,6 +541,7 @@ mod tests {
         let items = build_menu_items(&ContextTarget::CanvasSelection {
             selected_count: 2,
             contains_group: false,
+            has_image: false,
             instance: None,
         });
         let actions = actions_of(&items);
@@ -539,6 +564,7 @@ mod tests {
         let items = build_menu_items(&ContextTarget::CanvasSelection {
             selected_count: 1,
             contains_group: false,
+            has_image: false,
             instance: None,
         });
         let actions = actions_of(&items);
@@ -550,10 +576,38 @@ mod tests {
     }
 
     #[test]
+    fn the_selection_menu_offers_flip_rows_for_an_image() {
+        let items = build_menu_items(&ContextTarget::CanvasSelection {
+            selected_count: 1,
+            contains_group: false,
+            has_image: true,
+            instance: None,
+        });
+        let actions = actions_of(&items);
+        assert!(
+            actions.contains(&&ContextAction::FlipHorizontal),
+            "Figma's flip rows, help 360039956914"
+        );
+        assert!(actions.contains(&&ContextAction::FlipVertical));
+        assert_eq!(ContextAction::FlipHorizontal.shortcut(), Some("⇧H"));
+        assert_eq!(ContextAction::FlipVertical.shortcut(), Some("⇧V"));
+
+        // a selection with no image has nothing to flip, so it gets no row
+        let plain = actions_of(&build_menu_items(&ContextTarget::CanvasSelection {
+            selected_count: 1,
+            contains_group: false,
+            has_image: false,
+            instance: None,
+        }));
+        assert!(!plain.contains(&&ContextAction::FlipHorizontal));
+    }
+
+    #[test]
     fn single_group_selection_offers_ungroup_not_group() {
         let items = build_menu_items(&ContextTarget::CanvasSelection {
             selected_count: 1,
             contains_group: true,
+            has_image: false,
             instance: None,
         });
         let actions = actions_of(&items);

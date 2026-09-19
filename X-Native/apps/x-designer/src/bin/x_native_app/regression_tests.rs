@@ -7372,6 +7372,7 @@ fn the_canvas_menu_wraps_a_selection_in_a_section() {
     let items = build_menu_items(&ContextTarget::CanvasSelection {
         selected_count: 2,
         contains_group: false,
+        has_image: false,
         instance: None,
     });
     let offers = items.iter().any(|it| {
@@ -7745,6 +7746,7 @@ fn selection_menu(h: &Host) -> Vec<crate::context_menu::ContextMenuItem> {
     crate::context_menu::build_menu_items(&crate::context_menu::ContextTarget::CanvasSelection {
         selected_count: 1,
         contains_group: false,
+        has_image: false,
         instance,
     })
 }
@@ -8814,4 +8816,105 @@ fn the_stroke_panel_writes_the_join_the_angle_the_pattern_and_the_ends() {
     assert!(h.app.stroke_style_open && !h.app.list_style_open);
     h.dispatch(Action::ToggleStrokeStyle);
     assert!(!h.app.stroke_style_open, "the icon closes it again");
+}
+
+/// Figma flips a layer with ⇧H / ⇧V (help 360039956914: *"Use the right-click
+/// menu to apply a flip transformation, or the keyboard shortcuts: Flip
+/// horizontal: ⇧H, Flip vertical: ⇧V"*). The shifted forms used to pick the
+/// hand and the move tool here; in Figma those keep the plain keys and the
+/// transform takes the shifted ones, which is what this pins.
+#[test]
+fn shift_h_and_shift_v_flip_the_image_about_its_axis() {
+    let (mut h, _asset) = crop_host();
+    let start = placement_of(&image_of(&h, "shot"));
+    assert!(
+        !start.flip_h && !start.flip_v,
+        "a fresh placement is unflipped"
+    );
+    assert_eq!(h.app.tool, Tool::Select);
+    let depth = h.app.doc_ref().editor_ref().undo_depth();
+
+    h.app.shift = true;
+    h.on_key(Key::Character("H".into()), None);
+    let after_h = placement_of(&image_of(&h, "shot"));
+    assert!(after_h.flip_h && !after_h.flip_v, "⇧H mirrors the x axis");
+    assert_eq!(h.app.tool, Tool::Select, "⇧H is not the hand tool");
+    assert_eq!(h.app.status, "Flipped horizontally");
+
+    h.on_key(Key::Character("V".into()), None);
+    let both = placement_of(&image_of(&h, "shot"));
+    assert!(both.flip_h && both.flip_v, "⇧V mirrors the y axis on top");
+    assert_eq!(h.app.tool, Tool::Select, "⇧V is not the move tool");
+    assert_eq!(h.app.status, "Flipped vertically");
+
+    // the same key again puts the axis back — the transform toggles
+    h.on_key(Key::Character("V".into()), None);
+    h.app.shift = false;
+    let back = placement_of(&image_of(&h, "shot"));
+    assert!(back.flip_h && !back.flip_v);
+    assert_eq!(
+        h.app.doc_ref().editor_ref().undo_depth(),
+        depth + 3,
+        "every flip is an entry of its own"
+    );
+}
+
+/// Every image layer in the selection mirrors, and the whole gesture is ONE
+/// undo entry — the fold a multi-layer write needs, the same one a crop
+/// session makes when it applies.
+#[test]
+fn the_flip_covers_the_selection_in_one_undo_entry() {
+    let (mut h, asset) = crop_host();
+    let root = h.app.doc().editor_ref().root.id.clone();
+    h.app.doc().editor().insert_node(
+        &root,
+        Node::image("shot2", 140.0, 0.0, 100.0, 100.0, &asset),
+    );
+    h.app.doc().editor().selection = vec!["shot".into(), "shot2".into()];
+    let depth = h.app.doc_ref().editor_ref().undo_depth();
+
+    assert_eq!(h.app.flip_images(true), 2, "both images flip");
+    assert!(placement_of(&image_of(&h, "shot")).flip_h);
+    assert!(placement_of(&image_of(&h, "shot2")).flip_h);
+    assert_eq!(
+        h.app.doc_ref().editor_ref().undo_depth(),
+        depth + 1,
+        "the whole selection is one entry"
+    );
+
+    h.app.doc().editor().undo();
+    assert!(!placement_of(&image_of(&h, "shot")).flip_h);
+    assert!(
+        !placement_of(&image_of(&h, "shot2")).flip_h,
+        "one undo puts both back"
+    );
+}
+
+/// The Image section carries the same two writes as buttons beside Rotate 90°
+/// — help 360039956914's right-click rows and its ⇧H / ⇧V are the other two
+/// ways in — and they are reachable to a click: the section scrolls into view
+/// first, because the panel drops the hit rects of rows that leave its
+/// viewport.
+#[test]
+fn the_image_section_flip_buttons_write_the_placement() {
+    let (mut h, _asset) = crop_host();
+    crate::editor_ui::scroll_image_into_view(&mut h.app);
+    let button = |h: &Host, horizontal: bool| {
+        h.app
+            .hit
+            .iter()
+            .find(|(_, a)| matches!(a, Action::FlipImage { horizontal: x } if *x == horizontal))
+            .map(|(r, _)| *r)
+            .expect("the Image section offers the flip buttons")
+    };
+    let h_btn = button(&h, true);
+    let v_btn = button(&h, false);
+
+    h.on_press(h_btn.center());
+    assert!(placement_of(&image_of(&h, "shot")).flip_h);
+    assert_eq!(h.app.status, "Flipped horizontally");
+    h.on_press(v_btn.center());
+    let both = placement_of(&image_of(&h, "shot"));
+    assert!(both.flip_h && both.flip_v);
+    assert_eq!(h.app.status, "Flipped vertically");
 }

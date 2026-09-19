@@ -319,6 +319,28 @@ const ICONS: &[(&str, &[&str])] = &[
         "M21 13v1a4 4 0 0 1-4 4H3",
     ]),
     ("rotate-ccw", &["M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8", "M3 3v5h5"]),
+    (
+        "flip-horizontal",
+        &[
+            "M8 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h3",
+            "M16 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3",
+            "M12 2v2",
+            "M12 8v2",
+            "M12 14v2",
+            "M12 20v2",
+        ],
+    ),
+    (
+        "flip-vertical",
+        &[
+            "M21 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v3",
+            "M21 16v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3",
+            "M2 12h2",
+            "M8 12h2",
+            "M14 12h2",
+            "M20 12h2",
+        ],
+    ),
     ("save", &[
         "M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z",
         "M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7",
@@ -518,6 +540,8 @@ mod tests {
             "file",
             "file-plus",
             "file-text",
+            "flip-horizontal",
+            "flip-vertical",
             "folder-open",
             "frame",
             "frame#",
@@ -584,7 +608,7 @@ mod tests {
         }
         assert_eq!(
             names.len(),
-            77,
+            79,
             "census list drifted — recount when adding icons"
         );
     }

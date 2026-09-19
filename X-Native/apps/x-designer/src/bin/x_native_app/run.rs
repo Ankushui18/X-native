@@ -3594,11 +3594,22 @@ impl Host {
                     .map(|n| matches!(n.kind, K::Group))
                     .unwrap_or(false)
             };
+            let has_image = {
+                use x_native::NodeKind as K;
+                let d = self.app.doc();
+                let root = &d.editor_ref().root;
+                d.editor_ref().selection.iter().any(|id| {
+                    crate::editor_ui::find_node(root, id.as_str())
+                        .map(|n| matches!(n.kind, K::Image { .. }))
+                        .unwrap_or(false)
+                })
+            };
             let instance = self.app.context_instance();
             let target = if sel_count > 0 {
                 crate::context_menu::ContextTarget::CanvasSelection {
                     selected_count: sel_count,
                     contains_group,
+                    has_image,
                     instance,
                 }
             } else {
@@ -8129,6 +8140,17 @@ impl Host {
             // ⇧A — add auto layout (Figma's shortcut; plain A stays free)
             if self.app.shift && c == "A" {
                 self.dispatch(Action::AddAutoLayout);
+                return;
+            }
+            // ⇧H / ⇧V — Figma's flips (help 360039956914). They sit above the
+            // tool table on purpose: in Figma the hand and the move tool keep
+            // the UNSHIFTED keys, and a flip must never select a tool.
+            if self.app.shift && !self.app.alt && (c == "H" || c == "h") {
+                self.dispatch(Action::FlipImage { horizontal: true });
+                return;
+            }
+            if self.app.shift && !self.app.alt && (c == "V" || c == "v") {
+                self.dispatch(Action::FlipImage { horizontal: false });
                 return;
             }
             // N / ⇧N — zoom to the next / previous frame (Figma's walk)
@@ -13950,6 +13972,25 @@ impl Host {
                 }
             }
 
+            Action::FlipImage { horizontal } => {
+                let n = self.app.flip_images(horizontal);
+                if n > 0 {
+                    self.app.mark_dirty();
+                    let axis = if horizontal {
+                        "horizontally"
+                    } else {
+                        "vertically"
+                    };
+                    self.app.status = if n == 1 {
+                        format!("Flipped {}", axis)
+                    } else {
+                        format!("Flipped {} - {} layers", axis, n)
+                    };
+                } else {
+                    self.app.status = "Flip needs an image layer".into();
+                }
+            }
+
             Action::CropApply => {
                 self.app.crop_apply();
             }
@@ -16782,6 +16823,7 @@ fn screenshot_screens() {
             crate::context_menu::ContextTarget::CanvasSelection {
                 selected_count: 1,
                 contains_group: false,
+                has_image: true,
                 instance: None,
             },
             700.0,

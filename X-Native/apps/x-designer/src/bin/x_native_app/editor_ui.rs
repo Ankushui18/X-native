@@ -34,6 +34,7 @@ pub fn paint(app: &mut App, s: &mut Scene) {
     app.corner_slider = None;
     // …and the Stroke section records its style icon when it is drawn
     app.stroke_row = None;
+    app.image_row = None;
     let mut hit: Vec<(Rect, Action)> = Vec::new();
     fill_rect(s, Rect::new(0.0, 0.0, app.win_w, app.win_h), C_BG);
     if app.flow.is_some() {
@@ -4871,7 +4872,8 @@ fn paint_design(
     let y_after_image =
         paint_image_adjustments(app, s, hit, rx + pl, rx + rw - pl, y_after_appearance);
     if y_after_image != y_after_appearance {
-        // The image-adjustment block rendered (7 sliders + buttons, ~280px).
+        // The image-adjustment block rendered (7 sliders + the reset /
+        // rotate / flip button rows, ~310px).
         // Its height cannot be folded into `y0` without re-flowing every
         // offset below it, so the sections that follow keep their reference
         // positions — see the geometry note atop this function.
@@ -7612,6 +7614,42 @@ fn paint_image_adjustments(
     );
     hit.push((rot_ccw_r, Action::RotateImage { clockwise: false }));
 
+    // Flip buttons — Figma's ⇧H / ⇧V (help 360039956914), the sidebar
+    // counterparts of the shortcut and the right-click rows. They take their
+    // own row: at the panel's minimum width the rotate row has no room left,
+    // and a transform button that can be clipped by the divider is a bug.
+    y += 32.0;
+    let flip_h_r = Rect::new(x0, y, x0 + 44.0, y + 24.0);
+    let hov = hover(app, flip_h_r);
+    fill_rrect(s, flip_h_r, R_MD, if hov { C_FIELD_2 } else { C_FIELD });
+    stroke_rrect(s, flip_h_r, R_MD, C_LINE, 1.0);
+    draw_icon(
+        s,
+        "flip-horizontal",
+        flip_h_r.x0 + 10.0,
+        flip_h_r.y0 + 6.0,
+        ICON_XS,
+        C_DIM,
+    );
+    tip(app, flip_h_r, "Flip horizontal");
+    app.image_row = Some(flip_h_r);
+    hit.push((flip_h_r, Action::FlipImage { horizontal: true }));
+
+    let flip_v_r = Rect::new(x0 + 52.0, y, x0 + 96.0, y + 24.0);
+    let hov = hover(app, flip_v_r);
+    fill_rrect(s, flip_v_r, R_MD, if hov { C_FIELD_2 } else { C_FIELD });
+    stroke_rrect(s, flip_v_r, R_MD, C_LINE, 1.0);
+    draw_icon(
+        s,
+        "flip-vertical",
+        flip_v_r.x0 + 10.0,
+        flip_v_r.y0 + 6.0,
+        ICON_XS,
+        C_DIM,
+    );
+    tip(app, flip_v_r, "Flip vertical");
+    hit.push((flip_v_r, Action::FlipImage { horizontal: false }));
+
     y += 32.0;
 
     y
@@ -8933,6 +8971,26 @@ pub fn scroll_stroke_into_view(app: &mut App) {
     }
 }
 
+/// Bring the Image section's flip buttons into the panel viewport. Same
+/// reasoning as `scroll_effects_into_view` above: the section sits below the
+/// fold at scroll 0 and `paint_right` drops the hit rects of rows that leave
+/// the viewport, so anything that means to *click* them — a test, a
+/// screenshot — has to make the scroll a user makes.
+pub fn scroll_image_into_view(app: &mut App) {
+    let mut scene = vello::Scene::new();
+    paint(app, &mut scene);
+    let Some(row) = app.image_row else {
+        return;
+    };
+    let top = crate::theme::ED_TITLE_H + 89.0;
+    let need = row.y0 - 24.0 - (top + 8.0);
+    if need > 0.0 {
+        app.doc().scroll_right += need;
+        let mut scene = vello::Scene::new();
+        paint(app, &mut scene);
+    }
+}
+
 /// Figma's Effects list — the section that replaced a header and a `+`.
 ///
 /// One row per effect carrying its **type dropdown** (Figma: *"The Drop shadow
@@ -9192,6 +9250,7 @@ fn paint_shortcuts_panel(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Acti
         ("\u{2318}D", "Duplicate"),
         ("\u{2325}\u{2318}M", "Use as mask"),
         ("\u{2325}\u{2318}K", "Create component"),
+        ("\u{21e7}H / \u{21e7}V", "Flip horizontal / vertical"),
         ("\u{21e7}\u{2318}K", "Place image"),
         ("\u{2318}/", "Quick actions"),
         ("\u{2318}K", "Command palette"),
