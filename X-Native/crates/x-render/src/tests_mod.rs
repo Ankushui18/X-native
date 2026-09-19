@@ -1076,9 +1076,12 @@ mod outline_view_tests {
             .any(|b| matches!(b, Brush::Solid(x) if *x == blue));
         assert!(!any_blue, "the master's blue fill must not paint");
         // …and no image or glyph command at all
-        let image_or_glyph = tree.commands.iter().any(
-            |c| matches!(c, RenderCommand::Image { .. } | RenderCommand::Glyphs { .. })
-        );
+        let image_or_glyph = tree.commands.iter().any(|c| {
+            matches!(
+                c,
+                RenderCommand::Image { .. } | RenderCommand::Glyphs { .. }
+            )
+        });
         assert!(
             !image_or_glyph,
             "the wireframe carries no image or glyph command"
