@@ -129,6 +129,10 @@ pub struct Editor {
     pub edit_serial: u64,
     pub root: Node,
     pub selection: Vec<String>,
+    /// Figma: a layer *inside* an instance is selectable, and editing one of
+    /// its properties stores an override on the instance instead of touching
+    /// the master. `(instance id, layer id inside it)`; `None` = not inside.
+    pub instance_scope: Option<(String, String)>,
     undo_stack: Vec<Vec<Command>>,
     redo_stack: Vec<Vec<Command>>,
     /// Group/Ungroup are structural; store whole-tree snapshots for them.
@@ -227,6 +231,7 @@ impl Editor {
             root,
             edit_serial: 0,
             selection: vec![],
+            instance_scope: None,
             undo_stack: vec![],
             redo_stack: vec![],
             snapshots: vec![],
@@ -309,6 +314,126 @@ impl Editor {
         Some(next)
     }
 
+    // -- inside an instance -------------------------------------------------
+    /// Figma's *select inside*: double-clicking inside an instance selects the
+    /// layer under the cursor **inside it**, and every property change from
+    /// then on is stored as the instance's override (help 360039150733: *"you
+    /// can change the properties of any layer within an instance"*). The
+    /// selected id is the **master's** layer id, because that is what an
+    /// override targets — an instance carries no children of its own to select.
+    pub fn enter_instance(&mut self, p: Point, vars: &x_core::Variables) -> Option<String> {
+        let hit = hit_test(&self.root, p)?;
+        let instance_id = instance_ancestor(&self.root, &hit)?;
+        let layer = self.layer_inside(&instance_id, p, vars)?;
+        self.instance_scope = Some((instance_id, layer.clone()));
+        self.selection = vec![layer.clone()];
+        Some(layer)
+    }
+
+    /// Leave the instance: Figma's Esc selects the instance itself again.
+    /// Returns true when there was a scope to leave.
+    pub fn exit_instance(&mut self) -> bool {
+        match self.instance_scope.take() {
+            Some((instance_id, _)) => {
+                self.selection = vec![instance_id];
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The scoped layer as the canvas resolves it — master value with the
+    /// instance's override applied. This is what the panels must show while a
+    /// layer inside an instance is selected.
+    pub fn scoped_layer(&self, vars: &x_core::Variables) -> Option<Node> {
+        let (instance_id, layer) = self.instance_scope.clone()?;
+        let inst = find(&self.root, &instance_id)?;
+        let resolved = x_core::detach_instance(&self.root, inst, vars)?;
+        fn take(node: Node, id: &str) -> Option<Node> {
+            if node.id == id {
+                return Some(node);
+            }
+            for c in node.children {
+                if let Some(found) = take(c, id) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        take(resolved, &layer)
+    }
+
+    /// The deepest master layer under `p` inside `instance_id`: the instance is
+    /// swapped for its resolved subtree and the point is asked again, so the
+    /// answer comes from the same tree the renderer paints.
+    fn layer_inside(
+        &self,
+        instance_id: &str,
+        p: Point,
+        vars: &x_core::Variables,
+    ) -> Option<String> {
+        let inst = find(&self.root, instance_id)?;
+        let sentinel = format!("{instance_id}#inside");
+        let mut resolved = x_core::detach_instance(&self.root, inst, vars)?;
+        resolved.id = sentinel.clone();
+        let mut tree = self.root.clone();
+        if !replace_in_tree(&mut tree, instance_id, resolved) {
+            return None;
+        }
+        let inside = hit_test(&tree, p)?;
+        let group = find(&tree, &sentinel)?;
+        if group.id == inside {
+            return None;
+        }
+        find(group, &inside).map(|n| n.id.clone())
+    }
+
+    /// Is `id` inside the instance the editor is scoped into? The ids an
+    /// override targets are the master's, so the master's tree is the one to
+    /// ask.
+    fn scope_owns(&self, id: &str) -> bool {
+        let Some((instance_id, layer)) = self.instance_scope.as_ref() else {
+            return false;
+        };
+        let Some(inst) = find(&self.root, instance_id) else {
+            return false;
+        };
+        let NodeKind::Instance { component } = &inst.kind else {
+            return false;
+        };
+        let Some(master) = x_core::find_master(&self.root, component) else {
+            return false;
+        };
+        let Some(scope) = find(master, layer) else {
+            return false;
+        };
+        scope.id == id || find(scope, id).is_some()
+    }
+
+    /// A write aimed at a layer inside an instance never edits the master
+    /// (Figma keeps the master and every other instance untouched). Returns
+    /// true when the caller must stop: either the write became an override, or
+    /// `v` is `None` — meaning that property is one Figma does not let an
+    /// instance override, so the write is refused rather than misdirected.
+    fn scope_gate(&mut self, id: &str, v: Option<x_core::OverrideValue>) -> bool {
+        if !self.scope_owns(id) {
+            return false;
+        }
+        let Some(v) = v else {
+            return true;
+        };
+        let Some((instance_id, _)) = self.instance_scope.clone() else {
+            return true;
+        };
+        let Some(inst) = find(&self.root, &instance_id).cloned() else {
+            return true;
+        };
+        let mut after = inst;
+        x_core::set_override(&mut after, id, v);
+        self.replace_node(&instance_id, after);
+        true
+    }
+
     pub fn click(&mut self, p: Point, shift: bool) {
         match hit_test(&self.root, p) {
             Some(id) => {
@@ -370,6 +495,11 @@ impl Editor {
         if dx == 0.0 && dy == 0.0 {
             return;
         }
+        // Figma's list of what an instance does NOT let you override starts
+        // with position: a layer inside an instance does not move.
+        if self.scope_gate(id, None) {
+            return;
+        }
         self.push(vec![Command::Move {
             id: id.into(),
             dx,
@@ -429,6 +559,9 @@ impl Editor {
 
     /// Visibility is a persisted, undoable document edit.
     pub fn set_visible(&mut self, id: &str, v: bool) {
+        if self.scope_gate(id, Some(x_core::OverrideValue::Visible(v))) {
+            return;
+        }
         if let Some(n) = find(&self.root, id).filter(|n| n.visible != v) {
             let mut after = n.clone();
             after.visible = v;
@@ -446,8 +579,13 @@ impl Editor {
     }
 
     pub fn move_selection(&mut self, dx: f64, dy: f64) {
-        let cmds = self
+        let ids: Vec<String> = self
             .selection
+            .iter()
+            .filter(|id| !self.scope_owns(id))
+            .cloned()
+            .collect();
+        let cmds = ids
             .iter()
             .map(|id| Command::Move {
                 id: id.clone(),
@@ -458,6 +596,11 @@ impl Editor {
         self.push(cmds);
     }
     pub fn resize(&mut self, id: &str, w: f64, h: f64) {
+        // …and `constraints` and `text bounds` are on the same list: size
+        // comes from the master.
+        if self.scope_gate(id, None) {
+            return;
+        }
         if let Some(n) = find(&self.root, id) {
             let cmd = Command::Resize {
                 id: id.into(),
@@ -544,6 +687,16 @@ impl Editor {
         }
     }
     pub fn set_fill(&mut self, id: &str, paint: Paint) {
+        // Inside an instance a solid fill is an override; a gradient or an
+        // image is a paint the override model has no shape for, so it is
+        // refused rather than written into the master.
+        let solid = match &paint {
+            Paint::Solid(c) => Some(x_core::OverrideValue::Fill(*c)),
+            _ => None,
+        };
+        if self.scope_gate(id, solid) {
+            return;
+        }
         if let Some(n) = find(&self.root, id) {
             if !n.visual_stacks_materialized {
                 let cmd = Command::SetFill {
@@ -634,6 +787,16 @@ impl Editor {
         })
     }
     pub fn set_text(&mut self, id: &str, text: &str) {
+        let overridable = matches!(
+            find(&self.root, id).map(|n| &n.kind),
+            Some(NodeKind::Text { .. })
+        );
+        if self.scope_gate(
+            id,
+            overridable.then(|| x_core::OverrideValue::Text(text.into())),
+        ) {
+            return;
+        }
         let Some(mut after) = find(&self.root, id).cloned() else {
             return;
         };
@@ -1175,6 +1338,9 @@ impl Editor {
     }
 
     pub fn set_opacity(&mut self, id: &str, v: f32) {
+        if self.scope_gate(id, Some(x_core::OverrideValue::Opacity(v))) {
+            return;
+        }
         if let Some(n) = find(&self.root, id) {
             let cmd = Command::SetOpacity {
                 id: id.into(),

@@ -223,6 +223,54 @@ pub fn hit_test_rect(root: &Node, rect: Rect, contained: bool, deep: bool) -> Ve
 /// (direct child of the page) that contains the hit; only deep-select
 /// (Ctrl/Cmd+click) or double-click drills into nested children.
 /// Maps a (deep) hit id to its top-level ancestor's id.
+/// The nearest ancestor of `id` — or `id` itself — that is an instance. Used
+/// by the *select inside* gesture: Figma lets a layer inside an instance be
+/// selected and edited, so a hit has to be attributed to the instance it
+/// belongs to.
+pub fn instance_ancestor(root: &Node, id: &str) -> Option<String> {
+    fn walk(node: &Node, id: &str, last: Option<String>) -> Option<String> {
+        let here = match node.kind {
+            NodeKind::Instance { .. } => Some(node.id.clone()),
+            _ => last,
+        };
+        if node.id == id {
+            return here;
+        }
+        for c in &node.children {
+            if let Some(found) = walk(c, id, here.clone()) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    walk(root, id, None)
+}
+
+/// Replace the node `id` with `after`; the replacement keeps `after`'s id.
+/// Used to hit-test *through* an instance: the instance is swapped for its
+/// resolved subtree, so the point can be answered with a master layer's id.
+pub fn replace_in_tree(root: &mut Node, id: &str, after: Node) -> bool {
+    fn walk(node: &mut Node, id: &str, after: &mut Option<Node>) -> bool {
+        if let Some(pos) = node.children.iter().position(|c| c.id == id) {
+            if let Some(a) = after.take() {
+                node.children[pos] = a;
+            }
+            return true;
+        }
+        for c in &mut node.children {
+            if walk(c, id, after) {
+                return true;
+            }
+        }
+        false
+    }
+    if root.id == id {
+        return false;
+    }
+    let mut slot = Some(after);
+    walk(root, id, &mut slot)
+}
+
 pub fn top_level_ancestor(root: &Node, id: &str) -> Option<String> {
     for child in &root.children {
         if child.id == id || find(child, id).is_some() {

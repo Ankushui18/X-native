@@ -2500,6 +2500,178 @@ mod tests {
         assert_eq!(e.push_overrides_to_main("nope"), 0);
     }
 
+    /// A Button master with a label and an icon, and one instance of it — the
+    /// fixture Figma's *select inside* behaves on.
+    fn scoped_fixture() -> Editor {
+        let master = Node::component("def", "Button", 120.0, 44.0)
+            .child(Node::text("lbl", 12.0, 12.0, 80.0, 20.0, "Click me"))
+            .child(Node::rect(
+                "ico",
+                96.0,
+                14.0,
+                16.0,
+                16.0,
+                Color::from_rgb8(0x11, 0x22, 0x33),
+            ));
+        let inst = Node::instance("i1", "Button", 100.0, 200.0, 120.0, 44.0);
+        Editor::new(Node::frame("r", 500.0, 500.0).child(master).child(inst))
+    }
+
+    /// Figma (help 360039150733): *"you can change the properties of any layer
+    /// within an instance"* — double-clicking inside an instance selects the
+    /// layer under the cursor, which for this engine is the master layer the
+    /// override will name.
+    #[test]
+    fn selecting_inside_an_instance_picks_the_layer_under_the_cursor() {
+        let mut e = scoped_fixture();
+        let vars = Variables::default();
+
+        let layer = e.enter_instance(Point::new(120.0, 220.0), &vars);
+        assert_eq!(
+            layer.as_deref(),
+            Some("lbl"),
+            "the label is under the point"
+        );
+        assert_eq!(e.selection, vec!["lbl".to_string()]);
+        assert_eq!(
+            e.instance_scope.as_ref().map(|(i, _)| i.as_str()),
+            Some("i1")
+        );
+
+        // the icon sits further right; entering there moves the scope
+        let layer = e.enter_instance(Point::new(205.0, 222.0), &vars);
+        assert_eq!(layer.as_deref(), Some("ico"));
+        assert_eq!(
+            e.instance_scope.as_ref().map(|(_, l)| l.as_str()),
+            Some("ico")
+        );
+
+        // a point outside the instance is not "inside" anything
+        assert_eq!(e.enter_instance(Point::new(400.0, 400.0), &vars), None);
+
+        // …and Esc (exit_instance) puts the instance back under the cursor
+        assert!(e.exit_instance());
+        assert_eq!(e.selection, vec!["i1".to_string()]);
+        assert!(e.instance_scope.is_none());
+        assert!(!e.exit_instance(), "there is nothing left to leave");
+    }
+
+    /// The write rule: a property change aimed at a layer inside the instance
+    /// becomes the instance's override, and the master keeps its own value.
+    #[test]
+    fn editing_inside_an_instance_stores_an_override() {
+        let mut e = scoped_fixture();
+        let vars = Variables::default();
+        e.enter_instance(Point::new(120.0, 220.0), &vars)
+            .expect("inside the instance");
+
+        e.set_text("lbl", "Hello");
+        e.set_visible("lbl", false);
+        e.set_opacity("ico", 0.4);
+
+        let inst = crate::find(&e.root, "i1").unwrap();
+        assert!(inst.overrides.contains_key("lbl"), "text + visibility");
+        assert!(
+            !inst.overrides.contains_key("ico"),
+            "the icon is not inside the scoped layer"
+        );
+
+        // the master keeps its own values…
+        let NodeKind::Text { text } = &crate::find(&e.root, "lbl").unwrap().kind else {
+            panic!("label is a text layer")
+        };
+        assert_eq!(text, "Click me", "the master is untouched");
+
+        // …and the resolved layer shows what the canvas paints
+        let resolved = e.scoped_layer(&vars).expect("the scoped layer resolves");
+        let NodeKind::Text { text } = &resolved.kind else {
+            panic!("the resolved layer is the text")
+        };
+        assert_eq!(text, "Hello");
+        assert!(!resolved.visible, "the visibility override is resolved too");
+    }
+
+    /// Figma's list of what an instance does NOT let you override starts with
+    /// position and constraints: a layer inside an instance does not move.
+    #[test]
+    fn position_is_not_overridable_inside_an_instance() {
+        let mut e = scoped_fixture();
+        let vars = Variables::default();
+        e.enter_instance(Point::new(120.0, 220.0), &vars)
+            .expect("inside the instance");
+
+        let before = crate::find(&e.root, "lbl").unwrap().transform.x;
+        e.move_selection(30.0, 40.0);
+        e.move_node("lbl", 5.0, 5.0);
+        e.resize("lbl", 10.0, 10.0);
+        assert_eq!(
+            crate::find(&e.root, "lbl").unwrap().transform.x,
+            before,
+            "the master's layout is not an override"
+        );
+        assert!(crate::find(&e.root, "i1").unwrap().overrides.is_empty());
+
+        // outside the scope the same calls move the node as usual
+        assert!(e.exit_instance());
+        e.move_node("lbl", 5.0, 5.0);
+        assert_eq!(
+            crate::find(&e.root, "lbl").unwrap().transform.x,
+            before + 5.0
+        );
+    }
+
+    /// A paint the override model has no shape for (a variable reference, a
+    /// gradient) is refused rather than written into the master.
+    #[test]
+    fn a_fill_that_cannot_be_an_override_inside_an_instance_is_refused() {
+        let mut e = scoped_fixture();
+        let vars = Variables::default();
+        e.enter_instance(Point::new(205.0, 222.0), &vars)
+            .expect("inside the instance");
+        let before = crate::find(&e.root, "ico").unwrap().fill.clone();
+
+        e.set_fill("ico", Paint::Variable("brand".into()));
+        assert_eq!(
+            crate::find(&e.root, "ico").unwrap().fill,
+            before,
+            "the master keeps its fill"
+        );
+        assert!(crate::find(&e.root, "i1").unwrap().overrides.is_empty());
+
+        // a solid fill is the kind that does become an override
+        e.set_fill("ico", Paint::Solid(Color::WHITE));
+        assert_eq!(
+            crate::find(&e.root, "i1").unwrap().overrides.len(),
+            1,
+            "one override, on the instance"
+        );
+    }
+
+    /// Each write inside an instance is its own undo step, and the scope is
+    /// view state: undo takes the override back without leaving the instance.
+    #[test]
+    fn an_override_written_inside_an_instance_is_one_undo_step() {
+        let mut e = scoped_fixture();
+        let vars = Variables::default();
+        e.enter_instance(Point::new(120.0, 220.0), &vars)
+            .expect("inside the instance");
+        e.set_text("lbl", "Hello");
+        assert_eq!(crate::find(&e.root, "i1").unwrap().overrides.len(), 1);
+
+        e.undo();
+        assert!(
+            crate::find(&e.root, "i1").unwrap().overrides.is_empty(),
+            "one step back"
+        );
+        assert_eq!(
+            e.instance_scope.as_ref().map(|(_, l)| l.as_str()),
+            Some("lbl"),
+            "the scope is not part of the document"
+        );
+        e.redo();
+        assert_eq!(crate::find(&e.root, "i1").unwrap().overrides.len(), 1);
+    }
+
     #[test]
     fn detach_instance_is_undoable() {
         let master = Node::component("def", "Card", 200.0, 100.0).child(Node::rect(

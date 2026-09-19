@@ -5,6 +5,45 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-19 (Instances: select inside)
+
+Figma lets you reach *into* an instance: *"you can change the properties of any
+layer within an instance"* — the change is stored on the instance, the master and
+every other instance keep their own value. An instance carries no children of its
+own here (its subtree resolves from the master at render time), so "inside" had to
+become a place the editor can be: a scope.
+
+- **The scope.** `Editor::instance_scope: Option<(instance, layer)>`.
+  `enter_instance(point, vars)` finds the instance under the cursor, swaps it for
+  its resolved subtree (the same resolution the renderer uses) and answers the
+  point again, so the layer selected is the master layer an override will name;
+  `exit_instance()` puts the instance back under the cursor; `scoped_layer(vars)`
+  returns that layer as the canvas paints it.
+- **The write rule, in one place.** `scope_gate` sits in `set_fill`, `set_text`,
+  `set_opacity` and `set_visible`: inside an instance the write becomes the
+  instance's override in one undo step, and a property the override model has no
+  shape for (a gradient, a variable reference) is refused rather than written into
+  the master. Position and size are refused too — Figma's own list of what an
+  instance does not let you override starts with position, constraints and text
+  bounds — so `move_node`, `move_selection` and `resize` are inert inside a scope.
+- **The gestures.** A double-click inside an instance enters it (the existing
+  one-level drill-in is the fallback for everything else); while inside, a click
+  moves the scope to the layer under the cursor and a click outside leaves it; Esc
+  steps out to the instance. The status line names the path: `Inside Button - lbl
+  (Esc to leave)`.
+- **The panel.** `sel_info` reads the instance's resolved copy of the layer while
+  the scope holds it, so the fields show the values the canvas is painting — and
+  the writes they dispatch land back as overrides.
+- Tests: `selecting_inside_an_instance_picks_the_layer_under_the_cursor`,
+  `editing_inside_an_instance_stores_an_override`,
+  `position_is_not_overridable_inside_an_instance`,
+  `a_fill_that_cannot_be_an_override_inside_an_instance_is_refused`,
+  `an_override_written_inside_an_instance_is_one_undo_step`,
+  `double_clicking_inside_an_instance_selects_the_layer_there`,
+  `the_panel_shows_the_instance_copy_of_a_layer_inside_it`.
+
+Still open on this item: component sets as a first-class node (12.19).
+
 ## [Unreleased] — 2026-09-19 (Instances: go to main, push changes, reset one change)
 
 An instance's *More actions* menu in Figma is where its three master-level

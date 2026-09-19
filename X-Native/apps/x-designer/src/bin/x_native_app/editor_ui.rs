@@ -3479,7 +3479,17 @@ pub fn sel_info(app: &App) -> Sel {
         };
     };
     let root = &doc.editor_ref().root;
-    let Some(n) = find_node(root, &id) else {
+    // Figma's *select inside*: while a layer inside an instance is selected,
+    // the panel shows the instance's resolved copy of it — the values the
+    // canvas is painting — and every write below goes back as an override.
+    let resolved = doc
+        .editor_ref()
+        .instance_scope
+        .as_ref()
+        .filter(|(_, layer)| layer == &id)
+        .and_then(|_| doc.editor_ref().scoped_layer(vars));
+    let node = resolved.or_else(|| find_node(root, &id).cloned());
+    let Some(n) = node.as_ref() else {
         return Sel {
             is_frame: false,
             name: "Page".into(),

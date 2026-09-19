@@ -3873,6 +3873,34 @@ impl App {
         })
     }
 
+    /// Figma's *select inside*: after a double-click (or a click while already
+    /// inside) the status names the layer being edited within its instance and
+    /// says how to leave — the breadcrumb Figma puts in the layers panel.
+    pub fn enter_instance_status(&mut self, layer: &str) {
+        let label = match self.doc_opt() {
+            Some(doc) => {
+                let ed = doc.editor_ref();
+                let instance = ed
+                    .instance_scope
+                    .as_ref()
+                    .and_then(|(id, _)| crate::editor_ui::find_node(&ed.root, id))
+                    .map(|n| match &n.kind {
+                        // Figma names an instance after its component
+                        x_native::NodeKind::Instance { component } => component.clone(),
+                        _ => n.name.clone(),
+                    })
+                    .unwrap_or_else(|| "the instance".to_string());
+                let layer = ed
+                    .scoped_layer(&doc.doc.variables)
+                    .map(|n| n.name.clone())
+                    .unwrap_or_else(|| layer.to_string());
+                format!("Inside {instance} - {layer} (Esc to leave)")
+            }
+            None => return,
+        };
+        self.status = label;
+    }
+
     /// Commit a page rename (single source of truth for the pages-panel
     /// inline field). Empty names are ignored.
     /// The selected node's own auto-layout (None unless it is a Frame

@@ -4269,8 +4269,35 @@ impl Host {
                     // lands on the shape inside it. `deep_click` (⌘/ctrl) still
                     // reaches the exact nested layer in one press, which is the
                     // other half of Figma's selection story.
+                    //
+                    // Instances come first: Figma's *select inside* means a
+                    // double-click there selects the layer **within** the
+                    // instance, and a click while already inside moves the
+                    // scope to whatever is under the cursor. A click outside
+                    // the instance leaves it, the way Esc does.
+                    let vars = self.app.vars.clone();
+                    let entered = self.app.doc().editor_ref().instance_scope.is_some();
                     if dbl && !shift {
-                        self.app.doc().editor().drill_into(world);
+                        match self.app.doc().editor().enter_instance(world, &vars) {
+                            Some(layer) => self.app.enter_instance_status(&layer),
+                            None => {
+                                self.app.doc().editor().drill_into(world);
+                            }
+                        }
+                    } else if entered {
+                        // already inside: this click moves the scope to
+                        // whatever the cursor is over, and a click outside the
+                        // instance leaves it (Esc does the same)
+                        match self.app.doc().editor().enter_instance(world, &vars) {
+                            Some(layer) => self.app.enter_instance_status(&layer),
+                            None => {
+                                self.app.doc().editor().exit_instance();
+                                self.app
+                                    .doc()
+                                    .editor()
+                                    .click_select(world, shift, deep_click);
+                            }
+                        }
                     } else {
                         self.app
                             .doc()
@@ -7201,6 +7228,11 @@ impl Host {
                         // drag already in flight still ends through its own
                         // release (which merges it into one undo step)
                         self.app.tool = Tool::Select;
+                    } else if self.app.doc().editor().exit_instance() {
+                        // Figma: inside an instance Esc steps out of it first —
+                        // the instance comes back under the cursor rather than
+                        // the selection being thrown away.
+                        self.app.status = "Left the instance".into();
                     } else {
                         self.app.doc().editor().selection.clear();
                     }

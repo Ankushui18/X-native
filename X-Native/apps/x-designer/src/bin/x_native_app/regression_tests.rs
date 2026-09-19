@@ -6553,6 +6553,65 @@ fn selection_menu(h: &Host) -> Vec<crate::context_menu::ContextMenuItem> {
     })
 }
 
+/// Figma's *select inside* (help 360039150733: *"you can change the properties
+/// of any layer within an instance"*): the canvas gesture enters the instance
+/// on the layer under the cursor, the status names the path, and Esc leaves.
+#[test]
+fn double_clicking_inside_an_instance_selects_the_layer_there() {
+    let (mut h, inst) = instance_host();
+    let vars = h.app.vars.clone();
+
+    // the label sits at (12, 12) inside an instance placed at (40, 300)
+    let layer = h
+        .app
+        .doc()
+        .editor()
+        .enter_instance(Point::new(60.0, 316.0), &vars);
+    assert_eq!(layer.as_deref(), Some("lbl"));
+    assert_eq!(h.app.doc().editor_ref().selection, vec!["lbl".to_string()]);
+
+    h.app.enter_instance_status("lbl");
+    assert!(
+        h.app.status.contains("Inside Button") && h.app.status.contains("lbl"),
+        "the status names the instance and the layer: {}",
+        h.app.status
+    );
+
+    // Esc steps out: the instance is selected again, not the whole canvas
+    h.on_key(Key::Named(NamedKey::Escape), None);
+    assert!(h.app.doc().editor_ref().instance_scope.is_none());
+    assert_eq!(h.app.doc().editor_ref().selection, vec![inst]);
+    assert_eq!(h.app.status, "Left the instance");
+
+    // a point outside the instance is not inside anything
+    let outside = h
+        .app
+        .doc()
+        .editor()
+        .enter_instance(Point::new(400.0, 60.0), &vars);
+    assert_eq!(outside, None);
+}
+
+/// The panel reads the instance's copy of a layer it edits — the value the
+/// canvas paints — while the master keeps its own.
+#[test]
+fn the_panel_shows_the_instance_copy_of_a_layer_inside_it() {
+    let (mut h, _inst) = instance_host();
+    let vars = h.app.vars.clone();
+    h.app
+        .doc()
+        .editor()
+        .enter_instance(Point::new(144.0, 318.0), &vars)
+        .expect("the icon is under the point");
+
+    h.app.doc().editor().set_opacity("ico", 0.4);
+
+    let info = crate::editor_ui::sel_info(&h.app);
+    assert_eq!(info.opacity, 0.4, "the panel shows the override");
+    let master = crate::editor_ui::find_node(&h.app.doc().editor_ref().root, "ico").unwrap();
+    assert_eq!(master.opacity, 1.0, "the master is untouched");
+}
+
 /// Figma's instance menu (help 360039150733): *"Go to main component"*,
 /// *"Push changes to main component"*, and a Reset flyout that *"only lists
 /// properties that have changes applied"*. A plain selection has none of it.
