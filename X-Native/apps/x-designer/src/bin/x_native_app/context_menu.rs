@@ -96,7 +96,10 @@ pub enum ContextAction {
     /// A row of the Reset flyout: *"Reset > Reset [property]"* — the label
     /// names the layer and the property it carries, so it is data, not a
     /// static string.
-    ResetChange { target: String, label: String },
+    ResetChange {
+        target: String,
+        label: String,
+    },
     /// *"Reset > Reset all changes"*.
     ResetAllChanges,
 }

@@ -15,7 +15,8 @@
 //! serialization surface and is converted losslessly both ways.
 
 use crate::{
-    color_to_hex, find_node, parse_hex_color, Color, Node, NodeKind, Paint, StrokeLayer, Variables,
+    color_to_hex, find_node, parse_hex_color, Color, Node, NodeKind, Paint, PaintLayer, StrokeLayer,
+    Variables,
 };
 use std::collections::HashMap;
 
@@ -219,7 +220,7 @@ pub fn push_overrides_to_master(root: &mut Node, instance_id: &str) -> usize {
 fn push_into(node: &mut Node, overrides: &std::collections::HashMap<String, String>) -> usize {
     let own = overrides
         .get(&node.id)
-        .and_then(OverrideValue::decode)
+        .and_then(|raw| OverrideValue::decode(raw))
         .map(|v| apply_override(node, &v))
         .unwrap_or(0);
     let mut n = own;
@@ -233,8 +234,18 @@ fn push_into(node: &mut Node, overrides: &std::collections::HashMap<String, Stri
 fn apply_override(node: &mut Node, v: &OverrideValue) -> usize {
     match v {
         OverrideValue::Fill(c) => {
-            node.fill = Paint::Solid(*c);
-            node.fills.clear();
+            // The engine's own rule for writing a fill (`Editor::set_fill`): a
+            // node that paints from materialized layers paints its top one, so
+            // the write has to land there and not only in `fill`.
+            if node.visual_stacks_materialized {
+                if let Some(layer) = node.fill_layers.last_mut() {
+                    layer.paint = Paint::Solid(*c);
+                } else {
+                    node.fill_layers.push(PaintLayer::new(Paint::Solid(*c)));
+                }
+            } else {
+                node.fill = Paint::Solid(*c);
+            }
             1
         }
         OverrideValue::Stroke(c) => {
