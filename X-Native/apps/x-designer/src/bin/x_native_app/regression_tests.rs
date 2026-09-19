@@ -6353,7 +6353,10 @@ fn the_width_menu_carries_figmas_sizing_and_min_max_rows() {
     // ...and the HEIGHT menu writes the main axis
     h.dispatch(Action::LayoutAxisMenu(false));
     h.dispatch(Action::SetAxisSizing(false, x_native::Sizing::Hug));
-    assert_eq!(h.app.selected_layout().unwrap().sizing, x_native::Sizing::Hug);
+    assert_eq!(
+        h.app.selected_layout().unwrap().sizing,
+        x_native::Sizing::Hug
+    );
 }
 
 /// "From the new field that appears, enter a value": the menu's Add rows

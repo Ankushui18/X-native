@@ -4330,7 +4330,10 @@ fn paint_design(
             ));
             // Figma's auto-layout settings carry **canvas stacking**: "Next to
             // canvas stacking, select: First on top / Last on top."
-            let stacking = sel_layout.as_ref().map(|l| l.canvas_stacking).unwrap_or_default();
+            let stacking = sel_layout
+                .as_ref()
+                .map(|l| l.canvas_stacking)
+                .unwrap_or_default();
             let sr = Rect::new(x0 + 120.0, y0 + 426.0, x0 + 283.0, y0 + 426.0 + DENSE_H);
             let shov = hover(app, sr);
             app.fonts.text(
