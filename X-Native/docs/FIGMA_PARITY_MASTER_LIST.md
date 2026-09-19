@@ -33,14 +33,14 @@ recon task, not a settled fact.
 | surface | rows | MATCH | PARTIAL | MISSING | EXTRA | OUT |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | 1 Tools (toolbar & shape menu) | 24 | 15 | 3 | 1 | 5 | 0 |
-| 2 Canvas gestures (drag) | 28 | 24 | 0 | 3 | 1 | 0 |
+| 2 Canvas gestures (drag) | 28 | 24 | 1 | 2 | 1 | 0 |
 | 3 Keyboard | 35 | 23 | 5 | 6 | 1 | 0 |
 | 4 Menus & palettes | 10 | 9 | 0 | 1 | 0 | 0 |
 | 5 Layers, pages, sections | 14 | 12 | 1 | 1 | 0 | 0 |
 | 6 Frame & shape properties | 20 | 15 | 3 | 2 | 0 | 0 |
 | 7 Auto layout | 16 | 14 | 1 | 1 | 0 | 0 |
 | 8 Fill, stroke, effects, colour | 25 | 21 | 1 | 3 | 0 | 0 |
-| 9 Images | 9 | 5 | 3 | 1 | 0 | 0 |
+| 9 Images | 9 | 6 | 3 | 0 | 0 | 0 |
 | 10 Text & typography | 18 | 15 | 2 | 1 | 0 | 0 |
 | 11 Vector editing & booleans | 20 | 14 | 5 | 1 | 0 | 0 |
 | 12 Components, instances, styles | 21 | 18 | 3 | 0 | 0 | 0 |
@@ -52,9 +52,9 @@ recon task, not a settled fact.
 | 18 Design language (look of the app itself) | 12 | 1 | 5 | 6 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **339** | **239** | **52** | **29** | **16** | **3** |
+| **total** | **339** | **240** | **53** | **27** | **16** | **3** |
 
-The 29 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
+The 27 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
 the brief.
 
@@ -128,7 +128,7 @@ Figma's canvas is a small set of gestures with modifiers; the shape-tool drags a
 | 2.22 | Vector point drag | move anchors, handles | vector-edit pointer path | MATCH |
 | 2.23 | **Rotate on canvas** | hover outside a corner → rotate cursor, drag rotates; `⇧` snaps 15°; `⌥R` moves the origin | `Drag::RotateSel` + `state::rotate_corner_at` (a ring *outside* the corner, past the resize handle), `⇧` = 15° steps, `Drag::RotationOrigin` for the `⌥R` target | MATCH |
 | 2.24 | **`⌥` measure** | hold `⌥` and point to read the distance to the selection | not implemented | **MISSING** |
-| 2.25 | **Crop image** | double-click an image → crop handles | `ImageFillMode`/`image_transform` exist, no crop gesture | **MISSING** |
+| 2.25 | **Crop image** | double-click an image → crop handles, **Aspect ratio**, **Resize to fit** | `App::crop` + `Drag::Crop` + `paint_crop_chrome`: the frame and its four corner handles, a corner drag pinches the picture about the opposite corner (⌥ both sides), aspect kept, Enter/click-outside applies and Esc puts it back, **Resize to fit** in the panel. **Not built:** the faded uncropped surround, Control's free aspect (our crop zoom is uniform), the **Aspect ratio** picker, the crop-value slider and the `⌘`-drag quick crop; a press inside crop mode is the crop's, so the rotate ring and the resize handles wait for the apply | **PARTIAL** |
 | 2.26 | **Place & size image** | image tool drag places at that size | `finish_create`'s `Tool::PlaceImage` arm: a click places the file's own size (its header, capped at 4096), a drag draws the box you drew | MATCH |
 | 2.27 | Scroll / pinch zoom, `⌘`+scroll | canvas zoom | wheel path | MATCH |
 | 2.28 | `Space`-drag pan | temporary pan | `Space` arm + `Drag::Pan` | MATCH |
@@ -304,7 +304,7 @@ position, canvas stacking, "distribute", `⇧A` to add.
 | 9.2 | Fill modes | Fill / Fit / Crop / Tile | `SetImageFillMode`, `ImageFit` | MATCH |
 | 9.3 | Adjustments | exposure, contrast, saturation, temperature… | `SetImageAdjustments` | MATCH |
 | 9.4 | Rotate 90° steps | yes | `RotateImage`, `image_rotation` | MATCH |
-| 9.5 | **Crop gesture** | double-click → crop | none | **MISSING** |
+| 9.5 | **Crop gesture** | double-click → crop | `begin_crop` on the double-clicked image (also when the fill mode becomes **Crop**), `crop_drag` for the corner/inside drags, `crop_apply`/`crop_cancel` on ⏎/Esc and a click outside, all resolved through `resolve_image_placement` | MATCH |
 | 9.6 | **Place-image tool** | image tool with drag sizing | `⇧⌘K` / File → Place image / command search; a multi-file pick queues, one file per placement, `Delete` discards the rest; a click on a layer fills it, an image layer swaps its picture and keeps its crop | MATCH |
 | 9.7 | Flip H/V | yes | `ImagePlacement::flip_h/flip_v` in the engine, no UI toggle seen | PARTIAL |
 | 9.8 | Copy/paste image between files | yes | clipboard path | MATCH |
@@ -627,10 +627,24 @@ rendering it.
    `a_click_scales_a_file_bigger_than_figmas_cap`,
    `the_palette_lists_place_image_with_its_shortcut` and
    `set_image_asset_swaps_the_picture_and_keeps_the_crop`. The **crop** half of
-   the same help article (2.25, 9.5) — crop mode, its handles, **Aspect
-   ratio**, **Resize to fit** and the `⌘`-drag quick crop — is the next
-   increment; **Place all**, the cursor's count badge, HEIC/TIFF and video are
-   the honest remainder.
+   the same article — and of [Crop an image](https://help.figma.com/hc/en-us/articles/360040675194),
+   the page the crop rows come from — is **delivered too**: `⌘⌥` no, a
+   double-click on the image layer (or the Fill mode becoming **Crop**) opens
+   the crop frame, its four corner handles pinch the picture about the corner
+   opposite the one being held — `⌥` moves both sides, the aspect ratio is kept
+   as the page's default — a drag inside the frame repositions the picture, ⏎
+   or a click outside applies the session as ONE undo entry, Esc puts the
+   picture and its fill mode back, and the panel's **Crop** section carries
+   **Resize to fit**. Pinned by
+   `a_corner_drag_crops_about_the_opposite_corner`,
+   `escape_puts_the_cropped_picture_back`,
+   `dragging_inside_the_crop_frame_repositions_the_picture`,
+   `resize_to_fit_makes_the_layer_the_size_of_the_picture`,
+   `the_crop_frame_answers_its_corners_and_its_inside` and
+   `the_image_crop_writers_are_one_entry_each`. Still open in crop: the faded
+   uncropped surround, Control's free aspect, the **Aspect ratio** picker, the
+   crop-value slider and the `⌘`-drag quick crop. **Place all**, the cursor's
+   count badge, HEIC/TIFF and video are the honest remainder of place-image.
 10. Per-corner radii + **corner smoothing** (6.4, 6.5) — both fields are in the model;
     this is a UI pass with a renderer already able to draw it.
 11. ~~**Component sets as a node** (12.19)~~ — **delivered**, the last row of the

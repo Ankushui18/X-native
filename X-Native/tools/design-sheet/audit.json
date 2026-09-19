@@ -28,7 +28,7 @@
     },
     "radii": {
       "dashboard.rs": 0,
-      "editor_ui.rs": 14,
+      "editor_ui.rs": 15,
       "board_ui.rs": 0,
       "loading.rs": 0,
       "command.rs": 0,
@@ -50,7 +50,7 @@
       "icons.rs": 0,
       "theme.rs": 0
     },
-    "canvasSpaceRadii": 14,
+    "canvasSpaceRadii": 15,
     "canvasList": [
       1,
       1.5,
@@ -95,11 +95,11 @@
       40,
       48
     ],
-    "total": 784,
-    "onLadder": 378,
+    "total": 786,
+    "onLadder": 379,
     "perFile": {
       "dashboard.rs": 129,
-      "editor_ui.rs": 614,
+      "editor_ui.rs": 616,
       "board_ui.rs": 21,
       "command.rs": 0,
       "loading.rs": 20,
@@ -109,7 +109,7 @@
     "top": [
       {
         "value": 8,
-        "count": 131,
+        "count": 132,
         "onLadder": true
       },
       {
@@ -134,7 +134,7 @@
       },
       {
         "value": 7,
-        "count": 34,
+        "count": 35,
         "onLadder": false
       },
       {

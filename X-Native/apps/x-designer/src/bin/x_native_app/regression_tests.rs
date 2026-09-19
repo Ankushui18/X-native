@@ -2524,6 +2524,229 @@ fn the_palette_lists_place_image_with_its_shortcut() {
     assert_eq!(row.shortcut, "⇧⌘K");
 }
 
+/// A registered picture on the page — the crop tests need a real intrinsic
+/// size (the store probes the header) and an image layer to crop.
+fn crop_host() -> (Host, String) {
+    let mut h = host();
+    let root = h.app.doc().editor_ref().root.id.clone();
+    let asset = h.app.doc().doc.assets.register(
+        "pic.png",
+        PLACE_PNG.to_vec(),
+        x_native::AssetSource::Embedded,
+    );
+    h.app.doc().editor().insert_node(
+        &root,
+        Node::image("shot", 100.0, 100.0, 100.0, 100.0, &asset),
+    );
+    h.app.doc().editor().selection = vec!["shot".into()];
+    (h, asset)
+}
+
+fn image_of(h: &Host, id: &str) -> Node {
+    find_node_clone(&h.app.doc_ref().editor_ref().root, id).expect("the layer is there")
+}
+
+fn placement_of(n: &Node) -> x_native::ImagePlacement {
+    match &n.kind {
+        NodeKind::Image { placement, .. } => *placement,
+        other => panic!("image: {other:?}"),
+    }
+}
+
+/// The image-space point that a node-local point shows, through the one
+/// resolver every sink reads — the invariant a crop has to hold.
+fn image_point_under(n: &Node, iw: f64, ih: f64, local: Point) -> Point {
+    let NodeKind::Image { fit, placement, .. } = &n.kind else {
+        panic!("image");
+    };
+    let r = x_native::resolve_image_placement(*fit, placement, n.w, n.h, iw, ih);
+    r.draws[0].inverse() * local
+}
+
+/// Figma's crop mode (help 360040675194): *"Double-click the image layer to
+/// enter crop mode"*, which switches its fill mode to **Crop**, and a corner
+/// drag pinches the picture about the OPPOSITE corner — the image pixel under
+/// that corner must not move, which is what makes it a crop and not a pan. The
+/// aspect ratio is kept, which the page calls its default for cropping. Enter
+/// then folds the session into ONE undo entry.
+#[test]
+fn a_corner_drag_crops_about_the_opposite_corner() {
+    let (mut h, _asset) = crop_host();
+    let base = h.app.doc_ref().editor_ref().undo_depth();
+    assert!(h.app.begin_crop("shot"), "the mode opens on an image layer");
+    let start_node = image_of(&h, "shot");
+    assert!(
+        matches!(&start_node.kind, NodeKind::Image { fit, .. } if *fit == x_native::ImageFit::Crop),
+        "entering crop switches the fill mode to Crop"
+    );
+    let before = placement_of(&start_node);
+    assert_eq!(before.scale, 1.0, "a crop starts at the fit scale");
+
+    let (iw, ih) = (32.0, 24.0);
+    let anchor = Point::new(100.0, 100.0);
+    let under_before = image_point_under(&start_node, iw, ih, anchor);
+
+    // hold the top-left corner and pull it out past the frame: the picture
+    // zooms about the bottom-right and that corner's pixel stays put
+    let held = Point::new(0.0, 0.0);
+    assert!(h.crop_drag(0, held, Point::new(-20.0, -20.0), false));
+    let after = image_of(&h, "shot");
+    let now = placement_of(&after);
+    assert!(
+        now.scale > 1.1,
+        "the drag zoomed the picture: {}",
+        now.scale
+    );
+    let under_after = image_point_under(&after, iw, ih, anchor);
+    assert!(
+        (under_before.x - under_after.x).abs() < 0.05
+            && (under_before.y - under_after.y).abs() < 0.05,
+        "the anchor's pixel moved: {under_before:?} -> {under_after:?}"
+    );
+    assert!(
+        now.focal.0 >= 0.0 && now.focal.0 <= 1.0 && now.focal.1 >= 0.0 && now.focal.1 <= 1.0,
+        "the crop stays inside the picture: {:?}",
+        now.focal
+    );
+
+    // a second drag, then Enter: the whole session is one undo entry
+    let depth = h.app.doc_ref().editor_ref().undo_depth();
+    assert!(h.crop_drag(0, held, Point::new(-30.0, -30.0), false));
+    assert!(h.app.doc_ref().editor_ref().undo_depth() > depth);
+    h.dispatch(Action::CropApply);
+    assert!(h.app.crop.is_none(), "the mode closed");
+    assert_eq!(
+        h.app.doc_ref().editor_ref().undo_depth(),
+        base + 1,
+        "the session folded into one entry"
+    );
+    assert_eq!(h.app.status, "Cropped");
+    assert!(h.app.doc().editor().undo());
+    let back = image_of(&h, "shot");
+    assert_eq!(
+        placement_of(&back).scale,
+        1.0,
+        "one undo takes the crop back"
+    );
+    assert!(
+        matches!(&back.kind, NodeKind::Image { fit, .. } if *fit == x_native::ImageFit::Fill),
+        "and the fill mode with it"
+    );
+}
+
+/// Esc puts the picture — and the fill mode — back the way the layer was, and
+/// folds the session, including the putting back, into one entry.
+#[test]
+fn escape_puts_the_cropped_picture_back() {
+    let (mut h, _asset) = crop_host();
+    let base = h.app.doc_ref().editor_ref().undo_depth();
+    assert!(h.app.begin_crop("shot"));
+    assert!(h.crop_drag(2, Point::new(0.0, 100.0), Point::new(-24.0, 124.0), false));
+    assert!(
+        placement_of(&image_of(&h, "shot")).scale > 1.0,
+        "cropped in"
+    );
+    h.on_key(Key::Named(NamedKey::Escape), None);
+    assert!(h.app.crop.is_none(), "Esc closes the mode");
+    let n = image_of(&h, "shot");
+    assert_eq!(placement_of(&n).scale, 1.0, "the picture is back");
+    assert!(
+        matches!(&n.kind, NodeKind::Image { fit, .. } if *fit == x_native::ImageFit::Fill),
+        "the fill mode is back too"
+    );
+    assert!(
+        h.app.doc_ref().editor_ref().undo_depth() <= base + 1,
+        "the session is one entry"
+    );
+    assert_eq!(h.app.status, "Crop cancelled");
+}
+
+/// A drag that starts INSIDE the frame repositions the picture instead of
+/// scaling it — Figma's *"hover the faded area to reposition"*, carried by the
+/// frame's own inside here — and pushing right moves the window left.
+#[test]
+fn dragging_inside_the_crop_frame_repositions_the_picture() {
+    let (mut h, _asset) = crop_host();
+    assert!(h.app.begin_crop("shot"));
+    let before = placement_of(&image_of(&h, "shot"));
+    let inside = Point::new(50.0, 50.0);
+    assert!(
+        !h.crop_drag(crate::state::CROP_PAN, inside, inside, false),
+        "no movement, no write"
+    );
+    assert!(h.crop_drag(
+        crate::state::CROP_PAN,
+        inside,
+        Point::new(60.0, 50.0),
+        false
+    ));
+    let after = placement_of(&image_of(&h, "shot"));
+    assert!(
+        after.focal.0 < before.focal.0,
+        "the picture follows the pointer"
+    );
+    assert_eq!(after.scale, before.scale, "a pan does not zoom");
+}
+
+/// The crop section's **Resize to fit**: the layer becomes the size of the
+/// whole picture, with a clean crop.
+#[test]
+fn resize_to_fit_makes_the_layer_the_size_of_the_picture() {
+    let (mut h, _asset) = crop_host();
+    assert!(h.app.begin_crop("shot"));
+    assert!(h.crop_drag(3, Point::new(100.0, 100.0), Point::new(140.0, 140.0), false));
+    assert!(
+        placement_of(&image_of(&h, "shot")).scale > 1.0,
+        "cropped in"
+    );
+    h.dispatch(Action::CropResizeToFit);
+    let n = image_of(&h, "shot");
+    assert_eq!((n.w, n.h), (32.0, 24.0), "the layer is the picture's size");
+    let p = placement_of(&n);
+    assert_eq!(p.scale, 1.0);
+    assert_eq!(p.focal, (0.5, 0.5));
+    assert!(
+        matches!(&n.kind, NodeKind::Image { fit, .. } if *fit == x_native::ImageFit::Crop),
+        "and it is still a crop"
+    );
+    assert!(h.app.status.contains("Resized to fit"), "{}", h.app.status);
+}
+
+/// The crop frame's own hit geometry: four corners, the inside, and nothing
+/// outside — the press that misses the frame is the apply.
+#[test]
+fn the_crop_frame_answers_its_corners_and_its_inside() {
+    let b = (10.0, 20.0, 100.0, 50.0);
+    assert_eq!(
+        crate::state::crop_corner_at(b, Point::new(10.0, 20.0), 4.0),
+        Some(0)
+    );
+    assert_eq!(
+        crate::state::crop_corner_at(b, Point::new(110.0, 20.0), 4.0),
+        Some(1)
+    );
+    assert_eq!(
+        crate::state::crop_corner_at(b, Point::new(10.0, 70.0), 4.0),
+        Some(2)
+    );
+    assert_eq!(
+        crate::state::crop_corner_at(b, Point::new(110.0, 70.0), 4.0),
+        Some(3)
+    );
+    assert_eq!(
+        crate::state::crop_corner_at(b, Point::new(60.0, 45.0), 4.0),
+        None,
+        "the middle of the frame is the pan, not a corner"
+    );
+    assert!(crate::state::crop_inside(b, Point::new(60.0, 45.0)));
+    assert!(!crate::state::crop_inside(b, Point::new(150.0, 45.0)));
+    assert_eq!(
+        crate::state::crop_corner_at(b, Point::new(150.0, 45.0), 4.0),
+        None,
+        "outside the frame: neither handle nor inside, so the press applies"
+    );
+}
+
 /// Figma's **Use as mask** (help 360040450253): `⌘⌥M` — or the menu row —
 /// turns the bottom layer of the selection into the mask for the layers above
 /// it, and the same gesture on a mask object clears it again.

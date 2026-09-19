@@ -936,6 +936,78 @@ impl Editor {
         self.replace_node(id, after)
     }
 
+    /// Set an image layer's fill mode (Figma's Fill mode menu). One entry.
+    pub fn set_image_fit(&mut self, id: &str, fit: ImageFit) -> bool {
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        let mut after = n.clone();
+        match &mut after.kind {
+            NodeKind::Image { fit: current, .. } => {
+                if *current == fit {
+                    return false;
+                }
+                *current = fit;
+            }
+            _ => return false,
+        }
+        self.replace_node(id, after)
+    }
+
+    /// Set an image layer's crop — focal point, zoom and flips (help
+    /// 360040675194). The crop gesture's one writer; a crop session folds its
+    /// entries into one when it is applied. One entry.
+    pub fn set_image_placement(&mut self, id: &str, placement: ImagePlacement) -> bool {
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        let mut after = n.clone();
+        match &mut after.kind {
+            NodeKind::Image {
+                placement: current, ..
+            } => {
+                if *current == placement {
+                    return false;
+                }
+                *current = placement;
+            }
+            _ => return false,
+        }
+        self.replace_node(id, after)
+    }
+
+    /// Figma's **Resize to fit** (help 360040675194): the layer becomes the
+    /// size of the whole picture, uncropped. Box, focal point and zoom in ONE
+    /// entry, because they only mean anything together.
+    pub fn fit_image_to_picture(&mut self, id: &str, iw: f64, ih: f64) -> bool {
+        let (iw, ih) = (iw.max(1.0), ih.max(1.0));
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        let mut after = n.clone();
+        if !matches!(after.kind, NodeKind::Image { .. }) {
+            return false;
+        }
+        let clean = match &after.kind {
+            NodeKind::Image { fit, placement, .. } => {
+                *fit == ImageFit::Crop && *placement == ImagePlacement::default()
+            }
+            _ => false,
+        };
+        if clean && (after.w - iw).abs() < 1e-6 && (after.h - ih).abs() < 1e-6 {
+            // already the picture's size with a clean crop: nothing to write
+            return false;
+        }
+        after.w = iw;
+        after.h = ih;
+        if let NodeKind::Image { fit, placement, .. } = &mut after.kind {
+            *fit = ImageFit::Crop;
+            *placement = ImagePlacement::default();
+        }
+        after.dirty = true;
+        self.replace_node(id, after)
+    }
+
     /// Ordered visual-stack mutation. Every operation swaps the whole node,
     /// so add/remove/reorder/toggle remain one atomic undo step.
     pub fn mutate_visual_stack(&mut self, id: &str, f: impl FnOnce(&mut Node)) -> bool {

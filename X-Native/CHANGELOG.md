@@ -5,6 +5,44 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-19 (Crop)
+
+Figma's [Crop an image](https://help.figma.com/hc/en-us/articles/360040675194):
+*"Select a layer with an image fill"*, *"Double-click the image layer to enter
+crop mode"*, *"Click on the canvas or press Enter to apply your changes"*,
+*"Aspect ratio is maintained by default when cropping"*, *"Option/Alt also
+modifies the opposite sides"*, and **Resize to fit** in the crop section.
+
+- **The mode.** `App::crop` is the session: the layer, the placement and the
+  fill mode from before it opened, and how many engine writes it has made.
+  Entering switches the fill mode to **Crop**, which is what cropping an image
+  does in Figma, and it opens from a **double-click on the image layer** or
+  from the fill mode becoming **Crop** in the panel.
+- **The gesture.** `Drag::Crop` + `state::crop_placement_from` resolve, in the
+  LAYER's own space, the picture's new zoom and focal point: the picture scales
+  about the corner **opposite** the one being held — `⌥` moves both sides, so
+  the anchor is the frame's centre — and the image pixel under that anchor does
+  not move, which is what makes it a crop and not a pan. One zoom for both axes
+  keeps the aspect ratio; a drag inside the frame repositions the picture.
+  `paint_crop_chrome` draws the frame, its four corner handles and the
+  picture's own edges, and reads the zoom out in a chip while a corner is held.
+- **Apply and cancel.** ⏎ or a click anywhere outside the frame applies
+  (`App::crop_apply`), folding the whole session into ONE undo entry
+  (`merge_last`); Esc (`App::crop_cancel`) writes the placement and the fill
+  mode back and folds the session including the putting back.
+- **The panel.** The **IMAGE** section grows Figma's **CROP** block while the
+  mode is open: **Resize to fit** (`Editor::fit_image_to_picture` — the layer
+  becomes the size of the whole picture with a clean crop, box, focal point and
+  zoom in one entry).
+- **Engine.** `Editor::set_image_fit` and `Editor::set_image_placement` join
+  `set_image_asset` as the image writers: each swaps the node through
+  `replace_node`, so each is one undo entry and a no-op write is refused.
+- **Not built:** the faded uncropped surround (the frame's clip is all the
+  canvas shows), `Control`'s free aspect (our crop zoom is uniform), the
+  **Aspect ratio** picker, the crop-value slider, the `⌘`-drag quick crop, and
+  the rotate/resize gestures inside the mode — a press there belongs to the
+  crop until it is applied.
+
 ## [Unreleased] — 2026-09-19 (Place image)
 
 Figma's **Place image/video** (`360040028034`): *"Select Image/video from the

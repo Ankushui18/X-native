@@ -108,6 +108,7 @@ pub fn paint_over(app: &mut App, s: &mut Scene) {
     paint_canvas_overlays(app, s);
     paint_arc_handles(app, s);
     paint_shape_handles(app, s);
+    paint_crop_chrome(app, s);
     paint_conn_drag(app, s);
     paint_minimap(app, s, &mut hit);
     paint_layout_guides(app, s);
@@ -167,6 +168,82 @@ fn paint_arc_handles(app: &App, s: &mut Scene) {
         fill_rrect(s, chip, R_SM, C_TEXT);
         app.fonts
             .text_center(s, chip, &label, T10, C_BASE, Wt::Med, true);
+    }
+}
+
+/// Figma's crop mode on the canvas (help 360040675194): the crop frame
+/// around the image layer, a handle on each corner, and the picture's own
+/// edges inside it — so a drag that pinches the frame about the opposite
+/// corner reads as the crop it is. While a corner is held the zoom reads out
+/// in a chip, which is the crop value the page's slider carries in the panel.
+fn paint_crop_chrome(app: &App, s: &mut Scene) {
+    let Some(session) = app.crop.as_ref() else {
+        return;
+    };
+    let doc = app.doc_ref();
+    let root = &doc.editor_ref().root;
+    let Some(n) = find_node(root, &session.id) else {
+        return;
+    };
+    let Some(m) = crate::run::node_world(root, &session.id) else {
+        return;
+    };
+    let corners = crate::state::crop_corners((0.0, 0.0, n.w, n.h));
+    let screen: Vec<Point> = corners
+        .iter()
+        .map(|(x, y)| app.world_to_screen(m * Point::new(*x, *y)))
+        .collect();
+    for i in 0..4 {
+        let a = screen[i];
+        let b = screen[(i + 1) % 4];
+        line(s, a.x, a.y, b.x, b.y, C_SEL, 1.5);
+    }
+    // the picture's own edges: what the frame is cropping, and what a corner
+    // drag pinches
+    if let NodeKind::Image {
+        fit,
+        placement,
+        asset,
+    } = &n.kind
+    {
+        let (iw, ih) = app.image_natural_size(asset).unwrap_or((n.w, n.h));
+        if let Some(a) = x_native::resolve_image_placement(*fit, placement, n.w, n.h, iw, ih)
+            .draws
+            .first()
+        {
+            let p0 = *a * Point::new(0.0, 0.0);
+            let p1 = *a * Point::new(iw, ih);
+            let local = [(p0.x, p0.y), (p1.x, p0.y), (p1.x, p1.y), (p0.x, p1.y)];
+            for i in 0..4 {
+                let a = app.world_to_screen(m * Point::new(local[i].0, local[i].1));
+                let b =
+                    app.world_to_screen(m * Point::new(local[(i + 1) % 4].0, local[(i + 1) % 4].1));
+                line(s, a.x, a.y, b.x, b.y, C_DIM, 1.0);
+            }
+        }
+    }
+    // Figma's corner handles: white squares on the blue frame
+    for p in &screen {
+        let r = Rect::new(
+            p.x - HANDLE_HALF,
+            p.y - HANDLE_HALF,
+            p.x + HANDLE_HALF,
+            p.y + HANDLE_HALF,
+        );
+        fill_rrect(s, r, 1.0, C_BASE);
+        stroke_rect(s, r, C_SEL, 1.0);
+    }
+    // while a corner is held the zoom reads out, like the arc's sweep chip
+    if matches!(app.drag, Some(Drag::Crop { .. })) {
+        if let NodeKind::Image { placement, .. } = &n.kind {
+            let label = format!("{}%", (placement.scale * 100.0).round() as i64);
+            let c = app.world_to_screen(m * Point::new(n.w / 2.0, 0.0));
+            let tw = app.fonts.measure(&label, T10, Wt::Reg) + 12.0;
+            let chip = Rect::new(c.x - tw / 2.0, c.y - 26.0, c.x + tw / 2.0, c.y - 8.0);
+            fill_rrect(s, chip, R_SM, C_TEXT);
+            app.fonts
+                .text_center(s, chip, &label, T10, C_BASE, Wt::Med, true);
+        }
     }
 }
 
@@ -6744,6 +6821,37 @@ fn paint_image_adjustments(
             },
         ));
         y += 34.0;
+    }
+
+    // Figma's crop mode puts a **Crop** section under the image's own rows
+    // (help 360040675194): the layer is being cropped, and **Resize to fit**
+    // puts it back to the whole picture — one button, one undo entry.
+    if app.crop.is_some() {
+        app.fonts.caps_label(s, x0, y, "CROP", C_TEXT, Wt::Med);
+        y += 20.0;
+        let fit_r = Rect::new(x0, y, x0 + 220.0, y + 26.0);
+        input_box(app, s, fit_r, 6.0);
+        app.fonts.text(
+            s,
+            fit_r.x0 + 8.0,
+            fit_r.y0 + 7.0,
+            "Resize to fit",
+            T10,
+            C_TEXT,
+            Wt::Reg,
+        );
+        hit.push((fit_r, Action::CropResizeToFit));
+        y += 34.0;
+        app.fonts.text(
+            s,
+            x0,
+            y,
+            "Drag a corner to crop - Enter applies, Esc cancels",
+            T10,
+            C_DIM,
+            Wt::Reg,
+        );
+        y += 18.0;
     }
 
     // Get current adjustments

@@ -397,6 +397,163 @@ pub const ROTATE_SNAP_DEG: f64 = 15.0;
 /// still draws the box you drew.
 pub const PLACE_MAX_DIM: f64 = 4096.0;
 
+/// How close to a crop frame's corner the pointer has to be to take its
+/// handle, in SCREEN pixels (divided by the zoom at the press).
+pub const CROP_TOUCH: f64 = 9.0;
+/// The crop zoom's ceiling: 40x, past which the picture is a single pixel.
+pub const CROP_ZOOM_MAX: f64 = 40.0;
+/// The `corner` a crop drag carries when it is repositioning the picture
+/// rather than scaling it (the press landed inside the frame).
+pub const CROP_PAN: usize = 4;
+
+/// A live crop session — Figma's crop mode (help 360040675194). It remembers
+/// the picture's placement and fill mode from before the mode opened, so Esc
+/// can put them back, and it counts the engine writes the session has made so
+/// applying the crop folds them into ONE undo entry.
+#[derive(Debug, Clone)]
+pub struct CropSession {
+    pub id: String,
+    pub start: x_native::ImagePlacement,
+    pub start_fit: x_native::ImageFit,
+    pub steps: usize,
+}
+
+/// The crop frame's corners, in the order the resize handles use: 0 TL,
+/// 1 TR, 2 BL, 3 BR.
+pub fn crop_corners(b: (f64, f64, f64, f64)) -> [(f64, f64); 4] {
+    [
+        (b.0, b.1),
+        (b.0 + b.2, b.1),
+        (b.0, b.1 + b.3),
+        (b.0 + b.2, b.1 + b.3),
+    ]
+}
+
+/// Which corner of the crop frame the pointer is on, within `tol` world units.
+pub fn crop_corner_at(b: (f64, f64, f64, f64), p: Point, tol: f64) -> Option<usize> {
+    crop_corners(b)
+        .iter()
+        .position(|(x, y)| (p.x - x).hypot(p.y - y) <= tol)
+}
+
+/// Is the point inside the crop frame? That is the drag that repositions the
+/// picture instead of scaling it — Figma's *"hover the faded area to
+/// reposition"*, which our frame's own inside carries.
+pub fn crop_inside(b: (f64, f64, f64, f64), p: Point) -> bool {
+    if b.2 <= 0.0 || b.3 <= 0.0 {
+        return false;
+    }
+    let (x0, x1) = (b.0.min(b.0 + b.2), b.0.max(b.0 + b.2));
+    let (y0, y1) = (b.1.min(b.1 + b.3), b.1.max(b.1 + b.3));
+    p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1
+}
+
+/// The zoom factor a corner drag asks for: how far the pointer has travelled
+/// along the diagonal that runs from the anchor to the corner being held. The
+/// drag starts ON that corner, so the diagonal — not the pointer — defines the
+/// direction; one factor for both axes keeps the aspect ratio, which is the
+/// page's default for cropping.
+pub fn crop_zoom_factor(anchor: Point, held: Point, cur: Point) -> f64 {
+    let (dx, dy) = (held.x - anchor.x, held.y - anchor.y);
+    let rx = if dx.abs() > 1e-6 {
+        Some((cur.x - anchor.x) / dx)
+    } else {
+        None
+    };
+    let ry = if dy.abs() > 1e-6 {
+        Some((cur.y - anchor.y) / dy)
+    } else {
+        None
+    };
+    match (rx, ry) {
+        (Some(rx), Some(ry)) => ((rx + ry) / 2.0).max(0.05),
+        (Some(rx), None) => rx.max(0.05),
+        (None, Some(ry)) => ry.max(0.05),
+        (None, None) => 1.0,
+    }
+}
+
+/// Where the overflow fraction has to sit so that the image pixel under the
+/// anchor stays under it while the picture scales by `k`. `box_len` and
+/// `drawn` are the frame's and the picture's lengths on one axis, `focal` the
+/// fraction the placement carried. The picture's edge sits at
+/// `(box_len - drawn) * focal`, which is the same arithmetic
+/// `resolve_image_placement` runs for `Crop` and `Fit`.
+pub fn crop_focal_for(anchor: f64, box_len: f64, drawn: f64, k: f64, focal: f64) -> f64 {
+    let denom = box_len - drawn * k;
+    if denom.abs() < 1e-6 {
+        return focal;
+    }
+    let f = ((1.0 - k) * anchor + k * (box_len - drawn) * focal) / denom;
+    f.clamp(0.0, 1.0)
+}
+
+/// The placement a crop drag asks for (help 360040675194): the picture scales
+/// about the corner OPPOSITE the one being held — ⌥ moves both sides, so the
+/// anchor is the frame's centre instead — or, when `corner` is `CROP_PAN`, it
+/// is pushed around inside the frame. Aspect ratio kept: *"hold Control to
+/// modify it"* is the one rule this does not model, because our crop zoom is
+/// uniform. Everything is in the LAYER's own space, so a rotated layer crops in
+/// its own frame.
+#[allow(clippy::too_many_arguments)]
+pub fn crop_placement_from(
+    orig: &x_native::ImagePlacement,
+    box_wh: (f64, f64),
+    image_wh: (f64, f64),
+    corner: usize,
+    start: Point,
+    cur: Point,
+    alt: bool,
+    fit: x_native::ImageFit,
+) -> x_native::ImagePlacement {
+    let (w, h) = box_wh;
+    let (iw, ih) = (image_wh.0.max(1.0), image_wh.1.max(1.0));
+    // the drawn size of the picture at the placement the drag started from,
+    // through the same fit math `resolve_image_placement` runs
+    let fit_scale = |box_len: f64, image_len: f64| box_len / image_len;
+    let base = match fit {
+        x_native::ImageFit::Fit => fit_scale(w, iw).min(fit_scale(h, ih)),
+        x_native::ImageFit::Crop => fit_scale(w, iw).max(fit_scale(h, ih)),
+        // Fill stretches per axis and Tile draws at natural size: neither has
+        // an overflow to crop, so the zoom is the whole story
+        _ => 1.0,
+    };
+    let s = base * orig.scale.max(0.05);
+    let drawn = (iw * s, ih * s);
+    let mut next = orig.clone();
+    if corner == CROP_PAN {
+        next.focal.0 = crop_pan_focal(orig.focal.0, cur.x - start.x, w - drawn.0);
+        next.focal.1 = crop_pan_focal(orig.focal.1, cur.y - start.y, h - drawn.1);
+        return next;
+    }
+    let idx = corner.min(3);
+    let held = crop_corners((0.0, 0.0, w, h))[idx];
+    let anchor = if alt {
+        Point::new(w / 2.0, h / 2.0)
+    } else {
+        let a = crop_corners((0.0, 0.0, w, h))[3 - idx];
+        Point::new(a.0, a.1)
+    };
+    let k = crop_zoom_factor(anchor, Point::new(held.0, held.1), cur);
+    // a crop never shows the frame's own background: the picture has to keep
+    // covering the box, so the zoom starts at 1.0
+    let zoom = (orig.scale * k).clamp(1.0, CROP_ZOOM_MAX);
+    let applied = zoom / orig.scale.max(0.05);
+    next.scale = zoom;
+    next.focal.0 = crop_focal_for(anchor.x, w, drawn.0, applied, orig.focal.0);
+    next.focal.1 = crop_focal_for(anchor.y, h, drawn.1, applied, orig.focal.1);
+    next
+}
+
+/// Push the picture by `delta` inside a frame with `room` of slack: the
+/// overflow fraction moves the other way, and stops at the picture's edge.
+fn crop_pan_focal(focal: f64, delta: f64, room: f64) -> f64 {
+    if room.abs() < 1e-6 {
+        return focal;
+    }
+    (focal + delta / room).clamp(0.0, 1.0)
+}
+
 /// Which corner's rotate ring the pointer is in, if any. `b` is `x, y, w, h`
 /// in the same space as `p`, `ring` the outer radius of the zone and `handle`
 /// the inner one (the resize handle's tolerance). A point INSIDE the bounds is
@@ -1743,6 +1900,14 @@ pub enum Action {
     SetImageFillMode {
         mode: String,
     },
+    /// Apply the crop session (help 360040675194), folding the session's
+    /// writes into one undo entry. ⏎ and a click outside the frame reach this.
+    CropApply,
+    /// Esc — put the picture and its fill mode back and close the mode.
+    CropCancel,
+    /// Figma's **Resize to fit** in the crop section: the layer becomes the
+    /// size of the whole picture, uncropped.
+    CropResizeToFit,
 }
 
 /// Commands offered by the editor right-click context menu
@@ -2225,6 +2390,15 @@ pub enum Drag {
         start: Point,
         /// Undo-stack depth at press; release merges the per-event resize
         /// entries into ONE undo step (see `MoveSel::base_depth`).
+        base_depth: usize,
+    },
+    /// Crop-mode drag (help 360040675194): the picture scales about the
+    /// corner opposite the one being held and the frame never moves. `corner`
+    /// is `CROP_PAN` when the press landed inside the frame, which pushes the
+    /// picture around instead.
+    Crop {
+        corner: usize,
+        start: Point,
         base_depth: usize,
     },
     /// Scale-tool drag (K): the selection box grows about the corner the
@@ -3216,6 +3390,10 @@ pub struct App {
     /// place-image tool is armed while this is non-empty, and one file leaves
     /// it per placement.
     pub placing_images: Vec<String>,
+    /// The open crop session, if Figma's crop mode is on (⌘⌥ no: the mode is
+    /// entered by double-clicking an image or by its fill mode becoming
+    /// **Crop** — help 360040675194).
+    pub crop: Option<CropSession>,
     /// The row a drag is over while reordering.
     pub effect_drag_over: Option<usize>,
     pub status: String,
@@ -3335,6 +3513,118 @@ impl App {
             .map(|r| r.name.clone())
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| "Image".into())
+    }
+
+    /// Enter Figma's crop mode on an image layer (help 360040675194). The mode
+    /// switches the fill mode to **Crop** — which is what cropping an image
+    /// does in Figma — and remembers the placement and the fill mode from
+    /// before, so Esc can put them back.
+    pub fn begin_crop(&mut self, id: &str) -> bool {
+        if self.crop.as_ref().is_some_and(|c| c.id == id) {
+            return true;
+        }
+        let (fit, placement) = {
+            let Some(n) = crate::editor_ui::find_node(&self.doc_ref().editor_ref().root, id) else {
+                return false;
+            };
+            match &n.kind {
+                x_native::NodeKind::Image { fit, placement, .. } => (*fit, placement.clone()),
+                _ => return false,
+            }
+        };
+        let mut steps = 0usize;
+        if fit != x_native::ImageFit::Crop
+            && self
+                .doc()
+                .editor()
+                .set_image_fit(id, x_native::ImageFit::Crop)
+        {
+            steps += 1;
+        }
+        self.crop = Some(CropSession {
+            id: id.to_string(),
+            start: placement,
+            start_fit: fit,
+            steps,
+        });
+        self.status = "Cropping - drag a corner, Enter to apply, Esc to cancel".into();
+        true
+    }
+
+    /// Apply the crop: the session's writes become one undo entry, which is
+    /// what Figma's *"click on the canvas or press Enter"* does.
+    pub fn crop_apply(&mut self) -> bool {
+        let Some(session) = self.crop.take() else {
+            return false;
+        };
+        if session.steps > 1 {
+            let editor = self.doc().editor();
+            editor.merge_last(session.steps);
+        }
+        self.mark_dirty();
+        self.status = "Cropped".into();
+        true
+    }
+
+    /// Esc: put the picture and its fill mode back exactly as they were, and
+    /// fold the session — including the putting back — into one entry.
+    pub fn crop_cancel(&mut self) -> bool {
+        let Some(session) = self.crop.take() else {
+            return false;
+        };
+        let mut wrote = 0usize;
+        if self
+            .doc()
+            .editor()
+            .set_image_placement(&session.id, session.start.clone())
+        {
+            wrote += 1;
+        }
+        if self
+            .doc()
+            .editor()
+            .set_image_fit(&session.id, session.start_fit)
+        {
+            wrote += 1;
+        }
+        let steps = session.steps + wrote;
+        if steps > 1 {
+            let editor = self.doc().editor();
+            editor.merge_last(steps);
+        }
+        self.status = "Crop cancelled".into();
+        true
+    }
+
+    /// The crop section's **Resize to fit** (help 360040675194): the layer
+    /// becomes the picture's own size, uncropped.
+    pub fn crop_resize_to_fit(&mut self) -> bool {
+        let Some(id) = self.crop.as_ref().map(|c| c.id.clone()) else {
+            return false;
+        };
+        let asset = {
+            let Some(n) = crate::editor_ui::find_node(&self.doc_ref().editor_ref().root, &id)
+            else {
+                return false;
+            };
+            match &n.kind {
+                x_native::NodeKind::Image { asset, .. } => asset.clone(),
+                _ => return false,
+            }
+        };
+        let Some((iw, ih)) = self.image_natural_size(&asset) else {
+            self.status = "That image has no readable size".into();
+            return false;
+        };
+        if !self.doc().editor().fit_image_to_picture(&id, iw, ih) {
+            return false;
+        }
+        if let Some(s) = self.crop.as_mut() {
+            s.steps += 1;
+        }
+        self.mark_dirty();
+        self.status = format!("Resized to fit the picture - {iw:.0} x {ih:.0}");
+        true
     }
 
     pub fn new() -> Self {
@@ -3482,6 +3772,7 @@ impl App {
             effect_rows: Vec::new(),
             mask_row: None,
             placing_images: Vec::new(),
+            crop: None,
             effect_drag_over: None,
             status: String::from("Ready"),
             nav_tab: NavTab::File,

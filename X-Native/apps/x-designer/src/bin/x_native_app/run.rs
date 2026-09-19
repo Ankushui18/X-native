@@ -4179,6 +4179,47 @@ impl Host {
         }
         self.commit_field();
         let world = self.app.screen_to_world(p);
+        // Figma's crop mode owns the canvas while it is open (help
+        // 360040675194): a corner handle crops, the inside of the frame
+        // repositions the picture, and a click anywhere else applies it —
+        // *"Click on the canvas or press Enter to apply your changes"*.
+        if let Some(session) = self.app.crop.clone() {
+            let grabbed = {
+                let doc = self.app.doc_ref();
+                let root = &doc.editor_ref().root;
+                crate::editor_ui::find_node(root, &session.id)
+                    .cloned()
+                    .and_then(|n| {
+                        let m = crate::run::node_world(root, &session.id)?;
+                        let local = m.inverse() * world;
+                        let b = (0.0, 0.0, n.w, n.h);
+                        let tol = crate::state::CROP_TOUCH / self.app.zoom.max(1e-3);
+                        match crate::state::crop_corner_at(b, local, tol) {
+                            Some(corner) => Some(corner),
+                            None if crate::state::crop_inside(b, local) => {
+                                Some(crate::state::CROP_PAN)
+                            }
+                            None => None,
+                        }
+                    })
+            };
+            match grabbed {
+                Some(corner) => {
+                    let base_depth = self.app.doc_ref().editor_ref().undo_depth();
+                    self.app.drag = Some(Drag::Crop {
+                        corner,
+                        start: world,
+                        base_depth,
+                    });
+                }
+                // a press that misses the frame is Figma's own apply
+                None => {
+                    self.app.crop_apply();
+                }
+            }
+            self.app.last_click = Some((std::time::Instant::now(), p));
+            return;
+        }
         let tool = self.app.tool;
         if self.app.space_pan && tool != Tool::Pen {
             self.app.drag = Some(Drag::Pan {
@@ -4281,6 +4322,15 @@ impl Host {
                         };
                         if let Some(text) = text {
                             self.app.begin_text_edit(id, text);
+                            return;
+                        }
+                    }
+                    // Figma's crop mode opens on the image layer a double
+                    // click lands on — *"Double-click the image layer to
+                    // enter crop mode"* (help 360040675194)
+                    if let Some(id) = hit_id.clone() {
+                        if self.app.begin_crop(&id) {
+                            self.app.doc().editor().selection = vec![id];
                             return;
                         }
                     }
@@ -5137,6 +5187,14 @@ impl Host {
                 if let Some(Drag::VectorLasso { cur, .. }) = self.app.drag.as_mut() {
                     *cur = world;
                 }
+            }
+            // a crop drag re-resolves the placement from the placement the
+            // press started with, so every move is absolute and the corner
+            // follows the pointer without drift
+            Some(Drag::Crop { corner, start, .. }) => {
+                let world = self.app.screen_to_world(p);
+                let alt = self.app.alt;
+                self.crop_drag(corner, start, world, alt);
             }
             Some(Drag::ResizeSel {
                 corner,
@@ -5995,6 +6053,25 @@ impl Host {
                 if self.app.finish_pending_text_edit() {
                     self.app.mark_dirty();
                 }
+            }
+            // A crop drag ends on release, but the SESSION stays open: Figma
+            // applies the crop on Enter or a click outside, so this drag's
+            // entries fold into one and the session's total is what Apply
+            // merges.
+            Some(Drag::Crop { base_depth, .. }) => {
+                let made = {
+                    let editor = self.app.doc().editor();
+                    let made = editor.undo_depth().saturating_sub(base_depth);
+                    editor.merge_last(made);
+                    made
+                };
+                if made > 0 {
+                    if let Some(s) = self.app.crop.as_mut() {
+                        s.steps += 1;
+                    }
+                    self.app.mark_dirty();
+                }
+                self.app.drag = None;
             }
             // Layer corner-resize ends on release: same one-gesture =
             // one-step merge as MoveSel.
@@ -7518,6 +7595,8 @@ impl Host {
                     // canvas, so Esc spends itself on it — the second Esc
                     // clears the selection as usual
                     self.app.cancel_image_placement();
+                } else if self.app.crop.is_some() {
+                    self.app.crop_cancel();
                 } else if self.app.screen == Screen::Editor {
                     // P12: an in-flight tree drag cancels first
                     if matches!(self.app.drag, Some(Drag::TreeRow { .. })) {
@@ -7604,6 +7683,11 @@ impl Host {
                 }
             }
             Key::Named(NamedKey::Enter) => {
+                if self.app.crop.is_some() {
+                    // *"press Enter to apply your changes"*
+                    self.app.crop_apply();
+                    return;
+                }
                 if self.app.screen == Screen::Editor {
                     self.dispatch(Action::SelectChild);
                 }
@@ -10075,6 +10159,56 @@ impl Host {
             "Filled with {} - Fill mode is Fill",
             self.app.image_label(asset)
         );
+    }
+
+    /// The mouse-move half of a crop drag (help 360040675194): the picture
+    /// scales about the corner opposite the one being held — ⌥ moves both
+    /// sides, so the anchor is the frame's centre — or is pushed around inside
+    /// the frame when the press was inside it. Everything resolves in the
+    /// LAYER's own space, so a rotated layer crops in its own frame.
+    fn crop_drag(&mut self, corner: usize, start: Point, cur: Point, alt: bool) -> bool {
+        let Some(session) = self.app.crop.clone() else {
+            return false;
+        };
+        let (id, orig, box_wh, image_wh, fit) = {
+            let doc = self.app.doc_ref();
+            let Some(n) = crate::editor_ui::find_node(&doc.editor_ref().root, &session.id) else {
+                return false;
+            };
+            let NodeKind::Image {
+                fit,
+                placement,
+                asset,
+            } = &n.kind
+            else {
+                return false;
+            };
+            let Some((iw, ih)) = self.app.image_natural_size(asset) else {
+                return false;
+            };
+            (session.id.clone(), *placement, (n.w, n.h), (iw, ih), *fit)
+        };
+        let (start_l, cur_l) = {
+            let doc = self.app.doc_ref();
+            let Some(m) = crate::run::node_world(&doc.editor_ref().root, &id) else {
+                return false;
+            };
+            let inv = m.inverse();
+            (inv * start, inv * cur)
+        };
+        let next = crate::state::crop_placement_from(
+            &orig, box_wh, image_wh, corner, start_l, cur_l, alt, fit,
+        );
+        if next == orig {
+            return false;
+        }
+        if !self.app.doc().editor().set_image_placement(&id, next) {
+            return false;
+        }
+        if let Some(s) = self.app.crop.as_mut() {
+            s.steps += 1;
+        }
+        true
     }
 
     /// One file leaves the place-image queue per placement. The tool stays
@@ -13161,6 +13295,15 @@ impl Host {
                 }
             }
 
+            Action::CropApply => {
+                self.app.crop_apply();
+            }
+            Action::CropCancel => {
+                self.app.crop_cancel();
+            }
+            Action::CropResizeToFit => {
+                self.app.crop_resize_to_fit();
+            }
             Action::SetImageFillMode { mode } => {
                 let Some(id) = self.app.doc().selected_id() else {
                     self.app.status = "Select an image layer first".into();
@@ -13193,6 +13336,13 @@ impl Host {
                 if changed {
                     self.app.mark_dirty();
                     self.app.status = format!("Image fill mode set to {mode}");
+                    // Figma's third way into crop mode: the fill mode becoming
+                    // **Crop** is what cropping an image looks like from the
+                    // panel, so the crop frame opens with it
+                    // (help 360040675194)
+                    if fit == ImageFit::Crop {
+                        self.app.begin_crop(&id);
+                    }
                 } else {
                     self.app.status = "Select an image layer to change its fill mode".into();
                 }

@@ -916,6 +916,48 @@ mod tests {
     }
 
     #[test]
+    fn the_image_crop_writers_are_one_entry_each() {
+        let img = Node::image("img", 0.0, 0.0, 40.0, 30.0, "pic.png");
+        let mut e = Editor::new(Node::frame("page", 400.0, 400.0).child(img));
+        e.selection = vec!["img".into()];
+        assert!(e.set_image_fit("img", ImageFit::Crop));
+        let depth = e.undo_depth();
+        assert!(
+            !e.set_image_fit("img", ImageFit::Crop),
+            "same mode: no edit"
+        );
+        assert_eq!(e.undo_depth(), depth, "and no undo entry");
+        assert!(e.set_image_placement(
+            "img",
+            ImagePlacement {
+                scale: 2.0,
+                ..ImagePlacement::default()
+            }
+        ));
+        assert!(e.fit_image_to_picture("img", 800.0, 600.0));
+        let n = find(&e.root, "img").unwrap();
+        assert_eq!((n.w, n.h), (800.0, 600.0), "the layer is the picture");
+        match &n.kind {
+            NodeKind::Image { fit, placement, .. } => {
+                assert_eq!(*fit, ImageFit::Crop);
+                assert_eq!(placement.scale, 1.0, "the crop is clean");
+                assert_eq!(placement.focal, (0.5, 0.5));
+            }
+            other => panic!("image: {other:?}"),
+        }
+        assert!(
+            !e.set_image_placement("page", ImagePlacement::default()),
+            "the page is not an image layer"
+        );
+        assert!(
+            !e.fit_image_to_picture("img", 800.0, 600.0),
+            "already there"
+        );
+        assert!(e.undo(), "one undo takes the fit back");
+        assert_eq!(find(&e.root, "img").unwrap().w, 40.0);
+    }
+
+    #[test]
     fn select_similar_matches_kind_and_fill() {
         let mut e = Editor::new(doc());
         // a second RED rect elsewhere in the tree
