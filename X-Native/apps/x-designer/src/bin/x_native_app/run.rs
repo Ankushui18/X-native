@@ -7795,10 +7795,12 @@ impl Host {
                         }
                         return;
                     }
+                    // ⌘Y — Figma's outline mode (designlab Figma 101, "Tips
+                    // and Tricks": *"Show outlines — to toggle outlines on
+                    // and off, ⌘Y"*). Redo keeps its own Figma key, ⇧⌘Z
+                    // above; nothing ever pinned ⌘Y as redo.
                     "y" | "Y" => {
-                        if self.app.doc().redo_document() {
-                            self.app.mark_dirty();
-                        }
+                        self.dispatch(Action::ToggleOutlines);
                         return;
                     }
                     // Modifier-guarded arms MUST precede the plain Ctrl+C /
@@ -12434,6 +12436,17 @@ impl Host {
                         }
                     }
                 }
+            }
+            Action::ToggleOutlines => {
+                // Figma's outline mode (⌘Y): a VIEW state on the app, never a
+                // document edit — no undo entry, no dirty mark. `canvas_scene`
+                // renders the stripped copy while it is on.
+                self.app.outlines = !self.app.outlines;
+                self.app.status = if self.app.outlines {
+                    "Outline view on".into()
+                } else {
+                    "Outline view off".into()
+                };
             }
             Action::ClipContent => {
                 let doc = self.app.doc();
@@ -18191,13 +18204,26 @@ impl App {
             .and_then(|f| f.tick.as_ref())
             .filter(|t| t.running());
         let mut ticking;
-        let root = match tick {
+        let doc_root: &Node = match tick {
             Some(tick) => {
                 ticking = d.editors[d.page].root.clone();
                 crate::editor_ui::paint_tick_tree(&mut ticking, tick);
                 &ticking
             }
             None => &d.editors[d.page].root,
+        };
+        // Figma's outline mode (⌘Y): the canvas renders a STRIPPED COPY —
+        // only each layer's hairline outline, `1.0 / zoom` wide so the line
+        // stays ≈1 screen pixel at any zoom. The document is never touched,
+        // so undo, dirty-state and the exporters keep their meaning. The
+        // flow viewer is a presentation (the artwork alone), and it takes
+        // precedence over the editor's view mode.
+        let outline;
+        let root = if self.app.outlines && self.flow.is_none() {
+            outline = x_native::outline_view(doc_root, 1.0 / self.app.zoom.max(1e-3));
+            &outline
+        } else {
+            doc_root
         };
         let sink = x_native::VelloSink {
             assets: Some(&d.assets),

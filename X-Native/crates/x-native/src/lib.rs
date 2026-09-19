@@ -17,8 +17,8 @@ pub use x_render::{
 };
 pub use x_render::{
     build_render_tree, build_render_tree_of, build_render_tree_slice, export_pdf,
-    export_pdf_with_assets, render_via_ir, thumbnail_scene, FrameCache, FrameCacheStats,
-    RenderCommand, RenderTree, SceneCache, VelloSink,
+    export_pdf_with_assets, outline_view, render_via_ir, thumbnail_scene, FrameCache,
+    FrameCacheStats, OUTLINE_COLOR, RenderCommand, RenderTree, SceneCache, VelloSink,
 };
 pub use x_render::{
     encode_jpg, encode_png, export_raster, export_raster_cancellable, RasterFormat, RasterSink,

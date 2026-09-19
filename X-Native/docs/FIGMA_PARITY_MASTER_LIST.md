@@ -48,11 +48,11 @@ recon task, not a settled fact.
 | 14 Prototype | 30 | 19 | 10 | 0 | 0 | 1 |
 | 15 Inspect, dev mode, codegen | 9 | 5 | 3 | 1 | 0 | 0 |
 | 16 Export & import | 12 | 11 | 1 | 0 | 0 | 0 |
-| 17 Canvas view & navigation | 14 | 9 | 2 | 1 | 1 | 1 |
+| 17 Canvas view & navigation | 14 | 10 | 1 | 1 | 1 | 1 |
 | 18 Design language (look of the app itself) | 12 | 1 | 5 | 6 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **339** | **257** | **46** | **17** | **16** | **3** |
+| **total** | **339** | **258** | **45** | **17** | **16** | **3** |
 
 The 17 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
@@ -482,7 +482,7 @@ scroll behaviour, flows and flow starting points, device preview.
 | 17.4 | Guides + snap | drag from ruler | guide drag | MATCH |
 | 17.5 | Pixel grid | `⌘'` | toggle | MATCH |
 | 17.6 | Layout grids | per frame, `⇧G` | grid UI | MATCH |
-| 17.7 | Outlines mode | `⌘Y` | *verify* an outlines toggle | PARTIAL |
+| 17.7 | Outlines mode | `⌘Y` — *"Show outlines — to toggle outlines on and off, ⌘Y"* (designlab Figma 101, Tips and Tricks) | `x_render::outline_view` is the one strip (fills/strokes/effects cleared, blends Normal, Image/Text become the plain box they own, instances resolve from the stripped registry, the page itself is not outlined); `Action::ToggleOutlines` on ⌘Y (the old redo arm — redo keeps Figma's ⇧⌘Z) with the status line and the shortcuts-panel row; `Host::canvas_scene` renders the copy at a `1/zoom` hairline — a render mode, the document untouched. **Not built:** Figma renders text as glyph outlines; we render the text layer's box | MATCH |
 | 17.8 | Canvas background colour | Figma supports changing it | `CANVAS BACKGROUND` row | MATCH |
 | 17.9 | Zoom to next/prev frame | `N` / `⇧N` | not implemented | **MISSING** |
 | 17.10 | Scrollbars | yes | *verify* | PARTIAL |
@@ -722,8 +722,21 @@ rendering it.
     keyboard completions that finished the item (3.23–3.31: `⇧E`, `⌘R`, `⌥⌘K`,
     `⇧A`, `N`/`⇧N`, `⌘\`, `⇧⌘\`, `⌘/`, `⇧?`, and the `⌘⌥M` row §28 had already
     built) moved the whole of section 3's remainder into `MATCH`.
-14. Outlines mode (17.7) — the item's last row.
-    Its other rows are delivered: 2.24 is `MATCH` (`App::measure_spans`,
+14. ~~**Outlines mode** (17.7)~~ — **delivered**, the item's last row: `⌘Y`
+    (the old redo arm — redo keeps Figma's ⇧⌘Z, and nothing ever pinned ⌘Y)
+    toggles a VIEW state on the app — no undo entry, no dirty mark, the
+    document bytes untouched — and the canvas renders a stripped copy: fills,
+    images, blends and effects not painted, only each layer's outline at a
+    `1/zoom` hairline, Image and Text becoming the plain box they own (the
+    named delta: Figma outlines the glyphs), instances resolving from the
+    stripped registry, and the page itself unoutlined (it is not a layer).
+    Pinned by `cmd_y_toggles_outline_view_and_never_touches_the_document`,
+    `outline_mode_hairs_the_canvas_and_paints_no_image` and
+    `the_shortcut_sheet_carries_the_outline_view_key` (app) plus
+    `outline_view_is_a_wireframe_copy_of_the_document`,
+    `outline_view_strips_the_instances_master_too` and
+    `outline_mode_paints_only_the_wireframe` (x-render). Its other rows were
+    delivered: 2.24 is `MATCH` (`App::measure_spans`,
     `paint_measure`, pinned by
     `option_measures_the_gap_to_the_layer_under_the_cursor` and the geometry's
     own `measure_reads_both_axes_of_a_diagonal_pair` /

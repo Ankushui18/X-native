@@ -5,6 +5,41 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-19 (Outlines mode)
+
+[Designlab Figma 101 — Tips and Tricks](https://designlab.com/figma-101-course/tips-and-tricks)
+— master row 17.7, the last row of wave-1b item 14. *"Show outlines — to
+toggle outlines on and off, **⌘Y**"*.
+
+- **The strip is one copy, never a document edit.** `x_render::outline_view(root,
+  width)` clones the page and, per node, clears the fill, stroke and effect
+  stacks (and the legacy single-paint fallback), puts the blend back to Normal
+  and sets the stroke to a solid hairline in `OUTLINE_COLOR` (white — the
+  wireframe ink) at `width`. Image and Text nodes paint themselves and would
+  swallow the stroke, so they become the plain box they own — the named delta:
+  Figma outlines the glyphs, we outline the text layer's box. Children are
+  stripped recursively, so an instance resolves from the STRIPPED registry.
+  The render root (the page — not a layer) keeps no outline of its own, so the
+  canvas does not ring the whole window.
+- **The canvas renders the copy, at `1.0 / zoom`.** `Host::canvas_scene`
+  builds the stripped copy while `app.outlines` is on — the width follows the
+  zoom, so the line stays ≈1 screen pixel at any zoom (a different picture,
+  so the frame cache re-renders rather than serving the old width). It is a
+  render mode on the app, like `presenting` on the `FrameCache`: no undo
+  entry, no dirty mark, the document bytes untouched — undo, selection and
+  the exporters keep their meaning.
+- **⌘Y is the key again — redo keeps ⇧⌘Z.** The old `⌘Y`-as-redo arm (nothing
+  pinned it; Figma's redo is ⇧⌘Z, which stays) is replaced by
+  `Action::ToggleOutlines` with its status line ("Outline view on / off") and
+  a row in the keyboard-shortcuts panel. The text editor's ⌃Y redo is a
+  different branch and stays.
+- **Not built:** Figma renders text as glyph outlines in outline view; we
+  render the text layer's box.
+
+Docs in the same change: row 17.7 `MATCH`, section 17 at **10 / 1**, the grand
+total re-derived (**339 / 258 / 45 / 17 / 16 / 3**), a `FIGMA_PARITY.md` row
+and the wave-1b item-14 note closed.
+
 ## [Unreleased] — 2026-09-19 (Image flip)
 
 [Adjust alignment, rotation, position, and dimensions](https://help.figma.com/hc/en-us/articles/360039956914)

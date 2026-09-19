@@ -9258,6 +9258,7 @@ fn paint_shortcuts_panel(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Acti
             "\u{2318}\u{21e7}8 / \u{2318}\u{21e7}7",
             "Bulleted / numbered list",
         ),
+        ("\u{2318}Y", "Outline view"),
         ("\u{2318}\\", "Hide UI"),
         ("\u{21e7}\u{2318}\\", "Hide left panel"),
         ("\u{21e7}?", "This panel"),
