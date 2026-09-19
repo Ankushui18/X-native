@@ -787,6 +787,39 @@ mod tests {
     }
 
     #[test]
+    fn corner_radius_extends_to_frames_and_smoothing_is_one_entry() {
+        let mut e = Editor::new(doc());
+        // a frame takes a uniform radius as four equal corners, and undo
+        // puts it back the way it was
+        assert!(e.set_uniform_radius("page", 8.0));
+        assert_eq!(find(&e.root, "page").unwrap().corner_radii, Some([8.0; 4]));
+        assert!(e.undo());
+        assert!(find(&e.root, "page").unwrap().corner_radii.is_none());
+
+        // one corner at a time: the uniform value the rect keeps is the base
+        assert!(e.set_uniform_radius("a", 10.0));
+        assert!(e.set_corner_radius("a", 2, 24.0));
+        assert_eq!(
+            find(&e.root, "a").unwrap().corner_radii,
+            Some([10.0, 10.0, 24.0, 10.0])
+        );
+        match find(&e.root, "a").unwrap().kind {
+            NodeKind::Rect { radius } => assert_eq!(radius, 10.0),
+            _ => panic!("a should be a rect"),
+        }
+        assert!(!e.set_corner_radius("a", 9, 4.0), "only four corners");
+
+        // smoothing: clamped to 0..=1, one entry per write
+        let depth = e.undo_depth();
+        assert!(e.set_corner_smoothing("a", 0.6));
+        assert_eq!(e.undo_depth(), depth + 1);
+        assert!((find(&e.root, "a").unwrap().corner_smoothing - 0.6).abs() < 1e-9);
+        assert!(e.set_corner_smoothing("a", 9.0));
+        assert!((find(&e.root, "a").unwrap().corner_smoothing - 1.0).abs() < 1e-9);
+        assert!(!e.set_corner_smoothing("missing", 0.5), "no such layer");
+    }
+
+    #[test]
     fn delete_and_undo_restores_at_same_index() {
         let mut e = Editor::new(doc());
         e.selection = vec!["b".into()];

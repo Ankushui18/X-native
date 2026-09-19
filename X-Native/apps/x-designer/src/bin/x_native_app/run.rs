@@ -3921,6 +3921,14 @@ impl Host {
                         return;
                     }
                 }
+                if matches!(a, Action::SetCornerSmoothing(_)) {
+                    // the slider is a drag, not just a click: the press takes
+                    // the track and every move re-reads the value from x
+                    if let Some(track) = self.app.corner_slider {
+                        let base_depth = self.app.doc_ref().editor_ref().undo_depth();
+                        self.app.drag = Some(Drag::CornerSmooth { track, base_depth });
+                    }
+                }
                 self.app.last_chrome = Some((std::time::Instant::now(), p, a.is_toggle_row()));
                 self.dispatch(a);
                 return;
@@ -4278,6 +4286,16 @@ impl Host {
                 if let Some(dr) = self.shape_grab(world) {
                     self.app.drag = Some(dr);
                     return;
+                }
+                // Figma's corner radius handle rides INSIDE the corner — the
+                // corner's own square is excluded by its zone — so it is asked
+                // before the resize handles: on the outline you resize, a press
+                // inside rounds the shape (help 360050986854).
+                if tool == Tool::Select {
+                    if let Some(dr) = self.radius_grab(world) {
+                        self.app.drag = Some(dr);
+                        return;
+                    }
                 }
                 // corner handles win when there's a single selection
                 if let Some(dr) = match tool {
@@ -4701,6 +4719,103 @@ impl Host {
             start: world,
             base_depth,
         })
+    }
+
+    /// Figma's canvas **corner radius handle** (help 360050986854): a white
+    /// dot just INSIDE a corner of a single rectangle or frame. The corner's own
+    /// square is excluded by the zone itself, so a press on the outline still
+    /// resizes and a press inside rounds; ⌥ rounds only the corner being held
+    /// (rectangles only, as Figma's own canvas gesture is), a plain drag the
+    /// whole shape.
+    fn radius_grab(&mut self, world: Point) -> Option<Drag> {
+        let zoom = self.app.zoom.max(1e-3);
+        let alt = self.app.alt;
+        let doc = self.app.doc();
+        let editor = doc.editor_ref();
+        let [id] = editor.selection.as_slice() else {
+            return None;
+        };
+        let n = crate::editor_ui::find_node(&editor.root, id.as_str())?;
+        // the panel treats a frame's corners as independent too; the ⌥
+        // single-corner canvas drag is the one that stops at rectangles
+        let rect = matches!(n.kind, NodeKind::Rect { .. });
+        if !rect && !matches!(n.kind, NodeKind::Frame { .. }) {
+            return None;
+        }
+        let m = crate::run::node_world(&editor.root, id)?;
+        let local = m.inverse() * world;
+        let radii = crate::state::node_corner_radii(n);
+        let corner = crate::state::radius_handle_at((0.0, 0.0, n.w, n.h), local, zoom, radii)?;
+        let start_r = radii[corner];
+        let uniform = !alt || !rect;
+        let base_depth = editor.undo_depth();
+        Some(Drag::RadiusCorner {
+            corner,
+            start: world,
+            start_r,
+            uniform,
+            base_depth,
+        })
+    }
+
+    /// One corner-radius drag: the radius is the handle's travel along the
+    /// corner's inward diagonal, measured from where the press took hold, so a
+    /// press a pixel off the dot never jumps the value. Clamped at zero and at
+    /// half the box's shorter side — Figma's own ceiling.
+    fn radius_drag(
+        &mut self,
+        corner: usize,
+        start: Point,
+        start_r: f64,
+        cur: Point,
+        uniform: bool,
+    ) -> bool {
+        let (id, b) = {
+            let doc = self.app.doc_ref();
+            let Some(id) = doc.selected_id() else {
+                return false;
+            };
+            let Some(n) = crate::editor_ui::find_node(&doc.editor_ref().root, id.as_str()) else {
+                return false;
+            };
+            (id, (0.0, 0.0, n.w, n.h))
+        };
+        let (start_l, cur_l) = {
+            let doc = self.app.doc_ref();
+            let Some(m) = crate::run::node_world(&doc.editor_ref().root, &id) else {
+                return false;
+            };
+            let inv = m.inverse();
+            (inv * start, inv * cur)
+        };
+        let (cx, cy) = crate::state::radius_corners(b)[corner.min(3)];
+        let (ux, uy) = crate::state::radius_inward(corner);
+        let along = |p: Point| (p.x - cx) * ux + (p.y - cy) * uy;
+        let raw = start_r + (along(cur_l) - along(start_l)) / crate::state::RADIUS_HANDLE_FRAC;
+        let r = raw.clamp(0.0, b.2.min(b.3) / 2.0);
+        let doc = self.app.doc();
+        if uniform {
+            doc.editor().set_uniform_radius(&id, r)
+        } else {
+            doc.editor().set_corner_radius(&id, corner.min(3), r)
+        }
+    }
+
+    /// One smoothing write: the slider's click, its drag and the `iOS` chip all
+    /// land here, so the panel cannot drift from the engine.
+    fn set_corner_smoothing(&mut self, v: f32) -> bool {
+        let wrote = {
+            let doc = self.app.doc();
+            let Some(id) = doc.selected_id() else {
+                return false;
+            };
+            doc.editor().set_corner_smoothing(&id, v as f64)
+        };
+        if wrote {
+            self.app.mark_dirty();
+            self.app.status = format!("Corner smoothing {}%", (v * 100.0).round() as i64);
+        }
+        wrote
     }
 
     /// Figma's canvas rotate: the ring *just outside* a corner of the bounds
@@ -5195,6 +5310,25 @@ impl Host {
                 let world = self.app.screen_to_world(p);
                 let alt = self.app.alt;
                 self.crop_drag(corner, start, world, alt);
+            }
+            // Figma's corner radius handle: every move re-reads the radius
+            // from the pointer's travel along the corner's diagonal
+            Some(Drag::RadiusCorner {
+                corner,
+                start,
+                start_r,
+                uniform,
+                ..
+            }) => {
+                let world = self.app.screen_to_world(p);
+                if self.radius_drag(corner, start, start_r, world, uniform) {
+                    self.app.mark_dirty();
+                }
+            }
+            // the smoothing slider's drag
+            Some(Drag::CornerSmooth { track, .. }) => {
+                let v = crate::state::slider_fraction(track, p.x);
+                self.set_corner_smoothing(v);
             }
             Some(Drag::ResizeSel {
                 corner,
@@ -6053,6 +6187,20 @@ impl Host {
                 if self.app.finish_pending_text_edit() {
                     self.app.mark_dirty();
                 }
+            }
+            // A corner-radius drag ends on release: one gesture, one entry
+            Some(Drag::RadiusCorner { base_depth, .. }) => {
+                let doc = self.app.doc();
+                let editor = doc.editor();
+                editor.merge_last(editor.undo_depth().saturating_sub(base_depth));
+                self.app.drag = None;
+            }
+            // the smoothing slider is one gesture too
+            Some(Drag::CornerSmooth { base_depth, .. }) => {
+                let doc = self.app.doc();
+                let editor = doc.editor();
+                editor.merge_last(editor.undo_depth().saturating_sub(base_depth));
+                self.app.drag = None;
             }
             // A crop drag ends on release, but the SESSION stays open: Figma
             // applies the crop on Enter or a click outside, so this drag's
@@ -12087,6 +12235,42 @@ impl Host {
                     self.app.status = format!("Mask type: {}", kind.label());
                 }
             }
+            Action::ToggleCorners => {
+                // Figma's **Independent corners** row (help 360050986854): it
+                // opens the corner-radius panel, and closing it quits that
+                // panel's fields — they belong to it.
+                let open = !self.app.corner_open;
+                self.app.close_panel_menus();
+                self.app.corner_open = open;
+                if open {
+                    self.app.status = "Corner radius - one field per corner, and smoothing".into();
+                } else {
+                    if matches!(
+                        self.app.field.as_ref().map(|f| f.id),
+                        Some(FieldId::CornerRadius(_))
+                    ) {
+                        self.app.field = None;
+                    }
+                    self.app.status = String::new();
+                }
+            }
+            Action::SetCornerSmoothing(v) => {
+                let wrote = {
+                    let doc = self.app.doc();
+                    let Some(id) = doc.selected_id() else {
+                        return;
+                    };
+                    doc.editor().set_corner_smoothing(&id, *v as f64)
+                };
+                if wrote {
+                    self.app.mark_dirty();
+                    self.app.status = format!("Corner smoothing {}%", (*v * 100.0).round() as i64);
+                }
+            }
+            Action::CornerSmoothingIos => {
+                // Figma's chip: "click iOS to set corner smoothing to 60%"
+                self.dispatch(Action::SetCornerSmoothing(0.6));
+            }
             Action::ToggleRotationOrigin => {
                 self.app.rotation_origin_on = !self.app.rotation_origin_on;
                 self.app.drag = None;
@@ -13728,8 +13912,22 @@ impl Host {
             }
             FieldId::Radius => {
                 if let Some(v) = num(raw) {
-                    doc.editor().set_corners(&node_id, v.max(0.0), None);
-                    self.app.mark_dirty();
+                    // the row is the shape's single value; on a frame that
+                    // value lives as four equal corners
+                    if doc.editor().set_uniform_radius(&node_id, v.max(0.0)) {
+                        self.app.mark_dirty();
+                    }
+                }
+            }
+            FieldId::CornerRadius(corner) => {
+                if let Some(v) = num(raw) {
+                    // Figma's **Independent corners**: this field's corner only
+                    if doc
+                        .editor()
+                        .set_corner_radius(&node_id, corner.min(3), v.max(0.0))
+                    {
+                        self.app.mark_dirty();
+                    }
                 }
             }
             FieldId::FillHex => {
@@ -14305,6 +14503,16 @@ fn field_initial(app: &App, f: FieldId) -> String {
         FieldId::Rotation => fmt(s.rot),
         FieldId::Opacity => format!("{}", (s.opacity * 100.0).round() as i64),
         FieldId::Radius => fmt(s.radius),
+        FieldId::CornerRadius(corner) => {
+            // Figma's **Independent corners**: each field reads its own corner
+            let d = app.doc_ref();
+            let v = d
+                .selected_id()
+                .and_then(|id| crate::editor_ui::find_node(&d.editor_ref().root, id.as_str()))
+                .map(|n| crate::state::node_corner_radii(n)[corner.min(3)])
+                .unwrap_or(0.0);
+            fmt(v)
+        }
         FieldId::FillHex => s.fill.clone(),
         FieldId::FillAlpha => "100".into(),
         FieldId::StrokeHex => s.stroke.clone(),

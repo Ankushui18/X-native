@@ -853,24 +853,81 @@ impl Editor {
             self.push(vec![cmd]);
         }
     }
-    /// Set a Rect node's corner radius: uniform `radius` + optional per-corner
-    /// overrides (None = uniform mode). Undoable.
+    /// Set a node's corner radius: uniform `radius` + optional per-corner
+    /// overrides (None = uniform mode). Figma's radius applies to rectangles
+    /// AND frames (help 360050986854); a frame has no uniform field of its own,
+    /// so the command resolves its uniform value into four equal corners.
+    /// Undoable.
     pub fn set_corners(&mut self, id: &str, radius: f64, corners: Option<[f64; 4]>) -> bool {
         let Some(n) = find(&self.root, id) else {
             return false;
         };
-        if !matches!(n.kind, NodeKind::Rect { .. }) {
-            return false;
-        }
         let from = match &n.kind {
             NodeKind::Rect { radius } => (*radius, n.corner_radii),
-            _ => unreachable!(),
+            NodeKind::Frame { .. } => (0.0, n.corner_radii),
+            _ => return false,
         };
         self.push(vec![Command::SetCorners {
             id: id.into(),
             from,
             to: (radius, corners),
         }]);
+        true
+    }
+
+    /// The uniform corner radius on whatever carries one — a rect's own field,
+    /// or a frame's four equal corners.
+    pub fn set_uniform_radius(&mut self, id: &str, r: f64) -> bool {
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        match n.kind {
+            NodeKind::Rect { .. } => self.set_corners(id, r, None),
+            NodeKind::Frame { .. } => self.set_corners(id, r, Some([r.max(0.0); 4])),
+            _ => false,
+        }
+    }
+
+    /// ONE corner's radius — Figma's **Independent corners**. The uniform value
+    /// a rect keeps in its kind is left alone, so putting the corners back to
+    /// uniform returns the radius the layer had before.
+    pub fn set_corner_radius(&mut self, id: &str, corner: usize, r: f64) -> bool {
+        if corner >= 4 {
+            return false;
+        }
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        let base = match &n.kind {
+            NodeKind::Rect { radius } => *radius,
+            NodeKind::Frame { .. } => 0.0,
+            _ => return false,
+        };
+        let mut radii = n.corner_radii.unwrap_or([base; 4]);
+        radii[corner] = r.max(0.0);
+        self.set_corners(id, base, Some(radii))
+    }
+
+    /// Corner smoothing — Figma's *Corner smoothing* slider, 0–1 here and 0–100%
+    /// on screen. Only the whole shape carries it, so one write is one entry.
+    pub fn set_corner_smoothing(&mut self, id: &str, v: f64) -> bool {
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        if !matches!(n.kind, NodeKind::Rect { .. } | NodeKind::Frame { .. }) {
+            return false;
+        }
+        // the slider re-reads its value on every move: a write that changes
+        // nothing is not an entry
+        let v = v.clamp(0.0, 1.0);
+        if (n.corner_smoothing - v).abs() < 1e-9 {
+            return false;
+        }
+        let before = Box::new(n.clone());
+        let mut after = n.clone();
+        after.corner_smoothing = v;
+        after.dirty = true;
+        self.push_replace(id, before, after);
         true
     }
 

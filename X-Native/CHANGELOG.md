@@ -5,6 +5,40 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-19 (Corner radius and smoothing)
+
+Figma's
+[Adjust corner radius and smoothing](https://help.figma.com/hc/en-us/articles/360050986854):
+*"Hover just inside a corner until the white circle icon appears, then drag"*,
+**Independent corners** in the right sidebar opening a value per corner, and
+*"Click iOS to set corner smoothing to 60%"*.
+
+- **The row.** The Appearance section's **Corner radius** field now carries
+  Figma's leading icon — a square with one rounded corner — and the field is
+  named **Corner radius**. The icon is the **Independent corners** toggle: it
+  opens the **Corner radius details** panel under the row.
+- **The panel.** `paint_corner_popover` paints Figma's four fields in the tl/tr
+  over bl/br grid — each one edits ITS corner (`FieldId::CornerRadius(i)`) —
+  and the corner-smoothing slider with the `iOS` chip at 60%. The row keeps the
+  shape's single value, and the model keeps each corner's radius.
+- **Rects and frames.** Figma's radius applies to rectangles *and* frames
+  (polygons, stars and closed vector networks are still the open half, 6.15):
+  `Editor::set_uniform_radius`, `set_corner_radius` and `set_corner_smoothing`
+  are the three writers, each one undo entry with a no-op refused, and
+  `Command::SetCorners` gives a frame its uniform radius as four equal corners
+  because a frame has no radius field of its own.
+- **The canvas dot.** Hovering just inside a corner of a single rectangle or
+  frame shows Figma's white dot on that corner's arc
+  (`state::radius_handle_at` / `radius_handle_point`); a drag rounds the whole
+  shape along the corner's inward diagonal — the travel is relative, so a press
+  a pixel off the dot never jumps the value — and `⌥` rounds that corner alone
+  (rectangles, as Figma's own canvas gesture is). The corner's own square stays
+  the resize handles', so on the outline you resize and just inside you round.
+  `Drag::RadiusCorner` folds the gesture into ONE undo entry.
+- **Not built:** the **Apply variable** slot on each corner field, a typeable
+  smoothing value (slider + `iOS`), the Small/Big nudge keys on the radius,
+  `⌥`-drag on a frame's corner, and per-point radius in vector-edit mode.
+
 ## [Unreleased] — 2026-09-19 (Crop)
 
 Figma's [Crop an image](https://help.figma.com/hc/en-us/articles/360040675194):

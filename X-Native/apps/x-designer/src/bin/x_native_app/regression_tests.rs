@@ -2524,8 +2524,202 @@ fn the_palette_lists_place_image_with_its_shortcut() {
     assert_eq!(row.shortcut, "⇧⌘K");
 }
 
-/// A registered picture on the page — the crop tests need a real intrinsic
-/// size (the store probes the header) and an image layer to crop.
+/// Figma's **Independent corners** (help 360050986854): each field edits ITS
+/// corner, the uniform value the rect keeps is the base a corner grows from,
+/// and closing the panel puts the shape back to one radius.
+#[test]
+fn the_corner_panel_writes_one_corner_at_a_time() {
+    let mut h = host();
+    let root = h.app.doc().editor_ref().root.id.clone();
+    h.app.doc().editor().insert_node(
+        &root,
+        Node::rect("card", 0.0, 0.0, 100.0, 60.0, Color::WHITE).radius(4.0),
+    );
+    h.app.doc().editor().selection = vec!["card".into()];
+    assert!(!h.app.corner_open, "the panel starts closed");
+    h.dispatch(Action::ToggleCorners);
+    assert!(h.app.corner_open, "the Independent corners row opens it");
+
+    let depth = h.app.doc_ref().editor_ref().undo_depth();
+    set_field(&mut h, FieldId::CornerRadius(2), "24");
+    let card = find_node_clone(&h.app.doc_ref().editor_ref().root, "card").unwrap();
+    assert_eq!(card.corner_radii, Some([4.0, 4.0, 24.0, 4.0]));
+    match card.kind {
+        NodeKind::Rect { radius } => assert_eq!(radius, 4.0, "the uniform value is the base"),
+        _ => panic!("card is a rect"),
+    }
+    assert_eq!(
+        h.app.doc_ref().editor_ref().undo_depth(),
+        depth + 1,
+        "one corner write is one entry"
+    );
+
+    // a second corner writes the array again
+    set_field(&mut h, FieldId::CornerRadius(0), "12");
+    let card = find_node_clone(&h.app.doc_ref().editor_ref().root, "card").unwrap();
+    assert_eq!(card.corner_radii, Some([12.0, 4.0, 24.0, 4.0]));
+
+    // and the plain radius field is the single value again once it is closed
+    h.dispatch(Action::ToggleCorners);
+    assert!(!h.app.corner_open);
+    set_field(&mut h, FieldId::Radius, "9");
+    let card = find_node_clone(&h.app.doc_ref().editor_ref().root, "card").unwrap();
+    assert!(card.corner_radii.is_none(), "uniform mode is back");
+    match card.kind {
+        NodeKind::Rect { radius } => assert_eq!(radius, 9.0),
+        _ => panic!("card is a rect"),
+    }
+}
+
+/// Figma's smoothing slider and its `iOS` chip: *"click iOS to set corner
+/// smoothing to 60%"* — one clamped, undoable write each.
+#[test]
+fn the_ios_chip_sets_corner_smoothing_to_sixty() {
+    let mut h = host();
+    let root = h.app.doc().editor_ref().root.id.clone();
+    h.app.doc().editor().insert_node(
+        &root,
+        Node::rect("card", 0.0, 0.0, 100.0, 60.0, Color::WHITE).radius(8.0),
+    );
+    h.app.doc().editor().selection = vec!["card".into()];
+    h.dispatch(Action::ToggleCorners);
+
+    let depth = h.app.doc_ref().editor_ref().undo_depth();
+    h.dispatch(Action::CornerSmoothingIos);
+    let card = find_node_clone(&h.app.doc_ref().editor_ref().root, "card").unwrap();
+    assert!(
+        (card.corner_smoothing - 0.6).abs() < 1e-9,
+        "iOS is Figma's 60%: {}",
+        card.corner_smoothing
+    );
+    assert_eq!(
+        h.app.doc_ref().editor_ref().undo_depth(),
+        depth + 1,
+        "one write is one entry"
+    );
+
+    // the slider's own write is clamped, exactly as the model says
+    h.dispatch(Action::SetCornerSmoothing(1.4));
+    let card = find_node_clone(&h.app.doc_ref().editor_ref().root, "card").unwrap();
+    assert!((card.corner_smoothing - 1.0).abs() < 1e-9);
+}
+
+/// A 100 × 60 card with a 4pt radius at the canvas centre: the fixture the
+/// corner-handle tests grab, so the press lands in the canvas and not on chrome.
+fn corner_host() -> Host {
+    let mut h = host();
+    let reg = h.app.editor_regions();
+    let c = h.app.screen_to_world(Point::new(
+        (reg.canvas.x0 + reg.canvas.x1) / 2.0,
+        (reg.canvas.y0 + reg.canvas.y1) / 2.0,
+    ));
+    let root = h.app.doc_ref().editor_ref().root.id.clone();
+    h.app.doc().editor().insert_node(
+        &root,
+        Node::rect("card", c.x - 50.0, c.y - 30.0, 100.0, 60.0, Color::WHITE).radius(4.0),
+    );
+    h.app.doc().editor().selection = vec!["card".into()];
+    h
+}
+
+/// The canvas radius handle's zone (help 360050986854): a dot on each corner's
+/// diagonal, a disc around it, and the corner's own square left to the resize
+/// handles.
+#[test]
+fn the_radius_handle_sits_on_the_corner_arc() {
+    let b = (0.0, 0.0, 100.0, 60.0);
+    let radii = [4.0; 4];
+    // a 4pt radius' arc midpoint is 1.66 in; the dot has a floor so it never
+    // hides under the corner's resize handle
+    let d = crate::state::RADIUS_HANDLE_MIN * std::f64::consts::FRAC_1_SQRT_2;
+    let tl = crate::state::radius_handle_point(b, 0, 4.0);
+    assert!((tl.x - d).abs() < 1e-9 && (tl.y - d).abs() < 1e-9, "{tl:?}");
+    // a radius big enough to leave the floor sits on its own arc
+    let big = crate::state::radius_handle_point(b, 0, 40.0);
+    assert!((big.x - 40.0 * crate::state::RADIUS_HANDLE_FRAC).abs() < 1e-9);
+    // each corner answers its own dot
+    for i in 0..4 {
+        let p = crate::state::radius_handle_point(b, i, radii[i]);
+        assert_eq!(
+            crate::state::radius_handle_at(b, p, 1.0, radii),
+            Some(i),
+            "corner {i}"
+        );
+    }
+    // the corner's own square is the resize handles': not a radius
+    assert_eq!(
+        crate::state::radius_handle_at(b, Point::new(2.0, 2.0), 1.0, radii),
+        None
+    );
+    assert_eq!(
+        crate::state::radius_handle_at(b, Point::new(0.0, 0.0), 1.0, radii),
+        None,
+        "the corner point itself is never a radius"
+    );
+    // and the middle of the shape is neither
+    assert_eq!(
+        crate::state::radius_handle_at(b, Point::new(50.0, 30.0), 1.0, radii),
+        None
+    );
+}
+
+/// The canvas radius handle's drag: a plain drag rounds the whole shape, ⌥
+/// rounds only that corner (rectangles only), and the whole gesture is one undo
+/// entry.
+#[test]
+fn dragging_the_canvas_corner_handle_rounds_the_shape() {
+    let mut h = corner_host();
+    let (x, y, w, hh) = {
+        let n = find_node_clone(&h.app.doc_ref().editor_ref().root, "card").unwrap();
+        (n.transform.x, n.transform.y, n.w, n.h)
+    };
+    let b = (0.0, 0.0, w, hh);
+    let radii = [4.0; 4];
+    let dot = crate::state::radius_handle_point(b, 0, radii[0]);
+    let world_dot = Point::new(x + dot.x, y + dot.y);
+
+    match h.radius_grab(world_dot) {
+        Some(Drag::RadiusCorner {
+            corner, uniform, ..
+        }) => {
+            assert_eq!(corner, 0);
+            assert!(uniform, "a plain drag rounds the whole shape");
+        }
+        other => panic!("the corner zone answers with the radius handle: {other:?}"),
+    }
+
+    let depth = h.app.doc_ref().editor_ref().undo_depth();
+    h.on_press(h.app.world_to_screen(world_dot));
+    assert!(matches!(h.app.drag, Some(Drag::RadiusCorner { .. })));
+    // in along the diagonal: 12pt of travel, ÷ (√2 − 1)
+    h.on_move(
+        h.app
+            .world_to_screen(Point::new(world_dot.x + 12.0, world_dot.y + 12.0)),
+    );
+    let card = find_node_clone(&h.app.doc_ref().editor_ref().root, "card").unwrap();
+    match card.kind {
+        NodeKind::Rect { radius } => assert!(radius > 4.0, "the drag grew the radius: {radius}"),
+        _ => panic!("card is a rect"),
+    }
+    h.on_release();
+    assert!(h.app.drag.is_none(), "the gesture is over");
+    assert_eq!(
+        h.app.doc_ref().editor_ref().undo_depth(),
+        depth + 1,
+        "one drag is one entry"
+    );
+
+    // ⌥ takes that one corner instead of the whole shape
+    h.app.alt = true;
+    match h.radius_grab(world_dot) {
+        Some(Drag::RadiusCorner { uniform, .. }) => {
+            assert!(!uniform, "⌥ is the single-corner drag")
+        }
+        _ => panic!("still a radius handle"),
+    }
+    h.app.alt = false;
+}
+
 fn crop_host() -> (Host, String) {
     let mut h = host();
     let root = h.app.doc().editor_ref().root.id.clone();

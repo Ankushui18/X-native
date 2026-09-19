@@ -30,6 +30,8 @@ use crate::theme::*;
 pub fn paint(app: &mut App, s: &mut Scene) {
     app.tooltip.clear();
     app.paint_lib_at = None;
+    // the corner popover records its slider track every paint it is open
+    app.corner_slider = None;
     let mut hit: Vec<(Rect, Action)> = Vec::new();
     fill_rect(s, Rect::new(0.0, 0.0, app.win_w, app.win_h), C_BG);
     if app.flow.is_some() {
@@ -4763,18 +4765,54 @@ fn paint_design(
         app.blend_dd_anchor = (bdr.x0, bdr.y1);
     }
 
+    // Figma's radius row (help 360050986854): the **Independent corners**
+    // toggle sits at the field's left edge — a square with one rounded corner
+    // — and the field is named after what it rounds.
     let rdr = Rect::new(x0, y0 + 636.0, x0 + 315.0, y0 + 664.0);
-    input(
-        app,
+    let rhov = hover(app, rdr);
+    fill_rrect(s, rdr, R_INPUT, if rhov { C_INPUT_HOVER } else { C_FIELD });
+    if rhov {
+        stroke_rrect(s, rdr, R_INPUT, C_LINE_2, 1.0);
+    }
+    let corners_btn = Rect::new(rdr.x0 + 4.0, rdr.y0, rdr.x0 + 24.0, rdr.y1);
+    let btn_hov = hover(app, corners_btn);
+    if btn_hov || app.corner_open {
+        fill_rrect(
+            s,
+            corners_btn,
+            R_SM,
+            if app.corner_open {
+                C_FIELD_2
+            } else {
+                C_ROW_HOVER
+            },
+        );
+    }
+    draw_icon(
         s,
-        hit,
-        rdr,
-        Some(("Radius", T10)),
-        "",
-        false,
-        Some(Action::Field(FieldId::Radius)),
-        None,
+        "square-round-corner",
+        corners_btn.x0 + 4.0,
+        corners_btn.y0 + 8.0,
+        ICON_XS,
+        if app.corner_open || btn_hov {
+            C_TEXT
+        } else {
+            C_DIM
+        },
     );
+    app.fonts.text(
+        s,
+        rdr.x0 + 28.0,
+        y0 + 642.5,
+        "Corner radius",
+        T10,
+        C_DIM,
+        Wt::Reg,
+    );
+    hit.push((rdr, Action::Field(FieldId::Radius)));
+    // the toggle is pushed AFTER the field: the reverse scan is what lets a
+    // press on the icon open the corner panel instead of the text field
+    hit.push((corners_btn, Action::ToggleCorners));
     let rd_val = field_val(app, FieldId::Radius, fmt_num(sel.radius));
     let rd_vw = app.fonts.measure(&rd_val, T11, Wt::Reg);
     app.fonts.text(
@@ -4786,6 +4824,9 @@ fn paint_design(
         C_TEXT,
         Wt::Reg,
     );
+    if app.corner_open {
+        app.corner_anchor = (rdr.x0, rdr.y1);
+    }
 
     hline(s, rx, rx + rw, y0 + 676.0, C_LINE);
 
@@ -6240,6 +6281,141 @@ fn mask_section_state(app: &App) -> Option<(bool, x_native::MaskType)> {
         .and_then(|t| find_node(&ed.root, t.as_str()))
         .unwrap_or(node);
     Some((target.is_mask, target.mask_type))
+}
+
+/// Figma's **Corner radius details** panel (help 360050986854): the four
+/// independent-corner fields in a 2×2 grid — tl/tr over bl/br, the order the
+/// model stores — and the corner-smoothing slider with its `iOS` shortcut at
+/// 60%. It hangs under the radius row it was opened from and floats over the
+/// sections below it, like every other popover this panel owns.
+fn paint_corner_popover(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    let (radii, smoothing) = {
+        let Some(doc) = app.doc_opt() else {
+            return;
+        };
+        let Some(id) = doc.selected_id() else {
+            return;
+        };
+        let Some(n) = find_node(&doc.editor_ref().root, id.as_str()) else {
+            return;
+        };
+        (crate::state::node_corner_radii(n), n.corner_smoothing)
+    };
+    let (ax, ay) = app.corner_anchor;
+    let w = 224.0;
+    let x0 = ax.min((app.win_w - w - 8.0).max(8.0)).max(8.0);
+    let dd = Rect::new(x0, ay + 4.0, x0 + w, ay + 4.0 + 132.0);
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, R_LG, C_FIELD);
+    stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+
+    // the four corner fields, in the grid Figma paints them in
+    for (i, (col, row)) in [
+        (0usize, (0usize, 0usize)),
+        (1, (1, 0)),
+        (3, (0, 1)),
+        (2, (1, 1)),
+    ] {
+        let r = Rect::new(
+            dd.x0 + 10.0 + col as f64 * 106.0,
+            dd.y0 + 10.0 + row as f64 * 34.0,
+            dd.x0 + 110.0 + col as f64 * 106.0,
+            dd.y0 + 38.0 + row as f64 * 34.0,
+        );
+        let hov = hover(app, r);
+        fill_rrect(s, r, R_INPUT, if hov { C_INPUT_HOVER } else { C_FIELD_2 });
+        let editing = app
+            .field
+            .as_ref()
+            .is_some_and(|f| f.id == FieldId::CornerRadius(i));
+        paint_corner_glyph(
+            s,
+            Point::new(r.x0 + 8.0, r.y0 + 8.0),
+            i,
+            if editing { C_TEXT } else { C_DIM },
+        );
+        let v = field_val(app, FieldId::CornerRadius(i), fmt_num(radii[i]));
+        let vw = app.fonts.measure(&v, T11, Wt::Reg);
+        app.fonts
+            .text(s, r.x1 - 8.0 - vw, r.y0 + 5.75, &v, T11, C_TEXT, Wt::Reg);
+        hit.push((r, Action::Field(FieldId::CornerRadius(i))));
+    }
+
+    // corner smoothing: the label, Figma's `iOS` chip, the slider and its
+    // percentage
+    let sy = dd.y0 + 78.0;
+    app.fonts.text(
+        s,
+        dd.x0 + 10.0,
+        sy + 4.0,
+        "Corner smoothing",
+        T10,
+        C_DIM,
+        Wt::Reg,
+    );
+    let ios = Rect::new(dd.x1 - 46.0, sy, dd.x1 - 10.0, sy + 20.0);
+    let ihov = hover(app, ios);
+    fill_rrect(s, ios, R_MD, if ihov { C_FIELD_2 } else { C_FIELD });
+    stroke_rrect(s, ios, R_MD, C_LINE, 1.0);
+    app.fonts
+        .text_center(s, ios, "iOS", T10, C_TEXT, Wt::Reg, true);
+    hit.push((ios, Action::CornerSmoothingIos));
+    let track = Rect::new(dd.x0 + 10.0, sy + 26.0, dd.x1 - 58.0, sy + 32.0);
+    fill_rrect(s, track, R_SM, C_FIELD_2);
+    let knob_x = track.x0 + track.width() * smoothing.clamp(0.0, 1.0);
+    fill_rrect(
+        s,
+        Rect::new(
+            track.x0,
+            track.y0 + 2.0,
+            knob_x.max(track.x0),
+            track.y1 - 2.0,
+        ),
+        R_XS,
+        C_ACCENT,
+    );
+    fill_rrect(
+        s,
+        Rect::new(knob_x - 4.5, sy + 21.0, knob_x + 4.5, sy + 37.0),
+        R_FULL,
+        C_TEXT,
+    );
+    let pct = format!("{}%", (smoothing * 100.0).round() as i64);
+    let pw = app.fonts.measure(&pct, T11, Wt::Reg);
+    app.fonts
+        .text(s, dd.x1 - 10.0 - pw, sy + 24.0, &pct, T11, C_TEXT, Wt::Reg);
+    app.corner_slider = Some(track);
+    hit.push((
+        track.inflate(0.0, 9.0),
+        Action::SetCornerSmoothing(crate::state::slider_fraction(track, app.mouse.x)),
+    ));
+}
+
+/// The corner mark in one of the four corner fields: two 1.5px strokes meeting
+/// at that corner of a 12px box — "⌐", "¬", "L" and their mirrors.
+fn paint_corner_glyph(s: &mut Scene, at: Point, corner: usize, tint: Color) {
+    let (x0, y0) = (at.x, at.y);
+    let (x1, y1) = (x0 + 12.0, y0 + 12.0);
+    let (h, v) = match corner {
+        0 => (
+            (x0 + 1.0, y0 + 1.0, x1, y0 + 1.0),
+            (x0 + 1.0, y0 + 1.0, x0 + 1.0, y1),
+        ),
+        1 => (
+            (x0, y0 + 1.0, x1 - 1.0, y0 + 1.0),
+            (x1 - 1.0, y0 + 1.0, x1 - 1.0, y1),
+        ),
+        3 => (
+            (x0 + 1.0, y1 - 1.0, x1, y1 - 1.0),
+            (x0 + 1.0, y0, x0 + 1.0, y1 - 1.0),
+        ),
+        _ => (
+            (x0, y1 - 1.0, x1 - 1.0, y1 - 1.0),
+            (x1 - 1.0, y0, x1 - 1.0, y1 - 1.0),
+        ),
+    };
+    line(s, h.0, h.1, h.2, h.3, tint, 1.5);
+    line(s, v.0, v.1, v.2, v.3, tint, 1.5);
 }
 
 /// Figma's Mask-section type dropdown (help 360040450253): Alpha, Vector,
@@ -8530,6 +8706,10 @@ fn paint_effects_section(
 /// menu hang past the panel's edge and still take clicks, the way the frame,
 /// line-height and text-style dropdowns do.
 fn paint_effects_menus(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    if app.corner_open {
+        paint_corner_popover(app, s, hit);
+        return;
+    }
     if app.mask_type_open {
         paint_mask_type_menu(app, s, hit);
         return;
@@ -8762,6 +8942,39 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
             continue;
         }
         if let Some(n) = find_node(&doc.editor_ref().root, id) {
+            // Figma's corner radius handle (help 360050986854): a white dot
+            // with a blue ring, sitting on the corner's arc INSIDE the bounds —
+            // the square handles own the outline itself. It shows while the
+            // pointer is in a corner's zone, and stays while a drag holds it.
+            if sel.len() == 1 && matches!(n.kind, NodeKind::Rect { .. } | NodeKind::Frame { .. }) {
+                if let Some(m) = crate::run::node_world(&doc.editor_ref().root, id.as_str()) {
+                    let held = match &app.drag {
+                        Some(Drag::RadiusCorner { corner, .. }) => Some(*corner),
+                        _ => None,
+                    };
+                    let zone = held.or_else(|| {
+                        if app.tool != Tool::Select {
+                            return None;
+                        }
+                        let local = m.inverse() * app.screen_to_world(app.mouse);
+                        crate::state::radius_handle_at(
+                            (0.0, 0.0, n.w, n.h),
+                            local,
+                            app.zoom,
+                            crate::state::node_corner_radii(n),
+                        )
+                    });
+                    if let Some(c) = zone {
+                        let radii = crate::state::node_corner_radii(n);
+                        let local =
+                            crate::state::radius_handle_point((0.0, 0.0, n.w, n.h), c, radii[c]);
+                        let p = app.world_to_screen(m * local);
+                        let r = Rect::new(p.x - 4.5, p.y - 4.5, p.x + 4.5, p.y + 4.5);
+                        fill_rrect(s, r, R_FULL, C_TEXT);
+                        stroke_rrect(s, r, R_FULL, C_SEL, 1.5);
+                    }
+                }
+            }
             // A transformed node is outlined through its REAL corners, the
             // same four the renderer produces and the same four the resize
             // grab hit-tests — one geometry for paint and input.
@@ -9199,6 +9412,7 @@ fn paint_carets(app: &mut App, s: &mut Scene) {
                     | FieldId::Rotation
                     | FieldId::Opacity
                     | FieldId::Radius
+                    | FieldId::CornerRadius(_)
                     | FieldId::PadH
                     | FieldId::PadV
                     | FieldId::GridPct

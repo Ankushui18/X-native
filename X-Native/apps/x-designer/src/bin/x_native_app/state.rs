@@ -585,6 +585,104 @@ pub fn rotate_corner_at(
     best.map(|(i, _)| i)
 }
 
+/// How near a corner's **radius handle** the pointer has to be to take it, in
+/// SCREEN pixels (help 360050986854). The handle is a dot INSIDE the corner, so
+/// the zone is the disc around it.
+pub const RADIUS_TOUCH: f64 = 12.0;
+
+/// The corner's own square, in SCREEN pixels: a press this close to a corner in
+/// BOTH axes is a resize, never a radius. Figma's radius handle lives inside the
+/// bounds, and the corner itself stays the resize handle.
+pub const RADIUS_KEEP: f64 = 4.0;
+
+/// How far in along the diagonal a radius handle sits when the radius is 0, in
+/// world units. Without a floor the dot would hide under the corner's resize
+/// handle exactly where a shape needs it most.
+pub const RADIUS_HANDLE_MIN: f64 = 8.0;
+
+/// The four corners of a local `x, y, w, h` box, in the order
+/// `Node::corner_radii` stores them: 0 top-left, 1 top-right, 2 bottom-right,
+/// 3 bottom-left.
+pub fn radius_corners(b: (f64, f64, f64, f64)) -> [(f64, f64); 4] {
+    let (x, y, w, h) = b;
+    [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
+}
+
+/// The inward diagonal at a corner, as a unit vector: the direction a radius
+/// handle is dragged in, and the one its value is measured along.
+pub fn radius_inward(corner: usize) -> (f64, f64) {
+    const D: f64 = std::f64::consts::FRAC_1_SQRT_2;
+    match corner {
+        0 => (D, D),
+        1 => (-D, D),
+        2 => (-D, -D),
+        _ => (D, -D),
+    }
+}
+
+/// Which corner's radius handle the pointer is on. `b` is the layer's local
+/// `x, y, w, h`, `p` the pointer in that same space and `radii` the layer's four
+/// corner radii. The handle is a dot on the corner's diagonal and the zone is
+/// the disc of `RADIUS_TOUCH` screen px around it — minus the corner's own
+/// square, which belongs to the resize handles. The nearest such dot wins.
+pub fn radius_handle_at(
+    b: (f64, f64, f64, f64),
+    p: Point,
+    zoom: f64,
+    radii: [f64; 4],
+) -> Option<usize> {
+    let (x, y, w, h) = b;
+    if p.x <= x || p.y <= y || p.x >= x + w || p.y >= y + h {
+        return None;
+    }
+    let zoom = zoom.max(1e-3);
+    let keep = RADIUS_KEEP / zoom;
+    let tol = RADIUS_TOUCH / zoom;
+    let mut best: Option<(usize, f64)> = None;
+    for (i, (cx, cy)) in radius_corners(b).iter().enumerate() {
+        if (p.x - cx).abs() < keep && (p.y - cy).abs() < keep {
+            continue;
+        }
+        let dot = radius_handle_point(b, i, radii[i]);
+        let d = (p.x - dot.x).hypot(p.y - dot.y);
+        if d <= tol && best.is_none_or(|(_, bd)| d < bd) {
+            best = Some((i, d));
+        }
+    }
+    best.map(|(i, _)| i)
+}
+
+/// How far along its diagonal a corner's handle sits for radius `r`: the
+/// midpoint of that corner's own arc, `r · (√2 − 1)` in from the corner.
+pub const RADIUS_HANDLE_FRAC: f64 = std::f64::consts::SQRT_2 - 1.0;
+
+/// Where a corner's radius handle is drawn, in the layer's own space: on the
+/// corner's diagonal, `r · (√2 − 1)` in — the midpoint of the corner's arc —
+/// and never closer to the corner than `RADIUS_HANDLE_MIN`.
+pub fn radius_handle_point(b: (f64, f64, f64, f64), corner: usize, r: f64) -> Point {
+    let (cx, cy) = radius_corners(b)[corner];
+    let (ux, uy) = radius_inward(corner);
+    let d = (r.max(0.0) * RADIUS_HANDLE_FRAC).max(RADIUS_HANDLE_MIN);
+    Point::new(cx + ux * d, cy + uy * d)
+}
+
+/// The 0–1 a slider track reads at `x` — the same mapping the
+/// image-adjustment sliders use, so every slider in this panel answers a press
+/// the same way and the smoothing drag can re-read it on every move.
+pub fn slider_fraction(track: Rect, x: f64) -> f32 {
+    (((x - track.x0) / track.width().max(1.0)) as f32).clamp(0.0, 1.0)
+}
+
+/// The four radii a layer's panel and handle speak for: the stored per-corner
+/// values when they are independent, the uniform radius otherwise.
+pub fn node_corner_radii(n: &Node) -> [f64; 4] {
+    let base = match n.kind {
+        NodeKind::Rect { radius } => radius,
+        _ => 0.0,
+    };
+    n.corner_radii.unwrap_or([base; 4])
+}
+
 /// The point a selection turns about: the layer's own transform-origin when one
 /// layer is selected — Figma's *"change an object's rotation origin"* — and the
 /// centre of the selection box otherwise, which is Figma's default *"Figma uses
@@ -1264,6 +1362,7 @@ fn is_toggle_row(a: &Action) -> bool {
             | Action::ToggleEffectBlend(_)
             | Action::ToggleLayerBlend
             | Action::ToggleMaskType
+            | Action::ToggleCorners
             | Action::TogglePaintBlend(_)
             | Action::ToggleVectorHandles
             | Action::ClipContent
@@ -1751,6 +1850,14 @@ pub enum Action {
     /// The Mask section's type dropdown: Alpha, Vector, Luminance.
     ToggleMaskType,
     SetMaskType(x_native::MaskType),
+    /// Figma's **Independent corners** toggle on the radius row (help
+    /// 360050986854): opens the corner-radius panel — four fields and the
+    /// smoothing slider.
+    ToggleCorners,
+    /// The corner-smoothing slider, 0–1 (0–100% on screen).
+    SetCornerSmoothing(f32),
+    /// Figma's `iOS` shortcut in that panel: smoothing 60%.
+    CornerSmoothingIos,
     /// Pressing an effect row (not its buttons) arms the reorder drag.
     EffectRow(usize),
     /// UX Analysis actions (Quant-UX inspired)
@@ -2035,6 +2142,10 @@ pub enum FieldId {
     Rotation,
     Opacity,
     Radius,
+    /// The corner panel's four fields (Figma's **Independent corners**); the
+    /// index is which corner it edits — 0 tl, 1 tr, 2 br, 3 bl, the order
+    /// `Node::corner_radii` stores them in.
+    CornerRadius(usize),
     FillHex,
     FillAlpha,
     StrokeHex,
@@ -2399,6 +2510,24 @@ pub enum Drag {
     Crop {
         corner: usize,
         start: Point,
+        base_depth: usize,
+    },
+    /// Figma's canvas **corner radius handle** (help 360050986854): a white
+    /// circle just inside a corner of a rectangle or frame. The radius is the
+    /// handle's travel along the corner's inward diagonal, so the drag is
+    /// *relative* — a press a pixel off the dot does not jump the value. ⌥
+    /// rounds only the corner being held.
+    RadiusCorner {
+        corner: usize,
+        start: Point,
+        start_r: f64,
+        uniform: bool,
+        base_depth: usize,
+    },
+    /// The corner-smoothing slider: a press takes the track and every move
+    /// re-reads the value from the pointer's x.
+    CornerSmooth {
+        track: Rect,
         base_depth: usize,
     },
     /// Scale-tool drag (K): the selection box grows about the corner the
@@ -3370,6 +3499,13 @@ pub struct App {
     pub layer_blend_open: bool,
     /// The Mask section's type dropdown is open (Figma's Mask section).
     pub mask_type_open: bool,
+    /// Figma's corner-radius panel is open (the **Independent corners** row).
+    pub corner_open: bool,
+    /// Where that panel hangs from, recorded by the panel pass.
+    pub corner_anchor: (f64, f64),
+    /// The smoothing slider's track, recorded by the popover pass so the press
+    /// can take hold of it as a drag.
+    pub corner_slider: Option<Rect>,
     pub paint_blend_open: Option<PaintTarget>,
     /// Where a blend menu anchors, recorded by the paint pass.
     pub blend_dd_anchor: (f64, f64),
@@ -3765,6 +3901,9 @@ impl App {
             effect_blend_open: None,
             layer_blend_open: false,
             mask_type_open: false,
+            corner_open: false,
+            corner_anchor: (0.0, 0.0),
+            corner_slider: None,
             paint_blend_open: None,
             blend_dd_anchor: (0.0, 0.0),
             effect_add_anchor: (0.0, 0.0),
@@ -5661,6 +5800,8 @@ impl App {
         self.effect_blend_open = None;
         self.layer_blend_open = false;
         self.mask_type_open = false;
+        self.corner_open = false;
+        self.corner_slider = None;
         self.paint_blend_open = None;
     }
 

@@ -37,7 +37,7 @@ recon task, not a settled fact.
 | 3 Keyboard | 35 | 23 | 5 | 6 | 1 | 0 |
 | 4 Menus & palettes | 10 | 9 | 0 | 1 | 0 | 0 |
 | 5 Layers, pages, sections | 14 | 12 | 1 | 1 | 0 | 0 |
-| 6 Frame & shape properties | 20 | 15 | 3 | 2 | 0 | 0 |
+| 6 Frame & shape properties | 20 | 17 | 1 | 0 | 0 | 0 |
 | 7 Auto layout | 16 | 14 | 1 | 1 | 0 | 0 |
 | 8 Fill, stroke, effects, colour | 25 | 21 | 1 | 3 | 0 | 0 |
 | 9 Images | 9 | 6 | 3 | 0 | 0 | 0 |
@@ -52,7 +52,7 @@ recon task, not a settled fact.
 | 18 Design language (look of the app itself) | 12 | 1 | 5 | 6 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **339** | **240** | **53** | **27** | **16** | **3** |
+| **total** | **339** | **242** | **51** | **27** | **16** | **3** |
 
 The 27 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
@@ -223,8 +223,8 @@ Appearance (opacity, radius, clip), Fill, Stroke, Effects, Export.
 | 6.1 | Position X/Y, rotate angle | numeric, scrubbable | `Position` rows + the rotate field (`FieldId::Rotation` → `Editor::set_selection_rotation`, Figma's (−180, 180]) | PARTIAL — the sign counts clockwise-positive (the renderer's y-down `Affine::rotate`), where Figma's counts counter-clockwise |
 | 6.2 | Width/Height + Resizing | Fixed / Hug / Fill per axis, chosen from the Width/Height dropdown | `Sizing`, `Action::LayoutAxisMenu` / `SetAxisSizing` | MATCH |
 | 6.3 | Constraints | 5 H × 5 V options, "ignore constraints" `⌃` | `Constraints` section, `SetConstraint` (`2ebb068`) | MATCH |
-| 6.4 | Corner radius | one value; independent corners via the expand | uniform radius in the panel; per-corner `corner_radii` exists in the model, the UI reads only `[0]` | PARTIAL |
-| 6.5 | Corner smoothing | continuous (squircle) corners, 0–100% | `corner_smoothing: f64` is in the model and unimplemented in the UI | PARTIAL |
+| 6.4 | Corner radius | one value; **Independent corners** for a value each; a radius handle just inside each corner on the canvas | **Corner radius** row with Figma's leading independent-corners icon (`Action::ToggleCorners`) opening the four-field **Corner radius details** panel; `Editor::set_uniform_radius` / `set_corner_radius` write rects AND frames; the canvas dot (`Drag::RadiusCorner`, ⌥ = that corner alone on rectangles) rounds the shape by its diagonal travel | MATCH |
+| 6.5 | Corner smoothing | continuous (squircle) corners, 0–100% | the panel's slider plus Figma's `iOS` chip at 60% (`Action::SetCornerSmoothing` / `CornerSmoothingIos`, `Editor::set_corner_smoothing` — one entry per write, no-op refused) | MATCH |
 | 6.6 | Alignment row | 6 align buttons + distribute | `Alignment` row, `Action::Align` | MATCH |
 | 6.7 | Opacity | 0–100% | `Opacity` | MATCH |
 | 6.8 | Aspect ratio lock | lock icon between W and H | `ToggleAspectRatio` | MATCH |
@@ -645,8 +645,27 @@ rendering it.
    uncropped surround, Control's free aspect, the **Aspect ratio** picker, the
    crop-value slider and the `⌘`-drag quick crop. **Place all**, the cursor's
    count badge, HEIC/TIFF and video are the honest remainder of place-image.
-10. Per-corner radii + **corner smoothing** (6.4, 6.5) — both fields are in the model;
-    this is a UI pass with a renderer already able to draw it.
+10. ~~Per-corner radii + **corner smoothing** (6.4, 6.5)~~ — **delivered**: the
+    Appearance section's **Corner radius** row carries Figma's leading
+    independent-corners icon; it opens the **Corner radius details** panel — the
+    four fields in Figma's tl/tr over bl/br grid, each editing its own corner,
+    plus the smoothing slider with Figma's `iOS` chip at 60% — while the row
+    itself stays the shape's single value (and a frame's uniform radius is four
+    equal corners, because a frame has no radius field of its own). On the
+    canvas, hovering just inside a corner of a single rectangle or frame shows
+    Figma's white dot on that corner's arc: a drag rounds the whole shape along
+    the corner's inward diagonal — relative, so a press a pixel off the dot does
+    not jump the value — and `⌥` (rectangles, as Figma's own gesture is) rounds
+    that corner alone, the whole drag being ONE undo entry. Pinned by
+    `the_corner_panel_writes_one_corner_at_a_time`,
+    `the_ios_chip_sets_corner_smoothing_to_sixty`,
+    `the_radius_handle_sits_on_the_corner_arc`,
+    `dragging_the_canvas_corner_handle_rounds_the_shape` (app) and
+    `corner_radius_extends_to_frames_and_smoothing_is_one_entry` (x-editor).
+    Still open in this family: the **Apply variable** slot on each corner field,
+    a typeable smoothing value (slider + `iOS` only), the Small/Big nudge keys
+    on the radius, `⌥`-drag on a frame's corner, per-point radius in
+    vector-edit mode, and 6.15's star/polygon radius handle.
 11. ~~**Component sets as a node** (12.19)~~ — **delivered**, the last row of the
     instances item: a set is a frame that holds nothing but the variants of one prefix,
     "Combine as variants" builds that frame (reusing one that already holds only the

@@ -196,12 +196,21 @@ pub(crate) fn apply(root: &mut Node, cmd: &Command) -> bool {
         }
         Command::SetCorners { id, to, .. } => {
             if let Some(n) = find_mut(root, id) {
+                // A rectangle keeps its uniform radius in the kind it carries;
+                // a FRAME has no such field, so its uniform radius is four
+                // equal corners — exactly the shape the renderer already
+                // resolves for a frame (help 360050986854 allows both kinds).
+                let radii = match &n.kind {
+                    NodeKind::Rect { .. } => to.1,
+                    NodeKind::Frame { .. } => Some(to.1.unwrap_or([to.0.max(0.0); 4])),
+                    _ => return false,
+                };
                 if let NodeKind::Rect { radius } = &mut n.kind {
                     *radius = to.0.max(0.0);
-                    n.corner_radii = to.1.map(|c| c.map(|v| v.max(0.0)));
-                    n.dirty = true;
-                    return true;
                 }
+                n.corner_radii = radii.map(|c| c.map(|v| v.max(0.0)));
+                n.dirty = true;
+                return true;
             }
             false
         }
