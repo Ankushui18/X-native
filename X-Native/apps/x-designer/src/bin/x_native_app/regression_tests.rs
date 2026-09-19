@@ -8933,10 +8933,10 @@ fn cmd_y_toggles_outline_view_and_never_touches_the_document() {
         &root,
         Node::rect("paint", 0.0, 0.0, 100.0, 60.0, Color::from_rgb8(255, 0, 0)),
     );
-    h.app.doc().editor().insert_node(
-        &root,
-        Node::image("pic", 0.0, 80.0, 60.0, 40.0, "no-asset"),
-    );
+    h.app
+        .doc()
+        .editor()
+        .insert_node(&root, Node::image("pic", 0.0, 80.0, 60.0, 40.0, "no-asset"));
     let depth = h.app.doc_ref().editor_ref().undo_depth();
     // leave a redoable step on the stack: the OLD ⌘Y arm used to consume it
     h.app.doc().undo_document();
@@ -8988,40 +8988,49 @@ fn cmd_y_toggles_outline_view_and_never_touches_the_document() {
 }
 
 /// The canvas the outline mode paints: a stripped copy at the hairline. The
-/// scene's own encoding is the read-back — no image command at all (the
-/// image became its box), the hairlines are drawn, and the width follows the
-/// zoom (`1.0 / zoom`), so a zoom is a different picture, not a cache hit.
+/// wireframe's own render tree is the read-back — no image command (the
+/// image became its box), the hairlines in its place. The canvas scene is a
+/// different picture from the editor's, and because the hairline width is
+/// `1.0 / zoom` a different zoom is a different picture too: this small
+/// page's visible set does not change between the zooms, so only the width
+/// moves the hash.
 #[test]
 fn outline_mode_hairs_the_canvas_and_paints_no_image() {
     let mut h = host();
     let mut page = Node::frame("page", 200.0, 200.0);
-    page.children.push(Node::rect("r", 10.0, 10.0, 80.0, 80.0, Color::from_rgb8(255, 0, 0)));
+    page.children
+        .push(Node::rect("r", 10.0, 10.0, 80.0, 80.0, Color::from_rgb8(255, 0, 0)));
     page.children.push(Node::image("i", 120.0, 10.0, 60.0, 60.0, "no-asset"));
     h.app.doc().editor().root = page;
 
-    let normal = h.app.canvas_scene();
-    assert_eq!(normal.encoding().n_images, 1, "the image paints normally");
-    let normal_paths = normal.encoding().n_paths;
+    // the document's own tree carries exactly one image command; the
+    // wireframe copy the canvas renders carries none — hairlines instead
+    let doc = h.app.doc_ref();
+    let doc_tree = x_native::build_render_tree(&doc.editor_ref().root, &doc.doc.variables);
+    let stripped = x_native::outline_view(&doc.editor_ref().root, 1.0);
+    let wire = x_native::build_render_tree(&stripped, &doc.doc.variables);
+    let images = |t: &x_native::RenderTree| {
+        t.commands.iter().filter(|c| matches!(c, x_native::RenderCommand::Image { .. })).count()
+    };
+    assert_eq!(images(&doc_tree), 1, "the image is in the document's tree");
+    assert_eq!(images(&wire), 0, "outline view paints no image — it is a box now");
+    let strokes = wire
+        .commands
+        .iter()
+        .filter(|c| matches!(c, x_native::RenderCommand::StrokePath { .. }))
+        .count();
+    assert!(strokes > 0, "the hairline outlines are drawn");
 
+    // on the canvas: the wireframe is a different picture from the editor's
+    let normal = h.app.canvas_scene();
+    assert!(normal.encoding().n_paths > 0, "the canvas encodes the page");
     h.app.outlines = true;
     let outlined = h.app.canvas_scene();
-    assert_eq!(
-        outlined.encoding().n_images,
-        0,
-        "outline view paints no image — it is a box now"
-    );
     assert!(
-        outlined.encoding().n_paths >= normal_paths,
-        "the hairline outlines are drawn"
+        !h.app.doc_ref().frame_cache.stats.full_hit,
+        "outline mode renders the stripped copy, not the editor's picture"
     );
-    // the document was never touched by either render
-    assert!(
-        matches!(
-            h.app.doc_ref().editor_ref().root.children[1].kind,
-            NodeKind::Image { .. }
-        ),
-        "the image node is still an image in the document"
-    );
+    assert!(outlined.encoding().n_paths > 0, "the hairlines encode");
     // the hairline is 1/zoom: a different zoom is a different picture, so the
     // cache must re-render rather than serve the old width
     h.app.zoom = 2.0;
@@ -9034,10 +9043,17 @@ fn outline_mode_hairs_the_canvas_and_paints_no_image() {
     // off again: the editor's own picture comes back
     h.app.outlines = false;
     h.app.canvas_scene();
-    assert_eq!(
-        h.app.canvas_scene().encoding().n_images,
-        1,
-        "back in the editor, the image paints again"
+    assert!(
+        !h.app.doc_ref().frame_cache.stats.full_hit,
+        "back in the editor, the fills paint again"
+    );
+    // the document itself was never touched by any of this
+    assert!(
+        matches!(
+            h.app.doc_ref().editor_ref().root.children[1].kind,
+            NodeKind::Image { .. }
+        ),
+        "the image node is still an image in the document"
     );
 }
 

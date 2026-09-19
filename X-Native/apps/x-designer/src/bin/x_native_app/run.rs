@@ -18219,8 +18219,8 @@ impl App {
         // flow viewer is a presentation (the artwork alone), and it takes
         // precedence over the editor's view mode.
         let outline;
-        let root = if self.app.outlines && self.flow.is_none() {
-            outline = x_native::outline_view(doc_root, 1.0 / self.app.zoom.max(1e-3));
+        let root = if self.outlines && self.flow.is_none() {
+            outline = x_native::outline_view(doc_root, 1.0 / self.zoom.max(1e-3));
             &outline
         } else {
             doc_root

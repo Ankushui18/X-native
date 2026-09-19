@@ -993,8 +993,7 @@ mod outline_view_tests {
         // the render root is the page — and the page is not a layer, so it
         // keeps no outline of its own (everything under it does)
         assert_eq!(
-            stripped.stroke,
-            Stroke::default(),
+            stripped.stroke, Stroke::default(),
             "the page itself is not outlined"
         );
         check(&stripped.children[0], "card");
@@ -1067,10 +1066,10 @@ mod outline_view_tests {
             })
             .collect();
         let blue = Color::from_rgb8(0, 0, 0xff);
-        assert!(
-            !fills.iter().any(|b| matches!(*b, Brush::Solid(x) if x == blue)),
-            "the master's blue fill must not paint"
-        );
+        let any_blue = fills.iter().any(|b| {
+            matches!(b, Brush::Solid(x) if *x == blue)
+        });
+        assert!(!any_blue, "the master's blue fill must not paint");
         // …and no image or glyph command at all
         let image_or_glyph = tree.commands.iter().any(|c| {
             matches!(c, RenderCommand::Image { .. } | RenderCommand::Glyphs { .. })
