@@ -2045,6 +2045,7 @@ fn paint_app_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let items: Vec<(&str, &str, bool)> = vec![
         ("New file", "⌘N", true),
         ("Open file…", "⌘O", true),
+        ("Place image…", "⇧⌘K", true),
         ("", "", false), // separator
         ("Save", "⌘S", true),
         ("Save as…", "⇧⌘S", true),
@@ -9323,6 +9324,10 @@ pub fn palette_commands() -> Vec<Command> {
         Command {
             label: "Import…",
             shortcut: "⌘ I",
+        },
+        Command {
+            label: "Place image…",
+            shortcut: "⇧⌘K",
         },
         Command {
             label: "Lint document",

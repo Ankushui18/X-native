@@ -26,6 +26,12 @@ fn temp(name: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("x-native-audit-{}-{name}", std::process::id()))
 }
 
+/// A clone of one node, so an assertion can outlive the borrow of the
+/// document it came from.
+fn find_node_clone(root: &Node, id: &str) -> Option<Node> {
+    crate::editor_ui::find_node(root, id).cloned()
+}
+
 /// Does the chrome currently publish a hit rect for this Prototype-tab scroll
 /// menu? A field and its open menu both push the same action, so one question
 /// answers "is the row there" and "did the press land on it".
@@ -2282,6 +2288,235 @@ fn mask_host() -> Host {
             .insert_node(&root, Node::rect(id, x, y, 80.0, 80.0, Color::WHITE));
     }
     h
+}
+
+/// A real 32 × 24 PNG (built for this test): the asset store probes its size
+/// from the IHDR header, and the placement reads that back, so a placed click
+/// is exactly the file's own size.
+const PLACE_PNG: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x18, 0x08, 0x02, 0x00, 0x00, 0x00, 0x14, 0x31, 0x68,
+    0x63, 0x00, 0x00, 0x00, 0xb7, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x60, 0xe0, 0x10, 0x90,
+    0x50, 0xd0, 0x30, 0xb0, 0x70, 0xf0, 0x08, 0x88, 0x48, 0xc8, 0x28, 0xa8, 0x68, 0xe8, 0x98, 0x30,
+    0x63, 0xc1, 0x8a, 0x0d, 0x3b, 0x0e, 0x9c, 0xb8, 0x70, 0xe3, 0xc1, 0x8b, 0x0f, 0x3f, 0x28, 0x96,
+    0x67, 0xe1, 0x11, 0x91, 0x51, 0xd1, 0x31, 0xb1, 0x71, 0xf1, 0x09, 0x89, 0x49, 0xc9, 0x29, 0xa9,
+    0x69, 0xe9, 0x99, 0x32, 0x67, 0xc9, 0x9a, 0x2d, 0x7b, 0x8e, 0x9c, 0xb9, 0x72, 0xe7, 0xc9, 0x9b,
+    0x2f, 0x7f, 0x28, 0x95, 0xa7, 0xb9, 0x07, 0x18, 0x68, 0xec, 0x01, 0x16, 0x06, 0x1a, 0x7b, 0x80,
+    0x83, 0x81, 0xc6, 0x1e, 0xe0, 0x61, 0xa0, 0xb1, 0x07, 0x04, 0x18, 0x68, 0xec, 0x01, 0x11, 0x06,
+    0x1a, 0x7b, 0x40, 0x82, 0x81, 0xc6, 0x1e, 0x90, 0x61, 0xa0, 0xb1, 0x07, 0x14, 0x18, 0x68, 0xec,
+    0x01, 0x15, 0x06, 0x1a, 0x7b, 0x40, 0x83, 0x81, 0xc6, 0x1e, 0xd0, 0x61, 0xa0, 0xb1, 0x07, 0x0c,
+    0x18, 0x68, 0xec, 0x01, 0x13, 0x06, 0x1a, 0x7b, 0xc0, 0x82, 0x81, 0xc6, 0x1e, 0xb0, 0x61, 0xa0,
+    0xb1, 0x07, 0x1c, 0x18, 0x68, 0xec, 0x01, 0x17, 0x06, 0x1a, 0x7b, 0xc0, 0x83, 0x81, 0xc6, 0x1e,
+    0xf0, 0x61, 0xa0, 0xb1, 0x07, 0x02, 0x18, 0x68, 0xec, 0x81, 0x10, 0x00, 0xcd, 0xbc, 0x6e, 0x3d,
+    0xc1, 0x79, 0x94, 0xb7, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+/// Write the fixture where the store can read it and hand back the path.
+fn place_png(name: &str) -> std::path::PathBuf {
+    let path = temp(name);
+    std::fs::write(&path, PLACE_PNG).expect("fixture writes");
+    path
+}
+
+/// A 5000 x 2500 PNG header — past Figma's 4096 px cap. The bytes are the
+/// small fixture with a rewritten IHDR, which is all the placement reads:
+/// the store probes the header and nothing here ever decodes the picture.
+fn big_png(name: &str) -> std::path::PathBuf {
+    let mut bytes = PLACE_PNG.to_vec();
+    bytes[16..20].copy_from_slice(&5000u32.to_be_bytes());
+    bytes[20..24].copy_from_slice(&2500u32.to_be_bytes());
+    let path = temp(name);
+    std::fs::write(&path, bytes).expect("fixture writes");
+    path
+}
+
+/// Figma's **Place image** (⇧⌘K; File → Place image): *"Hit any spot of the
+/// canvas and Figma will place the image on that spot, or click and drag on the
+/// canvas to draw the image."* A click is the file's own size, a drag is the
+/// size you draw, and either way it is one undo entry.
+#[test]
+fn the_place_image_tool_places_at_the_click_and_sizes_by_drag() {
+    let mut h = host();
+    let path = place_png("place-click.png");
+    h.place_images(&[path.clone()]);
+
+    // the picker registered the bytes and armed the tool
+    assert_eq!(h.app.tool, Tool::PlaceImage);
+    assert_eq!(h.app.placing_images.len(), 1);
+    let asset = h.app.placing_images[0].clone();
+    assert!(asset.starts_with("asset://"), "{asset}");
+    let rec = h
+        .app
+        .doc_ref()
+        .doc
+        .assets
+        .get(asset.as_str())
+        .expect("registered");
+    assert_eq!(rec.dimensions, Some((32, 24)), "probed from the header");
+    assert_eq!(rec.name, "place-click.png");
+
+    // a click (no drag) drops the file's own size, centred where it landed
+    let at = Point::new(500.0, 400.0);
+    h.finish_create(Tool::PlaceImage, at, at);
+    let id = h.app.doc_ref().editor_ref().selection[0].clone();
+    let img = find_node_clone(&h.app.doc_ref().editor_ref().root, &id).expect("placed");
+    assert!(matches!(img.kind, NodeKind::Image { .. }), "{:?}", img.kind);
+    assert_eq!((img.w, img.h), (32.0, 24.0), "the image's own size");
+    assert_eq!(img.transform.x, at.x - 16.0);
+    assert_eq!(img.transform.y, at.y - 12.0);
+    assert_eq!(img.name, "place-click.png", "Figma names it after the file");
+    assert!(h.app.placing_images.is_empty(), "the queue drained");
+    assert_eq!(h.app.tool, Tool::Select, "one image, one placement");
+    h.app.doc().editor().undo();
+    assert!(
+        find_node_clone(&h.app.doc_ref().editor_ref().root, &id).is_none(),
+        "the placement is one undo entry"
+    );
+
+    // …a click that lands on a shape replaces its fill instead of stacking a
+    // new layer (help 360040028034: *"Select an existing object on the canvas
+    // to replace its fill with the image or video"*)
+    let root_id = h.app.doc_ref().editor_ref().root.id.clone();
+    h.app.doc().editor().insert_node(
+        &root_id,
+        Node::rect("plate", 300.0, 300.0, 120.0, 80.0, Color::WHITE),
+    );
+    h.app.doc().editor().selection.clear();
+    h.place_images(&[path.clone()]);
+    assert_eq!(h.app.tool, Tool::PlaceImage, "nothing was selected to fill");
+    h.finish_create(
+        Tool::PlaceImage,
+        Point::new(320.0, 320.0),
+        Point::new(320.0, 320.0),
+    );
+    let plate = find_node_clone(&h.app.doc_ref().editor_ref().root, "plate").expect("plate");
+    match &plate.fill {
+        x_native::Paint::Pattern { asset, .. } => assert!(asset.starts_with("asset://"), "{asset}"),
+        other => panic!("the click filled the shape: {other:?}"),
+    }
+    assert_eq!(
+        h.app.doc_ref().editor_ref().selection,
+        vec!["plate".to_string()]
+    );
+    assert!(h.app.placing_images.is_empty(), "the queue drained");
+
+    // …and a drag draws the image at that size instead
+    h.app.doc().editor().selection.clear();
+    h.place_images(&[path]);
+    assert_eq!(h.app.tool, Tool::PlaceImage);
+    h.finish_create(
+        Tool::PlaceImage,
+        Point::new(100.0, 100.0),
+        Point::new(180.0, 160.0),
+    );
+    let id = h.app.doc_ref().editor_ref().selection[0].clone();
+    let img = find_node_clone(&h.app.doc_ref().editor_ref().root, &id).expect("placed");
+    assert_eq!(
+        (img.w, img.h),
+        (80.0, 60.0),
+        "the drawn box, not the file's size"
+    );
+}
+
+/// With a layer selected Figma takes the image as a fill instead of placing a
+/// new layer (and an image layer swaps its picture, keeping its crop).
+#[test]
+fn placing_an_image_fills_the_selected_shape_or_swaps_the_picture() {
+    let mut h = host();
+    let root = h.app.doc().editor_ref().root.id.clone();
+    h.app.doc().editor().insert_node(
+        &root,
+        Node::rect("plate", 20.0, 20.0, 80.0, 60.0, Color::WHITE),
+    );
+    h.app.doc().editor().selection = vec!["plate".into()];
+    let path = place_png("place-fill.png");
+    h.place_images(&[path.clone()]);
+
+    assert!(
+        h.app.placing_images.is_empty(),
+        "the selection took the image"
+    );
+    assert_eq!(h.app.tool, Tool::Select);
+    let plate = find_node_clone(&h.app.doc_ref().editor_ref().root, "plate").expect("plate");
+    match &plate.fill {
+        x_native::Paint::Pattern { asset, fit } => {
+            assert!(asset.starts_with("asset://"), "{asset}");
+            assert_eq!(*fit, x_native::ImageFit::Fill, "Figma's default Fill mode");
+        }
+        other => panic!("expected the image as the layer's fill, got {other:?}"),
+    }
+    assert!(h.app.status.contains("Filled with"), "{}", h.app.status);
+
+    // an image layer takes the new picture instead of a fill
+    h.app.doc().editor().insert_node(
+        &root,
+        Node::image("shot", 200.0, 20.0, 40.0, 40.0, "asset://first"),
+    );
+    h.app.doc().editor().selection = vec!["shot".into()];
+    h.place_images(&[path]);
+    let shot = find_node_clone(&h.app.doc_ref().editor_ref().root, "shot").expect("shot");
+    match &shot.kind {
+        NodeKind::Image { asset, .. } => assert!(asset.starts_with("asset://"), "{asset}"),
+        other => panic!("image: {other:?}"),
+    }
+    assert_eq!(h.app.status, "Image replaced");
+}
+
+/// Figma drops a pending placement on Esc — and *"to discard any remaining
+/// images or videos, press Delete"* (help 360040028034) drops the rest of a
+/// bulk pick.
+#[test]
+fn escape_drops_a_pending_image_placement() {
+    let mut h = host();
+    let path = place_png("place-esc.png");
+    h.app.doc().editor().selection.clear();
+    h.place_images(&[path.clone()]);
+    assert_eq!(h.app.tool, Tool::PlaceImage);
+    h.on_key(Key::Named(NamedKey::Escape), None);
+    assert!(h.app.placing_images.is_empty());
+    assert_eq!(h.app.tool, Tool::Select);
+    assert_eq!(h.app.status, "Image placement cancelled");
+
+    // Delete is the documented discard, and it takes the whole queue
+    h.app.doc().editor().selection.clear();
+    h.place_images(&[path.clone(), place_png("place-esc-2.png")]);
+    assert_eq!(h.app.placing_images.len(), 2);
+    h.on_key(Key::Named(NamedKey::Delete), None);
+    assert!(h.app.placing_images.is_empty(), "the rest is discarded");
+    assert_eq!(h.app.tool, Tool::Select);
+    assert_eq!(h.app.doc_ref().editor_ref().selection.len(), 0);
+}
+
+/// *"If the asset you are uploading exceeds 4096 x 4096 pixels, Figma will
+/// automatically scale the asset proportionally so that its longest dimension
+/// becomes 4096 pixels or fewer"* (help 360040028034) — and a drag still
+/// draws the box you drew.
+#[test]
+fn a_click_scales_a_file_bigger_than_figmas_cap() {
+    let mut h = host();
+    h.app.doc().editor().selection.clear();
+    h.place_images(&[big_png("place-big.png")]);
+    let at = Point::new(600.0, 500.0);
+    h.finish_create(Tool::PlaceImage, at, at);
+    let id = h.app.doc_ref().editor_ref().selection[0].clone();
+    let img = find_node_clone(&h.app.doc_ref().editor_ref().root, &id).expect("placed");
+    assert!(
+        (img.w - 4096.0).abs() < 0.01 && (img.h - 2048.0).abs() < 0.01,
+        "5000 x 2500 lands at 4096 x 2048, got {} x {}",
+        img.w,
+        img.h
+    );
+}
+
+/// The command search carries the row Figma's File menu carries, with the
+/// shortcut the key handler answers.
+#[test]
+fn the_palette_lists_place_image_with_its_shortcut() {
+    let row = crate::editor_ui::palette_commands()
+        .into_iter()
+        .find(|c| c.label == "Place image…")
+        .expect("Place image… is a command");
+    assert_eq!(row.shortcut, "⇧⌘K");
 }
 
 /// Figma's **Use as mask** (help 360040450253): `⌘⌥M` — or the menu row —

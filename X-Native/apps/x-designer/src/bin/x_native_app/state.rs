@@ -60,6 +60,11 @@ pub enum Tool {
     /// draws nothing itself — exporting it captures the flattened canvas
     /// content inside its bounds.
     Slice,
+    /// Figma's **Place image/video** (⇧⌘K, or the Shape tools menu): not a
+    /// rail tool but a pending placement — *"Click on the canvas to place the
+    /// image or video in a new layer, using its original dimensions"* (help
+    /// 360040028034) — which stays armed while a picked file is waiting.
+    PlaceImage,
     /// Figma's Pencil (⇧P): a freehand stroke, smoothed into an editable
     /// vector path, and a tool that "stays active until you select another
     /// tool or press Esc".
@@ -86,6 +91,7 @@ impl Tool {
             Tool::Frame => "frame#",
             Tool::Section => "section",
             Tool::Slice => "scissors",
+            Tool::PlaceImage => "image",
             Tool::Text => "type",
             Tool::Rect => "square",
             Tool::Ellipse => "circle",
@@ -124,6 +130,7 @@ impl Tool {
             Tool::Frame => "Frame",
             Tool::Section => "Section",
             Tool::Slice => "Slice",
+            Tool::PlaceImage => "Place image",
             Tool::Text => "Text",
             Tool::Rect => "Rectangle",
             Tool::Ellipse => "Ellipse",
@@ -382,6 +389,13 @@ pub const ORIGIN_TARGET_R: f64 = 8.0;
 /// `⇧` snaps a canvas rotation: *"Hold down Shift to snap rotation values to
 /// increments of 15."*
 pub const ROTATE_SNAP_DEG: f64 = 15.0;
+
+/// Figma's cap on an uploaded asset: *"If the asset you are uploading exceeds
+/// 4096 x 4096 pixels, Figma will automatically scale the asset
+/// proportionally so that its longest dimension becomes 4096 pixels or
+/// fewer"* (help 360040028034). A click places at that scaled size — a drag
+/// still draws the box you drew.
+pub const PLACE_MAX_DIM: f64 = 4096.0;
 
 /// Which corner's rotate ring the pointer is in, if any. `b` is `x, y, w, h`
 /// in the same space as `p`, `ring` the outer radius of the zone and `handle`
@@ -3198,6 +3212,10 @@ pub struct App {
     /// The Mask row's rect from the last paint — the anchor the panel scrolls
     /// to when the Mask section has to be reached (tests, screenshots).
     pub mask_row: Option<Rect>,
+    /// Figma's Place image queue: the assets picked with ⇧⌘K, in order. The
+    /// place-image tool is armed while this is non-empty, and one file leaves
+    /// it per placement.
+    pub placing_images: Vec<String>,
     /// The row a drag is over while reordering.
     pub effect_drag_over: Option<usize>,
     pub status: String,
@@ -3277,7 +3295,46 @@ impl App {
         if matches!(t, Tool::Frame | Tool::Section) {
             self.frame_cluster = t;
         }
+        // picking another tool abandons a pending placement — the queue is
+        // Figma's place-image cursor, and there is only one cursor
+        if t != Tool::PlaceImage {
+            self.placing_images.clear();
+        }
         self.tool = t;
+    }
+
+    /// Drop a pending place-image queue (Esc, or another tool). `true` when
+    /// there was one, so Esc can spend itself on it.
+    pub fn cancel_image_placement(&mut self) -> bool {
+        if self.placing_images.is_empty() {
+            return false;
+        }
+        self.placing_images.clear();
+        if self.tool == Tool::PlaceImage {
+            self.tool = Tool::Select;
+        }
+        self.status = "Image placement cancelled".into();
+        true
+    }
+
+    /// A placed image's own pixel size. Figma drops a click at the file's
+    /// natural size, and the asset store already knows it — `dimensions` is a
+    /// header parse (`probe_dimensions`), never a decode.
+    pub fn image_natural_size(&self, asset: &str) -> Option<(f64, f64)> {
+        let rec = self.docs.get(self.active)?.doc.assets.get(asset)?;
+        let (w, h) = rec.dimensions?;
+        Some((f64::from(w), f64::from(h)))
+    }
+
+    /// The layer name a placed image takes: the file it came from, which is
+    /// what Figma names the layer.
+    pub fn image_label(&self, asset: &str) -> String {
+        self.docs
+            .get(self.active)
+            .and_then(|d| d.doc.assets.get(asset))
+            .map(|r| r.name.clone())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| "Image".into())
     }
 
     pub fn new() -> Self {
@@ -3424,6 +3481,7 @@ impl App {
             rotation_origin_on: false,
             effect_rows: Vec::new(),
             mask_row: None,
+            placing_images: Vec::new(),
             effect_drag_over: None,
             status: String::from("Ready"),
             nav_tab: NavTab::File,

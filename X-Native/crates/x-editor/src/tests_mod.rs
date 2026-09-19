@@ -875,6 +875,47 @@ mod tests {
     }
 
     #[test]
+    fn set_image_asset_swaps_the_picture_and_keeps_the_crop() {
+        let mut img = Node::image("img", 0.0, 0.0, 40.0, 30.0, "first.png");
+        if let NodeKind::Image { fit, placement, .. } = &mut img.kind {
+            *fit = ImageFit::Crop;
+            placement.scale = 2.0;
+            placement.focal = (0.25, 0.75);
+        }
+        let mut e = Editor::new(Node::frame("page", 400.0, 400.0).child(img));
+        e.selection = vec!["img".into()];
+        assert!(e.set_image_asset("img", "second.png"));
+        match &find(&e.root, "img").unwrap().kind {
+            NodeKind::Image {
+                asset,
+                fit,
+                placement,
+            } => {
+                assert_eq!(asset, "second.png", "the picture is the new file");
+                assert_eq!(*fit, ImageFit::Crop, "how it shows does not change");
+                assert_eq!(placement.focal, (0.25, 0.75));
+                assert_eq!(placement.scale, 2.0);
+            }
+            other => panic!("image: {other:?}"),
+        }
+        let depth = e.undo_depth();
+        assert!(
+            !e.set_image_asset("img", "second.png"),
+            "same file: no edit"
+        );
+        assert_eq!(e.undo_depth(), depth, "and no undo entry");
+        assert!(
+            !e.set_image_asset("page", "third.png"),
+            "not an image layer"
+        );
+        assert!(e.undo());
+        match &find(&e.root, "img").unwrap().kind {
+            NodeKind::Image { asset, .. } => assert_eq!(asset, "first.png"),
+            other => panic!("image: {other:?}"),
+        }
+    }
+
+    #[test]
     fn select_similar_matches_kind_and_fill() {
         let mut e = Editor::new(doc());
         // a second RED rect elsewhere in the tree

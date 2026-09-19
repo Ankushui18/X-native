@@ -5,6 +5,38 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-19 (Place image)
+
+Figma's **Place image/video** (`360040028034`): *"Select Image/video from the
+Shape tools menu … or use the keyboard shortcut ⇧⌘K"*, *"Click on the canvas to
+place the image or video in a new layer, using its original dimensions"*,
+*"Select an existing object on the canvas to replace its fill with the image or
+video"*, and *"To discard any remaining images or videos, press Delete"*.
+
+- **The cursor.** `Tool::PlaceImage` is not a rail button — it is the pending
+  placement. `App::placing_images` holds the asset ids a pick left behind, one
+  file leaves the queue per placement, and the last one hands the rail back to
+  Select. `⇧⌘K` (the ⌘K command palette keeps its own key), the File menu's
+  **Place image…** row and the command search all reach `Host::cmd_place_image`;
+  `Host::place_images` is the half a test can drive without a dialog.
+- **Click or drag.** A click places the file at the size its header reports —
+  `probe_dimensions`, never a decode — scaled down proportionally when the file
+  is past Figma's 4096 px cap (`PLACE_MAX_DIM`); a drag reuses the ordinary
+  create gesture and draws the image at the box you drew. Either way the
+  placement is ONE undo entry and the layer takes the file's name.
+- **Images are fills.** A click that lands on a layer fills that layer instead
+  of stacking a new one; an image layer takes the new picture through the new
+  `Editor::set_image_asset`, which keeps its fit mode, focal point, scale and
+  flips (`replace_node`, so it is one undo step), exactly as the help page asks
+  of a replaced fill. A pick made with a selection already standing fills it
+  straight away.
+- **Esc and Delete.** Esc drops the placement; `Delete` — the documented
+  discard — throws the rest of a bulk pick away without touching the layers.
+- **Not built:** the crop half of the same article (crop mode, handles,
+  **Aspect ratio**, **Resize to fit**, the `⌘`-drag quick crop — master rows
+  2.25/9.5), **Place all**, the cursor's count badge, HEIC/TIFF/video, and OS
+  drag-and-drop (`WindowEvent::DroppedFile` is still unhandled).
+
 ## [Unreleased] — 2026-09-19 (Masks)
 
 Figma's masks (`360040450253`): *"Masks sit below the layers they affect, and apply

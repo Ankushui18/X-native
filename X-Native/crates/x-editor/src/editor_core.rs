@@ -916,6 +916,26 @@ impl Editor {
         }
     }
 
+    /// Replace the picture of an image layer. Figma's *Place image* with an
+    /// image layer selected swaps the file rather than painting a fill over
+    /// it, and the crop and fit mode stay: they describe how the layer shows
+    /// a picture, not which one (help 360040675194).
+    pub fn set_image_asset(&mut self, id: &str, asset: &str) -> bool {
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        let mut after = n.clone();
+        if let NodeKind::Image { asset: current, .. } = &mut after.kind {
+            if current == asset {
+                return false;
+            }
+            *current = asset.to_string();
+        } else {
+            return false;
+        }
+        self.replace_node(id, after)
+    }
+
     /// Ordered visual-stack mutation. Every operation swaps the whole node,
     /// so add/remove/reorder/toggle remain one atomic undo step.
     pub fn mutate_visual_stack(&mut self, id: &str, f: impl FnOnce(&mut Node)) -> bool {

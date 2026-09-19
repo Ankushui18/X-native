@@ -32,15 +32,15 @@ recon task, not a settled fact.
 
 | surface | rows | MATCH | PARTIAL | MISSING | EXTRA | OUT |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 Tools (toolbar & shape menu) | 24 | 15 | 2 | 2 | 5 | 0 |
-| 2 Canvas gestures (drag) | 28 | 23 | 0 | 4 | 1 | 0 |
+| 1 Tools (toolbar & shape menu) | 24 | 15 | 3 | 1 | 5 | 0 |
+| 2 Canvas gestures (drag) | 28 | 24 | 0 | 3 | 1 | 0 |
 | 3 Keyboard | 35 | 23 | 5 | 6 | 1 | 0 |
 | 4 Menus & palettes | 10 | 9 | 0 | 1 | 0 | 0 |
 | 5 Layers, pages, sections | 14 | 12 | 1 | 1 | 0 | 0 |
 | 6 Frame & shape properties | 20 | 15 | 3 | 2 | 0 | 0 |
 | 7 Auto layout | 16 | 14 | 1 | 1 | 0 | 0 |
 | 8 Fill, stroke, effects, colour | 25 | 21 | 1 | 3 | 0 | 0 |
-| 9 Images | 9 | 5 | 2 | 2 | 0 | 0 |
+| 9 Images | 9 | 5 | 3 | 1 | 0 | 0 |
 | 10 Text & typography | 18 | 15 | 2 | 1 | 0 | 0 |
 | 11 Vector editing & booleans | 20 | 14 | 5 | 1 | 0 | 0 |
 | 12 Components, instances, styles | 21 | 18 | 3 | 0 | 0 | 0 |
@@ -52,9 +52,9 @@ recon task, not a settled fact.
 | 18 Design language (look of the app itself) | 12 | 1 | 5 | 6 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **339** | **238** | **50** | **32** | **16** | **3** |
+| **total** | **339** | **239** | **52** | **29** | **16** | **3** |
 
-The 33 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
+The 29 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
 the brief.
 
@@ -87,7 +87,7 @@ while a tool is armed.
 | 1.14 | Comment `C` | pin, thread, resolve | `Tool::Comment`, open comment box | MATCH |
 | 1.15 | Slice `S` | export region, draws nothing | `Tool::Slice` | MATCH |
 | 1.16 | Shape menu itself | one button, chevron, five shapes, keys shown | **PARTIAL** — our tools sit as separate buttons in the rail; no single Shape button with a chevron menu | PARTIAL |
-| 1.17 | **Place image** `⇧⌘K` | image tool: click/drag to place, then crop | nothing — images arrive only as fills/import | **MISSING** |
+| 1.17 | **Place image** `⇧⌘K` (Figma's Shape tools row reads **Image/video**) | image tool: click/drag to place, then crop | `Tool::PlaceImage` + `App::placing_images` + `Host::place_images`; `⇧⌘K`, the File menu row and the command search reach it. **Not a rail button** — Figma's is in the Shape tools menu, and our rail has no single Shape button (1.16) | **PARTIAL** |
 | 1.18 | **Dev Mode toggle** `⇧D` | switches the file to inspect/code view | no toggle; Inspect is a right-panel tab only | **MISSING** |
 | 1.19 | Eraser | Figma **Draw** only, not design files | `Tool::Eraser` | EXTRA |
 | 1.20 | Brush | Figma **Draw** only (`31440438150935`) | `Tool::Brush` | EXTRA |
@@ -129,7 +129,7 @@ Figma's canvas is a small set of gestures with modifiers; the shape-tool drags a
 | 2.23 | **Rotate on canvas** | hover outside a corner → rotate cursor, drag rotates; `⇧` snaps 15°; `⌥R` moves the origin | `Drag::RotateSel` + `state::rotate_corner_at` (a ring *outside* the corner, past the resize handle), `⇧` = 15° steps, `Drag::RotationOrigin` for the `⌥R` target | MATCH |
 | 2.24 | **`⌥` measure** | hold `⌥` and point to read the distance to the selection | not implemented | **MISSING** |
 | 2.25 | **Crop image** | double-click an image → crop handles | `ImageFillMode`/`image_transform` exist, no crop gesture | **MISSING** |
-| 2.26 | **Place & size image** | image tool drag places at that size | n/a (no image tool) | **MISSING** |
+| 2.26 | **Place & size image** | image tool drag places at that size | `finish_create`'s `Tool::PlaceImage` arm: a click places the file's own size (its header, capped at 4096), a drag draws the box you drew | MATCH |
 | 2.27 | Scroll / pinch zoom, `⌘`+scroll | canvas zoom | wheel path | MATCH |
 | 2.28 | `Space`-drag pan | temporary pan | `Space` arm + `Drag::Pan` | MATCH |
 
@@ -300,12 +300,12 @@ position, canvas stacking, "distribute", `⇧A` to add.
 
 | # | Item | Figma | Ours | Status |
 | --- | --- | --- | --- | --- |
-| 9.1 | Import image | drag-drop, paste, `⇧⌘K` | import path + `⌘I` | MATCH |
+| 9.1 | Import image | drag-drop, paste, `⇧⌘K` | import path + `⌘I` + `⇧⌘K` bulk placement (`Assets::register`, content-hashed). **Not built:** dropping a file from the OS (`WindowEvent::DroppedFile` is unhandled) | PARTIAL |
 | 9.2 | Fill modes | Fill / Fit / Crop / Tile | `SetImageFillMode`, `ImageFit` | MATCH |
 | 9.3 | Adjustments | exposure, contrast, saturation, temperature… | `SetImageAdjustments` | MATCH |
 | 9.4 | Rotate 90° steps | yes | `RotateImage`, `image_rotation` | MATCH |
 | 9.5 | **Crop gesture** | double-click → crop | none | **MISSING** |
-| 9.6 | **Place-image tool** | image tool with drag sizing | none | **MISSING** |
+| 9.6 | **Place-image tool** | image tool with drag sizing | `⇧⌘K` / File → Place image / command search; a multi-file pick queues, one file per placement, `Delete` discards the rest; a click on a layer fills it, an image layer swaps its picture and keeps its crop | MATCH |
 | 9.7 | Flip H/V | yes | `ImagePlacement::flip_h/flip_v` in the engine, no UI toggle seen | PARTIAL |
 | 9.8 | Copy/paste image between files | yes | clipboard path | MATCH |
 | 9.9 | Video fill | Figma supports video paint | not built | PARTIAL (documented) |
@@ -611,7 +611,26 @@ rendering it.
    `the_mask_shortcut_masks_the_bottom_layer`,
    `the_mask_section_switches_the_masks_type` and
    `the_selection_menu_offers_use_as_mask`.
-9. Place-image tool + crop (1.17, 2.25, 2.26, 9.5).
+9. ~~**Place-image tool** (1.17, 2.26, 9.6)~~ — **delivered**: `⇧⌘K` (*"Select
+   Image/video from the Shape tools menu … or use the keyboard shortcut"*, and
+   the File menu and command search reach it too) picks one or more images,
+   registers the bytes in the asset store and either fills the standing
+   selection or arms the cursor's queue; a click places the file at the size its
+   header reports — scaled down proportionally past Figma's 4096 px cap — a
+   click that lands on a layer fills that layer (an image layer swaps its
+   picture and keeps its crop), a drag draws the image at the box you drew, one
+   file leaves the queue per placement, and `Delete` discards the rest while Esc
+   drops the cursor. Pinned by
+   `the_place_image_tool_places_at_the_click_and_sizes_by_drag`,
+   `placing_an_image_fills_the_selected_shape_or_swaps_the_picture`,
+   `escape_drops_a_pending_image_placement`,
+   `a_click_scales_a_file_bigger_than_figmas_cap`,
+   `the_palette_lists_place_image_with_its_shortcut` and
+   `set_image_asset_swaps_the_picture_and_keeps_the_crop`. The **crop** half of
+   the same help article (2.25, 9.5) — crop mode, its handles, **Aspect
+   ratio**, **Resize to fit** and the `⌘`-drag quick crop — is the next
+   increment; **Place all**, the cursor's count badge, HEIC/TIFF and video are
+   the honest remainder.
 10. Per-corner radii + **corner smoothing** (6.4, 6.5) — both fields are in the model;
     this is a UI pass with a renderer already able to draw it.
 11. ~~**Component sets as a node** (12.19)~~ — **delivered**, the last row of the

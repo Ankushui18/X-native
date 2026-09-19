@@ -6386,6 +6386,59 @@ impl Host {
                 t.bindings.insert("font".into(), default_font);
                 t
             }
+            Tool::PlaceImage => {
+                // the queue is the asset; the arm is only reachable with one
+                let Some(asset) = self.app.placing_images.first().cloned() else {
+                    return;
+                };
+                // Figma drops a click at the file's own size and a drag at the
+                // size you draw, so the two differ by the gesture, not a mode
+                let zoom = self.app.zoom.max(1e-3);
+                let click =
+                    (cur.x - start.x).abs() * zoom < 4.0 && (cur.y - start.y).abs() * zoom < 4.0;
+                // A click lands ON something and Figma fills whatever is under
+                // it; only empty canvas drops a new image layer. Groups and
+                // the page have no fill of their own, so they place as well.
+                if click {
+                    let target = {
+                        let root = &self.app.doc_ref().editor_ref().root;
+                        x_native::editor::hit_test(root, start).filter(|id| {
+                            *id != root.id
+                                && editor_ui::find_node(root, id)
+                                    .is_some_and(|n| !matches!(n.kind, NodeKind::Group))
+                        })
+                    };
+                    if let Some(id) = target {
+                        self.fill_with_image(&id, &asset);
+                        self.app.doc().editor().selection = vec![id];
+                        self.place_image_taken();
+                        return;
+                    }
+                }
+                let (nw, nh) = self
+                    .app
+                    .image_natural_size(&asset)
+                    .unwrap_or((200.0, 150.0));
+                // Figma scales an asset past 4096 px down proportionally
+                // before it lands (help 360040028034)
+                let cap = (crate::state::PLACE_MAX_DIM / nw.max(nh)).min(1.0);
+                let (iw, ih) = (nw * cap, nh * cap);
+                let (bx, by, bw, bh) = if click {
+                    (start.x - iw / 2.0, start.y - ih / 2.0, iw, ih)
+                } else {
+                    (x, y, w, h)
+                };
+                let mut img = Node::image(
+                    &x_native::fresh_id("image"),
+                    bx,
+                    by,
+                    bw.max(1.0),
+                    bh.max(1.0),
+                    &asset,
+                );
+                img.name = self.app.image_label(&asset);
+                img
+            }
             _ => return,
         };
         let id = node.id.clone();
@@ -6473,6 +6526,11 @@ impl Host {
         // click/drag with the Text tool drops a text node and starts editing it
         if tool == Tool::Text {
             self.app.begin_text_edit(id, String::new());
+        }
+        // the picked files are a queue: one leaves it per placement, and the
+        // tool stays armed until the last one is down
+        if tool == Tool::PlaceImage {
+            self.place_image_taken();
         }
     }
 
@@ -7198,6 +7256,12 @@ impl Host {
                         self.app.apply_ctx(CtxCmd::HideSel);
                         return;
                     }
+                    // ⇧⌘K — Place image (Figma's shortcut; the ⌘K command
+                    // palette below keeps its own key)
+                    "k" | "K" if self.app.shift => {
+                        self.cmd_place_image();
+                        return;
+                    }
                     "k" | "K" => {
                         // Toggle command palette with full initialization
                         if self.app.palette.open {
@@ -7449,6 +7513,11 @@ impl Host {
                     self.app.dropdown_layout_axis = None;
                     self.app.dropdown_stacking = false;
                     self.app.paint_lib = None;
+                } else if !self.app.placing_images.is_empty() {
+                    // a pending image placement is the newest thing on the
+                    // canvas, so Esc spends itself on it — the second Esc
+                    // clears the selection as usual
+                    self.app.cancel_image_placement();
                 } else if self.app.screen == Screen::Editor {
                     // P12: an in-flight tree drag cancels first
                     if matches!(self.app.drag, Some(Drag::TreeRow { .. })) {
@@ -7484,6 +7553,14 @@ impl Host {
             }
             Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace) => {
                 if self.app.screen == Screen::Editor {
+                    // Figma's own way to throw the rest of a bulk pick away:
+                    // *"To discard any remaining images or videos, press
+                    // Delete"* (help 360040028034) — it goes before the
+                    // selection, which has nothing to delete yet
+                    if !self.app.placing_images.is_empty() {
+                        self.app.cancel_image_placement();
+                        return;
+                    }
                     // Figma: a selected connection is an object of its own —
                     // "you can select it and press Delete to remove it" — and
                     // it goes first, before the layers underneath.
@@ -7749,6 +7826,7 @@ impl Host {
             "New file" => self.cmd_new_file(),
             "Open…" => self.cmd_open_file(),
             "Import…" => self.cmd_import_file(),
+            "Place image…" => self.cmd_place_image(),
             "Lint document" => self.cmd_lint(),
             "Theme: Graphite (dark)" => self.apply_theme(x_native::ui::ThemeId::Graphite),
             "Theme: Daylight (light)" => self.apply_theme(x_native::ui::ThemeId::Daylight),
@@ -9891,6 +9969,134 @@ impl Host {
         }
     }
 
+    /// File → Place image, and Figma's ⇧⌘K: pick one or more images, then
+    /// place them — *"place one or more image files in sequence"*.
+    fn cmd_place_image(&mut self) {
+        let picked = rfd::FileDialog::new()
+            .set_title("Place image")
+            .add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp"])
+            .pick_files();
+        let Some(paths) = picked else {
+            return;
+        };
+        self.place_images(&paths);
+    }
+
+    /// The half of `cmd_place_image` that does not need a dialog: register the
+    /// bytes, then either fill the selection with the image or arm the
+    /// placement tool with the queue.
+    fn place_images(&mut self, paths: &[std::path::PathBuf]) {
+        if self.app.doc_opt().is_none() {
+            self.app.status = "Open a document to place an image".into();
+            return;
+        }
+        let mut ids: Vec<String> = Vec::new();
+        for path in paths {
+            let Ok(bytes) = std::fs::read(path) else {
+                continue;
+            };
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("image")
+                .to_string();
+            let id =
+                self.app
+                    .doc()
+                    .doc
+                    .assets
+                    .register(&name, bytes, x_native::AssetSource::Embedded);
+            ids.push(id);
+        }
+        if ids.is_empty() {
+            self.app.status = "No image could be read".into();
+            return;
+        }
+        // Figma applies the image to the selection when there is one:
+        // *"Select an existing object on the canvas to replace its fill with
+        // the image or video"* (help 360040028034). Anything else arms the
+        // tool, which places one file per click or drag.
+        if ids.len() == 1 && self.apply_image_to_selection(&ids[0]) {
+            return;
+        }
+        self.app.placing_images = ids;
+        self.app.select_tool(Tool::PlaceImage);
+        self.app.status = if self.app.placing_images.len() == 1 {
+            "Click to place at the image's size, or drag to draw it".into()
+        } else {
+            format!(
+                "Click to place each image - {} picked",
+                self.app.placing_images.len()
+            )
+        };
+    }
+
+    /// Put a picked image on the selected layer. `false` when there is
+    /// nothing to apply it to, so the caller falls through to the placement
+    /// tool.
+    fn apply_image_to_selection(&mut self, asset: &str) -> bool {
+        let Some(id) = self.app.doc().selected_id() else {
+            return false;
+        };
+        self.fill_with_image(&id, asset);
+        true
+    }
+
+    /// Put an image on one layer the way Figma does when the image lands on
+    /// something: an image layer takes the new picture — its crop and fit mode
+    /// survive, they describe how the layer shows a picture, not which one
+    /// (help 360040675194) — and anything else takes it as a fill.
+    fn fill_with_image(&mut self, id: &str, asset: &str) {
+        let is_image = {
+            let root = &self.app.doc_ref().editor_ref().root;
+            matches!(
+                editor_ui::find_node(root, id).map(|n| &n.kind),
+                Some(NodeKind::Image { .. })
+            )
+        };
+        if is_image {
+            if self.app.doc().editor().set_image_asset(id, asset) {
+                self.app.mark_dirty();
+                self.app.status = "Image replaced".into();
+            } else {
+                self.app.status = "That image is already in place".into();
+            }
+            return;
+        }
+        self.app.doc().editor().set_fill(
+            id,
+            x_native::Paint::Pattern {
+                asset: asset.to_string(),
+                fit: ImageFit::Fill,
+            },
+        );
+        self.app.mark_dirty();
+        self.app.status = format!(
+            "Filled with {} - Fill mode is Fill",
+            self.app.image_label(asset)
+        );
+    }
+
+    /// One file leaves the place-image queue per placement. The tool stays
+    /// armed while others are left — Figma places them one after another —
+    /// and hands the cursor back to Select with the last one.
+    fn place_image_taken(&mut self) {
+        if self.app.placing_images.is_empty() {
+            return;
+        }
+        self.app.placing_images.remove(0);
+        if self.app.placing_images.is_empty() {
+            self.app.tool = Tool::Select;
+            self.app.status = "Image placed".into();
+        } else {
+            self.app.tool = Tool::PlaceImage;
+            self.app.status = format!(
+                "Image placed - {} left to place",
+                self.app.placing_images.len()
+            );
+        }
+    }
+
     fn cmd_import_file(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
             .add_filter(
@@ -11102,26 +11308,27 @@ impl Host {
                         self.app.open_blank();
                     } // New file
                     1 => self.cmd_open_file(),    // Open file…
-                    3 => self.cmd_save(),         // Save
-                    4 => self.cmd_save_as(),      // Save as…
-                    5 => self.cmd_open_version(), // Open archived version
-                    6 => {
+                    2 => self.cmd_place_image(),  // Place image…
+                    4 => self.cmd_save(),         // Save
+                    5 => self.cmd_save_as(),      // Save as…
+                    6 => self.cmd_open_version(), // Open archived version
+                    7 => {
                         self.dispatch(Action::FileDuplicate);
                     } // Duplicate file
-                    7 => {
+                    8 => {
                         self.dispatch(Action::FileMoveToDrafts);
                     } // Move to drafts
-                    9 => self.cmd_export(false),  // Export as…
-                    10 => {
+                    10 => self.cmd_export(false), // Export as…
+                    11 => {
                         self.dispatch(Action::OpenFind);
                     } // Find…
-                    12 => self.apply_theme(x_native::ui::ThemeId::Graphite),
-                    13 => self.apply_theme(x_native::ui::ThemeId::Daylight),
+                    13 => self.apply_theme(x_native::ui::ThemeId::Graphite),
+                    14 => self.apply_theme(x_native::ui::ThemeId::Daylight),
                     // Welcome & shortcuts — the first-launch card, on
                     // demand (it used to be reachable exactly once, ever).
-                    // 15, not 16: the row ids are menu indices and the
+                    // 16, not 17: the row ids are menu indices and the
                     // retired High Contrast row sat between them.
-                    15 => self.dispatch(Action::ShowWelcome),
+                    16 => self.dispatch(Action::ShowWelcome),
                     _ => {}
                 }
             }
