@@ -755,6 +755,7 @@ mod tests {
             None,
             0.0,
             x_core::TextDecoration::None,
+            x_core::ListStyle::None,
         )
         .expect("rich outlines");
         assert!(glyphs.len() >= 8, "shaped {} glyphs", glyphs.len());

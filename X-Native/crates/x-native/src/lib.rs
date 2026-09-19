@@ -96,6 +96,7 @@ pub fn svg_text_outliner(
                 None,
                 0.0,
                 x_core::TextDecoration::None,
+                x_core::ListStyle::None,
             )?;
             glyphs
         };
