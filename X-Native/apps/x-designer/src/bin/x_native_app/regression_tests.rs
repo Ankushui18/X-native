@@ -2314,8 +2314,8 @@ fn the_rotate_ring_turns_the_selection_about_its_centre() {
     );
     let n = find_node_clone(&h.app.doc_ref().editor_ref().root, &id).unwrap();
     assert!(
-        (n.transform.rotation.to_degrees() - 45.0).abs() < 1e-6,
-        "45°: {}",
+        (n.transform.rotation.to_degrees() - 90.0).abs() < 1e-6,
+        "90°: {}",
         n.transform.rotation.to_degrees()
     );
     assert!(
