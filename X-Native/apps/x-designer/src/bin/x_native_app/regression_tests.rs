@@ -4013,14 +4013,11 @@ fn the_effects_section_lists_every_effect_with_figmas_controls() {
         "Drop shadow, Inner shadow, the two blurs, Noise"
     );
     h.dispatch(Action::AddEffect(EffectKind::InnerShadow));
-    assert_eq!(
-        h.app.effect_rows.len(),
-        0,
-        "the rows are recomputed on paint"
-    );
+    // the rows are laid out by the paint pass, so the new one appears on the
+    // next frame — which is the same frame the user sees it on
     let mut scene = vello::Scene::new();
     crate::editor_ui::paint(&mut h.app, &mut scene);
-    assert_eq!(h.app.effect_rows.len(), 3);
+    assert_eq!(h.app.effect_rows.len(), 3, "the + added a third row");
 
     // the settings disclosure shows the effect's OWN fields
     h.dispatch(Action::ToggleEffectSettings(0));

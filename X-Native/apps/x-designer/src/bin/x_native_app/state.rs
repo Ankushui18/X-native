@@ -1449,7 +1449,6 @@ pub enum Action {
     RemoveFill,
     AddStroke,
     RemoveStroke,
-    AddEffect,
     AddGuide,
     RemoveGuide,
     ToggleGuide(usize),
@@ -1513,7 +1512,6 @@ pub enum Action {
     SetPaintBlend(PaintTarget, x_native::BlendKind),
     /// Pressing an effect row (not its buttons) arms the reorder drag.
     EffectRow(usize),
-    CloseColorPicker,
     /// UX Analysis actions (Quant-UX inspired)
     UxAccessibility,
     UxUserFlow,
@@ -2354,23 +2352,6 @@ pub struct OpenDoc {
     /// Board document for infinite canvas mode
     pub board_doc: Option<x_board::BoardDocument>,
     /// Color picker popup state for fill
-    /// Effects list (Figma's Effects section): which popovers are open. One at
-    /// a time, the way the panel's other menus behave.
-    pub effect_add_open: bool,
-    pub effect_kind_open: Option<usize>,
-    /// The row whose settings block is expanded (Figma's *Effect settings*).
-    pub effect_settings: Option<usize>,
-    pub effect_blend_open: Option<usize>,
-    pub layer_blend_open: bool,
-    pub paint_blend_open: Option<PaintTarget>,
-    /// Where a blend menu anchors, recorded by the paint pass.
-    pub blend_dd_anchor: (f64, f64),
-    /// The effect rows the paint pass laid out (top to bottom) — the drop
-    /// targets for reordering by dragging a row, which is Figma's gesture:
-    /// *"you click and drag the handles to reorder the effects"*.
-    pub effect_rows: Vec<Rect>,
-    /// The row a drag is over while reordering.
-    pub effect_drag_over: Option<usize>,
     pub color_picker_fill_open: bool,
     /// Color picker popup state for stroke
     pub color_picker_stroke_open: bool,
@@ -2806,15 +2787,6 @@ impl OpenDoc {
             board_doc: None,
             color_picker_fill_open: false,
             color_picker_stroke_open: false,
-            effect_add_open: false,
-            effect_kind_open: None,
-            effect_settings: None,
-            effect_blend_open: None,
-            layer_blend_open: false,
-            paint_blend_open: None,
-            blend_dd_anchor: (0.0, 0.0),
-            effect_rows: Vec::new(),
-            effect_drag_over: None,
         }
     }
 
@@ -2869,15 +2841,6 @@ impl OpenDoc {
             board_doc: None,
             color_picker_fill_open: false,
             color_picker_stroke_open: false,
-            effect_add_open: false,
-            effect_kind_open: None,
-            effect_settings: None,
-            effect_blend_open: None,
-            layer_blend_open: false,
-            paint_blend_open: None,
-            blend_dd_anchor: (0.0, 0.0),
-            effect_rows: Vec::new(),
-            effect_drag_over: None,
         }
     }
 
@@ -3119,6 +3082,23 @@ pub struct App {
     pub context_menu: ContextMenu,
     /// Color picker popup state: (is_fill, field_rect, is_open)
     pub color_picker_popup: Option<(PaintTarget, Rect, bool)>,
+    /// Effects list (Figma's Effects section): which popovers are open. One at
+    /// a time, the way the panel's other menus behave.
+    pub effect_add_open: bool,
+    pub effect_kind_open: Option<usize>,
+    /// The row whose settings block is expanded (Figma's *Effect settings*).
+    pub effect_settings: Option<usize>,
+    pub effect_blend_open: Option<usize>,
+    pub layer_blend_open: bool,
+    pub paint_blend_open: Option<PaintTarget>,
+    /// Where a blend menu anchors, recorded by the paint pass.
+    pub blend_dd_anchor: (f64, f64),
+    /// The effect rows the paint pass laid out (top to bottom) — the drop
+    /// targets for reordering by dragging a row, which is Figma's gesture:
+    /// *"you click and drag the handles to reorder the effects"*.
+    pub effect_rows: Vec<Rect>,
+    /// The row a drag is over while reordering.
+    pub effect_drag_over: Option<usize>,
     pub status: String,
     // Navigation bar state (Figma-style)
     pub nav_tab: NavTab,
@@ -3331,6 +3311,15 @@ impl App {
             palette: CommandPalette::new(1440.0, 900.0),
             context_menu: ContextMenu::new(),
             color_picker_popup: None,
+            effect_add_open: false,
+            effect_kind_open: None,
+            effect_settings: None,
+            effect_blend_open: None,
+            layer_blend_open: false,
+            paint_blend_open: None,
+            blend_dd_anchor: (0.0, 0.0),
+            effect_rows: Vec::new(),
+            effect_drag_over: None,
             status: String::from("Ready"),
             nav_tab: NavTab::File,
             nav_bar_w: 48.0,
