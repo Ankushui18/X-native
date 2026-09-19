@@ -1124,8 +1124,22 @@ mod tests {
     fn outline_mode_paints_only_the_wireframe() {
         const BG: Color = Color::from_rgb8(40, 40, 40);
         let page = Node::frame("page", 100.0, 100.0)
-            .child(Node::rect("r", 20.0, 20.0, 60.0, 60.0, Color::from_rgb8(255, 0, 0)))
-            .child(Node::ellipse("e", 35.0, 35.0, 30.0, 30.0, Color::from_rgb8(0, 0, 255)))
+            .child(Node::rect(
+                "r",
+                20.0,
+                20.0,
+                60.0,
+                60.0,
+                Color::from_rgb8(255, 0, 0),
+            ))
+            .child(Node::ellipse(
+                "e",
+                35.0,
+                35.0,
+                30.0,
+                30.0,
+                Color::from_rgb8(0, 0, 255),
+            ))
             .child(Node::image("i", 75.0, 5.0, 20.0, 20.0, "no-asset"))
             .child(Node::text("t", 30.0, 70.0, 40.0, 12.0, "Hi"));
 
