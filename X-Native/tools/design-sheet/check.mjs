@@ -46,7 +46,11 @@ const dom = new JSDOM(readFileSync(fileURLToPath(new URL('./index.html', import.
 const { window } = dom;
 await new Promise((r) => setTimeout(r, 700));
 const d = window.document;
-const check = (name, ok, detail = '') => console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ' — ' + detail : ''}`);
+let failures = 0;
+const check = (name, ok, detail = '') => {
+  if (!ok) failures += 1;
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ' — ' + detail : ''}`);
+};
 
 check('no script errors', errors.length === 0, errors.join(' | '));
 const roles = d.querySelectorAll('#roles .role');
@@ -279,4 +283,4 @@ check(
   'aria-free arithmetic on the parsed ranges',
 );
 check('provenance line', /@ [0-9a-f]{7}/.test(d.getElementById('provenance').textContent));
-process.exit(errors.length ? 1 : 0);
+process.exit(errors.length || failures ? 1 : 0);

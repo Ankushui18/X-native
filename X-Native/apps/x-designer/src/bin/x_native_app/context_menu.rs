@@ -593,12 +593,13 @@ mod tests {
         assert_eq!(ContextAction::FlipVertical.shortcut(), Some("⇧V"));
 
         // a selection with no image has nothing to flip, so it gets no row
-        let plain = actions_of(&build_menu_items(&ContextTarget::CanvasSelection {
+        let plain_items = build_menu_items(&ContextTarget::CanvasSelection {
             selected_count: 1,
             contains_group: false,
             has_image: false,
             instance: None,
-        }));
+        });
+        let plain = actions_of(&plain_items);
         assert!(!plain.contains(&&ContextAction::FlipHorizontal));
     }
 

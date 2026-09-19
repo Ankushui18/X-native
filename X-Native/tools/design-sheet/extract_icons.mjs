@@ -9,7 +9,7 @@ const src = readFileSync(new URL('../../apps/x-designer/src/bin/x_native_app/ico
 const start = src.indexOf('const ICONS: &[(&str, &[&str])] = &[');
 const body = src.slice(start, src.indexOf('\n];', start));
 const icons = {};
-const re = /\("([a-z0-9-]+)",\s*&\[([\s\S]*?)\]\)/g;
+const re = /\(\s*"([a-z0-9-]+)",\s*&\[([\s\S]*?)\]\s*,?\s*\)/g;
 let m;
 while ((m = re.exec(body))) {
   const paths = [...m[2].matchAll(/"([^"]+)"/g)].map((x) => x[1]);
