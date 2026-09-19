@@ -4252,8 +4252,8 @@ impl App {
         };
         let root = &doc.editor_ref().root;
         let (Some(a), Some(b)) = (
-            crate::world_rect_of(root, sel_id.as_str()),
-            crate::world_rect_of(root, hover.as_str()),
+            crate::run::world_rect_of(root, sel_id.as_str()),
+            crate::run::world_rect_of(root, hover.as_str()),
         ) else {
             return Vec::new();
         };

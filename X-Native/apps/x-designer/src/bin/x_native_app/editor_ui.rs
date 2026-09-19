@@ -9090,7 +9090,9 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
     // rotated layer is outlined where it is drawn.
     if let Some(hid) = app.hover_node.clone() {
         if !sel.contains(&hid) && app.text_edit.as_deref() != Some(hid.as_str()) {
-            if let Some((x, y, w, h)) = crate::world_rect_of(&doc.editor_ref().root, hid.as_str()) {
+            if let Some((x, y, w, h)) =
+                crate::run::world_rect_of(&doc.editor_ref().root, hid.as_str())
+            {
                 let p0 = app.world_to_screen(Point::new(x, y));
                 let p1 = app.world_to_screen(Point::new(x + w, y + h));
                 stroke_rect(
