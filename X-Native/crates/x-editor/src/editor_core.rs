@@ -901,17 +901,23 @@ impl Editor {
         if blend == BlendKind::PassThrough {
             return false;
         }
-        // `PaintLayer` and `StrokeLayer` are different types, so the two lists
-        // cannot share one binding — each branch reads and writes its own.
-        let present = find(&self.root, id)
-            .map(|n| {
-                if is_fill {
-                    index < n.fill_layers.len()
-                } else {
-                    index < n.stroke_layers.len()
-                }
-            })
-            .unwrap_or(false);
+        // A node whose paints still live in the flat `fill` / `stroke` fields
+        // has an empty `fill_layers`, so the question "does that paint exist?"
+        // has to be asked of the *materialized* stack: materializing is what
+        // turns the flat fill into layer 0. (Without this, a blend picked on a
+        // layer nobody had touched yet wrote nothing at all.)
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        let mut probe = n.clone();
+        probe.materialize_visual_stacks();
+        // `PaintLayer` and `StrokeLayer` are different types, but their lengths
+        // are both `usize`, so the two branches can share this binding.
+        let present = if is_fill {
+            index < probe.fill_layers.len()
+        } else {
+            index < probe.stroke_layers.len()
+        };
         if !present {
             return false;
         }

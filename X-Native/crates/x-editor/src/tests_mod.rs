@@ -2621,6 +2621,27 @@ mod tests {
         assert_eq!(e.undo_depth(), depth, "nothing was pushed");
     }
 
+    /// A blend picked on a paint the user never touched still lands: the node's
+    /// flat fill *is* layer 0, and the write materializes the stack to say so.
+    #[test]
+    fn a_fill_blend_materializes_the_stack_first() {
+        let mut e = Editor::new(Node::frame("r", 400.0, 300.0).child(Node::rect(
+            "r1",
+            0.0,
+            0.0,
+            40.0,
+            40.0,
+            Color::WHITE,
+        )));
+        assert!(!find(&e.root, "r1").unwrap().visual_stacks_materialized);
+        assert!(e.set_paint_layer_blend("r1", true, 0, BlendKind::Multiply));
+        let n = find(&e.root, "r1").unwrap();
+        assert_eq!(n.fill_layers.len(), 1, "the flat fill became layer 0");
+        assert_eq!(n.fill_layers[0].blend, BlendKind::Multiply);
+        // a stroke that was never set is still refused — there is no paint there
+        assert!(!e.set_paint_layer_blend("r1", false, 0, BlendKind::Multiply));
+    }
+
     /// A blur has no colour: the shadow's Fill field cannot land on it.
     #[test]
     fn only_a_shadow_carries_a_fill() {
