@@ -5259,362 +5259,6 @@ fn paint_design(
     hline(s, rx, rx + rw, y, C_LINE);
     y += 1.0 + SECTION_GAP;
 
-    // ------------------------------------------------------------ effects list
-
-    /// One row's place for the drag: the index whose row the pointer is inside.
-    /// `None` outside the list, so a drag that leaves it commits nothing.
-    pub fn effect_drop_index(app: &App, p: Point) -> Option<usize> {
-        app.effect_rows
-            .iter()
-            .position(|r| p.y >= r.y0 && p.y <= r.y1)
-    }
-
-    /// The blend a paint popover is currently showing: the effect's own blend, or
-    /// the first fill's / stroke's. Used by the popover's *Apply blend mode* row.
-    fn paint_target_blend(app: &App, t: crate::state::PaintTarget) -> x_native::BlendKind {
-        let Some(id) = app.doc_ref().selected_id() else {
-            return x_native::BlendKind::Normal;
-        };
-        match t {
-            crate::state::PaintTarget::Effect(i) => app
-                .effect_layers_of(&id)
-                .get(i)
-                .map(|l| l.blend)
-                .unwrap_or(x_native::BlendKind::Normal),
-            target => {
-                let d = app.doc_ref();
-                crate::editor_ui::find_node(&d.editor_ref().root, &id)
-                    .and_then(|n| {
-                        let layers = if target.is_fill() {
-                            &n.fill_layers
-                        } else {
-                            &n.stroke_layers
-                        };
-                        layers.first().map(|l| l.blend)
-                    })
-                    .unwrap_or(x_native::BlendKind::Normal)
-            }
-        }
-    }
-
-    /// Figma's blend dropdown. `modes` is the list for the thing being blended —
-    /// the layer's 19 (Pass through first) or a paint's 18 (no Pass through) — so
-    /// one painter serves the layer row, the popover and every effect row.
-    fn paint_blend_menu(
-        app: &mut App,
-        s: &mut Scene,
-        hit: &mut Vec<(Rect, Action)>,
-        modes: &[x_native::BlendKind],
-        current: x_native::BlendKind,
-        make: impl Fn(x_native::BlendKind) -> Action,
-    ) {
-        let (ax, ay) = app.blend_dd_anchor;
-        let w = 176.0;
-        let h = DROPDOWN_ROW_H * modes.len() as f64;
-        let x0 = ax.min((app.win_w - w - 8.0).max(8.0)).max(8.0);
-        let mut y0 = ay + 4.0;
-        if y0 + h > app.win_h - 8.0 {
-            y0 = (ay - 4.0 - h).max(8.0);
-        }
-        let dd = Rect::new(x0, y0, x0 + w, y0 + h);
-        elev_shadow(s, dd, 8.0, Elevation::Floating);
-        fill_rrect(s, dd, R_LG, C_FIELD);
-        stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
-        for (k, m) in modes.iter().enumerate() {
-            let r = Rect::new(
-                dd.x0,
-                dd.y0 + DROPDOWN_ROW_H * k as f64,
-                dd.x1,
-                dd.y0 + DROPDOWN_ROW_H * (k + 1) as f64,
-            );
-            let hov = hover(app, r);
-            let on = *m == current;
-            if hov {
-                fill_rect(s, r, C_FIELD_2);
-            }
-            app.fonts.text(
-                s,
-                r.x0 + 10.0,
-                r.y0 + 9.0,
-                m.label(),
-                T11,
-                if on { C_TEXT } else { C_MUTED },
-                Wt::Reg,
-            );
-            if on {
-                draw_icon(s, "check", r.x1 - 22.0, r.y0 + 8.0, ICON_XS, C_TEXT);
-            }
-            hit.push((r, make(*m)));
-        }
-    }
-
-    /// Figma's Effects list — the section that replaced a header and a `+`.
-    ///
-    /// One row per effect carrying its **type dropdown** (Figma: *"The Drop shadow
-    /// effect is selected by default. Use the dropdown to switch to Inner shadow /
-    /// Layer Blur / Background Blur"*), its **Effect settings** disclosure, its own
-    /// eye (*"you can toggle the visibility of individual effects"*) and its own
-    /// blend (*"You can apply blend modes to inner shadows, drop shadows, and noise
-    /// effects"*). The `+` opens the five types. Rows are pressed and dragged to
-    /// reorder, which is Figma's gesture.
-    fn paint_effects_section(
-        app: &mut App,
-        s: &mut Scene,
-        hit: &mut Vec<(Rect, Action)>,
-        rx: f64,
-        rw: f64,
-        pl: f64,
-        y: f64,
-    ) -> f64 {
-        let mut y = y;
-        let x0 = rx + pl;
-        let xr = rx + rw - pl;
-        section_header(
-            app,
-            s,
-            hit,
-            rx,
-            rw,
-            pl,
-            y,
-            "Effects",
-            false,
-            Action::ToggleEffectAdd,
-        );
-        y += 14.0 + LABEL_GAP;
-        if app.effect_add_open {
-            let anchor = Rect::new(xr - 18.0, y - 24.0, xr, y + 8.0);
-            let items = x_native::EffectKind::all();
-            let w = 176.0;
-            let h = DROPDOWN_ROW_H * items.len() as f64;
-            let x = anchor.x1 - w;
-            let mut dy = anchor.y1 + 4.0;
-            if dy + h > app.win_h - 8.0 {
-                dy = (anchor.y0 - 4.0 - h).max(8.0);
-            }
-            let dd = Rect::new(x, dy, x + w, dy + h);
-            elev_shadow(s, dd, 8.0, Elevation::Floating);
-            fill_rrect(s, dd, R_LG, C_FIELD);
-            stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
-            for (k, kind) in items.iter().enumerate() {
-                let r = Rect::new(
-                    dd.x0,
-                    dd.y0 + DROPDOWN_ROW_H * k as f64,
-                    dd.x1,
-                    dd.y0 + DROPDOWN_ROW_H * (k + 1) as f64,
-                );
-                if hover(app, r) {
-                    fill_rect(s, r, C_FIELD_2);
-                }
-                draw_icon(s, kind.icon(), r.x0 + 10.0, r.y0 + 8.0, ICON_XS, C_MUTED);
-                app.fonts.text(
-                    s,
-                    r.x0 + 30.0,
-                    r.y0 + 9.0,
-                    kind.label(),
-                    T11,
-                    C_TEXT,
-                    Wt::Reg,
-                );
-                hit.push((r, Action::AddEffect(*kind)));
-            }
-            y = dd.y1 + 8.0;
-        }
-
-        let Some(id) = app.doc_ref().selected_id() else {
-            return y;
-        };
-        let layers = app.effect_layers_of(&id);
-        app.effect_rows.clear();
-        if layers.is_empty() {
-            app.fonts.text(s, x0, y, "No effects", T10, C_DIM, Wt::Reg);
-            y += 20.0;
-            return y;
-        }
-
-        for (i, layer) in layers.iter().enumerate() {
-            if i > 0 {
-                hline(s, rx, rx + rw, y - 6.0, C_LINE);
-            }
-            let row = Rect::new(x0, y, xr, y + 24.0);
-            app.effect_rows.push(row);
-            if app.effect_drag_over == Some(i) {
-                fill_rrect(s, row, R_SM, C_SEL_WASH);
-            } else if hover(app, row) {
-                fill_rrect(s, row, R_SM, C_ROW_HOVER);
-            }
-            hit.push((row, Action::EffectRow(i)));
-
-            // the type dropdown: the row's own words, and the type's icon
-            let kind = layer.effect.kind();
-            draw_icon(s, kind.icon(), x0 + 2.0, y + 6.0, ICON_XS, C_MUTED);
-            draw_icon(s, "chevron-down", x0 + 18.0, y + 7.0, ICON_XS, C_DIM);
-            app.fonts
-                .text(s, x0 + 34.0, y + 5.0, kind.label(), T11, C_TEXT, Wt::Reg);
-            hit.push((
-                Rect::new(x0, y, x0 + 132.0, y + 24.0),
-                Action::ToggleEffectKind(i),
-            ));
-            if app.effect_kind_open == Some(i) {
-                app.blend_dd_anchor = (x0 + 2.0, y + 22.0);
-            }
-
-            // the row's own buttons: Eye, Duplicate, Effect settings, Remove
-            let mut bx = xr - 24.0;
-            let remove = Rect::new(bx, y + 2.0, bx + 20.0, y + 22.0);
-            if hover(app, remove) {
-                fill_rrect(s, remove, R_SM, C_FIELD_2);
-            }
-            draw_icon(s, "minus", remove.x0 + 4.0, remove.y0 + 5.0, ICON_XS, C_DIM);
-            hit.push((remove, Action::RemoveEffect(i)));
-            bx -= 24.0;
-            let gear = Rect::new(bx, y + 2.0, bx + 20.0, y + 22.0);
-            let gear_on = app.effect_settings == Some(i);
-            if hover(app, gear) || gear_on {
-                fill_rrect(s, gear, R_SM, if gear_on { C_FIELD_2 } else { C_ROW_HOVER });
-            }
-            draw_icon(
-                s,
-                "sliders-horizontal",
-                gear.x0 + 4.0,
-                gear.y0 + 5.0,
-                ICON_XS,
-                C_DIM,
-            );
-            tip(app, gear, "Effect settings");
-            hit.push((gear, Action::ToggleEffectSettings(i)));
-            bx -= 24.0;
-            let dup = Rect::new(bx, y + 2.0, bx + 20.0, y + 22.0);
-            if hover(app, dup) {
-                fill_rrect(s, dup, R_SM, C_FIELD_2);
-            }
-            draw_icon(s, "copy", dup.x0 + 4.0, dup.y0 + 5.0, ICON_XS, C_DIM);
-            tip(app, dup, "Duplicate effect");
-            hit.push((dup, Action::DuplicateEffect(i)));
-            bx -= 24.0;
-            let eye = Rect::new(bx, y + 2.0, bx + 20.0, y + 22.0);
-            if hover(app, eye) || !layer.visible {
-                fill_rrect(s, eye, R_SM, C_FIELD_2);
-            }
-            draw_icon(
-                s,
-                if layer.visible { "eye" } else { "eye-off" },
-                eye.x0 + 4.0,
-                eye.y0 + 5.0,
-                ICON_XS,
-                if layer.visible { C_DIM } else { C_TEXT },
-            );
-            tip(app, eye, "Toggle effect visibility");
-            hit.push((eye, Action::ToggleEffectVisible(i)));
-            y += 28.0;
-
-            if app.effect_settings == Some(i) {
-                // Figma's *Effect settings*: the type's own rows. Which fields
-                // exist comes from the model, so a Blur shows Radius and Noise
-                // shows Density without the panel carrying a second table.
-                let mut sy = y;
-                let fields = layer.effect.fields();
-                let cols: Vec<(x_native::EffectField, String)> = fields
-                    .iter()
-                    .map(|f| (*f, fmt_num(layer.effect.field(*f))))
-                    .collect();
-                let col_w = 76.0;
-                let gap_w = 8.0;
-                // labels
-                for (k, (f, _)) in cols.iter().enumerate() {
-                    let cx = x0 + k as f64 * (col_w + gap_w);
-                    if cx + col_w > xr {
-                        break;
-                    }
-                    app.fonts.text(s, cx, sy, f.label(), T10, C_DIM, Wt::Reg);
-                }
-                sy += 12.0 + LABEL_GAP;
-                for (k, (f, v)) in cols.iter().enumerate() {
-                    let cx = x0 + k as f64 * (col_w + gap_w);
-                    if cx + col_w > xr {
-                        break;
-                    }
-                    let r = Rect::new(cx, sy, cx + col_w, sy + 24.0);
-                    let fid = crate::state::FieldId::for_effect(i, *f);
-                    let shown = field_val(app, fid, v.clone());
-                    input(
-                        app,
-                        s,
-                        hit,
-                        r,
-                        None,
-                        &shown,
-                        true,
-                        Some(Action::Field(fid)),
-                        None,
-                    );
-                }
-                sy += 24.0 + 8.0;
-
-                // a shadow's **Fill**: the swatch opens the real colour popover,
-                // and its target is this effect (never the layer's fill)
-                if let Some(color) = layer.effect.color() {
-                    let fr = Rect::new(x0, sy, x0 + 96.0, sy + 24.0);
-                    fill_rrect(s, fr, R_MD, C_FIELD);
-                    if hover(app, fr) {
-                        stroke_rrect(s, fr, R_MD, C_LINE_2, 1.0);
-                    }
-                    let sw = Rect::new(fr.x0 + 4.0, sy + 4.0, fr.x0 + 20.0, sy + 20.0);
-                    fill_rrect(s, sw, R_XS, color);
-                    stroke_rrect(s, sw, R_XS, C_LINE_2, 1.0);
-                    app.fonts
-                        .text(s, fr.x0 + 26.0, sy + 5.0, "Fill", T10, C_DIM, Wt::Reg);
-                    hit.push((
-                        sw,
-                        Action::ToggleColorPicker(crate::state::PaintTarget::Effect(i)),
-                    ));
-                    sy += 24.0 + 8.0;
-                }
-
-                // the effect's own **blend** (Figma: shadows, inner shadows, noise)
-                let blend_row = Rect::new(x0, sy, xr, sy + 24.0);
-                if hover(app, blend_row) {
-                    fill_rrect(s, blend_row, R_MD, C_FIELD_2);
-                }
-                app.fonts.text(
-                    s,
-                    blend_row.x0 + 8.0,
-                    sy + 5.0,
-                    "Blend",
-                    T10,
-                    C_TEXT,
-                    Wt::Reg,
-                );
-                let bl = layer.blend.label();
-                let blw = app.fonts.measure(bl, T11, Wt::Reg);
-                app.fonts.text(
-                    s,
-                    blend_row.x1 - 20.0 - blw,
-                    sy + 4.0,
-                    bl,
-                    T11,
-                    C_DIM,
-                    Wt::Reg,
-                );
-                draw_icon(
-                    s,
-                    "chevron-down",
-                    blend_row.x1 - 16.0,
-                    sy + 7.0,
-                    ICON_XS,
-                    C_DIM,
-                );
-                hit.push((blend_row, Action::ToggleEffectBlend(i)));
-                if app.effect_blend_open == Some(i) {
-                    app.blend_dd_anchor = (blend_row.x0, blend_row.y1);
-                }
-                sy += 24.0 + 8.0;
-                y = sy;
-            }
-        }
-        y += 6.0
-    }
-
     // --- Effects -------------------------------------------------------
     // Figma's list: one row per effect, each with its type dropdown, its
     // *Effect settings*, its own eye and its own blend; drag a row to reorder.
@@ -8272,6 +7916,362 @@ fn paint_variant_chrome(app: &mut App, s: &mut Scene) {
         app.fonts
             .text_center(s, chip, &name, T10, C_ON_ACCENT, Wt::Med, true);
     }
+}
+
+// ------------------------------------------------------------ effects list
+
+/// One row's place for the drag: the index whose row the pointer is inside.
+/// `None` outside the list, so a drag that leaves it commits nothing.
+pub fn effect_drop_index(app: &App, p: Point) -> Option<usize> {
+    app.effect_rows
+        .iter()
+        .position(|r| p.y >= r.y0 && p.y <= r.y1)
+}
+
+/// The blend a paint popover is currently showing: the effect's own blend, or
+/// the first fill's / stroke's. Used by the popover's *Apply blend mode* row.
+fn paint_target_blend(app: &App, t: crate::state::PaintTarget) -> x_native::BlendKind {
+    let Some(id) = app.doc_ref().selected_id() else {
+        return x_native::BlendKind::Normal;
+    };
+    match t {
+        crate::state::PaintTarget::Effect(i) => app
+            .effect_layers_of(&id)
+            .get(i)
+            .map(|l| l.blend)
+            .unwrap_or(x_native::BlendKind::Normal),
+        target => {
+            let d = app.doc_ref();
+            crate::editor_ui::find_node(&d.editor_ref().root, &id)
+                .and_then(|n| {
+                    let layers = if target.is_fill() {
+                        &n.fill_layers
+                    } else {
+                        &n.stroke_layers
+                    };
+                    layers.first().map(|l| l.blend)
+                })
+                .unwrap_or(x_native::BlendKind::Normal)
+        }
+    }
+}
+
+/// Figma's blend dropdown. `modes` is the list for the thing being blended —
+/// the layer's 19 (Pass through first) or a paint's 18 (no Pass through) — so
+/// one painter serves the layer row, the popover and every effect row.
+fn paint_blend_menu(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    modes: &[x_native::BlendKind],
+    current: x_native::BlendKind,
+    make: impl Fn(x_native::BlendKind) -> Action,
+) {
+    let (ax, ay) = app.blend_dd_anchor;
+    let w = 176.0;
+    let h = DROPDOWN_ROW_H * modes.len() as f64;
+    let x0 = ax.min((app.win_w - w - 8.0).max(8.0)).max(8.0);
+    let mut y0 = ay + 4.0;
+    if y0 + h > app.win_h - 8.0 {
+        y0 = (ay - 4.0 - h).max(8.0);
+    }
+    let dd = Rect::new(x0, y0, x0 + w, y0 + h);
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, R_LG, C_FIELD);
+    stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+    for (k, m) in modes.iter().enumerate() {
+        let r = Rect::new(
+            dd.x0,
+            dd.y0 + DROPDOWN_ROW_H * k as f64,
+            dd.x1,
+            dd.y0 + DROPDOWN_ROW_H * (k + 1) as f64,
+        );
+        let hov = hover(app, r);
+        let on = *m == current;
+        if hov {
+            fill_rect(s, r, C_FIELD_2);
+        }
+        app.fonts.text(
+            s,
+            r.x0 + 10.0,
+            r.y0 + 9.0,
+            m.label(),
+            T11,
+            if on { C_TEXT } else { C_MUTED },
+            Wt::Reg,
+        );
+        if on {
+            draw_icon(s, "check", r.x1 - 22.0, r.y0 + 8.0, ICON_XS, C_TEXT);
+        }
+        hit.push((r, make(*m)));
+    }
+}
+
+/// Figma's Effects list — the section that replaced a header and a `+`.
+///
+/// One row per effect carrying its **type dropdown** (Figma: *"The Drop shadow
+/// effect is selected by default. Use the dropdown to switch to Inner shadow /
+/// Layer Blur / Background Blur"*), its **Effect settings** disclosure, its own
+/// eye (*"you can toggle the visibility of individual effects"*) and its own
+/// blend (*"You can apply blend modes to inner shadows, drop shadows, and noise
+/// effects"*). The `+` opens the five types. Rows are pressed and dragged to
+/// reorder, which is Figma's gesture.
+fn paint_effects_section(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    rx: f64,
+    rw: f64,
+    pl: f64,
+    y: f64,
+) -> f64 {
+    let mut y = y;
+    let x0 = rx + pl;
+    let xr = rx + rw - pl;
+    section_header(
+        app,
+        s,
+        hit,
+        rx,
+        rw,
+        pl,
+        y,
+        "Effects",
+        false,
+        Action::ToggleEffectAdd,
+    );
+    y += 14.0 + LABEL_GAP;
+    if app.effect_add_open {
+        let anchor = Rect::new(xr - 18.0, y - 24.0, xr, y + 8.0);
+        let items = x_native::EffectKind::all();
+        let w = 176.0;
+        let h = DROPDOWN_ROW_H * items.len() as f64;
+        let x = anchor.x1 - w;
+        let mut dy = anchor.y1 + 4.0;
+        if dy + h > app.win_h - 8.0 {
+            dy = (anchor.y0 - 4.0 - h).max(8.0);
+        }
+        let dd = Rect::new(x, dy, x + w, dy + h);
+        elev_shadow(s, dd, 8.0, Elevation::Floating);
+        fill_rrect(s, dd, R_LG, C_FIELD);
+        stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+        for (k, kind) in items.iter().enumerate() {
+            let r = Rect::new(
+                dd.x0,
+                dd.y0 + DROPDOWN_ROW_H * k as f64,
+                dd.x1,
+                dd.y0 + DROPDOWN_ROW_H * (k + 1) as f64,
+            );
+            if hover(app, r) {
+                fill_rect(s, r, C_FIELD_2);
+            }
+            draw_icon(s, kind.icon(), r.x0 + 10.0, r.y0 + 8.0, ICON_XS, C_MUTED);
+            app.fonts.text(
+                s,
+                r.x0 + 30.0,
+                r.y0 + 9.0,
+                kind.label(),
+                T11,
+                C_TEXT,
+                Wt::Reg,
+            );
+            hit.push((r, Action::AddEffect(*kind)));
+        }
+        y = dd.y1 + 8.0;
+    }
+
+    let Some(id) = app.doc_ref().selected_id() else {
+        return y;
+    };
+    let layers = app.effect_layers_of(&id);
+    app.effect_rows.clear();
+    if layers.is_empty() {
+        app.fonts.text(s, x0, y, "No effects", T10, C_DIM, Wt::Reg);
+        y += 20.0;
+        return y;
+    }
+
+    for (i, layer) in layers.iter().enumerate() {
+        if i > 0 {
+            hline(s, rx, rx + rw, y - 6.0, C_LINE);
+        }
+        let row = Rect::new(x0, y, xr, y + 24.0);
+        app.effect_rows.push(row);
+        if app.effect_drag_over == Some(i) {
+            fill_rrect(s, row, R_SM, C_SEL_WASH);
+        } else if hover(app, row) {
+            fill_rrect(s, row, R_SM, C_ROW_HOVER);
+        }
+        hit.push((row, Action::EffectRow(i)));
+
+        // the type dropdown: the row's own words, and the type's icon
+        let kind = layer.effect.kind();
+        draw_icon(s, kind.icon(), x0 + 2.0, y + 6.0, ICON_XS, C_MUTED);
+        draw_icon(s, "chevron-down", x0 + 18.0, y + 7.0, ICON_XS, C_DIM);
+        app.fonts
+            .text(s, x0 + 34.0, y + 5.0, kind.label(), T11, C_TEXT, Wt::Reg);
+        hit.push((
+            Rect::new(x0, y, x0 + 132.0, y + 24.0),
+            Action::ToggleEffectKind(i),
+        ));
+        if app.effect_kind_open == Some(i) {
+            app.blend_dd_anchor = (x0 + 2.0, y + 22.0);
+        }
+
+        // the row's own buttons: Eye, Duplicate, Effect settings, Remove
+        let mut bx = xr - 24.0;
+        let remove = Rect::new(bx, y + 2.0, bx + 20.0, y + 22.0);
+        if hover(app, remove) {
+            fill_rrect(s, remove, R_SM, C_FIELD_2);
+        }
+        draw_icon(s, "minus", remove.x0 + 4.0, remove.y0 + 5.0, ICON_XS, C_DIM);
+        hit.push((remove, Action::RemoveEffect(i)));
+        bx -= 24.0;
+        let gear = Rect::new(bx, y + 2.0, bx + 20.0, y + 22.0);
+        let gear_on = app.effect_settings == Some(i);
+        if hover(app, gear) || gear_on {
+            fill_rrect(s, gear, R_SM, if gear_on { C_FIELD_2 } else { C_ROW_HOVER });
+        }
+        draw_icon(
+            s,
+            "sliders-horizontal",
+            gear.x0 + 4.0,
+            gear.y0 + 5.0,
+            ICON_XS,
+            C_DIM,
+        );
+        tip(app, gear, "Effect settings");
+        hit.push((gear, Action::ToggleEffectSettings(i)));
+        bx -= 24.0;
+        let dup = Rect::new(bx, y + 2.0, bx + 20.0, y + 22.0);
+        if hover(app, dup) {
+            fill_rrect(s, dup, R_SM, C_FIELD_2);
+        }
+        draw_icon(s, "copy", dup.x0 + 4.0, dup.y0 + 5.0, ICON_XS, C_DIM);
+        tip(app, dup, "Duplicate effect");
+        hit.push((dup, Action::DuplicateEffect(i)));
+        bx -= 24.0;
+        let eye = Rect::new(bx, y + 2.0, bx + 20.0, y + 22.0);
+        if hover(app, eye) || !layer.visible {
+            fill_rrect(s, eye, R_SM, C_FIELD_2);
+        }
+        draw_icon(
+            s,
+            if layer.visible { "eye" } else { "eye-off" },
+            eye.x0 + 4.0,
+            eye.y0 + 5.0,
+            ICON_XS,
+            if layer.visible { C_DIM } else { C_TEXT },
+        );
+        tip(app, eye, "Toggle effect visibility");
+        hit.push((eye, Action::ToggleEffectVisible(i)));
+        y += 28.0;
+
+        if app.effect_settings == Some(i) {
+            // Figma's *Effect settings*: the type's own rows. Which fields
+            // exist comes from the model, so a Blur shows Radius and Noise
+            // shows Density without the panel carrying a second table.
+            let mut sy = y;
+            let fields = layer.effect.fields();
+            let cols: Vec<(x_native::EffectField, String)> = fields
+                .iter()
+                .map(|f| (*f, fmt_num(layer.effect.field(*f))))
+                .collect();
+            let col_w = 76.0;
+            let gap_w = 8.0;
+            // labels
+            for (k, (f, _)) in cols.iter().enumerate() {
+                let cx = x0 + k as f64 * (col_w + gap_w);
+                if cx + col_w > xr {
+                    break;
+                }
+                app.fonts.text(s, cx, sy, f.label(), T10, C_DIM, Wt::Reg);
+            }
+            sy += 12.0 + LABEL_GAP;
+            for (k, (f, v)) in cols.iter().enumerate() {
+                let cx = x0 + k as f64 * (col_w + gap_w);
+                if cx + col_w > xr {
+                    break;
+                }
+                let r = Rect::new(cx, sy, cx + col_w, sy + 24.0);
+                let fid = crate::state::FieldId::for_effect(i, *f);
+                let shown = field_val(app, fid, v.clone());
+                input(
+                    app,
+                    s,
+                    hit,
+                    r,
+                    None,
+                    &shown,
+                    true,
+                    Some(Action::Field(fid)),
+                    None,
+                );
+            }
+            sy += 24.0 + 8.0;
+
+            // a shadow's **Fill**: the swatch opens the real colour popover,
+            // and its target is this effect (never the layer's fill)
+            if let Some(color) = layer.effect.color() {
+                let fr = Rect::new(x0, sy, x0 + 96.0, sy + 24.0);
+                fill_rrect(s, fr, R_MD, C_FIELD);
+                if hover(app, fr) {
+                    stroke_rrect(s, fr, R_MD, C_LINE_2, 1.0);
+                }
+                let sw = Rect::new(fr.x0 + 4.0, sy + 4.0, fr.x0 + 20.0, sy + 20.0);
+                fill_rrect(s, sw, R_XS, color);
+                stroke_rrect(s, sw, R_XS, C_LINE_2, 1.0);
+                app.fonts
+                    .text(s, fr.x0 + 26.0, sy + 5.0, "Fill", T10, C_DIM, Wt::Reg);
+                hit.push((
+                    sw,
+                    Action::ToggleColorPicker(crate::state::PaintTarget::Effect(i)),
+                ));
+                sy += 24.0 + 8.0;
+            }
+
+            // the effect's own **blend** (Figma: shadows, inner shadows, noise)
+            let blend_row = Rect::new(x0, sy, xr, sy + 24.0);
+            if hover(app, blend_row) {
+                fill_rrect(s, blend_row, R_MD, C_FIELD_2);
+            }
+            app.fonts.text(
+                s,
+                blend_row.x0 + 8.0,
+                sy + 5.0,
+                "Blend",
+                T10,
+                C_TEXT,
+                Wt::Reg,
+            );
+            let bl = layer.blend.label();
+            let blw = app.fonts.measure(bl, T11, Wt::Reg);
+            app.fonts.text(
+                s,
+                blend_row.x1 - 20.0 - blw,
+                sy + 4.0,
+                bl,
+                T11,
+                C_DIM,
+                Wt::Reg,
+            );
+            draw_icon(
+                s,
+                "chevron-down",
+                blend_row.x1 - 16.0,
+                sy + 7.0,
+                ICON_XS,
+                C_DIM,
+            );
+            hit.push((blend_row, Action::ToggleEffectBlend(i)));
+            if app.effect_blend_open == Some(i) {
+                app.blend_dd_anchor = (blend_row.x0, blend_row.y1);
+            }
+            sy += 24.0 + 8.0;
+            y = sy;
+        }
+    }
+    y += 6.0
 }
 
 /// The inspector's own popovers — the layer / paint / effect blend menus and an
