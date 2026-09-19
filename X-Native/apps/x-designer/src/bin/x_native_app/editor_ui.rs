@@ -8011,9 +8011,10 @@ fn paint_blend_menu(
 /// Scroll the right panel until the Effects section is at the top of the
 /// panel viewport. The section is the tail of the DESIGN column, so at scroll 0
 /// it lives below the fold — and the panel drops hit rects that leave the
-/// viewport (see `paint_right`), so anything that means to *click* its rows has
-/// to make the same scroll a user makes to reach them.
-#[cfg(test)]
+/// viewport (see `paint_right`), so anything that means to *click* its rows —
+/// a test, a screenshot — has to make the same scroll a user makes to reach
+/// them. (It stays out of the file's test tail on purpose: the design-sheet
+/// scan reads each file only up to that marker, and this one sits mid-file.)
 pub fn scroll_effects_into_view(app: &mut App) {
     let mut scene = vello::Scene::new();
     paint(app, &mut scene);
@@ -8320,7 +8321,7 @@ fn paint_effects_menus(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action
         paint_blend_menu(
             app,
             s,
-            &mut hit,
+            hit,
             &x_native::BlendKind::layer_modes(),
             cur,
             Action::SetLayerBlend,
@@ -8330,7 +8331,7 @@ fn paint_effects_menus(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action
         paint_blend_menu(
             app,
             s,
-            &mut hit,
+            hit,
             &x_native::BlendKind::paint_modes(),
             cur,
             move |m| Action::SetPaintBlend(t, m),
@@ -8344,7 +8345,7 @@ fn paint_effects_menus(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action
         paint_blend_menu(
             app,
             s,
-            &mut hit,
+            hit,
             &x_native::BlendKind::paint_modes(),
             cur,
             move |m| Action::SetEffectBlend(i, m),

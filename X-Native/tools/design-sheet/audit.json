@@ -70,7 +70,7 @@
     },
     "inkLiterals": {
       "dashboard.rs": 0,
-      "editor_ui.rs": 4,
+      "editor_ui.rs": 3,
       "board_ui.rs": 0,
       "loading.rs": 0,
       "command.rs": 0,
@@ -96,7 +96,7 @@
       48
     ],
     "total": 774,
-    "onLadder": 375,
+    "onLadder": 374,
     "perFile": {
       "dashboard.rs": 129,
       "editor_ui.rs": 604,
@@ -109,7 +109,7 @@
     "top": [
       {
         "value": 8,
-        "count": 130,
+        "count": 129,
         "onLadder": true
       },
       {
