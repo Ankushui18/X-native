@@ -356,14 +356,14 @@ mod tests {
         assert!((fresh.opacity - 0.5).abs() < 0.01);
         assert!((fresh.x - 200.0).abs() < 0.01, "it arrives where it lives");
         // matched but fixed: no transition, so nothing to interpolate
-        assert!(mid.get("bar-b").is_none(), "a fixed match holds still");
+        assert!(!mid.contains_key("bar-b"), "a fixed match holds still");
         // the map is keyed by destination id, and outgoing-only layers are
         // simply not part of the new screen's picture
         assert!(
-            mid.get("card-a").is_none(),
+            !mid.contains_key("card-a"),
             "keyed by destination, not source"
         );
-        assert!(mid.get("gone-a").is_none());
+        assert!(!mid.contains_key("gone-a"));
     }
 
     #[test]

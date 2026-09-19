@@ -1574,29 +1574,33 @@ mod tests {
             .child(ghost)
             .child(fresh);
 
-        // document order, parents before their children: [card, title, bar,
-        // new]; the decisions are Figma's four cases in that order
+        // document order, parents before their children: [card, title, new,
+        // new-title, pinned, ghost, fresh] — Figma's four cases among them
         let plan = matching_layers(&from, &to);
-        assert_eq!(plan.len(), 4, "every destination layer is planned");
-        assert_eq!(plan[0].to, "card-b");
-        assert_eq!(plan[0].name, "Card", "document order, parents first");
+        assert_eq!(plan.len(), 7, "every destination layer is planned");
+        assert_eq!(plan[0].to, "card-to", "document order, parents first");
+        assert_eq!(plan[0].name, "Card");
         assert_eq!(
             plan[0].transition,
             LayerTransition::SmartAnimate {
-                from: "card-a".into(),
+                from: "card-from".into(),
             }
         );
         // the child matches through the hierarchy, not through the screens
         assert_eq!(
             plan[1].transition,
             LayerTransition::SmartAnimate {
-                from: "title-a".into(),
+                from: "title-from".into(),
             }
         );
-        // matched but fixed: no transition at all
-        assert_eq!(plan[2].transition, LayerTransition::Hold);
-        // a layer the outgoing screen never had dissolves in
+        // its parent is renamed, so the same child name is another layer
         assert_eq!(plan[3].transition, LayerTransition::Dissolve);
+        // matched but fixed: no transition at all
+        assert_eq!(plan[4].transition, LayerTransition::Hold);
+        // a fixed layer with nothing to match dissolves, not holds
+        assert_eq!(plan[5].transition, LayerTransition::Dissolve);
+        // and a layer the outgoing screen never had dissolves in
+        assert_eq!(plan[6].transition, LayerTransition::Dissolve);
     }
 
     #[test]
