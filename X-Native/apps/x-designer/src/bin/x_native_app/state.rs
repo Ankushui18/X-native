@@ -424,13 +424,6 @@ pub fn miter_limit_to_angle(limit: f64) -> f64 {
     2.0 * (1.0 / limit.max(1.0)).asin().to_degrees()
 }
 
-/// The miter limit Figma's own default angle (28.96°) works out to — the 4.0
-/// the model already carries, which is why the conversion is the honest way to
-/// show the field.
-pub fn miter_angle_default() -> f64 {
-    miter_limit_to_angle(4.0)
-}
-
 /// One row of Figma's **Advanced stroke settings** panel (help 360049283914).
 /// The panel IS this list: the card's height, the painter and the tests all
 /// read the same rows, so a row cannot go missing from one of them.
@@ -7303,7 +7296,8 @@ mod stroke_panel_tests {
     /// and the round trip through both directions is exact.
     #[test]
     fn the_miter_angle_is_the_limit_it_stands_for() {
-        assert!((miter_angle_default() - 28.96).abs() < 0.01);
+        // Figma's own default angle is the 4.0 limit the model already carries
+        assert!((miter_limit_to_angle(4.0) - 28.96).abs() < 0.01);
         assert!((miter_angle_to_limit(28.96) - 4.0).abs() < 0.001);
         for deg in [5.0, 28.96, 60.0, 120.0, 179.0] {
             let back = miter_limit_to_angle(miter_angle_to_limit(deg));
@@ -7389,7 +7383,7 @@ mod stroke_panel_tests {
         let o = node_stroke_options(&n);
         assert!(o.dash.is_empty(), "a fresh layer has no dashes");
         assert_eq!(o.join, StrokeJoin::Miter, "Figma's default join");
-        assert!((miter_limit_to_angle(o.miter_limit) - miter_angle_default()).abs() < 1e-9);
+        assert!((miter_limit_to_angle(o.miter_limit) - miter_limit_to_angle(4.0)).abs() < 1e-9);
         assert_eq!(o.cap_start, StrokeCap::None, "a butt end by default");
         assert_eq!(o.cap_end, StrokeCap::None);
     }
