@@ -16134,6 +16134,52 @@ fn screenshot_screens_r7() {
     app.doc().scroll_right = 860.0;
     shoot("editor-component-props", &mut app);
 
+    // 27. Effects list (Figma's Effects section, help 360041488473): two
+    //     effects on one layer, the first row's *Effect settings* open — X, Y,
+    //     Blur and the shadow's Fill swatch — and the panel scrolled to the
+    //     section, which is the tail of the DESIGN column.
+    let mut app = App::demo();
+    app.win_w = 1440.0;
+    app.win_h = 900.0;
+    app.screen = Screen::Editor;
+    app.center_view();
+    {
+        let doc = app.doc();
+        let root_id = doc.editor_ref().root.id.clone();
+        doc.editor().insert_node(
+            &root_id,
+            Node::rect(
+                "fx-card",
+                300.0,
+                220.0,
+                260.0,
+                180.0,
+                x_native::Color::WHITE,
+            ),
+        );
+        doc.editor().add_effect_layer(
+            "fx-card",
+            x_native::Effect::default_of(x_native::EffectKind::DropShadow),
+        );
+        doc.editor().add_effect_layer(
+            "fx-card",
+            x_native::Effect::default_of(x_native::EffectKind::LayerBlur),
+        );
+        doc.editor().selection = vec!["fx-card".into()];
+    }
+    editor_ui::scroll_effects_into_view(&mut app);
+    app.effect_settings = Some(0);
+    shoot("editor-effects", &mut app);
+
+    // 28. the same section with its popovers open: the `+` menu (Figma's five
+    //     types) and the first row's blend menu (Figma's shadow modes — no
+    //     *Pass through*, which "cannot be applied to fills or effects")
+    app.effect_add_open = true;
+    shoot("editor-effects-menu", &mut app);
+    app.effect_add_open = false;
+    app.effect_blend_open = Some(0);
+    shoot("editor-effects-blend", &mut app);
+
     // 26. r15 C18: comment pins — resolved pin, open thread popover, and
     //     the new-comment composer, all above the canvas content
     let mut app = App::demo();

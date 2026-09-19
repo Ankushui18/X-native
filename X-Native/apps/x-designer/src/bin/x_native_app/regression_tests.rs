@@ -3969,8 +3969,9 @@ fn the_effects_section_lists_every_effect_with_figmas_controls() {
             .add_effect_layer("fx", x_native::Effect::default_of(EffectKind::LayerBlur));
         d.editor().selection = vec!["fx".into()];
     }
-    let mut scene = vello::Scene::new();
-    crate::editor_ui::paint(&mut h.app, &mut scene);
+    // the section is the tail of the DESIGN column: scroll to it, the way a
+    // user does — the panel drops hit rects that leave its viewport
+    crate::editor_ui::scroll_effects_into_view(&mut h.app);
 
     // one row per effect, top to bottom, and no add menu until it is opened
     assert_eq!(h.app.effect_rows.len(), 2, "one row per effect");
@@ -4064,6 +4065,7 @@ fn the_effects_section_lists_every_effect_with_figmas_controls() {
 #[test]
 fn the_blend_menus_offer_figmas_modes_and_write_the_choice() {
     let mut h = effect_host();
+    crate::editor_ui::scroll_effects_into_view(&mut h.app);
     h.dispatch(Action::ToggleLayerBlend);
     let mut scene = vello::Scene::new();
     crate::editor_ui::paint(&mut h.app, &mut scene);
@@ -4130,8 +4132,7 @@ fn dragging_an_effect_row_reorders_the_stack() {
             .add_effect_layer("fx", x_native::Effect::default_of(EffectKind::LayerBlur));
         d.editor().selection = vec!["fx".into()];
     }
-    let mut scene = vello::Scene::new();
-    crate::editor_ui::paint(&mut h.app, &mut scene);
+    crate::editor_ui::scroll_effects_into_view(&mut h.app);
     let rows = h.app.effect_rows.clone();
     assert_eq!(rows.len(), 2);
     let (a, b) = (rows[0].center(), rows[1].center());

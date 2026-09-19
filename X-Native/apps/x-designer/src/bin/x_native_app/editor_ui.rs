@@ -78,6 +78,7 @@ pub fn paint(app: &mut App, s: &mut Scene) {
     if let Some(i) = app.dropdown_proto_trigger {
         paint_proto_trigger_dropdown(app, s, &mut hit, i);
     }
+    paint_effects_menus(app, s, &mut hit);
     if app.paint_lib.is_some() {
         paint_paint_library(app, s, &mut hit);
     }
@@ -8007,6 +8008,29 @@ fn paint_blend_menu(
     }
 }
 
+/// Scroll the right panel until the Effects section is at the top of the
+/// panel viewport. The section is the tail of the DESIGN column, so at scroll 0
+/// it lives below the fold — and the panel drops hit rects that leave the
+/// viewport (see `paint_right`), so anything that means to *click* its rows has
+/// to make the same scroll a user makes to reach them.
+#[cfg(test)]
+pub fn scroll_effects_into_view(app: &mut App) {
+    let mut scene = vello::Scene::new();
+    paint(app, &mut scene);
+    let Some(first) = app.effect_rows.first().copied() else {
+        return;
+    };
+    // the panel's scroll region starts one pixel under this divider
+    let top = crate::theme::ED_TITLE_H + 89.0;
+    // the header (and its `+`) sits just above the first row
+    let need = first.y0 - 34.0 - (top + 8.0);
+    if need > 0.0 {
+        app.doc().scroll_right += need;
+        let mut scene = vello::Scene::new();
+        paint(app, &mut scene);
+    }
+}
+
 /// Figma's Effects list — the section that replaced a header and a `+`.
 ///
 /// One row per effect carrying its **type dropdown** (Figma: *"The Drop shadow
@@ -8041,44 +8065,10 @@ fn paint_effects_section(
         Action::ToggleEffectAdd,
     );
     y += 14.0 + LABEL_GAP;
-    if app.effect_add_open {
-        let anchor = Rect::new(xr - 18.0, y - 24.0, xr, y + 8.0);
-        let items = x_native::EffectKind::all();
-        let w = 176.0;
-        let h = DROPDOWN_ROW_H * items.len() as f64;
-        let x = anchor.x1 - w;
-        let mut dy = anchor.y1 + 4.0;
-        if dy + h > app.win_h - 8.0 {
-            dy = (anchor.y0 - 4.0 - h).max(8.0);
-        }
-        let dd = Rect::new(x, dy, x + w, dy + h);
-        elev_shadow(s, dd, 8.0, Elevation::Floating);
-        fill_rrect(s, dd, R_LG, C_FIELD);
-        stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
-        for (k, kind) in items.iter().enumerate() {
-            let r = Rect::new(
-                dd.x0,
-                dd.y0 + DROPDOWN_ROW_H * k as f64,
-                dd.x1,
-                dd.y0 + DROPDOWN_ROW_H * (k + 1) as f64,
-            );
-            if hover(app, r) {
-                fill_rect(s, r, C_FIELD_2);
-            }
-            draw_icon(s, kind.icon(), r.x0 + 10.0, r.y0 + 8.0, ICON_XS, C_MUTED);
-            app.fonts.text(
-                s,
-                r.x0 + 30.0,
-                r.y0 + 9.0,
-                kind.label(),
-                T11,
-                C_TEXT,
-                Wt::Reg,
-            );
-            hit.push((r, Action::AddEffect(*kind)));
-        }
-        y = dd.y1 + 8.0;
-    }
+    // the `+` menu is a popover, not panel content: it is drawn in the popover
+    // pass (`paint_effects_menus`) so it can hang past the panel's edge — and
+    // so its rows stay clickable — exactly like the panel's other dropdowns.
+    app.effect_add_anchor = (xr, y);
 
     let Some(id) = app.doc_ref().selected_id() else {
         return y;
@@ -8275,11 +8265,51 @@ fn paint_effects_section(
     y
 }
 
-/// The inspector's own popovers — the layer / paint / effect blend menus and an
-/// effect row's type menu. Painted after the panel (they are drawn by the
-/// overlay pass) and before the canvas chrome they must never be hidden by.
-fn paint_panel_menus(app: &mut App, s: &mut Scene) {
-    let mut hit: Vec<(Rect, Action)> = Vec::new();
+/// The Effects popovers: the section's `+` menu, a row's type menu, a row's
+/// blend menu, the layer's **Apply blend mode** menu and a fill's or stroke's
+/// blend menu. They paint in the popover pass — after the panel's clip layer
+/// has been popped and after its hit filter has run — which is what lets a
+/// menu hang past the panel's edge and still take clicks, the way the frame,
+/// line-height and text-style dropdowns do.
+fn paint_effects_menus(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    if app.effect_add_open {
+        let (ax1, ay) = app.effect_add_anchor;
+        let anchor = Rect::new(ax1 - 18.0, ay - 24.0, ax1, ay + 8.0);
+        let items = x_native::EffectKind::all();
+        let w = 176.0;
+        let h = DROPDOWN_ROW_H * items.len() as f64;
+        let x = anchor.x1 - w;
+        let mut dy = anchor.y1 + 4.0;
+        if dy + h > app.win_h - 8.0 {
+            dy = (anchor.y0 - 4.0 - h).max(8.0);
+        }
+        let dd = Rect::new(x, dy, x + w, dy + h);
+        elev_shadow(s, dd, 8.0, Elevation::Floating);
+        fill_rrect(s, dd, R_LG, C_FIELD);
+        stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+        for (k, kind) in items.iter().enumerate() {
+            let r = Rect::new(
+                dd.x0,
+                dd.y0 + DROPDOWN_ROW_H * k as f64,
+                dd.x1,
+                dd.y0 + DROPDOWN_ROW_H * (k + 1) as f64,
+            );
+            if hover(app, r) {
+                fill_rect(s, r, C_FIELD_2);
+            }
+            draw_icon(s, kind.icon(), r.x0 + 10.0, r.y0 + 8.0, ICON_XS, C_MUTED);
+            app.fonts.text(
+                s,
+                r.x0 + 30.0,
+                r.y0 + 9.0,
+                kind.label(),
+                T11,
+                C_TEXT,
+                Wt::Reg,
+            );
+            hit.push((r, Action::AddEffect(*kind)));
+        }
+    }
     if app.layer_blend_open {
         let Some(id) = app.doc_ref().selected_id() else {
             return;
@@ -8364,15 +8394,11 @@ fn paint_panel_menus(app: &mut App, s: &mut Scene) {
             hit.push((r, Action::SetEffectKind(i, *kind)));
         }
     }
-    if !hit.is_empty() {
-        app.hit.append(&mut hit);
-    }
 }
 
 fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
     paint_slice_chrome(app, s);
     paint_variant_chrome(app, s);
-    paint_panel_menus(app, s);
     let doc = match app.doc_opt() {
         Some(d) => d,
         None => return,
@@ -8959,7 +8985,9 @@ fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
                     .get(i)
                     .and_then(|l| l.effect.color())
             })
-            .unwrap_or(Color::BLACK),
+            // a shadow always carries a Fill (black at 25% by default), so
+            // this only stands in for a blur or noise with no Fill to show
+            .unwrap_or(C_TEXT),
         target => {
             let hex = if target.is_fill() {
                 &info.fill

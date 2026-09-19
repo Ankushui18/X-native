@@ -805,7 +805,7 @@ impl Effect {
             },
             EffectKind::LayerBlur => Effect::LayerBlur { radius: 4.0 },
             EffectKind::BackgroundBlur => Effect::BackgroundBlur { radius: 8.0 },
-            EffectKind::Noise { .. } => Effect::Noise {
+            EffectKind::Noise => Effect::Noise {
                 amount: 0.25,
                 seed: 1,
             },

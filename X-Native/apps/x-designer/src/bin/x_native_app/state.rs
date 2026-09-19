@@ -3093,6 +3093,9 @@ pub struct App {
     pub paint_blend_open: Option<PaintTarget>,
     /// Where a blend menu anchors, recorded by the paint pass.
     pub blend_dd_anchor: (f64, f64),
+    /// Where the Effects `+` menu anchors, recorded by the panel pass: the
+    /// menu itself paints in the popover pass, above the panel's clip.
+    pub effect_add_anchor: (f64, f64),
     /// The effect rows the paint pass laid out (top to bottom) — the drop
     /// targets for reordering by dragging a row, which is Figma's gesture:
     /// *"you click and drag the handles to reorder the effects"*.
@@ -3318,6 +3321,7 @@ impl App {
             layer_blend_open: false,
             paint_blend_open: None,
             blend_dd_anchor: (0.0, 0.0),
+            effect_add_anchor: (0.0, 0.0),
             effect_rows: Vec::new(),
             effect_drag_over: None,
             status: String::from("Ready"),

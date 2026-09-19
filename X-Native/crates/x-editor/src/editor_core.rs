@@ -757,6 +757,9 @@ impl Editor {
         })
     }
     pub fn remove_effect_layer(&mut self, id: &str, index: usize) -> bool {
+        if effect_at(&self.root, id, index).is_none() {
+            return false;
+        }
         self.mutate_visual_stack(id, move |n| {
             if index < n.effect_layers.len() {
                 n.effect_layers.remove(index);
@@ -780,6 +783,9 @@ impl Editor {
         })
     }
     pub fn move_effect_layer(&mut self, id: &str, from: usize, to: usize) -> bool {
+        if effect_at(&self.root, id, from).is_none() || effect_at(&self.root, id, to).is_none() {
+            return false;
+        }
         self.mutate_visual_stack(id, move |n| {
             if from < n.effect_layers.len() && to < n.effect_layers.len() {
                 let v = n.effect_layers.remove(from);

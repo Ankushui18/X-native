@@ -2572,7 +2572,12 @@ mod tests {
             n.effect_layers[0].effect.color(),
             Some(Color::from_rgba8(255, 0, 0, 128))
         );
-        assert_eq!(n.effect_layers[1].effect.field(EffectField::Density), 0.6);
+        // the stack holds f32, so the round-trip is f32-accurate (0.6 → the
+        // nearest f32, which is what the panel prints back as 60%)
+        assert_eq!(
+            n.effect_layers[1].effect.field(EffectField::Density),
+            f64::from(0.6_f32)
+        );
 
         // per-effect visibility: hidden, but the settings stay
         assert!(e.set_effect_layer_visible("r1", 0, false));
