@@ -1009,8 +1009,8 @@ mod tests {
         let sample = |stacking: CanvasStacking| {
             let page = Node::frame("page", 100.0, 100.0).child(two_overlapping(stacking));
             let tree = build_render_tree(&page, &Variables::default());
-            let sink = RasterSink::new(None, None, 100.0, 100.0, 1.0, Some(Color::WHITE))
-                .expect("sink");
+            let sink =
+                RasterSink::new(None, None, 100.0, 100.0, 1.0, Some(Color::WHITE)).expect("sink");
             let pix = sink.render(&tree);
             sample_px(&pix, 30, 30)
         };
