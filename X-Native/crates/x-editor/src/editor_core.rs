@@ -895,26 +895,26 @@ impl Editor {
         if blend == BlendKind::PassThrough {
             return false;
         }
+        // `PaintLayer` and `StrokeLayer` are different types, so the two lists
+        // cannot share one binding — each branch reads and writes its own.
         let present = find(&self.root, id)
             .map(|n| {
-                let layers = if is_fill {
-                    &n.fill_layers
+                if is_fill {
+                    index < n.fill_layers.len()
                 } else {
-                    &n.stroke_layers
-                };
-                index < layers.len()
+                    index < n.stroke_layers.len()
+                }
             })
             .unwrap_or(false);
         if !present {
             return false;
         }
         self.mutate_visual_stack(id, move |n| {
-            let layers = if is_fill {
-                &mut n.fill_layers
-            } else {
-                &mut n.stroke_layers
-            };
-            if let Some(l) = layers.get_mut(index) {
+            if is_fill {
+                if let Some(l) = n.fill_layers.get_mut(index) {
+                    l.blend = blend;
+                }
+            } else if let Some(l) = n.stroke_layers.get_mut(index) {
                 l.blend = blend;
             }
         })

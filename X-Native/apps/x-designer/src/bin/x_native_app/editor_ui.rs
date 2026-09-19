@@ -7944,12 +7944,12 @@ fn paint_target_blend(app: &App, t: crate::state::PaintTarget) -> x_native::Blen
             let d = app.doc_ref();
             crate::editor_ui::find_node(&d.editor_ref().root, &id)
                 .and_then(|n| {
-                    let layers = if target.is_fill() {
-                        &n.fill_layers
+                    // the two layer lists are different types: one branch each
+                    if target.is_fill() {
+                        n.fill_layers.first().map(|l| l.blend)
                     } else {
-                        &n.stroke_layers
-                    };
-                    layers.first().map(|l| l.blend)
+                        n.stroke_layers.first().map(|l| l.blend)
+                    }
                 })
                 .unwrap_or(x_native::BlendKind::Normal)
         }
