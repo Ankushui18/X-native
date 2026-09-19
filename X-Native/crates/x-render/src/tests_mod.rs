@@ -1049,11 +1049,9 @@ mod outline_view_tests {
             .commands
             .iter()
             .find_map(|c| match c {
-                RenderCommand::StrokePath { key, brush, width, .. }
-                    if key.contains("chip-bg") =>
-                {
-                    Some((brush.clone(), *width))
-                }
+                RenderCommand::StrokePath {
+                    key, brush, width, ..
+                } if key.contains("chip-bg") => Some((brush.clone(), *width)),
                 _ => None,
             })
             .expect("the resolved chip is outlined");
@@ -1073,14 +1071,14 @@ mod outline_view_tests {
             })
             .collect();
         let blue = Color::from_rgb8(0, 0, 0xff);
-        let any_blue = fills.iter().any(|b| {
-            matches!(b, Brush::Solid(x) if *x == blue)
-        });
+        let any_blue = fills
+            .iter()
+            .any(|b| matches!(b, Brush::Solid(x) if *x == blue));
         assert!(!any_blue, "the master's blue fill must not paint");
         // …and no image or glyph command at all
-        let image_or_glyph = tree.commands.iter().any(|c| {
-            matches!(c, RenderCommand::Image { .. } | RenderCommand::Glyphs { .. })
-        });
+        let image_or_glyph = tree.commands.iter().any(
+            |c| matches!(c, RenderCommand::Image { .. } | RenderCommand::Glyphs { .. })
+        );
         assert!(
             !image_or_glyph,
             "the wireframe carries no image or glyph command"
