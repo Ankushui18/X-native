@@ -1029,7 +1029,7 @@ pub fn matching_layers(from: &Node, to: &Node) -> Vec<LayerPlan> {
             path.pop();
         }
     }
-    let mut by_path = Index::new();
+    let mut by_path = HashMap::new();
     index(from, &mut Vec::new(), &mut by_path);
 
     fn plan(n: &Node, path: &mut Vec<String>, by_path: &Index<'_>, out: &mut Vec<LayerPlan>) {
