@@ -34,7 +34,7 @@ recon task, not a settled fact.
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | 1 Tools (toolbar & shape menu) | 24 | 15 | 3 | 1 | 5 | 0 |
 | 2 Canvas gestures (drag) | 28 | 24 | 1 | 2 | 1 | 0 |
-| 3 Keyboard | 35 | 23 | 5 | 6 | 1 | 0 |
+| 3 Keyboard | 35 | 32 | 2 | 0 | 1 | 0 |
 | 4 Menus & palettes | 10 | 9 | 0 | 1 | 0 | 0 |
 | 5 Layers, pages, sections | 14 | 12 | 1 | 1 | 0 | 0 |
 | 6 Frame & shape properties | 20 | 18 | 1 | 1 | 0 | 0 |
@@ -52,9 +52,9 @@ recon task, not a settled fact.
 | 18 Design language (look of the app itself) | 12 | 1 | 5 | 6 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **339** | **245** | **50** | **25** | **16** | **3** |
+| **total** | **339** | **254** | **47** | **19** | **16** | **3** |
 
-The 27 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
+The 19 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
 the brief.
 
@@ -161,15 +161,15 @@ Figma's shortcut list is in the shortcuts panel (`360040328653`, tabbed, live-hi
 | 3.20 | `⌘⌥A` | select matching layers | `SelectMatching` (`⇧⌥⌘M` kept as alias) | MATCH |
 | 3.21 | `⇧R` | toggle rulers | `app.rulers` | MATCH |
 | 3.22 | `⌘'` | pixel grid | toggle exists | MATCH |
-| 3.23 | `⇧E` | toggle Design ↔ Prototype tab | *verify* — our right tabs are clicked, no key seen | **MISSING** (verify) |
-| 3.24 | `⌘R` | rename layer | rename exists but on another binding; `⌘R` = renumber ours | PARTIAL |
-| 3.25 | `⌘⇧K` | create component | menu + context path; no key | **MISSING** |
-| 3.26 | `⇧A` | add auto layout | panel + context path; no key seen | **MISSING** (verify) |
-| 3.27 | `N` / `⇧N` | zoom to next / previous frame | not implemented | **MISSING** |
-| 3.28 | `⌘⌥M` | use as mask | mask flag exists (`is_mask`), no shortcut or UI | **MISSING** |
-| 3.29 | `⌘\` / `⇧⌘\` | hide UI / hide left panel only | `⇧⌘\` minimizes our UI only | PARTIAL |
-| 3.30 | `⌘/` | quick actions / plugins | `⌘K` opens our command palette | PARTIAL (different key) |
-| 3.31 | `⌃⇧?` | keyboard-shortcuts panel | no panel (the welcome card lists a few) | **MISSING** |
+| 3.23 | `⇧E` | toggle the Design and Prototype tabs (`360040314193`) | `toggle_right_tab` → `Action::RightTab` | MATCH |
+| 3.24 | `⌘R` | rename the selected layer | `rename_selected_layer` → `App::begin_layer_rename`; our renumber keeps `⇧⌘R` | MATCH |
+| 3.25 | `⌥⌘K` | create component | `CtxCmd::MakeComponent`, the context menu's own path; the row's key was wrong — `⇧⌘K` is Figma's *Place image* and has been ours since row 9.6 | MATCH |
+| 3.26 | `⇧A` | add auto layout | `Action::AddAutoLayout`, the panel's own path | MATCH |
+| 3.27 | `N` / `⇧N` | zoom to next / previous frame | `Host::zoom_to_frame` over `zoom_to_rect` (⇧2's fit) | MATCH |
+| 3.28 | `⌘⌥M` | use as mask | shipped with masks (§28): `Action::UseAsMask` + the Mask section | MATCH |
+| 3.29 | `⌘\` / `⇧⌘\` | hide UI / hide left panel only | two keys, two states: `ui_minimized` / `left_minimized`, one gate in `editor_regions` | MATCH |
+| 3.30 | `⌘/` | quick actions / plugins | `Host::toggle_palette`, the palette `⌘K` also opens | MATCH |
+| 3.31 | `⇧?` | keyboard-shortcuts panel | `paint_shortcuts_panel`; the help page's `⌃⇧?` — this host reports the character, not the Control key | MATCH |
 | 3.32 | `⌘K` | link/copy-as? (Figma uses it for links in text) | our palette | EXTRA |
 | 3.33 | `⇧P`, `B` etc. inside text | bold/italic/underline, size steps | `⌘B`, `⌘I` in the inline editor | PARTIAL — no `⌘U`, no `⇧⌘<`/`>` size steps |
 | 3.34 | `⌘⏎` / `⌃⌥⌘⏎` | present / present with settings | flow preview key exists | PARTIAL |
@@ -718,9 +718,10 @@ rendering it.
     The honest remainder of the article: indentation levels with `Tab`/`⌘]`, **List
     spacing**, the hanging-quotes / hanging-lists toggles, counters rotating
     numbers → letters → roman per level, and `⌥8`; of the resizing article: **Auto
-    height** as a third mode of the Layout section's Resizing control. Keyboard
-    completions `N`/`⇧N`, `⌘R` rename, `⌘⇧K` component, `⇧A` auto layout, `⇧E` tab
-    toggle, the `⌃⇧?` shortcuts panel (3.23–3.31) are the rest of this item.
+    height** as a third mode of the Layout section's Resizing control. The
+    keyboard completions that finished the item (3.23–3.31: `⇧E`, `⌘R`, `⌥⌘K`,
+    `⇧A`, `N`/`⇧N`, `⌘\`, `⇧⌘\`, `⌘/`, `⇧?`, and the `⌘⌥M` row §28 had already
+    built) moved the whole of section 3's remainder into `MATCH`.
 14. Measure with `⌥` (2.24); `Space`-during-resize (2.12); stroke-style panel (8.15);
     image flip toggle (9.7); outlines mode (17.7).
 15. Clean-up layers (5.9) — chapter 4's lesson.

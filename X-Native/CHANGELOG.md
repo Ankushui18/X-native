@@ -5,6 +5,30 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-19 (Keyboard completions)
+
+Figma's [Keyboard shortcuts](https://help.figma.com/hc/en-us/articles/360040328653)
+article, rows 3.23-3.31 of the master list — the last nine keyboard rows, every one
+of them now `MATCH`. Row 3.28 (`⌘⌥M`, use as mask) was already built by the masks
+increment; this one adds the rest:
+
+- **`⇧E`** toggles the **Design** and **Prototype** tabs
+  ([Guide to prototyping](https://help.figma.com/hc/en-us/articles/360040314193)).
+  The vector eraser — ours, and Figma-Draw-only per master rows 1.19 / 20.5 — moves
+  to the plain `E` rather than keep a key Figma gives to the tab toggle.
+- **`⌘R`** renames the selected layer through `App::begin_layer_rename`, the entry
+  the layers panel's double-click already used; `⇧⌘R` keeps this host's renumber.
+- **`⇧A`** adds auto layout and **`⌥⌘K`** creates a component — each dispatching the
+  path the panel or the context menu already takes, so a key and a menu row cannot
+  drift. Row 3.25's key was wrong: `⇧⌘K` is Figma's *Place image*, which has been
+  ours since row 9.6.
+- **`N` / `⇧N`** zoom to the next / previous frame and wrap at either end, walking
+  the page's top-level frames from the one the canvas centre is inside.
+- **`⌘\`** hides the UI and **`⇧⌘\`** hides the **left panel only** — two states,
+  because Figma has two keys; the left dock yields its width in `editor_regions`.
+- **`⌘/`** opens the command palette Figma calls Quick Actions (`⌘K` still works),
+  and **`⇧?`** opens a keyboard-shortcuts panel, painted from the same table.
+
 ## [Unreleased] — 2026-09-19 (Text lists and resize-to-fit)
 
 Figma's [Create bulleted and numbered lists](https://help.figma.com/hc/en-us/articles/360040449773)

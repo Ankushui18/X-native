@@ -91,6 +91,9 @@ pub fn paint(app: &mut App, s: &mut Scene) {
         paint_lib_review(app, s, &mut hit);
     }
     paint_color_picker(app, s, &mut hit);
+    if app.shortcuts_open {
+        paint_shortcuts_panel(app, s, &mut hit);
+    }
     paint_carets(app, s);
     app.hit = hit;
     let _ = reg;
@@ -2525,8 +2528,9 @@ fn paint_notifications(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action
 
 fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let reg = app.editor_regions();
-    // If UI is minimized, hide the sidebar
-    if app.ui_minimized {
+    // If UI is minimized, hide the sidebar — `left_minimized` is the ⇧⌘\
+    // half of the same idea: the LEFT panel goes, the inspector stays
+    if app.ui_minimized || app.left_minimized {
         return;
     }
     let sidebar = reg.sidebar;
@@ -3270,7 +3274,7 @@ fn collect_tree_rows(app: &App, scroll: f64, height: f64) -> (Vec<RowRef>, f64) 
 /// source shared by paint and drag hit-testing, so drop targets can
 /// never drift from the painted rows.
 pub(crate) fn tree_geometry(app: &App) -> Option<(f64, f64, f64)> {
-    if app.ui_minimized {
+    if app.ui_minimized || app.left_minimized {
         return None;
     }
     let doc = app.doc_opt()?;
@@ -8802,6 +8806,81 @@ fn paint_effects_section(
     }
     y += 6.0;
     y
+}
+
+/// Figma's keyboard-shortcuts panel: the sheet `⇧?` opens (the help page's
+/// `⌃⇧?`; this host reports the character, not the Control key). Two columns
+/// of the keys this host actually answers to, and a full-window scrim pushed
+/// LAST so the reverse scan finds it before the canvas behind it.
+fn paint_shortcuts_panel(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    const ROWS: &[(&str, &str)] = &[
+        ("V", "Move"),
+        ("F", "Frame"),
+        ("R", "Rectangle"),
+        ("O", "Ellipse"),
+        ("T", "Text"),
+        ("P", "Pen"),
+        ("K", "Scale"),
+        ("H", "Hand"),
+        ("C", "Comment"),
+        ("\u{21e7}1", "Zoom to fit"),
+        ("\u{21e7}2", "Zoom to selection"),
+        ("N / \u{21e7}N", "Next / previous frame"),
+        ("\u{21e7}E", "Design / Prototype"),
+        ("\u{21e7}A", "Add auto layout"),
+        ("\u{2318}R", "Rename layer"),
+        ("\u{2318}G / \u{21e7}\u{2318}G", "Group / ungroup"),
+        ("\u{2318}D", "Duplicate"),
+        ("\u{2325}\u{2318}M", "Use as mask"),
+        ("\u{2325}\u{2318}K", "Create component"),
+        ("\u{21e7}\u{2318}K", "Place image"),
+        ("\u{2318}/", "Quick actions"),
+        ("\u{2318}K", "Command palette"),
+        (
+            "\u{2318}\u{21e7}8 / \u{2318}\u{21e7}7",
+            "Bulleted / numbered list",
+        ),
+        ("\u{2318}\\", "Hide UI"),
+        ("\u{21e7}\u{2318}\\", "Hide left panel"),
+        ("\u{21e7}?", "This panel"),
+    ];
+    const COLS: usize = 2;
+    const ROW_H: f64 = 22.0;
+    let per_col = ROWS.len().div_ceil(COLS);
+    let w = 560.0;
+    let h = 56.0 + per_col as f64 * ROW_H + 16.0;
+    let x0 = ((app.win_w - w) / 2.0).max(8.0);
+    let y0 = ((app.win_h - h) / 2.0).max(8.0);
+    let panel = Rect::new(
+        x0,
+        y0,
+        (x0 + w).min(app.win_w - 8.0),
+        (y0 + h).min(app.win_h - 8.0),
+    );
+    elev_shadow(s, panel, 12.0, Elevation::Floating);
+    fill_rrect(s, panel, R_LG, C_PANEL);
+    stroke_rrect(s, panel, R_LG, C_LINE_2, 1.0);
+    app.fonts.text(
+        s,
+        panel.x0 + 16.0,
+        panel.y0 + 14.0,
+        "Keyboard shortcuts",
+        T13,
+        C_TEXT,
+        Wt::Med,
+    );
+    let col_w = (panel.x1 - panel.x0) / COLS as f64;
+    for (i, (key, what)) in ROWS.iter().enumerate() {
+        let rx = panel.x0 + 16.0 + (i / per_col) as f64 * col_w;
+        let ry = panel.y0 + 46.0 + (i % per_col) as f64 * ROW_H;
+        app.fonts.text(s, rx, ry, key, T11, C_TEXT, Wt::Med);
+        app.fonts
+            .text(s, rx + 116.0, ry, what, T11, C_MUTED, Wt::Reg);
+    }
+    hit.push((
+        Rect::new(0.0, 0.0, app.win_w, app.win_h),
+        Action::CloseShortcuts,
+    ));
 }
 
 /// The Effects popovers: the section's `+` menu, a row's type menu, a row's

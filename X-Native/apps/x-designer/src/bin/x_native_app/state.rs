@@ -192,7 +192,10 @@ impl Tool {
 
     pub fn from_shortcut(key: &str, shift: bool, board: bool) -> Option<Tool> {
         match (key, shift) {
-            ("e", true) => Some(Tool::Eraser),
+            // the eraser is ours (Figma Draw, master rows 1.19 / 20.5):
+            // it keeps the plain key, because Figma's ⇧E toggles the
+            // Design and Prototype tabs (help 360040314193)
+            ("e", false) => Some(Tool::Eraser),
             ("c", false) if board => Some(Tool::BoardConnector),
             ("c", false) => Some(Tool::Comment),
             ("m", false) if !board => Some(Tool::Symmetry),
@@ -1856,6 +1859,9 @@ pub enum Action {
     /// 360040449773): none, bulleted, numbered.
     ToggleListStyle,
     SetListStyle(x_native::ListStyle),
+    /// The keyboard-shortcuts panel's scrim (`⇧?` opens the sheet): a
+    /// press anywhere outside it closes it.
+    CloseShortcuts,
     /// The Layout section's **Resizing** control for a text layer (help
     /// 27378154668951): Fixed size <-> Auto width.
     ToggleTextResize,
@@ -3568,6 +3574,13 @@ pub struct App {
     pub nav_bar_w: f64,
     pub sidebar_resizing: bool,
     pub ui_minimized: bool,
+    /// Figma's `⇧⌘\` — hide the LEFT panel only, leaving the canvas and
+    /// the inspector (`⌘\` hides the whole UI, `ui_minimized`). Two keys,
+    /// two states, so each does what Figma's own does.
+    pub left_minimized: bool,
+    /// Figma's keyboard-shortcuts panel — `⇧?` (the help page's `⌃⇧?`;
+    /// this host reports the character, not the Control key).
+    pub shortcuts_open: bool,
     pub app_menu: AppMenu,
     pub find_replace: FindReplace,
     pub notifications: NotificationCenter,
@@ -3949,6 +3962,8 @@ impl App {
             nav_bar_w: 48.0,
             sidebar_resizing: false,
             ui_minimized: false,
+            left_minimized: false,
+            shortcuts_open: false,
             app_menu: AppMenu::default(),
             find_replace: FindReplace::default(),
             notifications: NotificationCenter::default(),
@@ -4038,7 +4053,11 @@ impl App {
         // yields to the right dock's minimum, then the right takes what is
         // left over. Panels therefore stop at the floor instead of overlapping
         // each other and painting the canvas backwards.
-        let want_left = if self.ui_minimized { 0.0 } else { self.left_w };
+        let want_left = if self.ui_minimized || self.left_minimized {
+            0.0
+        } else {
+            self.left_w
+        };
         let room = (self.win_w - self.nav_bar_w - ED_CANVAS_MIN).max(0.0);
         let left = want_left.min((room - ED_RIGHT_MIN).max(0.0));
         let right = self.right_w.min((room - left).max(0.0));

@@ -8179,3 +8179,172 @@ fn a_manual_resize_pins_a_text_layer_and_the_handle_gesture_fits_it() {
         .w;
     assert!(w_fit <= w_back);
 }
+
+/// Figma's keyboard article (help 360040328653, master rows 3.23-3.31): its
+/// ⇧E toggles Design and Prototype, so the vector eraser — ours, Draw-only
+/// per rows 1.19 / 20.5 — keeps the plain key instead of stealing it.
+#[test]
+fn shift_e_toggles_the_tabs_and_the_eraser_keeps_its_own_key() {
+    let mut h = host();
+    assert_eq!(h.app.doc_ref().right_tab, crate::state::RightTab::Design);
+
+    h.app.shift = true;
+    h.on_key(Key::Character("E".into()), None);
+    h.app.shift = false;
+    assert_eq!(h.app.doc_ref().right_tab, crate::state::RightTab::Prototype);
+    assert_eq!(h.app.status, "Prototype tab");
+
+    h.app.shift = true;
+    h.on_key(Key::Character("E".into()), None);
+    h.app.shift = false;
+    assert_eq!(h.app.doc_ref().right_tab, crate::state::RightTab::Design);
+    assert_eq!(h.app.status, "Design tab");
+    assert_eq!(h.app.tool, Tool::Select, "the toggle is not a tool");
+
+    // the eraser answers to the plain key it was moved to
+    h.on_key(Key::Character("e".into()), None);
+    assert_eq!(h.app.tool, Tool::Eraser);
+}
+
+/// ⌘R renames the selected layer, ⇧A adds auto layout and ⌥⌘K makes a
+/// component — Figma's three keys for them, each on the path the menu
+/// already takes. ⇧⌘K stays Place image, ⇧⌘R stays this host's renumber.
+#[test]
+fn the_layer_keys_are_figmas_rename_auto_layout_and_component() {
+    // ⌘R: the layer's name becomes the field edit, on that node
+    let mut h = host();
+    h.app.doc().editor().selection = vec!["frame-1".into()];
+    h.app.ctrl = true;
+    h.on_key(Key::Character("r".into()), None);
+    h.app.ctrl = false;
+    assert_eq!(h.app.field.as_ref().map(|f| f.id), Some(FieldId::LayerName));
+    assert_eq!(h.app.layer_edit_id.as_deref(), Some("frame-1"));
+    assert_eq!(h.app.status, "Renaming the layer");
+
+    // ⇧A: the frame the selection names gets the layout
+    let mut h = host();
+    h.app.doc().editor().selection = vec!["frame-1".into()];
+    h.app.shift = true;
+    h.on_key(Key::Character("A".into()), None);
+    h.app.shift = false;
+    assert!(h.app.doc_ref().selected_layout().is_some(), "auto layout");
+    assert_eq!(h.app.status, "Auto Layout added");
+
+    // ⌥⌘K: the selection becomes a component
+    let mut h = host();
+    h.app.doc().editor().selection = vec!["frame-1".into()];
+    h.app.ctrl = true;
+    h.app.alt = true;
+    h.on_key(Key::Character("k".into()), None);
+    h.app.ctrl = false;
+    h.app.alt = false;
+    let names = h.app.doc_ref().editor_ref().component_names();
+    assert_eq!(names.len(), 1, "the layer is a component now: {names:?}");
+}
+
+/// N / ⇧N walk the page's frames in document order and wrap at either end
+/// (help 360040328653): every press lands the canvas on one of the page's
+/// frames, and a full loop comes back to where it started.
+#[test]
+fn n_walks_the_pages_frames_in_order() {
+    let mut h = host();
+    let root_id = {
+        let doc = h.app.doc();
+        doc.editor_ref().root.id.clone()
+    };
+    let mut second = Node::frame("frame-2", 240.0, 180.0);
+    second.name = "Second".into();
+    second.transform.x = 900.0;
+    second.transform.y = 120.0;
+    h.app.doc().editor().insert_node(&root_id, second);
+
+    let step = |h: &mut Host, back: bool| {
+        h.app.shift = back;
+        h.on_key(
+            Key::Character(if back { "N".into() } else { "n".into() }),
+            None,
+        );
+        h.app.shift = false;
+        h.app.status.clone()
+    };
+    let a = step(&mut h, false);
+    let b = step(&mut h, false);
+    assert_ne!(a, b, "N walks to the page's other frame");
+    let mut seen = [a.clone(), b.clone()];
+    seen.sort();
+    assert_eq!(seen, ["Frame: Frame", "Frame: Second"], "and names it");
+    assert_eq!(step(&mut h, false), a, "the walk wraps");
+
+    // ⇧N is the same walk backwards, from wherever N left us
+    let at = step(&mut h, false);
+    let back = step(&mut h, true);
+    assert_ne!(back, at);
+    assert_eq!(step(&mut h, true), at, "two steps back is where we were");
+}
+
+/// ⇧? opens Figma's keyboard-shortcuts sheet; a press outside it (the scrim
+/// the paint pushes last) or Esc closes it. ⌘\ hides the whole UI while
+/// ⇧⌘\ hides the LEFT panel only, and the canvas takes the width it had.
+#[test]
+fn the_shortcut_sheet_and_the_two_hide_ui_keys() {
+    let mut h = host();
+    let open_width = h.app.editor_regions().left.x1;
+
+    h.app.shift = true;
+    h.on_key(Key::Character("?".into()), None);
+    h.app.shift = false;
+    assert!(h.app.shortcuts_open, "⇧? opens the sheet");
+    assert_eq!(h.app.status, "Keyboard shortcuts");
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    assert!(
+        matches!(
+            h.app.hit.last().map(|(_, a)| a),
+            Some(Action::CloseShortcuts)
+        ),
+        "the scrim is the last hit entry, so the reverse scan finds it first"
+    );
+    h.dispatch(Action::CloseShortcuts);
+    assert!(!h.app.shortcuts_open);
+
+    h.app.shift = true;
+    h.on_key(Key::Character("?".into()), None);
+    h.app.shift = false;
+    h.on_key(Key::Named(NamedKey::Escape), None);
+    assert!(!h.app.shortcuts_open, "Esc closes it");
+
+    // ⇧⌘\ — the left panel only
+    h.app.ctrl = true;
+    h.app.shift = true;
+    h.on_key(Key::Character("\\".into()), None);
+    h.app.ctrl = false;
+    h.app.shift = false;
+    assert!(h.app.left_minimized && !h.app.ui_minimized);
+    assert_eq!(h.app.status, "Left panel hidden");
+    assert!(
+        h.app.editor_regions().left.x1 < open_width,
+        "the canvas takes the dock's width"
+    );
+    h.app.ctrl = true;
+    h.app.shift = true;
+    h.on_key(Key::Character("\\".into()), None);
+    h.app.ctrl = false;
+    h.app.shift = false;
+    assert!(!h.app.left_minimized);
+
+    // ⌘\ — the whole UI
+    h.app.ctrl = true;
+    h.on_key(Key::Character("\\".into()), None);
+    h.app.ctrl = false;
+    assert!(h.app.ui_minimized);
+
+    // ⌘/ is Figma's Quick actions key; ⌘K still toggles the same palette
+    h.app.ctrl = true;
+    h.on_key(Key::Character("/".into()), None);
+    h.app.ctrl = false;
+    assert!(h.app.palette.open, "⌘/ opens Quick actions");
+    h.app.ctrl = true;
+    h.on_key(Key::Character("k".into()), None);
+    h.app.ctrl = false;
+    assert!(!h.app.palette.open, "⌘K still toggles it");
+}

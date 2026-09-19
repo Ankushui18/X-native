@@ -6992,6 +6992,11 @@ impl Host {
             self.app.template_picker_open = false;
             return;
         }
+        // the shortcuts panel is the topmost sheet: Esc closes it first
+        if self.app.shortcuts_open && matches!(key, Key::Named(NamedKey::Escape)) {
+            self.app.shortcuts_open = false;
+            return;
+        }
         // The dashboard is reachable by keyboard, not only by pointer: Tab
         // walks the page's controls (the ring is painted from the same hit
         // list, see `dashboard::focus_targets`), Enter fires the focused one
@@ -7569,9 +7574,27 @@ impl Host {
                         self.app.nav_tab = NavTab::Variables;
                         return;
                     }
-                    // ⇧⌘\ — minimize UI
+                    // ⇧⌘\ — hide the left panel only (Figma's key for it);
+                    // ⌘\ below hides the UI
                     "\\" if self.app.shift => {
+                        self.app.left_minimized = !self.app.left_minimized;
+                        let hidden = self.app.left_minimized;
+                        self.app.status = if hidden {
+                            "Left panel hidden".into()
+                        } else {
+                            "Left panel shown".into()
+                        };
+                        return;
+                    }
+                    // ⌘\ — hide UI (Figma's shortcut)
+                    "\\" => {
                         self.app.ui_minimized = !self.app.ui_minimized;
+                        let hidden = self.app.ui_minimized;
+                        self.app.status = if hidden {
+                            "UI hidden - ⌘\\ brings it back".into()
+                        } else {
+                            "UI shown".into()
+                        };
                         return;
                     }
                     // ⇧⌘F — find
@@ -7605,25 +7628,23 @@ impl Host {
                     }
                     // ⇧⌘K — Place image (Figma's shortcut; the ⌘K command
                     // palette below keeps its own key)
+                    "k" | "K" if self.app.alt => {
+                        // the context menu's own path, so the key and the menu
+                        // cannot drift (MakeComponent is a CtxCmd, not an
+                        // Action)
+                        self.app.apply_ctx(CtxCmd::MakeComponent);
+                        return;
+                    }
                     "k" | "K" if self.app.shift => {
                         self.cmd_place_image();
                         return;
                     }
+                    "/" => {
+                        self.toggle_palette();
+                        return;
+                    }
                     "k" | "K" => {
-                        // Toggle command palette with full initialization
-                        if self.app.palette.open {
-                            self.app.palette.close();
-                        } else {
-                            self.app.palette.open();
-                            self.app.palette.register_standard_commands();
-                            // Update context before showing. The dashboard is
-                            // valid with zero open documents, so do not call
-                            // `doc()` merely to populate palette context.
-                            self.app.palette.has_selection = self
-                                .app
-                                .doc_opt()
-                                .is_some_and(|doc| !doc.editor_ref().selection.is_empty());
-                        }
+                        self.toggle_palette();
                         return;
                     }
                     "n" | "N" => {
@@ -7820,6 +7841,12 @@ impl Host {
                         self.dispatch(Action::ToggleMinimap);
                         return;
                     }
+                    // ⌘R — rename the selected layer (Figma's shortcut for
+                    // it); ⇧⌘R keeps this host's renumber
+                    "r" | "R" if !self.app.shift => {
+                        self.rename_selected_layer();
+                        return;
+                    }
                     // Layer management shortcuts
                     "r" | "R" if self.app.shift => {
                         self.dispatch(Action::RenumberSelection);
@@ -7990,6 +8017,37 @@ impl Host {
 
     fn on_character(&mut self, c: &str) {
         if self.app.screen == Screen::Editor && !self.app.ctrl {
+            // ⇧E — toggle the Design and Prototype tabs (Figma's shortcut,
+            // help 360040314193)
+            if self.app.shift && c == "E" {
+                self.toggle_right_tab();
+                return;
+            }
+            // ⇧A — add auto layout (Figma's shortcut; plain A stays free)
+            if self.app.shift && c == "A" {
+                self.dispatch(Action::AddAutoLayout);
+                return;
+            }
+            // N / ⇧N — zoom to the next / previous frame (Figma's walk)
+            if c == "n" {
+                self.zoom_to_frame(1);
+                return;
+            }
+            if self.app.shift && c == "N" {
+                self.zoom_to_frame(-1);
+                return;
+            }
+            // ⇧? — the keyboard-shortcuts panel
+            if c == "?" {
+                self.app.shortcuts_open = !self.app.shortcuts_open;
+                let open = self.app.shortcuts_open;
+                self.app.status = if open {
+                    "Keyboard shortcuts".into()
+                } else {
+                    "Shortcuts panel closed".into()
+                };
+                return;
+            }
             // Shift+R toggles the viewport rulers (⇧R types "R")
             if self.app.shift && c == "R" {
                 self.app.rulers = !self.app.rulers;
@@ -9641,6 +9699,111 @@ impl Host {
         self.app.pan.1 += target.y - now.y;
     }
 
+    /// Fit a world rect into the canvas, filling `fill` of it —
+    /// ⇧2's fit and the frame walk's fit are the same arithmetic.
+    fn zoom_to_rect(&mut self, x0: f64, y0: f64, x1: f64, y1: f64, fill: f64) {
+        let reg = self.app.editor_regions();
+        let cw = reg.canvas.x1 - reg.canvas.x0;
+        let ch = reg.canvas.y1 - reg.canvas.y0;
+        let z = ((cw / (x1 - x0).max(1.0)).min(ch / (y1 - y0).max(1.0)) * fill).clamp(0.01, 64.0);
+        self.app.zoom = z;
+        self.app.pan = (
+            reg.canvas.x0 + cw / 2.0 - (x0 + x1) / 2.0 * z,
+            reg.canvas.y0 + ch / 2.0 - (y0 + y1) / 2.0 * z,
+        );
+    }
+
+    /// N / ⇧N — zoom to the next / previous frame (help 360040328653). The
+    /// walk starts from the frame the canvas centre is inside, so repeated
+    /// presses visit the page in document order and wrap at either end.
+    fn zoom_to_frame(&mut self, step: i32) {
+        let frames: Vec<(String, String, f64, f64, f64, f64)> = {
+            let doc = self.app.doc();
+            let root = &doc.editor_ref().root;
+            root.children
+                .iter()
+                .filter(|n| matches!(n.kind, NodeKind::Frame { .. }))
+                .map(|n| {
+                    (
+                        n.id.clone(),
+                        n.name.clone(),
+                        n.transform.x,
+                        n.transform.y,
+                        n.w,
+                        n.h,
+                    )
+                })
+                .collect()
+        };
+        if frames.is_empty() {
+            self.app.status = "No frames on this page".into();
+            return;
+        }
+        let reg = self.app.editor_regions();
+        let centre = self.app.screen_to_world(Point::new(
+            (reg.canvas.x0 + reg.canvas.x1) / 2.0,
+            (reg.canvas.y0 + reg.canvas.y1) / 2.0,
+        ));
+        let at = frames.iter().position(|(_, _, x, y, w, h)| {
+            centre.x >= *x && centre.x <= x + w && centre.y >= *y && centre.y <= y + h
+        });
+        let next = match at {
+            Some(i) => (i as i32 + step).rem_euclid(frames.len() as i32) as usize,
+            None if step > 0 => 0,
+            None => frames.len() - 1,
+        };
+        let (_, name, x, y, w, h) = frames[next].clone();
+        self.zoom_to_rect(x, y, x + w, y + h, 0.9);
+        self.app.status = format!("Frame: {name}");
+    }
+
+    /// ⇧E — Figma's Design ↔ Prototype toggle (help 360040314193). Inspect is
+    /// a third tab on this host and the toggle leaves it alone.
+    fn toggle_right_tab(&mut self) {
+        use crate::state::RightTab;
+        let tab = if self.app.doc_ref().right_tab == RightTab::Prototype {
+            RightTab::Design
+        } else {
+            RightTab::Prototype
+        };
+        self.dispatch(Action::RightTab(tab));
+        self.app.status = if tab == RightTab::Prototype {
+            "Prototype tab".into()
+        } else {
+            "Design tab".into()
+        };
+    }
+
+    /// ⌘K / ⌘/ — the command palette, with its context refreshed before it
+    /// opens.
+    fn toggle_palette(&mut self) {
+        if self.app.palette.open {
+            self.app.palette.close();
+            return;
+        }
+        self.app.palette.open();
+        self.app.palette.register_standard_commands();
+        // Update context before showing. The dashboard is valid with zero
+        // open documents, so do not call `doc()` merely to populate it.
+        self.app.palette.has_selection = self
+            .app
+            .doc_opt()
+            .is_some_and(|doc| !doc.editor_ref().selection.is_empty());
+    }
+
+    /// ⌘R — Figma's rename: the selected layer's name becomes a field edit.
+    fn rename_selected_layer(&mut self) {
+        let Some(id) = self.app.doc_ref().selected_id() else {
+            self.app.status = "Select the layer to rename first".into();
+            return;
+        };
+        if !self.finish_edits() {
+            return;
+        }
+        self.app.begin_layer_rename(id);
+        self.app.status = "Renaming the layer".into();
+    }
+
     /// Zoom by `factor` anchored at screen point `p` (cursor / center).
     fn zoom_at(&mut self, p: Point, factor: f64) {
         let canvas = if self.app.screen == Screen::Board {
@@ -9679,15 +9842,7 @@ impl Host {
             }
         }
         let Some((x0, y0, x1, y1)) = bb else { return };
-        let reg = self.app.editor_regions();
-        let cw = reg.canvas.x1 - reg.canvas.x0;
-        let ch = reg.canvas.y1 - reg.canvas.y0;
-        let z = ((cw / (x1 - x0).max(1.0)).min(ch / (y1 - y0).max(1.0)) * 0.6).clamp(0.01, 64.0);
-        self.app.zoom = z;
-        self.app.pan = (
-            reg.canvas.x0 + cw / 2.0 - (x0 + x1) / 2.0 * z - 0.0,
-            reg.canvas.y0 + ch / 2.0 - (y0 + y1) / 2.0 * z,
-        );
+        self.zoom_to_rect(x0, y0, x1, y1, 0.6);
     }
 
     fn cmd_new_file(&mut self) {
@@ -11892,6 +12047,8 @@ impl Host {
                     doc.expanded.insert(id);
                 }
             }
+            // the shortcuts panel's scrim: a press outside the sheet
+            Action::CloseShortcuts => self.app.shortcuts_open = false,
             Action::RenameStart => {
                 let d = self.app.doc();
                 let name = d.file_label.clone().unwrap_or_else(|| d.name.clone());
