@@ -4873,7 +4873,7 @@ fn paint_design(
         paint_image_adjustments(app, s, hit, rx + pl, rx + rw - pl, y_after_appearance);
     if y_after_image != y_after_appearance {
         // The image-adjustment block rendered (7 sliders + the reset /
-        // rotate / flip button rows, ~310px).
+        // rotate / flip button row, ~280px).
         // Its height cannot be folded into `y0` without re-flowing every
         // offset below it, so the sections that follow keep their reference
         // positions — see the geometry note atop this function.
@@ -7615,11 +7615,11 @@ fn paint_image_adjustments(
     hit.push((rot_ccw_r, Action::RotateImage { clockwise: false }));
 
     // Flip buttons — Figma's ⇧H / ⇧V (help 360039956914), the sidebar
-    // counterparts of the shortcut and the right-click rows. They take their
-    // own row: at the panel's minimum width the rotate row has no room left,
-    // and a transform button that can be clipped by the divider is a bug.
-    y += 32.0;
-    let flip_h_r = Rect::new(x0, y, x0 + 44.0, y + 24.0);
+    // counterparts of the shortcut and the right-click rows. They share the
+    // transform row with Rotate 90° on purpose: the band below belongs to the
+    // Typography offsets (which keep their reference positions), and a row
+    // painted under one of those is a row whose hit rect never wins.
+    let flip_h_r = Rect::new(x0 + 210.0, y, x0 + 254.0, y + 24.0);
     let hov = hover(app, flip_h_r);
     fill_rrect(s, flip_h_r, R_MD, if hov { C_FIELD_2 } else { C_FIELD });
     stroke_rrect(s, flip_h_r, R_MD, C_LINE, 1.0);
@@ -7635,7 +7635,7 @@ fn paint_image_adjustments(
     app.image_row = Some(flip_h_r);
     hit.push((flip_h_r, Action::FlipImage { horizontal: true }));
 
-    let flip_v_r = Rect::new(x0 + 52.0, y, x0 + 96.0, y + 24.0);
+    let flip_v_r = Rect::new(x0 + 262.0, y, x0 + 306.0, y + 24.0);
     let hov = hover(app, flip_v_r);
     fill_rrect(s, flip_v_r, R_MD, if hov { C_FIELD_2 } else { C_FIELD });
     stroke_rrect(s, flip_v_r, R_MD, C_LINE, 1.0);
