@@ -6282,6 +6282,9 @@ fn a_section_dragged_over_a_layer_takes_it_in() {
         (sec.transform.x - 600.0).abs() < 0.001,
         "the section is back where the drag began"
     );
-    assert!(sec.children.is_empty(), "and the layer is a page child again");
+    assert!(
+        sec.children.is_empty(),
+        "and the layer is a page child again"
+    );
     assert!(find_node_clone(root, &rect_id).is_some());
 }
