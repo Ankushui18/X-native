@@ -9006,7 +9006,8 @@ fn outline_mode_hairs_the_canvas_and_paints_no_image() {
         80.0,
         Color::from_rgb8(255, 0, 0),
     ));
-    page.children.push(Node::image("i", 120.0, 10.0, 60.0, 60.0, "no-asset"));
+    page.children
+        .push(Node::image("i", 120.0, 10.0, 60.0, 60.0, "no-asset"));
     h.app.doc().editor().root = page;
 
     // the document's own tree carries exactly one image command; the
@@ -9022,7 +9023,11 @@ fn outline_mode_hairs_the_canvas_and_paints_no_image() {
             .count()
     };
     assert_eq!(images(&doc_tree), 1, "the image is in the document's tree");
-    assert_eq!(images(&wire), 0, "outline view paints no image — it is a box now");
+    assert_eq!(
+        images(&wire),
+        0,
+        "outline view paints no image — it is a box now"
+    );
     let strokes = wire
         .commands
         .iter()
