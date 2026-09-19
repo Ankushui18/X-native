@@ -556,7 +556,8 @@ mod tests {
                 reset_on_navigate: false,
             })
             .collect();
-        doc.pages.push(Node::frame("page-1", 800.0, 600.0).child(hot));
+        doc.pages
+            .push(Node::frame("page-1", 800.0, 600.0).child(hot));
         let text = save_x(&doc);
         let loaded = load_x(&text).expect("load");
         let hot = find(&loaded.pages[0], "hot").expect("hot survives");
