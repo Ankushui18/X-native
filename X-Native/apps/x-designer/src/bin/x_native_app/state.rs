@@ -1104,12 +1104,8 @@ pub enum ProtoScrollMenu {
 /// (Figma keeps the two as separate settings — see the master list, row 14.13).
 /// Labels and values are two parallel tables so the panel can read the captions
 /// as a slice without collecting one.
-pub const PROTO_OVERFLOW_LABELS: [&str; 4] = [
-    "No scrolling",
-    "Horizontal",
-    "Vertical",
-    "Both directions",
-];
+pub const PROTO_OVERFLOW_LABELS: [&str; 4] =
+    ["No scrolling", "Horizontal", "Vertical", "Both directions"];
 pub const PROTO_OVERFLOW_VALUES: [Option<x_native::Overflow>; 4] = [
     None,
     Some(x_native::Overflow::ScrollX),

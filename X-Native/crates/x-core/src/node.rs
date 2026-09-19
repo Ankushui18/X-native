@@ -2311,8 +2311,14 @@ mod scroll_extent_tests {
 
     #[test]
     fn a_frame_that_fits_its_content_does_not_scroll() {
-        let f = Node::frame("f", 300.0, 200.0)
-            .child(Node::rect("a", 10.0, 10.0, 100.0, 100.0, Color::WHITE));
+        let f = Node::frame("f", 300.0, 200.0).child(Node::rect(
+            "a",
+            10.0,
+            10.0,
+            100.0,
+            100.0,
+            Color::WHITE,
+        ));
         assert_eq!(scroll_extent(&f), (0.0, 0.0));
     }
 }

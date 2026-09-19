@@ -1488,8 +1488,10 @@ fn the_scroll_behaviour_rows_write_the_frames_overflow_and_a_layers_position() {
         let mut plain = Node::frame("plain", 100.0, 100.0);
         plain.transform.x = 400.0;
         d.editor().insert_node(&root_id, plain);
-        d.editor()
-            .insert_node("plain", Node::rect("inner", 0.0, 0.0, 40.0, 40.0, Color::WHITE));
+        d.editor().insert_node(
+            "plain",
+            Node::rect("inner", 0.0, 0.0, 40.0, 40.0, Color::WHITE),
+        );
     }
 
     // the frame row: Overflow, showing what the frame carries
@@ -1498,8 +1500,14 @@ fn the_scroll_behaviour_rows_write_the_frames_overflow_and_a_layers_position() {
     let mut scene = vello::Scene::new();
     crate::editor_ui::paint(&mut h.app, &mut scene);
     use crate::state::ProtoScrollMenu;
-    assert!(shows_menu(&h, ProtoScrollMenu::Overflow), "the Overflow field");
-    assert!(!shows_menu(&h, ProtoScrollMenu::Position), "a top-level frame has no Position row");
+    assert!(
+        shows_menu(&h, ProtoScrollMenu::Overflow),
+        "the Overflow field"
+    );
+    assert!(
+        !shows_menu(&h, ProtoScrollMenu::Position),
+        "a top-level frame has no Position row"
+    );
 
     // the menu lists Figma's four options and writes the one pressed
     h.dispatch(Action::ProtoScrollMenu(ProtoScrollMenu::Overflow));
@@ -1554,7 +1562,10 @@ fn the_scroll_behaviour_rows_write_the_frames_overflow_and_a_layers_position() {
     assert!(n.constraints.sticky && !n.constraints.fixed, "Sticky");
     h.dispatch(Action::ProtoSetPosition(0));
     let n = find_node_clone(&h.app.doc_ref().editor_ref().root, "nav").unwrap();
-    assert!(!n.constraints.fixed && !n.constraints.sticky, "back to Scroll with parent");
+    assert!(
+        !n.constraints.fixed && !n.constraints.sticky,
+        "back to Scroll with parent"
+    );
 
     // a layer on a frame that does not scroll has no Position row at all
     h.app.doc().editor().selection = vec!["inner".into()];

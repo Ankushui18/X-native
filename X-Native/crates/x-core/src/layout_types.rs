@@ -537,7 +537,10 @@ mod scroll_position_tests {
             ScrollPosition::from_str(ScrollPosition::Sticky.to_str()),
             ScrollPosition::Sticky
         );
-        assert_eq!(ScrollPosition::from_str("something else"), ScrollPosition::ScrollWithParent);
+        assert_eq!(
+            ScrollPosition::from_str("something else"),
+            ScrollPosition::ScrollWithParent
+        );
     }
 
     #[test]
