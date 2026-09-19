@@ -14692,6 +14692,26 @@ pub(crate) fn node_world(root: &Node, id: &str) -> Option<Affine> {
     out
 }
 
+/// A layer's world-space BOUNDING BOX: `node_world`'s affine applied to the
+/// node's four corners, so a nested or rotated layer measures where it is
+/// drawn rather than where its parent-relative transform happens to sit.
+pub(crate) fn world_rect_of(root: &Node, id: &str) -> Option<(f64, f64, f64, f64)> {
+    let n = crate::editor_ui::find_node(root, id)?;
+    let m = node_world(root, id)?;
+    let corner = |x: f64, y: f64| m * Point::new(x, y);
+    let pts = [
+        corner(0.0, 0.0),
+        corner(n.w, 0.0),
+        corner(n.w, n.h),
+        corner(0.0, n.h),
+    ];
+    let x0 = pts.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
+    let x1 = pts.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max);
+    let y0 = pts.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
+    let y1 = pts.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
+    Some((x0, y0, x1 - x0, y1 - y0))
+}
+
 /// The sweep a field commit asks for: degrees, or a share of the whole circle
 /// when the text says so — Figma's own tooltip reads the sweep as a percentage.
 fn sweep_from_text(raw: &str, v: f64) -> f64 {

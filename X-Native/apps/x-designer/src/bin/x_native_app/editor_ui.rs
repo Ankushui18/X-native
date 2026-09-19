@@ -120,6 +120,7 @@ pub fn paint_over(app: &mut App, s: &mut Scene) {
     paint_ruler_guides(app, s);
     paint_vector_points(app, s);
     paint_smart_guides(app, s);
+    paint_measure(app, s);
     paint_text_editor(app, s);
     paint_proto_connections(app, s);
     paint_conn_anchor(app, s, &mut hit);
@@ -9026,6 +9027,48 @@ fn paint_effects_menus(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action
     }
 }
 
+/// Figma's **⌥ measure** (help 360039956974): *"a red line between the two
+/// objects, as well as horizontal and vertical measurements"*. The spans are
+/// `App::measure_spans`' answer — the painter draws them and measures nothing
+/// itself — in screen space, with the short end ticks Figma draws and the
+/// value at the line's middle.
+fn paint_measure(app: &App, s: &mut Scene) {
+    for m in app.measure_spans() {
+        let (p0, p1) = if m.horizontal {
+            (
+                app.world_to_screen(Point::new(m.from, m.at)),
+                app.world_to_screen(Point::new(m.to, m.at)),
+            )
+        } else {
+            (
+                app.world_to_screen(Point::new(m.at, m.from)),
+                app.world_to_screen(Point::new(m.at, m.to)),
+            )
+        };
+        line(s, p0.x, p0.y, p1.x, p1.y, C_MEASURE, 1.0);
+        let cap = 4.0;
+        for p in [p0, p1] {
+            if m.horizontal {
+                line(s, p.x, p.y - cap, p.x, p.y + cap, C_MEASURE, 1.0);
+            } else {
+                line(s, p.x - cap, p.y, p.x + cap, p.y, C_MEASURE, 1.0);
+            }
+        }
+        let label = format!("{}", m.gap.round() as i64);
+        let (mx, my) = ((p0.x + p1.x) / 2.0, (p0.y + p1.y) / 2.0);
+        let w = app.fonts.measure(&label, T11, Wt::Med);
+        app.fonts.text(
+            s,
+            mx - w / 2.0,
+            if m.horizontal { my - 18.0 } else { my + 6.0 },
+            &label,
+            T11,
+            C_MEASURE,
+            Wt::Med,
+        );
+    }
+}
+
 fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
     paint_slice_chrome(app, s);
     paint_variant_chrome(app, s);
@@ -9041,16 +9084,19 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
     // selection outlines + handles
     let sel = doc.editor_ref().selection.clone();
 
-    // Figma hover: subtle outline on the layer under the cursor
+    // Figma hover: subtle outline on the layer under the cursor — and while
+    // ⌥ is held, the measure gesture's own red outline of the layer it reads
+    // (help 360039956974). The box is the layer's WORLD box, so a nested or
+    // rotated layer is outlined where it is drawn.
     if let Some(hid) = app.hover_node.clone() {
         if !sel.contains(&hid) && app.text_edit.as_deref() != Some(hid.as_str()) {
-            if let Some(n) = find_node(&doc.editor_ref().root, hid.as_str()) {
-                let p0 = app.world_to_screen(Point::new(n.transform.x, n.transform.y));
-                let p1 = app.world_to_screen(Point::new(n.transform.x + n.w, n.transform.y + n.h));
+            if let Some((x, y, w, h)) = crate::world_rect_of(&doc.editor_ref().root, hid.as_str()) {
+                let p0 = app.world_to_screen(Point::new(x, y));
+                let p1 = app.world_to_screen(Point::new(x + w, y + h));
                 stroke_rect(
                     s,
                     Rect::new(p0.x, p0.y, p1.x, p1.y).inflate(1.5, 1.5),
-                    C_SEL,
+                    if app.alt { C_MEASURE } else { C_SEL },
                     1.5,
                 );
             }

@@ -225,6 +225,10 @@ pub const C_SEL: Color = rgb(role!(selection));
 /// asks the theme for it rather than hard-coding a hex no theme could remap
 /// (the same reason `C_SEL` exists).
 pub const C_SET: Color = C_ACCENT;
+/// Figma's measurement ink — *"Figma will display a red line between the two
+/// objects"* (help 360039956974). It is the app's red ink, named so the
+/// canvas gesture has one owner and the panels keep theirs.
+pub const C_MEASURE: Color = C_DANGER_INK;
 pub const C_SEL_SOFT: Color = rgba(role!(selection), A_FAINT);
 /// Wash behind the editor's selected text (stronger than C_SEL_SOFT).
 pub const C_SEL_WASH: Color = rgba(role!(selection), A_MEDIUM);

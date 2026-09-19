@@ -424,6 +424,81 @@ pub struct CropSession {
 
 /// The crop frame's corners, in the order the resize handles use: 0 TL,
 /// 1 TR, 2 BL, 3 BR.
+/// One line of Figma's **measure** gesture (help 360039956974: *"Figma will
+/// display a red line between the two objects, as well as horizontal and
+/// vertical measurements"*): the gap in one axis, and where its line sits.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Measure {
+    /// true when the gap runs along x, so the line is horizontal
+    pub horizontal: bool,
+    /// the distance between the edges the pair faces, in world px
+    pub gap: f64,
+    /// the line's fixed coordinate on the other axis
+    pub at: f64,
+    /// the line's two ends along the measured axis
+    pub from: f64,
+    pub to: f64,
+}
+
+/// The middle of the band two intervals share — or, when they share none, the
+/// middle of the gap between their near edges: where Figma anchors the line.
+fn band_mid(a0: f64, a1: f64, b0: f64, b1: f64) -> f64 {
+    let lo = a0.max(b0);
+    let hi = a1.min(b1);
+    if lo <= hi {
+        (lo + hi) / 2.0
+    } else if a1 < b0 {
+        (a1 + b0) / 2.0
+    } else {
+        (b1 + a0) / 2.0
+    }
+}
+
+/// Figma's two measurements for a pair of layers (help 360039956974), each
+/// taken between the edges the pair FACES. A pair that overlaps on an axis has
+/// no gap on it and gets no line — Figma draws nothing there — so only real
+/// gaps come back, in the order the article reads: horizontal, then vertical.
+pub fn measure_between(a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)) -> Vec<Measure> {
+    let (ax0, ay0, aw, ah) = a;
+    let (bx0, by0, bw, bh) = b;
+    let (ax1, ay1) = (ax0 + aw, ay0 + ah);
+    let (bx1, by1) = (bx0 + bw, by0 + bh);
+    let mut out = Vec::new();
+    let (h0, h1, hgap) = if ax1 <= bx0 {
+        (ax1, bx0, bx0 - ax1)
+    } else if bx1 <= ax0 {
+        (bx1, ax0, ax0 - bx1)
+    } else {
+        (0.0, 0.0, 0.0)
+    };
+    if hgap > 0.0 {
+        out.push(Measure {
+            horizontal: true,
+            gap: hgap,
+            at: band_mid(ay0, ay1, by0, by1),
+            from: h0,
+            to: h1,
+        });
+    }
+    let (v0, v1, vgap) = if ay1 <= by0 {
+        (ay1, by0, by0 - ay1)
+    } else if by1 <= ay0 {
+        (by1, ay0, ay0 - by1)
+    } else {
+        (0.0, 0.0, 0.0)
+    };
+    if vgap > 0.0 {
+        out.push(Measure {
+            horizontal: false,
+            gap: vgap,
+            at: band_mid(ax0, ax1, bx0, bx1),
+            from: v0,
+            to: v1,
+        });
+    }
+    out
+}
+
 pub fn crop_corners(b: (f64, f64, f64, f64)) -> [(f64, f64); 4] {
     [
         (b.0, b.1),
@@ -4150,6 +4225,41 @@ impl App {
     }
 
     /// Immutable document access (paint paths).
+    /// Figma's **⌥ measure** (help 360039956974): with one layer selected,
+    /// hold ⌥ and point at a second one — the distance in each axis, taken
+    /// between the edges the pair faces. The hovered layer is the one the
+    /// canvas already outlines (`hover_node`, the deepest layer under the
+    /// cursor), and an unarmed gesture answers with nothing at all: the
+    /// painter draws this list and decides nothing itself.
+    pub fn measure_spans(&self) -> Vec<Measure> {
+        if self.screen != Screen::Editor
+            || !self.alt
+            || self.drag.is_some()
+            || self.text_edit.is_some()
+            || self.field.is_some()
+        {
+            return Vec::new();
+        }
+        let Some(doc) = self.doc_opt() else {
+            return Vec::new();
+        };
+        let sel = doc.editor_ref().selection.clone();
+        let [sel_id] = sel.as_slice() else {
+            return Vec::new();
+        };
+        let Some(hover) = self.hover_node.clone() else {
+            return Vec::new();
+        };
+        let root = &doc.editor_ref().root;
+        let (Some(a), Some(b)) = (
+            crate::world_rect_of(root, sel_id.as_str()),
+            crate::world_rect_of(root, hover.as_str()),
+        ) else {
+            return Vec::new();
+        };
+        measure_between(a, b)
+    }
+
     pub fn doc_ref(&self) -> &OpenDoc {
         self.docs
             .get(self.active)
@@ -6793,5 +6903,50 @@ mod tool_shortcut_tests {
         let in_board = Tool::from_shortcut("s", false, true);
         assert_eq!(in_board, Some(Tool::BoardSticky));
         assert_eq!(Tool::from_shortcut("q", false, false), None);
+    }
+}
+
+#[cfg(test)]
+mod measure_tests {
+    use super::*;
+
+    /// Figma's ⌥ measure (help 360039956974): a diagonal pair reads on BOTH
+    /// axes — *"horizontal and vertical measurements"* — each between the
+    /// edges the pair faces, and each anchored on the band they share (or,
+    /// sharing none, between the near edges).
+    #[test]
+    fn measure_reads_both_axes_of_a_diagonal_pair() {
+        let a = (100.0, 100.0, 40.0, 20.0); // x 100..140, y 100..120
+        let b = (200.0, 160.0, 50.0, 30.0); // x 200..250, y 160..190
+        let m = measure_between(a, b);
+        assert_eq!(m.len(), 2, "a diagonal pair reads on both axes");
+        let h = m[0];
+        assert!(h.horizontal, "horizontal first, as the article reads");
+        assert_eq!(h.gap, 60.0);
+        assert_eq!((h.from, h.to), (140.0, 200.0), "the edges the pair faces");
+        assert_eq!(h.at, 140.0, "no shared y band: the line sits between");
+        let v = m[1];
+        assert!(!v.horizontal);
+        assert_eq!(v.gap, 40.0);
+        assert_eq!((v.from, v.to), (120.0, 160.0));
+        assert_eq!(v.at, 170.0);
+    }
+
+    /// Layers that overlap on an axis have no gap on it, and Figma draws no
+    /// line there: a pair side by side reads once, anchored at the middle of
+    /// the band the two share. One layer inside another reads nothing.
+    #[test]
+    fn a_shared_band_anchors_the_line_and_an_overlap_reads_nothing() {
+        let a = (0.0, 0.0, 100.0, 100.0);
+        let b = (140.0, 50.0, 100.0, 100.0);
+        let m = measure_between(a, b);
+        assert_eq!(m.len(), 1, "no vertical gap to read");
+        assert_eq!(m[0].gap, 40.0);
+        assert_eq!(m[0].at, 75.0, "the middle of the shared band");
+        assert!(
+            measure_between(a, (10.0, 10.0, 20.0, 20.0)).is_empty(),
+            "a layer inside another has no gap to read"
+        );
+        assert!(measure_between(a, a).is_empty(), "and neither has itself");
     }
 }

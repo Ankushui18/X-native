@@ -5,6 +5,30 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-19 (Measure with ⌥)
+
+[Measure distances between layers](https://help.figma.com/hc/en-us/articles/360039956974)
+— master row 2.24. *"Select the first object in the canvas"*, *"Hold down the
+modifier key"* (⌥), *"hover over the second object"* and *"Figma will display a red
+line between the two objects, as well as horizontal and vertical measurements"*:
+
+- **`App::measure_spans`** is the one answer to what is being measured right now: the
+  selected layer against the layer under the cursor (the one the canvas already
+  outlines), and nothing at all unless ⌥ is held with no drag, field or inline edit
+  open. `state::measure_between` is the geometry — each axis measured between the
+  edges the pair faces and anchored on the band the two share, with no line where the
+  projections overlap, because Figma draws none there — and `world_rect_of` gives a
+  nested or rotated layer its world bounding box.
+- **`paint_measure`** draws that list and nothing else: the red line, its short end
+  ticks and the value at the middle, in the app's own red (`C_MEASURE`). The hover
+  outline takes the same ink while ⌥ is held, so the layer being read is the layer
+  outlined.
+- Pinned by `option_measures_the_gap_to_the_layer_under_the_cursor` and the
+  geometry's own `measure_reads_both_axes_of_a_diagonal_pair` /
+  `a_shared_band_anchors_the_line_and_an_overlap_reads_nothing`. **Not built:** the
+  drag-time spacing numbers Figma shows while moving a layer, and measuring between
+  two guides.
+
 ## [Unreleased] — 2026-09-19 (Keyboard completions)
 
 Figma's [Keyboard shortcuts](https://help.figma.com/hc/en-us/articles/360040328653)

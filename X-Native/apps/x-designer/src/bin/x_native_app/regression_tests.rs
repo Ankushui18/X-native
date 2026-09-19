@@ -8352,3 +8352,74 @@ fn the_shortcut_sheet_and_the_two_hide_ui_keys() {
     h.app.ctrl = false;
     assert!(h.app.palette.open, "⌘K still opens it");
 }
+
+/// Figma's **⌥ measure** (help 360039956974): select a layer, hold ⌥ and point
+/// at a second one — the overlay reads the gap in each axis. The layer it
+/// reads is the one the canvas already outlines (`hover_node`), at its WORLD
+/// box, and the gesture is a hover: a drag in progress answers with nothing.
+#[test]
+fn option_measures_the_gap_to_the_layer_under_the_cursor() {
+    let mut h = host();
+    let root_id = {
+        let doc = h.app.doc();
+        doc.editor_ref().root.id.clone()
+    };
+    // a layer to the right of the demo frame: a 125px gap, sharing its y band
+    // with the frame's 60..480 (40..80 overlaps at 60..80, so the line sits at
+    // the middle of that band, 70)
+    let far = Node::rect("far", 500.0, 40.0, 60.0, 40.0, Color::from_rgb8(9, 9, 9));
+    h.app.doc().editor().insert_node(&root_id, far);
+    h.app.doc().editor().selection = vec!["frame-1".into()];
+
+    // not armed: no ⌥, no reading
+    assert!(h.app.measure_spans().is_empty(), "the gesture needs ⌥");
+
+    h.zoom_fit();
+    h.app.alt = true;
+    let p = h.app.world_to_screen(Point::new(530.0, 60.0));
+    assert!(
+        h.app.editor_regions().canvas.contains(p),
+        "precondition: the pointer is on the canvas"
+    );
+    h.on_move(p);
+    assert_eq!(
+        h.app.hover_node.as_deref(),
+        Some("far"),
+        "the hover the canvas already computes is the layer measured"
+    );
+    let spans = h.app.measure_spans();
+    assert_eq!(spans.len(), 1, "the pair shares its y band: one line");
+    assert!(spans[0].horizontal);
+    assert_eq!(spans[0].gap, 125.0);
+    assert_eq!(spans[0].at, 70.0, "the middle of the shared band");
+
+    // the same pointer without ⌥ reads nothing
+    h.app.alt = false;
+    h.on_move(p);
+    assert_eq!(h.app.hover_node.as_deref(), Some("far"), "the hover stays");
+    assert!(h.app.measure_spans().is_empty());
+
+    // two layers selected: Figma measures FROM one object, so nothing to read
+    h.app.alt = true;
+    h.app.doc().editor().selection = vec!["frame-1".into(), "far".into()];
+    assert!(h.app.measure_spans().is_empty(), "one anchor at a time");
+
+    // and a drag in progress is not the gesture
+    h.app.doc().editor().selection = vec!["frame-1".into()];
+    h.app.drag = Some(Drag::ResizeSel {
+        corner: 3,
+        orig: (0.0, 0.0, 10.0, 10.0),
+        start: Point::new(0.0, 0.0),
+        base_depth: 0,
+    });
+    assert!(
+        h.app.measure_spans().is_empty(),
+        "a drag is not a measurement"
+    );
+    h.app.drag = None;
+
+    // the painter reads this list and nothing else
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint_over(&mut h.app, &mut scene);
+    assert_eq!(h.app.measure_spans().len(), 1, "still armed after a paint");
+}

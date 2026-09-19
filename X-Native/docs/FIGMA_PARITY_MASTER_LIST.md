@@ -33,7 +33,7 @@ recon task, not a settled fact.
 | surface | rows | MATCH | PARTIAL | MISSING | EXTRA | OUT |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | 1 Tools (toolbar & shape menu) | 24 | 15 | 3 | 1 | 5 | 0 |
-| 2 Canvas gestures (drag) | 28 | 24 | 1 | 2 | 1 | 0 |
+| 2 Canvas gestures (drag) | 28 | 25 | 1 | 1 | 1 | 0 |
 | 3 Keyboard | 35 | 32 | 2 | 0 | 1 | 0 |
 | 4 Menus & palettes | 10 | 9 | 0 | 1 | 0 | 0 |
 | 5 Layers, pages, sections | 14 | 12 | 1 | 1 | 0 | 0 |
@@ -52,9 +52,9 @@ recon task, not a settled fact.
 | 18 Design language (look of the app itself) | 12 | 1 | 5 | 6 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **339** | **254** | **47** | **19** | **16** | **3** |
+| **total** | **339** | **255** | **47** | **18** | **16** | **3** |
 
-The 19 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
+The 18 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
 the brief.
 
@@ -127,7 +127,7 @@ Figma's canvas is a small set of gestures with modifiers; the shape-tool drags a
 | 2.21 | Inline text drag-select | select a range with the pointer | `Drag::TextEditSel` | MATCH |
 | 2.22 | Vector point drag | move anchors, handles | vector-edit pointer path | MATCH |
 | 2.23 | **Rotate on canvas** | hover outside a corner → rotate cursor, drag rotates; `⇧` snaps 15°; `⌥R` moves the origin | `Drag::RotateSel` + `state::rotate_corner_at` (a ring *outside* the corner, past the resize handle), `⇧` = 15° steps, `Drag::RotationOrigin` for the `⌥R` target | MATCH |
-| 2.24 | **`⌥` measure** | hold `⌥` and point to read the distance to the selection | not implemented | **MISSING** |
+| 2.24 | **`⌥` measure** | hold `⌥` and point at a second layer to read the distance to the selection (`360039956974`): *"a red line between the two objects, as well as horizontal and vertical measurements"* | `App::measure_spans` over `state::measure_between` (the edges the pair faces, on the band they share), `world_rect_of` for the WORLD box, `paint_measure` for the red lines, their end ticks and the value; the layer read is the one the canvas already outlines | MATCH |
 | 2.25 | **Crop image** | double-click an image → crop handles, **Aspect ratio**, **Resize to fit** | `App::crop` + `Drag::Crop` + `paint_crop_chrome`: the frame and its four corner handles, a corner drag pinches the picture about the opposite corner (⌥ both sides), aspect kept, Enter/click-outside applies and Esc puts it back, **Resize to fit** in the panel. **Not built:** the faded uncropped surround, Control's free aspect (our crop zoom is uniform), the **Aspect ratio** picker, the crop-value slider and the `⌘`-drag quick crop; a press inside crop mode is the crop's, so the rotate ring and the resize handles wait for the apply | **PARTIAL** |
 | 2.26 | **Place & size image** | image tool drag places at that size | `finish_create`'s `Tool::PlaceImage` arm: a click places the file's own size (its header, capped at 4096), a drag draws the box you drew | MATCH |
 | 2.27 | Scroll / pinch zoom, `⌘`+scroll | canvas zoom | wheel path | MATCH |
@@ -722,8 +722,13 @@ rendering it.
     keyboard completions that finished the item (3.23–3.31: `⇧E`, `⌘R`, `⌥⌘K`,
     `⇧A`, `N`/`⇧N`, `⌘\`, `⇧⌘\`, `⌘/`, `⇧?`, and the `⌘⌥M` row §28 had already
     built) moved the whole of section 3's remainder into `MATCH`.
-14. Measure with `⌥` (2.24); `Space`-during-resize (2.12); stroke-style panel (8.15);
-    image flip toggle (9.7); outlines mode (17.7).
+14. `Space`-during-resize (2.12); stroke-style panel (8.15);
+    image flip toggle (9.7); outlines mode (17.7). The `⌥`-measure half of this
+    item is delivered: row 2.24 is `MATCH` (`App::measure_spans`,
+    `paint_measure`), pinned by
+    `option_measures_the_gap_to_the_layer_under_the_cursor` and the geometry's
+    own `measure_reads_both_axes_of_a_diagonal_pair` /
+    `a_shared_band_anchors_the_line_and_an_overlap_reads_nothing`.
 15. Clean-up layers (5.9) — chapter 4's lesson.
 
 ### Wave 2 — design parity ("no design issue")
