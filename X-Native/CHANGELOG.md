@@ -24,9 +24,10 @@ Figma's
 - **Rects and frames.** Figma's radius applies to rectangles *and* frames
   (polygons, stars and closed vector networks are still the open half, 6.15):
   `Editor::set_uniform_radius`, `set_corner_radius` and `set_corner_smoothing`
-  are the three writers, each one undo entry with a no-op refused, and
-  `Command::SetCorners` gives a frame its uniform radius as four equal corners
-  because a frame has no radius field of its own.
+  are the three writers, each one undo entry with a no-op refused. A frame has
+  no radius field of its own, so `Editor::set_corners` gives its uniform radius
+  four equal corners; `Command::SetCorners` applies literally what it is handed,
+  which is what lets undo put a frame back to carrying none.
 - **The canvas dot.** Hovering just inside a corner of a single rectangle or
   frame shows Figma's white dot on that corner's arc
   (`state::radius_handle_at` / `radius_handle_point`); a drag rounds the whole
