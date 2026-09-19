@@ -6154,9 +6154,14 @@ fn mask_section_state(app: &App) -> Option<(bool, x_native::MaskType)> {
     let doc = app.doc_opt()?;
     let id = doc.selected_id()?;
     let ed = doc.editor_ref();
-    let target = ed.mask_section_target(&id)?;
-    let node = find_node(&ed.root, target.as_str())?;
-    Some((node.is_mask, node.mask_type))
+    let node = find_node(&ed.root, id.as_str())?;
+    // a selected mask object speaks for the mask at its bottom; anything else
+    // speaks for itself, which is what puts the *Use as mask* row there
+    let target = ed
+        .mask_section_target(&id)
+        .and_then(|t| find_node(&ed.root, t.as_str()))
+        .unwrap_or(node);
+    Some((target.is_mask, target.mask_type))
 }
 
 /// Figma's Mask-section type dropdown (help 360040450253): Alpha, Vector,

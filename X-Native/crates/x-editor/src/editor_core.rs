@@ -632,9 +632,7 @@ impl Editor {
         let bottom = find(&self.root, group_id)
             .and_then(|g| g.children.first())
             .map(|c| c.id.clone());
-        let Some(bottom) = bottom else {
-            return None;
-        };
+        let bottom = bottom?;
         let masked = self.set_mask(&bottom, true);
         if masked {
             // one gesture, one undo entry: the mask object and its mask

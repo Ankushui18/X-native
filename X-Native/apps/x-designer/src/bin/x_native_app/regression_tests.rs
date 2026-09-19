@@ -2317,6 +2317,7 @@ fn the_mask_shortcut_masks_the_bottom_layer() {
     h.on_key(Key::Character("m".into()), None);
     h.app.ctrl = false;
     h.app.alt = false;
+    let root = h.app.doc_ref().editor_ref().root.clone();
     assert!(
         !find_node_clone(&root, "under").unwrap().is_mask,
         "asking again clears the mask"
