@@ -119,7 +119,8 @@ impl Tool {
     /// the handler used to keep a second, half-drifted copy inline).
     /// `key` is the lowercased character; `board` selects the mode's
     /// tool set. Baseline keys are case/shift tolerant as before;
-    /// plain-C is mode-specific and ⇧C stays free; ⇧E is the eraser;
+    /// plain-C is mode-specific and ⇧C stays free; the eraser is ours and
+    /// answers to plain E, because ⇧E toggles the Design/Prototype tabs;
     /// M-symmetry is design-mode only (the old handler let it leak
     /// into boards).
     /// Display name (toolbar tooltips; P10)
@@ -175,7 +176,7 @@ impl Tool {
             ("m", false),
             ("s", false),
             ("s", true),
-            ("e", true),
+            ("e", false),
         ];
         for (k, sh) in KEYS {
             if Self::from_shortcut(k, *sh, board) == Some(self) {
@@ -6568,7 +6569,7 @@ mod tool_shortcut_tests {
         assert_eq!(d("h", false), Some(Tool::Hand));
         assert_eq!(d("c", false), Some(Tool::Comment));
         assert_eq!(d("m", false), Some(Tool::Symmetry));
-        assert_eq!(d("e", true), Some(Tool::Eraser));
+        assert_eq!(d("e", false), Some(Tool::Eraser));
     }
 
     #[test]
@@ -6765,7 +6766,7 @@ mod tool_shortcut_tests {
         assert_eq!(Tool::Eraser.label(), "Vector eraser");
         assert_eq!(Tool::Pencil.label(), "Pencil");
         assert_eq!(Tool::Select.shortcut_hint(false), "V");
-        assert_eq!(Tool::Eraser.shortcut_hint(false), "⇧E");
+        assert_eq!(Tool::Eraser.shortcut_hint(false), "E");
         assert_eq!(Tool::Symmetry.shortcut_hint(true), "");
         assert_eq!(Tool::Slice.shortcut_hint(false), "S");
         assert_eq!(Tool::Slice.label(), "Slice");
@@ -6780,8 +6781,10 @@ mod tool_shortcut_tests {
         // ⇧C stays free (old comment promised this; old code broke it)
         assert_eq!(Tool::from_shortcut("c", true, false), None);
         assert_eq!(Tool::from_shortcut("c", true, true), None);
-        // the eraser needs shift; bare E is not a tool key
-        assert_eq!(Tool::from_shortcut("e", false, false), None);
+        // ⇧E is Figma's Design/Prototype toggle, so the eraser — ours, and
+        // Draw-only per rows 1.19 / 20.5 — answers to the bare key instead
+        assert_eq!(Tool::from_shortcut("e", true, false), None);
+        assert_eq!(Tool::from_shortcut("e", false, false), Some(Tool::Eraser));
         // baseline keys stay shift-tolerant (pre-refactor behavior)
         assert_eq!(Tool::from_shortcut("r", true, false), Some(Tool::Rect));
         // unclaimed keys; S is the Slice tool in design mode and a sticky

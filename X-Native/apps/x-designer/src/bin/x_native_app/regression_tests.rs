@@ -8343,8 +8343,12 @@ fn the_shortcut_sheet_and_the_two_hide_ui_keys() {
     h.on_key(Key::Character("/".into()), None);
     h.app.ctrl = false;
     assert!(h.app.palette.open, "⌘/ opens Quick actions");
+    // the open palette owns the keyboard (it types its query), so Esc closes
+    // it and ⌘K — the key this host has always used — opens it again
+    h.on_key(Key::Named(NamedKey::Escape), None);
+    assert!(!h.app.palette.open, "Esc closes it");
     h.app.ctrl = true;
     h.on_key(Key::Character("k".into()), None);
     h.app.ctrl = false;
-    assert!(!h.app.palette.open, "⌘K still toggles it");
+    assert!(h.app.palette.open, "⌘K still opens it");
 }
