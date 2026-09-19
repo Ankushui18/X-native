@@ -39,7 +39,8 @@ instance; nothing could name them, clear one, or send them back to the master.
   `pushing_changes_to_main_and_resetting_one_change_are_undoable`,
   `the_change_list_names_every_override_and_reset_clears_one`,
   `resetting_a_layer_clears_its_subtree_and_nothing_else`,
-  `pushing_overrides_writes_the_master_for_every_instance`.
+  `pushing_overrides_writes_the_master_for_every_instance`,
+  `pushing_from_an_instance_whose_master_is_gone_changes_nothing`.
 
 Still open on this row: selecting *inside* an instance (12.11) and component
 sets as a first-class node (12.19).
