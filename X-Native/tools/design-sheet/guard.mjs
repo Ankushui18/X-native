@@ -222,8 +222,75 @@ check(
   'ED_STATUS_H in theme.rs; no `win_h - 22` anywhere else in the chrome',
 );
 
+// ------------------------------------------- the master list's own arithmetic
+// The scoreboard IS the brief's instrument: "100%" is a number the owner reads
+// off this table. It drifted the first time a row moved — one section's MISSING
+// cell kept a stale count while the grand total was updated by hand — and a
+// stale header is worse than a stale total, because the section is what a wave
+// is planned from. So: every section header must equal the rows listed under
+// that section, and `**total**` must equal the sum of every header.
+const master = read('docs/FIGMA_PARITY_MASTER_LIST.md').split('\n');
+const COLUMNS = ['rows', 'MATCH', 'PARTIAL', 'MISSING', 'EXTRA', 'OUT'];
+const count = (c) => (c === '—' ? 0 : Number.parseInt(c.replace(/\*/g, ''), 10));
+const status = (cell) => cell.replace(/\*/g, '').trim().split(/[\s(—]/)[0];
+const board = [];
+let totals = null;
+const from = master.findIndex((l) => l.startsWith('| surface |'));
+for (let i = from + 2; i < master.length && master[i].startsWith('| '); i += 1) {
+  const cells = master[i]
+    .split('|')
+    .slice(1, -1)
+    .map((c) => c.trim());
+  if (cells.length !== 7) continue;
+  if (cells[0] === '**total**') totals = cells.slice(1).map(count);
+  else if (/^\d+\s/.test(cells[0])) board.push([Number.parseInt(cells[0], 10), cells.slice(1)]);
+}
+const listed = new Map();
+let current = null;
+for (const line of master) {
+  const head = /^#{2,4} (\d+)\. /.exec(line);
+  if (head) {
+    current = Number.parseInt(head[1], 10);
+    continue;
+  }
+  if (!current || !/^\| \d+\.\d+ /.test(line)) continue;
+  const cells = line
+    .split('|')
+    .slice(1, -1)
+    .map((c) => c.trim());
+  const s = status(cells[cells.length - 1]);
+  const c = listed.get(current) ?? { rows: 0 };
+  c.rows += 1;
+  c[s] = (c[s] ?? 0) + 1;
+  listed.set(current, c);
+}
+const drift = [];
+for (const [n, cells] of board) {
+  const c = listed.get(n) ?? { rows: 0 };
+  const got = [c.rows, c.MATCH ?? 0, c.PARTIAL ?? 0, c.MISSING ?? 0, c.EXTRA ?? 0, c.OUT ?? 0];
+  cells.forEach((cell, i) => {
+    if (cell === '—') {
+      if (got[i] !== 0) drift.push(`section ${n}: ${COLUMNS[i]} = ${got[i]}, header says none`);
+    } else if (got[i] !== count(cell)) {
+      drift.push(`section ${n}: ${COLUMNS[i]} ${got[i]} vs ${count(cell)}`);
+    }
+  });
+}
+const sum = [0, 0, 0, 0, 0, 0];
+for (const [, cells] of board) cells.forEach((c, i) => (sum[i] += count(c)));
+if (totals) {
+  totals.forEach((t, i) => {
+    if (t !== sum[i]) drift.push(`total: ${COLUMNS[i]} ${sum[i]} vs ${t}`);
+  });
+}
+check(
+  "the master list's scoreboard is its own arithmetic",
+  totals !== null && drift.length === 0,
+  drift.length ? drift.join('; ') : 'every section header equals its rows; every total equals the sum',
+);
+
 console.log(`      ${pinned} behaviours pinned by a test, ${open} open (documented, not pinned)`);
 console.log(
-  `SUMMARY  design + Figma conformance: 9 checks, ${pinned} pinned, ${open} open, ${failed} failed`,
+  `SUMMARY  design + Figma conformance: 10 checks, ${pinned} pinned, ${open} open, ${failed} failed`,
 );
 process.exit(failed === 0 ? 0 : 1);

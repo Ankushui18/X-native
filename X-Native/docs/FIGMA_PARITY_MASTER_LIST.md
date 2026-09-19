@@ -37,7 +37,7 @@ recon task, not a settled fact.
 | 3 Keyboard | 35 | 23 | 5 | 6 | 1 | 0 |
 | 4 Menus & palettes | 10 | 9 | 0 | 1 | 0 | 0 |
 | 5 Layers, pages, sections | 14 | 12 | 1 | 1 | 0 | 0 |
-| 6 Frame & shape properties | 20 | 17 | 1 | 0 | 0 | 0 |
+| 6 Frame & shape properties | 20 | 17 | 1 | 2 | 0 | 0 |
 | 7 Auto layout | 16 | 14 | 1 | 1 | 0 | 0 |
 | 8 Fill, stroke, effects, colour | 25 | 21 | 1 | 3 | 0 | 0 |
 | 9 Images | 9 | 6 | 3 | 0 | 0 | 0 |
