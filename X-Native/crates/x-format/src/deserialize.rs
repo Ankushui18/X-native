@@ -874,10 +874,7 @@ pub(crate) fn parse_node(v: &V) -> Node {
                     .map(Easing::from_str)
                     .unwrap_or(Easing::Linear),
                 reset_on_navigate: e.get("reset").and_then(V::boolean).unwrap_or(false),
-                animate_matching_layers: e
-                    .get("smartmatch")
-                    .and_then(V::boolean)
-                    .unwrap_or(false),
+                animate_matching_layers: e.get("smartmatch").and_then(V::boolean).unwrap_or(false),
             });
         }
     }

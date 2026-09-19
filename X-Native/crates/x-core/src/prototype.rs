@@ -1039,9 +1039,7 @@ pub fn matching_layers(from: &Node, to: &Node) -> Vec<LayerPlan> {
                 != crate::ScrollPosition::ScrollWithParent;
             let transition = match by_path.get(path) {
                 Some(_) if held => LayerTransition::Hold,
-                Some(m) => LayerTransition::SmartAnimate {
-                    from: m.id.clone(),
-                },
+                Some(m) => LayerTransition::SmartAnimate { from: m.id.clone() },
                 None => LayerTransition::Dissolve,
             };
             out.push(LayerPlan {
