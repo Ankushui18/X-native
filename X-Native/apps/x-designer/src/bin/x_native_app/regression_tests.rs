@@ -1459,12 +1459,10 @@ fn the_trigger_menu_offers_figmas_list_and_the_pill_fits_its_words() {
         assert!(pill.width() >= 56.0, "the pill keeps a readable width");
         // the field beside the pill, for the triggers that carry a value: the
         // row's own edit actions, found by the geometry that paints them
-        let param = h
-            .app
-            .hit
-            .iter()
-            .map(|(r, _)| *r)
-            .find(|r| r.y0 >= pill.y0 && r.y1 <= pill.y1 && r.x0 > pill.x1 && r.x0 < pill.x1 + 8.0);
+        let param =
+            h.app.hit.iter().map(|(r, _)| *r).find(|r| {
+                r.y0 >= pill.y0 && r.y1 <= pill.y1 && r.x0 > pill.x1 && r.x0 < pill.x1 + 8.0
+            });
         let carries = matches!(
             want,
             Trigger::AfterDelay { .. } | Trigger::KeyDown { .. } | Trigger::WhenVideoHits { .. }
