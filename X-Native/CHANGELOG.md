@@ -42,6 +42,8 @@ section a section rather than a frame.
   over the objects you want to add to it."* The drag that drew the section did
   exactly that: `Editor::section_absorb` moves every unlocked sibling the section
   fully covers into it, keeping its place, merged with the draw into one undo.
+  The same take-in runs when a move gesture ends — a single section dragged on
+  top of a layer absorbs it, and the drag plus the take-in are one undo step.
 - **Two deletes.** `Delete` takes the section and its contents; `Ctrl+Backspace`
   (`⌘⌫` on a Mac) takes the container and keeps its contents, promoted to the
   canvas with their place on it. Plain layers answer the ordinary delete either

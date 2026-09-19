@@ -6228,3 +6228,60 @@ fn the_canvas_menu_wraps_a_selection_in_a_section() {
         "lifted layer sits where it was drawn: {p:?}"
     );
 }
+
+/// "You can also click and drag a section over the objects you want to add to
+/// it" — a section dragged on top of a layer takes it in, keeping its place on
+/// the page, and the drag and the take-in are ONE undo step.
+#[test]
+fn a_section_dragged_over_a_layer_takes_it_in() {
+    let mut h = host();
+    // clear of the demo page's frame-1 (x 0..375, y 60..480): a page-level rect
+    h.finish_create(
+        Tool::Rect,
+        Point::new(500.0, 200.0),
+        Point::new(580.0, 280.0),
+    );
+    let rect_id = h.app.doc_ref().editor_ref().selection[0].clone();
+    h.finish_create(
+        Tool::Section,
+        Point::new(600.0, 200.0),
+        Point::new(700.0, 300.0),
+    );
+    let sec_id = h.app.doc_ref().editor_ref().selection[0].clone();
+    assert!(matches!(
+        crate::editor_ui::find_node(&h.app.doc_ref().editor_ref().root, &sec_id).map(|n| &n.kind),
+        Some(NodeKind::Section)
+    ));
+
+    // drag the section left until it covers the rect
+    h.app.doc().editor().selection = vec![sec_id.clone()];
+    let from = h.app.world_to_screen(Point::new(650.0, 250.0));
+    h.on_press(from);
+    h.on_move(h.app.world_to_screen(Point::new(550.0, 250.0)));
+    assert!(
+        matches!(h.app.drag, Some(Drag::MoveSel { .. })),
+        "the press takes the section as a layer move"
+    );
+    h.on_release();
+
+    let root = &h.app.doc_ref().editor_ref().root;
+    let sec = find_node_clone(root, &sec_id).expect("the section is on the page");
+    assert_eq!(sec.children.len(), 1, "the layer it covered joined it");
+    assert_eq!(sec.children[0].id, rect_id);
+    let m = node_world(root, &rect_id).expect("world matrix");
+    let p = m * Point::new(0.0, 0.0);
+    assert!(
+        (p.x - 500.0).abs() < 0.001 && (p.y - 200.0).abs() < 0.001,
+        "the layer kept its place on the page: {p:?}"
+    );
+    // the drag and the take-in are one step: one undo puts both back
+    assert!(h.app.doc().editor().undo());
+    let root = &h.app.doc_ref().editor_ref().root;
+    let sec = find_node_clone(root, &sec_id).expect("the section is back");
+    assert!(
+        (sec.transform.x - 600.0).abs() < 0.001,
+        "the section is back where the drag began"
+    );
+    assert!(sec.children.is_empty(), "and the layer is a page child again");
+    assert!(find_node_clone(root, &rect_id).is_some());
+}

@@ -5736,6 +5736,7 @@ impl Host {
                     let editor = doc.editor();
                     editor.merge_last(editor.undo_depth().saturating_sub(base_depth));
                 }
+                self.section_take_in_after_move(base_depth);
                 self.app.drag = None;
                 // a click (no movement) on already-selected text still
                 // places the caret — the gesture pushed nothing to merge
@@ -5918,6 +5919,28 @@ impl Host {
         // `doc` is a &mut borrow: it ends at its last use, so `mark_dirty`'s
         // &mut self borrow is free (dropping the reference would do nothing)
         self.app.mark_dirty();
+    }
+
+    /// Figma: "You can also click and drag a section over the objects you want
+    /// to add to it." Called when a move gesture ends: a single selected
+    /// section that actually moved takes in the layers it now covers, and the
+    /// whole gesture — the drag and the take-in — reads as one undo step.
+    fn section_take_in_after_move(&mut self, base_depth: usize) {
+        let doc = self.app.doc_ref();
+        let editor = doc.editor_ref();
+        if editor.undo_depth() <= base_depth || editor.selection.len() != 1 {
+            return;
+        }
+        let Some(n) = crate::editor_ui::find_node(&editor.root, &editor.selection[0]) else {
+            return;
+        };
+        if !matches!(n.kind, x_native::NodeKind::Section) {
+            return;
+        }
+        let sid = n.id.clone();
+        if self.app.doc().editor().section_absorb(&sid) > 0 {
+            self.app.doc().editor().merge_last(2);
+        }
     }
 
     fn finish_create(&mut self, tool: Tool, start: Point, cur: Point) {
