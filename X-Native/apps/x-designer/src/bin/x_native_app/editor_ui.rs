@@ -32,6 +32,8 @@ pub fn paint(app: &mut App, s: &mut Scene) {
     app.paint_lib_at = None;
     // the corner popover records its slider track every paint it is open
     app.corner_slider = None;
+    // …and the Stroke section records its style icon when it is drawn
+    app.stroke_row = None;
     let mut hit: Vec<(Rect, Action)> = Vec::new();
     fill_rect(s, Rect::new(0.0, 0.0, app.win_w, app.win_h), C_BG);
     if app.flow.is_some() {
@@ -6358,6 +6360,7 @@ fn stroke_section_header(
             if app.stroke_style_open { C_TEXT } else { C_DIM },
         );
         tip(app, sr, "Advanced stroke settings");
+        app.stroke_row = Some(sr);
         hit.push((sr, Action::ToggleStrokeStyle));
         if app.stroke_style_open {
             app.stroke_style_anchor = (sr.x1, sr.y1);
@@ -8899,6 +8902,26 @@ pub fn scroll_mask_into_view(app: &mut App) {
     let mut scene = vello::Scene::new();
     paint(app, &mut scene);
     let Some(row) = app.mask_row else {
+        return;
+    };
+    let top = crate::theme::ED_TITLE_H + 89.0;
+    let need = row.y0 - 12.0 - (top + 8.0);
+    if need > 0.0 {
+        app.doc().scroll_right += need;
+        let mut scene = vello::Scene::new();
+        paint(app, &mut scene);
+    }
+}
+
+/// Bring the Stroke section into the panel viewport. Same reasoning as
+/// `scroll_effects_into_view` and `scroll_mask_into_view`: the section sits
+/// below the fold at scroll 0 and `paint_right` drops the hit rects of rows
+/// that leave the viewport, so anything that means to *click* its style icon —
+/// a test, a screenshot — has to make the scroll a user makes.
+pub fn scroll_stroke_into_view(app: &mut App) {
+    let mut scene = vello::Scene::new();
+    paint(app, &mut scene);
+    let Some(row) = app.stroke_row else {
         return;
     };
     let top = crate::theme::ED_TITLE_H + 89.0;

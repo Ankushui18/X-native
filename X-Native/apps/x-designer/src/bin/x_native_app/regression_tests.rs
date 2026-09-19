@@ -8577,7 +8577,9 @@ fn the_advanced_stroke_panel_opens_from_the_section_and_writes_the_styles() {
         .doc()
         .editor()
         .add_stroke_layer("s", x_native::Stroke::solid(Color::BLACK, 2.0));
-    crate::editor_ui::paint(&mut h.app, &mut scene);
+    // the section is below the fold at scroll 0, and the panel drops the hit
+    // rects of rows that leave its viewport — so scroll it in, as a user does
+    crate::editor_ui::scroll_stroke_into_view(&mut h.app);
     let icon = h
         .app
         .hit
@@ -8711,6 +8713,7 @@ fn the_stroke_panel_writes_the_join_the_angle_the_pattern_and_the_ends() {
         .doc()
         .editor()
         .add_stroke_layer("s", x_native::Stroke::solid(Color::BLACK, 2.0));
+    crate::editor_ui::scroll_stroke_into_view(&mut h.app);
     h.dispatch(Action::ToggleStrokeStyle);
     assert!(h.app.stroke_style_open);
 

@@ -3900,6 +3900,10 @@ pub struct App {
     /// The Mask row's rect from the last paint — the anchor the panel scrolls
     /// to when the Mask section has to be reached (tests, screenshots).
     pub mask_row: Option<Rect>,
+    /// The Stroke section's style icon from the last paint, for the same
+    /// reason: the panel drops hit rects that leave its viewport, so reaching
+    /// the icon means scrolling the section in (`scroll_stroke_into_view`).
+    pub stroke_row: Option<Rect>,
     /// Figma's Place image queue: the assets picked with ⇧⌘K, in order. The
     /// place-image tool is armed while this is non-empty, and one file leaves
     /// it per placement.
@@ -4300,6 +4304,7 @@ impl App {
             rotation_origin_on: false,
             effect_rows: Vec::new(),
             mask_row: None,
+            stroke_row: None,
             placing_images: Vec::new(),
             crop: None,
             effect_drag_over: None,
