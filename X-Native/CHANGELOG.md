@@ -5,6 +5,45 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-19 (Instances: go to main, push changes, reset one change)
+
+An instance's *More actions* menu in Figma is where its three master-level
+operations live: **Go to main component**, **Push changes to main component**,
+and a **Reset** flyout that — in Figma's own words — *"only lists properties
+that have changes applied"*. The engine could already store overrides per
+instance; nothing could name them, clear one, or send them back to the master.
+
+- **The change list.** `x-core::instance_changes` reads an instance's overrides
+  and answers with one entry per change — the layer it sits on and the property
+  that changed (Fill, Text, Visible, Opacity, Swap, Width). Overrides live in a
+  map, so the list imposes Figma's own order and sorts within a group: the same
+  menu every render.
+- **Reset one change.** `Editor::reset_one_override` clears a single layer's
+  override (Figma's *"Reset > Reset [property]"*), and `reset_layer_overrides`
+  clears one layer *and its subtree* for the layer-selected case. Both are one
+  command-log step, so ⌘Z takes them back.
+- **Push changes to main component.** `x-core::push_overrides_to_master` writes
+  the instance's *appearance* overrides into its master, which is what makes
+  every other instance of that component follow. A swap override is not pushed
+  (it names another component), matching Figma, which only allows pushes for
+  components in the same file.
+- **The canvas menu.** A selection that is an instance now carries Figma's three
+  rows: *Go to main component* (selects the master and brings it into view),
+  *Push changes to main component* (inert until something has changed), and a
+  *Reset* submenu listing the changes plus *Reset all changes*. The rows are
+  built by `context_menu.rs` from data, and the painter learned one thing: a row
+  label can be data (`ContextAction::dynamic_label`).
+- Tests: `the_canvas_menu_carries_figmas_instance_actions`,
+  `go_to_main_selects_the_master_and_pushing_reaches_every_instance`,
+  `resetting_one_change_leaves_the_others_alone`,
+  `pushing_changes_to_main_and_resetting_one_change_are_undoable`,
+  `the_change_list_names_every_override_and_reset_clears_one`,
+  `resetting_a_layer_clears_its_subtree_and_nothing_else`,
+  `pushing_overrides_writes_the_master_for_every_instance`.
+
+Still open on this row: selecting *inside* an instance (12.11) and component
+sets as a first-class node (12.19).
+
 ## [Unreleased] — 2026-09-19 (Auto layout: min/max dimensions and canvas stacking)
 
 Two rows of Figma's auto-layout block were carried by the model but reachable

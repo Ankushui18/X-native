@@ -6176,6 +6176,7 @@ fn the_canvas_menu_wraps_a_selection_in_a_section() {
     let items = build_menu_items(&ContextTarget::CanvasSelection {
         selected_count: 2,
         contains_group: false,
+        instance: None,
     });
     let offers = items.iter().any(|it| {
         matches!(
@@ -6473,4 +6474,261 @@ fn the_canvas_stacking_menu_writes_figmas_two_orders() {
         x_native::CanvasStacking::LastOnTop
     );
     assert!(h.app.status.contains("Last on top"), "{}", h.app.status);
+}
+
+/// A Button master with a label and an icon, two component properties bound to
+/// them (so the panel's own write path produces the overrides), and an instance
+/// of it selected — the fixture Figma's instance menu is about.
+fn instance_host() -> (Host, String) {
+    let mut h = host();
+    let root_id = h.app.doc().editor_ref().root.id.clone();
+    let mut master = x_native::Node::component("def", "Button", 120.0, 44.0);
+    master.children.push(x_native::Node::text(
+        "lbl",
+        12.0,
+        12.0,
+        80.0,
+        20.0,
+        "Click me",
+    ));
+    master.children.push(x_native::Node::rect(
+        "ico",
+        96.0,
+        14.0,
+        16.0,
+        16.0,
+        Color::WHITE,
+    ));
+    h.app.doc().editor().insert_node(&root_id, master);
+    h.app.doc().editor().selection = vec!["lbl".into()];
+    h.app.add_prop(x_native::ComponentPropKind::Text);
+    h.app.doc().editor().selection = vec!["ico".into()];
+    h.app.add_prop(x_native::ComponentPropKind::Bool);
+    let inst = h
+        .app
+        .doc()
+        .editor()
+        .place_instance("Button", 40.0, 300.0)
+        .expect("instance placed");
+    h.app.doc().editor().selection = vec![inst.clone()];
+    (h, inst)
+}
+
+/// Every action in a built menu, submenus flattened — the same walk the painter
+/// does when it turns rows into hit rects.
+fn menu_actions(
+    items: &[crate::context_menu::ContextMenuItem],
+) -> Vec<(crate::context_menu::ContextAction, bool)> {
+    let mut out = vec![];
+    for it in items {
+        match it {
+            crate::context_menu::ContextMenuItem::Action { action, enabled } => {
+                out.push((action.clone(), *enabled));
+            }
+            crate::context_menu::ContextMenuItem::Submenu {
+                enabled, items, ..
+            } => {
+                for (a, e) in menu_actions(items) {
+                    out.push((a, e && *enabled));
+                }
+            }
+            crate::context_menu::ContextMenuItem::Separator => {}
+        }
+    }
+    out
+}
+
+/// Is this action present in a built menu AND enabled? The painter skips a hit
+/// rect for a disabled row, so this is the same question a click asks.
+fn menu_enabled(
+    actions: &[(crate::context_menu::ContextAction, bool)],
+    want: &crate::context_menu::ContextAction,
+) -> bool {
+    actions
+        .iter()
+        .find(|(a, _)| a == want)
+        .map(|(_, enabled)| *enabled)
+        .unwrap_or(false)
+}
+
+fn selection_menu(h: &Host) -> Vec<crate::context_menu::ContextMenuItem> {
+    let instance = h.app.context_instance();
+    crate::context_menu::build_menu_items(&crate::context_menu::ContextTarget::CanvasSelection {
+        selected_count: 1,
+        contains_group: false,
+        instance,
+    })
+}
+
+/// Figma's instance menu (help 360039150733): *"Go to main component"*,
+/// *"Push changes to main component"*, and a Reset flyout that *"only lists
+/// properties that have changes applied"*. A plain selection has none of it.
+#[test]
+fn the_canvas_menu_carries_figmas_instance_actions() {
+    use crate::context_menu::ContextAction as CA;
+    // a selection that is not an instance offers nothing instance-shaped
+    let mut plain = host();
+    let root_id = plain.app.doc().editor_ref().root.id.clone();
+    plain.app.doc().editor().selection = vec![root_id];
+    assert!(
+        plain.app.context_instance().is_none(),
+        "the page is not an instance"
+    );
+    let actions = menu_actions(&selection_menu(&plain));
+    let offers_main = actions
+        .iter()
+        .any(|(a, _)| matches!(a, CA::GoToMainComponent));
+    assert!(!offers_main, "a plain selection has no instance rows");
+
+    let (mut h, inst) = instance_host();
+    let info = h.app.context_instance().expect("the selection is an instance");
+    assert_eq!(info.id, inst);
+    assert_eq!(info.component, "Button");
+    assert!(info.in_file, "the master is in this document");
+    assert!(info.changes.is_empty(), "no overrides yet");
+
+    // with no changes: both master rows are there, push is off, no Reset
+    let actions = menu_actions(&selection_menu(&h));
+    assert!(
+        menu_enabled(&actions, &CA::GoToMainComponent),
+        "go-to-main is offered"
+    );
+    assert!(
+        actions.iter().any(|(a, _)| a == &CA::PushChangesToMain),
+        "the push row is offered"
+    );
+    assert!(
+        !menu_enabled(&actions, &CA::PushChangesToMain),
+        "nothing to push yet, so the row is inert"
+    );
+    assert!(
+        !actions
+            .iter()
+            .any(|(a, _)| matches!(a, CA::ResetChange { .. } | CA::ResetAllChanges)),
+        "no changes means no Reset rows"
+    );
+
+    // two overrides written through the panel's own path
+    assert!(h.app.apply_prop(&inst, "Button", "lbl", "Hello"));
+    assert!(h.app.apply_prop(&inst, "Button", "ico", "false"));
+    let info = h.app.context_instance().expect("still an instance");
+    assert_eq!(info.changes.len(), 2, "one row per change");
+    assert_eq!(info.changes[0].1, "lbl · Text");
+    assert_eq!(info.changes[1].1, "ico · Visible");
+    let actions = menu_actions(&selection_menu(&h));
+    assert!(
+        menu_enabled(&actions, &CA::PushChangesToMain),
+        "with changes applied the push row comes alive"
+    );
+    assert!(
+        actions.iter().any(|(a, _)| a == &CA::ResetAllChanges),
+        "the flyout ends with Reset all changes"
+    );
+    let rows = actions
+        .iter()
+        .filter(|(a, _)| matches!(a, CA::ResetChange { .. }))
+        .count();
+    assert_eq!(rows, 2, "and lists exactly the layers carrying changes");
+}
+
+/// *"Go to main component"* selects the master (help 360038665934), and
+/// *"Push changes to main component"* writes the instance's overrides into it —
+/// which is what makes every other instance of the component follow.
+#[test]
+fn go_to_main_selects_the_master_and_pushing_reaches_every_instance() {
+    let (mut h, inst) = instance_host();
+    assert!(h.app.apply_prop(&inst, "Button", "lbl", "Hello"));
+    // a second instance, untouched, to prove the push went to the definition
+    let second = h
+        .app
+        .doc()
+        .editor()
+        .place_instance("Button", 40.0, 400.0)
+        .expect("second instance");
+    h.app.doc().editor().selection = vec![inst.clone()];
+
+    h.dispatch(Action::GoToMainComponent);
+    assert_eq!(
+        h.app.doc().selected_id().as_deref(),
+        Some("def"),
+        "the master is selected"
+    );
+    assert!(
+        h.app.status.contains("main component"),
+        "status names the move: {}",
+        h.app.status
+    );
+
+    h.app.doc().editor().selection = vec![inst.clone()];
+    h.dispatch(Action::PushChangesToMain);
+    let text = {
+        let root = &h.app.doc_ref().editor_ref().root;
+        match &crate::editor_ui::find_node(root, "lbl").unwrap().kind {
+            NodeKind::Text { text } => text.clone(),
+            other => panic!("the master's label is a text layer, got {other:?}"),
+        }
+    };
+    assert_eq!(text, "Hello", "the master took the instance's text");
+    assert!(
+        h.app.status.contains("Pushed"),
+        "status reports the push: {}",
+        h.app.status
+    );
+    {
+        let root = &h.app.doc_ref().editor_ref().root;
+        let n = crate::editor_ui::find_node(root, &second).unwrap();
+        assert!(
+            n.overrides.is_empty(),
+            "the other instance needed no override of its own"
+        );
+    }
+    // ⌘Z takes the push back in one step
+    h.app.doc().editor().undo();
+    let text = {
+        let root = &h.app.doc_ref().editor_ref().root;
+        match &crate::editor_ui::find_node(root, "lbl").unwrap().kind {
+            NodeKind::Text { text } => text.clone(),
+            other => panic!("the master's label is a text layer, got {other:?}"),
+        }
+    };
+    assert_eq!(text, "Click me", "the push is one undo step");
+}
+
+/// *"Select a specific layer to view changes for that layer only … Reset >
+/// Reset [property]"* — one change at a time, and the rest stay put.
+#[test]
+fn resetting_one_change_leaves_the_others_alone() {
+    let (mut h, inst) = instance_host();
+    assert!(h.app.apply_prop(&inst, "Button", "lbl", "Hello"));
+    assert!(h.app.apply_prop(&inst, "Button", "ico", "false"));
+    // the change list is what the flyout prints, in Figma's property order
+    let changes = h.app.doc().editor_ref().instance_changes(&inst);
+    assert_eq!(changes.len(), 2);
+    let target = changes[0].node.clone();
+    assert_eq!(target, "lbl");
+
+    h.dispatch(Action::ResetInstanceChange(target.clone()));
+    let overrides = {
+        let root = &h.app.doc_ref().editor_ref().root;
+        crate::editor_ui::find_node(root, &inst).unwrap().overrides.clone()
+    };
+    assert!(!overrides.contains_key(&target), "that change is gone");
+    assert!(
+        overrides.contains_key("ico"),
+        "the other change is untouched: {overrides:?}"
+    );
+    assert!(
+        crate::editor_ui::find_node(&h.app.doc_ref().editor_ref().root, &inst)
+            .unwrap()
+            .visible,
+        "the instance itself is still there"
+    );
+    // a target with no override is a no-op, not a panic
+    h.dispatch(Action::ResetInstanceChange("ico".into()));
+    h.dispatch(Action::ResetInstanceChange("ico".into()));
+    let overrides = {
+        let root = &h.app.doc_ref().editor_ref().root;
+        crate::editor_ui::find_node(root, &inst).unwrap().overrides.clone()
+    };
+    assert!(overrides.is_empty(), "all changes cleared");
 }

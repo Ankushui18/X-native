@@ -14,7 +14,9 @@
 //! legacy `HashMap<String, String>` ("#hex" / "text:") remains as a
 //! serialization surface and is converted losslessly both ways.
 
-use crate::{color_to_hex, parse_hex_color, Color, Node, NodeKind, Paint, StrokeLayer, Variables};
+use crate::{
+    color_to_hex, find_node, parse_hex_color, Color, Node, NodeKind, Paint, StrokeLayer, Variables,
+};
 use std::collections::HashMap;
 
 /// A typed per-node override carried by an Instance.
@@ -89,6 +91,185 @@ pub fn set_override(node: &mut Node, target: &str, value: OverrideValue) {
 /// content lives in the instance's children, so it is kept.
 pub fn reset_overrides(instance: &mut Node) {
     instance.overrides.clear();
+}
+
+/// One entry in an instance's change list (Figma's More-actions menu, help
+/// 360039150733 "Reset changes": *"Figma only lists properties that have
+/// changes applied"*). `node` is the target layer's id, `property` the
+/// override kind's own word — the three the menu prints.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InstanceChange {
+    pub node: String,
+    pub property: &'static str,
+}
+
+impl InstanceChange {
+    /// The label Figma shows above the Reset row: the layer the change sits
+    /// on, then the property that changed. `root` is the tree to name it
+    /// from — an override targets a layer of the MASTER, so the lookup cannot
+    /// start at the instance.
+    pub fn label(&self, root: &Node) -> String {
+        let layer = find_node(root, &self.node)
+            .map(|n| n.name.clone())
+            .unwrap_or_else(|| self.node.clone());
+        format!("{layer} · {}", self.property)
+    }
+}
+
+/// How far down Figma's list a change sits: the appearance rows first, then
+/// the ones that name another layer. Overrides live in a map, so the menu has
+/// to impose this order itself to read the same on every render.
+fn change_rank(property: &str) -> u8 {
+    match property {
+        "Fill" => 0,
+        "Text" => 1,
+        "Visible" => 2,
+        "Opacity" => 3,
+        "Swap" => 4,
+        "Width" => 5,
+        _ => 6,
+    }
+}
+
+/// Every override on `instance` — the change list the Reset menu is built from
+/// — grouped in Figma's property order and stable within a group. Slot content
+/// is not an override; it lives in the instance's children, so it is never
+/// listed (and never reset).
+pub fn instance_changes(instance: &Node) -> Vec<InstanceChange> {
+    let mut out: Vec<InstanceChange> = instance
+        .overrides
+        .iter()
+        .map(|(target, raw)| InstanceChange {
+            node: target.clone(),
+            property: match OverrideValue::decode(raw) {
+                Some(OverrideValue::Fill(_)) | Some(OverrideValue::Stroke(_)) => "Fill",
+                Some(OverrideValue::Text(_)) => "Text",
+                Some(OverrideValue::Visible(_)) => "Visible",
+                Some(OverrideValue::Opacity(_)) => "Opacity",
+                Some(OverrideValue::Swap(_)) => "Swap",
+                Some(OverrideValue::Number(_)) => "Width",
+                None => "Change",
+            },
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        change_rank(a.property)
+            .cmp(&change_rank(b.property))
+            .then_with(|| a.node.cmp(&b.node))
+    });
+    out
+}
+
+/// Drop ONE override — Figma's *"Reset > Reset [property]"*. Returns whether
+/// that layer carried an override at all.
+pub fn reset_override(instance: &mut Node, target: &str) -> bool {
+    instance.overrides.remove(target).is_some()
+}
+
+/// Reset every override on ONE LAYER of the instance — Figma's *"select a
+/// specific layer to view changes for that layer only"* then *"Reset all
+/// changes"*. Both the layer's own entry and any override naming one of its
+/// descendants go, so resetting a group resets what it contains.
+pub fn reset_layer_overrides(instance: &mut Node, layer: &str) -> usize {
+    let mut targets = vec![layer.to_string()];
+    if let Some(n) = find_node(instance, layer) {
+        fn collect(n: &Node, out: &mut Vec<String>) {
+            for c in &n.children {
+                out.push(c.id.clone());
+                collect(c, out);
+            }
+        }
+        collect(n, &mut targets);
+    }
+    let before = instance.overrides.len();
+    instance.overrides.retain(|k, _| !targets.contains(k));
+    before - instance.overrides.len()
+}
+
+/// Figma's **push changes to main component** (help 360039150733): the
+/// instance's overrides are written into the master, so every other instance
+/// of it follows. Only layer *appearance* is pushed — fill, stroke, text,
+/// visibility, opacity — because that is the set Figma lets an instance
+/// override in the first place; a SWAP (which names another component) is not.
+///
+/// Returns the number of layers the master actually changed.
+pub fn push_overrides_to_master(root: &mut Node, instance_id: &str) -> usize {
+    let Some(instance) = find_node(root, instance_id).cloned() else {
+        return 0;
+    };
+    let NodeKind::Instance { component } = &instance.kind else {
+        return 0;
+    };
+    let component = component.clone();
+    let Some(master_id) = find_master(root, &component).map(|m| m.id.clone()) else {
+        return 0;
+    };
+    let mut pushed = 0;
+    if let Some(master) = find_node_mut(root, &master_id) {
+        for child in &mut master.children {
+            pushed += push_into(child, &instance.overrides);
+        }
+    }
+    pushed
+}
+
+/// Apply `overrides` to one master subtree, then its children. A node whose
+/// override lands returns 1 plus whatever its children take, so a nested
+/// target is found the same way the renderer finds it.
+fn push_into(node: &mut Node, overrides: &std::collections::HashMap<String, String>) -> usize {
+    let own = overrides
+        .get(&node.id)
+        .and_then(OverrideValue::decode)
+        .map(|v| apply_override(node, &v))
+        .unwrap_or(0);
+    let mut n = own;
+    for c in &mut node.children {
+        n += push_into(c, overrides);
+    }
+    n
+}
+
+/// Write one typed override into a node; 0 when that kind cannot be pushed.
+fn apply_override(node: &mut Node, v: &OverrideValue) -> usize {
+    match v {
+        OverrideValue::Fill(c) => {
+            node.fill = Paint::Solid(*c);
+            node.fills.clear();
+            1
+        }
+        OverrideValue::Stroke(c) => {
+            apply_stroke_paint(node, *c);
+            1
+        }
+        OverrideValue::Text(t) => {
+            if let NodeKind::Text { text } = &mut node.kind {
+                *text = t.clone();
+                node.text_runs.clear();
+                1
+            } else {
+                0
+            }
+        }
+        OverrideValue::Visible(b) => {
+            node.visible = *b;
+            1
+        }
+        OverrideValue::Opacity(o) => {
+            node.opacity = *o;
+            1
+        }
+        // a swap names another component, and a number is a bound property's
+        // width — neither is a pushable appearance change
+        OverrideValue::Swap(_) | OverrideValue::Number(_) => 0,
+    }
+}
+
+/// First node with `id`, mutable.
+fn find_node_mut<'a>(node: &'a mut Node, id: &str) -> Option<&'a mut Node> {
+    if node.id == id {
+        return Some(node);
+    }
+    node.children.iter_mut().find_map(|c| find_node_mut(c, id))
 }
 
 /// The typed override a color property writes, picked from its
@@ -863,5 +1044,151 @@ mod tests {
             return Some(n);
         }
         n.children.iter().find_map(|c| find(c, id))
+    }
+
+    /// A Button master: a label text and an icon rect, with one instance of it
+    /// on the page. The instance carries a text override, a fill override on
+    /// the icon and a swap override — the three kinds the Reset menu sorts.
+    fn master_and_instance() -> (Node, Node) {
+        let mut master = Node::component("Button", "Button", 120.0, 44.0);
+        master
+            .children
+            .push(Node::text("lbl", 12.0, 12.0, 80.0, 20.0, "Click me"));
+        master.children.push(Node::rect(
+            "ico",
+            96.0,
+            14.0,
+            16.0,
+            16.0,
+            Color::from_rgb8(0x11, 0x22, 0x33),
+        ));
+        master
+            .children
+            .push(Node::instance("badge", "Badge", 96.0, 14.0, 16.0, 16.0));
+        let mut inst = Node::instance("i1", "Button", 40.0, 300.0, 120.0, 44.0);
+        set_override(&mut inst, "lbl", OverrideValue::Text("Hello".into()));
+        set_override(
+            &mut inst,
+            "ico",
+            OverrideValue::Fill(Color::from_rgb8(0xff, 0, 0)),
+        );
+        set_override(&mut inst, "badge", OverrideValue::Swap("Badge/Big".into()));
+        (master, inst)
+    }
+
+    #[test]
+    fn the_change_list_names_every_override_and_reset_clears_one() {
+        let (master, inst) = master_and_instance();
+        let changes = instance_changes(&inst);
+        assert_eq!(changes.len(), 3, "one entry per override");
+        // Figma's property order, not the map's
+        assert_eq!(
+            (changes[0].node.as_str(), changes[0].property),
+            ("ico", "Fill")
+        );
+        assert_eq!(
+            (changes[1].node.as_str(), changes[1].property),
+            ("lbl", "Text")
+        );
+        assert_eq!(
+            (changes[2].node.as_str(), changes[2].property),
+            ("badge", "Swap")
+        );
+        // the label names the LAYER the change sits on (Figma's menu is a list
+        // of layers-and-properties, not of internal ids)
+        assert_eq!(changes[0].label(&master), "ico · Fill");
+        assert_eq!(changes[1].label(&master), "lbl · Text");
+        assert_eq!(changes[2].label(&master), "badge · Swap");
+
+        // Figma's "Reset > Reset [property]": one override goes, the rest stay
+        let mut after = inst.clone();
+        assert!(reset_override(&mut after, "lbl"));
+        assert_eq!(after.overrides.len(), 2);
+        assert!(!after.overrides.contains_key("lbl"));
+        assert!(
+            !reset_override(&mut after, "lbl"),
+            "a second reset has nothing to clear"
+        );
+    }
+
+    #[test]
+    fn resetting_a_layer_clears_its_subtree_and_nothing_else() {
+        // a container override plus one on a layer inside it
+        let mut inst = Node::instance("i1", "Card", 0.0, 0.0, 100.0, 60.0);
+        set_override(&mut inst, "lbl", OverrideValue::Text("Hi".into()));
+        set_override(&mut inst, "outer", OverrideValue::Opacity(0.5));
+        set_override(&mut inst, "inner", OverrideValue::Visible(false));
+        let mut outer = Node::group("outer", 100.0, 60.0);
+        outer.children.push(Node::rect(
+            "inner",
+            0.0,
+            0.0,
+            10.0,
+            10.0,
+            Color::WHITE,
+        ));
+        inst.children.push(outer);
+
+        // selecting the group resets what the group and its children carry
+        let cleared = reset_layer_overrides(&mut inst, "outer");
+        assert_eq!(cleared, 2, "the group and the layer inside it");
+        assert_eq!(inst.overrides.len(), 1);
+        assert!(
+            inst.overrides.contains_key("lbl"),
+            "a sibling is untouched by a layer reset"
+        );
+        assert_eq!(reset_layer_overrides(&mut inst, "outer"), 0);
+    }
+
+    #[test]
+    fn pushing_overrides_writes_the_master_for_every_instance() {
+        let (master, inst) = master_and_instance();
+        let mut root = Node::frame("page", 800.0, 600.0);
+        let master_id = master.id.clone();
+        root.children.push(master);
+        root.children.push(inst.clone());
+        // a second instance shows the same master
+        root.children
+            .push(Node::instance("i2", "Button", 40.0, 400.0, 120.0, 44.0));
+
+        let changed = push_overrides_to_master(&mut root, "i1");
+        assert_eq!(
+            changed, 2,
+            "fill + text are pushable; a swap names another component"
+        );
+        let m = find(&root, &master_id).expect("master still there");
+        let NodeKind::Text { text } = &find(m, "lbl").unwrap().kind else {
+            panic!("label is a text layer")
+        };
+        assert_eq!(text, "Hello", "the master's text took the override");
+        assert!(
+            matches!(
+                &find(m, "ico").unwrap().fill,
+                Paint::Solid(c) if *c == Color::from_rgb8(0xff, 0, 0)
+            ),
+            "the master's icon took the fill"
+        );
+        let badge = &find(m, "badge").unwrap().kind;
+        assert!(
+            matches!(badge, NodeKind::Instance { component } if component == "Badge"),
+            "a swap override does not repoint the master's nested instance"
+        );
+        assert_eq!(
+            root.children[1].overrides.len(),
+            3,
+            "the pushed instance keeps its own override list"
+        );
+    }
+
+    #[test]
+    fn pushing_from_an_instance_whose_master_is_gone_changes_nothing() {
+        let (_, inst) = master_and_instance();
+        let mut root = Node::frame("page", 800.0, 600.0);
+        let mut orphan = inst.clone();
+        orphan.kind = NodeKind::Instance {
+            component: "Missing".into(),
+        };
+        root.children.push(orphan);
+        assert_eq!(push_overrides_to_master(&mut root, "i1"), 0);
     }
 }

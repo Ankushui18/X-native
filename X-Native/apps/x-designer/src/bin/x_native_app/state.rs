@@ -1324,6 +1324,12 @@ pub enum Action {
     LibReviewClose,
     CycleInstanceSwap(String),
     ResetInstanceProps,
+    /// Instance More-actions menu (Figma, help 360039150733):
+    /// *"Go to main component"* and *"Push changes to main component"*, plus
+    /// *"Reset > Reset [property]"* carrying the target layer's id.
+    GoToMainComponent,
+    PushChangesToMain,
+    ResetInstanceChange(String),
     // board chrome
     BoardToggleGrid,
     BoardToggleConnectors,
@@ -3799,6 +3805,72 @@ impl App {
         let doc = self.doc();
         doc.editor().reset_instance_overrides(instance_id);
         self.mark_dirty();
+    }
+
+    /// Reset ONE change on the selected instance — Figma's *"Reset > Reset
+    /// [property]"*. False when that layer carried no override.
+    pub fn reset_instance_change(&mut self, target: &str) -> bool {
+        let Some((iid, _)) = self.selected_instance() else {
+            return false;
+        };
+        let doc = self.doc();
+        let ok = doc.editor().reset_one_override(&iid, target);
+        if ok {
+            self.mark_dirty();
+        }
+        ok
+    }
+
+    /// Figma's *"push changes to main component"*: the instance's overrides
+    /// land on the master, so every other instance of it follows. Returns how
+    /// many master layers changed (0 when the master is not in this file).
+    pub fn push_instance_overrides(&mut self, instance_id: &str) -> usize {
+        let doc = self.doc();
+        let changed = doc.editor().push_overrides_to_main(instance_id);
+        if changed > 0 {
+            self.mark_dirty();
+        }
+        changed
+    }
+
+    /// Select the instance's main component — Figma's *"Go to main
+    /// component"* (help 360038665934). Returns the master's id so the caller
+    /// can bring it into view.
+    pub fn go_to_main_component(&mut self) -> Option<String> {
+        let (_, component) = self.selected_instance()?;
+        let master = {
+            let doc = self.doc();
+            x_native::find_master(&doc.editor_ref().root, &component).map(|m| m.id.clone())?
+        };
+        self.doc().editor().selection = vec![master.clone()];
+        self.mark_dirty();
+        Some(master)
+    }
+
+    /// The selection as Figma's instance menu needs it: `None` unless the
+    /// selection is an instance. `in_file` gates both master rows (help
+    /// 360038665934: *"You can only push overrides if the main component is in
+    /// the same file as the instance"*) and `changes` is the list the Reset
+    /// flyout prints — *"Figma only lists properties that have changes
+    /// applied"*.
+    pub fn context_instance(&self) -> Option<crate::context_menu::InstanceMenu> {
+        let doc = self.doc_opt()?;
+        let (id, component) = self.selected_instance()?;
+        let root = &doc.editor_ref().root;
+        let node = crate::editor_ui::find_node(root, &id)?;
+        if !matches!(node.kind, x_native::NodeKind::Instance { .. }) {
+            return None;
+        }
+        let changes = x_native::instance_changes(node)
+            .iter()
+            .map(|c| (c.node.clone(), c.label(root)))
+            .collect();
+        Some(crate::context_menu::InstanceMenu {
+            id,
+            component: component.clone(),
+            in_file: x_native::find_master(root, &component).is_some(),
+            changes,
+        })
     }
 
     /// Commit a page rename (single source of truth for the pages-panel

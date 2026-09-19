@@ -3537,10 +3537,12 @@ impl Host {
                     .map(|n| matches!(n.kind, K::Group))
                     .unwrap_or(false)
             };
+            let instance = self.app.context_instance();
             let target = if sel_count > 0 {
                 crate::context_menu::ContextTarget::CanvasSelection {
                     selected_count: sel_count,
                     contains_group,
+                    instance,
                 }
             } else {
                 crate::context_menu::ContextTarget::CanvasEmpty
@@ -11684,6 +11686,37 @@ impl Host {
                     self.app.reset_instance_props(&iid);
                 }
             }
+            // Figma's instance More-actions menu (help 360039150733).
+            Action::GoToMainComponent => {
+                if let Some(master) = self.app.go_to_main_component() {
+                    let name = {
+                        let doc = self.app.doc();
+                        crate::editor_ui::find_node(&doc.editor_ref().root, &master)
+                            .map(|n| n.name.clone())
+                            .unwrap_or_default()
+                    };
+                    self.app.status = format!("Selected main component {name}");
+                    // Figma opens the master's file "to the location of the
+                    // main component"; in one file that means the viewport
+                    // travels to it.
+                    self.zoom_to_selection();
+                }
+            }
+            Action::PushChangesToMain => {
+                if let Some((iid, component)) = self.app.selected_instance() {
+                    let changed = self.app.push_instance_overrides(&iid);
+                    self.app.status = if changed == 0 {
+                        "Nothing to push — this instance has no overrides".to_string()
+                    } else {
+                        format!("Pushed {changed} layer(s) to {component}")
+                    };
+                }
+            }
+            Action::ResetInstanceChange(target) => {
+                if self.app.reset_instance_change(&target) {
+                    self.app.status = "Reset one change".into();
+                }
+            }
             Action::PaletteToggle => {
                 self.app.palette.open();
                 self.app.palette.query.clear();
@@ -15102,6 +15135,7 @@ fn screenshot_screens() {
             crate::context_menu::ContextTarget::CanvasSelection {
                 selected_count: 1,
                 contains_group: false,
+                instance: None,
             },
             700.0,
             500.0,

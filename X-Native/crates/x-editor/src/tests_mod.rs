@@ -2417,6 +2417,86 @@ mod tests {
         assert_eq!(n.overrides.len(), 1, "reset undone");
     }
 
+    /// Figma's instance More-actions menu (help 360039150733) at the engine
+    /// layer: the change list, a one-property reset, and **push changes to
+    /// main component** — each one command-log step, so ⌘Z takes it back.
+    #[test]
+    fn pushing_changes_to_main_and_resetting_one_change_are_undoable() {
+        let master = Node::component("def", "Button", 120.0, 44.0)
+            .child(Node::text("lbl", 0.0, 0.0, 80.0, 16.0, "Click me"))
+            .child(Node::rect(
+                "ico",
+                96.0,
+                0.0,
+                16.0,
+                16.0,
+                Color::from_rgb8(0x11, 0x22, 0x33),
+            ));
+        let mut inst = Node::instance("i1", "Button", 10.0, 10.0, 120.0, 44.0);
+        x_core::set_override(
+            &mut inst,
+            "lbl",
+            x_core::OverrideValue::Text("Hello".into()),
+        );
+        x_core::set_override(
+            &mut inst,
+            "ico",
+            x_core::OverrideValue::Fill(Color::from_rgb8(0xab, 0xcd, 0xef)),
+        );
+        let mut e = Editor::new(Node::frame("r", 500.0, 500.0).child(master).child(inst));
+
+        // the list the Reset flyout prints
+        let changes = e.instance_changes("i1");
+        assert_eq!(changes.len(), 2);
+        assert_eq!(
+            (changes[0].node.as_str(), changes[0].property),
+            ("ico", "Fill")
+        );
+        assert_eq!(
+            (changes[1].node.as_str(), changes[1].property),
+            ("lbl", "Text")
+        );
+        // a node that is not an instance has no changes to list
+        assert!(e.instance_changes("r").is_empty());
+
+        // "Reset > Reset [property]": only that layer's override goes
+        assert!(e.reset_one_override("i1", "lbl"));
+        let n = crate::find(&e.root, "i1").unwrap();
+        assert!(!n.overrides.contains_key("lbl"));
+        assert!(n.overrides.contains_key("ico"), "the other change stays");
+        assert!(
+            !e.reset_one_override("i1", "lbl"),
+            "nothing left to reset on that layer"
+        );
+        e.undo();
+        assert!(
+            crate::find(&e.root, "i1").unwrap().overrides.contains_key("lbl"),
+            "the single reset unwinds"
+        );
+
+        // "Push changes to main component"
+        let pushed = e.push_overrides_to_main("i1");
+        assert_eq!(pushed, 2, "text + fill are pushable");
+        let NodeKind::Text { text } = &crate::find(&e.root, "lbl").unwrap().kind else {
+            panic!("label is a text layer")
+        };
+        assert_eq!(text, "Hello", "the master carries the instance's text now");
+        assert!(matches!(
+            &crate::find(&e.root, "ico").unwrap().fill,
+            x_core::Paint::Solid(c) if *c == Color::from_rgb8(0xab, 0xcd, 0xef)
+        ));
+        // pushing is one undo step
+        e.undo();
+        let NodeKind::Text { text } = &crate::find(&e.root, "lbl").unwrap().kind else {
+            panic!("label is a text layer")
+        };
+        assert_eq!(text, "Click me", "the push unwinds in one step");
+
+        // a node that is not an instance pushes nothing
+        assert_eq!(e.push_overrides_to_main("r"), 0);
+        assert_eq!(e.push_overrides_to_main("nope"), 0);
+    }
+
     #[test]
     fn detach_instance_is_undoable() {
         let master = Node::component("def", "Card", 200.0, 100.0).child(Node::rect(

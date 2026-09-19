@@ -43,7 +43,7 @@ recon task, not a settled fact.
 | 9 Images | 9 | 5 | 2 | 2 | 0 | 0 |
 | 10 Text & typography | 18 | 15 | 2 | 1 | 0 | 0 |
 | 11 Vector editing & booleans | 20 | 14 | 5 | 1 | 0 | 0 |
-| 12 Components, instances, styles | 20 | 13 | 4 | 3 | 0 | 0 |
+| 12 Components, instances, styles | 20 | 16 | 2 | 2 | 0 | 0 |
 | 13 Variables & modes | 9 | 6 | 3 | 0 | 0 | 0 |
 | 14 Prototype | 30 | 19 | 10 | 0 | 0 | 1 |
 | 15 Inspect, dev mode, codegen | 9 | 5 | 3 | 1 | 0 | 0 |
@@ -52,9 +52,9 @@ recon task, not a settled fact.
 | 18 Design language (look of the app itself) | 12 | 1 | 5 | 6 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **334** | **226** | **55** | **34** | **16** | **3** |
+| **total** | **334** | **229** | **53** | **33** | **16** | **3** |
 
-The 34 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
+The 33 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
 the brief.
 
@@ -365,7 +365,7 @@ go to main, publish library, styles.
 | 12.1 | Create component | `⌘⇧K`, or the toolbar diamond | `MakeComponent`, `CtxCmd::MakeComponent` | MATCH |
 | 12.2 | Instance | instance node referencing a master | `NodeKind::Instance { component }` | MATCH |
 | 12.3 | Detach | `⇧⌘B` | `detach_instance` (`⌘⇧B`) | MATCH |
-| 12.4 | Find the main component | navigate to it | `find_master`, `VariantCycle`… *verify* a "go to main" action | PARTIAL |
+| 12.4 | Find the main component | *"Go to main component"* — [help 360038665934](https://help.figma.com/hc/en-us/articles/360038665934) | `App::go_to_main_component` (selects the master; the viewport travels to it), `Action::GoToMainComponent`, menu row | MATCH |
 | 12.5 | Variant sets | combine selections, swap variant | `VariantCombine`, `variant_set`, `switch_variant` | MATCH |
 | 12.6 | Component properties | boolean / text / instance swap / slot | `ComponentProp`, `PropRegistry`, `AddProp`, `AddSlot` | MATCH |
 | 12.7 | Overrides per instance | text/colour/etc. | `OverrideValue`, `typed_overrides`, `ToggleInstanceProp` | MATCH |
@@ -373,8 +373,8 @@ go to main, publish library, styles.
 | 12.9 | Slots (content previews) | slot property | `slot_content`, `SlotSetFromSelection`, `resolve_slots` | MATCH |
 | 12.10 | Swap instance | `⌥`-drag from Assets, or the swap menu | `CycleInstanceSwap`, `LibReviewAccept` | MATCH |
 | 12.11 | **Select inside an instance** | double-click to reach a nested layer | documented open item in the 2026-09-18 audit | **MISSING** |
-| 12.12 | **Push changes to main** | "edit main component" | not implemented | **MISSING** |
-| 12.13 | **Reset variant / property per instance** | per-property reset arrows | partial (`ResetInstanceProps` is all-or-nothing) | PARTIAL |
+| 12.12 | Push changes to main | *"Push changes to main component"*, same file only, instance selected — [help 360039150733](https://help.figma.com/hc/en-us/articles/360039150733) | `x-core::push_overrides_to_master` (fill/stroke/text/visibility/opacity; a swap is not pushed), `Editor::push_overrides_to_main`, `Action::PushChangesToMain` | MATCH |
+| 12.13 | Reset variant / property per instance | *"Reset > Reset [property]"* / *"Reset all changes"*, and the menu *"only lists properties that have changes applied"* — [help 360039150733](https://help.figma.com/hc/en-us/articles/360039150733) | `x-core::instance_changes` (stable list), `reset_override`, `reset_layer_overrides`, `Editor::reset_one_override`, `Action::ResetInstanceChange`, Reset flyout | MATCH |
 | 12.14 | **Publish library** | publish, update, review | `PublishLibrary`, `LibCheckUpdate`, `LibReview*` | MATCH |
 | 12.15 | Library updates review | yes | `LibReviewAccept/Close` | MATCH |
 | 12.16 | Dependency graph / cycle guard | Figma forbids cycles | `DependencyGraph::would_cycle` | MATCH |
@@ -588,8 +588,13 @@ rendering it.
 9. Place-image tool + crop (1.17, 2.25, 2.26, 9.5).
 10. Per-corner radii + **corner smoothing** (6.4, 6.5) — both fields are in the model;
     this is a UI pass with a renderer already able to draw it.
-11. Instance select-inside + push-to-main (12.11, 12.12), and component sets as a node
-    (12.19).
+11. Instance select-inside (12.11) and component sets as a node (12.19).
+    *Push changes to main component* (12.12), *Go to main component* (12.4) and the
+    per-property **Reset** flyout (12.13) — **delivered**: one engine rule pushes the
+    instance's appearance overrides into its master (a swap is not pushed), the canvas
+    menu carries Figma's rows, and the Reset list is built from the overrides that
+    really exist. Pinned by `the_canvas_menu_carries_figmas_instance_actions` and
+    `pushing_changes_to_main_and_resetting_one_change_are_undoable`.
 12. ~~**Auto layout min/max size + canvas stacking** (7.9, 7.10)~~ — **delivered**: the
     Width/Height dropdown's sizing and min/max rows (with the field they create and the
     marks on the axis icon), and canvas stacking as one paint-order rule the viewer, the

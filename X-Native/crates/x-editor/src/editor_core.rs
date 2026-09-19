@@ -2026,6 +2026,71 @@ impl Editor {
         self.replace_node(id, after)
     }
 
+    /// The instance's change list — Figma's More-actions menu *"only lists
+    /// properties that have changes applied"* (help 360039150733).
+    pub fn instance_changes(&self, id: &str) -> Vec<x_core::InstanceChange> {
+        match find(&self.root, id) {
+            Some(n) if matches!(n.kind, x_core::NodeKind::Instance { .. }) => {
+                x_core::instance_changes(n)
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Reset ONE change on an instance: Figma's *"Reset > Reset [property]"*.
+    /// Undoable; false when that layer had no override to reset.
+    pub fn reset_one_override(&mut self, id: &str, target: &str) -> bool {
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        if !matches!(n.kind, x_core::NodeKind::Instance { .. }) {
+            return false;
+        }
+        let mut after = n.clone();
+        if !x_core::reset_override(&mut after, target) {
+            return false;
+        }
+        self.replace_node(id, after)
+    }
+
+    /// Reset the changes on ONE LAYER of an instance: Figma's *"select a
+    /// specific layer to view changes for that layer only"* then *"Reset all
+    /// changes"*. Returns how many overrides went; undoable when any did.
+    pub fn reset_layer_overrides(&mut self, id: &str, layer: &str) -> usize {
+        let Some(n) = find(&self.root, id) else {
+            return 0;
+        };
+        if !matches!(n.kind, x_core::NodeKind::Instance { .. }) {
+            return 0;
+        }
+        let mut after = n.clone();
+        let changed = x_core::reset_layer_overrides(&mut after, layer);
+        if changed > 0 {
+            self.replace_node(id, after);
+        }
+        changed
+    }
+
+    /// Figma's **push changes to main component** (help 360039150733): the
+    /// instance's overrides are written into its master, so the change lands
+    /// on every other instance of that component. Undoable; returns how many
+    /// master layers changed, 0 when the master is not in this document.
+    pub fn push_overrides_to_main(&mut self, id: &str) -> usize {
+        let Some(n) = find(&self.root, id) else {
+            return 0;
+        };
+        if !matches!(n.kind, x_core::NodeKind::Instance { .. }) {
+            return 0;
+        }
+        let mut after = self.root.clone();
+        let changed = x_core::push_overrides_to_master(&mut after, id);
+        if changed > 0 {
+            let root_id = self.root.id.clone();
+            self.replace_node(&root_id, after);
+        }
+        changed
+    }
+
     /// Detach an instance into a resolved group (overrides + slot content
     /// applied). Undoable; returns the detached group's id.
     pub fn detach(&mut self, id: &str, vars: &x_core::Variables) -> Option<String> {

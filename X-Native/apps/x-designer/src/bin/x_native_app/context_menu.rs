@@ -21,7 +21,27 @@ pub enum ContextTarget {
         selected_count: usize,
         /// Any selected node is a group (enables Ungroup).
         contains_group: bool,
+        /// The instance the selection is, when it is one: the master name,
+        /// whether that master lives in this file, and the layers carrying an
+        /// override (Figma's More-actions menu, help 360039150733).
+        instance: Option<InstanceMenu>,
     },
+}
+
+/// What the instance section of the selection menu needs. Built by the app
+/// from the engine, so the menu itself stays data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstanceMenu {
+    /// The instance node's id.
+    pub id: String,
+    /// The component it follows — Figma's *"hover over the name … to see Go
+    /// to main component in library"*.
+    pub component: String,
+    /// The master is in this document, so *Go to main component* and *Push
+    /// changes to main component* are both available.
+    pub in_file: bool,
+    /// One override per entry: (target layer id, the property's own word).
+    pub changes: Vec<(String, String)>,
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -68,6 +88,17 @@ pub enum ContextAction {
     /// Canvas minimap (⇧M) — the navigation aid for a page larger than the
     /// viewport.
     ToggleMinimap,
+    // Instance (Figma's More-actions menu)
+    /// *"Go to main component"* — select the master (help 360038665934).
+    GoToMainComponent,
+    /// *"Push changes to main component"* (help 360039150733).
+    PushChangesToMain,
+    /// A row of the Reset flyout: *"Reset > Reset [property]"* — the label
+    /// names the layer and the property it carries, so it is data, not a
+    /// static string.
+    ResetChange { target: String, label: String },
+    /// *"Reset > Reset all changes"*.
+    ResetAllChanges,
 }
 
 impl ContextAction {
@@ -99,6 +130,20 @@ impl ContextAction {
             Self::SelectAll => "Select all",
             Self::ToggleGrid => "Toggle grid",
             Self::ToggleMinimap => "Toggle minimap",
+            Self::GoToMainComponent => "Go to main component",
+            Self::PushChangesToMain => "Push changes to main component",
+            Self::ResetAllChanges => "Reset all changes",
+            // the one action whose label is data; `dynamic_label` serves it
+            Self::ResetChange { .. } => "Reset change",
+        }
+    }
+
+    /// The label when it is not static (the Reset rows, which name the layer
+    /// and the property they clear).
+    pub fn dynamic_label(&self) -> Option<&str> {
+        match self {
+            Self::ResetChange { label, .. } => Some(label.as_str()),
+            _ => None,
         }
     }
 
@@ -131,6 +176,9 @@ impl ContextAction {
             Self::SelectAll => "box-select",
             Self::ToggleGrid => "grid-2x2",
             Self::ToggleMinimap => "layout-dashboard",
+            Self::GoToMainComponent => "component",
+            Self::PushChangesToMain => "arrow-up-right",
+            Self::ResetChange { .. } | Self::ResetAllChanges => "rotate-ccw",
         }
     }
 
@@ -282,6 +330,10 @@ pub fn action_for(action: &ContextAction) -> Option<Action> {
         SelectAll => Action::Ctx(CtxCmd::SelectAll),
         ToggleGrid => Action::ToggleGuideVisibility,
         ToggleMinimap => Action::ToggleMinimap,
+        GoToMainComponent => Action::GoToMainComponent,
+        PushChangesToMain => Action::PushChangesToMain,
+        ResetChange { target, .. } => Action::ResetInstanceChange(target.clone()),
+        ResetAllChanges => Action::ResetInstanceProps,
     })
 }
 
@@ -309,6 +361,7 @@ pub fn build_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
         ContextTarget::CanvasSelection {
             selected_count,
             contains_group,
+            instance,
         } => {
             let mut items = vec![
                 ai(Cut, true),
@@ -353,6 +406,36 @@ pub fn build_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
                         ai(BooleanExclude, true),
                     ],
                 });
+            }
+            // Figma's instance More-actions menu (help 360039150733). The two
+            // master rows need the master to be in this file; the Reset flyout
+            // *"only lists properties that have changes applied"* and ends with
+            // *"Reset all changes"*.
+            if let Some(inst) = instance {
+                let pushable = inst.in_file && !inst.changes.is_empty();
+                items.push(ContextMenuItem::Separator);
+                items.push(ai(GoToMainComponent, inst.in_file));
+                items.push(ai(PushChangesToMain, pushable));
+                if !inst.changes.is_empty() {
+                    let mut rows: Vec<ContextMenuItem> = inst
+                        .changes
+                        .iter()
+                        .map(|(target, property)| ContextMenuItem::Action {
+                            action: ResetChange {
+                                target: target.clone(),
+                                label: property.clone(),
+                            },
+                            enabled: true,
+                        })
+                        .collect();
+                    rows.push(ai(ResetAllChanges, true));
+                    items.push(ContextMenuItem::Submenu {
+                        label: "Reset",
+                        icon: "history",
+                        enabled: true,
+                        items: rows,
+                    });
+                }
             }
             items.push(ContextMenuItem::Separator);
             items.push(ai(OutlineStroke, true));
@@ -421,6 +504,7 @@ mod tests {
         let items = build_menu_items(&ContextTarget::CanvasSelection {
             selected_count: 2,
             contains_group: false,
+            instance: None,
         });
         let actions = actions_of(&items);
         assert!(
@@ -442,6 +526,7 @@ mod tests {
         let items = build_menu_items(&ContextTarget::CanvasSelection {
             selected_count: 1,
             contains_group: true,
+            instance: None,
         });
         let actions = actions_of(&items);
         assert!(
