@@ -727,6 +727,7 @@ impl Editor {
         let mut after = n.clone();
         after.materialize_visual_stacks();
         f(&mut after);
+        sync_legacy_effects(&mut after);
         after.dirty = true;
         self.push_replace(id, before, after);
         true
@@ -786,6 +787,139 @@ impl Editor {
             }
         })
     }
+    /// Toggle one effect off/on (Figma's per-effect eye). The effect keeps its
+    /// settings; it just stops painting — which is Figma's own reason for the
+    /// control: *"you can toggle the visibility of individual effects"*.
+    pub fn set_effect_layer_visible(&mut self, id: &str, index: usize, visible: bool) -> bool {
+        if effect_at(&self.root, id, index).is_none() {
+            return false;
+        }
+        self.mutate_visual_stack(id, move |n| {
+            if let Some(l) = n.effect_layers.get_mut(index) {
+                l.visible = visible;
+            }
+        })
+    }
+
+    /// Switch an effect to another type (Figma's per-row dropdown). The new
+    /// effect starts from that type's own defaults; the layer keeps its
+    /// visibility and blend, which belong to the row rather than the effect.
+    pub fn set_effect_kind(&mut self, id: &str, index: usize, kind: EffectKind) -> bool {
+        if effect_at(&self.root, id, index).is_none() {
+            return false;
+        }
+        self.mutate_visual_stack(id, move |n| {
+            if let Some(l) = n.effect_layers.get_mut(index) {
+                l.effect = Effect::default_of(kind);
+            }
+        })
+    }
+
+    /// Write one numeric setting of one effect (X / Y / Blur / Radius /
+    /// Density — see [`Effect::fields`]).
+    pub fn set_effect_field(&mut self, id: &str, index: usize, field: EffectField, v: f64) -> bool {
+        if effect_at(&self.root, id, index).is_none() {
+            return false;
+        }
+        self.mutate_visual_stack(id, move |n| {
+            if let Some(l) = n.effect_layers.get_mut(index) {
+                l.effect.set_field(field, v);
+            }
+        })
+    }
+
+    /// A shadow's **Fill** (its colour). Only the shadow kinds carry one, so
+    /// the write is refused for the others rather than silently dropped.
+    pub fn set_effect_color(&mut self, id: &str, index: usize, color: Color) -> bool {
+        if !effect_at(&self.root, id, index).is_some_and(|e| e.color().is_some()) {
+            return false;
+        }
+        self.mutate_visual_stack(id, move |n| {
+            if let Some(l) = n.effect_layers.get_mut(index) {
+                l.effect.set_color(color);
+            }
+        })
+    }
+
+    /// One effect's blend mode (Figma: *"Apply a blend mode to an effect"* for
+    /// inner shadow, drop shadow and noise). `Pass through` is refused here —
+    /// it cannot be applied to an effect.
+    pub fn set_effect_layer_blend(&mut self, id: &str, index: usize, blend: BlendKind) -> bool {
+        if blend == BlendKind::PassThrough || effect_at(&self.root, id, index).is_none() {
+            return false;
+        }
+        self.mutate_visual_stack(id, move |n| {
+            if let Some(l) = n.effect_layers.get_mut(index) {
+                l.blend = blend;
+            }
+        })
+    }
+
+    /// Duplicate an effect in place (`⌘D` on a selected effect copies its
+    /// settings — Figma's *"duplicate the effect"*).
+    pub fn duplicate_effect_layer(&mut self, id: &str, index: usize) -> bool {
+        if effect_at(&self.root, id, index).is_none() {
+            return false;
+        }
+        self.mutate_visual_stack(id, move |n| {
+            if let Some(l) = n.effect_layers.get(index).cloned() {
+                n.effect_layers.insert(index + 1, l);
+            }
+        })
+    }
+
+    /// The whole layer's blend mode: Figma's **Apply blend mode** in the
+    /// Appearance section, where `Pass through` IS allowed (it is the default
+    /// for layers).
+    pub fn set_layer_blend(&mut self, id: &str, blend: BlendKind) -> bool {
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        let mut after = n.clone();
+        after.blend = blend;
+        after.dirty = true;
+        self.push_replace(id, Box::new(n.clone()), after);
+        true
+    }
+
+    /// One fill's or stroke's blend mode (Figma: *"Open the color picker in
+    /// the Fill or Stroke sections … then click Apply blend mode"*). `Pass
+    /// through` is refused: it cannot be applied to a paint.
+    pub fn set_paint_layer_blend(
+        &mut self,
+        id: &str,
+        is_fill: bool,
+        index: usize,
+        blend: BlendKind,
+    ) -> bool {
+        if blend == BlendKind::PassThrough {
+            return false;
+        }
+        let present = find(&self.root, id)
+            .map(|n| {
+                let layers = if is_fill {
+                    &n.fill_layers
+                } else {
+                    &n.stroke_layers
+                };
+                index < layers.len()
+            })
+            .unwrap_or(false);
+        if !present {
+            return false;
+        }
+        self.mutate_visual_stack(id, move |n| {
+            let layers = if is_fill {
+                &mut n.fill_layers
+            } else {
+                &mut n.stroke_layers
+            };
+            if let Some(l) = layers.get_mut(index) {
+                l.blend = blend;
+            }
+        })
+    }
+
     pub fn set_text(&mut self, id: &str, text: &str) {
         let overridable = matches!(
             find(&self.root, id).map(|n| &n.kind),
@@ -3392,6 +3526,30 @@ impl Editor {
 // stack's back: an operation either pushes exactly one undo entry or pushes
 // nothing at all.
 // ---------------------------------------------------------------------------
+
+/// The effect at `index` as the node carries it: the ordered stack once the
+/// node is materialized, the flat legacy list otherwise. `None` when the index
+/// is out of range — which is how every effect setter refuses *before* it
+/// pushes an undo entry, so a click on a stale row changes nothing at all.
+fn effect_at<'a>(root: &'a Node, id: &str, index: usize) -> Option<&'a Effect> {
+    let n = find(root, id)?;
+    if n.visual_stacks_materialized {
+        n.effect_layers.get(index).map(|l| &l.effect)
+    } else {
+        n.effects.get(index)
+    }
+}
+
+/// The ordered `effect_layers` stack is the truth once a node has been
+/// materialized; `effects` is the flat list the `.x` format and the direct
+/// (non-IR) sink read. Every write through [`Editor::mutate_visual_stack`]
+/// leaves the two saying the same thing, so an effect added, retyped, hidden
+/// or reordered in the panel paints exactly that way on every path.
+fn sync_legacy_effects(n: &mut Node) {
+    if n.visual_stacks_materialized {
+        n.effects = n.effect_layers.iter().map(|l| l.effect.clone()).collect();
+    }
+}
 
 /// Rename every reference to a component — `Instance { component }` and the
 /// `Swap` overrides — from `old` to `new`. The other half of

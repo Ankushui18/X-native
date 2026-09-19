@@ -5,6 +5,54 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-19 (Effects list and blend modes)
+
+Figma's Effects section is a **list**, and `360041488473` says exactly how to
+work it: add one of the types from the `+`, switch a row's type from its own
+dropdown, hide an individual effect, edit the settings the *Effect settings*
+discloses, duplicate it (*"⌘D … duplicate the effect"*), reorder it by dragging a
+row. Ours was a header and a `+` that added one fixed drop shadow: no list, no
+edit, and Figma's other four types unreachable from the UI.
+
+- **One list, one owner per fact.** `Effect::kind` / `Effect::fields` /
+  `Effect::field` / `Effect::set_field` / `Effect::color` / `Effect::set_color`
+  describe what each type carries, and `EffectKind::{all, label, icon}` own the
+  five types in Figma's dropdown order. The panel builds every row and settings
+  block from those, so a type can never grow a field the model has no place for —
+  a Blur shows **Radius**, Noise shows **Density**, a shadow shows **X / Y /
+  Blur** plus its **Fill**.
+- **The writers.** `set_effect_kind`, `set_effect_field`, `set_effect_color`,
+  `set_effect_layer_visible`, `duplicate_effect_layer`,
+  `set_effect_layer_blend` and the existing add / remove / move. Each refuses
+  before pushing an undo entry when the row or setting does not exist, so a click
+  on a stale row changes nothing at all (`effect_at`).
+- **The legacy list follows.** `mutate_visual_stack` now mirrors the ordered
+  `effect_layers` stack into the flat `effects` list the `.x` format and the
+  direct sink read, so an effect added, retyped, hidden or reordered in the panel
+  paints that way on every path.
+- **Blend modes** (`360040667874`): `BlendKind::{label, layer_modes, paint_modes,
+  row_in}` hold Figma's words and its two lists — the layer menu is the paint menu
+  with **Pass through** in front, because *"Pass through cannot be applied to
+  fills or effects"* while it is the default for layers. Writable on the layer
+  (Appearance row), on a fill/stroke (the colour popover's **Apply blend mode**
+  row) and on a shadow or noise effect (the effect row's own blend).
+- **The app.** The Effects section paints the list: type dropdown, settings,
+  the shadow's Fill swatch (which opens the real colour popover, now targeted by
+  `PaintTarget` instead of a bool), the effect's blend, and its own eye /
+  duplicate / remove. A press-and-drag on a row reorders the stack, one undo
+  entry per reorder (`Drag::EffectRow`).
+- Tests: `the_effects_list_is_the_stack_and_every_write_is_one_undo_step`,
+  `an_effect_write_past_the_end_changes_nothing`, `only_a_shadow_carries_a_fill`,
+  `pass_through_is_a_layer_mode_only`,
+  `the_blend_lists_are_figmas_and_pass_through_is_layer_only`,
+  `the_effect_kinds_are_figmas_five_with_their_own_fields`,
+  `the_effects_section_lists_every_effect_with_figmas_controls`,
+  `the_blend_menus_offer_figmas_modes_and_write_the_choice`,
+  `dragging_an_effect_row_reorders_the_stack`,
+  `an_effect_colour_never_lands_on_the_layer_fill`.
+- Still open, and now listed as such: Figma's **Glass** and **Texture** types,
+  and the per-type caps (*"up to eight drop shadows … one layer blur"*).
+
 ## [Unreleased] — 2026-09-19 (Component sets)
 
 Figma's component set is not a fourth kind of node: it is a **frame that holds

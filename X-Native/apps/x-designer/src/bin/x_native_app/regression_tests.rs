@@ -3939,6 +3939,251 @@ fn variant_switcher_switches_instance_variant() {
     }
 }
 
+/// A layer with nothing on it, selected: the fixture the effects tests use.
+fn effect_host() -> Host {
+    let mut h = host();
+    {
+        let d = h.app.doc();
+        let root_id = d.editor_ref().root.id.clone();
+        d.editor().insert_node(
+            &root_id,
+            Node::rect("fx", 0.0, 0.0, 80.0, 60.0, x_native::Color::WHITE),
+        );
+        d.editor().selection = vec!["fx".into()];
+    }
+    h
+}
+
+/// Figma (help 360041488473): the Effects section is a **list** of the effects
+/// on the layer, the `+` opens the five types, and each row carries its own
+/// dropdown, settings, eye and blend.
+#[test]
+fn the_effects_section_lists_every_effect_with_figmas_controls() {
+    use x_native::EffectKind;
+    let mut h = effect_host();
+    {
+        let d = h.app.doc();
+        d.editor()
+            .add_effect_layer("fx", x_native::Effect::default_of(EffectKind::DropShadow));
+        d.editor()
+            .add_effect_layer("fx", x_native::Effect::default_of(EffectKind::LayerBlur));
+        d.editor().selection = vec!["fx".into()];
+    }
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+
+    // one row per effect, top to bottom, and no add menu until it is opened
+    assert_eq!(h.app.effect_rows.len(), 2, "one row per effect");
+    assert!(
+        !h.app
+            .hit
+            .iter()
+            .any(|(_, a)| matches!(a, Action::AddEffect(_))),
+        "the + opens a menu; it does not add anything by itself"
+    );
+    for i in 0..2 {
+        assert!(h.app.hit.iter().any(|(_, a)| *a == Action::EffectRow(i)));
+        assert!(h
+            .app
+            .hit
+            .iter()
+            .any(|(_, a)| *a == Action::ToggleEffectVisible(i)));
+        assert!(h
+            .app
+            .hit
+            .iter()
+            .any(|(_, a)| *a == Action::ToggleEffectKind(i)));
+        assert!(h.app.hit.iter().any(|(_, a)| *a == Action::RemoveEffect(i)));
+    }
+
+    // the add menu lists Figma's five types
+    h.dispatch(Action::ToggleEffectAdd);
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let kinds: Vec<Action> = h
+        .app
+        .hit
+        .iter()
+        .filter(|(_, a)| matches!(a, Action::AddEffect(_)))
+        .map(|(_, a)| a.clone())
+        .collect();
+    assert_eq!(
+        kinds.len(),
+        5,
+        "Drop shadow, Inner shadow, the two blurs, Noise"
+    );
+    h.dispatch(Action::AddEffect(EffectKind::InnerShadow));
+    assert_eq!(
+        h.app.effect_rows.len(),
+        0,
+        "the rows are recomputed on paint"
+    );
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    assert_eq!(h.app.effect_rows.len(), 3);
+
+    // the settings disclosure shows the effect's OWN fields
+    h.dispatch(Action::ToggleEffectSettings(0));
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    for f in [
+        FieldId::EffectX(0),
+        FieldId::EffectY(0),
+        FieldId::EffectBlur(0),
+    ] {
+        assert!(
+            h.app.hit.iter().any(|(_, a)| *a == Action::Field(f)),
+            "a shadow shows X / Y / Blur"
+        );
+    }
+    assert!(
+        !h.app
+            .hit
+            .iter()
+            .any(|(_, a)| *a == Action::Field(FieldId::EffectRadius(0))),
+        "…and not a Blur's Radius row"
+    );
+    // the shadow's Fill swatch opens the colour popover targeted at THIS effect
+    assert!(h
+        .app
+        .hit
+        .iter()
+        .any(|(_, a)| *a == Action::ToggleColorPicker(crate::state::PaintTarget::Effect(0))));
+
+    // typing in the field writes that effect's setting, undoably
+    h.dispatch(Action::Field(FieldId::EffectBlur(0)));
+    h.app.field.as_mut().unwrap().buffer = "11".into();
+    assert!(h.finish_edits());
+    let layers = h.app.effect_layers_of("fx");
+    assert_eq!(
+        layers[0].effect.field(x_native::EffectField::Blur),
+        11.0,
+        "the Blur row wrote the effect"
+    );
+}
+
+/// Figma's two blend dropdowns: the layer's 19 modes start with *Pass through*,
+/// a paint's 18 do not — *"Pass through cannot be applied to fills or effects"*.
+#[test]
+fn the_blend_menus_offer_figmas_modes_and_write_the_choice() {
+    let mut h = effect_host();
+    h.dispatch(Action::ToggleLayerBlend);
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let layer_rows: Vec<x_native::BlendKind> = h
+        .app
+        .hit
+        .iter()
+        .filter_map(|(_, a)| match a {
+            Action::SetLayerBlend(m) => Some(*m),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(layer_rows.len(), 19);
+    assert_eq!(layer_rows[0], x_native::BlendKind::PassThrough);
+
+    h.dispatch(Action::SetLayerBlend(x_native::BlendKind::Multiply));
+    assert_eq!(
+        crate::editor_ui::find_node(&h.app.doc_ref().editor_ref().root, "fx")
+            .unwrap()
+            .blend,
+        x_native::BlendKind::Multiply
+    );
+
+    h.dispatch(Action::TogglePaintBlend(crate::state::PaintTarget::Fill));
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let paint_rows: Vec<x_native::BlendKind> = h
+        .app
+        .hit
+        .iter()
+        .filter_map(|(_, a)| match a {
+            Action::SetPaintBlend(_, m) => Some(*m),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(paint_rows.len(), 18);
+    assert!(
+        !paint_rows.contains(&x_native::BlendKind::PassThrough),
+        "a fill cannot be Pass through"
+    );
+    h.dispatch(Action::SetPaintBlend(
+        crate::state::PaintTarget::Fill,
+        x_native::BlendKind::Darken,
+    ));
+    assert_eq!(
+        crate::editor_ui::find_node(&h.app.doc_ref().editor_ref().root, "fx")
+            .unwrap()
+            .fill_layers[0]
+            .blend,
+        x_native::BlendKind::Darken
+    );
+}
+
+/// Figma reorders effects by dragging a row; the release is ONE undo entry.
+#[test]
+fn dragging_an_effect_row_reorders_the_stack() {
+    use x_native::EffectKind;
+    let mut h = effect_host();
+    {
+        let d = h.app.doc();
+        d.editor()
+            .add_effect_layer("fx", x_native::Effect::default_of(EffectKind::DropShadow));
+        d.editor()
+            .add_effect_layer("fx", x_native::Effect::default_of(EffectKind::LayerBlur));
+        d.editor().selection = vec!["fx".into()];
+    }
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let rows = h.app.effect_rows.clone();
+    assert_eq!(rows.len(), 2);
+    let (a, b) = (rows[0].center(), rows[1].center());
+
+    h.on_press(a);
+    assert!(matches!(h.app.drag, Some(Drag::EffectRow { .. })));
+    h.on_move(b);
+    assert!(matches!(
+        h.app.drag,
+        Some(Drag::EffectRow { active: true, .. })
+    ));
+    h.on_release();
+    let layers = h.app.effect_layers_of("fx");
+    assert_eq!(
+        layers[0].effect.kind(),
+        EffectKind::LayerBlur,
+        "the blur moved to the top"
+    );
+    assert!(h.app.doc().editor().undo());
+    let layers = h.app.effect_layers_of("fx");
+    assert_eq!(layers[0].effect.kind(), EffectKind::DropShadow, "one undo");
+}
+
+/// A shadow's colour goes to the *effect*, never to the layer's own fill.
+#[test]
+fn an_effect_colour_never_lands_on_the_layer_fill() {
+    use x_native::EffectKind;
+    let mut h = effect_host();
+    {
+        let d = h.app.doc();
+        d.editor()
+            .add_effect_layer("fx", x_native::Effect::default_of(EffectKind::DropShadow));
+        d.editor().selection = vec!["fx".into()];
+    }
+    h.dispatch(Action::PaintPreset(
+        crate::state::PaintTarget::Effect(0),
+        "#FF3B30".into(),
+    ));
+    let n = crate::editor_ui::find_node(&h.app.doc_ref().editor_ref().root, "fx").unwrap();
+    let color = n.effect_layers[0].effect.color().expect("a shadow colour");
+    let rgba = color.to_rgba8();
+    assert_eq!((rgba.r, rgba.g, rgba.b), (0xFF, 0x3B, 0x30));
+    assert_eq!(
+        n.fill,
+        x_native::Paint::Solid(x_native::Color::WHITE),
+        "the layer's own fill is untouched"
+    );
+}
+
 #[test]
 fn variant_combine_groups_masters() {
     let mut h = host();

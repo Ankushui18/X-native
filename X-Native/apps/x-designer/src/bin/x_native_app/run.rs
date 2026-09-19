@@ -3619,6 +3619,29 @@ impl Host {
     /// a >4px move turns into a real reorder (P12). Shared by the row's own hit
     /// zone and the name zone inside it, so dragging a layer by its NAME works
     /// exactly like dragging it by the rest of the row.
+    fn effect_count(&self, id: &str) -> usize {
+        self.app.effect_layers_of(id).len()
+    }
+
+    fn effect_layer(&self, id: &str, i: usize) -> Option<x_native::EffectLayer> {
+        self.app.effect_layers_of(id).into_iter().nth(i)
+    }
+
+    /// Figma reorders effects by dragging a row (*"you click and drag the
+    /// handles to reorder the effects"*). A press on a row arms the drag; the
+    /// move turns it into a reorder once it passes the threshold, and the
+    /// release commits it as one undo entry.
+    fn effect_row_press(&mut self, index: usize) {
+        self.app.effect_settings = Some(index);
+        self.app.drag = Some(Drag::EffectRow {
+            from: index,
+            start: self.app.mouse,
+            active: false,
+            over: None,
+        });
+    }
+
+    /// One popover at a time in the inspector, the way its other menus behave.
     fn tree_row_press(&mut self, id: String, p: Point) {
         let doc = self.app.doc();
         doc.editor().selection = vec![id.clone()];
@@ -4927,6 +4950,27 @@ impl Host {
                     *o = over;
                 }
             }
+            // ---- effects list: the same drag, inside the inspector
+            Some(Drag::EffectRow {
+                from,
+                start,
+                active,
+                ..
+            }) => {
+                if !active {
+                    if (p.x - start.x).abs().max((p.y - start.y).abs()) < 4.0 {
+                        return;
+                    }
+                    if let Some(Drag::EffectRow { active, .. }) = self.app.drag.as_mut() {
+                        *active = true;
+                    }
+                }
+                let over = crate::editor_ui::effect_drop_index(&self.app, p);
+                self.app.effect_drag_over = over.filter(|o| *o != from);
+                if let Some(Drag::EffectRow { over: o, .. }) = self.app.drag.as_mut() {
+                    *o = over;
+                }
+            }
             // ---- vector edit mode drags: live in the tree, logged once ----
             Some(Drag::VectorPoint { last }) => {
                 let world = self.app.screen_to_world(p);
@@ -5614,6 +5658,26 @@ impl Host {
             }
             Some(Drag::Guide { .. }) => {
                 self.app.guide_release();
+            }
+            // the effects list: a reorder that passed the threshold commits
+            // here, as ONE undo entry
+            Some(Drag::EffectRow {
+                from, active, over, ..
+            }) => {
+                self.app.effect_drag_over = None;
+                if active {
+                    if let Some(to) = over.filter(|t| *t != from) {
+                        let sel = self.app.doc().selected_id();
+                        if let Some(id) = sel {
+                            if self.app.doc().editor().move_effect_layer(&id, from, to) {
+                                self.app.mark_dirty();
+                                self.app.effect_settings = Some(to);
+                                self.app.status = "Effect reordered".into();
+                            }
+                        }
+                    }
+                }
+                self.app.drag = None;
             }
             // P12: the tree reorder commits on release — one undo step
             Some(Drag::TreeRow { active, over, .. }) => {
@@ -10419,29 +10483,36 @@ impl Host {
                 let next = crate::theme::active_theme().next();
                 self.apply_theme(next);
             }
-            Action::ToggleColorPicker(is_fill) => {
+            Action::ToggleColorPicker(target) => {
+                // The popover is ONE control; its target says where the colour
+                // lands — a fill, a stroke, or an effect's Fill row.
+                let same = self
+                    .app
+                    .color_picker_popup
+                    .as_ref()
+                    .is_some_and(|(t, _, _)| *t == target);
+                let effect_fill = matches!(target, crate::state::PaintTarget::Effect(_));
                 let (fill_open, stroke_open) = {
                     let doc = self.app.doc();
-                    if is_fill {
-                        doc.color_picker_fill_open = !doc.color_picker_fill_open;
-                        if doc.color_picker_fill_open {
-                            doc.color_picker_stroke_open = false;
-                        }
+                    if same {
+                        doc.color_picker_fill_open = false;
+                        doc.color_picker_stroke_open = false;
+                    } else if target.is_fill() {
+                        doc.color_picker_fill_open = true;
+                        doc.color_picker_stroke_open = false;
                     } else {
-                        doc.color_picker_stroke_open = !doc.color_picker_stroke_open;
-                        if doc.color_picker_stroke_open {
-                            doc.color_picker_fill_open = false;
-                        }
+                        doc.color_picker_fill_open = false;
+                        doc.color_picker_stroke_open = !effect_fill;
                     }
                     (doc.color_picker_fill_open, doc.color_picker_stroke_open)
                 };
-                if fill_open || stroke_open {
+                if !same && (fill_open || stroke_open || effect_fill) {
                     // Keep the popup anchored to the actual click instead of
                     // the retired chrome renderer. The active editor painter
                     // owns the popup and appends its own hit targets.
                     let p = self.app.mouse;
                     self.app.color_picker_popup =
-                        Some((is_fill, Rect::new(p.x, p.y, p.x + 1.0, p.y + 1.0), true));
+                        Some((target, Rect::new(p.x, p.y, p.x + 1.0, p.y + 1.0), true));
                 } else {
                     self.app.color_picker_popup = None;
                 }
@@ -10452,7 +10523,7 @@ impl Host {
                 doc.color_picker_stroke_open = false;
                 self.app.color_picker_popup = None;
             }
-            Action::PaintPreset(is_fill, hex) => {
+            Action::PaintPreset(target, hex) => {
                 let Some(color) = crate::state::parse_hex(&hex) else {
                     self.app.status = "Invalid color preset".into();
                     return;
@@ -10461,6 +10532,16 @@ impl Host {
                     self.app.status = "Select a layer before changing its color".into();
                     return;
                 };
+                // An effect's **Fill** row: the colour belongs to the effect,
+                // never to the layer's own fill (Figma's shadow Fill).
+                if let crate::state::PaintTarget::Effect(i) = target {
+                    if self.app.doc().editor().set_effect_color(&id, i, color) {
+                        self.app.mark_dirty();
+                        self.app.status = "Effect colour updated".into();
+                    }
+                    return;
+                }
+                let is_fill = target.is_fill();
                 let info = crate::editor_ui::sel_info(&self.app);
                 let changed = if is_fill {
                     self.app.doc().editor().set_fill(&id, Paint::Solid(color));
@@ -11333,22 +11414,168 @@ impl Host {
                     self.app.mark_dirty();
                 }
             }
-            Action::AddEffect => {
+            Action::ToggleEffectAdd => {
+                let open = !self.app.effect_add_open;
+                self.app.close_panel_menus();
+                self.app.effect_add_open = open;
+            }
+            Action::AddEffect(kind) => {
+                self.app.effect_add_open = false;
                 let Some(id) = self.app.doc().selected_id() else {
                     self.app.status = "Select a layer before adding an effect".into();
                     return;
                 };
-                let effect = x_native::Effect::DropShadow {
-                    dx: 0.0,
-                    dy: 4.0,
-                    blur: 12.0,
-                    color: x_native::Color::from_rgba8(0, 0, 0, 96),
-                };
-                if self.app.doc().editor().add_effect_layer(&id, effect) {
+                if self
+                    .app
+                    .doc()
+                    .editor()
+                    .add_effect_layer(&id, x_native::Effect::default_of(kind))
+                {
+                    let n = self.effect_count(&id);
                     self.app.mark_dirty();
-                    self.app.status = "Drop shadow added".into();
+                    self.app.effect_settings = Some(n.saturating_sub(1));
+                    self.app.status = format!("{} added", kind.label());
                 }
             }
+            Action::ToggleEffectKind(i) => {
+                let open = if self.app.effect_kind_open == Some(i) {
+                    None
+                } else {
+                    Some(i)
+                };
+                self.app.close_panel_menus();
+                self.app.effect_kind_open = open;
+            }
+            Action::SetEffectKind(i, kind) => {
+                self.app.effect_kind_open = None;
+                let Some(id) = self.app.doc().selected_id() else {
+                    return;
+                };
+                if self.app.doc().editor().set_effect_kind(&id, i, kind) {
+                    self.app.mark_dirty();
+                    self.app.status = format!("Effect {}", kind.label());
+                }
+            }
+            Action::ToggleEffectSettings(i) => {
+                let open = if self.app.effect_settings == Some(i) {
+                    None
+                } else {
+                    Some(i)
+                };
+                self.app.close_panel_menus();
+                self.app.effect_settings = open;
+            }
+            Action::ToggleEffectVisible(i) => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    return;
+                };
+                let now = self
+                    .effect_layer(&id, i)
+                    .map(|l| !l.visible)
+                    .unwrap_or(false);
+                if self
+                    .app
+                    .doc()
+                    .editor()
+                    .set_effect_layer_visible(&id, i, now)
+                {
+                    self.app.mark_dirty();
+                }
+            }
+            Action::RemoveEffect(i) => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    return;
+                };
+                if self.app.doc().editor().remove_effect_layer(&id, i) {
+                    self.app.mark_dirty();
+                    if self.app.effect_settings == Some(i) {
+                        self.app.effect_settings = None;
+                    }
+                    self.app.status = "Effect removed".into();
+                }
+            }
+            Action::DuplicateEffect(i) => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    return;
+                };
+                if self.app.doc().editor().duplicate_effect_layer(&id, i) {
+                    self.app.mark_dirty();
+                    self.app.effect_settings = Some(i + 1);
+                    self.app.status = "Effect duplicated".into();
+                }
+            }
+            Action::ToggleEffectBlend(i) => {
+                let open = if self.app.effect_blend_open == Some(i) {
+                    None
+                } else {
+                    Some(i)
+                };
+                self.app.close_panel_menus();
+                self.app.effect_blend_open = open;
+            }
+            Action::SetEffectBlend(i, blend) => {
+                self.app.effect_blend_open = None;
+                let Some(id) = self.app.doc().selected_id() else {
+                    return;
+                };
+                if self
+                    .app
+                    .doc()
+                    .editor()
+                    .set_effect_layer_blend(&id, i, blend)
+                {
+                    self.app.mark_dirty();
+                    self.app.status = format!("Effect blend: {}", blend.label());
+                }
+            }
+            Action::ToggleLayerBlend => {
+                let open = !self.app.layer_blend_open;
+                self.app.close_panel_menus();
+                self.app.layer_blend_open = open;
+            }
+            Action::SetLayerBlend(blend) => {
+                self.app.layer_blend_open = false;
+                let Some(id) = self.app.doc().selected_id() else {
+                    return;
+                };
+                if self.app.doc().editor().set_layer_blend(&id, blend) {
+                    self.app.mark_dirty();
+                    self.app.status = format!("Blend mode: {}", blend.label());
+                }
+            }
+            Action::TogglePaintBlend(t) => {
+                let open = if self.app.paint_blend_open == Some(t) {
+                    None
+                } else {
+                    Some(t)
+                };
+                self.app.close_panel_menus();
+                self.app.paint_blend_open = open;
+            }
+            Action::SetPaintBlend(t, blend) => {
+                self.app.paint_blend_open = None;
+                let Some(id) = self.app.doc().selected_id() else {
+                    return;
+                };
+                let done = match t {
+                    crate::state::PaintTarget::Effect(i) => self
+                        .app
+                        .doc()
+                        .editor()
+                        .set_effect_layer_blend(&id, i, blend),
+                    target => self.app.doc().editor().set_paint_layer_blend(
+                        &id,
+                        target.is_fill(),
+                        0,
+                        blend,
+                    ),
+                };
+                if done {
+                    self.app.mark_dirty();
+                    self.app.status = format!("Blend mode: {}", blend.label());
+                }
+            }
+            Action::EffectRow(i) => self.effect_row_press(i),
             Action::AddGuide => {
                 // drop a vertical guide at the canvas center
                 let reg = self.app.editor_regions();
@@ -12828,6 +13055,32 @@ impl Host {
     }
 
     fn apply_field_to_selection(&mut self, id: FieldId, raw: &str) {
+        // Effects list: one numeric setting of one effect (X / Y / Blur /
+        // Radius / Density). Resolved from the field itself, so the panel's
+        // rows and this writer can never disagree about which is which.
+        if let Some((index, field)) = id.effect_target() {
+            let v = raw
+                .trim()
+                .trim_end_matches('%')
+                .trim_end_matches("px")
+                .trim()
+                .parse::<f64>()
+                .ok()
+                .filter(|n| n.is_finite());
+            let Some(v) = v else { return };
+            let Some(node_id) = self.app.doc().selected_id() else {
+                return;
+            };
+            if self
+                .app
+                .doc()
+                .editor()
+                .set_effect_field(&node_id, index, field, v)
+            {
+                self.app.mark_dirty();
+            }
+            return;
+        }
         let info = crate::editor_ui::sel_info(&self.app);
         let aspect_ratio_locked = self.app.aspect_ratio_locked;
         let sel = self.app.doc().selected_id();

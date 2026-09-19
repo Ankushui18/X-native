@@ -1026,6 +1026,12 @@ fn is_toggle_row(a: &Action) -> bool {
             | Action::ToggleCanvasBgVisibility
             | Action::ToggleMinimap
             | Action::ToggleColorPicker(_)
+            | Action::ToggleEffectAdd
+            | Action::ToggleEffectKind(_)
+            | Action::ToggleEffectSettings(_)
+            | Action::ToggleEffectBlend(_)
+            | Action::ToggleLayerBlend
+            | Action::TogglePaintBlend(_)
             | Action::ToggleVectorHandles
             | Action::ClipContent
             | Action::PaintLibToggle(_)
@@ -1479,10 +1485,34 @@ pub enum Action {
     /// (wrap / fill / absolute).
     ToggleLayoutAdvanced,
     /// Apply a color chosen from the native color popover.
-    PaintPreset(bool, String),
+    PaintPreset(PaintTarget, String),
     Align(usize, usize),
-    /// Color picker popup toggle (fill/stroke)
-    ToggleColorPicker(bool),
+    /// Color picker popup toggle (fill / stroke / an effect's Fill)
+    ToggleColorPicker(PaintTarget),
+    CloseColorPicker,
+    /// Effects section: the `+` opens the add menu (Figma's five types).
+    ToggleEffectAdd,
+    /// Add one effect of this type to the selected layer.
+    AddEffect(x_native::EffectKind),
+    /// A row's type dropdown — Figma's per-effect type menu.
+    ToggleEffectKind(usize),
+    SetEffectKind(usize, x_native::EffectKind),
+    /// The row's *Effect settings* disclosure.
+    ToggleEffectSettings(usize),
+    ToggleEffectVisible(usize),
+    RemoveEffect(usize),
+    DuplicateEffect(usize),
+    /// Reorder: dragging a row moves it in the stack (Figma's gesture).
+    ToggleEffectBlend(usize),
+    SetEffectBlend(usize, x_native::BlendKind),
+    /// Figma's **Apply blend mode** in the Appearance section, and the same
+    /// control inside a fill's or stroke's colour popover.
+    ToggleLayerBlend,
+    SetLayerBlend(x_native::BlendKind),
+    TogglePaintBlend(PaintTarget),
+    SetPaintBlend(PaintTarget, x_native::BlendKind),
+    /// Pressing an effect row (not its buttons) arms the reorder drag.
+    EffectRow(usize),
     CloseColorPicker,
     /// UX Analysis actions (Quant-UX inspired)
     UxAccessibility,
@@ -1684,6 +1714,24 @@ pub enum CtxCmd {
     SelectAll,
 }
 
+/// What a colour popover writes to. Figma applies a paint to a fill, a stroke
+/// **or an effect** — *"Open the color picker in the Fill or Stroke sections …
+/// then click Apply blend mode"*, and a shadow's colour is its **Fill** row —
+/// so the popover's target is not a bool any more.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaintTarget {
+    Fill,
+    Stroke,
+    /// The **Fill** of the effect at this index in the selected layer's stack.
+    Effect(usize),
+}
+
+impl PaintTarget {
+    pub fn is_fill(self) -> bool {
+        matches!(self, PaintTarget::Fill)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldId {
     DocName,
@@ -1786,6 +1834,39 @@ pub enum FieldId {
     FindQuery,
     /// Find panel: replacement string
     FindReplace,
+    /// Effects list: one numeric setting of one effect (Figma's X / Y / Blur /
+    /// Radius / Density rows). Which field is which comes from the model
+    /// ([`x_native::EffectField`]) — the index is the row's place in the stack.
+    EffectX(usize),
+    EffectY(usize),
+    EffectBlur(usize),
+    EffectRadius(usize),
+    EffectDensity(usize),
+}
+
+impl FieldId {
+    /// The field a settings row edits, for the effect at `index`.
+    pub fn for_effect(index: usize, field: x_native::EffectField) -> FieldId {
+        match field {
+            x_native::EffectField::X => FieldId::EffectX(index),
+            x_native::EffectField::Y => FieldId::EffectY(index),
+            x_native::EffectField::Blur => FieldId::EffectBlur(index),
+            x_native::EffectField::Radius => FieldId::EffectRadius(index),
+            x_native::EffectField::Density => FieldId::EffectDensity(index),
+        }
+    }
+    /// The effect row and setting this field edits — the inverse, so the text
+    /// commit path has ONE place to resolve an effect field from.
+    pub fn effect_target(self) -> Option<(usize, x_native::EffectField)> {
+        match self {
+            FieldId::EffectX(i) => Some((i, x_native::EffectField::X)),
+            FieldId::EffectY(i) => Some((i, x_native::EffectField::Y)),
+            FieldId::EffectBlur(i) => Some((i, x_native::EffectField::Blur)),
+            FieldId::EffectRadius(i) => Some((i, x_native::EffectField::Radius)),
+            FieldId::EffectDensity(i) => Some((i, x_native::EffectField::Density)),
+            _ => None,
+        }
+    }
 }
 
 /// An armed `AfterDelay` trigger in the flow preview: fire `action` when
@@ -2003,6 +2084,15 @@ pub enum Drag {
     Pan {
         start: Point,
         start_pan: (f64, f64),
+    },
+    /// Effects list reorder (Figma: *"you click and drag the handles to
+    /// reorder the effects"*). A press on a row arms it; passing the drag
+    /// threshold makes it live, and the row under the pointer becomes `over`.
+    EffectRow {
+        from: usize,
+        start: Point,
+        active: bool,
+        over: Option<usize>,
     },
     /// Moving the current selection.
     MoveSel {
@@ -2264,6 +2354,23 @@ pub struct OpenDoc {
     /// Board document for infinite canvas mode
     pub board_doc: Option<x_board::BoardDocument>,
     /// Color picker popup state for fill
+    /// Effects list (Figma's Effects section): which popovers are open. One at
+    /// a time, the way the panel's other menus behave.
+    pub effect_add_open: bool,
+    pub effect_kind_open: Option<usize>,
+    /// The row whose settings block is expanded (Figma's *Effect settings*).
+    pub effect_settings: Option<usize>,
+    pub effect_blend_open: Option<usize>,
+    pub layer_blend_open: bool,
+    pub paint_blend_open: Option<PaintTarget>,
+    /// Where a blend menu anchors, recorded by the paint pass.
+    pub blend_dd_anchor: (f64, f64),
+    /// The effect rows the paint pass laid out (top to bottom) — the drop
+    /// targets for reordering by dragging a row, which is Figma's gesture:
+    /// *"you click and drag the handles to reorder the effects"*.
+    pub effect_rows: Vec<Rect>,
+    /// The row a drag is over while reordering.
+    pub effect_drag_over: Option<usize>,
     pub color_picker_fill_open: bool,
     /// Color picker popup state for stroke
     pub color_picker_stroke_open: bool,
@@ -2699,6 +2806,15 @@ impl OpenDoc {
             board_doc: None,
             color_picker_fill_open: false,
             color_picker_stroke_open: false,
+            effect_add_open: false,
+            effect_kind_open: None,
+            effect_settings: None,
+            effect_blend_open: None,
+            layer_blend_open: false,
+            paint_blend_open: None,
+            blend_dd_anchor: (0.0, 0.0),
+            effect_rows: Vec::new(),
+            effect_drag_over: None,
         }
     }
 
@@ -2753,6 +2869,15 @@ impl OpenDoc {
             board_doc: None,
             color_picker_fill_open: false,
             color_picker_stroke_open: false,
+            effect_add_open: false,
+            effect_kind_open: None,
+            effect_settings: None,
+            effect_blend_open: None,
+            layer_blend_open: false,
+            paint_blend_open: None,
+            blend_dd_anchor: (0.0, 0.0),
+            effect_rows: Vec::new(),
+            effect_drag_over: None,
         }
     }
 
@@ -2993,7 +3118,7 @@ pub struct App {
     /// Context menu system for canvas, layers, pages, inspector, and tool rail
     pub context_menu: ContextMenu,
     /// Color picker popup state: (is_fill, field_rect, is_open)
-    pub color_picker_popup: Option<(bool, Rect, bool)>,
+    pub color_picker_popup: Option<(PaintTarget, Rect, bool)>,
     pub status: String,
     // Navigation bar state (Figma-style)
     pub nav_tab: NavTab,
@@ -5054,6 +5179,45 @@ impl App {
         let camera = crate::loading::ViewConfig::from_app(self).camera(self.doc_opt());
         self.zoom = camera.zoom;
         self.pan = camera.pan;
+    }
+
+    /// A layer's effect stack as every reader sees it: the ordered stack once
+    /// the node is materialized, the flat legacy list otherwise. The Effects
+    /// panel, the drag targets and the colour popover all come through here,
+    /// so none of them can disagree about what the list holds.
+    pub fn effect_layers_of(&self, id: &str) -> Vec<x_native::EffectLayer> {
+        let Some(doc) = self.doc_opt() else {
+            return vec![];
+        };
+        let root = &doc.editor_ref().root;
+        fn find<'a>(n: &'a x_native::Node, id: &str) -> Option<&'a x_native::Node> {
+            if n.id == id {
+                return Some(n);
+            }
+            n.children.iter().find_map(|c| find(c, id))
+        }
+        match find(root, id) {
+            Some(n) if n.visual_stacks_materialized => n.effect_layers.clone(),
+            Some(n) => n
+                .effects
+                .iter()
+                .cloned()
+                .map(x_native::EffectLayer::new)
+                .collect(),
+            None => vec![],
+        }
+    }
+
+    /// Close every popover the inspector can have open. One at a time is the
+    /// panel's rule (its menus anchor to the rows they came from, so two open
+    /// at once would overlap), and it is what Figma does when you open the
+    /// next control.
+    pub fn close_panel_menus(&mut self) {
+        self.effect_add_open = false;
+        self.effect_kind_open = None;
+        self.effect_blend_open = None;
+        self.layer_blend_open = false;
+        self.paint_blend_open = None;
     }
 
     pub fn mark_dirty(&mut self) {

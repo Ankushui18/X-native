@@ -39,7 +39,7 @@ recon task, not a settled fact.
 | 5 Layers, pages, sections | 14 | 12 | 1 | 1 | 0 | 0 |
 | 6 Frame & shape properties | 20 | 16 | 2 | 2 | 0 | 0 |
 | 7 Auto layout | 16 | 14 | 1 | 1 | 0 | 0 |
-| 8 Fill, stroke, effects, colour | 22 | 15 | 6 | 1 | 0 | 0 |
+| 8 Fill, stroke, effects, colour | 25 | 21 | 1 | 3 | 0 | 0 |
 | 9 Images | 9 | 5 | 2 | 2 | 0 | 0 |
 | 10 Text & typography | 18 | 15 | 2 | 1 | 0 | 0 |
 | 11 Vector editing & booleans | 20 | 14 | 5 | 1 | 0 | 0 |
@@ -52,9 +52,9 @@ recon task, not a settled fact.
 | 18 Design language (look of the app itself) | 12 | 1 | 5 | 6 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **335** | **231** | **54** | **31** | **16** | **3** |
+| **total** | **338** | **237** | **49** | **33** | **16** | **3** |
 
-The 31 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
+The 33 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
 the brief.
 
@@ -278,17 +278,20 @@ position, canvas stacking, "distribute", `⇧A` to add.
 | 8.7 | Paint styles | apply / create / detach | `ApplyPaintStyle`, `CreateTextStyle`-family | MATCH |
 | 8.8 | Variables as paint | bind/unbind a variable | `ApplyPaintVariable`, `DetachPaintBinding` | MATCH |
 | 8.9 | Opacity per paint + per object | both | paint alpha + object opacity | MATCH |
-| 8.10 | **Blend mode** | 16 modes per paint | model only | **MISSING** |
+| 8.10 | Blend mode | every **layer**, every **fill / stroke** and a shadow or noise effect can carry one — *"Each layer, fill, or effect can only have one blend mode applied"*; **Pass through** leads the layer list ("the default mode for layers") and is absent from the paint and effect lists ("Pass through cannot be applied to fills or effects"); 18 more modes in Figma's own order and words — [help 360040667874](https://help.figma.com/hc/en-us/articles/360040667874) | `x_core::BlendKind::{label, layer_modes, paint_modes, row_in}` is the ONE owner of the mode words and the two lists (the layer menu is the paint menu with Pass through in front); `Editor::{set_layer_blend, set_paint_layer_blend, set_effect_layer_blend}` are the three writers, each refusing Pass through where Figma does; the Appearance row, the paint popover's **Apply blend mode** and every effect row's blend read those lists | MATCH |
 | 8.11 | Stroke colour / weight | yes | `AddStroke`, weight field | MATCH |
 | 8.12 | Stroke position | inside / centre / outside | `CycleStrokePosition` | MATCH |
 | 8.13 | Stroke cap & join | 3 caps, 3 joins, arrow/triangle caps | `StrokeCap` (5 incl. Arrow/Triangle), `StrokeJoin` | MATCH |
 | 8.14 | Dashes | dash pattern editor | dash support in paint model | MATCH |
 | 8.15 | **Stroke "Edit style" panel** | named caps/joins/dashes preview | ours cycles instead of a menu | PARTIAL |
-| 8.16 | Effects: drop / inner shadow | x, y, blur, spread, colour | **the `Effects` section is a header and a `+` that adds one `DropShadow { 0, 4, 12 }`** — no list, no edit, no inner shadow | PARTIAL |
-| 8.17 | Effects: layer blur | radius | `Effect::LayerBlur` in the model, unreachable from the UI | PARTIAL |
-| 8.18 | Effects: background blur | radius | `Effect::BackgroundBlur` in the model, unreachable from the UI | PARTIAL |
-| 8.19 | Effects: noise/texture | Figma's noise effect | `Effect::Noise { amount, seed }` in the model, unreachable from the UI | PARTIAL |
-| 8.20 | Multiple effects, reorder, per-effect visibility | yes | `EffectLayer { visible, opacity, blend }` exists; no list to reorder or hide | PARTIAL |
+| 8.16 | Effects: drop / inner shadow | | | [Apply effects to layers](https://help.figma.com/hc/en-us/articles/360041488473) — *"Click the **Effects** section in the right sidebar"*, *"The **Drop shadow** effect is selected by default. Use the dropdown to switch"*, X / Y / **Fill** / Blur / Spread, *"you can toggle the visibility of individual effects"*, *"You can also duplicate the effect"*, *"click and drag the handles to reorder the effects"* | one row per effect carrying its type dropdown, its **Effect settings** (**X**, **Y**, **Blur**, and the shadow's **Fill** swatch that opens the real colour popover targeted at that effect), its own eye, duplicate and remove; `+` opens Figma's five types | MATCH |
+| 8.17 | Effects: layer blur | Radius | a row of type **Layer blur** with its Radius field, reachable from the `+` menu and the row's own dropdown | MATCH |
+| 8.18 | Effects: background blur | Radius | a row of type **Background blur** with its Radius field | MATCH |
+| 8.19 | Effects: noise | Density (Figma: Mono/Duo/Multi, size, density) | a row of type **Noise** with its Density field — the colour-count and size settings are not in the model | MATCH |
+| 8.20 | Multiple effects, reorder, per-effect visibility | Figma: *"If a selection has multiple effects applied, you click and drag the handles to reorder"* | the list is the stack: one row per effect, the row's eye hides it without losing its settings, a press-and-drag on a row reorders it (one undo entry per reorder), and `mutate_visual_stack` keeps the legacy flat `effects` list in step so every render path paints the order the panel shows | MATCH |
+| 8.23 | Effect type: **Glass** | one per layer; Light angle / intensity / refraction / depth / dispersion / frost / splay — [Apply effects to layers](https://help.figma.com/hc/en-us/articles/360041488473) | not in the model (`Effect` carries drop shadow, inner shadow, layer blur, background blur and noise) | **MISSING** |
+| 8.24 | Effect type: **Texture** | one per layer; Size, Radius, **Clip to shape** | not in the model | **MISSING** |
+| 8.25 | Per-type effect limits | *"Each layer can have up to eight drop shadows, eight inner shadows, one layer blur, two noise effects, one texture effect, one background blur, and one glass effect"* | no caps: the panel lets you add any number of any type | **MISSING** |
 | 8.21 | Colour swatch interaction | swatch = popover, `+`/`−` | swatch + popovers | MATCH |
 | 8.22 | Color styles library | team/local styles list | `PAINT STYLES` library section | MATCH |
 
@@ -615,6 +618,7 @@ rendering it.
     `editing_inside_an_instance_stores_an_override`,
     `position_is_not_overridable_inside_an_instance` and
     `double_clicking_inside_an_instance_selects_the_layer_there`.
+    ***Effects list + blend modes*** (8.10, 8.16–8.20) — **delivered**: the Effects section is a list of each effect with its own type dropdown, settings, eye, duplicate and remove, reordered by dragging a row; blend modes are writable on a layer, a fill/stroke and a shadow or noise effect, with **Pass through** a layer-only mode. Pinned by `the_effects_list_is_the_stack_and_every_write_is_one_undo_step`, `the_effects_section_lists_every_effect_with_figmas_controls`, `the_blend_menus_offer_figmas_modes_and_write_the_choice`, `pass_through_is_a_layer_mode_only` and `dragging_an_effect_row_reorders_the_stack`. Figma's **Glass** and **Texture** types (8.23, 8.24) and the per-type caps (8.25) are the honest remainder.
 12. ~~**Auto layout min/max size + canvas stacking** (7.9, 7.10)~~ — **delivered**: the
     Width/Height dropdown's sizing and min/max rows (with the field they create and the
     marks on the axis icon), and canvas stacking as one paint-order rule the viewer, the

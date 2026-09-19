@@ -2528,6 +2528,140 @@ mod tests {
         Editor::new(Node::frame("r", 500.0, 500.0).child(master).child(inst))
     }
 
+    /// Figma (help 360041488473): the Effects section is a **list** — add a
+    /// type, switch a row's type, hide it, edit its settings, duplicate it,
+    /// reorder it, remove it — and every write is one undo entry.
+    #[test]
+    fn the_effects_list_is_the_stack_and_every_write_is_one_undo_step() {
+        let mut e = Editor::new(Node::frame("r", 400.0, 300.0).child(Node::rect(
+            "r1",
+            0.0,
+            0.0,
+            40.0,
+            40.0,
+            Color::WHITE,
+        )));
+
+        assert!(e.add_effect_layer("r1", Effect::default_of(EffectKind::DropShadow)));
+        assert!(e.add_effect_layer("r1", Effect::default_of(EffectKind::LayerBlur)));
+        let n = find(&e.root, "r1").unwrap();
+        assert_eq!(n.effect_layers.len(), 2, "the stack");
+        assert_eq!(n.effects.len(), 2, "the legacy list follows the stack");
+
+        // the second effect becomes noise; its fields are the noise fields
+        assert!(e.set_effect_kind("r1", 1, EffectKind::Noise));
+        let n = find(&e.root, "r1").unwrap();
+        assert_eq!(n.effect_layers[1].effect.kind(), EffectKind::Noise);
+        assert_eq!(
+            n.effect_layers[1].effect.fields(),
+            vec![EffectField::Density],
+            "a blur's Radius row became the noise's Density row"
+        );
+
+        // settings: X / Y / Blur on the shadow, Density on the noise
+        assert!(e.set_effect_field("r1", 0, EffectField::X, 2.0));
+        assert!(e.set_effect_field("r1", 0, EffectField::Blur, 9.0));
+        assert!(e.set_effect_field("r1", 1, EffectField::Density, 0.6));
+        assert!(e.set_effect_color("r1", 0, Color::from_rgba8(255, 0, 0, 128)));
+        // a field the effect does not carry is ignored, not misdirected
+        assert!(e.set_effect_field("r1", 1, EffectField::Blur, 5.0));
+        let n = find(&e.root, "r1").unwrap();
+        assert_eq!(n.effect_layers[0].effect.field(EffectField::X), 2.0);
+        assert_eq!(n.effect_layers[0].effect.field(EffectField::Blur), 9.0);
+        assert_eq!(
+            n.effect_layers[0].effect.color(),
+            Some(Color::from_rgba8(255, 0, 0, 128))
+        );
+        assert_eq!(n.effect_layers[1].effect.field(EffectField::Density), 0.6);
+
+        // per-effect visibility: hidden, but the settings stay
+        assert!(e.set_effect_layer_visible("r1", 0, false));
+        let n = find(&e.root, "r1").unwrap();
+        assert!(!n.effect_layers[0].visible);
+        assert_eq!(n.effect_layers[0].effect.field(EffectField::Blur), 9.0);
+        assert_eq!(n.active_effects().len(), 1, "only the noise paints");
+
+        // duplicate in place, then reorder by one
+        assert!(e.duplicate_effect_layer("r1", 0));
+        assert_eq!(find(&e.root, "r1").unwrap().effect_layers.len(), 3);
+        assert!(e.move_effect_layer("r1", 0, 2));
+        let n = find(&e.root, "r1").unwrap();
+        assert_eq!(n.effect_layers[2].effect.kind(), EffectKind::DropShadow);
+
+        // …and one click is one undo entry: removing takes back one step
+        assert!(e.remove_effect_layer("r1", 2));
+        assert_eq!(find(&e.root, "r1").unwrap().effect_layers.len(), 2);
+        assert!(e.undo());
+        assert_eq!(find(&e.root, "r1").unwrap().effect_layers.len(), 3);
+    }
+
+    /// Somebody clicking a row that is gone writes nothing at all — no silent
+    /// no-op undo entry, no write into a neighbour's settings.
+    #[test]
+    fn an_effect_write_past_the_end_changes_nothing() {
+        let mut e = Editor::new(Node::frame("r", 400.0, 300.0).child(Node::rect(
+            "r1",
+            0.0,
+            0.0,
+            40.0,
+            40.0,
+            Color::WHITE,
+        )));
+        assert!(e.add_effect_layer("r1", Effect::default_of(EffectKind::DropShadow)));
+        let depth = e.undo_depth();
+        assert!(!e.set_effect_field("r1", 1, EffectField::X, 4.0));
+        assert!(!e.set_effect_kind("r1", 7, EffectKind::Noise));
+        assert!(!e.remove_effect_layer("r1", 3));
+        assert!(!e.set_effect_color("r1", 4, Color::WHITE));
+        assert_eq!(e.undo_depth(), depth, "nothing was pushed");
+    }
+
+    /// A blur has no colour: the shadow's Fill field cannot land on it.
+    #[test]
+    fn only_a_shadow_carries_a_fill() {
+        let mut e = Editor::new(Node::frame("r", 400.0, 300.0).child(Node::rect(
+            "r1",
+            0.0,
+            0.0,
+            40.0,
+            40.0,
+            Color::WHITE,
+        )));
+        assert!(e.add_effect_layer("r1", Effect::default_of(EffectKind::LayerBlur)));
+        assert!(!e.set_effect_color("r1", 0, Color::from_rgba8(9, 9, 9, 255)));
+        assert_eq!(
+            find(&e.root, "r1").unwrap().effect_layers[0].effect.color(),
+            None
+        );
+    }
+
+    /// Figma (help 360040667874): *"Pass through cannot be applied to fills or
+    /// effects"*, and it IS allowed on a layer, where it is also the default.
+    #[test]
+    fn pass_through_is_a_layer_mode_only() {
+        let mut e = Editor::new(Node::frame("r", 400.0, 300.0).child(Node::rect(
+            "r1",
+            0.0,
+            0.0,
+            40.0,
+            40.0,
+            Color::WHITE,
+        )));
+        assert!(e.add_effect_layer("r1", Effect::default_of(EffectKind::DropShadow)));
+        assert!(e.set_layer_blend("r1", BlendKind::PassThrough));
+        assert_eq!(find(&e.root, "r1").unwrap().blend, BlendKind::PassThrough);
+
+        assert!(!e.set_paint_layer_blend("r1", true, 0, BlendKind::PassThrough));
+        assert!(!e.set_effect_layer_blend("r1", 0, BlendKind::PassThrough));
+        assert!(e.set_paint_layer_blend("r1", true, 0, BlendKind::Multiply));
+        assert!(e.set_effect_layer_blend("r1", 0, BlendKind::Screen));
+        let n = find(&e.root, "r1").unwrap();
+        assert_eq!(n.fill_layers[0].blend, BlendKind::Multiply);
+        assert_eq!(n.effect_layers[0].blend, BlendKind::Screen);
+        // a paint index that does not exist is refused, not created
+        assert!(!e.set_paint_layer_blend("r1", true, 5, BlendKind::Darken));
+    }
+
     /// Two masters and an instance of the first, none of them grouped: the
     /// fixture `combine_as_variants` works on.
     fn variant_fixture() -> Editor {

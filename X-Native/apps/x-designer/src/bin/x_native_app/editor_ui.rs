@@ -4636,7 +4636,55 @@ fn paint_design(
         C_TEXT,
         Wt::Reg,
     );
-    let rdr = Rect::new(x0 + 161.5, y0 + 596.0, x0 + 315.0, y0 + 624.0);
+    // Figma's Appearance row pairs **Opacity** with **Blend mode**; the corner
+    // radius keeps a row of its own below. The layer's blend is a dropdown of
+    // the 19 layer modes — Pass through first, because it is the layer default.
+    let bdr = Rect::new(x0 + 161.5, y0 + 596.0, x0 + 315.0, y0 + 624.0);
+    let layer_blend = {
+        let d = app.doc();
+        d.selected_id()
+            .and_then(|id| find_node(&d.editor_ref().root, &id).map(|n| n.blend))
+            .unwrap_or(x_native::BlendKind::Normal)
+    };
+    let blend_open = app.layer_blend_open;
+    let bhov = hover(app, bdr);
+    fill_rrect(
+        s,
+        bdr,
+        R_INPUT,
+        if bhov || blend_open {
+            C_FIELD_2
+        } else {
+            C_FIELD
+        },
+    );
+    app.fonts
+        .text(s, bdr.x0 + 8.0, bdr.y0 + 6.0, "Blend", T10, C_TEXT, Wt::Reg);
+    let bval = layer_blend.label();
+    let bvw = app.fonts.measure(bval, T11, Wt::Reg);
+    app.fonts.text(
+        s,
+        bdr.x1 - 20.0 - bvw,
+        bdr.y0 + 7.0,
+        bval,
+        T11,
+        C_DIM,
+        Wt::Reg,
+    );
+    draw_icon(
+        s,
+        "chevron-down",
+        bdr.x1 - 8.0 - 10.0,
+        bdr.y0 + 8.0,
+        ICON_XS,
+        C_DIM,
+    );
+    hit.push((bdr, Action::ToggleLayerBlend));
+    if blend_open {
+        app.blend_dd_anchor = (bdr.x0, bdr.y1);
+    }
+
+    let rdr = Rect::new(x0, y0 + 636.0, x0 + 315.0, y0 + 664.0);
     input(
         app,
         s,
@@ -4653,17 +4701,17 @@ fn paint_design(
     app.fonts.text(
         s,
         rdr.x1 - 8.0 - rd_vw,
-        y0 + 601.75,
+        y0 + 641.75,
         &rd_val,
         T11,
         C_TEXT,
         Wt::Reg,
     );
 
-    hline(s, rx, rx + rw, y0 + 636.0, C_LINE);
+    hline(s, rx, rx + rw, y0 + 676.0, C_LINE);
 
     // Phase 6: Image adjustment controls (only shown for image nodes)
-    let y_after_appearance = y0 + 636.0 + 1.0 + 12.0;
+    let y_after_appearance = y0 + 676.0 + 1.0 + 12.0;
     let y_after_image =
         paint_image_adjustments(app, s, hit, rx + pl, rx + rw - pl, y_after_appearance);
     if y_after_image != y_after_appearance {
@@ -4676,12 +4724,12 @@ fn paint_design(
     // ---- typography -----------------------------------------------------
     // Section header row (28): caps label centered, both buttons 28px.
     app.fonts
-        .caps_label(s, x0, y0 + 657.0, "Typography", C_TEXT, Wt::Med);
+        .caps_label(s, x0, y0 + 697.0, "Typography", C_TEXT, Wt::Med);
     // Figma's Typography header: the styles button opens the text-style
     // picker, the plus creates a style from the current selection. Both were
     // painted but inert — these rects are what make them buttons.
-    let styles_btn = Rect::new(xr - 38.0, y0 + 648.0, xr - 18.0, y0 + 676.0);
-    let create_btn = Rect::new(xr - 18.0, y0 + 648.0, xr + 2.0, y0 + 676.0);
+    let styles_btn = Rect::new(xr - 38.0, y0 + 688.0, xr - 18.0, y0 + 716.0);
+    let create_btn = Rect::new(xr - 18.0, y0 + 688.0, xr + 2.0, y0 + 716.0);
     let styles_tint = if app.dropdown_text_style || hover(app, styles_btn) {
         C_TEXT
     } else {
@@ -4691,7 +4739,7 @@ fn paint_design(
         s,
         "grid-2x2",
         xr - 14.0 - 8.0 - 12.0,
-        y0 + 654.0,
+        y0 + 694.0,
         ICON_XS,
         styles_tint,
     );
@@ -4700,10 +4748,10 @@ fn paint_design(
     } else {
         C_DIM
     };
-    draw_icon(s, "plus", xr - 14.0, y0 + 655.0, ICON_SM, create_tint);
+    draw_icon(s, "plus", xr - 14.0, y0 + 695.0, ICON_SM, create_tint);
     hit.push((styles_btn, Action::TextStyleDropdown));
     hit.push((create_btn, Action::CreateTextStyle));
-    let fam = Rect::new(x0, y0 + 684.0, x0 + 315.0, y0 + 712.0);
+    let fam = Rect::new(x0, y0 + 724.0, x0 + 315.0, y0 + 752.0);
     input(
         app,
         s,
@@ -4758,7 +4806,7 @@ fn paint_design(
             hit.push((row, Action::FontPicker(fam.clone())));
         }
     }
-    let wgt = Rect::new(x0, y0 + 720.0, x0 + 227.0, y0 + 748.0);
+    let wgt = Rect::new(x0, y0 + 760.0, x0 + 227.0, y0 + 788.0);
     input(
         app,
         s,
@@ -4770,7 +4818,7 @@ fn paint_design(
         Some(Action::Field(FieldId::FontWeight)),
         Some("chevron-down"),
     );
-    let szr = Rect::new(x0 + 235.0, y0 + 720.0, x0 + 315.0, y0 + 748.0);
+    let szr = Rect::new(x0 + 235.0, y0 + 760.0, x0 + 315.0, y0 + 788.0);
     input(
         app,
         s,
@@ -4783,8 +4831,8 @@ fn paint_design(
         Some("chevron-down"),
     );
     app.fonts
-        .text(s, x0, y0 + 756.0, "Line height", T10, C_DIM, Wt::Reg);
-    let lhr = Rect::new(x0, y0 + 774.0, x0 + 153.5, y0 + 802.0);
+        .text(s, x0, y0 + 796.0, "Line height", T10, C_DIM, Wt::Reg);
+    let lhr = Rect::new(x0, y0 + 814.0, x0 + 153.5, y0 + 842.0);
     input_box(app, s, lhr, R_INPUT);
     draw_icon(s, "type", lhr.x0 + 8.0, lhr.y0 + 8.0, ICON_XS, C_DIM);
     // line-height mode affordance (Auto / px / %) — same chevron language
@@ -4819,7 +4867,7 @@ fn paint_design(
     // Justified to Left, so it is not offered (a phantom state); the active
     // highlight mirrors what the canvas actually renders.
     app.fonts
-        .text(s, x0, y0 + 810.0, "Alignment", T10, C_DIM, Wt::Reg);
+        .text(s, x0, y0 + 850.0, "Alignment", T10, C_DIM, Wt::Reg);
     let align_now = selected_text_align(app);
     for (i, (ic, t)) in [
         ("align-left", x_native::TextAlign::Left),
@@ -4830,7 +4878,7 @@ fn paint_design(
     .enumerate()
     {
         let bx = x0 + 47.7 * i as f64;
-        let br = Rect::new(bx, y0 + 828.0, bx + 43.8, y0 + 856.0);
+        let br = Rect::new(bx, y0 + 868.0, bx + 43.8, y0 + 896.0);
         let active = align_now == t;
         if active {
             fill_rrect(s, br, R_MD, C_FIELD_2);
@@ -4851,8 +4899,8 @@ fn paint_design(
 
     // Vertical alignment (horizontal sits in the button row above)
     app.fonts
-        .text(s, x0, y0 + 864.0, "Vertical alignment", T10, C_DIM, Wt::Reg);
-    let v_align = Rect::new(x0, y0 + 882.0, x0 + 153.5, y0 + 910.0);
+        .text(s, x0, y0 + 904.0, "Vertical alignment", T10, C_DIM, Wt::Reg);
+    let v_align = Rect::new(x0, y0 + 922.0, x0 + 153.5, y0 + 950.0);
     input(
         app,
         s,
@@ -4867,10 +4915,10 @@ fn paint_design(
 
     // Decoration | Wrap style (the engine's paragraph wrap strategy, "tw")
     app.fonts
-        .text(s, x0, y0 + 918.0, "Decoration", T10, C_DIM, Wt::Reg);
+        .text(s, x0, y0 + 958.0, "Decoration", T10, C_DIM, Wt::Reg);
     app.fonts
-        .text(s, x0 + 161.5, y0 + 918.0, "Wrap style", T10, C_DIM, Wt::Reg);
-    let deco = Rect::new(x0, y0 + 936.0, x0 + 153.5, y0 + 964.0);
+        .text(s, x0 + 161.5, y0 + 958.0, "Wrap style", T10, C_DIM, Wt::Reg);
+    let deco = Rect::new(x0, y0 + 976.0, x0 + 153.5, y0 + 1004.0);
     input(
         app,
         s,
@@ -4882,7 +4930,7 @@ fn paint_design(
         Some(Action::CycleTextDecoration),
         Some("chevron-down"),
     );
-    let wrap = Rect::new(x0 + 161.5, y0 + 936.0, x0 + 315.0, y0 + 964.0);
+    let wrap = Rect::new(x0 + 161.5, y0 + 976.0, x0 + 315.0, y0 + 1004.0);
     input(
         app,
         s,
@@ -4897,17 +4945,17 @@ fn paint_design(
 
     // Max lines | Paragraph indent
     app.fonts
-        .text(s, x0, y0 + 972.0, "Max lines", T10, C_DIM, Wt::Reg);
+        .text(s, x0, y0 + 1012.0, "Max lines", T10, C_DIM, Wt::Reg);
     app.fonts.text(
         s,
         x0 + 161.5,
-        y0 + 972.0,
+        y0 + 1012.0,
         "Paragraph indent",
         T10,
         C_DIM,
         Wt::Reg,
     );
-    let max_lines = Rect::new(x0, y0 + 990.0, x0 + 153.5, y0 + 1018.0);
+    let max_lines = Rect::new(x0, y0 + 1030.0, x0 + 153.5, y0 + 1058.0);
     input(
         app,
         s,
@@ -4919,7 +4967,7 @@ fn paint_design(
         Some(Action::Field(FieldId::MaxLines)),
         None,
     );
-    let para_indent = Rect::new(x0 + 161.5, y0 + 990.0, x0 + 315.0, y0 + 1018.0);
+    let para_indent = Rect::new(x0 + 161.5, y0 + 1030.0, x0 + 315.0, y0 + 1058.0);
     input(
         app,
         s,
@@ -4942,7 +4990,7 @@ fn paint_design(
     // (Font / Weight / Size / Line height / Alignment), so they sit behind
     // a disclosure instead of disappearing.
     let adv_open = app.typo_advanced_open;
-    let adv = Rect::new(x0, y0 + 1026.0, x0 + 315.0, y0 + 1026.0 + DENSE_H);
+    let adv = Rect::new(x0, y0 + 1066.0, x0 + 315.0, y0 + 1066.0 + DENSE_H);
     let adv_hov = hover(app, adv);
     draw_icon(
         s,
@@ -4969,17 +5017,17 @@ fn paint_design(
     if adv_open {
         // Letter spacing | Word spacing
         app.fonts
-            .text(s, x0, y0 + 1058.0, "Letter spacing", T10, C_DIM, Wt::Reg);
+            .text(s, x0, y0 + 1098.0, "Letter spacing", T10, C_DIM, Wt::Reg);
         app.fonts.text(
             s,
             x0 + 161.5,
-            y0 + 1058.0,
+            y0 + 1098.0,
             "Word spacing",
             T10,
             C_DIM,
             Wt::Reg,
         );
-        let lsr = Rect::new(x0, y0 + 1076.0, x0 + 153.5, y0 + 1104.0);
+        let lsr = Rect::new(x0, y0 + 1116.0, x0 + 153.5, y0 + 1144.0);
         input(
             app,
             s,
@@ -4995,7 +5043,7 @@ fn paint_design(
             Some(Action::Field(FieldId::LetterSpacing)),
             None,
         );
-        let wsr = Rect::new(x0 + 161.5, y0 + 1076.0, x0 + 315.0, y0 + 1104.0);
+        let wsr = Rect::new(x0 + 161.5, y0 + 1116.0, x0 + 315.0, y0 + 1144.0);
         input(
             app,
             s,
@@ -5009,17 +5057,17 @@ fn paint_design(
         );
         // Paragraph spacing | Baseline shift
         app.fonts
-            .text(s, x0, y0 + 1112.0, "Paragraph spacing", T10, C_DIM, Wt::Reg);
+            .text(s, x0, y0 + 1152.0, "Paragraph spacing", T10, C_DIM, Wt::Reg);
         app.fonts.text(
             s,
             x0 + 161.5,
-            y0 + 1112.0,
+            y0 + 1152.0,
             "Baseline shift",
             T10,
             C_DIM,
             Wt::Reg,
         );
-        let psr = Rect::new(x0, y0 + 1130.0, x0 + 153.5, y0 + 1158.0);
+        let psr = Rect::new(x0, y0 + 1170.0, x0 + 153.5, y0 + 1198.0);
         input(
             app,
             s,
@@ -5031,7 +5079,7 @@ fn paint_design(
             Some(Action::Field(FieldId::ParaSpacing)),
             None,
         );
-        let bsr = Rect::new(x0 + 161.5, y0 + 1130.0, x0 + 315.0, y0 + 1158.0);
+        let bsr = Rect::new(x0 + 161.5, y0 + 1170.0, x0 + 315.0, y0 + 1198.0);
         input(
             app,
             s,
@@ -5049,8 +5097,8 @@ fn paint_design(
         );
         // Text case (small caps rides the same control)
         app.fonts
-            .text(s, x0, y0 + 1166.0, "Text case", T10, C_DIM, Wt::Reg);
-        let tcr = Rect::new(x0, y0 + 1184.0, x0 + 153.5, y0 + 1212.0);
+            .text(s, x0, y0 + 1206.0, "Text case", T10, C_DIM, Wt::Reg);
+        let tcr = Rect::new(x0, y0 + 1224.0, x0 + 153.5, y0 + 1252.0);
         input(
             app,
             s,
@@ -5064,10 +5112,10 @@ fn paint_design(
         );
         // Optical size | Width (variable-font axes; Auto on static faces)
         app.fonts
-            .text(s, x0, y0 + 1220.0, "Optical size", T10, C_DIM, Wt::Reg);
+            .text(s, x0, y0 + 1260.0, "Optical size", T10, C_DIM, Wt::Reg);
         app.fonts
-            .text(s, x0 + 161.5, y0 + 1220.0, "Width", T10, C_DIM, Wt::Reg);
-        let osr = Rect::new(x0, y0 + 1238.0, x0 + 153.5, y0 + 1266.0);
+            .text(s, x0 + 161.5, y0 + 1260.0, "Width", T10, C_DIM, Wt::Reg);
+        let osr = Rect::new(x0, y0 + 1278.0, x0 + 153.5, y0 + 1306.0);
         input(
             app,
             s,
@@ -5079,7 +5127,7 @@ fn paint_design(
             Some(Action::Field(FieldId::OpticalSize)),
             None,
         );
-        let wdr = Rect::new(x0 + 161.5, y0 + 1238.0, x0 + 315.0, y0 + 1266.0);
+        let wdr = Rect::new(x0 + 161.5, y0 + 1278.0, x0 + 315.0, y0 + 1306.0);
         input(
             app,
             s,
@@ -5095,7 +5143,7 @@ fn paint_design(
 
     // ---- fill / stroke / effects / guides continue with the shared tail
     // (the section's end moves with the disclosure, so does the tail)
-    let tail_top = if adv_open { y0 + 1278.0 } else { y0 + 1062.0 };
+    let tail_top = if adv_open { y0 + 1318.0 } else { y0 + 1102.0 };
     hline(s, rx, rx + rw, tail_top, C_LINE);
     let mut y = tail_top + 12.0;
     let inner_w = rw - pl * 2.0;
@@ -5211,16 +5259,366 @@ fn paint_design(
     hline(s, rx, rx + rw, y, C_LINE);
     y += 1.0 + SECTION_GAP;
 
+    // ------------------------------------------------------------ effects list
+
+    /// One row's place for the drag: the index whose row the pointer is inside.
+    /// `None` outside the list, so a drag that leaves it commits nothing.
+    pub fn effect_drop_index(app: &App, p: Point) -> Option<usize> {
+        app.effect_rows
+            .iter()
+            .position(|r| p.y >= r.y0 && p.y <= r.y1)
+    }
+
+    /// The blend a paint popover is currently showing: the effect's own blend, or
+    /// the first fill's / stroke's. Used by the popover's *Apply blend mode* row.
+    fn paint_target_blend(app: &App, t: crate::state::PaintTarget) -> x_native::BlendKind {
+        let Some(id) = app.doc_ref().selected_id() else {
+            return x_native::BlendKind::Normal;
+        };
+        match t {
+            crate::state::PaintTarget::Effect(i) => app
+                .effect_layers_of(&id)
+                .get(i)
+                .map(|l| l.blend)
+                .unwrap_or(x_native::BlendKind::Normal),
+            target => {
+                let d = app.doc_ref();
+                crate::editor_ui::find_node(&d.editor_ref().root, &id)
+                    .and_then(|n| {
+                        let layers = if target.is_fill() {
+                            &n.fill_layers
+                        } else {
+                            &n.stroke_layers
+                        };
+                        layers.first().map(|l| l.blend)
+                    })
+                    .unwrap_or(x_native::BlendKind::Normal)
+            }
+        }
+    }
+
+    /// Figma's blend dropdown. `modes` is the list for the thing being blended —
+    /// the layer's 19 (Pass through first) or a paint's 18 (no Pass through) — so
+    /// one painter serves the layer row, the popover and every effect row.
+    fn paint_blend_menu(
+        app: &mut App,
+        s: &mut Scene,
+        hit: &mut Vec<(Rect, Action)>,
+        modes: &[x_native::BlendKind],
+        current: x_native::BlendKind,
+        make: impl Fn(x_native::BlendKind) -> Action,
+    ) {
+        let (ax, ay) = app.blend_dd_anchor;
+        let w = 176.0;
+        let h = DROPDOWN_ROW_H * modes.len() as f64;
+        let x0 = ax.min((app.win_w - w - 8.0).max(8.0)).max(8.0);
+        let mut y0 = ay + 4.0;
+        if y0 + h > app.win_h - 8.0 {
+            y0 = (ay - 4.0 - h).max(8.0);
+        }
+        let dd = Rect::new(x0, y0, x0 + w, y0 + h);
+        elev_shadow(s, dd, 8.0, Elevation::Floating);
+        fill_rrect(s, dd, R_LG, C_FIELD);
+        stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+        for (k, m) in modes.iter().enumerate() {
+            let r = Rect::new(
+                dd.x0,
+                dd.y0 + DROPDOWN_ROW_H * k as f64,
+                dd.x1,
+                dd.y0 + DROPDOWN_ROW_H * (k + 1) as f64,
+            );
+            let hov = hover(app, r);
+            let on = *m == current;
+            if hov {
+                fill_rect(s, r, C_FIELD_2);
+            }
+            app.fonts.text(
+                s,
+                r.x0 + 10.0,
+                r.y0 + 9.0,
+                m.label(),
+                T11,
+                if on { C_TEXT } else { C_MUTED },
+                Wt::Reg,
+            );
+            if on {
+                draw_icon(s, "check", r.x1 - 22.0, r.y0 + 8.0, ICON_XS, C_TEXT);
+            }
+            hit.push((r, make(*m)));
+        }
+    }
+
+    /// Figma's Effects list — the section that replaced a header and a `+`.
+    ///
+    /// One row per effect carrying its **type dropdown** (Figma: *"The Drop shadow
+    /// effect is selected by default. Use the dropdown to switch to Inner shadow /
+    /// Layer Blur / Background Blur"*), its **Effect settings** disclosure, its own
+    /// eye (*"you can toggle the visibility of individual effects"*) and its own
+    /// blend (*"You can apply blend modes to inner shadows, drop shadows, and noise
+    /// effects"*). The `+` opens the five types. Rows are pressed and dragged to
+    /// reorder, which is Figma's gesture.
+    fn paint_effects_section(
+        app: &mut App,
+        s: &mut Scene,
+        hit: &mut Vec<(Rect, Action)>,
+        rx: f64,
+        rw: f64,
+        pl: f64,
+        y: f64,
+    ) -> f64 {
+        let mut y = y;
+        let x0 = rx + pl;
+        let xr = rx + rw - pl;
+        section_header(
+            app,
+            s,
+            hit,
+            rx,
+            rw,
+            pl,
+            y,
+            "Effects",
+            false,
+            Action::ToggleEffectAdd,
+        );
+        y += 14.0 + LABEL_GAP;
+        if app.effect_add_open {
+            let anchor = Rect::new(xr - 18.0, y - 24.0, xr, y + 8.0);
+            let items = x_native::EffectKind::all();
+            let w = 176.0;
+            let h = DROPDOWN_ROW_H * items.len() as f64;
+            let x = anchor.x1 - w;
+            let mut dy = anchor.y1 + 4.0;
+            if dy + h > app.win_h - 8.0 {
+                dy = (anchor.y0 - 4.0 - h).max(8.0);
+            }
+            let dd = Rect::new(x, dy, x + w, dy + h);
+            elev_shadow(s, dd, 8.0, Elevation::Floating);
+            fill_rrect(s, dd, R_LG, C_FIELD);
+            stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+            for (k, kind) in items.iter().enumerate() {
+                let r = Rect::new(
+                    dd.x0,
+                    dd.y0 + DROPDOWN_ROW_H * k as f64,
+                    dd.x1,
+                    dd.y0 + DROPDOWN_ROW_H * (k + 1) as f64,
+                );
+                if hover(app, r) {
+                    fill_rect(s, r, C_FIELD_2);
+                }
+                draw_icon(s, kind.icon(), r.x0 + 10.0, r.y0 + 8.0, ICON_XS, C_MUTED);
+                app.fonts.text(
+                    s,
+                    r.x0 + 30.0,
+                    r.y0 + 9.0,
+                    kind.label(),
+                    T11,
+                    C_TEXT,
+                    Wt::Reg,
+                );
+                hit.push((r, Action::AddEffect(*kind)));
+            }
+            y = dd.y1 + 8.0;
+        }
+
+        let Some(id) = app.doc_ref().selected_id() else {
+            return y;
+        };
+        let layers = app.effect_layers_of(&id);
+        app.effect_rows.clear();
+        if layers.is_empty() {
+            app.fonts.text(s, x0, y, "No effects", T10, C_DIM, Wt::Reg);
+            y += 20.0;
+            return y;
+        }
+
+        for (i, layer) in layers.iter().enumerate() {
+            if i > 0 {
+                hline(s, rx, rx + rw, y - 6.0, C_LINE);
+            }
+            let row = Rect::new(x0, y, xr, y + 24.0);
+            app.effect_rows.push(row);
+            if app.effect_drag_over == Some(i) {
+                fill_rrect(s, row, R_SM, C_SEL_WASH);
+            } else if hover(app, row) {
+                fill_rrect(s, row, R_SM, C_ROW_HOVER);
+            }
+            hit.push((row, Action::EffectRow(i)));
+
+            // the type dropdown: the row's own words, and the type's icon
+            let kind = layer.effect.kind();
+            draw_icon(s, kind.icon(), x0 + 2.0, y + 6.0, ICON_XS, C_MUTED);
+            draw_icon(s, "chevron-down", x0 + 18.0, y + 7.0, ICON_XS, C_DIM);
+            app.fonts
+                .text(s, x0 + 34.0, y + 5.0, kind.label(), T11, C_TEXT, Wt::Reg);
+            hit.push((
+                Rect::new(x0, y, x0 + 132.0, y + 24.0),
+                Action::ToggleEffectKind(i),
+            ));
+            if app.effect_kind_open == Some(i) {
+                app.blend_dd_anchor = (x0 + 2.0, y + 22.0);
+            }
+
+            // the row's own buttons: Eye, Duplicate, Effect settings, Remove
+            let mut bx = xr - 24.0;
+            let remove = Rect::new(bx, y + 2.0, bx + 20.0, y + 22.0);
+            if hover(app, remove) {
+                fill_rrect(s, remove, R_SM, C_FIELD_2);
+            }
+            draw_icon(s, "minus", remove.x0 + 4.0, remove.y0 + 5.0, ICON_XS, C_DIM);
+            hit.push((remove, Action::RemoveEffect(i)));
+            bx -= 24.0;
+            let gear = Rect::new(bx, y + 2.0, bx + 20.0, y + 22.0);
+            let gear_on = app.effect_settings == Some(i);
+            if hover(app, gear) || gear_on {
+                fill_rrect(s, gear, R_SM, if gear_on { C_FIELD_2 } else { C_ROW_HOVER });
+            }
+            draw_icon(
+                s,
+                "sliders-horizontal",
+                gear.x0 + 4.0,
+                gear.y0 + 5.0,
+                ICON_XS,
+                C_DIM,
+            );
+            tip(app, gear, "Effect settings");
+            hit.push((gear, Action::ToggleEffectSettings(i)));
+            bx -= 24.0;
+            let dup = Rect::new(bx, y + 2.0, bx + 20.0, y + 22.0);
+            if hover(app, dup) {
+                fill_rrect(s, dup, R_SM, C_FIELD_2);
+            }
+            draw_icon(s, "copy", dup.x0 + 4.0, dup.y0 + 5.0, ICON_XS, C_DIM);
+            tip(app, dup, "Duplicate effect");
+            hit.push((dup, Action::DuplicateEffect(i)));
+            bx -= 24.0;
+            let eye = Rect::new(bx, y + 2.0, bx + 20.0, y + 22.0);
+            if hover(app, eye) || !layer.visible {
+                fill_rrect(s, eye, R_SM, C_FIELD_2);
+            }
+            draw_icon(
+                s,
+                if layer.visible { "eye" } else { "eye-off" },
+                eye.x0 + 4.0,
+                eye.y0 + 5.0,
+                ICON_XS,
+                if layer.visible { C_DIM } else { C_TEXT },
+            );
+            tip(app, eye, "Toggle effect visibility");
+            hit.push((eye, Action::ToggleEffectVisible(i)));
+            y += 28.0;
+
+            if app.effect_settings == Some(i) {
+                // Figma's *Effect settings*: the type's own rows. Which fields
+                // exist comes from the model, so a Blur shows Radius and Noise
+                // shows Density without the panel carrying a second table.
+                let mut sy = y;
+                let fields = layer.effect.fields();
+                let cols: Vec<(x_native::EffectField, String)> = fields
+                    .iter()
+                    .map(|f| (*f, fmt_num(layer.effect.field(*f))))
+                    .collect();
+                let col_w = 76.0;
+                let gap_w = 8.0;
+                // labels
+                for (k, (f, _)) in cols.iter().enumerate() {
+                    let cx = x0 + k as f64 * (col_w + gap_w);
+                    if cx + col_w > xr {
+                        break;
+                    }
+                    app.fonts.text(s, cx, sy, f.label(), T10, C_DIM, Wt::Reg);
+                }
+                sy += 12.0 + LABEL_GAP;
+                for (k, (f, v)) in cols.iter().enumerate() {
+                    let cx = x0 + k as f64 * (col_w + gap_w);
+                    if cx + col_w > xr {
+                        break;
+                    }
+                    let r = Rect::new(cx, sy, cx + col_w, sy + 24.0);
+                    let fid = crate::state::FieldId::for_effect(i, *f);
+                    let shown = field_val(app, fid, v.clone());
+                    input(
+                        app,
+                        s,
+                        hit,
+                        r,
+                        None,
+                        &shown,
+                        true,
+                        Some(Action::Field(fid)),
+                        None,
+                    );
+                }
+                sy += 24.0 + 8.0;
+
+                // a shadow's **Fill**: the swatch opens the real colour popover,
+                // and its target is this effect (never the layer's fill)
+                if let Some(color) = layer.effect.color() {
+                    let fr = Rect::new(x0, sy, x0 + 96.0, sy + 24.0);
+                    fill_rrect(s, fr, R_MD, C_FIELD);
+                    if hover(app, fr) {
+                        stroke_rrect(s, fr, R_MD, C_LINE_2, 1.0);
+                    }
+                    let sw = Rect::new(fr.x0 + 4.0, sy + 4.0, fr.x0 + 20.0, sy + 20.0);
+                    fill_rrect(s, sw, R_XS, color);
+                    stroke_rrect(s, sw, R_XS, C_LINE_2, 1.0);
+                    app.fonts
+                        .text(s, fr.x0 + 26.0, sy + 5.0, "Fill", T10, C_DIM, Wt::Reg);
+                    hit.push((
+                        sw,
+                        Action::ToggleColorPicker(crate::state::PaintTarget::Effect(i)),
+                    ));
+                    sy += 24.0 + 8.0;
+                }
+
+                // the effect's own **blend** (Figma: shadows, inner shadows, noise)
+                let blend_row = Rect::new(x0, sy, xr, sy + 24.0);
+                if hover(app, blend_row) {
+                    fill_rrect(s, blend_row, R_MD, C_FIELD_2);
+                }
+                app.fonts.text(
+                    s,
+                    blend_row.x0 + 8.0,
+                    sy + 5.0,
+                    "Blend",
+                    T10,
+                    C_TEXT,
+                    Wt::Reg,
+                );
+                let bl = layer.blend.label();
+                let blw = app.fonts.measure(bl, T11, Wt::Reg);
+                app.fonts.text(
+                    s,
+                    blend_row.x1 - 20.0 - blw,
+                    sy + 4.0,
+                    bl,
+                    T11,
+                    C_DIM,
+                    Wt::Reg,
+                );
+                draw_icon(
+                    s,
+                    "chevron-down",
+                    blend_row.x1 - 16.0,
+                    sy + 7.0,
+                    ICON_XS,
+                    C_DIM,
+                );
+                hit.push((blend_row, Action::ToggleEffectBlend(i)));
+                if app.effect_blend_open == Some(i) {
+                    app.blend_dd_anchor = (blend_row.x0, blend_row.y1);
+                }
+                sy += 24.0 + 8.0;
+                y = sy;
+            }
+        }
+        y += 6.0
+    }
+
     // --- Effects -------------------------------------------------------
-    let eff_h = 40.0;
-    app.fonts
-        .caps_label(s, rx + pl, y + 10.0, "Effects", C_TEXT, Wt::Med);
-    draw_icon(s, "plus", rx + rw - pl - 14.0, y + 9.0, ICON_SM, C_DIM);
-    hit.push((
-        Rect::new(rx + rw - pl - 18.0, y, rx + rw - pl, y + 32.0),
-        Action::AddEffect,
-    ));
-    y += eff_h;
+    // Figma's list: one row per effect, each with its type dropdown, its
+    // *Effect settings*, its own eye and its own blend; drag a row to reorder.
+    y = paint_effects_section(app, s, hit, rx, rw, pl, y);
     hline(s, rx, rx + rw, y, C_LINE);
     y += 1.0 + 12.0;
 
@@ -6774,7 +7172,14 @@ fn paint_paint_row(
     // Register the broad text field first so the later, smaller swatch hit
     // wins during reverse hit-testing.
     hit.push((r, Action::Field(hex_field)));
-    hit.push((sw, Action::ToggleColorPicker(is_fill)));
+    hit.push((
+        sw,
+        Action::ToggleColorPicker(if is_fill {
+            crate::state::PaintTarget::Fill
+        } else {
+            crate::state::PaintTarget::Stroke
+        }),
+    ));
     // P14: eyedropper — sample a layer's paint (was an unreachable action)
     let pd = Rect::new(r.x1 + 8.0, y + 2.0, r.x1 + 8.0 + 24.0, y + 26.0);
     let drop_armed = app.eyedropper == Some(!is_fill);
@@ -7313,7 +7718,7 @@ fn paint_lh_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>
                                   // menu 89px above the Line-height field it belongs to.
     let y_entry = crate::theme::ED_TITLE_H + 89.0;
     // the typography rows scroll with the panel
-    let fy = y_entry + 771.0 - app.doc().scroll_right;
+    let fy = y_entry + 811.0 - app.doc().scroll_right;
     let dd = Rect::new(x0, fy + 28.0, x0 + 153.5, fy + 28.0 + 3.0 * DROPDOWN_ROW_H);
     elev_shadow(s, dd, 8.0, Elevation::Floating);
     fill_rrect(s, dd, R_LG, C_FIELD);
@@ -7356,7 +7761,7 @@ fn paint_text_style_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, 
     let reg = app.editor_regions();
     let x0 = reg.right.x0 + 13.0; // panel border + padding (cols x0)
     let y_entry = crate::theme::ED_TITLE_H + 89.0;
-    let fy = y_entry + 658.5 - app.doc().scroll_right;
+    let fy = y_entry + 698.5 - app.doc().scroll_right;
 
     let names: Vec<String> = {
         let doc = app.doc();
@@ -7869,9 +8274,104 @@ fn paint_variant_chrome(app: &mut App, s: &mut Scene) {
     }
 }
 
+/// The inspector's own popovers — the layer / paint / effect blend menus and an
+/// effect row's type menu. Painted after the panel (they are drawn by the
+/// overlay pass) and before the canvas chrome they must never be hidden by.
+fn paint_panel_menus(app: &mut App, s: &mut Scene) {
+    let mut hit: Vec<(Rect, Action)> = Vec::new();
+    if app.layer_blend_open {
+        let Some(id) = app.doc_ref().selected_id() else {
+            return;
+        };
+        let cur = find_node(&app.doc_ref().editor_ref().root, &id)
+            .map(|n| n.blend)
+            .unwrap_or(x_native::BlendKind::Normal);
+        paint_blend_menu(
+            app,
+            s,
+            &mut hit,
+            &x_native::BlendKind::layer_modes(),
+            cur,
+            Action::SetLayerBlend,
+        );
+    } else if let Some(t) = app.paint_blend_open {
+        let cur = paint_target_blend(app, t);
+        paint_blend_menu(
+            app,
+            s,
+            &mut hit,
+            &x_native::BlendKind::paint_modes(),
+            cur,
+            move |m| Action::SetPaintBlend(t, m),
+        );
+    } else if let Some(i) = app.effect_blend_open {
+        let cur = app
+            .doc_ref()
+            .selected_id()
+            .and_then(|id| app.effect_layers_of(&id).get(i).map(|l| l.blend))
+            .unwrap_or(x_native::BlendKind::Normal);
+        paint_blend_menu(
+            app,
+            s,
+            &mut hit,
+            &x_native::BlendKind::paint_modes(),
+            cur,
+            move |m| Action::SetEffectBlend(i, m),
+        );
+    } else if let Some(i) = app.effect_kind_open {
+        let (ax, ay) = app.blend_dd_anchor;
+        let items = x_native::EffectKind::all();
+        let w = 176.0;
+        let h = DROPDOWN_ROW_H * items.len() as f64;
+        let x0 = ax.min((app.win_w - w - 8.0).max(8.0)).max(8.0);
+        let mut y0 = ay + 4.0;
+        if y0 + h > app.win_h - 8.0 {
+            y0 = (ay - 4.0 - h).max(8.0);
+        }
+        let dd = Rect::new(x0, y0, x0 + w, y0 + h);
+        elev_shadow(s, dd, 8.0, Elevation::Floating);
+        fill_rrect(s, dd, R_LG, C_FIELD);
+        stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+        let cur = app
+            .doc_ref()
+            .selected_id()
+            .and_then(|id| app.effect_layers_of(&id).get(i).map(|l| l.effect.kind()));
+        for (k, kind) in items.iter().enumerate() {
+            let r = Rect::new(
+                dd.x0,
+                dd.y0 + DROPDOWN_ROW_H * k as f64,
+                dd.x1,
+                dd.y0 + DROPDOWN_ROW_H * (k + 1) as f64,
+            );
+            let hov = hover(app, r);
+            let on = cur == Some(*kind);
+            if hov {
+                fill_rect(s, r, C_FIELD_2);
+            }
+            app.fonts.text(
+                s,
+                r.x0 + 10.0,
+                r.y0 + 9.0,
+                kind.label(),
+                T11,
+                if on { C_TEXT } else { C_MUTED },
+                Wt::Reg,
+            );
+            if on {
+                draw_icon(s, "check", r.x1 - 22.0, r.y0 + 8.0, ICON_XS, C_TEXT);
+            }
+            hit.push((r, Action::SetEffectKind(i, *kind)));
+        }
+    }
+    if !hit.is_empty() {
+        app.hit.append(&mut hit);
+    }
+}
+
 fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
     paint_slice_chrome(app, s);
     paint_variant_chrome(app, s);
+    paint_panel_menus(app, s);
     let doc = match app.doc_opt() {
         Some(d) => d,
         None => return,
@@ -8422,7 +8922,7 @@ pub(crate) fn color_picker_rect(app: &App) -> Option<Rect> {
         return None;
     }
     let w = 244.0;
-    let h = 250.0;
+    let h = 286.0;
     let x_left = anchor.x0 - w - 8.0;
     let x = if x_left >= 8.0 {
         x_left
@@ -8437,9 +8937,10 @@ pub(crate) fn color_picker_rect(app: &App) -> Option<Rect> {
 }
 
 fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
-    let Some((is_fill, _, open)) = app.color_picker_popup.as_ref().cloned() else {
+    let Some((paint_target, _, open)) = app.color_picker_popup.as_ref().cloned() else {
         return;
     };
+    let is_fill = paint_target.is_fill();
     if !open || app.doc_opt().is_none() {
         return;
     }
@@ -8447,8 +8948,30 @@ fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         return;
     };
     let info = sel_info(app);
-    let current = parse_hex(if is_fill { &info.fill } else { &info.stroke })
-        .unwrap_or(if is_fill { Color::WHITE } else { Color::BLACK });
+    // The popover's subject: a fill, a stroke, or an effect's **Fill** row.
+    let current = match paint_target {
+        crate::state::PaintTarget::Effect(i) => app
+            .doc_ref()
+            .selected_id()
+            .and_then(|id| {
+                app.effect_layers_of(&id)
+                    .get(i)
+                    .and_then(|l| l.effect.color())
+            })
+            .unwrap_or(Color::BLACK),
+        target => {
+            let hex = if target.is_fill() {
+                &info.fill
+            } else {
+                &info.stroke
+            };
+            parse_hex(hex).unwrap_or(if target.is_fill() {
+                Color::WHITE
+            } else {
+                Color::BLACK
+            })
+        }
+    };
     elev_shadow(s, panel, 14.0, Elevation::Floating);
     fill_rrect(s, panel, R_LG, C_FIELD);
     stroke_rrect(s, panel, R_LG, C_LINE_2, 1.0);
@@ -8505,6 +9028,52 @@ fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         Wt::Reg,
     );
 
+    // Figma: *"Open the color picker in the Fill or Stroke sections of the
+    // right sidebar, then click Apply blend mode"* — a paint's blend lives in
+    // this popover, next to the colour it applies to.
+    let brow = Rect::new(
+        panel.x0 + 14.0,
+        panel.y1 - 34.0,
+        panel.x1 - 14.0,
+        panel.y1 - 10.0,
+    );
+    if hover(app, brow) {
+        fill_rrect(s, brow, R_MD, C_FIELD_2);
+    }
+    app.fonts.text(
+        s,
+        brow.x0 + 8.0,
+        brow.y0 + 7.0,
+        "Apply blend mode",
+        T10,
+        C_TEXT,
+        Wt::Reg,
+    );
+    let cur_blend = paint_target_blend(app, paint_target);
+    let cb = cur_blend.label();
+    let cbw = app.fonts.measure(cb, T10, Wt::Reg);
+    app.fonts.text(
+        s,
+        brow.x1 - 20.0 - cbw,
+        brow.y0 + 7.0,
+        cb,
+        T10,
+        C_DIM,
+        Wt::Reg,
+    );
+    draw_icon(
+        s,
+        "chevron-down",
+        brow.x1 - 16.0,
+        brow.y0 + 8.0,
+        ICON_XS,
+        C_DIM,
+    );
+    hit.push((brow, Action::TogglePaintBlend(paint_target)));
+    if app.paint_blend_open == Some(paint_target) {
+        app.blend_dd_anchor = (brow.x0, brow.y0);
+    }
+
     const PRESETS: [&str; 16] = [
         "FFFFFF", "F2F3F7", "D9DCE5", "9A9EAA", "6B6E7A", "343842", "1B1D23", "000000", "FF3B30",
         "FF9500", "FFCC00", "34C759", "00A3FF", "5856D6", "AF52DE", "FF2D55",
@@ -8529,7 +9098,7 @@ fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         } else {
             stroke_rrect(s, r, R_MD, C_LINE, 1.0);
         }
-        hit.push((r, Action::PaintPreset(is_fill, hex.to_string())));
+        hit.push((r, Action::PaintPreset(paint_target, hex.to_string())));
     }
 }
 
