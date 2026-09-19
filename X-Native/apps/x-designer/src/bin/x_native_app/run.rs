@@ -4811,6 +4811,8 @@ impl Host {
             orig: (x, y, w, h),
             start: world,
             base_depth,
+            space: None,
+            offset: (0.0, 0.0),
         })
     }
 
@@ -5444,6 +5446,59 @@ impl Host {
                 ..
             }) => {
                 let world = self.app.screen_to_world(p);
+
+                // Figma's **Space while resizing** (master row 2.12; the
+                // keyboard table's *"Move while resizing — Space"*, and the
+                // vector article's *"Hold Space while in the middle of another
+                // action to move the points. Release Space to return to the
+                // previous action"* — the same rule for layers): while `Space`
+                // is held the box travels with the pointer and keeps the size
+                // it has. The first event after `Space` goes down only sets the
+                // anchor, so the box never jumps on the way in, and the travel
+                // is `smart_move` — the call the plain drag uses, one snapping
+                // rule for both.
+                if self.app.space_pan {
+                    let last = match &self.app.drag {
+                        Some(Drag::ResizeSel { space, .. }) => *space,
+                        _ => None,
+                    };
+                    match last {
+                        Some(prev) => {
+                            let (dx, dy) = (world.x - prev.x, world.y - prev.y);
+                            if dx != 0.0 || dy != 0.0 {
+                                self.smart_move(dx, dy);
+                                if let Some(Drag::ResizeSel { space, offset, .. }) =
+                                    self.app.drag.as_mut()
+                                {
+                                    *space = Some(world);
+                                    offset.0 += dx;
+                                    offset.1 += dy;
+                                }
+                            }
+                        }
+                        None => {
+                            if let Some(Drag::ResizeSel { space, .. }) = self.app.drag.as_mut() {
+                                *space = Some(world);
+                            }
+                        }
+                    }
+                    return;
+                }
+
+                // `Space` let go: the move stands, and the resize runs from
+                // where the box now is. `orig` and `start` travel with the same
+                // offset, so the pointer keeps its grip on the corner it took
+                // hold of; until `Space` is ever used the offset is zero and
+                // this is the arithmetic, byte for byte, that it always was.
+                let (sx, sy) = match self.app.drag.as_mut() {
+                    Some(Drag::ResizeSel { space, offset, .. }) => {
+                        *space = None;
+                        *offset
+                    }
+                    _ => (0.0, 0.0),
+                };
+                let start = Point::new(start.x + sx, start.y + sy);
+                let (ox, oy) = (ox + sx, oy + sy);
 
                 // ONE layer, dragged by a corner: resize in the node's own
                 // frame. The engine keeps the opposite corner pinned in world

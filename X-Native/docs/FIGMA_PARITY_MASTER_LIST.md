@@ -33,7 +33,7 @@ recon task, not a settled fact.
 | surface | rows | MATCH | PARTIAL | MISSING | EXTRA | OUT |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | 1 Tools (toolbar & shape menu) | 24 | 15 | 3 | 1 | 5 | 0 |
-| 2 Canvas gestures (drag) | 28 | 25 | 1 | 1 | 1 | 0 |
+| 2 Canvas gestures (drag) | 28 | 26 | 1 | 0 | 1 | 0 |
 | 3 Keyboard | 35 | 32 | 2 | 0 | 1 | 0 |
 | 4 Menus & palettes | 10 | 9 | 0 | 1 | 0 | 0 |
 | 5 Layers, pages, sections | 14 | 12 | 1 | 1 | 0 | 0 |
@@ -52,9 +52,9 @@ recon task, not a settled fact.
 | 18 Design language (look of the app itself) | 12 | 1 | 5 | 6 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **339** | **255** | **47** | **18** | **16** | **3** |
+| **total** | **339** | **256** | **47** | **17** | **16** | **3** |
 
-The 18 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
+The 17 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
 the brief.
 
@@ -115,7 +115,7 @@ Figma's canvas is a small set of gestures with modifiers; the shape-tool drags a
 | 2.9 | Corner resize | 4 handles | `Drag::ResizeSel` | MATCH |
 | 2.10 | `⇧` resize | proportional | resize arm | MATCH |
 | 2.11 | `⌥` resize | from the centre | resize arm | MATCH |
-| 2.12 | `Space` during resize | move the box while resizing | not implemented | **MISSING** |
+| 2.12 | `Space` during resize | *"Hold Space while in the middle of another action to move the points. Release Space to return to the previous action"* (`360039957634`; the shortcut tables list it as **Move while resizing**) | `Drag::ResizeSel`'s `space`/`offset` riders: while `Space` is held the box travels with the pointer at the size the resize gave it (`smart_move`, so it snaps like any drag), the first event only anchors, and letting go re-bases the resize on the box's new place | MATCH |
 | 2.13 | Scale-tool drag | box + contents scale | `Drag::ScaleSel`, `Drag::ScaleBody` | MATCH |
 | 2.14 | Arc handles | hover the ellipse, drag sweep / start / ratio | `Drag::ArcHandle` (`360040450173`) | MATCH |
 | 2.15 | Star / Polygon handles | Count (and Ratio) drag, live redraw | `Drag::ShapeHandle` | MATCH |
@@ -722,13 +722,14 @@ rendering it.
     keyboard completions that finished the item (3.23–3.31: `⇧E`, `⌘R`, `⌥⌘K`,
     `⇧A`, `N`/`⇧N`, `⌘\`, `⇧⌘\`, `⌘/`, `⇧?`, and the `⌘⌥M` row §28 had already
     built) moved the whole of section 3's remainder into `MATCH`.
-14. `Space`-during-resize (2.12); stroke-style panel (8.15);
-    image flip toggle (9.7); outlines mode (17.7). The `⌥`-measure half of this
-    item is delivered: row 2.24 is `MATCH` (`App::measure_spans`,
-    `paint_measure`), pinned by
+14. Stroke-style panel (8.15); image flip toggle (9.7); outlines mode (17.7).
+    Two halves of this item are delivered: row 2.24 is `MATCH`
+    (`App::measure_spans`, `paint_measure`, pinned by
     `option_measures_the_gap_to_the_layer_under_the_cursor` and the geometry's
     own `measure_reads_both_axes_of_a_diagonal_pair` /
-    `a_shared_band_anchors_the_line_and_an_overlap_reads_nothing`.
+    `a_shared_band_anchors_the_line_and_an_overlap_reads_nothing`) and so is
+    row 2.12 (`Drag::ResizeSel`'s `space`/`offset` riders, pinned by
+    `space_moves_the_box_mid_resize_and_the_resize_resumes_from_there`).
 15. Clean-up layers (5.9) — chapter 4's lesson.
 
 ### Wave 2 — design parity ("no design issue")

@@ -8141,6 +8141,8 @@ fn a_manual_resize_pins_a_text_layer_and_the_handle_gesture_fits_it() {
             orig: (x, y, w, hh),
             start: Point::new(x + w, y + hh),
             base_depth: 0,
+            space: None,
+            offset: (0.0, 0.0),
         });
         let target = Point::new(x + w + 180.0, y + hh);
         h.on_move(h.app.world_to_screen(target));
@@ -8411,6 +8413,8 @@ fn option_measures_the_gap_to_the_layer_under_the_cursor() {
         orig: (0.0, 0.0, 10.0, 10.0),
         start: Point::new(0.0, 0.0),
         base_depth: 0,
+        space: None,
+        offset: (0.0, 0.0),
     });
     assert!(
         h.app.measure_spans().is_empty(),
@@ -8422,4 +8426,122 @@ fn option_measures_the_gap_to_the_layer_under_the_cursor() {
     let mut scene = vello::Scene::new();
     crate::editor_ui::paint_over(&mut h.app, &mut scene);
     assert_eq!(h.app.measure_spans().len(), 1, "still armed after a paint");
+}
+
+/// Figma's **Space while resizing** (master row 2.12; the keyboard table's
+/// *"Move while resizing — Space — while dragging"*, and the vector article's
+/// *"Hold Space while in the middle of another action to move the points.
+/// Release Space to return to the previous action"*). While `Space` is held the
+/// box travels with the pointer and keeps the size it has; letting `Space` go
+/// hands the box back to the resize where it now stands.
+#[test]
+fn space_moves_the_box_mid_resize_and_the_resize_resumes_from_there() {
+    let mut h = host();
+    let root_id = {
+        let doc = h.app.doc();
+        doc.editor_ref().root.id.clone()
+    };
+    let rect = |h: &Host, id: &str| {
+        let n = find_node_clone(&h.app.doc_ref().editor_ref().root, id).unwrap();
+        (n.transform.x, n.transform.y, n.w, n.h)
+    };
+
+    // ---- one layer: the engine resizes it in its own frame, so the move is
+    // the ONLY thing that can have carried it
+    let solo = Node::rect("sp", 100.0, 100.0, 80.0, 60.0, Color::from_rgb8(1, 2, 3));
+    h.app.doc().editor().insert_node(&root_id, solo);
+    h.app.doc().editor().selection = vec!["sp".into()];
+    h.app.drag = Some(Drag::ResizeSel {
+        corner: 3,
+        orig: (100.0, 100.0, 80.0, 60.0),
+        start: Point::new(180.0, 160.0),
+        base_depth: 0,
+        space: None,
+        offset: (0.0, 0.0),
+    });
+    // the corner drag widens the box: (100,100) 80x60 -> 100x60
+    h.on_move(h.app.world_to_screen(Point::new(200.0, 160.0)));
+    let (x, y, w, hh) = rect(&h, "sp");
+    assert!((w - 100.0).abs() < 0.51, "the corner drag widened it: {w}");
+    assert_eq!((x, y), (100.0, 100.0), "and pinned the opposite corner");
+
+    // Space: the box moves with the pointer and keeps the size it has. The
+    // first event only anchors, so it never jumps on the way in.
+    h.app.space_pan = true;
+    h.on_move(h.app.world_to_screen(Point::new(200.0, 160.0)));
+    assert_eq!(rect(&h, "sp"), (x, y, w, hh), "anchoring moves nothing");
+    h.on_move(h.app.world_to_screen(Point::new(220.0, 170.0)));
+    let (mx, my, mw, mh) = rect(&h, "sp");
+    assert_eq!((mx, my), (x + 20.0, y + 10.0), "the box travelled");
+    assert_eq!((mw, mh), (w, hh), "and kept the size the resize gave it");
+
+    // Space let go: the move stands and the resize picks up from there — the
+    // pointer still holds the corner it took hold of, so +40px is +40px wide.
+    h.app.space_pan = false;
+    h.on_move(h.app.world_to_screen(Point::new(260.0, 170.0)));
+    let (rx, ry, rw, rh) = rect(&h, "sp");
+    assert_eq!((rx, ry), (mx, my), "the resize did not jump back");
+    assert!(
+        (rw - (mw + 40.0)).abs() < 0.51,
+        "and resumed from the move: {rw}"
+    );
+    assert_eq!(rh, mh);
+    h.on_release();
+    assert!(h.app.drag.is_none(), "release ends the gesture");
+
+    // ---- a pair: the same rule through the box arithmetic, where `orig` and
+    // `start` carry the move
+    let a = Node::rect("sa", 400.0, 600.0, 80.0, 60.0, Color::from_rgb8(4, 5, 6));
+    let b = Node::rect("sb", 500.0, 600.0, 80.0, 60.0, Color::from_rgb8(7, 8, 9));
+    h.app.doc().editor().insert_node(&root_id, a);
+    h.app.doc().editor().insert_node(&root_id, b);
+    h.app.doc().editor().selection = vec!["sa".into(), "sb".into()];
+    h.app.drag = Some(Drag::ResizeSel {
+        corner: 3,
+        orig: (400.0, 600.0, 180.0, 60.0),
+        start: Point::new(580.0, 660.0),
+        base_depth: 0,
+        space: None,
+        offset: (0.0, 0.0),
+    });
+    h.on_move(h.app.world_to_screen(Point::new(600.0, 660.0)));
+    let before_a = rect(&h, "sa");
+    let before_b = rect(&h, "sb");
+    assert!(before_a.2 > 80.0, "the pair widened together");
+
+    h.app.space_pan = true;
+    h.on_move(h.app.world_to_screen(Point::new(600.0, 660.0)));
+    h.on_move(h.app.world_to_screen(Point::new(620.0, 670.0)));
+    let moved_a = rect(&h, "sa");
+    let moved_b = rect(&h, "sb");
+    assert_eq!(
+        (moved_a.0, moved_a.1),
+        (before_a.0 + 20.0, before_a.1 + 10.0),
+        "both layers travel with the pointer"
+    );
+    assert_eq!(
+        (moved_b.0, moved_b.1),
+        (before_b.0 + 20.0, before_b.1 + 10.0)
+    );
+    assert_eq!((moved_a.2, moved_a.3), (before_a.2, before_a.3));
+    assert_eq!((moved_b.2, moved_b.3), (before_b.2, before_b.3));
+
+    // the resize resumes from the MOVED box: measuring the pointer from the
+    // press box instead would overshoot by exactly the 20px the box travelled
+    h.app.space_pan = false;
+    h.on_move(h.app.world_to_screen(Point::new(700.0, 670.0)));
+    let after = rect(&h, "sa");
+    assert!(
+        after.2 > moved_a.2,
+        "the pair resize is live again: {} -> {}",
+        moved_a.2,
+        after.2
+    );
+    assert!(
+        after.2 < moved_a.2 * 1.44,
+        "and it resumed from the moved box, not the press box: {}",
+        after.2
+    );
+    h.on_release();
+    assert!(h.app.drag.is_none());
 }

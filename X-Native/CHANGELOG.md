@@ -5,6 +5,27 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-19 (Space moves the box mid-resize)
+
+[Edit vector layers](https://help.figma.com/hc/en-us/articles/360039957634) — master
+row 2.12, the second half of the canvas-gesture item: *"Hold Space while in the middle
+of another action to move the points. Release Space to return to the previous action"*,
+the rule the design-file shortcut tables carry as **Move while resizing**.
+
+- **`Drag::ResizeSel`** gained its two riders. `space` is the pointer the last
+  move-with-`Space` event landed on — `None` until the first one, so the box travels
+  from where `Space` went down instead of jumping when it does — and `offset` is how
+  far that travel has carried the box.
+- While `Space` is held the box moves with the pointer and keeps the size the resize
+  gave it, through `smart_move`, the call the plain layer drag uses: one snapping rule
+  for both gestures. Letting `Space` go adds `offset` to the drag's `orig` and `start`,
+  so the resize re-bases on the box's new place and the pointer keeps its grip on the
+  corner it took hold of. With `Space` never used the offset is zero and the
+  arithmetic is byte for byte what it was.
+- Pinned by `space_moves_the_box_mid_resize_and_the_resize_resumes_from_there`, which
+  drives both the single-layer path (the engine's own frame resize) and the
+  box-arithmetic path a multi-selection takes.
+
 ## [Unreleased] — 2026-09-19 (Measure with ⌥)
 
 [Measure distances between layers](https://help.figma.com/hc/en-us/articles/360039956974)

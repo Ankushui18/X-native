@@ -2593,6 +2593,16 @@ pub enum Drag {
         /// Undo-stack depth at press; release merges the per-event resize
         /// entries into ONE undo step (see `MoveSel::base_depth`).
         base_depth: usize,
+        /// Figma's **Space while resizing** (master row 2.12): the pointer the
+        /// last move-with-`Space` event landed on — `None` until the first one,
+        /// so the box travels from where `Space` went down instead of jumping
+        /// when it does.
+        space: Option<Point>,
+        /// How far that move has carried the box, added to `orig` and `start`
+        /// while the resize runs: letting `Space` go resumes the resize from
+        /// the box's new place (*"Release Space to return to the previous
+        /// action"*), not from the place the press began.
+        offset: (f64, f64),
     },
     /// Crop-mode drag (help 360040675194): the picture scales about the
     /// corner opposite the one being held and the frame never moves. `corner`
