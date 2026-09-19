@@ -13,7 +13,7 @@
 //! ## Runtime themes
 //!
 //! The app paints through [`resolve`], which maps a Graphite-authored color
-//! onto the active palette ([`ThemeId::Daylight`], [`ThemeId::HighContrast`]).
+//! onto the active palette ([`ThemeId::Daylight`]).
 //! With the default theme active it is an atomic load and an early return, so
 //! there is no per-frame cost for the feature.
 
@@ -220,6 +220,15 @@ pub const C_LINE_2: Color = rgb(role!(border_strong)); // Strong borders
 // the `selection` role (deeper violet) — keyboard focus is the distinct
 // `focus_ring` role, so the two states can never be confused.
 pub const C_SEL: Color = rgb(role!(selection));
+/// Component sets. Figma's default look for a set is a dashed violet stroke
+/// with no fill; this design system's accent IS the violet, so the set chrome
+/// asks the theme for it rather than hard-coding a hex no theme could remap
+/// (the same reason `C_SEL` exists).
+pub const C_SET: Color = C_ACCENT;
+/// Figma's measurement ink — *"Figma will display a red line between the two
+/// objects"* (help 360039956974). It is the app's red ink, named so the
+/// canvas gesture has one owner and the panels keep theirs.
+pub const C_MEASURE: Color = C_DANGER_INK;
 pub const C_SEL_SOFT: Color = rgba(role!(selection), A_FAINT);
 /// Wash behind the editor's selected text (stronger than C_SEL_SOFT).
 pub const C_SEL_WASH: Color = rgba(role!(selection), A_MEDIUM);
@@ -272,6 +281,11 @@ pub const C_GRID_LIGHT: Color = Color::from_rgba8(0x4A, 0x4D, 0x58, 60); // Fain
 // --------------------------------------------------------------- geometry
 // Editor dimensions
 pub const ED_TITLE_H: f64 = 36.0;
+
+/// Height of the status band — the one chrome row that spans the window at its
+/// bottom (`run.rs::paint_feedback`). `state.rs` owns the rect; every region
+/// ends above it, so a message can never be painted *through* the artwork.
+pub const ED_STATUS_H: f64 = 22.0;
 pub const LOGO_CELL_W: f64 = 44.0;
 pub const ED_LEFT_W: f64 = 280.0;
 pub const ED_LEFT_MIN: f64 = 200.0;

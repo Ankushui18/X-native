@@ -79,7 +79,6 @@ x-ui (Reusable Component Layer)
 | Secondary Text | `#9A9EAA` |
 | Accent | `#7C5CFC` |
 | Focus Ring | `#A996FF` |
-| High Contrast Accent | `#9F88FF` |
 
 **Required Semantic Tokens:**
 ```rust
@@ -681,7 +680,8 @@ Issues:
 - [ ] Focus management
 - [ ] Focus restoration
 - [ ] Screen reader semantics
-- [ ] High Contrast mode support
+- [x] ~~High Contrast mode support~~ — dropped 18 Sep 2026; the product ships two
+      palettes (Graphite, Daylight) and no third
 - [ ] Reduced Motion preference
 - [ ] UI scaling
 - [ ] Inspector keyboard editing

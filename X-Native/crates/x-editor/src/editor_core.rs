@@ -22,6 +22,51 @@ fn next_copy_id(taken: &mut std::collections::HashSet<String>, old: &str) -> Str
     candidate
 }
 
+/// True when a transform only says WHERE a node sits: translation without
+/// rotation, scale or skew. The Section rules below deal in translations, so
+/// anything else is refused rather than guessed.
+fn plain_translation(t: &Transform) -> bool {
+    t.rotation == 0.0 && t.scale_x == 1.0 && t.scale_y == 1.0 && t.skew_x == 0.0 && t.skew_y == 0.0
+}
+
+/// The PAGE position of a node's origin: its own translation plus every
+/// ancestor's. `None` when an ancestor is not a plain translation — its
+/// children's page position is a matrix, not a point.
+fn page_pos(n: &Node, id: &str) -> Option<(f64, f64)> {
+    for c in &n.children {
+        if c.id == id {
+            return Some((c.transform.x, c.transform.y));
+        }
+        if let Some((x, y)) = page_pos(c, id) {
+            if !plain_translation(&c.transform) {
+                return None;
+            }
+            return Some((c.transform.x + x, c.transform.y + y));
+        }
+    }
+    None
+}
+
+/// The id of a node's direct parent, if it has one.
+fn parent_of(n: &Node, id: &str) -> Option<String> {
+    for c in &n.children {
+        if c.id == id {
+            return Some(n.id.clone());
+        }
+        if let Some(p) = parent_of(c, id) {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Does a subtree carry a Section anywhere? Figma's rule is about the
+/// container itself: "Sections ... cannot be contained within frames or
+/// groups", and a frame cannot be given one through the back door either.
+fn has_section(n: &Node) -> bool {
+    matches!(n.kind, NodeKind::Section) || n.children.iter().any(has_section)
+}
+
 /// Overlay a rich-text style onto CHAR range `[start, end)` within `runs`:
 /// existing runs are clipped around the range and any part they cover is
 /// dropped, then a fresh run for the range is appended (the renderer's
@@ -84,6 +129,10 @@ pub struct Editor {
     pub edit_serial: u64,
     pub root: Node,
     pub selection: Vec<String>,
+    /// Figma: a layer *inside* an instance is selectable, and editing one of
+    /// its properties stores an override on the instance instead of touching
+    /// the master. `(instance id, layer id inside it)`; `None` = not inside.
+    pub instance_scope: Option<(String, String)>,
     undo_stack: Vec<Vec<Command>>,
     redo_stack: Vec<Vec<Command>>,
     /// Group/Ungroup are structural; store whole-tree snapshots for them.
@@ -182,6 +231,7 @@ impl Editor {
             root,
             edit_serial: 0,
             selection: vec![],
+            instance_scope: None,
             undo_stack: vec![],
             redo_stack: vec![],
             snapshots: vec![],
@@ -264,6 +314,126 @@ impl Editor {
         Some(next)
     }
 
+    // -- inside an instance -------------------------------------------------
+    /// Figma's *select inside*: double-clicking inside an instance selects the
+    /// layer under the cursor **inside it**, and every property change from
+    /// then on is stored as the instance's override (help 360039150733: *"you
+    /// can change the properties of any layer within an instance"*). The
+    /// selected id is the **master's** layer id, because that is what an
+    /// override targets — an instance carries no children of its own to select.
+    pub fn enter_instance(&mut self, p: Point, vars: &x_core::Variables) -> Option<String> {
+        let hit = hit_test(&self.root, p)?;
+        let instance_id = instance_ancestor(&self.root, &hit)?;
+        let layer = self.layer_inside(&instance_id, p, vars)?;
+        self.instance_scope = Some((instance_id, layer.clone()));
+        self.selection = vec![layer.clone()];
+        Some(layer)
+    }
+
+    /// Leave the instance: Figma's Esc selects the instance itself again.
+    /// Returns true when there was a scope to leave.
+    pub fn exit_instance(&mut self) -> bool {
+        match self.instance_scope.take() {
+            Some((instance_id, _)) => {
+                self.selection = vec![instance_id];
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The scoped layer as the canvas resolves it — master value with the
+    /// instance's override applied. This is what the panels must show while a
+    /// layer inside an instance is selected.
+    pub fn scoped_layer(&self, vars: &x_core::Variables) -> Option<Node> {
+        let (instance_id, layer) = self.instance_scope.clone()?;
+        let inst = find(&self.root, &instance_id)?;
+        let resolved = x_core::detach_instance(&self.root, inst, vars)?;
+        fn take(node: Node, id: &str) -> Option<Node> {
+            if node.id == id {
+                return Some(node);
+            }
+            for c in node.children {
+                if let Some(found) = take(c, id) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        take(resolved, &layer)
+    }
+
+    /// The deepest master layer under `p` inside `instance_id`: the instance is
+    /// swapped for its resolved subtree and the point is asked again, so the
+    /// answer comes from the same tree the renderer paints.
+    fn layer_inside(
+        &self,
+        instance_id: &str,
+        p: Point,
+        vars: &x_core::Variables,
+    ) -> Option<String> {
+        let inst = find(&self.root, instance_id)?;
+        let sentinel = format!("{instance_id}#inside");
+        let mut resolved = x_core::detach_instance(&self.root, inst, vars)?;
+        resolved.id = sentinel.clone();
+        let mut tree = self.root.clone();
+        if !replace_in_tree(&mut tree, instance_id, resolved) {
+            return None;
+        }
+        let inside = hit_test(&tree, p)?;
+        let group = find(&tree, &sentinel)?;
+        if group.id == inside {
+            return None;
+        }
+        find(group, &inside).map(|n| n.id.clone())
+    }
+
+    /// Is `id` inside the instance the editor is scoped into? The ids an
+    /// override targets are the master's, so the master's tree is the one to
+    /// ask.
+    fn scope_owns(&self, id: &str) -> bool {
+        let Some((instance_id, layer)) = self.instance_scope.as_ref() else {
+            return false;
+        };
+        let Some(inst) = find(&self.root, instance_id) else {
+            return false;
+        };
+        let NodeKind::Instance { component } = &inst.kind else {
+            return false;
+        };
+        let Some(master) = x_core::find_master(&self.root, component) else {
+            return false;
+        };
+        let Some(scope) = find(master, layer) else {
+            return false;
+        };
+        scope.id == id || find(scope, id).is_some()
+    }
+
+    /// A write aimed at a layer inside an instance never edits the master
+    /// (Figma keeps the master and every other instance untouched). Returns
+    /// true when the caller must stop: either the write became an override, or
+    /// `v` is `None` — meaning that property is one Figma does not let an
+    /// instance override, so the write is refused rather than misdirected.
+    fn scope_gate(&mut self, id: &str, v: Option<x_core::OverrideValue>) -> bool {
+        if !self.scope_owns(id) {
+            return false;
+        }
+        let Some(v) = v else {
+            return true;
+        };
+        let Some((instance_id, _)) = self.instance_scope.clone() else {
+            return true;
+        };
+        let Some(inst) = find(&self.root, &instance_id).cloned() else {
+            return true;
+        };
+        let mut after = inst;
+        x_core::set_override(&mut after, id, v);
+        self.replace_node(&instance_id, after);
+        true
+    }
+
     pub fn click(&mut self, p: Point, shift: bool) {
         match hit_test(&self.root, p) {
             Some(id) => {
@@ -284,12 +454,17 @@ impl Editor {
             }
         }
     }
+    /// Figma's plain marquee: the page's top-level objects only.
     pub fn marquee(&mut self, rect: Rect) {
-        self.selection = hit_test_rect(&self.root, rect, false);
+        self.selection = hit_test_rect(&self.root, rect, false, false);
+    }
+    /// Figma's ⌘/Ctrl-drag marquee: the nested layers answer too.
+    pub fn marquee_deep(&mut self, rect: Rect) {
+        self.selection = hit_test_rect(&self.root, rect, false, true);
     }
     /// Figma Alt-drag marquee: select only fully-contained nodes.
     pub fn marquee_contained(&mut self, rect: Rect) {
-        self.selection = hit_test_rect(&self.root, rect, true);
+        self.selection = hit_test_rect(&self.root, rect, true, false);
     }
 
     // -- undoable ops ------------------------------------------------------
@@ -318,6 +493,11 @@ impl Editor {
     /// Move a single node (undoable), used by corner-resize and alignment.
     pub fn move_node(&mut self, id: &str, dx: f64, dy: f64) {
         if dx == 0.0 && dy == 0.0 {
+            return;
+        }
+        // Figma's list of what an instance does NOT let you override starts
+        // with position: a layer inside an instance does not move.
+        if self.scope_gate(id, None) {
             return;
         }
         self.push(vec![Command::Move {
@@ -379,6 +559,9 @@ impl Editor {
 
     /// Visibility is a persisted, undoable document edit.
     pub fn set_visible(&mut self, id: &str, v: bool) {
+        if self.scope_gate(id, Some(x_core::OverrideValue::Visible(v))) {
+            return;
+        }
         if let Some(n) = find(&self.root, id).filter(|n| n.visible != v) {
             let mut after = n.clone();
             after.visible = v;
@@ -395,9 +578,167 @@ impl Editor {
         }
     }
 
-    pub fn move_selection(&mut self, dx: f64, dy: f64) {
-        let cmds = self
+    /// Figma's *Use as mask* (`⌘⌥M`; help 360040450253): the bottom-most
+    /// selected layer becomes the mask for the layers above it. With several
+    /// layers selected Figma wraps them in the mask object it creates — a
+    /// group carrying the mask — and that group becomes the selection; a
+    /// single layer just flips its own flag. Asking again on a selection that
+    /// is all masks clears them, so one gesture is the toggle.
+    ///
+    /// `Some(true)` means a mask was applied, `Some(false)` that one was
+    /// removed, `None` that the selection could not take a mask at all.
+    pub fn use_as_mask(&mut self, group_id: &str) -> Option<bool> {
+        if self.selection.is_empty() {
+            return None;
+        }
+        let targets: Vec<String> = self
             .selection
+            .clone()
+            .iter()
+            .filter_map(|id| self.mask_section_target(id))
+            .collect();
+        if targets.len() == self.selection.len() {
+            let mut cleared = false;
+            for id in targets {
+                cleared |= self.set_mask(&id, false);
+            }
+            return cleared.then_some(false);
+        }
+        if self.selection.len() == 1 {
+            let id = self.selection[0].clone();
+            return self.set_mask(&id, true).then_some(true);
+        }
+        // The mask object's stack is the selection's z-order: park the
+        // bottom layer first, where `group_selection` puts the first entry
+        // and where the clip rule looks for the mask.
+        if let Some(parent) = find_parent_mut(&mut self.root, &self.selection[0]) {
+            let mut ordered: Vec<(usize, String)> = self
+                .selection
+                .iter()
+                .filter_map(|id| {
+                    parent
+                        .children
+                        .iter()
+                        .position(|c| &c.id == id)
+                        .map(|i| (i, id.clone()))
+                })
+                .collect();
+            if ordered.len() == self.selection.len() {
+                ordered.sort_by_key(|(i, _)| *i);
+                self.selection = ordered.into_iter().map(|(_, id)| id).collect();
+            }
+        }
+        self.group_selection(group_id);
+        let bottom = find(&self.root, group_id)
+            .and_then(|g| g.children.first())
+            .map(|c| c.id.clone());
+        let bottom = bottom?;
+        let masked = self.set_mask(&bottom, true);
+        if masked {
+            // one gesture, one undo entry: the mask object and its mask
+            self.merge_last(2);
+        }
+        masked.then_some(true)
+    }
+
+    /// Set or clear one layer's mask flag. One `ReplaceNode`, so one undo
+    /// entry — the parity sheet's mask rows lean on that.
+    pub fn set_mask(&mut self, id: &str, v: bool) -> bool {
+        if let Some(n) = find(&self.root, id).filter(|n| n.is_mask != v) {
+            let mut after = n.clone();
+            after.is_mask = v;
+            return self.replace_node(id, after);
+        }
+        false
+    }
+
+    /// The layer the Mask section speaks for: a selected mask, or the mask at
+    /// the bottom of a selected mask object — Figma selects the object it just
+    /// created, and its Mask section still drives that mask's type.
+    pub fn mask_section_target(&self, id: &str) -> Option<String> {
+        let n = find(&self.root, id)?;
+        if n.is_mask {
+            return Some(id.to_string());
+        }
+        n.children
+            .first()
+            .filter(|c| c.is_mask)
+            .map(|c| c.id.clone())
+    }
+
+    /// Figma's **Mask** section (help 360040450253): the type the mask is
+    /// applied by. The section speaks for the whole selection, so every
+    /// selected mask takes the choice.
+    pub fn set_mask_type(&mut self, kind: MaskType) -> bool {
+        let ids: Vec<String> = self
+            .selection
+            .clone()
+            .iter()
+            .filter_map(|id| self.mask_section_target(id))
+            .collect();
+        let mut done = false;
+        for id in ids {
+            if let Some(n) = find(&self.root, &id).filter(|n| n.is_mask && n.mask_type != kind) {
+                let mut after = n.clone();
+                after.mask_type = kind;
+                done |= self.replace_node(&id, after);
+            }
+        }
+        done
+    }
+
+    /// Figma's **List style** (help 360040449773): the selected text layers
+    /// take the style — the shaper then reserves a marker column and draws
+    /// the bullet or the counter in it. Layers that are not text are left
+    /// alone, and a write that changes nothing is not an entry.
+    pub fn set_list_style(&mut self, style: ListStyle) -> bool {
+        let ids: Vec<String> = self
+            .selection
+            .clone()
+            .into_iter()
+            .filter(|id| {
+                find(&self.root, id).is_some_and(|n| matches!(n.kind, NodeKind::Text { .. }))
+            })
+            .collect();
+        let mut done = false;
+        for id in ids {
+            if let Some(n) = find(&self.root, &id).filter(|n| n.list_style != style) {
+                let mut after = n.clone();
+                after.list_style = style;
+                done |= self.replace_node(&id, after);
+            }
+        }
+        done
+    }
+
+    /// The list style the type-details block shows: the primary selection's,
+    /// when that layer is text at all.
+    pub fn list_style_of_selection(&self) -> Option<ListStyle> {
+        self.selection
+            .last()
+            .and_then(|id| find(&self.root, id))
+            .filter(|n| matches!(n.kind, NodeKind::Text { .. }))
+            .map(|n| n.list_style)
+    }
+
+    /// The type the Mask section's dropdown shows: the primary selection's,
+    /// when it is a mask at all.
+    pub fn mask_type_of_selection(&self) -> Option<MaskType> {
+        self.selection
+            .last()
+            .and_then(|id| self.mask_section_target(id))
+            .and_then(|id| find(&self.root, &id))
+            .map(|n| n.mask_type)
+    }
+
+    pub fn move_selection(&mut self, dx: f64, dy: f64) {
+        let ids: Vec<String> = self
+            .selection
+            .iter()
+            .filter(|id| !self.scope_owns(id))
+            .cloned()
+            .collect();
+        let cmds = ids
             .iter()
             .map(|id| Command::Move {
                 id: id.clone(),
@@ -408,6 +749,11 @@ impl Editor {
         self.push(cmds);
     }
     pub fn resize(&mut self, id: &str, w: f64, h: f64) {
+        // …and `constraints` and `text bounds` are on the same list: size
+        // comes from the master.
+        if self.scope_gate(id, None) {
+            return;
+        }
         if let Some(n) = find(&self.root, id) {
             let cmd = Command::Resize {
                 id: id.into(),
@@ -417,6 +763,109 @@ impl Editor {
             self.push(vec![cmd]);
         }
     }
+
+    /// Resize a node the way the canvas does (Figma's Constraints): the node
+    /// takes the new size and the layers inside it answer their pins — in the
+    /// SAME undo entry, so one Ctrl+Z puts the whole picture back.
+    pub fn resize_with_constraints(&mut self, id: &str, w: f64, h: f64) -> bool {
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        let (ow, oh) = (n.w, n.h);
+        let kids = if constrains_children(n) {
+            n.children.clone()
+        } else {
+            Vec::new()
+        };
+        let mut cmds = vec![Command::Resize {
+            id: id.into(),
+            from: (ow, oh),
+            to: (w, h),
+        }];
+        pin_commands(&kids, w, h, ow, oh, &mut cmds);
+        self.push_cmds(cmds);
+        true
+    }
+    /// Figma's rotation field (`360039956914`): the angle applies to *every*
+    /// selected layer, and what is stored follows the panel's convention —
+    /// `(-180, 180]`, counting back down past 180 in the direction you came
+    /// from. One undo entry for the whole selection.
+    pub fn set_selection_rotation(&mut self, deg: f64) -> bool {
+        let ids: Vec<String> = self
+            .selection
+            .iter()
+            .filter(|id| !self.scope_owns(id))
+            .cloned()
+            .collect();
+        let to = normalize_degrees(deg).to_radians();
+        let cmds: Vec<Command> = ids
+            .iter()
+            .filter_map(|id| {
+                let n = find(&self.root, id)?;
+                Some(Command::Rotate {
+                    id: id.clone(),
+                    from: n.transform.rotation,
+                    to,
+                })
+            })
+            .collect();
+        if cmds.is_empty() {
+            return false;
+        }
+        self.push(cmds);
+        true
+    }
+
+    /// Figma's canvas rotate: every selected layer turns about `pivot` by
+    /// `delta` radians. `base` is the selection as it stood when the gesture
+    /// began (`id → x, y, rotation`), so a live drag can ask for the *total*
+    /// delta on every move — the last move wins instead of compounding, and the
+    /// app merges the gesture into one undo entry on release.
+    ///
+    /// The pivot is `(x + origin_x·w, y + origin_y·h)` for a layer whose own
+    /// origin the user moved, and the selection's centre otherwise — which is
+    /// Figma's rule: *"Figma uses the horizontal and vertical center of the
+    /// current selection as the point of rotation by default. You can change an
+    /// object's rotation origin so that it will rotate around a different
+    /// point."*
+    pub fn rotate_selection_from(
+        &mut self,
+        base: &[(String, f64, f64, f64)],
+        pivot: (f64, f64),
+        delta: f64,
+    ) -> bool {
+        let mut cmds: Vec<Command> = Vec::new();
+        for (id, bx, by, brot) in base {
+            if self.scope_owns(id) {
+                continue;
+            }
+            let Some(n) = find(&self.root, id) else {
+                continue;
+            };
+            let (w, h) = (n.w, n.h);
+            let mut t = n.transform;
+            t.x = *bx;
+            t.y = *by;
+            t.rotation = *brot;
+            t.rotate_about(w, h, pivot, delta);
+            cmds.push(Command::Rotate {
+                id: id.clone(),
+                from: n.transform.rotation,
+                to: normalize_degrees(t.rotation.to_degrees()).to_radians(),
+            });
+            cmds.push(Command::Move {
+                id: id.clone(),
+                dx: t.x - n.transform.x,
+                dy: t.y - n.transform.y,
+            });
+        }
+        if cmds.is_empty() {
+            return false;
+        }
+        self.push(cmds);
+        true
+    }
+
     pub fn rotate(&mut self, id: &str, angle: f64) {
         if let Some(n) = find(&self.root, id) {
             let cmd = Command::Rotate {
@@ -438,24 +887,88 @@ impl Editor {
             self.push(vec![cmd]);
         }
     }
-    /// Set a Rect node's corner radius: uniform `radius` + optional per-corner
-    /// overrides (None = uniform mode). Undoable.
+    /// Set a node's corner radius: uniform `radius` + optional per-corner
+    /// overrides (None = uniform mode). Figma's radius applies to rectangles
+    /// AND frames (help 360050986854); a frame has no uniform field of its own,
+    /// so the command resolves its uniform value into four equal corners.
+    /// Undoable.
     pub fn set_corners(&mut self, id: &str, radius: f64, corners: Option<[f64; 4]>) -> bool {
         let Some(n) = find(&self.root, id) else {
             return false;
         };
-        if !matches!(n.kind, NodeKind::Rect { .. }) {
-            return false;
-        }
         let from = match &n.kind {
             NodeKind::Rect { radius } => (*radius, n.corner_radii),
-            _ => unreachable!(),
+            NodeKind::Frame { .. } => (0.0, n.corner_radii),
+            _ => return false,
+        };
+        // A frame has no radius field of its own, so a uniform radius has to
+        // LAND as four equal corners; a caller that passes an array (or the
+        // reverse entry of an undo) is already explicit.
+        let to = match &n.kind {
+            NodeKind::Frame { .. } => corners.or(Some([radius.max(0.0); 4])),
+            _ => corners,
         };
         self.push(vec![Command::SetCorners {
             id: id.into(),
             from,
-            to: (radius, corners),
+            to: (radius, to),
         }]);
+        true
+    }
+
+    /// The uniform corner radius on whatever carries one — a rect's own field,
+    /// or a frame's four equal corners.
+    pub fn set_uniform_radius(&mut self, id: &str, r: f64) -> bool {
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        match n.kind {
+            NodeKind::Rect { .. } => self.set_corners(id, r, None),
+            NodeKind::Frame { .. } => self.set_corners(id, r, Some([r.max(0.0); 4])),
+            _ => false,
+        }
+    }
+
+    /// ONE corner's radius — Figma's **Independent corners**. The uniform value
+    /// a rect keeps in its kind is left alone, so putting the corners back to
+    /// uniform returns the radius the layer had before.
+    pub fn set_corner_radius(&mut self, id: &str, corner: usize, r: f64) -> bool {
+        if corner >= 4 {
+            return false;
+        }
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        let base = match &n.kind {
+            NodeKind::Rect { radius } => *radius,
+            NodeKind::Frame { .. } => 0.0,
+            _ => return false,
+        };
+        let mut radii = n.corner_radii.unwrap_or([base; 4]);
+        radii[corner] = r.max(0.0);
+        self.set_corners(id, base, Some(radii))
+    }
+
+    /// Corner smoothing — Figma's *Corner smoothing* slider, 0–1 here and 0–100%
+    /// on screen. Only the whole shape carries it, so one write is one entry.
+    pub fn set_corner_smoothing(&mut self, id: &str, v: f64) -> bool {
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        if !matches!(n.kind, NodeKind::Rect { .. } | NodeKind::Frame { .. }) {
+            return false;
+        }
+        // the slider re-reads its value on every move: a write that changes
+        // nothing is not an entry
+        let v = v.clamp(0.0, 1.0);
+        if (n.corner_smoothing - v).abs() < 1e-9 {
+            return false;
+        }
+        let before = Box::new(n.clone());
+        let mut after = n.clone();
+        after.corner_smoothing = v;
+        after.dirty = true;
+        self.push_replace(id, before, after);
         true
     }
 
@@ -471,6 +984,16 @@ impl Editor {
         }
     }
     pub fn set_fill(&mut self, id: &str, paint: Paint) {
+        // Inside an instance a solid fill is an override; a gradient or an
+        // image is a paint the override model has no shape for, so it is
+        // refused rather than written into the master.
+        let solid = match &paint {
+            Paint::Solid(c) => Some(x_core::OverrideValue::Fill(*c)),
+            _ => None,
+        };
+        if self.scope_gate(id, solid) {
+            return;
+        }
         if let Some(n) = find(&self.root, id) {
             if !n.visual_stacks_materialized {
                 let cmd = Command::SetFill {
@@ -491,6 +1014,98 @@ impl Editor {
         }
     }
 
+    /// Replace the picture of an image layer. Figma's *Place image* with an
+    /// image layer selected swaps the file rather than painting a fill over
+    /// it, and the crop and fit mode stay: they describe how the layer shows
+    /// a picture, not which one (help 360040675194).
+    pub fn set_image_asset(&mut self, id: &str, asset: &str) -> bool {
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        let mut after = n.clone();
+        if let NodeKind::Image { asset: current, .. } = &mut after.kind {
+            if current == asset {
+                return false;
+            }
+            *current = asset.to_string();
+        } else {
+            return false;
+        }
+        self.replace_node(id, after)
+    }
+
+    /// Set an image layer's fill mode (Figma's Fill mode menu). One entry.
+    pub fn set_image_fit(&mut self, id: &str, fit: ImageFit) -> bool {
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        let mut after = n.clone();
+        match &mut after.kind {
+            NodeKind::Image { fit: current, .. } => {
+                if *current == fit {
+                    return false;
+                }
+                *current = fit;
+            }
+            _ => return false,
+        }
+        self.replace_node(id, after)
+    }
+
+    /// Set an image layer's crop — focal point, zoom and flips (help
+    /// 360040675194). The crop gesture's one writer; a crop session folds its
+    /// entries into one when it is applied. One entry.
+    pub fn set_image_placement(&mut self, id: &str, placement: ImagePlacement) -> bool {
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        let mut after = n.clone();
+        match &mut after.kind {
+            NodeKind::Image {
+                placement: current, ..
+            } => {
+                if *current == placement {
+                    return false;
+                }
+                *current = placement;
+            }
+            _ => return false,
+        }
+        self.replace_node(id, after)
+    }
+
+    /// Figma's **Resize to fit** (help 360040675194): the layer becomes the
+    /// size of the whole picture, uncropped. Box, focal point and zoom in ONE
+    /// entry, because they only mean anything together.
+    pub fn fit_image_to_picture(&mut self, id: &str, iw: f64, ih: f64) -> bool {
+        let (iw, ih) = (iw.max(1.0), ih.max(1.0));
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        let mut after = n.clone();
+        if !matches!(after.kind, NodeKind::Image { .. }) {
+            return false;
+        }
+        let clean = match &after.kind {
+            NodeKind::Image { fit, placement, .. } => {
+                *fit == ImageFit::Crop && *placement == ImagePlacement::default()
+            }
+            _ => false,
+        };
+        if clean && (after.w - iw).abs() < 1e-6 && (after.h - ih).abs() < 1e-6 {
+            // already the picture's size with a clean crop: nothing to write
+            return false;
+        }
+        after.w = iw;
+        after.h = ih;
+        if let NodeKind::Image { fit, placement, .. } = &mut after.kind {
+            *fit = ImageFit::Crop;
+            *placement = ImagePlacement::default();
+        }
+        after.dirty = true;
+        self.replace_node(id, after)
+    }
+
     /// Ordered visual-stack mutation. Every operation swaps the whole node,
     /// so add/remove/reorder/toggle remain one atomic undo step.
     pub fn mutate_visual_stack(&mut self, id: &str, f: impl FnOnce(&mut Node)) -> bool {
@@ -501,6 +1116,7 @@ impl Editor {
         let mut after = n.clone();
         after.materialize_visual_stacks();
         f(&mut after);
+        sync_legacy_effects(&mut after);
         after.dirty = true;
         self.push_replace(id, before, after);
         true
@@ -530,6 +1146,9 @@ impl Editor {
         })
     }
     pub fn remove_effect_layer(&mut self, id: &str, index: usize) -> bool {
+        if effect_at(&self.root, id, index).is_none() {
+            return false;
+        }
         self.mutate_visual_stack(id, move |n| {
             if index < n.effect_layers.len() {
                 n.effect_layers.remove(index);
@@ -553,6 +1172,9 @@ impl Editor {
         })
     }
     pub fn move_effect_layer(&mut self, id: &str, from: usize, to: usize) -> bool {
+        if effect_at(&self.root, id, from).is_none() || effect_at(&self.root, id, to).is_none() {
+            return false;
+        }
         self.mutate_visual_stack(id, move |n| {
             if from < n.effect_layers.len() && to < n.effect_layers.len() {
                 let v = n.effect_layers.remove(from);
@@ -560,7 +1182,156 @@ impl Editor {
             }
         })
     }
+    /// Toggle one effect off/on (Figma's per-effect eye). The effect keeps its
+    /// settings; it just stops painting — which is Figma's own reason for the
+    /// control: *"you can toggle the visibility of individual effects"*.
+    pub fn set_effect_layer_visible(&mut self, id: &str, index: usize, visible: bool) -> bool {
+        if effect_at(&self.root, id, index).is_none() {
+            return false;
+        }
+        self.mutate_visual_stack(id, move |n| {
+            if let Some(l) = n.effect_layers.get_mut(index) {
+                l.visible = visible;
+            }
+        })
+    }
+
+    /// Switch an effect to another type (Figma's per-row dropdown). The new
+    /// effect starts from that type's own defaults; the layer keeps its
+    /// visibility and blend, which belong to the row rather than the effect.
+    pub fn set_effect_kind(&mut self, id: &str, index: usize, kind: EffectKind) -> bool {
+        if effect_at(&self.root, id, index).is_none() {
+            return false;
+        }
+        self.mutate_visual_stack(id, move |n| {
+            if let Some(l) = n.effect_layers.get_mut(index) {
+                l.effect = Effect::default_of(kind);
+            }
+        })
+    }
+
+    /// Write one numeric setting of one effect (X / Y / Blur / Radius /
+    /// Density — see [`Effect::fields`]).
+    pub fn set_effect_field(&mut self, id: &str, index: usize, field: EffectField, v: f64) -> bool {
+        if effect_at(&self.root, id, index).is_none() {
+            return false;
+        }
+        self.mutate_visual_stack(id, move |n| {
+            if let Some(l) = n.effect_layers.get_mut(index) {
+                l.effect.set_field(field, v);
+            }
+        })
+    }
+
+    /// A shadow's **Fill** (its colour). Only the shadow kinds carry one, so
+    /// the write is refused for the others rather than silently dropped.
+    pub fn set_effect_color(&mut self, id: &str, index: usize, color: Color) -> bool {
+        if !effect_at(&self.root, id, index).is_some_and(|e| e.color().is_some()) {
+            return false;
+        }
+        self.mutate_visual_stack(id, move |n| {
+            if let Some(l) = n.effect_layers.get_mut(index) {
+                l.effect.set_color(color);
+            }
+        })
+    }
+
+    /// One effect's blend mode (Figma: *"Apply a blend mode to an effect"* for
+    /// inner shadow, drop shadow and noise). `Pass through` is refused here —
+    /// it cannot be applied to an effect.
+    pub fn set_effect_layer_blend(&mut self, id: &str, index: usize, blend: BlendKind) -> bool {
+        if blend == BlendKind::PassThrough || effect_at(&self.root, id, index).is_none() {
+            return false;
+        }
+        self.mutate_visual_stack(id, move |n| {
+            if let Some(l) = n.effect_layers.get_mut(index) {
+                l.blend = blend;
+            }
+        })
+    }
+
+    /// Duplicate an effect in place (`⌘D` on a selected effect copies its
+    /// settings — Figma's *"duplicate the effect"*).
+    pub fn duplicate_effect_layer(&mut self, id: &str, index: usize) -> bool {
+        if effect_at(&self.root, id, index).is_none() {
+            return false;
+        }
+        self.mutate_visual_stack(id, move |n| {
+            if let Some(l) = n.effect_layers.get(index).cloned() {
+                n.effect_layers.insert(index + 1, l);
+            }
+        })
+    }
+
+    /// The whole layer's blend mode: Figma's **Apply blend mode** in the
+    /// Appearance section, where `Pass through` IS allowed (it is the default
+    /// for layers).
+    pub fn set_layer_blend(&mut self, id: &str, blend: BlendKind) -> bool {
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        let mut after = n.clone();
+        after.blend = blend;
+        after.dirty = true;
+        self.push_replace(id, Box::new(n.clone()), after);
+        true
+    }
+
+    /// One fill's or stroke's blend mode (Figma: *"Open the color picker in
+    /// the Fill or Stroke sections … then click Apply blend mode"*). `Pass
+    /// through` is refused: it cannot be applied to a paint.
+    pub fn set_paint_layer_blend(
+        &mut self,
+        id: &str,
+        is_fill: bool,
+        index: usize,
+        blend: BlendKind,
+    ) -> bool {
+        if blend == BlendKind::PassThrough {
+            return false;
+        }
+        // A node whose paints still live in the flat `fill` / `stroke` fields
+        // has an empty `fill_layers`, so the question "does that paint exist?"
+        // has to be asked of the *materialized* stack: materializing is what
+        // turns the flat fill into layer 0. (Without this, a blend picked on a
+        // layer nobody had touched yet wrote nothing at all.)
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        let mut probe = n.clone();
+        probe.materialize_visual_stacks();
+        // `PaintLayer` and `StrokeLayer` are different types, but their lengths
+        // are both `usize`, so the two branches can share this binding.
+        let present = if is_fill {
+            index < probe.fill_layers.len()
+        } else {
+            index < probe.stroke_layers.len()
+        };
+        if !present {
+            return false;
+        }
+        self.mutate_visual_stack(id, move |n| {
+            if is_fill {
+                if let Some(l) = n.fill_layers.get_mut(index) {
+                    l.blend = blend;
+                }
+            } else if let Some(l) = n.stroke_layers.get_mut(index) {
+                l.blend = blend;
+            }
+        })
+    }
+
     pub fn set_text(&mut self, id: &str, text: &str) {
+        let overridable = matches!(
+            find(&self.root, id).map(|n| &n.kind),
+            Some(NodeKind::Text { .. })
+        );
+        if self.scope_gate(
+            id,
+            overridable.then(|| x_core::OverrideValue::Text(text.into())),
+        ) {
+            return;
+        }
         let Some(mut after) = find(&self.root, id).cloned() else {
             return;
         };
@@ -783,17 +1554,52 @@ impl Editor {
     }
 
     /// Phase 2.3 (Scale tool): scale a node AND its whole subtree
-    /// uniformly — sizes, child offsets, strokes, corner radii. One
-    /// undoable ReplaceNode.
+    /// uniformly — sizes, child offsets, strokes, corner radii, text, effects
+    /// and auto layout. One undoable ReplaceNode. The anchor is the node's own
+    /// origin, so a node scales IN PLACE (Figma's numeric scale).
     pub fn scale_node(&mut self, id: &str, factor: f64) -> bool {
-        if factor <= 0.0 {
-            return false;
-        }
         let Some(n) = find(&self.root, id) else {
             return false;
         };
-        let before = Box::new(n.clone());
-        let mut after = n.clone();
+        let (ax, ay) = (n.transform.x, n.transform.y);
+        self.scale_nodes_about(&[(id.to_string(), ax, ay)], factor)
+    }
+
+    /// Figma's Scale tool (K): scale every listed node — and its subtree — by
+    /// `factor` about `(ax, ay)`, a point of that node's PARENT space (the
+    /// space `transform.x/y` live in). The anchor is the fixed point of the
+    /// mapping, which is what pins the corner you are not dragging: grab the
+    /// bottom-right handle and the top-left corner stays exactly where it was.
+    ///
+    /// A listed node whose ANCESTOR is also listed is skipped — its scale is
+    /// already part of that subtree's, and applying both would scale it twice.
+    /// Every `ReplaceNode` goes into ONE undo step, so scaling a ten-layer
+    /// selection is a single Ctrl+Z.
+    ///
+    /// What travels with the size is Figma's list, not just w/h: child
+    /// offsets, stroke weight, dashes, corner radius, text size and leading,
+    /// the distances inside effects, and auto-layout padding/gap.
+    pub fn scale_nodes_about(&mut self, parts: &[(String, f64, f64)], factor: f64) -> bool {
+        if parts.is_empty() || !factor.is_finite() || factor <= 0.0 {
+            return false;
+        }
+        if factor == 1.0 {
+            return true;
+        }
+        // Shadows and blurs are distances, so they scale with the box. A
+        // noise AMOUNT is a ratio — 0.4 grain is 0.4 grain at any size.
+        fn scale_effect(e: &mut Effect, f: f64) {
+            match e {
+                Effect::DropShadow { dx, dy, blur, .. }
+                | Effect::InnerShadow { dx, dy, blur, .. } => {
+                    *dx *= f;
+                    *dy *= f;
+                    *blur *= f;
+                }
+                Effect::LayerBlur { radius } | Effect::BackgroundBlur { radius } => *radius *= f,
+                Effect::Noise { .. } => {}
+            }
+        }
         fn scale_subtree(n: &mut Node, f: f64, scale_own_pos: bool) {
             if scale_own_pos {
                 n.transform.x *= f;
@@ -802,6 +1608,52 @@ impl Editor {
             n.w *= f;
             n.h *= f;
             n.stroke.width *= f;
+            // Text metrics are px values in the BINDINGS — `fs` point size,
+            // `ls` tracking, `ps`/`pi` paragraph distance, `lhpx` an absolute
+            // line height — so the Scale tool takes them with the box. That is
+            // the whole difference from the Move tool's handles, which leave
+            // font size alone. The other line-height modes are relative and
+            // follow by construction: a percentage rides the size up on its
+            // own and a multiple never was px.
+            for key in ["fs", "ls", "ps", "pi", "lhpx"] {
+                if let Some(px) = n.bindings.get(key).and_then(|v| v.parse::<f64>().ok()) {
+                    n.bindings.insert(key.into(), (px * f).to_string());
+                }
+            }
+            n.paragraph_spacing *= f;
+            n.paragraph_indent *= f;
+            for run in &mut n.text_runs {
+                if let Some(size) = &mut run.size {
+                    *size *= f;
+                }
+                if let Some(ls) = &mut run.ls {
+                    *ls *= f;
+                }
+            }
+            // stroke stacks: weight and the dash/gap pattern are distances
+            for layer in &mut n.stroke_layers {
+                layer.stroke.width *= f;
+                for d in layer.options.dash.iter_mut() {
+                    *d *= f;
+                }
+                layer.options.dash_offset *= f;
+            }
+            scale_effect_both(&mut n.effects, &mut n.effect_layers, f, scale_effect);
+            // auto layout: padding and gap travel with the frame
+            if let NodeKind::Frame {
+                layout: Some(layout),
+            } = &mut n.kind
+            {
+                layout.gap *= f;
+                for side in layout.padding.iter_mut() {
+                    *side *= f;
+                }
+            }
+            for grid in &mut n.layout_grids {
+                grid.gutter *= f;
+                grid.margin *= f;
+                grid.cell *= f;
+            }
             if let NodeKind::Rect { radius } = &mut n.kind {
                 *radius *= f;
             }
@@ -813,11 +1665,11 @@ impl Editor {
             if let NodeKind::Vector { path } = &mut n.kind {
                 for c in path.iter_mut() {
                     match c {
-                        x_core::PathCmd::MoveTo(x, y) | x_core::PathCmd::LineTo(x, y) => {
+                        PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => {
                             *x *= f;
                             *y *= f;
                         }
-                        x_core::PathCmd::CurveTo(x1, y1, x2, y2, x, y) => {
+                        PathCmd::CurveTo(x1, y1, x2, y2, x, y) => {
                             *x1 *= f;
                             *y1 *= f;
                             *x2 *= f;
@@ -825,7 +1677,7 @@ impl Editor {
                             *x *= f;
                             *y *= f;
                         }
-                        x_core::PathCmd::Close => {}
+                        PathCmd::Close => {}
                     }
                 }
             }
@@ -833,14 +1685,64 @@ impl Editor {
                 scale_subtree(c, f, true);
             }
         }
-        // the root of the scale keeps its own x/y (scales in place)
-        scale_subtree(&mut after, factor, false);
-        let cmd = Command::ReplaceNode {
-            id: id.into(),
-            before,
-            after: Box::new(after),
-        };
-        self.push(vec![cmd]);
+        // The legacy `effects` list and the ordered `effect_layers` stack are
+        // two encodings of the same idea; a node may carry either or both,
+        // and each entry scales exactly once.
+        fn scale_effect_both(
+            legacy: &mut [Effect],
+            layers: &mut [EffectLayer],
+            f: f64,
+            one: fn(&mut Effect, f64),
+        ) {
+            for e in legacy.iter_mut() {
+                one(e, f);
+            }
+            for layer in layers.iter_mut() {
+                one(&mut layer.effect, f);
+            }
+        }
+        // Is `id` inside a subtree that the same gesture already scales?
+        fn nested_in_listed(n: &Node, id: &str, listed: &[&str], ancestor_listed: bool) -> bool {
+            if n.id == id {
+                return ancestor_listed;
+            }
+            let now = ancestor_listed || listed.contains(&n.id.as_str());
+            n.children
+                .iter()
+                .any(|c| nested_in_listed(c, id, listed, now))
+        }
+
+        let listed: Vec<&str> = parts.iter().map(|(id, _, _)| id.as_str()).collect();
+        let mut cmds = Vec::new();
+        for (id, ax, ay) in parts {
+            if nested_in_listed(&self.root, id, &listed, false) {
+                continue;
+            }
+            let Some(n) = find(&self.root, id) else {
+                continue;
+            };
+            // Figma: "You can scale any object, with the exception of locked
+            // layers and layers nested inside a component instance." A locked
+            // layer refuses every gesture, so it is skipped here too.
+            if n.locked {
+                continue;
+            }
+            let before = Box::new(n.clone());
+            let mut after = n.clone();
+            // the anchor is the fixed point: x' = ax + (x - ax) * f
+            after.transform.x = ax + (n.transform.x - ax) * factor;
+            after.transform.y = ay + (n.transform.y - ay) * factor;
+            scale_subtree(&mut after, factor, false);
+            cmds.push(Command::ReplaceNode {
+                id: id.clone(),
+                before,
+                after: Box::new(after),
+            });
+        }
+        if cmds.is_empty() {
+            return false;
+        }
+        self.push(cmds);
         true
     }
 
@@ -886,6 +1788,51 @@ impl Editor {
         true
     }
 
+    /// Figma's per-frame **Show name** switch: whether the canvas paints this
+    /// frame's name label. Undoable, like every other layer property.
+    pub fn set_show_name(&mut self, id: &str, show: bool) -> bool {
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        let before = Box::new(n.clone());
+        let mut after = n.clone();
+        after.show_name = show;
+        after.dirty = true;
+        self.push_replace(id, before, after);
+        true
+    }
+
+    /// Set one layer's **scroll position** inside its scrolling frame —
+    /// Figma's Prototype-tab "Scroll behavior → Position" (Scroll with parent
+    /// / Fixed / Sticky). One undoable ReplaceNode, like every other layer
+    /// property; the flags it writes are the ones the renderer already honours.
+    pub fn set_scroll_position(&mut self, id: &str, pos: x_core::ScrollPosition) -> bool {
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        let before = Box::new(n.clone());
+        let mut after = n.clone();
+        pos.apply(&mut after.constraints);
+        after.dirty = true;
+        self.push_replace(id, before, after);
+        true
+    }
+
+    /// The preview's own scroll offset for a frame. This is **view state, not a
+    /// document edit**: the flow player writes it in place (no command, no undo
+    /// entry) and clears it when the preview opens and closes, the way the
+    /// preview owns its copy of the variables. Authoring scroll uses
+    /// [`Editor::set_scroll`], which is undoable.
+    pub fn set_scroll_preview(&mut self, id: &str, x: f64, y: f64) -> bool {
+        match find_mut(&mut self.root, id) {
+            Some(n) => {
+                n.scroll = (x, y);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Set a frame's scroll offset (authoring/preview state, undoable).
     pub fn set_scroll(&mut self, id: &str, x: f64, y: f64) -> bool {
         let Some(n) = find(&self.root, id) else {
@@ -926,6 +1873,9 @@ impl Editor {
     }
 
     pub fn set_opacity(&mut self, id: &str, v: f32) {
+        if self.scope_gate(id, Some(x_core::OverrideValue::Opacity(v))) {
+            return;
+        }
         if let Some(n) = find(&self.root, id) {
             let cmd = Command::SetOpacity {
                 id: id.into(),
@@ -1084,10 +2034,15 @@ impl Editor {
         }
     }
 
-    /// Figma "Frame selection" (⌥⌘G / ⌘⇧A): wrap the current selection in a
-    /// new Frame sized to the members' collective AABB. Works with a single
-    /// node (unlike group, which needs 2+). Snapshot-undo, like group.
     /// Wrap the current selection in a labelled Section container.
+    ///
+    /// Figma's own rule stands behind the two paths here: "Sections in Figma
+    /// Design are a top-level element on the canvas by default. Sections can
+    /// contain all layer types, including other sections, but cannot be
+    /// contained within frames or groups." A selection that already lives on
+    /// the canvas — or inside another section — is wrapped in place; one that
+    /// lives inside a frame or a group is LIFTED to the canvas first, keeping
+    /// its place, so the section lands around it rather than inside a frame.
     pub fn section_selection(&mut self, section_id: &str) {
         if section_id.is_empty() || find(&self.root, section_id).is_some() {
             return;
@@ -1095,12 +2050,20 @@ impl Editor {
         if self.selection.is_empty() {
             return;
         }
-        let snapshot = self.root.clone();
         let first = self.selection[0].clone();
         let parent_id = match find_parent_mut(&mut self.root, &first) {
             Some(p) => p.id.clone(),
             None => return,
         };
+        let allowed = match find(&self.root, &parent_id) {
+            Some(p) => matches!(p.kind, NodeKind::Section),
+            None => return,
+        };
+        if !allowed && parent_id != self.root.id {
+            self.lift_into_section(section_id);
+            return;
+        }
+        let snapshot = self.root.clone();
         let indices: Vec<usize> = {
             // stale parent id (undo/redo race, async UI): no-op, not a panic
             let Some(p) = find(&self.root, &parent_id) else {
@@ -1128,6 +2091,232 @@ impl Editor {
         }
     }
 
+    /// Wrap a selection that sits inside a frame or a group in a Section that
+    /// lands on the canvas. The members keep their place on the page — their
+    /// page positions are computed first, the section is drawn around them,
+    /// and each member is moved into it by the difference. A rotated or
+    /// scaled ancestor stops the lift and nothing changes: the page position
+    /// of that subtree is a matrix, and a wrong lift would be worse than none.
+    fn lift_into_section(&mut self, section_id: &str) -> bool {
+        /// One member of the lift: where it is now and where it sits on the
+        /// page. `from_index` is resolved by id at apply, so it cannot drift.
+        struct Placed {
+            id: String,
+            from_parent: String,
+            from_index: usize,
+            px: f64,
+            py: f64,
+            lx: f64,
+            ly: f64,
+            w: f64,
+            h: f64,
+        }
+        let members = self.selected_roots();
+        if members.is_empty() {
+            return false;
+        }
+        let mut placed: Vec<Placed> = vec![];
+        for id in &members {
+            let Some((px, py)) = page_pos(&self.root, id) else {
+                return false;
+            };
+            let Some(n) = find(&self.root, id) else {
+                return false;
+            };
+            let Some(from_parent) = parent_of(&self.root, id) else {
+                return false;
+            };
+            let Some(from_index) = find(&self.root, &from_parent)
+                .and_then(|p| p.children.iter().position(|c| c.id == *id))
+            else {
+                return false;
+            };
+            placed.push(Placed {
+                id: id.clone(),
+                from_parent,
+                from_index,
+                px,
+                py,
+                lx: n.transform.x,
+                ly: n.transform.y,
+                w: n.w,
+                h: n.h,
+            });
+        }
+        let x0 = placed.iter().map(|p| p.px).fold(f64::INFINITY, f64::min);
+        let y0 = placed.iter().map(|p| p.py).fold(f64::INFINITY, f64::min);
+        let x1 = placed
+            .iter()
+            .map(|p| p.px + p.w)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let y1 = placed
+            .iter()
+            .map(|p| p.py + p.h)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let mut sec = Node::section(section_id, x1 - x0, y1 - y0);
+        sec.transform.x = x0;
+        sec.transform.y = y0;
+        let mut cmds = vec![Command::Insert {
+            parent_id: self.root.id.clone(),
+            index: self.root.children.len(),
+            node: sec,
+        }];
+        for (k, p) in placed.iter().enumerate() {
+            cmds.push(Command::ReorderNode {
+                id: p.id.clone(),
+                from_parent: p.from_parent.clone(),
+                from_index: p.from_index,
+                to_parent: section_id.into(),
+                index: k,
+            });
+            // the reorder keeps the member's local transform: this moves it
+            // from where it was inside its frame to where it was on the page
+            cmds.push(Command::Move {
+                id: p.id.clone(),
+                dx: p.px - x0 - p.lx,
+                dy: p.py - y0 - p.ly,
+            });
+        }
+        self.push(cmds);
+        self.selection = vec![section_id.to_string()];
+        true
+    }
+
+    /// Figma's "Add objects to a section": "You can also click and drag a
+    /// section over the objects you want to add to it." Every SIBLING layer
+    /// the section completely covers — section, frame, shape or text — joins
+    /// it, keeping its place on the canvas. This is the one rule behind both
+    /// the drag that creates a section over a design and the drag that moves
+    /// one onto it. Returns how many layers moved; 0 is the common answer.
+    pub fn section_absorb(&mut self, section_id: &str) -> usize {
+        let Some(sec) = find(&self.root, section_id) else {
+            return 0;
+        };
+        if !matches!(sec.kind, NodeKind::Section) || !plain_translation(&sec.transform) {
+            return 0;
+        }
+        let (sx, sy, sw, sh) = (sec.transform.x, sec.transform.y, sec.w, sec.h);
+        let Some(parent_id) = parent_of(&self.root, section_id) else {
+            return 0;
+        };
+        let mut taken: Vec<String> = vec![];
+        {
+            let Some(parent) = find(&self.root, &parent_id) else {
+                return 0;
+            };
+            for c in &parent.children {
+                // a locked layer stays where it is, and a rotated one cannot
+                // be placed inside the section's own frame of reference
+                if c.id == section_id || c.locked || !plain_translation(&c.transform) {
+                    continue;
+                }
+                let inside = c.transform.x >= sx - 0.5
+                    && c.transform.y >= sy - 0.5
+                    && c.transform.x + c.w <= sx + sw + 0.5
+                    && c.transform.y + c.h <= sy + sh + 0.5;
+                if inside {
+                    taken.push(c.id.clone());
+                }
+            }
+        }
+        if taken.is_empty() {
+            return 0;
+        }
+        let mut cmds: Vec<Command> = vec![];
+        for (k, id) in taken.iter().enumerate() {
+            cmds.push(Command::ReorderNode {
+                id: id.clone(),
+                from_parent: parent_id.clone(),
+                from_index: k, // resolved by id at apply
+                to_parent: section_id.to_string(),
+                index: k,
+            });
+            // a sibling of the section is a page-level node, so its position
+            // on the page IS its local one: joining the section is a shift by
+            // the section's own origin, and its place on the page is kept
+            cmds.push(Command::Move {
+                id: id.clone(),
+                dx: -sx,
+                dy: -sy,
+            });
+        }
+        let n = taken.len();
+        self.push(cmds);
+        n
+    }
+
+    /// Figma's second delete — "To delete a section without deleting its
+    /// contents", Command+Delete on a Mac and Control+Backspace on Windows:
+    /// the container goes, its children stay, promoted to the container's
+    /// parent with their place on the canvas kept. Plain layers, containers
+    /// with nothing to keep, and rotated containers (whose children's page
+    /// positions are a matrix) delete the ordinary way. Returns how many
+    /// layers were promoted.
+    pub fn delete_keeping_contents(&mut self) -> usize {
+        let mut cmds: Vec<Command> = vec![];
+        let mut promoted = 0usize;
+        for id in self.selected_roots() {
+            let Some(node) = find(&self.root, &id).cloned() else {
+                continue;
+            };
+            let container = matches!(
+                node.kind,
+                NodeKind::Group | NodeKind::Section | NodeKind::Frame { .. }
+            );
+            let ordinary =
+                !container || node.children.is_empty() || !plain_translation(&node.transform);
+            if ordinary {
+                if let Some(p) = find_parent_mut(&mut self.root, &id) {
+                    if let Some(i) = p.children.iter().position(|c| c.id == id) {
+                        cmds.push(Command::Delete {
+                            parent_id: p.id.clone(),
+                            index: i,
+                            node: p.children[i].clone(),
+                        });
+                    }
+                }
+                continue;
+            }
+            let Some(parent_id) = parent_of(&self.root, &id) else {
+                continue;
+            };
+            let Some(index) = find(&self.root, &parent_id)
+                .and_then(|p| p.children.iter().position(|c| c.id == id))
+            else {
+                continue;
+            };
+            let (ox, oy) = (node.transform.x, node.transform.y);
+            cmds.push(Command::Delete {
+                parent_id: parent_id.clone(),
+                index,
+                node: node.clone(),
+            });
+            for (k, child) in node.children.iter().enumerate() {
+                cmds.push(Command::Insert {
+                    parent_id: parent_id.clone(),
+                    index: index + k,
+                    node: child.clone(),
+                });
+                if ox != 0.0 || oy != 0.0 {
+                    cmds.push(Command::Move {
+                        id: child.id.clone(),
+                        dx: ox,
+                        dy: oy,
+                    });
+                }
+            }
+            promoted += node.children.len();
+        }
+        if !cmds.is_empty() {
+            self.push(cmds);
+        }
+        self.selection.clear();
+        promoted
+    }
+
+    /// Figma "Frame selection" (⌥⌘G): wrap the current selection in a new
+    /// Frame sized to the members' collective AABB. Works with a single node
+    /// (unlike group, which needs 2+). Snapshot-undo, like group.
     pub fn frame_selection(&mut self, frame_id: &str) {
         if frame_id.is_empty() || find(&self.root, frame_id).is_some() {
             return;
@@ -1538,6 +2727,71 @@ impl Editor {
         self.replace_node(id, after)
     }
 
+    /// The instance's change list — Figma's More-actions menu *"only lists
+    /// properties that have changes applied"* (help 360039150733).
+    pub fn instance_changes(&self, id: &str) -> Vec<x_core::InstanceChange> {
+        match find(&self.root, id) {
+            Some(n) if matches!(n.kind, x_core::NodeKind::Instance { .. }) => {
+                x_core::instance_changes(n)
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Reset ONE change on an instance: Figma's *"Reset > Reset [property]"*.
+    /// Undoable; false when that layer had no override to reset.
+    pub fn reset_one_override(&mut self, id: &str, target: &str) -> bool {
+        let Some(n) = find(&self.root, id) else {
+            return false;
+        };
+        if !matches!(n.kind, x_core::NodeKind::Instance { .. }) {
+            return false;
+        }
+        let mut after = n.clone();
+        if !x_core::reset_override(&mut after, target) {
+            return false;
+        }
+        self.replace_node(id, after)
+    }
+
+    /// Reset the changes on ONE LAYER of an instance: Figma's *"select a
+    /// specific layer to view changes for that layer only"* then *"Reset all
+    /// changes"*. Returns how many overrides went; undoable when any did.
+    pub fn reset_layer_overrides(&mut self, id: &str, layer: &str) -> usize {
+        let Some(n) = find(&self.root, id) else {
+            return 0;
+        };
+        if !matches!(n.kind, x_core::NodeKind::Instance { .. }) {
+            return 0;
+        }
+        let mut after = n.clone();
+        let changed = x_core::reset_layer_overrides(&mut after, layer);
+        if changed > 0 {
+            self.replace_node(id, after);
+        }
+        changed
+    }
+
+    /// Figma's **push changes to main component** (help 360039150733): the
+    /// instance's overrides are written into its master, so the change lands
+    /// on every other instance of that component. Undoable; returns how many
+    /// master layers changed, 0 when the master is not in this document.
+    pub fn push_overrides_to_main(&mut self, id: &str) -> usize {
+        let Some(n) = find(&self.root, id) else {
+            return 0;
+        };
+        if !matches!(n.kind, x_core::NodeKind::Instance { .. }) {
+            return 0;
+        }
+        let mut after = self.root.clone();
+        let changed = x_core::push_overrides_to_master(&mut after, id);
+        if changed > 0 {
+            let root_id = self.root.id.clone();
+            self.replace_node(&root_id, after);
+        }
+        changed
+    }
+
     /// Detach an instance into a resolved group (overrides + slot content
     /// applied). Undoable; returns the detached group's id.
     pub fn detach(&mut self, id: &str, vars: &x_core::Variables) -> Option<String> {
@@ -1568,6 +2822,16 @@ impl Editor {
             return false;
         };
         if nodes.is_empty() {
+            return false;
+        }
+        // Figma's rule, enforced where the tree is written rather than in each
+        // caller: a section is a top-level element and "cannot be contained
+        // within frames or groups". The page is a frame in this model, so the
+        // canvas itself is exempt BY IDENTITY, not by kind.
+        if parent_id != self.root.id
+            && matches!(parent.kind, NodeKind::Frame { .. } | NodeKind::Group)
+            && nodes.iter().any(has_section)
+        {
             return false;
         }
         let base = parent.children.len();
@@ -1986,54 +3250,29 @@ impl Editor {
         if new.is_empty() || old == new {
             return false;
         }
-        if self.component_names().iter().any(|c| c == new) {
-            return false;
-        }
-        let Some(master) = find_master(&self.root, old) else {
-            return false;
-        };
-        let old_id = master.id.clone();
-        let new_id = format!("comp-{new}");
-        if find(&self.root, &new_id).is_some() {
-            return false;
-        }
         let before = Box::new(self.root.clone());
         let mut after = self.root.clone();
-        if let Some(m) = find_mut(&mut after, &old_id) {
-            if let NodeKind::Component { name } = &mut m.kind {
-                *name = new.to_string();
-            }
-            m.id = new_id.clone();
-            m.name = new_id.clone(); // master display name follows its id
+        if !rename_master_in(&mut after, old, new) {
+            return false;
         }
-        fn rewrite(n: &mut Node, old: &str, new: &str) {
-            if let NodeKind::Instance { component } = &mut n.kind {
-                if component == old {
-                    *component = new.to_string();
-                }
-            }
-            for v in n.overrides.values_mut() {
-                if let Some(OverrideValue::Swap(c)) = OverrideValue::decode(v) {
-                    if c == old {
-                        *v = OverrideValue::Swap(new.to_string()).encode();
-                    }
-                }
-            }
-            for c in &mut n.children {
-                rewrite(c, old, new);
-            }
-        }
-        rewrite(&mut after, old, new);
         let root_id = self.root.id.clone();
         self.push_replace(&root_id, before, after);
         true
     }
 
-    /// Combine the selected components into one variant set: each selected
-    /// instance/master's component is renamed to `{set}/{variant}` (the variant
-    /// name keeps the component's original name, or its existing variant part
-    /// when already a variant). Returns how many components were renamed.
+    /// Combine the selected components into one variant set. The set is a
+    /// **frame holding the masters** — which is what makes Figma's rule "a set
+    /// can contain only components" true by construction. A frame that already
+    /// holds nothing but the selection becomes the set; otherwise a new frame
+    /// is built around them. Each master is renamed to `{set}/{variant}` (the
+    /// variant part keeps its own name) and every instance follows the rename.
+    /// One undo entry for the whole combine. Returns how many masters the set
+    /// holds.
     pub fn combine_as_variants(&mut self, set_name: &str) -> usize {
+        let set_name = set_name.trim();
+        if set_name.is_empty() {
+            return 0;
+        }
         let mut names: Vec<String> = vec![];
         for id in &self.selection {
             if let Some(n) = find(&self.root, id) {
@@ -2052,17 +3291,96 @@ impl Editor {
         if names.len() < 2 {
             return 0;
         }
+        let mut ids: Vec<String> = vec![];
+        for n in &names {
+            if let Some(m) = find_master(&self.root, n) {
+                if !ids.contains(&m.id) {
+                    ids.push(m.id.clone());
+                }
+            }
+        }
+        if ids.len() < 2 {
+            return 0;
+        }
+
+        let before = Box::new(self.root.clone());
+        let mut after = self.root.clone();
+
+        // --- the container: an existing frame, or a new one around them
+        // A container that already holds nothing but the selection becomes the
+        // set. The page itself is not a container in that sense — Figma never
+        // turns the canvas into a set — so loose masters get a frame of their
+        // own even when the page holds nothing else.
+        let page_id = self.root.id.clone();
+        let holds_only_the_selection = common_parent_id(&after, &ids)
+            .filter(|pid| *pid != page_id)
+            .and_then(|pid| find(&after, &pid).map(|p| (pid, p)))
+            .filter(|(_, p)| {
+                matches!(p.kind, NodeKind::Frame { .. } | NodeKind::Section)
+                    && p.children.len() == ids.len()
+                    && p.children.iter().all(|c| ids.contains(&c.id))
+            })
+            .map(|(pid, _)| pid);
+        if let Some(pid) = holds_only_the_selection {
+            if let Some(p) = find_mut(&mut after, &pid) {
+                p.name = set_name.to_string();
+            }
+        } else {
+            let mut bounds: Option<(f64, f64, f64, f64)> = None;
+            for id in &ids {
+                if let Some(m) = find(&after, id) {
+                    let (x, y) = (m.transform.x, m.transform.y);
+                    bounds = Some(match bounds {
+                        None => (x, y, x + m.w, y + m.h),
+                        Some((x0, y0, x1, y1)) => {
+                            (x0.min(x), y0.min(y), x1.max(x + m.w), y1.max(y + m.h))
+                        }
+                    });
+                }
+            }
+            let (bx, by, bw, bh) = bounds.unwrap_or((0.0, 0.0, 0.0, 0.0));
+            // the first master's slot: the set takes its place in the tree
+            let home = ids.first().and_then(|id| {
+                find_parent_mut(&mut after, id).map(|p| {
+                    (
+                        p.id.clone(),
+                        p.children.iter().position(|c| c.id == *id).unwrap_or(0),
+                    )
+                })
+            });
+            let mut set = Node::frame(&format!("set-{set_name}"), bw, bh);
+            set.name = set_name.to_string();
+            set.transform.x = bx;
+            set.transform.y = by;
+            for id in &ids {
+                if let Some(mut m) = take_node(&mut after, id) {
+                    m.transform.x -= bx;
+                    m.transform.y -= by;
+                    set.children.push(m);
+                }
+            }
+            match home.and_then(|(pid, idx)| find_mut(&mut after, &pid).map(|p| (p, idx))) {
+                Some((p, idx)) => p.children.insert(idx.min(p.children.len()), set),
+                None => after.children.push(set),
+            }
+        }
+
+        // --- the variant names
         let mut done = 0;
-        for c in names {
+        for c in &names {
             let variant = c
                 .split_once('/')
                 .map(|(_, v)| v.to_string())
                 .unwrap_or_else(|| c.clone());
-            let new = format!("{set_name}/{variant}");
-            if self.rename_component(&c, &new) {
+            if rename_master_in(&mut after, c, &format!("{set_name}/{variant}")) {
                 done += 1;
             }
         }
+        if done == 0 {
+            return 0;
+        }
+        let root_id = self.root.id.clone();
+        self.push_replace(&root_id, before, after);
         done
     }
 
@@ -2610,6 +3928,118 @@ impl Editor {
 // nothing at all.
 // ---------------------------------------------------------------------------
 
+/// The effect at `index` as the node carries it: the ordered stack once the
+/// node is materialized, the flat legacy list otherwise. `None` when the index
+/// is out of range — which is how every effect setter refuses *before* it
+/// pushes an undo entry, so a click on a stale row changes nothing at all.
+fn effect_at<'a>(root: &'a Node, id: &str, index: usize) -> Option<&'a Effect> {
+    let n = find(root, id)?;
+    if n.visual_stacks_materialized {
+        n.effect_layers.get(index).map(|l| &l.effect)
+    } else {
+        n.effects.get(index)
+    }
+}
+
+/// The ordered `effect_layers` stack is the truth once a node has been
+/// materialized; `effects` is the flat list the `.x` format and the direct
+/// (non-IR) sink read. Every write through [`Editor::mutate_visual_stack`]
+/// leaves the two saying the same thing, so an effect added, retyped, hidden
+/// or reordered in the panel paints exactly that way on every path.
+fn sync_legacy_effects(n: &mut Node) {
+    if n.visual_stacks_materialized {
+        n.effects = n.effect_layers.iter().map(|l| l.effect.clone()).collect();
+    }
+}
+
+/// Rename every reference to a component — `Instance { component }` and the
+/// `Swap` overrides — from `old` to `new`. The other half of
+/// [`Editor::rename_component`], shared with [`Editor::combine_as_variants`] so
+/// combining can never leave an instance pointing at a name that is gone.
+fn rename_component_refs(n: &mut Node, old: &str, new: &str) {
+    if let NodeKind::Instance { component } = &mut n.kind {
+        if component == old {
+            *component = new.to_string();
+        }
+    }
+    for v in n.overrides.values_mut() {
+        if let Some(OverrideValue::Swap(c)) = OverrideValue::decode(v) {
+            if c == old {
+                *v = OverrideValue::Swap(new.to_string()).encode();
+            }
+        }
+    }
+    for c in &mut n.children {
+        rename_component_refs(c, old, new);
+    }
+}
+
+/// Rename a master inside `root`: its component name, its id, its display name
+/// and every reference to it. `false` when the master is missing or the name is
+/// already taken. One undo entry is the caller's business — this works on a
+/// tree so a whole combine can be a single replace.
+fn rename_master_in(root: &mut Node, old: &str, new: &str) -> bool {
+    if old == new || find_master(root, new).is_some() {
+        return false;
+    }
+    let Some(master) = find_master(root, old) else {
+        return false;
+    };
+    let old_id = master.id.clone();
+    let new_id = format!("comp-{new}");
+    if find(root, &new_id).is_some() {
+        return false;
+    }
+    if let Some(m) = find_mut(root, &old_id) {
+        if let NodeKind::Component { name } = &mut m.kind {
+            *name = new.to_string();
+        }
+        m.id = new_id.clone();
+        m.name = new_id.clone(); // master display name follows its id
+    }
+    rename_component_refs(root, old, new);
+    true
+}
+
+/// The id of the node that is the parent of EVERY id — `None` when they do not
+/// share one. Combining uses it to decide whether an existing frame can become
+/// the set or a new one has to be built.
+fn common_parent_id(root: &Node, ids: &[String]) -> Option<String> {
+    fn parent_of<'a>(n: &'a Node, id: &str) -> Option<&'a Node> {
+        if n.children.iter().any(|c| c.id == id) {
+            return Some(n);
+        }
+        n.children.iter().find_map(|c| parent_of(c, id))
+    }
+    let first = ids.first()?;
+    let p = parent_of(root, first)?;
+    if ids
+        .iter()
+        .skip(1)
+        .all(|id| parent_of(root, id).is_some_and(|q| q.id == p.id))
+    {
+        Some(p.id.clone())
+    } else {
+        None
+    }
+}
+
+/// Detach a node from the tree, children intact.
+fn take_node(root: &mut Node, id: &str) -> Option<Node> {
+    fn walk(n: &mut Node, id: &str) -> Option<Node> {
+        if let Some(i) = n.children.iter().position(|c| c.id == id) {
+            return Some(n.children.remove(i));
+        }
+        for c in &mut n.children {
+            if let Some(found) = walk(c, id) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    walk(root, id)
+}
+
 impl Editor {
     /// Enter vector edit mode on a vector node. Refuses anything that is not a
     /// `Vector` node — a frame or a rect has no anchors to edit — and always
@@ -2809,23 +4239,103 @@ impl Editor {
         ids
     }
 
-    /// Find all nodes that match the structure of the given node
-    pub fn find_matching_nodes(&self, template: &Node) -> Vec<&Node> {
-        let mut matches = Vec::new();
-        fn find_matches<'a>(node: &'a Node, template: &Node, matches: &mut Vec<&'a Node>) {
-            // Compare structure (kind, children count, dimensions)
-            if std::mem::discriminant(&node.kind) == std::mem::discriminant(&template.kind)
-                && node.children.len() == template.children.len()
-                && (node.w - template.w).abs() < 0.1
-                && (node.h - template.h).abs() < 0.1
-            {
-                matches.push(node);
+    /// Figma's "matching objects": the SAME layer — by name and by its place in
+    /// the structure — as it exists in the other frames and groups of the same
+    /// scope. "Matching objects are identical layers that exist across more than
+    /// one frame or group", and identity is a name, not a size: a search bar that
+    /// was resized in one frame still matches. (This used to compare kind, child
+    /// count and dimensions, which matched any two same-sized frames and missed
+    /// the matching layer in a frame that had been resized.)
+    ///
+    /// Scope follows Figma as well: a layer inside a **Section** only matches
+    /// layers in that section ("Objects with sections can only match with other
+    /// objects in that section"), otherwise it matches across the page's
+    /// top-level frames and groups. The template itself is included, so the
+    /// selection is never empty for a layer that has a container to match in; a
+    /// top-level layer (nothing to match within) returns itself alone.
+    ///
+    /// Names are the identity, so the first name+kind match at each step of the
+    /// path wins when one container holds two layers with the same name.
+    pub fn find_matching_nodes<'a>(&'a self, template: &'a Node) -> Vec<&'a Node> {
+        /// The chain of nodes from the root down to `id`, inclusive.
+        fn chain_to<'a>(node: &'a Node, id: &str, out: &mut Vec<&'a Node>) -> bool {
+            if node.id == id {
+                out.push(node);
+                return true;
             }
             for child in &node.children {
-                find_matches(child, template, matches);
+                if chain_to(child, id, out) {
+                    out.push(node);
+                    return true;
+                }
+            }
+            false
+        }
+        /// The first child matching each `(name, kind)` step, then one level down.
+        fn resolve<'a>(
+            container: &'a Node,
+            path: &[(&str, std::mem::Discriminant<NodeKind>)],
+        ) -> Option<&'a Node> {
+            let mut cursor = container;
+            for (name, kind) in path {
+                cursor = cursor
+                    .children
+                    .iter()
+                    .find(|c| c.name == *name && std::mem::discriminant(&c.kind) == *kind)?;
+            }
+            Some(cursor)
+        }
+
+        let mut chain = Vec::new();
+        if !chain_to(&self.root, &template.id, &mut chain) {
+            return Vec::new();
+        }
+        chain.reverse(); // root .. template
+        if chain.len() < 3 {
+            // a top-level layer: Figma asks for "an object inside a frame or
+            // group", and a page's own objects have nothing to match across
+            return vec![template];
+        }
+        // The template's container, and the section that scopes the match: each
+        // Section on the chain moves the container one level down, to the
+        // section's own child that holds the template.
+        let mut own_from = 1;
+        let mut section: Option<&Node> = None;
+        for (i, node) in chain.iter().take(chain.len() - 1).enumerate() {
+            if matches!(node.kind, NodeKind::Section) {
+                own_from = i + 1;
+                section = Some(*node);
             }
         }
-        find_matches(&self.root, template, &mut matches);
+        // Figma's precondition, verbatim: "Select an object inside a frame or
+        // group." A page's top-level layer, or a frame sitting directly in a
+        // Section, has no container to be matched across, and an empty relative
+        // path would otherwise make every container a "match".
+        let parent = chain[chain.len() - 2];
+        if !matches!(parent.kind, NodeKind::Frame { .. } | NodeKind::Group) {
+            return vec![template];
+        }
+        let own_container = chain[own_from];
+        let path: Vec<(&str, std::mem::Discriminant<NodeKind>)> = chain[own_from + 1..]
+            .iter()
+            .map(|n| (n.name.as_str(), std::mem::discriminant(&n.kind)))
+            .collect();
+        let containers: &[Node] = match section {
+            Some(s) => &s.children,
+            None => &self.root.children,
+        };
+        let mut matches = vec![template];
+        for container in containers {
+            if container.id == own_container.id {
+                continue;
+            }
+            if !matches!(container.kind, NodeKind::Frame { .. } | NodeKind::Group) {
+                continue;
+            }
+            if let Some(found) = resolve(container, &path) {
+                matches.push(found);
+            }
+        }
         matches
     }
 

@@ -43,6 +43,35 @@ pub fn node_to_jsx(node: &Node) -> String {
     selection_to_jsx(std::iter::once(node))
 }
 
+/// A polygon or star as CSS: the shape's own vertices as percentages of its
+/// box, so the exported element draws the shape instead of a plain rectangle.
+fn clip_path_of(node: &Node) -> String {
+    let cmds = match &node.kind {
+        NodeKind::Poly { sides } => x_core::booleans::poly_path_cmds(node.w, node.h, *sides),
+        NodeKind::Star { points, ratio } => {
+            x_core::booleans::star_path_cmds(node.w, node.h, *points, *ratio)
+        }
+        _ => return String::new(),
+    };
+    let mut parts: Vec<String> = Vec::new();
+    for c in &cmds {
+        if let x_core::PathCmd::MoveTo(x, y) | x_core::PathCmd::LineTo(x, y) = c {
+            let px = if node.w > 0.0 {
+                x / node.w * 100.0
+            } else {
+                0.0
+            };
+            let py = if node.h > 0.0 {
+                y / node.h * 100.0
+            } else {
+                0.0
+            };
+            parts.push(format!("{}% {}%", n(px), n(py)));
+        }
+    }
+    format!("clipPath: 'polygon({})'", parts.join(", "))
+}
+
 /// Integer-first number formatting (42, 12.5, 0.25): trims float noise.
 fn n(v: f64) -> String {
     let r = (v * 100.0).round() / 100.0;
@@ -424,6 +453,9 @@ fn emit(node: &Node, parent_layout: Option<&AutoLayout>, depth: usize, out: &mut
         NodeKind::Ellipse => {
             style.push("borderRadius: 9999".into());
         }
+        NodeKind::Poly { .. } | NodeKind::Star { .. } => {
+            style.push(clip_path_of(node));
+        }
         NodeKind::Text { text } => {
             let tm = node.text_metrics.clone().unwrap_or_default();
             style.push(format!(
@@ -800,6 +832,9 @@ fn emit_tw(node: &Node, parent_layout: Option<&AutoLayout>, depth: usize, out: &
         }
         NodeKind::Ellipse => {
             style.push("borderRadius: 9999".into());
+        }
+        NodeKind::Poly { .. } | NodeKind::Star { .. } => {
+            style.push(clip_path_of(node));
         }
         NodeKind::Text { .. } => {
             let tm = node.text_metrics.clone().unwrap_or_default();

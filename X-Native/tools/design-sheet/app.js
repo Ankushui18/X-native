@@ -7,7 +7,6 @@ const AUDIT = window.AUDIT;
 const THEMES = [
   ['graphite', 'Graphite', 'dark — the shipping default'],
   ['daylight', 'Daylight', 'light — bright rooms, screen sharing'],
-  ['hc', 'High contrast', 'AA+ everywhere, for low vision'],
 ];
 
 const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));

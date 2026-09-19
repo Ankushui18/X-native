@@ -500,7 +500,7 @@ impl CommandPalette {
                 id: "tools.eraser",
                 label: "Vector Eraser".into(),
                 category: CommandCategory::Tools,
-                shortcut: Some("⇧E".into()),
+                shortcut: Some("E".into()),
                 icon: "eraser",
                 requires_selection: false,
                 enabled: true,

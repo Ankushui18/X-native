@@ -50,4 +50,10 @@ __pycache__/
 # NOTE: X-Native/Cargo.lock is intentionally TRACKED (this workspace ships an
 # application binary), so it must not be listed here — an ignore rule for it
 # would contradict the lockfile's committed state and confuse new lockfiles in.
+
+# Opt-in test output: the six #[ignore]d GPU/screenshot tests write PNGs here.
+# The `Screenshots (software Vulkan)` CI job uploads them as artifacts instead
+# of committing them.
+screenshots/
+**/screenshots/
 ```

@@ -7,7 +7,10 @@ use std::path::PathBuf;
 
 use vello::kurbo::{Point, Rect};
 use x_native::editor::Editor;
-use x_native::{Color, Document, Node, NodeKind, Paint, StrokeJoin, Variables, APP_DEFAULT_FONT};
+use x_native::{
+    Color, Document, Node, NodeKind, Paint, StrokeCap, StrokeJoin, StrokeOptions, Variables,
+    APP_DEFAULT_FONT,
+};
 
 use crate::command::CommandPalette;
 use crate::context_menu::ContextMenu;
@@ -20,10 +23,33 @@ use vello::peniko::Color as VelloColor;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tool {
     Select,
+    /// Figma's Scale tool (K): the same four corner handles as the Move tool,
+    /// but the whole layer scales with them — stroke weight, corner radius,
+    /// text size, effects and auto-layout spacing travel with the box.
+    Scale,
     Frame,
+    /// Figma's Section tool (⇧S): a labelled container whose whole job is to
+    /// hold other layers. "Sections in Figma Design are a top-level element on
+    /// the canvas by default. Sections can contain all layer types, including
+    /// other sections, but cannot be contained within frames or groups."
+    Section,
     Text,
     Rect,
     Ellipse,
+    /// Figma's Line tool (L): one straight segment in any direction, whose
+    /// only paint is its stroke — a horizontal line's box is 0 units high.
+    Line,
+    /// Figma's Arrow tool (⇧L): the same segment, ending in the solid head
+    /// the shape menu's arrow draws.
+    Arrow,
+    /// Figma's Polygon tool, from the shape tools menu: "an enclosed shape
+    /// that is made up of any number of straight lines", a triangle by
+    /// default. Its Count lives in the Appearance section, like the arc's
+    /// properties.
+    Poly,
+    /// Figma's Star tool: "polygons that are arranged in a star shape", five
+    /// points by default, with a Count and a Ratio in the Appearance section.
+    Star,
     Pen,
     Hand,
     /// Board zoom tool (kept out of the design toolbar, where wheel/shortcuts
@@ -33,6 +59,24 @@ pub enum Tool {
     Comment,
     /// Vector Eraser - erase parts of paths and shapes
     Eraser,
+    /// Figma's Slice tool (S): a region whose only job is to be exported. It
+    /// draws nothing itself — exporting it captures the flattened canvas
+    /// content inside its bounds.
+    Slice,
+    /// Figma's **Place image/video** (⇧⌘K, or the Shape tools menu): not a
+    /// rail tool but a pending placement — *"Click on the canvas to place the
+    /// image or video in a new layer, using its original dimensions"* (help
+    /// 360040028034) — which stays armed while a picked file is waiting.
+    PlaceImage,
+    /// Figma's Pencil (⇧P): a freehand stroke, smoothed into an editable
+    /// vector path, and a tool that "stays active until you select another
+    /// tool or press Esc".
+    Pencil,
+    /// Figma Draw's Brush, beside the Pencil in the same toolbar: the same
+    /// freehand gesture and the same vector points, but the mark is painted
+    /// rather than drawn — the article's "add texture and color for a more
+    /// organic, hand-painted appearance".
+    Brush,
     /// Symmetry Mirror - mirror drawing across axis
     Symmetry,
     /// Board-specific tools
@@ -46,11 +90,21 @@ impl Tool {
     pub fn icon(self) -> &'static str {
         match self {
             Tool::Select => "mouse-pointer-2",
+            Tool::Scale => "maximize",
             Tool::Frame => "frame#",
+            Tool::Section => "section",
+            Tool::Slice => "scissors",
+            Tool::PlaceImage => "image",
             Tool::Text => "type",
             Tool::Rect => "square",
             Tool::Ellipse => "circle",
+            Tool::Line => "line",
+            Tool::Arrow => "arrow-up-right",
+            Tool::Poly => "triangle",
+            Tool::Star => "star",
             Tool::Pen => "pen-tool",
+            Tool::Pencil => "pencil",
+            Tool::Brush => "brush",
             Tool::Hand => "hand",
             Tool::Zoom => "zoom-in",
             Tool::Comment => "message-circle",
@@ -68,18 +122,29 @@ impl Tool {
     /// the handler used to keep a second, half-drifted copy inline).
     /// `key` is the lowercased character; `board` selects the mode's
     /// tool set. Baseline keys are case/shift tolerant as before;
-    /// plain-C is mode-specific and ⇧C stays free; ⇧E is the eraser;
+    /// plain-C is mode-specific and ⇧C stays free; the eraser is ours and
+    /// answers to plain E, because ⇧E toggles the Design/Prototype tabs;
     /// M-symmetry is design-mode only (the old handler let it leak
     /// into boards).
     /// Display name (toolbar tooltips; P10)
     pub fn label(self) -> &'static str {
         match self {
             Tool::Select => "Move",
+            Tool::Scale => "Scale",
             Tool::Frame => "Frame",
+            Tool::Section => "Section",
+            Tool::Slice => "Slice",
+            Tool::PlaceImage => "Place image",
             Tool::Text => "Text",
             Tool::Rect => "Rectangle",
             Tool::Ellipse => "Ellipse",
+            Tool::Line => "Line",
+            Tool::Arrow => "Arrow",
+            Tool::Poly => "Polygon",
+            Tool::Star => "Star",
             Tool::Pen => "Pen",
+            Tool::Pencil => "Pencil",
+            Tool::Brush => "Brush",
             Tool::Hand => "Hand",
             Tool::Zoom => "Zoom",
             Tool::Comment => "Comment",
@@ -99,16 +164,22 @@ impl Tool {
     pub fn shortcut_hint(self, board: bool) -> String {
         const KEYS: &[(&str, bool)] = &[
             ("v", false),
+            ("k", false),
             ("f", false),
             ("t", false),
             ("r", false),
             ("o", false),
+            ("l", false),
+            ("l", true),
+            ("p", true),
+            ("b", true),
             ("p", false),
             ("h", false),
             ("c", false),
             ("m", false),
             ("s", false),
-            ("e", true),
+            ("s", true),
+            ("e", false),
         ];
         for (k, sh) in KEYS {
             if Self::from_shortcut(k, *sh, board) == Some(self) {
@@ -125,23 +196,1152 @@ impl Tool {
 
     pub fn from_shortcut(key: &str, shift: bool, board: bool) -> Option<Tool> {
         match (key, shift) {
-            ("e", true) => Some(Tool::Eraser),
+            // the eraser is ours (Figma Draw, master rows 1.19 / 20.5):
+            // it keeps the plain key, because Figma's ⇧E toggles the
+            // Design and Prototype tabs (help 360040314193)
+            ("e", false) => Some(Tool::Eraser),
             ("c", false) if board => Some(Tool::BoardConnector),
             ("c", false) => Some(Tool::Comment),
             ("m", false) if !board => Some(Tool::Symmetry),
             ("s", _) if board => Some(Tool::BoardSticky),
             ("r", _) if board => Some(Tool::BoardRect),
             ("o", _) if board => Some(Tool::BoardCircle),
-            ("v", _) => Some(Tool::Select),
+            // ⇧V is Figma's flip vertical (help 360039956914), so only the
+            // plain key is the Move tool here.
+            ("v", false) => Some(Tool::Select),
+            // Figma's Scale tool; boards have their own model, no scale there
+            ("k", _) if !board => Some(Tool::Scale),
+            // Figma's Slice tool — also design-only: a board draws its own
+            // shapes and has no export region. Sections live on the canvas,
+            // so they are design-only too, and they take ⇧S (Figma's own
+            // key for the tool, beside the frame's F).
+            ("s", true) if !board => Some(Tool::Section),
+            ("s", _) if !board => Some(Tool::Slice),
             ("f", _) => Some(Tool::Frame),
             ("t", _) => Some(Tool::Text),
             ("r", _) => Some(Tool::Rect),
             ("o", _) => Some(Tool::Ellipse),
+            // Figma's shape menu keeps the line and the arrow on one key: L is
+            // the Line, ⇧L the Arrow. Like the Scale, Slice, Pencil and Brush
+            // tools both are design-only — a board uses its own connector.
+            ("l", true) if !board => Some(Tool::Arrow),
+            ("l", _) if !board => Some(Tool::Line),
+            // Figma's Pencil shares P with the Pen (⇧P, the creation-tools
+            // menu) and, like the Scale and Slice tools, it is design-only:
+            // a board draws freehand with its own pen.
+            ("p", true) if !board => Some(Tool::Pencil),
+            // Figma Draw's Brush: the pencil's freehand gesture with a painted
+            // mark. The article puts the two in one toolbar and names no
+            // shortcut for either, so ⇧B sits beside ⇧P; like the Scale, Slice
+            // and Pencil tools it is design-only.
+            ("b", true) if !board => Some(Tool::Brush),
             ("p", _) => Some(Tool::Pen),
-            ("h", _) => Some(Tool::Hand),
+            // …and ⇧H is the flip horizontal — the Hand keeps the plain key.
+            ("h", false) => Some(Tool::Hand),
             _ => None,
         }
     }
+}
+
+/// The Pencil's ink. Figma: "the pencil tool sketches with a round 3px stroke
+/// weight in black, unless you're sketching on a dark canvas or frame" — this
+/// canvas is dark and every other shape tool in it draws with the light ink, so
+/// a sketch does too. ONE source for the live preview and the node that lands,
+/// so the two cannot drift.
+pub fn pencil_ink() -> x_native::Color {
+    x_native::Color::from_rgb8(0xFF, 0xFF, 0xFF)
+}
+
+/// A new sketch's stroke weight (Figma's default).
+pub const PENCIL_WEIGHT: f64 = 3.0;
+
+/// The Line and Arrow tools' ink: Figma's new line is a 1px stroke, drawn in
+/// the light ink this canvas needs — the pencil's own rule, so the two tools
+/// cannot drift and the chrome's colour ratchet gains no new literal. ONE
+/// source for the live preview and the node that lands.
+pub fn line_ink() -> x_native::Color {
+    pencil_ink()
+}
+
+/// A new line's stroke weight (Figma's default for the tool).
+pub const LINE_WEIGHT: f64 = 1.0;
+
+/// The Line and Arrow tools' endpoints — the same ⌥ rule `create_rect` uses
+/// (hold Option to draw from the centre), so the preview and the commit cannot
+/// disagree about the segment.
+pub fn create_line(start: Point, cur: Point, from_center: bool) -> ((f64, f64), (f64, f64)) {
+    let (dx, dy) = (cur.x - start.x, cur.y - start.y);
+    if from_center {
+        ((start.x - dx, start.y - dy), (start.x + dx, start.y + dy))
+    } else {
+        ((start.x, start.y), (cur.x, cur.y))
+    }
+}
+
+/// Freehand simplification, in world units. A hand's wobble is smaller than
+/// this, and the engine's fit turns the rest into editable curves.
+pub const PENCIL_SMOOTHING: f64 = 1.5;
+
+/// The ink both freehand tools draw with. The pencil's page says black "unless
+/// you're sketching on a dark canvas or frame", the brush's says it "adds
+/// texture and color" on top of the pencil's line, and this canvas is dark — so
+/// the brush's default is the light ink the pencil already uses.
+pub fn brush_ink() -> x_native::Color {
+    pencil_ink()
+}
+
+/// Figma Draw's brush styles. Their page's "Create brush" turns a closed vector
+/// shape into a style that is stretched or scattered along a stroke; this build
+/// has no brush-style library, so the three styles that ship are the outline's
+/// own profile — how wide the mark is, how far its ends taper, and how rough
+/// its two edges are. The live preview and the layer the stroke lands as read
+/// this one table, so what is on screen is what is committed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BrushStyle {
+    /// A loaded round brush: full width, ends that come to a point.
+    Ink,
+    /// A marker: one width from end to end, clean edges.
+    Marker,
+    /// A dry brush: a thin body and a lot of grain.
+    Dry,
+}
+
+/// Figma's **Stroke style** (help 360049283914): the three rows its Advanced
+/// stroke settings offer. The document stores a dash pattern and nothing else,
+/// so the style is DERIVED from that pattern — one owner for "which style is
+/// this stroke?", read by the panel's rows, by the writer that changes it and
+/// by the tests.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StrokeStyleKind {
+    /// No dash pattern: a continuous line.
+    Solid,
+    /// A uniform pair — dash, gap. What Figma's **Dashed** style writes.
+    Dashed,
+    /// Anything else: Figma's **Custom** pattern (`10, 5, 5, 5`).
+    Custom,
+}
+
+impl StrokeStyleKind {
+    pub const ALL: [StrokeStyleKind; 3] = [
+        StrokeStyleKind::Solid,
+        StrokeStyleKind::Dashed,
+        StrokeStyleKind::Custom,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            StrokeStyleKind::Solid => "Solid",
+            StrokeStyleKind::Dashed => "Dashed",
+            StrokeStyleKind::Custom => "Custom",
+        }
+    }
+
+    /// The style a dash pattern IS. The rule is the model's own shape rather
+    /// than a stored flag: an empty pattern is Solid, a pair is Dashed, and
+    /// anything longer is Custom — so a pattern typed into the **Dashes**
+    /// field can never leave the panel claiming a style the layer has not got.
+    pub fn of(dash: &[f64]) -> StrokeStyleKind {
+        match dash.len() {
+            0 => StrokeStyleKind::Solid,
+            2 => StrokeStyleKind::Dashed,
+            _ => StrokeStyleKind::Custom,
+        }
+    }
+
+    /// The pattern this row writes. `current` is what the layer carries, so
+    /// moving between Dashed and Custom keeps the numbers already chosen
+    /// instead of resetting them to ours.
+    pub fn pattern(self, current: &[f64]) -> Vec<f64> {
+        match self {
+            StrokeStyleKind::Solid => Vec::new(),
+            StrokeStyleKind::Dashed => match current {
+                [d, g, ..] => vec![*d, *g],
+                _ => vec![DASH_DEFAULT, GAP_DEFAULT],
+            },
+            StrokeStyleKind::Custom => match current {
+                // a pair IS Dashed by definition, so Custom repeats it: the
+                // line is drawn identically and the pattern field is open
+                [d, g] => vec![*d, *g, *d, *g],
+                [] => DASHES_DEFAULT.to_vec(),
+                pattern => pattern.to_vec(),
+            },
+        }
+    }
+}
+
+/// The Dashed style's two numbers, in px. The article gives the fields
+/// (*"Enter the length you want for the Dash, in pixels"*) and no defaults, so
+/// these are ours — the same pair the engine's own dash fixtures carry.
+pub const DASH_DEFAULT: f64 = 8.0;
+pub const GAP_DEFAULT: f64 = 4.0;
+
+/// The **Custom** row's starting pattern: Figma's own example of the syntax is
+/// *"10, 20, 10, 20, 80, 20, 10, 100"*, and a shorter one keeps the field
+/// readable while still being a pattern rather than a dashed pair.
+pub const DASHES_DEFAULT: [f64; 4] = [10.0, 5.0, 5.0, 5.0];
+
+/// The three joins Figma names in **Advanced stroke settings** (help
+/// 360049283914: *"Miter"*, *"Bevel"*, *"Round"*), in the order it lists them.
+pub const STROKE_JOINS: [StrokeJoin; 3] = [StrokeJoin::Miter, StrokeJoin::Bevel, StrokeJoin::Round];
+
+/// The caps Figma's **End point** menu offers (help 360049283914: *"**None**:
+/// no cap…", "**Round (default)**…", "**Square**…"*). The model also stores the
+/// two heads the arrow tool draws (`Arrow`/`Triangle`), but a line's head is
+/// GEOMETRY here — `arrow_path` — and the renderers paint those two as a butt
+/// end, so the menu offers what it can actually paint and the rest is named in
+/// the section's deltas.
+pub const STROKE_CAPS: [StrokeCap; 3] = [StrokeCap::None, StrokeCap::Round, StrokeCap::Square];
+
+pub fn stroke_join_label(join: StrokeJoin) -> &'static str {
+    match join {
+        StrokeJoin::Miter => "Miter",
+        StrokeJoin::Bevel => "Bevel",
+        StrokeJoin::Round => "Round",
+    }
+}
+
+/// The name of a cap, in Figma's words — **None** is the butt end it paints.
+pub fn stroke_cap_label(cap: StrokeCap) -> &'static str {
+    match cap {
+        StrokeCap::None => "None",
+        StrokeCap::Round => "Round",
+        StrokeCap::Square => "Square",
+        StrokeCap::Arrow => "Arrow",
+        StrokeCap::Triangle => "Triangle",
+    }
+}
+
+/// Figma's **Miter angle** is the angle the miter join is cut at; the model
+/// stores SVG's miter limit, and the two are one relation — `limit = 1 / sin(angle / 2)`.
+/// The field, the renderer and the tests read these two functions and nothing
+/// else, so a typed angle cannot mean something different from the canvas's.
+pub const MITTER_ANGLE_MIN: f64 = 1.0;
+pub const MITTER_ANGLE_MAX: f64 = 179.0;
+
+pub fn miter_angle_to_limit(deg: f64) -> f64 {
+    let a = deg.clamp(MITTER_ANGLE_MIN, MITTER_ANGLE_MAX).to_radians();
+    1.0 / (a / 2.0).sin()
+}
+
+pub fn miter_limit_to_angle(limit: f64) -> f64 {
+    2.0 * (1.0 / limit.max(1.0)).asin().to_degrees()
+}
+
+/// One row of Figma's **Advanced stroke settings** panel (help 360049283914).
+/// The panel IS this list: the card's height, the painter and the tests all
+/// read the same rows, so a row cannot go missing from one of them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StrokePanelRow {
+    /// a small caps label — "STROKE STYLE" / "JOIN" / "END POINTS"
+    Caps(&'static str),
+    /// Solid / Dashed / Custom
+    Style(StrokeStyleKind),
+    /// the Dashed style's two fields
+    Dash,
+    Gap,
+    /// the Custom style's pattern field
+    Dashes,
+    /// Miter / Bevel / Round
+    Join(StrokeJoin),
+    /// the Miter angle, which only a Miter join has
+    Miter,
+    /// the **Start** (`false`) / **End** (`true`) point row
+    End(bool),
+}
+
+impl StrokePanelRow {
+    /// How tall a row is: a caps label is a label, a choice is a row, a field
+    /// is a label over a box.
+    pub fn height(self) -> f64 {
+        match self {
+            StrokePanelRow::Caps(_) => 26.0,
+            StrokePanelRow::Dash
+            | StrokePanelRow::Gap
+            | StrokePanelRow::Dashes
+            | StrokePanelRow::Miter => 44.0,
+            StrokePanelRow::Style(_) | StrokePanelRow::Join(_) | StrokePanelRow::End(_) => 28.0,
+        }
+    }
+}
+
+/// The rows the panel shows for a stroke: the three style rows always, the
+/// **Dash**/**Gap** pair for Dashed, the **Dashes** pattern for Custom, the
+/// three joins always, the **Miter angle** for a Miter join, and both end-point
+/// rows — which is Figma's own content, since the panel exists to hold what the
+/// Stroke section has no room for.
+pub fn stroke_panel_rows(kind: StrokeStyleKind, join: StrokeJoin) -> Vec<StrokePanelRow> {
+    use StrokePanelRow::*;
+    let mut rows = vec![Caps("STROKE STYLE")];
+    rows.extend(StrokeStyleKind::ALL.map(Style));
+    match kind {
+        StrokeStyleKind::Solid => {}
+        StrokeStyleKind::Dashed => rows.extend([Dash, Gap]),
+        StrokeStyleKind::Custom => rows.push(Dashes),
+    }
+    rows.push(Caps("JOIN"));
+    rows.extend(STROKE_JOINS.map(Join));
+    if join == StrokeJoin::Miter {
+        rows.push(Miter);
+    }
+    rows.push(Caps("END POINTS"));
+    rows.extend([End(false), End(true)]);
+    rows
+}
+
+/// The panel's card height: the rows' own heights plus the card's padding.
+pub fn stroke_panel_height(rows: &[StrokePanelRow]) -> f64 {
+    10.0 + rows.iter().map(|r| r.height()).sum::<f64>() + 10.0
+}
+
+/// The selected layer's stroke options, read through [`node_stroke_options`]
+/// — the one answer the Stroke section, its Advanced stroke settings panel and
+/// the writers all share, so the panel cannot show numbers the canvas is not
+/// drawing.
+pub fn sel_stroke(app: &App) -> StrokeOptions {
+    let Some(doc) = app.doc_opt() else {
+        return StrokeOptions::default();
+    };
+    let Some(id) = doc.selected_id() else {
+        return StrokeOptions::default();
+    };
+    crate::editor_ui::find_node(&doc.editor_ref().root, id.as_str())
+        .map(node_stroke_options)
+        .unwrap_or_default()
+}
+
+/// The selected layer's stroke options — the first stroke layer's, the same
+/// one the Stroke section's weight field reads, and the defaults a layer with
+/// no stroke layer yet would get (so the panel shows Figma's own numbers
+/// before the first edit writes anything).
+pub fn node_stroke_options(n: &Node) -> StrokeOptions {
+    n.stroke_layers
+        .first()
+        .map(|l| l.options.clone())
+        .unwrap_or_default()
+}
+
+impl BrushStyle {
+    pub const ALL: [BrushStyle; 3] = [BrushStyle::Ink, BrushStyle::Marker, BrushStyle::Dry];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BrushStyle::Ink => "Ink",
+            BrushStyle::Marker => "Marker",
+            BrushStyle::Dry => "Dry",
+        }
+    }
+
+    /// The mark's full width, in world units.
+    pub fn width(self) -> f64 {
+        match self {
+            BrushStyle::Ink => 12.0,
+            BrushStyle::Marker => 8.0,
+            BrushStyle::Dry => 14.0,
+        }
+    }
+
+    /// How far the mark's ends thin (0 = a marker's constant width).
+    pub fn taper(self) -> f64 {
+        match self {
+            BrushStyle::Ink => 1.0,
+            BrushStyle::Marker => 0.0,
+            BrushStyle::Dry => 1.6,
+        }
+    }
+
+    /// How rough the mark's two edges are.
+    pub fn grain(self) -> f64 {
+        match self {
+            BrushStyle::Ink => 0.25,
+            BrushStyle::Marker => 0.05,
+            BrushStyle::Dry => 0.7,
+        }
+    }
+}
+
+/// The rect a shape-tool drag commits — ONE rule for the live preview and the
+/// node that lands, so what you see while dragging is what you get.
+///
+/// * ⇧ (constrain to a square/circle) is applied to the drag's `cur` as it
+///   moves, so it is already in `cur` here;
+/// * ⌥ / Alt draws FROM THE CENTRE (Figma's shape tools), so the point the
+///   drag started on is the centre, not a corner;
+/// * either way the rect is normalised, so dragging up/left is the same drag.
+pub fn create_rect(start: Point, cur: Point, from_center: bool) -> Rect {
+    let (dx, dy) = (cur.x - start.x, cur.y - start.y);
+    if from_center {
+        Rect::new(
+            start.x - dx.abs(),
+            start.y - dy.abs(),
+            start.x + dx.abs(),
+            start.y + dy.abs(),
+        )
+    } else {
+        Rect::new(
+            start.x.min(cur.x),
+            start.y.min(cur.y),
+            start.x.max(cur.x),
+            start.y.max(cur.y),
+        )
+    }
+}
+
+/// The corner a scale about `corner` pins: the one diagonally OPPOSITE the
+/// handle the pointer grabbed. That is Figma's fixed point — grab the
+/// bottom-right handle and the top-left corner does not move.
+pub fn scale_anchor(orig: (f64, f64, f64, f64), corner: usize) -> (f64, f64) {
+    let (x, y, w, h) = orig;
+    match corner {
+        0 => (x + w, y + h),
+        1 => (x, y + h),
+        2 => (x + w, y),
+        _ => (x, y),
+    }
+}
+
+/// How far outside a corner Figma's rotate zone reaches, in SCREEN pixels.
+/// The resize handle's own 6px is the inner edge of the ring, so the two
+/// gestures never fight over the same pixel — and the zone is *outside* the
+/// bounds, which is what the help page asks for: *"Hover just outside one of
+/// the layer's bounds until the icon appears."*
+pub const ROTATE_RING: f64 = 22.0;
+
+/// The radius of the rotation-origin target: a 6px dot with the same
+/// forgiveness Figma gives its own handles.
+pub const ORIGIN_TARGET_R: f64 = 8.0;
+
+/// `⇧` snaps a canvas rotation: *"Hold down Shift to snap rotation values to
+/// increments of 15."*
+pub const ROTATE_SNAP_DEG: f64 = 15.0;
+
+/// Figma's cap on an uploaded asset: *"If the asset you are uploading exceeds
+/// 4096 x 4096 pixels, Figma will automatically scale the asset
+/// proportionally so that its longest dimension becomes 4096 pixels or
+/// fewer"* (help 360040028034). A click places at that scaled size — a drag
+/// still draws the box you drew.
+pub const PLACE_MAX_DIM: f64 = 4096.0;
+
+/// How close to a crop frame's corner the pointer has to be to take its
+/// handle, in SCREEN pixels (divided by the zoom at the press).
+pub const CROP_TOUCH: f64 = 9.0;
+/// The crop zoom's ceiling: 40x, past which the picture is a single pixel.
+pub const CROP_ZOOM_MAX: f64 = 40.0;
+/// The `corner` a crop drag carries when it is repositioning the picture
+/// rather than scaling it (the press landed inside the frame).
+pub const CROP_PAN: usize = 4;
+
+/// A live crop session — Figma's crop mode (help 360040675194). It remembers
+/// the picture's placement and fill mode from before the mode opened, so Esc
+/// can put them back, and it counts the engine writes the session has made so
+/// applying the crop folds them into ONE undo entry.
+#[derive(Debug, Clone)]
+pub struct CropSession {
+    pub id: String,
+    pub start: x_native::ImagePlacement,
+    pub start_fit: x_native::ImageFit,
+    pub steps: usize,
+}
+
+/// The crop frame's corners, in the order the resize handles use: 0 TL,
+/// 1 TR, 2 BL, 3 BR.
+/// One line of Figma's **measure** gesture (help 360039956974: *"Figma will
+/// display a red line between the two objects, as well as horizontal and
+/// vertical measurements"*): the gap in one axis, and where its line sits.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Measure {
+    /// true when the gap runs along x, so the line is horizontal
+    pub horizontal: bool,
+    /// the distance between the edges the pair faces, in world px
+    pub gap: f64,
+    /// the line's fixed coordinate on the other axis
+    pub at: f64,
+    /// the line's two ends along the measured axis
+    pub from: f64,
+    pub to: f64,
+}
+
+/// The middle of the band two intervals share — or, when they share none, the
+/// middle of the gap between their near edges: where Figma anchors the line.
+fn band_mid(a0: f64, a1: f64, b0: f64, b1: f64) -> f64 {
+    let lo = a0.max(b0);
+    let hi = a1.min(b1);
+    if lo <= hi {
+        (lo + hi) / 2.0
+    } else if a1 < b0 {
+        (a1 + b0) / 2.0
+    } else {
+        (b1 + a0) / 2.0
+    }
+}
+
+/// Figma's two measurements for a pair of layers (help 360039956974), each
+/// taken between the edges the pair FACES. A pair that overlaps on an axis has
+/// no gap on it and gets no line — Figma draws nothing there — so only real
+/// gaps come back, in the order the article reads: horizontal, then vertical.
+pub fn measure_between(a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)) -> Vec<Measure> {
+    let (ax0, ay0, aw, ah) = a;
+    let (bx0, by0, bw, bh) = b;
+    let (ax1, ay1) = (ax0 + aw, ay0 + ah);
+    let (bx1, by1) = (bx0 + bw, by0 + bh);
+    let mut out = Vec::new();
+    let (h0, h1, hgap) = if ax1 <= bx0 {
+        (ax1, bx0, bx0 - ax1)
+    } else if bx1 <= ax0 {
+        (bx1, ax0, ax0 - bx1)
+    } else {
+        (0.0, 0.0, 0.0)
+    };
+    if hgap > 0.0 {
+        out.push(Measure {
+            horizontal: true,
+            gap: hgap,
+            at: band_mid(ay0, ay1, by0, by1),
+            from: h0,
+            to: h1,
+        });
+    }
+    let (v0, v1, vgap) = if ay1 <= by0 {
+        (ay1, by0, by0 - ay1)
+    } else if by1 <= ay0 {
+        (by1, ay0, ay0 - by1)
+    } else {
+        (0.0, 0.0, 0.0)
+    };
+    if vgap > 0.0 {
+        out.push(Measure {
+            horizontal: false,
+            gap: vgap,
+            at: band_mid(ax0, ax1, bx0, bx1),
+            from: v0,
+            to: v1,
+        });
+    }
+    out
+}
+
+pub fn crop_corners(b: (f64, f64, f64, f64)) -> [(f64, f64); 4] {
+    [
+        (b.0, b.1),
+        (b.0 + b.2, b.1),
+        (b.0, b.1 + b.3),
+        (b.0 + b.2, b.1 + b.3),
+    ]
+}
+
+/// Which corner of the crop frame the pointer is on, within `tol` world units.
+pub fn crop_corner_at(b: (f64, f64, f64, f64), p: Point, tol: f64) -> Option<usize> {
+    crop_corners(b)
+        .iter()
+        .position(|(x, y)| (p.x - x).hypot(p.y - y) <= tol)
+}
+
+/// Is the point inside the crop frame? That is the drag that repositions the
+/// picture instead of scaling it — Figma's *"hover the faded area to
+/// reposition"*, which our frame's own inside carries.
+pub fn crop_inside(b: (f64, f64, f64, f64), p: Point) -> bool {
+    if b.2 <= 0.0 || b.3 <= 0.0 {
+        return false;
+    }
+    let (x0, x1) = (b.0.min(b.0 + b.2), b.0.max(b.0 + b.2));
+    let (y0, y1) = (b.1.min(b.1 + b.3), b.1.max(b.1 + b.3));
+    p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1
+}
+
+/// The zoom factor a corner drag asks for: how far the pointer has travelled
+/// along the diagonal that runs from the anchor to the corner being held. The
+/// drag starts ON that corner, so the diagonal — not the pointer — defines the
+/// direction; one factor for both axes keeps the aspect ratio, which is the
+/// page's default for cropping.
+pub fn crop_zoom_factor(anchor: Point, held: Point, cur: Point) -> f64 {
+    let (dx, dy) = (held.x - anchor.x, held.y - anchor.y);
+    let rx = if dx.abs() > 1e-6 {
+        Some((cur.x - anchor.x) / dx)
+    } else {
+        None
+    };
+    let ry = if dy.abs() > 1e-6 {
+        Some((cur.y - anchor.y) / dy)
+    } else {
+        None
+    };
+    match (rx, ry) {
+        (Some(rx), Some(ry)) => ((rx + ry) / 2.0).max(0.05),
+        (Some(rx), None) => rx.max(0.05),
+        (None, Some(ry)) => ry.max(0.05),
+        (None, None) => 1.0,
+    }
+}
+
+/// Where the overflow fraction has to sit so that the image pixel under the
+/// anchor stays under it while the picture scales by `k`. `box_len` and
+/// `drawn` are the frame's and the picture's lengths on one axis, `focal` the
+/// fraction the placement carried. The picture's edge sits at
+/// `(box_len - drawn) * focal`, which is the same arithmetic
+/// `resolve_image_placement` runs for `Crop` and `Fit`.
+pub fn crop_focal_for(anchor: f64, box_len: f64, drawn: f64, k: f64, focal: f64) -> f64 {
+    let denom = box_len - drawn * k;
+    if denom.abs() < 1e-6 {
+        return focal;
+    }
+    let f = ((1.0 - k) * anchor + k * (box_len - drawn) * focal) / denom;
+    f.clamp(0.0, 1.0)
+}
+
+/// The placement a crop drag asks for (help 360040675194): the picture scales
+/// about the corner OPPOSITE the one being held — ⌥ moves both sides, so the
+/// anchor is the frame's centre instead — or, when `corner` is `CROP_PAN`, it
+/// is pushed around inside the frame. Aspect ratio kept: *"hold Control to
+/// modify it"* is the one rule this does not model, because our crop zoom is
+/// uniform. Everything is in the LAYER's own space, so a rotated layer crops in
+/// its own frame.
+#[allow(clippy::too_many_arguments)]
+pub fn crop_placement_from(
+    orig: &x_native::ImagePlacement,
+    box_wh: (f64, f64),
+    image_wh: (f64, f64),
+    corner: usize,
+    start: Point,
+    cur: Point,
+    alt: bool,
+    fit: x_native::ImageFit,
+) -> x_native::ImagePlacement {
+    let (w, h) = box_wh;
+    let (iw, ih) = (image_wh.0.max(1.0), image_wh.1.max(1.0));
+    // the drawn size of the picture at the placement the drag started from,
+    // through the same fit math `resolve_image_placement` runs
+    let fit_scale = |box_len: f64, image_len: f64| box_len / image_len;
+    let base = match fit {
+        x_native::ImageFit::Fit => fit_scale(w, iw).min(fit_scale(h, ih)),
+        x_native::ImageFit::Crop => fit_scale(w, iw).max(fit_scale(h, ih)),
+        // Fill stretches per axis and Tile draws at natural size: neither has
+        // an overflow to crop, so the zoom is the whole story
+        _ => 1.0,
+    };
+    let s = base * orig.scale.max(0.05);
+    let drawn = (iw * s, ih * s);
+    let mut next = *orig;
+    if corner == CROP_PAN {
+        next.focal.0 = crop_pan_focal(orig.focal.0, cur.x - start.x, w - drawn.0);
+        next.focal.1 = crop_pan_focal(orig.focal.1, cur.y - start.y, h - drawn.1);
+        return next;
+    }
+    let idx = corner.min(3);
+    let held = crop_corners((0.0, 0.0, w, h))[idx];
+    let anchor = if alt {
+        Point::new(w / 2.0, h / 2.0)
+    } else {
+        let a = crop_corners((0.0, 0.0, w, h))[3 - idx];
+        Point::new(a.0, a.1)
+    };
+    let k = crop_zoom_factor(anchor, Point::new(held.0, held.1), cur);
+    // a crop never shows the frame's own background: the picture has to keep
+    // covering the box, so the zoom starts at 1.0
+    let zoom = (orig.scale * k).clamp(1.0, CROP_ZOOM_MAX);
+    let applied = zoom / orig.scale.max(0.05);
+    next.scale = zoom;
+    next.focal.0 = crop_focal_for(anchor.x, w, drawn.0, applied, orig.focal.0);
+    next.focal.1 = crop_focal_for(anchor.y, h, drawn.1, applied, orig.focal.1);
+    next
+}
+
+/// Push the picture by `delta` inside a frame with `room` of slack: the
+/// overflow fraction moves the other way, and stops at the picture's edge.
+fn crop_pan_focal(focal: f64, delta: f64, room: f64) -> f64 {
+    if room.abs() < 1e-6 {
+        return focal;
+    }
+    (focal + delta / room).clamp(0.0, 1.0)
+}
+
+/// Which corner's rotate ring the pointer is in, if any. `b` is `x, y, w, h`
+/// in the same space as `p`, `ring` the outer radius of the zone and `handle`
+/// the inner one (the resize handle's tolerance). A point INSIDE the bounds is
+/// never in the ring, however close to a corner it is — the inside of a layer
+/// belongs to selection, marquee and the move drag.
+pub fn rotate_corner_at(
+    b: (f64, f64, f64, f64),
+    p: Point,
+    ring: f64,
+    handle: f64,
+) -> Option<usize> {
+    let inside = p.x >= b.0 && p.x <= b.0 + b.2 && p.y >= b.1 && p.y <= b.1 + b.3;
+    if inside {
+        return None;
+    }
+    let corners = [
+        (b.0, b.1),
+        (b.0 + b.2, b.1),
+        (b.0, b.1 + b.3),
+        (b.0 + b.2, b.1 + b.3),
+    ];
+    let mut best: Option<(usize, f64)> = None;
+    for (i, (cx, cy)) in corners.iter().enumerate() {
+        let d = ((p.x - cx) * (p.x - cx) + (p.y - cy) * (p.y - cy)).sqrt();
+        if d <= ring && d > handle && best.is_none_or(|(_, bd)| d < bd) {
+            best = Some((i, d));
+        }
+    }
+    best.map(|(i, _)| i)
+}
+
+/// How near a corner's **radius handle** the pointer has to be to take it, in
+/// SCREEN pixels (help 360050986854). The handle is a dot INSIDE the corner, so
+/// the zone is the disc around it.
+pub const RADIUS_TOUCH: f64 = 12.0;
+
+/// The corner's own square, in SCREEN pixels: a press this close to a corner in
+/// BOTH axes is a resize, never a radius. Figma's radius handle lives inside the
+/// bounds, and the corner itself stays the resize handle.
+pub const RADIUS_KEEP: f64 = 4.0;
+
+/// How far in along the diagonal a radius handle sits when the radius is 0, in
+/// world units. Without a floor the dot would hide under the corner's resize
+/// handle exactly where a shape needs it most.
+pub const RADIUS_HANDLE_MIN: f64 = 8.0;
+
+/// The four corners of a local `x, y, w, h` box, in the order
+/// `Node::corner_radii` stores them: 0 top-left, 1 top-right, 2 bottom-right,
+/// 3 bottom-left.
+pub fn radius_corners(b: (f64, f64, f64, f64)) -> [(f64, f64); 4] {
+    let (x, y, w, h) = b;
+    [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
+}
+
+/// The inward diagonal at a corner, as a unit vector: the direction a radius
+/// handle is dragged in, and the one its value is measured along.
+pub fn radius_inward(corner: usize) -> (f64, f64) {
+    const D: f64 = std::f64::consts::FRAC_1_SQRT_2;
+    match corner {
+        0 => (D, D),
+        1 => (-D, D),
+        2 => (-D, -D),
+        _ => (D, -D),
+    }
+}
+
+/// Which corner's radius handle the pointer is on. `b` is the layer's local
+/// `x, y, w, h`, `p` the pointer in that same space and `radii` the layer's four
+/// corner radii. The handle is a dot on the corner's diagonal and the zone is
+/// the disc of `RADIUS_TOUCH` screen px around it — minus the corner's own
+/// square, which belongs to the resize handles. The nearest such dot wins.
+pub fn radius_handle_at(
+    b: (f64, f64, f64, f64),
+    p: Point,
+    zoom: f64,
+    radii: [f64; 4],
+) -> Option<usize> {
+    let (x, y, w, h) = b;
+    if p.x <= x || p.y <= y || p.x >= x + w || p.y >= y + h {
+        return None;
+    }
+    let zoom = zoom.max(1e-3);
+    let keep = RADIUS_KEEP / zoom;
+    let tol = RADIUS_TOUCH / zoom;
+    let mut best: Option<(usize, f64)> = None;
+    for (i, (cx, cy)) in radius_corners(b).iter().enumerate() {
+        if (p.x - cx).abs() < keep && (p.y - cy).abs() < keep {
+            continue;
+        }
+        let dot = radius_handle_point(b, i, radii[i]);
+        let d = (p.x - dot.x).hypot(p.y - dot.y);
+        if d <= tol && best.is_none_or(|(_, bd)| d < bd) {
+            best = Some((i, d));
+        }
+    }
+    best.map(|(i, _)| i)
+}
+
+/// How far along its diagonal a corner's handle sits for radius `r`: the
+/// midpoint of that corner's own arc, `r · (√2 − 1)` in from the corner.
+pub const RADIUS_HANDLE_FRAC: f64 = std::f64::consts::SQRT_2 - 1.0;
+
+/// Where a corner's radius handle is drawn, in the layer's own space: on the
+/// corner's diagonal, `r · (√2 − 1)` in — the midpoint of the corner's arc —
+/// and never closer to the corner than `RADIUS_HANDLE_MIN`.
+pub fn radius_handle_point(b: (f64, f64, f64, f64), corner: usize, r: f64) -> Point {
+    let (cx, cy) = radius_corners(b)[corner];
+    let (ux, uy) = radius_inward(corner);
+    let d = (r.max(0.0) * RADIUS_HANDLE_FRAC).max(RADIUS_HANDLE_MIN);
+    Point::new(cx + ux * d, cy + uy * d)
+}
+
+/// The 0–1 a slider track reads at `x` — the same mapping the
+/// image-adjustment sliders use, so every slider in this panel answers a press
+/// the same way and the smoothing drag can re-read it on every move.
+pub fn slider_fraction(track: Rect, x: f64) -> f64 {
+    ((x - track.x0) / track.width().max(1.0)).clamp(0.0, 1.0)
+}
+
+/// The four radii a layer's panel and handle speak for: the stored per-corner
+/// values when they are independent, the uniform radius otherwise.
+pub fn node_corner_radii(n: &Node) -> [f64; 4] {
+    let base = match n.kind {
+        NodeKind::Rect { radius } => radius,
+        _ => 0.0,
+    };
+    n.corner_radii.unwrap_or([base; 4])
+}
+
+/// The point a selection turns about: the layer's own transform-origin when one
+/// layer is selected — Figma's *"change an object's rotation origin"* — and the
+/// centre of the selection box otherwise, which is Figma's default *"Figma uses
+/// the horizontal and vertical center of the current selection as the point of
+/// rotation"*.
+pub fn rotation_pivot(n: Option<&x_native::Node>, b: (f64, f64, f64, f64)) -> (f64, f64) {
+    match n {
+        Some(n) => {
+            let (px, py) = n.transform.pivot(n.w, n.h);
+            (n.transform.x + px, n.transform.y + py)
+        }
+        None => (b.0 + b.2 / 2.0, b.1 + b.3 / 2.0),
+    }
+}
+
+/// The Scale panel's anchor box, as nine cells read row by row from the top
+/// left — the middle one (4) is what the panel opens on, exactly as Figma's
+/// screenshot shows it. ONE table: the panel paints it, the multiplier and the
+/// dimension fields read it, and the canvas body drag uses `nearest_corner`
+/// instead (Figma anchors a drag to the corner opposite the pointer).
+pub const SCALE_CELLS: usize = 9;
+
+/// The fixed point of a panel scale: which side of the box stays put.
+pub fn scale_cell_anchor(orig: (f64, f64, f64, f64), cell: usize) -> (f64, f64) {
+    let (x, y, w, h) = orig;
+    let cell = cell.min(SCALE_CELLS - 1);
+    let xs = [x, x + w / 2.0, x + w];
+    let ys = [y, y + h / 2.0, y + h];
+    (xs[cell % 3], ys[cell / 3])
+}
+
+/// The corner a handle grab takes hold of: 0 top-left, 1 top-right, 2
+/// bottom-left, 3 bottom-right. `scale_anchor` is its opposite — the fixed
+/// point of the same grab.
+pub fn corner_point(orig: (f64, f64, f64, f64), corner: usize) -> Point {
+    let (x, y, w, h) = orig;
+    match corner {
+        0 => Point::new(x, y),
+        1 => Point::new(x + w, y),
+        2 => Point::new(x, y + h),
+        _ => Point::new(x + w, y + h),
+    }
+}
+
+/// The corner of the box nearest `p` — which corner a body drag scales about
+/// (the opposite one stays put, like a handle grab).
+pub fn nearest_corner(orig: (f64, f64, f64, f64), p: Point) -> usize {
+    let (x, y, w, h) = orig;
+    match (p.x - x > w / 2.0, p.y - y > h / 2.0) {
+        (false, false) => 0,
+        (true, false) => 1,
+        (false, true) => 2,
+        (true, true) => 3,
+    }
+}
+
+/// The projection rule behind EVERY scale gesture, with the grab point in
+/// place of the grabbed corner: `factor` is where the pointer lands on the ray
+/// from the anchor through the grab, so the grabbed point rides the pointer
+/// and the box stays uniform — Figma's Scale is proportional by definition,
+/// and 1.0 means "unmoved". A collapse is clamped rather than flipped:
+/// dragging past the anchor must not mirror the layer.
+pub fn scale_grab_factor(anchor: (f64, f64), grab: Point, pointer: Point) -> f64 {
+    let (ux, uy) = (grab.x - anchor.0, grab.y - anchor.1);
+    let denom = ux * ux + uy * uy;
+    if denom <= 1e-9 {
+        return 1.0;
+    }
+    let f = ((pointer.x - anchor.0) * ux + (pointer.y - anchor.1) * uy) / denom;
+    f.max(MIN_SCALE)
+}
+
+/// The Scale tool's handle rule, shared by the live preview and the commit:
+/// the grab is the corner the pointer holds, the anchor the one opposite it.
+pub fn scale_drag_factor(
+    orig: (f64, f64, f64, f64),
+    corner: usize,
+    pointer: Point,
+) -> (f64, (f64, f64)) {
+    let anchor = scale_anchor(orig, corner);
+    let grab = corner_point(orig, corner);
+    (scale_grab_factor(anchor, grab, pointer), anchor)
+}
+
+/// The box a scale of `factor` about `anchor` maps `orig` onto — the paint
+/// half of both drag rules.
+pub fn scaled_box_about(orig: (f64, f64, f64, f64), anchor: (f64, f64), factor: f64) -> Rect {
+    let (x, y, w, h) = orig;
+    let (ax, ay) = anchor;
+    let (nx, ny) = (ax + (x - ax) * factor, ay + (y - ay) * factor);
+    Rect::new(nx, ny, nx + w * factor, ny + h * factor)
+}
+
+/// The box a handle grab's scale maps `orig` onto.
+pub fn scaled_box(orig: (f64, f64, f64, f64), corner: usize, factor: f64) -> Rect {
+    scaled_box_about(orig, scale_anchor(orig, corner), factor)
+}
+
+/// Smallest factor a drag may commit: below this the layer is invisible and
+/// the anchor sits on top of its own edge, so 0.02 is as far as a drag goes.
+pub const MIN_SCALE: f64 = 0.02;
+
+/// Which of Figma's three arc handles a drag has hold of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArcPart {
+    /// The handle you meet first: drag it to change the sweep. On a solid
+    /// ellipse it is the only one, and it sits at 0 — "a single handle will
+    /// appear on the right-hand side".
+    Sweep,
+    /// The handle with a dot inside it: where the arc begins.
+    Start,
+    /// The handle that turns the circle into a ring: its distance from the
+    /// centre is the ratio.
+    Ratio,
+}
+
+/// A layer's arc properties, in the engine's own terms: `(start, end, ratio)`.
+/// A solid ellipse reads as the full sweep — Figma's arc properties describe
+/// every ellipse, the defaults are just 0 / 360 / 0. `None` for anything that
+/// is not an ellipse or an arc.
+pub fn arc_props(n: &Node) -> Option<(f64, f64, f64)> {
+    match &n.kind {
+        NodeKind::Ellipse => Some((0.0, 0.0, 0.0)),
+        NodeKind::Arc { start, end, ratio } => Some((*start, *end, *ratio)),
+        _ => None,
+    }
+}
+
+/// Whether the layer still draws a whole circle: Figma only grows the Start
+/// and Ratio handles once the sweep has been broken.
+pub fn arc_is_full(start: f64, end: f64, ratio: f64) -> bool {
+    let sweep = x_native::booleans::arc_sweep(start, end);
+    sweep.abs() >= 360.0 - 1e-6 && ratio <= 1e-6
+}
+
+/// Figma's arc handles in the LAYER'S OWN box space (0..w, 0..h): the Sweep
+/// handle at the end of the sweep, the Start handle at its beginning, and the
+/// Ratio handle at the middle of the sweep on the inner edge — "at the center
+/// of the circle" while there is no ring to ride on. The same table paints
+/// them, hit-tests them and drives the drag.
+pub fn arc_handles(n: &Node) -> Vec<(ArcPart, Point)> {
+    let Some((start, end, ratio)) = arc_props(n) else {
+        return vec![];
+    };
+    let sweep = x_native::booleans::arc_sweep(start, end);
+    let at = |deg: f64, frac: f64| {
+        let (x, y) = x_native::booleans::arc_point(n.w, n.h, deg, frac);
+        Point::new(x, y)
+    };
+    let mut out = vec![(ArcPart::Sweep, at(end, 1.0))];
+    if !arc_is_full(start, end, ratio) {
+        out.push((ArcPart::Start, at(start, 1.0)));
+        out.push((ArcPart::Ratio, at(start + sweep / 2.0, ratio)));
+    }
+    out
+}
+
+/// The layer Figma's arc handles belong to: the single selected ellipse or
+/// arc, else the layer under the cursor — Figma shows the handle on hover,
+/// before anything is selected.
+pub fn arc_target(app: &App) -> Option<(String, bool)> {
+    // the handles belong to the Move tool, the way Figma's do: another tool
+    // has its own gesture for the same pointer
+    if app.tool != Tool::Select {
+        return None;
+    }
+    let doc = app.doc_opt()?;
+    let sel = &doc.editor_ref().selection;
+    if sel.len() == 1 {
+        let n = crate::editor_ui::find_node(&doc.editor_ref().root, &sel[0])?;
+        if arc_props(n).is_some() {
+            return Some((sel[0].clone(), true));
+        }
+    }
+    let hover = app.hover_node.clone()?;
+    let n = crate::editor_ui::find_node(&doc.editor_ref().root, &hover)?;
+    arc_props(n).map(|_| (hover, false))
+}
+
+/// The pointer's angle about a layer's centre, in the layer's own box space —
+/// 0 at the right-hand point and growing clockwise, the convention the engine's
+/// arc geometry and Figma's own handle both use.
+pub fn arc_angle_at(w: f64, h: f64, local: Point) -> f64 {
+    let (cx, cy) = (w / 2.0, h / 2.0);
+    (local.y - cy).atan2(local.x - cx).to_degrees()
+}
+
+/// How far out the pointer is, as a fraction of the radius — 1.0 on the rim,
+/// 0 at the centre. Ellipse-normalised, so a rim point reads 1.0 whatever the
+/// box's aspect. Unclamped on purpose: the Count handle measures motion on
+/// both sides of the rim, so outwards has to keep growing.
+pub fn shape_radial_at(w: f64, h: f64, local: Point) -> f64 {
+    let (rx, ry) = ((w / 2.0).max(1e-6), (h / 2.0).max(1e-6));
+    let (dx, dy) = ((local.x - rx) / rx, (local.y - ry) / ry);
+    (dx * dx + dy * dy).sqrt()
+}
+
+/// How far out the pointer is, as a fraction of the radius — what dragging the
+/// Ratio handle sets. Never quite 1: a ring with no width is not a shape.
+pub fn arc_ratio_at(w: f64, h: f64, local: Point) -> f64 {
+    shape_radial_at(w, h, local).clamp(0.0, 0.99)
+}
+
+/// Write arc properties onto a layer, turning a solid ellipse into the arc
+/// that carries them. The box is untouched: these are appearance, not size —
+/// the same rule that makes Figma's arc non-destructive. `false` when the id
+/// is not an ellipse or an arc (nothing is written, so nothing is undone).
+pub fn set_arc(
+    editor: &mut x_native::editor::Editor,
+    id: &str,
+    start: f64,
+    end: f64,
+    ratio: f64,
+) -> bool {
+    let ok = x_native::editor::find(&editor.root, id).is_some_and(|n| arc_props(n).is_some());
+    if !ok {
+        return false;
+    }
+    editor.mutate_visual_stack(id, |n| n.kind = NodeKind::Arc { start, end, ratio })
+}
+
+/// How far a Count handle drag travels, in units of the shape's own radius:
+/// half a radius outwards adds this many points, half a radius inwards takes
+/// them away. Size-independent, the way every other canvas handle is.
+pub const COUNT_DRAG_SPAN: f64 = 20.0;
+
+/// The polygon's sides, if the layer is one — Figma's Count.
+pub fn poly_sides(n: &Node) -> Option<usize> {
+    match &n.kind {
+        NodeKind::Poly { sides } => Some(*sides),
+        _ => None,
+    }
+}
+
+/// A star's points and inner ratio, if the layer is one — Figma's Count and
+/// Ratio on the same layer.
+pub fn star_props(n: &Node) -> Option<(usize, f64)> {
+    match &n.kind {
+        NodeKind::Star { points, ratio } => Some((*points, *ratio)),
+        _ => None,
+    }
+}
+
+/// A layer's Count, whichever of Figma's two counting shapes it is.
+pub fn shape_count(n: &Node) -> Option<usize> {
+    poly_sides(n).or_else(|| star_props(n).map(|(points, _)| points))
+}
+
+/// A layer's kind and Count together, for the Appearance block that shows it.
+pub fn shape_of(n: &Node) -> Option<(NodeKind, usize)> {
+    shape_count(n).map(|count| (n.kind.clone(), count))
+}
+
+/// Which of Figma's polygon and star handles a drag has hold of.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ShapePart {
+    /// "How many points there are to the star" (a polygon's sides): the
+    /// min/max are 3 and 60 for both.
+    Count,
+    /// The star only: "the distance of the inner points of the star from the
+    /// center", as a share of the radius.
+    Ratio,
+}
+
+/// Figma's polygon and star handles in the LAYER'S OWN box space: the Count
+/// handle rides the shape's rightmost outer vertex — "the small, round count
+/// handle next to the shape" — and a star's Ratio handle rides the rightmost
+/// INNER vertex, the point whose distance from the centre is the Ratio. The
+/// same table paints them, hit-tests them and drives the drag.
+pub fn shape_handles(n: &Node) -> Vec<(ShapePart, Point)> {
+    let rightmost = |mut pts: Vec<Point>| -> Option<Point> {
+        pts.sort_by(|a, b| a.x.total_cmp(&b.x));
+        pts.pop()
+    };
+    let at = |deg: f64, frac: f64| {
+        let (x, y) = x_native::booleans::arc_point(n.w, n.h, deg, frac);
+        Point::new(x, y)
+    };
+    match &n.kind {
+        NodeKind::Poly { sides } => {
+            let outer: Vec<Point> = (0..*sides)
+                .map(|k| at(-90.0 + 360.0 * k as f64 / *sides as f64, 1.0))
+                .collect();
+            rightmost(outer)
+                .map(|p| vec![(ShapePart::Count, p)])
+                .unwrap_or_default()
+        }
+        NodeKind::Star { points, ratio } => {
+            let outer: Vec<Point> = (0..*points)
+                .map(|k| at(-90.0 + 360.0 * k as f64 / *points as f64, 1.0))
+                .collect();
+            let inner: Vec<Point> = (0..*points)
+                .map(|k| at(-90.0 + 180.0 * (2 * k + 1) as f64 / *points as f64, *ratio))
+                .collect();
+            let mut out: Vec<(ShapePart, Point)> = vec![];
+            if let Some(p) = rightmost(outer) {
+                out.push((ShapePart::Count, p));
+            }
+            if let Some(p) = rightmost(inner) {
+                out.push((ShapePart::Ratio, p));
+            }
+            out
+        }
+        _ => vec![],
+    }
+}
+
+/// The layer Figma's Count and Ratio handles belong to: the single selected
+/// polygon or star, else the layer under the cursor — the same rule as the
+/// arc's handles, and for the same reason (Figma shows the handle on hover).
+pub fn shape_target(app: &App) -> Option<(String, bool)> {
+    if app.tool != Tool::Select {
+        return None;
+    }
+    let doc = app.doc_opt()?;
+    let sel = &doc.editor_ref().selection;
+    if sel.len() == 1 {
+        let n = crate::editor_ui::find_node(&doc.editor_ref().root, &sel[0])?;
+        if shape_count(n).is_some() {
+            return Some((sel[0].clone(), true));
+        }
+    }
+    let hover = app.hover_node.clone()?;
+    let n = crate::editor_ui::find_node(&doc.editor_ref().root, &hover)?;
+    shape_count(n).map(|_| (hover, false))
+}
+
+/// Write a polygon's or star's Count, in whichever of the two kinds the layer
+/// already is. The box is untouched — the Count is appearance, not size — and
+/// the engine clamps it to Figma's 3..60. `false` when the id is neither (so
+/// nothing is written and nothing is undone).
+pub fn set_shape_count(editor: &mut x_native::editor::Editor, id: &str, count: usize) -> bool {
+    let count = count.clamp(x_native::booleans::COUNT_MIN, x_native::booleans::COUNT_MAX);
+    let kind = x_native::editor::find(&editor.root, id).map(|n| n.kind.clone());
+    match kind {
+        Some(NodeKind::Poly { .. }) => {
+            editor.mutate_visual_stack(id, |n| n.kind = NodeKind::Poly { sides: count })
+        }
+        Some(NodeKind::Star { ratio, .. }) => editor.mutate_visual_stack(id, |n| {
+            n.kind = NodeKind::Star {
+                points: count,
+                ratio,
+            }
+        }),
+        _ => false,
+    }
+}
+
+/// Write a star's Ratio — Figma's "distance of the inner points … from the
+/// center", clamped clear of a degenerate star. `false` for anything that is
+/// not a star.
+pub fn set_star_ratio(editor: &mut x_native::editor::Editor, id: &str, ratio: f64) -> bool {
+    let points = match x_native::editor::find(&editor.root, id).and_then(star_props) {
+        Some((points, _)) => points,
+        None => return false,
+    };
+    let ratio = ratio.clamp(0.05, 0.95);
+    editor.mutate_visual_stack(id, |n| {
+        n.kind = NodeKind::Star { points, ratio };
+    })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -419,6 +1619,225 @@ fn draft(name: &str, edited: &str, icon: &'static str) -> RecentFile {
 
 // ----------------------------------------------------------------- actions
 
+/// Panel affordances that FLIP a piece of state rather than repeat an
+/// action. Two presses inside the double-click window leave them where they
+/// started, which reads as "the double-click did nothing" — `run.rs`'s chrome
+/// dispatch counts a repeat press of one of these once per window.
+///
+/// Row SELECTION (`TreeRow`, `SelectPage`, `LayerRename`) is deliberately not
+/// in this set: a second press there is the rename gesture and has to reach the
+/// dispatcher. Steppers (zoom, alignment, gap, duplication) are not in it
+/// either — repeating those is exactly what the user asked for.
+impl Action {
+    pub fn is_toggle_row(&self) -> bool {
+        is_toggle_row(self)
+    }
+}
+
+fn is_toggle_row(a: &Action) -> bool {
+    matches!(
+        a,
+        Action::ToggleWrap
+            | Action::ToggleAspectRatio
+            | Action::ToggleChildAbsolute
+            | Action::ToggleInstanceProp(_)
+            | Action::ToggleLayoutAdvanced
+            | Action::ToggleTypoAdvanced
+            | Action::ToggleVisible
+            | Action::ToggleLock
+            | Action::ToggleShowName
+            | Action::TreeVisible(_)
+            | Action::TreeLock(_)
+            | Action::TreeToggle(_)
+            | Action::TogglePaintVisibility(_)
+            | Action::ToggleGuide(_)
+            | Action::ToggleGuideVisibility
+            | Action::ToggleCanvasBgVisibility
+            | Action::ToggleMinimap
+            | Action::ToggleColorPicker(_)
+            | Action::ToggleEffectAdd
+            | Action::ToggleEffectKind(_)
+            | Action::ToggleEffectSettings(_)
+            | Action::ToggleEffectBlend(_)
+            | Action::ToggleLayerBlend
+            | Action::ToggleStrokeStyle
+            | Action::ToggleStrokeCap(_)
+            | Action::ToggleListStyle
+            | Action::ToggleTextResize
+            | Action::ToggleMaskType
+            | Action::ToggleCorners
+            | Action::TogglePaintBlend(_)
+            | Action::ToggleVectorHandles
+            | Action::ClipContent
+            | Action::PaintLibToggle(_)
+            | Action::FrameDropdown
+            | Action::ConstraintDropdown(_)
+            | Action::ZoomMenu
+            | Action::LhDropdown
+            | Action::TextStyleDropdown
+            | Action::PaletteToggle
+            | Action::OpenAppMenu
+            | Action::ToggleNotifications
+            | Action::ToggleFindInSelection
+            | Action::ToggleCaseSensitive
+            | Action::DashSortMenu
+            | Action::BoardToggleGrid
+            | Action::BoardToggleConnectors
+            | Action::VarToggleBool(_)
+            | Action::FlowDeviceToggle
+            // the font-family row is the one `Action::Field` that FLIPS a
+            // popover instead of opening an edit buffer (run.rs dispatch):
+            // a double-click would open the picker and shut it again
+            | Action::Field(FieldId::FontFamily)
+    )
+}
+
+/// The two axes Figma's Constraints block speaks in: one dropdown each, five
+/// answers each. The labels and pins are the table from the beginner course's
+/// "Frame presets and constraints" — the first dropdown manages the horizontal
+/// position, the second the vertical one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConstraintAxis {
+    Horizontal,
+    Vertical,
+}
+
+impl ConstraintAxis {
+    /// The row's label in the panel ("Horizontal" / "Vertical").
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Horizontal => "Horizontal",
+            Self::Vertical => "Vertical",
+        }
+    }
+
+    /// The menu's labels, in the order the dropdown lists them. The pin that
+    /// goes with each one lives in `CONSTRAINT_H` / `CONSTRAINT_V`.
+    pub fn labels(self) -> [&'static str; 5] {
+        match self {
+            Self::Horizontal => CONSTRAINT_H.map(|(label, _)| label),
+            Self::Vertical => CONSTRAINT_V.map(|(label, _)| label),
+        }
+    }
+}
+
+/// Figma's Constraints menu, horizontal axis: label + pin, in menu order.
+pub const CONSTRAINT_H: [(&str, x_native::HPin); 5] = [
+    ("Left", x_native::HPin::Left),
+    ("Right", x_native::HPin::Right),
+    ("Left & Right", x_native::HPin::StretchH),
+    ("Center", x_native::HPin::CenterH),
+    ("Scale", x_native::HPin::ScaleH),
+];
+
+/// Figma's Constraints menu, vertical axis.
+pub const CONSTRAINT_V: [(&str, x_native::VPin); 5] = [
+    ("Top", x_native::VPin::Top),
+    ("Bottom", x_native::VPin::Bottom),
+    ("Top & Bottom", x_native::VPin::StretchV),
+    ("Center", x_native::VPin::CenterV),
+    ("Scale", x_native::VPin::ScaleV),
+];
+
+/// Which of the Prototype tab's two **Scroll behavior** menus is open
+/// (Figma shows them in one block: "Overflow" on a frame, "Position" on an
+/// object that sits on a scrolling frame).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ProtoScrollMenu {
+    Overflow,
+    Position,
+}
+
+/// Figma's Overflow menu, in the menu's own order. `None` is "No scrolling":
+/// it returns the frame to the clip state the Design tab's Clip content tick
+/// owns, because our `Overflow` enum carries the clip as well as the scroll
+/// (Figma keeps the two as separate settings — see the master list, row 14.13).
+/// Labels and values are two parallel tables so the panel can read the captions
+/// as a slice without collecting one.
+pub const PROTO_OVERFLOW_LABELS: [&str; 4] =
+    ["No scrolling", "Horizontal", "Vertical", "Both directions"];
+pub const PROTO_OVERFLOW_VALUES: [Option<x_native::Overflow>; 4] = [
+    None,
+    Some(x_native::Overflow::ScrollX),
+    Some(x_native::Overflow::ScrollY),
+    Some(x_native::Overflow::ScrollBoth),
+];
+
+/// Figma's **Animate matching layers** tick (help 360039818874), in one
+/// place: the panel paints this word and its test reads it, so the two cannot
+/// drift.
+pub const PROTO_MATCHING_LABEL: &str = "Animate matching layers";
+
+/// Figma's Position menu, in the menu's own order.
+pub const PROTO_POSITION_LABELS: [&str; 3] = ["Scroll with parent", "Fixed", "Sticky"];
+pub const PROTO_POSITION_VALUES: [x_native::ScrollPosition; 3] = [
+    x_native::ScrollPosition::ScrollWithParent,
+    x_native::ScrollPosition::Fixed,
+    x_native::ScrollPosition::Sticky,
+];
+
+/// Which Overflow row the frame's current setting shows.
+pub fn proto_overflow_row(o: x_native::Overflow) -> usize {
+    for (i, v) in PROTO_OVERFLOW_VALUES.iter().enumerate() {
+        if *v == Some(o) {
+            return i;
+        }
+    }
+    0
+}
+
+/// What a press on Overflow row `row` writes. "No scrolling" needs the frame's
+/// current value: a frame that was scrolling is still clipping, so it lands on
+/// `Clip` rather than `Visible`.
+pub fn proto_overflow_for_row(row: usize, current: x_native::Overflow) -> x_native::Overflow {
+    match PROTO_OVERFLOW_VALUES[row] {
+        Some(v) => v,
+        None => {
+            if current == x_native::Overflow::Visible {
+                x_native::Overflow::Visible
+            } else {
+                x_native::Overflow::Clip
+            }
+        }
+    }
+}
+
+/// Which Position row the layer's flags show.
+pub fn proto_position_row(c: &x_native::ChildConstraints) -> usize {
+    let pos = x_native::ScrollPosition::of(c);
+    for (i, p) in PROTO_POSITION_VALUES.iter().enumerate() {
+        if *p == pos {
+            return i;
+        }
+    }
+    0
+}
+
+/// The nearest ancestor frame of `id` whose Overflow scrolls — Figma shows the
+/// Position row only for an object "on a frame that has scroll overflow
+/// applied" (help 360039818734). Returns the frame's id.
+pub fn scrollable_ancestor(root: &x_native::Node, id: &str) -> Option<String> {
+    let mut best: Option<String> = None;
+    fn walk(n: &x_native::Node, id: &str, best: &mut Option<String>) -> bool {
+        if n.id == id {
+            return true;
+        }
+        for c in &n.children {
+            if walk(c, id, best) {
+                // the NEAREST scrolling frame: the first ancestor to unwind
+                // wins, so an outer scrollable frame cannot overwrite it
+                if best.is_none() && n.overflow.scrollable() {
+                    *best = Some(n.id.clone());
+                }
+                return true;
+            }
+        }
+        false
+    }
+    walk(root, id, &mut best);
+    best
+}
+
 /// Every interactive zone records one of these; `run.rs` dispatches them.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
@@ -434,9 +1853,21 @@ pub enum Action {
     AddAutoLayout,
     /// auto-layout wrap toggle (selected frame's own layout)
     ToggleWrap,
-    /// main/cross axis Hug<->Fixed (selected frame's own layout)
-    ToggleMainSizing,
-    ToggleCrossSizing,
+    /// Figma's **Width**/**Height** dropdown on an auto-layout frame
+    /// (help 360040451373): the sizing choice plus the min/max rows, which are
+    /// an ADDITIONAL setting — "Minimum and maximum dimensions is an
+    /// additional setting that can be used at the same time as other resizing
+    /// properties". `true` is the Width field, `false` the Height one.
+    LayoutAxisMenu(bool),
+    /// One row of that menu: Fixed … / Hug contents.
+    SetAxisSizing(bool, x_native::Sizing),
+    /// "Add min width" / "Add max width" — the axis, then min (`true`) or max.
+    AddAxisLimit(bool, bool),
+    /// "Remove min and max" for the axis.
+    ClearAxisLimits(bool),
+    /// The auto-layout settings' **canvas stacking** menu (help 31289464393751).
+    StackingMenu,
+    SetCanvasStacking(x_native::CanvasStacking),
     /// Lock the W/H inspector fields to the current aspect ratio.
     ToggleAspectRatio,
     /// selected CHILD of an auto-layout frame: Fill container vs Fixed
@@ -459,7 +1890,12 @@ pub enum Action {
     ProtoTrigger(usize),
     ProtoDest(usize, i32),
     ProtoSpeed(usize),
+    /// Figma's **Animate matching layers** tick, in the interaction's
+    /// animation section (help 360039818874).
+    ProtoToggleMatching(usize),
     ProtoAnimation(usize),
+    /// Figma's four arrows beside a Move in / Move out: the side it enters from.
+    ProtoDirection(usize, x_native::Direction),
     ProtoActionType(usize),
     ProtoEasing(usize),
     ProtoToggleReset(usize),
@@ -473,6 +1909,15 @@ pub enum Action {
     ProtoEditUrl(usize),
     ProtoEditVideoTime(usize),
     ProtoToggleStart,
+    /// Figma's Prototype-tab **Scroll behavior** menus: which one opens, and
+    /// the row a press picked in it.
+    ProtoScrollMenu(ProtoScrollMenu),
+    ProtoSetOverflow(usize),
+    ProtoSetPosition(usize),
+    /// A press in the trigger menu: interaction `i` takes `Trigger::all()[row]`
+    /// — the trigger *kind* plus the value its row starts from (a delay's
+    /// milliseconds, a video hit's time).
+    ProtoSetTrigger(usize, usize),
     FlowEnter,
     FlowBack,
     FlowExit,
@@ -520,6 +1965,12 @@ pub enum Action {
     LibReviewClose,
     CycleInstanceSwap(String),
     ResetInstanceProps,
+    /// Instance More-actions menu (Figma, help 360039150733):
+    /// *"Go to main component"* and *"Push changes to main component"*, plus
+    /// *"Reset > Reset [property]"* carrying the target layer's id.
+    GoToMainComponent,
+    PushChangesToMain,
+    ResetInstanceChange(String),
     // board chrome
     BoardToggleGrid,
     BoardToggleConnectors,
@@ -530,6 +1981,10 @@ pub enum Action {
     OnboardingSample,
     OnboardingBlank,
     OnboardingDismiss,
+    /// Re-open the welcome / quick-start card from the app menu, the ⌘K
+    /// palette or Help. Dismissing it writes the onboarding marker, which
+    /// used to mean "seen once, unreachable forever after".
+    ShowWelcome,
     NewBoard,
     ImportFile,
     OpenRecent(usize),
@@ -569,6 +2024,8 @@ pub enum Action {
     SelectDoc(usize),
     CloseDoc(usize),
     Tool(Tool),
+    /// Pick the Brush's style (the secondary toolbar's "style" control).
+    SetBrushStyle(BrushStyle),
     LeftTab(LeftTab),
     RightTab(RightTab),
     AddPage,
@@ -576,9 +2033,26 @@ pub enum Action {
     DeletePage(usize),
     TreeRow(String),
     TreeToggle(String),
+    /// A layer's NAME zone in the Layers panel: a single press selects the row
+    /// (same as `TreeRow`), a second press inside the double-click window opens
+    /// the name for inline editing — Figma's rename gesture.
+    LayerRename(String),
     RenameStart,
     // inspector
     FrameDropdown,
+    /// Open/close one axis of Figma's Constraints block (a layer inside a
+    /// frame). One flag for both axes: only one menu is ever open.
+    ConstraintDropdown(ConstraintAxis),
+    /// Constraints menu item: row index into `CONSTRAINT_H` / `CONSTRAINT_V`.
+    SetConstraint(ConstraintAxis, usize),
+    /// Scale panel: pick an anchor cell (Figma's nine-point box).
+    ScaleCell(usize),
+    /// The plus on the selected layer's edge — the press that begins the
+    /// connection drag.
+    ConnMenu,
+    /// Delete the selected connection (Figma: "you can select it and press
+    /// Delete to remove it").
+    ConnDelete,
     /// Toggle the zoom menu (right-panel header; audit F4)
     ZoomMenu,
     /// Zoom-menu item: 0 in, 1 out, 2 100%, 3 selection, 4 fit
@@ -597,6 +2071,18 @@ pub enum Action {
     /// Push the selection's typography into the style it is linked to and
     /// re-resolve every consumer (Figma's "Update style")
     UpdateTextStyleFromSelection,
+    /// Figma's **Advanced stroke settings** panel (help 360049283914): the
+    /// style icon in the Stroke section opens it, the icon closes it.
+    ToggleStrokeStyle,
+    /// One of the panel's three style rows — Solid, Dashed, Custom. What it
+    /// writes is the dash pattern behind the row.
+    SetStrokeStyle(StrokeStyleKind),
+    /// One of the panel's three join rows (Miter / Bevel / Round).
+    SetStrokeJoin(StrokeJoin),
+    /// The **Start point** / **End point** row's menu: `true` is the end.
+    ToggleStrokeCap(bool),
+    /// A cap chosen in that menu — named, with the row showing what it paints.
+    SetStrokeCapEnd(bool, StrokeCap),
     /// layer row hover toggles (Figma): eye / padlock
     TreeVisible(String),
     TreeLock(String),
@@ -610,7 +2096,6 @@ pub enum Action {
     RemoveFill,
     AddStroke,
     RemoveStroke,
-    AddEffect,
     AddGuide,
     RemoveGuide,
     ToggleGuide(usize),
@@ -621,6 +2106,9 @@ pub enum Action {
     PaletteRun(usize),
     ToggleVisible,
     ToggleLock,
+    /// Figma's right sidebar (Layer → "Show name"): paint this frame's name on
+    /// the canvas, or don't. Frames only; Sections always show theirs.
+    ToggleShowName,
     /// Toggle visibility of the primary fill or stroke layer.
     TogglePaintVisibility(bool),
     /// Cycle the selected stroke between inside, center, and outside.
@@ -643,11 +2131,60 @@ pub enum Action {
     /// (wrap / fill / absolute).
     ToggleLayoutAdvanced,
     /// Apply a color chosen from the native color popover.
-    PaintPreset(bool, String),
+    PaintPreset(PaintTarget, String),
     Align(usize, usize),
-    /// Color picker popup toggle (fill/stroke)
-    ToggleColorPicker(bool),
+    /// Color picker popup toggle (fill / stroke / an effect's Fill)
+    ToggleColorPicker(PaintTarget),
     CloseColorPicker,
+    /// Effects section: the `+` opens the add menu (Figma's five types).
+    ToggleEffectAdd,
+    /// Add one effect of this type to the selected layer.
+    AddEffect(x_native::EffectKind),
+    /// A row's type dropdown — Figma's per-effect type menu.
+    ToggleEffectKind(usize),
+    SetEffectKind(usize, x_native::EffectKind),
+    /// The row's *Effect settings* disclosure.
+    ToggleEffectSettings(usize),
+    ToggleEffectVisible(usize),
+    RemoveEffect(usize),
+    DuplicateEffect(usize),
+    /// Reorder: dragging a row moves it in the stack (Figma's gesture).
+    ToggleEffectBlend(usize),
+    SetEffectBlend(usize, x_native::BlendKind),
+    /// Figma's **Apply blend mode** in the Appearance section, and the same
+    /// control inside a fill's or stroke's colour popover.
+    ToggleLayerBlend,
+    /// `⌥R` — reveal/hide Figma's rotation-origin target for the selection.
+    ToggleRotationOrigin,
+    SetLayerBlend(x_native::BlendKind),
+    TogglePaintBlend(PaintTarget),
+    SetPaintBlend(PaintTarget, x_native::BlendKind),
+    /// Figma's **Use as mask** (`⌘⌥M`; help 360040450253) — the bottom-most
+    /// selected layer becomes the mask for the layers above it.
+    UseAsMask,
+    /// The Mask section's type dropdown: Alpha, Vector, Luminance.
+    ToggleMaskType,
+    SetMaskType(x_native::MaskType),
+    /// Figma's **List style** picker in the type-details block (help
+    /// 360040449773): none, bulleted, numbered.
+    ToggleListStyle,
+    SetListStyle(x_native::ListStyle),
+    /// The keyboard-shortcuts panel's scrim (`⇧?` opens the sheet): a
+    /// press anywhere outside it closes it.
+    CloseShortcuts,
+    /// The Layout section's **Resizing** control for a text layer (help
+    /// 27378154668951): Fixed size <-> Auto width.
+    ToggleTextResize,
+    /// Figma's **Independent corners** toggle on the radius row (help
+    /// 360050986854): opens the corner-radius panel — four fields and the
+    /// smoothing slider.
+    ToggleCorners,
+    /// The corner-smoothing slider, 0–1 (0–100% on screen).
+    SetCornerSmoothing(f64),
+    /// Figma's `iOS` shortcut in that panel: smoothing 60%.
+    CornerSmoothingIos,
+    /// Pressing an effect row (not its buttons) arms the reorder drag.
+    EffectRow(usize),
     /// UX Analysis actions (Quant-UX inspired)
     UxAccessibility,
     UxUserFlow,
@@ -791,10 +2328,25 @@ pub enum Action {
     RotateImage {
         clockwise: bool,
     },
+    /// Figma's **Flip horizontal** / **Flip vertical** (help 360039956914:
+    /// *"Flip horizontal: ⇧ Shift H … Flip vertical: ⇧ Shift V"*). Image
+    /// layers only: the flip the engine carries lives on `ImagePlacement`,
+    /// so a vector or a group has nothing to hold it yet.
+    FlipImage {
+        horizontal: bool,
+    },
     /// Set image fill mode (fill/fit/crop/tile)
     SetImageFillMode {
         mode: String,
     },
+    /// Apply the crop session (help 360040675194), folding the session's
+    /// writes into one undo entry. ⏎ and a click outside the frame reach this.
+    CropApply,
+    /// Esc — put the picture and its fill mode back and close the mode.
+    CropCancel,
+    /// Figma's **Resize to fit** in the crop section: the layer becomes the
+    /// size of the whole picture, uncropped.
+    CropResizeToFit,
 }
 
 /// Commands offered by the editor right-click context menu
@@ -820,6 +2372,13 @@ pub enum CtxCmd {
     Delete,
     Group,
     Ungroup,
+    /// Figma's Frame selection (⌥⌘G): wrap the selection in a new Frame sized
+    /// to the members' collective bounds.
+    FrameSelection,
+    /// Figma's "Wrap in new section": wrap the selection in a labelled
+    /// Section. Sections are canvas elements, so a selection inside a frame
+    /// or a group is lifted to the canvas first, keeping its place.
+    SectionSelection,
     MakeComponent,
     /// boolean combine of the two selected shapes (engine boolean_selected)
     Union,
@@ -841,6 +2400,24 @@ pub enum CtxCmd {
     SelectAll,
 }
 
+/// What a colour popover writes to. Figma applies a paint to a fill, a stroke
+/// **or an effect** — *"Open the color picker in the Fill or Stroke sections …
+/// then click Apply blend mode"*, and a shadow's colour is its **Fill** row —
+/// so the popover's target is not a bool any more.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaintTarget {
+    Fill,
+    Stroke,
+    /// The **Fill** of the effect at this index in the selected layer's stack.
+    Effect(usize),
+}
+
+impl PaintTarget {
+    pub fn is_fill(self) -> bool {
+        matches!(self, PaintTarget::Fill)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldId {
     DocName,
@@ -855,9 +2432,37 @@ pub enum FieldId {
     /// `App::var_edit_name`, resolved at click from `var_value_rects` —
     /// same pattern as `InstanceProp`).
     VarValue,
+    /// Scale panel: the multiplier. A percentage on screen ("100%"); a bare
+    /// number is read as one, and an `x` suffix as a plain multiplier.
+    ScaleFactor,
+    /// Scale panel: the width field. Typing a number scales the selection so
+    /// the box BECOMES that width — proportionally, which is the whole
+    /// difference from the inspector's own W (Figma: "the other dimension
+    /// field will automatically update").
+    ScaleW,
+    /// Scale panel: the height field, the width's mirror.
+    ScaleH,
+    /// Arc properties (Figma's Appearance section): where the sweep begins,
+    /// in degrees.
+    ArcStart,
+    /// Arc properties: how far the sweep runs, in degrees — a `%` is read as
+    /// a share of the circle.
+    ArcSweep,
+    /// Arc properties: the fraction of the radius cut out of the middle, on
+    /// screen a percentage (Figma's Ratio; 0 is a solid wedge, 85 a thin ring).
+    ArcRatio,
+    /// Figma's Count, on the two shapes that carry one: a polygon's sides, a
+    /// star's points. Both are 3..60 and neither moves the box.
+    ShapeCount,
+    /// Figma's Ratio on a star: the inner points' distance from the centre, on
+    /// screen a percentage of the radius.
+    StarRatio,
     /// Tokens panel: variable name editing (rename-as-alias; same target
     /// resolution as `VarValue`, from `var_name_rects`).
     VarName,
+    /// layers panel: inline layer rename, opened by double-clicking a layer
+    /// NAME (Figma). The node being renamed lives in `App::layer_edit_id`.
+    LayerName,
     /// layers panel: tree search query (row above the tree; audit F8).
     /// Enter keeps the field open — the query lives in
     /// `OpenDoc::tree_search` and filters the tree live.
@@ -869,14 +2474,32 @@ pub enum FieldId {
     Rotation,
     Opacity,
     Radius,
+    /// The corner panel's four fields (Figma's **Independent corners**); the
+    /// index is which corner it edits — 0 tl, 1 tr, 2 br, 3 bl, the order
+    /// `Node::corner_radii` stores them in.
+    CornerRadius(usize),
     FillHex,
     FillAlpha,
     StrokeHex,
     StrokeAlpha,
     StrokeWeight,
+    /// Figma's **Dash** and **Gap** (the Dashed style's two numbers), and the
+    /// **Dashes** pattern the Custom style takes (`10, 5, 5, 5`).
+    StrokeDash,
+    StrokeGap,
+    StrokeDashes,
+    /// Figma's **Miter angle**, in degrees: the field speaks the angle, the
+    /// model stores the limit `miter_angle_to_limit` derives from it.
+    StrokeMiter,
     Gap,
     PadH,
     PadV,
+    /// Figma's min/max dimensions on an auto-layout frame: the two fields the
+    /// Width/Height dropdown's "Add min …"/"Add max …" rows create.
+    MinWidth,
+    MaxWidth,
+    MinHeight,
+    MaxHeight,
     FontFamily,
     FontWeight,
     FontSize,
@@ -909,6 +2532,39 @@ pub enum FieldId {
     FindQuery,
     /// Find panel: replacement string
     FindReplace,
+    /// Effects list: one numeric setting of one effect (Figma's X / Y / Blur /
+    /// Radius / Density rows). Which field is which comes from the model
+    /// ([`x_native::EffectField`]) — the index is the row's place in the stack.
+    EffectX(usize),
+    EffectY(usize),
+    EffectBlur(usize),
+    EffectRadius(usize),
+    EffectDensity(usize),
+}
+
+impl FieldId {
+    /// The field a settings row edits, for the effect at `index`.
+    pub fn for_effect(index: usize, field: x_native::EffectField) -> FieldId {
+        match field {
+            x_native::EffectField::X => FieldId::EffectX(index),
+            x_native::EffectField::Y => FieldId::EffectY(index),
+            x_native::EffectField::Blur => FieldId::EffectBlur(index),
+            x_native::EffectField::Radius => FieldId::EffectRadius(index),
+            x_native::EffectField::Density => FieldId::EffectDensity(index),
+        }
+    }
+    /// The effect row and setting this field edits — the inverse, so the text
+    /// commit path has ONE place to resolve an effect field from.
+    pub fn effect_target(self) -> Option<(usize, x_native::EffectField)> {
+        match self {
+            FieldId::EffectX(i) => Some((i, x_native::EffectField::X)),
+            FieldId::EffectY(i) => Some((i, x_native::EffectField::Y)),
+            FieldId::EffectBlur(i) => Some((i, x_native::EffectField::Blur)),
+            FieldId::EffectRadius(i) => Some((i, x_native::EffectField::Radius)),
+            FieldId::EffectDensity(i) => Some((i, x_native::EffectField::Density)),
+            _ => None,
+        }
+    }
 }
 
 /// An armed `AfterDelay` trigger in the flow preview: fire `action` when
@@ -1052,6 +2708,10 @@ pub struct FlowState {
     pub press_span: Option<x_native::editor::WhileSpan>,
     /// Preview device chrome toggle (mobile/tablet frame presentation).
     pub device_frame: bool,
+    /// the running Figma **Animate matching layers** transition, when the
+    /// last navigation asked for one — the shared engine's tick, so the
+    /// viewer and the editor player cannot disagree on its shape.
+    pub tick: Option<x_native::editor::SmartTick>,
 }
 
 /// Clipboard for copying/pasting layer properties (Figma parity)
@@ -1123,6 +2783,15 @@ pub enum Drag {
         start: Point,
         start_pan: (f64, f64),
     },
+    /// Effects list reorder (Figma: *"you click and drag the handles to
+    /// reorder the effects"*). A press on a row arms it; passing the drag
+    /// threshold makes it live, and the row under the pointer becomes `over`.
+    EffectRow {
+        from: usize,
+        start: Point,
+        active: bool,
+        over: Option<usize>,
+    },
     /// Moving the current selection.
     MoveSel {
         last: Point,
@@ -1132,10 +2801,13 @@ pub enum Drag {
         /// Ctrl+Z reverts the whole drag).
         base_depth: usize,
     },
-    /// Rubber-band selection.
+    /// Rubber-band selection. `deep` is the ⌘/Ctrl modifier read at press: it
+    /// decides whether layers nested inside a frame can answer, which is the
+    /// one thing Figma's ⌘-drag marquee adds to a plain one.
     Marquee {
         start: Point,
         cur: Point,
+        deep: bool,
     },
     /// P12: dragging a layers-tree row. `active` once the pointer moved
     /// past the threshold; `over` = live drop target (row id, zone:
@@ -1169,6 +2841,124 @@ pub enum Drag {
         start: Point,
         /// Undo-stack depth at press; release merges the per-event resize
         /// entries into ONE undo step (see `MoveSel::base_depth`).
+        base_depth: usize,
+        /// Figma's **Space while resizing** (master row 2.12): the pointer the
+        /// last move-with-`Space` event landed on — `None` until the first one,
+        /// so the box travels from where `Space` went down instead of jumping
+        /// when it does.
+        space: Option<Point>,
+        /// How far that move has carried the box, added to `orig` and `start`
+        /// while the resize runs: letting `Space` go resumes the resize from
+        /// the box's new place (*"Release Space to return to the previous
+        /// action"*), not from the place the press began.
+        offset: (f64, f64),
+    },
+    /// Crop-mode drag (help 360040675194): the picture scales about the
+    /// corner opposite the one being held and the frame never moves. `corner`
+    /// is `CROP_PAN` when the press landed inside the frame, which pushes the
+    /// picture around instead.
+    Crop {
+        corner: usize,
+        start: Point,
+        base_depth: usize,
+    },
+    /// Figma's canvas **corner radius handle** (help 360050986854): a white
+    /// circle just inside a corner of a rectangle or frame. The radius is the
+    /// handle's travel along the corner's inward diagonal, so the drag is
+    /// *relative* — a press a pixel off the dot does not jump the value. ⌥
+    /// rounds only the corner being held.
+    RadiusCorner {
+        corner: usize,
+        start: Point,
+        start_r: f64,
+        uniform: bool,
+        base_depth: usize,
+    },
+    /// The corner-smoothing slider: a press takes the track and every move
+    /// re-reads the value from the pointer's x.
+    CornerSmooth {
+        track: Rect,
+        base_depth: usize,
+    },
+    /// Scale-tool drag (K): the selection box grows about the corner the
+    /// pointer is NOT holding. `parts` is built once at press — the anchor is
+    /// the fixed point of the mapping, so it never moves, and `applied` is the
+    /// factor already committed by this gesture (each move applies the RATIO
+    /// to what is on screen, which is what keeps the drag incremental).
+    ScaleSel {
+        corner: usize,
+        orig: (f64, f64, f64, f64), // x, y, w, h at drag start
+        start: Point,
+        base_depth: usize,
+        parts: Vec<(String, f64, f64)>, // (id, anchor x, anchor y) in parent space
+        applied: f64,
+    },
+    /// Figma's canvas rotate (`360039956914`): *"Hover just outside one of the
+    /// layer's bounds until the icon appears. Click and drag to rotate your
+    /// selection … Hold down Shift to snap rotation values to increments of
+    /// 15."* `base` is the selection as it stood at the press and `acc` the
+    /// angle swept so far, so every move asks for the TOTAL delta from the
+    /// press — the last move wins, and a pointer that crosses ±180° keeps
+    /// turning instead of jumping a circle.
+    RotateSel {
+        pivot: (f64, f64),
+        last: f64,
+        acc: f64,
+        base: Vec<(String, f64, f64, f64)>, // (id, x, y, rotation) at the press
+        base_depth: usize,
+    },
+    /// The rotation-origin target (`⌥R`): *"Click and drag the target to move
+    /// the rotation origin."* Written live through `Editor::set_origin`, and
+    /// merged into one undo entry on release like every other gesture here.
+    RotationOrigin {
+        base_depth: usize,
+    },
+    /// Scale-tool BODY drag (K): Figma's "hover over the object's bounding box
+    /// ... then click-and-drag to resize". The anchor is the corner opposite
+    /// the nearest one to the press, and the press point itself rides the
+    /// pointer — the panel's anchor box is a setting for its multiplier and
+    /// dimension fields, not for the canvas gesture.
+    ScaleBody {
+        orig: (f64, f64, f64, f64), // x, y, w, h at drag start
+        anchor: (f64, f64),
+        grab: Point,
+        base_depth: usize,
+        parts: Vec<(String, f64, f64)>, // (id, anchor x, anchor y) in parent space
+        applied: f64,
+    },
+    /// Figma's canvas connection gesture: the circle on the selected layer's
+    /// edge, dragged towards another frame. "Figma will snap the connection
+    /// noodle to the Case study frame when you get close enough. Release your
+    /// cursor to complete the connection."
+    ProtoConnect {
+        src: String,
+        cur: Point,
+        /// The frame the noodle is currently snapped to, if any.
+        target: Option<String>,
+    },
+    /// Figma's arc handles on an ellipse or an arc (K is not involved: the
+    /// handles belong to the layer, and they are dragged with the Move tool —
+    /// A polygon's or star's Count handle — and, on a star, its Ratio handle.
+    /// `f0` is the pointer's radial fraction when the press took hold, so the
+    /// Count gesture is measured from where the drag began.
+    ShapeHandle {
+        id: String,
+        part: ShapePart,
+        count: usize,
+        f0: f64,
+        base_depth: usize,
+    },
+    /// "hover your cursor over the ellipse until you see the Arc handle").
+    /// The kind of the layer is written on every move, so what is on screen is
+    /// already the shape the release commits; the box never moves.
+    ArcHandle {
+        id: String,
+        part: ArcPart,
+        /// The arc as it was when the drag started — every move recomputes
+        /// from these, so the gesture cannot accumulate rounding.
+        start: f64,
+        end: f64,
+        ratio: f64,
         base_depth: usize,
     },
     /// Pen-tool polyline in progress (world-space points).
@@ -1237,6 +3027,17 @@ pub enum Drag {
         start: Point,
         start_pan: (f64, f64),
     },
+    /// Pencil: the freehand stroke in progress. Points are world space; the
+    /// layer it joins is decided on release by the same draw-it-in rule every
+    /// other creation tool follows.
+    Pencil {
+        points: Vec<Point>,
+    },
+    /// Brush: the painted stroke in progress. Sampled exactly like the pencil's
+    /// — the two tools share the gesture and differ in the mark they leave.
+    Brush {
+        points: Vec<Point>,
+    },
     /// Board: Pen tool freehand drawing.
     BoardPen {
         id: String,
@@ -1266,10 +3067,6 @@ pub struct OpenDoc {
     /// — the mock keeps it independent from the active tab name; None
     /// falls back to `name`.
     pub file_label: Option<String>,
-    /// v45 mock left-panel layers (HTML `layers` const). The mock renders
-    /// the tree from this hardcoded flat array, intentionally independent
-    /// from the canvas board. Empty → render the real document tree.
-    pub mock_layers: Vec<MockLayer>,
     /// Seeded mock tabs keep reference tab widths (a few px past the text
     /// advances, like a browser's flex tab layout);
     /// None → derive from the text measure (user-created tabs).
@@ -1317,49 +3114,11 @@ pub struct OpenDoc {
     pub color_picker_stroke_open: bool,
 }
 
-/// One row of the v45 mock's left-panel layers array (HTML `layers` const):
-/// flat display data with explicit indents — e.g. `section-header` renders
-/// at indent 2 under an indent-1 `pay-row` that itself has no chevron.
-#[derive(Debug, Clone)]
-pub struct MockLayer {
-    pub name: String,
-    pub icon: &'static str,
-    pub indent: usize,
-    pub expanded: bool,
-    pub has_children: bool,
-    pub selected: bool,
-}
-
-fn demo_layers() -> Vec<MockLayer> {
-    let m = |name: &str, icon: &'static str, indent: usize, expanded: bool, has_children: bool| {
-        MockLayer {
-            name: name.into(),
-            icon,
-            indent,
-            expanded,
-            has_children,
-            selected: false,
-        }
-    };
-    vec![
-        m("Board", "frame#", 0, false, false),
-        m("order-details", "layout-grid", 0, false, true),
-        m("Header", "type", 1, false, false),
-        m("Content", "layout-grid", 1, false, false),
-        m("Rectangle 12", "square", 0, false, false),
-        m("payment-methods", "layout-grid", 0, true, true),
-        m("pay-row", "frame#", 1, false, false),
-        m("section-header", "type", 2, false, false),
-        m("pay-row", "frame#", 1, true, true),
-        m("Ellipse 3", "circle", 2, false, false),
-        m("Vector", "pen-tool", 2, false, false),
-    ]
-}
-
 impl OpenDoc {
     /// The v45 HTML editor mock's boot document: file "Liquor Delivery App
-    /// UI" on Page 3 of 3, the Frame board (375×420 @ 0,60) as content, and
-    /// the mock layers array for the left panel.
+    /// UI" on Page 3 of 3 with the Frame board (375×420 @ 0,60) as content.
+    /// The left panel renders this document's real tree — there is no
+    /// separate mock layer list to drift from it.
     pub fn demo_doc() -> Self {
         let mut d = OpenDoc::demo_blank("DESIGN_SYSTEM.md".into());
         d.file_label = Some("Liquor Delivery App UI".into());
@@ -1376,7 +3135,6 @@ impl OpenDoc {
             d.doc.pages.insert(n - 1, p);
         }
         d.page = 2;
-        d.mock_layers = demo_layers();
         d
     }
 
@@ -1756,7 +3514,6 @@ impl OpenDoc {
             frame_cache: x_native::FrameCache::new(),
             prepared_canvas: None,
             file_label: None,
-            mock_layers: Vec::new(),
             tab_w: None,
             doc,
             editors: vec![editor],
@@ -1811,7 +3568,6 @@ impl OpenDoc {
             frame_cache: x_native::FrameCache::new(),
             prepared_canvas: None,
             file_label: None,
-            mock_layers: Vec::new(),
             tab_w: None,
             doc,
             editors,
@@ -1864,6 +3620,25 @@ impl OpenDoc {
 
     pub fn selected_id(&self) -> Option<String> {
         self.editor_ref().selection.last().cloned()
+    }
+
+    /// The selected layer, when it is a text layer.
+    pub fn selected_text_id(&self) -> Option<String> {
+        let id = self.selected_id()?;
+        crate::editor_ui::find_node(&self.editor_ref().root, id.as_str())
+            .filter(|n| matches!(n.kind, NodeKind::Text { .. }))
+            .map(|_| id)
+    }
+
+    /// True when the selected layer is text on Figma's **Fixed size**
+    /// (help 27378154668951). The `tm` binding is the resizing property;
+    /// absent means auto width.
+    pub fn is_text_fixed(&self) -> bool {
+        let Some(id) = self.selected_text_id() else {
+            return false;
+        };
+        crate::editor_ui::find_node(&self.editor_ref().root, id.as_str())
+            .is_some_and(|n| n.bindings.get("tm").map(String::as_str) == Some("fixed"))
     }
 }
 
@@ -1929,11 +3704,45 @@ pub struct App {
     pub left_w: f64,
     pub right_w: f64,
     pub tool: Tool,
+    /// Which of the frame slot's two tools the toolbar draws when the active
+    /// tool is neither: Figma keeps the frame and the section on ONE slot and
+    /// shows whichever you used last.
+    pub frame_cluster: Tool,
+    /// The Brush's style (Figma Draw's "stroke style"): which mark the tool
+    /// paints. A tool setting, not a document one — it survives the stroke.
+    pub brush_style: BrushStyle,
     pub drag: Option<Drag>,
     pub field: Option<FieldEdit>,
     /// prototype flow preview (None = normal editing)
     pub flow: Option<FlowState>,
     pub dropdown_frame: bool,
+    /// Open axis of the Constraints block (`None` = closed)
+    pub dropdown_constraint: Option<ConstraintAxis>,
+    /// Screen anchor of the open Constraints field, recorded while the panel
+    /// paints: the panel scrolls, so a hard-coded offset would drift away
+    /// from the field it belongs to.
+    pub constraint_dd_anchor: (f64, f64),
+    /// Open Prototype-tab Scroll behavior menu (`None` = closed), and the
+    /// screen anchor its field recorded while painting — same reason as the
+    /// Constraints field above.
+    pub dropdown_proto_scroll: Option<ProtoScrollMenu>,
+    pub proto_scroll_dd_anchor: (f64, f64),
+    /// Open Prototype-tab **trigger** menu — the index of the interaction
+    /// whose row it belongs to — and the screen anchor that row recorded while
+    /// painting. Figma's trigger control is a dropdown (help 360040315773);
+    /// `Trigger::all` is the list it shows.
+    pub dropdown_proto_trigger: Option<usize>,
+    pub proto_trigger_dd_anchor: (f64, f64),
+    /// Open auto-layout **Width**/**Height** menu (`true` = the Width field)
+    /// and the screen anchor its chip recorded while painting. Figma's W/H
+    /// control is a dropdown (help 360040451373), and its min/max rows live in
+    /// it — "Open the Width dropdown to find Add min width and Add max width".
+    pub dropdown_layout_axis: Option<bool>,
+    pub layout_axis_dd_anchor: (f64, f64),
+    /// Open **canvas stacking** menu and its anchor, in the auto-layout
+    /// settings band (help 31289464393751: "Next to canvas stacking, select").
+    pub dropdown_stacking: bool,
+    pub stacking_dd_anchor: (f64, f64),
     /// Zoom menu open (right-panel header, audit F4)
     pub dropdown_zoom: bool,
     /// Hover labels registered this frame (P10); paint_tooltip draws
@@ -1980,6 +3789,15 @@ pub struct App {
     pub snap_lines: Vec<(f64, char)>,
     /// Last click (instant + screen pos) for double-click detection
     pub last_click: Option<(std::time::Instant, Point)>,
+    /// Last CHROME press: instant, screen pos, and whether it hit a
+    /// toggle-class row. Chrome presses deliberately do not touch
+    /// `last_click` (that one belongs to the canvas), so the panels keep
+    /// their own record — the repeat-press guard and the page rows'
+    /// double-click rename both read it (`run.rs` chrome dispatch).
+    pub last_chrome: Option<(std::time::Instant, Point, bool)>,
+    /// Node being renamed inline by `FieldId::LayerName` (the tree's name zone
+    /// resolves to this id; the field itself only carries the buffer).
+    pub layer_edit_id: Option<String>,
     /// Node being inline-edited
     pub text_edit: Option<String>,
     /// Rich-text styling of the OPEN inline editor (char-index runs over
@@ -2039,13 +3857,82 @@ pub struct App {
     /// Context menu system for canvas, layers, pages, inspector, and tool rail
     pub context_menu: ContextMenu,
     /// Color picker popup state: (is_fill, field_rect, is_open)
-    pub color_picker_popup: Option<(bool, Rect, bool)>,
+    pub color_picker_popup: Option<(PaintTarget, Rect, bool)>,
+    /// Effects list (Figma's Effects section): which popovers are open. One at
+    /// a time, the way the panel's other menus behave.
+    pub effect_add_open: bool,
+    pub effect_kind_open: Option<usize>,
+    /// The row whose settings block is expanded (Figma's *Effect settings*).
+    pub effect_settings: Option<usize>,
+    pub effect_blend_open: Option<usize>,
+    pub layer_blend_open: bool,
+    /// The Mask section's type dropdown is open (Figma's Mask section).
+    pub mask_type_open: bool,
+    /// Figma's **List style** picker is open (the type-details block).
+    pub list_style_open: bool,
+    /// Figma's **Advanced stroke settings** panel is open (help 360049283914)
+    /// — the style icon in the Stroke section.
+    pub stroke_style_open: bool,
+    /// Where that panel hangs from, recorded by the panel pass.
+    pub stroke_style_anchor: (f64, f64),
+    /// The open **Start point**/**End point** menu: `Some(false)` for the
+    /// start, `Some(true)` for the end. Figma's cap chooser is a dropdown on
+    /// the row, so the menu anchors to the row the panel painted.
+    pub stroke_cap_open: Option<bool>,
+    pub stroke_cap_anchor: (f64, f64),
+    /// Figma's corner-radius panel is open (the **Independent corners** row).
+    pub corner_open: bool,
+    /// Where that panel hangs from, recorded by the panel pass.
+    pub corner_anchor: (f64, f64),
+    /// The smoothing slider's track, recorded by the popover pass so the press
+    /// can take hold of it as a drag.
+    pub corner_slider: Option<Rect>,
+    pub paint_blend_open: Option<PaintTarget>,
+    /// Where a blend menu anchors, recorded by the paint pass.
+    pub blend_dd_anchor: (f64, f64),
+    /// Where the Effects `+` menu anchors, recorded by the panel pass: the
+    /// menu itself paints in the popover pass, above the panel's clip.
+    pub effect_add_anchor: (f64, f64),
+    /// `⌥R`: the rotation-origin target is showing, so the canvas offers it to
+    /// drag. Figma's shortcut, and Figma's name for the thing it reveals.
+    pub rotation_origin_on: bool,
+    /// The effect rows the paint pass laid out (top to bottom) — the drop
+    /// targets for reordering by dragging a row, which is Figma's gesture:
+    /// *"you click and drag the handles to reorder the effects"*.
+    pub effect_rows: Vec<Rect>,
+    /// The Mask row's rect from the last paint — the anchor the panel scrolls
+    /// to when the Mask section has to be reached (tests, screenshots).
+    pub mask_row: Option<Rect>,
+    /// The Stroke section's style icon from the last paint, for the same
+    /// reason: the panel drops hit rects that leave its viewport, so reaching
+    /// the icon means scrolling the section in (`scroll_stroke_into_view`).
+    pub stroke_row: Option<Rect>,
+    /// The Image section's **Flip horizontal** button, recorded for the same
+    /// reason (`scroll_image_into_view`).
+    pub image_row: Option<Rect>,
+    /// Figma's Place image queue: the assets picked with ⇧⌘K, in order. The
+    /// place-image tool is armed while this is non-empty, and one file leaves
+    /// it per placement.
+    pub placing_images: Vec<String>,
+    /// The open crop session, if Figma's crop mode is on (⌘⌥ no: the mode is
+    /// entered by double-clicking an image or by its fill mode becoming
+    /// **Crop** — help 360040675194).
+    pub crop: Option<CropSession>,
+    /// The row a drag is over while reordering.
+    pub effect_drag_over: Option<usize>,
     pub status: String,
     // Navigation bar state (Figma-style)
     pub nav_tab: NavTab,
     pub nav_bar_w: f64,
     pub sidebar_resizing: bool,
     pub ui_minimized: bool,
+    /// Figma's `⇧⌘\` — hide the LEFT panel only, leaving the canvas and
+    /// the inspector (`⌘\` hides the whole UI, `ui_minimized`). Two keys,
+    /// two states, so each does what Figma's own does.
+    pub left_minimized: bool,
+    /// Figma's keyboard-shortcuts panel — `⇧?` (the help page's `⌃⇧?`;
+    /// this host reports the character, not the Control key).
+    pub shortcuts_open: bool,
     pub app_menu: AppMenu,
     pub find_replace: FindReplace,
     pub notifications: NotificationCenter,
@@ -2053,6 +3940,12 @@ pub struct App {
     /// Inspector W/H lock state; kept at app level because it is UI intent,
     /// not a document property.
     pub aspect_ratio_locked: bool,
+    /// Scale panel: which of the nine anchor cells stays put (4 = centre, the
+    /// cell Figma's panel opens on).
+    pub scale_cell: usize,
+    /// The connection a press on a canvas noodle selected — what Delete
+    /// removes, as an index into `editor_ui::page_connections` for this page.
+    pub conn_sel: Option<usize>,
     pub zoom: f64,
     pub pan: (f64, f64),
     pub ctrl: bool,
@@ -2073,11 +3966,238 @@ pub struct App {
     pub mouse: Point,
     /// Space held → drag pans the canvas (legacy behavior, kept).
     pub space_pan: bool,
+    /// Where the right button went down (screen space). `Some` while it is
+    /// held: a right CLICK opens the context menu, a right DRAG marquees
+    /// (Figma's gesture), so the press point has to survive the drag.
+    pub right_origin: Option<Point>,
+    /// The right button has travelled far enough to count as a drag — the
+    /// context menu has been dismissed and the marquee owns the gesture.
+    pub right_dragging: bool,
+    /// The welcome / quick-start card is open on demand (Help). The card
+    /// also shows once on a fresh install, but it is reachable afterwards.
+    pub welcome_open: bool,
 }
+
+/// How many page rows the rail shows at once. The band is part of the fixed
+/// left rail, so the list is WINDOWED: `pages_rows` slides the window with the
+/// active page, so every page stays reachable (the old code swapped the last
+/// row for a sentinel `n` — an index one past the end of `pages` — so with
+/// more than 3 pages the 4th was never drawn and never deletable).
+pub(crate) const PAGES_MAX_ROWS: usize = 4;
 
 pub const USER_NAME: &str = "You";
 
 impl App {
+    /// The tool the toolbar's frame slot draws: the active frame-or-section
+    /// tool when one of them is active, otherwise the one used last. Figma's
+    /// slot works the same way, with a caret that switches by hand.
+    pub fn frame_slot(&self) -> Tool {
+        match self.tool {
+            Tool::Frame | Tool::Section => self.tool,
+            _ => self.frame_cluster,
+        }
+    }
+
+    /// Select a tool, remembering the frame slot's choice so the slot can
+    /// show the section after the tool has moved on.
+    pub fn select_tool(&mut self, t: Tool) {
+        if matches!(t, Tool::Frame | Tool::Section) {
+            self.frame_cluster = t;
+        }
+        // picking another tool abandons a pending placement — the queue is
+        // Figma's place-image cursor, and there is only one cursor
+        if t != Tool::PlaceImage {
+            self.placing_images.clear();
+        }
+        self.tool = t;
+    }
+
+    /// Drop a pending place-image queue (Esc, or another tool). `true` when
+    /// there was one, so Esc can spend itself on it.
+    pub fn cancel_image_placement(&mut self) -> bool {
+        if self.placing_images.is_empty() {
+            return false;
+        }
+        self.placing_images.clear();
+        if self.tool == Tool::PlaceImage {
+            self.tool = Tool::Select;
+        }
+        self.status = "Image placement cancelled".into();
+        true
+    }
+
+    /// A placed image's own pixel size. Figma drops a click at the file's
+    /// natural size, and the asset store already knows it — `dimensions` is a
+    /// header parse (`probe_dimensions`), never a decode.
+    pub fn image_natural_size(&self, asset: &str) -> Option<(f64, f64)> {
+        let rec = self.docs.get(self.active)?.doc.assets.get(asset)?;
+        let (w, h) = rec.dimensions?;
+        Some((f64::from(w), f64::from(h)))
+    }
+
+    /// The layer name a placed image takes: the file it came from, which is
+    /// what Figma names the layer.
+    pub fn image_label(&self, asset: &str) -> String {
+        self.docs
+            .get(self.active)
+            .and_then(|d| d.doc.assets.get(asset))
+            .map(|r| r.name.clone())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| "Image".into())
+    }
+
+    /// Enter Figma's crop mode on an image layer (help 360040675194). The mode
+    /// switches the fill mode to **Crop** — which is what cropping an image
+    /// does in Figma — and remembers the placement and the fill mode from
+    /// before, so Esc can put them back.
+    pub fn begin_crop(&mut self, id: &str) -> bool {
+        if self.crop.as_ref().is_some_and(|c| c.id == id) {
+            return true;
+        }
+        let (fit, placement) = {
+            let Some(n) = crate::editor_ui::find_node(&self.doc_ref().editor_ref().root, id) else {
+                return false;
+            };
+            match &n.kind {
+                x_native::NodeKind::Image { fit, placement, .. } => (*fit, *placement),
+                _ => return false,
+            }
+        };
+        let mut steps = 0usize;
+        if fit != x_native::ImageFit::Crop
+            && self
+                .doc()
+                .editor()
+                .set_image_fit(id, x_native::ImageFit::Crop)
+        {
+            steps += 1;
+        }
+        self.crop = Some(CropSession {
+            id: id.to_string(),
+            start: placement,
+            start_fit: fit,
+            steps,
+        });
+        self.status = "Cropping - drag a corner, Enter to apply, Esc to cancel".into();
+        true
+    }
+
+    /// Figma's **Flip horizontal** / **Flip vertical** (help 360039956914).
+    /// ⇧H / ⇧V, the right-click rows and the Image section's buttons all reach
+    /// this. Every image layer in the selection mirrors on the asked axis and
+    /// the whole gesture lands as ONE undo entry — the fold `crop_apply` makes
+    /// for a multi-write session.
+    pub fn flip_images(&mut self, horizontal: bool) -> usize {
+        let ids: Vec<String> = self.doc().editor_ref().selection.clone();
+        let mut wrote = 0usize;
+        for id in &ids {
+            let Some(next) = self.flipped_placement(id.as_str(), horizontal) else {
+                continue;
+            };
+            if self.doc().editor().set_image_placement(id.as_str(), next) {
+                wrote += 1;
+            }
+        }
+        if wrote > 1 {
+            self.doc().editor().merge_last(wrote);
+        }
+        wrote
+    }
+
+    /// The placement a layer would carry after the flip, when it is an image
+    /// layer — the read half of `flip_images`, kept apart so the borrow of the
+    /// document ends before the write starts.
+    fn flipped_placement(&self, id: &str, horizontal: bool) -> Option<x_native::ImagePlacement> {
+        let doc = self.doc_ref();
+        let node = crate::editor_ui::find_node(&doc.editor_ref().root, id)?;
+        let NodeKind::Image { placement, .. } = &node.kind else {
+            return None;
+        };
+        let mut next = *placement;
+        if horizontal {
+            next.flip_h = !next.flip_h;
+        } else {
+            next.flip_v = !next.flip_v;
+        }
+        Some(next)
+    }
+
+    /// Apply the crop: the session's writes become one undo entry, which is
+    /// what Figma's *"click on the canvas or press Enter"* does.
+    pub fn crop_apply(&mut self) -> bool {
+        let Some(session) = self.crop.take() else {
+            return false;
+        };
+        if session.steps > 1 {
+            let editor = self.doc().editor();
+            editor.merge_last(session.steps);
+        }
+        self.mark_dirty();
+        self.status = "Cropped".into();
+        true
+    }
+
+    /// Esc: put the picture and its fill mode back exactly as they were, and
+    /// fold the session — including the putting back — into one entry.
+    pub fn crop_cancel(&mut self) -> bool {
+        let Some(session) = self.crop.take() else {
+            return false;
+        };
+        let mut wrote = 0usize;
+        if self
+            .doc()
+            .editor()
+            .set_image_placement(&session.id, session.start)
+        {
+            wrote += 1;
+        }
+        if self
+            .doc()
+            .editor()
+            .set_image_fit(&session.id, session.start_fit)
+        {
+            wrote += 1;
+        }
+        let steps = session.steps + wrote;
+        if steps > 1 {
+            let editor = self.doc().editor();
+            editor.merge_last(steps);
+        }
+        self.status = "Crop cancelled".into();
+        true
+    }
+
+    /// The crop section's **Resize to fit** (help 360040675194): the layer
+    /// becomes the picture's own size, uncropped.
+    pub fn crop_resize_to_fit(&mut self) -> bool {
+        let Some(id) = self.crop.as_ref().map(|c| c.id.clone()) else {
+            return false;
+        };
+        let asset = {
+            let Some(n) = crate::editor_ui::find_node(&self.doc_ref().editor_ref().root, &id)
+            else {
+                return false;
+            };
+            match &n.kind {
+                x_native::NodeKind::Image { asset, .. } => asset.clone(),
+                _ => return false,
+            }
+        };
+        let Some((iw, ih)) = self.image_natural_size(&asset) else {
+            self.status = "That image has no readable size".into();
+            return false;
+        };
+        if !self.doc().editor().fit_image_to_picture(&id, iw, ih) {
+            return false;
+        }
+        if let Some(s) = self.crop.as_mut() {
+            s.steps += 1;
+        }
+        self.mark_dirty();
+        self.status = format!("Resized to fit the picture - {iw:.0} x {ih:.0}");
+        true
+    }
+
     pub fn new() -> Self {
         let mut app = Self::demo();
         app.demo_mode = false;
@@ -2143,10 +4263,22 @@ impl App {
             left_w: ED_LEFT_W,
             right_w: ED_RIGHT_W,
             tool: Tool::Select,
+            frame_cluster: Tool::Frame,
+            brush_style: BrushStyle::Ink,
             drag: None,
             field: None,
             flow: None,
             dropdown_frame: false,
+            dropdown_constraint: None,
+            constraint_dd_anchor: (0.0, 0.0),
+            dropdown_proto_scroll: None,
+            proto_scroll_dd_anchor: (0.0, 0.0),
+            dropdown_proto_trigger: None,
+            proto_trigger_dd_anchor: (0.0, 0.0),
+            dropdown_layout_axis: None,
+            layout_axis_dd_anchor: (0.0, 0.0),
+            dropdown_stacking: false,
+            stacking_dd_anchor: (0.0, 0.0),
             dropdown_zoom: false,
             tooltip: Vec::new(),
             dropdown_lh: false,
@@ -2169,6 +4301,8 @@ impl App {
             align: (0, 2),
             snap_lines: Vec::new(),
             last_click: None,
+            last_chrome: None,
+            layer_edit_id: None,
             text_edit: None,
             text_runs_edit: Vec::new(),
             text_caret: 0,
@@ -2196,11 +4330,38 @@ impl App {
             palette: CommandPalette::new(1440.0, 900.0),
             context_menu: ContextMenu::new(),
             color_picker_popup: None,
+            effect_add_open: false,
+            effect_kind_open: None,
+            effect_settings: None,
+            effect_blend_open: None,
+            layer_blend_open: false,
+            mask_type_open: false,
+            list_style_open: false,
+            stroke_style_open: false,
+            stroke_style_anchor: (0.0, 0.0),
+            stroke_cap_open: None,
+            stroke_cap_anchor: (0.0, 0.0),
+            corner_open: false,
+            corner_anchor: (0.0, 0.0),
+            corner_slider: None,
+            paint_blend_open: None,
+            blend_dd_anchor: (0.0, 0.0),
+            effect_add_anchor: (0.0, 0.0),
+            rotation_origin_on: false,
+            effect_rows: Vec::new(),
+            mask_row: None,
+            stroke_row: None,
+            image_row: None,
+            placing_images: Vec::new(),
+            crop: None,
+            effect_drag_over: None,
             status: String::from("Ready"),
             nav_tab: NavTab::File,
             nav_bar_w: 48.0,
             sidebar_resizing: false,
             ui_minimized: false,
+            left_minimized: false,
+            shortcuts_open: false,
             app_menu: AppMenu::default(),
             find_replace: FindReplace::default(),
             notifications: NotificationCenter::default(),
@@ -2209,6 +4370,8 @@ impl App {
             vector_edit_mode: VectorEditMode::default(),
             // Phase 5: Shape Builder state
             aspect_ratio_locked: false,
+            scale_cell: 4,
+            conn_sel: None,
             zoom: 1.0,
             pan: (0.0, 0.0),
             ctrl: false,
@@ -2222,28 +4385,49 @@ impl App {
             scaled: false,
             mouse: Point::ZERO,
             space_pan: false,
+            right_origin: None,
+            right_dragging: false,
+            welcome_open: false,
         }
     }
 
     // ------------------------------------------------------------- regions
 
+    /// True when `p` is the second press of a double-click on the CHROME: a
+    /// press within 350 ms and 4 px of the last one — the same window the
+    /// canvas uses (`Host::is_double_click`), measured from the chrome's own
+    /// record because the canvas owns `last_click`.
+    pub fn is_repeat_chrome_click(&self, p: Point) -> bool {
+        self.last_chrome
+            .map(|(t, q, _)| {
+                t.elapsed().as_millis() < 350 && (p.x - q.x).abs() < 4.0 && (p.y - q.y).abs() < 4.0
+            })
+            .unwrap_or(false)
+    }
+
     /// PAGES list band geometry — ONE source of truth shared by paint and
     /// hit-testing. Rows start where the old single page field did
-    /// (y0+142), 26px tall, max 4 rows; more pages collapse into a
-    /// "+N more" row whose index is the page COUNT (a sentinel).
+    /// (y0+142), 26px tall, at most `PAGES_MAX_ROWS` of them; the window
+    /// follows the active page, so every page stays reachable and deletable.
     pub fn pages_rows(&self) -> Vec<(usize, Rect)> {
         const ROW_H: f64 = 26.0;
-        const MAX_ROWS: usize = 4;
         let y0 = ED_TITLE_H;
         let sidebar = self.editor_regions().sidebar;
         let sx = sidebar.x0;
         let lw = sidebar.x1;
         let n = self.doc_ref().editors.len();
-        let count = n.min(MAX_ROWS);
-        let overflow = n > MAX_ROWS;
-        (0..count)
+        if n == 0 {
+            return Vec::new();
+        }
+        // Top row of the window. It follows the ACTIVE PAGE (`OpenDoc::page` —
+        // `App::active` is the active DOCUMENT, not the page) once the page
+        // walks past the last visible row, then clamps so the last page is
+        // always on screen. Every page is therefore reachable by selecting it
+        // (menu, keyboard, or the row above it).
+        let top = self.doc_ref().page.min(n.saturating_sub(PAGES_MAX_ROWS));
+        (0..PAGES_MAX_ROWS.min(n))
             .map(|i| {
-                let page_i = if overflow && i == MAX_ROWS - 1 { n } else { i };
+                let page_i = top + i;
                 let ry = y0 + 142.0 + i as f64 * ROW_H;
                 (page_i, Rect::new(sx + 12.0, ry, lw - 13.0, ry + ROW_H))
             })
@@ -2253,9 +4437,8 @@ impl App {
     /// Bottom of the PAGES band (header label at y0+120.5, then the rows).
     pub fn pages_band_bottom(&self) -> f64 {
         const ROW_H: f64 = 26.0;
-        const MAX_ROWS: usize = 4;
         let n = self.doc_ref().editors.len();
-        let count = n.clamp(1, MAX_ROWS);
+        let count = n.clamp(1, PAGES_MAX_ROWS);
         ED_TITLE_H + 142.0 + count as f64 * ROW_H
     }
 
@@ -2268,18 +4451,38 @@ impl App {
         // yields to the right dock's minimum, then the right takes what is
         // left over. Panels therefore stop at the floor instead of overlapping
         // each other and painting the canvas backwards.
-        let want_left = if self.ui_minimized { 0.0 } else { self.left_w };
+        let want_left = if self.ui_minimized || self.left_minimized {
+            0.0
+        } else {
+            self.left_w
+        };
         let room = (self.win_w - self.nav_bar_w - ED_CANVAS_MIN).max(0.0);
         let left = want_left.min((room - ED_RIGHT_MIN).max(0.0));
         let right = self.right_w.min((room - left).max(0.0));
         let left_total = self.nav_bar_w + left;
+        // Chrome yields to chrome: the status band owns the bottom of the
+        // window, so no region (and therefore no artwork) runs underneath it.
+        let bottom = self.status_band().y0.max(ED_TITLE_H);
         EdRegions {
-            left: Rect::new(0.0, ED_TITLE_H, left_total, self.win_h),
-            nav_bar: Rect::new(0.0, ED_TITLE_H, self.nav_bar_w, self.win_h),
-            sidebar: Rect::new(self.nav_bar_w, ED_TITLE_H, left_total, self.win_h),
-            right: Rect::new(self.win_w - right, ED_TITLE_H, self.win_w, self.win_h),
-            canvas: Rect::new(left_total, ED_TITLE_H, self.win_w - right, self.win_h),
+            left: Rect::new(0.0, ED_TITLE_H, left_total, bottom),
+            nav_bar: Rect::new(0.0, ED_TITLE_H, self.nav_bar_w, bottom),
+            sidebar: Rect::new(self.nav_bar_w, ED_TITLE_H, left_total, bottom),
+            right: Rect::new(self.win_w - right, ED_TITLE_H, self.win_w, bottom),
+            canvas: Rect::new(left_total, ED_TITLE_H, self.win_w - right, bottom),
         }
+    }
+
+    /// The status band: the one row the window reserves for a message. It is
+    /// both the message's background and its hit zone, and it is a *row* — the
+    /// regions above stop at its top edge rather than painting under it.
+    pub fn status_band(&self) -> Rect {
+        Rect::new(0.0, self.win_h - ED_STATUS_H, self.win_w, self.win_h)
+    }
+
+    /// The band is chrome. The chrome-less flow viewer (a prototype preview)
+    /// gives the document every pixel and paints no band at all.
+    pub fn paints_status_band(&self) -> bool {
+        self.flow.is_none()
     }
 
     /// The rect the document viewport occupies: the canvas region while
@@ -2332,7 +4535,53 @@ impl App {
         &mut self.doc().guide_drag
     }
 
+    /// The selected layer, when it is a text layer (the panels' question).
+    pub fn selected_text_id(&self) -> Option<String> {
+        self.doc_ref().selected_text_id()
+    }
+
+    /// True when the selected layer is text on Figma's **Fixed size**
+    /// (help 27378154668951).
+    pub fn is_text_fixed(&self) -> bool {
+        self.doc_ref().is_text_fixed()
+    }
+
     /// Immutable document access (paint paths).
+    /// Figma's **⌥ measure** (help 360039956974): with one layer selected,
+    /// hold ⌥ and point at a second one — the distance in each axis, taken
+    /// between the edges the pair faces. The hovered layer is the one the
+    /// canvas already outlines (`hover_node`, the deepest layer under the
+    /// cursor), and an unarmed gesture answers with nothing at all: the
+    /// painter draws this list and decides nothing itself.
+    pub fn measure_spans(&self) -> Vec<Measure> {
+        if self.screen != Screen::Editor
+            || !self.alt
+            || self.drag.is_some()
+            || self.text_edit.is_some()
+            || self.field.is_some()
+        {
+            return Vec::new();
+        }
+        let Some(doc) = self.doc_opt() else {
+            return Vec::new();
+        };
+        let sel = doc.editor_ref().selection.clone();
+        let [sel_id] = sel.as_slice() else {
+            return Vec::new();
+        };
+        let Some(hover) = self.hover_node.clone() else {
+            return Vec::new();
+        };
+        let root = &doc.editor_ref().root;
+        let (Some(a), Some(b)) = (
+            crate::run::world_rect_of(root, sel_id.as_str()),
+            crate::run::world_rect_of(root, hover.as_str()),
+        ) else {
+            return Vec::new();
+        };
+        measure_between(a, b)
+    }
+
     pub fn doc_ref(&self) -> &OpenDoc {
         self.docs
             .get(self.active)
@@ -2375,7 +4624,12 @@ impl App {
     /// Board-specific regions (no side panels for infinite canvas)
     pub fn board_regions(&self) -> BoardRegions {
         BoardRegions {
-            canvas: Rect::new(0.0, ED_TITLE_H, self.win_w, self.win_h),
+            canvas: Rect::new(
+                0.0,
+                ED_TITLE_H,
+                self.win_w,
+                self.status_band().y0.max(ED_TITLE_H),
+            ),
         }
     }
 
@@ -2754,6 +5008,100 @@ impl App {
         self.mark_dirty();
     }
 
+    /// Reset ONE change on the selected instance — Figma's *"Reset > Reset
+    /// [property]"*. False when that layer carried no override.
+    pub fn reset_instance_change(&mut self, target: &str) -> bool {
+        let Some((iid, _)) = self.selected_instance() else {
+            return false;
+        };
+        let doc = self.doc();
+        let ok = doc.editor().reset_one_override(&iid, target);
+        if ok {
+            self.mark_dirty();
+        }
+        ok
+    }
+
+    /// Figma's *"push changes to main component"*: the instance's overrides
+    /// land on the master, so every other instance of it follows. Returns how
+    /// many master layers changed (0 when the master is not in this file).
+    pub fn push_instance_overrides(&mut self, instance_id: &str) -> usize {
+        let doc = self.doc();
+        let changed = doc.editor().push_overrides_to_main(instance_id);
+        if changed > 0 {
+            self.mark_dirty();
+        }
+        changed
+    }
+
+    /// Select the instance's main component — Figma's *"Go to main
+    /// component"* (help 360038665934). Returns the master's id so the caller
+    /// can bring it into view.
+    pub fn go_to_main_component(&mut self) -> Option<String> {
+        let (_, component) = self.selected_instance()?;
+        let master = {
+            let doc = self.doc();
+            x_native::find_master(&doc.editor_ref().root, &component).map(|m| m.id.clone())?
+        };
+        self.doc().editor().selection = vec![master.clone()];
+        self.mark_dirty();
+        Some(master)
+    }
+
+    /// The selection as Figma's instance menu needs it: `None` unless the
+    /// selection is an instance. `in_file` gates both master rows (help
+    /// 360038665934: *"You can only push overrides if the main component is in
+    /// the same file as the instance"*) and `changes` is the list the Reset
+    /// flyout prints — *"Figma only lists properties that have changes
+    /// applied"*.
+    pub fn context_instance(&self) -> Option<crate::context_menu::InstanceMenu> {
+        let doc = self.doc_opt()?;
+        let (id, component) = self.selected_instance()?;
+        let root = &doc.editor_ref().root;
+        let node = crate::editor_ui::find_node(root, &id)?;
+        if !matches!(node.kind, x_native::NodeKind::Instance { .. }) {
+            return None;
+        }
+        let changes = x_native::instance_changes(node)
+            .iter()
+            .map(|c| (c.node.clone(), c.label(root)))
+            .collect();
+        Some(crate::context_menu::InstanceMenu {
+            id,
+            component: component.clone(),
+            in_file: x_native::find_master(root, &component).is_some(),
+            changes,
+        })
+    }
+
+    /// Figma's *select inside*: after a double-click (or a click while already
+    /// inside) the status names the layer being edited within its instance and
+    /// says how to leave — the breadcrumb Figma puts in the layers panel.
+    pub fn enter_instance_status(&mut self, layer: &str) {
+        let label = match self.doc_opt() {
+            Some(doc) => {
+                let ed = doc.editor_ref();
+                let instance = ed
+                    .instance_scope
+                    .as_ref()
+                    .and_then(|(id, _)| crate::editor_ui::find_node(&ed.root, id))
+                    .map(|n| match &n.kind {
+                        // Figma names an instance after its component
+                        x_native::NodeKind::Instance { component } => component.clone(),
+                        _ => n.name.clone(),
+                    })
+                    .unwrap_or_else(|| "the instance".to_string());
+                let layer = ed
+                    .scoped_layer(&doc.doc.variables)
+                    .map(|n| n.name.clone())
+                    .unwrap_or_else(|| layer.to_string());
+                format!("Inside {instance} - {layer} (Esc to leave)")
+            }
+            None => return,
+        };
+        self.status = label;
+    }
+
     /// Commit a page rename (single source of truth for the pages-panel
     /// inline field). Empty names are ignored.
     /// The selected node's own auto-layout (None unless it is a Frame
@@ -2853,6 +5201,17 @@ impl App {
         self.mark_dirty();
     }
 
+    /// Rename the ACTIVE page. The page's name lives in `doc.pages[i].name`
+    /// — that is the list the rail shows, the field edits, and the undo
+    /// history records. The page's ROOT frame carries the same string purely
+    /// as a mirror, because a handful of surfaces read a root's name directly
+    /// (flow labels via `editor_ui::flow_locate`, thumbnails, SVG ids); the
+    /// mirror is one-way, so a page rename can never be mistaken for a frame
+    /// rename — the bug where the artboard's frame name WAS the page name.
+    ///
+    /// Compared against the page name, not the root's: the old guard tested
+    /// `root.name`, so renaming a page back to its mirrored frame name was
+    /// silently rejected.
     pub fn commit_page_rename(&mut self, raw: &str) -> bool {
         let raw = raw.trim().to_string();
         if raw.is_empty() {
@@ -2860,11 +5219,17 @@ impl App {
         }
         {
             let doc = self.doc();
-            if doc.editor_ref().root.name == raw {
+            let i = doc.page;
+            let current = doc
+                .doc
+                .pages
+                .get(i)
+                .map(|p| p.name.clone())
+                .unwrap_or_default();
+            if current == raw {
                 return false;
             }
             doc.checkpoint();
-            let i = doc.page;
             if let Some(p) = doc.doc.pages.get_mut(i) {
                 p.name = raw.clone();
             }
@@ -2874,6 +5239,89 @@ impl App {
         }
         self.mark_dirty();
         true
+    }
+
+    /// Open layer `id` for inline rename (Figma: double-click the layer's name
+    /// in the Layers panel). The selection follows, so the inspector and the
+    /// canvas agree with what is being renamed.
+    pub fn begin_layer_rename(&mut self, id: String) {
+        let name = {
+            let doc = self.doc();
+            // read the name out FIRST: the find borrows the tree, the
+            // selection write needs it mutably
+            let found = crate::editor_ui::find_node(&doc.editor_ref().root, id.as_str())
+                .map(|n| n.name.clone());
+            let Some(name) = found else {
+                return;
+            };
+            doc.editor().selection = vec![id.clone()];
+            name
+        };
+        self.layer_edit_id = Some(id);
+        self.field_select_all = true;
+        self.field = Some(FieldEdit {
+            id: FieldId::LayerName,
+            buffer: name,
+        });
+    }
+
+    /// Open page `i` for inline rename (Figma: double-click a page NAME in
+    /// the Pages list). Selecting and editing in one step, because the field
+    /// zone only exists on the ACTIVE row — a rename that did not also select
+    /// would open a field the hit-test cannot reach.
+    pub fn begin_page_rename(&mut self, i: usize) {
+        let name = {
+            let doc = self.doc();
+            if i >= doc.editors.len() {
+                return;
+            }
+            doc.page = i;
+            doc.doc
+                .pages
+                .get(i)
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| format!("Page {}", i + 1))
+        };
+        self.field_select_all = true;
+        self.field = Some(FieldEdit {
+            id: FieldId::PageName,
+            buffer: name,
+        });
+        self.page_menu = None;
+    }
+
+    /// Delete page `i` — the rail's ✕, which must work on ANY row including
+    /// the page you are looking at (Figma allows both). Deleting a page that
+    /// is not the active one leaves the selection alone; deleting the active
+    /// one clamps it to the last remaining page. The last page cannot be
+    /// deleted: a document with no page has nothing to render.
+    pub fn delete_page(&mut self, i: usize) -> bool {
+        let deleted = {
+            let doc = self.doc();
+            if doc.editors.len() <= 1 || i >= doc.editors.len() {
+                false
+            } else {
+                doc.checkpoint();
+                doc.editors.remove(i);
+                doc.doc.pages.remove(i);
+                doc.doc.comments.retain(|c| c.page != i);
+                for c in &mut doc.doc.comments {
+                    if c.page > i {
+                        c.page -= 1;
+                    }
+                }
+                if doc.page > i {
+                    doc.page -= 1;
+                } else if doc.page == i {
+                    doc.page = doc.page.min(doc.editors.len() - 1);
+                }
+                true
+            }
+        };
+        if deleted {
+            self.mark_dirty();
+        }
+        deleted
     }
 
     pub fn page_menu_cmd(&mut self, cmd: PageMenuCmd) {
@@ -2949,27 +5397,12 @@ impl App {
                 self.mark_dirty();
             }
             PageMenuCmd::Delete => {
-                let mut deleted = false;
-                {
-                    let doc = self.doc();
-                    if doc.editors.len() > 1 {
-                        doc.checkpoint();
-                        let i = doc.page;
-                        doc.editors.remove(i);
-                        doc.doc.pages.remove(i);
-                        doc.doc.comments.retain(|c| c.page != i);
-                        for c in &mut doc.doc.comments {
-                            if c.page > i {
-                                c.page -= 1;
-                            }
-                        }
-                        doc.page = doc.page.min(doc.editors.len() - 1);
-                        deleted = true;
-                    }
-                }
-                if deleted {
-                    self.mark_dirty();
-                }
+                // one implementation, shared with the rail's ✕ (see
+                // `App::delete_page`): the old copy here was the ONLY delete
+                // path, refused at one page, and unreachable for the active
+                // page from the rail.
+                let i = self.doc_ref().page;
+                self.delete_page(i);
             }
             PageMenuCmd::MoveUp => {
                 let moved = {
@@ -3092,6 +5525,26 @@ impl App {
                 let id = doc.editor_ref().selection.first().cloned();
                 if let Some(id) = id {
                     doc.editor().ungroup(&id);
+                }
+            }
+            FrameSelection => {
+                if doc.editor_ref().selection.is_empty() {
+                    refusal = Some("Select at least one layer to frame it".into());
+                } else {
+                    // the engine sizes the frame to the members' collective
+                    // bounds and re-parents them with their positions kept
+                    doc.editor().frame_selection(&x_native::fresh_id("frame"));
+                }
+            }
+            SectionSelection => {
+                if doc.editor_ref().selection.is_empty() {
+                    refusal = Some("Select at least one layer to wrap in a section".into());
+                } else {
+                    // the engine sizes the section to the members' collective
+                    // bounds, lifts them to the canvas when a frame or group
+                    // held them, and keeps their place on the page
+                    doc.editor()
+                        .section_selection(&x_native::fresh_id("section"));
                 }
             }
             MakeComponent => {
@@ -3804,6 +6257,51 @@ impl App {
         self.pan = camera.pan;
     }
 
+    /// A layer's effect stack as every reader sees it: the ordered stack once
+    /// the node is materialized, the flat legacy list otherwise. The Effects
+    /// panel, the drag targets and the colour popover all come through here,
+    /// so none of them can disagree about what the list holds.
+    pub fn effect_layers_of(&self, id: &str) -> Vec<x_native::EffectLayer> {
+        let Some(doc) = self.doc_opt() else {
+            return vec![];
+        };
+        let root = &doc.editor_ref().root;
+        fn find<'a>(n: &'a x_native::Node, id: &str) -> Option<&'a x_native::Node> {
+            if n.id == id {
+                return Some(n);
+            }
+            n.children.iter().find_map(|c| find(c, id))
+        }
+        match find(root, id) {
+            Some(n) if n.visual_stacks_materialized => n.effect_layers.clone(),
+            Some(n) => n
+                .effects
+                .iter()
+                .cloned()
+                .map(x_native::EffectLayer::new)
+                .collect(),
+            None => vec![],
+        }
+    }
+
+    /// Close every popover the inspector can have open. One at a time is the
+    /// panel's rule (its menus anchor to the rows they came from, so two open
+    /// at once would overlap), and it is what Figma does when you open the
+    /// next control.
+    pub fn close_panel_menus(&mut self) {
+        self.effect_add_open = false;
+        self.effect_kind_open = None;
+        self.effect_blend_open = None;
+        self.layer_blend_open = false;
+        self.mask_type_open = false;
+        self.list_style_open = false;
+        self.stroke_style_open = false;
+        self.stroke_cap_open = None;
+        self.corner_open = false;
+        self.corner_slider = None;
+        self.paint_blend_open = None;
+    }
+
     pub fn mark_dirty(&mut self) {
         if let Some(d) = self.docs.get_mut(self.active) {
             d.record_page_changes(self.drag.is_some());
@@ -3837,18 +6335,22 @@ pub struct BoardRegions {
 
 // ------------------------------------------------------------ node helpers
 
-/// Layer-type icon per the v45 mapping.
+/// Layer-type icon per the v45 mapping. Every kind is listed on purpose: a new
+/// `NodeKind` should fail to compile here rather than silently become a box.
 pub fn kind_icon(k: &NodeKind) -> &'static str {
     match k {
         NodeKind::Frame { .. } => "frame#",
         NodeKind::Rect { .. } => "square",
-        NodeKind::Group | NodeKind::Section => "layout-grid",
+        NodeKind::Group => "layout-grid",
+        NodeKind::Section => "section",
         NodeKind::Text { .. } => "type",
         NodeKind::Ellipse => "circle",
+        NodeKind::Poly { .. } => "triangle",
+        NodeKind::Star { .. } => "star",
         NodeKind::Vector { .. } | NodeKind::Arc { .. } | NodeKind::Line => "pen-tool",
         NodeKind::Component { .. } | NodeKind::Instance { .. } => "component",
         NodeKind::Image { .. } => "image",
-        _ => "box",
+        NodeKind::Slice => "scissors",
     }
 }
 
@@ -4495,10 +6997,17 @@ mod tool_shortcut_tests {
         assert_eq!(d("r", false), Some(Tool::Rect));
         assert_eq!(d("o", false), Some(Tool::Ellipse));
         assert_eq!(d("p", false), Some(Tool::Pen));
+        assert_eq!(d("p", true), Some(Tool::Pencil));
+        assert_eq!(d("k", false), Some(Tool::Scale));
+        assert_eq!(d("s", false), Some(Tool::Slice));
         assert_eq!(d("h", false), Some(Tool::Hand));
         assert_eq!(d("c", false), Some(Tool::Comment));
         assert_eq!(d("m", false), Some(Tool::Symmetry));
-        assert_eq!(d("e", true), Some(Tool::Eraser));
+        assert_eq!(d("e", false), Some(Tool::Eraser));
+        // the shifted forms belong to the transform (help 360039956914),
+        // not to the tool table
+        assert_eq!(d("h", true), None);
+        assert_eq!(d("v", true), None);
     }
 
     #[test]
@@ -4693,9 +7202,13 @@ mod tool_shortcut_tests {
     fn tool_labels_and_hints_follow_mode() {
         assert_eq!(Tool::Select.label(), "Move");
         assert_eq!(Tool::Eraser.label(), "Vector eraser");
+        assert_eq!(Tool::Pencil.label(), "Pencil");
         assert_eq!(Tool::Select.shortcut_hint(false), "V");
-        assert_eq!(Tool::Eraser.shortcut_hint(false), "⇧E");
+        assert_eq!(Tool::Eraser.shortcut_hint(false), "E");
         assert_eq!(Tool::Symmetry.shortcut_hint(true), "");
+        assert_eq!(Tool::Slice.shortcut_hint(false), "S");
+        assert_eq!(Tool::Slice.label(), "Slice");
+        assert_eq!(Tool::Slice.shortcut_hint(true), "");
         assert_eq!(Tool::BoardSticky.shortcut_hint(true), "S");
         assert_eq!(Tool::BoardSticky.shortcut_hint(false), "");
         assert_eq!(Tool::Comment.shortcut_hint(true), "");
@@ -4706,12 +7219,230 @@ mod tool_shortcut_tests {
         // ⇧C stays free (old comment promised this; old code broke it)
         assert_eq!(Tool::from_shortcut("c", true, false), None);
         assert_eq!(Tool::from_shortcut("c", true, true), None);
-        // the eraser needs shift; bare E is not a tool key
-        assert_eq!(Tool::from_shortcut("e", false, false), None);
+        // ⇧E is Figma's Design/Prototype toggle, so the eraser — ours, and
+        // Draw-only per rows 1.19 / 20.5 — answers to the bare key instead
+        assert_eq!(Tool::from_shortcut("e", true, false), None);
+        assert_eq!(Tool::from_shortcut("e", false, false), Some(Tool::Eraser));
         // baseline keys stay shift-tolerant (pre-refactor behavior)
         assert_eq!(Tool::from_shortcut("r", true, false), Some(Tool::Rect));
-        // unclaimed keys
-        assert_eq!(Tool::from_shortcut("s", false, false), None);
+        // unclaimed keys; S is the Slice tool in design mode and a sticky
+        // note in boards, so it answers in both
+        assert_eq!(Tool::from_shortcut("s", false, false), Some(Tool::Slice));
+        let in_board = Tool::from_shortcut("s", false, true);
+        assert_eq!(in_board, Some(Tool::BoardSticky));
         assert_eq!(Tool::from_shortcut("q", false, false), None);
+    }
+}
+
+#[cfg(test)]
+mod measure_tests {
+    use super::*;
+
+    /// Figma's ⌥ measure (help 360039956974): a diagonal pair reads on BOTH
+    /// axes — *"horizontal and vertical measurements"* — each between the
+    /// edges the pair faces, and each anchored on the band they share (or,
+    /// sharing none, between the near edges).
+    #[test]
+    fn measure_reads_both_axes_of_a_diagonal_pair() {
+        let a = (100.0, 100.0, 40.0, 20.0); // x 100..140, y 100..120
+        let b = (200.0, 160.0, 50.0, 30.0); // x 200..250, y 160..190
+        let m = measure_between(a, b);
+        assert_eq!(m.len(), 2, "a diagonal pair reads on both axes");
+        let h = m[0];
+        assert!(h.horizontal, "horizontal first, as the article reads");
+        assert_eq!(h.gap, 60.0);
+        assert_eq!((h.from, h.to), (140.0, 200.0), "the edges the pair faces");
+        assert_eq!(h.at, 140.0, "no shared y band: the line sits between");
+        let v = m[1];
+        assert!(!v.horizontal);
+        assert_eq!(v.gap, 40.0);
+        assert_eq!((v.from, v.to), (120.0, 160.0));
+        assert_eq!(v.at, 170.0);
+    }
+
+    /// Layers that overlap on an axis have no gap on it, and Figma draws no
+    /// line there: a pair side by side reads once, anchored at the middle of
+    /// the band the two share. One layer inside another reads nothing.
+    #[test]
+    fn a_shared_band_anchors_the_line_and_an_overlap_reads_nothing() {
+        let a = (0.0, 0.0, 100.0, 100.0);
+        let b = (140.0, 50.0, 100.0, 100.0);
+        let m = measure_between(a, b);
+        assert_eq!(m.len(), 1, "no vertical gap to read");
+        assert_eq!(m[0].gap, 40.0);
+        assert_eq!(m[0].at, 75.0, "the middle of the shared band");
+        assert!(
+            measure_between(a, (10.0, 10.0, 20.0, 20.0)).is_empty(),
+            "a layer inside another has no gap to read"
+        );
+        assert!(measure_between(a, a).is_empty(), "and neither has itself");
+    }
+}
+
+#[cfg(test)]
+mod stroke_panel_tests {
+    use super::*;
+
+    /// Figma's **Dashes** syntax is the pattern itself — *"dash, gap, dash,
+    /// gap..."* — and the style is what the pattern IS: an empty one is Solid,
+    /// a pair is Dashed, a longer list Custom. That is the whole reason the
+    /// style is derived rather than stored.
+    #[test]
+    fn the_stroke_style_is_what_the_pattern_is() {
+        assert_eq!(StrokeStyleKind::of(&[]), StrokeStyleKind::Solid);
+        assert_eq!(
+            StrokeStyleKind::of(&[10.0, 4.0]),
+            StrokeStyleKind::Dashed,
+            "a pair is the Dashed style"
+        );
+        assert_eq!(
+            StrokeStyleKind::of(&[10.0, 5.0, 5.0, 5.0]),
+            StrokeStyleKind::Custom
+        );
+        // the rows' own words are Figma's, in the order its panel lists them
+        assert_eq!(
+            StrokeStyleKind::ALL.map(|k| k.label()),
+            ["Solid", "Dashed", "Custom"]
+        );
+    }
+
+    /// Moving between the rows keeps the numbers the designer chose: Dashed
+    /// takes the first pair of whatever is there, Custom repeats a pair it is
+    /// handed (the line is drawn identically) and keeps a real pattern as it is.
+    #[test]
+    fn the_style_rows_carry_the_numbers_over() {
+        assert!(StrokeStyleKind::Solid.pattern(&[10.0, 4.0]).is_empty());
+        assert_eq!(
+            StrokeStyleKind::Dashed.pattern(&[10.0, 4.0]),
+            vec![10.0, 4.0]
+        );
+        assert_eq!(
+            StrokeStyleKind::Dashed.pattern(&[]),
+            vec![DASH_DEFAULT, GAP_DEFAULT],
+            "with nothing to carry, the row's own defaults"
+        );
+        assert_eq!(
+            StrokeStyleKind::Custom.pattern(&[10.0, 4.0]),
+            vec![10.0, 4.0, 10.0, 4.0],
+            "a pair repeats, so the line it draws is the one it drew"
+        );
+        assert_eq!(
+            StrokeStyleKind::Custom.pattern(&[10.0, 5.0, 5.0, 5.0]),
+            vec![10.0, 5.0, 5.0, 5.0]
+        );
+        assert_eq!(
+            StrokeStyleKind::Custom.pattern(&[]),
+            DASHES_DEFAULT.to_vec()
+        );
+        // whatever a row writes, the panel reads that style back: no pattern
+        // can leave the rows claiming a style the layer has not got
+        for kind in StrokeStyleKind::ALL {
+            for current in [
+                vec![],
+                vec![10.0, 4.0],
+                vec![10.0, 5.0, 5.0, 5.0],
+                vec![1.0, 2.0, 3.0],
+            ] {
+                let written = kind.pattern(&current);
+                assert_eq!(StrokeStyleKind::of(&written), kind, "{kind:?} {current:?}");
+            }
+        }
+    }
+
+    /// Figma's **Miter angle** and the model's miter limit are one relation:
+    /// its own default angle works out to the 4.0 the model already carries,
+    /// and the round trip through both directions is exact.
+    #[test]
+    fn the_miter_angle_is_the_limit_it_stands_for() {
+        // Figma's own default angle is the 4.0 limit the model already carries
+        assert!((miter_limit_to_angle(4.0) - 28.96).abs() < 0.01);
+        assert!((miter_angle_to_limit(28.96) - 4.0).abs() < 0.001);
+        for deg in [5.0, 28.96, 60.0, 120.0, 179.0] {
+            let back = miter_limit_to_angle(miter_angle_to_limit(deg));
+            assert!((back - deg).abs() < 1e-6, "{deg} -> {back}");
+        }
+        assert!(miter_angle_to_limit(0.0) >= 1.0, "clamped, never infinite");
+    }
+
+    /// The panel's rows are Figma's own content, and they follow the stroke's
+    /// style and join: the Dashed pair only for Dashed, the pattern only for
+    /// Custom, the Miter angle only for a Miter join, and both end-point rows
+    /// always — with the two caps labels the article's panel carries.
+    #[test]
+    fn the_panel_shows_the_rows_the_stroke_has_settings_for() {
+        let rows = |k, j| stroke_panel_rows(k, j);
+        let labels: Vec<&str> = rows(StrokeStyleKind::Solid, StrokeJoin::Miter)
+            .iter()
+            .filter_map(|r| match r {
+                StrokePanelRow::Caps(l) => Some(*l),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(labels, ["STROKE STYLE", "JOIN", "END POINTS"]);
+
+        let solid = rows(StrokeStyleKind::Solid, StrokeJoin::Miter);
+        assert!(
+            !solid.contains(&StrokePanelRow::Dash),
+            "Solid has no dashes"
+        );
+        assert!(!solid.contains(&StrokePanelRow::Dashes));
+        assert!(solid.contains(&StrokePanelRow::Miter));
+
+        let dashed = rows(StrokeStyleKind::Dashed, StrokeJoin::Bevel);
+        assert!(dashed.contains(&StrokePanelRow::Dash) && dashed.contains(&StrokePanelRow::Gap));
+        assert!(
+            !dashed.contains(&StrokePanelRow::Dashes),
+            "the pair, not a pattern"
+        );
+        assert!(
+            !dashed.contains(&StrokePanelRow::Miter),
+            "a Bevel join has no miter angle — the field belongs to Miter"
+        );
+
+        let custom = rows(StrokeStyleKind::Custom, StrokeJoin::Round);
+        assert!(custom.contains(&StrokePanelRow::Dashes));
+        assert!(!custom.contains(&StrokePanelRow::Dash));
+        assert!(
+            custom.contains(&StrokePanelRow::End(false))
+                && custom.contains(&StrokePanelRow::End(true))
+        );
+
+        // the card is its rows: no row can be drawn outside the panel
+        let h = stroke_panel_height(&custom);
+        let rows_h: f64 = custom.iter().map(|r| r.height()).sum();
+        assert_eq!(h, rows_h + 20.0, "the rows plus the card's padding");
+    }
+
+    /// The two menus are *named* lists — Figma's own words for the joins and
+    /// the ends (help 360049283914) — so the pins here are the names, not just
+    /// the count of rows.
+    #[test]
+    fn the_join_and_cap_rows_are_figmas_names() {
+        assert_eq!(
+            STROKE_JOINS.map(stroke_join_label),
+            ["Miter", "Bevel", "Round"]
+        );
+        assert_eq!(
+            STROKE_CAPS.map(stroke_cap_label),
+            ["None", "Round", "Square"]
+        );
+        assert_eq!(
+            STROKE_CAPS.len(),
+            3,
+            "the two head caps are geometry here, not ends"
+        );
+    }
+
+    /// The writer reads the same list the panel shows, so the numbers a row
+    /// carries are the numbers the layer gets.
+    #[test]
+    fn the_stroke_options_default_to_figmas_own_numbers() {
+        let n = Node::rect("r", 0.0, 0.0, 10.0, 10.0, Color::WHITE);
+        let o = node_stroke_options(&n);
+        assert!(o.dash.is_empty(), "a fresh layer has no dashes");
+        assert_eq!(o.join, StrokeJoin::Miter, "Figma's default join");
+        assert!((miter_limit_to_angle(o.miter_limit) - miter_limit_to_angle(4.0)).abs() < 1e-9);
+        assert_eq!(o.cap_start, StrokeCap::None, "a butt end by default");
+        assert_eq!(o.cap_end, StrokeCap::None);
     }
 }

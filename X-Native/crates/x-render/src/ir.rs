@@ -16,6 +16,100 @@ use vello::peniko::{Brush, Color, Fill, Mix};
 use vello::Scene;
 use x_core::*;
 
+/// How far above a frame/section's top-left corner its name label is drawn.
+/// A name is canvas chrome: an 18px label with a 1.2 line box needs ~22px,
+/// plus a 4px gap to the frame edge. Both the Frame and the Section arm use
+/// it, so a frame and a section put their name on the same line.
+pub const LABEL_ABOVE_Y: f64 = -26.0;
+
+/// Point size of that label. One constant for both encoders (this one and the
+/// direct encoder in `scene.rs`) and both arms (Frame and Section), so a name
+/// looks the same whether it was lowered through the IR or painted straight
+/// into a scene by an export/thumbnail.
+pub const LABEL_SIZE: f64 = 18.0;
+
+/// Ink of a canvas name label (`LABEL_ABOVE_Y` / `LABEL_SIZE` above). ONE owner
+/// for "which grey": the IR encoder and the direct scene encoder both call this,
+/// for their Frame and their Section arm alike. It used to be written out at four
+/// sites across the two encoders and they had already drifted — the scene's Frame
+/// arm faded a name to 70% while the other three did not, so the same frame's name
+/// was a different grey on the canvas than in an export. The contract this sits
+/// under — and the tests that pin it — is docs/FIGMA_PARITY.md.
+pub fn label_ink() -> Color {
+    Color::from_rgba8(0x4b, 0x55, 0x63, 0xff)
+}
+
+/// Figma draws a Section's name as a **filled chip in the section's own colour**,
+/// not as a bare frame-style label — and, unlike a frame name, a section's chip IS
+/// part of its export. These are the chip's numbers, in the section's own
+/// coordinate space (the chip sits in the gutter above the section's top-left
+/// corner, `SECTION_PILL_GAP` clear of its edge).
+pub const SECTION_LABEL_SIZE: f64 = 12.0;
+pub const SECTION_PILL_H: f64 = 20.0;
+pub const SECTION_PILL_PAD_X: f64 = 7.0;
+pub const SECTION_PILL_R: f64 = 6.0;
+pub const SECTION_PILL_GAP: f64 = 4.0;
+
+/// Top of the chip, relative to the section's origin (negative = above it).
+pub fn section_pill_top() -> f64 {
+    -(SECTION_PILL_H + SECTION_PILL_GAP)
+}
+
+/// Where the label's line box starts inside the chip, so the text is centred.
+pub const SECTION_PILL_TEXT_DY: f64 = (SECTION_PILL_H - SECTION_LABEL_SIZE * 1.2) / 2.0;
+
+/// The chip's fill — the section hue at FULL opacity, because the section itself
+/// is a 5% wash and a wash is invisible in a 20px chip.
+pub fn section_pill_fill() -> Color {
+    x_core::section_hue()
+}
+
+/// Ink ON the chip. Not `label_ink()`: that grey is for a label sitting on the
+/// canvas background, and it measures unreadable on this fill.
+pub fn section_pill_ink() -> Color {
+    Color::from_rgb8(0xf8, 0xfa, 0xfc)
+}
+
+/// Width of the chip for `name`.
+///
+/// The IR is built WITHOUT a font manager — glyphs are resolved later, by the
+/// sink — so this width is estimated, and the estimate is the ONE rule: the
+/// direct scene encoder (exports, thumbnails, PDF) calls it too, so a chip is the
+/// same size on the canvas and in an export. Wide (CJK / fullwidth) characters
+/// count as one em, everything else as 0.55 em.
+pub fn section_pill_width(name: &str) -> f64 {
+    let ems: f64 = name
+        .chars()
+        .map(|c| if is_wide_char(c) { 1.0 } else { 0.55 })
+        .sum();
+    ems * SECTION_LABEL_SIZE + 2.0 * SECTION_PILL_PAD_X
+}
+
+fn is_wide_char(c: char) -> bool {
+    matches!(c,
+        '\u{1100}'..='\u{115f}'   // Hangul Jamo
+        | '\u{2e80}'..='\u{a4cf}' // CJK radicals … Yi
+        | '\u{ac00}'..='\u{d7a3}' // Hangul syllables
+        | '\u{f900}'..='\u{faff}' // CJK compatibility ideographs
+        | '\u{fe30}'..='\u{fe4f}' // CJK compatibility forms
+        | '\u{ff00}'..='\u{ff60}' // fullwidth forms
+        | '\u{ffe0}'..='\u{ffe6}' // fullwidth signs
+        | '\u{2_0000}'..='\u{3_fffd}') // CJK ext. B and beyond
+}
+
+/// The chip's rect in the section's own space, clamped so it never grows past the
+/// section it names.
+pub fn section_pill_rect(name: &str, section_w: f64) -> Rect {
+    let longest = (section_w - 2.0 * SECTION_PILL_PAD_X).max(SECTION_PILL_H);
+    let w = section_pill_width(name).min(longest);
+    Rect::new(
+        0.0,
+        section_pill_top(),
+        w,
+        section_pill_top() + SECTION_PILL_H,
+    )
+}
+
 /// One drawable unit, fully resolved. No document types leak through
 /// except geometry/paint primitives.
 #[derive(Debug, Clone)]
@@ -77,6 +171,9 @@ pub enum RenderCommand {
         paragraph_indent: f64,
         /// Underline / strikethrough, drawn per line by the shaper.
         decoration: x_core::TextDecoration,
+        /// Figma's list style: the shaper reserves a marker column and
+        /// draws the bullet or counter in it (help 360040449773).
+        list: x_core::ListStyle,
         runs: Vec<x_core::TextPart>,
     },
     Image {
@@ -150,11 +247,21 @@ impl RenderTree {
 }
 
 /// A mask node's clip geometry (vector path / rect / ellipse).
+/// Figma: *"any layer can be a mask"* (help 360040450253). Kinds with an
+/// outline of their own use it; the rest — text, images, groups, frames,
+/// instances — clip to their bounds, a superset of Figma's per-pixel
+/// coverage (glyph coverage, image alpha) and the named delta there.
 fn mask_path_of(n: &Node) -> Option<BezPath> {
     match &n.kind {
         NodeKind::Vector { path } if !path.is_empty() => Some(path_to_bez(path)),
-        NodeKind::Arc { start, end } => Some(path_to_bez(&x_core::booleans::arc_path_cmds(
-            n.w, n.h, *start, *end,
+        NodeKind::Arc { start, end, ratio } => Some(path_to_bez(&x_core::booleans::arc_path_cmds(
+            n.w, n.h, *start, *end, *ratio,
+        ))),
+        NodeKind::Poly { sides } => Some(path_to_bez(&x_core::booleans::poly_path_cmds(
+            n.w, n.h, *sides,
+        ))),
+        NodeKind::Star { points, ratio } => Some(path_to_bez(&x_core::booleans::star_path_cmds(
+            n.w, n.h, *points, *ratio,
         ))),
         NodeKind::Rect { radius } => {
             let r = *radius;
@@ -168,7 +275,23 @@ fn mask_path_of(n: &Node) -> Option<BezPath> {
             let (rx, ry) = (n.w / 2.0, n.h / 2.0);
             Some(vello::kurbo::Ellipse::new((rx, ry), (rx, ry), 0.0).into_path(0.1))
         }
-        _ => None,
+        _ => Some(Rect::new(0.0, 0.0, n.w, n.h).into_path(0.1)),
+    }
+}
+
+/// The uniform alpha Figma's mask type asks for. Container masks have no fill
+/// of their own to key on (a group or frame reveals where its children
+/// painted), so only a leaf's own paint scales the scope; those stay at 1.0
+/// and the clip does the work.
+fn mask_scope_alpha(n: &Node) -> f32 {
+    match n.kind {
+        NodeKind::Frame { .. }
+        | NodeKind::Group
+        | NodeKind::Section
+        | NodeKind::Component { .. }
+        | NodeKind::Instance { .. }
+        | NodeKind::Slice => 1.0,
+        _ => n.mask_type.mask_alpha(&n.fill, n.opacity),
     }
 }
 
@@ -272,7 +395,7 @@ fn layer_brush(paint: &Paint, vars: &Variables, opacity: f32) -> Brush {
         // via clip + tiled image; this gray is the fallback for strokes,
         // text fills and lines (patterns can't clip a stroke region)
         Paint::Pattern { .. } => {
-            Brush::Solid(Color::from_rgb8(0x99, 0x99, 0x99).multiply_alpha(opacity))
+            Brush::Solid(x_core::fallbacks::pattern_fallback_grey().multiply_alpha(opacity))
         }
     }
 }
@@ -370,6 +493,7 @@ fn offset_command(command: &RenderCommand, dx: f64, dy: f64) -> RenderCommand {
             max_lines,
             paragraph_indent,
             decoration,
+            list,
             runs,
         } => RenderCommand::Glyphs {
             key: format!("{key}/bg"),
@@ -396,6 +520,7 @@ fn offset_command(command: &RenderCommand, dx: f64, dy: f64) -> RenderCommand {
             max_lines: *max_lines,
             paragraph_indent: *paragraph_indent,
             decoration: *decoration,
+            list: *list,
             runs: runs.clone(),
         },
         RenderCommand::Image {
@@ -766,9 +891,10 @@ fn fingerprint(c: &RenderCommand) -> String {
             max_lines,
             paragraph_indent,
             decoration,
+            list,
             ..
         } => format!(
-            "g{:?}{text}{size}{max_width}{font:?}{brush:?}{runs:?}{letter_spacing}{line_height}{lh_mode}{lh_value}{word_spacing}{paragraph_spacing}{baseline_shift}{small_caps}{optical_size}{width_axis}{wrap:?}{align:?}{v_align:?}{node_h}{max_lines:?}{paragraph_indent}{decoration:?}",
+            "g{:?}{text}{size}{max_width}{font:?}{brush:?}{runs:?}{letter_spacing}{line_height}{lh_mode}{lh_value}{word_spacing}{paragraph_spacing}{baseline_shift}{small_caps}{optical_size}{width_axis}{wrap:?}{align:?}{v_align:?}{node_h}{max_lines:?}{paragraph_indent}{decoration:?}{list:?}",
             transform.as_coeffs()
         ),
         RenderCommand::Image {
@@ -795,46 +921,43 @@ pub fn build_render_tree(root: &Node, vars: &Variables) -> RenderTree {
     build_render_tree_with_hidden(root, vars, None)
 }
 
-/// Suppress the glyphs currently drawn by the inline editor without cloning
-/// or temporarily mutating the document root.
-pub fn build_render_tree_with_hidden(
-    root: &Node,
-    vars: &Variables,
-    hidden: Option<&str>,
-) -> RenderTree {
-    let mut tree = RenderTree::default();
-    let mut registry: HashMap<&str, &Node> = HashMap::new();
-    fn collect<'a>(n: &'a Node, reg: &mut HashMap<&'a str, &'a Node>) {
-        if let NodeKind::Component { name } = &n.kind {
-            reg.insert(name.as_str(), n);
-        }
-        for c in &n.children {
-            collect(c, reg);
-        }
-    }
-    collect(root, &mut registry);
-    let empty = HashMap::new();
-    lower(
-        root,
-        Affine::IDENTITY,
-        vars,
-        &registry,
-        &empty,
-        0,
-        &mut tree,
-        "",
-        hidden,
-        true,
-    );
-    tree
+/// Lower a document root to render commands. The optional `hidden` id
+/// suppresses the glyphs the inline editor is drawing itself, without cloning
+/// or mutating the document.
+///
+/// This is the ONE lowering entry: the canvas (`FrameCache::render_viewport`,
+/// which lowers the page root once per child bucket) and the direct
+/// `build_render_tree` path both come through here, so the label rules in
+/// `lower` apply everywhere at once — there is no second "bucket shell" entry
+/// that could disagree about which names get painted.
+/// A frame's name label — the one key the exporter strips and a presentation
+/// hides. One predicate, because the export rule and the presentation rule must
+/// agree about *which* command is a name.
+pub fn is_frame_name_label(key: &str) -> bool {
+    key.ends_with("/label")
 }
 
-/// Same as `build_render_tree_with_hidden`, but the ROOT's name label is
-/// suppressed: the frame-cache segmented path lowers the root once per
-/// child bucket, so the root label must be painted by the separately
-/// rendered shell scene EXACTLY ONCE — never re-emitted per bucket
-/// (that overdraws the name N+1 times and darkens it).
-pub(crate) fn build_render_tree_bucket_shell(
+/// Which commands are CANVAS CHROME — painted to identify a layer while editing,
+/// never part of the artwork:
+///
+/// * `/label` — a frame's name, in the gutter above it;
+/// * `/pill` + `/chip` — a Section's title chip.
+///
+/// The two objects differ in an EXPORT: Figma exports a section's title with the
+/// section, so only the label is stripped there. A PRESENTATION has no canvas to
+/// identify anything on, so `strip_canvas_chrome` takes both.
+pub fn is_canvas_chrome(key: &str) -> bool {
+    is_frame_name_label(key) || key.ends_with("/pill") || key.ends_with("/chip")
+}
+
+/// Drop the canvas chrome from a lowered tree. A presentation paints the
+/// artwork: Figma does not draw frame names in presentation mode, and the
+/// canvas around a presented frame is not on screen at all.
+pub fn strip_canvas_chrome(tree: &mut RenderTree) {
+    tree.commands.retain(|c| !is_canvas_chrome(c.key()));
+}
+
+pub fn build_render_tree_with_hidden(
     root: &Node,
     vars: &Variables,
     hidden: Option<&str>,
@@ -904,7 +1027,7 @@ pub fn build_render_tree_of(root: &Node, id: &str, vars: &Variables) -> Option<R
         &mut tree,
         "",
         None,
-        true,
+        false,
     );
     Some(tree)
 }
@@ -964,6 +1087,13 @@ pub fn build_render_tree_slice(
     Some((tree, node.w, node.h))
 }
 
+/// `in_frame`: true when a FRAME (not the page, not a Section) already encloses
+/// this node in THIS render. Figma only draws a name for a page's outermost
+/// frames — "when nesting frames to organize them, only the top-level /
+/// outermost frame title is shown" (frames inside a Section reset the flag) —
+/// so a frame nested in a frame stays silent. It also keeps a nested frame's
+/// label from being cropped away by its parent's clip scope, since the label
+/// now sits ABOVE the frame.
 #[allow(clippy::too_many_arguments)]
 fn lower(
     node: &Node,
@@ -975,12 +1105,7 @@ fn lower(
     tree: &mut RenderTree,
     path: &str,
     hidden: Option<&str>,
-    // true for the document root on every PUBLIC lowering entry (canvas,
-    // exports, previews): the root's name is canvas chrome and must render.
-    // false only for the frame-cache BUCKET shells, where the root is
-    // re-lowered per child bucket and its label is painted once by the
-    // separately rendered shell scene instead.
-    label_root: bool,
+    in_frame: bool,
 ) {
     // typed traversal overrides (visible / opacity / swap), same semantics
     // as the direct encoder
@@ -1102,10 +1227,39 @@ fn lower(
             let override_color = overrides.get(&node.id).and_then(|raw| parse_hex_color(raw));
             emit_visual_layers(tree, node, &key, t, &shape, vars, opacity, override_color);
         }
-        NodeKind::Arc { start, end } => {
+        NodeKind::Arc { start, end, ratio } => {
             let shape = path_to_bez(&x_core::booleans::arc_path_cmds(
-                node.w, node.h, *start, *end,
+                node.w, node.h, *start, *end, *ratio,
             ));
+            let override_color = overrides.get(&node.id).and_then(|raw| parse_hex_color(raw));
+            emit_visual_layers(
+                tree,
+                node,
+                &key,
+                world,
+                &shape,
+                vars,
+                opacity,
+                override_color,
+            );
+        }
+        NodeKind::Poly { sides } => {
+            let shape = path_to_bez(&x_core::booleans::poly_path_cmds(node.w, node.h, *sides));
+            let override_color = overrides.get(&node.id).and_then(|raw| parse_hex_color(raw));
+            emit_visual_layers(
+                tree,
+                node,
+                &key,
+                world,
+                &shape,
+                vars,
+                opacity,
+                override_color,
+            );
+        }
+        NodeKind::Star { points, ratio } => {
+            let cmds = x_core::booleans::star_path_cmds(node.w, node.h, *points, *ratio);
+            let shape = path_to_bez(&cmds);
             let override_color = overrides.get(&node.id).and_then(|raw| parse_hex_color(raw));
             emit_visual_layers(
                 tree,
@@ -1316,6 +1470,7 @@ fn lower(
                         max_lines: node.max_lines,
                         paragraph_indent: node.paragraph_indent,
                         decoration: node.text_decoration,
+                        list: node.list_style,
                         runs,
                     });
                 }
@@ -1391,23 +1546,45 @@ fn lower(
                 opacity,
                 override_color,
             );
-            // same root-label gating as the Frame arm (bucket shells)
-            if label_root || !path.is_empty() {
+            // same root gate as the Frame arm: a page container is not a
+            // labelled object on the canvas.
+            if !path.is_empty() {
                 let name = if node.name.is_empty() {
                     "Section"
                 } else {
                     node.name.as_str()
                 };
+                // the chip first, then the label ON it: Figma's section title is
+                // a filled tag in the section's own colour, not a bare label
+                tree.commands.push(RenderCommand::FillPath {
+                    key: format!("{key}/pill"),
+                    transform: world,
+                    path: RoundedRect::from_rect(
+                        section_pill_rect(name, node.w),
+                        RoundedRectRadii::new(
+                            SECTION_PILL_R,
+                            SECTION_PILL_R,
+                            SECTION_PILL_R,
+                            SECTION_PILL_R,
+                        ),
+                    )
+                    .into_path(0.1),
+                    brush: layer_brush(&Paint::Solid(section_pill_fill()), vars, opacity),
+                });
+                // `/chip`, NOT `/label`: a frame's name is canvas chrome and the
+                // exporter strips it, while a section's title is part of the
+                // section's own artwork and exports with it (Figma). Same suffix
+                // would have exported a solid tag with no text on it.
                 tree.commands.push(RenderCommand::Glyphs {
-                    key: format!("{key}/label"),
-                    transform: world * Affine::translate((14.0, 10.0)),
+                    key: format!("{key}/chip"),
+                    transform: world
+                        * Affine::translate((
+                            SECTION_PILL_PAD_X,
+                            section_pill_top() + SECTION_PILL_TEXT_DY,
+                        )),
                     text: name.to_string(),
-                    size: 18.0,
-                    brush: layer_brush(
-                        &Paint::Solid(Color::from_rgba8(0x4b, 0x55, 0x63, 0xff)),
-                        vars,
-                        opacity,
-                    ),
+                    size: SECTION_LABEL_SIZE,
+                    brush: layer_brush(&Paint::Solid(section_pill_ink()), vars, opacity),
                     max_width: (node.w - 20.0).max(8.0),
                     font: None,
                     letter_spacing: 0.0,
@@ -1428,6 +1605,7 @@ fn lower(
                     max_lines: None,
                     paragraph_indent: 0.0,
                     decoration: x_core::TextDecoration::None,
+                    list: x_core::ListStyle::None,
                     runs: vec![],
                 });
             }
@@ -1471,11 +1649,20 @@ fn lower(
             // header Glyphs command the Section arm emits, so frame names
             // appear on the canvas like section names; children render
             // through the shared path below, after the clip scope.
-            // The root's label is gated by `label_root` (see the
-            // parameter): frame-cache bucket shells re-lower the root per
-            // bucket and leave the root label to the shell scene, which
-            // paints it exactly once.
-            if label_root || !path.is_empty() {
+            //
+            // The ROOT of a render tree is never labelled: on the canvas the
+            // root is the PAGE (its name belongs in the pages list, not on an
+            // artboard — it used to print the page name across the canvas and
+            // survive the deletion of everything on it), and on an export or a
+            // thumbnail the root is the object being exported, whose name is
+            // canvas chrome, not artwork. `!path.is_empty()` is exactly the
+            // "not the root" test the traversal already carries; `!in_frame`
+            // drops the names of frames nested inside other frames (see the
+            // parameter).
+            // ...and the frame may switch its own name OFF (Figma's right
+            // sidebar: Layer → "Show name"), which is the third and last gate on
+            // a frame label.
+            if !path.is_empty() && !in_frame && node.show_name {
                 let name = if node.name.is_empty() {
                     "Frame"
                 } else {
@@ -1483,14 +1670,14 @@ fn lower(
                 };
                 tree.commands.push(RenderCommand::Glyphs {
                     key: format!("{key}/label"),
-                    transform: world * Affine::translate((14.0, 10.0)),
+                    // ABOVE the frame's top-left corner — a name is canvas
+                    // chrome, so it must not sit on the artwork it names
+                    // (Figma draws it in the gutter above the frame; ours was
+                    // painted inside the top-left corner, over the content).
+                    transform: world * Affine::translate((0.0, LABEL_ABOVE_Y)),
                     text: name.to_string(),
-                    size: 18.0,
-                    brush: layer_brush(
-                        &Paint::Solid(Color::from_rgba8(0x4b, 0x55, 0x63, 0xff)),
-                        vars,
-                        opacity,
-                    ),
+                    size: LABEL_SIZE,
+                    brush: layer_brush(&Paint::Solid(label_ink()), vars, opacity),
                     max_width: (node.w - 20.0).max(8.0),
                     font: None,
                     letter_spacing: 0.0,
@@ -1511,6 +1698,7 @@ fn lower(
                     max_lines: None,
                     paragraph_indent: 0.0,
                     decoration: x_core::TextDecoration::None,
+                    list: x_core::ListStyle::None,
                     runs: vec![],
                 });
             }
@@ -1547,6 +1735,7 @@ fn lower(
                             tree,
                             &key,
                             hidden,
+                            // a master's internal frames are never named
                             true,
                         );
                     }
@@ -1581,8 +1770,22 @@ fn lower(
             path: Rect::new(0.0, 0.0, node.w, node.h).into_path(0.1),
         });
     }
+    // Does a child of this node count as "nested in a frame"? Frames say
+    // yes (except the render root, which is the page), Sections say no (their
+    // frames keep their names), everything else passes the flag through.
+    let child_in_frame = if matches!(node.kind, NodeKind::Frame { .. }) {
+        !path.is_empty()
+    } else if matches!(node.kind, NodeKind::Section) {
+        false
+    } else {
+        in_frame
+    };
     let mut mask_layers = 0usize;
-    for child in &node.children {
+    // child paint order: document order, or the reverse of it in an
+    // auto-layout frame whose canvas stacking is First on top (one owner:
+    // `x_core::auto_layout::paint_order`)
+    for ci in paint_order(node) {
+        let child = &node.children[ci];
         if child.is_mask && child.visible {
             // masks paint nothing themselves; they clip following siblings
             if let Some(mask_path) = mask_path_of(child) {
@@ -1593,6 +1796,23 @@ fn lower(
                     path: mask_path,
                 });
                 mask_layers += 1;
+                // Figma's mask types (help 360040450253; the Mask section's
+                // dropdown): Vector is outline only, so the clip above is the
+                // whole story. Alpha and Luminance key the masked result on
+                // the mask's own opacity / brightness, which for a single
+                // solid fill is one uniform figure — scale the scope by it.
+                // (Per-pixel alpha, gradients and image masks are the named
+                // delta: this compositor has no mask layer.)
+                let alpha = mask_scope_alpha(child);
+                if alpha < 1.0 {
+                    tree.commands.push(RenderCommand::PushLayer {
+                        key: format!("{key}/{}#mask-alpha", child.id),
+                        mix: Mix::Normal,
+                        alpha,
+                        bounds: Rect::new(-1e12, -1e12, 1e12, 1e12),
+                    });
+                    mask_layers += 1;
+                }
             }
             continue;
         }
@@ -1618,7 +1838,7 @@ fn lower(
             tree,
             &key,
             hidden,
-            true,
+            child_in_frame,
         );
     }
     for _ in 0..mask_layers {
@@ -1754,7 +1974,7 @@ impl<'a> VelloSink<'a> {
                         scene.fill(
                             Fill::NonZero,
                             *transform,
-                            Color::from_rgb8(0xdd, 0xdd, 0xdd),
+                            x_core::fallbacks::missing_asset_grey(),
                             None,
                             &Rect::new(0.0, 0.0, *w, *h).into_path(0.1),
                         );
@@ -1843,7 +2063,7 @@ pub fn build_render_tree_selection(
         &mut tree,
         "",
         None,
-        true,
+        false,
     );
     Some(tree)
 }
@@ -1867,8 +2087,9 @@ mod tests {
         }];
         let d = Node::frame("page", 300.0, 100.0).child(t);
         let tree = build_render_tree(&d, &Variables::default());
-        // the text node's OWN Glyphs command — the root frame's name label
-        // (QA-004) is a separate, earlier command
+        // the text node's OWN Glyphs command (the fixture's frame is the
+        // render root, so it contributes no name label — see
+        // `a_frame_name_labels_the_gutter_above_it_and_never_the_root`)
         let runs = tree
             .commands
             .iter()
@@ -1897,7 +2118,7 @@ mod tests {
         let d =
             Node::frame("page", 300.0, 100.0).child(Node::text("t", 10.0, 10.0, 100.0, 20.0, "hi"));
         let tree = build_render_tree(&d, &Variables::default());
-        // the text node's OWN command, not the frame's name label
+        // the text node's OWN command, not some label off the frame
         let runs = tree
             .commands
             .iter()
@@ -1910,24 +2131,39 @@ mod tests {
     }
 
     #[test]
-    fn frame_name_loweres_to_a_canvas_label() {
-        // QA-004 on the IR path: the live canvas lowers frames through
-        // build_render_tree, so a frame's name must appear as a Glyphs
-        // command there — not just in the direct encoder (scene.rs).
-        let d = Node::frame("Hero", 300.0, 100.0).child(Node::rect(
+    fn a_frame_name_labels_the_gutter_above_it_and_never_the_root() {
+        // QA-004 on the IR path, with the two rules the canvas needs:
+        //
+        //  1. the ROOT of a render is not a labelled object. On the canvas the
+        //     root is the PAGE, so its name belongs in the pages list — it used
+        //     to be painted across the artboard and survived deleting every
+        //     frame on the page ("the page name on the artboard").
+        //  2. a nested frame's name is canvas chrome: it goes in the gutter
+        //     ABOVE the frame's top-left corner, not on top of its artwork.
+        let mut hero = Node::frame("Hero", 300.0, 100.0);
+        hero.transform.x = 40.0;
+        hero.transform.y = 60.0;
+        let page = Node::frame("Page 1", 400.0, 300.0).child(hero.child(Node::rect(
             "r",
             0.0,
             0.0,
             10.0,
             10.0,
             Color::WHITE,
-        ));
-        let tree = build_render_tree(&d, &Variables::default());
+        )));
+        let tree = build_render_tree(&page, &Variables::default());
+        assert!(
+            !tree
+                .commands
+                .iter()
+                .any(|c| matches!(c, RenderCommand::Glyphs { text, .. } if text == "Page 1")),
+            "the root (the page) must never be labelled"
+        );
         let label = tree
             .commands
             .iter()
             .find(|c| matches!(c, RenderCommand::Glyphs { text, .. } if text == "Hero"))
-            .expect("frame name label command");
+            .expect("a nested frame's name label command");
         match label {
             RenderCommand::Glyphs {
                 key,
@@ -1936,27 +2172,219 @@ mod tests {
                 max_width,
                 ..
             } => {
-                // the root's own id is part of its path ("/Hero"), so the
-                // label key is "/Hero/label", not "/label"
-                assert_eq!(key, "/Hero/label");
-                // world origin + the same top-left inset the Section arm uses
+                // A key is the node's PATH plus the slot: the path carries
+                // every ancestor's name, so this frame's label slot is
+                // "/Page 1/Hero/label". (The root is not labelled, but it is
+                // still a path segment — a rooted path is what keeps two
+                // same-named frames in different branches apart in the cache.)
+                assert_eq!(key, "/Page 1/Hero/label");
+                assert!(key.ends_with("/Hero/label"), "{key}");
+                // the frame's world origin (40, 60) plus the label offset: left
+                // edge aligned with the frame, 26px of gutter above it
                 let t = transform.translation();
-                assert!((t.x - 14.0).abs() < 1e-9);
-                assert!((t.y - 10.0).abs() < 1e-9);
+                assert!((t.x - 40.0).abs() < 1e-9, "{t:?}");
+                assert!((t.y - (60.0 + LABEL_ABOVE_Y)).abs() < 1e-9, "{t:?}");
+                assert!(t.y < 60.0, "the label sits ABOVE the frame");
                 assert_eq!(*size, 18.0);
                 assert_eq!(*max_width, 280.0);
             }
             other => panic!("expected Glyphs, got {other:?}"),
         }
-        // an unnamed frame falls back to "Frame"
-        let anon = Node::frame("", 50.0, 50.0);
-        let t2 = build_render_tree(&anon, &Variables::default());
+        // an unnamed top-level frame falls back to "Frame"
+        let parent = Node::frame("Page", 100.0, 100.0).child(Node::frame("", 10.0, 10.0));
+        let t2 = build_render_tree(&parent, &Variables::default());
         assert!(
             t2.commands
                 .iter()
                 .any(|c| matches!(c, RenderCommand::Glyphs { text, .. } if text == "Frame")),
             "empty name falls back to 'Frame'"
         );
+        // ...and a frame nested inside ANOTHER frame is silent — here the
+        // render root is a frame, so it is not labelled (rule 1) and neither is
+        // the frame inside its child frame (rule 2); only "Middle" is a page's
+        // outermost frame. Figma names those only, which is also what keeps a
+        // nested frame's label from being cropped by its parent's clip scope.
+        let outer = Node::frame("Outer", 400.0, 300.0)
+            .child(Node::frame("Middle", 300.0, 200.0).child(Node::frame("Inner", 100.0, 80.0)));
+        let t3 = build_render_tree(&outer, &Variables::default());
+        let labels3: Vec<&str> = t3
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                RenderCommand::Glyphs { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(labels3, vec!["Middle"], "only the outermost frame is named");
+        // a Section does not hide the names of the frames it contains (Figma:
+        // frame names stay visible inside sections)
+        let mut band = Node::section("Band", 300.0, 200.0);
+        band.name = "Band".into(); // `Node::section` names itself "Section"
+        let sect =
+            Node::frame("Page", 400.0, 300.0).child(band.child(Node::frame("Card", 100.0, 80.0)));
+        let t4 = build_render_tree(&sect, &Variables::default());
+        assert!(
+            t4.commands
+                .iter()
+                .any(|c| matches!(c, RenderCommand::Glyphs { text, .. } if text == "Band"))
+                && t4
+                    .commands
+                    .iter()
+                    .any(|c| matches!(c, RenderCommand::Glyphs { text, .. } if text == "Card")),
+            "a section and the frame inside it both keep their names"
+        );
+    }
+
+    /// A presentation paints the artwork, not the canvas chrome: a frame's name
+    /// label and a Section's title chip both go, and nothing else does.
+    #[test]
+    fn a_presentation_strips_the_canvas_chrome_and_keeps_the_artwork() {
+        let mut band = Node::section("band", 300.0, 200.0);
+        band.name = "Band".into();
+        let mut hero = Node::frame("hero", 200.0, 120.0);
+        hero.name = "Hero".into();
+        let page = Node::frame("Page", 400.0, 300.0)
+            .child(hero.child(Node::rect("r", 4.0, 4.0, 20.0, 20.0, Color::WHITE)))
+            .child(band);
+        let mut tree = build_render_tree(&page, &Variables::default());
+        let chrome: Vec<String> = tree
+            .commands
+            .iter()
+            .filter(|c| is_canvas_chrome(c.key()))
+            .map(|c| c.key().to_string())
+            .collect();
+        assert!(
+            chrome.iter().any(|k| is_frame_name_label(k)),
+            "no frame name to strip: {chrome:?}"
+        );
+        assert!(
+            chrome.iter().any(|k| k.ends_with("/pill")),
+            "no section chip to strip: {chrome:?}"
+        );
+        let artwork = tree
+            .commands
+            .iter()
+            .filter(|c| !is_canvas_chrome(c.key()))
+            .count();
+        assert!(artwork > 0, "the fixture has no artwork to keep");
+        strip_canvas_chrome(&mut tree);
+        assert!(
+            !tree.commands.iter().any(|c| is_canvas_chrome(c.key())),
+            "canvas chrome survived the presentation"
+        );
+        assert_eq!(
+            tree.commands
+                .iter()
+                .filter(|c| !is_canvas_chrome(c.key()))
+                .count(),
+            artwork,
+            "the artwork went with the chrome"
+        );
+    }
+
+    /// A Section's name is a filled chip in the section's own colour — not a bare
+    /// frame-style label — and the chip is sized to the name it carries.
+    #[test]
+    fn a_section_name_is_a_chip_sized_to_the_name() {
+        let mut band = Node::section("band", 300.0, 200.0);
+        band.name = "Band".into();
+        let page = Node::frame("Page", 400.0, 300.0).child(band);
+        let t = build_render_tree(&page, &Variables::default());
+        fn is_pill(c: &RenderCommand) -> bool {
+            matches!(c, RenderCommand::FillPath { key, .. } if key.ends_with("/pill"))
+        }
+        fn is_label(c: &RenderCommand) -> bool {
+            matches!(c, RenderCommand::Glyphs { key, .. } if key.ends_with("/chip"))
+        }
+        let pill = t.commands.iter().find(|c| is_pill(c)).expect("chip");
+        let RenderCommand::FillPath {
+            key,
+            transform,
+            path,
+            brush,
+        } = pill
+        else {
+            unreachable!()
+        };
+        assert_eq!(key, "/Page/band/pill");
+        // "Band" = 4 narrow chars (0.55 em) at 12px + 2 × 7px of padding
+        let want = 4.0 * 0.55 * SECTION_LABEL_SIZE + 2.0 * SECTION_PILL_PAD_X;
+        assert!((section_pill_width("Band") - want).abs() < 1e-9);
+        let bounds = path.bounding_box();
+        assert!((bounds.width() - want).abs() < 0.01, "{bounds:?}");
+        assert!(
+            (bounds.height() - SECTION_PILL_H).abs() < 0.01,
+            "{bounds:?}"
+        );
+        assert!(
+            bounds.y1 <= 0.0,
+            "the chip sits in the gutter above the section: {bounds:?}"
+        );
+        let t0 = transform.translation();
+        assert!(
+            (t0.x - 0.0).abs() < 1e-9 && (t0.y - 0.0).abs() < 1e-9,
+            "in section space"
+        );
+        assert!(matches!(brush, Brush::Solid(c) if *c == section_pill_fill()));
+        // the label follows the chip, on the chip: pill ink, chip size, inside it
+        let (index_pill, index_label) = (
+            t.commands.iter().position(is_pill).unwrap(),
+            t.commands.iter().position(is_label).unwrap(),
+        );
+        assert!(
+            index_pill < index_label,
+            "the chip is painted under its label"
+        );
+        match &t.commands[index_label] {
+            RenderCommand::Glyphs {
+                transform,
+                size,
+                brush,
+                text,
+                ..
+            } => {
+                assert_eq!(text, "Band");
+                assert_eq!(*size, SECTION_LABEL_SIZE);
+                assert!(matches!(brush, Brush::Solid(c) if *c == section_pill_ink()));
+                let tl = transform.translation();
+                assert!(tl.x >= SECTION_PILL_PAD_X - 1e-9, "on the chip: {tl:?}");
+                assert!(
+                    tl.y + SECTION_LABEL_SIZE <= bounds.y1 + SECTION_PILL_H,
+                    "the label is on the chip"
+                );
+                assert!(tl.y >= bounds.y0, "the label is not above the chip");
+            }
+            other => panic!("expected Glyphs, got {other:?}"),
+        }
+        // a long name is clamped: the chip never grows past the section
+        let tiny = section_pill_rect("a very long section name indeed", 40.0);
+        assert!(tiny.width() <= 40.0, "{tiny:?}");
+    }
+
+    /// Figma's per-frame **Show name** switch is the third gate on a frame
+    /// label, after "not the root" and "not nested in a frame": the frame is
+    /// still named by the rules, it just stops painting the name.
+    #[test]
+    fn a_frame_that_switches_its_name_off_emits_no_label() {
+        let mut page = Node::frame("Page 1", 400.0, 300.0)
+            .child(Node::frame("Shown", 100.0, 80.0))
+            .child(Node::frame("Hidden", 100.0, 80.0));
+        page.children[1].show_name = false;
+        let t = build_render_tree(&page, &Variables::default());
+        let labels: Vec<&str> = t
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                RenderCommand::Glyphs { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(labels, vec!["Shown"], "the hidden frame paints no name");
+        // ...and it is the frame's own switch, not the page's: with it back on
+        // both labels are emitted again
+        page.children[1].show_name = true;
+        let t2 = build_render_tree(&page, &Variables::default());
+        assert_eq!(t2.commands.len(), t.commands.len() + 1);
     }
 
     #[test]
@@ -2155,6 +2583,15 @@ mod tests {
                 assert!(co[4] >= -0.001 && co[4] < 100.0, "unexpected tx {}", co[4]);
             }
         }
+        // Figma: a frame's name is canvas chrome and is never part of the
+        // exported artwork (forum "Section titles are exporting as part of the
+        // image?"); an exported subtree therefore carries no `/label` command,
+        // not even for a frame nested in the exported one.
+        assert!(
+            !tree.commands.iter().any(|c| c.key().ends_with("/label")),
+            "exported trees carry no canvas name labels: {:?}",
+            tree.commands.iter().map(|c| c.key()).collect::<Vec<_>>()
+        );
         assert!(build_render_tree_of(&d, "nope", &Variables::default()).is_none());
     }
 

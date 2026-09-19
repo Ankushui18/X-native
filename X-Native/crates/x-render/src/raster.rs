@@ -334,6 +334,7 @@ impl<'a> RasterSink<'a> {
                     max_lines,
                     paragraph_indent,
                     decoration,
+                    list,
                     ..
                 } => {
                     let mut drew = false;
@@ -367,6 +368,7 @@ impl<'a> RasterSink<'a> {
                             *max_lines,
                             *paragraph_indent,
                             *decoration,
+                            *list,
                         ) {
                             // vertical placement inside the node box, the same
                             // rule the canvas sink applies
@@ -507,12 +509,14 @@ impl<'a> RasterSink<'a> {
                             }
                         }
                     } else {
-                        // missing asset: gray box (matches the Vello sink)
+                        // missing asset: the same grey the Vello sink paints — one
+                        // decision, `x_core::fallbacks`, not two that agree today
                         if let Some(p) =
                             to_path(&vello::kurbo::Rect::new(0.0, 0.0, *w, *h).into_path(0.1))
                         {
                             let mut paint = ts::Paint::default();
-                            paint.set_color(ts::Color::from_rgba8(0xdd, 0xdd, 0xdd, 0xff));
+                            let grey = x_core::fallbacks::missing_asset_grey();
+                            paint.set_color(to_color(grey));
                             let mask = self.stack.last().and_then(|c| c.mask.as_ref());
                             paint.blend_mode = self
                                 .stack
@@ -789,7 +793,9 @@ fn check_work_budget(tree: &RenderTree, w: u32, h: u32) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::ir::{build_render_tree, build_render_tree_slice};
-    use x_core::{Node, Variables};
+    use x_core::{
+        apply_layout_recursive, AutoLayout, CanvasStacking, LayoutDirection, Node, Variables,
+    };
 
     fn doc() -> Node {
         Node::frame("page", 200.0, 100.0)
@@ -965,6 +971,147 @@ mod tests {
             r > 240 && g > 240 && b > 240,
             "corner should be white = {r},{g},{b}"
         );
+    }
+
+    /// Figma's **canvas stacking** (help 31289464393751) on the pixels: in a
+    /// stack of overlapping layers the LAST one is on top by default, and
+    /// *First on top* puts the first one there instead. The setting changes the
+    /// canvas only — the layer list is the same either way.
+    #[test]
+    fn canvas_stacking_decides_which_layer_paints_on_top() {
+        fn two_overlapping(stacking: CanvasStacking) -> Node {
+            let mut frame = Node::frame("stack", 100.0, 100.0)
+                .auto_layout(AutoLayout {
+                    direction: LayoutDirection::Horizontal,
+                    gap: -40.0,
+                    canvas_stacking: stacking,
+                    ..Default::default()
+                })
+                .child(Node::rect(
+                    "first",
+                    0.0,
+                    0.0,
+                    60.0,
+                    60.0,
+                    Color::from_rgb8(255, 0, 0),
+                ))
+                .child(Node::rect(
+                    "last",
+                    0.0,
+                    0.0,
+                    60.0,
+                    60.0,
+                    Color::from_rgb8(0, 0, 255),
+                ));
+            // the solver places the two layers over each other: gap -40 with two
+            // 60-wide children leaves a 20px strip where both are painted
+            apply_layout_recursive(&mut frame, &Variables::default());
+            frame
+        }
+        let sample = |stacking: CanvasStacking| {
+            let page = Node::frame("page", 100.0, 100.0).child(two_overlapping(stacking));
+            let tree = build_render_tree(&page, &Variables::default());
+            let sink =
+                RasterSink::new(None, None, 100.0, 100.0, 1.0, Some(Color::WHITE)).expect("sink");
+            let pix = sink.render(&tree);
+            sample_px(&pix, 30, 30)
+        };
+        let (r, _, b, _) = sample(CanvasStacking::LastOnTop);
+        assert!(
+            b > r,
+            "last on top: the second layer wins the overlap, got {r},{b}"
+        );
+        let (r, _, b, _) = sample(CanvasStacking::FirstOnTop);
+        assert!(
+            r > b,
+            "first on top: the first layer wins the overlap, got {r},{b}"
+        );
+    }
+
+    /// PIXELS, not command lists: the canvas names a page's OUTERMOST frames and
+    /// never the page itself, which is the "page name on the artboard" complaint.
+    ///
+    /// The page root is shifted down by `GUTTER`, so the band ABOVE it — where a
+    /// root label would be painted — is inside the bitmap as well as the page
+    /// itself, and both are read back:
+    ///
+    /// * the gutter above the page: nothing (the root used to be labelled like
+    ///   any other frame),
+    /// * the page's own top edge: nothing (where the page name used to sit,
+    ///   inside the artwork, before names moved to the gutter),
+    /// * the gutter above the outermost frame: that frame's name,
+    /// * the gutter above a frame nested inside it: nothing,
+    /// * the gutter above a Section: the section's name.
+    ///
+    /// No font manager is attached, so a label rasterizes as its placeholder box
+    /// — exactly the question here ("was a name painted?") — and no GPU is
+    /// needed: this sink is tiny-skia.
+
+    #[test]
+    fn canvas_pixels_name_the_outermost_frames_and_never_the_page() {
+        const GUTTER: f64 = 40.0;
+        let (w, h) = (400.0, 300.0 + GUTTER);
+
+        fn check(darkest: u8, want_ink: bool, what: &str) {
+            if want_ink {
+                assert!(darkest < 245, "{what}: expected a name, darkest {darkest}");
+            } else {
+                assert!(darkest > 245, "{what}: expected no name, darkest {darkest}");
+            }
+        }
+
+        // `middle` sits 50px down inside `hero`, so its own gutter (where a
+        // nested frame's name would go) cannot overlap the hero's name.
+        let mut middle = Node::frame("middle", 60.0, 40.0);
+        middle.transform.y = 50.0;
+        let mut hero = Node::frame("hero", 160.0, 100.0).child(middle);
+        hero.transform.x = 40.0;
+        hero.transform.y = 40.0;
+        let mut band = Node::section("band", 120.0, 80.0);
+        band.name = "Band".into();
+        band.transform.x = 240.0;
+        band.transform.y = 40.0;
+        let mut page = Node::frame("page", w, h).child(hero).child(band);
+        page.transform.y = GUTTER;
+
+        let tree = crate::ir::build_render_tree_with_hidden(&page, &Variables::default(), None);
+        let sink = RasterSink::new(None, None, w, h, 1.0, Some(Color::WHITE));
+        let pix = sink.expect("sink").render(&tree);
+
+        // "ink": the darkest pixel in a band, ignoring transparent pixels
+        let ink = |x0: u32, y0: u32, x1: u32, y1: u32| {
+            let mut darkest = 255u8;
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let (r, g, b, a) = sample_px(&pix, x, y);
+                    if a > 8 {
+                        let avg = (u32::from(r) + u32::from(g) + u32::from(b)) / 3;
+                        darkest = darkest.min(avg as u8);
+                    }
+                }
+            }
+            darkest
+        };
+
+        // A name sits 26px above its frame, so a gutter band is
+        // `origin - 26 .. origin - 8`; the page's top edge is where the page
+        // name used to be painted instead.
+        check(ink(0, 14, 400, 32), false, "above the page");
+        check(ink(0, 41, 240, 53), false, "page corner");
+        check(ink(40, 54, 180, 72), true, "frame name");
+        check(ink(40, 104, 80, 122), false, "nested frame");
+        check(ink(240, 54, 340, 72), true, "section name");
+        // Figma paints a section's name as a chip in the section's own colour,
+        // sized to the name. This is that, in pixels — and it is asked by COLOUR,
+        // not by "any ink": with no font manager attached the sink paints a grey
+        // placeholder box as wide as the label's `max_width` (≈229 on white),
+        // which is lighter than the chip's own fill (≈118). So:
+        //   * where the chip is: something as dark as the chip,
+        //   * past where the name ends: the chip's colour is NOT there.
+        let chip = ink(240, 56, 270, 76);
+        assert!(chip < 150, "the chip paints its own colour, darkest {chip}");
+        let past = ink(300, 56, 360, 76);
+        assert!(past > 200, "the chip stops with its name, darkest {past}");
     }
 }
 

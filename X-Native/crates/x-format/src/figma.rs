@@ -187,14 +187,19 @@ fn export_node(n: &x_core::Node, parent: (f64, f64)) -> String {
         ),
         NodeKind::Rect { radius } => ("RECTANGLE", format!(",\"cornerRadius\":{radius}")),
         NodeKind::Ellipse => ("ELLIPSE", String::new()),
-        NodeKind::Arc { start, end } => (
+        NodeKind::Arc { start, end, ratio } => (
             "VECTOR",
             format!(
                 ",\"fillGeometry\":[{{\"path\":\"{}\",\"windingRule\":\"NONZERO\"}}]",
                 esc_json(&path_d(&x_core::booleans::arc_path_cmds(
-                    n.w, n.h, *start, *end
+                    n.w, n.h, *start, *end, *ratio
                 )))
             ),
+        ),
+        NodeKind::Poly { sides } => ("POLYGON", format!(",\"pointCount\":{sides}")),
+        NodeKind::Star { points, ratio } => (
+            "STAR",
+            format!(",\"pointCount\":{points},\"starInnerScale\":{ratio}"),
         ),
         NodeKind::Line => ("LINE", String::new()),
         NodeKind::Text { text } => {

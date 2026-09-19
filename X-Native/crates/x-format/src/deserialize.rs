@@ -1,6 +1,7 @@
 use crate::json::{P, V};
 #[allow(unused_imports)]
 use crate::*;
+use x_core::booleans::{COUNT_MAX, COUNT_MIN, STAR_RATIO};
 use x_core::document::LegacyStyle;
 use x_core::*;
 
@@ -89,6 +90,10 @@ fn parse_stops(v: &V) -> Vec<(f32, Color)> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn parse_mask_type(v: Option<&str>) -> MaskType {
+    v.and_then(MaskType::from_key).unwrap_or(MaskType::Alpha)
 }
 
 fn parse_blend(v: Option<&str>) -> BlendKind {
@@ -305,6 +310,13 @@ fn parse_grid(v: Option<&V>) -> Option<x_core::GridLayout> {
     })
 }
 
+/// Figma's Count is "minimum is three and the maximum is 60": a file that
+/// says otherwise loads clamped rather than wrong.
+fn count(v: Option<&V>) -> usize {
+    let n = v.and_then(V::num).unwrap_or(COUNT_MIN as f64) as usize;
+    n.clamp(COUNT_MIN, COUNT_MAX)
+}
+
 fn parse_kind(v: &V) -> NodeKind {
     match v.get("t").and_then(V::str).unwrap_or("frame") {
         "group" => NodeKind::Group,
@@ -316,6 +328,19 @@ fn parse_kind(v: &V) -> NodeKind {
         "arc" => NodeKind::Arc {
             start: v.get("start").and_then(V::num).unwrap_or(0.0),
             end: v.get("end").and_then(V::num).unwrap_or(270.0),
+            // files written before the arc had a ratio are solid wedges
+            ratio: v.get("ratio").and_then(V::num).unwrap_or(0.0),
+        },
+        "poly" => NodeKind::Poly {
+            sides: count(v.get("sides")),
+        },
+        "star" => NodeKind::Star {
+            points: count(v.get("points")),
+            ratio: v
+                .get("ratio")
+                .and_then(V::num)
+                .unwrap_or(STAR_RATIO)
+                .clamp(0.05, 0.95),
         },
         "line" => NodeKind::Line,
         "text" => NodeKind::Text {
@@ -528,8 +553,10 @@ pub(crate) fn parse_node(v: &V) -> Node {
     n.h = v.get("h").and_then(V::num).unwrap_or(0.0);
     n.opacity = v.get("opacity").and_then(V::num).unwrap_or(1.0) as f32;
     n.visible = v.get("visible").and_then(V::boolean).unwrap_or(true);
+    n.show_name = v.get("show_name").and_then(V::boolean).unwrap_or(true);
     n.locked = v.get("locked").and_then(V::boolean).unwrap_or(false);
     n.is_mask = v.get("mask").and_then(V::boolean).unwrap_or(false);
+    n.mask_type = parse_mask_type(v.get("maskType").and_then(V::str));
     n.fill = v
         .get("fill")
         .map(parse_paint)
@@ -778,9 +805,16 @@ pub(crate) fn parse_node(v: &V) -> Node {
                 Some("enter") => Trigger::MouseEnter,
                 Some("leave") => Trigger::MouseLeave,
                 Some("mouseup") => Trigger::MouseUp,
+                Some("mousedown") => Trigger::MouseDown,
                 Some("delay") => Trigger::AfterDelay {
                     ms: e.get("delay_ms").and_then(V::num).unwrap_or(0.0) as u32,
                 },
+                Some("video-hit") => Trigger::WhenVideoHits {
+                    time: e.get("video_time").and_then(V::num).unwrap_or(0.0) as f32,
+                },
+                Some("video-end") => Trigger::WhenVideoEnds,
+                // an unknown word is Figma's default rather than an error:
+                // files from other tools must still open
                 _ => Trigger::OnClick,
             };
             let dest = e.get("dest").and_then(V::str).unwrap_or("").to_string();
@@ -845,6 +879,7 @@ pub(crate) fn parse_node(v: &V) -> Node {
                     .map(Easing::from_str)
                     .unwrap_or(Easing::Linear),
                 reset_on_navigate: e.get("reset").and_then(V::boolean).unwrap_or(false),
+                animate_matching_layers: e.get("smartmatch").and_then(V::boolean).unwrap_or(false),
             });
         }
     }
@@ -1348,6 +1383,8 @@ fn validate_native_nodes(pages: &[V]) -> Result<(), String> {
                     | "rect"
                     | "ellipse"
                     | "arc"
+                    | "poly"
+                    | "star"
                     | "line"
                     | "text"
                     | "image"

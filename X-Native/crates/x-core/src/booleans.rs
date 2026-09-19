@@ -436,7 +436,7 @@ pub fn node_to_path(n: &Node) -> Option<Vec<PathCmd>> {
                 ])
             }
         }
-        NodeKind::Arc { start, end } => Some(arc_path_cmds(n.w, n.h, *start, *end)),
+        NodeKind::Arc { start, end, ratio } => Some(arc_path_cmds(n.w, n.h, *start, *end, *ratio)),
         NodeKind::Ellipse => {
             let (rx, ry) = (n.w / 2.0, n.h / 2.0);
             let (kx, ky) = (0.5523 * rx, 0.5523 * ry);
@@ -450,47 +450,87 @@ pub fn node_to_path(n: &Node) -> Option<Vec<PathCmd>> {
                 PathCmd::Close,
             ])
         }
+        NodeKind::Poly { sides } => Some(poly_path_cmds(n.w, n.h, *sides)),
+        NodeKind::Star { points, ratio } => Some(star_path_cmds(n.w, n.h, *points, *ratio)),
         NodeKind::Line => Some(vec![PathCmd::MoveTo(0.0, 0.0), PathCmd::LineTo(n.w, n.h)]),
         _ => None,
     }
 }
 
-/// Elliptical-arc path (y-down space, degrees clockwise from east):
-/// cubic-bezier approximation, <= 90 deg per segment. `start == end`
-/// (mod 360) yields the full ellipse. Open path (no Close) — Figma-style
-/// arc primitive geometry shared by node_to_path, the renderer and SVG
-/// export.
-pub fn arc_path_cmds(w: f64, h: f64, start: f64, end: f64) -> Vec<PathCmd> {
-    let (rx, ry) = (w / 2.0, (h / 2.0).max(1e-6));
-    let rx = rx.max(1e-6);
-    let (cx, cy) = (rx, ry);
-    let sweep = (end - start).rem_euclid(360.0);
-    let sweep = if sweep == 0.0 { 360.0 } else { sweep };
-    // split into n segments of <= 90 deg
-    let n = ((sweep / 90.0).ceil() as usize).max(1);
+/// The point `frac` of the way out from the centre to the ellipse's edge, at
+/// `deg` degrees — LOCAL node space, the box the arc's properties never move.
+/// The geometry below and the canvas handles both read it, so what is drawn
+/// and what can be grabbed cannot disagree.
+pub fn arc_point(w: f64, h: f64, deg: f64, frac: f64) -> (f64, f64) {
+    let (rx, ry) = ((w / 2.0).max(1e-6), (h / 2.0).max(1e-6));
+    let t = deg.to_radians();
+    (rx + rx * frac * t.cos(), ry + ry * frac * t.sin())
+}
+
+/// An arc's signed sweep: `end - start`, with equal angles read as the whole
+/// circle. The sign is part of the shape — Figma: "dragging the handle up
+/// will produce a positive percentage, while dragging the handle down will
+/// indicate a negative percentage" — so it is never folded with `rem_euclid`.
+pub fn arc_sweep(start: f64, end: f64) -> f64 {
+    let sweep = end - start;
+    if sweep.abs() < 1e-9 {
+        360.0
+    } else {
+        sweep.clamp(-360.0, 360.0)
+    }
+}
+
+/// Elliptical-arc geometry (y-down space, degrees from east, clockwise
+/// positive): cubic-bezier approximation, <= 90 degrees per segment, CLOSED —
+/// the region Figma's arc properties describe. `ratio` is the fraction of the
+/// radius the middle is cut back to, so 0 is a solid wedge through the centre
+/// and 0.85 a thin ring; the ring is a hole because its inner edge is walked
+/// the other way round (NonZero winding). Equal `start` and `end` is the full
+/// ellipse, closed ring included.
+///
+/// ONE outline for everything that draws or measures an arc — the fill, the
+/// stroke, a mask, flatten, outline stroke and the exporters — so the shape on
+/// screen and the shape in the file cannot drift apart.
+pub fn arc_path_cmds(w: f64, h: f64, start: f64, end: f64, ratio: f64) -> Vec<PathCmd> {
+    let (cx, cy) = (w / 2.0, h / 2.0);
+    let ratio = ratio.clamp(0.0, 1.0);
+    let sweep = arc_sweep(start, end);
+    let (x0, y0) = arc_point(w, h, start, 1.0);
+    let mut cmds = vec![PathCmd::MoveTo(x0, y0)];
+    arc_segments(&mut cmds, w, h, start, sweep, 1.0);
+    if ratio > 1e-6 {
+        let (ix, iy) = arc_point(w, h, start + sweep, ratio);
+        cmds.push(PathCmd::LineTo(ix, iy));
+        arc_segments(&mut cmds, w, h, start + sweep, -sweep, ratio);
+    } else if sweep.abs() < 360.0 - 1e-9 {
+        // a wedge closes through the centre
+        cmds.push(PathCmd::LineTo(cx, cy));
+    }
+    cmds.push(PathCmd::Close);
+    cmds
+}
+
+/// Emit one elliptical arc as cubic segments at `frac` of the radius — signed
+/// `sweep`, so a negative value walks back the other way round.
+fn arc_segments(cmds: &mut Vec<PathCmd>, w: f64, h: f64, from: f64, sweep: f64, frac: f64) {
+    let (rx, ry) = ((w / 2.0).max(1e-6), (h / 2.0).max(1e-6));
+    let n = ((sweep.abs() / 90.0).ceil() as usize).max(1);
     let seg = sweep / n as f64;
-    // kappa: standard circular-arc-to-bezier control offset for this
-    // segment angle: (4/3) tan(theta/4); 0.5523 for a quarter
+    // kappa: the standard circular-arc control offset (4/3) tan(theta/4); 0.5523
+    // for a quarter. Signed with the segment, so the arms stay on the inside of
+    // a counter-clockwise arc too.
     let kappa = 4.0 / 3.0 * (seg.to_radians() / 4.0).tan();
-    let pt = |deg: f64| {
+    let tangent = |deg: f64| {
         let t = deg.to_radians();
-        (cx + rx * t.cos(), cy + ry * t.sin())
+        (-rx * frac * t.sin(), ry * frac * t.cos())
     };
-    // tangent vector at angle t (derivative of (rx cos t, ry sin t))
-    let tang = |deg: f64| {
-        let t = deg.to_radians();
-        (-rx * t.sin(), ry * t.cos())
-    };
-    let mut cmds = vec![];
-    let p0 = pt(start);
-    cmds.push(PathCmd::MoveTo(p0.0, p0.1));
     for i in 0..n {
-        let a0 = start + seg * i as f64;
+        let a0 = from + seg * i as f64;
         let a1 = a0 + seg;
-        let (x0, y0) = pt(a0);
-        let (x1, y1) = pt(a1);
-        let (t0x, t0y) = tang(a0);
-        let (t1x, t1y) = tang(a1);
+        let (x0, y0) = arc_point(w, h, a0, frac);
+        let (x1, y1) = arc_point(w, h, a1, frac);
+        let (t0x, t0y) = tangent(a0);
+        let (t1x, t1y) = tangent(a1);
         cmds.push(PathCmd::CurveTo(
             x0 + t0x * kappa,
             y0 + t0y * kappa,
@@ -500,7 +540,88 @@ pub fn arc_path_cmds(w: f64, h: f64, start: f64, end: f64) -> Vec<PathCmd> {
             y1,
         ));
     }
-    cmds
+}
+
+/// The Count bounds Figma documents for both a polygon's sides and a star's
+/// points: "The minimum is three and the maximum is 60."
+pub const COUNT_MIN: usize = 3;
+pub const COUNT_MAX: usize = 60;
+
+/// Figma's default star is "a five pointed star with ten sides"; the inner
+/// points sit at 38.2% of the radius, the classic five-point star.
+pub const STAR_RATIO: f64 = 0.382;
+
+fn clamp_count(n: usize) -> usize {
+    n.clamp(COUNT_MIN, COUNT_MAX)
+}
+
+fn ring_cmds(pts: &[(f64, f64)]) -> Vec<PathCmd> {
+    let mut out = Vec::with_capacity(pts.len() + 2);
+    for (i, p) in pts.iter().enumerate() {
+        if i == 0 {
+            out.push(PathCmd::MoveTo(p.0, p.1));
+        } else {
+            out.push(PathCmd::LineTo(p.0, p.1));
+        }
+    }
+    out.push(PathCmd::Close);
+    out
+}
+
+/// Figma's Polygon: `sides` vertices on the ellipse inscribed in the box, the
+/// first one at the top — "the default shape for the polygon tool is a
+/// triangle" — walking clockwise. LOCAL node space, like the arc's geometry,
+/// so the shape is an appearance of the box and never resizes it.
+pub fn poly_path_cmds(w: f64, h: f64, sides: usize) -> Vec<PathCmd> {
+    let n = clamp_count(sides);
+    let pts: Vec<(f64, f64)> = (0..n)
+        .map(|k| arc_point(w, h, -90.0 + 360.0 * k as f64 / n as f64, 1.0))
+        .collect();
+    ring_cmds(&pts)
+}
+
+/// Figma's Star: `points` outer vertices with the inner ones at `ratio` of the
+/// radius between them, so a five-point star has ten vertices. The first
+/// vertex is at the top, like the polygon's.
+pub fn star_path_cmds(w: f64, h: f64, points: usize, ratio: f64) -> Vec<PathCmd> {
+    let n = clamp_count(points);
+    let inner = ratio.clamp(0.05, 0.95);
+    let pts: Vec<(f64, f64)> = (0..n * 2)
+        .map(|k| {
+            let frac = if k % 2 == 0 { 1.0 } else { inner };
+            arc_point(w, h, -90.0 + 180.0 * k as f64 / n as f64, frac)
+        })
+        .collect();
+    ring_cmds(&pts)
+}
+
+/// Is the LOCAL point (x, y) on the shape: inside the filled outline, or
+/// within `tol` of it so the stroke is grabbable? The polygon and the star are
+/// both simple polygons, so one crossing test on the flattened path answers
+/// for either.
+pub fn path_hit(cmds: &[PathCmd], x: f64, y: f64, tol: f64) -> bool {
+    let polys = path_to_polylines(cmds, 2);
+    if path_is_closed(cmds) && point_in(&polys, x, y) {
+        return true;
+    }
+    polys.iter().any(|poly| {
+        let n = poly.len();
+        (0..n).any(|i| {
+            let (a, b) = (poly[i], poly[(i + 1) % n]);
+            dist_to_seg(a, b, (x, y)) <= tol
+        })
+    })
+}
+
+fn dist_to_seg(a: (f64, f64), b: (f64, f64), p: (f64, f64)) -> f64 {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 <= 1e-12 {
+        0.0
+    } else {
+        (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0)
+    };
+    ((p.0 - (a.0 + dx * t)).powi(2) + (p.1 - (a.1 + dy * t)).powi(2)).sqrt()
 }
 
 // ---------------------------------------------- outline-stroke geometry
@@ -881,9 +1002,11 @@ mod tests {
     use crate::Color;
 
     #[test]
-    fn arc_quarter_is_one_open_curve() {
-        let cmds = arc_path_cmds(100.0, 100.0, 0.0, 90.0);
-        assert_eq!(cmds.len(), 2, "MoveTo + one 90-deg segment");
+    fn a_quarter_arc_is_a_wedge_through_the_centre() {
+        // ratio 0: the outer quarter, then straight in to the centre and
+        // closed — a pie slice, which is what Figma draws for sweep 90
+        let cmds = arc_path_cmds(100.0, 100.0, 0.0, 90.0, 0.0);
+        assert_eq!(cmds.len(), 4, "MoveTo + curve + LineTo + Close");
         assert!(
             matches!(cmds[0], PathCmd::MoveTo(x, y) if (x - 100.0).abs() < 1e-9 && (y - 50.0).abs() < 1e-9),
             "starts at the east point"
@@ -901,24 +1024,144 @@ mod tests {
         } else {
             panic!("expected curve");
         }
-        assert!(!matches!(cmds.last(), Some(PathCmd::Close)));
+        let through_centre = matches!(
+            cmds[2],
+            PathCmd::LineTo(x, y) if (x - 50.0).abs() < 1e-9 && (y - 50.0).abs() < 1e-9
+        );
+        assert!(through_centre, "the wedge closes through the centre");
+        assert!(matches!(cmds[3], PathCmd::Close));
+    }
+
+    #[test]
+    fn a_ratio_cuts_a_ring_out_of_the_wedge() {
+        // ratio 0.5: the centre is replaced by an inner arc, walked the other
+        // way round so NonZero winding leaves a hole
+        let ring = arc_path_cmds(100.0, 100.0, 0.0, 180.0, 0.5);
+        assert_eq!(
+            ring.iter()
+                .filter(|c| matches!(c, PathCmd::CurveTo(..)))
+                .count(),
+            4,
+            "two 90-deg segments out, two back"
+        );
+        let seam = matches!(
+            ring[3],
+            PathCmd::LineTo(x, y) if (x - 25.0).abs() < 1e-9 && (y - 50.0).abs() < 1e-9
+        );
+        assert!(seam, "the inner edge starts at half the radius");
+        assert!(matches!(ring.last(), Some(PathCmd::Close)));
+        // the wedge form has no inner edge at all
+        let wedge = arc_path_cmds(100.0, 100.0, 0.0, 180.0, 0.0);
+        assert_eq!(
+            wedge
+                .iter()
+                .filter(|c| matches!(c, PathCmd::CurveTo(..)))
+                .count(),
+            2
+        );
+        // arc_point is the one place the geometry and the handles agree
+        let (px, py) = arc_point(100.0, 100.0, 180.0, 0.5);
+        assert!((px - 25.0).abs() < 1e-9 && (py - 50.0).abs() < 1e-9);
     }
 
     #[test]
     fn arc_full_circle_and_arbitrary_sweep() {
-        // start == end -> full ellipse: 4 quarter segments
-        let full = arc_path_cmds(80.0, 40.0, 0.0, 0.0);
-        assert_eq!(full.len(), 5);
+        // start == end -> full ellipse: 4 quarter segments, closed
+        let full = arc_path_cmds(80.0, 40.0, 0.0, 0.0, 0.0);
+        assert_eq!(full.len(), 6, "MoveTo + 4 curves + Close");
+        assert!(matches!(full.last(), Some(PathCmd::Close)));
+        assert_eq!(arc_sweep(30.0, 30.0), 360.0, "equal angles are the circle");
+        // a full circle WITH a ratio is a closed ring: outer loop, seam,
+        // inner loop the other way round
+        let ring = arc_path_cmds(80.0, 40.0, 0.0, 0.0, 0.75);
+        assert_eq!(ring.len(), 11, "MoveTo + 4 + LineTo + 4 + Close");
         assert_eq!(
-            full.iter().filter(|c| matches!(c, PathCmd::Close)).count(),
-            0
+            ring.iter()
+                .filter(|c| matches!(c, PathCmd::CurveTo(..)))
+                .count(),
+            8
         );
         // 200-deg sweep -> 3 segments (ceil(200/90))
-        let sweep = arc_path_cmds(80.0, 40.0, 10.0, 210.0);
-        assert_eq!(sweep.len(), 4);
-        // sweep normalizes via rem_euclid regardless of start/end order
-        let back = arc_path_cmds(80.0, 40.0, 210.0, 10.0);
-        assert_eq!(back.len(), 3, "210->10 clockwise = 160 deg -> 2 segments");
+        let sweep = arc_path_cmds(80.0, 40.0, 10.0, 210.0, 0.0);
+        assert_eq!(
+            sweep
+                .iter()
+                .filter(|c| matches!(c, PathCmd::CurveTo(..)))
+                .count(),
+            3
+        );
+        // the sweep is SIGNED: 210 -> 10 walks back the other way
+        assert_eq!(arc_sweep(210.0, 10.0), -200.0);
+        let back = arc_path_cmds(80.0, 40.0, 210.0, 10.0, 0.0);
+        assert_eq!(
+            back.iter()
+                .filter(|c| matches!(c, PathCmd::CurveTo(..)))
+                .count(),
+            3,
+            "-200 deg -> 3 segments, same count the other way"
+        );
+    }
+
+    #[test]
+    fn a_polygon_is_a_ring_of_sides_whose_first_is_the_top() {
+        // Figma: "an enclosed shape that is made up of any number of straight
+        // lines", a triangle by default — every vertex on the box's rim, in
+        // the box's own space, so the box never becomes the shape.
+        let cmds = poly_path_cmds(100.0, 100.0, 3);
+        assert_eq!(cmds.len(), 4, "three vertices and the Close");
+        assert!(
+            matches!(cmds[0], PathCmd::MoveTo(x, y) if (x - 50.0).abs() < 1e-9 && y.abs() < 1e-9),
+            "the first vertex is the top of the box"
+        );
+        let verts: Vec<(f64, f64)> = cmds
+            .iter()
+            .filter_map(|c| match c {
+                PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => Some((*x, *y)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(verts.len(), 3, "a triangle has three");
+        for (x, y) in &verts {
+            let (dx, dy) = ((*x - 50.0) / 50.0, (*y - 50.0) / 50.0);
+            let r = (dx * dx + dy * dy).sqrt();
+            assert!((r - 1.0).abs() < 1e-9, "vertex {x},{y} sits on the rim");
+        }
+        assert!(matches!(cmds.last(), Some(PathCmd::Close)));
+        // Figma's Count is clamped to 3..60 whatever the caller says
+        assert_eq!(poly_path_cmds(100.0, 100.0, 1).len(), 4, "the floor is 3");
+        assert_eq!(
+            poly_path_cmds(100.0, 100.0, 200).len(),
+            COUNT_MAX + 1,
+            "the ceiling is 60"
+        );
+    }
+
+    #[test]
+    fn a_star_alternates_outside_points_with_ratio_inside_ones() {
+        // "The default will be a five pointed star with ten sides": five
+        // outside vertices on the rim, five at the Ratio between them.
+        let cmds = star_path_cmds(100.0, 100.0, 5, STAR_RATIO);
+        assert_eq!(cmds.len(), 11, "ten sides and the Close");
+        assert!(matches!(cmds.last(), Some(PathCmd::Close)));
+        let verts: Vec<(f64, f64)> = cmds
+            .iter()
+            .filter_map(|c| match c {
+                PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => Some((*x, *y)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(verts.len(), 10, "five points and five notches");
+        for (k, (x, y)) in verts.iter().enumerate() {
+            let (dx, dy) = ((*x - 50.0) / 50.0, (*y - 50.0) / 50.0);
+            let r = (dx * dx + dy * dy).sqrt();
+            let want = if k % 2 == 0 { 1.0 } else { STAR_RATIO };
+            assert!((r - want).abs() < 1e-9, "vertex {k} at {r}, not {want}");
+        }
+        assert_eq!(
+            star_path_cmds(100.0, 100.0, 7, 0.2).len(),
+            15,
+            "seven points is fifteen sides"
+        );
     }
 
     #[test]

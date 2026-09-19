@@ -332,10 +332,15 @@ pub fn validate_admission(doc: &Document) -> Result<(), String> {
                     numbers(&[*radius])?;
                     1
                 }
-                NodeKind::Arc { start, end } => {
-                    numbers(&[*start, *end])?;
+                NodeKind::Arc { start, end, ratio } => {
+                    numbers(&[*start, *end, *ratio])?;
                     1
                 }
+                NodeKind::Star { ratio, .. } => {
+                    numbers(&[*ratio])?;
+                    1
+                }
+                NodeKind::Poly { .. } => 1,
                 NodeKind::Image {
                     placement,
                     asset,

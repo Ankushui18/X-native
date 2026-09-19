@@ -12,6 +12,7 @@ pub mod booleans;
 pub mod clip;
 pub mod components;
 pub mod document;
+pub mod fallbacks;
 pub mod geometry;
 pub mod grid;
 pub mod image_transform;

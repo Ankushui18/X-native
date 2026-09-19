@@ -73,14 +73,16 @@ node-key allocator. `encode_message` is `pub(crate)` with `#[allow(dead_code)]`
 so the encoder does not rot while this is unimplemented. Import works
 (`x_native import-fig file.fig out.x`); export is `.x`, SVG, HTML/CSS, JSX.
 
-## 3. UI themes: painted, not persisted
+## 3. UI themes: two audited palettes, persisted
 
-`x_native::ui::ColorTokens` holds three audited palettes (Graphite, Daylight,
-High Contrast) and the app switches between them (TOKENS panel button,
-command palette, `Action::SetTheme`/`CycleTheme`), remapping every chrome color
-at paint time through `theme::resolve`. Still open:
+`x_native::ui::ColorTokens` holds two audited palettes (Graphite, Daylight) and
+the app switches between them (TOKENS panel button, command palette,
+`Action::SetTheme`/`CycleTheme`), remapping every chrome color at paint time
+through `theme::resolve`. The choice is written to `~/.config/x-native/theme`
+as a slug and read back at startup (`theme::persist_theme` /
+`load_persisted_theme`); a slug nothing parses — including the retired
+`high-contrast` one — falls back to Graphite. Still open:
 
-- the choice is not written to disk, so a restart returns to Graphite;
 - the right-click menu's *unwired* renderer (§1) carries its own `u32` palette
   derived from the roles — consistent today, but dead code;
 - content colors (artwork, smart guides, watermarks, avatars) are

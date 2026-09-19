@@ -24,6 +24,7 @@ const ICONS: &[(&str, &[&str])] = &[
     ("search", &["M21 21l-4.34-4.34", "M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16z"]),
     ("plus", &["M5 12h14", "M12 5v14"]),
     ("minus", &["M5 12h14"]),
+    ("line", &["M5 19 19 5"]),
     ("x", &["M18 6 6 18", "m6 6 12 12"]),
     ("chevron-down", &["m6 9 6 6 6-6"]),
     ("chevron-up", &["m18 15-6-6-6 6"]),
@@ -54,6 +55,13 @@ const ICONS: &[(&str, &[&str])] = &[
         "M10 16H4a1 1 0 0 0-1 1v3a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-3a1 1 0 0 0-1-1z",
     ]),
     ("clock", &["M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z", "M12 6v6l4 2"]),
+    ("square-round-corner", &[
+        "M21 11a8 8 0 0 0-8-8",
+        "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4",
+    ]),
+    ("triangle", &[
+        "M13.73 4a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z",
+    ]),
     ("star", &[
         "M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z",
     ]),
@@ -109,6 +117,11 @@ const ICONS: &[(&str, &[&str])] = &[
     ("pencil", &[
         "M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z",
         "m15 5 4 4",
+    ]),
+    ("brush", &[
+        "m14.622 17.897-10.68-2.913",
+        "M18.376 2.622a1 1 0 1 1 3.002 3.002L17.36 9.643a.5.5 0 0 0 0 .707l.944.944a2.41 2.41 0 0 1 0 3.408l-.944.944a.5.5 0 0 1-.707 0L8.354 7.348a.5.5 0 0 1 0-.707l.944-.944a2.41 2.41 0 0 1 3.408 0l.944.944a.5.5 0 0 0 .707 0z",
+        "M9 8c-1.804 2.71-3.97 3.46-6.583 3.948a.507.507 0 0 0-.302.819l7.32 8.883a1 1 0 0 0 1.185.204C12.735 20.405 16 16.792 16 15",
     ]),
     ("mouse-pointer-2", &[
         "M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z",
@@ -249,6 +262,12 @@ const ICONS: &[(&str, &[&str])] = &[
         "m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2",
     ]),
     ("frame", &["M22 6H2", "M6 2v4", "M6 18v4", "M18 2v4", "M18 18v4"]),
+    // Figma's Section: a rounded container with its title's first stroke
+    // inside the top-left corner — the labelled box the tool draws.
+    ("section", &[
+        "M6 3h12a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3z",
+        "M6.5 7.5h6",
+    ]),
     ("keyboard", &[
         "M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z",
         "M6.5 8a.5.5 0 1 0-1 0 .5.5 0 0 0 1 0z",
@@ -300,6 +319,28 @@ const ICONS: &[(&str, &[&str])] = &[
         "M21 13v1a4 4 0 0 1-4 4H3",
     ]),
     ("rotate-ccw", &["M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8", "M3 3v5h5"]),
+    (
+        "flip-horizontal",
+        &[
+            "M8 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h3",
+            "M16 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3",
+            "M12 2v2",
+            "M12 8v2",
+            "M12 14v2",
+            "M12 20v2",
+        ],
+    ),
+    (
+        "flip-vertical",
+        &[
+            "M21 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v3",
+            "M21 16v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3",
+            "M2 12h2",
+            "M8 12h2",
+            "M14 12h2",
+            "M20 12h2",
+        ],
+    ),
     ("save", &[
         "M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z",
         "M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7",
@@ -480,6 +521,7 @@ mod tests {
             "arrow-up-right",
             "box",
             "box-select",
+            "brush",
             "check",
             "chevron-down",
             "chevron-right",
@@ -498,6 +540,8 @@ mod tests {
             "file",
             "file-plus",
             "file-text",
+            "flip-horizontal",
+            "flip-vertical",
             "folder-open",
             "frame",
             "frame#",
@@ -510,6 +554,7 @@ mod tests {
             "layout-grid",
             "layout-list",
             "layout-template",
+            "line",
             "lock",
             "maximize",
             "maximize-2",
@@ -531,6 +576,7 @@ mod tests {
             "save",
             "scissors",
             "search",
+            "section",
             "sliders-horizontal",
             "sparkles",
             "square",
@@ -539,6 +585,7 @@ mod tests {
             "target",
             "trash",
             "trash-2",
+            "triangle",
             "type",
             "undo",
             "ungroup",
@@ -561,7 +608,7 @@ mod tests {
         }
         assert_eq!(
             names.len(),
-            73,
+            79,
             "census list drifted — recount when adding icons"
         );
     }

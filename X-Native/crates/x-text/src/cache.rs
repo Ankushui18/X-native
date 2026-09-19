@@ -70,6 +70,10 @@ pub struct TextLayoutKey {
     pub paragraph_indent_bits: u64,
     /// decoration (TextDecoration as u8): adds a per-line rect
     pub decoration: u8,
+    /// list style (x_core::ListStyle as u8): a bulleted or numbered block
+    /// has a marker column the plain one does not, so it must never be
+    /// served a plain layout
+    pub list: u8,
 }
 
 /// One styled run inside a rich-text layout key (see TextLayoutKey::runs).
@@ -118,6 +122,7 @@ impl TextLayoutKey {
             None,
             0.0,
             x_core::TextDecoration::None,
+            x_core::ListStyle::None,
         )
     }
 
@@ -144,6 +149,7 @@ impl TextLayoutKey {
         max_lines: Option<usize>,
         paragraph_indent: f64,
         decoration: x_core::TextDecoration,
+        list: x_core::ListStyle,
     ) -> Self {
         Self {
             text: text.to_string(),
@@ -164,6 +170,7 @@ impl TextLayoutKey {
             max_lines: max_lines.unwrap_or(0),
             paragraph_indent_bits: paragraph_indent.to_bits(),
             decoration: decoration as u8,
+            list: list as u8,
             color: {
                 let rgba = color.to_rgba8();
                 [rgba.r, rgba.g, rgba.b, rgba.a]
@@ -197,6 +204,7 @@ impl TextLayoutKey {
         max_lines: Option<usize>,
         paragraph_indent: f64,
         decoration: x_core::TextDecoration,
+        list: x_core::ListStyle,
     ) -> Self {
         let mut k = Self::new_styled(
             &parts.iter().map(|p| p.text.as_str()).collect::<String>(),
@@ -219,6 +227,7 @@ impl TextLayoutKey {
             max_lines,
             paragraph_indent,
             decoration,
+            list,
         );
         k.runs = parts
             .iter()
@@ -322,6 +331,11 @@ impl ShapedTextCache {
             2 => x_core::TextDecoration::Strikethrough,
             _ => x_core::TextDecoration::None,
         };
+        let list = match key.list {
+            1 => x_core::ListStyle::Bulleted,
+            2 => x_core::ListStyle::Numbered,
+            _ => x_core::ListStyle::None,
+        };
         let (glyphs, height) = if key.runs.is_empty() {
             let wrap = match key.wrap {
                 1 => x_core::TextWrap::Balance,
@@ -349,6 +363,7 @@ impl ShapedTextCache {
                 max_lines,
                 paragraph_indent,
                 decoration,
+                list,
             )?
         } else {
             // rich path: rebuild the parts from the key (the cache only
@@ -393,6 +408,7 @@ impl ShapedTextCache {
                 max_lines,
                 paragraph_indent,
                 decoration,
+                list,
             )?
         };
         let block = Arc::new(ShapedBlock { glyphs, height });
@@ -477,6 +493,7 @@ mod tests {
                 max_lines,
                 indent,
                 deco,
+                x_core::ListStyle::None,
             )
         };
         let left = base(Align::Left, None, 0.0, TextDecoration::None);
@@ -557,6 +574,7 @@ mod tests {
             None,
             0.0,
             x_core::TextDecoration::None,
+            x_core::ListStyle::None,
         );
         let k2 = TextLayoutKey::new_rich(
             &plain,
@@ -578,6 +596,7 @@ mod tests {
             None,
             0.0,
             x_core::TextDecoration::None,
+            x_core::ListStyle::None,
         );
         assert_ne!(k1, k2, "styled vs plain keys differ");
         assert_eq!(
@@ -602,6 +621,7 @@ mod tests {
                 None,
                 0.0,
                 x_core::TextDecoration::None,
+                x_core::ListStyle::None,
             ),
             "same runs -> same key"
         );
@@ -636,6 +656,7 @@ mod tests {
                 None,
                 0.0,
                 x_core::TextDecoration::None,
+                x_core::ListStyle::None,
             ))
         );
     }
@@ -684,6 +705,7 @@ mod tests {
             None,
             0.0,
             x_core::TextDecoration::None,
+            x_core::ListStyle::None,
         );
         let a = c.get_or_shape(&fm, k.clone()).expect("rich shapes");
         let b = c.get_or_shape(&fm, k).expect("second hit");
@@ -733,6 +755,7 @@ mod tests {
             None,
             0.0,
             x_core::TextDecoration::None,
+            x_core::ListStyle::None,
         )
         .expect("rich outlines");
         assert!(glyphs.len() >= 8, "shaped {} glyphs", glyphs.len());

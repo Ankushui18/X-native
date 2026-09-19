@@ -28,7 +28,7 @@
     },
     "radii": {
       "dashboard.rs": 0,
-      "editor_ui.rs": 14,
+      "editor_ui.rs": 15,
       "board_ui.rs": 0,
       "loading.rs": 0,
       "command.rs": 0,
@@ -50,7 +50,7 @@
       "icons.rs": 0,
       "theme.rs": 0
     },
-    "canvasSpaceRadii": 14,
+    "canvasSpaceRadii": 15,
     "canvasList": [
       1,
       1.5,
@@ -64,7 +64,7 @@
       "command.rs": 0,
       "paint.rs": 1,
       "run.rs": 0,
-      "state.rs": 20,
+      "state.rs": 21,
       "icons.rs": 0,
       "theme.rs": 19
     },
@@ -95,11 +95,11 @@
       40,
       48
     ],
-    "total": 703,
-    "onLadder": 335,
+    "total": 843,
+    "onLadder": 400,
     "perFile": {
       "dashboard.rs": 129,
-      "editor_ui.rs": 533,
+      "editor_ui.rs": 673,
       "board_ui.rs": 21,
       "command.rs": 0,
       "loading.rs": 20,
@@ -109,42 +109,52 @@
     "top": [
       {
         "value": 8,
-        "count": 112,
+        "count": 141,
         "onLadder": true
       },
       {
         "value": 4,
-        "count": 68,
+        "count": 80,
         "onLadder": true
       },
       {
         "value": 6,
-        "count": 52,
+        "count": 56,
         "onLadder": true
+      },
+      {
+        "value": 10,
+        "count": 52,
+        "onLadder": false
       },
       {
         "value": 12,
-        "count": 38,
+        "count": 42,
         "onLadder": true
       },
       {
-        "value": 5,
+        "value": 7,
         "count": 35,
         "onLadder": false
       },
       {
-        "value": 7,
+        "value": 2,
+        "count": 33,
+        "onLadder": false
+      },
+      {
+        "value": 5,
         "count": 31,
         "onLadder": false
       },
       {
-        "value": 2,
-        "count": 30,
-        "onLadder": false
+        "value": 24,
+        "count": 23,
+        "onLadder": true
       },
       {
-        "value": 10,
-        "count": 30,
+        "value": 22,
+        "count": 22,
         "onLadder": false
       },
       {
@@ -153,29 +163,19 @@
         "onLadder": false
       },
       {
-        "value": 24,
-        "count": 19,
-        "onLadder": true
-      },
-      {
-        "value": 3,
-        "count": 16,
-        "onLadder": false
-      },
-      {
-        "value": 14,
-        "count": 15,
+        "value": 9,
+        "count": 20,
         "onLadder": false
       },
       {
         "value": 16,
-        "count": 14,
+        "count": 20,
         "onLadder": true
       },
       {
-        "value": 20,
-        "count": 14,
-        "onLadder": true
+        "value": 14,
+        "count": 19,
+        "onLadder": false
       }
     ]
   },

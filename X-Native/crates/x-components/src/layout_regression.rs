@@ -687,3 +687,106 @@ fn auto_gap_no_overlap_when_children_exceed_container() {
     assert_eq!(b.transform.x, 30.0);
     assert_eq!(c.transform.x, 60.0, "children don't overlap with auto-gap");
 }
+
+// ------------------------------------------------- min/max + canvas stacking
+
+/// Figma's min/max dimensions are an ADDITIONAL setting — "Minimum and maximum
+/// dimensions is an additional setting that can be used at the same time as
+/// other resizing properties" (help 360040451373) — so they clamp the frame's
+/// own axes whatever the resizing choice is, and the padding floor survives a
+/// maximum that is smaller than the padding.
+#[test]
+fn min_and_max_dimensions_clamp_either_sizing() {
+    // a Fixed frame with a min width grows to it, and only to it
+    let mut fixed = Node::frame("fx", 100.0, 40.0);
+    if let NodeKind::Frame { layout } = &mut fixed.kind {
+        *layout = Some(AutoLayout {
+            direction: LayoutDirection::Horizontal,
+            sizing: Sizing::Fixed,
+            min_width: Some(160.0),
+            ..Default::default()
+        });
+    }
+    apply_layout_recursive(&mut fixed, &Variables::default());
+    assert_eq!(fixed.w, 160.0, "the minimum is a floor under a Fixed width");
+
+    // a Hug frame stops at its max width
+    let mut hugf = Node::frame("hx", 0.0, 0.0)
+        .auto_layout(AutoLayout {
+            direction: LayoutDirection::Horizontal,
+            padding: [4.0; 4],
+            sizing: Sizing::Hug,
+            max_width: Some(120.0),
+            ..Default::default()
+        })
+        .child(Node::rect("wide", 0.0, 0.0, 300.0, 30.0, Color::WHITE));
+    apply_layout_recursive(&mut hugf, &Variables::default());
+    assert_eq!(hugf.w, 120.0, "the maximum caps the hug");
+
+    // a padding floor still wins over a maximum that is smaller than it
+    let mut small = Node::frame("sm", 0.0, 0.0)
+        .auto_layout(AutoLayout {
+            direction: LayoutDirection::Horizontal,
+            padding: [20.0; 4],
+            sizing: Sizing::Hug,
+            max_width: Some(10.0),
+            ..Default::default()
+        })
+        .child(Node::rect("tiny", 0.0, 0.0, 5.0, 5.0, Color::WHITE));
+    apply_layout_recursive(&mut small, &Variables::default());
+    assert_eq!(
+        small.w, 40.0,
+        "40 of padding is the smallest a frame can be"
+    );
+
+    // the vertical axis answers the same way
+    let mut tall = Node::frame("tl", 30.0, 30.0);
+    if let NodeKind::Frame { layout } = &mut tall.kind {
+        *layout = Some(AutoLayout {
+            direction: LayoutDirection::Vertical,
+            sizing: Sizing::Fixed,
+            min_height: Some(90.0),
+            max_height: Some(70.0),
+            ..Default::default()
+        });
+    }
+    apply_layout_recursive(&mut tall, &Variables::default());
+    assert_eq!(tall.h, 90.0, "the minimum wins when the two cross");
+}
+
+/// Figma's **canvas stacking** (help 31289464393751): "the order of layers in
+/// the layers panel stays the same. Canvas stacking is solely a visual change
+/// that happens on the canvas." `paint_order` is that rule, and it is the one
+/// owner — the viewer and the hit test both walk it.
+#[test]
+fn canvas_stacking_reverses_the_paint_order_and_never_the_layer_list() {
+    let row = |stacking: CanvasStacking| {
+        Node::frame("row", 200.0, 40.0)
+            .auto_layout(AutoLayout {
+                direction: LayoutDirection::Horizontal,
+                gap: -20.0,
+                canvas_stacking: stacking,
+                ..Default::default()
+            })
+            .child(Node::rect("a", 0.0, 0.0, 40.0, 40.0, Color::WHITE))
+            .child(Node::rect("b", 0.0, 0.0, 40.0, 40.0, Color::WHITE))
+            .child(Node::rect("c", 0.0, 0.0, 40.0, 40.0, Color::WHITE))
+    };
+    let last = row(CanvasStacking::LastOnTop);
+    assert_eq!(
+        paint_order(&last),
+        vec![0, 1, 2],
+        "last on top is document order"
+    );
+    assert!(!paints_first_on_top(&last));
+    let first = row(CanvasStacking::FirstOnTop);
+    assert_eq!(
+        paint_order(&first),
+        vec![2, 1, 0],
+        "first on top paints back to front"
+    );
+    assert!(paints_first_on_top(&first));
+    // the layer list itself is untouched by the canvas-only setting
+    let ids: Vec<&str> = first.children.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(ids, vec!["a", "b", "c"]);
+}

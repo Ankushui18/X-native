@@ -1,7 +1,34 @@
 //! Export scope, origin and typography are decided once, before choosing a sink.
 use vello::kurbo::{Affine, Rect, Shape};
-use x_core::{Node, Variables};
+use x_core::{Node, NodeKind, Variables};
 use x_render::{RenderCommand, RenderTree};
+
+/// The plan for one slice: the page content inside the slice's world bounds,
+/// re-origined to (0, 0) with the slice's own size as the canvas. The slice
+/// layer itself contributes no commands — it is a region, and an empty slice
+/// still exports its size (a transparent image), which is what Figma does.
+fn prepare_slice_export(
+    root: &Node,
+    id: &str,
+    vars: &Variables,
+    fonts: &x_text::FontManager,
+) -> Result<ExportPlan, String> {
+    let (tree, width, height) =
+        x_render::ir::build_render_tree_slice(root, id, vars).ok_or("slice no longer exists")?;
+    let mut tree = tree;
+    // same chrome strip as every other export: a slice must never capture a
+    // frame's on-canvas name label
+    tree.commands
+        .retain(|c| !x_render::ir::is_frame_name_label(c.key()));
+    let mut tree = x_render::text_geometry::outline_text(&tree, fonts)?;
+    x_render::text_geometry::outline_strokes(&mut tree);
+    Ok(ExportPlan {
+        tree,
+        width,
+        height,
+        origin: (0.0, 0.0),
+    })
+}
 
 pub struct ExportPlan {
     pub tree: RenderTree,
@@ -16,22 +43,45 @@ pub fn prepare_export(
     selection: Option<&[String]>,
     fonts: &x_text::FontManager,
 ) -> Result<ExportPlan, String> {
+    // A SLICE is an export REGION, not a layer: the node draws nothing itself,
+    // so a selected slice exports the flattened canvas content inside its
+    // bounds (Figma: "anything that overlaps the slice will be exported").
+    // One slice per export — this app writes one file per invocation, so a
+    // selection that mixes a slice with other layers is refused rather than
+    // silently exporting part of it.
+    if let Some(ids) = selection {
+        let slice = ids.iter().find(|id| {
+            matches!(x_core::find_node(root, id), Some(n) if matches!(n.kind, NodeKind::Slice))
+        });
+        match (ids.len(), slice) {
+            (1, Some(slice)) => return prepare_slice_export(root, slice, vars, fonts),
+            (_, Some(_)) => {
+                return Err("a slice exports on its own — select the slice, or the layers".into());
+            }
+            _ => {}
+        }
+    }
     let tree = match selection {
         Some([]) => return Err("select at least one layer, or choose Export page".into()),
         Some(ids) => x_render::ir::build_render_tree_selection(root, ids, vars)
             .ok_or("selection no longer exists")?,
         None => x_render::build_render_tree(root, vars),
     };
-    // Frame/Section NAMES are canvas chrome (like the canvas grid): they
-    // help identify layers while editing but are never part of the
-    // exported artwork — Figma exports frame names out of the output too.
-    // Stripping here (before outlining) keeps label glyph outlines out of
-    // BOTH the export content and the computed bounds, in one place, for
-    // every export format (PNG / SVG / PDF / clipboard image).
+    // A FRAME's name is canvas chrome (like the canvas grid): it helps identify
+    // layers while editing but is never part of the exported artwork — Figma
+    // exports frame names out of the output too. Stripping here (before
+    // outlining) keeps label glyph outlines out of BOTH the export content and
+    // the computed bounds, in one place, for every export format (PNG / SVG /
+    // PDF / clipboard image).
+    //
+    // A SECTION is different, and its slot name says so: the title chip is part
+    // of the section's own artwork and exports with it (`/pill` + `/chip`), which
+    // is also why the two do not share the `/label` suffix — stripping the chip's
+    // text would have left a solid, wordless tag in the output.
     let tree = {
         let mut t = tree;
         t.commands
-            .retain(|c| !matches!(c, RenderCommand::Glyphs { key, .. } if key.ends_with("/label")));
+            .retain(|c| !x_render::ir::is_frame_name_label(c.key()));
         t
     };
     let mut tree = x_render::text_geometry::outline_text(&tree, fonts)?;

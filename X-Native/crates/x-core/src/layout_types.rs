@@ -147,6 +147,78 @@ impl Overflow {
     }
 }
 
+/// Figma's **scroll position** for one object inside a frame that scrolls:
+/// the Prototype tab's "Scroll behavior → Position" menu. The two flags on
+/// `ChildConstraints` are the state; this is the menu's own view of them, so
+/// the panel and the renderer cannot disagree about which one is set.
+///
+/// Figma: "Scroll with parent" is the default and scrolls the object with the
+/// frame; "Fixed" leaves it where it is while the content moves; "Sticky"
+/// "will scroll at first, but become fixed once its top edge reaches the top
+/// of its parent frame" ([Prototype scroll and overflow behavior], help
+/// article 360039818734). The row is only meaningful on an object that sits
+/// on a frame whose Overflow says it scrolls.
+///
+/// [Prototype scroll and overflow behavior]: https://help.figma.com/hc/en-us/articles/360039818734
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScrollPosition {
+    /// Moves with the frame's content (Figma's default).
+    #[default]
+    ScrollWithParent,
+    /// Ignores the parent's scroll offset.
+    Fixed,
+    /// Scrolls, then pins to the top edge of its frame.
+    Sticky,
+}
+
+impl ScrollPosition {
+    /// The menu's label, in Figma's own words.
+    pub fn label(self) -> &'static str {
+        match self {
+            ScrollPosition::ScrollWithParent => "Scroll with parent",
+            ScrollPosition::Fixed => "Fixed",
+            ScrollPosition::Sticky => "Sticky",
+        }
+    }
+
+    /// Wire/value form — the two flags are stored as booleans, so this is only
+    /// used where a single word is needed (status lines, tests).
+    pub fn to_str(self) -> &'static str {
+        match self {
+            ScrollPosition::ScrollWithParent => "scroll_with_parent",
+            ScrollPosition::Fixed => "fixed",
+            ScrollPosition::Sticky => "sticky",
+        }
+    }
+
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "fixed" => ScrollPosition::Fixed,
+            "sticky" => ScrollPosition::Sticky,
+            _ => ScrollPosition::ScrollWithParent,
+        }
+    }
+
+    /// Which position the flags currently express. Sticky wins over fixed when
+    /// both are on, which is the renderer's own precedence.
+    pub fn of(c: &ChildConstraints) -> Self {
+        if c.sticky {
+            ScrollPosition::Sticky
+        } else if c.fixed {
+            ScrollPosition::Fixed
+        } else {
+            ScrollPosition::ScrollWithParent
+        }
+    }
+
+    /// Write the position back: exactly one of the two flags is left on.
+    pub fn apply(self, c: &mut ChildConstraints) {
+        c.fixed = self == ScrollPosition::Fixed;
+        c.sticky = self == ScrollPosition::Sticky;
+    }
+}
+
 /// Per-side frame padding: `[left, right, top, bottom]`.
 pub type Padding = [f64; 4];
 
@@ -435,5 +507,50 @@ impl AutoLayout {
     /// Cross-axis sizing with the `None`-follows-`sizing` fallback applied.
     pub fn cross(&self) -> Sizing {
         self.cross_sizing.unwrap_or(self.sizing)
+    }
+}
+
+#[cfg(test)]
+mod scroll_position_tests {
+    use super::*;
+
+    #[test]
+    fn the_position_menu_reads_and_writes_the_two_flags() {
+        let mut c = ChildConstraints::default();
+        assert_eq!(ScrollPosition::of(&c), ScrollPosition::ScrollWithParent);
+        assert_eq!(ScrollPosition::of(&c).label(), "Scroll with parent");
+
+        ScrollPosition::Fixed.apply(&mut c);
+        assert!(c.fixed && !c.sticky, "fixed leaves sticky off");
+        assert_eq!(ScrollPosition::of(&c), ScrollPosition::Fixed);
+
+        // a position write never leaves both flags on: sticky clears fixed
+        ScrollPosition::Sticky.apply(&mut c);
+        assert!(c.sticky && !c.fixed);
+        assert_eq!(ScrollPosition::of(&c).label(), "Sticky");
+
+        // and back to the default turns both off
+        ScrollPosition::ScrollWithParent.apply(&mut c);
+        assert!(!c.fixed && !c.sticky);
+        assert_eq!(ScrollPosition::of(&c).to_str(), "scroll_with_parent");
+        assert_eq!(
+            ScrollPosition::from_str(ScrollPosition::Sticky.to_str()),
+            ScrollPosition::Sticky
+        );
+        assert_eq!(
+            ScrollPosition::from_str("something else"),
+            ScrollPosition::ScrollWithParent
+        );
+    }
+
+    #[test]
+    fn sticky_wins_when_both_flags_are_on() {
+        // the renderer resolves sticky first; the menu must not disagree
+        let c = ChildConstraints {
+            fixed: true,
+            sticky: true,
+            ..Default::default()
+        };
+        assert_eq!(ScrollPosition::of(&c), ScrollPosition::Sticky);
     }
 }

@@ -1,5 +1,10 @@
 # Local verification record — document loading screen
 
+> Dated snapshot (7 Sep 2026), kept as history. Two rows below still name the
+> retired High Contrast palette: the shipped theme set, the CLI's `--theme`
+> list and theme persistence were changed on 18 Sep 2026 — see
+> [FIXES_2026-09-18_OWNER_REPORT.md](FIXES_2026-09-18_OWNER_REPORT.md).
+
 - Date: 7 September 2026
 - Original audited base: `93d2233b83ef69ebc53699964cf87ff32790627e`
 - Local branch: `fix/editor-reliability` (not pushed)

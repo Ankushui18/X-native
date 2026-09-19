@@ -177,6 +177,50 @@ if [[ $QUICK == 0 ]]; then
         echo "      skipped: no node on PATH (the generators need it)"
     fi
 
+    step "design + Figma conformance (guard)"
+    # The sheet steps above prove the sheet matches the sources. This proves the
+    # *decisions* do: one owner per colour literal in the engine, a ratchet on the
+    # literals that remain, every icon the chrome asks for, and every behaviour
+    # docs/FIGMA_PARITY.md claims to copy from Figma still naming the test that
+    # pins it. Dependency-free (node:fs only), so unlike the jsdom sheets it runs
+    # on a bare runner.
+    if command -v node >/dev/null 2>&1; then
+        if GUARD_LOG=$(node tools/design-sheet/guard.mjs 2>&1); then
+            ok "$(printf '%s\n' "$GUARD_LOG" | tail -1 | sed 's/^SUMMARY  //')"
+        else
+            bad "a design or Figma-parity rule is broken"
+            printf '%s\n' "$GUARD_LOG" | grep -E '^FAIL' | head -12 | sed 's/^/      /'
+        fi
+    else
+        echo "      skipped: no node on PATH (the guard needs it)"
+    fi
+
+    step "design sheet assertions (jsdom)"
+    # check.mjs and check_screens.mjs are the sheet's own 40 + 20 assertions: the
+    # ladders read against design_system.rs, orphan roles, contrast pairs, no raw
+    # colour literals in the gallery, every screen's landmarks. They need jsdom —
+    # the repository's only node dependency — so CI installs it (`npm ci --prefix
+    # tools/design-sheet`) and FAILS the gate when it is missing instead of
+    # skipping the assertions silently. Locally, a missing jsdom is a note.
+    if command -v node >/dev/null 2>&1; then
+        if (cd tools/design-sheet && node -e "import('jsdom')" >/dev/null 2>&1); then
+            for sheet in check.mjs check_screens.mjs; do
+                if SHEET_LOG=$(cd tools/design-sheet && node "$sheet" 2>&1); then
+                    ok "$sheet — $(printf '%s\n' "$SHEET_LOG" | grep -c '^PASS') PASS"
+                else
+                    bad "$sheet — $(printf '%s\n' "$SHEET_LOG" | grep -c '^FAIL') FAIL"
+                    printf '%s\n' "$SHEET_LOG" | grep '^FAIL' | head -10 | sed 's/^/      /'
+                fi
+            done
+        elif [[ "${CI:-}" == "true" ]]; then
+            bad "jsdom is not installed (CI must run: npm ci --prefix tools/design-sheet)"
+        else
+            echo "      skipped: jsdom is not installed (npm ci --prefix tools/design-sheet)"
+        fi
+    else
+        echo "      skipped: no node on PATH"
+    fi
+
     step "CLI smoke (x_native)"
     if $CARGO build -q -p x-designer --bin x_native 2>/dev/null; then
         TARGET_DIR=${CARGO_TARGET_DIR:-$PWD/target}
