@@ -25,6 +25,12 @@ pub enum Trigger {
     MouseEnter,
     MouseLeave,
     MouseUp,
+    /// Figma's *Mouse down / Touch press*: the press itself, permanent and
+    /// one-way — unlike [`Trigger::OnPress`], which reverts when the press
+    /// ends. Figma documents the split (plugin API: "MOUSE_ENTER, MOUSE_LEAVE,
+    /// MOUSE_UP and MOUSE_DOWN are permanent, one-way navigation") and lists
+    /// it in the Prototype panel beside Mouse up (help 360040315773).
+    MouseDown,
     /// Prototype-player key press (Figma "key" gamepad/keyboard trigger).
     /// `key` is a single character ("a", "1") or a named key ("Enter",
     /// "Space", "Escape").
@@ -51,41 +57,78 @@ impl Trigger {
             Trigger::MouseEnter => "enter",
             Trigger::MouseLeave => "leave",
             Trigger::MouseUp => "mouseup",
+            Trigger::MouseDown => "mousedown",
             Trigger::KeyDown { .. } => "key",
             Trigger::WhenVideoHits { .. } => "video-hit",
             Trigger::WhenVideoEnds => "video-end",
         }
     }
-    /// Human label for the Prototype panel.
+    /// The trigger's name in the Prototype panel — ONE owner, in Figma's own
+    /// words. The set is what help 360040315773 prints for the trigger
+    /// control: *On click / On tap*, *While hovering*, *While pressing*,
+    /// *Mouse enter*, *Mouse leave*, *Mouse down / Touch press*, *Mouse up /
+    /// Touch release*, *On drag*, *After delay*, *Key/Gamepad*, *When video
+    /// hits*, *When video ends*. The desktop spelling is the row's — the
+    /// reference panel reads "On drag", never "On tap" — so the touch aliases
+    /// stay in the docs.
+    ///
+    /// The short form only: what a trigger carries (a delay, a key, a video
+    /// time) is its *parameter* and has its own field in the row;
+    /// [`Trigger::label_with`] is the one-line spelling.
     pub fn label(&self) -> &'static str {
         match self {
             Trigger::OnClick => "On click",
+            Trigger::OnDrag => "On drag",
             Trigger::OnHover => "While hovering",
             Trigger::OnPress => "While pressing",
-            Trigger::MouseUp => "Mouse up",
-            Trigger::OnDrag => "On drag",
-            Trigger::AfterDelay { ms } => {
-                if *ms == 0 {
-                    "After delay"
-                } else {
-                    ""
-                } // handled specially with ms
-            }
+            Trigger::KeyDown { .. } => "Key/Gamepad",
             Trigger::MouseEnter => "Mouse enter",
             Trigger::MouseLeave => "Mouse leave",
-            Trigger::KeyDown { .. } => "Key down",
+            Trigger::MouseDown => "Mouse down",
+            Trigger::MouseUp => "Mouse up",
+            Trigger::AfterDelay { .. } => "After delay",
             Trigger::WhenVideoHits { .. } => "When video hits",
             Trigger::WhenVideoEnds => "When video ends",
         }
     }
-    /// Full label including the delay duration or video time.
+
+    /// Every trigger the panel offers, in the menu's order: Figma's list
+    /// (help 360040315773) with its default, *On click*, moved to the front.
+    /// ONE table — the menu paints it, a press writes `row`'s entry, and the
+    /// delay/key/video entries carry the value the row starts from.
+    pub fn all() -> [Trigger; 12] {
+        [
+            Trigger::OnClick,
+            Trigger::OnDrag,
+            Trigger::OnHover,
+            Trigger::OnPress,
+            Trigger::KeyDown { key: String::new() },
+            Trigger::MouseEnter,
+            Trigger::MouseLeave,
+            Trigger::MouseDown,
+            Trigger::MouseUp,
+            Trigger::AfterDelay { ms: 800 },
+            Trigger::WhenVideoHits { time: 0.0 },
+            Trigger::WhenVideoEnds,
+        ]
+    }
+
+    /// The menu row this trigger sits on — its identity without the parameter,
+    /// which is the wire name (`to_str`), so the menu's tick and a press on it
+    /// cannot disagree about what "the same trigger" means.
+    pub fn row(&self) -> usize {
+        let me = self.to_str();
+        let list = Trigger::all();
+        list.iter().position(|t| t.to_str() == me).unwrap_or(0)
+    }
+    /// Full label including the delay duration or video time — the one-line
+    /// spelling, built from [`Trigger::label`] so the words have one owner.
     pub fn label_with(&self) -> String {
         match self {
-            Trigger::AfterDelay { ms } => format!("After delay ({} ms)", ms),
-            Trigger::KeyDown { key } => format!("Key down ({})", key),
-            Trigger::WhenVideoHits { time } => format!("When video hits ({:.1}s)", time),
-            Trigger::WhenVideoEnds => "When video ends".to_string(),
-            other => other.label().to_string(),
+            Trigger::AfterDelay { ms } => format!("{} ({} ms)", self.label(), ms),
+            Trigger::KeyDown { key } => format!("{} ({})", self.label(), key),
+            Trigger::WhenVideoHits { time } => format!("{} ({:.1}s)", self.label(), time),
+            _ => self.label().to_string(),
         }
     }
 }
@@ -1135,6 +1178,50 @@ mod tests {
         // no interactions at all
         let n3 = Node::rect("c", 0.0, 0.0, 10.0, 10.0, peniko::Color::WHITE);
         assert!(effective_interactions(&n3).is_empty());
+    }
+
+    /// Figma's trigger control is a dropdown whose entries are its own words
+    /// (help 360040315773); the panel reads them from `label`, one owner for
+    /// both. This pins the list, the order the menu shows it in, and the rule
+    /// that the short form never carries a parameter.
+    #[test]
+    fn the_trigger_words_are_figmas_and_the_menu_lists_every_one() {
+        let figma = [
+            "On click",
+            "On drag",
+            "While hovering",
+            "While pressing",
+            "Key/Gamepad",
+            "Mouse enter",
+            "Mouse leave",
+            "Mouse down",
+            "Mouse up",
+            "After delay",
+            "When video hits",
+            "When video ends",
+        ];
+        let words: Vec<&str> = Trigger::all().iter().map(|t| t.label()).collect();
+        assert_eq!(words, figma.to_vec());
+        for (k, t) in Trigger::all().iter().enumerate() {
+            assert_eq!(t.row(), k, "{} sits on its own menu row", t.label());
+        }
+        // a parameter never leaks into the row's words: the pill is the short
+        // form and the field beside it holds the number
+        assert_eq!(Trigger::AfterDelay { ms: 0 }.label(), "After delay");
+        assert_eq!(Trigger::AfterDelay { ms: 900 }.label(), "After delay");
+        let key = Trigger::KeyDown { key: "A".into() };
+        assert_eq!(key.label(), "Key/Gamepad");
+        let video = Trigger::WhenVideoHits { time: 5.5 };
+        assert_eq!(video.label(), "When video hits");
+        // the one-line spelling is built from the same words
+        assert_eq!(
+            Trigger::AfterDelay { ms: 800 }.label_with(),
+            "After delay (800 ms)"
+        );
+        assert_eq!(key.label_with(), "Key/Gamepad (A)");
+        assert_eq!(Trigger::MouseDown.label_with(), "Mouse down");
+        // the wire name is the menu's identity, and Mouse down is on the wire
+        assert_eq!(Trigger::MouseDown.to_str(), "mousedown");
     }
 
     #[test]

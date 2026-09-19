@@ -69,6 +69,9 @@ pub fn paint(app: &mut App, s: &mut Scene) {
     if let Some(which) = app.dropdown_proto_scroll {
         paint_proto_scroll_dropdown(app, s, &mut hit, which);
     }
+    if let Some(i) = app.dropdown_proto_trigger {
+        paint_proto_trigger_dropdown(app, s, &mut hit, i);
+    }
     if app.paint_lib.is_some() {
         paint_paint_library(app, s, &mut hit);
     }
@@ -6844,6 +6847,71 @@ fn paint_constraint_dropdown(
     }
 }
 
+/// Figma's **trigger menu**, anchored under the pill that opened it. The
+/// control is a dropdown, not a cycle (help 360040315773 calls it "the trigger
+/// control"): the list is `Trigger::all`, so the delay, key, mouse-down and
+/// video triggers are reachable from the panel rather than only the six
+/// pointer ones, and each row's words come from `Trigger::label` — the same
+/// owner the pill reads, so menu and field cannot disagree.
+fn paint_proto_trigger_dropdown(
+    app: &mut App,
+    s: &mut Scene,
+    hit: &mut Vec<(Rect, Action)>,
+    i: usize,
+) {
+    let list = x_native::Trigger::all();
+    // which row is ticked: the selected layer's own interaction `i`
+    let current = match app.doc_ref().selected_id() {
+        Some(id) => {
+            let root = &app.doc_ref().editor_ref().root;
+            find_node(root, &id)
+                .and_then(|n| x_native::effective_interactions(n).into_iter().nth(i))
+                .map(|ix| ix.trigger.row())
+        }
+        None => None,
+    };
+    let (ax, ay) = app.proto_trigger_dd_anchor;
+    let h = DROPDOWN_ROW_H * list.len() as f64;
+    let w = 176.0;
+    let x0 = ax.min((app.win_w - w - 8.0).max(8.0)).max(8.0);
+    // twelve rows is taller than the room under the field in most windows, so
+    // the menu flips above the pill rather than running off the screen
+    let mut y0 = ay + 4.0;
+    if y0 + h > app.win_h - 8.0 {
+        y0 = (ay - 4.0 - h).max(8.0);
+    }
+    let dd = Rect::new(x0, y0, x0 + w, y0 + h);
+    elev_shadow(s, dd, 8.0, Elevation::Floating);
+    fill_rrect(s, dd, R_LG, C_FIELD);
+    stroke_rrect(s, dd, R_LG, C_LINE_2, 1.0);
+    for (k, t) in list.iter().enumerate() {
+        let r = Rect::new(
+            dd.x0,
+            dd.y0 + DROPDOWN_ROW_H * k as f64,
+            dd.x1,
+            dd.y0 + DROPDOWN_ROW_H * (k + 1) as f64,
+        );
+        let hov = hover(app, r);
+        let on = current == Some(k);
+        if hov || on {
+            fill_rect(s, r, if hov { C_FIELD_2 } else { C_FIELD });
+        }
+        app.fonts.text(
+            s,
+            r.x0 + 10.0,
+            r.y0 + 9.0,
+            t.label(),
+            T11,
+            if on { C_TEXT } else { C_MUTED },
+            Wt::Reg,
+        );
+        if on {
+            draw_icon(s, "check", r.x1 - 22.0, r.y0 + 8.0, ICON_XS, C_TEXT);
+        }
+        hit.push((r, Action::ProtoSetTrigger(i, k)));
+    }
+}
+
 /// One row of Figma's Scroll behavior block: the label on the left and the
 /// field that opens `menu` on the right, inside the panel's padding. `field`
 /// is (caption, the value the field shows, the menu it opens). The anchor is
@@ -9131,23 +9199,6 @@ pub(crate) fn proto_targets(app: &App) -> Vec<(String, String)> {
     out
 }
 
-pub(crate) fn proto_trigger_label(t: &x_native::Trigger) -> &'static str {
-    use x_native::Trigger as T;
-    match t {
-        T::OnClick => "On click",
-        T::OnHover => "While hovering",
-        T::MouseEnter => "Mouse enter",
-        T::MouseLeave => "Mouse leave",
-        T::OnPress => "While pressing",
-        T::MouseUp => "Mouse up",
-        T::OnDrag => "On drag",
-        T::AfterDelay { .. } => "After delay",
-        T::KeyDown { .. } => "Key pressed",
-        T::WhenVideoHits { .. } => "Video hits",
-        T::WhenVideoEnds => "Video ends",
-    }
-}
-
 pub(crate) fn proto_dest_of(a: &x_native::Action) -> Option<String> {
     match a {
         x_native::Action::Navigate { destination } | x_native::Action::ScrollTo { destination } => {
@@ -9269,56 +9320,74 @@ fn paint_prototype(
             let row_h = if has_url { 128.0 } else { 96.0 };
             let row = Rect::new(x0, y, xr, y + row_h);
             fill_rrect(s, row, R_MD, C_FIELD);
-            // Row 1: trigger + action type + destination
-            let tb = Rect::new(x0 + 5.0, y + 4.0, x0 + 75.0, y + 20.0);
+            // Row 1: the trigger, then whatever it carries. Figma's trigger
+            // control is a dropdown whose field sizes to its own words (help
+            // 360040315773), so the pill is measured rather than fixed: the
+            // longest name still leaves the parameter its room inside the row,
+            // and the text truncates rather than overdrawing the field beside
+            // it — which is what a fixed 70 px pill did at "When video hits".
+            let pw = match &ix.trigger {
+                x_native::Trigger::KeyDown { .. } => 96.0,
+                _ => 60.0,
+            };
+            let label = ix.trigger.label();
+            let want = app.fonts.measure(label, T10, Wt::Reg) + 10.0;
+            let room = ((xr - x0) - (pw + 15.0)).max(56.0);
+            let tw = want.clamp(56.0, room);
+            let tx1 = (x0 + 5.0 + tw).min(xr - 5.0);
+            let tb = Rect::new(x0 + 5.0, y + 4.0, tx1, y + 20.0);
+            if app.dropdown_proto_trigger == Some(i) {
+                app.proto_trigger_dd_anchor = (tb.x0, tb.y1);
+            }
             input_box(app, s, tb, 4.0);
-            app.fonts.text(
-                s,
-                tb.x0 + 4.0,
-                y + 6.0,
-                proto_trigger_label(&ix.trigger),
-                T10,
-                C_TEXT,
-                Wt::Reg,
-            );
+            let shown = app.fonts.truncate(label, T10, Wt::Reg, tb.width() - 8.0);
+            app.fonts.text(s, tb.x0 + 4.0, y + 6.0, &shown, T10, C_TEXT, Wt::Reg);
             hit.push((tb, Action::ProtoTrigger(i)));
 
-            // Show trigger-specific fields (delay for AfterDelay, key for KeyDown, time for WhenVideoHits)
+            // The parameter a "when" trigger carries — Figma's delay, key or
+            // video time — starts where the pill ends, not at a fixed offset.
+            let px = tb.x1 + 5.0;
+            let pb = Rect::new(px, y + 4.0, (px + pw).min(xr - 5.0), y + 20.0);
             match &ix.trigger {
                 x_native::Trigger::AfterDelay { ms } => {
-                    let db = Rect::new(x0 + 80.0, y + 4.0, x0 + 140.0, y + 20.0);
-                    input_box(app, s, db, 4.0);
+                    input_box(app, s, pb, 4.0);
                     app.fonts.text(
                         s,
-                        db.x0 + 4.0,
+                        pb.x0 + 4.0,
                         y + 6.0,
                         &format!("{}ms", ms),
                         T10,
                         C_TEXT,
                         Wt::Mono,
                     );
-                    hit.push((db, Action::ProtoEditDelay(i)));
+                    hit.push((pb, Action::ProtoEditDelay(i)));
                 }
                 x_native::Trigger::KeyDown { key } => {
-                    let kb = Rect::new(x0 + 80.0, y + 4.0, x0 + 140.0, y + 20.0);
-                    input_box(app, s, kb, 4.0);
-                    app.fonts
-                        .text(s, kb.x0 + 4.0, y + 6.0, key, T10, C_TEXT, Wt::Mono);
-                    hit.push((kb, Action::ProtoEditKey(i)));
+                    input_box(app, s, pb, 4.0);
+                    // Figma's key control reads "Click to select" until a key
+                    // is recorded; ours cycles the common keys, so the empty
+                    // state carries the same invitation.
+                    let (text, ink) = if key.is_empty() {
+                        ("Click to select".to_string(), C_DIM)
+                    } else {
+                        (key.clone(), C_TEXT)
+                    };
+                    let shown = app.fonts.truncate(&text, T10, Wt::Mono, pb.width() - 8.0);
+                    app.fonts.text(s, pb.x0 + 4.0, y + 6.0, &shown, T10, ink, Wt::Mono);
+                    hit.push((pb, Action::ProtoEditKey(i)));
                 }
                 x_native::Trigger::WhenVideoHits { time } => {
-                    let vb = Rect::new(x0 + 80.0, y + 4.0, x0 + 140.0, y + 20.0);
-                    input_box(app, s, vb, 4.0);
+                    input_box(app, s, pb, 4.0);
                     app.fonts.text(
                         s,
-                        vb.x0 + 4.0,
+                        pb.x0 + 4.0,
                         y + 6.0,
                         &format!("{:.1}s", time),
                         T10,
                         C_TEXT,
                         Wt::Mono,
                     );
-                    hit.push((vb, Action::ProtoEditVideoTime(i)));
+                    hit.push((pb, Action::ProtoEditVideoTime(i)));
                 }
                 _ => {}
             }

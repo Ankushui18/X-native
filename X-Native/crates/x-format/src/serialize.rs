@@ -372,9 +372,15 @@ fn nested_action_json(a: &Action) -> String {
 }
 
 fn interaction_json(i: &Interaction) -> String {
+    // A trigger's parameter rides beside its word. Every trigger that carries
+    // one writes it here — the reader in `deserialize.rs` knows all twelve
+    // words (`Trigger::to_str`) and the fields that go with them; a word this
+    // writer emits but that reader does not know comes back as On click, which
+    // is how the video triggers used to lose their kind on the way in.
     let delay = match &i.trigger {
         Trigger::AfterDelay { ms } => format!(",\"delay_ms\":{ms}"),
         Trigger::KeyDown { key } => format!(",\"key\":\"{}\"", esc(key)),
+        Trigger::WhenVideoHits { time } => format!(",\"video_time\":{time}"),
         _ => String::new(),
     };
     // direction suffix for Move in / Move out ("movein-left")

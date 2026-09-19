@@ -1391,7 +1391,106 @@ fn prototype_panel_lists_interaction_rows() {
         .any(|(_, a)| matches!(a, Action::FlowEnter)));
 }
 
-/// Figma's interaction editor, in our row: the action's own name on the left
+/// Figma's trigger control is a dropdown listing its own words (help
+/// 360040315773). This walks the list the menu paints, writes from it, and
+/// checks the row still fits at the narrowest panel — the pill is measured to
+/// its words, so no trigger name can overdraw the field beside it.
+#[test]
+fn the_trigger_menu_offers_figmas_list_and_the_pill_fits_its_words() {
+    use x_native::Trigger;
+    let mut h = host();
+    proto_doc(&mut h);
+    h.app.doc().right_tab = crate::state::RightTab::Prototype;
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+
+    // the pill opens the menu rather than cycling through six triggers
+    h.dispatch(Action::ProtoTrigger(0));
+    assert_eq!(h.app.dropdown_proto_trigger, Some(0));
+    let mut scene = vello::Scene::new();
+    crate::editor_ui::paint(&mut h.app, &mut scene);
+    let rows: Vec<Rect> = h
+        .app
+        .hit
+        .iter()
+        .filter(|(_, a)| matches!(a, Action::ProtoSetTrigger(0, _)))
+        .map(|(r, _)| *r)
+        .collect();
+    assert_eq!(rows.len(), 12, "every trigger the engine carries");
+    for r in &rows {
+        assert!(r.x0 >= 0.0 && r.x1 <= h.app.win_w, "on screen");
+        assert!(r.y0 >= 0.0 && r.y1 <= h.app.win_h, "in the window");
+    }
+
+    // a press writes that trigger, kind and starting value together
+    h.dispatch(Action::ProtoSetTrigger(0, 8));
+    assert!(h.app.dropdown_proto_trigger.is_none(), "the menu closed");
+    let of = |h: &Host| {
+        let root = &h.app.doc_ref().editor_ref().root;
+        let btn = find_node_clone(root, "btn").unwrap();
+        btn.interactions[0].trigger.clone()
+    };
+    assert_eq!(of(&h), Trigger::MouseDown, "Mouse down is reachable now");
+    assert_eq!(h.app.status, "Trigger: Mouse down");
+
+    // the "when" triggers arrive with the value their row starts from, and the
+    // parameter field beside the pill edits it
+    h.dispatch(Action::ProtoSetTrigger(0, 4));
+    assert_eq!(of(&h), Trigger::KeyDown { key: "".into() });
+    h.dispatch(Action::ProtoSetTrigger(0, 9));
+    assert_eq!(of(&h), Trigger::AfterDelay { ms: 800 });
+    h.dispatch(Action::ProtoSetTrigger(0, 10));
+    assert_eq!(of(&h), Trigger::WhenVideoHits { time: 0.0 });
+
+    // every trigger in the list paints a pill and its parameter inside the
+    // row's own width — the narrowest panel is 208 px (ED_RIGHT_MIN)
+    for (k, want) in Trigger::all().iter().enumerate() {
+        h.dispatch(Action::ProtoSetTrigger(0, k));
+        assert_eq!(&of(&h), want, "row {k} writes its own trigger");
+        let mut scene = vello::Scene::new();
+        crate::editor_ui::paint(&mut h.app, &mut scene);
+        let pill = h
+            .app
+            .hit
+            .iter()
+            .find(|(_, a)| *a == Action::ProtoTrigger(0))
+            .map(|(r, _)| *r)
+            .expect("the trigger pill");
+        assert!(pill.width() >= 56.0, "the pill keeps a readable width");
+        // the field beside the pill, for the triggers that carry a value
+        let param = h
+            .app
+            .hit
+            .iter()
+            .find(|(_, a)| match a {
+                Action::ProtoEditDelay(0) => true,
+                Action::ProtoEditKey(0) => true,
+                Action::ProtoEditVideoTime(0) => true,
+                _ => false,
+            })
+            .map(|(r, _)| *r);
+        if let Some(p) = param {
+            // the pill starts 5 px inside the row, so the row's left edge is
+            // pill.x0 - 5 and ED_RIGHT_MIN puts its right edge 208 further on
+            let row_right = pill.x0 - 5.0 + 208.0;
+            assert!(p.x0 >= pill.x1, "the field does not overlap the pill");
+            assert!(p.x1 <= row_right, "and stays inside the row");
+        }
+    }
+    assert_eq!(h.app.status, "Trigger: When video ends");
+    // and the pill's words come from the same owner the menu reads: the
+    // engine's `Trigger::label`, pinned by the x-core test beside this one
+    assert_eq!(
+        find_node_clone(&h.app.doc_ref().editor_ref().root, "btn")
+            .unwrap()
+            .interactions[0]
+            .trigger
+            .label(),
+        "When video ends"
+    );
+}
+
+/// Figma's interaction editor, in our own row: the action's own name on the left
 /// ("Navigate to", "Go back"), then an arrow and the thing it acts on — and
 /// nothing after the name at all when the action has no destination. Beside
 /// the animation sit Figma's four direction arrows, which set the side a Move
@@ -3282,6 +3381,21 @@ fn player_doc(h: &mut Host) {
         },
     ];
     d.editor().insert_node("f1", pu);
+    // mouse-down navigate (200..280, 115..145): the press itself, one-way —
+    // the counterpart to `pu`'s While pressing, which reverts on release
+    let mut md = rect("md", 200.0, 115.0);
+    md.interactions = vec![Interaction {
+        trigger: Trigger::MouseDown,
+        action: Action::Navigate {
+            destination: "f2".into(),
+        },
+        transition_ms: 0,
+        animation: Animation::Instant,
+        actions: vec![],
+        easing: Easing::Linear,
+        reset_on_navigate: false,
+    }];
+    d.editor().insert_node("f1", md);
     let mut gate = rect("gate", 20.0, 60.0); // f2-local → world (420..500, 60..90)
     gate.interactions = vec![Interaction {
         trigger: Trigger::OnClick,
@@ -3354,6 +3468,33 @@ fn player_click_routes_through_open_overlay_at_rendered_position() {
         "shut closes dlg"
     );
     assert_eq!(h.app.flow.as_ref().unwrap().current, "f1");
+}
+
+/// Figma splits the press in two: *While pressing* is temporary — releasing
+/// reverts what it did — while *Mouse down / Touch press* is the press itself,
+/// permanent and one-way (help 360040315773; the plugin API spells it out:
+/// "MOUSE_ENTER, MOUSE_LEAVE, MOUSE_UP and MOUSE_DOWN are permanent, one-way
+/// navigation"). This is that difference, in the player.
+#[test]
+fn player_mouse_down_navigates_on_press_and_release_keeps_it() {
+    let mut h = host();
+    player_doc(&mut h);
+    h.flow_enter();
+    // md centre (240, 130)
+    let sp = h.app.world_to_screen(Point::new(240.0, 130.0));
+    h.flow_press(sp);
+    assert_eq!(
+        h.app.flow.as_ref().unwrap().current,
+        "f2",
+        "Mouse down fires on the press"
+    );
+    h.flow_release();
+    assert_eq!(
+        h.app.flow.as_ref().unwrap().current,
+        "f2",
+        "and the release keeps it — one-way, unlike While pressing"
+    );
+    assert_eq!(h.app.flow.as_ref().unwrap().stack, vec!["f1".to_string()]);
 }
 
 #[test]

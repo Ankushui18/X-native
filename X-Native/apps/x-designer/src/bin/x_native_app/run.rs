@@ -7650,19 +7650,29 @@ impl Host {
         self.app.status = format!("On click → {dname} (smart animate, 350ms)");
     }
 
-    fn proto_trigger_cycle(&mut self, i: usize) {
+    /// Write the trigger a press picked in Figma's trigger menu. The list is
+    /// `Trigger::all`, so the menu reaches every trigger the engine carries —
+    /// the old cycle only ever visited the six pointer ones and left the
+    /// delay, key and video triggers unreachable from the panel. The value a
+    /// "when" trigger starts from (a delay's milliseconds, a video hit's time)
+    /// comes from the same row, and the parameter field beside the pill edits
+    /// it from there.
+    fn proto_set_trigger(&mut self, i: usize, row: usize) {
+        let Some(trigger) = x_native::Trigger::all().get(row).cloned() else {
+            return;
+        };
+        let label = trigger.label();
+        let had_selection = self.proto_selected_id().is_some();
         self.proto_edit(move |l| {
             if let Some(ix) = l.get_mut(i) {
-                ix.trigger = match ix.trigger {
-                    x_native::Trigger::OnClick => x_native::Trigger::OnHover,
-                    x_native::Trigger::OnHover => x_native::Trigger::MouseEnter,
-                    x_native::Trigger::MouseEnter => x_native::Trigger::MouseLeave,
-                    x_native::Trigger::MouseLeave => x_native::Trigger::OnPress,
-                    x_native::Trigger::OnPress => x_native::Trigger::MouseUp,
-                    _ => x_native::Trigger::OnClick,
-                };
+                ix.trigger = trigger;
             }
         });
+        // proto_edit writes its own "select a layer" message when there is
+        // nothing to write to; only speak when the write had a target
+        if had_selection {
+            self.app.status = format!("Trigger: {label}");
+        }
     }
 
     fn proto_dest_cycle(&mut self, i: usize, dir: i32) {
@@ -8148,7 +8158,13 @@ impl Host {
                 f.hovered = Some(hit.clone());
             }
         }
+        // The press fires Figma's three press-time triggers. Mouse down sits
+        // between them because it is the press itself: While pressing arms the
+        // auto-reverse above (it reverts when the press ends), On click and
+        // Mouse down are permanent — releasing fires Mouse up, in
+        // `flow_release`, and never undoes either of them.
         self.flow_fire_trigger(&hit, x_native::Trigger::OnPress);
+        self.flow_fire_trigger(&hit, x_native::Trigger::MouseDown);
         self.flow_fire_trigger(&hit, x_native::Trigger::OnClick);
     }
 
@@ -10372,7 +10388,17 @@ impl Host {
                     l.remove(i);
                 }
             }),
-            Action::ProtoTrigger(i) => self.proto_trigger_cycle(i),
+            Action::ProtoTrigger(i) => {
+                // Figma's trigger control is a dropdown; the panel shows one
+                // menu at a time, so opening this one closes the scroll row's
+                let open = self.app.dropdown_proto_trigger != Some(i);
+                self.app.dropdown_proto_trigger = if open { Some(i) } else { None };
+                self.app.dropdown_proto_scroll = None;
+            }
+            Action::ProtoSetTrigger(i, row) => {
+                self.app.dropdown_proto_trigger = None;
+                self.proto_set_trigger(i, row);
+            }
             Action::ProtoDest(i, dir) => self.proto_dest_cycle(i, dir),
             Action::ProtoSpeed(i) => self.proto_speed_cycle(i),
             Action::ProtoAnimation(i) => self.proto_animation_cycle(i),
@@ -10411,6 +10437,7 @@ impl Host {
             Action::ProtoScrollMenu(which) => {
                 let open = self.app.dropdown_proto_scroll != Some(which);
                 self.app.dropdown_proto_scroll = if open { Some(which) } else { None };
+                self.app.dropdown_proto_trigger = None;
             }
             Action::ProtoSetOverflow(row) => {
                 self.app.dropdown_proto_scroll = None;

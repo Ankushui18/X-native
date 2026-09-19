@@ -656,7 +656,11 @@ impl<'a> Player<'a> {
             if !orphaned {
                 self.hovered = Some(hit.clone());
             }
-            self.fire_trigger(&hit, Trigger::OnPress)
+            let mut fired = self.fire_trigger(&hit, Trigger::OnPress);
+            // Mouse down is the press itself: permanent and one-way, where
+            // "while pressing" arms the release that unwinds it
+            fired |= self.fire_trigger(&hit, Trigger::MouseDown);
+            fired
         } else {
             false
         }
@@ -1257,6 +1261,34 @@ mod tests {
         p.release(Point::new(285.0, 40.0));
         // no key trigger is bound in this doc
         assert_eq!(p.key("a"), None);
+    }
+
+    /// Figma's Mouse down is the press itself: permanent and one-way, where
+    /// While pressing arms the release that unwinds it (help 360040315773).
+    /// The player fires it from `press`, beside `OnPress`; `release` leaves it
+    /// standing.
+    #[test]
+    fn player_mouse_down_navigates_on_press_and_release_keeps_it() {
+        let mut md = Node::rect("md", 10.0, 20.0, 60.0, 30.0, Color::WHITE);
+        md.interactions = vec![Interaction {
+            trigger: Trigger::MouseDown,
+            action: Action::Navigate {
+                destination: "detail".into(),
+            },
+            transition_ms: 0,
+            animation: Animation::Instant,
+            actions: vec![],
+            easing: Easing::Linear,
+            reset_on_navigate: false,
+        }];
+        let root = Node::frame("root", 1000.0, 600.0)
+            .child(Node::frame("home", 400.0, 300.0).child(md))
+            .child(Node::frame("detail", 400.0, 300.0));
+        let mut p = Player::new(&root, "home");
+        assert!(p.press(Point::new(30.0, 35.0)), "Mouse down fires");
+        assert_eq!(p.current, "detail");
+        p.release(Point::new(30.0, 35.0));
+        assert_eq!(p.current, "detail", "the release keeps it");
     }
 
     #[test]

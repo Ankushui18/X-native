@@ -45,14 +45,14 @@ recon task, not a settled fact.
 | 11 Vector editing & booleans | 20 | 14 | 5 | 1 | 0 | 0 |
 | 12 Components, instances, styles | 20 | 13 | 4 | 3 | 0 | 0 |
 | 13 Variables & modes | 9 | 6 | 3 | 0 | 0 | 0 |
-| 14 Prototype | 30 | 18 | 10 | 1 | 0 | 1 |
+| 14 Prototype | 30 | 19 | 9 | 1 | 0 | 1 |
 | 15 Inspect, dev mode, codegen | 9 | 5 | 3 | 1 | 0 | 0 |
 | 16 Export & import | 12 | 11 | 1 | 0 | 0 | 0 |
 | 17 Canvas view & navigation | 14 | 9 | 2 | 1 | 1 | 1 |
 | 18 Design language (look of the app itself) | 12 | 1 | 5 | 6 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **334** | **222** | **55** | **38** | **16** | **3** |
+| **total** | **334** | **223** | **54** | **38** | **16** | **3** |
 
 The 38 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
@@ -408,8 +408,8 @@ scroll behaviour, flows and flow starting points, device preview.
 | 14.1 | Select-to-connect on canvas | edge circle, drag to a frame, snaps | `Drag::ProtoConnect` | MATCH |
 | 14.2 | Connection noodle | curved bezier, arrowhead | 3-segment elbow, hit follows the drawn shape | PARTIAL |
 | 14.3 | Select / delete a connection | click it, `⌫` | `Action::ConnMenu`, `ConnDelete` | MATCH |
-| 14.4 | Trigger list | On click/tap, drag, while hovering, while pressing, key/gamepad, mouse enter/leave/up/down, after delay, video hits/ends | `Trigger` enum, 11 variants | MATCH |
-| 14.5 | Trigger row wording | short form ("On drag") | still spells the long form | PARTIAL (delta 1) |
+| 14.4 | Trigger list | On click/tap, drag, while hovering, while pressing, key/gamepad, mouse enter/leave/up/down, after delay, video hits/ends ([help 360040315773](https://help.figma.com/hc/en-us/articles/360040315773)) | `Trigger` enum, **12** variants incl. Mouse down, and the panel's trigger menu reaches every one — the old cycle only visited the six pointer kinds | MATCH |
+| 14.5 | Trigger row wording | short form ("On drag"), from Figma's own list ([help 360040315773](https://help.figma.com/hc/en-us/articles/360040315773)) | `Trigger::label` is the ONE owner — "Key/Gamepad", "When video hits", "When video ends" replaced our "Key pressed"/"Video hits"/"Video ends"; the duplicate panel table is gone; the pill is measured to its words so none can overdraw the field beside it | MATCH |
 | 14.6 | Action list | Navigate to, Back, Scroll to, Open/Close/Swap overlay, Open link, Change to, Set variable, Set mode | `Action` enum covers all but *Change to* | PARTIAL |
 | 14.7 | Action row with destination | "→ destination" box | `proto_action_type_label` + dest box | MATCH |
 | 14.8 | Animation list | Instant, Dissolve, Smart animate, Move in/out, Push, Slide in/out, Scale? | `Animation`, 7 variants | MATCH |
@@ -559,7 +559,9 @@ rendering it.
    the Overflow and Position menus, the preview's wheel scroll clamped to the
    content, `ScrollTo` scrolling the frame it lives in, and the reset switch.
    Pinned by `the_scroll_behaviour_rows_write_the_frames_overflow_and_a_layers_position`.
-2. **Trigger row short form** (14.5) — "On drag" etc. as Figma writes them.
+2. ~~**Trigger row short form** (14.5)~~ — **delivered**: one owner
+   (`Trigger::label`), Figma's words, a trigger menu that reaches all twelve
+   kinds (Mouse down included) and a pill measured to its own text.
 3. **Animate matching layers tick** (14.12) — opt-in for smart-animate matching.
 
 ### Wave 1b — the missing behaviours, in owner-visible order

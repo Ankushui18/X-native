@@ -800,9 +800,16 @@ pub(crate) fn parse_node(v: &V) -> Node {
                 Some("enter") => Trigger::MouseEnter,
                 Some("leave") => Trigger::MouseLeave,
                 Some("mouseup") => Trigger::MouseUp,
+                Some("mousedown") => Trigger::MouseDown,
                 Some("delay") => Trigger::AfterDelay {
                     ms: e.get("delay_ms").and_then(V::num).unwrap_or(0.0) as u32,
                 },
+                Some("video-hit") => Trigger::WhenVideoHits {
+                    time: e.get("video_time").and_then(V::num).unwrap_or(0.0) as f32,
+                },
+                Some("video-end") => Trigger::WhenVideoEnds,
+                // an unknown word is Figma's default rather than an error:
+                // files from other tools must still open
                 _ => Trigger::OnClick,
             };
             let dest = e.get("dest").and_then(V::str).unwrap_or("").to_string();

@@ -1244,6 +1244,10 @@ pub enum Action {
     ProtoScrollMenu(ProtoScrollMenu),
     ProtoSetOverflow(usize),
     ProtoSetPosition(usize),
+    /// A press in the trigger menu: interaction `i` takes `Trigger::all()[row]`
+    /// — the trigger *kind* plus the value its row starts from (a delay's
+    /// milliseconds, a video hit's time).
+    ProtoSetTrigger(usize, usize),
     FlowEnter,
     FlowBack,
     FlowExit,
@@ -2806,6 +2810,12 @@ pub struct App {
     /// Constraints field above.
     pub dropdown_proto_scroll: Option<ProtoScrollMenu>,
     pub proto_scroll_dd_anchor: (f64, f64),
+    /// Open Prototype-tab **trigger** menu — the index of the interaction
+    /// whose row it belongs to — and the screen anchor that row recorded while
+    /// painting. Figma's trigger control is a dropdown (help 360040315773);
+    /// `Trigger::all` is the list it shows.
+    pub dropdown_proto_trigger: Option<usize>,
+    pub proto_trigger_dd_anchor: (f64, f64),
     /// Zoom menu open (right-panel header, audit F4)
     pub dropdown_zoom: bool,
     /// Hover labels registered this frame (P10); paint_tooltip draws
@@ -3056,6 +3066,8 @@ impl App {
             constraint_dd_anchor: (0.0, 0.0),
             dropdown_proto_scroll: None,
             proto_scroll_dd_anchor: (0.0, 0.0),
+            dropdown_proto_trigger: None,
+            proto_trigger_dd_anchor: (0.0, 0.0),
             dropdown_zoom: false,
             tooltip: Vec::new(),
             dropdown_lh: false,

@@ -535,6 +535,63 @@ mod tests {
         assert_eq!(save_x(&loaded), text);
     }
 
+    /// Every trigger word the engine can write, read back with the value it
+    /// carries. The reader used to know nine of the twelve words, so a mouse
+    /// down trigger and both video triggers came back as On click — and a
+    /// video hit's time was never written at all.
+    #[test]
+    fn every_trigger_word_and_its_parameter_survive_the_round_trip() {
+        let mut doc = Document::new();
+        let mut hot = Node::rect("hot", 0.0, 0.0, 120.0, 40.0, Color::from_rgb8(0, 0, 255));
+        hot.interactions = Trigger::all()
+            .iter()
+            .cloned()
+            .map(|trigger| Interaction {
+                trigger,
+                action: Action::CloseOverlay,
+                actions: vec![],
+                transition_ms: 0,
+                animation: Animation::Instant,
+                easing: Easing::Linear,
+                reset_on_navigate: false,
+            })
+            .collect();
+        doc.pages.push(Node::frame("page-1", 800.0, 600.0).child(hot));
+        let text = save_x(&doc);
+        let loaded = load_x(&text).expect("load");
+        let hot = find(&loaded.pages[0], "hot").expect("hot survives");
+        let list = &hot.interactions;
+        let kinds: Vec<&str> = list.iter().map(|i| i.trigger.to_str()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "click",
+                "drag",
+                "hover",
+                "press",
+                "key",
+                "enter",
+                "leave",
+                "mousedown",
+                "mouseup",
+                "delay",
+                "video-hit",
+                "video-end",
+            ]
+        );
+        // the parameters ride with their words
+        assert_eq!(
+            hot.interactions[4].trigger,
+            Trigger::KeyDown { key: "".into() }
+        );
+        assert_eq!(hot.interactions[9].trigger, Trigger::AfterDelay { ms: 800 });
+        assert_eq!(
+            hot.interactions[10].trigger,
+            Trigger::WhenVideoHits { time: 0.0 }
+        );
+        assert_eq!(save_x(&loaded), text);
+    }
+
     #[test]
     fn openlink_and_mouseup_roundtrip_through_x_format() {
         let mut doc = Document::new();

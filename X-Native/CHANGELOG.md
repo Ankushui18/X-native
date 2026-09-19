@@ -5,6 +5,55 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-19 (Prototype: the trigger control, in Figma's words)
+
+The panel's first control was a cycle through six triggers whose words lived in
+two places. It is Figma's dropdown now, in Figma's words — and the trigger the
+engine was missing (Mouse down) and the kinds the panel could not reach (delay,
+key, video, drag) came with it.
+
+- **One owner for the trigger's name.** `Trigger::label` (x-core) is the table;
+  the panel's duplicate `proto_trigger_label` is deleted. The words are Figma's
+  own list (help 360040315773), and three of ours were wrong: "Key pressed" →
+  **Key/Gamepad**, "Video hits" → **When video hits**, "Video ends" → **When
+  video ends**.
+- **The bug behind them.** `Trigger::label` returned an *empty string* for any
+  delay with a non-zero `ms` ("handled specially with ms"), and `label_with`
+  spelled "Key down" — a second name for a trigger whose row said "Key pressed".
+  The short form never carries the parameter now, and the one-line spelling is
+  built from the same words.
+- **A menu, not a cycle.** Figma's trigger control is a dropdown; ours cycled
+  On click → While hovering → Mouse enter → Mouse leave → While pressing →
+  Mouse up and back, so a design could not be given an *On drag*, a delay, a
+  key/gamepad or a video trigger at all. `Trigger::all` is the twelve-entry list
+  the menu paints; a press writes that trigger *kind and the value its row
+  starts from* (800 ms, a blank key, 0.0 s), and the parameter field beside the
+  pill edits it from there. The menu flips above the pill when the window has no
+  room below it.
+- **Mouse down exists now.** Figma splits the press in two: *While pressing* is
+  temporary — releasing reverts it, which is our `press_span` — while *Mouse
+  down / Touch press* is permanent and one-way (help 360040315773 lists it;
+  the plugin API says "MOUSE_UP and MOUSE_DOWN are permanent, one-way
+  navigation"). The engine gains the variant, the player fires it on the press
+  between While pressing and On click, and it never arms the auto-reverse that
+  the press's end unwinds.
+- **The wire keeps all twelve.** The serializer wrote "video-hit"/"video-end"
+  but the reader knew nine words, so both video triggers came back as On click,
+  and a video hit's time was never written at all. Kind and parameter now round
+  trip, pinned by a test that walks the whole list.
+- **The pill fits its words.** It was a fixed 70 px box painted with whatever
+  the label said — "When video hits" is wider than that and ran into the field
+  beside it. It is measured now, clamped so the parameter keeps its room and
+  truncated rather than overdrawing: the "no design issue" half of the owner's
+  directive.
+
+**Tests:** `the_trigger_words_are_figmas_and_the_menu_lists_every_one`,
+`every_trigger_word_and_its_parameter_survive_the_round_trip`,
+`the_trigger_menu_offers_figmas_list_and_the_pill_fits_its_words`,
+`player_mouse_down_navigates_on_press_and_release_keeps_it`. Master list rows
+14.4 (trigger list, now twelve kinds and reachable) and 14.5 (trigger row
+wording, one owner) close: 223 MATCH · 54 PARTIAL.
+
 ## [Unreleased] — 2026-09-19 (Prototype: the per-frame scroll behavior)
 
 The last functional gap in the prototyping chapter of the course, and delta 3 of the
