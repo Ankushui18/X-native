@@ -520,7 +520,7 @@ pub fn crop_placement_from(
     };
     let s = base * orig.scale.max(0.05);
     let drawn = (iw * s, ih * s);
-    let mut next = orig.clone();
+    let mut next = *orig;
     if corner == CROP_PAN {
         next.focal.0 = crop_pan_focal(orig.focal.0, cur.x - start.x, w - drawn.0);
         next.focal.1 = crop_pan_focal(orig.focal.1, cur.y - start.y, h - drawn.1);
@@ -3528,7 +3528,7 @@ impl App {
                 return false;
             };
             match &n.kind {
-                x_native::NodeKind::Image { fit, placement, .. } => (*fit, placement.clone()),
+                x_native::NodeKind::Image { fit, placement, .. } => (*fit, *placement),
                 _ => return false,
             }
         };
@@ -3576,7 +3576,7 @@ impl App {
         if self
             .doc()
             .editor()
-            .set_image_placement(&session.id, session.start.clone())
+            .set_image_placement(&session.id, session.start)
         {
             wrote += 1;
         }

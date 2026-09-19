@@ -2534,10 +2534,10 @@ fn crop_host() -> (Host, String) {
         PLACE_PNG.to_vec(),
         x_native::AssetSource::Embedded,
     );
-    h.app.doc().editor().insert_node(
-        &root,
-        Node::image("shot", 100.0, 100.0, 100.0, 100.0, &asset),
-    );
+    h.app
+        .doc()
+        .editor()
+        .insert_node(&root, Node::image("shot", 0.0, 0.0, 100.0, 100.0, &asset));
     h.app.doc().editor().selection = vec!["shot".into()];
     (h, asset)
 }
