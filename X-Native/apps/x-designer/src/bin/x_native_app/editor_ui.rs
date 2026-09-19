@@ -9341,7 +9341,8 @@ fn paint_prototype(
             }
             input_box(app, s, tb, 4.0);
             let shown = app.fonts.truncate(label, T10, Wt::Reg, tb.width() - 8.0);
-            app.fonts.text(s, tb.x0 + 4.0, y + 6.0, &shown, T10, C_TEXT, Wt::Reg);
+            app.fonts
+                .text(s, tb.x0 + 4.0, y + 6.0, &shown, T10, C_TEXT, Wt::Reg);
             hit.push((tb, Action::ProtoTrigger(i)));
 
             // The parameter a "when" trigger carries — Figma's delay, key or
@@ -9373,7 +9374,8 @@ fn paint_prototype(
                         (key.clone(), C_TEXT)
                     };
                     let shown = app.fonts.truncate(&text, T10, Wt::Mono, pb.width() - 8.0);
-                    app.fonts.text(s, pb.x0 + 4.0, y + 6.0, &shown, T10, ink, Wt::Mono);
+                    app.fonts
+                        .text(s, pb.x0 + 4.0, y + 6.0, &shown, T10, ink, Wt::Mono);
                     hit.push((pb, Action::ProtoEditKey(i)));
                 }
                 x_native::Trigger::WhenVideoHits { time } => {

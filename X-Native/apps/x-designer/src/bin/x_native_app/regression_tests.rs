@@ -1423,7 +1423,7 @@ fn the_trigger_menu_offers_figmas_list_and_the_pill_fits_its_words() {
     }
 
     // a press writes that trigger, kind and starting value together
-    h.dispatch(Action::ProtoSetTrigger(0, 8));
+    h.dispatch(Action::ProtoSetTrigger(0, 7));
     assert!(h.app.dropdown_proto_trigger.is_none(), "the menu closed");
     let of = |h: &Host| {
         let root = &h.app.doc_ref().editor_ref().root;
@@ -1457,24 +1457,28 @@ fn the_trigger_menu_offers_figmas_list_and_the_pill_fits_its_words() {
             .map(|(r, _)| *r)
             .expect("the trigger pill");
         assert!(pill.width() >= 56.0, "the pill keeps a readable width");
-        // the field beside the pill, for the triggers that carry a value
+        // the field beside the pill, for the triggers that carry a value: the
+        // row's own edit actions, found by the geometry that paints them
         let param = h
             .app
             .hit
             .iter()
-            .find(|(_, a)| match a {
-                Action::ProtoEditDelay(0) => true,
-                Action::ProtoEditKey(0) => true,
-                Action::ProtoEditVideoTime(0) => true,
-                _ => false,
-            })
-            .map(|(r, _)| *r);
+            .map(|(r, _)| *r)
+            .find(|r| r.y0 >= pill.y0 && r.y1 <= pill.y1 && r.x0 > pill.x1 && r.x0 < pill.x1 + 8.0);
+        let carries = matches!(
+            want,
+            Trigger::AfterDelay { .. } | Trigger::KeyDown { .. } | Trigger::WhenVideoHits { .. }
+        );
+        assert_eq!(
+            param.is_some(),
+            carries,
+            "row {k} paints a parameter field exactly when its trigger carries one"
+        );
         if let Some(p) = param {
             // the pill starts 5 px inside the row, so the row's left edge is
             // pill.x0 - 5 and ED_RIGHT_MIN puts its right edge 208 further on
             let row_right = pill.x0 - 5.0 + 208.0;
-            assert!(p.x0 >= pill.x1, "the field does not overlap the pill");
-            assert!(p.x1 <= row_right, "and stays inside the row");
+            assert!(p.x1 <= row_right, "the field stays inside the row");
         }
     }
     assert_eq!(h.app.status, "Trigger: When video ends");

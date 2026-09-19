@@ -1454,7 +1454,7 @@ mod tests {
                 key: "Enter".into()
             }
             .label_with(),
-            "Key down (Enter)"
+            "Key/Gamepad (Enter)"
         );
         assert_eq!(Animation::MoveIn(Direction::Left).to_str(), "movein");
         assert_eq!(Animation::MoveIn(Direction::Right).dir_str(), Some("right"));
