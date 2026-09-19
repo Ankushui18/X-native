@@ -867,10 +867,17 @@ impl Editor {
             NodeKind::Frame { .. } => (0.0, n.corner_radii),
             _ => return false,
         };
+        // A frame has no radius field of its own, so a uniform radius has to
+        // LAND as four equal corners; a caller that passes an array (or the
+        // reverse entry of an undo) is already explicit.
+        let to = match &n.kind {
+            NodeKind::Frame { .. } => corners.or(Some([radius.max(0.0); 4])),
+            _ => corners,
+        };
         self.push(vec![Command::SetCorners {
             id: id.into(),
             from,
-            to: (radius, corners),
+            to: (radius, to),
         }]);
         true
     }

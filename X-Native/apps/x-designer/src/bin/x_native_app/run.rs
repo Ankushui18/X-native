@@ -4803,13 +4803,13 @@ impl Host {
 
     /// One smoothing write: the slider's click, its drag and the `iOS` chip all
     /// land here, so the panel cannot drift from the engine.
-    fn set_corner_smoothing(&mut self, v: f32) -> bool {
+    fn set_corner_smoothing(&mut self, v: f64) -> bool {
         let wrote = {
             let doc = self.app.doc();
             let Some(id) = doc.selected_id() else {
                 return false;
             };
-            doc.editor().set_corner_smoothing(&id, v as f64)
+            doc.editor().set_corner_smoothing(&id, v)
         };
         if wrote {
             self.app.mark_dirty();

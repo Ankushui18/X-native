@@ -669,8 +669,8 @@ pub fn radius_handle_point(b: (f64, f64, f64, f64), corner: usize, r: f64) -> Po
 /// The 0–1 a slider track reads at `x` — the same mapping the
 /// image-adjustment sliders use, so every slider in this panel answers a press
 /// the same way and the smoothing drag can re-read it on every move.
-pub fn slider_fraction(track: Rect, x: f64) -> f32 {
-    (((x - track.x0) / track.width().max(1.0)) as f32).clamp(0.0, 1.0)
+pub fn slider_fraction(track: Rect, x: f64) -> f64 {
+    ((x - track.x0) / track.width().max(1.0)).clamp(0.0, 1.0)
 }
 
 /// The four radii a layer's panel and handle speak for: the stored per-corner
@@ -1855,7 +1855,7 @@ pub enum Action {
     /// smoothing slider.
     ToggleCorners,
     /// The corner-smoothing slider, 0–1 (0–100% on screen).
-    SetCornerSmoothing(f32),
+    SetCornerSmoothing(f64),
     /// Figma's `iOS` shortcut in that panel: smoothing 60%.
     CornerSmoothingIos,
     /// Pressing an effect row (not its buttons) arms the reorder drag.

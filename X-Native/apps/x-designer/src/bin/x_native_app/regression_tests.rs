@@ -2634,9 +2634,11 @@ fn the_radius_handle_sits_on_the_corner_arc() {
     let d = crate::state::RADIUS_HANDLE_MIN * std::f64::consts::FRAC_1_SQRT_2;
     let tl = crate::state::radius_handle_point(b, 0, 4.0);
     assert!((tl.x - d).abs() < 1e-9 && (tl.y - d).abs() < 1e-9, "{tl:?}");
-    // a radius big enough to leave the floor sits on its own arc
+    // a radius big enough to leave the floor sits on its own arc: the dot is
+    // `r · (√2 − 1)` along the diagonal, so its distance from the corner is it
     let big = crate::state::radius_handle_point(b, 0, 40.0);
-    assert!((big.x - 40.0 * crate::state::RADIUS_HANDLE_FRAC).abs() < 1e-9);
+    let want = 40.0 * crate::state::RADIUS_HANDLE_FRAC;
+    assert!((big.x.hypot(big.y) - want).abs() < 1e-9, "{big:?}");
     // each corner answers its own dot
     for i in 0..4 {
         let p = crate::state::radius_handle_point(b, i, radii[i]);
