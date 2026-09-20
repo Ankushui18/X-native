@@ -12231,7 +12231,8 @@ fn paint_assets(
         } else {
             fam.clone()
         };
-        app.fonts.text(s, x0 + 4.0, y, &label, T_UI, C_TEXT, Wt::Reg);
+        app.fonts
+            .text(s, x0 + 4.0, y, &label, T_UI, C_TEXT, Wt::Reg);
         y += 16.0;
     }
     if fams.len() > 24 {
