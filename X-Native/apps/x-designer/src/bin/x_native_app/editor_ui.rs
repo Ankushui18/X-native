@@ -5677,7 +5677,8 @@ fn paint_design(
                     y += 28.0;
                 }
                 x_native::ComponentPropKind::Text => {
-                    app.fonts.text(s, x0, y + 6.0, &e.name, T_UI, C_DIM, Wt::Reg);
+                    app.fonts
+                        .text(s, x0, y + 6.0, &e.name, T_UI, C_DIM, Wt::Reg);
                     let fr = Rect::new(x0 + 120.0, y - 4.0, xr, y + 20.0);
                     input_box(app, s, fr, R_INPUT);
                     let shown = field_val(app, FieldId::InstanceProp, value);
@@ -5688,7 +5689,8 @@ fn paint_design(
                     y += 28.0;
                 }
                 x_native::ComponentPropKind::Swap => {
-                    app.fonts.text(s, x0, y + 6.0, &e.name, T_UI, C_DIM, Wt::Reg);
+                    app.fonts
+                        .text(s, x0, y + 6.0, &e.name, T_UI, C_DIM, Wt::Reg);
                     let br = Rect::new(x0 + 120.0, y - 4.0, xr, y + 20.0);
                     input_box(app, s, br, 6.0);
                     app.fonts
