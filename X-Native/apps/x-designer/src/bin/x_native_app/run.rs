@@ -8139,6 +8139,25 @@ impl Host {
                 self.toggle_right_tab();
                 return;
             }
+            // ⇧D — Figma's Dev Mode (help 360039956914): switch the file to the
+            // inspect/code view. Here that is the right panel's Inspect (SHIP)
+            // tab; a second ⇧D leaves it and returns to Design.
+            if self.app.shift && c == "D" {
+                let entering =
+                    self.app.doc_ref().right_tab != crate::state::RightTab::Inspect;
+                let tab = if entering {
+                    crate::state::RightTab::Inspect
+                } else {
+                    crate::state::RightTab::Design
+                };
+                self.dispatch(Action::RightTab(tab));
+                self.app.status = if entering {
+                    "Dev Mode: Inspect".into()
+                } else {
+                    "Dev Mode off: Design".into()
+                };
+                return;
+            }
             // ⇧A — add auto layout (Figma's shortcut; plain A stays free)
             if self.app.shift && c == "A" {
                 self.dispatch(Action::AddAutoLayout);

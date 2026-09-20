@@ -5,6 +5,23 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-20 (Dev Mode `⇧D` — master row 1.18)
+
+A code audit of the remaining `MISSING` rows confirmed 17.9/4.9 were the only
+stale ones — 6.15, 7.16, 8.23/8.24 and 11.17 are genuinely absent (glass/texture
+appear only in comments, the `VectorNetwork` experiment was removed 2026-09-02,
+there is no star point-radius and no layout suggestions). Of those, 1.18 was
+tractable and is now built.
+
+**Dev Mode `⇧D`** (help 360039956914): `⇧D` switches the right panel to the
+Inspect (SHIP) view — this host's inspect/code surface — and a second `⇧D`
+returns to Design. Added in `run.rs::on_character` alongside `⇧E`, pinned by
+`shift_d_enters_and_leaves_dev_mode`. Row 1.18 `MISSING` → `MATCH`; §1 to
+16/3/0; grand total **339 / 267 / 47 / 6 / 16 / 3**.
+
+*Rust gate runs in CI (no toolchain here); Node gates green (guard 10/0 with 80
+pinned, check 40/0, check_screens 20/0).*
+
 ## [Unreleased] — 2026-09-20 (Two stale MISSING rows corrected: N/⇧N walk + shortcuts sheet — rows 17.9/4.9)
 
 A code audit found two master-list rows marked `MISSING` whose features were

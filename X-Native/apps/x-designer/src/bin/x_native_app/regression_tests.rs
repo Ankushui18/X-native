@@ -8263,6 +8263,28 @@ fn shift_e_toggles_the_tabs_and_the_eraser_keeps_its_own_key() {
     assert_eq!(h.app.tool, Tool::Eraser);
 }
 
+/// Figma's Dev Mode (help 360039956914, master row 1.18): ⇧D switches the file
+/// to the inspect/code view — here the right panel's Inspect (SHIP) tab — and a
+/// second ⇧D leaves it back to Design.
+#[test]
+fn shift_d_enters_and_leaves_dev_mode() {
+    let mut h = host();
+    assert_eq!(h.app.doc_ref().right_tab, crate::state::RightTab::Design);
+
+    h.app.shift = true;
+    h.on_key(Key::Character("D".into()), None);
+    h.app.shift = false;
+    assert_eq!(h.app.doc_ref().right_tab, crate::state::RightTab::Inspect);
+    assert_eq!(h.app.status, "Dev Mode: Inspect");
+
+    h.app.shift = true;
+    h.on_key(Key::Character("D".into()), None);
+    h.app.shift = false;
+    assert_eq!(h.app.doc_ref().right_tab, crate::state::RightTab::Design);
+    assert_eq!(h.app.status, "Dev Mode off: Design");
+    assert_eq!(h.app.tool, Tool::Select, "dev mode is not a tool");
+}
+
 /// ⌘R renames the selected layer, ⇧A adds auto layout and ⌥⌘K makes a
 /// component — Figma's three keys for them, each on the path the menu
 /// already takes. ⇧⌘K stays Place image, ⇧⌘R stays this host's renumber.
