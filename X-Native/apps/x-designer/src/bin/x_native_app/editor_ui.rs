@@ -8857,7 +8857,9 @@ fn paint_frame_labels(app: &mut App, s: &mut Scene) {
         if !on_canvas {
             continue;
         }
-        let shown = app.fonts.truncate(&t.name, size, Wt::Med, (reg.canvas.x1 - a.x).max(20.0));
+        let shown = app
+            .fonts
+            .truncate(&t.name, size, Wt::Med, (reg.canvas.x1 - a.x).max(20.0));
         let ink = if sel.contains(&t.id) { C_SEL } else { C_DIM };
         app.fonts.text(s, a.x, top, &shown, size, ink, Wt::Med);
     }
@@ -11260,9 +11262,12 @@ fn paint_inspect(
     // two — straight from the engine's devmode readers, never recomputed
     // here (Figma's inspect sizes/distances).
     if let Some((line1, line2)) = app.inspect_measurements() {
-        app.fonts.micro_label(s, x0, y, "MEASUREMENTS", C_DIM, Wt::Med);
-        app.fonts.text(s, x0, y + 15.0, &line1, T11, C_TEXT, Wt::Reg);
-        app.fonts.text(s, x0, y + 15.0 + 17.0, &line2, T11, C_DIM, Wt::Reg);
+        app.fonts
+            .micro_label(s, x0, y, "MEASUREMENTS", C_DIM, Wt::Med);
+        let y1 = y + 15.0;
+        let y2 = y1 + 17.0;
+        app.fonts.text(s, x0, y1, &line1, T11, C_TEXT, Wt::Reg);
+        app.fonts.text(s, x0, y2, &line2, T11, C_DIM, Wt::Reg);
         y += 15.0 + 17.0 * 2.0 + 12.0;
     } else if let Some(gap) = app.inspect_gap() {
         app.fonts.micro_label(s, x0, y, "DISTANCE", C_DIM, Wt::Med);

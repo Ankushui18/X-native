@@ -1182,18 +1182,20 @@ mod reliability_tests {
         let vars = Variables::default();
         // sanity: the direct lowering DOES name the frame
         let direct = crate::ir::build_render_tree(&page, &vars);
-        assert!(
-            direct.commands.iter().any(|c| crate::ir::is_frame_name_label(c.key())),
-            "the fixture names its frame"
-        );
+        let names_frame = direct
+            .commands
+            .iter()
+            .any(|c| crate::ir::is_frame_name_label(c.key()));
+        assert!(names_frame, "the fixture names its frame");
         for presenting in [false, true] {
             let mut cache = FrameCache::new();
             cache.set_presenting(presenting);
             let tree = cache.lower_canvas(&page, &vars);
-            assert!(
-                !tree.commands.iter().any(|c| crate::ir::is_frame_name_label(c.key())),
-                "no /label on the canvas (presenting={presenting})"
-            );
+            let labelled = tree
+                .commands
+                .iter()
+                .any(|c| crate::ir::is_frame_name_label(c.key()));
+            assert!(!labelled, "no /label on the canvas (presenting={presenting})");
         }
     }
 

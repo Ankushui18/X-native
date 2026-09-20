@@ -692,6 +692,10 @@ fn an_outside_press_commits_the_text_before_selecting() {
     // A press inside the editor rect must not commit (caret handling owns
     // it); a press anywhere else must.
     let mut h = host();
+    // the demo page ships a 375x420 frame at (0,60): clear it so the rect
+    // is top-level and the press selects the rect itself, not its ancestor
+    // (Figma clicks select the top level — that rule is pinned elsewhere).
+    h.app.docs[0].editors[0].root.children.clear();
     h.finish_create(
         Tool::Rect,
         Point::new(300.0, 300.0),
@@ -702,7 +706,8 @@ fn an_outside_press_commits_the_text_before_selecting() {
     h.on_text("!");
     // inside the editor: no commit, editor stays open
     let r = h.app.text_edit_rect().unwrap();
-    assert!(!h.app.commit_text_if_press_outside(Point::new(r.x0 + 4.0, r.y0 + 4.0)));
+    let inside = Point::new(r.x0 + 4.0, r.y0 + 4.0);
+    assert!(!h.app.commit_text_if_press_outside(inside));
     assert!(h.app.text_edit.is_some());
     // on the rect: the real press path commits, then selects the rect
     let sp = h.app.world_to_screen(Point::new(330.0, 330.0));
@@ -776,11 +781,12 @@ fn inspect_measurements_gap_tokens_assets_and_jsx_read_the_engine() {
 
     // one layer: X/Y/W/H + the gaps to the parent frame's edges
     h.app.doc().editor().selection = vec![a.clone()];
-    let (l1, l2) = h.app.inspect_measurements().expect("single selection measures");
-    assert!(
-        l1.contains("X 40") && l1.contains("Y 40") && l1.contains("W 120") && l1.contains("H 44"),
-        "{l1}"
-    );
+    let m = h.app.inspect_measurements();
+    let (l1, l2) = m.expect("single selection measures");
+    assert!(l1.contains("X 40"), "{l1}");
+    assert!(l1.contains("Y 40"), "{l1}");
+    assert!(l1.contains("W 120"), "{l1}");
+    assert!(l1.contains("H 44"), "{l1}");
     assert!(l2.contains("← 40"), "{l2}");
 
     // two layers: no single measurements, but the pair gap reads
@@ -792,12 +798,18 @@ fn inspect_measurements_gap_tokens_assets_and_jsx_read_the_engine() {
     // tokens: a bound property surfaces as a (kind, token) row
     {
         let doc = h.app.doc();
-        let n = x_native::editor::find_mut(&mut doc.editor().root, &a).unwrap();
+        let found = x_native::editor::find_mut(&mut doc.editor().root, &a);
+        let n = found.unwrap();
         n.bindings.insert("radius".into(), "brand/radius".into());
     }
     h.app.doc().editor().selection = vec![a.clone()];
     let tokens = h.app.inspect_tokens();
-    let has_token = tokens.iter().any(|(k, v)| k == "Corner radius" && v == "brand/radius");
+    let mut has_token = false;
+    for (k, v) in &tokens {
+        if k == "Corner radius" && v == "brand/radius" {
+            has_token = true;
+        }
+    }
     assert!(has_token, "{tokens:?}");
 
     // assets: no images/components referenced here — the plumbing answers
