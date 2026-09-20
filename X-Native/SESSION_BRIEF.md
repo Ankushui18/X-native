@@ -15,8 +15,8 @@ the 24px layer row, the 240px left dock, and four redrawn tool glyphs. The two
 values Figma ships sub-AA (accent fill, dim grey) are pinned as deliberate
 deviations by `graphite_carries_figmas_chrome_values`.
 
-**Scoreboard (branch, verified):** 339 rows — **262 MATCH / 47 PARTIAL /
-11 MISSING / 16 EXTRA / 3 OUT**. Guard: 10 checks, 71 pinned, 0 open, 0 failed.
+**Scoreboard (branch, verified):** 339 rows — **263 MATCH / 46 PARTIAL /
+11 MISSING / 16 EXTRA / 3 OUT**. Guard: 10 checks, 72 pinned, 0 open, 0 failed.
 
 The single source of truth for what's next remains
 `docs/FIGMA_PARITY_MASTER_LIST.md`.
@@ -38,11 +38,15 @@ The single source of truth for what's next remains
    Pinned by `the_rotation_field_shows_figmas_counter_clockwise_sign`.
    Row 6.1 → MATCH.
 
-3. **Wave 2 remainder** (items 16–19): right dock at 240 (needs the inspector
-   reflow), radii (18.6), Inter at 11px (18.5), tool cursors (18.11), motion
-   (18.12), remaining icon vocabulary (18.10), Design-tab row order.
+3. ~~**Radii (row 18.6)**~~ — **delivered**: `R_ROW`/`R_CARD`=8, `R_INPUT`=6,
+   `R_PILL`=4 on the shared `RadiusScale`, pinned by
+   `radii_follow_figmas_measured_chrome`. Row 18.6 → MATCH.
 
-4. **Wave 3** (item 20), only after 1–3.
+4. **Wave 2 remainder** (items 16–19): right dock at 240 (needs the inspector
+   reflow), Inter at 11px (18.5), tool cursors (18.11), motion (18.12),
+   remaining icon vocabulary (18.10), Design-tab row order.
+
+5. **Wave 3** (item 20), only after 1–4.
 
 ## How we reach it — per-behaviour recipe
 

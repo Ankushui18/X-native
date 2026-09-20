@@ -5,6 +5,23 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-20 (Radii follow Figma's measured chrome — master row 18.6)
+
+Wave-2 token pass, continued. Figma's chrome rounds rows and cards at 8 px,
+inputs at 6 px and chips at 4 px; ours had inputs at 8, cards at 12 and chips at
+6. The semantic aliases now sit on Figma's steps of the shared `RadiusScale`:
+`R_INPUT` 8→6, `R_CARD` 12→8, `R_PILL` 6→4 (rows already 8). Row 18.6 `PARTIAL`
+→ `MATCH`; section 18 to **5 / 6 / 1**; grand total re-derived
+(**339 / 263 / 46 / 11 / 16 / 3**).
+
+- **Pinned** by `radii_follow_figmas_measured_chrome` (design_tokens_test.rs):
+  `R_ROW`/`R_CARD` = 8, `R_INPUT` = 6, `R_PILL` = 4. A future "tidy" that
+  re-rounds the chrome away from Figma now fails the gate.
+- Visual-only; geometry gates (`check_screens.mjs`) confirm nothing escapes its
+  panel, since a radius never moves a box.
+
+*Rust gate runs in CI; the Node gates are the local check and stay green.*
+
 ## [Unreleased] — 2026-09-20 (Rotation sign — master row 6.1, wave-2 item 19)
 
 Figma's rotation field counts **counter-clockwise positive**; the engine stored

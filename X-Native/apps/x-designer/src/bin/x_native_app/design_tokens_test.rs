@@ -343,3 +343,15 @@ fn theme_constants_follow_the_palette_or_say_why_not() {
         );
     }
 }
+
+/// Radii follow Figma's measured chrome (master row 18.6): 8 px rows and cards,
+/// 6 px inputs, 4 px chips. Pinning the steps here means a future "tidy" cannot
+/// quietly re-round the chrome away from Figma.
+#[test]
+fn radii_follow_figmas_measured_chrome() {
+    use crate::theme::*;
+    assert_eq!(R_ROW, 8.0, "Figma rows are 8px");
+    assert_eq!(R_CARD, 8.0, "Figma cards are 8px");
+    assert_eq!(R_INPUT, 6.0, "Figma inputs are 6px");
+    assert_eq!(R_PILL, 4.0, "Figma chips are 4px");
+}

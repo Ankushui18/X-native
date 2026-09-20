@@ -378,13 +378,16 @@ pub const R_XL: f64 = RadiusScale::XL;
 /// pills drawn as rounded rects instead of with the `circle` helper.
 pub const R_FULL: f64 = RadiusScale::FULL;
 
-pub const R_INPUT: f64 = R_LG;
+// Figma's measured chrome radii (master row 18.6, re-measured for the Wave-2
+// design pass): 8 px rows and cards, 6 px inputs, 4 px chips. The aliases keep
+// naming intent; only the step each intent sits on follows Figma now.
+pub const R_INPUT: f64 = R_MD; // Figma inputs: 6
 pub const R_SEARCH: f64 = R_XL;
-pub const R_CARD: f64 = R_XL;
+pub const R_CARD: f64 = R_LG; // Figma cards: 8
 pub const R_TOOLBAR: f64 = R_XL;
-pub const R_ROW: f64 = R_LG;
+pub const R_ROW: f64 = R_LG; // Figma rows: 8
 pub const R_PAGE: f64 = R_MD;
-pub const R_PILL: f64 = R_MD;
+pub const R_PILL: f64 = R_SM; // Figma chips: 4
 pub const R_TREE: f64 = R_SM;
 pub const R_LOGO: f64 = R_SM;
 pub const R_TOOL_ICON: f64 = R_LG;
