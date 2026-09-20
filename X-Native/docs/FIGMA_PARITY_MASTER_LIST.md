@@ -32,27 +32,27 @@ recon task, not a settled fact.
 
 | surface | rows | MATCH | PARTIAL | MISSING | EXTRA | OUT |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 Tools (toolbar & shape menu) | 24 | 15 | 3 | 1 | 5 | 0 |
+| 1 Tools (toolbar & shape menu) | 24 | 16 | 3 | 0 | 5 | 0 |
 | 2 Canvas gestures (drag) | 28 | 26 | 1 | 0 | 1 | 0 |
 | 3 Keyboard | 35 | 32 | 2 | 0 | 1 | 0 |
-| 4 Menus & palettes | 10 | 9 | 0 | 1 | 0 | 0 |
-| 5 Layers, pages, sections | 14 | 12 | 1 | 1 | 0 | 0 |
-| 6 Frame & shape properties | 20 | 18 | 1 | 1 | 0 | 0 |
-| 7 Auto layout | 16 | 14 | 1 | 1 | 0 | 0 |
-| 8 Fill, stroke, effects, colour | 25 | 21 | 1 | 3 | 0 | 0 |
+| 4 Menus & palettes | 10 | 9 | 1 | 0 | 0 | 0 |
+| 5 Layers, pages, sections | 14 | 12 | 2 | 0 | 0 | 0 |
+| 6 Frame & shape properties | 20 | 19 | 0 | 1 | 0 | 0 |
+| 7 Auto layout | 16 | 14 | 1 | 0 | 0 | 1 |
+| 8 Fill, stroke, effects, colour | 25 | 22 | 1 | 2 | 0 | 0 |
 | 9 Images | 9 | 7 | 2 | 0 | 0 | 0 |
 | 10 Text & typography | 18 | 17 | 1 | 0 | 0 | 0 |
 | 11 Vector editing & booleans | 20 | 14 | 5 | 1 | 0 | 0 |
 | 12 Components, instances, styles | 21 | 18 | 3 | 0 | 0 | 0 |
 | 13 Variables & modes | 9 | 6 | 3 | 0 | 0 | 0 |
-| 14 Prototype | 30 | 19 | 10 | 0 | 0 | 1 |
-| 15 Inspect, dev mode, codegen | 9 | 5 | 3 | 1 | 0 | 0 |
+| 14 Prototype | 30 | 20 | 9 | 0 | 0 | 1 |
+| 15 Inspect, dev mode, codegen | 10 | 5 | 4 | 1 | 0 | 0 |
 | 16 Export & import | 12 | 11 | 1 | 0 | 0 | 0 |
-| 17 Canvas view & navigation | 14 | 10 | 1 | 1 | 1 | 1 |
-| 18 Design language (look of the app itself) | 12 | 1 | 5 | 6 | 0 | 0 |
+| 17 Canvas view & navigation | 14 | 11 | 1 | 0 | 1 | 1 |
+| 18 Design language (look of the app itself) | 12 | 5 | 7 | 0 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **339** | **258** | **45** | **17** | **16** | **3** |
+| **total** | **340** | **267** | **48** | **5** | **16** | **4** |
 
 The 17 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
@@ -88,7 +88,7 @@ while a tool is armed.
 | 1.15 | Slice `S` | export region, draws nothing | `Tool::Slice` | MATCH |
 | 1.16 | Shape menu itself | one button, chevron, five shapes, keys shown | **PARTIAL** — our tools sit as separate buttons in the rail; no single Shape button with a chevron menu | PARTIAL |
 | 1.17 | **Place image** `⇧⌘K` (Figma's Shape tools row reads **Image/video**) | image tool: click/drag to place, then crop | `Tool::PlaceImage` + `App::placing_images` + `Host::place_images`; `⇧⌘K`, the File menu row and the command search reach it. **Not a rail button** — Figma's is in the Shape tools menu, and our rail has no single Shape button (1.16) | **PARTIAL** |
-| 1.18 | **Dev Mode toggle** `⇧D` | switches the file to inspect/code view | no toggle; Inspect is a right-panel tab only | **MISSING** |
+| 1.18 | **Dev Mode toggle** `⇧D` | switches the file to inspect/code view | `⇧D` switches the right panel to the Inspect view and back to Design on a second press (`run.rs::on_character`) | MATCH — `shift_d_enters_and_leaves_dev_mode` |
 | 1.19 | Eraser | Figma **Draw** only, not design files | `Tool::Eraser` | EXTRA |
 | 1.20 | Brush | Figma **Draw** only (`31440438150935`) | `Tool::Brush` | EXTRA |
 | 1.21 | Symmetry | not in Figma Design | `Tool::Symmetry` | EXTRA |
@@ -187,7 +187,7 @@ Figma's shortcut list is in the shortcuts panel (`360040328653`, tabbed, live-hi
 | 4.6 | Export menu | format, scale, suffix, multiple settings | export panel with 5 formats | MATCH |
 | 4.7 | Font picker | search, preview, styles, missing-font state | `FontPicker` + `FONT BROWSER` + type scale | MATCH |
 | 4.8 | Library / assets picker | components, styles, variables, swap on drop | `PaintLibToggle`, `LibRow` sections, swap | MATCH |
-| 4.9 | **Shortcuts panel** | tabbed, live-highlights used keys | none | **MISSING** |
+| 4.9 | **Shortcuts panel** | tabbed, live-highlights used keys | a ⇧? shortcuts sheet exists and lists the keys (`editor_ui::paint_shortcuts_panel`), but it is a flat list — no tabs and no live highlight of the keys you have used | PARTIAL — `the_shortcut_sheet_and_the_two_hide_ui_keys` |
 | 4.10 | Onboarding / sample | Figma opens a starter file | `OnboardingSample` / `OnboardingBlank` | MATCH |
 
 ## 5. Layers, pages, sections
@@ -206,7 +206,7 @@ sections, groups and frames").
 | 5.6 | Group / ungroup / frame selection | `⌘G` `⇧⌘G` `⌥⌘G` | same | MATCH |
 | 5.7 | Select all with same property | "Select matching" | `SelectMatching` | MATCH |
 | 5.8 | **Sections** | labelled container, distinct hit/hue, arrow key nav; place one with the Section tool (`⇧S`) or **Wrap in new section** (right-click); "sections … cannot be contained within frames or groups"; a section takes in the layers it is dragged or drawn over; `Delete` removes it **and its contents**, `⌘⌫`/`Ctrl+Backspace` **without** them ([help 9771500257687](https://help.figma.com/hc/en-us/articles/9771500257687)) | `Tool::Section` (⇧S, sharing `App::frame_slot` with Frame through `App::select_tool`), `Editor::section_selection` / `lift_into_section` / `section_absorb` / `delete_keeping_contents`, `CtxCmd::SectionSelection`; pinned by `a_section_lifts_layers_out_of_a_frame_and_keeps_their_place`, `a_section_never_lands_inside_a_frame_or_a_group`, `a_section_takes_in_the_layers_it_covers`, `deleting_a_section_can_keep_its_layers`, `the_section_tool_is_shift_s_and_shares_the_frame_slot`, `the_section_tool_draws_on_the_canvas_and_takes_what_it_covers`, `the_canvas_menu_wraps_a_selection_in_a_section` | MATCH |
-| 5.9 | Clean up layers | chapter 4 lesson: flatten redundant nests, rename for handoff | `CleanupLayers`? no — nothing in code | **MISSING** |
+| 5.9 | Clean up layers | Owner-confirmed 2026-09-20 to the chapter-4 framing: flatten redundant nests; **rename stays manual** (Figma's layer-namer is an AI agent). The chapter-16 FD4B reading ([help 30979556779159](https://help.figma.com/hc/en-us/articles/30979556779159): align → distribute → Smart-selection tidy-up, [help 360040450233](https://help.figma.com/hc/en-us/articles/360040450233)) is a separate remainder: engine has `align` + `distribute_horizontal`, no `distribute_vertical` / smart selection. | `Editor::clean_up_layers` unwraps single-child, visually-inert groups bottom-up (positions preserved, one undo entry); exposed as right-click **Clean up layers** + command palette; pinned by `clean_up_layers_flattens_redundant_nests_in_one_undo` | PARTIAL — rename (manual by choice) + FD4B smart selection remain |
 | 5.10 | Duplicate naming | Figma: "… copy" style naming on duplicate | ours uses another suffix | PARTIAL |
 | 5.11 | Per-frame "Show name" | toggle on the frame | `ToggleShowName` | MATCH |
 | 5.12 | Clip content | per-frame tick | `ClipContent` | MATCH |
@@ -220,7 +220,7 @@ Appearance (opacity, radius, clip), Fill, Stroke, Effects, Export.
 
 | # | Item | Figma | Ours | Status |
 | --- | --- | --- | --- | --- |
-| 6.1 | Position X/Y, rotate angle | numeric, scrubbable | `Position` rows + the rotate field (`FieldId::Rotation` → `Editor::set_selection_rotation`, Figma's (−180, 180]) | PARTIAL — the sign counts clockwise-positive (the renderer's y-down `Affine::rotate`), where Figma's counts counter-clockwise |
+| 6.1 | Position X/Y, rotate angle | numeric, scrubbable, **counter-clockwise positive** | `Position` rows + the rotate field; ONE display conversion `state::rotation_display` (negate + re-range to (−180,180]) at the single `Sel.rot` source, and `rotation_from_display` on write — the stored y-down sign is untouched so renderer/exporters keep meaning | MATCH — `the_rotation_field_shows_figmas_counter_clockwise_sign` |
 | 6.2 | Width/Height + Resizing | Fixed / Hug / Fill per axis, chosen from the Width/Height dropdown | `Sizing`, `Action::LayoutAxisMenu` / `SetAxisSizing` | MATCH |
 | 6.3 | Constraints | 5 H × 5 V options, "ignore constraints" `⌃` | `Constraints` section, `SetConstraint` (`2ebb068`) | MATCH |
 | 6.4 | Corner radius | one value; **Independent corners** for a value each; a radius handle just inside each corner on the canvas | **Corner radius** row with Figma's leading independent-corners icon (`Action::ToggleCorners`) opening the four-field **Corner radius details** panel; `Editor::set_uniform_radius` / `set_corner_radius` write rects AND frames; the canvas dot (`Drag::RadiusCorner`, ⌥ = that corner alone on rectangles) rounds the shape by its diagonal travel | MATCH |
@@ -264,7 +264,7 @@ position, canvas stacking, "distribute", `⇧A` to add.
 | 7.13 | Text resizing inside layout | hug/fill text | text sizing path | MATCH |
 | 7.14 | Layout in components | layout inherited by instances | component path | MATCH |
 | 7.15 | Layout grid inside layout | grid frames | grid.rs | MATCH |
-| 7.16 | Auto layout suggestions | Figma proposes a layout from the arrangement | not implemented (Figma-only AI-ish helper) | **MISSING** (low) |
+| 7.16 | Auto layout suggestions | Figma proposes a layout from the arrangement | not built — **out of scope**: Figma's AI helper; the owner will design our own style for this as a last goal, after the product is stable and 100% Figma-matched | OUT (owner: Figma AI, deferred to "our style") |
 
 ## 8. Fill, stroke, effects, colour
 
@@ -292,7 +292,7 @@ position, canvas stacking, "distribute", `⇧A` to add.
 | 8.20 | Multiple effects, reorder, per-effect visibility | Figma: *"If a selection has multiple effects applied, you click and drag the handles to reorder"* | the list is the stack: one row per effect, the row's eye hides it without losing its settings, a press-and-drag on a row reorders it (one undo entry per reorder), and `mutate_visual_stack` keeps the legacy flat `effects` list in step so every render path paints the order the panel shows | MATCH |
 | 8.23 | Effect type: **Glass** | one per layer; Light angle / intensity / refraction / depth / dispersion / frost / splay — [Apply effects to layers](https://help.figma.com/hc/en-us/articles/360041488473) | not in the model (`Effect` carries drop shadow, inner shadow, layer blur, background blur and noise) | **MISSING** |
 | 8.24 | Effect type: **Texture** | one per layer; Size, Radius, **Clip to shape** | not in the model | **MISSING** |
-| 8.25 | Per-type effect limits | *"Each layer can have up to eight drop shadows, eight inner shadows, one layer blur, two noise effects, one texture effect, one background blur, and one glass effect"* | no caps: the panel lets you add any number of any type | **MISSING** |
+| 8.25 | Per-type effect limits | *"Each layer can have up to eight drop shadows, eight inner shadows, one layer blur, two noise effects, one texture effect, one background blur, and one glass effect"* | `Editor::add_effect_layer` refuses a cap-breaching push at Figma's per-type limits (`EffectKind::limit`: 8 drop/inner shadows, 2 noise, 1 layer blur, 1 background blur), so the panel can no longer stack past them; glass/texture caps ride with rows 8.23/8.24 | MATCH — `effect_adds_stop_at_figmas_per_type_caps` |
 | 8.21 | Colour swatch interaction | swatch = popover, `+`/`−` | swatch + popovers | MATCH |
 | 8.22 | Color styles library | team/local styles list | `PAINT STYLES` library section | MATCH |
 
@@ -432,7 +432,7 @@ scroll behaviour, flows and flow starting points, device preview.
 | 14.20 | Keyboard/gamepad triggers | yes | `KeyDown` trigger + `ProtoEditKey` | MATCH |
 | 14.21 | Video triggers | play from time, on hit/end | `WhenVideoHits/Ends`, `ProtoEditVideoTime` | MATCH |
 | 14.22 | URL actions | open link in new tab | `OpenLink`, `ProtoEditUrl` | MATCH |
-| 14.23 | Reset scroll position on navigate | checked (the default) → "Frame 2 will load from the top of the frame"; unchecked = **Preserve scroll position**, and only Instant/Dissolve offer the choice | the interaction's own switch works (`reset_on_navigate`, the panel's `Reset: On`) — but our default is *preserve*, the opposite of Figma's | PARTIAL |
+| 14.23 | Reset scroll position on navigate | checked (the default) → "Frame 2 will load from the top of the frame"; unchecked = **Preserve scroll position**, and only Instant/Dissolve offer the choice | new interactions default to reset-ON (Figma), pinned by `interaction_includes_easing_and_state_management`; the panel's `Reset` switch toggles it (run.rs:8945) and a navigation resets scroll when set (run.rs:9462); old files keep their stored value | MATCH |
 | 14.24 | **Scroll to + scroll position on load** | "Scroll to" with an anchor and offset | `ScrollTo` exists as an action; *verify* whose offset semantics match | PARTIAL |
 | 14.25 | Smart animate | animates matching layers between frames | `smart_animate.rs` + gate-covered | PARTIAL — matching is heuristic, no "animate matching layers" opt-in |
 | 14.26 | Copy a connection | copy/paste onto another frame | not implemented (documented) | PARTIAL |
@@ -449,9 +449,10 @@ scroll behaviour, flows and flow starting points, device preview.
 | 15.2 | Copy code | CSS / iOS / Android snippets | `x-format::codegen` + `InspectCopy` | MATCH |
 | 15.3 | Copy as code from the canvas menu | "Copy as code" item | `CtxCmd::CopyAsCode` | MATCH |
 | 15.4 | Platform switch | Web / iOS / Android | `InspectPlatform` | MATCH |
-| 15.5 | Measurements between layers | hover with `⌥` | no measure gesture | **MISSING** |
-| 15.6 | Annotations | dev-mode notes on layers | not implemented | PARTIAL |
-| 15.7 | Dev Mode toggle `⇧D` | yes | tab only | PARTIAL |
+| 15.5 | Measurements between layers | select an object, hold `⌥`/Alt and hover a second → red line plus horizontal/vertical measurements; in Dev Mode hovering surrounding layers also shows padding (Guide to inspecting `22012921621015`) | no measure gesture | **MISSING** |
+| 15.6 | Annotations | Annotate `⇧T`: green dot on the layer, click to reveal, note + **+ Property** chips (Guide to inspecting `22012921621015`) | `⇧T` toggles Annotate mode, exclusive with Measure (pinned by the same test); green-dot markers + note editor not yet drawn | PARTIAL |
+| 15.7 | Dev Mode toggle `⇧D` | `⇧D` / top-right toggle enters Dev Mode (`help 360039956914`) | `⇧D` IS implemented — run.rs:8142 switches the right panel to Inspect and back ("Dev Mode: Inspect" / "Dev Mode off: Design") — but it maps to the Inspect tab rather than a distinct Dev Mode chrome whose toolbar carries Inspect/Measure/Annotate/Comment | PARTIAL |
+| 15.10 | Measure tool `⇧M` | a persistent measurement you click-drag between layers, repositionable (Guide to inspecting `22012921621015`) | `⇧M` toggles Dev-Mode Measure as an exclusive view state (pinned by `dev_mode_measure_and_annotate_are_exclusive_tools`); the canvas redline drag is not yet drawn | PARTIAL |
 | 15.8 | Code Connect / component mapping | yes | not implemented | PARTIAL (low) |
 | 15.9 | Asset download from inspect | export from inspect | export path | MATCH |
 
@@ -484,7 +485,7 @@ scroll behaviour, flows and flow starting points, device preview.
 | 17.6 | Layout grids | per frame, `⇧G` | grid UI | MATCH |
 | 17.7 | Outlines mode | `⌘Y` — *"Show outlines — to toggle outlines on and off, ⌘Y"* (designlab Figma 101, Tips and Tricks) | `x_render::outline_view` is the one strip (fills/strokes/effects cleared, blends Normal, Image/Text become the plain box they own, instances resolve from the stripped registry, the page itself is not outlined); `Action::ToggleOutlines` on ⌘Y (the old redo arm — redo keeps Figma's ⇧⌘Z) with the status line and the shortcuts-panel row; `Host::canvas_scene` renders the copy at a `1/zoom` hairline — a render mode, the document untouched. **Not built:** Figma renders text as glyph outlines; we render the text layer's box | MATCH |
 | 17.8 | Canvas background colour | Figma supports changing it | `CANVAS BACKGROUND` row | MATCH |
-| 17.9 | Zoom to next/prev frame | `N` / `⇧N` | not implemented | **MISSING** |
+| 17.9 | Zoom to next/prev frame | `N` / `⇧N` | `N` walks to the next top-level frame, `⇧N` to the previous, wrapping around the page and naming the frame (`run.rs::zoom_to_frame`) | MATCH — `n_walks_the_pages_frames_in_order` |
 | 17.10 | Scrollbars | yes | *verify* | PARTIAL |
 | 17.11 | Snap to objects/pixels toggles | preferences + modifiers | snapping inside drags | MATCH |
 | 17.12 | Multiplayer cursors | `⌃⌥⌘\` | not built (single-user) | OUT |
@@ -500,8 +501,8 @@ between our chrome and Figma's UI, and it is a workstream of its own (Wave 2).
 Figma's UI, as seen in the product and in the course videos: a dark canvas `#1E1E1E`,
 panels `#2C2C2C` with `#383838` dividers, accent blue `#0D99FF`, white primary text and
 `#B3B3B3` secondary, 11 px UI type, 8 px corner radius on rows and cards, ~24 px layer
-rows, 240 px side panels, a floating toolbar centred at the bottom of the canvas, and a
-monoline icon set on a 24 px grid with ~1.5 px strokes.
+rows, 240 px side panels, the tool set **in the top bar** left-of-centre (not a floating
+dock), and a monoline icon set on a 24 px grid with ~1.5 px strokes.
 
 *Those hexes and sizes are measurements of the Figma app, not published tokens — Figma
 ships no token list. Wave 2 therefore starts by re-measuring each one against the
@@ -510,17 +511,17 @@ the palette change is evidence-led rather than an approximation of a memory.*
 
 | # | Item | Figma | Ours (measured) | Status |
 | --- | --- | --- | --- | --- |
-| 18.1 | Canvas + panel palette | `#1E1E1E` / `#2C2C2C` / `#383838` | role palette (Graphite/Daylight), our own hues | **MISSING** (parity) |
-| 18.2 | Accent | `#0D99FF` | our accent | **MISSING** (parity) |
-| 18.3 | Text ramp | `#FFFFFF` / `#B3B3B3` / dim | `C_TEXT`/`C_MUTED`/`C_DIM`, our values | **MISSING** (parity) |
-| 18.4 | Selection colour | `#0D99FF` outline + handles | our selection blue | PARTIAL |
-| 18.5 | UI type | Inter, 11 px base | our UI font/size | **MISSING** (verify face) |
-| 18.6 | Radii | 8 px rows/cards, 6 px inputs, 4 px chips | `R_*` scale | PARTIAL |
-| 18.7 | Side panels | 240 px each, 40 px header | `ED_LEFT_W 280`, `ED_RIGHT_W 340` | **MISSING** (parity) |
-| 18.8 | Toolbar | floating, bottom-centre, 40 px, rounded | `TOOLBAR_H 40`, `TOOLBAR_BOTTOM 20` | MATCH |
-| 18.9 | Layer row height | 24 px | our row height | PARTIAL |
-| 18.10 | Icon set | Figma's monoline set, 24 px grid, 1.5 px stroke | Lucide set, 89 keys | **MISSING** (vocabulary) |
-| 18.11 | Tool cursor glyphs | Figma's tool cursors | system cursors | PARTIAL |
+| 18.1 | Canvas + panel palette | `#1E1E1E` / `#2C2C2C` / `#383838` | Graphite now ships `#1E1E1E` / `#2C2C2C` / `#383838` and Daylight `#F5F5F5` (help.figma.com 360041064814) | MATCH — `graphite_carries_figmas_chrome_values` |
+| 18.2 | Accent | `#0D99FF` | fill `#0B77C9`, ink `#66C7FF` | PARTIAL — white on `#0D99FF` is 2.99:1, under the 4.5:1 ratchet, so the fill is a deeper cut of the same hue; pinned by `graphite_carries_figmas_chrome_values` |
+| 18.3 | Text ramp | `#FFFFFF` / `#B3B3B3` / dim `#8C8C8C` | neutral `#FFFFFF`/`#C9C9C9`/`#BCBCBC`/`#B6B6B6` | PARTIAL — neutral like Figma's, but on this surface ladder the AA floor admits no grey darker than `#B3`, so Figma's dim `#8C8C8C` (2.9:1 on `#2C2C2C`) is unreachable; pinned by `graphite_carries_figmas_chrome_values` |
+| 18.4 | Selection colour | `#0D99FF` outline + handles | `selection` and `focus_ring` are `#0D99FF` exactly — the 3:1 indicator floor admits Figma's blue | MATCH — `graphite_carries_figmas_chrome_values` |
+| 18.5 | UI type | Inter, 11 px base | the chrome's four weights are the bundled Inter 400/500/600/700 — read back from each file's own `name` table, not from the stem it was registered under — and its body step is `theme::T_UI` = 11 px (250 call sites in the editor, plus the tracked section headings); the 10 px step survives only where Figma has no counterpart: the dashboard's metadata rows, the board and the status band | MATCH — `the_chrome_type_is_figmas_inter_at_eleven_pixels` |
+| 18.6 | Radii | 8 px rows/cards, 6 px inputs, 4 px chips | `R_ROW`/`R_CARD` 8, `R_INPUT` 6, `R_PILL` 4 on the shared scale | MATCH — `radii_follow_figmas_measured_chrome` |
+| 18.7 | Side panels | 240 px each, 40 px header; the right panel is not resizable (forum.figma.com/t/6578) | `ED_LEFT_W 240` ✓ and `ED_TITLE_H 40` ✓ (pinned by `the_editor_header_is_figmas_forty_pixels`); the inspector is now **width-adaptive** — the size/position, image and design-panel rows right-anchor via the dock's right edge, reproducing 340 exactly and holding 240 (`docks_never_eat_the_canvas` covers 240); default held at 340 until the popover menus + gallery reflow land | PARTIAL |
+| 18.8 | Toolbar | **in the top bar**, left-of-centre, beside the centred file breadcrumb (measured from Figma editor screenshots); no floating dock | ours floats a rounded dock at the **bottom-centre** of the canvas (`TOOLBAR_H 40`, `TOOLBAR_BOTTOM 20`) | PARTIAL — the single biggest structural divergence from Figma's chrome; moving the tools into the top bar is the open Wave-2 item |
+| 18.9 | Layer row height | 24 px | `TREE_ROW_H 24` = `DENSE_H`, and the contract counts the row on-standard (`OFF_STANDARD_COMPONENTS` 2 → 1) | MATCH — `app_row_heights_are_the_component_layers`, `on_standard_components_sit_exactly_on_their_step` |
+| 18.10 | Icon set | Figma's monoline set, 24 px grid, 1.5 px stroke | 97 keys on a 24 grid at 1.5 px — the **metrics match**; tool metaphors redrawn to Figma's (`polygon` pentagon, `scale` box+diagonal arrow, `slice` bracketed region, `section` dashed square, `star` at Figma's 0.382 default ratio, `arrow-up-right` as a shaft+V head like the other arrows, `comment` as Figma's rounded-square tailed bubble, and the Frame glyph `#` renamed `frame#`→`frame-hash` so the sheet can draw it). The icon census now also reads the `fn icon()`/`kind_icon` binding tables (86 of 97 keys named), so "unused" is a real number instead of a scan blind spot | PARTIAL — a few glyph forms (hand, pen nib, comment bubble) still read Lucide; pinned by `the_polygon_and_star_tools_count_their_sides`, `the_star_and_arrow_glyphs_are_figmas_metaphors` |
+| 18.11 | Tool cursor glyphs | Figma's tool cursors | system cursors mapped per tool like Figma — I-beam over text (incl. the Text tool armed on canvas), crosshair over the geometry tools, grab/grabbing for Hand and pan, ew-resize on the panel splitter, pointer on controls; pinned by `the_text_tool_wears_an_i_beam`, `pointer_says_what_it_will_do` | PARTIAL — the mapping is Figma's, but Figma's *custom bitmap* cursors (pen nib, comment pin) are platform cursor work deferred to CI |
 | 18.12 | Motion | panel/popover fade+scale ~120 ms | our transitions | PARTIAL |
 
 Icon note: Figma's icon assets are not open source, so "exact like Figma" here means
@@ -756,8 +757,28 @@ rendering it.
 
 ### Wave 2 — design parity ("no design issue")
 
-16. Adopt Figma's measured tokens: canvas/panel/divider palette, accent, text ramp,
-    radii, row heights, 240 px panels, Inter at 11 px (18.1–18.12).
+16. Adopt Figma's measured tokens (18.1–18.12) — **partly delivered**: the
+    canvas/panel/divider palette, the selection blue, the neutral text ramp and
+    the 24 px layer row are in, and the left dock is at 240. Two of Figma's
+    values are **not** reachable and are now pinned as deliberate deviations
+    rather than left as silent drift: the accent *fill* (white on Figma's
+    `#0D99FF` measures 2.99:1, under this repo's 4.5:1 ratchet) and Figma's dim
+    `#8C8C8C` (2.9:1 on `#2C2C2C`). Both are asserted by
+    `graphite_carries_figmas_chrome_values`, so neither can be "corrected" back
+    into a sub-AA pair by accident. Since then the radii pass (18.6), the 40 px
+    header (18.7) and the UI type — Inter on an 11 px base, the face verified
+    from each bundled file's `name` table (18.5) — have landed. Still open: **the
+    tools into the top bar** (18.8 — Figma has no floating dock; this is the biggest
+    structural divergence), the right dock at 240 (needs the inspector reflow of
+    item 18), the remaining icon vocabulary (18.10), the tool cursors (18.11) and
+    motion (18.12).
+
+    *Measured, not guessed: the palette was validated against the repo's own
+    audit before it was written — 54 pairs, 0 failures, headroom 1.026× on
+    Graphite and 1.118× on Daylight. `tools/design-sheet/figma_palette_probe.py`
+    re-implements `ColorTokens::contrast_audit` so a palette can be checked on a
+    host with no Rust toolchain; it reproduces the shipping palette's 54-pair /
+    0-failure result, which is what makes the new numbers trustworthy.*
 17. Redraw the icon vocabulary to Figma's metaphors at Figma's metrics, key by key,
     with the census test and the design sheet kept green (18.10).
 18. Panel geometry pass: header 40 px, section headers, the Design tab's row order
