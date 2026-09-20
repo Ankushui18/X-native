@@ -9260,7 +9260,10 @@ fn the_rotation_field_shows_figmas_counter_clockwise_sign() {
         .transform
         .rotation
         .to_degrees();
-    assert!((stored - 30.0).abs() < 1e-6, "stored sign is clockwise: {stored}");
+    assert!(
+        (stored - 30.0).abs() < 1e-6,
+        "stored sign is clockwise: {stored}"
+    );
     // …but the field reads the counter-clockwise value (within float noise: the
     // stored angle round-trips degrees→radians→degrees, so compare like line
     // above rather than with assert_eq on an f64)
@@ -9277,7 +9280,10 @@ fn the_rotation_field_shows_figmas_counter_clockwise_sign() {
         .transform
         .rotation
         .to_degrees();
-    assert!((stored - 30.0).abs() < 1e-6, "write converts ccw → cw: {stored}");
+    assert!(
+        (stored - 30.0).abs() < 1e-6,
+        "write converts ccw → cw: {stored}"
+    );
 
     // the 180 edge shows 180, not -180 (same float-noise tolerance)
     h.app.doc().editor().set_selection_rotation(180.0);
