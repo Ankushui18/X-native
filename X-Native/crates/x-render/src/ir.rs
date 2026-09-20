@@ -17,16 +17,19 @@ use vello::Scene;
 use x_core::*;
 
 /// How far above a frame/section's top-left corner its name label is drawn.
-/// A name is canvas chrome: an 18px label with a 1.2 line box needs ~22px,
-/// plus a 4px gap to the frame edge. Both the Frame and the Section arm use
-/// it, so a frame and a section put their name on the same line.
-pub const LABEL_ABOVE_Y: f64 = -26.0;
+/// A name is canvas chrome: a 12px label with a 1.2 line box needs ~14.4px,
+/// plus a ~5.6px gap to the frame edge — Figma's 12px gutter label. Both the
+/// Frame and the Section arm use it, so a frame and a section put their name
+/// on the same line.
+pub const LABEL_ABOVE_Y: f64 = -20.0;
 
-/// Point size of that label. One constant for both encoders (this one and the
-/// direct encoder in `scene.rs`) and both arms (Frame and Section), so a name
-/// looks the same whether it was lowered through the IR or painted straight
-/// into a scene by an export/thumbnail.
-pub const LABEL_SIZE: f64 = 18.0;
+/// Point size of that label — Figma's 12px frame name. One constant for both
+/// encoders (this one and the direct encoder in `scene.rs`), both arms (Frame
+/// and Section), and the canvas overlay (`editor_ui::paint_frame_labels`, via
+/// the facade re-export), so a name reads the same size whether it was lowered
+/// through the IR, painted straight into a scene by an export/thumbnail, or
+/// drawn in screen space over the canvas.
+pub const LABEL_SIZE: f64 = 12.0;
 
 /// Ink of a canvas name label (`LABEL_ABOVE_Y` / `LABEL_SIZE` above). ONE owner
 /// for "which grey": the IR encoder and the direct scene encoder both call this,
@@ -35,8 +38,76 @@ pub const LABEL_SIZE: f64 = 18.0;
 /// arm faded a name to 70% while the other three did not, so the same frame's name
 /// was a different grey on the canvas than in an export. The contract this sits
 /// under — and the tests that pin it — is docs/FIGMA_PARITY.md.
+///
+/// This is the artwork-surface ink (raster, thumbnails, headless renders — light
+/// backgrounds). The canvas overlay paints through the theme roles instead
+/// (`C_DIM` / `C_SEL`), because the editor canvas is theme-aware and this grey
+/// is unreadable on the dark canvas.
 pub fn label_ink() -> Color {
     Color::from_rgba8(0x4b, 0x55, 0x63, 0xff)
+}
+
+/// Ink of a SELECTED frame's name label — Figma's accent blue. The canvas
+/// overlay reads the theme's selection role (the same blue); this is the
+/// engine-side spelling for surfaces without a theme.
+pub fn label_ink_selected() -> Color {
+    Color::from_rgba8(0x0d, 0x99, 0xff, 0xff)
+}
+
+/// One frame name the canvas paints: the shared answer to "which frames get
+/// named", read by the canvas overlay. The IR lowering in `lower` answers the
+/// same question inline for the raster / thumbnail / headless paths, and
+/// `frame_label_targets_agree_with_the_ir_lowering` pins the two answers
+/// together so they can never drift.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FrameLabelTarget {
+    /// Node id — the overlay reads selection state off it.
+    pub id: String,
+    /// Display name (`"Frame"` when the node is unnamed).
+    pub name: String,
+}
+
+/// The frames whose names the canvas paints: a page's outermost frames (plus
+/// the frames sitting directly in a Section), honouring visibility and each
+/// frame's own **Show name** switch — Figma names those only. The render root
+/// (the page) is never named, frames nested inside another frame are not, and
+/// a master's internal frames (instance content) are not. Mirrors the gate in
+/// `lower` (`!path.is_empty() && !in_frame && node.show_name`, Frame arm only)
+/// and the `child_in_frame` rule below it.
+pub fn frame_label_targets(root: &Node) -> Vec<FrameLabelTarget> {
+    fn walk(n: &Node, in_frame: bool, is_root: bool, out: &mut Vec<FrameLabelTarget>) {
+        if !n.visible || n.opacity <= 0.0 {
+            return;
+        }
+        if !is_root && !in_frame && n.show_name && matches!(n.kind, NodeKind::Frame { .. }) {
+            out.push(FrameLabelTarget {
+                id: n.id.clone(),
+                name: if n.name.is_empty() {
+                    "Frame".to_string()
+                } else {
+                    n.name.clone()
+                },
+            });
+        }
+        // `lower` resolves an instance's master subtree with `in_frame = true`
+        // (never named), so there is nothing to collect by descending into one.
+        if matches!(n.kind, NodeKind::Instance { .. }) {
+            return;
+        }
+        let child_in_frame = if matches!(n.kind, NodeKind::Frame { .. }) {
+            !is_root
+        } else if matches!(n.kind, NodeKind::Section) {
+            false
+        } else {
+            in_frame
+        };
+        for c in &n.children {
+            walk(c, child_in_frame, false, out);
+        }
+    }
+    let mut out = vec![];
+    walk(root, false, true, &mut out);
+    out
 }
 
 /// Figma draws a Section's name as a **filled chip in the section's own colour**,
@@ -2180,12 +2251,13 @@ mod tests {
                 assert_eq!(key, "/Page 1/Hero/label");
                 assert!(key.ends_with("/Hero/label"), "{key}");
                 // the frame's world origin (40, 60) plus the label offset: left
-                // edge aligned with the frame, 26px of gutter above it
+                // edge aligned with the frame, 20px of gutter above it
                 let t = transform.translation();
                 assert!((t.x - 40.0).abs() < 1e-9, "{t:?}");
                 assert!((t.y - (60.0 + LABEL_ABOVE_Y)).abs() < 1e-9, "{t:?}");
                 assert!(t.y < 60.0, "the label sits ABOVE the frame");
-                assert_eq!(*size, 18.0);
+                assert_eq!(*size, LABEL_SIZE);
+                assert_eq!(*size, 12.0, "Figma's frame name is 12px");
                 assert_eq!(*max_width, 280.0);
             }
             other => panic!("expected Glyphs, got {other:?}"),
@@ -2233,6 +2305,104 @@ mod tests {
                     .any(|c| matches!(c, RenderCommand::Glyphs { text, .. } if text == "Card")),
             "a section and the frame inside it both keep their names"
         );
+    }
+
+    /// `frame_label_targets` — the canvas overlay's reading of "which frames get
+    /// named": outermost frames only, plus frames in sections, honouring
+    /// visibility and Show name; never the root, never nested-in-frame, never
+    /// instance internals.
+    #[test]
+    fn frame_label_targets_name_the_outermost_frames_only() {
+        let mut inner = Node::frame("Inner", 100.0, 80.0);
+        inner.name = "Inner".into();
+        let mut hero = Node::frame("Hero", 300.0, 200.0).child(inner);
+        hero.name = "Hero".into();
+        let mut card = Node::frame("Card", 100.0, 80.0);
+        card.name = "Card".into();
+        let mut band = Node::section("Band", 300.0, 200.0);
+        band.name = "Band".into();
+        band = band.child(card);
+        let mut quiet = Node::frame("Quiet", 100.0, 80.0);
+        quiet.name = "Quiet".into();
+        quiet.show_name = false;
+        let mut ghost = Node::frame("Ghost", 100.0, 80.0);
+        ghost.name = "Ghost".into();
+        ghost.visible = false;
+        let master = Node::component("cb", "Chip", 120.0, 40.0).child(Node::rect(
+            "r",
+            0.0,
+            0.0,
+            60.0,
+            20.0,
+            Color::WHITE,
+        ));
+        let inst = Node::instance("i", "Chip", 10.0, 10.0, 120.0, 40.0);
+        let page = Node::frame("Page", 800.0, 600.0)
+            .child(hero)
+            .child(band)
+            .child(quiet)
+            .child(ghost)
+            .child(master)
+            .child(inst);
+        let names: Vec<String> = frame_label_targets(&page)
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+        assert_eq!(names, vec!["Hero".to_string(), "Card".to_string()]);
+        let ids: Vec<String> = frame_label_targets(&page)
+            .iter()
+            .map(|t| t.id.clone())
+            .collect();
+        assert_eq!(ids, vec!["Hero".to_string(), "Card".to_string()]);
+    }
+
+    /// The overlay's target list and the IR lowering must agree about WHICH
+    /// names exist: the same fixture lowered both ways yields the same set.
+    /// This is what keeps the two readers of the naming rule from drifting.
+    #[test]
+    fn frame_label_targets_agree_with_the_ir_lowering() {
+        let mut inner = Node::frame("Inner", 100.0, 80.0);
+        inner.name = "Inner".into();
+        let mut hero = Node::frame("Hero", 300.0, 200.0).child(inner);
+        hero.name = "Hero".into();
+        let mut card = Node::frame("Card", 100.0, 80.0);
+        card.name = "Card".into();
+        let mut band = Node::section("Band", 300.0, 200.0);
+        band.name = "Band".into();
+        band = band.child(card);
+        let mut quiet = Node::frame("Quiet", 100.0, 80.0);
+        quiet.name = "Quiet".into();
+        quiet.show_name = false;
+        let mut ghost = Node::frame("Ghost", 100.0, 80.0);
+        ghost.name = "Ghost".into();
+        ghost.visible = false;
+        let page = Node::frame("Page", 800.0, 600.0)
+            .child(hero)
+            .child(band)
+            .child(quiet)
+            .child(ghost);
+        let mut via_walk: Vec<String> = frame_label_targets(&page)
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+        via_walk.sort();
+        let tree = build_render_tree(&page, &Variables::default());
+        let mut via_ir: Vec<String> = tree
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                RenderCommand::Glyphs { key, text, .. } if is_frame_name_label(key) => {
+                    Some(text.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        via_ir.sort();
+        assert_eq!(
+            via_walk, via_ir,
+            "overlay targets and IR agree on frame names"
+        );
+        assert_eq!(via_walk, vec!["Card".to_string(), "Hero".to_string()]);
     }
 
     /// A presentation paints the artwork, not the canvas chrome: a frame's name

@@ -8818,6 +8818,53 @@ fn paint_variant_chrome(app: &mut App, s: &mut Scene) {
     }
 }
 
+/// Figma's canvas frame names: a 12px label in the gutter above each of the
+/// page's outermost frames (plus frames in sections), grey normally and blue
+/// when the frame is selected. Screen-space — a constant 12px at any zoom —
+/// so it lives in the overlay: the canvas lowering strips world-space
+/// `/label` commands (`FrameCache::lower_canvas`) because a render command
+/// can be neither zoom-constant nor selection-aware. The size, the gutter
+/// offset and the target list are the engine's one rule (`LABEL_SIZE`,
+/// `LABEL_ABOVE_Y`, `frame_label_targets`); only the ink is theme-resolved
+/// here, because the editor canvas is theme-aware. Editor chrome only —
+/// exports strip labels and presentations hide all chrome.
+fn paint_frame_labels(app: &mut App, s: &mut Scene) {
+    let Some(doc) = app.doc_opt() else {
+        return;
+    };
+    let root = &doc.editor_ref().root;
+    let targets = x_native::frame_label_targets(root);
+    if targets.is_empty() {
+        return;
+    }
+    let sel = doc.editor_ref().selection.clone();
+    let reg = app.editor_regions();
+    let size = x_native::LABEL_SIZE;
+    for t in targets {
+        let Some((x, y, _, _)) = crate::run::world_rect_of(root, t.id.as_str()) else {
+            continue;
+        };
+        let a = app.world_to_screen(Point::new(x, y));
+        let top = a.y + x_native::LABEL_ABOVE_Y;
+        // the document scene clips to the canvas; the overlay does not, so a
+        // label that would paint over the title bar or a dock is skipped, and
+        // a name running past the canvas edge is truncated — chrome must never
+        // paint over chrome.
+        let on_canvas = a.x >= reg.canvas.x0
+            && a.x <= reg.canvas.x1
+            && top >= reg.canvas.y0
+            && top <= reg.canvas.y1;
+        if !on_canvas {
+            continue;
+        }
+        let shown = app
+            .fonts
+            .truncate(&t.name, size, Wt::Med, (reg.canvas.x1 - a.x).max(20.0));
+        let ink = if sel.contains(&t.id) { C_SEL } else { C_DIM };
+        app.fonts.text(s, a.x, top, &shown, size, ink, Wt::Med);
+    }
+}
+
 // ------------------------------------------------------------ effects list
 
 /// One row's place for the drag: the index whose row the pointer is inside.
@@ -9500,6 +9547,7 @@ fn paint_measure(app: &App, s: &mut Scene) {
 fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
     paint_slice_chrome(app, s);
     paint_variant_chrome(app, s);
+    paint_frame_labels(app, s);
     let doc = match app.doc_opt() {
         Some(d) => d,
         None => return,
@@ -11172,10 +11220,12 @@ fn paint_inspect(
 ) {
     hline(s, x0 - 8.0, xr, y, C_LINE);
     let y = y + 1.0 + 12.0;
-    // platform segmented control for X-Native's artifact handoff targets
-    const NAMES: [&str; 5] = App::INSPECT_PLATFORMS;
+    // Figma Dev Mode's platform switch (Web / iOS / Android, plus Tailwind
+    // and JSX): one segment per `INSPECT_PLATFORMS` entry, so adding a target
+    // is adding a name — the geometry follows the list, not a literal count.
+    const NAMES: [&str; 6] = App::INSPECT_PLATFORMS;
     let w = xr - x0;
-    let seg_w = (w - 4.0 * 4.0) / 5.0;
+    let seg_w = (w - 4.0 * (NAMES.len() - 1) as f64) / NAMES.len() as f64;
     for (i, name) in NAMES.iter().enumerate() {
         let bx = x0 + (seg_w + 4.0) * i as f64;
         let r = Rect::new(bx, y, bx + seg_w, y + 24.0);
@@ -11208,6 +11258,52 @@ fn paint_inspect(
         hit.push((r, Action::InspectPlatform(i)));
     }
     let mut y = y + 24.0 + 12.0;
+    // MEASUREMENTS — sizes + parent gaps for one layer, or the pair gap for
+    // two — straight from the engine's devmode readers, never recomputed
+    // here (Figma's inspect sizes/distances).
+    if let Some((line1, line2)) = app.inspect_measurements() {
+        app.fonts
+            .micro_label(s, x0, y, "MEASUREMENTS", C_DIM, Wt::Med);
+        let y1 = y + 15.0;
+        let y2 = y1 + 17.0;
+        app.fonts.text(s, x0, y1, &line1, T11, C_TEXT, Wt::Reg);
+        app.fonts.text(s, x0, y2, &line2, T11, C_DIM, Wt::Reg);
+        y += 15.0 + 17.0 * 2.0 + 12.0;
+    } else if let Some(gap) = app.inspect_gap() {
+        app.fonts.micro_label(s, x0, y, "DISTANCE", C_DIM, Wt::Med);
+        app.fonts.text(s, x0, y + 15.0, &gap, T11, C_TEXT, Wt::Reg);
+        y += 15.0 + 17.0 + 12.0;
+    }
+    // TOKENS — the variables / styles behind the selection's look.
+    let tokens = app.inspect_tokens();
+    if !tokens.is_empty() {
+        app.fonts.micro_label(s, x0, y, "TOKENS", C_DIM, Wt::Med);
+        y += 15.0;
+        for (kind, name) in tokens.iter().take(8) {
+            let row = format!("{kind} · {name}");
+            let shown = app.fonts.truncate(&row, T11, Wt::Reg, xr - x0);
+            app.fonts.text(s, x0, y, &shown, T11, C_TEXT, Wt::Reg);
+            y += 17.0;
+        }
+        y += 12.0;
+    }
+    // ASSETS — images + components the selection references.
+    let assets = app.inspect_assets();
+    if !assets.is_empty() {
+        app.fonts.micro_label(s, x0, y, "ASSETS", C_DIM, Wt::Med);
+        y += 15.0;
+        for (kind, name, usage) in assets.iter().take(8) {
+            let row = if *usage > 1 {
+                format!("{kind} · {name} ×{usage}")
+            } else {
+                format!("{kind} · {name}")
+            };
+            let shown = app.fonts.truncate(&row, T11, Wt::Reg, xr - x0);
+            app.fonts.text(s, x0, y, &shown, T11, C_TEXT, Wt::Reg);
+            y += 17.0;
+        }
+        y += 12.0;
+    }
     // code panel: dark inset with mono lines
     let code = app.inspect_code();
     let lines: Vec<&str> = if code.is_empty() {

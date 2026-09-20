@@ -72,7 +72,7 @@ const production = (src) => {
 const CEILINGS = {
   'crates/x-core/src/fallbacks.rs': 2, // the two greys themselves, named
   'crates/x-core/src/node.rs': 3, // section wash + section stroke + the text default
-  'crates/x-render/src/ir.rs': 2, // `label_ink()` + the section chip's ink
+  'crates/x-render/src/ir.rs': 3, // `label_ink()` + the section chip's ink + `label_ink_selected()`
   'crates/x-render/src/raster.rs': 1, // the no-font text placeholder box
   'crates/x-render/src/stress.rs': 2, // a benchmark scene's content, not chrome
 };
@@ -289,8 +289,62 @@ check(
   drift.length ? drift.join('; ') : 'every section header equals its rows; every total equals the sum',
 );
 
+// --------------------------------- Figma 100%: text commit + frame labels
+// The strict UI↔code rule (docs/FIGMA_UI_CODE_PARITY_RULE.md) pins Figma's
+// text and label behaviour to source claims a unit test cannot read back
+// (key/press wiring, world-space vs screen-space paint), so the guard reads
+// the wiring instead — same pattern as the status-band check above.
+const irSrc = read('crates/x-render/src/ir.rs');
+check(
+  "frame names are Figma's 12px gutter label",
+  /pub const LABEL_SIZE: f64 = 12\.0;/.test(irSrc) &&
+    /pub const LABEL_ABOVE_Y: f64 = -20\.0;/.test(irSrc),
+  'ir.rs::LABEL_SIZE / LABEL_ABOVE_Y',
+);
+const cacheSrc = read('crates/x-render/src/frame_cache.rs');
+check(
+  'the canvas lowering strips world-space frame names for its overlay',
+  /retain\(\|c\| !crate::ir::is_frame_name_label\(c\.key\(\)\)\)/.test(cacheSrc),
+  'frame_cache.rs::lower_canvas',
+);
+const editorUiSrc = read('apps/x-designer/src/bin/x_native_app/editor_ui.rs');
+check(
+  'the canvas paints frame names as a screen-space overlay off the one rule',
+  /fn paint_frame_labels\(/.test(editorUiSrc) &&
+    /paint_frame_labels\(app, s\)/.test(editorUiSrc) &&
+    /x_native::frame_label_targets\(/.test(editorUiSrc) &&
+    /x_native::LABEL_SIZE/.test(editorUiSrc) &&
+    /x_native::LABEL_ABOVE_Y/.test(editorUiSrc),
+  'editor_ui.rs::paint_frame_labels reads frame_label_targets + LABEL_*',
+);
+// the text editor's Esc arm sits between the `rich-text inline editor`
+// marker and its Enter arm; it must commit, never cancel.
+const editorKeys = appRun.slice(appRun.indexOf('rich-text inline editor'));
+const escArm = editorKeys.slice(0, editorKeys.indexOf('(Key::Named(NamedKey::Enter), _)'));
+check(
+  'text Esc COMMITS the edit (Figma: Esc keeps the text)',
+  escArm.includes('commit_text_field') && !escArm.includes('text_cancel_edit'),
+  'run.rs text_edit Escape arm',
+);
+check(
+  'an outside press commits the text before dispatching (Figma: click-away saves)',
+  /self\.app\.commit_text_if_press_outside\(p\);/.test(appRun),
+  'run.rs::on_press',
+);
+// Dev Mode's platform switch covers Figma's handoff set (Web / iOS /
+// Android) plus Tailwind and JSX — a platform dropped from the list is a
+// handoff target silently lost, so the list itself is guarded.
+const appState = read('apps/x-designer/src/bin/x_native_app/state.rs');
+check(
+  'INSPECT covers CSS / SwiftUI / Compose / XML / Tailwind / JSX',
+  ['"CSS"', '"SwiftUI"', '"Compose"', '"XML"', '"Tailwind"', '"JSX"'].every((p) =>
+    appState.includes(`INSPECT_PLATFORMS: [&str; 6]`) && appState.includes(p),
+  ),
+  'state.rs::INSPECT_PLATFORMS',
+);
+
 console.log(`      ${pinned} behaviours pinned by a test, ${open} open (documented, not pinned)`);
 console.log(
-  `SUMMARY  design + Figma conformance: 10 checks, ${pinned} pinned, ${open} open, ${failed} failed`,
+  `SUMMARY  design + Figma conformance: 16 checks, ${pinned} pinned, ${open} open, ${failed} failed`,
 );
 process.exit(failed === 0 ? 0 : 1);
