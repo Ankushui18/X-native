@@ -260,15 +260,15 @@ const NAV_TABS = [
   ['Variables', 'code'],
 ];
 const LEFT_TABS = [
-  ['Layers', 'STRUCTURE'],
-  ['Assets', 'LIBRARY'],
-  ['Tokens', 'TOKENS'],
+  ['Layers', 'Layers'],
+  ['Assets', 'Assets'],
+  ['Tokens', 'Tokens'],
 ];
 const RIGHT_TABS = [
-  ['Design', 'COMPOSE'],
-  ['Prototype', 'FLOW'],
-  ['Inspect', 'SHIP'],
-  ['UX', 'UX ANALYSIS'],
+  ['Design', 'Design'],
+  ['Prototype', 'Prototype'],
+  ['Inspect', 'Inspect'],
+  ['UX', 'UX'],
 ];
 const TOOLS = [
   ['Select', 'mouse-pointer-2', 'V'],
@@ -498,7 +498,7 @@ function composePanel() {
     50,
     323,
     30,
-    ['COMPOSE', 'FLOW', 'SHIP', 'UX ANALYSIS']
+    ['Design', 'Prototype', 'Inspect', 'UX']
       .map((l, i) => `<span class="pill${i === 0 ? ' on' : ''}">${l}</span>`)
       .join(''),
     { class: 'pillrow' },
@@ -1141,13 +1141,13 @@ window.SCREENS = [
     group: 'Editor',
     name: 'Editor · Structure + canvas',
     module: 'editor_ui.rs',
-    what: `Full editor chrome: title bar ${TITLE}, rail ${RAIL}, left dock ${LEFT} (STRUCTURE / LIBRARY / TOKENS), right dock ${RIGHT}, rulers, tool dock ${UI.toolbarH} tall. The COMPOSE inspector is drawn from paint_design: name + %, W/H, X/Y, rotation, Auto layout, Flow, Resizing, Alignment, Padding, Clip content, Appearance, Typography — fields are filled boxes with no outline until hover, and the value being typed into is ringed.`,
-    note: 'Three canvas aids ship in this frame: the minimap (bottom-right, ⇧M or its ✕), page sketches in every PAGES row that has content, and ⇧1 fitting the frame to the page content.',
+    what: `Full editor chrome: title bar ${TITLE}, rail ${RAIL}, left dock ${LEFT} (Layers / Assets / Tokens), right dock ${RIGHT}, rulers, tool dock ${UI.toolbarH} tall. The Design inspector is drawn from paint_design: name + %, W/H, X/Y, rotation, Auto layout, Flow, Resizing, Alignment, Padding, Clip content, Appearance, Typography — fields are filled boxes with no outline until hover, and the value being typed into is ringed.`,
+    note: 'Tabs use Figma names (Layers/Assets, Design/Prototype/Inspect) with X-Native adds (Tokens, UX). Three canvas aids ship in this frame: the minimap (bottom-right, ⇧M or its ✕), page sketches in every PAGES row that has content, and ⇧1 fitting the frame to the page content.',
     checks: [
-      'STRUCTURE',
-      'LIBRARY',
-      'TOKENS',
-      'COMPOSE',
+      'Layers',
+      'Assets',
+      'Tokens',
+      'Design',
       'minimap',
       'PAGES',
       'sketch',
@@ -1165,9 +1165,9 @@ window.SCREENS = [
     group: 'Editor',
     name: 'Editor · Library',
     module: 'editor_ui.rs',
-    what: 'Left dock on LIBRARY: the faces the render stack knows (Load Font…) and the libraries this document is linked to, each with its pinned version and a check pill.',
-    note: 'The left tabs are STRUCTURE / LIBRARY / TOKENS — X-Native names its own model (scene graph, not a Figma clone).',
-    checks: ['LIBRARY', 'FONTS', 'Load Font…', 'LIBRARIES', 'check'],
+    what: 'Left dock on Assets: the faces the render stack knows (Load Font…) and the libraries this document is linked to, each with its pinned version and a check pill.',
+    note: 'The left tabs are Layers / Assets / Tokens — Figma names plus X-Native\'s Tokens add.',
+    checks: ['Assets', 'FONTS', 'Load Font…', 'LIBRARIES', 'check'],
     render: () => editorScreen({ leftTab: 'Assets' }),
   },
   {
@@ -1175,9 +1175,9 @@ window.SCREENS = [
     group: 'Editor',
     name: 'Editor · Tokens',
     module: 'editor_ui.rs',
-    what: 'Left dock on TOKENS: what the document already paints with (colours, type scale, spacing), the extract-to-variables action, the four create-kind buttons and every variable with its delete ✕.',
+    what: 'Left dock on Tokens: what the document already paints with (colours, type scale, spacing), the extract-to-variables action, the four create-kind buttons and every variable with its delete ✕.',
     note: 'Variable edits route through the undo log; the inspector shows the variable name beside any bound fill.',
-    checks: ['TOKENS', 'TYPE SCALE', 'NEW VARIABLE', 'VARIABLES'],
+    checks: ['Tokens', 'TYPE SCALE', 'NEW VARIABLE', 'VARIABLES'],
     render: () => editorScreen({ leftTab: 'Tokens' }),
   },
   {
@@ -1185,9 +1185,9 @@ window.SCREENS = [
     group: 'Editor',
     name: 'Editor · Flow (prototype)',
     module: 'editor_ui.rs',
-    what: 'Right dock on FLOW: start point, interactions, animation; connections draw on the canvas.',
+    what: 'Right dock on Prototype: start point, interactions, animation; connections draw on the canvas.',
     note: '“▶ Preview flow start” enters the chrome-less flow viewer (next screen).',
-    checks: ['FLOW', 'Start flow here', 'Preview flow start'],
+    checks: ['Prototype', 'Start flow here', 'Preview flow start'],
     render: () => editorScreen({ rightTab: 'Prototype', connections: true }),
   },
   {
@@ -1195,9 +1195,9 @@ window.SCREENS = [
     group: 'Editor',
     name: 'Editor · Ship (inspect)',
     module: 'editor_ui.rs',
-    what: 'Right dock on SHIP: size, fill (with its variable), text style, and the CSS line.',
+    what: 'Right dock on Inspect: size, fill (with its variable), text style, and the CSS line.',
     note: 'The fill row names the variable it is bound to, which is the link the paint library edits.',
-    checks: ['SHIP', 'Selection', 'variable'],
+    checks: ['Inspect', 'Selection', 'variable'],
     render: () => editorScreen({ rightTab: 'Inspect' }),
   },
   {
@@ -1205,9 +1205,9 @@ window.SCREENS = [
     group: 'Editor',
     name: 'Editor · UX analysis',
     module: 'editor_ui.rs',
-    what: 'Right dock on UX ANALYSIS: contrast, flow gaps, quality notes.',
+    what: 'Right dock on UX: contrast, flow gaps, quality notes.',
     note: 'The contrast rows read the same audited pairs the palette table and the CLI theme audit use.',
-    checks: ['UX ANALYSIS', 'Contrast', 'pass AA'],
+    checks: ['UX', 'Contrast', 'pass AA'],
     render: () => editorScreen({ rightTab: 'UX' }),
   },
   {

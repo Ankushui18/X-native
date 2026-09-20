@@ -109,7 +109,7 @@ lookup — `COLOR_ROLES`, `role()` and the DTCG export are cross-checked, and
 | Colour | `C_*` — a **role**, never a hex | `C_PANEL`, `C_TEXT`, `C_SEL`, `C_DANGER_FILL`, `C_SUCCESS_WASH`, `C_SELECTION_EDGE`… |
 | Corner | `R_*` — 2/4/6/8/12 only | `R_XS R_SM R_MD R_LG R_XL` + intent aliases `R_INPUT R_ROW R_CARD R_SEARCH R_PILL R_TREE R_TOOL_ICON R_LOGO` |
 | Glyph | `ICON_*` + `STROKE_ICON` | `ICON_XS 12 · ICON_SM 14 · ICON_MD 16 · ICON_LG 18 · ICON_XL 24` |
-| Type | `T*`, and `T_UI` for the chrome's body | `T10 T11 T12 T13 T14 T16 T20` — the editor paints labels, values, rows and menus at **`T_UI` = `T11` = 11px**, Figma's UI base (master row 18.5); `T10` is left to the dashboard's metadata, the board and the status band. Tracked via `micro_label` (0.12em) / `caps_label` (0.08em), both on `T_UI` |
+| Type | `T*` | `T10 T11 T12 T13 T14 T16 T20`, tracked via `micro_label` (0.12em) / `caps_label` (0.08em) |
 | Space | `SP_*` | `SP_1 4 · SP_2 6 · SP_3 8 · SP_4 12 · SP_5 16 · SP_6 20 · SP_7 24 · SP_8 32 · SP_9 40 · SP_10 48` |
 | Wash alpha | `A_*` | `A_WHISPER 8 · A_FAINT 20 · A_SOFT 51 · A_MEDIUM 66 · A_STRONG 128` (0–255) |
 | Border | `STROKE_HAIRLINE 1.0 · STROKE_RING 1.5` | |
@@ -169,7 +169,7 @@ handler all read it — so what is drawn is what happens.
   node→box mapping. A page with nothing on it keeps the plain glyph, because a
   thumbnail of nothing is a lie.
 - **Guide readout** (`guide_readout`): while a ruler guide is dragged, the chip
-  beside the line shows its world coordinate in `T_UI` mono on `C_FIELD`, and is
+  beside the line shows its world coordinate in `T10` mono on `C_FIELD`, and is
   clamped to the canvas so the number is always readable. A guide you cannot
   measure is a guess.
 - **Zoom to fit** (⇧1) fits the *content* box, not the page frame: the frame can

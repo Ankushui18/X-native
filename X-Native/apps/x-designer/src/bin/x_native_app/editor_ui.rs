@@ -2652,11 +2652,11 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     );
     let item_w = (pw - 6.0 - 4.0) / 3.0;
     let tabs = [
-        // X-Native calls the layer tree Structure and the asset browser
-        // Library: the document model is a scene graph, not a Figma clone.
-        (LeftTab::Layers, "STRUCTURE"),
-        (LeftTab::Assets, "LIBRARY"),
-        (LeftTab::Tokens, "TOKENS"),
+        // Parity-first: the left dock uses Figma's own tab names (Layers, Assets);
+        // Tokens is X-Native's added tab and keeps its name.
+        (LeftTab::Layers, "Layers"),
+        (LeftTab::Assets, "Assets"),
+        (LeftTab::Tokens, "Tokens"),
     ];
     for (i, (tab, label)) in tabs.into_iter().enumerate() {
         let ix = px0 + 3.0 + (item_w + 2.0) * i as f64;
@@ -3502,12 +3502,12 @@ fn paint_right(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     );
     let item_w = (pw - 6.0 - 4.0) / 4.0;
     let tabs = [
-        // Right inspector is an X-Native workflow: compose the scene,
-        // route it through interactive flows, then ship an artifact.
-        (RightTab::Design, "COMPOSE"),
-        (RightTab::Prototype, "FLOW"),
-        (RightTab::Inspect, "SHIP"),
-        (RightTab::UX, "UX ANALYSIS"),
+        // Parity-first: the right inspector uses Figma's own tab names
+        // (Design, Prototype, Inspect); UX is X-Native's added tab.
+        (RightTab::Design, "Design"),
+        (RightTab::Prototype, "Prototype"),
+        (RightTab::Inspect, "Inspect"),
+        (RightTab::UX, "UX"),
     ];
     for (i, (tab, label)) in tabs.into_iter().enumerate() {
         let ix = px0 + 3.0 + (item_w + 2.0) * i as f64;

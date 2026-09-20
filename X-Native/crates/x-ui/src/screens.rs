@@ -327,7 +327,7 @@ pub static SURFACES: &[SurfaceSpec] = &[
         id: SurfaceId::EdStructure,
         screen: ScreenId::Editor,
         kind: SurfaceKind::Panel,
-        label: "STRUCTURE",
+        label: "Layers",
         property_rows: false,
         on_standard: true,
         empty_state: EmptyState::Silent,
@@ -337,7 +337,7 @@ pub static SURFACES: &[SurfaceSpec] = &[
         id: SurfaceId::EdLibrary,
         screen: ScreenId::Editor,
         kind: SurfaceKind::Panel,
-        label: "LIBRARY",
+        label: "Assets",
         property_rows: false,
         on_standard: true,
         empty_state: EmptyState::Copy("No colour variables in this file"),
@@ -347,7 +347,7 @@ pub static SURFACES: &[SurfaceSpec] = &[
         id: SurfaceId::EdTokens,
         screen: ScreenId::Editor,
         kind: SurfaceKind::Panel,
-        label: "TOKENS",
+        label: "Tokens",
         property_rows: false,
         on_standard: true,
         empty_state: EmptyState::Silent,
@@ -382,7 +382,7 @@ pub static SURFACES: &[SurfaceSpec] = &[
         id: SurfaceId::EdCompose,
         screen: ScreenId::Editor,
         kind: SurfaceKind::Panel,
-        label: "COMPOSE",
+        label: "Design",
         property_rows: true,
         // P0-9 put every row here on the control-height scale.
         on_standard: true,
@@ -395,7 +395,7 @@ pub static SURFACES: &[SurfaceSpec] = &[
         id: SurfaceId::EdFlow,
         screen: ScreenId::Editor,
         kind: SurfaceKind::Panel,
-        label: "FLOW",
+        label: "Prototype",
         property_rows: true,
         on_standard: false,
         empty_state: EmptyState::Copy("No painted content to analyze yet"),
@@ -405,7 +405,7 @@ pub static SURFACES: &[SurfaceSpec] = &[
         id: SurfaceId::EdShip,
         screen: ScreenId::Editor,
         kind: SurfaceKind::Panel,
-        label: "SHIP",
+        label: "Inspect",
         property_rows: true,
         on_standard: false,
         // The code panel simply draws no lines when there is nothing selected.
@@ -416,7 +416,7 @@ pub static SURFACES: &[SurfaceSpec] = &[
         id: SurfaceId::EdUx,
         screen: ScreenId::Editor,
         kind: SurfaceKind::Panel,
-        label: "UX ANALYSIS",
+        label: "UX",
         property_rows: true,
         on_standard: false,
         empty_state: EmptyState::Copy("Select an element to analyze"),
@@ -562,7 +562,10 @@ pub const SILENT_EMPTY_STATES: usize = 6;
 
 /// Labels a surface must never show: the internal vocabulary (enum variant
 /// names, mostly) that the UI used to leak before the X-Native rename.
-pub const BANNED_LABELS: &[&str] = &["design", "prototype", "inspect", "layers", "assets"];
+/// Parity-first: the chrome uses Figma's own tab vocabulary (Design / Prototype /
+/// Inspect, Layers / Assets), so the *old* internal vocabulary is what is now
+/// banned. (Inverted from P0-10, which banned the Figma names.)
+pub const BANNED_LABELS: &[&str] = &["compose", "flow", "ship", "structure", "library"];
 
 pub fn screen(id: ScreenId) -> Option<&'static ScreenSpec> {
     SCREENS.iter().find(|s| s.id == id)
@@ -625,11 +628,11 @@ mod tests {
         }
     }
 
-    /// The naming rule from P0-10: the workflow is COMPOSE / FLOW / SHIP / UX
-    /// ANALYSIS, and the docks are STRUCTURE / LIBRARY / TOKENS. A surface
-    /// showing "Design" or "Layers" is the old vocabulary leaking through.
+    /// Parity-first naming: the chrome uses Figma's own vocabulary — the right
+    /// dock is Design / Prototype / Inspect (+ UX) and the left dock is
+    /// Layers / Assets (+ Tokens). The old internal vocabulary is banned.
     #[test]
-    fn surface_labels_use_x_native_naming() {
+    fn surface_labels_use_figma_naming() {
         for s in SURFACES {
             let label = s.label.to_ascii_lowercase();
             for banned in BANNED_LABELS {
@@ -651,7 +654,7 @@ mod tests {
         .iter()
         .map(|id| surface(*id).unwrap().label)
         .collect();
-        assert_eq!(tabs, vec!["COMPOSE", "FLOW", "SHIP", "UX ANALYSIS"]);
+        assert_eq!(tabs, vec!["Design", "Prototype", "Inspect", "UX"]);
     }
 
     #[test]

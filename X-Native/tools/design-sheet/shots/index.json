@@ -1,6 +1,6 @@
 {
   "theme": "graphite",
-  "at": "2026-09-20 05:21",
+  "at": "2026-09-17 20:34",
   "browser": "AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.0 Safari/537.36",
   "runtime": "chrome 153.0.8010.0",
   "window": {
@@ -16,7 +16,7 @@
   ],
   "verified": {
     "screens": 26,
-    "boxes": 7947,
+    "boxes": 7959,
     "issues": []
   },
   "screens": [
@@ -35,8 +35,8 @@
         "Start from a template"
       ],
       "file": "shots/dash-home-grid.png",
-      "bytes": 70967,
-      "sha256": "0225633b19bacdff",
+      "bytes": 80794,
+      "sha256": "728486ffdddae845",
       "width": 1440,
       "height": 900
     },
@@ -54,8 +54,8 @@
         "Design System"
       ],
       "file": "shots/dash-home-list.png",
-      "bytes": 73194,
-      "sha256": "cb87a94569645608",
+      "bytes": 83572,
+      "sha256": "805fe14d230421e1",
       "width": 1440,
       "height": 900
     },
@@ -71,8 +71,8 @@
         "All files"
       ],
       "file": "shots/dash-recents.png",
-      "bytes": 69500,
-      "sha256": "86032b42e085c71b",
+      "bytes": 78744,
+      "sha256": "2c08c8e2b37735d4",
       "width": 1440,
       "height": 900
     },
@@ -88,8 +88,8 @@
         "★"
       ],
       "file": "shots/dash-starred.png",
-      "bytes": 71593,
-      "sha256": "bd7b71e56c92f994",
+      "bytes": 81416,
+      "sha256": "dfe91460466d5840",
       "width": 1440,
       "height": 900
     },
@@ -105,8 +105,8 @@
         "nothing is removed"
       ],
       "file": "shots/dash-trash.png",
-      "bytes": 55687,
-      "sha256": "915b28d455d583d4",
+      "bytes": 62779,
+      "sha256": "ef40964c3b7a2b30",
       "width": 1440,
       "height": 900
     },
@@ -124,8 +124,8 @@
         "Starred first"
       ],
       "file": "shots/dash-selection.png",
-      "bytes": 81453,
-      "sha256": "a5cd6f8ff9d0231b",
+      "bytes": 92070,
+      "sha256": "24bbbb1a46cf9ab4",
       "width": 1440,
       "height": 900
     },
@@ -142,8 +142,8 @@
         "Create new file"
       ],
       "file": "shots/dash-empty.png",
-      "bytes": 60939,
-      "sha256": "15fb16a0e1c34f62",
+      "bytes": 69260,
+      "sha256": "50937d949118c754",
       "width": 1440,
       "height": 900
     },
@@ -160,8 +160,8 @@
         "Retro board"
       ],
       "file": "shots/dash-templates.png",
-      "bytes": 62900,
-      "sha256": "6f1f3be4e8645d3c",
+      "bytes": 73268,
+      "sha256": "8dfdba4361088109",
       "width": 1440,
       "height": 900
     },
@@ -170,7 +170,7 @@
       "name": "Editor · Structure + canvas",
       "group": "Editor",
       "module": "editor_ui.rs",
-      "what": "Full editor chrome: title bar 36, rail 48, left dock 240 (STRUCTURE / LIBRARY / TOKENS), right dock 340, rulers, tool dock 40 tall. The COMPOSE inspector is drawn from paint_design: name + %, W/H, X/Y, rotation, Auto layout, Flow, Resizing, Alignment, Padding, Clip content, Appearance, Typography — fields are filled boxes with no outline until hover, and the value being typed into is ringed.",
+      "what": "Full editor chrome: title bar 36, rail 48, left dock 280 (STRUCTURE / LIBRARY / TOKENS), right dock 340, rulers, tool dock 40 tall. The COMPOSE inspector is drawn from paint_design: name + %, W/H, X/Y, rotation, Auto layout, Flow, Resizing, Alignment, Padding, Clip content, Appearance, Typography — fields are filled boxes with no outline until hover, and the value being typed into is ringed.",
       "note": "Three canvas aids ship in this frame: the minimap (bottom-right, ⇧M or its ✕), page sketches in every PAGES row that has content, and ⇧1 fitting the frame to the page content.",
       "checks": [
         "STRUCTURE",
@@ -188,8 +188,8 @@
         "Typography"
       ],
       "file": "shots/editor-structure.png",
-      "bytes": 86162,
-      "sha256": "7784be1d2a93f4c9",
+      "bytes": 93693,
+      "sha256": "c320ef2232d1e6e9",
       "width": 1440,
       "height": 900
     },
@@ -198,18 +198,16 @@
       "name": "Editor · Library",
       "group": "Editor",
       "module": "editor_ui.rs",
-      "what": "Left dock on LIBRARY: the faces the render stack knows (Load Font…) and the libraries this document is linked to, each with its pinned version and a check pill.",
+      "what": "Left dock on LIBRARY: assets in this file, then linked libraries.",
       "note": "The left tabs are STRUCTURE / LIBRARY / TOKENS — X-Native names its own model (scene graph, not a Figma clone).",
       "checks": [
         "LIBRARY",
-        "FONTS",
-        "Load Font…",
         "LIBRARIES",
-        "check"
+        "linked"
       ],
       "file": "shots/editor-library.png",
-      "bytes": 88146,
-      "sha256": "ae8b41e226f91765",
+      "bytes": 95830,
+      "sha256": "ebd6f99e2df1fd74",
       "width": 1440,
       "height": 900
     },
@@ -218,17 +216,16 @@
       "name": "Editor · Tokens",
       "group": "Editor",
       "module": "editor_ui.rs",
-      "what": "Left dock on TOKENS: what the document already paints with (colours, type scale, spacing), the extract-to-variables action, the four create-kind buttons and every variable with its delete ✕.",
+      "what": "Left dock on TOKENS: the document variables, grouped by kind.",
       "note": "Variable edits route through the undo log; the inspector shows the variable name beside any bound fill.",
       "checks": [
         "TOKENS",
-        "TYPE SCALE",
-        "NEW VARIABLE",
-        "VARIABLES"
+        "color/accent",
+        "undoable"
       ],
       "file": "shots/editor-tokens.png",
-      "bytes": 95311,
-      "sha256": "8fb7f8cb2234c354",
+      "bytes": 92058,
+      "sha256": "d614f71a49cbc56f",
       "width": 1440,
       "height": 900
     },
@@ -245,8 +242,8 @@
         "Preview flow start"
       ],
       "file": "shots/editor-flow.png",
-      "bytes": 75535,
-      "sha256": "e72e0b8654a88421",
+      "bytes": 82515,
+      "sha256": "1f1dab876ccf63ef",
       "width": 1440,
       "height": 900
     },
@@ -263,8 +260,8 @@
         "variable"
       ],
       "file": "shots/editor-ship.png",
-      "bytes": 74720,
-      "sha256": "2584d60b9b298e2b",
+      "bytes": 81340,
+      "sha256": "3909a27791ff618a",
       "width": 1440,
       "height": 900
     },
@@ -281,8 +278,8 @@
         "pass AA"
       ],
       "file": "shots/editor-ux.png",
-      "bytes": 73740,
-      "sha256": "fce21faf4a770d22",
+      "bytes": 79760,
+      "sha256": "f99fa4acf1f35d50",
       "width": 1440,
       "height": 900
     },
@@ -300,8 +297,8 @@
         "more in Variables"
       ],
       "file": "shots/editor-paint-lib.png",
-      "bytes": 103566,
-      "sha256": "8f4fe2d71759e340",
+      "bytes": 115422,
+      "sha256": "d1f0913edb97aa03",
       "width": 1440,
       "height": 900
     },
@@ -317,8 +314,8 @@
         "sguide"
       ],
       "file": "shots/editor-guides.png",
-      "bytes": 87980,
-      "sha256": "bc1f840c9031394f",
+      "bytes": 95753,
+      "sha256": "477261909a49185c",
       "width": 1440,
       "height": 900
     },
@@ -334,8 +331,8 @@
         "fit the page"
       ],
       "file": "shots/editor-empty-page.png",
-      "bytes": 81579,
-      "sha256": "a033c35df8e943b3",
+      "bytes": 88613,
+      "sha256": "fbd2babf0bb386de",
       "width": 1440,
       "height": 900
     },
@@ -352,8 +349,8 @@
         "Prototype"
       ],
       "file": "shots/editor-command.png",
-      "bytes": 91960,
-      "sha256": "bb63ce23c15860db",
+      "bytes": 102511,
+      "sha256": "efaffd5ab316ee04",
       "width": 1440,
       "height": 900
     },
@@ -370,8 +367,8 @@
         "Duplicate"
       ],
       "file": "shots/editor-context.png",
-      "bytes": 92797,
-      "sha256": "d68281babeec6bed",
+      "bytes": 101748,
+      "sha256": "b710537d308a2a3c",
       "width": 1440,
       "height": 900
     },
@@ -388,8 +385,8 @@
         "Opacity"
       ],
       "file": "shots/editor-colour.png",
-      "bytes": 98699,
-      "sha256": "a080cd00106bf0b7",
+      "bytes": 110408,
+      "sha256": "436393326ea9503f",
       "width": 1440,
       "height": 900
     },
@@ -398,17 +395,16 @@
       "name": "App menu",
       "group": "Overlays",
       "module": "editor_ui.rs",
-      "what": "The hamburger menu, 220 wide: file actions, export, find, the two theme rows, and the welcome card.",
+      "what": "The hamburger menu, 220 wide: file actions, export, find, theme, preferences.",
       "note": "Every row here is a real action; shortcuts are shown only where the app binds them.",
       "checks": [
         "New file",
         "Export as…",
-        "Theme: Graphite (dark)",
-        "Welcome & shortcuts"
+        "Preferences"
       ],
       "file": "shots/editor-app-menu.png",
-      "bytes": 90670,
-      "sha256": "0c33c4cac533b173",
+      "bytes": 93165,
+      "sha256": "64c389d7cc0132d5",
       "width": 1440,
       "height": 900
     },
@@ -424,8 +420,8 @@
         "1 / 4"
       ],
       "file": "shots/editor-find.png",
-      "bytes": 93131,
-      "sha256": "97db9d6b0ea1a7fd",
+      "bytes": 101637,
+      "sha256": "072bc0ba907ea73e",
       "width": 1440,
       "height": 900
     },
@@ -441,8 +437,8 @@
         "Undo"
       ],
       "file": "shots/editor-notify.png",
-      "bytes": 95747,
-      "sha256": "e6d47df194569b05",
+      "bytes": 106666,
+      "sha256": "b149c39dc3ed805c",
       "width": 1440,
       "height": 900
     },
@@ -461,8 +457,8 @@
         "Board outline"
       ],
       "file": "shots/board.png",
-      "bytes": 57278,
-      "sha256": "710c12fbae6fbc3b",
+      "bytes": 54874,
+      "sha256": "ac50cdddd5b1470d",
       "width": 1440,
       "height": 900
     },
@@ -479,8 +475,8 @@
         "Chrome-less"
       ],
       "file": "shots/flow.png",
-      "bytes": 25115,
-      "sha256": "cabd0919763dd99b",
+      "bytes": 26415,
+      "sha256": "8ab7d5dbc7a2ae5c",
       "width": 1440,
       "height": 900
     },
@@ -497,8 +493,8 @@
         "Loading images"
       ],
       "file": "shots/loading.png",
-      "bytes": 33140,
-      "sha256": "6ac8f315e262737f",
+      "bytes": 36286,
+      "sha256": "1da4f458a1a4a62c",
       "width": 1440,
       "height": 900
     }

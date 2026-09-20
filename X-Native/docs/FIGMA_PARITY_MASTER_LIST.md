@@ -88,7 +88,7 @@ while a tool is armed.
 | 1.15 | Slice `S` | export region, draws nothing | `Tool::Slice` | MATCH |
 | 1.16 | Shape menu itself | one button, chevron, five shapes, keys shown | **PARTIAL** — our tools sit as separate buttons in the rail; no single Shape button with a chevron menu | PARTIAL |
 | 1.17 | **Place image** `⇧⌘K` (Figma's Shape tools row reads **Image/video**) | image tool: click/drag to place, then crop | `Tool::PlaceImage` + `App::placing_images` + `Host::place_images`; `⇧⌘K`, the File menu row and the command search reach it. **Not a rail button** — Figma's is in the Shape tools menu, and our rail has no single Shape button (1.16) | **PARTIAL** |
-| 1.18 | **Dev Mode toggle** `⇧D` | switches the file to inspect/code view | `⇧D` switches the right panel to the Inspect (SHIP) view and back to Design on a second press (`run.rs::on_character`) | MATCH — `shift_d_enters_and_leaves_dev_mode` |
+| 1.18 | **Dev Mode toggle** `⇧D` | switches the file to inspect/code view | `⇧D` switches the right panel to the Inspect view and back to Design on a second press (`run.rs::on_character`) | MATCH — `shift_d_enters_and_leaves_dev_mode` |
 | 1.19 | Eraser | Figma **Draw** only, not design files | `Tool::Eraser` | EXTRA |
 | 1.20 | Brush | Figma **Draw** only (`31440438150935`) | `Tool::Brush` | EXTRA |
 | 1.21 | Symmetry | not in Figma Design | `Tool::Symmetry` | EXTRA |

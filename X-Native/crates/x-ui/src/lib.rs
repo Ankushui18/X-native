@@ -895,12 +895,12 @@ mod tests {
         };
         assert_eq!(first_rect(&ops2).w, first_rect(&ops1).w * 2.0);
         // the light palette switches colors: primary ink becomes the dark
-        // `text_primary` step (#1E1E1E) instead of the dark theme's near-white
+        // `text_primary` step instead of the dark theme's near-white
         t.theme = Theme::new(ThemeId::Daylight);
         let ops3 = paint(&t);
         assert!(ops3
             .iter()
-            .any(|o| matches!(o, PaintOp::Text { color, .. } if *color == [0x1e, 0x1e, 0x1e])));
+            .any(|o| matches!(o, PaintOp::Text { color, .. } if *color == [0x1b, 0x1d, 0x23])));
     }
 
     #[test]

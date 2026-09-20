@@ -38,12 +38,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # CI runners can trip git's "dubious ownership" guard when the checkout
-      # is owned by a different uid, which makes the gate's `git status` (the
-      # design-sheet regenerate-then-diff step) exit 128. Trust the workspace.
-      - name: Trust the checkout for git
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
       # System libraries the GUI stack (winit / wgpu / arboard) links against
       # on Linux. Without them the build fails inside a C dependency rather
       # than on any Rust error.

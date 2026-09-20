@@ -24,6 +24,5 @@ const audit = iconAudit(new URL('../../apps/x-designer/src/bin/x_native_app/', i
 writeFileSync(OUT('icon-audit.js'), `window.ICON_AUDIT = ${JSON.stringify(audit, null, 0)};\n`);
 console.log(
   `extracted ${Object.keys(icons).length} icons; ${audit.used} named by code in ${audit.where} ` +
-    `(${audit.files} files), ${audit.missing.length} missing, ` +
-    `${audit.unused.length} named by none of those positions`,
+    `(${audit.files} files), ${audit.missing.length} missing, ${audit.unused.length} not named anywhere`,
 );

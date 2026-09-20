@@ -749,19 +749,6 @@ impl EffectKind {
             EffectKind::Noise => "grid-2x2",
         }
     }
-
-    /// Figma's per-layer caps (*Apply effects to layers*, help 360041488473):
-    /// *"Each layer can have up to eight drop shadows, eight inner shadows,
-    /// one layer blur, two noise effects, … and one background blur."* The
-    /// add path refuses a cap-breaching push instead of silently stacking.
-    /// (Glass and Texture carry their own 1-cap when they land — rows 8.23/8.24.)
-    pub fn limit(self) -> usize {
-        match self {
-            EffectKind::DropShadow | EffectKind::InnerShadow => 8,
-            EffectKind::Noise => 2,
-            EffectKind::LayerBlur | EffectKind::BackgroundBlur => 1,
-        }
-    }
 }
 
 /// One numeric row of an effect's settings block, in Figma's words and order:

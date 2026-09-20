@@ -177,10 +177,7 @@ fn scan_dir(dir: &Path, db: &mut SystemFonts, depth: u32) {
     }
 }
 
-/// One string out of a face's `name` table. `pub(crate)` so
-/// [`crate::font::LoadedFont::family_name`] can read the real family of a
-/// loaded face without re-implementing the lookup.
-pub(crate) fn name_record(face: &ttf_parser::Face, id: u16) -> Option<String> {
+fn name_record(face: &ttf_parser::Face, id: u16) -> Option<String> {
     face.names()
         .into_iter()
         .filter(|n| n.name_id == id)
