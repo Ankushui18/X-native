@@ -45,14 +45,14 @@ recon task, not a settled fact.
 | 11 Vector editing & booleans | 20 | 14 | 5 | 1 | 0 | 0 |
 | 12 Components, instances, styles | 21 | 18 | 3 | 0 | 0 | 0 |
 | 13 Variables & modes | 9 | 6 | 3 | 0 | 0 | 0 |
-| 14 Prototype | 30 | 19 | 10 | 0 | 0 | 1 |
+| 14 Prototype | 30 | 20 | 9 | 0 | 0 | 1 |
 | 15 Inspect, dev mode, codegen | 10 | 5 | 3 | 2 | 0 | 0 |
 | 16 Export & import | 12 | 11 | 1 | 0 | 0 | 0 |
 | 17 Canvas view & navigation | 14 | 11 | 1 | 0 | 1 | 1 |
 | 18 Design language (look of the app itself) | 12 | 6 | 6 | 0 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **340** | **267** | **47** | **6** | **16** | **4** |
+| **total** | **340** | **268** | **46** | **6** | **16** | **4** |
 
 The 17 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
@@ -432,7 +432,7 @@ scroll behaviour, flows and flow starting points, device preview.
 | 14.20 | Keyboard/gamepad triggers | yes | `KeyDown` trigger + `ProtoEditKey` | MATCH |
 | 14.21 | Video triggers | play from time, on hit/end | `WhenVideoHits/Ends`, `ProtoEditVideoTime` | MATCH |
 | 14.22 | URL actions | open link in new tab | `OpenLink`, `ProtoEditUrl` | MATCH |
-| 14.23 | Reset scroll position on navigate | checked (the default) → "Frame 2 will load from the top of the frame"; unchecked = **Preserve scroll position**, and only Instant/Dissolve offer the choice | the interaction's own switch works (`reset_on_navigate`, the panel's `Reset: On`) — but our default is *preserve*, the opposite of Figma's | PARTIAL |
+| 14.23 | Reset scroll position on navigate | checked (the default) → "Frame 2 will load from the top of the frame"; unchecked = **Preserve scroll position**, and only Instant/Dissolve offer the choice | new interactions default to reset-ON (Figma), pinned by `interaction_includes_easing_and_state_management`; the panel's `Reset` switch toggles it (run.rs:8945) and a navigation resets scroll when set (run.rs:9462); old files keep their stored value | MATCH |
 | 14.24 | **Scroll to + scroll position on load** | "Scroll to" with an anchor and offset | `ScrollTo` exists as an action; *verify* whose offset semantics match | PARTIAL |
 | 14.25 | Smart animate | animates matching layers between frames | `smart_animate.rs` + gate-covered | PARTIAL — matching is heuristic, no "animate matching layers" opt-in |
 | 14.26 | Copy a connection | copy/paste onto another frame | not implemented (documented) | PARTIAL |
