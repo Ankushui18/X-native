@@ -1267,7 +1267,7 @@ window.SCREENS = [
     module: 'editor_ui.rs',
     what: 'The fill colour popover, Figma anatomy: saturation/value field, hue + alpha rails, eyedropper + hex + opacity row, and the theme swatch ramp.',
     note: 'Colour popovers are modal to the inspector: clicks inside are consumed, so a pick never falls through to the canvas.',
-    checks: ['Fill colour', '0B77C9', '100%'],
+    checks: ['Fill colour', '6B49F5', '100%'],
     render: () => editorScreen({ overlay: ovColourPicker() }),
   },
   {
