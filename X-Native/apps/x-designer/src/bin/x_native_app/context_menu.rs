@@ -67,9 +67,6 @@ pub enum ContextAction {
     // Object
     Group,
     Ungroup,
-    /// Clean up layers (master row 5.9): flatten redundant single-child group
-    /// nests in one undo entry. Renaming stays manual by owner decision.
-    CleanupLayers,
     /// Figma's "Wrap in new section" — the selection goes into a labelled
     /// Section on the canvas. Sections cannot live inside frames or groups
     /// (help 9771500257687), so a selection drawn in one is lifted first.
@@ -132,7 +129,6 @@ impl ContextAction {
             Self::CopyAsCode => "Copy as code",
             Self::Group => "Group selection",
             Self::Ungroup => "Ungroup",
-            Self::CleanupLayers => "Clean up layers",
             Self::WrapInSection => "Wrap in new section",
             Self::MakeComponent => "Make component",
             Self::UseAsMask => "Use as mask",
@@ -182,7 +178,6 @@ impl ContextAction {
             Self::CopyAsCode => "code",
             Self::Group => "group",
             Self::Ungroup => "ungroup",
-            Self::CleanupLayers => "ungroup",
             Self::WrapInSection => "section",
             Self::MakeComponent => "component",
             Self::UseAsMask => "square",
@@ -343,7 +338,6 @@ pub fn action_for(action: &ContextAction) -> Option<Action> {
         Delete => Action::Ctx(CtxCmd::Delete),
         Group => Action::Ctx(CtxCmd::Group),
         Ungroup => Action::Ctx(CtxCmd::Ungroup),
-        CleanupLayers => Action::Ctx(CtxCmd::CleanupLayers),
         WrapInSection => Action::Ctx(CtxCmd::SectionSelection),
         MakeComponent => Action::Ctx(CtxCmd::MakeComponent),
         UseAsMask => Action::UseAsMask,
@@ -412,9 +406,6 @@ pub fn build_menu_items(target: &ContextTarget) -> Vec<ContextMenuItem> {
             }
             if *contains_group {
                 items.push(ai(Ungroup, true));
-                // Clean up layers (row 5.9): offered wherever Ungroup is, since
-                // it only ever unwraps redundant group nests.
-                items.push(ai(CleanupLayers, true));
             }
             items.push(ai(WrapInSection, true));
             items.push(ai(MakeComponent, true));

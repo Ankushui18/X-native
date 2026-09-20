@@ -260,15 +260,15 @@ const NAV_TABS = [
   ['Variables', 'code'],
 ];
 const LEFT_TABS = [
-  ['Layers', 'Layers'],
-  ['Assets', 'Assets'],
-  ['Tokens', 'Tokens'],
+  ['Layers', 'STRUCTURE'],
+  ['Assets', 'LIBRARY'],
+  ['Tokens', 'TOKENS'],
 ];
 const RIGHT_TABS = [
-  ['Design', 'Design'],
-  ['Prototype', 'Prototype'],
-  ['Inspect', 'Inspect'],
-  ['UX', 'UX'],
+  ['Design', 'COMPOSE'],
+  ['Prototype', 'FLOW'],
+  ['Inspect', 'SHIP'],
+  ['UX', 'UX ANALYSIS'],
 ];
 const TOOLS = [
   ['Select', 'mouse-pointer-2', 'V'],
@@ -498,7 +498,7 @@ function composePanel() {
     50,
     323,
     30,
-    ['Design', 'Prototype', 'Inspect', 'UX']
+    ['COMPOSE', 'FLOW', 'SHIP', 'UX ANALYSIS']
       .map((l, i) => `<span class="pill${i === 0 ? ' on' : ''}">${l}</span>`)
       .join(''),
     { class: 'pillrow' },
@@ -856,26 +856,21 @@ function ovContextMenu() {
 }
 
 function ovColourPicker() {
-  // Figma anatomy: a saturation/value field, a hue rail, an alpha rail, then a
-  // row of eyedropper + hex field + opacity field, then the theme's own swatch
-  // ramp. The ramp is the palette's roles — a picker that showed invented hexes
+  // The ramp is the palette's own roles — a picker that showed invented hexes
   // would be the one place in the app where a colour has no name.
   const p = T.palettes.graphite;
   const swatches = [p.accent, p.accent_hover, p.focus_ring, p.success, p.warning, p.danger, p.selection, p.text_dim];
-  const hex = p.accent.slice(1).toUpperCase();
-  return at(RAIL + LEFT + 12, TITLE + 150, 268, 332, `
+  return at(RAIL + LEFT + 12, TITLE + 150, 268, 236, `
     <div class="pop-h">Fill colour ${icon('x', 12)}</div>
-    <div class="colr-field"><span class="colr-dot" style="left:72%;top:28%"></span></div>
-    <div class="colr-hue"><span class="colr-handle" style="left:58%"></span></div>
-    <div class="colr-alpha"><span class="colr-handle" style="left:100%"></span></div>
-    <div class="colr-row">
-      <span class="colr-pip">${icon('pipette', 14)}</span>
-      <span class="colr-hex mono">${hex}</span>
-      <span class="colr-op mono">100%</span>
+    <div class="cp-top">
+      <span class="cp-preview" style="background:var(--accent)"></span>
+      <span class="cp-read"><b>Hex</b><span class="mono">${T.palettes.graphite.accent.slice(1).toUpperCase()}</span></span>
+      <span class="cp-read"><b>Opacity</b><span class="mono">100%</span></span>
     </div>
-    <div class="colr-swatches">${swatches
-      .map((c) => `<span class="colr-sw" style="background:${c}"></span>`)
+    <div class="cp-swatches">${swatches
+      .map((c) => `<span class="cp-sw" style="background:${c}"></span>`)
       .join('')}</div>
+    <div class="cp-hint">Palette swatches come from the active theme; the eight shown are the accent ramp.</div>
   `, { class: 'popover' });
 }
 
@@ -1141,13 +1136,13 @@ window.SCREENS = [
     group: 'Editor',
     name: 'Editor · Structure + canvas',
     module: 'editor_ui.rs',
-    what: `Full editor chrome: title bar ${TITLE}, rail ${RAIL}, left dock ${LEFT} (Layers / Assets / Tokens), right dock ${RIGHT}, rulers, tool dock ${UI.toolbarH} tall. The Design inspector is drawn from paint_design: name + %, W/H, X/Y, rotation, Auto layout, Flow, Resizing, Alignment, Padding, Clip content, Appearance, Typography — fields are filled boxes with no outline until hover, and the value being typed into is ringed.`,
-    note: 'Tabs use Figma names (Layers/Assets, Design/Prototype/Inspect) with X-Native adds (Tokens, UX). Three canvas aids ship in this frame: the minimap (bottom-right, ⇧M or its ✕), page sketches in every PAGES row that has content, and ⇧1 fitting the frame to the page content.',
+    what: `Full editor chrome: title bar ${TITLE}, rail ${RAIL}, left dock ${LEFT} (STRUCTURE / LIBRARY / TOKENS), right dock ${RIGHT}, rulers, tool dock ${UI.toolbarH} tall. The COMPOSE inspector is drawn from paint_design: name + %, W/H, X/Y, rotation, Auto layout, Flow, Resizing, Alignment, Padding, Clip content, Appearance, Typography — fields are filled boxes with no outline until hover, and the value being typed into is ringed.`,
+    note: 'Three canvas aids ship in this frame: the minimap (bottom-right, ⇧M or its ✕), page sketches in every PAGES row that has content, and ⇧1 fitting the frame to the page content.',
     checks: [
-      'Layers',
-      'Assets',
-      'Tokens',
-      'Design',
+      'STRUCTURE',
+      'LIBRARY',
+      'TOKENS',
+      'COMPOSE',
       'minimap',
       'PAGES',
       'sketch',
@@ -1165,9 +1160,9 @@ window.SCREENS = [
     group: 'Editor',
     name: 'Editor · Library',
     module: 'editor_ui.rs',
-    what: 'Left dock on Assets: the faces the render stack knows (Load Font…) and the libraries this document is linked to, each with its pinned version and a check pill.',
-    note: 'The left tabs are Layers / Assets / Tokens — Figma names plus X-Native\'s Tokens add.',
-    checks: ['Assets', 'FONTS', 'Load Font…', 'LIBRARIES', 'check'],
+    what: 'Left dock on LIBRARY: the faces the render stack knows (Load Font…) and the libraries this document is linked to, each with its pinned version and a check pill.',
+    note: 'The left tabs are STRUCTURE / LIBRARY / TOKENS — X-Native names its own model (scene graph, not a Figma clone).',
+    checks: ['LIBRARY', 'FONTS', 'Load Font…', 'LIBRARIES', 'check'],
     render: () => editorScreen({ leftTab: 'Assets' }),
   },
   {
@@ -1175,9 +1170,9 @@ window.SCREENS = [
     group: 'Editor',
     name: 'Editor · Tokens',
     module: 'editor_ui.rs',
-    what: 'Left dock on Tokens: what the document already paints with (colours, type scale, spacing), the extract-to-variables action, the four create-kind buttons and every variable with its delete ✕.',
+    what: 'Left dock on TOKENS: what the document already paints with (colours, type scale, spacing), the extract-to-variables action, the four create-kind buttons and every variable with its delete ✕.',
     note: 'Variable edits route through the undo log; the inspector shows the variable name beside any bound fill.',
-    checks: ['Tokens', 'TYPE SCALE', 'NEW VARIABLE', 'VARIABLES'],
+    checks: ['TOKENS', 'TYPE SCALE', 'NEW VARIABLE', 'VARIABLES'],
     render: () => editorScreen({ leftTab: 'Tokens' }),
   },
   {
@@ -1185,9 +1180,9 @@ window.SCREENS = [
     group: 'Editor',
     name: 'Editor · Flow (prototype)',
     module: 'editor_ui.rs',
-    what: 'Right dock on Prototype: start point, interactions, animation; connections draw on the canvas.',
+    what: 'Right dock on FLOW: start point, interactions, animation; connections draw on the canvas.',
     note: '“▶ Preview flow start” enters the chrome-less flow viewer (next screen).',
-    checks: ['Prototype', 'Start flow here', 'Preview flow start'],
+    checks: ['FLOW', 'Start flow here', 'Preview flow start'],
     render: () => editorScreen({ rightTab: 'Prototype', connections: true }),
   },
   {
@@ -1195,9 +1190,9 @@ window.SCREENS = [
     group: 'Editor',
     name: 'Editor · Ship (inspect)',
     module: 'editor_ui.rs',
-    what: 'Right dock on Inspect: size, fill (with its variable), text style, and the CSS line.',
+    what: 'Right dock on SHIP: size, fill (with its variable), text style, and the CSS line.',
     note: 'The fill row names the variable it is bound to, which is the link the paint library edits.',
-    checks: ['Inspect', 'Selection', 'variable'],
+    checks: ['SHIP', 'Selection', 'variable'],
     render: () => editorScreen({ rightTab: 'Inspect' }),
   },
   {
@@ -1205,9 +1200,9 @@ window.SCREENS = [
     group: 'Editor',
     name: 'Editor · UX analysis',
     module: 'editor_ui.rs',
-    what: 'Right dock on UX: contrast, flow gaps, quality notes.',
+    what: 'Right dock on UX ANALYSIS: contrast, flow gaps, quality notes.',
     note: 'The contrast rows read the same audited pairs the palette table and the CLI theme audit use.',
-    checks: ['UX', 'Contrast', 'pass AA'],
+    checks: ['UX ANALYSIS', 'Contrast', 'pass AA'],
     render: () => editorScreen({ rightTab: 'UX' }),
   },
   {
@@ -1265,9 +1260,9 @@ window.SCREENS = [
     group: 'Overlays',
     name: 'Colour picker',
     module: 'editor_ui.rs',
-    what: 'The fill colour popover, Figma anatomy: saturation/value field, hue + alpha rails, eyedropper + hex + opacity row, and the theme swatch ramp.',
+    what: 'The fill colour popover: hex, opacity, the accent ramp, and the palette note.',
     note: 'Colour popovers are modal to the inspector: clicks inside are consumed, so a pick never falls through to the canvas.',
-    checks: ['Fill colour', '0B77C9', '100%'],
+    checks: ['Fill colour', 'Hex', 'Opacity'],
     render: () => editorScreen({ overlay: ovColourPicker() }),
   },
   {

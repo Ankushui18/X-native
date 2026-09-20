@@ -49,10 +49,10 @@ recon task, not a settled fact.
 | 15 Inspect, dev mode, codegen | 10 | 5 | 4 | 1 | 0 | 0 |
 | 16 Export & import | 12 | 11 | 1 | 0 | 0 | 0 |
 | 17 Canvas view & navigation | 14 | 11 | 1 | 0 | 1 | 1 |
-| 18 Design language (look of the app itself) | 12 | 6 | 6 | 0 | 0 | 0 |
+| 18 Design language (look of the app itself) | 12 | 5 | 7 | 0 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **340** | **268** | **47** | **5** | **16** | **4** |
+| **total** | **340** | **267** | **48** | **5** | **16** | **4** |
 
 The 17 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
@@ -501,8 +501,8 @@ between our chrome and Figma's UI, and it is a workstream of its own (Wave 2).
 Figma's UI, as seen in the product and in the course videos: a dark canvas `#1E1E1E`,
 panels `#2C2C2C` with `#383838` dividers, accent blue `#0D99FF`, white primary text and
 `#B3B3B3` secondary, 11 px UI type, 8 px corner radius on rows and cards, ~24 px layer
-rows, 240 px side panels, a floating toolbar centred at the bottom of the canvas, and a
-monoline icon set on a 24 px grid with ~1.5 px strokes.
+rows, 240 px side panels, the tool set **in the top bar** left-of-centre (not a floating
+dock), and a monoline icon set on a 24 px grid with ~1.5 px strokes.
 
 *Those hexes and sizes are measurements of the Figma app, not published tokens — Figma
 ships no token list. Wave 2 therefore starts by re-measuring each one against the
@@ -518,7 +518,7 @@ the palette change is evidence-led rather than an approximation of a memory.*
 | 18.5 | UI type | Inter, 11 px base | the chrome's four weights are the bundled Inter 400/500/600/700 — read back from each file's own `name` table, not from the stem it was registered under — and its body step is `theme::T_UI` = 11 px (250 call sites in the editor, plus the tracked section headings); the 10 px step survives only where Figma has no counterpart: the dashboard's metadata rows, the board and the status band | MATCH — `the_chrome_type_is_figmas_inter_at_eleven_pixels` |
 | 18.6 | Radii | 8 px rows/cards, 6 px inputs, 4 px chips | `R_ROW`/`R_CARD` 8, `R_INPUT` 6, `R_PILL` 4 on the shared scale | MATCH — `radii_follow_figmas_measured_chrome` |
 | 18.7 | Side panels | 240 px each, 40 px header; the right panel is not resizable (forum.figma.com/t/6578) | `ED_LEFT_W 240` ✓ and `ED_TITLE_H 40` ✓ (pinned by `the_editor_header_is_figmas_forty_pixels`); the inspector is now **width-adaptive** — the size/position, image and design-panel rows right-anchor via the dock's right edge, reproducing 340 exactly and holding 240 (`docks_never_eat_the_canvas` covers 240); default held at 340 until the popover menus + gallery reflow land | PARTIAL |
-| 18.8 | Toolbar | floating, bottom-centre, 40 px, rounded | `TOOLBAR_H 40`, `TOOLBAR_BOTTOM 20` | MATCH |
+| 18.8 | Toolbar | **in the top bar**, left-of-centre, beside the centred file breadcrumb (measured from Figma editor screenshots); no floating dock | ours floats a rounded dock at the **bottom-centre** of the canvas (`TOOLBAR_H 40`, `TOOLBAR_BOTTOM 20`) | PARTIAL — the single biggest structural divergence from Figma's chrome; moving the tools into the top bar is the open Wave-2 item |
 | 18.9 | Layer row height | 24 px | `TREE_ROW_H 24` = `DENSE_H`, and the contract counts the row on-standard (`OFF_STANDARD_COMPONENTS` 2 → 1) | MATCH — `app_row_heights_are_the_component_layers`, `on_standard_components_sit_exactly_on_their_step` |
 | 18.10 | Icon set | Figma's monoline set, 24 px grid, 1.5 px stroke | 97 keys on a 24 grid at 1.5 px — the **metrics match**; tool metaphors redrawn to Figma's (`polygon` pentagon, `scale` box+diagonal arrow, `slice` bracketed region, `section` dashed square, `star` at Figma's 0.382 default ratio, `arrow-up-right` as a shaft+V head like the other arrows, `comment` as Figma's rounded-square tailed bubble, and the Frame glyph `#` renamed `frame#`→`frame-hash` so the sheet can draw it). The icon census now also reads the `fn icon()`/`kind_icon` binding tables (86 of 97 keys named), so "unused" is a real number instead of a scan blind spot | PARTIAL — a few glyph forms (hand, pen nib, comment bubble) still read Lucide; pinned by `the_polygon_and_star_tools_count_their_sides`, `the_star_and_arrow_glyphs_are_figmas_metaphors` |
 | 18.11 | Tool cursor glyphs | Figma's tool cursors | system cursors mapped per tool like Figma — I-beam over text (incl. the Text tool armed on canvas), crosshair over the geometry tools, grab/grabbing for Hand and pan, ew-resize on the panel splitter, pointer on controls; pinned by `the_text_tool_wears_an_i_beam`, `pointer_says_what_it_will_do` | PARTIAL — the mapping is Figma's, but Figma's *custom bitmap* cursors (pen nib, comment pin) are platform cursor work deferred to CI |
@@ -767,9 +767,11 @@ rendering it.
     `graphite_carries_figmas_chrome_values`, so neither can be "corrected" back
     into a sub-AA pair by accident. Since then the radii pass (18.6), the 40 px
     header (18.7) and the UI type — Inter on an 11 px base, the face verified
-    from each bundled file's `name` table (18.5) — have landed. Still open: the
-    right dock at 240 (needs the inspector reflow of item 18), the remaining
-    icon vocabulary (18.10), the tool cursors (18.11) and motion (18.12).
+    from each bundled file's `name` table (18.5) — have landed. Still open: **the
+    tools into the top bar** (18.8 — Figma has no floating dock; this is the biggest
+    structural divergence), the right dock at 240 (needs the inspector reflow of
+    item 18), the remaining icon vocabulary (18.10), the tool cursors (18.11) and
+    motion (18.12).
 
     *Measured, not guessed: the palette was validated against the repo's own
     audit before it was written — 54 pairs, 0 failures, headroom 1.026× on

@@ -1068,7 +1068,7 @@ impl Interaction {
             transition_ms: 350,
             animation: Animation::SmartAnimate,
             easing: Easing::EaseInOut,
-            reset_on_navigate: true,
+            reset_on_navigate: false,
             animate_matching_layers: false,
         }
     }
@@ -1088,7 +1088,7 @@ impl Interaction {
             transition_ms,
             animation,
             easing: Easing::EaseInOut,
-            reset_on_navigate: true,
+            reset_on_navigate: false,
             animate_matching_layers: false,
         }
     }
@@ -1108,7 +1108,7 @@ impl Interaction {
             transition_ms,
             animation,
             easing,
-            reset_on_navigate: true,
+            reset_on_navigate: false,
             animate_matching_layers: false,
         }
     }
@@ -1884,9 +1884,6 @@ mod tests {
         );
 
         assert_eq!(interaction.easing, Easing::EaseOut);
-        assert!(
-            interaction.reset_on_navigate,
-            "Figma default: reset scroll on navigate"
-        );
+        assert!(!interaction.reset_on_navigate);
     }
 }

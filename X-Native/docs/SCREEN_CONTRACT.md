@@ -42,12 +42,11 @@ surface owes:
 
 ## The rules
 
-**1 · Naming matches Figma (parity-first).** The editor's docks use Figma's own
-tab vocabulary — right dock Design / Prototype / Inspect (+ the X-Native UX
-add), left dock Layers / Assets (+ the Tokens add). `BANNED_LABELS` in
-`screens.rs` now rejects the *old internal* vocabulary — *compose*, *flow*,
-*ship*, *structure*, *library* — in a surface's label. (P0-10 had this inverted,
-banning the Figma names; parity-first reversed it.)
+**1 · Naming stays X-Native.** The workflow is COMPOSE / FLOW / SHIP / UX
+ANALYSIS; the editor's docks are STRUCTURE / LIBRARY / TOKENS. A surface must
+not show the internal vocabulary the rename removed — `BANNED_LABELS` in
+`screens.rs` rejects *design*, *prototype*, *inspect*, *layers* and *assets* in
+a surface's label, which is how the enum-variant names used to reach the UI.
 
 **2 · Property rows snap to the scale.** A panel that owns property rows uses
 the control-height standard (`x-ui::metrics`): 28px rows, 24px disclosure rows,

@@ -170,13 +170,13 @@ fn paint_arc_handles(app: &App, s: &mut Scene) {
         let label = format!("{}%", (sweep.abs() / 3.6).round() as i64);
         let (cx, cy) = (n.transform.x + n.w / 2.0, n.transform.y + n.h / 2.0);
         let c = app.world_to_screen(Point::new(cx, cy));
-        let tw = app.fonts.measure(&label, T_UI, Wt::Reg) + 12.0;
+        let tw = app.fonts.measure(&label, T10, Wt::Reg) + 12.0;
         let chip_x = c.x - tw / 2.0;
         let chip_y = c.y - n.h * app.zoom / 2.0 - 26.0;
         let chip = Rect::new(chip_x, chip_y, chip_x + tw, chip_y + 18.0);
         fill_rrect(s, chip, R_SM, C_TEXT);
         app.fonts
-            .text_center(s, chip, &label, T_UI, C_BASE, Wt::Med, true);
+            .text_center(s, chip, &label, T10, C_BASE, Wt::Med, true);
     }
 }
 
@@ -247,11 +247,11 @@ fn paint_crop_chrome(app: &App, s: &mut Scene) {
         if let NodeKind::Image { placement, .. } = &n.kind {
             let label = format!("{}%", (placement.scale * 100.0).round() as i64);
             let c = app.world_to_screen(m * Point::new(n.w / 2.0, 0.0));
-            let tw = app.fonts.measure(&label, T_UI, Wt::Reg) + 12.0;
+            let tw = app.fonts.measure(&label, T10, Wt::Reg) + 12.0;
             let chip = Rect::new(c.x - tw / 2.0, c.y - 26.0, c.x + tw / 2.0, c.y - 8.0);
             fill_rrect(s, chip, R_SM, C_TEXT);
             app.fonts
-                .text_center(s, chip, &label, T_UI, C_BASE, Wt::Med, true);
+                .text_center(s, chip, &label, T10, C_BASE, Wt::Med, true);
         }
     }
 }
@@ -297,13 +297,13 @@ fn paint_shape_handles(app: &App, s: &mut Scene) {
         return;
     }
     let c = app.world_to_screen(m * Point::new(n.w / 2.0, n.h / 2.0));
-    let tw = app.fonts.measure(&label, T_UI, Wt::Reg) + 12.0;
+    let tw = app.fonts.measure(&label, T10, Wt::Reg) + 12.0;
     let chip_x = c.x - tw / 2.0;
     let chip_y = c.y - n.h * app.zoom / 2.0 - 26.0;
     let chip = Rect::new(chip_x, chip_y, chip_x + tw, chip_y + 18.0);
     fill_rrect(s, chip, R_SM, C_TEXT);
     app.fonts
-        .text_center(s, chip, &label, T_UI, C_BASE, Wt::Med, true);
+        .text_center(s, chip, &label, T10, C_BASE, Wt::Med, true);
 }
 
 /// P10: the hover label for the control under the cursor. The
@@ -325,7 +325,7 @@ fn paint_tooltip(app: &App, s: &mut Scene) {
     let Some((_, label)) = best else {
         return;
     };
-    let tw = app.fonts.measure(label, T_UI, Wt::Reg) + 16.0;
+    let tw = app.fonts.measure(label, T10, Wt::Reg) + 16.0;
     let th = 20.0;
     let mut x = mouse.x + 14.0;
     let mut y = mouse.y + 18.0;
@@ -339,7 +339,7 @@ fn paint_tooltip(app: &App, s: &mut Scene) {
     elev_shadow(s, tr, 8.0, Elevation::Floating);
     fill_rrect(s, tr, R_MD, C_TEXT);
     app.fonts
-        .text(s, x + 8.0, y + 5.0, label, T_UI, C_BASE, Wt::Reg);
+        .text(s, x + 8.0, y + 5.0, label, T10, C_BASE, Wt::Reg);
 }
 
 /// Persistent ruler guides (Figma): 1px pink lines across the canvas plus
@@ -385,7 +385,7 @@ fn paint_ruler_guides(app: &App, s: &mut Scene) {
         fill_rrect(s, r, R_SM, C_FIELD);
         stroke_rrect(s, r, R_SM, C_LINE_2, 1.0);
         app.fonts
-            .text(s, r.x0 + 6.0, r.y0 + 3.5, &label, T_UI, C_TEXT, Wt::Mono);
+            .text(s, r.x0 + 6.0, r.y0 + 3.5, &label, T10, C_TEXT, Wt::Mono);
     }
 }
 
@@ -396,7 +396,7 @@ fn paint_ruler_guides(app: &App, s: &mut Scene) {
 pub fn guide_readout(app: &App, axis: char, c: f64) -> Option<(Rect, String)> {
     let reg = app.editor_regions();
     let label = fmt_num(c.round());
-    let w = app.fonts.measure(&label, T_UI, Wt::Mono) + 12.0;
+    let w = app.fonts.measure(&label, T10, Wt::Mono) + 12.0;
     let r = if axis == 'v' {
         let x = app.world_to_screen(Point::new(c, 0.0)).x;
         if x < reg.canvas.x0 || x > reg.canvas.x1 {
@@ -937,7 +937,7 @@ fn paint_conn_anchor(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>
         let r = Rect::new(c.x - 7.0, c.y - 7.0, c.x + 7.0, c.y + 7.0);
         hit.push((r, Action::ConnMenu));
         // and the hint, while the pointer is on it
-        let tw = app.fonts.measure("Drag to connect", T_UI, Wt::Reg) + 12.0;
+        let tw = app.fonts.measure("Drag to connect", T10, Wt::Reg) + 12.0;
         let chip = Rect::new(c.x + 12.0, c.y - 10.0, c.x + 12.0 + tw, c.y + 10.0);
         fill_rrect(s, chip, R_SM, C_TEXT);
         app.fonts.text(
@@ -945,7 +945,7 @@ fn paint_conn_anchor(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>
             chip.x0 + 6.0,
             chip.y0 + 4.0,
             "Drag to connect",
-            T_UI,
+            T10,
             C_BASE,
             Wt::Reg,
         );
@@ -1154,7 +1154,7 @@ fn paint_proto_connections(app: &App, s: &mut Scene) {
         if !b.contains(app.mouse) || app.flow.is_some() {
             continue;
         }
-        let tw = app.fonts.measure(&name, T_UI, Wt::Med) + 14.0;
+        let tw = app.fonts.measure(&name, T10, Wt::Med) + 14.0;
         let chip = Rect::new(b.x0, b.y0 - 20.0, b.x0 + tw, b.y0 - 2.0);
         fill_rrect(s, chip, R_SM, C_SEL);
         app.fonts.text(
@@ -1162,7 +1162,7 @@ fn paint_proto_connections(app: &App, s: &mut Scene) {
             chip.x0 + 7.0,
             chip.y0 + 3.0,
             &name,
-            T_UI,
+            T10,
             C_ON_ACCENT,
             Wt::Med,
         );
@@ -1434,7 +1434,7 @@ fn paint_context_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
                         r.x1 - 8.0,
                         r.y0 + 7.3,
                         sc,
-                        T_UI,
+                        T10,
                         if *enabled { C_DIM } else { C_MUTED },
                         Wt::Reg,
                         0.0,
@@ -1503,7 +1503,7 @@ fn paint_context_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
                         r.x1 - 8.0,
                         r.y0 + 7.3,
                         sc,
-                        T_UI,
+                        T10,
                         if *enabled { C_DIM } else { C_MUTED },
                         Wt::Reg,
                         0.0,
@@ -1602,7 +1602,7 @@ fn paint_page_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) 
             r.x1 - 8.0,
             r.y0 + 7.3,
             shortcut,
-            T_UI,
+            T10,
             if *enabled { C_DIM } else { C_MUTED },
             Wt::Reg,
             0.0,
@@ -1614,7 +1614,7 @@ fn paint_page_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) 
 }
 
 /// Viewport rulers (⇧R) — 22px top/left strips styled after the reference
-/// screenshot: #2C2C2C bg, #444 inner border, #666 ticks, T_UI labels.
+/// screenshot: #2C2C2C bg, #444 inner border, #666 ticks, T10 labels.
 /// Left-ruler labels are rotated 90° CCW (read bottom-to-top), like Figma.
 /// A focus-ring band spans the selection's extent; an accent marker tracks
 /// the pointer — both clamped to the canvas.
@@ -1686,13 +1686,13 @@ fn paint_rulers(app: &App, s: &mut Scene) {
             crate::theme::C_RULER_TICK,
         );
         let label = fmt_num(wx);
-        let lw = app.fonts.measure(&label, T_UI, Wt::Reg);
+        let lw = app.fonts.measure(&label, T10, Wt::Reg);
         app.fonts.text(
             s,
             sx - lw / 2.0,
             reg.canvas.y0 + 4.0,
             &label,
-            T_UI,
+            T10,
             crate::theme::C_RULER_TEXT,
             Wt::Reg,
         );
@@ -1712,20 +1712,20 @@ fn paint_rulers(app: &App, s: &mut Scene) {
             crate::theme::C_RULER_TICK,
         );
         let label = fmt_num(wy);
-        let lw = app.fonts.measure(&label, T_UI, Wt::Reg);
+        let lw = app.fonts.measure(&label, T10, Wt::Reg);
         let mut tmp = vello::Scene::new();
         app.fonts.text(
             &mut tmp,
             0.0,
             0.0,
             &label,
-            T_UI,
+            T10,
             crate::theme::C_RULER_TEXT,
             Wt::Reg,
         );
         // local x (run) → up, local y (line box) → +x; center both on sy / strip
         let t = vello::kurbo::Affine::translate((
-            reg.canvas.x0 + (r - T_UI * CSS_LH) / 2.0,
+            reg.canvas.x0 + (r - T10 * CSS_LH) / 2.0,
             sy + lw / 2.0,
         )) * vello::kurbo::Affine::rotate(-std::f64::consts::FRAC_PI_2);
         s.append(&tmp, Some(t));
@@ -2186,7 +2186,7 @@ fn paint_app_menu(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                     r.x1 - 12.0,
                     r.y0 + 8.5,
                     shortcut,
-                    T_UI,
+                    T10,
                     C_DIM,
                     Wt::Reg,
                     0.0,
@@ -2271,13 +2271,13 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
             app.find_replace.current_match.max(1),
             app.find_replace.match_count
         );
-        let mtw = app.fonts.measure(&match_text, T_UI, Wt::Reg);
+        let mtw = app.fonts.measure(&match_text, T10, Wt::Reg);
         app.fonts.text(
             s,
             search_r.x1 - 60.0 - mtw,
-            line_top(search_r, T_UI),
+            line_top(search_r, T10),
             &match_text,
-            T_UI,
+            T10,
             C_DIM,
             Wt::Reg,
         );
@@ -2372,9 +2372,9 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         app.fonts.text(
             s,
             repl_all_r.x0 + 6.0,
-            line_top(repl_all_r, T_UI),
+            line_top(repl_all_r, T10),
             "Replace all",
-            T_UI,
+            T10,
             C_TEXT,
             Wt::Reg,
         );
@@ -2385,9 +2385,9 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         app.fonts.text(
             s,
             repl_r.x0 + 6.0,
-            line_top(repl_r, T_UI),
+            line_top(repl_r, T10),
             "Replace",
-            T_UI,
+            T10,
             C_TEXT,
             Wt::Reg,
         );
@@ -2476,7 +2476,7 @@ fn paint_notifications(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action
             mark_all_r.x0,
             mark_all_r.y0 + 4.0,
             "Mark all read",
-            T_UI,
+            T10,
             C_ACCENT_INK,
             Wt::Reg,
         );
@@ -2501,13 +2501,13 @@ fn paint_notifications(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action
         );
         let msg = app
             .fonts
-            .truncate(&notif.message, T_UI, Wt::Reg, nr.width() - 40.0);
+            .truncate(&notif.message, T10, Wt::Reg, nr.width() - 40.0);
         app.fonts.text(
             s,
             nr.x0 + 28.0,
             nr.y0 + 8.0,
             &msg,
-            T_UI,
+            T10,
             if notif.read { C_DIM } else { C_TEXT },
             Wt::Reg,
         );
@@ -2563,7 +2563,7 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         C_DIM,
     );
     app.fonts
-        .micro_label(s, sx + 36.0, line_top(dbox, T_UI), "DRAFTS", C_DIM, Wt::Med);
+        .micro_label(s, sx + 36.0, line_top(dbox, T10), "DRAFTS", C_DIM, Wt::Med);
 
     // file name row (editable) — the mock's file-name-text, independent
     // from the active tab name
@@ -2652,11 +2652,11 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     );
     let item_w = (pw - 6.0 - 4.0) / 3.0;
     let tabs = [
-        // Parity-first: the left dock uses Figma's own tab names (Layers, Assets);
-        // Tokens is X-Native's added tab and keeps its name.
-        (LeftTab::Layers, "Layers"),
-        (LeftTab::Assets, "Assets"),
-        (LeftTab::Tokens, "Tokens"),
+        // X-Native calls the layer tree Structure and the asset browser
+        // Library: the document model is a scene graph, not a Figma clone.
+        (LeftTab::Layers, "STRUCTURE"),
+        (LeftTab::Assets, "LIBRARY"),
+        (LeftTab::Tokens, "TOKENS"),
     ];
     for (i, (tab, label)) in tabs.into_iter().enumerate() {
         let ix = px0 + 3.0 + (item_w + 2.0) * i as f64;
@@ -2670,7 +2670,7 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             s,
             ir,
             label,
-            T_UI,
+            T10,
             if active { C_TEXT } else { C_DIM },
             Wt::Semi,
             true,
@@ -2700,7 +2700,7 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             sx + 12.0,
             ay + 48.0,
             "Ask an agent to inspect or edit this file.",
-            T_UI,
+            T10,
             C_MUTED,
             Wt::Reg,
         );
@@ -2710,7 +2710,7 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             s,
             status_r,
             "⌘K  Open command palette",
-            T_UI,
+            T10,
             C_TEXT,
             Wt::Med,
             true,
@@ -2748,7 +2748,7 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         .micro_label(s, sx + 12.0, y, "PAGES", C_DIM, Wt::Med);
     // the add button is exactly one line box tall, so its glyph centres on
     // the PAGES label it sits beside
-    let addp = Rect::new(lw - 26.0, y, lw - 14.0, y + T_UI * CSS_LH);
+    let addp = Rect::new(lw - 26.0, y, lw - 14.0, y + T10 * CSS_LH);
     draw_icon(
         s,
         "plus",
@@ -2876,7 +2876,7 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     // in line with (it was placed by top edge, not centre).
     let hrow = Rect::new(sx + 12.0, ly - 3.0, lw, ly + 13.0);
     app.fonts
-        .micro_label(s, sx + 12.0, line_top(hrow, T_UI), "LAYERS", C_DIM, Wt::Med);
+        .micro_label(s, sx + 12.0, line_top(hrow, T10), "LAYERS", C_DIM, Wt::Med);
     // F8: the search icon was dead — it opens the tree search field
     let srch = Rect::new(lw - 28.0, hrow.y0, lw - 12.0, hrow.y1);
     if hover(app, srch) {
@@ -3502,12 +3502,12 @@ fn paint_right(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     );
     let item_w = (pw - 6.0 - 4.0) / 4.0;
     let tabs = [
-        // Parity-first: the right inspector uses Figma's own tab names
-        // (Design, Prototype, Inspect); UX is X-Native's added tab.
-        (RightTab::Design, "Design"),
-        (RightTab::Prototype, "Prototype"),
-        (RightTab::Inspect, "Inspect"),
-        (RightTab::UX, "UX"),
+        // Right inspector is an X-Native workflow: compose the scene,
+        // route it through interactive flows, then ship an artifact.
+        (RightTab::Design, "COMPOSE"),
+        (RightTab::Prototype, "FLOW"),
+        (RightTab::Inspect, "SHIP"),
+        (RightTab::UX, "UX ANALYSIS"),
     ];
     for (i, (tab, label)) in tabs.into_iter().enumerate() {
         let ix = px0 + 3.0 + (item_w + 2.0) * i as f64;
@@ -3521,7 +3521,7 @@ fn paint_right(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             s,
             ir,
             label,
-            T_UI,
+            T10,
             if active { C_TEXT } else { C_DIM },
             Wt::Semi,
             true,
@@ -3641,7 +3641,7 @@ pub fn sel_info(app: &App) -> Sel {
         h: n.h,
         x: n.transform.x,
         y: n.transform.y,
-        rot: crate::state::rotation_display(n.transform.rotation.to_degrees()),
+        rot: n.transform.rotation.to_degrees(),
         opacity: n.opacity,
         radius,
         fill: crate::state::node_fill_hex(n, vars),
@@ -3840,12 +3840,11 @@ fn input(
     let mut tx = r.x0 + 8.0;
     if let Some((text, size)) = label {
         // center the CSS line box (1.5em), like flex align-items:center —
-        // audit: an 11px label box sits top +5.75 inside the 28px field,
-        // which is the same box the value below it uses
+        // audit: T10 label box top +6.5 inside the 28px field
         let ty = r.y0 + (INPUT_H.min(r.y1 - r.y0) - size * CSS_LH) / 2.0;
         app.fonts.text(s, tx, ty, text, size, C_DIM, Wt::Reg);
-        // T_UI labels sit in a fixed w-4 slot (span.w-4) then ~4px to the value
-        tx += if (size - T_UI).abs() < 0.01 {
+        // T10 labels sit in a fixed w-4 slot (span.w-4) then ~4px to the value
+        tx += if (size - T10).abs() < 0.01 {
             16.0 + 4.4
         } else {
             app.fonts.measure(text, size, Wt::Reg) + 6.0
@@ -3961,7 +3960,7 @@ fn paint_design_empty(
     let fa = Rect::new(xr - pct_w, y0 + 30.0, xr, y0 + 58.0);
     input_box(app, s, fa, R_INPUT);
     app.fonts
-        .text(s, fa.x0 + 9.0, y0 + 36.5, "%", T_UI, C_DIM, Wt::Reg);
+        .text(s, fa.x0 + 9.0, y0 + 36.5, "%", T10, C_DIM, Wt::Reg);
     app.fonts
         .text_right(s, fa.x1, y0 + 37.8, &bg_alpha, T11, C_TEXT, Wt::Mono, 8.0);
     hit.push((fa, Action::Field(FieldId::CanvasBgAlpha)));
@@ -4006,7 +4005,7 @@ fn paint_design_empty(
     let f3 = Rect::new(xr - pct_w, y0 + 90.0, xr, y0 + 118.0);
     input_box(app, s, f3, R_INPUT);
     app.fonts
-        .text(s, f3.x0 + 9.0, y0 + 96.5, "%", T_UI, C_DIM, Wt::Reg);
+        .text(s, f3.x0 + 9.0, y0 + 96.5, "%", T10, C_DIM, Wt::Reg);
     let pct_val = field_val(
         app,
         FieldId::GridPct,
@@ -4041,17 +4040,12 @@ fn paint_design(
     let sel = sel_info(app);
     let xr = rx + rw - pl; // 1428
     let gap = 8.0;
-    // Right-anchored trailing controls so the inspector holds at any
-    // dock width (Figma 240 default through the 520 max): at 340 these
-    // reproduce the historical offsets exactly.
-    let lock_x = xr - SQ_BTN;
-    let eye_x = lock_x - SQ_BTN - gap;
     let h = INPUT_H; // 28
     let mono = true;
 
     // ---- size & position rows: +12 / +48 / +84 / +120 (pitch 36) -------
     let r1 = y0 + 12.0;
-    let fd = Rect::new(x0, r1, (x0 + 145.0).min(eye_x - gap - 90.0), r1 + h);
+    let fd = Rect::new(x0, r1, x0 + 145.0, r1 + h);
     let preset_name = FRAME_PRESETS[app.doc().frame_preset].0;
     input(
         app,
@@ -4069,10 +4063,10 @@ fn paint_design(
         Some("chevron-down"),
     );
     // % field: label left, value right (justify-between per the HTML)
-    let pct = Rect::new(fd.x1 + gap, r1, eye_x - gap, r1 + h);
+    let pct = Rect::new(x0 + 153.0, r1, x0 + 243.0, r1 + h);
     input_box(app, s, pct, R_INPUT);
     app.fonts
-        .text(s, pct.x0 + 9.0, r1 + 6.5, "%", T_UI, C_DIM, Wt::Reg);
+        .text(s, pct.x0 + 9.0, r1 + 6.5, "%", T10, C_DIM, Wt::Reg);
     // justify-between: label left ('%' box at +9), value right, chevron right
     let pct_val = field_val(
         app,
@@ -4094,45 +4088,44 @@ fn paint_design(
     hit.push((pct, Action::Field(FieldId::Zoom)));
     // chevron: audited ink 1337-1344 → icon left = field right − 21
     draw_icon(s, "chevron-down", pct.x1 - 21.0, r1 + 8.0, ICON_XS, C_DIM);
-    sq_btn(app, s, hit, eye_x, r1, "eye", false);
+    sq_btn(app, s, hit, x0 + 251.0, r1, "eye", false);
     hit.push((
-        Rect::new(eye_x, r1, eye_x + SQ_BTN, r1 + SQ_BTN),
+        Rect::new(x0 + 251.0, r1, x0 + 251.0 + SQ_BTN, r1 + SQ_BTN),
         Action::ToggleVisible,
     ));
-    sq_btn(app, s, hit, lock_x, r1, "lock", false);
+    sq_btn(app, s, hit, x0 + 287.0, r1, "lock", false);
     hit.push((
-        Rect::new(lock_x, r1, lock_x + SQ_BTN, r1 + SQ_BTN),
+        Rect::new(x0 + 287.0, r1, x0 + 287.0 + SQ_BTN, r1 + SQ_BTN),
         Action::ToggleLock,
     ));
 
     let r2 = y0 + 48.0;
-    let aspect_x = xr - SQ_BTN;
-    let half = ((aspect_x - gap - x0) - gap) / 2.0;
+    let half = 135.5;
     let wr = Rect::new(x0, r2, x0 + half, r2 + h);
     input(
         app,
         s,
         hit,
         wr,
-        Some(("W", T_UI)),
+        Some(("W", T10)),
         &field_val(app, FieldId::W, fmt_num(sel.w)),
         mono,
         Some(Action::Field(FieldId::W)),
         None,
     );
-    let hr = Rect::new(x0 + half + gap, r2, x0 + half + gap + half, r2 + h);
+    let hr = Rect::new(x0 + 143.5, r2, x0 + 143.5 + half, r2 + h);
     input(
         app,
         s,
         hit,
         hr,
-        Some(("H", T_UI)),
+        Some(("H", T10)),
         &field_val(app, FieldId::H, fmt_num(sel.h)),
         mono,
         Some(Action::Field(FieldId::H)),
         None,
     );
-    let aspect_lock = Rect::new(aspect_x, r2, aspect_x + SQ_BTN, r2 + SQ_BTN);
+    let aspect_lock = Rect::new(x0 + 287.0, r2, x0 + 287.0 + SQ_BTN, r2 + SQ_BTN);
     sq_btn(app, s, hit, aspect_lock.x0, aspect_lock.y0, "lock", false);
     if app.aspect_ratio_locked {
         fill_rrect(s, aspect_lock, R_LG, C_FIELD_2);
@@ -4154,7 +4147,7 @@ fn paint_design(
         s,
         hit,
         xr3,
-        Some(("X", T_UI)),
+        Some(("X", T10)),
         &field_val(app, FieldId::X, fmt_num(sel.x)),
         mono,
         Some(Action::Field(FieldId::X)),
@@ -4166,7 +4159,7 @@ fn paint_design(
         s,
         hit,
         yr3,
-        Some(("Y", T_UI)),
+        Some(("Y", T10)),
         &field_val(app, FieldId::Y, fmt_num(sel.y)),
         mono,
         Some(Action::Field(FieldId::Y)),
@@ -4200,7 +4193,7 @@ fn paint_design(
     hit.push((addb, Action::AddAutoLayout));
 
     app.fonts
-        .text(s, x0, y0 + 208.0, "Flow", T_UI, C_DIM, Wt::Reg);
+        .text(s, x0, y0 + 208.0, "Flow", T10, C_DIM, Wt::Reg);
     let flow_xs = [0.0, 80.3, 160.5, 240.8];
     let flow = app.doc().flow;
     let boot_mock = app.doc().flow_boot_mock;
@@ -4245,7 +4238,7 @@ fn paint_design(
     }
 
     app.fonts
-        .text(s, x0, y0 + 262.0, "Resizing", T_UI, C_DIM, Wt::Reg);
+        .text(s, x0, y0 + 262.0, "Resizing", T10, C_DIM, Wt::Reg);
     // axis sizing is REAL for auto-layout frames (A5): W chip = main axis
     // when horizontal (cross when vertical), H chip the other; click
     // toggles Hug <-> Fixed. Non-layout frames keep the mock's static chip.
@@ -4266,7 +4259,7 @@ fn paint_design(
         let fr = Rect::new(fx, y0 + 280.0, fx + 133.5, y0 + 308.0);
         input_box(app, s, fr, 8.0);
         app.fonts
-            .text(s, fx + 9.0, y0 + 289.3, axis, T_UI, C_DIM, Wt::Reg);
+            .text(s, fx + 9.0, y0 + 289.3, axis, T10, C_DIM, Wt::Reg);
         // value stops before the Hug/Fixed chip (chip x0 = fx + 93.5)
         app.fonts
             .text_right(s, fx + 93.5, y0 + 287.8, &val, T11, C_TEXT, Wt::Mono, 6.0);
@@ -4311,7 +4304,7 @@ fn paint_design(
         fill_rrect(s, chip, R_SM, if chov { C_INPUT_HOVER } else { C_FIELD_2 });
         stroke_rrect(s, chip, R_SM, C_LINE_2, 1.0);
         app.fonts
-            .text_center(s, chip, label, T_UI, C_TEXT, Wt::Reg, true);
+            .text_center(s, chip, label, T10, C_TEXT, Wt::Reg, true);
         // Figma's sizing control is a dropdown: "Open the Width dropdown to
         // find Add min width and Add max width."
         if enabled {
@@ -4340,9 +4333,9 @@ fn paint_design(
         }
     }
     app.fonts
-        .text(s, x0, y0 + 316.0, "Alignment", T_UI, C_DIM, Wt::Reg);
+        .text(s, x0, y0 + 316.0, "Alignment", T10, C_DIM, Wt::Reg);
     app.fonts
-        .text_right(s, xr, y0 + 316.0, "Gap", T_UI, C_DIM, Wt::Reg, 0.0);
+        .text_right(s, xr, y0 + 316.0, "Gap", T10, C_DIM, Wt::Reg, 0.0);
     // 9-dot alignment card 84×84 at +334
     let card = Rect::new(x0, y0 + 334.0, x0 + 84.0, y0 + 418.0);
     fill_rrect(s, card, R_XL, C_FIELD);
@@ -4409,7 +4402,7 @@ fn paint_design(
     hit.push((g2, Action::Field(FieldId::Gap)));
 
     app.fonts
-        .text(s, x0, y0 + 458.0, "Padding", T_UI, C_DIM, Wt::Reg);
+        .text(s, x0, y0 + 458.0, "Padding", T10, C_DIM, Wt::Reg);
     for (i, (fid, val)) in [
         (FieldId::PadH, app.doc().pad_h),
         (FieldId::PadV, app.doc().pad_v),
@@ -4440,7 +4433,7 @@ fn paint_design(
     // disclosure (P0-8): these are the layout section's ADVANCED rows, so
     // the band shows an "Advanced" toggle until the user opens it. When
     // open, the chevron at the band's right edge collapses it again.
-    let band = Rect::new(x0, y0 + 426.0, xr, y0 + 426.0 + DENSE_H);
+    let band = Rect::new(x0, y0 + 426.0, x0 + 315.0, y0 + 426.0 + DENSE_H);
     let has_advanced = sel_layout.is_some() || app.selected_parent_has_layout();
     let lav_open = app.layout_advanced_open;
     if has_advanced && !lav_open {
@@ -4458,7 +4451,7 @@ fn paint_design(
             band.x0 + 20.0,
             band.y0 + 5.0,
             "Advanced",
-            T_UI,
+            T10,
             if hov { C_TEXT } else { C_DIM },
             Wt::Reg,
         );
@@ -4503,7 +4496,7 @@ fn paint_design(
                 .as_ref()
                 .map(|l| l.canvas_stacking)
                 .unwrap_or_default();
-            let sr = Rect::new(x0 + 120.0, y0 + 426.0, xr - 32.0, y0 + 426.0 + DENSE_H);
+            let sr = Rect::new(x0 + 120.0, y0 + 426.0, x0 + 283.0, y0 + 426.0 + DENSE_H);
             let shov = hover(app, sr);
             app.fonts.text(
                 s,
@@ -4554,7 +4547,7 @@ fn paint_design(
                     .map(|c| c.grow >= 1.0)
                     .unwrap_or(false)
             };
-            let seg = Rect::new(x0, y0 + 426.0, xr - 165.0, y0 + 426.0 + DENSE_H);
+            let seg = Rect::new(x0, y0 + 426.0, x0 + 150.0, y0 + 426.0 + DENSE_H);
             let half = Rect::new(seg.x0, seg.y0, seg.x0 + 74.0, seg.y1);
             let other = Rect::new(half.x1, seg.y0, seg.x1, seg.y1);
             for (rr, lab, active, act) in [
@@ -4564,7 +4557,7 @@ fn paint_design(
                 fill_rrect(s, rr, R_MD, if active { C_FIELD_2 } else { C_FIELD });
                 stroke_rrect(s, rr, R_MD, if active { C_LINE_2 } else { C_LINE }, 1.0);
                 app.fonts
-                    .text_center(s, rr, lab, T_UI, C_TEXT, Wt::Reg, true);
+                    .text_center(s, rr, lab, T10, C_TEXT, Wt::Reg, true);
                 hit.push((rr, act));
             }
             // absolute position checkbox
@@ -4591,7 +4584,7 @@ fn paint_design(
                     .map(|c| c.is_absolute)
                     .unwrap_or(false)
             };
-            let ab = Rect::new(xr - 153.0, y0 + 430.0, xr - 137.0, y0 + 430.0 + CHIP_H);
+            let ab = Rect::new(x0 + 162.0, y0 + 430.0, x0 + 178.0, y0 + 430.0 + CHIP_H);
             fill_rrect(s, ab, R_SM, C_FIELD);
             stroke_rrect(s, ab, R_SM, C_LINE_2, 1.0);
             if absolute {
@@ -4607,7 +4600,7 @@ fn paint_design(
                 Wt::Reg,
             );
             hit.push((
-                Rect::new(xr - 153.0, y0 + 426.0, xr - 53.0, y0 + 450.0),
+                Rect::new(x0 + 162.0, y0 + 426.0, x0 + 262.0, y0 + 450.0),
                 Action::ToggleChildAbsolute,
             ));
         }
@@ -4648,7 +4641,7 @@ fn paint_design(
                 s,
                 hit,
                 fr,
-                Some((*label, T_UI)),
+                Some((*label, T10)),
                 &field_val(app, *fid, fmt_num(*v)),
                 mono,
                 Some(Action::Field(*fid)),
@@ -4686,7 +4679,7 @@ fn paint_design(
     // same 24px checkbox, same ink, no geometry moved. Frames only: a Section
     // always shows its own name, and no other layer has one to switch off.
     if sel.is_frame {
-        let sn_x = xr - 165.0;
+        let sn_x = x0 + 150.0;
         let sn_row = Rect::new(sn_x, clip_row.y0, sn_x + 118.0, clip_row.y0 + DENSE_H);
         let sn_cb = Rect::new(
             sn_x,
@@ -4739,7 +4732,7 @@ fn paint_design(
         s,
         hit,
         opr,
-        Some(("Opacity", T_UI)),
+        Some(("Opacity", T10)),
         "",
         false,
         Some(Action::Field(FieldId::Opacity)),
@@ -4764,7 +4757,7 @@ fn paint_design(
     // Figma's Appearance row pairs **Opacity** with **Blend mode**; the corner
     // radius keeps a row of its own below. The layer's blend is a dropdown of
     // the 19 layer modes — Pass through first, because it is the layer default.
-    let bdr = Rect::new(x0 + 161.5, y0 + 596.0, xr, y0 + 624.0);
+    let bdr = Rect::new(x0 + 161.5, y0 + 596.0, x0 + 315.0, y0 + 624.0);
     let layer_blend = {
         let d = app.doc();
         d.selected_id()
@@ -4783,15 +4776,8 @@ fn paint_design(
             C_FIELD
         },
     );
-    app.fonts.text(
-        s,
-        bdr.x0 + 8.0,
-        bdr.y0 + 6.0,
-        "Blend",
-        T_UI,
-        C_TEXT,
-        Wt::Reg,
-    );
+    app.fonts
+        .text(s, bdr.x0 + 8.0, bdr.y0 + 6.0, "Blend", T10, C_TEXT, Wt::Reg);
     let bval = layer_blend.label();
     let bvw = app.fonts.measure(bval, T11, Wt::Reg);
     app.fonts.text(
@@ -4819,7 +4805,7 @@ fn paint_design(
     // Figma's radius row (help 360050986854): the **Independent corners**
     // toggle sits at the field's left edge — a square with one rounded corner
     // — and the field is named after what it rounds.
-    let rdr = Rect::new(x0, y0 + 636.0, xr, y0 + 664.0);
+    let rdr = Rect::new(x0, y0 + 636.0, x0 + 315.0, y0 + 664.0);
     let rhov = hover(app, rdr);
     fill_rrect(s, rdr, R_INPUT, if rhov { C_INPUT_HOVER } else { C_FIELD });
     if rhov {
@@ -4856,7 +4842,7 @@ fn paint_design(
         rdr.x0 + 28.0,
         y0 + 642.5,
         "Corner radius",
-        T_UI,
+        T10,
         C_DIM,
         Wt::Reg,
     );
@@ -4923,7 +4909,7 @@ fn paint_design(
     draw_icon(s, "plus", xr - 14.0, y0 + 695.0, ICON_SM, create_tint);
     hit.push((styles_btn, Action::TextStyleDropdown));
     hit.push((create_btn, Action::CreateTextStyle));
-    let fam = Rect::new(x0, y0 + 724.0, xr, y0 + 752.0);
+    let fam = Rect::new(x0, y0 + 724.0, x0 + 315.0, y0 + 752.0);
     input(
         app,
         s,
@@ -4961,16 +4947,16 @@ fn paint_design(
                 fill_rrect(s, row, R_SM, C_FIELD_2);
             }
             app.fonts
-                .text(s, row.x0 + 6.0, row.y0 + 3.0, fam, T_UI, C_TEXT, Wt::Reg);
+                .text(s, row.x0 + 6.0, row.y0 + 3.0, fam, T10, C_TEXT, Wt::Reg);
             if faces.len() > 1 {
                 let cnt = format!("{} faces", faces.len());
-                let cw = app.fonts.measure(&cnt, T_UI, Wt::Reg);
+                let cw = app.fonts.measure(&cnt, T10, Wt::Reg);
                 app.fonts.text(
                     s,
                     row.x1 - 10.0 - cw,
                     row.y0 + 3.0,
                     &cnt,
-                    T_UI,
+                    T10,
                     C_DIM,
                     Wt::Reg,
                 );
@@ -4978,7 +4964,7 @@ fn paint_design(
             hit.push((row, Action::FontPicker(fam.clone())));
         }
     }
-    let wgt = Rect::new(x0, y0 + 760.0, xr - 88.0, y0 + 788.0);
+    let wgt = Rect::new(x0, y0 + 760.0, x0 + 227.0, y0 + 788.0);
     input(
         app,
         s,
@@ -4990,7 +4976,7 @@ fn paint_design(
         Some(Action::Field(FieldId::FontWeight)),
         Some("chevron-down"),
     );
-    let szr = Rect::new(xr - 80.0, y0 + 760.0, xr, y0 + 788.0);
+    let szr = Rect::new(x0 + 235.0, y0 + 760.0, x0 + 315.0, y0 + 788.0);
     input(
         app,
         s,
@@ -5003,7 +4989,7 @@ fn paint_design(
         Some("chevron-down"),
     );
     app.fonts
-        .text(s, x0, y0 + 796.0, "Line height", T_UI, C_DIM, Wt::Reg);
+        .text(s, x0, y0 + 796.0, "Line height", T10, C_DIM, Wt::Reg);
     let lhr = Rect::new(x0, y0 + 814.0, x0 + 153.5, y0 + 842.0);
     input_box(app, s, lhr, R_INPUT);
     draw_icon(s, "type", lhr.x0 + 8.0, lhr.y0 + 8.0, ICON_XS, C_DIM);
@@ -5039,7 +5025,7 @@ fn paint_design(
     // Justified to Left, so it is not offered (a phantom state); the active
     // highlight mirrors what the canvas actually renders.
     app.fonts
-        .text(s, x0, y0 + 850.0, "Alignment", T_UI, C_DIM, Wt::Reg);
+        .text(s, x0, y0 + 850.0, "Alignment", T10, C_DIM, Wt::Reg);
     let align_now = selected_text_align(app);
     for (i, (ic, t)) in [
         ("align-left", x_native::TextAlign::Left),
@@ -5070,15 +5056,8 @@ fn paint_design(
     }
 
     // Vertical alignment (horizontal sits in the button row above)
-    app.fonts.text(
-        s,
-        x0,
-        y0 + 904.0,
-        "Vertical alignment",
-        T_UI,
-        C_DIM,
-        Wt::Reg,
-    );
+    app.fonts
+        .text(s, x0, y0 + 904.0, "Vertical alignment", T10, C_DIM, Wt::Reg);
     let v_align = Rect::new(x0, y0 + 922.0, x0 + 153.5, y0 + 950.0);
     input(
         app,
@@ -5094,16 +5073,9 @@ fn paint_design(
 
     // Decoration | Wrap style (the engine's paragraph wrap strategy, "tw")
     app.fonts
-        .text(s, x0, y0 + 958.0, "Decoration", T_UI, C_DIM, Wt::Reg);
-    app.fonts.text(
-        s,
-        x0 + 161.5,
-        y0 + 958.0,
-        "Wrap style",
-        T_UI,
-        C_DIM,
-        Wt::Reg,
-    );
+        .text(s, x0, y0 + 958.0, "Decoration", T10, C_DIM, Wt::Reg);
+    app.fonts
+        .text(s, x0 + 161.5, y0 + 958.0, "Wrap style", T10, C_DIM, Wt::Reg);
     let deco = Rect::new(x0, y0 + 976.0, x0 + 153.5, y0 + 1004.0);
     input(
         app,
@@ -5116,7 +5088,7 @@ fn paint_design(
         Some(Action::CycleTextDecoration),
         Some("chevron-down"),
     );
-    let wrap = Rect::new(x0 + 161.5, y0 + 976.0, xr, y0 + 1004.0);
+    let wrap = Rect::new(x0 + 161.5, y0 + 976.0, x0 + 315.0, y0 + 1004.0);
     input(
         app,
         s,
@@ -5131,13 +5103,13 @@ fn paint_design(
 
     // Max lines | Paragraph indent
     app.fonts
-        .text(s, x0, y0 + 1012.0, "Max lines", T_UI, C_DIM, Wt::Reg);
+        .text(s, x0, y0 + 1012.0, "Max lines", T10, C_DIM, Wt::Reg);
     app.fonts.text(
         s,
         x0 + 161.5,
         y0 + 1012.0,
         "Paragraph indent",
-        T_UI,
+        T10,
         C_DIM,
         Wt::Reg,
     );
@@ -5153,7 +5125,7 @@ fn paint_design(
         Some(Action::Field(FieldId::MaxLines)),
         None,
     );
-    let para_indent = Rect::new(x0 + 161.5, y0 + 1030.0, xr, y0 + 1058.0);
+    let para_indent = Rect::new(x0 + 161.5, y0 + 1030.0, x0 + 315.0, y0 + 1058.0);
     input(
         app,
         s,
@@ -5176,7 +5148,7 @@ fn paint_design(
     // (Font / Weight / Size / Line height / Alignment), so they sit behind
     // a disclosure instead of disappearing.
     let adv_open = app.typo_advanced_open;
-    let adv = Rect::new(x0, y0 + 1066.0, xr, y0 + 1066.0 + DENSE_H);
+    let adv = Rect::new(x0, y0 + 1066.0, x0 + 315.0, y0 + 1066.0 + DENSE_H);
     let adv_hov = hover(app, adv);
     draw_icon(
         s,
@@ -5195,7 +5167,7 @@ fn paint_design(
         adv.x0 + 20.0,
         adv.y0 + 5.0,
         "Advanced",
-        T_UI,
+        T10,
         if adv_hov { C_TEXT } else { C_DIM },
         Wt::Reg,
     );
@@ -5203,13 +5175,13 @@ fn paint_design(
     if adv_open {
         // Letter spacing | Word spacing
         app.fonts
-            .text(s, x0, y0 + 1098.0, "Letter spacing", T_UI, C_DIM, Wt::Reg);
+            .text(s, x0, y0 + 1098.0, "Letter spacing", T10, C_DIM, Wt::Reg);
         app.fonts.text(
             s,
             x0 + 161.5,
             y0 + 1098.0,
             "Word spacing",
-            T_UI,
+            T10,
             C_DIM,
             Wt::Reg,
         );
@@ -5229,7 +5201,7 @@ fn paint_design(
             Some(Action::Field(FieldId::LetterSpacing)),
             None,
         );
-        let wsr = Rect::new(x0 + 161.5, y0 + 1116.0, xr, y0 + 1144.0);
+        let wsr = Rect::new(x0 + 161.5, y0 + 1116.0, x0 + 315.0, y0 + 1144.0);
         input(
             app,
             s,
@@ -5242,21 +5214,14 @@ fn paint_design(
             None,
         );
         // Paragraph spacing | Baseline shift
-        app.fonts.text(
-            s,
-            x0,
-            y0 + 1152.0,
-            "Paragraph spacing",
-            T_UI,
-            C_DIM,
-            Wt::Reg,
-        );
+        app.fonts
+            .text(s, x0, y0 + 1152.0, "Paragraph spacing", T10, C_DIM, Wt::Reg);
         app.fonts.text(
             s,
             x0 + 161.5,
             y0 + 1152.0,
             "Baseline shift",
-            T_UI,
+            T10,
             C_DIM,
             Wt::Reg,
         );
@@ -5272,7 +5237,7 @@ fn paint_design(
             Some(Action::Field(FieldId::ParaSpacing)),
             None,
         );
-        let bsr = Rect::new(x0 + 161.5, y0 + 1170.0, xr, y0 + 1198.0);
+        let bsr = Rect::new(x0 + 161.5, y0 + 1170.0, x0 + 315.0, y0 + 1198.0);
         input(
             app,
             s,
@@ -5290,7 +5255,7 @@ fn paint_design(
         );
         // Text case (small caps rides the same control)
         app.fonts
-            .text(s, x0, y0 + 1206.0, "Text case", T_UI, C_DIM, Wt::Reg);
+            .text(s, x0, y0 + 1206.0, "Text case", T10, C_DIM, Wt::Reg);
         let tcr = Rect::new(x0, y0 + 1224.0, x0 + 153.5, y0 + 1252.0);
         input(
             app,
@@ -5307,7 +5272,7 @@ fn paint_design(
         // *"Use the List style property to apply a list style to a text
         // layer"*. None / Bulleted / Numbered behind one picker.
         app.fonts
-            .text(s, x0, y0 + 1260.0, "List style", T_UI, C_DIM, Wt::Reg);
+            .text(s, x0, y0 + 1260.0, "List style", T10, C_DIM, Wt::Reg);
         let lsr = Rect::new(x0, y0 + 1278.0, x0 + 153.5, y0 + 1306.0);
         input(
             app,
@@ -5325,9 +5290,9 @@ fn paint_design(
         }
         // Optical size | Width (variable-font axes; Auto on static faces)
         app.fonts
-            .text(s, x0, y0 + 1314.0, "Optical size", T_UI, C_DIM, Wt::Reg);
+            .text(s, x0, y0 + 1314.0, "Optical size", T10, C_DIM, Wt::Reg);
         app.fonts
-            .text(s, x0 + 161.5, y0 + 1314.0, "Width", T_UI, C_DIM, Wt::Reg);
+            .text(s, x0 + 161.5, y0 + 1314.0, "Width", T10, C_DIM, Wt::Reg);
         let osr = Rect::new(x0, y0 + 1332.0, x0 + 153.5, y0 + 1360.0);
         input(
             app,
@@ -5340,7 +5305,7 @@ fn paint_design(
             Some(Action::Field(FieldId::OpticalSize)),
             None,
         );
-        let wdr = Rect::new(x0 + 161.5, y0 + 1332.0, xr, y0 + 1360.0);
+        let wdr = Rect::new(x0 + 161.5, y0 + 1332.0, x0 + 315.0, y0 + 1360.0);
         input(
             app,
             s,
@@ -5413,9 +5378,9 @@ fn paint_design(
     y += gap;
     let half3 = (inner_w - gap) / 2.0;
     app.fonts
-        .text(s, rx + pl, y, "Position", T_UI, C_DIM, Wt::Reg);
+        .text(s, rx + pl, y, "Position", T10, C_DIM, Wt::Reg);
     app.fonts
-        .text(s, rx + pl + half3 + gap, y, "Weight", T_UI, C_DIM, Wt::Reg);
+        .text(s, rx + pl + half3 + gap, y, "Weight", T10, C_DIM, Wt::Reg);
     y += 12.0 + LABEL_GAP;
     let pos = Rect::new(rx + pl, y, rx + pl + half3, y + h);
     input(
@@ -5606,7 +5571,7 @@ fn paint_design(
     let hov = hover(app, ex);
     fill_rrect(s, ex, R_MD, if hov { C_LINE_2 } else { C_FIELD_2 });
     stroke_rrect(s, ex, R_MD, C_LINE_2, 1.0);
-    let label_w = app.fonts.measure("EXPORT 1 ELEMENT", T_UI, Wt::Med) + 16.0 * T_UI * 0.08;
+    let label_w = app.fonts.measure("EXPORT 1 ELEMENT", T10, Wt::Med) + 16.0 * T10 * 0.08;
     app.fonts.caps_label(
         s,
         rx + (rw - label_w) / 2.0,
@@ -5633,7 +5598,7 @@ fn paint_design(
             let cur_variant = comp.rsplit('/').next().unwrap_or(&comp).to_string();
             let set = comp.split('/').next().unwrap_or(&comp).to_string();
             app.fonts
-                .text(s, x0, y + 6.0, "Variant", T_UI, C_DIM, Wt::Reg);
+                .text(s, x0, y + 6.0, "Variant", T10, C_DIM, Wt::Reg);
             let vb = Rect::new(x0 + 120.0, y - 4.0, xr, y + 20.0);
             input_box(app, s, vb, 6.0);
             let shown = app.fonts.truncate(
@@ -5660,7 +5625,7 @@ fn paint_design(
         let entries = app.props_of(&comp);
         if entries.is_empty() {
             app.fonts
-                .text(s, x0, y, "No properties defined", T_UI, C_MUTED, Wt::Reg);
+                .text(s, x0, y, "No properties defined", T10, C_MUTED, Wt::Reg);
             y += 18.0;
         }
         for e in &entries {
@@ -5677,14 +5642,13 @@ fn paint_design(
                     app.fonts
                         .text(s, cb.x1 + 8.0, y - 0.3, &e.name, T11, C_TEXT, Wt::Reg);
                     hit.push((
-                        Rect::new(x0, y - 6.0, xr - 165.0, y + 22.0),
+                        Rect::new(x0, y - 6.0, x0 + 150.0, y + 22.0),
                         Action::ToggleInstanceProp(e.name.clone()),
                     ));
                     y += 28.0;
                 }
                 x_native::ComponentPropKind::Text => {
-                    app.fonts
-                        .text(s, x0, y + 6.0, &e.name, T_UI, C_DIM, Wt::Reg);
+                    app.fonts.text(s, x0, y + 6.0, &e.name, T10, C_DIM, Wt::Reg);
                     let fr = Rect::new(x0 + 120.0, y - 4.0, xr, y + 20.0);
                     input_box(app, s, fr, R_INPUT);
                     let shown = field_val(app, FieldId::InstanceProp, value);
@@ -5695,8 +5659,7 @@ fn paint_design(
                     y += 28.0;
                 }
                 x_native::ComponentPropKind::Swap => {
-                    app.fonts
-                        .text(s, x0, y + 6.0, &e.name, T_UI, C_DIM, Wt::Reg);
+                    app.fonts.text(s, x0, y + 6.0, &e.name, T10, C_DIM, Wt::Reg);
                     let br = Rect::new(x0 + 120.0, y - 4.0, xr, y + 20.0);
                     input_box(app, s, br, 6.0);
                     app.fonts
@@ -5713,7 +5676,7 @@ fn paint_design(
             fill_rrect(s, rr, R_MD, if hov { C_FIELD_2 } else { C_FIELD });
             stroke_rrect(s, rr, R_MD, C_LINE, 1.0);
             app.fonts
-                .text_center(s, rr, "Reset overrides", T_UI, C_TEXT, Wt::Reg, true);
+                .text_center(s, rr, "Reset overrides", T10, C_TEXT, Wt::Reg, true);
             hit.push((rr, Action::ResetInstanceProps));
             y += 30.0;
         }
@@ -5757,14 +5720,14 @@ fn paint_design(
                     s,
                     x0,
                     y + 6.0,
-                    &app.fonts.truncate(sname, T_UI, Wt::Reg, 90.0),
-                    T_UI,
+                    &app.fonts.truncate(sname, T10, Wt::Reg, 90.0),
+                    T10,
                     C_TEXT,
                     Wt::Reg,
                 );
-                let sw = app.fonts.measure(&st, T_UI, Wt::Reg);
+                let sw = app.fonts.measure(&st, T10, Wt::Reg);
                 app.fonts
-                    .text(s, xr - 170.0 - sw, y + 7.0, &st, T_UI, C_MUTED, Wt::Reg);
+                    .text(s, xr - 170.0 - sw, y + 7.0, &st, T10, C_MUTED, Wt::Reg);
                 let setb = Rect::new(xr - 164.0, y, xr - 84.0, y + 20.0);
                 fill_rrect(
                     s,
@@ -5774,7 +5737,7 @@ fn paint_design(
                 );
                 stroke_rrect(s, setb, R_SM, C_LINE, 1.0);
                 app.fonts
-                    .text_center(s, setb, "from selection", T_UI, C_TEXT, Wt::Reg, true);
+                    .text_center(s, setb, "from selection", T10, C_TEXT, Wt::Reg, true);
                 hit.push((setb, Action::SlotSetFromSelection(sname.clone())));
                 let clrb = Rect::new(xr - 78.0, y, xr - 56.0, y + 20.0);
                 fill_rrect(
@@ -5800,10 +5763,9 @@ fn paint_design(
         }
     } else if let Some(master) = master {
         // master side: bind the selected descendant as a new property
-        app.fonts.text(s, x0, y, &master, T_UI, C_DIM, Wt::Reg);
+        app.fonts.text(s, x0, y, &master, T10, C_DIM, Wt::Reg);
         y += 20.0;
-        app.fonts
-            .text(s, x0, y, "Description", T_UI, C_DIM, Wt::Reg);
+        app.fonts.text(s, x0, y, "Description", T10, C_DIM, Wt::Reg);
         let description = app
             .doc_ref()
             .selected_id()
@@ -5833,7 +5795,7 @@ fn paint_design(
                 s,
                 cb,
                 "◆ Combine selected into variant set",
-                T_UI,
+                T10,
                 C_TEXT,
                 Wt::Reg,
                 true,
@@ -5846,7 +5808,7 @@ fn paint_design(
         fill_rrect(s, slot, R_MD, if slot_hov { C_FIELD_2 } else { C_FIELD });
         stroke_rrect(s, slot, R_MD, C_LINE, 1.0);
         app.fonts
-            .text_center(s, slot, "+ Slot property", T_UI, C_TEXT, Wt::Reg, true);
+            .text_center(s, slot, "+ Slot property", T10, C_TEXT, Wt::Reg, true);
         hit.push((slot, Action::AddSlot));
         y += 28.0;
         for (kind, label) in [
@@ -5859,14 +5821,14 @@ fn paint_design(
             fill_rrect(s, br, R_MD, if hov { C_FIELD_2 } else { C_FIELD });
             stroke_rrect(s, br, R_MD, C_LINE, 1.0);
             app.fonts
-                .text_center(s, br, label, T_UI, C_TEXT, Wt::Reg, true);
+                .text_center(s, br, label, T10, C_TEXT, Wt::Reg, true);
             hit.push((br, Action::AddProp(kind)));
             y += 28.0;
         }
         // defined props with remove buttons
         for e in app.props_of(&master) {
             app.fonts
-                .text(s, x0, y + 5.0, &e.name, T_UI, C_MUTED, Wt::Reg);
+                .text(s, x0, y + 5.0, &e.name, T10, C_MUTED, Wt::Reg);
             let xb = Rect::new(xr - 20.0, y, xr, y + 16.0);
             draw_icon(s, "x", xb.x0 + 4.0, y + 2.0, ICON_XS, C_DIM);
             hit.push((xb, Action::RemoveProp(e.name.clone())));
@@ -5878,7 +5840,7 @@ fn paint_design(
             x0,
             y,
             "Select inside a master or an instance",
-            T_UI,
+            T10,
             C_MUTED,
             Wt::Reg,
         );
@@ -5939,7 +5901,7 @@ fn paint_arc_block(
             s,
             hit,
             r,
-            Some((*label, T_UI)),
+            Some((*label, T10)),
             &field_val(app, *id, fallback.clone()),
             true,
             Some(Action::Field(*id)),
@@ -6006,7 +5968,7 @@ fn paint_shape_block(
             s,
             hit,
             r,
-            Some((*label, T_UI)),
+            Some((*label, T10)),
             &field_val(app, *id, fallback.clone()),
             true,
             Some(Action::Field(*id)),
@@ -6056,7 +6018,7 @@ fn paint_scale_block(
         s,
         hit,
         wr,
-        Some(("W", T_UI)),
+        Some(("W", T10)),
         &field_val(app, FieldId::ScaleW, fmt_num(bw)),
         true,
         Some(Action::Field(FieldId::ScaleW)),
@@ -6068,7 +6030,7 @@ fn paint_scale_block(
         s,
         hit,
         hr,
-        Some(("H", T_UI)),
+        Some(("H", T10)),
         &field_val(app, FieldId::ScaleH, fmt_num(bh)),
         true,
         Some(Action::Field(FieldId::ScaleH)),
@@ -6083,7 +6045,7 @@ fn paint_scale_block(
         s,
         hit,
         mr,
-        Some(("Scale", T_UI)),
+        Some(("Scale", T10)),
         &field_val(app, FieldId::ScaleFactor, shown),
         true,
         Some(Action::Field(FieldId::ScaleFactor)),
@@ -6223,7 +6185,7 @@ fn paint_constraints(
             continue;
         };
         app.fonts
-            .text(s, x0, y + 6.5, axis.label(), T_UI, C_DIM, Wt::Reg);
+            .text(s, x0, y + 6.5, axis.label(), T10, C_DIM, Wt::Reg);
         let fr = Rect::new(x0 + 74.0, y, xr, y + INPUT_H);
         if app.dropdown_constraint == Some(axis) {
             // the menu anchors under the field it belongs to; the panel
@@ -6321,7 +6283,7 @@ fn paint_mask_section(
             fill_rrect(s, row, R_XS, C_ROW_HOVER);
         }
         app.fonts
-            .text(s, row.x0 + 2.0, y, "Use as mask", T_UI, C_TEXT, Wt::Reg);
+            .text(s, row.x0 + 2.0, y, "Use as mask", T10, C_TEXT, Wt::Reg);
         app.mask_row = Some(row);
         hit.push((row, Action::UseAsMask));
         return Some(row.y1 + 10.0);
@@ -6341,15 +6303,8 @@ fn paint_mask_section(
         },
     );
     stroke_rrect(s, row, R_XS, C_LINE, 1.0);
-    app.fonts.text(
-        s,
-        row.x0 + 8.0,
-        y + 2.0,
-        kind.label(),
-        T_UI,
-        C_TEXT,
-        Wt::Reg,
-    );
+    app.fonts
+        .text(s, row.x0 + 8.0, y + 2.0, kind.label(), T10, C_TEXT, Wt::Reg);
     draw_icon(s, "chevron-down", row.x1 - 18.0, y + 3.0, ICON_XS, C_DIM);
     hit.push((row, Action::ToggleMaskType));
     if app.mask_type_open {
@@ -6557,7 +6512,7 @@ fn paint_stroke_row(
                 r.x0 + 8.0,
                 y + 7.5,
                 if end { "End point" } else { "Start point" },
-                T_UI,
+                T10,
                 C_DIM,
                 Wt::Reg,
             );
@@ -6593,7 +6548,7 @@ fn paint_stroke_row(
                 )
             };
             app.fonts
-                .text(s, dd.x0 + pad, y + 4.0, label, T_UI, C_DIM, Wt::Reg);
+                .text(s, dd.x0 + pad, y + 4.0, label, T10, C_DIM, Wt::Reg);
             let r = Rect::new(dd.x0 + pad, y + 16.0, dd.x1 - pad, y + 44.0);
             input(
                 app,
@@ -6610,7 +6565,7 @@ fn paint_stroke_row(
         }
         R::Dashes => {
             app.fonts
-                .text(s, dd.x0 + pad, y + 4.0, "Dashes", T_UI, C_DIM, Wt::Reg);
+                .text(s, dd.x0 + pad, y + 4.0, "Dashes", T10, C_DIM, Wt::Reg);
             let shown = opts
                 .dash
                 .iter()
@@ -6633,7 +6588,7 @@ fn paint_stroke_row(
         }
         R::Miter => {
             app.fonts
-                .text(s, dd.x0 + pad, y + 4.0, "Miter angle", T_UI, C_DIM, Wt::Reg);
+                .text(s, dd.x0 + pad, y + 4.0, "Miter angle", T10, C_DIM, Wt::Reg);
             let shown = fmt_num(crate::state::miter_limit_to_angle(opts.miter_limit));
             let r = Rect::new(dd.x0 + pad, y + 16.0, dd.x1 - pad, y + 44.0);
             input(
@@ -6641,7 +6596,7 @@ fn paint_stroke_row(
                 s,
                 hit,
                 r,
-                Some(("°", T_UI)),
+                Some(("°", T10)),
                 &field_val(app, FieldId::StrokeMiter, shown),
                 false,
                 Some(Action::Field(FieldId::StrokeMiter)),
@@ -6844,7 +6799,7 @@ fn paint_corner_popover(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Actio
         dd.x0 + 10.0,
         sy + 4.0,
         "Corner smoothing",
-        T_UI,
+        T10,
         C_DIM,
         Wt::Reg,
     );
@@ -6853,7 +6808,7 @@ fn paint_corner_popover(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Actio
     fill_rrect(s, ios, R_MD, if ihov { C_FIELD_2 } else { C_FIELD });
     stroke_rrect(s, ios, R_MD, C_LINE, 1.0);
     app.fonts
-        .text_center(s, ios, "iOS", T_UI, C_TEXT, Wt::Reg, true);
+        .text_center(s, ios, "iOS", T10, C_TEXT, Wt::Reg, true);
     hit.push((ios, Action::CornerSmoothingIos));
     let track = Rect::new(dd.x0 + 10.0, sy + 26.0, dd.x1 - 58.0, sy + 32.0);
     fill_rrect(s, track, R_SM, C_FIELD_2);
@@ -7227,7 +7182,7 @@ fn paint_gradient_controls(
         type_r.x0 + 8.0,
         type_r.y0 + 6.0,
         &label,
-        T_UI,
+        T10,
         C_TEXT,
         Wt::Reg,
     );
@@ -7262,13 +7217,13 @@ fn paint_gradient_controls(
         flip_r.x0 + 24.0,
         flip_r.y0 + 6.0,
         "Flip",
-        T_UI,
+        T10,
         C_TEXT,
         Wt::Reg,
     );
     hit.push((flip_r, Action::FlipGradient));
 
-    let rotate_r = Rect::new(x0 + 70.0, y, xr - 115.0, y + 24.0);
+    let rotate_r = Rect::new(x0 + 70.0, y, x0 + 200.0, y + 24.0);
     input_box(app, s, rotate_r, 6.0);
     draw_icon(
         s,
@@ -7283,7 +7238,7 @@ fn paint_gradient_controls(
         rotate_r.x0 + 24.0,
         rotate_r.y0 + 6.0,
         "90°",
-        T_UI,
+        T10,
         C_TEXT,
         Wt::Reg,
     );
@@ -7390,7 +7345,7 @@ fn paint_gradient_controls(
         add_r.x0 + 24.0,
         add_r.y0 + 4.0,
         "Add",
-        T_UI,
+        T10,
         C_TEXT,
         Wt::Reg,
     );
@@ -7426,7 +7381,7 @@ fn paint_gradient_controls(
             remove_r.x0 + 24.0,
             remove_r.y0 + 4.0,
             "Remove",
-            T_UI,
+            T10,
             C_TEXT,
             Wt::Reg,
         );
@@ -7451,7 +7406,7 @@ fn paint_image_adjustments(
     // The panel lays its sliders out from x0 with fixed widths, so the right
     // edge it is handed is never read; kept in the signature because every
     // other inspector panel takes the same (x0, xr, y) box.
-    xr: f64,
+    _xr: f64,
     y: f64,
 ) -> f64 {
     if !is_image_node(app) {
@@ -7465,14 +7420,14 @@ fn paint_image_adjustments(
     y += 20.0;
 
     if let Some(fit) = selected_image_fit(app) {
-        let mode_r = Rect::new(x0, y, xr - 95.0, y + 26.0);
+        let mode_r = Rect::new(x0, y, x0 + 220.0, y + 26.0);
         input_box(app, s, mode_r, 6.0);
         app.fonts.text(
             s,
             mode_r.x0 + 8.0,
             mode_r.y0 + 7.0,
             &format!("Fill mode  ·  {}", image_fit_label(fit)),
-            T_UI,
+            T10,
             C_TEXT,
             Wt::Reg,
         );
@@ -7500,14 +7455,14 @@ fn paint_image_adjustments(
     if app.crop.is_some() {
         app.fonts.caps_label(s, x0, y, "CROP", C_TEXT, Wt::Med);
         y += 20.0;
-        let fit_r = Rect::new(x0, y, xr - 95.0, y + 26.0);
+        let fit_r = Rect::new(x0, y, x0 + 220.0, y + 26.0);
         input_box(app, s, fit_r, 6.0);
         app.fonts.text(
             s,
             fit_r.x0 + 8.0,
             fit_r.y0 + 7.0,
             "Resize to fit",
-            T_UI,
+            T10,
             C_TEXT,
             Wt::Reg,
         );
@@ -7518,7 +7473,7 @@ fn paint_image_adjustments(
             x0,
             y,
             "Drag a corner to crop - Enter applies, Esc cancels",
-            T_UI,
+            T10,
             C_DIM,
             Wt::Reg,
         );
@@ -7564,10 +7519,10 @@ fn paint_image_adjustments(
             .unwrap_or(0.0);
 
         // Label
-        app.fonts.text(s, x0, y + 4.0, label, T_UI, C_DIM, Wt::Reg);
+        app.fonts.text(s, x0, y + 4.0, label, T10, C_DIM, Wt::Reg);
 
         // Slider track
-        let slider_r = Rect::new(x0 + 100.0, y, xr - 95.0, y + 20.0);
+        let slider_r = Rect::new(x0 + 100.0, y, x0 + 220.0, y + 20.0);
         fill_rrect(s, slider_r, R_SM, C_FIELD);
 
         // Slider fill (centered at 0)
@@ -7584,7 +7539,7 @@ fn paint_image_adjustments(
         // Value label
         let val_label = format!("{:.0}%", value * 100.0);
         app.fonts
-            .text(s, xr - 85.0, y + 4.0, &val_label, T_UI, C_TEXT, Wt::Mono);
+            .text(s, x0 + 230.0, y + 4.0, &val_label, T10, C_TEXT, Wt::Mono);
 
         // Hit area for slider
         // A click is a real slider write, not a fixed demo increment: the
@@ -7609,7 +7564,7 @@ fn paint_image_adjustments(
     fill_rrect(s, reset_r, R_MD, if hov { C_FIELD_2 } else { C_FIELD });
     stroke_rrect(s, reset_r, R_MD, C_LINE, 1.0);
     app.fonts
-        .text_center(s, reset_r, "Reset", T_UI, C_TEXT, Wt::Reg, true);
+        .text_center(s, reset_r, "Reset", T10, C_TEXT, Wt::Reg, true);
     hit.push((reset_r, Action::ResetImageAdjustments));
 
     // Rotate buttons
@@ -7630,13 +7585,13 @@ fn paint_image_adjustments(
         rot_cw_r.x0 + 24.0,
         rot_cw_r.y0 + 6.0,
         "90°",
-        T_UI,
+        T10,
         C_TEXT,
         Wt::Reg,
     );
     hit.push((rot_cw_r, Action::RotateImage { clockwise: true }));
 
-    let rot_ccw_r = Rect::new(xr - 165.0, y, xr - 115.0, y + 24.0);
+    let rot_ccw_r = Rect::new(x0 + 150.0, y, x0 + 200.0, y + 24.0);
     let hov = hover(app, rot_ccw_r);
     fill_rrect(s, rot_ccw_r, R_MD, if hov { C_FIELD_2 } else { C_FIELD });
     stroke_rrect(s, rot_ccw_r, R_MD, C_LINE, 1.0);
@@ -7653,7 +7608,7 @@ fn paint_image_adjustments(
         rot_ccw_r.x0 + 24.0,
         rot_ccw_r.y0 + 6.0,
         "90°",
-        T_UI,
+        T10,
         C_TEXT,
         Wt::Reg,
     );
@@ -7664,7 +7619,7 @@ fn paint_image_adjustments(
     // transform row with Rotate 90° on purpose: the band below belongs to the
     // Typography offsets (which keep their reference positions), and a row
     // painted under one of those is a row whose hit rect never wins.
-    let flip_h_r = Rect::new(xr - 105.0, y, xr - 61.0, y + 24.0);
+    let flip_h_r = Rect::new(x0 + 210.0, y, x0 + 254.0, y + 24.0);
     let hov = hover(app, flip_h_r);
     fill_rrect(s, flip_h_r, R_MD, if hov { C_FIELD_2 } else { C_FIELD });
     stroke_rrect(s, flip_h_r, R_MD, C_LINE, 1.0);
@@ -7680,7 +7635,7 @@ fn paint_image_adjustments(
     app.image_row = Some(flip_h_r);
     hit.push((flip_h_r, Action::FlipImage { horizontal: true }));
 
-    let flip_v_r = Rect::new(xr - 53.0, y, xr - 9.0, y + 24.0);
+    let flip_v_r = Rect::new(x0 + 262.0, y, x0 + 306.0, y + 24.0);
     let hov = hover(app, flip_v_r);
     fill_rrect(s, flip_v_r, R_MD, if hov { C_FIELD_2 } else { C_FIELD });
     stroke_rrect(s, flip_v_r, R_MD, C_LINE, 1.0);
@@ -7828,7 +7783,7 @@ fn paint_paint_row(
         s,
         hit,
         ar,
-        Some(("%", T_UI)),
+        Some(("%", T10)),
         &field_val(app, alpha_field, "100".into()),
         false,
         Some(Action::Field(alpha_field)),
@@ -7897,7 +7852,7 @@ fn paint_zoom_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action
         app.fonts
             .text(s, r.x0 + 32.0, r.y0 + 9.0, name, T11, C_TEXT, Wt::Reg);
         app.fonts
-            .text_right(s, r.x1 - 10.0, r.y0 + 10.0, sc, T_UI, C_DIM, Wt::Reg, 0.0);
+            .text_right(s, r.x1 - 10.0, r.y0 + 10.0, sc, T10, C_DIM, Wt::Reg, 0.0);
         hit.push((r, Action::ZoomStep(i)));
     }
 }
@@ -7933,16 +7888,9 @@ fn paint_frame_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Actio
             Wt::Reg,
         );
         let dims = format!("{} × {}", w as i64, h as i64);
-        let dw = app.fonts.measure(&dims, T_UI, Wt::Reg);
-        app.fonts.text(
-            s,
-            r.x1 - 10.0 - dw,
-            r.y0 + 11.0,
-            &dims,
-            T_UI,
-            C_DIM,
-            Wt::Reg,
-        );
+        let dw = app.fonts.measure(&dims, T10, Wt::Reg);
+        app.fonts
+            .text(s, r.x1 - 10.0 - dw, r.y0 + 11.0, &dims, T10, C_DIM, Wt::Reg);
         hit.push((r, Action::FramePreset(i)));
     }
 }
@@ -8212,8 +8160,7 @@ fn proto_scroll_row(
 ) {
     let (x0, xr) = span;
     let (caption, value, menu) = field;
-    app.fonts
-        .text(s, x0, y + 6.5, caption, T_UI, C_DIM, Wt::Reg);
+    app.fonts.text(s, x0, y + 6.5, caption, T10, C_DIM, Wt::Reg);
     let fr = Rect::new(x0 + 74.0, y, xr, y + INPUT_H);
     if app.dropdown_proto_scroll == Some(menu) {
         app.proto_scroll_dd_anchor = (fr.x0, fr.y1);
@@ -8609,7 +8556,7 @@ fn paint_paint_library(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action
             }
             LibRow::Note(text) => {
                 app.fonts
-                    .text(s, dd.x0 + 10.0, y + 6.0, &text, T_UI, C_DIM, Wt::Reg);
+                    .text(s, dd.x0 + 10.0, y + 6.0, &text, T10, C_DIM, Wt::Reg);
                 y += LIB_NOTE_H;
             }
             LibRow::Item {
@@ -8809,12 +8756,12 @@ fn paint_slice_chrome(app: &mut App, s: &mut Scene) {
         let b = app.world_to_screen(Point::new(wr.x1, wr.y1));
         let r = Rect::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y));
         stroke_rect_dashed(s, r, C_SEL, 1.0, 6.0, 4.0);
-        let tw = app.fonts.measure(&name, T_UI, Wt::Reg) + 12.0;
+        let tw = app.fonts.measure(&name, T10, Wt::Reg) + 12.0;
         let cy = (r.y0 - 18.0).max(reg.canvas.y0 + 2.0);
         let chip = Rect::new(r.x0, cy, r.x0 + tw, cy + 16.0);
         fill_rrect(s, chip, R_SM, C_TEXT);
         app.fonts
-            .text_center(s, chip, &name, T_UI, C_BASE, Wt::Med, true);
+            .text_center(s, chip, &name, T10, C_BASE, Wt::Med, true);
     }
 }
 
@@ -8862,12 +8809,12 @@ fn paint_variant_chrome(app: &mut App, s: &mut Scene) {
         }
         let r = to_screen(wr);
         stroke_rect_dashed(s, r, C_SET, 1.0, 6.0, 4.0);
-        let tw = app.fonts.measure(&name, T_UI, Wt::Reg) + 12.0;
+        let tw = app.fonts.measure(&name, T10, Wt::Reg) + 12.0;
         let cy = (r.y1 + 2.0).min(reg.canvas.y1 - 18.0);
         let chip = Rect::new(r.x0, cy, r.x0 + tw, cy + 16.0);
         fill_rrect(s, chip, R_SM, C_SET);
         app.fonts
-            .text_center(s, chip, &name, T_UI, C_ON_ACCENT, Wt::Med, true);
+            .text_center(s, chip, &name, T10, C_ON_ACCENT, Wt::Med, true);
     }
 }
 
@@ -9089,7 +9036,7 @@ fn paint_effects_section(
     let layers = app.effect_layers_of(&id);
     app.effect_rows.clear();
     if layers.is_empty() {
-        app.fonts.text(s, x0, y, "No effects", T_UI, C_DIM, Wt::Reg);
+        app.fonts.text(s, x0, y, "No effects", T10, C_DIM, Wt::Reg);
         y += 20.0;
         return y;
     }
@@ -9188,7 +9135,7 @@ fn paint_effects_section(
                 if cx + col_w > xr {
                     break;
                 }
-                app.fonts.text(s, cx, sy, f.label(), T_UI, C_DIM, Wt::Reg);
+                app.fonts.text(s, cx, sy, f.label(), T10, C_DIM, Wt::Reg);
             }
             sy += 12.0 + LABEL_GAP;
             for (k, (f, v)) in cols.iter().enumerate() {
@@ -9225,7 +9172,7 @@ fn paint_effects_section(
                 fill_rrect(s, sw, R_XS, color);
                 stroke_rrect(s, sw, R_XS, C_LINE_2, 1.0);
                 app.fonts
-                    .text(s, fr.x0 + 26.0, sy + 5.0, "Fill", T_UI, C_DIM, Wt::Reg);
+                    .text(s, fr.x0 + 26.0, sy + 5.0, "Fill", T10, C_DIM, Wt::Reg);
                 hit.push((
                     sw,
                     Action::ToggleColorPicker(crate::state::PaintTarget::Effect(i)),
@@ -9243,7 +9190,7 @@ fn paint_effects_section(
                 blend_row.x0 + 8.0,
                 sy + 5.0,
                 "Blend",
-                T_UI,
+                T10,
                 C_TEXT,
                 Wt::Reg,
             );
@@ -9957,12 +9904,12 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
             let label = format!("{} × {}", wr.width().round(), wr.height().round());
             (r, label)
         };
-        let tw = app.fonts.measure(&label, T_UI, Wt::Reg) + 12.0;
+        let tw = app.fonts.measure(&label, T10, Wt::Reg) + 12.0;
         let bx = r.x0.min(reg.canvas.x1 - tw - 4.0).max(reg.canvas.x0 + 4.0);
         let chip = Rect::new(bx, r.y1 + 6.0, bx + tw, r.y1 + 24.0);
         fill_rrect(s, chip, R_SM, C_TEXT);
         app.fonts
-            .text_center(s, chip, &label, T_UI, C_BASE, Wt::Med, true);
+            .text_center(s, chip, &label, T10, C_BASE, Wt::Med, true);
     }
     // scale-tool drag (K) — the same deal as the create preview: the box the
     // gesture will commit, drawn through `state::scaled_box`, with the ratio
@@ -9982,12 +9929,12 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
         let r = Rect::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y));
         stroke_rect(s, r, C_SEL, 1.0);
         let label = format!("{}%", (*applied * 100.0).round() as i64);
-        let tw = app.fonts.measure(&label, T_UI, Wt::Reg) + 12.0;
+        let tw = app.fonts.measure(&label, T10, Wt::Reg) + 12.0;
         let bx = r.x0.min(reg.canvas.x1 - tw - 4.0).max(reg.canvas.x0 + 4.0);
         let chip = Rect::new(bx, r.y1 + 6.0, bx + tw, r.y1 + 24.0);
         fill_rrect(s, chip, R_SM, C_TEXT);
         app.fonts
-            .text_center(s, chip, &label, T_UI, C_BASE, Wt::Med, true);
+            .text_center(s, chip, &label, T10, C_BASE, Wt::Med, true);
     }
     // pen preview
     if let Some(crate::state::Drag::Pen { points, cursor }) = &app.drag {
@@ -10254,7 +10201,7 @@ fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         panel.x0 + 14.0,
         panel.y0 + 87.0,
         &format!("#{}", crate::state::color_hex(current)),
-        T_UI,
+        T10,
         C_TEXT,
         Wt::Mono,
     );
@@ -10263,7 +10210,7 @@ fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         panel.x0 + 14.0,
         panel.y0 + 104.0,
         "Choose a preset or edit the hex field",
-        T_UI,
+        T10,
         C_DIM,
         Wt::Reg,
     );
@@ -10285,19 +10232,19 @@ fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         brow.x0 + 8.0,
         brow.y0 + 7.0,
         "Apply blend mode",
-        T_UI,
+        T10,
         C_TEXT,
         Wt::Reg,
     );
     let cur_blend = paint_target_blend(app, paint_target);
     let cb = cur_blend.label();
-    let cbw = app.fonts.measure(cb, T_UI, Wt::Reg);
+    let cbw = app.fonts.measure(cb, T10, Wt::Reg);
     app.fonts.text(
         s,
         brow.x1 - 20.0 - cbw,
         brow.y0 + 7.0,
         cb,
-        T_UI,
+        T10,
         C_DIM,
         Wt::Reg,
     );
@@ -10533,10 +10480,6 @@ pub fn palette_commands() -> Vec<Command> {
             shortcut: "⇧ ⌘ G",
         },
         Command {
-            label: "Clean up layers",
-            shortcut: "",
-        },
-        Command {
             label: "Bring to front",
             shortcut: "⇧ ⌘ ]",
         },
@@ -10707,19 +10650,17 @@ fn paint_palette(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             x + 22.0,
             ry + 8.0,
             all[ci].label,
-            // one size for every row — Figma marks the active palette row with
-            // its fill and ink, never by changing the type size
-            T_UI,
+            if active { T11 } else { T10 },
             if active { C_TEXT } else { C_MUTED },
             Wt::Reg,
         );
-        let sw = app.fonts.measure(all[ci].shortcut, T_UI, Wt::Reg);
+        let sw = app.fonts.measure(all[ci].shortcut, T10, Wt::Reg);
         app.fonts.text(
             s,
             x + pw - 22.0 - sw,
             ry + 9.0,
             all[ci].shortcut,
-            T_UI,
+            T10,
             C_DIM,
             Wt::Reg,
         );
@@ -10837,7 +10778,7 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
                 s,
                 Rect::new(pin.x1 - 10.0, pin.y0 - 8.0, pin.x1 + 8.0, pin.y0 + 10.0),
                 &n,
-                T_UI,
+                T10,
                 C_TEXT,
                 Wt::Semi,
                 false,
@@ -10845,7 +10786,7 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
         }
         // collapsed preview bubble on hover (not while its thread is open)
         if hov && !open {
-            let w = (app.fonts.measure(&c.text, T_UI, Wt::Reg) + 24.0).min(240.0);
+            let w = (app.fonts.measure(&c.text, T10, Wt::Reg) + 24.0).min(240.0);
             let b = Rect::new(pin.x1 + 6.0, pin.y0 + 1.0, pin.x1 + 6.0 + w, pin.y1 - 1.0);
             elev_shadow(s, b, 8.0, Elevation::Floating);
             fill_rrect(s, b, R_XL, C_FIELD);
@@ -10861,7 +10802,7 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
                 )
             };
             app.fonts
-                .text(s, b.x0 + 12.0, b.y0 + 9.0, &hint, T_UI, C_TEXT, Wt::Reg);
+                .text(s, b.x0 + 12.0, b.y0 + 9.0, &hint, T10, C_TEXT, Wt::Reg);
         }
         // open thread popover (grows with the thread)
         if open {
@@ -10880,7 +10821,7 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
                 card.x0 + 12.0,
                 card.y0 + 10.0,
                 &c.author,
-                T_UI,
+                T10,
                 C_DIM,
                 Wt::Med,
             );
@@ -10914,7 +10855,7 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
                 s,
                 pill,
                 label,
-                T_UI,
+                T10,
                 if c.resolved { C_MUTED } else { C_ACCENT_INK },
                 Wt::Med,
                 true,
@@ -10935,14 +10876,14 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
                 let ry = card.y0 + 76.0 + i as f64 * 18.0;
                 hline(s, card.x0 + 10.0, card.x1 - 10.0, ry, C_LINE);
                 app.fonts
-                    .text(s, card.x0 + 12.0, ry + 3.0, &r.author, T_UI, C_DIM, Wt::Med);
+                    .text(s, card.x0 + 12.0, ry + 3.0, &r.author, T10, C_DIM, Wt::Med);
                 let shown_r: String = if r.text.chars().count() > 26 {
                     format!("{}…", r.text.chars().take(26).collect::<String>())
                 } else {
                     r.text.clone()
                 };
                 app.fonts
-                    .text(s, card.x0 + 76.0, ry + 3.0, &shown_r, T_UI, C_TEXT, Wt::Reg);
+                    .text(s, card.x0 + 76.0, ry + 3.0, &shown_r, T10, C_TEXT, Wt::Reg);
                 // per-reply delete ✕
                 let xb = Rect::new(card.x1 - 40.0, ry + 1.0, card.x1 - 22.0, ry + 16.0);
                 if hover(app, xb) {
@@ -10961,7 +10902,7 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
             );
             stroke_rrect(s, rbtn, R_MD, C_LINE_2, 1.0);
             app.fonts
-                .text_center(s, rbtn, "Reply", T_UI, C_ACCENT_INK, Wt::Med, true);
+                .text_center(s, rbtn, "Reply", T10, C_ACCENT_INK, Wt::Med, true);
         }
     }
     // the composer (new comment)
@@ -10987,7 +10928,7 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
             card.x0 + 28.0,
             card.y0 + 10.0,
             &title,
-            T_UI,
+            T10,
             C_DIM,
             Wt::Med,
         );
@@ -11024,7 +10965,7 @@ fn paint_comments(app: &mut App, s: &mut Scene) {
         fill_rrect(s, post, R_MD, if hov_p { C_FIELD_2 } else { C_PANEL });
         stroke_rrect(s, post, R_MD, C_SEL, 1.0);
         app.fonts
-            .text_center(s, post, "Post", T_UI, C_ACCENT_INK, Wt::Med, true);
+            .text_center(s, post, "Post", T10, C_ACCENT_INK, Wt::Med, true);
         // author dot anchored at the pin
         s.fill(
             vello::peniko::Fill::NonZero,
@@ -11069,7 +11010,7 @@ fn paint_ux_analysis(
         x0 + 16.0,
         y,
         "Analyze your design for usability, accessibility, and best practices.",
-        T_UI,
+        T10,
         C_DIM,
         Wt::Reg,
     );
@@ -11119,11 +11060,11 @@ fn paint_ux_analysis(
 
         // Title
         app.fonts
-            .text(s, x0 + 24.0, y + 14.0, title, T_UI, C_TEXT, Wt::Med);
+            .text(s, x0 + 24.0, y + 14.0, title, T10, C_TEXT, Wt::Med);
 
         // Description
         app.fonts
-            .text(s, x0 + 24.0, y + 34.0, desc, T_UI, C_DIM, Wt::Reg);
+            .text(s, x0 + 24.0, y + 34.0, desc, T10, C_DIM, Wt::Reg);
 
         hit.push((card_r, action.clone()));
 
@@ -11145,7 +11086,7 @@ fn paint_ux_analysis(
             x0 + 16.0,
             y,
             "SELECTED ELEMENT ANALYSIS",
-            T_UI,
+            T10,
             C_TEXT,
             Wt::Semi,
         );
@@ -11156,7 +11097,7 @@ fn paint_ux_analysis(
             x0 + 16.0,
             y,
             &format!("{} element(s) selected", sel.len()),
-            T_UI,
+            T10,
             C_DIM,
             Wt::Reg,
         );
@@ -11170,7 +11111,7 @@ fn paint_ux_analysis(
 
                 let name = node.name.clone();
                 app.fonts
-                    .text(s, x0 + 24.0, y + 12.0, &name, T_UI, C_TEXT, Wt::Reg);
+                    .text(s, x0 + 24.0, y + 12.0, &name, T10, C_TEXT, Wt::Reg);
 
                 // Quick metrics
                 match &node.kind {
@@ -11180,7 +11121,7 @@ fn paint_ux_analysis(
                             x0 + 24.0,
                             y + 26.0,
                             "\u{2713} Text layer",
-                            T_UI,
+                            T10,
                             C_SUCCESS,
                             Wt::Reg,
                         );
@@ -11191,7 +11132,7 @@ fn paint_ux_analysis(
                             x0 + 24.0,
                             y + 26.0,
                             "\u{2713} Container",
-                            T_UI,
+                            T10,
                             C_SUCCESS,
                             Wt::Reg,
                         );
@@ -11213,7 +11154,7 @@ fn paint_ux_analysis(
             s,
             empty_r,
             "Select an element to analyze",
-            T_UI,
+            T10,
             C_DIM,
             Wt::Reg,
             true,
@@ -11259,7 +11200,7 @@ fn paint_inspect(
             s,
             r,
             name,
-            T_UI,
+            T10,
             if active { C_TEXT } else { C_DIM },
             if active { Wt::Med } else { Wt::Reg },
             true,
@@ -11290,7 +11231,7 @@ fn paint_inspect(
             x0 + pad,
             y + pad + 4.0,
             "Select a layer to inspect",
-            T_UI,
+            T10,
             C_MUTED,
             Wt::Reg,
         );
@@ -11301,7 +11242,7 @@ fn paint_inspect(
                 panel.x0 + pad,
                 panel.y0 + pad + i as f64 * row_h + 2.5,
                 line,
-                T_UI,
+                T10,
                 C_TEXT,
                 Wt::Mono,
             );
@@ -11332,7 +11273,7 @@ fn paint_inspect(
         cb.x0 + 27.0,
         cb.y0 + 5.5,
         "Copy code",
-        T_UI,
+        T10,
         if enabled { C_TEXT } else { C_MUTED },
         Wt::Reg,
     );
@@ -11461,7 +11402,7 @@ fn paint_prototype(
         let ab = Rect::new(xr - 66.0, y - 4.0, xr, y + 14.0);
         input_box(app, s, ab, 6.0);
         app.fonts
-            .text_center(s, ab, "+ Add", T_UI, C_TEXT, Wt::Med, true);
+            .text_center(s, ab, "+ Add", T10, C_TEXT, Wt::Med, true);
         hit.push((ab, Action::ProtoAdd));
         let _ = hb;
         y += 24.0;
@@ -11473,7 +11414,7 @@ fn paint_prototype(
                 x0,
                 y,
                 "Nothing wired — add an interaction",
-                T_UI,
+                T10,
                 C_MUTED,
                 Wt::Reg,
             );
@@ -11506,7 +11447,7 @@ fn paint_prototype(
                 _ => 60.0,
             };
             let label = ix.trigger.label();
-            let want = app.fonts.measure(label, T_UI, Wt::Reg) + 10.0;
+            let want = app.fonts.measure(label, T10, Wt::Reg) + 10.0;
             let room = ((xr - x0) - (pw + 15.0)).max(56.0);
             let tw = want.clamp(56.0, room);
             let tx1 = (x0 + 5.0 + tw).min(xr - 5.0);
@@ -11515,9 +11456,9 @@ fn paint_prototype(
                 app.proto_trigger_dd_anchor = (tb.x0, tb.y1);
             }
             input_box(app, s, tb, 4.0);
-            let shown = app.fonts.truncate(label, T_UI, Wt::Reg, tb.width() - 8.0);
+            let shown = app.fonts.truncate(label, T10, Wt::Reg, tb.width() - 8.0);
             app.fonts
-                .text(s, tb.x0 + 4.0, y + 6.0, &shown, T_UI, C_TEXT, Wt::Reg);
+                .text(s, tb.x0 + 4.0, y + 6.0, &shown, T10, C_TEXT, Wt::Reg);
             hit.push((tb, Action::ProtoTrigger(i)));
 
             // The parameter a "when" trigger carries — Figma's delay, key or
@@ -11532,7 +11473,7 @@ fn paint_prototype(
                         pb.x0 + 4.0,
                         y + 6.0,
                         &format!("{}ms", ms),
-                        T_UI,
+                        T10,
                         C_TEXT,
                         Wt::Mono,
                     );
@@ -11548,9 +11489,9 @@ fn paint_prototype(
                     } else {
                         (key.clone(), C_TEXT)
                     };
-                    let shown = app.fonts.truncate(&text, T_UI, Wt::Mono, pb.width() - 8.0);
+                    let shown = app.fonts.truncate(&text, T10, Wt::Mono, pb.width() - 8.0);
                     app.fonts
-                        .text(s, pb.x0 + 4.0, y + 6.0, &shown, T_UI, ink, Wt::Mono);
+                        .text(s, pb.x0 + 4.0, y + 6.0, &shown, T10, ink, Wt::Mono);
                     hit.push((pb, Action::ProtoEditKey(i)));
                 }
                 x_native::Trigger::WhenVideoHits { time } => {
@@ -11560,7 +11501,7 @@ fn paint_prototype(
                         pb.x0 + 4.0,
                         y + 6.0,
                         &format!("{:.1}s", time),
-                        T_UI,
+                        T10,
                         C_TEXT,
                         Wt::Mono,
                     );
@@ -11581,7 +11522,7 @@ fn paint_prototype(
                 ab.x0 + 4.0,
                 action_y + 2.0,
                 proto_action_type_label(&ix.action),
-                T_UI,
+                T10,
                 C_TEXT,
                 Wt::Reg,
             );
@@ -11612,16 +11553,16 @@ fn paint_prototype(
             if let Some(name) = dest {
                 let arrow = Rect::new(x0 + 100.0, action_y, x0 + 114.0, action_y + 20.0);
                 app.fonts
-                    .text(s, arrow.x0, action_y + 2.0, "→", T_UI, C_MUTED, Wt::Reg);
+                    .text(s, arrow.x0, action_y + 2.0, "→", T10, C_MUTED, Wt::Reg);
                 let db = Rect::new(arrow.x1, action_y, xr - 5.0, action_y + 20.0);
                 input_box(app, s, db, 4.0);
-                let target_text = app.fonts.truncate(name, T_UI, Wt::Reg, db.width() - 8.0);
+                let target_text = app.fonts.truncate(name, T10, Wt::Reg, db.width() - 8.0);
                 app.fonts.text(
                     s,
                     db.x0 + 4.0,
                     action_y + 2.0,
                     &target_text,
-                    T_UI,
+                    T10,
                     C_TEXT,
                     Wt::Reg,
                 );
@@ -11639,13 +11580,13 @@ fn paint_prototype(
             let animation = ix.animation.label();
             let animation = app
                 .fonts
-                .truncate(animation, T_UI, Wt::Reg, mb.width() - 8.0);
+                .truncate(animation, T10, Wt::Reg, mb.width() - 8.0);
             app.fonts.text(
                 s,
                 mb.x0 + 4.0,
                 motion_y + 2.0,
                 &animation,
-                T_UI,
+                T10,
                 C_TEXT,
                 Wt::Reg,
             );
@@ -11666,7 +11607,7 @@ fn paint_prototype(
                     s,
                     b,
                     glyph,
-                    T_UI,
+                    T10,
                     if lit { C_TEXT } else { C_DIM },
                     if lit { Wt::Med } else { Wt::Reg },
                     true,
@@ -11685,7 +11626,7 @@ fn paint_prototype(
                 sb.x0 + 4.0,
                 motion_y + 2.0,
                 &format!("{}ms", ix.transition_ms),
-                T_UI,
+                T10,
                 C_TEXT,
                 Wt::Mono,
             );
@@ -11700,7 +11641,7 @@ fn paint_prototype(
                 eb.x0 + 4.0,
                 row3_y + 2.0,
                 &format!("Easing: {}", ix.easing.label()),
-                T_UI,
+                T10,
                 C_TEXT,
                 Wt::Reg,
             );
@@ -11717,7 +11658,7 @@ fn paint_prototype(
                 } else {
                     "Reset: Off"
                 },
-                T_UI,
+                T10,
                 C_TEXT,
                 Wt::Reg,
             );
@@ -11725,7 +11666,7 @@ fn paint_prototype(
             let rb_rm = Rect::new(xr - 30.0, row3_y, xr - 5.0, row3_y + 20.0);
             input_box(app, s, rb_rm, 4.0);
             app.fonts
-                .text_center(s, rb_rm, "Remove", T_UI, C_TEXT, Wt::Reg, true);
+                .text_center(s, rb_rm, "Remove", T10, C_TEXT, Wt::Reg, true);
             hit.push((rb_rm, Action::ProtoRemove(i)));
 
             // URL is intentionally below the common controls so a link
@@ -11741,16 +11682,9 @@ fn paint_prototype(
                 };
                 let truncated = app
                     .fonts
-                    .truncate(&display_url, T_UI, Wt::Mono, ub.width() - 8.0);
-                app.fonts.text(
-                    s,
-                    ub.x0 + 4.0,
-                    y + 100.0,
-                    &truncated,
-                    T_UI,
-                    C_TEXT,
-                    Wt::Mono,
-                );
+                    .truncate(&display_url, T10, Wt::Mono, ub.width() - 8.0);
+                app.fonts
+                    .text(s, ub.x0 + 4.0, y + 100.0, &truncated, T10, C_TEXT, Wt::Mono);
                 hit.push((ub, Action::ProtoEditUrl(i)));
             }
 
@@ -11770,7 +11704,7 @@ fn paint_prototype(
                 cb.x1 + 8.0,
                 tick_y + 1.0,
                 crate::state::PROTO_MATCHING_LABEL,
-                T_UI,
+                T10,
                 C_TEXT,
                 Wt::Reg,
             );
@@ -11828,7 +11762,7 @@ fn paint_prototype(
         } else {
             "Select one layer or frame to wire its interactions"
         };
-        app.fonts.text(s, x0, y, hint, T_UI, C_MUTED, Wt::Reg);
+        app.fonts.text(s, x0, y, hint, T10, C_MUTED, Wt::Reg);
         y += 22.0;
     }
 
@@ -11837,9 +11771,9 @@ fn paint_prototype(
     let hov = hover(app, pb);
     fill_rrect(s, pb, R_MD, if hov { C_LINE_2 } else { C_FIELD_2 });
     stroke_rrect(s, pb, R_MD, C_LINE_2, 1.0);
-    let lw = app.fonts.measure("▶ Preview flow start", T_UI, Wt::Med);
+    let lw = app.fonts.measure("▶ Preview flow start", T10, Wt::Med);
     app.fonts
-        .text_center(s, pb, "▶  Preview flow start", T_UI, C_TEXT, Wt::Med, true);
+        .text_center(s, pb, "▶  Preview flow start", T10, C_TEXT, Wt::Med, true);
     let _ = lw;
     hit.push((pb, Action::FlowEnter));
     y += 44.0;
@@ -11850,7 +11784,7 @@ fn paint_prototype(
         x0,
         y,
         "Preview plays on the live canvas: click hit targets to",
-        T_UI,
+        T10,
         C_DIM,
         Wt::Reg,
     );
@@ -11860,7 +11794,7 @@ fn paint_prototype(
         x0,
         y,
         "navigate, Esc steps back, Q exits.",
-        T_UI,
+        T10,
         C_DIM,
         Wt::Reg,
     );
@@ -12050,7 +11984,7 @@ fn paint_flow_overlay(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         } else {
             "Device"
         },
-        T_UI,
+        T10,
         C_TEXT,
         Wt::Med,
         true,
@@ -12077,7 +12011,7 @@ fn paint_flow_overlay(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         s,
         bb,
         "← Back",
-        T_UI,
+        T10,
         if flow.stack.is_empty() {
             C_MUTED
         } else {
@@ -12097,7 +12031,7 @@ fn paint_flow_overlay(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
     );
     fill_rrect(s, eb, R_MD, C_FIELD_2);
     app.fonts
-        .text_center(s, eb, "Exit (Q)", T_UI, C_TEXT, Wt::Reg, true);
+        .text_center(s, eb, "Exit (Q)", T10, C_TEXT, Wt::Reg, true);
     hit.push((eb, Action::FlowExit));
 }
 
@@ -12145,7 +12079,7 @@ fn paint_lib_review(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>)
             rv.changes.len(),
             if rv.changes.len() == 1 { "" } else { "s" }
         ),
-        T_UI,
+        T10,
         C_MUTED,
         Wt::Reg,
     );
@@ -12178,7 +12112,7 @@ fn paint_lib_review(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>)
             cx + 40.0,
             cy + 64.0 + 8.0 * row_h,
             &format!("… and {} more", rv.changes.len() - 8),
-            T_UI,
+            T10,
             C_DIM,
             Wt::Reg,
         );
@@ -12228,7 +12162,7 @@ fn paint_assets(
     let fams = app.fonts.fonts.families();
     if fams.is_empty() {
         app.fonts
-            .text(s, x0, y, "No faces registered", T_UI, C_MUTED, Wt::Reg);
+            .text(s, x0, y, "No faces registered", T10, C_MUTED, Wt::Reg);
         y += 18.0;
     }
     for (fam, faces) in fams.iter().take(24) {
@@ -12237,8 +12171,7 @@ fn paint_assets(
         } else {
             fam.clone()
         };
-        app.fonts
-            .text(s, x0 + 4.0, y, &label, T_UI, C_TEXT, Wt::Reg);
+        app.fonts.text(s, x0 + 4.0, y, &label, T10, C_TEXT, Wt::Reg);
         y += 16.0;
     }
     if fams.len() > 24 {
@@ -12247,7 +12180,7 @@ fn paint_assets(
             x0 + 4.0,
             y,
             &format!("… {} more families", fams.len() - 24),
-            T_UI,
+            T10,
             C_MUTED,
             Wt::Reg,
         );
@@ -12257,7 +12190,7 @@ fn paint_assets(
     let br = Rect::new(x0, y, lw - 12.0, y + 26.0);
     input_box(app, s, br, 6.0);
     app.fonts
-        .text_center(s, br, "Load Font…", T_UI, C_TEXT, Wt::Med, true);
+        .text_center(s, br, "Load Font…", T10, C_TEXT, Wt::Med, true);
     hit.push((br, Action::LoadFont));
     y += 34.0;
     let publish = Rect::new(x0, y, lw - 12.0, y + 26.0);
@@ -12273,7 +12206,7 @@ fn paint_assets(
     );
     stroke_rrect(s, publish, R_MD, C_LINE_2, 1.0);
     app.fonts
-        .text_center(s, publish, "Publish library…", T_UI, C_TEXT, Wt::Med, true);
+        .text_center(s, publish, "Publish library…", T10, C_TEXT, Wt::Med, true);
     hit.push((publish, Action::PublishLibrary));
     y += 34.0;
     app.fonts.text(
@@ -12281,7 +12214,7 @@ fn paint_assets(
         x0,
         y,
         "TTF / OTF / TTC; text layers can then use it by name",
-        T_UI,
+        T10,
         C_MUTED,
         Wt::Reg,
     );
@@ -12308,24 +12241,24 @@ fn paint_assets(
                 fill_rrect(s, hover_r, R_SM, C_ROW_HOVER);
             }
             draw_icon(s, "component", x0 + 3.0, row_t + 4.0, ICON_XS, C_MUTED);
-            let label = app.fonts.truncate(id, T_UI, Wt::Med, lw - 92.0);
+            let label = app.fonts.truncate(id, T10, Wt::Med, lw - 92.0);
             app.fonts.text(
                 s,
                 x0 + 20.0,
-                line_top(hover_r, T_UI),
+                line_top(hover_r, T10),
                 &label,
-                T_UI,
+                T10,
                 C_TEXT,
                 Wt::Med,
             );
             let vs = format!("v{ver}");
-            let vw2 = app.fonts.measure(&vs, T_UI, Wt::Mono);
+            let vw2 = app.fonts.measure(&vs, T10, Wt::Mono);
             app.fonts.text(
                 s,
                 lw - 74.0 - vw2,
-                line_top(hover_r, T_UI),
+                line_top(hover_r, T10),
                 &vs,
-                T_UI,
+                T10,
                 C_MUTED,
                 Wt::Mono,
             );
@@ -12333,7 +12266,7 @@ fn paint_assets(
             let cb = Rect::new(lw - 66.0, row_t + 2.0, lw - 16.0, row_t + 18.0);
             fill_rrect(s, cb, R_SM, if hover(app, cb) { C_LINE_2 } else { C_FIELD });
             app.fonts
-                .text_center(s, cb, "check", T_UI, C_TEXT, Wt::Reg, true);
+                .text_center(s, cb, "check", T10, C_TEXT, Wt::Reg, true);
             hit.push((cb, Action::LibCheckUpdate(i)));
         }
     }
@@ -12369,7 +12302,7 @@ fn paint_tokens(
             x0,
             y,
             "No painted content to analyze yet",
-            T_UI,
+            T10,
             C_MUTED,
             Wt::Reg,
         );
@@ -12379,20 +12312,20 @@ fn paint_tokens(
         // the 12px swatch centres on the 15px line box it labels
         let sw = Rect::new(
             x0 + 4.0,
-            y + centre_in(ICON_XS, T_UI * CSS_LH),
+            y + centre_in(ICON_XS, T10 * CSS_LH),
             x0 + 16.0,
-            y + centre_in(ICON_XS, T_UI * CSS_LH) + ICON_XS,
+            y + centre_in(ICON_XS, T10 * CSS_LH) + ICON_XS,
         );
         if let Some(c) = x_native::parse_hex_color(hex) {
             fill_rrect(s, sw, R_SM, c);
             stroke_rrect(s, sw, R_SM, C_LINE_2, 1.0);
         }
-        app.fonts.text(s, x0 + 24.0, y, hex, T_UI, C_TEXT, Wt::Mono);
+        app.fonts.text(s, x0 + 24.0, y, hex, T10, C_TEXT, Wt::Mono);
         let cnt = format!("×{count}");
-        let cw = app.fonts.measure(&cnt, T_UI, Wt::Reg);
+        let cw = app.fonts.measure(&cnt, T10, Wt::Reg);
         // the count rides the same baseline as the hex it counts
         app.fonts
-            .text(s, lw - 12.0 - cw, y, &cnt, T_UI, C_MUTED, Wt::Reg);
+            .text(s, lw - 12.0 - cw, y, &cnt, T10, C_MUTED, Wt::Reg);
         y += 18.0;
     }
     if !tokens.font_sizes.is_empty() {
@@ -12407,7 +12340,7 @@ fn paint_tokens(
             .map(|(sz, _)| sz.clone())
             .collect::<Vec<_>>()
             .join(" · ");
-        app.fonts.text(s, x0 + 4.0, y, &row, T_UI, C_TEXT, Wt::Mono);
+        app.fonts.text(s, x0 + 4.0, y, &row, T10, C_TEXT, Wt::Mono);
         y += 18.0;
     }
     if !tokens.gaps.is_empty() {
@@ -12421,8 +12354,7 @@ fn paint_tokens(
                 .collect::<Vec<_>>()
                 .join(" · ")
         );
-        app.fonts
-            .text(s, x0 + 4.0, y, &row, T_UI, C_MUTED, Wt::Mono);
+        app.fonts.text(s, x0 + 4.0, y, &row, T10, C_MUTED, Wt::Mono);
         y += 16.0;
     }
     let vcount = app
@@ -12444,7 +12376,7 @@ fn paint_tokens(
         } else {
             "Generate variables from tokens"
         },
-        T_UI,
+        T10,
         if tokens.colors.is_empty() {
             C_MUTED
         } else {
@@ -12486,7 +12418,7 @@ fn paint_tokens(
         );
         stroke_rrect(s, br, R_MD, C_LINE_2, 1.0);
         app.fonts
-            .text_center(s, br, label, T_UI, C_TEXT, Wt::Med, true);
+            .text_center(s, br, label, T10, C_TEXT, Wt::Med, true);
         hit.push((br, Action::CreateVariable(kind)));
     }
     y += 66.0;
@@ -12558,7 +12490,7 @@ fn paint_tokens(
                 _ => "B",
             };
             app.fonts
-                .text_center(s, kr, glyph, T_UI, C_DIM, Wt::Med, true);
+                .text_center(s, kr, glyph, T10, C_DIM, Wt::Med, true);
         }
         // name slot: click to rename inline (FieldId::VarName; commits as a
         // rename-as-alias, so old bindings keep resolving).
@@ -12572,13 +12504,13 @@ fn paint_tokens(
         } else {
             name.clone()
         };
-        let nw = app.fonts.measure(&name_shown, T_UI, Wt::Med);
+        let nw = app.fonts.measure(&name_shown, T10, Wt::Med);
         app.fonts.text(
             s,
             x0 + 18.0,
-            line_top(hover_r, T_UI),
+            line_top(hover_r, T10),
             &name_shown,
-            T_UI,
+            T10,
             C_TEXT,
             Wt::Med,
         );
@@ -12608,13 +12540,13 @@ fn paint_tokens(
         } else {
             disp.clone()
         };
-        let vvw = app.fonts.measure(&shown, T_UI, Wt::Mono);
+        let vvw = app.fonts.measure(&shown, T10, Wt::Mono);
         app.fonts.text(
             s,
             lw - 66.0 - vvw,
-            line_top(hover_r, T_UI),
+            line_top(hover_r, T10),
             &shown,
-            T_UI,
+            T10,
             if editing_this { C_TEXT } else { C_MUTED },
             Wt::Mono,
         );
@@ -12633,7 +12565,7 @@ fn paint_tokens(
             let tb = Rect::new(lw - 64.0, row_t + 2.0, lw - 38.0, row_t + 18.0);
             fill_rrect(s, tb, R_SM, if hover(app, tb) { C_LINE_2 } else { C_FIELD });
             app.fonts
-                .text_center(s, tb, "on/off", T_UI, C_TEXT, Wt::Reg, true);
+                .text_center(s, tb, "on/off", T10, C_TEXT, Wt::Reg, true);
             hit.push((tb, Action::VarToggleBool(name.clone())));
         } else if kind == "number" {
             for (j, (glyph, delta)) in [("−", -1.0), ("+", 1.0)].into_iter().enumerate() {
@@ -12645,7 +12577,7 @@ fn paint_tokens(
                 );
                 fill_rrect(s, sb, R_SM, if hover(app, sb) { C_LINE_2 } else { C_FIELD });
                 app.fonts
-                    .text_center(s, sb, glyph, T_UI, C_TEXT, Wt::Med, true);
+                    .text_center(s, sb, glyph, T10, C_TEXT, Wt::Med, true);
                 hit.push((sb, Action::VarStep(name.clone(), delta)));
             }
         }
@@ -12670,7 +12602,7 @@ fn paint_tokens(
             s,
             ub,
             &format!("Undo variable edit ({undo_n})"),
-            T_UI,
+            T10,
             C_TEXT,
             Wt::Med,
             true,
@@ -12689,7 +12621,7 @@ fn paint_tokens(
         s,
         tb,
         &format!("Theme: {}", crate::theme::active_theme().label()),
-        T_UI,
+        T10,
         C_TEXT,
         Wt::Med,
         true,
@@ -12704,7 +12636,7 @@ fn paint_tokens(
             "{} variables defined · color/*, text/*, space/*, radius/*",
             vcount
         ),
-        T_UI,
+        T10,
         C_MUTED,
         Wt::Reg,
     );
@@ -12861,7 +12793,7 @@ mod viewport_row_tests {
             .iter()
             .find(|r| r.id == "fr1")
             .expect("the plain frame");
-        assert_eq!(fr.icon, "frame-hash", "one plain master is not a set");
+        assert_eq!(fr.icon, "frame#", "one plain master is not a set");
     }
 
     /// The set's canvas chrome — Figma's dashed violet outline plus the set's

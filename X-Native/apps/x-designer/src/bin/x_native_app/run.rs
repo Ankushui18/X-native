@@ -8139,44 +8139,6 @@ impl Host {
                 self.toggle_right_tab();
                 return;
             }
-            // ⇧D — Figma's Dev Mode (help 360039956914): switch the file to the
-            // inspect/code view. Here that is the right panel's Inspect (SHIP)
-            // tab; a second ⇧D leaves it and returns to Design.
-            if self.app.shift && c == "D" {
-                let entering = self.app.doc_ref().right_tab != crate::state::RightTab::Inspect;
-                let tab = if entering {
-                    crate::state::RightTab::Inspect
-                } else {
-                    crate::state::RightTab::Design
-                };
-                self.dispatch(Action::RightTab(tab));
-                self.app.status = if entering {
-                    "Dev Mode: Inspect".into()
-                } else {
-                    "Dev Mode off: Design".into()
-                };
-                return;
-            }
-            // ⇧M / ⇧T — Figma Dev Mode toolbar tools (Guide to inspecting
-            // 22012921621015): Measure and Annotate. View states, not edits.
-            if self.app.shift && c == "M" {
-                let on = self.app.doc().toggle_dev_measure();
-                self.app.status = if on {
-                    "Dev Mode: Measure on".into()
-                } else {
-                    "Dev Mode: Measure off".into()
-                };
-                return;
-            }
-            if self.app.shift && c == "T" {
-                let on = self.app.doc().toggle_dev_annotate();
-                self.app.status = if on {
-                    "Dev Mode: Annotate on".into()
-                } else {
-                    "Dev Mode: Annotate off".into()
-                };
-                return;
-            }
             // ⇧A — add auto layout (Figma's shortcut; plain A stays free)
             if self.app.shift && c == "A" {
                 self.dispatch(Action::AddAutoLayout);
@@ -8559,11 +8521,6 @@ impl Host {
                     doc.editor().ungroup(&id);
                 }
                 self.app.mark_dirty();
-            }
-            "Clean up layers" => {
-                // routes through the CtxCmd dispatcher so the status line and
-                // undo entry match the right-click path exactly
-                self.app.apply_ctx(CtxCmd::CleanupLayers);
             }
             _ => {}
         }
@@ -14466,11 +14423,8 @@ impl Host {
             FieldId::Rotation => {
                 if let Some(deg) = num(raw) {
                     // the field takes the whole selection and Figma's range:
-                    // past 180 the count runs back down (195° → -165°). The
-                    // typed value is Figma's counter-clockwise convention, so it
-                    // is converted to the stored clockwise sign first (row 6.1).
-                    doc.editor()
-                        .set_selection_rotation(crate::state::rotation_from_display(deg));
+                    // past 180 the count runs back down (195° → -165°)
+                    doc.editor().set_selection_rotation(deg);
                     self.app.mark_dirty();
                 }
             }
@@ -14925,10 +14879,6 @@ pub fn cursor_for(app: &App) -> CursorIcon {
                 match app.tool {
                     Tool::Hand => CursorIcon::Grab,
                     Tool::Select => CursorIcon::Default,
-                    // Figma's Text tool advertises an I-beam over the canvas,
-                    // like any text surface — not the drawing crosshair the
-                    // geometry tools wear (help 360041064174).
-                    Tool::Text => CursorIcon::Text,
                     _ => CursorIcon::Crosshair,
                 }
             } else {
@@ -16419,7 +16369,7 @@ mod tests {
     #[test]
     fn tool_order_matches_html() {
         assert_eq!(Tool::Select.icon(), "mouse-pointer-2");
-        assert_eq!(Tool::Frame.icon(), "frame-hash");
+        assert_eq!(Tool::Frame.icon(), "frame#");
         assert_eq!(Tool::Text.icon(), "type");
         assert_eq!(Tool::Rect.icon(), "square");
         assert_eq!(Tool::Ellipse.icon(), "circle");

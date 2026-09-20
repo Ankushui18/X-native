@@ -90,17 +90,17 @@ impl Tool {
     pub fn icon(self) -> &'static str {
         match self {
             Tool::Select => "mouse-pointer-2",
-            Tool::Scale => "scale",
-            Tool::Frame => "frame-hash",
+            Tool::Scale => "maximize",
+            Tool::Frame => "frame#",
             Tool::Section => "section",
-            Tool::Slice => "slice",
+            Tool::Slice => "scissors",
             Tool::PlaceImage => "image",
             Tool::Text => "type",
             Tool::Rect => "square",
             Tool::Ellipse => "circle",
             Tool::Line => "line",
             Tool::Arrow => "arrow-up-right",
-            Tool::Poly => "polygon",
+            Tool::Poly => "triangle",
             Tool::Star => "star",
             Tool::Pen => "pen-tool",
             Tool::Pencil => "pencil",
@@ -265,27 +265,6 @@ pub fn line_ink() -> x_native::Color {
 
 /// A new line's stroke weight (Figma's default for the tool).
 pub const LINE_WEIGHT: f64 = 1.0;
-
-/// Figma's rotation field counts **counter-clockwise positive**; the engine
-/// stores the renderer's y-down `Affine::rotate`, which is clockwise-positive.
-/// This is the ONE display conversion (master row 6.1): the field and every
-/// readout show the negation, re-ranged to Figma's (−180, 180], while the
-/// stored sign is left untouched so the renderer and exporters keep meaning.
-pub fn rotation_display(stored_deg: f64) -> f64 {
-    let mut d = -stored_deg % 360.0;
-    if d <= -180.0 {
-        d += 360.0
-    } else if d > 180.0 {
-        d -= 360.0
-    }
-    d
-}
-
-/// Inverse of [`rotation_display`] for writes: a counter-clockwise field value
-/// becomes the stored clockwise angle (`set_selection_rotation` re-ranges it).
-pub fn rotation_from_display(display_deg: f64) -> f64 {
-    -display_deg
-}
 
 /// The Line and Arrow tools' endpoints — the same ⌥ rule `create_rect` uses
 /// (hold Option to draw from the centre), so the preview and the commit cannot
@@ -2398,9 +2377,6 @@ pub enum CtxCmd {
     Delete,
     Group,
     Ungroup,
-    /// Clean up layers (master row 5.9): flatten redundant single-child group
-    /// nests in one undo entry. Renaming stays manual by owner decision.
-    CleanupLayers,
     /// Figma's Frame selection (⌥⌘G): wrap the selection in a new Frame sized
     /// to the members' collective bounds.
     FrameSelection,
@@ -3110,13 +3086,6 @@ pub struct OpenDoc {
     pub tree_search: String,
     pub left_tab: LeftTab,
     pub right_tab: RightTab,
-    /// Dev Mode **Measure** tool (`⇧M`, Figma Dev Mode toolbar — Guide to
-    /// inspecting `22012921621015`): a view state, not a document edit; while on,
-    /// hover surfaces redline distances. Exclusive with [`OpenDoc::dev_annotate`].
-    pub dev_measure: bool,
-    /// Dev Mode **Annotate** tool (`⇧T`): while on, clicking a layer drops a
-    /// green-dot annotation instead of selecting. Exclusive with Measure.
-    pub dev_annotate: bool,
     pub frame_preset: usize,
     pub flow: usize,
     /// v45 mock boot state: flow pills 0 AND 2 carry .active in the HTML
@@ -3559,8 +3528,6 @@ impl OpenDoc {
             tree_search: String::new(),
             left_tab: LeftTab::Layers,
             right_tab: RightTab::Design,
-            dev_measure: false,
-            dev_annotate: false,
             frame_preset: 0,
             flow: 0,
             flow_boot_mock: false,
@@ -3615,8 +3582,6 @@ impl OpenDoc {
             tree_search: String::new(),
             left_tab: LeftTab::Layers,
             right_tab: RightTab::Design,
-            dev_measure: false,
-            dev_annotate: false,
             frame_preset: 0,
             flow: 0,
             flow_boot_mock: false,
@@ -5574,17 +5539,6 @@ impl App {
                     doc.editor().ungroup(&id);
                 }
             }
-            CleanupLayers => {
-                let n = doc.editor().clean_up_layers();
-                refusal = if n == 0 {
-                    Some("Nothing to clean up — no redundant group nests".into())
-                } else {
-                    Some(format!(
-                        "Cleaned up {n} redundant group{}",
-                        if n == 1 { "" } else { "s" }
-                    ))
-                };
-            }
             FrameSelection => {
                 if doc.editor_ref().selection.is_empty() {
                     refusal = Some("Select at least one layer to frame it".into());
@@ -6397,7 +6351,7 @@ pub struct BoardRegions {
 /// `NodeKind` should fail to compile here rather than silently become a box.
 pub fn kind_icon(k: &NodeKind) -> &'static str {
     match k {
-        NodeKind::Frame { .. } => "frame-hash",
+        NodeKind::Frame { .. } => "frame#",
         NodeKind::Rect { .. } => "square",
         NodeKind::Group => "layout-grid",
         NodeKind::Section => "section",
@@ -6408,9 +6362,7 @@ pub fn kind_icon(k: &NodeKind) -> &'static str {
         NodeKind::Vector { .. } | NodeKind::Arc { .. } | NodeKind::Line => "pen-tool",
         NodeKind::Component { .. } | NodeKind::Instance { .. } => "component",
         NodeKind::Image { .. } => "image",
-        // the Slice layer wears the Slice tool's own glyph — `scissors` is
-        // Figma's CUT, and one metaphor must not mean two things in the chrome
-        NodeKind::Slice => "slice",
+        NodeKind::Slice => "scissors",
     }
 }
 
@@ -7504,26 +7456,5 @@ mod stroke_panel_tests {
         assert!((miter_limit_to_angle(o.miter_limit) - miter_limit_to_angle(4.0)).abs() < 1e-9);
         assert_eq!(o.cap_start, StrokeCap::None, "a butt end by default");
         assert_eq!(o.cap_end, StrokeCap::None);
-    }
-}
-
-impl OpenDoc {
-    /// Figma Dev Mode **Measure** (`⇧M`): toggle; entering Measure leaves Annotate.
-    /// Returns the new state so callers can set their status line.
-    pub fn toggle_dev_measure(&mut self) -> bool {
-        self.dev_measure = !self.dev_measure;
-        if self.dev_measure {
-            self.dev_annotate = false;
-        }
-        self.dev_measure
-    }
-
-    /// Figma Dev Mode **Annotate** (`⇧T`): toggle; entering Annotate leaves Measure.
-    pub fn toggle_dev_annotate(&mut self) -> bool {
-        self.dev_annotate = !self.dev_annotate;
-        if self.dev_annotate {
-            self.dev_measure = false;
-        }
-        self.dev_annotate
     }
 }

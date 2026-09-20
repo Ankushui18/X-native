@@ -607,18 +607,17 @@ impl TextUi {
     }
 
     /// Micro label: dim section eyebrows (`DRAFTS`, `PAGES`, `FONTS`) —
-    /// `T_UI` (Figma's 11 px base) tracked 0.12em. One of the two tracked
-    /// steps; the other is [`TextUi::caps_label`].
+    /// T10 tracked 0.12em. One of the two tracked steps; the other is
+    /// [`TextUi::caps_label`].
     pub fn micro_label(&self, s: &mut Scene, x: f64, y: f64, text: &str, color: Color, wt: Wt) {
-        self.text_tracked(s, x, y, text, T_UI, 0.12, color, wt);
+        self.text_tracked(s, x, y, text, T10, 0.12, color, wt);
     }
 
     /// Caps label: panel section headings (`Appearance`, `PROTOTYPE`) —
-    /// `T_UI` tracked 0.08em, which is where Figma sets its own section
-    /// headings. Pairs with [`TextUi::micro_label`]; together they are the
-    /// only tracked steps in the UI.
+    /// T10 tracked 0.08em. Pairs with [`TextUi::micro_label`]; together
+    /// they are the only tracked steps in the UI.
     pub fn caps_label(&self, s: &mut Scene, x: f64, y: f64, text: &str, color: Color, wt: Wt) {
-        self.text_tracked(s, x, y, text, T_UI, 0.08, color, wt);
+        self.text_tracked(s, x, y, text, T10, 0.08, color, wt);
     }
 
     /// Draw text centered in `r` horizontally (and optionally vertically).
