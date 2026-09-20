@@ -8206,7 +8206,8 @@ fn proto_scroll_row(
 ) {
     let (x0, xr) = span;
     let (caption, value, menu) = field;
-    app.fonts.text(s, x0, y + 6.5, caption, T_UI, C_DIM, Wt::Reg);
+    app.fonts
+        .text(s, x0, y + 6.5, caption, T_UI, C_DIM, Wt::Reg);
     let fr = Rect::new(x0 + 74.0, y, xr, y + INPUT_H);
     if app.dropdown_proto_scroll == Some(menu) {
         app.proto_scroll_dd_anchor = (fr.x0, fr.y1);
@@ -11735,8 +11736,15 @@ fn paint_prototype(
                 let truncated = app
                     .fonts
                     .truncate(&display_url, T_UI, Wt::Mono, ub.width() - 8.0);
-                app.fonts
-                    .text(s, ub.x0 + 4.0, y + 100.0, &truncated, T_UI, C_TEXT, Wt::Mono);
+                app.fonts.text(
+                    s,
+                    ub.x0 + 4.0,
+                    y + 100.0,
+                    &truncated,
+                    T_UI,
+                    C_TEXT,
+                    Wt::Mono,
+                );
                 hit.push((ub, Action::ProtoEditUrl(i)));
             }
 
