@@ -280,7 +280,10 @@ pub const C_GRID_LIGHT: Color = Color::from_rgba8(0x4A, 0x4D, 0x58, 60); // Fain
 
 // --------------------------------------------------------------- geometry
 // Editor dimensions
-pub const ED_TITLE_H: f64 = 36.0;
+/// Figma's top bar is 40px tall (master row 18.7 header). It was 36 here; the
+/// +4 recentres the tab strip and every panel hangs off this, so nothing else
+/// moves.
+pub const ED_TITLE_H: f64 = 40.0;
 
 /// Height of the status band — the one chrome row that spans the window at its
 /// bottom (`run.rs::paint_feedback`). `state.rs` owns the rect; every region

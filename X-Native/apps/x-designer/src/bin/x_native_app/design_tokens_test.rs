@@ -355,3 +355,10 @@ fn radii_follow_figmas_measured_chrome() {
     assert_eq!(R_INPUT, 6.0, "Figma inputs are 6px");
     assert_eq!(R_PILL, 4.0, "Figma chips are 4px");
 }
+
+/// The editor's top bar is Figma's 40px (master row 18.7 header), not the old
+/// 36. Pinning it stops a future pass from silently shrinking the chrome back.
+#[test]
+fn the_editor_header_is_figmas_forty_pixels() {
+    assert_eq!(crate::theme::ED_TITLE_H, 40.0);
+}

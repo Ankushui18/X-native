@@ -283,7 +283,7 @@
       240,
       520
     ],
-    "titleH": 36
+    "titleH": 40
   },
   "geom": {
     "nav": 48,
@@ -294,7 +294,7 @@
     "cols": 3
   },
   "ui": {
-    "titleH": 36,
+    "titleH": 40,
     "logoCell": 44,
     "treeRowH": 24,
     "inputH": 28,

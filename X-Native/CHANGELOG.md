@@ -5,6 +5,17 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-20 (Editor header is Figma's 40px — master row 18.7 header)
+
+`ED_TITLE_H` 36 → 40 to match Figma's top bar (row 18.7). Every panel hangs off
+this constant, so the +4px recentres the tab strip and nothing else moves; the
+design sheet is title-relative, so `check_screens.mjs` confirms all boxes still
+sit inside their panels (20/0). Pinned by
+`the_editor_header_is_figmas_forty_pixels`. Row 18.7 stays PARTIAL — the right
+dock at 240 still needs the inspector reflow (its `paint_design` offsets are
+absolute, hand-tuned for ~340px), which is a CI-compiled refactor, deliberately
+not half-done here.
+
 ## [Unreleased] — 2026-09-20 (Radii follow Figma's measured chrome — master row 18.6)
 
 Wave-2 token pass, continued. Figma's chrome rounds rows and cards at 8 px,

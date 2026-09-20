@@ -42,11 +42,18 @@ The single source of truth for what's next remains
    `R_PILL`=4 on the shared `RadiusScale`, pinned by
    `radii_follow_figmas_measured_chrome`. Row 18.6 → MATCH.
 
-4. **Wave 2 remainder** (items 16–19): right dock at 240 (needs the inspector
-   reflow), Inter at 11px (18.5), tool cursors (18.11), motion (18.12),
-   remaining icon vocabulary (18.10), Design-tab row order.
+4. ~~**Header (row 18.7 header)**~~ — **delivered**: `ED_TITLE_H` 36→40 (Figma's
+   top bar); panels hang off the constant, sheet is title-relative, so
+   `check_screens.mjs` stays 20/0. Pinned by
+   `the_editor_header_is_figmas_forty_pixels`.
 
-5. **Wave 3** (item 20), only after 1–4.
+5. **Wave 2 remainder** (items 16–19): right dock at 240 — needs the inspector
+   reflow (`paint_design` offsets are absolute for ~340px; a CI-compiled
+   refactor, deliberately not half-done here) — plus Inter at 11px (18.5), tool
+   cursors (18.11), motion (18.12), remaining icon vocabulary (18.10), Design-tab
+   row order.
+
+6. **Wave 3** (item 20), only after 1–5.
 
 ## How we reach it — per-behaviour recipe
 
