@@ -7268,7 +7268,7 @@ fn paint_gradient_controls(
     );
     hit.push((flip_r, Action::FlipGradient));
 
-    let rotate_r = Rect::new(x0 + 70.0, y, x0 + 200.0, y + 24.0);
+    let rotate_r = Rect::new(x0 + 70.0, y, xr - 115.0, y + 24.0);
     input_box(app, s, rotate_r, 6.0);
     draw_icon(
         s,
@@ -7451,7 +7451,7 @@ fn paint_image_adjustments(
     // The panel lays its sliders out from x0 with fixed widths, so the right
     // edge it is handed is never read; kept in the signature because every
     // other inspector panel takes the same (x0, xr, y) box.
-    _xr: f64,
+    xr: f64,
     y: f64,
 ) -> f64 {
     if !is_image_node(app) {
@@ -7465,7 +7465,7 @@ fn paint_image_adjustments(
     y += 20.0;
 
     if let Some(fit) = selected_image_fit(app) {
-        let mode_r = Rect::new(x0, y, x0 + 220.0, y + 26.0);
+        let mode_r = Rect::new(x0, y, xr - 95.0, y + 26.0);
         input_box(app, s, mode_r, 6.0);
         app.fonts.text(
             s,
@@ -7500,7 +7500,7 @@ fn paint_image_adjustments(
     if app.crop.is_some() {
         app.fonts.caps_label(s, x0, y, "CROP", C_TEXT, Wt::Med);
         y += 20.0;
-        let fit_r = Rect::new(x0, y, x0 + 220.0, y + 26.0);
+        let fit_r = Rect::new(x0, y, xr - 95.0, y + 26.0);
         input_box(app, s, fit_r, 6.0);
         app.fonts.text(
             s,
@@ -7567,7 +7567,7 @@ fn paint_image_adjustments(
         app.fonts.text(s, x0, y + 4.0, label, T_UI, C_DIM, Wt::Reg);
 
         // Slider track
-        let slider_r = Rect::new(x0 + 100.0, y, x0 + 220.0, y + 20.0);
+        let slider_r = Rect::new(x0 + 100.0, y, xr - 95.0, y + 20.0);
         fill_rrect(s, slider_r, R_SM, C_FIELD);
 
         // Slider fill (centered at 0)
@@ -7584,7 +7584,7 @@ fn paint_image_adjustments(
         // Value label
         let val_label = format!("{:.0}%", value * 100.0);
         app.fonts
-            .text(s, x0 + 230.0, y + 4.0, &val_label, T_UI, C_TEXT, Wt::Mono);
+            .text(s, xr - 85.0, y + 4.0, &val_label, T_UI, C_TEXT, Wt::Mono);
 
         // Hit area for slider
         // A click is a real slider write, not a fixed demo increment: the
@@ -7636,7 +7636,7 @@ fn paint_image_adjustments(
     );
     hit.push((rot_cw_r, Action::RotateImage { clockwise: true }));
 
-    let rot_ccw_r = Rect::new(x0 + 150.0, y, x0 + 200.0, y + 24.0);
+    let rot_ccw_r = Rect::new(xr - 165.0, y, xr - 115.0, y + 24.0);
     let hov = hover(app, rot_ccw_r);
     fill_rrect(s, rot_ccw_r, R_MD, if hov { C_FIELD_2 } else { C_FIELD });
     stroke_rrect(s, rot_ccw_r, R_MD, C_LINE, 1.0);
@@ -7664,7 +7664,7 @@ fn paint_image_adjustments(
     // transform row with Rotate 90° on purpose: the band below belongs to the
     // Typography offsets (which keep their reference positions), and a row
     // painted under one of those is a row whose hit rect never wins.
-    let flip_h_r = Rect::new(x0 + 210.0, y, x0 + 254.0, y + 24.0);
+    let flip_h_r = Rect::new(xr - 105.0, y, xr - 61.0, y + 24.0);
     let hov = hover(app, flip_h_r);
     fill_rrect(s, flip_h_r, R_MD, if hov { C_FIELD_2 } else { C_FIELD });
     stroke_rrect(s, flip_h_r, R_MD, C_LINE, 1.0);
@@ -7680,7 +7680,7 @@ fn paint_image_adjustments(
     app.image_row = Some(flip_h_r);
     hit.push((flip_h_r, Action::FlipImage { horizontal: true }));
 
-    let flip_v_r = Rect::new(x0 + 262.0, y, x0 + 306.0, y + 24.0);
+    let flip_v_r = Rect::new(xr - 53.0, y, xr - 9.0, y + 24.0);
     let hov = hover(app, flip_v_r);
     fill_rrect(s, flip_v_r, R_MD, if hov { C_FIELD_2 } else { C_FIELD });
     stroke_rrect(s, flip_v_r, R_MD, C_LINE, 1.0);
