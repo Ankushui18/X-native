@@ -2,6 +2,44 @@
 use crate::*;
 use x_core::*;
 
+/// A group is *redundant* when it holds exactly one child and carries no visual
+/// meaning of its own — unwrapping it cannot change what is drawn. Hidden,
+/// locked, masked, translucent, blended or effected groups stay, as do frames
+/// and sections.
+fn redundant_group(n: &Node) -> bool {
+    matches!(n.kind, NodeKind::Group)
+        && n.children.len() == 1
+        && n.visible
+        && !n.locked
+        && !n.is_mask
+        && n.opacity == 1.0
+        && n.blend == BlendKind::Normal
+        && n.effects.is_empty()
+}
+
+/// Post-order flatten of redundant single-child groups; returns the count.
+fn clean_node(n: &mut Node) -> usize {
+    let mut count = 0;
+    for c in &mut n.children {
+        count += clean_node(c);
+    }
+    let mut i = 0;
+    while i < n.children.len() {
+        if redundant_group(&n.children[i]) {
+            let mut g = n.children.remove(i);
+            let mut child = g.children.remove(0);
+            child.transform.x += g.transform.x;
+            child.transform.y += g.transform.y;
+            child.dirty = true;
+            n.children.insert(i, child);
+            count += 1;
+        } else {
+            i += 1;
+        }
+    }
+    count
+}
+
 /// Collect every id in a subtree (for copy-id allocation).
 fn collect_ids(n: &Node, set: &mut std::collections::HashSet<String>) {
     set.insert(n.id.clone());
@@ -1129,6 +1167,22 @@ impl Editor {
         self.mutate_visual_stack(id, move |n| n.stroke_layers.push(StrokeLayer::new(stroke)))
     }
     pub fn add_effect_layer(&mut self, id: &str, effect: Effect) -> bool {
+        // Figma's per-type caps (help 360041488473). Refuse a cap-breaching
+        // add rather than stacking past it; the panel's "+" is a no-op at the
+        // cap, exactly like Figma disabling the row.
+        if let Some(n) = find(&self.root, id) {
+            let mut probe = n.clone();
+            probe.materialize_visual_stacks();
+            let kind = effect.kind();
+            let have = probe
+                .effect_layers
+                .iter()
+                .filter(|l| l.effect.kind() == kind)
+                .count();
+            if have >= kind.limit() {
+                return false;
+            }
+        }
         self.mutate_visual_stack(id, move |n| n.effect_layers.push(EffectLayer::new(effect)))
     }
     pub fn remove_fill_layer(&mut self, id: &str, index: usize) -> bool {
@@ -2395,6 +2449,33 @@ impl Editor {
         self.clear_redo_history();
         self.selection = ids;
         true
+    }
+
+    /// Clean up layers (master row 5.9, chapter-4 framing): flatten redundant
+    /// group nests. A `Group` holding exactly one child adds no grouping, so it
+    /// is unwrapped — the child inherits the group's offset and keeps its world
+    /// position — applied bottom-up so a chain of single-child groups collapses
+    /// in one pass. Only *visually inert* groups are touched: hidden, locked,
+    /// masked, translucent, blended or effected groups carry meaning and stay,
+    /// and frames/sections (layout, clip) are never unwrapped. Renaming is
+    /// deliberately out of scope (the owner chose manual naming; Figma's is an
+    /// AI agent). Returns the number of groups unwrapped; the whole pass is ONE
+    /// undo entry, mirroring [`Editor::ungroup`]'s snapshot idiom.
+    pub fn clean_up_layers(&mut self) -> usize {
+        let snapshot = self.root.clone();
+        let count = clean_node(&mut self.root);
+        if count == 0 {
+            return 0;
+        }
+        self.snapshots.push((self.undo_stack.len(), snapshot));
+        self.edit_serial = self.edit_serial.wrapping_add(1);
+        self.undo_stack.push(vec![Command::Group {
+            parent_id: String::new(),
+            indices: vec![],
+            group_id: String::new(),
+        }]);
+        self.clear_redo_history();
+        count
     }
 
     /// Figma Ctrl+A: select all top-level children of the page (or of the

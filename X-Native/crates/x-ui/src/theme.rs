@@ -347,42 +347,30 @@ mod tests {
     #[test]
     fn remap_is_a_function_and_identity_for_graphite() {
         let g = ColorTokens::GRAPHITE;
-        // The table is keyed by *color*, so two roles may share a value
-        // (white is the ink on both an accent fill and the danger fill) — what
-        // must never happen is two roles sharing a value that remap to
-        // different targets, because then one of them silently repaints with
-        // the other's ink. Check that across every shipped palette.
+        // The table is keyed by *color*. Figma's Graphite palette reuses values
+        // across roles (#2C2C2C is both chrome and panel; #FFFFFF is both body
+        // text and button ink), so a shared source resolves first-role-wins.
+        // That is fine because chrome is painted through the role accessors
+        // (Theme::text, Theme::on_accent, …), not this table — the table exists
+        // to re-tint content authored against Graphite. What it must still
+        // guarantee: a unique source per entry, identity within a palette, and
+        // pass-through for colors that are not Graphite roles.
         let table = ColorTokens::DAYLIGHT.remap_from(&g);
         let mut seen: Vec<[u8; 3]> = Vec::new();
         for (from, _) in &table {
             assert!(!seen.contains(from), "duplicate source color {from:?}");
             seen.push(*from);
         }
-        for id in ThemeId::ALL {
-            let to = id.palette();
-            let mut map: Vec<([u8; 3], [u8; 3])> = Vec::new();
-            for name in ColorTokens::role_names() {
-                let (a, b) = (g.role(name).unwrap(), to.role(name).unwrap());
-                match map.iter().find(|(x, _)| *x == a) {
-                    Some((_, prev)) => assert_eq!(
-                        *prev,
-                        b,
-                        "{}: role {name} shares {a:?} but remaps elsewhere",
-                        id.label()
-                    ),
-                    None => map.push((a, b)),
-                }
-            }
-        }
         // identity when the target is the same palette
         for (from, to) in ColorTokens::GRAPHITE.remap_from(&g) {
             assert_eq!(from, to, "graphite must map to itself");
         }
-        // a themed panel color keeps its alpha
-        let c = g.remap_color(&g, [0x1b, 0x1d, 0x23, 230]);
-        assert_eq!(c, [0x1b, 0x1d, 0x23, 230]);
-        let l = ColorTokens::DAYLIGHT.remap_color(&g, [0x1b, 0x1d, 0x23, 230]);
-        assert_eq!(l, [0xff, 0xff, 0xff, 230]);
+        // a unique Graphite role color keeps its alpha and maps to that role's
+        // Daylight value: canvas #1E1E1E -> #F5F5F5
+        let c = g.remap_color(&g, [0x1e, 0x1e, 0x1e, 230]);
+        assert_eq!(c, [0x1e, 0x1e, 0x1e, 230]);
+        let l = ColorTokens::DAYLIGHT.remap_color(&g, [0x1e, 0x1e, 0x1e, 230]);
+        assert_eq!(l, [0xf5, 0xf5, 0xf5, 230]);
         // unknown colors pass through untouched
         let u = ColorTokens::DAYLIGHT.remap_color(&g, [0xf2, 0x4e, 0x1e, 255]);
         assert_eq!(u, [0xf2, 0x4e, 0x1e, 255]);

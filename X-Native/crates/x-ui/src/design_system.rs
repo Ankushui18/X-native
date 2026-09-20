@@ -95,60 +95,87 @@ pub const COLOR_ROLES: &[&str] = &[
 ];
 
 impl ColorTokens {
-    /// Graphite & Signal — the shipping default, and the palette the
-    /// designer's constants are derived from.
+    /// Graphite — the shipping default, and the palette the designer's
+    /// constants are derived from. Retuned to Figma's own dark chrome
+    /// (parity rows 18.1–18.4 of `docs/FIGMA_PARITY_MASTER_LIST.md`):
+    /// canvas `#1E1E1E`, which is Figma's documented dark-mode canvas
+    /// background (help.figma.com 360041064814: "In dark mode, the
+    /// background defaults to an off-black color: #1E1E1E"), panels
+    /// `#2C2C2C`, dividers `#383838`, and Figma's selection blue
+    /// `#0D99FF` as the indicator.
+    ///
+    /// Two documented deviations, both forced by [`contrast_audit`]:
+    ///
+    /// * The accent FILL is `#0B77C9`, not Figma's `#0D99FF`. White on
+    ///   `#0D99FF` measures 2.99:1, under the 4.5:1 floor this palette is
+    ///   gated on — Figma ships that pair sub-AA. `#0D99FF` is kept where
+    ///   the floor allows it: `selection` and `focus_ring` (3:1) read
+    ///   Figma's exact blue.
+    /// * The greys are neutral, not the old blue-tinted ramp, because
+    ///   Figma's chrome is neutral. On this surface ladder the AA floor
+    ///   admits no grey darker than `#B3`, so the four text steps sit
+    ///   between white and `#B6B6B6` instead of reaching Figma's dim
+    ///   `#8C8C8C`, which measures 2.9:1 on `#2C2C2C`.
     pub const GRAPHITE: Self = Self {
-        background: [0x09, 0x09, 0x09],
-        canvas: [0x06, 0x06, 0x06],
-        surface: [0x1b, 0x1d, 0x23],
-        surface_elevated: [0x24, 0x26, 0x2d],
-        surface_hover: [0x2e, 0x31, 0x3a],
-        surface_active: [0x2e, 0x30, 0x38],
-        border: [0x2a, 0x2c, 0x34],
-        border_strong: [0x3a, 0x3d, 0x46],
-        text_primary: [0xf2, 0xf3, 0xf7],
-        text_secondary: [0xb0, 0xb5, 0xc1],
-        text_dim: [0x9a, 0x9e, 0xaa],
-        text_placeholder: [0x93, 0x9a, 0xa6],
-        accent: [0x6b, 0x49, 0xf5],
-        accent_hover: [0x5b, 0x3c, 0xe0],
-        accent_active: [0x4a, 0x2f, 0xc4],
-        accent_ink: [0xb4, 0xa4, 0xff],
+        background: [0x2c, 0x2c, 0x2c],
+        canvas: [0x1e, 0x1e, 0x1e],
+        surface: [0x2c, 0x2c, 0x2c],
+        surface_elevated: [0x38, 0x38, 0x38],
+        surface_hover: [0x38, 0x38, 0x38],
+        surface_active: [0x46, 0x46, 0x46],
+        border: [0x38, 0x38, 0x38],
+        border_strong: [0x4f, 0x4f, 0x4f],
+        text_primary: [0xff, 0xff, 0xff],
+        text_secondary: [0xc9, 0xc9, 0xc9],
+        text_dim: [0xbc, 0xbc, 0xbc],
+        text_placeholder: [0xb6, 0xb6, 0xb6],
+        accent: [0x0b, 0x77, 0xc9],
+        accent_hover: [0x0a, 0x6a, 0xb4],
+        accent_active: [0x08, 0x5d, 0x9e],
+        accent_ink: [0x66, 0xc7, 0xff],
         on_accent: [0xff, 0xff, 0xff],
-        selection: [0x7c, 0x5c, 0xfc],
-        focus_ring: [0xa9, 0x96, 0xff],
-        success: [0x4c, 0xd9, 0x66],
-        warning: [0xf0, 0xad, 0x4e],
-        danger: [0xef, 0x9a, 0x94],
+        selection: [0x0d, 0x99, 0xff],
+        focus_ring: [0x0d, 0x99, 0xff],
+        success: [0x2f, 0xd0, 0x7a],
+        warning: [0xf5, 0xb8, 0x3d],
+        danger: [0xff, 0x9a, 0x8f],
         danger_fill: [0xc0, 0x39, 0x2b],
         on_danger: [0xff, 0xff, 0xff],
     };
 
     /// Daylight — for bright rooms, projectors and screen sharing. Text and
     /// accent values are AA-verified against every surface in this palette.
+    /// The canvas is `#F5F5F5`, Figma's documented light-mode default
+    /// (help.figma.com 360041064814). Its accent is a deeper cut of the same
+    /// Figma blue than Graphite's: the fill carries white text on a white
+    /// panel, so it needs the headroom the dark palette does not.
     pub const DAYLIGHT: Self = Self {
-        background: [0xee, 0xf0, 0xf4],
-        canvas: [0xe9, 0xea, 0xee],
+        // Figma's light chrome is white like its panels. Keeping background ==
+        // surface here also satisfies the color-keyed theme remap: Graphite
+        // shares #2C2C2C between the two roles, so every theme must map that
+        // one source to one target (remap_is_a_function_and_identity_for_graphite).
+        background: [0xff, 0xff, 0xff],
+        canvas: [0xf5, 0xf5, 0xf5],
         surface: [0xff, 0xff, 0xff],
-        surface_elevated: [0xf7, 0xf8, 0xfa],
-        surface_hover: [0xee, 0xf0, 0xf5],
-        surface_active: [0xe4, 0xe7, 0xee],
-        border: [0xd6, 0xd9, 0xe0],
-        border_strong: [0xae, 0xb3, 0xbf],
-        text_primary: [0x1b, 0x1d, 0x23],
-        text_secondary: [0x4e, 0x54, 0x60],
-        text_dim: [0x5a, 0x5f, 0x6b],
-        text_placeholder: [0x5b, 0x62, 0x74],
-        accent: [0x4a, 0x2f, 0xc4],
-        accent_hover: [0x3f, 0x27, 0x99],
-        accent_active: [0x33, 0x1e, 0x7c],
-        accent_ink: [0x44, 0x2b, 0xb8],
+        surface_elevated: [0xff, 0xff, 0xff],
+        surface_hover: [0xf0, 0xf0, 0xf0],
+        surface_active: [0xe5, 0xe5, 0xe5],
+        border: [0xe0, 0xe0, 0xe0],
+        border_strong: [0xc4, 0xc4, 0xc4],
+        text_primary: [0x1e, 0x1e, 0x1e],
+        text_secondary: [0x38, 0x38, 0x38],
+        text_dim: [0x52, 0x52, 0x52],
+        text_placeholder: [0x5f, 0x5f, 0x5f],
+        accent: [0x0a, 0x62, 0xa6],
+        accent_hover: [0x09, 0x55, 0x90],
+        accent_active: [0x07, 0x48, 0x77],
+        accent_ink: [0x0a, 0x62, 0xa6],
         on_accent: [0xff, 0xff, 0xff],
-        selection: [0x4a, 0x2f, 0xc4],
-        focus_ring: [0x3f, 0x27, 0x99],
-        success: [0x16, 0x6b, 0x2e],
-        warning: [0x8a, 0x5a, 0x00],
-        danger: [0xb3, 0x24, 0x2b],
+        selection: [0x0a, 0x62, 0xa6],
+        focus_ring: [0x09, 0x55, 0x90],
+        success: [0x0d, 0x6e, 0x3d],
+        warning: [0x7d, 0x52, 0x00],
+        danger: [0xa8, 0x21, 0x1a],
         danger_fill: [0xc0, 0x39, 0x2b],
         on_danger: [0xff, 0xff, 0xff],
     };
@@ -1072,5 +1099,93 @@ mod tests {
             }
         }
         assert!(Elevation::Flat.layers().iter().all(|(_, a)| *a == 0));
+    }
+
+    /// Figma-parity pins (master list §18). The palette is *tuned to* Figma's
+    /// chrome, so the values are the claim: without this test a future retune
+    /// silently drifts away from `#1E1E1E` and nobody notices, which is how the
+    /// purple accent shipped in the first place. Each hex is asserted against
+    /// the source that states it, and the two deliberate deviations are
+    /// asserted too, so they cannot be "fixed" back into a sub-AA pair.
+    #[test]
+    fn graphite_carries_figmas_chrome_values() {
+        let g = ColorTokens::GRAPHITE;
+        // help.figma.com 360041064814: dark-mode canvas is `#1E1E1E`.
+        assert_eq!(g.canvas, [0x1E, 0x1E, 0x1E], "canvas (row 18.1)");
+        // Figma's panels and dividers (master list §18 preamble).
+        assert_eq!(g.surface, [0x2C, 0x2C, 0x2C], "panel (row 18.1)");
+        assert_eq!(g.background, [0x2C, 0x2C, 0x2C], "chrome (row 18.1)");
+        assert_eq!(g.border, [0x38, 0x38, 0x38], "divider (row 18.1)");
+        // Figma's selection blue, exactly, where the 3:1 indicator floor
+        // admits it (row 18.4).
+        assert_eq!(g.selection, [0x0D, 0x99, 0xFF], "selection (row 18.4)");
+        assert_eq!(g.focus_ring, [0x0D, 0x99, 0xFF], "focus ring (row 18.4)");
+        assert_eq!(
+            g.text_primary,
+            [0xFF, 0xFF, 0xFF],
+            "primary text (row 18.3)"
+        );
+        // The documented deviation: white on `#0D99FF` is 2.99:1, under the
+        // 4.5:1 floor `contrast_audit` enforces, so the accent FILL is a
+        // deeper cut of the same hue. Pin both halves of that decision.
+        assert!(
+            crate::theme::contrast_ratio(g.on_accent, [0x0D, 0x99, 0xFF]) < 4.5,
+            "if Figma's blue ever clears AA, the accent fill should become it"
+        );
+        assert!(
+            crate::theme::contrast_ratio(g.on_accent, g.accent) >= 4.5,
+            "the accent fill must keep carrying white text at AA (row 18.2)"
+        );
+        // The other deviation: the greys are neutral (Figma's chrome is), and
+        // the AA floor on this surface ladder admits no grey darker than
+        // `#B3`, so Figma's dim `#8C8C8C` is unreachable — pin that the ramp
+        // stays monotonic and inside the admissible band instead.
+        let ramp = [
+            g.text_primary,
+            g.text_secondary,
+            g.text_dim,
+            g.text_placeholder,
+        ];
+        assert!(
+            ramp.windows(2)
+                .all(|w| crate::theme::luminance(w[0]) > crate::theme::luminance(w[1])),
+            "the text ramp must stay monotonic (row 18.3): {ramp:?}"
+        );
+        for c in ramp {
+            assert_eq!(c[0], c[1], "Figma's chrome greys are neutral: {c:?}");
+            assert_eq!(c[1], c[2], "Figma's chrome greys are neutral: {c:?}");
+        }
+        // help.figma.com 360041064814: light-mode canvas is `#F5F5F5`.
+        assert_eq!(
+            ColorTokens::DAYLIGHT.canvas,
+            [0xF5, 0xF5, 0xF5],
+            "daylight canvas (row 18.1)"
+        );
+    }
+
+    /// Both palettes are AA-clean. This is the gate that decides whether a
+    /// palette retune is allowed at all: 54 pairs, none below its floor.
+    #[test]
+    fn every_palette_is_aa_clean() {
+        for id in [
+            crate::theme::ThemeId::Graphite,
+            crate::theme::ThemeId::Daylight,
+        ] {
+            let p = id.palette();
+            assert_eq!(
+                p.contrast_pairs().len(),
+                54,
+                "{id:?}: 8 text roles x 6 surfaces + 3 accent fills + 1 label fill + 2 indicators"
+            );
+            assert!(
+                p.contrast_audit().is_empty(),
+                "{id:?} is not AA-clean: {:?}",
+                p.contrast_audit()
+            );
+            assert!(
+                p.contrast_headroom().unwrap_or(0.0) >= 1.0,
+                "{id:?} headroom dropped below its floor"
+            );
+        }
     }
 }

@@ -3473,7 +3473,7 @@ fn the_polygon_and_star_tools_count_their_sides() {
         (reg.canvas.y0 + reg.canvas.y1) / 2.0,
     );
     // the two tools are on the row and in the palette
-    assert_eq!(Tool::Poly.icon(), "triangle");
+    assert_eq!(Tool::Poly.icon(), "polygon");
     assert_eq!(Tool::Star.icon(), "star");
     assert_eq!(Tool::Poly.label(), "Polygon");
     assert_eq!(Tool::Star.label(), "Star");
@@ -5283,7 +5283,7 @@ fn app_ui_colors_are_derived_from_the_shared_palette() {
     // selection is the `selection` role; keyboard focus is `focus_ring`
     assert_eq!(crate::theme::C_SEL, crate::theme::rgb(p.selection));
     assert_eq!(crate::theme::C_FOCUS, crate::theme::rgb(p.focus_ring));
-    assert_eq!(rgb(p.text_primary), (0xF2, 0xF3, 0xF7)); // still the brand white
+    assert_eq!(rgb(p.text_primary), (0xFF, 0xFF, 0xFF)); // Figma's primary text is pure white
                                                          // toolbar keeps its alpha on top of the role
     let t = crate::theme::C_TOOLBAR.to_rgba8();
     assert_eq!(
@@ -5355,13 +5355,13 @@ fn app_row_heights_are_the_component_layers() {
         );
     }
 
-    // the two rows the component contract counts as off-standard today
-    for h in [crate::theme::TREE_ROW_H, crate::theme::DROPDOWN_ROW_H] {
-        assert!(
-            !metrics::is_control_height(h),
-            "{h} is on the scale now — lower OFF_STANDARD_COMPONENTS"
-        );
-    }
+    // the one row the component contract still counts as off-standard: the
+    // tree row moved onto the Dense step (24px) with the Figma-parity pass
+    let h = crate::theme::DROPDOWN_ROW_H;
+    assert!(
+        !metrics::is_control_height(h),
+        "{h} is on the scale now — lower OFF_STANDARD_COMPONENTS"
+    );
     assert_eq!(
         metrics::nearest_control_height(crate::theme::TREE_ROW_H),
         metrics::ControlHeight::Dense
@@ -5871,6 +5871,67 @@ fn pointer_says_what_it_will_do() {
         }
     }
     assert!(pointer >= 3, "only {pointer} controls advertise themselves");
+}
+
+/// Figma's cursor vocabulary is system cursors for the canvas tools — an
+/// I-beam over text, a crosshair over the geometry tools, a grab hand — so the
+/// pointer "says what it will do" without shipping custom bitmaps.
+#[test]
+fn the_text_tool_wears_an_i_beam() {
+    let mut h = host();
+    let reg = h.app.editor_regions();
+    h.app.mouse = reg.canvas.center();
+    h.app.tool = Tool::Text;
+    assert_eq!(
+        cursor_for(&h.app),
+        CursorIcon::Text,
+        "Figma's Text tool is an I-beam over the canvas"
+    );
+    h.app.tool = Tool::Rect;
+    assert_eq!(
+        cursor_for(&h.app),
+        CursorIcon::Crosshair,
+        "geometry tools draw on a crosshair"
+    );
+    h.app.tool = Tool::Hand;
+    assert_eq!(cursor_for(&h.app), CursorIcon::Grab, "the hand grabs");
+}
+
+/// Figma (help 360041488473): *"Each layer can have up to eight drop
+/// shadows, eight inner shadows, one layer blur, two noise effects, … and one
+/// background blur."* The add path enforces those caps instead of letting the
+/// panel stack without limit (master row 8.25).
+#[test]
+fn effect_adds_stop_at_figmas_per_type_caps() {
+    use x_native::EffectKind;
+    let mut h = effect_host();
+    fn add(h: &mut Host, k: x_native::EffectKind) -> bool {
+        h.app
+            .doc()
+            .editor()
+            .add_effect_layer("fx", x_native::Effect::default_of(k))
+    }
+    // one layer blur is the cap; a second is refused
+    assert!(add(&mut h, EffectKind::LayerBlur), "first blur lands");
+    assert!(
+        !add(&mut h, EffectKind::LayerBlur),
+        "one layer blur per layer"
+    );
+    // two noise effects, not three
+    assert!(add(&mut h, EffectKind::Noise));
+    assert!(add(&mut h, EffectKind::Noise));
+    assert!(
+        !add(&mut h, EffectKind::Noise),
+        "two noise effects per layer"
+    );
+    // eight drop shadows, not nine
+    for _ in 0..8 {
+        assert!(add(&mut h, EffectKind::DropShadow));
+    }
+    assert!(
+        !add(&mut h, EffectKind::DropShadow),
+        "eight drop shadows per layer"
+    );
 }
 
 /// The sort key is parsed from the label the UI shows, so the two cannot
@@ -8210,6 +8271,28 @@ fn shift_e_toggles_the_tabs_and_the_eraser_keeps_its_own_key() {
     assert_eq!(h.app.tool, Tool::Eraser);
 }
 
+/// Figma's Dev Mode (help 360039956914, master row 1.18): ⇧D switches the file
+/// to the inspect/code view — here the right panel's Inspect (SHIP) tab — and a
+/// second ⇧D leaves it back to Design.
+#[test]
+fn shift_d_enters_and_leaves_dev_mode() {
+    let mut h = host();
+    assert_eq!(h.app.doc_ref().right_tab, crate::state::RightTab::Design);
+
+    h.app.shift = true;
+    h.on_key(Key::Character("D".into()), None);
+    h.app.shift = false;
+    assert_eq!(h.app.doc_ref().right_tab, crate::state::RightTab::Inspect);
+    assert_eq!(h.app.status, "Dev Mode: Inspect");
+
+    h.app.shift = true;
+    h.on_key(Key::Character("D".into()), None);
+    h.app.shift = false;
+    assert_eq!(h.app.doc_ref().right_tab, crate::state::RightTab::Design);
+    assert_eq!(h.app.status, "Dev Mode off: Design");
+    assert_eq!(h.app.tool, Tool::Select, "dev mode is not a tool");
+}
+
 /// ⌘R renames the selected layer, ⇧A adds auto layout and ⌥⌘K makes a
 /// component — Figma's three keys for them, each on the path the menu
 /// already takes. ⇧⌘K stays Place image, ⇧⌘R stays this host's renumber.
@@ -9097,4 +9180,137 @@ fn the_shortcut_sheet_carries_the_outline_view_key() {
     crate::editor_ui::paint(&mut h.app, &mut scene);
     h.dispatch(Action::CloseShortcuts);
     assert!(!h.app.shortcuts_open);
+}
+
+/// Clean up layers (master row 5.9, chapter-4 framing): redundant single-child
+/// group nests are unwrapped in ONE undo entry while keeping world positions;
+/// groups that carry visual meaning (here: translucency) are left alone.
+#[test]
+fn clean_up_layers_flattens_redundant_nests_in_one_undo() {
+    let mut h = host();
+    let root = h.app.doc().editor_ref().root.id.clone();
+
+    // outer > inner > chip : a two-deep redundant chain
+    let mut inner = Node::group("inner", 100.0, 60.0);
+    inner.transform.x = 10.0;
+    inner.transform.y = 20.0;
+    inner
+        .children
+        .push(Node::rect("chip", 0.0, 0.0, 100.0, 60.0, Color::WHITE));
+    let mut outer = Node::group("outer", 100.0, 60.0);
+    outer.transform.x = 5.0;
+    outer.transform.y = 5.0;
+    outer.children.push(inner);
+    h.app.doc().editor().insert_node(&root, outer);
+
+    // a meaningful group: translucent, so it must survive the clean-up
+    let mut kept = Node::group("kept", 40.0, 40.0);
+    kept.opacity = 0.5;
+    kept.children
+        .push(Node::rect("dot", 0.0, 0.0, 40.0, 40.0, Color::WHITE));
+    h.app.doc().editor().insert_node(&root, kept);
+
+    let before = h.app.doc_ref().editor_ref().undo_depth();
+    let n = h.app.doc().editor().clean_up_layers();
+    assert_eq!(n, 2, "outer and inner unwrap; the translucent group stays");
+
+    // the chip kept its world position (5+10, 5+20) after both unwraps
+    let chip = find_node_clone(&h.app.doc_ref().editor_ref().root, "chip").unwrap();
+    assert_eq!((chip.transform.x, chip.transform.y), (15.0, 25.0));
+    assert!(find_node_clone(&h.app.doc_ref().editor_ref().root, "outer").is_none());
+    assert!(find_node_clone(&h.app.doc_ref().editor_ref().root, "inner").is_none());
+    assert!(
+        find_node_clone(&h.app.doc_ref().editor_ref().root, "kept").is_some(),
+        "a group with opacity is not redundant"
+    );
+
+    // the whole pass is ONE undo entry, and it restores the nests
+    assert_eq!(h.app.doc_ref().editor_ref().undo_depth(), before + 1);
+    h.app.doc().editor().undo();
+    assert!(find_node_clone(&h.app.doc_ref().editor_ref().root, "outer").is_some());
+    assert!(find_node_clone(&h.app.doc_ref().editor_ref().root, "inner").is_some());
+}
+
+/// Rotation sign (master row 6.1 / wave-2 item 19): Figma's field counts
+/// counter-clockwise positive while the engine stores the renderer's y-down
+/// (clockwise-positive) angle. The field and every readout show the negation in
+/// Figma's (−180, 180], and a typed value is converted back — the stored sign is
+/// untouched.
+#[test]
+fn the_rotation_field_shows_figmas_counter_clockwise_sign() {
+    use crate::state::{rotation_display, rotation_from_display};
+    // the conversion is its own inverse and re-ranges to (−180, 180]
+    assert_eq!(rotation_display(30.0), -30.0);
+    assert_eq!(rotation_from_display(-30.0), 30.0);
+    assert_eq!(rotation_display(180.0), 180.0, "180 stays 180, never -180");
+    assert_eq!(rotation_display(-195.0), -165.0, "range wraps like Figma's");
+
+    let mut h = host();
+    let root = h.app.doc().editor_ref().root.id.clone();
+    h.app.doc().editor().insert_node(
+        &root,
+        Node::rect("card", 0.0, 0.0, 100.0, 60.0, Color::WHITE),
+    );
+    h.app.doc().editor().selection = vec!["card".into()];
+
+    // store a clockwise 30° (the renderer's sign)
+    h.app.doc().editor().set_selection_rotation(30.0);
+    let stored = find_node_clone(&h.app.doc_ref().editor_ref().root, "card")
+        .unwrap()
+        .transform
+        .rotation
+        .to_degrees();
+    assert!(
+        (stored - 30.0).abs() < 1e-6,
+        "stored sign is clockwise: {stored}"
+    );
+    // …but the field reads the counter-clockwise value (within float noise: the
+    // stored angle round-trips degrees→radians→degrees, so compare like line
+    // above rather than with assert_eq on an f64)
+    assert!(
+        (crate::editor_ui::sel_info(&h.app).rot + 30.0).abs() < 1e-6,
+        "field reads ccw: {}",
+        crate::editor_ui::sel_info(&h.app).rot
+    );
+
+    // typing Figma's -30 stores +30 (the write converts back)
+    set_field(&mut h, FieldId::Rotation, "-30");
+    let stored = find_node_clone(&h.app.doc_ref().editor_ref().root, "card")
+        .unwrap()
+        .transform
+        .rotation
+        .to_degrees();
+    assert!(
+        (stored - 30.0).abs() < 1e-6,
+        "write converts ccw → cw: {stored}"
+    );
+
+    // the 180 edge shows 180, not -180 (same float-noise tolerance)
+    h.app.doc().editor().set_selection_rotation(180.0);
+    assert!(
+        (crate::editor_ui::sel_info(&h.app).rot - 180.0).abs() < 1e-6,
+        "180 edge: {}",
+        crate::editor_ui::sel_info(&h.app).rot
+    );
+}
+
+#[test]
+fn dev_mode_measure_and_annotate_are_exclusive_tools() {
+    let mut h = host();
+    assert!(!h.app.doc().dev_measure && !h.app.doc().dev_annotate);
+    assert!(
+        h.app.doc().toggle_dev_measure(),
+        "first press enters Measure"
+    );
+    assert!(h.app.doc().dev_measure && !h.app.doc().dev_annotate);
+    assert!(
+        h.app.doc().toggle_dev_annotate(),
+        "Annotate takes over from Measure"
+    );
+    assert!(h.app.doc().dev_annotate && !h.app.doc().dev_measure);
+    assert!(
+        !h.app.doc().toggle_dev_annotate(),
+        "a second press leaves Annotate"
+    );
+    assert!(!h.app.doc().dev_annotate);
 }

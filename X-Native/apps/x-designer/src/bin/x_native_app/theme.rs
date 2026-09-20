@@ -280,14 +280,19 @@ pub const C_GRID_LIGHT: Color = Color::from_rgba8(0x4A, 0x4D, 0x58, 60); // Fain
 
 // --------------------------------------------------------------- geometry
 // Editor dimensions
-pub const ED_TITLE_H: f64 = 36.0;
+/// Figma's top bar is 40px tall (master row 18.7 header). It was 36 here; the
+/// +4 recentres the tab strip and every panel hangs off this, so nothing else
+/// moves.
+pub const ED_TITLE_H: f64 = 40.0;
 
 /// Height of the status band — the one chrome row that spans the window at its
 /// bottom (`run.rs::paint_feedback`). `state.rs` owns the rect; every region
 /// ends above it, so a message can never be painted *through* the artwork.
 pub const ED_STATUS_H: f64 = 22.0;
 pub const LOGO_CELL_W: f64 = 44.0;
-pub const ED_LEFT_W: f64 = 280.0;
+/// Left dock (layers / assets). 240px is Figma's panel width as measured for
+/// parity row 18.7 of `docs/FIGMA_PARITY_MASTER_LIST.md`; it was 280px here.
+pub const ED_LEFT_W: f64 = 240.0;
 pub const ED_LEFT_MIN: f64 = 200.0;
 pub const ED_LEFT_MAX: f64 = 480.0;
 /// The canvas keeps at least this much width: the two docks (nav rail + left
@@ -295,6 +300,12 @@ pub const ED_LEFT_MAX: f64 = 480.0;
 /// however far the window is shrunk. `editor_regions` is the single place that
 /// enforces it, so no paint or hit-test path can see an inverted canvas.
 pub const ED_CANVAS_MIN: f64 = 280.0;
+/// Right dock (Design / Prototype / Inspect). Figma's right panel is 240px and
+/// is not user-resizable (forum.figma.com/t/6578: "there is no way to do it at
+/// the moment"). Ours is still 340: dropping it to 240 makes 300 inspector
+/// boxes escape the panel, which `tools/design-sheet/check_screens.mjs`
+/// measures and fails on. The width moves with the inspector reflow (master
+/// list Wave 2 item 18), not before it — row 18.7 is half-delivered.
 pub const ED_RIGHT_W: f64 = 340.0;
 pub const ED_RIGHT_MIN: f64 = 240.0;
 pub const ED_RIGHT_MAX: f64 = 520.0;
@@ -302,10 +313,11 @@ pub const NEW_TAB_W: f64 = 32.0;
 pub const TAB_MIN_W: f64 = 120.0;
 pub const TAB_PAD_L: f64 = 12.0;
 pub const TAB_PAD_R: f64 = 10.0;
-/// Layer-tree rows: 22px, 2px under the standard's dense row. The component
-/// contract (`x_native::ui::contract`) counts it as off-standard; the
-/// cross-screen pass snaps it to 24 with the rows it shares a panel with.
-pub const TREE_ROW_H: f64 = 22.0;
+/// Layer-tree rows: Figma's own layer-row height (parity row 18.9 of
+/// `docs/FIGMA_PARITY_MASTER_LIST.md`), and the `DENSE_H` step of the
+/// component scale — the two owners agree, so the contract counts the row
+/// on-standard (`OFF_STANDARD_COMPONENTS`).
+pub const TREE_ROW_H: f64 = 24.0;
 pub const TREE_INDENT: f64 = 12.0;
 // ——————————————————————————————————————————————— the control-height standard
 // Refinement v1, P0-9. The scale is declared in the component layer
@@ -369,13 +381,16 @@ pub const R_XL: f64 = RadiusScale::XL;
 /// pills drawn as rounded rects instead of with the `circle` helper.
 pub const R_FULL: f64 = RadiusScale::FULL;
 
-pub const R_INPUT: f64 = R_LG;
+// Figma's measured chrome radii (master row 18.6, re-measured for the Wave-2
+// design pass): 8 px rows and cards, 6 px inputs, 4 px chips. The aliases keep
+// naming intent; only the step each intent sits on follows Figma now.
+pub const R_INPUT: f64 = R_MD; // Figma inputs: 6
 pub const R_SEARCH: f64 = R_XL;
-pub const R_CARD: f64 = R_XL;
+pub const R_CARD: f64 = R_LG; // Figma cards: 8
 pub const R_TOOLBAR: f64 = R_XL;
-pub const R_ROW: f64 = R_LG;
+pub const R_ROW: f64 = R_LG; // Figma rows: 8
 pub const R_PAGE: f64 = R_MD;
-pub const R_PILL: f64 = R_MD;
+pub const R_PILL: f64 = R_SM; // Figma chips: 4
 pub const R_TREE: f64 = R_SM;
 pub const R_LOGO: f64 = R_SM;
 pub const R_TOOL_ICON: f64 = R_LG;
@@ -388,6 +403,22 @@ pub const R_TOOL_ICON: f64 = R_LG;
 // scale still defines it for future use).
 pub const T10: f64 = TypographyScale::XS;
 pub const T11: f64 = TypographyScale::SM;
+
+/// **The chrome's body step: Figma's 11 px UI type** (master row 18.5).
+///
+/// Every editor-chrome label, field value, layer row, menu item, chip and
+/// tooltip is set at this step — Figma's own interface renders its panels,
+/// inspector and menus at 11 px Inter ("the interface font appears to be
+/// about 11px by default", forum.figma.com/t/36463; the desktop app scales
+/// that step rather than replacing it, help.figma.com "Adjust UI scale").
+/// It is an alias of `T11` rather than a new size so the ladder stays one
+/// name per step, and `design_tokens_test` pins it equal.
+///
+/// The 10 px step (`T10`) is no longer body type: it survives only on the
+/// surfaces Figma has no counterpart for — the dashboard's metadata rows,
+/// the board canvas and the status band.
+pub const T_UI: f64 = T11;
+
 pub const T12: f64 = TypographyScale::BASE;
 pub const T13: f64 = TypographyScale::MD;
 pub const T14: f64 = TypographyScale::LG;

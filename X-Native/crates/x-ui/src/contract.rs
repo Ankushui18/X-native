@@ -237,11 +237,14 @@ pub static COMPONENTS: &[ComponentSpec] = &[
         id: ComponentId::TreeRow,
         name: "tree row",
         kind: ComponentKind::Interactive,
-        height: Some(22.0),
+        height: Some(24.0),
         target: Some(ControlHeight::Dense),
-        // 22px predates the scale; a tree is dense on purpose, but the step it
-        // should be is 24. P0-5 snaps it.
-        on_standard: false,
+        // Snapped to the Dense step, which is also Figma's own layer-row
+        // height — the parity row 18.9 of docs/FIGMA_PARITY_MASTER_LIST.md.
+        // It was 22px, "2px under the standard's dense row", and P0-5 named 24
+        // as the step it should be; the two owners agree, so the row is
+        // on-standard now and `OFF_STANDARD_COMPONENTS` came down by one.
+        on_standard: true,
         hit: true,
         focus_ring: false,
         states: &[WidgetState::Rest, WidgetState::Hover, WidgetState::Selected],
@@ -416,9 +419,10 @@ pub const COMPONENT_VARIANTS: &[ComponentId] = &[
     ComponentId::CapsLabel,
 ];
 
-/// Components with a scale target they do not sit on yet. P0-5 owns this
-/// number: it is the 22px tree row and the 32px dropdown row.
-pub const OFF_STANDARD_COMPONENTS: usize = 2;
+/// Components with a scale target they do not sit on yet. One today: the 32px
+/// dropdown row. (The tree row used to be the second — it sat at 22px and P0-5
+/// named 24 as its step; it is on the step now, so this came down by one.)
+pub const OFF_STANDARD_COMPONENTS: usize = 1;
 
 /// Components whose painter has moved into `x-ui`. Zero today: this milestone
 /// lands the contract first, and the painters move with the surfaces that use
@@ -527,8 +531,8 @@ mod tests {
         );
         assert_eq!(
             off,
-            vec![ComponentId::TreeRow, ComponentId::DropdownRow],
-            "the two rows that predate the scale"
+            vec![ComponentId::DropdownRow],
+            "the row that predates the scale"
         );
         for c in COMPONENTS {
             let Some(target) = c.target else {

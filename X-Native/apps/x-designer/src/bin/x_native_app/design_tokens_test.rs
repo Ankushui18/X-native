@@ -343,3 +343,71 @@ fn theme_constants_follow_the_palette_or_say_why_not() {
         );
     }
 }
+
+/// Radii follow Figma's measured chrome (master row 18.6): 8 px rows and cards,
+/// 6 px inputs, 4 px chips. Pinning the steps here means a future "tidy" cannot
+/// quietly re-round the chrome away from Figma.
+#[test]
+fn radii_follow_figmas_measured_chrome() {
+    use crate::theme::*;
+    assert_eq!(R_ROW, 8.0, "Figma rows are 8px");
+    assert_eq!(R_CARD, 8.0, "Figma cards are 8px");
+    assert_eq!(R_INPUT, 6.0, "Figma inputs are 6px");
+    assert_eq!(R_PILL, 4.0, "Figma chips are 4px");
+}
+
+/// The editor's top bar is Figma's 40px (master row 18.7 header), not the old
+/// 36. Pinning it stops a future pass from silently shrinking the chrome back.
+#[test]
+fn the_editor_header_is_figmas_forty_pixels() {
+    assert_eq!(crate::theme::ED_TITLE_H, 40.0);
+}
+
+/// Figma's UI is Inter on an 11 px base (master row 18.5). Both halves of that
+/// sentence are checked here rather than asserted in prose:
+///
+/// 1. **the face** — `TextUi::load` is the chrome's real font path, so the four
+///    weights it binds are read back from each file's own `name` table. A
+///    swapped, re-cut or mislabelled asset fails here instead of silently
+///    shipping a different face at the same stem name.
+/// 2. **the size** — the chrome's body step `T_UI` is 11 px on the shared
+///    ladder, and the 10 px step is gone from the editor's paint code, so a
+///    future "make it denser" pass cannot quietly drop the chrome below
+///    Figma's base.
+#[test]
+fn the_chrome_type_is_figmas_inter_at_eleven_pixels() {
+    let fonts = crate::paint::TextUi::load();
+    for (name, face) in [
+        ("regular", fonts.regular),
+        ("medium", fonts.medium),
+        ("semibold", fonts.semibold),
+        ("bold", fonts.bold),
+    ] {
+        let family = fonts.fonts.fonts[face]
+            .family_name()
+            .unwrap_or_else(|| "<face has no name table>".into());
+        assert_eq!(family, "Inter", "the chrome's {name} face is not Inter");
+    }
+    assert_eq!(
+        fonts.fonts.fonts[fonts.mono].family_name().as_deref(),
+        Some("JetBrains Mono"),
+        "numeric readouts keep the bundled mono face"
+    );
+
+    assert_eq!(crate::theme::T_UI, 11.0, "Figma's UI base is 11px");
+    assert_eq!(
+        crate::theme::T_UI,
+        crate::theme::T11,
+        "T_UI is the shared ladder's 11px step under the chrome's name, not a new size"
+    );
+    // deliberate substring count: the token is `T10` and nothing else in these
+    // files contains that sequence
+    for file in ["editor_ui.rs", "paint.rs"] {
+        let found = read(file).matches("T10").count();
+        assert_eq!(
+            found, 0,
+            "{file}: {found} uses of the 10px step remain — the chrome's body \
+             type is T_UI (11px), Figma's base"
+        );
+    }
+}

@@ -30,7 +30,12 @@ const ICONS: &[(&str, &[&str])] = &[
     ("chevron-up", &["m18 15-6-6-6 6"]),
     ("chevron-right", &["m9 18 6-6-6-6"]),
     ("arrow-down", &["M12 5v14", "m19 12-7 7-7-7"]),
-    ("arrow-up-right", &["M7 7h10v10", "M7 17 17 7"]),
+    // Figma's Arrow tool (⇧L): "the same segment, ending in the solid head
+    // the shape menu's arrow draws" — a shaft with a V head, like the
+    // arrow-up/-down/-right glyphs beside it. The old binding wore Lucide's
+    // `arrow-up-right`, whose head arms run 10 units along the box edges and
+    // read as a corner bracket ("open elsewhere"), not as a head on a shaft.
+    ("arrow-up-right", &["M5 19 19 5", "M12 5h7v7"]),
     ("arrow-left-right", &["M8 3 4 7l4 4", "M4 7h16", "m16 21 4-4-4-4", "M20 17H4"]),
     ("arrow-up-down", &["m21 16-4 4-4-4", "M17 20V4", "m3 8 4-4 4 4", "M7 4v16"]),
     ("more-horizontal", &[
@@ -59,11 +64,42 @@ const ICONS: &[(&str, &[&str])] = &[
         "M21 11a8 8 0 0 0-8-8",
         "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4",
     ]),
+    // Figma's Polygon glyph: a regular pentagon. The Polygon tool's default
+    // is a triangle, but Figma's toolbar shows five sides — the old binding
+    // wore Lucide's `triangle`, which is the shape the tool draws, not the
+    // tool's own mark. Regular pentagon, centre (12,12), r=9, point up.
+    ("polygon", &["M12 3 20.6 9.2 17.3 19.3 6.7 19.3 3.4 9.2Z"]),
+    // Figma's Scale glyph (K): a box with a diagonal double-headed arrow —
+    // "the whole layer scales", which is what separates it from Move. Lucide's
+    // `maximize` (four outward corners) reads as expand/fullscreen instead.
+    ("scale", &[
+        "M5 9V7a2 2 0 0 1 2-2h2",
+        "M19 15v2a2 2 0 0 1-2 2h-2",
+        "M8 16 16 8",
+        "M16 13V8h-5",
+    ]),
+    // Figma's Slice glyph: a bracketed region cut by a blade line — "a region
+    // whose only job is to be exported". The old binding wore Lucide's
+    // `scissors`, which is Figma's CUT action, so the same metaphor meant two
+    // different things in our chrome.
+    ("slice", &[
+        "M4 8V6a2 2 0 0 1 2-2h2",
+        "M20 8V6a2 2 0 0 0-2-2h-2",
+        "M4 16v2a2 2 0 0 0 2 2h2",
+        "M20 16v2a2 2 0 0 1-2 2h-2",
+        "M4 12h16",
+    ]),
     ("triangle", &[
         "M13.73 4a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z",
     ]),
+    // Figma's Star glyph: five points at the ratio the Star tool itself
+    // defaults to — `booleans::STAR_RATIO` = 0.382, "the distance of the inner
+    // points from the centre" — so the tool's mark is the shape the tool
+    // draws, on the same rule the polygon glyph follows. Outer r=9 about
+    // (12,12), point up; Lucide's star sits at 0.486 and reads chunkier than
+    // the shape it stands for.
     ("star", &[
-        "M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z",
+        "M12 3L14.02 9.22L20.56 9.22L15.27 13.06L17.29 19.28L12 15.44L6.71 19.28L8.73 13.06L3.44 9.22L9.98 9.22Z",
     ]),
     ("trash-2", &[
         "M3 6h18",
@@ -141,7 +177,10 @@ const ICONS: &[(&str, &[&str])] = &[
         "M10 10.5V6a2 2 0 0 0-4 0v8",
         "M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15",
     ]),
-    ("message-circle", &["M7.9 20A9 9 0 1 0 4 16.1L2 22Z"]),
+    // Figma's Comment is a rounded-square bubble with its tail at the bottom-
+    // left, not Lucide's circular one — the angular tail is what reads as
+    // "pin a note to a spot" rather than "chat".
+    ("message-circle", &["M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"]),
     ("history", &["M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8", "M3 3v5h5", "M12 7v5l4 2"]),
     ("play", &["M6 3l14 9-14 9z"]),
     ("pipette", &[
@@ -248,7 +287,11 @@ const ICONS: &[(&str, &[&str])] = &[
         "M18.5 8.5 22 12l-3.5 3.5L15 12l3.5-3.5Z",
         "m12 15 3.5 3.5L12 22l-3.5-3.5L12 15Z",
     ]),
-    ("frame#", &["M2 8h20", "M2 16h20", "M8 2v20", "M16 2v20"]),
+    // Figma's Frame glyph is a `#`. The key is spelled `frame-hash` rather
+    // than `frame#`: the icon vocabulary is `[a-z0-9-]`, and a `#` in the key
+    // is invisible to `extract_icons.mjs`, so the design sheet had no glyph to
+    // draw for the Frame tool.
+    ("frame-hash", &["M2 8h20", "M2 16h20", "M8 2v20", "M16 2v20"]),
     ("arrow-right", &["M5 12h14", "m12 5 7 7-7 7"]),
     ("arrow-up", &["M5 12h14", "m12 19-7-7 7-7"]),
     ("download", &["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", "m7 10 5 5 5-5", "M12 15V3"]),
@@ -264,9 +307,19 @@ const ICONS: &[(&str, &[&str])] = &[
     ("frame", &["M22 6H2", "M6 2v4", "M6 18v4", "M18 2v4", "M18 18v4"]),
     // Figma's Section: a rounded container with its title's first stroke
     // inside the top-left corner — the labelled box the tool draws.
+    // Figma's Section glyph: a DASHED square — the container whose whole job
+    // is to hold layers, drawn as an outline that is not a solid boundary.
+    // Eight short runs on the 24 grid; the old glyph was a solid rounded
+    // square with a label tick, which read as a frame, not a section.
     ("section", &[
-        "M6 3h12a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3z",
-        "M6.5 7.5h6",
+        "M8 4H6a2 2 0 0 0-2 2v2",
+        "M16 4h2a2 2 0 0 1 2 2v2",
+        "M20 16v2a2 2 0 0 1-2 2h-2",
+        "M8 20H6a2 2 0 0 1-2-2v-2",
+        "M11 4h2",
+        "M11 20h2",
+        "M4 11v2",
+        "M20 11v2",
     ]),
     ("keyboard", &[
         "M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z",
@@ -544,7 +597,7 @@ mod tests {
             "flip-vertical",
             "folder-open",
             "frame",
-            "frame#",
+            "frame-hash",
             "grid-2x2",
             "group",
             "hand",
@@ -610,6 +663,103 @@ mod tests {
             names.len(),
             79,
             "census list drifted — recount when adding icons"
+        );
+    }
+
+    /// The two glyphs redrawn to Figma's metaphors, pinned by *geometry*
+    /// rather than by eye (master row 18.10) — the same rule the polygon
+    /// glyph's census test follows: a tool's mark is the shape the tool makes.
+    ///
+    /// * the **Star** carries five points with the inner ones at
+    ///   `booleans::STAR_RATIO` (0.382) — Figma's "distance of the inner
+    ///   points from the centre", and the ratio this app's Star tool defaults
+    ///   to, so the glyph and the shape it draws agree;
+    /// * the **Arrow** is a shaft ending in a V head, like the
+    ///   arrow-up/-down/-right glyphs beside it. Lucide's `arrow-up-right`
+    ///   ran its head arms 10 units along the box edges, which reads as a
+    ///   corner bracket ("open elsewhere") rather than a head on a shaft.
+    #[test]
+    fn the_star_and_arrow_glyphs_are_figmas_metaphors() {
+        use vello::kurbo::{PathEl, Point};
+
+        fn pts_of(d: &str) -> Vec<Point> {
+            BezPath::from_svg(d)
+                .expect("glyph parses")
+                .elements()
+                .iter()
+                .filter_map(|el| match el {
+                    PathEl::MoveTo(p) | PathEl::LineTo(p) => Some(*p),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        // --- the star: ten vertices, alternating outer/inner at 0.382
+        let pts = pts_of(src("star")[0]);
+        assert_eq!(pts.len(), 10, "a five-point star has ten vertices");
+        let radius = |p: Point| ((p.x - 12.0) * (p.x - 12.0) + (p.y - 12.0) * (p.y - 12.0)).sqrt();
+        let outer = pts.iter().copied().map(radius).fold(0.0f64, f64::max);
+        let inner = pts.iter().copied().map(radius).fold(f64::MAX, f64::min);
+        assert!(
+            (outer - 9.0).abs() < 0.05,
+            "the tips ride the polygon glyph's r=9, got {outer:.2}"
+        );
+        let ratio = inner / outer;
+        assert!(
+            (ratio - x_native::booleans::STAR_RATIO).abs() < 0.01,
+            "the inner points sit at the Star tool's default ratio 0.382, got {ratio:.3}"
+        );
+
+        // --- the arrow: one shaft, and a head whose arms are equal and short
+        let arrow = src("arrow-up-right");
+        assert_eq!(arrow.len(), 2, "a shaft and a head");
+        let shaft = pts_of(arrow[0]);
+        let head = pts_of(arrow[1]);
+        assert_eq!(shaft.len(), 2, "the shaft is one segment");
+        assert_eq!(head.len(), 3, "a V head is two arms meeting at a tip");
+        let tip = head[1];
+        assert!(
+            (tip.x - shaft[1].x).abs() < 0.01 && (tip.y - shaft[1].y).abs() < 0.01,
+            "the head sits on the shaft's end"
+        );
+        let arm = |p: Point| ((p.x - tip.x) * (p.x - tip.x) + (p.y - tip.y) * (p.y - tip.y)).sqrt();
+        assert!(
+            (arm(head[0]) - arm(head[2])).abs() < 0.01,
+            "the two arms are the same length"
+        );
+        assert!(
+            arm(head[0]) < 8.0,
+            "the arms are a head, not Lucide's 10-unit corner bracket: {:.1}",
+            arm(head[0])
+        );
+    }
+
+    /// Figma's Comment is a rounded-square bubble with an angular tail at the
+    /// bottom-left — the tail is the metaphor ("pin a note to a spot"), so the
+    /// glyph must carry one closed outline that actually drops to a corner.
+    #[test]
+    fn the_comment_glyph_is_a_tailed_bubble() {
+        use vello::kurbo::{PathEl, Point};
+        let path = BezPath::from_svg(src("message-circle")[0]).expect("comment parses");
+        let closes = path
+            .elements()
+            .iter()
+            .filter(|e| matches!(e, PathEl::ClosePath))
+            .count();
+        assert_eq!(closes, 1, "one closed bubble outline");
+        let line_pts: Vec<Point> = path
+            .elements()
+            .iter()
+            .filter_map(|e| match e {
+                PathEl::MoveTo(p) | PathEl::LineTo(p) => Some(*p),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            line_pts
+                .iter()
+                .any(|p| (p.x - 3.0).abs() < 0.01 && (p.y - 21.0).abs() < 0.01),
+            "the tail drops to the bottom-left corner (3,21)"
         );
     }
 
