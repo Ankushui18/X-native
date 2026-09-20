@@ -8832,7 +8832,8 @@ fn paint_frame_labels(app: &mut App, s: &mut Scene) {
     let Some(doc) = app.doc_opt() else {
         return;
     };
-    let targets = x_native::frame_label_targets(&doc.editor_ref().root);
+    let root = &doc.editor_ref().root;
+    let targets = x_native::frame_label_targets(root);
     if targets.is_empty() {
         return;
     }
@@ -8840,9 +8841,7 @@ fn paint_frame_labels(app: &mut App, s: &mut Scene) {
     let reg = app.editor_regions();
     let size = x_native::LABEL_SIZE;
     for t in targets {
-        let Some((x, y, _, _)) =
-            crate::run::world_rect_of(&doc.editor_ref().root, t.id.as_str())
-        else {
+        let Some((x, y, _, _)) = crate::run::world_rect_of(root, t.id.as_str()) else {
             continue;
         };
         let a = app.world_to_screen(Point::new(x, y));
@@ -8851,10 +8850,11 @@ fn paint_frame_labels(app: &mut App, s: &mut Scene) {
         // label that would paint over the title bar or a dock is skipped, and
         // a name running past the canvas edge is truncated — chrome must never
         // paint over chrome.
-        if top < reg.canvas.y0 || top > reg.canvas.y1 {
-            continue;
-        }
-        if a.x < reg.canvas.x0 || a.x > reg.canvas.x1 {
+        let on_canvas = a.x >= reg.canvas.x0
+            && a.x <= reg.canvas.x1
+            && top >= reg.canvas.y0
+            && top <= reg.canvas.y1;
+        if !on_canvas {
             continue;
         }
         let shown = app.fonts.truncate(&t.name, size, Wt::Med, (reg.canvas.x1 - a.x).max(20.0));
