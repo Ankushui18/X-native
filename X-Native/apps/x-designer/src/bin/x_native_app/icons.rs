@@ -177,7 +177,10 @@ const ICONS: &[(&str, &[&str])] = &[
         "M10 10.5V6a2 2 0 0 0-4 0v8",
         "M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15",
     ]),
-    ("message-circle", &["M7.9 20A9 9 0 1 0 4 16.1L2 22Z"]),
+    // Figma's Comment is a rounded-square bubble with its tail at the bottom-
+    // left, not Lucide's circular one — the angular tail is what reads as
+    // "pin a note to a spot" rather than "chat".
+    ("message-circle", &["M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"]),
     ("history", &["M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8", "M3 3v5h5", "M12 7v5l4 2"]),
     ("play", &["M6 3l14 9-14 9z"]),
     ("pipette", &[
@@ -728,6 +731,33 @@ mod tests {
             arm(head[0]) < 8.0,
             "the arms are a head, not Lucide's 10-unit corner bracket: {:.1}",
             arm(head[0])
+        );
+    }
+
+    /// Figma's Comment is a rounded-square bubble with an angular tail at the
+    /// bottom-left — the tail is the metaphor ("pin a note to a spot"), so the
+    /// glyph must carry one closed outline that actually drops to a corner.
+    #[test]
+    fn the_comment_glyph_is_a_tailed_bubble() {
+        use vello::kurbo::{PathEl, Point};
+        let path = BezPath::from_svg(src("message-circle")[0]).expect("comment parses");
+        let closes = path
+            .elements()
+            .iter()
+            .filter(|e| matches!(e, PathEl::ClosePath))
+            .count();
+        assert_eq!(closes, 1, "one closed bubble outline");
+        let line_pts: Vec<Point> = path
+            .elements()
+            .iter()
+            .filter_map(|e| match e {
+                PathEl::MoveTo(p) | PathEl::LineTo(p) => Some(*p),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            line_pts.iter().any(|p| (p.x - 3.0).abs() < 0.01 && (p.y - 21.0).abs() < 0.01),
+            "the tail drops to the bottom-left corner (3,21)"
         );
     }
 

@@ -5874,6 +5874,30 @@ fn pointer_says_what_it_will_do() {
     assert!(pointer >= 3, "only {pointer} controls advertise themselves");
 }
 
+/// Figma's cursor vocabulary is system cursors for the canvas tools — an
+/// I-beam over text, a crosshair over the geometry tools, a grab hand — so the
+/// pointer "says what it will do" without shipping custom bitmaps.
+#[test]
+fn the_text_tool_wears_an_i_beam() {
+    let mut h = host();
+    let reg = h.app.editor_regions();
+    h.app.mouse = reg.canvas.center();
+    h.app.tool = Tool::Text;
+    assert_eq!(
+        cursor_for(&h.app),
+        CursorIcon::Text,
+        "Figma's Text tool is an I-beam over the canvas"
+    );
+    h.app.tool = Tool::Rect;
+    assert_eq!(
+        cursor_for(&h.app),
+        CursorIcon::Crosshair,
+        "geometry tools draw on a crosshair"
+    );
+    h.app.tool = Tool::Hand;
+    assert_eq!(cursor_for(&h.app), CursorIcon::Grab, "the hand grabs");
+}
+
 /// The sort key is parsed from the label the UI shows, so the two cannot
 /// disagree; an unknown label sorts last instead of jumping to the top.
 #[test]

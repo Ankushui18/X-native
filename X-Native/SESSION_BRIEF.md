@@ -16,7 +16,7 @@ values Figma ships sub-AA (accent fill, dim grey) are pinned as deliberate
 deviations by `graphite_carries_figmas_chrome_values`.
 
 **Scoreboard (branch, verified):** 339 rows — **264 MATCH / 46 PARTIAL /
-10 MISSING / 16 EXTRA / 3 OUT**. Guard: 10 checks, 74 pinned, 0 open, 0 failed.
+10 MISSING / 16 EXTRA / 3 OUT**. Guard: 10 checks, 76 pinned, 0 open, 0 failed.
 
 The single source of truth for what's next remains
 `docs/FIGMA_PARITY_MASTER_LIST.md`.
@@ -55,11 +55,18 @@ The single source of truth for what's next remains
    `the_chrome_type_is_figmas_inter_at_eleven_pixels`. Row 18.5 → MATCH.
 
 6. ~~**Icon vocabulary (row 18.10), part**~~ — `star` redrawn at Figma's 0.382
-   default ratio, `arrow-up-right` redrawn as shaft+V head, Frame glyph keyed
-   `frame-hash` so the sheet can draw it, Slice layers wear the Slice glyph, and
-   the icon census now reads the `fn icon()`/`kind_icon` tables so "unused" is
-   real. Pinned by `the_star_and_arrow_glyphs_are_figmas_metaphors`. Row 18.10
-   stays PARTIAL — hand, pen nib and comment bubble still read Lucide.
+   default ratio, `arrow-up-right` redrawn as shaft+V head, `comment` redrawn to
+   Figma's tailed rounded-square bubble, Frame glyph keyed `frame-hash` so the
+   sheet can draw it, Slice layers wear the Slice glyph, and the icon census now
+   reads the `fn icon()`/`kind_icon` tables so "unused" is real. Pinned by
+   `the_star_and_arrow_glyphs_are_figmas_metaphors`,
+   `the_comment_glyph_is_a_tailed_bubble`. Row 18.10 stays PARTIAL — hand and
+   pen nib still read Lucide.
+
+6b. ~~**Canvas cursors (row 18.11), part**~~ — the Text tool armed on the canvas
+   now shows an I-beam (was the drawing crosshair); geometry tools crosshair,
+   Hand grab. Pinned by `the_text_tool_wears_an_i_beam`. Figma's custom bitmap
+   cursors remain deferred to CI; row 18.11 stays PARTIAL.
 
 7. **Wave 2 remainder** (items 16–19): right dock at 240 — needs the inspector
    reflow (`paint_design` offsets are absolute for ~340px; a CI-compiled

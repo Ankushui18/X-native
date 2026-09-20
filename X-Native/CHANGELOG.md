@@ -5,6 +5,25 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-20 (Comment glyph + canvas cursor vocabulary — rows 18.10/18.11)
+
+Two small, pinnable steps of the design-language tail:
+
+- **Comment glyph** redrawn to Figma's rounded-square speech bubble with its
+  tail at the bottom-left (one closed outline that drops to a corner), replacing
+  Lucide's circular chat bubble. Pinned by
+  `the_comment_glyph_is_a_tailed_bubble` and rasterized/inspected before
+  shipping.
+- **Canvas cursors** now follow Figma's system-cursor vocabulary: the Text tool
+  armed on the canvas shows an I-beam (it used to wear the drawing crosshair),
+  geometry tools stay on crosshair, Hand stays grab. Pinned by
+  `the_text_tool_wears_an_i_beam`. Figma's *custom bitmap* cursors (pen nib,
+  comment pin) remain deferred — that is platform cursor work for CI, so row
+  18.11 stays PARTIAL.
+
+Guard now reports 76 pinned; the Node gates stay green (guard 10/0, check 40/0,
+check_screens 20/0).
+
 ## [Unreleased] — 2026-09-20 (Icon vocabulary toward Figma — master row 18.10, part)
 
 Continuing the icon pass with the same rule as before: a tool's mark is the

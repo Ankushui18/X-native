@@ -14887,6 +14887,10 @@ pub fn cursor_for(app: &App) -> CursorIcon {
                 match app.tool {
                     Tool::Hand => CursorIcon::Grab,
                     Tool::Select => CursorIcon::Default,
+                    // Figma's Text tool advertises an I-beam over the canvas,
+                    // like any text surface — not the drawing crosshair the
+                    // geometry tools wear (help 360041064174).
+                    Tool::Text => CursorIcon::Text,
                     _ => CursorIcon::Crosshair,
                 }
             } else {
