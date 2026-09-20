@@ -82,7 +82,11 @@ pub fn frame_label_targets(root: &Node) -> Vec<FrameLabelTarget> {
         if !is_root && !in_frame && n.show_name && matches!(n.kind, NodeKind::Frame { .. }) {
             out.push(FrameLabelTarget {
                 id: n.id.clone(),
-                name: if n.name.is_empty() { "Frame".to_string() } else { n.name.clone() },
+                name: if n.name.is_empty() {
+                    "Frame".to_string()
+                } else {
+                    n.name.clone()
+                },
             });
         }
         // `lower` resolves an instance's master subtree with `in_frame = true`
@@ -2344,11 +2348,7 @@ mod tests {
             .iter()
             .map(|t| t.name.clone())
             .collect();
-        assert_eq!(
-            names,
-            vec!["Hero".to_string(), "Card".to_string()],
-            "outermost frames + frames in sections only, got {names:?}"
-        );
+        assert_eq!(names, vec!["Hero".to_string(), "Card".to_string()]);
         let ids: Vec<String> = frame_label_targets(&page)
             .iter()
             .map(|t| t.id.clone())
@@ -2399,8 +2399,7 @@ mod tests {
             .collect();
         via_ir.sort();
         assert_eq!(
-            via_walk,
-            via_ir,
+            via_walk, via_ir,
             "overlay targets and IR agree on frame names"
         );
         assert_eq!(via_walk, vec!["Card".to_string(), "Hero".to_string()]);

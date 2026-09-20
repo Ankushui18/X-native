@@ -6887,14 +6887,8 @@ impl Host {
                 // committing empty deletes it. A click stays auto-width and
                 // hugs the typed text; a drag pins the drawn box (Fixed size).
                 let tid = x_native::fresh_id("text");
-                let mut t = Node::text(
-                    &tid,
-                    x,
-                    y,
-                    w.max(120.0),
-                    if create_dragged { h.max(14.0) } else { 14.0 },
-                    "",
-                );
+                let th = if create_dragged { h.max(14.0) } else { 14.0 };
+                let mut t = Node::text(&tid, x, y, w.max(120.0), th, "");
                 if create_dragged {
                     t.bindings.insert("tm".into(), "fixed".into());
                 }

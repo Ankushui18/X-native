@@ -679,11 +679,7 @@ fn escape_on_a_fresh_empty_text_discards_the_layer() {
     let kids = h.app.doc_ref().editor_ref().root.children.len();
     h.on_key(Key::Named(NamedKey::Escape), None);
     assert!(h.app.text_edit.is_none());
-    assert_eq!(
-        h.app.doc_ref().editor_ref().root.children.len(),
-        kids - 1,
-        "committing empty text removes the fresh node"
-    );
+    assert_eq!(h.app.doc_ref().editor_ref().root.children.len(), kids - 1);
 }
 
 #[test]
