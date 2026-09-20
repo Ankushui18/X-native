@@ -737,7 +737,11 @@ fn the_text_tool_edits_the_text_it_clicks() {
     );
     let kids = h.app.doc_ref().editor_ref().root.children.len();
     h.app.tool = Tool::Text;
-    h.finish_create(Tool::Text, Point::new(150.0, 110.0), Point::new(150.0, 110.0));
+    h.finish_create(
+        Tool::Text,
+        Point::new(150.0, 110.0),
+        Point::new(150.0, 110.0),
+    );
     assert_eq!(
         h.app.doc_ref().editor_ref().root.children.len(),
         kids,
@@ -772,11 +776,7 @@ fn inspect_measurements_gap_tokens_assets_and_jsx_read_the_engine() {
     let mut h = host();
     h.finish_create(Tool::Rect, Point::new(40.0, 40.0), Point::new(160.0, 84.0));
     let a = h.app.doc_ref().selected_id().unwrap();
-    h.finish_create(
-        Tool::Rect,
-        Point::new(200.0, 40.0),
-        Point::new(280.0, 84.0),
-    );
+    h.finish_create(Tool::Rect, Point::new(200.0, 40.0), Point::new(280.0, 84.0));
     let b = h.app.doc_ref().selected_id().unwrap();
 
     // one layer: X/Y/W/H + the gaps to the parent frame's edges
