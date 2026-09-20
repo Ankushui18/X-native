@@ -28,8 +28,8 @@
     <code>shots.mjs</code> in a real browser at 1440×900, scale 1. These are pixels for the
     same claims <a href="screens.html">Every screen</a> makes.</p>
     <div class="nav-group">Renderer</div>
-    <p class="fine">AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.0 Safari/537.36<br>captured 2026-09-17 20:34, one file per screen,
-    largest 113 KB.</p>
+    <p class="fine">AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.0 Safari/537.36<br>captured 2026-09-20 05:21, one file per screen,
+    largest 101 KB.</p>
     <div class="nav-group">Screens</div>
     <a href="#dash-home-grid"><i></i>Home · Grid</a>
     <a href="#dash-home-list"><i></i>Home · List</a>
@@ -172,7 +172,7 @@
       <span class="badge new">shots/editor-structure.png · 1440×900</span>
       <a class="shotlink" href="shots/editor-structure.png">Open PNG</a>
     </div>
-    <p>Full editor chrome: title bar 36, rail 48, left dock 280 (STRUCTURE / LIBRARY / TOKENS), right dock 340, rulers, tool dock 40 tall. The COMPOSE inspector is drawn from paint_design: name + %, W/H, X/Y, rotation, Auto layout, Flow, Resizing, Alignment, Padding, Clip content, Appearance, Typography — fields are filled boxes with no outline until hover, and the value being typed into is ringed.</p>
+    <p>Full editor chrome: title bar 36, rail 48, left dock 240 (STRUCTURE / LIBRARY / TOKENS), right dock 340, rulers, tool dock 40 tall. The COMPOSE inspector is drawn from paint_design: name + %, W/H, X/Y, rotation, Auto layout, Flow, Resizing, Alignment, Padding, Clip content, Appearance, Typography — fields are filled boxes with no outline until hover, and the value being typed into is ringed.</p>
     <p>Three canvas aids ship in this frame: the minimap (bottom-right, ⇧M or its ✕), page sketches in every PAGES row that has content, and ⇧1 fitting the frame to the page content.</p>
     <div class="capture"><img class="shot" src="shots/editor-structure.png" width="1440" height="900" alt="Editor · Structure + canvas at 1440×900"></div>
     <div class="checks"><span>STRUCTURE</span><span>LIBRARY</span><span>TOKENS</span><span>COMPOSE</span><span>minimap</span><span>PAGES</span><span>sketch</span><span>Auto layout</span><span>Resizing</span><span>Alignment</span><span>Padding</span><span>Appearance</span><span>Typography</span></div>
@@ -185,10 +185,10 @@
       <span class="badge new">shots/editor-library.png · 1440×900</span>
       <a class="shotlink" href="shots/editor-library.png">Open PNG</a>
     </div>
-    <p>Left dock on LIBRARY: assets in this file, then linked libraries.</p>
+    <p>Left dock on LIBRARY: the faces the render stack knows (Load Font…) and the libraries this document is linked to, each with its pinned version and a check pill.</p>
     <p>The left tabs are STRUCTURE / LIBRARY / TOKENS — X-Native names its own model (scene graph, not a Figma clone).</p>
     <div class="capture"><img class="shot" src="shots/editor-library.png" width="1440" height="900" alt="Editor · Library at 1440×900"></div>
-    <div class="checks"><span>LIBRARY</span><span>LIBRARIES</span><span>linked</span></div>
+    <div class="checks"><span>LIBRARY</span><span>FONTS</span><span>Load Font…</span><span>LIBRARIES</span><span>check</span></div>
   </section>
   <section class="card" id="editor-tokens">
     <div class="card-h">
@@ -198,10 +198,10 @@
       <span class="badge new">shots/editor-tokens.png · 1440×900</span>
       <a class="shotlink" href="shots/editor-tokens.png">Open PNG</a>
     </div>
-    <p>Left dock on TOKENS: the document variables, grouped by kind.</p>
+    <p>Left dock on TOKENS: what the document already paints with (colours, type scale, spacing), the extract-to-variables action, the four create-kind buttons and every variable with its delete ✕.</p>
     <p>Variable edits route through the undo log; the inspector shows the variable name beside any bound fill.</p>
     <div class="capture"><img class="shot" src="shots/editor-tokens.png" width="1440" height="900" alt="Editor · Tokens at 1440×900"></div>
-    <div class="checks"><span>TOKENS</span><span>color/accent</span><span>undoable</span></div>
+    <div class="checks"><span>TOKENS</span><span>TYPE SCALE</span><span>NEW VARIABLE</span><span>VARIABLES</span></div>
   </section>
   <section class="card" id="editor-flow">
     <div class="card-h">
@@ -328,10 +328,10 @@
       <span class="badge new">shots/editor-app-menu.png · 1440×900</span>
       <a class="shotlink" href="shots/editor-app-menu.png">Open PNG</a>
     </div>
-    <p>The hamburger menu, 220 wide: file actions, export, find, theme, preferences.</p>
+    <p>The hamburger menu, 220 wide: file actions, export, find, the two theme rows, and the welcome card.</p>
     <p>Every row here is a real action; shortcuts are shown only where the app binds them.</p>
     <div class="capture"><img class="shot" src="shots/editor-app-menu.png" width="1440" height="900" alt="App menu at 1440×900"></div>
-    <div class="checks"><span>New file</span><span>Export as…</span><span>Preferences</span></div>
+    <div class="checks"><span>New file</span><span>Export as…</span><span>Theme: Graphite (dark)</span><span>Welcome & shortcuts</span></div>
   </section>
   <section class="card" id="editor-find">
     <div class="card-h">
