@@ -5701,22 +5701,21 @@ impl App {
         }
         let id = doc.selected_id()?;
         let m = x_native::editor::node_measurements(&doc.editor_ref().root, &id)?;
-        Some((
-            format!(
-                "X {}   Y {}   W {}   H {}",
-                inspect_num(m.x),
-                inspect_num(m.y),
-                inspect_num(m.w),
-                inspect_num(m.h)
-            ),
-            format!(
-                "← {}   → {}   ↑ {}   ↓ {}",
-                inspect_num(m.left),
-                inspect_num(m.right),
-                inspect_num(m.top),
-                inspect_num(m.bottom)
-            ),
-        ))
+        let l1 = format!(
+            "X {}   Y {}   W {}   H {}",
+            inspect_num(m.x),
+            inspect_num(m.y),
+            inspect_num(m.w),
+            inspect_num(m.h)
+        );
+        let l2 = format!(
+            "← {}   → {}   ↑ {}   ↓ {}",
+            inspect_num(m.left),
+            inspect_num(m.right),
+            inspect_num(m.top),
+            inspect_num(m.bottom)
+        );
+        Some((l1, l2))
     }
 
     /// Gap readout for two selected layers — Figma's hovered-node measurement
@@ -5730,19 +5729,21 @@ impl App {
         };
         let g = x_native::editor::node_gap(&doc.editor_ref().root, a, b)?;
         if let Some(n) = g.nested {
-            Some(format!(
+            let s = format!(
                 "inset  ← {}   → {}   ↑ {}   ↓ {}",
                 inspect_num(n.left),
                 inspect_num(n.right),
                 inspect_num(n.top),
                 inspect_num(n.bottom)
-            ))
+            );
+            Some(s)
         } else {
-            Some(format!(
+            let s = format!(
                 "↔ {}   ↕ {}",
                 inspect_num(g.horizontal),
                 inspect_num(g.vertical)
-            ))
+            );
+            Some(s)
         }
     }
 

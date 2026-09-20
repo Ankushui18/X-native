@@ -1196,7 +1196,10 @@ mod reliability_tests {
                 .commands
                 .iter()
                 .any(|c| crate::ir::is_frame_name_label(c.key()));
-            assert!(!labelled, "no /label on the canvas (presenting={presenting})");
+            assert!(
+                !labelled,
+                "no /label on the canvas (presenting={presenting})"
+            );
         }
     }
 

@@ -2398,7 +2398,11 @@ mod tests {
             })
             .collect();
         via_ir.sort();
-        assert_eq!(via_walk, via_ir, "overlay targets and IR agree on frame names");
+        assert_eq!(
+            via_walk,
+            via_ir,
+            "overlay targets and IR agree on frame names"
+        );
         assert_eq!(via_walk, vec!["Card".to_string(), "Hero".to_string()]);
     }
 
