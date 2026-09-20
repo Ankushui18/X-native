@@ -8157,6 +8157,26 @@ impl Host {
                 };
                 return;
             }
+            // ⇧M / ⇧T — Figma Dev Mode toolbar tools (Guide to inspecting
+            // 22012921621015): Measure and Annotate. View states, not edits.
+            if self.app.shift && c == "M" {
+                let on = self.app.doc().toggle_dev_measure();
+                self.app.status = if on {
+                    "Dev Mode: Measure on".into()
+                } else {
+                    "Dev Mode: Measure off".into()
+                };
+                return;
+            }
+            if self.app.shift && c == "T" {
+                let on = self.app.doc().toggle_dev_annotate();
+                self.app.status = if on {
+                    "Dev Mode: Annotate on".into()
+                } else {
+                    "Dev Mode: Annotate off".into()
+                };
+                return;
+            }
             // ⇧A — add auto layout (Figma's shortcut; plain A stays free)
             if self.app.shift && c == "A" {
                 self.dispatch(Action::AddAutoLayout);

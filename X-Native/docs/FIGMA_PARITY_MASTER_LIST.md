@@ -46,13 +46,13 @@ recon task, not a settled fact.
 | 12 Components, instances, styles | 21 | 18 | 3 | 0 | 0 | 0 |
 | 13 Variables & modes | 9 | 6 | 3 | 0 | 0 | 0 |
 | 14 Prototype | 30 | 20 | 9 | 0 | 0 | 1 |
-| 15 Inspect, dev mode, codegen | 10 | 5 | 3 | 2 | 0 | 0 |
+| 15 Inspect, dev mode, codegen | 10 | 5 | 4 | 1 | 0 | 0 |
 | 16 Export & import | 12 | 11 | 1 | 0 | 0 | 0 |
 | 17 Canvas view & navigation | 14 | 11 | 1 | 0 | 1 | 1 |
 | 18 Design language (look of the app itself) | 12 | 6 | 6 | 0 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **340** | **268** | **46** | **6** | **16** | **4** |
+| **total** | **340** | **268** | **47** | **5** | **16** | **4** |
 
 The 17 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
@@ -450,9 +450,9 @@ scroll behaviour, flows and flow starting points, device preview.
 | 15.3 | Copy as code from the canvas menu | "Copy as code" item | `CtxCmd::CopyAsCode` | MATCH |
 | 15.4 | Platform switch | Web / iOS / Android | `InspectPlatform` | MATCH |
 | 15.5 | Measurements between layers | select an object, hold `⌥`/Alt and hover a second → red line plus horizontal/vertical measurements; in Dev Mode hovering surrounding layers also shows padding (Guide to inspecting `22012921621015`) | no measure gesture | **MISSING** |
-| 15.6 | Annotations | Annotate `⇧T`: green dot on the layer, click to reveal, note + **+ Property** chips (Guide to inspecting `22012921621015`) | not implemented | PARTIAL |
+| 15.6 | Annotations | Annotate `⇧T`: green dot on the layer, click to reveal, note + **+ Property** chips (Guide to inspecting `22012921621015`) | `⇧T` toggles Annotate mode, exclusive with Measure (pinned by the same test); green-dot markers + note editor not yet drawn | PARTIAL |
 | 15.7 | Dev Mode toggle `⇧D` | `⇧D` / top-right toggle enters Dev Mode (`help 360039956914`) | `⇧D` IS implemented — run.rs:8142 switches the right panel to Inspect and back ("Dev Mode: Inspect" / "Dev Mode off: Design") — but it maps to the Inspect tab rather than a distinct Dev Mode chrome whose toolbar carries Inspect/Measure/Annotate/Comment | PARTIAL |
-| 15.10 | Measure tool `⇧M` | a persistent measurement you click-drag between layers, repositionable (Guide to inspecting `22012921621015`) | not implemented | **MISSING** |
+| 15.10 | Measure tool `⇧M` | a persistent measurement you click-drag between layers, repositionable (Guide to inspecting `22012921621015`) | `⇧M` toggles Dev-Mode Measure as an exclusive view state (pinned by `dev_mode_measure_and_annotate_are_exclusive_tools`); the canvas redline drag is not yet drawn | PARTIAL |
 | 15.8 | Code Connect / component mapping | yes | not implemented | PARTIAL (low) |
 | 15.9 | Asset download from inspect | export from inspect | export path | MATCH |
 

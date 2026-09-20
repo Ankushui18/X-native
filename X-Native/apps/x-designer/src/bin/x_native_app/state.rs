@@ -3110,6 +3110,13 @@ pub struct OpenDoc {
     pub tree_search: String,
     pub left_tab: LeftTab,
     pub right_tab: RightTab,
+    /// Dev Mode **Measure** tool (`⇧M`, Figma Dev Mode toolbar — Guide to
+    /// inspecting `22012921621015`): a view state, not a document edit; while on,
+    /// hover surfaces redline distances. Exclusive with [`OpenDoc::dev_annotate`].
+    pub dev_measure: bool,
+    /// Dev Mode **Annotate** tool (`⇧T`): while on, clicking a layer drops a
+    /// green-dot annotation instead of selecting. Exclusive with Measure.
+    pub dev_annotate: bool,
     pub frame_preset: usize,
     pub flow: usize,
     /// v45 mock boot state: flow pills 0 AND 2 carry .active in the HTML
@@ -3552,6 +3559,8 @@ impl OpenDoc {
             tree_search: String::new(),
             left_tab: LeftTab::Layers,
             right_tab: RightTab::Design,
+            dev_measure: false,
+            dev_annotate: false,
             frame_preset: 0,
             flow: 0,
             flow_boot_mock: false,
@@ -3606,6 +3615,8 @@ impl OpenDoc {
             tree_search: String::new(),
             left_tab: LeftTab::Layers,
             right_tab: RightTab::Design,
+            dev_measure: false,
+            dev_annotate: false,
             frame_preset: 0,
             flow: 0,
             flow_boot_mock: false,
@@ -7493,5 +7504,26 @@ mod stroke_panel_tests {
         assert!((miter_limit_to_angle(o.miter_limit) - miter_limit_to_angle(4.0)).abs() < 1e-9);
         assert_eq!(o.cap_start, StrokeCap::None, "a butt end by default");
         assert_eq!(o.cap_end, StrokeCap::None);
+    }
+}
+
+impl OpenDoc {
+    /// Figma Dev Mode **Measure** (`⇧M`): toggle; entering Measure leaves Annotate.
+    /// Returns the new state so callers can set their status line.
+    pub fn toggle_dev_measure(&mut self) -> bool {
+        self.dev_measure = !self.dev_measure;
+        if self.dev_measure {
+            self.dev_annotate = false;
+        }
+        self.dev_measure
+    }
+
+    /// Figma Dev Mode **Annotate** (`⇧T`): toggle; entering Annotate leaves Measure.
+    pub fn toggle_dev_annotate(&mut self) -> bool {
+        self.dev_annotate = !self.dev_annotate;
+        if self.dev_annotate {
+            self.dev_measure = false;
+        }
+        self.dev_annotate
     }
 }
