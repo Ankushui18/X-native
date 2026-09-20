@@ -5283,7 +5283,7 @@ fn app_ui_colors_are_derived_from_the_shared_palette() {
     // selection is the `selection` role; keyboard focus is `focus_ring`
     assert_eq!(crate::theme::C_SEL, crate::theme::rgb(p.selection));
     assert_eq!(crate::theme::C_FOCUS, crate::theme::rgb(p.focus_ring));
-    assert_eq!(rgb(p.text_primary), (0xF2, 0xF3, 0xF7)); // still the brand white
+    assert_eq!(rgb(p.text_primary), (0xFF, 0xFF, 0xFF)); // Figma's primary text is pure white
                                                          // toolbar keeps its alpha on top of the role
     let t = crate::theme::C_TOOLBAR.to_rgba8();
     assert_eq!(
