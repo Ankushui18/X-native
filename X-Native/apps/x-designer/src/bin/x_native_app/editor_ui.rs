@@ -12415,7 +12415,8 @@ fn paint_tokens(
                 .collect::<Vec<_>>()
                 .join(" · ")
         );
-        app.fonts.text(s, x0 + 4.0, y, &row, T_UI, C_MUTED, Wt::Mono);
+        app.fonts
+            .text(s, x0 + 4.0, y, &row, T_UI, C_MUTED, Wt::Mono);
         y += 16.0;
     }
     let vcount = app

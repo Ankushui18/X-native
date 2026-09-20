@@ -756,7 +756,9 @@ mod tests {
             })
             .collect();
         assert!(
-            line_pts.iter().any(|p| (p.x - 3.0).abs() < 0.01 && (p.y - 21.0).abs() < 0.01),
+            line_pts
+                .iter()
+                .any(|p| (p.x - 3.0).abs() < 0.01 && (p.y - 21.0).abs() < 0.01),
             "the tail drops to the bottom-left corner (3,21)"
         );
     }
