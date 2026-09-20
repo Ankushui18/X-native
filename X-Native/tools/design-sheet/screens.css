@@ -386,8 +386,6 @@ body {
 .tool { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 8px; color: var(--text-dim); }
 .tool.on { background: var(--accent); color: var(--on-accent); }
 .toolsplit { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
-/* Figma's tools sit centred in the top bar, not in a floating dock (18.8). */
-.dock.top { border: 0; box-shadow: none; background: transparent; }
 .popover { padding: 10px; display: grid; gap: 6px; box-shadow: 0 14px 40px var(--g-scrim); }
 .pop-h { display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 500; }
 .pop-t { font-size: 9.5px; letter-spacing: .1em; color: var(--text-dim); display: flex; align-items: center; gap: 4px; padding-top: 4px; }
