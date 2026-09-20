@@ -2044,11 +2044,7 @@ fn paint_nav_bar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                 ir.y1 - 12.0,
                 label,
                 9.0,
-                if active {
-                    C_NAV_ICON_ACTIVE
-                } else {
-                    C_NAV_LABEL
-                },
+                if active { C_NAV_ICON_ACTIVE } else { C_NAV_LABEL },
                 Wt::Reg,
             );
         }
@@ -2411,11 +2407,7 @@ fn paint_find_replace(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         line_top(case_r, 9.0),
         "Aa",
         9.0,
-        if app.find_replace.case_sensitive {
-            C_ON_ACCENT
-        } else {
-            C_DIM
-        },
+        if app.find_replace.case_sensitive { C_ON_ACCENT } else { C_DIM },
         Wt::Bold,
     );
     hit.push((case_r, Action::ToggleCaseSensitive));
@@ -3085,11 +3077,7 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
                 line_top(r, T11),
                 &shown,
                 T11,
-                if selected || editing {
-                    C_TEXT
-                } else {
-                    C_ZINC_400
-                },
+                if selected || editing { C_TEXT } else { C_ZINC_400 },
                 Wt::Reg,
             );
             hit.push((r, Action::TreeRow(row.id.clone())));
@@ -7465,7 +7453,7 @@ fn paint_image_adjustments(
             s,
             mode_r.x0 + 8.0,
             mode_r.y0 + 7.0,
-            &format!("Fill mode  ·  {}", image_fit_label(fit)),
+            &format!("Fill mode · {}", image_fit_label(fit)),
             T_UI,
             C_TEXT,
             Wt::Reg,
@@ -7511,7 +7499,8 @@ fn paint_image_adjustments(
             s,
             x0,
             y,
-            "Drag a corner to crop - Enter applies, Esc cancels",
+            "Drag a corner to crop - Enter applies,
+            Esc cancels",
             T_UI,
             C_DIM,
             Wt::Reg,
@@ -8206,7 +8195,8 @@ fn proto_scroll_row(
 ) {
     let (x0, xr) = span;
     let (caption, value, menu) = field;
-    app.fonts.text(s, x0, y + 6.5, caption, T_UI, C_DIM, Wt::Reg);
+    app.fonts
+        .text(s, x0, y + 6.5, caption, T_UI, C_DIM, Wt::Reg);
     let fr = Rect::new(x0 + 74.0, y, xr, y + INPUT_H);
     if app.dropdown_proto_scroll == Some(menu) {
         app.proto_scroll_dd_anchor = (fr.x0, fr.y1);
@@ -10213,11 +10203,7 @@ fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         s,
         panel.x0 + 14.0,
         panel.y0 + 14.0,
-        if is_fill {
-            "Fill color"
-        } else {
-            "Stroke color"
-        },
+        if is_fill { "Fill color" } else { "Stroke color" },
         T11,
         C_TEXT,
         Wt::Med,
@@ -10700,9 +10686,8 @@ fn paint_palette(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
             x + 22.0,
             ry + 8.0,
             all[ci].label,
-            // one size for every row — Figma marks the active palette row with
-            // its fill and ink, never by changing the type size
-            T_UI,
+            // one size for every row — Figma marks the active palette row with // its fill and ink,
+            never by changing the type size T_UI,
             if active { C_TEXT } else { C_MUTED },
             Wt::Reg,
         );
@@ -11061,7 +11046,9 @@ fn paint_ux_analysis(
         s,
         x0 + 16.0,
         y,
-        "Analyze your design for usability, accessibility, and best practices.",
+        "Analyze your design for usability,
+        accessibility,
+        and best practices.",
         T_UI,
         C_DIM,
         Wt::Reg,
@@ -11705,11 +11692,7 @@ fn paint_prototype(
                 s,
                 rb.x0 + 4.0,
                 row3_y + 2.0,
-                if ix.reset_on_navigate {
-                    "Reset: On"
-                } else {
-                    "Reset: Off"
-                },
+                if ix.reset_on_navigate { "Reset: On" } else { "Reset: Off" },
                 T_UI,
                 C_TEXT,
                 Wt::Reg,
@@ -11735,8 +11718,15 @@ fn paint_prototype(
                 let truncated = app
                     .fonts
                     .truncate(&display_url, T_UI, Wt::Mono, ub.width() - 8.0);
-                app.fonts
-                    .text(s, ub.x0 + 4.0, y + 100.0, &truncated, T_UI, C_TEXT, Wt::Mono);
+                app.fonts.text(
+                    s,
+                    ub.x0 + 4.0,
+                    y + 100.0,
+                    &truncated,
+                    T_UI,
+                    C_TEXT,
+                    Wt::Mono,
+                );
                 hit.push((ub, Action::ProtoEditUrl(i)));
             }
 
@@ -11845,7 +11835,9 @@ fn paint_prototype(
         s,
         x0,
         y,
-        "navigate, Esc steps back, Q exits.",
+        "navigate,
+        Esc steps back,
+        Q exits.",
         T_UI,
         C_DIM,
         Wt::Reg,
@@ -12125,12 +12117,7 @@ fn paint_lib_review(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>)
         s,
         cx + 20.0,
         cy + 42.0,
-        &format!(
-            "{} · {} change{}",
-            rv.path.display(),
-            rv.changes.len(),
-            if rv.changes.len() == 1 { "" } else { "s" }
-        ),
+        &format!( "{} · {} change{}", rv.path.display(), rv.changes.len(), if rv.changes.len() == 1 { "" } else { "s" } ),
         T_UI,
         C_MUTED,
         Wt::Reg,
@@ -12223,7 +12210,8 @@ fn paint_assets(
         } else {
             fam.clone()
         };
-        app.fonts.text(s, x0 + 4.0, y, &label, T_UI, C_TEXT, Wt::Reg);
+        app.fonts
+            .text(s, x0 + 4.0, y, &label, T_UI, C_TEXT, Wt::Reg);
         y += 16.0;
     }
     if fams.len() > 24 {
@@ -12406,7 +12394,8 @@ fn paint_tokens(
                 .collect::<Vec<_>>()
                 .join(" · ")
         );
-        app.fonts.text(s, x0 + 4.0, y, &row, T_UI, C_MUTED, Wt::Mono);
+        app.fonts
+            .text(s, x0 + 4.0, y, &row, T_UI, C_MUTED, Wt::Mono);
         y += 16.0;
     }
     let vcount = app
@@ -12684,10 +12673,7 @@ fn paint_tokens(
         s,
         x0,
         y,
-        &format!(
-            "{} variables defined · color/*, text/*, space/*, radius/*",
-            vcount
-        ),
+        &format!( "{} variables defined · color/*, text/*, space/*, radius/*", vcount ),
         T_UI,
         C_MUTED,
         Wt::Reg,
