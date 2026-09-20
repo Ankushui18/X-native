@@ -856,21 +856,26 @@ function ovContextMenu() {
 }
 
 function ovColourPicker() {
-  // The ramp is the palette's own roles — a picker that showed invented hexes
+  // Figma anatomy: a saturation/value field, a hue rail, an alpha rail, then a
+  // row of eyedropper + hex field + opacity field, then the theme's own swatch
+  // ramp. The ramp is the palette's roles — a picker that showed invented hexes
   // would be the one place in the app where a colour has no name.
   const p = T.palettes.graphite;
   const swatches = [p.accent, p.accent_hover, p.focus_ring, p.success, p.warning, p.danger, p.selection, p.text_dim];
-  return at(RAIL + LEFT + 12, TITLE + 150, 268, 236, `
+  const hex = p.accent.slice(1).toUpperCase();
+  return at(RAIL + LEFT + 12, TITLE + 150, 268, 332, `
     <div class="pop-h">Fill colour ${icon('x', 12)}</div>
-    <div class="cp-top">
-      <span class="cp-preview" style="background:var(--accent)"></span>
-      <span class="cp-read"><b>Hex</b><span class="mono">${T.palettes.graphite.accent.slice(1).toUpperCase()}</span></span>
-      <span class="cp-read"><b>Opacity</b><span class="mono">100%</span></span>
+    <div class="colr-field"><span class="colr-dot" style="left:72%;top:28%"></span></div>
+    <div class="colr-hue"><span class="colr-handle" style="left:58%"></span></div>
+    <div class="colr-alpha"><span class="colr-handle" style="left:100%"></span></div>
+    <div class="colr-row">
+      <span class="colr-pip">${icon('pipette', 14)}</span>
+      <span class="colr-hex mono">${hex}</span>
+      <span class="colr-op mono">100%</span>
     </div>
-    <div class="cp-swatches">${swatches
-      .map((c) => `<span class="cp-sw" style="background:${c}"></span>`)
+    <div class="colr-swatches">${swatches
+      .map((c) => `<span class="colr-sw" style="background:${c}"></span>`)
       .join('')}</div>
-    <div class="cp-hint">Palette swatches come from the active theme; the eight shown are the accent ramp.</div>
   `, { class: 'popover' });
 }
 
@@ -1260,9 +1265,9 @@ window.SCREENS = [
     group: 'Overlays',
     name: 'Colour picker',
     module: 'editor_ui.rs',
-    what: 'The fill colour popover: hex, opacity, the accent ramp, and the palette note.',
+    what: 'The fill colour popover, Figma anatomy: saturation/value field, hue + alpha rails, eyedropper + hex + opacity row, and the theme swatch ramp.',
     note: 'Colour popovers are modal to the inspector: clicks inside are consumed, so a pick never falls through to the canvas.',
-    checks: ['Fill colour', 'Hex', 'Opacity'],
+    checks: ['Fill colour', '0B77C9', '100%'],
     render: () => editorScreen({ overlay: ovColourPicker() }),
   },
   {
