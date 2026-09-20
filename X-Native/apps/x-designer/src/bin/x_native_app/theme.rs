@@ -306,7 +306,7 @@ pub const ED_CANVAS_MIN: f64 = 280.0;
 /// boxes escape the panel, which `tools/design-sheet/check_screens.mjs`
 /// measures and fails on. The width moves with the inspector reflow (master
 /// list Wave 2 item 18), not before it — row 18.7 is half-delivered.
-pub const ED_RIGHT_W: f64 = 240.0;
+pub const ED_RIGHT_W: f64 = 340.0;
 pub const ED_RIGHT_MIN: f64 = 240.0;
 pub const ED_RIGHT_MAX: f64 = 520.0;
 pub const NEW_TAB_W: f64 = 32.0;
