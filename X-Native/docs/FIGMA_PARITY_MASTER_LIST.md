@@ -39,7 +39,7 @@ recon task, not a settled fact.
 | 5 Layers, pages, sections | 14 | 12 | 2 | 0 | 0 | 0 |
 | 6 Frame & shape properties | 20 | 19 | 0 | 1 | 0 | 0 |
 | 7 Auto layout | 16 | 14 | 1 | 1 | 0 | 0 |
-| 8 Fill, stroke, effects, colour | 25 | 21 | 1 | 3 | 0 | 0 |
+| 8 Fill, stroke, effects, colour | 25 | 22 | 1 | 2 | 0 | 0 |
 | 9 Images | 9 | 7 | 2 | 0 | 0 | 0 |
 | 10 Text & typography | 18 | 17 | 1 | 0 | 0 | 0 |
 | 11 Vector editing & booleans | 20 | 14 | 5 | 1 | 0 | 0 |
@@ -52,7 +52,7 @@ recon task, not a settled fact.
 | 18 Design language (look of the app itself) | 12 | 6 | 6 | 0 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **339** | **264** | **46** | **10** | **16** | **3** |
+| **total** | **339** | **265** | **46** | **9** | **16** | **3** |
 
 The 17 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
@@ -292,7 +292,7 @@ position, canvas stacking, "distribute", `⇧A` to add.
 | 8.20 | Multiple effects, reorder, per-effect visibility | Figma: *"If a selection has multiple effects applied, you click and drag the handles to reorder"* | the list is the stack: one row per effect, the row's eye hides it without losing its settings, a press-and-drag on a row reorders it (one undo entry per reorder), and `mutate_visual_stack` keeps the legacy flat `effects` list in step so every render path paints the order the panel shows | MATCH |
 | 8.23 | Effect type: **Glass** | one per layer; Light angle / intensity / refraction / depth / dispersion / frost / splay — [Apply effects to layers](https://help.figma.com/hc/en-us/articles/360041488473) | not in the model (`Effect` carries drop shadow, inner shadow, layer blur, background blur and noise) | **MISSING** |
 | 8.24 | Effect type: **Texture** | one per layer; Size, Radius, **Clip to shape** | not in the model | **MISSING** |
-| 8.25 | Per-type effect limits | *"Each layer can have up to eight drop shadows, eight inner shadows, one layer blur, two noise effects, one texture effect, one background blur, and one glass effect"* | no caps: the panel lets you add any number of any type | **MISSING** |
+| 8.25 | Per-type effect limits | *"Each layer can have up to eight drop shadows, eight inner shadows, one layer blur, two noise effects, one texture effect, one background blur, and one glass effect"* | `Editor::add_effect_layer` refuses a cap-breaching push at Figma's per-type limits (`EffectKind::limit`: 8 drop/inner shadows, 2 noise, 1 layer blur, 1 background blur), so the panel can no longer stack past them; glass/texture caps ride with rows 8.23/8.24 | MATCH — `effect_adds_stop_at_figmas_per_type_caps` |
 | 8.21 | Colour swatch interaction | swatch = popover, `+`/`−` | swatch + popovers | MATCH |
 | 8.22 | Color styles library | team/local styles list | `PAINT STYLES` library section | MATCH |
 

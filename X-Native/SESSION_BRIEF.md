@@ -15,8 +15,8 @@ the 24px layer row, the 240px left dock, and four redrawn tool glyphs. The two
 values Figma ships sub-AA (accent fill, dim grey) are pinned as deliberate
 deviations by `graphite_carries_figmas_chrome_values`.
 
-**Scoreboard (branch, verified):** 339 rows — **264 MATCH / 46 PARTIAL /
-10 MISSING / 16 EXTRA / 3 OUT**. Guard: 10 checks, 76 pinned, 0 open, 0 failed.
+**Scoreboard (branch, verified):** 339 rows — **265 MATCH / 46 PARTIAL /
+9 MISSING / 16 EXTRA / 3 OUT**. Guard: 10 checks, 77 pinned, 0 open, 0 failed.
 
 The single source of truth for what's next remains
 `docs/FIGMA_PARITY_MASTER_LIST.md`.
@@ -67,6 +67,10 @@ The single source of truth for what's next remains
    now shows an I-beam (was the drawing crosshair); geometry tools crosshair,
    Hand grab. Pinned by `the_text_tool_wears_an_i_beam`. Figma's custom bitmap
    cursors remain deferred to CI; row 18.11 stays PARTIAL.
+
+6c. ~~**Effect caps (row 8.25)**~~ — `add_effect_layer` refuses cap-breaching
+   adds at Figma's per-type limits (`EffectKind::limit`). Pinned by
+   `effect_adds_stop_at_figmas_per_type_caps`. Row 8.25 → MATCH.
 
 7. **Wave 2 remainder** (items 16–19): right dock at 240 — needs the inspector
    reflow (`paint_design` offsets are absolute for ~340px; a CI-compiled

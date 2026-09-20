@@ -5898,6 +5898,34 @@ fn the_text_tool_wears_an_i_beam() {
     assert_eq!(cursor_for(&h.app), CursorIcon::Grab, "the hand grabs");
 }
 
+/// Figma (help 360041488473): *"Each layer can have up to eight drop
+/// shadows, eight inner shadows, one layer blur, two noise effects, … and one
+/// background blur."* The add path enforces those caps instead of letting the
+/// panel stack without limit (master row 8.25).
+#[test]
+fn effect_adds_stop_at_figmas_per_type_caps() {
+    use x_native::EffectKind;
+    let mut h = effect_host();
+    fn add(h: &mut Host, k: x_native::EffectKind) -> bool {
+        h.app
+            .doc()
+            .editor()
+            .add_effect_layer("fx", x_native::Effect::default_of(k))
+    }
+    // one layer blur is the cap; a second is refused
+    assert!(add(&mut h, EffectKind::LayerBlur), "first blur lands");
+    assert!(!add(&mut h, EffectKind::LayerBlur), "one layer blur per layer");
+    // two noise effects, not three
+    assert!(add(&mut h, EffectKind::Noise));
+    assert!(add(&mut h, EffectKind::Noise));
+    assert!(!add(&mut h, EffectKind::Noise), "two noise effects per layer");
+    // eight drop shadows, not nine
+    for _ in 0..8 {
+        assert!(add(&mut h, EffectKind::DropShadow));
+    }
+    assert!(!add(&mut h, EffectKind::DropShadow), "eight drop shadows per layer");
+}
+
 /// The sort key is parsed from the label the UI shows, so the two cannot
 /// disagree; an unknown label sorts last instead of jumping to the top.
 #[test]

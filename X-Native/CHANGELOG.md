@@ -5,6 +5,21 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-20 (Effect adds stop at Figma's per-type caps — master row 8.25)
+
+Figma (*Apply effects to layers*, help 360041488473): *"Each layer can have up
+to eight drop shadows, eight inner shadows, one layer blur, two noise effects,
+… and one background blur."* The panel used to let you stack any number of any
+type. `Editor::add_effect_layer` now refuses a cap-breaching push at
+`EffectKind::limit` (8 drop/inner shadows, 2 noise, 1 layer blur, 1 background
+blur), so the "+" is a no-op at the cap exactly like Figma disabling the row.
+Glass/Texture carry their own 1-cap when those types land (rows 8.23/8.24).
+Row 8.25 `MISSING` → `MATCH`; §8 to 22/1/2; grand total
+**339 / 265 / 46 / 9 / 16 / 3**. Pinned by
+`effect_adds_stop_at_figmas_per_type_caps`.
+
+*Rust gate runs in CI (no toolchain here); the Node gates stay green.*
+
 ## [Unreleased] — 2026-09-20 (Comment glyph + canvas cursor vocabulary — rows 18.10/18.11)
 
 Two small, pinnable steps of the design-language tail:

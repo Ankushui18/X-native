@@ -1167,6 +1167,22 @@ impl Editor {
         self.mutate_visual_stack(id, move |n| n.stroke_layers.push(StrokeLayer::new(stroke)))
     }
     pub fn add_effect_layer(&mut self, id: &str, effect: Effect) -> bool {
+        // Figma's per-type caps (help 360041488473). Refuse a cap-breaching
+        // add rather than stacking past it; the panel's "+" is a no-op at the
+        // cap, exactly like Figma disabling the row.
+        if let Some(n) = find(&self.root, id) {
+            let mut probe = n.clone();
+            probe.materialize_visual_stacks();
+            let kind = effect.kind();
+            let have = probe
+                .effect_layers
+                .iter()
+                .filter(|l| l.effect.kind() == kind)
+                .count();
+            if have >= kind.limit() {
+                return false;
+            }
+        }
         self.mutate_visual_stack(id, move |n| n.effect_layers.push(EffectLayer::new(effect)))
     }
     pub fn remove_fill_layer(&mut self, id: &str, index: usize) -> bool {
