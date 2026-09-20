@@ -5,6 +5,25 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-20 (Two stale MISSING rows corrected: N/⇧N walk + shortcuts sheet — rows 17.9/4.9)
+
+A code audit found two master-list rows marked `MISSING` whose features were
+already built and pinned — the doc had drifted behind the code.
+
+- **17.9 — Zoom to next/prev frame (`N` / `⇧N`):** `run.rs::zoom_to_frame`
+  already walks the page's top-level frames (`N` next, `⇧N` previous, wrapping,
+  naming the frame). Row `MISSING` → `MATCH`, pinned by
+  `n_walks_the_pages_frames_in_order`.
+- **4.9 — Shortcuts panel:** a ⇧? shortcuts sheet exists
+  (`editor_ui::paint_shortcuts_panel`) and stays open so you can try the keys,
+  but it is a flat list, not Figma's tabbed panel that live-highlights used
+  keys. Row `MISSING` ("none") → `PARTIAL`, pinned by
+  `the_shortcut_sheet_and_the_two_hide_ui_keys`.
+
+§4 → 9/1/0; §17 → 11/1/0; grand total **339 / 266 / 47 / 7 / 16 / 3**. Two new
+§2 conformance rows (79 behaviours pinned). No code changed — documentation
+accuracy only, so the Node gates stay green and the sheet is byte-stable.
+
 ## [Unreleased] — 2026-09-20 (Effect adds stop at Figma's per-type caps — master row 8.25)
 
 Figma (*Apply effects to layers*, help 360041488473): *"Each layer can have up

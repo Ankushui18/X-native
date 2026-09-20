@@ -35,7 +35,7 @@ recon task, not a settled fact.
 | 1 Tools (toolbar & shape menu) | 24 | 15 | 3 | 1 | 5 | 0 |
 | 2 Canvas gestures (drag) | 28 | 26 | 1 | 0 | 1 | 0 |
 | 3 Keyboard | 35 | 32 | 2 | 0 | 1 | 0 |
-| 4 Menus & palettes | 10 | 9 | 0 | 1 | 0 | 0 |
+| 4 Menus & palettes | 10 | 9 | 1 | 0 | 0 | 0 |
 | 5 Layers, pages, sections | 14 | 12 | 2 | 0 | 0 | 0 |
 | 6 Frame & shape properties | 20 | 19 | 0 | 1 | 0 | 0 |
 | 7 Auto layout | 16 | 14 | 1 | 1 | 0 | 0 |
@@ -48,11 +48,11 @@ recon task, not a settled fact.
 | 14 Prototype | 30 | 19 | 10 | 0 | 0 | 1 |
 | 15 Inspect, dev mode, codegen | 9 | 5 | 3 | 1 | 0 | 0 |
 | 16 Export & import | 12 | 11 | 1 | 0 | 0 | 0 |
-| 17 Canvas view & navigation | 14 | 10 | 1 | 1 | 1 | 1 |
+| 17 Canvas view & navigation | 14 | 11 | 1 | 0 | 1 | 1 |
 | 18 Design language (look of the app itself) | 12 | 6 | 6 | 0 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **339** | **265** | **46** | **9** | **16** | **3** |
+| **total** | **339** | **266** | **47** | **7** | **16** | **3** |
 
 The 17 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
@@ -187,7 +187,7 @@ Figma's shortcut list is in the shortcuts panel (`360040328653`, tabbed, live-hi
 | 4.6 | Export menu | format, scale, suffix, multiple settings | export panel with 5 formats | MATCH |
 | 4.7 | Font picker | search, preview, styles, missing-font state | `FontPicker` + `FONT BROWSER` + type scale | MATCH |
 | 4.8 | Library / assets picker | components, styles, variables, swap on drop | `PaintLibToggle`, `LibRow` sections, swap | MATCH |
-| 4.9 | **Shortcuts panel** | tabbed, live-highlights used keys | none | **MISSING** |
+| 4.9 | **Shortcuts panel** | tabbed, live-highlights used keys | a ⇧? shortcuts sheet exists and lists the keys (`editor_ui::paint_shortcuts_panel`), but it is a flat list — no tabs and no live highlight of the keys you have used | PARTIAL — `the_shortcut_sheet_and_the_two_hide_ui_keys` |
 | 4.10 | Onboarding / sample | Figma opens a starter file | `OnboardingSample` / `OnboardingBlank` | MATCH |
 
 ## 5. Layers, pages, sections
@@ -484,7 +484,7 @@ scroll behaviour, flows and flow starting points, device preview.
 | 17.6 | Layout grids | per frame, `⇧G` | grid UI | MATCH |
 | 17.7 | Outlines mode | `⌘Y` — *"Show outlines — to toggle outlines on and off, ⌘Y"* (designlab Figma 101, Tips and Tricks) | `x_render::outline_view` is the one strip (fills/strokes/effects cleared, blends Normal, Image/Text become the plain box they own, instances resolve from the stripped registry, the page itself is not outlined); `Action::ToggleOutlines` on ⌘Y (the old redo arm — redo keeps Figma's ⇧⌘Z) with the status line and the shortcuts-panel row; `Host::canvas_scene` renders the copy at a `1/zoom` hairline — a render mode, the document untouched. **Not built:** Figma renders text as glyph outlines; we render the text layer's box | MATCH |
 | 17.8 | Canvas background colour | Figma supports changing it | `CANVAS BACKGROUND` row | MATCH |
-| 17.9 | Zoom to next/prev frame | `N` / `⇧N` | not implemented | **MISSING** |
+| 17.9 | Zoom to next/prev frame | `N` / `⇧N` | `N` walks to the next top-level frame, `⇧N` to the previous, wrapping around the page and naming the frame (`run.rs::zoom_to_frame`) | MATCH — `n_walks_the_pages_frames_in_order` |
 | 17.10 | Scrollbars | yes | *verify* | PARTIAL |
 | 17.11 | Snap to objects/pixels toggles | preferences + modifiers | snapping inside drags | MATCH |
 | 17.12 | Multiplayer cursors | `⌃⌥⌘\` | not built (single-user) | OUT |

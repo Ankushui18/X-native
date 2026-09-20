@@ -15,8 +15,8 @@ the 24px layer row, the 240px left dock, and four redrawn tool glyphs. The two
 values Figma ships sub-AA (accent fill, dim grey) are pinned as deliberate
 deviations by `graphite_carries_figmas_chrome_values`.
 
-**Scoreboard (branch, verified):** 339 rows — **265 MATCH / 46 PARTIAL /
-9 MISSING / 16 EXTRA / 3 OUT**. Guard: 10 checks, 77 pinned, 0 open, 0 failed.
+**Scoreboard (branch, verified):** 339 rows — **266 MATCH / 47 PARTIAL /
+7 MISSING / 16 EXTRA / 3 OUT**. Guard: 10 checks, 79 pinned, 0 open, 0 failed.
 
 The single source of truth for what's next remains
 `docs/FIGMA_PARITY_MASTER_LIST.md`.
