@@ -9206,7 +9206,8 @@ fn clean_up_layers_flattens_redundant_nests_in_one_undo() {
     // a meaningful group: translucent, so it must survive the clean-up
     let mut kept = Node::group("kept", 40.0, 40.0);
     kept.opacity = 0.5;
-    kept.children.push(Node::rect("dot", 0.0, 0.0, 40.0, 40.0, Color::WHITE));
+    kept.children
+        .push(Node::rect("dot", 0.0, 0.0, 40.0, 40.0, Color::WHITE));
     h.app.doc().editor().insert_node(&root, kept);
 
     let before = h.app.doc_ref().editor_ref().undo_depth();
@@ -9246,10 +9247,10 @@ fn the_rotation_field_shows_figmas_counter_clockwise_sign() {
 
     let mut h = host();
     let root = h.app.doc().editor_ref().root.id.clone();
-    h.app
-        .doc()
-        .editor()
-        .insert_node(&root, Node::rect("card", 0.0, 0.0, 100.0, 60.0, Color::WHITE));
+    h.app.doc().editor().insert_node(
+        &root,
+        Node::rect("card", 0.0, 0.0, 100.0, 60.0, Color::WHITE),
+    );
     h.app.doc().editor().selection = vec!["card".into()];
 
     // store a clockwise 30° (the renderer's sign)
