@@ -1884,6 +1884,9 @@ mod tests {
         );
 
         assert_eq!(interaction.easing, Easing::EaseOut);
-        assert!(interaction.reset_on_navigate, "Figma default: reset scroll on navigate");
+        assert!(
+            interaction.reset_on_navigate,
+            "Figma default: reset scroll on navigate"
+        );
     }
 }
