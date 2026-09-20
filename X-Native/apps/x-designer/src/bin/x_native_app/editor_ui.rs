@@ -7928,8 +7928,15 @@ fn paint_frame_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Actio
         );
         let dims = format!("{} × {}", w as i64, h as i64);
         let dw = app.fonts.measure(&dims, T_UI, Wt::Reg);
-        app.fonts
-            .text(s, r.x1 - 10.0 - dw, r.y0 + 11.0, &dims, T_UI, C_DIM, Wt::Reg);
+        app.fonts.text(
+            s,
+            r.x1 - 10.0 - dw,
+            r.y0 + 11.0,
+            &dims,
+            T_UI,
+            C_DIM,
+            Wt::Reg,
+        );
         hit.push((r, Action::FramePreset(i)));
     }
 }
