@@ -649,6 +649,170 @@ fn save_before_close_commits_pending_text() {
 }
 
 #[test]
+fn escape_commits_the_text_edit_and_keeps_the_layer_selected() {
+    // Figma (+ OpenPencil's `text_edit.rs` rule): Esc leaves edit mode AND
+    // keeps the typed text — only a fresh EMPTY node is discarded. Pinned
+    // through the real key path, not the commit helper.
+    let mut h = host();
+    begin_text(&mut h, "hello");
+    h.on_text("!");
+    h.on_key(Key::Named(NamedKey::Escape), None);
+    assert!(h.app.text_edit.is_none(), "Esc leaves the editor");
+    assert!(
+        matches!(&x_native::editor::find(&h.app.doc_ref().editor_ref().root, "audit-text").unwrap().kind, NodeKind::Text { text } if text == "hello!"),
+        "the typed text is kept"
+    );
+    assert_eq!(
+        h.app.doc_ref().editor_ref().selection,
+        vec!["audit-text".to_string()],
+        "the text layer stays selected"
+    );
+}
+
+#[test]
+fn escape_on_a_fresh_empty_text_discards_the_layer() {
+    // The one Esc case that removes a node: committing EMPTY text deletes
+    // the fresh object (Figma's discard-new-text), through the same commit
+    // path as every other Esc.
+    let mut h = host();
+    begin_text(&mut h, "");
+    let kids = h.app.doc_ref().editor_ref().root.children.len();
+    h.on_key(Key::Named(NamedKey::Escape), None);
+    assert!(h.app.text_edit.is_none());
+    assert_eq!(
+        h.app.doc_ref().editor_ref().root.children.len(),
+        kids - 1,
+        "committing empty text removes the fresh node"
+    );
+}
+
+#[test]
+fn an_outside_press_commits_the_text_before_selecting() {
+    // Figma: click-away commits first, THEN the click selects what it hit.
+    // A press inside the editor rect must not commit (caret handling owns
+    // it); a press anywhere else must.
+    let mut h = host();
+    h.finish_create(
+        Tool::Rect,
+        Point::new(300.0, 300.0),
+        Point::new(360.0, 360.0),
+    );
+    let rect_id = h.app.doc_ref().selected_id().unwrap();
+    begin_text(&mut h, "keep me");
+    h.on_text("!");
+    // inside the editor: no commit, editor stays open
+    let r = h.app.text_edit_rect().unwrap();
+    assert!(!h.app.commit_text_if_press_outside(Point::new(r.x0 + 4.0, r.y0 + 4.0)));
+    assert!(h.app.text_edit.is_some());
+    // on the rect: the real press path commits, then selects the rect
+    let sp = h.app.world_to_screen(Point::new(330.0, 330.0));
+    assert!(h.app.editor_regions().canvas.contains(sp));
+    h.on_press(sp);
+    assert!(h.app.text_edit.is_none(), "click-away leaves the editor");
+    assert!(
+        matches!(&x_native::editor::find(&h.app.doc_ref().editor_ref().root, "audit-text").unwrap().kind, NodeKind::Text { text } if text == "keep me!"),
+        "the typed text is kept"
+    );
+    assert_eq!(
+        h.app.doc_ref().editor_ref().selection,
+        vec![rect_id],
+        "the press then selects what it hit"
+    );
+}
+
+#[test]
+fn the_text_tool_edits_the_text_it_clicks() {
+    // Figma: with the Text tool, a click on an existing text layer edits
+    // it — only empty canvas (or a drag) creates a new text object.
+    let mut h = host();
+    let root_id = h.app.doc().editor_ref().root.id.clone();
+    h.app.doc().editor().insert_node(
+        &root_id,
+        Node::text("t1", 100.0, 100.0, 200.0, 20.0, "edit me"),
+    );
+    let kids = h.app.doc_ref().editor_ref().root.children.len();
+    h.app.tool = Tool::Text;
+    h.finish_create(Tool::Text, Point::new(150.0, 110.0), Point::new(150.0, 110.0));
+    assert_eq!(
+        h.app.doc_ref().editor_ref().root.children.len(),
+        kids,
+        "no second node on top of the clicked text"
+    );
+    assert_eq!(h.app.text_edit.as_deref(), Some("t1"));
+    assert_eq!(h.app.tool, Tool::Select);
+}
+
+#[test]
+fn dragging_with_the_text_tool_pins_a_fixed_box() {
+    // Figma: dragging the Text tool draws the box (Fixed size); a plain
+    // click stays auto-width.
+    let mut h = host();
+    h.app.tool = Tool::Text;
+    h.finish_create(Tool::Text, Point::new(50.0, 50.0), Point::new(250.0, 150.0));
+    let id = h.app.doc_ref().selected_id().unwrap();
+    let n = find_node_clone(&h.app.doc_ref().editor_ref().root, &id).unwrap();
+    assert_eq!(
+        n.bindings.get("tm").map(String::as_str),
+        Some("fixed"),
+        "a dragged box is Fixed size"
+    );
+    assert!((n.w - 200.0).abs() < 1e-6 && (n.h - 100.0).abs() < 1e-6);
+}
+
+#[test]
+fn inspect_measurements_gap_tokens_assets_and_jsx_read_the_engine() {
+    // The INSPECT tab is a view over the engine's devmode readers — sizes,
+    // pair gaps, variable/style tokens, referenced assets, and the JSX
+    // target join the existing CSS / SwiftUI / Compose / XML / Tailwind.
+    let mut h = host();
+    h.finish_create(Tool::Rect, Point::new(40.0, 40.0), Point::new(160.0, 84.0));
+    let a = h.app.doc_ref().selected_id().unwrap();
+    h.finish_create(
+        Tool::Rect,
+        Point::new(200.0, 40.0),
+        Point::new(280.0, 84.0),
+    );
+    let b = h.app.doc_ref().selected_id().unwrap();
+
+    // one layer: X/Y/W/H + the gaps to the parent frame's edges
+    h.app.doc().editor().selection = vec![a.clone()];
+    let (l1, l2) = h.app.inspect_measurements().expect("single selection measures");
+    assert!(
+        l1.contains("X 40") && l1.contains("Y 40") && l1.contains("W 120") && l1.contains("H 44"),
+        "{l1}"
+    );
+    assert!(l2.contains("← 40"), "{l2}");
+
+    // two layers: no single measurements, but the pair gap reads
+    h.app.doc().editor().selection = vec![a.clone(), b.clone()];
+    assert!(h.app.inspect_measurements().is_none());
+    let gap = h.app.inspect_gap().expect("a pair reads its gap");
+    assert!(gap.contains("↔ 40"), "{gap}");
+
+    // tokens: a bound property surfaces as a (kind, token) row
+    {
+        let doc = h.app.doc();
+        let n = x_native::editor::find_mut(&mut doc.editor().root, &a).unwrap();
+        n.bindings.insert("radius".into(), "brand/radius".into());
+    }
+    h.app.doc().editor().selection = vec![a.clone()];
+    let tokens = h.app.inspect_tokens();
+    let has_token = tokens.iter().any(|(k, v)| k == "Corner radius" && v == "brand/radius");
+    assert!(has_token, "{tokens:?}");
+
+    // assets: no images/components referenced here — the plumbing answers
+    // empty instead of panicking (the engine pins the collection itself)
+    assert!(h.app.inspect_assets().is_empty());
+
+    // JSX platform for the same selection
+    h.app.inspect_platform = 5;
+    assert_eq!(App::INSPECT_PLATFORMS[5], "JSX");
+    let jsx = h.app.inspect_code();
+    assert!(jsx.contains("<div") && jsx.contains("width: 120"), "{jsx}");
+    h.app.inspect_platform = 0;
+}
+
+#[test]
 fn tab_and_page_switch_commit_text_to_the_original_owner() {
     let mut h = host();
     begin_text(&mut h, "first");

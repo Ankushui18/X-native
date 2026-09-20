@@ -1061,7 +1061,7 @@ mod run_fns_tests {
         };
         assert_ne!(hit.as_deref(), Some("r1"), "locked = not hittable");
 
-        // 5) empty text: Esc discards the fresh node
+        // 5) empty text: Esc COMMITS, and committing empty discards the node
         app.tool = Tool::Text;
         app.doc().editor().selection.clear();
         let kids = app.doc().editor_ref().root.children.len();
@@ -1076,7 +1076,7 @@ mod run_fns_tests {
             id
         };
         app.begin_text_edit(tid, String::new());
-        app.text_cancel_edit_new();
+        assert!(app.commit_text_field(), "Esc commits even when empty");
         assert_eq!(
             app.doc().editor_ref().root.children.len(),
             kids,
@@ -1626,8 +1626,10 @@ impl App {
         self.doc().editor().selection = vec![id];
     }
 
-    /// Cancel the inline editor WITHOUT writing (Esc): all session state
-    /// (caret / selection / run styling) is dropped.
+    /// Drop the inline editor WITHOUT writing: all session state (caret /
+    /// selection / run styling) is discarded. A reset helper for tests and
+    /// for flows that never owned the buffer (tool teardown); the production
+    /// Esc path COMMITS via `commit_text_field` (Figma: Esc keeps the text).
     pub fn text_cancel_edit(&mut self) {
         self.text_undo.clear();
         self.text_redo.clear();
@@ -1639,8 +1641,31 @@ impl App {
         self.text_buffer.clear();
     }
 
-    /// Esc on a FRESH EMPTY text object (click-created, never typed into)
-    /// removes the node — Figma's discard-new-text behavior.
+    /// The outside-click half of the Figma + OpenPencil text rule, shared by
+    /// every press path (`Host::on_press` calls it before dispatching): when
+    /// the inline editor is open and `p` is OUTSIDE its rect, commit the text
+    /// first and report true — the press then proceeds normally, so
+    /// click-away both saves the text and selects (or acts on) whatever was
+    /// clicked. A press inside the editor rect reports false (the caret/drag
+    /// handling in `canvas_press` owns it), as does no open editor.
+    pub fn commit_text_if_press_outside(&mut self, p: Point) -> bool {
+        if self.text_edit.is_none() {
+            return false;
+        }
+        if self.text_edit_rect().is_some_and(|r| r.contains(p)) {
+            return false;
+        }
+        if self.commit_text_field() {
+            self.mark_dirty();
+        }
+        true
+    }
+
+    /// Discard a FRESH EMPTY text object (click-created, never typed into)
+    /// without writing — Figma's discard-new-text behavior. Kept for tests
+    /// and teardown; the production Esc path reaches the same outcome
+    /// through `commit_text_field`, which removes a node whose committed
+    /// text is empty.
     pub fn text_cancel_edit_new(&mut self) {
         let empty_new = self
             .text_edit
@@ -3749,6 +3774,13 @@ impl Host {
             self.app.context_menu.close();
         }
         self.app.page_menu = None;
+        // Figma + OpenPencil rule: a press anywhere outside the inline
+        // editor COMMITS the text first — Enter inserts newlines, so only
+        // Esc and an outside click commit. The press then proceeds as
+        // normal, so click-away both saves the text and selects (or acts
+        // on) whatever was clicked. A press INSIDE the editor rect falls
+        // through to the caret/drag handling in `canvas_press`.
+        self.app.commit_text_if_press_outside(p);
         if self.app.palette.open {
             // zone hit or dismiss
             for (r, a) in self.app.hit.iter().rev() {
@@ -6662,6 +6694,38 @@ impl Host {
         // the live preview, so the shape that lands is the shape on screen.
         let rect = crate::state::create_rect(start, cur, self.app.alt);
         let (mut x, mut y, w, h) = (rect.x0, rect.y0, rect.width(), rect.height());
+        // The Text tool's gesture, read before the doc borrow below: a click
+        // keeps auto-width, a drag pins a fixed box (Figma).
+        let zx = self.app.zoom.max(1e-3);
+        let create_dragged = w * zx >= 4.0 || h * zx >= 4.0;
+        // Figma: with the Text tool, a CLICK on an existing text layer edits
+        // it — only empty canvas (or a drag, which draws a fixed box) creates
+        // a new text object. Without this the click lands a second, empty text
+        // node on top of the one the user meant to edit.
+        if tool == Tool::Text && !create_dragged {
+            let hit = {
+                let doc = self.app.doc();
+                x_native::editor::hit_test(&doc.editor_ref().root, start)
+            };
+            if let Some(id) = hit {
+                let text = {
+                    let doc = self.app.doc();
+                    let root = &doc.editor_ref().root;
+                    crate::editor_ui::find_node(root, id.as_str()).and_then(|n| {
+                        match &n.kind {
+                            NodeKind::Text { text } => Some((n.id.clone(), text.clone())),
+                            _ => None,
+                        }
+                    })
+                };
+                if let Some((id, text)) = text {
+                    self.app.doc().editor().selection = vec![id.clone()];
+                    self.app.tool = Tool::Select;
+                    self.app.begin_text_edit(id, text);
+                    return;
+                }
+            }
+        }
 
         // Board rectangle/circle tools share the Drag::Create gesture with
         // design shapes, but must never insert an x-core Node into the hidden
@@ -6822,9 +6886,20 @@ impl Host {
             }
             Tool::Text => {
                 // Figma: a new text object starts EMPTY (placeholder only);
-                // committing empty deletes it
+                // committing empty deletes it. A click stays auto-width and
+                // hugs the typed text; a drag pins the drawn box (Fixed size).
                 let tid = x_native::fresh_id("text");
-                let mut t = Node::text(&tid, x, y, w.max(120.0), 14.0, "");
+                let mut t = Node::text(
+                    &tid,
+                    x,
+                    y,
+                    w.max(120.0),
+                    if create_dragged { h.max(14.0) } else { 14.0 },
+                    "",
+                );
+                if create_dragged {
+                    t.bindings.insert("tm".into(), "fixed".into());
+                }
                 t.name = format!("Text {n}");
                 // P3: new text is set in the document's default typeface
                 // (per-file data) rather than an engine constant
@@ -7354,8 +7429,13 @@ impl Host {
                         self.app.context_menu.close();
                         return;
                     }
-                    // fresh empty object: Esc discards it (Figma)
-                    self.app.text_cancel_edit_new();
+                    // Figma + OpenPencil rule: Esc COMMITS the edit — the
+                    // typed text stays and the text layer stays selected.
+                    // Only a fresh EMPTY node is discarded, by the same
+                    // commit path (committing empty text removes the node).
+                    if self.app.commit_text_field() {
+                        self.app.mark_dirty();
+                    }
                     return;
                 }
                 (Key::Named(NamedKey::Enter), _) => {
@@ -15764,7 +15844,8 @@ mod tests {
         assert!(app.text_toggle_italic());
         assert_ne!(app.text_runs_edit[0].italic, Some(true));
 
-        // Esc cancels: node keeps the LAST committed state
+        // the reset helper drops the buffer: node keeps the LAST committed
+        // state (the production Esc key COMMITS instead — see the Esc tests)
         let (text_before, runs_before) = {
             let doc = app.doc();
             let n = crate::editor_ui::find_node(&doc.editor_ref().root, "tx").unwrap();

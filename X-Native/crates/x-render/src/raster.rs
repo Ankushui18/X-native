@@ -1093,9 +1093,9 @@ mod tests {
             darkest
         };
 
-        // A name sits 26px above its frame, so a gutter band is
-        // `origin - 26 .. origin - 8`; the page's top edge is where the page
-        // name used to be painted instead.
+        // A name sits 20px above its frame (Figma's 12px gutter label),
+        // inside the `origin - 26 .. origin - 8` gutter band; the page's top
+        // edge is where the page name used to be painted instead.
         check(ink(0, 14, 400, 32), false, "above the page");
         check(ink(0, 41, 240, 53), false, "page corner");
         check(ink(40, 54, 180, 72), true, "frame name");

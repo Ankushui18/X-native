@@ -5664,7 +5664,8 @@ impl App {
     // (C21): the INSPECT tab's code view over the existing devmode
     // generators (CSS / SwiftUI / Compose / XML)
 
-    pub const INSPECT_PLATFORMS: [&str; 5] = ["CSS", "SwiftUI", "Compose", "XML", "Tailwind"];
+    pub const INSPECT_PLATFORMS: [&str; 6] =
+        ["CSS", "SwiftUI", "Compose", "XML", "Tailwind", "JSX"];
 
     /// Code for the current selection in the current INSPECT platform
     /// (empty string when nothing is selected).
@@ -5684,8 +5685,92 @@ impl App {
             2 => x_native::editor::node_to_compose(n, &doc.doc.variables),
             3 => x_native::editor::node_to_xml(n, &doc.doc.variables),
             4 => x_native::selection_to_tailwind(std::slice::from_ref(n)),
+            5 => x_native::node_to_jsx(n),
             _ => x_native::editor::node_to_css(n, &doc.doc.variables),
         }
+    }
+
+    /// Measurements lines for the INSPECT tab — Figma's X/Y/W/H plus the gaps
+    /// to the parent frame's edges — read from the engine's
+    /// `node_measurements`, not recomputed. None unless exactly one layer is
+    /// selected.
+    pub fn inspect_measurements(&self) -> Option<(String, String)> {
+        let doc = self.doc_opt()?;
+        if doc.editor_ref().selection.len() != 1 {
+            return None;
+        }
+        let id = doc.selected_id()?;
+        let m = x_native::editor::node_measurements(&doc.editor_ref().root, &id)?;
+        Some((
+            format!(
+                "X {}   Y {}   W {}   H {}",
+                inspect_num(m.x),
+                inspect_num(m.y),
+                inspect_num(m.w),
+                inspect_num(m.h)
+            ),
+            format!(
+                "← {}   → {}   ↑ {}   ↓ {}",
+                inspect_num(m.left),
+                inspect_num(m.right),
+                inspect_num(m.top),
+                inspect_num(m.bottom)
+            ),
+        ))
+    }
+
+    /// Gap readout for two selected layers — Figma's hovered-node measurement
+    /// (edge-to-edge insets when one contains the other) — read from the
+    /// engine's `node_gap`. None for any other selection.
+    pub fn inspect_gap(&self) -> Option<String> {
+        let doc = self.doc_opt()?;
+        let sel = &doc.editor_ref().selection;
+        let [a, b] = sel.as_slice() else {
+            return None;
+        };
+        let g = x_native::editor::node_gap(&doc.editor_ref().root, a, b)?;
+        if let Some(n) = g.nested {
+            Some(format!(
+                "inset  ← {}   → {}   ↑ {}   ↓ {}",
+                inspect_num(n.left),
+                inspect_num(n.right),
+                inspect_num(n.top),
+                inspect_num(n.bottom)
+            ))
+        } else {
+            Some(format!(
+                "↔ {}   ↕ {}",
+                inspect_num(g.horizontal),
+                inspect_num(g.vertical)
+            ))
+        }
+    }
+
+    /// Token rows for the INSPECT tab — which variables / styles drive the
+    /// selection's look — read from the engine's `node_tokens`.
+    pub fn inspect_tokens(&self) -> Vec<(String, String)> {
+        let Some(doc) = self.doc_opt() else {
+            return vec![];
+        };
+        let Some(id) = doc.selected_id() else {
+            return vec![];
+        };
+        let Some(n) = crate::editor_ui::find_node(&doc.editor_ref().root, &id) else {
+            return vec![];
+        };
+        x_native::editor::node_tokens(n, &doc.doc.variables)
+    }
+
+    /// Asset rows for the INSPECT tab — images and components referenced by
+    /// the selection — read from the engine's `selection_assets`.
+    pub fn inspect_assets(&self) -> Vec<(String, String, usize)> {
+        let Some(doc) = self.doc_opt() else {
+            return vec![];
+        };
+        x_native::editor::selection_assets(&doc.editor_ref().root, &doc.editor_ref().selection)
+            .iter()
+            .map(|a| (a.kind.to_string(), a.name.clone(), a.usage))
+            .collect()
     }
 
     // ------------------------------------------------------- comments
@@ -6569,6 +6654,16 @@ fn check_contrast_node(n: &x_native::Node, issues: &mut Vec<String>, vars: &x_na
     }
     for child in &n.children {
         check_contrast_node(child, issues, vars);
+    }
+}
+
+/// Figma-style measure readout: whole numbers print without decimals,
+/// the rest with one.
+pub(crate) fn inspect_num(v: f64) -> String {
+    if (v - v.round()).abs() < 0.05 {
+        (v.round() as i64).to_string()
+    } else {
+        format!("{v:.1}")
     }
 }
 

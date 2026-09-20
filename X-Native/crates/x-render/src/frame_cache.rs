@@ -547,9 +547,15 @@ impl FrameCache {
 
     /// Lower one node for the canvas under this cache's current mode: the inline
     /// editor's hidden text, and — while presenting — no canvas chrome.
+    /// Frame-name `/label` commands are ALWAYS stripped here: the canvas paints
+    /// its names as a screen-space overlay (`editor_ui::paint_frame_labels`) —
+    /// constant 12px at any zoom, blue when selected — which a world-space
+    /// render command can be neither of. (Presenting strips the section chips
+    /// too; the editor keeps them, because they are artwork that exports.)
     fn lower_canvas(&self, node: &Node, vars: &Variables) -> crate::ir::RenderTree {
         let mut tree =
             crate::ir::build_render_tree_with_hidden(node, vars, self.hidden_text.as_deref());
+        tree.commands.retain(|c| !crate::ir::is_frame_name_label(c.key()));
         if self.presenting {
             crate::ir::strip_canvas_chrome(&mut tree);
         }
@@ -1155,6 +1161,40 @@ mod reliability_tests {
             !cache.stats.full_hit,
             "the editor hit the presentation's scene"
         );
+    }
+
+    /// The canvas never carries world-space frame names: `lower_canvas` strips
+    /// every `/label` — the canvas paints its names as a screen-space overlay
+    /// instead (constant 12px at any zoom, blue when selected). Holds in the
+    /// editor AND in presentation mode (which additionally drops the chips).
+    #[test]
+    fn the_canvas_lowering_carries_no_frame_name_labels() {
+        let page = Node::frame("page", 400.0, 300.0).child(
+            Node::frame("hero", 160.0, 100.0).child(Node::rect(
+                "r",
+                4.0,
+                4.0,
+                20.0,
+                20.0,
+                Color::WHITE,
+            )),
+        );
+        let vars = Variables::default();
+        // sanity: the direct lowering DOES name the frame
+        let direct = crate::ir::build_render_tree(&page, &vars);
+        assert!(
+            direct.commands.iter().any(|c| crate::ir::is_frame_name_label(c.key())),
+            "the fixture names its frame"
+        );
+        for presenting in [false, true] {
+            let mut cache = FrameCache::new();
+            cache.set_presenting(presenting);
+            let tree = cache.lower_canvas(&page, &vars);
+            assert!(
+                !tree.commands.iter().any(|c| crate::ir::is_frame_name_label(c.key())),
+                "no /label on the canvas (presenting={presenting})"
+            );
+        }
     }
 
     #[test]
