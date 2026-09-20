@@ -10249,34 +10249,24 @@ fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
     );
     fill_rrect(s, preview, R_MD, current);
     stroke_rrect(s, preview, R_MD, C_LINE_2, 1.0);
-    // Figma: the picker exposes the same editable hex + opacity fields as the
-    // inspector row, so a value typed here commits through the field editor.
-    let hex_f = if is_fill { FieldId::FillHex } else { FieldId::StrokeHex };
-    let alp_f = if is_fill { FieldId::FillAlpha } else { FieldId::StrokeAlpha };
-    let hex_r = Rect::new(panel.x0 + 14.0, panel.y0 + 84.0, panel.x0 + 164.0, panel.y0 + 112.0);
-    if hover(app, hex_r) {
-        fill_rrect(s, hex_r, R_MD, C_FIELD_2);
-    } else {
-        fill_rrect(s, hex_r, R_MD, C_FIELD);
-    }
     app.fonts.text(
         s,
-        hex_r.x0 + 8.0,
-        hex_r.y0 + 8.0,
+        panel.x0 + 14.0,
+        panel.y0 + 87.0,
         &format!("#{}", crate::state::color_hex(current)),
         T_UI,
         C_TEXT,
         Wt::Mono,
     );
-    hit.push((hex_r, Action::Field(hex_f)));
-    let alp_r = Rect::new(panel.x1 - 78.0, panel.y0 + 84.0, panel.x1 - 14.0, panel.y0 + 112.0);
-    if hover(app, alp_r) {
-        fill_rrect(s, alp_r, R_MD, C_FIELD_2);
-    } else {
-        fill_rrect(s, alp_r, R_MD, C_FIELD);
-    }
-    app.fonts.text(s, alp_r.x0 + 8.0, alp_r.y0 + 8.0, "100%", T_UI, C_TEXT, Wt::Mono);
-    hit.push((alp_r, Action::Field(alp_f)));
+    app.fonts.text(
+        s,
+        panel.x0 + 14.0,
+        panel.y0 + 104.0,
+        "Choose a preset or edit the hex field",
+        T_UI,
+        C_DIM,
+        Wt::Reg,
+    );
 
     // Figma: *"Open the color picker in the Fill or Stroke sections of the
     // right sidebar, then click Apply blend mode"* — a paint's blend lives in
