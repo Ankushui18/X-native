@@ -62,6 +62,15 @@ const typeAliases = {};
 for (const m of app.matchAll(/pub const T(\d+): f64 = TypographyScale::([A-Z]+);/g)) {
   typeAliases[m[2]] = `T${m[1]}`;
 }
+// A *semantic* alias over a numeric step — `T_UI = T11`, the same trick the
+// radii use with `R_ROW = R_LG` — is a name the chrome really sets type with,
+// so it is read from the source and counted below too. Without it the sheet
+// would report the 11px step as barely used while the editor paints a couple
+// of hundred call sites at it under the alias.
+const typeStepAliases = {};
+for (const m of app.matchAll(/pub const (T_[A-Z_]+): f64 = (T\d+);/g)) {
+  typeStepAliases[m[1]] = m[2];
+}
 scales.motion = {};
 {
   const start = ds.indexOf('impl MotionScale {');
@@ -91,6 +100,7 @@ const appVocab = {
 const usage = {};
 const names = new Set([
   ...Object.values(typeAliases),
+  ...Object.keys(typeStepAliases),
   ...Object.values(appVocab).flat().map(([alias]) => alias),
 ]);
 const appDir = new URL('../../apps/x-designer/src/bin/x_native_app/', import.meta.url);
@@ -204,7 +214,7 @@ const textBlock = xuiTheme.slice(
   xuiTheme.indexOf('];', xuiTheme.indexOf('const TEXT_ROLES')),
 );
 const textRoles = [...textBlock.matchAll(/\("([a-z_]+)"/g)].map((m) => m[1]);
-const payload = { palettes, roleNames, textRoles, scales, typeAliases, appVocab, usage, motionMentions, orphanRoles, colorAliases, colorKind, colorResolved, provenance };
+const payload = { palettes, roleNames, textRoles, scales, typeAliases, typeStepAliases, appVocab, usage, motionMentions, orphanRoles, colorAliases, colorKind, colorResolved, provenance };
 writeFileSync(OUT('tokens.json'), JSON.stringify(payload, null, 2));
 writeFileSync(OUT('tokens.js'), `window.TOKENS = ${JSON.stringify(payload)};\n`);
 // The sheet's two pages both link this file, so the app's typeface is declared

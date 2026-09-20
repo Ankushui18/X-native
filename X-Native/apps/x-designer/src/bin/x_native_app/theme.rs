@@ -403,6 +403,22 @@ pub const R_TOOL_ICON: f64 = R_LG;
 // scale still defines it for future use).
 pub const T10: f64 = TypographyScale::XS;
 pub const T11: f64 = TypographyScale::SM;
+
+/// **The chrome's body step: Figma's 11 px UI type** (master row 18.5).
+///
+/// Every editor-chrome label, field value, layer row, menu item, chip and
+/// tooltip is set at this step — Figma's own interface renders its panels,
+/// inspector and menus at 11 px Inter ("the interface font appears to be
+/// about 11px by default", forum.figma.com/t/36463; the desktop app scales
+/// that step rather than replacing it, help.figma.com "Adjust UI scale").
+/// It is an alias of `T11` rather than a new size so the ladder stays one
+/// name per step, and `design_tokens_test` pins it equal.
+///
+/// The 10 px step (`T10`) is no longer body type: it survives only on the
+/// surfaces Figma has no counterpart for — the dashboard's metadata rows,
+/// the board canvas and the status band.
+pub const T_UI: f64 = T11;
+
 pub const T12: f64 = TypographyScale::BASE;
 pub const T13: f64 = TypographyScale::MD;
 pub const T14: f64 = TypographyScale::LG;

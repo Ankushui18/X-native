@@ -85,6 +85,17 @@ impl LoadedFont {
         &self.data
     }
 
+    /// The family the face reports in its own `name` table — the typographic
+    /// family when it has one, else the legacy family. `name` is the stem the
+    /// face was *registered under*, which the caller chose; this is what the
+    /// file says about itself, so it is how a test can prove a bundled face
+    /// really is the family the chrome claims to render in.
+    pub fn family_name(&self) -> Option<String> {
+        let face = self.face();
+        crate::sources::name_record(&face, ttf_parser::name_id::TYPOGRAPHIC_FAMILY)
+            .or_else(|| crate::sources::name_record(&face, ttf_parser::name_id::FAMILY))
+    }
+
     fn face(&self) -> ttf_parser::Face<'_> {
         // parse is cheap (zero-copy views); Face borrows self.data
         ttf_parser::Face::parse(&self.data, self.face_index).expect("validated at load")

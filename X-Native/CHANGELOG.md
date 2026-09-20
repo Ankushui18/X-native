@@ -5,6 +5,40 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-20 (The chrome's UI type is Figma's Inter at 11px — master row 18.5)
+
+Wave-2 token pass, continued — the last `MISSING` row in §18. Row 18.5 asks for
+two things and both are now *checked*, not asserted:
+
+- **The face.** `TextUi::load` already bound the bundled Inter 400/500/600/700,
+  but nothing proved those files *are* Inter — the stem name is chosen by the
+  caller. `LoadedFont::family_name()` reads the face's own `name` table
+  (typographic family, else legacy family), so the four chrome weights and the
+  mono face are now verified from the bytes they were loaded from.
+- **The size.** Figma's interface sets its panels, inspector and menus at
+  **11 px**; the chrome's body step was 10 px (`T10`, 274 call sites) with the
+  field values already at 11. The editor now has one body step, `theme::T_UI`
+  (an alias of `T11`, named like the `R_*` radius aliases), used by all 250
+  editor call sites plus the tracked section headings; `T10` survives only where
+  Figma has no counterpart — the dashboard's metadata rows, the board and the
+  status band. The command palette no longer changes a row's size to mark it
+  active (Figma marks it with fill and ink).
+- **Pinned** by `the_chrome_type_is_figmas_inter_at_eleven_pixels`
+  (design_tokens_test.rs): the four faces report `Inter` from their own name
+  tables, `T_UI` is 11 px on the shared ladder, and no 10 px step remains in
+  `editor_ui.rs` / `paint.rs`.
+- **Sheet kept honest**: `build_tokens.mjs` now reads semantic type aliases from
+  the source (`T_UI = T11`) and counts them, and the type ladder prints the
+  alias beside the step with the summed count — otherwise the sheet would have
+  reported the 11 px step as barely used while 250 call sites set type at it
+  under the alias.
+
+Row 18.5 `MISSING` → `MATCH`; section 18 to **6 / 6 / 0**; grand total
+re-derived (**339 / 264 / 46 / 10 / 16 / 3**).
+
+*Rust gate runs in CI; the Node gates are the local check and stay green
+(guard 10/0 with 72 pinned, check 40/0, check_screens 20/0).*
+
 ## [Unreleased] — 2026-09-20 (Editor header is Figma's 40px — master row 18.7 header)
 
 `ED_TITLE_H` 36 → 40 to match Figma's top bar (row 18.7). Every panel hangs off

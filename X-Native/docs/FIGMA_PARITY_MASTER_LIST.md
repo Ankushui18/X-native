@@ -49,10 +49,10 @@ recon task, not a settled fact.
 | 15 Inspect, dev mode, codegen | 9 | 5 | 3 | 1 | 0 | 0 |
 | 16 Export & import | 12 | 11 | 1 | 0 | 0 | 0 |
 | 17 Canvas view & navigation | 14 | 10 | 1 | 1 | 1 | 1 |
-| 18 Design language (look of the app itself) | 12 | 5 | 6 | 1 | 0 | 0 |
+| 18 Design language (look of the app itself) | 12 | 6 | 6 | 0 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **339** | **263** | **46** | **11** | **16** | **3** |
+| **total** | **339** | **264** | **46** | **10** | **16** | **3** |
 
 The 17 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
@@ -514,7 +514,7 @@ the palette change is evidence-led rather than an approximation of a memory.*
 | 18.2 | Accent | `#0D99FF` | fill `#0B77C9`, ink `#66C7FF` | PARTIAL — white on `#0D99FF` is 2.99:1, under the 4.5:1 ratchet, so the fill is a deeper cut of the same hue; pinned by `graphite_carries_figmas_chrome_values` |
 | 18.3 | Text ramp | `#FFFFFF` / `#B3B3B3` / dim `#8C8C8C` | neutral `#FFFFFF`/`#C9C9C9`/`#BCBCBC`/`#B6B6B6` | PARTIAL — neutral like Figma's, but on this surface ladder the AA floor admits no grey darker than `#B3`, so Figma's dim `#8C8C8C` (2.9:1 on `#2C2C2C`) is unreachable; pinned by `graphite_carries_figmas_chrome_values` |
 | 18.4 | Selection colour | `#0D99FF` outline + handles | `selection` and `focus_ring` are `#0D99FF` exactly — the 3:1 indicator floor admits Figma's blue | MATCH — `graphite_carries_figmas_chrome_values` |
-| 18.5 | UI type | Inter, 11 px base | our UI font/size | **MISSING** (verify face) |
+| 18.5 | UI type | Inter, 11 px base | the chrome's four weights are the bundled Inter 400/500/600/700 — read back from each file's own `name` table, not from the stem it was registered under — and its body step is `theme::T_UI` = 11 px (250 call sites in the editor, plus the tracked section headings); the 10 px step survives only where Figma has no counterpart: the dashboard's metadata rows, the board and the status band | MATCH — `the_chrome_type_is_figmas_inter_at_eleven_pixels` |
 | 18.6 | Radii | 8 px rows/cards, 6 px inputs, 4 px chips | `R_ROW`/`R_CARD` 8, `R_INPUT` 6, `R_PILL` 4 on the shared scale | MATCH — `radii_follow_figmas_measured_chrome` |
 | 18.7 | Side panels | 240 px each, 40 px header; the right panel is not resizable (forum.figma.com/t/6578) | `ED_LEFT_W 240` ✓ and `ED_TITLE_H 40` ✓ (pinned by `the_editor_header_is_figmas_forty_pixels`); `ED_RIGHT_W 340` | PARTIAL — the right dock at 240 makes 300 inspector boxes escape the panel (`check_screens.mjs` measures it); it needs the inspector reflow, a large absolute-offset refactor done in CI, not here |
 | 18.8 | Toolbar | floating, bottom-centre, 40 px, rounded | `TOOLBAR_H 40`, `TOOLBAR_BOTTOM 20` | MATCH |
@@ -764,9 +764,11 @@ rendering it.
     `#0D99FF` measures 2.99:1, under this repo's 4.5:1 ratchet) and Figma's dim
     `#8C8C8C` (2.9:1 on `#2C2C2C`). Both are asserted by
     `graphite_carries_figmas_chrome_values`, so neither can be "corrected" back
-    into a sub-AA pair by accident. Still open: the right dock at 240 (needs the
-    inspector reflow of item 18), the radii pass (18.6), the UI face at 11 px
-    (18.5), the tool cursors (18.11) and motion (18.12).
+    into a sub-AA pair by accident. Since then the radii pass (18.6), the 40 px
+    header (18.7) and the UI type — Inter on an 11 px base, the face verified
+    from each bundled file's `name` table (18.5) — have landed. Still open: the
+    right dock at 240 (needs the inspector reflow of item 18), the remaining
+    icon vocabulary (18.10), the tool cursors (18.11) and motion (18.12).
 
     *Measured, not guessed: the palette was validated against the repo's own
     audit before it was written — 54 pairs, 0 failures, headroom 1.026× on

@@ -15,8 +15,8 @@ the 24px layer row, the 240px left dock, and four redrawn tool glyphs. The two
 values Figma ships sub-AA (accent fill, dim grey) are pinned as deliberate
 deviations by `graphite_carries_figmas_chrome_values`.
 
-**Scoreboard (branch, verified):** 339 rows — **263 MATCH / 46 PARTIAL /
-11 MISSING / 16 EXTRA / 3 OUT**. Guard: 10 checks, 72 pinned, 0 open, 0 failed.
+**Scoreboard (branch, verified):** 339 rows — **264 MATCH / 46 PARTIAL /
+10 MISSING / 16 EXTRA / 3 OUT**. Guard: 10 checks, 73 pinned, 0 open, 0 failed.
 
 The single source of truth for what's next remains
 `docs/FIGMA_PARITY_MASTER_LIST.md`.
@@ -47,13 +47,21 @@ The single source of truth for what's next remains
    `check_screens.mjs` stays 20/0. Pinned by
    `the_editor_header_is_figmas_forty_pixels`.
 
-5. **Wave 2 remainder** (items 16–19): right dock at 240 — needs the inspector
-   reflow (`paint_design` offsets are absolute for ~340px; a CI-compiled
-   refactor, deliberately not half-done here) — plus Inter at 11px (18.5), tool
-   cursors (18.11), motion (18.12), remaining icon vocabulary (18.10), Design-tab
-   row order.
+5. ~~**UI type (row 18.5)**~~ — **delivered**: the chrome's body step is now
+   `theme::T_UI` = 11 px (Figma's base) across all 250 editor call sites plus the
+   tracked section headings; `T10` stays only on the dashboard's metadata rows,
+   the board and the status band. The four bundled Inter weights are verified
+   from each file's own `name` table via `LoadedFont::family_name`. Pinned by
+   `the_chrome_type_is_figmas_inter_at_eleven_pixels`. Row 18.5 → MATCH.
 
-6. **Wave 3** (item 20), only after 1–5.
+6. **Wave 2 remainder** (items 16–19): right dock at 240 — needs the inspector
+   reflow (`paint_design` offsets are absolute for ~340px; a CI-compiled
+   refactor, deliberately not half-done here) — plus tool cursors (18.11),
+   motion (18.12) and the remaining icon vocabulary (18.10). (The Design tab's
+   row order already matches Figma's: Position → Layout → Appearance → Fill →
+   Stroke → Effects → Export.)
+
+7. **Wave 3** (item 20), only after 1–6.
 
 ## How we reach it — per-behaviour recipe
 

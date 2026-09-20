@@ -77,28 +77,39 @@ const rowOf = (label, inner) => `<div class="row"><span class="label">${label}</
 // How many call sites name this constant. `0` is a fact worth printing: the
 // 16px type step and the fully-round radius exist in the scale but no chrome
 // file spells them, and a reader deciding what to reuse should know that.
-const uses = (name) => {
-  const n = T.usage ? T.usage[name] : undefined;
-  if (n === undefined) return '';
+const usesOf = (names) => {
+  const known = names.filter((n) => n && T.usage && T.usage[n] !== undefined);
+  if (known.length === 0) return '';
+  const n = known.reduce((sum, k) => sum + T.usage[k], 0);
+  const via = known.length > 1 ? ` (counted as ${known.join(' + ')})` : '';
   return n === 0
     ? `<span class="uses none" title="declared in theme.rs, named by no call site yet">unused</span>`
-    : `<span class="uses" title="${n} reference${n === 1 ? '' : 's'} in the app sources">×${n}</span>`;
+    : `<span class="uses" title="${n} reference${n === 1 ? '' : 's'} in the app sources${via}">×${n}</span>`;
 };
+const uses = (name) => usesOf([name]);
 
 function renderScales() {
   const s = T.scales;
   const type = Object.entries(s.type);
   const aliasName = (k) => (T.typeAliases ? T.typeAliases[k] || '' : '');
+  // A step's *semantic* alias (`T_UI = T11`) is printed beside the numeric one
+  // and folded into the count, because that is the name the chrome spells when
+  // it sets type at that step.
+  const stepAliases = (tName) =>
+    Object.entries(T.typeStepAliases || {})
+      .filter(([, target]) => target === tName)
+      .map(([a]) => a);
+  const namesOf = (k) => [aliasName(k), ...stepAliases(aliasName(k))].filter(Boolean);
   // NB: the separator is a middle dot, not whitespace — `alias(k).trim()` would
   // leave "T10 ·" and the lookup would miss. Keep the bare name for lookups.
-  const alias = (k) => (aliasName(k) ? `${aliasName(k)} · ` : '');
+  const alias = (k) => (namesOf(k).length ? `${namesOf(k).join(' / ')} · ` : '');
   document.getElementById('l-type').innerHTML =
     `<div class="nums" style="margin-bottom:2px">type — ${type.length} steps, ` +
     `${type.map(([k, v]) => `${alias(k)}${v}px`).join(' · ')} (TypographyScale; the chrome names the alias)</div>` +
     type
       .map(([k, v]) =>
         rowOf(
-          `${alias(k)}${k.toLowerCase()} ${v}px ${uses(aliasName(k))}`,
+          `${alias(k)}${k.toLowerCase()} ${v}px ${usesOf(namesOf(k))}`,
           `<span class="type" style="font-size:${v}px">Ag — quick brown fox</span>`,
         ),
       )
