@@ -5568,7 +5568,10 @@ impl App {
                 refusal = if n == 0 {
                     Some("Nothing to clean up — no redundant group nests".into())
                 } else {
-                    Some(format!("Cleaned up {n} redundant group{}", if n == 1 { "" } else { "s" }))
+                    Some(format!(
+                        "Cleaned up {n} redundant group{}",
+                        if n == 1 { "" } else { "s" }
+                    ))
                 };
             }
             FrameSelection => {

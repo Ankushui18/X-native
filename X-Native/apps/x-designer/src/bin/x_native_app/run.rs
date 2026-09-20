@@ -8143,8 +8143,7 @@ impl Host {
             // inspect/code view. Here that is the right panel's Inspect (SHIP)
             // tab; a second ⇧D leaves it and returns to Design.
             if self.app.shift && c == "D" {
-                let entering =
-                    self.app.doc_ref().right_tab != crate::state::RightTab::Inspect;
+                let entering = self.app.doc_ref().right_tab != crate::state::RightTab::Inspect;
                 let tab = if entering {
                     crate::state::RightTab::Inspect
                 } else {
