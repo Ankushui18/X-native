@@ -1120,7 +1120,11 @@ mod tests {
         // admits it (row 18.4).
         assert_eq!(g.selection, [0x0D, 0x99, 0xFF], "selection (row 18.4)");
         assert_eq!(g.focus_ring, [0x0D, 0x99, 0xFF], "focus ring (row 18.4)");
-        assert_eq!(g.text_primary, [0xFF, 0xFF, 0xFF], "primary text (row 18.3)");
+        assert_eq!(
+            g.text_primary,
+            [0xFF, 0xFF, 0xFF],
+            "primary text (row 18.3)"
+        );
         // The documented deviation: white on `#0D99FF` is 2.99:1, under the
         // 4.5:1 floor `contrast_audit` enforces, so the accent FILL is a
         // deeper cut of the same hue. Pin both halves of that decision.
@@ -1163,7 +1167,10 @@ mod tests {
     /// palette retune is allowed at all: 54 pairs, none below its floor.
     #[test]
     fn every_palette_is_aa_clean() {
-        for id in [crate::theme::ThemeId::Graphite, crate::theme::ThemeId::Daylight] {
+        for id in [
+            crate::theme::ThemeId::Graphite,
+            crate::theme::ThemeId::Daylight,
+        ] {
             let p = id.palette();
             assert_eq!(
                 p.contrast_pairs().len(),
