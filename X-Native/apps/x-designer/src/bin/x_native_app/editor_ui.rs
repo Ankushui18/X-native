@@ -3641,7 +3641,7 @@ pub fn sel_info(app: &App) -> Sel {
         h: n.h,
         x: n.transform.x,
         y: n.transform.y,
-        rot: n.transform.rotation.to_degrees(),
+        rot: crate::state::rotation_display(n.transform.rotation.to_degrees()),
         opacity: n.opacity,
         radius,
         fill: crate::state::node_fill_hex(n, vars),

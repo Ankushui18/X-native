@@ -14428,8 +14428,11 @@ impl Host {
             FieldId::Rotation => {
                 if let Some(deg) = num(raw) {
                     // the field takes the whole selection and Figma's range:
-                    // past 180 the count runs back down (195° → -165°)
-                    doc.editor().set_selection_rotation(deg);
+                    // past 180 the count runs back down (195° → -165°). The
+                    // typed value is Figma's counter-clockwise convention, so it
+                    // is converted to the stored clockwise sign first (row 6.1).
+                    doc.editor()
+                        .set_selection_rotation(crate::state::rotation_from_display(deg));
                     self.app.mark_dirty();
                 }
             }

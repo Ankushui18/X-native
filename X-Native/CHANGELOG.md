@@ -5,6 +5,25 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-20 (Rotation sign — master row 6.1, wave-2 item 19)
+
+Figma's rotation field counts **counter-clockwise positive**; the engine stored
+the renderer's y-down `Affine::rotate` (clockwise-positive) and showed it raw.
+Now one display conversion, stored sign unchanged. Row 6.1 `PARTIAL` → `MATCH`;
+section 6 to **19 / 0 / 1**; grand total re-derived (**339 / 262 / 47 / 11 / 16 / 3**).
+
+- **`state::rotation_display`** negates the stored degrees and re-ranges to
+  Figma's (−180, 180]; it is applied at the *single* readout source
+  (`editor_ui.rs::sel_info`'s `Sel.rot`), so the Position field and every other
+  angle readout agree by construction. **`rotation_from_display`** is its inverse
+  on the write path (`run.rs` `FieldId::Rotation`), so a typed counter-clockwise
+  value becomes the stored clockwise angle. The stored `transform.rotation` is
+  never touched — the renderer and the exporters keep their meaning.
+- **Pinned** by `the_rotation_field_shows_figmas_counter_clockwise_sign`: stored
+  30° reads −30°, typing −30 stores 30°, and the 180° edge shows 180 (never −180).
+
+*Rust gate runs in CI; the Node gates are the local check and stay green.*
+
 ## [Unreleased] — 2026-09-20 (Clean up layers — master row 5.9, wave 1 closes its last behaviour)
 
 Item 15, scoped with the owner to the **chapter-4 framing**: flatten redundant

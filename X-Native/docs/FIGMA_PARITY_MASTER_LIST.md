@@ -37,7 +37,7 @@ recon task, not a settled fact.
 | 3 Keyboard | 35 | 32 | 2 | 0 | 1 | 0 |
 | 4 Menus & palettes | 10 | 9 | 0 | 1 | 0 | 0 |
 | 5 Layers, pages, sections | 14 | 12 | 2 | 0 | 0 | 0 |
-| 6 Frame & shape properties | 20 | 18 | 1 | 1 | 0 | 0 |
+| 6 Frame & shape properties | 20 | 19 | 0 | 1 | 0 | 0 |
 | 7 Auto layout | 16 | 14 | 1 | 1 | 0 | 0 |
 | 8 Fill, stroke, effects, colour | 25 | 21 | 1 | 3 | 0 | 0 |
 | 9 Images | 9 | 7 | 2 | 0 | 0 | 0 |
@@ -52,7 +52,7 @@ recon task, not a settled fact.
 | 18 Design language (look of the app itself) | 12 | 4 | 7 | 1 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **339** | **261** | **48** | **11** | **16** | **3** |
+| **total** | **339** | **262** | **47** | **11** | **16** | **3** |
 
 The 17 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
@@ -220,7 +220,7 @@ Appearance (opacity, radius, clip), Fill, Stroke, Effects, Export.
 
 | # | Item | Figma | Ours | Status |
 | --- | --- | --- | --- | --- |
-| 6.1 | Position X/Y, rotate angle | numeric, scrubbable | `Position` rows + the rotate field (`FieldId::Rotation` → `Editor::set_selection_rotation`, Figma's (−180, 180]) | PARTIAL — the sign counts clockwise-positive (the renderer's y-down `Affine::rotate`), where Figma's counts counter-clockwise |
+| 6.1 | Position X/Y, rotate angle | numeric, scrubbable, **counter-clockwise positive** | `Position` rows + the rotate field; ONE display conversion `state::rotation_display` (negate + re-range to (−180,180]) at the single `Sel.rot` source, and `rotation_from_display` on write — the stored y-down sign is untouched so renderer/exporters keep meaning | MATCH — `the_rotation_field_shows_figmas_counter_clockwise_sign` |
 | 6.2 | Width/Height + Resizing | Fixed / Hug / Fill per axis, chosen from the Width/Height dropdown | `Sizing`, `Action::LayoutAxisMenu` / `SetAxisSizing` | MATCH |
 | 6.3 | Constraints | 5 H × 5 V options, "ignore constraints" `⌃` | `Constraints` section, `SetConstraint` (`2ebb068`) | MATCH |
 | 6.4 | Corner radius | one value; **Independent corners** for a value each; a radius handle just inside each corner on the canvas | **Corner radius** row with Figma's leading independent-corners icon (`Action::ToggleCorners`) opening the four-field **Corner radius details** panel; `Editor::set_uniform_radius` / `set_corner_radius` write rects AND frames; the canvas dot (`Drag::RadiusCorner`, ⌥ = that corner alone on rectangles) rounds the shape by its diagonal travel | MATCH |

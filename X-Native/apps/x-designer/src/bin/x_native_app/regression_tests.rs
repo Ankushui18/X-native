@@ -9145,3 +9145,50 @@ fn clean_up_layers_flattens_redundant_nests_in_one_undo() {
     assert!(find_node_clone(&h.app.doc_ref().editor_ref().root, "outer").is_some());
     assert!(find_node_clone(&h.app.doc_ref().editor_ref().root, "inner").is_some());
 }
+
+/// Rotation sign (master row 6.1 / wave-2 item 19): Figma's field counts
+/// counter-clockwise positive while the engine stores the renderer's y-down
+/// (clockwise-positive) angle. The field and every readout show the negation in
+/// Figma's (−180, 180], and a typed value is converted back — the stored sign is
+/// untouched.
+#[test]
+fn the_rotation_field_shows_figmas_counter_clockwise_sign() {
+    use crate::state::{rotation_display, rotation_from_display};
+    // the conversion is its own inverse and re-ranges to (−180, 180]
+    assert_eq!(rotation_display(30.0), -30.0);
+    assert_eq!(rotation_from_display(-30.0), 30.0);
+    assert_eq!(rotation_display(180.0), 180.0, "180 stays 180, never -180");
+    assert_eq!(rotation_display(-195.0), -165.0, "range wraps like Figma's");
+
+    let mut h = host();
+    let root = h.app.doc().editor_ref().root.id.clone();
+    h.app
+        .doc()
+        .editor()
+        .insert_node(&root, Node::rect("card", 0.0, 0.0, 100.0, 60.0, Color::WHITE));
+    h.app.doc().editor().selection = vec!["card".into()];
+
+    // store a clockwise 30° (the renderer's sign)
+    h.app.doc().editor().set_selection_rotation(30.0);
+    let stored = find_node_clone(&h.app.doc_ref().editor_ref().root, "card")
+        .unwrap()
+        .transform
+        .rotation
+        .to_degrees();
+    assert!((stored - 30.0).abs() < 1e-6, "stored sign is clockwise: {stored}");
+    // …but the field reads the counter-clockwise value
+    assert_eq!(crate::editor_ui::sel_info(&h.app).rot, -30.0);
+
+    // typing Figma's -30 stores +30 (the write converts back)
+    set_field(&mut h, FieldId::Rotation, "-30");
+    let stored = find_node_clone(&h.app.doc_ref().editor_ref().root, "card")
+        .unwrap()
+        .transform
+        .rotation
+        .to_degrees();
+    assert!((stored - 30.0).abs() < 1e-6, "write converts ccw → cw: {stored}");
+
+    // the 180 edge shows 180, not -180
+    h.app.doc().editor().set_selection_rotation(180.0);
+    assert_eq!(crate::editor_ui::sel_info(&h.app).rot, 180.0);
+}
