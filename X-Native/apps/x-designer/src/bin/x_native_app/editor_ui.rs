@@ -5087,8 +5087,17 @@ fn paint_design(
     );
 
     // Decoration | Wrap style (the engine's paragraph wrap strategy, "tw")
-    app.fonts.text(s, x0, y0 + 958.0, "Decoration", T_UI, C_DIM, Wt::Reg);
-    app.fonts.text(s, x0 + 161.5, y0 + 958.0, "Wrap style", T_UI, C_DIM, Wt::Reg);
+    app.fonts
+        .text(s, x0, y0 + 958.0, "Decoration", T_UI, C_DIM, Wt::Reg);
+    app.fonts.text(
+        s,
+        x0 + 161.5,
+        y0 + 958.0,
+        "Wrap style",
+        T_UI,
+        C_DIM,
+        Wt::Reg,
+    );
     let deco = Rect::new(x0, y0 + 976.0, x0 + 153.5, y0 + 1004.0);
     input(
         app,

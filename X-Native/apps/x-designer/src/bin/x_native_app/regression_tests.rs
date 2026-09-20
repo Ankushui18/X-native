@@ -5357,12 +5357,11 @@ fn app_row_heights_are_the_component_layers() {
 
     // the one row the component contract still counts as off-standard: the
     // tree row moved onto the Dense step (24px) with the Figma-parity pass
-    for h in [crate::theme::DROPDOWN_ROW_H] {
-        assert!(
-            !metrics::is_control_height(h),
-            "{h} is on the scale now — lower OFF_STANDARD_COMPONENTS"
-        );
-    }
+    let h = crate::theme::DROPDOWN_ROW_H;
+    assert!(
+        !metrics::is_control_height(h),
+        "{h} is on the scale now — lower OFF_STANDARD_COMPONENTS"
+    );
     assert_eq!(
         metrics::nearest_control_height(crate::theme::TREE_ROW_H),
         metrics::ControlHeight::Dense
