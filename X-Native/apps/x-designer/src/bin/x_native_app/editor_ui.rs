@@ -5796,7 +5796,8 @@ fn paint_design(
         // master side: bind the selected descendant as a new property
         app.fonts.text(s, x0, y, &master, T_UI, C_DIM, Wt::Reg);
         y += 20.0;
-        app.fonts.text(s, x0, y, "Description", T_UI, C_DIM, Wt::Reg);
+        app.fonts
+            .text(s, x0, y, "Description", T_UI, C_DIM, Wt::Reg);
         let description = app
             .doc_ref()
             .selected_id()
@@ -6334,8 +6335,15 @@ fn paint_mask_section(
         },
     );
     stroke_rrect(s, row, R_XS, C_LINE, 1.0);
-    app.fonts
-        .text(s, row.x0 + 8.0, y + 2.0, kind.label(), T_UI, C_TEXT, Wt::Reg);
+    app.fonts.text(
+        s,
+        row.x0 + 8.0,
+        y + 2.0,
+        kind.label(),
+        T_UI,
+        C_TEXT,
+        Wt::Reg,
+    );
     draw_icon(s, "chevron-down", row.x1 - 18.0, y + 3.0, ICON_XS, C_DIM);
     hit.push((row, Action::ToggleMaskType));
     if app.mask_type_open {
