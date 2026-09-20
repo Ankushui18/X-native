@@ -184,7 +184,7 @@
       "window": 980,
       "card": 159,
       "grid": 213.3,
-      "canvas": 352,
+      "canvas": 452,
       "canvasWorst": 280,
       "searchSlack": 217.8,
       "docks": {
@@ -197,7 +197,7 @@
       "window": 1280,
       "card": 234,
       "grid": 313.3,
-      "canvas": 652,
+      "canvas": 752,
       "canvasWorst": 280,
       "searchSlack": 517.8,
       "docks": {
@@ -210,7 +210,7 @@
       "window": 1440,
       "card": 274,
       "grid": 366.7,
-      "canvas": 812,
+      "canvas": 912,
       "canvasWorst": 392,
       "searchSlack": 677.8,
       "docks": {
@@ -223,7 +223,7 @@
       "window": 1920,
       "card": 394,
       "grid": 526.7,
-      "canvas": 1292,
+      "canvas": 1392,
       "canvasWorst": 872,
       "searchSlack": 1157.8,
       "docks": {
@@ -236,7 +236,7 @@
       "window": 2560,
       "card": 554,
       "grid": 740,
-      "canvas": 1932,
+      "canvas": 2032,
       "canvasWorst": 1512,
       "searchSlack": 1797.8,
       "docks": {
@@ -277,7 +277,7 @@
       200,
       480
     ],
-    "right": 340,
+    "right": 240,
     "rightMin": 240,
     "rightRange": [
       240,
