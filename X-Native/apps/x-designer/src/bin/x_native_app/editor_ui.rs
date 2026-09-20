@@ -4041,12 +4041,17 @@ fn paint_design(
     let sel = sel_info(app);
     let xr = rx + rw - pl; // 1428
     let gap = 8.0;
+    // Right-anchored trailing controls so the inspector holds at any
+    // dock width (Figma 240 default through the 520 max): at 340 these
+    // reproduce the historical offsets exactly.
+    let lock_x = xr - SQ_BTN;
+    let eye_x = lock_x - SQ_BTN - gap;
     let h = INPUT_H; // 28
     let mono = true;
 
     // ---- size & position rows: +12 / +48 / +84 / +120 (pitch 36) -------
     let r1 = y0 + 12.0;
-    let fd = Rect::new(x0, r1, x0 + 145.0, r1 + h);
+    let fd = Rect::new(x0, r1, (x0 + 145.0).min(eye_x - gap - 90.0), r1 + h);
     let preset_name = FRAME_PRESETS[app.doc().frame_preset].0;
     input(
         app,
@@ -4064,7 +4069,7 @@ fn paint_design(
         Some("chevron-down"),
     );
     // % field: label left, value right (justify-between per the HTML)
-    let pct = Rect::new(x0 + 153.0, r1, x0 + 243.0, r1 + h);
+    let pct = Rect::new(fd.x1 + gap, r1, eye_x - gap, r1 + h);
     input_box(app, s, pct, R_INPUT);
     app.fonts
         .text(s, pct.x0 + 9.0, r1 + 6.5, "%", T_UI, C_DIM, Wt::Reg);
@@ -4089,19 +4094,20 @@ fn paint_design(
     hit.push((pct, Action::Field(FieldId::Zoom)));
     // chevron: audited ink 1337-1344 → icon left = field right − 21
     draw_icon(s, "chevron-down", pct.x1 - 21.0, r1 + 8.0, ICON_XS, C_DIM);
-    sq_btn(app, s, hit, x0 + 251.0, r1, "eye", false);
+    sq_btn(app, s, hit, eye_x, r1, "eye", false);
     hit.push((
-        Rect::new(x0 + 251.0, r1, x0 + 251.0 + SQ_BTN, r1 + SQ_BTN),
+        Rect::new(eye_x, r1, eye_x + SQ_BTN, r1 + SQ_BTN),
         Action::ToggleVisible,
     ));
-    sq_btn(app, s, hit, x0 + 287.0, r1, "lock", false);
+    sq_btn(app, s, hit, lock_x, r1, "lock", false);
     hit.push((
-        Rect::new(x0 + 287.0, r1, x0 + 287.0 + SQ_BTN, r1 + SQ_BTN),
+        Rect::new(lock_x, r1, lock_x + SQ_BTN, r1 + SQ_BTN),
         Action::ToggleLock,
     ));
 
     let r2 = y0 + 48.0;
-    let half = 135.5;
+    let aspect_x = xr - SQ_BTN;
+    let half = ((aspect_x - gap - x0) - gap) / 2.0;
     let wr = Rect::new(x0, r2, x0 + half, r2 + h);
     input(
         app,
@@ -4114,7 +4120,7 @@ fn paint_design(
         Some(Action::Field(FieldId::W)),
         None,
     );
-    let hr = Rect::new(x0 + 143.5, r2, x0 + 143.5 + half, r2 + h);
+    let hr = Rect::new(x0 + half + gap, r2, x0 + half + gap + half, r2 + h);
     input(
         app,
         s,
@@ -4126,7 +4132,7 @@ fn paint_design(
         Some(Action::Field(FieldId::H)),
         None,
     );
-    let aspect_lock = Rect::new(x0 + 287.0, r2, x0 + 287.0 + SQ_BTN, r2 + SQ_BTN);
+    let aspect_lock = Rect::new(aspect_x, r2, aspect_x + SQ_BTN, r2 + SQ_BTN);
     sq_btn(app, s, hit, aspect_lock.x0, aspect_lock.y0, "lock", false);
     if app.aspect_ratio_locked {
         fill_rrect(s, aspect_lock, R_LG, C_FIELD_2);
