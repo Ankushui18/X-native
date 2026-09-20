@@ -16,7 +16,14 @@ values Figma ships sub-AA (accent fill, dim grey) are pinned as deliberate
 deviations by `graphite_carries_figmas_chrome_values`.
 
 **Scoreboard (branch, verified):** 339 rows — **267 MATCH / 47 PARTIAL /
-6 MISSING / 16 EXTRA / 3 OUT**. Guard: 10 checks, 80 pinned, 0 open, 0 failed.
+5 MISSING / 16 EXTRA / 4 OUT**. Guard: 10 checks, 80 pinned, 0 open, 0 failed.
+
+**Priority order (owner, 2026-09-20):** FIRST make the product **stable** and
+**100% Figma-matched**; only AFTER that improve / add our own style. **Figma AI
+is NOT a parity requirement** — AI helpers (e.g. 7.16 auto-layout suggestions,
+now OUT) are out of scope for the match phase and become "our own style" as the
+LAST goal. Never build AI features to chase parity, and never ship a risky
+change that could destabilise the build before the match is done.
 
 The single source of truth for what's next remains
 `docs/FIGMA_PARITY_MASTER_LIST.md`.

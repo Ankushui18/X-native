@@ -5,6 +5,19 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-20 (Owner priority: stability + 100% match first, AI last — 7.16 out of scope)
+
+Owner direction recorded in `SESSION_BRIEF.md`: make the product **stable** and
+**100% Figma-matched** first; improve / add our own style only after. **Figma AI
+is not a parity requirement.**
+
+- **7.16 Auto-layout suggestions** (Figma's AI helper) is reclassified
+  `MISSING` → `OUT` — out of scope for the match phase; it will become "our own
+  style" as the last goal. §7 → 14/1/0/0/1; grand total
+  **339 / 267 / 47 / 5 / 16 / 4**.
+
+Documentation only; Node gates stay green and the sheet is byte-stable.
+
 ## [Unreleased] — 2026-09-20 (Dev Mode `⇧D` — master row 1.18)
 
 A code audit of the remaining `MISSING` rows confirmed 17.9/4.9 were the only

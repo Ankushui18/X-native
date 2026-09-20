@@ -38,7 +38,7 @@ recon task, not a settled fact.
 | 4 Menus & palettes | 10 | 9 | 1 | 0 | 0 | 0 |
 | 5 Layers, pages, sections | 14 | 12 | 2 | 0 | 0 | 0 |
 | 6 Frame & shape properties | 20 | 19 | 0 | 1 | 0 | 0 |
-| 7 Auto layout | 16 | 14 | 1 | 1 | 0 | 0 |
+| 7 Auto layout | 16 | 14 | 1 | 0 | 0 | 1 |
 | 8 Fill, stroke, effects, colour | 25 | 22 | 1 | 2 | 0 | 0 |
 | 9 Images | 9 | 7 | 2 | 0 | 0 | 0 |
 | 10 Text & typography | 18 | 17 | 1 | 0 | 0 | 0 |
@@ -52,7 +52,7 @@ recon task, not a settled fact.
 | 18 Design language (look of the app itself) | 12 | 6 | 6 | 0 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **339** | **267** | **47** | **6** | **16** | **3** |
+| **total** | **339** | **267** | **47** | **5** | **16** | **4** |
 
 The 17 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
@@ -264,7 +264,7 @@ position, canvas stacking, "distribute", `⇧A` to add.
 | 7.13 | Text resizing inside layout | hug/fill text | text sizing path | MATCH |
 | 7.14 | Layout in components | layout inherited by instances | component path | MATCH |
 | 7.15 | Layout grid inside layout | grid frames | grid.rs | MATCH |
-| 7.16 | Auto layout suggestions | Figma proposes a layout from the arrangement | not implemented (Figma-only AI-ish helper) | **MISSING** (low) |
+| 7.16 | Auto layout suggestions | Figma proposes a layout from the arrangement | not built — **out of scope**: Figma's AI helper; the owner will design our own style for this as a last goal, after the product is stable and 100% Figma-matched | OUT (owner: Figma AI, deferred to "our style") |
 
 ## 8. Fill, stroke, effects, colour
 
