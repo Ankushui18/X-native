@@ -5928,7 +5928,10 @@ fn effect_adds_stop_at_figmas_per_type_caps() {
     for _ in 0..8 {
         assert!(add(&mut h, EffectKind::DropShadow));
     }
-    assert!(!add(&mut h, EffectKind::DropShadow), "eight drop shadows per layer");
+    assert!(
+        !add(&mut h, EffectKind::DropShadow),
+        "eight drop shadows per layer"
+    );
 }
 
 /// The sort key is parsed from the label the UI shows, so the two cannot
@@ -9191,7 +9194,9 @@ fn clean_up_layers_flattens_redundant_nests_in_one_undo() {
     let mut inner = Node::group("inner", 100.0, 60.0);
     inner.transform.x = 10.0;
     inner.transform.y = 20.0;
-    inner.children.push(Node::rect("chip", 0.0, 0.0, 100.0, 60.0, Color::WHITE));
+    inner
+        .children
+        .push(Node::rect("chip", 0.0, 0.0, 100.0, 60.0, Color::WHITE));
     let mut outer = Node::group("outer", 100.0, 60.0);
     outer.transform.x = 5.0;
     outer.transform.y = 5.0;
