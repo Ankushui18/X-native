@@ -12800,7 +12800,7 @@ mod viewport_row_tests {
             .iter()
             .find(|r| r.id == "fr1")
             .expect("the plain frame");
-        assert_eq!(fr.icon, "frame#", "one plain master is not a set");
+        assert_eq!(fr.icon, "frame-hash", "one plain master is not a set");
     }
 
     /// The set's canvas chrome — Figma's dashed violet outline plus the set's

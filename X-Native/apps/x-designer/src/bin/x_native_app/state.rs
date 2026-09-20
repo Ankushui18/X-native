@@ -91,7 +91,7 @@ impl Tool {
         match self {
             Tool::Select => "mouse-pointer-2",
             Tool::Scale => "scale",
-            Tool::Frame => "frame#",
+            Tool::Frame => "frame-hash",
             Tool::Section => "section",
             Tool::Slice => "slice",
             Tool::PlaceImage => "image",
@@ -6405,7 +6405,7 @@ pub struct BoardRegions {
 /// `NodeKind` should fail to compile here rather than silently become a box.
 pub fn kind_icon(k: &NodeKind) -> &'static str {
     match k {
-        NodeKind::Frame { .. } => "frame#",
+        NodeKind::Frame { .. } => "frame-hash",
         NodeKind::Rect { .. } => "square",
         NodeKind::Group => "layout-grid",
         NodeKind::Section => "section",
@@ -6416,7 +6416,9 @@ pub fn kind_icon(k: &NodeKind) -> &'static str {
         NodeKind::Vector { .. } | NodeKind::Arc { .. } | NodeKind::Line => "pen-tool",
         NodeKind::Component { .. } | NodeKind::Instance { .. } => "component",
         NodeKind::Image { .. } => "image",
-        NodeKind::Slice => "scissors",
+        // the Slice layer wears the Slice tool's own glyph — `scissors` is
+        // Figma's CUT, and one metaphor must not mean two things in the chrome
+        NodeKind::Slice => "slice",
     }
 }
 

@@ -16,7 +16,7 @@ values Figma ships sub-AA (accent fill, dim grey) are pinned as deliberate
 deviations by `graphite_carries_figmas_chrome_values`.
 
 **Scoreboard (branch, verified):** 339 rows — **264 MATCH / 46 PARTIAL /
-10 MISSING / 16 EXTRA / 3 OUT**. Guard: 10 checks, 73 pinned, 0 open, 0 failed.
+10 MISSING / 16 EXTRA / 3 OUT**. Guard: 10 checks, 74 pinned, 0 open, 0 failed.
 
 The single source of truth for what's next remains
 `docs/FIGMA_PARITY_MASTER_LIST.md`.
@@ -54,14 +54,21 @@ The single source of truth for what's next remains
    from each file's own `name` table via `LoadedFont::family_name`. Pinned by
    `the_chrome_type_is_figmas_inter_at_eleven_pixels`. Row 18.5 → MATCH.
 
-6. **Wave 2 remainder** (items 16–19): right dock at 240 — needs the inspector
+6. ~~**Icon vocabulary (row 18.10), part**~~ — `star` redrawn at Figma's 0.382
+   default ratio, `arrow-up-right` redrawn as shaft+V head, Frame glyph keyed
+   `frame-hash` so the sheet can draw it, Slice layers wear the Slice glyph, and
+   the icon census now reads the `fn icon()`/`kind_icon` tables so "unused" is
+   real. Pinned by `the_star_and_arrow_glyphs_are_figmas_metaphors`. Row 18.10
+   stays PARTIAL — hand, pen nib and comment bubble still read Lucide.
+
+7. **Wave 2 remainder** (items 16–19): right dock at 240 — needs the inspector
    reflow (`paint_design` offsets are absolute for ~340px; a CI-compiled
    refactor, deliberately not half-done here) — plus tool cursors (18.11),
-   motion (18.12) and the remaining icon vocabulary (18.10). (The Design tab's
+   motion (18.12) and the remaining icon forms (18.10). (The Design tab's
    row order already matches Figma's: Position → Layout → Appearance → Fill →
    Stroke → Effects → Export.)
 
-7. **Wave 3** (item 20), only after 1–6.
+8. **Wave 3** (item 20), only after 1–7.
 
 ## How we reach it — per-behaviour recipe
 

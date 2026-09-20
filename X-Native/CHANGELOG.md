@@ -5,6 +5,36 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-20 (Icon vocabulary toward Figma — master row 18.10, part)
+
+Continuing the icon pass with the same rule as before: a tool's mark is the
+shape the tool makes, at Figma's metrics (24 grid, 1.5 px stroke, round caps).
+
+- **`star`** redrawn at Figma's default inner-point ratio 0.382 (`booleans::
+  STAR_RATIO`, the value this app's Star tool defaults to), so the glyph and the
+  shape it draws agree — the polygon/`scale`/`slice`/`section` rule extended.
+- **`arrow-up-right`** redrawn as a shaft ending in a V head, matching the
+  arrow-up/-down/-right family; Lucide's version ran its head arms 10 units
+  along the box edges and read as a corner bracket ("open elsewhere"), which is
+  Figma's *Arrow* shape tool's opposite.
+- **`frame#` → `frame-hash`**: the Frame glyph was invisible to the sheet
+  because the icon vocabulary is `[a-z0-9-]` and the `#` fell out of
+  `extract_icons.mjs`. Renamed at the key, both bindings, and the two tests.
+- **`kind_icon`**: a Slice layer now wears the Slice tool's glyph instead of
+  Figma's Cut scissors — one metaphor must not mean two things.
+- **Honest census**: `icon_scan.mjs` now also reads the `fn icon()` /
+  `kind_icon()` binding tables (brace-matched), so 86 of 97 keys are counted as
+  used and the "unused" number is real; the sheet's wording says the remainder
+  is a to-look-at list, not dead keys.
+
+Pinned by `the_star_and_arrow_glyphs_are_figmas_metaphors` (geometry: 10 star
+vertices at ratio 0.382, arrow head = two equal arms on the shaft's end). Row
+18.10 stays PARTIAL — a few forms (hand, pen nib, comment bubble) still read
+Lucide; guard now reports 74 pinned.
+
+*Rust gate runs in CI; the Node gates are the local check and stay green
+(guard 10/0 with 74 pinned, check 40/0, check_screens 20/0).*
+
 ## [Unreleased] — 2026-09-20 (The chrome's UI type is Figma's Inter at 11px — master row 18.5)
 
 Wave-2 token pass, continued — the last `MISSING` row in §18. Row 18.5 asks for

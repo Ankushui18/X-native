@@ -158,7 +158,10 @@ function renderScales() {
         (IA.missing.length
           ? `<span class="ratio warn">${IA.missing.length} name${IA.missing.length === 1 ? '' : 's'} not in the set: ${IA.missing.join(', ')}</span>`
           : `none of them missing`) +
-        `. ${IA.unused.length} are in the set but not named anywhere yet.</div>`
+        `. ${IA.unused.length} are in the set that none of those positions names` +
+        ` (a few of those are still drawn — through a conditional or a tuple` +
+        ` table the scan does not read — so this is a to-look-at list, not a` +
+        ` dead-key list).</div>`
       : '');
   document.body.dataset.iconsMissing = IA ? String(IA.missing.length) : 'n/a';
 

@@ -16377,7 +16377,7 @@ mod tests {
     #[test]
     fn tool_order_matches_html() {
         assert_eq!(Tool::Select.icon(), "mouse-pointer-2");
-        assert_eq!(Tool::Frame.icon(), "frame#");
+        assert_eq!(Tool::Frame.icon(), "frame-hash");
         assert_eq!(Tool::Text.icon(), "type");
         assert_eq!(Tool::Rect.icon(), "square");
         assert_eq!(Tool::Ellipse.icon(), "circle");
