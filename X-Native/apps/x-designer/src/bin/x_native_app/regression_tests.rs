@@ -5913,11 +5913,17 @@ fn effect_adds_stop_at_figmas_per_type_caps() {
     }
     // one layer blur is the cap; a second is refused
     assert!(add(&mut h, EffectKind::LayerBlur), "first blur lands");
-    assert!(!add(&mut h, EffectKind::LayerBlur), "one layer blur per layer");
+    assert!(
+        !add(&mut h, EffectKind::LayerBlur),
+        "one layer blur per layer"
+    );
     // two noise effects, not three
     assert!(add(&mut h, EffectKind::Noise));
     assert!(add(&mut h, EffectKind::Noise));
-    assert!(!add(&mut h, EffectKind::Noise), "two noise effects per layer");
+    assert!(
+        !add(&mut h, EffectKind::Noise),
+        "two noise effects per layer"
+    );
     // eight drop shadows, not nine
     for _ in 0..8 {
         assert!(add(&mut h, EffectKind::DropShadow));
