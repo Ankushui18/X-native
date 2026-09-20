@@ -449,9 +449,10 @@ scroll behaviour, flows and flow starting points, device preview.
 | 15.2 | Copy code | CSS / iOS / Android snippets | `x-format::codegen` + `InspectCopy` | MATCH |
 | 15.3 | Copy as code from the canvas menu | "Copy as code" item | `CtxCmd::CopyAsCode` | MATCH |
 | 15.4 | Platform switch | Web / iOS / Android | `InspectPlatform` | MATCH |
-| 15.5 | Measurements between layers | hover with `⌥` | no measure gesture | **MISSING** |
-| 15.6 | Annotations | dev-mode notes on layers | not implemented | PARTIAL |
-| 15.7 | Dev Mode toggle `⇧D` | yes | tab only | PARTIAL |
+| 15.5 | Measurements between layers | select an object, hold `⌥`/Alt and hover a second → red line plus horizontal/vertical measurements; in Dev Mode hovering surrounding layers also shows padding (Guide to inspecting `22012921621015`) | no measure gesture | **MISSING** |
+| 15.6 | Annotations | Annotate `⇧T`: green dot on the layer, click to reveal, note + **+ Property** chips (Guide to inspecting `22012921621015`) | not implemented | PARTIAL |
+| 15.7 | Dev Mode toggle `⇧D` | `⇧D` / top-right toggle enters Dev Mode (`help 360039956914`) | `⇧D` IS implemented — run.rs:8142 switches the right panel to Inspect and back ("Dev Mode: Inspect" / "Dev Mode off: Design") — but it maps to the Inspect tab rather than a distinct Dev Mode chrome whose toolbar carries Inspect/Measure/Annotate/Comment | PARTIAL |
+| 15.10 | Measure tool `⇧M` | a persistent measurement you click-drag between layers, repositionable (Guide to inspecting `22012921621015`) | not implemented | **MISSING** |
 | 15.8 | Code Connect / component mapping | yes | not implemented | PARTIAL (low) |
 | 15.9 | Asset download from inspect | export from inspect | export path | MATCH |
 
