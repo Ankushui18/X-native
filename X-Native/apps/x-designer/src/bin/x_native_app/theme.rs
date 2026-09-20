@@ -287,7 +287,9 @@ pub const ED_TITLE_H: f64 = 36.0;
 /// ends above it, so a message can never be painted *through* the artwork.
 pub const ED_STATUS_H: f64 = 22.0;
 pub const LOGO_CELL_W: f64 = 44.0;
-pub const ED_LEFT_W: f64 = 280.0;
+/// Left dock (layers / assets). 240px is Figma's panel width as measured for
+/// parity row 18.7 of `docs/FIGMA_PARITY_MASTER_LIST.md`; it was 280px here.
+pub const ED_LEFT_W: f64 = 240.0;
 pub const ED_LEFT_MIN: f64 = 200.0;
 pub const ED_LEFT_MAX: f64 = 480.0;
 /// The canvas keeps at least this much width: the two docks (nav rail + left
@@ -295,6 +297,12 @@ pub const ED_LEFT_MAX: f64 = 480.0;
 /// however far the window is shrunk. `editor_regions` is the single place that
 /// enforces it, so no paint or hit-test path can see an inverted canvas.
 pub const ED_CANVAS_MIN: f64 = 280.0;
+/// Right dock (Design / Prototype / Inspect). Figma's right panel is 240px and
+/// is not user-resizable (forum.figma.com/t/6578: "there is no way to do it at
+/// the moment"). Ours is still 340: dropping it to 240 makes 300 inspector
+/// boxes escape the panel, which `tools/design-sheet/check_screens.mjs`
+/// measures and fails on. The width moves with the inspector reflow (master
+/// list Wave 2 item 18), not before it — row 18.7 is half-delivered.
 pub const ED_RIGHT_W: f64 = 340.0;
 pub const ED_RIGHT_MIN: f64 = 240.0;
 pub const ED_RIGHT_MAX: f64 = 520.0;
@@ -302,10 +310,11 @@ pub const NEW_TAB_W: f64 = 32.0;
 pub const TAB_MIN_W: f64 = 120.0;
 pub const TAB_PAD_L: f64 = 12.0;
 pub const TAB_PAD_R: f64 = 10.0;
-/// Layer-tree rows: 22px, 2px under the standard's dense row. The component
-/// contract (`x_native::ui::contract`) counts it as off-standard; the
-/// cross-screen pass snaps it to 24 with the rows it shares a panel with.
-pub const TREE_ROW_H: f64 = 22.0;
+/// Layer-tree rows: Figma's own layer-row height (parity row 18.9 of
+/// `docs/FIGMA_PARITY_MASTER_LIST.md`), and the `DENSE_H` step of the
+/// component scale — the two owners agree, so the contract counts the row
+/// on-standard (`OFF_STANDARD_COMPONENTS`).
+pub const TREE_ROW_H: f64 = 24.0;
 pub const TREE_INDENT: f64 = 12.0;
 // ——————————————————————————————————————————————— the control-height standard
 // Refinement v1, P0-9. The scale is declared in the component layer

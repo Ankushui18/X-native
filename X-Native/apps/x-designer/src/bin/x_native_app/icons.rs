@@ -59,6 +59,31 @@ const ICONS: &[(&str, &[&str])] = &[
         "M21 11a8 8 0 0 0-8-8",
         "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4",
     ]),
+    // Figma's Polygon glyph: a regular pentagon. The Polygon tool's default
+    // is a triangle, but Figma's toolbar shows five sides — the old binding
+    // wore Lucide's `triangle`, which is the shape the tool draws, not the
+    // tool's own mark. Regular pentagon, centre (12,12), r=9, point up.
+    ("polygon", &["M12 3 20.6 9.2 17.3 19.3 6.7 19.3 3.4 9.2Z"]),
+    // Figma's Scale glyph (K): a box with a diagonal double-headed arrow —
+    // "the whole layer scales", which is what separates it from Move. Lucide's
+    // `maximize` (four outward corners) reads as expand/fullscreen instead.
+    ("scale", &[
+        "M5 9V7a2 2 0 0 1 2-2h2",
+        "M19 15v2a2 2 0 0 1-2 2h-2",
+        "M8 16 16 8",
+        "M16 13V8h-5",
+    ]),
+    // Figma's Slice glyph: a bracketed region cut by a blade line — "a region
+    // whose only job is to be exported". The old binding wore Lucide's
+    // `scissors`, which is Figma's CUT action, so the same metaphor meant two
+    // different things in our chrome.
+    ("slice", &[
+        "M4 8V6a2 2 0 0 1 2-2h2",
+        "M20 8V6a2 2 0 0 0-2-2h-2",
+        "M4 16v2a2 2 0 0 0 2 2h2",
+        "M20 16v2a2 2 0 0 1-2 2h-2",
+        "M4 12h16",
+    ]),
     ("triangle", &[
         "M13.73 4a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z",
     ]),
@@ -264,9 +289,19 @@ const ICONS: &[(&str, &[&str])] = &[
     ("frame", &["M22 6H2", "M6 2v4", "M6 18v4", "M18 2v4", "M18 18v4"]),
     // Figma's Section: a rounded container with its title's first stroke
     // inside the top-left corner — the labelled box the tool draws.
+    // Figma's Section glyph: a DASHED square — the container whose whole job
+    // is to hold layers, drawn as an outline that is not a solid boundary.
+    // Eight short runs on the 24 grid; the old glyph was a solid rounded
+    // square with a label tick, which read as a frame, not a section.
     ("section", &[
-        "M6 3h12a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3z",
-        "M6.5 7.5h6",
+        "M8 4H6a2 2 0 0 0-2 2v2",
+        "M16 4h2a2 2 0 0 1 2 2v2",
+        "M20 16v2a2 2 0 0 1-2 2h-2",
+        "M8 20H6a2 2 0 0 1-2-2v-2",
+        "M11 4h2",
+        "M11 20h2",
+        "M4 11v2",
+        "M20 11v2",
     ]),
     ("keyboard", &[
         "M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z",

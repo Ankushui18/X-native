@@ -49,10 +49,10 @@ recon task, not a settled fact.
 | 15 Inspect, dev mode, codegen | 9 | 5 | 3 | 1 | 0 | 0 |
 | 16 Export & import | 12 | 11 | 1 | 0 | 0 | 0 |
 | 17 Canvas view & navigation | 14 | 10 | 1 | 1 | 1 | 1 |
-| 18 Design language (look of the app itself) | 12 | 1 | 5 | 6 | 0 | 0 |
+| 18 Design language (look of the app itself) | 12 | 4 | 7 | 1 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **339** | **258** | **45** | **17** | **16** | **3** |
+| **total** | **339** | **261** | **47** | **12** | **16** | **3** |
 
 The 17 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
@@ -510,16 +510,16 @@ the palette change is evidence-led rather than an approximation of a memory.*
 
 | # | Item | Figma | Ours (measured) | Status |
 | --- | --- | --- | --- | --- |
-| 18.1 | Canvas + panel palette | `#1E1E1E` / `#2C2C2C` / `#383838` | role palette (Graphite/Daylight), our own hues | **MISSING** (parity) |
-| 18.2 | Accent | `#0D99FF` | our accent | **MISSING** (parity) |
-| 18.3 | Text ramp | `#FFFFFF` / `#B3B3B3` / dim | `C_TEXT`/`C_MUTED`/`C_DIM`, our values | **MISSING** (parity) |
-| 18.4 | Selection colour | `#0D99FF` outline + handles | our selection blue | PARTIAL |
+| 18.1 | Canvas + panel palette | `#1E1E1E` / `#2C2C2C` / `#383838` | Graphite now ships `#1E1E1E` / `#2C2C2C` / `#383838` and Daylight `#F5F5F5` (help.figma.com 360041064814) | MATCH — `graphite_carries_figmas_chrome_values` |
+| 18.2 | Accent | `#0D99FF` | fill `#0B77C9`, ink `#66C7FF` | PARTIAL — white on `#0D99FF` is 2.99:1, under the 4.5:1 ratchet, so the fill is a deeper cut of the same hue; pinned by `graphite_carries_figmas_chrome_values` |
+| 18.3 | Text ramp | `#FFFFFF` / `#B3B3B3` / dim `#8C8C8C` | neutral `#FFFFFF`/`#C9C9C9`/`#BCBCBC`/`#B6B6B6` | PARTIAL — neutral like Figma's, but on this surface ladder the AA floor admits no grey darker than `#B3`, so Figma's dim `#8C8C8C` (2.9:1 on `#2C2C2C`) is unreachable; pinned by `graphite_carries_figmas_chrome_values` |
+| 18.4 | Selection colour | `#0D99FF` outline + handles | `selection` and `focus_ring` are `#0D99FF` exactly — the 3:1 indicator floor admits Figma's blue | MATCH — `graphite_carries_figmas_chrome_values` |
 | 18.5 | UI type | Inter, 11 px base | our UI font/size | **MISSING** (verify face) |
 | 18.6 | Radii | 8 px rows/cards, 6 px inputs, 4 px chips | `R_*` scale | PARTIAL |
-| 18.7 | Side panels | 240 px each, 40 px header | `ED_LEFT_W 280`, `ED_RIGHT_W 340` | **MISSING** (parity) |
+| 18.7 | Side panels | 240 px each, 40 px header; the right panel is not resizable (forum.figma.com/t/6578) | `ED_LEFT_W 240` ✓, `ED_RIGHT_W 340` | PARTIAL — the right dock at 240 makes 300 inspector boxes escape the panel (`check_screens.mjs` measures it); it moves with the Wave 2 item 18 reflow |
 | 18.8 | Toolbar | floating, bottom-centre, 40 px, rounded | `TOOLBAR_H 40`, `TOOLBAR_BOTTOM 20` | MATCH |
-| 18.9 | Layer row height | 24 px | our row height | PARTIAL |
-| 18.10 | Icon set | Figma's monoline set, 24 px grid, 1.5 px stroke | Lucide set, 89 keys | **MISSING** (vocabulary) |
+| 18.9 | Layer row height | 24 px | `TREE_ROW_H 24` = `DENSE_H`, and the contract counts the row on-standard (`OFF_STANDARD_COMPONENTS` 2 → 1) | MATCH — `app_row_heights_are_the_component_layers`, `on_standard_components_sit_exactly_on_their_step` |
+| 18.10 | Icon set | Figma's monoline set, 24 px grid, 1.5 px stroke | 96 keys on a 24 grid at 1.5 px — the **metrics already match**; four tool metaphors redrawn to Figma's (`polygon` pentagon, `scale` box+diagonal arrow, `slice` bracketed region, `section` dashed square) | PARTIAL — the remaining vocabulary still reads Lucide, not Figma; pinned by `the_polygon_and_star_tools_count_their_sides` |
 | 18.11 | Tool cursor glyphs | Figma's tool cursors | system cursors | PARTIAL |
 | 18.12 | Motion | panel/popover fade+scale ~120 ms | our transitions | PARTIAL |
 
@@ -756,8 +756,24 @@ rendering it.
 
 ### Wave 2 — design parity ("no design issue")
 
-16. Adopt Figma's measured tokens: canvas/panel/divider palette, accent, text ramp,
-    radii, row heights, 240 px panels, Inter at 11 px (18.1–18.12).
+16. Adopt Figma's measured tokens (18.1–18.12) — **partly delivered**: the
+    canvas/panel/divider palette, the selection blue, the neutral text ramp and
+    the 24 px layer row are in, and the left dock is at 240. Two of Figma's
+    values are **not** reachable and are now pinned as deliberate deviations
+    rather than left as silent drift: the accent *fill* (white on Figma's
+    `#0D99FF` measures 2.99:1, under this repo's 4.5:1 ratchet) and Figma's dim
+    `#8C8C8C` (2.9:1 on `#2C2C2C`). Both are asserted by
+    `graphite_carries_figmas_chrome_values`, so neither can be "corrected" back
+    into a sub-AA pair by accident. Still open: the right dock at 240 (needs the
+    inspector reflow of item 18), the radii pass (18.6), the UI face at 11 px
+    (18.5), the tool cursors (18.11) and motion (18.12).
+
+    *Measured, not guessed: the palette was validated against the repo's own
+    audit before it was written — 54 pairs, 0 failures, headroom 1.026× on
+    Graphite and 1.118× on Daylight. `tools/design-sheet/figma_palette_probe.py`
+    re-implements `ColorTokens::contrast_audit` so a palette can be checked on a
+    host with no Rust toolchain; it reproduces the shipping palette's 54-pair /
+    0-failure result, which is what makes the new numbers trustworthy.*
 17. Redraw the icon vocabulary to Figma's metaphors at Figma's metrics, key by key,
     with the census test and the design sheet kept green (18.10).
 18. Panel geometry pass: header 40 px, section headers, the Design tab's row order

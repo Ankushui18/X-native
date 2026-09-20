@@ -5,6 +5,58 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-20 (Wave 2 opens: the chrome wears Figma's palette)
+
+Master list Wave 2 item 16, partly delivered — rows **18.1, 18.4, 18.9** to
+`MATCH` and **18.2, 18.3, 18.7** from `MISSING`/`PARTIAL` to `PARTIAL` with the
+divergence named. Section 18 goes **1 / 5 / 6** → **4 / 6 / 2**; the grand total
+is re-derived (**339 / 261 / 46 / 13 / 16 / 3**).
+
+- **Graphite is Figma's dark chrome, not our own hues.** Canvas `#1E1E1E` —
+  Figma's documented dark-mode default, *"In dark mode, the background defaults
+  to an off-black color: #1E1E1E"* (help.figma.com 360041064814) — panels
+  `#2C2C2C`, dividers `#383838`, strong edge `#4F4F4F`, and the greys neutral
+  instead of the old blue-tinted ramp, because Figma's chrome is neutral. The
+  purple accent (`#6B49F5`) is gone. Daylight's canvas is `#F5F5F5`, Figma's
+  documented light-mode default.
+- **Two of Figma's values are unreachable, and are now pinned rather than
+  drifted.** White on Figma's `#0D99FF` measures **2.99:1** — under the 4.5:1
+  floor `ColorTokens::contrast_audit` enforces, i.e. Figma ships that pair
+  sub-AA — so the accent *fill* is `#0B77C9` (4.67:1), a deeper cut of the same
+  hue, while `selection` and `focus_ring` keep Figma's `#0D99FF` exactly, where
+  the 3:1 indicator floor admits it. Likewise Figma's dim `#8C8C8C` is 2.9:1 on
+  `#2C2C2C`, and on this surface ladder the floor admits no grey darker than
+  `#B3`, so the ramp sits `#FFFFFF`/`#C9C9C9`/`#BCBCBC`/`#B6B6B6`. Both
+  decisions are asserted by `graphite_carries_figmas_chrome_values`, so neither
+  can be "corrected" back into a sub-AA pair by accident.
+- **The layer row is Figma's 24 px** (`TREE_ROW_H` 22 → 24), which is also the
+  component scale's `DENSE_H` — the two owners finally agree, so the contract
+  counts the tree row on-standard and `OFF_STANDARD_COMPONENTS` comes down
+  2 → 1, with `on_standard_components_sit_exactly_on_their_step` and
+  `app_row_heights_are_the_component_layers` updated to match.
+- **The left dock is 240 px.** The right dock stays 340: at 240, 300 inspector
+  boxes escape the panel, which `check_screens.mjs` measures and fails on. It
+  moves with the inspector reflow (Wave 2 item 18), not before it.
+- **Four tool glyphs redrawn to Figma's metaphors** (row 18.10). The icon
+  *metrics* already matched — every glyph is on a 24 grid stroked at a constant
+  1.5 px with round caps, which is Figma's — so the gap was vocabulary, not
+  geometry. `Tool::Poly` now wears `polygon` (a regular pentagon: Figma's
+  toolbar shows five sides even though the tool's default is a triangle),
+  `Tool::Scale` wears `scale` (box + diagonal double arrow; Lucide's `maximize`
+  reads as fullscreen), `Tool::Slice` wears `slice` (a bracketed region cut by a
+  blade — it had been wearing Lucide's `scissors`, which is Figma's *Cut*
+  action, so one metaphor meant two things in our chrome), and `section` is
+  redrawn as Figma's dashed square rather than a solid rounded one that read as
+  a frame. Set grows 93 → 96 keys; the census still reports 62 named, 0
+  missing, and `the_polygon_and_star_tools_count_their_sides` moves to the new
+  key.
+- **`tools/design-sheet/figma_palette_probe.py`** re-implements
+  `ColorTokens::contrast_audit` (8 text roles × 6 surfaces + 3 accent fills + 1
+  label fill + 2 indicators = 54 pairs) so a palette can be audited on a host
+  with no Rust toolchain. It reproduces the shipping palette's 54 / 0 result,
+  which is what makes the new numbers trustworthy; the retuned palettes measure
+  0 failures at 1.026× (Graphite) and 1.118× (Daylight) headroom.
+
 ## [Unreleased] — 2026-09-19 (Outlines mode)
 
 [Designlab Figma 101 — Tips and Tricks](https://designlab.com/figma-101-course/tips-and-tricks)

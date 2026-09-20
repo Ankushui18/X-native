@@ -3473,7 +3473,7 @@ fn the_polygon_and_star_tools_count_their_sides() {
         (reg.canvas.y0 + reg.canvas.y1) / 2.0,
     );
     // the two tools are on the row and in the palette
-    assert_eq!(Tool::Poly.icon(), "triangle");
+    assert_eq!(Tool::Poly.icon(), "polygon");
     assert_eq!(Tool::Star.icon(), "star");
     assert_eq!(Tool::Poly.label(), "Polygon");
     assert_eq!(Tool::Star.label(), "Star");
@@ -5355,8 +5355,9 @@ fn app_row_heights_are_the_component_layers() {
         );
     }
 
-    // the two rows the component contract counts as off-standard today
-    for h in [crate::theme::TREE_ROW_H, crate::theme::DROPDOWN_ROW_H] {
+    // the one row the component contract still counts as off-standard: the
+    // tree row moved onto the Dense step (24px) with the Figma-parity pass
+    for h in [crate::theme::DROPDOWN_ROW_H] {
         assert!(
             !metrics::is_control_height(h),
             "{h} is on the scale now — lower OFF_STANDARD_COMPONENTS"
