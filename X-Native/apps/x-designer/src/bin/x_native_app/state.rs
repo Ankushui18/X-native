@@ -299,28 +299,6 @@ pub fn create_line(start: Point, cur: Point, from_center: bool) -> ((f64, f64), 
     }
 }
 
-/// Figma's rotation field counts **counter-clockwise positive**
-/// (`360039956914`); the engine stores the renderer's y-down `Affine::rotate`,
-/// which is clockwise-positive. This is the ONE display conversion (master row
-/// 6.1): show the negation, re-ranged to Figma's (−180, 180]. The stored sign is
-/// never touched, so the renderer and the exporters keep their meaning.
-pub fn rotation_display(stored_deg: f64) -> f64 {
-    let mut d = -stored_deg % 360.0;
-    if d <= -180.0 {
-        d += 360.0
-    } else if d > 180.0 {
-        d -= 360.0
-    }
-    d
-}
-
-/// The inverse of [`rotation_display`] for writes: a value typed in Figma's
-/// counter-clockwise convention becomes the stored clockwise one. Range
-/// normalisation is left to `Editor::set_selection_rotation`.
-pub fn rotation_from_display(display_deg: f64) -> f64 {
-    -display_deg
-}
-
 /// Freehand simplification, in world units. A hand's wobble is smaller than
 /// this, and the engine's fit turns the rest into editable curves.
 pub const PENCIL_SMOOTHING: f64 = 1.5;

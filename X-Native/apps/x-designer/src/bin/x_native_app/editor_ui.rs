@@ -4777,8 +4777,15 @@ fn paint_design(
             C_FIELD
         },
     );
-    app.fonts
-        .text(s, bdr.x0 + 8.0, bdr.y0 + 6.0, "Blend", T_UI, C_TEXT, Wt::Reg);
+    app.fonts.text(
+        s,
+        bdr.x0 + 8.0,
+        bdr.y0 + 6.0,
+        "Blend",
+        T_UI,
+        C_TEXT,
+        Wt::Reg,
+    );
     let bval = layer_blend.label();
     let bvw = app.fonts.measure(bval, T11, Wt::Reg);
     app.fonts.text(
@@ -5057,8 +5064,15 @@ fn paint_design(
     }
 
     // Vertical alignment (horizontal sits in the button row above)
-    app.fonts
-        .text(s, x0, y0 + 904.0, "Vertical alignment", T_UI, C_DIM, Wt::Reg);
+    app.fonts.text(
+        s,
+        x0,
+        y0 + 904.0,
+        "Vertical alignment",
+        T_UI,
+        C_DIM,
+        Wt::Reg,
+    );
     let v_align = Rect::new(x0, y0 + 922.0, x0 + 153.5, y0 + 950.0);
     input(
         app,
