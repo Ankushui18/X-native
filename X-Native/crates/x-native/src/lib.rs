@@ -27,8 +27,7 @@ pub use x_render::{
 // (constant 12px at any zoom, blue when selected), reading the engine's one
 // size/offset/ink rule and target list — never its own copies.
 pub use x_render::ir::{
-    frame_label_targets, label_ink, label_ink_selected, FrameLabelTarget, LABEL_ABOVE_Y,
-    LABEL_SIZE,
+    frame_label_targets, label_ink, label_ink_selected, FrameLabelTarget, LABEL_ABOVE_Y, LABEL_SIZE,
 };
 pub mod editor {
     pub use x_editor::*;

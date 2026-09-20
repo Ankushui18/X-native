@@ -555,7 +555,8 @@ impl FrameCache {
     fn lower_canvas(&self, node: &Node, vars: &Variables) -> crate::ir::RenderTree {
         let mut tree =
             crate::ir::build_render_tree_with_hidden(node, vars, self.hidden_text.as_deref());
-        tree.commands.retain(|c| !crate::ir::is_frame_name_label(c.key()));
+        tree.commands
+            .retain(|c| !crate::ir::is_frame_name_label(c.key()));
         if self.presenting {
             crate::ir::strip_canvas_chrome(&mut tree);
         }
