@@ -10480,6 +10480,10 @@ pub fn palette_commands() -> Vec<Command> {
             shortcut: "⇧ ⌘ G",
         },
         Command {
+            label: "Clean up layers",
+            shortcut: "",
+        },
+        Command {
             label: "Bring to front",
             shortcut: "⇧ ⌘ ]",
         },

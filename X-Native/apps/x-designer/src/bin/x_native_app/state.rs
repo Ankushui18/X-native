@@ -2377,6 +2377,9 @@ pub enum CtxCmd {
     Delete,
     Group,
     Ungroup,
+    /// Clean up layers (master row 5.9): flatten redundant single-child group
+    /// nests in one undo entry. Renaming stays manual by owner decision.
+    CleanupLayers,
     /// Figma's Frame selection (⌥⌘G): wrap the selection in a new Frame sized
     /// to the members' collective bounds.
     FrameSelection,
@@ -5538,6 +5541,14 @@ impl App {
                 if let Some(id) = id {
                     doc.editor().ungroup(&id);
                 }
+            }
+            CleanupLayers => {
+                let n = doc.editor().clean_up_layers();
+                refusal = if n == 0 {
+                    Some("Nothing to clean up — no redundant group nests".into())
+                } else {
+                    Some(format!("Cleaned up {n} redundant group{}", if n == 1 { "" } else { "s" }))
+                };
             }
             FrameSelection => {
                 if doc.editor_ref().selection.is_empty() {

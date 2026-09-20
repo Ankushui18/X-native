@@ -5,6 +5,39 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-20 (Clean up layers — master row 5.9, wave 1 closes its last behaviour)
+
+Item 15, scoped with the owner to the **chapter-4 framing**: flatten redundant
+group nests; **rename stays manual** (Figma's layer-namer is an AI agent and is
+not copied). Row 5.9 goes `MISSING` → `PARTIAL`; section 5 to **12 / 2 / 0**; the
+grand total is re-derived (**339 / 261 / 48 / 11 / 16 / 3**).
+
+- **`Editor::clean_up_layers`** unwraps any `Group` holding exactly one child
+  that is *visually inert* (visible, unlocked, unmasked, opacity 1.0, Normal
+  blend, no effects), applied bottom-up so a chain of single-child groups
+  collapses in one pass; each lifted child inherits its group's offset so world
+  positions are unchanged. Frames and sections are never touched, and a
+  translucent/blended/effected group is left alone because unwrapping it would
+  change what is drawn. The whole pass is **one undo entry**, mirroring
+  `ungroup`'s snapshot idiom.
+- **Reachable two ways**: the right-click menu's **Clean up layers** row (offered
+  wherever *Ungroup* is, since it only ever unwraps redundant nests) and the
+  command palette's "Clean up layers" entry; both route through
+  `CtxCmd::CleanupLayers` so the status line ("Cleaned up N redundant group(s)" /
+  "Nothing to clean up…") and the undo entry match.
+- **Pinned** by `clean_up_layers_flattens_redundant_nests_in_one_undo`: a
+  two-deep redundant chain collapses (chip keeps its world position), a
+  translucent group survives, and one undo restores the nests.
+- **Not built (documented remainder):** renaming (manual by owner choice) and
+  FD4B's chapter-16 smart-selection tidy-up / `distribute_vertical`
+  ([help 30979556779159](https://help.figma.com/hc/en-us/articles/30979556779159),
+  [help 360040450233](https://help.figma.com/hc/en-us/articles/360040450233)).
+  The engine already has `align` + `distribute_horizontal`.
+
+*Rust gate note: `cargo`/`crates.io` remain unreachable in this sandbox, so the
+new test runs in CI; the Node gates (`guard.mjs`, `check.mjs`,
+`check_screens.mjs`) are the local check and stay green.*
+
 ## [Unreleased] — 2026-09-20 (Wave 2 opens: the chrome wears Figma's palette)
 
 Master list Wave 2 item 16, partly delivered — rows **18.1, 18.4, 18.9** to

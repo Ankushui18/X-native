@@ -9099,3 +9099,49 @@ fn the_shortcut_sheet_carries_the_outline_view_key() {
     h.dispatch(Action::CloseShortcuts);
     assert!(!h.app.shortcuts_open);
 }
+
+/// Clean up layers (master row 5.9, chapter-4 framing): redundant single-child
+/// group nests are unwrapped in ONE undo entry while keeping world positions;
+/// groups that carry visual meaning (here: translucency) are left alone.
+#[test]
+fn clean_up_layers_flattens_redundant_nests_in_one_undo() {
+    let mut h = host();
+    let root = h.app.doc().editor_ref().root.id.clone();
+
+    // outer > inner > chip : a two-deep redundant chain
+    let mut inner = Node::group("inner", 100.0, 60.0);
+    inner.transform.x = 10.0;
+    inner.transform.y = 20.0;
+    inner.children.push(Node::rect("chip", 0.0, 0.0, 100.0, 60.0, Color::WHITE));
+    let mut outer = Node::group("outer", 100.0, 60.0);
+    outer.transform.x = 5.0;
+    outer.transform.y = 5.0;
+    outer.children.push(inner);
+    h.app.doc().editor().insert_node(&root, outer);
+
+    // a meaningful group: translucent, so it must survive the clean-up
+    let mut kept = Node::group("kept", 40.0, 40.0);
+    kept.opacity = 0.5;
+    kept.children.push(Node::rect("dot", 0.0, 0.0, 40.0, 40.0, Color::WHITE));
+    h.app.doc().editor().insert_node(&root, kept);
+
+    let before = h.app.doc_ref().editor_ref().undo_depth();
+    let n = h.app.doc().editor().clean_up_layers();
+    assert_eq!(n, 2, "outer and inner unwrap; the translucent group stays");
+
+    // the chip kept its world position (5+10, 5+20) after both unwraps
+    let chip = find_node_clone(&h.app.doc_ref().editor_ref().root, "chip").unwrap();
+    assert_eq!((chip.transform.x, chip.transform.y), (15.0, 25.0));
+    assert!(find_node_clone(&h.app.doc_ref().editor_ref().root, "outer").is_none());
+    assert!(find_node_clone(&h.app.doc_ref().editor_ref().root, "inner").is_none());
+    assert!(
+        find_node_clone(&h.app.doc_ref().editor_ref().root, "kept").is_some(),
+        "a group with opacity is not redundant"
+    );
+
+    // the whole pass is ONE undo entry, and it restores the nests
+    assert_eq!(h.app.doc_ref().editor_ref().undo_depth(), before + 1);
+    h.app.doc().editor().undo();
+    assert!(find_node_clone(&h.app.doc_ref().editor_ref().root, "outer").is_some());
+    assert!(find_node_clone(&h.app.doc_ref().editor_ref().root, "inner").is_some());
+}

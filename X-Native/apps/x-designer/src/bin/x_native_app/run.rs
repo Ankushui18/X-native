@@ -8522,6 +8522,11 @@ impl Host {
                 }
                 self.app.mark_dirty();
             }
+            "Clean up layers" => {
+                // routes through the CtxCmd dispatcher so the status line and
+                // undo entry match the right-click path exactly
+                self.app.apply_ctx(CtxCmd::CleanupLayers);
+            }
             _ => {}
         }
     }
