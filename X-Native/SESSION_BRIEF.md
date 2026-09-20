@@ -15,8 +15,8 @@ the 24px layer row, the 240px left dock, and four redrawn tool glyphs. The two
 values Figma ships sub-AA (accent fill, dim grey) are pinned as deliberate
 deviations by `graphite_carries_figmas_chrome_values`.
 
-**Scoreboard (branch, verified):** 339 rows — **261 MATCH / 47 PARTIAL /
-12 MISSING / 16 EXTRA / 3 OUT**. Guard: 10 checks, 69 pinned, 0 open, 0 failed.
+**Scoreboard (branch, verified):** 339 rows — **262 MATCH / 47 PARTIAL /
+11 MISSING / 16 EXTRA / 3 OUT**. Guard: 10 checks, 71 pinned, 0 open, 0 failed.
 
 The single source of truth for what's next remains
 `docs/FIGMA_PARITY_MASTER_LIST.md`.
@@ -32,12 +32,17 @@ The single source of truth for what's next remains
    *Remainder:* FD4B's chapter-16 smart-selection tidy-up + `distribute_vertical`
    (help 30979556779159, 360040450233) — a separate, later row.
 
-2. **Wave 2 remainder** (items 16–19): right dock at 240 (needs the inspector
-   reflow), radii (18.6), Inter at 11px (18.5), tool cursors (18.11), motion
-   (18.12), remaining icon vocabulary (18.10), Design-tab row order, rotation
-   sign (6.1).
+2. ~~**Rotation sign (row 6.1)**~~ — **delivered**: `state::rotation_display`
+   (negate + re-range to (−180,180]) applied at the single `Sel.rot` readout
+   source, `rotation_from_display` on write; stored y-down sign untouched.
+   Pinned by `the_rotation_field_shows_figmas_counter_clockwise_sign`.
+   Row 6.1 → MATCH.
 
-3. **Wave 3** (item 20), only after 1 and 2.
+3. **Wave 2 remainder** (items 16–19): right dock at 240 (needs the inspector
+   reflow), radii (18.6), Inter at 11px (18.5), tool cursors (18.11), motion
+   (18.12), remaining icon vocabulary (18.10), Design-tab row order.
+
+4. **Wave 3** (item 20), only after 1–3.
 
 ## How we reach it — per-behaviour recipe
 
