@@ -4440,7 +4440,7 @@ fn paint_design(
     // disclosure (P0-8): these are the layout section's ADVANCED rows, so
     // the band shows an "Advanced" toggle until the user opens it. When
     // open, the chevron at the band's right edge collapses it again.
-    let band = Rect::new(x0, y0 + 426.0, x0 + 315.0, y0 + 426.0 + DENSE_H);
+    let band = Rect::new(x0, y0 + 426.0, xr, y0 + 426.0 + DENSE_H);
     let has_advanced = sel_layout.is_some() || app.selected_parent_has_layout();
     let lav_open = app.layout_advanced_open;
     if has_advanced && !lav_open {
@@ -4503,7 +4503,7 @@ fn paint_design(
                 .as_ref()
                 .map(|l| l.canvas_stacking)
                 .unwrap_or_default();
-            let sr = Rect::new(x0 + 120.0, y0 + 426.0, x0 + 283.0, y0 + 426.0 + DENSE_H);
+            let sr = Rect::new(x0 + 120.0, y0 + 426.0, xr - 32.0, y0 + 426.0 + DENSE_H);
             let shov = hover(app, sr);
             app.fonts.text(
                 s,
@@ -4554,7 +4554,7 @@ fn paint_design(
                     .map(|c| c.grow >= 1.0)
                     .unwrap_or(false)
             };
-            let seg = Rect::new(x0, y0 + 426.0, x0 + 150.0, y0 + 426.0 + DENSE_H);
+            let seg = Rect::new(x0, y0 + 426.0, xr - 165.0, y0 + 426.0 + DENSE_H);
             let half = Rect::new(seg.x0, seg.y0, seg.x0 + 74.0, seg.y1);
             let other = Rect::new(half.x1, seg.y0, seg.x1, seg.y1);
             for (rr, lab, active, act) in [
@@ -4591,7 +4591,7 @@ fn paint_design(
                     .map(|c| c.is_absolute)
                     .unwrap_or(false)
             };
-            let ab = Rect::new(x0 + 162.0, y0 + 430.0, x0 + 178.0, y0 + 430.0 + CHIP_H);
+            let ab = Rect::new(xr - 153.0, y0 + 430.0, xr - 137.0, y0 + 430.0 + CHIP_H);
             fill_rrect(s, ab, R_SM, C_FIELD);
             stroke_rrect(s, ab, R_SM, C_LINE_2, 1.0);
             if absolute {
@@ -4607,7 +4607,7 @@ fn paint_design(
                 Wt::Reg,
             );
             hit.push((
-                Rect::new(x0 + 162.0, y0 + 426.0, x0 + 262.0, y0 + 450.0),
+                Rect::new(xr - 153.0, y0 + 426.0, xr - 53.0, y0 + 450.0),
                 Action::ToggleChildAbsolute,
             ));
         }
@@ -4686,7 +4686,7 @@ fn paint_design(
     // same 24px checkbox, same ink, no geometry moved. Frames only: a Section
     // always shows its own name, and no other layer has one to switch off.
     if sel.is_frame {
-        let sn_x = x0 + 150.0;
+        let sn_x = xr - 165.0;
         let sn_row = Rect::new(sn_x, clip_row.y0, sn_x + 118.0, clip_row.y0 + DENSE_H);
         let sn_cb = Rect::new(
             sn_x,
@@ -4764,7 +4764,7 @@ fn paint_design(
     // Figma's Appearance row pairs **Opacity** with **Blend mode**; the corner
     // radius keeps a row of its own below. The layer's blend is a dropdown of
     // the 19 layer modes — Pass through first, because it is the layer default.
-    let bdr = Rect::new(x0 + 161.5, y0 + 596.0, x0 + 315.0, y0 + 624.0);
+    let bdr = Rect::new(x0 + 161.5, y0 + 596.0, xr, y0 + 624.0);
     let layer_blend = {
         let d = app.doc();
         d.selected_id()
@@ -4819,7 +4819,7 @@ fn paint_design(
     // Figma's radius row (help 360050986854): the **Independent corners**
     // toggle sits at the field's left edge — a square with one rounded corner
     // — and the field is named after what it rounds.
-    let rdr = Rect::new(x0, y0 + 636.0, x0 + 315.0, y0 + 664.0);
+    let rdr = Rect::new(x0, y0 + 636.0, xr, y0 + 664.0);
     let rhov = hover(app, rdr);
     fill_rrect(s, rdr, R_INPUT, if rhov { C_INPUT_HOVER } else { C_FIELD });
     if rhov {
@@ -4923,7 +4923,7 @@ fn paint_design(
     draw_icon(s, "plus", xr - 14.0, y0 + 695.0, ICON_SM, create_tint);
     hit.push((styles_btn, Action::TextStyleDropdown));
     hit.push((create_btn, Action::CreateTextStyle));
-    let fam = Rect::new(x0, y0 + 724.0, x0 + 315.0, y0 + 752.0);
+    let fam = Rect::new(x0, y0 + 724.0, xr, y0 + 752.0);
     input(
         app,
         s,
@@ -4978,7 +4978,7 @@ fn paint_design(
             hit.push((row, Action::FontPicker(fam.clone())));
         }
     }
-    let wgt = Rect::new(x0, y0 + 760.0, x0 + 227.0, y0 + 788.0);
+    let wgt = Rect::new(x0, y0 + 760.0, xr - 88.0, y0 + 788.0);
     input(
         app,
         s,
@@ -4990,7 +4990,7 @@ fn paint_design(
         Some(Action::Field(FieldId::FontWeight)),
         Some("chevron-down"),
     );
-    let szr = Rect::new(x0 + 235.0, y0 + 760.0, x0 + 315.0, y0 + 788.0);
+    let szr = Rect::new(xr - 80.0, y0 + 760.0, xr, y0 + 788.0);
     input(
         app,
         s,
@@ -5116,7 +5116,7 @@ fn paint_design(
         Some(Action::CycleTextDecoration),
         Some("chevron-down"),
     );
-    let wrap = Rect::new(x0 + 161.5, y0 + 976.0, x0 + 315.0, y0 + 1004.0);
+    let wrap = Rect::new(x0 + 161.5, y0 + 976.0, xr, y0 + 1004.0);
     input(
         app,
         s,
@@ -5153,7 +5153,7 @@ fn paint_design(
         Some(Action::Field(FieldId::MaxLines)),
         None,
     );
-    let para_indent = Rect::new(x0 + 161.5, y0 + 1030.0, x0 + 315.0, y0 + 1058.0);
+    let para_indent = Rect::new(x0 + 161.5, y0 + 1030.0, xr, y0 + 1058.0);
     input(
         app,
         s,
@@ -5176,7 +5176,7 @@ fn paint_design(
     // (Font / Weight / Size / Line height / Alignment), so they sit behind
     // a disclosure instead of disappearing.
     let adv_open = app.typo_advanced_open;
-    let adv = Rect::new(x0, y0 + 1066.0, x0 + 315.0, y0 + 1066.0 + DENSE_H);
+    let adv = Rect::new(x0, y0 + 1066.0, xr, y0 + 1066.0 + DENSE_H);
     let adv_hov = hover(app, adv);
     draw_icon(
         s,
@@ -5229,7 +5229,7 @@ fn paint_design(
             Some(Action::Field(FieldId::LetterSpacing)),
             None,
         );
-        let wsr = Rect::new(x0 + 161.5, y0 + 1116.0, x0 + 315.0, y0 + 1144.0);
+        let wsr = Rect::new(x0 + 161.5, y0 + 1116.0, xr, y0 + 1144.0);
         input(
             app,
             s,
@@ -5272,7 +5272,7 @@ fn paint_design(
             Some(Action::Field(FieldId::ParaSpacing)),
             None,
         );
-        let bsr = Rect::new(x0 + 161.5, y0 + 1170.0, x0 + 315.0, y0 + 1198.0);
+        let bsr = Rect::new(x0 + 161.5, y0 + 1170.0, xr, y0 + 1198.0);
         input(
             app,
             s,
@@ -5340,7 +5340,7 @@ fn paint_design(
             Some(Action::Field(FieldId::OpticalSize)),
             None,
         );
-        let wdr = Rect::new(x0 + 161.5, y0 + 1332.0, x0 + 315.0, y0 + 1360.0);
+        let wdr = Rect::new(x0 + 161.5, y0 + 1332.0, xr, y0 + 1360.0);
         input(
             app,
             s,
@@ -5677,7 +5677,7 @@ fn paint_design(
                     app.fonts
                         .text(s, cb.x1 + 8.0, y - 0.3, &e.name, T11, C_TEXT, Wt::Reg);
                     hit.push((
-                        Rect::new(x0, y - 6.0, x0 + 150.0, y + 22.0),
+                        Rect::new(x0, y - 6.0, xr - 165.0, y + 22.0),
                         Action::ToggleInstanceProp(e.name.clone()),
                     ));
                     y += 28.0;
