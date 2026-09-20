@@ -46,13 +46,13 @@ recon task, not a settled fact.
 | 12 Components, instances, styles | 21 | 18 | 3 | 0 | 0 | 0 |
 | 13 Variables & modes | 9 | 6 | 3 | 0 | 0 | 0 |
 | 14 Prototype | 30 | 19 | 10 | 0 | 0 | 1 |
-| 15 Inspect, dev mode, codegen | 9 | 5 | 3 | 1 | 0 | 0 |
+| 15 Inspect, dev mode, codegen | 10 | 5 | 3 | 2 | 0 | 0 |
 | 16 Export & import | 12 | 11 | 1 | 0 | 0 | 0 |
 | 17 Canvas view & navigation | 14 | 11 | 1 | 0 | 1 | 1 |
 | 18 Design language (look of the app itself) | 12 | 6 | 6 | 0 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **339** | **267** | **47** | **5** | **16** | **4** |
+| **total** | **340** | **267** | **47** | **6** | **16** | **4** |
 
 The 17 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
