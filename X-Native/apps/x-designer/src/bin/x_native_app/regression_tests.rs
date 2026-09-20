@@ -9250,8 +9250,14 @@ fn the_rotation_field_shows_figmas_counter_clockwise_sign() {
         .rotation
         .to_degrees();
     assert!((stored - 30.0).abs() < 1e-6, "stored sign is clockwise: {stored}");
-    // …but the field reads the counter-clockwise value
-    assert_eq!(crate::editor_ui::sel_info(&h.app).rot, -30.0);
+    // …but the field reads the counter-clockwise value (within float noise: the
+    // stored angle round-trips degrees→radians→degrees, so compare like line
+    // above rather than with assert_eq on an f64)
+    assert!(
+        (crate::editor_ui::sel_info(&h.app).rot + 30.0).abs() < 1e-6,
+        "field reads ccw: {}",
+        crate::editor_ui::sel_info(&h.app).rot
+    );
 
     // typing Figma's -30 stores +30 (the write converts back)
     set_field(&mut h, FieldId::Rotation, "-30");
@@ -9262,7 +9268,11 @@ fn the_rotation_field_shows_figmas_counter_clockwise_sign() {
         .to_degrees();
     assert!((stored - 30.0).abs() < 1e-6, "write converts ccw → cw: {stored}");
 
-    // the 180 edge shows 180, not -180
+    // the 180 edge shows 180, not -180 (same float-noise tolerance)
     h.app.doc().editor().set_selection_rotation(180.0);
-    assert_eq!(crate::editor_ui::sel_info(&h.app).rot, 180.0);
+    assert!(
+        (crate::editor_ui::sel_info(&h.app).rot - 180.0).abs() < 1e-6,
+        "180 edge: {}",
+        crate::editor_ui::sel_info(&h.app).rot
+    );
 }

@@ -150,7 +150,11 @@ impl ColorTokens {
     /// Figma blue than Graphite's: the fill carries white text on a white
     /// panel, so it needs the headroom the dark palette does not.
     pub const DAYLIGHT: Self = Self {
-        background: [0xe5, 0xe5, 0xe5],
+        // Figma's light chrome is white like its panels. Keeping background ==
+        // surface here also satisfies the color-keyed theme remap: Graphite
+        // shares #2C2C2C between the two roles, so every theme must map that
+        // one source to one target (remap_is_a_function_and_identity_for_graphite).
+        background: [0xff, 0xff, 0xff],
         canvas: [0xf5, 0xf5, 0xf5],
         surface: [0xff, 0xff, 0xff],
         surface_elevated: [0xff, 0xff, 0xff],
