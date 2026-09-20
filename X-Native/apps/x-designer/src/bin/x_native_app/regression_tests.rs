@@ -9298,7 +9298,10 @@ fn the_rotation_field_shows_figmas_counter_clockwise_sign() {
 fn dev_mode_measure_and_annotate_are_exclusive_tools() {
     let mut h = host();
     assert!(!h.app.doc().dev_measure && !h.app.doc().dev_annotate);
-    assert!(h.app.doc().toggle_dev_measure(), "first press enters Measure");
+    assert!(
+        h.app.doc().toggle_dev_measure(),
+        "first press enters Measure"
+    );
     assert!(h.app.doc().dev_measure && !h.app.doc().dev_annotate);
     assert!(
         h.app.doc().toggle_dev_annotate(),
