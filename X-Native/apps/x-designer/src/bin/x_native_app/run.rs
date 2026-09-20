@@ -6711,11 +6711,9 @@ impl Host {
                 let text = {
                     let doc = self.app.doc();
                     let root = &doc.editor_ref().root;
-                    crate::editor_ui::find_node(root, id.as_str()).and_then(|n| {
-                        match &n.kind {
-                            NodeKind::Text { text } => Some((n.id.clone(), text.clone())),
-                            _ => None,
-                        }
+                    crate::editor_ui::find_node(root, id.as_str()).and_then(|n| match &n.kind {
+                        NodeKind::Text { text } => Some((n.id.clone(), text.clone())),
+                        _ => None,
                     })
                 };
                 if let Some((id, text)) = text {

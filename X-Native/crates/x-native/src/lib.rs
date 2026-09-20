@@ -20,15 +20,15 @@ pub use x_render::{
     export_pdf_with_assets, outline_view, render_via_ir, thumbnail_scene, FrameCache,
     FrameCacheStats, RenderCommand, RenderTree, SceneCache, VelloSink, OUTLINE_COLOR,
 };
+pub use x_render::{
+    encode_jpg, encode_png, export_raster, export_raster_cancellable, RasterFormat, RasterSink,
+};
 // Canvas frame-name labels: the canvas overlay paints them in screen space
 // (constant 12px at any zoom, blue when selected), reading the engine's one
 // size/offset/ink rule and target list — never its own copies.
 pub use x_render::ir::{
     frame_label_targets, label_ink, label_ink_selected, FrameLabelTarget, LABEL_ABOVE_Y,
     LABEL_SIZE,
-};
-pub use x_render::{
-    encode_jpg, encode_png, export_raster, export_raster_cancellable, RasterFormat, RasterSink,
 };
 pub mod editor {
     pub use x_editor::*;
