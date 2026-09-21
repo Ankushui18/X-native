@@ -500,6 +500,9 @@ function Design({
                 </button>
               ))}
             </div>
+            <button style={{ marginTop: 6 }} onClick={() => engine.dispatch({ type: "flatten" })}>
+              Flatten
+            </button>
           </div>
         </>
       )}
@@ -695,6 +698,60 @@ function Design({
         />
         Clip content / mask
       </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={!!n.isMask}
+          onChange={(e) => patch({ isMask: e.target.checked })}
+        />
+        Use as mask
+      </label>
+      <div className="insp-pad">
+        <div className="seg">
+          <button
+            title="Convert to vector path"
+            onClick={() => {
+              if (n.kind !== "vector") engine.dispatch({ type: "flatten" });
+            }}
+          >
+            Edit vector
+          </button>
+          <button onClick={() => engine.dispatch({ type: "flatten" })}>Flatten</button>
+          {n.strokeWidth > 0 && (
+            <button onClick={() => engine.dispatch({ type: "outlineStroke" })}>Outline stroke</button>
+          )}
+        </div>
+      </div>
+      {(n.isComponent || n.componentId) && (
+        <>
+          <div className="h-row">
+            <h3>Variants</h3>
+          </div>
+          <div className="insp-pad">
+            <select
+              value={n.variant || "Default"}
+              onChange={(e) => engine.dispatch({ type: "setVariant", id: n.id, name: e.target.value })}
+            >
+              {(snap.components.find((c) => c.id === n.componentId)?.variants ?? [{ name: "Default" }]).map((v) => (
+                <option key={v.name} value={v.name}>
+                  {v.name}
+                </option>
+              ))}
+            </select>
+            {n.isComponent && (
+              <button
+                style={{ marginTop: 6 }}
+                onClick={() => {
+                  const name = `Variant ${(snap.components.find((c) => c.id === n.componentId)?.variants?.length ?? 1) + 1}`;
+                  engine.dispatch({ type: "addVariant", name });
+                }}
+              >
+                Add variant
+              </button>
+            )}
+          </div>
+        </>
+      )}
       {n.layout && (
         <>
           <div className="dir-row">

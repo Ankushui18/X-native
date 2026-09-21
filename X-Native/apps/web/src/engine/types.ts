@@ -66,10 +66,17 @@ export interface Interaction {
   delay: number;
 }
 
+export interface ComponentVariant {
+  name: string;
+  node: XNode;
+}
+
 export interface ComponentMaster {
   id: string;
   name: string;
   node: XNode;
+  variants: ComponentVariant[];
+  property: string;
 }
 
 export interface ExportPreset {
@@ -185,6 +192,13 @@ export interface XNode {
   interactions: Interaction[];
   flipH: boolean;
   flipV: boolean;
+  fillGX: number;
+  fillGY: number;
+  fillHX: number;
+  fillHY: number;
+  isMask: boolean;
+  maskType: "alpha" | "vector" | "luminance";
+  variant: string;
 }
 
 export interface Page {
@@ -269,6 +283,11 @@ export type Command =
   | { type: "detachInstance" }
   | { type: "placeComponent"; id: string; x: number; y: number }
   | { type: "addPath"; points: PathPoint[]; closed: boolean }
+  | { type: "patchPath"; id: string; path: PathPoint[]; closed?: boolean }
+  | { type: "flatten" }
+  | { type: "outlineStroke" }
+  | { type: "addVariant"; name: string }
+  | { type: "setVariant"; id: string; name: string }
   | { type: "setInteractions"; id: string; interactions: Interaction[] }
   | { type: "presentStart"; id?: string }
   | { type: "presentGo"; id: string }

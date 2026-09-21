@@ -10,6 +10,7 @@ import type {
   Tool,
   XNode,
 } from "./types";
+import { booleanPath, outlineStroke as outlineStrokePath, shapePoly } from "./geometry";
 
 let seq = 1;
 const uid = (p: string) => `${p}_${seq++}`;
@@ -95,6 +96,13 @@ function node(
     interactions: [],
     flipH: false,
     flipV: false,
+    fillGX: 0.5,
+    fillGY: 0,
+    fillHX: 0.5,
+    fillHY: 1,
+    isMask: false,
+    maskType: "alpha",
+    variant: "",
     ...extra,
   };
 }
@@ -784,6 +792,15 @@ export class MemoryEngine implements Engine {
           g.strokeVisible = src.strokeVisible;
           g.strokeAlign = src.strokeAlign;
           g.effects = clone(src.effects);
+          const baked = booleanPath(
+            cmd.op,
+            g.children.map((c) => ({ poly: shapePoly(c), ox: c.x, oy: c.y })),
+          );
+          if (baked) {
+            g.path = baked.path;
+            g.closed = true;
+            g.kind = "boolean";
+          }
         }
         break;
       }
@@ -807,7 +824,7 @@ export class MemoryEngine implements Engine {
         if (!n.name || n.name === "Group" || n.name === "Rectangle") n.name = "Component";
         const existing = s.components.find((c) => c.id === cid);
         if (existing) existing.node = clone(n);
-        else s.components.push({ id: cid, name: n.name, node: clone(n) });
+        else s.components.push({ id: cid, name: n.name, node: clone(n), variants: [{ name: "Default", node: clone(n) }], property: "Variant" });
         s.selection = [n.id];
         break;
       }
@@ -864,6 +881,98 @@ export class MemoryEngine implements Engine {
         this.root().children.push(n);
         s.selection = [n.id];
         if (!keepTool) s.tool = "select";
+        break;
+      }
+      case "patchPath": {
+        const n = find(this.root(), cmd.id);
+        if (!n || n.locked) break;
+        n.path = cmd.path;
+        if (cmd.closed != null) n.closed = cmd.closed;
+        n.kind = "vector";
+        const xs = n.path.map((pt) => pt.x);
+        const ys = n.path.map((pt) => pt.y);
+        if (xs.length) {
+          n.w = Math.max(1, Math.max(...xs) - Math.min(0, ...xs));
+          n.h = Math.max(1, Math.max(...ys) - Math.min(0, ...ys));
+        }
+        break;
+      }
+      case "flatten": {
+        const id = s.selection[0];
+        const n = id ? find(this.root(), id) : null;
+        if (!n) break;
+        if (n.kind === "boolean" && n.children.length) {
+          const baked = booleanPath(
+            n.booleanOp || "union",
+            n.children.map((c) => ({ poly: shapePoly(c), ox: c.x, oy: c.y })),
+          );
+          if (baked) {
+            n.path = baked.path;
+            n.closed = true;
+            n.kind = "vector";
+            n.children = [];
+            n.booleanOp = null;
+            n.x += baked.x;
+            n.y += baked.y;
+            n.w = baked.w;
+            n.h = baked.h;
+          }
+        } else if (!n.path.length) {
+          n.path = shapePoly(n);
+          n.closed = n.kind !== "line" && n.kind !== "arrow";
+          n.kind = "vector";
+        }
+        break;
+      }
+      case "outlineStroke": {
+        const id = s.selection[0];
+        const n = id ? find(this.root(), id) : null;
+        if (!n || n.strokeWidth <= 0) break;
+        const src = n.path.length ? n.path : shapePoly(n);
+        n.path = outlineStrokePath(src, n.strokeWidth, n.closed || n.kind !== "line");
+        n.kind = "vector";
+        n.closed = true;
+        n.fill = n.strokePaint;
+        n.fillVisible = true;
+        n.strokeWidth = 0;
+        n.strokeVisible = false;
+        break;
+      }
+      case "addVariant": {
+        const n = s.selection[0] ? find(this.root(), s.selection[0]) : null;
+        if (!n?.isComponent || !n.componentId) break;
+        const lib = s.components.find((c) => c.id === n.componentId);
+        if (!lib) break;
+        const copy = clone(n);
+        reid(copy);
+        copy.isComponent = true;
+        copy.componentId = n.componentId;
+        copy.variant = cmd.name;
+        copy.x = n.x + n.w + 40;
+        copy.y = n.y;
+        this.root().children.push(copy);
+        lib.variants = lib.variants || [];
+        lib.variants.push({ name: cmd.name, node: clone(copy) });
+        s.selection = [copy.id];
+        break;
+      }
+      case "setVariant": {
+        const n = find(this.root(), cmd.id);
+        if (!n?.componentId) break;
+        const lib = s.components.find((c) => c.id === n.componentId);
+        const v = lib?.variants?.find((x) => x.name === cmd.name);
+        if (!v) break;
+        const x = n.x;
+        const y = n.y;
+        const id = n.id;
+        Object.assign(n, clone(v.node), {
+          x,
+          y,
+          id,
+          isComponent: n.isComponent,
+          componentId: n.componentId,
+          variant: cmd.name,
+        });
         break;
       }
       case "setInteractions": {

@@ -278,10 +278,16 @@ export function runMenu(
     case "detachInstance":
       engine.dispatch({ type: "detachInstance" });
       break;
+    case "flatten":
+      engine.dispatch({ type: "flatten" });
+      break;
+    case "outlineStroke":
+      engine.dispatch({ type: "outlineStroke" });
+      break;
     case "useAsMask": {
       const s = engine.snapshot();
       const id0 = s.selection[0];
-      if (id0) engine.dispatch({ type: "patch", id: id0, patch: { overflow: "clip" } });
+      if (id0) engine.dispatch({ type: "patch", id: id0, patch: { isMask: true } });
       break;
     }
     default:

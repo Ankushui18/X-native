@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Engine, NodeKind, PathPoint, Snapshot, Tool, XNode } from "../engine/types";
 import { deepestFrame, find, findParent, hitTest, worldPos } from "../engine/memory";
+import { shapePoly } from "../engine/geometry";
 import { useTheme } from "./theme";
 import { cssRgba, isNone, takeEyedrop, toHex } from "./color";
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
@@ -29,7 +30,9 @@ function kindOf(t: Tool): NodeKind | null {
 
 type Drag =
   | {
-      mode: "pan" | "move" | "create" | "resize" | "marquee" | "rotate";
+      mode: "pan" | "move" | "create" | "resize" | "marquee" | "rotate" | "vec" | "grad";
+      point?: number;
+      handle?: "in" | "out" | "g" | "h";
       sx: number;
       sy: number;
       wx: number;
@@ -52,6 +55,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const [menu, setMenu] = useState<{ x: number; y: number; wx: number; wy: number } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const pendingImage = useRef<{ x: number; y: number } | null>(null);
+  const [vecEdit, setVecEdit] = useState<string | null>(null);
   const [draft, setDraft] = useState<PathPoint[]>([]);
   const pencil = useRef<PathPoint[] | null>(null);
   const penDrag = useRef<{ i: number; x: number; y: number } | null>(null);
@@ -79,6 +83,35 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         const id = snap.selection[0];
         const n = id ? worldPos(root, id)?.node : null;
         if (n?.kind === "text") setEdit({ id: n.id, text: n.text });
+        else if (
+          n &&
+          !vecEdit &&
+          (n.kind === "vector" ||
+            n.kind === "boolean" ||
+            n.kind === "rect" ||
+            n.kind === "ellipse" ||
+            n.kind === "poly" ||
+            n.kind === "star" ||
+            n.kind === "line" ||
+            n.kind === "arrow")
+        ) {
+          if (n.kind !== "vector") engine.dispatch({ type: "flatten" });
+          setVecEdit(n.id);
+          e.stopImmediatePropagation();
+        } else if (vecEdit) {
+          setVecEdit(null);
+        }
+      }
+      if (e.type === "keydown" && e.key === "Escape" && vecEdit) {
+        setVecEdit(null);
+        e.stopImmediatePropagation();
+      }
+      if (e.type === "keydown" && (e.key === "Delete" || e.key === "Backspace") && vecEdit && !edit) {
+        const n = worldPos(snap.pages[snap.page].root, vecEdit)?.node;
+        if (n?.path.length) {
+          engine.dispatch({ type: "patchPath", id: n.id, path: n.path.slice(0, -1), closed: n.closed });
+          e.stopImmediatePropagation();
+        }
       }
     };
     window.addEventListener("keydown", onKey, true);
@@ -87,7 +120,11 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("keyup", onKey, true);
     };
-  }, [snap, edit, draft, engine]);
+  }, [snap, edit, draft, engine, vecEdit]);
+
+  useEffect(() => {
+    if (vecEdit && !snap.selection.includes(vecEdit)) setVecEdit(null);
+  }, [snap.selection, vecEdit]);
 
   useEffect(() => {
     if (!snap.presentFrame) {
@@ -185,7 +222,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         ctx.restore();
         return;
       }
-      if (n.kind === "vector" && n.path.length) {
+      if ((n.kind === "vector" || n.kind === "boolean") && n.path.length) {
         tracePath(ctx, n.path, snap.panX + x * z, snap.panY + y * z, z, n.closed);
       } else if (n.kind === "ellipse") {
         ctx.beginPath();
@@ -334,7 +371,31 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         round();
         ctx.clip();
       }
-      for (const ch of n.children) paint(ch, x, y);
+      let maskOn = false;
+      for (const ch of n.children) {
+        if (ch.isMask && ch.visible) {
+          ctx.save();
+          const mx = snap.panX + (x + ch.x) * z;
+          const my = snap.panY + (y + ch.y) * z;
+          const mw = ch.w * z;
+          const mh = ch.h * z;
+          ctx.beginPath();
+          if (ch.kind === "ellipse") {
+            ctx.ellipse(mx + mw / 2, my + mh / 2, Math.abs(mw / 2), Math.abs(mh / 2), 0, 0, Math.PI * 2);
+          } else if (ch.path.length) {
+            tracePath(ctx, ch.path, mx, my, z, ch.closed);
+          } else if (typeof ctx.roundRect === "function") {
+            ctx.roundRect(mx, my, mw, mh, (ch.cornerRadii[0] || 0) * z);
+          } else {
+            ctx.rect(mx, my, mw, mh);
+          }
+          ctx.clip();
+          maskOn = true;
+          continue;
+        }
+        paint(ch, x, y);
+      }
+      if (maskOn) ctx.restore();
       ctx.restore();
     };
     const present = snap.presentFrame ? find(root, snap.presentFrame) : null;
@@ -469,6 +530,71 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       ctx.textBaseline = "alphabetic";
     }
 
+    if (vecEdit) {
+      const wp = worldPos(root, vecEdit);
+      if (wp) {
+        const pts = wp.node.path.length ? wp.node.path : shapePoly(wp.node);
+        ctx.strokeStyle = "#0d99ff";
+        ctx.lineWidth = 1;
+        for (const p of pts) {
+          const px = snap.panX + (wp.x + p.x) * z;
+          const py = snap.panY + (wp.y + p.y) * z;
+          if ((p.ox && p.ox !== 0) || (p.oy && p.oy !== 0) || (p.ix && p.ix !== 0) || (p.iy && p.iy !== 0)) {
+            ctx.beginPath();
+            ctx.moveTo(px + (p.ix || 0) * z, py + (p.iy || 0) * z);
+            ctx.lineTo(px + (p.ox || 0) * z, py + (p.oy || 0) * z);
+            ctx.stroke();
+            for (const [hx, hy] of [
+              [px + (p.ix || 0) * z, py + (p.iy || 0) * z],
+              [px + (p.ox || 0) * z, py + (p.oy || 0) * z],
+            ] as const) {
+              ctx.fillStyle = "#fff";
+              ctx.beginPath();
+              ctx.arc(hx, hy, 3, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.stroke();
+            }
+          }
+          ctx.fillStyle = "#fff";
+          ctx.beginPath();
+          ctx.rect(px - 3.5, py - 3.5, 7, 7);
+          ctx.fill();
+          ctx.stroke();
+        }
+      }
+    }
+
+    if (snap.selection.length === 1) {
+      const wp = worldPos(root, snap.selection[0]);
+      const ft = wp?.node.fillType;
+      if (wp && (ft === "linear" || ft === "radial" || ft === "angular" || ft === "diamond")) {
+        const gx = (wp.node.fillGX ?? 0.5) * wp.node.w;
+        const gy = (wp.node.fillGY ?? 0) * wp.node.h;
+        const hx = (wp.node.fillHX ?? 0.5) * wp.node.w;
+        const hy = (wp.node.fillHY ?? 1) * wp.node.h;
+        const ax = snap.panX + (wp.x + gx) * z;
+        const ay = snap.panY + (wp.y + gy) * z;
+        const bx = snap.panX + (wp.x + hx) * z;
+        const by = snap.panY + (wp.y + hy) * z;
+        ctx.strokeStyle = "#0d99ff";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(bx, by);
+        ctx.stroke();
+        ctx.fillStyle = wp.node.fill;
+        ctx.beginPath();
+        ctx.arc(ax, ay, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = wp.node.fillB || "#ffffff";
+        ctx.beginPath();
+        ctx.arc(bx, by, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+
     if (band) {
       ctx.fillStyle = "rgba(13,153,255,0.12)";
       ctx.strokeStyle = "#0d99ff";
@@ -476,7 +602,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       ctx.fillRect(band.x, band.y, band.w, band.h);
       ctx.strokeRect(band.x + 0.5, band.y + 0.5, band.w, band.h);
     }
-  }, [snap, band, edit, engine, theme, draft]);
+  }, [snap, band, edit, engine, theme, draft, vecEdit]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();
@@ -599,6 +725,46 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         const r = wrap.current!.getBoundingClientRect();
         const px = e.clientX - r.left;
         const py = e.clientY - r.top;
+        const ft = wp.node.fillType;
+        if (ft === "linear" || ft === "radial" || ft === "angular" || ft === "diamond") {
+          const ax = snap.panX + (wp.x + (wp.node.fillGX ?? 0.5) * wp.node.w) * z;
+          const ay = snap.panY + (wp.y + (wp.node.fillGY ?? 0) * wp.node.h) * z;
+          const bx = snap.panX + (wp.x + (wp.node.fillHX ?? 0.5) * wp.node.w) * z;
+          const by = snap.panY + (wp.y + (wp.node.fillHY ?? 1) * wp.node.h) * z;
+          if (Math.hypot(px - ax, py - ay) < 8) {
+            engine.dispatch({ type: "begin" });
+            drag.current = { mode: "grad", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, handle: "g" };
+            return;
+          }
+          if (Math.hypot(px - bx, py - by) < 8) {
+            engine.dispatch({ type: "begin" });
+            drag.current = { mode: "grad", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, handle: "h" };
+            return;
+          }
+        }
+        if (vecEdit === wp.node.id) {
+          const pts = wp.node.path.length ? wp.node.path : shapePoly(wp.node);
+          for (let i = 0; i < pts.length; i++) {
+            const p = pts[i];
+            const vx = snap.panX + (wp.x + p.x) * z;
+            const vy = snap.panY + (wp.y + p.y) * z;
+            if (Math.hypot(px - (vx + (p.ix || 0) * z), py - (vy + (p.iy || 0) * z)) < 7) {
+              engine.dispatch({ type: "begin" });
+              drag.current = { mode: "vec", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, point: i, handle: "in" };
+              return;
+            }
+            if (Math.hypot(px - (vx + (p.ox || 0) * z), py - (vy + (p.oy || 0) * z)) < 7) {
+              engine.dispatch({ type: "begin" });
+              drag.current = { mode: "vec", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, point: i, handle: "out" };
+              return;
+            }
+            if (Math.hypot(px - vx, py - vy) < 8) {
+              engine.dispatch({ type: "begin" });
+              drag.current = { mode: "vec", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, point: i };
+              return;
+            }
+          }
+        }
         if (Math.hypot(px - (sx + (wp.node.w * z) / 2), py - (sy - 20)) < 8) {
           drag.current = {
             mode: "rotate",
@@ -764,6 +930,36 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         ...next,
         scaleProps: snap.tool === "scale",
       });
+    } else if (d.mode === "grad" && d.id) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      const wp = worldPos(snap.pages[snap.page].root, d.id);
+      if (wp) {
+        const lx = (wpt.x - wp.x) / Math.max(1, wp.node.w);
+        const ly = (wpt.y - wp.y) / Math.max(1, wp.node.h);
+        if (d.handle === "g") engine.dispatch({ type: "patch", id: d.id, patch: { fillGX: lx, fillGY: ly } });
+        else engine.dispatch({ type: "patch", id: d.id, patch: { fillHX: lx, fillHY: ly } });
+      }
+    } else if (d.mode === "vec" && d.id != null && d.point != null) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      const loc = worldPos(snap.pages[snap.page].root, d.id);
+      const n = loc?.node;
+      if (n && loc) {
+        const pts = (n.path.length ? n.path : shapePoly(n)).map((p) => ({ ...p }));
+        const p = pts[d.point];
+        const lx = wpt.x - loc.x;
+        const ly = wpt.y - loc.y;
+        if (d.handle === "in") {
+          p.ix = lx - p.x;
+          p.iy = ly - p.y;
+        } else if (d.handle === "out") {
+          p.ox = lx - p.x;
+          p.oy = ly - p.y;
+        } else {
+          p.x = lx;
+          p.y = ly;
+        }
+        engine.dispatch({ type: "patchPath", id: n.id, path: pts, closed: n.closed });
+      }
     } else if (d.mode === "rotate" && d.orig && d.id) {
       const wp = worldPos(snap.pages[snap.page].root, d.id);
       if (!wp) return;
@@ -792,7 +988,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     drag.current = null;
     setBand(null);
     if (!d) return;
-    if (d.mode === "move" || d.mode === "resize") engine.dispatch({ type: "end" });
+    if (d.mode === "move" || d.mode === "resize" || d.mode === "vec" || d.mode === "grad") engine.dispatch({ type: "end" });
     if (d.mode === "move") {
       const sel = engine.snapshot().selection[0];
       const root = snap.pages[snap.page].root;
@@ -928,7 +1124,11 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     const wpt = toWorld(e.clientX, e.clientY);
     const hit = hitTest(snap.pages[snap.page].root, wpt.x, wpt.y, { deep: true });
     if (hit?.kind === "text") setEdit({ id: hit.id, text: hit.text });
-    else if (hit) engine.dispatch({ type: "select", ids: [hit.id] });
+    else if (hit && (hit.kind === "vector" || hit.kind === "boolean")) {
+      engine.dispatch({ type: "select", ids: [hit.id] });
+      if (hit.kind !== "vector") engine.dispatch({ type: "flatten" });
+      setVecEdit(hit.id);
+    } else if (hit) engine.dispatch({ type: "select", ids: [hit.id] });
   };
 
   const placeFiles = (files: FileList | File[], at?: { x: number; y: number }) => {
@@ -1177,27 +1377,28 @@ function fillPaint(
 ): string | CanvasGradient {
   const a = n.fill;
   const b = n.fillB || "#ffffff";
+  const gx = n.fillGX ?? 0.5;
+  const gy = n.fillGY ?? 0;
+  const hx = n.fillHX ?? 0.5;
+  const hy = n.fillHY ?? 1;
   if (n.fillType === "linear") {
-    const g = ctx.createLinearGradient(sx, sy, sx, sy + sh);
+    const g = ctx.createLinearGradient(sx + gx * sw, sy + gy * sh, sx + hx * sw, sy + hy * sh);
     g.addColorStop(0, a);
     g.addColorStop(1, b);
     return g;
   }
   if (n.fillType === "radial") {
-    const g = ctx.createRadialGradient(
-      sx + sw / 2,
-      sy + sh / 2,
-      0,
-      sx + sw / 2,
-      sy + sh / 2,
-      Math.max(sw, sh) / 2,
-    );
+    const cx = sx + gx * sw;
+    const cy = sy + gy * sh;
+    const r = Math.hypot((hx - gx) * sw, (hy - gy) * sh) || Math.max(sw, sh) / 2;
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
     g.addColorStop(0, a);
     g.addColorStop(1, b);
     return g;
   }
   if (n.fillType === "angular" && typeof ctx.createConicGradient === "function") {
-    const g = ctx.createConicGradient(0, sx + sw / 2, sy + sh / 2);
+    const ang = Math.atan2((hy - gy) * sh, (hx - gx) * sw);
+    const g = ctx.createConicGradient(ang, sx + gx * sw, sy + gy * sh);
     g.addColorStop(0, a);
     g.addColorStop(0.5, b);
     g.addColorStop(1, a);
