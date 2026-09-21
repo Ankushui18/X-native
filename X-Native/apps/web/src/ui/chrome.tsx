@@ -1,19 +1,21 @@
+import { useState } from "react";
 import type { Engine, LeftTab, RightTab, Snapshot, Tool, XNode } from "../engine/types";
-import { TOOL_META } from "../engine/types";
 import { defaultLayout, worldPos } from "../engine/memory";
-import { Icon, TOOL_ICON } from "./icons";
+import { Icon, TOOL_ICON, kindIcon } from "./icons";
 
 export function TitleBar({ snap }: { snap: Snapshot }) {
   return (
     <header className="title">
-      <div className="logo" title="X-Native">
-        <svg viewBox="0 0 14 14" fill="none" stroke="#fff" strokeWidth="1.6">
-          <path d="M2 12L12 2M4 2h8v8" />
-        </svg>
-      </div>
-      <div className="file-tab">{snap.fileName}</div>
+      <button className="brand" title="Main menu">
+        <Icon name="figma" size={18} />
+        <Icon name="chevron" size={12} />
+      </button>
+      <div className="file-name">{snap.fileName}</div>
       <div className="spacer" />
-      <span className="muted">Web chrome · engine API</span>
+      <button className="icon-btn" title="Present">
+        <Icon name="play" />
+      </button>
+      <button className="share">Share</button>
     </header>
   );
 }
@@ -33,10 +35,10 @@ function LayerRow({
     <>
       <div
         className={`row${sel.includes(n.id) ? " sel" : ""}`}
-        style={{ paddingLeft: 8 + depth * 12 }}
+        style={{ paddingLeft: 10 + depth * 14 }}
         onClick={() => engine.dispatch({ type: "select", ids: [n.id] })}
       >
-        <Icon name={kindIcon(n.kind)} className="icon icon-sm" />
+        <Icon name={kindIcon(n.kind)} size={14} />
         <span className="name">{n.name}</span>
         <button
           className="mini"
@@ -46,7 +48,7 @@ function LayerRow({
             engine.dispatch({ type: "patch", id: n.id, patch: { visible: !n.visible } });
           }}
         >
-          <Icon name={n.visible ? "eye" : "eye-off"} className="icon icon-sm" />
+          <Icon name={n.visible ? "eye" : "eye-off"} size={14} />
         </button>
         <button
           className="mini"
@@ -56,7 +58,7 @@ function LayerRow({
             engine.dispatch({ type: "patch", id: n.id, patch: { locked: !n.locked } });
           }}
         >
-          <Icon name={n.locked ? "lock" : "unlock"} className="icon icon-sm" />
+          <Icon name={n.locked ? "lock" : "unlock"} size={14} />
         </button>
       </div>
       {n.children.map((c) => (
@@ -66,31 +68,11 @@ function LayerRow({
   );
 }
 
-function kindIcon(k: XNode["kind"]): string {
-  switch (k) {
-    case "frame":
-      return "frame";
-    case "ellipse":
-      return "circle";
-    case "text":
-      return "type";
-    case "line":
-      return "line";
-    case "star":
-      return "star";
-    case "poly":
-      return "triangle";
-    default:
-      return "square";
-  }
-}
-
 export function LeftPanel({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const root = snap.pages[snap.page].root;
   const tabs: { id: LeftTab; label: string }[] = [
     { id: "layers", label: "Layers" },
     { id: "assets", label: "Assets" },
-    { id: "tokens", label: "Tokens" },
   ];
   return (
     <aside className="panel left">
@@ -105,27 +87,27 @@ export function LeftPanel({ engine, snap }: { engine: Engine; snap: Snapshot }) 
           </button>
         ))}
       </div>
-      <div className="section-label">Pages</div>
-      <div>
-        {snap.pages.map((p, i) => (
-          <div
-            key={p.id}
-            className={`row${i === snap.page ? " sel" : ""}`}
-            onClick={() => engine.dispatch({ type: "setPage", index: i })}
-          >
-            <span className="name">{p.name}</span>
-          </div>
-        ))}
-        <button className="ghost" onClick={() => engine.dispatch({ type: "addPage" })}>
-          + Add page
-        </button>
+      <div className="section-label">
+        <Icon name="chevron" size={12} />
+        Pages
       </div>
-      <div className="section-label">Layers</div>
+      {snap.pages.map((p, i) => (
+        <div
+          key={p.id}
+          className={`row${i === snap.page ? " sel" : ""}`}
+          onClick={() => engine.dispatch({ type: "setPage", index: i })}
+        >
+          <Icon name="page" size={14} />
+          <span className="name">{p.name}</span>
+        </div>
+      ))}
+      <div className="section-label">
+        <Icon name="chevron" size={12} />
+        Layers
+      </div>
       <div className="tree">
         {snap.leftTab !== "layers" ? (
-          <p className="empty">
-            {snap.leftTab === "assets" ? "No local libraries" : "Tokens live on the native TOKENS tab"}
-          </p>
+          <p className="empty">No published libraries</p>
         ) : (
           root.children.map((n) => (
             <LayerRow key={n.id} n={n} depth={0} sel={snap.selection} engine={engine} />
@@ -158,25 +140,18 @@ export function RightPanel({ engine, snap }: { engine: Engine; snap: Snapshot })
             {t.label}
           </button>
         ))}
-        <button
-          className="zoom-chip"
-          title="Zoom menu"
-          onClick={() => engine.dispatch({ type: "setZoom", zoom: snap.zoom === 1 ? 0.75 : 1 })}
-        >
-          {Math.round(snap.zoom * 100)}%
-        </button>
       </div>
       <div className="inspector">
         {snap.rightTab === "prototype" && (
           <p className="muted">
-            Prototype interactions stay in the native FLOW player (`x-editor`). Connect frames there;
-            this chrome only authors Design properties.
+            Drag the blue node on the right of a selected frame to connect a flow — Prototype tab
+            in Figma.
           </p>
         )}
         {snap.rightTab === "inspect" && (
           <p className="muted">
-            Inspect emits CSS / SwiftUI / Compose / XML / Tailwind / JSX from `x-format::codegen` in
-            the native app. Selection: {n ? n.name : "none"}.
+            Dev Mode: CSS, iOS, Android, and Tailwind from the selection. Native Inspect still
+            owns codegen.
           </p>
         )}
         {snap.rightTab === "design" && !n && (
@@ -203,9 +178,12 @@ function Design({
 }) {
   const num = (key: "x" | "y" | "w" | "h" | "rotation" | "opacity" | "fontSize", v: number) => {
     if (key === "x" || key === "y") {
-      const dx = key === "x" ? v - x : 0;
-      const dy = key === "y" ? v - y : 0;
-      engine.dispatch({ type: "move", ids: [n.id], dx, dy });
+      engine.dispatch({
+        type: "move",
+        ids: [n.id],
+        dx: key === "x" ? v - x : 0,
+        dy: key === "y" ? v - y : 0,
+      });
       return;
     }
     if (key === "w" || key === "h") {
@@ -223,23 +201,34 @@ function Design({
   };
   return (
     <>
-      <div className="grid2">
-        <Field label="W" value={n.w} onChange={(v) => num("w", v)} />
-        <Field label="H" value={n.h} onChange={(v) => num("h", v)} />
-        <Field label="X" value={x} onChange={(v) => num("x", v)} />
-        <Field label="Y" value={y} onChange={(v) => num("y", v)} />
-        <Field label="∠" value={n.rotation} onChange={(v) => num("rotation", v)} />
-        <Field
-          label="R"
-          value={n.cornerRadii[0]}
-          onChange={(v) =>
-            engine.dispatch({
-              type: "patch",
-              id: n.id,
-              patch: { cornerRadii: [v, v, v, v] },
-            })
-          }
-        />
+      <div className="insp-pad">
+        <div className="align">
+          {["align-left", "align-hcenter", "align-right", "align-top", "align-vcenter", "align-bottom"].map(
+            (ic) => (
+              <button key={ic} title={ic}>
+                <Icon name={ic} />
+              </button>
+            ),
+          )}
+        </div>
+        <div className="grid2">
+          <Field label="X" value={x} onChange={(v) => num("x", v)} />
+          <Field label="Y" value={y} onChange={(v) => num("y", v)} />
+          <Field label="W" value={n.w} onChange={(v) => num("w", v)} />
+          <Field label="H" value={n.h} onChange={(v) => num("h", v)} />
+          <Field icon="rotate" value={n.rotation} onChange={(v) => num("rotation", v)} />
+          <Field
+            icon="radius"
+            value={n.cornerRadii[0]}
+            onChange={(v) =>
+              engine.dispatch({
+                type: "patch",
+                id: n.id,
+                patch: { cornerRadii: [v, v, v, v] },
+              })
+            }
+          />
+        </div>
       </div>
       <label className="check">
         <input
@@ -260,7 +249,7 @@ function Design({
         <h3>Auto layout</h3>
         <button
           className="plus"
-          title="Add auto layout"
+          title={n.layout ? "Remove auto layout" : "Add auto layout"}
           onClick={() =>
             engine.dispatch({
               type: "autoLayout",
@@ -269,91 +258,147 @@ function Design({
             })
           }
         >
-          <Icon name={n.layout ? "x-mark" : "plus"} className="icon icon-sm" />
+          <Icon name={n.layout ? "minus" : "plus"} size={14} />
         </button>
       </div>
       {n.layout && (
-        <div className="grid2">
-          <Field
-            label="G"
-            value={n.layout.gap}
-            onChange={(v) =>
-              engine.dispatch({
-                type: "autoLayout",
-                id: n.id,
-                layout: { ...n.layout!, gap: v },
-              })
-            }
-          />
-          <button
-            className="ghost"
-            onClick={() =>
-              engine.dispatch({
-                type: "autoLayout",
-                id: n.id,
-                layout: {
-                  ...n.layout!,
-                  direction: n.layout!.direction === "horizontal" ? "vertical" : "horizontal",
-                },
-              })
-            }
-          >
-            {n.layout.direction === "horizontal" ? "Horizontal" : "Vertical"}
-          </button>
-        </div>
-      )}
-      <div className="hr" />
-      <h3>Fill</h3>
-      <ColorRow
-        value={n.fill}
-        onChange={(fill) => engine.dispatch({ type: "patch", id: n.id, patch: { fill } })}
-      />
-      <h3>Stroke</h3>
-      <ColorRow
-        value={n.strokePaint}
-        onChange={(strokePaint) =>
-          engine.dispatch({ type: "patch", id: n.id, patch: { strokePaint } })
-        }
-      />
-      <Field
-        label="W"
-        value={n.strokeWidth}
-        onChange={(strokeWidth) =>
-          engine.dispatch({ type: "patch", id: n.id, patch: { strokeWidth } })
-        }
-      />
-      {n.kind === "text" && (
         <>
-          <div className="hr" />
-          <h3>Typography</h3>
-          <input
-            className="hex"
-            value={n.text}
-            onChange={(e) =>
-              engine.dispatch({ type: "patch", id: n.id, patch: { text: e.target.value } })
-            }
-          />
-          <Field label="S" value={n.fontSize} onChange={(v) => num("fontSize", v)} />
+          <div className="dir-btns">
+            <button
+              className={n.layout.direction === "horizontal" ? "on" : ""}
+              title="Horizontal"
+              onClick={() =>
+                engine.dispatch({
+                  type: "autoLayout",
+                  id: n.id,
+                  layout: { ...n.layout!, direction: "horizontal" },
+                })
+              }
+            >
+              <Icon name="layout-h" />
+            </button>
+            <button
+              className={n.layout.direction === "vertical" ? "on" : ""}
+              title="Vertical"
+              onClick={() =>
+                engine.dispatch({
+                  type: "autoLayout",
+                  id: n.id,
+                  layout: { ...n.layout!, direction: "vertical" },
+                })
+              }
+            >
+              <Icon name="layout-v" />
+            </button>
+          </div>
+          <div className="insp-pad">
+            <Field
+              label="G"
+              value={n.layout.gap}
+              onChange={(v) =>
+                engine.dispatch({
+                  type: "autoLayout",
+                  id: n.id,
+                  layout: { ...n.layout!, gap: v },
+                })
+              }
+            />
+          </div>
         </>
       )}
       <div className="hr" />
-      <Field label="%" value={n.opacity * 100} onChange={(v) => num("opacity", v / 100)} />
+      <div className="h-row">
+        <h3>Fill</h3>
+        <button className="plus" title="Add fill">
+          <Icon name="plus" size={14} />
+        </button>
+      </div>
+      <div className="insp-pad">
+        <ColorRow
+          value={n.fill}
+          opacity={Math.round(n.opacity * 100)}
+          onChange={(fill) => engine.dispatch({ type: "patch", id: n.id, patch: { fill } })}
+          onOpacity={(v) => num("opacity", v / 100)}
+        />
+      </div>
+      <div className="h-row">
+        <h3>Stroke</h3>
+        <button className="plus">
+          <Icon name="plus" size={14} />
+        </button>
+      </div>
+      <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
+        <ColorRow
+          value={n.strokePaint}
+          opacity={100}
+          onChange={(strokePaint) =>
+            engine.dispatch({ type: "patch", id: n.id, patch: { strokePaint } })
+          }
+        />
+        <Field
+          label="W"
+          value={n.strokeWidth}
+          onChange={(strokeWidth) =>
+            engine.dispatch({ type: "patch", id: n.id, patch: { strokeWidth } })
+          }
+        />
+      </div>
+      {n.kind === "text" && (
+        <>
+          <div className="hr" />
+          <div className="h-row">
+            <h3>Typography</h3>
+          </div>
+          <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
+            <input
+              className="hex"
+              style={{
+                height: 32,
+                background: "var(--input)",
+                borderRadius: 6,
+                padding: "0 8px",
+                textTransform: "none",
+              }}
+              value={n.text}
+              onChange={(e) =>
+                engine.dispatch({ type: "patch", id: n.id, patch: { text: e.target.value } })
+              }
+            />
+            <Field label="S" value={n.fontSize} onChange={(v) => num("fontSize", v)} />
+          </div>
+        </>
+      )}
+      <div className="hr" />
+      <div className="h-row">
+        <h3>Effects</h3>
+        <button className="plus">
+          <Icon name="plus" size={14} />
+        </button>
+      </div>
+      <div className="h-row">
+        <h3>Export</h3>
+        <button className="plus">
+          <Icon name="plus" size={14} />
+        </button>
+      </div>
     </>
   );
 }
 
 function Field({
   label,
+  icon,
   value,
   onChange,
 }: {
-  label: string;
+  label?: string;
+  icon?: string;
   value: number;
   onChange: (v: number) => void;
 }) {
   return (
     <div className="field">
-      <label>{label}</label>
+      {icon ? <Icon name={icon} size={14} /> : <label>{label}</label>}
       <input
         value={fmt(value)}
         onChange={(e) => {
@@ -365,14 +410,38 @@ function Field({
   );
 }
 
-function ColorRow({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const hex = value.length === 9 ? value.slice(0, 7) : value;
+function ColorRow({
+  value,
+  opacity = 100,
+  onChange,
+  onOpacity,
+}: {
+  value: string;
+  opacity?: number;
+  onChange: (v: string) => void;
+  onOpacity?: (v: number) => void;
+}) {
+  const hex = value.length >= 7 ? value.slice(0, 7) : "#000000";
   return (
     <div className="color-row">
       <label className="swatch" style={{ background: hex }}>
-        <input type="color" value={hex || "#000000"} onChange={(e) => onChange(e.target.value)} />
+        <input type="color" value={hex} onChange={(e) => onChange(e.target.value)} />
       </label>
-      <input className="hex" value={hex.replace("#", "")} onChange={(e) => onChange("#" + e.target.value)} />
+      <input
+        className="hex"
+        value={hex.replace("#", "")}
+        onChange={(e) => onChange("#" + e.target.value.replace("#", ""))}
+      />
+      {onOpacity && (
+        <input
+          className="op"
+          value={`${opacity}%`}
+          onChange={(e) => {
+            const v = parseFloat(e.target.value);
+            if (!Number.isNaN(v)) onOpacity(v);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -382,22 +451,125 @@ function fmt(v: number) {
   return Math.abs(v - r) < 0.05 ? String(r) : v.toFixed(1);
 }
 
+type Group = {
+  id: string;
+  tools: { id: Tool; label: string; shortcut: string }[];
+};
+
+const GROUPS: Group[] = [
+  {
+    id: "move",
+    tools: [
+      { id: "select", label: "Move", shortcut: "V" },
+      { id: "scale", label: "Scale", shortcut: "K" },
+    ],
+  },
+  {
+    id: "frame",
+    tools: [
+      { id: "frame", label: "Frame", shortcut: "F" },
+      { id: "slice", label: "Slice", shortcut: "S" },
+    ],
+  },
+  {
+    id: "shape",
+    tools: [
+      { id: "rect", label: "Rectangle", shortcut: "R" },
+      { id: "ellipse", label: "Ellipse", shortcut: "O" },
+      { id: "line", label: "Line", shortcut: "L" },
+      { id: "arrow", label: "Arrow", shortcut: "⇧L" },
+      { id: "poly", label: "Polygon", shortcut: "" },
+      { id: "star", label: "Star", shortcut: "" },
+    ],
+  },
+  {
+    id: "pen",
+    tools: [
+      { id: "pen", label: "Pen", shortcut: "P" },
+      { id: "pencil", label: "Pencil", shortcut: "⇧P" },
+      { id: "brush", label: "Brush", shortcut: "B" },
+      { id: "eraser", label: "Eraser", shortcut: "⇧E" },
+    ],
+  },
+  { id: "text", tools: [{ id: "text", label: "Text", shortcut: "T" }] },
+  { id: "comment", tools: [{ id: "comment", label: "Comment", shortcut: "C" }] },
+  { id: "hand", tools: [{ id: "hand", label: "Hand", shortcut: "H" }] },
+];
+
 export function Toolbar({ engine, snap }: { engine: Engine; snap: Snapshot }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const last = (g: Group) =>
+    g.tools.find((t) => t.id === snap.tool)?.id ?? g.tools[0].id;
+
   return (
     <div className="dock" role="toolbar" aria-label="Tools">
-      {TOOL_META.map((t) => (
-        <button
-          key={t.id}
-          className={snap.tool === t.id ? "active" : ""}
-          title={t.shortcut ? `${t.label} (${t.shortcut})` : t.label}
-          onClick={() => engine.dispatch({ type: "setTool", tool: t.id as Tool })}
-        >
-          <Icon name={TOOL_ICON[t.id]} />
-        </button>
-      ))}
+      {GROUPS.map((g) => {
+        const current = last(g);
+        const active = g.tools.some((t) => t.id === snap.tool);
+        const multi = g.tools.length > 1;
+        return (
+          <div
+            key={g.id}
+            className={`tool${active ? " active" : ""}${open === g.id ? " open" : ""}`}
+            onMouseLeave={() => setOpen((o) => (o === g.id ? null : o))}
+          >
+            <button
+              className="hit"
+              title={g.tools.find((t) => t.id === current)?.label}
+              onClick={() => engine.dispatch({ type: "setTool", tool: current })}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                if (multi) setOpen(g.id);
+              }}
+            >
+              <Icon name={TOOL_ICON[current]} size={16} />
+            </button>
+            {multi && (
+              <div className="fly">
+                {g.tools.map((t) => (
+                  <button
+                    key={t.id}
+                    className={snap.tool === t.id ? "on" : ""}
+                    onClick={() => {
+                      engine.dispatch({ type: "setTool", tool: t.id });
+                      setOpen(null);
+                    }}
+                  >
+                    <Icon name={TOOL_ICON[t.id]} size={16} />
+                    {t.label}
+                    {t.shortcut && <span className="sc">{t.shortcut}</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
       <div className="div" />
-      <button title="Command palette (⌘K)" onClick={() => {}}>
-        <Icon name="search" />
+      <div className="tool">
+        <button className="hit" title="Actions">
+          <Icon name="search" size={16} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function ZoomBar({ engine, snap }: { engine: Engine; snap: Snapshot }) {
+  return (
+    <div className="zoom-bar">
+      <button
+        title="Zoom out"
+        onClick={() => engine.dispatch({ type: "setZoom", zoom: snap.zoom / 1.2 })}
+      >
+        <Icon name="zoom-out" size={14} />
+      </button>
+      <span>{Math.round(snap.zoom * 100)}%</span>
+      <button
+        title="Zoom in"
+        onClick={() => engine.dispatch({ type: "setZoom", zoom: snap.zoom * 1.2 })}
+      >
+        <Icon name="zoom-in" size={14} />
       </button>
     </div>
   );
@@ -440,6 +612,7 @@ export function bindHotkeys(engine: Engine) {
       h: "hand",
       b: "brush",
       c: "comment",
+      s: "slice",
     };
     if (!meta && map[e.key.toLowerCase()]) {
       engine.dispatch({ type: "setTool", tool: map[e.key.toLowerCase()] });

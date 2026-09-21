@@ -61,8 +61,24 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     const ctx = c.getContext("2d");
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = "#060606";
+    ctx.fillStyle = "#e5e5e5";
     ctx.fillRect(0, 0, w, h);
+    // Figma's faint pixel grid at ≥100%
+    if (snap.zoom >= 1) {
+      ctx.strokeStyle = "rgba(0,0,0,0.04)";
+      ctx.lineWidth = 1;
+      const step = 8 * snap.zoom;
+      ctx.beginPath();
+      for (let x = snap.panX % step; x < w; x += step) {
+        ctx.moveTo(x + 0.5, 0);
+        ctx.lineTo(x + 0.5, h);
+      }
+      for (let y = snap.panY % step; y < h; y += step) {
+        ctx.moveTo(0, y + 0.5);
+        ctx.lineTo(w, y + 0.5);
+      }
+      ctx.stroke();
+    }
     const root = snap.pages[snap.page].root;
     const z = snap.zoom;
     const paint = (n: XNode, px: number, py: number) => {
@@ -126,7 +142,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
 
     // frame names
     ctx.font = "500 11px Inter, system-ui";
-    ctx.fillStyle = "#9a9eaa";
+    ctx.fillStyle = "rgba(0,0,0,0.45)";
     const label = (n: XNode, px: number, py: number) => {
       const x = px + n.x;
       const y = py + n.y;
