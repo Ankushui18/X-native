@@ -38,18 +38,29 @@ function node(
           : kind === "line" || kind === "arrow"
             ? "#00000000"
             : "#d9d9d9",
-    strokePaint: kind === "line" || kind === "arrow" ? "#0d1220" : "#00000000",
+    strokePaint: kind === "line" || kind === "arrow" ? "#1e1e1e" : "#00000000",
     strokeWidth: kind === "line" || kind === "arrow" ? 1 : 0,
+    strokeAlign: "inside",
     opacity: 1,
     visible: true,
     locked: false,
     overflow: kind === "frame" ? "clip" : "visible",
     cornerRadii: [0, 0, 0, 0],
+    blendMode: "normal",
+    imageSrc: "",
     text: kind === "text" ? "Text" : "",
+    fontFamily: "Inter",
     fontSize: 16,
     fontWeight: 400,
+    lineHeight: 0,
+    letterSpacing: 0,
+    paragraphSpacing: 0,
     textAlign: "left",
     textAlignVertical: "top",
+    textDecoration: "none",
+    textCase: "none",
+    truncate: false,
+    maxLines: 1,
     children: [],
     layout: null,
     ...extra,
@@ -90,25 +101,38 @@ function applyLayout(n: XNode) {
   const flow = n.children.filter((c) => c.visible);
   const [pl, pr, pt, pb] = l.padding;
   const horiz = l.direction === "horizontal";
-  let cursor = horiz ? pl : pt;
+  const gap = l.gap;
+  const innerW = n.w - pl - pr;
+  const innerH = n.h - pt - pb;
+  const mainTotal = flow.reduce((s, c) => s + (horiz ? c.w : c.h), 0) + gap * Math.max(0, flow.length - 1);
+  let origin = horiz ? pl : pt;
+  if (l.justify === "center") origin += Math.max(0, (horiz ? innerW : innerH) - mainTotal) / 2;
+  if (l.justify === "max") origin += Math.max(0, (horiz ? innerW : innerH) - mainTotal);
+  const free = Math.max(0, (horiz ? innerW : innerH) - flow.reduce((s, c) => s + (horiz ? c.w : c.h), 0));
+  const between = l.justify === "between" && flow.length > 1 ? free / (flow.length - 1) : gap;
+  let cursor = origin;
   let crossMax = 0;
   for (let i = 0; i < flow.length; i++) {
     const c = flow[i];
     if (horiz) {
       c.x = cursor;
-      c.y = pt;
-      cursor += c.w + (i < flow.length - 1 ? l.gap : 0);
+      const extra = innerH - c.h;
+      c.y = pt + (l.align === "center" ? extra / 2 : l.align === "max" ? extra : 0);
+      cursor += c.w + (i < flow.length - 1 ? between : 0);
       crossMax = Math.max(crossMax, c.h);
     } else {
       c.y = cursor;
-      c.x = pl;
-      cursor += c.h + (i < flow.length - 1 ? l.gap : 0);
+      const extra = innerW - c.w;
+      c.x = pl + (l.align === "center" ? extra / 2 : l.align === "max" ? extra : 0);
+      cursor += c.h + (i < flow.length - 1 ? between : 0);
       crossMax = Math.max(crossMax, c.w);
     }
   }
   if (l.sizing === "hug") {
-    if (horiz) n.w = cursor + pr;
-    else n.h = cursor + pb;
+    if (horiz) n.w = origin + mainTotal + pr - (l.justify === "min" ? 0 : 0);
+    else n.h = (l.justify === "min" ? pt : pt) + mainTotal + pb;
+    if (horiz) n.w = pl + mainTotal + pr;
+    else n.h = pt + mainTotal + pb;
   }
   if (l.cross === "hug") {
     if (horiz) n.h = crossMax + pt + pb;
@@ -150,6 +174,8 @@ function demoPage(): Page {
       sizing: "fixed",
       cross: "fixed",
       wrap: false,
+      align: "min",
+      justify: "min",
     },
   });
   const cardTitle = node("text", "Heading", 0, 0, 300, 22, {
@@ -311,6 +337,9 @@ export class MemoryEngine implements Engine {
       case "setLeftTab":
         s.leftTab = cmd.tab;
         break;
+      case "setFileName":
+        s.fileName = cmd.name;
+        break;
       case "setPage":
         s.page = Math.max(0, Math.min(s.pages.length - 1, cmd.index));
         s.selection = [];
@@ -325,7 +354,7 @@ export class MemoryEngine implements Engine {
         break;
       }
       case "add": {
-        const n = node(cmd.kind, labelFor(cmd.kind), cmd.x, cmd.y, cmd.w, cmd.h);
+        const n = node(cmd.kind, labelFor(cmd.kind), cmd.x, cmd.y, cmd.w, cmd.h, cmd.extra);
         const parent = cmd.parent ? find(this.root(), cmd.parent) : this.root();
         (parent ?? this.root()).children.push(n);
         s.selection = [n.id];
@@ -502,5 +531,7 @@ export function defaultLayout(): AutoLayout {
     sizing: "hug",
     cross: "hug",
     wrap: false,
+    align: "min",
+    justify: "min",
   };
 }

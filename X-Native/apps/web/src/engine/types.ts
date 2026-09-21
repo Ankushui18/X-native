@@ -16,10 +16,15 @@ export type NodeKind =
   | "star";
 
 export type Overflow = "visible" | "clip" | "scrollx" | "scrolly" | "scrollboth";
-export type Sizing = "fixed" | "hug";
+export type Sizing = "fixed" | "hug" | "fill";
 export type LayoutDirection = "horizontal" | "vertical";
+export type LayoutAlign = "min" | "center" | "max";
+export type LayoutJustify = "min" | "center" | "max" | "between";
 export type TextAlign = "left" | "center" | "right" | "justified";
 export type TextAlignVertical = "top" | "middle" | "bottom";
+export type TextDecoration = "none" | "underline" | "strikethrough";
+export type TextCase = "none" | "upper" | "lower" | "title" | "small-caps";
+export type StrokeAlign = "inside" | "center" | "outside";
 export type RightTab = "design" | "prototype" | "inspect";
 export type LeftTab = "layers" | "assets" | "tokens";
 
@@ -35,6 +40,7 @@ export type Tool =
   | "arrow"
   | "poly"
   | "star"
+  | "image"
   | "pen"
   | "pencil"
   | "brush"
@@ -49,6 +55,8 @@ export interface AutoLayout {
   sizing: Sizing;
   cross: Sizing;
   wrap: boolean;
+  align: LayoutAlign;
+  justify: LayoutJustify;
 }
 
 export interface XNode {
@@ -63,16 +71,27 @@ export interface XNode {
   fill: string;
   strokePaint: string;
   strokeWidth: number;
+  strokeAlign: StrokeAlign;
   opacity: number;
   visible: boolean;
   locked: boolean;
   overflow: Overflow;
   cornerRadii: [number, number, number, number];
+  blendMode: string;
+  imageSrc: string;
   text: string;
+  fontFamily: string;
   fontSize: number;
   fontWeight: number;
+  lineHeight: number;
+  letterSpacing: number;
+  paragraphSpacing: number;
   textAlign: TextAlign;
   textAlignVertical: TextAlignVertical;
+  textDecoration: TextDecoration;
+  textCase: TextCase;
+  truncate: boolean;
+  maxLines: number;
   children: XNode[];
   layout: AutoLayout | null;
 }
@@ -107,6 +126,7 @@ export type Command =
   | { type: "setRightTab"; tab: RightTab }
   | { type: "setLeftTab"; tab: LeftTab }
   | { type: "setPage"; index: number }
+  | { type: "setFileName"; name: string }
   | { type: "addPage" }
   | {
       type: "add";
@@ -116,6 +136,7 @@ export type Command =
       w: number;
       h: number;
       parent?: string;
+      extra?: Partial<XNode>;
     }
   | { type: "move"; ids: string[]; dx: number; dy: number }
   | { type: "resize"; id: string; x: number; y: number; w: number; h: number }
@@ -151,6 +172,7 @@ export const TOOL_META: {
   { id: "arrow", label: "Arrow", shortcut: "⇧L" },
   { id: "poly", label: "Polygon", shortcut: "" },
   { id: "star", label: "Star", shortcut: "" },
+  { id: "image", label: "Image", shortcut: "⇧I" },
   { id: "pen", label: "Pen", shortcut: "P" },
   { id: "pencil", label: "Pencil", shortcut: "⇧P" },
   { id: "brush", label: "Brush", shortcut: "B" },

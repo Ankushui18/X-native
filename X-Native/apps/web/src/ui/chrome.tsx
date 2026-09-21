@@ -1,22 +1,75 @@
-import { useState } from "react";
-import type { Engine, LeftTab, RightTab, Snapshot, Tool, XNode } from "../engine/types";
-import { defaultLayout, worldPos } from "../engine/memory";
+import { useRef, useState } from "react";
+import type { Engine, Snapshot, Tool, XNode } from "../engine/types";
 import { Icon, TOOL_ICON, kindIcon } from "./icons";
 
-export function TitleBar({ snap }: { snap: Snapshot }) {
+export type NavId = "file" | "assets" | "tools" | "variables" | "agent";
+
+export function NavRail({
+  engine,
+  nav,
+  setNav,
+  onActions,
+}: {
+  engine: Engine;
+  nav: NavId;
+  setNav: (n: NavId) => void;
+  onActions: () => void;
+}) {
+  const [menu, setMenu] = useState(false);
+  const items: { id: NavId; icon: string; label: string; tab?: "layers" | "assets" | "tokens" }[] = [
+    { id: "file", icon: "layers", label: "File", tab: "layers" },
+    { id: "agent", icon: "agent", label: "Agent" },
+    { id: "assets", icon: "component", label: "Assets", tab: "assets" },
+    { id: "tools", icon: "tools", label: "Tools" },
+    { id: "variables", icon: "vars", label: "Vars", tab: "tokens" },
+  ];
   return (
-    <header className="title">
-      <button className="brand" title="Main menu">
+    <nav className="rail">
+      <button className="logo" title="Main menu" onClick={() => setMenu((v) => !v)}>
         <Icon name="figma" size={18} />
-        <Icon name="chevron" size={12} />
+        {menu && (
+          <div className="menu" onMouseLeave={() => setMenu(false)}>
+            <button>
+              Back to files <span className="sc">⌘Esc</span>
+            </button>
+            <hr />
+            <button onClick={onActions}>
+              Actions <span className="sc">⌘K</span>
+            </button>
+            <button onClick={() => engine.dispatch({ type: "undo" })}>
+              Undo <span className="sc">⌘Z</span>
+            </button>
+            <button onClick={() => engine.dispatch({ type: "redo" })}>
+              Redo <span className="sc">⇧⌘Z</span>
+            </button>
+            <hr />
+            <button onClick={() => engine.dispatch({ type: "duplicate" })}>
+              Duplicate <span className="sc">⌘D</span>
+            </button>
+            <button onClick={() => engine.dispatch({ type: "delete" })}>
+              Delete <span className="sc">⌫</span>
+            </button>
+            <hr />
+            <button>Preferences</button>
+          </div>
+        )}
       </button>
-      <div className="file-name">{snap.fileName}</div>
+      {items.map((it) => (
+        <button
+          key={it.id}
+          className={`nav${nav === it.id ? " on" : ""}`}
+          title={it.label}
+          onClick={() => {
+            setNav(it.id);
+            if (it.tab) engine.dispatch({ type: "setLeftTab", tab: it.tab });
+          }}
+        >
+          <Icon name={it.icon} size={16} />
+          <span>{it.label}</span>
+        </button>
+      ))}
       <div className="spacer" />
-      <button className="icon-btn" title="Present">
-        <Icon name="play" />
-      </button>
-      <button className="share">Share</button>
-    </header>
+    </nav>
   );
 }
 
@@ -25,21 +78,60 @@ function LayerRow({
   depth,
   sel,
   engine,
+  q,
 }: {
   n: XNode;
   depth: number;
   sel: string[];
   engine: Engine;
+  q: string;
 }) {
+  const [open, setOpen] = useState(true);
+  const [renaming, setRenaming] = useState(false);
+  const match = !q || n.name.toLowerCase().includes(q.toLowerCase());
+  if (!match && !n.children.some((c) => c.name.toLowerCase().includes(q.toLowerCase()))) {
+    return null;
+  }
   return (
     <>
       <div
         className={`row${sel.includes(n.id) ? " sel" : ""}`}
-        style={{ paddingLeft: 10 + depth * 14 }}
+        style={{ paddingLeft: 8 + depth * 12 }}
         onClick={() => engine.dispatch({ type: "select", ids: [n.id] })}
+        onDoubleClick={() => setRenaming(true)}
       >
-        <Icon name={kindIcon(n.kind)} size={14} />
-        <span className="name">{n.name}</span>
+        {n.children.length ? (
+          <button
+            className="twist"
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen((v) => !v);
+            }}
+          >
+            <Icon name={open ? "chevron" : "chevron-right"} size={12} />
+          </button>
+        ) : (
+          <span style={{ width: 16 }} />
+        )}
+        <Icon name={kindIcon(n.kind, n.imageSrc)} size={14} />
+        {renaming ? (
+          <input
+            className="name"
+            autoFocus
+            defaultValue={n.name}
+            onClick={(e) => e.stopPropagation()}
+            onBlur={(e) => {
+              engine.dispatch({ type: "patch", id: n.id, patch: { name: e.target.value } });
+              setRenaming(false);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              if (e.key === "Escape") setRenaming(false);
+            }}
+          />
+        ) : (
+          <span className="name">{n.name}</span>
+        )}
         <button
           className="mini"
           title={n.visible ? "Hide" : "Show"}
@@ -61,394 +153,120 @@ function LayerRow({
           <Icon name={n.locked ? "lock" : "unlock"} size={14} />
         </button>
       </div>
-      {n.children.map((c) => (
-        <LayerRow key={c.id} n={c} depth={depth + 1} sel={sel} engine={engine} />
-      ))}
+      {open &&
+        n.children.map((c) => (
+          <LayerRow key={c.id} n={c} depth={depth + 1} sel={sel} engine={engine} q={q} />
+        ))}
     </>
   );
 }
 
-export function LeftPanel({ engine, snap }: { engine: Engine; snap: Snapshot }) {
+export function LeftPanel({
+  engine,
+  snap,
+  nav,
+  onMinimize,
+}: {
+  engine: Engine;
+  snap: Snapshot;
+  nav: NavId;
+  onMinimize: () => void;
+}) {
+  const [q, setQ] = useState("");
+  const [pagesOpen, setPagesOpen] = useState(true);
   const root = snap.pages[snap.page].root;
-  const tabs: { id: LeftTab; label: string }[] = [
-    { id: "layers", label: "Layers" },
-    { id: "assets", label: "Assets" },
-  ];
   return (
     <aside className="panel left">
-      <div className="pills">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            aria-pressed={snap.leftTab === t.id}
-            onClick={() => engine.dispatch({ type: "setLeftTab", tab: t.id })}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-      <div className="section-label">
-        <Icon name="chevron" size={12} />
-        Pages
-      </div>
-      {snap.pages.map((p, i) => (
-        <div
-          key={p.id}
-          className={`row${i === snap.page ? " sel" : ""}`}
-          onClick={() => engine.dispatch({ type: "setPage", index: i })}
-        >
-          <Icon name="page" size={14} />
-          <span className="name">{p.name}</span>
-        </div>
-      ))}
-      <div className="section-label">
-        <Icon name="chevron" size={12} />
-        Layers
-      </div>
-      <div className="tree">
-        {snap.leftTab !== "layers" ? (
-          <p className="empty">No published libraries</p>
-        ) : (
-          root.children.map((n) => (
-            <LayerRow key={n.id} n={n} depth={0} sel={snap.selection} engine={engine} />
-          ))
-        )}
-      </div>
-    </aside>
-  );
-}
-
-export function RightPanel({ engine, snap }: { engine: Engine; snap: Snapshot }) {
-  const tabs: { id: RightTab; label: string }[] = [
-    { id: "design", label: "Design" },
-    { id: "prototype", label: "Prototype" },
-    { id: "inspect", label: "Inspect" },
-  ];
-  const root = snap.pages[snap.page].root;
-  const id = snap.selection[0];
-  const wp = id ? worldPos(root, id) : null;
-  const n = wp?.node;
-  return (
-    <aside className="panel right">
-      <div className="tabs">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            aria-current={snap.rightTab === t.id}
-            onClick={() => engine.dispatch({ type: "setRightTab", tab: t.id })}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-      <div className="inspector">
-        {snap.rightTab === "prototype" && (
-          <p className="muted">
-            Drag the blue node on the right of a selected frame to connect a flow — Prototype tab
-            in Figma.
-          </p>
-        )}
-        {snap.rightTab === "inspect" && (
-          <p className="muted">
-            Dev Mode: CSS, iOS, Android, and Tailwind from the selection. Native Inspect still
-            owns codegen.
-          </p>
-        )}
-        {snap.rightTab === "design" && !n && (
-          <p className="empty">Select a layer to edit properties</p>
-        )}
-        {snap.rightTab === "design" && n && wp && (
-          <Design n={n} x={wp.x} y={wp.y} engine={engine} />
-        )}
-      </div>
-    </aside>
-  );
-}
-
-function Design({
-  n,
-  x,
-  y,
-  engine,
-}: {
-  n: XNode;
-  x: number;
-  y: number;
-  engine: Engine;
-}) {
-  const num = (key: "x" | "y" | "w" | "h" | "rotation" | "opacity" | "fontSize", v: number) => {
-    if (key === "x" || key === "y") {
-      engine.dispatch({
-        type: "move",
-        ids: [n.id],
-        dx: key === "x" ? v - x : 0,
-        dy: key === "y" ? v - y : 0,
-      });
-      return;
-    }
-    if (key === "w" || key === "h") {
-      engine.dispatch({
-        type: "resize",
-        id: n.id,
-        x: n.x,
-        y: n.y,
-        w: key === "w" ? v : n.w,
-        h: key === "h" ? v : n.h,
-      });
-      return;
-    }
-    engine.dispatch({ type: "patch", id: n.id, patch: { [key]: v } });
-  };
-  return (
-    <>
-      <div className="insp-pad">
-        <div className="align">
-          {["align-left", "align-hcenter", "align-right", "align-top", "align-vcenter", "align-bottom"].map(
-            (ic) => (
-              <button key={ic} title={ic}>
-                <Icon name={ic} />
-              </button>
-            ),
-          )}
-        </div>
-        <div className="grid2">
-          <Field label="X" value={x} onChange={(v) => num("x", v)} />
-          <Field label="Y" value={y} onChange={(v) => num("y", v)} />
-          <Field label="W" value={n.w} onChange={(v) => num("w", v)} />
-          <Field label="H" value={n.h} onChange={(v) => num("h", v)} />
-          <Field icon="rotate" value={n.rotation} onChange={(v) => num("rotation", v)} />
-          <Field
-            icon="radius"
-            value={n.cornerRadii[0]}
-            onChange={(v) =>
-              engine.dispatch({
-                type: "patch",
-                id: n.id,
-                patch: { cornerRadii: [v, v, v, v] },
-              })
-            }
-          />
-        </div>
-      </div>
-      <label className="check">
+      <div className="file-head">
         <input
-          type="checkbox"
-          checked={n.overflow !== "visible"}
-          onChange={(e) =>
-            engine.dispatch({
-              type: "patch",
-              id: n.id,
-              patch: { overflow: e.target.checked ? "clip" : "visible" },
-            })
-          }
+          className="name"
+          value={snap.fileName}
+          onChange={(e) => engine.dispatch({ type: "setFileName", name: e.target.value })}
         />
-        Clip content
-      </label>
-      <div className="hr" />
-      <div className="h-row">
-        <h3>Auto layout</h3>
-        <button
-          className="plus"
-          title={n.layout ? "Remove auto layout" : "Add auto layout"}
-          onClick={() =>
-            engine.dispatch({
-              type: "autoLayout",
-              id: n.id,
-              layout: n.layout ? null : defaultLayout(),
-            })
-          }
-        >
-          <Icon name={n.layout ? "minus" : "plus"} size={14} />
+        <button className="icon-btn" title="Minimize UI" onClick={onMinimize}>
+          <Icon name="minimize" size={14} />
         </button>
       </div>
-      {n.layout && (
+      {nav === "file" && (
         <>
-          <div className="dir-btns">
-            <button
-              className={n.layout.direction === "horizontal" ? "on" : ""}
-              title="Horizontal"
-              onClick={() =>
-                engine.dispatch({
-                  type: "autoLayout",
-                  id: n.id,
-                  layout: { ...n.layout!, direction: "horizontal" },
-                })
-              }
-            >
-              <Icon name="layout-h" />
-            </button>
-            <button
-              className={n.layout.direction === "vertical" ? "on" : ""}
-              title="Vertical"
-              onClick={() =>
-                engine.dispatch({
-                  type: "autoLayout",
-                  id: n.id,
-                  layout: { ...n.layout!, direction: "vertical" },
-                })
-              }
-            >
-              <Icon name="layout-v" />
-            </button>
-          </div>
-          <div className="insp-pad">
-            <Field
-              label="G"
-              value={n.layout.gap}
-              onChange={(v) =>
-                engine.dispatch({
-                  type: "autoLayout",
-                  id: n.id,
-                  layout: { ...n.layout!, gap: v },
-                })
-              }
-            />
-          </div>
-        </>
-      )}
-      <div className="hr" />
-      <div className="h-row">
-        <h3>Fill</h3>
-        <button className="plus" title="Add fill">
-          <Icon name="plus" size={14} />
-        </button>
-      </div>
-      <div className="insp-pad">
-        <ColorRow
-          value={n.fill}
-          opacity={Math.round(n.opacity * 100)}
-          onChange={(fill) => engine.dispatch({ type: "patch", id: n.id, patch: { fill } })}
-          onOpacity={(v) => num("opacity", v / 100)}
-        />
-      </div>
-      <div className="h-row">
-        <h3>Stroke</h3>
-        <button className="plus">
-          <Icon name="plus" size={14} />
-        </button>
-      </div>
-      <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
-        <ColorRow
-          value={n.strokePaint}
-          opacity={100}
-          onChange={(strokePaint) =>
-            engine.dispatch({ type: "patch", id: n.id, patch: { strokePaint } })
-          }
-        />
-        <Field
-          label="W"
-          value={n.strokeWidth}
-          onChange={(strokeWidth) =>
-            engine.dispatch({ type: "patch", id: n.id, patch: { strokeWidth } })
-          }
-        />
-      </div>
-      {n.kind === "text" && (
-        <>
-          <div className="hr" />
-          <div className="h-row">
-            <h3>Typography</h3>
-          </div>
-          <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
+          <div className="search">
+            <Icon name="search" size={14} />
             <input
-              className="hex"
-              style={{
-                height: 32,
-                background: "var(--input)",
-                borderRadius: 6,
-                padding: "0 8px",
-                textTransform: "none",
-              }}
-              value={n.text}
-              onChange={(e) =>
-                engine.dispatch({ type: "patch", id: n.id, patch: { text: e.target.value } })
-              }
+              placeholder="Find…"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
             />
-            <Field label="S" value={n.fontSize} onChange={(v) => num("fontSize", v)} />
+          </div>
+          <div className="section-label">
+            <button className="twist" onClick={() => setPagesOpen((v) => !v)}>
+              <Icon name={pagesOpen ? "chevron" : "chevron-right"} size={12} />
+            </button>
+            Pages
+            <span className="grow" />
+            <button
+              className="icon-btn"
+              title="Add page"
+              onClick={() => engine.dispatch({ type: "addPage" })}
+            >
+              <Icon name="plus" size={14} />
+            </button>
+          </div>
+          {pagesOpen &&
+            snap.pages.map((p, i) => (
+              <div
+                key={p.id}
+                className={`row${i === snap.page ? " sel" : ""}`}
+                onClick={() => engine.dispatch({ type: "setPage", index: i })}
+              >
+                <Icon name="page" size={14} />
+                <span className="name">{p.name}</span>
+              </div>
+            ))}
+          <div className="section-label">
+            <Icon name="chevron" size={12} />
+            Layers
+          </div>
+          <div className="tree">
+            {root.children.map((n) => (
+              <LayerRow key={n.id} n={n} depth={0} sel={snap.selection} engine={engine} q={q} />
+            ))}
           </div>
         </>
       )}
-      <div className="hr" />
-      <div className="h-row">
-        <h3>Effects</h3>
-        <button className="plus">
-          <Icon name="plus" size={14} />
-        </button>
-      </div>
-      <div className="h-row">
-        <h3>Export</h3>
-        <button className="plus">
-          <Icon name="plus" size={14} />
-        </button>
-      </div>
-    </>
-  );
-}
-
-function Field({
-  label,
-  icon,
-  value,
-  onChange,
-}: {
-  label?: string;
-  icon?: string;
-  value: number;
-  onChange: (v: number) => void;
-}) {
-  return (
-    <div className="field">
-      {icon ? <Icon name={icon} size={14} /> : <label>{label}</label>}
-      <input
-        value={fmt(value)}
-        onChange={(e) => {
-          const v = parseFloat(e.target.value);
-          if (!Number.isNaN(v)) onChange(v);
-        }}
-      />
-    </div>
-  );
-}
-
-function ColorRow({
-  value,
-  opacity = 100,
-  onChange,
-  onOpacity,
-}: {
-  value: string;
-  opacity?: number;
-  onChange: (v: string) => void;
-  onOpacity?: (v: number) => void;
-}) {
-  const hex = value.length >= 7 ? value.slice(0, 7) : "#000000";
-  return (
-    <div className="color-row">
-      <label className="swatch" style={{ background: hex }}>
-        <input type="color" value={hex} onChange={(e) => onChange(e.target.value)} />
-      </label>
-      <input
-        className="hex"
-        value={hex.replace("#", "")}
-        onChange={(e) => onChange("#" + e.target.value.replace("#", ""))}
-      />
-      {onOpacity && (
-        <input
-          className="op"
-          value={`${opacity}%`}
-          onChange={(e) => {
-            const v = parseFloat(e.target.value);
-            if (!Number.isNaN(v)) onOpacity(v);
-          }}
-        />
+      {nav === "assets" && (
+        <>
+          <div className="search">
+            <Icon name="search" size={14} />
+            <input placeholder="Search assets…" />
+          </div>
+          <p className="empty">No published libraries</p>
+          <div className="assets-grid">
+            <div className="asset-card">Local</div>
+            <div className="asset-card">Libraries</div>
+          </div>
+        </>
       )}
-    </div>
+      {nav === "variables" && (
+        <>
+          <div className="h-row">
+            <h3 style={{ margin: 0, fontSize: 11, fontWeight: 500, padding: "8px 4px" }}>
+              Color Primitive
+            </h3>
+            <button className="plus">
+              <Icon name="plus" size={14} />
+            </button>
+          </div>
+          <p className="muted">Variables collections live here — same place as Figma’s Variables view.</p>
+        </>
+      )}
+      {nav === "tools" && (
+        <p className="muted">Plugins, widgets, and shaders. Open Actions (⌘K) to run a tool.</p>
+      )}
+      {nav === "agent" && (
+        <p className="muted">Figma agent. Describe a change and it edits the file.</p>
+      )}
+    </aside>
   );
-}
-
-function fmt(v: number) {
-  const r = Math.round(v);
-  return Math.abs(v - r) < 0.05 ? String(r) : v.toFixed(1);
 }
 
 type Group = {
@@ -475,11 +293,12 @@ const GROUPS: Group[] = [
     id: "shape",
     tools: [
       { id: "rect", label: "Rectangle", shortcut: "R" },
-      { id: "ellipse", label: "Ellipse", shortcut: "O" },
       { id: "line", label: "Line", shortcut: "L" },
       { id: "arrow", label: "Arrow", shortcut: "⇧L" },
+      { id: "ellipse", label: "Ellipse", shortcut: "O" },
       { id: "poly", label: "Polygon", shortcut: "" },
       { id: "star", label: "Star", shortcut: "" },
+      { id: "image", label: "Place image…", shortcut: "⇧I" },
     ],
   },
   {
@@ -487,19 +306,25 @@ const GROUPS: Group[] = [
     tools: [
       { id: "pen", label: "Pen", shortcut: "P" },
       { id: "pencil", label: "Pencil", shortcut: "⇧P" },
-      { id: "brush", label: "Brush", shortcut: "B" },
-      { id: "eraser", label: "Eraser", shortcut: "⇧E" },
+      { id: "brush", label: "Paint bucket", shortcut: "B" },
     ],
   },
   { id: "text", tools: [{ id: "text", label: "Text", shortcut: "T" }] },
   { id: "comment", tools: [{ id: "comment", label: "Comment", shortcut: "C" }] },
-  { id: "hand", tools: [{ id: "hand", label: "Hand", shortcut: "H" }] },
 ];
 
-export function Toolbar({ engine, snap }: { engine: Engine; snap: Snapshot }) {
+export function Toolbar({
+  engine,
+  snap,
+  onActions,
+}: {
+  engine: Engine;
+  snap: Snapshot;
+  onActions: () => void;
+}) {
   const [open, setOpen] = useState<string | null>(null);
-  const last = (g: Group) =>
-    g.tools.find((t) => t.id === snap.tool)?.id ?? g.tools[0].id;
+  const hold = useRef<number | null>(null);
+  const last = (g: Group) => g.tools.find((t) => t.id === snap.tool)?.id ?? g.tools[0].id;
 
   return (
     <div className="dock" role="toolbar" aria-label="Tools">
@@ -511,18 +336,29 @@ export function Toolbar({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           <div
             key={g.id}
             className={`tool${active ? " active" : ""}${open === g.id ? " open" : ""}`}
-            onMouseLeave={() => setOpen((o) => (o === g.id ? null : o))}
+            onMouseLeave={() => {
+              if (hold.current) window.clearTimeout(hold.current);
+              setOpen((o) => (o === g.id ? null : o));
+            }}
           >
             <button
               className="hit"
               title={g.tools.find((t) => t.id === current)?.label}
               onClick={() => engine.dispatch({ type: "setTool", tool: current })}
+              onPointerDown={() => {
+                if (!multi) return;
+                hold.current = window.setTimeout(() => setOpen(g.id), 280);
+              }}
+              onPointerUp={() => {
+                if (hold.current) window.clearTimeout(hold.current);
+              }}
               onContextMenu={(e) => {
                 e.preventDefault();
                 if (multi) setOpen(g.id);
               }}
             >
               <Icon name={TOOL_ICON[current]} size={16} />
+              {multi && <i className="caret" />}
             </button>
             {multi && (
               <div className="fly">
@@ -547,7 +383,26 @@ export function Toolbar({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       })}
       <div className="div" />
       <div className="tool">
-        <button className="hit" title="Actions">
+        <button className="hit" title="Resources">
+          <Icon name="resources" size={16} />
+        </button>
+      </div>
+      <div className={`tool${snap.rightTab === "inspect" ? " active" : ""}`}>
+        <button
+          className="hit"
+          title="Dev Mode"
+          onClick={() =>
+            engine.dispatch({
+              type: "setRightTab",
+              tab: snap.rightTab === "inspect" ? "design" : "inspect",
+            })
+          }
+        >
+          <Icon name="dev" size={16} />
+        </button>
+      </div>
+      <div className="tool">
+        <button className="hit" title="Actions" onClick={onActions}>
           <Icon name="search" size={16} />
         </button>
       </div>
@@ -555,31 +410,74 @@ export function Toolbar({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   );
 }
 
-export function ZoomBar({ engine, snap }: { engine: Engine; snap: Snapshot }) {
+export function Actions({
+  engine,
+  onClose,
+  onHide,
+}: {
+  engine: Engine;
+  onClose: () => void;
+  onHide: () => void;
+}) {
+  const [q, setQ] = useState("");
+  const items = [
+    { label: "Undo", sc: "⌘Z", run: () => engine.dispatch({ type: "undo" }) },
+    { label: "Redo", sc: "⇧⌘Z", run: () => engine.dispatch({ type: "redo" }) },
+    { label: "Duplicate", sc: "⌘D", run: () => engine.dispatch({ type: "duplicate" }) },
+    { label: "Delete", sc: "⌫", run: () => engine.dispatch({ type: "delete" }) },
+    { label: "Hide UI", sc: "⌘\\", run: onHide },
+    { label: "Zoom to 100%", sc: "⇧0", run: () => engine.dispatch({ type: "setZoom", zoom: 1 }) },
+    { label: "Zoom to fit", sc: "⇧1", run: () => engine.dispatch({ type: "setZoom", zoom: 0.5 }) },
+  ].filter((i) => i.label.toLowerCase().includes(q.toLowerCase()));
   return (
-    <div className="zoom-bar">
-      <button
-        title="Zoom out"
-        onClick={() => engine.dispatch({ type: "setZoom", zoom: snap.zoom / 1.2 })}
-      >
-        <Icon name="zoom-out" size={14} />
-      </button>
-      <span>{Math.round(snap.zoom * 100)}%</span>
-      <button
-        title="Zoom in"
-        onClick={() => engine.dispatch({ type: "setZoom", zoom: snap.zoom * 1.2 })}
-      >
-        <Icon name="zoom-in" size={14} />
-      </button>
+    <div className="actions">
+      <input
+        autoFocus
+        placeholder="Type a command or search…"
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") onClose();
+          if (e.key === "Enter" && items[0]) {
+            items[0].run();
+            onClose();
+          }
+        }}
+      />
+      {items.map((i) => (
+        <button
+          key={i.label}
+          onClick={() => {
+            i.run();
+            onClose();
+          }}
+        >
+          {i.label}
+          <span className="sc">{i.sc}</span>
+        </button>
+      ))}
     </div>
   );
 }
 
-export function bindHotkeys(engine: Engine) {
+export function bindHotkeys(
+  engine: Engine,
+  extra: { onActions: () => void; onHide: () => void },
+) {
   const onKey = (e: KeyboardEvent) => {
     const t = e.target as HTMLElement;
     if (t.tagName === "INPUT" || t.tagName === "TEXTAREA") return;
     const meta = e.metaKey || e.ctrlKey;
+    if (meta && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      extra.onActions();
+      return;
+    }
+    if (meta && e.key === "\\") {
+      e.preventDefault();
+      extra.onHide();
+      return;
+    }
     if (meta && e.key.toLowerCase() === "z") {
       e.preventDefault();
       engine.dispatch({ type: e.shiftKey ? "redo" : "undo" });
@@ -613,6 +511,7 @@ export function bindHotkeys(engine: Engine) {
       b: "brush",
       c: "comment",
       s: "slice",
+      i: "image",
     };
     if (!meta && map[e.key.toLowerCase()]) {
       engine.dispatch({ type: "setTool", tool: map[e.key.toLowerCase()] });
@@ -625,4 +524,39 @@ export function bindHotkeys(engine: Engine) {
   };
   window.addEventListener("keydown", onKey);
   return () => window.removeEventListener("keydown", onKey);
+}
+
+export function usePanelDrag(
+  width: number,
+  set: (n: number) => void,
+  min: number,
+  max: number,
+  invert = false,
+) {
+  const start = useRef<{ x: number; w: number } | null>(null);
+  const wref = useRef(width);
+  wref.current = width;
+  return {
+    onPointerDown: (e: React.PointerEvent) => {
+      start.current = { x: e.clientX, w: wref.current };
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    },
+    onPointerMove: (e: React.PointerEvent) => {
+      if (!start.current) return;
+      const dx = e.clientX - start.current.x;
+      const next = invert ? start.current.w - dx : start.current.w + dx;
+      set(Math.min(max, Math.max(min, next)));
+    },
+    onPointerUp: () => {
+      start.current = null;
+    },
+  };
+}
+
+export function HelpBtn() {
+  return (
+    <button className="help" title="Help">
+      <Icon name="help" size={14} />
+    </button>
+  );
 }

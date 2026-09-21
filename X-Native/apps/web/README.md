@@ -19,7 +19,7 @@ undo, auto layout, and (later) canvas raster stay in Rust.
 | GPU canvas, export | `crates/x-render`, `x_native_app` | untouched |
 | Command API | `apps/web/src/engine/types.ts` | this package |
 | In-memory engine (dev) | `apps/web/src/engine/memory.ts` | this package |
-| Designer chrome | React (this package) | Graphite tokens from `tools/design-sheet` |
+| Designer chrome | React (this package) | Figma UI3 light |
 
 When `wasm-bindgen` is available, `MemoryEngine` is replaced by a WASM
 `x-editor` that implements the same `Engine.dispatch(Command)` interface.

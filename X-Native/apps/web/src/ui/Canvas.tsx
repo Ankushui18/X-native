@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Engine, NodeKind, Snapshot, Tool, XNode } from "../engine/types";
 import { hitTest, worldPos } from "../engine/memory";
 
@@ -11,35 +11,50 @@ const CREATE: Tool[] = [
   "arrow",
   "poly",
   "star",
+  "image",
 ];
 
 function kindOf(t: Tool): NodeKind | null {
   if (t === "slice" || t === "pen" || t === "pencil" || t === "brush") return "rect";
+  if (t === "image") return "rect";
   if (CREATE.includes(t)) return t as NodeKind;
   return null;
 }
 
+type Drag =
+  | {
+      mode: "pan" | "move" | "create" | "resize" | "marquee" | "rotate";
+      sx: number;
+      sy: number;
+      wx: number;
+      wy: number;
+      orig?: { x: number; y: number; w: number; h: number; rotation: number };
+      corner?: number;
+      id?: string;
+    };
+
 export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const wrap = useRef<HTMLDivElement>(null);
-  const drag = useRef<
-    | {
-        mode: "pan" | "move" | "create" | "resize" | "marquee";
-        sx: number;
-        sy: number;
-        wx: number;
-        wy: number;
-        orig?: { x: number; y: number; w: number; h: number };
-        corner?: number;
-        id?: string;
-      }
-    | null
-  >(null);
+  const drag = useRef<Drag | null>(null);
   const space = useRef(false);
+  const imgs = useRef(new Map<string, HTMLImageElement>());
+  const [band, setBand] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [edit, setEdit] = useState<{ id: string; text: string } | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const pendingImage = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.code === "Space") space.current = e.type === "keydown";
+      if (e.type === "keydown" && e.key === "Enter" && !edit) {
+        const t = e.target as HTMLElement;
+        if (t.tagName === "INPUT" || t.tagName === "TEXTAREA") return;
+        const root = snap.pages[snap.page].root;
+        const id = snap.selection[0];
+        const n = id ? worldPos(root, id)?.node : null;
+        if (n?.kind === "text") setEdit({ id: n.id, text: n.text });
+      }
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("keyup", onKey);
@@ -47,7 +62,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKey);
     };
-  }, []);
+  }, [snap, edit]);
 
   useEffect(() => {
     const c = ref.current;
@@ -63,11 +78,10 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = "#e5e5e5";
     ctx.fillRect(0, 0, w, h);
-    // Figma's faint pixel grid at ≥100%
-    if (snap.zoom >= 1) {
-      ctx.strokeStyle = "rgba(0,0,0,0.04)";
+    if (snap.zoom >= 2) {
+      ctx.strokeStyle = "rgba(0,0,0,0.06)";
       ctx.lineWidth = 1;
-      const step = 8 * snap.zoom;
+      const step = snap.zoom;
       ctx.beginPath();
       for (let x = snap.panX % step; x < w; x += step) {
         ctx.moveTo(x + 0.5, 0);
@@ -116,7 +130,22 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       } else {
         round();
       }
-      if (n.fill && n.fill !== "#00000000" && n.kind !== "line" && n.kind !== "arrow") {
+      if (n.imageSrc) {
+        let im = imgs.current.get(n.imageSrc);
+        if (!im) {
+          im = new Image();
+          im.src = n.imageSrc;
+          im.onload = () => engine.dispatch({ type: "select", ids: snap.selection });
+          imgs.current.set(n.imageSrc, im);
+        }
+        if (im.complete && im.naturalWidth) {
+          round();
+          ctx.save();
+          ctx.clip();
+          ctx.drawImage(im, sx, sy, sw, sh);
+          ctx.restore();
+        }
+      } else if (n.fill && n.fill !== "#00000000" && n.kind !== "line" && n.kind !== "arrow") {
         ctx.fillStyle = n.fill;
         ctx.fill();
       }
@@ -125,11 +154,32 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         ctx.lineWidth = Math.max(1, n.strokeWidth * z);
         ctx.stroke();
       }
-      if (n.kind === "text") {
+      if (n.kind === "text" && edit?.id !== n.id) {
         ctx.fillStyle = n.fill;
-        ctx.font = `${n.fontWeight} ${Math.max(8, n.fontSize * z)}px Inter, system-ui`;
-        ctx.textBaseline = "top";
-        ctx.fillText(n.text || "Text", sx, sy);
+        const size = Math.max(8, n.fontSize * z);
+        ctx.font = `${n.fontWeight} ${size}px ${n.fontFamily}, Inter, system-ui`;
+        ctx.textBaseline = n.textAlignVertical === "middle" ? "middle" : n.textAlignVertical === "bottom" ? "bottom" : "top";
+        ctx.textAlign = n.textAlign === "center" ? "center" : n.textAlign === "right" ? "right" : "left";
+        const tx = n.textAlign === "center" ? sx + sw / 2 : n.textAlign === "right" ? sx + sw : sx;
+        const ty = n.textAlignVertical === "middle" ? sy + sh / 2 : n.textAlignVertical === "bottom" ? sy + sh : sy;
+        let content = n.text || "Type something";
+        if (n.textCase === "upper") content = content.toUpperCase();
+        if (n.textCase === "lower") content = content.toLowerCase();
+        if (n.truncate) {
+          const lines = content.split("\n").slice(0, n.maxLines || 1);
+          content = lines.join("\n");
+        }
+        ctx.fillText(content, tx, ty, sw);
+        if (n.textDecoration === "underline" || n.textDecoration === "strikethrough") {
+          const m = ctx.measureText(content);
+          ctx.beginPath();
+          const yy = n.textDecoration === "underline" ? ty + size : ty + size / 2;
+          ctx.moveTo(tx, yy);
+          ctx.lineTo(tx + m.width, yy);
+          ctx.strokeStyle = n.fill;
+          ctx.lineWidth = Math.max(1, z);
+          ctx.stroke();
+        }
       }
       if (n.kind === "frame" && n.overflow !== "visible") {
         round();
@@ -140,7 +190,6 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     };
     for (const ch of root.children) paint(ch, 0, 0);
 
-    // frame names
     ctx.font = "500 11px Inter, system-ui";
     ctx.fillStyle = "rgba(0,0,0,0.45)";
     const label = (n: XNode, px: number, py: number) => {
@@ -154,28 +203,43 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     for (const ch of root.children) label(ch, 0, 0);
 
     for (const id of snap.selection) {
+      if (edit?.id === id) continue;
       const wp = worldPos(root, id);
       if (!wp) continue;
       const sx = snap.panX + wp.x * z;
       const sy = snap.panY + wp.y * z;
       const sw = wp.node.w * z;
       const sh = wp.node.h * z;
-      ctx.strokeStyle = "#7c5cfc";
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(sx, sy, sw, sh);
-      const hs = [
-        [sx, sy],
-        [sx + sw, sy],
-        [sx, sy + sh],
-        [sx + sw, sy + sh],
-      ];
+      ctx.strokeStyle = "#0d99ff";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(sx + 0.5, sy + 0.5, sw, sh);
+      const hs = handles(sx, sy, sw, sh);
       for (const [hx, hy] of hs) {
         ctx.fillStyle = "#ffffff";
-        ctx.fillRect(hx - 3.5, hy - 3.5, 7, 7);
-        ctx.strokeRect(hx - 3.5, hy - 3.5, 7, 7);
+        ctx.strokeStyle = "#0d99ff";
+        ctx.lineWidth = 1;
+        ctx.fillRect(hx - 3, hy - 3, 6, 6);
+        ctx.strokeRect(hx - 3, hy - 3, 6, 6);
       }
+      ctx.beginPath();
+      ctx.moveTo(sx + sw / 2, sy);
+      ctx.lineTo(sx + sw / 2, sy - 16);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(sx + sw / 2, sy - 20, 4, 0, Math.PI * 2);
+      ctx.fillStyle = "#fff";
+      ctx.fill();
+      ctx.stroke();
     }
-  }, [snap]);
+
+    if (band) {
+      ctx.fillStyle = "rgba(13,153,255,0.12)";
+      ctx.strokeStyle = "#0d99ff";
+      ctx.lineWidth = 1;
+      ctx.fillRect(band.x, band.y, band.w, band.h);
+      ctx.strokeRect(band.x + 0.5, band.y + 0.5, band.w, band.h);
+    }
+  }, [snap, band, edit, engine]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();
@@ -186,14 +250,20 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   };
 
   const onDown = (e: React.MouseEvent) => {
+    if (edit) return;
     if (e.button === 1 || snap.tool === "hand" || space.current) {
       drag.current = { mode: "pan", sx: e.clientX, sy: e.clientY, wx: 0, wy: 0 };
       return;
     }
     const wpt = toWorld(e.clientX, e.clientY);
     const root = snap.pages[snap.page].root;
+    if (snap.tool === "image") {
+      pendingImage.current = { x: wpt.x, y: wpt.y };
+      fileRef.current?.click();
+      return;
+    }
     const create = kindOf(snap.tool);
-    if (create) {
+    if (create && snap.tool !== "select") {
       drag.current = {
         mode: "create",
         sx: e.clientX,
@@ -203,7 +273,6 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       };
       return;
     }
-    // resize handles
     if (snap.selection.length === 1) {
       const wp = worldPos(root, snap.selection[0]);
       if (wp) {
@@ -213,13 +282,20 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         const r = wrap.current!.getBoundingClientRect();
         const px = e.clientX - r.left;
         const py = e.clientY - r.top;
-        const hs = [
-          [sx, sy],
-          [sx + wp.node.w * z, sy],
-          [sx, sy + wp.node.h * z],
-          [sx + wp.node.w * z, sy + wp.node.h * z],
-        ];
-        for (let i = 0; i < 4; i++) {
+        if (Math.hypot(px - (sx + (wp.node.w * z) / 2), py - (sy - 20)) < 8) {
+          drag.current = {
+            mode: "rotate",
+            sx: e.clientX,
+            sy: e.clientY,
+            wx: wpt.x,
+            wy: wpt.y,
+            orig: { x: wp.x, y: wp.y, w: wp.node.w, h: wp.node.h, rotation: wp.node.rotation },
+            id: wp.node.id,
+          };
+          return;
+        }
+        const hs = handles(sx, sy, wp.node.w * z, wp.node.h * z);
+        for (let i = 0; i < hs.length; i++) {
           if (Math.hypot(px - hs[i][0], py - hs[i][1]) < 8) {
             drag.current = {
               mode: "resize",
@@ -227,10 +303,11 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
               sy: e.clientY,
               wx: wpt.x,
               wy: wpt.y,
-              orig: { x: wp.x, y: wp.y, w: wp.node.w, h: wp.node.h },
+              orig: { x: wp.node.x, y: wp.node.y, w: wp.node.w, h: wp.node.h, rotation: wp.node.rotation },
               corner: i,
               id: wp.node.id,
             };
+            engine.dispatch({ type: "begin" });
             return;
           }
         }
@@ -261,6 +338,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const onMove = (e: React.MouseEvent) => {
     const d = drag.current;
     if (!d) return;
+    const box = wrap.current!.getBoundingClientRect();
     if (d.mode === "pan") {
       engine.dispatch({ type: "pan", dx: e.clientX - d.sx, dy: e.clientY - d.sy });
       d.sx = e.clientX;
@@ -273,13 +351,31 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         d.sx = e.clientX;
         d.sy = e.clientY;
       }
+    } else if (d.mode === "create" || d.mode === "marquee") {
+      const x = Math.min(d.sx, e.clientX) - box.left;
+      const y = Math.min(d.sy, e.clientY) - box.top;
+      setBand({ x, y, w: Math.abs(e.clientX - d.sx), h: Math.abs(e.clientY - d.sy) });
+    } else if (d.mode === "resize" && d.orig && d.id != null && d.corner != null) {
+      const b = toWorld(e.clientX, e.clientY);
+      const next = resizeFrom(d.orig, d.corner, b.x, b.y);
+      engine.dispatch({ type: "resize", id: d.id, ...next });
+    } else if (d.mode === "rotate" && d.orig && d.id) {
+      const wp = worldPos(snap.pages[snap.page].root, d.id);
+      if (!wp) return;
+      const cx = wp.x + wp.node.w / 2;
+      const cy = wp.y + wp.node.h / 2;
+      const b = toWorld(e.clientX, e.clientY);
+      const ang = (Math.atan2(b.y - cy, b.x - cx) * 180) / Math.PI + 90;
+      engine.dispatch({ type: "patch", id: d.id, patch: { rotation: Math.round(ang) } });
     }
   };
 
   const onUp = (e: React.MouseEvent) => {
     const d = drag.current;
     drag.current = null;
+    setBand(null);
     if (!d) return;
+    if (d.mode === "move" || d.mode === "resize") engine.dispatch({ type: "end" });
     if (d.mode === "create") {
       const a = toWorld(d.sx, d.sy);
       const b = toWorld(e.clientX, e.clientY);
@@ -298,35 +394,24 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       }
       engine.dispatch({ type: "add", kind: k, x, y, w, h });
     }
-    if (d.mode === "resize" && d.orig && d.id != null && d.corner != null) {
+    if (d.mode === "marquee") {
+      const a = toWorld(d.sx, d.sy);
       const b = toWorld(e.clientX, e.clientY);
-      const o = d.orig;
-      let { x, y, w, h } = o;
-      if (d.corner === 0) {
-        w = o.x + o.w - b.x;
-        h = o.y + o.h - b.y;
-        x = b.x;
-        y = b.y;
-      } else if (d.corner === 1) {
-        w = b.x - o.x;
-        h = o.y + o.h - b.y;
-        y = b.y;
-      } else if (d.corner === 2) {
-        w = o.x + o.w - b.x;
-        h = b.y - o.y;
-        x = b.x;
-      } else {
-        w = b.x - o.x;
-        h = b.y - o.y;
-      }
-      engine.dispatch({
-        type: "resize",
-        id: d.id,
-        x,
-        y,
-        w: Math.max(1, w),
-        h: Math.max(1, h),
-      });
+      const x0 = Math.min(a.x, b.x);
+      const y0 = Math.min(a.y, b.y);
+      const x1 = Math.max(a.x, b.x);
+      const y1 = Math.max(a.y, b.y);
+      const ids: string[] = [];
+      const visit = (n: XNode, px: number, py: number) => {
+        const x = px + n.x;
+        const y = py + n.y;
+        if (n !== snap.pages[snap.page].root) {
+          if (x >= x0 && y >= y0 && x + n.w <= x1 && y + n.h <= y1) ids.push(n.id);
+        }
+        for (const c of n.children) visit(c, x, y);
+      };
+      visit(snap.pages[snap.page].root, 0, 0);
+      engine.dispatch({ type: "select", ids });
     }
   };
 
@@ -340,12 +425,66 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     }
   };
 
+  const onDbl = (e: React.MouseEvent) => {
+    const wpt = toWorld(e.clientX, e.clientY);
+    const hit = hitTest(snap.pages[snap.page].root, wpt.x, wpt.y);
+    if (hit?.kind === "text") setEdit({ id: hit.id, text: hit.text });
+  };
+
+  const placeFiles = (files: FileList | File[], at?: { x: number; y: number }) => {
+    const list = Array.from(files).filter((f) => f.type.startsWith("image/"));
+    let ox = at?.x ?? 80;
+    let oy = at?.y ?? 80;
+    list.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const src = String(reader.result);
+        const im = new Image();
+        im.onload = () => {
+          const w = im.naturalWidth;
+          const h = im.naturalHeight;
+          const max = 480;
+          const s = Math.min(1, max / Math.max(w, h));
+          engine.dispatch({
+            type: "add",
+            kind: "rect",
+            x: ox,
+            y: oy,
+            w: Math.max(8, w * s),
+            h: Math.max(8, h * s),
+            extra: { imageSrc: src, name: file.name.replace(/\.[^.]+$/, ""), fill: "#00000000" },
+          });
+          ox += 24;
+          oy += 24;
+        };
+        im.src = src;
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
   const cursor =
     snap.tool === "hand" || space.current
       ? "grab"
       : CREATE.includes(snap.tool)
         ? "crosshair"
         : "default";
+
+  const editBox = (() => {
+    if (!edit) return null;
+    const wp = worldPos(snap.pages[snap.page].root, edit.id);
+    if (!wp) return null;
+    return {
+      left: snap.panX + wp.x * snap.zoom,
+      top: snap.panY + wp.y * snap.zoom,
+      width: wp.node.w * snap.zoom,
+      height: wp.node.h * snap.zoom,
+      fontSize: wp.node.fontSize * snap.zoom,
+      fontWeight: wp.node.fontWeight,
+      color: wp.node.fill,
+      fontFamily: wp.node.fontFamily,
+    };
+  })();
 
   return (
     <div
@@ -356,11 +495,96 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       onMouseMove={onMove}
       onMouseUp={onUp}
       onMouseLeave={onUp}
+      onDoubleClick={onDbl}
       onWheel={onWheel}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        const wpt = toWorld(e.clientX, e.clientY);
+        if (e.dataTransfer.files?.length) placeFiles(e.dataTransfer.files, wpt);
+      }}
     >
       <canvas ref={ref} />
+      {edit && editBox && (
+        <textarea
+          className="text-edit"
+          style={editBox}
+          value={edit.text}
+          autoFocus
+          onChange={(e) => setEdit({ ...edit, text: e.target.value })}
+          onBlur={() => {
+            engine.dispatch({ type: "patch", id: edit.id, patch: { text: edit.text } });
+            setEdit(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") (e.target as HTMLTextAreaElement).blur();
+            e.stopPropagation();
+          }}
+        />
+      )}
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/png,image/jpeg,image/gif,image/webp,image/*"
+        hidden
+        onChange={(e) => {
+          if (e.target.files) placeFiles(e.target.files, pendingImage.current ?? undefined);
+          e.target.value = "";
+        }}
+      />
     </div>
   );
+}
+
+function handles(sx: number, sy: number, sw: number, sh: number): [number, number][] {
+  return [
+    [sx, sy],
+    [sx + sw / 2, sy],
+    [sx + sw, sy],
+    [sx + sw, sy + sh / 2],
+    [sx + sw, sy + sh],
+    [sx + sw / 2, sy + sh],
+    [sx, sy + sh],
+    [sx, sy + sh / 2],
+  ];
+}
+
+function resizeFrom(
+  o: { x: number; y: number; w: number; h: number },
+  corner: number,
+  bx: number,
+  by: number,
+) {
+  let { x, y, w, h } = o;
+  const right = o.x + o.w;
+  const bottom = o.y + o.h;
+  // 0 nw, 1 n, 2 ne, 3 e, 4 se, 5 s, 6 sw, 7 w
+  if (corner === 0 || corner === 1 || corner === 2) {
+    y = by;
+    h = bottom - by;
+  }
+  if (corner === 4 || corner === 5 || corner === 6) {
+    h = by - o.y;
+  }
+  if (corner === 0 || corner === 6 || corner === 7) {
+    x = bx;
+    w = right - bx;
+  }
+  if (corner === 2 || corner === 3 || corner === 4) {
+    w = bx - o.x;
+  }
+  if (w < 1) {
+    x += w - 1;
+    w = 1;
+  }
+  if (h < 1) {
+    y += h - 1;
+    h = 1;
+  }
+  return { x, y, w, h };
 }
 
 function starPath(

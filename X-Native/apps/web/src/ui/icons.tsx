@@ -220,13 +220,12 @@ export function Icon({
           <path d="M5 3.4v9.2L13 8z" />
         </svg>
       );
-    case "share":
+    case "more":
       return (
-        <svg {...p}>
-          <circle cx="4.2" cy="8" r="1.6" />
-          <circle cx="11.4" cy="4.2" r="1.6" />
-          <circle cx="11.4" cy="11.8" r="1.6" />
-          <path d="M5.6 7.3l4.2-2.4M5.6 8.7l4.2 2.4" />
+        <svg {...p} fill="currentColor" stroke="none">
+          <circle cx="3.5" cy="8" r="1.15" />
+          <circle cx="8" cy="8" r="1.15" />
+          <circle cx="12.5" cy="8" r="1.15" />
         </svg>
       );
     case "rotate":
@@ -278,6 +277,18 @@ export function Icon({
           <path d="M3.2 13.5h9.6M5.2 2.5v8M10.8 5v5.5" />
         </svg>
       );
+    case "distribute-h":
+      return (
+        <svg {...p}>
+          <path d="M2.5 3.2v9.6M13.5 3.2v9.6M6 5.5h4v5H6z" />
+        </svg>
+      );
+    case "distribute-v":
+      return (
+        <svg {...p}>
+          <path d="M3.2 2.5h9.6M3.2 13.5h9.6M5.5 6h5v4h-5z" />
+        </svg>
+      );
     case "layout-h":
       return (
         <svg {...p}>
@@ -294,11 +305,72 @@ export function Icon({
           <rect x="4.2" y="10.2" width="7.6" height="4" rx="0.8" />
         </svg>
       );
+    case "layout-none":
+      return (
+        <svg {...p}>
+          <rect x="2.4" y="2.4" width="4.6" height="4.6" rx="0.8" />
+          <rect x="9" y="2.4" width="4.6" height="4.6" rx="0.8" />
+          <rect x="2.4" y="9" width="4.6" height="4.6" rx="0.8" />
+          <rect x="9" y="9" width="4.6" height="4.6" rx="0.8" />
+        </svg>
+      );
+    case "layout-grid":
+      return (
+        <svg {...p}>
+          <rect x="2.4" y="2.4" width="4.4" height="4.4" rx="0.6" />
+          <rect x="9.2" y="2.4" width="4.4" height="4.4" rx="0.6" />
+          <rect x="2.4" y="9.2" width="4.4" height="4.4" rx="0.6" />
+          <rect x="9.2" y="9.2" width="4.4" height="4.4" rx="0.6" />
+        </svg>
+      );
     case "clip":
       return (
         <svg {...p}>
           <rect x="3" y="3" width="10" height="10" rx="1.2" />
-          <path d="M6.2 8.8l1.6 1.6 2.4-3.4" />
+        </svg>
+      );
+    case "constraints":
+      return (
+        <svg {...p}>
+          <rect x="3.2" y="3.2" width="9.6" height="9.6" rx="1" />
+          <path d="M8 3.2v9.6M3.2 8h9.6" />
+        </svg>
+      );
+    case "flip-h":
+      return (
+        <svg {...p}>
+          <path d="M8 2.4v11.2M3.4 11.6L6.6 8 3.4 4.4zM12.6 11.6L9.4 8l3.2-3.6z" />
+        </svg>
+      );
+    case "flip-v":
+      return (
+        <svg {...p}>
+          <path d="M2.4 8h11.2M11.6 3.4L8 6.6 4.4 3.4zM11.6 12.6L8 9.4l-3.6 3.2z" />
+        </svg>
+      );
+    case "independent":
+      return (
+        <svg {...p}>
+          <path d="M4.2 8.8V5.2A1.2 1.2 0 015.4 4h3.6M11.8 7.2v3.6A1.2 1.2 0 0110.6 12H7" />
+        </svg>
+      );
+    case "padding":
+      return (
+        <svg {...p}>
+          <rect x="2.6" y="2.6" width="10.8" height="10.8" rx="1" />
+          <rect x="5.2" y="5.2" width="5.6" height="5.6" rx="0.6" />
+        </svg>
+      );
+    case "gap":
+      return (
+        <svg {...p}>
+          <path d="M3 4.2h4.4v7.6H3zM8.6 4.2H13v7.6H8.6z" />
+        </svg>
+      );
+    case "hug":
+      return (
+        <svg {...p}>
+          <path d="M4.2 3.4h7.6M4.2 12.6h7.6M6.2 6.2h3.6v3.6H6.2z" />
         </svg>
       );
     case "effects":
@@ -309,9 +381,17 @@ export function Icon({
         </svg>
       );
     case "code":
+    case "dev":
       return (
         <svg {...p}>
-          <path d="M5.4 4.6L2.4 8l3 3.4M10.6 4.6l3 3.4-3 3.4M9 3.4L7 12.6" />
+          <path d="M5.4 4.6L2.4 8l3 3.4M10.6 4.6l3 3.4-3 3.4" />
+        </svg>
+      );
+    case "resources":
+      return (
+        <svg {...p}>
+          <path d="M8 2.4l3.2 3.2L8 8.8 4.8 5.6z" />
+          <path d="M8 8.8l3.2 3.2-1.4 1.4-3.2-3.2zM4.8 5.6L2.4 8l1.4 1.4 3.2-3.2z" />
         </svg>
       );
     case "proto":
@@ -342,17 +422,139 @@ export function Icon({
           <rect x="2.6" y="2.6" width="10.8" height="10.8" rx="1" />
         </svg>
       );
-    case "menu":
+    case "layers":
       return (
         <svg {...p}>
-          <path d="M2.8 4.2h10.4M2.8 8h10.4M2.8 11.8h10.4" />
+          <path d="M2.6 6.2L8 3.4l5.4 2.8L8 9z" />
+          <path d="M2.6 8.8L8 11.6l5.4-2.8" />
         </svg>
       );
-    case "settings":
+    case "vars":
       return (
         <svg {...p}>
-          <circle cx="8" cy="8" r="2.1" />
-          <path d="M8 2.2v1.6M8 12.2v1.6M2.2 8h1.6M12.2 8h1.6M4 4l1.1 1.1M10.9 10.9L12 12M12 4l-1.1 1.1M5.1 10.9L4 12" />
+          <rect x="2.6" y="2.6" width="4.6" height="4.6" rx="1" />
+          <rect x="8.8" y="2.6" width="4.6" height="4.6" rx="1" />
+          <rect x="2.6" y="8.8" width="4.6" height="4.6" rx="1" />
+          <rect x="8.8" y="8.8" width="4.6" height="4.6" rx="1" />
+        </svg>
+      );
+    case "tools":
+      return (
+        <svg {...p}>
+          <rect x="2.6" y="2.6" width="4.8" height="4.8" rx="1.2" />
+          <rect x="8.6" y="2.6" width="4.8" height="4.8" rx="1.2" />
+          <rect x="2.6" y="8.6" width="4.8" height="4.8" rx="1.2" />
+          <path d="M10.2 10.2h4.2M12.3 8.1v4.2" />
+        </svg>
+      );
+    case "agent":
+      return (
+        <svg {...p}>
+          <path d="M8 2.2l1.1 3.2H12.6L9.8 7.4l1.1 3.2L8 8.6l-2.9 2-1.1-3.2L1.4 5.4h3.5z" />
+        </svg>
+      );
+    case "minimize":
+      return (
+        <svg {...p}>
+          <path d="M3.2 8h9.6M6.2 4.6L3.2 8l3 3.4M9.8 4.6l3 3.4-3 3.4" />
+        </svg>
+      );
+    case "type-settings":
+      return (
+        <svg {...p}>
+          <path d="M3.2 4.2h9.6M8 4.2v7.6M4.6 12.4h6.8" />
+          <circle cx="12.2" cy="11.6" r="1.6" />
+        </svg>
+      );
+    case "align-text-left":
+      return (
+        <svg {...p}>
+          <path d="M3 4.2h10M3 8h7M3 11.8h10" />
+        </svg>
+      );
+    case "align-text-center":
+      return (
+        <svg {...p}>
+          <path d="M3 4.2h10M4.5 8h7M3 11.8h10" />
+        </svg>
+      );
+    case "align-text-right":
+      return (
+        <svg {...p}>
+          <path d="M3 4.2h10M6 8h7M3 11.8h10" />
+        </svg>
+      );
+    case "align-text-justified":
+      return (
+        <svg {...p}>
+          <path d="M3 4.2h10M3 8h10M3 11.8h10" />
+        </svg>
+      );
+    case "valign-top":
+      return (
+        <svg {...p}>
+          <path d="M3 3.4h10M5 6.2h6v6H5z" />
+        </svg>
+      );
+    case "valign-middle":
+      return (
+        <svg {...p}>
+          <path d="M3 8h10M5 4.4h6v7.2H5z" />
+        </svg>
+      );
+    case "valign-bottom":
+      return (
+        <svg {...p}>
+          <path d="M3 12.6h10M5 3.8h6v6H5z" />
+        </svg>
+      );
+    case "underline":
+      return (
+        <svg {...p}>
+          <path d="M4.2 3.4v5.2a3.8 3.8 0 007.6 0V3.4M3.4 13h9.2" />
+        </svg>
+      );
+    case "strike":
+      return (
+        <svg {...p}>
+          <path d="M3 8h10M5.2 5.2c.4-1.4 1.6-2 2.8-2s2.4.8 2.8 2M5.2 10.8c.5 1.4 1.7 2.2 3 2.2s2.4-.8 2.8-2" />
+        </svg>
+      );
+    case "list":
+      return (
+        <svg {...p}>
+          <path d="M6.4 4.2h6.6M6.4 8h6.6M6.4 11.8h6.6" />
+          <circle cx="3.6" cy="4.2" r="0.9" fill="currentColor" />
+          <circle cx="3.6" cy="8" r="0.9" fill="currentColor" />
+          <circle cx="3.6" cy="11.8" r="0.9" fill="currentColor" />
+        </svg>
+      );
+    case "stroke-inside":
+      return (
+        <svg {...p}>
+          <rect x="3" y="3" width="10" height="10" rx="1" />
+          <rect x="5.2" y="5.2" width="5.6" height="5.6" rx="0.4" />
+        </svg>
+      );
+    case "stroke-center":
+      return (
+        <svg {...p}>
+          <rect x="3" y="3" width="10" height="10" rx="1" />
+        </svg>
+      );
+    case "stroke-outside":
+      return (
+        <svg {...p}>
+          <rect x="4.4" y="4.4" width="7.2" height="7.2" rx="0.6" />
+          <rect x="2.4" y="2.4" width="11.2" height="11.2" rx="1.2" strokeDasharray="2 1.5" />
+        </svg>
+      );
+    case "help":
+      return (
+        <svg {...p}>
+          <circle cx="8" cy="8" r="5.4" />
+          <path d="M6.4 6.2a1.6 1.6 0 012.8 1.1c0 1.1-1.6 1.4-1.6 2.4" />
+          <circle cx="8" cy="11.4" r="0.6" fill="currentColor" stroke="none" />
         </svg>
       );
     case "zoom-in":
@@ -400,6 +602,7 @@ export const TOOL_ICON: Record<Tool, string> = {
   arrow: "arrow",
   poly: "poly",
   star: "star",
+  image: "image",
   pen: "pen",
   pencil: "pencil",
   brush: "brush",
@@ -408,7 +611,8 @@ export const TOOL_ICON: Record<Tool, string> = {
   hand: "hand",
 };
 
-export function kindIcon(k: string): string {
+export function kindIcon(k: string, imageSrc?: string): string {
+  if (imageSrc) return "image";
   switch (k) {
     case "frame":
       return "frame";
