@@ -521,6 +521,7 @@ export function Actions({
     { label: "Subtract", sc: "⌥⇧S", run: () => engine.dispatch({ type: "boolean", op: "subtract" }) },
     { label: "Intersect", sc: "⌥⇧I", run: () => engine.dispatch({ type: "boolean", op: "intersect" }) },
     { label: "Exclude", sc: "⌥⇧E", run: () => engine.dispatch({ type: "boolean", op: "exclude" }) },
+    { label: "Flatten", sc: "⌘E", run: () => engine.dispatch({ type: "flatten" }) },
     { label: "Flip horizontal", sc: "⇧H", run: () => engine.dispatch({ type: "flip", axis: "h" }) },
     { label: "Flip vertical", sc: "⇧V", run: () => engine.dispatch({ type: "flip", axis: "v" }) },
     { label: "Zoom to 100%", sc: "⇧0", run: () => engine.dispatch({ type: "setZoom", zoom: 1 }) },
@@ -707,6 +708,23 @@ export function bindHotkeys(
       engine.dispatch({ type: "setTool", tool: "select" });
       return;
     }
+    if (e.altKey && e.shiftKey && !meta) {
+      const op =
+        e.key.toLowerCase() === "u"
+          ? "union"
+          : e.key.toLowerCase() === "s"
+            ? "subtract"
+            : e.key.toLowerCase() === "i"
+              ? "intersect"
+              : e.key.toLowerCase() === "e"
+                ? "exclude"
+                : null;
+      if (op) {
+        e.preventDefault();
+        engine.dispatch({ type: "boolean", op });
+        return;
+      }
+    }
     if (meta && e.altKey && e.key.toLowerCase() === "u") {
       e.preventDefault();
       engine.dispatch({ type: "boolean", op: "union" });
@@ -725,6 +743,17 @@ export function bindHotkeys(
     if (meta && e.altKey && e.key.toLowerCase() === "x") {
       e.preventDefault();
       engine.dispatch({ type: "boolean", op: "exclude" });
+      return;
+    }
+    if (meta && !e.shiftKey && e.key.toLowerCase() === "e") {
+      e.preventDefault();
+      engine.dispatch({ type: "flatten" });
+      return;
+    }
+    if ((e.ctrlKey || meta) && e.altKey && e.key.toLowerCase() === "m") {
+      e.preventDefault();
+      const id0 = engine.snapshot().selection[0];
+      if (id0) engine.dispatch({ type: "patch", id: id0, patch: { isMask: true } });
       return;
     }
     if (!meta && e.shiftKey && e.key.toLowerCase() === "a") {
@@ -802,10 +831,13 @@ export function bindHotkeys(
       engine.dispatch({ type: "setTool", tool: map[e.key.toLowerCase()] });
     }
     const step = e.shiftKey ? 10 : 1;
-    if (e.key === "ArrowLeft") engine.dispatch({ type: "nudge", dx: -step, dy: 0 });
-    if (e.key === "ArrowRight") engine.dispatch({ type: "nudge", dx: step, dy: 0 });
-    if (e.key === "ArrowUp") engine.dispatch({ type: "nudge", dx: 0, dy: -step });
-    if (e.key === "ArrowDown") engine.dispatch({ type: "nudge", dx: 0, dy: step });
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown") {
+      e.preventDefault();
+      if (e.key === "ArrowLeft") engine.dispatch({ type: "nudge", dx: -step, dy: 0 });
+      if (e.key === "ArrowRight") engine.dispatch({ type: "nudge", dx: step, dy: 0 });
+      if (e.key === "ArrowUp") engine.dispatch({ type: "nudge", dx: 0, dy: -step });
+      if (e.key === "ArrowDown") engine.dispatch({ type: "nudge", dx: 0, dy: step });
+    }
   };
   window.addEventListener("keydown", onKey, true);
   return () => window.removeEventListener("keydown", onKey, true);
@@ -1010,6 +1042,8 @@ export function HelpBtn() {
               ["C", "Comment"],
               ["⌘⌥K", "Component"],
               ["⌥⇧U", "Union"],
+              ["⌘E", "Flatten"],
+              ["⌘⌥M", "Use as mask"],
             ].map(([k, l]) => (
               <div key={k} className="proto-row">
                 <span>{l}</span>

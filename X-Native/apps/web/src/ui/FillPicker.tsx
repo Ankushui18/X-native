@@ -21,6 +21,7 @@ export interface FillValue {
   type: FillType;
   second: string;
   blend: string;
+  image?: string;
 }
 
 export function FillPicker({
@@ -48,6 +49,7 @@ export function FillPicker({
   const sv = useRef<HTMLDivElement>(null);
   const hue = useRef<HTMLDivElement>(null);
   const op = useRef<HTMLDivElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const on = (e: MouseEvent) => {
@@ -243,6 +245,31 @@ export function FillPicker({
           }}
         />
       </div>
+
+      {value.type === "image" && (
+        <div className="hex-row">
+          <button
+            className="blend-row"
+            style={{ flex: 1 }}
+            onClick={() => fileRef.current?.click()}
+          >
+            Choose image
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/png,image/jpeg,image/gif,image/webp,image/*"
+            hidden
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (!f) return;
+              const reader = new FileReader();
+              reader.onload = () => onChange({ ...value, type: "image", image: String(reader.result) });
+              reader.readAsDataURL(f);
+            }}
+          />
+        </div>
+      )}
 
       {(value.type === "linear" || value.type === "radial" || value.type === "angular" || value.type === "diamond") && (
         <div className="hex-row">

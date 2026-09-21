@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Engine, XNode } from "../engine/types";
+import { find } from "../engine/memory";
 import { Icon } from "./icons";
 
 export type MenuItem =
@@ -153,10 +154,12 @@ export function canvasMenu(sel: number, isGroup: boolean, hasImage: boolean): Me
         { kind: "action", id: "subtract", label: "Subtract", shortcut: "⌥⇧S" },
         { kind: "action", id: "intersect", label: "Intersect", shortcut: "⌥⇧I" },
         { kind: "action", id: "exclude", label: "Exclude", shortcut: "⌥⇧E" },
+        { kind: "action", id: "flatten", label: "Flatten" },
       ],
     });
   }
   items.push({ kind: "sep" });
+  items.push({ kind: "action", id: "flatten", label: "Flatten selection", shortcut: "⌘E" });
   items.push({ kind: "action", id: "outlineStroke", label: "Outline stroke", shortcut: "⇧⌘O" });
   items.push({ kind: "sep" });
   items.push({ kind: "action", id: "lockSel", label: "Lock/Unlock", shortcut: "⇧⌘L", icon: "lock" });
@@ -286,8 +289,16 @@ export function runMenu(
       break;
     case "useAsMask": {
       const s = engine.snapshot();
-      const id0 = s.selection[0];
-      if (id0) engine.dispatch({ type: "patch", id: id0, patch: { isMask: true } });
+      if (s.selection.length >= 2) engine.dispatch({ type: "group" });
+      const snap = engine.snapshot();
+      const root = snap.pages[snap.page].root;
+      const id0 = snap.selection[0];
+      const n = id0 ? find(root, id0) : null;
+      if (n?.children.length) {
+        engine.dispatch({ type: "patch", id: n.children[0].id, patch: { isMask: true } });
+      } else if (id0) {
+        engine.dispatch({ type: "patch", id: id0, patch: { isMask: true } });
+      }
       break;
     }
     default:

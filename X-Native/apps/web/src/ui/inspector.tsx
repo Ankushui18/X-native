@@ -706,6 +706,20 @@ function Design({
         />
         Use as mask
       </label>
+      {n.isMask && (
+        <div className="insp-pad">
+          <div className="field">
+            <select
+              value={n.maskType || "alpha"}
+              onChange={(e) => patch({ maskType: e.target.value as XNode["maskType"] })}
+            >
+              <option value="alpha">Alpha</option>
+              <option value="vector">Vector</option>
+              <option value="luminance">Luminance</option>
+            </select>
+          </div>
+        </div>
+      )}
       <div className="insp-pad">
         <div className="seg">
           <button
@@ -1141,6 +1155,8 @@ function Design({
               <Field
                 label="↑"
                 value={n.lineHeight || n.fontSize * 1.2}
+                hint={n.lineHeight ? undefined : "Auto"}
+                onLabelClick={() => num("lineHeight", 0)}
                 onChange={(v) => num("lineHeight", v)}
               />
               <Field label="↔" value={n.letterSpacing} onChange={(v) => num("letterSpacing", v)} />
@@ -1730,7 +1746,13 @@ function ColorRow({
           onChange={(v) => {
             onChange(v.color);
             onOpacity?.(v.opacity);
-            onMeta?.({ fillType: v.type, fillB: v.second, fillBlend: v.blend, fillVisible: true });
+            onMeta?.({
+              fillType: v.type,
+              fillB: v.second,
+              fillBlend: v.blend,
+              fillVisible: true,
+              ...(v.image ? { imageSrc: v.image } : {}),
+            });
           }}
           onClose={() => setOpen(false)}
         />

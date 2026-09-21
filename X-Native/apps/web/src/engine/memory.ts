@@ -532,10 +532,10 @@ export class MemoryEngine implements Engine {
         if (n && !n.locked) {
           const oldW = n.w;
           const oldH = n.h;
-          n.x = cmd.x;
-          n.y = cmd.y;
-          n.w = Math.max(1, cmd.w);
-          n.h = Math.max(1, cmd.h);
+          n.x = s.pages[s.page].pixelGrid ? Math.round(cmd.x) : cmd.x;
+          n.y = s.pages[s.page].pixelGrid ? Math.round(cmd.y) : cmd.y;
+          n.w = Math.max(1, s.pages[s.page].pixelGrid ? Math.round(cmd.w) : cmd.w);
+          n.h = Math.max(1, s.pages[s.page].pixelGrid ? Math.round(cmd.h) : cmd.h);
           if (cmd.scaleProps && oldW > 0 && oldH > 0) {
             scaleProps(n, n.w / oldW, n.h / oldH);
           } else {
@@ -642,11 +642,24 @@ export class MemoryEngine implements Engine {
         if (!this.clip.length) break;
         const created: string[] = [];
         const parent = this.root();
+        const grid = s.pages[s.page].pixelGrid;
         for (const n of this.clip) {
           const copy = clone(n);
           reid(copy);
-          copy.x = (cmd.x ?? copy.x) + (cmd.x != null ? 0 : 16);
-          copy.y = (cmd.y ?? copy.y) + (cmd.y != null ? 0 : 16);
+          if (cmd.inPlace) {
+            copy.x = n.x;
+            copy.y = n.y;
+          } else if (cmd.x != null && cmd.y != null) {
+            copy.x = cmd.x;
+            copy.y = cmd.y;
+          } else {
+            copy.x = n.x + 16;
+            copy.y = n.y + 16;
+          }
+          if (grid) {
+            copy.x = Math.round(copy.x);
+            copy.y = Math.round(copy.y);
+          }
           parent.children.push(copy);
           created.push(copy.id);
         }
