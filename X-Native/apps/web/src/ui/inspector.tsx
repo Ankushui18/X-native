@@ -235,6 +235,10 @@ function Prototype({
       </div>
       <p className="muted">Present opens {startName}. Esc steps back, then exits.</p>
       <div className="h-row">
+        <h3>Motion</h3>
+      </div>
+      <p className="muted">Animation on the interaction below.</p>
+      <div className="h-row">
         <h3>Interactions</h3>
         <button
           className="plus"
@@ -479,6 +483,26 @@ function Design({
         />
       )}
 
+      {multi && (
+        <>
+          <div className="h-row">
+            <h3>Boolean</h3>
+          </div>
+          <div className="insp-pad">
+            <div className="seg">
+              {(["union", "subtract", "intersect", "exclude"] as const).map((op) => (
+                <button
+                  key={op}
+                  title={op[0].toUpperCase() + op.slice(1)}
+                  onClick={() => engine.dispatch({ type: "boolean", op })}
+                >
+                  {op[0].toUpperCase() + op.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
       {multi && <SelectionColors engine={engine} snap={snap} />}
 
       <div className="h-row">
@@ -669,7 +693,7 @@ function Design({
             })
           }
         />
-        Clip content
+        Clip content / mask
       </label>
       {n.layout && (
         <>
@@ -947,9 +971,33 @@ function Design({
               ))}
             </div>
           </div>
+          <div className="seg">
+            {(["none", "round", "square", "arrow"] as StrokeCap[]).map((c) => (
+              <button
+                key={c}
+                className={n.strokeCap === c ? "on" : ""}
+                title={c === "none" ? "Cap butt" : `Cap ${c}`}
+                onClick={() => patch({ strokeCap: c })}
+              >
+                <Icon name={c === "arrow" ? "arrow" : `cap-${c}`} size={14} />
+              </button>
+            ))}
+          </div>
+          <div className="seg">
+            {(["miter", "bevel", "round"] as StrokeJoin[]).map((j) => (
+              <button
+                key={j}
+                className={n.strokeJoin === j ? "on" : ""}
+                title={`Join ${j}`}
+                onClick={() => patch({ strokeJoin: j })}
+              >
+                <Icon name={`join-${j}`} size={14} />
+              </button>
+            ))}
+          </div>
           <button
             className={`icon-btn${strokeMore ? " on" : ""}`}
-            title="Dash, cap, join"
+            title="Dash"
             onClick={() => setStrokeMore((v) => !v)}
           >
             <Icon name="dash" size={14} />
@@ -963,30 +1011,6 @@ function Design({
                   value={n.strokeGap || n.strokeDash}
                   onChange={(strokeGap) => patch({ strokeGap })}
                 />
-              </div>
-              <div className="seg">
-                {(["none", "round", "square", "arrow"] as StrokeCap[]).map((c) => (
-                  <button
-                    key={c}
-                    className={n.strokeCap === c ? "on" : ""}
-                    title={`Cap ${c}`}
-                    onClick={() => patch({ strokeCap: c })}
-                  >
-                    <Icon name={c === "arrow" ? "arrow" : `cap-${c}`} size={14} />
-                  </button>
-                ))}
-              </div>
-              <div className="seg">
-                {(["miter", "bevel", "round"] as StrokeJoin[]).map((j) => (
-                  <button
-                    key={j}
-                    className={n.strokeJoin === j ? "on" : ""}
-                    title={`Join ${j}`}
-                    onClick={() => patch({ strokeJoin: j })}
-                  >
-                    <Icon name={`join-${j}`} size={14} />
-                  </button>
-                ))}
               </div>
             </>
           )}
@@ -1201,6 +1225,8 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
     { id: "inner-shadow", label: "Inner shadow" },
     { id: "layer-blur", label: "Layer blur" },
     { id: "background-blur", label: "Background blur" },
+    { id: "noise", label: "Noise" },
+    { id: "glass", label: "Glass" },
   ];
   return (
     <>

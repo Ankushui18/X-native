@@ -495,7 +495,8 @@ html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }
   display: none;
   z-index: 20;
 }
-.tool.open .fly { display: block; }
+.tool.open .fly,
+.tool:hover .fly { display: block; }
 .fly button {
   display: flex;
   align-items: center;
@@ -890,15 +891,16 @@ html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }
 .actions {
   position: absolute;
   left: 50%;
-  top: 18%;
+  top: 12%;
   transform: translateX(-50%);
   width: 480px;
   max-width: calc(100% - 48px);
+  max-height: 72vh;
+  overflow: auto;
   background: var(--elevated);
   border-radius: 12px;
   box-shadow: var(--shadow);
   z-index: 40;
-  overflow: hidden;
 }
 .actions input {
   width: 100%;

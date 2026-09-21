@@ -859,7 +859,7 @@ export class MemoryEngine implements Engine {
           fillVisible: cmd.closed,
           strokePaint: "#1e1e1e",
           strokeVisible: true,
-          strokeWidth: cmd.closed ? 1 : 2,
+          strokeWidth: s.tool === "brush" ? 8 : cmd.closed ? 1 : 2,
         });
         this.root().children.push(n);
         s.selection = [n.id];
@@ -1189,12 +1189,13 @@ export function collectColors(root: XNode): string[] {
 }
 
 export function defaultEffect(kind: Effect["kind"]): Effect {
+  const shadow = kind === "drop-shadow" || kind === "inner-shadow";
   return {
     kind,
-    color: "#000000",
+    color: shadow ? "#00000040" : kind === "glass" ? "#ffffff80" : "#000000",
     x: 0,
-    y: kind === "drop-shadow" || kind === "inner-shadow" ? 4 : 0,
-    blur: kind.includes("blur") ? 8 : 16,
+    y: shadow ? 4 : 0,
+    blur: kind === "noise" ? 40 : kind === "glass" || kind.includes("blur") ? 12 : shadow ? 4 : 4,
     spread: 0,
     visible: true,
   };

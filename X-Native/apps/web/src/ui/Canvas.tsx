@@ -201,7 +201,9 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       } else {
         round();
       }
-      const bgBlur = (n.effects ?? []).find((e) => e.kind === "background-blur" && e.visible);
+      const bgBlur = (n.effects ?? []).find(
+        (e) => (e.kind === "background-blur" || e.kind === "glass") && e.visible,
+      );
       if (bgBlur && sw > 1 && sh > 1) {
         try {
           ctx.save();
@@ -250,6 +252,17 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           ctx.fillStyle = fillPaint(ctx, n, sx, sy, sw, sh);
           ctx.fill();
         }
+        ctx.restore();
+      }
+      const noise = (n.effects ?? []).find((e) => e.kind === "noise" && e.visible);
+      if (noise) paintNoise(ctx, sx, sy, sw, sh, noise.blur);
+      const glass = (n.effects ?? []).find((e) => e.kind === "glass" && e.visible);
+      if (glass) {
+        ctx.save();
+        ctx.clip();
+        ctx.globalAlpha *= 0.28;
+        ctx.fillStyle = glass.color || "#ffffff";
+        ctx.fill();
         ctx.restore();
       }
       ctx.shadowColor = "transparent";
@@ -493,6 +506,30 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       }
       return;
     }
+    if (snap.tool === "eraser") {
+      const wpt = toWorld(e.clientX, e.clientY);
+      const root = snap.pages[snap.page].root;
+      const hit = hitTest(root, wpt.x, wpt.y, { deep: true });
+      if (hit) {
+        engine.dispatch({ type: "select", ids: [hit.id] });
+        engine.dispatch({ type: "delete" });
+      }
+      drag.current = { mode: "marquee", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: "erase" };
+      return;
+    }
+    if (snap.tool === "comment") {
+      const wpt = toWorld(e.clientX, e.clientY);
+      engine.dispatch({
+        type: "add",
+        kind: "ellipse",
+        x: wpt.x - 10,
+        y: wpt.y - 10,
+        w: 20,
+        h: 20,
+        extra: { name: "Comment", fill: "#18a0fb", fillVisible: true, strokeWidth: 0 },
+      });
+      return;
+    }
     if (snap.tool === "pen") {
       const wpt = toWorld(e.clientX, e.clientY);
       if (draft.length >= 3) {
@@ -689,6 +726,13 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         d.sx = e.clientX;
         d.sy = e.clientY;
       }
+    } else if (d.mode === "marquee" && d.id === "erase") {
+      const wpt = toWorld(e.clientX, e.clientY);
+      const hit = hitTest(snap.pages[snap.page].root, wpt.x, wpt.y, { deep: true });
+      if (hit) {
+        engine.dispatch({ type: "select", ids: [hit.id] });
+        engine.dispatch({ type: "delete" });
+      }
     } else if (d.mode === "create" || d.mode === "marquee") {
       let x = Math.min(d.sx, e.clientX) - box.left;
       let y = Math.min(d.sy, e.clientY) - box.top;
@@ -818,6 +862,16 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       const extra: Partial<XNode> =
         snap.tool === "section"
           ? { name: "Section", fill: "#00000000", overflow: "visible" }
+          : snap.tool === "slice"
+            ? {
+                name: "Slice",
+                fill: "#00000000",
+                fillVisible: false,
+                strokePaint: "#0d99ff",
+                strokeVisible: true,
+                strokeWidth: 1,
+                strokeDash: 4,
+              }
           : k === "text"
             ? clicked
               ? { text: "", sizingW: "hug", sizingH: "hug", fontSize: 16 }
@@ -838,6 +892,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         if (id) setEdit({ id, text: "" });
       }
     }
+    if (d.mode === "marquee" && d.id === "erase") return;
     if (d.mode === "marquee") {
       const a = toWorld(d.sx, d.sy);
       const b = toWorld(e.clientX, e.clientY);
@@ -1025,6 +1080,32 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       )}
     </div>
   );
+}
+
+function paintNoise(
+  ctx: CanvasRenderingContext2D,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+  density: number,
+) {
+  const d = Math.max(0, Math.min(1, density / 100));
+  if (d <= 0 || sw < 1 || sh < 1) return;
+  ctx.save();
+  ctx.clip();
+  ctx.fillStyle = "#ffffff";
+  ctx.globalAlpha = 0.35 * d;
+  const count = Math.min(4000, Math.floor((sw * sh * d) / 18));
+  const seed = Math.floor(sx * 13 + sy * 17);
+  for (let i = 0; i < count; i++) {
+    const h = Math.sin(seed * 12.9898 + i * 78.233) * 43758.5453;
+    const r = h - Math.floor(h);
+    const h2 = Math.sin(seed * 4.1414 + i * 19.19) * 23421.631;
+    const r2 = h2 - Math.floor(h2);
+    ctx.fillRect(sx + r * sw, sy + r2 * sh, 1, 1);
+  }
+  ctx.restore();
 }
 
 function canvasBlend(m?: string): GlobalCompositeOperation {

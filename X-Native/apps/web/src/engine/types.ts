@@ -35,7 +35,13 @@ export type ExportFormat = "PNG" | "JPG" | "SVG" | "PDF";
 export type RightTab = "design" | "prototype" | "inspect";
 export type LeftTab = "layers" | "assets" | "tokens";
 export type FillType = "solid" | "linear" | "radial" | "angular" | "diamond" | "image";
-export type EffectKind = "drop-shadow" | "inner-shadow" | "layer-blur" | "background-blur";
+export type EffectKind =
+  | "drop-shadow"
+  | "inner-shadow"
+  | "layer-blur"
+  | "background-blur"
+  | "noise"
+  | "glass";
 export type BooleanOp = "union" | "subtract" | "intersect" | "exclude";
 export type ProtoTrigger = "onClick" | "onHover" | "afterDelay";
 export type ProtoAction = "navigate" | "back" | "openUrl";

@@ -363,6 +363,8 @@ const GROUPS: Group[] = [
     tools: [
       { id: "pen", label: "Pen", shortcut: "P" },
       { id: "pencil", label: "Pencil", shortcut: "⇧P" },
+      { id: "brush", label: "Brush", shortcut: "B" },
+      { id: "eraser", label: "Eraser", shortcut: "⇧E" },
     ],
   },
   { id: "text", tools: [{ id: "text", label: "Text", shortcut: "T" }] },
@@ -480,22 +482,50 @@ export function Actions({
   const [q, setQ] = useState("");
   const { setPref } = useTheme();
   const items = [
+    { label: "Move tool", sc: "V", run: () => engine.dispatch({ type: "setTool", tool: "select" }) },
+    { label: "Scale tool", sc: "K", run: () => engine.dispatch({ type: "setTool", tool: "scale" }) },
+    { label: "Frame", sc: "F", run: () => engine.dispatch({ type: "setTool", tool: "frame" }) },
+    { label: "Rectangle", sc: "R", run: () => engine.dispatch({ type: "setTool", tool: "rect" }) },
+    { label: "Ellipse", sc: "O", run: () => engine.dispatch({ type: "setTool", tool: "ellipse" }) },
+    { label: "Line", sc: "L", run: () => engine.dispatch({ type: "setTool", tool: "line" }) },
+    { label: "Arrow", sc: "⇧L", run: () => engine.dispatch({ type: "setTool", tool: "arrow" }) },
+    { label: "Pen", sc: "P", run: () => engine.dispatch({ type: "setTool", tool: "pen" }) },
+    { label: "Pencil", sc: "⇧P", run: () => engine.dispatch({ type: "setTool", tool: "pencil" }) },
+    { label: "Brush", sc: "B", run: () => engine.dispatch({ type: "setTool", tool: "brush" }) },
+    { label: "Eraser", sc: "⇧E", run: () => engine.dispatch({ type: "setTool", tool: "eraser" }) },
+    { label: "Text", sc: "T", run: () => engine.dispatch({ type: "setTool", tool: "text" }) },
+    { label: "Slice", sc: "S", run: () => engine.dispatch({ type: "setTool", tool: "slice" }) },
+    { label: "Comment", sc: "C", run: () => engine.dispatch({ type: "setTool", tool: "comment" }) },
+    { label: "Hand", sc: "H", run: () => engine.dispatch({ type: "setTool", tool: "hand" }) },
+    { label: "Place image", sc: "⇧I", run: () => engine.dispatch({ type: "setTool", tool: "image" }) },
     { label: "Undo", sc: "⌘Z", run: () => engine.dispatch({ type: "undo" }) },
     { label: "Redo", sc: "⇧⌘Z", run: () => engine.dispatch({ type: "redo" }) },
     { label: "Duplicate", sc: "⌘D", run: () => engine.dispatch({ type: "duplicate" }) },
     { label: "Delete", sc: "⌫", run: () => engine.dispatch({ type: "delete" }) },
+    { label: "Group", sc: "⌘G", run: () => engine.dispatch({ type: "group" }) },
+    { label: "Ungroup", sc: "⇧⌘G", run: () => engine.dispatch({ type: "ungroup" }) },
     { label: "Hide UI", sc: "⌘\\", run: onHide },
     { label: "Minimize UI", sc: "⇧⌘\\", run: () => onMinimize?.() },
     { label: "Dev Mode", sc: "⇧D", run: () => engine.dispatch({ type: "setRightTab", tab: "inspect" }) },
+    { label: "Prototype", sc: "", run: () => engine.dispatch({ type: "setRightTab", tab: "prototype" }) },
+    { label: "Design", sc: "", run: () => engine.dispatch({ type: "setRightTab", tab: "design" }) },
+    { label: "Present", sc: "", run: () => engine.dispatch({ type: "presentStart" }) },
     { label: "Theme: Light", sc: "", run: () => setPref("light") },
     { label: "Theme: Dark", sc: "", run: () => setPref("dark") },
     { label: "Theme: Graphite", sc: "", run: () => setPref("graphite") },
     { label: "Theme: Daylight", sc: "", run: () => setPref("daylight") },
     { label: "Theme: System", sc: "", run: () => setPref("system") },
     { label: "Create component", sc: "⌘⌥K", run: () => engine.dispatch({ type: "makeComponent" }) },
+    { label: "Detach instance", sc: "", run: () => engine.dispatch({ type: "detachInstance" }) },
     { label: "Union", sc: "⌥⇧U", run: () => engine.dispatch({ type: "boolean", op: "union" }) },
+    { label: "Subtract", sc: "⌥⇧S", run: () => engine.dispatch({ type: "boolean", op: "subtract" }) },
+    { label: "Intersect", sc: "⌥⇧I", run: () => engine.dispatch({ type: "boolean", op: "intersect" }) },
+    { label: "Exclude", sc: "⌥⇧E", run: () => engine.dispatch({ type: "boolean", op: "exclude" }) },
+    { label: "Flip horizontal", sc: "⇧H", run: () => engine.dispatch({ type: "flip", axis: "h" }) },
+    { label: "Flip vertical", sc: "⇧V", run: () => engine.dispatch({ type: "flip", axis: "v" }) },
     { label: "Zoom to 100%", sc: "⇧0", run: () => engine.dispatch({ type: "setZoom", zoom: 1 }) },
-    { label: "Zoom to fit", sc: "⇧1", run: () => engine.dispatch({ type: "setZoom", zoom: 0.5 }) },
+    { label: "Zoom to fit", sc: "⇧1", run: () => zoomTo(engine, "fit") },
+    { label: "Zoom to selection", sc: "⇧2", run: () => zoomTo(engine, "selection") },
   ].filter((i) => i.label.toLowerCase().includes(q.toLowerCase()));
   return (
     <div className="actions">
@@ -777,8 +807,8 @@ export function bindHotkeys(
     if (e.key === "ArrowUp") engine.dispatch({ type: "nudge", dx: 0, dy: -step });
     if (e.key === "ArrowDown") engine.dispatch({ type: "nudge", dx: 0, dy: step });
   };
-  window.addEventListener("keydown", onKey);
-  return () => window.removeEventListener("keydown", onKey);
+  window.addEventListener("keydown", onKey, true);
+  return () => window.removeEventListener("keydown", onKey, true);
 }
 
 export function usePanelDrag(
@@ -975,8 +1005,11 @@ export function HelpBtn() {
               ["⌘\\", "Hide UI"],
               ["P", "Pen"],
               ["⇧P", "Pencil"],
+              ["B", "Brush"],
+              ["⇧E", "Eraser"],
+              ["C", "Comment"],
               ["⌘⌥K", "Component"],
-              ["⌘⌥U", "Union"],
+              ["⌥⇧U", "Union"],
             ].map(([k, l]) => (
               <div key={k} className="proto-row">
                 <span>{l}</span>
