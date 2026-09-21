@@ -26,7 +26,7 @@ export function NavRail({
   return (
     <nav className="rail">
       <button className="logo" title="Main menu" onClick={() => setMenu((v) => !v)}>
-        <Icon name="figma" size={18} />
+        <Icon name="logo" size={20} />
         {menu && (
           <div className="menu" onMouseLeave={() => setMenu(false)}>
             <button>
