@@ -288,10 +288,32 @@ function demoPage(): Page {
     overflow: "clip",
     children: [title, body, card],
   });
+  const back = node("text", "Back", 24, 28, 120, 24, {
+    text: "← Back",
+    fontSize: 16,
+    fontWeight: 600,
+    fill: "#0d70f6",
+    interactions: [{ trigger: "onClick", action: "back", destination: "", animation: "instant", delay: 0 }],
+  });
+  const done = node("text", "Done", 24, 80, 320, 40, {
+    text: "Second screen — Esc or Back.",
+    fontSize: 20,
+    fontWeight: 600,
+    fill: "#0d1220",
+  });
+  const screen2 = node("frame", "Success", 520, 60, 390, 844, {
+    fill: "#ffffff",
+    cornerRadii: [32, 32, 32, 32],
+    overflow: "clip",
+    children: [back, done],
+  });
+  pill.interactions = [
+    { trigger: "onClick", action: "navigate", destination: screen2.id, animation: "instant", delay: 0 },
+  ];
   const pageRoot = node("frame", "Page 1", 0, 0, 1200, 800, {
     fill: "#00000000",
     overflow: "visible",
-    children: [phone],
+    children: [phone, screen2],
   });
   applyLayout(phone);
   applyLayout(card);
@@ -526,7 +548,6 @@ export class MemoryEngine implements Engine {
           copy.y += 16;
           if (n.isComponent) {
             copy.isComponent = false;
-            copy.kind = "instance";
             copy.componentId = masterId;
             copy.name = n.name;
           }
@@ -708,17 +729,29 @@ export class MemoryEngine implements Engine {
           fillVisible: true,
           overflow: "visible",
         });
+        const g = find(this.root(), s.selection[0]);
+        if (g?.children[0]?.fill) {
+          g.fill = g.children[0].fill;
+          g.fillVisible = true;
+        }
         break;
       }
       case "makeComponent": {
         const ids = s.selection;
         if (!ids.length) break;
-        if (ids.length > 1) this.wrapSel("Component", { kind: "component", isComponent: true });
+        if (ids.length > 1) {
+          this.wrapSel("Component", {
+            kind: "frame",
+            isComponent: true,
+            fill: "#00000000",
+            fillVisible: false,
+            overflow: "visible",
+          });
+        }
         const n = find(this.root(), s.selection[0]);
         if (!n) break;
         const cid = n.componentId || uid("comp");
         n.isComponent = true;
-        n.kind = "component";
         n.componentId = cid;
         if (!n.name || n.name === "Group" || n.name === "Rectangle") n.name = "Component";
         const existing = s.components.find((c) => c.id === cid);
@@ -731,7 +764,6 @@ export class MemoryEngine implements Engine {
         for (const id of s.selection) {
           const n = find(this.root(), id);
           if (!n || (!n.componentId && n.kind !== "instance")) continue;
-          n.kind = n.children.length ? "frame" : n.kind === "instance" ? "frame" : n.kind;
           n.isComponent = false;
           n.componentId = "";
         }
@@ -745,7 +777,6 @@ export class MemoryEngine implements Engine {
         copy.x = cmd.x;
         copy.y = cmd.y;
         copy.isComponent = false;
-        copy.kind = "instance";
         copy.componentId = lib.id;
         copy.name = lib.name;
         this.root().children.push(copy);
@@ -762,6 +793,7 @@ export class MemoryEngine implements Engine {
         const maxX = Math.max(...xs);
         const maxY = Math.max(...ys);
         const path = cmd.points.map((p) => ({ x: p.x - minX, y: p.y - minY }));
+        const keepTool = s.tool === "pen" || s.tool === "pencil" || s.tool === "brush";
         const n = node("vector", "Vector", minX, minY, Math.max(1, maxX - minX), Math.max(1, maxY - minY), {
           path,
           closed: cmd.closed,
@@ -773,7 +805,7 @@ export class MemoryEngine implements Engine {
         });
         this.root().children.push(n);
         s.selection = [n.id];
-        s.tool = "select";
+        if (!keepTool) s.tool = "select";
         break;
       }
       case "setInteractions": {
@@ -792,27 +824,21 @@ export class MemoryEngine implements Engine {
         s.presentFrame = id;
         s.presentStack = id ? [id] : [];
         s.rightTab = "prototype";
-        if (id) {
-          const wp = worldPos(this.root(), id);
-          if (wp) {
-            s.panX = 48;
-            s.panY = 48;
-            const z = Math.min(1.2, Math.max(0.25, 720 / Math.max(wp.node.w, 1)));
-            s.zoom = z;
-          }
-        }
+        if (id) focusFrame(s, this.root(), id);
         break;
       }
       case "presentGo": {
         if (!cmd.id) break;
         s.presentStack = [...s.presentStack, cmd.id];
         s.presentFrame = cmd.id;
+        focusFrame(s, this.root(), cmd.id);
         break;
       }
       case "presentBack": {
         if (s.presentStack.length > 1) {
           s.presentStack = s.presentStack.slice(0, -1);
           s.presentFrame = s.presentStack[s.presentStack.length - 1];
+          focusFrame(s, this.root(), s.presentFrame);
         } else {
           s.presentFrame = "";
           s.presentStack = [];
@@ -862,9 +888,7 @@ export class MemoryEngine implements Engine {
     if (ids.length < 1) return;
     const parent = findParent(this.root(), ids[0]);
     if (!parent) return;
-    const nodes = ids
-      .map((id) => parent.children.find((c) => c.id === id))
-      .filter((n): n is XNode => !!n);
+    const nodes = parent.children.filter((c) => ids.includes(c.id));
     if (nodes.length !== ids.length) return;
     const minX = Math.min(...nodes.map((n) => n.x));
     const minY = Math.min(...nodes.map((n) => n.y));
@@ -888,6 +912,16 @@ function reid(n: XNode) {
   n.children.forEach(reid);
 }
 
+
+function focusFrame(s: Internal, root: XNode, id: string) {
+  const wp = worldPos(root, id);
+  if (!wp) return;
+  const z = Math.min(1.2, Math.max(0.25, 720 / Math.max(wp.node.w, 1)));
+  s.zoom = z;
+  s.panX = 48 - wp.x * z;
+  s.panY = 48 - wp.y * z;
+}
+
 function framesOf(root: XNode): XNode[] {
   const out: XNode[] = [];
   walk(root, (n) => {
@@ -907,7 +941,7 @@ function syncInstances(pages: Page[], master: XNode) {
       const y = n.y;
       const id = n.id;
       const interactions = n.interactions;
-      Object.assign(n, clone(master), { x, y, id, interactions, isComponent: false, kind: "instance", componentId: cid });
+      Object.assign(n, clone(master), { x, y, id, interactions, isComponent: false, componentId: cid });
     });
   }
 }

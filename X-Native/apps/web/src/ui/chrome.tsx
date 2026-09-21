@@ -593,12 +593,12 @@ export function bindHotkeys(
       engine.dispatch({ type: "duplicate" });
       return;
     }
-    if (meta && e.key.toLowerCase() === "c") {
+    if (meta && !e.altKey && e.key.toLowerCase() === "c") {
       e.preventDefault();
       engine.dispatch({ type: "copy" });
       return;
     }
-    if (meta && e.key.toLowerCase() === "x") {
+    if (meta && !e.altKey && e.key.toLowerCase() === "x") {
       e.preventDefault();
       engine.dispatch({ type: "cut" });
       return;
@@ -651,11 +651,6 @@ export function bindHotkeys(
       extra.onPresentExit?.();
       engine.dispatch({ type: "select", ids: [] });
       engine.dispatch({ type: "setTool", tool: "select" });
-      return;
-    }
-    if (meta && e.altKey && e.key.toLowerCase() === "k") {
-      e.preventDefault();
-      engine.dispatch({ type: "makeComponent" });
       return;
     }
     if (meta && e.altKey && e.key.toLowerCase() === "u") {

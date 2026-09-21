@@ -414,8 +414,15 @@ function Design({
     }
     engine.dispatch({ type: "patch", id: n.id, patch: { [key]: v } });
   };
-  const kindLabel =
-    n.imageSrc ? "Image" : n.kind === "rect" ? "Rectangle" : n.kind[0].toUpperCase() + n.kind.slice(1);
+  const kindLabel = n.imageSrc
+    ? "Image"
+    : n.isComponent
+      ? "Component"
+      : n.componentId
+        ? "Instance"
+        : n.kind === "rect"
+          ? "Rectangle"
+          : n.kind[0].toUpperCase() + n.kind.slice(1);
   const patch = (p: Partial<XNode>) => engine.dispatch({ type: "patch", id: n.id, patch: p });
   return (
     <>

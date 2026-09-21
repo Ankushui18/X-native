@@ -58,10 +58,12 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     const onKey = (e: KeyboardEvent) => {
       if (e.code === "Space") space.current = e.type === "keydown";
       if (e.type === "keydown" && e.key === "Escape" && draft.length) {
+        e.stopImmediatePropagation();
         setDraft([]);
         return;
       }
       if (e.type === "keydown" && e.key === "Enter" && draft.length >= 2) {
+        e.stopImmediatePropagation();
         engine.dispatch({ type: "addPath", points: draft, closed: true });
         setDraft([]);
         return;
@@ -75,11 +77,11 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         if (n?.kind === "text") setEdit({ id: n.id, text: n.text });
       }
     };
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("keyup", onKey);
+    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("keyup", onKey, true);
     return () => {
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("keyup", onKey);
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("keyup", onKey, true);
     };
   }, [snap, edit, draft, engine]);
 
@@ -294,7 +296,9 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       }
       for (const c of n.children) label(c, x, y);
     };
-    for (const ch of root.children) label(ch, 0, 0);
+    if (!snap.presentFrame) {
+      for (const ch of root.children) label(ch, 0, 0);
+    }
 
     if (draft.length) {
       ctx.beginPath();
@@ -348,13 +352,14 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       const sy = snap.panY + wp.y * z;
       const sw = wp.node.w * z;
       const sh = wp.node.h * z;
-      ctx.strokeStyle = "#0d99ff";
+      const accent = wp.node.isComponent || wp.node.componentId ? "#7b61ff" : "#0d99ff";
+      ctx.strokeStyle = accent;
       ctx.lineWidth = 1;
       ctx.strokeRect(sx + 0.5, sy + 0.5, sw, sh);
       const hs = handles(sx, sy, sw, sh);
       for (const [hx, hy] of hs) {
         ctx.fillStyle = "#ffffff";
-        ctx.strokeStyle = "#0d99ff";
+        ctx.strokeStyle = accent;
         ctx.lineWidth = 1;
         ctx.fillRect(hx - 3, hy - 3, 6, 6);
         ctx.strokeRect(hx - 3, hy - 3, 6, 6);
@@ -375,7 +380,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       const bh = 20;
       const bx = sx + sw / 2 - bw / 2;
       const by = sy + sh + 8;
-      ctx.fillStyle = "#0d99ff";
+      ctx.fillStyle = accent;
       if (typeof ctx.roundRect === "function") {
         ctx.beginPath();
         ctx.roundRect(bx, by, bw, bh, 4);
@@ -981,8 +986,10 @@ function paintBoolean(
       polyPath(o, sx + sw / 2, sy + sh / 2, Math.min(sw, sh) / 2, c.count || 3);
     } else if (c.kind === "vector" && c.path.length) {
       c.path.forEach((pt, i) => {
-        if (i === 0) o.moveTo(pt.x * z, pt.y * z);
-        else o.lineTo(pt.x * z, pt.y * z);
+        const vx = (c.x + pt.x) * z;
+        const vy = (c.y + pt.y) * z;
+        if (i === 0) o.moveTo(vx, vy);
+        else o.lineTo(vx, vy);
       });
       if (c.closed) o.closePath();
     } else {
