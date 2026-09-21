@@ -1229,46 +1229,53 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
           </div>
         )}
       </div>
-      {(n.effects ?? []).map((fx, i) => (
-        <div key={i} className="insp-pad" style={{ marginBottom: 4 }}>
-          <div className="color-row">
-            <span className="swatch" style={{ background: fx.color }} />
-            <span className="hex">{kinds.find((k) => k.id === fx.kind)?.label}</span>
-            <input
-              className="op"
-              value={fx.blur}
-              onChange={(e) => {
-                const blur = parseFloat(e.target.value);
-                if (Number.isNaN(blur)) return;
-                const effects = (n.effects ?? []).map((e2, j) => (j === i ? { ...e2, blur } : e2));
-                engine.dispatch({ type: "patch", id: n.id, patch: { effects } });
-              }}
-            />
-            <button
-              className="mini"
-              title={fx.visible ? "Hide" : "Show"}
-              onClick={() => {
-                const effects = (n.effects ?? []).map((e2, j) =>
-                  j === i ? { ...e2, visible: !e2.visible } : e2,
-                );
-                engine.dispatch({ type: "patch", id: n.id, patch: { effects } });
-              }}
-            >
-              <Icon name={fx.visible ? "eye" : "eye-off"} size={14} />
-            </button>
-            <button
-              className="mini minus"
-              title="Remove"
-              onClick={() => {
-                const effects = (n.effects ?? []).filter((_, j) => j !== i);
-                engine.dispatch({ type: "patch", id: n.id, patch: { effects } });
-              }}
-            >
-              <Icon name="minus" size={14} />
-            </button>
+      {(n.effects ?? []).map((fx, i) => {
+        const set = (p: Partial<typeof fx>) => {
+          const effects = (n.effects ?? []).map((e2, j) => (j === i ? { ...e2, ...p } : e2));
+          engine.dispatch({ type: "patch", id: n.id, patch: { effects } });
+        };
+        const shadow = fx.kind === "drop-shadow" || fx.kind === "inner-shadow";
+        return (
+          <div key={i} className="insp-pad" style={{ marginBottom: 8, display: "grid", gap: 4 }}>
+            <div className="color-row">
+              <span className="hex">{kinds.find((k) => k.id === fx.kind)?.label}</span>
+              <button
+                className="mini"
+                title={fx.visible ? "Hide" : "Show"}
+                onClick={() => set({ visible: !fx.visible })}
+              >
+                <Icon name={fx.visible ? "eye" : "eye-off"} size={14} />
+              </button>
+              <button
+                className="mini minus"
+                title="Remove"
+                onClick={() => {
+                  const effects = (n.effects ?? []).filter((_, j) => j !== i);
+                  engine.dispatch({ type: "patch", id: n.id, patch: { effects } });
+                }}
+              >
+                <Icon name="minus" size={14} />
+              </button>
+            </div>
+            {shadow && (
+              <ColorRow
+                title="Shadow"
+                value={fx.color}
+                opacity={100}
+                visible
+                recents={["#000000", "#00000040", "#ffffff"]}
+                onChange={(color) => set({ color })}
+              />
+            )}
+            <div className="grid2">
+              {shadow && <Field label="X" value={fx.x} onChange={(x) => set({ x })} />}
+              {shadow && <Field label="Y" value={fx.y} onChange={(y) => set({ y })} />}
+              <Field label="Blur" value={fx.blur} onChange={(blur) => set({ blur })} />
+              {shadow && <Field label="Spread" value={fx.spread} onChange={(spread) => set({ spread })} />}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </>
   );
 }

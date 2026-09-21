@@ -93,6 +93,8 @@ function node(
     componentId: "",
     isComponent: false,
     interactions: [],
+    flipH: false,
+    flipV: false,
     ...extra,
   };
 }
@@ -531,6 +533,7 @@ export class MemoryEngine implements Engine {
           } else {
             applyConstraints(n, oldW, oldH, n.w, n.h);
           }
+          this.publishMaster(n);
         }
         break;
       }
@@ -595,7 +598,10 @@ export class MemoryEngine implements Engine {
       }
       case "autoLayout": {
         const n = find(this.root(), cmd.id);
-        if (n) n.layout = cmd.layout;
+        if (n) {
+          n.layout = cmd.layout;
+          this.publishMaster(n);
+        }
         break;
       }
       case "undo": {
@@ -658,8 +664,18 @@ export class MemoryEngine implements Engine {
         for (const id of s.selection) {
           const n = find(this.root(), id);
           if (!n) continue;
-          if (cmd.axis === "h") n.rotation = -n.rotation;
-          else n.rotation = 180 - n.rotation;
+          if (cmd.axis === "h") {
+            n.flipH = !n.flipH;
+            const [tl, tr, bl, br] = n.cornerRadii;
+            n.cornerRadii = [tr, tl, br, bl];
+            for (const c of n.children) c.x = n.w - c.x - c.w;
+          } else {
+            n.flipV = !n.flipV;
+            const [tl, tr, bl, br] = n.cornerRadii;
+            n.cornerRadii = [bl, br, tl, tr];
+            for (const c of n.children) c.y = n.h - c.y - c.h;
+          }
+          this.publishMaster(n);
         }
         break;
       case "copyCode": {
@@ -742,7 +758,12 @@ export class MemoryEngine implements Engine {
         Object.assign(s.pages[s.page], cmd.patch);
         break;
       case "boolean": {
-        if (s.selection.length < 2) break;
+        const ids = s.selection.filter((id) => {
+          const n = find(this.root(), id);
+          return !!n && n.kind !== "frame";
+        });
+        if (ids.length < 2) break;
+        s.selection = ids;
         this.wrapSel(cmd.op === "union" ? "Union" : cmd.op[0].toUpperCase() + cmd.op.slice(1), {
           kind: "boolean",
           booleanOp: cmd.op,
@@ -751,9 +772,18 @@ export class MemoryEngine implements Engine {
           overflow: "visible",
         });
         const g = find(this.root(), s.selection[0]);
-        if (g?.children[0]?.fill) {
-          g.fill = g.children[0].fill;
-          g.fillVisible = true;
+        if (g?.children.length) {
+          const src = cmd.op === "subtract" ? g.children[0] : g.children[g.children.length - 1];
+          g.fill = src.fill;
+          g.fillVisible = src.fillVisible;
+          g.fillType = src.fillType;
+          g.fillB = src.fillB;
+          g.fillOpacity = src.fillOpacity;
+          g.strokePaint = src.strokePaint;
+          g.strokeWidth = src.strokeWidth;
+          g.strokeVisible = src.strokeVisible;
+          g.strokeAlign = src.strokeAlign;
+          g.effects = clone(src.effects);
         }
         break;
       }
@@ -813,7 +843,14 @@ export class MemoryEngine implements Engine {
         const minY = Math.min(...ys);
         const maxX = Math.max(...xs);
         const maxY = Math.max(...ys);
-        const path = cmd.points.map((p) => ({ x: p.x - minX, y: p.y - minY }));
+        const path = cmd.points.map((p) => ({
+          x: p.x - minX,
+          y: p.y - minY,
+          ix: p.ix,
+          iy: p.iy,
+          ox: p.ox,
+          oy: p.oy,
+        }));
         const keepTool = s.tool === "pen" || s.tool === "pencil" || s.tool === "brush";
         const n = node("vector", "Vector", minX, minY, Math.max(1, maxX - minX), Math.max(1, maxY - minY), {
           path,
@@ -901,6 +938,16 @@ export class MemoryEngine implements Engine {
         break;
       }
     }
+  }
+
+  private publishMaster(n: XNode) {
+    if (!n.isComponent || !n.componentId) return;
+    const lib = this.state.components.find((c) => c.id === n.componentId);
+    if (lib) {
+      lib.name = n.name;
+      lib.node = clone(n);
+    }
+    syncInstances(this.state.pages, n);
   }
 
   private wrapSel(name: string, extra: Partial<XNode>) {
@@ -1034,7 +1081,12 @@ export function worldPos(
   return found ? { x: accX, y: accY, node: found } : null;
 }
 
-export function hitTest(root: XNode, wx: number, wy: number): XNode | null {
+export function hitTest(
+  root: XNode,
+  wx: number,
+  wy: number,
+  opts?: { deep?: boolean; selection?: string[] },
+): XNode | null {
   let hit: XNode | null = null;
   const visit = (n: XNode, px: number, py: number) => {
     if (!n.visible) return;
@@ -1047,7 +1099,19 @@ export function hitTest(root: XNode, wx: number, wy: number): XNode | null {
     }
   };
   visit(root, 0, 0);
-  return hit;
+  if (!hit || opts?.deep) return hit;
+  let n: XNode | null = hit;
+  while (n) {
+    const p = findParent(root, n.id);
+    if (!p || p === root) break;
+    if (p.kind === "group" || p.kind === "boolean") {
+      if (opts?.selection?.includes(p.id)) break;
+      n = p;
+      continue;
+    }
+    break;
+  }
+  return n;
 }
 
 function applyConstraints(parent: XNode, oldW: number, oldH: number, newW: number, newH: number) {

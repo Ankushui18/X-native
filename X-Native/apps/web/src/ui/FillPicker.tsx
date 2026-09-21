@@ -219,7 +219,19 @@ export function FillPicker({
           />
         ) : (
           <span className="rgb-read">
-            {rgb.r} {rgb.g} {rgb.b}
+            {(["r", "g", "b"] as const).map((ch) => (
+              <input
+                key={ch}
+                className="op"
+                value={rgb[ch]}
+                onChange={(e) => {
+                  const n = parseInt(e.target.value, 10);
+                  if (Number.isNaN(n)) return;
+                  const next = { ...rgb, [ch]: Math.max(0, Math.min(255, n)) };
+                  applyRgb(next.r, next.g, next.b);
+                }}
+              />
+            ))}
           </span>
         )}
         <input

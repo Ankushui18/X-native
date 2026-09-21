@@ -1092,7 +1092,8 @@ html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }
   border-radius: 4px;
   text-align: center;
 }
-.rgb-read { flex: 1; font-size: 11px; color: var(--muted); }
+.rgb-read { flex: 1; display: flex; gap: 4px; font-size: 11px; color: var(--muted); }
+.rgb-read input { width: 36px; min-width: 0; }
 .muted-inline { font-size: 11px; color: var(--muted); }
 .swatch-grid {
   display: grid;

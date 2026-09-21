@@ -55,6 +55,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const [draft, setDraft] = useState<PathPoint[]>([]);
   const pencil = useRef<PathPoint[] | null>(null);
   const penDrag = useRef<{ i: number; x: number; y: number } | null>(null);
+  const hoverIx = useRef("");
   const { theme } = useTheme();
 
   useEffect(() => {
@@ -87,6 +88,22 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       window.removeEventListener("keyup", onKey, true);
     };
   }, [snap, edit, draft, engine]);
+
+  useEffect(() => {
+    if (!snap.presentFrame) {
+      hoverIx.current = "";
+      return;
+    }
+    const n = find(snap.pages[snap.page].root, snap.presentFrame);
+    const ix = (n?.interactions ?? []).find((i) => i.trigger === "afterDelay");
+    if (!ix) return;
+    const t = window.setTimeout(() => {
+      if (ix.action === "back") engine.dispatch({ type: "presentBack" });
+      else if (ix.action === "navigate" && ix.destination)
+        engine.dispatch({ type: "presentGo", id: ix.destination });
+    }, Math.max(0, ix.delay || 800));
+    return () => window.clearTimeout(t);
+  }, [snap.presentFrame, snap.page, engine, snap.pages]);
 
   useEffect(() => {
     const c = ref.current;
@@ -134,12 +151,16 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       const x = px + n.x;
       const y = py + n.y;
       ctx.save();
-      if (n.rotation) {
+      if (n.rotation || n.flipH || n.flipV) {
         ctx.translate(x + n.w / 2, y + n.h / 2);
-        ctx.rotate((n.rotation * Math.PI) / 180);
+        if (n.rotation) ctx.rotate((n.rotation * Math.PI) / 180);
+        if (n.flipH || n.flipV) ctx.scale(n.flipH ? -1 : 1, n.flipV ? -1 : 1);
         ctx.translate(-(x + n.w / 2), -(y + n.h / 2));
       }
       ctx.globalAlpha *= n.opacity;
+      ctx.globalCompositeOperation = canvasBlend(n.blendMode);
+      const layerBlur = (n.effects ?? []).find((e) => e.kind === "layer-blur" && e.visible);
+      if (layerBlur) ctx.filter = `blur(${Math.max(0, layerBlur.blur) * z}px)`;
       const sx = snap.panX + x * z;
       const sy = snap.panY + y * z;
       const sw = n.w * z;
@@ -153,6 +174,13 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         else ctx.rect(sx, sy, sw, sh);
       };
       if (n.kind === "boolean" && n.booleanOp && n.children.length) {
+        const dropB = (n.effects ?? []).find((e) => e.kind === "drop-shadow" && e.visible);
+        if (dropB) {
+          ctx.shadowColor = dropB.color;
+          ctx.shadowBlur = dropB.blur * z;
+          ctx.shadowOffsetX = (dropB.x || 0) * z;
+          ctx.shadowOffsetY = (dropB.y || 4) * z;
+        }
         paintBoolean(ctx, n, x, y, snap);
         ctx.restore();
         return;
@@ -173,6 +201,18 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       } else {
         round();
       }
+      const bgBlur = (n.effects ?? []).find((e) => e.kind === "background-blur" && e.visible);
+      if (bgBlur && sw > 1 && sh > 1) {
+        try {
+          ctx.save();
+          ctx.clip();
+          ctx.filter = `blur(${Math.max(0, bgBlur.blur) * z}px)`;
+          ctx.drawImage(c, sx, sy, sw, sh, sx, sy, sw, sh);
+          ctx.restore();
+        } catch {
+          /* tainted canvas */
+        }
+      }
       const drop = (n.effects ?? []).find((e) => e.kind === "drop-shadow" && e.visible);
       if (drop) {
         ctx.shadowColor = drop.color;
@@ -180,16 +220,15 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         ctx.shadowOffsetX = (drop.x || 0) * z;
         ctx.shadowOffsetY = (drop.y || 4) * z;
       }
-      if (n.imageSrc) {
-        let im = imgs.current.get(n.imageSrc);
-        if (!im) {
+      if (n.imageSrc || n.fillType === "image") {
+        let im = n.imageSrc ? imgs.current.get(n.imageSrc) : undefined;
+        if (n.imageSrc && !im) {
           im = new Image();
           im.src = n.imageSrc;
           im.onload = () => engine.dispatch({ type: "select", ids: snap.selection });
           imgs.current.set(n.imageSrc, im);
         }
-        if (im.complete && im.naturalWidth) {
-          round();
+        if (im?.complete && im.naturalWidth) {
           ctx.save();
           ctx.clip();
           ctx.drawImage(im, sx, sy, sw, sh);
@@ -204,19 +243,37 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       ) {
         ctx.save();
         ctx.globalAlpha *= n.fillOpacity ?? 1;
-        ctx.fillStyle = fillPaint(ctx, n, sx, sy, sw, sh);
-        ctx.fill();
+        ctx.globalCompositeOperation = canvasBlend(n.fillBlend);
+        if (n.fillType === "diamond") {
+          paintDiamond(ctx, n, sx, sy, sw, sh);
+        } else {
+          ctx.fillStyle = fillPaint(ctx, n, sx, sy, sw, sh);
+          ctx.fill();
+        }
         ctx.restore();
       }
       ctx.shadowColor = "transparent";
       ctx.shadowBlur = 0;
       ctx.shadowOffsetX = 0;
       ctx.shadowOffsetY = 0;
+      const inner = (n.effects ?? []).find((e) => e.kind === "inner-shadow" && e.visible);
+      if (inner) {
+        ctx.save();
+        ctx.clip();
+        ctx.shadowColor = inner.color;
+        ctx.shadowBlur = inner.blur * z;
+        ctx.shadowOffsetX = (inner.x || 0) * z;
+        ctx.shadowOffsetY = (inner.y || 4) * z;
+        ctx.strokeStyle = inner.color;
+        ctx.lineWidth = Math.max(2, (inner.spread || 0) * z + 8);
+        ctx.stroke();
+        ctx.restore();
+      }
       if (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)) {
         ctx.save();
         ctx.globalAlpha *= n.strokeOpacity ?? 1;
         ctx.strokeStyle = n.strokePaint;
-        ctx.lineWidth = Math.max(1, n.strokeWidth * z);
+        const lw = Math.max(0.5, n.strokeWidth * z);
         ctx.lineCap = n.strokeCap === "round" ? "round" : n.strokeCap === "square" ? "square" : "butt";
         ctx.lineJoin = n.strokeJoin === "round" ? "round" : n.strokeJoin === "bevel" ? "bevel" : "miter";
         if (n.strokeDash > 0) {
@@ -226,7 +283,24 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         } else {
           ctx.setLineDash([]);
         }
-        ctx.stroke();
+        if (n.strokeAlign === "inside") {
+          ctx.save();
+          ctx.clip();
+          ctx.lineWidth = lw * 2;
+          ctx.stroke();
+          ctx.restore();
+        } else if (n.strokeAlign === "outside") {
+          ctx.lineWidth = lw * 2;
+          ctx.stroke();
+          if (n.fillVisible && !isNone(n.fill) && n.kind !== "line" && n.kind !== "arrow") {
+            ctx.globalCompositeOperation = "source-over";
+            ctx.fillStyle = fillPaint(ctx, n, sx, sy, sw, sh);
+            ctx.fill();
+          }
+        } else {
+          ctx.lineWidth = lw;
+          ctx.stroke();
+        }
         if (n.kind === "arrow" || n.strokeCap === "arrow") {
           ctx.setLineDash([]);
           const ah = Math.max(6, n.strokeWidth * 3 * z);
@@ -519,7 +593,10 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         }
       }
     }
-    const hit = hitTest(root, wpt.x, wpt.y);
+    const hit = hitTest(root, wpt.x, wpt.y, {
+      deep: e.metaKey || e.ctrlKey,
+      selection: snap.selection,
+    });
     if (hit) {
       const ids = e.shiftKey
         ? snap.selection.includes(hit.id)
@@ -542,6 +619,24 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   };
 
   const onMove = (e: React.MouseEvent) => {
+    if (snap.presentFrame) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      const root = snap.pages[snap.page].root;
+      let n: XNode | null = hitTest(root, wpt.x, wpt.y, { deep: true });
+      while (n) {
+        const ix = (n.interactions ?? []).find((i) => i.trigger === "onHover");
+        if (ix && hoverIx.current !== n.id) {
+          hoverIx.current = n.id;
+          if (ix.action === "back") engine.dispatch({ type: "presentBack" });
+          else if (ix.action === "navigate" && ix.destination)
+            engine.dispatch({ type: "presentGo", id: ix.destination });
+          return;
+        }
+        const p = findParent(root, n.id);
+        n = p && p !== root ? p : null;
+      }
+      return;
+    }
     if (penDrag.current) {
       const wpt = toWorld(e.clientX, e.clientY);
       const p = penDrag.current;
@@ -776,8 +871,9 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
 
   const onDbl = (e: React.MouseEvent) => {
     const wpt = toWorld(e.clientX, e.clientY);
-    const hit = hitTest(snap.pages[snap.page].root, wpt.x, wpt.y);
+    const hit = hitTest(snap.pages[snap.page].root, wpt.x, wpt.y, { deep: true });
     if (hit?.kind === "text") setEdit({ id: hit.id, text: hit.text });
+    else if (hit) engine.dispatch({ type: "select", ids: [hit.id] });
   };
 
   const placeFiles = (files: FileList | File[], at?: { x: number; y: number }) => {
@@ -931,6 +1027,65 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   );
 }
 
+function canvasBlend(m?: string): GlobalCompositeOperation {
+  const k = (m || "normal").toLowerCase().replace(/\s+/g, "-");
+  const map: Record<string, GlobalCompositeOperation> = {
+    normal: "source-over",
+    "pass-through": "source-over",
+    multiply: "multiply",
+    screen: "screen",
+    overlay: "overlay",
+    darken: "darken",
+    lighten: "lighten",
+    "color-dodge": "color-dodge",
+    "color-burn": "color-burn",
+    difference: "difference",
+    exclusion: "exclusion",
+    hue: "hue",
+    saturation: "saturation",
+    color: "color",
+    luminosity: "luminosity",
+    "hard-light": "hard-light",
+    "soft-light": "soft-light",
+  };
+  return map[k] || "source-over";
+}
+
+function paintDiamond(
+  ctx: CanvasRenderingContext2D,
+  n: XNode,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+) {
+  const cx = sx + sw / 2;
+  const cy = sy + sh / 2;
+  const mids: [number, number][] = [
+    [cx, sy],
+    [sx + sw, cy],
+    [cx, sy + sh],
+    [sx, cy],
+  ];
+  for (let i = 0; i < 4; i++) {
+    const a = mids[i];
+    const b = mids[(i + 1) % 4];
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(a[0], a[1]);
+    ctx.lineTo(b[0], b[1]);
+    ctx.closePath();
+    ctx.clip();
+    const g = ctx.createLinearGradient(cx, cy, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
+    g.addColorStop(0, n.fill);
+    g.addColorStop(1, n.fillB || "#ffffff");
+    ctx.fillStyle = g;
+    ctx.fillRect(sx, sy, sw, sh);
+    ctx.restore();
+  }
+}
+
 function fillPaint(
   ctx: CanvasRenderingContext2D,
   n: XNode,
@@ -942,12 +1097,12 @@ function fillPaint(
   const a = n.fill;
   const b = n.fillB || "#ffffff";
   if (n.fillType === "linear") {
-    const g = ctx.createLinearGradient(sx, sy, sx + sw, sy + sh);
+    const g = ctx.createLinearGradient(sx, sy, sx, sy + sh);
     g.addColorStop(0, a);
     g.addColorStop(1, b);
     return g;
   }
-  if (n.fillType === "radial" || n.fillType === "diamond") {
+  if (n.fillType === "radial") {
     const g = ctx.createRadialGradient(
       sx + sw / 2,
       sy + sh / 2,
@@ -1188,24 +1343,46 @@ function paintText(
   ctx.font = `${n.fontWeight} ${size}px ${n.fontFamily}, Inter, system-ui`;
   ctx.textBaseline = "top";
   ctx.textAlign = n.textAlign === "center" ? "center" : n.textAlign === "right" ? "right" : "left";
-  let content = n.text || "Type something";
+  let content = n.text;
+  if (!content) return;
   if (n.textCase === "upper") content = content.toUpperCase();
   if (n.textCase === "lower") content = content.toLowerCase();
   if (n.textCase === "title") content = content.replace(/\w\S*/g, (t) => t[0].toUpperCase() + t.slice(1).toLowerCase());
   const lh = Math.max(size, (n.lineHeight || n.fontSize * 1.2) * z);
   const ls = (n.letterSpacing || 0) * z;
+  const paraGap = (n.paragraphSpacing || 0) * z;
   const wrap = n.sizingW !== "hug";
-  let lines = wrapLines(ctx, content, wrap ? sw : 1e6, ls);
+  const paras = content.split("\n");
+  type Row = { line: string; lastInPara: boolean };
+  const rows: Row[] = [];
+  for (const para of paras) {
+    const wrapped = wrapLines(ctx, para || " ", wrap ? sw : 1e6, ls);
+    wrapped.forEach((line, i) => rows.push({ line: para ? line : "", lastInPara: i === wrapped.length - 1 }));
+  }
+  let lines = rows;
   if (n.truncate) lines = lines.slice(0, n.maxLines || 1);
-  const blockH = lines.length * lh;
+  const blockH = lines.reduce((h, r) => h + lh + (r.lastInPara ? paraGap : 0), 0) - paraGap;
   let y0 = sy;
   if (n.textAlignVertical === "middle") y0 = sy + (sh - blockH) / 2;
   if (n.textAlignVertical === "bottom") y0 = sy + sh - blockH;
-  lines.forEach((line, i) => {
+  let ty = y0;
+  lines.forEach((row) => {
+    const line = row.line;
     const tx =
       n.textAlign === "center" ? sx + sw / 2 : n.textAlign === "right" ? sx + sw : sx;
-    const ty = y0 + i * lh;
-    if (ls) {
+    const justify = n.textAlign === "justified" && wrap && !row.lastInPara && line.includes(" ");
+    if (justify) {
+      const words = line.trim().split(/\s+/);
+      const total = words.reduce((s, w) => s + ctx.measureText(w).width, 0);
+      const gap = words.length > 1 ? (sw - total) / (words.length - 1) : 0;
+      let x = sx;
+      ctx.textAlign = "left";
+      for (const w of words) {
+        ctx.fillText(w, x, ty);
+        x += ctx.measureText(w).width + gap;
+      }
+      ctx.textAlign = "left";
+    } else if (ls) {
       let x = tx;
       if (n.textAlign === "center") x = tx - (ctx.measureText(line).width + ls * Math.max(0, line.length - 1)) / 2;
       if (n.textAlign === "right") x = tx - (ctx.measureText(line).width + ls * Math.max(0, line.length - 1));
@@ -1276,13 +1453,9 @@ function paintBoolean(
     } else if (c.kind === "poly") {
       polyPath(o, sx + sw / 2, sy + sh / 2, Math.min(sw, sh) / 2, c.count || 3);
     } else if (c.kind === "vector" && c.path.length) {
-      c.path.forEach((pt, i) => {
-        const vx = (c.x + pt.x) * z;
-        const vy = (c.y + pt.y) * z;
-        if (i === 0) o.moveTo(vx, vy);
-        else o.lineTo(vx, vy);
-      });
-      if (c.closed) o.closePath();
+      tracePath(o, c.path, c.x * z, c.y * z, z, c.closed);
+    } else if (typeof o.roundRect === "function") {
+      o.roundRect(sx, sy, sw, sh, (c.cornerRadii[0] || 0) * z);
     } else {
       o.rect(sx, sy, sw, sh);
     }

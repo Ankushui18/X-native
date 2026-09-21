@@ -126,9 +126,10 @@ export function canvasMenu(sel: number, isGroup: boolean, hasImage: boolean): Me
   items.push({ kind: "action", id: "makeComponent", label: "Create component", shortcut: "⌘⌥K", icon: "component" });
   items.push({ kind: "action", id: "detachInstance", label: "Detach instance", icon: "component" });
   items.push({ kind: "action", id: "useAsMask", label: "Use as mask", shortcut: "⌘⌥M", icon: "rect" });
+  items.push({ kind: "action", id: "flipH", label: "Flip horizontal", shortcut: "⇧H", icon: "flip-h" });
+  items.push({ kind: "action", id: "flipV", label: "Flip vertical", shortcut: "⇧V", icon: "flip-v" });
   if (hasImage) {
-    items.push({ kind: "action", id: "flipH", label: "Flip horizontal", shortcut: "⇧H", icon: "flip-h" });
-    items.push({ kind: "action", id: "flipV", label: "Flip vertical", shortcut: "⇧V", icon: "flip-v" });
+    /* image-specific items already covered by flip */
   }
   items.push({ kind: "sep" });
   items.push({
@@ -148,10 +149,10 @@ export function canvasMenu(sel: number, isGroup: boolean, hasImage: boolean): Me
       label: "Boolean",
       icon: "rect",
       items: [
-        { kind: "action", id: "union", label: "Union selection", shortcut: "⌘⌥U" },
-        { kind: "action", id: "subtract", label: "Subtract", shortcut: "⌘⌥S" },
-        { kind: "action", id: "intersect", label: "Intersect", shortcut: "⌘⌥I" },
-        { kind: "action", id: "exclude", label: "Exclude", shortcut: "⌘⌥X" },
+        { kind: "action", id: "union", label: "Union selection", shortcut: "⌥⇧U" },
+        { kind: "action", id: "subtract", label: "Subtract", shortcut: "⌥⇧S" },
+        { kind: "action", id: "intersect", label: "Intersect", shortcut: "⌥⇧I" },
+        { kind: "action", id: "exclude", label: "Exclude", shortcut: "⌥⇧E" },
       ],
     });
   }

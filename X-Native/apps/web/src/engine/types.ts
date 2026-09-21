@@ -177,6 +177,8 @@ export interface XNode {
   componentId: string;
   isComponent: boolean;
   interactions: Interaction[];
+  flipH: boolean;
+  flipV: boolean;
 }
 
 export interface Page {
@@ -241,7 +243,7 @@ export type Command =
   | { type: "end" }
   | { type: "cut" }
   | { type: "copy" }
-  | { type: "paste"; x?: number; y?: number }
+  | { type: "paste"; x?: number; y?: number; inPlace?: boolean }
   | { type: "group" }
   | { type: "ungroup" }
   | { type: "wrapSection" }

@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { Engine, Snapshot, Tool, XNode } from "../engine/types";
-import { collectColors, defaultLayout } from "../engine/memory";
+import { collectColors, defaultLayout, worldPos } from "../engine/memory";
 import { Icon, TOOL_ICON, kindIcon } from "./icons";
 import { useTheme, type ThemePref } from "./theme";
 import { ContextMenu, isGroupNode, layerMenu, pageMenu, runMenu } from "./ContextMenu";
@@ -493,7 +493,7 @@ export function Actions({
     { label: "Theme: Daylight", sc: "", run: () => setPref("daylight") },
     { label: "Theme: System", sc: "", run: () => setPref("system") },
     { label: "Create component", sc: "⌘⌥K", run: () => engine.dispatch({ type: "makeComponent" }) },
-    { label: "Union", sc: "⌘⌥U", run: () => engine.dispatch({ type: "boolean", op: "union" }) },
+    { label: "Union", sc: "⌥⇧U", run: () => engine.dispatch({ type: "boolean", op: "union" }) },
     { label: "Zoom to 100%", sc: "⇧0", run: () => engine.dispatch({ type: "setZoom", zoom: 1 }) },
     { label: "Zoom to fit", sc: "⇧1", run: () => engine.dispatch({ type: "setZoom", zoom: 0.5 }) },
   ].filter((i) => i.label.toLowerCase().includes(q.toLowerCase()));
@@ -526,6 +526,30 @@ export function Actions({
       ))}
     </div>
   );
+}
+
+function zoomTo(engine: Engine, mode: "fit" | "selection") {
+  const s = engine.snapshot();
+  const root = s.pages[s.page].root;
+  const nodes =
+    mode === "selection" && s.selection.length
+      ? s.selection.map((id) => worldPos(root, id)).filter((x): x is NonNullable<typeof x> => !!x)
+      : root.children.filter((c) => c.visible).map((n) => ({ x: n.x, y: n.y, node: n }));
+  if (!nodes.length) {
+    engine.dispatch({ type: "setZoom", zoom: 1 });
+    return;
+  }
+  const minX = Math.min(...nodes.map((n) => n.x));
+  const minY = Math.min(...nodes.map((n) => n.y));
+  const maxX = Math.max(...nodes.map((n) => n.x + n.node.w));
+  const maxY = Math.max(...nodes.map((n) => n.y + n.node.h));
+  const bw = Math.max(1, maxX - minX);
+  const bh = Math.max(1, maxY - minY);
+  const vw = Math.max(200, window.innerWidth - 520);
+  const vh = Math.max(200, window.innerHeight - 96);
+  const z = Math.max(0.1, Math.min(8, Math.min(vw / bw, vh / bh) * 0.9));
+  engine.dispatch({ type: "setZoom", zoom: z });
+  engine.dispatch({ type: "setPan", x: (vw - bw * z) / 2 - minX * z, y: (vh - bh * z) / 2 - minY * z });
 }
 
 export function bindHotkeys(
@@ -605,7 +629,7 @@ export function bindHotkeys(
     }
     if (meta && e.key.toLowerCase() === "v") {
       e.preventDefault();
-      engine.dispatch({ type: "paste" });
+      engine.dispatch({ type: "paste", inPlace: e.shiftKey });
       return;
     }
     if (meta && e.key.toLowerCase() === "a") {
@@ -679,14 +703,39 @@ export function bindHotkeys(
       if (id) engine.dispatch({ type: "autoLayout", id, layout: defaultLayout() });
       return;
     }
-    if (!meta && e.shiftKey && e.code === "Digit0") {
+    if ((meta && e.key === "0") || (!meta && e.shiftKey && e.code === "Digit0")) {
       e.preventDefault();
       engine.dispatch({ type: "setZoom", zoom: 1 });
       return;
     }
+    if (meta && (e.key === "=" || e.key === "+")) {
+      e.preventDefault();
+      engine.dispatch({ type: "setZoom", zoom: engine.snapshot().zoom * 1.25 });
+      return;
+    }
+    if (meta && e.key === "-") {
+      e.preventDefault();
+      engine.dispatch({ type: "setZoom", zoom: engine.snapshot().zoom / 1.25 });
+      return;
+    }
     if (!meta && e.shiftKey && e.code === "Digit1") {
       e.preventDefault();
-      engine.dispatch({ type: "setZoom", zoom: 0.5 });
+      zoomTo(engine, "fit");
+      return;
+    }
+    if (!meta && e.shiftKey && e.code === "Digit2") {
+      e.preventDefault();
+      zoomTo(engine, "selection");
+      return;
+    }
+    if (!meta && e.shiftKey && e.key.toLowerCase() === "h") {
+      e.preventDefault();
+      engine.dispatch({ type: "flip", axis: "h" });
+      return;
+    }
+    if (!meta && e.shiftKey && e.key.toLowerCase() === "v") {
+      e.preventDefault();
+      engine.dispatch({ type: "flip", axis: "v" });
       return;
     }
     if (!meta && e.shiftKey) {
