@@ -1,6 +1,7 @@
 import type {
   AutoLayout,
   Command,
+  Effect,
   Engine,
   NodeKind,
   Page,
@@ -38,8 +39,16 @@ function node(
           : kind === "line" || kind === "arrow"
             ? "#00000000"
             : "#d9d9d9",
+    fillOpacity: 1,
+    fillVisible: !(kind === "line" || kind === "arrow"),
+    fillType: "solid",
+    fillB: "#ffffff",
+    fillBlend: "Normal",
     strokePaint: kind === "line" || kind === "arrow" ? "#1e1e1e" : "#00000000",
+    strokeOpacity: 1,
+    strokeVisible: kind === "line" || kind === "arrow",
     strokeWidth: kind === "line" || kind === "arrow" ? 1 : 0,
+    effects: [] as Effect[],
     strokeAlign: "inside",
     opacity: 1,
     visible: true,
@@ -226,6 +235,7 @@ export class MemoryEngine implements Engine {
   private listeners = new Set<() => void>();
   private snapCache: Snapshot;
   private grouping = false;
+  private clip: XNode[] = [];
 
   constructor() {
     this.state = {
@@ -275,6 +285,8 @@ export class MemoryEngine implements Engine {
       "setPage",
       "undo",
       "redo",
+      "copy",
+      "copyCode",
     ].includes(cmd.type);
     if (hist && !this.grouping) {
       this.undo.push(clone(this.state));
@@ -439,6 +451,158 @@ export class MemoryEngine implements Engine {
         }
         break;
       }
+      case "copy":
+        this.clip = s.selection
+          .map((id) => find(this.root(), id))
+          .filter((n): n is XNode => !!n)
+          .map(clone);
+        break;
+      case "cut":
+        this.apply({ type: "copy" });
+        this.apply({ type: "delete" });
+        break;
+      case "paste": {
+        if (!this.clip.length) break;
+        const created: string[] = [];
+        const parent = this.root();
+        for (const n of this.clip) {
+          const copy = clone(n);
+          reid(copy);
+          copy.x = (cmd.x ?? copy.x) + (cmd.x != null ? 0 : 16);
+          copy.y = (cmd.y ?? copy.y) + (cmd.y != null ? 0 : 16);
+          parent.children.push(copy);
+          created.push(copy.id);
+        }
+        s.selection = created;
+        break;
+      }
+      case "selectAll":
+        s.selection = this.root().children.map((c) => c.id);
+        break;
+      case "lockSel":
+        for (const id of s.selection) {
+          const n = find(this.root(), id);
+          if (n) n.locked = !n.locked;
+        }
+        break;
+      case "hideSel":
+        for (const id of s.selection) {
+          const n = find(this.root(), id);
+          if (n) n.visible = !n.visible;
+        }
+        break;
+      case "flip":
+        for (const id of s.selection) {
+          const n = find(this.root(), id);
+          if (!n) continue;
+          if (cmd.axis === "h") n.rotation = -n.rotation;
+          else n.rotation = 180 - n.rotation;
+        }
+        break;
+      case "copyCode": {
+        const n = s.selection[0] ? find(this.root(), s.selection[0]) : null;
+        if (!n || typeof navigator === "undefined") break;
+        const css = [
+          `width: ${Math.round(n.w)}px;`,
+          `height: ${Math.round(n.h)}px;`,
+          n.cornerRadii[0] ? `border-radius: ${n.cornerRadii[0]}px;` : "",
+          n.fillVisible ? `background: ${n.fill};` : "",
+          n.opacity < 1 ? `opacity: ${n.opacity};` : "",
+        ]
+          .filter(Boolean)
+          .join("\n");
+        void navigator.clipboard?.writeText(css);
+        break;
+      }
+      case "group":
+      case "wrapSection": {
+        const ids = s.selection;
+        if (ids.length < (cmd.type === "group" ? 2 : 1)) break;
+        const parent = findParent(this.root(), ids[0]);
+        if (!parent) break;
+        const nodes = ids
+          .map((id) => parent.children.find((c) => c.id === id))
+          .filter((n): n is XNode => !!n);
+        if (nodes.length !== ids.length) break;
+        const minX = Math.min(...nodes.map((n) => n.x));
+        const minY = Math.min(...nodes.map((n) => n.y));
+        const maxX = Math.max(...nodes.map((n) => n.x + n.w));
+        const maxY = Math.max(...nodes.map((n) => n.y + n.h));
+        const g = node(
+          cmd.type === "wrapSection" ? "frame" : "group",
+          cmd.type === "wrapSection" ? "Section" : "Group",
+          minX,
+          minY,
+          maxX - minX,
+          maxY - minY,
+          {
+            fill: "#00000000",
+            fillVisible: false,
+            overflow: "visible",
+          },
+        );
+        g.children = nodes.map((n) => {
+          const c = clone(n);
+          c.x -= minX;
+          c.y -= minY;
+          return c;
+        });
+        parent.children = parent.children.filter((c) => !ids.includes(c.id));
+        parent.children.push(g);
+        s.selection = [g.id];
+        break;
+      }
+      case "ungroup": {
+        const id = s.selection[0];
+        if (!id) break;
+        const parent = findParent(this.root(), id);
+        const n = find(this.root(), id);
+        if (!parent || !n || !n.children.length) break;
+        const i = parent.children.findIndex((c) => c.id === id);
+        const kids = n.children.map((c) => {
+          const k = clone(c);
+          k.x += n.x;
+          k.y += n.y;
+          return k;
+        });
+        parent.children.splice(i, 1, ...kids);
+        s.selection = kids.map((k) => k.id);
+        break;
+      }
+      case "arrange": {
+        for (const id of s.selection) {
+          const parent = findParent(this.root(), id);
+          if (!parent) continue;
+          const i = parent.children.findIndex((c) => c.id === id);
+          if (i < 0) continue;
+          const [row] = parent.children.splice(i, 1);
+          if (cmd.dir === "front") parent.children.push(row);
+          else if (cmd.dir === "back") parent.children.unshift(row);
+          else if (cmd.dir === "forward") parent.children.splice(Math.min(parent.children.length, i + 1), 0, row);
+          else parent.children.splice(Math.max(0, i - 1), 0, row);
+        }
+        break;
+      }
+      case "duplicatePage": {
+        const p = clone(s.pages[s.page]);
+        p.id = uid("page");
+        p.name = `${p.name} copy`;
+        reid(p.root);
+        s.pages.splice(s.page + 1, 0, p);
+        s.page += 1;
+        s.selection = [];
+        break;
+      }
+      case "deletePage": {
+        if (s.pages.length < 2) break;
+        s.pages.splice(s.page, 1);
+        s.page = Math.min(s.page, s.pages.length - 1);
+        s.selection = [];
+        break;
+      }
+      case "renamePage":
+        s.pages[s.page].name = cmd.name;
+        break;
     }
   }
 }
@@ -521,6 +685,30 @@ export function hitTest(root: XNode, wx: number, wy: number): XNode | null {
   };
   visit(root, 0, 0);
   return hit;
+}
+
+export { find, findParent };
+
+export function collectColors(root: XNode): string[] {
+  const out: string[] = [];
+  walk(root, (n) => {
+    if (n.fillVisible && n.fill && n.fill !== "#00000000") out.push(n.fill.slice(0, 7));
+    if (n.strokeVisible && n.strokePaint && n.strokePaint !== "#00000000")
+      out.push(n.strokePaint.slice(0, 7));
+  });
+  return out;
+}
+
+export function defaultEffect(kind: Effect["kind"]): Effect {
+  return {
+    kind,
+    color: "#000000",
+    x: 0,
+    y: kind === "drop-shadow" || kind === "inner-shadow" ? 4 : 0,
+    blur: kind.includes("blur") ? 8 : 16,
+    spread: 0,
+    visible: true,
+  };
 }
 
 export function defaultLayout(): AutoLayout {

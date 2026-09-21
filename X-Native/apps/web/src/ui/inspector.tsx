@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type {
   AutoLayout,
+  EffectKind,
   Engine,
   LayoutAlign,
   LayoutJustify,
@@ -11,8 +12,10 @@ import type {
   TextAlignVertical,
   XNode,
 } from "../engine/types";
-import { defaultLayout, worldPos } from "../engine/memory";
+import { collectColors, defaultEffect, defaultLayout, worldPos } from "../engine/memory";
 import { Icon } from "./icons";
+import { FillPicker, type FillValue } from "./FillPicker";
+import { isNone } from "./color";
 
 export function RightPanel({
   engine,
@@ -97,6 +100,8 @@ const PRESETS: { name: string; w: number; h: number }[] = [
 ];
 
 function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
+  const snap = engine.snapshot();
+  const root = snap.pages[snap.page].root;
   return (
     <>
       {tool === "frame" && (
@@ -116,7 +121,7 @@ function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
                     y: 80,
                     w: p.w,
                     h: p.h,
-                    extra: { name: p.name, overflow: "clip", fill: "#ffffff" },
+                    extra: { name: p.name, overflow: "clip", fill: "#ffffff", fillVisible: true },
                   })
                 }
               >
@@ -134,12 +139,22 @@ function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
         <h3>Background</h3>
       </div>
       <div className="insp-pad">
-        <ColorRow value="#e5e5e5" opacity={100} onChange={() => {}} />
+        <ColorRow
+          value={root.fill}
+          opacity={Math.round((root.fillOpacity ?? 1) * 100)}
+          visible={root.fillVisible !== false && !isNone(root.fill)}
+          recents={collectColors(root)}
+          onChange={(fill) => engine.dispatch({ type: "patch", id: root.id, patch: { fill, fillVisible: true } })}
+          onOpacity={(v) =>
+            engine.dispatch({ type: "patch", id: root.id, patch: { fillOpacity: v / 100 } })
+          }
+          onVisible={(v) => engine.dispatch({ type: "patch", id: root.id, patch: { fillVisible: v } })}
+        />
       </div>
       <div className="hr" />
       <div className="h-row">
         <h3>Export</h3>
-        <button className="plus">
+        <button className="plus" title="Add export">
           <Icon name="plus" size={14} />
         </button>
       </div>
@@ -300,11 +315,11 @@ function Design({
           <div className="seg">
             <button
               title="Flip horizontal"
-              onClick={() => engine.dispatch({ type: "patch", id: n.id, patch: { w: n.w } })}
+              onClick={() => engine.dispatch({ type: "flip", axis: "h" })}
             >
               <Icon name="flip-h" size={14} />
             </button>
-            <button title="Flip vertical">
+            <button title="Flip vertical" onClick={() => engine.dispatch({ type: "flip", axis: "v" })}>
               <Icon name="flip-v" size={14} />
             </button>
           </div>
@@ -470,7 +485,7 @@ function Design({
 
       <div className="hr" />
       <div className="h-row">
-        <h3>Layer</h3>
+        <h3>Appearance</h3>
       </div>
       <div className="insp-pad">
         <div className="grid2">
@@ -512,55 +527,117 @@ function Design({
       <div className="hr" />
       <div className="h-row">
         <h3>Fill</h3>
-        <button className="plus" title="Add fill">
+        <button
+          className="plus"
+          title="Add fill"
+          onClick={() =>
+            engine.dispatch({
+              type: "patch",
+              id: n.id,
+              patch: {
+                fill: isNone(n.fill) ? "#d9d9d9" : n.fill,
+                fillVisible: true,
+                fillOpacity: n.fillOpacity ?? 1,
+              },
+            })
+          }
+        >
           <Icon name="plus" size={14} />
         </button>
       </div>
-      <div className="insp-pad">
-        <ColorRow
-          value={n.fill}
-          opacity={Math.round(n.opacity * 100)}
-          onChange={(fill) => engine.dispatch({ type: "patch", id: n.id, patch: { fill } })}
-          onOpacity={(v) => num("opacity", v / 100)}
-        />
-      </div>
+      {n.fillVisible && !isNone(n.fill) && (
+        <div className="insp-pad">
+          <ColorRow
+            value={n.fill}
+            opacity={Math.round((n.fillOpacity ?? 1) * 100)}
+            visible={n.fillVisible}
+            type={n.fillType}
+            second={n.fillB}
+            blend={n.fillBlend}
+            recents={collectColors(snap.pages[snap.page].root)}
+            onChange={(fill) => engine.dispatch({ type: "patch", id: n.id, patch: { fill, fillVisible: true } })}
+            onOpacity={(v) =>
+              engine.dispatch({ type: "patch", id: n.id, patch: { fillOpacity: v / 100 } })
+            }
+            onVisible={(v) => engine.dispatch({ type: "patch", id: n.id, patch: { fillVisible: v } })}
+            onRemove={() =>
+              engine.dispatch({
+                type: "patch",
+                id: n.id,
+                patch: { fill: "#00000000", fillVisible: false },
+              })
+            }
+            onMeta={(p) => engine.dispatch({ type: "patch", id: n.id, patch: p })}
+          />
+        </div>
+      )}
 
       <div className="h-row">
         <h3>Stroke</h3>
-        <button className="plus">
+        <button
+          className="plus"
+          title="Add stroke"
+          onClick={() =>
+            engine.dispatch({
+              type: "patch",
+              id: n.id,
+              patch: {
+                strokePaint: isNone(n.strokePaint) ? "#1e1e1e" : n.strokePaint,
+                strokeVisible: true,
+                strokeWidth: n.strokeWidth || 1,
+              },
+            })
+          }
+        >
           <Icon name="plus" size={14} />
         </button>
       </div>
-      <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
-        <ColorRow
-          value={n.strokePaint}
-          opacity={100}
-          onChange={(strokePaint) =>
-            engine.dispatch({ type: "patch", id: n.id, patch: { strokePaint } })
-          }
-        />
-        <div className="grid3">
-          <Field
-            label="W"
-            value={n.strokeWidth}
-            onChange={(strokeWidth) =>
-              engine.dispatch({ type: "patch", id: n.id, patch: { strokeWidth } })
+      {n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint) && (
+        <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
+          <ColorRow
+            title="Stroke"
+            value={n.strokePaint}
+            opacity={Math.round((n.strokeOpacity ?? 1) * 100)}
+            visible={n.strokeVisible}
+            recents={collectColors(snap.pages[snap.page].root)}
+            onChange={(strokePaint) =>
+              engine.dispatch({ type: "patch", id: n.id, patch: { strokePaint, strokeVisible: true } })
+            }
+            onOpacity={(v) =>
+              engine.dispatch({ type: "patch", id: n.id, patch: { strokeOpacity: v / 100 } })
+            }
+            onVisible={(v) => engine.dispatch({ type: "patch", id: n.id, patch: { strokeVisible: v } })}
+            onRemove={() =>
+              engine.dispatch({
+                type: "patch",
+                id: n.id,
+                patch: { strokePaint: "#00000000", strokeVisible: false, strokeWidth: 0 },
+              })
             }
           />
-          <div className="seg">
-            {(["inside", "center", "outside"] as StrokeAlign[]).map((a) => (
-              <button
-                key={a}
-                className={n.strokeAlign === a ? "on" : ""}
-                title={a}
-                onClick={() => engine.dispatch({ type: "patch", id: n.id, patch: { strokeAlign: a } })}
-              >
-                <Icon name={`stroke-${a}`} size={14} />
-              </button>
-            ))}
+          <div className="grid3">
+            <Field
+              label="W"
+              value={n.strokeWidth}
+              onChange={(strokeWidth) =>
+                engine.dispatch({ type: "patch", id: n.id, patch: { strokeWidth } })
+              }
+            />
+            <div className="seg">
+              {(["inside", "center", "outside"] as StrokeAlign[]).map((a) => (
+                <button
+                  key={a}
+                  className={n.strokeAlign === a ? "on" : ""}
+                  title={a}
+                  onClick={() => engine.dispatch({ type: "patch", id: n.id, patch: { strokeAlign: a } })}
+                >
+                  <Icon name={`stroke-${a}`} size={14} />
+                </button>
+              ))}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {n.kind === "text" && (
         <>
@@ -717,18 +794,114 @@ function Design({
       )}
 
       <div className="hr" />
-      <div className="h-row">
-        <h3>Effects</h3>
-        <button className="plus">
-          <Icon name="plus" size={14} />
-        </button>
-      </div>
+      <Effects n={n} engine={engine} />
       <div className="h-row">
         <h3>Export</h3>
-        <button className="plus">
+        <button
+          className="plus"
+          title="Add export"
+          onClick={() => {
+            const a = document.createElement("a");
+            a.download = `${n.name}.svg`;
+            a.href = URL.createObjectURL(
+              new Blob(
+                [
+                  `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(n.w)}" height="${Math.round(n.h)}"><rect width="100%" height="100%" fill="${n.fillVisible ? n.fill : "none"}"/></svg>`,
+                ],
+                { type: "image/svg+xml" },
+              ),
+            );
+            a.click();
+          }}
+        >
           <Icon name="plus" size={14} />
         </button>
       </div>
+      <div className="insp-pad">
+        <div className="color-row">
+          <span className="hex">PNG</span>
+          <span className="op">1×</span>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function Effects({ n, engine }: { n: XNode; engine: Engine }) {
+  const [open, setOpen] = useState(false);
+  const kinds: { id: EffectKind; label: string }[] = [
+    { id: "drop-shadow", label: "Drop shadow" },
+    { id: "inner-shadow", label: "Inner shadow" },
+    { id: "layer-blur", label: "Layer blur" },
+    { id: "background-blur", label: "Background blur" },
+  ];
+  return (
+    <>
+      <div className="h-row" style={{ position: "relative" }}>
+        <h3>Effects</h3>
+        <button className="plus" title="Add effect" onClick={() => setOpen((v) => !v)}>
+          <Icon name="plus" size={14} />
+        </button>
+        {open && (
+          <div className="type-menu" style={{ right: 8, top: 28, left: "auto", width: 180 }}>
+            {kinds.map((k) => (
+              <button
+                key={k.id}
+                onClick={() => {
+                  engine.dispatch({
+                    type: "patch",
+                    id: n.id,
+                    patch: { effects: [...(n.effects ?? []), defaultEffect(k.id)] },
+                  });
+                  setOpen(false);
+                }}
+              >
+                {k.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      {(n.effects ?? []).map((fx, i) => (
+        <div key={i} className="insp-pad" style={{ marginBottom: 4 }}>
+          <div className="color-row">
+            <span className="swatch" style={{ background: fx.color }} />
+            <span className="hex">{kinds.find((k) => k.id === fx.kind)?.label}</span>
+            <input
+              className="op"
+              value={fx.blur}
+              onChange={(e) => {
+                const blur = parseFloat(e.target.value);
+                if (Number.isNaN(blur)) return;
+                const effects = (n.effects ?? []).map((e2, j) => (j === i ? { ...e2, blur } : e2));
+                engine.dispatch({ type: "patch", id: n.id, patch: { effects } });
+              }}
+            />
+            <button
+              className="mini"
+              title={fx.visible ? "Hide" : "Show"}
+              onClick={() => {
+                const effects = (n.effects ?? []).map((e2, j) =>
+                  j === i ? { ...e2, visible: !e2.visible } : e2,
+                );
+                engine.dispatch({ type: "patch", id: n.id, patch: { effects } });
+              }}
+            >
+              <Icon name={fx.visible ? "eye" : "eye-off"} size={14} />
+            </button>
+            <button
+              className="mini minus"
+              title="Remove"
+              onClick={() => {
+                const effects = (n.effects ?? []).filter((_, j) => j !== i);
+                engine.dispatch({ type: "patch", id: n.id, patch: { effects } });
+              }}
+            >
+              <Icon name="minus" size={14} />
+            </button>
+          </div>
+        </div>
+      ))}
     </>
   );
 }
@@ -791,27 +964,50 @@ function Field({
 }
 
 function ColorRow({
+  title = "Fill",
   value,
   opacity = 100,
+  visible = true,
+  type = "solid",
+  second = "#ffffff",
+  blend = "Normal",
+  recents = [],
   onChange,
   onOpacity,
+  onVisible,
+  onRemove,
+  onMeta,
 }: {
+  title?: string;
   value: string;
   opacity?: number;
+  visible?: boolean;
+  type?: FillValue["type"];
+  second?: string;
+  blend?: string;
+  recents?: string[];
   onChange: (v: string) => void;
   onOpacity?: (v: number) => void;
+  onVisible?: (v: boolean) => void;
+  onRemove?: () => void;
+  onMeta?: (p: Partial<XNode>) => void;
 }) {
-  const hidden = value === "#00000000";
+  const [open, setOpen] = useState(false);
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  const hidden = !visible || isNone(value);
   const hex = value.length >= 7 ? value.slice(0, 7) : "#000000";
   return (
     <div className="color-row">
-      <label className="swatch" style={{ background: hidden ? "#fff" : hex }}>
-        <input
-          type="color"
-          value={hidden ? "#ffffff" : hex}
-          onChange={(e) => onChange(e.target.value)}
-        />
-      </label>
+      <button
+        type="button"
+        className="swatch"
+        style={{ background: hidden ? "transparent" : hex }}
+        title="Color picker"
+        onClick={(e) => {
+          setAnchor((e.currentTarget as HTMLElement).getBoundingClientRect());
+          setOpen(true);
+        }}
+      />
       <input
         className="hex"
         value={hidden ? "" : hex.replace("#", "")}
@@ -831,10 +1027,29 @@ function ColorRow({
       <button
         className="mini"
         title={hidden ? "Show" : "Hide"}
-        onClick={() => onChange(hidden ? "#d9d9d9" : "#00000000")}
+        onClick={() => onVisible?.(!visible)}
       >
         <Icon name={hidden ? "eye-off" : "eye"} size={14} />
       </button>
+      {onRemove && (
+        <button className="mini minus" title="Remove" onClick={onRemove}>
+          <Icon name="minus" size={14} />
+        </button>
+      )}
+      {open && anchor && (
+        <FillPicker
+          title={title}
+          value={{ color: hex, opacity, type, second, blend }}
+          recents={recents}
+          anchor={anchor}
+          onChange={(v) => {
+            onChange(v.color);
+            onOpacity?.(v.opacity);
+            onMeta?.({ fillType: v.type, fillB: v.second, fillBlend: v.blend, fillVisible: true });
+          }}
+          onClose={() => setOpen(false)}
+        />
+      )}
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import type { Engine, Snapshot, Tool, XNode } from "../engine/types";
 import { Icon, TOOL_ICON, kindIcon } from "./icons";
 import { useTheme, type ThemePref } from "./theme";
+import { ContextMenu, isGroupNode, layerMenu, pageMenu, runMenu } from "./ContextMenu";
 
 export type NavId = "file" | "assets" | "tools" | "variables" | "agent";
 
@@ -99,6 +100,7 @@ function LayerRow({
 }) {
   const [open, setOpen] = useState(true);
   const [renaming, setRenaming] = useState(false);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const match = !q || n.name.toLowerCase().includes(q.toLowerCase());
   if (!match && !n.children.some((c) => c.name.toLowerCase().includes(q.toLowerCase()))) {
     return null;
@@ -110,6 +112,12 @@ function LayerRow({
         style={{ paddingLeft: 8 + depth * 12 }}
         onClick={() => engine.dispatch({ type: "select", ids: [n.id] })}
         onDoubleClick={() => setRenaming(true)}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          engine.dispatch({ type: "select", ids: [n.id] });
+          setMenu({ x: e.clientX, y: e.clientY });
+        }}
       >
         {n.children.length ? (
           <button
@@ -168,6 +176,15 @@ function LayerRow({
         n.children.map((c) => (
           <LayerRow key={c.id} n={c} depth={depth + 1} sel={sel} engine={engine} q={q} />
         ))}
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={layerMenu(isGroupNode(n))}
+          onRun={(id) => runMenu(engine, id, { onRename: () => setRenaming(true) })}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </>
   );
 }
@@ -185,6 +202,7 @@ export function LeftPanel({
 }) {
   const [q, setQ] = useState("");
   const [pagesOpen, setPagesOpen] = useState(true);
+  const [pageMenuAt, setPageMenuAt] = useState<{ x: number; y: number; i: number } | null>(null);
   const root = snap.pages[snap.page].root;
   return (
     <aside className="panel left">
@@ -228,6 +246,15 @@ export function LeftPanel({
                 key={p.id}
                 className={`row${i === snap.page ? " sel" : ""}`}
                 onClick={() => engine.dispatch({ type: "setPage", index: i })}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  engine.dispatch({ type: "setPage", index: i });
+                  setPageMenuAt({ x: e.clientX, y: e.clientY, i });
+                }}
+                onDoubleClick={() => {
+                  const name = window.prompt("Rename page", p.name);
+                  if (name) engine.dispatch({ type: "renamePage", name });
+                }}
               >
                 <Icon name="page" size={14} />
                 <span className="name">{p.name}</span>
@@ -285,6 +312,23 @@ export function LeftPanel({
             Agents tab.
           </p>
         </>
+      )}
+      {pageMenuAt && (
+        <ContextMenu
+          x={pageMenuAt.x}
+          y={pageMenuAt.y}
+          items={pageMenu(snap.pages.length > 1)}
+          onRun={(id) =>
+            runMenu(engine, id, {
+              onRename: () => {
+                const p = snap.pages[pageMenuAt.i];
+                const name = window.prompt("Rename page", p.name);
+                if (name) engine.dispatch({ type: "renamePage", name });
+              },
+            })
+          }
+          onClose={() => setPageMenuAt(null)}
+        />
       )}
     </aside>
   );
@@ -546,6 +590,51 @@ export function bindHotkeys(
     if (meta && e.key.toLowerCase() === "d") {
       e.preventDefault();
       engine.dispatch({ type: "duplicate" });
+      return;
+    }
+    if (meta && e.key.toLowerCase() === "c") {
+      e.preventDefault();
+      engine.dispatch({ type: "copy" });
+      return;
+    }
+    if (meta && e.key.toLowerCase() === "x") {
+      e.preventDefault();
+      engine.dispatch({ type: "cut" });
+      return;
+    }
+    if (meta && e.key.toLowerCase() === "v") {
+      e.preventDefault();
+      engine.dispatch({ type: "paste" });
+      return;
+    }
+    if (meta && e.key.toLowerCase() === "a") {
+      e.preventDefault();
+      engine.dispatch({ type: "selectAll" });
+      return;
+    }
+    if (meta && e.key.toLowerCase() === "g") {
+      e.preventDefault();
+      engine.dispatch({ type: e.shiftKey ? "ungroup" : "group" });
+      return;
+    }
+    if (meta && e.key === "]") {
+      e.preventDefault();
+      engine.dispatch({ type: "arrange", dir: e.shiftKey ? "front" : "forward" });
+      return;
+    }
+    if (meta && e.key === "[") {
+      e.preventDefault();
+      engine.dispatch({ type: "arrange", dir: e.shiftKey ? "back" : "backward" });
+      return;
+    }
+    if (meta && e.shiftKey && e.key.toLowerCase() === "l") {
+      e.preventDefault();
+      engine.dispatch({ type: "lockSel" });
+      return;
+    }
+    if (meta && e.shiftKey && e.key.toLowerCase() === "h") {
+      e.preventDefault();
+      engine.dispatch({ type: "hideSel" });
       return;
     }
     if (e.key === "Delete" || e.key === "Backspace") {

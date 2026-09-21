@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import type { Engine, NodeKind, Snapshot, Tool, XNode } from "../engine/types";
 import { hitTest, worldPos } from "../engine/memory";
 import { useTheme } from "./theme";
+import { cssRgba, isNone, takeEyedrop, toHex } from "./color";
+import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
 
 const CREATE: Tool[] = [
   "frame",
@@ -44,6 +46,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const imgs = useRef(new Map<string, HTMLImageElement>());
   const [band, setBand] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [edit, setEdit] = useState<{ id: string; text: string } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; wx: number; wy: number } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const pendingImage = useRef<{ x: number; y: number } | null>(null);
   const { theme } = useTheme();
@@ -86,6 +89,11 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     const canvasLabel = css.getPropertyValue("--canvas-label").trim() || "rgba(0,0,0,0.45)";
     ctx.fillStyle = canvasBg;
     ctx.fillRect(0, 0, w, h);
+    const pageRoot = snap.pages[snap.page].root;
+    if (pageRoot.fillVisible !== false && !isNone(pageRoot.fill)) {
+      ctx.fillStyle = cssRgba(pageRoot.fill, pageRoot.fillOpacity ?? 1);
+      ctx.fillRect(0, 0, w, h);
+    }
     if (snap.zoom >= 2) {
       ctx.strokeStyle = grid;
       ctx.lineWidth = 1;
@@ -138,6 +146,13 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       } else {
         round();
       }
+      const drop = (n.effects ?? []).find((e) => e.kind === "drop-shadow" && e.visible);
+      if (drop) {
+        ctx.shadowColor = drop.color;
+        ctx.shadowBlur = drop.blur * z;
+        ctx.shadowOffsetX = (drop.x || 0) * z;
+        ctx.shadowOffsetY = (drop.y || 4) * z;
+      }
       if (n.imageSrc) {
         let im = imgs.current.get(n.imageSrc);
         if (!im) {
@@ -153,14 +168,30 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           ctx.drawImage(im, sx, sy, sw, sh);
           ctx.restore();
         }
-      } else if (n.fill && n.fill !== "#00000000" && n.kind !== "line" && n.kind !== "arrow") {
-        ctx.fillStyle = n.fill;
+      } else if (
+        n.fillVisible !== false &&
+        n.fill &&
+        !isNone(n.fill) &&
+        n.kind !== "line" &&
+        n.kind !== "arrow"
+      ) {
+        ctx.save();
+        ctx.globalAlpha *= n.fillOpacity ?? 1;
+        ctx.fillStyle = fillPaint(ctx, n, sx, sy, sw, sh);
         ctx.fill();
+        ctx.restore();
       }
-      if (n.strokeWidth > 0 && n.strokePaint !== "#00000000") {
+      ctx.shadowColor = "transparent";
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+      if (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)) {
+        ctx.save();
+        ctx.globalAlpha *= n.strokeOpacity ?? 1;
         ctx.strokeStyle = n.strokePaint;
         ctx.lineWidth = Math.max(1, n.strokeWidth * z);
         ctx.stroke();
+        ctx.restore();
       }
       if (n.kind === "text" && edit?.id !== n.id) {
         ctx.fillStyle = n.fill;
@@ -280,6 +311,23 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
 
   const onDown = (e: React.MouseEvent) => {
     if (edit) return;
+    if (e.button === 2) return;
+    const drop = takeEyedrop();
+    if (drop) {
+      const c = ref.current;
+      const box = wrap.current!.getBoundingClientRect();
+      if (c) {
+        const dpr = window.devicePixelRatio || 1;
+        const px = Math.max(0, Math.floor((e.clientX - box.left) * dpr));
+        const py = Math.max(0, Math.floor((e.clientY - box.top) * dpr));
+        const ctx = c.getContext("2d");
+        if (ctx) {
+          const d = ctx.getImageData(px, py, 1, 1).data;
+          drop(toHex(d[0], d[1], d[2]));
+        }
+      }
+      return;
+    }
     if (e.button === 1 || snap.tool === "hand" || space.current) {
       drag.current = { mode: "pan", sx: e.clientX, sy: e.clientY, wx: 0, wy: 0 };
       return;
@@ -546,6 +594,16 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         const wpt = toWorld(e.clientX, e.clientY);
         if (e.dataTransfer.files?.length) placeFiles(e.dataTransfer.files, wpt);
       }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        const wpt = toWorld(e.clientX, e.clientY);
+        const hit = hitTest(snap.pages[snap.page].root, wpt.x, wpt.y);
+        if (hit && !snap.selection.includes(hit.id)) {
+          engine.dispatch({ type: "select", ids: [hit.id] });
+        }
+        if (!hit) engine.dispatch({ type: "select", ids: [] });
+        setMenu({ x: e.clientX, y: e.clientY, wx: wpt.x, wy: wpt.y });
+      }}
     >
       <canvas ref={ref} />
       {edit && editBox && (
@@ -575,8 +633,65 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           e.target.value = "";
         }}
       />
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={canvasMenu(
+            snap.selection.length,
+            isGroupNode(
+              snap.selection[0]
+                ? worldPos(snap.pages[snap.page].root, snap.selection[0])?.node
+                : undefined,
+            ),
+            !!snap.selection[0] &&
+              !!worldPos(snap.pages[snap.page].root, snap.selection[0])?.node.imageSrc,
+          )}
+          onRun={(id) => runMenu(engine, id, { x: menu.wx, y: menu.wy })}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </div>
   );
+}
+
+function fillPaint(
+  ctx: CanvasRenderingContext2D,
+  n: XNode,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+): string | CanvasGradient {
+  const a = n.fill;
+  const b = n.fillB || "#ffffff";
+  if (n.fillType === "linear") {
+    const g = ctx.createLinearGradient(sx, sy, sx + sw, sy + sh);
+    g.addColorStop(0, a);
+    g.addColorStop(1, b);
+    return g;
+  }
+  if (n.fillType === "radial" || n.fillType === "diamond") {
+    const g = ctx.createRadialGradient(
+      sx + sw / 2,
+      sy + sh / 2,
+      0,
+      sx + sw / 2,
+      sy + sh / 2,
+      Math.max(sw, sh) / 2,
+    );
+    g.addColorStop(0, a);
+    g.addColorStop(1, b);
+    return g;
+  }
+  if (n.fillType === "angular" && typeof ctx.createConicGradient === "function") {
+    const g = ctx.createConicGradient(0, sx + sw / 2, sy + sh / 2);
+    g.addColorStop(0, a);
+    g.addColorStop(0.5, b);
+    g.addColorStop(1, a);
+    return g;
+  }
+  return a;
 }
 
 function handles(sx: number, sy: number, sw: number, sh: number): [number, number][] {

@@ -27,6 +27,18 @@ export type TextCase = "none" | "upper" | "lower" | "title" | "small-caps";
 export type StrokeAlign = "inside" | "center" | "outside";
 export type RightTab = "design" | "prototype" | "inspect";
 export type LeftTab = "layers" | "assets" | "tokens";
+export type FillType = "solid" | "linear" | "radial" | "angular" | "diamond" | "image";
+export type EffectKind = "drop-shadow" | "inner-shadow" | "layer-blur" | "background-blur";
+
+export interface Effect {
+  kind: EffectKind;
+  color: string;
+  x: number;
+  y: number;
+  blur: number;
+  spread: number;
+  visible: boolean;
+}
 
 export type Tool =
   | "select"
@@ -70,10 +82,18 @@ export interface XNode {
   h: number;
   rotation: number;
   fill: string;
+  fillOpacity: number;
+  fillVisible: boolean;
+  fillType: FillType;
+  fillB: string;
+  fillBlend: string;
   strokePaint: string;
+  strokeOpacity: number;
+  strokeVisible: boolean;
   strokeWidth: number;
   strokeAlign: StrokeAlign;
   opacity: number;
+  effects: Effect[];
   visible: boolean;
   locked: boolean;
   overflow: Overflow;
@@ -149,7 +169,22 @@ export type Command =
   | { type: "autoLayout"; id: string; layout: AutoLayout | null }
   | { type: "nudge"; dx: number; dy: number }
   | { type: "begin" }
-  | { type: "end" };
+  | { type: "end" }
+  | { type: "cut" }
+  | { type: "copy" }
+  | { type: "paste"; x?: number; y?: number }
+  | { type: "group" }
+  | { type: "ungroup" }
+  | { type: "wrapSection" }
+  | { type: "arrange"; dir: "front" | "forward" | "backward" | "back" }
+  | { type: "selectAll" }
+  | { type: "lockSel" }
+  | { type: "hideSel" }
+  | { type: "copyCode" }
+  | { type: "flip"; axis: "h" | "v" }
+  | { type: "duplicatePage" }
+  | { type: "deletePage" }
+  | { type: "renamePage"; name: string };
 
 export interface Engine {
   snapshot(): Snapshot;

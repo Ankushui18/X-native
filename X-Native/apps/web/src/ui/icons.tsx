@@ -549,6 +549,66 @@ export function Icon({
           <rect x="2.4" y="2.4" width="11.2" height="11.2" rx="1.2" strokeDasharray="2 1.5" />
         </svg>
       );
+    case "eyedropper":
+      return (
+        <svg {...p}>
+          <path d="M10.2 2.6l3.2 3.2-1.1 1.1-3.2-3.2z" />
+          <path d="M8.6 4.8L3.4 10v2.6H6l5.2-5.2" />
+          <path d="M3.2 13.4h4" />
+        </svg>
+      );
+    case "copy":
+      return (
+        <svg {...p}>
+          <rect x="5.4" y="5.4" width="7.6" height="7.6" rx="1.2" />
+          <path d="M10.6 5.2V3.8A1.2 1.2 0 009.4 2.6H3.8A1.2 1.2 0 002.6 3.8v5.6A1.2 1.2 0 003.8 10.6h1.4" />
+        </svg>
+      );
+    case "clipboard":
+      return (
+        <svg {...p}>
+          <rect x="3.6" y="3.8" width="8.8" height="10" rx="1.2" />
+          <path d="M6 3.8V3a2 2 0 014 0v.8" />
+        </svg>
+      );
+    case "scissors":
+      return (
+        <svg {...p}>
+          <circle cx="4.2" cy="4.4" r="1.6" />
+          <circle cx="4.2" cy="11.6" r="1.6" />
+          <path d="M5.6 5.4L13.2 12M5.6 10.6L13.2 4" />
+        </svg>
+      );
+    case "trash":
+      return (
+        <svg {...p}>
+          <path d="M3.2 5.2h9.6M6.2 5.2V3.6h3.6v1.6M4.6 5.2l.6 7.4h5.6l.6-7.4" />
+        </svg>
+      );
+    case "chevrons-up":
+      return (
+        <svg {...p}>
+          <path d="M4.2 8.4L8 4.6l3.8 3.8M4.2 11.6L8 7.8l3.8 3.8" />
+        </svg>
+      );
+    case "chevron-up":
+      return (
+        <svg {...p}>
+          <path d="M4.2 10L8 6.2 11.8 10" />
+        </svg>
+      );
+    case "chevron-down":
+      return (
+        <svg {...p}>
+          <path d="M4.2 6L8 9.8 11.8 6" />
+        </svg>
+      );
+    case "chevrons-down":
+      return (
+        <svg {...p}>
+          <path d="M4.2 4.4L8 8.2l3.8-3.8M4.2 7.6L8 11.4l3.8-3.8" />
+        </svg>
+      );
     case "help":
       return (
         <svg {...p}>
