@@ -754,6 +754,12 @@ export function kindIcon(k: string, imageSrc?: string): string {
       return "poly";
     case "group":
       return "group";
+    case "component":
+    case "instance":
+      return "component";
+    case "boolean":
+    case "vector":
+      return "pen";
     default:
       return "rect";
   }

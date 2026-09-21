@@ -91,6 +91,70 @@ html[data-theme="dark"] {
   --shadow: 0 2px 14px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
+/* crates/x-ui Graphite — audited dark palette, accent #0d70f6. */
+html[data-theme="graphite"] {
+  color-scheme: dark;
+  --bg: #2c2c2c;
+  --canvas: #1e1e1e;
+  --panel: #2c2c2c;
+  --elevated: #383838;
+  --hover: #3c3c3c;
+  --active: #444444;
+  --sel: rgba(13, 112, 246, 0.22);
+  --line: #444444;
+  --line-2: #555555;
+  --text: #f5f5f5;
+  --muted: #b3b3b3;
+  --dim: #b1b1b1;
+  --blue: #0d70f6;
+  --blue-hover: #0b63d9;
+  --on-accent: #ffffff;
+  --input: #383838;
+  --field-focus: #2c2c2c;
+  --dock: #2c2c2c;
+  --tool-fg: #f5f5f5;
+  --tool-on-bg: #f5f5f5;
+  --tool-on-fg: #1e1e1e;
+  --help-bg: #383838;
+  --help-fg: #ffffff;
+  --grid: rgba(255, 255, 255, 0.06);
+  --canvas-label: #b3b3b3;
+  --dot: #555555;
+  --shadow: 0 2px 14px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+/* crates/x-ui Daylight — audited light palette. */
+html[data-theme="daylight"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --canvas: #e5e5e5;
+  --panel: #ffffff;
+  --elevated: #f5f5f5;
+  --hover: #eeeeee;
+  --active: #e6e6e6;
+  --sel: #e5f4ff;
+  --line: #e6e6e6;
+  --line-2: #b0b0b0;
+  --text: #1a1a1a;
+  --muted: #5a5a5a;
+  --dim: #5a5a5a;
+  --blue: #0d70f6;
+  --blue-hover: #0b63d9;
+  --on-accent: #ffffff;
+  --input: #f5f5f5;
+  --field-focus: #ffffff;
+  --dock: #ffffff;
+  --tool-fg: #1a1a1a;
+  --tool-on-bg: #1a1a1a;
+  --tool-on-fg: #ffffff;
+  --help-bg: #2c2c2c;
+  --help-fg: #ffffff;
+  --grid: rgba(0, 0, 0, 0.06);
+  --canvas-label: #5a5a5a;
+  --dot: #b0b0b0;
+  --shadow: 0 2px 14px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.06);
+}
+
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
 body {
@@ -312,6 +376,9 @@ input, textarea { user-select: text; }
 }
 .row:hover { background: var(--hover); }
 .row.sel { background: var(--sel); }
+.row.comp .name { color: #7b61ff; }
+html[data-theme="dark"] .row.comp .name,
+html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }
 .row .name {
   flex: 1;
   overflow: hidden;
@@ -1148,3 +1215,39 @@ body.eyedrop, body.eyedrop * { cursor: crosshair !important; }
   padding: 12px 16px 8px;
   font-size: 13px;
 }
+.export-run {
+  height: 32px;
+  width: 100%;
+  border: 0;
+  border-radius: 6px;
+  background: var(--blue);
+  color: var(--on-accent);
+  font-weight: 500;
+  font-size: 11px;
+}
+.export-run:hover { background: var(--blue-hover); }
+.export-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+}
+.export-row .fmt {
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--input);
+  padding: 0 8px;
+  font-size: 11px;
+}
+.export-row .suffix {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  border: 0;
+  background: var(--input);
+  border-radius: 6px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+.hint { color: var(--dim); font-size: 10px; }

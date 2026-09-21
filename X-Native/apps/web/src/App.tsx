@@ -38,9 +38,9 @@ export default function App() {
     window.setTimeout(() => setToast(""), 1600);
   };
   const present = () => {
+    engine.dispatch({ type: "presentStart" });
     setHideUi(true);
-    engine.dispatch({ type: "setRightTab", tab: "prototype" });
-    setToast("Presenting — press Esc to exit");
+    setToast("Presenting — click hotspots, Esc to go back");
     window.setTimeout(() => setToast(""), 1800);
   };
 
@@ -51,7 +51,16 @@ export default function App() {
         onHide: () => setHideUi((v) => !v),
         onMinimize: () => setMinUi((v) => !v),
         onNav: setNav,
-        onPresentExit: () => setHideUi(false),
+        onPresentExit: () => {
+          const s = engine.snapshot();
+          if (s.presentFrame) {
+            if (s.presentStack.length > 1) engine.dispatch({ type: "presentBack" });
+            else {
+              engine.dispatch({ type: "presentStop" });
+              setHideUi(false);
+            }
+          }
+        },
       }),
     [engine],
   );

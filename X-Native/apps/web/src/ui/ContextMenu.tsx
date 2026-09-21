@@ -124,6 +124,7 @@ export function canvasMenu(sel: number, isGroup: boolean, hasImage: boolean): Me
   if (isGroup) items.push({ kind: "action", id: "ungroup", label: "Ungroup", shortcut: "⇧⌘G", icon: "group" });
   items.push({ kind: "action", id: "wrapSection", label: "Wrap in new section", icon: "section" });
   items.push({ kind: "action", id: "makeComponent", label: "Create component", shortcut: "⌘⌥K", icon: "component" });
+  items.push({ kind: "action", id: "detachInstance", label: "Detach instance", icon: "component" });
   items.push({ kind: "action", id: "useAsMask", label: "Use as mask", shortcut: "⌘⌥M", icon: "rect" });
   if (hasImage) {
     items.push({ kind: "action", id: "flipH", label: "Flip horizontal", shortcut: "⇧H", icon: "flip-h" });
@@ -173,6 +174,9 @@ export function layerMenu(isGroup: boolean): MenuItem[] {
     { kind: "action", id: "paste", label: "Paste", shortcut: "⌘V", icon: "clipboard" },
     { kind: "action", id: "duplicate", label: "Duplicate", shortcut: "⌘D", icon: "copy" },
     { kind: "sep" },
+    { kind: "action", id: "makeComponent", label: "Create component", shortcut: "⌘⌥K", icon: "component" },
+    { kind: "action", id: "detachInstance", label: "Detach instance", icon: "component" },
+    { kind: "sep" },
     ...(isGroup
       ? [{ kind: "action" as const, id: "ungroup", label: "Ungroup", shortcut: "⇧⌘G", icon: "group" }]
       : []),
@@ -219,11 +223,13 @@ export function runMenu(
       engine.dispatch({ type: "selectAll" });
       break;
     case "group":
+      engine.dispatch({ type: "group" });
+      break;
     case "union":
     case "subtract":
     case "intersect":
     case "exclude":
-      engine.dispatch({ type: "group" });
+      engine.dispatch({ type: "boolean", op: id });
       break;
     case "ungroup":
       engine.dispatch({ type: "ungroup" });
@@ -265,12 +271,12 @@ export function runMenu(
     case "renamePage":
       extra?.onRename?.();
       break;
-    case "makeComponent": {
-      const s = engine.snapshot();
-      const id0 = s.selection[0];
-      if (id0) engine.dispatch({ type: "patch", id: id0, patch: { name: "Component" } });
+    case "makeComponent":
+      engine.dispatch({ type: "makeComponent" });
       break;
-    }
+    case "detachInstance":
+      engine.dispatch({ type: "detachInstance" });
+      break;
     case "useAsMask": {
       const s = engine.snapshot();
       const id0 = s.selection[0];

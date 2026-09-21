@@ -1,8 +1,8 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
-/** Figma Preferences → Theme. */
-export type ThemePref = "light" | "dark" | "system";
-export type Theme = "light" | "dark";
+/** Figma Preferences → Theme, plus Graphite/Daylight from crates/x-ui. */
+export type ThemePref = "light" | "dark" | "graphite" | "daylight" | "system";
+export type Theme = "light" | "dark" | "graphite" | "daylight";
 
 const KEY = "x-native-theme";
 
@@ -15,7 +15,7 @@ const Ctx = createContext<{
 function readPref(): ThemePref {
   try {
     const v = localStorage.getItem(KEY);
-    if (v === "light" || v === "dark" || v === "system") return v;
+    if (v === "light" || v === "dark" || v === "graphite" || v === "daylight" || v === "system") return v;
   } catch {
     /* ignore */
   }
@@ -32,7 +32,7 @@ function resolve(pref: ThemePref): Theme {
 function apply(theme: Theme) {
   const root = document.documentElement;
   root.dataset.theme = theme;
-  root.style.colorScheme = theme;
+  root.style.colorScheme = theme === "dark" || theme === "graphite" ? "dark" : "light";
 }
 
 apply(resolve(readPref()));

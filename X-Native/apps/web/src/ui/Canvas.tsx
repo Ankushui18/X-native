@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { Engine, NodeKind, Snapshot, Tool, XNode } from "../engine/types";
-import { hitTest, worldPos } from "../engine/memory";
+import type { Engine, NodeKind, PathPoint, Snapshot, Tool, XNode } from "../engine/types";
+import { find, findParent, hitTest, worldPos } from "../engine/memory";
 import { useTheme } from "./theme";
 import { cssRgba, isNone, takeEyedrop, toHex } from "./color";
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
@@ -20,7 +20,8 @@ const CREATE: Tool[] = [
 
 function kindOf(t: Tool): NodeKind | null {
   if (t === "section") return "frame";
-  if (t === "slice" || t === "pen" || t === "pencil" || t === "brush") return "rect";
+  if (t === "slice") return "rect";
+  if (t === "pen" || t === "pencil" || t === "brush") return null;
   if (t === "image") return "rect";
   if (CREATE.includes(t)) return t as NodeKind;
   return null;
@@ -49,11 +50,22 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const [menu, setMenu] = useState<{ x: number; y: number; wx: number; wy: number } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const pendingImage = useRef<{ x: number; y: number } | null>(null);
+  const [draft, setDraft] = useState<PathPoint[]>([]);
+  const pencil = useRef<PathPoint[] | null>(null);
   const { theme } = useTheme();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.code === "Space") space.current = e.type === "keydown";
+      if (e.type === "keydown" && e.key === "Escape" && draft.length) {
+        setDraft([]);
+        return;
+      }
+      if (e.type === "keydown" && e.key === "Enter" && draft.length >= 2) {
+        engine.dispatch({ type: "addPath", points: draft, closed: true });
+        setDraft([]);
+        return;
+      }
       if (e.type === "keydown" && e.key === "Enter" && !edit) {
         const t = e.target as HTMLElement;
         if (t.tagName === "INPUT" || t.tagName === "TEXTAREA") return;
@@ -69,7 +81,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKey);
     };
-  }, [snap, edit]);
+  }, [snap, edit, draft, engine]);
 
   useEffect(() => {
     const c = ref.current;
@@ -135,7 +147,21 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         if (typeof ctx.roundRect === "function") ctx.roundRect(sx, sy, sw, sh, radii);
         else ctx.rect(sx, sy, sw, sh);
       };
-      if (n.kind === "ellipse") {
+      if (n.kind === "boolean" && n.booleanOp && n.children.length) {
+        paintBoolean(ctx, n, x, y, snap);
+        ctx.restore();
+        return;
+      }
+      if (n.kind === "vector" && n.path.length) {
+        ctx.beginPath();
+        n.path.forEach((pt, i) => {
+          const vx = snap.panX + (x + pt.x) * z;
+          const vy = snap.panY + (y + pt.y) * z;
+          if (i === 0) ctx.moveTo(vx, vy);
+          else ctx.lineTo(vx, vy);
+        });
+        if (n.closed) ctx.closePath();
+      } else if (n.kind === "ellipse") {
         ctx.beginPath();
         ctx.ellipse(sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), 0, 0, Math.PI * 2);
       } else if (n.kind === "line" || n.kind === "arrow") {
@@ -250,7 +276,13 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       for (const ch of n.children) paint(ch, x, y);
       ctx.restore();
     };
-    for (const ch of root.children) paint(ch, 0, 0);
+    const present = snap.presentFrame ? find(root, snap.presentFrame) : null;
+    if (present) {
+      const wp = worldPos(root, present.id);
+      paint(present, wp ? wp.x - present.x : 0, wp ? wp.y - present.y : 0);
+    } else {
+      for (const ch of root.children) paint(ch, 0, 0);
+    }
 
     ctx.font = "500 11px Inter, system-ui";
     ctx.fillStyle = canvasLabel;
@@ -263,6 +295,50 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       for (const c of n.children) label(c, x, y);
     };
     for (const ch of root.children) label(ch, 0, 0);
+
+    if (draft.length) {
+      ctx.beginPath();
+      ctx.strokeStyle = "#0d99ff";
+      ctx.lineWidth = 1.5;
+      draft.forEach((p, i) => {
+        const px = snap.panX + p.x * z;
+        const py = snap.panY + p.y * z;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      });
+      ctx.stroke();
+      for (const p of draft) {
+        ctx.fillStyle = "#fff";
+        ctx.strokeStyle = "#0d99ff";
+        ctx.beginPath();
+        ctx.arc(snap.panX + p.x * z, snap.panY + p.y * z, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+
+    if (snap.rightTab === "prototype" && !snap.presentFrame) {
+      walkInteractions(root, 0, 0, (n, nx, ny, destId) => {
+        const dest = worldPos(root, destId);
+        if (!dest) return;
+        const ax = snap.panX + (nx + n.w) * z;
+        const ay = snap.panY + (ny + n.h / 2) * z;
+        const bx = snap.panX + dest.x * z;
+        const by = snap.panY + (dest.y + dest.node.h / 2) * z;
+        ctx.strokeStyle = "#0d99ff";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.bezierCurveTo(ax + 40, ay, bx - 40, by, bx, by);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(ax, ay, 5, 0, Math.PI * 2);
+        ctx.fillStyle = "#0d99ff";
+        ctx.fill();
+      });
+    }
+
+    if (snap.presentFrame) return;
 
     for (const id of snap.selection) {
       if (edit?.id === id) continue;
@@ -322,7 +398,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       ctx.fillRect(band.x, band.y, band.w, band.h);
       ctx.strokeRect(band.x + 0.5, band.y + 0.5, band.w, band.h);
     }
-  }, [snap, band, edit, engine, theme]);
+  }, [snap, band, edit, engine, theme, draft]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();
@@ -335,6 +411,42 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const onDown = (e: React.MouseEvent) => {
     if (edit) return;
     if (e.button === 2) return;
+    if (snap.presentFrame) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      const root = snap.pages[snap.page].root;
+      let n: XNode | null = hitTest(root, wpt.x, wpt.y);
+      while (n) {
+        const ix = (n.interactions ?? []).find((i) => i.trigger === "onClick");
+        if (ix) {
+          if (ix.action === "back") engine.dispatch({ type: "presentBack" });
+          else if (ix.action === "navigate" && ix.destination)
+            engine.dispatch({ type: "presentGo", id: ix.destination });
+          return;
+        }
+        const p = findParent(root, n.id);
+        n = p && p !== root ? p : null;
+      }
+      return;
+    }
+    if (snap.tool === "pen") {
+      const wpt = toWorld(e.clientX, e.clientY);
+      if (draft.length >= 3) {
+        const a = draft[0];
+        if (Math.hypot(wpt.x - a.x, wpt.y - a.y) < 8 / snap.zoom) {
+          engine.dispatch({ type: "addPath", points: draft, closed: true });
+          setDraft([]);
+          return;
+        }
+      }
+      setDraft((d) => [...d, wpt]);
+      return;
+    }
+    if (snap.tool === "pencil" || snap.tool === "brush") {
+      const wpt = toWorld(e.clientX, e.clientY);
+      pencil.current = [wpt];
+      setDraft([wpt]);
+      return;
+    }
     const drop = takeEyedrop();
     if (drop) {
       const c = ref.current;
@@ -436,6 +548,12 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   };
 
   const onMove = (e: React.MouseEvent) => {
+    if (pencil.current) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      pencil.current.push(wpt);
+      setDraft([...pencil.current]);
+      return;
+    }
     const d = drag.current;
     if (!d) return;
     const box = wrap.current!.getBoundingClientRect();
@@ -476,6 +594,13 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   };
 
   const onUp = (e: React.MouseEvent) => {
+    if (pencil.current) {
+      const pts = pencil.current;
+      pencil.current = null;
+      if (pts.length >= 2) engine.dispatch({ type: "addPath", points: pts, closed: false });
+      setDraft([]);
+      return;
+    }
     const d = drag.current;
     drag.current = null;
     setBand(null);
@@ -582,7 +707,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const cursor =
     snap.tool === "hand" || space.current
       ? "grab"
-      : CREATE.includes(snap.tool)
+      : CREATE.includes(snap.tool) || snap.tool === "pen" || snap.tool === "pencil" || snap.tool === "brush"
         ? "crosshair"
         : "default";
 
@@ -809,4 +934,71 @@ function polyPath(
     else ctx.lineTo(x, y);
   }
   ctx.closePath();
+}
+
+function walkInteractions(
+  n: XNode,
+  px: number,
+  py: number,
+  fn: (n: XNode, x: number, y: number, dest: string) => void,
+) {
+  const x = px + n.x;
+  const y = py + n.y;
+  for (const ix of n.interactions ?? []) {
+    if (ix.action === "navigate" && ix.destination) fn(n, x, y, ix.destination);
+  }
+  for (const c of n.children) walkInteractions(c, x, y, fn);
+}
+
+function paintBoolean(
+  ctx: CanvasRenderingContext2D,
+  n: XNode,
+  px: number,
+  py: number,
+  snap: Snapshot,
+) {
+  const z = snap.zoom;
+  const w = Math.max(1, Math.ceil(n.w * z));
+  const h = Math.max(1, Math.ceil(n.h * z));
+  const oc = document.createElement("canvas");
+  oc.width = w;
+  oc.height = h;
+  const o = oc.getContext("2d");
+  if (!o) return;
+  const kids = n.children.filter((c) => c.visible);
+  const draw = (c: XNode, op: GlobalCompositeOperation) => {
+    o.globalCompositeOperation = op;
+    o.beginPath();
+    const sx = c.x * z;
+    const sy = c.y * z;
+    const sw = c.w * z;
+    const sh = c.h * z;
+    if (c.kind === "ellipse") {
+      o.ellipse(sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), 0, 0, Math.PI * 2);
+    } else if (c.kind === "star") {
+      starPath(o, sx + sw / 2, sy + sh / 2, Math.min(sw, sh) / 2, c.count || 5, c.starRatio || 0.4);
+    } else if (c.kind === "poly") {
+      polyPath(o, sx + sw / 2, sy + sh / 2, Math.min(sw, sh) / 2, c.count || 3);
+    } else if (c.kind === "vector" && c.path.length) {
+      c.path.forEach((pt, i) => {
+        if (i === 0) o.moveTo(pt.x * z, pt.y * z);
+        else o.lineTo(pt.x * z, pt.y * z);
+      });
+      if (c.closed) o.closePath();
+    } else {
+      o.rect(sx, sy, sw, sh);
+    }
+    o.fillStyle = n.fillVisible && n.fill ? n.fill : c.fill;
+    o.fill();
+  };
+  if (!kids.length) return;
+  draw(kids[0], "source-over");
+  for (let i = 1; i < kids.length; i++) {
+    const op = n.booleanOp;
+    if (op === "subtract") draw(kids[i], "destination-out");
+    else if (op === "intersect") draw(kids[i], "destination-in");
+    else if (op === "exclude") draw(kids[i], "xor");
+    else draw(kids[i], "source-over");
+  }
+  ctx.drawImage(oc, snap.panX + px * z, snap.panY + py * z);
 }

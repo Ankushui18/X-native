@@ -1,7 +1,6 @@
 /**
  * Document types that mirror `x-core::Node` / `.x` JSON enough for the
- * designer chrome. The native app remains the GPU owner; this is the
- * command-API view a WASM `x-editor` can implement later.
+ * designer chrome. WASM `x-editor` can implement the same command API later.
  */
 
 export type NodeKind =
@@ -13,7 +12,11 @@ export type NodeKind =
   | "line"
   | "arrow"
   | "poly"
-  | "star";
+  | "star"
+  | "vector"
+  | "boolean"
+  | "component"
+  | "instance";
 
 export type Overflow = "visible" | "clip" | "scrollx" | "scrolly" | "scrollboth";
 export type Sizing = "fixed" | "hug" | "fill";
@@ -33,6 +36,29 @@ export type RightTab = "design" | "prototype" | "inspect";
 export type LeftTab = "layers" | "assets" | "tokens";
 export type FillType = "solid" | "linear" | "radial" | "angular" | "diamond" | "image";
 export type EffectKind = "drop-shadow" | "inner-shadow" | "layer-blur" | "background-blur";
+export type BooleanOp = "union" | "subtract" | "intersect" | "exclude";
+export type ProtoTrigger = "onClick" | "onHover" | "afterDelay";
+export type ProtoAction = "navigate" | "back" | "openUrl";
+export type ProtoAnim = "instant" | "dissolve" | "smart";
+
+export interface PathPoint {
+  x: number;
+  y: number;
+}
+
+export interface Interaction {
+  trigger: ProtoTrigger;
+  action: ProtoAction;
+  destination: string;
+  animation: ProtoAnim;
+  delay: number;
+}
+
+export interface ComponentMaster {
+  id: string;
+  name: string;
+  node: XNode;
+}
 
 export interface ExportPreset {
   format: ExportFormat;
@@ -139,6 +165,12 @@ export interface XNode {
   maxLines: number;
   children: XNode[];
   layout: AutoLayout | null;
+  path: PathPoint[];
+  closed: boolean;
+  booleanOp: BooleanOp | null;
+  componentId: string;
+  isComponent: boolean;
+  interactions: Interaction[];
 }
 
 export interface Page {
@@ -147,6 +179,7 @@ export interface Page {
   root: XNode;
   pixelGrid: boolean;
   pixelGridColor: string;
+  flowStart: string;
 }
 
 export interface Snapshot {
@@ -162,6 +195,9 @@ export interface Snapshot {
   leftTab: LeftTab;
   canUndo: boolean;
   canRedo: boolean;
+  components: ComponentMaster[];
+  presentFrame: string;
+  presentStack: string[];
 }
 
 export type Command =
@@ -211,8 +247,18 @@ export type Command =
   | { type: "duplicatePage" }
   | { type: "deletePage" }
   | { type: "renamePage"; name: string }
-  | { type: "patchPage"; patch: Partial<Pick<Page, "pixelGrid" | "pixelGridColor" | "name">> }
-  | { type: "distribute"; axis: "h" | "v" };
+  | { type: "patchPage"; patch: Partial<Pick<Page, "pixelGrid" | "pixelGridColor" | "name" | "flowStart">> }
+  | { type: "distribute"; axis: "h" | "v" }
+  | { type: "boolean"; op: BooleanOp }
+  | { type: "makeComponent" }
+  | { type: "detachInstance" }
+  | { type: "placeComponent"; id: string; x: number; y: number }
+  | { type: "addPath"; points: PathPoint[]; closed: boolean }
+  | { type: "setInteractions"; id: string; interactions: Interaction[] }
+  | { type: "presentStart"; id?: string }
+  | { type: "presentGo"; id: string }
+  | { type: "presentBack" }
+  | { type: "presentStop" };
 
 export interface Engine {
   snapshot(): Snapshot;

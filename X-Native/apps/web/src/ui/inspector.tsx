@@ -16,9 +16,12 @@ import type {
   StrokeJoin,
   TextAlign,
   TextAlignVertical,
+  Interaction,
+  ProtoAnim,
+  ProtoTrigger,
   XNode,
 } from "../engine/types";
-import { collectColors, defaultEffect, defaultLayout, find, worldPos } from "../engine/memory";
+import { collectColors, defaultEffect, defaultLayout, find, framesOf, worldPos } from "../engine/memory";
 import { Icon } from "./icons";
 import { FillPicker, type FillValue } from "./FillPicker";
 import { isNone } from "./color";
@@ -90,7 +93,9 @@ export function RightPanel({
         </button>
       </div>
       <div className="inspector">
-        {snap.rightTab === "prototype" && !inspect && <Prototype n={n} engine={engine} />}
+        {snap.rightTab === "prototype" && !inspect && (
+          <Prototype n={n} engine={engine} snap={snap} onPresent={onPresent} />
+        )}
         {inspect && <Inspect n={n} />}
         {snap.rightTab === "design" && !inspect && !n && (
           <PageDesign engine={engine} tool={snap.tool} />
@@ -187,64 +192,143 @@ function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
   );
 }
 
-function Prototype({ n, engine }: { n?: XNode; engine: Engine }) {
-  const [device, setDevice] = useState(n?.kind === "frame" ? "iPhone 14" : "None");
-  const [flows, setFlows] = useState<string[]>(n?.kind === "frame" ? ["Home"] : []);
+function Prototype({
+  n,
+  engine,
+  snap,
+  onPresent,
+}: {
+  n?: XNode;
+  engine: Engine;
+  snap: Snapshot;
+  onPresent?: () => void;
+}) {
+  const frames = framesOf(snap.pages[snap.page].root);
+  const start = snap.pages[snap.page].flowStart;
+  const startName = frames.find((f) => f.id === start)?.name || frames[0]?.name || "—";
+  const interactions = n?.interactions ?? [];
+  const setIx = (next: Interaction[]) => {
+    if (!n) return;
+    engine.dispatch({ type: "setInteractions", id: n.id, interactions: next });
+  };
   return (
     <>
       <div className="h-row">
-        <h3>Prototype settings</h3>
+        <h3>Flow starting point</h3>
       </div>
       <div className="proto-row">
-        <span>Device</span>
+        <span>Start</span>
         <select
-          value={device}
-          onChange={(e) => setDevice(e.target.value)}
+          value={start || frames[0]?.id || ""}
+          onChange={(e) => engine.dispatch({ type: "patchPage", patch: { flowStart: e.target.value } })}
           style={{ border: 0, background: "var(--input)", borderRadius: 6, height: 24, padding: "0 6px" }}
         >
-          {["None", "iPhone 14", "iPhone 14 Pro Max", "Desktop", "Tablet"].map((d) => (
-            <option key={d}>{d}</option>
+          {frames.map((f) => (
+            <option key={f.id} value={f.id}>
+              {f.name}
+            </option>
           ))}
         </select>
-      </div>
-      <div className="proto-row">
-        <span>Starting frame</span>
-        <strong>{n?.kind === "frame" ? n.name : "—"}</strong>
       </div>
       <div className="proto-preview">
         <div className="phone" style={{ background: n?.fillVisible ? n.fill : "#fff" }} />
       </div>
+      <p className="muted">Present opens {startName}. Esc steps back, then exits.</p>
       <div className="h-row">
-        <h3>Flows</h3>
+        <h3>Interactions</h3>
         <button
           className="plus"
-          title="Add flow"
-          onClick={() => setFlows((f) => [...f, n?.name || `Flow ${f.length + 1}`])}
+          title="Add interaction"
+          disabled={!n}
+          onClick={() =>
+            n &&
+            setIx([
+              ...interactions,
+              {
+                trigger: "onClick",
+                action: "navigate",
+                destination: frames.find((f) => f.id !== n.id)?.id || "",
+                animation: "instant",
+                delay: 0,
+              },
+            ])
+          }
         >
           <Icon name="plus" size={14} />
         </button>
       </div>
-      {flows.map((f, i) => (
-        <div key={i} className="proto-row">
-          <span>{f}</span>
-          <button className="mini" onClick={() => setFlows((xs) => xs.filter((_, j) => j !== i))}>
-            <Icon name="minus" size={12} />
-          </button>
-        </div>
-      ))}
-      <p className="muted">
-        Present plays the selected frame. Add a flow, then press Present in the header.
-      </p>
-      {n && (
-        <div className="insp-pad">
-          <button
-            className="export-run"
-            onClick={() => engine.dispatch({ type: "setRightTab", tab: "design" })}
-          >
-            Edit in Design
-          </button>
-        </div>
-      )}
+      {!n && <p className="muted">Select a layer to add On click → Navigate.</p>}
+      {n &&
+        interactions.map((ix, i) => (
+          <div key={i} className="insp-pad" style={{ display: "grid", gap: 4, marginBottom: 8 }}>
+            <select
+              value={ix.trigger}
+              onChange={(e) => {
+                const next = interactions.map((x, j) =>
+                  j === i ? { ...x, trigger: e.target.value as ProtoTrigger } : x,
+                );
+                setIx(next);
+              }}
+            >
+              <option value="onClick">On click</option>
+              <option value="onHover">While hovering</option>
+              <option value="afterDelay">After delay</option>
+            </select>
+            <select
+              value={ix.action}
+              onChange={(e) => {
+                const action = e.target.value as Interaction["action"];
+                setIx(interactions.map((x, j) => (j === i ? { ...x, action } : x)));
+              }}
+            >
+              <option value="navigate">Navigate to</option>
+              <option value="back">Back</option>
+            </select>
+            {ix.action === "navigate" && (
+              <select
+                value={ix.destination}
+                onChange={(e) =>
+                  setIx(interactions.map((x, j) => (j === i ? { ...x, destination: e.target.value } : x)))
+                }
+              >
+                <option value="">Choose frame…</option>
+                {frames
+                  .filter((f) => f.id !== n.id)
+                  .map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}
+                    </option>
+                  ))}
+              </select>
+            )}
+            <select
+              value={ix.animation}
+              onChange={(e) =>
+                setIx(
+                  interactions.map((x, j) =>
+                    j === i ? { ...x, animation: e.target.value as ProtoAnim } : x,
+                  ),
+                )
+              }
+            >
+              <option value="instant">Instant</option>
+              <option value="dissolve">Dissolve</option>
+              <option value="smart">Smart animate</option>
+            </select>
+            <button
+              className="mini minus"
+              title="Remove"
+              onClick={() => setIx(interactions.filter((_, j) => j !== i))}
+            >
+              <Icon name="minus" size={12} />
+            </button>
+          </div>
+        ))}
+      <div className="insp-pad">
+        <button className="export-run" onClick={() => onPresent?.()}>
+          Present
+        </button>
+      </div>
     </>
   );
 }

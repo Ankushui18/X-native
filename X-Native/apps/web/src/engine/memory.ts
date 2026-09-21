@@ -1,6 +1,7 @@
 import type {
   AutoLayout,
   Command,
+  ComponentMaster,
   Effect,
   Engine,
   NodeKind,
@@ -86,6 +87,12 @@ function node(
     maxLines: 1,
     children: [],
     layout: null,
+    path: [],
+    closed: false,
+    booleanOp: null,
+    componentId: "",
+    isComponent: false,
+    interactions: [],
     ...extra,
   };
 }
@@ -294,6 +301,7 @@ function demoPage(): Page {
     root: pageRoot,
     pixelGrid: false,
     pixelGridColor: "#cccccc",
+    flowStart: phone.id,
   };
 }
 
@@ -308,6 +316,9 @@ interface Internal {
   panY: number;
   rightTab: Snapshot["rightTab"];
   leftTab: Snapshot["leftTab"];
+  components: ComponentMaster[];
+  presentFrame: string;
+  presentStack: string[];
 }
 
 export class MemoryEngine implements Engine {
@@ -331,6 +342,9 @@ export class MemoryEngine implements Engine {
       panY: 20,
       rightTab: "design",
       leftTab: "layers",
+      components: [],
+      presentFrame: "",
+      presentStack: [],
     };
     this.relayout();
     this.snapCache = this.build();
@@ -369,6 +383,10 @@ export class MemoryEngine implements Engine {
       "redo",
       "copy",
       "copyCode",
+      "presentGo",
+      "presentBack",
+      "presentStart",
+      "presentStop",
     ].includes(cmd.type);
     if (hist && !this.grouping) {
       this.undo.push(clone(this.state));
@@ -402,6 +420,9 @@ export class MemoryEngine implements Engine {
       leftTab: this.state.leftTab,
       canUndo: this.undo.length > 0,
       canRedo: this.redo.length > 0,
+      components: this.state.components,
+      presentFrame: this.state.presentFrame,
+      presentStack: this.state.presentStack,
     };
   }
 
@@ -442,6 +463,7 @@ export class MemoryEngine implements Engine {
         const p = demoPage();
         p.name = `Page ${s.pages.length + 1}`;
         p.root.children = [];
+        p.flowStart = "";
         s.pages.push(p);
         s.page = s.pages.length - 1;
         s.selection = [];
@@ -498,9 +520,16 @@ export class MemoryEngine implements Engine {
           const p = findParent(this.root(), id) ?? this.root();
           if (!n) continue;
           const copy = clone(n);
+          const masterId = n.isComponent ? n.componentId || n.id : n.componentId;
           reid(copy);
           copy.x += 16;
           copy.y += 16;
+          if (n.isComponent) {
+            copy.isComponent = false;
+            copy.kind = "instance";
+            copy.componentId = masterId;
+            copy.name = n.name;
+          }
           p.children.push(copy);
           created.push(copy.id);
         }
@@ -509,7 +538,17 @@ export class MemoryEngine implements Engine {
       }
       case "patch": {
         const n = find(this.root(), cmd.id);
-        if (n) Object.assign(n, cmd.patch);
+        if (n) {
+          Object.assign(n, cmd.patch);
+          if (n.isComponent && n.componentId) {
+            const lib = s.components.find((c) => c.id === n.componentId);
+            if (lib) {
+              lib.name = n.name;
+              lib.node = clone(n);
+            }
+            syncInstances(s.pages, n);
+          }
+        }
         break;
       }
       case "autoLayout": {
@@ -598,40 +637,12 @@ export class MemoryEngine implements Engine {
       }
       case "group":
       case "wrapSection": {
-        const ids = s.selection;
-        if (ids.length < (cmd.type === "group" ? 2 : 1)) break;
-        const parent = findParent(this.root(), ids[0]);
-        if (!parent) break;
-        const nodes = ids
-          .map((id) => parent.children.find((c) => c.id === id))
-          .filter((n): n is XNode => !!n);
-        if (nodes.length !== ids.length) break;
-        const minX = Math.min(...nodes.map((n) => n.x));
-        const minY = Math.min(...nodes.map((n) => n.y));
-        const maxX = Math.max(...nodes.map((n) => n.x + n.w));
-        const maxY = Math.max(...nodes.map((n) => n.y + n.h));
-        const g = node(
-          cmd.type === "wrapSection" ? "frame" : "group",
-          cmd.type === "wrapSection" ? "Section" : "Group",
-          minX,
-          minY,
-          maxX - minX,
-          maxY - minY,
-          {
-            fill: "#00000000",
-            fillVisible: false,
-            overflow: "visible",
-          },
-        );
-        g.children = nodes.map((n) => {
-          const c = clone(n);
-          c.x -= minX;
-          c.y -= minY;
-          return c;
+        this.wrapSel(cmd.type === "wrapSection" ? "Section" : "Group", {
+          kind: cmd.type === "wrapSection" ? "frame" : "group",
+          fill: "#00000000",
+          fillVisible: false,
+          overflow: "visible",
         });
-        parent.children = parent.children.filter((c) => !ids.includes(c.id));
-        parent.children.push(g);
-        s.selection = [g.id];
         break;
       }
       case "ungroup": {
@@ -688,6 +699,130 @@ export class MemoryEngine implements Engine {
       case "patchPage":
         Object.assign(s.pages[s.page], cmd.patch);
         break;
+      case "boolean": {
+        if (s.selection.length < 2) break;
+        this.wrapSel(cmd.op === "union" ? "Union" : cmd.op[0].toUpperCase() + cmd.op.slice(1), {
+          kind: "boolean",
+          booleanOp: cmd.op,
+          fill: "#d9d9d9",
+          fillVisible: true,
+          overflow: "visible",
+        });
+        break;
+      }
+      case "makeComponent": {
+        const ids = s.selection;
+        if (!ids.length) break;
+        if (ids.length > 1) this.wrapSel("Component", { kind: "component", isComponent: true });
+        const n = find(this.root(), s.selection[0]);
+        if (!n) break;
+        const cid = n.componentId || uid("comp");
+        n.isComponent = true;
+        n.kind = "component";
+        n.componentId = cid;
+        if (!n.name || n.name === "Group" || n.name === "Rectangle") n.name = "Component";
+        const existing = s.components.find((c) => c.id === cid);
+        if (existing) existing.node = clone(n);
+        else s.components.push({ id: cid, name: n.name, node: clone(n) });
+        s.selection = [n.id];
+        break;
+      }
+      case "detachInstance": {
+        for (const id of s.selection) {
+          const n = find(this.root(), id);
+          if (!n || (!n.componentId && n.kind !== "instance")) continue;
+          n.kind = n.children.length ? "frame" : n.kind === "instance" ? "frame" : n.kind;
+          n.isComponent = false;
+          n.componentId = "";
+        }
+        break;
+      }
+      case "placeComponent": {
+        const lib = s.components.find((c) => c.id === cmd.id);
+        if (!lib) break;
+        const copy = clone(lib.node);
+        reid(copy);
+        copy.x = cmd.x;
+        copy.y = cmd.y;
+        copy.isComponent = false;
+        copy.kind = "instance";
+        copy.componentId = lib.id;
+        copy.name = lib.name;
+        this.root().children.push(copy);
+        s.selection = [copy.id];
+        s.tool = "select";
+        break;
+      }
+      case "addPath": {
+        if (cmd.points.length < 2) break;
+        const xs = cmd.points.map((p) => p.x);
+        const ys = cmd.points.map((p) => p.y);
+        const minX = Math.min(...xs);
+        const minY = Math.min(...ys);
+        const maxX = Math.max(...xs);
+        const maxY = Math.max(...ys);
+        const path = cmd.points.map((p) => ({ x: p.x - minX, y: p.y - minY }));
+        const n = node("vector", "Vector", minX, minY, Math.max(1, maxX - minX), Math.max(1, maxY - minY), {
+          path,
+          closed: cmd.closed,
+          fill: cmd.closed ? "#d9d9d9" : "#00000000",
+          fillVisible: cmd.closed,
+          strokePaint: "#1e1e1e",
+          strokeVisible: true,
+          strokeWidth: cmd.closed ? 1 : 2,
+        });
+        this.root().children.push(n);
+        s.selection = [n.id];
+        s.tool = "select";
+        break;
+      }
+      case "setInteractions": {
+        const n = find(this.root(), cmd.id);
+        if (n) n.interactions = cmd.interactions;
+        break;
+      }
+      case "presentStart": {
+        const frames = framesOf(this.root());
+        const id =
+          cmd.id ||
+          s.pages[s.page].flowStart ||
+          (s.selection[0] && find(this.root(), s.selection[0])?.kind === "frame" ? s.selection[0] : "") ||
+          frames[0]?.id ||
+          "";
+        s.presentFrame = id;
+        s.presentStack = id ? [id] : [];
+        s.rightTab = "prototype";
+        if (id) {
+          const wp = worldPos(this.root(), id);
+          if (wp) {
+            s.panX = 48;
+            s.panY = 48;
+            const z = Math.min(1.2, Math.max(0.25, 720 / Math.max(wp.node.w, 1)));
+            s.zoom = z;
+          }
+        }
+        break;
+      }
+      case "presentGo": {
+        if (!cmd.id) break;
+        s.presentStack = [...s.presentStack, cmd.id];
+        s.presentFrame = cmd.id;
+        break;
+      }
+      case "presentBack": {
+        if (s.presentStack.length > 1) {
+          s.presentStack = s.presentStack.slice(0, -1);
+          s.presentFrame = s.presentStack[s.presentStack.length - 1];
+        } else {
+          s.presentFrame = "";
+          s.presentStack = [];
+        }
+        break;
+      }
+      case "presentStop":
+        s.presentFrame = "";
+        s.presentStack = [];
+        break;
       case "distribute": {
         const items = s.selection
           .map((id) => find(this.root(), id))
@@ -720,11 +855,61 @@ export class MemoryEngine implements Engine {
       }
     }
   }
+
+  private wrapSel(name: string, extra: Partial<XNode>) {
+    const s = this.state;
+    const ids = s.selection;
+    if (ids.length < 1) return;
+    const parent = findParent(this.root(), ids[0]);
+    if (!parent) return;
+    const nodes = ids
+      .map((id) => parent.children.find((c) => c.id === id))
+      .filter((n): n is XNode => !!n);
+    if (nodes.length !== ids.length) return;
+    const minX = Math.min(...nodes.map((n) => n.x));
+    const minY = Math.min(...nodes.map((n) => n.y));
+    const maxX = Math.max(...nodes.map((n) => n.x + n.w));
+    const maxY = Math.max(...nodes.map((n) => n.y + n.h));
+    const g = node(extra.kind ?? "group", name, minX, minY, maxX - minX, maxY - minY, extra);
+    g.children = nodes.map((n) => {
+      const c = clone(n);
+      c.x -= minX;
+      c.y -= minY;
+      return c;
+    });
+    parent.children = parent.children.filter((c) => !ids.includes(c.id));
+    parent.children.push(g);
+    s.selection = [g.id];
+  }
 }
 
 function reid(n: XNode) {
   n.id = uid(n.kind);
   n.children.forEach(reid);
+}
+
+function framesOf(root: XNode): XNode[] {
+  const out: XNode[] = [];
+  walk(root, (n) => {
+    if (n !== root && n.kind === "frame") out.push(n);
+  });
+  return out;
+}
+
+function syncInstances(pages: Page[], master: XNode) {
+  const cid = master.componentId;
+  if (!cid) return;
+  for (const page of pages) {
+    walk(page.root, (n) => {
+      if (n === master) return;
+      if (n.componentId !== cid || n.isComponent) return;
+      const x = n.x;
+      const y = n.y;
+      const id = n.id;
+      const interactions = n.interactions;
+      Object.assign(n, clone(master), { x, y, id, interactions, isComponent: false, kind: "instance", componentId: cid });
+    });
+  }
 }
 
 function labelFor(k: NodeKind): string {
@@ -745,6 +930,14 @@ function labelFor(k: NodeKind): string {
       return "Polygon";
     case "star":
       return "Star";
+    case "vector":
+      return "Vector";
+    case "boolean":
+      return "Boolean";
+    case "component":
+      return "Component";
+    case "instance":
+      return "Instance";
     default:
       return "Layer";
   }
@@ -802,7 +995,7 @@ export function hitTest(root: XNode, wx: number, wy: number): XNode | null {
   return hit;
 }
 
-export { find, findParent };
+export { find, findParent, framesOf };
 
 export function collectColors(root: XNode): string[] {
   const out: string[] = [];

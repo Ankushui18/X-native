@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { Engine, Snapshot, Tool, XNode } from "../engine/types";
-import { collectColors, flatten } from "../engine/memory";
+import { collectColors } from "../engine/memory";
 import { Icon, TOOL_ICON, kindIcon } from "./icons";
 import { useTheme, type ThemePref } from "./theme";
 import { ContextMenu, isGroupNode, layerMenu, pageMenu, runMenu } from "./ContextMenu";
@@ -61,9 +61,17 @@ export function NavRail({
             </button>
             <hr />
             <div className="kicker">Theme</div>
-            {(["light", "dark", "system"] as ThemePref[]).map((p) => (
+            {(["light", "dark", "graphite", "daylight", "system"] as ThemePref[]).map((p) => (
               <button key={p} className={pref === p ? "on" : ""} onClick={() => setPref(p)}>
-                {p === "light" ? "Light" : p === "dark" ? "Dark" : "System"}
+                {p === "light"
+                  ? "Light"
+                  : p === "dark"
+                    ? "Dark"
+                    : p === "graphite"
+                      ? "Graphite"
+                      : p === "daylight"
+                        ? "Daylight"
+                        : "System"}
                 {pref === p && <span className="sc">✓</span>}
               </button>
             ))}
@@ -119,7 +127,7 @@ function LayerRow({
   return (
     <>
       <div
-        className={`row${sel.includes(n.id) ? " sel" : ""}`}
+        className={`row${sel.includes(n.id) ? " sel" : ""}${n.isComponent || n.kind === "component" || n.kind === "instance" ? " comp" : ""}`}
         style={{ paddingLeft: 8 + depth * 12 }}
         onClick={() => engine.dispatch({ type: "select", ids: [n.id] })}
         onDoubleClick={() => setRenaming(true)}
@@ -143,7 +151,14 @@ function LayerRow({
         ) : (
           <span style={{ width: 16 }} />
         )}
-        <Icon name={kindIcon(n.kind, n.imageSrc)} size={14} />
+        <Icon
+          name={
+            n.isComponent || n.kind === "component" || n.kind === "instance"
+              ? "component"
+              : kindIcon(n.kind, n.imageSrc)
+          }
+          size={14}
+        />
         {renaming ? (
           <input
             className="name"
@@ -474,7 +489,11 @@ export function Actions({
     { label: "Dev Mode", sc: "⇧D", run: () => engine.dispatch({ type: "setRightTab", tab: "inspect" }) },
     { label: "Theme: Light", sc: "", run: () => setPref("light") },
     { label: "Theme: Dark", sc: "", run: () => setPref("dark") },
+    { label: "Theme: Graphite", sc: "", run: () => setPref("graphite") },
+    { label: "Theme: Daylight", sc: "", run: () => setPref("daylight") },
     { label: "Theme: System", sc: "", run: () => setPref("system") },
+    { label: "Create component", sc: "⌘⌥K", run: () => engine.dispatch({ type: "makeComponent" }) },
+    { label: "Union", sc: "⌘⌥U", run: () => engine.dispatch({ type: "boolean", op: "union" }) },
     { label: "Zoom to 100%", sc: "⇧0", run: () => engine.dispatch({ type: "setZoom", zoom: 1 }) },
     { label: "Zoom to fit", sc: "⇧1", run: () => engine.dispatch({ type: "setZoom", zoom: 0.5 }) },
   ].filter((i) => i.label.toLowerCase().includes(q.toLowerCase()));
@@ -522,7 +541,13 @@ export function bindHotkeys(
   const onKey = (e: KeyboardEvent) => {
     const t = e.target as HTMLElement;
     if (t.tagName === "INPUT" || t.tagName === "TEXTAREA") return;
+    if (engine.snapshot().presentFrame && e.key !== "Escape") return;
     const meta = e.metaKey || e.ctrlKey;
+    if (meta && e.altKey && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      engine.dispatch({ type: "makeComponent" });
+      return;
+    }
     if (meta && e.key.toLowerCase() === "k") {
       e.preventDefault();
       extra.onActions();
@@ -619,10 +644,54 @@ export function bindHotkeys(
       return;
     }
     if (e.key === "Escape") {
+      if (engine.snapshot().presentFrame) {
+        extra.onPresentExit?.();
+        return;
+      }
       extra.onPresentExit?.();
       engine.dispatch({ type: "select", ids: [] });
       engine.dispatch({ type: "setTool", tool: "select" });
       return;
+    }
+    if (meta && e.altKey && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      engine.dispatch({ type: "makeComponent" });
+      return;
+    }
+    if (meta && e.altKey && e.key.toLowerCase() === "u") {
+      e.preventDefault();
+      engine.dispatch({ type: "boolean", op: "union" });
+      return;
+    }
+    if (meta && e.altKey && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      engine.dispatch({ type: "boolean", op: "subtract" });
+      return;
+    }
+    if (meta && e.altKey && e.key.toLowerCase() === "i") {
+      e.preventDefault();
+      engine.dispatch({ type: "boolean", op: "intersect" });
+      return;
+    }
+    if (meta && e.altKey && e.key.toLowerCase() === "x") {
+      e.preventDefault();
+      engine.dispatch({ type: "boolean", op: "exclude" });
+      return;
+    }
+    if (!meta && e.shiftKey) {
+      const shifted: Record<string, Tool> = {
+        s: "section",
+        p: "pencil",
+        l: "arrow",
+        i: "image",
+        e: "eraser",
+      };
+      const t = shifted[e.key.toLowerCase()];
+      if (t) {
+        e.preventDefault();
+        engine.dispatch({ type: "setTool", tool: t });
+        return;
+      }
     }
     const map: Record<string, Tool> = {
       v: "select",
@@ -681,8 +750,8 @@ export function usePanelDrag(
 
 function AssetsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const [q, setQ] = useState("");
-  const layers = flatten(snap.pages[snap.page].root).filter(
-    (n) => !q || n.name.toLowerCase().includes(q.toLowerCase()),
+  const comps = snap.components.filter(
+    (c) => !q || c.name.toLowerCase().includes(q.toLowerCase()),
   );
   return (
     <>
@@ -692,16 +761,19 @@ function AssetsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       </div>
       <div className="section-label">Local components</div>
       <div className="tree">
-        {layers.length === 0 && <p className="empty">No layers in this file</p>}
-        {layers.map((n) => (
+        {comps.length === 0 && (
+          <p className="empty">Create a component (⌘⌥K) to see it here. Double-click to place an instance.</p>
+        )}
+        {comps.map((c) => (
           <div
-            key={n.id}
-            className={`row${snap.selection.includes(n.id) ? " sel" : ""}`}
-            onClick={() => engine.dispatch({ type: "select", ids: [n.id] })}
-            onDoubleClick={() => engine.dispatch({ type: "duplicate" })}
+            key={c.id}
+            className="row"
+            onDoubleClick={() =>
+              engine.dispatch({ type: "placeComponent", id: c.id, x: 80, y: 80 })
+            }
           >
-            <Icon name={kindIcon(n.kind, n.imageSrc)} size={14} />
-            <span className="name">{n.name}</span>
+            <Icon name="component" size={14} />
+            <span className="name">{c.name}</span>
           </div>
         ))}
       </div>
@@ -841,6 +913,10 @@ export function HelpBtn() {
               ["⌘K", "Actions"],
               ["⇧D", "Dev Mode"],
               ["⌘\\", "Hide UI"],
+              ["P", "Pen"],
+              ["⇧P", "Pencil"],
+              ["⌘⌥K", "Component"],
+              ["⌘⌥U", "Union"],
             ].map(([k, l]) => (
               <div key={k} className="proto-row">
                 <span>{l}</span>
