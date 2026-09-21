@@ -722,6 +722,42 @@ fn an_outside_press_commits_the_text_before_selecting() {
 }
 
 #[test]
+fn click_just_past_the_glyphs_commits_like_figma() {
+    // Figma Auto width hugs the letters (help 360039956434): a click just
+    // to the right of "Hi" is outside the layer and leaves edit. The old
+    // 200px placeholder box used to swallow that click and keep the caret.
+    let mut h = host();
+    h.app.win_w = 1440.0;
+    h.app.win_h = 900.0;
+    h.app.center_view();
+    h.app.docs[0].editors[0].root.children.clear();
+    begin_text(&mut h, "Hi");
+    let r = h.app.text_edit_rect().unwrap();
+    let node_w = {
+        let a = h.app.world_to_screen(Point::new(0.0, 0.0));
+        let b = h.app.world_to_screen(Point::new(200.0, 0.0));
+        (b.x - a.x).abs()
+    };
+    assert!(
+        r.width() < node_w * 0.7,
+        "auto-width overlay hugs the glyphs ({}) not the 200px box ({})",
+        r.width(),
+        node_w
+    );
+    let outside = Point::new(r.x1 + 12.0, (r.y0 + r.y1) / 2.0);
+    assert!(
+        h.app.editor_regions().canvas.contains(outside),
+        "click must land on the canvas"
+    );
+    h.on_press(outside);
+    assert!(h.app.text_edit.is_none(), "click-away leaves the editor");
+    assert!(
+        matches!(&x_native::editor::find(&h.app.doc_ref().editor_ref().root, "audit-text").unwrap().kind, NodeKind::Text { text } if text == "Hi"),
+        "the typed text is kept"
+    );
+}
+
+#[test]
 fn the_text_tool_edits_the_text_it_clicks() {
     // Figma: with the Text tool, a click on an existing text layer edits
     // it — only empty canvas (or a drag) creates a new text object.

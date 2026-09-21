@@ -1479,7 +1479,8 @@ mod run_fns_tests {
     }
 
     #[test]
-    fn click_selected_text_places_caret() {
+    fn click_selected_text_does_not_enter_edit() {
+        // Figma: single click selects; double-click or Enter edits.
         let mut app = App::demo();
         app.win_w = 1440.0;
         app.win_h = 900.0;
@@ -1492,31 +1493,11 @@ mod run_fns_tests {
         );
         let inside = app.world_to_screen(Point::new(512.0, 310.0));
         let world = app.screen_to_world(inside);
-
-        // NOT selected: no arming (plain click-select flow)
-        app.doc().editor().selection = vec!["other".into()];
+        app.doc().editor().selection = vec!["tx".into()];
         assert!(!app.press_selected_text("tx".into(), inside, world));
-
-        // selected: armed, and a click (release) enters edit at the caret
-        app.doc().editor().selection = vec!["tx".into()];
-        assert!(app.press_selected_text("tx".into(), inside, world));
-        assert!(app.finish_pending_text_edit());
-        assert_eq!(app.text_edit.as_deref(), Some("tx"));
-        let idx = app.text_caret;
-        assert!((1..=3).contains(&idx), "caret near the click, got {idx}");
-        app.text_cancel_edit();
-
-        // drag variant: movement cancels the pending edit -> no editor
-        app.doc().editor().selection = vec!["tx".into()];
-        assert!(app.press_selected_text("tx".into(), inside, world));
-        app.pending_text_edit = None; // what on_move does on real movement
-        assert!(!app.finish_pending_text_edit());
         assert!(app.text_edit.is_none());
-        assert_eq!(app.doc().editor_ref().selection, vec!["tx".to_string()]);
-
-        // multi-selection: never arms (drag = move the group)
-        app.doc().editor().selection = vec!["tx".into(), "other".into()];
-        assert!(!app.press_selected_text("tx".into(), inside, world));
+        assert!(app.enter_edit_selected());
+        assert_eq!(app.text_edit.as_deref(), Some("tx"));
     }
 
     #[test]
@@ -1827,7 +1808,9 @@ impl App {
         let id = self.text_edit.as_ref()?;
         let doc = self.doc_opt()?;
         let n = crate::editor_ui::find_node(&doc.editor_ref().root, id.as_str())?;
-        let p0 = self.world_to_screen(Point::new(n.transform.x, n.transform.y));
+        // Nested text lives in its parent's space — local x/y is not world.
+        let origin = node_world(&doc.editor_ref().root, id).map(|m| m * Point::new(0.0, 0.0))?;
+        let p0 = self.world_to_screen(origin);
         let fw = n.bindings.get("fw").and_then(|v| v.parse::<u16>().ok());
         Some((p0.x, p0.y, fw))
     }
@@ -1886,22 +1869,46 @@ impl App {
         x
     }
 
-    /// Screen rect of the open inline editor (the overlay field). Grows
-    /// with the buffer's line count.
+    /// Screen rect of the open inline editor. Figma Auto width hugs the
+    /// typed glyphs (help 360039956434): a click just past the letters is
+    /// outside the layer and commits. Auto height / Fixed keep the node's
+    /// width. Nested text uses the world box, not parent-local x/y.
     pub fn text_edit_rect(&self) -> Option<Rect> {
         let id = self.text_edit.as_ref()?;
         let doc = self.doc_opt()?;
         let n = crate::editor_ui::find_node(&doc.editor_ref().root, id.as_str())?;
-        let p0 = self.world_to_screen(Point::new(n.transform.x, n.transform.y));
-        let p1 = self.world_to_screen(Point::new(n.transform.x + n.w, n.transform.y + n.h));
-        let (_, _, line_h) = self.text_edit_metrics()?;
+        let (wx, wy, ww, wh) = world_rect_of(&doc.editor_ref().root, id)?;
+        let p0 = self.world_to_screen(Point::new(wx, wy));
+        let p1 = self.world_to_screen(Point::new(wx + ww, wy + wh));
+        let (fs, ls, line_h) = self.text_edit_metrics()?;
+        let z = self.canvas_transform().2;
         let lines = self.text_buffer.split('\n').count().max(1);
-        let need_h = (lines as f64 * line_h + 4.0 * self.canvas_transform().2)
-            .max(p1.y - p0.y + 4.0 * self.canvas_transform().2);
+        let tm = n
+            .bindings
+            .get("tm")
+            .map(String::as_str)
+            .unwrap_or("auto");
+        let hug_w = {
+            let mut max_w = 0.0;
+            let mut off = 0usize;
+            for line in self.text_buffer.split('\n') {
+                let w = self.text_char_x(line, off, line.chars().count(), 0.0, fs, ls);
+                if w > max_w {
+                    max_w = w;
+                }
+                off += line.chars().count() + 1;
+            }
+            max_w.max(fs.max(12.0))
+        };
+        let width = match tm {
+            "fixed" | "height" => (p1.x - p0.x).max(8.0),
+            _ => hug_w,
+        };
+        let need_h = (lines as f64 * line_h + 4.0 * z).max(p1.y - p0.y + 4.0 * z);
         Some(Rect::new(
             p0.x - 2.0,
             p0.y - 2.0,
-            (p1.x + 2.0).max(p0.x + 78.0),
+            p0.x - 2.0 + width + 4.0,
             p0.y - 2.0 + need_h,
         ))
     }
@@ -3390,33 +3397,12 @@ impl App {
         self.hover_node = if on_sel { None } else { next };
     }
 
-    /// Press on an ALREADY-SELECTED Text node: arm caret-on-release.
-    /// Click = edit mode with the caret at the click point; a real drag
-    /// still moves the layer (movement clears the pending edit).
-    /// Guarded to a plain click: single selection, select tool, no alt/shift.
-    pub fn press_selected_text(&mut self, id: String, p: Point, world: Point) -> bool {
-        if self.text_edit.is_some() || self.tool != Tool::Select || self.alt || self.shift {
-            return false;
-        }
-        let sel = self.doc().editor_ref().selection.clone();
-        if sel.as_slice() != [id.clone()] {
-            return false;
-        }
-        let is_text = {
-            let root = self.doc().editor_ref().root.clone();
-            crate::editor_ui::find_node(&root, id.as_str())
-                .map(|n| matches!(n.kind, NodeKind::Text { .. }))
-                .unwrap_or(false)
-        };
-        if !is_text {
-            return false;
-        }
-        self.pending_text_edit = Some((id, p));
-        self.drag = Some(Drag::MoveSel {
-            last: world,
-            base_depth: self.doc().editor_ref().undo_depth(),
-        });
-        true
+    /// Figma (help 360039956434): a single click on selected text SELECTS /
+    /// MOVES it. Edit mode is double-click, Enter, the Text tool, or a
+    /// click on another text layer while already editing. A second single
+    /// click used to re-enter edit after click-away — that is not Figma.
+    pub fn press_selected_text(&mut self, _id: String, _p: Point, _world: Point) -> bool {
+        false
     }
 
     /// Release after `press_selected_text`: any movement (a real drag)
@@ -3976,13 +3962,10 @@ impl Host {
             self.app.context_menu.close();
         }
         self.app.page_menu = None;
-        // Figma + OpenPencil rule: a press anywhere outside the inline
-        // editor COMMITS the text first — Enter inserts newlines, so only
-        // Esc and an outside click commit. The press then proceeds as
-        // normal, so click-away both saves the text and selects (or acts
-        // on) whatever was clicked. A press INSIDE the editor rect falls
-        // through to the caret/drag handling in `canvas_press`.
-        self.app.commit_text_if_press_outside(p);
+        // Canvas click-away (Figma help 360039956434) is owned by
+        // `canvas_press`: a press outside the hugged glyph box commits,
+        // a press on another text layer switches edit, and a press on
+        // inspector chrome stays in edit so type properties still apply.
         if self.app.palette.open {
             // zone hit or dismiss
             for (r, a) in self.app.hit.iter().rev() {
@@ -4526,8 +4509,11 @@ impl Host {
             });
             return;
         }
-        // clicking INSIDE the open editor moves the caret (drag selects);
-        // clicking anywhere else commits
+        // Figma canvas text (help 360039956434):
+        //   • click inside the hugged glyph box → move caret / drag-select
+        //   • click another text layer while editing → edit that one
+        //   • click empty canvas or a non-text layer → commit, then select
+        // Esc also commits; Enter inserts a newline.
         if self.app.text_edit.is_some() {
             if let Some(idx) = self.app.text_char_at(p) {
                 self.app.field = None; // editor takes keyboard focus back
@@ -4541,6 +4527,33 @@ impl Host {
                 self.app.drag = Some(Drag::TextEditSel);
                 return;
             }
+            let world = self.app.screen_to_world(p);
+            let switch = {
+                let current = self.app.text_edit.clone();
+                let doc = self.app.doc();
+                let root = &doc.editor_ref().root;
+                x_native::editor::hit_test(root, world).and_then(|id| {
+                    if current.as_deref() == Some(id.as_str()) {
+                        return None;
+                    }
+                    crate::editor_ui::find_node(root, id.as_str()).and_then(|n| match &n.kind {
+                        NodeKind::Text { text } => Some((n.id.clone(), text.clone())),
+                        _ => None,
+                    })
+                })
+            };
+            if self.app.commit_text_field() {
+                self.app.mark_dirty();
+            }
+            if let Some((id, text)) = switch {
+                self.app.begin_text_edit(id, text);
+                if let Some(idx) = self.app.text_char_at(p) {
+                    self.app.text_set_caret(idx, false);
+                }
+                self.app.last_click = Some((std::time::Instant::now(), p));
+                return;
+            }
+            // fall through: the press selects (or deselects) what it hit
         }
         self.commit_field();
         let world = self.app.screen_to_world(p);
