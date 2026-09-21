@@ -1153,9 +1153,8 @@ function Design({
               </div>
               <Field label="S" value={n.fontSize} onChange={(v) => num("fontSize", v)} />
               <Field
-                label="↑"
+                label={n.lineHeight ? "↑" : "Auto"}
                 value={n.lineHeight || n.fontSize * 1.2}
-                hint={n.lineHeight ? undefined : "Auto"}
                 onLabelClick={() => num("lineHeight", 0)}
                 onChange={(v) => num("lineHeight", v)}
               />

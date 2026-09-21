@@ -114,7 +114,12 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           return;
         }
         if (n?.kind === "text") setEdit({ id: n.id, text: n.text });
-        else if (n && (n.kind === "frame" || n.kind === "group") && n.children.length && !vecEdit) {
+        else if (
+          n &&
+          (n.kind === "frame" || n.kind === "group" || (n.kind === "boolean" && n.children.length > 0)) &&
+          n.children.length &&
+          !vecEdit
+        ) {
           const child = n.children.find((c) => c.visible && !c.locked) ?? n.children[0];
           engine.dispatch({ type: "select", ids: [child.id] });
           e.stopImmediatePropagation();
@@ -290,20 +295,26 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           /* tainted canvas */
         }
       }
-      for (const drop of (n.effects ?? []).filter((e) => e.kind === "drop-shadow" && e.visible)) {
-        ctx.save();
-        ctx.shadowColor = drop.color;
-        ctx.shadowBlur = Math.max(0, drop.blur) * z;
-        ctx.shadowOffsetX = (drop.x || 0) * z;
-        ctx.shadowOffsetY = (drop.y || 4) * z;
-        ctx.fillStyle = drop.color;
-        ctx.fill();
-        if (drop.spread) {
-          ctx.lineWidth = Math.max(0, drop.spread * 2) * z;
-          ctx.strokeStyle = drop.color;
-          ctx.stroke();
+      const canShadow =
+        !!n.imageSrc ||
+        (n.fillVisible !== false && !!n.fill && !isNone(n.fill) && n.kind !== "line" && n.kind !== "arrow") ||
+        (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint));
+      if (canShadow) {
+        for (const drop of (n.effects ?? []).filter((e) => e.kind === "drop-shadow" && e.visible)) {
+          ctx.save();
+          ctx.shadowColor = drop.color;
+          ctx.shadowBlur = Math.max(0, drop.blur) * z;
+          ctx.shadowOffsetX = (drop.x || 0) * z;
+          ctx.shadowOffsetY = (drop.y || 4) * z;
+          ctx.fillStyle = drop.color;
+          ctx.fill();
+          if (drop.spread) {
+            ctx.lineWidth = Math.max(0, drop.spread * 2) * z;
+            ctx.strokeStyle = drop.color;
+            ctx.stroke();
+          }
+          ctx.restore();
         }
-        ctx.restore();
       }
       if (n.imageSrc || n.fillType === "image") {
         let im = n.imageSrc ? imgs.current.get(n.imageSrc) : undefined;
@@ -416,7 +427,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         round();
         ctx.clip();
       }
-      let maskOn = false;
+      let maskOn = 0;
       for (const ch of n.children) {
         if (ch.isMask && ch.visible) {
           ctx.save();
@@ -435,12 +446,12 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             ctx.rect(mx, my, mw, mh);
           }
           ctx.clip();
-          maskOn = true;
+          maskOn += 1;
           continue;
         }
         paint(ch, x, y);
       }
-      if (maskOn) ctx.restore();
+      while (maskOn--) ctx.restore();
       ctx.restore();
     };
     const present = snap.presentFrame ? find(root, snap.presentFrame) : null;
@@ -600,6 +611,29 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       ctx.fillText(dim, bx + bw / 2, by + bh / 2);
       ctx.textAlign = "left";
       ctx.textBaseline = "alphabetic";
+      const ft = wp.node.fillType;
+      if (ft === "linear" || ft === "radial" || ft === "angular" || ft === "diamond") {
+        const ax = sx + (wp.node.fillGX ?? 0.5) * sw;
+        const ay = sy + (wp.node.fillGY ?? 0) * sh;
+        const bx = sx + (wp.node.fillHX ?? 0.5) * sw;
+        const by = sy + (wp.node.fillHY ?? 1) * sh;
+        ctx.strokeStyle = "#0d99ff";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(bx, by);
+        ctx.stroke();
+        ctx.fillStyle = wp.node.fill;
+        ctx.beginPath();
+        ctx.arc(ax, ay, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = wp.node.fillB || "#ffffff";
+        ctx.beginPath();
+        ctx.arc(bx, by, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
       ctx.restore();
     }
 
@@ -634,37 +668,6 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           ctx.fill();
           ctx.stroke();
         }
-      }
-    }
-
-    if (snap.selection.length === 1) {
-      const wp = worldPos(root, snap.selection[0]);
-      const ft = wp?.node.fillType;
-      if (wp && (ft === "linear" || ft === "radial" || ft === "angular" || ft === "diamond")) {
-        const gx = (wp.node.fillGX ?? 0.5) * wp.node.w;
-        const gy = (wp.node.fillGY ?? 0) * wp.node.h;
-        const hx = (wp.node.fillHX ?? 0.5) * wp.node.w;
-        const hy = (wp.node.fillHY ?? 1) * wp.node.h;
-        const ax = snap.panX + (wp.x + gx) * z;
-        const ay = snap.panY + (wp.y + gy) * z;
-        const bx = snap.panX + (wp.x + hx) * z;
-        const by = snap.panY + (wp.y + hy) * z;
-        ctx.strokeStyle = "#0d99ff";
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(ax, ay);
-        ctx.lineTo(bx, by);
-        ctx.stroke();
-        ctx.fillStyle = wp.node.fill;
-        ctx.beginPath();
-        ctx.arc(ax, ay, 6, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-        ctx.fillStyle = wp.node.fillB || "#ffffff";
-        ctx.beginPath();
-        ctx.arc(bx, by, 6, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
       }
     }
 
@@ -802,8 +805,10 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         const sx = snap.panX + wp.x * z;
         const sy = snap.panY + wp.y * z;
         const r = wrap.current!.getBoundingClientRect();
-        let px = e.clientX - r.left;
-        let py = e.clientY - r.top;
+        const rawX = e.clientX - r.left;
+        const rawY = e.clientY - r.top;
+        let px = rawX;
+        let py = rawY;
         if (wp.node.rotation) {
           const u = unrot(px, py, sx + (wp.node.w * z) / 2, sy + (wp.node.h * z) / 2, wp.node.rotation);
           px = u.x;
@@ -811,10 +816,10 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         }
         const ft = wp.node.fillType;
         if (ft === "linear" || ft === "radial" || ft === "angular" || ft === "diamond") {
-          const ax = snap.panX + (wp.x + (wp.node.fillGX ?? 0.5) * wp.node.w) * z;
-          const ay = snap.panY + (wp.y + (wp.node.fillGY ?? 0) * wp.node.h) * z;
-          const bx = snap.panX + (wp.x + (wp.node.fillHX ?? 0.5) * wp.node.w) * z;
-          const by = snap.panY + (wp.y + (wp.node.fillHY ?? 1) * wp.node.h) * z;
+          const ax = sx + (wp.node.fillGX ?? 0.5) * wp.node.w * z;
+          const ay = sy + (wp.node.fillGY ?? 0) * wp.node.h * z;
+          const bx = sx + (wp.node.fillHX ?? 0.5) * wp.node.w * z;
+          const by = sy + (wp.node.fillHY ?? 1) * wp.node.h * z;
           if (Math.hypot(px - ax, py - ay) < 8) {
             engine.dispatch({ type: "begin" });
             drag.current = { mode: "grad", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, handle: "g" };
@@ -939,7 +944,9 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         const d = Math.hypot(wpt.x - last.x, wpt.y - last.y);
         wpt = { x: last.x + Math.cos(ang) * d, y: last.y + Math.sin(ang) * d };
       }
-      setGhost(wpt);
+      const gx = Math.round(wpt.x);
+      const gy = Math.round(wpt.y);
+      if (!ghost || Math.round(ghost.x) !== gx || Math.round(ghost.y) !== gy) setGhost({ x: gx, y: gy });
     } else if (ghost) setGhost(null);
     if (penDrag.current) {
       const wpt = toWorld(e.clientX, e.clientY);
