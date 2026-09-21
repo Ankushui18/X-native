@@ -1,4 +1,4 @@
-//! X-Native Design System — Graphite & Signal Palette
+//! X-Native Design System — Figma UI3 chrome (Graphite / Daylight palettes)
 //!
 //! Every semantic color below is **derived from the shared palette** in
 //! `x_native::ui::ColorTokens::GRAPHITE` (crates/x-ui/src/design_system.rs),
@@ -217,7 +217,7 @@ pub const C_LINE_2: Color = rgb(role!(border_strong)); // Strong borders
 // ------------------------------------------------------------- state colors
 
 // selection ring on canvas; smart-guide lines while dragging. Selection is
-// the `selection` role (deeper violet) — keyboard focus is the distinct
+// the `selection` role (UI3 Share blue) — keyboard focus is the distinct
 // `focus_ring` role, so the two states can never be confused.
 pub const C_SEL: Color = rgb(role!(selection));
 /// Component sets. Figma's default look for a set is a dashed violet stroke

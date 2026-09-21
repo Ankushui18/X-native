@@ -900,7 +900,7 @@ mod tests {
         let ops3 = paint(&t);
         assert!(ops3
             .iter()
-            .any(|o| matches!(o, PaintOp::Text { color, .. } if *color == [0x1b, 0x1d, 0x23])));
+            .any(|o| matches!(o, PaintOp::Text { color, .. } if *color == [0x1a, 0x1a, 0x1a])));
     }
 
     #[test]
