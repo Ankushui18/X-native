@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { Engine, Snapshot, Tool, XNode } from "../engine/types";
-import { collectColors } from "../engine/memory";
+import { collectColors, defaultLayout } from "../engine/memory";
 import { Icon, TOOL_ICON, kindIcon } from "./icons";
 import { useTheme, type ThemePref } from "./theme";
 import { ContextMenu, isGroupNode, layerMenu, pageMenu, runMenu } from "./ContextMenu";
@@ -671,6 +671,22 @@ export function bindHotkeys(
     if (meta && e.altKey && e.key.toLowerCase() === "x") {
       e.preventDefault();
       engine.dispatch({ type: "boolean", op: "exclude" });
+      return;
+    }
+    if (!meta && e.shiftKey && e.key.toLowerCase() === "a") {
+      e.preventDefault();
+      const id = engine.snapshot().selection[0];
+      if (id) engine.dispatch({ type: "autoLayout", id, layout: defaultLayout() });
+      return;
+    }
+    if (!meta && e.shiftKey && e.code === "Digit0") {
+      e.preventDefault();
+      engine.dispatch({ type: "setZoom", zoom: 1 });
+      return;
+    }
+    if (!meta && e.shiftKey && e.code === "Digit1") {
+      e.preventDefault();
+      engine.dispatch({ type: "setZoom", zoom: 0.5 });
       return;
     }
     if (!meta && e.shiftKey) {

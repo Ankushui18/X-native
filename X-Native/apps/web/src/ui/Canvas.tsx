@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Engine, NodeKind, PathPoint, Snapshot, Tool, XNode } from "../engine/types";
-import { find, findParent, hitTest, worldPos } from "../engine/memory";
+import { deepestFrame, find, findParent, hitTest, worldPos } from "../engine/memory";
 import { useTheme } from "./theme";
 import { cssRgba, isNone, takeEyedrop, toHex } from "./color";
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
@@ -37,6 +37,8 @@ type Drag =
       orig?: { x: number; y: number; w: number; h: number; rotation: number };
       corner?: number;
       id?: string;
+      duped?: boolean;
+      axis?: "x" | "y" | null;
     };
 
 export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
@@ -52,6 +54,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const pendingImage = useRef<{ x: number; y: number } | null>(null);
   const [draft, setDraft] = useState<PathPoint[]>([]);
   const pencil = useRef<PathPoint[] | null>(null);
+  const penDrag = useRef<{ i: number; x: number; y: number } | null>(null);
   const { theme } = useTheme();
 
   useEffect(() => {
@@ -155,14 +158,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         return;
       }
       if (n.kind === "vector" && n.path.length) {
-        ctx.beginPath();
-        n.path.forEach((pt, i) => {
-          const vx = snap.panX + (x + pt.x) * z;
-          const vy = snap.panY + (y + pt.y) * z;
-          if (i === 0) ctx.moveTo(vx, vy);
-          else ctx.lineTo(vx, vy);
-        });
-        if (n.closed) ctx.closePath();
+        tracePath(ctx, n.path, snap.panX + x * z, snap.panY + y * z, z, n.closed);
       } else if (n.kind === "ellipse") {
         ctx.beginPath();
         ctx.ellipse(sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), 0, 0, Math.PI * 2);
@@ -245,31 +241,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         ctx.restore();
       }
       if (n.kind === "text" && edit?.id !== n.id) {
-        ctx.fillStyle = n.fill;
-        const size = Math.max(8, n.fontSize * z);
-        ctx.font = `${n.fontWeight} ${size}px ${n.fontFamily}, Inter, system-ui`;
-        ctx.textBaseline = n.textAlignVertical === "middle" ? "middle" : n.textAlignVertical === "bottom" ? "bottom" : "top";
-        ctx.textAlign = n.textAlign === "center" ? "center" : n.textAlign === "right" ? "right" : "left";
-        const tx = n.textAlign === "center" ? sx + sw / 2 : n.textAlign === "right" ? sx + sw : sx;
-        const ty = n.textAlignVertical === "middle" ? sy + sh / 2 : n.textAlignVertical === "bottom" ? sy + sh : sy;
-        let content = n.text || "Type something";
-        if (n.textCase === "upper") content = content.toUpperCase();
-        if (n.textCase === "lower") content = content.toLowerCase();
-        if (n.truncate) {
-          const lines = content.split("\n").slice(0, n.maxLines || 1);
-          content = lines.join("\n");
-        }
-        ctx.fillText(content, tx, ty, sw);
-        if (n.textDecoration === "underline" || n.textDecoration === "strikethrough") {
-          const m = ctx.measureText(content);
-          ctx.beginPath();
-          const yy = n.textDecoration === "underline" ? ty + size : ty + size / 2;
-          ctx.moveTo(tx, yy);
-          ctx.lineTo(tx + m.width, yy);
-          ctx.strokeStyle = n.fill;
-          ctx.lineWidth = Math.max(1, z);
-          ctx.stroke();
-        }
+        paintText(ctx, n, sx, sy, sw, sh, z);
       }
       if (n.kind === "frame" && n.overflow !== "visible") {
         round();
@@ -301,21 +273,35 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     }
 
     if (draft.length) {
-      ctx.beginPath();
       ctx.strokeStyle = "#0d99ff";
       ctx.lineWidth = 1.5;
-      draft.forEach((p, i) => {
-        const px = snap.panX + p.x * z;
-        const py = snap.panY + p.y * z;
-        if (i === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
-      });
+      tracePath(ctx, draft, snap.panX, snap.panY, z, false);
       ctx.stroke();
       for (const p of draft) {
+        const px = snap.panX + p.x * z;
+        const py = snap.panY + p.y * z;
+        if ((p.ox && p.ox !== 0) || (p.oy && p.oy !== 0) || (p.ix && p.ix !== 0) || (p.iy && p.iy !== 0)) {
+          ctx.strokeStyle = "#0d99ff";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(px + (p.ix || 0) * z, py + (p.iy || 0) * z);
+          ctx.lineTo(px + (p.ox || 0) * z, py + (p.oy || 0) * z);
+          ctx.stroke();
+          for (const [hx, hy] of [
+            [px + (p.ix || 0) * z, py + (p.iy || 0) * z],
+            [px + (p.ox || 0) * z, py + (p.oy || 0) * z],
+          ] as const) {
+            ctx.fillStyle = "#fff";
+            ctx.beginPath();
+            ctx.arc(hx, hy, 3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+          }
+        }
         ctx.fillStyle = "#fff";
         ctx.strokeStyle = "#0d99ff";
         ctx.beginPath();
-        ctx.arc(snap.panX + p.x * z, snap.panY + p.y * z, 3.5, 0, Math.PI * 2);
+        ctx.arc(px, py, 3.5, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
       }
@@ -440,10 +426,13 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         if (Math.hypot(wpt.x - a.x, wpt.y - a.y) < 8 / snap.zoom) {
           engine.dispatch({ type: "addPath", points: draft, closed: true });
           setDraft([]);
+          penDrag.current = null;
           return;
         }
       }
-      setDraft((d) => [...d, wpt]);
+      const pt: PathPoint = { x: wpt.x, y: wpt.y };
+      setDraft((d) => [...d, pt]);
+      penDrag.current = { i: draft.length, x: wpt.x, y: wpt.y };
       return;
     }
     if (snap.tool === "pencil" || snap.tool === "brush") {
@@ -553,6 +542,26 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   };
 
   const onMove = (e: React.MouseEvent) => {
+    if (penDrag.current) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      const p = penDrag.current;
+      const ox = wpt.x - p.x;
+      const oy = wpt.y - p.y;
+      if (Math.hypot(ox, oy) > 2 / snap.zoom) {
+        setDraft((d) => {
+          const next = d.map((pt) => ({ ...pt }));
+          const i = p.i;
+          if (next[i]) {
+            next[i].ox = ox;
+            next[i].oy = oy;
+            next[i].ix = -ox;
+            next[i].iy = -oy;
+          }
+          return next;
+        });
+      }
+      return;
+    }
     if (pencil.current) {
       const wpt = toWorld(e.clientX, e.clientY);
       pencil.current.push(wpt);
@@ -566,39 +575,73 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       engine.dispatch({ type: "pan", dx: e.clientX - d.sx, dy: e.clientY - d.sy });
       d.sx = e.clientX;
       d.sy = e.clientY;
-    } else if (d.mode === "move" && snap.tool === "select") {
-      const dx = (e.clientX - d.sx) / snap.zoom;
-      const dy = (e.clientY - d.sy) / snap.zoom;
+    } else if (d.mode === "move" && (snap.tool === "select" || snap.tool === "scale")) {
+      if (e.altKey && !d.duped) {
+        engine.dispatch({ type: "duplicate" });
+        d.duped = true;
+      }
+      let dx = (e.clientX - d.sx) / snap.zoom;
+      let dy = (e.clientY - d.sy) / snap.zoom;
+      if (e.shiftKey) {
+        if (!d.axis) d.axis = Math.abs(dx) >= Math.abs(dy) ? "x" : "y";
+        if (d.axis === "x") dy = 0;
+        else dx = 0;
+      } else {
+        d.axis = null;
+      }
       if (dx || dy) {
-        engine.dispatch({ type: "move", ids: snap.selection, dx, dy });
+        engine.dispatch({ type: "move", ids: engine.snapshot().selection, dx, dy });
         d.sx = e.clientX;
         d.sy = e.clientY;
       }
     } else if (d.mode === "create" || d.mode === "marquee") {
-      const x = Math.min(d.sx, e.clientX) - box.left;
-      const y = Math.min(d.sy, e.clientY) - box.top;
-      setBand({ x, y, w: Math.abs(e.clientX - d.sx), h: Math.abs(e.clientY - d.sy) });
+      let x = Math.min(d.sx, e.clientX) - box.left;
+      let y = Math.min(d.sy, e.clientY) - box.top;
+      let w = Math.abs(e.clientX - d.sx);
+      let h = Math.abs(e.clientY - d.sy);
+      if (d.mode === "create" && e.shiftKey) {
+        const s = Math.max(w, h);
+        w = s;
+        h = s;
+      }
+      if (d.mode === "create" && e.altKey) {
+        x = d.sx - box.left - w;
+        y = d.sy - box.top - h;
+        w *= 2;
+        h *= 2;
+      }
+      setBand({ x, y, w, h });
     } else if (d.mode === "resize" && d.orig && d.id != null && d.corner != null) {
       const b = toWorld(e.clientX, e.clientY);
-      let next = resizeFrom(d.orig, d.corner, b.x, b.y);
-      const locked = worldPos(snap.pages[snap.page].root, d.id)?.node.aspectLocked;
-      if (locked && d.orig.w > 0) {
-        const ratio = d.orig.h / d.orig.w;
-        next.h = Math.max(1, next.w * ratio);
-      }
-      engine.dispatch({ type: "resize", id: d.id, ...next });
+      const node = worldPos(snap.pages[snap.page].root, d.id)?.node;
+      const lock = e.shiftKey || !!node?.aspectLocked;
+      const next = resizeFrom(d.orig, d.corner, b.x, b.y, {
+        aspect: lock,
+        fromCenter: e.altKey,
+      });
+      engine.dispatch({
+        type: "resize",
+        id: d.id,
+        ...next,
+        scaleProps: snap.tool === "scale",
+      });
     } else if (d.mode === "rotate" && d.orig && d.id) {
       const wp = worldPos(snap.pages[snap.page].root, d.id);
       if (!wp) return;
       const cx = wp.x + wp.node.w / 2;
       const cy = wp.y + wp.node.h / 2;
       const b = toWorld(e.clientX, e.clientY);
-      const ang = (Math.atan2(b.y - cy, b.x - cx) * 180) / Math.PI + 90;
+      let ang = (Math.atan2(b.y - cy, b.x - cx) * 180) / Math.PI + 90;
+      if (e.shiftKey) ang = Math.round(ang / 15) * 15;
       engine.dispatch({ type: "patch", id: d.id, patch: { rotation: Math.round(ang) } });
     }
   };
 
   const onUp = (e: React.MouseEvent) => {
+    if (penDrag.current) {
+      penDrag.current = null;
+      return;
+    }
     if (pencil.current) {
       const pts = pencil.current;
       pencil.current = null;
@@ -611,34 +654,94 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     setBand(null);
     if (!d) return;
     if (d.mode === "move" || d.mode === "resize") engine.dispatch({ type: "end" });
+    if (d.mode === "move") {
+      const sel = engine.snapshot().selection[0];
+      const root = snap.pages[snap.page].root;
+      const wp = sel ? worldPos(root, sel) : null;
+      if (wp) {
+        const cx = wp.x + wp.node.w / 2;
+        const cy = wp.y + wp.node.h / 2;
+        const frame = deepestFrame(root, cx, cy, new Set(engine.snapshot().selection));
+        const parent = findParent(root, wp.node.id);
+        if (frame && frame.id !== wp.node.id && frame !== parent) {
+          engine.dispatch({
+            type: "reparent",
+            ids: [wp.node.id],
+            parent: frame.id,
+            x: wp.x - (worldPos(root, frame.id)?.x ?? 0),
+            y: wp.y - (worldPos(root, frame.id)?.y ?? 0),
+          });
+        }
+      }
+    }
     if (d.mode === "create") {
       const a = toWorld(d.sx, d.sy);
       const b = toWorld(e.clientX, e.clientY);
-      const x = Math.min(a.x, b.x);
-      const y = Math.min(a.y, b.y);
+      const clicked = Math.hypot(e.clientX - d.sx, e.clientY - d.sy) < 4;
       let w = Math.abs(b.x - a.x);
       let h = Math.abs(b.y - a.y);
+      let x = Math.min(a.x, b.x);
+      let y = Math.min(a.y, b.y);
       const k = kindOf(snap.tool);
       if (!k) return;
-      if (k === "text") {
-        w = Math.max(w, 120);
-        h = Math.max(h, 24);
+      const shift = e.shiftKey;
+      const alt = e.altKey;
+      if (clicked) {
+        if (k === "text") {
+          w = 24;
+          h = 24;
+        } else if (k === "line" || k === "arrow") {
+          w = 100;
+          h = 1;
+        } else {
+          w = 100;
+          h = 100;
+        }
+        x = a.x;
+        y = a.y;
       } else {
+        if (shift) {
+          const s = Math.max(w, h, 1);
+          w = s;
+          h = s;
+        }
+        if (alt) {
+          x = a.x - w;
+          y = a.y - h;
+          w *= 2;
+          h *= 2;
+        }
+      }
+      if (k === "text" && !clicked) {
         w = Math.max(w, 8);
         h = Math.max(h, 8);
+      } else if (k !== "line" && k !== "arrow" && k !== "text") {
+        w = Math.max(w, 1);
+        h = Math.max(h, 1);
       }
+      const host = deepestFrame(snap.pages[snap.page].root, x + w / 2, y + h / 2);
+      const extra: Partial<XNode> =
+        snap.tool === "section"
+          ? { name: "Section", fill: "#00000000", overflow: "visible" }
+          : k === "text"
+            ? clicked
+              ? { text: "", sizingW: "hug", sizingH: "hug", fontSize: 16 }
+              : { text: "", sizingW: "fixed", sizingH: "fixed", fontSize: 16 }
+            : {};
       engine.dispatch({
         type: "add",
         kind: k,
-        x,
-        y,
+        x: host ? x - (worldPos(snap.pages[snap.page].root, host.id)?.x ?? 0) : x,
+        y: host ? y - (worldPos(snap.pages[snap.page].root, host.id)?.y ?? 0) : y,
         w,
         h,
-        extra:
-          snap.tool === "section"
-            ? { name: "Section", fill: "#00000000", overflow: "visible" }
-            : undefined,
+        parent: host?.id,
+        extra,
       });
+      if (k === "text") {
+        const id = engine.snapshot().selection[0];
+        if (id) setEdit({ id, text: "" });
+      }
     }
     if (d.mode === "marquee") {
       const a = toWorld(d.sx, d.sy);
@@ -651,7 +754,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       const visit = (n: XNode, px: number, py: number) => {
         const x = px + n.x;
         const y = py + n.y;
-        if (n !== snap.pages[snap.page].root) {
+        if (n !== snap.pages[snap.page].root && n.visible && !n.locked) {
           if (x >= x0 && y >= y0 && x + n.w <= x1 && y + n.h <= y1) ids.push(n.id);
         }
         for (const c of n.children) visit(c, x, y);
@@ -712,9 +815,11 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const cursor =
     snap.tool === "hand" || space.current
       ? "grab"
-      : CREATE.includes(snap.tool) || snap.tool === "pen" || snap.tool === "pencil" || snap.tool === "brush"
-        ? "crosshair"
-        : "default";
+      : snap.tool === "scale"
+        ? "nwse-resize"
+        : CREATE.includes(snap.tool) || snap.tool === "pen" || snap.tool === "pencil" || snap.tool === "brush"
+          ? "crosshair"
+          : "default";
 
   const editBox = (() => {
     if (!edit) return null;
@@ -772,7 +877,20 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           autoFocus
           onChange={(e) => setEdit({ ...edit, text: e.target.value })}
           onBlur={() => {
-            engine.dispatch({ type: "patch", id: edit.id, patch: { text: edit.text } });
+            const n = worldPos(snap.pages[snap.page].root, edit.id)?.node;
+            const patch: Partial<XNode> = { text: edit.text };
+            if (n && (n.sizingW === "hug" || n.sizingH === "hug")) {
+              const ctx = ref.current?.getContext("2d");
+              if (ctx) {
+                ctx.font = `${n.fontWeight} ${n.fontSize}px ${n.fontFamily}, Inter, system-ui`;
+                const lines = (edit.text || " ").split("\n");
+                const tw = Math.max(...lines.map((l) => ctx.measureText(l).width), 8);
+                const lh = n.lineHeight || n.fontSize * 1.2;
+                if (n.sizingW === "hug") patch.w = Math.ceil(tw + 4);
+                if (n.sizingH === "hug") patch.h = Math.ceil(Math.max(1, lines.length) * lh);
+              }
+            }
+            engine.dispatch({ type: "patch", id: edit.id, patch });
             setEdit(null);
           }}
           onKeyDown={(e) => {
@@ -870,24 +988,44 @@ function resizeFrom(
   corner: number,
   bx: number,
   by: number,
+  opts?: { aspect?: boolean; fromCenter?: boolean },
 ) {
   let { x, y, w, h } = o;
   const right = o.x + o.w;
   const bottom = o.y + o.h;
+  const cx = o.x + o.w / 2;
+  const cy = o.y + o.h / 2;
   // 0 nw, 1 n, 2 ne, 3 e, 4 se, 5 s, 6 sw, 7 w
-  if (corner === 0 || corner === 1 || corner === 2) {
-    y = by;
-    h = bottom - by;
+  if (opts?.fromCenter) {
+    if (corner === 0 || corner === 1 || corner === 2 || corner === 4 || corner === 5 || corner === 6) {
+      h = Math.abs(by - cy) * 2;
+      y = cy - h / 2;
+    }
+    if (corner === 0 || corner === 2 || corner === 3 || corner === 4 || corner === 6 || corner === 7) {
+      w = Math.abs(bx - cx) * 2;
+      x = cx - w / 2;
+    }
+  } else {
+    if (corner === 0 || corner === 1 || corner === 2) {
+      y = by;
+      h = bottom - by;
+    }
+    if (corner === 4 || corner === 5 || corner === 6) {
+      h = by - o.y;
+    }
+    if (corner === 0 || corner === 6 || corner === 7) {
+      x = bx;
+      w = right - bx;
+    }
+    if (corner === 2 || corner === 3 || corner === 4) {
+      w = bx - o.x;
+    }
   }
-  if (corner === 4 || corner === 5 || corner === 6) {
-    h = by - o.y;
-  }
-  if (corner === 0 || corner === 6 || corner === 7) {
-    x = bx;
-    w = right - bx;
-  }
-  if (corner === 2 || corner === 3 || corner === 4) {
-    w = bx - o.x;
+  if (opts?.aspect && o.w > 0) {
+    const ratio = o.h / o.w;
+    h = Math.max(1, w * ratio);
+    if (opts.fromCenter) y = cy - h / 2;
+    else if (corner === 0 || corner === 1 || corner === 2) y = bottom - h;
   }
   if (w < 1) {
     x += w - 1;
@@ -939,6 +1077,159 @@ function polyPath(
     else ctx.lineTo(x, y);
   }
   ctx.closePath();
+}
+
+function tracePath(
+  ctx: CanvasRenderingContext2D,
+  path: PathPoint[],
+  ox: number,
+  oy: number,
+  z: number,
+  closed: boolean,
+) {
+  ctx.beginPath();
+  path.forEach((pt, i) => {
+    const vx = ox + pt.x * z;
+    const vy = oy + pt.y * z;
+    if (i === 0) {
+      ctx.moveTo(vx, vy);
+      return;
+    }
+    const prev = path[i - 1];
+    const has =
+      (prev.ox && prev.ox !== 0) ||
+      (prev.oy && prev.oy !== 0) ||
+      (pt.ix && pt.ix !== 0) ||
+      (pt.iy && pt.iy !== 0);
+    if (has) {
+      ctx.bezierCurveTo(
+        ox + (prev.x + (prev.ox || 0)) * z,
+        oy + (prev.y + (prev.oy || 0)) * z,
+        ox + (pt.x + (pt.ix || 0)) * z,
+        oy + (pt.y + (pt.iy || 0)) * z,
+        vx,
+        vy,
+      );
+    } else {
+      ctx.lineTo(vx, vy);
+    }
+  });
+  if (closed && path.length > 2) {
+    const first = path[0];
+    const last = path[path.length - 1];
+    const has =
+      (last.ox && last.ox !== 0) ||
+      (last.oy && last.oy !== 0) ||
+      (first.ix && first.ix !== 0) ||
+      (first.iy && first.iy !== 0);
+    if (has) {
+      ctx.bezierCurveTo(
+        ox + (last.x + (last.ox || 0)) * z,
+        oy + (last.y + (last.oy || 0)) * z,
+        ox + (first.x + (first.ix || 0)) * z,
+        oy + (first.y + (first.iy || 0)) * z,
+        ox + first.x * z,
+        oy + first.y * z,
+      );
+    }
+    ctx.closePath();
+  }
+}
+
+function wrapLines(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxW: number,
+  letterSpacing: number,
+): string[] {
+  const paras = text.split("\n");
+  const lines: string[] = [];
+  const widthOf = (s: string) => {
+    if (!s) return 0;
+    const m = ctx.measureText(s).width;
+    return letterSpacing ? m + letterSpacing * Math.max(0, s.length - 1) : m;
+  };
+  for (const para of paras) {
+    if (!para) {
+      lines.push("");
+      continue;
+    }
+    if (maxW <= 0 || widthOf(para) <= maxW) {
+      lines.push(para);
+      continue;
+    }
+    const words = para.split(/(\s+)/);
+    let cur = "";
+    for (const w of words) {
+      const next = cur + w;
+      if (cur && widthOf(next) > maxW) {
+        lines.push(cur.replace(/\s+$/, ""));
+        cur = w.replace(/^\s+/, "");
+      } else {
+        cur = next;
+      }
+    }
+    if (cur) lines.push(cur.replace(/\s+$/, ""));
+  }
+  return lines.length ? lines : [""];
+}
+
+function paintText(
+  ctx: CanvasRenderingContext2D,
+  n: XNode,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+  z: number,
+) {
+  ctx.fillStyle = n.fill;
+  const size = Math.max(1, n.fontSize * z);
+  ctx.font = `${n.fontWeight} ${size}px ${n.fontFamily}, Inter, system-ui`;
+  ctx.textBaseline = "top";
+  ctx.textAlign = n.textAlign === "center" ? "center" : n.textAlign === "right" ? "right" : "left";
+  let content = n.text || "Type something";
+  if (n.textCase === "upper") content = content.toUpperCase();
+  if (n.textCase === "lower") content = content.toLowerCase();
+  if (n.textCase === "title") content = content.replace(/\w\S*/g, (t) => t[0].toUpperCase() + t.slice(1).toLowerCase());
+  const lh = Math.max(size, (n.lineHeight || n.fontSize * 1.2) * z);
+  const ls = (n.letterSpacing || 0) * z;
+  const wrap = n.sizingW !== "hug";
+  let lines = wrapLines(ctx, content, wrap ? sw : 1e6, ls);
+  if (n.truncate) lines = lines.slice(0, n.maxLines || 1);
+  const blockH = lines.length * lh;
+  let y0 = sy;
+  if (n.textAlignVertical === "middle") y0 = sy + (sh - blockH) / 2;
+  if (n.textAlignVertical === "bottom") y0 = sy + sh - blockH;
+  lines.forEach((line, i) => {
+    const tx =
+      n.textAlign === "center" ? sx + sw / 2 : n.textAlign === "right" ? sx + sw : sx;
+    const ty = y0 + i * lh;
+    if (ls) {
+      let x = tx;
+      if (n.textAlign === "center") x = tx - (ctx.measureText(line).width + ls * Math.max(0, line.length - 1)) / 2;
+      if (n.textAlign === "right") x = tx - (ctx.measureText(line).width + ls * Math.max(0, line.length - 1));
+      ctx.textAlign = "left";
+      for (const ch of line) {
+        ctx.fillText(ch, x, ty);
+        x += ctx.measureText(ch).width + ls;
+      }
+      ctx.textAlign = n.textAlign === "center" ? "center" : n.textAlign === "right" ? "right" : "left";
+    } else {
+      ctx.fillText(line, tx, ty, wrap ? sw : undefined);
+    }
+    if (n.textDecoration === "underline" || n.textDecoration === "strikethrough") {
+      const m = ctx.measureText(line);
+      const yy = n.textDecoration === "underline" ? ty + size : ty + size / 2;
+      const x0 = n.textAlign === "center" ? tx - m.width / 2 : n.textAlign === "right" ? tx - m.width : tx;
+      ctx.beginPath();
+      ctx.moveTo(x0, yy);
+      ctx.lineTo(x0 + m.width, yy);
+      ctx.strokeStyle = n.fill;
+      ctx.lineWidth = Math.max(1, z);
+      ctx.stroke();
+    }
+  });
 }
 
 function walkInteractions(

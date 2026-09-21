@@ -44,6 +44,12 @@ export type ProtoAnim = "instant" | "dissolve" | "smart";
 export interface PathPoint {
   x: number;
   y: number;
+  /** Incoming bezier handle, relative to the point (Figma pen). */
+  ix?: number;
+  iy?: number;
+  /** Outgoing bezier handle, relative to the point. */
+  ox?: number;
+  oy?: number;
 }
 
 export interface Interaction {
@@ -222,7 +228,8 @@ export type Command =
       extra?: Partial<XNode>;
     }
   | { type: "move"; ids: string[]; dx: number; dy: number }
-  | { type: "resize"; id: string; x: number; y: number; w: number; h: number }
+  | { type: "resize"; id: string; x: number; y: number; w: number; h: number; scaleProps?: boolean }
+  | { type: "reparent"; ids: string[]; parent: string; x: number; y: number }
   | { type: "delete" }
   | { type: "duplicate" }
   | { type: "undo" }

@@ -496,7 +496,7 @@ export class MemoryEngine implements Engine {
         const parent = cmd.parent ? find(this.root(), cmd.parent) : this.root();
         (parent ?? this.root()).children.push(n);
         s.selection = [n.id];
-        s.tool = "select";
+        if (cmd.kind === "text" || cmd.extra?.imageSrc) s.tool = "select";
         break;
       }
       case "move":
@@ -520,10 +520,31 @@ export class MemoryEngine implements Engine {
       case "resize": {
         const n = find(this.root(), cmd.id);
         if (n && !n.locked) {
+          const oldW = n.w;
+          const oldH = n.h;
           n.x = cmd.x;
           n.y = cmd.y;
           n.w = Math.max(1, cmd.w);
           n.h = Math.max(1, cmd.h);
+          if (cmd.scaleProps && oldW > 0 && oldH > 0) {
+            scaleProps(n, n.w / oldW, n.h / oldH);
+          } else {
+            applyConstraints(n, oldW, oldH, n.w, n.h);
+          }
+        }
+        break;
+      }
+      case "reparent": {
+        const dest = find(this.root(), cmd.parent) ?? this.root();
+        for (const id of cmd.ids) {
+          if (id === dest.id) continue;
+          const p = findParent(this.root(), id);
+          const n = find(this.root(), id);
+          if (!p || !n) continue;
+          p.children = p.children.filter((c) => c.id !== id);
+          n.x = cmd.x;
+          n.y = cmd.y;
+          dest.children.push(n);
         }
         break;
       }
@@ -544,8 +565,8 @@ export class MemoryEngine implements Engine {
           const copy = clone(n);
           const masterId = n.isComponent ? n.componentId || n.id : n.componentId;
           reid(copy);
-          copy.x += 16;
-          copy.y += 16;
+          copy.x += 10;
+          copy.y += 10;
           if (n.isComponent) {
             copy.isComponent = false;
             copy.componentId = masterId;
@@ -1024,6 +1045,68 @@ export function hitTest(root: XNode, wx: number, wy: number): XNode | null {
     if (wx >= x && wy >= y && wx <= x + n.w && wy <= y + n.h) {
       if (!hit) hit = n;
     }
+  };
+  visit(root, 0, 0);
+  return hit;
+}
+
+function applyConstraints(parent: XNode, oldW: number, oldH: number, newW: number, newH: number) {
+  const dw = newW - oldW;
+  const dh = newH - oldH;
+  if (!dw && !dh) return;
+  for (const c of parent.children) {
+    const h = c.constraintH;
+    const v = c.constraintV;
+    if (h === "max") c.x += dw;
+    else if (h === "center") c.x += dw / 2;
+    else if (h === "stretch") c.w = Math.max(1, c.w + dw);
+    else if (h === "scale" && oldW > 0) {
+      c.x *= newW / oldW;
+      c.w = Math.max(1, c.w * (newW / oldW));
+    }
+    if (v === "max") c.y += dh;
+    else if (v === "center") c.y += dh / 2;
+    else if (v === "stretch") c.h = Math.max(1, c.h + dh);
+    else if (v === "scale" && oldH > 0) {
+      c.y *= newH / oldH;
+      c.h = Math.max(1, c.h * (newH / oldH));
+    }
+  }
+}
+
+function scaleProps(n: XNode, sx: number, sy: number) {
+  const s = (Math.abs(sx) + Math.abs(sy)) / 2;
+  n.strokeWidth *= s;
+  n.fontSize *= s;
+  n.letterSpacing *= s;
+  if (n.lineHeight) n.lineHeight *= s;
+  n.cornerRadii = n.cornerRadii.map((r) => r * s) as [number, number, number, number];
+  if (n.layout) {
+    n.layout = {
+      ...n.layout,
+      gap: n.layout.gap * s,
+      padding: n.layout.padding.map((p) => p * s) as [number, number, number, number],
+    };
+  }
+  for (const c of n.children) {
+    c.x *= sx;
+    c.y *= sy;
+    c.w = Math.max(1, c.w * sx);
+    c.h = Math.max(1, c.h * sy);
+    scaleProps(c, sx, sy);
+  }
+}
+
+export function deepestFrame(root: XNode, wx: number, wy: number, skip?: Set<string>): XNode | null {
+  let hit: XNode | null = null;
+  const visit = (n: XNode, px: number, py: number) => {
+    if (!n.visible) return;
+    if (skip?.has(n.id)) return;
+    const x = px + n.x;
+    const y = py + n.y;
+    const inside = wx >= x && wy >= y && wx <= x + n.w && wy <= y + n.h;
+    if (n !== root && n.kind === "frame" && inside) hit = n;
+    if (inside || n === root) for (const c of n.children) visit(c, x, y);
   };
   visit(root, 0, 0);
   return hit;

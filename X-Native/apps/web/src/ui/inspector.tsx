@@ -1064,6 +1064,23 @@ function Design({
               />
               <Field label="↔" value={n.letterSpacing} onChange={(v) => num("letterSpacing", v)} />
             </div>
+            <div className="field">
+              <select
+                value={
+                  n.sizingW === "hug" ? "auto-width" : n.sizingH === "hug" ? "auto-height" : "fixed"
+                }
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === "auto-width") patch({ sizingW: "hug", sizingH: "hug" });
+                  else if (v === "auto-height") patch({ sizingW: "fixed", sizingH: "hug" });
+                  else patch({ sizingW: "fixed", sizingH: "fixed" });
+                }}
+              >
+                <option value="auto-width">Auto width</option>
+                <option value="auto-height">Auto height</option>
+                <option value="fixed">Fixed size</option>
+              </select>
+            </div>
             <div className="seg">
               {(["left", "center", "right", "justified"] as TextAlign[]).map((a) => (
                 <button
