@@ -71,15 +71,44 @@ impl OverrideValue {
 }
 
 /// Typed view over an instance's override map.
+fn override_kind_tag(v: &OverrideValue) -> &'static str {
+    match v {
+        OverrideValue::Fill(_) => "fill",
+        OverrideValue::Stroke(_) => "stroke",
+        OverrideValue::Text(_) => "text",
+        OverrideValue::Visible(_) => "visible",
+        OverrideValue::Opacity(_) => "opacity",
+        OverrideValue::Swap(_) => "swap",
+    }
+}
+
+fn override_target_id(key: &str) -> &str {
+    key.split('\x1f').next().unwrap_or(key)
+}
+
 pub fn typed_overrides(node: &Node) -> HashMap<String, OverrideValue> {
-    node.overrides
-        .iter()
-        .filter_map(|(k, v)| OverrideValue::decode(v).map(|ov| (k.clone(), ov)))
-        .collect()
+    let mut out = HashMap::new();
+    for (k, v) in &node.overrides {
+        if let Some(ov) = OverrideValue::decode(v) {
+            out.insert(override_target_id(k).to_string(), ov);
+        }
+    }
+    out
 }
 
 pub fn set_override(node: &mut Node, target: &str, value: OverrideValue) {
-    node.overrides.insert(target.into(), value.encode());
+    let tag = override_kind_tag(&value);
+    node.overrides.retain(|k, enc| {
+        if override_target_id(k) != target {
+            return true;
+        }
+        match OverrideValue::decode(enc) {
+            Some(existing) => override_kind_tag(&existing) != tag,
+            None => k != target,
+        }
+    });
+    node.overrides
+        .insert(format!("{target}\x1f{tag}"), value.encode());
 }
 
 // ------------------------------------------------------------- properties
@@ -212,33 +241,38 @@ pub fn detach_instance(root: &Node, instance: &Node, vars: &Variables) -> Option
         return None;
     };
     let master = find_master(root, component)?;
-    let ovr = typed_overrides(instance);
     let mut group = Node::group(&format!("{}-detached", instance.id), instance.w, instance.h);
     group.transform = instance.transform;
     for child in &master.children {
         let mut c = child.clone();
-        apply_overrides_deep(&mut c, &ovr, vars);
+        apply_overrides_raw(&mut c, &instance.overrides, vars);
         group.children.push(c);
     }
     Some(group)
 }
 
-fn apply_overrides_deep(node: &mut Node, ovr: &HashMap<String, OverrideValue>, vars: &Variables) {
-    if let Some(v) = ovr.get(&node.id) {
+fn apply_overrides_raw(node: &mut Node, ovr: &HashMap<String, String>, vars: &Variables) {
+    for (k, enc) in ovr {
+        if override_target_id(k) != node.id {
+            continue;
+        }
+        let Some(v) = OverrideValue::decode(enc) else {
+            continue;
+        };
         match v {
-            OverrideValue::Fill(c) => node.fill = Paint::Solid(*c),
-            OverrideValue::Stroke(c) => apply_stroke_paint(node, *c),
+            OverrideValue::Fill(c) => node.fill = Paint::Solid(c),
+            OverrideValue::Stroke(c) => apply_stroke_paint(node, c),
             OverrideValue::Text(t) => {
                 if let NodeKind::Text { text } = &mut node.kind {
-                    *text = t.clone();
+                    *text = t;
                     node.text_runs.clear();
                 }
             }
-            OverrideValue::Visible(b) => node.visible = *b,
-            OverrideValue::Opacity(o) => node.opacity = *o,
+            OverrideValue::Visible(b) => node.visible = b,
+            OverrideValue::Opacity(o) => node.opacity = o,
             OverrideValue::Swap(c) => {
                 if let NodeKind::Instance { component } = &mut node.kind {
-                    *component = c.clone();
+                    *component = c;
                 }
             }
         }
@@ -249,7 +283,7 @@ fn apply_overrides_deep(node: &mut Node, ovr: &HashMap<String, OverrideValue>, v
         return;
     }
     for c in &mut node.children {
-        apply_overrides_deep(c, ovr, vars);
+        apply_overrides_raw(c, ovr, vars);
     }
 }
 

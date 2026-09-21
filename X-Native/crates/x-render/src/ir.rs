@@ -324,6 +324,17 @@ impl RenderTree {
 /// outline of their own use it; the rest — text, images, groups, frames,
 /// instances — clip to their bounds, a superset of Figma's per-pixel
 /// coverage (glyph coverage, image alpha) and the named delta there.
+
+fn node_fill_override(
+    overrides: &std::collections::HashMap<String, String>,
+    id: &str,
+) -> Option<Color> {
+    overrides
+        .get(&format!("{id}\x1ffill"))
+        .or_else(|| overrides.get(id))
+        .and_then(|raw| parse_hex_color(raw))
+}
+
 fn mask_path_of(n: &Node) -> Option<BezPath> {
     match &n.kind {
         NodeKind::Vector { path } if !path.is_empty() => Some(path_to_bez(path)),
@@ -1281,7 +1292,7 @@ fn lower(
             } else {
                 Rect::new(0.0, 0.0, node.w, node.h).into_path(0.1)
             };
-            let override_color = overrides.get(&node.id).and_then(|raw| parse_hex_color(raw));
+            let override_color = node_fill_override(overrides, node.id.as_str());
             emit_visual_layers(
                 tree,
                 node,
@@ -1297,14 +1308,14 @@ fn lower(
             let r = node.w.min(node.h) / 2.0;
             let t = world * Affine::scale_non_uniform(node.w / node.h, 1.0);
             let shape = Circle::new((r, r), r).into_path(0.1);
-            let override_color = overrides.get(&node.id).and_then(|raw| parse_hex_color(raw));
+            let override_color = node_fill_override(overrides, node.id.as_str());
             emit_visual_layers(tree, node, &key, t, &shape, vars, opacity, override_color);
         }
         NodeKind::Arc { start, end, ratio } => {
             let shape = path_to_bez(&x_core::booleans::arc_path_cmds(
                 node.w, node.h, *start, *end, *ratio,
             ));
-            let override_color = overrides.get(&node.id).and_then(|raw| parse_hex_color(raw));
+            let override_color = node_fill_override(overrides, node.id.as_str());
             emit_visual_layers(
                 tree,
                 node,
@@ -1318,7 +1329,7 @@ fn lower(
         }
         NodeKind::Poly { sides } => {
             let shape = path_to_bez(&x_core::booleans::poly_path_cmds(node.w, node.h, *sides));
-            let override_color = overrides.get(&node.id).and_then(|raw| parse_hex_color(raw));
+            let override_color = node_fill_override(overrides, node.id.as_str());
             emit_visual_layers(
                 tree,
                 node,
@@ -1333,7 +1344,7 @@ fn lower(
         NodeKind::Star { points, ratio } => {
             let cmds = x_core::booleans::star_path_cmds(node.w, node.h, *points, *ratio);
             let shape = path_to_bez(&cmds);
-            let override_color = overrides.get(&node.id).and_then(|raw| parse_hex_color(raw));
+            let override_color = node_fill_override(overrides, node.id.as_str());
             emit_visual_layers(
                 tree,
                 node,
@@ -1360,13 +1371,14 @@ fn lower(
         NodeKind::Vector { path: p } => {
             if !p.is_empty() {
                 let bez = path_to_bez(p);
-                let override_color = overrides.get(&node.id).and_then(|raw| parse_hex_color(raw));
+                let override_color = node_fill_override(overrides, node.id.as_str());
                 emit_visual_layers(tree, node, &key, world, &bez, vars, opacity, override_color);
             }
         }
         NodeKind::Text { text } => {
             let content = overrides
-                .get(&node.id)
+                .get(&format!("{}\x1ftext", node.id))
+                .or_else(|| overrides.get(&node.id))
                 .and_then(|v| v.strip_prefix("text:"))
                 .unwrap_or(text);
             let content = if hidden == Some(node.id.as_str()) {
@@ -1608,7 +1620,7 @@ fn lower(
             } else {
                 Rect::new(0.0, 0.0, node.w, node.h).into_path(0.1)
             };
-            let override_color = overrides.get(&node.id).and_then(|raw| parse_hex_color(raw));
+            let override_color = node_fill_override(overrides, node.id.as_str());
             emit_visual_layers(
                 tree,
                 node,
@@ -1707,7 +1719,7 @@ fn lower(
             // a visible fill) so a frame's own effects — drop shadow, inner
             // shadow, layer/background blur — render even on a frame with
             // no fill, matching how every other node kind handles effects.
-            let override_color = overrides.get(&node.id).and_then(|raw| parse_hex_color(raw));
+            let override_color = node_fill_override(overrides, node.id.as_str());
             emit_visual_layers(
                 tree,
                 node,

@@ -515,6 +515,10 @@ fn encode(
             }
         }
         NodeKind::Text { text } => {
+            // Figma Fixed size / Truncate: glyphs never paint outside the
+            // text layer's box (help 360039956634 / 27378154668951).
+            let text_clip = Rect::new(0.0, 0.0, node.w.max(0.0), node.h.max(0.0)).into_path(0.1);
+            scene.push_clip_layer(Fill::NonZero, world, &text_clip);
             let raw = effective_text(node, overrides).unwrap_or(text);
             // text case transforms the CONTENT (only when there are no rich
             // runs — case can change char counts)
@@ -666,6 +670,7 @@ fn encode(
             if !drew {
                 stats.paths += x_text::encode_text(scene, content, world, node.h, color);
             }
+            scene.pop_layer();
         }
         NodeKind::Vector { path } => {
             // Vectors use the same materialized fill/stroke stacks as the IR

@@ -27,29 +27,34 @@ pub fn resolve_instance_layout(
         return None;
     };
     let master = find_master(root, component)?;
-    let ovr = typed_overrides(instance);
-
     let mut work = master.clone();
     // 1) overrides + text remeasurement, deep (respecting nested-instance scope)
     fn pass(
         n: &mut Node,
-        ovr: &std::collections::HashMap<String, OverrideValue>,
+        ovr: &std::collections::HashMap<String, String>,
         measure: MeasureFn,
     ) {
-        if let Some(v) = ovr.get(&n.id) {
+        for (k, enc) in ovr {
+            let target = k.split('\x1f').next().unwrap_or(k);
+            if target != n.id {
+                continue;
+            }
+            let Some(v) = OverrideValue::decode(enc) else {
+                continue;
+            };
             match v {
                 OverrideValue::Text(t) => {
                     if let NodeKind::Text { text } = &mut n.kind {
-                        *text = t.clone();
+                        *text = t;
                     }
                 }
-                OverrideValue::Fill(c) => n.fill = x_core::Paint::Solid(*c),
-                OverrideValue::Stroke(c) => x_core::apply_stroke_paint(n, *c),
-                OverrideValue::Visible(b) => n.visible = *b,
-                OverrideValue::Opacity(o) => n.opacity = *o,
+                OverrideValue::Fill(c) => n.fill = x_core::Paint::Solid(c),
+                OverrideValue::Stroke(c) => x_core::apply_stroke_paint(n, c),
+                OverrideValue::Visible(b) => n.visible = b,
+                OverrideValue::Opacity(o) => n.opacity = o,
                 OverrideValue::Swap(c) => {
                     if let NodeKind::Instance { component } = &mut n.kind {
-                        *component = c.clone();
+                        *component = c;
                     }
                 }
             }
@@ -67,7 +72,7 @@ pub fn resolve_instance_layout(
         }
     }
     for c in &mut work.children {
-        pass(c, &ovr, measure);
+        pass(c, &instance.overrides, measure);
     }
 
     // 2) re-solve auto layout bottom-up so Hug frames grow around new text

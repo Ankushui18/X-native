@@ -7609,6 +7609,9 @@ impl Host {
                         "i" => {
                             self.app.text_toggle_italic();
                         }
+                        "u" => {
+                            self.dispatch(Action::CycleTextDecoration);
+                        }
                         "c" => self.app.copy_inline_text(),
                         "x" => {
                             self.app.copy_inline_text();
@@ -7782,6 +7785,9 @@ impl Host {
                             }
                             "i" => {
                                 self.app.text_toggle_italic();
+                            }
+                            "u" => {
+                                self.dispatch(Action::CycleTextDecoration);
                             }
                             "a" => {
                                 self.app.text_select_all_ed();

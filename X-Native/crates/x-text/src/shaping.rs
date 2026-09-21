@@ -781,6 +781,54 @@ pub struct OutlineGlyph {
 /// canvas encoder (encode_rich_text) and the SVG/PDF exporters all
 /// consume it, so text placement is pixel-identical across all three
 /// sinks by construction. Returns (glyphs, total_height).
+/// Figma "Truncate text": the last visible line ends in an ellipsis, and
+/// characters are peeled from its end until the ellipsis fits the wrap width.
+fn apply_truncate_ellipsis(
+    shaper: &mut Shaper,
+    lines: &mut [Line],
+    default_font: usize,
+    avail: f64,
+) {
+    let Some(last) = lines.last_mut() else {
+        return;
+    };
+    let size = last
+        .spans
+        .last()
+        .map(|s| s.size)
+        .unwrap_or(12.0);
+    let mut ell = last
+        .spans
+        .last()
+        .cloned()
+        .unwrap_or_else(|| Span::new("…", size));
+    ell.text = "…".into();
+    let ell_w = piece_width(shaper, &ell, default_font);
+    let line_w = |shaper: &mut Shaper, spans: &[Span]| -> f64 {
+        spans
+            .iter()
+            .map(|s| piece_width(shaper, s, default_font))
+            .sum()
+    };
+    while line_w(shaper, &last.spans) + ell_w > avail + 0.5 {
+        let Some(sp) = last.spans.last_mut() else {
+            break;
+        };
+        if sp.text.is_empty() {
+            last.spans.pop();
+            continue;
+        }
+        let mut chars: Vec<char> = sp.text.chars().collect();
+        chars.pop();
+        sp.text = chars.into_iter().collect();
+        if sp.text.is_empty() {
+            last.spans.pop();
+        }
+    }
+    last.spans.push(ell);
+    last.width = line_w(shaper, &last.spans);
+}
+
 pub fn glyph_outlines(
     fonts: &FontManager,
     spans: &[Span],
@@ -835,10 +883,14 @@ pub fn glyph_outlines(
     };
     let avail = (style.max_width - list_indent).max(8.0);
     let mut lines = layout_lines_wrapped(&mut shaper, &spans, default_font, avail, style.wrap);
-    // max-lines: drop everything beyond the cap BEFORE placement, so the
-    // returned height covers exactly what is emitted (CSS max-lines).
+    // Figma Truncate text (help 360039956634): cap the line count and put
+    // an ellipsis on the last visible line when anything was dropped.
     if let Some(cap) = style.max_lines {
+        let dropped = lines.len() > cap;
         lines.truncate(cap);
+        if dropped {
+            apply_truncate_ellipsis(&mut shaper, &mut lines, default_font, avail);
+        }
     }
     let mut out = vec![];
     let mut y = 0.0f64;
@@ -1824,6 +1876,29 @@ mod tests {
             (h2 - 2.0 * nat * 1.2).abs() < 0.5,
             "height = 2 line boxes: {h2}"
         );
+    }
+
+    /// Figma Truncate text: the last visible line ends with an ellipsis.
+    #[test]
+    fn max_lines_adds_ellipsis_when_truncated() {
+        let m = fonts();
+        let f = m.default_font().unwrap();
+        let spans = [Span::new("one\ntwo\nthree", 16.0)];
+        let style = TextBlockStyle {
+            max_lines: Some(2),
+            max_width: 400.0,
+            ..Default::default()
+        };
+        let (glyphs, _) = glyph_outlines(&m, &spans, f, &style);
+        assert!(!glyphs.is_empty());
+        // the last drawn outline is the ellipsis (U+2026) on line 2
+        let last_line = layout_lines(
+            &mut Shaper::new(&m),
+            &spans,
+            f,
+            400.0,
+        );
+        assert!(last_line.len() > 2);
     }
 
     /// Paragraph indent shifts the FIRST line of each paragraph only —
