@@ -381,9 +381,11 @@ fn write_path_list(path: &Path, paths: &[String]) -> std::io::Result<()> {
 pub fn recent_files() -> Vec<String> {
     read_path_list(&recent_path())
 }
+
+static RECENTS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub fn try_push_recent(path: &str) -> std::io::Result<()> {
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = RECENTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut files = recent_files();
     files.retain(|f| f != path);
     files.insert(0, path.to_owned());
@@ -392,6 +394,41 @@ pub fn try_push_recent(path: &str) -> std::io::Result<()> {
 }
 pub fn push_recent(path: &str) {
     let _ = try_push_recent(path);
+}
+
+/// Drop one path from the MRU list (a Recents card whose file is gone).
+pub fn try_forget_recent(path: &str) -> std::io::Result<()> {
+    let _guard = RECENTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut files = recent_files();
+    let before = files.len();
+    files.retain(|f| f != path);
+    if files.len() == before {
+        return Ok(());
+    }
+    write_path_list(&recent_path(), &files)
+}
+pub fn forget_recent(path: &str) {
+    let _ = try_forget_recent(path);
+}
+
+/// Paths that still exist as files — Recents must never keep a ghost.
+pub fn keep_existing_paths(files: Vec<String>) -> Vec<String> {
+    files
+        .into_iter()
+        .filter(|p| Path::new(p).is_file())
+        .collect()
+}
+
+/// Rewrite the MRU list without missing files. Returns how many were dropped.
+pub fn prune_missing_recents() -> usize {
+    let _guard = RECENTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let files = recent_files();
+    let kept = keep_existing_paths(files.clone());
+    let n = files.len() - kept.len();
+    if n > 0 {
+        let _ = write_path_list(&recent_path(), &kept);
+    }
+    n
 }
 pub fn starred_files() -> Vec<String> {
     read_path_list(&user_data_dir().join("starred.json"))
@@ -613,6 +650,18 @@ mod safety_regressions {
         write_path_list(&p, &paths).unwrap();
         assert_eq!(read_path_list(&p), paths);
         let _ = std::fs::remove_file(p);
+    }
+    #[test]
+    fn keep_existing_paths_drops_missing_files() {
+        let p = path("exists.x");
+        std::fs::write(&p, b"ok").unwrap();
+        let missing = path("gone.x");
+        let kept = keep_existing_paths(vec![
+            p.to_string_lossy().into_owned(),
+            missing.to_string_lossy().into_owned(),
+        ]);
+        assert_eq!(kept, vec![p.to_string_lossy().to_string()]);
+        let _ = std::fs::remove_file(&p);
     }
     #[test]
     fn held_os_save_lock_prevents_an_overwrite() {

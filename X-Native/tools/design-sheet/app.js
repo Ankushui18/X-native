@@ -184,7 +184,7 @@ function renderScales() {
 // Rust binary; it is NOT a screenshot, and the note above it says so.
 function dashboardMock(width, { rows = 3, layout = 'grid', view = 'Home' } = {}) {
   const cards = [
-    ['plus', 'New design file', 'Compose, flow, ship — from one file'],
+    ['plus', 'New design file', 'Design, prototype, inspect — from one file'],
     ['import', 'Import file', 'SVG, PNG, Sketch, Figma JSON'],
     ['sticky-note', 'New board', 'Infinite canvas for brainstorming'],
     ['layout-template', 'Start from template', 'Mobile, landing, system, board'],
@@ -243,7 +243,7 @@ function dashboardMock(width, { rows = 3, layout = 'grid', view = 'Home' } = {})
       <div class="side-label">LOCAL WORKSPACE</div>
       <div class="side-block"><b>No account required</b><span>Cloud teams are not available yet</span></div>
       <div class="side-label">THE WORKFLOW</div>
-      ${[['1', 'Compose', 'Frames, auto layout, vectors'], ['2', 'Flow', 'Connect screens, preview'], ['3', 'Ship', 'Export PNG, PDF, SVG']]
+      ${[['1', 'Design', 'Frames, auto layout, vectors'], ['2', 'Prototype', 'Connect screens, preview'], ['3', 'Inspect', 'Export PNG, PDF, SVG']]
         .map(
           ([n, name, sub]) =>
             `<div class="wrow"><span class="wnum">${n}</span><div class="wtxt"><b>${name}</b><span>${sub}</span></div></div>`,

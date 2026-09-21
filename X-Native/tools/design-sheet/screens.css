@@ -230,9 +230,30 @@ body {
 /* the divider is a child of the panel (vline at rx in paint_right), not a CSS
    border: a border would shift every absolutely positioned child by 1px */
 .win .right-panel { border-right: 0; border-left: 0; padding: 0; gap: 0; }
-/* the three list-style tabs (FLOW / SHIP / UX) keep the old 10px inset and stack */
+/* Prototype / Inspect / UX keep the old 10px inset and stack under the tab bar */
 .tab-body { position: absolute; display: grid; align-content: start; gap: 10px; }
-/* four equal tabs: `item_w = (pw − 6 − 4) / 4` in paint_right */
+/* OpenPencil PropertiesPanel / LayersPanel: 11px underline tabs, not pills */
+.proptabs {
+  display: flex; align-items: stretch; height: 40px; padding: 0 4px 0 6px;
+  border-bottom: 1px solid var(--border); background: var(--surface);
+}
+.proptabs.left { height: 32px; padding: 0; }
+.win .left-panel { padding: 0; gap: 0; }
+.win .left-panel .tree { padding: 8px 10px 10px; }
+.proptab {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 400; color: var(--text-dim); position: relative;
+}
+.proptab.on { font-weight: 600; color: var(--text-primary); }
+.proptab.on::after {
+  content: ''; position: absolute; left: 50%; bottom: 0; height: 2px;
+  width: 2.6em; transform: translateX(-50%); background: var(--accent);
+}
+.propzoom {
+  flex: 0 0 56px; display: grid; place-items: center;
+  font-size: 11px; color: var(--text-dim);
+}
+/* leftover pill chrome — unused by editor docks */
 .pillrow { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-elevated); }
 .pill { text-align: center; font-size: 10px; font-weight: 600; padding: 5px 0; border-radius: 999px; color: var(--text-dim); }
 .pill.on { background: var(--surface-active); color: var(--text-primary); border: 1px solid var(--border-strong); }

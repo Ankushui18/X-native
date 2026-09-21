@@ -102,6 +102,51 @@ impl Freehand {
     }
 }
 
+fn path_ext_lower(path: &std::path::Path) -> String {
+    path.extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default()
+}
+
+fn is_placeable_image(path: &std::path::Path) -> bool {
+    matches!(
+        path_ext_lower(path).as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp"
+    )
+}
+
+fn is_openable_document(path: &std::path::Path) -> bool {
+    matches!(
+        path_ext_lower(path).as_str(),
+        "x" | "svg" | "png" | "sketch" | "fig" | "json"
+    )
+}
+
+fn is_missing_file_error(path: Option<&std::path::Path>, error: &str) -> bool {
+    let e = error.to_ascii_lowercase();
+    if e.contains("os error 2")
+        || e.contains("no such file")
+        || e.contains("cannot find the path")
+        || e.contains("the system cannot find")
+    {
+        return true;
+    }
+    path.is_some_and(|p| !p.as_os_str().is_empty() && !p.exists())
+}
+
+fn friendly_open_error(path: Option<&std::path::Path>, error: &str) -> String {
+    if is_missing_file_error(path, error) {
+        let name = path
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "This file".into());
+        format!("{name} is no longer on disk. It was removed from Recents.")
+    } else {
+        error.to_string()
+    }
+}
+
 struct Host {
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
@@ -111,6 +156,9 @@ struct Host {
     recoveries: std::collections::VecDeque<crate::jobs::RecoveryOffer>,
     close_after_job: bool,
     pending_open: Option<crate::jobs::OpenRequest>,
+    /// OS file-drop events arrive one path at a time; batch them so a
+    /// multi-file drop places every image in one queue (Figma).
+    pending_drops: Vec<std::path::PathBuf>,
     next_loading_frame: std::time::Instant,
     /// next frame of a running "Animate matching layers" transition, ms pace
     /// — the same 16 ms step the loading screen animates on.
@@ -133,6 +181,7 @@ pub fn run() {
         recoveries: Default::default(),
         close_after_job: false,
         pending_open: None,
+        pending_drops: Vec::new(),
         next_loading_frame: std::time::Instant::now(),
         next_proto_frame: std::time::Instant::now(),
     };
@@ -430,6 +479,10 @@ impl ApplicationHandler for Host {
                     }
                 }
             }
+            WindowEvent::DroppedFile(path) => {
+                self.pending_drops.push(path);
+                window.request_redraw();
+            }
             _ => {}
         }
         window.set_ime_allowed(self.app.document_loading.is_none() && self.app.has_text_focus());
@@ -443,6 +496,13 @@ impl ApplicationHandler for Host {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if !self.pending_drops.is_empty() {
+            let paths = std::mem::take(&mut self.pending_drops);
+            self.handle_dropped_paths(paths);
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+        }
         self.poll_file_jobs();
         if self.close_after_job && self.files.active.is_none() {
             self.close_after_job = false;
@@ -627,6 +687,44 @@ mod run_fns_tests {
             len,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn drop_classifies_images_and_documents() {
+        use std::path::PathBuf;
+        assert!(is_placeable_image(&PathBuf::from("shot.PNG")));
+        assert!(is_placeable_image(&PathBuf::from("photo.jpg")));
+        assert!(is_openable_document(&PathBuf::from("file.x")));
+        assert!(is_openable_document(&PathBuf::from("mark.svg")));
+        assert!(is_openable_document(&PathBuf::from("shot.png")));
+        assert!(!is_placeable_image(&PathBuf::from("file.x")));
+        assert!(!is_openable_document(&PathBuf::from("photo.jpg")));
+    }
+
+    #[test]
+    fn missing_file_open_error_is_readable() {
+        let path = std::path::Path::new("/tmp/Frame 1000001705.x");
+        let msg = friendly_open_error(
+            Some(path),
+            "No such file or directory (os error 2)",
+        );
+        assert!(
+            msg.contains("no longer on disk"),
+            "got {msg}"
+        );
+        assert!(
+            !msg.contains("os error 2"),
+            "raw os error leaked: {msg}"
+        );
+        let live = friendly_open_error(None, "bad json");
+        assert_eq!(live, "bad json");
+        let tmp = std::env::temp_dir().join("x-native-open-ok.x");
+        std::fs::write(&tmp, b"ok").unwrap();
+        assert_eq!(
+            friendly_open_error(Some(&tmp), "truncated document"),
+            "truncated document"
+        );
+        let _ = std::fs::remove_file(&tmp);
     }
 
     #[test]
@@ -10164,9 +10262,7 @@ impl Host {
                 }
             }
             Err(error) => {
-                if let Some(load) = &mut self.app.document_loading {
-                    load.fail(error, None);
-                }
+                self.apply_open_failure(error);
             }
         }
         self.refresh_file_status();
@@ -10185,10 +10281,7 @@ impl Host {
                 }
             }
             Err(error) => {
-                self.app.status = error.clone();
-                if let Some(load) = &mut self.app.document_loading {
-                    load.fail(error, None);
-                }
+                self.apply_open_failure(error);
             }
         }
         self.refresh_file_status();
@@ -10586,7 +10679,15 @@ impl Host {
                     Kind::Open { .. } => format!("Open stopped: {error}"),
                     Kind::RecoveryScan => format!("Recovery scan stopped: {error}"),
                 };
-                if let Some(load) = self
+                if matches!(kind, Kind::Open { .. })
+                    && self
+                        .app
+                        .document_loading
+                        .as_ref()
+                        .is_some_and(|l| l.ticket == ticket)
+                {
+                    self.apply_open_failure(error);
+                } else if let Some(load) = self
                     .app
                     .document_loading
                     .as_mut()
@@ -10688,6 +10789,78 @@ impl Host {
             return;
         };
         self.place_images(&paths);
+    }
+
+    /// Finder / Explorer drop: images place on an open canvas (Figma); design
+    /// files (`.x`, `.svg`, `.fig`, …) open. PNG on the dashboard still opens
+    /// as a new document — there is no canvas to place onto.
+    fn handle_dropped_paths(&mut self, paths: Vec<std::path::PathBuf>) {
+        if paths.is_empty() {
+            return;
+        }
+        if self.app.document_loading.is_some() {
+            self.app.status = "Finish opening the current file first".into();
+            return;
+        }
+        if self.app.flow.is_some() {
+            return;
+        }
+        let in_editor = self.app.screen == Screen::Editor && self.app.doc_opt().is_some();
+        let images: Vec<std::path::PathBuf> = paths
+            .iter()
+            .filter(|p| is_placeable_image(p))
+            .cloned()
+            .collect();
+        let docs: Vec<std::path::PathBuf> = paths
+            .iter()
+            .filter(|p| is_openable_document(p) && !is_placeable_image(p))
+            .cloned()
+            .collect();
+        if in_editor && !images.is_empty() {
+            self.place_images(&images);
+            return;
+        }
+        if let Some(path) = docs.into_iter().next() {
+            self.open_path(path);
+            return;
+        }
+        if let Some(path) = images
+            .iter()
+            .find(|p| is_openable_document(p))
+            .cloned()
+        {
+            // dashboard: a PNG drop opens as a new file (no canvas to place on)
+            self.open_path(path);
+            return;
+        }
+        if !images.is_empty() {
+            self.app.status =
+                "Open a design file, then drop images onto the canvas to place them".into();
+            return;
+        }
+        self.app.status = "Drop a .x, .svg, .png or .fig file — images place on the canvas".into();
+    }
+
+    /// Recents / open failures that are just "the file is gone" drop the
+    /// ghost from Recents and say so in English, not `os error 2`.
+    fn apply_open_failure(&mut self, error: String) {
+        let path = self
+            .app
+            .document_loading
+            .as_ref()
+            .map(|l| l.request.path.clone());
+        if is_missing_file_error(path.as_deref(), &error) {
+            if let Some(p) = &path {
+                x_native::fileio::forget_recent(&p.to_string_lossy());
+                self.app.reload_recents();
+            }
+        }
+        let message = friendly_open_error(path.as_deref(), &error);
+        self.app.status = message.clone();
+        if let Some(load) = &mut self.app.document_loading {
+            load.fail(message, None);
+            self.app.hit.clear();
+        }
     }
 
     /// The half of `cmd_place_image` that does not need a dialog: register the
@@ -10858,8 +11031,8 @@ impl Host {
     fn cmd_import_file(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
             .add_filter(
-                "Import: SVG, PNG, Sketch, Figma REST JSON",
-                &["svg", "png", "sketch", "json"],
+                "Design files",
+                &["x", "svg", "png", "sketch", "fig", "json"],
             )
             .pick_file()
         {
@@ -18442,6 +18615,13 @@ impl App {
         }
         paint_feedback(self, &mut inner);
         inner
+    }
+}
+
+#[cfg(test)]
+#[path = "loading_tests.rs"]
+mod loading_tests;
+      inner
     }
 }
 

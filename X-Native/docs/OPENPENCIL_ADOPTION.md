@@ -32,10 +32,12 @@ with it.
 
 ## Studied, nothing to take
 
-- **Canvas frame labels**: OpenPencil has no canvas frame-label
-  implementation to copy, so ours is original — the engine's one
-  size/offset/ink rule (`LABEL_SIZE`, `LABEL_ABOVE_Y`, `frame_label_targets`)
-  read by the screen-space overlay (`editor_ui::paint_frame_labels`).
+- **Canvas frame labels**: OpenPencil's `packages/core/src/canvas/labels`
+  (11px Regular, 8px gutter, screen-space) is the rule. Ours: the engine's
+  one size/offset/ink (`LABEL_FONT_SIZE`, `LABEL_OFFSET_Y`, `LABEL_ABOVE_Y`,
+  `frame_label_targets`) read by the screen-space overlay
+  (`editor_ui::paint_frame_labels`). World-space `/label` commands stay
+  stripped on the live canvas so a deleted frame cannot leave a ghost name.
 
 ## Deliberately not ported
 

@@ -27,8 +27,8 @@ recomputes.
 - the literal ceilings — a new engine-chrome literal fails unless routed
   through a named constant (or the ceiling is raised on purpose, in a diff a
   reviewer can see);
-- the wiring checks — frame-label constants (`LABEL_SIZE` 12,
-  `LABEL_ABOVE_Y` −20), the canvas lowering stripping world-space `/label`,
+- the wiring checks — frame-label constants (`LABEL_FONT_SIZE` 11,
+  `LABEL_OFFSET_Y` 8), the canvas lowering stripping world-space `/label`,
   the overlay reading `frame_label_targets`, the text Esc arm committing,
   the outside press committing before dispatch, the six INSPECT platforms;
 - every §2 parity row cites a Figma source and names tests that still exist;

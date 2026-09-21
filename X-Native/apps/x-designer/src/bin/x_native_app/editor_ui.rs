@@ -1,13 +1,7 @@
-//! Editor screen — the audited v45 geometry is a benchmark, not the product
-//! identity. X-Native keeps the measured density where it improves usability,
-//! then uses its own Graphite & Signal language and Compose → Flow → Ship
-//! workflow instead of reproducing Figma's Design/Prototype/Inspect shell.
-//!
-//! 36px title (28px logo cell + flush file tabs + [+]), 280px left panel
-//! (DRAFTS / file name / LAYERS-ASSETS-TOKENS pills / PAGES / tree),
-//! #060606 canvas with floating 40px tool dock, 340px right panel
-//! (DESIGN/PROTOTYPE/INSPECT with Size+Position, Auto layout, Appearance,
-//! Typography, Fill, Stroke, Effects, GUIDES, Export).
+//! Editor screen — Figma UI3 / OpenPencil geometry: 36px title, 280px left
+//! panel, floating 40px tool dock, 340px right properties panel with
+//! Design / Prototype / Inspect / UX tabs (11px, accent underline). Canvas
+//! frame names are 11px Inter Regular, 8px above the frame.
 
 use std::collections::{HashMap, HashSet};
 
@@ -2633,52 +2627,44 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     }
     hit.push((nr, Action::RenameStart));
 
-    // pill tabs LAYERS / ASSETS / TOKENS — container (8,110.5,263,30)
+    // OpenPencil / Figma UI3: Layers | Assets | Tokens as 11px underline
+    // tabs. No rounded STRUCTURE / LIBRARY pills.
     let pill_y = y0 + 74.5;
-    let px0 = sx + 8.0;
-    let pw = sidebar.x1 - sidebar.x0 - 17.0;
-    fill_rrect(
-        s,
-        Rect::new(px0, pill_y, px0 + pw, pill_y + PILL_H),
-        R_LG,
-        C_BG,
-    );
-    stroke_rrect(
-        s,
-        Rect::new(px0, pill_y, px0 + pw, pill_y + PILL_H),
-        R_LG,
-        C_LINE,
-        1.0,
-    );
-    let item_w = (pw - 6.0 - 4.0) / 3.0;
+    let tab_h = 32.0;
+    let px0 = sx;
+    let pw = sidebar.x1 - sidebar.x0;
+    let item_w = pw / 3.0;
     let tabs = [
-        // X-Native calls the layer tree Structure and the asset browser
-        // Library: the document model is a scene graph, not a Figma clone.
-        (LeftTab::Layers, "STRUCTURE"),
-        (LeftTab::Assets, "LIBRARY"),
-        (LeftTab::Tokens, "TOKENS"),
+        (LeftTab::Layers, "Layers"),
+        (LeftTab::Assets, "Assets"),
+        (LeftTab::Tokens, "Tokens"),
     ];
     for (i, (tab, label)) in tabs.into_iter().enumerate() {
-        let ix = px0 + 3.0 + (item_w + 2.0) * i as f64;
-        let ir = Rect::new(ix, pill_y + 3.0, ix + item_w, pill_y + 27.0);
+        let ix = px0 + item_w * i as f64;
+        let ir = Rect::new(ix, pill_y, ix + item_w, pill_y + tab_h);
         let active = app.doc().left_tab == tab;
-        if active {
-            fill_rrect(s, ir, R_PILL, C_FIELD_2);
-            stroke_rrect(s, ir, R_PILL, C_LINE_2, 1.0);
-        }
+        let wt = if active { Wt::Semi } else { Wt::Reg };
         app.fonts.text_center(
             s,
             ir,
             label,
-            T10,
+            T11,
             if active { C_TEXT } else { C_DIM },
-            Wt::Semi,
+            wt,
             true,
         );
-        {
-            hit.push((ir, Action::LeftTab(tab)));
+        if active {
+            let tw = app.fonts.measure(label, T11, wt);
+            let ux = ir.x0 + (ir.width() - tw) / 2.0;
+            fill_rect(
+                s,
+                Rect::new(ux, pill_y + tab_h - 2.0, ux + tw, pill_y + tab_h),
+                C_ACCENT,
+            );
         }
+        hit.push((ir, Action::LeftTab(tab)));
     }
+    hline(s, sx, lw, pill_y + tab_h, C_LINE);
     // Agents is a real workspace surface, not an empty selection state. Keep
     // it intentionally small until the agent conversation UI lands, but make
     // the available integration visible and give the user useful context.
@@ -2719,7 +2705,7 @@ fn paint_left(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
         return;
     }
 
-    // LIBRARY and TOKENS own the band below the pill tabs. They used to be
+    // Assets and Tokens own the band below the underline tabs. They used to be
     // painted *under* the pages band — at an absolute x = 12, i.e. over the
     // nav rail, and 50px lower than the tab strip — so the PAGES list, the
     // LAYERS header and the tree all landed on top of them. One band at a
@@ -3432,103 +3418,62 @@ fn paint_right(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     fill_rect(s, reg.right, C_PANEL);
     vline(s, rx, ED_TITLE_H, app.win_h, C_LINE);
 
-    // Audited at 1440 (rx=1100): avatar 24px at (1113,48..72) w/ 11px bold
-    // initial; zoom 11px box top 51.8 at x 1145; icons 16px at y 52, right
-    // edge 1428; pill-tabs container (1109, 86, 323, 30), items 24px at y 89.
-    // header row: avatar + zoom% | message/history/play
-    app.fonts.avatar(
-        s,
-        rx + 25.0,
-        ED_TITLE_H + 24.0,
-        12.0,
-        C_AVATAR,
-        T11,
-        &app.user
-            .chars()
-            .next()
-            .map(|c| c.to_string())
-            .unwrap_or_else(|| "?".into()),
-    );
-    // zoom% is the zoom menu (audit F4): in/out/100%/selection/fit in
-    // one dropdown; the dead history button is gone (F5)
-    let zoom_label = format!("{}%", (app.zoom * 100.0).round() as i64);
-    let zoom_r = Rect::new(rx + 38.0, ED_TITLE_H + 7.0, rx + 92.0, ED_TITLE_H + 37.0);
-    if hover(app, zoom_r) || app.dropdown_zoom {
-        fill_rrect(s, zoom_r, R_MD, C_FIELD_2);
-    }
-    app.fonts.text(
-        s,
-        rx + 45.0,
-        ED_TITLE_H + 15.8,
-        &zoom_label,
-        T11,
-        if app.dropdown_zoom { C_TEXT } else { C_MUTED },
-        Wt::Reg,
-    );
-    tip(app, zoom_r, "Zoom menu");
-    hit.push((zoom_r, Action::ZoomMenu));
-    let icons = ["message-circle", "play"];
-    for (i, ic) in icons.iter().enumerate() {
-        let ix = rx + rw - 56.0 + 28.0 * i as f64;
-        let iy = ED_TITLE_H + 16.0;
-        draw_icon(s, ic, ix, iy, ICON_MD, C_DIM);
-        let icon_hit = Rect::new(ix - 2.0, iy - 2.0, ix + 18.0, iy + 18.0);
-        match i {
-            0 => {
-                tip(app, icon_hit, "Comment tool");
-                hit.push((icon_hit, Action::Tool(Tool::Comment)));
-            }
-            _ => {
-                // Figma's toolbar has one ▶ and it PRESENTS. Ours opened the
-                // Prototype tab and left the viewer to a button inside it — the
-                // panel is still one click away on the FLOW pill.
-                tip(app, icon_hit, "Present");
-                hit.push((icon_hit, Action::FlowEnter));
-            }
-        }
-    }
-
-    // X-Native workflow tabs: COMPOSE / FLOW / SHIP / UX ANALYSIS
-    let py = ED_TITLE_H + 50.0;
-    let px0 = rx + 9.0;
-    let pw = rw - 17.0;
-    fill_rrect(s, Rect::new(px0, py, px0 + pw, py + 30.0), R_LG, C_BG);
-    stroke_rrect(
-        s,
-        Rect::new(px0, py, px0 + pw, py + 30.0),
-        R_LG,
-        C_LINE,
-        1.0,
-    );
-    let item_w = (pw - 6.0 - 4.0) / 4.0;
+    // OpenPencil PropertiesPanel: 40px tab bar (Design / Prototype / Inspect /
+    // UX) with an 11px accent underline, zoom on the right. No avatar row —
+    // that was X-Native chrome sitting on top of Figma's properties panel.
+    let py = ED_TITLE_H;
+    let tab_h = 40.0;
     let tabs = [
-        // Right inspector is an X-Native workflow: compose the scene,
-        // route it through interactive flows, then ship an artifact.
-        (RightTab::Design, "COMPOSE"),
-        (RightTab::Prototype, "FLOW"),
-        (RightTab::Inspect, "SHIP"),
-        (RightTab::UX, "UX ANALYSIS"),
+        (RightTab::Design, "Design"),
+        (RightTab::Prototype, "Prototype"),
+        (RightTab::Inspect, "Inspect"),
+        (RightTab::UX, "UX"),
     ];
+    let zoom_w = 56.0;
+    let n = tabs.len() as f64;
+    let item_w = (rw - 12.0 - zoom_w) / n;
     for (i, (tab, label)) in tabs.into_iter().enumerate() {
-        let ix = px0 + 3.0 + (item_w + 2.0) * i as f64;
-        let ir = Rect::new(ix, py + 3.0, ix + item_w, py + 27.0);
+        let ix = rx + 6.0 + item_w * i as f64;
+        let ir = Rect::new(ix, py, ix + item_w, py + tab_h);
         let active = app.doc().right_tab == tab;
-        if active {
-            fill_rrect(s, ir, R_PILL, C_FIELD_2);
-            stroke_rrect(s, ir, R_PILL, C_LINE_2, 1.0);
-        }
+        let wt = if active { Wt::Semi } else { Wt::Reg };
         app.fonts.text_center(
             s,
             ir,
             label,
-            T10,
+            T11,
             if active { C_TEXT } else { C_DIM },
-            Wt::Semi,
+            wt,
             true,
         );
+        if active {
+            let tw = app.fonts.measure(label, T11, wt);
+            let ux = ir.x0 + (ir.width() - tw) / 2.0;
+            fill_rect(
+                s,
+                Rect::new(ux, py + tab_h - 2.0, ux + tw, py + tab_h),
+                C_ACCENT,
+            );
+        }
         hit.push((ir, Action::RightTab(tab)));
     }
-    let y = ED_TITLE_H + 88.0;
+    let zoom_label = format!("{}%", (app.zoom * 100.0).round() as i64);
+    let zoom_r = Rect::new(rx + rw - zoom_w - 4.0, py + 8.0, rx + rw - 8.0, py + 32.0);
+    if hover(app, zoom_r) || app.dropdown_zoom {
+        fill_rrect(s, zoom_r, R_MD, C_FIELD_2);
+    }
+    app.fonts.text_center(
+        s,
+        zoom_r,
+        &zoom_label,
+        T11,
+        if app.dropdown_zoom { C_TEXT } else { C_MUTED },
+        Wt::Reg,
+        true,
+    );
+    tip(app, zoom_r, "Zoom menu");
+    hit.push((zoom_r, Action::ZoomMenu));
+    let y = ED_TITLE_H + tab_h;
     hline(s, rx, rx + rw, y, C_LINE);
     let y = y + 1.0;
 
@@ -4025,9 +3970,9 @@ fn paint_design(
     y_entry: f64,
 ) {
     // Absolute geometry, hand-tuned against a 1440px-wide reference
-    // composition. `y_entry` is the pixel right after the pill-tabs divider
-    // (abs 125); all offsets below are entry-relative, so the panel holds at
-    // any window size.
+    // composition. `y_entry` is the pixel right after the 40px OpenPencil
+    // tab bar (abs 77); all offsets below are entry-relative, so the panel
+    // holds at any window size.
     let scroll = app.doc().scroll_right;
     let y0 = y_entry - scroll;
     let pl = 12.0;
@@ -4038,14 +3983,21 @@ fn paint_design(
         return;
     }
     let sel = sel_info(app);
-    let xr = rx + rw - pl; // 1428
+    let xr = rx + rw - pl; // 1428 @340
     let gap = 8.0;
     let h = INPUT_H; // 28
     let mono = true;
+    // Field row width follows the dock, not the 1440px reference. At the
+    // default 340px panel this is 315 — the old hardcoded right edge.
+    let inner_w = (xr - x0).max(200.0);
+    let lock_x = x0 + inner_w - SQ_BTN;
+    let eye_x = lock_x - gap - SQ_BTN;
 
     // ---- size & position rows: +12 / +48 / +84 / +120 (pitch 36) -------
     let r1 = y0 + 12.0;
-    let fd = Rect::new(x0, r1, x0 + 145.0, r1 + h);
+    let pct_w = 72.0;
+    let fd_w = (inner_w - pct_w - SQ_BTN - SQ_BTN - gap * 3.0).max(64.0);
+    let fd = Rect::new(x0, r1, x0 + fd_w, r1 + h);
     let preset_name = FRAME_PRESETS[app.doc().frame_preset].0;
     input(
         app,
@@ -4063,7 +4015,7 @@ fn paint_design(
         Some("chevron-down"),
     );
     // % field: label left, value right (justify-between per the HTML)
-    let pct = Rect::new(x0 + 153.0, r1, x0 + 243.0, r1 + h);
+    let pct = Rect::new(fd.x1 + gap, r1, fd.x1 + gap + pct_w, r1 + h);
     input_box(app, s, pct, R_INPUT);
     app.fonts
         .text(s, pct.x0 + 9.0, r1 + 6.5, "%", T10, C_DIM, Wt::Reg);
@@ -4088,19 +4040,19 @@ fn paint_design(
     hit.push((pct, Action::Field(FieldId::Zoom)));
     // chevron: audited ink 1337-1344 → icon left = field right − 21
     draw_icon(s, "chevron-down", pct.x1 - 21.0, r1 + 8.0, ICON_XS, C_DIM);
-    sq_btn(app, s, hit, x0 + 251.0, r1, "eye", false);
+    sq_btn(app, s, hit, eye_x, r1, "eye", false);
     hit.push((
-        Rect::new(x0 + 251.0, r1, x0 + 251.0 + SQ_BTN, r1 + SQ_BTN),
+        Rect::new(eye_x, r1, eye_x + SQ_BTN, r1 + SQ_BTN),
         Action::ToggleVisible,
     ));
-    sq_btn(app, s, hit, x0 + 287.0, r1, "lock", false);
+    sq_btn(app, s, hit, lock_x, r1, "lock", false);
     hit.push((
-        Rect::new(x0 + 287.0, r1, x0 + 287.0 + SQ_BTN, r1 + SQ_BTN),
+        Rect::new(lock_x, r1, lock_x + SQ_BTN, r1 + SQ_BTN),
         Action::ToggleLock,
     ));
 
     let r2 = y0 + 48.0;
-    let half = 135.5;
+    let half = ((inner_w - SQ_BTN - gap) / 2.0).max(60.0);
     let wr = Rect::new(x0, r2, x0 + half, r2 + h);
     input(
         app,
@@ -4113,7 +4065,7 @@ fn paint_design(
         Some(Action::Field(FieldId::W)),
         None,
     );
-    let hr = Rect::new(x0 + 143.5, r2, x0 + 143.5 + half, r2 + h);
+    let hr = Rect::new(wr.x1 + gap, r2, wr.x1 + gap + half, r2 + h);
     input(
         app,
         s,
@@ -4125,7 +4077,7 @@ fn paint_design(
         Some(Action::Field(FieldId::H)),
         None,
     );
-    let aspect_lock = Rect::new(x0 + 287.0, r2, x0 + 287.0 + SQ_BTN, r2 + SQ_BTN);
+    let aspect_lock = Rect::new(lock_x, r2, lock_x + SQ_BTN, r2 + SQ_BTN);
     sq_btn(app, s, hit, aspect_lock.x0, aspect_lock.y0, "lock", false);
     if app.aspect_ratio_locked {
         fill_rrect(s, aspect_lock, R_LG, C_FIELD_2);
@@ -4433,7 +4385,7 @@ fn paint_design(
     // disclosure (P0-8): these are the layout section's ADVANCED rows, so
     // the band shows an "Advanced" toggle until the user opens it. When
     // open, the chevron at the band's right edge collapses it again.
-    let band = Rect::new(x0, y0 + 426.0, x0 + 315.0, y0 + 426.0 + DENSE_H);
+    let band = Rect::new(x0, y0 + 426.0, x0 + inner_w, y0 + 426.0 + DENSE_H);
     let has_advanced = sel_layout.is_some() || app.selected_parent_has_layout();
     let lav_open = app.layout_advanced_open;
     if has_advanced && !lav_open {
@@ -4757,7 +4709,7 @@ fn paint_design(
     // Figma's Appearance row pairs **Opacity** with **Blend mode**; the corner
     // radius keeps a row of its own below. The layer's blend is a dropdown of
     // the 19 layer modes — Pass through first, because it is the layer default.
-    let bdr = Rect::new(x0 + 161.5, y0 + 596.0, x0 + 315.0, y0 + 624.0);
+    let bdr = Rect::new(x0 + 161.5, y0 + 596.0, x0 + inner_w, y0 + 624.0);
     let layer_blend = {
         let d = app.doc();
         d.selected_id()
@@ -4805,7 +4757,7 @@ fn paint_design(
     // Figma's radius row (help 360050986854): the **Independent corners**
     // toggle sits at the field's left edge — a square with one rounded corner
     // — and the field is named after what it rounds.
-    let rdr = Rect::new(x0, y0 + 636.0, x0 + 315.0, y0 + 664.0);
+    let rdr = Rect::new(x0, y0 + 636.0, x0 + inner_w, y0 + 664.0);
     let rhov = hover(app, rdr);
     fill_rrect(s, rdr, R_INPUT, if rhov { C_INPUT_HOVER } else { C_FIELD });
     if rhov {
@@ -4909,7 +4861,7 @@ fn paint_design(
     draw_icon(s, "plus", xr - 14.0, y0 + 695.0, ICON_SM, create_tint);
     hit.push((styles_btn, Action::TextStyleDropdown));
     hit.push((create_btn, Action::CreateTextStyle));
-    let fam = Rect::new(x0, y0 + 724.0, x0 + 315.0, y0 + 752.0);
+    let fam = Rect::new(x0, y0 + 724.0, x0 + inner_w, y0 + 752.0);
     input(
         app,
         s,
@@ -4976,7 +4928,7 @@ fn paint_design(
         Some(Action::Field(FieldId::FontWeight)),
         Some("chevron-down"),
     );
-    let szr = Rect::new(x0 + 235.0, y0 + 760.0, x0 + 315.0, y0 + 788.0);
+    let szr = Rect::new(x0 + 235.0, y0 + 760.0, x0 + inner_w, y0 + 788.0);
     input(
         app,
         s,
@@ -5088,7 +5040,7 @@ fn paint_design(
         Some(Action::CycleTextDecoration),
         Some("chevron-down"),
     );
-    let wrap = Rect::new(x0 + 161.5, y0 + 976.0, x0 + 315.0, y0 + 1004.0);
+    let wrap = Rect::new(x0 + 161.5, y0 + 976.0, x0 + inner_w, y0 + 1004.0);
     input(
         app,
         s,
@@ -5125,7 +5077,7 @@ fn paint_design(
         Some(Action::Field(FieldId::MaxLines)),
         None,
     );
-    let para_indent = Rect::new(x0 + 161.5, y0 + 1030.0, x0 + 315.0, y0 + 1058.0);
+    let para_indent = Rect::new(x0 + 161.5, y0 + 1030.0, x0 + inner_w, y0 + 1058.0);
     input(
         app,
         s,
@@ -5148,7 +5100,7 @@ fn paint_design(
     // (Font / Weight / Size / Line height / Alignment), so they sit behind
     // a disclosure instead of disappearing.
     let adv_open = app.typo_advanced_open;
-    let adv = Rect::new(x0, y0 + 1066.0, x0 + 315.0, y0 + 1066.0 + DENSE_H);
+    let adv = Rect::new(x0, y0 + 1066.0, x0 + inner_w, y0 + 1066.0 + DENSE_H);
     let adv_hov = hover(app, adv);
     draw_icon(
         s,
@@ -5201,7 +5153,7 @@ fn paint_design(
             Some(Action::Field(FieldId::LetterSpacing)),
             None,
         );
-        let wsr = Rect::new(x0 + 161.5, y0 + 1116.0, x0 + 315.0, y0 + 1144.0);
+        let wsr = Rect::new(x0 + 161.5, y0 + 1116.0, x0 + inner_w, y0 + 1144.0);
         input(
             app,
             s,
@@ -5237,7 +5189,7 @@ fn paint_design(
             Some(Action::Field(FieldId::ParaSpacing)),
             None,
         );
-        let bsr = Rect::new(x0 + 161.5, y0 + 1170.0, x0 + 315.0, y0 + 1198.0);
+        let bsr = Rect::new(x0 + 161.5, y0 + 1170.0, x0 + inner_w, y0 + 1198.0);
         input(
             app,
             s,
@@ -5305,7 +5257,7 @@ fn paint_design(
             Some(Action::Field(FieldId::OpticalSize)),
             None,
         );
-        let wdr = Rect::new(x0 + 161.5, y0 + 1332.0, x0 + 315.0, y0 + 1360.0);
+        let wdr = Rect::new(x0 + 161.5, y0 + 1332.0, x0 + inner_w, y0 + 1360.0);
         input(
             app,
             s,
@@ -7863,7 +7815,8 @@ fn paint_frame_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Actio
     let inner_w = reg.right.x1 - reg.right.x0 - pl * 2.0;
     let fd_w = inner_w - 90.0 - SQ_BTN - SQ_BTN - 8.0 * 3.0;
     let dx = reg.right.x0 + pl;
-    let dy = ED_TITLE_H + 8.0 + 24.0 + 10.0 + PILL_H + 10.0 + 1.0 + 12.0 + 32.0;
+    // hang under the name field: 40px tab bar + 1px divider + 12px to first row + 28px field
+    let dy = ED_TITLE_H + 41.0 + 12.0 + 28.0;
     let dd = Rect::new(dx, dy, dx + fd_w, dy + 5.0 * DROPDOWN_ROW_H);
     elev_shadow(s, dd, 8.0, Elevation::Floating);
     fill_rrect(s, dd, R_LG, C_FIELD);
@@ -8256,11 +8209,8 @@ fn paint_lh_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>
     let reg = app.editor_regions();
     let x0 = reg.right.x0 + 13.0; // panel border + padding (cols x0)
                                   // Panel rows live at `y_entry - scroll + offset`, where `y_entry` is the
-                                  // pixel after the pill-tab divider: `ED_TITLE_H` plus the same chrome sum
-                                  // `paint_frame_dropdown` builds (8 + 24 + 10 + PILL_H + 10 + 1 = 77, +12
-                                  // to the first row = 89). Anchoring on `ED_TITLE_H` alone floated this
-                                  // menu 89px above the Line-height field it belongs to.
-    let y_entry = crate::theme::ED_TITLE_H + 89.0;
+                                  // pixel after the 40px OpenPencil tab bar (`ED_TITLE_H + 41`).
+    let y_entry = crate::theme::ED_TITLE_H + 41.0;
     // the typography rows scroll with the panel
     let fy = y_entry + 811.0 - app.doc().scroll_right;
     let dd = Rect::new(x0, fy + 28.0, x0 + 153.5, fy + 28.0 + 3.0 * DROPDOWN_ROW_H);
@@ -8299,12 +8249,12 @@ fn paint_lh_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>
 /// layer. Same design language as the line-height menu.
 ///
 /// Panel rows live at `y_entry - scroll + offset`, where `y_entry` is the
-/// pixel after the pill-tab divider (`ED_TITLE_H + 89`, see `paint_right`);
+/// pixel after the 40px OpenPencil tab bar (`ED_TITLE_H + 41`, see `paint_right`);
 /// the anchor below is the Typography header row at offset 658.5.
 fn paint_text_style_dropdown(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let reg = app.editor_regions();
     let x0 = reg.right.x0 + 13.0; // panel border + padding (cols x0)
-    let y_entry = crate::theme::ED_TITLE_H + 89.0;
+    let y_entry = crate::theme::ED_TITLE_H + 41.0;
     let fy = y_entry + 698.5 - app.doc().scroll_right;
 
     let names: Vec<String> = {
@@ -8818,16 +8768,17 @@ fn paint_variant_chrome(app: &mut App, s: &mut Scene) {
     }
 }
 
-/// Figma's canvas frame names: a 12px label in the gutter above each of the
-/// page's outermost frames (plus frames in sections), grey normally and blue
-/// when the frame is selected. Screen-space — a constant 12px at any zoom —
-/// so it lives in the overlay: the canvas lowering strips world-space
-/// `/label` commands (`FrameCache::lower_canvas`) because a render command
-/// can be neither zoom-constant nor selection-aware. The size, the gutter
-/// offset and the target list are the engine's one rule (`LABEL_SIZE`,
-/// `LABEL_ABOVE_Y`, `frame_label_targets`); only the ink is theme-resolved
-/// here, because the editor canvas is theme-aware. Editor chrome only —
-/// exports strip labels and presentations hide all chrome.
+/// OpenPencil / Figma UI3 canvas frame names: 11px Inter Regular in the
+/// gutter above each of the page's outermost frames (plus frames in
+/// sections), grey normally and blue when selected. Screen-space — a
+/// constant 11px at any zoom — so it lives in the overlay: the canvas
+/// lowering strips world-space `/label` commands (`FrameCache::lower_canvas`)
+/// because a render command can be neither zoom-constant nor
+/// selection-aware. Size, gutter and targets are the engine's one rule
+/// (`LABEL_SIZE`, `LABEL_OFFSET_Y` / `LABEL_ABOVE_Y`, `frame_label_targets`);
+/// only the ink is theme-resolved here. Editor chrome only — exports strip
+/// labels and presentations hide all chrome. The overlay walks the *live*
+/// tree, so a deleted frame drops its name on the next paint.
 fn paint_frame_labels(app: &mut App, s: &mut Scene) {
     let Some(doc) = app.doc_opt() else {
         return;
@@ -8840,12 +8791,24 @@ fn paint_frame_labels(app: &mut App, s: &mut Scene) {
     let sel = doc.editor_ref().selection.clone();
     let reg = app.editor_regions();
     let size = x_native::LABEL_SIZE;
+    if !app.fonts.has_fonts() {
+        return;
+    }
+    let font = app.fonts.regular;
+    let face = &app.fonts.fonts.fonts[font];
+    let k = size / face.units_per_em;
+    // OpenPencil: glyph bottoms sit LABEL_OFFSET_Y above the frame top.
+    let descent = (-face.descent).max(0.0) * k;
     for t in targets {
-        let Some((x, y, _, _)) = crate::run::world_rect_of(root, t.id.as_str()) else {
+        let Some((x, y, w, h)) = crate::run::world_rect_of(root, t.id.as_str()) else {
             continue;
         };
+        if w <= 0.0 || h <= 0.0 {
+            continue;
+        }
         let a = app.world_to_screen(Point::new(x, y));
         let top = a.y + x_native::LABEL_ABOVE_Y;
+        let baseline = a.y - x_native::LABEL_OFFSET_Y - descent;
         // the document scene clips to the canvas; the overlay does not, so a
         // label that would paint over the title bar or a dock is skipped, and
         // a name running past the canvas edge is truncated — chrome must never
@@ -8859,9 +8822,10 @@ fn paint_frame_labels(app: &mut App, s: &mut Scene) {
         }
         let shown = app
             .fonts
-            .truncate(&t.name, size, Wt::Med, (reg.canvas.x1 - a.x).max(20.0));
+            .truncate(&t.name, size, Wt::Reg, (reg.canvas.x1 - a.x).max(20.0));
         let ink = if sel.contains(&t.id) { C_SEL } else { C_DIM };
-        app.fonts.text(s, a.x, top, &shown, size, ink, Wt::Med);
+        app.fonts
+            .text_at_baseline(s, a.x, baseline, &shown, size, ink, font);
     }
 }
 
@@ -8968,7 +8932,7 @@ pub fn scroll_effects_into_view(app: &mut App) {
         return;
     };
     // the panel's scroll region starts one pixel under this divider
-    let top = crate::theme::ED_TITLE_H + 89.0;
+    let top = crate::theme::ED_TITLE_H + 41.0;
     // the header (and its `+`) sits just above the first row
     let need = first.y0 - 34.0 - (top + 8.0);
     if need > 0.0 {
@@ -8989,7 +8953,7 @@ pub fn scroll_mask_into_view(app: &mut App) {
     let Some(row) = app.mask_row else {
         return;
     };
-    let top = crate::theme::ED_TITLE_H + 89.0;
+    let top = crate::theme::ED_TITLE_H + 41.0;
     let need = row.y0 - 12.0 - (top + 8.0);
     if need > 0.0 {
         app.doc().scroll_right += need;
@@ -9009,7 +8973,7 @@ pub fn scroll_stroke_into_view(app: &mut App) {
     let Some(row) = app.stroke_row else {
         return;
     };
-    let top = crate::theme::ED_TITLE_H + 89.0;
+    let top = crate::theme::ED_TITLE_H + 41.0;
     let need = row.y0 - 12.0 - (top + 8.0);
     if need > 0.0 {
         app.doc().scroll_right += need;
@@ -9029,7 +8993,7 @@ pub fn scroll_image_into_view(app: &mut App) {
     let Some(row) = app.image_row else {
         return;
     };
-    let top = crate::theme::ED_TITLE_H + 89.0;
+    let top = crate::theme::ED_TITLE_H + 41.0;
     let need = row.y0 - 24.0 - (top + 8.0);
     if need > 0.0 {
         app.doc().scroll_right += need;
@@ -10059,7 +10023,7 @@ fn paint_canvas_overlays(app: &mut App, s: &mut Scene) {
         let cy = (reg.canvas.y0 + reg.canvas.y1) / 2.0;
         let l1 = "Add your first frame";
         let l2 = "Pick the frame tool in the dock below, then drag on the canvas.";
-        let l3 = "Then connect screens in FLOW, and export from SHIP.";
+        let l3 = "Then connect screens in Prototype, and export from Inspect.";
         let w1 = app.fonts.measure(l1, T14, Wt::Med);
         let w2 = app.fonts.measure(l2, T11, Wt::Reg);
         let w3 = app.fonts.measure(l3, T11, Wt::Reg);
@@ -11049,7 +11013,7 @@ fn paint_ux_analysis(
 
     // Header
     app.fonts
-        .text(s, x0 + 16.0, y, "UX ANALYSIS", T11, C_TEXT, Wt::Bold);
+        .text(s, x0 + 16.0, y, "UX", T11, C_TEXT, Wt::Bold);
     y += 28.0;
 
     // Description
@@ -11458,7 +11422,7 @@ fn paint_prototype(
     let xr = rx + rw - 16.0;
     let mut y = y0 + 14.0;
     app.fonts
-        .caps_label(s, x0, y, "FLOW PREVIEW", C_TEXT, Wt::Med);
+        .caps_label(s, x0, y, "PROTOTYPE", C_TEXT, Wt::Med);
     y += 20.0;
 
     let sel: Vec<String> = app.doc().editor_ref().selection.clone();

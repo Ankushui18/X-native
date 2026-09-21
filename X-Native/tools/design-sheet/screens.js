@@ -92,9 +92,9 @@ function dashSidebar(view) {
   // THE WORKFLOW section mirrors paint_workflow: the primary loop in the
   // sidebar's lower half, informational only (no hit region in the app).
   const workflow = [
-    ['1', 'Compose', 'Frames, auto layout, vectors'],
-    ['2', 'Flow', 'Connect screens, preview'],
-    ['3', 'Ship', 'Export PNG, PDF, SVG'],
+    ['1', 'Design', 'Frames, auto layout, vectors'],
+    ['2', 'Prototype', 'Connect screens, preview'],
+    ['3', 'Inspect', 'Export PNG, PDF, SVG'],
   ];
   return at(0, UI.dashTitleH, G.dashSide, H - UI.dashTitleH, `
     <div class="side-label">${icon('box', 12)}DRAFTS</div>
@@ -174,7 +174,7 @@ function dashMain({ view = 'Home', layout = 'Grid', selected = [], sortOpen = fa
   const cards = `
     <div class="cards">
       ${[
-        ['plus', 'New design file', 'Compose, flow, ship — from one file'],
+        ['plus', 'New design file', 'Design, prototype, inspect — from one file'],
         ['import', 'Import file', 'SVG, PNG, Sketch, Figma JSON'],
         ['sticky-note', 'New board', 'Infinite canvas for brainstorming'],
         ['layout-template', 'Start from a template', 'Mobile, landing, system, board'],
@@ -260,15 +260,15 @@ const NAV_TABS = [
   ['Variables', 'code'],
 ];
 const LEFT_TABS = [
-  ['Layers', 'STRUCTURE'],
-  ['Assets', 'LIBRARY'],
-  ['Tokens', 'TOKENS'],
+  ['Layers', 'Layers'],
+  ['Assets', 'Assets'],
+  ['Tokens', 'Tokens'],
 ];
 const RIGHT_TABS = [
-  ['Design', 'COMPOSE'],
-  ['Prototype', 'FLOW'],
-  ['Inspect', 'SHIP'],
-  ['UX', 'UX ANALYSIS'],
+  ['Design', 'Design'],
+  ['Prototype', 'Prototype'],
+  ['Inspect', 'Inspect'],
+  ['UX', 'UX'],
 ];
 const TOOLS = [
   ['Select', 'mouse-pointer-2', 'V'],
@@ -310,15 +310,12 @@ function editorTitleBar({ file = 'Checkout flow', zoom = '100%', tabs = ['Checko
       return html;
     })
     .join('');
+  // paint_title: logo + file tabs + new-tab. Zoom lives on the properties
+  // tab bar (OpenPencil PropertiesPanel), not here.
   return at(0, 0, W, TITLE, `
     <span class="logo-cell">${icon('frame', 16)}</span>
     ${tabHtml}
     <span class="newtab">${icon('plus', 14)}</span>
-    <span class="grow"></span>
-    <span class="tb-chip">${icon('zoom-out', 14)}<b>${zoom}</b>${icon('zoom-in', 14)}</span>
-    <span class="tb-chip">${icon('history', 14)}Version ${icon('chevron-down', 12)}</span>
-    <span class="btn ghost">${icon('play', 14)}Present</span>
-    <span class="btn primary">${icon('save', 14)}Save</span>
   `, { class: 'titlebar' });
 }
 
@@ -334,8 +331,8 @@ function editorRail(active = 'File') {
 
 function editorLeftPanel(tab = 'Layers', { pages = 3 } = {}) {
   const y0 = TITLE;
-  const pill = `<div class="pillrow">${LEFT_TABS.map(
-    ([key, label]) => `<span class="pill${key === tab ? ' on' : ''}">${label}</span>`,
+  const pill = `<div class="proptabs left">${LEFT_TABS.map(
+    ([key, label]) => `<span class="proptab${key === tab ? ' on' : ''}">${label}</span>`,
   ).join('')}</div>`;
   let body = '';
   if (tab === 'Layers') {
@@ -449,10 +446,10 @@ function editorLeftPanel(tab = 'Layers', { pages = 3 } = {}) {
 }
 
 // ------------------------------------------------------------------ inspector
-// The COMPOSE tab is drawn from `paint_design` in editor_ui.rs: the same
-// geometry at 1440 (x0 = 1113, xr = 1428, scroll region from y 125, panel top
-// 36), the same section labels and the same rows. Coordinates here are
-// panel-local — subtract (1100, 36) from the absolute numbers in the source.
+// The Design tab is drawn from `paint_design` in editor_ui.rs: the same
+// geometry at 1440 (x0 = 1113, xr = 1428, scroll region from y 77 after the
+// 40px OpenPencil tab bar, panel top 36), the same section labels and the
+// same rows. Coordinates here are panel-local — subtract (1100, 36).
 //
 // This replaced a set of invented sections ("POSITION / LAYOUT / FILL / STROKE /
 // CORNER RADIUS") that the app never painted: the real panel has no fill or
@@ -484,24 +481,20 @@ const flowGlyph = (i) => {
 function composePanel() {
   const x0 = 13; // rx + 12 padding + 1 border
   const xr = 328; // rx + rw − 12
-  const y0 = 89; // scroll region (abs 125) − panel top (36)
+  // paint_right: 40px tab bar at ED_TITLE_H, clip at +41 (panel-local)
+  const y0 = 41;
   const half = 135.5;
   const hit = '196';
-  // header row: avatar 24 at (25, 24) centre, zoom at +45, icons at the right
-  const header =
-    at(13, 12, 24, 24, 'A', { class: 'avatar sm' }) +
-    at(45, 13, 44, 18, '100%', { class: 'zoom' }) +
-    at(284, 16, 16, 16, icon('message-circle', 16)) +
-    at(312, 16, 16, 16, icon('play', 16));
-  const pills = at(
-    9,
-    50,
-    323,
-    30,
-    ['COMPOSE', 'FLOW', 'SHIP', 'UX ANALYSIS']
-      .map((l, i) => `<span class="pill${i === 0 ? ' on' : ''}">${l}</span>`)
-      .join(''),
-    { class: 'pillrow' },
+  // OpenPencil PropertiesPanel: 11px underline tabs + zoom. No avatar row.
+  const tabs = at(
+    0,
+    0,
+    RIGHT,
+    40,
+    RIGHT_TABS.map(
+      ([, label], i) => `<span class="proptab${i === 0 ? ' on' : ''}">${label}</span>`,
+    ).join('') + '<span class="propzoom">100%</span>',
+    { class: 'proptabs' },
   );
 
   // rows 1–4: name + %, W/H, X/Y, rotation (audit pitch 36 from +12)
@@ -624,7 +617,7 @@ function composePanel() {
     insField(x0 + 235, y0 + 720, 80, 28, { value: '13', end: true });
 
   return at(W - RIGHT, TITLE, RIGHT, H - TITLE, `
-    ${at(0, 0, 1, H - TITLE, '', { class: 'hr' })}${header}${pills}${hr(88)}
+    ${at(0, 0, 1, H - TITLE, '', { class: 'hr' })}${tabs}
     ${row1}${row2}${row3}${hr(y0 + 160)}
     ${auto}${resizing}
     ${align}${padding}${clip}${hr(y0 + 548)}
@@ -684,11 +677,10 @@ function editorRightPanel(tab = 'Design') {
   }
   return at(W - RIGHT, TITLE, RIGHT, H - TITLE, `
     ${at(0, 0, 1, H - TITLE, '', { class: 'hr' })}
-    ${at(10, 10, RIGHT - 20, H - TITLE - 20, `
-      <div class="pillrow">${RIGHT_TABS.map(
-        ([key, label]) => `<span class="pill${key === tab ? ' on' : ''}">${label}</span>`,
-      ).join('')}</div>${body}
-    `, { class: 'tab-body' })}
+    ${at(0, 0, RIGHT, 40, `${RIGHT_TABS.map(
+      ([key, label]) => `<span class="proptab${key === tab ? ' on' : ''}">${label}</span>`,
+    ).join('')}<span class="propzoom">100%</span>`, { class: 'proptabs' })}
+    ${at(10, 51, RIGHT - 20, H - TITLE - 61, body, { class: 'tab-body' })}
   `, { class: 'panel right-panel' });
 }
 
@@ -1134,15 +1126,15 @@ window.SCREENS = [
   {
     id: 'editor-structure',
     group: 'Editor',
-    name: 'Editor · Structure + canvas',
+    name: 'Editor · Layers + canvas',
     module: 'editor_ui.rs',
-    what: `Full editor chrome: title bar ${TITLE}, rail ${RAIL}, left dock ${LEFT} (STRUCTURE / LIBRARY / TOKENS), right dock ${RIGHT}, rulers, tool dock ${UI.toolbarH} tall. The COMPOSE inspector is drawn from paint_design: name + %, W/H, X/Y, rotation, Auto layout, Flow, Resizing, Alignment, Padding, Clip content, Appearance, Typography — fields are filled boxes with no outline until hover, and the value being typed into is ringed.`,
-    note: 'Three canvas aids ship in this frame: the minimap (bottom-right, ⇧M or its ✕), page sketches in every PAGES row that has content, and ⇧1 fitting the frame to the page content.',
+    what: `Full editor chrome: title bar ${TITLE}, rail ${RAIL}, left dock ${LEFT} (Layers / Assets / Tokens), right dock ${RIGHT}, rulers, tool dock ${UI.toolbarH} tall. The Design inspector is drawn from paint_design: name + %, W/H, X/Y, rotation, Auto layout, Flow, Resizing, Alignment, Padding, Clip content, Appearance, Typography — fields are filled boxes with no outline until hover, and the value being typed into is ringed.`,
+    note: 'OpenPencil / Figma UI3 chrome: left Layers|Assets|Tokens and right Design|Prototype|Inspect|UX as 11px underline tabs, zoom on the properties bar, no avatar row. Three canvas aids ship in this frame: the minimap (bottom-right, ⇧M or its ✕), page sketches in every PAGES row that has content, and ⇧1 fitting the frame to the page content.',
     checks: [
-      'STRUCTURE',
-      'LIBRARY',
-      'TOKENS',
-      'COMPOSE',
+      'Layers',
+      'Assets',
+      'Tokens',
+      'Design',
       'minimap',
       'PAGES',
       'sketch',
@@ -1158,11 +1150,11 @@ window.SCREENS = [
   {
     id: 'editor-library',
     group: 'Editor',
-    name: 'Editor · Library',
+    name: 'Editor · Assets',
     module: 'editor_ui.rs',
-    what: 'Left dock on LIBRARY: the faces the render stack knows (Load Font…) and the libraries this document is linked to, each with its pinned version and a check pill.',
-    note: 'The left tabs are STRUCTURE / LIBRARY / TOKENS — X-Native names its own model (scene graph, not a Figma clone).',
-    checks: ['LIBRARY', 'FONTS', 'Load Font…', 'LIBRARIES', 'check'],
+    what: 'Left dock on Assets: the faces the render stack knows (Load Font…) and the libraries this document is linked to, each with its pinned version and a check pill.',
+    note: 'The left tabs are Layers / Assets / Tokens — OpenPencil / Figma UI3 naming (File|Assets + Pages/Layers).',
+    checks: ['Assets', 'FONTS', 'Load Font…', 'LIBRARIES', 'check'],
     render: () => editorScreen({ leftTab: 'Assets' }),
   },
   {
@@ -1170,29 +1162,29 @@ window.SCREENS = [
     group: 'Editor',
     name: 'Editor · Tokens',
     module: 'editor_ui.rs',
-    what: 'Left dock on TOKENS: what the document already paints with (colours, type scale, spacing), the extract-to-variables action, the four create-kind buttons and every variable with its delete ✕.',
+    what: 'Left dock on Tokens: what the document already paints with (colours, type scale, spacing), the extract-to-variables action, the four create-kind buttons and every variable with its delete ✕.',
     note: 'Variable edits route through the undo log; the inspector shows the variable name beside any bound fill.',
-    checks: ['TOKENS', 'TYPE SCALE', 'NEW VARIABLE', 'VARIABLES'],
+    checks: ['Tokens', 'TYPE SCALE', 'NEW VARIABLE', 'VARIABLES'],
     render: () => editorScreen({ leftTab: 'Tokens' }),
   },
   {
     id: 'editor-flow',
     group: 'Editor',
-    name: 'Editor · Flow (prototype)',
+    name: 'Editor · Prototype',
     module: 'editor_ui.rs',
-    what: 'Right dock on FLOW: start point, interactions, animation; connections draw on the canvas.',
+    what: 'Right dock on Prototype: start point, interactions, animation; connections draw on the canvas.',
     note: '“▶ Preview flow start” enters the chrome-less flow viewer (next screen).',
-    checks: ['FLOW', 'Start flow here', 'Preview flow start'],
+    checks: ['Prototype', 'Start flow here', 'Preview flow start'],
     render: () => editorScreen({ rightTab: 'Prototype', connections: true }),
   },
   {
     id: 'editor-ship',
     group: 'Editor',
-    name: 'Editor · Ship (inspect)',
+    name: 'Editor · Inspect',
     module: 'editor_ui.rs',
-    what: 'Right dock on SHIP: size, fill (with its variable), text style, and the CSS line.',
+    what: 'Right dock on Inspect: size, fill (with its variable), text style, and the CSS line.',
     note: 'The fill row names the variable it is bound to, which is the link the paint library edits.',
-    checks: ['SHIP', 'Selection', 'variable'],
+    checks: ['Inspect', 'Selection', 'variable'],
     render: () => editorScreen({ rightTab: 'Inspect' }),
   },
   {
@@ -1200,9 +1192,9 @@ window.SCREENS = [
     group: 'Editor',
     name: 'Editor · UX analysis',
     module: 'editor_ui.rs',
-    what: 'Right dock on UX ANALYSIS: contrast, flow gaps, quality notes.',
+    what: 'Right dock on UX: contrast, flow gaps, quality notes.',
     note: 'The contrast rows read the same audited pairs the palette table and the CLI theme audit use.',
-    checks: ['UX ANALYSIS', 'Contrast', 'pass AA'],
+    checks: ['UX', 'Contrast', 'pass AA'],
     render: () => editorScreen({ rightTab: 'UX' }),
   },
   {

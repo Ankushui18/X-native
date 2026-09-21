@@ -296,10 +296,11 @@ check(
 // the wiring instead — same pattern as the status-band check above.
 const irSrc = read('crates/x-render/src/ir.rs');
 check(
-  "frame names are Figma's 12px gutter label",
-  /pub const LABEL_SIZE: f64 = 12\.0;/.test(irSrc) &&
-    /pub const LABEL_ABOVE_Y: f64 = -20\.0;/.test(irSrc),
-  'ir.rs::LABEL_SIZE / LABEL_ABOVE_Y',
+  "frame names are OpenPencil / Figma UI3 11px gutter labels",
+  /pub const LABEL_FONT_SIZE: f64 = 11\.0;/.test(irSrc) &&
+    /pub const LABEL_OFFSET_Y: f64 = 8\.0;/.test(irSrc) &&
+    /pub const LABEL_SIZE: f64 = LABEL_FONT_SIZE;/.test(irSrc),
+  'ir.rs::LABEL_FONT_SIZE / LABEL_OFFSET_Y / LABEL_SIZE',
 );
 const cacheSrc = read('crates/x-render/src/frame_cache.rs');
 check(
@@ -314,7 +315,10 @@ check(
     /paint_frame_labels\(app, s\)/.test(editorUiSrc) &&
     /x_native::frame_label_targets\(/.test(editorUiSrc) &&
     /x_native::LABEL_SIZE/.test(editorUiSrc) &&
-    /x_native::LABEL_ABOVE_Y/.test(editorUiSrc),
+    /x_native::LABEL_ABOVE_Y/.test(editorUiSrc) &&
+    /x_native::LABEL_OFFSET_Y/.test(editorUiSrc) &&
+    /text_at_baseline/.test(editorUiSrc) &&
+    /Wt::Reg/.test(editorUiSrc),
   'editor_ui.rs::paint_frame_labels reads frame_label_targets + LABEL_*',
 );
 // the text editor's Esc arm sits between the `rich-text inline editor`

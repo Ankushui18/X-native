@@ -40,7 +40,7 @@ impl ScreenId {
     }
 }
 
-/// What a screen is for, and where it sits in the Compose → Flow → Ship loop.
+/// What a screen is for, and where it sits in the Design → Prototype → Inspect loop.
 #[derive(Clone, Copy, Debug)]
 pub struct ScreenSpec {
     pub id: ScreenId,
@@ -62,10 +62,10 @@ pub static SCREENS: &[ScreenSpec] = &[
     ScreenSpec {
         id: ScreenId::Editor,
         name: "Editor",
-        purpose: "Compose, flow, ship and analyze one file.",
+        purpose: "Design, prototype, inspect and analyze one file.",
         workflow: concat!(
-            "The loop. COMPOSE is the default right-dock tab; FLOW, SHIP and UX ",
-            "ANALYSIS follow it in that order."
+            "The loop. Design is the default right-dock tab; Prototype, Inspect ",
+            "and UX follow it in that order."
         ),
     },
     ScreenSpec {
@@ -73,8 +73,8 @@ pub static SCREENS: &[ScreenSpec] = &[
         name: "Board",
         purpose: "Map screens and flows on an infinite canvas.",
         workflow: concat!(
-            "Before the loop: a place to lay out what will later be composed and ",
-            "connected in FLOW."
+            "Before the loop: a place to lay out what will later be designed and ",
+            "connected in Prototype."
         ),
     },
 ];
@@ -134,8 +134,8 @@ pub struct SurfaceSpec {
     pub id: SurfaceId,
     pub screen: ScreenId,
     pub kind: SurfaceKind,
-    /// The name it shows, or `""` when it shows none. X-Native naming only —
-    /// the test rejects the pre-rename vocabulary.
+    /// The name it shows, or `""` when it shows none. OpenPencil / Figma
+    /// naming — the test rejects the old STRUCTURE / COMPOSE vocabulary.
     pub label: &'static str,
     /// It owns property rows, so those rows snap to the control-height scale.
     pub property_rows: bool,
@@ -327,7 +327,7 @@ pub static SURFACES: &[SurfaceSpec] = &[
         id: SurfaceId::EdStructure,
         screen: ScreenId::Editor,
         kind: SurfaceKind::Panel,
-        label: "STRUCTURE",
+        label: "Layers",
         property_rows: false,
         on_standard: true,
         empty_state: EmptyState::Silent,
@@ -337,7 +337,7 @@ pub static SURFACES: &[SurfaceSpec] = &[
         id: SurfaceId::EdLibrary,
         screen: ScreenId::Editor,
         kind: SurfaceKind::Panel,
-        label: "LIBRARY",
+        label: "Assets",
         property_rows: false,
         on_standard: true,
         empty_state: EmptyState::Copy("No colour variables in this file"),
@@ -347,7 +347,7 @@ pub static SURFACES: &[SurfaceSpec] = &[
         id: SurfaceId::EdTokens,
         screen: ScreenId::Editor,
         kind: SurfaceKind::Panel,
-        label: "TOKENS",
+        label: "Tokens",
         property_rows: false,
         on_standard: true,
         empty_state: EmptyState::Silent,
@@ -364,7 +364,7 @@ pub static SURFACES: &[SurfaceSpec] = &[
         // soon as a frame lands.
         empty_state: EmptyState::Copy(concat!(
             "Add your first frame — pick the frame tool in the dock below, then ",
-            "drag on the canvas. Then connect screens in FLOW, and export from SHIP."
+            "drag on the canvas. Then connect screens in Prototype, and export from Inspect."
         )),
         scroll: ScrollRule::Fixed,
     },
@@ -382,7 +382,7 @@ pub static SURFACES: &[SurfaceSpec] = &[
         id: SurfaceId::EdCompose,
         screen: ScreenId::Editor,
         kind: SurfaceKind::Panel,
-        label: "COMPOSE",
+        label: "Design",
         property_rows: true,
         // P0-9 put every row here on the control-height scale.
         on_standard: true,
@@ -395,7 +395,7 @@ pub static SURFACES: &[SurfaceSpec] = &[
         id: SurfaceId::EdFlow,
         screen: ScreenId::Editor,
         kind: SurfaceKind::Panel,
-        label: "FLOW",
+        label: "Prototype",
         property_rows: true,
         on_standard: false,
         empty_state: EmptyState::Copy("No painted content to analyze yet"),
@@ -405,7 +405,7 @@ pub static SURFACES: &[SurfaceSpec] = &[
         id: SurfaceId::EdShip,
         screen: ScreenId::Editor,
         kind: SurfaceKind::Panel,
-        label: "SHIP",
+        label: "Inspect",
         property_rows: true,
         on_standard: false,
         // The code panel simply draws no lines when there is nothing selected.
@@ -416,7 +416,7 @@ pub static SURFACES: &[SurfaceSpec] = &[
         id: SurfaceId::EdUx,
         screen: ScreenId::Editor,
         kind: SurfaceKind::Panel,
-        label: "UX ANALYSIS",
+        label: "UX",
         property_rows: true,
         on_standard: false,
         empty_state: EmptyState::Copy("Select an element to analyze"),
@@ -552,7 +552,7 @@ pub const SURFACE_VARIANTS: &[SurfaceId] = &[
 
 /// Surfaces that own property rows and are not on the control-height scale yet.
 ///
-/// P0-5 owns this number: it is the cross-screen pass over FLOW, SHIP and UX
+/// P0-5 owns this number: it is the cross-screen pass over Prototype, Inspect and UX
 /// ANALYSIS. Lower it when a surface's rows actually move onto the scale.
 pub const OFF_STANDARD_SURFACES: usize = 3;
 
@@ -560,9 +560,16 @@ pub const OFF_STANDARD_SURFACES: usize = 3;
 /// that offers the next step, and lowers this to zero.
 pub const SILENT_EMPTY_STATES: usize = 6;
 
-/// Labels a surface must never show: the internal vocabulary (enum variant
-/// names, mostly) that the UI used to leak before the X-Native rename.
-pub const BANNED_LABELS: &[&str] = &["design", "prototype", "inspect", "layers", "assets"];
+/// Labels a surface must never show: the old X-Native STRUCTURE / COMPOSE
+/// vocabulary that OpenPencil / Figma UI3 replaced.
+pub const BANNED_LABELS: &[&str] = &[
+    "structure",
+    "library",
+    "compose",
+    "flow",
+    "ship",
+    "ux analysis",
+];
 
 pub fn screen(id: ScreenId) -> Option<&'static ScreenSpec> {
     SCREENS.iter().find(|s| s.id == id)
@@ -625,11 +632,10 @@ mod tests {
         }
     }
 
-    /// The naming rule from P0-10: the workflow is COMPOSE / FLOW / SHIP / UX
-    /// ANALYSIS, and the docks are STRUCTURE / LIBRARY / TOKENS. A surface
-    /// showing "Design" or "Layers" is the old vocabulary leaking through.
+    /// Right-dock tabs match Figma / OpenPencil: Design / Prototype / Inspect / UX.
+    /// Left dock is Layers / Assets / Tokens.
     #[test]
-    fn surface_labels_use_x_native_naming() {
+    fn surface_labels_use_openpencil_naming() {
         for s in SURFACES {
             let label = s.label.to_ascii_lowercase();
             for banned in BANNED_LABELS {
@@ -641,7 +647,7 @@ mod tests {
                 );
             }
         }
-        // the four workflow tabs, in order, are what the right dock shows
+        // the four properties tabs, in order, are what the right dock shows
         let tabs: Vec<&str> = [
             SurfaceId::EdCompose,
             SurfaceId::EdFlow,
@@ -651,7 +657,16 @@ mod tests {
         .iter()
         .map(|id| surface(*id).unwrap().label)
         .collect();
-        assert_eq!(tabs, vec!["COMPOSE", "FLOW", "SHIP", "UX ANALYSIS"]);
+        assert_eq!(tabs, vec!["Design", "Prototype", "Inspect", "UX"]);
+        let left: Vec<&str> = [
+            SurfaceId::EdStructure,
+            SurfaceId::EdLibrary,
+            SurfaceId::EdTokens,
+        ]
+        .iter()
+        .map(|id| surface(*id).unwrap().label)
+        .collect();
+        assert_eq!(left, vec!["Layers", "Assets", "Tokens"]);
     }
 
     #[test]
@@ -687,7 +702,7 @@ mod tests {
         assert_eq!(
             off,
             vec![SurfaceId::EdFlow, SurfaceId::EdShip, SurfaceId::EdUx],
-            "the cross-screen pass is FLOW, SHIP and UX ANALYSIS"
+            "the cross-screen pass is Prototype, Inspect and UX"
         );
         // the rows a surface owes are the tallest step of the scale
         assert_eq!(row_height(), ControlHeight::Control.px());

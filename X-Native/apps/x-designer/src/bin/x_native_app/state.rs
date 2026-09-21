@@ -1391,7 +1391,7 @@ impl NavTab {
         match self {
             NavTab::File => "Layers",
             NavTab::Agents => "Agents",
-            NavTab::Assets => "Library",
+            NavTab::Assets => "Assets",
             NavTab::Tools => "Tokens",
             NavTab::Variables => "Variables",
         }

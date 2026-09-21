@@ -16,8 +16,8 @@ functions.
 | Screen | Purpose | Where it sits in the loop |
 |---|---|---|
 | **Dashboard** | Find, open and start a file. | Entry point. It names the loop (sidebar, primary card) and teaches it on the first run; it does not host the loop. |
-| **Editor** | Compose, flow, ship and analyze one file. | The loop. COMPOSE is the default right-dock tab; FLOW, SHIP and UX ANALYSIS follow it in that order. |
-| **Board** | Map screens and flows on an infinite canvas. | Before the loop: a place to lay out what will later be composed and connected in FLOW. |
+| **Editor** | Design, prototype, inspect and analyze one file. | The loop. Design is the default right-dock tab; Prototype, Inspect and UX follow it in that order. |
+| **Board** | Map screens and flows on an infinite canvas. | Before the loop: a place to lay out what will later be designed and connected in Prototype. |
 
 `ScreenId` mirrors the app's `Screen` enum, and
 `every_screen_the_app_can_show_is_in_the_contract` (in the designer's regression
@@ -33,7 +33,7 @@ surface owes:
 | `Toolbar` | title bar, editor toolbar, board tool rail, bulk bar | Fixed height, no scroll, no property rows. |
 | `Rail` | editor nav rail | Fixed; icons, not rows. |
 | `Dock` | left dock, right dock | Hosts tabs; may scroll under pinned chrome. |
-| `Panel` | STRUCTURE, LIBRARY, TOKENS, COMPOSE, FLOW, SHIP, UX ANALYSIS, recents, drafts | Property rows on the control-height scale if it has any; an empty state if it can be empty. |
+| `Panel` | Layers, Assets, Tokens, Design, Prototype, Inspect, UX, recents, drafts | Property rows on the control-height scale if it has any; an empty state if it can be empty. |
 | `Canvas` | editor page, board canvas | User content. Never property rows; navigation is pan/zoom, not scroll. |
 | `Card` | first-run onboarding | One-off, informational. |
 | `Modal` | template picker, command palette, find/replace | Scrim, dismissable, no property rows. |
@@ -42,17 +42,16 @@ surface owes:
 
 ## The rules
 
-**1 · Naming stays X-Native.** The workflow is COMPOSE / FLOW / SHIP / UX
-ANALYSIS; the editor's docks are STRUCTURE / LIBRARY / TOKENS. A surface must
-not show the internal vocabulary the rename removed — `BANNED_LABELS` in
-`screens.rs` rejects *design*, *prototype*, *inspect*, *layers* and *assets* in
-a surface's label, which is how the enum-variant names used to reach the UI.
+**1 · Naming stays OpenPencil / Figma.** The right dock is Design /
+Prototype / Inspect / UX; the left dock is Layers / Assets / Tokens.
+`BANNED_LABELS` in `screens.rs` rejects the old STRUCTURE / COMPOSE / FLOW /
+SHIP vocabulary.
 
 **2 · Property rows snap to the scale.** A panel that owns property rows uses
 the control-height standard (`x-ui::metrics`): 28px rows, 24px disclosure rows,
 16px chips, 8/6/12px rhythm. `SurfaceSpec::on_standard` is the ledger — today
-only COMPOSE is on it, and `OFF_STANDARD_SURFACES` counts the three that are
-not (FLOW, SHIP, UX ANALYSIS). That count is P0-5's work list, and it is a
+only Design is on it, and `OFF_STANDARD_SURFACES` counts the three that are
+not (Prototype, Inspect, UX). That count is P0-5's work list, and it is a
 ratchet: lowering it without moving the rows fails the test.
 
 **3 · Scroll rules are declared, not discovered.** `Fixed` chrome never
@@ -78,8 +77,8 @@ hit region, or it is not a control. The app's paint functions push
 the component contract (below) is what each control owes.
 
 **7 · First run teaches the loop once.** The dashboard's onboarding card names
-Compose → Flow → Ship and points at the editor docks for everything else; a
-blank page in the editor names the frame tool, FLOW and SHIP. Neither is
+Design → Prototype → Inspect and points at the editor docks for everything else; a
+blank page in the editor names the frame tool, Prototype and Inspect. Neither is
 dismissable and neither keeps a flag that can go stale — the canvas hint is
 keyed on the page being empty and leaves when the first frame lands.
 
@@ -92,8 +91,8 @@ tests then hold it to the rules above.
 
 The cross-screen pass (P0-5) owns everything the ledgers count:
 
-- FLOW, SHIP and UX ANALYSIS rows onto the control-height scale;
-- copy for the six silent empty states (drafts, STRUCTURE, TOKENS, the SHIP
+- Prototype, Inspect and UX rows onto the control-height scale;
+- copy for the six silent empty states (drafts, Layers, Tokens, the Inspect
   code panel, notifications, the board canvas);
 - the board brought onto the language the editor and dashboard share.
 

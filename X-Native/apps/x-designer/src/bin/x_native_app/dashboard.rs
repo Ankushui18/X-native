@@ -205,7 +205,7 @@ fn paint_first_launch(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         s,
         card.x0 + 32.0,
         card.y0 + 96.0,
-        "The loop: Compose, then Flow, then Ship.",
+        "The loop: Design, then Prototype, then Inspect.",
         T11,
         C_MUTED,
         Wt::Reg,
@@ -214,7 +214,7 @@ fn paint_first_launch(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         s,
         card.x0 + 32.0,
         card.y0 + 114.0,
-        "Structure, Library, Tokens, Variables, Agents and UX analysis live in the editor docks.",
+        "Layers, Assets, Tokens, Variables, Agents and UX live in the editor docks.",
         T10,
         C_DIM,
         Wt::Reg,
@@ -222,13 +222,17 @@ fn paint_first_launch(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
     let tips = [
         (
             "1",
-            "Compose",
+            "Design",
             "Frames, layers, vectors and auto layout — the canvas.",
         ),
-        ("2", "Flow", "Connect screens and preview interactions."),
+        (
+            "2",
+            "Prototype",
+            "Connect screens and preview interactions.",
+        ),
         (
             "3",
-            "Ship",
+            "Inspect",
             "Export PNG, PDF and SVG — with variables and components.",
         ),
     ];
@@ -537,17 +541,17 @@ fn paint_sidebar(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
 }
 
 /// The primary loop, painted into the sidebar's empty lower half. The
-/// dashboard is the one screen where COMPOSE / FLOW / SHIP appear nowhere
-/// else, and a returning user (onboarding marker already set) would never
-/// see the loop again — this is where they do. Informational only: no hit
-/// region, no hover, no affordance, so it cannot be a phantom.
+/// dashboard is the one screen where Design / Prototype / Inspect appear
+/// nowhere else, and a returning user (onboarding marker already set) would
+/// never see the loop again — this is where they do. Informational only: no
+/// hit region, no hover, no affordance, so it cannot be a phantom.
 fn paint_workflow(app: &App, s: &mut Scene, y: f64) {
     app.fonts
         .micro_label(s, 12.0, y, "THE WORKFLOW", C_DIM, Wt::Med);
     let steps = [
-        ("1", "Compose", "Frames, auto layout, vectors"),
-        ("2", "Flow", "Connect screens, preview"),
-        ("3", "Ship", "Export PNG, PDF, SVG"),
+        ("1", "Design", "Frames, auto layout, vectors"),
+        ("2", "Prototype", "Connect screens, preview"),
+        ("3", "Inspect", "Export PNG, PDF, SVG"),
     ];
     for (i, (n, name, sub)) in steps.into_iter().enumerate() {
         let ry = y + 18.0 + i as f64 * 44.0;
@@ -691,13 +695,17 @@ fn paint_main(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
     let cw = (x1 - x0 - gap * 3.0) / 4.0;
     let cards: [(&str, &str, &str); 4] = [
         // The primary card anchors the loop in its own name: the file you
-        // start here is where Compose / Flow / Ship happen.
+        // start here is where Design / Prototype / Inspect happen.
         (
             "plus",
             "New design file",
-            "Compose, flow, ship — from one file",
+            "Design, prototype, inspect — from one file",
         ),
-        ("import", "Import file", "SVG, PNG, Sketch, Figma JSON"),
+        (
+            "import",
+            "Import file",
+            "Drop PNG on the canvas, or import SVG / Sketch",
+        ),
         (
             // P14: was the dead "Browse templates" card; boards are real.
             // sticky-note, not layout-template: the template card beside it

@@ -16,20 +16,22 @@ use vello::peniko::{Brush, Color, Fill, Mix};
 use vello::Scene;
 use x_core::*;
 
-/// How far above a frame/section's top-left corner its name label is drawn.
-/// A name is canvas chrome: a 12px label with a 1.2 line box needs ~14.4px,
-/// plus a ~5.6px gap to the frame edge — Figma's 12px gutter label. Both the
-/// Frame and the Section arm use it, so a frame and a section put their name
-/// on the same line.
-pub const LABEL_ABOVE_Y: f64 = -20.0;
+/// OpenPencil / Figma UI3 canvas frame names: 11px Inter Regular, with an
+/// 8px gap between the bottom of the glyphs and the frame's top edge.
+/// `LABEL_ABOVE_Y` is the world-space translation used by the IR / direct
+/// encoders (top of an 11px line); the canvas overlay places by baseline so
+/// the same gap holds at every zoom.
+pub const LABEL_FONT_SIZE: f64 = 11.0;
+pub const LABEL_OFFSET_Y: f64 = 8.0;
 
-/// Point size of that label — Figma's 12px frame name. One constant for both
-/// encoders (this one and the direct encoder in `scene.rs`), both arms (Frame
-/// and Section), and the canvas overlay (`editor_ui::paint_frame_labels`, via
-/// the facade re-export), so a name reads the same size whether it was lowered
-/// through the IR, painted straight into a scene by an export/thumbnail, or
-/// drawn in screen space over the canvas.
-pub const LABEL_SIZE: f64 = 12.0;
+/// How far above a frame's top-left corner its name label is drawn in world
+/// space. OpenPencil: `-(LABEL_OFFSET_Y + LABEL_FONT_SIZE)`.
+pub const LABEL_ABOVE_Y: f64 = -(LABEL_OFFSET_Y + LABEL_FONT_SIZE);
+
+/// Point size of that label — OpenPencil `LABEL_FONT_SIZE` (11px), which is
+/// Figma UI3's frame name. One constant for both encoders, both arms, and the
+/// canvas overlay (`editor_ui::paint_frame_labels`).
+pub const LABEL_SIZE: f64 = LABEL_FONT_SIZE;
 
 /// Ink of a canvas name label (`LABEL_ABOVE_Y` / `LABEL_SIZE` above). ONE owner
 /// for "which grey": the IR encoder and the direct scene encoder both call this,
@@ -2257,7 +2259,7 @@ mod tests {
                 assert!((t.y - (60.0 + LABEL_ABOVE_Y)).abs() < 1e-9, "{t:?}");
                 assert!(t.y < 60.0, "the label sits ABOVE the frame");
                 assert_eq!(*size, LABEL_SIZE);
-                assert_eq!(*size, 12.0, "Figma's frame name is 12px");
+                assert_eq!(*size, 11.0, "OpenPencil / Figma UI3 frame name is 11px");
                 assert_eq!(*max_width, 280.0);
             }
             other => panic!("expected Glyphs, got {other:?}"),
@@ -2354,6 +2356,27 @@ mod tests {
             .map(|t| t.id.clone())
             .collect();
         assert_eq!(ids, vec!["Hero".to_string(), "Card".to_string()]);
+    }
+
+    /// Deleting a named frame must drop it from the overlay's target list —
+    /// a leftover name after the frame is gone is the ghost-label bug.
+    #[test]
+    fn deleting_a_frame_drops_it_from_the_label_targets() {
+        let mut hero = Node::frame("Hero", 300.0, 200.0);
+        hero.name = "Hero".into();
+        let mut page = Node::frame("Page", 800.0, 600.0).child(hero);
+        assert_eq!(
+            frame_label_targets(&page)
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Hero"]
+        );
+        page.children.clear();
+        assert!(
+            frame_label_targets(&page).is_empty(),
+            "a removed frame must not keep its canvas name"
+        );
     }
 
     /// The overlay's target list and the IR lowering must agree about WHICH

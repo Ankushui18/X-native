@@ -361,9 +361,11 @@ fn same_path(a: &Path, b: &Path) -> bool {
 
 impl App {
     pub fn reload_recents(&mut self) {
+        x_native::fileio::prune_missing_recents();
         let stars = x_native::fileio::starred_files();
         self.recents = x_native::fileio::recent_files()
             .into_iter()
+            .filter(|path| Path::new(path).is_file())
             .map(|path| {
                 let starred = stars.contains(&path);
                 let path = PathBuf::from(path);
