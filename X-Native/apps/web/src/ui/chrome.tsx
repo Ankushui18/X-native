@@ -70,8 +70,7 @@ export function NavRail({
       ))}
       <div className="spacer" />
       <button className="nav" title="File notifications">
-        <Icon name="help" size={16} />
-        <span>Alerts</span>
+        <Icon name="page" size={16} />
       </button>
     </nav>
   );

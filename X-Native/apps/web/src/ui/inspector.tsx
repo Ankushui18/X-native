@@ -76,7 +76,9 @@ export function RightPanel({
       <div className="inspector">
         {snap.rightTab === "prototype" && !inspect && <Prototype n={n} />}
         {inspect && <Inspect n={n} />}
-        {snap.rightTab === "design" && !inspect && !n && <PageDesign />}
+        {snap.rightTab === "design" && !inspect && !n && (
+          <PageDesign engine={engine} tool={snap.tool} />
+        )}
         {snap.rightTab === "design" && !inspect && n && wp && (
           <Design n={n} x={wp.x} y={wp.y} engine={engine} snap={snap} />
         )}
@@ -85,35 +87,56 @@ export function RightPanel({
   );
 }
 
-function PageDesign() {
+const PRESETS: { name: string; w: number; h: number }[] = [
+  { name: "iPhone 14", w: 390, h: 844 },
+  { name: "iPhone 14 Pro Max", w: 430, h: 932 },
+  { name: "Android", w: 360, h: 800 },
+  { name: "Desktop", w: 1440, h: 900 },
+  { name: "Tablet", w: 768, h: 1024 },
+  { name: "Slide 16:9", w: 1920, h: 1080 },
+];
+
+function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
   return (
     <>
+      {tool === "frame" && (
+        <>
+          <div className="h-row">
+            <h3>Frame</h3>
+          </div>
+          <div className="presets">
+            {PRESETS.map((p) => (
+              <button
+                key={p.name}
+                onClick={() =>
+                  engine.dispatch({
+                    type: "add",
+                    kind: "frame",
+                    x: 80,
+                    y: 80,
+                    w: p.w,
+                    h: p.h,
+                    extra: { name: p.name, overflow: "clip", fill: "#ffffff" },
+                  })
+                }
+              >
+                {p.name}
+                <span className="sz">
+                  {p.w} × {p.h}
+                </span>
+              </button>
+            ))}
+          </div>
+          <div className="hr" />
+        </>
+      )}
       <div className="h-row">
-        <h3>Page</h3>
-      </div>
-      <p className="muted" style={{ paddingTop: 0 }}>
-        Nothing selected — canvas background, local styles, and page export, same as Figma’s empty
-        Design tab.
-      </p>
-      <div className="h-row">
-        <h3>Fill</h3>
+        <h3>Background</h3>
       </div>
       <div className="insp-pad">
         <ColorRow value="#e5e5e5" opacity={100} onChange={() => {}} />
       </div>
       <div className="hr" />
-      <div className="h-row">
-        <h3>Color styles</h3>
-        <button className="plus">
-          <Icon name="plus" size={14} />
-        </button>
-      </div>
-      <div className="h-row">
-        <h3>Text styles</h3>
-        <button className="plus">
-          <Icon name="plus" size={14} />
-        </button>
-      </div>
       <div className="h-row">
         <h3>Export</h3>
         <button className="plus">
@@ -447,30 +470,43 @@ function Design({
 
       <div className="hr" />
       <div className="h-row">
-        <h3>Appearance</h3>
-        <button className="icon-btn" title="Visible">
-          <Icon name={n.visible ? "eye" : "eye-off"} size={14} />
-        </button>
+        <h3>Layer</h3>
       </div>
       <div className="insp-pad">
         <div className="grid2">
+          <div className="field">
+            <select
+              value={n.blendMode}
+              onChange={(e) =>
+                engine.dispatch({ type: "patch", id: n.id, patch: { blendMode: e.target.value } })
+              }
+            >
+              {["normal", "multiply", "screen", "overlay", "darken", "lighten"].map((m) => (
+                <option key={m} value={m}>
+                  {m === "normal" ? "Pass through" : m[0].toUpperCase() + m.slice(1)}
+                </option>
+              ))}
+            </select>
+          </div>
           <Field
             label="%"
             value={Math.round(n.opacity * 100)}
             onChange={(v) => num("opacity", v / 100)}
           />
-          <Field
-            icon="radius"
-            value={n.cornerRadii[0]}
-            onChange={(v) =>
-              engine.dispatch({
-                type: "patch",
-                id: n.id,
-                patch: { cornerRadii: [v, v, v, v] },
-              })
-            }
-          />
         </div>
+      </div>
+      <div className="insp-pad" style={{ marginTop: 4 }}>
+        <Field
+          icon="radius"
+          value={n.cornerRadii[0]}
+          onChange={(v) =>
+            engine.dispatch({
+              type: "patch",
+              id: n.id,
+              patch: { cornerRadii: [v, v, v, v] },
+            })
+          }
+        />
       </div>
 
       <div className="hr" />
@@ -765,19 +801,21 @@ function ColorRow({
   onChange: (v: string) => void;
   onOpacity?: (v: number) => void;
 }) {
+  const hidden = value === "#00000000";
   const hex = value.length >= 7 ? value.slice(0, 7) : "#000000";
   return (
     <div className="color-row">
-      <label className="swatch" style={{ background: hex === "#00000000" ? "#fff" : hex }}>
+      <label className="swatch" style={{ background: hidden ? "#fff" : hex }}>
         <input
           type="color"
-          value={hex === "#00000000" ? "#ffffff" : hex}
+          value={hidden ? "#ffffff" : hex}
           onChange={(e) => onChange(e.target.value)}
         />
       </label>
       <input
         className="hex"
-        value={hex.replace("#", "")}
+        value={hidden ? "" : hex.replace("#", "")}
+        placeholder="None"
         onChange={(e) => onChange("#" + e.target.value.replace("#", ""))}
       />
       {onOpacity && (
@@ -790,6 +828,13 @@ function ColorRow({
           }}
         />
       )}
+      <button
+        className="mini"
+        title={hidden ? "Show" : "Hide"}
+        onClick={() => onChange(hidden ? "#d9d9d9" : "#00000000")}
+      >
+        <Icon name={hidden ? "eye-off" : "eye"} size={14} />
+      </button>
     </div>
   );
 }

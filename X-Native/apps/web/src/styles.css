@@ -121,10 +121,11 @@ input, textarea { user-select: text; }
 .rail button.nav:hover { background: var(--hover); }
 .rail button.nav.on { background: var(--active); }
 .rail button.nav span {
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 500;
   color: var(--muted);
   line-height: 1;
+  letter-spacing: -0.01em;
 }
 .rail .spacer { flex: 1; }
 
@@ -332,10 +333,10 @@ input, textarea { user-select: text; }
   align-items: center;
 }
 .tool > button.hit {
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 6px;
   background: transparent;
   color: #1e1e1e;
   display: grid;
@@ -597,11 +598,21 @@ input, textarea { user-select: text; }
 .color-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   height: 32px;
   background: var(--input);
   border-radius: 6px;
-  padding: 0 8px;
+  padding: 0 6px 0 8px;
+}
+.color-row .mini {
+  width: 20px;
+  height: 20px;
+  border: 0;
+  background: transparent;
+  color: var(--dim);
+  padding: 0;
+  display: grid;
+  place-items: center;
 }
 .swatch {
   width: 16px;

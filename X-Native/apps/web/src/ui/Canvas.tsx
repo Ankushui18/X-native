@@ -232,6 +232,27 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       ctx.fillStyle = "#fff";
       ctx.fill();
       ctx.stroke();
+      const dim = `${Math.round(wp.node.w)} × ${Math.round(wp.node.h)}`;
+      ctx.font = "500 11px Inter, system-ui";
+      const tw = ctx.measureText(dim).width;
+      const bw = tw + 16;
+      const bh = 20;
+      const bx = sx + sw / 2 - bw / 2;
+      const by = sy + sh + 8;
+      ctx.fillStyle = "#0d99ff";
+      if (typeof ctx.roundRect === "function") {
+        ctx.beginPath();
+        ctx.roundRect(bx, by, bw, bh, 4);
+        ctx.fill();
+      } else {
+        ctx.fillRect(bx, by, bw, bh);
+      }
+      ctx.fillStyle = "#ffffff";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(dim, bx + bw / 2, by + bh / 2);
+      ctx.textAlign = "left";
+      ctx.textBaseline = "alphabetic";
     }
 
     if (band) {
@@ -394,7 +415,18 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         w = Math.max(w, 8);
         h = Math.max(h, 8);
       }
-      engine.dispatch({ type: "add", kind: k, x, y, w, h });
+      engine.dispatch({
+        type: "add",
+        kind: k,
+        x,
+        y,
+        w,
+        h,
+        extra:
+          snap.tool === "section"
+            ? { name: "Section", fill: "#00000000", overflow: "visible" }
+            : undefined,
+      });
     }
     if (d.mode === "marquee") {
       const a = toWorld(d.sx, d.sy);
