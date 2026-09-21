@@ -3844,6 +3844,77 @@ impl Host {
         });
     }
 
+    fn apply_picker_sv(&mut self, square: Rect, p: Point) {
+        let s = ((p.x - square.x0) / square.width().max(1.0)).clamp(0.0, 1.0) as f32;
+        let v = (1.0 - (p.y - square.y0) / square.height().max(1.0)).clamp(0.0, 1.0) as f32;
+        self.app.picker_hsv.1 = s;
+        self.app.picker_hsv.2 = v;
+        self.commit_picker_hsv();
+    }
+
+    fn apply_picker_hue(&mut self, bar: Rect, p: Point) {
+        let h = ((p.x - bar.x0) / bar.width().max(1.0)).clamp(0.0, 1.0) as f32 * 360.0;
+        self.app.picker_hsv.0 = h;
+        self.commit_picker_hsv();
+    }
+
+    fn commit_picker_hsv(&mut self) {
+        let (h, s, v) = self.app.picker_hsv;
+        let (r, g, b) = crate::editor_ui::hsv_to_rgb(h, s, v);
+        let hex = format!("{r:02X}{g:02X}{b:02X}");
+        let Some((target, _, _)) = self.app.color_picker_popup else {
+            return;
+        };
+        self.dispatch(Action::PaintLive(target, hex));
+    }
+
+    fn apply_paint_hex(&mut self, target: crate::state::PaintTarget, hex: &str, announce: bool) {
+        let Some(color) = crate::state::parse_hex(hex) else {
+            self.app.status = "Invalid color preset".into();
+            return;
+        };
+        let rgba = color.to_rgba8();
+        self.app.picker_hsv = crate::editor_ui::rgb_to_hsv(rgba.r, rgba.g, rgba.b);
+        let Some(id) = self.app.doc().selected_id() else {
+            self.app.status = "Select a layer before changing its color".into();
+            return;
+        };
+        if let crate::state::PaintTarget::Effect(i) = target {
+            if self.app.doc().editor().set_effect_color(&id, i, color) {
+                self.app.mark_dirty();
+                if announce {
+                    self.app.status = "Effect colour updated".into();
+                }
+            }
+            return;
+        }
+        let is_fill = target.is_fill();
+        let info = crate::editor_ui::sel_info(&self.app);
+        let changed = if is_fill {
+            self.app.doc().editor().set_fill(&id, Paint::Solid(color));
+            true
+        } else {
+            let width = info.stroke_w.max(1.0);
+            self.app.doc().editor().mutate_visual_stack(&id, move |n| {
+                n.materialize_visual_stacks();
+                let stroke = x_native::Stroke::solid(color, width);
+                n.stroke = stroke.clone();
+                if let Some(layer) = n.stroke_layers.last_mut() {
+                    layer.stroke = stroke;
+                } else {
+                    n.stroke_layers.push(x_native::StrokeLayer::new(stroke));
+                }
+            })
+        };
+        if changed {
+            self.app.mark_dirty();
+            if announce {
+                self.app.status =
+                    format!("{} color updated", if is_fill { "Fill" } else { "Stroke" });
+            }
+        }
+    }
+
     fn on_press(&mut self, p: Point) {
         // A double-click must not undo the press it repeats. Chrome presses on
         // a toggle row FLIP state — the fill row's colour swatch opens the
@@ -4126,6 +4197,44 @@ impl Host {
                         let base_depth = self.app.doc_ref().editor_ref().undo_depth();
                         self.app.drag = Some(Drag::CornerSmooth { track, base_depth });
                     }
+                }
+                if let Action::UpdateImageAdjustment { adjustment, .. } = &a {
+                    let base_depth = self.app.doc_ref().editor_ref().undo_depth();
+                    self.app.drag = Some(Drag::ImageAdj {
+                        name: adjustment.clone(),
+                        track: *r,
+                        base_depth,
+                    });
+                    let value = (((p.x - r.x0) / r.width().max(1.0)) * 2.0 - 1.0)
+                        .clamp(-1.0, 1.0) as f32;
+                    self.app.last_chrome = Some((std::time::Instant::now(), p, false));
+                    self.dispatch(Action::UpdateImageAdjustment {
+                        adjustment: adjustment.clone(),
+                        value,
+                    });
+                    return;
+                }
+                if let Action::PickColorSv(target) = a {
+                    let base_depth = self.app.doc_ref().editor_ref().undo_depth();
+                    self.app.drag = Some(Drag::ColorSv {
+                        target,
+                        square: *r,
+                        base_depth,
+                    });
+                    self.app.last_chrome = Some((std::time::Instant::now(), p, false));
+                    self.apply_picker_sv(*r, p);
+                    return;
+                }
+                if let Action::PickColorHue(target) = a {
+                    let base_depth = self.app.doc_ref().editor_ref().undo_depth();
+                    self.app.drag = Some(Drag::ColorHue {
+                        target,
+                        bar: *r,
+                        base_depth,
+                    });
+                    self.app.last_chrome = Some((std::time::Instant::now(), p, false));
+                    self.apply_picker_hue(*r, p);
+                    return;
                 }
                 self.app.last_chrome = Some((std::time::Instant::now(), p, a.is_toggle_row()));
                 self.dispatch(a);
@@ -6236,6 +6345,17 @@ impl Host {
                     pts.push(world);
                 }
             }
+            Some(Drag::ImageAdj { name, track, .. }) => {
+                let value =
+                    (((p.x - track.x0) / track.width().max(1.0)) * 2.0 - 1.0).clamp(-1.0, 1.0)
+                        as f32;
+                self.dispatch(Action::UpdateImageAdjustment {
+                    adjustment: name,
+                    value,
+                });
+            }
+            Some(Drag::ColorSv { square, .. }) => self.apply_picker_sv(square, p),
+            Some(Drag::ColorHue { bar, .. }) => self.apply_picker_hue(bar, p),
             None => {
                 self.app.update_hover(p);
             }
@@ -6635,6 +6755,14 @@ impl Host {
                         .unwrap_or(0.0)
                 };
                 self.app.status = format!("Rotated {}°", deg.round());
+                self.app.drag = None;
+            }
+            Some(Drag::ImageAdj { base_depth, .. })
+            | Some(Drag::ColorSv { base_depth, .. })
+            | Some(Drag::ColorHue { base_depth, .. }) => {
+                let doc = self.app.doc();
+                let editor = doc.editor();
+                editor.merge_last(editor.undo_depth().saturating_sub(base_depth));
                 self.app.drag = None;
             }
             _ => {
@@ -11836,6 +11964,17 @@ impl Host {
                     let p = self.app.mouse;
                     self.app.color_picker_popup =
                         Some((target, Rect::new(p.x, p.y, p.x + 1.0, p.y + 1.0), true));
+                    let info = crate::editor_ui::sel_info(&self.app);
+                    let hex = if target.is_fill() {
+                        info.fill
+                    } else {
+                        info.stroke
+                    };
+                    if let Some(c) = crate::state::parse_hex(&hex) {
+                        let rgba = c.to_rgba8();
+                        self.app.picker_hsv =
+                            crate::editor_ui::rgb_to_hsv(rgba.r, rgba.g, rgba.b);
+                    }
                 } else {
                     self.app.color_picker_popup = None;
                 }
@@ -11847,50 +11986,14 @@ impl Host {
                 self.app.color_picker_popup = None;
             }
             Action::PaintPreset(target, hex) => {
-                let Some(color) = crate::state::parse_hex(&hex) else {
-                    self.app.status = "Invalid color preset".into();
-                    return;
-                };
-                let Some(id) = self.app.doc().selected_id() else {
-                    self.app.status = "Select a layer before changing its color".into();
-                    return;
-                };
-                // An effect's **Fill** row: the colour belongs to the effect,
-                // never to the layer's own fill (Figma's shadow Fill).
-                if let crate::state::PaintTarget::Effect(i) = target {
-                    if self.app.doc().editor().set_effect_color(&id, i, color) {
-                        self.app.mark_dirty();
-                        self.app.status = "Effect colour updated".into();
-                    }
-                    return;
-                }
-                let is_fill = target.is_fill();
-                let info = crate::editor_ui::sel_info(&self.app);
-                let changed = if is_fill {
-                    self.app.doc().editor().set_fill(&id, Paint::Solid(color));
-                    true
-                } else {
-                    let width = info.stroke_w.max(1.0);
-                    self.app.doc().editor().mutate_visual_stack(&id, move |n| {
-                        n.materialize_visual_stacks();
-                        let stroke = x_native::Stroke::solid(color, width);
-                        n.stroke = stroke.clone();
-                        if let Some(layer) = n.stroke_layers.last_mut() {
-                            layer.stroke = stroke;
-                        } else {
-                            n.stroke_layers.push(x_native::StrokeLayer::new(stroke));
-                        }
-                    })
-                };
-                if changed {
-                    self.app.mark_dirty();
-                    self.app.status =
-                        format!("{} color updated", if is_fill { "Fill" } else { "Stroke" });
-                }
-                self.app.color_picker_popup = None;
-                let doc = self.app.doc();
-                doc.color_picker_fill_open = false;
-                doc.color_picker_stroke_open = false;
+                self.apply_paint_hex(target, &hex, true);
+            }
+            Action::PaintLive(target, hex) => {
+                self.apply_paint_hex(target, &hex, false);
+            }
+            Action::PickColorSv(_) | Action::PickColorHue(_) => {
+                // pointer sampling is handled in on_press / on_move so a
+                // drag can keep writing without re-entering dispatch.
             }
             Action::ToggleMinimap => {
                 self.app.minimap = !self.app.minimap;

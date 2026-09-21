@@ -5305,7 +5305,8 @@ fn paint_design(
     );
     y += 12.0 + LABEL_GAP;
 
-    // Phase 6: Gradient controls (only shown when fill is a gradient)
+    // Fill type (Solid / Linear / Radial / …) plus gradient stops when
+    // the fill is already a gradient.
     y = paint_gradient_controls(app, s, hit, rx + pl, rx + rw - pl, y);
 
     hline(s, rx, rx + rw, y, C_LINE);
@@ -7043,11 +7044,24 @@ fn gradient_stops(paint: &Paint) -> Option<Vec<(f32, Color)>> {
 
 fn next_gradient_type(paint: &Paint) -> &'static str {
     match paint.gradient_type_name() {
+        "Solid" => "Linear",
         "Linear" => "Radial",
         "Radial" => "Angular",
         "Angular" => "Diamond",
-        _ => "Linear",
+        _ => "Solid",
     }
+}
+
+fn selected_fill_paint(app: &App) -> Option<Paint> {
+    let doc = app.doc_opt()?;
+    let id = doc.selected_id()?;
+    let node = find_node(&doc.editor_ref().root, &id)?;
+    node.active_fills()
+        .into_iter()
+        .rev()
+        .map(|layer| layer.paint)
+        .next()
+        .or_else(|| Some(node.fill.clone()))
 }
 
 /// Phase 6: Check if the selected node has a gradient fill
@@ -7113,22 +7127,25 @@ fn paint_gradient_controls(
     xr: f64,
     y: f64,
 ) -> f64 {
-    let Some(paint) = selected_gradient_paint(app) else {
+    let Some(paint) = selected_fill_paint(app) else {
         return y;
     };
-    let Some(stops) = gradient_stops(&paint) else {
-        return y;
-    };
+    let stops = gradient_stops(&paint).unwrap_or_default();
     let mut y = y;
 
-    app.fonts.caps_label(s, x0, y, "GRADIENT", C_TEXT, Wt::Med);
+    app.fonts.caps_label(s, x0, y, "FILL TYPE", C_TEXT, Wt::Med);
     y += 20.0;
 
-    // The selector cycles through the real conversion path. It is not a
-    // decorative dropdown wired to the unrelated frame menu.
+    // The selector cycles Solid → Linear → Radial → Angular → Diamond →
+    // Solid. A solid fill used to hide this row, so there was no way to
+    // create a gradient from the inspector.
     let type_r = Rect::new(x0, y, x0 + 120.0, y + 24.0);
     input_box(app, s, type_r, 6.0);
-    let label = format!("{}  ·  {} stops", paint.gradient_type_name(), stops.len());
+    let label = if paint.is_gradient() {
+        format!("{}  ·  {} stops", paint.gradient_type_name(), stops.len())
+    } else {
+        paint.gradient_type_name().to_string()
+    };
     app.fonts.text(
         s,
         type_r.x0 + 8.0,
@@ -7153,6 +7170,10 @@ fn paint_gradient_controls(
         },
     ));
     y += 32.0;
+
+    if !paint.is_gradient() || stops.is_empty() {
+        return y;
+    }
 
     let flip_r = Rect::new(x0, y, x0 + 60.0, y + 24.0);
     input_box(app, s, flip_r, 6.0);
@@ -8770,7 +8791,7 @@ fn paint_variant_chrome(app: &mut App, s: &mut Scene) {
 
 /// OpenPencil / Figma UI3 canvas frame names: 11px Inter Regular in the
 /// gutter above each of the page's outermost frames (plus frames in
-/// sections), grey normally and blue when selected. Screen-space — a
+/// sections), muted normally and primary text when selected. Screen-space — a
 /// constant 11px at any zoom — so it lives in the overlay: the canvas
 /// lowering strips world-space `/label` commands (`FrameCache::lower_canvas`)
 /// because a render command can be neither zoom-constant nor
@@ -8807,7 +8828,9 @@ fn paint_frame_labels(app: &mut App, s: &mut Scene) {
             continue;
         }
         let a = app.world_to_screen(Point::new(x, y));
-        let top = a.y + x_native::LABEL_ABOVE_Y;
+        // Screen-space top: 11px glyphs + 8px gutter, never the world-space
+        // LABEL_ABOVE_Y mixed into a screen y (that scaled the clip at zoom).
+        let top = a.y - x_native::LABEL_OFFSET_Y - size;
         let baseline = a.y - x_native::LABEL_OFFSET_Y - descent;
         // the document scene clips to the canvas; the overlay does not, so a
         // label that would paint over the title bar or a dock is skipped, and
@@ -8823,7 +8846,10 @@ fn paint_frame_labels(app: &mut App, s: &mut Scene) {
         let shown = app
             .fonts
             .truncate(&t.name, size, Wt::Reg, (reg.canvas.x1 - a.x).max(20.0));
-        let ink = if sel.contains(&t.id) { C_SEL } else { C_DIM };
+        // Canvas chrome, not IR `label_ink` (that one is for light artwork
+        // / exports). Unselected = secondary text (~7:1 on Graphite canvas);
+        // selected = primary text, the Figma "this frame is selected" lift.
+        let ink = if sel.contains(&t.id) { C_TEXT } else { C_MUTED };
         app.fonts
             .text_at_baseline(s, a.x, baseline, &shown, size, ink, font);
     }
@@ -10113,13 +10139,71 @@ fn paint_carets(app: &mut App, s: &mut Scene) {
 /// Bounds of the native color popover. Keeping this calculation shared by
 /// painting and input means clicks outside the popup close it instead of
 /// accidentally editing the canvas underneath.
+pub(crate) fn rgb_to_hsv(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+    let r = r as f32 / 255.0;
+    let g = g as f32 / 255.0;
+    let b = b as f32 / 255.0;
+    let max = r.max(g.max(b));
+    let min = r.min(g.min(b));
+    let d = max - min;
+    let mut h = if d < 1e-6 {
+        0.0
+    } else if (max - r).abs() < 1e-6 {
+        60.0 * (((g - b) / d) % 6.0)
+    } else if (max - g).abs() < 1e-6 {
+        60.0 * ((b - r) / d + 2.0)
+    } else {
+        60.0 * ((r - g) / d + 4.0)
+    };
+    if h < 0.0 {
+        h += 360.0;
+    }
+    let s = if max < 1e-6 { 0.0 } else { d / max };
+    (h, s, max)
+}
+
+pub(crate) fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (u8, u8, u8) {
+    let h = h.rem_euclid(360.0);
+    let c = v * s;
+    let sector = h / 60.0;
+    let x = c * (1.0 - (sector % 2.0 - 1.0).abs());
+    let m = v - c;
+    let (r, g, b) = match sector as i32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    (
+        ((r + m) * 255.0).round().clamp(0.0, 255.0) as u8,
+        ((g + m) * 255.0).round().clamp(0.0, 255.0) as u8,
+        ((b + m) * 255.0).round().clamp(0.0, 255.0) as u8,
+    )
+}
+
+#[cfg(test)]
+mod hsv_tests {
+    use super::{hsv_to_rgb, rgb_to_hsv};
+
+    #[test]
+    fn hsv_roundtrip_primaries() {
+        for (r, g, b) in [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 255), (0, 0, 0)] {
+            let (h, s, v) = rgb_to_hsv(r, g, b);
+            let out = hsv_to_rgb(h, s, v);
+            assert_eq!(out, (r, g, b), "roundtrip {r},{g},{b} via {h},{s},{v}");
+        }
+    }
+}
+
 pub(crate) fn color_picker_rect(app: &App) -> Option<Rect> {
     let (_, anchor, open) = *app.color_picker_popup.as_ref()?;
     if !open {
         return None;
     }
     let w = 244.0;
-    let h = 286.0;
+    let h = 360.0;
     let x_left = anchor.x0 - w - 8.0;
     let x = if x_left >= 8.0 {
         x_left
@@ -10145,7 +10229,6 @@ fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         return;
     };
     let info = sel_info(app);
-    // The popover's subject: a fill, a stroke, or an effect's **Fill** row.
     let current = match paint_target {
         crate::state::PaintTarget::Effect(i) => app
             .doc_ref()
@@ -10155,8 +10238,6 @@ fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
                     .get(i)
                     .and_then(|l| l.effect.color())
             })
-            // a shadow always carries a Fill (black at 25% by default), so
-            // this only stands in for a blur or noise with no Fill to show
             .unwrap_or(C_TEXT),
         target => {
             let hex = if target.is_fill() {
@@ -10200,36 +10281,80 @@ fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
     draw_icon(s, "x", close.x0 + 5.0, close.y0 + 5.0, ICON_SM, C_DIM);
     hit.push((close, Action::CloseColorPicker));
 
-    let preview = Rect::new(
+    let (h, sat, val) = app.picker_hsv;
+    let sv = Rect::new(
         panel.x0 + 14.0,
-        panel.y0 + 38.0,
+        panel.y0 + 36.0,
         panel.x1 - 14.0,
-        panel.y0 + 72.0,
+        panel.y0 + 168.0,
     );
-    fill_rrect(s, preview, R_MD, current);
-    stroke_rrect(s, preview, R_MD, C_LINE_2, 1.0);
-    app.fonts.text(
-        s,
-        panel.x0 + 14.0,
-        panel.y0 + 87.0,
-        &format!("#{}", crate::state::color_hex(current)),
-        T10,
-        C_TEXT,
-        Wt::Mono,
-    );
-    app.fonts.text(
-        s,
-        panel.x0 + 14.0,
-        panel.y0 + 104.0,
-        "Choose a preset or edit the hex field",
-        T10,
-        C_DIM,
-        Wt::Reg,
-    );
+    const COLS: i32 = 16;
+    const ROWS: i32 = 10;
+    let cw = sv.width() / COLS as f64;
+    let ch = sv.height() / ROWS as f64;
+    for row in 0..ROWS {
+        let v = 1.0 - (row as f32 + 0.5) / ROWS as f32;
+        for col in 0..COLS {
+            let s_val = (col as f32 + 0.5) / COLS as f32;
+            let (r, g, b) = hsv_to_rgb(h, s_val, v);
+            let cell = Rect::new(
+                sv.x0 + col as f64 * cw,
+                sv.y0 + row as f64 * ch,
+                sv.x0 + (col as f64 + 1.0) * cw,
+                sv.y0 + (row as f64 + 1.0) * ch,
+            );
+            fill_rrect(s, cell, 0.0, Color::from_rgb8(r, g, b));
+        }
+    }
+    stroke_rrect(s, sv, R_SM, C_LINE_2, 1.0);
+    let cx = sv.x0 + sat as f64 * sv.width();
+    let cy = sv.y0 + (1.0 - val as f64) * sv.height();
+    let cursor = Rect::new(cx - 5.0, cy - 5.0, cx + 5.0, cy + 5.0);
+    fill_rrect(s, cursor, 5.0, current);
+    stroke_rrect(s, cursor, 5.0, Color::WHITE, 1.5);
+    hit.push((sv, Action::PickColorSv(paint_target)));
 
-    // Figma: *"Open the color picker in the Fill or Stroke sections of the
-    // right sidebar, then click Apply blend mode"* — a paint's blend lives in
-    // this popover, next to the colour it applies to.
+    let hue = Rect::new(sv.x0, sv.y1 + 8.0, sv.x1, sv.y1 + 20.0);
+    let hue_stops: [(f32, Color); 7] = [
+        (0.0, Color::from_rgb8(255, 0, 0)),
+        (1.0 / 6.0, Color::from_rgb8(255, 255, 0)),
+        (2.0 / 6.0, Color::from_rgb8(0, 255, 0)),
+        (3.0 / 6.0, Color::from_rgb8(0, 255, 255)),
+        (4.0 / 6.0, Color::from_rgb8(0, 0, 255)),
+        (5.0 / 6.0, Color::from_rgb8(255, 0, 255)),
+        (1.0, Color::from_rgb8(255, 0, 0)),
+    ];
+    let hue_grad = vello::peniko::Gradient::new_linear((hue.x0, hue.y0), (hue.x1, hue.y0))
+        .with_stops(hue_stops.as_slice());
+    s.fill(
+        vello::peniko::Fill::NonZero,
+        vello::kurbo::Affine::IDENTITY,
+        &hue_grad,
+        None,
+        &hue,
+    );
+    stroke_rrect(s, hue, R_SM, C_LINE_2, 1.0);
+    let hx = hue.x0 + (h as f64 / 360.0) * hue.width();
+    let hue_mark = Rect::new(hx - 3.0, hue.y0 - 2.0, hx + 3.0, hue.y1 + 2.0);
+    fill_rrect(s, hue_mark, R_XS, Color::WHITE);
+    stroke_rrect(s, hue_mark, R_XS, C_TEXT, 1.0);
+    hit.push((hue, Action::PickColorHue(paint_target)));
+
+    let hex_r = Rect::new(sv.x0, hue.y1 + 8.0, sv.x1, hue.y1 + 36.0);
+    fill_rrect(s, hex_r, R_MD, C_FIELD_2);
+    stroke_rrect(s, hex_r, R_MD, C_LINE, 1.0);
+    let sw = Rect::new(hex_r.x0 + 8.0, hex_r.y0 + 6.0, hex_r.x0 + 22.0, hex_r.y1 - 6.0);
+    fill_rrect(s, sw, R_SM, current);
+    stroke_rrect(s, sw, R_SM, C_LINE_2, 1.0);
+    let hex = format!("#{}", crate::state::color_hex(current));
+    app.fonts
+        .text(s, sw.x1 + 8.0, hex_r.y0 + 8.0, &hex, T11, C_TEXT, Wt::Mono);
+    match paint_target {
+        crate::state::PaintTarget::Fill => hit.push((hex_r, Action::Field(FieldId::FillHex))),
+        crate::state::PaintTarget::Stroke => hit.push((hex_r, Action::Field(FieldId::StrokeHex))),
+        crate::state::PaintTarget::Effect(_) => {}
+    }
+
     let brow = Rect::new(
         panel.x0 + 14.0,
         panel.y1 - 34.0,
@@ -10277,10 +10402,10 @@ fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         "FFFFFF", "F2F3F7", "D9DCE5", "9A9EAA", "6B6E7A", "343842", "1B1D23", "000000", "FF3B30",
         "FF9500", "FFCC00", "34C759", "00A3FF", "5856D6", "AF52DE", "FF2D55",
     ];
-    let size = 26.0;
-    let gap = 7.0;
+    let size = 22.0;
+    let gap = 6.0;
     let start_x = panel.x0 + 14.0;
-    let start_y = panel.y0 + 119.0;
+    let start_y = hex_r.y1 + 10.0;
     for (i, hex) in PRESETS.into_iter().enumerate() {
         let col = i % 8;
         let row = i / 8;
@@ -10297,7 +10422,7 @@ fn paint_color_picker(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)
         } else {
             stroke_rrect(s, r, R_MD, C_LINE, 1.0);
         }
-        hit.push((r, Action::PaintPreset(paint_target, hex.to_string())));
+        hit.push((r, Action::PaintLive(paint_target, hex.to_string())));
     }
 }
 

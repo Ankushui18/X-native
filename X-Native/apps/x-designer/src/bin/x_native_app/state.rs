@@ -2137,6 +2137,13 @@ pub enum Action {
     ToggleLayoutAdvanced,
     /// Apply a color chosen from the native color popover.
     PaintPreset(PaintTarget, String),
+    /// Live colour from the SV square / hue bar — same write as a preset,
+    /// but the popover stays open so a drag can keep sampling.
+    PaintLive(PaintTarget, String),
+    /// Sample the saturation-value square at the pointer.
+    PickColorSv(PaintTarget),
+    /// Sample the hue bar at the pointer.
+    PickColorHue(PaintTarget),
     Align(usize, usize),
     /// Color picker popup toggle (fill / stroke / an effect's Fill)
     ToggleColorPicker(PaintTarget),
@@ -3048,6 +3055,25 @@ pub enum Drag {
         id: String,
         points: Vec<Point>,
     },
+    /// Image-adjustment slider: the press takes the track and every move
+    /// re-reads [-1, 1] from x, same mapping as the click.
+    ImageAdj {
+        name: String,
+        track: Rect,
+        base_depth: usize,
+    },
+    /// Colour popover saturation-value square.
+    ColorSv {
+        target: PaintTarget,
+        square: Rect,
+        base_depth: usize,
+    },
+    /// Colour popover hue bar.
+    ColorHue {
+        target: PaintTarget,
+        bar: Rect,
+        base_depth: usize,
+    },
 }
 
 // -------------------------------------------------------------- open files
@@ -3863,6 +3889,9 @@ pub struct App {
     pub context_menu: ContextMenu,
     /// Color picker popup state: (is_fill, field_rect, is_open)
     pub color_picker_popup: Option<(PaintTarget, Rect, bool)>,
+    /// HSV of the open colour popover. Survives a drag so hue stays put
+    /// while saturation/value change, and vice versa.
+    pub picker_hsv: (f32, f32, f32),
     /// Effects list (Figma's Effects section): which popovers are open. One at
     /// a time, the way the panel's other menus behave.
     pub effect_add_open: bool,
@@ -4341,6 +4370,7 @@ impl App {
             palette: CommandPalette::new(1440.0, 900.0),
             context_menu: ContextMenu::new(),
             color_picker_popup: None,
+            picker_hsv: (0.0, 0.0, 1.0),
             effect_add_open: false,
             effect_kind_open: None,
             effect_settings: None,
