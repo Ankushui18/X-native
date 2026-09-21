@@ -1,14 +1,12 @@
 # X-Native Designer
 
-Native design tool (Rust + Vello/wgpu). **Greenfield UI** on a preserved engine.
-Visual language: Graphite & Signal.
+Design tool with a **Rust engine** (document, layout, `.x` IO, headless render)
+and a **web designer** as the only product UI. Visual language: Graphite & Signal.
 
 ## Document opening
 
-The [document loading screen](docs/DOCUMENT_LOADING.md) follows real read/validation,
-asset and rendering work, uses an indeterminate spinner, and enables the editor
-only after a successful first presentation. There are no fake percentages or
-minimum loading delays. Failures offer Try Again and Close.
+The web designer loads the document through the command API. There are no fake
+percentages or minimum loading delays. Engine-side read/validation stays in Rust.
 
 ## Reliability and verification
 
@@ -58,14 +56,9 @@ record is the one that has actually been executed.
   `x_native theme audit` checks every text role against every surface it can be
   painted on (47 pairs per theme, WCAG 2.1 AA) and `x_native theme tokens`
   exports one as W3C DTCG JSON. See [Themes](#themes).
-- In-app: the PROTOTYPE tab authors interactions (on-click / hover / press
-  → navigate) with live **flow preview** on the canvas (Esc steps back,
-  Q exits); instances of variant sets get a **VARIANT switcher**; component
-  masters expose Text/Bool/Swap **properties** editable per instance; the
-  ASSETS panel can **Load Font…** (.ttf/.otf/.ttc) into the render stack;
-  the TOKENS tab live-audits the document (palette, type scale, spacing)
-  and generates named variables from the extracted tokens. The command
-  palette gained **Lint document**.
+- In-app (web designer): Prototype, Assets, Variables, and inspect panes
+  live in [`apps/web`](apps/web/README.md). Headless lint / analyze / theme
+  audit stay on the `x_native` CLI.
 
 ## Themes
 
@@ -74,15 +67,9 @@ Interface color is a set of 22 semantic roles in
 surfaces, text levels, accent fills, label-on-fill, selection and focus
 indicators, state colors — instantiated as two palettes: **Graphite** (dark,
 the default) and **Daylight** (light, for shared screens and bright rooms).
-The application paints
-through them: `theme::resolve` maps a Graphite-authored chrome color onto the
-active palette at draw time, so switching repaints every panel, row and label —
-and leaves what you drew alone, because artwork, smart guides and watermarks are
-not roles.
-
-Switch it from the TOKENS panel button, the ticked rows in the app menu, or
-`⌘K` → `Theme: Daylight (light)`. What keeps the palettes honest is an audit,
-not a vibe: every text role is measured against every surface it can
+The CLI and design-system crate paint through those roles. Artwork, smart
+guides and watermarks are not roles. What keeps the palettes honest is an
+audit, not a vibe: every text role is measured against every surface it can
 land on (plus labels on accent fills, and the 3:1 floor for non-text indicators)
 using the WCAG 2.1 contrast formula.
 
@@ -98,30 +85,29 @@ PR instead of a redesign.
 
 ## UI
 
-Designer **chrome** (panels, inspector, tool dock) also ships as a React app in
-[`apps/web`](apps/web/README.md). It talks to the document through a command API
-so a future WASM `x-editor` can replace the in-memory engine without rewriting
-the shell. The GPU canvas, undo, layout solver and `.x` IO stay in Rust;
-`x_native_app` is unchanged.
+The product interface is the React designer in [`apps/web`](apps/web/README.md)
+(Figma UI3 chrome). It talks to the document through a command API so a future
+WASM `x-editor` can replace the in-memory engine without rewriting the shell.
+Undo, layout, `.x` IO and headless GPU export stay in Rust.
 
-The native Rust UI in `apps/x-designer/src/bin/x_native_app/` is the active
-product interface, implementing the Graphite & Signal design system:
-app shell, home, tool rail, pages + layers, contextual inspector, status bar,
-command palette. Runtime behavior uses real local documents; fixture content is
-available only via `--demo`. See the [capability map](docs/UI_CAPABILITY_MAP.md),
-[icon system](docs/ICON_SYSTEM.md), [product direction](docs/X_NATIVE_PROFESSIONAL_UI.md)
-and [roadmap](docs/X_NATIVE_IMPLEMENTATION_ROADMAP.md). The chrome is held to a
-contract in `crates/x-ui`: the [screen contract](docs/SCREEN_CONTRACT.md) lists
-every surface and what it owes, and the
-[component contract](docs/COMPONENT_CONTRACT.md) the components they are built
-from — heights, states, hit regions and who paints each one.
+There is **no native GPU chrome**. The old `x_native_app` window (Vello panels,
+immediate-mode inspector) was removed so there is one UI to design and ship.
+
+```bash
+cd apps/web && npm install && npm run dev
+```
 
 ## Build
 
 ```bash
-sudo apt-get install -y libgtk-3-dev   # Linux dialogs (rfd)
-cargo build --release -p x-designer --bin x_native_app
-cargo run --release -p x-designer --bin x_native_app
+cargo build --release -p x-designer --bin x_native
+cargo run --release -p x-designer --bin x_native -- --help
+```
+
+Headless GPU proof (needs a Vulkan adapter, software is fine):
+
+```bash
+cargo run --release -p x-designer --bin render_headless
 ```
 
 ## Test
@@ -129,7 +115,7 @@ cargo run --release -p x-designer --bin x_native_app
 ```bash
 ./scripts/check.sh          # fmt, clippy, tests, doc references, CLI smoke
 cargo test --workspace
-cargo test -p x-designer --bin x_native_app -- --ignored   # headless GPU screenshot tests (needs software Vulkan)
+cd apps/web && npx tsc -b
 ```
 
 ## Repository notes

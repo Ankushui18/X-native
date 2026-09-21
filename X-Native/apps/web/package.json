@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Figma-like designer chrome (React) over the X-Native document command API. Native GPU app stays in x_native_app.",
+  "description": "X-Native product UI: Figma-like designer chrome (React) over the document command API.",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
     "build": "tsc -b && vite build",
