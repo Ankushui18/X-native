@@ -921,6 +921,21 @@ fn explicit_line_height_routes_to_styled_pipeline() {
     let mut legacy = plain.clone();
     legacy.bindings.insert("lh".into(), "1.5".into());
     assert!(super::text_needs_styled(&legacy));
+    // the fast path drops baseline shift / word / paragraph / letter spacing
+    for key in ["bs", "ws", "ps", "ls"] {
+        let mut spaced = plain.clone();
+        spaced.bindings.insert(key.into(), "4".into());
+        assert!(
+            super::text_needs_styled(&spaced),
+            "{key} must take the styled shaper"
+        );
+        let mut zero = plain.clone();
+        zero.bindings.insert(key.into(), "0".into());
+        assert!(
+            !super::text_needs_styled(&zero),
+            "zero {key} is a no-op on the fast path"
+        );
+    }
 }
 
 #[cfg(test)]

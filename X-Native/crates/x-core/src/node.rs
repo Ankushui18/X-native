@@ -1272,31 +1272,96 @@ pub fn plain_part(text: &str) -> TextPart {
 }
 
 /// Text-case transform (the `tc` binding): "upper" | "lower" | "title".
-/// Anything else (including None) is identity. NOTE: case can change the
-/// char count (ß -> SS), so callers apply it only to plain text (no rich
-/// runs) or before building runs.
+/// Anything else (including None) is identity. Case can change the char
+/// count (ß → SS); pair with [`apply_text_case_with_runs`] when the node
+/// carries rich-text ranges so those CHAR indices stay on the same glyphs.
 pub fn apply_text_case(text: &str, mode: Option<&str>) -> String {
-    match mode {
-        Some("upper") | Some("UPPER") => text.to_uppercase(),
-        Some("lower") | Some("LOWER") => text.to_lowercase(),
-        Some("title") | Some("TITLE") => {
-            let mut out = String::with_capacity(text.len());
-            let mut at_word_start = true;
-            for c in text.chars() {
+    apply_text_case_with_runs(text, &[], mode).0
+}
+
+/// Apply [`apply_text_case`] and remap `runs` onto the cased string.
+/// Each original character maps onto however many output characters it
+/// produced, so a run covering ß still covers both S's after uppercase.
+pub fn apply_text_case_with_runs(
+    text: &str,
+    runs: &[TextRun],
+    mode: Option<&str>,
+) -> (String, Vec<TextRun>) {
+    let kind = match mode {
+        Some("upper") | Some("UPPER") => 1u8,
+        Some("lower") | Some("LOWER") => 2,
+        Some("title") | Some("TITLE") => 3,
+        _ => 0,
+    };
+    if kind == 0 {
+        return (text.to_string(), runs.to_vec());
+    }
+    let orig_n = text.chars().count();
+    let mut out = String::with_capacity(text.len());
+    // map[i] = output char index of original char i; map[orig_n] = new length
+    let mut map = Vec::with_capacity(orig_n + 1);
+    map.push(0);
+    let mut out_n = 0usize;
+    let mut at_word_start = true;
+    for c in text.chars() {
+        match kind {
+            1 => {
+                for u in c.to_uppercase() {
+                    out.push(u);
+                    out_n += 1;
+                }
+            }
+            2 => {
+                for u in c.to_lowercase() {
+                    out.push(u);
+                    out_n += 1;
+                }
+            }
+            _ => {
                 if c.is_whitespace() {
                     at_word_start = true;
                     out.push(c);
+                    out_n += 1;
                 } else if at_word_start {
-                    out.extend(c.to_uppercase());
                     at_word_start = false;
+                    for u in c.to_uppercase() {
+                        out.push(u);
+                        out_n += 1;
+                    }
                 } else {
-                    out.extend(c.to_lowercase());
+                    for u in c.to_lowercase() {
+                        out.push(u);
+                        out_n += 1;
+                    }
                 }
             }
-            out
         }
-        _ => text.to_string(),
+        map.push(out_n);
     }
+    if runs.is_empty() {
+        return (out, Vec::new());
+    }
+    if out_n == orig_n {
+        return (out, runs.to_vec());
+    }
+    let remapped = runs
+        .iter()
+        .map(|r| {
+            let s = r.start.min(orig_n);
+            let e = r.start.saturating_add(r.len).min(orig_n);
+            TextRun {
+                start: map[s],
+                len: map[e].saturating_sub(map[s]),
+                color: r.color,
+                size: r.size,
+                font: r.font.clone(),
+                weight: r.weight,
+                italic: r.italic,
+                ls: r.ls,
+            }
+        })
+        .collect();
+    (out, remapped)
 }
 
 pub fn resolve_text_parts(text: &str, runs: &[TextRun]) -> Vec<TextPart> {
@@ -2401,6 +2466,35 @@ mod layout_grid_tests {
         );
         assert_eq!(apply_text_case("same", None), "same");
         assert_eq!(apply_text_case("same", Some("nonesuch")), "same");
+    }
+
+    #[test]
+    fn text_case_remaps_rich_runs_when_char_count_grows() {
+        // ß uppercases to SS (1 → 2 chars). A run on ß must cover both S's.
+        let red = Color::from_rgb8(255, 0, 0);
+        let runs = [TextRun {
+            start: 1,
+            len: 1,
+            color: Some(red),
+            ..Default::default()
+        }];
+        let (cased, remapped) = apply_text_case_with_runs("aße", &runs, Some("upper"));
+        assert_eq!(cased, "ASSE");
+        assert_eq!(remapped.len(), 1);
+        assert_eq!(remapped[0].start, 1);
+        assert_eq!(remapped[0].len, 2);
+        assert_eq!(remapped[0].color, Some(red));
+        let parts = resolve_text_parts(&cased, &remapped);
+        assert_eq!(parts[0].text, "A");
+        assert_eq!(parts[1].text, "SS");
+        assert_eq!(parts[1].color, Some(red));
+        assert_eq!(parts[2].text, "E");
+        // same char count: ranges stay put
+        let (titled, same) =
+            apply_text_case_with_runs("hello world", &runs, Some("title"));
+        assert_eq!(titled, "Hello World");
+        assert_eq!(same[0].start, 1);
+        assert_eq!(same[0].len, 1);
     }
 
     /// Figma's list styles (help 360040449773): three rows in their order,

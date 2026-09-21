@@ -1452,23 +1452,19 @@ fn lower(
             let text_override = overrides
                 .get(&node.id)
                 .and_then(|v| v.strip_prefix("text:"));
+            let tc = node.bindings.get("tc").map(String::as_str);
+            let (cased, cased_runs) = if text_override.is_none() {
+                x_core::apply_text_case_with_runs(content, &node.text_runs, tc)
+            } else {
+                (x_core::apply_text_case(content, tc), Vec::new())
+            };
+            let content = cased.as_str();
             let base_parts: Option<Vec<TextPart>> =
-                if text_override.is_none() && !node.text_runs.is_empty() {
-                    Some(resolve_text_parts(content, &node.text_runs))
+                if text_override.is_none() && !cased_runs.is_empty() {
+                    Some(resolve_text_parts(content, &cased_runs))
                 } else {
                     None
                 };
-            // text case rewrites the CONTENT; rich-run char ranges would go
-            // stale (case can change counts), so case applies to plain text
-            // only — weight/family keep the run pipeline
-            let content_box;
-            let content = if base_parts.is_none() {
-                content_box =
-                    x_core::apply_text_case(content, node.bindings.get("tc").map(String::as_str));
-                content_box.as_str()
-            } else {
-                content
-            };
             // node-level weight (no explicit runs): synthesize one run so the
             // rich pipeline resolves the weighted face ("Inter"+600->Inter-600)
             let weight_runs: Option<Vec<TextPart>> = if base_parts.is_none() {
