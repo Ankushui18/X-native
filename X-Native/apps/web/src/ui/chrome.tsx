@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import type { Engine, Snapshot, Tool, XNode } from "../engine/types";
+import { collectColors, flatten } from "../engine/memory";
 import { Icon, TOOL_ICON, kindIcon } from "./icons";
 import { useTheme, type ThemePref } from "./theme";
 import { ContextMenu, isGroupNode, layerMenu, pageMenu, runMenu } from "./ContextMenu";
@@ -32,7 +33,13 @@ export function NavRail({
         <Icon name="logo" size={20} />
         {menu && (
           <div className="menu" onMouseLeave={() => setMenu(false)}>
-            <button>
+            <button
+              onClick={() => {
+                engine.dispatch({ type: "select", ids: [] });
+                engine.dispatch({ type: "setPage", index: 0 });
+                setMenu(false);
+              }}
+            >
               Back to files <span className="sc">⌘Esc</span>
             </button>
             <hr />
@@ -78,7 +85,11 @@ export function NavRail({
         </button>
       ))}
       <div className="spacer" />
-      <button className="nav" title="File notifications">
+      <button
+        className="nav"
+        title="File notifications"
+        onClick={() => window.alert("You're up to date. No file notifications.")}
+      >
         <Icon name="page" size={16} />
       </button>
     </nav>
@@ -194,11 +205,13 @@ export function LeftPanel({
   snap,
   nav,
   onMinimize,
+  onActions,
 }: {
   engine: Engine;
   snap: Snapshot;
   nav: NavId;
   onMinimize: () => void;
+  onActions?: () => void;
 }) {
   const [q, setQ] = useState("");
   const [pagesOpen, setPagesOpen] = useState(true);
@@ -271,48 +284,10 @@ export function LeftPanel({
           </div>
         </>
       )}
-      {nav === "assets" && (
-        <>
-          <div className="search">
-            <Icon name="search" size={14} />
-            <input placeholder="Search assets…" />
-          </div>
-          <p className="empty">No published libraries</p>
-          <div className="assets-grid">
-            <div className="asset-card">Local</div>
-            <div className="asset-card">Libraries</div>
-          </div>
-        </>
-      )}
-      {nav === "variables" && (
-        <>
-          <div className="h-row">
-            <h3 style={{ margin: 0, fontSize: 11, fontWeight: 500, padding: "8px 4px" }}>
-              Color Primitive
-            </h3>
-            <button className="plus">
-              <Icon name="plus" size={14} />
-            </button>
-          </div>
-          <p className="muted">Variables collections live here — same place as Figma’s Variables view.</p>
-        </>
-      )}
-      {nav === "tools" && (
-        <p className="muted">Plugins, widgets, and shaders. Open Actions (⌘K) to run a tool.</p>
-      )}
-      {nav === "agent" && (
-        <>
-          <div className="file-head">
-            <button className="share" style={{ marginLeft: 0 }}>
-              New chat
-            </button>
-          </div>
-          <p className="muted">
-            Agent history for this file. Chats stay in the left sidebar — same place as Figma’s
-            Agents tab.
-          </p>
-        </>
-      )}
+      {nav === "assets" && <AssetsPane engine={engine} snap={snap} />}
+      {nav === "variables" && <VarsPane engine={engine} snap={snap} />}
+      {nav === "tools" && <ToolsPane onActions={onActions} />}
+      {nav === "agent" && <AgentPane engine={engine} />}
       {pageMenuAt && (
         <ContextMenu
           x={pageMenuAt.x}
@@ -449,7 +424,7 @@ export function Toolbar({
       })}
       <div className="div" />
       <div className="tool">
-        <button className="hit" title="Resources">
+        <button className="hit" title="Resources" onClick={onActions}>
           <Icon name="resources" size={16} />
         </button>
       </div>
@@ -541,6 +516,7 @@ export function bindHotkeys(
     onHide: () => void;
     onMinimize: () => void;
     onNav?: (n: NavId) => void;
+    onPresentExit?: () => void;
   },
 ) {
   const onKey = (e: KeyboardEvent) => {
@@ -643,6 +619,7 @@ export function bindHotkeys(
       return;
     }
     if (e.key === "Escape") {
+      extra.onPresentExit?.();
       engine.dispatch({ type: "select", ids: [] });
       engine.dispatch({ type: "setTool", tool: "select" });
       return;
@@ -702,10 +679,180 @@ export function usePanelDrag(
   };
 }
 
-export function HelpBtn() {
+function AssetsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
+  const [q, setQ] = useState("");
+  const layers = flatten(snap.pages[snap.page].root).filter(
+    (n) => !q || n.name.toLowerCase().includes(q.toLowerCase()),
+  );
   return (
-    <button className="help" title="Help">
-      <Icon name="help" size={14} />
-    </button>
+    <>
+      <div className="search">
+        <Icon name="search" size={14} />
+        <input placeholder="Search assets…" value={q} onChange={(e) => setQ(e.target.value)} />
+      </div>
+      <div className="section-label">Local components</div>
+      <div className="tree">
+        {layers.length === 0 && <p className="empty">No layers in this file</p>}
+        {layers.map((n) => (
+          <div
+            key={n.id}
+            className={`row${snap.selection.includes(n.id) ? " sel" : ""}`}
+            onClick={() => engine.dispatch({ type: "select", ids: [n.id] })}
+            onDoubleClick={() => engine.dispatch({ type: "duplicate" })}
+          >
+            <Icon name={kindIcon(n.kind, n.imageSrc)} size={14} />
+            <span className="name">{n.name}</span>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
+  const colors = Array.from(new Set(collectColors(snap.pages[snap.page].root)));
+  return (
+    <>
+      <div className="h-row">
+        <h3 style={{ margin: 0, fontSize: 11, fontWeight: 500, padding: "8px 4px" }}>Color Primitive</h3>
+        <button
+          className="plus"
+          title="Add from selection"
+          onClick={() => {
+            const id = snap.selection[0];
+            if (id) engine.dispatch({ type: "copyCode" });
+          }}
+        >
+          <Icon name="plus" size={14} />
+        </button>
+      </div>
+      <div className="insp-pad" style={{ display: "grid", gap: 4, padding: "0 12px" }}>
+        {colors.length === 0 && <p className="muted">No colors in this file yet.</p>}
+        {colors.map((c) => (
+          <button
+            key={c}
+            className="color-row"
+            style={{ width: "100%", textAlign: "left" }}
+            onClick={() => {
+              const id = snap.selection[0];
+              if (id) engine.dispatch({ type: "patch", id, patch: { fill: c, fillVisible: true } });
+            }}
+          >
+            <span className="swatch" style={{ background: c }} />
+            <span className="hex">{c.replace("#", "")}</span>
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function ToolsPane({ onActions }: { onActions?: () => void }) {
+  const tools = ["Place image", "Duplicate", "Group", "Undo", "Redo", "Zoom to 100%"];
+  return (
+    <>
+      <p className="muted">Plugins and actions for this file.</p>
+      <div className="presets">
+        {tools.map((t) => (
+          <button key={t} onClick={() => onActions?.()}>
+            {t}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function AgentPane({ engine }: { engine: Engine }) {
+  const [chats, setChats] = useState<{ title: string; body: string }[]>([
+    { title: "New chat", body: "Ask the agent to add a frame, text, or color." },
+  ]);
+  const [msg, setMsg] = useState("");
+  const send = () => {
+    const t = msg.trim();
+    if (!t) return;
+    setChats((c) => [...c, { title: t.slice(0, 28), body: t }]);
+    setMsg("");
+    if (/frame/i.test(t)) {
+      engine.dispatch({ type: "add", kind: "frame", x: 120, y: 80, w: 390, h: 844, extra: { name: "Agent frame" } });
+    } else if (/text/i.test(t)) {
+      engine.dispatch({
+        type: "add",
+        kind: "text",
+        x: 140,
+        y: 120,
+        w: 240,
+        h: 32,
+        extra: { text: t, name: "Agent text" },
+      });
+    } else if (/rect|box/i.test(t)) {
+      engine.dispatch({ type: "add", kind: "rect", x: 160, y: 160, w: 160, h: 80 });
+    }
+  };
+  return (
+    <>
+      <div className="file-head">
+        <button className="share" style={{ marginLeft: 0 }} onClick={() => setChats([{ title: "New chat", body: "" }])}>
+          New chat
+        </button>
+      </div>
+      <div className="tree">
+        {chats.map((c, i) => (
+          <div key={i} className="row">
+            <Icon name="agent" size={14} />
+            <span className="name">{c.title}</span>
+          </div>
+        ))}
+      </div>
+      <div className="search">
+        <input
+          placeholder="Ask to add a frame, text…"
+          value={msg}
+          onChange={(e) => setMsg(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") send();
+          }}
+        />
+      </div>
+    </>
+  );
+}
+
+export function HelpBtn() {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button className="help" title="Help" onClick={() => setOpen((v) => !v)}>
+        <Icon name="help" size={14} />
+      </button>
+      {open && (
+        <div className="help-pop" onClick={() => setOpen(false)}>
+          <div className="help-card" onClick={(e) => e.stopPropagation()}>
+            <h4>Shortcuts</h4>
+            {[
+              ["V", "Move"],
+              ["F", "Frame"],
+              ["R", "Rectangle"],
+              ["O", "Ellipse"],
+              ["T", "Text"],
+              ["⌘Z", "Undo"],
+              ["⌘D", "Duplicate"],
+              ["⌘G", "Group"],
+              ["⌘K", "Actions"],
+              ["⇧D", "Dev Mode"],
+              ["⌘\\", "Hide UI"],
+            ].map(([k, l]) => (
+              <div key={k} className="proto-row">
+                <span>{l}</span>
+                <strong>{k}</strong>
+              </div>
+            ))}
+            <button className="export-run" style={{ margin: "8px 12px", width: "calc(100% - 24px)" }} onClick={() => setOpen(false)}>
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

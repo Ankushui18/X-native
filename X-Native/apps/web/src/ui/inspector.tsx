@@ -22,13 +22,18 @@ import { collectColors, defaultEffect, defaultLayout, find, worldPos } from "../
 import { Icon } from "./icons";
 import { FillPicker, type FillValue } from "./FillPicker";
 import { isNone } from "./color";
+import { ContextMenu, runMenu } from "./ContextMenu";
 
 export function RightPanel({
   engine,
   snap,
+  onPresent,
+  onShare,
 }: {
   engine: Engine;
   snap: Snapshot;
+  onPresent?: () => void;
+  onShare?: () => void;
 }) {
   const tabs: { id: RightTab; label: string }[] = [
     { id: "design", label: "Design" },
@@ -45,10 +50,12 @@ export function RightPanel({
         <div className="avatar" title="You">
           X
         </div>
-        <button className="icon-btn" title="Present">
+        <button className="icon-btn" title="Present" onClick={() => onPresent?.()}>
           <Icon name="play" />
         </button>
-        <button className="share">Share</button>
+        <button className="share" onClick={() => onShare?.()}>
+          Share
+        </button>
       </div>
       <div className="tabs">
         {inspect ? (
@@ -83,7 +90,7 @@ export function RightPanel({
         </button>
       </div>
       <div className="inspector">
-        {snap.rightTab === "prototype" && !inspect && <Prototype n={n} />}
+        {snap.rightTab === "prototype" && !inspect && <Prototype n={n} engine={engine} />}
         {inspect && <Inspect n={n} />}
         {snap.rightTab === "design" && !inspect && !n && (
           <PageDesign engine={engine} tool={snap.tool} />
@@ -180,7 +187,9 @@ function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
   );
 }
 
-function Prototype({ n }: { n?: XNode }) {
+function Prototype({ n, engine }: { n?: XNode; engine: Engine }) {
+  const [device, setDevice] = useState(n?.kind === "frame" ? "iPhone 14" : "None");
+  const [flows, setFlows] = useState<string[]>(n?.kind === "frame" ? ["Home"] : []);
   return (
     <>
       <div className="h-row">
@@ -188,29 +197,54 @@ function Prototype({ n }: { n?: XNode }) {
       </div>
       <div className="proto-row">
         <span>Device</span>
-        <strong>{n?.kind === "frame" ? "iPhone 14" : "None"}</strong>
+        <select
+          value={device}
+          onChange={(e) => setDevice(e.target.value)}
+          style={{ border: 0, background: "var(--input)", borderRadius: 6, height: 24, padding: "0 6px" }}
+        >
+          {["None", "iPhone 14", "iPhone 14 Pro Max", "Desktop", "Tablet"].map((d) => (
+            <option key={d}>{d}</option>
+          ))}
+        </select>
       </div>
       <div className="proto-row">
-        <span>Model</span>
-        <strong>Black</strong>
-      </div>
-      <div className="proto-row">
-        <span>Background</span>
-        <strong>000000</strong>
+        <span>Starting frame</span>
+        <strong>{n?.kind === "frame" ? n.name : "—"}</strong>
       </div>
       <div className="proto-preview">
-        <div className="phone" />
+        <div className="phone" style={{ background: n?.fillVisible ? n.fill : "#fff" }} />
       </div>
       <div className="h-row">
         <h3>Flows</h3>
-        <button className="plus">
+        <button
+          className="plus"
+          title="Add flow"
+          onClick={() => setFlows((f) => [...f, n?.name || `Flow ${f.length + 1}`])}
+        >
           <Icon name="plus" size={14} />
         </button>
       </div>
+      {flows.map((f, i) => (
+        <div key={i} className="proto-row">
+          <span>{f}</span>
+          <button className="mini" onClick={() => setFlows((xs) => xs.filter((_, j) => j !== i))}>
+            <Icon name="minus" size={12} />
+          </button>
+        </div>
+      ))}
       <p className="muted">
-        Drag the blue node on a selected frame to connect a flow. Interactions
-        live on this tab in Figma.
+        Present plays the selected frame. Add a flow, then press Present in the header.
       </p>
+      {n && (
+        <div className="insp-pad">
+          <button
+            className="export-run"
+            onClick={() => engine.dispatch({ type: "setRightTab", tab: "design" })}
+          >
+            Edit in Design
+          </button>
+        </div>
+      )}
     </>
   );
 }
@@ -236,9 +270,16 @@ function Inspect({ n }: { n?: XNode }) {
     <>
       <div className="h-row">
         <h3>CSS</h3>
+        <button
+          className="plus"
+          title="Copy CSS"
+          onClick={() => void navigator.clipboard?.writeText(css)}
+        >
+          <Icon name="copy" size={14} />
+        </button>
       </div>
       <pre className="css-block">{css}</pre>
-      <p className="muted">Dev Mode — iOS, Android, and Tailwind live in native Inspect.</p>
+      <p className="muted">Dev Mode — copy CSS from the selected layer.</p>
     </>
   );
 }
@@ -261,6 +302,7 @@ function Design({
   const [conOpen, setConOpen] = useState(false);
   const [cornersOpen, setCornersOpen] = useState(!!n.cornerIndependent);
   const [strokeMore, setStrokeMore] = useState(n.strokeDash > 0);
+  const [more, setMore] = useState<{ x: number; y: number } | null>(null);
   const multi = snap.selection.length > 1;
   const num = (
     key: "x" | "y" | "w" | "h" | "rotation" | "opacity" | "fontSize" | "letterSpacing" | "lineHeight" | "paragraphSpacing",
@@ -317,10 +359,34 @@ function Design({
         >
           <Icon name="dev" size={14} />
         </button>
-        <button className="icon-btn" title="More">
+        <button
+          className="icon-btn"
+          title="More"
+          onClick={(e) => {
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            setMore({ x: r.right - 220, y: r.bottom + 4 });
+          }}
+        >
           <Icon name="more" size={14} />
         </button>
       </div>
+      {more && (
+        <ContextMenu
+          x={more.x}
+          y={more.y}
+          items={[
+            { kind: "action", id: "copy", label: "Copy", shortcut: "⌘C", icon: "copy" },
+            { kind: "action", id: "duplicate", label: "Duplicate", shortcut: "⌘D", icon: "copy" },
+            { kind: "action", id: "copyCode", label: "Copy as CSS", icon: "code" },
+            { kind: "sep" },
+            { kind: "action", id: "lockSel", label: "Lock/Unlock", shortcut: "⇧⌘L", icon: "lock" },
+            { kind: "action", id: "hideSel", label: "Show/Hide", shortcut: "⇧⌘H", icon: "eye" },
+            { kind: "action", id: "delete", label: "Delete", shortcut: "⌫", icon: "trash" },
+          ]}
+          onRun={(id) => runMenu(engine, id)}
+          onClose={() => setMore(null)}
+        />
+      )}
 
       {multi && <SelectionColors engine={engine} snap={snap} />}
 
@@ -426,7 +492,17 @@ function Design({
           >
             <Icon name="layout-h" />
           </button>
-          <button title="Grid">
+          <button
+            className={n.layout?.wrap && n.layout.direction === "horizontal" ? "on" : ""}
+            title="Grid"
+            onClick={() =>
+              engine.dispatch({
+                type: "autoLayout",
+                id: n.id,
+                layout: { ...(n.layout ?? defaultLayout()), direction: "horizontal", wrap: true, gap: 8 },
+              })
+            }
+          >
             <Icon name="layout-grid" />
           </button>
           <button

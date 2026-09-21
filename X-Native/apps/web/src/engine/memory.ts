@@ -120,13 +120,75 @@ function findParent(root: XNode, id: string): XNode | null {
 function applyLayout(n: XNode) {
   for (const c of n.children) applyLayout(c);
   const l = n.layout;
-  if (!l) return;
+  if (!l) {
+    if (n.children.length && (n.sizingW === "hug" || n.sizingH === "hug")) {
+      const vis = n.children.filter((c) => c.visible);
+      if (vis.length) {
+        if (n.sizingW === "hug") n.w = Math.max(1, Math.max(...vis.map((c) => c.x + c.w)));
+        if (n.sizingH === "hug") n.h = Math.max(1, Math.max(...vis.map((c) => c.y + c.h)));
+      }
+    }
+    return;
+  }
   const flow = n.children.filter((c) => c.visible);
   const [pl, pr, pt, pb] = l.padding;
   const horiz = l.direction === "horizontal";
   const gap = l.gap;
   const innerW = n.w - pl - pr;
   const innerH = n.h - pt - pb;
+  const fillers = flow.filter((c) => (horiz ? c.sizingW : c.sizingH) === "fill");
+  if (fillers.length) {
+    const used = flow.reduce(
+      (s, c) => s + ((horiz ? c.sizingW : c.sizingH) === "fill" ? 0 : horiz ? c.w : c.h),
+      0,
+    );
+    const leftover = Math.max(1, (horiz ? innerW : innerH) - used - gap * Math.max(0, flow.length - 1));
+    const each = leftover / fillers.length;
+    for (const c of fillers) {
+      if (horiz) c.w = Math.max(1, each);
+      else c.h = Math.max(1, each);
+    }
+  }
+  if (l.wrap && flow.length) {
+    let x = pl;
+    let y = pt;
+    let rowH = 0;
+    let rowW = 0;
+    const limit = horiz ? n.w - pr : n.h - pb;
+    for (const c of flow) {
+      const main = horiz ? c.w : c.h;
+      const cur = horiz ? x : y;
+      if (cur > (horiz ? pl : pt) && cur + main > limit) {
+        if (horiz) {
+          x = pl;
+          y += rowH + gap;
+        } else {
+          y = pt;
+          x += rowW + gap;
+        }
+        rowH = 0;
+        rowW = 0;
+      }
+      c.x = x;
+      c.y = y;
+      if (horiz) {
+        x += c.w + gap;
+        rowH = Math.max(rowH, c.h);
+      } else {
+        y += c.h + gap;
+        rowW = Math.max(rowW, c.w);
+      }
+    }
+    if (l.sizing === "hug" || n.sizingW === "hug" || n.sizingH === "hug") {
+      if (horiz) n.w = Math.max(n.w, x + pr);
+      else n.h = Math.max(n.h, y + pb);
+    }
+    if (l.cross === "hug") {
+      if (horiz) n.h = y + rowH + pb;
+      else n.w = x + rowW + pr;
+    }
+    return;
+  }
   const mainTotal = flow.reduce((s, c) => s + (horiz ? c.w : c.h), 0) + gap * Math.max(0, flow.length - 1);
   let origin = horiz ? pl : pt;
   if (l.justify === "center") origin += Math.max(0, (horiz ? innerW : innerH) - mainTotal) / 2;
@@ -151,11 +213,11 @@ function applyLayout(n: XNode) {
       crossMax = Math.max(crossMax, c.w);
     }
   }
-  if (l.sizing === "hug") {
-    if (horiz) n.w = origin + mainTotal + pr - (l.justify === "min" ? 0 : 0);
-    else n.h = (l.justify === "min" ? pt : pt) + mainTotal + pb;
+  if (l.sizing === "hug" || n.sizingW === "hug") {
     if (horiz) n.w = pl + mainTotal + pr;
-    else n.h = pt + mainTotal + pb;
+  }
+  if (l.sizing === "hug" || n.sizingH === "hug") {
+    if (!horiz) n.h = pt + mainTotal + pb;
   }
   if (l.cross === "hug") {
     if (horiz) n.h = crossMax + pt + pb;

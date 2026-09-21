@@ -26,8 +26,23 @@ export default function App() {
   const [minUi, setMinUi] = useState(false);
   const [hideUi, setHideUi] = useState(false);
   const [actions, setActions] = useState(false);
+  const [toast, setToast] = useState("");
   const leftDrag = usePanelDrag(leftW, setLeftW, 180, 420);
   const rightDrag = usePanelDrag(rightW, setRightW, 200, 420, true);
+
+  const share = () => {
+    const page = snap.pages[snap.page];
+    const text = `${snap.fileName} · ${page.name} · ${window.location.href}`;
+    void navigator.clipboard?.writeText(text);
+    setToast("Link copied");
+    window.setTimeout(() => setToast(""), 1600);
+  };
+  const present = () => {
+    setHideUi(true);
+    engine.dispatch({ type: "setRightTab", tab: "prototype" });
+    setToast("Presenting — press Esc to exit");
+    window.setTimeout(() => setToast(""), 1800);
+  };
 
   useEffect(
     () =>
@@ -36,6 +51,7 @@ export default function App() {
         onHide: () => setHideUi((v) => !v),
         onMinimize: () => setMinUi((v) => !v),
         onNav: setNav,
+        onPresentExit: () => setHideUi(false),
       }),
     [engine],
   );
@@ -59,6 +75,7 @@ export default function App() {
         snap={snap}
         nav={nav}
         onMinimize={() => setMinUi((v) => !v)}
+        onActions={() => setActions(true)}
       />
       <div
         className="split l"
@@ -84,8 +101,9 @@ export default function App() {
           />
         )}
       </div>
-      <RightPanel engine={engine} snap={snap} />
+      <RightPanel engine={engine} snap={snap} onPresent={present} onShare={share} />
       <div className="split r" style={{ display: hideUi ? "none" : undefined }} {...rightDrag} />
+      {toast && <div className="toast">{toast}</div>}
     </div>
   );
 }
