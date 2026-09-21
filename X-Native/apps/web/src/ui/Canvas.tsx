@@ -94,8 +94,9 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       ctx.fillStyle = cssRgba(pageRoot.fill, pageRoot.fillOpacity ?? 1);
       ctx.fillRect(0, 0, w, h);
     }
-    if (snap.zoom >= 2) {
-      ctx.strokeStyle = grid;
+    const page = snap.pages[snap.page];
+    if (page.pixelGrid || snap.zoom >= 2) {
+      ctx.strokeStyle = page.pixelGrid ? page.pixelGridColor || grid : grid;
       ctx.lineWidth = 1;
       const step = snap.zoom;
       ctx.beginPath();
@@ -109,7 +110,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       }
       ctx.stroke();
     }
-    const root = snap.pages[snap.page].root;
+    const root = page.root;
     const z = snap.zoom;
     const paint = (n: XNode, px: number, py: number) => {
       if (!n.visible) return;
@@ -126,10 +127,12 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       const sy = snap.panY + y * z;
       const sw = n.w * z;
       const sh = n.h * z;
-      const r = n.cornerRadii[0] * z;
+      const radii = n.cornerIndependent
+        ? n.cornerRadii.map((r) => Math.max(0, r * z))
+        : Math.max(0, (n.cornerRadii[0] ?? 0) * z);
       const round = () => {
         ctx.beginPath();
-        if (typeof ctx.roundRect === "function") ctx.roundRect(sx, sy, sw, sh, r);
+        if (typeof ctx.roundRect === "function") ctx.roundRect(sx, sy, sw, sh, radii);
         else ctx.rect(sx, sy, sw, sh);
       };
       if (n.kind === "ellipse") {
@@ -140,9 +143,9 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         ctx.moveTo(sx, sy + sh / 2);
         ctx.lineTo(sx + sw, sy + sh / 2);
       } else if (n.kind === "star") {
-        starPath(ctx, sx + sw / 2, sy + sh / 2, Math.min(sw, sh) / 2, 5);
+        starPath(ctx, sx + sw / 2, sy + sh / 2, Math.min(sw, sh) / 2, n.count || 5, n.starRatio || 0.4);
       } else if (n.kind === "poly") {
-        polyPath(ctx, sx + sw / 2, sy + sh / 2, Math.min(sw, sh) / 2, 3);
+        polyPath(ctx, sx + sw / 2, sy + sh / 2, Math.min(sw, sh) / 2, n.count || 3);
       } else {
         round();
       }
@@ -190,7 +193,27 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         ctx.globalAlpha *= n.strokeOpacity ?? 1;
         ctx.strokeStyle = n.strokePaint;
         ctx.lineWidth = Math.max(1, n.strokeWidth * z);
+        ctx.lineCap = n.strokeCap === "round" ? "round" : n.strokeCap === "square" ? "square" : "butt";
+        ctx.lineJoin = n.strokeJoin === "round" ? "round" : n.strokeJoin === "bevel" ? "bevel" : "miter";
+        if (n.strokeDash > 0) {
+          const dash = n.strokeDash * z;
+          const gap = (n.strokeGap || n.strokeDash) * z;
+          ctx.setLineDash([dash, gap]);
+        } else {
+          ctx.setLineDash([]);
+        }
         ctx.stroke();
+        if (n.kind === "arrow" || n.strokeCap === "arrow") {
+          ctx.setLineDash([]);
+          const ah = Math.max(6, n.strokeWidth * 3 * z);
+          ctx.beginPath();
+          ctx.moveTo(sx + sw, sy + sh / 2);
+          ctx.lineTo(sx + sw - ah, sy + sh / 2 - ah * 0.55);
+          ctx.lineTo(sx + sw - ah, sy + sh / 2 + ah * 0.55);
+          ctx.closePath();
+          ctx.fillStyle = n.strokePaint;
+          ctx.fill();
+        }
         ctx.restore();
       }
       if (n.kind === "text" && edit?.id !== n.id) {
@@ -234,7 +257,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     const label = (n: XNode, px: number, py: number) => {
       const x = px + n.x;
       const y = py + n.y;
-      if (n.kind === "frame") {
+      if (n.kind === "frame" && n.showName !== false) {
         ctx.fillText(n.name, snap.panX + x * z, snap.panY + y * z - 14);
       }
       for (const c of n.children) label(c, x, y);
@@ -434,7 +457,12 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       setBand({ x, y, w: Math.abs(e.clientX - d.sx), h: Math.abs(e.clientY - d.sy) });
     } else if (d.mode === "resize" && d.orig && d.id != null && d.corner != null) {
       const b = toWorld(e.clientX, e.clientY);
-      const next = resizeFrom(d.orig, d.corner, b.x, b.y);
+      let next = resizeFrom(d.orig, d.corner, b.x, b.y);
+      const locked = worldPos(snap.pages[snap.page].root, d.id)?.node.aspectLocked;
+      if (locked && d.orig.w > 0) {
+        const ratio = d.orig.h / d.orig.w;
+        next.h = Math.max(1, next.w * ratio);
+      }
       engine.dispatch({ type: "resize", id: d.id, ...next });
     } else if (d.mode === "rotate" && d.orig && d.id) {
       const wp = worldPos(snap.pages[snap.page].root, d.id);
@@ -748,11 +776,14 @@ function starPath(
   cy: number,
   r: number,
   n: number,
+  ratio = 0.4,
 ) {
+  const pts = Math.max(3, Math.round(n));
+  const inner = Math.max(0.05, Math.min(0.95, ratio));
   ctx.beginPath();
-  for (let i = 0; i < n * 2; i++) {
-    const a = (i * Math.PI) / n - Math.PI / 2;
-    const rad = i % 2 === 0 ? r : r * 0.4;
+  for (let i = 0; i < pts * 2; i++) {
+    const a = (i * Math.PI) / pts - Math.PI / 2;
+    const rad = i % 2 === 0 ? r : r * inner;
     const x = cx + Math.cos(a) * rad;
     const y = cy + Math.sin(a) * rad;
     if (i === 0) ctx.moveTo(x, y);
@@ -769,8 +800,9 @@ function polyPath(
   n: number,
 ) {
   ctx.beginPath();
-  for (let i = 0; i < n; i++) {
-    const a = (i * 2 * Math.PI) / n - Math.PI / 2;
+  const pts = Math.max(3, Math.round(n));
+  for (let i = 0; i < pts; i++) {
+    const a = (i * 2 * Math.PI) / pts - Math.PI / 2;
     const x = cx + Math.cos(a) * r;
     const y = cy + Math.sin(a) * r;
     if (i === 0) ctx.moveTo(x, y);

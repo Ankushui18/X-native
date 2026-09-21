@@ -25,10 +25,20 @@ export type TextAlignVertical = "top" | "middle" | "bottom";
 export type TextDecoration = "none" | "underline" | "strikethrough";
 export type TextCase = "none" | "upper" | "lower" | "title" | "small-caps";
 export type StrokeAlign = "inside" | "center" | "outside";
+export type StrokeCap = "none" | "round" | "square" | "arrow";
+export type StrokeJoin = "miter" | "bevel" | "round";
+export type Constraint = "min" | "center" | "max" | "stretch" | "scale";
+export type ExportFormat = "PNG" | "JPG" | "SVG" | "PDF";
 export type RightTab = "design" | "prototype" | "inspect";
 export type LeftTab = "layers" | "assets" | "tokens";
 export type FillType = "solid" | "linear" | "radial" | "angular" | "diamond" | "image";
 export type EffectKind = "drop-shadow" | "inner-shadow" | "layer-blur" | "background-blur";
+
+export interface ExportPreset {
+  format: ExportFormat;
+  scale: number;
+  suffix: string;
+}
 
 export interface Effect {
   kind: EffectKind;
@@ -92,12 +102,26 @@ export interface XNode {
   strokeVisible: boolean;
   strokeWidth: number;
   strokeAlign: StrokeAlign;
+  strokeDash: number;
+  strokeGap: number;
+  strokeCap: StrokeCap;
+  strokeJoin: StrokeJoin;
   opacity: number;
   effects: Effect[];
   visible: boolean;
   locked: boolean;
   overflow: Overflow;
   cornerRadii: [number, number, number, number];
+  cornerIndependent: boolean;
+  aspectLocked: boolean;
+  sizingW: Sizing;
+  sizingH: Sizing;
+  constraintH: Constraint;
+  constraintV: Constraint;
+  count: number;
+  starRatio: number;
+  showName: boolean;
+  exports: ExportPreset[];
   blendMode: string;
   imageSrc: string;
   text: string;
@@ -121,6 +145,8 @@ export interface Page {
   id: string;
   name: string;
   root: XNode;
+  pixelGrid: boolean;
+  pixelGridColor: string;
 }
 
 export interface Snapshot {
@@ -184,7 +210,9 @@ export type Command =
   | { type: "flip"; axis: "h" | "v" }
   | { type: "duplicatePage" }
   | { type: "deletePage" }
-  | { type: "renamePage"; name: string };
+  | { type: "renamePage"; name: string }
+  | { type: "patchPage"; patch: Partial<Pick<Page, "pixelGrid" | "pixelGridColor" | "name">> }
+  | { type: "distribute"; axis: "h" | "v" };
 
 export interface Engine {
   snapshot(): Snapshot;

@@ -354,6 +354,63 @@ export function Icon({
           <path d="M4.2 8.8V5.2A1.2 1.2 0 015.4 4h3.6M11.8 7.2v3.6A1.2 1.2 0 0110.6 12H7" />
         </svg>
       );
+    case "aspect":
+      return (
+        <svg {...p}>
+          <path d="M6.2 4.2H4.4A1.2 1.2 0 003.2 5.4v1.8M9.8 4.2h1.8A1.2 1.2 0 0112.8 5.4v1.8M6.2 11.8H4.4A1.2 1.2 0 013.2 10.6V8.8M9.8 11.8h1.8A1.2 1.2 0 0012.8 10.6V8.8" />
+        </svg>
+      );
+    case "wrap":
+      return (
+        <svg {...p}>
+          <path d="M3.2 4.4h6.4M3.2 8h9.6M3.2 11.6h4.8" />
+          <path d="M12.4 4.4v3.6H10" />
+        </svg>
+      );
+    case "dash":
+      return (
+        <svg {...p}>
+          <path d="M2.6 8h2.4M7 8h2.4M11.2 8h2.2" />
+        </svg>
+      );
+    case "cap-none":
+      return (
+        <svg {...p}>
+          <path d="M3 8h10" />
+        </svg>
+      );
+    case "cap-round":
+      return (
+        <svg {...p}>
+          <path d="M3 8h7.4" />
+          <circle cx="11.4" cy="8" r="1.8" />
+        </svg>
+      );
+    case "cap-square":
+      return (
+        <svg {...p}>
+          <path d="M3 8h7.2" />
+          <rect x="10" y="6.2" width="3.6" height="3.6" />
+        </svg>
+      );
+    case "join-miter":
+      return (
+        <svg {...p}>
+          <path d="M3.2 12.4V3.6h8.8" />
+        </svg>
+      );
+    case "join-round":
+      return (
+        <svg {...p}>
+          <path d="M3.2 12.4V6.2A3 3 0 016.2 3.2h6.6" />
+        </svg>
+      );
+    case "join-bevel":
+      return (
+        <svg {...p}>
+          <path d="M3.2 12.4V7.2L7.2 3.2h5.6" />
+        </svg>
+      );
     case "padding":
       return (
         <svg {...p}>

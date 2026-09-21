@@ -50,11 +50,25 @@ function node(
     strokeWidth: kind === "line" || kind === "arrow" ? 1 : 0,
     effects: [] as Effect[],
     strokeAlign: "inside",
+    strokeDash: 0,
+    strokeGap: 0,
+    strokeCap: kind === "arrow" ? "arrow" : "none",
+    strokeJoin: "miter",
     opacity: 1,
     visible: true,
     locked: false,
     overflow: kind === "frame" ? "clip" : "visible",
     cornerRadii: [0, 0, 0, 0],
+    cornerIndependent: false,
+    aspectLocked: false,
+    sizingW: "fixed",
+    sizingH: "fixed",
+    constraintH: "min",
+    constraintV: "min",
+    count: kind === "star" ? 5 : kind === "poly" ? 3 : 0,
+    starRatio: 0.4,
+    showName: kind === "frame",
+    exports: [],
     blendMode: "normal",
     imageSrc: "",
     text: kind === "text" ? "Text" : "",
@@ -212,7 +226,13 @@ function demoPage(): Page {
   });
   applyLayout(phone);
   applyLayout(card);
-  return { id: uid("page"), name: "Page 1", root: pageRoot };
+  return {
+    id: uid("page"),
+    name: "Page 1",
+    root: pageRoot,
+    pixelGrid: false,
+    pixelGridColor: "#cccccc",
+  };
 }
 
 interface Internal {
@@ -603,6 +623,39 @@ export class MemoryEngine implements Engine {
       case "renamePage":
         s.pages[s.page].name = cmd.name;
         break;
+      case "patchPage":
+        Object.assign(s.pages[s.page], cmd.patch);
+        break;
+      case "distribute": {
+        const items = s.selection
+          .map((id) => find(this.root(), id))
+          .filter((n): n is XNode => !!n && !n.locked);
+        if (items.length < 3) break;
+        if (cmd.axis === "h") {
+          items.sort((a, b) => a.x - b.x);
+          const min = items[0].x;
+          const max = items[items.length - 1].x + items[items.length - 1].w;
+          const total = items.reduce((sum, n) => sum + n.w, 0);
+          const gap = (max - min - total) / (items.length - 1);
+          let cursor = min;
+          for (const n of items) {
+            n.x = cursor;
+            cursor += n.w + gap;
+          }
+        } else {
+          items.sort((a, b) => a.y - b.y);
+          const min = items[0].y;
+          const max = items[items.length - 1].y + items[items.length - 1].h;
+          const total = items.reduce((sum, n) => sum + n.h, 0);
+          const gap = (max - min - total) / (items.length - 1);
+          let cursor = min;
+          for (const n of items) {
+            n.y = cursor;
+            cursor += n.h + gap;
+          }
+        }
+        break;
+      }
     }
   }
 }

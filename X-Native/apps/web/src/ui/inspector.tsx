@@ -1,18 +1,24 @@
 import { useState } from "react";
 import type {
   AutoLayout,
+  Constraint,
   EffectKind,
   Engine,
+  ExportFormat,
+  ExportPreset,
   LayoutAlign,
   LayoutJustify,
   RightTab,
+  Sizing,
   Snapshot,
   StrokeAlign,
+  StrokeCap,
+  StrokeJoin,
   TextAlign,
   TextAlignVertical,
   XNode,
 } from "../engine/types";
-import { collectColors, defaultEffect, defaultLayout, worldPos } from "../engine/memory";
+import { collectColors, defaultEffect, defaultLayout, find, worldPos } from "../engine/memory";
 import { Icon } from "./icons";
 import { FillPicker, type FillValue } from "./FillPicker";
 import { isNone } from "./color";
@@ -153,11 +159,23 @@ function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
       </div>
       <div className="hr" />
       <div className="h-row">
-        <h3>Export</h3>
-        <button className="plus" title="Add export">
-          <Icon name="plus" size={14} />
-        </button>
+        <h3>Pixel grid</h3>
       </div>
+      <div className="insp-pad">
+        <ColorRow
+          value={snap.pages[snap.page].pixelGridColor || "#cccccc"}
+          opacity={snap.pages[snap.page].pixelGrid ? 100 : 0}
+          visible={!!snap.pages[snap.page].pixelGrid}
+          recents={["#cccccc", "#e6e6e6", "#8a8a8a", "#0d99ff"]}
+          onChange={(pixelGridColor) =>
+            engine.dispatch({ type: "patchPage", patch: { pixelGridColor, pixelGrid: true } })
+          }
+          onOpacity={(v) => engine.dispatch({ type: "patchPage", patch: { pixelGrid: v > 0 } })}
+          onVisible={(pixelGrid) => engine.dispatch({ type: "patchPage", patch: { pixelGrid } })}
+        />
+      </div>
+      <div className="hr" />
+      <ExportBlock n={root} engine={engine} />
     </>
   );
 }
@@ -240,6 +258,10 @@ function Design({
 }) {
   const [typeOpen, setTypeOpen] = useState(false);
   const [padOpen, setPadOpen] = useState(false);
+  const [conOpen, setConOpen] = useState(false);
+  const [cornersOpen, setCornersOpen] = useState(!!n.cornerIndependent);
+  const [strokeMore, setStrokeMore] = useState(n.strokeDash > 0);
+  const multi = snap.selection.length > 1;
   const num = (
     key: "x" | "y" | "w" | "h" | "rotation" | "opacity" | "fontSize" | "letterSpacing" | "lineHeight" | "paragraphSpacing",
     v: number,
@@ -254,25 +276,40 @@ function Design({
       return;
     }
     if (key === "w" || key === "h") {
-      engine.dispatch({
-        type: "resize",
-        id: n.id,
-        x: n.x,
-        y: n.y,
-        w: key === "w" ? v : n.w,
-        h: key === "h" ? v : n.h,
-      });
+      let w = key === "w" ? v : n.w;
+      let h = key === "h" ? v : n.h;
+      if (n.aspectLocked && n.w > 0 && n.h > 0) {
+        const ratio = n.h / n.w;
+        if (key === "w") h = Math.max(1, v * ratio);
+        else w = Math.max(1, v / ratio);
+      }
+      engine.dispatch({ type: "resize", id: n.id, x: n.x, y: n.y, w, h });
       return;
     }
     engine.dispatch({ type: "patch", id: n.id, patch: { [key]: v } });
   };
   const kindLabel =
     n.imageSrc ? "Image" : n.kind === "rect" ? "Rectangle" : n.kind[0].toUpperCase() + n.kind.slice(1);
+  const patch = (p: Partial<XNode>) => engine.dispatch({ type: "patch", id: n.id, patch: p });
   return (
     <>
       <div className="layer-type">
         <span className="kind">{kindLabel}</span>
         <span className="grow" />
+        <button
+          className={`icon-btn${n.visible ? "" : " on"}`}
+          title={n.visible ? "Hide" : "Show"}
+          onClick={() => engine.dispatch({ type: "hideSel" })}
+        >
+          <Icon name={n.visible ? "eye" : "eye-off"} size={14} />
+        </button>
+        <button
+          className={`icon-btn${n.locked ? " on" : ""}`}
+          title={n.locked ? "Unlock" : "Lock"}
+          onClick={() => engine.dispatch({ type: "lockSel" })}
+        >
+          <Icon name={n.locked ? "lock" : "unlock"} size={14} />
+        </button>
         <button
           className="icon-btn"
           title="Dev Mode"
@@ -284,6 +321,8 @@ function Design({
           <Icon name="more" size={14} />
         </button>
       </div>
+
+      {multi && <SelectionColors engine={engine} snap={snap} />}
 
       <div className="h-row">
         <h3>Position</h3>
@@ -304,11 +343,23 @@ function Design({
               </button>
             ))}
           </div>
+          <div className="g">
+            <button title="Distribute horizontal" onClick={() => engine.dispatch({ type: "distribute", axis: "h" })}>
+              <Icon name="distribute-h" />
+            </button>
+            <button title="Distribute vertical" onClick={() => engine.dispatch({ type: "distribute", axis: "v" })}>
+              <Icon name="distribute-v" />
+            </button>
+          </div>
         </div>
         <div className="grid3">
           <Field label="X" value={x} onChange={(v) => num("x", v)} />
           <Field label="Y" value={y} onChange={(v) => num("y", v)} />
-          <button className="icon-btn" title="Constraints">
+          <button
+            className={`icon-btn${conOpen ? " on" : ""}`}
+            title="Constraints"
+            onClick={() => setConOpen((v) => !v)}
+          >
             <Icon name="constraints" size={14} />
           </button>
           <Field icon="rotate" value={n.rotation} onChange={(v) => num("rotation", v)} />
@@ -324,6 +375,13 @@ function Design({
             </button>
           </div>
         </div>
+        {conOpen && (
+          <Constraints
+            h={n.constraintH}
+            v={n.constraintV}
+            onChange={(axis, value) => patch(axis === "h" ? { constraintH: value } : { constraintV: value })}
+          />
+        )}
       </div>
 
       <div className="hr" />
@@ -371,24 +429,64 @@ function Design({
           <button title="Grid">
             <Icon name="layout-grid" />
           </button>
+          <button
+            className={n.layout?.wrap ? "on" : ""}
+            title="Wrap"
+            onClick={() =>
+              n.layout &&
+              engine.dispatch({
+                type: "autoLayout",
+                id: n.id,
+                layout: { ...n.layout, wrap: !n.layout.wrap },
+              })
+            }
+          >
+            <Icon name="wrap" />
+          </button>
         </div>
       </div>
       <div className="insp-pad">
         <div className="grid3">
-          <Field label="W" value={n.w} onChange={(v) => num("w", v)} />
-          <Field label="H" value={n.h} onChange={(v) => num("h", v)} />
+          <Field
+            label="W"
+            hint={n.sizingW}
+            value={n.w}
+            onChange={(v) => num("w", v)}
+            onLabelClick={() => {
+              const sizingW = cycleSizing(n.sizingW);
+              patch({ sizingW });
+              if (n.layout && (sizingW === "hug" || sizingW === "fixed")) {
+                engine.dispatch({
+                  type: "autoLayout",
+                  id: n.id,
+                  layout: { ...n.layout, sizing: sizingW === "hug" ? "hug" : "fixed" },
+                });
+              }
+            }}
+          />
+          <Field
+            label="H"
+            hint={n.sizingH}
+            value={n.h}
+            onChange={(v) => num("h", v)}
+            onLabelClick={() => {
+              const sizingH = cycleSizing(n.sizingH);
+              patch({ sizingH });
+              if (n.layout && (sizingH === "hug" || sizingH === "fixed")) {
+                engine.dispatch({
+                  type: "autoLayout",
+                  id: n.id,
+                  layout: { ...n.layout, cross: sizingH === "hug" ? "hug" : "fixed" },
+                });
+              }
+            }}
+          />
           <button
-            className="icon-btn"
-            title="Clip content"
-            onClick={() =>
-              engine.dispatch({
-                type: "patch",
-                id: n.id,
-                patch: { overflow: n.overflow === "visible" ? "clip" : "visible" },
-              })
-            }
+            className={`icon-btn${n.aspectLocked ? " on" : ""}`}
+            title={n.aspectLocked ? "Unlock aspect ratio" : "Lock aspect ratio"}
+            onClick={() => patch({ aspectLocked: !n.aspectLocked })}
           >
-            <Icon name="clip" size={14} />
+            <Icon name="aspect" size={14} />
           </button>
         </div>
       </div>
@@ -510,19 +608,65 @@ function Design({
           />
         </div>
       </div>
-      <div className="insp-pad" style={{ marginTop: 4 }}>
-        <Field
-          icon="radius"
-          value={n.cornerRadii[0]}
-          onChange={(v) =>
-            engine.dispatch({
-              type: "patch",
-              id: n.id,
-              patch: { cornerRadii: [v, v, v, v] },
-            })
-          }
-        />
+      <div className="insp-pad" style={{ marginTop: 4, display: "grid", gap: 4 }}>
+        {cornersOpen ? (
+          <div className="grid2">
+            {(["TL", "TR", "BL", "BR"] as const).map((lab, i) => (
+              <Field
+                key={lab}
+                label={lab}
+                value={n.cornerRadii[i]}
+                onChange={(v) => {
+                  const r = [...n.cornerRadii] as [number, number, number, number];
+                  r[i] = v;
+                  patch({ cornerRadii: r, cornerIndependent: true });
+                }}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="grid3">
+            <Field
+              icon="radius"
+              value={n.cornerRadii[0]}
+              onChange={(v) => patch({ cornerRadii: [v, v, v, v] })}
+            />
+            <span />
+            <button
+              className={`icon-btn${cornersOpen ? " on" : ""}`}
+              title="Independent corners"
+              onClick={() => {
+                setCornersOpen(true);
+                patch({ cornerIndependent: true });
+              }}
+            >
+              <Icon name="independent" size={14} />
+            </button>
+          </div>
+        )}
+        {cornersOpen && (
+          <button
+            className="icon-btn on"
+            title="Uniform corners"
+            onClick={() => {
+              setCornersOpen(false);
+              patch({ cornerIndependent: false, cornerRadii: [n.cornerRadii[0], n.cornerRadii[0], n.cornerRadii[0], n.cornerRadii[0]] });
+            }}
+          >
+            <Icon name="independent" size={14} />
+          </button>
+        )}
       </div>
+      {n.kind === "frame" && (
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={n.showName !== false}
+            onChange={(e) => patch({ showName: e.target.checked })}
+          />
+          Show name
+        </label>
+      )}
 
       <div className="hr" />
       <div className="h-row">
@@ -636,7 +780,73 @@ function Design({
               ))}
             </div>
           </div>
+          <button
+            className={`icon-btn${strokeMore ? " on" : ""}`}
+            title="Dash, cap, join"
+            onClick={() => setStrokeMore((v) => !v)}
+          >
+            <Icon name="dash" size={14} />
+          </button>
+          {strokeMore && (
+            <>
+              <div className="grid2">
+                <Field label="–" value={n.strokeDash} onChange={(strokeDash) => patch({ strokeDash })} />
+                <Field
+                  label="gap"
+                  value={n.strokeGap || n.strokeDash}
+                  onChange={(strokeGap) => patch({ strokeGap })}
+                />
+              </div>
+              <div className="seg">
+                {(["none", "round", "square", "arrow"] as StrokeCap[]).map((c) => (
+                  <button
+                    key={c}
+                    className={n.strokeCap === c ? "on" : ""}
+                    title={`Cap ${c}`}
+                    onClick={() => patch({ strokeCap: c })}
+                  >
+                    <Icon name={c === "arrow" ? "arrow" : `cap-${c}`} size={14} />
+                  </button>
+                ))}
+              </div>
+              <div className="seg">
+                {(["miter", "bevel", "round"] as StrokeJoin[]).map((j) => (
+                  <button
+                    key={j}
+                    className={n.strokeJoin === j ? "on" : ""}
+                    title={`Join ${j}`}
+                    onClick={() => patch({ strokeJoin: j })}
+                  >
+                    <Icon name={`join-${j}`} size={14} />
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
         </div>
+      )}
+
+      {(n.kind === "star" || n.kind === "poly") && (
+        <>
+          <div className="hr" />
+          <div className="h-row">
+            <h3>{n.kind === "star" ? "Star" : "Polygon"}</h3>
+          </div>
+          <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
+            <Field
+              label="#"
+              value={n.count || (n.kind === "star" ? 5 : 3)}
+              onChange={(count) => patch({ count: Math.max(3, Math.round(count)) })}
+            />
+            {n.kind === "star" && (
+              <Field
+                label="%"
+                value={Math.round((n.starRatio || 0.4) * 100)}
+                onChange={(v) => patch({ starRatio: Math.max(0.05, Math.min(0.95, v / 100)) })}
+              />
+            )}
+          </div>
+        </>
       )}
 
       {n.kind === "text" && (
@@ -795,34 +1005,7 @@ function Design({
 
       <div className="hr" />
       <Effects n={n} engine={engine} />
-      <div className="h-row">
-        <h3>Export</h3>
-        <button
-          className="plus"
-          title="Add export"
-          onClick={() => {
-            const a = document.createElement("a");
-            a.download = `${n.name}.svg`;
-            a.href = URL.createObjectURL(
-              new Blob(
-                [
-                  `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(n.w)}" height="${Math.round(n.h)}"><rect width="100%" height="100%" fill="${n.fillVisible ? n.fill : "none"}"/></svg>`,
-                ],
-                { type: "image/svg+xml" },
-              ),
-            );
-            a.click();
-          }}
-        >
-          <Icon name="plus" size={14} />
-        </button>
-      </div>
-      <div className="insp-pad">
-        <div className="color-row">
-          <span className="hex">PNG</span>
-          <span className="op">1×</span>
-        </div>
-      </div>
+      <ExportBlock n={n} engine={engine} />
     </>
   );
 }
@@ -943,15 +1126,29 @@ function Field({
   icon,
   value,
   onChange,
+  hint,
+  onLabelClick,
 }: {
   label?: string;
   icon?: string;
   value: number;
   onChange: (v: number) => void;
+  hint?: string;
+  onLabelClick?: () => void;
 }) {
   return (
     <div className="field">
-      {icon ? <Icon name={icon} size={14} /> : <label>{label}</label>}
+      {icon ? (
+        <Icon name={icon} size={14} />
+      ) : (
+        <label
+          title={hint ? `${label} · ${hint}` : label}
+          onClick={onLabelClick}
+          style={onLabelClick ? { cursor: "pointer" } : undefined}
+        >
+          {label}
+        </label>
+      )}
       <input
         value={fmt(value)}
         onChange={(e) => {
@@ -959,7 +1156,221 @@ function Field({
           if (!Number.isNaN(v)) onChange(v);
         }}
       />
+      {hint && hint !== "fixed" && <span className="hint">{hint[0].toUpperCase()}</span>}
     </div>
+  );
+}
+
+function cycleSizing(s: Sizing | undefined): Sizing {
+  if (s === "fixed") return "hug";
+  if (s === "hug") return "fill";
+  return "fixed";
+}
+
+function Constraints({
+  h,
+  v,
+  onChange,
+}: {
+  h: Constraint;
+  v: Constraint;
+  onChange: (axis: "h" | "v", value: Constraint) => void;
+}) {
+  const opts: { id: Constraint; label: string }[] = [
+    { id: "min", label: "Left / Top" },
+    { id: "center", label: "Center" },
+    { id: "max", label: "Right / Bottom" },
+    { id: "stretch", label: "Left & right / Top & bottom" },
+    { id: "scale", label: "Scale" },
+  ];
+  return (
+    <div className="cons-pop">
+      <div className="cons-grid">
+        <select value={h} onChange={(e) => onChange("h", e.target.value as Constraint)}>
+          {opts.map((o) => (
+            <option key={o.id} value={o.id}>
+              H: {o.label.split(" / ")[0]}
+            </option>
+          ))}
+        </select>
+        <select value={v} onChange={(e) => onChange("v", e.target.value as Constraint)}>
+          {opts.map((o) => (
+            <option key={o.id} value={o.id}>
+              V: {o.label.split(" / ")[1] ?? o.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <p className="muted-inline" style={{ padding: "4px 0 0" }}>
+        Pin this layer to its parent when the parent resizes.
+      </p>
+    </div>
+  );
+}
+
+function SelectionColors({ engine, snap }: { engine: Engine; snap: Snapshot }) {
+  const root = snap.pages[snap.page].root;
+  const rows: { id: string; fill: string; opacity: number }[] = [];
+  const seen = new Set<string>();
+  for (const id of snap.selection) {
+    const n = find(root, id);
+    if (!n || !n.fillVisible || isNone(n.fill)) continue;
+    const key = n.fill.slice(0, 7).toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push({ id: n.id, fill: n.fill, opacity: Math.round((n.fillOpacity ?? 1) * 100) });
+  }
+  if (!rows.length) return null;
+  return (
+    <>
+      <div className="h-row">
+        <h3>Selection colors</h3>
+      </div>
+      <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
+        {rows.map((r) => (
+          <ColorRow
+            key={r.id}
+            value={r.fill}
+            opacity={r.opacity}
+            visible
+            recents={collectColors(root)}
+            onChange={(fill) => {
+              for (const id of snap.selection) {
+                const n = find(root, id);
+                if (n && n.fill.slice(0, 7).toLowerCase() === r.fill.slice(0, 7).toLowerCase()) {
+                  engine.dispatch({ type: "patch", id, patch: { fill, fillVisible: true } });
+                }
+              }
+            }}
+            onOpacity={(v) => engine.dispatch({ type: "patch", id: r.id, patch: { fillOpacity: v / 100 } })}
+          />
+        ))}
+      </div>
+      <div className="hr" />
+    </>
+  );
+}
+
+const FORMATS: ExportFormat[] = ["PNG", "JPG", "SVG", "PDF"];
+const SCALES = [0.5, 1, 2, 3, 4];
+
+function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
+  const presets = n.exports ?? [];
+  const add = () =>
+    engine.dispatch({
+      type: "patch",
+      id: n.id,
+      patch: { exports: [...presets, { format: "PNG", scale: 1, suffix: "" }] },
+    });
+  const set = (i: number, p: ExportPreset) => {
+    const next = presets.map((e, j) => (j === i ? p : e));
+    engine.dispatch({ type: "patch", id: n.id, patch: { exports: next } });
+  };
+  return (
+    <>
+      <div className="h-row">
+        <h3>Export</h3>
+        <button className="plus" title="Add export" onClick={add}>
+          <Icon name="plus" size={14} />
+        </button>
+      </div>
+      {presets.map((p, i) => (
+        <div key={i} className="insp-pad" style={{ marginBottom: 4 }}>
+          <div className="export-row">
+            <button
+              className="fmt"
+              title="Format"
+              onClick={() => set(i, { ...p, format: FORMATS[(FORMATS.indexOf(p.format) + 1) % FORMATS.length] })}
+            >
+              {p.format}
+            </button>
+            <button
+              className="fmt"
+              title="Scale"
+              onClick={() => set(i, { ...p, scale: SCALES[(SCALES.indexOf(p.scale) + 1) % SCALES.length] })}
+            >
+              {p.scale}×
+            </button>
+            <input
+              className="suffix"
+              placeholder="suffix"
+              value={p.suffix}
+              onChange={(e) => set(i, { ...p, suffix: e.target.value })}
+            />
+            <button
+              className="mini minus"
+              title="Remove"
+              onClick={() =>
+                engine.dispatch({
+                  type: "patch",
+                  id: n.id,
+                  patch: { exports: presets.filter((_, j) => j !== i) },
+                })
+              }
+            >
+              <Icon name="minus" size={14} />
+            </button>
+          </div>
+        </div>
+      ))}
+      {!!presets.length && (
+        <div className="insp-pad">
+          <button className="export-run" onClick={() => presets.forEach((p) => runExport(n, p))}>
+            Export
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
+
+function runExport(n: XNode, p: ExportPreset) {
+  const w = Math.max(1, Math.round(n.w * p.scale));
+  const h = Math.max(1, Math.round(n.h * p.scale));
+  const name = `${n.name}${p.suffix}.${p.format.toLowerCase()}`;
+  const fill = n.fillVisible && !isNone(n.fill) ? n.fill : "none";
+  if (p.format === "SVG" || p.format === "PDF") {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${Math.round(n.w)} ${Math.round(n.h)}">${n.kind === "ellipse" ? `<ellipse cx="${n.w / 2}" cy="${n.h / 2}" rx="${n.w / 2}" ry="${n.h / 2}" fill="${fill}"/>` : `<rect width="${n.w}" height="${n.h}" rx="${n.cornerRadii[0]}" fill="${fill}"/>`}${n.strokeVisible && n.strokeWidth ? `<rect width="${n.w}" height="${n.h}" fill="none" stroke="${n.strokePaint}" stroke-width="${n.strokeWidth}"/>` : ""}</svg>`;
+    const a = document.createElement("a");
+    a.download = name.replace(/\.pdf$/, ".svg");
+    a.href = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+    a.click();
+    return;
+  }
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext("2d");
+  if (!ctx) return;
+  if (p.format === "JPG") {
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, w, h);
+  }
+  if (fill !== "none") {
+    ctx.fillStyle = fill;
+    const r = n.cornerRadii[0] * p.scale;
+    if (n.kind === "ellipse") {
+      ctx.beginPath();
+      ctx.ellipse(w / 2, h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (typeof ctx.roundRect === "function") {
+      ctx.beginPath();
+      ctx.roundRect(0, 0, w, h, r);
+      ctx.fill();
+    } else {
+      ctx.fillRect(0, 0, w, h);
+    }
+  }
+  c.toBlob(
+    (b) => {
+      if (!b) return;
+      const a = document.createElement("a");
+      a.download = name;
+      a.href = URL.createObjectURL(b);
+      a.click();
+    },
+    p.format === "JPG" ? "image/jpeg" : "image/png",
+    0.92,
   );
 }
 

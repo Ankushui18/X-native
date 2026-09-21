@@ -268,6 +268,7 @@ input, textarea { user-select: text; }
   padding: 0;
 }
 .icon-btn:hover { background: var(--hover); }
+.icon-btn.on { background: var(--active); }
 
 .search {
   display: flex;
@@ -591,6 +592,7 @@ input, textarea { user-select: text; }
   display: flex;
   gap: 2px;
   margin-bottom: 8px;
+  flex-wrap: wrap;
 }
 .align .g {
   display: flex;
