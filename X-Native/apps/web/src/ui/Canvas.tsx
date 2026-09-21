@@ -4,6 +4,7 @@ import { hitTest, worldPos } from "../engine/memory";
 
 const CREATE: Tool[] = [
   "frame",
+  "section",
   "rect",
   "ellipse",
   "text",
@@ -15,6 +16,7 @@ const CREATE: Tool[] = [
 ];
 
 function kindOf(t: Tool): NodeKind | null {
+  if (t === "section") return "frame";
   if (t === "slice" || t === "pen" || t === "pencil" || t === "brush") return "rect";
   if (t === "image") return "rect";
   if (CREATE.includes(t)) return t as NodeKind;

@@ -70,6 +70,10 @@ input, textarea { user-select: text; }
 }
 .app.min-ui .rail,
 .app.min-ui .left { display: none; }
+.app.min-ui.no-sel {
+  grid-template-columns: 0 0 1fr 0;
+}
+.app.min-ui.no-sel .right { display: none; }
 .app.hide-ui {
   grid-template-columns: 1fr;
 }

@@ -32,6 +32,7 @@ export type Tool =
   | "select"
   | "scale"
   | "frame"
+  | "section"
   | "slice"
   | "text"
   | "rect"
@@ -164,6 +165,7 @@ export const TOOL_META: {
   { id: "select", label: "Move", shortcut: "V" },
   { id: "scale", label: "Scale", shortcut: "K" },
   { id: "frame", label: "Frame", shortcut: "F" },
+  { id: "section", label: "Section", shortcut: "⇧S" },
   { id: "slice", label: "Slice", shortcut: "S" },
   { id: "text", label: "Text", shortcut: "T" },
   { id: "rect", label: "Rectangle", shortcut: "R" },

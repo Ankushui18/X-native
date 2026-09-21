@@ -69,6 +69,10 @@ export function NavRail({
         </button>
       ))}
       <div className="spacer" />
+      <button className="nav" title="File notifications">
+        <Icon name="help" size={16} />
+        <span>Alerts</span>
+      </button>
     </nav>
   );
 }
@@ -263,7 +267,17 @@ export function LeftPanel({
         <p className="muted">Plugins, widgets, and shaders. Open Actions (⌘K) to run a tool.</p>
       )}
       {nav === "agent" && (
-        <p className="muted">Figma agent. Describe a change and it edits the file.</p>
+        <>
+          <div className="file-head">
+            <button className="share" style={{ marginLeft: 0 }}>
+              New chat
+            </button>
+          </div>
+          <p className="muted">
+            Agent history for this file. Chats stay in the left sidebar — same place as Figma’s
+            Agents tab.
+          </p>
+        </>
       )}
     </aside>
   );
@@ -279,13 +293,15 @@ const GROUPS: Group[] = [
     id: "move",
     tools: [
       { id: "select", label: "Move", shortcut: "V" },
+      { id: "hand", label: "Hand", shortcut: "H" },
       { id: "scale", label: "Scale", shortcut: "K" },
     ],
   },
   {
-    id: "frame",
+    id: "region",
     tools: [
       { id: "frame", label: "Frame", shortcut: "F" },
+      { id: "section", label: "Section", shortcut: "⇧S" },
       { id: "slice", label: "Slice", shortcut: "S" },
     ],
   },
@@ -298,7 +314,7 @@ const GROUPS: Group[] = [
       { id: "ellipse", label: "Ellipse", shortcut: "O" },
       { id: "poly", label: "Polygon", shortcut: "" },
       { id: "star", label: "Star", shortcut: "" },
-      { id: "image", label: "Place image…", shortcut: "⇧I" },
+      { id: "image", label: "Place image/video…", shortcut: "⇧I" },
     ],
   },
   {
@@ -306,7 +322,6 @@ const GROUPS: Group[] = [
     tools: [
       { id: "pen", label: "Pen", shortcut: "P" },
       { id: "pencil", label: "Pencil", shortcut: "⇧P" },
-      { id: "brush", label: "Paint bucket", shortcut: "B" },
     ],
   },
   { id: "text", tools: [{ id: "text", label: "Text", shortcut: "T" }] },
@@ -414,10 +429,12 @@ export function Actions({
   engine,
   onClose,
   onHide,
+  onMinimize,
 }: {
   engine: Engine;
   onClose: () => void;
   onHide: () => void;
+  onMinimize?: () => void;
 }) {
   const [q, setQ] = useState("");
   const items = [
@@ -426,6 +443,8 @@ export function Actions({
     { label: "Duplicate", sc: "⌘D", run: () => engine.dispatch({ type: "duplicate" }) },
     { label: "Delete", sc: "⌫", run: () => engine.dispatch({ type: "delete" }) },
     { label: "Hide UI", sc: "⌘\\", run: onHide },
+    { label: "Minimize UI", sc: "⇧⌘\\", run: () => onMinimize?.() },
+    { label: "Dev Mode", sc: "⇧D", run: () => engine.dispatch({ type: "setRightTab", tab: "inspect" }) },
     { label: "Zoom to 100%", sc: "⇧0", run: () => engine.dispatch({ type: "setZoom", zoom: 1 }) },
     { label: "Zoom to fit", sc: "⇧1", run: () => engine.dispatch({ type: "setZoom", zoom: 0.5 }) },
   ].filter((i) => i.label.toLowerCase().includes(q.toLowerCase()));
@@ -462,7 +481,12 @@ export function Actions({
 
 export function bindHotkeys(
   engine: Engine,
-  extra: { onActions: () => void; onHide: () => void },
+  extra: {
+    onActions: () => void;
+    onHide: () => void;
+    onMinimize: () => void;
+    onNav?: (n: NavId) => void;
+  },
 ) {
   const onKey = (e: KeyboardEvent) => {
     const t = e.target as HTMLElement;
@@ -473,10 +497,35 @@ export function bindHotkeys(
       extra.onActions();
       return;
     }
+    if (meta && e.shiftKey && e.key === "\\") {
+      e.preventDefault();
+      extra.onMinimize();
+      return;
+    }
     if (meta && e.key === "\\") {
       e.preventDefault();
       extra.onHide();
       return;
+    }
+    if (e.shiftKey && e.key.toLowerCase() === "d" && !meta) {
+      e.preventDefault();
+      const cur = engine.snapshot().rightTab;
+      engine.dispatch({ type: "setRightTab", tab: cur === "inspect" ? "design" : "inspect" });
+      return;
+    }
+    if (e.altKey && extra.onNav) {
+      if (e.key === "1") {
+        extra.onNav("file");
+        engine.dispatch({ type: "setLeftTab", tab: "layers" });
+      }
+      if (e.key === "2") {
+        extra.onNav("assets");
+        engine.dispatch({ type: "setLeftTab", tab: "assets" });
+      }
+      if (e.key === "3") {
+        extra.onNav("variables");
+        engine.dispatch({ type: "setLeftTab", tab: "tokens" });
+      }
     }
     if (meta && e.key.toLowerCase() === "z") {
       e.preventDefault();

@@ -598,6 +598,7 @@ export const TOOL_ICON: Record<Tool, string> = {
   select: "move",
   scale: "scale",
   frame: "frame",
+  section: "section",
   slice: "slice",
   text: "text",
   rect: "rect",
@@ -620,6 +621,8 @@ export function kindIcon(k: string, imageSrc?: string): string {
   switch (k) {
     case "frame":
       return "frame";
+    case "section":
+      return "section";
     case "ellipse":
       return "ellipse";
     case "text":

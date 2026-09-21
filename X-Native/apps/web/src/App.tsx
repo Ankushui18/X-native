@@ -34,11 +34,20 @@ export default function App() {
       bindHotkeys(engine, {
         onActions: () => setActions(true),
         onHide: () => setHideUi((v) => !v),
+        onMinimize: () => setMinUi((v) => !v),
+        onNav: setNav,
       }),
     [engine],
   );
 
-  const cls = ["app", minUi ? "min-ui" : "", hideUi ? "hide-ui" : ""].filter(Boolean).join(" ");
+  const cls = [
+    "app",
+    minUi ? "min-ui" : "",
+    minUi && !snap.selection.length ? "no-sel" : "",
+    hideUi ? "hide-ui" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   return (
     <div
       className={cls}
@@ -66,6 +75,10 @@ export default function App() {
             onClose={() => setActions(false)}
             onHide={() => {
               setHideUi((v) => !v);
+              setActions(false);
+            }}
+            onMinimize={() => {
+              setMinUi((v) => !v);
               setActions(false);
             }}
           />

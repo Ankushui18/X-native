@@ -76,14 +76,51 @@ export function RightPanel({
       <div className="inspector">
         {snap.rightTab === "prototype" && !inspect && <Prototype n={n} />}
         {inspect && <Inspect n={n} />}
-        {snap.rightTab === "design" && !inspect && !n && (
-          <p className="empty">Select a layer to edit properties</p>
-        )}
+        {snap.rightTab === "design" && !inspect && !n && <PageDesign />}
         {snap.rightTab === "design" && !inspect && n && wp && (
           <Design n={n} x={wp.x} y={wp.y} engine={engine} snap={snap} />
         )}
       </div>
     </aside>
+  );
+}
+
+function PageDesign() {
+  return (
+    <>
+      <div className="h-row">
+        <h3>Page</h3>
+      </div>
+      <p className="muted" style={{ paddingTop: 0 }}>
+        Nothing selected — canvas background, local styles, and page export, same as Figma’s empty
+        Design tab.
+      </p>
+      <div className="h-row">
+        <h3>Fill</h3>
+      </div>
+      <div className="insp-pad">
+        <ColorRow value="#e5e5e5" opacity={100} onChange={() => {}} />
+      </div>
+      <div className="hr" />
+      <div className="h-row">
+        <h3>Color styles</h3>
+        <button className="plus">
+          <Icon name="plus" size={14} />
+        </button>
+      </div>
+      <div className="h-row">
+        <h3>Text styles</h3>
+        <button className="plus">
+          <Icon name="plus" size={14} />
+        </button>
+      </div>
+      <div className="h-row">
+        <h3>Export</h3>
+        <button className="plus">
+          <Icon name="plus" size={14} />
+        </button>
+      </div>
+    </>
   );
 }
 
