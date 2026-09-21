@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import type { Engine, Snapshot, Tool, XNode } from "../engine/types";
 import { Icon, TOOL_ICON, kindIcon } from "./icons";
+import { useTheme, type ThemePref } from "./theme";
 
 export type NavId = "file" | "assets" | "tools" | "variables" | "agent";
 
@@ -16,6 +17,7 @@ export function NavRail({
   onActions: () => void;
 }) {
   const [menu, setMenu] = useState(false);
+  const { pref, setPref } = useTheme();
   const items: { id: NavId; icon: string; label: string; tab?: "layers" | "assets" | "tokens" }[] = [
     { id: "file", icon: "layers", label: "File", tab: "layers" },
     { id: "agent", icon: "agent", label: "Agent" },
@@ -50,7 +52,13 @@ export function NavRail({
               Delete <span className="sc">⌫</span>
             </button>
             <hr />
-            <button>Preferences</button>
+            <div className="kicker">Theme</div>
+            {(["light", "dark", "system"] as ThemePref[]).map((p) => (
+              <button key={p} className={pref === p ? "on" : ""} onClick={() => setPref(p)}>
+                {p === "light" ? "Light" : p === "dark" ? "Dark" : "System"}
+                {pref === p && <span className="sc">✓</span>}
+              </button>
+            ))}
           </div>
         )}
       </button>
@@ -436,6 +444,7 @@ export function Actions({
   onMinimize?: () => void;
 }) {
   const [q, setQ] = useState("");
+  const { setPref } = useTheme();
   const items = [
     { label: "Undo", sc: "⌘Z", run: () => engine.dispatch({ type: "undo" }) },
     { label: "Redo", sc: "⇧⌘Z", run: () => engine.dispatch({ type: "redo" }) },
@@ -444,6 +453,9 @@ export function Actions({
     { label: "Hide UI", sc: "⌘\\", run: onHide },
     { label: "Minimize UI", sc: "⇧⌘\\", run: () => onMinimize?.() },
     { label: "Dev Mode", sc: "⇧D", run: () => engine.dispatch({ type: "setRightTab", tab: "inspect" }) },
+    { label: "Theme: Light", sc: "", run: () => setPref("light") },
+    { label: "Theme: Dark", sc: "", run: () => setPref("dark") },
+    { label: "Theme: System", sc: "", run: () => setPref("system") },
     { label: "Zoom to 100%", sc: "⇧0", run: () => engine.dispatch({ type: "setZoom", zoom: 1 }) },
     { label: "Zoom to fit", sc: "⇧1", run: () => engine.dispatch({ type: "setZoom", zoom: 0.5 }) },
   ].filter((i) => i.label.toLowerCase().includes(q.toLowerCase()));

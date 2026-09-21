@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Engine, NodeKind, Snapshot, Tool, XNode } from "../engine/types";
 import { hitTest, worldPos } from "../engine/memory";
+import { useTheme } from "./theme";
 
 const CREATE: Tool[] = [
   "frame",
@@ -45,6 +46,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const [edit, setEdit] = useState<{ id: string; text: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const pendingImage = useRef<{ x: number; y: number } | null>(null);
+  const { theme } = useTheme();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -78,10 +80,14 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     const ctx = c.getContext("2d");
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = "#e5e5e5";
+    const css = getComputedStyle(document.documentElement);
+    const canvasBg = css.getPropertyValue("--canvas").trim() || "#e5e5e5";
+    const grid = css.getPropertyValue("--grid").trim() || "rgba(0,0,0,0.06)";
+    const canvasLabel = css.getPropertyValue("--canvas-label").trim() || "rgba(0,0,0,0.45)";
+    ctx.fillStyle = canvasBg;
     ctx.fillRect(0, 0, w, h);
     if (snap.zoom >= 2) {
-      ctx.strokeStyle = "rgba(0,0,0,0.06)";
+      ctx.strokeStyle = grid;
       ctx.lineWidth = 1;
       const step = snap.zoom;
       ctx.beginPath();
@@ -193,7 +199,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     for (const ch of root.children) paint(ch, 0, 0);
 
     ctx.font = "500 11px Inter, system-ui";
-    ctx.fillStyle = "rgba(0,0,0,0.45)";
+    ctx.fillStyle = canvasLabel;
     const label = (n: XNode, px: number, py: number) => {
       const x = px + n.x;
       const y = py + n.y;
@@ -262,7 +268,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       ctx.fillRect(band.x, band.y, band.w, band.h);
       ctx.strokeRect(band.x + 0.5, band.y + 0.5, band.w, band.h);
     }
-  }, [snap, band, edit, engine]);
+  }, [snap, band, edit, engine, theme]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();

@@ -23,10 +23,14 @@
   src: url(/fonts/inter-latin-700-normal.woff2) format("woff2");
 }
 
-:root {
+/* Figma UI3 light — panels white, canvas #e5e5e5, selection #0d99ff. */
+:root,
+html[data-theme="light"] {
+  color-scheme: light;
   --bg: #ffffff;
   --canvas: #e5e5e5;
   --panel: #ffffff;
+  --elevated: #ffffff;
   --hover: #f5f5f5;
   --active: #e6e6e6;
   --sel: #e5f4ff;
@@ -37,11 +41,54 @@
   --dim: rgba(0, 0, 0, 0.35);
   --blue: #0d99ff;
   --blue-hover: #0b87e0;
+  --on-accent: #ffffff;
   --input: #f5f5f5;
+  --field-focus: #ffffff;
+  --dock: #ffffff;
+  --tool-fg: #1e1e1e;
+  --tool-on-bg: #1e1e1e;
+  --tool-on-fg: #ffffff;
+  --help-bg: #2c2c2c;
+  --help-fg: #ffffff;
+  --grid: rgba(0, 0, 0, 0.06);
+  --canvas-label: rgba(0, 0, 0, 0.45);
+  --dot: #c6c6c6;
   --shadow: 0 2px 14px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.06);
   --rail: 48px;
   --left-w: 240px;
   --right-w: 240px;
+}
+
+/* Figma UI3 dark — panels #2c2c2c, canvas #1e1e1e. User art does not invert. */
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #2c2c2c;
+  --canvas: #1e1e1e;
+  --panel: #2c2c2c;
+  --elevated: #2c2c2c;
+  --hover: #3c3c3c;
+  --active: #444444;
+  --sel: rgba(13, 153, 255, 0.18);
+  --line: rgba(255, 255, 255, 0.1);
+  --line-2: rgba(255, 255, 255, 0.16);
+  --text: #ffffff;
+  --muted: rgba(255, 255, 255, 0.5);
+  --dim: rgba(255, 255, 255, 0.35);
+  --blue: #0d99ff;
+  --blue-hover: #3cabff;
+  --on-accent: #ffffff;
+  --input: #383838;
+  --field-focus: #2c2c2c;
+  --dock: #2c2c2c;
+  --tool-fg: #ffffff;
+  --tool-on-bg: #ffffff;
+  --tool-on-fg: #1e1e1e;
+  --help-bg: #383838;
+  --help-fg: #ffffff;
+  --grid: rgba(255, 255, 255, 0.06);
+  --canvas-label: rgba(255, 255, 255, 0.45);
+  --dot: #6a6a6a;
+  --shadow: 0 2px 14px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
 * { box-sizing: border-box; }
@@ -134,7 +181,7 @@ input, textarea { user-select: text; }
   left: 44px;
   top: 8px;
   width: 220px;
-  background: #fff;
+  background: var(--elevated);
   border-radius: 8px;
   box-shadow: var(--shadow);
   padding: 6px;
@@ -154,7 +201,15 @@ input, textarea { user-select: text; }
   gap: 8px;
 }
 .menu button:hover { background: var(--hover); }
+.menu button.on { background: var(--sel); }
 .menu .sc { margin-left: auto; color: var(--dim); font-size: 11px; }
+.menu .kicker {
+  height: 24px;
+  padding: 8px 8px 2px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
 .menu hr { border: 0; height: 1px; background: var(--line); margin: 4px 0; }
 
 .panel {
@@ -200,7 +255,7 @@ input, textarea { user-select: text; }
   outline: none;
 }
 .file-head input.name:hover { background: var(--hover); }
-.file-head input.name:focus { background: #fff; box-shadow: 0 0 0 1px var(--blue); }
+.file-head input.name:focus { background: var(--field-focus); box-shadow: 0 0 0 1px var(--blue); }
 .icon-btn {
   width: 28px;
   height: 28px;
@@ -323,7 +378,7 @@ input, textarea { user-select: text; }
   gap: 2px;
   padding: 0 6px;
   border-radius: 12px;
-  background: #ffffff;
+  background: var(--dock);
   box-shadow: var(--shadow);
   z-index: 10;
 }
@@ -338,7 +393,7 @@ input, textarea { user-select: text; }
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: #1e1e1e;
+  color: var(--tool-fg);
   display: grid;
   place-items: center;
   padding: 0;
@@ -346,8 +401,8 @@ input, textarea { user-select: text; }
 }
 .tool > button.hit:hover { background: var(--hover); }
 .tool.active > button.hit {
-  background: #1e1e1e;
-  color: #fff;
+  background: var(--tool-on-bg);
+  color: var(--tool-on-fg);
 }
 .tool .caret {
   position: absolute;
@@ -367,7 +422,7 @@ input, textarea { user-select: text; }
   min-width: 220px;
   padding: 6px;
   border-radius: 8px;
-  background: #fff;
+  background: var(--elevated);
   box-shadow: var(--shadow);
   display: none;
   z-index: 20;
@@ -404,11 +459,11 @@ input, textarea { user-select: text; }
   height: 32px;
   border: 0;
   border-radius: 16px;
-  background: #fff;
+  background: var(--help-bg);
   box-shadow: var(--shadow);
   display: grid;
   place-items: center;
-  color: var(--text);
+  color: var(--help-fg);
   z-index: 8;
 }
 
@@ -438,7 +493,7 @@ input, textarea { user-select: text; }
   border: 0;
   border-radius: 6px;
   background: var(--blue);
-  color: #fff;
+  color: var(--on-accent);
   font-weight: 500;
   font-size: 11px;
   margin-left: auto;
@@ -577,7 +632,7 @@ input, textarea { user-select: text; }
   min-width: 0;
 }
 .field:hover { border-color: var(--line-2); }
-.field:focus-within { border-color: var(--blue); background: #fff; }
+.field:focus-within { border-color: var(--blue); background: var(--field-focus); }
 .field label {
   color: var(--muted);
   font-size: 11px;
@@ -677,7 +732,7 @@ input, textarea { user-select: text; }
   place-items: center;
 }
 .seg button:hover { background: var(--hover); }
-.seg button.on { background: #fff; box-shadow: 0 0 0 1px var(--line); }
+.seg button.on { background: var(--elevated); box-shadow: 0 0 0 1px var(--line); }
 
 .nine {
   display: grid;
@@ -695,7 +750,7 @@ input, textarea { user-select: text; }
   padding: 0;
   border: 0;
   border-radius: 1px;
-  background: #c6c6c6;
+  background: var(--dot);
 }
 .nine button.on {
   background: var(--blue);
@@ -750,7 +805,7 @@ input, textarea { user-select: text; }
   right: 252px;
   top: 120px;
   width: 240px;
-  background: #fff;
+  background: var(--elevated);
   border-radius: 8px;
   box-shadow: var(--shadow);
   padding: 8px 0;
@@ -770,7 +825,7 @@ input, textarea { user-select: text; }
   transform: translateX(-50%);
   width: 480px;
   max-width: calc(100% - 48px);
-  background: #fff;
+  background: var(--elevated);
   border-radius: 12px;
   box-shadow: var(--shadow);
   z-index: 40;
@@ -814,3 +869,23 @@ input, textarea { user-select: text; }
   color: var(--muted);
   font-size: 11px;
 }
+
+.presets {
+  display: flex;
+  flex-direction: column;
+  padding: 0 8px 8px;
+  gap: 2px;
+}
+.presets button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 32px;
+  border: 0;
+  background: transparent;
+  border-radius: 6px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+.presets button:hover { background: var(--hover); }
+.presets .sz { color: var(--muted); font-size: 11px; }
