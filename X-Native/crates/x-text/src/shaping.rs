@@ -663,20 +663,19 @@ pub enum Align {
     Left,
     Center,
     Right,
+    /// Figma Justify: first word on the left edge, last on the right,
+    /// extra space distributed across word gaps. The last line of a
+    /// paragraph stays Left (CSS `text-align: justify`).
+    Justify,
 }
 
-/// Map the document model's alignment onto the shaper's. The model carries a
-/// fourth state (`Justified`) the layout engine does not stretch for yet; it
-/// degrades to Left rather than claim to justify (a justified label over
-/// left-set lines is a phantom control).
 impl From<x_core::TextAlign> for Align {
     fn from(t: x_core::TextAlign) -> Self {
         match t {
             x_core::TextAlign::Left => Align::Left,
             x_core::TextAlign::Center => Align::Center,
             x_core::TextAlign::Right => Align::Right,
-            // NOTE: Justified intentionally maps to Left — see above.
-            x_core::TextAlign::Justified => Align::Left,
+            x_core::TextAlign::Justified => Align::Justify,
         }
     }
 }
@@ -871,7 +870,7 @@ pub fn glyph_outlines(
         // have started, so Left/Center/Right all keep the marker beside
         // their own line; the text's pen is one gap further in
         let marker_x = match style.align {
-            Align::Left => 0.0,
+            Align::Left | Align::Justify => 0.0,
             Align::Center => (avail - line.width) / 2.0,
             Align::Right => avail - line.width,
         } + if para_first {
@@ -880,6 +879,20 @@ pub fn glyph_outlines(
             0.0
         };
         let x0 = marker_x + list_indent;
+        let justify_extra = if matches!(style.align, Align::Justify) && !line.para_end {
+            let spaces = line
+                .spans
+                .iter()
+                .map(|s| s.text.chars().filter(|&c| c == ' ').count())
+                .sum::<usize>();
+            if spaces > 0 {
+                ((avail - line.width) / spaces as f64).max(0.0)
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
         let mut pen = x0;
         for span in &line.spans {
             for run in shaper.shape_span(span, default_font) {
@@ -897,8 +910,19 @@ pub fn glyph_outlines(
                         });
                     }
                     x += g.x_advance;
+                    if justify_extra > 0.0 {
+                        let is_space = run
+                            .text
+                            .get(g.cluster as usize..)
+                            .and_then(|s| s.chars().next())
+                            .map(|c| c == ' ')
+                            .unwrap_or(false);
+                        if is_space {
+                            x += justify_extra;
+                        }
+                    }
                 }
-                pen += run.width;
+                pen = x;
             }
         }
         // the marker itself: the item's bullet or counter, in the line's
@@ -1750,6 +1774,29 @@ mod tests {
         assert!((xr - xl - (400.0 - w)).abs() < 0.5, "right offset {xr}");
     }
 
+    /// Figma Justify: a wrapped middle line stretches so the last word
+    /// meets the right edge; the last line of the paragraph stays left.
+    #[test]
+    fn justify_stretches_wrapped_lines() {
+        let m = fonts();
+        let f = m.default_font().unwrap();
+        let spans = [Span::new("one two three four five six seven eight", 16.0)];
+        let style = |a: Align| TextBlockStyle {
+            align: a,
+            max_width: 120.0,
+            ..Default::default()
+        };
+        let (gl, _) = glyph_outlines(&m, &spans, f, &style(Align::Left));
+        let (gj, _) = glyph_outlines(&m, &spans, f, &style(Align::Justify));
+        assert!(gj.len() >= gl.len().saturating_sub(1));
+        let max_left = gl.iter().map(|g| g.transform.translation().x).fold(0.0, f64::max);
+        let max_just = gj.iter().map(|g| g.transform.translation().x).fold(0.0, f64::max);
+        assert!(
+            max_just > max_left + 2.0,
+            "justified last-on-line sits further right: left {max_left} just {max_just}"
+        );
+    }
+
     /// max-lines drops lines beyond the cap; the returned height covers
     /// exactly the lines that were emitted.
     #[test]
@@ -2238,7 +2285,7 @@ mod tests {
         let lines = layout_lines(&mut sh, &[Span::new("hi", 16.0)], f, 300.0);
         assert_eq!(lines.len(), 1);
         // encode with center/right must not panic and produce same path count
-        for align in [Align::Left, Align::Center, Align::Right] {
+        for align in [Align::Left, Align::Center, Align::Right, Align::Justify] {
             let mut sc = Scene::new();
             let style = TextBlockStyle {
                 lh_mode: 0,

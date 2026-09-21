@@ -8346,10 +8346,15 @@ fn a_manual_resize_pins_a_text_layer_and_the_handle_gesture_fits_it() {
     assert!(w_back < w_fixed, "the box hugged the text again");
 
     // the same control from the Layout section's Resizing chip
+    // Figma: Auto width → Auto height → Fixed size → Auto width
+    h.dispatch(Action::ToggleTextResize);
+    assert!(h.app.is_text_auto_height(), "Auto height");
+    assert!(!h.app.is_text_fixed());
     h.dispatch(Action::ToggleTextResize);
     assert!(h.app.is_text_fixed(), "Fixed size");
     h.dispatch(Action::ToggleTextResize);
     assert!(!h.app.is_text_fixed(), "Auto width");
+    assert!(!h.app.is_text_auto_height());
     let w_fit = find_node_clone(&h.app.doc_ref().editor_ref().root, "tx")
         .unwrap()
         .w;

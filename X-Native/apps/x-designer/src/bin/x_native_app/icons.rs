@@ -220,6 +220,10 @@ const ICONS: &[(&str, &[&str])] = &[
     ]),
     ("align-center", &["M17 6H7", "M21 12H3", "M15 18H9"]),
     ("align-right", &["M21 6H3", "M21 12H9", "M21 18H7"]),
+    ("align-justify", &["M3 6h18", "M3 12h18", "M3 18h18"]),
+    ("align-vertical-top", &["M3 5h18", "M7 10h10", "M9 15h6"]),
+    ("align-vertical-middle", &["M7 5h10", "M3 12h18", "M7 19h10"]),
+    ("align-vertical-bottom", &["M9 9h6", "M7 14h10", "M3 19h18"]),
     ("sliders-horizontal", &[
         "M21 4h-7",
         "M10 4H3",

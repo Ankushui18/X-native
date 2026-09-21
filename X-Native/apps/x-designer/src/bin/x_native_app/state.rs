@@ -2122,6 +2122,7 @@ pub enum Action {
     /// Set horizontal text alignment. Left/Center/Right only — the shaper
     /// degrades Justified to Left, so offering it would be a phantom state.
     SetTextAlign(x_native::TextAlign),
+    SetTextAlignVertical(x_native::TextAlignVertical),
     /// Cycle vertical text alignment: top/middle/bottom
     CycleTextAlignVertical,
     /// Cycle text decoration: none/underline/strikethrough
@@ -3671,6 +3672,15 @@ impl OpenDoc {
         crate::editor_ui::find_node(&self.editor_ref().root, id.as_str())
             .is_some_and(|n| n.bindings.get("tm").map(String::as_str) == Some("fixed"))
     }
+
+    /// Figma **Auto height**: width pinned, height hugs wrapped lines.
+    pub fn is_text_auto_height(&self) -> bool {
+        let Some(id) = self.selected_text_id() else {
+            return false;
+        };
+        crate::editor_ui::find_node(&self.editor_ref().root, id.as_str())
+            .is_some_and(|n| n.bindings.get("tm").map(String::as_str) == Some("height"))
+    }
 }
 
 // ---------------------------------------------------------------- app root
@@ -3795,6 +3805,10 @@ pub struct App {
     /// shift, case, variable axes). Progressive disclosure, P0-8: the
     /// primary set is Font / Weight / Size / Line height / Alignment.
     pub typo_advanced_open: bool,
+    /// Type-settings button rect (Figma's ⋯ in Typography) so the popover
+    /// can anchor to it after the panel has scrolled.
+    pub typo_settings_btn: Option<Rect>,
+    pub typo_settings_panel: Option<Rect>,
     /// Auto Layout "Advanced" disclosure (Wrap / Fill / Absolute).
     pub layout_advanced_open: bool,
     /// Viewport rulers (Shift+R). Off by default — the HTML mock has none.
@@ -4327,6 +4341,8 @@ impl App {
             paint_lib_at: None,
             font_picker_open: false,
             typo_advanced_open: false,
+            typo_settings_btn: None,
+            typo_settings_panel: None,
             layout_advanced_open: false,
             rulers: false,
             minimap: true,
@@ -4586,6 +4602,10 @@ impl App {
     /// (help 27378154668951).
     pub fn is_text_fixed(&self) -> bool {
         self.doc_ref().is_text_fixed()
+    }
+
+    pub fn is_text_auto_height(&self) -> bool {
+        self.doc_ref().is_text_auto_height()
     }
 
     /// Immutable document access (paint paths).
@@ -6428,6 +6448,8 @@ impl App {
         self.corner_open = false;
         self.corner_slider = None;
         self.paint_blend_open = None;
+        self.typo_advanced_open = false;
+        self.typo_settings_panel = None;
     }
 
     pub fn mark_dirty(&mut self) {

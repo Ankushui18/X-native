@@ -2517,12 +2517,13 @@ impl App {
         };
         // "fixed" is the user-pinned box (drag-resize / W-H fields): text
         // wraps inside it and auto-sizing stands down, like Figma's
-        // fixed-size text. Missing binding = auto-width.
-        match info.as_ref().map(|i| i.4.as_str()) {
+        // fixed-size text. Missing binding = auto-width. "height" is
+        // Figma Auto height: width stays, height hugs the wrap.
+        let tm = match info.as_ref().map(|i| i.4.as_str()) {
             Some("fixed") | None => return false,
-            _ => {}
-        }
-        let (text, _, fs, lh_binding, _, list) = info.unwrap();
+            Some(m) => m.to_string(),
+        };
+        let (text, cur_w, fs, lh_binding, _, list) = info.unwrap();
         // line-height MODE -> effective natural multiplier
         let nat = self.natural_line_height(fs).max(0.1);
         let (ls, ws, ps, tc, lh) = {
@@ -2554,31 +2555,49 @@ impl App {
         // fits what is actually rendered; small caps re-sizes segments)
         let tc = tc.as_deref();
         let text = x_native::apply_text_case(&text, tc);
-        let (line_w, block_h) = self.measure_text_node(
-            &text,
-            fs,
-            lh,
-            ls,
-            ws,
-            ps,
-            tc == Some("sc"),
-            x_native::TextWrap::Auto,
-        );
-        let w = {
+        let wrap = {
             let doc = self.doc();
             crate::editor_ui::find_node(&doc.editor_ref().root, id)
-                .map(|n| n.w)
-                .unwrap_or(0.0)
+                .map(|n| n.text_wrap())
+                .unwrap_or(x_native::TextWrap::Auto)
         };
-        // a list's box hugs the marker column as well as the text: the
-        // shaper reserves `LIST_MARKER_GAP` off the wrap width, so an
-        // auto-width box has to carry it
         let gap = if list == x_native::ListStyle::None {
             0.0
         } else {
             x_native::LIST_MARKER_GAP
         };
-        let (nw, nh) = ((line_w + gap + 3.0).ceil(), (block_h + 0.5).ceil());
+        let (nw, nh) = if tm == "height" {
+            // Auto height: wrap at the current width, hug the block height.
+            let font = self.fonts.fonts.default_font().unwrap_or(0);
+            let spans = [x_native::text::Span::new(&text, fs)
+                .font(font)
+                .letter_spacing(ls)
+                .word_spacing(ws)];
+            let style = x_native::text::TextBlockStyle {
+                max_width: cur_w.max(8.0),
+                line_height: lh,
+                wrap,
+                paragraph_spacing: ps,
+                small_caps: tc == Some("sc"),
+                ..Default::default()
+            };
+            let (_, block_h) =
+                x_native::text::glyph_outlines(&self.fonts.fonts, &spans, font, &style);
+            (cur_w, (block_h + 0.5).ceil())
+        } else {
+            let (line_w, block_h) = self.measure_text_node(
+                &text,
+                fs,
+                lh,
+                ls,
+                ws,
+                ps,
+                tc == Some("sc"),
+                x_native::TextWrap::Auto,
+            );
+            ((line_w + gap + 3.0).ceil(), (block_h + 0.5).ceil())
+        };
+        let w = cur_w;
         let doc = self.doc();
         doc.editor().mutate_visual_stack(id, |n| {
             n.bindings
@@ -2616,7 +2635,7 @@ impl App {
     }
 
     /// The Layout section's **Resizing** control for a text layer (help
-    /// 27378154668951): Fixed size pins the box, Auto width fits it again.
+    /// 27378154668951): Auto width → Auto height → Fixed size → Auto width.
     pub fn toggle_text_resize(&mut self) -> bool {
         let info = {
             let doc = self.doc();
@@ -2626,14 +2645,27 @@ impl App {
                     .map(|n| {
                         (
                             id,
-                            n.bindings.get("tm").map(String::as_str) == Some("fixed"),
+                            n.bindings
+                                .get("tm")
+                                .map(String::as_str)
+                                .unwrap_or("auto")
+                                .to_string(),
                         )
                     })
             })
         };
-        match info {
-            Some((id, true)) => self.fit_text_to_content(&id),
-            Some((id, false)) => {
+        match info.as_ref().map(|(id, tm)| (id.as_str(), tm.as_str())) {
+            Some((id, "auto")) => {
+                let id = id.to_string();
+                let doc = self.doc();
+                doc.editor().mutate_visual_stack(&id, |n| {
+                    n.bindings.insert("tm".into(), "height".into());
+                });
+                self.autosize_text_node(&id);
+                true
+            }
+            Some((id, "height")) => {
+                let id = id.to_string();
                 let doc = self.doc();
                 doc.editor().mutate_visual_stack(&id, |n| {
                     n.bindings.insert("tm".into(), "fixed".into());
@@ -2641,6 +2673,7 @@ impl App {
                 self.mark_dirty();
                 true
             }
+            Some((id, _)) => self.fit_text_to_content(id),
             None => false,
         }
     }
@@ -4098,6 +4131,23 @@ impl Host {
         if self.app.color_picker_popup.is_some() && !color_popup_hit {
             self.dispatch(Action::CloseColorPicker);
             return;
+        }
+
+        if self.app.typo_advanced_open {
+            let on_btn = self
+                .app
+                .typo_settings_btn
+                .map(|r| r.contains(p))
+                .unwrap_or(false);
+            let on_panel = self
+                .app
+                .typo_settings_panel
+                .map(|r| r.contains(p))
+                .unwrap_or(false);
+            if !on_btn && !on_panel {
+                self.app.typo_advanced_open = false;
+                self.app.typo_settings_panel = None;
+            }
         }
 
         // The minimap owns presses inside it: the ✕ closes it, anywhere else
@@ -12248,6 +12298,19 @@ impl Host {
                     self.app.mark_dirty();
                 }
             }
+            Action::SetTextAlignVertical(align) => {
+                let Some(id) = self.app.doc().selected_id() else {
+                    return;
+                };
+                let changed = self
+                    .app
+                    .doc()
+                    .editor()
+                    .mutate_visual_stack(&id, |n| n.text_align_vertical = align);
+                if changed {
+                    self.app.mark_dirty();
+                }
+            }
             Action::CycleTextAlignVertical => {
                 let Some(id) = self.app.doc().selected_id() else {
                     return;
@@ -13094,6 +13157,8 @@ impl Host {
                     self.app.mark_dirty();
                     self.app.status = if self.app.is_text_fixed() {
                         "Fixed size".into()
+                    } else if self.app.is_text_auto_height() {
+                        "Auto height".into()
                     } else {
                         "Auto width".into()
                     };

@@ -26,6 +26,7 @@ pub fn paint(app: &mut App, s: &mut Scene) {
     app.paint_lib_at = None;
     // the corner popover records its slider track every paint it is open
     app.corner_slider = None;
+    app.typo_settings_btn = None;
     // …and the Stroke section records its style icon when it is drawn
     app.stroke_row = None;
     app.image_row = None;
@@ -77,6 +78,7 @@ pub fn paint(app: &mut App, s: &mut Scene) {
     if let Some(i) = app.dropdown_proto_trigger {
         paint_proto_trigger_dropdown(app, s, &mut hit, i);
     }
+    paint_type_settings(app, s, &mut hit);
     paint_effects_menus(app, s, &mut hit);
     if app.paint_lib.is_some() {
         paint_paint_library(app, s, &mut hit);
@@ -4230,15 +4232,17 @@ fn paint_design(
         let (label, enabled) = if text_sel {
             (
                 if is_w {
-                    if app.is_text_fixed() {
+                    if app.is_text_fixed() || app.is_text_auto_height() {
                         "Fixed"
                     } else {
                         "Auto"
                     }
+                } else if app.is_text_fixed() {
+                    "Fixed"
                 } else {
                     "Auto"
                 },
-                is_w,
+                true,
             )
         } else {
             match sizing {
@@ -4973,22 +4977,42 @@ fn paint_design(
     hit.push((lhr, Action::Field(FieldId::LineHeight)));
     hit.push((lh_chev, Action::LhDropdown));
 
-    // Horizontal alignment: three working buttons. The shaper degrades
-    // Justified to Left, so it is not offered (a phantom state); the active
-    // highlight mirrors what the canvas actually renders.
+    // Figma puts letter spacing on this same row (help 360039956634).
+    app.fonts
+        .text(s, x0 + 161.5, y0 + 796.0, "Letter spacing", T10, C_DIM, Wt::Reg);
+    let lsr = Rect::new(x0 + 161.5, y0 + 814.0, x0 + inner_w, y0 + 842.0);
+    input(
+        app,
+        s,
+        hit,
+        lsr,
+        None,
+        &field_val(
+            app,
+            FieldId::LetterSpacing,
+            typo_val(app, Typo::LetterSpacing),
+        ),
+        false,
+        Some(Action::Field(FieldId::LetterSpacing)),
+        None,
+    );
+
+    // Figma Typography: 4 horizontal + 3 vertical + type settings (⋯).
     app.fonts
         .text(s, x0, y0 + 850.0, "Alignment", T10, C_DIM, Wt::Reg);
     let align_now = selected_text_align(app);
-    for (i, (ic, t)) in [
+    let valign_now = selected_text_align_vertical(app);
+    let btn_w = 32.0;
+    let btn_h = 28.0;
+    let by = y0 + 868.0;
+    let mut bx = x0;
+    for (ic, t) in [
         ("align-left", x_native::TextAlign::Left),
         ("align-center", x_native::TextAlign::Center),
         ("align-right", x_native::TextAlign::Right),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let bx = x0 + 47.7 * i as f64;
-        let br = Rect::new(bx, y0 + 868.0, bx + 43.8, y0 + 896.0);
+        ("align-justify", x_native::TextAlign::Justified),
+    ] {
+        let br = Rect::new(bx, by, bx + btn_w, by + btn_h);
         let active = align_now == t;
         if active {
             fill_rrect(s, br, R_MD, C_FIELD_2);
@@ -4999,281 +5023,61 @@ fn paint_design(
         draw_icon(
             s,
             ic,
-            br.x0 + (43.8 - 14.0) / 2.0,
+            br.x0 + (btn_w - 14.0) / 2.0,
             br.y0 + 7.0,
             ICON_SM,
             if active { C_TEXT } else { C_DIM },
         );
         hit.push((br, Action::SetTextAlign(t)));
+        bx += btn_w + 4.0;
     }
-
-    // Vertical alignment (horizontal sits in the button row above)
-    app.fonts
-        .text(s, x0, y0 + 904.0, "Vertical alignment", T10, C_DIM, Wt::Reg);
-    let v_align = Rect::new(x0, y0 + 922.0, x0 + 153.5, y0 + 950.0);
-    input(
-        app,
-        s,
-        hit,
-        v_align,
-        None,
-        &text_align_vertical_label(app),
-        false,
-        Some(Action::CycleTextAlignVertical),
-        Some("chevron-down"),
-    );
-
-    // Decoration | Wrap style (the engine's paragraph wrap strategy, "tw")
-    app.fonts
-        .text(s, x0, y0 + 958.0, "Decoration", T10, C_DIM, Wt::Reg);
-    app.fonts
-        .text(s, x0 + 161.5, y0 + 958.0, "Wrap style", T10, C_DIM, Wt::Reg);
-    let deco = Rect::new(x0, y0 + 976.0, x0 + 153.5, y0 + 1004.0);
-    input(
-        app,
-        s,
-        hit,
-        deco,
-        None,
-        &text_decoration_label(app),
-        false,
-        Some(Action::CycleTextDecoration),
-        Some("chevron-down"),
-    );
-    let wrap = Rect::new(x0 + 161.5, y0 + 976.0, x0 + inner_w, y0 + 1004.0);
-    input(
-        app,
-        s,
-        hit,
-        wrap,
-        None,
-        &wrap_strategy_label(app),
-        false,
-        Some(Action::CycleTextWrap),
-        Some("chevron-down"),
-    );
-
-    // Max lines | Paragraph indent
-    app.fonts
-        .text(s, x0, y0 + 1012.0, "Max lines", T10, C_DIM, Wt::Reg);
-    app.fonts.text(
-        s,
-        x0 + 161.5,
-        y0 + 1012.0,
-        "Paragraph indent",
-        T10,
-        C_DIM,
-        Wt::Reg,
-    );
-    let max_lines = Rect::new(x0, y0 + 1030.0, x0 + 153.5, y0 + 1058.0);
-    input(
-        app,
-        s,
-        hit,
-        max_lines,
-        None,
-        &field_val(app, FieldId::MaxLines, typo_val(app, Typo::MaxLines)),
-        false,
-        Some(Action::Field(FieldId::MaxLines)),
-        None,
-    );
-    let para_indent = Rect::new(x0 + 161.5, y0 + 1030.0, x0 + inner_w, y0 + 1058.0);
-    input(
-        app,
-        s,
-        hit,
-        para_indent,
-        None,
-        &field_val(
-            app,
-            FieldId::ParagraphIndent,
-            typo_val(app, Typo::ParagraphIndent),
-        ),
-        false,
-        Some(Action::Field(FieldId::ParagraphIndent)),
-        None,
-    );
-
-    // ---- Advanced disclosure (progressive disclosure, P0-8) -------------
-    // The spacing metrics, baseline shift, case and the variable-font axes
-    // are real, engine-backed properties — but they are not the primary set
-    // (Font / Weight / Size / Line height / Alignment), so they sit behind
-    // a disclosure instead of disappearing.
-    let adv_open = app.typo_advanced_open;
-    let adv = Rect::new(x0, y0 + 1066.0, x0 + inner_w, y0 + 1066.0 + DENSE_H);
-    let adv_hov = hover(app, adv);
+    bx += 6.0;
+    for (ic, t) in [
+        ("align-vertical-top", x_native::TextAlignVertical::Top),
+        ("align-vertical-middle", x_native::TextAlignVertical::Middle),
+        ("align-vertical-bottom", x_native::TextAlignVertical::Bottom),
+    ] {
+        let br = Rect::new(bx, by, bx + btn_w, by + btn_h);
+        let active = valign_now == t;
+        if active {
+            fill_rrect(s, br, R_MD, C_FIELD_2);
+            stroke_rrect(s, br, R_MD, C_LINE_2, 1.0);
+        } else {
+            input_box(app, s, br, 6.0);
+        }
+        draw_icon(
+            s,
+            ic,
+            br.x0 + (btn_w - 14.0) / 2.0,
+            br.y0 + 7.0,
+            ICON_SM,
+            if active { C_TEXT } else { C_DIM },
+        );
+        hit.push((br, Action::SetTextAlignVertical(t)));
+        bx += btn_w + 4.0;
+    }
+    let settings = Rect::new(x0 + inner_w - btn_h, by, x0 + inner_w, by + btn_h);
+    let settings_on = app.typo_advanced_open || hover(app, settings);
+    if settings_on {
+        fill_rrect(s, settings, R_MD, if app.typo_advanced_open { C_SEL } else { C_FIELD_2 });
+    } else {
+        input_box(app, s, settings, 6.0);
+    }
     draw_icon(
         s,
-        if adv_open {
-            "chevron-down"
-        } else {
-            "chevron-right"
-        },
-        adv.x0 + 1.0,
-        adv.y0 + 6.0,
-        ICON_XS,
-        C_DIM,
+        "more-horizontal",
+        settings.x0 + 7.0,
+        settings.y0 + 7.0,
+        ICON_SM,
+        if app.typo_advanced_open { C_ON_ACCENT } else { C_DIM },
     );
-    app.fonts.text(
-        s,
-        adv.x0 + 20.0,
-        adv.y0 + 5.0,
-        "Advanced",
-        T10,
-        if adv_hov { C_TEXT } else { C_DIM },
-        Wt::Reg,
-    );
-    hit.push((adv, Action::ToggleTypoAdvanced));
-    if adv_open {
-        // Letter spacing | Word spacing
-        app.fonts
-            .text(s, x0, y0 + 1098.0, "Letter spacing", T10, C_DIM, Wt::Reg);
-        app.fonts.text(
-            s,
-            x0 + 161.5,
-            y0 + 1098.0,
-            "Word spacing",
-            T10,
-            C_DIM,
-            Wt::Reg,
-        );
-        let lsr = Rect::new(x0, y0 + 1116.0, x0 + 153.5, y0 + 1144.0);
-        input(
-            app,
-            s,
-            hit,
-            lsr,
-            None,
-            &field_val(
-                app,
-                FieldId::LetterSpacing,
-                typo_val(app, Typo::LetterSpacing),
-            ),
-            false,
-            Some(Action::Field(FieldId::LetterSpacing)),
-            None,
-        );
-        let wsr = Rect::new(x0 + 161.5, y0 + 1116.0, x0 + inner_w, y0 + 1144.0);
-        input(
-            app,
-            s,
-            hit,
-            wsr,
-            None,
-            &field_val(app, FieldId::WordSpacing, typo_val(app, Typo::WordSpacing)),
-            false,
-            Some(Action::Field(FieldId::WordSpacing)),
-            None,
-        );
-        // Paragraph spacing | Baseline shift
-        app.fonts
-            .text(s, x0, y0 + 1152.0, "Paragraph spacing", T10, C_DIM, Wt::Reg);
-        app.fonts.text(
-            s,
-            x0 + 161.5,
-            y0 + 1152.0,
-            "Baseline shift",
-            T10,
-            C_DIM,
-            Wt::Reg,
-        );
-        let psr = Rect::new(x0, y0 + 1170.0, x0 + 153.5, y0 + 1198.0);
-        input(
-            app,
-            s,
-            hit,
-            psr,
-            None,
-            &field_val(app, FieldId::ParaSpacing, typo_val(app, Typo::ParaSpacing)),
-            false,
-            Some(Action::Field(FieldId::ParaSpacing)),
-            None,
-        );
-        let bsr = Rect::new(x0 + 161.5, y0 + 1170.0, x0 + inner_w, y0 + 1198.0);
-        input(
-            app,
-            s,
-            hit,
-            bsr,
-            None,
-            &field_val(
-                app,
-                FieldId::BaselineShift,
-                typo_val(app, Typo::BaselineShift),
-            ),
-            false,
-            Some(Action::Field(FieldId::BaselineShift)),
-            None,
-        );
-        // Text case (small caps rides the same control)
-        app.fonts
-            .text(s, x0, y0 + 1206.0, "Text case", T10, C_DIM, Wt::Reg);
-        let tcr = Rect::new(x0, y0 + 1224.0, x0 + 153.5, y0 + 1252.0);
-        input(
-            app,
-            s,
-            hit,
-            tcr,
-            None,
-            &field_val(app, FieldId::TextCase, typo_val(app, Typo::TextCase)),
-            false,
-            Some(Action::Field(FieldId::TextCase)),
-            Some("chevron-down"),
-        );
-        // List style — Figma's text-list property (help 360040449773):
-        // *"Use the List style property to apply a list style to a text
-        // layer"*. None / Bulleted / Numbered behind one picker.
-        app.fonts
-            .text(s, x0, y0 + 1260.0, "List style", T10, C_DIM, Wt::Reg);
-        let lsr = Rect::new(x0, y0 + 1278.0, x0 + 153.5, y0 + 1306.0);
-        input(
-            app,
-            s,
-            hit,
-            lsr,
-            None,
-            &list_style_label(app),
-            false,
-            Some(Action::ToggleListStyle),
-            Some("chevron-down"),
-        );
-        if app.list_style_open {
-            app.blend_dd_anchor = (lsr.x0, lsr.y1);
-        }
-        // Optical size | Width (variable-font axes; Auto on static faces)
-        app.fonts
-            .text(s, x0, y0 + 1314.0, "Optical size", T10, C_DIM, Wt::Reg);
-        app.fonts
-            .text(s, x0 + 161.5, y0 + 1314.0, "Width", T10, C_DIM, Wt::Reg);
-        let osr = Rect::new(x0, y0 + 1332.0, x0 + 153.5, y0 + 1360.0);
-        input(
-            app,
-            s,
-            hit,
-            osr,
-            None,
-            &field_val(app, FieldId::OpticalSize, typo_val(app, Typo::OpticalSize)),
-            false,
-            Some(Action::Field(FieldId::OpticalSize)),
-            None,
-        );
-        let wdr = Rect::new(x0 + 161.5, y0 + 1332.0, x0 + inner_w, y0 + 1360.0);
-        input(
-            app,
-            s,
-            hit,
-            wdr,
-            None,
-            &field_val(app, FieldId::WidthAxis, typo_val(app, Typo::WidthAxis)),
-            false,
-            Some(Action::Field(FieldId::WidthAxis)),
-            None,
-        );
-    }
+    tip(app, settings, "Type settings");
+    app.typo_settings_btn = Some(settings);
+    hit.push((settings, Action::ToggleTypoAdvanced));
 
     // ---- fill / stroke / effects / guides continue with the shared tail
-    // (the section's end moves with the disclosure, so does the tail)
-    let tail_top = if adv_open { y0 + 1372.0 } else { y0 + 1102.0 };
+    // (type settings is a popover, so the tail no longer jumps)
+    let tail_top = y0 + 908.0;
     hline(s, rx, rx + rw, tail_top, C_LINE);
     let mut y = tail_top + 12.0;
     let inner_w = rw - pl * 2.0;
@@ -6932,10 +6736,20 @@ fn selected_text_align(app: &App) -> x_native::TextAlign {
     let Some(node) = find_node(&doc.editor_ref().root, &id) else {
         return x_native::TextAlign::Left;
     };
-    match node.text_align {
-        x_native::TextAlign::Justified => x_native::TextAlign::Left,
-        other => other,
-    }
+    node.text_align
+}
+
+fn selected_text_align_vertical(app: &App) -> x_native::TextAlignVertical {
+    let Some(doc) = app.doc_opt() else {
+        return x_native::TextAlignVertical::Top;
+    };
+    let Some(id) = doc.selected_id() else {
+        return x_native::TextAlignVertical::Top;
+    };
+    let Some(node) = find_node(&doc.editor_ref().root, &id) else {
+        return x_native::TextAlignVertical::Top;
+    };
+    node.text_align_vertical
 }
 
 fn text_align_vertical_label(app: &App) -> String {
@@ -8222,6 +8036,206 @@ fn paint_proto_scroll_dropdown(
         };
         hit.push((r, action));
     }
+}
+
+/// Figma Type settings popover (help 360039956634): decoration, wrap,
+/// case, lists, paragraph metrics, max lines, variable axes. Anchored to
+/// the ⋯ button in Typography so it sits over the panel, not in flow.
+fn paint_type_settings(app: &mut App, s: &mut Scene, hit: &mut Vec<(Rect, Action)>) {
+    if !app.typo_advanced_open {
+        app.typo_settings_panel = None;
+        return;
+    }
+    let Some(btn) = app.typo_settings_btn else {
+        return;
+    };
+    let w = 300.0;
+    let h = 420.0;
+    let x = (btn.x1 - w).max(8.0);
+    let y = (btn.y1 + 4.0).min((app.win_h - h - 8.0).max(ED_TITLE_H + 4.0));
+    let panel = Rect::new(x, y, x + w, y + h);
+    elev_shadow(s, panel, 12.0, Elevation::Floating);
+    fill_rrect(s, panel, R_LG, C_FIELD);
+    stroke_rrect(s, panel, R_LG, C_LINE_2, 1.0);
+    app.typo_settings_panel = Some(panel);
+    app.fonts
+        .text(s, panel.x0 + 12.0, panel.y0 + 12.0, "Type settings", T11, C_TEXT, Wt::Med);
+    let x0 = panel.x0 + 12.0;
+    let xr = panel.x1 - 12.0;
+    let inner = xr - x0;
+    let mut y = panel.y0 + 36.0;
+    let row_h = 28.0;
+
+    app.fonts.text(s, x0, y, "Decoration", T10, C_DIM, Wt::Reg);
+    app.fonts.text(s, x0 + inner / 2.0 + 4.0, y, "Wrap style", T10, C_DIM, Wt::Reg);
+    y += 14.0;
+    let deco = Rect::new(x0, y, x0 + inner / 2.0 - 4.0, y + row_h);
+    input(
+        app,
+        s,
+        hit,
+        deco,
+        None,
+        &text_decoration_label(app),
+        false,
+        Some(Action::CycleTextDecoration),
+        Some("chevron-down"),
+    );
+    let wrap = Rect::new(x0 + inner / 2.0 + 4.0, y, xr, y + row_h);
+    input(
+        app,
+        s,
+        hit,
+        wrap,
+        None,
+        &wrap_strategy_label(app),
+        false,
+        Some(Action::CycleTextWrap),
+        Some("chevron-down"),
+    );
+    y += row_h + 10.0;
+
+    app.fonts.text(s, x0, y, "Text case", T10, C_DIM, Wt::Reg);
+    app.fonts.text(s, x0 + inner / 2.0 + 4.0, y, "List style", T10, C_DIM, Wt::Reg);
+    y += 14.0;
+    let tcr = Rect::new(x0, y, x0 + inner / 2.0 - 4.0, y + row_h);
+    input(
+        app,
+        s,
+        hit,
+        tcr,
+        None,
+        &field_val(app, FieldId::TextCase, typo_val(app, Typo::TextCase)),
+        false,
+        Some(Action::Field(FieldId::TextCase)),
+        Some("chevron-down"),
+    );
+    let lsr = Rect::new(x0 + inner / 2.0 + 4.0, y, xr, y + row_h);
+    input(
+        app,
+        s,
+        hit,
+        lsr,
+        None,
+        &list_style_label(app),
+        false,
+        Some(Action::ToggleListStyle),
+        Some("chevron-down"),
+    );
+    if app.list_style_open {
+        app.blend_dd_anchor = (lsr.x0, lsr.y1);
+    }
+    y += row_h + 10.0;
+
+    app.fonts.text(s, x0, y, "Paragraph spacing", T10, C_DIM, Wt::Reg);
+    app.fonts.text(s, x0 + inner / 2.0 + 4.0, y, "Paragraph indent", T10, C_DIM, Wt::Reg);
+    y += 14.0;
+    let psr = Rect::new(x0, y, x0 + inner / 2.0 - 4.0, y + row_h);
+    input(
+        app,
+        s,
+        hit,
+        psr,
+        None,
+        &field_val(app, FieldId::ParaSpacing, typo_val(app, Typo::ParaSpacing)),
+        false,
+        Some(Action::Field(FieldId::ParaSpacing)),
+        None,
+    );
+    let pir = Rect::new(x0 + inner / 2.0 + 4.0, y, xr, y + row_h);
+    input(
+        app,
+        s,
+        hit,
+        pir,
+        None,
+        &field_val(
+            app,
+            FieldId::ParagraphIndent,
+            typo_val(app, Typo::ParagraphIndent),
+        ),
+        false,
+        Some(Action::Field(FieldId::ParagraphIndent)),
+        None,
+    );
+    y += row_h + 10.0;
+
+    app.fonts.text(s, x0, y, "Max lines", T10, C_DIM, Wt::Reg);
+    app.fonts.text(s, x0 + inner / 2.0 + 4.0, y, "Word spacing", T10, C_DIM, Wt::Reg);
+    y += 14.0;
+    let mlr = Rect::new(x0, y, x0 + inner / 2.0 - 4.0, y + row_h);
+    input(
+        app,
+        s,
+        hit,
+        mlr,
+        None,
+        &field_val(app, FieldId::MaxLines, typo_val(app, Typo::MaxLines)),
+        false,
+        Some(Action::Field(FieldId::MaxLines)),
+        None,
+    );
+    let wsr = Rect::new(x0 + inner / 2.0 + 4.0, y, xr, y + row_h);
+    input(
+        app,
+        s,
+        hit,
+        wsr,
+        None,
+        &field_val(app, FieldId::WordSpacing, typo_val(app, Typo::WordSpacing)),
+        false,
+        Some(Action::Field(FieldId::WordSpacing)),
+        None,
+    );
+    y += row_h + 10.0;
+
+    app.fonts.text(s, x0, y, "Baseline shift", T10, C_DIM, Wt::Reg);
+    y += 14.0;
+    let bsr = Rect::new(x0, y, x0 + inner / 2.0 - 4.0, y + row_h);
+    input(
+        app,
+        s,
+        hit,
+        bsr,
+        None,
+        &field_val(
+            app,
+            FieldId::BaselineShift,
+            typo_val(app, Typo::BaselineShift),
+        ),
+        false,
+        Some(Action::Field(FieldId::BaselineShift)),
+        None,
+    );
+    y += row_h + 10.0;
+
+    app.fonts.text(s, x0, y, "Optical size", T10, C_DIM, Wt::Reg);
+    app.fonts.text(s, x0 + inner / 2.0 + 4.0, y, "Width", T10, C_DIM, Wt::Reg);
+    y += 14.0;
+    let osr = Rect::new(x0, y, x0 + inner / 2.0 - 4.0, y + row_h);
+    input(
+        app,
+        s,
+        hit,
+        osr,
+        None,
+        &field_val(app, FieldId::OpticalSize, typo_val(app, Typo::OpticalSize)),
+        false,
+        Some(Action::Field(FieldId::OpticalSize)),
+        None,
+    );
+    let wdr = Rect::new(x0 + inner / 2.0 + 4.0, y, xr, y + row_h);
+    input(
+        app,
+        s,
+        hit,
+        wdr,
+        None,
+        &field_val(app, FieldId::WidthAxis, typo_val(app, Typo::WidthAxis)),
+        false,
+        Some(Action::Field(FieldId::WidthAxis)),
+        None,
+    );
 }
 
 /// Line-height mode menu (Figma): Auto / Pixels / Percent, anchored under
