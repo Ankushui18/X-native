@@ -98,6 +98,12 @@ PR instead of a redesign.
 
 ## UI
 
+Designer **chrome** (panels, inspector, tool dock) also ships as a React app in
+[`apps/web`](apps/web/README.md). It talks to the document through a command API
+so a future WASM `x-editor` can replace the in-memory engine without rewriting
+the shell. The GPU canvas, undo, layout solver and `.x` IO stay in Rust;
+`x_native_app` is unchanged.
+
 The native Rust UI in `apps/x-designer/src/bin/x_native_app/` is the active
 product interface, implementing the Graphite & Signal design system:
 app shell, home, tool rail, pages + layers, contextual inspector, status bar,
