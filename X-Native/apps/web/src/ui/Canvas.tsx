@@ -4,7 +4,7 @@ import { deepestFrame, find, findParent, hitTest, worldPos } from "../engine/mem
 import { shapePoly } from "../engine/geometry";
 import { fillStyle, paintDropShadows, paintFill, paintImageFill, paintInnerShadows } from "../engine/paint";
 import { useTheme } from "./theme";
-import { cssRgba, isNone, takeEyedrop, toHex } from "./color";
+import { cssRgba, isNone, parseHex, takeEyedrop, toHex } from "./color";
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
 
 const CREATE: Tool[] = [
@@ -68,7 +68,11 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.code === "Space") space.current = e.type === "keydown";
+      if (e.code === "Space") {
+        space.current = e.type === "keydown";
+        if (e.type === "keydown" && (e.target as HTMLElement).tagName !== "INPUT" && (e.target as HTMLElement).tagName !== "TEXTAREA")
+          e.preventDefault();
+      }
       if (e.type === "keydown" && e.key === "Escape" && draft.length) {
         e.stopImmediatePropagation();
         setDraft([]);
@@ -297,9 +301,10 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         }
       }
       const canShadow =
-        !!n.imageSrc ||
-        (n.fillVisible !== false && !!n.fill && !isNone(n.fill) && n.kind !== "line" && n.kind !== "arrow") ||
-        (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint));
+        n.kind !== "text" &&
+        (!!n.imageSrc ||
+          (n.fillVisible !== false && !!n.fill && !isNone(n.fill) && n.kind !== "line" && n.kind !== "arrow") ||
+          (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)));
       if (canShadow) paintDropShadows(ctx, n, z);
       if (n.fillType === "image" || (n.imageSrc && isNone(n.fill))) {
         let im = n.imageSrc ? imgs.current.get(n.imageSrc) : undefined;
@@ -348,7 +353,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       if (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)) {
         ctx.save();
         ctx.globalAlpha *= n.strokeOpacity ?? 1;
-        ctx.strokeStyle = n.strokePaint;
+        ctx.strokeStyle = cssRgba(n.strokePaint);
         const lw = Math.max(0.5, n.strokeWidth * z);
         ctx.lineCap = n.strokeCap === "round" ? "round" : n.strokeCap === "square" ? "square" : "butt";
         ctx.lineJoin = n.strokeJoin === "round" ? "round" : n.strokeJoin === "bevel" ? "bevel" : "miter";
@@ -384,7 +389,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           ctx.lineTo(sx + sw - ah, sy + sh / 2 - ah * 0.55);
           ctx.lineTo(sx + sw - ah, sy + sh / 2 + ah * 0.55);
           ctx.closePath();
-          ctx.fillStyle = n.strokePaint;
+          ctx.fillStyle = cssRgba(n.strokePaint);
           ctx.fill();
         }
         ctx.restore();
@@ -658,7 +663,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   };
 
   const onDown = (e: React.MouseEvent) => {
-    if (edit) return;
+    if (edit && (e.target as HTMLElement).closest(".text-edit")) return;
     if (e.button === 2) return;
     if (snap.presentFrame) {
       const wpt = toWorld(e.clientX, e.clientY);
@@ -1110,6 +1115,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       if (!k) return;
       const shift = e.shiftKey;
       const alt = e.altKey;
+      let rot = 0;
       if (clicked) {
         if (k === "text") {
           w = 24;
@@ -1123,6 +1129,19 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         }
         x = a.x;
         y = a.y;
+      } else if (k === "line" || k === "arrow") {
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        let ang = Math.atan2(dy, dx);
+        if (shift) ang = Math.round(ang / (Math.PI / 4)) * (Math.PI / 4);
+        const len = Math.max(1, Math.hypot(dx, dy));
+        w = len;
+        h = 1;
+        const mx = a.x + Math.cos(ang) * (len / 2);
+        const my = a.y + Math.sin(ang) * (len / 2);
+        x = mx - w / 2;
+        y = my - h / 2;
+        rot = (ang * 180) / Math.PI;
       } else {
         if (shift) {
           const s = Math.max(w, h, 1);
@@ -1161,7 +1180,9 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             ? clicked
               ? { text: "", sizingW: "hug", sizingH: "hug", fontSize: 16 }
               : { text: "", sizingW: "fixed", sizingH: "fixed", fontSize: 16 }
-            : {};
+            : k === "line" || k === "arrow"
+              ? { rotation: rot }
+              : {};
       engine.dispatch({
         type: "add",
         kind: k,
@@ -1374,7 +1395,8 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             setEdit(null);
           }}
           onKeyDown={(e) => {
-            if (e.key === "Escape") (e.target as HTMLTextAreaElement).blur();
+            if (e.key === "Escape" || ((e.metaKey || e.ctrlKey) && e.key === "Enter"))
+              (e.target as HTMLTextAreaElement).blur();
             e.stopPropagation();
           }}
         />
@@ -1708,7 +1730,27 @@ function paintText(
   let y0 = sy;
   if (n.textAlignVertical === "middle") y0 = sy + (sh - blockH) / 2;
   if (n.textAlignVertical === "bottom") y0 = sy + sh - blockH;
+  const drop = (n.effects ?? []).find((e) => e.kind === "drop-shadow" && e.visible);
+  if (drop) {
+    const { r, g, b, a } = parseHex(drop.color);
+    ctx.shadowColor = `rgba(${r},${g},${b},${a})`;
+    ctx.shadowBlur = Math.max(0, drop.blur) * z;
+    ctx.shadowOffsetX = drop.x * z;
+    ctx.shadowOffsetY = drop.y * z;
+  }
   let ty = y0;
+  const strokeOn = n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint);
+  const paintLine = (str: string, x: number, y: number, maxW?: number) => {
+    ctx.fillText(str, x, y, maxW);
+    if (strokeOn) {
+      ctx.save();
+      ctx.shadowColor = "transparent";
+      ctx.strokeStyle = cssRgba(n.strokePaint);
+      ctx.lineWidth = Math.max(0.5, n.strokeWidth * z);
+      ctx.strokeText(str, x, y, maxW);
+      ctx.restore();
+    }
+  };
   lines.forEach((row) => {
     const line = row.line;
     const tx =
@@ -1721,7 +1763,7 @@ function paintText(
       let x = sx;
       ctx.textAlign = "left";
       for (const w of words) {
-        ctx.fillText(w, x, ty);
+        paintLine(w, x, ty);
         x += ctx.measureText(w).width + gap;
       }
       ctx.textAlign = "left";
@@ -1731,32 +1773,33 @@ function paintText(
       if (n.textAlign === "right") x = tx - (ctx.measureText(line).width + ls * Math.max(0, line.length - 1));
       ctx.textAlign = "left";
       for (const ch of line) {
-        ctx.fillText(ch, x, ty);
+        paintLine(ch, x, ty);
         x += ctx.measureText(ch).width + ls;
       }
       ctx.textAlign = n.textAlign === "center" ? "center" : n.textAlign === "right" ? "right" : "left";
     } else {
-      ctx.fillText(line, tx, ty, wrap ? sw : undefined);
-      if (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)) {
-        ctx.save();
-        ctx.strokeStyle = n.strokePaint;
-        ctx.lineWidth = Math.max(0.5, n.strokeWidth * z);
-        ctx.strokeText(line, tx, ty, wrap ? sw : undefined);
-        ctx.restore();
-      }
+      paintLine(line, tx, ty, wrap ? sw : undefined);
     }
     if (n.textDecoration === "underline" || n.textDecoration === "strikethrough") {
       const m = ctx.measureText(line);
       const yy = n.textDecoration === "underline" ? ty + size : ty + size / 2;
       const x0 = n.textAlign === "center" ? tx - m.width / 2 : n.textAlign === "right" ? tx - m.width : tx;
+      ctx.save();
+      ctx.shadowColor = "transparent";
       ctx.beginPath();
       ctx.moveTo(x0, yy);
       ctx.lineTo(x0 + m.width, yy);
-      ctx.strokeStyle = n.fill;
+      ctx.strokeStyle = cssRgba(n.fill);
       ctx.lineWidth = Math.max(1, z);
       ctx.stroke();
+      ctx.restore();
     }
+    ty += lh + (row.lastInPara ? paraGap : 0);
   });
+  ctx.shadowColor = "transparent";
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 0;
 }
 
 function walkInteractions(
@@ -1809,7 +1852,7 @@ function paintBoolean(
     } else {
       o.rect(sx, sy, sw, sh);
     }
-    o.fillStyle = n.fillVisible && n.fill ? n.fill : c.fill;
+    o.fillStyle = "#ffffff";
     o.fill();
   };
   if (!kids.length) return;
@@ -1821,5 +1864,9 @@ function paintBoolean(
     else if (op === "exclude") draw(kids[i], "xor");
     else draw(kids[i], "source-over");
   }
+  o.globalCompositeOperation = "source-in";
+  o.fillStyle = fillStyle(o, n, 0, 0, w, h);
+  o.globalAlpha = n.fillOpacity ?? 1;
+  o.fillRect(0, 0, w, h);
   ctx.drawImage(oc, snap.panX + px * z, snap.panY + py * z);
 }

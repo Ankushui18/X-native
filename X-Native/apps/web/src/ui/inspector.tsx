@@ -21,10 +21,10 @@ import type {
   ProtoTrigger,
   XNode,
 } from "../engine/types";
-import { collectColors, defaultEffect, defaultLayout, find, framesOf, worldPos } from "../engine/memory";
+import { collectColors, defaultEffect, defaultLayout, find, findParent, framesOf, worldPos } from "../engine/memory";
 import { Icon } from "./icons";
 import { FillPicker, type FillValue } from "./FillPicker";
-import { handlesForFill, isNone, parseHex, withAlpha } from "./color";
+import { BLENDS, handlesForFill, isNone, parseHex, withAlpha } from "./color";
 import { ContextMenu, runMenu } from "./ContextMenu";
 
 export function RightPanel({
@@ -856,9 +856,15 @@ function Design({
                 engine.dispatch({ type: "patch", id: n.id, patch: { blendMode: e.target.value } })
               }
             >
-              {["normal", "multiply", "screen", "overlay", "darken", "lighten"].map((m) => (
-                <option key={m} value={m}>
-                  {m === "normal" ? "Pass through" : m[0].toUpperCase() + m.slice(1)}
+              {(n.kind === "frame" || n.kind === "group"
+                ? ["Pass through", ...BLENDS]
+                : BLENDS
+              ).map((m) => (
+                <option
+                  key={m}
+                  value={m === "Pass through" ? "pass-through" : m.toLowerCase().replace(/\s+/g, "-")}
+                >
+                  {m}
                 </option>
               ))}
             </select>
@@ -1845,7 +1851,7 @@ function setDir(engine: Engine, n: XNode, direction: "horizontal" | "vertical") 
   });
 }
 
-function align(
+export function align(
   engine: Engine,
   snap: Snapshot,
   mode:
@@ -1857,6 +1863,21 @@ function align(
     | "align-bottom",
 ) {
   const root = snap.pages[snap.page].root;
+  if (snap.selection.length === 1) {
+    const n = find(root, snap.selection[0]);
+    const p = n ? findParent(root, n.id) : null;
+    if (!n || !p || p === root) return;
+    let dx = 0;
+    let dy = 0;
+    if (mode === "align-left") dx = -n.x;
+    if (mode === "align-right") dx = p.w - n.w - n.x;
+    if (mode === "align-hcenter") dx = (p.w - n.w) / 2 - n.x;
+    if (mode === "align-top") dy = -n.y;
+    if (mode === "align-bottom") dy = p.h - n.h - n.y;
+    if (mode === "align-vcenter") dy = (p.h - n.h) / 2 - n.y;
+    if (dx || dy) engine.dispatch({ type: "move", ids: [n.id], dx, dy });
+    return;
+  }
   const items = snap.selection
     .map((id) => worldPos(root, id))
     .filter((x): x is NonNullable<typeof x> => !!x);

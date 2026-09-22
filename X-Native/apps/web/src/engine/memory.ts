@@ -71,7 +71,7 @@ function node(
     starRatio: 0.4,
     showName: kind === "frame",
     exports: [],
-    blendMode: "normal",
+    blendMode: kind === "frame" || kind === "group" ? "pass-through" : "normal",
     imageSrc: "",
     imageFit: "fill",
     imageRot: 0,
@@ -675,9 +675,12 @@ export class MemoryEngine implements Engine {
         s.selection = created;
         break;
       }
-      case "selectAll":
-        s.selection = this.root().children.map((c) => c.id);
+      case "selectAll": {
+        const id = s.selection[0];
+        const parent = id ? findParent(this.root(), id) ?? this.root() : this.root();
+        s.selection = parent.children.filter((c) => c.visible).map((c) => c.id);
         break;
+      }
       case "lockSel":
         for (const id of s.selection) {
           const n = find(this.root(), id);
@@ -1212,6 +1215,13 @@ export function worldPos(
   return found ? { x: accX, y: accY, node: found } : null;
 }
 
+function unrotPt(px: number, py: number, cx: number, cy: number, deg: number) {
+  const a = (-deg * Math.PI) / 180;
+  const dx = px - cx;
+  const dy = py - cy;
+  return { x: cx + dx * Math.cos(a) - dy * Math.sin(a), y: cy + dx * Math.sin(a) + dy * Math.cos(a) };
+}
+
 export function hitTest(
   root: XNode,
   wx: number,
@@ -1219,17 +1229,24 @@ export function hitTest(
   opts?: { deep?: boolean; selection?: string[] },
 ): XNode | null {
   let hit: XNode | null = null;
-  const visit = (n: XNode, px: number, py: number) => {
+  const visit = (n: XNode, px: number, py: number, qx: number, qy: number) => {
     if (!n.visible) return;
     const x = px + n.x;
     const y = py + n.y;
-    for (let i = n.children.length - 1; i >= 0; i--) visit(n.children[i], x, y);
+    let lx = qx;
+    let ly = qy;
+    if (n.rotation) {
+      const u = unrotPt(qx, qy, x + n.w / 2, y + n.h / 2, n.rotation);
+      lx = u.x;
+      ly = u.y;
+    }
+    for (let i = n.children.length - 1; i >= 0; i--) visit(n.children[i], x, y, lx, ly);
     if (n === root) return;
-    if (wx >= x && wy >= y && wx <= x + n.w && wy <= y + n.h) {
+    if (lx >= x && ly >= y && lx <= x + n.w && ly <= y + n.h) {
       if (!hit) hit = n;
     }
   };
-  visit(root, 0, 0);
+  visit(root, 0, 0, wx, wy);
   if (!hit || opts?.deep) return hit;
   let n: XNode | null = hit;
   while (n) {

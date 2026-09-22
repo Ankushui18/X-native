@@ -376,6 +376,8 @@ input, textarea { user-select: text; }
 }
 .row:hover { background: var(--hover); }
 .row.sel { background: var(--sel); }
+.row.dim { opacity: 0.45; }
+.row.locked .name { font-style: italic; }
 .row.comp .name { color: #7b61ff; }
 html[data-theme="dark"] .row.comp .name,
 html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }

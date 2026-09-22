@@ -338,8 +338,6 @@ export function paintImageFill(
   const ih = src instanceof HTMLCanvasElement ? src.height : im.naturalHeight;
   const fit = n.imageFit || "fill";
   ctx.save();
-  ctx.beginPath();
-  ctx.rect(sx, sy, sw, sh);
   ctx.clip();
   if (fit === "tile") {
     const z = sw / Math.max(1, n.w);

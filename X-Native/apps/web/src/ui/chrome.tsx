@@ -4,6 +4,7 @@ import { collectColors, defaultLayout, worldPos } from "../engine/memory";
 import { Icon, TOOL_ICON, kindIcon } from "./icons";
 import { useTheme, type ThemePref } from "./theme";
 import { ContextMenu, isGroupNode, layerMenu, pageMenu, runMenu } from "./ContextMenu";
+import { align } from "./inspector";
 
 export type NavId = "file" | "assets" | "tools" | "variables" | "agent";
 
@@ -127,7 +128,7 @@ function LayerRow({
   return (
     <>
       <div
-        className={`row${sel.includes(n.id) ? " sel" : ""}${n.isComponent || n.kind === "component" || n.kind === "instance" ? " comp" : ""}`}
+        className={`row${sel.includes(n.id) ? " sel" : ""}${n.isComponent || n.kind === "component" || n.kind === "instance" ? " comp" : ""}${n.visible ? "" : " dim"}${n.locked ? " locked" : ""}`}
         style={{ paddingLeft: 8 + depth * 12 }}
         onClick={() => engine.dispatch({ type: "select", ids: [n.id] })}
         onDoubleClick={() => setRenaming(true)}
@@ -199,7 +200,7 @@ function LayerRow({
         </button>
       </div>
       {open &&
-        n.children.map((c) => (
+        [...n.children].reverse().map((c) => (
           <LayerRow key={c.id} n={c} depth={depth + 1} sel={sel} engine={engine} q={q} />
         ))}
       {menu && (
@@ -636,6 +637,25 @@ export function bindHotkeys(
       if (e.key === "3") {
         extra.onNav("variables");
         engine.dispatch({ type: "setLeftTab", tab: "tokens" });
+      }
+    }
+    if (e.altKey && !meta && !e.shiftKey) {
+      const am: Record<
+        string,
+        "align-left" | "align-right" | "align-top" | "align-bottom" | "align-hcenter" | "align-vcenter"
+      > = {
+        a: "align-left",
+        d: "align-right",
+        w: "align-top",
+        s: "align-bottom",
+        h: "align-hcenter",
+        v: "align-vcenter",
+      };
+      const mode = am[e.key.toLowerCase()];
+      if (mode) {
+        e.preventDefault();
+        align(engine, engine.snapshot(), mode);
+        return;
       }
     }
     if (meta && e.key.toLowerCase() === "z") {
