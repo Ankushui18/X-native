@@ -197,9 +197,35 @@ export function Comments({
             style={{ left: pos.left, top: pos.top }}
             title={t.body}
             aria-label={`Comment: ${t.body}`}
-            onClick={(e) => {
+            onMouseDown={(e) => {
+              if (e.button !== 0) return;
               e.stopPropagation();
-              engine.dispatch({ type: "openComment", id: t.id === openId ? "" : t.id });
+              // Drag to re-anchor the pin. A press that never moves is treated
+              // as a click, so opening a thread still works — hence the 3px
+              // threshold rather than dragging from the first pixel.
+              const startX = e.clientX;
+              const startY = e.clientY;
+              const box = host.current?.getBoundingClientRect();
+              let moved = false;
+              const move = (ev: MouseEvent) => {
+                if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 3) return;
+                moved = true;
+                engine.dispatch({
+                  type: "moveComment",
+                  id: t.id,
+                  x: (ev.clientX - (box?.left ?? 0) - panX) / zoom,
+                  y: (ev.clientY - (box?.top ?? 0) - panY) / zoom,
+                });
+              };
+              const up = () => {
+                window.removeEventListener("mousemove", move);
+                window.removeEventListener("mouseup", up);
+                if (!moved) {
+                  engine.dispatch({ type: "openComment", id: t.id === openId ? "" : t.id });
+                }
+              };
+              window.addEventListener("mousemove", move);
+              window.addEventListener("mouseup", up);
             }}
           >
             {initials(t.body)}

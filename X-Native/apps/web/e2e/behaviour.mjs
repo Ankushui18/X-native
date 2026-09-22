@@ -916,6 +916,107 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 21. remaining gaps: stroke styles and draggable comment pins -------------
+{
+  const p = await page();
+  let reply = "Brand";
+  const onDialog = async (d) => {
+    if (d.type() === "confirm") await d.accept();   // create from the stroke
+    else await d.accept(reply);
+  };
+  p.on("dialog", onDialog);
+  await p.evaluate(() => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="140">
+      <rect x="20" y="20" width="150" height="90" fill="#dddddd" stroke="#ff0000" stroke-width="8"/></svg>`;
+    const dt = new DataTransfer();
+    dt.items.add(new File([svg], "a.svg", { type: "image/svg+xml" }));
+    document.querySelector(".canvas-wrap").dispatchEvent(
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 800, clientY: 520 }));
+  });
+  await sleep(1400);
+  await p.evaluate(() => {
+    const el = [...document.querySelectorAll("button")]
+      .find((x) => (x.getAttribute("aria-label") || x.textContent).trim() === "Vars");
+    el.click();
+  });
+  await sleep(500);
+  await p.evaluate(() => {
+    const el = [...document.querySelectorAll(".panel.left button.plus")]
+      .find((x) => x.getAttribute("title") === "Create style from selection");
+    el && el.click();
+  });
+  await sleep(900);
+  // The engine has always supported stroke styles; only the UI was missing.
+  const swatch = await p.evaluate(() => {
+    const el = document.querySelector('.panel.left button[aria-label^="Apply style"]');
+    return el ? getComputedStyle(el).backgroundColor : "";
+  });
+  t(`a style can be created from the stroke (${swatch})`, swatch.includes("255, 0, 0"));
+  t("a bound selection offers detach", (await p.evaluate(() =>
+    document.querySelectorAll('.panel.left button[aria-label^="Detach style"]').length)) === 1);
+  await p.evaluate(() => {
+    const el = document.querySelector('.panel.left button[aria-label^="Detach style"]');
+    el && el.click();
+  });
+  await sleep(700);
+  t("detaching drops the binding", (await p.evaluate(() =>
+    document.querySelectorAll('.panel.left button[aria-label^="Detach style"]').length)) === 0);
+
+  // comment pins: moveComment existed in the engine with no way to reach it
+  await p.evaluate(() => {
+    const el = [...document.querySelectorAll("button")]
+      .find((x) => (x.getAttribute("aria-label") || x.textContent).trim() === "File");
+    el.click();
+  });
+  await sleep(500);
+  const wrap = await p.evaluate(() => {
+    const r = document.querySelector(".canvas-wrap").getBoundingClientRect();
+    return { x: Math.round(r.left), y: Math.round(r.top) };
+  });
+  await p.keyboard.press("c");
+  await sleep(300);
+  await p.mouse.click(wrap.x + 700, wrap.y + 300);
+  await sleep(450);
+  await p.keyboard.type("Move me");
+  await p.keyboard.press("Enter");
+  await sleep(800);
+  const pinLeft = () => p.evaluate(() => Math.round(document.querySelector(".cm-pin").getBoundingClientRect().left));
+  const pinCentre = () => p.evaluate(() => {
+    const r = document.querySelector(".cm-pin").getBoundingClientRect();
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+  });
+  const before = await pinLeft();
+  await p.keyboard.press("v");
+  const c = await pinCentre();
+  await p.mouse.move(c.x, c.y);
+  await p.mouse.down();
+  await p.mouse.move(c.x + 60, c.y, { steps: 8 });
+  await p.mouse.move(c.x + 140, c.y, { steps: 8 });
+  await p.mouse.up();
+  await sleep(700);
+  const after = await pinLeft();
+  t(`a comment pin can be dragged (${before} -> ${after})`, Math.abs(after - before) > 100);
+
+  // a press that never moves must still count as a click
+  let c2 = await pinCentre();
+  await p.mouse.click(c2.x, c2.y);
+  await sleep(600);
+  const closed = !(await p.evaluate(() => !!document.querySelector(".cm-pop")));
+  c2 = await pinCentre();
+  await p.mouse.click(c2.x, c2.y);
+  await sleep(600);
+  t("dragging did not break click-to-open",
+    closed && (await p.evaluate(() => !!document.querySelector(".cm-pop"))));
+
+  // the new anchor is part of the document
+  await sleep(1300);
+  await p.reload({ waitUntil: "networkidle0" });
+  await sleep(1200);
+  t(`the moved pin persists (${await pinLeft()})`, Math.abs((await pinLeft()) - after) < 4);
+  p.off("dialog", onDialog);
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();
