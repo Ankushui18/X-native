@@ -113,5 +113,32 @@ console.log("undo coalescing:");
   t("one undo restores padding", lay().padding[0] === 16);
 }
 
+console.log("persisted document recovery:");
+{
+  // A stored node missing fields the UI reads (fill, cornerRadii, effects, …)
+  // used to render a white screen on boot. Loading must repair it instead.
+  const KEY = "x-native-document";
+  const store = new Map();
+  globalThis.localStorage = {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+  };
+  store.set(KEY, JSON.stringify({
+    version: 1, fileName: "x", components: [], zoom: 1,
+    pages: [{ name: "p", root: { children: [{ kind: "rect", name: "Bare", x: 0, y: 0, w: 10, h: 10 }] } }],
+  }));
+  const e = new MemoryEngine(true);
+  const sn = e.snapshot();
+  const root = sn.pages[sn.page].root;
+  const kid = root.children[0];
+  t("skeletal persisted node is revived", !!kid);
+  t("revived node gains a fill", typeof kid.fill === "string" && kid.fill.length >= 7);
+  t("revived node gains array fields", Array.isArray(kid.cornerRadii) && Array.isArray(kid.effects));
+  t("revived node keeps its own values", kid.name === "Bare" && kid.kind === "rect" && kid.w === 10);
+  t("revived root is usable", typeof root.fill === "string" && Array.isArray(root.children));
+  delete globalThis.localStorage;
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);

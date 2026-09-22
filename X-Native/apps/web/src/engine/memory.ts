@@ -401,6 +401,21 @@ function coalesceKey(cmd: Command): string {
   return cmd.type;
 }
 
+/** Fill in anything a persisted node is missing, using the same defaults as a
+ *  freshly created node, and recurse through children. Unknown extra keys are
+ *  preserved. Throws if the value is not object-shaped, which the caller treats
+ *  as a corrupt document. */
+function reviveNode(raw: unknown): XNode {
+  if (typeof raw !== "object" || raw === null) throw new Error("not a node");
+  const r = raw as Partial<XNode> & Record<string, unknown>;
+  const kind = (typeof r.kind === "string" ? r.kind : "frame") as NodeKind;
+  const nm = typeof r.name === "string" ? r.name : "Layer";
+  const n = (v: unknown, d: number) => (typeof v === "number" && Number.isFinite(v) ? v : d);
+  const defaults = node(kind, nm, n(r.x, 0), n(r.y, 0), n(r.w, 100), n(r.h, 100));
+  const kids = Array.isArray(r.children) ? r.children.map(reviveNode) : [];
+  return { ...defaults, ...r, kind, name: nm, id: typeof r.id === "string" && r.id ? r.id : defaults.id, children: kids };
+}
+
 export class MemoryEngine implements Engine {
   private state: Internal;
   private undo: Internal[] = [];
@@ -420,8 +435,22 @@ export class MemoryEngine implements Engine {
 
   constructor(restore = true) {
     const loaded = restore ? loadDoc() : { doc: null, corrupt: false };
-    this.restoreFailed = loaded.corrupt;
-    const doc = loaded.doc;
+    let doc = loaded.doc;
+    let corrupt = loaded.corrupt;
+    // A stored node that is missing fields the UI reads (fill, cornerRadii,
+    // effects, …) used to render a white screen: persist.ts can only check the
+    // document's shape, not every node property. Backfill against the same
+    // factory that creates nodes normally, so a partial or older node is
+    // repaired rather than crashing the app.
+    if (doc) {
+      try {
+        doc = { ...doc, pages: doc.pages.map((pg) => ({ ...pg, root: reviveNode(pg.root) })) };
+      } catch {
+        doc = null;
+        corrupt = true;
+      }
+    }
+    this.restoreFailed = corrupt;
     this.state = {
       fileName: doc?.fileName ?? "Untitled",
       pages: doc?.pages ?? [demoPage()],
