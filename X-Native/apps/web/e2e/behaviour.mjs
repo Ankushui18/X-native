@@ -279,7 +279,7 @@ for (const [label, payload] of [
     await sleep(550);
   };
   await openVars();
-  await (await p.$(".panel.left button.plus")).click();
+  await (await p.$('.panel.left button.plus[title*="Copy"]')).click();
   await sleep(800);
   t("Vars + with no selection explains itself",
     /select a layer/i.test(await p.evaluate(() => document.querySelector(".toast")?.textContent || "")));
@@ -292,7 +292,7 @@ for (const [label, payload] of [
   const rs = await p.$$(".panel.left .row");
   await rs[6].click(); await sleep(400);
   await openVars();
-  await (await p.$(".panel.left button.plus")).click();
+  await (await p.$('.panel.left button.plus[title*="Copy"]')).click();
   await sleep(900);
   t("Vars + copies the selected layer's colour",
     /^Copied #/.test(await p.evaluate(() => document.querySelector(".toast")?.textContent || "")));
@@ -650,6 +650,96 @@ for (const [label, payload] of [
   await p.keyboard.down("Meta"); await p.keyboard.press("z"); await p.keyboard.up("Meta");
   await sleep(700);
   t("undo steps back through the stroke stack", (await px()).blue < after.blue);
+  await p.close();
+}
+
+// 17. shared styles: one edit repaints every bound layer -------------------
+{
+  const p = await page();
+  let reply = "Brand";
+  const onDialog = async (d) => { await d.accept(reply); };
+  p.on("dialog", onDialog);
+  await p.evaluate(() => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="140">
+      <rect x="10" y="20" width="110" height="90" fill="#ff0000"/>
+      <rect x="160" y="20" width="110" height="90" fill="#ff0000"/></svg>`;
+    const dt = new DataTransfer();
+    dt.items.add(new File([svg], "a.svg", { type: "image/svg+xml" }));
+    document.querySelector(".canvas-wrap").dispatchEvent(
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 800, clientY: 520 }));
+  });
+  await sleep(1400);
+  const px = () => p.evaluate(() => {
+    const c = document.querySelector("canvas");
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let red = 0, blue = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i] > 180 && d[i + 1] < 80 && d[i + 2] < 80 && d[i + 3] > 200) red++;
+      if (d[i] < 80 && d[i + 1] < 80 && d[i + 2] > 180 && d[i + 3] > 200) blue++;
+    }
+    return { red, blue };
+  });
+  const openVars = async () => {
+    await p.evaluate(() => {
+      const b = [...document.querySelectorAll("button")]
+        .find(x => (x.getAttribute("aria-label") || x.textContent).trim() === "Vars");
+      b.click();
+    });
+    await sleep(500);
+  };
+  const openFile = async () => {
+    await p.evaluate(() => {
+      const b = [...document.querySelectorAll("button")]
+        .find(x => (x.getAttribute("aria-label") || x.textContent).trim() === "File");
+      b.click();
+    });
+    await sleep(500);
+  };
+
+  const names = await rows(p);
+  const idx = names.map((n, i) => [n, i]).filter(([n]) => n === "Rectangle").map(([, i]) => i);
+  let rs = await p.$$(".panel.left .row");
+  await rs[idx[0]].click(); await sleep(500);
+  await openVars();
+  await p.evaluate(() => {
+    const el = [...document.querySelectorAll(".panel.left button.plus")]
+      .find(b => b.getAttribute("title") === "Create style from selection");
+    el && el.click();
+  });
+  await sleep(900);
+  t("creating a style lists it", (await p.evaluate(() =>
+    document.querySelectorAll('.panel.left button[aria-label^="Apply style"]').length)) === 1);
+
+  await openFile();
+  rs = await p.$$(".panel.left .row");
+  await rs[idx[1]].click(); await sleep(500);
+  await openVars();
+  await p.evaluate(() => {
+    const el = document.querySelector('.panel.left button[aria-label^="Apply style"]');
+    el && el.click();
+  });
+  await sleep(800);
+
+  reply = "#0000ff";
+  await p.evaluate(() => {
+    const el = document.querySelector('.panel.left button[aria-label^="Edit style"]');
+    el && el.click();
+  });
+  await sleep(1000);
+  const after = await px();
+  t(`one style edit repaints every bound layer (red ${after.red}, blue ${after.blue})`,
+    after.blue > 1000 && after.red < 200);
+
+  // styles and their bindings are part of the document, so they must persist
+  await sleep(1300);
+  await p.reload({ waitUntil: "networkidle0" });
+  await sleep(1200);
+  const kept = await px();
+  t(`styles survive a reload (blue ${kept.blue})`, kept.blue > 1000);
+  await openVars();
+  t("the style list survives a reload", (await p.evaluate(() =>
+    document.querySelectorAll('.panel.left button[aria-label^="Apply style"]').length)) === 1);
+  p.off("dialog", onDialog);
   await p.close();
 }
 

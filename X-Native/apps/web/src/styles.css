@@ -1013,7 +1013,10 @@ html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }
 .presets .sz { color: var(--muted); font-size: 11px; }
 
 .color-row .minus { opacity: 0; }
-.color-row:hover .minus { opacity: 1; }
+.color-row:hover .minus,
+/* A hover-only control is unreachable by keyboard, so reveal it on focus too.
+   Without this the style delete button could be tabbed to but never seen. */
+.color-row .minus:focus-visible { opacity: 1; }
 .swatch {
   background-image:
     linear-gradient(45deg, #bbb 25%, transparent 25%),

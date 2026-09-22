@@ -1198,8 +1198,80 @@ function AssetsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
 
 function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const colors = Array.from(new Set(collectColors(snap.pages[snap.page].root)));
+  const sel = snap.selection[0];
+  const selNode = sel ? findNode(snap.pages[snap.page].root, sel)?.node : null;
   return (
     <>
+      <div className="h-row">
+        <h3 style={{ margin: 0, fontSize: 11, fontWeight: 500, padding: "8px 4px" }}>Styles</h3>
+        <button
+          className="plus"
+          title="Create style from selection"
+          onClick={() => {
+            if (!selNode) {
+              toast("Select a layer to create a style from its fill");
+              return;
+            }
+            const name = window.prompt("Style name", selNode.name || "Style");
+            if (name === null) return;
+            engine.dispatch({ type: "createStyle", kind: "fill", name });
+          }}
+        >
+          <Icon name="plus" size={14} />
+        </button>
+      </div>
+      <div className="insp-pad" style={{ display: "grid", gap: 4, padding: "0 12px" }}>
+        {snap.styles.length === 0 && (
+          <p className="muted">
+            No styles yet. Select a layer and press + to save its fill as a reusable style.
+          </p>
+        )}
+        {snap.styles.map((st) => {
+          const bound = selNode?.fillStyle === st.id;
+          return (
+            <div key={st.id} className="color-row" style={{ width: "100%" }}>
+              <button
+                className="swatch"
+                title={`Apply ${st.name}`}
+                aria-label={`Apply style ${st.name}`}
+                style={{ background: st.color, border: bound ? "2px solid var(--accent)" : undefined }}
+                onClick={() => {
+                  if (!sel) {
+                    toast("Select a layer first");
+                    return;
+                  }
+                  engine.dispatch({ type: "applyStyle", kind: "fill", styleId: st.id });
+                }}
+              />
+              <span className="hex" style={{ flex: 1 }}>
+                {st.name}
+              </span>
+              <button
+                className="mini"
+                title={`Edit ${st.name}`}
+                aria-label={`Edit style ${st.name}`}
+                onClick={() => {
+                  const next = window.prompt(`Colour for ${st.name}`, st.color);
+                  if (!next) return;
+                  const hex = next.trim().startsWith("#") ? next.trim() : `#${next.trim()}`;
+                  engine.dispatch({ type: "editStyle", id: st.id, color: hex });
+                }}
+              >
+                <Icon name="eyedropper" size={14} />
+              </button>
+              <button
+                className="mini minus"
+                title={`Delete ${st.name}`}
+                aria-label={`Delete style ${st.name}`}
+                onClick={() => engine.dispatch({ type: "deleteStyle", id: st.id })}
+              >
+                <Icon name="trash" size={14} />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <div className="hr" />
       <div className="h-row">
         <h3 style={{ margin: 0, fontSize: 11, fontWeight: 500, padding: "8px 4px" }}>Color Primitive</h3>
         <button

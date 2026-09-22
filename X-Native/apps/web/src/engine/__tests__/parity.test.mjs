@@ -140,5 +140,52 @@ console.log("persisted document recovery:");
   delete globalThis.localStorage;
 }
 
+console.log("shared styles:");
+{
+  const e = new MemoryEngine(false);
+  e.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w: 100, h: 100 });
+  const a = e.snapshot().selection[0];
+  e.dispatch({ type: "add", kind: "rect", x: 120, y: 0, w: 100, h: 100 });
+  const b = e.snapshot().selection[0];
+  const get = (id) => {
+    let found = null;
+    const walk = (n) => { if (n.id === id) found = n; n.children?.forEach(walk); };
+    const sn = e.snapshot();
+    walk(sn.pages[sn.page].root);
+    return found;
+  };
+  e.dispatch({ type: "select", ids: [a] });
+  e.dispatch({ type: "patch", id: a, patch: { fill: "#ff0000", fillVisible: true } });
+  e.dispatch({ type: "createStyle", kind: "fill", name: "Brand" });
+  const style = e.snapshot().styles[0];
+  t("createStyle stores a named paint", !!style && style.name === "Brand" && style.color === "#ff0000");
+  t("the source node is bound", get(a).fillStyle === style.id);
+
+  e.dispatch({ type: "select", ids: [b] });
+  e.dispatch({ type: "applyStyle", kind: "fill", styleId: style.id });
+  t("applyStyle paints and binds another node", get(b).fill === "#ff0000" && get(b).fillStyle === style.id);
+
+  // the point of the feature: one edit repaints every bound node
+  e.dispatch({ type: "editStyle", id: style.id, color: "#0000ff" });
+  t("editing a style repaints every bound node",
+    get(a).fill === "#0000ff" && get(b).fill === "#0000ff");
+
+  // editing a bound colour by hand detaches, and must not drag the style with it
+  e.dispatch({ type: "patch", id: b, patch: { fill: "#00ff00" } });
+  t("a hand edit detaches that node", get(b).fillStyle === undefined && get(b).fill === "#00ff00");
+  t("the style itself is unchanged", e.snapshot().styles[0].color === "#0000ff");
+  t("the other bound node is unaffected", get(a).fill === "#0000ff" && get(a).fillStyle === style.id);
+
+  // deleting keeps the colour, drops the link
+  e.dispatch({ type: "deleteStyle", id: style.id });
+  t("deleteStyle unbinds without repainting", get(a).fill === "#0000ff" && get(a).fillStyle === undefined);
+  t("the store is empty again", e.snapshot().styles.length === 0);
+
+  // undo must restore the binding, not just the colour
+  e.dispatch({ type: "undo" });
+  t("undo restores the style and its binding",
+    e.snapshot().styles.length === 1 && get(a).fillStyle === e.snapshot().styles[0].id);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);
