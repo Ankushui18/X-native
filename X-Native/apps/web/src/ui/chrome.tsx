@@ -163,6 +163,7 @@ function LayerRow({
   const [open, setOpen] = useState(true);
   const [renaming, setRenaming] = useState(false);
   const cancelRename = useRef(false);
+  const lastDown = useRef(0);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   if (!matchesLayer(n, q)) return null;
   const container = n.kind === "frame" || n.kind === "group" || n.kind === "component";
@@ -228,6 +229,19 @@ function LayerRow({
             }
           }
           engine.dispatch({ type: "select", ids: [n.id] });
+        }}
+        // A real double-click on a draggable element does not reliably emit
+        // dblclick (the drag machinery claims the second press), so rename is
+        // triggered from the mousedown pair instead. Verified: before this,
+        // double-clicking a layer row never opened the rename field.
+        onMouseDown={(e) => {
+          if (e.button !== 0 || renaming) return;
+          const t = performance.now();
+          if (t - lastDown.current < 400) {
+            e.preventDefault();
+            setRenaming(true);
+          }
+          lastDown.current = t;
         }}
         onDoubleClick={() => setRenaming(true)}
         onContextMenu={(e) => {

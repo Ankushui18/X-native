@@ -224,6 +224,9 @@ export interface XNode {
   imageTint: number;
   imageHighlights: number;
   imageShadows: number;
+  /** Set once the user renames a layer by hand, so automatic naming (e.g. a
+   *  text layer following its content, as in Figma) stops overriding it. */
+  nameLocked?: boolean;
   text: string;
   fontFamily: string;
   fontSize: number;

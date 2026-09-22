@@ -707,7 +707,14 @@ export class MemoryEngine implements Engine {
       case "patch": {
         const n = find(this.root(), cmd.id);
         if (n) {
+          // A hand-typed name pins the layer name; automatic naming stops.
+          if (cmd.patch.name !== undefined) n.nameLocked = true;
           Object.assign(n, cmd.patch);
+          // Text layers follow their content until renamed, as in Figma.
+          if (n.kind === "text" && cmd.patch.text !== undefined && !n.nameLocked) {
+            const first = (cmd.patch.text || "").split("\n")[0].trim();
+            n.name = first ? first.slice(0, 60) : "Text";
+          }
           if (n.isComponent && n.componentId) {
             const lib = s.components.find((c) => c.id === n.componentId);
             if (lib) {
