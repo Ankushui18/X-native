@@ -1438,12 +1438,6 @@ fn lower(
                 _ => node.lh_mode_value(),
             };
             let fills = node.active_fills();
-            let text_clip = Rect::new(0.0, 0.0, node.w.max(0.0), node.h.max(0.0)).into_path(0.1);
-            tree.commands.push(RenderCommand::PushClip {
-                key: format!("{key}/text-clip"),
-                transform: world,
-                path: text_clip,
-            });
             let text_blur = node
                 .active_effects()
                 .iter()
@@ -1464,6 +1458,16 @@ fn lower(
                 (x_core::apply_text_case(content, tc), Vec::new())
             };
             let content = cased.as_str();
+            let text_has_ink = !content.is_empty();
+            if text_has_ink {
+                let text_clip =
+                    Rect::new(0.0, 0.0, node.w.max(0.0), node.h.max(0.0)).into_path(0.1);
+                tree.commands.push(RenderCommand::PushClip {
+                    key: format!("{key}/text-clip"),
+                    transform: world,
+                    path: text_clip,
+                });
+            }
             let base_parts: Option<Vec<TextPart>> =
                 if text_override.is_none() && !cased_runs.is_empty() {
                     Some(resolve_text_parts(content, &cased_runs))
@@ -1564,7 +1568,9 @@ fn lower(
                     tree.commands.push(RenderCommand::PopLayer);
                 }
             }
-            tree.commands.push(RenderCommand::PopLayer);
+            if text_has_ink {
+                tree.commands.push(RenderCommand::PopLayer);
+            }
         }
         NodeKind::Image {
             asset,

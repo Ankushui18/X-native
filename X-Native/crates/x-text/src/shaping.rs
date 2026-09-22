@@ -792,11 +792,7 @@ fn apply_truncate_ellipsis(
     let Some(last) = lines.last_mut() else {
         return;
     };
-    let size = last
-        .spans
-        .last()
-        .map(|s| s.size)
-        .unwrap_or(12.0);
+    let size = last.spans.last().map(|s| s.size).unwrap_or(12.0);
     let mut ell = last
         .spans
         .last()
@@ -1841,8 +1837,14 @@ mod tests {
         let (gl, _) = glyph_outlines(&m, &spans, f, &style(Align::Left));
         let (gj, _) = glyph_outlines(&m, &spans, f, &style(Align::Justify));
         assert!(gj.len() >= gl.len().saturating_sub(1));
-        let max_left = gl.iter().map(|g| g.transform.translation().x).fold(0.0, f64::max);
-        let max_just = gj.iter().map(|g| g.transform.translation().x).fold(0.0, f64::max);
+        let max_left = gl
+            .iter()
+            .map(|g| g.transform.translation().x)
+            .fold(0.0, f64::max);
+        let max_just = gj
+            .iter()
+            .map(|g| g.transform.translation().x)
+            .fold(0.0, f64::max);
         assert!(
             max_just > max_left + 2.0,
             "justified last-on-line sits further right: left {max_left} just {max_just}"
