@@ -87,6 +87,31 @@ console.log("undo coalescing:");
   e.dispatch({ type: "undo" });
   t("undo reverts only the last property", get().w === 100 && get().rotation === 30);
 }
+{
+  // Same problem on the Auto Layout gap/padding fields, which rewrite the
+  // whole layout object rather than going through "patch".
+  const e = new MemoryEngine(false);
+  e.dispatch({ type: "add", kind: "frame", x: 0, y: 0, w: 200, h: 200 });
+  const id = e.snapshot().selection[0];
+  const base = { direction: "vertical", gap: 8, padding: [16, 16, 16, 16],
+                 sizing: "fixed", cross: "fixed", wrap: false, align: "min", justify: "min" };
+  e.dispatch({ type: "autoLayout", id, layout: { ...base } });
+  // Look the frame up by identity-independent means: undo restores a cloned
+  // state, so hold on to the node's position in the tree rather than a stale ref.
+  const lay = () => {
+    let f = null;
+    const walk = (n) => { if (n.layout) f = n; n.children?.forEach(walk); };
+    const sn = e.snapshot();
+    walk(sn.pages[sn.page].root);
+    return f ? f.layout : null;
+  };
+  // typing "32" into padding commits 3 then 32
+  e.dispatch({ type: "autoLayout", id, layout: { ...base, padding: [3, 3, 3, 3] } });
+  e.dispatch({ type: "autoLayout", id, layout: { ...base, padding: [32, 32, 32, 32] } });
+  t("padding applies", lay().padding[0] === 32);
+  e.dispatch({ type: "undo" });
+  t("one undo restores padding", lay().padding[0] === 16);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);

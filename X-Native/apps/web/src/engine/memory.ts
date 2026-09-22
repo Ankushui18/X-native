@@ -377,7 +377,7 @@ const MAX_UNDO = 200;
 /** Commands whose rapid repeats collapse into a single undo step. Only
  *  incremental, self-repeating gestures belong here — structural edits must
  *  always get their own entry. */
-const COALESCABLE = new Set<string>(["nudge", "move", "resize", "patch"]);
+const COALESCABLE = new Set<string>(["nudge", "move", "resize", "patch", "autoLayout"]);
 
 /** Identity used to decide whether two consecutive history commands belong to
  *  the same burst. For `patch` this includes the target ids and the property
@@ -389,6 +389,14 @@ function coalesceKey(cmd: Command): string {
     const c = cmd as Extract<Command, { type: "patch" }>;
     const ids = "id" in c && c.id ? String(c.id) : "";
     return `patch:${ids}:${Object.keys(c.patch ?? {}).sort().join(",")}`;
+  }
+  if (cmd.type === "autoLayout") {
+    // Typing into a gap/padding field rewrites the whole layout object, so key
+    // on which layout properties actually differ is not available here; key on
+    // the target instead. Consecutive edits to one frame's layout inside the
+    // coalesce window are one undo step, which matches the field-typing case.
+    const c = cmd as Extract<Command, { type: "autoLayout" }>;
+    return `autoLayout:${String(c.id)}`;
   }
   return cmd.type;
 }
