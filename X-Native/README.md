@@ -1,16 +1,25 @@
 # X-Native Designer
 
-Design tool with a **Rust engine** (document, layout, `.x` IO, headless render)
-and a **web designer** as the only product UI. Visual language: Graphite & Signal.
+Design tool with a **web designer** as the only product UI, and a **Rust
+codebase** (document, layout, `.x` IO, headless render, format import/export)
+that is currently headless and unconnected. Visual language: Graphite & Signal.
 
 ## Architecture boundary
 
-Rust is the intended engine authority; the web designer is the only UI. Today
-the web app implements the document model, undo and Auto Layout in TypeScript
-and does not call the Rust crates at all. The decided boundary, the verified
-gap and the order of work to close it are in
-[docs/ARCHITECTURE_BOUNDARY.md](docs/ARCHITECTURE_BOUNDARY.md). Read it before
-adding engine behaviour to `apps/web`.
+**TypeScript is the production runtime engine for the web application today.**
+`apps/web/src/engine/` owns the document model, undo, Auto Layout, snapping,
+persistence and import/export, and does not call the Rust crates at all. Rust
+is a future candidate engine whose role has not yet been proven — it cannot
+currently be built in this environment.
+
+The rule is *one authoritative production implementation per engine
+capability*, with the Rust ↔ TypeScript boundary explicitly provisional until
+Rust can be built, connected and equivalence-tested. Product work on the
+TypeScript app and the Rust migration track run in parallel; neither blocks the
+other.
+
+See [docs/ARCHITECTURE_BOUNDARY.md](docs/ARCHITECTURE_BOUNDARY.md) before
+adding engine behaviour anywhere.
 
 ## Document opening
 

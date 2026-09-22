@@ -16,6 +16,11 @@
  * patterns, masks and CSS stylesheets are out of scope. Anything unrecognised
  * is skipped rather than guessed at, and the caller is told how many nodes
  * were dropped so the UI can be honest about it.
+ *
+ * Rust counterpart: `crates/x-format/src/svg_import.rs`, which is not reachable
+ * from the web app. See docs/ARCHITECTURE_BOUNDARY.md — this is the
+ * authoritative implementation today, and the Rust one is a migration
+ * candidate, not the current authority.
  */
 
 export interface ImportedNode {
