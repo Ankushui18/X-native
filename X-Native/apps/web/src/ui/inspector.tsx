@@ -969,17 +969,28 @@ function Design({
         <button
           className="plus"
           title="Add fill"
-          onClick={() =>
+          onClick={() => {
+            // First press turns the base fill back on; after that each press
+            // stacks another fill on top, the way Figma's Fill "+" behaves.
+            if (isNone(n.fill) && !n.fillVisible) {
+              engine.dispatch({
+                type: "patch",
+                id: n.id,
+                patch: { fill: "#d9d9d9", fillVisible: true, fillOpacity: n.fillOpacity ?? 1 },
+              });
+              return;
+            }
             engine.dispatch({
               type: "patch",
               id: n.id,
               patch: {
-                fill: isNone(n.fill) ? "#d9d9d9" : n.fill,
-                fillVisible: true,
-                fillOpacity: n.fillOpacity ?? 1,
+                fills: [
+                  ...(n.fills ?? []),
+                  { type: "solid", color: "#ffffff", opacity: 1, visible: true },
+                ],
               },
-            })
-          }
+            });
+          }}
         >
           <Icon name="plus" size={14} />
         </button>
@@ -1026,6 +1037,58 @@ function Design({
           />
         </div>
       )}
+      {(n.fills ?? []).map((p, i) => {
+        const setPaint = (patch: Partial<typeof p>) =>
+          engine.dispatch({
+            type: "patch",
+            id: n.id,
+            patch: { fills: (n.fills ?? []).map((q, j) => (j === i ? { ...q, ...patch } : q)) },
+          });
+        return (
+          <div className="insp-pad" key={i}>
+            <ColorRow
+              value={p.color}
+              opacity={Math.round((p.opacity ?? 1) * 100)}
+              visible={p.visible}
+              type={p.type}
+              stops={p.stops}
+              gx={p.gx}
+              gy={p.gy}
+              hx={p.hx}
+              hy={p.hy}
+              blend={p.blend}
+              recents={collectColors(snap.pages[snap.page].root)}
+              onChange={(color) => setPaint({ color, visible: true })}
+              onOpacity={(v) => setPaint({ opacity: v / 100 })}
+              onVisible={(v) => setPaint({ visible: v })}
+              onRemove={() =>
+                engine.dispatch({
+                  type: "patch",
+                  id: n.id,
+                  patch: { fills: (n.fills ?? []).filter((_, j) => j !== i) },
+                })
+              }
+              onMeta={(meta) =>
+                setPaint({
+                  gx: meta.fillGX,
+                  gy: meta.fillGY,
+                  hx: meta.fillHX,
+                  hy: meta.fillHY,
+                  blend: meta.fillBlend,
+                })
+              }
+              onValueChange={(v) => {
+                const patch = fillValuePatch(v);
+                setPaint({
+                  type: patch.fillType,
+                  color: patch.fill,
+                  stops: patch.gradientStops,
+                });
+              }}
+            />
+          </div>
+        );
+      })}
 
       <div className="h-row">
         <h3>Stroke</h3>

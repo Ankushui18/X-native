@@ -137,7 +137,47 @@ export function fillStyle(
   return cssRgba(a);
 }
 
+/**
+ * Paint a node's fill stack: the base `fill` first, then any extra `fills`
+ * on top, bottom-to-top the way Figma layers them. The current path must
+ * already be set by the caller.
+ */
 export function paintFill(
+  ctx: CanvasRenderingContext2D,
+  n: XNode,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+) {
+  paintOnePaint(ctx, n, sx, sy, sw, sh);
+  for (const p of n.fills ?? []) {
+    if (p.visible === false) continue;
+    // Each extra fill is described by a Paint; project it onto the same
+    // node-shaped surface by borrowing the node's geometry fields.
+    const layer: XNode = {
+      ...n,
+      fill: p.color,
+      fillType: p.type,
+      fillOpacity: p.opacity,
+      gradientStops: p.stops ?? [],
+      fillGX: p.gx ?? n.fillGX,
+      fillGY: p.gy ?? n.fillGY,
+      fillHX: p.hx ?? n.fillHX,
+      fillHY: p.hy ?? n.fillHY,
+      fills: undefined,
+    };
+    ctx.save();
+    if (p.blend && p.blend !== "normal") {
+      ctx.globalCompositeOperation = p.blend as GlobalCompositeOperation;
+    }
+    if (p.opacity != null && p.opacity < 1) ctx.globalAlpha *= p.opacity;
+    paintOnePaint(ctx, layer, sx, sy, sw, sh);
+    ctx.restore();
+  }
+}
+
+function paintOnePaint(
   ctx: CanvasRenderingContext2D,
   n: XNode,
   sx: number,

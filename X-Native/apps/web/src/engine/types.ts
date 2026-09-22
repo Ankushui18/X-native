@@ -98,6 +98,29 @@ export interface GradientStop {
   position: number;
 }
 
+/**
+ * One entry in a node's fill stack.
+ *
+ * Figma paints a list of fills bottom-to-top. The existing scalar `fill`/
+ * `fillType`/`gradientStops` fields on XNode describe the *bottom* fill and
+ * remain authoritative on their own, so every existing call site keeps working.
+ * `XNode.fills` holds any *additional* fills painted over it; an empty or
+ * absent array means "single fill", which is the legacy behaviour.
+ */
+export interface Paint {
+  type: FillType;
+  color: string;
+  opacity: number;
+  visible: boolean;
+  blend?: string;
+  /** Gradient geometry, normalised 0..1 within the node box. */
+  gx?: number;
+  gy?: number;
+  hx?: number;
+  hy?: number;
+  stops?: GradientStop[];
+}
+
 export interface Effect {
   kind: EffectKind;
   color: string;
@@ -159,6 +182,11 @@ export interface XNode {
    * two or more entries take precedence over it.
    */
   gradientStops: GradientStop[];
+  /**
+   * Extra fills painted on top of the base `fill`, bottom-to-top, the way
+   * Figma stacks them. Absent/empty means the node has a single fill.
+   */
+  fills?: Paint[];
   fillBlend: string;
   strokePaint: string;
   strokeOpacity: number;

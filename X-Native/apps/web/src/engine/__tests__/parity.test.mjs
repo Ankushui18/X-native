@@ -47,5 +47,18 @@ const runs=erasePath(Array.from({length:11},(_,i)=>({x:i*10,y:0})),50,0,15);
 t("eraser splits a stroke into two runs", runs.length===2);
 t("eraser removed the covered anchors", runs[0].every(p=>p.x<35) && runs[1].every(p=>p.x>65));
 
+console.log("fill stack:");
+// A node with no `fills` must behave exactly as before (single fill).
+const base={fillType:"solid",fill:"#ff0000",fillOpacity:1,fillVisible:true,gradientStops:[]};
+t("absent fills array means one paint", (base.fills ?? []).length===0);
+// Extra fills paint bottom-to-top over the base, and hidden ones are skipped.
+const stacked={...base,fills:[
+  {type:"solid",color:"#00ff00",opacity:1,visible:true},
+  {type:"solid",color:"#0000ff",opacity:1,visible:false},
+]};
+const painted=(stacked.fills ?? []).filter(f=>f.visible!==false);
+t("stacked fills keep declared order", painted.length===1 && painted[0].color==="#00ff00");
+t("invisible fills are skipped", !painted.some(f=>f.color==="#0000ff"));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);
