@@ -1,0 +1,114 @@
+import type { ComponentMaster, Page } from "./types";
+
+/** Bump when the persisted shape changes incompatibly. A mismatch is discarded
+ *  rather than migrated blindly, so a stale document can never half-load. */
+const VERSION = 1;
+const KEY = "x-native-document";
+
+/** Only the document and the viewport are persisted. Transient interaction
+ *  state (current tool, selection, present mode, open comment) is deliberately
+ *  excluded: restoring a session mid-gesture is confusing, and Figma likewise
+ *  reopens a file with nothing selected. */
+export interface PersistedDoc {
+  version: number;
+  fileName: string;
+  pages: Page[];
+  components: ComponentMaster[];
+  page: number;
+  zoom: number;
+  panX: number;
+  panY: number;
+  showRulers: boolean;
+  showComments: boolean;
+}
+
+export interface LoadResult {
+  doc: PersistedDoc | null;
+  /** True when something was stored but could not be used, so the caller can
+   *  tell the user their work was replaced by a fresh document. */
+  corrupt: boolean;
+}
+
+function isObj(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+/** Structural validation. Anything failing this is treated as corrupt and the
+ *  app falls back to a clean document instead of crashing on first render. */
+function validate(v: unknown): PersistedDoc | null {
+  if (!isObj(v)) return null;
+  if (v.version !== VERSION) return null;
+  if (typeof v.fileName !== "string") return null;
+  if (!Array.isArray(v.pages) || v.pages.length === 0) return null;
+  for (const p of v.pages) {
+    if (!isObj(p) || !isObj(p.root) || typeof p.name !== "string") return null;
+    if (!Array.isArray((p.root as Record<string, unknown>).children)) return null;
+  }
+  if (!Array.isArray(v.components)) return null;
+  const num = (x: unknown, lo: number, hi: number, dflt: number) =>
+    typeof x === "number" && Number.isFinite(x) && x >= lo && x <= hi ? x : dflt;
+  const pages = v.pages as Page[];
+  // Pages written before comments existed have no `comments` array; give them
+  // one so callers never have to null-check it.
+  for (const p of pages) if (!Array.isArray(p.comments)) p.comments = [];
+  return {
+    version: VERSION,
+    fileName: v.fileName,
+    pages,
+    components: v.components as ComponentMaster[],
+    page: num(v.page, 0, pages.length - 1, 0),
+    zoom: num(v.zoom, 0.1, 8, 1),
+    panX: num(v.panX, -1e7, 1e7, 0),
+    panY: num(v.panY, -1e7, 1e7, 0),
+    showRulers: v.showRulers === true,
+    showComments: v.showComments === true,
+  };
+}
+
+export function loadDoc(): LoadResult {
+  let raw: string | null = null;
+  try {
+    raw = localStorage.getItem(KEY);
+  } catch {
+    return { doc: null, corrupt: false }; // storage unavailable (private mode)
+  }
+  if (!raw) return { doc: null, corrupt: false };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { doc: null, corrupt: true };
+  }
+  const doc = validate(parsed);
+  if (!doc) {
+    // A version bump is an expected discard, not corruption worth reporting.
+    const known = isObj(parsed) && typeof parsed.version === "number" && parsed.version !== VERSION;
+    return { doc: null, corrupt: !known };
+  }
+  return { doc, corrupt: false };
+}
+
+export type SaveStatus = "saved" | "quota" | "error";
+
+export function saveDoc(doc: Omit<PersistedDoc, "version">): SaveStatus {
+  try {
+    localStorage.setItem(KEY, JSON.stringify({ version: VERSION, ...doc }));
+    return "saved";
+  } catch (err) {
+    // Images are stored inline as data URLs, so a large document can exceed the
+    // ~5MB localStorage budget. Report it so the UI can warn instead of
+    // silently dropping the user's work.
+    const quota =
+      isObj(err) &&
+      (err.name === "QuotaExceededError" || err.name === "NS_ERROR_DOM_QUOTA_REACHED");
+    return quota ? "quota" : "error";
+  }
+}
+
+export function clearDoc(): void {
+  try {
+    localStorage.removeItem(KEY);
+  } catch {
+    /* nothing useful to do */
+  }
+}

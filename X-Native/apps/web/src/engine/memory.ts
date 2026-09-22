@@ -12,6 +12,7 @@ import type {
   XNode,
 } from "./types";
 import { copyText } from "./clipboard";
+import { loadDoc, type PersistedDoc } from "./persist";
 import { booleanPath, outlineStroke as outlineStrokePath, shapePoly, transformedPoly } from "./geometry";
 
 let seq = 1;
@@ -391,27 +392,50 @@ export class MemoryEngine implements Engine {
   private lastHist: { type: string; at: number } | null = null;
   private clip: XNode[] = [];
 
-  constructor() {
+  /** Set when a stored document existed but could not be read, so the UI can
+   *  tell the user their work was replaced rather than silently starting over. */
+  readonly restoreFailed: boolean;
+
+  constructor(restore = true) {
+    const loaded = restore ? loadDoc() : { doc: null, corrupt: false };
+    this.restoreFailed = loaded.corrupt;
+    const doc = loaded.doc;
     this.state = {
-      fileName: "Untitled",
-      pages: [demoPage()],
-      page: 0,
+      fileName: doc?.fileName ?? "Untitled",
+      pages: doc?.pages ?? [demoPage()],
+      page: doc?.page ?? 0,
       selection: [],
       tool: "select",
-      zoom: 0.75,
-      panX: 40,
-      panY: 20,
+      zoom: doc?.zoom ?? 0.75,
+      panX: doc?.panX ?? 40,
+      panY: doc?.panY ?? 20,
       rightTab: "design",
       leftTab: "layers",
-      components: [],
+      components: doc?.components ?? [],
       presentFrame: "",
       presentStack: [],
-      showRulers: false,
-      showComments: false,
+      showRulers: doc?.showRulers ?? false,
+      showComments: doc?.showComments ?? false,
       openComment: "",
     };
     this.relayout();
     this.snapCache = this.build();
+  }
+
+  /** The persistable slice of state. Kept here so the storage format never has
+   *  to reach into private fields from outside. */
+  toDoc(): Omit<PersistedDoc, "version"> {
+    return {
+      fileName: this.state.fileName,
+      pages: this.state.pages,
+      components: this.state.components,
+      page: this.state.page,
+      zoom: this.state.zoom,
+      panX: this.state.panX,
+      panY: this.state.panY,
+      showRulers: this.state.showRulers,
+      showComments: this.state.showComments,
+    };
   }
 
   snapshot(): Snapshot {
