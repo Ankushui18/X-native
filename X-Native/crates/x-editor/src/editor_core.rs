@@ -429,7 +429,7 @@ impl Editor {
             return true;
         };
         let mut after = inst;
-        x_core::set_override(&mut after, id, v);
+        x_core::set_exclusive_override(&mut after, id, v);
         self.replace_node(&instance_id, after);
         true
     }
@@ -3475,19 +3475,19 @@ impl Editor {
         let mut after = inst.clone();
         let applied = match &prop {
             ComponentProp::Text { target, .. } => {
-                set_override(&mut after, target, OverrideValue::Text(value.into()));
+                set_exclusive_override(&mut after, target, OverrideValue::Text(value.into()));
                 true
             }
             ComponentProp::Bool { target, .. } => {
                 if let Ok(b) = value.parse::<bool>() {
-                    set_override(&mut after, target, OverrideValue::Visible(b));
+                    set_exclusive_override(&mut after, target, OverrideValue::Visible(b));
                     true
                 } else {
                     false
                 }
             }
             ComponentProp::Swap { target, .. } => {
-                set_override(&mut after, target, OverrideValue::Swap(value.into()));
+                set_exclusive_override(&mut after, target, OverrideValue::Swap(value.into()));
                 true
             }
             ComponentProp::Number {
@@ -3499,14 +3499,14 @@ impl Editor {
                     // Apply to the specified target_property (width, height, opacity, etc.)
                     match target_property.as_str() {
                         "width" | "height" | "radius" => {
-                            set_override(&mut after, target, OverrideValue::Number(n));
+                            set_exclusive_override(&mut after, target, OverrideValue::Number(n));
                         }
                         "opacity" => {
-                            set_override(&mut after, target, OverrideValue::Opacity(n as f32));
+                            set_exclusive_override(&mut after, target, OverrideValue::Opacity(n as f32));
                         }
                         _ => {
                             // Default to Number for backward compatibility
-                            set_override(&mut after, target, OverrideValue::Number(n));
+                            set_exclusive_override(&mut after, target, OverrideValue::Number(n));
                         }
                     }
                     true
@@ -3523,7 +3523,7 @@ impl Editor {
             } => {
                 // Parse hex color and apply it to the bound node
                 if let Some(color) = parse_hex_color(value) {
-                    set_override(&mut after, target, color_override(target_property, color));
+                    set_exclusive_override(&mut after, target, color_override(target_property, color));
                     true
                 } else {
                     false

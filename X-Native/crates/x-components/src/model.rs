@@ -98,17 +98,28 @@ pub fn typed_overrides(node: &Node) -> HashMap<String, OverrideValue> {
 
 pub fn set_override(node: &mut Node, target: &str, value: OverrideValue) {
     let tag = override_kind_tag(&value);
-    node.overrides.retain(|k, enc| {
-        if override_target_id(k) != target {
-            return true;
-        }
-        match OverrideValue::decode(enc) {
-            Some(existing) => override_kind_tag(&existing) != tag,
-            None => k != target,
-        }
-    });
-    node.overrides
-        .insert(format!("{target}\x1f{tag}"), value.encode());
+    // Preserve the legacy `target` key for the first property on a layer;
+    // additional properties use a namespaced key so old `.x` readers and
+    // Figma's multi-property instances can coexist.
+    let key = node
+        .overrides
+        .iter()
+        .find(|(k, raw)| {
+            override_target_id(k) == target
+                && OverrideValue::decode(raw)
+                    .map(|existing| override_kind_tag(&existing) == tag)
+                    .unwrap_or(false)
+        })
+        .map(|(k, _)| k.clone())
+        .or_else(|| {
+            let has_target = node
+                .overrides
+                .keys()
+                .any(|k| override_target_id(k) == target);
+            (!has_target).then(|| target.to_string())
+        })
+        .unwrap_or_else(|| format!("{target}\x1f{tag}"));
+    node.overrides.insert(key, value.encode());
 }
 
 // ------------------------------------------------------------- properties

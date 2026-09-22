@@ -7,7 +7,7 @@
 //! walks a tree and grows Hug-sized instances to fit, then re-solves the
 //! parent chain so layout parents resize too.
 
-use crate::model::{find_master, typed_overrides, OverrideValue};
+use crate::model::{find_master, OverrideValue};
 use x_core::{apply_auto_layout, Node, NodeKind, Sizing, Variables};
 
 /// Text measurement callback: (content, font_size_px) -> width_px.

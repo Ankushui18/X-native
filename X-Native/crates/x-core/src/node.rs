@@ -2490,8 +2490,7 @@ mod layout_grid_tests {
         assert_eq!(parts[1].color, Some(red));
         assert_eq!(parts[2].text, "E");
         // same char count: ranges stay put
-        let (titled, same) =
-            apply_text_case_with_runs("hello world", &runs, Some("title"));
+        let (titled, same) = apply_text_case_with_runs("hello world", &runs, Some("title"));
         assert_eq!(titled, "Hello World");
         assert_eq!(same[0].start, 1);
         assert_eq!(same[0].len, 1);

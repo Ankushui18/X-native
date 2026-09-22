@@ -523,8 +523,7 @@ fn encode(
             // text case transforms the CONTENT; rich-run CHAR ranges remap
             // when case expands a glyph (ß → SS)
             let tc = node.bindings.get("tc").map(String::as_str);
-            let (cased, cased_runs) =
-                x_core::apply_text_case_with_runs(raw, &node.text_runs, tc);
+            let (cased, cased_runs) = x_core::apply_text_case_with_runs(raw, &node.text_runs, tc);
             let content: &str = cased.as_str();
             let mut node_for_runs_store: Option<Node> = None;
             let node_for_runs: &Node = if node.text_runs.is_empty() {
