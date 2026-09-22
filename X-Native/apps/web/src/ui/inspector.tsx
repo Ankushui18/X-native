@@ -1055,7 +1055,7 @@ function Design({
               })
             }
           />
-          <div className="grid3">
+          <div className="stroke-width">
             <Field
               label="W"
               value={n.strokeWidth}
@@ -1076,6 +1076,7 @@ function Design({
               ))}
             </div>
           </div>
+          <div className="stroke-ends">
           <div className="seg icons">
             {(["none", "round", "square", "arrow"] as StrokeCap[]).map((c) => (
               <button
@@ -1107,6 +1108,7 @@ function Design({
           >
             <Icon name="dash" size={14} />
           </button>
+          </div>
           {strokeMore && (
             <>
               <div className="grid2">
@@ -2054,6 +2056,32 @@ export function align(
     const n = find(root, snap.selection[0]);
     const p = n ? findParent(root, n.id) : null;
     if (!n || !p || p === root) return;
+    // Children of an auto-layout frame are positioned by the layout engine, so a
+    // raw `move` is recomputed away on the next pass and the button looks dead.
+    // Figma instead retargets the alignment onto the parent's layout axes, which
+    // is the only thing that can actually move the child. Mirror that.
+    if (p.layout) {
+      const horizontal = p.layout.direction === "horizontal";
+      const axis: Record<string, LayoutAlign | LayoutJustify> = {
+        "align-left": "min",
+        "align-hcenter": "center",
+        "align-right": "max",
+        "align-top": "min",
+        "align-vcenter": "center",
+        "align-bottom": "max",
+      };
+      const value = axis[mode];
+      const isX = mode.startsWith("align-left") || mode.startsWith("align-h") || mode.startsWith("align-r");
+      // On a horizontal stack the main axis is X (justify) and the cross axis is
+      // Y (align); on a vertical stack it is the other way around.
+      const key = isX === horizontal ? "justify" : "align";
+      engine.dispatch({
+        type: "patch",
+        id: p.id,
+        patch: { layout: { ...p.layout, [key]: value } },
+      });
+      return;
+    }
     let dx = 0;
     let dy = 0;
     if (mode === "align-left") dx = -n.x;

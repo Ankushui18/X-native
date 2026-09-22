@@ -719,6 +719,15 @@ html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }
   gap: 4px 8px;
   align-items: center;
 }
+/* Grid and flex children default to min-width:auto, so a row whose content is
+   intrinsically wider than the 216px of usable panel space (e.g. Stroke: width
+   field + 3-up align + 4-up cap + 3-up join) pushes past the panel edge and the
+   trailing controls become physically unreachable. Let them shrink. */
+.grid2 > *, .grid3 > * { min-width: 0; }
+.insp-pad { min-width: 0; }
+.color-row { min-width: 0; }
+.color-row .hex { min-width: 0; }
+.seg { min-width: 0; }
 .field {
   height: 32px;
   display: flex;
@@ -1414,3 +1423,28 @@ body.eyedrop, body.eyedrop * { cursor: crosshair !important; }
   gap: 2px;
   padding: 0 12px 6px;
 }
+
+/* Stroke cap (4) + join (3) + dash (1) = 8 controls. At 32px each that needs
+   256px + gaps, more than the 216px of usable panel width, so they wrap onto a
+   second line instead of scrolling buttons out of reach. */
+.stroke-ends {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.stroke-ends .seg { flex: 0 0 auto; }
+.stroke-ends .icon-btn { flex: 0 0 auto; margin-left: auto; }
+
+/* The stroke width row has no trailing 32px control, so unlike .grid3 it should
+   give the alignment segment its full intrinsic width (3 x 32px) rather than
+   reserving a column for something that is not there. */
+.stroke-width {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.stroke-width .field { flex: 1 1 auto; min-width: 0; }
+.stroke-width .seg { flex: 0 0 auto; }
