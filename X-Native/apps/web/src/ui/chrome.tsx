@@ -811,7 +811,8 @@ export function bindHotkeys(
       engine.dispatch({ type: "setRightTab", tab: cur === "inspect" ? "design" : "inspect" });
       return;
     }
-    if (e.shiftKey && e.key.toLowerCase() === "e" && !meta) {
+    // Must exclude Alt, otherwise this swallows ⌥⇧E (boolean Exclude).
+    if (e.shiftKey && e.key.toLowerCase() === "e" && !meta && !e.altKey) {
       e.preventDefault();
       const cur = engine.snapshot().rightTab;
       engine.dispatch({ type: "setRightTab", tab: cur === "prototype" ? "design" : "prototype" });
