@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Engine, XNode } from "../engine/types";
+import { plural, toast } from "./toast";
 import { find } from "../engine/memory";
 import { Icon } from "./icons";
 
@@ -221,21 +222,30 @@ export function runMenu(
     case "cut":
       engine.dispatch({ type: "cut" });
       break;
-    case "copy":
+    case "copy": {
+      const n = engine.snapshot().selection.length;
       engine.dispatch({ type: "copy" });
+      if (n) toast(`Copied ${plural(n, "layer")}`);
       break;
+    }
     case "paste":
       engine.dispatch({ type: "paste", x: extra?.x, y: extra?.y });
       break;
     case "copyCode":
       engine.dispatch({ type: "copyCode" });
+      // The result lands on the clipboard with no visible change on canvas, so
+      // without a toast the command looks like it did nothing.
+      toast("Copied as CSS");
       break;
     case "duplicate":
       engine.dispatch({ type: "duplicate" });
       break;
-    case "delete":
+    case "delete": {
+      const n = engine.snapshot().selection.length;
       engine.dispatch({ type: "delete" });
+      if (n) toast(`Deleted ${plural(n, "layer")} · ⌘Z to undo`);
       break;
+    }
     case "selectAll":
       engine.dispatch({ type: "selectAll" });
       break;

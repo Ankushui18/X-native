@@ -1448,3 +1448,126 @@ body.eyedrop, body.eyedrop * { cursor: crosshair !important; }
 }
 .stroke-width .field { flex: 1 1 auto; min-width: 0; }
 .stroke-width .seg { flex: 0 0 auto; }
+
+/* ---------------------------------------------------------------------------
+   Motion
+   Figma is restrained but not static: interactive chrome eases on hover/press
+   and popovers fade in rather than snapping. Durations are deliberately short
+   (80-120ms) so the editor still feels instant. Everything here is cosmetic —
+   no layout-affecting property is animated, so nothing can cause reflow jank.
+   --------------------------------------------------------------------------- */
+button,
+.row,
+.tool,
+.swatch,
+.field,
+.seg button,
+.icon-btn,
+.mini,
+.plus,
+.twist {
+  transition:
+    background-color 90ms ease,
+    border-color 90ms ease,
+    color 90ms ease,
+    box-shadow 90ms ease,
+    opacity 90ms ease;
+}
+/* Pressed state: a subtle scale gives tactile feedback on the dock + buttons. */
+.tool:active,
+.icon-btn:active,
+.plus:active { transform: scale(0.94); }
+.tool,
+.icon-btn,
+.plus { transition: background-color 90ms ease, color 90ms ease, transform 70ms ease; }
+
+@keyframes x-pop-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
+}
+.fill-pop,
+.ctx,
+.menu,
+.type-menu,
+.palette,
+.help-sheet { animation: x-pop-in 110ms cubic-bezier(0.2, 0, 0.13, 1); }
+
+/* Respect the OS reduced-motion preference. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Figma-style tooltip: dark pill, label plus dimmed shortcut. */
+.tip-host { display: contents; }
+.tip {
+  position: fixed;
+  z-index: 200;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: #1e1e1e;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 400;
+  white-space: nowrap;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+  animation: x-pop-in 90ms ease;
+}
+html[data-theme="dark"] .tip,
+html[data-theme="graphite"] .tip { background: #383838; }
+.tip-sc { color: rgba(255, 255, 255, 0.55); }
+
+/* Empty state for the right panel with nothing selected. */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 2px;
+  padding: 28px 20px 24px;
+  color: var(--muted);
+}
+.empty-state svg { color: var(--dim); margin-bottom: 6px; }
+.empty-title { margin: 0; font-size: 12px; font-weight: 500; color: var(--text); }
+.empty-body { margin: 2px 0 0; font-size: 11px; line-height: 1.5; color: var(--muted); }
+.empty-hint { margin: 10px 0 0; font-size: 11px; line-height: 1.7; color: var(--dim); }
+.empty-hint kbd {
+  display: inline-block;
+  min-width: 16px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--input);
+  border: 1px solid var(--line);
+  font: inherit;
+  font-size: 10px;
+  color: var(--text);
+}
+
+/* Keyboard focus. Only `:focus-visible`, so mouse users never see a ring but
+   keyboard users can always tell where they are. Previously fields showed a
+   blue border and every icon button showed nothing, making keyboard-only
+   navigation effectively impossible. */
+button:focus-visible,
+select:focus-visible,
+input:focus-visible,
+[tabindex]:focus-visible,
+.row:focus-visible,
+.tool .hit:focus-visible,
+.swatch:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
+  border-radius: 6px;
+}
+/* Inside the dark dock the blue ring needs a light halo to stay visible. */
+.dock button:focus-visible {
+  outline-color: #fff;
+  outline-offset: 2px;
+}

@@ -123,6 +123,21 @@ function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
   const root = snap.pages[snap.page].root;
   return (
     <>
+      {tool !== "frame" && (
+        // Figma uses the empty right panel to teach rather than leaving it
+        // blank; with nothing selected the only controls are page-level, so
+        // say what the panel will show once something is picked.
+        <div className="empty-state">
+          <Icon name="move" size={20} />
+          <p className="empty-title">Nothing selected</p>
+          <p className="empty-body">
+            Select a layer to edit its position, size, fill, stroke and effects.
+          </p>
+          <p className="empty-hint">
+            Press <kbd>F</kbd> for a frame, <kbd>R</kbd> for a rectangle, <kbd>T</kbd> for text.
+          </p>
+        </div>
+      )}
       {tool === "frame" && (
         <>
           <div className="h-row">

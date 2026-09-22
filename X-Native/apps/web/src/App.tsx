@@ -12,6 +12,7 @@ import {
   type NavId,
 } from "./ui/chrome";
 import { RightPanel } from "./ui/inspector";
+import { subscribeToast } from "./ui/toast";
 
 export default function App() {
   const engine = useMemo(() => new MemoryEngine(), []);
@@ -29,6 +30,21 @@ export default function App() {
   const [toast, setToast] = useState("");
   const leftDrag = usePanelDrag(leftW, setLeftW, 180, 420);
   const rightDrag = usePanelDrag(rightW, setRightW, 200, 420, true);
+
+  // Any module can raise a toast via the bus; keep the existing local setter
+  // working for the share button.
+  useEffect(() => {
+    let timer = 0;
+    const off = subscribeToast((msg) => {
+      setToast(msg);
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setToast(""), 1800);
+    });
+    return () => {
+      off();
+      window.clearTimeout(timer);
+    };
+  }, []);
 
   const share = () => {
     const page = snap.pages[snap.page];

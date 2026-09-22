@@ -127,6 +127,8 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const penDrag = useRef<{ i: number; x: number; y: number } | null>(null);
   const vecPt = useRef(-1);
   const hoverIx = useRef("");
+  /** Cursor implied by whatever selection chrome is under the pointer. */
+  const [hoverCursor, setHoverCursor] = useState<string | null>(null);
   /** Live smart-guide overlay, produced by the snapping pass during a drag. */
   const [guides, setGuides] = useState<Guide[]>([]);
   const [gapBadges, setGapBadges] = useState<GapBadge[]>([]);
@@ -1242,6 +1244,56 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       const hit = hitTest(snap.pages[snap.page].root, wpt.x, wpt.y, { selection: snap.selection });
       const id = hit && !snap.selection.includes(hit.id) ? hit.id : "";
       if (id !== hoverId) setHoverId(id);
+      // Mirror the mousedown hit-test so the cursor advertises what a press
+      // would actually do: resize on a handle, rotate just outside a corner,
+      // move over the selection itself.
+      const root0 = snap.pages[snap.page].root;
+      const r0 = wrap.current?.getBoundingClientRect();
+      let next: string | null = null;
+      if (r0 && snap.selection.length) {
+        const z = snap.zoom;
+        const px0 = e.clientX - r0.left;
+        const py0 = e.clientY - r0.top;
+        const bb = snap.selection.length === 1 ? worldPos(root0, snap.selection[0]) : null;
+        const box = bb
+          ? { x: bb.x, y: bb.y, w: bb.node.w, h: bb.node.h, rot: bb.node.rotation }
+          : (() => {
+              const b = selectionBounds(root0, snap.selection);
+              return b ? { x: b.x, y: b.y, w: b.w, h: b.h, rot: 0 } : null;
+            })();
+        if (box) {
+          const sx0 = snap.panX + box.x * z;
+          const sy0 = snap.panY + box.y * z;
+          let hx = px0;
+          let hy = py0;
+          if (box.rot) {
+            const cx = sx0 + (box.w * z) / 2;
+            const cy = sy0 + (box.h * z) / 2;
+            const u = unrot(hx, hy, cx, cy, box.rot);
+            hx = u.x;
+            hy = u.y;
+          }
+          const hs = handles(sx0, sy0, box.w * z, box.h * z);
+          for (let i = 0; i < hs.length; i++) {
+            if (Math.hypot(hx - hs[i][0], hy - hs[i][1]) < 8) {
+              next = resizeCursor(i, box.rot);
+              break;
+            }
+            // Just outside a corner is the rotate zone, as in Figma.
+            if (i % 2 === 0 && Math.hypot(hx - hs[i][0], hy - hs[i][1]) < 18) next = "grab";
+          }
+          if (
+            !next &&
+            hx >= sx0 &&
+            hx <= sx0 + box.w * z &&
+            hy >= sy0 &&
+            hy <= sy0 + box.h * z
+          ) {
+            next = "move";
+          }
+        }
+      }
+      if (next !== hoverCursor) setHoverCursor(next);
     } else if (hoverId && snap.tool !== "select") setHoverId("");
     if (snap.tool === "pen" && draft.length && !penDrag.current) {
       let wpt = toWorld(e.clientX, e.clientY);
@@ -1694,6 +1746,10 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         const id = engine.snapshot().selection[0];
         if (id) setEdit({ id, text: "" });
       }
+      // Figma drops back to the move tool after a shape is committed, so the
+      // next drag manipulates what you just drew instead of stamping another
+      // copy. Slice is the documented exception: it stays armed for repeat cuts.
+      if (snap.tool !== "slice") engine.dispatch({ type: "setTool", tool: "select" });
     }
     if (d.mode === "marquee" && d.id === "erase") return;
     if (d.mode === "marquee") {
@@ -1834,7 +1890,9 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         ? "nwse-resize"
         : CREATE.includes(snap.tool) || snap.tool === "pen" || snap.tool === "pencil" || snap.tool === "brush"
           ? "crosshair"
-          : "default";
+          : snap.tool === "select" && hoverCursor
+            ? hoverCursor
+            : "default";
 
   const editBox = (() => {
     if (!edit) return null;
@@ -2049,6 +2107,27 @@ function selectionBounds(
   }
   if (!isFinite(minX)) return null;
   return { x: minX, y: minY, w: Math.max(1, maxX - minX), h: Math.max(1, maxY - minY) };
+}
+
+/**
+ * Figma shows a resize cursor whose direction follows the handle *and* the
+ * node's rotation, so a 90deg-rotated box still reads correctly. Handle order is
+ * TL,T,TR,R,BR,B,BL,L (see `handles`); each sits 45deg apart, so rotating by the
+ * node angle and snapping back to the nearest 45deg step picks the right glyph.
+ */
+const RESIZE_CURSORS = [
+  "nwse-resize", // TL
+  "ns-resize", // T
+  "nesw-resize", // TR
+  "ew-resize", // R
+  "nwse-resize", // BR
+  "ns-resize", // B
+  "nesw-resize", // BL
+  "ew-resize", // L
+];
+function resizeCursor(handle: number, rotation = 0): string {
+  const step = Math.round(rotation / 45);
+  return RESIZE_CURSORS[(((handle + step) % 8) + 8) % 8];
 }
 
 function handles(sx: number, sy: number, sw: number, sh: number): [number, number][] {

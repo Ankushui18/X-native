@@ -2,6 +2,8 @@ import { useRef, useState } from "react";
 import type { Engine, Snapshot, Tool, XNode } from "../engine/types";
 import { collectColors, defaultLayout, worldPos } from "../engine/memory";
 import { Icon, TOOL_ICON, kindIcon } from "./icons";
+import { Tooltip } from "./Tooltip";
+import { plural, toast } from "./toast";
 import { useTheme, type ThemePref } from "./theme";
 import { ContextMenu, isGroupNode, layerMenu, pageMenu, runMenu } from "./ContextMenu";
 import { align } from "./inspector";
@@ -557,9 +559,13 @@ export function Toolbar({
               setOpen((o) => (o === g.id ? null : o));
             }}
           >
+            <Tooltip
+              label={g.tools.find((t) => t.id === current)?.label ?? ""}
+              shortcut={g.tools.find((t) => t.id === current)?.shortcut}
+            >
             <button
               className="hit"
-              title={g.tools.find((t) => t.id === current)?.label}
+              aria-label={g.tools.find((t) => t.id === current)?.label}
               onClick={() => engine.dispatch({ type: "setTool", tool: current })}
               onPointerDown={() => {
                 if (!multi) return;
@@ -576,6 +582,7 @@ export function Toolbar({
               <Icon name={TOOL_ICON[current]} size={16} />
               {multi && <i className="caret" />}
             </button>
+            </Tooltip>
             {multi && (
               <div className="fly">
                 {g.tools.map((t) => (
@@ -899,7 +906,11 @@ export function bindHotkeys(
     }
     if (e.key === "Delete" || e.key === "Backspace") {
       e.preventDefault();
+      const n = engine.snapshot().selection.length;
       engine.dispatch({ type: "delete" });
+      // Deleting a layer that is scrolled out of view gives no visual feedback;
+      // confirm it and advertise the undo, as Figma does.
+      if (n) toast(`Deleted ${plural(n, "layer")} · ⌘Z to undo`);
       return;
     }
     if (e.key === "Escape") {
