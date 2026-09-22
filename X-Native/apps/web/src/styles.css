@@ -1732,3 +1732,17 @@ input:focus-visible,
   white-space: nowrap;
 }
 .guide-y .guide-badge { left: 6px; top: 6px; }
+
+/* Minimap ---------------------------------------------------------------- */
+.minimap {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 7;
+  background: var(--elevated);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 4px;
+  line-height: 0;
+}
+.minimap canvas { border-radius: 4px; cursor: pointer; display: block; }

@@ -376,6 +376,8 @@ export interface Snapshot {
   presentStack: string[];
   /** Figma's View > Rulers (⇧R). */
   showRulers: boolean;
+  /** Figma's View > Minimap. Off by default; it costs its own render pass. */
+  showMinimap: boolean;
   /** Comment pins are hidden unless the comment tool is active or the user
    *  has explicitly turned them on, as in Figma. */
   showComments: boolean;
@@ -391,6 +393,7 @@ export type Command =
   | { type: "setPan"; x: number; y: number }
   | { type: "setRightTab"; tab: RightTab }
   | { type: "toggleRulers" }
+  | { type: "toggleMinimap" }
   | { type: "toggleComments" }
   | { type: "addComment"; x: number; y: number; body: string }
   | { type: "replyComment"; id: string; body: string }

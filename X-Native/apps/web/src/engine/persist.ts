@@ -20,6 +20,7 @@ export interface PersistedDoc {
   panX: number;
   panY: number;
   showRulers: boolean;
+  showMinimap: boolean;
   showComments: boolean;
 }
 
@@ -70,6 +71,7 @@ function validate(v: unknown): PersistedDoc | null {
     panX: num(v.panX, -1e7, 1e7, 0),
     panY: num(v.panY, -1e7, 1e7, 0),
     showRulers: v.showRulers === true,
+    showMinimap: v.showMinimap === true,
     showComments: v.showComments === true,
   };
 }

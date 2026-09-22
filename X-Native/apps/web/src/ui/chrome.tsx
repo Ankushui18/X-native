@@ -724,6 +724,7 @@ export function Actions({
     { label: "Duplicate", sc: "⌘D", run: () => engine.dispatch({ type: "duplicate" }) },
     { label: "Delete", sc: "⌫", run: () => engine.dispatch({ type: "delete" }) },
     { label: "Rulers", sc: "⇧R", run: () => engine.dispatch({ type: "toggleRulers" }) },
+    { label: "Minimap", sc: "⇧M", run: () => engine.dispatch({ type: "toggleMinimap" }) },
     {
       // With autosave the document is now sticky, so there has to be a way back
       // to a blank file. Destructive and unrecoverable, hence the confirm.
@@ -970,6 +971,11 @@ export function bindHotkeys(
     if (!meta && e.shiftKey && e.key.toLowerCase() === "r") {
       e.preventDefault();
       engine.dispatch({ type: "toggleRulers" });
+      return;
+    }
+    if (!meta && !e.altKey && e.shiftKey && e.key.toLowerCase() === "m") {
+      e.preventDefault();
+      engine.dispatch({ type: "toggleMinimap" });
       return;
     }
     if (meta && e.shiftKey && e.key.toLowerCase() === "h") {

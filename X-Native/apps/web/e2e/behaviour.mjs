@@ -856,6 +856,66 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 20. minimap --------------------------------------------------------------
+{
+  const p = await page();
+  t("minimap is off by default", (await p.evaluate(() => document.querySelectorAll(".minimap").length)) === 0);
+  await p.keyboard.down("Shift"); await p.keyboard.press("M"); await p.keyboard.up("Shift");
+  await sleep(600);
+  t("Shift+M shows the minimap", (await p.evaluate(() => document.querySelectorAll(".minimap").length)) === 1);
+
+  // it must actually draw the document, not sit there as an empty box
+  const ink = await p.evaluate(() => {
+    const c = document.querySelector(".minimap canvas");
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i + 3] > 10) n++;
+    return n;
+  });
+  t(`the thumbnail renders content (${ink}px)`, ink > 5000);
+
+  // clicking the centre must centre the viewport there; the rectangle also has
+  // to stay inside the thumbnail, which it did not when the fit ignored the
+  // viewport and the visible area was larger than the artwork.
+  const mm = await p.evaluate(() => {
+    const c = document.querySelector(".minimap canvas").getBoundingClientRect();
+    return { x: c.left, y: c.top, w: c.width, h: c.height };
+  });
+  await p.mouse.click(Math.round(mm.x + mm.w / 2), Math.round(mm.y + mm.h / 2));
+  await sleep(700);
+  const rect = await p.evaluate(() => {
+    const c = document.querySelector(".minimap canvas");
+    const dpr = window.devicePixelRatio || 1;
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let minX = 1e9, minY = 1e9, maxX = -1, maxY = -1;
+    for (let y = 0; y < c.height; y++) {
+      for (let x = 0; x < c.width; x++) {
+        const i = (y * c.width + x) * 4;
+        if (d[i] < 90 && d[i + 1] > 120 && d[i + 2] > 200) {
+          if (x < minX) minX = x; if (x > maxX) maxX = x;
+          if (y < minY) minY = y; if (y > maxY) maxY = y;
+        }
+      }
+    }
+    return maxX < 0 ? null : {
+      cx: (minX + maxX) / 2 / dpr, cy: (minY + maxY) / 2 / dpr,
+      w: (maxX - minX) / dpr, h: (maxY - minY) / dpr,
+    };
+  });
+  t("the viewport rectangle is drawn", !!rect);
+  if (rect) {
+    t(`clicking centres the viewport (dx=${Math.abs(rect.cx - mm.w / 2).toFixed(0)}, dy=${Math.abs(rect.cy - mm.h / 2).toFixed(0)})`,
+      Math.abs(rect.cx - mm.w / 2) < 6 && Math.abs(rect.cy - mm.h / 2) < 6);
+    t(`the viewport rectangle fits the thumbnail (${rect.w.toFixed(0)}x${rect.h.toFixed(0)})`,
+      rect.w <= mm.w && rect.h <= mm.h);
+  }
+
+  await p.keyboard.down("Shift"); await p.keyboard.press("M"); await p.keyboard.up("Shift");
+  await sleep(500);
+  t("Shift+M hides it again", (await p.evaluate(() => document.querySelectorAll(".minimap").length)) === 0);
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();

@@ -13,6 +13,7 @@ import {
 import { fillStyle, paintDropShadows, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows } from "../engine/paint";
 import { Rulers } from "./Rulers";
 import { Guides } from "./Guides";
+import { Minimap } from "./Minimap";
 import { Comments } from "./Comments";
 import { useTheme } from "./theme";
 import { cssRgba, isNone, parseHex, takeEyedrop, toHex } from "./color";
@@ -2125,6 +2126,18 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           height={box.h}
           theme={theme}
           selection={selectionBounds(snap.pages[snap.page].root, snap.selection)}
+        />
+      )}
+      {snap.showMinimap && !snap.presentFrame && (
+        <Minimap
+          root={snap.pages[snap.page].root}
+          engine={engine}
+          zoom={snap.zoom}
+          panX={snap.panX}
+          panY={snap.panY}
+          viewW={box.w}
+          viewH={box.h}
+          theme={theme}
         />
       )}
       {transition && <div className={`proto-transition ${transition}`} aria-hidden="true" />}

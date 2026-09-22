@@ -369,6 +369,7 @@ interface Internal {
   presentFrame: string;
   presentStack: string[];
   showRulers: boolean;
+  showMinimap: boolean;
   showComments: boolean;
   openComment: string;
 }
@@ -470,6 +471,7 @@ export class MemoryEngine implements Engine {
       presentFrame: "",
       presentStack: [],
       showRulers: doc?.showRulers ?? false,
+      showMinimap: doc?.showMinimap ?? false,
       showComments: doc?.showComments ?? false,
       openComment: "",
     };
@@ -490,6 +492,7 @@ export class MemoryEngine implements Engine {
       panX: this.state.panX,
       panY: this.state.panY,
       showRulers: this.state.showRulers,
+      showMinimap: this.state.showMinimap,
       showComments: this.state.showComments,
     };
   }
@@ -527,6 +530,7 @@ export class MemoryEngine implements Engine {
       "select",
       "selectAll",
       "toggleRulers",
+      "toggleMinimap",
       // Comments are annotations layered over the design, not part of it.
       // Figma keeps them off the design undo stack entirely: ⌘Z after posting
       // a comment reverts your last *design* edit, it does not delete the note.
@@ -607,6 +611,7 @@ export class MemoryEngine implements Engine {
       components: this.state.components,
       styles: this.state.styles,
       showRulers: this.state.showRulers,
+      showMinimap: this.state.showMinimap,
       showComments: this.state.showComments,
       openComment: this.state.openComment,
       presentFrame: this.state.presentFrame,
@@ -636,6 +641,9 @@ export class MemoryEngine implements Engine {
         break;
       case "toggleRulers":
         s.showRulers = !s.showRulers;
+        break;
+      case "toggleMinimap":
+        s.showMinimap = !s.showMinimap;
         break;
       case "toggleComments":
         s.showComments = !s.showComments;
