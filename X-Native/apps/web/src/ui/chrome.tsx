@@ -9,6 +9,7 @@ import { ContextMenu, isGroupNode, layerMenu, pageMenu, runMenu } from "./Contex
 import { align } from "./inspector";
 import { stepZoom, zoomTo } from "./zoom";
 import { clearDoc } from "../engine/persist";
+import { copyText } from "../engine/clipboard";
 
 export type NavId = "file" | "assets" | "tools" | "variables" | "agent";
 
@@ -1203,13 +1204,29 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         <h3 style={{ margin: 0, fontSize: 11, fontWeight: 500, padding: "8px 4px" }}>Color Primitive</h3>
         <button
           className="plus"
-          title="Add from selection"
+          // This list is derived from the colours actually used in the file, so
+          // there is nothing to "add" — a colour appears here as soon as a layer
+          // uses it. The button used to dispatch copyCode, which copied CSS and
+          // added nothing, so it read as dead. Copying the selected layer's
+          // fill is the useful action that matches what the panel shows.
+          title="Copy selected layer's colour"
           onClick={() => {
             const id = snap.selection[0];
-            if (id) engine.dispatch({ type: "copyCode" });
+            const n = id ? findNode(snap.pages[snap.page].root, id)?.node : null;
+            if (!n) {
+              toast("Select a layer to copy its colour");
+              return;
+            }
+            const hex = (n.fill || "").slice(0, 7);
+            if (!hex) {
+              toast("That layer has no solid fill");
+              return;
+            }
+            void copyText(hex);
+            toast(`Copied ${hex}`);
           }}
         >
-          <Icon name="plus" size={14} />
+          <Icon name="copy" size={14} />
         </button>
       </div>
       <div className="insp-pad" style={{ display: "grid", gap: 4, padding: "0 12px" }}>

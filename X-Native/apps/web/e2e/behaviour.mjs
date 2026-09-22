@@ -218,6 +218,101 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 9. export: PDF must be a real PDF, not an SVG with the extension swapped ---
+{
+  const p = await page();
+  await p.evaluate(() => {
+    window.__dl = [];
+    const real = URL.createObjectURL.bind(URL);
+    URL.createObjectURL = (blob) => {
+      const rec = { type: blob.type, size: blob.size };
+      window.__dl.push(rec);
+      blob.arrayBuffer().then((b) => { rec.head = new TextDecoder().decode(new Uint8Array(b).slice(0, 5)); });
+      return real(blob);
+    };
+    const click = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () {
+      const d = window.__dl[window.__dl.length - 1];
+      if (this.download && d) d.name = this.download;
+      return click.call(this);
+    };
+  });
+  const rs = await p.$$(".panel.left .row");
+  await rs[2].click(); await sleep(450);
+  await p.evaluate(() => document.querySelector('button.plus[title="Add export"]').click());
+  await sleep(450);
+  for (let i = 0; i < 3; i++) {
+    await p.evaluate(() => document.querySelector('button.fmt[title="Format"]').click());
+    await sleep(200);
+  }
+  t("export format cycles to PDF",
+    (await p.evaluate(() => document.querySelector('button.fmt[title="Format"]').textContent.trim())) === "PDF");
+  await p.evaluate(() => document.querySelector("button.export-run").click());
+  await sleep(2500);
+  const dl = (await p.evaluate(() => window.__dl))[0] || {};
+  t(`PDF export has a .pdf name (${dl.name})`, /\.pdf$/i.test(dl.name || ""));
+  t(`PDF export has the PDF mime (${dl.type})`, dl.type === "application/pdf");
+  t(`PDF export starts with %PDF (${dl.head})`, dl.head === "%PDF-");
+  await p.close();
+}
+
+// 10. Vars "+" must do something visible ----------------------------------
+{
+  const p = await page();
+  const openVars = async () => {
+    await p.evaluate(() => {
+      const b = [...document.querySelectorAll("button")]
+        .find(x => (x.getAttribute("aria-label") || x.textContent).trim() === "Vars");
+      b.click();
+    });
+    await sleep(550);
+  };
+  await openVars();
+  await (await p.$(".panel.left button.plus")).click();
+  await sleep(800);
+  t("Vars + with no selection explains itself",
+    /select a layer/i.test(await p.evaluate(() => document.querySelector(".toast")?.textContent || "")));
+  await p.evaluate(() => {
+    const b = [...document.querySelectorAll("button")]
+      .find(x => (x.getAttribute("aria-label") || x.textContent).trim() === "File");
+    b.click();
+  });
+  await sleep(450);
+  const rs = await p.$$(".panel.left .row");
+  await rs[6].click(); await sleep(400);
+  await openVars();
+  await (await p.$(".panel.left button.plus")).click();
+  await sleep(900);
+  t("Vars + copies the selected layer's colour",
+    /^Copied #/.test(await p.evaluate(() => document.querySelector(".toast")?.textContent || "")));
+  await p.close();
+}
+
+// 11. Agent pane actually mutates the document ----------------------------
+{
+  const p = await page();
+  await p.evaluate(() => {
+    const b = [...document.querySelectorAll("button")]
+      .find(x => (x.getAttribute("aria-label") || x.textContent).trim() === "Agent");
+    b.click();
+  });
+  await sleep(550);
+  const inp = await p.$(".panel.left .search input");
+  await inp.click();
+  await p.keyboard.type("add a frame");
+  await p.keyboard.press("Enter");
+  await sleep(900);
+  await p.evaluate(() => {
+    const b = [...document.querySelectorAll("button")]
+      .find(x => (x.getAttribute("aria-label") || x.textContent).trim() === "File");
+    b.click();
+  });
+  await sleep(550);
+  t("Agent request creates the layer it promises",
+    (await rows(p)).some(r => /Agent frame/.test(r)));
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();

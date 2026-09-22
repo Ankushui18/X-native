@@ -26,6 +26,8 @@ import { shapePoly } from "../engine/geometry";
 import { Icon } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { copyText } from "../engine/clipboard";
+import { buildPdf } from "../engine/pdf";
+import { toast } from "./toast";
 import { ZOOM_STEPS, zoomTo } from "./zoom";
 import { FillPicker, type FillValue } from "./FillPicker";
 import { BLENDS, handlesForFill, isNone, parseHex, withAlpha } from "./color";
@@ -1884,9 +1886,8 @@ function runExport(n: XNode, p: ExportPreset) {
   const height = Math.max(1, Math.round(n.h * p.scale));
   const name = `${n.name}${p.suffix}.${p.format.toLowerCase()}`;
   const svg = exportSvg(n, p);
-  if (p.format === "SVG" || p.format === "PDF") {
-    // PDF export remains an SVG download in browsers without a PDF encoder.
-    downloadBlob(new Blob([svg], { type: "image/svg+xml" }), name.replace(/\.pdf$/i, ".svg"));
+  if (p.format === "SVG") {
+    downloadBlob(new Blob([svg], { type: "image/svg+xml" }), name);
     return;
   }
   const image = new Image();
@@ -1896,13 +1897,24 @@ function runExport(n: XNode, p: ExportPreset) {
     c.height = height;
     const ctx = c.getContext("2d");
     if (!ctx) return;
+    // PDF keeps transparency via a soft mask, so it must not be flattened.
     if (p.format === "JPG") {
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, width, height);
     }
     ctx.drawImage(image, 0, 0, width, height);
+    if (p.format === "PDF") {
+      const px = ctx.getImageData(0, 0, width, height).data;
+      // Page size is the design size in points; the bitmap may be larger when
+      // exporting at 2x/3x, which just raises the effective resolution.
+      void buildPdf(new Uint8Array(px.buffer.slice(0)), width, height, Math.max(1, n.w), Math.max(1, n.h), n.name)
+        .then((blob) => downloadBlob(blob, name))
+        .catch(() => toast("Could not build the PDF"));
+      return;
+    }
     c.toBlob((blob) => blob && downloadBlob(blob, name), p.format === "JPG" ? "image/jpeg" : "image/png", 0.92);
   };
+  image.onerror = () => toast(`Could not render ${n.name} for export`);
   image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
