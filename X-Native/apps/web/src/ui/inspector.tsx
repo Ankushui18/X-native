@@ -24,6 +24,7 @@ import type {
 import { collectColors, defaultEffect, defaultLayout, find, findParent, framesOf, worldPos } from "../engine/memory";
 import { shapePoly } from "../engine/geometry";
 import { Icon } from "./icons";
+import { Tooltip } from "./Tooltip";
 import { FillPicker, type FillValue } from "./FillPicker";
 import { BLENDS, handlesForFill, isNone, parseHex, withAlpha } from "./color";
 import { ContextMenu, runMenu } from "./ContextMenu";
@@ -542,25 +543,33 @@ function Design({
         <div className="align">
           <div className="g">
             {(["align-left", "align-hcenter", "align-right"] as const).map((ic) => (
-              <button key={ic} title={ic} onClick={(e) => align(engine, snap, ic, e.shiftKey)}>
-                <Icon name={ic} />
-              </button>
+              <Tooltip key={ic} label={ALIGN_LABEL[ic]} shortcut={ALIGN_SHORTCUT[ic]}>
+                <button aria-label={ALIGN_LABEL[ic]} onClick={(e) => align(engine, snap, ic, e.shiftKey)}>
+                  <Icon name={ic} />
+                </button>
+              </Tooltip>
             ))}
           </div>
           <div className="g">
             {(["align-top", "align-vcenter", "align-bottom"] as const).map((ic) => (
-              <button key={ic} title={ic} onClick={(e) => align(engine, snap, ic, e.shiftKey)}>
-                <Icon name={ic} />
-              </button>
+              <Tooltip key={ic} label={ALIGN_LABEL[ic]} shortcut={ALIGN_SHORTCUT[ic]}>
+                <button aria-label={ALIGN_LABEL[ic]} onClick={(e) => align(engine, snap, ic, e.shiftKey)}>
+                  <Icon name={ic} />
+                </button>
+              </Tooltip>
             ))}
           </div>
           <div className="g">
-            <button title="Distribute horizontal" onClick={() => engine.dispatch({ type: "distribute", axis: "h" })}>
+            <Tooltip label="Distribute horizontal spacing" shortcut="⌃⌥H">
+            <button aria-label="Distribute horizontal" onClick={() => engine.dispatch({ type: "distribute", axis: "h" })}>
               <Icon name="distribute-h" />
             </button>
-            <button title="Distribute vertical" onClick={() => engine.dispatch({ type: "distribute", axis: "v" })}>
+            </Tooltip>
+            <Tooltip label="Distribute vertical spacing" shortcut="⌃⌥V">
+            <button aria-label="Distribute vertical" onClick={() => engine.dispatch({ type: "distribute", axis: "v" })}>
               <Icon name="distribute-v" />
             </button>
+            </Tooltip>
           </div>
         </div>
         <div className="grid3">
@@ -2097,6 +2106,24 @@ function setDir(engine: Engine, n: XNode, direction: "horizontal" | "vertical") 
     layout: { ...(n.layout ?? defaultLayout()), direction },
   });
 }
+
+/** Human labels + Figma's shortcuts for the align row. */
+const ALIGN_LABEL: Record<string, string> = {
+  "align-left": "Align left",
+  "align-hcenter": "Align horizontal centers",
+  "align-right": "Align right",
+  "align-top": "Align top",
+  "align-vcenter": "Align vertical centers",
+  "align-bottom": "Align bottom",
+};
+const ALIGN_SHORTCUT: Record<string, string> = {
+  "align-left": "⌥A",
+  "align-hcenter": "⌥H",
+  "align-right": "⌥D",
+  "align-top": "⌥W",
+  "align-vcenter": "⌥V",
+  "align-bottom": "⌥S",
+};
 
 export function align(
   engine: Engine,

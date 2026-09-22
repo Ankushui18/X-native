@@ -850,6 +850,18 @@ export function bindHotkeys(
         return;
       }
     }
+    // Distribute spacing: ⌃⌥H / ⌃⌥V, as in Figma. The align row's tooltips
+    // advertise these, so they must actually be bound.
+    // NB: `meta` above is metaKey||ctrlKey, so it is always true when Ctrl is
+    // held — test e.ctrlKey directly and exclude Cmd instead.
+    if (e.ctrlKey && e.altKey && !e.metaKey) {
+      const k = e.key.toLowerCase();
+      if (k === "h" || k === "v") {
+        e.preventDefault();
+        engine.dispatch({ type: "distribute", axis: k === "h" ? "h" : "v" });
+        return;
+      }
+    }
     if (meta && e.key.toLowerCase() === "z") {
       e.preventDefault();
       engine.dispatch({ type: e.shiftKey ? "redo" : "undo" });
