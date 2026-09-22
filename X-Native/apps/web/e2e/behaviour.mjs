@@ -1,6 +1,11 @@
 // Behaviour suite: drives the running app and asserts on engine state / DOM,
 // not on source. Re-created after the original /tmp harness was lost.
 import puppeteer from "puppeteer-core";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 // Point CHROMIUM_PATH / CHROMIUM_LIBS at a local Chromium (e.g. the binary that
 // ships inside @sparticuz/chromium) to run this suite.
@@ -442,6 +447,73 @@ for (const [label, payload] of [
   const toast = await p.evaluate(() => document.querySelector(".toast")?.textContent || "");
   t(`malformed SVG is reported, not crashed (${JSON.stringify(toast)})`,
     (await rows(p)).length === before && /could not read|nothing importable/i.test(toast));
+  await p.close();
+}
+
+// 14. Sketch import: a .sketch file opens as editable layers ---------------
+{
+  const p = await page();
+  const b64 = fs.readFileSync(path.join(HERE, "fixtures", "sample.sketch")).toString("base64");
+  const dropSketch = (name) => p.evaluate((data, n) => {
+    const bin = atob(data);
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    const dt = new DataTransfer();
+    dt.items.add(new File([u8], n, { type: "" }));
+    document.querySelector(".canvas-wrap").dispatchEvent(
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 700, clientY: 450 }));
+  }, b64, name);
+
+  const before = (await rows(p)).length;
+  await dropSketch("design.sketch");
+  await sleep(2000);
+  const after = await rows(p);
+  t(`.sketch opens as layers (${before} -> ${after.length})`, after.length === before + 5);
+  t("artboard, shapes and text all arrive",
+    ["Home", "Card", "Dot", "Label", "Inner"].every((n) => after.includes(n)));
+
+  // geometry and style must survive the round trip, not just the names
+  const names = await rows(p);
+  const rs = await p.$$(".panel.left .row");
+  await rs[names.indexOf("Card")].click();
+  await sleep(650);
+  const f = await p.evaluate(() =>
+    [...document.querySelectorAll(".inspector .field input")].map((i) => i.value).slice(0, 8));
+  t(`Card keeps its 120x60 size (${f[3]}x${f[4]})`, f[3] === "120" && f[4] === "60");
+  t(`Card keeps corner radius 8 and stroke 2 (r${f[6]} s${f[7]})`, f[6] === "8" && f[7] === "2");
+
+  // and it has to actually render
+  const px = await p.evaluate(() => {
+    const c = document.querySelector("canvas");
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let red = 0, green = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i] > 200 && d[i + 1] < 70 && d[i + 2] < 70 && d[i + 3] > 200) red++;
+      if (d[i] < 80 && d[i + 1] > 150 && d[i + 2] < 80 && d[i + 3] > 200) green++;
+    }
+    return { red, green };
+  });
+  t(`imported Sketch fills render (${px.red}px red, ${px.green}px green)`, px.red > 500 && px.green > 200);
+
+  await p.keyboard.down("Meta"); await p.keyboard.press("z"); await p.keyboard.up("Meta");
+  await sleep(800);
+  t(`one undo removes the whole .sketch import (${(await rows(p)).length})`, (await rows(p)).length === before);
+  await p.close();
+}
+{
+  // a non-ZIP file named .sketch must report, not crash
+  const p = await page();
+  const before = (await rows(p)).length;
+  await p.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.items.add(new File(["definitely not a zip"], "broken.sketch", { type: "" }));
+    document.querySelector(".canvas-wrap").dispatchEvent(
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 700, clientY: 450 }));
+  });
+  await sleep(1200);
+  const toast = await p.evaluate(() => document.querySelector(".toast")?.textContent || "");
+  t(`a corrupt .sketch is reported (${JSON.stringify(toast.slice(0, 48))})`,
+    (await rows(p)).length === before && /could not read/i.test(toast));
   await p.close();
 }
 

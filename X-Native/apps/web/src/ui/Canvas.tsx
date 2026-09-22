@@ -16,7 +16,8 @@ import { Comments } from "./Comments";
 import { useTheme } from "./theme";
 import { cssRgba, isNone, parseHex, takeEyedrop, toHex } from "./color";
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
-import { importSvg } from "../engine/svgImport";
+import { importSvg, type ImportedNode } from "../engine/svgImport";
+import { importSketch } from "../engine/sketchImport";
 import { toast } from "./toast";
 
 /** Snap radius in screen pixels; divided by zoom to get world tolerance. */
@@ -1872,51 +1873,71 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         toast(`Could not read ${file.name}`);
         return;
       }
-      if (!result.nodes.length) {
-        toast(`Nothing importable in ${file.name}`);
-        return;
-      }
-      const ox = at?.x ?? 80;
-      const oy = at?.y ?? 80;
-      const current = engine.snapshot();
-      const root = current.pages[current.page].root;
-      const host = deepestFrame(root, ox, oy);
-      const origin = host ? worldToLocal(root, host.id, ox, oy) : { x: ox, y: oy };
-      // One undo step for the whole file, not one per shape.
-      engine.dispatch({ type: "begin" });
-      for (const n of result.nodes) {
-        const { kind, name, x, y, w, h, ...rest } = n;
-        // Spreading an explicit `undefined` overwrites the node factory's
-        // default (cornerRadii became undefined and crashed the inspector), so
-        // unset optional fields must be dropped rather than passed through.
-        for (const k of Object.keys(rest) as (keyof typeof rest)[]) {
-          if (rest[k] === undefined) delete rest[k];
-        }
-        engine.dispatch({
-          type: "add",
-          kind,
-          x: origin.x + x,
-          y: origin.y + y,
-          w: Math.max(1, w),
-          h: Math.max(1, h),
-          parent: host?.id,
-          extra: { name, ...rest } as Partial<XNode>,
-        });
-      }
-      engine.dispatch({ type: "end" });
-      toast(
-        result.skipped
-          ? `Imported ${result.nodes.length} layers · ${result.skipped} unsupported skipped`
-          : `Imported ${result.nodes.length} layers`,
-      );
+      placeNodes(result, file.name, at);
     };
     reader.readAsText(file);
+  };
+
+  /** Shared tail for every vector-ish import: place the produced nodes as one
+   *  undo step and report what happened. */
+  const placeNodes = (
+    result: { nodes: ImportedNode[]; skipped: number },
+    fileName: string,
+    at?: { x: number; y: number },
+  ) => {
+    if (!result.nodes.length) {
+      toast(`Nothing importable in ${fileName}`);
+      return;
+    }
+    const ox = at?.x ?? 80;
+    const oy = at?.y ?? 80;
+    const current = engine.snapshot();
+    const root = current.pages[current.page].root;
+    const host = deepestFrame(root, ox, oy);
+    const origin = host ? worldToLocal(root, host.id, ox, oy) : { x: ox, y: oy };
+    engine.dispatch({ type: "begin" });
+    for (const n of result.nodes) {
+      const { kind, name, x, y, w, h, ...rest } = n;
+      // Spreading an explicit `undefined` overwrites the node factory's
+      // default (cornerRadii became undefined and crashed the inspector), so
+      // unset optional fields must be dropped rather than passed through.
+      for (const k of Object.keys(rest) as (keyof typeof rest)[]) {
+        if (rest[k] === undefined) delete rest[k];
+      }
+      engine.dispatch({
+        type: "add",
+        kind,
+        x: origin.x + x,
+        y: origin.y + y,
+        w: Math.max(1, w),
+        h: Math.max(1, h),
+        parent: host?.id,
+        extra: { name, ...rest } as Partial<XNode>,
+      });
+    }
+    engine.dispatch({ type: "end" });
+    toast(
+      result.skipped
+        ? `Imported ${result.nodes.length} layers · ${result.skipped} unsupported skipped`
+        : `Imported ${result.nodes.length} layers`,
+    );
+  };
+
+  const placeSketch = (file: File, at?: { x: number; y: number }) => {
+    file
+      .arrayBuffer()
+      .then((buf) => importSketch(buf))
+      .then((result) => placeNodes(result, file.name, at))
+      .catch((err: unknown) => {
+        toast(`Could not read ${file.name}: ${err instanceof Error ? err.message : "unreadable"}`);
+      });
   };
 
   const placeFiles = (files: FileList | File[], at?: { x: number; y: number }) => {
     const all = Array.from(files);
     for (const f of all) {
       if (f.type === "image/svg+xml" || /\.svg$/i.test(f.name)) placeSvg(f, at);
+      else if (/\.sketch$/i.test(f.name)) placeSketch(f, at);
     }
     const list = all.filter(
       (f) => f.type.startsWith("image/") && f.type !== "image/svg+xml" && !/\.svg$/i.test(f.name),
@@ -2103,7 +2124,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       <input
         ref={fileRef}
         type="file"
-        accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml,.svg,image/*"
+        accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml,.svg,.sketch,image/*"
         hidden
         onChange={(e) => {
           if (e.target.files) placeFiles(e.target.files, pendingImage.current ?? undefined);
