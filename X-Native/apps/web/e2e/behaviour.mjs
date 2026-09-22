@@ -239,6 +239,12 @@ for (const [label, payload] of [
   });
   const rs = await p.$$(".panel.left .row");
   await rs[2].click(); await sleep(450);
+  // Export now starts folded, so open it before reaching for its "+".
+  await p.evaluate(() => {
+    const b = [...document.querySelectorAll(".sec-toggle")].find(x => x.textContent.trim() === "Export");
+    if (b && b.getAttribute("aria-expanded") === "false") b.click();
+  });
+  await sleep(350);
   await p.evaluate(() => document.querySelector('button.plus[title="Add export"]').click());
   await sleep(450);
   for (let i = 0; i < 3; i++) {
@@ -310,6 +316,55 @@ for (const [label, payload] of [
   await sleep(550);
   t("Agent request creates the layer it promises",
     (await rows(p)).some(r => /Agent frame/.test(r)));
+  await p.close();
+}
+
+// 12. inspector sections fold away without hiding anything ----------------
+{
+  const p = await page();
+  await p.evaluate(() => { try { localStorage.removeItem("x-native-inspector-sections"); } catch {} });
+  await p.reload({ waitUntil: "networkidle0" });
+  await sleep(600);
+  const names = await rows(p);
+  const rs = await p.$$(".panel.left .row");
+  await rs[names.indexOf("Title")].click();
+  await sleep(650);
+  const read = () => p.evaluate(() => {
+    const i = document.querySelector(".inspector");
+    return {
+      sh: i.scrollHeight, ch: i.clientHeight,
+      toggles: [...i.querySelectorAll(".sec-toggle")].map(b => b.textContent.trim()),
+      controls: i.querySelectorAll("button,select,input").length,
+    };
+  });
+  const base = await read();
+  t(`every inspector section is collapsible (${base.toggles.length})`, base.toggles.length === 8);
+  const click = async (nm) => {
+    await p.evaluate((n) => {
+      const b = [...document.querySelectorAll(".sec-toggle")].find(x => x.textContent.trim() === n);
+      b && b.click();
+    }, nm);
+    await sleep(200);
+  };
+  for (const nm of base.toggles) await click(nm);
+  const closed = await read();
+  t(`collapsing removes the overflow (${(base.sh / base.ch).toFixed(2)}x -> ${(closed.sh / closed.ch).toFixed(2)}x)`,
+    closed.sh <= closed.ch && closed.sh < base.sh);
+  for (const nm of base.toggles) await click(nm);
+  const back = await read();
+  t(`reopening restores every control (${back.controls}/${base.controls})`, back.controls === base.controls);
+  // the choice must survive a reload, or it is noise rather than a preference
+  await click("Typography");
+  await p.reload({ waitUntil: "networkidle0" });
+  await sleep(700);
+  const rs2 = await p.$$(".panel.left .row");
+  await rs2[names.indexOf("Title")].click();
+  await sleep(650);
+  const kept = await p.evaluate(() => {
+    const b = [...document.querySelectorAll(".sec-toggle")].find(x => x.textContent.trim() === "Typography");
+    return b ? b.getAttribute("aria-expanded") : "missing";
+  });
+  t(`a folded section stays folded across a reload (${kept})`, kept === "false");
   await p.close();
 }
 

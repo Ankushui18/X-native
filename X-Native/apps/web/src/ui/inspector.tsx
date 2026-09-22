@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type {
   AutoLayout,
   Constraint,
@@ -527,9 +527,7 @@ function Design({
       )}
       {multi && <SelectionColors engine={engine} snap={snap} />}
 
-      <div className="h-row">
-        <h3>Position</h3>
-      </div>
+      <Section id="position" title="Position">
       <div className="insp-pad">
         <div className="align">
           <div className="g">
@@ -594,10 +592,10 @@ function Design({
           />
         )}
       </div>
+      </Section>
 
       <div className="hr" />
-      <div className="h-row">
-        <h3>Layout</h3>
+      <Section id="layout" title="Layout" actions={
         <div style={{ display: "flex", gap: 2 }}>
           <button
             className="plus"
@@ -613,7 +611,7 @@ function Design({
             <Icon name={n.layout ? "minus" : "plus"} size={14} />
           </button>
         </div>
-      </div>
+      }>
       <div className="dir-row">
         <div className="seg icons">
           <button
@@ -871,11 +869,10 @@ function Design({
           </div>
         </>
       )}
+      </Section>
 
       <div className="hr" />
-      <div className="h-row">
-        <h3>Appearance</h3>
-      </div>
+      <Section id="appearance" title="Appearance">
       <div className="insp-pad">
         <div className="grid2">
           <div className="field">
@@ -965,10 +962,10 @@ function Design({
           Show name
         </label>
       )}
+      </Section>
 
       <div className="hr" />
-      <div className="h-row">
-        <h3>Fill</h3>
+      <Section id="fill" title="Fill" actions={
         <button
           className="plus"
           title="Add fill"
@@ -997,7 +994,7 @@ function Design({
         >
           <Icon name="plus" size={14} />
         </button>
-      </div>
+      }>
       {(!isNone(n.fill) || n.fillVisible) && (
         <div className="insp-pad">
           <ColorRow
@@ -1092,9 +1089,9 @@ function Design({
           </div>
         );
       })}
+      </Section>
 
-      <div className="h-row">
-        <h3>Stroke</h3>
+      <Section id="stroke" title="Stroke" actions={
         <button
           className="plus"
           title="Add stroke"
@@ -1112,7 +1109,7 @@ function Design({
         >
           <Icon name="plus" size={14} />
         </button>
-      </div>
+      }>
       {n.strokeWidth > 0 && (!isNone(n.strokePaint) || n.strokeVisible) && (
         <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
           <ColorRow
@@ -1204,6 +1201,7 @@ function Design({
           )}
         </div>
       )}
+      </Section>
 
       {(n.kind === "star" || n.kind === "poly") && (
         <>
@@ -1231,12 +1229,15 @@ function Design({
       {n.kind === "text" && (
         <>
           <div className="hr" />
-          <div className="h-row">
-            <h3>Typography</h3>
-            <button className="plus" title="Type settings" onClick={() => setTypeOpen((v) => !v)}>
-              <Icon name="type-settings" size={14} />
-            </button>
-          </div>
+          <Section
+            id="typography"
+            title="Typography"
+            actions={
+              <button className="plus" title="Type settings" onClick={() => setTypeOpen((v) => !v)}>
+                <Icon name="type-settings" size={14} />
+              </button>
+            }
+          >
           <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
             <div className="field">
               <select
@@ -1402,6 +1403,7 @@ function Design({
               </div>
             </div>
           )}
+          </Section>
         </>
       )}
 
@@ -1424,11 +1426,15 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
   ];
   return (
     <>
-      <div className="h-row" style={{ position: "relative" }}>
-        <h3>Effects</h3>
-        <button className="plus" title="Add effect" onClick={() => setOpen((v) => !v)}>
-          <Icon name="plus" size={14} />
-        </button>
+      <Section
+        id="effects"
+        title="Effects"
+        defaultOpen={(n.effects ?? []).length > 0}
+        actions={
+          <div style={{ position: "relative", display: "flex" }}>
+            <button className="plus" title="Add effect" onClick={() => setOpen((v) => !v)}>
+              <Icon name="plus" size={14} />
+            </button>
         {open && (
           <div className="type-menu" style={{ right: 8, top: 28, left: "auto", width: 180 }}>
             {kinds.map((k) => (
@@ -1448,7 +1454,9 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
             ))}
           </div>
         )}
-      </div>
+          </div>
+        }
+      >
       {(n.effects ?? []).map((fx, i) => {
         const set = (p: Partial<typeof fx>) => {
           const effects = (n.effects ?? []).map((e2, j) => (j === i ? { ...e2, ...p } : e2));
@@ -1497,6 +1505,7 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
           </div>
         );
       })}
+      </Section>
     </>
   );
 }
@@ -1712,12 +1721,16 @@ function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
   };
   return (
     <>
-      <div className="h-row">
-        <h3>Export</h3>
-        <button className="plus" title="Add export" onClick={add}>
-          <Icon name="plus" size={14} />
-        </button>
-      </div>
+      <Section
+        id="export"
+        title="Export"
+        defaultOpen={false}
+        actions={
+          <button className="plus" title="Add export" onClick={add}>
+            <Icon name="plus" size={14} />
+          </button>
+        }
+      >
       {presets.map((p, i) => (
         <div key={i} className="insp-pad" style={{ marginBottom: 4 }}>
           <div className="export-row">
@@ -1764,6 +1777,7 @@ function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
           </button>
         </div>
       )}
+      </Section>
     </>
   );
 }
@@ -1945,6 +1959,69 @@ function fillValuePatch(v: FillValue): Partial<XNode> {
         ? { fillGX: handles.fillGX, fillGY: handles.fillGY, fillHX: handles.fillHX, fillHY: handles.fillHY }
         : {}),
   };
+}
+
+/** Collapsible inspector section.
+ *
+ *  The panel runs past the viewport on a text layer (1043px of content in
+ *  912px), so the lower sections — Effects, Export — are below the fold and
+ *  easy to miss. Rather than hide controls behind an "Advanced" bucket, which
+ *  makes real properties harder to find, each section can be folded away and
+ *  remembers that choice. Nothing is removed, and everything stays one click
+ *  from view.
+ *
+ *  `id` keys the persisted open/closed state; `defaultOpen` false starts a
+ *  section folded for layers that rarely need it.
+ */
+const SECTION_KEY = "x-native-inspector-sections";
+
+function readSections(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(SECTION_KEY);
+    const v: unknown = raw ? JSON.parse(raw) : null;
+    return v && typeof v === "object" ? (v as Record<string, boolean>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function Section({
+  id,
+  title,
+  defaultOpen = true,
+  actions,
+  children,
+}: {
+  id: string;
+  title: string;
+  defaultOpen?: boolean;
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(() => readSections()[id] ?? defaultOpen);
+  const toggle = () => {
+    setOpen((v) => {
+      const next = !v;
+      try {
+        localStorage.setItem(SECTION_KEY, JSON.stringify({ ...readSections(), [id]: next }));
+      } catch {
+        /* preference only; not worth surfacing */
+      }
+      return next;
+    });
+  };
+  return (
+    <>
+      <div className="h-row">
+        <button className="sec-toggle" aria-expanded={open} onClick={toggle}>
+          <Icon name={open ? "chevron" : "chevron-right"} size={12} />
+          <h3>{title}</h3>
+        </button>
+        {actions}
+      </div>
+      {open && children}
+    </>
+  );
 }
 
 function ColorRow({
