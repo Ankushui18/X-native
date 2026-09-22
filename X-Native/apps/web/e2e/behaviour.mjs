@@ -743,6 +743,61 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 18. effects: compact rows, controls in a popover -------------------------
+{
+  const p = await page();
+  const names = await rows(p);
+  const rs = await p.$$(".panel.left .row");
+  await rs[names.indexOf("Chip")].click();
+  await sleep(600);
+  const height = () => p.evaluate(() => {
+    const i = document.querySelector(".inspector");
+    return { sh: i.scrollHeight, ch: i.clientHeight };
+  });
+  const base = await height();
+  await p.evaluate(() => {
+    const t = [...document.querySelectorAll(".sec-toggle")].find(x => x.textContent.trim() === "Effects");
+    if (t && t.getAttribute("aria-expanded") === "false") t.click();
+  });
+  await sleep(400);
+  for (let k = 0; k < 3; k++) {
+    await p.evaluate(() => {
+      const el = [...document.querySelectorAll(".inspector button.plus")].find(b => b.getAttribute("title") === "Add effect");
+      el && el.click();
+    });
+    await sleep(350);
+    await p.evaluate(() => {
+      const btns = [...document.querySelectorAll(".type-menu button")];
+      btns[0] && btns[0].click();
+    });
+    await sleep(450);
+  }
+  t("three effects are listed", (await p.evaluate(() => document.querySelectorAll(".fx-row").length)) === 3);
+  // Inline these cost ~148px each and pushed the panel 314px past its viewport.
+  const after = await height();
+  t(`three effects do not overflow the panel (${base.sh} -> ${after.sh} in ${after.ch})`,
+    after.sh <= after.ch);
+
+  await p.evaluate(() => {
+    const el = document.querySelector('.fx-row button[aria-label^="Edit"]');
+    el && el.click();
+  });
+  await sleep(600);
+  t("the row opens an effect popover", await p.evaluate(() => !!document.querySelector(".fx-pop")));
+  const f = await p.$$(".fx-pop .field input");
+  t(`the popover carries the shadow controls (${f.length})`, f.length === 4);
+  await f[1].click();
+  await p.keyboard.down("Control"); await p.keyboard.press("a"); await p.keyboard.up("Control");
+  await p.keyboard.type("18"); await p.keyboard.press("Enter");
+  await sleep(600);
+  const vals = await p.evaluate(() => [...document.querySelectorAll(".fx-pop .field input")].map(i => i.value));
+  t(`editing in the popover reaches the model (Y=${vals[1]})`, vals[1] === "18");
+  await p.keyboard.press("Escape");
+  await sleep(400);
+  t("Escape closes the popover", !(await p.evaluate(() => !!document.querySelector(".fx-pop"))));
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();

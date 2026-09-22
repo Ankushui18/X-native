@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type {
   AutoLayout,
   Constraint,
+  Effect,
   EffectKind,
   Engine,
   ExportFormat,
@@ -1479,8 +1480,106 @@ function Design({
   );
 }
 
+/**
+ * One effect's controls, shown in a popover anchored to its row.
+ *
+ * Inline these cost ~148px each — three shadows pushed the inspector 314px past
+ * its viewport (measured). Figma keeps the list scannable and puts the detail
+ * behind a click, which is what this does: the row stays one line, the editing
+ * surface opens next to it.
+ */
+function EffectPopover({
+  fx,
+  anchor,
+  onChange,
+  onClose,
+}: {
+  fx: Effect;
+  anchor: DOMRect;
+  onChange: (p: Partial<Effect>) => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const click = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      // The colour picker portals outside this popover, so a click inside it
+      // must not count as "outside" and close the editor underneath.
+      if (!t.closest(".fx-pop") && !t.closest(".fx-row") && !t.closest(".fill-pop")) onClose();
+    };
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("mousedown", click);
+    window.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("mousedown", click);
+      window.removeEventListener("keydown", key);
+    };
+  }, [onClose]);
+
+  const shadow = fx.kind === "drop-shadow" || fx.kind === "inner-shadow";
+  const blur = fx.kind === "layer-blur" || fx.kind === "background-blur";
+  // Keep the panel on screen when the row sits near the bottom of the window.
+  const top = Math.min(anchor.top, window.innerHeight - 250);
+  return (
+    <div
+      className="fill-pop fx-pop"
+      style={{ left: Math.max(8, anchor.left - 252), top: Math.max(8, top) }}
+      role="dialog"
+      aria-label={`${EFFECT_LABEL[fx.kind]} settings`}
+    >
+      {shadow && (
+        <ColorRow
+          title="Shadow"
+          value={fx.color}
+          opacity={Math.round(parseHex(fx.color).a * 100)}
+          visible
+          recents={["#000000", "#00000040", "#ffffff"]}
+          onChange={(color) => onChange({ color: withAlpha(color, parseHex(fx.color).a) })}
+          onOpacity={(v) => onChange({ color: withAlpha(fx.color, v / 100) })}
+        />
+      )}
+      {shadow && (
+        <div className="grid2">
+          <Field label="X" aria="Shadow X" value={fx.x} onChange={(x) => onChange({ x })} />
+          <Field label="Y" aria="Shadow Y" value={fx.y} onChange={(y) => onChange({ y })} />
+        </div>
+      )}
+      <div className="grid2">
+        {(shadow || blur || fx.kind === "noise") && (
+          <Field label="Blur" aria="Blur" value={fx.blur} onChange={(v) => onChange({ blur: v })} />
+        )}
+        {shadow && (
+          <Field label="Spread" aria="Spread" value={fx.spread} onChange={(v) => onChange({ spread: v })} />
+        )}
+      </div>
+      {fx.kind === "glass" && (
+        <ColorRow
+          title="Tint"
+          value={fx.color}
+          opacity={Math.round(parseHex(fx.color).a * 100)}
+          visible
+          recents={["#ffffff", "#000000"]}
+          onChange={(color) => onChange({ color: withAlpha(color, parseHex(fx.color).a) })}
+          onOpacity={(v) => onChange({ color: withAlpha(fx.color, v / 100) })}
+        />
+      )}
+    </div>
+  );
+}
+
+const EFFECT_LABEL: Record<string, string> = {
+  "drop-shadow": "Drop shadow",
+  "inner-shadow": "Inner shadow",
+  "layer-blur": "Layer blur",
+  "background-blur": "Background blur",
+  noise: "Noise",
+  glass: "Glass",
+};
+
 function Effects({ n, engine }: { n: XNode; engine: Engine }) {
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<{ i: number; rect: DOMRect } | null>(null);
   const kinds: { id: EffectKind; label: string }[] = [
     { id: "drop-shadow", label: "Drop shadow" },
     { id: "inner-shadow", label: "Inner shadow" },
@@ -1489,88 +1588,107 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
     { id: "noise", label: "Noise" },
     { id: "glass", label: "Glass" },
   ];
+  const effects = n.effects ?? [];
+  const set = (i: number, p: Partial<Effect>) => {
+    const next = effects.map((e2, j) => (j === i ? { ...e2, ...p } : e2));
+    engine.dispatch({ type: "patch", id: n.id, patch: { effects: next } });
+  };
+  // A removed row must not leave its popover open over the wrong effect.
+  const remove = (i: number) => {
+    setEditing(null);
+    engine.dispatch({ type: "patch", id: n.id, patch: { effects: effects.filter((_, j) => j !== i) } });
+  };
   return (
     <>
       <Section
         id="effects"
         title="Effects"
-        defaultOpen={(n.effects ?? []).length > 0}
+        defaultOpen={effects.length > 0}
         actions={
           <div style={{ position: "relative", display: "flex" }}>
             <button className="plus" title="Add effect" onClick={() => setOpen((v) => !v)}>
               <Icon name="plus" size={14} />
             </button>
-        {open && (
-          <div className="type-menu" style={{ right: 8, top: 28, left: "auto", width: 180 }}>
-            {kinds.map((k) => (
-              <button
-                key={k.id}
-                onClick={() => {
-                  engine.dispatch({
-                    type: "patch",
-                    id: n.id,
-                    patch: { effects: [...(n.effects ?? []), defaultEffect(k.id)] },
-                  });
-                  setOpen(false);
-                }}
-              >
-                {k.label}
-              </button>
-            ))}
-          </div>
-        )}
+            {open && (
+              <div className="type-menu" style={{ right: 8, top: 28, left: "auto", width: 180 }}>
+                {kinds.map((k) => (
+                  <button
+                    key={k.id}
+                    onClick={() => {
+                      engine.dispatch({
+                        type: "patch",
+                        id: n.id,
+                        patch: { effects: [...effects, defaultEffect(k.id)] },
+                      });
+                      setOpen(false);
+                    }}
+                  >
+                    {k.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         }
       >
-      {(n.effects ?? []).map((fx, i) => {
-        const set = (p: Partial<typeof fx>) => {
-          const effects = (n.effects ?? []).map((e2, j) => (j === i ? { ...e2, ...p } : e2));
-          engine.dispatch({ type: "patch", id: n.id, patch: { effects } });
-        };
-        const shadow = fx.kind === "drop-shadow" || fx.kind === "inner-shadow";
-        return (
-          <div key={i} className="insp-pad" style={{ marginBottom: 8, display: "grid", gap: 4 }}>
-            <div className="color-row">
-              <span className="hex">{kinds.find((k) => k.id === fx.kind)?.label}</span>
+        {effects.map((fx, i) => (
+          <div className="insp-pad" key={i} style={{ marginBottom: 4 }}>
+            <div className="color-row fx-row">
+              {(fx.kind === "drop-shadow" || fx.kind === "inner-shadow" || fx.kind === "glass") && (
+                <span className="swatch" style={{ background: fx.color }} />
+              )}
+              <button
+                className="hex"
+                style={{
+                  flex: 1,
+                  textAlign: "left",
+                  background: "none",
+                  border: 0,
+                  padding: 0,
+                  cursor: "pointer",
+                  color: "inherit",
+                }}
+                title={`${EFFECT_LABEL[fx.kind]} settings`}
+                aria-label={`Edit ${EFFECT_LABEL[fx.kind]}`}
+                aria-expanded={editing?.i === i}
+                onClick={(e) => {
+                  // Read the rect before the state updater runs: inside the
+                  // updater `e.currentTarget` is already null, which threw
+                  // "getBoundingClientRect of null" and left the popover shut.
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  setEditing((cur) => (cur?.i === i ? null : { i, rect }));
+                }}
+              >
+                {EFFECT_LABEL[fx.kind]}
+              </button>
               <button
                 className="mini"
                 title={fx.visible ? "Hide" : "Show"}
-                onClick={() => set({ visible: !fx.visible })}
+                aria-label={`${fx.visible ? "Hide" : "Show"} ${EFFECT_LABEL[fx.kind]}`}
+                onClick={() => set(i, { visible: !fx.visible })}
               >
                 <Icon name={fx.visible ? "eye" : "eye-off"} size={14} />
               </button>
               <button
                 className="mini minus"
                 title="Remove"
-                onClick={() => {
-                  const effects = (n.effects ?? []).filter((_, j) => j !== i);
-                  engine.dispatch({ type: "patch", id: n.id, patch: { effects } });
-                }}
+                aria-label={`Remove ${EFFECT_LABEL[fx.kind]}`}
+                onClick={() => remove(i)}
               >
                 <Icon name="minus" size={14} />
               </button>
             </div>
-            {shadow && (
-              <ColorRow
-                title="Shadow"
-                value={fx.color}
-                opacity={Math.round(parseHex(fx.color).a * 100)}
-                visible
-                recents={["#000000", "#00000040", "#ffffff"]}
-                onChange={(color) => set({ color: withAlpha(color, parseHex(fx.color).a) })}
-                onOpacity={(v) => set({ color: withAlpha(fx.color, v / 100) })}
-              />
-            )}
-            <div className="grid2">
-              {shadow && <Field label="X" value={fx.x} onChange={(x) => set({ x })} />}
-              {shadow && <Field label="Y" value={fx.y} onChange={(y) => set({ y })} />}
-              <Field label="Blur" value={fx.blur} onChange={(blur) => set({ blur })} />
-              {shadow && <Field label="Spread" value={fx.spread} onChange={(spread) => set({ spread })} />}
-            </div>
           </div>
-        );
-      })}
+        ))}
       </Section>
+      {editing && effects[editing.i] && (
+        <EffectPopover
+          fx={effects[editing.i]}
+          anchor={editing.rect}
+          onChange={(p) => set(editing.i, p)}
+          onClose={() => setEditing(null)}
+        />
+      )}
     </>
   );
 }
