@@ -324,6 +324,24 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       if (!n.visible) return;
       const x = px + n.x;
       const y = py + n.y;
+      // Viewport culling. Only childless nodes are considered: a container may
+      // paint children outside its own bounds when overflow is visible, and
+      // children are positioned relative to the parent, so skipping a parent
+      // would wrongly skip its subtree. Bounds are padded for stroke width and
+      // for any shadow offset/blur, and rotation is covered by using the
+      // diagonal, so nothing that could touch a pixel on screen is dropped.
+      if (!n.children.length) {
+        let pad = (n.strokeWidth ?? 0) + 2;
+        for (const e of n.effects ?? []) {
+          if (!e.visible) continue;
+          pad = Math.max(pad, Math.abs(e.x ?? 0) + Math.abs(e.y ?? 0) + Math.abs(e.blur ?? 0) + Math.abs(e.spread ?? 0));
+        }
+        const half = n.rotation ? Math.hypot(n.w, n.h) / 2 - Math.min(n.w, n.h) / 2 : 0;
+        const m = (pad + half) * z + 4;
+        const sx0 = snap.panX + x * z;
+        const sy0 = snap.panY + y * z;
+        if (sx0 + n.w * z + m < 0 || sy0 + n.h * z + m < 0 || sx0 - m > w || sy0 - m > h) return;
+      }
       ctx.save();
       if (n.rotation || n.flipH || n.flipV) {
         const cx = snap.panX + (x + n.w / 2) * z;
@@ -1995,7 +2013,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
               if (ctx) {
                 ctx.font = `${n.fontWeight} ${n.fontSize}px ${n.fontFamily}, Inter, system-ui`;
                 const lines = (edit.text || " ").split("\n");
-                const tw = Math.max(...lines.map((l) => ctx.measureText(l).width), 8);
+                const tw = Math.max(...lines.map((l) => measureCached(ctx, l)), 8);
                 const lh = n.lineHeight || n.fontSize * 1.2;
                 if (n.sizingW === "hug") patch.w = Math.ceil(tw + 4);
                 if (n.sizingH === "hug") patch.h = Math.ceil(Math.max(1, lines.length) * lh);
@@ -2321,6 +2339,25 @@ function tracePath(
   }
 }
 
+/** Glyph-width cache. measureText dominated pan/zoom frame time on large
+ *  documents because every visible string was re-measured on every frame even
+ *  when neither the text nor the font had changed. Keyed by font + string, so
+ *  a font change naturally misses and re-measures. Bounded to keep a long
+ *  session from growing the cache without limit. */
+const MEASURE_CACHE = new Map<string, number>();
+const MEASURE_CACHE_MAX = 20000;
+
+function measureCached(ctx: CanvasRenderingContext2D, s: string): number {
+  if (!s) return 0;
+  const key = `${ctx.font}\u0000${s}`;
+  const hit = MEASURE_CACHE.get(key);
+  if (hit !== undefined) return hit;
+  const w = ctx.measureText(s).width;
+  if (MEASURE_CACHE.size >= MEASURE_CACHE_MAX) MEASURE_CACHE.clear();
+  MEASURE_CACHE.set(key, w);
+  return w;
+}
+
 function wrapLines(
   ctx: CanvasRenderingContext2D,
   text: string,
@@ -2331,7 +2368,7 @@ function wrapLines(
   const lines: string[] = [];
   const widthOf = (s: string) => {
     if (!s) return 0;
-    const m = ctx.measureText(s).width;
+    const m = measureCached(ctx, s);
     return letterSpacing ? m + letterSpacing * Math.max(0, s.length - 1) : m;
   };
   const splitLong = (word: string) => {
@@ -2432,7 +2469,7 @@ function paintText(
       const clipped = lines.slice(0, limit);
       const last = clipped[clipped.length - 1];
       const widthOf = (s: string) =>
-        ctx.measureText(s).width + (ls ? ls * Math.max(0, s.length - 1) : 0);
+        measureCached(ctx, s) + (ls ? ls * Math.max(0, s.length - 1) : 0);
       const maxW = wrap ? sw : Infinity;
       let line = last.line;
       if (Number.isFinite(maxW)) {
@@ -2485,30 +2522,30 @@ function paintText(
     const justify = n.textAlign === "justified" && wrap && !row.lastInPara && line.includes(" ");
     if (justify) {
       const words = line.trim().split(/\s+/);
-      const total = words.reduce((s, w) => s + ctx.measureText(w).width, 0);
+      const total = words.reduce((s, w) => s + measureCached(ctx, w), 0);
       const gap = words.length > 1 ? (sw - total) / (words.length - 1) : 0;
       let x = sx;
       ctx.textAlign = "left";
       for (const w of words) {
         paintLine(w, x, ty);
-        x += ctx.measureText(w).width + gap;
+        x += measureCached(ctx, w) + gap;
       }
       ctx.textAlign = "left";
     } else if (ls) {
       let x = tx;
-      if (n.textAlign === "center") x = tx - (ctx.measureText(line).width + ls * Math.max(0, line.length - 1)) / 2;
-      if (n.textAlign === "right") x = tx - (ctx.measureText(line).width + ls * Math.max(0, line.length - 1));
+      if (n.textAlign === "center") x = tx - (measureCached(ctx, line) + ls * Math.max(0, line.length - 1)) / 2;
+      if (n.textAlign === "right") x = tx - (measureCached(ctx, line) + ls * Math.max(0, line.length - 1));
       ctx.textAlign = "left";
       for (const ch of line) {
         paintLine(ch, x, ty);
-        x += ctx.measureText(ch).width + ls;
+        x += measureCached(ctx, ch) + ls;
       }
       ctx.textAlign = n.textAlign === "center" ? "center" : n.textAlign === "right" ? "right" : "left";
     } else {
       paintLine(line, tx, ty, wrap ? sw : undefined);
     }
     if (fillOn && (n.textDecoration === "underline" || n.textDecoration === "strikethrough")) {
-      const textWidth = ctx.measureText(line).width + ls * Math.max(0, line.length - 1);
+      const textWidth = measureCached(ctx, line) + ls * Math.max(0, line.length - 1);
       const yy = n.textDecoration === "underline" ? ty + size : ty + size / 2;
       const x0 = n.textAlign === "center" ? tx - textWidth / 2 : n.textAlign === "right" ? tx - textWidth : tx;
       ctx.save();
