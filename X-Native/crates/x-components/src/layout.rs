@@ -29,11 +29,7 @@ pub fn resolve_instance_layout(
     let master = find_master(root, component)?;
     let mut work = master.clone();
     // 1) overrides + text remeasurement, deep (respecting nested-instance scope)
-    fn pass(
-        n: &mut Node,
-        ovr: &std::collections::HashMap<String, String>,
-        measure: MeasureFn,
-    ) {
+    fn pass(n: &mut Node, ovr: &std::collections::HashMap<String, String>, measure: MeasureFn) {
         for (k, enc) in ovr {
             let target = k.split('\x1f').next().unwrap_or(k);
             if target != n.id {

@@ -324,7 +324,6 @@ impl RenderTree {
 /// outline of their own use it; the rest — text, images, groups, frames,
 /// instances — clip to their bounds, a superset of Figma's per-pixel
 /// coverage (glyph coverage, image alpha) and the named delta there.
-
 fn node_fill_override(
     overrides: &std::collections::HashMap<String, String>,
     id: &str,

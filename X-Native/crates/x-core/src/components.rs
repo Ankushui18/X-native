@@ -1287,7 +1287,7 @@ mod tests {
 
     #[test]
     fn one_layer_can_hold_text_and_fill_overrides() {
-        let mut inst = Node::instance("i", "Btn", 80.0, 32.0);
+        let mut inst = Node::instance("i", "Btn", 0.0, 0.0, 80.0, 32.0);
         set_override(&mut inst, "label", OverrideValue::Text("Hi".into()));
         set_override(
             &mut inst,
@@ -1296,7 +1296,8 @@ mod tests {
         );
         let both = overrides_for(&inst, "label");
         assert!(
-            both.iter().any(|v| matches!(v, OverrideValue::Text(t) if t == "Hi")),
+            both.iter()
+                .any(|v| matches!(v, OverrideValue::Text(t) if t == "Hi")),
             "{both:?}"
         );
         assert!(

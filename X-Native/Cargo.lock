@@ -3929,17 +3929,10 @@ dependencies = [
 name = "x-designer"
 version = "0.34.0"
 dependencies = [
- "arboard",
- "glam",
  "png",
  "pollster 1.0.1",
- "rfd",
- "serde_json",
- "unicode-segmentation",
  "vello",
  "wgpu",
- "winit",
- "x-board",
  "x-native",
 ]
 
