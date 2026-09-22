@@ -672,6 +672,7 @@ export function Actions({
     { label: "Redo", sc: "⇧⌘Z", run: () => engine.dispatch({ type: "redo" }) },
     { label: "Duplicate", sc: "⌘D", run: () => engine.dispatch({ type: "duplicate" }) },
     { label: "Delete", sc: "⌫", run: () => engine.dispatch({ type: "delete" }) },
+    { label: "Rulers", sc: "⇧R", run: () => engine.dispatch({ type: "toggleRulers" }) },
     { label: "Group", sc: "⌘G", run: () => engine.dispatch({ type: "group" }) },
     { label: "Ungroup", sc: "⇧⌘G", run: () => engine.dispatch({ type: "ungroup" }) },
     { label: "Hide UI", sc: "⌘\\", run: onHide },
@@ -897,6 +898,11 @@ export function bindHotkeys(
     if (meta && e.shiftKey && e.key.toLowerCase() === "l") {
       e.preventDefault();
       engine.dispatch({ type: "lockSel" });
+      return;
+    }
+    if (!meta && e.shiftKey && e.key.toLowerCase() === "r") {
+      e.preventDefault();
+      engine.dispatch({ type: "toggleRulers" });
       return;
     }
     if (meta && e.shiftKey && e.key.toLowerCase() === "h") {

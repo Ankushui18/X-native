@@ -1571,3 +1571,11 @@ input:focus-visible,
   outline-color: #fff;
   outline-offset: 2px;
 }
+
+/* Ruler overlay sits above the document canvas but must not eat pointer events. */
+.rulers {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+}

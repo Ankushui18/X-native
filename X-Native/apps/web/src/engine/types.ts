@@ -281,6 +281,8 @@ export interface Snapshot {
   components: ComponentMaster[];
   presentFrame: string;
   presentStack: string[];
+  /** Figma's View > Rulers (⇧R). */
+  showRulers: boolean;
 }
 
 export type Command =
@@ -290,6 +292,7 @@ export type Command =
   | { type: "pan"; dx: number; dy: number }
   | { type: "setPan"; x: number; y: number }
   | { type: "setRightTab"; tab: RightTab }
+  | { type: "toggleRulers" }
   | { type: "setLeftTab"; tab: LeftTab }
   | { type: "setPage"; index: number }
   | { type: "setFileName"; name: string }

@@ -362,6 +362,7 @@ interface Internal {
   components: ComponentMaster[];
   presentFrame: string;
   presentStack: string[];
+  showRulers: boolean;
 }
 
 export class MemoryEngine implements Engine {
@@ -388,6 +389,7 @@ export class MemoryEngine implements Engine {
       components: [],
       presentFrame: "",
       presentStack: [],
+      showRulers: false,
     };
     this.relayout();
     this.snapCache = this.build();
@@ -471,6 +473,7 @@ export class MemoryEngine implements Engine {
       canUndo: this.undo.length > 0,
       canRedo: this.redo.length > 0,
       components: this.state.components,
+      showRulers: this.state.showRulers,
       presentFrame: this.state.presentFrame,
       presentStack: this.state.presentStack,
     };
@@ -495,6 +498,9 @@ export class MemoryEngine implements Engine {
       case "setPan":
         s.panX = cmd.x;
         s.panY = cmd.y;
+        break;
+      case "toggleRulers":
+        s.showRulers = !s.showRulers;
         break;
       case "setRightTab":
         s.rightTab = cmd.tab;

@@ -11,6 +11,7 @@ import {
   type Guide,
 } from "../engine/snapping";
 import { fillStyle, paintDropShadows, paintFill, paintImageFill, paintInnerShadows } from "../engine/paint";
+import { Rulers } from "./Rulers";
 import { useTheme } from "./theme";
 import { cssRgba, isNone, parseHex, takeEyedrop, toHex } from "./color";
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
@@ -129,6 +130,8 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const hoverIx = useRef("");
   /** Cursor implied by whatever selection chrome is under the pointer. */
   const [hoverCursor, setHoverCursor] = useState<string | null>(null);
+  /** Viewport size, tracked so the ruler overlay can size its own canvas. */
+  const [box, setBox] = useState({ w: 0, h: 0 });
   /** Live smart-guide overlay, produced by the snapping pass during a drag. */
   const [guides, setGuides] = useState<Guide[]>([]);
   const [gapBadges, setGapBadges] = useState<GapBadge[]>([]);
@@ -1883,6 +1886,15 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     });
   };
 
+  useEffect(() => {
+    const el = wrap.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setBox({ w: el.clientWidth, h: el.clientHeight }));
+    ro.observe(el);
+    setBox({ w: el.clientWidth, h: el.clientHeight });
+    return () => ro.disconnect();
+  }, []);
+
   const cursor =
     snap.tool === "hand" || space.current
       ? "grab"
@@ -1956,6 +1968,17 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       }}
     >
       <canvas ref={ref} />
+      {snap.showRulers && (
+        <Rulers
+          zoom={snap.zoom}
+          panX={snap.panX}
+          panY={snap.panY}
+          width={box.w}
+          height={box.h}
+          theme={theme}
+          selection={selectionBounds(snap.pages[snap.page].root, snap.selection)}
+        />
+      )}
       {transition && <div className={`proto-transition ${transition}`} aria-hidden="true" />}
       {edit && editBox && (
         <textarea
