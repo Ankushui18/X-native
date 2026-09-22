@@ -663,7 +663,7 @@ function GradientStops({
           />
         ))}
       </div>
-      <div className="hex-row">
+      <div className="hex-row grad-row">
         <span className="swatch" style={{ background: stops[idx].color }} />
         <span className="muted-inline">Stop {idx + 1}</span>
         <input
@@ -701,6 +701,8 @@ function GradientStops({
             );
           }}
         />
+      </div>
+      <div className="grad-actions">
         <button
           className="icon-btn"
           title="Remove stop"

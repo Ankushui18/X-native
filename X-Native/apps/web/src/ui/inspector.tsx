@@ -559,7 +559,7 @@ function Design({
             <Icon name="constraints" size={14} />
           </button>
           <Field icon="rotate" value={n.rotation} onChange={(v) => num("rotation", v)} />
-          <div className="seg">
+          <div className="seg icons">
             <button
               title="Flip horizontal"
               onClick={() => engine.dispatch({ type: "flip", axis: "h" })}
@@ -600,7 +600,7 @@ function Design({
         </div>
       </div>
       <div className="dir-row">
-        <div className="seg">
+        <div className="seg icons">
           <button
             className={!n.layout ? "on" : ""}
             title="None"
@@ -1063,7 +1063,7 @@ function Design({
                 engine.dispatch({ type: "patch", id: n.id, patch: { strokeWidth } })
               }
             />
-            <div className="seg">
+            <div className="seg icons">
               {(["inside", "center", "outside"] as StrokeAlign[]).map((a) => (
                 <button
                   key={a}
@@ -1076,7 +1076,7 @@ function Design({
               ))}
             </div>
           </div>
-          <div className="seg">
+          <div className="seg icons">
             {(["none", "round", "square", "arrow"] as StrokeCap[]).map((c) => (
               <button
                 key={c}
@@ -1088,7 +1088,7 @@ function Design({
               </button>
             ))}
           </div>
-          <div className="seg">
+          <div className="seg icons">
             {(["miter", "bevel", "round"] as StrokeJoin[]).map((j) => (
               <button
                 key={j}
@@ -1211,7 +1211,7 @@ function Design({
                 <option value="fixed">Fixed size</option>
               </select>
             </div>
-            <div className="seg">
+            <div className="seg icons">
               {(["left", "center", "right", "justified"] as TextAlign[]).map((a) => (
                 <button
                   key={a}
@@ -1222,7 +1222,7 @@ function Design({
                 </button>
               ))}
             </div>
-            <div className="seg">
+            <div className="seg icons">
               {(["top", "middle", "bottom"] as TextAlignVertical[]).map((a) => (
                 <button
                   key={a}
@@ -1240,7 +1240,7 @@ function Design({
             <div className="type-pop">
               <h4>Type settings</h4>
               <div className="dir-row">
-                <div className="seg">
+                <div className="seg icons">
                   <button
                     className={n.textDecoration === "underline" ? "on" : ""}
                     onClick={() =>

@@ -363,7 +363,8 @@ input, textarea { user-select: text; }
   align-items: center;
   gap: 6px;
   padding: 4px 10px;
-  color: var(--text);
+  /* Matches the right panel's header treatment (see `.h-row h3`). */
+  color: var(--muted);
   font-size: 11px;
   font-weight: 500;
   height: 32px;
@@ -406,7 +407,10 @@ html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }
 }
 .row:hover .mini, .row.sel .mini { opacity: 1; }
 .row .mini:hover { color: var(--text); }
-.row .twist {
+/* Disclosure triangles appear in layer rows AND section headers; scoping the
+   reset to `.row` left the header copies with the UA default grey button
+   background, which rendered as a white block in dark themes. */
+.twist {
   width: 16px;
   height: 16px;
   border: 0;
@@ -416,6 +420,7 @@ html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }
   display: grid;
   place-items: center;
 }
+.twist:hover { color: var(--text); }
 
 .canvas-col {
   position: relative;
@@ -662,6 +667,10 @@ html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }
   margin: 0;
   font-size: 11px;
   font-weight: 500;
+  /* Section headers should recede so the eye lands on the values beneath them.
+     At full text strength they competed with the fields and the whole panel
+     read as one flat list. */
+  color: var(--muted);
 }
 .plus {
   width: 24px;
@@ -726,8 +735,11 @@ html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }
 .field label {
   color: var(--muted);
   font-size: 11px;
-  width: 10px;
+  /* Most labels are a single glyph (X, Y, W, H) so 10px is the right rhythm,
+     but word labels like "Auto" must not bleed into the value. */
+  min-width: 10px;
   flex: 0 0 auto;
+  white-space: nowrap;
 }
 .field input, .field select {
   flex: 1;
@@ -813,13 +825,23 @@ html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }
   overflow: hidden;
 }
 .seg button {
-  width: 32px;
+  /* Icon segments are square; text segments grow to fit their label instead of
+     clipping it (e.g. "Edit vector" / "Flatten"). */
+  min-width: 32px;
   height: 32px;
+  padding: 0 8px;
+  flex: 1 1 auto;
+  white-space: nowrap;
   border: 0;
   background: transparent;
   color: var(--text);
   display: grid;
   place-items: center;
+}
+/* Segmented rows made purely of icon buttons keep the tight square rhythm. */
+.seg.icons button {
+  flex: 0 0 auto;
+  padding: 0;
 }
 .seg button:hover { background: var(--hover); }
 .seg button.on { background: var(--elevated); box-shadow: 0 0 0 1px var(--line); }
@@ -1381,3 +1403,14 @@ body.eyedrop, body.eyedrop * { cursor: crosshair !important; }
 }
 .grad-stop.on { box-shadow: 0 0 0 2px var(--accent, #0d99ff); }
 .grad-pos { max-width: 42px; text-align: right; }
+
+/* Gradient stop controls: identity + values on one row, actions on the next,
+   so nothing is squeezed below a usable width in the 240px picker. */
+.grad-row { gap: 6px; }
+.grad-row .hex { min-width: 0; }
+.grad-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+  padding: 0 12px 6px;
+}
