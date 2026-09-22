@@ -25,6 +25,7 @@ import { collectColors, defaultEffect, defaultLayout, find, findParent, framesOf
 import { shapePoly } from "../engine/geometry";
 import { Icon } from "./icons";
 import { Tooltip } from "./Tooltip";
+import { ZOOM_STEPS, zoomTo } from "./zoom";
 import { FillPicker, type FillValue } from "./FillPicker";
 import { BLENDS, handlesForFill, isNone, parseHex, withAlpha } from "./color";
 import { ContextMenu, runMenu } from "./ContextMenu";
@@ -79,20 +80,7 @@ export function RightPanel({
             </button>
           ))
         )}
-        <button
-          className="zoom"
-          title="Zoom"
-          onClick={() => {
-            const next = snap.zoom >= 1 ? 0.5 : snap.zoom >= 0.5 ? 1 : 2;
-            engine.dispatch({ type: "setZoom", zoom: next });
-          }}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            engine.dispatch({ type: "setZoom", zoom: 1 });
-          }}
-        >
-          {Math.round(snap.zoom * 100)}%
-        </button>
+        <ZoomMenu engine={engine} snap={snap} />
       </div>
       <div className="inspector">
         {snap.rightTab === "prototype" && !inspect && (
@@ -2108,6 +2096,66 @@ function setDir(engine: Engine, n: XNode, direction: "horizontal" | "vertical") 
 }
 
 /** Human labels + Figma's shortcuts for the align row. */
+/** Zoom control. The previous button cycled 100%→50%→100% and could never
+ *  reach 200%, so the presets are exposed in a dropdown instead — matching the
+ *  zoom menu designers expect, with the fit/selection commands alongside. */
+function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (!ref.current?.parentElement?.contains(e.target as Node)) setOpen(false);
+    };
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", esc);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+  const go = (fn: () => void) => () => {
+    fn();
+    setOpen(false);
+  };
+  return (
+    <div style={{ position: "relative", display: "flex" }}>
+      <button
+        ref={ref}
+        className="zoom"
+        title="Zoom"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {Math.round(snap.zoom * 100)}%
+      </button>
+      {open && (
+        <div className="ctx" role="menu" style={{ position: "absolute", top: "100%", right: 0, minWidth: 190 }}>
+          <button role="menuitem" onClick={go(() => zoomTo(engine, "fit"))}>
+            Zoom to fit<span className="sc">⇧1</span>
+          </button>
+          <button
+            role="menuitem"
+            disabled={!snap.selection.length}
+            onClick={go(() => zoomTo(engine, "selection"))}
+          >
+            Zoom to selection<span className="sc">⇧2</span>
+          </button>
+          <hr />
+          {ZOOM_STEPS.map((z) => (
+            <button key={z} role="menuitem" onClick={go(() => engine.dispatch({ type: "setZoom", zoom: z }))}>
+              {Math.round(z * 100)}%
+              {z === 1 && <span className="sc">⇧0</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const ALIGN_LABEL: Record<string, string> = {
   "align-left": "Align left",
   "align-hcenter": "Align horizontal centers",
