@@ -1992,6 +1992,13 @@ function ColorRow({
   const isImage = type === "image" || !!image;
   const hidden = !isImage && (!visible || isNone(value));
   const hex = value.length >= 7 ? value.slice(0, 7) : "#000000";
+  // The hex field keeps its own draft while typing. Committing on every
+  // keystroke meant an in-progress value like "f" was parsed as an invalid
+  // colour and normalised to black, which wiped the field mid-entry and made
+  // the control impossible to type into. Commit only complete hex values,
+  // matching how FillPicker already handles the same input.
+  const [draft, setDraft] = useState<string | null>(null);
+  const shown = hidden ? "" : isImage ? "Image" : hex.replace("#", "");
   return (
     <div className="color-row">
       <button
@@ -2010,12 +2017,28 @@ function ColorRow({
       />
       <input
         className="hex"
-        value={hidden ? "" : isImage ? "Image" : hex.replace("#", "")}
+        value={draft ?? shown}
         placeholder="None"
+        spellCheck={false}
         readOnly={isImage}
         onChange={(e) => {
           if (isImage) return;
-          onChange("#" + e.target.value.replace("#", ""));
+          const v = e.target.value.replace(/[^0-9a-fA-F]/g, "").slice(0, 8);
+          setDraft(v);
+          if (v.length === 3 || v.length === 4 || v.length === 6 || v.length === 8) {
+            onChange("#" + v);
+          }
+        }}
+        onFocus={(e) => e.currentTarget.select()}
+        onBlur={() => setDraft(null)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            setDraft(null);
+            e.currentTarget.blur();
+          } else if (e.key === "Escape") {
+            setDraft(null);
+            e.currentTarget.blur();
+          }
         }}
       />
       {onOpacity && (
