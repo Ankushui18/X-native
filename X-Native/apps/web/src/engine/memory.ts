@@ -342,6 +342,7 @@ function demoPage(): Page {
     id: uid("page"),
     name: "Page 1",
     root: pageRoot,
+    comments: [],
     pixelGrid: false,
     pixelGridColor: "#cccccc",
     flowStart: phone.id,
@@ -363,6 +364,8 @@ interface Internal {
   presentFrame: string;
   presentStack: string[];
   showRulers: boolean;
+  showComments: boolean;
+  openComment: string;
 }
 
 /** Cap the undo stack. Each entry is a full document clone, so an unbounded
@@ -403,6 +406,8 @@ export class MemoryEngine implements Engine {
       presentFrame: "",
       presentStack: [],
       showRulers: false,
+      showComments: false,
+      openComment: "",
     };
     this.relayout();
     this.snapCache = this.build();
@@ -441,6 +446,16 @@ export class MemoryEngine implements Engine {
       "select",
       "selectAll",
       "toggleRulers",
+      // Comments are annotations layered over the design, not part of it.
+      // Figma keeps them off the design undo stack entirely: ⌘Z after posting
+      // a comment reverts your last *design* edit, it does not delete the note.
+      "toggleComments",
+      "openComment",
+      "addComment",
+      "replyComment",
+      "resolveComment",
+      "deleteComment",
+      "moveComment",
       "setTool",
       "setZoom",
       "pan",
@@ -509,6 +524,8 @@ export class MemoryEngine implements Engine {
       canRedo: this.redo.length > 0,
       components: this.state.components,
       showRulers: this.state.showRulers,
+      showComments: this.state.showComments,
+      openComment: this.state.openComment,
       presentFrame: this.state.presentFrame,
       presentStack: this.state.presentStack,
     };
@@ -537,6 +554,55 @@ export class MemoryEngine implements Engine {
       case "toggleRulers":
         s.showRulers = !s.showRulers;
         break;
+      case "toggleComments":
+        s.showComments = !s.showComments;
+        if (!s.showComments) s.openComment = "";
+        break;
+      case "openComment":
+        s.openComment = cmd.id;
+        break;
+      case "addComment": {
+        const page = s.pages[s.page];
+        const id = uid("cm");
+        page.comments.push({
+          id,
+          x: cmd.x,
+          y: cmd.y,
+          body: cmd.body,
+          at: Date.now(),
+          resolved: false,
+          replies: [],
+        });
+        s.showComments = true;
+        s.openComment = id;
+        break;
+      }
+      case "replyComment": {
+        const t = s.pages[s.page].comments.find((c) => c.id === cmd.id);
+        if (t) t.replies.push({ id: uid("cr"), body: cmd.body, at: Date.now() });
+        break;
+      }
+      case "resolveComment": {
+        const t = s.pages[s.page].comments.find((c) => c.id === cmd.id);
+        if (t) t.resolved = cmd.resolved;
+        if (cmd.resolved) s.openComment = "";
+        break;
+      }
+      case "deleteComment": {
+        const page = s.pages[s.page];
+        page.comments = page.comments.filter((c) => c.id !== cmd.id);
+        if (s.openComment === cmd.id) s.openComment = "";
+        break;
+      }
+      case "moveComment": {
+        const t = s.pages[s.page].comments.find((c) => c.id === cmd.id);
+        if (t) {
+          t.x = cmd.x;
+          t.y = cmd.y;
+        }
+        break;
+      }
+        break;
       case "setRightTab":
         s.rightTab = cmd.tab;
         break;
@@ -554,6 +620,7 @@ export class MemoryEngine implements Engine {
         const p = demoPage();
         p.name = `Page ${s.pages.length + 1}`;
         p.root.children = [];
+        p.comments = [];
         p.flowStart = "";
         s.pages.push(p);
         s.page = s.pages.length - 1;

@@ -703,6 +703,7 @@ export function Actions({
     { label: "Duplicate", sc: "⌘D", run: () => engine.dispatch({ type: "duplicate" }) },
     { label: "Delete", sc: "⌫", run: () => engine.dispatch({ type: "delete" }) },
     { label: "Rulers", sc: "⇧R", run: () => engine.dispatch({ type: "toggleRulers" }) },
+    { label: "Show/hide comments", sc: "⇧C", run: () => engine.dispatch({ type: "toggleComments" }) },
     { label: "Group", sc: "⌘G", run: () => engine.dispatch({ type: "group" }) },
     { label: "Ungroup", sc: "⇧⌘G", run: () => engine.dispatch({ type: "ungroup" }) },
     { label: "Hide UI", sc: "⌘\\", run: onHide },
@@ -819,6 +820,11 @@ export function bindHotkeys(
       return;
     }
     // Must exclude Alt, otherwise this swallows ⌥⇧E (boolean Exclude).
+    if (e.shiftKey && !meta && !e.altKey && e.key.toLowerCase() === "c") {
+      e.preventDefault();
+      engine.dispatch({ type: "toggleComments" });
+      return;
+    }
     if (e.shiftKey && e.key.toLowerCase() === "e" && !meta && !e.altKey) {
       e.preventDefault();
       const cur = engine.snapshot().rightTab;

@@ -12,6 +12,7 @@ import {
 } from "../engine/snapping";
 import { fillStyle, paintDropShadows, paintFill, paintImageFill, paintInnerShadows } from "../engine/paint";
 import { Rulers } from "./Rulers";
+import { Comments } from "./Comments";
 import { useTheme } from "./theme";
 import { cssRgba, isNone, parseHex, takeEyedrop, toHex } from "./color";
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
@@ -116,6 +117,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const imgs = useRef(new Map<string, HTMLImageElement>());
   const [band, setBand] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [edit, setEdit] = useState<{ id: string; text: string } | null>(null);
+  const [draftComment, setDraftComment] = useState<{ x: number; y: number } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; wx: number; wy: number } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const pendingImage = useRef<{ x: number; y: number } | null>(null);
@@ -1001,17 +1003,13 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       drag.current = { mode: "marquee", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: "erase" };
       return;
     }
-    if (snap.tool === "comment") {
+    if (snap.tool === "comment" && e.button === 0 && !space.current) {
+      // Comments are annotations, not geometry. Previously this dropped a blue
+      // ellipse into the layer tree, which exported and hit-tested like a real
+      // shape; now it opens a draft thread anchored to the clicked point.
+      // Space (and middle-click) must still pan, so defer to those.
       const wpt = toWorld(e.clientX, e.clientY);
-      engine.dispatch({
-        type: "add",
-        kind: "ellipse",
-        x: wpt.x - 10,
-        y: wpt.y - 10,
-        w: 20,
-        h: 20,
-        extra: { name: "Comment", fill: "#18a0fb", fillVisible: true, strokeWidth: 0 },
-      });
+      setDraftComment({ x: wpt.x, y: wpt.y });
       return;
     }
     if (snap.tool === "pen") {
@@ -1986,6 +1984,18 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       }}
     >
       <canvas ref={ref} />
+      {(snap.showComments || snap.tool === "comment") && (
+        <Comments
+          threads={snap.pages[snap.page].comments}
+          engine={engine}
+          zoom={snap.zoom}
+          panX={snap.panX}
+          panY={snap.panY}
+          openId={snap.openComment}
+          draft={draftComment}
+          onDraftDone={() => setDraftComment(null)}
+        />
+      )}
       {snap.showRulers && (
         <Rulers
           zoom={snap.zoom}

@@ -259,10 +259,31 @@ export interface XNode {
   variant: string;
 }
 
+/** A single message inside a comment thread. */
+export interface CommentReply {
+  id: string;
+  body: string;
+  at: number;
+}
+
+/** A comment pin anchored to a point in page space. Comments are annotations,
+ *  not geometry: they live on the page rather than in the layer tree, so they
+ *  never export, never hit-test as shapes and never appear as layers. */
+export interface CommentThread {
+  id: string;
+  x: number;
+  y: number;
+  body: string;
+  at: number;
+  resolved: boolean;
+  replies: CommentReply[];
+}
+
 export interface Page {
   id: string;
   name: string;
   root: XNode;
+  comments: CommentThread[];
   pixelGrid: boolean;
   pixelGridColor: string;
   flowStart: string;
@@ -286,6 +307,11 @@ export interface Snapshot {
   presentStack: string[];
   /** Figma's View > Rulers (⇧R). */
   showRulers: boolean;
+  /** Comment pins are hidden unless the comment tool is active or the user
+   *  has explicitly turned them on, as in Figma. */
+  showComments: boolean;
+  /** Thread whose popover is open, if any. */
+  openComment: string;
 }
 
 export type Command =
@@ -296,6 +322,13 @@ export type Command =
   | { type: "setPan"; x: number; y: number }
   | { type: "setRightTab"; tab: RightTab }
   | { type: "toggleRulers" }
+  | { type: "toggleComments" }
+  | { type: "addComment"; x: number; y: number; body: string }
+  | { type: "replyComment"; id: string; body: string }
+  | { type: "resolveComment"; id: string; resolved: boolean }
+  | { type: "deleteComment"; id: string }
+  | { type: "moveComment"; id: string; x: number; y: number }
+  | { type: "openComment"; id: string }
   | { type: "setLeftTab"; tab: LeftTab }
   | { type: "setPage"; index: number }
   | { type: "setFileName"; name: string }
