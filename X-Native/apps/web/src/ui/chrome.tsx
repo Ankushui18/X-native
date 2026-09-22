@@ -8,6 +8,7 @@ import { useTheme, type ThemePref } from "./theme";
 import { ContextMenu, isGroupNode, layerMenu, pageMenu, runMenu } from "./ContextMenu";
 import { align } from "./inspector";
 import { stepZoom, zoomTo } from "./zoom";
+import { clearDoc } from "../engine/persist";
 
 export type NavId = "file" | "assets" | "tools" | "variables" | "agent";
 
@@ -713,6 +714,17 @@ export function Actions({
     { label: "Duplicate", sc: "⌘D", run: () => engine.dispatch({ type: "duplicate" }) },
     { label: "Delete", sc: "⌫", run: () => engine.dispatch({ type: "delete" }) },
     { label: "Rulers", sc: "⇧R", run: () => engine.dispatch({ type: "toggleRulers" }) },
+    {
+      // With autosave the document is now sticky, so there has to be a way back
+      // to a blank file. Destructive and unrecoverable, hence the confirm.
+      label: "New file…",
+      sc: "",
+      run: () => {
+        if (!window.confirm("Discard the current document and start a new file?")) return;
+        clearDoc();
+        window.location.reload();
+      },
+    },
     { label: "Show/hide comments", sc: "⇧C", run: () => engine.dispatch({ type: "toggleComments" }) },
     { label: "Group", sc: "⌘G", run: () => engine.dispatch({ type: "group" }) },
     { label: "Ungroup", sc: "⇧⌘G", run: () => engine.dispatch({ type: "ungroup" }) },

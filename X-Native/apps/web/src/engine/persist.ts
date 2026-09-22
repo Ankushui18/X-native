@@ -91,6 +91,7 @@ export function loadDoc(): LoadResult {
 export type SaveStatus = "saved" | "quota" | "error";
 
 export function saveDoc(doc: Omit<PersistedDoc, "version">): SaveStatus {
+  if (suppressed) return "saved";
   try {
     localStorage.setItem(KEY, JSON.stringify({ version: VERSION, ...doc }));
     return "saved";
@@ -105,7 +106,16 @@ export function saveDoc(doc: Omit<PersistedDoc, "version">): SaveStatus {
   }
 }
 
+/** Set by clearDoc so the pagehide flush during the subsequent reload cannot
+ *  immediately write the in-memory document straight back out. */
+let suppressed = false;
+
+export function saveSuppressed(): boolean {
+  return suppressed;
+}
+
 export function clearDoc(): void {
+  suppressed = true;
   try {
     localStorage.removeItem(KEY);
   } catch {
