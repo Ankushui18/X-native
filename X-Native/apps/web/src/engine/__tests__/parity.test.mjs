@@ -8,6 +8,7 @@
  */
 import { snapMove, snapCandidates } from "../snapping.ts";
 import { simplifyPath, smoothPath, erasePath } from "../geometry.ts";
+import { MemoryEngine } from "../memory.ts";
 
 let pass=0, fail=0;
 const t=(n,c)=>{ if(c){pass++;console.log("  ok  "+n);} else {fail++;console.log("  FAIL "+n);} };
@@ -59,6 +60,33 @@ const stacked={...base,fills:[
 const painted=(stacked.fills ?? []).filter(f=>f.visible!==false);
 t("stacked fills keep declared order", painted.length===1 && painted[0].color==="#00ff00");
 t("invisible fills are skipped", !painted.some(f=>f.color==="#0000ff"));
+
+console.log("undo coalescing:");
+{
+  // Typing "45" into a numeric field commits 4 then 45 in quick succession.
+  // Both keystrokes must collapse into a single undo step, while a patch of a
+  // different property still starts a new one.
+  const e = new MemoryEngine(false);
+  e.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w: 100, h: 100 });
+  const id = e.snapshot().selection[0];
+  const get = () => {
+    let found = null;
+    const walk = (n) => { if (n.id === id) found = n; n.children?.forEach(walk); };
+    const sn = e.snapshot();
+    walk(sn.pages[sn.page].root);
+    return found;
+  };
+  e.dispatch({ type: "patch", id, patch: { rotation: 4 } });
+  e.dispatch({ type: "patch", id, patch: { rotation: 45 } });
+  t("typed value applies", get().rotation === 45);
+  e.dispatch({ type: "undo" });
+  t("one undo clears the whole typed value", get().rotation === 0);
+
+  e.dispatch({ type: "patch", id, patch: { rotation: 30 } });
+  e.dispatch({ type: "patch", id, patch: { w: 150 } });
+  e.dispatch({ type: "undo" });
+  t("undo reverts only the last property", get().w === 100 && get().rotation === 30);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);

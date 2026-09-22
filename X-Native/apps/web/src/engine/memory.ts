@@ -377,7 +377,21 @@ const MAX_UNDO = 200;
 /** Commands whose rapid repeats collapse into a single undo step. Only
  *  incremental, self-repeating gestures belong here — structural edits must
  *  always get their own entry. */
-const COALESCABLE = new Set<string>(["nudge", "move", "resize"]);
+const COALESCABLE = new Set<string>(["nudge", "move", "resize", "patch"]);
+
+/** Identity used to decide whether two consecutive history commands belong to
+ *  the same burst. For `patch` this includes the target ids and the property
+ *  names being written, so typing "45" into the rotation field coalesces into
+ *  one undo step while a patch of a *different* property still starts a new
+ *  one. Without this, each keystroke in a numeric field cost its own undo. */
+function coalesceKey(cmd: Command): string {
+  if (cmd.type === "patch") {
+    const c = cmd as Extract<Command, { type: "patch" }>;
+    const ids = "id" in c && c.id ? String(c.id) : "";
+    return `patch:${ids}:${Object.keys(c.patch ?? {}).sort().join(",")}`;
+  }
+  return cmd.type;
+}
 
 export class MemoryEngine implements Engine {
   private state: Internal;
@@ -504,17 +518,18 @@ export class MemoryEngine implements Engine {
       // gesture instead of one keypress at a time.
       const now = Date.now();
       const COALESCE_MS = 600;
+      const key = coalesceKey(cmd);
       const repeat =
         COALESCABLE.has(cmd.type) &&
         this.lastHist !== null &&
-        this.lastHist.type === cmd.type &&
+        this.lastHist.type === key &&
         now - this.lastHist.at < COALESCE_MS;
       if (!repeat) {
         this.undo.push(clone(this.state));
         if (this.undo.length > MAX_UNDO) this.undo.shift();
       }
       this.redo = [];
-      this.lastHist = { type: cmd.type, at: now };
+      this.lastHist = { type: key, at: now };
     } else if (!hist && cmd.type !== "undo" && cmd.type !== "redo") {
       // A non-history command (select, zoom, ...) ends the current burst.
       this.lastHist = null;
