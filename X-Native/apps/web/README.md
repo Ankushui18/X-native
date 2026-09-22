@@ -8,8 +8,13 @@ The GPU native window (`x_native_app`) was removed.
 
 Immediate-mode Vello chrome is the wrong layer for Figma-density panels:
 layout, focus, text fields, and CSS hover states fight the scene graph.
-Chrome belongs in the DOM. The document, undo, auto layout, and (later)
-canvas raster stay in Rust.
+Chrome belongs in the DOM.
+
+The intent was that the document, undo and auto layout stay in Rust. That is
+**not yet true**: `src/engine/` currently implements all of them in
+TypeScript and nothing here calls into the Rust crates. See
+[docs/ARCHITECTURE_BOUNDARY.md](../../docs/ARCHITECTURE_BOUNDARY.md) for the
+decided boundary, the verified gap, and the order of work to close it.
 
 ## Split
 

@@ -3,10 +3,19 @@
 Design tool with a **Rust engine** (document, layout, `.x` IO, headless render)
 and a **web designer** as the only product UI. Visual language: Graphite & Signal.
 
+## Architecture boundary
+
+Rust is the intended engine authority; the web designer is the only UI. Today
+the web app implements the document model, undo and Auto Layout in TypeScript
+and does not call the Rust crates at all. The decided boundary, the verified
+gap and the order of work to close it are in
+[docs/ARCHITECTURE_BOUNDARY.md](docs/ARCHITECTURE_BOUNDARY.md). Read it before
+adding engine behaviour to `apps/web`.
+
 ## Document opening
 
 The web designer loads the document through the command API. There are no fake
-percentages or minimum loading delays. Engine-side read/validation stays in Rust.
+percentages or minimum loading delays.
 
 ## Reliability and verification
 
