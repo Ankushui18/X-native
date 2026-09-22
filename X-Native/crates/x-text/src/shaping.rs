@@ -1894,12 +1894,7 @@ mod tests {
         let (glyphs, _) = glyph_outlines(&m, &spans, f, &style);
         assert!(!glyphs.is_empty());
         // the last drawn outline is the ellipsis (U+2026) on line 2
-        let last_line = layout_lines(
-            &mut Shaper::new(&m),
-            &spans,
-            f,
-            400.0,
-        );
+        let last_line = layout_lines(&mut Shaper::new(&m), &spans, f, 400.0);
         assert!(last_line.len() > 2);
     }
 
