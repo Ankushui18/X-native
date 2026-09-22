@@ -1,4 +1,4 @@
-import { memo, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { Engine, Snapshot, Tool, XNode } from "../engine/types";
 import { collectColors, defaultLayout } from "../engine/memory";
 import { Icon, TOOL_ICON, kindIcon } from "./icons";
@@ -164,6 +164,16 @@ function LayerRow({
   const [renaming, setRenaming] = useState(false);
   const cancelRename = useRef(false);
   const lastDown = useRef(0);
+  // ⌘R renames the selected layer. Rename lives in this row's local state, so
+  // the global hotkey reaches it through a targeted event rather than by
+  // lifting the state up.
+  useEffect(() => {
+    const onReq = (e: Event) => {
+      if ((e as CustomEvent<string>).detail === n.id) setRenaming(true);
+    };
+    window.addEventListener("x-rename-layer", onReq);
+    return () => window.removeEventListener("x-rename-layer", onReq);
+  }, [n.id]);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   if (!matchesLayer(n, q)) return null;
   const container = n.kind === "frame" || n.kind === "group" || n.kind === "component";
@@ -880,6 +890,15 @@ export function bindHotkeys(
       e.preventDefault();
       engine.dispatch({ type: e.shiftKey ? "redo" : "undo" });
       return;
+    }
+    if (meta && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "r") {
+      const id = engine.snapshot().selection[0];
+      if (id) {
+        e.preventDefault();
+        engine.dispatch({ type: "setLeftTab", tab: "layers" });
+        window.dispatchEvent(new CustomEvent("x-rename-layer", { detail: id }));
+        return;
+      }
     }
     if (meta && e.key.toLowerCase() === "d") {
       e.preventDefault();
