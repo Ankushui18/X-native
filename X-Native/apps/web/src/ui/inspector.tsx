@@ -571,7 +571,7 @@ function Design({
           >
             <Icon name="constraints" size={14} />
           </button>
-          <Field icon="rotate" value={n.rotation} onChange={(v) => num("rotation", v)} />
+          <Field icon="rotate" aria="Rotation" value={n.rotation} onChange={(v) => num("rotation", v)} />
           <div className="seg icons">
             <button
               title="Flip horizontal"
@@ -820,6 +820,7 @@ function Design({
           <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
             <Field
               icon="gap"
+              aria="Gap between items"
               value={n.layout.gap}
               onChange={(v) =>
                 engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, gap: v } })
@@ -847,6 +848,7 @@ function Design({
             ) : (
               <Field
                 icon="padding"
+                aria="Padding"
                 value={n.layout.padding[0]}
                 onChange={(v) =>
                   engine.dispatch({
@@ -921,6 +923,7 @@ function Design({
           <div className="grid3">
             <Field
               icon="radius"
+              aria="Corner radius"
               value={n.cornerRadii[0]}
               onChange={(v) => patch({ cornerRadii: [v, v, v, v] })}
             />
@@ -1535,6 +1538,7 @@ function Field({
   onChange,
   hint,
   onLabelClick,
+  aria,
 }: {
   label?: string;
   icon?: string;
@@ -1542,6 +1546,9 @@ function Field({
   onChange: (v: number) => void;
   hint?: string;
   onLabelClick?: () => void;
+  /** Accessible name for icon-only fields, which otherwise expose no label
+   *  at all to assistive tech or to keyboard users reading focus. */
+  aria?: string;
 }) {
   const [draft, setDraft] = useState(() => fmt(value));
   const focused = useRef(false);
@@ -1572,6 +1579,8 @@ function Field({
       )}
       <input
         value={draft}
+        aria-label={aria ?? label}
+        title={aria && !label ? aria : undefined}
         onFocus={() => {
           focused.current = true;
         }}
@@ -2017,6 +2026,7 @@ function ColorRow({
       />
       <input
         className="hex"
+        aria-label={title ? `${title} colour hex` : "Colour hex"}
         value={draft ?? shown}
         placeholder="None"
         spellCheck={false}
@@ -2044,6 +2054,7 @@ function ColorRow({
       {onOpacity && (
         <input
           className="op"
+          aria-label={title ? `${title} opacity` : "Opacity"}
           value={`${opacity}%`}
           onChange={(e) => {
             const v = parseFloat(e.target.value);

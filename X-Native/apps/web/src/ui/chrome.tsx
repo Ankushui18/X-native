@@ -265,6 +265,8 @@ function LayerRow({
         {n.children.length ? (
           <button
             className="twist"
+            aria-label={open ? `Collapse ${n.name}` : `Expand ${n.name}`}
+            aria-expanded={open}
             onClick={(e) => {
               e.stopPropagation();
               setOpen((v) => !v);
@@ -406,6 +408,7 @@ function LeftPanelImpl({
       <div className="file-head">
         <input
           className="name"
+          aria-label="File name"
           value={snap.fileName}
           onChange={(e) => engine.dispatch({ type: "setFileName", name: e.target.value })}
         />
@@ -419,12 +422,18 @@ function LeftPanelImpl({
             <Icon name="search" size={14} />
             <input
               placeholder="Find…"
+              aria-label="Find layers"
               value={q}
               onChange={(e) => setQ(e.target.value)}
             />
           </div>
           <div className="section-label">
-            <button className="twist" onClick={() => setPagesOpen((v) => !v)}>
+            <button
+              className="twist"
+              aria-label={pagesOpen ? "Collapse pages" : "Expand pages"}
+              aria-expanded={pagesOpen}
+              onClick={() => setPagesOpen((v) => !v)}
+            >
               <Icon name={pagesOpen ? "chevron" : "chevron-right"} size={12} />
             </button>
             Pages
