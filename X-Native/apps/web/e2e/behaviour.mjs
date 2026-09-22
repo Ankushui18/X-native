@@ -579,6 +579,80 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 16. multiple strokes per layer -------------------------------------------
+{
+  const p = await page();
+  // thick red base stroke (inside) so a second stroke can sit beside it
+  await p.evaluate(() => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="220" height="160">
+      <rect x="30" y="30" width="160" height="100" fill="#dddddd" stroke="#ff0000" stroke-width="10"/></svg>`;
+    const dt = new DataTransfer();
+    dt.items.add(new File([svg], "a.svg", { type: "image/svg+xml" }));
+    document.querySelector(".canvas-wrap").dispatchEvent(
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 800, clientY: 520 }));
+  });
+  await sleep(1400);
+  const openStroke = async () => {
+    await p.evaluate(() => {
+      const t = [...document.querySelectorAll(".sec-toggle")].find(x => x.textContent.trim() === "Stroke");
+      if (t && t.getAttribute("aria-expanded") === "false") t.click();
+    });
+    await sleep(400);
+  };
+  const px = () => p.evaluate(() => {
+    const c = document.querySelector("canvas");
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let red = 0, blue = 0, grey = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i] > 180 && d[i + 1] < 80 && d[i + 2] < 80 && d[i + 3] > 200) red++;
+      if (d[i] < 80 && d[i + 1] < 80 && d[i + 2] > 180 && d[i + 3] > 200) blue++;
+      if (Math.abs(d[i] - 221) < 12 && Math.abs(d[i + 1] - 221) < 12 && d[i + 3] > 200) grey++;
+    }
+    return { red, blue, grey };
+  });
+  const before = await px();
+  t(`base stroke renders (${before.red}px red)`, before.red > 500);
+
+  await openStroke();
+  await p.evaluate(() => {
+    const el = [...document.querySelectorAll(".inspector button.plus")].find(b => b.getAttribute("title") === "Add stroke");
+    el && el.click();
+  });
+  await sleep(800);
+  const widths = await p.$$('.inspector input[aria-label*="Stroke 2 width"]');
+  t("a second stroke gets its own width control", widths.length === 1);
+
+  await widths[0].click();
+  await p.keyboard.down("Control"); await p.keyboard.press("a"); await p.keyboard.up("Control");
+  await p.keyboard.type("4"); await p.keyboard.press("Enter");
+  await sleep(600);
+  await p.evaluate(() => {
+    const bs = [...document.querySelectorAll('.inspector button[title="outside"]')];
+    bs[bs.length - 1]?.click();
+  });
+  await sleep(600);
+  const hexes = await p.$$(".inspector .color-row input");
+  let target = null;
+  for (const h of hexes) {
+    const v = await p.evaluate(e => e.value, h);
+    if (/^[0-9a-fA-F]{6}$/.test(v)) target = h;
+  }
+  await target.click({ clickCount: 3 });
+  await p.keyboard.type("0000ff"); await p.keyboard.press("Enter");
+  await sleep(900);
+
+  const after = await px();
+  // The point of the feature: both outlines and the fill coexist. An outside
+  // stroke must not erase what is already painted inside the shape.
+  t(`both strokes and the fill render together (red ${after.red}, blue ${after.blue}, fill ${after.grey})`,
+    after.red > 300 && after.blue > 200 && after.grey > 1000);
+
+  await p.keyboard.down("Meta"); await p.keyboard.press("z"); await p.keyboard.up("Meta");
+  await sleep(700);
+  t("undo steps back through the stroke stack", (await px()).blue < after.blue);
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();

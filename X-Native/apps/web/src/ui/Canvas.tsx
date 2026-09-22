@@ -10,7 +10,7 @@ import {
   type GapBadge,
   type Guide,
 } from "../engine/snapping";
-import { fillStyle, paintDropShadows, paintFill, paintImageFill, paintInnerShadows } from "../engine/paint";
+import { fillStyle, paintDropShadows, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows } from "../engine/paint";
 import { Rulers } from "./Rulers";
 import { Comments } from "./Comments";
 import { useTheme } from "./theme";
@@ -395,27 +395,35 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           ctx.stroke();
           ctx.restore();
         }
+        paintExtraStrokes(ctx, n, z, () =>
+          tracePath(ctx, n.path.length ? n.path : shapePoly(n), snap.panX + x * z, snap.panY + y * z, z, true),
+        );
         ctx.restore();
         return;
       }
-      if (n.kind === "text") {
-        ctx.beginPath();
-      } else if ((n.kind === "vector" || n.kind === "boolean") && n.path.length) {
-        tracePath(ctx, n.path, snap.panX + x * z, snap.panY + y * z, z, n.closed);
-      } else if (n.kind === "ellipse") {
-        ctx.beginPath();
-        ctx.ellipse(sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), 0, 0, Math.PI * 2);
-      } else if (n.kind === "line" || n.kind === "arrow") {
-        ctx.beginPath();
-        ctx.moveTo(sx, sy + sh / 2);
-        ctx.lineTo(sx + sw, sy + sh / 2);
-      } else if (n.kind === "star") {
-        starPath(ctx, sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), n.count || 5, n.starRatio || 0.4);
-      } else if (n.kind === "poly") {
-        polyPath(ctx, sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), n.count || 3);
-      } else {
-        round();
-      }
+      // Named so extra stroke layers can re-trace the same outline; a stroke
+      // pass changes lineWidth and may clip, so the path has to be rebuilt.
+      const traceShape = () => {
+        if (n.kind === "text") {
+          ctx.beginPath();
+        } else if ((n.kind === "vector" || n.kind === "boolean") && n.path.length) {
+          tracePath(ctx, n.path, snap.panX + x * z, snap.panY + y * z, z, n.closed);
+        } else if (n.kind === "ellipse") {
+          ctx.beginPath();
+          ctx.ellipse(sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), 0, 0, Math.PI * 2);
+        } else if (n.kind === "line" || n.kind === "arrow") {
+          ctx.beginPath();
+          ctx.moveTo(sx, sy + sh / 2);
+          ctx.lineTo(sx + sw, sy + sh / 2);
+        } else if (n.kind === "star") {
+          starPath(ctx, sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), n.count || 5, n.starRatio || 0.4);
+        } else if (n.kind === "poly") {
+          polyPath(ctx, sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), n.count || 3);
+        } else {
+          round();
+        }
+      };
+      traceShape();
       const bgBlur = (n.effects ?? []).find(
         (e) => (e.kind === "background-blur" || e.kind === "glass") && e.visible,
       );
@@ -542,6 +550,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         }
         ctx.restore();
       }
+      paintExtraStrokes(ctx, n, z, traceShape);
       if (n.kind === "text" && edit?.id !== n.id) {
         paintText(ctx, n, sx, sy, sw, sh, z);
       }

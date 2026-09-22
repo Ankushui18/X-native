@@ -1095,17 +1095,33 @@ function Design({
         <button
           className="plus"
           title="Add stroke"
-          onClick={() =>
+          onClick={() => {
+            // First press turns the base stroke on; after that each press
+            // stacks another stroke on top, the way Figma's Stroke "+" behaves.
+            const hasBase = n.strokeWidth > 0 && (!isNone(n.strokePaint) || n.strokeVisible);
+            if (!hasBase) {
+              engine.dispatch({
+                type: "patch",
+                id: n.id,
+                patch: {
+                  strokePaint: isNone(n.strokePaint) ? "#1e1e1e" : n.strokePaint,
+                  strokeVisible: true,
+                  strokeWidth: n.strokeWidth || 1,
+                },
+              });
+              return;
+            }
             engine.dispatch({
               type: "patch",
               id: n.id,
               patch: {
-                strokePaint: isNone(n.strokePaint) ? "#1e1e1e" : n.strokePaint,
-                strokeVisible: true,
-                strokeWidth: n.strokeWidth || 1,
+                strokes: [
+                  ...(n.strokes ?? []),
+                  { color: "#1e1e1e", opacity: 1, visible: true, width: 1, align: n.strokeAlign },
+                ],
               },
-            })
-          }
+            });
+          }}
         >
           <Icon name="plus" size={14} />
         </button>
@@ -1201,6 +1217,55 @@ function Design({
           )}
         </div>
       )}
+      {(n.strokes ?? []).map((sk, i) => {
+        const setStroke = (p: Partial<typeof sk>) =>
+          engine.dispatch({
+            type: "patch",
+            id: n.id,
+            patch: { strokes: (n.strokes ?? []).map((q, j) => (j === i ? { ...q, ...p } : q)) },
+          });
+        return (
+          <div className="insp-pad" key={i} style={{ display: "grid", gap: 4 }}>
+            <ColorRow
+              title="Stroke"
+              value={sk.color}
+              opacity={Math.round((sk.opacity ?? 1) * 100)}
+              visible={sk.visible}
+              recents={collectColors(snap.pages[snap.page].root)}
+              onChange={(color) => setStroke({ color, visible: true })}
+              onOpacity={(v) => setStroke({ opacity: v / 100 })}
+              onVisible={(v) => setStroke({ visible: v })}
+              onRemove={() =>
+                engine.dispatch({
+                  type: "patch",
+                  id: n.id,
+                  patch: { strokes: (n.strokes ?? []).filter((_, j) => j !== i) },
+                })
+              }
+            />
+            <div className="grid2">
+              <Field
+                label="W"
+                aria={`Stroke ${i + 2} width`}
+                value={sk.width}
+                onChange={(width) => setStroke({ width: Math.max(0, width) })}
+              />
+              <div className="seg icons">
+                {(["inside", "center", "outside"] as StrokeAlign[]).map((a) => (
+                  <button
+                    key={a}
+                    className={sk.align === a ? "on" : ""}
+                    title={a}
+                    onClick={() => setStroke({ align: a })}
+                  >
+                    <Icon name={`stroke-${a}`} size={14} />
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })}
       </Section>
 
       {(n.kind === "star" || n.kind === "poly") && (

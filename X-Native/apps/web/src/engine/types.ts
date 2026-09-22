@@ -121,6 +121,31 @@ export interface Paint {
   stops?: GradientStop[];
 }
 
+/**
+ * One additional stroke, painted over the base stroke.
+ *
+ * Same split as fills: the scalar `strokePaint`/`strokeWidth`/… fields on
+ * XNode describe the *bottom* stroke and stay authoritative on their own, so
+ * every existing call site keeps working. `XNode.strokes` holds any extra
+ * strokes drawn on top, bottom-to-top, the way Figma stacks them. An empty or
+ * absent array means "single stroke", which is the legacy behaviour.
+ *
+ * Each layer carries its own geometry (width, align, dash, caps) because in
+ * Figma a second stroke is a genuinely independent outline, not a recolour of
+ * the first.
+ */
+export interface StrokeLayer {
+  color: string;
+  opacity: number;
+  visible: boolean;
+  width: number;
+  align: StrokeAlign;
+  dash?: number;
+  gap?: number;
+  cap?: StrokeCap;
+  join?: StrokeJoin;
+}
+
 export interface Effect {
   kind: EffectKind;
   color: string;
@@ -187,6 +212,8 @@ export interface XNode {
    * Figma stacks them. Absent/empty means the node has a single fill.
    */
   fills?: Paint[];
+  /** Extra strokes painted over the base stroke; see StrokeLayer. */
+  strokes?: StrokeLayer[];
   fillBlend: string;
   strokePaint: string;
   strokeOpacity: number;
