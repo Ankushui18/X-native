@@ -25,6 +25,7 @@ import { collectColors, defaultEffect, defaultLayout, find, findParent, framesOf
 import { shapePoly } from "../engine/geometry";
 import { Icon } from "./icons";
 import { Tooltip } from "./Tooltip";
+import { copyText } from "../engine/clipboard";
 import { ZOOM_STEPS, zoomTo } from "./zoom";
 import { FillPicker, type FillValue } from "./FillPicker";
 import { BLENDS, handlesForFill, isNone, parseHex, withAlpha } from "./color";
@@ -376,7 +377,7 @@ function Inspect({ n }: { n?: XNode }) {
         <button
           className="plus"
           title="Copy CSS"
-          onClick={() => void navigator.clipboard?.writeText(css)}
+          onClick={() => copyText(css)}
         >
           <Icon name="copy" size={14} />
         </button>

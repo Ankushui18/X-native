@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { MemoryEngine } from "./engine/memory";
 import { Canvas } from "./ui/Canvas";
+import { copyText } from "./engine/clipboard";
 import {
   Actions,
   HelpBtn,
@@ -49,7 +50,7 @@ export default function App() {
   const share = () => {
     const page = snap.pages[snap.page];
     const text = `${snap.fileName} · ${page.name} · ${window.location.href}`;
-    void navigator.clipboard?.writeText(text);
+    copyText(text);
     setToast("Link copied");
     window.setTimeout(() => setToast(""), 1600);
   };

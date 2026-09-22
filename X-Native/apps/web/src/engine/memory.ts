@@ -11,6 +11,7 @@ import type {
   Tool,
   XNode,
 } from "./types";
+import { copyText } from "./clipboard";
 import { booleanPath, outlineStroke as outlineStrokePath, shapePoly, transformedPoly } from "./geometry";
 
 let seq = 1;
@@ -910,7 +911,7 @@ export class MemoryEngine implements Engine {
         ]
           .filter(Boolean)
           .join("\n");
-        void navigator.clipboard?.writeText(css);
+        copyText(css);
         break;
       }
       case "group":
