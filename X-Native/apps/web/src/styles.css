@@ -363,7 +363,8 @@ input, textarea { user-select: text; }
   align-items: center;
   gap: 6px;
   padding: 4px 10px;
-  color: var(--text);
+  /* Matches the right panel's header treatment (see `.h-row h3`). */
+  color: var(--muted);
   font-size: 11px;
   font-weight: 500;
   height: 32px;
@@ -406,7 +407,10 @@ html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }
 }
 .row:hover .mini, .row.sel .mini { opacity: 1; }
 .row .mini:hover { color: var(--text); }
-.row .twist {
+/* Disclosure triangles appear in layer rows AND section headers; scoping the
+   reset to `.row` left the header copies with the UA default grey button
+   background, which rendered as a white block in dark themes. */
+.twist {
   width: 16px;
   height: 16px;
   border: 0;
@@ -416,6 +420,7 @@ html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }
   display: grid;
   place-items: center;
 }
+.twist:hover { color: var(--text); }
 
 .canvas-col {
   position: relative;
@@ -662,6 +667,10 @@ html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }
   margin: 0;
   font-size: 11px;
   font-weight: 500;
+  /* Section headers should recede so the eye lands on the values beneath them.
+     At full text strength they competed with the fields and the whole panel
+     read as one flat list. */
+  color: var(--muted);
 }
 .plus {
   width: 24px;
@@ -710,6 +719,15 @@ html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }
   gap: 4px 8px;
   align-items: center;
 }
+/* Grid and flex children default to min-width:auto, so a row whose content is
+   intrinsically wider than the 216px of usable panel space (e.g. Stroke: width
+   field + 3-up align + 4-up cap + 3-up join) pushes past the panel edge and the
+   trailing controls become physically unreachable. Let them shrink. */
+.grid2 > *, .grid3 > * { min-width: 0; }
+.insp-pad { min-width: 0; }
+.color-row { min-width: 0; }
+.color-row .hex { min-width: 0; }
+.seg { min-width: 0; }
 .field {
   height: 32px;
   display: flex;
@@ -726,8 +744,11 @@ html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }
 .field label {
   color: var(--muted);
   font-size: 11px;
-  width: 10px;
+  /* Most labels are a single glyph (X, Y, W, H) so 10px is the right rhythm,
+     but word labels like "Auto" must not bleed into the value. */
+  min-width: 10px;
   flex: 0 0 auto;
+  white-space: nowrap;
 }
 .field input, .field select {
   flex: 1;
@@ -813,13 +834,23 @@ html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }
   overflow: hidden;
 }
 .seg button {
-  width: 32px;
+  /* Icon segments are square; text segments grow to fit their label instead of
+     clipping it (e.g. "Edit vector" / "Flatten"). */
+  min-width: 32px;
   height: 32px;
+  padding: 0 8px;
+  flex: 1 1 auto;
+  white-space: nowrap;
   border: 0;
   background: transparent;
   color: var(--text);
   display: grid;
   place-items: center;
+}
+/* Segmented rows made purely of icon buttons keep the tight square rhythm. */
+.seg.icons button {
+  flex: 0 0 auto;
+  padding: 0;
 }
 .seg button:hover { background: var(--hover); }
 .seg button.on { background: var(--elevated); box-shadow: 0 0 0 1px var(--line); }
@@ -1333,3 +1364,286 @@ body.eyedrop, body.eyedrop * { cursor: crosshair !important; }
   font-size: 11px;
 }
 .hint { color: var(--dim); font-size: 10px; }
+
+/* Layers panel drag-and-drop affordances. */
+.row[draggable="true"] { cursor: grab; }
+.row.dragging { opacity: 0.4; }
+.row.drop-before,
+.row.drop-after { position: relative; }
+.row.drop-before::after,
+.row.drop-after::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  background: var(--accent, #0d99ff);
+  border-radius: 1px;
+  pointer-events: none;
+}
+.row.drop-before::after { top: -1px; }
+.row.drop-after::after { bottom: -1px; }
+.row.drop-inside {
+  box-shadow: inset 0 0 0 1px var(--accent, #0d99ff);
+  border-radius: 3px;
+}
+
+/* Gradient ramp editor. */
+.grad-editor { padding: 6px 12px 0; }
+.grad-bar {
+  position: relative;
+  height: 20px;
+  border-radius: 4px;
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+  cursor: copy;
+  background-clip: padding-box;
+}
+.grad-stop {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  padding: 0;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+  cursor: grab;
+}
+.grad-stop.on { box-shadow: 0 0 0 2px var(--accent, #0d99ff); }
+.grad-pos { max-width: 42px; text-align: right; }
+
+/* Gradient stop controls: identity + values on one row, actions on the next,
+   so nothing is squeezed below a usable width in the 240px picker. */
+.grad-row { gap: 6px; }
+.grad-row .hex { min-width: 0; }
+.grad-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+  padding: 0 12px 6px;
+}
+
+/* Stroke cap (4) + join (3) + dash (1) = 8 controls. At 32px each that needs
+   256px + gaps, more than the 216px of usable panel width, so they wrap onto a
+   second line instead of scrolling buttons out of reach. */
+.stroke-ends {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.stroke-ends .seg { flex: 0 0 auto; }
+.stroke-ends .icon-btn { flex: 0 0 auto; margin-left: auto; }
+
+/* The stroke width row has no trailing 32px control, so unlike .grid3 it should
+   give the alignment segment its full intrinsic width (3 x 32px) rather than
+   reserving a column for something that is not there. */
+.stroke-width {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.stroke-width .field { flex: 1 1 auto; min-width: 0; }
+.stroke-width .seg { flex: 0 0 auto; }
+
+/* ---------------------------------------------------------------------------
+   Motion
+   Figma is restrained but not static: interactive chrome eases on hover/press
+   and popovers fade in rather than snapping. Durations are deliberately short
+   (80-120ms) so the editor still feels instant. Everything here is cosmetic —
+   no layout-affecting property is animated, so nothing can cause reflow jank.
+   --------------------------------------------------------------------------- */
+button,
+.row,
+.tool,
+.swatch,
+.field,
+.seg button,
+.icon-btn,
+.mini,
+.plus,
+.twist {
+  transition:
+    background-color 90ms ease,
+    border-color 90ms ease,
+    color 90ms ease,
+    box-shadow 90ms ease,
+    opacity 90ms ease;
+}
+/* Pressed state: a subtle scale gives tactile feedback on the dock + buttons. */
+.tool:active,
+.icon-btn:active,
+.plus:active { transform: scale(0.94); }
+.tool,
+.icon-btn,
+.plus { transition: background-color 90ms ease, color 90ms ease, transform 70ms ease; }
+
+@keyframes x-pop-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
+}
+.fill-pop,
+.ctx,
+.menu,
+.type-menu,
+.palette,
+.help-sheet { animation: x-pop-in 110ms cubic-bezier(0.2, 0, 0.13, 1); }
+
+/* Respect the OS reduced-motion preference. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Figma-style tooltip: dark pill, label plus dimmed shortcut. */
+.tip-host { display: contents; }
+.tip {
+  position: fixed;
+  z-index: 200;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: #1e1e1e;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 400;
+  white-space: nowrap;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+  animation: x-pop-in 90ms ease;
+}
+html[data-theme="dark"] .tip,
+html[data-theme="graphite"] .tip { background: #383838; }
+.tip-sc { color: rgba(255, 255, 255, 0.55); }
+
+/* Empty state for the right panel with nothing selected. */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 2px;
+  padding: 28px 20px 24px;
+  color: var(--muted);
+}
+.empty-state svg { color: var(--dim); margin-bottom: 6px; }
+.empty-title { margin: 0; font-size: 12px; font-weight: 500; color: var(--text); }
+.empty-body { margin: 2px 0 0; font-size: 11px; line-height: 1.5; color: var(--muted); }
+.empty-hint { margin: 10px 0 0; font-size: 11px; line-height: 1.7; color: var(--dim); }
+.empty-hint kbd {
+  display: inline-block;
+  min-width: 16px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--input);
+  border: 1px solid var(--line);
+  font: inherit;
+  font-size: 10px;
+  color: var(--text);
+}
+
+/* Keyboard focus. Only `:focus-visible`, so mouse users never see a ring but
+   keyboard users can always tell where they are. Previously fields showed a
+   blue border and every icon button showed nothing, making keyboard-only
+   navigation effectively impossible. */
+button:focus-visible,
+select:focus-visible,
+input:focus-visible,
+[tabindex]:focus-visible,
+.row:focus-visible,
+.tool .hit:focus-visible,
+.swatch:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
+  border-radius: 6px;
+}
+/* Inside the dark dock the blue ring needs a light halo to stay visible. */
+.dock button:focus-visible {
+  outline-color: #fff;
+  outline-offset: 2px;
+}
+
+/* Ruler overlay sits above the document canvas but must not eat pointer events. */
+.rulers {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+}
+
+/* Comments -------------------------------------------------------------- */
+.cm-layer { position: absolute; inset: 0; pointer-events: none; z-index: 6; }
+.cm-pin, .cm-pop { pointer-events: auto; }
+.cm-pin {
+  position: absolute;
+  width: 28px; height: 28px;
+  margin: -28px 0 0 0;               /* tip of the teardrop sits on the point */
+  border: 2px solid #fff;
+  border-radius: 14px 14px 14px 2px;
+  background: var(--accent, #18a0fb);
+  color: #fff;
+  font-size: 11px; font-weight: 600;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+  cursor: pointer;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+.cm-pin:hover { transform: scale(1.08); }
+.cm-pin.on { box-shadow: 0 0 0 3px rgba(24,160,251,0.35), 0 2px 6px rgba(0,0,0,0.25); }
+.cm-pin.done { background: var(--dim, #8c8c8c); }
+.cm-pop {
+  position: absolute;
+  width: 240px;
+  background: var(--elevated);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  padding: 10px;
+  z-index: 7;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.cm-head { display: flex; align-items: center; gap: 6px; }
+.cm-av {
+  width: 22px; height: 22px; border-radius: 11px;
+  background: var(--accent, #18a0fb); color: #fff;
+  font-size: 11px; font-weight: 600;
+  display: flex; align-items: center; justify-content: center;
+  flex: none;
+}
+.cm-av.sm { width: 18px; height: 18px; font-size: 10px; }
+.cm-when { font-size: 11px; color: var(--dim); }
+.cm-head .cm-when { margin-right: auto; }
+.cm-icon {
+  width: 22px; height: 22px; border: 0; background: transparent;
+  border-radius: 6px; color: var(--dim); cursor: pointer; font-size: 13px;
+  display: flex; align-items: center; justify-content: center;
+}
+.cm-icon:hover { background: var(--hover); color: var(--text); }
+.cm-body { font-size: 12px; color: var(--text); white-space: pre-wrap; word-break: break-word; }
+.cm-reply { display: flex; gap: 6px; align-items: flex-start; }
+.cm-input {
+  width: 100%; min-height: 52px; resize: vertical;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--text);
+  font: inherit; font-size: 12px; padding: 6px 8px;
+  box-sizing: border-box;
+}
+.cm-input:focus { outline: none; border-color: var(--accent, #18a0fb); }
+.cm-actions { display: flex; align-items: center; gap: 6px; }
+.cm-hint { font-size: 11px; color: var(--dim); margin-right: auto; }
+.cm-btn {
+  height: 26px; padding: 0 10px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--text);
+  font-size: 12px; cursor: pointer;
+}
+.cm-btn:hover { background: var(--hover); }
+.cm-btn.primary { background: var(--accent, #18a0fb); border-color: transparent; color: #fff; }
+.cm-btn.primary:disabled { opacity: 0.45; cursor: default; }

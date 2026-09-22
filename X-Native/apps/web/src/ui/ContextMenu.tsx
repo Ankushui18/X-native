@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Engine, XNode } from "../engine/types";
+import { plural, toast } from "./toast";
 import { find } from "../engine/memory";
 import { Icon } from "./icons";
 
@@ -38,13 +39,26 @@ export function ContextMenu({
     };
   }, [onClose]);
 
-  const h = items.reduce((s, it) => s + (it.kind === "sep" ? 7 : 28), 10);
+  // Row-height arithmetic is only an estimate — real rows drift with font
+  // metrics and separators, so a tall menu opened near the bottom hung off the
+  // edge. Measure the rendered node and re-derive the position from the true
+  // height before paint.
+  const ref = useRef<HTMLDivElement | null>(null);
+  const estimated = items.reduce((s, it) => s + (it.kind === "sep" ? 7 : 28), 10);
+  const [h, setH] = useState(estimated);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const real = el.getBoundingClientRect().height;
+    if (Math.abs(real - h) > 0.5) setH(real);
+  });
+
   const w = 220;
   const left = Math.max(4, Math.min(x, window.innerWidth - w - 8));
   const top = Math.max(4, Math.min(y, window.innerHeight - h - 8));
 
   return createPortal(
-    <div className="ctx" style={{ left, top, width: w }} role="menu">
+    <div className="ctx" ref={ref} style={{ left, top, width: w }} role="menu">
       {items.map((it, i) => {
         if (it.kind === "sep") return <hr key={i} />;
         if (it.kind === "sub") {
@@ -208,21 +222,30 @@ export function runMenu(
     case "cut":
       engine.dispatch({ type: "cut" });
       break;
-    case "copy":
+    case "copy": {
+      const n = engine.snapshot().selection.length;
       engine.dispatch({ type: "copy" });
+      if (n) toast(`Copied ${plural(n, "layer")}`);
       break;
+    }
     case "paste":
       engine.dispatch({ type: "paste", x: extra?.x, y: extra?.y });
       break;
     case "copyCode":
       engine.dispatch({ type: "copyCode" });
+      // The result lands on the clipboard with no visible change on canvas, so
+      // without a toast the command looks like it did nothing.
+      toast("Copied as CSS");
       break;
     case "duplicate":
       engine.dispatch({ type: "duplicate" });
       break;
-    case "delete":
+    case "delete": {
+      const n = engine.snapshot().selection.length;
       engine.dispatch({ type: "delete" });
+      if (n) toast(`Deleted ${plural(n, "layer")} · ⌘Z to undo`);
       break;
+    }
     case "selectAll":
       engine.dispatch({ type: "selectAll" });
       break;

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { MemoryEngine } from "./engine/memory";
 import { Canvas } from "./ui/Canvas";
+import { copyText } from "./engine/clipboard";
 import {
   Actions,
   HelpBtn,
@@ -12,6 +13,8 @@ import {
   type NavId,
 } from "./ui/chrome";
 import { RightPanel } from "./ui/inspector";
+import { subscribeToast, toast as toastMsg } from "./ui/toast";
+import { saveDoc } from "./engine/persist";
 
 export default function App() {
   const engine = useMemo(() => new MemoryEngine(), []);
@@ -30,10 +33,70 @@ export default function App() {
   const leftDrag = usePanelDrag(leftW, setLeftW, 180, 420);
   const rightDrag = usePanelDrag(rightW, setRightW, 200, 420, true);
 
+  // Autosave. The document is serialised on a trailing debounce so a burst of
+  // edits (dragging, typing) writes once when it settles rather than on every
+  // dispatch, and again on pagehide to catch a close mid-burst.
+  useEffect(() => {
+    let timer = 0;
+    let warned = false;
+    const write = () => {
+      const status = saveDoc(engine.toDoc());
+      if (status !== "saved" && !warned) {
+        warned = true; // one warning per session, not once per keystroke
+        toastMsg(
+          status === "quota"
+            ? "Document too large to autosave · export to keep a copy"
+            : "Autosave unavailable in this browser",
+        );
+      }
+      if (status === "saved") warned = false;
+    };
+    const off = engine.subscribe(() => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(write, 600);
+    });
+    const flush = () => {
+      window.clearTimeout(timer);
+      write();
+    };
+    window.addEventListener("pagehide", flush);
+    return () => {
+      off();
+      window.clearTimeout(timer);
+      window.removeEventListener("pagehide", flush);
+    };
+  }, [engine]);
+
+  // If a stored document existed but could not be read, say so rather than
+  // silently presenting an empty file as if nothing was lost. This sets the
+  // toast state directly: the bus subscription below mounts after this effect,
+  // so a message raised through the bus here would be dropped.
+  useEffect(() => {
+    if (!engine.restoreFailed) return;
+    setToast("Saved document could not be read · started a new one");
+    const t = window.setTimeout(() => setToast(""), 4000);
+    return () => window.clearTimeout(t);
+  }, [engine]);
+
+  // Any module can raise a toast via the bus; keep the existing local setter
+  // working for the share button.
+  useEffect(() => {
+    let timer = 0;
+    const off = subscribeToast((msg) => {
+      setToast(msg);
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setToast(""), 1800);
+    });
+    return () => {
+      off();
+      window.clearTimeout(timer);
+    };
+  }, []);
+
   const share = () => {
     const page = snap.pages[snap.page];
     const text = `${snap.fileName} · ${page.name} · ${window.location.href}`;
-    void navigator.clipboard?.writeText(text);
+    copyText(text);
     setToast("Link copied");
     window.setTimeout(() => setToast(""), 1600);
   };

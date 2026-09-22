@@ -86,6 +86,41 @@ export interface ExportPreset {
   suffix: string;
 }
 
+/**
+ * One colour stop on a gradient ramp.
+ *
+ * `position` is 0..1 along the gradient axis. When `XNode.gradientStops` is
+ * empty the renderer falls back to the legacy two-colour `fill` → `fillB`
+ * ramp, so existing documents keep working.
+ */
+export interface GradientStop {
+  color: string;
+  position: number;
+}
+
+/**
+ * One entry in a node's fill stack.
+ *
+ * Figma paints a list of fills bottom-to-top. The existing scalar `fill`/
+ * `fillType`/`gradientStops` fields on XNode describe the *bottom* fill and
+ * remain authoritative on their own, so every existing call site keeps working.
+ * `XNode.fills` holds any *additional* fills painted over it; an empty or
+ * absent array means "single fill", which is the legacy behaviour.
+ */
+export interface Paint {
+  type: FillType;
+  color: string;
+  opacity: number;
+  visible: boolean;
+  blend?: string;
+  /** Gradient geometry, normalised 0..1 within the node box. */
+  gx?: number;
+  gy?: number;
+  hx?: number;
+  hy?: number;
+  stops?: GradientStop[];
+}
+
 export interface Effect {
   kind: EffectKind;
   color: string;
@@ -142,6 +177,16 @@ export interface XNode {
   fillVisible: boolean;
   fillType: FillType;
   fillB: string;
+  /**
+   * Multi-stop gradient ramp. Empty means "use the legacy `fill`/`fillB` pair";
+   * two or more entries take precedence over it.
+   */
+  gradientStops: GradientStop[];
+  /**
+   * Extra fills painted on top of the base `fill`, bottom-to-top, the way
+   * Figma stacks them. Absent/empty means the node has a single fill.
+   */
+  fills?: Paint[];
   fillBlend: string;
   strokePaint: string;
   strokeOpacity: number;
@@ -179,6 +224,9 @@ export interface XNode {
   imageTint: number;
   imageHighlights: number;
   imageShadows: number;
+  /** Set once the user renames a layer by hand, so automatic naming (e.g. a
+   *  text layer following its content, as in Figma) stops overriding it. */
+  nameLocked?: boolean;
   text: string;
   fontFamily: string;
   fontSize: number;
@@ -211,10 +259,31 @@ export interface XNode {
   variant: string;
 }
 
+/** A single message inside a comment thread. */
+export interface CommentReply {
+  id: string;
+  body: string;
+  at: number;
+}
+
+/** A comment pin anchored to a point in page space. Comments are annotations,
+ *  not geometry: they live on the page rather than in the layer tree, so they
+ *  never export, never hit-test as shapes and never appear as layers. */
+export interface CommentThread {
+  id: string;
+  x: number;
+  y: number;
+  body: string;
+  at: number;
+  resolved: boolean;
+  replies: CommentReply[];
+}
+
 export interface Page {
   id: string;
   name: string;
   root: XNode;
+  comments: CommentThread[];
   pixelGrid: boolean;
   pixelGridColor: string;
   flowStart: string;
@@ -236,6 +305,13 @@ export interface Snapshot {
   components: ComponentMaster[];
   presentFrame: string;
   presentStack: string[];
+  /** Figma's View > Rulers (⇧R). */
+  showRulers: boolean;
+  /** Comment pins are hidden unless the comment tool is active or the user
+   *  has explicitly turned them on, as in Figma. */
+  showComments: boolean;
+  /** Thread whose popover is open, if any. */
+  openComment: string;
 }
 
 export type Command =
@@ -245,6 +321,14 @@ export type Command =
   | { type: "pan"; dx: number; dy: number }
   | { type: "setPan"; x: number; y: number }
   | { type: "setRightTab"; tab: RightTab }
+  | { type: "toggleRulers" }
+  | { type: "toggleComments" }
+  | { type: "addComment"; x: number; y: number; body: string }
+  | { type: "replyComment"; id: string; body: string }
+  | { type: "resolveComment"; id: string; resolved: boolean }
+  | { type: "deleteComment"; id: string }
+  | { type: "moveComment"; id: string; x: number; y: number }
+  | { type: "openComment"; id: string }
   | { type: "setLeftTab"; tab: LeftTab }
   | { type: "setPage"; index: number }
   | { type: "setFileName"; name: string }
@@ -262,6 +346,12 @@ export type Command =
   | { type: "move"; ids: string[]; dx: number; dy: number }
   | { type: "resize"; id: string; x: number; y: number; w: number; h: number; scaleProps?: boolean }
   | { type: "reparent"; ids: string[]; parent: string; x: number; y: number }
+  /**
+   * Move layers to an explicit slot in a parent's child list, preserving their
+   * on-canvas position. This is what the layers-panel drag uses; `reparent`
+   * always appends and is driven by canvas coordinates instead.
+   */
+  | { type: "reorder"; ids: string[]; parent: string; index: number }
   | { type: "delete" }
   | { type: "duplicate" }
   | { type: "undo" }

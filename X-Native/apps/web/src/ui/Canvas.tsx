@@ -1,11 +1,28 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Engine, Interaction, NodeKind, PathPoint, Snapshot, Tool, XNode } from "../engine/types";
 import { deepestFrame, find, findParent, hitTest, worldToLocal, worldPos } from "../engine/memory";
-import { shapePoly } from "../engine/geometry";
+import { erasePath, shapePoly, simplifyPath, smoothPath } from "../engine/geometry";
+import {
+  snapCandidates,
+  snapMove,
+  snapResize,
+  type Box,
+  type GapBadge,
+  type Guide,
+} from "../engine/snapping";
 import { fillStyle, paintDropShadows, paintFill, paintImageFill, paintInnerShadows } from "../engine/paint";
+import { Rulers } from "./Rulers";
+import { Comments } from "./Comments";
 import { useTheme } from "./theme";
 import { cssRgba, isNone, parseHex, takeEyedrop, toHex } from "./color";
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
+
+/** Snap radius in screen pixels; divided by zoom to get world tolerance. */
+const SNAP_PX = 6;
+/** Eraser brush radius, in screen pixels. */
+const ERASER_PX = 10;
+/** RDP tolerance for freehand strokes, in screen pixels. */
+const PENCIL_TOLERANCE_PX = 2;
 
 const CREATE: Tool[] = [
   "frame",
@@ -29,9 +46,33 @@ function kindOf(t: Tool): NodeKind | null {
   return null;
 }
 
+/** Per-node state captured at the start of a group transform. */
+interface MultiOrigin {
+  id: string;
+  /** World-space box before the transform. */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  rotation: number;
+  /** Local (parent-relative) origin, which is what `resize` actually writes. */
+  lx: number;
+  ly: number;
+}
+
 type Drag =
   | {
-      mode: "pan" | "move" | "create" | "resize" | "marquee" | "rotate" | "vec" | "grad";
+      mode:
+        | "pan"
+        | "move"
+        | "create"
+        | "resize"
+        | "marquee"
+        | "rotate"
+        | "vec"
+        | "grad"
+        | "multiResize"
+        | "multiRotate";
       point?: number;
       handle?: "in" | "out" | "g" | "h";
       sx: number;
@@ -43,7 +84,30 @@ type Drag =
       id?: string;
       duped?: boolean;
       axis?: "x" | "y" | null;
+      /** Combined selection bounds at drag start (group transforms). */
+      bounds?: { x: number; y: number; w: number; h: number };
+      origs?: MultiOrigin[];
     };
+
+/** Snapshot every selected node's world + local box before a group transform. */
+function multiOrigins(root: XNode, ids: string[]): MultiOrigin[] {
+  const out: MultiOrigin[] = [];
+  for (const id of ids) {
+    const wp = worldPos(root, id);
+    if (!wp || wp.node.locked) continue;
+    out.push({
+      id,
+      x: wp.x,
+      y: wp.y,
+      w: wp.node.w,
+      h: wp.node.h,
+      rotation: wp.node.rotation,
+      lx: wp.node.x,
+      ly: wp.node.y,
+    });
+  }
+  return out;
+}
 
 export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const ref = useRef<HTMLCanvasElement>(null);
@@ -53,6 +117,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const imgs = useRef(new Map<string, HTMLImageElement>());
   const [band, setBand] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [edit, setEdit] = useState<{ id: string; text: string } | null>(null);
+  const [draftComment, setDraftComment] = useState<{ x: number; y: number } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; wx: number; wy: number } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const pendingImage = useRef<{ x: number; y: number } | null>(null);
@@ -65,6 +130,15 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const penDrag = useRef<{ i: number; x: number; y: number } | null>(null);
   const vecPt = useRef(-1);
   const hoverIx = useRef("");
+  /** Cursor implied by whatever selection chrome is under the pointer. */
+  const [hoverCursor, setHoverCursor] = useState<string | null>(null);
+  /** Viewport size, tracked so the ruler overlay can size its own canvas. */
+  const [box, setBox] = useState({ w: 0, h: 0 });
+  /** Live smart-guide overlay, produced by the snapping pass during a drag. */
+  const [guides, setGuides] = useState<Guide[]>([]);
+  const [gapBadges, setGapBadges] = useState<GapBadge[]>([]);
+  /** Static snap targets, captured once at drag start so they never shift mid-drag. */
+  const snapTargets = useRef<Box[]>([]);
   const { theme } = useTheme();
   const runInteraction = useCallback(
     (ix: Interaction) => {
@@ -252,6 +326,24 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       if (!n.visible) return;
       const x = px + n.x;
       const y = py + n.y;
+      // Viewport culling. Only childless nodes are considered: a container may
+      // paint children outside its own bounds when overflow is visible, and
+      // children are positioned relative to the parent, so skipping a parent
+      // would wrongly skip its subtree. Bounds are padded for stroke width and
+      // for any shadow offset/blur, and rotation is covered by using the
+      // diagonal, so nothing that could touch a pixel on screen is dropped.
+      if (!n.children.length) {
+        let pad = (n.strokeWidth ?? 0) + 2;
+        for (const e of n.effects ?? []) {
+          if (!e.visible) continue;
+          pad = Math.max(pad, Math.abs(e.x ?? 0) + Math.abs(e.y ?? 0) + Math.abs(e.blur ?? 0) + Math.abs(e.spread ?? 0));
+        }
+        const half = n.rotation ? Math.hypot(n.w, n.h) / 2 - Math.min(n.w, n.h) / 2 : 0;
+        const m = (pad + half) * z + 4;
+        const sx0 = snap.panX + x * z;
+        const sy0 = snap.panY + y * z;
+        if (sx0 + n.w * z + m < 0 || sy0 + n.h * z + m < 0 || sx0 - m > w || sy0 - m > h) return;
+      }
       ctx.save();
       if (n.rotation || n.flipH || n.flipV) {
         const cx = snap.panX + (x + n.w / 2) * z;
@@ -594,6 +686,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       }
     }
 
+    const multiSel = snap.selection.length > 1;
     for (const id of snap.selection) {
       if (edit?.id === id) continue;
       const wp = worldPos(root, id);
@@ -613,6 +706,12 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       ctx.strokeStyle = accent;
       ctx.lineWidth = 1;
       ctx.strokeRect(sx + 0.5, sy + 0.5, sw, sh);
+      // With several layers picked, each member only gets a thin outline; the
+      // handles, rotate stem and size badge belong to the combined box below.
+      if (multiSel) {
+        ctx.restore();
+        continue;
+      }
       const hs = handles(sx, sy, sw, sh);
       for (const [hx, hy] of hs) {
         ctx.fillStyle = "#ffffff";
@@ -677,6 +776,100 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       ctx.restore();
     }
 
+    // Combined bounding box for a multi-selection: one set of handles, one
+    // rotate stem, one size badge — exactly like Figma.
+    if (multiSel) {
+      const bb = selectionBounds(root, snap.selection);
+      if (bb) {
+        const sx = snap.panX + bb.x * z;
+        const sy = snap.panY + bb.y * z;
+        const sw = bb.w * z;
+        const sh = bb.h * z;
+        ctx.save();
+        ctx.strokeStyle = "#0d99ff";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(sx + 0.5, sy + 0.5, sw, sh);
+        for (const [hx, hy] of handles(sx, sy, sw, sh)) {
+          ctx.fillStyle = "#ffffff";
+          ctx.strokeStyle = "#0d99ff";
+          ctx.fillRect(hx - 3, hy - 3, 6, 6);
+          ctx.strokeRect(hx - 3, hy - 3, 6, 6);
+        }
+        ctx.beginPath();
+        ctx.moveTo(sx + sw / 2, sy);
+        ctx.lineTo(sx + sw / 2, sy - 16);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(sx + sw / 2, sy - 20, 4, 0, Math.PI * 2);
+        ctx.fillStyle = "#fff";
+        ctx.fill();
+        ctx.stroke();
+        const dim = `${Math.round(bb.w)} × ${Math.round(bb.h)}`;
+        ctx.font = "500 11px Inter, system-ui";
+        const bw = ctx.measureText(dim).width + 16;
+        const bx = sx + sw / 2 - bw / 2;
+        const by = sy + sh + 8;
+        ctx.fillStyle = "#0d99ff";
+        if (typeof ctx.roundRect === "function") {
+          ctx.beginPath();
+          ctx.roundRect(bx, by, bw, 20, 4);
+          ctx.fill();
+        } else ctx.fillRect(bx, by, bw, 20);
+        ctx.fillStyle = "#ffffff";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(dim, bx + bw / 2, by + 10);
+        ctx.textAlign = "left";
+        ctx.textBaseline = "alphabetic";
+        ctx.restore();
+      }
+    }
+
+    // Smart guides + equal-spacing badges, drawn on top of the selection chrome.
+    if (guides.length) {
+      ctx.save();
+      ctx.strokeStyle = "#ff3b6b";
+      ctx.lineWidth = 1;
+      for (const g of guides) {
+        ctx.setLineDash(g.center ? [4, 3] : []);
+        ctx.beginPath();
+        if (g.axis === "x") {
+          const gx = Math.round(snap.panX + g.at * z) + 0.5;
+          ctx.moveTo(gx, snap.panY + g.from * z);
+          ctx.lineTo(gx, snap.panY + g.to * z);
+        } else {
+          const gy = Math.round(snap.panY + g.at * z) + 0.5;
+          ctx.moveTo(snap.panX + g.from * z, gy);
+          ctx.lineTo(snap.panX + g.to * z, gy);
+        }
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    if (gapBadges.length) {
+      ctx.save();
+      ctx.font = "500 10px Inter, system-ui";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      for (const g of gapBadges) {
+        const cx = g.axis === "x" ? snap.panX + g.at * z : snap.panX + g.cross * z;
+        const cy = g.axis === "x" ? snap.panY + g.cross * z : snap.panY + g.at * z;
+        const label = `${Math.round(g.size)}`;
+        const bw = ctx.measureText(label).width + 10;
+        ctx.fillStyle = "#ff3b6b";
+        if (typeof ctx.roundRect === "function") {
+          ctx.beginPath();
+          ctx.roundRect(cx - bw / 2, cy - 8, bw, 16, 3);
+          ctx.fill();
+        } else ctx.fillRect(cx - bw / 2, cy - 8, bw, 16);
+        ctx.fillStyle = "#ffffff";
+        ctx.fillText(label, cx, cy);
+      }
+      ctx.textAlign = "left";
+      ctx.textBaseline = "alphabetic";
+      ctx.restore();
+    }
+
     if (vecEdit) {
       const wp = worldPos(root, vecEdit);
       if (wp) {
@@ -730,7 +923,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       ctx.fillRect(band.x, band.y, band.w, band.h);
       ctx.strokeRect(band.x + 0.5, band.y + 0.5, band.w, band.h);
     }
-  }, [snap, band, edit, engine, theme, draft, vecEdit, hoverId, ghost]);
+  }, [snap, band, edit, engine, theme, draft, vecEdit, hoverId, ghost, guides, gapBadges]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();
@@ -740,9 +933,54 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     };
   };
 
+  /**
+   * Figma-style eraser: on a vector/freehand path it removes the anchors under
+   * the brush and splits the remainder into separate paths; on any other layer
+   * it falls back to deleting the layer (Figma does the same for non-vectors).
+   */
+  const eraseAt = useCallback(
+    (wx: number, wy: number) => {
+      const root = engine.snapshot().pages[engine.snapshot().page].root;
+      const hit = hitTest(root, wx, wy, { deep: true });
+      if (!hit || hit.locked) return;
+      const radius = ERASER_PX / engine.snapshot().zoom;
+      if (hit.kind === "vector" && hit.path.length) {
+        const wp = worldPos(root, hit.id);
+        if (!wp) return;
+        const runs = erasePath(hit.path, wx - wp.x, wy - wp.y, radius);
+        if (runs.length === 1 && runs[0].length === hit.path.length) return;
+        if (!runs.length) {
+          engine.dispatch({ type: "select", ids: [hit.id] });
+          engine.dispatch({ type: "delete" });
+          return;
+        }
+        // First run stays on the original node; extra runs become new paths so
+        // erasing through the middle of a stroke yields two strokes.
+        engine.dispatch({ type: "patchPath", id: hit.id, path: runs[0], closed: false });
+        for (const extra of runs.slice(1)) {
+          engine.dispatch({
+            type: "addPath",
+            points: extra.map((p) => ({ ...p, x: p.x + wp.x, y: p.y + wp.y })),
+            closed: false,
+          });
+        }
+        return;
+      }
+      engine.dispatch({ type: "select", ids: [hit.id] });
+      engine.dispatch({ type: "delete" });
+    },
+    [engine],
+  );
+
   const onDown = (e: React.MouseEvent) => {
     if (edit && (e.target as HTMLElement).closest(".text-edit")) return;
     if (e.button === 2) return;
+    // Freeze the snap targets for this gesture: everything except the layers
+    // being dragged (and their subtrees), so a node never snaps to itself.
+    snapTargets.current = snapCandidates(
+      snap.pages[snap.page].root,
+      new Set(snap.selection),
+    );
     if (snap.presentFrame) {
       const wpt = toWorld(e.clientX, e.clientY);
       const root = snap.pages[snap.page].root;
@@ -760,26 +998,18 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     }
     if (snap.tool === "eraser") {
       const wpt = toWorld(e.clientX, e.clientY);
-      const root = snap.pages[snap.page].root;
-      const hit = hitTest(root, wpt.x, wpt.y, { deep: true });
-      if (hit) {
-        engine.dispatch({ type: "select", ids: [hit.id] });
-        engine.dispatch({ type: "delete" });
-      }
+      engine.dispatch({ type: "begin" });
+      eraseAt(wpt.x, wpt.y);
       drag.current = { mode: "marquee", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: "erase" };
       return;
     }
-    if (snap.tool === "comment") {
+    if (snap.tool === "comment" && e.button === 0 && !space.current) {
+      // Comments are annotations, not geometry. Previously this dropped a blue
+      // ellipse into the layer tree, which exported and hit-tested like a real
+      // shape; now it opens a draft thread anchored to the clicked point.
+      // Space (and middle-click) must still pan, so defer to those.
       const wpt = toWorld(e.clientX, e.clientY);
-      engine.dispatch({
-        type: "add",
-        kind: "ellipse",
-        x: wpt.x - 10,
-        y: wpt.y - 10,
-        w: 20,
-        h: 20,
-        extra: { name: "Comment", fill: "#18a0fb", fillVisible: true, strokeWidth: 0 },
-      });
+      setDraftComment({ x: wpt.x, y: wpt.y });
       return;
     }
     if (snap.tool === "pen") {
@@ -847,6 +1077,51 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         wy: wpt.y,
       };
       return;
+    }
+    // Multi-selection: hit-test the combined bounding box's handles first, so a
+    // group of layers can be scaled and rotated as one.
+    if (snap.selection.length > 1 && snap.tool === "select") {
+      const bb = selectionBounds(root, snap.selection);
+      if (bb) {
+        const z = snap.zoom;
+        const r = wrap.current!.getBoundingClientRect();
+        const px = e.clientX - r.left;
+        const py = e.clientY - r.top;
+        const bsx = snap.panX + bb.x * z;
+        const bsy = snap.panY + bb.y * z;
+        const bsw = bb.w * z;
+        const bsh = bb.h * z;
+        if (Math.hypot(px - (bsx + bsw / 2), py - (bsy - 20)) < 8) {
+          engine.dispatch({ type: "begin" });
+          drag.current = {
+            mode: "multiRotate",
+            sx: e.clientX,
+            sy: e.clientY,
+            wx: wpt.x,
+            wy: wpt.y,
+            bounds: bb,
+            origs: multiOrigins(root, snap.selection),
+          };
+          return;
+        }
+        const hs = handles(bsx, bsy, bsw, bsh);
+        for (let i = 0; i < hs.length; i++) {
+          if (Math.hypot(px - hs[i][0], py - hs[i][1]) < 8) {
+            engine.dispatch({ type: "begin" });
+            drag.current = {
+              mode: "multiResize",
+              sx: e.clientX,
+              sy: e.clientY,
+              wx: wpt.x,
+              wy: wpt.y,
+              corner: i,
+              bounds: bb,
+              origs: multiOrigins(root, snap.selection),
+            };
+            return;
+          }
+        }
+      }
     }
     if (snap.selection.length === 1) {
       const wp = worldPos(root, snap.selection[0]);
@@ -988,6 +1263,56 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       const hit = hitTest(snap.pages[snap.page].root, wpt.x, wpt.y, { selection: snap.selection });
       const id = hit && !snap.selection.includes(hit.id) ? hit.id : "";
       if (id !== hoverId) setHoverId(id);
+      // Mirror the mousedown hit-test so the cursor advertises what a press
+      // would actually do: resize on a handle, rotate just outside a corner,
+      // move over the selection itself.
+      const root0 = snap.pages[snap.page].root;
+      const r0 = wrap.current?.getBoundingClientRect();
+      let next: string | null = null;
+      if (r0 && snap.selection.length) {
+        const z = snap.zoom;
+        const px0 = e.clientX - r0.left;
+        const py0 = e.clientY - r0.top;
+        const bb = snap.selection.length === 1 ? worldPos(root0, snap.selection[0]) : null;
+        const box = bb
+          ? { x: bb.x, y: bb.y, w: bb.node.w, h: bb.node.h, rot: bb.node.rotation }
+          : (() => {
+              const b = selectionBounds(root0, snap.selection);
+              return b ? { x: b.x, y: b.y, w: b.w, h: b.h, rot: 0 } : null;
+            })();
+        if (box) {
+          const sx0 = snap.panX + box.x * z;
+          const sy0 = snap.panY + box.y * z;
+          let hx = px0;
+          let hy = py0;
+          if (box.rot) {
+            const cx = sx0 + (box.w * z) / 2;
+            const cy = sy0 + (box.h * z) / 2;
+            const u = unrot(hx, hy, cx, cy, box.rot);
+            hx = u.x;
+            hy = u.y;
+          }
+          const hs = handles(sx0, sy0, box.w * z, box.h * z);
+          for (let i = 0; i < hs.length; i++) {
+            if (Math.hypot(hx - hs[i][0], hy - hs[i][1]) < 8) {
+              next = resizeCursor(i, box.rot);
+              break;
+            }
+            // Just outside a corner is the rotate zone, as in Figma.
+            if (i % 2 === 0 && Math.hypot(hx - hs[i][0], hy - hs[i][1]) < 18) next = "grab";
+          }
+          if (
+            !next &&
+            hx >= sx0 &&
+            hx <= sx0 + box.w * z &&
+            hy >= sy0 &&
+            hy <= sy0 + box.h * z
+          ) {
+            next = "move";
+          }
+        }
+      }
+      if (next !== hoverCursor) setHoverCursor(next);
     } else if (hoverId && snap.tool !== "select") setHoverId("");
     if (snap.tool === "pen" && draft.length && !penDrag.current) {
       let wpt = toWorld(e.clientX, e.clientY);
@@ -1049,17 +1374,82 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         d.axis = null;
       }
       if (dx || dy) {
-        engine.dispatch({ type: "move", ids: engine.snapshot().selection, dx, dy });
+        const sel = engine.snapshot().selection;
+        // Snap the moved bounding box to nearby geometry. Holding ⌘/Ctrl
+        // bypasses snapping, matching Figma.
+        if (!e.metaKey && !e.ctrlKey) {
+          const root2 = snap.pages[snap.page].root;
+          const bb = selectionBounds(root2, sel);
+          if (bb) {
+            const moved = { id: "sel", x: bb.x + dx, y: bb.y + dy, w: bb.w, h: bb.h };
+            const res = snapMove(moved, snapTargets.current, SNAP_PX / snap.zoom);
+            dx += res.dx;
+            dy += res.dy;
+            setGuides(res.guides);
+            setGapBadges(res.gaps);
+          }
+        } else if (guides.length || gapBadges.length) {
+          setGuides([]);
+          setGapBadges([]);
+        }
+        engine.dispatch({ type: "move", ids: sel, dx, dy });
         d.sx = e.clientX;
         d.sy = e.clientY;
       }
+    } else if (d.mode === "multiResize" && d.bounds && d.origs && d.corner != null) {
+      const b = toWorld(e.clientX, e.clientY);
+      const next = resizeFrom(d.bounds, d.corner, b.x, b.y, {
+        aspect: e.shiftKey,
+        fromCenter: e.altKey,
+      });
+      const sxScale = next.w / Math.max(1e-6, d.bounds.w);
+      const syScale = next.h / Math.max(1e-6, d.bounds.h);
+      // Map each member through the same affine scale about the box origin.
+      for (const o of d.origs) {
+        const nx = next.x + (o.x - d.bounds.x) * sxScale;
+        const ny = next.y + (o.y - d.bounds.y) * syScale;
+        engine.dispatch({
+          type: "resize",
+          id: o.id,
+          x: o.lx + (nx - o.x),
+          y: o.ly + (ny - o.y),
+          w: Math.max(1, o.w * sxScale),
+          h: Math.max(1, o.h * syScale),
+          scaleProps: snap.tool === "scale",
+        });
+      }
+    } else if (d.mode === "multiRotate" && d.bounds && d.origs) {
+      const cx = d.bounds.x + d.bounds.w / 2;
+      const cy = d.bounds.y + d.bounds.h / 2;
+      const b = toWorld(e.clientX, e.clientY);
+      let ang = (Math.atan2(b.y - cy, b.x - cx) * 180) / Math.PI + 90;
+      if (e.shiftKey) ang = Math.round(ang / 15) * 15;
+      const rad = (ang * Math.PI) / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      // Orbit every member around the shared centre and spin it in place.
+      for (const o of d.origs) {
+        const ox = o.x + o.w / 2 - cx;
+        const oy = o.y + o.h / 2 - cy;
+        const wx = cx + ox * cos - oy * sin - o.w / 2;
+        const wy = cy + ox * sin + oy * cos - o.h / 2;
+        engine.dispatch({
+          type: "resize",
+          id: o.id,
+          x: o.lx + (wx - o.x),
+          y: o.ly + (wy - o.y),
+          w: o.w,
+          h: o.h,
+        });
+        engine.dispatch({
+          type: "patch",
+          id: o.id,
+          patch: { rotation: Math.round(o.rotation + ang) },
+        });
+      }
     } else if (d.mode === "marquee" && d.id === "erase") {
       const wpt = toWorld(e.clientX, e.clientY);
-      const hit = hitTest(snap.pages[snap.page].root, wpt.x, wpt.y, { deep: true });
-      if (hit) {
-        engine.dispatch({ type: "select", ids: [hit.id] });
-        engine.dispatch({ type: "delete" });
-      }
+      eraseAt(wpt.x, wpt.y);
     } else if (d.mode === "create" || d.mode === "marquee") {
       let x = Math.min(d.sx, e.clientX) - box.left;
       let y = Math.min(d.sy, e.clientY) - box.top;
@@ -1089,6 +1479,33 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         aspect: lock,
         fromCenter: e.altKey,
       });
+      // Snap the edges the handle is actually moving (skipped while aspect is
+      // locked, since a snap would break the ratio, and on ⌘/Ctrl).
+      if (!lock && !e.altKey && !e.metaKey && !e.ctrlKey && current) {
+        const worldBox = {
+          id: d.id,
+          x: current.x + (next.x - node!.x),
+          y: current.y + (next.y - node!.y),
+          w: next.w,
+          h: next.h,
+        };
+        const r2 = snapResize(worldBox, d.corner, snapTargets.current, SNAP_PX / snap.zoom);
+        setGuides(r2.guides);
+        const movesLeft = d.corner === 0 || d.corner === 6 || d.corner === 7;
+        const movesTop = d.corner === 0 || d.corner === 1 || d.corner === 2;
+        if (r2.dx) {
+          if (movesLeft) {
+            next.x += r2.dx;
+            next.w = Math.max(1, next.w - r2.dx);
+          } else next.w = Math.max(1, next.w + r2.dx);
+        }
+        if (r2.dy) {
+          if (movesTop) {
+            next.y += r2.dy;
+            next.h = Math.max(1, next.h - r2.dy);
+          } else next.h = Math.max(1, next.h + r2.dy);
+        }
+      }
       engine.dispatch({
         type: "resize",
         id: d.id,
@@ -1147,15 +1564,34 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     if (pencil.current) {
       const pts = pencil.current;
       pencil.current = null;
-      if (pts.length >= 2) engine.dispatch({ type: "addPath", points: pts, closed: false });
+      if (pts.length >= 2) {
+        // Raw pointer samples are dense and jagged: thin them with RDP, then
+        // fit bezier handles so the stroke reads as a smooth curve. Tolerance
+        // is in world units so it is consistent at any zoom.
+        const tol = PENCIL_TOLERANCE_PX / snap.zoom;
+        const thinned = simplifyPath(pts, tol);
+        const smoothed = snap.tool === "pencil" ? smoothPath(thinned, false) : thinned;
+        engine.dispatch({ type: "addPath", points: smoothed, closed: false });
+      }
       setDraft([]);
       return;
     }
     const d = drag.current;
     drag.current = null;
     setBand(null);
+    setGuides([]);
+    setGapBadges([]);
     if (!d) return;
-    if (d.mode === "move" || d.mode === "resize" || d.mode === "vec" || d.mode === "grad") engine.dispatch({ type: "end" });
+    if (
+      d.mode === "move" ||
+      d.mode === "resize" ||
+      d.mode === "vec" ||
+      d.mode === "grad" ||
+      d.mode === "multiResize" ||
+      d.mode === "multiRotate" ||
+      (d.mode === "marquee" && d.id === "erase")
+    )
+      engine.dispatch({ type: "end" });
     if (d.mode === "move" && snap.pages[snap.page].pixelGrid) {
       const root = snap.pages[snap.page].root;
       for (const id of engine.snapshot().selection) {
@@ -1329,6 +1765,10 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         const id = engine.snapshot().selection[0];
         if (id) setEdit({ id, text: "" });
       }
+      // Figma drops back to the move tool after a shape is committed, so the
+      // next drag manipulates what you just drew instead of stamping another
+      // copy. Slice is the documented exception: it stays armed for repeat cuts.
+      if (snap.tool !== "slice") engine.dispatch({ type: "setTool", tool: "select" });
     }
     if (d.mode === "marquee" && d.id === "erase") return;
     if (d.mode === "marquee") {
@@ -1462,6 +1902,15 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     });
   };
 
+  useEffect(() => {
+    const el = wrap.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setBox({ w: el.clientWidth, h: el.clientHeight }));
+    ro.observe(el);
+    setBox({ w: el.clientWidth, h: el.clientHeight });
+    return () => ro.disconnect();
+  }, []);
+
   const cursor =
     snap.tool === "hand" || space.current
       ? "grab"
@@ -1469,7 +1918,9 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         ? "nwse-resize"
         : CREATE.includes(snap.tool) || snap.tool === "pen" || snap.tool === "pencil" || snap.tool === "brush"
           ? "crosshair"
-          : "default";
+          : snap.tool === "select" && hoverCursor
+            ? hoverCursor
+            : "default";
 
   const editBox = (() => {
     if (!edit) return null;
@@ -1533,6 +1984,29 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       }}
     >
       <canvas ref={ref} />
+      {(snap.showComments || snap.tool === "comment") && (
+        <Comments
+          threads={snap.pages[snap.page].comments}
+          engine={engine}
+          zoom={snap.zoom}
+          panX={snap.panX}
+          panY={snap.panY}
+          openId={snap.openComment}
+          draft={draftComment}
+          onDraftDone={() => setDraftComment(null)}
+        />
+      )}
+      {snap.showRulers && (
+        <Rulers
+          zoom={snap.zoom}
+          panX={snap.panX}
+          panY={snap.panY}
+          width={box.w}
+          height={box.h}
+          theme={theme}
+          selection={selectionBounds(snap.pages[snap.page].root, snap.selection)}
+        />
+      )}
       {transition && <div className={`proto-transition ${transition}`} aria-hidden="true" />}
       {edit && editBox && (
         <textarea
@@ -1549,7 +2023,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
               if (ctx) {
                 ctx.font = `${n.fontWeight} ${n.fontSize}px ${n.fontFamily}, Inter, system-ui`;
                 const lines = (edit.text || " ").split("\n");
-                const tw = Math.max(...lines.map((l) => ctx.measureText(l).width), 8);
+                const tw = Math.max(...lines.map((l) => measureCached(ctx, l)), 8);
                 const lh = n.lineHeight || n.fontSize * 1.2;
                 if (n.sizingW === "hug") patch.w = Math.ceil(tw + 4);
                 if (n.sizingH === "hug") patch.h = Math.ceil(Math.max(1, lines.length) * lh);
@@ -1663,6 +2137,48 @@ function nodeLocalPoint(px: number, py: number, x: number, y: number, n: XNode) 
     x: (n.flipH ? cx - (p.x - cx) : p.x) - x,
     y: (n.flipV ? cy - (p.y - cy) : p.y) - y,
   };
+}
+
+/** Axis-aligned world bounds enclosing every selected node. */
+function selectionBounds(
+  root: XNode,
+  ids: string[],
+): { x: number; y: number; w: number; h: number } | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const id of ids) {
+    const wp = worldPos(root, id);
+    if (!wp) continue;
+    minX = Math.min(minX, wp.x);
+    minY = Math.min(minY, wp.y);
+    maxX = Math.max(maxX, wp.x + wp.node.w);
+    maxY = Math.max(maxY, wp.y + wp.node.h);
+  }
+  if (!isFinite(minX)) return null;
+  return { x: minX, y: minY, w: Math.max(1, maxX - minX), h: Math.max(1, maxY - minY) };
+}
+
+/**
+ * Figma shows a resize cursor whose direction follows the handle *and* the
+ * node's rotation, so a 90deg-rotated box still reads correctly. Handle order is
+ * TL,T,TR,R,BR,B,BL,L (see `handles`); each sits 45deg apart, so rotating by the
+ * node angle and snapping back to the nearest 45deg step picks the right glyph.
+ */
+const RESIZE_CURSORS = [
+  "nwse-resize", // TL
+  "ns-resize", // T
+  "nesw-resize", // TR
+  "ew-resize", // R
+  "nwse-resize", // BR
+  "ns-resize", // B
+  "nesw-resize", // BL
+  "ew-resize", // L
+];
+function resizeCursor(handle: number, rotation = 0): string {
+  const step = Math.round(rotation / 45);
+  return RESIZE_CURSORS[(((handle + step) % 8) + 8) % 8];
 }
 
 function handles(sx: number, sy: number, sw: number, sh: number): [number, number][] {
@@ -1833,6 +2349,25 @@ function tracePath(
   }
 }
 
+/** Glyph-width cache. measureText dominated pan/zoom frame time on large
+ *  documents because every visible string was re-measured on every frame even
+ *  when neither the text nor the font had changed. Keyed by font + string, so
+ *  a font change naturally misses and re-measures. Bounded to keep a long
+ *  session from growing the cache without limit. */
+const MEASURE_CACHE = new Map<string, number>();
+const MEASURE_CACHE_MAX = 20000;
+
+function measureCached(ctx: CanvasRenderingContext2D, s: string): number {
+  if (!s) return 0;
+  const key = `${ctx.font}\u0000${s}`;
+  const hit = MEASURE_CACHE.get(key);
+  if (hit !== undefined) return hit;
+  const w = ctx.measureText(s).width;
+  if (MEASURE_CACHE.size >= MEASURE_CACHE_MAX) MEASURE_CACHE.clear();
+  MEASURE_CACHE.set(key, w);
+  return w;
+}
+
 function wrapLines(
   ctx: CanvasRenderingContext2D,
   text: string,
@@ -1843,7 +2378,7 @@ function wrapLines(
   const lines: string[] = [];
   const widthOf = (s: string) => {
     if (!s) return 0;
-    const m = ctx.measureText(s).width;
+    const m = measureCached(ctx, s);
     return letterSpacing ? m + letterSpacing * Math.max(0, s.length - 1) : m;
   };
   const splitLong = (word: string) => {
@@ -1944,7 +2479,7 @@ function paintText(
       const clipped = lines.slice(0, limit);
       const last = clipped[clipped.length - 1];
       const widthOf = (s: string) =>
-        ctx.measureText(s).width + (ls ? ls * Math.max(0, s.length - 1) : 0);
+        measureCached(ctx, s) + (ls ? ls * Math.max(0, s.length - 1) : 0);
       const maxW = wrap ? sw : Infinity;
       let line = last.line;
       if (Number.isFinite(maxW)) {
@@ -1997,30 +2532,30 @@ function paintText(
     const justify = n.textAlign === "justified" && wrap && !row.lastInPara && line.includes(" ");
     if (justify) {
       const words = line.trim().split(/\s+/);
-      const total = words.reduce((s, w) => s + ctx.measureText(w).width, 0);
+      const total = words.reduce((s, w) => s + measureCached(ctx, w), 0);
       const gap = words.length > 1 ? (sw - total) / (words.length - 1) : 0;
       let x = sx;
       ctx.textAlign = "left";
       for (const w of words) {
         paintLine(w, x, ty);
-        x += ctx.measureText(w).width + gap;
+        x += measureCached(ctx, w) + gap;
       }
       ctx.textAlign = "left";
     } else if (ls) {
       let x = tx;
-      if (n.textAlign === "center") x = tx - (ctx.measureText(line).width + ls * Math.max(0, line.length - 1)) / 2;
-      if (n.textAlign === "right") x = tx - (ctx.measureText(line).width + ls * Math.max(0, line.length - 1));
+      if (n.textAlign === "center") x = tx - (measureCached(ctx, line) + ls * Math.max(0, line.length - 1)) / 2;
+      if (n.textAlign === "right") x = tx - (measureCached(ctx, line) + ls * Math.max(0, line.length - 1));
       ctx.textAlign = "left";
       for (const ch of line) {
         paintLine(ch, x, ty);
-        x += ctx.measureText(ch).width + ls;
+        x += measureCached(ctx, ch) + ls;
       }
       ctx.textAlign = n.textAlign === "center" ? "center" : n.textAlign === "right" ? "right" : "left";
     } else {
       paintLine(line, tx, ty, wrap ? sw : undefined);
     }
     if (fillOn && (n.textDecoration === "underline" || n.textDecoration === "strikethrough")) {
-      const textWidth = ctx.measureText(line).width + ls * Math.max(0, line.length - 1);
+      const textWidth = measureCached(ctx, line) + ls * Math.max(0, line.length - 1);
       const yy = n.textDecoration === "underline" ? ty + size : ty + size / 2;
       const x0 = n.textAlign === "center" ? tx - textWidth / 2 : n.textAlign === "right" ? tx - textWidth : tx;
       ctx.save();

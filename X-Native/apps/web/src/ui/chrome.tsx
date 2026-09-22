@@ -1,10 +1,14 @@
-import { useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { Engine, Snapshot, Tool, XNode } from "../engine/types";
-import { collectColors, defaultLayout, worldPos } from "../engine/memory";
+import { collectColors, defaultLayout } from "../engine/memory";
 import { Icon, TOOL_ICON, kindIcon } from "./icons";
+import { Tooltip } from "./Tooltip";
+import { plural, toast } from "./toast";
 import { useTheme, type ThemePref } from "./theme";
 import { ContextMenu, isGroupNode, layerMenu, pageMenu, runMenu } from "./ContextMenu";
 import { align } from "./inspector";
+import { stepZoom, zoomTo } from "./zoom";
+import { clearDoc } from "../engine/persist";
 
 export type NavId = "file" | "assets" | "tools" | "variables" | "agent";
 
@@ -107,10 +111,33 @@ export function NavRail({
   );
 }
 
+/** Locate a node and its parent in the page tree. */
+function findNode(
+  root: XNode,
+  id: string,
+  parent: XNode | null = null,
+): { node: XNode; parent: XNode | null; id: string } | null {
+  if (root.id === id) return { node: root, parent, id };
+  for (const c of root.children) {
+    const hit = findNode(c, id, root);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 function matchesLayer(n: XNode, q: string): boolean {
   if (!q) return true;
   const needle = q.toLowerCase();
   return n.name.toLowerCase().includes(needle) || n.children.some((c) => matchesLayer(c, q));
+}
+
+/** Where a layer drag would land: above a row, below it, or inside it. */
+type DropZone = "before" | "after" | "inside";
+
+interface LayerDrag {
+  ids: string[];
+  overId: string;
+  zone: DropZone;
 }
 
 function LayerRow({
@@ -119,35 +146,127 @@ function LayerRow({
   sel,
   engine,
   q,
+  siblings,
+  drag,
+  setDrag,
+  onDrop,
 }: {
   n: XNode;
   depth: number;
   sel: string[];
   engine: Engine;
   q: string;
+  siblings: XNode[];
+  drag: LayerDrag | null;
+  setDrag: (d: LayerDrag | null) => void;
+  onDrop: (d: LayerDrag) => void;
 }) {
   const [open, setOpen] = useState(true);
   const [renaming, setRenaming] = useState(false);
   const cancelRename = useRef(false);
+  const lastDown = useRef(0);
+  // ⌘R renames the selected layer. Rename lives in this row's local state, so
+  // the global hotkey reaches it through a targeted event rather than by
+  // lifting the state up.
+  useEffect(() => {
+    const onReq = (e: Event) => {
+      if ((e as CustomEvent<string>).detail === n.id) setRenaming(true);
+    };
+    window.addEventListener("x-rename-layer", onReq);
+    return () => window.removeEventListener("x-rename-layer", onReq);
+  }, [n.id]);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   if (!matchesLayer(n, q)) return null;
+  const container = n.kind === "frame" || n.kind === "group" || n.kind === "component";
+  const isOver = drag?.overId === n.id;
   return (
     <>
       <div
-        className={`row${sel.includes(n.id) ? " sel" : ""}${n.isComponent || n.kind === "component" || n.kind === "instance" ? " comp" : ""}${n.visible ? "" : " dim"}${n.locked ? " locked" : ""}`}
+        className={`row${sel.includes(n.id) ? " sel" : ""}${n.isComponent || n.kind === "component" || n.kind === "instance" ? " comp" : ""}${n.visible ? "" : " dim"}${n.locked ? " locked" : ""}${
+          isOver ? ` drop-${drag!.zone}` : ""
+        }${drag?.ids.includes(n.id) ? " dragging" : ""}`}
         style={{ paddingLeft: 8 + depth * 12 }}
-        onClick={() => engine.dispatch({ type: "select", ids: [n.id] })}
+        draggable={!renaming}
+        onDragStart={(e) => {
+          // Dragging an unselected row selects it first, so the drag payload
+          // always matches what the user sees highlighted.
+          const ids = sel.includes(n.id) ? sel : [n.id];
+          if (!sel.includes(n.id)) engine.dispatch({ type: "select", ids });
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", n.id);
+          setDrag({ ids, overId: n.id, zone: "after" });
+        }}
+        onDragOver={(e) => {
+          if (!drag || drag.ids.includes(n.id)) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          const r = e.currentTarget.getBoundingClientRect();
+          const t = (e.clientY - r.top) / r.height;
+          // Containers get a middle band that means "drop inside".
+          const zone: DropZone = container
+            ? t < 0.28
+              ? "before"
+              : t > 0.72
+                ? "after"
+                : "inside"
+            : t < 0.5
+              ? "before"
+              : "after";
+          if (drag.overId !== n.id || drag.zone !== zone) setDrag({ ...drag, overId: n.id, zone });
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (drag && !drag.ids.includes(n.id)) onDrop({ ...drag, overId: n.id });
+          setDrag(null);
+        }}
+        onDragEnd={() => setDrag(null)}
+        onClick={(e) => {
+          // ⌘/Ctrl toggles one row; Shift extends across the visible siblings.
+          if (e.metaKey || e.ctrlKey) {
+            const ids = sel.includes(n.id) ? sel.filter((i) => i !== n.id) : [...sel, n.id];
+            engine.dispatch({ type: "select", ids });
+            return;
+          }
+          if (e.shiftKey && sel.length) {
+            const order = siblings.map((c) => c.id);
+            const anchor = order.findIndex((id) => sel.includes(id));
+            const here = order.indexOf(n.id);
+            if (anchor >= 0 && here >= 0) {
+              const [a, b] = anchor < here ? [anchor, here] : [here, anchor];
+              const range = order.slice(a, b + 1);
+              engine.dispatch({ type: "select", ids: Array.from(new Set([...sel, ...range])) });
+              return;
+            }
+          }
+          engine.dispatch({ type: "select", ids: [n.id] });
+        }}
+        // A real double-click on a draggable element does not reliably emit
+        // dblclick (the drag machinery claims the second press), so rename is
+        // triggered from the mousedown pair instead. Verified: before this,
+        // double-clicking a layer row never opened the rename field.
+        onMouseDown={(e) => {
+          if (e.button !== 0 || renaming) return;
+          const t = performance.now();
+          if (t - lastDown.current < 400) {
+            e.preventDefault();
+            setRenaming(true);
+          }
+          lastDown.current = t;
+        }}
         onDoubleClick={() => setRenaming(true)}
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          engine.dispatch({ type: "select", ids: [n.id] });
+          if (!sel.includes(n.id)) engine.dispatch({ type: "select", ids: [n.id] });
           setMenu({ x: e.clientX, y: e.clientY });
         }}
       >
         {n.children.length ? (
           <button
             className="twist"
+            aria-label={open ? `Collapse ${n.name}` : `Expand ${n.name}`}
+            aria-expanded={open}
             onClick={(e) => {
               e.stopPropagation();
               setOpen((v) => !v);
@@ -215,7 +334,18 @@ function LayerRow({
       </div>
       {open &&
         [...n.children].reverse().map((c) => (
-          <LayerRow key={c.id} n={c} depth={depth + 1} sel={sel} engine={engine} q={q} />
+          <LayerRow
+            key={c.id}
+            n={c}
+            depth={depth + 1}
+            sel={sel}
+            engine={engine}
+            q={q}
+            siblings={[...n.children].reverse()}
+            drag={drag}
+            setDrag={setDrag}
+            onDrop={onDrop}
+          />
         ))}
       {menu && (
         <ContextMenu
@@ -230,7 +360,7 @@ function LayerRow({
   );
 }
 
-export function LeftPanel({
+function LeftPanelImpl({
   engine,
   snap,
   nav,
@@ -246,12 +376,39 @@ export function LeftPanel({
   const [q, setQ] = useState("");
   const [pagesOpen, setPagesOpen] = useState(true);
   const [pageMenuAt, setPageMenuAt] = useState<{ x: number; y: number; i: number } | null>(null);
+  const [drag, setDrag] = useState<LayerDrag | null>(null);
   const root = snap.pages[snap.page].root;
+
+  /**
+   * Translate a drop (target row + zone) into a concrete parent + child index.
+   *
+   * The panel lists children top-to-bottom in reverse z-order, so "before" in
+   * the panel means a *higher* index in `children`.
+   */
+  const onDrop = (d: LayerDrag) => {
+    const target = findNode(root, d.overId);
+    if (!target) return;
+    if (d.zone === "inside") {
+      // Dropping into a container puts the layers on top of its stack.
+      engine.dispatch({ type: "reorder", ids: d.ids, parent: target.id, index: target.node.children.length });
+      return;
+    }
+    const parent = target.parent ?? root;
+    const at = parent.children.indexOf(target.node);
+    if (at < 0) return;
+    engine.dispatch({
+      type: "reorder",
+      ids: d.ids,
+      parent: parent.id,
+      index: d.zone === "before" ? at + 1 : at,
+    });
+  };
   return (
     <aside className="panel left">
       <div className="file-head">
         <input
           className="name"
+          aria-label="File name"
           value={snap.fileName}
           onChange={(e) => engine.dispatch({ type: "setFileName", name: e.target.value })}
         />
@@ -265,12 +422,18 @@ export function LeftPanel({
             <Icon name="search" size={14} />
             <input
               placeholder="Find…"
+              aria-label="Find layers"
               value={q}
               onChange={(e) => setQ(e.target.value)}
             />
           </div>
           <div className="section-label">
-            <button className="twist" onClick={() => setPagesOpen((v) => !v)}>
+            <button
+              className="twist"
+              aria-label={pagesOpen ? "Collapse pages" : "Expand pages"}
+              aria-expanded={pagesOpen}
+              onClick={() => setPagesOpen((v) => !v)}
+            >
               <Icon name={pagesOpen ? "chevron" : "chevron-right"} size={12} />
             </button>
             Pages
@@ -307,9 +470,26 @@ export function LeftPanel({
             <Icon name="chevron" size={12} />
             Layers
           </div>
-          <div className="tree">
+          <div
+            className="tree"
+            onDragOver={(e) => {
+              if (drag) e.preventDefault();
+            }}
+            onDrop={() => setDrag(null)}
+          >
             {[...root.children].reverse().map((n) => (
-              <LayerRow key={n.id} n={n} depth={0} sel={snap.selection} engine={engine} q={q} />
+              <LayerRow
+                key={n.id}
+                n={n}
+                depth={0}
+                sel={snap.selection}
+                engine={engine}
+                q={q}
+                siblings={[...root.children].reverse()}
+                drag={drag}
+                setDrag={setDrag}
+                onDrop={onDrop}
+              />
             ))}
           </div>
         </>
@@ -386,6 +566,21 @@ const GROUPS: Group[] = [
   { id: "comment", tools: [{ id: "comment", label: "Comment", shortcut: "C" }] },
 ];
 
+
+/** The layers tree only depends on the document, the page and the selection.
+ *  Without this guard every pan/zoom dispatch re-rendered every layer row,
+ *  which dominated frame time on large documents (~47ms/frame at 1400 nodes). */
+export const LeftPanel = memo(LeftPanelImpl, (a, b) =>
+  a.nav === b.nav &&
+  a.engine === b.engine &&
+  a.onMinimize === b.onMinimize &&
+  a.onActions === b.onActions &&
+  a.snap.pages === b.snap.pages &&
+  a.snap.page === b.snap.page &&
+  a.snap.selection === b.snap.selection &&
+  a.snap.fileName === b.snap.fileName,
+);
+
 export function Toolbar({
   engine,
   snap,
@@ -414,9 +609,13 @@ export function Toolbar({
               setOpen((o) => (o === g.id ? null : o));
             }}
           >
+            <Tooltip
+              label={g.tools.find((t) => t.id === current)?.label ?? ""}
+              shortcut={g.tools.find((t) => t.id === current)?.shortcut}
+            >
             <button
               className="hit"
-              title={g.tools.find((t) => t.id === current)?.label}
+              aria-label={g.tools.find((t) => t.id === current)?.label}
               onClick={() => engine.dispatch({ type: "setTool", tool: current })}
               onPointerDown={() => {
                 if (!multi) return;
@@ -433,6 +632,7 @@ export function Toolbar({
               <Icon name={TOOL_ICON[current]} size={16} />
               {multi && <i className="caret" />}
             </button>
+            </Tooltip>
             {multi && (
               <div className="fly">
                 {g.tools.map((t) => (
@@ -522,6 +722,19 @@ export function Actions({
     { label: "Redo", sc: "⇧⌘Z", run: () => engine.dispatch({ type: "redo" }) },
     { label: "Duplicate", sc: "⌘D", run: () => engine.dispatch({ type: "duplicate" }) },
     { label: "Delete", sc: "⌫", run: () => engine.dispatch({ type: "delete" }) },
+    { label: "Rulers", sc: "⇧R", run: () => engine.dispatch({ type: "toggleRulers" }) },
+    {
+      // With autosave the document is now sticky, so there has to be a way back
+      // to a blank file. Destructive and unrecoverable, hence the confirm.
+      label: "New file…",
+      sc: "",
+      run: () => {
+        if (!window.confirm("Discard the current document and start a new file?")) return;
+        clearDoc();
+        window.location.reload();
+      },
+    },
+    { label: "Show/hide comments", sc: "⇧C", run: () => engine.dispatch({ type: "toggleComments" }) },
     { label: "Group", sc: "⌘G", run: () => engine.dispatch({ type: "group" }) },
     { label: "Ungroup", sc: "⇧⌘G", run: () => engine.dispatch({ type: "ungroup" }) },
     { label: "Hide UI", sc: "⌘\\", run: onHide },
@@ -549,6 +762,15 @@ export function Actions({
     { label: "Intersect", sc: "⌥⇧I", run: () => engine.dispatch({ type: "boolean", op: "intersect" }) },
     { label: "Exclude", sc: "⌥⇧E", run: () => engine.dispatch({ type: "boolean", op: "exclude" }) },
     { label: "Flatten", sc: "⌘E", run: () => engine.dispatch({ type: "flatten" }) },
+    { label: "Outline stroke", sc: "⇧⌘O", run: () => engine.dispatch({ type: "outlineStroke" }) },
+    { label: "Wrap in section", sc: "", run: () => engine.dispatch({ type: "wrapSection" }) },
+    { label: "Use as mask", sc: "⌘⌥M", run: () => runMenu(engine, "useAsMask") },
+    { label: "Bring to front", sc: "⇧⌘]", run: () => engine.dispatch({ type: "arrange", dir: "front" }) },
+    { label: "Send to back", sc: "⇧⌘[", run: () => engine.dispatch({ type: "arrange", dir: "back" }) },
+    { label: "Add auto layout", sc: "⇧A", run: () => {
+      const id = engine.snapshot().selection[0];
+      if (id) engine.dispatch({ type: "autoLayout", id, layout: defaultLayout() });
+    } },
     { label: "Flip horizontal", sc: "⇧H", run: () => engine.dispatch({ type: "flip", axis: "h" }) },
     { label: "Flip vertical", sc: "⇧V", run: () => engine.dispatch({ type: "flip", axis: "v" }) },
     { label: "Zoom to 100%", sc: "⇧0", run: () => engine.dispatch({ type: "setZoom", zoom: 1 }) },
@@ -586,29 +808,6 @@ export function Actions({
   );
 }
 
-function zoomTo(engine: Engine, mode: "fit" | "selection") {
-  const s = engine.snapshot();
-  const root = s.pages[s.page].root;
-  const nodes =
-    mode === "selection" && s.selection.length
-      ? s.selection.map((id) => worldPos(root, id)).filter((x): x is NonNullable<typeof x> => !!x)
-      : root.children.filter((c) => c.visible).map((n) => ({ x: n.x, y: n.y, node: n }));
-  if (!nodes.length) {
-    engine.dispatch({ type: "setZoom", zoom: 1 });
-    return;
-  }
-  const minX = Math.min(...nodes.map((n) => n.x));
-  const minY = Math.min(...nodes.map((n) => n.y));
-  const maxX = Math.max(...nodes.map((n) => n.x + n.node.w));
-  const maxY = Math.max(...nodes.map((n) => n.y + n.node.h));
-  const bw = Math.max(1, maxX - minX);
-  const bh = Math.max(1, maxY - minY);
-  const vw = Math.max(200, window.innerWidth - 520);
-  const vh = Math.max(200, window.innerHeight - 96);
-  const z = Math.max(0.1, Math.min(8, Math.min(vw / bw, vh / bh) * 0.9));
-  engine.dispatch({ type: "setZoom", zoom: z });
-  engine.dispatch({ type: "setPan", x: (vw - bw * z) / 2 - minX * z, y: (vh - bh * z) / 2 - minY * z });
-}
 
 export function bindHotkeys(
   engine: Engine,
@@ -651,7 +850,13 @@ export function bindHotkeys(
       engine.dispatch({ type: "setRightTab", tab: cur === "inspect" ? "design" : "inspect" });
       return;
     }
-    if (e.shiftKey && e.key.toLowerCase() === "e" && !meta) {
+    // Must exclude Alt, otherwise this swallows ⌥⇧E (boolean Exclude).
+    if (e.shiftKey && !meta && !e.altKey && e.key.toLowerCase() === "c") {
+      e.preventDefault();
+      engine.dispatch({ type: "toggleComments" });
+      return;
+    }
+    if (e.shiftKey && e.key.toLowerCase() === "e" && !meta && !e.altKey) {
       e.preventDefault();
       const cur = engine.snapshot().rightTab;
       engine.dispatch({ type: "setRightTab", tab: cur === "prototype" ? "design" : "prototype" });
@@ -690,10 +895,31 @@ export function bindHotkeys(
         return;
       }
     }
+    // Distribute spacing: ⌃⌥H / ⌃⌥V, as in Figma. The align row's tooltips
+    // advertise these, so they must actually be bound.
+    // NB: `meta` above is metaKey||ctrlKey, so it is always true when Ctrl is
+    // held — test e.ctrlKey directly and exclude Cmd instead.
+    if (e.ctrlKey && e.altKey && !e.metaKey) {
+      const k = e.key.toLowerCase();
+      if (k === "h" || k === "v") {
+        e.preventDefault();
+        engine.dispatch({ type: "distribute", axis: k === "h" ? "h" : "v" });
+        return;
+      }
+    }
     if (meta && e.key.toLowerCase() === "z") {
       e.preventDefault();
       engine.dispatch({ type: e.shiftKey ? "redo" : "undo" });
       return;
+    }
+    if (meta && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "r") {
+      const id = engine.snapshot().selection[0];
+      if (id) {
+        e.preventDefault();
+        engine.dispatch({ type: "setLeftTab", tab: "layers" });
+        window.dispatchEvent(new CustomEvent("x-rename-layer", { detail: id }));
+        return;
+      }
     }
     if (meta && e.key.toLowerCase() === "d") {
       e.preventDefault();
@@ -740,6 +966,11 @@ export function bindHotkeys(
       engine.dispatch({ type: "lockSel" });
       return;
     }
+    if (!meta && e.shiftKey && e.key.toLowerCase() === "r") {
+      e.preventDefault();
+      engine.dispatch({ type: "toggleRulers" });
+      return;
+    }
     if (meta && e.shiftKey && e.key.toLowerCase() === "h") {
       e.preventDefault();
       engine.dispatch({ type: "hideSel" });
@@ -747,7 +978,11 @@ export function bindHotkeys(
     }
     if (e.key === "Delete" || e.key === "Backspace") {
       e.preventDefault();
+      const n = engine.snapshot().selection.length;
       engine.dispatch({ type: "delete" });
+      // Deleting a layer that is scrolled out of view gives no visual feedback;
+      // confirm it and advertise the undo, as Figma does.
+      if (n) toast(`Deleted ${plural(n, "layer")} · ⌘Z to undo`);
       return;
     }
     if (e.key === "Escape") {
@@ -802,6 +1037,11 @@ export function bindHotkeys(
       engine.dispatch({ type: "flatten" });
       return;
     }
+    if (meta && e.shiftKey && e.key.toLowerCase() === "o") {
+      e.preventDefault();
+      engine.dispatch({ type: "outlineStroke" });
+      return;
+    }
     if ((e.ctrlKey || meta) && e.altKey && e.key.toLowerCase() === "m") {
       e.preventDefault();
       runMenu(engine, "useAsMask");
@@ -818,14 +1058,16 @@ export function bindHotkeys(
       engine.dispatch({ type: "setZoom", zoom: 1 });
       return;
     }
+    // Step through the zoom presets so the readout lands on round values
+    // (25/50/100/200...) instead of compounding into 94% / 117% / 146%.
     if (meta && (e.key === "=" || e.key === "+")) {
       e.preventDefault();
-      engine.dispatch({ type: "setZoom", zoom: engine.snapshot().zoom * 1.25 });
+      engine.dispatch({ type: "setZoom", zoom: stepZoom(engine.snapshot().zoom, 1) });
       return;
     }
     if (meta && e.key === "-") {
       e.preventDefault();
-      engine.dispatch({ type: "setZoom", zoom: engine.snapshot().zoom / 1.25 });
+      engine.dispatch({ type: "setZoom", zoom: stepZoom(engine.snapshot().zoom, -1) });
       return;
     }
     if (!meta && e.shiftKey && e.code === "Digit1") {
@@ -1103,6 +1345,8 @@ export function HelpBtn() {
               ["⌥⇧U", "Union"],
               ["⌘E", "Flatten"],
               ["⌘⌥M", "Use as mask"],
+              ["⇧⌘O", "Outline stroke"],
+              ["⌘drag", "Ignore snapping"],
             ].map(([k, l]) => (
               <div key={k} className="proto-row">
                 <span>{l}</span>

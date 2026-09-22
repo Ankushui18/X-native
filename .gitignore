@@ -57,3 +57,6 @@ __pycache__/
 screenshots/
 **/screenshots/
 ```
+
+# TypeScript incremental build cache
+*.tsbuildinfo

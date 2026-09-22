@@ -11,6 +11,8 @@ import type {
   Tool,
   XNode,
 } from "./types";
+import { copyText } from "./clipboard";
+import { loadDoc, type PersistedDoc } from "./persist";
 import { booleanPath, outlineStroke as outlineStrokePath, shapePoly, transformedPoly } from "./geometry";
 
 let seq = 1;
@@ -46,6 +48,7 @@ function node(
     fillVisible: !(kind === "line" || kind === "arrow"),
     fillType: "solid",
     fillB: "#ffffff",
+    gradientStops: [],
     fillBlend: "Normal",
     strokePaint: kind === "line" || kind === "arrow" ? "#1e1e1e" : "#00000000",
     strokeOpacity: 1,
@@ -341,6 +344,7 @@ function demoPage(): Page {
     id: uid("page"),
     name: "Page 1",
     root: pageRoot,
+    comments: [],
     pixelGrid: false,
     pixelGridColor: "#cccccc",
     flowStart: phone.id,
@@ -361,6 +365,55 @@ interface Internal {
   components: ComponentMaster[];
   presentFrame: string;
   presentStack: string[];
+  showRulers: boolean;
+  showComments: boolean;
+  openComment: string;
+}
+
+/** Cap the undo stack. Each entry is a full document clone, so an unbounded
+ *  stack grows memory without limit during a long editing session. */
+const MAX_UNDO = 200;
+
+/** Commands whose rapid repeats collapse into a single undo step. Only
+ *  incremental, self-repeating gestures belong here — structural edits must
+ *  always get their own entry. */
+const COALESCABLE = new Set<string>(["nudge", "move", "resize", "patch", "autoLayout"]);
+
+/** Identity used to decide whether two consecutive history commands belong to
+ *  the same burst. For `patch` this includes the target ids and the property
+ *  names being written, so typing "45" into the rotation field coalesces into
+ *  one undo step while a patch of a *different* property still starts a new
+ *  one. Without this, each keystroke in a numeric field cost its own undo. */
+function coalesceKey(cmd: Command): string {
+  if (cmd.type === "patch") {
+    const c = cmd as Extract<Command, { type: "patch" }>;
+    const ids = "id" in c && c.id ? String(c.id) : "";
+    return `patch:${ids}:${Object.keys(c.patch ?? {}).sort().join(",")}`;
+  }
+  if (cmd.type === "autoLayout") {
+    // Typing into a gap/padding field rewrites the whole layout object, so key
+    // on which layout properties actually differ is not available here; key on
+    // the target instead. Consecutive edits to one frame's layout inside the
+    // coalesce window are one undo step, which matches the field-typing case.
+    const c = cmd as Extract<Command, { type: "autoLayout" }>;
+    return `autoLayout:${String(c.id)}`;
+  }
+  return cmd.type;
+}
+
+/** Fill in anything a persisted node is missing, using the same defaults as a
+ *  freshly created node, and recurse through children. Unknown extra keys are
+ *  preserved. Throws if the value is not object-shaped, which the caller treats
+ *  as a corrupt document. */
+function reviveNode(raw: unknown): XNode {
+  if (typeof raw !== "object" || raw === null) throw new Error("not a node");
+  const r = raw as Partial<XNode> & Record<string, unknown>;
+  const kind = (typeof r.kind === "string" ? r.kind : "frame") as NodeKind;
+  const nm = typeof r.name === "string" ? r.name : "Layer";
+  const n = (v: unknown, d: number) => (typeof v === "number" && Number.isFinite(v) ? v : d);
+  const defaults = node(kind, nm, n(r.x, 0), n(r.y, 0), n(r.w, 100), n(r.h, 100));
+  const kids = Array.isArray(r.children) ? r.children.map(reviveNode) : [];
+  return { ...defaults, ...r, kind, name: nm, id: typeof r.id === "string" && r.id ? r.id : defaults.id, children: kids };
 }
 
 export class MemoryEngine implements Engine {
@@ -370,26 +423,70 @@ export class MemoryEngine implements Engine {
   private listeners = new Set<() => void>();
   private snapCache: Snapshot;
   private grouping = false;
+  /** Last history-pushing command type and its timestamp, used to coalesce
+   *  rapid repeats of the same command (e.g. holding an arrow key) into a
+   *  single undo step, as Figma does. */
+  private lastHist: { type: string; at: number } | null = null;
   private clip: XNode[] = [];
 
-  constructor() {
+  /** Set when a stored document existed but could not be read, so the UI can
+   *  tell the user their work was replaced rather than silently starting over. */
+  readonly restoreFailed: boolean;
+
+  constructor(restore = true) {
+    const loaded = restore ? loadDoc() : { doc: null, corrupt: false };
+    let doc = loaded.doc;
+    let corrupt = loaded.corrupt;
+    // A stored node that is missing fields the UI reads (fill, cornerRadii,
+    // effects, …) used to render a white screen: persist.ts can only check the
+    // document's shape, not every node property. Backfill against the same
+    // factory that creates nodes normally, so a partial or older node is
+    // repaired rather than crashing the app.
+    if (doc) {
+      try {
+        doc = { ...doc, pages: doc.pages.map((pg) => ({ ...pg, root: reviveNode(pg.root) })) };
+      } catch {
+        doc = null;
+        corrupt = true;
+      }
+    }
+    this.restoreFailed = corrupt;
     this.state = {
-      fileName: "Untitled",
-      pages: [demoPage()],
-      page: 0,
+      fileName: doc?.fileName ?? "Untitled",
+      pages: doc?.pages ?? [demoPage()],
+      page: doc?.page ?? 0,
       selection: [],
       tool: "select",
-      zoom: 0.75,
-      panX: 40,
-      panY: 20,
+      zoom: doc?.zoom ?? 0.75,
+      panX: doc?.panX ?? 40,
+      panY: doc?.panY ?? 20,
       rightTab: "design",
       leftTab: "layers",
-      components: [],
+      components: doc?.components ?? [],
       presentFrame: "",
       presentStack: [],
+      showRulers: doc?.showRulers ?? false,
+      showComments: doc?.showComments ?? false,
+      openComment: "",
     };
     this.relayout();
     this.snapCache = this.build();
+  }
+
+  /** The persistable slice of state. Kept here so the storage format never has
+   *  to reach into private fields from outside. */
+  toDoc(): Omit<PersistedDoc, "version"> {
+    return {
+      fileName: this.state.fileName,
+      pages: this.state.pages,
+      components: this.state.components,
+      page: this.state.page,
+      zoom: this.state.zoom,
+      panX: this.state.panX,
+      panY: this.state.panY,
+      showRulers: this.state.showRulers,
+      showComments: this.state.showComments,
+    };
   }
 
   snapshot(): Snapshot {
@@ -418,8 +515,23 @@ export class MemoryEngine implements Engine {
       }
       return;
     }
+    // Pure selection/view commands must never enter history: a user pressing
+    // undo expects the last *document* change to revert, not to spend a step
+    // undoing a select-all or a ruler toggle.
     const hist = ![
       "select",
+      "selectAll",
+      "toggleRulers",
+      // Comments are annotations layered over the design, not part of it.
+      // Figma keeps them off the design undo stack entirely: ⌘Z after posting
+      // a comment reverts your last *design* edit, it does not delete the note.
+      "toggleComments",
+      "openComment",
+      "addComment",
+      "replyComment",
+      "resolveComment",
+      "deleteComment",
+      "moveComment",
       "setTool",
       "setZoom",
       "pan",
@@ -438,8 +550,26 @@ export class MemoryEngine implements Engine {
       "presentStop",
     ].includes(cmd.type);
     if (hist && !this.grouping) {
-      this.undo.push(clone(this.state));
+      // Coalesce a burst of identical commands (arrow-key nudges, repeated
+      // resize steps) into one undo entry so a single undo reverses the whole
+      // gesture instead of one keypress at a time.
+      const now = Date.now();
+      const COALESCE_MS = 600;
+      const key = coalesceKey(cmd);
+      const repeat =
+        COALESCABLE.has(cmd.type) &&
+        this.lastHist !== null &&
+        this.lastHist.type === key &&
+        now - this.lastHist.at < COALESCE_MS;
+      if (!repeat) {
+        this.undo.push(clone(this.state));
+        if (this.undo.length > MAX_UNDO) this.undo.shift();
+      }
       this.redo = [];
+      this.lastHist = { type: key, at: now };
+    } else if (!hist && cmd.type !== "undo" && cmd.type !== "redo") {
+      // A non-history command (select, zoom, ...) ends the current burst.
+      this.lastHist = null;
     }
     this.apply(cmd);
     this.relayout();
@@ -470,6 +600,9 @@ export class MemoryEngine implements Engine {
       canUndo: this.undo.length > 0,
       canRedo: this.redo.length > 0,
       components: this.state.components,
+      showRulers: this.state.showRulers,
+      showComments: this.state.showComments,
+      openComment: this.state.openComment,
       presentFrame: this.state.presentFrame,
       presentStack: this.state.presentStack,
     };
@@ -495,6 +628,58 @@ export class MemoryEngine implements Engine {
         s.panX = cmd.x;
         s.panY = cmd.y;
         break;
+      case "toggleRulers":
+        s.showRulers = !s.showRulers;
+        break;
+      case "toggleComments":
+        s.showComments = !s.showComments;
+        if (!s.showComments) s.openComment = "";
+        break;
+      case "openComment":
+        s.openComment = cmd.id;
+        break;
+      case "addComment": {
+        const page = s.pages[s.page];
+        const id = uid("cm");
+        page.comments.push({
+          id,
+          x: cmd.x,
+          y: cmd.y,
+          body: cmd.body,
+          at: Date.now(),
+          resolved: false,
+          replies: [],
+        });
+        s.showComments = true;
+        s.openComment = id;
+        break;
+      }
+      case "replyComment": {
+        const t = s.pages[s.page].comments.find((c) => c.id === cmd.id);
+        if (t) t.replies.push({ id: uid("cr"), body: cmd.body, at: Date.now() });
+        break;
+      }
+      case "resolveComment": {
+        const t = s.pages[s.page].comments.find((c) => c.id === cmd.id);
+        if (t) t.resolved = cmd.resolved;
+        if (cmd.resolved) s.openComment = "";
+        break;
+      }
+      case "deleteComment": {
+        const page = s.pages[s.page];
+        page.comments = page.comments.filter((c) => c.id !== cmd.id);
+        if (s.openComment === cmd.id) s.openComment = "";
+        break;
+      }
+      case "moveComment": {
+        const t = s.pages[s.page].comments.find((c) => c.id === cmd.id);
+        if (t) {
+          t.x = cmd.x;
+          t.y = cmd.y;
+        }
+        break;
+      }
+        break;
       case "setRightTab":
         s.rightTab = cmd.tab;
         break;
@@ -512,6 +697,7 @@ export class MemoryEngine implements Engine {
         const p = demoPage();
         p.name = `Page ${s.pages.length + 1}`;
         p.root.children = [];
+        p.comments = [];
         p.flowStart = "";
         s.pages.push(p);
         s.page = s.pages.length - 1;
@@ -596,6 +782,41 @@ export class MemoryEngine implements Engine {
         }
         break;
       }
+      case "reorder": {
+        const root = this.root();
+        const dest = find(root, cmd.parent) ?? root;
+        // Absolute position is preserved across the move, so dragging a layer
+        // into a frame in the panel does not teleport it on the canvas.
+        const moving: { node: XNode; wx: number; wy: number }[] = [];
+        for (const id of cmd.ids) {
+          const n = find(root, id);
+          const wp = worldPos(root, id);
+          // Refuse to drop a node into itself or its own subtree.
+          if (!n || n.locked || id === dest.id || find(n, dest.id)) continue;
+          moving.push({ node: n, wx: wp?.x ?? n.x, wy: wp?.y ?? n.y });
+        }
+        if (!moving.length) break;
+        // Count how many of the moved nodes sit before the target slot in the
+        // destination, so the index still points at the intended gap after
+        // they are spliced out.
+        let index = cmd.index;
+        for (const { node } of moving) {
+          const at = dest.children.indexOf(node);
+          if (at >= 0 && at < index) index--;
+        }
+        for (const { node } of moving) {
+          const p = findParent(root, node.id);
+          if (p) p.children = p.children.filter((c) => c.id !== node.id);
+        }
+        const destWorld = dest === root ? { x: 0, y: 0 } : worldPos(root, dest.id);
+        index = Math.max(0, Math.min(index, dest.children.length));
+        dest.children.splice(index, 0, ...moving.map((m) => m.node));
+        for (const m of moving) {
+          m.node.x = m.wx - (destWorld?.x ?? 0);
+          m.node.y = m.wy - (destWorld?.y ?? 0);
+        }
+        break;
+      }
       case "delete": {
         for (const id of s.selection) {
           const p = findParent(this.root(), id);
@@ -630,7 +851,14 @@ export class MemoryEngine implements Engine {
       case "patch": {
         const n = find(this.root(), cmd.id);
         if (n) {
+          // A hand-typed name pins the layer name; automatic naming stops.
+          if (cmd.patch.name !== undefined) n.nameLocked = true;
           Object.assign(n, cmd.patch);
+          // Text layers follow their content until renamed, as in Figma.
+          if (n.kind === "text" && cmd.patch.text !== undefined && !n.nameLocked) {
+            const first = (cmd.patch.text || "").split("\n")[0].trim();
+            n.name = first ? first.slice(0, 60) : "Text";
+          }
           if (n.isComponent && n.componentId) {
             const lib = s.components.find((c) => c.id === n.componentId);
             if (lib) {
@@ -759,7 +987,7 @@ export class MemoryEngine implements Engine {
         ]
           .filter(Boolean)
           .join("\n");
-        void navigator.clipboard?.writeText(css);
+        copyText(css);
         break;
       }
       case "group":

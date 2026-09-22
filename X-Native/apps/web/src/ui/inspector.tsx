@@ -24,6 +24,9 @@ import type {
 import { collectColors, defaultEffect, defaultLayout, find, findParent, framesOf, worldPos } from "../engine/memory";
 import { shapePoly } from "../engine/geometry";
 import { Icon } from "./icons";
+import { Tooltip } from "./Tooltip";
+import { copyText } from "../engine/clipboard";
+import { ZOOM_STEPS, zoomTo } from "./zoom";
 import { FillPicker, type FillValue } from "./FillPicker";
 import { BLENDS, handlesForFill, isNone, parseHex, withAlpha } from "./color";
 import { ContextMenu, runMenu } from "./ContextMenu";
@@ -78,20 +81,7 @@ export function RightPanel({
             </button>
           ))
         )}
-        <button
-          className="zoom"
-          title="Zoom"
-          onClick={() => {
-            const next = snap.zoom >= 1 ? 0.5 : snap.zoom >= 0.5 ? 1 : 2;
-            engine.dispatch({ type: "setZoom", zoom: next });
-          }}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            engine.dispatch({ type: "setZoom", zoom: 1 });
-          }}
-        >
-          {Math.round(snap.zoom * 100)}%
-        </button>
+        <ZoomMenu engine={engine} snap={snap} />
       </div>
       <div className="inspector">
         {snap.rightTab === "prototype" && !inspect && (
@@ -123,6 +113,21 @@ function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
   const root = snap.pages[snap.page].root;
   return (
     <>
+      {tool !== "frame" && (
+        // Figma uses the empty right panel to teach rather than leaving it
+        // blank; with nothing selected the only controls are page-level, so
+        // say what the panel will show once something is picked.
+        <div className="empty-state">
+          <Icon name="move" size={20} />
+          <p className="empty-title">Nothing selected</p>
+          <p className="empty-body">
+            Select a layer to edit its position, size, fill, stroke and effects.
+          </p>
+          <p className="empty-hint">
+            Press <kbd>F</kbd> for a frame, <kbd>R</kbd> for a rectangle, <kbd>T</kbd> for text.
+          </p>
+        </div>
+      )}
       {tool === "frame" && (
         <>
           <div className="h-row">
@@ -372,7 +377,7 @@ function Inspect({ n }: { n?: XNode }) {
         <button
           className="plus"
           title="Copy CSS"
-          onClick={() => void navigator.clipboard?.writeText(css)}
+          onClick={() => copyText(css)}
         >
           <Icon name="copy" size={14} />
         </button>
@@ -527,25 +532,33 @@ function Design({
         <div className="align">
           <div className="g">
             {(["align-left", "align-hcenter", "align-right"] as const).map((ic) => (
-              <button key={ic} title={ic} onClick={(e) => align(engine, snap, ic, e.shiftKey)}>
-                <Icon name={ic} />
-              </button>
+              <Tooltip key={ic} label={ALIGN_LABEL[ic]} shortcut={ALIGN_SHORTCUT[ic]}>
+                <button aria-label={ALIGN_LABEL[ic]} onClick={(e) => align(engine, snap, ic, e.shiftKey)}>
+                  <Icon name={ic} />
+                </button>
+              </Tooltip>
             ))}
           </div>
           <div className="g">
             {(["align-top", "align-vcenter", "align-bottom"] as const).map((ic) => (
-              <button key={ic} title={ic} onClick={(e) => align(engine, snap, ic, e.shiftKey)}>
-                <Icon name={ic} />
-              </button>
+              <Tooltip key={ic} label={ALIGN_LABEL[ic]} shortcut={ALIGN_SHORTCUT[ic]}>
+                <button aria-label={ALIGN_LABEL[ic]} onClick={(e) => align(engine, snap, ic, e.shiftKey)}>
+                  <Icon name={ic} />
+                </button>
+              </Tooltip>
             ))}
           </div>
           <div className="g">
-            <button title="Distribute horizontal" onClick={() => engine.dispatch({ type: "distribute", axis: "h" })}>
+            <Tooltip label="Distribute horizontal spacing" shortcut="⌃⌥H">
+            <button aria-label="Distribute horizontal" onClick={() => engine.dispatch({ type: "distribute", axis: "h" })}>
               <Icon name="distribute-h" />
             </button>
-            <button title="Distribute vertical" onClick={() => engine.dispatch({ type: "distribute", axis: "v" })}>
+            </Tooltip>
+            <Tooltip label="Distribute vertical spacing" shortcut="⌃⌥V">
+            <button aria-label="Distribute vertical" onClick={() => engine.dispatch({ type: "distribute", axis: "v" })}>
               <Icon name="distribute-v" />
             </button>
+            </Tooltip>
           </div>
         </div>
         <div className="grid3">
@@ -558,8 +571,8 @@ function Design({
           >
             <Icon name="constraints" size={14} />
           </button>
-          <Field icon="rotate" value={n.rotation} onChange={(v) => num("rotation", v)} />
-          <div className="seg">
+          <Field icon="rotate" aria="Rotation" value={n.rotation} onChange={(v) => num("rotation", v)} />
+          <div className="seg icons">
             <button
               title="Flip horizontal"
               onClick={() => engine.dispatch({ type: "flip", axis: "h" })}
@@ -600,7 +613,7 @@ function Design({
         </div>
       </div>
       <div className="dir-row">
-        <div className="seg">
+        <div className="seg icons">
           <button
             className={!n.layout ? "on" : ""}
             title="None"
@@ -807,6 +820,7 @@ function Design({
           <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
             <Field
               icon="gap"
+              aria="Gap between items"
               value={n.layout.gap}
               onChange={(v) =>
                 engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, gap: v } })
@@ -834,6 +848,7 @@ function Design({
             ) : (
               <Field
                 icon="padding"
+                aria="Padding"
                 value={n.layout.padding[0]}
                 onChange={(v) =>
                   engine.dispatch({
@@ -908,6 +923,7 @@ function Design({
           <div className="grid3">
             <Field
               icon="radius"
+              aria="Corner radius"
               value={n.cornerRadii[0]}
               onChange={(v) => patch({ cornerRadii: [v, v, v, v] })}
             />
@@ -954,17 +970,28 @@ function Design({
         <button
           className="plus"
           title="Add fill"
-          onClick={() =>
+          onClick={() => {
+            // First press turns the base fill back on; after that each press
+            // stacks another fill on top, the way Figma's Fill "+" behaves.
+            if (isNone(n.fill) && !n.fillVisible) {
+              engine.dispatch({
+                type: "patch",
+                id: n.id,
+                patch: { fill: "#d9d9d9", fillVisible: true, fillOpacity: n.fillOpacity ?? 1 },
+              });
+              return;
+            }
             engine.dispatch({
               type: "patch",
               id: n.id,
               patch: {
-                fill: isNone(n.fill) ? "#d9d9d9" : n.fill,
-                fillVisible: true,
-                fillOpacity: n.fillOpacity ?? 1,
+                fills: [
+                  ...(n.fills ?? []),
+                  { type: "solid", color: "#ffffff", opacity: 1, visible: true },
+                ],
               },
-            })
-          }
+            });
+          }}
         >
           <Icon name="plus" size={14} />
         </button>
@@ -992,6 +1019,7 @@ function Design({
             gy={n.fillGY}
             hx={n.fillHX}
             hy={n.fillHY}
+            stops={n.gradientStops}
             recents={collectColors(snap.pages[snap.page].root)}
             onChange={(fill) => engine.dispatch({ type: "patch", id: n.id, patch: { fill, fillVisible: true } })}
             onOpacity={(v) =>
@@ -1010,6 +1038,58 @@ function Design({
           />
         </div>
       )}
+      {(n.fills ?? []).map((p, i) => {
+        const setPaint = (patch: Partial<typeof p>) =>
+          engine.dispatch({
+            type: "patch",
+            id: n.id,
+            patch: { fills: (n.fills ?? []).map((q, j) => (j === i ? { ...q, ...patch } : q)) },
+          });
+        return (
+          <div className="insp-pad" key={i}>
+            <ColorRow
+              value={p.color}
+              opacity={Math.round((p.opacity ?? 1) * 100)}
+              visible={p.visible}
+              type={p.type}
+              stops={p.stops}
+              gx={p.gx}
+              gy={p.gy}
+              hx={p.hx}
+              hy={p.hy}
+              blend={p.blend}
+              recents={collectColors(snap.pages[snap.page].root)}
+              onChange={(color) => setPaint({ color, visible: true })}
+              onOpacity={(v) => setPaint({ opacity: v / 100 })}
+              onVisible={(v) => setPaint({ visible: v })}
+              onRemove={() =>
+                engine.dispatch({
+                  type: "patch",
+                  id: n.id,
+                  patch: { fills: (n.fills ?? []).filter((_, j) => j !== i) },
+                })
+              }
+              onMeta={(meta) =>
+                setPaint({
+                  gx: meta.fillGX,
+                  gy: meta.fillGY,
+                  hx: meta.fillHX,
+                  hy: meta.fillHY,
+                  blend: meta.fillBlend,
+                })
+              }
+              onValueChange={(v) => {
+                const patch = fillValuePatch(v);
+                setPaint({
+                  type: patch.fillType,
+                  color: patch.fill,
+                  stops: patch.gradientStops,
+                });
+              }}
+            />
+          </div>
+        );
+      })}
 
       <div className="h-row">
         <h3>Stroke</h3>
@@ -1054,7 +1134,7 @@ function Design({
               })
             }
           />
-          <div className="grid3">
+          <div className="stroke-width">
             <Field
               label="W"
               value={n.strokeWidth}
@@ -1062,7 +1142,7 @@ function Design({
                 engine.dispatch({ type: "patch", id: n.id, patch: { strokeWidth } })
               }
             />
-            <div className="seg">
+            <div className="seg icons">
               {(["inside", "center", "outside"] as StrokeAlign[]).map((a) => (
                 <button
                   key={a}
@@ -1075,7 +1155,8 @@ function Design({
               ))}
             </div>
           </div>
-          <div className="seg">
+          <div className="stroke-ends">
+          <div className="seg icons">
             {(["none", "round", "square", "arrow"] as StrokeCap[]).map((c) => (
               <button
                 key={c}
@@ -1087,7 +1168,7 @@ function Design({
               </button>
             ))}
           </div>
-          <div className="seg">
+          <div className="seg icons">
             {(["miter", "bevel", "round"] as StrokeJoin[]).map((j) => (
               <button
                 key={j}
@@ -1106,6 +1187,7 @@ function Design({
           >
             <Icon name="dash" size={14} />
           </button>
+          </div>
           {strokeMore && (
             <>
               <div className="grid2">
@@ -1210,7 +1292,7 @@ function Design({
                 <option value="fixed">Fixed size</option>
               </select>
             </div>
-            <div className="seg">
+            <div className="seg icons">
               {(["left", "center", "right", "justified"] as TextAlign[]).map((a) => (
                 <button
                   key={a}
@@ -1221,7 +1303,7 @@ function Design({
                 </button>
               ))}
             </div>
-            <div className="seg">
+            <div className="seg icons">
               {(["top", "middle", "bottom"] as TextAlignVertical[]).map((a) => (
                 <button
                   key={a}
@@ -1239,7 +1321,7 @@ function Design({
             <div className="type-pop">
               <h4>Type settings</h4>
               <div className="dir-row">
-                <div className="seg">
+                <div className="seg icons">
                   <button
                     className={n.textDecoration === "underline" ? "on" : ""}
                     onClick={() =>
@@ -1456,6 +1538,7 @@ function Field({
   onChange,
   hint,
   onLabelClick,
+  aria,
 }: {
   label?: string;
   icon?: string;
@@ -1463,6 +1546,9 @@ function Field({
   onChange: (v: number) => void;
   hint?: string;
   onLabelClick?: () => void;
+  /** Accessible name for icon-only fields, which otherwise expose no label
+   *  at all to assistive tech or to keyboard users reading focus. */
+  aria?: string;
 }) {
   const [draft, setDraft] = useState(() => fmt(value));
   const focused = useRef(false);
@@ -1493,6 +1579,8 @@ function Field({
       )}
       <input
         value={draft}
+        aria-label={aria ?? label}
+        title={aria && !label ? aria : undefined}
         onFocus={() => {
           focused.current = true;
         }}
@@ -1827,6 +1915,7 @@ function fillValuePatch(v: FillValue): Partial<XNode> {
     fillVisible: true,
     fillType: type,
     fillB: v.second,
+    gradientStops: v.stops ?? [],
     fillBlend: v.blend,
     imageSrc: type === "image" ? v.image || "" : "",
     imageFit: v.imageFit || "fill",
@@ -1868,6 +1957,7 @@ function ColorRow({
   gy,
   hx,
   hy,
+  stops,
   recents = [],
   onChange,
   onOpacity,
@@ -1897,6 +1987,7 @@ function ColorRow({
   gy?: number;
   hx?: number;
   hy?: number;
+  stops?: FillValue["stops"];
   recents?: string[];
   onChange: (v: string) => void;
   onOpacity?: (v: number) => void;
@@ -1910,6 +2001,13 @@ function ColorRow({
   const isImage = type === "image" || !!image;
   const hidden = !isImage && (!visible || isNone(value));
   const hex = value.length >= 7 ? value.slice(0, 7) : "#000000";
+  // The hex field keeps its own draft while typing. Committing on every
+  // keystroke meant an in-progress value like "f" was parsed as an invalid
+  // colour and normalised to black, which wiped the field mid-entry and made
+  // the control impossible to type into. Commit only complete hex values,
+  // matching how FillPicker already handles the same input.
+  const [draft, setDraft] = useState<string | null>(null);
+  const shown = hidden ? "" : isImage ? "Image" : hex.replace("#", "");
   return (
     <div className="color-row">
       <button
@@ -1928,17 +2026,35 @@ function ColorRow({
       />
       <input
         className="hex"
-        value={hidden ? "" : isImage ? "Image" : hex.replace("#", "")}
+        aria-label={title ? `${title} colour hex` : "Colour hex"}
+        value={draft ?? shown}
         placeholder="None"
+        spellCheck={false}
         readOnly={isImage}
         onChange={(e) => {
           if (isImage) return;
-          onChange("#" + e.target.value.replace("#", ""));
+          const v = e.target.value.replace(/[^0-9a-fA-F]/g, "").slice(0, 8);
+          setDraft(v);
+          if (v.length === 3 || v.length === 4 || v.length === 6 || v.length === 8) {
+            onChange("#" + v);
+          }
+        }}
+        onFocus={(e) => e.currentTarget.select()}
+        onBlur={() => setDraft(null)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            setDraft(null);
+            e.currentTarget.blur();
+          } else if (e.key === "Escape") {
+            setDraft(null);
+            e.currentTarget.blur();
+          }
         }}
       />
       {onOpacity && (
         <input
           className="op"
+          aria-label={title ? `${title} opacity` : "Opacity"}
           value={`${opacity}%`}
           onChange={(e) => {
             const v = parseFloat(e.target.value);
@@ -1981,6 +2097,7 @@ function ColorRow({
             gy,
             hx,
             hy,
+            stops,
           }}
           recents={recents}
           anchor={anchor}
@@ -2012,6 +2129,84 @@ function setDir(engine: Engine, n: XNode, direction: "horizontal" | "vertical") 
     layout: { ...(n.layout ?? defaultLayout()), direction },
   });
 }
+
+/** Human labels + Figma's shortcuts for the align row. */
+/** Zoom control. The previous button cycled 100%→50%→100% and could never
+ *  reach 200%, so the presets are exposed in a dropdown instead — matching the
+ *  zoom menu designers expect, with the fit/selection commands alongside. */
+function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (!ref.current?.parentElement?.contains(e.target as Node)) setOpen(false);
+    };
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", esc);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+  const go = (fn: () => void) => () => {
+    fn();
+    setOpen(false);
+  };
+  return (
+    <div style={{ position: "relative", display: "flex" }}>
+      <button
+        ref={ref}
+        className="zoom"
+        title="Zoom"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {Math.round(snap.zoom * 100)}%
+      </button>
+      {open && (
+        <div className="ctx" role="menu" style={{ position: "absolute", top: "100%", right: 0, minWidth: 190 }}>
+          <button role="menuitem" onClick={go(() => zoomTo(engine, "fit"))}>
+            Zoom to fit<span className="sc">⇧1</span>
+          </button>
+          <button
+            role="menuitem"
+            disabled={!snap.selection.length}
+            onClick={go(() => zoomTo(engine, "selection"))}
+          >
+            Zoom to selection<span className="sc">⇧2</span>
+          </button>
+          <hr />
+          {ZOOM_STEPS.map((z) => (
+            <button key={z} role="menuitem" onClick={go(() => engine.dispatch({ type: "setZoom", zoom: z }))}>
+              {Math.round(z * 100)}%
+              {z === 1 && <span className="sc">⇧0</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const ALIGN_LABEL: Record<string, string> = {
+  "align-left": "Align left",
+  "align-hcenter": "Align horizontal centers",
+  "align-right": "Align right",
+  "align-top": "Align top",
+  "align-vcenter": "Align vertical centers",
+  "align-bottom": "Align bottom",
+};
+const ALIGN_SHORTCUT: Record<string, string> = {
+  "align-left": "⌥A",
+  "align-hcenter": "⌥H",
+  "align-right": "⌥D",
+  "align-top": "⌥W",
+  "align-vcenter": "⌥V",
+  "align-bottom": "⌥S",
+};
 
 export function align(
   engine: Engine,
@@ -2049,6 +2244,32 @@ export function align(
     const n = find(root, snap.selection[0]);
     const p = n ? findParent(root, n.id) : null;
     if (!n || !p || p === root) return;
+    // Children of an auto-layout frame are positioned by the layout engine, so a
+    // raw `move` is recomputed away on the next pass and the button looks dead.
+    // Figma instead retargets the alignment onto the parent's layout axes, which
+    // is the only thing that can actually move the child. Mirror that.
+    if (p.layout) {
+      const horizontal = p.layout.direction === "horizontal";
+      const axis: Record<string, LayoutAlign | LayoutJustify> = {
+        "align-left": "min",
+        "align-hcenter": "center",
+        "align-right": "max",
+        "align-top": "min",
+        "align-vcenter": "center",
+        "align-bottom": "max",
+      };
+      const value = axis[mode];
+      const isX = mode.startsWith("align-left") || mode.startsWith("align-h") || mode.startsWith("align-r");
+      // On a horizontal stack the main axis is X (justify) and the cross axis is
+      // Y (align); on a vertical stack it is the other way around.
+      const key = isX === horizontal ? "justify" : "align";
+      engine.dispatch({
+        type: "patch",
+        id: p.id,
+        patch: { layout: { ...p.layout, [key]: value } },
+      });
+      return;
+    }
     let dx = 0;
     let dy = 0;
     if (mode === "align-left") dx = -n.x;
