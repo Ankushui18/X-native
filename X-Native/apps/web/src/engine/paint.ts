@@ -216,6 +216,155 @@ function paintDiamond(
   ctx.restore();
 }
 
+const imgCache = new Map<string, HTMLCanvasElement>();
+
+function clampByte(n: number) {
+  return n < 0 ? 0 : n > 255 ? 255 : n;
+}
+
+function adjKey(n: XNode) {
+  return [
+    n.imageSrc,
+    n.imageRot | 0,
+    n.imageExposure || 0,
+    n.imageContrast || 0,
+    n.imageSaturation || 0,
+    n.imageTemperature || 0,
+    n.imageTint || 0,
+    n.imageHighlights || 0,
+    n.imageShadows || 0,
+  ].join("|");
+}
+
+function hasAdj(n: XNode) {
+  return !!(
+    n.imageExposure ||
+    n.imageContrast ||
+    n.imageSaturation ||
+    n.imageTemperature ||
+    n.imageTint ||
+    n.imageHighlights ||
+    n.imageShadows ||
+    n.imageRot
+  );
+}
+
+function processImage(im: HTMLImageElement, n: XNode): CanvasImageSource {
+  if (!hasAdj(n)) return im;
+  const key = adjKey(n);
+  const hit = imgCache.get(key);
+  if (hit) return hit;
+  const rot = ((n.imageRot % 360) + 360) % 360;
+  const iw = im.naturalWidth;
+  const ih = im.naturalHeight;
+  const swap = rot === 90 || rot === 270;
+  const c = document.createElement("canvas");
+  c.width = swap ? ih : iw;
+  c.height = swap ? iw : ih;
+  const x = c.getContext("2d");
+  if (!x) return im;
+  x.save();
+  x.translate(c.width / 2, c.height / 2);
+  x.rotate((rot * Math.PI) / 180);
+  x.drawImage(im, -iw / 2, -ih / 2);
+  x.restore();
+  const exp = n.imageExposure || 0;
+  const con = n.imageContrast || 0;
+  const sat = n.imageSaturation || 0;
+  const temp = n.imageTemperature || 0;
+  const tint = n.imageTint || 0;
+  const hi = n.imageHighlights || 0;
+  const sh = n.imageShadows || 0;
+  if (exp || con || sat || temp || tint || hi || sh) {
+    const img = x.getImageData(0, 0, c.width, c.height);
+    const d = img.data;
+    const expM = 2 ** (exp / 100);
+    const conM = 1 + con / 100;
+    const satM = 1 + sat / 100;
+    const tR = (temp / 100) * 40;
+    const tB = -(temp / 100) * 40;
+    const tiG = (tint / 100) * 40;
+    const tiRB = -(tint / 100) * 20;
+    for (let i = 0; i < d.length; i += 4) {
+      let r = d[i] * expM;
+      let g = d[i + 1] * expM;
+      let b = d[i + 2] * expM;
+      r = (r / 255 - 0.5) * conM * 255 + 127.5;
+      g = (g / 255 - 0.5) * conM * 255 + 127.5;
+      b = (b / 255 - 0.5) * conM * 255 + 127.5;
+      const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      r = y + (r - y) * satM;
+      g = y + (g - y) * satM;
+      b = y + (b - y) * satM;
+      r += tR + tiRB;
+      g += tiG;
+      b += tB + tiRB;
+      const lum = y / 255;
+      if (lum > 0.5) {
+        const t = ((lum - 0.5) * 2 * hi) / 100;
+        r += t * 255;
+        g += t * 255;
+        b += t * 255;
+      } else {
+        const t = (((0.5 - lum) * 2 * sh) / 100);
+        r += t * 255;
+        g += t * 255;
+        b += t * 255;
+      }
+      d[i] = clampByte(r);
+      d[i + 1] = clampByte(g);
+      d[i + 2] = clampByte(b);
+    }
+    x.putImageData(img, 0, 0);
+  }
+  if (imgCache.size > 24) imgCache.clear();
+  imgCache.set(key, c);
+  return c;
+}
+
+/** Image fill: Fill / Fit / Crop / Tile, 90° fill rotate, non-destructive adjustments. */
+export function paintImageFill(
+  ctx: CanvasRenderingContext2D,
+  n: XNode,
+  im: HTMLImageElement,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+) {
+  if (!im.naturalWidth || sw < 1 || sh < 1) return;
+  const src = processImage(im, n);
+  const iw = src instanceof HTMLCanvasElement ? src.width : im.naturalWidth;
+  const ih = src instanceof HTMLCanvasElement ? src.height : im.naturalHeight;
+  const fit = n.imageFit || "fill";
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(sx, sy, sw, sh);
+  ctx.clip();
+  if (fit === "tile") {
+    const z = sw / Math.max(1, n.w);
+    const pat = ctx.createPattern(src, "repeat");
+    if (pat) {
+      ctx.save();
+      ctx.translate(sx, sy);
+      ctx.scale(z, z);
+      ctx.fillStyle = pat;
+      ctx.fillRect(0, 0, n.w, n.h);
+      ctx.restore();
+    }
+    ctx.restore();
+    return;
+  }
+  const cover = fit === "fill" || fit === "crop" || !fit;
+  const scale = cover ? Math.max(sw / iw, sh / ih) : Math.min(sw / iw, sh / ih);
+  const dw = iw * scale;
+  const dh = ih * scale;
+  const dx = sx + (sw - dw) / 2;
+  const dy = sy + (sh - dh) / 2;
+  ctx.drawImage(src, dx, dy, dw, dh);
+  ctx.restore();
+}
+
 export function paintDropShadows(ctx: CanvasRenderingContext2D, n: XNode, z: number) {
   const drops = (n.effects ?? []).filter((e) => e.kind === "drop-shadow" && e.visible);
   for (const drop of drops) {

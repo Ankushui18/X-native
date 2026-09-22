@@ -4,15 +4,27 @@ import { Icon } from "./icons";
 import {
   armEyedrop,
   BLENDS,
+  COLOR_MODELS,
   COLOR_PRESETS,
   eyedropArmed,
   FILL_TYPES,
+  handlesForFill,
+  hslToRgb,
   hsvToRgb,
+  IMAGE_ADJS,
+  IMAGE_FITS,
+  isNone,
   justEyedropped,
+  nextColorModel,
+  parseCssColor,
   parseHex,
+  rgbToHsl,
   rgbToHsv,
+  toCss,
   toHex,
+  type ColorModel,
   type FillType,
+  type ImageFit,
 } from "./color";
 
 export interface FillValue {
@@ -22,6 +34,19 @@ export interface FillValue {
   second: string;
   blend: string;
   image?: string;
+  imageFit?: ImageFit;
+  imageRot?: number;
+  imageExposure?: number;
+  imageContrast?: number;
+  imageSaturation?: number;
+  imageTemperature?: number;
+  imageTint?: number;
+  imageHighlights?: number;
+  imageShadows?: number;
+  gx?: number;
+  gy?: number;
+  hx?: number;
+  hy?: number;
 }
 
 export function FillPicker({
@@ -42,8 +67,9 @@ export function FillPicker({
   const { r, g, b } = parseHex(value.color);
   const init = rgbToHsv(r, g, b);
   const [hsv, setHsv] = useState(init);
-  const [hex, setHex] = useState(value.color.replace("#", "").slice(0, 6).toUpperCase());
-  const [model, setModel] = useState<"hex" | "rgb">("hex");
+  const [hex, setHex] = useState(value.color.replace("#", "").slice(0, 8).toUpperCase());
+  const [css, setCss] = useState(toCss(r, g, b, value.opacity / 100));
+  const [model, setModel] = useState<ColorModel>("hex");
   const [typeOpen, setTypeOpen] = useState(false);
   const [blendOpen, setBlendOpen] = useState(false);
   const sv = useRef<HTMLDivElement>(null);
@@ -58,8 +84,17 @@ export function FillPicker({
       if (!t.closest(".fill-pop") && !t.closest(".color-row")) onClose();
     };
     const key = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      const typing = tag === "INPUT" || tag === "TEXTAREA";
       if (e.key === "Escape") onClose();
-      if (e.key.toLowerCase() === "i" && !e.metaKey && !e.ctrlKey) {
+      if (e.key === "Tab" && !typing) {
+        e.preventDefault();
+        setModel((m) => nextColorModel(m));
+      }
+      const drop =
+        (e.key.toLowerCase() === "i" && !e.metaKey && !e.ctrlKey && !typing) ||
+        ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c" && !typing);
+      if (drop) {
         e.preventDefault();
         armEyedrop((c) => applyRgb(...hexToRgb(c)));
       }
@@ -70,12 +105,14 @@ export function FillPicker({
       window.removeEventListener("mousedown", on);
       window.removeEventListener("keydown", key);
     };
-  }, [onClose]);
+  }, [onClose, value]);
 
   const applyRgb = (rr: number, gg: number, bb: number, next?: Partial<FillValue>) => {
     const color = toHex(rr, gg, bb);
     setHex(color.slice(1).toUpperCase());
     setHsv(rgbToHsv(rr, gg, bb));
+    const op = next?.opacity ?? value.opacity;
+    setCss(toCss(rr, gg, bb, op / 100));
     onChange({ ...value, color, ...next });
   };
 
@@ -103,8 +140,12 @@ export function FillPicker({
 
   const hueCss = `hsl(${hsv.h} 100% 50%)`;
   const left = Math.max(8, Math.min(anchor.left - 248, window.innerWidth - 256));
-  const top = Math.max(8, Math.min(anchor.top, window.innerHeight - 420));
+  const top = Math.max(8, Math.min(anchor.top, window.innerHeight - 520));
   const rgb = hsvToRgb(hsv.h, hsv.s, hsv.v);
+  const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
+  const image = value.type === "image";
+  const gradient =
+    value.type === "linear" || value.type === "radial" || value.type === "angular" || value.type === "diamond";
   const docs = useMemo(() => {
     const seen = new Set<string>();
     const out: string[] = [];
@@ -116,6 +157,141 @@ export function FillPicker({
     }
     return out.slice(0, 16);
   }, [recents]);
+
+  const setType = (id: FillType) => {
+    const handles = handlesForFill(id);
+    const color = id !== "image" && isNone(value.color) ? "#d9d9d9" : value.color;
+    onChange({
+      ...value,
+      type: id,
+      color,
+      ...(handles
+        ? { gx: handles.fillGX, gy: handles.fillGY, hx: handles.fillHX, hy: handles.fillHY }
+        : {}),
+    });
+    setTypeOpen(false);
+  };
+
+  const rotHandles = () => {
+    const gx = value.gx ?? 0.5;
+    const gy = value.gy ?? 0;
+    const hx = value.hx ?? 0.5;
+    const hy = value.hy ?? 1;
+    onChange({
+      ...value,
+      gx: 0.5 - (gy - 0.5),
+      gy: 0.5 + (gx - 0.5),
+      hx: 0.5 - (hy - 0.5),
+      hy: 0.5 + (hx - 0.5),
+    });
+  };
+
+  const modelFields = () => {
+    if (model === "hex") {
+      return (
+        <input
+          className="hex"
+          value={hex}
+          spellCheck={false}
+          onChange={(e) => {
+            const v = e.target.value.replace(/[^0-9a-fA-F]/g, "").slice(0, 8);
+            setHex(v);
+            if (v.length === 6 || v.length === 3 || v.length === 8 || v.length === 4) {
+              const p = parseHex("#" + v);
+              applyRgb(p.r, p.g, p.b, v.length === 8 || v.length === 4 ? { opacity: Math.round(p.a * 100) } : undefined);
+            }
+          }}
+        />
+      );
+    }
+    if (model === "css") {
+      return (
+        <input
+          className="hex css-field"
+          value={css}
+          spellCheck={false}
+          onChange={(e) => {
+            setCss(e.target.value);
+            const p = parseCssColor(e.target.value);
+            if (p) applyRgb(p.r, p.g, p.b, { opacity: Math.round(p.a * 100) });
+          }}
+        />
+      );
+    }
+    if (model === "rgb") {
+      return (
+        <span className="rgb-read">
+          {(["r", "g", "b"] as const).map((ch) => (
+            <input
+              key={ch}
+              className="op"
+              value={rgb[ch]}
+              onChange={(e) => {
+                const n = parseInt(e.target.value, 10);
+                if (Number.isNaN(n)) return;
+                const next = { ...rgb, [ch]: Math.max(0, Math.min(255, n)) };
+                applyRgb(next.r, next.g, next.b);
+              }}
+            />
+          ))}
+        </span>
+      );
+    }
+    if (model === "hsl") {
+      const vals = [
+        { k: "h", v: Math.round(hsl.h), min: 0, max: 360 },
+        { k: "s", v: Math.round(hsl.s * 100), min: 0, max: 100 },
+        { k: "l", v: Math.round(hsl.l * 100), min: 0, max: 100 },
+      ] as const;
+      return (
+        <span className="rgb-read">
+          {vals.map((f) => (
+            <input
+              key={f.k}
+              className="op"
+              value={f.v}
+              onChange={(e) => {
+                const n = parseFloat(e.target.value);
+                if (Number.isNaN(n)) return;
+                const next = {
+                  h: f.k === "h" ? Math.max(0, Math.min(360, n)) : hsl.h,
+                  s: f.k === "s" ? Math.max(0, Math.min(100, n)) / 100 : hsl.s,
+                  l: f.k === "l" ? Math.max(0, Math.min(100, n)) / 100 : hsl.l,
+                };
+                const rgbv = hslToRgb(next.h, next.s, next.l);
+                applyRgb(rgbv.r, rgbv.g, rgbv.b);
+              }}
+            />
+          ))}
+        </span>
+      );
+    }
+    const vals = [
+      { k: "h", v: Math.round(hsv.h), min: 0, max: 360 },
+      { k: "s", v: Math.round(hsv.s * 100), min: 0, max: 100 },
+      { k: "b", v: Math.round(hsv.v * 100), min: 0, max: 100 },
+    ] as const;
+    return (
+      <span className="rgb-read">
+        {vals.map((f) => (
+          <input
+            key={f.k}
+            className="op"
+            value={f.v}
+            onChange={(e) => {
+              const n = parseFloat(e.target.value);
+              if (Number.isNaN(n)) return;
+              applyHsv(
+                f.k === "h" ? Math.max(0, Math.min(360, n)) : hsv.h,
+                f.k === "s" ? Math.max(0, Math.min(100, n)) / 100 : hsv.s,
+                f.k === "b" ? Math.max(0, Math.min(100, n)) / 100 : hsv.v,
+              );
+            }}
+          />
+        ))}
+      </span>
+    );
+  };
 
   return createPortal(
     <div className="fill-pop" style={{ left, top }} role="dialog" aria-label={title}>
@@ -130,10 +306,7 @@ export function FillPicker({
               <button
                 key={t.id}
                 className={value.type === t.id ? "on" : ""}
-                onClick={() => {
-                  onChange({ ...value, type: t.id });
-                  setTypeOpen(false);
-                }}
+                onClick={() => setType(t.id)}
               >
                 {t.label}
                 {value.type === t.id && <span className="sc">✓</span>}
@@ -153,40 +326,44 @@ export function FillPicker({
         </button>
       </div>
 
-      <div
-        className="sv"
-        ref={sv}
-        style={{ background: hueCss }}
-        onPointerDown={(e) =>
-          drag(sv.current, e, (x, y, box) => {
-            const s = Math.max(0, Math.min(1, (x - box.left) / box.width));
-            const v = Math.max(0, Math.min(1, 1 - (y - box.top) / box.height));
-            applyHsv(hsv.h, s, v);
-          })
-        }
-      >
-        <i
-          className="sv-cursor"
-          style={{
-            left: `${hsv.s * 100}%`,
-            top: `${(1 - hsv.v) * 100}%`,
-            background: toHex(rgb.r, rgb.g, rgb.b),
-          }}
-        />
-      </div>
+      {!image && (
+        <>
+          <div
+            className="sv"
+            ref={sv}
+            style={{ background: hueCss }}
+            onPointerDown={(e) =>
+              drag(sv.current, e, (x, y, box) => {
+                const s = Math.max(0, Math.min(1, (x - box.left) / box.width));
+                const v = Math.max(0, Math.min(1, 1 - (y - box.top) / box.height));
+                applyHsv(hsv.h, s, v);
+              })
+            }
+          >
+            <i
+              className="sv-cursor"
+              style={{
+                left: `${hsv.s * 100}%`,
+                top: `${(1 - hsv.v) * 100}%`,
+                background: toHex(rgb.r, rgb.g, rgb.b),
+              }}
+            />
+          </div>
 
-      <div
-        className="hue"
-        ref={hue}
-        onPointerDown={(e) =>
-          drag(hue.current, e, (x, _, box) => {
-            const h = Math.max(0, Math.min(360, ((x - box.left) / box.width) * 360));
-            applyHsv(h, hsv.s, hsv.v);
-          })
-        }
-      >
-        <i className="hue-mark" style={{ left: `${(hsv.h / 360) * 100}%` }} />
-      </div>
+          <div
+            className="hue"
+            ref={hue}
+            onPointerDown={(e) =>
+              drag(hue.current, e, (x, _, box) => {
+                const h = Math.max(0, Math.min(360, ((x - box.left) / box.width) * 360));
+                applyHsv(h, hsv.s, hsv.v);
+              })
+            }
+          >
+            <i className="hue-mark" style={{ left: `${(hsv.h / 360) * 100}%` }} />
+          </div>
+        </>
+      )}
 
       <div
         className="op-track"
@@ -197,6 +374,7 @@ export function FillPicker({
         onPointerDown={(e) =>
           drag(op.current, e, (x, _, box) => {
             const o = Math.round(Math.max(0, Math.min(1, (x - box.left) / box.width)) * 100);
+            setCss(toCss(rgb.r, rgb.g, rgb.b, o / 100));
             onChange({ ...value, opacity: o });
           })
         }
@@ -204,56 +382,41 @@ export function FillPicker({
         <i className="hue-mark" style={{ left: `${value.opacity}%` }} />
       </div>
 
-      <div className="hex-row">
-        <span className="swatch" style={{ background: toHex(rgb.r, rgb.g, rgb.b) }} />
-        <button className="model" onClick={() => setModel((m) => (m === "hex" ? "rgb" : "hex"))}>
-          {model.toUpperCase()}
-        </button>
-        {model === "hex" ? (
+      {!image && (
+        <div className="hex-row">
+          <span className="swatch" style={{ background: toHex(rgb.r, rgb.g, rgb.b) }} />
+          <button
+            className="model"
+            title="Color model (Tab)"
+            onClick={() => setModel((m) => nextColorModel(m))}
+          >
+            {COLOR_MODELS.find((m) => m.id === model)?.label ?? "Hex"}
+          </button>
+          {modelFields()}
           <input
-            className="hex"
-            value={hex}
+            className="op"
+            value={`${Math.round(value.opacity)}%`}
             onChange={(e) => {
-              const v = e.target.value.replace(/[^0-9a-fA-F]/g, "").slice(0, 6);
-              setHex(v);
-              if (v.length === 6) applyRgb(...hexToRgb("#" + v));
+              const n = parseFloat(e.target.value);
+              if (!Number.isNaN(n)) {
+                const o = Math.max(0, Math.min(100, n));
+                setCss(toCss(rgb.r, rgb.g, rgb.b, o / 100));
+                onChange({ ...value, opacity: o });
+              }
             }}
           />
-        ) : (
-          <span className="rgb-read">
-            {(["r", "g", "b"] as const).map((ch) => (
-              <input
-                key={ch}
-                className="op"
-                value={rgb[ch]}
-                onChange={(e) => {
-                  const n = parseInt(e.target.value, 10);
-                  if (Number.isNaN(n)) return;
-                  const next = { ...rgb, [ch]: Math.max(0, Math.min(255, n)) };
-                  applyRgb(next.r, next.g, next.b);
-                }}
-              />
-            ))}
-          </span>
-        )}
-        <input
-          className="op"
-          value={`${Math.round(value.opacity)}%`}
-          onChange={(e) => {
-            const n = parseFloat(e.target.value);
-            if (!Number.isNaN(n)) onChange({ ...value, opacity: Math.max(0, Math.min(100, n)) });
-          }}
-        />
-      </div>
+        </div>
+      )}
 
-      {value.type === "image" && (
-        <div className="hex-row">
-          <button
-            className="blend-row"
-            style={{ flex: 1 }}
-            onClick={() => fileRef.current?.click()}
-          >
-            Choose image
+      {image && (
+        <div className="img-fill">
+          {value.image ? (
+            <img className="img-preview" src={value.image} alt="" />
+          ) : (
+            <div className="img-preview empty-img">No image</div>
+          )}
+          <button className="blend-row" onClick={() => fileRef.current?.click()}>
+            {value.image ? "Replace image" : "Choose image"}
           </button>
           <input
             ref={fileRef}
@@ -268,32 +431,88 @@ export function FillPicker({
               reader.readAsDataURL(f);
             }}
           />
+          <div className="img-modes">
+            {IMAGE_FITS.map((f) => (
+              <button
+                key={f.id}
+                className={(value.imageFit || "fill") === f.id ? "on" : ""}
+                onClick={() => onChange({ ...value, imageFit: f.id })}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+          <button
+            className="blend-row"
+            title="Rotate fill 90°"
+            onClick={() => onChange({ ...value, imageRot: ((value.imageRot || 0) + 90) % 360 })}
+          >
+            Rotate 90°
+            <span>{value.imageRot || 0}°</span>
+          </button>
+          <div className="img-adjs">
+            {IMAGE_ADJS.map((a) => {
+              const v = value[a.key] || 0;
+              return (
+                <label className="adj-row" key={a.key}>
+                  <span>{a.label}</span>
+                  <input
+                    type="range"
+                    min={-100}
+                    max={100}
+                    value={v}
+                    onChange={(e) =>
+                      onChange({ ...value, [a.key]: parseInt(e.target.value, 10) } as FillValue)
+                    }
+                  />
+                  <em>{v}</em>
+                </label>
+              );
+            })}
+          </div>
         </div>
       )}
 
-      {(value.type === "linear" || value.type === "radial" || value.type === "angular" || value.type === "diamond") && (
+      {gradient && (
         <div className="hex-row">
           <span className="swatch" style={{ background: value.second }} />
           <span className="muted-inline">Stop 2</span>
           <input
             className="hex"
-            value={value.second.replace("#", "")}
-            onChange={(e) => onChange({ ...value, second: "#" + e.target.value.replace("#", "") })}
+            value={value.second.replace("#", "").slice(0, 8).toUpperCase()}
+            spellCheck={false}
+            onChange={(e) => {
+              const raw = e.target.value.replace(/[^0-9a-fA-F]/g, "").slice(0, 8);
+              if (raw.length === 3 || raw.length === 4 || raw.length === 6 || raw.length === 8) {
+                const p = parseHex("#" + raw);
+                onChange({ ...value, second: toHex(p.r, p.g, p.b) + (raw.length === 8 || raw.length === 4 ? Math.round(p.a * 255).toString(16).padStart(2, "0") : "") });
+              } else {
+                onChange({ ...value, second: "#" + raw });
+              }
+            }}
           />
+          <button className="icon-btn" title="Flip gradient" onClick={() => onChange({ ...value, color: value.second, second: value.color })}>
+            <Icon name="flip-h" size={14} />
+          </button>
+          <button className="icon-btn" title="Rotate gradient" onClick={rotHandles}>
+            <Icon name="rotate" size={14} />
+          </button>
         </div>
       )}
 
-      <div className="swatch-grid">
-        {docs.map((c) => (
-          <button
-            key={c}
-            className={`chip${c.toLowerCase() === value.color.toLowerCase() ? " on" : ""}`}
-            style={{ background: c }}
-            title={c}
-            onClick={() => applyRgb(...hexToRgb(c))}
-          />
-        ))}
-      </div>
+      {!image && (
+        <div className="swatch-grid">
+          {docs.map((c) => (
+            <button
+              key={c}
+              className={`chip${c.toLowerCase() === value.color.toLowerCase().slice(0, 7) ? " on" : ""}`}
+              style={{ background: c }}
+              title={c}
+              onClick={() => applyRgb(...hexToRgb(c))}
+            />
+          ))}
+        </div>
+      )}
 
       <button className="blend-row" onClick={() => setBlendOpen((v) => !v)}>
         Apply blend mode

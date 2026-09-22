@@ -24,7 +24,7 @@ import type {
 import { collectColors, defaultEffect, defaultLayout, find, framesOf, worldPos } from "../engine/memory";
 import { Icon } from "./icons";
 import { FillPicker, type FillValue } from "./FillPicker";
-import { isNone, parseHex, withAlpha } from "./color";
+import { handlesForFill, isNone, parseHex, withAlpha } from "./color";
 import { ContextMenu, runMenu } from "./ContextMenu";
 
 export function RightPanel({
@@ -1672,6 +1672,20 @@ function ColorRow({
   type = "solid",
   second = "#ffffff",
   blend = "Normal",
+  image,
+  imageFit = "fill",
+  imageRot = 0,
+  imageExposure = 0,
+  imageContrast = 0,
+  imageSaturation = 0,
+  imageTemperature = 0,
+  imageTint = 0,
+  imageHighlights = 0,
+  imageShadows = 0,
+  gx,
+  gy,
+  hx,
+  hy,
   recents = [],
   onChange,
   onOpacity,
@@ -1686,6 +1700,20 @@ function ColorRow({
   type?: FillValue["type"];
   second?: string;
   blend?: string;
+  image?: string;
+  imageFit?: FillValue["imageFit"];
+  imageRot?: number;
+  imageExposure?: number;
+  imageContrast?: number;
+  imageSaturation?: number;
+  imageTemperature?: number;
+  imageTint?: number;
+  imageHighlights?: number;
+  imageShadows?: number;
+  gx?: number;
+  gy?: number;
+  hx?: number;
+  hy?: number;
   recents?: string[];
   onChange: (v: string) => void;
   onOpacity?: (v: number) => void;
@@ -1695,14 +1723,19 @@ function ColorRow({
 }) {
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
-  const hidden = !visible || isNone(value);
+  const isImage = type === "image" || !!image;
+  const hidden = !isImage && (!visible || isNone(value));
   const hex = value.length >= 7 ? value.slice(0, 7) : "#000000";
   return (
     <div className="color-row">
       <button
         type="button"
         className="swatch"
-        style={{ background: hidden ? "transparent" : hex }}
+        style={
+          isImage && image
+            ? { backgroundImage: `url(${image})`, backgroundSize: "cover", backgroundPosition: "center" }
+            : { background: hidden ? "transparent" : hex }
+        }
         title="Color picker"
         onClick={(e) => {
           setAnchor((e.currentTarget as HTMLElement).getBoundingClientRect());
@@ -1711,9 +1744,13 @@ function ColorRow({
       />
       <input
         className="hex"
-        value={hidden ? "" : hex.replace("#", "")}
+        value={hidden ? "" : isImage ? "Image" : hex.replace("#", "")}
         placeholder="None"
-        onChange={(e) => onChange("#" + e.target.value.replace("#", ""))}
+        readOnly={isImage}
+        onChange={(e) => {
+          if (isImage) return;
+          onChange("#" + e.target.value.replace("#", ""));
+        }}
       />
       {onOpacity && (
         <input
@@ -1740,18 +1777,52 @@ function ColorRow({
       {open && anchor && (
         <FillPicker
           title={title}
-          value={{ color: hex, opacity, type, second, blend }}
+          value={{
+            color: hex,
+            opacity,
+            type: isImage ? "image" : type,
+            second,
+            blend,
+            image,
+            imageFit,
+            imageRot,
+            imageExposure,
+            imageContrast,
+            imageSaturation,
+            imageTemperature,
+            imageTint,
+            imageHighlights,
+            imageShadows,
+            gx,
+            gy,
+            hx,
+            hy,
+          }}
           recents={recents}
           anchor={anchor}
           onChange={(v) => {
             onChange(v.color);
             onOpacity?.(v.opacity);
+            const handles = v.type !== type ? handlesForFill(v.type) : null;
             onMeta?.({
               fillType: v.type,
               fillB: v.second,
               fillBlend: v.blend,
               fillVisible: true,
-              ...(v.image ? { imageSrc: v.image } : {}),
+              ...(v.image != null ? { imageSrc: v.image } : {}),
+              ...(v.imageFit ? { imageFit: v.imageFit } : {}),
+              ...(v.imageRot != null ? { imageRot: v.imageRot } : {}),
+              imageExposure: v.imageExposure ?? 0,
+              imageContrast: v.imageContrast ?? 0,
+              imageSaturation: v.imageSaturation ?? 0,
+              imageTemperature: v.imageTemperature ?? 0,
+              imageTint: v.imageTint ?? 0,
+              imageHighlights: v.imageHighlights ?? 0,
+              imageShadows: v.imageShadows ?? 0,
+              ...(handles ??
+                (v.gx != null
+                  ? { fillGX: v.gx, fillGY: v.gy, fillHX: v.hx, fillHY: v.hy }
+                  : {})),
             });
           }}
           onClose={() => setOpen(false)}

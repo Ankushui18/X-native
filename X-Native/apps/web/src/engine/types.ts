@@ -35,6 +35,7 @@ export type ExportFormat = "PNG" | "JPG" | "SVG" | "PDF";
 export type RightTab = "design" | "prototype" | "inspect";
 export type LeftTab = "layers" | "assets" | "tokens";
 export type FillType = "solid" | "linear" | "radial" | "angular" | "diamond" | "image";
+export type ImageFit = "fill" | "fit" | "crop" | "tile";
 export type EffectKind =
   | "drop-shadow"
   | "inner-shadow"
@@ -169,6 +170,15 @@ export interface XNode {
   exports: ExportPreset[];
   blendMode: string;
   imageSrc: string;
+  imageFit: ImageFit;
+  imageRot: number;
+  imageExposure: number;
+  imageContrast: number;
+  imageSaturation: number;
+  imageTemperature: number;
+  imageTint: number;
+  imageHighlights: number;
+  imageShadows: number;
   text: string;
   fontFamily: string;
   fontSize: number;

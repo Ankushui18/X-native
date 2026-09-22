@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Engine, NodeKind, PathPoint, Snapshot, Tool, XNode } from "../engine/types";
 import { deepestFrame, find, findParent, hitTest, worldPos } from "../engine/memory";
 import { shapePoly } from "../engine/geometry";
-import { fillStyle, paintDropShadows, paintFill, paintInnerShadows } from "../engine/paint";
+import { fillStyle, paintDropShadows, paintFill, paintImageFill, paintInnerShadows } from "../engine/paint";
 import { useTheme } from "./theme";
 import { cssRgba, isNone, takeEyedrop, toHex } from "./color";
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
@@ -301,7 +301,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         (n.fillVisible !== false && !!n.fill && !isNone(n.fill) && n.kind !== "line" && n.kind !== "arrow") ||
         (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint));
       if (canShadow) paintDropShadows(ctx, n, z);
-      if (n.imageSrc || n.fillType === "image") {
+      if (n.fillType === "image" || (n.imageSrc && isNone(n.fill))) {
         let im = n.imageSrc ? imgs.current.get(n.imageSrc) : undefined;
         if (n.imageSrc && !im) {
           im = new Image();
@@ -311,8 +311,9 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         }
         if (im?.complete && im.naturalWidth) {
           ctx.save();
-          ctx.clip();
-          ctx.drawImage(im, sx, sy, sw, sh);
+          ctx.globalAlpha *= n.fillOpacity ?? 1;
+          ctx.globalCompositeOperation = canvasBlend(n.fillBlend);
+          paintImageFill(ctx, n, im, sx, sy, sw, sh);
           ctx.restore();
         }
       } else if (
@@ -1273,7 +1274,14 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             y: oy,
             w: Math.max(8, w * s),
             h: Math.max(8, h * s),
-            extra: { imageSrc: src, name: file.name.replace(/\.[^.]+$/, ""), fill: "#00000000" },
+            extra: {
+              imageSrc: src,
+              fillType: "image",
+              imageFit: "fill",
+              name: file.name.replace(/\.[^.]+$/, ""),
+              fill: "#00000000",
+              fillVisible: true,
+            },
           });
           ox += 24;
           oy += 24;
