@@ -46,6 +46,7 @@ function node(
     fillVisible: !(kind === "line" || kind === "arrow"),
     fillType: "solid",
     fillB: "#ffffff",
+    gradientStops: [],
     fillBlend: "Normal",
     strokePaint: kind === "line" || kind === "arrow" ? "#1e1e1e" : "#00000000",
     strokeOpacity: 1,
@@ -593,6 +594,41 @@ export class MemoryEngine implements Engine {
           n.x = cmd.x;
           n.y = cmd.y;
           dest.children.push(n);
+        }
+        break;
+      }
+      case "reorder": {
+        const root = this.root();
+        const dest = find(root, cmd.parent) ?? root;
+        // Absolute position is preserved across the move, so dragging a layer
+        // into a frame in the panel does not teleport it on the canvas.
+        const moving: { node: XNode; wx: number; wy: number }[] = [];
+        for (const id of cmd.ids) {
+          const n = find(root, id);
+          const wp = worldPos(root, id);
+          // Refuse to drop a node into itself or its own subtree.
+          if (!n || n.locked || id === dest.id || find(n, dest.id)) continue;
+          moving.push({ node: n, wx: wp?.x ?? n.x, wy: wp?.y ?? n.y });
+        }
+        if (!moving.length) break;
+        // Count how many of the moved nodes sit before the target slot in the
+        // destination, so the index still points at the intended gap after
+        // they are spliced out.
+        let index = cmd.index;
+        for (const { node } of moving) {
+          const at = dest.children.indexOf(node);
+          if (at >= 0 && at < index) index--;
+        }
+        for (const { node } of moving) {
+          const p = findParent(root, node.id);
+          if (p) p.children = p.children.filter((c) => c.id !== node.id);
+        }
+        const destWorld = dest === root ? { x: 0, y: 0 } : worldPos(root, dest.id);
+        index = Math.max(0, Math.min(index, dest.children.length));
+        dest.children.splice(index, 0, ...moving.map((m) => m.node));
+        for (const m of moving) {
+          m.node.x = m.wx - (destWorld?.x ?? 0);
+          m.node.y = m.wy - (destWorld?.y ?? 0);
         }
         break;
       }

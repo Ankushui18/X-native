@@ -992,6 +992,7 @@ function Design({
             gy={n.fillGY}
             hx={n.fillHX}
             hy={n.fillHY}
+            stops={n.gradientStops}
             recents={collectColors(snap.pages[snap.page].root)}
             onChange={(fill) => engine.dispatch({ type: "patch", id: n.id, patch: { fill, fillVisible: true } })}
             onOpacity={(v) =>
@@ -1827,6 +1828,7 @@ function fillValuePatch(v: FillValue): Partial<XNode> {
     fillVisible: true,
     fillType: type,
     fillB: v.second,
+    gradientStops: v.stops ?? [],
     fillBlend: v.blend,
     imageSrc: type === "image" ? v.image || "" : "",
     imageFit: v.imageFit || "fill",
@@ -1868,6 +1870,7 @@ function ColorRow({
   gy,
   hx,
   hy,
+  stops,
   recents = [],
   onChange,
   onOpacity,
@@ -1897,6 +1900,7 @@ function ColorRow({
   gy?: number;
   hx?: number;
   hy?: number;
+  stops?: FillValue["stops"];
   recents?: string[];
   onChange: (v: string) => void;
   onOpacity?: (v: number) => void;
@@ -1981,6 +1985,7 @@ function ColorRow({
             gy,
             hx,
             hy,
+            stops,
           }}
           recents={recents}
           anchor={anchor}

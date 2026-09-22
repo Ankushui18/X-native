@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import type { GradientStop } from "../engine/types";
 import { Icon } from "./icons";
 import {
   armEyedrop,
@@ -47,6 +48,17 @@ export interface FillValue {
   gy?: number;
   hx?: number;
   hy?: number;
+  /** Multi-stop ramp; empty falls back to the `color`/`second` pair. */
+  stops?: GradientStop[];
+}
+
+/** Resolve the ramp a gradient should show, materialising the legacy pair. */
+function rampOf(v: FillValue): GradientStop[] {
+  if (v.stops && v.stops.length >= 2) return [...v.stops].sort((a, b) => a.position - b.position);
+  return [
+    { color: v.color, position: 0 },
+    { color: v.second, position: 1 },
+  ];
 }
 
 export function FillPicker({
@@ -72,6 +84,8 @@ export function FillPicker({
   const [model, setModel] = useState<ColorModel>("hex");
   const [typeOpen, setTypeOpen] = useState(false);
   const [blendOpen, setBlendOpen] = useState(false);
+  /** Index of the gradient stop the colour area is currently editing. */
+  const [stopIdx, setStopIdx] = useState(0);
   const sv = useRef<HTMLDivElement>(null);
   const hue = useRef<HTMLDivElement>(null);
   const op = useRef<HTMLDivElement>(null);
@@ -120,6 +134,26 @@ export function FillPicker({
     setHsv(rgbToHsv(rr, gg, bb));
     const op = next?.opacity ?? value.opacity;
     setCss(toCss(rr, gg, bb, op / 100));
+    const isGradient =
+      value.type === "linear" ||
+      value.type === "radial" ||
+      value.type === "angular" ||
+      value.type === "diamond";
+    if (isGradient) {
+      // The colour area edits whichever stop is selected, not just `color`.
+      const ramp = rampOf(value);
+      const i = Math.min(stopIdx, ramp.length - 1);
+      const stops = ramp.map((s, k) => (k === i ? { ...s, color } : s));
+      onChange({
+        ...value,
+        stops,
+        // Keep the legacy pair in sync so older render paths stay correct.
+        color: stops[0].color,
+        second: stops[stops.length - 1].color,
+        ...next,
+      });
+      return;
+    }
     onChange({ ...value, color, ...next });
   };
 
@@ -481,30 +515,13 @@ export function FillPicker({
       )}
 
       {gradient && (
-        <div className="hex-row">
-          <span className="swatch" style={{ background: value.second }} />
-          <span className="muted-inline">Stop 2</span>
-          <input
-            className="hex"
-            value={value.second.replace("#", "").slice(0, 8).toUpperCase()}
-            spellCheck={false}
-            onChange={(e) => {
-              const raw = e.target.value.replace(/[^0-9a-fA-F]/g, "").slice(0, 8);
-              if (raw.length === 3 || raw.length === 4 || raw.length === 6 || raw.length === 8) {
-                const p = parseHex("#" + raw);
-                onChange({ ...value, second: toHex(p.r, p.g, p.b) + (raw.length === 8 || raw.length === 4 ? Math.round(p.a * 255).toString(16).padStart(2, "0") : "") });
-              } else {
-                onChange({ ...value, second: "#" + raw });
-              }
-            }}
-          />
-          <button className="icon-btn" title="Flip gradient" onClick={() => onChange({ ...value, color: value.second, second: value.color })}>
-            <Icon name="flip-h" size={14} />
-          </button>
-          <button className="icon-btn" title="Rotate gradient" onClick={rotHandles}>
-            <Icon name="rotate" size={14} />
-          </button>
-        </div>
+        <GradientStops
+          value={value}
+          selected={stopIdx}
+          onSelect={setStopIdx}
+          onChange={onChange}
+          onRotate={rotHandles}
+        />
       )}
 
       {!image && (
@@ -553,4 +570,160 @@ export function FillPicker({
 function hexToRgb(c: string): [number, number, number] {
   const { r, g, b } = parseHex(c);
   return [r, g, b];
+}
+
+/**
+ * Figma-style gradient ramp editor: a preview bar with draggable stop handles,
+ * click-empty-space to insert, double-click / Delete to remove.
+ */
+function GradientStops({
+  value,
+  selected,
+  onSelect,
+  onChange,
+  onRotate,
+}: {
+  value: FillValue;
+  selected: number;
+  onSelect: (i: number) => void;
+  onChange: (v: FillValue) => void;
+  onRotate: () => void;
+}) {
+  const bar = useRef<HTMLDivElement>(null);
+  const stops = rampOf(value);
+  const idx = Math.min(selected, stops.length - 1);
+
+  /** Write a ramp back, keeping the legacy first/last pair in sync. */
+  const commit = (next: GradientStop[]) => {
+    const sorted = [...next].sort((a, b) => a.position - b.position);
+    onChange({
+      ...value,
+      stops: sorted,
+      color: sorted[0].color,
+      second: sorted[sorted.length - 1].color,
+    });
+    return sorted;
+  };
+
+  const css = `linear-gradient(to right, ${stops
+    .map((s) => `${s.color} ${(s.position * 100).toFixed(1)}%`)
+    .join(", ")})`;
+
+  const dragStop = (i: number, e: React.PointerEvent) => {
+    e.stopPropagation();
+    onSelect(i);
+    const el = bar.current;
+    if (!el) return;
+    const id = stops[i];
+    const move = (ev: PointerEvent) => {
+      const r = el.getBoundingClientRect();
+      const t = Math.max(0, Math.min(1, (ev.clientX - r.left) / Math.max(1, r.width)));
+      const next = stops.map((s) => (s === id ? { ...s, position: t } : s));
+      const sorted = commit(next);
+      onSelect(sorted.findIndex((s) => s.color === id.color && s.position === t));
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  return (
+    <div className="grad-editor">
+      <div
+        className="grad-bar"
+        ref={bar}
+        style={{ background: css }}
+        onPointerDown={(e) => {
+          // Clicking the bar inserts a stop sampled from the ramp at that point.
+          const r = e.currentTarget.getBoundingClientRect();
+          const t = Math.max(0, Math.min(1, (e.clientX - r.left) / Math.max(1, r.width)));
+          let after = stops.findIndex((s) => s.position > t);
+          if (after < 0) after = stops.length;
+          const before = Math.max(0, after - 1);
+          const sorted = commit([...stops, { color: stops[before].color, position: t }]);
+          onSelect(sorted.findIndex((s) => s.position === t));
+        }}
+      >
+        {stops.map((s, i) => (
+          <button
+            key={`${i}-${s.position}`}
+            className={`grad-stop${i === idx ? " on" : ""}`}
+            style={{ left: `${s.position * 100}%`, background: s.color }}
+            title={`${s.color} · ${Math.round(s.position * 100)}%`}
+            onPointerDown={(e) => dragStop(i, e)}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              if (stops.length <= 2) return;
+              commit(stops.filter((_, k) => k !== i));
+              onSelect(Math.max(0, i - 1));
+            }}
+          />
+        ))}
+      </div>
+      <div className="hex-row">
+        <span className="swatch" style={{ background: stops[idx].color }} />
+        <span className="muted-inline">Stop {idx + 1}</span>
+        <input
+          className="hex"
+          value={stops[idx].color.replace("#", "").slice(0, 8).toUpperCase()}
+          spellCheck={false}
+          onChange={(e) => {
+            const raw = e.target.value.replace(/[^0-9a-fA-F]/g, "").slice(0, 8);
+            const color =
+              raw.length === 3 || raw.length === 4 || raw.length === 6 || raw.length === 8
+                ? (() => {
+                    const p = parseHex("#" + raw);
+                    return (
+                      toHex(p.r, p.g, p.b) +
+                      (raw.length === 8 || raw.length === 4
+                        ? Math.round(p.a * 255).toString(16).padStart(2, "0")
+                        : "")
+                    );
+                  })()
+                : "#" + raw;
+            commit(stops.map((s, k) => (k === idx ? { ...s, color } : s)));
+          }}
+        />
+        <input
+          className="hex grad-pos"
+          value={Math.round(stops[idx].position * 100)}
+          spellCheck={false}
+          onChange={(e) => {
+            const p = parseInt(e.target.value.replace(/[^0-9]/g, ""), 10);
+            if (isNaN(p)) return;
+            commit(
+              stops.map((s, k) =>
+                k === idx ? { ...s, position: Math.max(0, Math.min(100, p)) / 100 } : s,
+              ),
+            );
+          }}
+        />
+        <button
+          className="icon-btn"
+          title="Remove stop"
+          disabled={stops.length <= 2}
+          onClick={() => {
+            if (stops.length <= 2) return;
+            commit(stops.filter((_, k) => k !== idx));
+            onSelect(Math.max(0, idx - 1));
+          }}
+        >
+          <Icon name="trash" size={14} />
+        </button>
+        <button
+          className="icon-btn"
+          title="Reverse gradient"
+          onClick={() => commit(stops.map((s) => ({ ...s, position: 1 - s.position })))}
+        >
+          <Icon name="flip-h" size={14} />
+        </button>
+        <button className="icon-btn" title="Rotate gradient" onClick={onRotate}>
+          <Icon name="rotate" size={14} />
+        </button>
+      </div>
+    </div>
+  );
 }

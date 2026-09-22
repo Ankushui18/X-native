@@ -86,6 +86,18 @@ export interface ExportPreset {
   suffix: string;
 }
 
+/**
+ * One colour stop on a gradient ramp.
+ *
+ * `position` is 0..1 along the gradient axis. When `XNode.gradientStops` is
+ * empty the renderer falls back to the legacy two-colour `fill` → `fillB`
+ * ramp, so existing documents keep working.
+ */
+export interface GradientStop {
+  color: string;
+  position: number;
+}
+
 export interface Effect {
   kind: EffectKind;
   color: string;
@@ -142,6 +154,11 @@ export interface XNode {
   fillVisible: boolean;
   fillType: FillType;
   fillB: string;
+  /**
+   * Multi-stop gradient ramp. Empty means "use the legacy `fill`/`fillB` pair";
+   * two or more entries take precedence over it.
+   */
+  gradientStops: GradientStop[];
   fillBlend: string;
   strokePaint: string;
   strokeOpacity: number;
@@ -262,6 +279,12 @@ export type Command =
   | { type: "move"; ids: string[]; dx: number; dy: number }
   | { type: "resize"; id: string; x: number; y: number; w: number; h: number; scaleProps?: boolean }
   | { type: "reparent"; ids: string[]; parent: string; x: number; y: number }
+  /**
+   * Move layers to an explicit slot in a parent's child list, preserving their
+   * on-canvas position. This is what the layers-panel drag uses; `reparent`
+   * always appends and is driven by canvas coordinates instead.
+   */
+  | { type: "reorder"; ids: string[]; parent: string; index: number }
   | { type: "delete" }
   | { type: "duplicate" }
   | { type: "undo" }

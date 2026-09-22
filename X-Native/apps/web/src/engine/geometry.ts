@@ -245,3 +245,63 @@ export function outlineStroke(path: PathPoint[], width: number, closed: boolean)
   }
   return [...left, ...right.reverse()];
 }
+
+/**
+ * Ramer–Douglas–Peucker simplification over anchor positions.
+ *
+ * Mirrors `x-editor::vector_edit::simplify_path`. The freehand tools capture a
+ * raw mouse sample every pointermove, which yields hundreds of near-duplicate
+ * anchors; without this a single pencil stroke is both visually jagged and
+ * expensive to hit-test.
+ */
+export function simplifyPath(pts: PathPoint[], tolerance: number): PathPoint[] {
+  if (pts.length < 3 || tolerance <= 0) return pts;
+  return simplify(pts, tolerance);
+}
+
+/**
+ * Fit smooth bezier handles through a polyline (Catmull–Rom → cubic).
+ *
+ * `tension` 0 gives a polyline, 1 is very loose; Figma's pencil sits near 0.5.
+ * Handles are stored relative to their anchor, matching `PathPoint`.
+ */
+export function smoothPath(pts: PathPoint[], closed: boolean, tension = 0.5): PathPoint[] {
+  if (pts.length < 3) return pts;
+  const n = pts.length;
+  const k = tension / 3;
+  return pts.map((p, i) => {
+    const prev = pts[i === 0 ? (closed ? n - 1 : 0) : i - 1];
+    const next = pts[i === n - 1 ? (closed ? 0 : n - 1) : i + 1];
+    const dx = next.x - prev.x;
+    const dy = next.y - prev.y;
+    return { x: p.x, y: p.y, ix: -dx * k, iy: -dy * k, ox: dx * k, oy: dy * k };
+  });
+}
+
+/**
+ * Erase the part of an open polyline that falls inside a circular brush.
+ *
+ * Returns one entry per surviving run, so erasing through the middle of a
+ * stroke splits it into two paths — which is what Figma's eraser does to
+ * vector geometry, rather than deleting the whole layer.
+ */
+export function erasePath(
+  pts: PathPoint[],
+  cx: number,
+  cy: number,
+  radius: number,
+): PathPoint[][] {
+  if (!pts.length) return [];
+  const runs: PathPoint[][] = [];
+  let run: PathPoint[] = [];
+  for (const p of pts) {
+    if (Math.hypot(p.x - cx, p.y - cy) <= radius) {
+      if (run.length > 1) runs.push(run);
+      run = [];
+    } else {
+      run.push(p);
+    }
+  }
+  if (run.length > 1) runs.push(run);
+  return runs;
+}

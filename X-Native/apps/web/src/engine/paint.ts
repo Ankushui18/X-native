@@ -1,4 +1,4 @@
-import type { XNode } from "./types";
+import type { GradientStop, XNode } from "./types";
 import { cssRgba, parseHex, toHexA } from "../ui/color";
 
 /** Linear sRGB → OKLab mix so ramps are smoother than canvas sRGB (and Figma’s default). */
@@ -54,13 +54,49 @@ function oklabToRgb(L: number, a: number, b: number): [number, number, number] {
   ];
 }
 
-function ramp(g: CanvasGradient, a: string, b: string) {
-  const steps = 8;
-  for (let i = 0; i <= steps; i++) {
-    try {
-      g.addColorStop(i / steps, mixHex(a, b, i / steps));
-    } catch {
-      /* invalid stop */
+/**
+ * Resolve a node's ramp to a sorted stop list, falling back to the legacy
+ * two-colour `fill`/`fillB` pair when no explicit stops are authored.
+ */
+function stopsOf(n: XNode): GradientStop[] {
+  const raw = n.gradientStops ?? [];
+  if (raw.length >= 2) {
+    return [...raw].sort((p, q) => p.position - q.position);
+  }
+  return [
+    { color: n.fill, position: 0 },
+    { color: n.fillB || "#ffffff", position: 1 },
+  ];
+}
+
+/**
+ * Paint a ramp onto a canvas gradient.
+ *
+ * Each adjacent pair is subdivided and interpolated in OKLab, which keeps
+ * mid-tones from going grey the way canvas' native sRGB interpolation does.
+ */
+/** Compress a ramp into 0..0.5 and mirror it into 0.5..1 for conic sweeps. */
+function conicStops(stops: GradientStop[]): GradientStop[] {
+  const fwd = stops.map((s) => ({ color: s.color, position: s.position / 2 }));
+  const back = [...stops]
+    .reverse()
+    .map((s) => ({ color: s.color, position: 1 - s.position / 2 }));
+  return [...fwd, ...back];
+}
+
+function ramp(g: CanvasGradient, stops: GradientStop[]) {
+  const per = 6;
+  for (let i = 0; i < stops.length - 1; i++) {
+    const a = stops[i];
+    const b = stops[i + 1];
+    for (let k = 0; k <= per; k++) {
+      const t = k / per;
+      const pos = a.position + (b.position - a.position) * t;
+      try {
+        g.addColorStop(Math.max(0, Math.min(1, pos)), mixHex(a.color, b.color, t));
+      } catch {
+        /* invalid stop */
+      }
     }
   }
 }
@@ -73,15 +109,15 @@ export function fillStyle(
   sw: number,
   sh: number,
 ): string | CanvasGradient {
-  const a = n.fill;
-  const b = n.fillB || "#ffffff";
+  const stops = stopsOf(n);
+  const a = stops[0].color;
   const gx = n.fillGX ?? 0.5;
   const gy = n.fillGY ?? 0;
   const hx = n.fillHX ?? 0.5;
   const hy = n.fillHY ?? 1;
   if (n.fillType === "linear") {
     const g = ctx.createLinearGradient(sx + gx * sw, sy + gy * sh, sx + hx * sw, sy + hy * sh);
-    ramp(g, a, b);
+    ramp(g, stops);
     return g;
   }
   if (n.fillType === "radial") {
@@ -89,22 +125,13 @@ export function fillStyle(
     const cy = sy + gy * sh;
     const r = Math.hypot((hx - gx) * sw, (hy - gy) * sh) || Math.max(sw, sh) / 2;
     const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-    ramp(g, a, b);
+    ramp(g, stops);
     return g;
   }
   if (n.fillType === "angular" && typeof ctx.createConicGradient === "function") {
     const ang = Math.atan2((hy - gy) * sh, (hx - gx) * sw);
     const g = ctx.createConicGradient(ang, sx + gx * sw, sy + gy * sh);
-    const steps = 8;
-    for (let i = 0; i <= steps; i++) {
-      const t = i / steps;
-      const col = t <= 0.5 ? mixHex(a, b, t * 2) : mixHex(b, a, (t - 0.5) * 2);
-      try {
-        g.addColorStop(t, col);
-      } catch {
-        /* invalid */
-      }
-    }
+    ramp(g, conicStops(stops));
     return g;
   }
   return cssRgba(a);
@@ -119,7 +146,7 @@ export function paintFill(
   sh: number,
 ) {
   const a = n.fill;
-  const b = n.fillB || "#ffffff";
+  const stops = stopsOf(n);
   const gx = n.fillGX ?? 0.5;
   const gy = n.fillGY ?? 0;
   const hx = n.fillHX ?? 0.5;
@@ -137,7 +164,7 @@ export function paintFill(
     ctx.translate(cx, cy);
     ctx.scale(Math.max(0.001, sw * rn), Math.max(0.001, sh * rn));
     const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
-    ramp(g, a, b);
+    ramp(g, stops);
     ctx.fillStyle = g;
     ctx.fillRect(-2, -2, 4, 4);
     ctx.restore();
@@ -145,7 +172,7 @@ export function paintFill(
   }
   if (n.fillType === "linear") {
     const g = ctx.createLinearGradient(sx + gx * sw, sy + gy * sh, sx + hx * sw, sy + hy * sh);
-    ramp(g, a, b);
+    ramp(g, stops);
     ctx.fillStyle = g;
     ctx.fill();
     return;
@@ -153,16 +180,9 @@ export function paintFill(
   if (n.fillType === "angular" && typeof ctx.createConicGradient === "function") {
     const ang = Math.atan2((hy - gy) * sh, (hx - gx) * sw);
     const g = ctx.createConicGradient(ang, sx + gx * sw, sy + gy * sh);
-    const steps = 8;
-    for (let i = 0; i <= steps; i++) {
-      const t = i / steps;
-      const col = t <= 0.5 ? mixHex(a, b, t * 2) : mixHex(b, a, (t - 0.5) * 2);
-      try {
-        g.addColorStop(t, col);
-      } catch {
-        /* invalid */
-      }
-    }
+    // A cone wraps, so mirror the ramp back to the first colour at t=1 to
+    // avoid a hard seam at the sweep origin.
+    ramp(g, conicStops(stops));
     ctx.fillStyle = g;
     ctx.fill();
     return;
@@ -179,8 +199,7 @@ function paintDiamond(
   sw: number,
   sh: number,
 ) {
-  const a = n.fill;
-  const b = n.fillB || "#ffffff";
+  const stops = stopsOf(n);
   const gx = n.fillGX ?? 0.5;
   const gy = n.fillGY ?? 0.5;
   const hx = n.fillHX ?? 0.5;
@@ -208,7 +227,7 @@ function paintDiamond(
     ctx.closePath();
     ctx.clip();
     const g = ctx.createLinearGradient(cx, cy, (p[0] + q[0]) / 2, (p[1] + q[1]) / 2);
-    ramp(g, a, b);
+    ramp(g, stops);
     ctx.fillStyle = g;
     ctx.fillRect(sx - rx, sy - ry, sw + rx * 2, sh + ry * 2);
     ctx.restore();

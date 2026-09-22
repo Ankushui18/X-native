@@ -107,10 +107,33 @@ export function NavRail({
   );
 }
 
+/** Locate a node and its parent in the page tree. */
+function findNode(
+  root: XNode,
+  id: string,
+  parent: XNode | null = null,
+): { node: XNode; parent: XNode | null; id: string } | null {
+  if (root.id === id) return { node: root, parent, id };
+  for (const c of root.children) {
+    const hit = findNode(c, id, root);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 function matchesLayer(n: XNode, q: string): boolean {
   if (!q) return true;
   const needle = q.toLowerCase();
   return n.name.toLowerCase().includes(needle) || n.children.some((c) => matchesLayer(c, q));
+}
+
+/** Where a layer drag would land: above a row, below it, or inside it. */
+type DropZone = "before" | "after" | "inside";
+
+interface LayerDrag {
+  ids: string[];
+  overId: string;
+  zone: DropZone;
 }
 
 function LayerRow({
@@ -119,29 +142,95 @@ function LayerRow({
   sel,
   engine,
   q,
+  siblings,
+  drag,
+  setDrag,
+  onDrop,
 }: {
   n: XNode;
   depth: number;
   sel: string[];
   engine: Engine;
   q: string;
+  siblings: XNode[];
+  drag: LayerDrag | null;
+  setDrag: (d: LayerDrag | null) => void;
+  onDrop: (d: LayerDrag) => void;
 }) {
   const [open, setOpen] = useState(true);
   const [renaming, setRenaming] = useState(false);
   const cancelRename = useRef(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   if (!matchesLayer(n, q)) return null;
+  const container = n.kind === "frame" || n.kind === "group" || n.kind === "component";
+  const isOver = drag?.overId === n.id;
   return (
     <>
       <div
-        className={`row${sel.includes(n.id) ? " sel" : ""}${n.isComponent || n.kind === "component" || n.kind === "instance" ? " comp" : ""}${n.visible ? "" : " dim"}${n.locked ? " locked" : ""}`}
+        className={`row${sel.includes(n.id) ? " sel" : ""}${n.isComponent || n.kind === "component" || n.kind === "instance" ? " comp" : ""}${n.visible ? "" : " dim"}${n.locked ? " locked" : ""}${
+          isOver ? ` drop-${drag!.zone}` : ""
+        }${drag?.ids.includes(n.id) ? " dragging" : ""}`}
         style={{ paddingLeft: 8 + depth * 12 }}
-        onClick={() => engine.dispatch({ type: "select", ids: [n.id] })}
+        draggable={!renaming}
+        onDragStart={(e) => {
+          // Dragging an unselected row selects it first, so the drag payload
+          // always matches what the user sees highlighted.
+          const ids = sel.includes(n.id) ? sel : [n.id];
+          if (!sel.includes(n.id)) engine.dispatch({ type: "select", ids });
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", n.id);
+          setDrag({ ids, overId: n.id, zone: "after" });
+        }}
+        onDragOver={(e) => {
+          if (!drag || drag.ids.includes(n.id)) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          const r = e.currentTarget.getBoundingClientRect();
+          const t = (e.clientY - r.top) / r.height;
+          // Containers get a middle band that means "drop inside".
+          const zone: DropZone = container
+            ? t < 0.28
+              ? "before"
+              : t > 0.72
+                ? "after"
+                : "inside"
+            : t < 0.5
+              ? "before"
+              : "after";
+          if (drag.overId !== n.id || drag.zone !== zone) setDrag({ ...drag, overId: n.id, zone });
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (drag && !drag.ids.includes(n.id)) onDrop({ ...drag, overId: n.id });
+          setDrag(null);
+        }}
+        onDragEnd={() => setDrag(null)}
+        onClick={(e) => {
+          // ⌘/Ctrl toggles one row; Shift extends across the visible siblings.
+          if (e.metaKey || e.ctrlKey) {
+            const ids = sel.includes(n.id) ? sel.filter((i) => i !== n.id) : [...sel, n.id];
+            engine.dispatch({ type: "select", ids });
+            return;
+          }
+          if (e.shiftKey && sel.length) {
+            const order = siblings.map((c) => c.id);
+            const anchor = order.findIndex((id) => sel.includes(id));
+            const here = order.indexOf(n.id);
+            if (anchor >= 0 && here >= 0) {
+              const [a, b] = anchor < here ? [anchor, here] : [here, anchor];
+              const range = order.slice(a, b + 1);
+              engine.dispatch({ type: "select", ids: Array.from(new Set([...sel, ...range])) });
+              return;
+            }
+          }
+          engine.dispatch({ type: "select", ids: [n.id] });
+        }}
         onDoubleClick={() => setRenaming(true)}
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          engine.dispatch({ type: "select", ids: [n.id] });
+          if (!sel.includes(n.id)) engine.dispatch({ type: "select", ids: [n.id] });
           setMenu({ x: e.clientX, y: e.clientY });
         }}
       >
@@ -215,7 +304,18 @@ function LayerRow({
       </div>
       {open &&
         [...n.children].reverse().map((c) => (
-          <LayerRow key={c.id} n={c} depth={depth + 1} sel={sel} engine={engine} q={q} />
+          <LayerRow
+            key={c.id}
+            n={c}
+            depth={depth + 1}
+            sel={sel}
+            engine={engine}
+            q={q}
+            siblings={[...n.children].reverse()}
+            drag={drag}
+            setDrag={setDrag}
+            onDrop={onDrop}
+          />
         ))}
       {menu && (
         <ContextMenu
@@ -246,7 +346,33 @@ export function LeftPanel({
   const [q, setQ] = useState("");
   const [pagesOpen, setPagesOpen] = useState(true);
   const [pageMenuAt, setPageMenuAt] = useState<{ x: number; y: number; i: number } | null>(null);
+  const [drag, setDrag] = useState<LayerDrag | null>(null);
   const root = snap.pages[snap.page].root;
+
+  /**
+   * Translate a drop (target row + zone) into a concrete parent + child index.
+   *
+   * The panel lists children top-to-bottom in reverse z-order, so "before" in
+   * the panel means a *higher* index in `children`.
+   */
+  const onDrop = (d: LayerDrag) => {
+    const target = findNode(root, d.overId);
+    if (!target) return;
+    if (d.zone === "inside") {
+      // Dropping into a container puts the layers on top of its stack.
+      engine.dispatch({ type: "reorder", ids: d.ids, parent: target.id, index: target.node.children.length });
+      return;
+    }
+    const parent = target.parent ?? root;
+    const at = parent.children.indexOf(target.node);
+    if (at < 0) return;
+    engine.dispatch({
+      type: "reorder",
+      ids: d.ids,
+      parent: parent.id,
+      index: d.zone === "before" ? at + 1 : at,
+    });
+  };
   return (
     <aside className="panel left">
       <div className="file-head">
@@ -307,9 +433,26 @@ export function LeftPanel({
             <Icon name="chevron" size={12} />
             Layers
           </div>
-          <div className="tree">
+          <div
+            className="tree"
+            onDragOver={(e) => {
+              if (drag) e.preventDefault();
+            }}
+            onDrop={() => setDrag(null)}
+          >
             {[...root.children].reverse().map((n) => (
-              <LayerRow key={n.id} n={n} depth={0} sel={snap.selection} engine={engine} q={q} />
+              <LayerRow
+                key={n.id}
+                n={n}
+                depth={0}
+                sel={snap.selection}
+                engine={engine}
+                q={q}
+                siblings={[...root.children].reverse()}
+                drag={drag}
+                setDrag={setDrag}
+                onDrop={onDrop}
+              />
             ))}
           </div>
         </>
@@ -549,6 +692,15 @@ export function Actions({
     { label: "Intersect", sc: "⌥⇧I", run: () => engine.dispatch({ type: "boolean", op: "intersect" }) },
     { label: "Exclude", sc: "⌥⇧E", run: () => engine.dispatch({ type: "boolean", op: "exclude" }) },
     { label: "Flatten", sc: "⌘E", run: () => engine.dispatch({ type: "flatten" }) },
+    { label: "Outline stroke", sc: "⇧⌘O", run: () => engine.dispatch({ type: "outlineStroke" }) },
+    { label: "Wrap in section", sc: "", run: () => engine.dispatch({ type: "wrapSection" }) },
+    { label: "Use as mask", sc: "⌘⌥M", run: () => runMenu(engine, "useAsMask") },
+    { label: "Bring to front", sc: "⇧⌘]", run: () => engine.dispatch({ type: "arrange", dir: "front" }) },
+    { label: "Send to back", sc: "⇧⌘[", run: () => engine.dispatch({ type: "arrange", dir: "back" }) },
+    { label: "Add auto layout", sc: "⇧A", run: () => {
+      const id = engine.snapshot().selection[0];
+      if (id) engine.dispatch({ type: "autoLayout", id, layout: defaultLayout() });
+    } },
     { label: "Flip horizontal", sc: "⇧H", run: () => engine.dispatch({ type: "flip", axis: "h" }) },
     { label: "Flip vertical", sc: "⇧V", run: () => engine.dispatch({ type: "flip", axis: "v" }) },
     { label: "Zoom to 100%", sc: "⇧0", run: () => engine.dispatch({ type: "setZoom", zoom: 1 }) },
@@ -800,6 +952,11 @@ export function bindHotkeys(
     if (meta && !e.shiftKey && e.key.toLowerCase() === "e") {
       e.preventDefault();
       engine.dispatch({ type: "flatten" });
+      return;
+    }
+    if (meta && e.shiftKey && e.key.toLowerCase() === "o") {
+      e.preventDefault();
+      engine.dispatch({ type: "outlineStroke" });
       return;
     }
     if ((e.ctrlKey || meta) && e.altKey && e.key.toLowerCase() === "m") {
@@ -1103,6 +1260,8 @@ export function HelpBtn() {
               ["⌥⇧U", "Union"],
               ["⌘E", "Flatten"],
               ["⌘⌥M", "Use as mask"],
+              ["⇧⌘O", "Outline stroke"],
+              ["⌘drag", "Ignore snapping"],
             ].map(([k, l]) => (
               <div key={k} className="proto-row">
                 <span>{l}</span>
