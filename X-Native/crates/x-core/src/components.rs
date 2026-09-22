@@ -565,7 +565,11 @@ impl PropRegistry {
                                 set_exclusive_override(instance, target, OverrideValue::Number(n));
                             }
                             "opacity" => {
-                                set_exclusive_override(instance, target, OverrideValue::Opacity(n as f32));
+                                set_exclusive_override(
+                                    instance,
+                                    target,
+                                    OverrideValue::Opacity(n as f32),
+                                );
                             }
                             _ => {
                                 // Default to Number for backward compatibility
@@ -583,7 +587,11 @@ impl PropRegistry {
                 } if name == prop_name => {
                     // Parse hex color and apply to the specified target_property (fill or stroke)
                     if let Some(color) = parse_hex_color(value) {
-                        set_exclusive_override(instance, target, color_override(target_property, color));
+                        set_exclusive_override(
+                            instance,
+                            target,
+                            color_override(target_property, color),
+                        );
                         return true;
                     }
                 }

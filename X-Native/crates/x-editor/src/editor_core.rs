@@ -3502,7 +3502,11 @@ impl Editor {
                             set_exclusive_override(&mut after, target, OverrideValue::Number(n));
                         }
                         "opacity" => {
-                            set_exclusive_override(&mut after, target, OverrideValue::Opacity(n as f32));
+                            set_exclusive_override(
+                                &mut after,
+                                target,
+                                OverrideValue::Opacity(n as f32),
+                            );
                         }
                         _ => {
                             // Default to Number for backward compatibility
@@ -3523,7 +3527,11 @@ impl Editor {
             } => {
                 // Parse hex color and apply it to the bound node
                 if let Some(color) = parse_hex_color(value) {
-                    set_exclusive_override(&mut after, target, color_override(target_property, color));
+                    set_exclusive_override(
+                        &mut after,
+                        target,
+                        color_override(target_property, color),
+                    );
                     true
                 } else {
                     false

@@ -1438,6 +1438,12 @@ fn lower(
                 _ => node.lh_mode_value(),
             };
             let fills = node.active_fills();
+            let text_clip = Rect::new(0.0, 0.0, node.w.max(0.0), node.h.max(0.0)).into_path(0.1);
+            tree.commands.push(RenderCommand::PushClip {
+                key: format!("{key}/text-clip"),
+                transform: world,
+                path: text_clip,
+            });
             let text_blur = node
                 .active_effects()
                 .iter()
@@ -1558,6 +1564,7 @@ fn lower(
                     tree.commands.push(RenderCommand::PopLayer);
                 }
             }
+            tree.commands.push(RenderCommand::PopLayer);
         }
         NodeKind::Image {
             asset,

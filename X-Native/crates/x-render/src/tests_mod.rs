@@ -281,7 +281,8 @@ mod tests {
         let (scene, s) = build_scene(&d, None, &Variables::default());
         // "HELLO 123" = 8 visible glyphs (space is free) = 8 stroke paths
         assert_eq!(s.paths, 8);
-        assert_eq!(scene.encoding().n_paths, 8);
+        // The text clip contributes two scene paths in addition to the eight glyph paths.
+        assert_eq!(scene.encoding().n_paths, 10);
     }
 
     #[test]
