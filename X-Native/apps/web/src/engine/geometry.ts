@@ -2,7 +2,7 @@ import type { BooleanOp, PathPoint, XNode } from "./types";
 
 /** Sample a node's outline in local coordinates (for booleans / vector edit). */
 export function shapePoly(n: XNode, steps = 48): PathPoint[] {
-  if (n.kind === "vector" && n.path.length) return n.path.map((p) => ({ ...p }));
+  if ((n.kind === "vector" || n.kind === "boolean") && n.path.length) return n.path.map((p) => ({ ...p }));
   const w = Math.max(1, n.w);
   const h = Math.max(1, n.h);
   if (n.kind === "ellipse") {
@@ -15,23 +15,25 @@ export function shapePoly(n: XNode, steps = 48): PathPoint[] {
   }
   if (n.kind === "star") {
     const pts: PathPoint[] = [];
-    const count = Math.max(3, n.count || 5);
+    const count = Math.max(3, Math.min(60, Math.round(n.count || 5)));
     const inner = n.starRatio || 0.4;
-    const r = Math.min(w, h) / 2;
+    const rx = w / 2;
+    const ry = h / 2;
     for (let i = 0; i < count * 2; i++) {
       const a = (i * Math.PI) / count - Math.PI / 2;
-      const rad = i % 2 === 0 ? r : r * inner;
-      pts.push({ x: w / 2 + Math.cos(a) * rad, y: h / 2 + Math.sin(a) * rad });
+      const k = i % 2 === 0 ? 1 : inner;
+      pts.push({ x: w / 2 + Math.cos(a) * rx * k, y: h / 2 + Math.sin(a) * ry * k });
     }
     return pts;
   }
   if (n.kind === "poly") {
     const pts: PathPoint[] = [];
-    const count = Math.max(3, n.count || 3);
-    const r = Math.min(w, h) / 2;
+    const count = Math.max(3, Math.min(60, Math.round(n.count || 3)));
+    const rx = w / 2;
+    const ry = h / 2;
     for (let i = 0; i < count; i++) {
       const a = (i * 2 * Math.PI) / count - Math.PI / 2;
-      pts.push({ x: w / 2 + Math.cos(a) * r, y: h / 2 + Math.sin(a) * r });
+      pts.push({ x: w / 2 + Math.cos(a) * rx, y: h / 2 + Math.sin(a) * ry });
     }
     return pts;
   }
@@ -41,24 +43,49 @@ export function shapePoly(n: XNode, steps = 48): PathPoint[] {
       { x: w, y: h / 2 },
     ];
   }
-  const r = Math.min(n.cornerRadii[0] || 0, w / 2, h / 2);
-  if (r <= 0) return [
+  const raw = n.cornerIndependent ? n.cornerRadii : [n.cornerRadii[0], n.cornerRadii[0], n.cornerRadii[0], n.cornerRadii[0]];
+  const tl = Math.min(Math.max(0, raw[0] || 0), w / 2, h / 2);
+  const tr = Math.min(Math.max(0, raw[1] || 0), w / 2, h / 2);
+  const bl = Math.min(Math.max(0, raw[2] || 0), w / 2, h / 2);
+  const br = Math.min(Math.max(0, raw[3] || 0), w / 2, h / 2);
+  if (!(tl || tr || bl || br)) return [
     { x: 0, y: 0 },
     { x: w, y: 0 },
     { x: w, y: h },
     { x: 0, y: h },
   ];
-  const k = 0.5522847498 * r;
+  const k = 0.5522847498;
   return [
-    { x: r, y: 0, ix: -k, iy: 0, ox: k, oy: 0 },
-    { x: w - r, y: 0, ix: -k, iy: 0, ox: k, oy: 0 },
-    { x: w, y: r, ix: 0, iy: -k, ox: 0, oy: k },
-    { x: w, y: h - r, ix: 0, iy: -k, ox: 0, oy: k },
-    { x: w - r, y: h, ix: k, iy: 0, ox: -k, oy: 0 },
-    { x: r, y: h, ix: k, iy: 0, ox: -k, oy: 0 },
-    { x: 0, y: h - r, ix: 0, iy: k, ox: 0, oy: -k },
-    { x: 0, y: r, ix: 0, iy: k, ox: 0, oy: -k },
+    { x: tl, y: 0, ix: -tl * k, iy: 0, ox: tl * k, oy: 0 },
+    { x: w - tr, y: 0, ix: -tr * k, iy: 0, ox: tr * k, oy: 0 },
+    { x: w, y: tr, ix: 0, iy: -tr * k, ox: 0, oy: tr * k },
+    { x: w, y: h - br, ix: 0, iy: -br * k, ox: 0, oy: br * k },
+    { x: w - br, y: h, ix: br * k, iy: 0, ox: -br * k, oy: 0 },
+    { x: bl, y: h, ix: bl * k, iy: 0, ox: -bl * k, oy: 0 },
+    { x: 0, y: h - bl, ix: 0, iy: bl * k, ox: 0, oy: -bl * k },
+    { x: 0, y: tl, ix: 0, iy: tl * k, ox: 0, oy: -tl * k },
   ];
+}
+
+/** Return an outline in the node's parent coordinate system, including its local transform. */
+export function transformedPoly(n: XNode): PathPoint[] {
+  const points = shapePoly(n);
+  const cx = n.w / 2;
+  const cy = n.h / 2;
+  const a = (n.rotation * Math.PI) / 180;
+  const cos = Math.cos(a);
+  const sin = Math.sin(a);
+  return points.map((p) => {
+    const sx = n.flipH ? cx - (p.x - cx) : p.x;
+    const sy = n.flipV ? cy - (p.y - cy) : p.y;
+    const dx = sx - cx;
+    const dy = sy - cy;
+    return {
+      ...p,
+      x: cx + dx * cos - dy * sin,
+      y: cy + dx * sin + dy * cos,
+    };
+  });
 }
 
 function inside(poly: PathPoint[], x: number, y: number): boolean {

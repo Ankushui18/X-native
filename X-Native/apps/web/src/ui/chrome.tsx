@@ -30,8 +30,10 @@ export function NavRail({
   ];
   return (
     <nav className="rail">
-      <button className="logo" title="Main menu" onClick={() => setMenu((v) => !v)}>
-        <Icon name="logo" size={20} />
+      <div className="logo-wrap">
+        <button className="logo" title="Main menu" onClick={() => setMenu((v) => !v)}>
+          <Icon name="logo" size={20} />
+        </button>
         {menu && (
           <div className="menu" onMouseLeave={() => setMenu(false)}>
             <button
@@ -78,7 +80,7 @@ export function NavRail({
             ))}
           </div>
         )}
-      </button>
+      </div>
       {items.map((it) => (
         <button
           key={it.id}
@@ -105,6 +107,12 @@ export function NavRail({
   );
 }
 
+function matchesLayer(n: XNode, q: string): boolean {
+  if (!q) return true;
+  const needle = q.toLowerCase();
+  return n.name.toLowerCase().includes(needle) || n.children.some((c) => matchesLayer(c, q));
+}
+
 function LayerRow({
   n,
   depth,
@@ -120,11 +128,9 @@ function LayerRow({
 }) {
   const [open, setOpen] = useState(true);
   const [renaming, setRenaming] = useState(false);
+  const cancelRename = useRef(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-  const match = !q || n.name.toLowerCase().includes(q.toLowerCase());
-  if (!match && !n.children.some((c) => c.name.toLowerCase().includes(q.toLowerCase()))) {
-    return null;
-  }
+  if (!matchesLayer(n, q)) return null;
   return (
     <>
       <div
@@ -167,12 +173,20 @@ function LayerRow({
             defaultValue={n.name}
             onClick={(e) => e.stopPropagation()}
             onBlur={(e) => {
-              engine.dispatch({ type: "patch", id: n.id, patch: { name: e.target.value } });
+              if (!cancelRename.current) {
+                engine.dispatch({ type: "patch", id: n.id, patch: { name: e.target.value } });
+              }
+              cancelRename.current = false;
               setRenaming(false);
             }}
             onKeyDown={(e) => {
               if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-              if (e.key === "Escape") setRenaming(false);
+              if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                cancelRename.current = true;
+                (e.target as HTMLInputElement).blur();
+              }
             }}
           />
         ) : (
@@ -294,7 +308,7 @@ export function LeftPanel({
             Layers
           </div>
           <div className="tree">
-            {root.children.map((n) => (
+            {[...root.children].reverse().map((n) => (
               <LayerRow key={n.id} n={n} depth={0} sel={snap.selection} engine={engine} q={q} />
             ))}
           </div>
@@ -302,7 +316,7 @@ export function LeftPanel({
       )}
       {nav === "assets" && <AssetsPane engine={engine} snap={snap} />}
       {nav === "variables" && <VarsPane engine={engine} snap={snap} />}
-      {nav === "tools" && <ToolsPane onActions={onActions} />}
+      {nav === "tools" && <ToolsPane engine={engine} onActions={onActions} />}
       {nav === "agent" && <AgentPane engine={engine} />}
       {pageMenuAt && (
         <ContextMenu
@@ -365,7 +379,7 @@ const GROUPS: Group[] = [
       { id: "pen", label: "Pen", shortcut: "P" },
       { id: "pencil", label: "Pencil", shortcut: "⇧P" },
       { id: "brush", label: "Brush", shortcut: "B" },
-      { id: "eraser", label: "Eraser", shortcut: "⇧E" },
+      { id: "eraser", label: "Eraser", shortcut: "" },
     ],
   },
   { id: "text", tools: [{ id: "text", label: "Text", shortcut: "T" }] },
@@ -471,11 +485,13 @@ export function Toolbar({
 
 export function Actions({
   engine,
+  onPresent,
   onClose,
   onHide,
   onMinimize,
 }: {
   engine: Engine;
+  onPresent?: () => void;
   onClose: () => void;
   onHide: () => void;
   onMinimize?: () => void;
@@ -486,16 +502,19 @@ export function Actions({
     { label: "Move tool", sc: "V", run: () => engine.dispatch({ type: "setTool", tool: "select" }) },
     { label: "Scale tool", sc: "K", run: () => engine.dispatch({ type: "setTool", tool: "scale" }) },
     { label: "Frame", sc: "F", run: () => engine.dispatch({ type: "setTool", tool: "frame" }) },
+    { label: "Section", sc: "⇧S", run: () => engine.dispatch({ type: "setTool", tool: "section" }) },
+    { label: "Slice", sc: "S", run: () => engine.dispatch({ type: "setTool", tool: "slice" }) },
     { label: "Rectangle", sc: "R", run: () => engine.dispatch({ type: "setTool", tool: "rect" }) },
+    { label: "Polygon", sc: "", run: () => engine.dispatch({ type: "setTool", tool: "poly" }) },
+    { label: "Star", sc: "", run: () => engine.dispatch({ type: "setTool", tool: "star" }) },
     { label: "Ellipse", sc: "O", run: () => engine.dispatch({ type: "setTool", tool: "ellipse" }) },
     { label: "Line", sc: "L", run: () => engine.dispatch({ type: "setTool", tool: "line" }) },
     { label: "Arrow", sc: "⇧L", run: () => engine.dispatch({ type: "setTool", tool: "arrow" }) },
     { label: "Pen", sc: "P", run: () => engine.dispatch({ type: "setTool", tool: "pen" }) },
     { label: "Pencil", sc: "⇧P", run: () => engine.dispatch({ type: "setTool", tool: "pencil" }) },
     { label: "Brush", sc: "B", run: () => engine.dispatch({ type: "setTool", tool: "brush" }) },
-    { label: "Eraser", sc: "⇧E", run: () => engine.dispatch({ type: "setTool", tool: "eraser" }) },
+    { label: "Eraser", sc: "", run: () => engine.dispatch({ type: "setTool", tool: "eraser" }) },
     { label: "Text", sc: "T", run: () => engine.dispatch({ type: "setTool", tool: "text" }) },
-    { label: "Slice", sc: "S", run: () => engine.dispatch({ type: "setTool", tool: "slice" }) },
     { label: "Comment", sc: "C", run: () => engine.dispatch({ type: "setTool", tool: "comment" }) },
     { label: "Hand", sc: "H", run: () => engine.dispatch({ type: "setTool", tool: "hand" }) },
     { label: "Place image", sc: "⇧I", run: () => engine.dispatch({ type: "setTool", tool: "image" }) },
@@ -510,7 +529,14 @@ export function Actions({
     { label: "Dev Mode", sc: "⇧D", run: () => engine.dispatch({ type: "setRightTab", tab: "inspect" }) },
     { label: "Prototype", sc: "", run: () => engine.dispatch({ type: "setRightTab", tab: "prototype" }) },
     { label: "Design", sc: "", run: () => engine.dispatch({ type: "setRightTab", tab: "design" }) },
-    { label: "Present", sc: "", run: () => engine.dispatch({ type: "presentStart" }) },
+    {
+      label: "Present",
+      sc: "",
+      run: () => {
+        if (onPresent) onPresent();
+        else engine.dispatch({ type: "presentStart" });
+      },
+    },
     { label: "Theme: Light", sc: "", run: () => setPref("light") },
     { label: "Theme: Dark", sc: "", run: () => setPref("dark") },
     { label: "Theme: Graphite", sc: "", run: () => setPref("graphite") },
@@ -623,6 +649,12 @@ export function bindHotkeys(
       e.preventDefault();
       const cur = engine.snapshot().rightTab;
       engine.dispatch({ type: "setRightTab", tab: cur === "inspect" ? "design" : "inspect" });
+      return;
+    }
+    if (e.shiftKey && e.key.toLowerCase() === "e" && !meta) {
+      e.preventDefault();
+      const cur = engine.snapshot().rightTab;
+      engine.dispatch({ type: "setRightTab", tab: cur === "prototype" ? "design" : "prototype" });
       return;
     }
     if (e.altKey && extra.onNav) {
@@ -772,8 +804,7 @@ export function bindHotkeys(
     }
     if ((e.ctrlKey || meta) && e.altKey && e.key.toLowerCase() === "m") {
       e.preventDefault();
-      const id0 = engine.snapshot().selection[0];
-      if (id0) engine.dispatch({ type: "patch", id: id0, patch: { isMask: true } });
+      runMenu(engine, "useAsMask");
       return;
     }
     if (!meta && e.shiftKey && e.key.toLowerCase() === "a") {
@@ -823,7 +854,6 @@ export function bindHotkeys(
         p: "pencil",
         l: "arrow",
         i: "image",
-        e: "eraser",
       };
       const t = shifted[e.key.toLowerCase()];
       if (t) {
@@ -961,15 +991,23 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   );
 }
 
-function ToolsPane({ onActions }: { onActions?: () => void }) {
-  const tools = ["Place image", "Duplicate", "Group", "Undo", "Redo", "Zoom to 100%"];
+function ToolsPane({ engine, onActions }: { engine: Engine; onActions?: () => void }) {
+  const tools = [
+    { label: "Place image", run: () => engine.dispatch({ type: "setTool", tool: "image" }) },
+    { label: "Duplicate", run: () => engine.dispatch({ type: "duplicate" }) },
+    { label: "Group", run: () => engine.dispatch({ type: "group" }) },
+    { label: "Undo", run: () => engine.dispatch({ type: "undo" }) },
+    { label: "Redo", run: () => engine.dispatch({ type: "redo" }) },
+    { label: "Zoom to 100%", run: () => engine.dispatch({ type: "setZoom", zoom: 1 }) },
+    { label: "All actions…", run: () => onActions?.() },
+  ];
   return (
     <>
       <p className="muted">Plugins and actions for this file.</p>
       <div className="presets">
         {tools.map((t) => (
-          <button key={t} onClick={() => onActions?.()}>
-            {t}
+          <button key={t.label} onClick={t.run}>
+            {t.label}
           </button>
         ))}
       </div>
@@ -1045,6 +1083,7 @@ export function HelpBtn() {
             <h4>Shortcuts</h4>
             {[
               ["V", "Move"],
+              ["K", "Scale"],
               ["F", "Frame"],
               ["R", "Rectangle"],
               ["O", "Ellipse"],
@@ -1058,7 +1097,7 @@ export function HelpBtn() {
               ["P", "Pen"],
               ["⇧P", "Pencil"],
               ["B", "Brush"],
-              ["⇧E", "Eraser"],
+              ["⇧E", "Design / Prototype"],
               ["C", "Comment"],
               ["⌘⌥K", "Component"],
               ["⌥⇧U", "Union"],

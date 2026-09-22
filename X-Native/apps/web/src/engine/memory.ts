@@ -6,11 +6,12 @@ import type {
   Engine,
   NodeKind,
   Page,
+  PathPoint,
   Snapshot,
   Tool,
   XNode,
 } from "./types";
-import { booleanPath, outlineStroke as outlineStrokePath, shapePoly } from "./geometry";
+import { booleanPath, outlineStroke as outlineStrokePath, shapePoly, transformedPoly } from "./geometry";
 
 let seq = 1;
 const uid = (p: string) => `${p}_${seq++}`;
@@ -409,6 +410,12 @@ export class MemoryEngine implements Engine {
     }
     if (cmd.type === "end") {
       this.grouping = false;
+      const previous = this.undo[this.undo.length - 1];
+      if (previous && JSON.stringify(previous) === JSON.stringify(this.state)) {
+        this.undo.pop();
+        this.snapCache = this.build();
+        this.listeners.forEach((f) => f());
+      }
       return;
     }
     const hist = ![
@@ -420,6 +427,7 @@ export class MemoryEngine implements Engine {
       "setRightTab",
       "setLeftTab",
       "setPage",
+      "setFileName",
       "undo",
       "redo",
       "copy",
@@ -511,7 +519,16 @@ export class MemoryEngine implements Engine {
         break;
       }
       case "add": {
-        const n = node(cmd.kind, labelFor(cmd.kind), cmd.x, cmd.y, cmd.w, cmd.h, cmd.extra);
+        const grid = s.pages[s.page].pixelGrid;
+        const n = node(
+          cmd.kind,
+          labelFor(cmd.kind),
+          grid ? Math.round(cmd.x) : cmd.x,
+          grid ? Math.round(cmd.y) : cmd.y,
+          grid ? Math.max(1, Math.round(cmd.w)) : cmd.w,
+          grid ? Math.max(1, Math.round(cmd.h)) : cmd.h,
+          cmd.extra,
+        );
         const parent = cmd.parent ? find(this.root(), cmd.parent) : this.root();
         (parent ?? this.root()).children.push(n);
         s.selection = [n.id];
@@ -524,6 +541,10 @@ export class MemoryEngine implements Engine {
           if (n && !n.locked) {
             n.x += cmd.dx;
             n.y += cmd.dy;
+            if (s.pages[s.page].pixelGrid) {
+              n.x = Math.round(n.x);
+              n.y = Math.round(n.y);
+            }
           }
         }
         break;
@@ -533,6 +554,10 @@ export class MemoryEngine implements Engine {
           if (n && !n.locked) {
             n.x += cmd.dx;
             n.y += cmd.dy;
+            if (s.pages[s.page].pixelGrid) {
+              n.x = Math.round(n.x);
+              n.y = Math.round(n.y);
+            }
           }
         }
         break;
@@ -545,6 +570,10 @@ export class MemoryEngine implements Engine {
           n.y = s.pages[s.page].pixelGrid ? Math.round(cmd.y) : cmd.y;
           n.w = Math.max(1, s.pages[s.page].pixelGrid ? Math.round(cmd.w) : cmd.w);
           n.h = Math.max(1, s.pages[s.page].pixelGrid ? Math.round(cmd.h) : cmd.h);
+          if (n.kind === "text" && !cmd.scaleProps) {
+            if (n.w !== oldW) n.sizingW = "fixed";
+            if (n.h !== oldH) n.sizingH = "fixed";
+          }
           if (cmd.scaleProps && oldW > 0 && oldH > 0) {
             scaleProps(n, n.w / oldW, n.h / oldH);
           } else {
@@ -557,10 +586,9 @@ export class MemoryEngine implements Engine {
       case "reparent": {
         const dest = find(this.root(), cmd.parent) ?? this.root();
         for (const id of cmd.ids) {
-          if (id === dest.id) continue;
           const p = findParent(this.root(), id);
           const n = find(this.root(), id);
-          if (!p || !n) continue;
+          if (!p || !n || id === dest.id || !!find(n, dest.id)) continue;
           p.children = p.children.filter((c) => c.id !== id);
           n.x = cmd.x;
           n.y = cmd.y;
@@ -571,9 +599,10 @@ export class MemoryEngine implements Engine {
       case "delete": {
         for (const id of s.selection) {
           const p = findParent(this.root(), id);
-          if (p) p.children = p.children.filter((c) => c.id !== id);
+          const n = find(this.root(), id);
+          if (p && n && !n.locked) p.children = p.children.filter((c) => c.id !== id);
         }
-        s.selection = [];
+        s.selection = s.selection.filter((id) => !!find(this.root(), id));
         break;
       }
       case "duplicate": {
@@ -581,7 +610,7 @@ export class MemoryEngine implements Engine {
         for (const id of s.selection) {
           const n = find(this.root(), id);
           const p = findParent(this.root(), id) ?? this.root();
-          if (!n) continue;
+          if (!n || n.locked) continue;
           const copy = clone(n);
           const masterId = n.isComponent ? n.componentId || n.id : n.componentId;
           reid(copy);
@@ -650,7 +679,14 @@ export class MemoryEngine implements Engine {
       case "paste": {
         if (!this.clip.length) break;
         const created: string[] = [];
-        const parent = this.root();
+        const selected = s.selection.length === 1 ? find(this.root(), s.selection[0]) : null;
+        const parent =
+          selected && (selected.kind === "frame" || selected.kind === "group" || selected.kind === "boolean")
+            ? selected
+            : selected
+              ? findParent(this.root(), selected.id) ?? this.root()
+              : this.root();
+        const parentWorld = parent === this.root() ? { x: 0, y: 0 } : worldPos(this.root(), parent.id) ?? { x: 0, y: 0 };
         const grid = s.pages[s.page].pixelGrid;
         for (const n of this.clip) {
           const copy = clone(n);
@@ -659,8 +695,8 @@ export class MemoryEngine implements Engine {
             copy.x = n.x;
             copy.y = n.y;
           } else if (cmd.x != null && cmd.y != null) {
-            copy.x = cmd.x;
-            copy.y = cmd.y;
+            copy.x = cmd.x - parentWorld.x;
+            copy.y = cmd.y - parentWorld.y;
           } else {
             copy.x = n.x + 16;
             copy.y = n.y + 16;
@@ -678,7 +714,7 @@ export class MemoryEngine implements Engine {
       case "selectAll": {
         const id = s.selection[0];
         const parent = id ? findParent(this.root(), id) ?? this.root() : this.root();
-        s.selection = parent.children.filter((c) => c.visible).map((c) => c.id);
+        s.selection = parent.children.filter((c) => c.visible && !c.locked).map((c) => c.id);
         break;
       }
       case "lockSel":
@@ -754,24 +790,47 @@ export class MemoryEngine implements Engine {
         break;
       }
       case "arrange": {
-        for (const id of s.selection) {
-          const parent = findParent(this.root(), id);
-          if (!parent) continue;
-          const i = parent.children.findIndex((c) => c.id === id);
-          if (i < 0) continue;
-          const [row] = parent.children.splice(i, 1);
-          if (cmd.dir === "front") parent.children.push(row);
-          else if (cmd.dir === "back") parent.children.unshift(row);
-          else if (cmd.dir === "forward") parent.children.splice(Math.min(parent.children.length, i + 1), 0, row);
-          else parent.children.splice(Math.max(0, i - 1), 0, row);
+        const selected = new Set(s.selection);
+        const groups = new Map<XNode, string[]>();
+        const collect = (parent: XNode) => {
+          const ids = parent.children.filter((c) => selected.has(c.id)).map((c) => c.id);
+          if (ids.length) groups.set(parent, ids);
+          parent.children.forEach(collect);
+        };
+        collect(this.root());
+        for (const [parent, ids] of groups) {
+          if (cmd.dir === "front" || cmd.dir === "back") {
+            const picked = parent.children.filter((c) => ids.includes(c.id));
+            const rest = parent.children.filter((c) => !ids.includes(c.id));
+            parent.children = cmd.dir === "front" ? [...rest, ...picked] : [...picked, ...rest];
+            continue;
+          }
+          const next = [...parent.children];
+          if (cmd.dir === "forward") {
+            for (let i = next.length - 2; i >= 0; i--) {
+              if (selected.has(next[i].id) && !selected.has(next[i + 1].id)) {
+                [next[i], next[i + 1]] = [next[i + 1], next[i]];
+              }
+            }
+          } else {
+            for (let i = 1; i < next.length; i++) {
+              if (selected.has(next[i].id) && !selected.has(next[i - 1].id)) {
+                [next[i], next[i - 1]] = [next[i - 1], next[i]];
+              }
+            }
+          }
+          parent.children = next;
         }
         break;
       }
       case "duplicatePage": {
         const p = clone(s.pages[s.page]);
+        const ids = new Map<string, string>();
+        const oldFlowStart = p.flowStart;
         p.id = uid("page");
         p.name = `${p.name} copy`;
-        reid(p.root);
+        reid(p.root, ids);
+        p.flowStart = ids.get(oldFlowStart) ?? "";
         s.pages.splice(s.page + 1, 0, p);
         s.page += 1;
         s.selection = [];
@@ -819,7 +878,7 @@ export class MemoryEngine implements Engine {
           g.effects = clone(src.effects);
           const baked = booleanPath(
             cmd.op,
-            g.children.map((c) => ({ poly: shapePoly(c), ox: c.x, oy: c.y })),
+            g.children.map((c) => ({ poly: transformedPoly(c), ox: c.x, oy: c.y })),
           );
           if (baked) {
             g.path = baked.path;
@@ -929,7 +988,7 @@ export class MemoryEngine implements Engine {
         if (n.kind === "boolean" && n.children.length) {
           const baked = booleanPath(
             n.booleanOp || "union",
-            n.children.map((c) => ({ poly: shapePoly(c), ox: c.x, oy: c.y })),
+            n.children.map((c) => ({ poly: transformedPoly(c), ox: c.x, oy: c.y })),
           );
           if (baked) {
             n.path = baked.path;
@@ -1103,15 +1162,18 @@ export class MemoryEngine implements Engine {
       c.y -= minY;
       return c;
     });
+    const firstIndex = parent.children.findIndex((c) => ids.includes(c.id));
     parent.children = parent.children.filter((c) => !ids.includes(c.id));
-    parent.children.push(g);
+    parent.children.splice(Math.max(0, Math.min(firstIndex, parent.children.length)), 0, g);
     s.selection = [g.id];
   }
 }
 
-function reid(n: XNode) {
+function reid(n: XNode, ids?: Map<string, string>) {
+  const old = n.id;
   n.id = uid(n.kind);
-  n.children.forEach(reid);
+  ids?.set(old, n.id);
+  n.children.forEach((c) => reid(c, ids));
 }
 
 
@@ -1215,38 +1277,140 @@ export function worldPos(
   return found ? { x: accX, y: accY, node: found } : null;
 }
 
-function unrotPt(px: number, py: number, cx: number, cy: number, deg: number) {
-  const a = (-deg * Math.PI) / 180;
-  const dx = px - cx;
-  const dy = py - cy;
-  return { x: cx + dx * Math.cos(a) - dy * Math.sin(a), y: cy + dx * Math.sin(a) + dy * Math.cos(a) };
+type Matrix = { a: number; b: number; c: number; d: number; e: number; f: number };
+
+const IDENTITY: Matrix = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+
+function multiply(a: Matrix, b: Matrix): Matrix {
+  return {
+    a: a.a * b.a + a.c * b.b,
+    b: a.b * b.a + a.d * b.b,
+    c: a.a * b.c + a.c * b.d,
+    d: a.b * b.c + a.d * b.d,
+    e: a.a * b.e + a.c * b.f + a.e,
+    f: a.b * b.e + a.d * b.f + a.f,
+  };
+}
+
+function applyMatrix(m: Matrix, x: number, y: number) {
+  return { x: m.a * x + m.c * y + m.e, y: m.b * x + m.d * y + m.f };
+}
+
+function inverse(m: Matrix): Matrix | null {
+  const det = m.a * m.d - m.b * m.c;
+  if (Math.abs(det) < 1e-9) return null;
+  return {
+    a: m.d / det,
+    b: -m.b / det,
+    c: -m.c / det,
+    d: m.a / det,
+    e: (m.c * m.f - m.d * m.e) / det,
+    f: (m.b * m.e - m.a * m.f) / det,
+  };
+}
+
+function nodeMatrix(n: XNode): Matrix {
+  const cx = n.w / 2;
+  const cy = n.h / 2;
+  const angle = (n.rotation * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const local: Matrix = {
+    a: cos * (n.flipH ? -1 : 1),
+    b: sin * (n.flipH ? -1 : 1),
+    c: -sin * (n.flipV ? -1 : 1),
+    d: cos * (n.flipV ? -1 : 1),
+    e: 0,
+    f: 0,
+  };
+  const translate = (x: number, y: number): Matrix => ({ a: 1, b: 0, c: 0, d: 1, e: x, f: y });
+  return multiply(
+    translate(n.x + cx, n.y + cy),
+    multiply(local, translate(-cx, -cy)),
+  );
+}
+
+function worldMatrix(root: XNode, id: string): Matrix | null {
+  let result: Matrix | null = null;
+  const visit = (n: XNode, parent: Matrix) => {
+    if (result) return;
+    const world = n === root ? parent : multiply(parent, nodeMatrix(n));
+    if (n.id === id) {
+      result = world;
+      return;
+    }
+    for (const child of n.children) visit(child, world);
+  };
+  visit(root, IDENTITY);
+  return result;
+}
+
+/** Convert a point in page coordinates into a node's local coordinate system. */
+export function worldToLocal(root: XNode, id: string, x: number, y: number) {
+  const m = worldMatrix(root, id);
+  return applyMatrix(m ? inverse(m) ?? IDENTITY : IDENTITY, x, y);
+}
+
+/** Convert a point in a node's local coordinate system into page coordinates. */
+export function localToWorld(root: XNode, id: string, x: number, y: number) {
+  const m = worldMatrix(root, id);
+  return applyMatrix(m ?? IDENTITY, x, y);
+}
+
+function polygonHit(poly: PathPoint[], px: number, py: number): boolean {
+  let hit = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i];
+    const b = poly[j];
+    if (a.y > py !== b.y > py && px < ((b.x - a.x) * (py - a.y)) / (b.y - a.y || 1e-9) + a.x) hit = !hit;
+  }
+  return hit;
+}
+
+function segmentDistance(px: number, py: number, ax: number, ay: number, bx: number, by: number) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy || 1)));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+function nodeShapeHit(n: XNode, px: number, py: number): boolean {
+  if (n.kind === "ellipse") {
+    const dx = (px - n.w / 2) / Math.max(1, n.w / 2);
+    const dy = (py - n.h / 2) / Math.max(1, n.h / 2);
+    const d = dx * dx + dy * dy;
+    return n.fillVisible !== false && !n.fill.startsWith("#00000000") ? d <= 1 : Math.abs(Math.sqrt(d) - 1) <= Math.max(4, n.strokeWidth / 2);
+  }
+  if (n.kind === "line" || n.kind === "arrow") {
+    return segmentDistance(px, py, 0, n.h / 2, n.w, n.h / 2) <= Math.max(4, n.strokeWidth / 2);
+  }
+  if ((n.kind === "poly" || n.kind === "star" || n.kind === "vector" || n.kind === "boolean") && n.closed) {
+    return polygonHit(shapePoly(n), px, py);
+  }
+  return px >= 0 && py >= 0 && px <= n.w && py <= n.h;
 }
 
 export function hitTest(
   root: XNode,
   wx: number,
   wy: number,
-  opts?: { deep?: boolean; selection?: string[] },
+  opts?: { deep?: boolean; selection?: string[]; includeLocked?: boolean },
 ): XNode | null {
   let hit: XNode | null = null;
-  const visit = (n: XNode, px: number, py: number, qx: number, qy: number) => {
-    if (!n.visible) return;
-    const x = px + n.x;
-    const y = py + n.y;
-    let lx = qx;
-    let ly = qy;
-    if (n.rotation) {
-      const u = unrotPt(qx, qy, x + n.w / 2, y + n.h / 2, n.rotation);
-      lx = u.x;
-      ly = u.y;
+  const visit = (n: XNode, parentWorld: Matrix) => {
+    if (!n.visible || (n.locked && !opts?.includeLocked)) return;
+    const world = n === root ? parentWorld : multiply(parentWorld, nodeMatrix(n));
+    const local = n === root ? { x: wx, y: wy } : applyMatrix(inverse(world) ?? IDENTITY, wx, wy);
+    const inside =
+      n === root ||
+      (local.x >= 0 && local.y >= 0 && local.x <= n.w && local.y <= n.h);
+    if (n === root || n.overflow === "visible" || inside) {
+      for (let i = n.children.length - 1; i >= 0; i--) visit(n.children[i], world);
     }
-    for (let i = n.children.length - 1; i >= 0; i--) visit(n.children[i], x, y, lx, ly);
-    if (n === root) return;
-    if (lx >= x && ly >= y && lx <= x + n.w && ly <= y + n.h) {
-      if (!hit) hit = n;
-    }
+    if (n === root || !inside || !nodeShapeHit(n, local.x, local.y) || hit) return;
+    hit = n;
   };
-  visit(root, 0, 0, wx, wy);
+  visit(root, IDENTITY);
   if (!hit || opts?.deep) return hit;
   let n: XNode | null = hit;
   while (n) {
@@ -1293,6 +1457,15 @@ function scaleProps(n: XNode, sx: number, sy: number) {
   n.letterSpacing *= s;
   if (n.lineHeight) n.lineHeight *= s;
   n.cornerRadii = n.cornerRadii.map((r) => r * s) as [number, number, number, number];
+  n.path = n.path.map((p) => ({
+    ...p,
+    x: p.x * sx,
+    y: p.y * sy,
+    ix: p.ix == null ? p.ix : p.ix * sx,
+    iy: p.iy == null ? p.iy : p.iy * sy,
+    ox: p.ox == null ? p.ox : p.ox * sx,
+    oy: p.oy == null ? p.oy : p.oy * sy,
+  }));
   if (n.layout) {
     n.layout = {
       ...n.layout,
@@ -1311,16 +1484,17 @@ function scaleProps(n: XNode, sx: number, sy: number) {
 
 export function deepestFrame(root: XNode, wx: number, wy: number, skip?: Set<string>): XNode | null {
   let hit: XNode | null = null;
-  const visit = (n: XNode, px: number, py: number) => {
-    if (!n.visible) return;
-    if (skip?.has(n.id)) return;
-    const x = px + n.x;
-    const y = py + n.y;
-    const inside = wx >= x && wy >= y && wx <= x + n.w && wy <= y + n.h;
+  const visit = (n: XNode, parentWorld: Matrix) => {
+    if (!n.visible || skip?.has(n.id)) return;
+    const world = n === root ? parentWorld : multiply(parentWorld, nodeMatrix(n));
+    const local = n === root ? { x: wx, y: wy } : applyMatrix(inverse(world) ?? IDENTITY, wx, wy);
+    const inside = n === root || (local.x >= 0 && local.y >= 0 && local.x <= n.w && local.y <= n.h);
     if (n !== root && n.kind === "frame" && inside) hit = n;
-    if (inside || n === root) for (const c of n.children) visit(c, x, y);
+    if (inside || n === root) {
+      for (const c of n.children) visit(c, world);
+    }
   };
-  visit(root, 0, 0);
+  visit(root, IDENTITY);
   return hit;
 }
 

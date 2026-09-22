@@ -202,6 +202,11 @@ input, textarea { user-select: text; }
   padding: 8px 0;
   gap: 2px;
 }
+.rail .logo-wrap {
+  position: relative;
+  width: 32px;
+  height: 38px;
+}
 .rail .logo {
   width: 32px;
   height: 32px;
@@ -424,6 +429,19 @@ html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }
   background: var(--canvas);
 }
 .canvas-wrap canvas { width: 100%; height: 100%; display: block; }
+.proto-transition {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background: var(--canvas);
+  animation: proto-fade 180ms ease-out forwards;
+}
+.proto-transition.smart { animation-duration: 260ms; background: rgba(255,255,255,.18); }
+@keyframes proto-fade {
+  from { opacity: .92; }
+  to { opacity: 0; }
+}
 .text-edit {
   position: absolute;
   margin: 0;

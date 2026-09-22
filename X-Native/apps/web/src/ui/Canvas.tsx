@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
-import type { Engine, NodeKind, PathPoint, Snapshot, Tool, XNode } from "../engine/types";
-import { deepestFrame, find, findParent, hitTest, worldPos } from "../engine/memory";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { Engine, Interaction, NodeKind, PathPoint, Snapshot, Tool, XNode } from "../engine/types";
+import { deepestFrame, find, findParent, hitTest, worldToLocal, worldPos } from "../engine/memory";
 import { shapePoly } from "../engine/geometry";
 import { fillStyle, paintDropShadows, paintFill, paintImageFill, paintInnerShadows } from "../engine/paint";
 import { useTheme } from "./theme";
@@ -60,11 +60,32 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const [draft, setDraft] = useState<PathPoint[]>([]);
   const [ghost, setGhost] = useState<PathPoint | null>(null);
   const [hoverId, setHoverId] = useState("");
+  const [transition, setTransition] = useState<"dissolve" | "smart" | null>(null);
   const pencil = useRef<PathPoint[] | null>(null);
   const penDrag = useRef<{ i: number; x: number; y: number } | null>(null);
   const vecPt = useRef(-1);
   const hoverIx = useRef("");
   const { theme } = useTheme();
+  const runInteraction = useCallback(
+    (ix: Interaction) => {
+      const run = () => {
+        if (ix.action === "back") engine.dispatch({ type: "presentBack" });
+        else if (ix.action === "navigate" && ix.destination) engine.dispatch({ type: "presentGo", id: ix.destination });
+        else if (ix.action === "openUrl" && ix.destination)
+          window.open(ix.destination, "_blank", "noopener,noreferrer");
+      };
+      if (ix.animation === "instant" || ix.action === "openUrl") {
+        run();
+        return;
+      }
+      setTransition(ix.animation);
+      window.setTimeout(() => {
+        run();
+        setTransition(null);
+      }, ix.animation === "smart" ? 260 : 180);
+    },
+    [engine],
+  );
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -182,13 +203,9 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     const n = find(snap.pages[snap.page].root, snap.presentFrame);
     const ix = (n?.interactions ?? []).find((i) => i.trigger === "afterDelay");
     if (!ix) return;
-    const t = window.setTimeout(() => {
-      if (ix.action === "back") engine.dispatch({ type: "presentBack" });
-      else if (ix.action === "navigate" && ix.destination)
-        engine.dispatch({ type: "presentGo", id: ix.destination });
-    }, Math.max(0, ix.delay || 800));
+    const t = window.setTimeout(() => runInteraction(ix), Math.max(0, ix.delay ?? 800));
     return () => window.clearTimeout(t);
-  }, [snap.presentFrame, snap.page, engine, snap.pages]);
+  }, [snap.presentFrame, snap.page, snap.pages, runInteraction]);
 
   useEffect(() => {
     const c = ref.current;
@@ -237,10 +254,12 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       const y = py + n.y;
       ctx.save();
       if (n.rotation || n.flipH || n.flipV) {
-        ctx.translate(x + n.w / 2, y + n.h / 2);
+        const cx = snap.panX + (x + n.w / 2) * z;
+        const cy = snap.panY + (y + n.h / 2) * z;
+        ctx.translate(cx, cy);
         if (n.rotation) ctx.rotate((n.rotation * Math.PI) / 180);
         if (n.flipH || n.flipV) ctx.scale(n.flipH ? -1 : 1, n.flipV ? -1 : 1);
-        ctx.translate(-(x + n.w / 2), -(y + n.h / 2));
+        ctx.translate(-cx, -cy);
       }
       ctx.globalAlpha *= n.opacity;
       ctx.globalCompositeOperation = canvasBlend(n.blendMode);
@@ -255,8 +274,10 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         : Math.max(0, (n.cornerRadii[0] ?? 0) * z);
       const round = () => {
         ctx.beginPath();
-        if (typeof ctx.roundRect === "function") ctx.roundRect(sx, sy, sw, sh, radii);
-        else ctx.rect(sx, sy, sw, sh);
+        if (typeof ctx.roundRect === "function") {
+          const rr = Array.isArray(radii) ? [radii[0], radii[1], radii[3], radii[2]] : radii;
+          ctx.roundRect(sx, sy, sw, sh, rr);
+        } else ctx.rect(sx, sy, sw, sh);
       };
       if (n.kind === "boolean" && n.booleanOp && n.children.length) {
         const dropB = (n.effects ?? []).find((e) => e.kind === "drop-shadow" && e.visible);
@@ -267,10 +288,23 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           ctx.shadowOffsetY = dropB.y * z;
         }
         paintBoolean(ctx, n, x, y, snap);
+        if (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)) {
+          ctx.save();
+          ctx.strokeStyle = cssRgba(n.strokePaint);
+          ctx.globalAlpha *= n.strokeOpacity ?? 1;
+          ctx.lineWidth = Math.max(0.5, n.strokeWidth * z);
+          ctx.lineJoin = n.strokeJoin === "round" ? "round" : n.strokeJoin === "bevel" ? "bevel" : "miter";
+          ctx.setLineDash(n.strokeDash > 0 ? [n.strokeDash * z, (n.strokeGap || n.strokeDash) * z] : []);
+          tracePath(ctx, n.path.length ? n.path : shapePoly(n), snap.panX + x * z, snap.panY + y * z, z, true);
+          ctx.stroke();
+          ctx.restore();
+        }
         ctx.restore();
         return;
       }
-      if ((n.kind === "vector" || n.kind === "boolean") && n.path.length) {
+      if (n.kind === "text") {
+        ctx.beginPath();
+      } else if ((n.kind === "vector" || n.kind === "boolean") && n.path.length) {
         tracePath(ctx, n.path, snap.panX + x * z, snap.panY + y * z, z, n.closed);
       } else if (n.kind === "ellipse") {
         ctx.beginPath();
@@ -280,9 +314,9 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         ctx.moveTo(sx, sy + sh / 2);
         ctx.lineTo(sx + sw, sy + sh / 2);
       } else if (n.kind === "star") {
-        starPath(ctx, sx + sw / 2, sy + sh / 2, Math.min(sw, sh) / 2, n.count || 5, n.starRatio || 0.4);
+        starPath(ctx, sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), n.count || 5, n.starRatio || 0.4);
       } else if (n.kind === "poly") {
-        polyPath(ctx, sx + sw / 2, sy + sh / 2, Math.min(sw, sh) / 2, n.count || 3);
+        polyPath(ctx, sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), n.count || 3);
       } else {
         round();
       }
@@ -349,7 +383,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       ctx.shadowBlur = 0;
       ctx.shadowOffsetX = 0;
       ctx.shadowOffsetY = 0;
-      paintInnerShadows(ctx, n, sx, sy, sw, sh, z);
+      paintInnerShadows(ctx, n, z);
       if (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)) {
         ctx.save();
         ctx.globalAlpha *= n.strokeOpacity ?? 1;
@@ -381,13 +415,31 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           ctx.lineWidth = lw;
           ctx.stroke();
         }
-        if (n.kind === "arrow" || n.strokeCap === "arrow") {
+        const arrowCap =
+          n.kind === "arrow" ||
+          ((n.kind === "line" || n.kind === "vector") && !n.closed && n.strokeCap === "arrow");
+        if (arrowCap) {
           ctx.setLineDash([]);
           const ah = Math.max(6, n.strokeWidth * 3 * z);
+          let ex = sx + sw;
+          let ey = sy + sh / 2;
+          let ux = 1;
+          let uy = 0;
+          if (n.kind === "vector" && n.path.length > 1) {
+            const last = n.path[n.path.length - 1];
+            const prev = n.path[n.path.length - 2];
+            const dx = (last.x - prev.x) * z;
+            const dy = (last.y - prev.y) * z;
+            const len = Math.hypot(dx, dy) || 1;
+            ex = snap.panX + (x + last.x) * z;
+            ey = snap.panY + (y + last.y) * z;
+            ux = dx / len;
+            uy = dy / len;
+          }
           ctx.beginPath();
-          ctx.moveTo(sx + sw, sy + sh / 2);
-          ctx.lineTo(sx + sw - ah, sy + sh / 2 - ah * 0.55);
-          ctx.lineTo(sx + sw - ah, sy + sh / 2 + ah * 0.55);
+          ctx.moveTo(ex, ey);
+          ctx.lineTo(ex - ux * ah - uy * ah * 0.55, ey - uy * ah + ux * ah * 0.55);
+          ctx.lineTo(ex - ux * ah + uy * ah * 0.55, ey - uy * ah - ux * ah * 0.55);
           ctx.closePath();
           ctx.fillStyle = cssRgba(n.strokePaint);
           ctx.fill();
@@ -409,16 +461,29 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           const my = snap.panY + (y + ch.y) * z;
           const mw = ch.w * z;
           const mh = ch.h * z;
+          const mcx = mx + mw / 2;
+          const mcy = my + mh / 2;
+          ctx.save();
+          if (ch.rotation || ch.flipH || ch.flipV) {
+            ctx.translate(mcx, mcy);
+            if (ch.rotation) ctx.rotate((ch.rotation * Math.PI) / 180);
+            if (ch.flipH || ch.flipV) ctx.scale(ch.flipH ? -1 : 1, ch.flipV ? -1 : 1);
+            ctx.translate(-mcx, -mcy);
+          }
           ctx.beginPath();
           if (ch.kind === "ellipse") {
-            ctx.ellipse(mx + mw / 2, my + mh / 2, Math.abs(mw / 2), Math.abs(mh / 2), 0, 0, Math.PI * 2);
+            ctx.ellipse(mcx, mcy, Math.abs(mw / 2), Math.abs(mh / 2), 0, 0, Math.PI * 2);
           } else if (ch.path.length) {
             tracePath(ctx, ch.path, mx, my, z, ch.closed);
           } else if (typeof ctx.roundRect === "function") {
-            ctx.roundRect(mx, my, mw, mh, (ch.cornerRadii[0] || 0) * z);
+            const rr = ch.cornerIndependent
+              ? [ch.cornerRadii[0] * z, ch.cornerRadii[1] * z, ch.cornerRadii[3] * z, ch.cornerRadii[2] * z]
+              : ch.cornerRadii[0] * z;
+            ctx.roundRect(mx, my, mw, mh, rr);
           } else {
             ctx.rect(mx, my, mw, mh);
           }
+          ctx.restore();
           ctx.clip();
           maskOn += 1;
           continue;
@@ -539,9 +604,10 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       const sh = wp.node.h * z;
       const accent = wp.node.isComponent || wp.node.componentId ? "#7b61ff" : "#0d99ff";
       ctx.save();
-      if (wp.node.rotation) {
+      if (wp.node.rotation || wp.node.flipH || wp.node.flipV) {
         ctx.translate(sx + sw / 2, sy + sh / 2);
-        ctx.rotate((wp.node.rotation * Math.PI) / 180);
+        if (wp.node.rotation) ctx.rotate((wp.node.rotation * Math.PI) / 180);
+        if (wp.node.flipH || wp.node.flipV) ctx.scale(wp.node.flipH ? -1 : 1, wp.node.flipV ? -1 : 1);
         ctx.translate(-(sx + sw / 2), -(sy + sh / 2));
       }
       ctx.strokeStyle = accent;
@@ -615,6 +681,17 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       const wp = worldPos(root, vecEdit);
       if (wp) {
         const pts = wp.node.path.length ? wp.node.path : shapePoly(wp.node);
+        const vsx = snap.panX + wp.x * z;
+        const vsy = snap.panY + wp.y * z;
+        const vsw = wp.node.w * z;
+        const vsh = wp.node.h * z;
+        ctx.save();
+        if (wp.node.rotation || wp.node.flipH || wp.node.flipV) {
+          ctx.translate(vsx + vsw / 2, vsy + vsh / 2);
+          if (wp.node.rotation) ctx.rotate((wp.node.rotation * Math.PI) / 180);
+          if (wp.node.flipH || wp.node.flipV) ctx.scale(wp.node.flipH ? -1 : 1, wp.node.flipV ? -1 : 1);
+          ctx.translate(-(vsx + vsw / 2), -(vsy + vsh / 2));
+        }
         ctx.strokeStyle = "#0d99ff";
         ctx.lineWidth = 1;
         for (const p of pts) {
@@ -642,6 +719,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           ctx.fill();
           ctx.stroke();
         }
+        ctx.restore();
       }
     }
 
@@ -668,13 +746,11 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     if (snap.presentFrame) {
       const wpt = toWorld(e.clientX, e.clientY);
       const root = snap.pages[snap.page].root;
-      let n: XNode | null = hitTest(root, wpt.x, wpt.y);
+      let n: XNode | null = hitTest(root, wpt.x, wpt.y, { includeLocked: true });
       while (n) {
         const ix = (n.interactions ?? []).find((i) => i.trigger === "onClick");
         if (ix) {
-          if (ix.action === "back") engine.dispatch({ type: "presentBack" });
-          else if (ix.action === "navigate" && ix.destination)
-            engine.dispatch({ type: "presentGo", id: ix.destination });
+          runInteraction(ix);
           return;
         }
         const p = findParent(root, n.id);
@@ -783,10 +859,12 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         const rawY = e.clientY - r.top;
         let px = rawX;
         let py = rawY;
-        if (wp.node.rotation) {
-          const u = unrot(px, py, sx + (wp.node.w * z) / 2, sy + (wp.node.h * z) / 2, wp.node.rotation);
-          px = u.x;
-          py = u.y;
+        if (wp.node.rotation || wp.node.flipH || wp.node.flipV) {
+          const cx = sx + (wp.node.w * z) / 2;
+          const cy = sy + (wp.node.h * z) / 2;
+          const u = wp.node.rotation ? unrot(px, py, cx, cy, wp.node.rotation) : { x: px, y: py };
+          px = wp.node.flipH ? cx - (u.x - cx) : u.x;
+          py = wp.node.flipV ? cy - (u.y - cy) : u.y;
         }
         const ft = wp.node.fillType;
         if (ft === "linear" || ft === "radial" || ft === "angular" || ft === "diamond") {
@@ -889,19 +967,20 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     if (snap.presentFrame) {
       const wpt = toWorld(e.clientX, e.clientY);
       const root = snap.pages[snap.page].root;
-      let n: XNode | null = hitTest(root, wpt.x, wpt.y, { deep: true });
+      let n: XNode | null = hitTest(root, wpt.x, wpt.y, { deep: true, includeLocked: true });
       while (n) {
         const ix = (n.interactions ?? []).find((i) => i.trigger === "onHover");
-        if (ix && hoverIx.current !== n.id) {
-          hoverIx.current = n.id;
-          if (ix.action === "back") engine.dispatch({ type: "presentBack" });
-          else if (ix.action === "navigate" && ix.destination)
-            engine.dispatch({ type: "presentGo", id: ix.destination });
+        if (ix) {
+          if (hoverIx.current !== n.id) {
+            hoverIx.current = n.id;
+            runInteraction(ix);
+          }
           return;
         }
         const p = findParent(root, n.id);
         n = p && p !== root ? p : null;
       }
+      hoverIx.current = "";
       return;
     }
     if (!drag.current && !penDrag.current && !pencil.current && snap.tool === "select") {
@@ -999,8 +1078,12 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       }
       setBand({ x, y, w, h });
     } else if (d.mode === "resize" && d.orig && d.id != null && d.corner != null) {
-      const b = toWorld(e.clientX, e.clientY);
-      const node = worldPos(snap.pages[snap.page].root, d.id)?.node;
+      const raw = toWorld(e.clientX, e.clientY);
+      const current = worldPos(snap.pages[snap.page].root, d.id);
+      const node = current?.node;
+      const shape = node ? { ...node, x: d.orig.x, y: d.orig.y, w: d.orig.w, h: d.orig.h } : null;
+      const local = shape ? nodeLocalPoint(raw.x, raw.y, d.orig.x, d.orig.y, shape) : { x: raw.x - d.orig.x, y: raw.y - d.orig.y };
+      const b = shape ? { x: d.orig.x + local.x, y: d.orig.y + local.y } : raw;
       const lock = e.shiftKey || !!node?.aspectLocked;
       const next = resizeFrom(d.orig, d.corner, b.x, b.y, {
         aspect: lock,
@@ -1016,8 +1099,9 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       const wpt = toWorld(e.clientX, e.clientY);
       const wp = worldPos(snap.pages[snap.page].root, d.id);
       if (wp) {
-        const lx = (wpt.x - wp.x) / Math.max(1, wp.node.w);
-        const ly = (wpt.y - wp.y) / Math.max(1, wp.node.h);
+        const local = nodeLocalPoint(wpt.x, wpt.y, wp.x, wp.y, wp.node);
+        const lx = local.x / Math.max(1, wp.node.w);
+        const ly = local.y / Math.max(1, wp.node.h);
         if (d.handle === "g") engine.dispatch({ type: "patch", id: d.id, patch: { fillGX: lx, fillGY: ly } });
         else engine.dispatch({ type: "patch", id: d.id, patch: { fillHX: lx, fillHY: ly } });
       }
@@ -1028,8 +1112,9 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       if (n && loc) {
         const pts = (n.path.length ? n.path : shapePoly(n)).map((p) => ({ ...p }));
         const p = pts[d.point];
-        const lx = wpt.x - loc.x;
-        const ly = wpt.y - loc.y;
+        const local = nodeLocalPoint(wpt.x, wpt.y, loc.x, loc.y, n);
+        const lx = local.x;
+        const ly = local.y;
         if (d.handle === "in") {
           p.ix = lx - p.x;
           p.iy = ly - p.y;
@@ -1084,22 +1169,28 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       }
     }
     if (d.mode === "move") {
-      const sel = engine.snapshot().selection[0];
+      const selection = engine.snapshot().selection;
+      const sel = selection[0];
       const root = snap.pages[snap.page].root;
       const wp = sel ? worldPos(root, sel) : null;
       if (wp) {
         const cx = wp.x + wp.node.w / 2;
         const cy = wp.y + wp.node.h / 2;
-        const frame = deepestFrame(root, cx, cy, new Set(engine.snapshot().selection));
-        const parent = findParent(root, wp.node.id);
-        if (frame && frame.id !== wp.node.id && frame !== parent) {
-          engine.dispatch({
-            type: "reparent",
-            ids: [wp.node.id],
-            parent: frame.id,
-            x: wp.x - (worldPos(root, frame.id)?.x ?? 0),
-            y: wp.y - (worldPos(root, frame.id)?.y ?? 0),
-          });
+        const frame = deepestFrame(root, cx, cy, new Set(selection));
+        if (frame) {
+          const frameWorld = worldPos(root, frame.id);
+          for (const id of selection) {
+            const item = worldPos(root, id);
+            const parent = findParent(root, id);
+            if (!item || item.node.id === frame.id || frame === parent || !frameWorld) continue;
+            engine.dispatch({
+              type: "reparent",
+              ids: [item.node.id],
+              parent: frame.id,
+              x: item.x - frameWorld.x,
+              y: item.y - frameWorld.y,
+            });
+          }
         }
       }
     }
@@ -1162,7 +1253,48 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         w = Math.max(w, 1);
         h = Math.max(h, 1);
       }
-      const host = deepestFrame(snap.pages[snap.page].root, x + w / 2, y + h / 2);
+      const root = snap.pages[snap.page].root;
+      const host = deepestFrame(root, x + w / 2, y + h / 2);
+      let nodeX = x;
+      let nodeY = y;
+      let nodeW = w;
+      let nodeH = h;
+      let nodeRotation = rot;
+      if (host) {
+        const la = worldToLocal(root, host.id, a.x, a.y);
+        const lb = worldToLocal(root, host.id, b.x, b.y);
+        if (k === "line" || k === "arrow") {
+          const dx = lb.x - la.x;
+          const dy = lb.y - la.y;
+          const len = Math.max(1, Math.hypot(dx, dy));
+          const ang = Math.atan2(dy, dx);
+          nodeW = len;
+          nodeH = 1;
+          nodeX = (la.x + lb.x) / 2 - len / 2;
+          nodeY = (la.y + lb.y) / 2 - 0.5;
+          nodeRotation = (ang * 180) / Math.PI;
+        } else if (clicked) {
+          nodeX = la.x;
+          nodeY = la.y;
+        } else {
+          nodeW = Math.max(1, Math.abs(lb.x - la.x));
+          nodeH = Math.max(1, Math.abs(lb.y - la.y));
+          if (shift) {
+            const side = Math.max(nodeW, nodeH);
+            nodeW = side;
+            nodeH = side;
+          }
+          if (alt) {
+            nodeX = la.x - nodeW;
+            nodeY = la.y - nodeH;
+            nodeW *= 2;
+            nodeH *= 2;
+          } else {
+            nodeX = Math.min(la.x, lb.x);
+            nodeY = Math.min(la.y, lb.y);
+          }
+        }
+      }
       const extra: Partial<XNode> =
         snap.tool === "section"
           ? { name: "Section", fill: "#00000000", overflow: "visible" }
@@ -1181,15 +1313,15 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
               ? { text: "", sizingW: "hug", sizingH: "hug", fontSize: 16 }
               : { text: "", sizingW: "fixed", sizingH: "fixed", fontSize: 16 }
             : k === "line" || k === "arrow"
-              ? { rotation: rot }
+              ? { rotation: nodeRotation }
               : {};
       engine.dispatch({
         type: "add",
         kind: k,
-        x: host ? x - (worldPos(snap.pages[snap.page].root, host.id)?.x ?? 0) : x,
-        y: host ? y - (worldPos(snap.pages[snap.page].root, host.id)?.y ?? 0) : y,
-        w,
-        h,
+        x: nodeX,
+        y: nodeY,
+        w: nodeW,
+        h: nodeH,
         parent: host?.id,
         extra,
       });
@@ -1227,7 +1359,14 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     e.preventDefault();
     if (e.ctrlKey || e.metaKey) {
       const factor = e.deltaY < 0 ? 1.08 : 1 / 1.08;
-      engine.dispatch({ type: "setZoom", zoom: snap.zoom * factor });
+      const next = Math.min(8, Math.max(0.1, snap.zoom * factor));
+      const box = wrap.current!.getBoundingClientRect();
+      const cx = e.clientX - box.left;
+      const cy = e.clientY - box.top;
+      const wx = (cx - snap.panX) / snap.zoom;
+      const wy = (cy - snap.panY) / snap.zoom;
+      engine.dispatch({ type: "setZoom", zoom: next });
+      engine.dispatch({ type: "setPan", x: cx - wx * next, y: cy - wy * next });
     } else {
       engine.dispatch({ type: "pan", dx: -e.deltaX, dy: -e.deltaY });
     }
@@ -1274,6 +1413,11 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     } else if (hit) engine.dispatch({ type: "select", ids: [hit.id] });
   };
 
+  const onLeave = (e: React.MouseEvent) => {
+    onUp(e);
+    hoverIx.current = "";
+  };
+
   const placeFiles = (files: FileList | File[], at?: { x: number; y: number }) => {
     const list = Array.from(files).filter((f) => f.type.startsWith("image/"));
     let ox = at?.x ?? 80;
@@ -1288,13 +1432,18 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           const h = im.naturalHeight;
           const max = 480;
           const s = Math.min(1, max / Math.max(w, h));
+          const current = engine.snapshot();
+          const root = current.pages[current.page].root;
+          const host = deepestFrame(root, ox, oy);
+          const local = host ? worldToLocal(root, host.id, ox, oy) : { x: ox, y: oy };
           engine.dispatch({
             type: "add",
             kind: "rect",
-            x: ox,
-            y: oy,
+            x: local.x,
+            y: local.y,
             w: Math.max(8, w * s),
             h: Math.max(8, h * s),
+            parent: host?.id,
             extra: {
               imageSrc: src,
               fillType: "image",
@@ -1326,15 +1475,29 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     if (!edit) return null;
     const wp = worldPos(snap.pages[snap.page].root, edit.id);
     if (!wp) return null;
+    const measure = ref.current?.getContext("2d");
+    let textW = wp.node.w;
+    let textH = wp.node.h;
+    if (measure && (wp.node.sizingW === "hug" || wp.node.sizingH === "hug")) {
+      measure.font = `${wp.node.fontWeight} ${wp.node.fontSize}px ${wp.node.fontFamily}, Inter, system-ui`;
+      const lines = (edit.text || " ").split("\n");
+      textW = Math.max(wp.node.w, ...lines.map((line) => measure.measureText(line || " ").width + 4));
+      textH = Math.max(wp.node.h, lines.length * (wp.node.lineHeight || wp.node.fontSize * 1.2));
+    }
     return {
       left: snap.panX + wp.x * snap.zoom,
       top: snap.panY + wp.y * snap.zoom,
-      width: wp.node.w * snap.zoom,
-      height: wp.node.h * snap.zoom,
+      width: textW * snap.zoom,
+      height: textH * snap.zoom,
       fontSize: wp.node.fontSize * snap.zoom,
       fontWeight: wp.node.fontWeight,
+      lineHeight: (wp.node.lineHeight || wp.node.fontSize * 1.2) * snap.zoom,
+      letterSpacing: wp.node.letterSpacing * snap.zoom,
+      textAlign: wp.node.textAlign === "justified" ? "left" : wp.node.textAlign,
       color: wp.node.fill,
       fontFamily: wp.node.fontFamily,
+      transform: wp.node.rotation ? `rotate(${wp.node.rotation}deg)` : undefined,
+      transformOrigin: "center center",
     };
   })();
 
@@ -1346,7 +1509,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       onMouseDown={onDown}
       onMouseMove={onMove}
       onMouseUp={onUp}
-      onMouseLeave={onUp}
+      onMouseLeave={onLeave}
       onDoubleClick={onDbl}
       onWheel={onWheel}
       onDragOver={(e) => {
@@ -1370,6 +1533,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       }}
     >
       <canvas ref={ref} />
+      {transition && <div className={`proto-transition ${transition}`} aria-hidden="true" />}
       {edit && editBox && (
         <textarea
           className="text-edit"
@@ -1408,6 +1572,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         hidden
         onChange={(e) => {
           if (e.target.files) placeFiles(e.target.files, pendingImage.current ?? undefined);
+          pendingImage.current = null;
           e.target.value = "";
         }}
       />
@@ -1490,6 +1655,16 @@ function unrot(px: number, py: number, cx: number, cy: number, deg: number) {
   return { x: cx + dx * Math.cos(a) - dy * Math.sin(a), y: cy + dx * Math.sin(a) + dy * Math.cos(a) };
 }
 
+function nodeLocalPoint(px: number, py: number, x: number, y: number, n: XNode) {
+  const cx = x + n.w / 2;
+  const cy = y + n.h / 2;
+  const p = n.rotation ? unrot(px, py, cx, cy, n.rotation) : { x: px, y: py };
+  return {
+    x: (n.flipH ? cx - (p.x - cx) : p.x) - x,
+    y: (n.flipV ? cy - (p.y - cy) : p.y) - y,
+  };
+}
+
 function handles(sx: number, sy: number, sw: number, sh: number): [number, number][] {
   return [
     [sx, sy],
@@ -1562,18 +1737,19 @@ function starPath(
   ctx: CanvasRenderingContext2D,
   cx: number,
   cy: number,
-  r: number,
+  rx: number,
+  ry: number,
   n: number,
   ratio = 0.4,
 ) {
-  const pts = Math.max(3, Math.round(n));
+  const pts = Math.max(3, Math.min(60, Math.round(n)));
   const inner = Math.max(0.05, Math.min(0.95, ratio));
   ctx.beginPath();
   for (let i = 0; i < pts * 2; i++) {
     const a = (i * Math.PI) / pts - Math.PI / 2;
-    const rad = i % 2 === 0 ? r : r * inner;
-    const x = cx + Math.cos(a) * rad;
-    const y = cy + Math.sin(a) * rad;
+    const k = i % 2 === 0 ? 1 : inner;
+    const x = cx + Math.cos(a) * rx * k;
+    const y = cy + Math.sin(a) * ry * k;
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   }
@@ -1584,15 +1760,16 @@ function polyPath(
   ctx: CanvasRenderingContext2D,
   cx: number,
   cy: number,
-  r: number,
+  rx: number,
+  ry: number,
   n: number,
 ) {
   ctx.beginPath();
-  const pts = Math.max(3, Math.round(n));
+  const pts = Math.max(3, Math.min(60, Math.round(n)));
   for (let i = 0; i < pts; i++) {
     const a = (i * 2 * Math.PI) / pts - Math.PI / 2;
-    const x = cx + Math.cos(a) * r;
-    const y = cy + Math.sin(a) * r;
+    const x = cx + Math.cos(a) * rx;
+    const y = cy + Math.sin(a) * ry;
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   }
@@ -1669,6 +1846,18 @@ function wrapLines(
     const m = ctx.measureText(s).width;
     return letterSpacing ? m + letterSpacing * Math.max(0, s.length - 1) : m;
   };
+  const splitLong = (word: string) => {
+    let part = "";
+    for (const ch of word) {
+      if (part && widthOf(part + ch) > maxW) {
+        lines.push(part);
+        part = ch;
+      } else {
+        part += ch;
+      }
+    }
+    return part;
+  };
   for (const para of paras) {
     if (!para) {
       lines.push("");
@@ -1680,16 +1869,30 @@ function wrapLines(
     }
     const words = para.split(/(\s+)/);
     let cur = "";
-    for (const w of words) {
-      const next = cur + w;
+    for (const token of words) {
+      if (!token) continue;
+      const word = token.trim();
+      if (!word) {
+        if (cur) cur += token;
+        continue;
+      }
+      if (widthOf(word) > maxW) {
+        if (cur.trim()) {
+          lines.push(cur.trimEnd());
+          cur = "";
+        }
+        cur = splitLong(word);
+        continue;
+      }
+      const next = cur ? `${cur}${token}` : word;
       if (cur && widthOf(next) > maxW) {
-        lines.push(cur.replace(/\s+$/, ""));
-        cur = w.replace(/^\s+/, "");
+        lines.push(cur.trimEnd());
+        cur = word;
       } else {
         cur = next;
       }
     }
-    if (cur) lines.push(cur.replace(/\s+$/, ""));
+    if (cur) lines.push(cur.trimEnd());
   }
   return lines.length ? lines : [""];
 }
@@ -1703,14 +1906,24 @@ function paintText(
   sh: number,
   z: number,
 ) {
-  ctx.fillStyle = fillStyle(ctx, n, sx, sy, sw, sh);
+  const textFill = fillStyle(ctx, n, sx, sy, sw, sh);
   const size = Math.max(1, n.fontSize * z);
   ctx.font = `${n.fontWeight} ${size}px ${n.fontFamily}, Inter, system-ui`;
   ctx.textBaseline = "top";
   ctx.textAlign = n.textAlign === "center" ? "center" : n.textAlign === "right" ? "right" : "left";
+  const clipped = n.truncate;
+  if (clipped) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(sx, sy, sw, sh);
+    ctx.clip();
+  }
   let content = n.text;
-  if (!content) return;
-  if (n.textCase === "upper") content = content.toUpperCase();
+  if (!content) {
+    if (clipped) ctx.restore();
+    return;
+  }
+  if (n.textCase === "upper" || n.textCase === "small-caps") content = content.toUpperCase();
   if (n.textCase === "lower") content = content.toLowerCase();
   if (n.textCase === "title") content = content.replace(/\w\S*/g, (t) => t[0].toUpperCase() + t.slice(1).toLowerCase());
   const lh = Math.max(size, (n.lineHeight || n.fontSize * 1.2) * z);
@@ -1725,7 +1938,25 @@ function paintText(
     wrapped.forEach((line, i) => rows.push({ line: para ? line : "", lastInPara: i === wrapped.length - 1 }));
   }
   let lines = rows;
-  if (n.truncate) lines = lines.slice(0, n.maxLines || 1);
+  if (n.truncate) {
+    const limit = Math.max(1, n.maxLines || 1);
+    if (lines.length > limit) {
+      const clipped = lines.slice(0, limit);
+      const last = clipped[clipped.length - 1];
+      const widthOf = (s: string) =>
+        ctx.measureText(s).width + (ls ? ls * Math.max(0, s.length - 1) : 0);
+      const maxW = wrap ? sw : Infinity;
+      let line = last.line;
+      if (Number.isFinite(maxW)) {
+        while (line && widthOf(`${line}…`) > maxW) line = line.slice(0, -1);
+        line = `${line.replace(/\s+$/, "")}…`;
+      } else {
+        line = `${line}…`;
+      }
+      clipped[clipped.length - 1] = { line, lastInPara: true };
+      lines = clipped;
+    }
+  }
   const blockH = lines.reduce((h, r) => h + lh + (r.lastInPara ? paraGap : 0), 0) - paraGap;
   let y0 = sy;
   if (n.textAlignVertical === "middle") y0 = sy + (sh - blockH) / 2;
@@ -1739,13 +1970,21 @@ function paintText(
     ctx.shadowOffsetY = drop.y * z;
   }
   let ty = y0;
+  const fillOn = n.fillVisible !== false && !isNone(n.fill);
   const strokeOn = n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint);
   const paintLine = (str: string, x: number, y: number, maxW?: number) => {
-    ctx.fillText(str, x, y, maxW);
+    if (fillOn) {
+      ctx.save();
+      ctx.fillStyle = textFill;
+      ctx.globalAlpha *= n.fillOpacity ?? 1;
+      ctx.fillText(str, x, y, maxW);
+      ctx.restore();
+    }
     if (strokeOn) {
       ctx.save();
       ctx.shadowColor = "transparent";
       ctx.strokeStyle = cssRgba(n.strokePaint);
+      ctx.globalAlpha *= n.strokeOpacity ?? 1;
       ctx.lineWidth = Math.max(0.5, n.strokeWidth * z);
       ctx.strokeText(str, x, y, maxW);
       ctx.restore();
@@ -1780,15 +2019,16 @@ function paintText(
     } else {
       paintLine(line, tx, ty, wrap ? sw : undefined);
     }
-    if (n.textDecoration === "underline" || n.textDecoration === "strikethrough") {
-      const m = ctx.measureText(line);
+    if (fillOn && (n.textDecoration === "underline" || n.textDecoration === "strikethrough")) {
+      const textWidth = ctx.measureText(line).width + ls * Math.max(0, line.length - 1);
       const yy = n.textDecoration === "underline" ? ty + size : ty + size / 2;
-      const x0 = n.textAlign === "center" ? tx - m.width / 2 : n.textAlign === "right" ? tx - m.width : tx;
+      const x0 = n.textAlign === "center" ? tx - textWidth / 2 : n.textAlign === "right" ? tx - textWidth : tx;
       ctx.save();
       ctx.shadowColor = "transparent";
+      ctx.globalAlpha *= n.fillOpacity ?? 1;
       ctx.beginPath();
       ctx.moveTo(x0, yy);
-      ctx.lineTo(x0 + m.width, yy);
+      ctx.lineTo(x0 + textWidth, yy);
       ctx.strokeStyle = cssRgba(n.fill);
       ctx.lineWidth = Math.max(1, z);
       ctx.stroke();
@@ -1816,6 +2056,8 @@ function walkInteractions(
   for (const c of n.children) walkInteractions(c, x, y, fn);
 }
 
+const booleanCanvases = new Map<string, HTMLCanvasElement>();
+
 function paintBoolean(
   ctx: CanvasRenderingContext2D,
   n: XNode,
@@ -1826,34 +2068,41 @@ function paintBoolean(
   const z = snap.zoom;
   const w = Math.max(1, Math.ceil(n.w * z));
   const h = Math.max(1, Math.ceil(n.h * z));
-  const oc = document.createElement("canvas");
-  oc.width = w;
-  oc.height = h;
+  let oc = booleanCanvases.get(n.id);
+  if (!oc) {
+    oc = document.createElement("canvas");
+    booleanCanvases.set(n.id, oc);
+  }
+  if (oc.width !== w || oc.height !== h) {
+    oc.width = w;
+    oc.height = h;
+  }
   const o = oc.getContext("2d");
   if (!o) return;
+  o.setTransform(1, 0, 0, 1, 0, 0);
+  o.globalAlpha = 1;
+  o.globalCompositeOperation = "source-over";
+  o.filter = "none";
+  o.clearRect(0, 0, w, h);
   const kids = n.children.filter((c) => c.visible);
   const draw = (c: XNode, op: GlobalCompositeOperation) => {
     o.globalCompositeOperation = op;
-    o.beginPath();
+    o.save();
     const sx = c.x * z;
     const sy = c.y * z;
-    const sw = c.w * z;
-    const sh = c.h * z;
-    if (c.kind === "ellipse") {
-      o.ellipse(sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), 0, 0, Math.PI * 2);
-    } else if (c.kind === "star") {
-      starPath(o, sx + sw / 2, sy + sh / 2, Math.min(sw, sh) / 2, c.count || 5, c.starRatio || 0.4);
-    } else if (c.kind === "poly") {
-      polyPath(o, sx + sw / 2, sy + sh / 2, Math.min(sw, sh) / 2, c.count || 3);
-    } else if (c.kind === "vector" && c.path.length) {
-      tracePath(o, c.path, c.x * z, c.y * z, z, c.closed);
-    } else if (typeof o.roundRect === "function") {
-      o.roundRect(sx, sy, sw, sh, (c.cornerRadii[0] || 0) * z);
-    } else {
-      o.rect(sx, sy, sw, sh);
+    const cx = sx + (c.w * z) / 2;
+    const cy = sy + (c.h * z) / 2;
+    if (c.rotation || c.flipH || c.flipV) {
+      o.translate(cx, cy);
+      if (c.rotation) o.rotate((c.rotation * Math.PI) / 180);
+      if (c.flipH || c.flipV) o.scale(c.flipH ? -1 : 1, c.flipV ? -1 : 1);
+      o.translate(-cx, -cy);
     }
+    const path = shapePoly(c);
+    tracePath(o, path, sx, sy, z, c.closed || (c.kind !== "line" && c.kind !== "arrow"));
     o.fillStyle = "#ffffff";
     o.fill();
+    o.restore();
   };
   if (!kids.length) return;
   draw(kids[0], "source-over");
@@ -1866,7 +2115,11 @@ function paintBoolean(
   }
   o.globalCompositeOperation = "source-in";
   o.fillStyle = fillStyle(o, n, 0, 0, w, h);
-  o.globalAlpha = n.fillOpacity ?? 1;
+  o.globalAlpha = n.fillVisible === false ? 0 : n.fillOpacity ?? 1;
   o.fillRect(0, 0, w, h);
   ctx.drawImage(oc, snap.panX + px * z, snap.panY + py * z);
+  if (booleanCanvases.size > 64) {
+    const first = booleanCanvases.keys().next().value;
+    if (first) booleanCanvases.delete(first);
+  }
 }

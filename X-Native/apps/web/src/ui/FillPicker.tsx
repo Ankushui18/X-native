@@ -78,6 +78,13 @@ export function FillPicker({
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    const next = parseHex(value.color);
+    setHsv(rgbToHsv(next.r, next.g, next.b));
+    setHex(value.color.replace("#", "").slice(0, 8).toUpperCase());
+    setCss(toCss(next.r, next.g, next.b, value.opacity / 100));
+  }, [value.color, value.opacity]);
+
+  useEffect(() => {
     const on = (e: MouseEvent) => {
       const t = e.target as HTMLElement;
       if (eyedropArmed() || justEyedropped()) return;

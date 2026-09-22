@@ -167,7 +167,7 @@ export function paintFill(
     ctx.fill();
     return;
   }
-  ctx.fillStyle = cssRgba(a, n.fillOpacity ?? 1);
+  ctx.fillStyle = cssRgba(a);
   ctx.fill();
 }
 
@@ -385,38 +385,33 @@ export function paintDropShadows(ctx: CanvasRenderingContext2D, n: XNode, z: num
   }
 }
 
-export function paintInnerShadows(
-  ctx: CanvasRenderingContext2D,
-  n: XNode,
-  sx: number,
-  sy: number,
-  sw: number,
-  sh: number,
-  z: number,
-) {
+export function paintInnerShadows(ctx: CanvasRenderingContext2D, n: XNode, z: number) {
   const inners = (n.effects ?? []).filter((e) => e.kind === "inner-shadow" && e.visible);
   if (!inners.length) return;
   for (const inner of inners) {
     const { r, g, b, a } = parseHex(inner.color);
     if (a <= 0) continue;
     ctx.save();
+    // Draw an offset, blurred copy of the shape, then remove the original
+    // interior. The remaining pixels are the shadow constrained to the edge.
     ctx.clip();
-    ctx.fillStyle = `rgba(${r},${g},${b},${a})`;
+    const color = `rgba(${r},${g},${b},${a})`;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = Math.max(0, inner.blur) * z;
+    ctx.shadowOffsetX = inner.x * z;
+    ctx.shadowOffsetY = inner.y * z;
+    ctx.fillStyle = color;
     ctx.fill();
-    const blur = Math.max(0, inner.blur) * z;
-    if (blur) ctx.filter = `blur(${blur}px)`;
-    ctx.globalCompositeOperation = "destination-out";
-    ctx.translate(inner.x * z, inner.y * z);
-    const spread = inner.spread * z;
-    if (spread && sw > 2 && sh > 2) {
-      const cx = sx + sw / 2;
-      const cy = sy + sh / 2;
-      const sxn = Math.max(0.05, (sw - spread * 2) / sw);
-      const syn = Math.max(0.05, (sh - spread * 2) / sh);
-      ctx.translate(cx, cy);
-      ctx.scale(sxn, syn);
-      ctx.translate(-cx, -cy);
+    if (inner.spread > 0) {
+      ctx.lineWidth = inner.spread * 2 * z;
+      ctx.strokeStyle = color;
+      ctx.stroke();
     }
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+    ctx.globalCompositeOperation = "destination-out";
     ctx.fillStyle = "#000";
     ctx.fill();
     ctx.restore();

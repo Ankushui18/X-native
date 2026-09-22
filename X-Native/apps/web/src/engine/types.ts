@@ -331,7 +331,7 @@ export const TOOL_META: {
   { id: "pen", label: "Pen", shortcut: "P" },
   { id: "pencil", label: "Pencil", shortcut: "⇧P" },
   { id: "brush", label: "Brush", shortcut: "B" },
-  { id: "eraser", label: "Eraser", shortcut: "⇧E" },
+  { id: "eraser", label: "Eraser", shortcut: "" },
   { id: "comment", label: "Comment", shortcut: "C" },
   { id: "hand", label: "Hand", shortcut: "H" },
 ];

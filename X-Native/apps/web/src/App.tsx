@@ -98,6 +98,7 @@ export default function App() {
         {actions && (
           <Actions
             engine={engine}
+            onPresent={present}
             onClose={() => setActions(false)}
             onHide={() => {
               setHideUi((v) => !v);

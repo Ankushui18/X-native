@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   AutoLayout,
   Constraint,
@@ -22,6 +22,7 @@ import type {
   XNode,
 } from "../engine/types";
 import { collectColors, defaultEffect, defaultLayout, find, findParent, framesOf, worldPos } from "../engine/memory";
+import { shapePoly } from "../engine/geometry";
 import { Icon } from "./icons";
 import { FillPicker, type FillValue } from "./FillPicker";
 import { BLENDS, handlesForFill, isNone, parseHex, withAlpha } from "./color";
@@ -101,7 +102,7 @@ export function RightPanel({
           <PageDesign engine={engine} tool={snap.tool} />
         )}
         {snap.rightTab === "design" && !inspect && n && wp && (
-          <Design n={n} x={wp.x} y={wp.y} engine={engine} snap={snap} />
+          <Design key={n.id} n={n} x={n.x} y={n.y} engine={engine} snap={snap} />
         )}
       </div>
     </aside>
@@ -287,6 +288,7 @@ function Prototype({
             >
               <option value="navigate">Navigate to</option>
               <option value="back">Back</option>
+              <option value="openUrl">Open URL</option>
             </select>
             {ix.action === "navigate" && (
               <select
@@ -304,6 +306,15 @@ function Prototype({
                     </option>
                   ))}
               </select>
+            )}
+            {ix.action === "openUrl" && (
+              <input
+                placeholder="https://example.com"
+                value={ix.destination}
+                onChange={(e) =>
+                  setIx(interactions.map((x, j) => (j === i ? { ...x, destination: e.target.value } : x)))
+                }
+              />
             )}
             <select
               value={ix.animation}
@@ -416,7 +427,8 @@ function Design({
       engine.dispatch({ type: "resize", id: n.id, x: n.x, y: n.y, w, h });
       return;
     }
-    engine.dispatch({ type: "patch", id: n.id, patch: { [key]: v } });
+    const next = key === "opacity" ? Math.max(0, Math.min(1, v)) : v;
+    engine.dispatch({ type: "patch", id: n.id, patch: { [key]: next } });
   };
   const kindLabel = n.imageSrc
     ? "Image"
@@ -515,14 +527,14 @@ function Design({
         <div className="align">
           <div className="g">
             {(["align-left", "align-hcenter", "align-right"] as const).map((ic) => (
-              <button key={ic} title={ic} onClick={() => align(engine, snap, ic)}>
+              <button key={ic} title={ic} onClick={(e) => align(engine, snap, ic, e.shiftKey)}>
                 <Icon name={ic} />
               </button>
             ))}
           </div>
           <div className="g">
             {(["align-top", "align-vcenter", "align-bottom"] as const).map((ic) => (
-              <button key={ic} title={ic} onClick={() => align(engine, snap, ic)}>
+              <button key={ic} title={ic} onClick={(e) => align(engine, snap, ic, e.shiftKey)}>
                 <Icon name={ic} />
               </button>
             ))}
@@ -957,7 +969,7 @@ function Design({
           <Icon name="plus" size={14} />
         </button>
       </div>
-      {n.fillVisible && !isNone(n.fill) && (
+      {(!isNone(n.fill) || n.fillVisible) && (
         <div className="insp-pad">
           <ColorRow
             value={n.fill}
@@ -966,6 +978,20 @@ function Design({
             type={n.fillType}
             second={n.fillB}
             blend={n.fillBlend}
+            image={n.imageSrc || undefined}
+            imageFit={n.imageFit}
+            imageRot={n.imageRot}
+            imageExposure={n.imageExposure}
+            imageContrast={n.imageContrast}
+            imageSaturation={n.imageSaturation}
+            imageTemperature={n.imageTemperature}
+            imageTint={n.imageTint}
+            imageHighlights={n.imageHighlights}
+            imageShadows={n.imageShadows}
+            gx={n.fillGX}
+            gy={n.fillGY}
+            hx={n.fillHX}
+            hy={n.fillHY}
             recents={collectColors(snap.pages[snap.page].root)}
             onChange={(fill) => engine.dispatch({ type: "patch", id: n.id, patch: { fill, fillVisible: true } })}
             onOpacity={(v) =>
@@ -980,6 +1006,7 @@ function Design({
               })
             }
             onMeta={(p) => engine.dispatch({ type: "patch", id: n.id, patch: p })}
+            onValueChange={(v) => engine.dispatch({ type: "patch", id: n.id, patch: fillValuePatch(v) })}
           />
         </div>
       )}
@@ -1004,7 +1031,7 @@ function Design({
           <Icon name="plus" size={14} />
         </button>
       </div>
-      {n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint) && (
+      {n.strokeWidth > 0 && (!isNone(n.strokePaint) || n.strokeVisible) && (
         <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
           <ColorRow
             title="Stroke"
@@ -1104,7 +1131,7 @@ function Design({
             <Field
               label="#"
               value={n.count || (n.kind === "star" ? 5 : 3)}
-              onChange={(count) => patch({ count: Math.max(3, Math.round(count)) })}
+              onChange={(count) => patch({ count: Math.max(3, Math.min(60, Math.round(count))) })}
             />
             {n.kind === "star" && (
               <Field
@@ -1242,18 +1269,23 @@ function Design({
                   >
                     <Icon name="strike" />
                   </button>
-                  <button
-                    className={n.textCase === "upper" ? "on" : ""}
-                    onClick={() =>
+                  <select
+                    aria-label="Letter case"
+                    value={n.textCase}
+                    onChange={(e) =>
                       engine.dispatch({
                         type: "patch",
                         id: n.id,
-                        patch: { textCase: n.textCase === "upper" ? "none" : "upper" },
+                        patch: { textCase: e.target.value as XNode["textCase"] },
                       })
                     }
                   >
-                    TT
-                  </button>
+                    <option value="none">Aa</option>
+                    <option value="upper">AA</option>
+                    <option value="lower">aa</option>
+                    <option value="title">Title Case</option>
+                    <option value="small-caps">Small caps</option>
+                  </select>
                 </div>
               </div>
               <label className="check">
@@ -1432,6 +1464,20 @@ function Field({
   hint?: string;
   onLabelClick?: () => void;
 }) {
+  const [draft, setDraft] = useState(() => fmt(value));
+  const focused = useRef(false);
+  useEffect(() => {
+    if (!focused.current) setDraft(fmt(value));
+  }, [value]);
+  const commit = () => {
+    const parsed = parseFloat(draft);
+    if (!Number.isNaN(parsed)) {
+      onChange(parsed);
+      setDraft(fmt(parsed));
+    } else {
+      setDraft(fmt(value));
+    }
+  };
   return (
     <div className="field">
       {icon ? (
@@ -1446,10 +1492,22 @@ function Field({
         </label>
       )}
       <input
-        value={fmt(value)}
+        value={draft}
+        onFocus={() => {
+          focused.current = true;
+        }}
         onChange={(e) => {
-          const v = parseFloat(e.target.value);
-          if (!Number.isNaN(v)) onChange(v);
+          const next = e.target.value;
+          setDraft(next);
+          const parsed = parseFloat(next);
+          if (!Number.isNaN(parsed)) onChange(parsed);
+        }}
+        onBlur={() => {
+          focused.current = false;
+          commit();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
         }}
       />
       {hint && hint !== "fixed" && <span className="hint">{hint[0].toUpperCase()}</span>}
@@ -1620,54 +1678,172 @@ function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
   );
 }
 
+function escXml(value: string) {
+  return value.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[ch] || ch);
+}
+
+function svgColor(value: string) {
+  if (isNone(value) || value.length < 7) return "none";
+  const { r, g, b, a } = parseHex(value);
+  return a < 1 ? `rgba(${r},${g},${b},${a})` : value.slice(0, 7);
+}
+
+function svgPath(n: XNode) {
+  const points = n.path.length ? n.path : shapePoly(n);
+  if (!points.length) return "";
+  const out = [`M ${points[0].x} ${points[0].y}`];
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1];
+    const point = points[i];
+    if ((prev.ox || prev.oy || point.ix || point.iy) && (prev.ox != null || prev.oy != null || point.ix != null || point.iy != null)) {
+      out.push(
+        `C ${prev.x + (prev.ox || 0)} ${prev.y + (prev.oy || 0)} ${point.x + (point.ix || 0)} ${point.y + (point.iy || 0)} ${point.x} ${point.y}`,
+      );
+    } else out.push(`L ${point.x} ${point.y}`);
+  }
+  if (n.closed || (n.kind !== "line" && n.kind !== "arrow" && n.kind !== "text")) out.push("Z");
+  return out.join(" ");
+}
+
+function svgShape(n: XNode, fill: string, stroke = "none") {
+  const path = svgPath(n);
+  if (!path) return "";
+  return `<path d="${path}" fill="${fill}" fill-opacity="${Math.max(0, Math.min(1, n.fillOpacity))}" stroke="${stroke}" stroke-opacity="${Math.max(0, Math.min(1, n.strokeOpacity))}" stroke-width="${Math.max(0, n.strokeWidth)}" stroke-linecap="${n.strokeCap === "round" ? "round" : n.strokeCap === "square" ? "square" : "butt"}" stroke-linejoin="${n.strokeJoin}" stroke-dasharray="${n.strokeDash > 0 ? `${n.strokeDash} ${n.strokeGap || n.strokeDash}` : "none"}"/>`;
+}
+
+function svgNode(n: XNode, top = false): string {
+  const id = `paint_${n.id.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+  const fill = n.fillVisible !== false ? svgColor(n.fill) : "none";
+  const stroke = n.strokeVisible && n.strokeWidth > 0 ? svgColor(n.strokePaint) : "none";
+  const defs: string[] = [];
+  let paint = fill;
+  if (n.fillType === "linear" && fill !== "none") {
+    defs.push(`<linearGradient id="${id}" x1="${n.fillGX}" y1="${n.fillGY}" x2="${n.fillHX}" y2="${n.fillHY}"><stop offset="0" stop-color="${fill}"/><stop offset="1" stop-color="${svgColor(n.fillB)}"/></linearGradient>`);
+    paint = `url(#${id})`;
+  } else if (n.fillType === "radial" && fill !== "none") {
+    defs.push(`<radialGradient id="${id}" cx="${n.fillGX * 100}%" cy="${n.fillGY * 100}%" r="100%"><stop offset="0" stop-color="${fill}"/><stop offset="1" stop-color="${svgColor(n.fillB)}"/></radialGradient>`);
+    paint = `url(#${id})`;
+  }
+  const transform = [
+    top ? "" : `translate(${n.x} ${n.y})`,
+    n.rotation ? `rotate(${n.rotation} ${n.w / 2} ${n.h / 2})` : "",
+    n.flipH || n.flipV ? `translate(${n.flipH ? n.w : 0} ${n.flipV ? n.h : 0}) scale(${n.flipH ? -1 : 1} ${n.flipV ? -1 : 1})` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const body: string[] = [];
+  if (defs.length) body.push(`<defs>${defs.join("")}</defs>`);
+  if (n.kind === "text") {
+    let text = n.text;
+    if (n.textCase === "upper" || n.textCase === "small-caps") text = text.toUpperCase();
+    if (n.textCase === "lower") text = text.toLowerCase();
+    if (n.textCase === "title") text = text.replace(/\w\S*/g, (t) => t[0].toUpperCase() + t.slice(1).toLowerCase());
+    let lines = text.split("\n");
+    if (n.truncate && lines.length > Math.max(1, n.maxLines || 1)) {
+      lines = lines.slice(0, Math.max(1, n.maxLines || 1));
+      lines[lines.length - 1] = `${lines[lines.length - 1].replace(/\s+$/, "")}…`;
+    }
+    const anchor = n.textAlign === "center" ? "middle" : n.textAlign === "right" ? "end" : "start";
+    const tx = n.textAlign === "center" ? n.w / 2 : n.textAlign === "right" ? n.w : 0;
+    const lineHeight = n.lineHeight || n.fontSize * 1.2;
+    const blockHeight = lines.length * lineHeight;
+    const yOffset =
+      n.textAlignVertical === "middle"
+        ? (n.h - blockHeight) / 2
+        : n.textAlignVertical === "bottom"
+          ? n.h - blockHeight
+          : 0;
+    const content = lines
+      .map((line, i) => `<tspan x="${tx}" dy="${i ? lineHeight : yOffset + n.fontSize}">${escXml(line)}</tspan>`)
+      .join("");
+    const textStroke = n.strokeVisible && n.strokeWidth > 0 ? svgColor(n.strokePaint) : "none";
+    body.push(
+      `<text x="${tx}" y="0" text-anchor="${anchor}" dominant-baseline="hanging" fill="${paint}" fill-opacity="${Math.max(0, Math.min(1, n.fillOpacity))}" stroke="${textStroke}" stroke-opacity="${Math.max(0, Math.min(1, n.strokeOpacity))}" stroke-width="${Math.max(0, n.strokeWidth)}" font-family="${escXml(n.fontFamily)}" font-size="${n.fontSize}" font-weight="${n.fontWeight}" letter-spacing="${n.letterSpacing}" text-decoration="${n.textDecoration === "none" ? "none" : n.textDecoration}">${content}</text>`,
+    );
+  } else if (n.imageSrc) {
+    const preserve = n.imageFit === "fit" ? "xMidYMid meet" : n.imageFit === "crop" ? "xMidYMid slice" : n.imageFit === "tile" ? "none" : "none";
+    body.push(`<image href="${escXml(n.imageSrc)}" x="0" y="0" width="${n.w}" height="${n.h}" preserveAspectRatio="${preserve}"/>`);
+  } else if (n.kind !== "group" && n.kind !== "frame" && n.kind !== "component" && n.kind !== "instance") {
+    body.push(svgShape(n, paint, stroke));
+  } else if (fill !== "none" || stroke !== "none") {
+    body.push(svgShape(n, paint, stroke));
+  }
+  if (n.kind === "frame" && n.overflow !== "visible") {
+    body.push(`<g clip-path="url(#clip_${id})">${n.children.map((c) => svgNode(c)).join("")}</g>`);
+    body.unshift(`<defs><clipPath id="clip_${id}"><path d="${svgPath(n)}"/></clipPath></defs>`);
+  } else {
+    body.push(n.children.map((c) => svgNode(c)).join(""));
+  }
+  return `<g${transform ? ` transform="${transform}"` : ""} opacity="${Math.max(0, Math.min(1, n.opacity))}">${body.join("")}</g>`;
+}
+
+function exportSvg(n: XNode, p: ExportPreset) {
+  const width = Math.max(1, Math.round(n.w * p.scale));
+  const height = Math.max(1, Math.round(n.h * p.scale));
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${Math.max(1, n.w)} ${Math.max(1, n.h)}"><title>${escXml(n.name)}</title>${svgNode(n, true)}</svg>`;
+}
+
+function downloadBlob(blob: Blob, name: string) {
+  const a = document.createElement("a");
+  a.download = name;
+  a.href = URL.createObjectURL(blob);
+  a.click();
+  window.setTimeout(() => URL.revokeObjectURL(a.href), 0);
+}
+
 function runExport(n: XNode, p: ExportPreset) {
-  const w = Math.max(1, Math.round(n.w * p.scale));
-  const h = Math.max(1, Math.round(n.h * p.scale));
+  const width = Math.max(1, Math.round(n.w * p.scale));
+  const height = Math.max(1, Math.round(n.h * p.scale));
   const name = `${n.name}${p.suffix}.${p.format.toLowerCase()}`;
-  const fill = n.fillVisible && !isNone(n.fill) ? n.fill : "none";
+  const svg = exportSvg(n, p);
   if (p.format === "SVG" || p.format === "PDF") {
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${Math.round(n.w)} ${Math.round(n.h)}">${n.kind === "ellipse" ? `<ellipse cx="${n.w / 2}" cy="${n.h / 2}" rx="${n.w / 2}" ry="${n.h / 2}" fill="${fill}"/>` : `<rect width="${n.w}" height="${n.h}" rx="${n.cornerRadii[0]}" fill="${fill}"/>`}${n.strokeVisible && n.strokeWidth ? `<rect width="${n.w}" height="${n.h}" fill="none" stroke="${n.strokePaint}" stroke-width="${n.strokeWidth}"/>` : ""}</svg>`;
-    const a = document.createElement("a");
-    a.download = name.replace(/\.pdf$/, ".svg");
-    a.href = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
-    a.click();
+    // PDF export remains an SVG download in browsers without a PDF encoder.
+    downloadBlob(new Blob([svg], { type: "image/svg+xml" }), name.replace(/\.pdf$/i, ".svg"));
     return;
   }
-  const c = document.createElement("canvas");
-  c.width = w;
-  c.height = h;
-  const ctx = c.getContext("2d");
-  if (!ctx) return;
-  if (p.format === "JPG") {
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, w, h);
-  }
-  if (fill !== "none") {
-    ctx.fillStyle = fill;
-    const r = n.cornerRadii[0] * p.scale;
-    if (n.kind === "ellipse") {
-      ctx.beginPath();
-      ctx.ellipse(w / 2, h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (typeof ctx.roundRect === "function") {
-      ctx.beginPath();
-      ctx.roundRect(0, 0, w, h, r);
-      ctx.fill();
-    } else {
-      ctx.fillRect(0, 0, w, h);
+  const image = new Image();
+  image.onload = () => {
+    const c = document.createElement("canvas");
+    c.width = width;
+    c.height = height;
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    if (p.format === "JPG") {
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, width, height);
     }
-  }
-  c.toBlob(
-    (b) => {
-      if (!b) return;
-      const a = document.createElement("a");
-      a.download = name;
-      a.href = URL.createObjectURL(b);
-      a.click();
-    },
-    p.format === "JPG" ? "image/jpeg" : "image/png",
-    0.92,
-  );
+    ctx.drawImage(image, 0, 0, width, height);
+    c.toBlob((blob) => blob && downloadBlob(blob, name), p.format === "JPG" ? "image/jpeg" : "image/png", 0.92);
+  };
+  image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+function fillValuePatch(v: FillValue): Partial<XNode> {
+  const type = v.type || "solid";
+  const handles = handlesForFill(type);
+  return {
+    fill: v.color,
+    fillOpacity: Math.max(0, Math.min(1, (v.opacity ?? 100) / 100)),
+    fillVisible: true,
+    fillType: type,
+    fillB: v.second,
+    fillBlend: v.blend,
+    imageSrc: type === "image" ? v.image || "" : "",
+    imageFit: v.imageFit || "fill",
+    imageRot: v.imageRot || 0,
+    imageExposure: v.imageExposure || 0,
+    imageContrast: v.imageContrast || 0,
+    imageSaturation: v.imageSaturation || 0,
+    imageTemperature: v.imageTemperature || 0,
+    imageTint: v.imageTint || 0,
+    imageHighlights: v.imageHighlights || 0,
+    imageShadows: v.imageShadows || 0,
+    ...(v.gx != null
+      ? { fillGX: v.gx, fillGY: v.gy, fillHX: v.hx, fillHY: v.hy }
+      : handles
+        ? { fillGX: handles.fillGX, fillGY: handles.fillGY, fillHX: handles.fillHX, fillHY: handles.fillHY }
+        : {}),
+  };
 }
 
 function ColorRow({
@@ -1698,6 +1874,7 @@ function ColorRow({
   onVisible,
   onRemove,
   onMeta,
+  onValueChange,
 }: {
   title?: string;
   value: string;
@@ -1726,6 +1903,7 @@ function ColorRow({
   onVisible?: (v: boolean) => void;
   onRemove?: () => void;
   onMeta?: (p: Partial<XNode>) => void;
+  onValueChange?: (v: FillValue) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
@@ -1764,7 +1942,7 @@ function ColorRow({
           value={`${opacity}%`}
           onChange={(e) => {
             const v = parseFloat(e.target.value);
-            if (!Number.isNaN(v)) onOpacity(v);
+            if (!Number.isNaN(v)) onOpacity(Math.max(0, Math.min(100, v)));
           }}
         />
       )}
@@ -1807,29 +1985,13 @@ function ColorRow({
           recents={recents}
           anchor={anchor}
           onChange={(v) => {
+            if (onValueChange) {
+              onValueChange(v);
+              return;
+            }
             onChange(v.color);
             onOpacity?.(v.opacity);
-            const handles = v.type !== type ? handlesForFill(v.type) : null;
-            onMeta?.({
-              fillType: v.type,
-              fillB: v.second,
-              fillBlend: v.blend,
-              fillVisible: true,
-              ...(v.image != null ? { imageSrc: v.image } : {}),
-              ...(v.imageFit ? { imageFit: v.imageFit } : {}),
-              ...(v.imageRot != null ? { imageRot: v.imageRot } : {}),
-              imageExposure: v.imageExposure ?? 0,
-              imageContrast: v.imageContrast ?? 0,
-              imageSaturation: v.imageSaturation ?? 0,
-              imageTemperature: v.imageTemperature ?? 0,
-              imageTint: v.imageTint ?? 0,
-              imageHighlights: v.imageHighlights ?? 0,
-              imageShadows: v.imageShadows ?? 0,
-              ...(handles ??
-                (v.gx != null
-                  ? { fillGX: v.gx, fillGY: v.gy, fillHX: v.hx, fillHY: v.hy }
-                  : {})),
-            });
+            onMeta?.(fillValuePatch(v));
           }}
           onClose={() => setOpen(false)}
         />
@@ -1861,8 +2023,28 @@ export function align(
     | "align-top"
     | "align-vcenter"
     | "align-bottom",
+  toParent = false,
 ) {
   const root = snap.pages[snap.page].root;
+  if (toParent && snap.selection.length) {
+    engine.dispatch({ type: "begin" });
+    for (const id of snap.selection) {
+      const n = find(root, id);
+      const p = n ? findParent(root, n.id) : null;
+      if (!n || !p || p === root) continue;
+      let dx = 0;
+      let dy = 0;
+      if (mode === "align-left") dx = -n.x;
+      if (mode === "align-right") dx = p.w - n.w - n.x;
+      if (mode === "align-hcenter") dx = (p.w - n.w) / 2 - n.x;
+      if (mode === "align-top") dy = -n.y;
+      if (mode === "align-bottom") dy = p.h - n.h - n.y;
+      if (mode === "align-vcenter") dy = (p.h - n.h) / 2 - n.y;
+      if (dx || dy) engine.dispatch({ type: "move", ids: [n.id], dx, dy });
+    }
+    engine.dispatch({ type: "end" });
+    return;
+  }
   if (snap.selection.length === 1) {
     const n = find(root, snap.selection[0]);
     const p = n ? findParent(root, n.id) : null;
