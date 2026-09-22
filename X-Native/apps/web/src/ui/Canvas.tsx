@@ -16,6 +16,8 @@ import { Comments } from "./Comments";
 import { useTheme } from "./theme";
 import { cssRgba, isNone, parseHex, takeEyedrop, toHex } from "./color";
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
+import { importSvg } from "../engine/svgImport";
+import { toast } from "./toast";
 
 /** Snap radius in screen pixels; divided by zoom to get world tolerance. */
 const SNAP_PX = 6;
@@ -1858,8 +1860,67 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     hoverIx.current = "";
   };
 
+  /** SVG is a vector format, so it becomes editable layers rather than a flat
+   *  image fill. Everything else is placed as an image as before. */
+  const placeSvg = (file: File, at?: { x: number; y: number }) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      let result;
+      try {
+        result = importSvg(String(reader.result));
+      } catch {
+        toast(`Could not read ${file.name}`);
+        return;
+      }
+      if (!result.nodes.length) {
+        toast(`Nothing importable in ${file.name}`);
+        return;
+      }
+      const ox = at?.x ?? 80;
+      const oy = at?.y ?? 80;
+      const current = engine.snapshot();
+      const root = current.pages[current.page].root;
+      const host = deepestFrame(root, ox, oy);
+      const origin = host ? worldToLocal(root, host.id, ox, oy) : { x: ox, y: oy };
+      // One undo step for the whole file, not one per shape.
+      engine.dispatch({ type: "begin" });
+      for (const n of result.nodes) {
+        const { kind, name, x, y, w, h, ...rest } = n;
+        // Spreading an explicit `undefined` overwrites the node factory's
+        // default (cornerRadii became undefined and crashed the inspector), so
+        // unset optional fields must be dropped rather than passed through.
+        for (const k of Object.keys(rest) as (keyof typeof rest)[]) {
+          if (rest[k] === undefined) delete rest[k];
+        }
+        engine.dispatch({
+          type: "add",
+          kind,
+          x: origin.x + x,
+          y: origin.y + y,
+          w: Math.max(1, w),
+          h: Math.max(1, h),
+          parent: host?.id,
+          extra: { name, ...rest } as Partial<XNode>,
+        });
+      }
+      engine.dispatch({ type: "end" });
+      toast(
+        result.skipped
+          ? `Imported ${result.nodes.length} layers · ${result.skipped} unsupported skipped`
+          : `Imported ${result.nodes.length} layers`,
+      );
+    };
+    reader.readAsText(file);
+  };
+
   const placeFiles = (files: FileList | File[], at?: { x: number; y: number }) => {
-    const list = Array.from(files).filter((f) => f.type.startsWith("image/"));
+    const all = Array.from(files);
+    for (const f of all) {
+      if (f.type === "image/svg+xml" || /\.svg$/i.test(f.name)) placeSvg(f, at);
+    }
+    const list = all.filter(
+      (f) => f.type.startsWith("image/") && f.type !== "image/svg+xml" && !/\.svg$/i.test(f.name),
+    );
     let ox = at?.x ?? 80;
     let oy = at?.y ?? 80;
     list.forEach((file) => {
@@ -2042,7 +2103,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       <input
         ref={fileRef}
         type="file"
-        accept="image/png,image/jpeg,image/gif,image/webp,image/*"
+        accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml,.svg,image/*"
         hidden
         onChange={(e) => {
           if (e.target.files) placeFiles(e.target.files, pendingImage.current ?? undefined);

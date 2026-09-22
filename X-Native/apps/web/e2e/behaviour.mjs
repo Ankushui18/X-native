@@ -368,6 +368,83 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 13. SVG import produces editable layers, not a flat image ---------------
+{
+  const p = await page();
+  const drop = (svg, name) => p.evaluate((s, n) => {
+    const dt = new DataTransfer();
+    dt.items.add(new File([s], n, { type: "image/svg+xml" }));
+    document.querySelector(".canvas-wrap").dispatchEvent(
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 700, clientY: 450 }));
+  }, svg, name);
+
+  const before = (await rows(p)).length;
+  await drop(`<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120">
+    <rect x="10" y="10" width="80" height="50" fill="#ff0000"/>
+    <circle cx="150" cy="40" r="30" fill="#00ff00"/>
+    <text x="20" y="100" font-size="16" fill="#0000ff">Hello</text></svg>`, "logo.svg");
+  await sleep(1400);
+  const after = await rows(p);
+  t(`SVG becomes one layer per shape (${before} -> ${after.length})`, after.length === before + 3);
+  t("SVG text arrives as a text layer", after.includes("Hello"));
+  t("SVG circle arrives as an ellipse", after.includes("Ellipse"));
+
+  // the fill has to actually render, not just exist in the model
+  const red = await p.evaluate(() => {
+    const c = document.querySelector("canvas");
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i] > 200 && d[i + 1] < 60 && d[i + 2] < 60 && d[i + 3] > 200) n++;
+    }
+    return n;
+  });
+  t(`imported fill renders on canvas (${red}px red)`, red > 200);
+
+  // one undo must remove the whole file, not one shape
+  await p.keyboard.down("Meta"); await p.keyboard.press("z"); await p.keyboard.up("Meta");
+  await sleep(700);
+  t(`one undo removes the whole import (${(await rows(p)).length})`, (await rows(p)).length === before);
+  await p.close();
+}
+{
+  const p = await page();
+  const before = (await rows(p)).length;
+  // groups with transforms, paths and polygons
+  await p.evaluate(() => {
+    const s = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">
+      <g transform="translate(50,20)" fill="#00aa00">
+        <rect x="0" y="0" width="40" height="40"/><circle cx="80" cy="20" r="15"/></g>
+      <path d="M10 150 L60 120 L110 150 Z" fill="#884400"/>
+      <polygon points="200,20 240,60 200,100 160,60" fill="#0088ff"/></svg>`;
+    const dt = new DataTransfer();
+    dt.items.add(new File([s], "b.svg", { type: "image/svg+xml" }));
+    document.querySelector(".canvas-wrap").dispatchEvent(
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 700, clientY: 450 }));
+  });
+  await sleep(1400);
+  const after = await rows(p);
+  t(`nested groups, paths and polygons all import (${before} -> ${after.length})`, after.length === before + 4);
+  t("path imports as a vector layer", after.includes("Path"));
+  await p.close();
+}
+{
+  // a malformed file must not break the app
+  const p = await page();
+  const before = (await rows(p)).length;
+  await p.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.items.add(new File(["<svg><broken"], "bad.svg", { type: "image/svg+xml" }));
+    document.querySelector(".canvas-wrap").dispatchEvent(
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 700, clientY: 450 }));
+  });
+  await sleep(1000);
+  const toast = await p.evaluate(() => document.querySelector(".toast")?.textContent || "");
+  t(`malformed SVG is reported, not crashed (${JSON.stringify(toast)})`,
+    (await rows(p)).length === before && /could not read|nothing importable/i.test(toast));
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();
