@@ -52,10 +52,12 @@ The baseline was checked against these Figma Design articles:
 | Nested transformed-parent engine probe | **PASS** — matrix hit testing and deepest-frame placement for rotated parent |
 | Vite preview HTTP smoke | **PASS** on port 5173 during this PR pass |
 | Browser pointer replay / screenshot diff | **NOT RUN** — browser automation is not installed in the sandbox |
-| Rust workspace gate | **NOT RUN** — `cargo` is not installed in the sandbox |
+| Rust workspace gate | **PASS remotely** — GitHub `scripts/check.sh`: 914 tests passed, zero ignored, clippy and design guard green |
+| Opt-in Rust software-Vulkan screenshot suite | **PASS remotely** — GitHub `Screenshots (software Vulkan)` job passed |
+| Local Rust toolchain | **NOT RUN locally** — `cargo` is not installed in the sandbox; the remote gate is the Rust validation source |
 
-The matrix proves command/model invariants; it does not replace Figma's browser canvas
-or a human visual comparison. Scores marked MV remain open for that reason.
+The matrix and CI prove command/model invariants; they do not replace Figma's browser
+canvas or a human visual comparison. Scores marked MV remain open for that reason.
 
 ## 1. Product shell, navigation, and chrome
 
@@ -344,6 +346,16 @@ The implementation refinements that raised the scores above are:
 8. **Field/edit ergonomics:** inspector numeric fields preserve intermediate input and
    commit on blur/Enter; FillPicker updates can be sent as one node patch so a color
    change does not manufacture separate color/opacity/metadata undo steps.
+9. **Rust/core regression repair:** component-property writes preserve legacy `.x`
+   target keys for existing readers while direct typed overrides can retain multiple
+   property kinds on one layer; property-editor writes remain exclusive where the
+   existing editor contract requires one value. The workspace lockfile was regenerated
+   for the removed native dependencies, and the Rust formatting/test regressions exposed
+   by CI were corrected without adding product behavior.
+10. **Shared text clipping:** the IR and direct Rust render paths now apply the same
+    text-box clip only when text has ink; golden-render and FrameCache expectations were
+    updated to record the intentional clip commands. The software-Vulkan screenshot
+    suite and the full remote workspace gate pass on the resulting branch.
 
 No AI/agent work, new product feature, native UI, or second product UI was added.
 
