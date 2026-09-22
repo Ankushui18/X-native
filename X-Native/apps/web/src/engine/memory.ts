@@ -365,6 +365,15 @@ interface Internal {
   showRulers: boolean;
 }
 
+/** Cap the undo stack. Each entry is a full document clone, so an unbounded
+ *  stack grows memory without limit during a long editing session. */
+const MAX_UNDO = 200;
+
+/** Commands whose rapid repeats collapse into a single undo step. Only
+ *  incremental, self-repeating gestures belong here — structural edits must
+ *  always get their own entry. */
+const COALESCABLE = new Set<string>(["nudge", "move", "resize"]);
+
 export class MemoryEngine implements Engine {
   private state: Internal;
   private undo: Internal[] = [];
@@ -372,6 +381,10 @@ export class MemoryEngine implements Engine {
   private listeners = new Set<() => void>();
   private snapCache: Snapshot;
   private grouping = false;
+  /** Last history-pushing command type and its timestamp, used to coalesce
+   *  rapid repeats of the same command (e.g. holding an arrow key) into a
+   *  single undo step, as Figma does. */
+  private lastHist: { type: string; at: number } | null = null;
   private clip: XNode[] = [];
 
   constructor() {
@@ -421,8 +434,13 @@ export class MemoryEngine implements Engine {
       }
       return;
     }
+    // Pure selection/view commands must never enter history: a user pressing
+    // undo expects the last *document* change to revert, not to spend a step
+    // undoing a select-all or a ruler toggle.
     const hist = ![
       "select",
+      "selectAll",
+      "toggleRulers",
       "setTool",
       "setZoom",
       "pan",
@@ -441,8 +459,25 @@ export class MemoryEngine implements Engine {
       "presentStop",
     ].includes(cmd.type);
     if (hist && !this.grouping) {
-      this.undo.push(clone(this.state));
+      // Coalesce a burst of identical commands (arrow-key nudges, repeated
+      // resize steps) into one undo entry so a single undo reverses the whole
+      // gesture instead of one keypress at a time.
+      const now = Date.now();
+      const COALESCE_MS = 600;
+      const repeat =
+        COALESCABLE.has(cmd.type) &&
+        this.lastHist !== null &&
+        this.lastHist.type === cmd.type &&
+        now - this.lastHist.at < COALESCE_MS;
+      if (!repeat) {
+        this.undo.push(clone(this.state));
+        if (this.undo.length > MAX_UNDO) this.undo.shift();
+      }
       this.redo = [];
+      this.lastHist = { type: cmd.type, at: now };
+    } else if (!hist && cmd.type !== "undo" && cmd.type !== "redo") {
+      // A non-history command (select, zoom, ...) ends the current burst.
+      this.lastHist = null;
     }
     this.apply(cmd);
     this.relayout();
