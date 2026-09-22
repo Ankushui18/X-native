@@ -951,7 +951,8 @@ mod tests {
         assert_eq!(fc2.segments.len(), 1, "3 children fit one bucket");
         // reference sanity: the 3 child paint commands, and nothing else — the
         // root frame (the page) contributes no name label
-        assert_eq!(reference.commands.len(), 3);
+        // The text box clip and matching pop are part of the shared IR too.
+        assert_eq!(reference.commands.len(), 5);
     }
 }
 

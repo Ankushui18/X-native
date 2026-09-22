@@ -21,7 +21,7 @@ use crate::design_system::{ColorTokens, COLOR_ROLES};
 /// The shipped UI themes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThemeId {
-    /// Dark "Graphite & Signal" — the product default.
+    /// Dark Figma UI3 chrome — the product default.
     Graphite,
     /// Light theme for daylight work and screen sharing.
     Daylight,
@@ -379,9 +379,9 @@ mod tests {
             assert_eq!(from, to, "graphite must map to itself");
         }
         // a themed panel color keeps its alpha
-        let c = g.remap_color(&g, [0x1b, 0x1d, 0x23, 230]);
-        assert_eq!(c, [0x1b, 0x1d, 0x23, 230]);
-        let l = ColorTokens::DAYLIGHT.remap_color(&g, [0x1b, 0x1d, 0x23, 230]);
+        let c = g.remap_color(&g, [0x2c, 0x2c, 0x2c, 230]);
+        assert_eq!(c, [0x2c, 0x2c, 0x2c, 230]);
+        let l = ColorTokens::DAYLIGHT.remap_color(&g, [0x2c, 0x2c, 0x2c, 230]);
         assert_eq!(l, [0xff, 0xff, 0xff, 230]);
         // unknown colors pass through untouched
         let u = ColorTokens::DAYLIGHT.remap_color(&g, [0xf2, 0x4e, 0x1e, 255]);

@@ -16,20 +16,22 @@ use vello::peniko::{Brush, Color, Fill, Mix};
 use vello::Scene;
 use x_core::*;
 
-/// How far above a frame/section's top-left corner its name label is drawn.
-/// A name is canvas chrome: a 12px label with a 1.2 line box needs ~14.4px,
-/// plus a ~5.6px gap to the frame edge — Figma's 12px gutter label. Both the
-/// Frame and the Section arm use it, so a frame and a section put their name
-/// on the same line.
-pub const LABEL_ABOVE_Y: f64 = -20.0;
+/// OpenPencil / Figma UI3 canvas frame names: 11px Inter Regular, with an
+/// 8px gap between the bottom of the glyphs and the frame's top edge.
+/// `LABEL_ABOVE_Y` is the world-space translation used by the IR / direct
+/// encoders (top of an 11px line); the canvas overlay places by baseline so
+/// the same gap holds at every zoom.
+pub const LABEL_FONT_SIZE: f64 = 11.0;
+pub const LABEL_OFFSET_Y: f64 = 8.0;
 
-/// Point size of that label — Figma's 12px frame name. One constant for both
-/// encoders (this one and the direct encoder in `scene.rs`), both arms (Frame
-/// and Section), and the canvas overlay (`editor_ui::paint_frame_labels`, via
-/// the facade re-export), so a name reads the same size whether it was lowered
-/// through the IR, painted straight into a scene by an export/thumbnail, or
-/// drawn in screen space over the canvas.
-pub const LABEL_SIZE: f64 = 12.0;
+/// How far above a frame's top-left corner its name label is drawn in world
+/// space. OpenPencil: `-(LABEL_OFFSET_Y + LABEL_FONT_SIZE)`.
+pub const LABEL_ABOVE_Y: f64 = -(LABEL_OFFSET_Y + LABEL_FONT_SIZE);
+
+/// Point size of that label — OpenPencil `LABEL_FONT_SIZE` (11px), which is
+/// Figma UI3's frame name. One constant for both encoders, both arms, and the
+/// canvas overlay (`editor_ui::paint_frame_labels`).
+pub const LABEL_SIZE: f64 = LABEL_FONT_SIZE;
 
 /// Ink of a canvas name label (`LABEL_ABOVE_Y` / `LABEL_SIZE` above). ONE owner
 /// for "which grey": the IR encoder and the direct scene encoder both call this,
@@ -322,6 +324,16 @@ impl RenderTree {
 /// outline of their own use it; the rest — text, images, groups, frames,
 /// instances — clip to their bounds, a superset of Figma's per-pixel
 /// coverage (glyph coverage, image alpha) and the named delta there.
+fn node_fill_override(
+    overrides: &std::collections::HashMap<String, String>,
+    id: &str,
+) -> Option<Color> {
+    overrides
+        .get(&format!("{id}\x1ffill"))
+        .or_else(|| overrides.get(id))
+        .and_then(|raw| parse_hex_color(raw))
+}
+
 fn mask_path_of(n: &Node) -> Option<BezPath> {
     match &n.kind {
         NodeKind::Vector { path } if !path.is_empty() => Some(path_to_bez(path)),
@@ -1279,7 +1291,7 @@ fn lower(
             } else {
                 Rect::new(0.0, 0.0, node.w, node.h).into_path(0.1)
             };
-            let override_color = overrides.get(&node.id).and_then(|raw| parse_hex_color(raw));
+            let override_color = node_fill_override(overrides, node.id.as_str());
             emit_visual_layers(
                 tree,
                 node,
@@ -1295,14 +1307,14 @@ fn lower(
             let r = node.w.min(node.h) / 2.0;
             let t = world * Affine::scale_non_uniform(node.w / node.h, 1.0);
             let shape = Circle::new((r, r), r).into_path(0.1);
-            let override_color = overrides.get(&node.id).and_then(|raw| parse_hex_color(raw));
+            let override_color = node_fill_override(overrides, node.id.as_str());
             emit_visual_layers(tree, node, &key, t, &shape, vars, opacity, override_color);
         }
         NodeKind::Arc { start, end, ratio } => {
             let shape = path_to_bez(&x_core::booleans::arc_path_cmds(
                 node.w, node.h, *start, *end, *ratio,
             ));
-            let override_color = overrides.get(&node.id).and_then(|raw| parse_hex_color(raw));
+            let override_color = node_fill_override(overrides, node.id.as_str());
             emit_visual_layers(
                 tree,
                 node,
@@ -1316,7 +1328,7 @@ fn lower(
         }
         NodeKind::Poly { sides } => {
             let shape = path_to_bez(&x_core::booleans::poly_path_cmds(node.w, node.h, *sides));
-            let override_color = overrides.get(&node.id).and_then(|raw| parse_hex_color(raw));
+            let override_color = node_fill_override(overrides, node.id.as_str());
             emit_visual_layers(
                 tree,
                 node,
@@ -1331,7 +1343,7 @@ fn lower(
         NodeKind::Star { points, ratio } => {
             let cmds = x_core::booleans::star_path_cmds(node.w, node.h, *points, *ratio);
             let shape = path_to_bez(&cmds);
-            let override_color = overrides.get(&node.id).and_then(|raw| parse_hex_color(raw));
+            let override_color = node_fill_override(overrides, node.id.as_str());
             emit_visual_layers(
                 tree,
                 node,
@@ -1358,13 +1370,14 @@ fn lower(
         NodeKind::Vector { path: p } => {
             if !p.is_empty() {
                 let bez = path_to_bez(p);
-                let override_color = overrides.get(&node.id).and_then(|raw| parse_hex_color(raw));
+                let override_color = node_fill_override(overrides, node.id.as_str());
                 emit_visual_layers(tree, node, &key, world, &bez, vars, opacity, override_color);
             }
         }
         NodeKind::Text { text } => {
             let content = overrides
-                .get(&node.id)
+                .get(&format!("{}\x1ftext", node.id))
+                .or_else(|| overrides.get(&node.id))
                 .and_then(|v| v.strip_prefix("text:"))
                 .unwrap_or(text);
             let content = if hidden == Some(node.id.as_str()) {
@@ -1438,23 +1451,29 @@ fn lower(
             let text_override = overrides
                 .get(&node.id)
                 .and_then(|v| v.strip_prefix("text:"));
+            let tc = node.bindings.get("tc").map(String::as_str);
+            let (cased, cased_runs) = if text_override.is_none() {
+                x_core::apply_text_case_with_runs(content, &node.text_runs, tc)
+            } else {
+                (x_core::apply_text_case(content, tc), Vec::new())
+            };
+            let content = cased.as_str();
+            let text_has_ink = !content.is_empty();
+            if text_has_ink {
+                let text_clip =
+                    Rect::new(0.0, 0.0, node.w.max(0.0), node.h.max(0.0)).into_path(0.1);
+                tree.commands.push(RenderCommand::PushClip {
+                    key: format!("{key}/text-clip"),
+                    transform: world,
+                    path: text_clip,
+                });
+            }
             let base_parts: Option<Vec<TextPart>> =
-                if text_override.is_none() && !node.text_runs.is_empty() {
-                    Some(resolve_text_parts(content, &node.text_runs))
+                if text_override.is_none() && !cased_runs.is_empty() {
+                    Some(resolve_text_parts(content, &cased_runs))
                 } else {
                     None
                 };
-            // text case rewrites the CONTENT; rich-run char ranges would go
-            // stale (case can change counts), so case applies to plain text
-            // only — weight/family keep the run pipeline
-            let content_box;
-            let content = if base_parts.is_none() {
-                content_box =
-                    x_core::apply_text_case(content, node.bindings.get("tc").map(String::as_str));
-                content_box.as_str()
-            } else {
-                content
-            };
             // node-level weight (no explicit runs): synthesize one run so the
             // rich pipeline resolves the weighted face ("Inter"+600->Inter-600)
             let weight_runs: Option<Vec<TextPart>> = if base_parts.is_none() {
@@ -1549,6 +1568,9 @@ fn lower(
                     tree.commands.push(RenderCommand::PopLayer);
                 }
             }
+            if text_has_ink {
+                tree.commands.push(RenderCommand::PopLayer);
+            }
         }
         NodeKind::Image {
             asset,
@@ -1606,7 +1628,7 @@ fn lower(
             } else {
                 Rect::new(0.0, 0.0, node.w, node.h).into_path(0.1)
             };
-            let override_color = overrides.get(&node.id).and_then(|raw| parse_hex_color(raw));
+            let override_color = node_fill_override(overrides, node.id.as_str());
             emit_visual_layers(
                 tree,
                 node,
@@ -1705,7 +1727,7 @@ fn lower(
             // a visible fill) so a frame's own effects — drop shadow, inner
             // shadow, layer/background blur — render even on a frame with
             // no fill, matching how every other node kind handles effects.
-            let override_color = overrides.get(&node.id).and_then(|raw| parse_hex_color(raw));
+            let override_color = node_fill_override(overrides, node.id.as_str());
             emit_visual_layers(
                 tree,
                 node,
@@ -2257,7 +2279,7 @@ mod tests {
                 assert!((t.y - (60.0 + LABEL_ABOVE_Y)).abs() < 1e-9, "{t:?}");
                 assert!(t.y < 60.0, "the label sits ABOVE the frame");
                 assert_eq!(*size, LABEL_SIZE);
-                assert_eq!(*size, 12.0, "Figma's frame name is 12px");
+                assert_eq!(*size, 11.0, "OpenPencil / Figma UI3 frame name is 11px");
                 assert_eq!(*max_width, 280.0);
             }
             other => panic!("expected Glyphs, got {other:?}"),
@@ -2354,6 +2376,27 @@ mod tests {
             .map(|t| t.id.clone())
             .collect();
         assert_eq!(ids, vec!["Hero".to_string(), "Card".to_string()]);
+    }
+
+    /// Deleting a named frame must drop it from the overlay's target list —
+    /// a leftover name after the frame is gone is the ghost-label bug.
+    #[test]
+    fn deleting_a_frame_drops_it_from_the_label_targets() {
+        let mut hero = Node::frame("Hero", 300.0, 200.0);
+        hero.name = "Hero".into();
+        let mut page = Node::frame("Page", 800.0, 600.0).child(hero);
+        assert_eq!(
+            frame_label_targets(&page)
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Hero"]
+        );
+        page.children.clear();
+        assert!(
+            frame_label_targets(&page).is_empty(),
+            "a removed frame must not keep its canvas name"
+        );
     }
 
     /// The overlay's target list and the IR lowering must agree about WHICH

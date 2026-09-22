@@ -236,7 +236,10 @@ jobs:
       - name: Opt-in GPU + screenshot tests
         run: |
           set +e
-          cargo test --workspace --locked -- --ignored > /tmp/visual.log 2>&1
+          # The regular gate enforces Cargo.lock with --locked. The opt-in
+          # visual suite may resolve the ignored GPU test target's dev graph;
+          # keep it runnable while the normal workspace gate remains strict.
+          cargo test --workspace -- --ignored > /tmp/visual.log 2>&1
           status=$?
           tail -c 6000 /tmp/visual.log || true
           exit $status

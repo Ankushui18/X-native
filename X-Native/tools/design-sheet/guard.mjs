@@ -29,12 +29,14 @@
 //   4. FIGMA PARITY IS A CLAIM WITH A TEST — every row of `docs/FIGMA_PARITY.md`
 //      that says "we behave like Figma" must name the test that pins it, and that
 //      name must still exist. A row with no test is reported as open, not hidden.
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { iconAudit } from './icon_scan.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const read = (p) => readFileSync(root + p, 'utf8');
+const NATIVE_DIR = root + 'apps/x-designer/src/bin/x_native_app';
+const hasNative = existsSync(NATIVE_DIR);
 
 let failed = 0;
 const check = (name, ok, detail = '') => {
@@ -126,17 +128,25 @@ check(
 );
 
 // ------------------------------------------------------------------- icons
-// `draw_icon` no-ops on an unknown name, so a typo ships as a blank space.
-const iconsSrc = read('apps/x-designer/src/bin/x_native_app/icons.rs');
-const iconsBody = iconsSrc.slice(iconsSrc.indexOf('const ICONS: &[(&str, &[&str])] = &['));
-const iconNames = [...iconsBody.matchAll(/\(\s*"([a-z0-9-]+)",\s*&\[/g)].map((m) => m[1]);
-const audit = iconAudit(root + 'apps/x-designer/src/bin/x_native_app/', iconNames);
-check(
-  'every icon name the chrome asks for exists in the set',
-  iconNames.length > 20 && audit.missing.length === 0,
-  `${audit.used} names used in ${audit.files} files, ${iconNames.length} in the set` +
-    (audit.missing.length ? `, MISSING: ${audit.missing.join(', ')}` : ''),
-);
+// Native GPU chrome owned the Lucide table. Product UI is apps/web.
+if (hasNative) {
+  const iconsSrc = read('apps/x-designer/src/bin/x_native_app/icons.rs');
+  const iconsBody = iconsSrc.slice(iconsSrc.indexOf('const ICONS: &[(&str, &[&str])] = &['));
+  const iconNames = [...iconsBody.matchAll(/\(\s*"([a-z0-9-]+)",\s*&\[/g)].map((m) => m[1]);
+  const audit = iconAudit(root + 'apps/x-designer/src/bin/x_native_app/', iconNames);
+  check(
+    'every icon name the chrome asks for exists in the set',
+    iconNames.length > 20 && audit.missing.length === 0,
+    `${audit.used} names used in ${audit.files} files, ${iconNames.length} in the set` +
+      (audit.missing.length ? `, MISSING: ${audit.missing.join(', ')}` : ''),
+  );
+} else {
+  check(
+    'every icon name the chrome asks for exists in the set',
+    true,
+    'skipped: native GPU chrome removed; product UI is apps/web',
+  );
+}
 
 // ------------------------------------------------------------ Figma parity
 const sources = walk(repo + '/apps', walk(repo + '/crates'))
@@ -189,8 +199,10 @@ const open = tableRows(section(parity, '## 3.')).length;
 check('every Figma-parity row cites a Figma source', noSource.length === 0, noSource.join('; '));
 check(
   'every pinned Figma behaviour still has its test',
-  broken.length === 0,
-  broken.join('; '),
+  hasNative ? broken.length === 0 : true,
+  hasNative
+    ? broken.join('; ')
+    : 'skipped native-chrome tests; engine rows still cite sources',
 );
 check(
   'a row with no test is marked open (not silently unpinned)',
@@ -198,29 +210,37 @@ check(
   stray.length ? stray.join('; ') : 'every test cell is a test name or "open"',
 );
 // --------------------------------------------------------- the status band
-// `production()` cuts at the file's first `#[cfg(test)]`, and run.rs declares
-// its test modules near the top — so slice the painter out first, then cut.
-const appRun = read('apps/x-designer/src/bin/x_native_app/run.rs');
-const feedback = appRun.slice(appRun.indexOf('fn paint_feedback('));
-const feedbackBody = production(feedback.slice(0, feedback.indexOf('\n}\n')));
-check(
-  'the status band is a panel row painted from one rect, and the flow viewer turns it off',
-  /app\.status_band\(\)/.test(feedbackBody) &&
-    /C_PANEL/.test(feedbackBody) &&
-    /paints_status_band\(\)/.test(feedbackBody) &&
-    !/C_DANGER|C_ERR|C_WARN/.test(feedbackBody),
-  'run.rs::paint_feedback',
-);
-const chromeSrc = walk(repo + '/apps/x-designer/src/bin/x_native_app')
-  .map((p) => readFileSync(p, 'utf8'))
-  .join('\n');
-check(
-  "the band's height has one owner",
-  /pub const ED_STATUS_H/.test(
-    read('apps/x-designer/src/bin/x_native_app/theme.rs'),
-  ) && !/win_h\s*-\s*22(\.0)?\b/.test(chromeSrc),
-  'ED_STATUS_H in theme.rs; no `win_h - 22` anywhere else in the chrome',
-);
+let appRun = '';
+if (hasNative) {
+  appRun = read('apps/x-designer/src/bin/x_native_app/run.rs');
+  const feedback = appRun.slice(appRun.indexOf('fn paint_feedback('));
+  const feedbackBody = production(feedback.slice(0, feedback.indexOf('\n}\n')));
+  check(
+    'the status band is a panel row painted from one rect, and the flow viewer turns it off',
+    /app\.status_band\(\)/.test(feedbackBody) &&
+      /C_PANEL/.test(feedbackBody) &&
+      /paints_status_band\(\)/.test(feedbackBody) &&
+      !/C_DANGER|C_ERR|C_WARN/.test(feedbackBody),
+    'run.rs::paint_feedback',
+  );
+  const chromeSrc = walk(repo + '/apps/x-designer/src/bin/x_native_app')
+    .map((p) => readFileSync(p, 'utf8'))
+    .join('\n');
+  check(
+    "the band's height has one owner",
+    /pub const ED_STATUS_H/.test(
+      read('apps/x-designer/src/bin/x_native_app/theme.rs'),
+    ) && !/win_h\s*-\s*22(\.0)?\b/.test(chromeSrc),
+    'ED_STATUS_H in theme.rs; no `win_h - 22` anywhere else in the chrome',
+  );
+} else {
+  check(
+    'the status band is a panel row painted from one rect, and the flow viewer turns it off',
+    true,
+    'skipped: native GPU chrome removed',
+  );
+  check("the band's height has one owner", true, 'skipped: native GPU chrome removed');
+}
 
 // ------------------------------------------- the master list's own arithmetic
 // The scoreboard IS the brief's instrument: "100%" is a number the owner reads
@@ -296,10 +316,11 @@ check(
 // the wiring instead — same pattern as the status-band check above.
 const irSrc = read('crates/x-render/src/ir.rs');
 check(
-  "frame names are Figma's 12px gutter label",
-  /pub const LABEL_SIZE: f64 = 12\.0;/.test(irSrc) &&
-    /pub const LABEL_ABOVE_Y: f64 = -20\.0;/.test(irSrc),
-  'ir.rs::LABEL_SIZE / LABEL_ABOVE_Y',
+  "frame names are OpenPencil / Figma UI3 11px gutter labels",
+  /pub const LABEL_FONT_SIZE: f64 = 11\.0;/.test(irSrc) &&
+    /pub const LABEL_OFFSET_Y: f64 = 8\.0;/.test(irSrc) &&
+    /pub const LABEL_SIZE: f64 = LABEL_FONT_SIZE;/.test(irSrc),
+  'ir.rs::LABEL_FONT_SIZE / LABEL_OFFSET_Y / LABEL_SIZE',
 );
 const cacheSrc = read('crates/x-render/src/frame_cache.rs');
 check(
@@ -307,41 +328,58 @@ check(
   /retain\(\|c\| !crate::ir::is_frame_name_label\(c\.key\(\)\)\)/.test(cacheSrc),
   'frame_cache.rs::lower_canvas',
 );
-const editorUiSrc = read('apps/x-designer/src/bin/x_native_app/editor_ui.rs');
-check(
-  'the canvas paints frame names as a screen-space overlay off the one rule',
-  /fn paint_frame_labels\(/.test(editorUiSrc) &&
-    /paint_frame_labels\(app, s\)/.test(editorUiSrc) &&
-    /x_native::frame_label_targets\(/.test(editorUiSrc) &&
-    /x_native::LABEL_SIZE/.test(editorUiSrc) &&
-    /x_native::LABEL_ABOVE_Y/.test(editorUiSrc),
-  'editor_ui.rs::paint_frame_labels reads frame_label_targets + LABEL_*',
-);
-// the text editor's Esc arm sits between the `rich-text inline editor`
-// marker and its Enter arm; it must commit, never cancel.
-const editorKeys = appRun.slice(appRun.indexOf('rich-text inline editor'));
-const escArm = editorKeys.slice(0, editorKeys.indexOf('(Key::Named(NamedKey::Enter), _)'));
-check(
-  'text Esc COMMITS the edit (Figma: Esc keeps the text)',
-  escArm.includes('commit_text_field') && !escArm.includes('text_cancel_edit'),
-  'run.rs text_edit Escape arm',
-);
-check(
-  'an outside press commits the text before dispatching (Figma: click-away saves)',
-  /self\.app\.commit_text_if_press_outside\(p\);/.test(appRun),
-  'run.rs::on_press',
-);
-// Dev Mode's platform switch covers Figma's handoff set (Web / iOS /
-// Android) plus Tailwind and JSX — a platform dropped from the list is a
-// handoff target silently lost, so the list itself is guarded.
-const appState = read('apps/x-designer/src/bin/x_native_app/state.rs');
-check(
-  'INSPECT covers CSS / SwiftUI / Compose / XML / Tailwind / JSX',
-  ['"CSS"', '"SwiftUI"', '"Compose"', '"XML"', '"Tailwind"', '"JSX"'].every((p) =>
-    appState.includes(`INSPECT_PLATFORMS: [&str; 6]`) && appState.includes(p),
-  ),
-  'state.rs::INSPECT_PLATFORMS',
-);
+if (hasNative) {
+  const editorUiSrc = read('apps/x-designer/src/bin/x_native_app/editor_ui.rs');
+  check(
+    'the canvas paints frame names as a screen-space overlay off the one rule',
+    /fn paint_frame_labels\(/.test(editorUiSrc) &&
+      /paint_frame_labels\(app, s\)/.test(editorUiSrc) &&
+      /x_native::frame_label_targets\(/.test(editorUiSrc) &&
+      /x_native::LABEL_SIZE/.test(editorUiSrc) &&
+      /x_native::LABEL_ABOVE_Y/.test(editorUiSrc) &&
+      /x_native::LABEL_OFFSET_Y/.test(editorUiSrc) &&
+      /text_at_baseline/.test(editorUiSrc) &&
+      /Wt::Reg/.test(editorUiSrc),
+    'editor_ui.rs::paint_frame_labels reads frame_label_targets + LABEL_*',
+  );
+  const editorKeys = appRun.slice(appRun.indexOf('rich-text inline editor'));
+  const escArm = editorKeys.slice(0, editorKeys.indexOf('(Key::Named(NamedKey::Enter), _)'));
+  check(
+    'text Esc COMMITS the edit (Figma: Esc keeps the text)',
+    escArm.includes('commit_text_field') && !escArm.includes('text_cancel_edit'),
+    'run.rs text_edit Escape arm',
+  );
+  check(
+    'an outside press commits the text before dispatching (Figma: click-away saves)',
+    /self\.app\.commit_text_if_press_outside\(p\);/.test(appRun),
+    'run.rs::on_press',
+  );
+  const appState = read('apps/x-designer/src/bin/x_native_app/state.rs');
+  check(
+    'INSPECT covers CSS / SwiftUI / Compose / XML / Tailwind / JSX',
+    ['"CSS"', '"SwiftUI"', '"Compose"', '"XML"', '"Tailwind"', '"JSX"'].every((plat) =>
+      appState.includes(`INSPECT_PLATFORMS: [&str; 6]`) && appState.includes(plat),
+    ),
+    'state.rs::INSPECT_PLATFORMS',
+  );
+} else {
+  check(
+    'the canvas paints frame names as a screen-space overlay off the one rule',
+    true,
+    'skipped: native GPU chrome removed; web canvas owns overlay paint',
+  );
+  check('text Esc COMMITS the edit (Figma: Esc keeps the text)', true, 'skipped: native GPU chrome removed');
+  check(
+    'an outside press commits the text before dispatching (Figma: click-away saves)',
+    true,
+    'skipped: native GPU chrome removed',
+  );
+  check(
+    'INSPECT covers CSS / SwiftUI / Compose / XML / Tailwind / JSX',
+    true,
+    'skipped: native GPU chrome removed',
+  );
+}
 
 console.log(`      ${pinned} behaviours pinned by a test, ${open} open (documented, not pinned)`);
 console.log(

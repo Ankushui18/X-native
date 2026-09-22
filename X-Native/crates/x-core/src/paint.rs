@@ -172,17 +172,30 @@ impl Paint {
     /// does not provide a meaningful span, a 100px default keeps the result
     /// visible instead of collapsing it to a zero-length gradient.
     pub fn set_gradient_type(&mut self, gradient_type: &str) -> bool {
-        let stops = match self {
-            Paint::LinearGradient { stops, .. }
-            | Paint::RadialGradient { stops, .. }
-            | Paint::AngularGradient { stops, .. }
-            | Paint::DiamondGradient { stops, .. } => stops.clone(),
-            _ => return false,
-        };
-        let (center, span, space) = match self {
+        let kind = gradient_type.trim().to_ascii_lowercase();
+        if kind == "solid" {
+            let color = match self {
+                Paint::Solid(_) => return false,
+                Paint::LinearGradient { stops, .. }
+                | Paint::RadialGradient { stops, .. }
+                | Paint::AngularGradient { stops, .. }
+                | Paint::DiamondGradient { stops, .. } => {
+                    stops.first().map(|(_, c)| *c).unwrap_or(Color::WHITE)
+                }
+                _ => return false,
+            };
+            *self = Paint::Solid(color);
+            return true;
+        }
+        let (stops, center, span, space) = match self {
             Paint::LinearGradient {
-                start, end, space, ..
+                start,
+                end,
+                space,
+                stops,
+                ..
             } => (
+                stops.clone(),
                 ((start.0 + end.0) / 2.0, (start.1 + end.1) / 2.0),
                 ((end.0 - start.0) / 2.0, (end.1 - start.1) / 2.0),
                 *space,
@@ -191,16 +204,34 @@ impl Paint {
                 center,
                 radius,
                 space,
+                stops,
                 ..
-            } => (*center, (*radius, 0.0), *space),
-            Paint::AngularGradient { center, space, .. } => (*center, (100.0, 0.0), *space),
+            } => (stops.clone(), *center, (*radius, 0.0), *space),
+            Paint::AngularGradient {
+                center,
+                space,
+                stops,
+                ..
+            } => (stops.clone(), *center, (100.0, 0.0), *space),
             Paint::DiamondGradient {
                 center,
                 width,
                 height,
                 space,
+                stops,
                 ..
-            } => (*center, (*width, *height), *space),
+            } => (stops.clone(), *center, (*width, *height), *space),
+            Paint::Solid(c) => {
+                let c = *c;
+                let rgba = c.to_rgba8();
+                let fade = Color::from_rgba8(rgba.r, rgba.g, rgba.b, 0);
+                (
+                    vec![(0.0, c), (1.0, fade)],
+                    (50.0, 50.0),
+                    (50.0, 0.0),
+                    GradSpace::Srgb,
+                )
+            }
             _ => return false,
         };
         let span = if span.0.abs() + span.1.abs() < 1e-9 {
@@ -208,7 +239,6 @@ impl Paint {
         } else {
             span
         };
-        let kind = gradient_type.trim().to_ascii_lowercase();
         *self = match kind.as_str() {
             "linear" => Paint::LinearGradient {
                 start: (center.0 - span.0, center.1 - span.1),
@@ -1066,7 +1096,15 @@ mod tests {
             }
             other => panic!("expected radial gradient, got {other:?}"),
         }
-        assert!(!Paint::Solid(Color::WHITE).set_gradient_type("linear"));
+        let mut solid = Paint::Solid(Color::WHITE);
+        assert!(solid.set_gradient_type("linear"));
+        assert_eq!(solid.gradient_type_name(), "Linear");
+        match &solid {
+            Paint::LinearGradient { stops, .. } => assert_eq!(stops.len(), 2),
+            other => panic!("expected linear from solid, got {other:?}"),
+        }
+        assert!(solid.set_gradient_type("solid"));
+        assert_eq!(solid.gradient_type_name(), "Solid");
     }
 
     #[test]

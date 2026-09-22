@@ -515,17 +515,24 @@ fn encode(
             }
         }
         NodeKind::Text { text } => {
+            // Figma Fixed size / Truncate: glyphs never paint outside the
+            // text layer's box (help 360039956634 / 27378154668951).
+            let text_clip = Rect::new(0.0, 0.0, node.w.max(0.0), node.h.max(0.0)).into_path(0.1);
+            scene.push_clip_layer(Fill::NonZero, world, &text_clip);
             let raw = effective_text(node, overrides).unwrap_or(text);
-            // text case transforms the CONTENT (only when there are no rich
-            // runs — case can change char counts)
-            // text case transforms the CONTENT (only when there are no rich
-            // runs — case can change char counts)
-            let cased;
-            let content: &str = if node.text_runs.is_empty() {
-                cased = x_core::apply_text_case(raw, node.bindings.get("tc").map(String::as_str));
-                cased.as_str()
+            // text case transforms the CONTENT; rich-run CHAR ranges remap
+            // when case expands a glyph (ß → SS)
+            let tc = node.bindings.get("tc").map(String::as_str);
+            let (cased, cased_runs) = x_core::apply_text_case_with_runs(raw, &node.text_runs, tc);
+            let content: &str = cased.as_str();
+            let mut node_for_runs_store: Option<Node> = None;
+            let node_for_runs: &Node = if node.text_runs.is_empty() {
+                node
             } else {
-                raw
+                let mut n = node.clone();
+                n.text_runs = cased_runs;
+                node_for_runs_store = Some(n);
+                node_for_runs_store.as_ref().unwrap()
             };
             let color = effective_fill(node, overrides, vars).multiply_alpha(node.opacity);
             // Real typography when a FontManager is present. Font size in
@@ -596,7 +603,15 @@ fn encode(
                             // styled defaults without runs (sc / variable axes)
                             vec![x_text::Span::new(content, fs_px).color(color)]
                         } else {
-                            build_rich_spans_px(node, content, color, fm, font, fs_px, vars)
+                            build_rich_spans_px(
+                                node_for_runs,
+                                content,
+                                color,
+                                fm,
+                                font,
+                                fs_px,
+                                vars,
+                            )
                         };
                         // shape first so the vertical alignment can place the
                         // block inside the node box before encoding
@@ -666,6 +681,7 @@ fn encode(
             if !drew {
                 stats.paths += x_text::encode_text(scene, content, world, node.h, color);
             }
+            scene.pop_layer();
         }
         NodeKind::Vector { path } => {
             // Vectors use the same materialized fill/stroke stacks as the IR
@@ -958,6 +974,15 @@ fn encode(
     if let Some(shape) = &frame_clip_shape {
         scene.push_clip_layer(Fill::NonZero, world, shape);
     }
+    // F-09: square frames with Clip content still clip children. IR already
+    // wraps the subtree in a rect clip when `overflow.clips()` and the
+    // rounded path did not fire (`ir.rs` overflow wrap). Nested clipping
+    // frames each push their own layer, so F-11 stacks for free.
+    let overflow_clip = node.overflow.clips() && frame_clip_shape.is_none();
+    if overflow_clip {
+        let rect = Rect::new(0.0, 0.0, node.w.max(0.0), node.h.max(0.0)).into_path(0.1);
+        scene.push_clip_layer(Fill::NonZero, world, &rect);
+    }
     // Instance children are slot content: they render only via the
     // substitution in the Instance arm above, never directly.
     if matches!(node.kind, NodeKind::Instance { .. }) {
@@ -999,7 +1024,7 @@ fn encode(
             ctx,
         );
     }
-    if frame_clip_shape.is_some() {
+    if frame_clip_shape.is_some() || overflow_clip {
         scene.pop_layer();
     }
 
@@ -1038,7 +1063,22 @@ pub(crate) fn text_needs_styled(node: &Node) -> bool {
         // a list takes the styled path too: the fast path has no marker
         // column and would drop the bullets
         || node.list_style != x_core::ListStyle::None;
-    sc || opsz > 0.0 || wdth > 0.0 || node.has_explicit_lh() || typed
+    // encode_text_block ignores baseline shift, word/paragraph spacing and
+    // letter-spacing; the shaper applies all four
+    let spacing = binding_nonzero(node, "bs")
+        || binding_nonzero(node, "ws")
+        || binding_nonzero(node, "ps")
+        || binding_nonzero(node, "ls")
+        || node.bindings.contains_key("letterspacing");
+    sc || opsz > 0.0 || wdth > 0.0 || node.has_explicit_lh() || typed || spacing
+}
+
+fn binding_nonzero(node: &Node, key: &str) -> bool {
+    node.bindings
+        .get(key)
+        .and_then(|v| v.parse::<f64>().ok())
+        .map(|v| v != 0.0)
+        .unwrap_or(false)
 }
 
 pub(crate) fn build_rich_spans_px(

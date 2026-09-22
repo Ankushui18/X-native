@@ -37,17 +37,17 @@ use x_native::{
 /// Re-pinned again 2026-09-18 (canvas chrome audit): the render ROOT is never a
 /// labelled object — on the canvas the root is the PAGE, and its name
 /// belongs in the pages list, not painted across the artboard. The
-/// document's `/golden/label` command is gone, so the count drops by
-/// exactly one (51); `/golden/row/label` stays, because the auto-layout
-/// row is a page-level frame and Figma does name those. Nothing else
-/// moved: no geometry, no paint.
+/// document's `/golden/label` command is gone; `/golden/row/label` stays,
+/// because the auto-layout row is a page-level frame and Figma does name
+/// those. The text-layer clip is accounted for in the current pinned shape
+/// below. Nothing else moved: no geometry, no paint.
 ///
-/// Re-pinned 2026-09-18 (same day, CI): the count above was confirmed by the
-/// real gate (`commands=51 (pinned 51)` in the GOLDEN DRIFT panic), and the
-/// kind hash is the one that run printed — `0xcd250bfffae4f4a6`. Nothing else
-/// about the document moved.
-const GOLDEN_COMMANDS: usize = 51;
-const GOLDEN_KIND_HASH: u64 = 0xcd25_0bff_fae4_f4a6;
+/// Re-pinned 2026-09-22 after the text-layer clip was lowered into the shared
+/// IR (`commands=57` and hash `0x64bf525b0423b761` in the CI drift listing).
+/// The extra commands are the text box clip and its matching pop; document
+/// geometry and paint remain unchanged.
+const GOLDEN_COMMANDS: usize = 57;
+const GOLDEN_KIND_HASH: u64 = 0x64bf_525b_0423_b761;
 
 fn golden_document() -> Document {
     let mut doc = Document::new();

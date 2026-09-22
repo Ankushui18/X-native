@@ -583,8 +583,18 @@ pub fn color_to_hex(c: Color) -> String {
 /// Typed instance overrides (Phase 5.3): an override value keyed by a node id
 /// is either a hex color ("#12ab34") applied to that node's fill, or — new —
 /// prefixed "text:" to replace a Text node's content.
+fn override_raw<'a>(
+    overrides: &'a HashMap<String, String>,
+    id: &str,
+    tag: &str,
+) -> Option<&'a String> {
+    overrides
+        .get(&format!("{id}\x1f{tag}"))
+        .or_else(|| overrides.get(id))
+}
+
 pub fn effective_fill(node: &Node, overrides: &HashMap<String, String>, vars: &Variables) -> Color {
-    if let Some(v) = overrides.get(&node.id) {
+    if let Some(v) = override_raw(overrides, &node.id, "fill") {
         if let Some(c) = parse_hex_color(v) {
             return c;
         }
@@ -596,7 +606,7 @@ pub fn effective_brush(
     overrides: &HashMap<String, String>,
     vars: &Variables,
 ) -> Brush {
-    if let Some(v) = overrides.get(&node.id) {
+    if let Some(v) = override_raw(overrides, &node.id, "fill") {
         if let Some(c) = parse_hex_color(v) {
             return Brush::Solid(c);
         }
@@ -607,9 +617,7 @@ pub fn effective_text<'a>(
     node: &'a Node,
     overrides: &'a HashMap<String, String>,
 ) -> Option<&'a str> {
-    overrides
-        .get(&node.id)
-        .and_then(|v| v.strip_prefix("text:"))
+    override_raw(overrides, &node.id, "text").and_then(|v| v.strip_prefix("text:"))
 }
 
 #[cfg(test)]

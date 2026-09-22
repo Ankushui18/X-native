@@ -22,10 +22,10 @@
   "screens": [
     {
       "id": "dash-home-grid",
-      "name": "Home · Grid",
+      "name": "Home \u00b7 Grid",
       "group": "Dashboard",
       "module": "dashboard.rs",
-      "what": "Dashboard → Home: title bar 40, sidebar 260, sort chip + grid/list toggle, quick cards, 3-up grid.",
+      "what": "Dashboard \u2192 Home: title bar 40, sidebar 260, sort chip + grid/list toggle, quick cards, 3-up grid.",
       "note": "The sort chip names the current order and the grid/list toggle is a real hit target; both were the messy part of this screen before the IA pass.",
       "checks": [
         "Your design workspace",
@@ -42,11 +42,11 @@
     },
     {
       "id": "dash-home-list",
-      "name": "Home · List",
+      "name": "Home \u00b7 List",
       "group": "Dashboard",
       "module": "dashboard.rs",
       "what": "The same files in the List layout: one panel, NAME / TEAM / EDITED header, rows 48 tall.",
-      "note": "NAME and EDITED are sortable — the header chevron marks the active key; clicking a header sorts, clicking the sort chip opens the same list.",
+      "note": "NAME and EDITED are sortable \u2014 the header chevron marks the active key; clicking a header sorts, clicking the sort chip opens the same list.",
       "checks": [
         "NAME",
         "TEAM",
@@ -85,7 +85,7 @@
       "note": "Starring is per file and shows in both layouts; the sort has a Starred-first mode that keeps recency inside each group.",
       "checks": [
         "Starred",
-        "★"
+        "\u2605"
       ],
       "file": "shots/dash-starred.png",
       "bytes": 81416,
@@ -98,7 +98,7 @@
       "name": "Trash (empty)",
       "group": "Dashboard",
       "module": "dashboard.rs",
-      "what": "Trash with nothing in it — an empty state with a way back.",
+      "what": "Trash with nothing in it \u2014 an empty state with a way back.",
       "note": "This used to be a dead end with no content and no exit; the state now says what Trash is for.",
       "checks": [
         "Trash is empty",
@@ -116,7 +116,7 @@
       "group": "Dashboard",
       "module": "dashboard.rs",
       "what": "Two files selected: bulk bar at the bottom, sort menu open over the grid.",
-      "note": "⌘A selects everything visible, Esc unwinds menu → selection → focus ring. The bulk bar only exists while something is selected.",
+      "note": "\u2318A selects everything visible, Esc unwinds menu \u2192 selection \u2192 focus ring. The bulk bar only exists while something is selected.",
       "checks": [
         "selected",
         "Unstar",
@@ -167,16 +167,16 @@
     },
     {
       "id": "editor-structure",
-      "name": "Editor · Structure + canvas",
+      "name": "Editor \u00b7 Layers + canvas",
       "group": "Editor",
       "module": "editor_ui.rs",
-      "what": "Full editor chrome: title bar 36, rail 48, left dock 280 (STRUCTURE / LIBRARY / TOKENS), right dock 340, rulers, tool dock 40 tall. The COMPOSE inspector is drawn from paint_design: name + %, W/H, X/Y, rotation, Auto layout, Flow, Resizing, Alignment, Padding, Clip content, Appearance, Typography — fields are filled boxes with no outline until hover, and the value being typed into is ringed.",
-      "note": "Three canvas aids ship in this frame: the minimap (bottom-right, ⇧M or its ✕), page sketches in every PAGES row that has content, and ⇧1 fitting the frame to the page content.",
+      "what": "Full editor chrome: title bar 36, rail 48, left dock 280 (Layers / Assets / Tokens), right dock 340, rulers, tool dock 40 tall. The Design inspector is drawn from paint_design: name + %, W/H, X/Y, rotation, Auto layout, Flow, Resizing, Alignment, Padding, Clip content, Appearance, Typography \u2014 fields are filled boxes with no outline until hover, and the value being typed into is ringed.",
+      "note": "Three canvas aids ship in this frame: the minimap (bottom-right, \u21e7M or its \u2715), page sketches in every PAGES row that has content, and \u21e71 fitting the frame to the page content.",
       "checks": [
-        "STRUCTURE",
-        "LIBRARY",
-        "TOKENS",
-        "COMPOSE",
+        "Layers",
+        "Assets",
+        "Tokens",
+        "Design",
         "minimap",
         "PAGES",
         "sketch",
@@ -195,13 +195,13 @@
     },
     {
       "id": "editor-library",
-      "name": "Editor · Library",
+      "name": "Editor \u00b7 Assets",
       "group": "Editor",
       "module": "editor_ui.rs",
-      "what": "Left dock on LIBRARY: assets in this file, then linked libraries.",
-      "note": "The left tabs are STRUCTURE / LIBRARY / TOKENS — X-Native names its own model (scene graph, not a Figma clone).",
+      "what": "Left dock on Assets: fonts in this file, then linked libraries.",
+      "note": "The left tabs are Layers / Assets / Tokens \u2014 OpenPencil / Figma UI3 naming.",
       "checks": [
-        "LIBRARY",
+        "Assets",
         "LIBRARIES",
         "linked"
       ],
@@ -213,13 +213,13 @@
     },
     {
       "id": "editor-tokens",
-      "name": "Editor · Tokens",
+      "name": "Editor \u00b7 Tokens",
       "group": "Editor",
       "module": "editor_ui.rs",
-      "what": "Left dock on TOKENS: the document variables, grouped by kind.",
+      "what": "Left dock on Tokens: the document variables, grouped by kind.",
       "note": "Variable edits route through the undo log; the inspector shows the variable name beside any bound fill.",
       "checks": [
-        "TOKENS",
+        "Tokens",
         "color/accent",
         "undoable"
       ],
@@ -231,13 +231,13 @@
     },
     {
       "id": "editor-flow",
-      "name": "Editor · Flow (prototype)",
+      "name": "Editor \u00b7 Flow (prototype)",
       "group": "Editor",
       "module": "editor_ui.rs",
-      "what": "Right dock on FLOW: start point, interactions, animation; connections draw on the canvas.",
-      "note": "“▶ Preview flow start” enters the chrome-less flow viewer (next screen).",
+      "what": "Right dock on Prototype: start point, interactions, animation; connections draw on the canvas.",
+      "note": "\u201c\u25b6 Preview flow start\u201d enters the chrome-less flow viewer (next screen).",
       "checks": [
-        "FLOW",
+        "Prototype",
         "Start flow here",
         "Preview flow start"
       ],
@@ -249,13 +249,13 @@
     },
     {
       "id": "editor-ship",
-      "name": "Editor · Ship (inspect)",
+      "name": "Editor \u00b7 Ship (inspect)",
       "group": "Editor",
       "module": "editor_ui.rs",
-      "what": "Right dock on SHIP: size, fill (with its variable), text style, and the CSS line.",
+      "what": "Right dock on Inspect: size, fill (with its variable), text style, and the CSS line.",
       "note": "The fill row names the variable it is bound to, which is the link the paint library edits.",
       "checks": [
-        "SHIP",
+        "Inspect",
         "Selection",
         "variable"
       ],
@@ -267,13 +267,13 @@
     },
     {
       "id": "editor-ux",
-      "name": "Editor · UX analysis",
+      "name": "Editor \u00b7 UX analysis",
       "group": "Editor",
       "module": "editor_ui.rs",
-      "what": "Right dock on UX ANALYSIS: contrast, flow gaps, quality notes.",
+      "what": "Right dock on UX: contrast, flow gaps, quality notes.",
       "note": "The contrast rows read the same audited pairs the palette table and the CLI theme audit use.",
       "checks": [
-        "UX ANALYSIS",
+        "UX",
         "Contrast",
         "pass AA"
       ],
@@ -289,7 +289,7 @@
       "group": "Editor",
       "module": "editor_ui.rs",
       "what": "The fill/stroke library popover: variables (active mode resolved, tick on the bound one), paint styles, and a detach row.",
-      "note": "Linking is by reference, not a copy: a bound row shows the variable name, the popover is 300 wide, lists ≤8 variables then \"+N more in Variables (⌥5)\", and Detach keeps the resolved colour.",
+      "note": "Linking is by reference, not a copy: a bound row shows the variable name, the popover is 300 wide, lists \u22648 variables then \"+N more in Variables (\u23255)\", and Detach keeps the resolved colour.",
       "checks": [
         "VARIABLES",
         "PAINT STYLES",
@@ -321,10 +321,10 @@
     },
     {
       "id": "editor-empty-page",
-      "name": "Empty page (⇧1)",
+      "name": "Empty page (\u21e71)",
       "group": "Editor",
       "module": "editor_ui.rs",
-      "what": "A page with nothing on it: the canvas says what to do, and ⇧1 frames the camera instead of fitting nothing.",
+      "what": "A page with nothing on it: the canvas says what to do, and \u21e71 frames the camera instead of fitting nothing.",
       "note": "Content-fit fits the union of visible nodes with 24 px of padding; on an empty page it falls back to framing the camera.",
       "checks": [
         "Empty page",
@@ -338,11 +338,11 @@
     },
     {
       "id": "editor-command",
-      "name": "Command palette (⌘K)",
+      "name": "Command palette (\u2318K)",
       "group": "Overlays",
       "module": "command.rs",
-      "what": "Centred 480×400 palette: input 40 tall, rows 30, categories File→Help.",
-      "note": "Command-first discovery; fuzzy search over registered commands, ↑↓ to move, ⏎ to run.",
+      "what": "Centred 480\u00d7400 palette: input 40 tall, rows 30, categories File\u2192Help.",
+      "note": "Command-first discovery; fuzzy search over registered commands, \u2191\u2193 to move, \u23ce to run.",
       "checks": [
         "Toggle minimap",
         "Zoom to fit",
@@ -360,7 +360,7 @@
       "group": "Overlays",
       "module": "context_menu.rs",
       "what": "Right-click menu, 208 wide with 28-tall rows, keyboard hints on the right.",
-      "note": "The canvas menu carries the view toggles the last pass added — Toggle minimap (⇧M) sits beside Toggle grid.",
+      "note": "The canvas menu carries the view toggles the last pass added \u2014 Toggle minimap (\u21e7M) sits beside Toggle grid.",
       "checks": [
         "Toggle minimap",
         "Toggle grid",
@@ -399,7 +399,7 @@
       "note": "Every row here is a real action; shortcuts are shown only where the app binds them.",
       "checks": [
         "New file",
-        "Export as…",
+        "Export as\u2026",
         "Preferences"
       ],
       "file": "shots/editor-app-menu.png",
@@ -414,7 +414,7 @@
       "group": "Overlays",
       "module": "editor_ui.rs",
       "what": "Find bar with replace row, match counter, case and selection-only toggles.",
-      "note": "⇧⌘F opens it; matching is document-wide by default, or scoped to the selection.",
+      "note": "\u21e7\u2318F opens it; matching is document-wide by default, or scoped to the selection.",
       "checks": [
         "selection only",
         "1 / 4"

@@ -318,6 +318,7 @@ impl ShapedTextCache {
         let align = match key.align {
             1 => Align::Center,
             2 => Align::Right,
+            3 => Align::Justify,
             _ => Align::Left,
         };
         let max_lines = if key.max_lines == 0 {
@@ -506,6 +507,11 @@ mod tests {
             left,
             base(Align::Right, None, 0.0, TextDecoration::None),
             "align right"
+        );
+        assert_ne!(
+            left,
+            base(Align::Justify, None, 0.0, TextDecoration::None),
+            "align justify"
         );
         assert_ne!(
             left,

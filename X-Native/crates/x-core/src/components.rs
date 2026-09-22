@@ -77,15 +77,78 @@ impl OverrideValue {
 }
 
 /// Typed view over an instance's override map.
+fn override_kind_tag(v: &OverrideValue) -> &'static str {
+    match v {
+        OverrideValue::Fill(_) => "fill",
+        OverrideValue::Stroke(_) => "stroke",
+        OverrideValue::Text(_) => "text",
+        OverrideValue::Visible(_) => "visible",
+        OverrideValue::Opacity(_) => "opacity",
+        OverrideValue::Swap(_) => "swap",
+        OverrideValue::Number(_) => "num",
+    }
+}
+
+/// Target node id stored in an override map key. Composite keys are
+/// `{id}\x1f{kind}` so one layer can carry fill AND text at once (Figma).
+fn override_target_id(key: &str) -> &str {
+    key.split('\x1f').next().unwrap_or(key)
+}
+
 pub fn typed_overrides(node: &Node) -> HashMap<String, OverrideValue> {
+    // last-wins per target for the prop UI (`t.get("label")`).
+    let mut out = HashMap::new();
+    for (k, v) in &node.overrides {
+        if let Some(ov) = OverrideValue::decode(v) {
+            out.insert(override_target_id(k).to_string(), ov);
+        }
+    }
+    out
+}
+
+/// Every typed override on `target`, in map order. Figma lets a layer hold
+/// a text change and a fill change at the same time.
+pub fn overrides_for(node: &Node, target: &str) -> Vec<OverrideValue> {
     node.overrides
         .iter()
-        .filter_map(|(k, v)| OverrideValue::decode(v).map(|ov| (k.clone(), ov)))
+        .filter(|(k, _)| override_target_id(k) == target)
+        .filter_map(|(_, v)| OverrideValue::decode(v))
         .collect()
 }
 
 pub fn set_override(node: &mut Node, target: &str, value: OverrideValue) {
-    node.overrides.insert(target.into(), value.encode());
+    let tag = override_kind_tag(&value);
+    // Preserve the legacy `target` key for the first property on a layer;
+    // additional properties use a namespaced key so old `.x` readers and
+    // Figma's multi-property instances can coexist.
+    let key = node
+        .overrides
+        .iter()
+        .find(|(k, raw)| {
+            override_target_id(k) == target
+                && OverrideValue::decode(raw)
+                    .map(|existing| override_kind_tag(&existing) == tag)
+                    .unwrap_or(false)
+        })
+        .map(|(k, _)| k.clone())
+        .or_else(|| {
+            let has_target = node
+                .overrides
+                .keys()
+                .any(|k| override_target_id(k) == target);
+            (!has_target).then(|| target.to_string())
+        })
+        .unwrap_or_else(|| format!("{target}\x1f{tag}"));
+    node.overrides.insert(key, value.encode());
+}
+
+/// Set a property through the legacy one-value-per-layer path used by
+/// component-property editing. Direct override commands use `set_override`
+/// and may keep multiple property kinds on one target.
+pub fn set_exclusive_override(node: &mut Node, target: &str, value: OverrideValue) {
+    node.overrides
+        .retain(|key, _| override_target_id(key) != target);
+    node.overrides.insert(target.to_string(), value.encode());
 }
 
 /// Reset every override on an instance (Figma "reset overrides"). Slot
@@ -140,8 +203,8 @@ pub fn instance_changes(instance: &Node) -> Vec<InstanceChange> {
     let mut out: Vec<InstanceChange> = instance
         .overrides
         .iter()
-        .map(|(target, raw)| InstanceChange {
-            node: target.clone(),
+        .map(|(key, raw)| InstanceChange {
+            node: override_target_id(key).to_string(),
             property: match OverrideValue::decode(raw) {
                 Some(OverrideValue::Fill(_)) | Some(OverrideValue::Stroke(_)) => "Fill",
                 Some(OverrideValue::Text(_)) => "Text",
@@ -164,7 +227,11 @@ pub fn instance_changes(instance: &Node) -> Vec<InstanceChange> {
 /// Drop ONE override — Figma's *"Reset > Reset [property]"*. Returns whether
 /// that layer carried an override at all.
 pub fn reset_override(instance: &mut Node, target: &str) -> bool {
-    instance.overrides.remove(target).is_some()
+    let before = instance.overrides.len();
+    instance
+        .overrides
+        .retain(|k, _| override_target_id(k) != target);
+    instance.overrides.len() != before
 }
 
 /// Reset every override on ONE LAYER of the instance — Figma's *"select a
@@ -183,7 +250,9 @@ pub fn reset_layer_overrides(instance: &mut Node, layer: &str) -> usize {
         collect(n, &mut targets);
     }
     let before = instance.overrides.len();
-    instance.overrides.retain(|k, _| !targets.contains(k));
+    instance
+        .overrides
+        .retain(|k, _| !targets.iter().any(|t| override_target_id(k) == t));
     before - instance.overrides.len()
 }
 
@@ -218,11 +287,14 @@ pub fn push_overrides_to_master(root: &mut Node, instance_id: &str) -> usize {
 /// override lands returns 1 plus whatever its children take, so a nested
 /// target is found the same way the renderer finds it.
 fn push_into(node: &mut Node, overrides: &std::collections::HashMap<String, String>) -> usize {
-    let own = overrides
-        .get(&node.id)
-        .and_then(|raw| OverrideValue::decode(raw))
-        .map(|v| apply_override(node, &v))
-        .unwrap_or(0);
+    let mut own = 0;
+    for (k, raw) in overrides {
+        if override_target_id(k) == node.id {
+            if let Some(v) = OverrideValue::decode(raw) {
+                own += apply_override(node, &v);
+            }
+        }
+    }
     let mut n = own;
     for c in &mut node.children {
         n += push_into(c, overrides);
@@ -467,17 +539,17 @@ impl PropRegistry {
         for p in props {
             match p {
                 ComponentProp::Text { name, target, .. } if name == prop_name => {
-                    set_override(instance, target, OverrideValue::Text(value.into()));
+                    set_exclusive_override(instance, target, OverrideValue::Text(value.into()));
                     return true;
                 }
                 ComponentProp::Bool { name, target, .. } if name == prop_name => {
                     if let Ok(b) = value.parse::<bool>() {
-                        set_override(instance, target, OverrideValue::Visible(b));
+                        set_exclusive_override(instance, target, OverrideValue::Visible(b));
                         return true;
                     }
                 }
                 ComponentProp::Swap { name, target, .. } if name == prop_name => {
-                    set_override(instance, target, OverrideValue::Swap(value.into()));
+                    set_exclusive_override(instance, target, OverrideValue::Swap(value.into()));
                     return true;
                 }
                 ComponentProp::Number {
@@ -490,14 +562,18 @@ impl PropRegistry {
                         // Apply to the specified target_property (width, height, opacity, etc.)
                         match target_property.as_str() {
                             "width" | "height" | "radius" => {
-                                set_override(instance, target, OverrideValue::Number(n));
+                                set_exclusive_override(instance, target, OverrideValue::Number(n));
                             }
                             "opacity" => {
-                                set_override(instance, target, OverrideValue::Opacity(n as f32));
+                                set_exclusive_override(
+                                    instance,
+                                    target,
+                                    OverrideValue::Opacity(n as f32),
+                                );
                             }
                             _ => {
                                 // Default to Number for backward compatibility
-                                set_override(instance, target, OverrideValue::Number(n));
+                                set_exclusive_override(instance, target, OverrideValue::Number(n));
                             }
                         }
                         return true;
@@ -511,7 +587,11 @@ impl PropRegistry {
                 } if name == prop_name => {
                     // Parse hex color and apply to the specified target_property (fill or stroke)
                     if let Some(color) = parse_hex_color(value) {
-                        set_override(instance, target, color_override(target_property, color));
+                        set_exclusive_override(
+                            instance,
+                            target,
+                            color_override(target_property, color),
+                        );
                         return true;
                     }
                 }
@@ -716,39 +796,44 @@ pub fn detach_instance(root: &Node, instance: &Node, vars: &Variables) -> Option
         return None;
     };
     let master = find_master(root, component)?;
-    let ovr = typed_overrides(instance);
     let mut group = Node::group(&format!("{}-detached", instance.id), instance.w, instance.h);
     group.transform = instance.transform;
     let resolved = resolve_slots(master, instance);
     let kids: &[Node] = resolved.as_deref().unwrap_or(&master.children);
     for child in kids {
         let mut c = child.clone();
-        apply_overrides_deep(&mut c, &ovr, vars);
+        apply_overrides_raw(&mut c, &instance.overrides, vars);
         group.children.push(c);
     }
     Some(group)
 }
 
-fn apply_overrides_deep(node: &mut Node, ovr: &HashMap<String, OverrideValue>, vars: &Variables) {
-    if let Some(v) = ovr.get(&node.id) {
+fn apply_overrides_raw(node: &mut Node, ovr: &HashMap<String, String>, vars: &Variables) {
+    for (k, enc) in ovr {
+        if override_target_id(k) != node.id {
+            continue;
+        }
+        let Some(v) = OverrideValue::decode(enc) else {
+            continue;
+        };
         match v {
-            OverrideValue::Fill(c) => node.fill = Paint::Solid(*c),
-            OverrideValue::Stroke(c) => apply_stroke_paint(node, *c),
+            OverrideValue::Fill(c) => node.fill = Paint::Solid(c),
+            OverrideValue::Stroke(c) => apply_stroke_paint(node, c),
             OverrideValue::Text(t) => {
                 if let NodeKind::Text { text } = &mut node.kind {
-                    *text = t.clone();
+                    *text = t;
                     node.text_runs.clear();
                 }
             }
-            OverrideValue::Visible(b) => node.visible = *b,
-            OverrideValue::Opacity(o) => node.opacity = *o,
+            OverrideValue::Visible(b) => node.visible = b,
+            OverrideValue::Opacity(o) => node.opacity = o,
             OverrideValue::Swap(c) => {
                 if let NodeKind::Instance { component } = &mut node.kind {
-                    *component = c.clone();
+                    *component = c;
                 }
             }
             OverrideValue::Number(n) => {
-                node.w = *n;
+                node.w = n;
             }
         }
     }
@@ -758,7 +843,7 @@ fn apply_overrides_deep(node: &mut Node, ovr: &HashMap<String, OverrideValue>, v
         return;
     }
     for c in &mut node.children {
-        apply_overrides_deep(c, ovr, vars);
+        apply_overrides_raw(c, ovr, vars);
     }
 }
 
@@ -1226,5 +1311,27 @@ mod tests {
         };
         root.children.push(orphan);
         assert_eq!(push_overrides_to_master(&mut root, "i1"), 0);
+    }
+
+    #[test]
+    fn one_layer_can_hold_text_and_fill_overrides() {
+        let mut inst = Node::instance("i", "Btn", 0.0, 0.0, 80.0, 32.0);
+        set_override(&mut inst, "label", OverrideValue::Text("Hi".into()));
+        set_override(
+            &mut inst,
+            "label",
+            OverrideValue::Fill(Color::from_rgb8(0xff, 0, 0)),
+        );
+        let both = overrides_for(&inst, "label");
+        assert!(
+            both.iter()
+                .any(|v| matches!(v, OverrideValue::Text(t) if t == "Hi")),
+            "{both:?}"
+        );
+        assert!(
+            both.iter().any(|v| matches!(v, OverrideValue::Fill(_))),
+            "{both:?}"
+        );
+        assert_eq!(inst.overrides.len(), 2);
     }
 }

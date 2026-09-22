@@ -149,15 +149,11 @@ if [[ $QUICK == 0 ]]; then
     fi
 
     step "design sheet (regenerate, then diff)"
-    # tools/design-sheet is generated from the same sources this gate compiles,
-    # and it lies silently when it goes stale: the type ladder used to ship five
-    # of the seven steps because the generator carried its own key list. The
-    # generators now read every step from the source, and this step re-runs them
-    # and lets the working tree speak — a palette or scale edit that forgets to
-    # regenerate fails here instead of shipping a sheet that documents the
-    # previous scale. `SHEET_COMMIT` pins the provenance stamp to the committed
-    # one, so a merge commit does not read as a change on every pull request.
-    if command -v node >/dev/null 2>&1; then
+    # The generators parse the retired native GPU chrome
+    # (`apps/x-designer/src/bin/x_native_app`). Product UI is `apps/web`.
+    if [[ ! -d apps/x-designer/src/bin/x_native_app ]]; then
+        ok "skipped: native GPU chrome removed; designer UI is apps/web"
+    elif command -v node >/dev/null 2>&1; then
         SHEET=tools/design-sheet
         STAMP=$(sed -n 's/.*"commit": *"\([0-9a-f]*\)".*/\1/p' "$SHEET/tokens.json" | head -1)
         if SHEET_COMMIT=${STAMP:-HEAD} node "$SHEET/build_tokens.mjs" >/dev/null 2>&1 &&
@@ -178,12 +174,8 @@ if [[ $QUICK == 0 ]]; then
     fi
 
     step "design + Figma conformance (guard)"
-    # The sheet steps above prove the sheet matches the sources. This proves the
-    # *decisions* do: one owner per colour literal in the engine, a ratchet on the
-    # literals that remain, every icon the chrome asks for, and every behaviour
-    # docs/FIGMA_PARITY.md claims to copy from Figma still naming the test that
-    # pins it. Dependency-free (node:fs only), so unlike the jsdom sheets it runs
-    # on a bare runner.
+    # Engine colour-owner checks still run. Native-chrome icon/status/editor_ui
+    # claims are skipped when that binary is gone (guard.mjs detects the dir).
     if command -v node >/dev/null 2>&1; then
         if GUARD_LOG=$(node tools/design-sheet/guard.mjs 2>&1); then
             ok "$(printf '%s\n' "$GUARD_LOG" | tail -1 | sed 's/^SUMMARY  //')"
@@ -196,13 +188,11 @@ if [[ $QUICK == 0 ]]; then
     fi
 
     step "design sheet assertions (jsdom)"
-    # check.mjs and check_screens.mjs are the sheet's own 40 + 20 assertions: the
-    # ladders read against design_system.rs, orphan roles, contrast pairs, no raw
-    # colour literals in the gallery, every screen's landmarks. They need jsdom —
-    # the repository's only node dependency — so CI installs it (`npm ci --prefix
-    # tools/design-sheet`) and FAILS the gate when it is missing instead of
-    # skipping the assertions silently. Locally, a missing jsdom is a note.
-    if command -v node >/dev/null 2>&1; then
+    # check_screens.mjs still describes the retired native window. Skip the
+    # gallery when that chrome is gone. check.mjs reads x-ui palettes and stays.
+    if [[ ! -d apps/x-designer/src/bin/x_native_app ]]; then
+        ok "skipped native screen gallery; product UI is apps/web"
+    elif command -v node >/dev/null 2>&1; then
         if (cd tools/design-sheet && node -e "import('jsdom')" >/dev/null 2>&1); then
             for sheet in check.mjs check_screens.mjs; do
                 if SHEET_LOG=$(cd tools/design-sheet && node "$sheet" 2>&1); then

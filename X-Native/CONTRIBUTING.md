@@ -8,18 +8,19 @@ runs, so a green local run is a green pipeline.
 ```
 rustup toolchain install stable --profile minimal   # rust-toolchain.toml pins it
 rustup component add rustfmt clippy
-cargo build --workspace                             # vello + winit, a few minutes cold
+cargo build --workspace                             # vello + wgpu, a few minutes cold
 cargo test --workspace
+cd apps/web && npm install && npm run dev            # product UI
 ```
 
-Linux needs the usual Vulkan/GLSL loaders for the GUI binary
-(`libvulkan1`, `libegl1`, `libgl1`, `libfontconfig1`); the engine, CLI and MCP
-server build and test without them. Everything in the test suite is
-deterministic and offline — no fixture downloads, no wall-clock assertions, no
-network. The handful of GPU/screenshot tests are `#[ignore]`d on purpose:
+Linux needs Vulkan loaders for headless GPU bins (`render_headless`,
+`type_proof`); the engine, CLI and MCP server build and test without them.
+Everything in the test suite is deterministic and offline — no fixture
+downloads, no wall-clock assertions, no network. The handful of GPU tests
+are `#[ignore]`d on purpose:
 
 ```
-cargo test -p x-designer --bin x_native_app -- --ignored   # needs software Vulkan
+cargo test --workspace -- --ignored   # needs software Vulkan
 ```
 
 ## Layout
@@ -33,7 +34,8 @@ cargo test -p x-designer --bin x_native_app -- --ignored   # needs software Vulk
 | `crates/x-text` | font management, shaping, `glyf` subsetting |
 | `crates/x-ui` | widget kit, **design system + themes** (`design_system.rs`, `theme.rs`) |
 | `crates/x-native` | façade re-exports + the MCP server |
-| `apps/x-designer` | the app: `x_native.rs` (CLI driver), `x_native/toolkit.rs` (verbs), `x_native_app/*` (GUI) |
+| `apps/web` | **product UI** (React Figma UI3 chrome over the command API) |
+| `apps/x-designer` | CLI + headless GPU bins (`x_native`, `render_headless`, …) |
 
 The façade rule: `x_native::*` is what the app and the CLI both import. If a
 capability should be reachable from a script, an agent and the panel, it gets a
@@ -48,10 +50,9 @@ re-export here and a test on each side — not a second implementation.
   in CI, and `every_shipped_palette_is_aa_clean` as a unit test. Content colors
   (what the user drew, smart guides, watermarks, brand marks) stay literals on
   purpose: a theme switch must not repaint them.
-- **New UI colors must be reachable at runtime.** A new surface paints through
-  `apps/x-designer/src/bin/x_native_app/paint.rs` (`fill_rect`, `stroke_rrect`,
-  text via `draw_spans_baseline`), which remaps through `theme::resolve`.
-  Painting straight onto a `Scene` skips theming — think twice.
+- **New UI colors live in the web designer.** Chrome is `apps/web`. Engine
+  canvas labels still take roles from `crates/x-ui`. There is no native GPU
+  chrome to paint through.
 - **No `unsafe`, no `dbg!`, no `todo!`.** Denied by `[workspace.lints]`. A new
   `unsafe` block needs a documented `#[allow(unsafe_code)]` and a sentence in
   `docs/KNOWN_DEBT.md` about why it cannot be avoided.
