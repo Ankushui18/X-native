@@ -331,11 +331,26 @@ export interface CommentThread {
   replies: CommentReply[];
 }
 
+/**
+ * A ruler guide: an infinite line the user drags out of a ruler.
+ *
+ * Distinct from `snapping.Guide`, which is the transient red line drawn while
+ * dragging a layer. These persist with the page and objects snap to them.
+ */
+export interface RulerGuide {
+  id: string;
+  axis: "x" | "y";
+  /** Position in world units. */
+  at: number;
+}
+
 export interface Page {
   id: string;
   name: string;
   root: XNode;
   comments: CommentThread[];
+  /** Ruler guides for this page; see RulerGuide. */
+  guides: RulerGuide[];
   pixelGrid: boolean;
   pixelGridColor: string;
   flowStart: string;
@@ -443,6 +458,9 @@ export type Command =
   /** Recolour a style; every bound node follows. */
   | { type: "editStyle"; id: string; color?: string; name?: string }
   | { type: "deleteStyle"; id: string }
+  | { type: "addGuide"; axis: "x" | "y"; at: number }
+  | { type: "moveGuide"; id: string; at: number }
+  | { type: "removeGuide"; id: string }
   | { type: "makeComponent" }
   | { type: "detachInstance" }
   | { type: "placeComponent"; id: string; x: number; y: number }

@@ -798,6 +798,64 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 19. ruler guides ---------------------------------------------------------
+{
+  const p = await page();
+  await p.keyboard.down("Shift"); await p.keyboard.press("R"); await p.keyboard.up("Shift");
+  await sleep(450);
+  const wrap = await p.evaluate(() => {
+    const r = document.querySelector(".canvas-wrap").getBoundingClientRect();
+    return { x: Math.round(r.left), y: Math.round(r.top) };
+  });
+  t("both ruler rails are grabbable", (await p.evaluate(() => document.querySelectorAll(".guide-rail").length)) === 2);
+
+  // drag a horizontal guide out of the top rail
+  await p.mouse.move(wrap.x + 500, wrap.y + 10);
+  await p.mouse.down();
+  await p.mouse.move(wrap.x + 500, wrap.y + 300, { steps: 10 });
+  await p.mouse.up();
+  await sleep(600);
+  t("dragging from the top rail creates a horizontal guide",
+    (await p.evaluate(() => document.querySelectorAll(".guide-y").length)) === 1);
+
+  // and a vertical one out of the left rail
+  await p.mouse.move(wrap.x + 10, wrap.y + 400);
+  await p.mouse.down();
+  await p.mouse.move(wrap.x + 900, wrap.y + 400, { steps: 10 });
+  await p.mouse.up();
+  await sleep(600);
+  t("dragging from the left rail creates a vertical guide",
+    (await p.evaluate(() => document.querySelectorAll(".guide-x").length)) === 1);
+
+  // a guide drag must not disturb the canvas selection underneath
+  const sel = await p.evaluate(() => document.querySelector(".inspector")?.innerText.slice(0, 20) || "");
+  await p.mouse.move(wrap.x + 10, wrap.y + 600);
+  await p.mouse.down();
+  await p.mouse.move(wrap.x + 950, wrap.y + 600, { steps: 8 });
+  await p.mouse.up();
+  await sleep(500);
+  t("pulling a guide does not change the selection",
+    (await p.evaluate(() => document.querySelector(".inspector")?.innerText.slice(0, 20) || "")) === sel);
+
+  // double-click removes one
+  const before = await p.evaluate(() => document.querySelectorAll(".guide-x").length);
+  await p.evaluate(() => {
+    const g = document.querySelector(".guide-x");
+    g.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+  });
+  await sleep(500);
+  t(`double-click removes a guide (${before} -> ${await p.evaluate(() => document.querySelectorAll(".guide-x").length)})`,
+    (await p.evaluate(() => document.querySelectorAll(".guide-x").length)) === before - 1);
+
+  // guides belong to the page, so they persist
+  await sleep(1300);
+  await p.reload({ waitUntil: "networkidle0" });
+  await sleep(1200);
+  t("guides survive a reload",
+    (await p.evaluate(() => document.querySelectorAll(".guide").length)) >= 2);
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();

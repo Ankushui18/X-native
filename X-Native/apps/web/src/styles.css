@@ -1685,3 +1685,50 @@ input:focus-visible,
 .sec-toggle:hover svg {
   opacity: 1;
 }
+
+/* Ruler guides ----------------------------------------------------------- */
+/* Only the rails and the guides themselves take pointer events, so the layer
+   never steals clicks meant for the canvas beneath it. */
+.guide-layer { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
+.guide-rail { position: absolute; pointer-events: auto; }
+.guide-rail-top { left: 20px; right: 0; top: 0; height: 20px; cursor: ns-resize; }
+.guide-rail-left { top: 20px; bottom: 0; left: 0; width: 20px; cursor: ew-resize; }
+.guide {
+  position: absolute;
+  pointer-events: auto;
+  background: #f2495c;
+}
+/* A 1px line is nearly impossible to grab, so the hit area is padded out
+   with a transparent border while the painted line stays hairline. */
+.guide-x {
+  top: 20px; bottom: 0;
+  width: 1px;
+  margin-left: -4px;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  background-clip: padding-box;
+  cursor: ew-resize;
+}
+.guide-y {
+  left: 20px; right: 0;
+  height: 1px;
+  margin-top: -4px;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  background-clip: padding-box;
+  cursor: ns-resize;
+}
+.guide.on { background: #ff2d55; }
+.guide-hint { opacity: 0.4; pointer-events: none; }
+.guide-badge {
+  position: absolute;
+  left: 6px; top: 6px;
+  background: #f2495c;
+  color: #fff;
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+.guide-y .guide-badge { left: 6px; top: 6px; }

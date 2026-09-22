@@ -187,5 +187,32 @@ console.log("shared styles:");
     e.snapshot().styles.length === 1 && get(a).fillStyle === e.snapshot().styles[0].id);
 }
 
+console.log("ruler guides:");
+{
+  // A box 6px shy of a guide must land exactly on it.
+  const moving = { id: "m", x: 94, y: 10, w: 50, h: 50 };
+  const r = snapMove(moving, [], 8, [{ axis: "x", at: 100 }]);
+  t("a box snaps to a ruler guide", Math.abs(moving.x + r.dx - 100) < 1e-6);
+  t("the guide is drawn", r.guides.some((g) => g.axis === "x" && g.at === 100));
+
+  // Outside tolerance it must not move.
+  const far = snapMove({ id: "m", x: 40, y: 10, w: 50, h: 50 }, [], 8, [{ axis: "x", at: 100 }]);
+  t("a distant box is left alone", far.dx === 0);
+
+  // Guides work with no other objects present, which object-only snapping
+  // used to bail out of early.
+  const alone = snapMove({ id: "m", x: 10, y: 96, w: 20, h: 20 }, [], 8, [{ axis: "y", at: 100 }]);
+  t("guides snap even with no other layers", Math.abs(96 + alone.dy - 100) < 1e-6);
+
+  // An explicit guide should win a tie against a coincidental object edge.
+  const tie = snapMove(
+    { id: "m", x: 94, y: 10, w: 50, h: 50 },
+    [{ id: "o", x: 106, y: 200, w: 50, h: 50 }],
+    8,
+    [{ axis: "x", at: 100 }],
+  );
+  t("a ruler guide wins a tie against an object edge", Math.abs(94 + tie.dx - 100) < 1e-6);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);

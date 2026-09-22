@@ -54,7 +54,11 @@ function validate(v: unknown): PersistedDoc | null {
   const pages = v.pages as Page[];
   // Pages written before comments existed have no `comments` array; give them
   // one so callers never have to null-check it.
-  for (const p of pages) if (!Array.isArray(p.comments)) p.comments = [];
+  for (const p of pages) {
+    if (!Array.isArray(p.comments)) p.comments = [];
+    // Pages written before ruler guides existed have no array.
+    if (!Array.isArray(p.guides)) p.guides = [];
+  }
   return {
     version: VERSION,
     fileName: v.fileName,

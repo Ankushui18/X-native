@@ -12,6 +12,7 @@ import {
 } from "../engine/snapping";
 import { fillStyle, paintDropShadows, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows } from "../engine/paint";
 import { Rulers } from "./Rulers";
+import { Guides } from "./Guides";
 import { Comments } from "./Comments";
 import { useTheme } from "./theme";
 import { cssRgba, isNone, parseHex, takeEyedrop, toHex } from "./color";
@@ -1395,7 +1396,12 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           const bb = selectionBounds(root2, sel);
           if (bb) {
             const moved = { id: "sel", x: bb.x + dx, y: bb.y + dy, w: bb.w, h: bb.h };
-            const res = snapMove(moved, snapTargets.current, SNAP_PX / snap.zoom);
+            const res = snapMove(
+              moved,
+              snapTargets.current,
+              SNAP_PX / snap.zoom,
+              snap.pages[snap.page].guides,
+            );
             dx += res.dx;
             dy += res.dy;
             setGuides(res.guides);
@@ -2097,6 +2103,17 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           openId={snap.openComment}
           draft={draftComment}
           onDraftDone={() => setDraftComment(null)}
+        />
+      )}
+      {snap.showRulers && (
+        <Guides
+          guides={snap.pages[snap.page].guides}
+          engine={engine}
+          zoom={snap.zoom}
+          panX={snap.panX}
+          panY={snap.panY}
+          width={box.w}
+          height={box.h}
         />
       )}
       {snap.showRulers && (

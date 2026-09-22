@@ -346,6 +346,7 @@ function demoPage(): Page {
     name: "Page 1",
     root: pageRoot,
     comments: [],
+    guides: [],
     pixelGrid: false,
     pixelGridColor: "#cccccc",
     flowStart: phone.id,
@@ -703,6 +704,7 @@ export class MemoryEngine implements Engine {
         p.name = `Page ${s.pages.length + 1}`;
         p.root.children = [];
         p.comments = [];
+        p.guides = [];
         p.flowStart = "";
         s.pages.push(p);
         s.page = s.pages.length - 1;
@@ -1207,6 +1209,20 @@ export class MemoryEngine implements Engine {
           n.children.forEach(walk);
         };
         for (const pg of s.pages) walk(pg.root);
+        break;
+      }
+      case "addGuide": {
+        s.pages[s.page].guides.push({ id: uid("guide"), axis: cmd.axis, at: cmd.at });
+        break;
+      }
+      case "moveGuide": {
+        const g = s.pages[s.page].guides.find((x) => x.id === cmd.id);
+        if (g) g.at = cmd.at;
+        break;
+      }
+      case "removeGuide": {
+        const pg = s.pages[s.page];
+        pg.guides = pg.guides.filter((x) => x.id !== cmd.id);
         break;
       }
       case "makeComponent": {
