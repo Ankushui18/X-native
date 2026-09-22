@@ -24,7 +24,7 @@ import type {
 import { collectColors, defaultEffect, defaultLayout, find, framesOf, worldPos } from "../engine/memory";
 import { Icon } from "./icons";
 import { FillPicker, type FillValue } from "./FillPicker";
-import { isNone } from "./color";
+import { isNone, parseHex, withAlpha } from "./color";
 import { ContextMenu, runMenu } from "./ContextMenu";
 
 export function RightPanel({
@@ -1359,10 +1359,11 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
               <ColorRow
                 title="Shadow"
                 value={fx.color}
-                opacity={100}
+                opacity={Math.round(parseHex(fx.color).a * 100)}
                 visible
                 recents={["#000000", "#00000040", "#ffffff"]}
-                onChange={(color) => set({ color })}
+                onChange={(color) => set({ color: withAlpha(color, parseHex(fx.color).a) })}
+                onOpacity={(v) => set({ color: withAlpha(fx.color, v / 100) })}
               />
             )}
             <div className="grid2">

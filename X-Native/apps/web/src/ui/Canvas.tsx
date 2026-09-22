@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Engine, NodeKind, PathPoint, Snapshot, Tool, XNode } from "../engine/types";
 import { deepestFrame, find, findParent, hitTest, worldPos } from "../engine/memory";
 import { shapePoly } from "../engine/geometry";
+import { fillStyle, paintDropShadows, paintFill, paintInnerShadows } from "../engine/paint";
 import { useTheme } from "./theme";
 import { cssRgba, isNone, takeEyedrop, toHex } from "./color";
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
@@ -256,10 +257,10 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       if (n.kind === "boolean" && n.booleanOp && n.children.length) {
         const dropB = (n.effects ?? []).find((e) => e.kind === "drop-shadow" && e.visible);
         if (dropB) {
-          ctx.shadowColor = dropB.color;
-          ctx.shadowBlur = dropB.blur * z;
-          ctx.shadowOffsetX = (dropB.x || 0) * z;
-          ctx.shadowOffsetY = (dropB.y || 4) * z;
+          ctx.shadowColor = cssRgba(dropB.color);
+          ctx.shadowBlur = Math.max(0, dropB.blur) * z;
+          ctx.shadowOffsetX = dropB.x * z;
+          ctx.shadowOffsetY = dropB.y * z;
         }
         paintBoolean(ctx, n, x, y, snap);
         ctx.restore();
@@ -299,23 +300,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         !!n.imageSrc ||
         (n.fillVisible !== false && !!n.fill && !isNone(n.fill) && n.kind !== "line" && n.kind !== "arrow") ||
         (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint));
-      if (canShadow) {
-        for (const drop of (n.effects ?? []).filter((e) => e.kind === "drop-shadow" && e.visible)) {
-          ctx.save();
-          ctx.shadowColor = drop.color;
-          ctx.shadowBlur = Math.max(0, drop.blur) * z;
-          ctx.shadowOffsetX = (drop.x || 0) * z;
-          ctx.shadowOffsetY = (drop.y || 4) * z;
-          ctx.fillStyle = drop.color;
-          ctx.fill();
-          if (drop.spread) {
-            ctx.lineWidth = Math.max(0, drop.spread * 2) * z;
-            ctx.strokeStyle = drop.color;
-            ctx.stroke();
-          }
-          ctx.restore();
-        }
-      }
+      if (canShadow) paintDropShadows(ctx, n, z);
       if (n.imageSrc || n.fillType === "image") {
         let im = n.imageSrc ? imgs.current.get(n.imageSrc) : undefined;
         if (n.imageSrc && !im) {
@@ -340,12 +325,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         ctx.save();
         ctx.globalAlpha *= n.fillOpacity ?? 1;
         ctx.globalCompositeOperation = canvasBlend(n.fillBlend);
-        if (n.fillType === "diamond") {
-          paintDiamond(ctx, n, sx, sy, sw, sh);
-        } else {
-          ctx.fillStyle = fillPaint(ctx, n, sx, sy, sw, sh);
-          ctx.fill();
-        }
+        paintFill(ctx, n, sx, sy, sw, sh);
         ctx.restore();
       }
       const noise = (n.effects ?? []).find((e) => e.kind === "noise" && e.visible);
@@ -363,18 +343,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       ctx.shadowBlur = 0;
       ctx.shadowOffsetX = 0;
       ctx.shadowOffsetY = 0;
-      for (const inner of (n.effects ?? []).filter((e) => e.kind === "inner-shadow" && e.visible)) {
-        ctx.save();
-        ctx.clip();
-        ctx.shadowColor = inner.color;
-        ctx.shadowBlur = inner.blur * z;
-        ctx.shadowOffsetX = (inner.x || 0) * z;
-        ctx.shadowOffsetY = (inner.y || 4) * z;
-        ctx.strokeStyle = inner.color;
-        ctx.lineWidth = Math.max(2, (inner.spread || 0) * z + 8);
-        ctx.stroke();
-        ctx.restore();
-      }
+      paintInnerShadows(ctx, n, sx, sy, sw, sh, z);
       if (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)) {
         ctx.save();
         ctx.globalAlpha *= n.strokeOpacity ?? 1;
@@ -400,8 +369,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           ctx.stroke();
           if (n.fillVisible && !isNone(n.fill) && n.kind !== "line" && n.kind !== "arrow") {
             ctx.globalCompositeOperation = "source-over";
-            ctx.fillStyle = fillPaint(ctx, n, sx, sy, sw, sh);
-            ctx.fill();
+            paintFill(ctx, n, sx, sy, sw, sh);
           }
         } else {
           ctx.lineWidth = lw;
@@ -1485,87 +1453,6 @@ function canvasBlend(m?: string): GlobalCompositeOperation {
   return map[k] || "source-over";
 }
 
-function paintDiamond(
-  ctx: CanvasRenderingContext2D,
-  n: XNode,
-  sx: number,
-  sy: number,
-  sw: number,
-  sh: number,
-) {
-  const gx = n.fillGX ?? 0.5;
-  const gy = n.fillGY ?? 0.5;
-  const hx = n.fillHX ?? 0.5;
-  const hy = n.fillHY ?? 1;
-  const cx = sx + gx * sw;
-  const cy = sy + gy * sh;
-  const rx = Math.abs((hx - gx) * sw) || sw / 2;
-  const ry = Math.abs((hy - gy) * sh) || sh / 2;
-  const mids: [number, number][] = [
-    [cx, cy - ry],
-    [cx + rx, cy],
-    [cx, cy + ry],
-    [cx - rx, cy],
-  ];
-  for (let i = 0; i < 4; i++) {
-    const a = mids[i];
-    const b = mids[(i + 1) % 4];
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(cx, cy);
-    ctx.lineTo(a[0], a[1]);
-    ctx.lineTo(b[0], b[1]);
-    ctx.closePath();
-    ctx.clip();
-    const g = ctx.createLinearGradient(cx, cy, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
-    g.addColorStop(0, n.fill);
-    g.addColorStop(1, n.fillB || "#ffffff");
-    ctx.fillStyle = g;
-    ctx.fillRect(sx, sy, sw, sh);
-    ctx.restore();
-  }
-}
-
-function fillPaint(
-  ctx: CanvasRenderingContext2D,
-  n: XNode,
-  sx: number,
-  sy: number,
-  sw: number,
-  sh: number,
-): string | CanvasGradient {
-  const a = n.fill;
-  const b = n.fillB || "#ffffff";
-  const gx = n.fillGX ?? 0.5;
-  const gy = n.fillGY ?? 0;
-  const hx = n.fillHX ?? 0.5;
-  const hy = n.fillHY ?? 1;
-  if (n.fillType === "linear") {
-    const g = ctx.createLinearGradient(sx + gx * sw, sy + gy * sh, sx + hx * sw, sy + hy * sh);
-    g.addColorStop(0, a);
-    g.addColorStop(1, b);
-    return g;
-  }
-  if (n.fillType === "radial") {
-    const cx = sx + gx * sw;
-    const cy = sy + gy * sh;
-    const r = Math.hypot((hx - gx) * sw, (hy - gy) * sh) || Math.max(sw, sh) / 2;
-    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-    g.addColorStop(0, a);
-    g.addColorStop(1, b);
-    return g;
-  }
-  if (n.fillType === "angular" && typeof ctx.createConicGradient === "function") {
-    const ang = Math.atan2((hy - gy) * sh, (hx - gx) * sw);
-    const g = ctx.createConicGradient(ang, sx + gx * sw, sy + gy * sh);
-    g.addColorStop(0, a);
-    g.addColorStop(0.5, b);
-    g.addColorStop(1, a);
-    return g;
-  }
-  return a;
-}
-
 function unrot(px: number, py: number, cx: number, cy: number, deg: number) {
   const a = (-deg * Math.PI) / 180;
   const dx = px - cx;
@@ -1786,7 +1673,7 @@ function paintText(
   sh: number,
   z: number,
 ) {
-  ctx.fillStyle = fillPaint(ctx, n, sx, sy, sw, sh);
+  ctx.fillStyle = fillStyle(ctx, n, sx, sy, sw, sh);
   const size = Math.max(1, n.fontSize * z);
   ctx.font = `${n.fontWeight} ${size}px ${n.fontFamily}, Inter, system-ui`;
   ctx.textBaseline = "top";

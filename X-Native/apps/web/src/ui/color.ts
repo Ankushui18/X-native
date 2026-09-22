@@ -88,9 +88,22 @@ export function hsvToRgb(h: number, s: number, v: number): { r: number; g: numbe
   };
 }
 
-export function cssRgba(hex: string, opacity = 1): string {
+export function toHexA(r: number, g: number, b: number, a = 1): string {
+  const h = (n: number) =>
+    Math.max(0, Math.min(255, Math.round(n)))
+      .toString(16)
+      .padStart(2, "0");
+  return `#${h(r)}${h(g)}${h(b)}${h(a * 255)}`;
+}
+
+export function withAlpha(hex: string, a: number): string {
   const { r, g, b } = parseHex(hex);
-  return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, opacity))})`;
+  return toHexA(r, g, b, a);
+}
+
+export function cssRgba(hex: string, opacity = 1): string {
+  const { r, g, b, a } = parseHex(hex);
+  return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, a * opacity))})`;
 }
 
 export function isNone(hex: string): boolean {
