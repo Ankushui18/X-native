@@ -1,9 +1,20 @@
 # X-Native exhaustive Figma parity audit
 
 Date: **2026-09-22** (Asia/Calcutta)
-Branch: `arena/01a0c0d4-x-native`
+Branch audited: `arena/01a0c762-x-native` (the checked-out session branch)
+Requested comparison URL: `arena/01a0c0d4-x-native` (not checked out in this session)
 Product UI audited: `X-Native/apps/web` only
 Reference: Figma Design help, not a claim that X-Native is Figma-complete.
+
+## Executive result
+
+This deliverable is an **audit only**; no product feature work was performed as part of
+this report. The implementation is not at 100/100 Figma parity. The code-level audit
+finds strong coverage of the core canvas/editor path, but substantial gaps in export,
+prototype, collaboration, import, rich text, masks, vector editing, and transformed
+rendering. Scores below are feature-level final scores; they must not be interpreted as
+a validated Figma-equivalence claim. A browser replay and pixel-diff pass remains
+required before assigning a definitive product-wide score.
 
 This report is the feature-by-feature record for the current PR pass. It covers the
 controls and behaviours that exist in the web designer, including the extra tools that
