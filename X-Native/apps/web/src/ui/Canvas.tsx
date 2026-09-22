@@ -18,6 +18,7 @@ import { cssRgba, isNone, parseHex, takeEyedrop, toHex } from "./color";
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
 import { importSvg, type ImportedNode } from "../engine/svgImport";
 import { importSketch } from "../engine/sketchImport";
+import { importFig } from "../engine/figImport";
 import { toast } from "./toast";
 
 /** Snap radius in screen pixels; divided by zoom to get world tolerance. */
@@ -1933,11 +1934,22 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       });
   };
 
+  const placeFig = (file: File, at?: { x: number; y: number }) => {
+    file
+      .arrayBuffer()
+      .then((buf) => importFig(buf))
+      .then((result) => placeNodes(result, file.name, at))
+      .catch((err: unknown) => {
+        toast(`Could not read ${file.name}: ${err instanceof Error ? err.message : "unreadable"}`);
+      });
+  };
+
   const placeFiles = (files: FileList | File[], at?: { x: number; y: number }) => {
     const all = Array.from(files);
     for (const f of all) {
       if (f.type === "image/svg+xml" || /\.svg$/i.test(f.name)) placeSvg(f, at);
       else if (/\.sketch$/i.test(f.name)) placeSketch(f, at);
+      else if (/\.fig$/i.test(f.name)) placeFig(f, at);
     }
     const list = all.filter(
       (f) => f.type.startsWith("image/") && f.type !== "image/svg+xml" && !/\.svg$/i.test(f.name),
@@ -2124,7 +2136,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       <input
         ref={fileRef}
         type="file"
-        accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml,.svg,.sketch,image/*"
+        accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml,.svg,.sketch,.fig,image/*"
         hidden
         onChange={(e) => {
           if (e.target.files) placeFiles(e.target.files, pendingImage.current ?? undefined);

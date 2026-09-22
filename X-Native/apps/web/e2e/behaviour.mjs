@@ -517,6 +517,68 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 15. .fig import: Figma binary opens as editable layers -------------------
+{
+  const p = await page();
+  const b64 = fs.readFileSync(path.join(HERE, "fixtures", "sample.fig")).toString("base64");
+  const before = (await rows(p)).length;
+  await p.evaluate((data) => {
+    const bin = atob(data);
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    const dt = new DataTransfer();
+    dt.items.add(new File([u8], "design.fig", { type: "" }));
+    document.querySelector(".canvas-wrap").dispatchEvent(
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 700, clientY: 450 }));
+  }, b64);
+  await sleep(2200);
+  const after = await rows(p);
+  t(`.fig opens as layers (${before} -> ${after.length})`, after.length === before + 4);
+  t("frame, rect, ellipse and text all arrive",
+    ["Home", "FigCard", "FigDot", "FigLabel"].every((n) => after.includes(n)));
+
+  const rs = await p.$$(".panel.left .row");
+  await rs[after.indexOf("FigCard")].click();
+  await sleep(650);
+  const f = await p.evaluate(() =>
+    [...document.querySelectorAll(".inspector .field input")].map((i) => i.value).slice(0, 8));
+  t(`.fig keeps exact geometry (${f[3]}x${f[4]})`, f[3] === "120" && f[4] === "60");
+  t(`.fig keeps radius 8 and stroke 2 (r${f[6]} s${f[7]})`, f[6] === "8" && f[7] === "2");
+
+  const px = await p.evaluate(() => {
+    const c = document.querySelector("canvas");
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let red = 0, green = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i] > 200 && d[i + 1] < 70 && d[i + 2] < 70 && d[i + 3] > 200) red++;
+      if (d[i] < 80 && d[i + 1] > 150 && d[i + 2] < 80 && d[i + 3] > 200) green++;
+    }
+    return { red, green };
+  });
+  t(`.fig fills render (${px.red}px red, ${px.green}px green)`, px.red > 500 && px.green > 200);
+
+  await p.keyboard.down("Meta"); await p.keyboard.press("z"); await p.keyboard.up("Meta");
+  await sleep(800);
+  t(`one undo removes the whole .fig import (${(await rows(p)).length})`, (await rows(p)).length === before);
+  await p.close();
+}
+{
+  // a .fig that is not a ZIP, and a ZIP with no canvas.fig, must both report
+  const p = await page();
+  const before = (await rows(p)).length;
+  await p.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.items.add(new File(["nope"], "broken.fig", { type: "" }));
+    document.querySelector(".canvas-wrap").dispatchEvent(
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 700, clientY: 450 }));
+  });
+  await sleep(1200);
+  const toast = await p.evaluate(() => document.querySelector(".toast")?.textContent || "");
+  t(`a corrupt .fig is reported (${JSON.stringify(toast.slice(0, 44))})`,
+    (await rows(p)).length === before && /could not read/i.test(toast));
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();
