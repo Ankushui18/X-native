@@ -111,8 +111,9 @@ mod tests {
 
     #[test]
     fn an_svg_round_trips_to_x_json() {
-        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120">
-            <rect x="10" y="10" width="80" height="50" fill="#ff0000"/></svg>"#;
+        // r##..##: the fill colour contains `"#`, which closes a plain r#".."#.
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120">
+            <rect x="10" y="10" width="80" height="50" fill="#ff0000"/></svg>"##;
         let out = import_svg_to_x(svg);
         assert!(out.starts_with("{\"ok\":true"), "got: {out}");
         // The payload has to be the document, not an empty stub.
