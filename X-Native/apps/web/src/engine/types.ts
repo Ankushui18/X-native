@@ -77,9 +77,11 @@ export type ProtoAnim =
 
 export type ProtoDevice =
   | "iphone-16-pro"
+  | "iphone-se"
   | "pixel-9"
   | "ipad-pro"
   | "macbook-pro"
+  | "desktop"
   | "apple-watch"
   | "none";
 
@@ -315,7 +317,9 @@ export type Tool =
   | "brush"
   | "eraser"
   | "comment"
-  | "hand";
+  | "hand"
+  /** Sketch's Zoom tool: click to zoom in, ⌥-click out, drag to a region. */
+  | "zoom";
 
 export interface AutoLayout {
   direction: LayoutDirection;
@@ -514,6 +518,10 @@ export interface Page {
   guides: RulerGuide[];
   pixelGrid: boolean;
   pixelGridColor: string;
+  /** Figma separates the visual grid from "Snap to pixel grid", which is the
+   *  behaviour (whole-pixel coordinates while moving/resizing). Optional so
+   *  documents written before the split keep loading; the default is on. */
+  pixelSnap?: boolean;
   flowStart: string;
 }
 
@@ -548,6 +556,10 @@ export interface Snapshot {
     backdrop?: boolean;
     backdropColor?: string;
   } | null;
+  /** Figma's View > Prototype flows. When off the canvas hides connection
+   *  noodles and hotspot handles, which is what makes Design mode look like
+   *  Design mode. */
+  showFlows: boolean;
   /** Figma's View > Rulers (⇧R). */
   showRulers: boolean;
   /** Figma's View > Minimap. Off by default; it costs its own render pass. */
@@ -578,6 +590,7 @@ export type Command =
   | { type: "setRightTab"; tab: RightTab }
   | { type: "toggleRulers" }
   | { type: "toggleMinimap" }
+  | { type: "toggleFlows"; enabled?: boolean }
   | { type: "toggleComments" }
   | { type: "addComment"; x: number; y: number; body: string }
   | { type: "replyComment"; id: string; body: string }
@@ -635,7 +648,7 @@ export type Command =
   | { type: "duplicatePage" }
   | { type: "deletePage" }
   | { type: "renamePage"; name: string }
-  | { type: "patchPage"; patch: Partial<Pick<Page, "pixelGrid" | "pixelGridColor" | "name" | "flowStart">> }
+  | { type: "patchPage"; patch: Partial<Pick<Page, "pixelGrid" | "pixelGridColor" | "pixelSnap" | "name" | "flowStart">> }
   | { type: "distribute"; axis: "h" | "v" }
   | { type: "boolean"; op: BooleanOp }
   /** Create a named style from the selection's current fill or stroke and

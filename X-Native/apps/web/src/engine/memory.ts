@@ -16,6 +16,7 @@ import type {
 } from "./types";
 import { copyText } from "./clipboard";
 import { loadDoc, type PersistedDoc } from "./persist";
+import { clampZoom } from "./view";
 import {
   booleanPath,
   outlineStroke as outlineStrokePath,
@@ -29,9 +30,11 @@ import {
 } from "./geometry";
 
 let seq = 1;
-const uid = (p: string) => `${p}_${seq++}`;
+export const uid = (p: string) => `${p}_${seq++}`;
 
-function node(
+/** Node factory. Exported so the file store can seed new documents from the
+ *  dashboard templates with exactly the same defaults the editor uses. */
+export function node(
   kind: NodeKind,
   name: string,
   x: number,
@@ -301,7 +304,7 @@ function applyLayout(n: XNode) {
   clampDims(n);
 }
 
-function demoPage(): Page {
+export function demoPage(): Page {
   const title = node("text", "Title", 24, 28, 300, 32, {
     text: "Explore Store",
     fontSize: 24,
@@ -477,7 +480,28 @@ function demoPage(): Page {
     guides: [],
     pixelGrid: false,
     pixelGridColor: "#cccccc",
+    pixelSnap: true,
     flowStart: phone.id,
+  };
+}
+
+/** An empty page, the way a new Figma file opens: one invisible root frame
+ *  that holds the top-level layers and no content of its own. */
+export function blankPage(name = "Page 1"): Page {
+  return {
+    id: uid("page"),
+    name,
+    root: node("frame", name, 0, 0, 4000, 4000, {
+      fill: "#00000000",
+      overflow: "visible",
+      showName: false,
+    }),
+    comments: [],
+    guides: [],
+    pixelGrid: false,
+    pixelGridColor: "#cccccc",
+    pixelSnap: true,
+    flowStart: "",
   };
 }
 
@@ -503,6 +527,7 @@ interface Internal {
   prototypeLiveInputs: boolean;
   prototypeSound: boolean;
   activeOverlay: Snapshot["activeOverlay"];
+  showFlows: boolean;
   showRulers: boolean;
   showMinimap: boolean;
   showComments: boolean;
@@ -578,8 +603,12 @@ export class MemoryEngine implements Engine {
    *  tell the user their work was replaced rather than silently starting over. */
   readonly restoreFailed: boolean;
 
-  constructor(restore = true) {
-    const loaded = restore ? loadDoc() : { doc: null, corrupt: false };
+  constructor(restore = true, seed: Omit<PersistedDoc, "version"> | null = null) {
+    const loaded = seed
+      ? { doc: { version: 1, ...seed } as PersistedDoc, corrupt: false }
+      : restore
+        ? loadDoc()
+        : { doc: null, corrupt: false };
     let doc = loaded.doc;
     let corrupt = loaded.corrupt;
     // A stored node that is missing fields the UI reads (fill, cornerRadii,
@@ -618,6 +647,7 @@ export class MemoryEngine implements Engine {
       prototypeLiveInputs: true,
       prototypeSound: true,
       activeOverlay: null,
+      showFlows: true,
       showRulers: doc?.showRulers ?? false,
       showMinimap: doc?.showMinimap ?? false,
       showComments: doc?.showComments ?? false,
@@ -650,6 +680,7 @@ export class MemoryEngine implements Engine {
       zoom: this.state.zoom,
       panX: this.state.panX,
       panY: this.state.panY,
+      showFlows: this.state.showFlows,
       showRulers: this.state.showRulers,
       showMinimap: this.state.showMinimap,
       showComments: this.state.showComments,
@@ -689,6 +720,7 @@ export class MemoryEngine implements Engine {
       "select",
       "selectAll",
       "toggleRulers",
+      "toggleFlows",
       "toggleMinimap",
       // Comments are annotations layered over the design, not part of it.
       // Figma keeps them off the design undo stack entirely: ⌘Z after posting
@@ -771,6 +803,7 @@ export class MemoryEngine implements Engine {
       canRedo: this.redo.length > 0,
       components: this.state.components,
       styles: this.state.styles,
+      showFlows: this.state.showFlows,
       showRulers: this.state.showRulers,
       showMinimap: this.state.showMinimap,
       showComments: this.state.showComments,
@@ -807,7 +840,7 @@ export class MemoryEngine implements Engine {
         s.tool = cmd.tool;
         break;
       case "setZoom":
-        s.zoom = Math.min(8, Math.max(0.1, cmd.zoom));
+        s.zoom = clampZoom(cmd.zoom);
         break;
       case "pan":
         s.panX += cmd.dx;
@@ -819,6 +852,9 @@ export class MemoryEngine implements Engine {
         break;
       case "toggleRulers":
         s.showRulers = !s.showRulers;
+        break;
+      case "toggleFlows":
+        s.showFlows = cmd.enabled ?? !s.showFlows;
         break;
       case "toggleMinimap":
         s.showMinimap = !s.showMinimap;
@@ -2057,7 +2093,7 @@ function focusFrame(s: Internal, root: XNode, id: string) {
   const availW = Math.max(300, vw - 160);
   const availH = Math.max(300, vh - 160);
   const z = Math.min(1.0, Math.max(0.2, Math.min(availW / Math.max(wp.node.w, 1), availH / Math.max(wp.node.h, 1))));
-  s.zoom = z;
+  s.zoom = clampZoom(z);
   s.panX = Math.round((vw - wp.node.w * z) / 2 - wp.x * z);
   s.panY = Math.round((vh - wp.node.h * z) / 2 - wp.y * z);
 }

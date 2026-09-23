@@ -17,9 +17,109 @@ import { FigInspectorModal } from "./ui/FigInspectorModal";
 import { PresentationPlayer } from "./ui/PresentationPlayer";
 import { subscribeToast, toast as toastMsg } from "./ui/toast";
 import { saveDoc } from "./engine/persist";
+import { Dashboard } from "./ui/Dashboard";
+import { ensureDemoFile, getFile, migrateLegacyDoc, readDoc, readDocSync, saveFile, type DocSeed } from "./engine/files";
+
+/** The dashboard is the app's front door; a file opens at `#/file/<id>`. The
+ *  hash is the source of truth so reload, back and a shared link all behave. */
+function readRoute(): { view: "home" } | { view: "file"; id: string } {
+  const m = /#\/file\/([^/?#]+)/.exec(window.location.hash || "");
+  return m ? { view: "file", id: decodeURIComponent(m[1]) } : { view: "home" };
+}
 
 export default function App() {
-  const engine = useMemo(() => new MemoryEngine(), []);
+  const [route, setRoute] = useState(readRoute);
+  // The document is resolved before the editor mounts: seeding the engine is
+  // synchronous, so the canvas never paints half a file. Large documents live in
+  // IndexedDB, which is only readable asynchronously — hence this small state
+  // machine rather than a direct render.
+  const [seed, setSeed] = useState<{ id: string; doc: DocSeed | null; missing: boolean } | null>(null);
+
+  useEffect(() => {
+    const on = () => setRoute(readRoute());
+    window.addEventListener("hashchange", on);
+    return () => window.removeEventListener("hashchange", on);
+  }, []);
+
+  // A pre-dashboard autosave becomes a Draft rather than vanishing behind the
+  // new front door, and a brand-new store gets the bundled sample file.
+  useEffect(() => {
+    if (route.view === "home") {
+      ensureDemoFile();
+      migrateLegacyDoc();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (route.view !== "file") {
+      setSeed(null);
+      return;
+    }
+    const sync = readDocSync(route.id);
+    if (sync) {
+      setSeed({ id: route.id, doc: sync, missing: false });
+      return;
+    }
+    let alive = true;
+    setSeed(null);
+    readDoc(route.id)
+      .then((doc) => {
+        if (!alive) return;
+        // An id that was never stored opens as a scratch document — that is how
+        // a direct link to a file in another browser should behave, and it is
+        // what the e2e harness drives. An id that exists but whose bytes are
+        // gone must NOT be overwritten by a blank file.
+        setSeed({ id: route.id, doc: doc ?? null, missing: !!doc === false && !!getFile(route.id) });
+      })
+      .catch(() => {
+        if (alive) setSeed({ id: route.id, doc: null, missing: !!getFile(route.id) });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [route]);
+
+  if (route.view === "file") {
+    if (seed && seed.missing) {
+      return (
+        <div className="open-screen">
+          <div className="open-card">
+            <b>This file is not in this browser</b>
+            <span>Its document is stored locally, and nothing was found here. Start a new file instead.</span>
+            <button className="primary" onClick={() => (window.location.hash = "#/")}>
+              Back to files
+            </button>
+          </div>
+        </div>
+      );
+    }
+    if (!seed || seed.id !== route.id) {
+      return (
+        <div className="open-screen">
+          <div className="open-card">
+            <b>Opening file…</b>
+            <span>Reading the document from local storage.</span>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <Editor
+        key={route.id}
+        fileId={route.id}
+        seed={seed.doc}
+        onHome={() => {
+          window.location.hash = "#/";
+        }}
+      />
+    );
+  }
+  return <Dashboard onOpen={(id) => (window.location.hash = `#/file/${encodeURIComponent(id)}`)} />;
+}
+
+function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null; onHome: () => void }) {
+  const engine = useMemo(() => new MemoryEngine(!seed, seed), [seed]);
   const snap = useSyncExternalStore(
     (fn) => engine.subscribe(fn),
     () => engine.snapshot(),
@@ -44,7 +144,13 @@ export default function App() {
     let timer = 0;
     let warned = false;
     const write = () => {
-      const status = saveDoc(engine.toDoc());
+      const doc = engine.toDoc();
+      const status = saveDoc(doc);
+      try {
+        saveFile(fileId, doc as never);
+      } catch {
+        /* the per-file index is a convenience; the autosave above is the copy */
+      }
       if (status !== "saved" && !warned) {
         warned = true; // one warning per session, not once per keystroke
         toastMsg(
@@ -69,7 +175,7 @@ export default function App() {
       window.clearTimeout(timer);
       window.removeEventListener("pagehide", flush);
     };
-  }, [engine]);
+  }, [engine, fileId]);
 
   // If a stored document existed but could not be read, say so rather than
   // silently presenting an empty file as if nothing was lost. This sets the
@@ -95,6 +201,14 @@ export default function App() {
       off();
       window.clearTimeout(timer);
     };
+  }, []);
+
+  // The zoom menu offers "Hide UI", which is this component's state, so it asks
+  // through an event rather than threading another prop through the inspector.
+  useEffect(() => {
+    const on = () => setHideUi((v) => !v);
+    window.addEventListener("x-native-hide-ui", on);
+    return () => window.removeEventListener("x-native-hide-ui", on);
   }, []);
 
   const share = () => {
@@ -154,6 +268,7 @@ export default function App() {
         setNav={setNav}
         onActions={() => setActions(true)}
         onInspectFig={() => setFigInspector(true)}
+        onHome={onHome}
       />
       <LeftPanel
         engine={engine}
@@ -161,6 +276,7 @@ export default function App() {
         nav={nav}
         onMinimize={() => setMinUi((v) => !v)}
         onActions={() => setActions(true)}
+        onHome={onHome}
       />
       <div
         className="split l"

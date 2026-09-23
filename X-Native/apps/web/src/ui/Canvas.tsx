@@ -12,6 +12,7 @@ import {
   type Guide,
 } from "../engine/snapping";
 import { fillStyle, paintDropShadows, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows } from "../engine/paint";
+import { clampZoom, wheelZoomFactor } from "../engine/view";
 import { Rulers } from "./Rulers";
 import { Guides } from "./Guides";
 import { Minimap } from "./Minimap";
@@ -24,6 +25,7 @@ import { importSketch } from "../engine/sketchImport";
 import { importFig } from "../engine/figImport";
 import { toast } from "./toast";
 import { Icon } from "./icons";
+import { zoomAtPoint, zoomToRect } from "./zoom";
 
 /** Snap radius in screen pixels; divided by zoom to get world tolerance. */
 const SNAP_PX = 6;
@@ -93,6 +95,9 @@ type Drag =
         | "starRatio"
         | "radius"
         | "arc";
+      /** Zoom-tool drag: the create block zooms to the rect instead of
+       *  committing a node. */
+      zoom?: boolean;
       point?: number;
       segIndex?: number;
       handle?: "in" | "out" | "g" | "h";
@@ -507,8 +512,10 @@ export function Canvas({
       ctx.fillRect(0, 0, w, h);
     }
     const page = snap.pages[snap.page];
-    if (page.pixelGrid || snap.zoom >= 2) {
-      ctx.strokeStyle = page.pixelGrid ? page.pixelGridColor || grid : grid;
+    // Figma only paints the pixel grid from 400% up: below that it is grey
+    // noise rather than something you can align to.
+    if (page.pixelGrid && snap.zoom >= 4) {
+      ctx.strokeStyle = page.pixelGridColor || grid;
       ctx.lineWidth = 1;
       const step = snap.zoom;
       ctx.beginPath();
@@ -1018,7 +1025,7 @@ export function Canvas({
       }
     }
 
-    if (snap.rightTab === "prototype" && !snap.presentFrame) {
+    if (snap.rightTab === "prototype" && snap.showFlows && !snap.presentFrame) {
       // 1. Render Flow Starting Point Badge ("Flow 1") on starting frame (Figma parity)
       const flowStartId = snap.pages[snap.page].flowStart;
       if (flowStartId) {
@@ -1425,87 +1432,83 @@ export function Canvas({
           ctx.stroke();
         }
       }
+      // Corner radius handles. Figma only shows these for a corner that is
+      // actually rounded, and draws them as a small bracket hugging the corner.
+      // Painting a dot at every corner regardless of radius read as "why is
+      // there a dot in my frame", and clamping the offset to half the box could
+      // push those dots to the middle of a small rounded frame.
       if (
         (wp.node.kind === "rect" || wp.node.kind === "frame" || wp.node.kind === "component" || wp.node.kind === "instance") &&
         !vecEdit &&
         sw >= 36 &&
         sh >= 36
       ) {
-        const r0 = wp.node.cornerRadii[0] || 0;
-        const r1 = wp.node.cornerRadii[1] || 0;
-        const r2 = wp.node.cornerRadii[2] || 0;
-        const r3 = wp.node.cornerRadii[3] || 0;
-        const maxOffset = Math.min(sw, sh) / 2 - 4;
-        const o0 = Math.max(9, Math.min(maxOffset, r0 * z + 8));
-        const o1 = Math.max(9, Math.min(maxOffset, r1 * z + 8));
-        const o2 = Math.max(9, Math.min(maxOffset, r2 * z + 8));
-        const o3 = Math.max(9, Math.min(maxOffset, r3 * z + 8));
-
-        const rPins = [
-          [sx + o0, sy + o0],
-          [sx + sw - o1, sy + o1],
-          [sx + sw - o2, sy + sh - o2],
-          [sx + o3, sy + sh - o3],
-        ];
-
-        for (const [rx, ry] of rPins) {
-          ctx.beginPath();
-          ctx.arc(rx, ry, 3.5, 0, Math.PI * 2);
-          ctx.fillStyle = "#ffffff";
-          ctx.fill();
+        const radii = wp.node.cornerRadii.map((r) => Math.max(0, r || 0));
+        if (radii.some((r) => r > 0)) {
+          const reach = Math.min(14, Math.min(sw, sh) * 0.28);
+          // corner order: TL, TR, BR, BL — with the unit vector pointing into
+          // the box for each, so one draw call covers all four.
+          const dirs = [
+            [1, 1],
+            [-1, 1],
+            [-1, -1],
+            [1, -1],
+          ];
+          const anchors = [
+            [sx, sy],
+            [sx + sw, sy],
+            [sx + sw, sy + sh],
+            [sx, sy + sh],
+          ];
           ctx.strokeStyle = accent;
           ctx.lineWidth = 1.5;
-          ctx.stroke();
+          ctx.lineCap = "round";
+          for (let i = 0; i < 4; i++) {
+            if (radii[i] <= 0) continue;
+            const [ax, ay] = anchors[i];
+            const [dx, dy] = dirs[i];
+            ctx.beginPath();
+            ctx.moveTo(ax + dx * reach, ay + dy * 3.5);
+            ctx.lineTo(ax + dx * 3.5, ay + dy * 3.5);
+            ctx.lineTo(ax + dx * 3.5, ay + dy * reach);
+            ctx.stroke();
+          }
+          ctx.lineCap = "butt";
         }
       }
+      // Auto Layout visualisation. Figma paints the padding and gap regions as
+      // translucent pink bands across the frame, rather than parking four dots
+      // on the edges: the bands show the extent, the dots showed only a point.
       if (wp.node.layout) {
         const l = wp.node.layout;
         const [pl, pr, pt, pb] = l.padding;
-        const pink = "#ff2d55";
-        ctx.fillStyle = pink;
-        ctx.strokeStyle = "#ffffff";
-        ctx.lineWidth = 1;
+        const horiz = l.direction === "horizontal";
+        ctx.save();
+        ctx.fillStyle = "rgba(255, 45, 85, 0.14)";
+        const band = (bx: number, by: number, bw: number, bh: number) => {
+          if (bw > 0.5 && bh > 0.5) ctx.fillRect(bx, by, bw, bh);
+        };
+        band(sx, sy, sw, pt * z);
+        band(sx, sy + sh - pb * z, sw, pb * z);
+        band(sx, sy + pt * z, pl * z, Math.max(0, sh - (pt + pb) * z));
+        band(sx + sw - pr * z, sy + pt * z, pr * z, Math.max(0, sh - (pt + pb) * z));
 
-        // Top padding handle
-        const ty = sy + pt * z;
-        ctx.beginPath();
-        ctx.arc(sx + sw / 2, ty, 4, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-
-        // Bottom padding handle
-        const by = sy + sh - pb * z;
-        ctx.beginPath();
-        ctx.arc(sx + sw / 2, by, 4, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-
-        // Left padding handle
-        const lx = sx + pl * z;
-        ctx.beginPath();
-        ctx.arc(lx, sy + sh / 2, 4, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-
-        // Right padding handle
-        const rx = sx + sw - pr * z;
-        ctx.beginPath();
-        ctx.arc(rx, sy + sh / 2, 4, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-
-        // Gap handle between children
+        // Gap band between each pair of flowed children.
         const flowKids = wp.node.children.filter((c) => c.visible && !c.absolutePosition);
-        if (flowKids.length >= 2) {
-          const c0 = flowKids[0];
-          const horiz = l.direction === "horizontal";
-          const gx = horiz ? sx + (c0.x + c0.w + l.gap / 2) * z : sx + sw / 2;
-          const gy = horiz ? sy + sh / 2 : sy + (c0.y + c0.h + l.gap / 2) * z;
-          ctx.beginPath();
-          ctx.arc(gx, gy, 4, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.stroke();
+        for (let i = 1; i < flowKids.length; i++) {
+          const a = flowKids[i - 1];
+          const b = flowKids[i];
+          if (horiz) {
+            const x0 = sx + (a.x + a.w) * z;
+            const x1 = sx + b.x * z;
+            band(x0, sy + (b.y || 0) * z, (x1 - x0) || l.gap * z, Math.max(2, b.h * z));
+          } else {
+            const y0 = sy + (a.y + a.h) * z;
+            const y1 = sy + b.y * z;
+            band(sx + (b.x || 0) * z, y0, Math.max(2, b.w * z), (y1 - y0) || l.gap * z);
+          }
         }
+        ctx.restore();
       }
       ctx.restore();
     }
@@ -1963,6 +1966,13 @@ export function Canvas({
       fileRef.current?.click();
       return;
     }
+    if (snap.tool === "zoom") {
+      // Sketch's Zoom tool: click to step in, ⌥-click to step out, or drag a
+      // region to fit exactly that area. The drag reuses the create marquee so
+      // the rubber band looks like every other drag on this canvas.
+      drag.current = { mode: "create", zoom: true, sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y };
+      return;
+    }
     const create = kindOf(snap.tool);
     if (create && snap.tool !== "select") {
       drag.current = {
@@ -2385,7 +2395,17 @@ export function Canvas({
     }
   };
 
+  /** ⌥ inverts the Zoom tool, so the cursor has to follow the modifier. Only
+   *  tracked while that tool is armed — a state write on every mousemove would
+   *  re-render the whole editor. */
+  const [zoomOutCursor, setZoomOutCursor] = useState(false);
   const onMove = (e: React.MouseEvent) => {
+    if (snap.tool === "zoom") {
+      const want = e.altKey;
+      setZoomOutCursor((v) => (v === want ? v : want));
+    } else if (zoomOutCursor) {
+      setZoomOutCursor(false);
+    }
     if (snap.presentFrame) {
       const wpt = toWorld(e.clientX, e.clientY);
       const root = snap.pages[snap.page].root;
@@ -2990,7 +3010,7 @@ export function Canvas({
       (d.mode === "marquee" && d.id === "erase")
     )
       engine.dispatch({ type: "end" });
-    if (d.mode === "move" && snap.pages[snap.page].pixelGrid) {
+    if (d.mode === "move" && (snap.pages[snap.page].pixelSnap ?? true)) {
       const root = snap.pages[snap.page].root;
       for (const id of engine.snapshot().selection) {
         const n = worldPos(root, id)?.node;
@@ -3032,6 +3052,18 @@ export function Canvas({
       const a = toWorld(d.sx, d.sy);
       const b = toWorld(e.clientX, e.clientY);
       const clicked = Math.hypot(e.clientX - d.sx, e.clientY - d.sy) < 4;
+      if (d.zoom) {
+        const cur = engine.snapshot().zoom;
+        if (clicked || Math.abs(b.x - a.x) < 6 || Math.abs(b.y - a.y) < 6) {
+          const factor = e.altKey ? 1 / 1.5 : 1.5;
+          zoomAtPoint(engine, cur * factor, e.clientX, e.clientY);
+        } else {
+          const x = Math.min(a.x, b.x);
+          const y = Math.min(a.y, b.y);
+          zoomToRect(engine, { x, y, w: Math.abs(b.x - a.x), h: Math.abs(b.y - a.y) });
+        }
+        return;
+      }
       let w = Math.abs(b.x - a.x);
       let h = Math.abs(b.y - a.y);
       let x = Math.min(a.x, b.x);
@@ -3225,8 +3257,11 @@ export function Canvas({
   const onWheel = (e: React.WheelEvent) => {
     e.preventDefault();
     if (e.ctrlKey || e.metaKey) {
-      const factor = e.deltaY < 0 ? 1.08 : 1 / 1.08;
-      const next = Math.min(8, Math.max(0.1, snap.zoom * factor));
+      // Ctrl/⌘ + wheel and trackpad pinch both zoom at the cursor. The pinch
+      // stream is continuous (exp of deltaY) so it tracks the fingers 1:1,
+      // which is what makes Figma's canvas feel attached to the hand.
+      const factor = wheelZoomFactor(e.deltaY, e.ctrlKey);
+      const next = clampZoom(snap.zoom * factor);
       const box = wrap.current!.getBoundingClientRect();
       const cx = e.clientX - box.left;
       const cy = e.clientY - box.top;
@@ -3234,6 +3269,9 @@ export function Canvas({
       const wy = (cy - snap.panY) / snap.zoom;
       engine.dispatch({ type: "setZoom", zoom: next });
       engine.dispatch({ type: "setPan", x: cx - wx * next, y: cy - wy * next });
+    } else if (e.shiftKey) {
+      // ⇧ + wheel scrolls horizontally, as in Figma.
+      engine.dispatch({ type: "pan", dx: -(e.deltaY || e.deltaX), dy: 0 });
     } else {
       engine.dispatch({ type: "pan", dx: -e.deltaX, dy: -e.deltaY });
     }
@@ -3435,6 +3473,10 @@ export function Canvas({
   const cursor =
     snap.tool === "hand" || space.current
       ? "grab"
+      : snap.tool === "zoom"
+        ? zoomOutCursor
+          ? "zoom-out"
+          : "zoom-in"
       : snap.tool === "scale"
         ? "nwse-resize"
         : CREATE.includes(snap.tool) || snap.tool === "pen" || snap.tool === "pencil" || snap.tool === "brush"

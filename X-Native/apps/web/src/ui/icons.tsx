@@ -1061,6 +1061,13 @@ export function Icon({
           <path d="M3 8h10M6 5L3 8l3 3M10 5l3 3-3 3" strokeWidth={1.25} />
         </svg>
       );
+    case "open":
+      return (
+        <svg {...p}>
+          <path d="M9 3h4v4M13 3 7 9" strokeWidth={1.25} />
+          <path d="M12 10v3H3V4h3" strokeWidth={1.25} />
+        </svg>
+      );
     case "help":
     case "info":
       return (
@@ -1256,6 +1263,7 @@ export const TOOL_ICON: Record<Tool, string> = {
   eraser: "eraser",
   comment: "comment",
   hand: "hand",
+  zoom: "zoom-in",
 };
 
 export function kindIcon(k: string, imageSrc?: string): string {

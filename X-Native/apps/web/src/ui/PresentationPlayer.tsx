@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import type { Engine, Interaction, ProtoDevice, Snapshot, XNode } from "../engine/types";
 import { find, worldPos } from "../engine/memory";
 import { Icon } from "./icons";
+import { DEVICE_GROUPS, DeviceShell, deviceBox, deviceFor } from "./devices";
 
 // Web Audio API synthesizer for tactile prototype sound feedback
 let audioCtx: AudioContext | null = null;
@@ -141,6 +142,32 @@ export function PresentationPlayer({
     for (const ch of presentNode.children) collect(ch, 0, 0);
     return list;
   }, [presentNode, liveInputsActive]);
+
+  const spec = deviceFor(device);
+
+  // Fit the device — shell and safe-area bands included — into the viewport, and
+  // shift the design down inside the glass so the status bar does not land on
+  // top of the design's first line. The engine only knows the frame's own rect.
+  useEffect(() => {
+    if (!presentNode) return;
+    const box = deviceBox(spec, presentNode.w, presentNode.h);
+    const mode = snap.prototypeScale ?? "fit";
+    const vw = window.innerWidth;
+    const vh = Math.max(240, window.innerHeight - 150);
+    const z =
+      mode === "100%"
+        ? 1
+        : mode === "fill"
+          ? Math.max(vw / box.w, (vh + 200) / box.h)
+          : Math.min(1, Math.min((vw - 80) / box.w, vh / box.h));
+    engine.dispatch({ type: "setZoom", zoom: z });
+    engine.dispatch({
+      type: "setPan",
+      x: Math.round((vw - box.w * z) / 2 + box.bezShift * z - (wp?.x ?? 0) * z),
+      y: Math.round((vh - box.glassH * z) / 2 - ((wp?.y ?? 0) - box.pad.top) * z),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [device, snap.presentFrame, snap.prototypeScale, snap.prototypeOrientation]);
 
   // Screen coordinates of present frame
   const z = snap.zoom;
@@ -297,136 +324,9 @@ export function PresentationPlayer({
         />
       ))}
 
-      {/* Device Bezel Framing */}
-      {device === "iphone-16-pro" && (
-        <div
-          style={{
-            position: "absolute",
-            left: frameX - 16 * z,
-            top: frameY - 16 * z,
-            width: frameW + 32 * z,
-            height: frameH + 32 * z,
-            borderRadius: 54 * z,
-            boxShadow: `0 0 0 ${4 * z}px #2e2f33, 0 0 0 ${6 * z}px #4b4d52, 0 30px 60px rgba(0,0,0,0.5)`,
-            pointerEvents: "none",
-            zIndex: 42,
-          }}
-        >
-          {/* Dynamic Island */}
-          <div
-            style={{
-              position: "absolute",
-              top: 24 * z,
-              left: "50%",
-              transform: "translateX(-50%)",
-              width: 120 * z,
-              height: 35 * z,
-              background: "#000",
-              borderRadius: 20 * z,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              padding: `0 ${12 * z}px`,
-              boxShadow: "0 2px 8px rgba(0,0,0,0.4)",
-            }}
-          >
-            <div
-              style={{
-                width: 11 * z,
-                height: 11 * z,
-                borderRadius: "50%",
-                background: "#0f172a",
-                border: "1px solid rgba(255,255,255,0.15)",
-              }}
-            />
-            <div
-              style={{
-                width: 10 * z,
-                height: 10 * z,
-                borderRadius: "50%",
-                background: "#0284c7",
-                opacity: 0.8,
-              }}
-            />
-          </div>
-          {/* iOS Home Indicator */}
-          <div
-            style={{
-              position: "absolute",
-              bottom: 22 * z,
-              left: "50%",
-              transform: "translateX(-50%)",
-              width: 134 * z,
-              height: 5 * z,
-              background: "#fff",
-              opacity: 0.7,
-              borderRadius: 3 * z,
-            }}
-          />
-        </div>
-      )}
-
-      {device === "pixel-9" && (
-        <div
-          style={{
-            position: "absolute",
-            left: frameX - 12 * z,
-            top: frameY - 12 * z,
-            width: frameW + 24 * z,
-            height: frameH + 24 * z,
-            borderRadius: 44 * z,
-            boxShadow: `0 0 0 ${4 * z}px #1f2023, 0 24px 50px rgba(0,0,0,0.45)`,
-            pointerEvents: "none",
-            zIndex: 42,
-          }}
-        >
-          {/* Camera hole */}
-          <div
-            style={{
-              position: "absolute",
-              top: 20 * z,
-              left: "50%",
-              transform: "translateX(-50%)",
-              width: 13 * z,
-              height: 13 * z,
-              borderRadius: "50%",
-              background: "#05070a",
-              border: "1px solid rgba(255,255,255,0.2)",
-            }}
-          />
-        </div>
-      )}
-
-      {device === "macbook-pro" && (
-        <div
-          style={{
-            position: "absolute",
-            left: frameX - 18 * z,
-            top: frameY - 24 * z,
-            width: frameW + 36 * z,
-            height: frameH + 34 * z,
-            borderRadius: 14 * z,
-            boxShadow: `0 0 0 ${4 * z}px #1c1d20, 0 0 0 ${6 * z}px #383a3f, 0 40px 80px rgba(0,0,0,0.6)`,
-            pointerEvents: "none",
-            zIndex: 42,
-          }}
-        >
-          {/* Display Notch */}
-          <div
-            style={{
-              position: "absolute",
-              top: 24 * z,
-              left: "50%",
-              transform: "translateX(-50%)",
-              width: 80 * z,
-              height: 16 * z,
-              background: "#000",
-              borderBottomLeftRadius: 8 * z,
-              borderBottomRightRadius: 8 * z,
-            }}
-          />
-        </div>
-      )}
+      {/* Device mockup: the shell is derived from the frame's own rect, so any
+          frame size lands in a plausible device instead of a floating rectangle. */}
+      {spec && <DeviceShell spec={spec} x={frameX} y={frameY} w={frameW} h={frameH} />}
 
       {/* Interactive Form Fields Overlay */}
       {liveInputsActive &&
@@ -704,10 +604,16 @@ export function PresentationPlayer({
             cursor: "pointer",
           }}
         >
-          <option value="none" style={{ background: "#18181b" }}>No Device</option>
-          <option value="iphone-16-pro" style={{ background: "#18181b" }}>iPhone 16 Pro</option>
-          <option value="pixel-9" style={{ background: "#18181b" }}>Google Pixel 9</option>
-          <option value="macbook-pro" style={{ background: "#18181b" }}>MacBook Pro 16"</option>
+          <option value="none" style={{ background: "#18181b" }}>No device</option>
+          {DEVICE_GROUPS.map((g) => (
+            <optgroup key={g.group} label={g.group}>
+              {g.items.map((d) => (
+                <option key={d.id} value={d.id} style={{ background: "#18181b" }}>
+                  {d.label}
+                </option>
+              ))}
+            </optgroup>
+          ))}
         </select>
 
         {/* Scale Switcher */}

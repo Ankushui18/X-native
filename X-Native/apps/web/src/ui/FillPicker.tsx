@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { GradientStop } from "../engine/types";
 import { Icon } from "./icons";
@@ -180,8 +180,24 @@ export function FillPicker({
   };
 
   const hueCss = `hsl(${hsv.h} 100% 50%)`;
-  const left = Math.max(8, Math.min(anchor.left - 248, window.innerWidth - 256));
-  const top = Math.max(8, Math.min(anchor.top, window.innerHeight - 520));
+  // Anchor to the row that opened us — Figma's picker appears beside the swatch,
+  // never 400px away — and flip above when the row sits near the bottom edge.
+  // The height is measured after paint because the popover grows with gradient
+  // and image controls.
+  const popRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState(() => ({
+    left: Math.max(8, Math.min(anchor.left - 248, window.innerWidth - 256)),
+    top: Math.max(8, Math.min(anchor.top, window.innerHeight - 520)),
+  }));
+  useLayoutEffect(() => {
+    const el = popRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    let top = anchor.bottom + 6;
+    if (top + r.height > window.innerHeight - 8) top = Math.max(8, anchor.top - r.height - 6);
+    const left = Math.max(8, Math.min(anchor.left - r.width - 10, window.innerWidth - r.width - 8));
+    setPos({ left, top });
+  }, [anchor]);
   const rgb = hsvToRgb(hsv.h, hsv.s, hsv.v);
   const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
   const image = value.type === "image";
@@ -335,7 +351,7 @@ export function FillPicker({
   };
 
   return createPortal(
-    <div className="fill-pop" style={{ left, top }} role="dialog" aria-label={title}>
+    <div ref={popRef} className="fill-pop" style={{ left: pos.left, top: pos.top }} role="dialog" aria-label={title}>
       <div className="fill-head">
         <button className="type-btn" onClick={() => setTypeOpen((v) => !v)}>
           {FILL_TYPES.find((t) => t.id === value.type)?.label ?? "Solid"}

@@ -31,9 +31,21 @@ async function page(fresh = true) {
     // Wipe the document before the app script ever runs: loading it first would
     // let autosave immediately rewrite whatever a previous check left behind.
     await p.goto(`${URL}/favicon.ico`, { waitUntil: "domcontentloaded" }).catch(() => {});
-    await p.evaluate(() => { try { localStorage.removeItem("x-native-document"); } catch {} });
+    await p.evaluate(() => {
+      try {
+        // The dashboard keeps an index plus one document slot per file; both
+        // are cleared so every check starts from the bundled sample document.
+        // The interface theme is deliberately left alone.
+        for (const k of Object.keys(localStorage)) {
+          if (k.startsWith("x-native") && k !== "x-native-theme") localStorage.removeItem(k);
+        }
+      } catch {}
+    });
   }
-  await p.goto(URL, { waitUntil: "networkidle0" });
+  // The app opens on the dashboard; tests drive a file, so enter one directly.
+  // "demo" is the sample document, and it is created on the dashboard for a
+  // brand-new store by engine/files.ts.
+  await p.goto(`${URL}/#/file/demo`, { waitUntil: "networkidle0" });
   await sleep(450);
   return p;
 }
@@ -128,7 +140,9 @@ for (const [label, payload] of [
   await p.setViewport({ width: 1600, height: 1000, deviceScaleFactor: 1 });
   const errs = []; p.on("pageerror", e => errs.push(e.message));
   await p.evaluateOnNewDocument(v => { try { localStorage.setItem("x-native-document", v); } catch {} }, payload);
-  await p.goto(URL, { waitUntil: "networkidle0" }); await sleep(700);
+  // A file id with no stored document falls back to the autosave slot, which is
+  // exactly the path these hostile payloads are aimed at.
+  await p.goto(`${URL}/#/file/demo`, { waitUntil: "networkidle0" }); await sleep(700);
   const n = await p.evaluate(() => document.querySelectorAll(".panel.left .row").length);
   t(`corrupt save (${label}) boots a clean document`, n > 0 && errs.length === 0);
   if (label === "garbage") {

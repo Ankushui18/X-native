@@ -7,7 +7,9 @@ import { plural, toast } from "./toast";
 import { useTheme, type ThemePref } from "./theme";
 import { ContextMenu, isGroupNode, layerMenu, pageMenu, runMenu } from "./ContextMenu";
 import { align } from "./inspector";
-import { stepZoom, zoomTo } from "./zoom";
+import { stepZoom, zoomCenter, zoomTo } from "./zoom";
+import { roundToPixel } from "./round";
+
 import { clearDoc } from "../engine/persist";
 import { copyText } from "../engine/clipboard";
 import { isNone } from "./color";
@@ -21,12 +23,15 @@ export function NavRail({
   setNav,
   onActions,
   onInspectFig,
+  onHome,
 }: {
   engine: Engine;
   nav: NavId;
   setNav: (n: NavId) => void;
   onActions: () => void;
   onInspectFig?: () => void;
+  /** Return to the dashboard. The document is already autosaved. */
+  onHome?: () => void;
 }) {
   const [menu, setMenu] = useState(false);
   const { pref, setPref } = useTheme();
@@ -47,12 +52,20 @@ export function NavRail({
           <div className="menu" onMouseLeave={() => setMenu(false)}>
             <button
               onClick={() => {
+                setMenu(false);
+                onHome?.();
+              }}
+            >
+              <Icon name="navigate-back" size={14} /> Back to files
+            </button>
+            <button
+              onClick={() => {
                 engine.dispatch({ type: "select", ids: [] });
                 engine.dispatch({ type: "setPage", index: 0 });
                 setMenu(false);
               }}
             >
-              Back to files <span className="sc">⌘Esc</span>
+              <Icon name="layers" size={14} /> Collapse to page 1
             </button>
             <hr />
             <button onClick={onActions}>
@@ -123,10 +136,11 @@ export function NavRail({
       </button>
       <button
         className="nav"
-        title="File notifications"
-        onClick={() => window.alert("You're up to date. No file notifications.")}
+        title="File history"
+        onClick={() => toast("This file autosaves locally · no history to show yet")}
       >
-        <Icon name="page" size={16} />
+        <Icon name="refresh" size={16} />
+        <span>Saved</span>
       </button>
     </nav>
   );
@@ -389,12 +403,14 @@ function LeftPanelImpl({
   nav,
   onMinimize,
   onActions,
+  onHome,
 }: {
   engine: Engine;
   snap: Snapshot;
   nav: NavId;
   onMinimize: () => void;
   onActions?: () => void;
+  onHome?: () => void;
 }) {
   const [q, setQ] = useState("");
   const [pagesOpen, setPagesOpen] = useState(true);
@@ -429,6 +445,13 @@ function LeftPanelImpl({
   return (
     <aside className="panel left">
       <div className="file-head">
+        {onHome && (
+          <Tooltip label="Back to files" placement="bottom">
+            <button className="icon-btn back" onClick={onHome} aria-label="Back to files">
+              <Icon name="navigate-back" size={14} />
+            </button>
+          </Tooltip>
+        )}
         <span
           style={{
             fontSize: 10,
@@ -571,6 +594,7 @@ const GROUPS: Group[] = [
       { id: "select", label: "Move", shortcut: "V" },
       { id: "hand", label: "Hand", shortcut: "H" },
       { id: "scale", label: "Scale", shortcut: "K" },
+      { id: "zoom", label: "Zoom", shortcut: "Z" },
     ],
   },
   {
@@ -636,26 +660,27 @@ export function Toolbar({
 
   return (
     <div className="dock" role="toolbar" aria-label="Tools">
+      <div className="toolset">
       {GROUPS.map((g) => {
         const current = last(g);
         const active = g.tools.some((t) => t.id === snap.tool);
         const multi = g.tools.length > 1;
+        const cur = g.tools.find((t) => t.id === current);
         return (
           <div
             key={g.id}
-            className={`tool${active ? " active" : ""}${open === g.id ? " open" : ""}`}
+            className={`tool${active ? " active" : ""}${open === g.id ? " open" : ""}${multi ? " split" : ""}`}
             onMouseLeave={() => {
               if (hold.current) window.clearTimeout(hold.current);
               setOpen((o) => (o === g.id ? null : o));
             }}
           >
-            <Tooltip
-              label={g.tools.find((t) => t.id === current)?.label ?? ""}
-              shortcut={g.tools.find((t) => t.id === current)?.shortcut}
-            >
+            <Tooltip label={cur?.label ?? ""} shortcut={cur?.shortcut}>
             <button
               className="hit"
-              aria-label={g.tools.find((t) => t.id === current)?.label}
+              aria-label={cur?.label}
+              aria-haspopup={multi ? "menu" : undefined}
+              aria-expanded={multi ? open === g.id : undefined}
               onClick={() => engine.dispatch({ type: "setTool", tool: current })}
               onPointerDown={() => {
                 if (!multi) return;
@@ -673,19 +698,24 @@ export function Toolbar({
               {multi && (
                 <i
                   className="caret"
+                  title={`More tools (${g.tools.length})`}
                   onClick={(e) => {
                     e.stopPropagation();
                     setOpen((o) => (o === g.id ? null : g.id));
                   }}
-                />
+                >
+                  <Icon name="chevron" size={9} />
+                </i>
               )}
             </button>
             </Tooltip>
             {multi && (
-              <div className="fly">
+              <div className="fly" role="menu">
                 {g.tools.map((t) => (
                   <button
                     key={t.id}
+                    role="menuitemradio"
+                    aria-checked={snap.tool === t.id}
                     className={snap.tool === t.id ? "on" : ""}
                     onClick={() => {
                       engine.dispatch({ type: "setTool", tool: t.id });
@@ -697,35 +727,46 @@ export function Toolbar({
                     {t.shortcut && <span className="sc">{t.shortcut}</span>}
                   </button>
                 ))}
+                <div className="fly-hint">Hold Space to pan · {g.id === "move" ? "V moves, H hands" : "click a tool to switch"}</div>
               </div>
             )}
           </div>
         );
       })}
+      </div>
       <div className="div" />
+      <div className="toolset right">
       <div className="tool">
-        <button className="hit" title="Resources" onClick={onActions}>
-          <Icon name="resources" size={16} />
-        </button>
+        <Tooltip label="Resources" shortcut="⌘/">
+          <button className="hit" aria-label="Resources" onClick={onActions}>
+            <Icon name="resources" size={16} />
+          </button>
+        </Tooltip>
       </div>
       <div className={`tool${snap.rightTab === "inspect" ? " active" : ""}`}>
-        <button
-          className="hit"
-          title="Dev Mode"
-          onClick={() =>
-            engine.dispatch({
-              type: "setRightTab",
-              tab: snap.rightTab === "inspect" ? "design" : "inspect",
-            })
-          }
-        >
-          <Icon name="dev" size={16} />
-        </button>
+        <Tooltip label={snap.rightTab === "inspect" ? "Exit Dev Mode" : "Dev Mode"} shortcut="⇧D">
+          <button
+            className="hit"
+            aria-label="Dev Mode"
+            aria-pressed={snap.rightTab === "inspect"}
+            onClick={() =>
+              engine.dispatch({
+                type: "setRightTab",
+                tab: snap.rightTab === "inspect" ? "design" : "inspect",
+              })
+            }
+          >
+            <Icon name="dev" size={16} />
+          </button>
+        </Tooltip>
       </div>
       <div className="tool">
-        <button className="hit" title="Actions" onClick={onActions}>
-          <Icon name="search" size={16} />
-        </button>
+        <Tooltip label="Actions" shortcut="⌘/">
+          <button className="hit" aria-label="Actions" onClick={onActions}>
+            <Icon name="search" size={16} />
+          </button>
+        </Tooltip>
+      </div>
       </div>
       {snap.vecEdit && (
         <>
@@ -780,6 +821,14 @@ export function Actions({
       run: () => onInspectFig?.(),
     },
     { label: "Move tool", sc: "V", run: () => engine.dispatch({ type: "setTool", tool: "select" }) },
+    { label: "Zoom tool", sc: "Z", run: () => engine.dispatch({ type: "setTool", tool: "zoom" }) },
+    { label: "Zoom to fit", sc: "⇧1", run: () => zoomTo(engine, "fit") },
+    { label: "Zoom to selection", sc: "⇧2", run: () => zoomTo(engine, "selection") },
+    {
+      label: "Round to whole pixels",
+      sc: "⇧⌘P",
+      run: () => roundToPixel(engine),
+    },
     { label: "Scale tool", sc: "K", run: () => engine.dispatch({ type: "setTool", tool: "scale" }) },
     { label: "Frame", sc: "F", run: () => engine.dispatch({ type: "setTool", tool: "frame" }) },
     { label: "Section", sc: "⇧S", run: () => engine.dispatch({ type: "setTool", tool: "section" }) },
@@ -1212,6 +1261,16 @@ export function bindHotkeys(
     }
     // Step through the zoom presets so the readout lands on round values
     // (25/50/100/200...) instead of compounding into 94% / 117% / 146%.
+    if (!meta && !e.altKey && e.shiftKey && (e.key === "=" || e.key === "+")) {
+      e.preventDefault();
+      engine.dispatch({ type: "setZoom", zoom: stepZoom(engine.snapshot().zoom, 1) });
+      return;
+    }
+    if (!meta && !e.altKey && e.shiftKey && (e.key === "-" || e.key === "_")) {
+      e.preventDefault();
+      engine.dispatch({ type: "setZoom", zoom: stepZoom(engine.snapshot().zoom, -1) });
+      return;
+    }
     if (meta && (e.key === "=" || e.key === "+")) {
       e.preventDefault();
       engine.dispatch({ type: "setZoom", zoom: stepZoom(engine.snapshot().zoom, 1) });
@@ -1220,6 +1279,41 @@ export function bindHotkeys(
     if (meta && e.key === "-") {
       e.preventDefault();
       engine.dispatch({ type: "setZoom", zoom: stepZoom(engine.snapshot().zoom, -1) });
+      return;
+    }
+    // ⇧F — Figma's "View > Prototype flows": hide the noodles and hotspot
+    // handles without leaving Design mode.
+    if (!meta && !e.altKey && e.shiftKey && e.key.toLowerCase() === "f") {
+      e.preventDefault();
+      engine.dispatch({ type: "toggleFlows" });
+      return;
+    }
+    // ⌘' shows the pixel grid, ⌘⇧' toggles snapping to it — Figma's pair.
+    if (meta && (e.key === "'" || e.key === "@")) {
+      e.preventDefault();
+      const cur = engine.snapshot();
+      const page = cur.pages[cur.page];
+      engine.dispatch({
+        type: "patchPage",
+        patch: e.shiftKey ? { pixelSnap: !(page.pixelSnap ?? true) } : { pixelGrid: !page.pixelGrid },
+      });
+      return;
+    }
+    // Sketch's zoom keyboard set. Figma's ⇧1/2 stay bound above, so both
+    // vocabularies work.
+    if (meta && !e.shiftKey && e.code === "Digit1") {
+      e.preventDefault();
+      zoomTo(engine, "fit");
+      return;
+    }
+    if (meta && !e.shiftKey && e.code === "Digit2") {
+      e.preventDefault();
+      zoomTo(engine, "selection");
+      return;
+    }
+    if (meta && !e.shiftKey && e.code === "Digit3") {
+      e.preventDefault();
+      zoomCenter(engine);
       return;
     }
     if (!meta && e.shiftKey && e.code === "Digit1") {
@@ -1240,6 +1334,11 @@ export function bindHotkeys(
     if (!meta && e.shiftKey && e.key.toLowerCase() === "v") {
       e.preventDefault();
       engine.dispatch({ type: "flip", axis: "v" });
+      return;
+    }
+    if (meta && e.shiftKey && e.key.toLowerCase() === "p") {
+      e.preventDefault();
+      roundToPixel(engine);
       return;
     }
     if (meta && e.shiftKey && e.key.toLowerCase() === "k") {
@@ -1264,6 +1363,7 @@ export function bindHotkeys(
     const map: Record<string, Tool> = {
       v: "select",
       k: "scale",
+      z: "zoom",
       f: "frame",
       t: "text",
       r: "rect",
@@ -1857,7 +1957,13 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
       { id: "zoom-fit", name: "Zoom to fit", keys: ["⇧", "1"] },
       { id: "zoom-sel", name: "Zoom to selection", keys: ["⇧", "2"] },
       { id: "rulers", name: "Rulers", keys: ["⇧", "R"] },
-      { id: "pixel-grid", name: "Pixel grid", keys: ["⇧", "'"] },
+      { id: "pixel-grid", name: "Pixel grid", keys: ["⌘", "'"] },
+      { id: "pixel-snap", name: "Snap to pixel grid", keys: ["⌘", "⇧", "'"] },
+      { id: "zoom-tool", name: "Zoom tool", keys: ["Z"] },
+      { id: "zoom-fit", name: "Zoom to fit", keys: ["⇧", "1"] },
+      { id: "zoom-sel", name: "Zoom to selection", keys: ["⇧", "2"] },
+      { id: "zoom-center", name: "Center selection", keys: ["⌘", "3"] },
+      { id: "round-pixel", name: "Round to whole pixels", keys: ["⇧", "", "P"] },
       { id: "layout-grids", name: "Layout grids", keys: ["⇧", "G"] },
       { id: "outline", name: "Outline mode", keys: ["⌘", "Y"] },
     ],
@@ -1915,6 +2021,14 @@ export function HelpBtn() {
   const [activeTab, setActiveTab] = useState("Essential");
   const [query, setQuery] = useState("");
   const [usedKeys, setUsedKeys] = useState<Set<string>>(() => new Set(["undo", "move"]));
+
+  // The dashboard's header has no editor to hang a sheet on, so it asks for
+  // this one through an event instead of duplicating the modal.
+  useEffect(() => {
+    const on = () => setOpen(true);
+    window.addEventListener("x-native-shortcuts", on);
+    return () => window.removeEventListener("x-native-shortcuts", on);
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

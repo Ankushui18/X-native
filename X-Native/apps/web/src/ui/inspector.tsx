@@ -18,6 +18,7 @@ import type {
   TextAlign,
   TextAlignVertical,
   Interaction,
+  ProtoDevice,
   ProtoAnim,
   ProtoEasing,
   ProtoTrigger,
@@ -32,7 +33,14 @@ import { Tooltip } from "./Tooltip";
 import { copyText } from "../engine/clipboard";
 import { buildPdf } from "../engine/pdf";
 import { toast } from "./toast";
-import { ZOOM_STEPS, zoomTo } from "./zoom";
+import { ZOOM_STEPS, parseZoomInput, stepZoom, zoomLabel, zoomTo } from "./zoom";
+import { DEVICE_GROUPS, DevicePreview, deviceFor } from "./devices";
+import { roundToPixel } from "./round";
+
+/** Sketch only shows "Round to Pixel" when rounding can actually do something. */
+function isFractional(n: XNode) {
+  return [n.x, n.y, n.w, n.h].some((v) => !Number.isInteger(v));
+}
 import { FillPicker, type FillValue } from "./FillPicker";
 import { BLENDS, handlesForFill, isNone, parseHex, withAlpha } from "./color";
 import { ContextMenu, runMenu } from "./ContextMenu";
@@ -315,36 +323,69 @@ function Prototype({
         </select>
       </div>
 
-      <div className="h-row" style={{ marginTop: 8 }}>
-        <h3>Device Mockup</h3>
+      <div className="h-row" style={{ marginTop: 8 }} onClick={() => {}}>
+        <h3>Prototype settings</h3>
       </div>
       <div className="proto-row">
         <span>Device</span>
         <select
           value={snap.prototypeDevice || "none"}
           onChange={(e) =>
-            engine.dispatch({
-              type: "setPrototypeDevice",
-              device: e.target.value as "iphone-16-pro" | "pixel-9" | "ipad-pro" | "macbook-pro" | "apple-watch" | "none",
-            })
+            engine.dispatch({ type: "setPrototypeDevice", device: e.target.value as ProtoDevice })
           }
           style={{ border: 0, background: "var(--input)", borderRadius: 6, height: 24, padding: "0 6px" }}
         >
-          <option value="none">None (Borderless)</option>
-          <option value="iphone-16-pro">iPhone 16 Pro (Titanium)</option>
-          <option value="pixel-9">Google Pixel 9</option>
-          <option value="macbook-pro">MacBook Pro 16"</option>
+          <option value="none">None (borderless)</option>
+          {DEVICE_GROUPS.map((g) => (
+            <optgroup key={g.group} label={g.group}>
+              {g.items.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.label}
+                </option>
+              ))}
+            </optgroup>
+          ))}
         </select>
       </div>
+      <div className="proto-row">
+        <span>Size</span>
+        <select
+          value={snap.prototypeScale || "fit"}
+          onChange={(e) =>
+            engine.dispatch({ type: "setPrototypeScale", scale: e.target.value as "fit" | "100%" | "fill" })
+          }
+          style={{ border: 0, background: "var(--input)", borderRadius: 6, height: 24, padding: "0 6px" }}
+        >
+          <option value="fit">Zoom to fit</option>
+          <option value="100%">Zoom to 100%</option>
+          <option value="fill">Fill screen</option>
+        </select>
+      </div>
+      {deviceFor(snap.prototypeDevice) && (
+        <div className="proto-row">
+          <span>Orientation</span>
+          <div className="seg icons">
+            {(["portrait", "landscape"] as const).map((o) => (
+              <button
+                key={o}
+                className={(snap.prototypeOrientation ?? "portrait") === o ? "on" : ""}
+                title={o === "portrait" ? "Portrait" : "Landscape"}
+                onClick={() => engine.dispatch({ type: "setPrototypeOrientation", orientation: o })}
+              >
+                <Icon name={o === "portrait" ? "phone" : "desktop"} size={14} />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
-      <div className="proto-preview" style={{ marginTop: 8 }}>
-        <div
-          className="phone"
-          style={{
-            background: n?.fillVisible ? n.fill : "#fff",
-            borderRadius: snap.prototypeDevice === "iphone-16-pro" ? 14 : 4,
-            border: snap.prototypeDevice === "iphone-16-pro" ? "3px solid #383a3f" : "1px solid var(--line)",
-          }}
+      {/* The mockup preview shows the selected frame inside the real device
+          shell, so the choice is visible before pressing Play. */}
+      <div className="proto-preview device" style={{ marginTop: 8 }}>
+        <DevicePreview
+          spec={deviceFor(snap.prototypeDevice)}
+          fill={n?.fillVisible !== false && n?.fill && n.fill.length >= 7 ? n.fill : "#fff"}
+          radius={n?.cornerRadii?.[0] || 0}
         />
       </div>
       <p className="muted">Flow starts at {startName}. Esc steps back, then exits.</p>
@@ -1231,6 +1272,24 @@ function Design({
   const patch = (p: Partial<XNode>) => engine.dispatch({ type: "patch", id: n.id, patch: p });
   const parent = findParent(snap.pages[snap.page].root, n.id);
   const hasAutoLayoutParent = !!parent?.layout;
+  /* First press turns the base stroke on; after that each press stacks another
+     stroke on top, the way Figma's Stroke "+" behaves. Shared by the header "+"
+     and the empty-state row so both paths do exactly the same thing. */
+  const addStroke = () => {
+    openSection("stroke");
+    const hasBase = n.strokeWidth > 0 && (!isNone(n.strokePaint) || n.strokeVisible);
+    if (!hasBase) {
+      patch({
+        strokePaint: isNone(n.strokePaint) ? "#1e1e1e" : n.strokePaint,
+        strokeVisible: true,
+        strokeWidth: n.strokeWidth || 1,
+      });
+      return;
+    }
+    patch({
+      strokes: [...(n.strokes ?? []), { color: "#1e1e1e", opacity: 1, visible: true, width: 1, align: n.strokeAlign }],
+    });
+  };
   return (
     <>
       <div className="layer-type">
@@ -1250,6 +1309,16 @@ function Design({
         >
           <Icon name={n.locked ? "lock" : "unlock"} size={14} />
         </button>
+        <Tooltip label="Round to whole pixels" shortcut="⇧⌘P">
+          <button
+            className={`icon-btn${isFractional(n) ? " warn" : ""}`}
+            title="Round to whole pixels"
+            aria-label="Round to whole pixels"
+            onClick={() => roundToPixel(engine)}
+          >
+            <Icon name="grid" size={14} />
+          </button>
+        </Tooltip>
         <button
           className="icon-btn"
           title="Dev Mode"
@@ -2284,6 +2353,7 @@ function Design({
           className="plus"
           title="Add fill"
           onClick={() => {
+            openSection("fill");
             // First press turns the base fill back on; after that each press
             // stacks another fill on top, the way Figma's Fill "+" behaves.
             if (isNone(n.fill) && !n.fillVisible) {
@@ -2409,37 +2479,21 @@ function Design({
         <button
           className="plus"
           title="Add stroke"
-          onClick={() => {
-            // First press turns the base stroke on; after that each press
-            // stacks another stroke on top, the way Figma's Stroke "+" behaves.
-            const hasBase = n.strokeWidth > 0 && (!isNone(n.strokePaint) || n.strokeVisible);
-            if (!hasBase) {
-              engine.dispatch({
-                type: "patch",
-                id: n.id,
-                patch: {
-                  strokePaint: isNone(n.strokePaint) ? "#1e1e1e" : n.strokePaint,
-                  strokeVisible: true,
-                  strokeWidth: n.strokeWidth || 1,
-                },
-              });
-              return;
-            }
-            engine.dispatch({
-              type: "patch",
-              id: n.id,
-              patch: {
-                strokes: [
-                  ...(n.strokes ?? []),
-                  { color: "#1e1e1e", opacity: 1, visible: true, width: 1, align: n.strokeAlign },
-                ],
-              },
-            });
-          }}
+          onClick={() => addStroke()}
         >
           <Icon name="plus" size={14} />
         </button>
       }>
+      {!(n.strokeWidth > 0) && (
+        <div className="insp-pad">
+          <div className="empty-add">
+            <span className="muted">No stroke</span>
+            <button className="empty-add-btn" onClick={addStroke}>
+              <Icon name="plus" size={12} /> Add stroke
+            </button>
+          </div>
+        </div>
+      )}
       {n.strokeWidth > 0 && (!isNone(n.strokePaint) || n.strokeVisible) && (
         <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
           <ColorRow
@@ -2982,6 +3036,11 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
     { id: "texture", label: "Texture" },
   ];
   const effects = n.effects ?? [];
+  const addKind = (kind: EffectKind) => {
+    openSection("effects");
+    engine.dispatch({ type: "patch", id: n.id, patch: { effects: [...effects, defaultEffect(kind)] } });
+    setOpen(false);
+  };
   const set = (i: number, p: Partial<Effect>) => {
     const next = effects.map((e2, j) => (j === i ? { ...e2, ...p } : e2));
     engine.dispatch({ type: "patch", id: n.id, patch: { effects: next } });
@@ -2999,23 +3058,20 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
         defaultOpen={effects.length > 0}
         actions={
           <div style={{ position: "relative", display: "flex" }}>
-            <button className="plus" title="Add effect" onClick={() => setOpen((v) => !v)}>
+            <button
+              className="plus"
+              title="Add effect"
+              onClick={() => {
+                if (!effects.length) openSection("effects");
+                setOpen((v) => !v);
+              }}
+            >
               <Icon name="plus" size={14} />
             </button>
             {open && (
               <div className="type-menu" style={{ right: 8, top: 28, left: "auto", width: 180 }}>
                 {kinds.map((k) => (
-                  <button
-                    key={k.id}
-                    onClick={() => {
-                      engine.dispatch({
-                        type: "patch",
-                        id: n.id,
-                        patch: { effects: [...effects, defaultEffect(k.id)] },
-                      });
-                      setOpen(false);
-                    }}
-                  >
+                  <button key={k.id} onClick={() => addKind(k.id)}>
                     {k.label}
                   </button>
                 ))}
@@ -3024,6 +3080,20 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
           </div>
         }
       >
+        {!effects.length && (
+          <div className="insp-pad">
+            <div className="empty-add">
+              <span className="muted">No effects</span>
+              <div className="empty-add-menu">
+                {kinds.map((k) => (
+                  <button key={k.id} onClick={() => addKind(k.id)}>
+                    {k.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
         {effects.map((fx, i) => (
           <div className="insp-pad" key={i} style={{ marginBottom: 4 }}>
             <div className="color-row fx-row">
@@ -3285,12 +3355,15 @@ const SCALES = [0.5, 1, 2, 3, 4];
 
 function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
   const presets = n.exports ?? [];
-  const add = () =>
+  const [preview, setPreview] = useState<Record<number, boolean>>({});
+  const add = () => {
+    openSection("export");
     engine.dispatch({
       type: "patch",
       id: n.id,
       patch: { exports: [...presets, { format: "PNG", scale: 1, suffix: "" }] },
     });
+  };
   const set = (i: number, p: ExportPreset) => {
     const next = presets.map((e, j) => (j === i ? p : e));
     engine.dispatch({ type: "patch", id: n.id, patch: { exports: next } });
@@ -3302,7 +3375,14 @@ function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
         title="Export"
         defaultOpen={false}
         actions={
-          <button className="plus" title="Add export" onClick={add}>
+          <button
+          className="plus"
+          title="Add export"
+          onClick={() => {
+            openSection("export");
+            add();
+          }}
+        >
             <Icon name="plus" size={14} />
           </button>
         }
@@ -3310,6 +3390,16 @@ function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
       {presets.map((p, i) => (
         <div key={i} className="insp-pad" style={{ marginBottom: 4 }}>
           <div className="export-row">
+            {/* Figma previews the export before you download it — the thumbnail
+                is the real render (SVG source, so it scales with the preset). */}
+            <button
+              className={`export-thumb${preview[i] ? " on" : ""}`}
+              title={preview[i] ? "Hide preview" : "Preview"}
+              aria-pressed={!!preview[i]}
+              onClick={() => setPreview((v) => ({ ...v, [i]: !v[i] }))}
+            >
+              {preview[i] ? <img src={previewUrl(n, p)} alt="" /> : <Icon name="image" size={12} />}
+            </button>
             <button
               className="fmt"
               title="Format"
@@ -3344,6 +3434,11 @@ function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
               <Icon name="minus" size={14} />
             </button>
           </div>
+          {preview[i] && (
+            <div className="export-checker">
+              <img src={previewUrl(n, p)} alt={`Preview of ${n.name}${p.suffix} at ${p.scale}×`} />
+            </div>
+          )}
         </div>
       ))}
       {!!presets.length && (
@@ -3353,9 +3448,24 @@ function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
           </button>
         </div>
       )}
+      {!presets.length && (
+        <div className="insp-pad">
+          <div className="empty-add">
+            <span className="muted">No export settings</span>
+            <button className="empty-add-btn" onClick={add}>
+              <Icon name="plus" size={12} /> Add image export
+            </button>
+          </div>
+        </div>
+      )}
       </Section>
     </>
   );
+}
+
+/** A data URL of the exact SVG this preset would write, used by the preview. */
+function previewUrl(n: XNode, p: ExportPreset) {
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(exportSvg(n, p))}`;
 }
 
 function escXml(value: string) {
@@ -3561,6 +3671,13 @@ function readSections(): Record<string, boolean> {
   }
 }
 
+/** Ask a section to reveal itself. Adding a fill/stroke/export while its
+ *  section is collapsed used to write state the user could not see, which read
+ *  as "Export does nothing". Figma expands and scrolls to the new row. */
+export function openSection(id: string) {
+  window.dispatchEvent(new CustomEvent("x-native-open-section", { detail: id }));
+}
+
 function Section({
   id,
   title,
@@ -3575,6 +3692,21 @@ function Section({
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(() => readSections()[id] ?? defaultOpen);
+  const rowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const on = (e: Event) => {
+      if ((e as CustomEvent).detail !== id) return;
+      setOpen(true);
+      try {
+        localStorage.setItem(SECTION_KEY, JSON.stringify({ ...readSections(), [id]: true }));
+      } catch {
+        /* preference only */
+      }
+      requestAnimationFrame(() => rowRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }));
+    };
+    window.addEventListener("x-native-open-section", on);
+    return () => window.removeEventListener("x-native-open-section", on);
+  }, [id]);
   const toggle = () => {
     setOpen((v) => {
       const next = !v;
@@ -3588,7 +3720,7 @@ function Section({
   };
   return (
     <>
-      <div className="h-row">
+      <div className="h-row" ref={rowRef}>
         <button className="sec-toggle" aria-expanded={open} onClick={toggle}>
           <Icon name={open ? "chevron" : "chevron-right"} size={12} />
           <h3>{title}</h3>
@@ -3797,16 +3929,25 @@ function setDir(engine: Engine, n: XNode, direction: "horizontal" | "vertical") 
 }
 
 /** Human labels + Figma's shortcuts for the align row. */
-/** Zoom control. The previous button cycled 100%→50%→100% and could never
- *  reach 200%, so the presets are exposed in a dropdown instead — matching the
- *  zoom menu designers expect, with the fit/selection commands alongside. */
+/** Zoom control + view options.
+ *
+ *  Figma keeps this in one place: the top-right of the right sidebar shows the
+ *  current percentage, the field itself takes typed input, and the caret opens
+ *  the zoom presets and the canvas view toggles. The previous button cycled
+ *  100%→50%→100% and could never reach 200%.
+ */
 function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLButtonElement>(null);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const btn = useRef<HTMLButtonElement>(null);
+  const input = useRef<HTMLInputElement>(null);
+  const root = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent) => {
-      if (!ref.current?.parentElement?.contains(e.target as Node)) setOpen(false);
+      if (!root.current?.contains(e.target as Node)) setOpen(false);
     };
     const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     window.addEventListener("mousedown", close);
@@ -3816,24 +3957,66 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       window.removeEventListener("keydown", esc);
     };
   }, [open]);
+
+  useEffect(() => {
+    if (editing) input.current?.focus();
+    if (editing) input.current?.select();
+  }, [editing]);
+
   const go = (fn: () => void) => () => {
     fn();
     setOpen(false);
   };
+  const commit = () => {
+    const z = parseZoomInput(draft);
+    if (z != null) engine.dispatch({ type: "setZoom", zoom: z });
+    setEditing(false);
+  };
+  const page = snap.pages[snap.page];
+  const near = (z: number) => Math.abs(snap.zoom - z) < 0.005 * Math.max(1, z);
+
   return (
-    <div style={{ position: "relative", display: "flex" }}>
+    <div className="zoom-ctl" ref={root}>
+      {editing ? (
+        <input
+          ref={input}
+          className="zoom-input"
+          aria-label="Zoom percentage"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+            if (e.key === "Escape") {
+              setEditing(false);
+              e.stopPropagation();
+            }
+          }}
+        />
+      ) : (
+        <button
+          className="zoom"
+          title="Zoom · type a percentage"
+          onClick={() => {
+            setEditing(true);
+            setDraft(String(Math.round(snap.zoom * 100)));
+          }}
+        >
+          {zoomLabel(snap.zoom)}
+        </button>
+      )}
       <button
-        ref={ref}
-        className="zoom"
-        title="Zoom"
+        ref={btn}
+        className="zoom-caret"
+        title="Zoom and view options"
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        {Math.round(snap.zoom * 100)}%
+        <Icon name="chevron-down" size={10} />
       </button>
       {open && (
-        <div className="ctx" role="menu" style={{ position: "absolute", top: "100%", right: 0, minWidth: 190 }}>
+        <div className="ctx zoom-menu" role="menu">
           <button role="menuitem" onClick={go(() => zoomTo(engine, "fit"))}>
             Zoom to fit<span className="sc">⇧1</span>
           </button>
@@ -3844,13 +4027,70 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           >
             Zoom to selection<span className="sc">⇧2</span>
           </button>
+          <button role="menuitem" onClick={go(() => engine.dispatch({ type: "setZoom", zoom: 1 }))}>
+            Zoom to 100%<span className="sc">⇧0</span>
+          </button>
           <hr />
-          {ZOOM_STEPS.map((z) => (
-            <button key={z} role="menuitem" onClick={go(() => engine.dispatch({ type: "setZoom", zoom: z }))}>
-              {Math.round(z * 100)}%
-              {z === 1 && <span className="sc">⇧0</span>}
+          <div className="menu-label">Presets</div>
+          <div className="zoom-grid">
+            {ZOOM_STEPS.map((z) => (
+              <button
+                key={z}
+                role="menuitemradio"
+                aria-checked={near(z)}
+                className={near(z) ? "on" : ""}
+                onClick={go(() => engine.dispatch({ type: "setZoom", zoom: z }))}
+              >
+                {Math.round(z * 100)}%
+              </button>
+            ))}
+          </div>
+          <div className="zoom-grid">
+            <button role="menuitem" onClick={go(() => engine.dispatch({ type: "setZoom", zoom: stepZoom(snap.zoom, 1) }))}>
+              <Icon name="zoom-in" size={12} /> Zoom in<span className="sc">⇧=</span>
             </button>
-          ))}
+            <button role="menuitem" onClick={go(() => engine.dispatch({ type: "setZoom", zoom: stepZoom(snap.zoom, -1) }))}>
+              <Icon name="zoom-out" size={12} /> Zoom out<span className="sc">⇧−</span>
+            </button>
+          </div>
+          <hr />
+          <div className="menu-label">Canvas</div>
+          <button role="menuitemcheckbox" aria-checked={snap.showRulers} onClick={go(() => engine.dispatch({ type: "toggleRulers" }))}>
+            Rulers<span className="sc">⇧R</span>
+            {snap.showRulers && <Icon name="check" size={12} className="tick" />}
+          </button>
+          <button
+            role="menuitemcheckbox"
+            aria-checked={page.pixelGrid}
+            onClick={go(() => engine.dispatch({ type: "patchPage", patch: { pixelGrid: !page.pixelGrid } }))}
+          >
+            Pixel grid<span className="sc">⌘&apos;</span>
+            {page.pixelGrid && <Icon name="check" size={12} className="tick" />}
+          </button>
+          <button
+            role="menuitemcheckbox"
+            aria-checked={page.pixelSnap ?? true}
+            onClick={go(() => engine.dispatch({ type: "patchPage", patch: { pixelSnap: !(page.pixelSnap ?? true) } }))}
+          >
+            Snap to pixel grid<span className="sc">⌘⇧&apos;</span>
+            {page.pixelSnap ?? true ? <Icon name="check" size={12} className="tick" /> : null}
+          </button>
+          <button role="menuitemcheckbox" aria-checked={snap.showMinimap} onClick={go(() => engine.dispatch({ type: "toggleMinimap" }))}>
+            Minimap
+            {snap.showMinimap && <Icon name="check" size={12} className="tick" />}
+          </button>
+          <button role="menuitemcheckbox" aria-checked={snap.showComments} onClick={go(() => engine.dispatch({ type: "toggleComments" }))}>
+            Comments
+            {snap.showComments && <Icon name="check" size={12} className="tick" />}
+          </button>
+          <button role="menuitemcheckbox" aria-checked={snap.showFlows !== false} onClick={go(() => engine.dispatch({ type: "toggleFlows" }))}>
+            Prototype flows<span className="sc">⇧F</span>
+            {snap.showFlows !== false && <Icon name="check" size={12} className="tick" />}
+          </button>
+          <hr />
+          <button role="menuitem" onClick={go(() => window.dispatchEvent(new CustomEvent("x-native-hide-ui")))}>
+            Hide UI<span className="sc">⌘\</span>
+          </button>
         </div>
       )}
     </div>
