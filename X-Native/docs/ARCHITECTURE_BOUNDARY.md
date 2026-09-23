@@ -100,6 +100,21 @@ TYPESCRIPT PRODUCT              RUST MIGRATION TRACK
 
 Both tracks are live. Neither waits on the other.
 
+## Bridge status
+
+**Slice 1 is built.** `crates/x-wasm` compiles to `wasm32-unknown-unknown` in
+CI and uploads a ~298 KB `x_wasm.wasm` artifact on every run. It exposes
+`importFigToX`, `importSketchToX`, `importSvgToX` and `engineVersion`: bytes in,
+`.x` JSON out, via `x-format`'s existing importers and `save_x`. The crate owns
+no document logic, and the dependency-graph test declares it a leaf — it may
+depend on the engine, nothing may depend on it.
+
+**It is not yet loaded by the web app.** Nothing in `apps/web` imports the
+artifact, so the shipped product still runs entirely on TypeScript. The next
+slice is to load it behind a flag and run the existing `.fig`/`.sketch`/SVG
+import checks against both paths; the behaviour suite already pins the expected
+output, which is why import was chosen as the first capability.
+
 ## Migration sequence
 
 ```
