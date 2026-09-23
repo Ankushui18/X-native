@@ -4064,7 +4064,9 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             aria-checked={page.pixelGrid}
             onClick={go(() => engine.dispatch({ type: "patchPage", patch: { pixelGrid: !page.pixelGrid } }))}
           >
-            Pixel grid<span className="sc">⌘&apos;</span>
+            Pixel grid
+            {snap.zoom < 4 && <span className="hint">visible at 400%+</span>}
+            <span className="sc">⌘&apos;</span>
             {page.pixelGrid && <Icon name="check" size={12} className="tick" />}
           </button>
           <button
