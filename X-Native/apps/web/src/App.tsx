@@ -207,8 +207,13 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
   // through an event rather than threading another prop through the inspector.
   useEffect(() => {
     const on = () => setHideUi((v) => !v);
+    const onMin = () => setMinUi((v) => !v);
     window.addEventListener("x-native-hide-ui", on);
-    return () => window.removeEventListener("x-native-hide-ui", on);
+    window.addEventListener("x-native-minimize-ui", onMin);
+    return () => {
+      window.removeEventListener("x-native-hide-ui", on);
+      window.removeEventListener("x-native-minimize-ui", onMin);
+    };
   }, []);
 
   const share = () => {

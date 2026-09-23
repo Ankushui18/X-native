@@ -125,6 +125,11 @@ export function canvasMenu(sel: number, isGroup: boolean, hasImage: boolean): Me
     return [
       { kind: "action", id: "paste", label: "Paste", shortcut: "⌘V", icon: "clipboard" },
       { kind: "action", id: "selectAll", label: "Select all", shortcut: "⌘A", icon: "rect" },
+      // Figma's docs: right-clicking an empty canvas is the second way to get
+      // to the UI-state commands, for people who never look at the menu bar.
+      { kind: "sep" },
+      { kind: "action", id: "minimizeUi", label: "Minimize UI", shortcut: "⇧⌘\\", icon: "minimize" },
+      { kind: "action", id: "hideUi", label: "Hide UI", shortcut: "⌘\\", icon: "eye-off" },
     ];
   }
   const items: MenuItem[] = [
@@ -263,6 +268,14 @@ export function runMenu(
     }
     case "selectAll":
       engine.dispatch({ type: "selectAll" });
+      break;
+    // UI-state commands live in App (they are not document mutations), so the
+    // menu asks for them the same way the Actions palette does.
+    case "minimizeUi":
+      window.dispatchEvent(new CustomEvent("x-native-minimize-ui"));
+      break;
+    case "hideUi":
+      window.dispatchEvent(new CustomEvent("x-native-hide-ui"));
       break;
     case "group":
       engine.dispatch({ type: "group" });

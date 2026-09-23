@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import type {
   AutoLayout,
   Constraint,
@@ -27,12 +28,13 @@ import type {
   XNode,
 } from "../engine/types";
 import { collectColors, defaultEffect, defaultLayout, find, findParent, framesOf, worldPos } from "../engine/memory";
+import { colorUsage, recolorMatches, selectByColor } from "./selectionColors";
 import { shapePoly, pathToVectorNetwork, vectorNetworkToSvgPath, vertexDegree, simplifyPath, smoothPath } from "../engine/geometry";
 import { Icon } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { copyText } from "../engine/clipboard";
 import { buildPdf } from "../engine/pdf";
-import { toast } from "./toast";
+import { plural, toast } from "./toast";
 import { ZOOM_STEPS, parseZoomInput, stepZoom, zoomLabel, zoomTo } from "./zoom";
 import { DEVICE_GROUPS, DevicePreview, deviceFor } from "./devices";
 import { roundToPixel } from "./round";
@@ -67,26 +69,41 @@ export function RightPanel({
   const wp = id ? worldPos(root, id) : null;
   const n = wp?.node;
   const inspect = snap.rightTab === "inspect";
+  // ⇧⌘E is the same command in both apps: a bulk export sheet for the page.
+  // The right panel owns it because that is where export settings live.
+  const [exportAll, setExportAll] = useState(false);
+  useEffect(() => {
+    const on = () => setExportAll(true);
+    window.addEventListener("x-native-export-dialog", on);
+    return () => window.removeEventListener("x-native-export-dialog", on);
+  }, []);
   return (
     <aside className="panel right">
       <div className="right-head">
         <div className="avatar" title="You">
           X
         </div>
-        <button
-          className={`icon-btn${inspect ? " on" : ""}`}
-          title={inspect ? "Exit Dev Mode (⇧D)" : "Dev Mode (⇧D)"}
-          onClick={() => engine.dispatch({ type: "setRightTab", tab: inspect ? "design" : "inspect" })}
-          style={inspect ? { background: "rgba(16, 185, 129, 0.2)", color: "#10b981", borderRadius: 6 } : {}}
-        >
-          <Icon name="dev" />
-        </button>
-        <button className="icon-btn" title="Present" onClick={() => onPresent?.()}>
-          <Icon name="play" />
-        </button>
-        <button className="share" onClick={() => onShare?.()}>
-          Share
-        </button>
+        <span className="grow" />
+        <Tooltip label={inspect ? "Exit Dev Mode" : "Dev Mode"} shortcut="⇧D">
+          <button
+            className={`icon-btn dev-toggle${inspect ? " on" : ""}`}
+            aria-label="Dev Mode"
+            aria-pressed={inspect}
+            onClick={() => engine.dispatch({ type: "setRightTab", tab: inspect ? "design" : "inspect" })}
+          >
+            <Icon name="dev" />
+          </button>
+        </Tooltip>
+        <Tooltip label="Present" shortcut="Esc to exit">
+          <button className="icon-btn" aria-label="Present" onClick={() => onPresent?.()}>
+            <Icon name="play" />
+          </button>
+        </Tooltip>
+        <Tooltip label="Copy a link to this page">
+          <button className="share" onClick={() => onShare?.()}>
+            Share
+          </button>
+        </Tooltip>
       </div>
       <div className="tabs">
         {inspect ? (
@@ -128,9 +145,190 @@ export function RightPanel({
           <Design key={n.id} n={n} x={n.x} y={n.y} engine={engine} snap={snap} />
         )}
       </div>
+      {exportAll && (
+        <ExportAssetsDialog
+          engine={engine}
+          snap={snap}
+          onClose={() => setExportAll(false)}
+          onPresent={onPresent}
+        />
+      )}
     </aside>
   );
 }
+
+/**
+ * Figma's File ▸ Export… and Sketch's ⌘⇧E "Export Assets": one sheet listing
+ * everything on the page that can be exported, each row with its own format and
+ * scale, checkboxes to pick which ones to write. Thumbnails focus the layer so
+ * a long list stays navigable.
+ */
+function ExportAssetsDialog({
+  engine,
+  snap,
+  onClose,
+}: {
+  engine: Engine;
+  snap: Snapshot;
+  onClose: () => void;
+  onPresent?: () => void;
+}) {
+  const root = snap.pages[snap.page].root;
+  const candidates = useMemo(() => {
+    const out: XNode[] = [];
+    const walk = (n: XNode) => {
+      for (const ch of n.children) {
+        if (ch.visible === false) continue;
+        // Frames and slices are the export units; anything else only shows up
+        // when the layer already carries its own export settings.
+        if (ch.kind === "frame" || (ch.exports?.length ?? 0) > 0) out.push(ch);
+        else walk(ch);
+      }
+    };
+    walk(root);
+    return out;
+  }, [root]);
+  const selected = new Set(snap.selection);
+  const withConfig = (n: XNode) => (n.exports?.length ?? 0) > 0;
+  const presetFor = (n: XNode): ExportPreset =>
+    n.exports?.[0] ?? { format: "PNG", scale: 1, suffix: "" };
+  const [checked, setChecked] = useState<Record<string, boolean>>(() => {
+    const init: Record<string, boolean> = {};
+    for (const n of candidates) if (withConfig(n) || selected.has(n.id)) init[n.id] = true;
+    return init;
+  });
+  const [configs, setConfigs] = useState<Record<string, ExportPreset>>(() => {
+    const init: Record<string, ExportPreset> = {};
+    for (const n of candidates) init[n.id] = presetFor(n);
+    return init;
+  });
+  const [filter, setFilter] = useState("");
+  const rows = candidates.filter((n) => n.name.toLowerCase().includes(filter.trim().toLowerCase()));
+  // Rasterising every frame is expensive enough that it must not re-run while
+  // the sheet is being filtered or ticked; it follows the document instead.
+  const thumbs = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const n of candidates) out[n.id] = previewUrl(n, { format: "PNG", scale: 0.2, suffix: "" });
+    return out;
+  }, [candidates]);
+  const chosen = candidates.filter((n) => checked[n.id]);
+  const total = chosen.reduce((acc, n) => acc + Math.max(1, (n.exports?.length ?? 0) || 1), 0);
+
+  useEffect(() => {
+    // Capture phase, so Escape closes the sheet without also reaching the
+    // canvas handler that clears the selection behind it.
+    const on = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", on, true);
+    return () => window.removeEventListener("keydown", on, true);
+  }, [onClose]);
+
+  const run = () => {
+    if (!chosen.length) {
+      toast("Nothing checked to export");
+      return;
+    }
+    // Browsers throttle simultaneous downloads, so each file gets its own turn.
+    chosen.forEach((n, i) => {
+      const p = configs[n.id] ?? presetFor(n);
+      window.setTimeout(() => runExport(n, p), i * 220);
+    });
+    toast(`Exporting ${plural(chosen.length, "asset")} from "${snap.pages[snap.page].name}"`);
+    onClose();
+  };
+
+  return createPortal(
+    <div className="xmodal-veil" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="xmodal" role="dialog" aria-label="Export assets">
+        <div className="xmodal-head">
+          <h3>Export assets</h3>
+          <input
+            className="xmodal-filter"
+            placeholder="Filter layers"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          />
+          <button className="link" onClick={() => setChecked(Object.fromEntries(candidates.map((n) => [n.id, true])))}>
+            Check all
+          </button>
+          <button className="link" onClick={() => setChecked({})}>
+            Clear
+          </button>
+          <button className="icon-btn" title="Close" onClick={onClose}>
+            <Icon name="x-mark" size={14} />
+          </button>
+        </div>
+        <div className="xmodal-body">
+          {!rows.length && <p className="empty">Nothing on this page can be exported.</p>}
+          {rows.map((n) => {
+            const p = configs[n.id] ?? presetFor(n);
+            const set = (patch: Partial<ExportPreset>) =>
+              setConfigs((v) => ({ ...v, [n.id]: { ...p, ...patch } }));
+            return (
+              <label className={`xrow${checked[n.id] ? " on" : ""}`} key={n.id}>
+                <input
+                  type="checkbox"
+                  checked={!!checked[n.id]}
+                  onChange={(e) => setChecked((v) => ({ ...v, [n.id]: e.target.checked }))}
+                />
+                <img
+                  className="xrow-thumb"
+                  src={thumbs[n.id]}
+                  alt=""
+                  onClick={(e) => {
+                    // The thumbnail is Figma's shortcut to the layer itself.
+                    e.preventDefault();
+                    engine.dispatch({ type: "select", ids: [n.id] });
+                    zoomTo(engine, "selection");
+                    onClose();
+                  }}
+                />
+                <span className="xrow-name">{n.name}</span>
+                <span className="xrow-size">
+                  {Math.round(n.w)} × {Math.round(n.h)}
+                </span>
+                <select value={p.format} onChange={(e) => set({ format: e.target.value as ExportFormat })}>
+                  {FORMATS.map((f) => (
+                    <option key={f} value={f}>
+                      {f}
+                    </option>
+                  ))}
+                </select>
+                <select value={String(p.scale)} onChange={(e) => set({ scale: Number(e.target.value) })}>
+                  {SCALES.map((x) => (
+                    <option key={x} value={String(x)}>
+                      {x}×
+                    </option>
+                  ))}
+                </select>
+                <input
+                  className="xrow-suffix"
+                  placeholder="@2x"
+                  value={p.suffix}
+                  onChange={(e) => set({ suffix: e.target.value })}
+                  aria-label="File name suffix"
+                />
+              </label>
+            );
+          })}
+        </div>
+        <div className="xmodal-foot">
+          <span className="muted">
+            {chosen.length ? `${chosen.length} of ${candidates.length} layers · ${total} file${total === 1 ? "" : "s"}` : "No layers selected for export"}
+          </span>
+          <button className="export-run" disabled={!chosen.length} onClick={run}>
+            Export {chosen.length || ""}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 
 interface PresetCategory {
   category: string;
@@ -1382,7 +1580,6 @@ function Design({
           </div>
         </>
       )}
-      {multi && <SelectionColors engine={engine} snap={snap} />}
 
       <Section
         id="position"
@@ -2914,7 +3111,82 @@ function Design({
 
       <div className="hr" />
       <Effects n={n} engine={engine} />
+      <SelectionColors n={n} engine={engine} snap={snap} />
       <ExportBlock n={n} engine={engine} />
+    </>
+  );
+}
+
+/**
+ * Sketch's "Selection colors", widened to every selection instead of only
+ * multi-select, and walking the whole subtree so a frame reports the colours
+ * inside it. Two click targets per row, one per app: the swatch opens the
+ * picker and recolors every layer sharing that colour (Sketch's
+ * click-to-update-all, one undo step), the hex selects them (Figma's "Select
+ * all with same fill").
+ */
+function SelectionColors({ n, engine, snap }: { n: XNode; engine: Engine; snap: Snapshot }) {
+  const usage = colorUsage(n);
+  const [picking, setPicking] = useState<{ key: string; rect: DOMRect } | null>(null);
+  if (usage.length < 2) return null;
+  const root = snap.pages[snap.page].root;
+  return (
+    <>
+      <Section id="scolors" title={`Selection colors · ${usage.length}`} defaultOpen={false}>
+        <div className="insp-pad scolors">
+          {usage.map((u) => {
+            const key = `${u.bucket}:${u.hex}`;
+            return (
+              <div className="scolor-row" key={key}>
+                <button
+                  className="scolor-sw"
+                  style={{ background: u.hex }}
+                  title={`Change every ${u.bucket.toLowerCase()} ${u.hex.toUpperCase()} on this page`}
+                  aria-label={`Change ${u.hex}`}
+                  onClick={(e) =>
+                    setPicking({ key, rect: (e.currentTarget as HTMLElement).getBoundingClientRect() })
+                  }
+                />
+                <button
+                  className="scolor-hex"
+                  onClick={(e) => selectByColor(engine, snap, u, e.shiftKey || e.altKey)}
+                  title="Select all layers with this colour · ⇧ adds to the selection"
+                >
+                  {u.hex.replace("#", "").toUpperCase()}
+                  <span className="scolor-kind">{u.bucket}</span>
+                </button>
+                <span className="scolor-count" title={`${u.count} layers`}>
+                  {u.count}
+                </span>
+                <button
+                  className="mini"
+                  title="Copy hex"
+                  onClick={() => {
+                    copyText(u.hex.toUpperCase());
+                    toast(`Copied ${u.hex.toUpperCase()}`);
+                  }}
+                >
+                  <Icon name="copy" size={12} />
+                </button>
+                {picking?.key === key && (
+                  <FillPicker
+                    title={`${u.bucket} colours`}
+                    anchor={picking.rect}
+                    recents={collectColors(root)}
+                    value={{ color: u.hex, opacity: 100, type: "solid", second: "#ffffff", blend: "normal" }}
+                    onChange={(v) => {
+                      recolorMatches(engine, root, u, v.color);
+                      setPicking(null);
+                    }}
+                    onClose={() => setPicking(null)}
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </Section>
+      <div className="hr" />
     </>
   );
 }
@@ -3307,49 +3579,6 @@ function Constraints({
   );
 }
 
-function SelectionColors({ engine, snap }: { engine: Engine; snap: Snapshot }) {
-  const root = snap.pages[snap.page].root;
-  const rows: { id: string; fill: string; opacity: number }[] = [];
-  const seen = new Set<string>();
-  for (const id of snap.selection) {
-    const n = find(root, id);
-    if (!n || !n.fillVisible || isNone(n.fill)) continue;
-    const key = n.fill.slice(0, 7).toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    rows.push({ id: n.id, fill: n.fill, opacity: Math.round((n.fillOpacity ?? 1) * 100) });
-  }
-  if (!rows.length) return null;
-  return (
-    <>
-      <div className="h-row">
-        <h3>Selection colors</h3>
-      </div>
-      <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
-        {rows.map((r) => (
-          <ColorRow
-            key={r.id}
-            value={r.fill}
-            opacity={r.opacity}
-            visible
-            recents={collectColors(root)}
-            onChange={(fill) => {
-              for (const id of snap.selection) {
-                const n = find(root, id);
-                if (n && n.fill.slice(0, 7).toLowerCase() === r.fill.slice(0, 7).toLowerCase()) {
-                  engine.dispatch({ type: "patch", id, patch: { fill, fillVisible: true } });
-                }
-              }
-            }}
-            onOpacity={(v) => engine.dispatch({ type: "patch", id: r.id, patch: { fillOpacity: v / 100 } })}
-          />
-        ))}
-      </div>
-      <div className="hr" />
-    </>
-  );
-}
-
 const FORMATS: ExportFormat[] = ["PNG", "JPG", "SVG", "PDF"];
 const SCALES = [0.5, 1, 2, 3, 4];
 
@@ -3375,89 +3604,98 @@ function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
         title="Export"
         defaultOpen={false}
         actions={
-          <button
-          className="plus"
-          title="Add export"
-          onClick={() => {
-            openSection("export");
-            add();
-          }}
-        >
-            <Icon name="plus" size={14} />
-          </button>
+          <>
+            <button
+              className="link"
+              title="Export settings for the whole page (⇧⌘E)"
+              onClick={() => window.dispatchEvent(new CustomEvent("x-native-export-dialog"))}
+            >
+              All…
+            </button>
+            <button
+              className="plus"
+              title="Add export"
+              onClick={() => {
+                openSection("export");
+                add();
+              }}
+            >
+              <Icon name="plus" size={14} />
+            </button>
+          </>
         }
       >
-      {presets.map((p, i) => (
-        <div key={i} className="insp-pad" style={{ marginBottom: 4 }}>
-          <div className="export-row">
-            {/* Figma previews the export before you download it — the thumbnail
-                is the real render (SVG source, so it scales with the preset). */}
-            <button
-              className={`export-thumb${preview[i] ? " on" : ""}`}
-              title={preview[i] ? "Hide preview" : "Preview"}
-              aria-pressed={!!preview[i]}
-              onClick={() => setPreview((v) => ({ ...v, [i]: !v[i] }))}
-            >
-              {preview[i] ? <img src={previewUrl(n, p)} alt="" /> : <Icon name="image" size={12} />}
-            </button>
-            <button
-              className="fmt"
-              title="Format"
-              onClick={() => set(i, { ...p, format: FORMATS[(FORMATS.indexOf(p.format) + 1) % FORMATS.length] })}
-            >
-              {p.format}
-            </button>
-            <button
-              className="fmt"
-              title="Scale"
-              onClick={() => set(i, { ...p, scale: SCALES[(SCALES.indexOf(p.scale) + 1) % SCALES.length] })}
-            >
-              {p.scale}×
-            </button>
-            <input
-              className="suffix"
-              placeholder="suffix"
-              value={p.suffix}
-              onChange={(e) => set(i, { ...p, suffix: e.target.value })}
-            />
-            <button
-              className="mini minus"
-              title="Remove"
-              onClick={() =>
-                engine.dispatch({
-                  type: "patch",
-                  id: n.id,
-                  patch: { exports: presets.filter((_, j) => j !== i) },
-                })
-              }
-            >
-              <Icon name="minus" size={14} />
-            </button>
-          </div>
-          {preview[i] && (
-            <div className="export-checker">
-              <img src={previewUrl(n, p)} alt={`Preview of ${n.name}${p.suffix} at ${p.scale}×`} />
+        {presets.map((p, i) => (
+          <div key={i} className="insp-pad" style={{ marginBottom: 4 }}>
+            <div className="export-row">
+              {/* Figma previews the export before you download it — the thumbnail
+                  is the real render (SVG source, so it scales with the preset). */}
+              <button
+                className={`export-thumb${preview[i] ? " on" : ""}`}
+                title={preview[i] ? "Hide preview" : "Preview"}
+                aria-pressed={!!preview[i]}
+                onClick={() => setPreview((v) => ({ ...v, [i]: !v[i] }))}
+              >
+                {preview[i] ? <img src={previewUrl(n, p)} alt="" /> : <Icon name="image" size={12} />}
+              </button>
+              <button
+                className="fmt"
+                title="Format"
+                onClick={() => set(i, { ...p, format: FORMATS[(FORMATS.indexOf(p.format) + 1) % FORMATS.length] })}
+              >
+                {p.format}
+              </button>
+              <button
+                className="fmt"
+                title="Scale"
+                onClick={() => set(i, { ...p, scale: SCALES[(SCALES.indexOf(p.scale) + 1) % SCALES.length] })}
+              >
+                {p.scale}×
+              </button>
+              <input
+                className="suffix"
+                placeholder="suffix"
+                value={p.suffix}
+                onChange={(e) => set(i, { ...p, suffix: e.target.value })}
+              />
+              <button
+                className="mini minus"
+                title="Remove"
+                onClick={() =>
+                  engine.dispatch({
+                    type: "patch",
+                    id: n.id,
+                    patch: { exports: presets.filter((_, j) => j !== i) },
+                  })
+                }
+              >
+                <Icon name="minus" size={14} />
+              </button>
             </div>
-          )}
-        </div>
-      ))}
-      {!!presets.length && (
-        <div className="insp-pad">
-          <button className="export-run" onClick={() => presets.forEach((p) => runExport(n, p))}>
-            Export
-          </button>
-        </div>
-      )}
-      {!presets.length && (
-        <div className="insp-pad">
-          <div className="empty-add">
-            <span className="muted">No export settings</span>
-            <button className="empty-add-btn" onClick={add}>
-              <Icon name="plus" size={12} /> Add image export
+            {preview[i] && (
+              <div className="export-checker">
+                <img src={previewUrl(n, p)} alt={`Preview of ${n.name}${p.suffix} at ${p.scale}×`} />
+              </div>
+            )}
+          </div>
+        ))}
+        {!!presets.length && (
+          <div className="insp-pad">
+            <button className="export-run" onClick={() => presets.forEach((p) => runExport(n, p))}>
+              Export
             </button>
           </div>
-        </div>
-      )}
+        )}
+        {!presets.length && (
+          <div className="insp-pad">
+            <div className="empty-add">
+              <span className="muted">No export settings</span>
+              <button className="empty-add-btn" onClick={add}>
+                <Icon name="plus" size={12} /> Add image export
+              </button>
+            </div>
+          </div>
+        )}
       </Section>
     </>
   );

@@ -3636,6 +3636,15 @@ export function Canvas({
           e.target.value = "";
         }}
       />
+      {snap.tool === "zoom" && !snap.presentFrame && (
+        <div className="canvas-hud">
+          <span>Zoom tool</span>
+          <span>
+            click <b>in</b> · ⌥ click <b>out</b> · drag to fit an area
+          </span>
+          <b>{Math.round(snap.zoom * 100)}%</b>
+        </div>
+      )}
       {selectedConn && snap.rightTab === "prototype" && !snap.presentFrame && (
         <div
           onClick={(e) => e.stopPropagation()}

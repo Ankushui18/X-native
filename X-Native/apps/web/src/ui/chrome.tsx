@@ -869,6 +869,7 @@ export function Actions({
     { label: "Ungroup", sc: "⇧⌘G", run: () => engine.dispatch({ type: "ungroup" }) },
     { label: "Hide UI", sc: "⌘\\", run: onHide },
     { label: "Minimize UI", sc: "⇧⌘\\", run: () => onMinimize?.() },
+    { label: "Export assets…", sc: "⇧⌘E", run: () => window.dispatchEvent(new CustomEvent("x-native-export-dialog")) },
     { label: "Dev Mode", sc: "⇧D", run: () => engine.dispatch({ type: "setRightTab", tab: "inspect" }) },
     { label: "Prototype", sc: "", run: () => engine.dispatch({ type: "setRightTab", tab: "prototype" }) },
     { label: "Design", sc: "", run: () => engine.dispatch({ type: "setRightTab", tab: "design" }) },
@@ -1334,6 +1335,12 @@ export function bindHotkeys(
     if (!meta && e.shiftKey && e.key.toLowerCase() === "v") {
       e.preventDefault();
       engine.dispatch({ type: "flip", axis: "v" });
+      return;
+    }
+    // ⇧⌘E — the same bulk-export command in Figma (File ▸ Export…) and Sketch.
+    if (meta && e.shiftKey && e.key.toLowerCase() === "e") {
+      e.preventDefault();
+      window.dispatchEvent(new CustomEvent("x-native-export-dialog"));
       return;
     }
     if (meta && e.shiftKey && e.key.toLowerCase() === "p") {
