@@ -23,6 +23,8 @@
  * candidate, not the current authority.
  */
 
+import type { VectorNetwork } from "./types";
+
 export interface ImportedNode {
   kind: "rect" | "ellipse" | "line" | "text" | "vector";
   name: string;
@@ -38,7 +40,8 @@ export interface ImportedNode {
   opacity: number;
   rotation: number;
   cornerRadii?: [number, number, number, number];
-  path?: { x: number; y: number }[];
+  path?: { x: number; y: number; ix?: number; iy?: number; ox?: number; oy?: number }[];
+  vectorNetwork?: VectorNetwork;
   closed?: boolean;
   text?: string;
   fontSize?: number;

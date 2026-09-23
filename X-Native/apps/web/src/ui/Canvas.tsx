@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Engine, Interaction, NodeKind, PathPoint, Snapshot, Tool, XNode } from "../engine/types";
+import type { Engine, Interaction, NodeKind, PathPoint, ProtoAnim, Snapshot, Tool, VectorNetwork, XNode } from "../engine/types";
 import { deepestFrame, find, findParent, hitTest, worldToLocal, worldPos } from "../engine/memory";
-import { erasePath, shapePoly, simplifyPath, smoothPath } from "../engine/geometry";
+import { erasePath, shapePoly, simplifyPath, smoothPath, vertexDegree, insertPointOnPath, projectPointOnSegment, computeFigmaNoodle } from "../engine/geometry";
+import { interpolateMatchingLayers, solveEasing, applyInterpolatedFrame } from "../engine/smartAnimate";
 import {
   snapCandidates,
   snapMove,
@@ -22,6 +23,7 @@ import { importSvg, type ImportedNode } from "../engine/svgImport";
 import { importSketch } from "../engine/sketchImport";
 import { importFig } from "../engine/figImport";
 import { toast } from "./toast";
+import { Icon } from "./icons";
 
 /** Snap radius in screen pixels; divided by zoom to get world tolerance. */
 const SNAP_PX = 6;
@@ -29,6 +31,11 @@ const SNAP_PX = 6;
 const ERASER_PX = 10;
 /** RDP tolerance for freehand strokes, in screen pixels. */
 const PENCIL_TOLERANCE_PX = 2;
+
+/** X-Native signature brand accents (electric cyber indigo). */
+const BRAND_ACCENT = "#6366f1";
+const BRAND_ACCENT_WASH = "rgba(99, 102, 241, 0.14)";
+const BRAND_ACCENT_GLOW = "rgba(99, 102, 241, 0.35)";
 
 const CREATE: Tool[] = [
   "frame",
@@ -76,11 +83,25 @@ type Drag =
         | "marquee"
         | "rotate"
         | "vec"
+        | "bend"
         | "grad"
         | "multiResize"
-        | "multiRotate";
+        | "multiRotate"
+        | "autoPad"
+        | "autoGap"
+        | "protoConnect"
+        | "starRatio"
+        | "radius"
+        | "arc";
       point?: number;
+      segIndex?: number;
       handle?: "in" | "out" | "g" | "h";
+      padEdge?: "top" | "right" | "bottom" | "left";
+      forcedSide?: "right" | "bottom" | "left" | "top";
+      origPad?: [number, number, number, number];
+      origGap?: number;
+      fromX?: number;
+      fromY?: number;
       sx: number;
       sy: number;
       wx: number;
@@ -93,6 +114,7 @@ type Drag =
       /** Combined selection bounds at drag start (group transforms). */
       bounds?: { x: number; y: number; w: number; h: number };
       origs?: MultiOrigin[];
+      origPts?: PathPoint[];
     };
 
 /** Snapshot every selected node's world + local box before a group transform. */
@@ -115,7 +137,15 @@ function multiOrigins(root: XNode, ids: string[]): MultiOrigin[] {
   return out;
 }
 
-export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
+export function Canvas({
+  engine,
+  snap,
+  onRunInteraction,
+}: {
+  engine: Engine;
+  snap: Snapshot;
+  onRunInteraction?: (runner: (ix: Interaction) => void) => void;
+}) {
   const ref = useRef<HTMLCanvasElement>(null);
   const wrap = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
@@ -127,14 +157,32 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const [menu, setMenu] = useState<{ x: number; y: number; wx: number; wy: number } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const pendingImage = useRef<{ x: number; y: number } | null>(null);
-  const [vecEdit, setVecEdit] = useState<string | null>(null);
+  const vecEdit = snap.vecEdit ?? null;
+  const setVecEdit = useCallback(
+    (id: string | null, ptIndex: number | null = null, ptIndices: number[] = []) => {
+      engine.dispatch({ type: "setVecEdit", id, pointIndex: ptIndex, pointIndices: ptIndices });
+    },
+    [engine],
+  );
   const [draft, setDraft] = useState<PathPoint[]>([]);
   const [ghost, setGhost] = useState<PathPoint | null>(null);
   const [hoverId, setHoverId] = useState("");
-  const [transition, setTransition] = useState<"dissolve" | "smart" | null>(null);
+  const [transition, setTransition] = useState<ProtoAnim | null>(null);
+  const [animFrame, setAnimFrame] = useState<{
+    frame: XNode;
+    toFrame?: XNode;
+    progress: number;
+    type: ProtoAnim;
+    targetId?: string;
+  } | null>(null);
   const pencil = useRef<PathPoint[] | null>(null);
   const penDrag = useRef<{ i: number; x: number; y: number } | null>(null);
   const vecPt = useRef(-1);
+  useEffect(() => {
+    if (snap.vecPoint !== undefined && snap.vecPoint !== null) {
+      vecPt.current = snap.vecPoint;
+    }
+  }, [snap.vecPoint]);
   const hoverIx = useRef("");
   /** Cursor implied by whatever selection chrome is under the pointer. */
   const [hoverCursor, setHoverCursor] = useState<string | null>(null);
@@ -143,6 +191,26 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   /** Live smart-guide overlay, produced by the snapping pass during a drag. */
   const [guides, setGuides] = useState<Guide[]>([]);
   const [gapBadges, setGapBadges] = useState<GapBadge[]>([]);
+  /** Live Alt/Option distance measurement state */
+  const [altMeasure, setAltMeasure] = useState(false);
+  /** Live prototype connection dragging state */
+  const [protoDrag, setProtoDrag] = useState<{
+    fromX: number;
+    fromY: number;
+    toX: number;
+    toY: number;
+    srcId?: string;
+    targetId?: string;
+    forcedSide?: "right" | "bottom" | "left" | "top";
+  } | null>(null);
+  /** Selected prototype connection for on-canvas deletion and details */
+  const [selectedConn, setSelectedConn] = useState<{
+    srcId: string;
+    destId: string;
+    midX: number;
+    midY: number;
+    label: string;
+  } | null>(null);
   /** Static snap targets, captured once at drag start so they never shift mid-drag. */
   const snapTargets = useRef<Box[]>([]);
   const { theme } = useTheme();
@@ -151,24 +219,115 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       const run = () => {
         if (ix.action === "back") engine.dispatch({ type: "presentBack" });
         else if (ix.action === "navigate" && ix.destination) engine.dispatch({ type: "presentGo", id: ix.destination });
-        else if (ix.action === "openUrl" && ix.destination)
-          window.open(ix.destination, "_blank", "noopener,noreferrer");
+        else if (ix.action === "openUrl" && ix.destination) {
+          const url = /^https?:\/\//i.test(ix.destination) ? ix.destination : `https://${ix.destination}`;
+          window.open(url, "_blank", "noopener,noreferrer");
+        } else if (ix.action === "scrollTo" && ix.destination) {
+          const root = engine.snapshot().pages[engine.snapshot().page].root;
+          const target = worldPos(root, ix.destination);
+          if (target) {
+            engine.dispatch({
+              type: "setPan",
+              x: -target.x * engine.snapshot().zoom + 120,
+              y: -target.y * engine.snapshot().zoom + 120,
+            });
+          }
+        } else if (ix.action === "openOverlay" && ix.destination) {
+          engine.dispatch({
+            type: "openOverlay",
+            id: ix.destination,
+            position: ix.overlayPosition || "center",
+            closeOutside: ix.overlayCloseOutside !== false,
+            backdrop: ix.overlayBackdrop !== false,
+            backdropColor: ix.overlayBackdropColor,
+          });
+        } else if (ix.action === "swapOverlay" && ix.destination) {
+          engine.dispatch({
+            type: "openOverlay",
+            id: ix.destination,
+            position: ix.overlayPosition || "center",
+            closeOutside: ix.overlayCloseOutside !== false,
+            backdrop: ix.overlayBackdrop !== false,
+            backdropColor: ix.overlayBackdropColor,
+          });
+        } else if (ix.action === "closeOverlay") {
+          engine.dispatch({ type: "closeOverlay" });
+        } else if (ix.action === "setVariable" && ix.variableId) {
+          const s = engine.snapshot();
+          const v = s.variables?.find((varItem) => varItem.id === ix.variableId);
+          if (v) {
+            let nextVal = ix.variableValue !== undefined ? ix.variableValue : v.value;
+            if (ix.variableOp === "increment" && typeof v.value === "number") nextVal = v.value + 1;
+            else if (ix.variableOp === "decrement" && typeof v.value === "number") nextVal = v.value - 1;
+            else if (ix.variableOp === "toggle") nextVal = !v.value;
+            engine.dispatch({ type: "patchVariable", id: ix.variableId, patch: { value: nextVal } });
+          }
+        }
       };
-      if (ix.animation === "instant" || ix.action === "openUrl") {
+      if (ix.animation === "instant" || !ix.animation || ix.action === "openUrl" || ix.action === "scrollTo" || ix.action === "setVariable") {
         run();
         return;
       }
+
+      const root = engine.snapshot().pages[engine.snapshot().page].root;
+      const fromId = engine.snapshot().presentFrame;
+      const fromNode = fromId ? find(root, fromId) : null;
+      let destId: string | undefined = ix.destination;
+      if (ix.action === "back") {
+        const stack = engine.snapshot().presentStack;
+        destId = stack.length > 1 ? stack[stack.length - 2] : undefined;
+      }
+      const toNode = destId ? find(root, destId) : null;
+
+      if (fromNode && toNode && (ix.action === "navigate" || ix.action === "back")) {
+        const dur = ix.duration || (ix.animation === "smart" ? 300 : 250);
+        const easing = ix.easing || "easeOut";
+        const start = performance.now();
+
+        const tick = () => {
+          const now = performance.now();
+          const elapsed = now - start;
+          const t = Math.min(1, Math.max(0, elapsed / dur));
+          const easedT = solveEasing(easing, t);
+
+          if (ix.animation === "smart") {
+            const interpolated = interpolateMatchingLayers(fromNode, toNode, t, easing);
+            const morphed = applyInterpolatedFrame(toNode, interpolated, fromNode);
+            setAnimFrame({ frame: morphed, progress: easedT, type: "smart", targetId: toNode.id });
+          } else {
+            setAnimFrame({ frame: fromNode, toFrame: toNode, progress: easedT, type: ix.animation, targetId: toNode.id });
+          }
+
+          if (t < 1) {
+            requestAnimationFrame(tick);
+          } else {
+            setAnimFrame(null);
+            run();
+          }
+        };
+        requestAnimationFrame(tick);
+        return;
+      }
+
       setTransition(ix.animation);
+      const dur = ix.duration || (ix.animation === "smart" ? 260 : 220);
       window.setTimeout(() => {
         run();
         setTransition(null);
-      }, ix.animation === "smart" ? 260 : 180);
+      }, dur);
     },
     [engine],
   );
 
   useEffect(() => {
+    if (onRunInteraction) onRunInteraction(runInteraction);
+  }, [onRunInteraction, runInteraction]);
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Alt") {
+        setAltMeasure(e.type === "keydown");
+      }
       if (e.code === "Space") {
         space.current = e.type === "keydown";
         if (e.type === "keydown" && (e.target as HTMLElement).tagName !== "INPUT" && (e.target as HTMLElement).tagName !== "TEXTAREA")
@@ -252,13 +411,50 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         setVecEdit(null);
         e.stopImmediatePropagation();
       }
+      if (e.type === "keydown" && (e.key === "Delete" || e.key === "Backspace") && selectedConn && !edit) {
+        engine.dispatch({ type: "deleteInteraction", id: selectedConn.srcId, destId: selectedConn.destId });
+        setSelectedConn(null);
+        toast("Connection deleted");
+        e.stopImmediatePropagation();
+        return;
+      }
       if (e.type === "keydown" && (e.key === "Delete" || e.key === "Backspace") && vecEdit && !edit) {
         const n = worldPos(snap.pages[snap.page].root, vecEdit)?.node;
         if (n?.path.length) {
-          const i = vecPt.current >= 0 ? vecPt.current : n.path.length - 1;
-          const path = n.path.filter((_, j) => j !== i);
+          const selectedSet = new Set<number>(
+            snap.vecPoints && snap.vecPoints.length > 0
+              ? snap.vecPoints
+              : vecPt.current >= 0
+                ? [vecPt.current]
+                : [n.path.length - 1],
+          );
+          const isHeal = e.shiftKey;
+          let path = [...n.path];
+          if (isHeal && path.length >= 3 && selectedSet.size === 1) {
+            const i = Array.from(selectedSet)[0];
+            const prevIdx = i > 0 ? i - 1 : (n.closed ? path.length - 1 : null);
+            const nextIdx = i < path.length - 1 ? i + 1 : (n.closed ? 0 : null);
+            if (prevIdx !== null && nextIdx !== null) {
+              const p0 = path[prevIdx];
+              const p1 = path[nextIdx];
+              const dx = p1.x - p0.x;
+              const dy = p1.y - p0.y;
+              const dist = Math.hypot(dx, dy);
+              if (dist > 0.001) {
+                const tx = (dx / dist) * Math.min(dist / 3, 30);
+                const ty = (dy / dist) * Math.min(dist / 3, 30);
+                path[prevIdx] = { ...p0, ox: tx, oy: ty };
+                path[nextIdx] = { ...p1, ix: -tx, iy: -ty };
+              }
+            }
+            toast("Point deleted & healed");
+          }
+          path = path.filter((_, j) => !selectedSet.has(j));
           engine.dispatch({ type: "patchPath", id: n.id, path, closed: n.closed });
-          vecPt.current = Math.min(i, path.length - 1);
+          const firstSel = Math.min(...Array.from(selectedSet));
+          const nextPt = path.length ? Math.max(0, Math.min(path.length - 1, firstSel)) : -1;
+          vecPt.current = nextPt;
+          setVecEdit(n.id, nextPt >= 0 ? nextPt : null, nextPt >= 0 ? [nextPt] : []);
           e.stopImmediatePropagation();
         }
       }
@@ -332,14 +528,15 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       if (!n.visible) return;
       const x = px + n.x;
       const y = py + n.y;
-      // Viewport culling. Only childless nodes are considered: a container may
-      // paint children outside its own bounds when overflow is visible, and
-      // children are positioned relative to the parent, so skipping a parent
-      // would wrongly skip its subtree. Bounds are padded for stroke width and
-      // for any shadow offset/blur, and rotation is covered by using the
-      // diagonal, so nothing that could touch a pixel on screen is dropped.
-      if (!n.children.length) {
+      // Viewport culling. Leaf nodes and clipped-overflow containers (frames with
+      // overflow: "clip" | "scroll*") cannot paint outside their bounding box.
+      // Skipping them culls entire off-screen frames/subtrees instantly.
+      // Bounds are padded for stroke width, shadow offset/blur, and rotation.
+      if (!n.children.length || n.overflow !== "visible") {
         let pad = (n.strokeWidth ?? 0) + 2;
+        for (const st of n.strokes ?? []) {
+          if (st.visible) pad = Math.max(pad, st.width + 2);
+        }
         for (const e of n.effects ?? []) {
           if (!e.visible) continue;
           pad = Math.max(pad, Math.abs(e.x ?? 0) + Math.abs(e.y ?? 0) + Math.abs(e.blur ?? 0) + Math.abs(e.spread ?? 0));
@@ -408,17 +605,52 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       const traceShape = () => {
         if (n.kind === "text") {
           ctx.beginPath();
-        } else if ((n.kind === "vector" || n.kind === "boolean") && n.path.length) {
-          tracePath(ctx, n.path, snap.panX + x * z, snap.panY + y * z, z, n.closed);
+        } else if ((n.kind === "vector" || n.kind === "boolean") && (n.vectorNetwork || n.path.length)) {
+          if (n.vectorNetwork && n.vectorNetwork.segments.length > 0) {
+            traceVectorNetwork(ctx, n.vectorNetwork, snap.panX + x * z, snap.panY + y * z, z);
+          } else {
+            tracePath(ctx, n.path, snap.panX + x * z, snap.panY + y * z, z, n.closed);
+          }
         } else if (n.kind === "ellipse") {
           ctx.beginPath();
-          ctx.ellipse(sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), 0, 0, Math.PI * 2);
+          if (n.arcData && (n.arcData.endingAngle < Math.PI * 2 - 0.001 || n.arcData.innerRadius > 0.001 || n.arcData.startingAngle > 0.001)) {
+            const sa = n.arcData.startingAngle ?? 0;
+            const ea = n.arcData.endingAngle ?? Math.PI * 2;
+            const ir = Math.max(0, Math.min(0.99, n.arcData.innerRadius ?? 0));
+            const cx = sx + sw / 2;
+            const cy = sy + sh / 2;
+            const rx = Math.abs(sw / 2);
+            const ry = Math.abs(sh / 2);
+            if (ir > 0.001) {
+              ctx.ellipse(cx, cy, rx, ry, 0, sa, ea, false);
+              ctx.lineTo(cx + Math.cos(ea) * rx * ir, cy + Math.sin(ea) * ry * ir);
+              ctx.ellipse(cx, cy, rx * ir, ry * ir, 0, ea, sa, true);
+              ctx.closePath();
+            } else if (Math.abs(ea - sa) < Math.PI * 2 - 0.001) {
+              ctx.moveTo(cx, cy);
+              ctx.ellipse(cx, cy, rx, ry, 0, sa, ea, false);
+              ctx.closePath();
+            } else {
+              ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+            }
+          } else {
+            ctx.ellipse(sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), 0, 0, Math.PI * 2);
+          }
         } else if (n.kind === "line" || n.kind === "arrow") {
           ctx.beginPath();
           ctx.moveTo(sx, sy + sh / 2);
           ctx.lineTo(sx + sw, sy + sh / 2);
         } else if (n.kind === "star") {
-          starPath(ctx, sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), n.count || 5, n.starRatio || 0.4);
+          starPath(
+            ctx,
+            sx + sw / 2,
+            sy + sh / 2,
+            Math.abs(sw / 2),
+            Math.abs(sh / 2),
+            n.count || 5,
+            n.starRatio || 0.4,
+            n.cornerRadii[0] || 0,
+          );
         } else if (n.kind === "poly") {
           polyPath(ctx, sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), n.count || 3);
         } else {
@@ -485,6 +717,8 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         ctx.fill();
         ctx.restore();
       }
+      const texture = (n.effects ?? []).find((e) => e.kind === "texture" && e.visible);
+      if (texture) paintTexture(ctx, sx, sy, sw, sh, texture.blur || 16, texture.spread || 4);
       ctx.shadowColor = "transparent";
       ctx.shadowBlur = 0;
       ctx.shadowOffsetX = 0;
@@ -523,7 +757,9 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         }
         const arrowCap =
           n.kind === "arrow" ||
-          ((n.kind === "line" || n.kind === "vector") && !n.closed && n.strokeCap === "arrow");
+          ((n.kind === "line" || n.kind === "vector") &&
+            !n.closed &&
+            (n.strokeCap === "arrow" || n.strokeCap === "triangle"));
         if (arrowCap) {
           ctx.setLineDash([]);
           const ah = Math.max(6, n.strokeWidth * 3 * z);
@@ -542,10 +778,11 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             ux = dx / len;
             uy = dy / len;
           }
+          const kw = n.strokeCap === "triangle" ? 0.75 : 0.55;
           ctx.beginPath();
           ctx.moveTo(ex, ey);
-          ctx.lineTo(ex - ux * ah - uy * ah * 0.55, ey - uy * ah + ux * ah * 0.55);
-          ctx.lineTo(ex - ux * ah + uy * ah * 0.55, ey - uy * ah - ux * ah * 0.55);
+          ctx.lineTo(ex - ux * ah - uy * ah * kw, ey - uy * ah + ux * ah * kw);
+          ctx.lineTo(ex - ux * ah + uy * ah * kw, ey - uy * ah - ux * ah * kw);
           ctx.closePath();
           ctx.fillStyle = cssRgba(n.strokePaint);
           ctx.fill();
@@ -560,8 +797,53 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         round();
         ctx.clip();
       }
+      if (n.kind === "frame" && n.layoutGrids?.length && !snap.presentFrame) {
+        ctx.save();
+        for (const g of n.layoutGrids) {
+          if (g.visible === false) continue;
+          const color = g.color || "rgba(255, 0, 0, 0.08)";
+          ctx.fillStyle = color;
+          if (g.pattern === "columns") {
+            const count = g.count || 12;
+            const gutter = g.gutter !== undefined ? g.gutter : 20;
+            const margin = g.margin !== undefined ? g.margin : 20;
+            const avail = n.w - margin * 2 - gutter * (count - 1);
+            const colW = Math.max(1, avail / count);
+            for (let ci = 0; ci < count; ci++) {
+              const cx = x + margin + ci * (colW + gutter);
+              ctx.fillRect(snap.panX + cx * z, snap.panY + y * z, colW * z, n.h * z);
+            }
+          } else if (g.pattern === "rows") {
+            const count = g.count || 8;
+            const gutter = g.gutter !== undefined ? g.gutter : 20;
+            const margin = g.margin !== undefined ? g.margin : 20;
+            const avail = n.h - margin * 2 - gutter * (count - 1);
+            const rowH = Math.max(1, avail / count);
+            for (let ri = 0; ri < count; ri++) {
+              const cy = y + margin + ri * (rowH + gutter);
+              ctx.fillRect(snap.panX + x * z, snap.panY + cy * z, n.w * z, rowH * z);
+            }
+          } else if (g.pattern === "grid") {
+            const sz = g.sectionSize || 10;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            for (let gx = sz; gx < n.w; gx += sz) {
+              ctx.moveTo(snap.panX + (x + gx) * z, snap.panY + y * z);
+              ctx.lineTo(snap.panX + (x + gx) * z, snap.panY + (y + n.h) * z);
+            }
+            for (let gy = sz; gy < n.h; gy += sz) {
+              ctx.moveTo(snap.panX + x * z, snap.panY + (y + gy) * z);
+              ctx.lineTo(snap.panX + (x + n.w) * z, snap.panY + (y + gy) * z);
+            }
+            ctx.stroke();
+          }
+        }
+        ctx.restore();
+      }
       let maskOn = 0;
-      for (const ch of n.children) {
+      const renderChildren = n.layout?.itemReverseZIndex ? [...n.children].reverse() : n.children;
+      for (const ch of renderChildren) {
         if (ch.isMask && ch.visible) {
           ctx.save();
           const mx = snap.panX + (x + ch.x) * z;
@@ -601,9 +883,87 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       ctx.restore();
     };
     const present = snap.presentFrame ? find(root, snap.presentFrame) : null;
-    if (present) {
+    if (animFrame) {
+      if (animFrame.type === "smart") {
+        const targetId = animFrame.targetId || (present ? present.id : animFrame.frame.id);
+        const wp = worldPos(root, targetId) || (present ? worldPos(root, present.id) : null);
+        paint(animFrame.frame, wp ? wp.x - animFrame.frame.x : 0, wp ? wp.y - animFrame.frame.y : 0);
+      } else if (animFrame.type === "dissolve" && animFrame.toFrame) {
+        const wp = worldPos(root, present ? present.id : animFrame.frame.id);
+        const p = animFrame.progress;
+        ctx.save();
+        ctx.globalAlpha = 1 - p;
+        paint(animFrame.frame, wp ? wp.x - animFrame.frame.x : 0, wp ? wp.y - animFrame.frame.y : 0);
+        ctx.restore();
+        ctx.save();
+        ctx.globalAlpha = p;
+        paint(animFrame.toFrame, wp ? wp.x - animFrame.toFrame.x : 0, wp ? wp.y - animFrame.toFrame.y : 0);
+        ctx.restore();
+      } else if (animFrame.type.startsWith("slide") || animFrame.type.startsWith("push")) {
+        const wp = worldPos(root, present ? present.id : animFrame.frame.id);
+        const p = animFrame.progress;
+        const w = animFrame.frame.w;
+        const h = animFrame.frame.h;
+        let fromDx = 0, fromDy = 0, toDx = 0, toDy = 0;
+        if (animFrame.type === "slideInRight") {
+          toDx = (1 - p) * w;
+        } else if (animFrame.type === "slideInLeft") {
+          toDx = -(1 - p) * w;
+        } else if (animFrame.type === "slideInTop") {
+          toDy = -(1 - p) * h;
+        } else if (animFrame.type === "slideInBottom") {
+          toDy = (1 - p) * h;
+        } else if (animFrame.type === "pushRight") {
+          fromDx = p * w;
+          toDx = -(1 - p) * w;
+        } else if (animFrame.type === "pushLeft") {
+          fromDx = -p * w;
+          toDx = (1 - p) * w;
+        }
+        if (animFrame.type.startsWith("push")) {
+          ctx.save();
+          paint(animFrame.frame, (wp ? wp.x - animFrame.frame.x : 0) + fromDx, (wp ? wp.y - animFrame.frame.y : 0) + fromDy);
+          ctx.restore();
+        } else {
+          paint(animFrame.frame, wp ? wp.x - animFrame.frame.x : 0, wp ? wp.y - animFrame.frame.y : 0);
+        }
+        if (animFrame.toFrame) {
+          ctx.save();
+          paint(animFrame.toFrame, (wp ? wp.x - animFrame.toFrame.x : 0) + toDx, (wp ? wp.y - animFrame.toFrame.y : 0) + toDy);
+          ctx.restore();
+        }
+      }
+    } else if (present) {
       const wp = worldPos(root, present.id);
       paint(present, wp ? wp.x - present.x : 0, wp ? wp.y - present.y : 0);
+
+      // Paint active overlay if present
+      if (snap.activeOverlay?.id) {
+        const overlayNode = find(root, snap.activeOverlay.id);
+        if (overlayNode && wp) {
+          if (snap.activeOverlay.backdrop !== false) {
+            ctx.save();
+            ctx.fillStyle = snap.activeOverlay.backdropColor || "rgba(0, 0, 0, 0.45)";
+            ctx.fillRect(
+              snap.panX + wp.x * z,
+              snap.panY + wp.y * z,
+              present.w * z,
+              present.h * z,
+            );
+            ctx.restore();
+          }
+          let ox = wp.x + (present.w - overlayNode.w) / 2;
+          let oy = wp.y + (present.h - overlayNode.h) / 2;
+          if (snap.activeOverlay.position === "bottom") {
+            ox = wp.x + (present.w - overlayNode.w) / 2;
+            oy = wp.y + present.h - overlayNode.h;
+          } else if (snap.activeOverlay.position === "top") {
+            ox = wp.x + (present.w - overlayNode.w) / 2;
+            oy = wp.y;
+          }
+          paint(overlayNode, ox - overlayNode.x, oy - overlayNode.y);
+        }
+      }
     } else {
       for (const ch of root.children) paint(ch, 0, 0);
     }
@@ -623,7 +983,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     }
 
     if (draft.length) {
-      ctx.strokeStyle = "#0d99ff";
+      ctx.strokeStyle = BRAND_ACCENT;
       ctx.lineWidth = 1.5;
       const preview = ghost ? [...draft, ghost] : draft;
       tracePath(ctx, preview, snap.panX, snap.panY, z, false);
@@ -632,7 +992,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         const px = snap.panX + p.x * z;
         const py = snap.panY + p.y * z;
         if ((p.ox && p.ox !== 0) || (p.oy && p.oy !== 0) || (p.ix && p.ix !== 0) || (p.iy && p.iy !== 0)) {
-          ctx.strokeStyle = "#0d99ff";
+          ctx.strokeStyle = BRAND_ACCENT;
           ctx.lineWidth = 1;
           ctx.beginPath();
           ctx.moveTo(px + (p.ix || 0) * z, py + (p.iy || 0) * z);
@@ -650,7 +1010,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           }
         }
         ctx.fillStyle = "#fff";
-        ctx.strokeStyle = "#0d99ff";
+        ctx.strokeStyle = BRAND_ACCENT;
         ctx.beginPath();
         ctx.arc(px, py, 3.5, 0, Math.PI * 2);
         ctx.fill();
@@ -659,27 +1019,258 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     }
 
     if (snap.rightTab === "prototype" && !snap.presentFrame) {
-      walkInteractions(root, 0, 0, (n, nx, ny, destId) => {
+      // 1. Render Flow Starting Point Badge ("Flow 1") on starting frame (Figma parity)
+      const flowStartId = snap.pages[snap.page].flowStart;
+      if (flowStartId) {
+        const startWp = worldPos(root, flowStartId);
+        if (startWp) {
+          const fx = snap.panX + startWp.x * z;
+          const fy = snap.panY + startWp.y * z;
+          const badgeText = "Flow 1";
+          ctx.save();
+          ctx.font = "600 11px Inter, system-ui";
+          const tw = ctx.measureText(badgeText).width;
+          const pw = tw + 28;
+          const ph = 22;
+          const px = fx;
+          const py = fy - ph - 8;
+
+          ctx.fillStyle = BRAND_ACCENT;
+          ctx.beginPath();
+          if (typeof ctx.roundRect === "function") {
+            ctx.roundRect(px, py, pw, ph, 11);
+          } else {
+            ctx.rect(px, py, pw, ph);
+          }
+          ctx.fill();
+
+          // Play icon
+          ctx.fillStyle = "#ffffff";
+          ctx.beginPath();
+          ctx.moveTo(px + 8, py + 6);
+          ctx.lineTo(px + 16, py + 11);
+          ctx.lineTo(px + 8, py + 16);
+          ctx.closePath();
+          ctx.fill();
+
+          ctx.fillStyle = "#ffffff";
+          ctx.fillText(badgeText, px + 20, py + 15);
+          ctx.restore();
+        }
+      }
+
+      // 2. Render all interaction connection noodles with smooth Figma S-curve geometry
+      walkInteractions(root, 0, 0, (n, nx, ny, destId, _ix, isOverlay) => {
         const dest = worldPos(root, destId);
         if (!dest) return;
-        const ax = snap.panX + (nx + n.w) * z;
-        const ay = snap.panY + (ny + n.h / 2) * z;
-        const bx = snap.panX + dest.x * z;
-        const by = snap.panY + (dest.y + dest.node.h / 2) * z;
-        ctx.strokeStyle = "#0d99ff";
-        ctx.lineWidth = 1.5;
+
+        const noodle = computeFigmaNoodle(
+          nx,
+          ny,
+          n.w,
+          n.h,
+          dest.x,
+          dest.y,
+          dest.node.w,
+          dest.node.h,
+        );
+
+        const sax = snap.panX + noodle.ax * z;
+        const say = snap.panY + noodle.ay * z;
+        const scp1x = snap.panX + noodle.cp1x * z;
+        const scp1y = snap.panY + noodle.cp1y * z;
+        const scp2x = snap.panX + noodle.cp2x * z;
+        const scp2y = snap.panY + noodle.cp2y * z;
+        const sbx = snap.panX + noodle.bx * z;
+        const sby = snap.panY + noodle.by * z;
+
+        const isSelected = selectedConn && selectedConn.srcId === n.id && selectedConn.destId === destId;
+
+        ctx.save();
+        if (isSelected) {
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = 4.5;
+          ctx.beginPath();
+          ctx.moveTo(sax, say);
+          ctx.bezierCurveTo(scp1x, scp1y, scp2x, scp2y, sbx, sby);
+          ctx.stroke();
+        }
+
+        ctx.strokeStyle = isOverlay ? "#a855f7" : BRAND_ACCENT;
+        ctx.lineWidth = isSelected ? 2.5 : 1.8;
+        if (isOverlay) ctx.setLineDash([5, 4]);
+
         ctx.beginPath();
-        ctx.moveTo(ax, ay);
-        ctx.bezierCurveTo(ax + 40, ay, bx - 40, by, bx, by);
+        ctx.moveTo(sax, say);
+        ctx.bezierCurveTo(scp1x, scp1y, scp2x, scp2y, sbx, sby);
         ctx.stroke();
+
+        // Source circular anchor dot
+        ctx.fillStyle = isOverlay ? "#a855f7" : BRAND_ACCENT;
         ctx.beginPath();
-        ctx.arc(ax, ay, 5, 0, Math.PI * 2);
-        ctx.fillStyle = "#0d99ff";
+        ctx.arc(sax, say, isSelected ? 5.5 : 4.5, 0, Math.PI * 2);
         ctx.fill();
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = isSelected ? 2 : 1.25;
+        ctx.stroke();
+
+        // Destination rotated arrowhead
+        ctx.save();
+        ctx.translate(sbx, sby);
+        ctx.rotate(noodle.angle);
+        ctx.fillStyle = isOverlay ? "#a855f7" : BRAND_ACCENT;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(-8, -4.5);
+        ctx.lineTo(-6.5, 0);
+        ctx.lineTo(-8, 4.5);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+
+        ctx.restore();
       });
+
+      // 3. Hotspot connector handles on selected node (4 sides)
+      if (snap.selection.length === 1) {
+        const wp = worldPos(root, snap.selection[0]);
+        if (wp) {
+          const sx = snap.panX + wp.x * z;
+          const sy = snap.panY + wp.y * z;
+          const sw = wp.node.w * z;
+          const sh = wp.node.h * z;
+
+          const handles = [
+            { x: sx + sw, y: sy + sh / 2 },
+            { x: sx + sw / 2, y: sy + sh },
+            { x: sx, y: sy + sh / 2 },
+            { x: sx + sw / 2, y: sy },
+          ];
+
+          for (const h of handles) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(h.x, h.y, 6.5, 0, Math.PI * 2);
+            ctx.fillStyle = BRAND_ACCENT;
+            ctx.fill();
+            ctx.strokeStyle = "#ffffff";
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+
+            // Plus symbol inside handle
+            ctx.beginPath();
+            ctx.strokeStyle = "#ffffff";
+            ctx.lineWidth = 1.5;
+            ctx.moveTo(h.x - 3, h.y);
+            ctx.lineTo(h.x + 3, h.y);
+            ctx.moveTo(h.x, h.y - 3);
+            ctx.lineTo(h.x, h.y + 3);
+            ctx.stroke();
+            ctx.restore();
+          }
+        }
+      }
+
+      // 4. Live dragging noodle using computeFigmaNoodle
+      if (protoDrag) {
+        const srcWp = protoDrag.srcId ? worldPos(root, protoDrag.srcId) : null;
+        const twp = protoDrag.targetId ? worldPos(root, protoDrag.targetId) : null;
+
+        const noodle = computeFigmaNoodle(
+          srcWp ? srcWp.x : protoDrag.fromX,
+          srcWp ? srcWp.y : protoDrag.fromY,
+          srcWp ? srcWp.node.w : 0,
+          srcWp ? srcWp.node.h : 0,
+          twp ? twp.x : protoDrag.toX,
+          twp ? twp.y : protoDrag.toY,
+          twp ? twp.node.w : 0,
+          twp ? twp.node.h : 0,
+          protoDrag.forcedSide,
+        );
+
+        const sax = snap.panX + noodle.ax * z;
+        const say = snap.panY + noodle.ay * z;
+        const scp1x = snap.panX + noodle.cp1x * z;
+        const scp1y = snap.panY + noodle.cp1y * z;
+        const scp2x = snap.panX + noodle.cp2x * z;
+        const scp2y = snap.panY + noodle.cp2y * z;
+        const sbx = snap.panX + noodle.bx * z;
+        const sby = snap.panY + noodle.by * z;
+
+        ctx.save();
+        ctx.strokeStyle = BRAND_ACCENT;
+        ctx.lineWidth = 2.2;
+        ctx.beginPath();
+        ctx.moveTo(sax, say);
+        ctx.bezierCurveTo(scp1x, scp1y, scp2x, scp2y, sbx, sby);
+        ctx.stroke();
+
+        // Source circle
+        ctx.fillStyle = BRAND_ACCENT;
+        ctx.beginPath();
+        ctx.arc(sax, say, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // Destination indicator / arrow
+        if (twp) {
+          ctx.save();
+          ctx.translate(sbx, sby);
+          ctx.rotate(noodle.angle);
+          ctx.fillStyle = BRAND_ACCENT;
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.lineTo(-9, -5);
+          ctx.lineTo(-7, 0);
+          ctx.lineTo(-9, 5);
+          ctx.closePath();
+          ctx.fill();
+          ctx.restore();
+        } else {
+          ctx.fillStyle = BRAND_ACCENT;
+          ctx.beginPath();
+          ctx.arc(sbx, sby, 5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
+
+        // Highlight candidate destination frame
+        if (twp) {
+          ctx.strokeStyle = BRAND_ACCENT;
+          ctx.lineWidth = 2.5;
+          ctx.strokeRect(
+            snap.panX + twp.x * z,
+            snap.panY + twp.y * z,
+            twp.node.w * z,
+            twp.node.h * z,
+          );
+        }
+        ctx.restore();
+      }
     }
 
     if (snap.presentFrame) return;
+
+    if (snap.rightTab === "inspect" && snap.annotations?.length) {
+      for (const ann of snap.annotations) {
+        const wp = worldPos(root, ann.nodeId);
+        if (wp) {
+          const ax = snap.panX + (wp.x + wp.node.w) * z;
+          const ay = snap.panY + wp.y * z;
+          ctx.beginPath();
+          ctx.arc(ax, ay, 6, 0, Math.PI * 2);
+          ctx.fillStyle = "#10b981";
+          ctx.fill();
+          ctx.lineWidth = 1.5;
+          ctx.strokeStyle = "#ffffff";
+          ctx.stroke();
+        }
+      }
+    }
 
     if (hoverId && !snap.selection.includes(hoverId)) {
       const hp = worldPos(root, hoverId);
@@ -694,7 +1285,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           ctx.rotate((hp.node.rotation * Math.PI) / 180);
           ctx.translate(-(hx + hw / 2), -(hy + hh / 2));
         }
-        ctx.strokeStyle = "#0d99ff";
+        ctx.strokeStyle = BRAND_ACCENT;
         ctx.lineWidth = 1;
         ctx.strokeRect(hx + 0.5, hy + 0.5, hw, hh);
         ctx.restore();
@@ -710,7 +1301,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       const sy = snap.panY + wp.y * z;
       const sw = wp.node.w * z;
       const sh = wp.node.h * z;
-      const accent = wp.node.isComponent || wp.node.componentId ? "#7b61ff" : "#0d99ff";
+      const accent = wp.node.isComponent || wp.node.componentId ? "#a855f7" : BRAND_ACCENT;
       ctx.save();
       if (wp.node.rotation || wp.node.flipH || wp.node.flipV) {
         ctx.translate(sx + sw / 2, sy + sh / 2);
@@ -771,7 +1362,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         const ay = sy + (wp.node.fillGY ?? 0) * sh;
         const bx = sx + (wp.node.fillHX ?? 0.5) * sw;
         const by = sy + (wp.node.fillHY ?? 1) * sh;
-        ctx.strokeStyle = "#0d99ff";
+        ctx.strokeStyle = BRAND_ACCENT;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.moveTo(ax, ay);
@@ -788,6 +1379,134 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         ctx.fill();
         ctx.stroke();
       }
+      if (wp.node.kind === "star") {
+        const cx = sx + sw / 2;
+        const cy = sy + sh / 2;
+        const rx = sw / 2;
+        const ry = sh / 2;
+        const pts = Math.max(3, Math.min(60, Math.round(wp.node.count || 5)));
+        const a = Math.PI / pts - Math.PI / 2;
+        const k = Math.max(0.05, Math.min(0.95, wp.node.starRatio ?? 0.4));
+        const hx = cx + Math.cos(a) * rx * k;
+        const hy = cy + Math.sin(a) * ry * k;
+
+        ctx.fillStyle = "#ffffff";
+        ctx.strokeStyle = BRAND_ACCENT;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(hx, hy, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+      if (wp.node.kind === "ellipse" && sw >= 36 && sh >= 36) {
+        const cx = sx + sw / 2;
+        const cy = sy + sh / 2;
+        const rx = sw / 2;
+        const ry = sh / 2;
+        const ea = wp.node.arcData?.endingAngle ?? Math.PI * 2;
+        const ir = wp.node.arcData?.innerRadius ?? 0;
+        const hx = cx + Math.cos(ea) * rx;
+        const hy = cy + Math.sin(ea) * ry;
+
+        ctx.fillStyle = "#ffffff";
+        ctx.strokeStyle = BRAND_ACCENT;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(hx, hy, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        if (ir > 0) {
+          const rhx = cx + Math.cos(ea) * rx * ir;
+          const rhy = cy + Math.sin(ea) * ry * ir;
+          ctx.beginPath();
+          ctx.arc(rhx, rhy, 4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        }
+      }
+      if (
+        (wp.node.kind === "rect" || wp.node.kind === "frame" || wp.node.kind === "component" || wp.node.kind === "instance") &&
+        !vecEdit &&
+        sw >= 36 &&
+        sh >= 36
+      ) {
+        const r0 = wp.node.cornerRadii[0] || 0;
+        const r1 = wp.node.cornerRadii[1] || 0;
+        const r2 = wp.node.cornerRadii[2] || 0;
+        const r3 = wp.node.cornerRadii[3] || 0;
+        const maxOffset = Math.min(sw, sh) / 2 - 4;
+        const o0 = Math.max(9, Math.min(maxOffset, r0 * z + 8));
+        const o1 = Math.max(9, Math.min(maxOffset, r1 * z + 8));
+        const o2 = Math.max(9, Math.min(maxOffset, r2 * z + 8));
+        const o3 = Math.max(9, Math.min(maxOffset, r3 * z + 8));
+
+        const rPins = [
+          [sx + o0, sy + o0],
+          [sx + sw - o1, sy + o1],
+          [sx + sw - o2, sy + sh - o2],
+          [sx + o3, sy + sh - o3],
+        ];
+
+        for (const [rx, ry] of rPins) {
+          ctx.beginPath();
+          ctx.arc(rx, ry, 3.5, 0, Math.PI * 2);
+          ctx.fillStyle = "#ffffff";
+          ctx.fill();
+          ctx.strokeStyle = accent;
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
+      }
+      if (wp.node.layout) {
+        const l = wp.node.layout;
+        const [pl, pr, pt, pb] = l.padding;
+        const pink = "#ff2d55";
+        ctx.fillStyle = pink;
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 1;
+
+        // Top padding handle
+        const ty = sy + pt * z;
+        ctx.beginPath();
+        ctx.arc(sx + sw / 2, ty, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Bottom padding handle
+        const by = sy + sh - pb * z;
+        ctx.beginPath();
+        ctx.arc(sx + sw / 2, by, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Left padding handle
+        const lx = sx + pl * z;
+        ctx.beginPath();
+        ctx.arc(lx, sy + sh / 2, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Right padding handle
+        const rx = sx + sw - pr * z;
+        ctx.beginPath();
+        ctx.arc(rx, sy + sh / 2, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Gap handle between children
+        const flowKids = wp.node.children.filter((c) => c.visible && !c.absolutePosition);
+        if (flowKids.length >= 2) {
+          const c0 = flowKids[0];
+          const horiz = l.direction === "horizontal";
+          const gx = horiz ? sx + (c0.x + c0.w + l.gap / 2) * z : sx + sw / 2;
+          const gy = horiz ? sy + sh / 2 : sy + (c0.y + c0.h + l.gap / 2) * z;
+          ctx.beginPath();
+          ctx.arc(gx, gy, 4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        }
+      }
       ctx.restore();
     }
 
@@ -801,12 +1520,12 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         const sw = bb.w * z;
         const sh = bb.h * z;
         ctx.save();
-        ctx.strokeStyle = "#0d99ff";
+        ctx.strokeStyle = BRAND_ACCENT;
         ctx.lineWidth = 1;
         ctx.strokeRect(sx + 0.5, sy + 0.5, sw, sh);
         for (const [hx, hy] of handles(sx, sy, sw, sh)) {
           ctx.fillStyle = "#ffffff";
-          ctx.strokeStyle = "#0d99ff";
+          ctx.strokeStyle = BRAND_ACCENT;
           ctx.fillRect(hx - 3, hy - 3, 6, 6);
           ctx.strokeRect(hx - 3, hy - 3, 6, 6);
         }
@@ -824,7 +1543,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         const bw = ctx.measureText(dim).width + 16;
         const bx = sx + sw / 2 - bw / 2;
         const by = sy + sh + 8;
-        ctx.fillStyle = "#0d99ff";
+        ctx.fillStyle = BRAND_ACCENT;
         if (typeof ctx.roundRect === "function") {
           ctx.beginPath();
           ctx.roundRect(bx, by, bw, 20, 4);
@@ -900,9 +1619,11 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           if (wp.node.flipH || wp.node.flipV) ctx.scale(wp.node.flipH ? -1 : 1, wp.node.flipV ? -1 : 1);
           ctx.translate(-(vsx + vsw / 2), -(vsy + vsh / 2));
         }
-        ctx.strokeStyle = "#0d99ff";
+        ctx.strokeStyle = BRAND_ACCENT;
         ctx.lineWidth = 1;
-        for (const p of pts) {
+        const vn = wp.node.vectorNetwork;
+        for (let i = 0; i < pts.length; i++) {
+          const p = pts[i];
           const px = snap.panX + (wp.x + p.x) * z;
           const py = snap.panY + (wp.y + p.y) * z;
           if ((p.ox && p.ox !== 0) || (p.oy && p.oy !== 0) || (p.ix && p.ix !== 0) || (p.iy && p.iy !== 0)) {
@@ -921,24 +1642,142 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
               ctx.stroke();
             }
           }
-          ctx.fillStyle = "#fff";
+          const deg = vn ? vertexDegree(vn, i) : 2;
+          const isSelected = (snap.vecPoints && snap.vecPoints.includes(i)) || vecPt.current === i || snap.vecPoint === i;
+          if (deg >= 3) {
+            // Branching node indicator (Figma Vector Network Degree >= 3)
+            ctx.save();
+            ctx.fillStyle = isSelected ? BRAND_ACCENT_GLOW : "rgba(16, 185, 129, 0.25)";
+            ctx.beginPath();
+            ctx.arc(px, py, 9, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = isSelected ? BRAND_ACCENT : "#10b981";
+            ctx.strokeStyle = "#ffffff";
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(px, py - 5);
+            ctx.lineTo(px + 5, py);
+            ctx.lineTo(px, py + 5);
+            ctx.lineTo(px - 5, py);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+          } else {
+            ctx.fillStyle = isSelected ? BRAND_ACCENT : "#fff";
+            ctx.strokeStyle = isSelected ? "#ffffff" : BRAND_ACCENT;
+            ctx.lineWidth = isSelected ? 1.5 : 1;
+            ctx.beginPath();
+            ctx.rect(px - 3.5, py - 3.5, 7, 7);
+            ctx.fill();
+            ctx.stroke();
+          }
+        }
+        ctx.restore();
+      }
+    }
+
+    if (altMeasure && snap.selection.length === 1 && !drag.current) {
+      const A = worldPos(root, snap.selection[0]);
+      if (A) {
+        ctx.save();
+        ctx.strokeStyle = "#ff3b6b";
+        ctx.fillStyle = "#ff3b6b";
+        ctx.lineWidth = 1;
+        ctx.font = "500 10px Inter, system-ui";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+
+        const drawBadge = (label: string, x: number, y: number) => {
+          const bw = ctx.measureText(label).width + 8;
+          ctx.fillStyle = "#ff3b6b";
+          if (typeof ctx.roundRect === "function") {
+            ctx.beginPath();
+            ctx.roundRect(x - bw / 2, y - 7, bw, 14, 3);
+            ctx.fill();
+          } else ctx.fillRect(x - bw / 2, y - 7, bw, 14);
+          ctx.fillStyle = "#ffffff";
+          ctx.fillText(label, x, y);
+          ctx.fillStyle = "#ff3b6b";
+        };
+
+        const drawMeasLine = (x1: number, y1: number, x2: number, y2: number, label: string) => {
           ctx.beginPath();
-          ctx.rect(px - 3.5, py - 3.5, 7, 7);
-          ctx.fill();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x2, y2);
           ctx.stroke();
+          drawBadge(label, (x1 + x2) / 2, (y1 + y2) / 2);
+        };
+
+        const targetWp = hoverId && hoverId !== A.node.id ? worldPos(root, hoverId) : null;
+        if (targetWp) {
+          const B = targetWp;
+          const bsx = snap.panX + B.x * z;
+          const bsy = snap.panY + B.y * z;
+          const bsw = B.node.w * z;
+          const bsh = B.node.h * z;
+          ctx.strokeRect(bsx + 0.5, bsy + 0.5, bsw, bsh);
+
+          const asx = snap.panX + A.x * z;
+          const asy = snap.panY + A.y * z;
+          const asw = A.node.w * z;
+          const ash = A.node.h * z;
+
+          if (B.x >= A.x + A.node.w) {
+            const d = Math.round(B.x - (A.x + A.node.w));
+            const yMid = Math.max(asy, bsy) + Math.min(ash, bsh) / 2;
+            drawMeasLine(asx + asw, yMid, bsx, yMid, `${d}`);
+          } else if (A.x >= B.x + B.node.w) {
+            const d = Math.round(A.x - (B.x + B.node.w));
+            const yMid = Math.max(asy, bsy) + Math.min(ash, bsh) / 2;
+            drawMeasLine(bsx + bsw, yMid, asx, yMid, `${d}`);
+          }
+
+          if (B.y >= A.y + A.node.h) {
+            const d = Math.round(B.y - (A.y + A.node.h));
+            const xMid = Math.max(asx, bsx) + Math.min(asw, bsw) / 2;
+            drawMeasLine(xMid, asy + ash, xMid, bsy, `${d}`);
+          } else if (A.y >= B.y + B.node.h) {
+            const d = Math.round(A.y - (B.y + B.node.h));
+            const xMid = Math.max(asx, bsx) + Math.min(asw, bsw) / 2;
+            drawMeasLine(xMid, bsy + bsh, xMid, asy, `${d}`);
+          }
+        } else {
+          const par = findParent(root, A.node.id);
+          const parWp = par && par.id !== root.id ? worldPos(root, par.id) : null;
+          if (parWp) {
+            const psx = snap.panX + parWp.x * z;
+            const psy = snap.panY + parWp.y * z;
+            const psw = parWp.node.w * z;
+            const psh = parWp.node.h * z;
+            const asx = snap.panX + A.x * z;
+            const asy = snap.panY + A.y * z;
+            const asw = A.node.w * z;
+            const ash = A.node.h * z;
+
+            ctx.setLineDash([3, 2]);
+            const topD = Math.round(A.y - parWp.y);
+            if (topD > 0) drawMeasLine(asx + asw / 2, psy, asx + asw / 2, asy, `${topD}`);
+            const botD = Math.round((parWp.y + parWp.node.h) - (A.y + A.node.h));
+            if (botD > 0) drawMeasLine(asx + asw / 2, asy + ash, asx + asw / 2, psy + psh, `${botD}`);
+            const leftD = Math.round(A.x - parWp.x);
+            if (leftD > 0) drawMeasLine(psx, asy + ash / 2, asx, asy + ash / 2, `${leftD}`);
+            const rightD = Math.round((parWp.x + parWp.node.w) - (A.x + A.node.w));
+            if (rightD > 0) drawMeasLine(asx + asw, asy + ash / 2, psx + psw, asy + ash / 2, `${rightD}`);
+          }
         }
         ctx.restore();
       }
     }
 
     if (band) {
-      ctx.fillStyle = "rgba(13,153,255,0.12)";
-      ctx.strokeStyle = "#0d99ff";
+      ctx.fillStyle = BRAND_ACCENT_WASH;
+      ctx.strokeStyle = BRAND_ACCENT;
       ctx.lineWidth = 1;
       ctx.fillRect(band.x, band.y, band.w, band.h);
       ctx.strokeRect(band.x + 0.5, band.y + 0.5, band.w, band.h);
     }
-  }, [snap, band, edit, engine, theme, draft, vecEdit, hoverId, ghost, guides, gapBadges]);
+  }, [snap, band, edit, engine, theme, draft, vecEdit, hoverId, ghost, guides, gapBadges, altMeasure, protoDrag, selectedConn, animFrame]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();
@@ -999,6 +1838,48 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     if (snap.presentFrame) {
       const wpt = toWorld(e.clientX, e.clientY);
       const root = snap.pages[snap.page].root;
+
+      // Handle active overlay clicks & dismiss
+      if (snap.activeOverlay?.id) {
+        const overlayNode = find(root, snap.activeOverlay.id);
+        const presentNode = find(root, snap.presentFrame);
+        if (overlayNode && presentNode) {
+          const wp = worldPos(root, presentNode.id);
+          if (wp) {
+            let ox = wp.x + (presentNode.w - overlayNode.w) / 2;
+            let oy = wp.y + (presentNode.h - overlayNode.h) / 2;
+            if (snap.activeOverlay.position === "bottom") {
+              ox = wp.x + (presentNode.w - overlayNode.w) / 2;
+              oy = wp.y + presentNode.h - overlayNode.h;
+            } else if (snap.activeOverlay.position === "top") {
+              ox = wp.x + (presentNode.w - overlayNode.w) / 2;
+              oy = wp.y;
+            }
+            if (
+              wpt.x >= ox &&
+              wpt.x <= ox + overlayNode.w &&
+              wpt.y >= oy &&
+              wpt.y <= oy + overlayNode.h
+            ) {
+              let n: XNode | null = hitTest(overlayNode, wpt.x - ox + overlayNode.x, wpt.y - oy + overlayNode.y, { includeLocked: true });
+              while (n) {
+                const ix = (n.interactions ?? []).find((i) => i.trigger === "onClick");
+                if (ix) {
+                  runInteraction(ix);
+                  return;
+                }
+                const p = findParent(overlayNode, n.id);
+                n = p && p !== overlayNode ? p : null;
+              }
+              return;
+            } else if (snap.activeOverlay.closeOutside !== false) {
+              engine.dispatch({ type: "closeOverlay" });
+              return;
+            }
+          }
+        }
+      }
+
       let n: XNode | null = hitTest(root, wpt.x, wpt.y, { includeLocked: true });
       while (n) {
         const ix = (n.interactions ?? []).find((i) => i.trigger === "onClick");
@@ -1157,6 +2038,56 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           py = wp.node.flipV ? cy - (u.y - cy) : u.y;
         }
         const ft = wp.node.fillType;
+        if (snap.rightTab === "prototype") {
+          // Flow starting point badge click
+          const flowStartId = snap.pages[snap.page].flowStart;
+          if (flowStartId) {
+            const startWp = worldPos(root, flowStartId);
+            if (startWp) {
+              const fx = snap.panX + startWp.x * z;
+              const fy = snap.panY + startWp.y * z;
+              if (rawX >= fx && rawX <= fx + 75 && rawY >= fy - 32 && rawY <= fy - 8) {
+                engine.dispatch({ type: "presentStart", id: flowStartId });
+                return;
+              }
+            }
+          }
+
+          const sw = wp.node.w * z;
+          const sh = wp.node.h * z;
+          const handles = [
+            { x: sx + sw, y: sy + sh / 2, side: "right" as const },
+            { x: sx + sw / 2, y: sy + sh, side: "bottom" as const },
+            { x: sx, y: sy + sh / 2, side: "left" as const },
+            { x: sx + sw / 2, y: sy, side: "top" as const },
+          ];
+          for (const h of handles) {
+            if (Math.hypot(rawX - h.x, rawY - h.y) <= 13) {
+              const fromX = wp.x + (h.side === "right" ? wp.node.w : h.side === "left" ? 0 : wp.node.w / 2);
+              const fromY = wp.y + (h.side === "bottom" ? wp.node.h : h.side === "top" ? 0 : wp.node.h / 2);
+              drag.current = {
+                mode: "protoConnect",
+                sx: e.clientX,
+                sy: e.clientY,
+                wx: wpt.x,
+                wy: wpt.y,
+                fromX,
+                fromY,
+                id: wp.node.id,
+                forcedSide: h.side,
+              };
+              setProtoDrag({
+                srcId: wp.node.id,
+                fromX,
+                fromY,
+                toX: wpt.x,
+                toY: wpt.y,
+                forcedSide: h.side,
+              });
+              return;
+            }
+          }
+        }
         if (ft === "linear" || ft === "radial" || ft === "angular" || ft === "diamond") {
           const ax = sx + (wp.node.fillGX ?? 0.5) * wp.node.w * z;
           const ay = sy + (wp.node.fillGY ?? 0) * wp.node.h * z;
@@ -1171,6 +2102,115 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             engine.dispatch({ type: "begin" });
             drag.current = { mode: "grad", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, handle: "h" };
             return;
+          }
+        }
+        if (wp.node.kind === "star") {
+          const sw = wp.node.w * z;
+          const sh = wp.node.h * z;
+          const cx = sx + sw / 2;
+          const cy = sy + sh / 2;
+          const rx = sw / 2;
+          const ry = sh / 2;
+          const pts = Math.max(3, Math.min(60, Math.round(wp.node.count || 5)));
+          const a = Math.PI / pts - Math.PI / 2;
+          const k = Math.max(0.05, Math.min(0.95, wp.node.starRatio ?? 0.4));
+          const hx = cx + Math.cos(a) * rx * k;
+          const hy = cy + Math.sin(a) * ry * k;
+          if (Math.hypot(px - hx, py - hy) <= 9) {
+            engine.dispatch({ type: "begin" });
+            drag.current = {
+              mode: "starRatio",
+              sx: e.clientX,
+              sy: e.clientY,
+              wx: wpt.x,
+              wy: wpt.y,
+              id: wp.node.id,
+            };
+            return;
+          }
+        }
+        if (wp.node.kind === "ellipse") {
+          const sw = wp.node.w * z;
+          const sh = wp.node.h * z;
+          const cx = sx + sw / 2;
+          const cy = sy + sh / 2;
+          const rx = sw / 2;
+          const ry = sh / 2;
+          const ea = wp.node.arcData?.endingAngle ?? Math.PI * 2;
+          const ir = wp.node.arcData?.innerRadius ?? 0;
+          const hx = cx + Math.cos(ea) * rx;
+          const hy = cy + Math.sin(ea) * ry;
+          if (Math.hypot(px - hx, py - hy) <= 9) {
+            engine.dispatch({ type: "begin" });
+            drag.current = {
+              mode: "arc",
+              handle: "out",
+              sx: e.clientX,
+              sy: e.clientY,
+              wx: wpt.x,
+              wy: wpt.y,
+              id: wp.node.id,
+            };
+            return;
+          }
+          if (ir > 0) {
+            const rhx = cx + Math.cos(ea) * rx * ir;
+            const rhy = cy + Math.sin(ea) * ry * ir;
+            if (Math.hypot(px - rhx, py - rhy) <= 9) {
+              engine.dispatch({ type: "begin" });
+              drag.current = {
+                mode: "arc",
+                handle: "in",
+                sx: e.clientX,
+                sy: e.clientY,
+                wx: wpt.x,
+                wy: wpt.y,
+                id: wp.node.id,
+              };
+              return;
+            }
+          }
+        }
+        if (
+          (wp.node.kind === "rect" || wp.node.kind === "frame" || wp.node.kind === "component" || wp.node.kind === "instance") &&
+          !vecEdit &&
+          wp.node.w * z >= 36 &&
+          wp.node.h * z >= 36
+        ) {
+          const sw = wp.node.w * z;
+          const sh = wp.node.h * z;
+          const r0 = wp.node.cornerRadii[0] || 0;
+          const r1 = wp.node.cornerRadii[1] || 0;
+          const r2 = wp.node.cornerRadii[2] || 0;
+          const r3 = wp.node.cornerRadii[3] || 0;
+          const maxOffset = Math.min(sw, sh) / 2 - 4;
+          const o0 = Math.max(9, Math.min(maxOffset, r0 * z + 8));
+          const o1 = Math.max(9, Math.min(maxOffset, r1 * z + 8));
+          const o2 = Math.max(9, Math.min(maxOffset, r2 * z + 8));
+          const o3 = Math.max(9, Math.min(maxOffset, r3 * z + 8));
+
+          const rPins = [
+            [sx + o0, sy + o0],
+            [sx + sw - o1, sy + o1],
+            [sx + sw - o2, sy + sh - o2],
+            [sx + o3, sy + sh - o3],
+          ];
+
+          for (let ci = 0; ci < 4; ci++) {
+            const [rx, ry] = rPins[ci];
+            if (Math.hypot(px - rx, py - ry) <= 7) {
+              engine.dispatch({ type: "begin" });
+              drag.current = {
+                mode: "radius",
+                corner: ci,
+                sx: e.clientX,
+                sy: e.clientY,
+                wx: wpt.x,
+                wy: wpt.y,
+                id: wp.node.id,
+              };
+              return;
+            }
           }
         }
         if (vecEdit === wp.node.id) {
@@ -1191,8 +2231,48 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             }
             if (Math.hypot(px - vx, py - vy) < 8) {
               engine.dispatch({ type: "begin" });
+              const multi = e.shiftKey;
+              let nextSel = snap.vecPoints && snap.vecPoints.length > 0 ? [...snap.vecPoints] : (vecPt.current >= 0 ? [vecPt.current] : []);
+              if (multi) {
+                if (nextSel.includes(i)) {
+                  nextSel = nextSel.filter((idx) => idx !== i);
+                } else {
+                  nextSel.push(i);
+                }
+              } else {
+                if (!nextSel.includes(i)) {
+                  nextSel = [i];
+                }
+              }
               vecPt.current = i;
-              drag.current = { mode: "vec", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, point: i };
+              setVecEdit(wp.node.id, i, nextSel);
+              drag.current = { mode: "vec", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, point: i, origPts: pts.map((pt) => ({ ...pt })) };
+              return;
+            }
+          }
+          const local = nodeLocalPoint(wpt.x, wpt.y, wp.x, wp.y, wp.node);
+          const meta = e.metaKey || e.ctrlKey || e.altKey;
+          if (meta) {
+            const npts = pts.length;
+            const count = wp.node.closed ? npts : npts - 1;
+            for (let si = 0; si < count; si++) {
+              const p1 = pts[si];
+              const p2 = pts[(si + 1) % npts];
+              const pr = projectPointOnSegment(local.x, local.y, p1.x, p1.y, p2.x, p2.y);
+              if (pr.dist < 12 / snap.zoom && pr.t > 0.05 && pr.t < 0.95) {
+                engine.dispatch({ type: "begin" });
+                drag.current = { mode: "bend", id: wp.node.id, segIndex: si, sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y };
+                toast("Bending segment (Bend tool)");
+                return;
+              }
+            }
+          } else {
+            const res = insertPointOnPath(pts, local.x, local.y, wp.node.closed, 10 / snap.zoom);
+            if (res) {
+              engine.dispatch({ type: "insertPointOnPath", id: wp.node.id, x: local.x, y: local.y });
+              vecPt.current = res.insertedIndex;
+              setVecEdit(wp.node.id, res.insertedIndex);
+              toast("Point added on path");
               return;
             }
           }
@@ -1226,8 +2306,58 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             return;
           }
         }
+        if (wp.node.layout) {
+          const l = wp.node.layout;
+          const [pl, pr, pt, pb] = l.padding;
+          const sw = wp.node.w * z;
+          const sh = wp.node.h * z;
+          if (Math.hypot(px - (sx + sw / 2), py - (sy + pt * z)) < 8) {
+            engine.dispatch({ type: "begin" });
+            drag.current = { mode: "autoPad", padEdge: "top", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, origPad: [...l.padding] };
+            return;
+          }
+          if (Math.hypot(px - (sx + sw / 2), py - (sy + sh - pb * z)) < 8) {
+            engine.dispatch({ type: "begin" });
+            drag.current = { mode: "autoPad", padEdge: "bottom", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, origPad: [...l.padding] };
+            return;
+          }
+          if (Math.hypot(px - (sx + pl * z), py - (sy + sh / 2)) < 8) {
+            engine.dispatch({ type: "begin" });
+            drag.current = { mode: "autoPad", padEdge: "left", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, origPad: [...l.padding] };
+            return;
+          }
+          if (Math.hypot(px - (sx + sw - pr * z), py - (sy + sh / 2)) < 8) {
+            engine.dispatch({ type: "begin" });
+            drag.current = { mode: "autoPad", padEdge: "right", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, origPad: [...l.padding] };
+            return;
+          }
+          const flowKids = wp.node.children.filter((c) => c.visible && !c.absolutePosition);
+          if (flowKids.length >= 2) {
+            const c0 = flowKids[0];
+            const horiz = l.direction === "horizontal";
+            const gx = horiz ? sx + (c0.x + c0.w + l.gap / 2) * z : sx + sw / 2;
+            const gy = horiz ? sy + sh / 2 : sy + (c0.y + c0.h + l.gap / 2) * z;
+            if (Math.hypot(px - gx, py - gy) < 8) {
+              engine.dispatch({ type: "begin" });
+              drag.current = { mode: "autoGap", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, origGap: l.gap };
+              return;
+            }
+          }
+        }
       }
     }
+
+    if (snap.rightTab === "prototype" && !snap.presentFrame) {
+      const hitConn = findClickedNoodle(root, wpt, snap.zoom);
+      if (hitConn) {
+        setSelectedConn(hitConn);
+        engine.dispatch({ type: "select", ids: [hitConn.srcId] });
+        return;
+      } else if (selectedConn) {
+        setSelectedConn(null);
+      }
+    }
+
     const hit = hitTest(root, wpt.x, wpt.y, {
       deep: e.metaKey || e.ctrlKey,
       selection: snap.selection,
@@ -1248,7 +2378,9 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         wy: wpt.y,
       };
     } else {
-      engine.dispatch({ type: "select", ids: [] });
+      if (!vecEdit) {
+        engine.dispatch({ type: "select", ids: [] });
+      }
       drag.current = { mode: "marquee", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y };
     }
   };
@@ -1274,6 +2406,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       return;
     }
     if (!drag.current && !penDrag.current && !pencil.current && snap.tool === "select") {
+      if (e.altKey !== altMeasure) setAltMeasure(e.altKey);
       const wpt = toWorld(e.clientX, e.clientY);
       const hit = hitTest(snap.pages[snap.page].root, wpt.x, wpt.y, { selection: snap.selection });
       const id = hit && !snap.selection.includes(hit.id) ? hit.id : "";
@@ -1316,6 +2449,32 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             // Just outside a corner is the rotate zone, as in Figma.
             if (i % 2 === 0 && Math.hypot(hx - hs[i][0], hy - hs[i][1]) < 18) next = "grab";
           }
+          if (!next && bb?.node.layout) {
+            const l = bb.node.layout;
+            const [pl, pr, pt, pb] = l.padding;
+            const sw0 = box.w * z;
+            const sh0 = box.h * z;
+            if (Math.hypot(hx - (sx0 + sw0 / 2), hy - (sy0 + pt * z)) < 8) {
+              next = "ns-resize";
+            } else if (Math.hypot(hx - (sx0 + sw0 / 2), hy - (sy0 + sh0 - pb * z)) < 8) {
+              next = "ns-resize";
+            } else if (Math.hypot(hx - (sx0 + pl * z), hy - (sy0 + sh0 / 2)) < 8) {
+              next = "ew-resize";
+            } else if (Math.hypot(hx - (sx0 + sw0 - pr * z), hy - (sy0 + sh0 / 2)) < 8) {
+              next = "ew-resize";
+            } else {
+              const flowKids = bb.node.children.filter((c) => c.visible && !c.absolutePosition);
+              if (flowKids.length >= 2) {
+                const c0 = flowKids[0];
+                const horiz = l.direction === "horizontal";
+                const gx = horiz ? sx0 + (c0.x + c0.w + l.gap / 2) * z : sx0 + sw0 / 2;
+                const gy = horiz ? sy0 + sh0 / 2 : sy0 + (c0.y + c0.h + l.gap / 2) * z;
+                if (Math.hypot(hx - gx, hy - gy) < 8) {
+                  next = horiz ? "col-resize" : "row-resize";
+                }
+              }
+            }
+          }
           if (
             !next &&
             hx >= sx0 &&
@@ -1324,6 +2483,13 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             hy <= sy0 + box.h * z
           ) {
             next = "move";
+          }
+          if (snap.rightTab === "prototype" && bb) {
+            const cx = sx0 + box.w * z;
+            const cy = sy0 + (box.h * z) / 2;
+            if (Math.hypot(px0 - cx, py0 - cy) <= 12) {
+              next = "crosshair";
+            }
           }
         }
       }
@@ -1374,6 +2540,33 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       engine.dispatch({ type: "pan", dx: e.clientX - d.sx, dy: e.clientY - d.sy });
       d.sx = e.clientX;
       d.sy = e.clientY;
+    } else if (d.mode === "protoConnect" && d.id) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      const root = snap.pages[snap.page].root;
+      let targetId: string | undefined = undefined;
+      for (const ch of root.children) {
+        if (ch.id !== d.id && ch.kind === "frame") {
+          const wp = worldPos(root, ch.id);
+          if (wp && wpt.x >= wp.x && wpt.x <= wp.x + wp.node.w && wpt.y >= wp.y && wpt.y <= wp.y + wp.node.h) {
+            targetId = ch.id;
+            break;
+          }
+        }
+      }
+      if (!targetId) {
+        const hit = hitTest(root, wpt.x, wpt.y, { includeLocked: false });
+        if (hit && hit.id !== d.id) targetId = hit.id;
+      }
+      setProtoDrag({
+        srcId: d.id,
+        fromX: d.fromX ?? wpt.x,
+        fromY: d.fromY ?? wpt.y,
+        toX: wpt.x,
+        toY: wpt.y,
+        targetId,
+        forcedSide: d.forcedSide,
+      });
+      return;
     } else if (d.mode === "move" && (snap.tool === "select" || snap.tool === "scale")) {
       if (e.altKey && !d.duped) {
         engine.dispatch({ type: "duplicate" });
@@ -1555,14 +2748,62 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         if (d.handle === "in") {
           p.ix = lx - p.x;
           p.iy = ly - p.y;
+          if (p.mirrorMode === "angleAndLength" && !e.altKey) {
+            p.ox = -p.ix;
+            p.oy = -p.iy;
+          } else if (p.mirrorMode === "angle" && !e.altKey && (p.ox || p.oy)) {
+            const inLen = Math.hypot(p.ix, p.iy);
+            const outLen = Math.hypot(p.ox || 0, p.oy || 0);
+            if (inLen > 0.001) {
+              p.ox = (-p.ix / inLen) * outLen;
+              p.oy = (-p.iy / inLen) * outLen;
+            }
+          }
         } else if (d.handle === "out") {
           p.ox = lx - p.x;
           p.oy = ly - p.y;
+          if (p.mirrorMode === "angleAndLength" && !e.altKey) {
+            p.ix = -p.ox;
+            p.iy = -p.oy;
+          } else if (p.mirrorMode === "angle" && !e.altKey && (p.ix || p.iy)) {
+            const outLen = Math.hypot(p.ox, p.oy);
+            const inLen = Math.hypot(p.ix || 0, p.iy || 0);
+            if (outLen > 0.001) {
+              p.ix = (-p.ox / outLen) * inLen;
+              p.iy = (-p.oy / outLen) * inLen;
+            }
+          }
         } else {
-          p.x = lx;
-          p.y = ly;
+          const movingIndices = snap.vecPoints && snap.vecPoints.includes(d.point) ? snap.vecPoints : [d.point];
+          if (movingIndices.length > 1 && d.origPts) {
+            const origP = d.origPts[d.point];
+            const totalDx = lx - origP.x;
+            const totalDy = ly - origP.y;
+            for (const idx of movingIndices) {
+              if (d.origPts[idx] && pts[idx]) {
+                pts[idx].x = d.origPts[idx].x + totalDx;
+                pts[idx].y = d.origPts[idx].y + totalDy;
+              }
+            }
+          } else {
+            p.x = lx;
+            p.y = ly;
+          }
         }
         engine.dispatch({ type: "patchPath", id: n.id, path: pts, closed: n.closed });
+      }
+    } else if (d.mode === "bend" && d.id != null && d.segIndex != null) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      const loc = worldPos(snap.pages[snap.page].root, d.id);
+      if (loc) {
+        const local = nodeLocalPoint(wpt.x, wpt.y, loc.x, loc.y, loc.node);
+        engine.dispatch({
+          type: "bendSegment",
+          id: d.id,
+          segIndex: d.segIndex,
+          dragX: local.x,
+          dragY: local.y,
+        });
       }
     } else if (d.mode === "rotate" && d.orig && d.id) {
       const wp = worldPos(snap.pages[snap.page].root, d.id);
@@ -1573,6 +2814,102 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       let ang = (Math.atan2(b.y - cy, b.x - cx) * 180) / Math.PI + 90;
       if (e.shiftKey) ang = Math.round(ang / 15) * 15;
       engine.dispatch({ type: "patch", id: d.id, patch: { rotation: Math.round(ang) } });
+    } else if (d.mode === "autoPad" && d.id && d.padEdge && d.origPad) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      const wp = worldPos(snap.pages[snap.page].root, d.id);
+      if (wp?.node.layout) {
+        const [pl, pr, pt, pb] = d.origPad;
+        const dx = Math.round(wpt.x - d.wx);
+        const dy = Math.round(wpt.y - d.wy);
+        const nextPad: [number, number, number, number] = [pl, pr, pt, pb];
+        if (d.padEdge === "top") nextPad[2] = Math.max(0, pt + dy);
+        else if (d.padEdge === "bottom") nextPad[3] = Math.max(0, pb - dy);
+        else if (d.padEdge === "left") nextPad[0] = Math.max(0, pl + dx);
+        else if (d.padEdge === "right") nextPad[1] = Math.max(0, pr - dx);
+        engine.dispatch({ type: "autoLayout", id: d.id, layout: { ...wp.node.layout, padding: nextPad } });
+      }
+    } else if (d.mode === "autoGap" && d.id && d.origGap != null) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      const wp = worldPos(snap.pages[snap.page].root, d.id);
+      if (wp?.node.layout) {
+        const horiz = wp.node.layout.direction === "horizontal";
+        const delta = Math.round(horiz ? wpt.x - d.wx : wpt.y - d.wy);
+        const nextGap = Math.max(0, d.origGap + delta);
+        engine.dispatch({ type: "autoLayout", id: d.id, layout: { ...wp.node.layout, gap: nextGap } });
+      }
+    } else if (d.mode === "starRatio" && d.id) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      const wp = worldPos(snap.pages[snap.page].root, d.id);
+      if (wp) {
+        const cx = wp.x + wp.node.w / 2;
+        const cy = wp.y + wp.node.h / 2;
+        const maxR = Math.hypot(wp.node.w / 2, wp.node.h / 2);
+        const curR = Math.hypot(wpt.x - cx, wpt.y - cy);
+        const ratio = Math.max(0.05, Math.min(0.95, curR / (maxR || 1)));
+        engine.dispatch({ type: "patch", id: d.id, patch: { starRatio: ratio } });
+      }
+    } else if (d.mode === "radius" && d.id) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      const wp = worldPos(snap.pages[snap.page].root, d.id);
+      if (wp) {
+        const ci = d.corner ?? 0;
+        let dist = 0;
+        if (ci === 0) {
+          dist = Math.min(wpt.x - wp.x, wpt.y - wp.y);
+        } else if (ci === 1) {
+          dist = Math.min(wp.x + wp.node.w - wpt.x, wpt.y - wp.y);
+        } else if (ci === 2) {
+          dist = Math.min(wp.x + wp.node.w - wpt.x, wp.y + wp.node.h - wpt.y);
+        } else {
+          dist = Math.min(wpt.x - wp.x, wp.y + wp.node.h - wpt.y);
+        }
+        const maxR = Math.min(wp.node.w, wp.node.h) / 2;
+        const newR = Math.max(0, Math.min(maxR, Math.round(dist)));
+        if (e.altKey) {
+          const nextRadii: [number, number, number, number] = [...wp.node.cornerRadii];
+          nextRadii[ci] = newR;
+          engine.dispatch({
+            type: "patch",
+            id: d.id,
+            patch: { cornerRadii: nextRadii, cornerIndependent: true },
+          });
+        } else {
+          const nextRadii: [number, number, number, number] = [newR, newR, newR, newR];
+          engine.dispatch({
+            type: "patch",
+            id: d.id,
+            patch: { cornerRadii: nextRadii, cornerIndependent: false },
+          });
+        }
+      }
+    } else if (d.mode === "arc" && d.id) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      const wp = worldPos(snap.pages[snap.page].root, d.id);
+      if (wp) {
+        const cx = wp.x + wp.node.w / 2;
+        const cy = wp.y + wp.node.h / 2;
+        const curArc = wp.node.arcData ?? { startingAngle: 0, endingAngle: Math.PI * 2, innerRadius: 0 };
+        if (d.handle === "in") {
+          const maxR = Math.min(wp.node.w, wp.node.h) / 2;
+          const curR = Math.hypot(wpt.x - cx, wpt.y - cy);
+          const ratio = Math.max(0, Math.min(0.95, curR / (maxR || 1)));
+          engine.dispatch({
+            type: "patch",
+            id: d.id,
+            patch: { arcData: { ...curArc, innerRadius: Math.round(ratio * 100) / 100 } },
+          });
+        } else {
+          let ang = Math.atan2(wpt.y - cy, wpt.x - cx);
+          if (ang < 0) ang += Math.PI * 2;
+          if (e.shiftKey) ang = Math.round((ang * 180) / Math.PI / 15) * (Math.PI / 12);
+          if (ang > Math.PI * 2 - 0.05) ang = Math.PI * 2;
+          engine.dispatch({
+            type: "patch",
+            id: d.id,
+            patch: { arcData: { ...curArc, endingAngle: ang } },
+          });
+        }
+      }
     }
   };
 
@@ -1602,6 +2939,45 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     setGuides([]);
     setGapBadges([]);
     if (!d) return;
+    if (d.mode === "protoConnect" && d.id) {
+      if (protoDrag?.targetId) {
+        const root = snap.pages[snap.page].root;
+        const srcNode = find(root, d.id);
+        const targetNode = find(root, protoDrag.targetId);
+        if (srcNode && targetNode) {
+          const prev = srcNode.interactions ?? [];
+          engine.dispatch({
+            type: "setInteractions",
+            id: d.id,
+            interactions: [
+              ...prev,
+              {
+                trigger: "onClick",
+                action: "navigate",
+                destination: protoDrag.targetId,
+                animation: "instant",
+                delay: 0,
+              },
+            ],
+          });
+          // Auto-set flow starting point on first connection (Figma parity)
+          const currentPage = snap.pages[snap.page];
+          if (!currentPage.flowStart) {
+            let startFrame: XNode | null = srcNode.kind === "frame" ? srcNode : findParent(root, srcNode.id);
+            while (startFrame && startFrame.kind !== "frame" && startFrame !== root) {
+              startFrame = findParent(root, startFrame.id);
+            }
+            const flowId = startFrame && startFrame !== root ? startFrame.id : (srcNode.kind === "frame" ? srcNode.id : targetNode.id);
+            if (flowId) {
+              engine.dispatch({ type: "patchPage", patch: { flowStart: flowId } });
+            }
+          }
+          toast(`Connected to ${targetNode.name}`);
+        }
+      }
+      setProtoDrag(null);
+      return;
+    }
     if (
       d.mode === "move" ||
       d.mode === "resize" ||
@@ -1609,6 +2985,8 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       d.mode === "grad" ||
       d.mode === "multiResize" ||
       d.mode === "multiRotate" ||
+      d.mode === "autoPad" ||
+      d.mode === "autoGap" ||
       (d.mode === "marquee" && d.id === "erase")
     )
       engine.dispatch({ type: "end" });
@@ -1759,7 +3137,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
                 name: "Slice",
                 fill: "#00000000",
                 fillVisible: false,
-                strokePaint: "#0d99ff",
+                strokePaint: BRAND_ACCENT,
                 strokeVisible: true,
                 strokeWidth: 1,
                 strokeDash: 4,
@@ -1798,6 +3176,35 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       const y0 = Math.min(a.y, b.y);
       const x1 = Math.max(a.x, b.x);
       const y1 = Math.max(a.y, b.y);
+      const isDrag = Math.hypot(e.clientX - d.sx, e.clientY - d.sy) >= 4;
+
+      if (vecEdit) {
+        const wp = worldPos(snap.pages[snap.page].root, vecEdit);
+        if (wp) {
+          const pts = wp.node.path.length ? wp.node.path : shapePoly(wp.node);
+          if (isDrag) {
+            const hitIndices: number[] = [];
+            for (let i = 0; i < pts.length; i++) {
+              const p = pts[i];
+              const wx = wp.x + p.x;
+              const wy = wp.y + p.y;
+              if (wx >= x0 && wx <= x1 && wy >= y0 && wy <= y1) {
+                hitIndices.push(i);
+              }
+            }
+            const shift = e.shiftKey;
+            const prev = snap.vecPoints ?? (vecPt.current >= 0 ? [vecPt.current] : []);
+            const finalIndices = shift ? Array.from(new Set([...prev, ...hitIndices])) : hitIndices;
+            vecPt.current = finalIndices.length ? finalIndices[0] : -1;
+            setVecEdit(vecEdit, finalIndices.length ? finalIndices[0] : null, finalIndices);
+          } else {
+            vecPt.current = -1;
+            setVecEdit(vecEdit, null, []);
+          }
+          return;
+        }
+      }
+
       const ids: string[] = [];
       const deep = e.metaKey || e.ctrlKey;
       const visit = (n: XNode, px: number, py: number, top: boolean) => {
@@ -1870,7 +3277,11 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       engine.dispatch({ type: "select", ids: [hit.id] });
       if (hit.kind !== "vector") engine.dispatch({ type: "flatten" });
       setVecEdit(hit.id);
-    } else if (hit) engine.dispatch({ type: "select", ids: [hit.id] });
+    } else if (hit) {
+      engine.dispatch({ type: "select", ids: [hit.id] });
+    } else if (vecEdit) {
+      setVecEdit(null, null, []);
+    }
   };
 
   const onLeave = (e: React.MouseEvent) => {
@@ -2052,8 +3463,8 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       height: textH * snap.zoom,
       fontSize: wp.node.fontSize * snap.zoom,
       fontWeight: wp.node.fontWeight,
-      lineHeight: (wp.node.lineHeight || wp.node.fontSize * 1.2) * snap.zoom,
-      letterSpacing: wp.node.letterSpacing * snap.zoom,
+      lineHeight: `${(wp.node.lineHeight || wp.node.fontSize * 1.2) * snap.zoom}px`,
+      letterSpacing: `${wp.node.letterSpacing * snap.zoom}px`,
       textAlign: wp.node.textAlign === "justified" ? "left" : wp.node.textAlign,
       color: wp.node.fill,
       fontFamily: wp.node.fontFamily,
@@ -2183,6 +3594,54 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           e.target.value = "";
         }}
       />
+      {selectedConn && snap.rightTab === "prototype" && !snap.presentFrame && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "absolute",
+            left: snap.panX + selectedConn.midX * snap.zoom,
+            top: snap.panY + selectedConn.midY * snap.zoom,
+            transform: "translate(-50%, -50%)",
+            background: "#18181b",
+            color: "#ffffff",
+            padding: "5px 10px",
+            borderRadius: 14,
+            fontSize: 11,
+            fontWeight: 500,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            boxShadow: `0 4px 16px rgba(0,0,0,0.5), 0 0 0 1.5px ${BRAND_ACCENT}`,
+            zIndex: 35,
+            userSelect: "none",
+          }}
+        >
+          <span>{selectedConn.label}</span>
+          <button
+            onClick={() => {
+              engine.dispatch({
+                type: "deleteInteraction",
+                id: selectedConn.srcId,
+                destId: selectedConn.destId,
+              });
+              setSelectedConn(null);
+              toast("Connection deleted");
+            }}
+            title="Delete connection (⌫)"
+            style={{
+              background: "transparent",
+              border: 0,
+              color: "rgba(255,255,255,0.7)",
+              cursor: "pointer",
+              padding: 0,
+              display: "flex",
+              alignItems: "center",
+            }}
+          >
+            <Icon name="close" size={12} />
+          </button>
+        </div>
+      )}
       {menu && (
         <ContextMenu
           x={menu.x}
@@ -2227,6 +3686,29 @@ function paintNoise(
     const h2 = Math.sin(seed * 4.1414 + i * 19.19) * 23421.631;
     const r2 = h2 - Math.floor(h2);
     ctx.fillRect(sx + r * sw, sy + r2 * sh, 1, 1);
+  }
+  ctx.restore();
+}
+
+function paintTexture(
+  ctx: CanvasRenderingContext2D,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+  density = 16,
+  scale = 4,
+) {
+  if (sw < 1 || sh < 1) return;
+  ctx.save();
+  ctx.clip();
+  ctx.fillStyle = "#000000";
+  ctx.globalAlpha = Math.max(0.04, Math.min(0.3, density / 100));
+  const step = Math.max(2, Math.round(scale));
+  for (let x = sx; x < sx + sw; x += step * 2) {
+    for (let y = sy; y < sy + sh; y += step * 2) {
+      ctx.fillRect(x, y, 1, 1);
+    }
   }
   ctx.restore();
 }
@@ -2365,11 +3847,17 @@ function resizeFrom(
       w = bx - o.x;
     }
   }
-  if (opts?.aspect && o.w > 0) {
+  if (opts?.aspect && o.w > 0 && o.h > 0) {
     const ratio = o.h / o.w;
-    h = Math.max(1, w * ratio);
-    if (opts.fromCenter) y = cy - h / 2;
-    else if (corner === 0 || corner === 1 || corner === 2) y = bottom - h;
+    if (corner === 1 || corner === 5) {
+      w = Math.max(1, h / ratio);
+      if (opts.fromCenter) x = cx - w / 2;
+      else x = cx - w / 2;
+    } else {
+      h = Math.max(1, w * ratio);
+      if (opts.fromCenter) y = cy - h / 2;
+      else if (corner === 0 || corner === 1 || corner === 2) y = bottom - h;
+    }
   }
   if (w < 1) {
     x += w - 1;
@@ -2390,17 +3878,37 @@ function starPath(
   ry: number,
   n: number,
   ratio = 0.4,
+  cornerRadius = 0,
 ) {
   const pts = Math.max(3, Math.min(60, Math.round(n)));
   const inner = Math.max(0.05, Math.min(0.95, ratio));
-  ctx.beginPath();
+  const vertices: { x: number; y: number }[] = [];
   for (let i = 0; i < pts * 2; i++) {
     const a = (i * Math.PI) / pts - Math.PI / 2;
     const k = i % 2 === 0 ? 1 : inner;
-    const x = cx + Math.cos(a) * rx * k;
-    const y = cy + Math.sin(a) * ry * k;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
+    vertices.push({
+      x: cx + Math.cos(a) * rx * k,
+      y: cy + Math.sin(a) * ry * k,
+    });
+  }
+  ctx.beginPath();
+  const len = vertices.length;
+  if (cornerRadius <= 0) {
+    for (let i = 0; i < len; i++) {
+      if (i === 0) ctx.moveTo(vertices[i].x, vertices[i].y);
+      else ctx.lineTo(vertices[i].x, vertices[i].y);
+    }
+  } else {
+    const cr = Math.min(cornerRadius, Math.min(rx, ry) * 0.4);
+    for (let i = 0; i < len; i++) {
+      const pPrev = vertices[(i - 1 + len) % len];
+      const pCurr = vertices[i];
+      const pNext = vertices[(i + 1) % len];
+      if (i === 0) {
+        ctx.moveTo((pPrev.x + pCurr.x) / 2, (pPrev.y + pCurr.y) / 2);
+      }
+      ctx.arcTo(pCurr.x, pCurr.y, pNext.x, pNext.y, cr);
+    }
   }
   ctx.closePath();
 }
@@ -2479,6 +3987,72 @@ function tracePath(
       );
     }
     ctx.closePath();
+  }
+}
+
+function traceVectorNetwork(
+  ctx: CanvasRenderingContext2D,
+  vn: VectorNetwork,
+  ox: number,
+  oy: number,
+  z: number,
+) {
+  ctx.beginPath();
+  if (vn.regions && vn.regions.length > 0) {
+    for (const region of vn.regions) {
+      for (const loop of region.loops) {
+        if (!loop.length) continue;
+        const v0 = vn.vertices[loop[0]];
+        if (!v0) continue;
+        ctx.moveTo(ox + v0.x * z, oy + v0.y * z);
+        for (let i = 0; i < loop.length; i++) {
+          const curIdx = loop[i];
+          const nxtIdx = loop[(i + 1) % loop.length];
+          const curV = vn.vertices[curIdx];
+          const nxtV = vn.vertices[nxtIdx];
+          const seg = vn.segments.find(
+            (s) =>
+              (s.start === curIdx && s.end === nxtIdx) ||
+              (s.start === nxtIdx && s.end === curIdx),
+          );
+          if (seg && (seg.tangentStart || seg.tangentEnd)) {
+            const isFwd = seg.start === curIdx;
+            const tStart = isFwd ? seg.tangentStart : seg.tangentEnd;
+            const tEnd = isFwd ? seg.tangentEnd : seg.tangentStart;
+            ctx.bezierCurveTo(
+              ox + (curV.x + (tStart?.x || 0)) * z,
+              oy + (curV.y + (tStart?.y || 0)) * z,
+              ox + (nxtV.x + (tEnd?.x || 0)) * z,
+              oy + (nxtV.y + (tEnd?.y || 0)) * z,
+              ox + nxtV.x * z,
+              oy + nxtV.y * z,
+            );
+          } else {
+            ctx.lineTo(ox + nxtV.x * z, oy + nxtV.y * z);
+          }
+        }
+        ctx.closePath();
+      }
+    }
+  } else {
+    for (const seg of vn.segments) {
+      const v0 = vn.vertices[seg.start];
+      const v1 = vn.vertices[seg.end];
+      if (!v0 || !v1) continue;
+      ctx.moveTo(ox + v0.x * z, oy + v0.y * z);
+      if (seg.tangentStart || seg.tangentEnd) {
+        ctx.bezierCurveTo(
+          ox + (v0.x + (seg.tangentStart?.x || 0)) * z,
+          oy + (v0.y + (seg.tangentStart?.y || 0)) * z,
+          ox + (v1.x + (seg.tangentEnd?.x || 0)) * z,
+          oy + (v1.y + (seg.tangentEnd?.y || 0)) * z,
+          ox + v1.x * z,
+          oy + v1.y * z,
+        );
+      } else {
+        ctx.lineTo(ox + v1.x * z, oy + v1.y * z);
+      }
+    }
   }
 }
 
@@ -2714,14 +4288,47 @@ function walkInteractions(
   n: XNode,
   px: number,
   py: number,
-  fn: (n: XNode, x: number, y: number, dest: string) => void,
+  fn: (n: XNode, x: number, y: number, dest: string, ix: Interaction, isOverlay: boolean) => void,
 ) {
   const x = px + n.x;
   const y = py + n.y;
   for (const ix of n.interactions ?? []) {
-    if (ix.action === "navigate" && ix.destination) fn(n, x, y, ix.destination);
+    if (ix.destination) {
+      const isOverlay = ix.action === "openOverlay" || ix.action === "swapOverlay";
+      if (ix.action === "navigate" || isOverlay) {
+        fn(n, x, y, ix.destination, ix, isOverlay);
+      }
+    }
   }
   for (const c of n.children) walkInteractions(c, x, y, fn);
+}
+
+function findClickedNoodle(
+  root: XNode,
+  wpt: { x: number; y: number },
+  zoom: number,
+): { srcId: string; destId: string; midX: number; midY: number; label: string } | null {
+  let hit: { srcId: string; destId: string; midX: number; midY: number; label: string } | null = null;
+  walkInteractions(root, 0, 0, (n, nx, ny, destId, ix) => {
+    if (hit) return;
+    const dest = worldPos(root, destId);
+    if (!dest) return;
+    const noodle = computeFigmaNoodle(nx, ny, n.w, n.h, dest.x, dest.y, dest.node.w, dest.node.h);
+    for (let step = 0; step <= 16; step++) {
+      const t = step / 16;
+      const u = 1 - t;
+      const px = u * u * u * noodle.ax + 3 * u * u * t * noodle.cp1x + 3 * u * t * t * noodle.cp2x + t * t * t * noodle.bx;
+      const py = u * u * u * noodle.ay + 3 * u * u * t * noodle.cp1y + 3 * u * t * t * noodle.cp2y + t * t * t * noodle.by;
+      if (Math.hypot(wpt.x - px, wpt.y - py) <= 12 / zoom) {
+        const midX = (noodle.ax + noodle.bx) / 2;
+        const midY = (noodle.ay + noodle.by) / 2;
+        const trigLabel = ix.trigger === "onClick" ? "On click" : ix.trigger === "onHover" ? "While hovering" : "On drag";
+        hit = { srcId: n.id, destId, midX, midY, label: `${trigLabel} → ${dest.node.name}` };
+        break;
+      }
+    }
+  });
+  return hit;
 }
 
 const booleanCanvases = new Map<string, HTMLCanvasElement>();

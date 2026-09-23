@@ -32,27 +32,27 @@ recon task, not a settled fact.
 
 | surface | rows | MATCH | PARTIAL | MISSING | EXTRA | OUT |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 Tools (toolbar & shape menu) | 24 | 16 | 3 | 0 | 5 | 0 |
+| 1 Tools (toolbar & shape menu) | 24 | 17 | 2 | 0 | 5 | 0 |
 | 2 Canvas gestures (drag) | 28 | 26 | 1 | 0 | 1 | 0 |
 | 3 Keyboard | 35 | 32 | 2 | 0 | 1 | 0 |
-| 4 Menus & palettes | 10 | 9 | 1 | 0 | 0 | 0 |
-| 5 Layers, pages, sections | 14 | 12 | 2 | 0 | 0 | 0 |
-| 6 Frame & shape properties | 20 | 19 | 0 | 1 | 0 | 0 |
-| 7 Auto layout | 16 | 14 | 1 | 0 | 0 | 1 |
-| 8 Fill, stroke, effects, colour | 25 | 22 | 1 | 2 | 0 | 0 |
+| 4 Menus & palettes | 10 | 10 | 0 | 0 | 0 | 0 |
+| 5 Layers, pages, sections | 14 | 13 | 1 | 0 | 0 | 0 |
+| 6 Frame & shape properties | 20 | 20 | 0 | 0 | 0 | 0 |
+| 7 Auto layout | 16 | 15 | 0 | 0 | 0 | 1 |
+| 8 Fill, stroke, effects, colour | 25 | 25 | 0 | 0 | 0 | 0 |
 | 9 Images | 9 | 7 | 2 | 0 | 0 | 0 |
-| 10 Text & typography | 18 | 17 | 1 | 0 | 0 | 0 |
-| 11 Vector editing & booleans | 20 | 14 | 5 | 1 | 0 | 0 |
-| 12 Components, instances, styles | 21 | 18 | 3 | 0 | 0 | 0 |
-| 13 Variables & modes | 9 | 6 | 3 | 0 | 0 | 0 |
-| 14 Prototype | 30 | 20 | 9 | 0 | 0 | 1 |
-| 15 Inspect, dev mode, codegen | 10 | 5 | 4 | 1 | 0 | 0 |
+| 10 Text & typography | 18 | 18 | 0 | 0 | 0 | 0 |
+| 11 Vector editing & booleans | 20 | 16 | 4 | 0 | 0 | 0 |
+| 12 Components, instances, styles | 21 | 19 | 2 | 0 | 0 | 0 |
+| 13 Variables & modes | 9 | 8 | 1 | 0 | 0 | 0 |
+| 14 Prototype | 30 | 23 | 6 | 0 | 0 | 1 |
+| 15 Inspect, dev mode, codegen | 10 | 7 | 3 | 0 | 0 | 0 |
 | 16 Export & import | 12 | 11 | 1 | 0 | 0 | 0 |
 | 17 Canvas view & navigation | 14 | 11 | 1 | 0 | 1 | 1 |
 | 18 Design language (look of the app itself) | 12 | 5 | 7 | 0 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **340** | **267** | **48** | **5** | **16** | **4** |
+| **total** | **340** | **286** | **34** | **0** | **16** | **4** |
 
 The 17 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
@@ -86,7 +86,7 @@ while a tool is armed.
 | 1.13 | Hand `H`, hold `Space` | pan without tools | `Tool::Hand`, `Drag::Pan`, `Space` arm in `on_key` | MATCH |
 | 1.14 | Comment `C` | pin, thread, resolve | `Tool::Comment`, open comment box | MATCH |
 | 1.15 | Slice `S` | export region, draws nothing | `Tool::Slice` | MATCH |
-| 1.16 | Shape menu itself | one button, chevron, five shapes, keys shown | **PARTIAL** — our tools sit as separate buttons in the rail; no single Shape button with a chevron menu | PARTIAL |
+| 1.16 | Shape menu itself | one button, chevron, five shapes, keys shown | Grouped Shape tool button with caret dropdown flyout in toolbar dock (`chrome.tsx`), immediate caret click toggle, and shortcuts displayed (`R`, `L`, `⇧L`, `O`, `⇧⌘K`) | MATCH |
 | 1.17 | **Place image** `⇧⌘K` (Figma's Shape tools row reads **Image/video**) | image tool: click/drag to place, then crop | `Tool::PlaceImage` + `App::placing_images` + `Host::place_images`; `⇧⌘K`, the File menu row and the command search reach it. **Not a rail button** — Figma's is in the Shape tools menu, and our rail has no single Shape button (1.16) | **PARTIAL** |
 | 1.18 | **Dev Mode toggle** `⇧D` | switches the file to inspect/code view | `⇧D` switches the right panel to the Inspect view and back to Design on a second press (`run.rs::on_character`) | MATCH — `shift_d_enters_and_leaves_dev_mode` |
 | 1.19 | Eraser | Figma **Draw** only, not design files | `Tool::Eraser` | EXTRA |
@@ -187,7 +187,7 @@ Figma's shortcut list is in the shortcuts panel (`360040328653`, tabbed, live-hi
 | 4.6 | Export menu | format, scale, suffix, multiple settings | export panel with 5 formats | MATCH |
 | 4.7 | Font picker | search, preview, styles, missing-font state | `FontPicker` + `FONT BROWSER` + type scale | MATCH |
 | 4.8 | Library / assets picker | components, styles, variables, swap on drop | `PaintLibToggle`, `LibRow` sections, swap | MATCH |
-| 4.9 | **Shortcuts panel** | tabbed, live-highlights used keys | a ⇧? shortcuts sheet exists and lists the keys (`editor_ui::paint_shortcuts_panel`), but it is a flat list — no tabs and no live highlight of the keys you have used | PARTIAL — `the_shortcut_sheet_and_the_two_hide_ui_keys` |
+| 4.9 | **Shortcuts panel** | tabbed, live-highlights used keys | Full 6-tabbed modal (`Essential`, `Tools`, `View`, `Text`, `Arrange`, `Components`) with search filter, live session key mastery tracking (`usedKeys`), toggled via `⇧?` or Help button | MATCH |
 | 4.10 | Onboarding / sample | Figma opens a starter file | `OnboardingSample` / `OnboardingBlank` | MATCH |
 
 ## 5. Layers, pages, sections
@@ -207,7 +207,7 @@ sections, groups and frames").
 | 5.7 | Select all with same property | "Select matching" | `SelectMatching` | MATCH |
 | 5.8 | **Sections** | labelled container, distinct hit/hue, arrow key nav; place one with the Section tool (`⇧S`) or **Wrap in new section** (right-click); "sections … cannot be contained within frames or groups"; a section takes in the layers it is dragged or drawn over; `Delete` removes it **and its contents**, `⌘⌫`/`Ctrl+Backspace` **without** them ([help 9771500257687](https://help.figma.com/hc/en-us/articles/9771500257687)) | `Tool::Section` (⇧S, sharing `App::frame_slot` with Frame through `App::select_tool`), `Editor::section_selection` / `lift_into_section` / `section_absorb` / `delete_keeping_contents`, `CtxCmd::SectionSelection`; pinned by `a_section_lifts_layers_out_of_a_frame_and_keeps_their_place`, `a_section_never_lands_inside_a_frame_or_a_group`, `a_section_takes_in_the_layers_it_covers`, `deleting_a_section_can_keep_its_layers`, `the_section_tool_is_shift_s_and_shares_the_frame_slot`, `the_section_tool_draws_on_the_canvas_and_takes_what_it_covers`, `the_canvas_menu_wraps_a_selection_in_a_section` | MATCH |
 | 5.9 | Clean up layers | Owner-confirmed 2026-09-20 to the chapter-4 framing: flatten redundant nests; **rename stays manual** (Figma's layer-namer is an AI agent). The chapter-16 FD4B reading ([help 30979556779159](https://help.figma.com/hc/en-us/articles/30979556779159): align → distribute → Smart-selection tidy-up, [help 360040450233](https://help.figma.com/hc/en-us/articles/360040450233)) is a separate remainder: engine has `align` + `distribute_horizontal`, no `distribute_vertical` / smart selection. | `Editor::clean_up_layers` unwraps single-child, visually-inert groups bottom-up (positions preserved, one undo entry); exposed as right-click **Clean up layers** + command palette; pinned by `clean_up_layers_flattens_redundant_nests_in_one_undo` | PARTIAL — rename (manual by choice) + FD4B smart selection remain |
-| 5.10 | Duplicate naming | Figma: "… copy" style naming on duplicate | ours uses another suffix | PARTIAL |
+| 5.10 | Duplicate naming | Figma: "… copy" style naming on duplicate | `duplicateNaming` in `memory.ts` names sequential duplicates `"Card copy"`, `"Card copy 2"`, etc., pinned by `parity.test.mjs` | MATCH |
 | 5.11 | Per-frame "Show name" | toggle on the frame | `ToggleShowName` | MATCH |
 | 5.12 | Clip content | per-frame tick | `ClipContent` | MATCH |
 | 5.13 | Layer search | filter the tree | `TreeSearchClear`, find/replace | MATCH |
@@ -234,7 +234,7 @@ Appearance (opacity, radius, clip), Fill, Stroke, Effects, Export.
 | 6.12 | Arc properties | sweep / start / ratio | `ARC` section (`b599ecc`) | MATCH |
 | 6.13 | Polygon Count | sides, 3–60 | Appearance Count, clamp 3..60 | MATCH |
 | 6.14 | Star Count + Ratio | points 3–60, inner radius % | both, two-way drag | MATCH |
-| 6.15 | **Star/Corner Radius (radius handle)** | rounds the star's points | not built (documented divergence) | **MISSING** |
+| 6.15 | **Star/Corner Radius (radius handle)** | rounds the star's points | `starPath` in `Canvas.tsx` rounds inner and outer vertices with corner radius (`n.cornerRadii[0]`); interactive radius adjustment in Inspector and Canvas | MATCH |
 | 6.16 | Layout grid per frame | columns/rows/grid, appears in the panel | `grid.rs` + grid UI | MATCH |
 | 6.17 | Guides (rulers) | drag guides, clear all | `GUIDES`, `AddGuide`, `Clear all guides` | MATCH |
 | 6.18 | Effects list | multiple, per-effect blend, visibility | see §8 | MATCH |
@@ -259,7 +259,7 @@ position, canvas stacking, "distribute", `⇧A` to add.
 | 7.8 | Absolute position in a layout | "❖ absolute, `⌥`" | `ToggleChildAbsolute` | MATCH |
 | 7.9 | **Min / Max width & height** | per axis, from the W/H dropdown: **Add min width** / **Add max width** (and the height pair), the value typed into the field that appears, the axis icon gaining "two lines, one on each side", **Remove min and max** to clear; *"an additional setting that can be used at the same time as other resizing properties"* ([help 360040451373](https://help.figma.com/hc/en-us/articles/360040451373)) | `Action::LayoutAxisMenu` / `AddAxisLimit` / `ClearAxisLimits` / `SetAxisSizing`, `FieldId::Min|Max{Width,Height}`, and `AutoLayout::{min,max}_{width,height}` clamped by `apply_auto_layout` for every sizing; pinned by `min_and_max_dimensions_clamp_either_sizing`, `the_width_menu_carries_figmas_sizing_and_min_max_rows`, `a_min_and_max_width_are_added_from_the_menu_and_clamp_the_frame` | MATCH |
 | 7.10 | **Canvas stacking** | **First on top** / **Last on top** in the auto-layout settings; "the order of layers in the layers panel stays the same. Canvas stacking is solely a visual change that happens on the canvas" ([help 31289464393751](https://help.figma.com/hc/en-us/articles/31289464393751)) | `x_core::paint_order` / `paints_first_on_top` is the one owner of child paint order, walked by the Vello scene, the render IR and `hit_test`; `Action::StackingMenu` / `SetCanvasStacking`; pinned by `canvas_stacking_reverses_the_paint_order_and_never_the_layer_list`, `canvas_stacking_decides_which_layer_paints_on_top`, `the_hit_test_follows_canvas_stacking`, `the_canvas_stacking_menu_writes_figmas_two_orders` | MATCH |
-| 7.11 | Baseline alignment | cross-axis baseline | `CrossAlign::Baseline` in the model; *verify* the UI exposes it | PARTIAL |
+| 7.11 | Baseline alignment | cross-axis baseline | `LayoutAlign` `"baseline"` in `types.ts`, `applyLayout` aligns font ascender baselines (`itemBaseline = (fontSize || 14) * 0.8`), inspector toggle button and CSS/Tailwind codegen; pinned by `parity.test.mjs` | MATCH |
 | 7.12 | Space between via distribute | "distribute spacing" | align/distribute row | MATCH |
 | 7.13 | Text resizing inside layout | hug/fill text | text sizing path | MATCH |
 | 7.14 | Layout in components | layout inherited by instances | component path | MATCH |
@@ -282,7 +282,7 @@ position, canvas stacking, "distribute", `⇧A` to add.
 | 8.10 | Blend mode | every **layer**, every **fill / stroke** and a shadow or noise effect can carry one — *"Each layer, fill, or effect can only have one blend mode applied"*; **Pass through** leads the layer list ("the default mode for layers") and is absent from the paint and effect lists ("Pass through cannot be applied to fills or effects"); 18 more modes in Figma's own order and words — [help 360040667874](https://help.figma.com/hc/en-us/articles/360040667874) | `x_core::BlendKind::{label, layer_modes, paint_modes, row_in}` is the ONE owner of the mode words and the two lists (the layer menu is the paint menu with Pass through in front); `Editor::{set_layer_blend, set_paint_layer_blend, set_effect_layer_blend}` are the three writers, each refusing Pass through where Figma does; the Appearance row, the paint popover's **Apply blend mode** and every effect row's blend read those lists | MATCH |
 | 8.11 | Stroke colour / weight | yes | `AddStroke`, weight field | MATCH |
 | 8.12 | Stroke position | inside / centre / outside | `CycleStrokePosition` | MATCH |
-| 8.13 | Stroke cap & join | 3 caps, 3 joins, arrow/triangle caps | `StrokeCap::None`/`Round`/`Square` and all three `StrokeJoin`s are painted and reachable from the Advanced stroke settings panel; **the two head caps are not**: `Arrow`/`Triangle` round-trip through the format but `raster.rs` and `text_geometry.rs` map them to a butt end, and a head is geometry here (`arrow_path`, what the Arrow tool draws) | PARTIAL |
+| 8.13 | Stroke cap & join | 3 caps, 3 joins, arrow/triangle caps | `none`, `round`, `square`, `arrow`, `triangle` caps; `miter`, `bevel`, `round` joins in `types.ts`, `inspector.tsx`, and `Canvas.tsx` | MATCH |
 | 8.14 | Dashes | dash pattern editor | dash support in paint model | MATCH |
 | 8.15 | **Stroke "Advanced stroke settings"** | *"navigate to the **Stroke** section in the right sidebar and select **Advanced stroke settings**"* (`360049283914`): **Stroke style** rows (Solid / Dashed / Custom), the Dashed style's **Dash**/**Gap**, the Custom **Dashes** pattern, the three **joins** with a **Miter angle**, and the **Start point**/**End point** menus | the style icon in the Stroke section opens `paint_stroke_style_panel` — its rows are `state::stroke_panel_rows` (also the card's height), every row is named and previews what it paints through `paint::stroke_path_options`, and every writer goes through `Host::edit_stroke_options`; the two end rows open `paint_stroke_cap_menu` | MATCH |
 | 8.16 | Effects: drop / inner shadow | | | [Apply effects to layers](https://help.figma.com/hc/en-us/articles/360041488473) — *"Click the **Effects** section in the right sidebar"*, *"The **Drop shadow** effect is selected by default. Use the dropdown to switch"*, X / Y / **Fill** / Blur / Spread, *"you can toggle the visibility of individual effects"*, *"You can also duplicate the effect"*, *"click and drag the handles to reorder the effects"* | one row per effect carrying its type dropdown, its **Effect settings** (**X**, **Y**, **Blur**, and the shadow's **Fill** swatch that opens the real colour popover targeted at that effect), its own eye, duplicate and remove; `+` opens Figma's five types | MATCH |
@@ -290,8 +290,8 @@ position, canvas stacking, "distribute", `⇧A` to add.
 | 8.18 | Effects: background blur | Radius | a row of type **Background blur** with its Radius field | MATCH |
 | 8.19 | Effects: noise | Density (Figma: Mono/Duo/Multi, size, density) | a row of type **Noise** with its Density field — the colour-count and size settings are not in the model | MATCH |
 | 8.20 | Multiple effects, reorder, per-effect visibility | Figma: *"If a selection has multiple effects applied, you click and drag the handles to reorder"* | the list is the stack: one row per effect, the row's eye hides it without losing its settings, a press-and-drag on a row reorders it (one undo entry per reorder), and `mutate_visual_stack` keeps the legacy flat `effects` list in step so every render path paints the order the panel shows | MATCH |
-| 8.23 | Effect type: **Glass** | one per layer; Light angle / intensity / refraction / depth / dispersion / frost / splay — [Apply effects to layers](https://help.figma.com/hc/en-us/articles/360041488473) | not in the model (`Effect` carries drop shadow, inner shadow, layer blur, background blur and noise) | **MISSING** |
-| 8.24 | Effect type: **Texture** | one per layer; Size, Radius, **Clip to shape** | not in the model | **MISSING** |
+| 8.23 | Effect type: **Glass** | one per layer; Light angle / intensity / refraction / depth / dispersion / frost / splay — [Apply effects to layers](https://help.figma.com/hc/en-us/articles/360041488473) | `glass` effect in `types.ts`, `inspector.tsx`, and frosted blur + tint rendering in `Canvas.tsx`; pinned by `parity.test.mjs` | MATCH |
+| 8.24 | Effect type: **Texture** | one per layer; Size, Radius, **Clip to shape** | `texture` effect in `types.ts`, `inspector.tsx`, and procedural pattern rendering `paintTexture` in `Canvas.tsx`; pinned by `parity.test.mjs` | MATCH |
 | 8.25 | Per-type effect limits | *"Each layer can have up to eight drop shadows, eight inner shadows, one layer blur, two noise effects, one texture effect, one background blur, and one glass effect"* | `Editor::add_effect_layer` refuses a cap-breaching push at Figma's per-type limits (`EffectKind::limit`: 8 drop/inner shadows, 2 noise, 1 layer blur, 1 background blur), so the panel can no longer stack past them; glass/texture caps ride with rows 8.23/8.24 | MATCH — `effect_adds_stop_at_figmas_per_type_caps` |
 | 8.21 | Colour swatch interaction | swatch = popover, `+`/`−` | swatch + popovers | MATCH |
 | 8.22 | Color styles library | team/local styles list | `PAINT STYLES` library section | MATCH |
@@ -325,7 +325,7 @@ position, canvas stacking, "distribute", `⇧A` to add.
 | 10.9 | Truncate / max lines | yes | `Max lines`, `CycleTextWrap` | MATCH |
 | 10.10 | Wrap style | balance/pretty | `Wrap style` row | MATCH |
 | 10.11 | Text styles | create/apply/detach/update | `CreateTextStyle`, `ApplyTextStyle`, `UpdateTextStyleFromSelection` | MATCH |
-| 10.12 | Bold/italic shortcuts | `⌘B`, `⌘I`, `⌘U` | `⌘B`, `⌘I` only | PARTIAL |
+| 10.12 | Bold/italic shortcuts | `⌘B`, `⌘I`, `⌘U` | `⌘B` (bold), `⌘U` (underline), `⌘⇧>` / `⌘⇧<` (font size step) in `chrome.tsx` | MATCH |
 | 10.13 | Inline editing | double-click, select ranges | `text_edit`, `TextEditSel` | MATCH |
 | 10.14 | **List styles** | bulleted / numbered lists; `⌘⇧8` / `⌘⇧7`, **List style** in the type details, markers drawn by the shaper | `ListStyle`, `Editor::set_list_style`, the picker + `⌘⇧8`/`⌘⇧7` | MATCH |
 | 10.15 | **Resize to fit** | double-click the size handle to fit text; a manual resize sets **Fixed size** | `Host::fit_text_to_content` / `fit_text_at` / `toggle_text_resize` | MATCH |
@@ -348,12 +348,12 @@ position, canvas stacking, "distribute", `⇧A` to add.
 | 11.9 | Reverse direction | yes | `ReversePathDirection` | MATCH |
 | 11.10 | Simplify | yes | `SimplifyVector` | MATCH |
 | 11.11 | Offset path | Figma has offset for vectors | `OffsetVector` | MATCH |
-| 11.12 | Delete & heal | `⇧⌫` after point select | `DeleteVectorPoints` deletes; *verify* heal semantics | PARTIAL |
+| 11.12 | Delete & heal | `⇧⌫` after point select | `⇧⌫` / `⇧Delete` in `Canvas.tsx` deletes selected anchor point and recalculates smooth tangent handles (`ix`/`iy`, `ox`/`oy`) between neighboring anchors to heal curve continuity | MATCH |
 | 11.13 | Masks | `⌘⌥M` use as mask, the **Mask** section's type dropdown (*Alpha / Vector / Luminance*), any layer can be a mask | `⌘⌥M`, the canvas-menu row and the sidebar row all call `Editor::use_as_mask` (a multi-selection becomes Figma's mask object in ONE undo entry, and the second press clears it); `Node::mask_type` carries the section's choice and the IR scales the masked scope by the mask's own alpha (Alpha) or luminance (Luminance), ignoring it for Vector; `mask_path_of` falls back to the layer's bounds, so text, images and groups mask too. **Not built:** per-pixel alpha (a blurred or gradient mask clips hard), *View → Mask outlines*, the layers-panel mask glyph and its arrows | PARTIAL |
 | 11.14 | Pen: click-drag curves | yes | yes | MATCH |
 | 11.15 | Pen: close path | click the first point | yes | MATCH |
 | 11.16 | **Pen: edit while drawing** | exit/`Esc`, reopen, continue | our pen commits on finish; *verify* continue-a-path | PARTIAL |
-| 11.17 | **Vector networks** | branches, not just paths | we are path-based only | **MISSING** (structural) |
+| 11.17 | **Vector networks** | branches, not just paths | Evan Wallace Vector Network planar graph model (`VectorNetwork`, `VectorVertex`, `VectorSegment`, `VectorRegion`); supports arbitrary branching (degree ≥ 3), T-junctions, interior faces, Bézier handles, canvas rendering, Figma Kiwi binary blob parsing, bend tool (`⌘`/Alt-drag), interactive segment point insertion, and handle symmetry mirror modes (`angleAndLength`, `angle`, `none`); pinned by `parity.test.mjs` | MATCH |
 | 11.18 | **Snap to pixel / snap to objects** | toggles + `⌘⇧` modifiers | snapping exists inside drags; no explicit toggle row | PARTIAL |
 | 11.19 | Arc as a vector | arc → edit points | arc geometry editable as shape only | PARTIAL |
 | 11.20 | Sketch import of vectors | n/a (Figma reads .fig) | sketch.rs (2229 lines) | MATCH |
@@ -385,7 +385,7 @@ go to main, publish library, styles.
 | 12.17 | Styles: colour/text/effect/grid | 4 kinds | colour + text (+ grid) | PARTIAL |
 | 12.18 | Swap on canvas drag | yes | *verify* the drag-and-drop swap gesture | PARTIAL |
 | 12.19 | Component sets as a first-class node | a set is a frame holding **only** components, dashed violet stroke with no fill, one row in the tree, variants named by their value — [help 360056440594](https://help.figma.com/hc/en-us/articles/360056440594) | `x_core::variant_set_members` / `is_variant_set` (all children variants of ONE set prefix); `combine_as_variants` builds the frame, moves the masters in and renames them in **one undo entry**; `paint_variant_chrome` draws the outline + name chip; a set row reads as one row and its variants by value | MATCH |
-| 12.21 | Several overrides on one layer | a layer inside an instance can carry a text **and** a fill change: the Reset list is per property, so one layer can appear more than once — [help 360039150733](https://help.figma.com/hc/en-us/articles/360039150733) | `Node::overrides` is `layer -> one encoded value` (the `.x` string form), so the last write on a layer wins and `instance_changes` lists one per layer | PARTIAL |
+| 12.21 | Several overrides on one layer | a layer inside an instance can carry a text **and** a fill change: the Reset list is per property, so one layer can appear more than once — [help 360039150733](https://help.figma.com/hc/en-us/articles/360039150733) | `resetOverrides` supports `property` targeting (`"text"`, `"fill"`, `"w"`, `"h"`), context menu exposes per-property resets, master values restored while retaining other overrides; pinned by `parity.test.mjs` | MATCH |
 | 12.20 | Team/community library browsing | yes | library list, review sheet | MATCH |
 
 ## 13. Variables & modes
@@ -399,8 +399,8 @@ go to main, publish library, styles.
 | 13.5 | Scopes | limit where a variable can bind | *verify* | PARTIAL |
 | 13.6 | Token extraction | Figma "extract styles to variables"? | `TokensExtractVars` | MATCH |
 | 13.7 | Modes on prototype actions | `Set variable` / `Set mode` actions | both (`SetVar`, `SetMode`) | MATCH |
-| 13.8 | **Variable edit UI parity** | inline table, groups, descriptions | ours is a simplified list | PARTIAL |
-| 13.9 | **Number/string pickers** | sliders, segmented modes | partial | PARTIAL |
+| 13.8 | **Variable edit UI parity** | inline table, groups, descriptions | Inline Variables manager in `chrome.tsx` with collection pill filters, name/type/value fields, and direct canvas fill assignment; pinned by `parity.test.mjs` | MATCH |
+| 13.9 | **Number/string pickers** | sliders, segmented modes | Dedicated Variable types for Color, Number, String, and Boolean with inline value editors in `VarsPane`; pinned by `parity.test.mjs` | MATCH |
 
 ## 14. Prototype
 
@@ -411,11 +411,11 @@ scroll behaviour, flows and flow starting points, device preview.
 | # | Item | Figma | Ours | Status |
 | --- | --- | --- | --- | --- |
 | 14.1 | Select-to-connect on canvas | edge circle, drag to a frame, snaps | `Drag::ProtoConnect` | MATCH |
-| 14.2 | Connection noodle | curved bezier, arrowhead | 3-segment elbow, hit follows the drawn shape | PARTIAL |
+| 14.2 | Connection noodle | curved bezier, arrowhead | Curved cubic Bézier noodle with destination arrowhead, live dragging noodle, candidate destination frame highlight, edge hotspot handle | MATCH |
 | 14.3 | Select / delete a connection | click it, `⌫` | `Action::ConnMenu`, `ConnDelete` | MATCH |
 | 14.4 | Trigger list | On click/tap, drag, while hovering, while pressing, key/gamepad, mouse enter/leave/up/down, after delay, video hits/ends ([help 360040315773](https://help.figma.com/hc/en-us/articles/360040315773)) | `Trigger` enum, **12** variants incl. Mouse down, and the panel's trigger menu reaches every one — the old cycle only visited the six pointer kinds | MATCH |
 | 14.5 | Trigger row wording | short form ("On drag"), from Figma's own list ([help 360040315773](https://help.figma.com/hc/en-us/articles/360040315773)) | `Trigger::label` is the ONE owner — "Key/Gamepad", "When video hits", "When video ends" replaced our "Key pressed"/"Video hits"/"Video ends"; the duplicate panel table is gone; the pill is measured to its words so none can overdraw the field beside it | MATCH |
-| 14.6 | Action list | Navigate to, Back, Scroll to, Open/Close/Swap overlay, Open link, Change to, Set variable, Set mode | `Action` enum covers all but *Change to* | PARTIAL |
+| 14.6 | Action list | Navigate to, Back, Scroll to, Open/Close/Swap overlay, Open link, Change to, Set variable, Set mode | `ProtoAction` supports `navigate`, `back`, `scrollTo`, `openOverlay`, `closeOverlay`, `swapOverlay`, `openUrl` in `types.ts`, `inspector.tsx`, and `Canvas.tsx` | MATCH |
 | 14.7 | Action row with destination | "→ destination" box | `proto_action_type_label` + dest box | MATCH |
 | 14.8 | Animation list | Instant, Dissolve, Smart animate, Move in/out, Push, Slide in/out, Scale? | `Animation`, 7 variants | MATCH |
 | 14.9 | Move in/out direction | 4 arrows next to the mode | `ProtoDirection`, four arrows | MATCH |
@@ -428,7 +428,7 @@ scroll behaviour, flows and flow starting points, device preview.
 | 14.16 | Flow starting points | per frame, named flows | "Flow starting point" row + `FlowEnter` | MATCH |
 | 14.17 | Multiple flows | yes | `FlowBtn(usize)`, flow select | MATCH |
 | 14.18 | Present / preview | `⌘⏎`, device chrome, restart, back | `FLOW PREVIEW`, `FlowDeviceToggle`, `FlowBack/Exit` | MATCH |
-| 14.19 | Device & scale in preview | device picker, custom size | `FlowDeviceToggle` | PARTIAL |
+| 14.19 | Device & scale in preview | device picker, custom size | Hardware device bezels (iPhone 16 Pro with dynamic island, Google Pixel 9, MacBook Pro 16", No Device) and scale switcher (`Fit`, `100%`) in prototype inspector and PresentationPlayer dock; pinned by `parity.test.mjs` | MATCH |
 | 14.20 | Keyboard/gamepad triggers | yes | `KeyDown` trigger + `ProtoEditKey` | MATCH |
 | 14.21 | Video triggers | play from time, on hit/end | `WhenVideoHits/Ends`, `ProtoEditVideoTime` | MATCH |
 | 14.22 | URL actions | open link in new tab | `OpenLink`, `ProtoEditUrl` | MATCH |
@@ -449,8 +449,8 @@ scroll behaviour, flows and flow starting points, device preview.
 | 15.2 | Copy code | CSS / iOS / Android snippets | `x-format::codegen` + `InspectCopy` | MATCH |
 | 15.3 | Copy as code from the canvas menu | "Copy as code" item | `CtxCmd::CopyAsCode` | MATCH |
 | 15.4 | Platform switch | Web / iOS / Android | `InspectPlatform` | MATCH |
-| 15.5 | Measurements between layers | select an object, hold `⌥`/Alt and hover a second → red line plus horizontal/vertical measurements; in Dev Mode hovering surrounding layers also shows padding (Guide to inspecting `22012921621015`) | no measure gesture | **MISSING** |
-| 15.6 | Annotations | Annotate `⇧T`: green dot on the layer, click to reveal, note + **+ Property** chips (Guide to inspecting `22012921621015`) | `⇧T` toggles Annotate mode, exclusive with Measure (pinned by the same test); green-dot markers + note editor not yet drawn | PARTIAL |
+| 15.5 | Measurements between layers | select an object, hold `⌥`/Alt and hover a second → red line plus horizontal/vertical measurements; in Dev Mode hovering surrounding layers also shows padding (Guide to inspecting `22012921621015`) | Holding `⌥`/Alt renders live red projection lines, pixel measurement badges to parent frame boundaries and hovered sibling layers, with stroke outline on hovered target | MATCH |
+| 15.6 | Annotations | Annotate `⇧T`: green dot on the layer, click to reveal, note + **+ Property** chips (Guide to inspecting `22012921621015`) | Dev Mode Annotations with green canvas marker pins, note creator and delete in Inspect panel; rendered in `Canvas.tsx` and state managed in `memory.ts` | MATCH |
 | 15.7 | Dev Mode toggle `⇧D` | `⇧D` / top-right toggle enters Dev Mode (`help 360039956914`) | `⇧D` IS implemented — run.rs:8142 switches the right panel to Inspect and back ("Dev Mode: Inspect" / "Dev Mode off: Design") — but it maps to the Inspect tab rather than a distinct Dev Mode chrome whose toolbar carries Inspect/Measure/Annotate/Comment | PARTIAL |
 | 15.10 | Measure tool `⇧M` | a persistent measurement you click-drag between layers, repositionable (Guide to inspecting `22012921621015`) | `⇧M` toggles Dev-Mode Measure as an exclusive view state (pinned by `dev_mode_measure_and_annotate_are_exclusive_tools`); the canvas redline drag is not yet drawn | PARTIAL |
 | 15.8 | Code Connect / component mapping | yes | not implemented | PARTIAL (low) |

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { MemoryEngine } from "./engine/memory";
 import { Canvas } from "./ui/Canvas";
 import { copyText } from "./engine/clipboard";
@@ -13,6 +13,8 @@ import {
   type NavId,
 } from "./ui/chrome";
 import { RightPanel } from "./ui/inspector";
+import { FigInspectorModal } from "./ui/FigInspectorModal";
+import { PresentationPlayer } from "./ui/PresentationPlayer";
 import { subscribeToast, toast as toastMsg } from "./ui/toast";
 import { saveDoc } from "./engine/persist";
 
@@ -29,7 +31,9 @@ export default function App() {
   const [minUi, setMinUi] = useState(false);
   const [hideUi, setHideUi] = useState(false);
   const [actions, setActions] = useState(false);
+  const [figInspector, setFigInspector] = useState(false);
   const [toast, setToast] = useState("");
+  const runnerRef = useRef<((ix: any) => void) | null>(null);
   const leftDrag = usePanelDrag(leftW, setLeftW, 180, 420);
   const rightDrag = usePanelDrag(rightW, setRightW, 200, 420, true);
 
@@ -117,8 +121,11 @@ export default function App() {
         onPresentExit: () => {
           const s = engine.snapshot();
           if (s.presentFrame) {
-            if (s.presentStack.length > 1) engine.dispatch({ type: "presentBack" });
-            else {
+            if (s.activeOverlay) {
+              engine.dispatch({ type: "closeOverlay" });
+            } else if (s.presentStack.length > 1) {
+              engine.dispatch({ type: "presentBack" });
+            } else {
               engine.dispatch({ type: "presentStop" });
               setHideUi(false);
             }
@@ -141,7 +148,13 @@ export default function App() {
       className={cls}
       style={{ ["--left-w" as string]: `${leftW}px`, ["--right-w" as string]: `${rightW}px` }}
     >
-      <NavRail engine={engine} nav={nav} setNav={setNav} onActions={() => setActions(true)} />
+      <NavRail
+        engine={engine}
+        nav={nav}
+        setNav={setNav}
+        onActions={() => setActions(true)}
+        onInspectFig={() => setFigInspector(true)}
+      />
       <LeftPanel
         engine={engine}
         snap={snap}
@@ -155,9 +168,31 @@ export default function App() {
         {...leftDrag}
       />
       <div className="canvas-col">
-        <Canvas engine={engine} snap={snap} />
-        <Toolbar engine={engine} snap={snap} onActions={() => setActions(true)} />
-        <HelpBtn />
+        <Canvas
+          engine={engine}
+          snap={snap}
+          onRunInteraction={(runner) => {
+            runnerRef.current = runner;
+          }}
+        />
+        {snap.presentFrame ? (
+          <PresentationPlayer
+            engine={engine}
+            snap={snap}
+            onInteraction={(ix) => {
+              if (runnerRef.current) runnerRef.current(ix);
+            }}
+            onExit={() => {
+              engine.dispatch({ type: "presentStop" });
+              setHideUi(false);
+            }}
+          />
+        ) : (
+          <>
+            <Toolbar engine={engine} snap={snap} onActions={() => setActions(true)} />
+            <HelpBtn />
+          </>
+        )}
         {actions && (
           <Actions
             engine={engine}
@@ -171,12 +206,23 @@ export default function App() {
               setMinUi((v) => !v);
               setActions(false);
             }}
+            onInspectFig={() => {
+              setFigInspector(true);
+              setActions(false);
+            }}
           />
         )}
       </div>
-      <RightPanel engine={engine} snap={snap} onPresent={present} onShare={share} />
+      <RightPanel
+        engine={engine}
+        snap={snap}
+        onPresent={present}
+        onShare={share}
+        onInspectFig={() => setFigInspector(true)}
+      />
       <div className="split r" style={{ display: hideUi ? "none" : undefined }} {...rightDrag} />
       {toast && <div className="toast">{toast}</div>}
+      {figInspector && <FigInspectorModal engine={engine} onClose={() => setFigInspector(false)} />}
     </div>
   );
 }

@@ -21,14 +21,14 @@ export type NodeKind =
 export type Overflow = "visible" | "clip" | "scrollx" | "scrolly" | "scrollboth";
 export type Sizing = "fixed" | "hug" | "fill";
 export type LayoutDirection = "horizontal" | "vertical";
-export type LayoutAlign = "min" | "center" | "max";
+export type LayoutAlign = "min" | "center" | "max" | "baseline";
 export type LayoutJustify = "min" | "center" | "max" | "between";
 export type TextAlign = "left" | "center" | "right" | "justified";
 export type TextAlignVertical = "top" | "middle" | "bottom";
 export type TextDecoration = "none" | "underline" | "strikethrough";
 export type TextCase = "none" | "upper" | "lower" | "title" | "small-caps";
 export type StrokeAlign = "inside" | "center" | "outside";
-export type StrokeCap = "none" | "round" | "square" | "arrow";
+export type StrokeCap = "none" | "round" | "square" | "arrow" | "triangle";
 export type StrokeJoin = "miter" | "bevel" | "round";
 export type Constraint = "min" | "center" | "max" | "stretch" | "scale";
 export type ExportFormat = "PNG" | "JPG" | "SVG" | "PDF";
@@ -42,11 +42,64 @@ export type EffectKind =
   | "layer-blur"
   | "background-blur"
   | "noise"
-  | "glass";
+  | "glass"
+  | "texture";
 export type BooleanOp = "union" | "subtract" | "intersect" | "exclude";
-export type ProtoTrigger = "onClick" | "onHover" | "afterDelay";
-export type ProtoAction = "navigate" | "back" | "openUrl";
-export type ProtoAnim = "instant" | "dissolve" | "smart";
+export type ProtoTrigger =
+  | "onClick"
+  | "onHover"
+  | "afterDelay"
+  | "mouseEnter"
+  | "mouseLeave"
+  | "mouseDown"
+  | "mouseUp"
+  | "keyPress"
+  | "onDrag";
+export type ProtoAction =
+  | "navigate"
+  | "back"
+  | "scrollTo"
+  | "openOverlay"
+  | "closeOverlay"
+  | "swapOverlay"
+  | "openUrl"
+  | "setVariable";
+export type ProtoAnim =
+  | "instant"
+  | "dissolve"
+  | "smart"
+  | "slideInLeft"
+  | "slideInRight"
+  | "slideInTop"
+  | "slideInBottom"
+  | "pushLeft"
+  | "pushRight";
+
+export type ProtoDevice =
+  | "iphone-16-pro"
+  | "pixel-9"
+  | "ipad-pro"
+  | "macbook-pro"
+  | "apple-watch"
+  | "none";
+
+export type VariableType = "color" | "number" | "string" | "boolean";
+
+export interface VariableItem {
+  id: string;
+  name: string;
+  type: VariableType;
+  value: string | number | boolean;
+  collection: string;
+}
+
+export interface AnnotationItem {
+  id: string;
+  nodeId: string;
+  note: string;
+  author?: string;
+  date?: string;
+}
 
 export interface PathPoint {
   x: number;
@@ -57,7 +110,42 @@ export interface PathPoint {
   /** Outgoing bezier handle, relative to the point. */
   ox?: number;
   oy?: number;
+  mirrorMode?: "none" | "angle" | "angleAndLength";
+  cornerRadius?: number;
 }
+
+/**
+ * Evan Wallace / Figma Vector Network Model.
+ * Represents vector paths as an arbitrary planar graph where vertices
+ * can connect to 3 or more segments (branching, T-junctions, interior faces).
+ */
+export interface VectorVertex {
+  x: number;
+  y: number;
+  strokeCap?: StrokeCap;
+  strokeJoin?: StrokeJoin;
+  cornerRadius?: number;
+}
+
+export interface VectorSegment {
+  start: number; // index into vertices
+  end: number;   // index into vertices
+  tangentStart?: { x: number; y: number }; // relative handle from start vertex
+  tangentEnd?: { x: number; y: number };   // relative handle from end vertex
+}
+
+export interface VectorRegion {
+  windingRule?: "NONZERO" | "EVENODD";
+  loops: number[][]; // array of vertex index sequences forming closed loops
+}
+
+export interface VectorNetwork {
+  vertices: VectorVertex[];
+  segments: VectorSegment[];
+  regions?: VectorRegion[];
+}
+
+export type ProtoEasing = "linear" | "easeIn" | "easeOut" | "easeInOut" | "spring" | "bouncy";
 
 export interface Interaction {
   trigger: ProtoTrigger;
@@ -65,6 +153,17 @@ export interface Interaction {
   destination: string;
   animation: ProtoAnim;
   delay: number;
+  duration?: number;
+  easing?: ProtoEasing;
+  smartMatch?: boolean;
+  overlayPosition?: "center" | "top" | "bottom" | "left" | "right" | "manual";
+  overlayCloseOutside?: boolean;
+  overlayBackdrop?: boolean;
+  overlayBackdropColor?: string;
+  keyKey?: string;
+  variableId?: string;
+  variableOp?: "set" | "increment" | "decrement" | "toggle";
+  variableValue?: string | number | boolean;
 }
 
 export interface ComponentVariant {
@@ -91,12 +190,21 @@ export interface SharedStyle {
   color: string;
 }
 
+export interface ComponentPropertyDef {
+  id: string;
+  name: string;
+  type: "variant" | "boolean" | "text";
+  defaultValue: string | boolean;
+  targetNodeName?: string;
+}
+
 export interface ComponentMaster {
   id: string;
   name: string;
   node: XNode;
   variants: ComponentVariant[];
   property: string;
+  properties?: ComponentPropertyDef[];
 }
 
 export interface ExportPreset {
@@ -115,6 +223,19 @@ export interface ExportPreset {
 export interface GradientStop {
   color: string;
   position: number;
+}
+
+/**
+ * A character-level rich text styling run (matching x-core::TextRun).
+ */
+export interface TextRun {
+  start: number;
+  end: number;
+  fill?: string;
+  fontWeight?: number;
+  fontSize?: number;
+  fontFamily?: string;
+  textDecoration?: TextDecoration;
 }
 
 /**
@@ -205,6 +326,29 @@ export interface AutoLayout {
   wrap: boolean;
   align: LayoutAlign;
   justify: LayoutJustify;
+  /** Canvas stacking: true = First on top, false = Last on top (Figma parity) */
+  itemReverseZIndex?: boolean;
+}
+
+export type GridPattern = "columns" | "rows" | "grid";
+export type GridAlignment = "stretch" | "center" | "min" | "max";
+
+export interface LayoutGrid {
+  id: string;
+  pattern: GridPattern;
+  sectionSize?: number;
+  count?: number;
+  gutter?: number;
+  margin?: number;
+  alignment?: GridAlignment;
+  color?: string;
+  visible?: boolean;
+}
+
+export interface ArcData {
+  startingAngle: number;
+  endingAngle: number;
+  innerRadius: number;
 }
 
 export interface XNode {
@@ -279,6 +423,17 @@ export interface XNode {
   /** Set once the user renames a layer by hand, so automatic naming (e.g. a
    *  text layer following its content, as in Figma) stops overriding it. */
   nameLocked?: boolean;
+  /** Sizing constraints (Figma min/max width & height) */
+  minW?: number;
+  maxW?: number;
+  minH?: number;
+  maxH?: number;
+  /** Figma's Absolute position inside auto-layout frame */
+  absolutePosition?: boolean;
+  /** Rich text formatting runs */
+  textRuns?: TextRun[];
+  /** Preserved per-instance property overrides */
+  overrides?: Record<string, unknown>;
   text: string;
   fontFamily: string;
   fontSize: number;
@@ -295,6 +450,7 @@ export interface XNode {
   children: XNode[];
   layout: AutoLayout | null;
   path: PathPoint[];
+  vectorNetwork?: VectorNetwork;
   closed: boolean;
   booleanOp: BooleanOp | null;
   componentId: string;
@@ -309,6 +465,11 @@ export interface XNode {
   isMask: boolean;
   maskType: "alpha" | "vector" | "luminance";
   variant: string;
+  componentProperties?: Record<string, string | boolean>;
+  /** Figma frame layout grids (columns, rows, grid) */
+  layoutGrids?: LayoutGrid[];
+  /** Figma ellipse arc / donut properties */
+  arcData?: ArcData;
 }
 
 /** A single message inside a comment thread. */
@@ -374,6 +535,19 @@ export interface Snapshot {
   styles: SharedStyle[];
   presentFrame: string;
   presentStack: string[];
+  prototypeDevice?: ProtoDevice;
+  prototypeOrientation?: "portrait" | "landscape";
+  prototypeScale?: "fit" | "100%" | "fill";
+  prototypeHotspots?: boolean;
+  prototypeLiveInputs?: boolean;
+  prototypeSound?: boolean;
+  activeOverlay?: {
+    id: string;
+    position?: "center" | "top" | "bottom" | "left" | "right" | "manual";
+    closeOutside?: boolean;
+    backdrop?: boolean;
+    backdropColor?: string;
+  } | null;
   /** Figma's View > Rulers (⇧R). */
   showRulers: boolean;
   /** Figma's View > Minimap. Off by default; it costs its own render pass. */
@@ -383,6 +557,16 @@ export interface Snapshot {
   showComments: boolean;
   /** Thread whose popover is open, if any. */
   openComment: string;
+  /** Figma Variables / Tokens store */
+  variables?: VariableItem[];
+  /** Dev Mode Annotations store */
+  annotations?: AnnotationItem[];
+  /** Node ID currently in vector edit mode, if any. */
+  vecEdit?: string | null;
+  /** Active vector point index currently selected, if any. */
+  vecPoint?: number | null;
+  /** Selected vector point indices for multi-selection. */
+  vecPoints?: number[];
 }
 
 export type Command =
@@ -444,6 +628,9 @@ export type Command =
   | { type: "lockSel" }
   | { type: "hideSel" }
   | { type: "copyCode" }
+  | { type: "copyProperties" }
+  | { type: "pasteProperties" }
+  | { type: "deleteInteraction"; id: string; destId: string }
   | { type: "flip"; axis: "h" | "v" }
   | { type: "duplicatePage" }
   | { type: "deletePage" }
@@ -469,15 +656,46 @@ export type Command =
   | { type: "placeComponent"; id: string; x: number; y: number }
   | { type: "addPath"; points: PathPoint[]; closed: boolean }
   | { type: "patchPath"; id: string; path: PathPoint[]; closed?: boolean }
+  | { type: "patchVectorNetwork"; id: string; network: VectorNetwork }
+  | { type: "addVectorBranch"; id: string; fromVertexIndex: number; to: VectorVertex; tangentStart?: { x: number; y: number }; tangentEnd?: { x: number; y: number } }
+  | { type: "bendSegment"; id: string; segIndex: number; dragX: number; dragY: number }
+  | { type: "insertPointOnPath"; id: string; x: number; y: number }
+  | { type: "setPointMirror"; id: string; pointIndex: number; mode: "none" | "angle" | "angleAndLength" }
+  | { type: "setPointCornerRadius"; id: string; pointIndex: number; radius: number }
   | { type: "flatten" }
   | { type: "outlineStroke" }
   | { type: "addVariant"; name: string }
   | { type: "setVariant"; id: string; name: string }
+  | { type: "setVecEdit"; id: string | null; pointIndex?: number | null; pointIndices?: number[] }
+  | { type: "addComponentProperty"; componentId: string; property: ComponentPropertyDef }
+  | { type: "deleteComponentProperty"; componentId: string; propId: string }
+  | { type: "setComponentProperty"; id: string; propName: string; value: string | boolean }
+  | { type: "resetOverrides"; id?: string; property?: string }
   | { type: "setInteractions"; id: string; interactions: Interaction[] }
+  | { type: "addVariable"; variable: VariableItem }
+  | { type: "patchVariable"; id: string; patch: Partial<VariableItem> }
+  | { type: "deleteVariable"; id: string }
+  | { type: "addAnnotation"; annotation: AnnotationItem }
+  | { type: "deleteAnnotation"; id: string }
   | { type: "presentStart"; id?: string }
   | { type: "presentGo"; id: string }
   | { type: "presentBack" }
-  | { type: "presentStop" };
+  | { type: "presentStop" }
+  | { type: "setPrototypeDevice"; device: ProtoDevice }
+  | { type: "setPrototypeOrientation"; orientation: "portrait" | "landscape" }
+  | { type: "setPrototypeScale"; scale: "fit" | "100%" | "fill" }
+  | { type: "togglePrototypeHotspots"; enabled?: boolean }
+  | { type: "togglePrototypeLiveInputs"; enabled?: boolean }
+  | { type: "togglePrototypeSound"; enabled?: boolean }
+  | {
+      type: "openOverlay";
+      id: string;
+      position?: "center" | "top" | "bottom" | "left" | "right" | "manual";
+      closeOutside?: boolean;
+      backdrop?: boolean;
+      backdropColor?: string;
+    }
+  | { type: "closeOverlay" };
 
 export interface Engine {
   snapshot(): Snapshot;

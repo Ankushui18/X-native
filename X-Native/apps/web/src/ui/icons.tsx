@@ -1,7 +1,11 @@
-import type { CSSProperties, SVGProps } from "react";
+import type { CSSProperties, ReactElement, SVGProps } from "react";
 import type { Tool } from "../engine/types";
 
-/** 16×16 Figma-style glyphs: 1.25px stroke, round caps, currentColor. */
+/**
+ * 16×16 Figma UI3 icon specification:
+ * Sourced from Figma UI3 design language (3icons / ui3-figmas-ui-kit).
+ * Standard: 16×16 grid, 1.25px stroke, round caps/joins, currentColor.
+ */
 const S: SVGProps<SVGSVGElement> = {
   viewBox: "0 0 16 16",
   fill: "none",
@@ -20,35 +24,91 @@ export function Icon({
   name: string;
   size?: number;
   className?: string;
-}) {
+}): ReactElement {
   const style: CSSProperties = { width: size, height: size, display: "block" };
   const p = { ...S, className, style };
+
   switch (name) {
+    // -------------------------------------------------------------------------
+    // Selection & Navigation Tools
+    // -------------------------------------------------------------------------
     case "move":
+    case "select":
       return (
         <svg {...p} fill="currentColor" stroke="none">
-          <path d="M3.2 1.6l.1 12.2 3.3-3.1 2.1 4.6 1.85-.85-2.15-4.55 4.5-.15z" />
+          <path d="M3 2v11.5l3.2-3 2.3 4.5 1.7-.8-2.3-4.4 4.5-.2z" />
         </svg>
       );
     case "scale":
+    case "resize":
+    case "resize-alt":
       return (
         <svg {...p}>
-          <path d="M6 2.5H2.5V6M10 13.5h3.5V10" />
-          <path d="M2.8 2.8l4.2 4.2M13.2 13.2l-4.2-4.2" />
+          <path d="M5.5 2.5H2.5v3M10.5 13.5h3v-3M3 3l4.5 4.5M13 13l-4.5-4.5" />
         </svg>
       );
-    case "frame":
+    case "hand":
       return (
         <svg {...p}>
-          <path d="M5.25 1.5v3.5M10.75 1.5v3.5M5.25 11v3.5M10.75 11v3.5" />
-          <path d="M1.5 5.25h3.5M11 5.25h3.5M1.5 10.75h3.5M11 10.75h3.5" />
+          <path d="M5.5 7V4.5a1 1 0 012 0V7M8 6.5V3.5a1 1 0 012 0v3.5M10.5 7V4.5a1 1 0 012 0v5a4 4 0 01-4 4h-.5a3.8 3.8 0 01-3.8-3.8V8a1 1 0 012 0v.5" />
+        </svg>
+      );
+    case "search":
+    case "visual-search":
+      return (
+        <svg {...p}>
+          <circle cx="7" cy="7" r="4" />
+          <path d="M13 13l-3.2-3.2" strokeWidth={1.3} />
+        </svg>
+      );
+    case "zoom-in":
+      return (
+        <svg {...p}>
+          <circle cx="7" cy="7" r="4" />
+          <path d="M13 13l-3.2-3.2M7 5v4M5 7h4" strokeWidth={1.25} />
+        </svg>
+      );
+    case "zoom-out":
+      return (
+        <svg {...p}>
+          <circle cx="7" cy="7" r="4" />
+          <path d="M13 13l-3.2-3.2M5 7h4" strokeWidth={1.25} />
+        </svg>
+      );
+    case "actual-size":
+    case "zoom-no":
+      return (
+        <svg {...p}>
+          <rect x="2.5" y="2.5" width="11" height="11" rx="1.5" />
+          <path d="M6 5.5v5M9.5 5.5v5M5.5 6L6 5.5M9 6l.5-.5" />
+        </svg>
+      );
+    case "fit-screen":
+    case "fit-width":
+    case "fit-height":
+    case "fill-screen":
+      return (
+        <svg {...p}>
+          <rect x="2.5" y="2.5" width="11" height="11" rx="1.5" />
+          <path d="M5.5 2.5v11M10.5 2.5v11" />
+        </svg>
+      );
+
+    // -------------------------------------------------------------------------
+    // Creation & Canvas Containers
+    // -------------------------------------------------------------------------
+    case "frame":
+    case "hash":
+      return (
+        <svg {...p}>
+          <path d="M5.5 1.5v13M10.5 1.5v13M1.5 5.5h13M1.5 10.5h13" strokeWidth={1.25} />
         </svg>
       );
     case "section":
       return (
         <svg {...p}>
           <rect x="2.5" y="4.5" width="11" height="9" rx="1.5" />
-          <path d="M2.5 7.25h11M5 4.5V3.25h6V4.5" />
+          <path d="M2.5 7.5h11M5.5 4.5V3h5v1.5" />
         </svg>
       );
     case "slice":
@@ -57,167 +117,885 @@ export function Icon({
           <rect x="2.5" y="2.5" width="11" height="11" rx="0.5" />
         </svg>
       );
-    case "text":
-      return (
-        <svg {...p} strokeWidth={1.4}>
-          <path d="M3.5 3.5h9M8 3.5v9.2M5.5 12.7h5" />
-        </svg>
-      );
     case "rect":
+    case "square":
+    case "shapes":
       return (
         <svg {...p}>
-          <rect x="2.75" y="2.75" width="10.5" height="10.5" rx="1.75" />
+          <rect x="2.5" y="2.5" width="11" height="11" rx="2" strokeWidth={1.25} />
         </svg>
       );
     case "ellipse":
       return (
         <svg {...p}>
-          <circle cx="8" cy="8" r="5.25" />
+          <circle cx="8" cy="8" r="5.5" strokeWidth={1.25} />
         </svg>
       );
     case "line":
       return (
         <svg {...p}>
-          <path d="M3 13L13 3" />
+          <path d="M2.5 13.5L13.5 2.5" strokeWidth={1.25} />
         </svg>
       );
     case "arrow":
+    case "arrow-right":
       return (
         <svg {...p}>
-          <path d="M3.5 12.5L12.5 3.5" />
-          <path d="M7 3.5h5.5V9" />
+          <path d="M3.5 12.5L12.5 3.5M7 3.5h5.5V9" strokeWidth={1.25} />
+        </svg>
+      );
+    case "arrow-downward":
+      return (
+        <svg {...p}>
+          <path d="M8 2.5v11M3.5 9L8 13.5 12.5 9" strokeWidth={1.25} />
         </svg>
       );
     case "poly":
+    case "polygon":
       return (
         <svg {...p}>
-          <path d="M8 2.6l6 10.8H2z" />
+          <path d="M8 2.5l5.5 10.5H2.5L8 2.5z" strokeWidth={1.25} />
         </svg>
       );
     case "star":
+    case "count-star":
       return (
         <svg {...p}>
-          <path d="M8 2.2l1.62 3.92 4.28.34-3.28 2.66 1 4.16L8 11.4l-3.62 1.88 1-4.16L2.1 6.46l4.28-.34z" />
+          <path d="M8 2.2l1.7 3.8 4.1.3-3.1 2.8.9 4.1L8 11.2l-3.6 2 1-4.1-3.2-2.8 4.2-.3z" strokeWidth={1.25} />
         </svg>
       );
     case "image":
+    case "images":
+    case "fill-image":
       return (
         <svg {...p}>
-          <rect x="2.5" y="3.25" width="11" height="9.5" rx="1.25" />
-          <circle cx="6" cy="6.6" r="1.15" />
-          <path d="M2.8 11.2l3.4-2.8 2.2 1.8 2.3-2.1 2.5 3.1" />
+          <rect x="2.5" y="3" width="11" height="10" rx="1.5" strokeWidth={1.25} />
+          <circle cx="5.5" cy="6" r="1.1" fill="currentColor" stroke="none" />
+          <path d="M2.8 11.2l3.4-3.2 2.3 2.1 2.3-2.3 2.4 2.8" strokeWidth={1.2} />
         </svg>
       );
     case "pen":
+    case "vector":
+    case "vector-bend":
       return (
         <svg {...p}>
-          <path d="M10.2 2.6l3.2 3.2-7.4 7.4H2.8v-3.2z" />
-          <path d="M8.6 4.2l3.2 3.2" />
-          <path d="M2.8 13.2h10.4" />
+          <path d="M10 2.5l3.5 3.5-7.5 7.5H2.5v-3.5zM8.5 4l3.5 3.5M2.5 13.5l3-3" strokeWidth={1.25} />
+          <circle cx="7" cy="9" r="0.75" fill="currentColor" stroke="none" />
         </svg>
       );
     case "pencil":
       return (
         <svg {...p}>
-          <path d="M11.4 2.4l2.2 2.2-8.3 8.3H3.1v-2.2z" />
-          <path d="M10 3.8l2.2 2.2" />
+          <path d="M11 2.5l2.5 2.5-8 8H3v-2.5zM9.5 4l2.5 2.5" strokeWidth={1.25} />
         </svg>
       );
     case "brush":
       return (
         <svg {...p}>
-          <path d="M6.2 9.2c0 2.1 1.1 3.6 1.8 3.6s1.8-1.5 1.8-3.6" />
-          <path d="M6.2 9.2V4.4c0-1.5 1.6-2.4 1.8-2.4s1.8.9 1.8 2.4v4.8" />
+          <path d="M11.5 2.5l2 2-4.5 4.5-2-2zM7 7l-2 2c-1.2 1.2-1.5 2.8-1.5 3.8 1 0 2.6-.3 3.8-1.5l2-2" strokeWidth={1.25} />
         </svg>
       );
     case "eraser":
       return (
         <svg {...p}>
-          <path d="M5.2 13.2L2.6 10.6a1.4 1.4 0 010-2l6-6a1.4 1.4 0 012 0L13.4 5.4a1.4 1.4 0 010 2l-6 6H5.2z" />
-          <path d="M6.2 5.2l4.6 4.6" />
+          <path d="M5.5 13.5L2.5 10.5a1.5 1.5 0 010-2.1l6-6a1.5 1.5 0 012.1 0l3 3a1.5 1.5 0 010 2.1l-6 6H5.5zM6 5.5l4.5 4.5" strokeWidth={1.25} />
+        </svg>
+      );
+    case "text":
+    case "edit-text":
+    case "shape-text":
+      return (
+        <svg {...p}>
+          <path d="M3 3.5h10M8 3.5v9.5M5.5 13h5" strokeWidth={1.3} />
         </svg>
       );
     case "comment":
+    case "notes":
       return (
         <svg {...p}>
-          <path d="M3.2 3.4h9.6a1.2 1.2 0 011.2 1.2v5.2a1.2 1.2 0 01-1.2 1.2H7.2L3.2 13.6V4.6A1.2 1.2 0 014.4 3.4z" />
+          <path d="M3 3.5h10a1.5 1.5 0 011.5 1.5v5a1.5 1.5 0 01-1.5 1.5H7.5L3.5 14v-2.5H3A1.5 1.5 0 011.5 10V5A1.5 1.5 0 013 3.5z" strokeWidth={1.25} />
         </svg>
       );
-    case "hand":
+    case "figma":
+      return (
+        <svg width={size} height={size} viewBox="0 0 38 57" fill="none">
+          <path d="M19 28.5A9.5 9.5 0 1 1 28.5 19 9.5 9.5 0 0 1 19 28.5z" fill="#1abcfe" />
+          <path d="M0 47.5A9.5 9.5 0 0 1 9.5 38H19v9.5A9.5 9.5 0 0 1 9.5 57 9.5 9.5 0 0 1 0 47.5z" fill="#0acf83" />
+          <path d="M19 0v19h9.5a9.5 9.5 0 1 0 0-19z" fill="#ff7262" />
+          <path d="M0 9.5A9.5 9.5 0 0 0 9.5 19H19V0H9.5A9.5 9.5 0 0 0 0 9.5z" fill="#f24e1e" />
+          <path d="M0 28.5A9.5 9.5 0 0 0 9.5 38H19V19H9.5A9.5 9.5 0 0 0 0 28.5z" fill="#a259ff" />
+        </svg>
+      );
+
+    // -------------------------------------------------------------------------
+    // Components, Variants & Instances
+    // -------------------------------------------------------------------------
+    case "component":
+      // Figma UI3 4-diamond master component icon
+      return (
+        <svg {...p} fill="currentColor" stroke="none">
+          <path d="M8 2.2l2 2-2 2-2-2zM12.3 6.5l2 2-2 2-2-2zM8 10.8l2 2-2 2-2-2zM3.7 6.5l2 2-2 2-2-2z" />
+        </svg>
+      );
+    case "instance":
+      // Figma UI3 single outlined diamond
       return (
         <svg {...p}>
-          <path d="M5.4 7.2V4.6a1 1 0 012 0V7M8 6.6V3.7a1 1 0 012 0V7M10.6 7.1V4.8a1 1 0 012 0v5.1a4.1 4.1 0 01-4.1 4.1H8A3.8 3.8 0 014.2 10V7.6a1 1 0 012 0v.8" />
+          <polygon points="8,2.2 13.8,8 8,13.8 2.2,8" strokeWidth={1.25} />
         </svg>
       );
-    case "search":
+    case "component-set":
       return (
         <svg {...p}>
-          <circle cx="7" cy="7" r="3.6" />
-          <path d="M12.6 12.6L9.6 9.6" />
+          <rect x="2.5" y="2.5" width="11" height="11" rx="2" strokeDasharray="2 1.5" />
+          <polygon points="8,4.5 11.5,8 8,11.5 4.5,8" fill="currentColor" stroke="none" />
         </svg>
       );
+    case "variant":
+    case "create-variant":
+      return (
+        <svg {...p}>
+          <polygon points="7,2.2 12.5,7.7 7,13.2 1.5,7.7" strokeWidth={1.2} />
+          <path d="M12.5 10.5v4M10.5 12.5h4" strokeWidth={1.25} />
+        </svg>
+      );
+    case "instance-swap":
+    case "swap":
+      return (
+        <svg {...p}>
+          <polygon points="8,4.5 11.5,8 8,11.5 4.5,8" strokeWidth={1.1} />
+          <path d="M3 3h4M3 3l2-2M13 13h-4M13 13l-2 2" strokeWidth={1.2} />
+        </svg>
+      );
+    case "detach":
+      return (
+        <svg {...p}>
+          <path d="M7 9l2-2M9 4.5a2.5 2.5 0 013.5 3.5L11 9.5M7 6.5L5.5 8a2.5 2.5 0 003.5 3.5L10.5 10" strokeWidth={1.25} />
+        </svg>
+      );
+    case "reset":
+    case "refresh":
+    case "restart":
+      return (
+        <svg {...p}>
+          <path d="M3.5 8a4.5 4.5 0 101.3-3.2L3 6.5M3 3v3.5h3.5" strokeWidth={1.25} />
+        </svg>
+      );
+
+    // -------------------------------------------------------------------------
+    // Auto Layout & Sizing
+    // -------------------------------------------------------------------------
+    case "layout-h":
+    case "add-horizontal":
+      return (
+        <svg {...p}>
+          <rect x="3" y="3" width="4" height="10" rx="1.2" strokeWidth={1.25} />
+          <rect x="9" y="3" width="4" height="10" rx="1.2" strokeWidth={1.25} />
+        </svg>
+      );
+    case "layout-v":
+    case "add-vertical":
+      return (
+        <svg {...p}>
+          <rect x="3" y="3" width="10" height="4" rx="1.2" strokeWidth={1.25} />
+          <rect x="3" y="9" width="10" height="4" rx="1.2" strokeWidth={1.25} />
+        </svg>
+      );
+    case "wrap":
+    case "add-wrap":
+      return (
+        <svg {...p}>
+          <rect x="2.5" y="3" width="4.5" height="4" rx="1" strokeWidth={1.2} />
+          <rect x="9" y="3" width="4.5" height="4" rx="1" strokeWidth={1.2} />
+          <rect x="2.5" y="9" width="4.5" height="4" rx="1" strokeWidth={1.2} />
+          <path d="M12.5 9v1.5a1.5 1.5 0 01-1.5 1.5H9m0 0l1.5-1.5M9 12l1.5 1.5" strokeWidth={1.2} />
+        </svg>
+      );
+    case "layout-none":
+      return (
+        <svg {...p}>
+          <rect x="2.5" y="2.5" width="4.5" height="4.5" rx="0.8" strokeWidth={1.1} />
+          <rect x="9" y="2.5" width="4.5" height="4.5" rx="0.8" strokeWidth={1.1} />
+          <rect x="2.5" y="9" width="4.5" height="4.5" rx="0.8" strokeWidth={1.1} />
+          <rect x="9" y="9" width="4.5" height="4.5" rx="0.8" strokeWidth={1.1} />
+        </svg>
+      );
+    case "layout-grid":
+    case "grid":
+    case "grid-view":
+      return (
+        <svg {...p}>
+          <rect x="2.5" y="2.5" width="4.5" height="4.5" rx="0.8" strokeWidth={1.1} />
+          <rect x="9" y="2.5" width="4.5" height="4.5" rx="0.8" strokeWidth={1.1} />
+          <rect x="2.5" y="9" width="4.5" height="4.5" rx="0.8" strokeWidth={1.1} />
+          <rect x="9" y="9" width="4.5" height="4.5" rx="0.8" strokeWidth={1.1} />
+        </svg>
+      );
+    case "absolute":
+      return (
+        <svg {...p}>
+          <path d="M2.5 5.5V3a.5.5 0 01.5-.5h2.5M10.5 2.5H13a.5.5 0 01.5.5v2.5M13.5 10.5V13a.5.5 0 01-.5.5h-2.5M5.5 13.5H3a.5.5 0 01-.5-.5v-2.5" strokeWidth={1.3} />
+          <rect x="6" y="6" width="4" height="4" rx="0.75" strokeWidth={1.2} />
+        </svg>
+      );
+    case "padding":
+    case "padding-all":
+    case "padding-sides":
+      return (
+        <svg {...p}>
+          <rect x="2.5" y="2.5" width="11" height="11" rx="1.5" strokeWidth={1.25} />
+          <rect x="5.5" y="5.5" width="5" height="5" rx="0.5" strokeDasharray="1.5 1" strokeWidth={1.1} />
+        </svg>
+      );
+    case "padding-horizontal":
+      return (
+        <svg {...p}>
+          <rect x="2.5" y="2.5" width="11" height="11" rx="1.5" strokeWidth={1.25} />
+          <path d="M5.5 8h5M7 6.5L5.5 8 7 9.5M9 6.5l1.5 1.5-1.5 1.5" strokeWidth={1.2} />
+        </svg>
+      );
+    case "padding-vertical":
+      return (
+        <svg {...p}>
+          <rect x="2.5" y="2.5" width="11" height="11" rx="1.5" strokeWidth={1.25} />
+          <path d="M8 5.5v5M6.5 7L8 5.5 9.5 7M6.5 9L8 10.5 9.5 9" strokeWidth={1.2} />
+        </svg>
+      );
+    case "gap":
+      return (
+        <svg {...p}>
+          <path d="M2.5 3v10M13.5 3v10M5.5 8h5M7 6.5L5.5 8 7 9.5M9 6.5l1.5 1.5-1.5 1.5" strokeWidth={1.2} />
+        </svg>
+      );
+    case "hug":
+    case "width-hug":
+      return (
+        <svg {...p}>
+          <path d="M2.5 8h3M13.5 8h-3M5.5 5.5L8 8l-2.5 2.5M10.5 5.5L8 8l2.5 2.5" strokeWidth={1.25} />
+        </svg>
+      );
+    case "height-hug":
+      return (
+        <svg {...p}>
+          <path d="M8 2.5v3M8 13.5v-3M5.5 5.5L8 8l2.5-2.5M5.5 10.5L8 8l2.5 2.5" strokeWidth={1.25} />
+        </svg>
+      );
+    case "fill-container":
+    case "width-fill":
+      return (
+        <svg {...p}>
+          <path d="M2.5 8h11M5 5.5L2.5 8 5 10.5M11 5.5l2.5 2.5-2.5 2.5" strokeWidth={1.25} />
+        </svg>
+      );
+    case "height-fill":
+      return (
+        <svg {...p}>
+          <path d="M8 2.5v11M5.5 5L8 2.5 10.5 5M5.5 11L8 13.5l2.5-2.5" strokeWidth={1.25} />
+        </svg>
+      );
+    case "width-min":
+    case "width-max":
+      return (
+        <svg {...p}>
+          <path d="M3 2v12M13 2v12M3 8h10" strokeWidth={1.25} />
+        </svg>
+      );
+    case "height-min":
+    case "height-max":
+      return (
+        <svg {...p}>
+          <path d="M2 3h12M2 13h12M8 3v10" strokeWidth={1.25} />
+        </svg>
+      );
+    case "corners":
+    case "radius":
+      return (
+        <svg {...p}>
+          <path d="M3 13V7a4 4 0 014-4h6" strokeWidth={1.25} />
+        </svg>
+      );
+    case "independent":
+      return (
+        <svg {...p}>
+          <path d="M4.5 7.5V4.5h3M11.5 8.5v3h-3" strokeWidth={1.25} />
+        </svg>
+      );
+    case "constraints":
+    case "constr-horiz":
+    case "constr-vert":
+      return (
+        <svg {...p}>
+          <rect x="3" y="3" width="10" height="10" rx="1.5" strokeWidth={1.2} />
+          <path d="M8 3v10M3 8h10" strokeWidth={1.2} />
+        </svg>
+      );
+    case "clip":
+    case "overflow-clip":
+      return (
+        <svg {...p}>
+          <rect x="3" y="3" width="10" height="10" rx="1.5" strokeWidth={1.25} />
+          <path d="M3 3l10 10" strokeWidth={1} />
+        </svg>
+      );
+
+    // -------------------------------------------------------------------------
+    // Boolean Operations
+    // -------------------------------------------------------------------------
+    case "boolean":
+      return (
+        <svg {...p}>
+          <circle cx="6" cy="8" r="4.5" strokeWidth={1.2} />
+          <circle cx="10" cy="8" r="4.5" strokeWidth={1.2} />
+        </svg>
+      );
+    case "boolean-union":
+    case "union":
+      return (
+        <svg {...p}>
+          <path d="M2.5 5.5A1.5 1.5 0 014 4h4.5a1.5 1.5 0 011.5 1.5V6H12a1.5 1.5 0 011.5 1.5v4.5A1.5 1.5 0 0112 13.5H7.5A1.5 1.5 0 016 12v-.5H4A1.5 1.5 0 012.5 10V5.5z" strokeWidth={1.25} />
+        </svg>
+      );
+    case "boolean-subtract":
+    case "subtract":
+      return (
+        <svg {...p}>
+          <path d="M2.5 4.5A1.5 1.5 0 014 3h5v3.5H5.5V10H2.5V4.5z" strokeWidth={1.25} />
+          <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" strokeDasharray="2 1.5" strokeWidth={1.2} />
+        </svg>
+      );
+    case "boolean-intersect":
+    case "intersect":
+      return (
+        <svg {...p}>
+          <rect x="2.5" y="2.5" width="7" height="7" rx="1" strokeWidth={1.1} />
+          <rect x="6.5" y="6.5" width="7" height="7" rx="1" strokeWidth={1.1} />
+          <rect x="6.5" y="6.5" width="3" height="3" fill="currentColor" stroke="none" />
+        </svg>
+      );
+    case "boolean-exclude":
+    case "exclude":
+      return (
+        <svg {...p} fill="currentColor" stroke="none">
+          <path d="M2.5 4A1.5 1.5 0 014 2.5h5.5A1.5 1.5 0 0111 4v2H9.5V4H4v5.5H6V11H4A1.5 1.5 0 012.5 9.5V4zM5 12a1.5 1.5 0 001.5 1.5H12a1.5 1.5 0 001.5-1.5V6.5A1.5 1.5 0 0012 5H10v1.5h2V12H6.5v-2H5v2z" />
+        </svg>
+      );
+    case "flatten":
+      return (
+        <svg {...p}>
+          <path d="M2.5 7.5l5.5 3 5.5-3M2.5 11l5.5 3 5.5-3M8 2l5.5 3-5.5 3-5.5-3z" strokeWidth={1.25} />
+        </svg>
+      );
+
+    // -------------------------------------------------------------------------
+    // Typography Sizing & Alignment
+    // -------------------------------------------------------------------------
+    case "text-auto-width":
+      return (
+        <svg {...p}>
+          <path d="M2 3v10M14 3v10M4.5 8h7M6.5 6L4.5 8l2 2M9.5 6l2 2-2 2" strokeWidth={1.25} />
+        </svg>
+      );
+    case "text-auto-height":
+      return (
+        <svg {...p}>
+          <path d="M3 2h10M3 14h10M8 4.5v7M6 6.5L8 4.5l2 2M6 9.5l2 2-2-2" strokeWidth={1.25} />
+        </svg>
+      );
+    case "text-fixed":
+      return (
+        <svg {...p}>
+          <rect x="2.5" y="2.5" width="11" height="11" rx="1.5" strokeWidth={1.25} />
+          <path d="M5.5 6h5M8 6v4.5" strokeWidth={1.25} />
+        </svg>
+      );
+    case "align-left":
+    case "align-left-alt":
+      return (
+        <svg {...p}>
+          <path d="M2.5 2v12M5.5 4.5h8M5.5 9.5h5" strokeWidth={1.25} />
+        </svg>
+      );
+    case "align-hcenter":
+    case "align-horizontal-center":
+    case "align-center":
+      return (
+        <svg {...p}>
+          <path d="M8 2v12M3.5 4.5h9M5.5 9.5h5" strokeWidth={1.25} />
+        </svg>
+      );
+    case "align-right":
+    case "align-right-alt":
+      return (
+        <svg {...p}>
+          <path d="M13.5 2v12M2.5 4.5h8M5.5 9.5h5" strokeWidth={1.25} />
+        </svg>
+      );
+    case "align-top":
+    case "align-top-alt":
+      return (
+        <svg {...p}>
+          <path d="M2 2.5h12M4.5 5.5v8M9.5 5.5v5" strokeWidth={1.25} />
+        </svg>
+      );
+    case "align-vcenter":
+    case "align-vertical-center":
+    case "align-middle":
+      return (
+        <svg {...p}>
+          <path d="M2 8h12M4.5 3.5v9M9.5 5.5v5" strokeWidth={1.25} />
+        </svg>
+      );
+    case "align-bottom":
+    case "align-bottom-alt":
+      return (
+        <svg {...p}>
+          <path d="M2 13.5h12M4.5 2.5v8M9.5 5.5v5" strokeWidth={1.25} />
+        </svg>
+      );
+    case "distribute-h":
+    case "distribute-horizontal":
+      return (
+        <svg {...p}>
+          <path d="M2.5 2.5v11M13.5 2.5v11M6 5.5h4v5H6z" strokeWidth={1.25} />
+        </svg>
+      );
+    case "distribute-v":
+    case "distribute-vertical":
+      return (
+        <svg {...p}>
+          <path d="M2.5 2.5h11M2.5 13.5h11M5.5 6h5v4h-5z" strokeWidth={1.25} />
+        </svg>
+      );
+    case "align-text-left":
+      return (
+        <svg {...p}>
+          <path d="M2.5 4h11M2.5 8h7M2.5 12h11" strokeWidth={1.25} />
+        </svg>
+      );
+    case "align-text-center":
+      return (
+        <svg {...p}>
+          <path d="M2.5 4h11M4.5 8h7M2.5 12h11" strokeWidth={1.25} />
+        </svg>
+      );
+    case "align-text-right":
+      return (
+        <svg {...p}>
+          <path d="M2.5 4h11M6.5 8h7M2.5 12h11" strokeWidth={1.25} />
+        </svg>
+      );
+    case "align-text-justified":
+    case "align-justified":
+      return (
+        <svg {...p}>
+          <path d="M2.5 4h11M2.5 8h11M2.5 12h11" strokeWidth={1.25} />
+        </svg>
+      );
+    case "valign-top":
+      return (
+        <svg {...p}>
+          <path d="M2.5 3h11M5 5.5h6v6H5z" strokeWidth={1.25} />
+        </svg>
+      );
+    case "valign-middle":
+      return (
+        <svg {...p}>
+          <path d="M2.5 8h11M5 4.5h6v7H5z" strokeWidth={1.25} />
+        </svg>
+      );
+    case "valign-bottom":
+      return (
+        <svg {...p}>
+          <path d="M2.5 13h11M5 4.5h6v6H5z" strokeWidth={1.25} />
+        </svg>
+      );
+    case "line-height":
+      return (
+        <svg {...p}>
+          <path d="M3 2.5v11M1.5 5L3 2.5 4.5 5M1.5 11L3 13.5 4.5 11M7.5 4h6M7.5 8h6M7.5 12h6" strokeWidth={1.25} />
+        </svg>
+      );
+    case "letter-spacing":
+      return (
+        <svg {...p}>
+          <path d="M2.5 13.5h11M5 12l-2.5 1.5L5 15M11 12l2.5 1.5-2.5 1.5M5.5 3h5M8 3v7" strokeWidth={1.2} />
+        </svg>
+      );
+    case "paragraph-spacing":
+      return (
+        <svg {...p}>
+          <path d="M3 2h10M3 6h7M3 11h10M3 15h7M12 7v3M10.5 8.5L12 10l1.5-1.5" strokeWidth={1.2} />
+        </svg>
+      );
+    case "leading-trim":
+    case "no-trim":
+      return (
+        <svg {...p}>
+          <path d="M2 3h12M2 13h12M4.5 5.5h7M8 5.5v5M6 10.5h4" strokeWidth={1.2} />
+        </svg>
+      );
+    case "font-size":
+      return (
+        <svg {...p}>
+          <path d="M2.5 4h6M5.5 4v9M4 13h3M9.5 7h4M11.5 7v6M10.5 13h2" strokeWidth={1.2} />
+        </svg>
+      );
+    case "type-settings":
+      return (
+        <svg {...p}>
+          <path d="M3 4h10M8 4v8M5.5 12h5" strokeWidth={1.25} />
+          <circle cx="12.5" cy="11.5" r="1.5" strokeWidth={1.2} />
+        </svg>
+      );
+    case "bold":
+      return (
+        <svg {...p}>
+          <path d="M4.5 3.5h4.5a2.2 2.2 0 012.2 2.2 2.2 2.2 0 01-2.2 2.2H4.5v-4.4zM4.5 7.9h5a2.4 2.4 0 012.4 2.4 2.4 2.4 0 01-2.4 2.4H4.5V7.9z" strokeWidth={1.3} />
+        </svg>
+      );
+    case "underline":
+    case "underline-dashed":
+    case "underline-dotted":
+    case "underline-wave":
+      return (
+        <svg {...p}>
+          <path d="M4.5 3.5v5a3.5 3.5 0 007 0v-5M3.5 13h9" strokeWidth={1.25} />
+        </svg>
+      );
+    case "strike":
+    case "strike-through":
+      return (
+        <svg {...p}>
+          <path d="M2.5 8h11M5.5 5.2c.4-1.3 1.4-1.7 2.5-1.7s2.2.6 2.5 1.7M5.5 10.8c.4 1.3 1.4 1.7 2.5 1.7s2.2-.6 2.5-1.7" strokeWidth={1.25} />
+        </svg>
+      );
+    case "list":
+    case "list-view":
+    case "list-horizontal":
+    case "number-list":
+      return (
+        <svg {...p}>
+          <path d="M6.5 4.5h7M6.5 8h7M6.5 11.5h7" strokeWidth={1.25} />
+          <circle cx="3.5" cy="4.5" r="1" fill="currentColor" stroke="none" />
+          <circle cx="3.5" cy="8" r="1" fill="currentColor" stroke="none" />
+          <circle cx="3.5" cy="11.5" r="1" fill="currentColor" stroke="none" />
+        </svg>
+      );
+
+    // -------------------------------------------------------------------------
+    // Dev Mode & Code Generation
+    // -------------------------------------------------------------------------
+    case "dev":
+    case "dev-brackets":
+      return (
+        <svg {...p}>
+          <path d="M5.5 4.5L2 8l3.5 3.5M10.5 4.5L14 8l-3.5 3.5" strokeWidth={1.4} />
+        </svg>
+      );
+    case "code":
+    case "code-block":
+    case "code-snippet":
+    case "embed-code":
+      return (
+        <svg {...p}>
+          <rect x="2" y="3" width="12" height="10" rx="2" strokeWidth={1.2} />
+          <path d="M5.5 6.5L4 8l1.5 1.5M10.5 6.5L12 8l-1.5 1.5" strokeWidth={1.2} />
+        </svg>
+      );
+    case "inspect":
+      return (
+        <svg {...p}>
+          <path d="M3 2l5 12 2-4.5L14.5 7z" strokeWidth={1.25} />
+        </svg>
+      );
+    case "copy":
+    case "duplicate":
+      return (
+        <svg {...p}>
+          <rect x="5.5" y="5.5" width="7.5" height="7.5" rx="1.5" strokeWidth={1.25} />
+          <path d="M10.5 5.5V3.5a1.5 1.5 0 00-1.5-1.5H3.5A1.5 1.5 0 002 3.5V9a1.5 1.5 0 001.5 1.5h2" strokeWidth={1.25} />
+        </svg>
+      );
+    case "clipboard":
+      return (
+        <svg {...p}>
+          <rect x="3.5" y="4" width="9" height="10" rx="1.5" strokeWidth={1.25} />
+          <path d="M6 4V3a1.5 1.5 0 013 0v1" strokeWidth={1.25} />
+        </svg>
+      );
+    case "scissors":
+    case "cut":
+      return (
+        <svg {...p}>
+          <circle cx="4.5" cy="4.5" r="1.8" strokeWidth={1.2} />
+          <circle cx="4.5" cy="11.5" r="1.8" strokeWidth={1.2} />
+          <path d="M6 5.8L13.5 12M6 10.2L13.5 4" strokeWidth={1.25} />
+        </svg>
+      );
+
+    // -------------------------------------------------------------------------
+    // Prototype & Presentation
+    // -------------------------------------------------------------------------
+    case "play":
+    case "preview-prototype":
+      return (
+        <svg {...p} fill="currentColor" stroke="none">
+          <path d="M4.5 3.2a.8.8 0 00-1.2.7v8.2a.8.8 0 001.2.7l7.5-4.1a.8.8 0 000-1.4L4.5 3.2z" />
+        </svg>
+      );
+    case "proto":
+    case "prototyping":
+    case "magic-noodle":
+    case "noodle":
+      return (
+        <svg {...p}>
+          <circle cx="3.5" cy="8" r="1.5" strokeWidth={1.2} />
+          <circle cx="12.5" cy="8" r="1.5" strokeWidth={1.2} />
+          <path d="M5 8c2.5 0 3.5-3.5 6-3.5" strokeWidth={1.25} />
+        </svg>
+      );
+    case "back":
+    case "navigate-back":
+      return (
+        <svg {...p}>
+          <path d="M12.5 8H3.5M7 4.5L3.5 8 7 11.5" strokeWidth={1.25} />
+        </svg>
+      );
+    case "forward":
+    case "navigate-forward":
+      return (
+        <svg {...p}>
+          <path d="M3.5 8h9M9 4.5l3.5 3.5L9 11.5" strokeWidth={1.25} />
+        </svg>
+      );
+
+    // -------------------------------------------------------------------------
+    // Fills, Strokes & Effects
+    // -------------------------------------------------------------------------
+    case "eyedropper":
+      return (
+        <svg {...p}>
+          <path d="M10.5 2.5l3 3-1.2 1.2-3-3zM8.8 4.7L3.5 10v2.5H6l5.3-5.3" strokeWidth={1.25} />
+          <path d="M3.5 13.5h3.5" strokeWidth={1.2} />
+        </svg>
+      );
+    case "fill":
+    case "paint":
+    case "swatch":
+    case "color":
+      return (
+        <svg {...p} fill="currentColor" stroke="none">
+          <rect x="2.5" y="2.5" width="11" height="11" rx="2" />
+        </svg>
+      );
+    case "fill-solid":
+      return (
+        <svg {...p}>
+          <rect x="2.5" y="2.5" width="11" height="11" rx="2" strokeWidth={1.25} />
+          <rect x="4.5" y="4.5" width="7" height="7" rx="1" fill="currentColor" stroke="none" />
+        </svg>
+      );
+    case "gradient-linear":
+    case "fill-gradient-linear":
+      return (
+        <svg {...p}>
+          <rect x="2.5" y="2.5" width="11" height="11" rx="2" strokeWidth={1.25} />
+          <path d="M2.5 13.5L13.5 2.5" strokeWidth={1.2} />
+        </svg>
+      );
+    case "gradient-radial":
+      return (
+        <svg {...p}>
+          <circle cx="8" cy="8" r="5.5" strokeWidth={1.25} />
+          <circle cx="8" cy="8" r="2.5" strokeWidth={1.2} />
+        </svg>
+      );
+    case "gradient-angular":
+      return (
+        <svg {...p}>
+          <circle cx="8" cy="8" r="5.5" strokeWidth={1.25} />
+          <path d="M8 8V2.5M8 8l4 4" strokeWidth={1.2} />
+        </svg>
+      );
+    case "gradient-diamond":
+      return (
+        <svg {...p}>
+          <polygon points="8,2.5 13.5,8 8,13.5 2.5,8" strokeWidth={1.25} />
+          <polygon points="8,5.5 10.5,8 8,10.5 5.5,8" strokeWidth={1.1} />
+        </svg>
+      );
+    case "effects":
+    case "shadows":
+      return (
+        <svg {...p}>
+          <circle cx="8" cy="8" r="3.5" strokeWidth={1.2} />
+          <path d="M8 1.5v1.8M8 12.7v1.8M1.5 8h1.8M12.7 8h1.8M3.4 3.4l1.3 1.3M11.3 11.3l1.3 1.3M12.6 3.4l-1.3 1.3M4.7 11.3l-1.3 1.3" strokeWidth={1.2} />
+        </svg>
+      );
+    case "layer-blur":
+    case "layer-blur-medium":
+    case "background-blur":
+      return (
+        <svg {...p}>
+          <circle cx="8" cy="8" r="5.5" strokeWidth={1.2} strokeDasharray="2 1.5" />
+          <circle cx="8" cy="8" r="2.5" strokeWidth={1} />
+        </svg>
+      );
+    case "mask":
+      return (
+        <svg {...p}>
+          <circle cx="8" cy="8" r="5.5" strokeWidth={1.25} />
+          <path d="M8 2.5v11c3 0 5.5-2.5 5.5-5.5S11 2.5 8 2.5z" fill="currentColor" stroke="none" />
+        </svg>
+      );
+    case "stroke-inside":
+      return (
+        <svg {...p}>
+          <rect x="3" y="3" width="10" height="10" rx="1.5" strokeWidth={1.2} />
+          <rect x="5.5" y="5.5" width="5" height="5" rx="0.5" strokeWidth={1.2} />
+        </svg>
+      );
+    case "stroke-center":
+      return (
+        <svg {...p}>
+          <rect x="3" y="3" width="10" height="10" rx="1.5" strokeWidth={1.2} />
+        </svg>
+      );
+    case "stroke-outside":
+      return (
+        <svg {...p}>
+          <rect x="4.5" y="4.5" width="7" height="7" rx="0.8" strokeWidth={1.2} />
+          <rect x="2.5" y="2.5" width="11" height="11" rx="1.5" strokeDasharray="2 1.5" strokeWidth={1} />
+        </svg>
+      );
+    case "cap-none":
+      return (
+        <svg {...p}>
+          <path d="M3 8h10" strokeWidth={1.3} />
+        </svg>
+      );
+    case "cap-round":
+      return (
+        <svg {...p}>
+          <path d="M3 8h7.5" strokeWidth={1.3} />
+          <circle cx="11.5" cy="8" r="1.5" fill="currentColor" stroke="none" />
+        </svg>
+      );
+    case "cap-square":
+      return (
+        <svg {...p}>
+          <path d="M3 8h7" strokeWidth={1.3} />
+          <rect x="10" y="6.5" width="3" height="3" fill="currentColor" stroke="none" />
+        </svg>
+      );
+    case "join-miter":
+      return (
+        <svg {...p}>
+          <path d="M3.5 12.5V3.5h9" strokeWidth={1.3} strokeLinecap="square" strokeLinejoin="miter" />
+        </svg>
+      );
+    case "join-round":
+      return (
+        <svg {...p}>
+          <path d="M3.5 12.5V6.5a3 3 0 013-3h6" strokeWidth={1.3} />
+        </svg>
+      );
+    case "join-bevel":
+      return (
+        <svg {...p}>
+          <path d="M3.5 12.5V7.5l4-4h5" strokeWidth={1.3} />
+        </svg>
+      );
+    case "dash":
+      return (
+        <svg {...p}>
+          <path d="M2.5 8h2.5M7 8h2.5M11.5 8H14" strokeWidth={1.3} />
+        </svg>
+      );
+
+    // -------------------------------------------------------------------------
+    // Chrome, UI State, Badges & Device Presets
+    // -------------------------------------------------------------------------
     case "eye":
       return (
         <svg {...p}>
-          <path d="M1.6 8s2.6-4.4 6.4-4.4S14.4 8 14.4 8s-2.6 4.4-6.4 4.4S1.6 8 1.6 8z" />
-          <circle cx="8" cy="8" r="1.7" />
+          <path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8s-2.5 4.5-6.5 4.5S1.5 8 1.5 8z" strokeWidth={1.25} />
+          <circle cx="8" cy="8" r="2" strokeWidth={1.2} />
         </svg>
       );
     case "eye-off":
+    case "hidden":
       return (
         <svg {...p}>
-          <path d="M2.2 2.2l11.6 11.6" />
-          <path d="M6.5 6.6A2 2 0 008 10a2 2 0 001.7-3M4.2 4.6C2.6 5.8 1.6 8 1.6 8s2.6 4.4 6.4 4.4c1.2 0 2.3-.3 3.3-.8M7.1 3.6A6.7 6.7 0 018 3.6c3.8 0 6.4 4.4 6.4 4.4a10 10 0 01-1.7 2.2" />
+          <path d="M2 2l12 12M6.6 6.7A2 2 0 008 10a2 2 0 001.4-.6M4.2 4.4C2.5 5.6 1.5 8 1.5 8s2.5 4.5 6.5 4.5c1.3 0 2.5-.4 3.5-.9M7.2 3.6A7 7 0 018 3.5c4 0 6.5 4.5 6.5 4.5a11 11 0 01-1.8 2.3" strokeWidth={1.25} />
         </svg>
       );
     case "lock":
+    case "lock-locked":
       return (
         <svg {...p}>
-          <rect x="3.4" y="7.2" width="9.2" height="6.4" rx="1.2" />
-          <path d="M5.4 7.2V5.4a2.6 2.6 0 015.2 0v1.8" />
+          <rect x="3.5" y="7" width="9" height="6.5" rx="1.5" strokeWidth={1.25} />
+          <path d="M5.5 7V5a2.5 2.5 0 015 0v2" strokeWidth={1.25} />
         </svg>
       );
     case "unlock":
+    case "lock-open":
       return (
         <svg {...p}>
-          <rect x="3.4" y="7.2" width="9.2" height="6.4" rx="1.2" />
-          <path d="M5.4 7.2V5.4a2.6 2.6 0 014.8-1.4" />
+          <rect x="3.5" y="7" width="9" height="6.5" rx="1.5" strokeWidth={1.25} />
+          <path d="M5.5 7V5a2.5 2.5 0 014.8-1" strokeWidth={1.25} />
         </svg>
       );
     case "plus":
       return (
         <svg {...p}>
-          <path d="M8 3.2v9.6M3.2 8h9.6" />
+          <path d="M8 2.5v11M2.5 8h11" strokeWidth={1.3} />
         </svg>
       );
     case "minus":
       return (
         <svg {...p}>
-          <path d="M3.4 8h9.2" />
+          <path d="M3 8h10" strokeWidth={1.3} />
         </svg>
       );
+    case "close":
     case "x-mark":
       return (
         <svg {...p}>
-          <path d="M3.4 3.4l9.2 9.2M12.6 3.4L3.4 12.6" />
+          <path d="M3.5 3.5l9 9M12.5 3.5l-9 9" strokeWidth={1.3} />
         </svg>
       );
     case "chevron":
+    case "chevron-down":
+    case "chevron-down-large":
       return (
-        <svg {...p} strokeWidth={1.5}>
-          <path d="M5 6.4L8 9.4l3-3" />
+        <svg {...p}>
+          <path d="M4 6l4 4 4-4" strokeWidth={1.4} />
         </svg>
       );
     case "chevron-right":
+    case "chevron-right-large":
       return (
-        <svg {...p} strokeWidth={1.5}>
-          <path d="M6.4 4.2L9.6 8l-3.2 3.8" />
+        <svg {...p}>
+          <path d="M6 4l4 4-4 4" strokeWidth={1.4} />
         </svg>
       );
-    case "play":
+    case "chevron-up":
       return (
-        <svg {...p} fill="currentColor" stroke="none">
-          <path d="M5 3.4v9.2L13 8z" />
+        <svg {...p}>
+          <path d="M4 10l4-4 4 4" strokeWidth={1.4} />
+        </svg>
+      );
+    case "chevrons-down":
+      return (
+        <svg {...p}>
+          <path d="M4 4.5l4 4 4-4M4 8.5l4 4 4-4" strokeWidth={1.3} />
+        </svg>
+      );
+    case "chevrons-up":
+      return (
+        <svg {...p}>
+          <path d="M4 7.5l4-4 4 4M4 11.5l4-4 4 4" strokeWidth={1.3} />
         </svg>
       );
     case "more":
@@ -228,464 +1006,211 @@ export function Icon({
           <circle cx="12.5" cy="8" r="1.15" />
         </svg>
       );
+    case "trash":
+      return (
+        <svg {...p}>
+          <path d="M3 4.5h10M6 4.5V3a1 1 0 011-1h2a1 1 0 011 1v1.5M4.5 4.5l.7 8a1.5 1.5 0 001.5 1.5h2.6a1.5 1.5 0 001.5-1.5l.7-8" strokeWidth={1.25} />
+        </svg>
+      );
     case "rotate":
+    case "rotate-ccw":
       return (
         <svg {...p}>
-          <path d="M3.4 8a4.6 4.6 0 108.4-2.6" />
-          <path d="M12.4 2.8v3.2H9.2" />
-        </svg>
-      );
-    case "radius":
-      return (
-        <svg {...p}>
-          <path d="M3.2 12.8V6.2A3 3 0 016.2 3.2h6.6" />
-        </svg>
-      );
-    case "align-left":
-      return (
-        <svg {...p}>
-          <path d="M2.5 3.2v9.6M5.5 5.2h8M5.5 10.8h5.5" />
-        </svg>
-      );
-    case "align-hcenter":
-      return (
-        <svg {...p}>
-          <path d="M8 2.8v10.4M4.2 5.2h7.6M5.4 10.8h5.2" />
-        </svg>
-      );
-    case "align-right":
-      return (
-        <svg {...p}>
-          <path d="M13.5 3.2v9.6M2.5 5.2h8M5.5 10.8h5.5" />
-        </svg>
-      );
-    case "align-top":
-      return (
-        <svg {...p}>
-          <path d="M3.2 2.5h9.6M5.2 5.5v8M10.8 5.5v5.5" />
-        </svg>
-      );
-    case "align-vcenter":
-      return (
-        <svg {...p}>
-          <path d="M2.8 8h10.4M5.2 4.2v7.6M10.8 5.4v5.2" />
-        </svg>
-      );
-    case "align-bottom":
-      return (
-        <svg {...p}>
-          <path d="M3.2 13.5h9.6M5.2 2.5v8M10.8 5v5.5" />
-        </svg>
-      );
-    case "distribute-h":
-      return (
-        <svg {...p}>
-          <path d="M2.5 3.2v9.6M13.5 3.2v9.6M6 5.5h4v5H6z" />
-        </svg>
-      );
-    case "distribute-v":
-      return (
-        <svg {...p}>
-          <path d="M3.2 2.5h9.6M3.2 13.5h9.6M5.5 6h5v4h-5z" />
-        </svg>
-      );
-    case "layout-h":
-      return (
-        <svg {...p}>
-          <rect x="1.8" y="4.2" width="4" height="7.6" rx="0.8" />
-          <rect x="6.8" y="4.2" width="2.4" height="7.6" rx="0.8" />
-          <rect x="10.2" y="4.2" width="4" height="7.6" rx="0.8" />
-        </svg>
-      );
-    case "layout-v":
-      return (
-        <svg {...p}>
-          <rect x="4.2" y="1.8" width="7.6" height="4" rx="0.8" />
-          <rect x="4.2" y="6.8" width="7.6" height="2.4" rx="0.8" />
-          <rect x="4.2" y="10.2" width="7.6" height="4" rx="0.8" />
-        </svg>
-      );
-    case "layout-none":
-      return (
-        <svg {...p}>
-          <rect x="2.4" y="2.4" width="4.6" height="4.6" rx="0.8" />
-          <rect x="9" y="2.4" width="4.6" height="4.6" rx="0.8" />
-          <rect x="2.4" y="9" width="4.6" height="4.6" rx="0.8" />
-          <rect x="9" y="9" width="4.6" height="4.6" rx="0.8" />
-        </svg>
-      );
-    case "layout-grid":
-      return (
-        <svg {...p}>
-          <rect x="2.4" y="2.4" width="4.4" height="4.4" rx="0.6" />
-          <rect x="9.2" y="2.4" width="4.4" height="4.4" rx="0.6" />
-          <rect x="2.4" y="9.2" width="4.4" height="4.4" rx="0.6" />
-          <rect x="9.2" y="9.2" width="4.4" height="4.4" rx="0.6" />
-        </svg>
-      );
-    case "clip":
-      return (
-        <svg {...p}>
-          <rect x="3" y="3" width="10" height="10" rx="1.2" />
-        </svg>
-      );
-    case "constraints":
-      return (
-        <svg {...p}>
-          <rect x="3.2" y="3.2" width="9.6" height="9.6" rx="1" />
-          <path d="M8 3.2v9.6M3.2 8h9.6" />
+          <path d="M3.5 8a4.5 4.5 0 108.4-2.6M12.5 2.5v3.5H9" strokeWidth={1.25} />
         </svg>
       );
     case "flip-h":
+    case "flip-horizontal":
       return (
         <svg {...p}>
-          <path d="M8 2.4v11.2M3.4 11.6L6.6 8 3.4 4.4zM12.6 11.6L9.4 8l3.2-3.6z" />
+          <path d="M8 2v12M3 11.5L6.5 8 3 4.5zM13 11.5L9.5 8 13 4.5z" strokeWidth={1.2} />
         </svg>
       );
     case "flip-v":
+    case "flip-vertical":
       return (
         <svg {...p}>
-          <path d="M2.4 8h11.2M11.6 3.4L8 6.6 4.4 3.4zM11.6 12.6L8 9.4l-3.6 3.2z" />
-        </svg>
-      );
-    case "independent":
-      return (
-        <svg {...p}>
-          <path d="M4.2 8.8V5.2A1.2 1.2 0 015.4 4h3.6M11.8 7.2v3.6A1.2 1.2 0 0110.6 12H7" />
+          <path d="M2 8h12M11.5 3L8 6.5 4.5 3zM11.5 13L8 9.5 4.5 13z" strokeWidth={1.2} />
         </svg>
       );
     case "aspect":
+    case "linked":
       return (
         <svg {...p}>
-          <path d="M6.2 4.2H4.4A1.2 1.2 0 003.2 5.4v1.8M9.8 4.2h1.8A1.2 1.2 0 0112.8 5.4v1.8M6.2 11.8H4.4A1.2 1.2 0 013.2 10.6V8.8M9.8 11.8h1.8A1.2 1.2 0 0012.8 10.6V8.8" />
+          <rect x="3" y="5.5" width="4.5" height="5" rx="1.5" strokeWidth={1.2} />
+          <rect x="8.5" y="5.5" width="4.5" height="5" rx="1.5" strokeWidth={1.2} />
+          <path d="M6.5 8h3" strokeWidth={1.3} />
         </svg>
       );
-    case "wrap":
+    case "link":
+    case "link-connected":
       return (
         <svg {...p}>
-          <path d="M3.2 4.4h6.4M3.2 8h9.6M3.2 11.6h4.8" />
-          <path d="M12.4 4.4v3.6H10" />
+          <path d="M6.5 9.5l3-3M9 4.5l1.5-1.5a2.5 2.5 0 013.5 3.5L12.5 8M7 11.5L5.5 13a2.5 2.5 0 01-3.5-3.5L3.5 8" strokeWidth={1.25} />
         </svg>
       );
-    case "dash":
+    case "link-broken":
       return (
         <svg {...p}>
-          <path d="M2.6 8h2.4M7 8h2.4M11.2 8h2.2" />
-        </svg>
-      );
-    case "cap-none":
-      return (
-        <svg {...p}>
-          <path d="M3 8h10" />
-        </svg>
-      );
-    case "cap-round":
-      return (
-        <svg {...p}>
-          <path d="M3 8h7.4" />
-          <circle cx="11.4" cy="8" r="1.8" />
-        </svg>
-      );
-    case "cap-square":
-      return (
-        <svg {...p}>
-          <path d="M3 8h7.2" />
-          <rect x="10" y="6.2" width="3.6" height="3.6" />
-        </svg>
-      );
-    case "join-miter":
-      return (
-        <svg {...p}>
-          <path d="M3.2 12.4V3.6h8.8" />
-        </svg>
-      );
-    case "join-round":
-      return (
-        <svg {...p}>
-          <path d="M3.2 12.4V6.2A3 3 0 016.2 3.2h6.6" />
-        </svg>
-      );
-    case "join-bevel":
-      return (
-        <svg {...p}>
-          <path d="M3.2 12.4V7.2L7.2 3.2h5.6" />
-        </svg>
-      );
-    case "padding":
-      return (
-        <svg {...p}>
-          <rect x="2.6" y="2.6" width="10.8" height="10.8" rx="1" />
-          <rect x="5.2" y="5.2" width="5.6" height="5.6" rx="0.6" />
-        </svg>
-      );
-    case "gap":
-      return (
-        <svg {...p}>
-          <path d="M3 4.2h4.4v7.6H3zM8.6 4.2H13v7.6H8.6z" />
-        </svg>
-      );
-    case "hug":
-      return (
-        <svg {...p}>
-          <path d="M4.2 3.4h7.6M4.2 12.6h7.6M6.2 6.2h3.6v3.6H6.2z" />
-        </svg>
-      );
-    case "effects":
-      return (
-        <svg {...p}>
-          <circle cx="8" cy="8" r="3.2" />
-          <path d="M8 1.8v1.8M8 12.4v1.8M1.8 8h1.8M12.4 8h1.8M3.4 3.4l1.3 1.3M11.3 11.3l1.3 1.3M12.6 3.4l-1.3 1.3M4.7 11.3l-1.3 1.3" />
-        </svg>
-      );
-    case "code":
-    case "dev":
-      return (
-        <svg {...p}>
-          <path d="M5.4 4.6L2.4 8l3 3.4M10.6 4.6l3 3.4-3 3.4" />
-        </svg>
-      );
-    case "resources":
-      return (
-        <svg {...p}>
-          <path d="M8 2.4l3.2 3.2L8 8.8 4.8 5.6z" />
-          <path d="M8 8.8l3.2 3.2-1.4 1.4-3.2-3.2zM4.8 5.6L2.4 8l1.4 1.4 3.2-3.2z" />
-        </svg>
-      );
-    case "proto":
-      return (
-        <svg {...p}>
-          <circle cx="3.6" cy="8" r="1.6" />
-          <circle cx="12.4" cy="4.4" r="1.6" />
-          <circle cx="12.4" cy="11.6" r="1.6" />
-          <path d="M5.2 7.4C7.4 7.4 8.4 4.4 10.8 4.4M5.2 8.6C7.4 8.6 8.4 11.6 10.8 11.6" />
-        </svg>
-      );
-    case "page":
-      return (
-        <svg {...p}>
-          <path d="M4.2 2.4h5.4L12.4 5.2v8.4H4.2z" />
-          <path d="M9.4 2.4v3h3" />
-        </svg>
-      );
-    case "component":
-      return (
-        <svg {...p}>
-          <path d="M8 2.2l4.6 4.6L8 13.4 3.4 8.8z" />
-        </svg>
-      );
-    case "group":
-      return (
-        <svg {...p} strokeDasharray="2 1.4">
-          <rect x="2.6" y="2.6" width="10.8" height="10.8" rx="1" />
-        </svg>
-      );
-    case "layers":
-      return (
-        <svg {...p}>
-          <path d="M2.6 6.2L8 3.4l5.4 2.8L8 9z" />
-          <path d="M2.6 8.8L8 11.6l5.4-2.8" />
-        </svg>
-      );
-    case "vars":
-      return (
-        <svg {...p}>
-          <rect x="2.6" y="2.6" width="4.6" height="4.6" rx="1" />
-          <rect x="8.8" y="2.6" width="4.6" height="4.6" rx="1" />
-          <rect x="2.6" y="8.8" width="4.6" height="4.6" rx="1" />
-          <rect x="8.8" y="8.8" width="4.6" height="4.6" rx="1" />
-        </svg>
-      );
-    case "tools":
-      return (
-        <svg {...p}>
-          <rect x="2.6" y="2.6" width="4.8" height="4.8" rx="1.2" />
-          <rect x="8.6" y="2.6" width="4.8" height="4.8" rx="1.2" />
-          <rect x="2.6" y="8.6" width="4.8" height="4.8" rx="1.2" />
-          <path d="M10.2 10.2h4.2M12.3 8.1v4.2" />
-        </svg>
-      );
-    case "agent":
-      return (
-        <svg {...p}>
-          <path d="M8 2.2l1.1 3.2H12.6L9.8 7.4l1.1 3.2L8 8.6l-2.9 2-1.1-3.2L1.4 5.4h3.5z" />
+          <path d="M9 4.5l1.5-1.5a2.5 2.5 0 013.5 3.5L12.5 8M7 11.5L5.5 13a2.5 2.5 0 01-3.5-3.5L3.5 8M2 2l12 12" strokeWidth={1.25} />
         </svg>
       );
     case "minimize":
       return (
         <svg {...p}>
-          <path d="M3.2 8h9.6M6.2 4.6L3.2 8l3 3.4M9.8 4.6l3 3.4-3 3.4" />
-        </svg>
-      );
-    case "type-settings":
-      return (
-        <svg {...p}>
-          <path d="M3.2 4.2h9.6M8 4.2v7.6M4.6 12.4h6.8" />
-          <circle cx="12.2" cy="11.6" r="1.6" />
-        </svg>
-      );
-    case "align-text-left":
-      return (
-        <svg {...p}>
-          <path d="M3 4.2h10M3 8h7M3 11.8h10" />
-        </svg>
-      );
-    case "align-text-center":
-      return (
-        <svg {...p}>
-          <path d="M3 4.2h10M4.5 8h7M3 11.8h10" />
-        </svg>
-      );
-    case "align-text-right":
-      return (
-        <svg {...p}>
-          <path d="M3 4.2h10M6 8h7M3 11.8h10" />
-        </svg>
-      );
-    case "align-text-justified":
-      return (
-        <svg {...p}>
-          <path d="M3 4.2h10M3 8h10M3 11.8h10" />
-        </svg>
-      );
-    case "valign-top":
-      return (
-        <svg {...p}>
-          <path d="M3 3.4h10M5 6.2h6v6H5z" />
-        </svg>
-      );
-    case "valign-middle":
-      return (
-        <svg {...p}>
-          <path d="M3 8h10M5 4.4h6v7.2H5z" />
-        </svg>
-      );
-    case "valign-bottom":
-      return (
-        <svg {...p}>
-          <path d="M3 12.6h10M5 3.8h6v6H5z" />
-        </svg>
-      );
-    case "underline":
-      return (
-        <svg {...p}>
-          <path d="M4.2 3.4v5.2a3.8 3.8 0 007.6 0V3.4M3.4 13h9.2" />
-        </svg>
-      );
-    case "strike":
-      return (
-        <svg {...p}>
-          <path d="M3 8h10M5.2 5.2c.4-1.4 1.6-2 2.8-2s2.4.8 2.8 2M5.2 10.8c.5 1.4 1.7 2.2 3 2.2s2.4-.8 2.8-2" />
-        </svg>
-      );
-    case "list":
-      return (
-        <svg {...p}>
-          <path d="M6.4 4.2h6.6M6.4 8h6.6M6.4 11.8h6.6" />
-          <circle cx="3.6" cy="4.2" r="0.9" fill="currentColor" />
-          <circle cx="3.6" cy="8" r="0.9" fill="currentColor" />
-          <circle cx="3.6" cy="11.8" r="0.9" fill="currentColor" />
-        </svg>
-      );
-    case "stroke-inside":
-      return (
-        <svg {...p}>
-          <rect x="3" y="3" width="10" height="10" rx="1" />
-          <rect x="5.2" y="5.2" width="5.6" height="5.6" rx="0.4" />
-        </svg>
-      );
-    case "stroke-center":
-      return (
-        <svg {...p}>
-          <rect x="3" y="3" width="10" height="10" rx="1" />
-        </svg>
-      );
-    case "stroke-outside":
-      return (
-        <svg {...p}>
-          <rect x="4.4" y="4.4" width="7.2" height="7.2" rx="0.6" />
-          <rect x="2.4" y="2.4" width="11.2" height="11.2" rx="1.2" strokeDasharray="2 1.5" />
-        </svg>
-      );
-    case "eyedropper":
-      return (
-        <svg {...p}>
-          <path d="M10.2 2.6l3.2 3.2-1.1 1.1-3.2-3.2z" />
-          <path d="M8.6 4.8L3.4 10v2.6H6l5.2-5.2" />
-          <path d="M3.2 13.4h4" />
-        </svg>
-      );
-    case "copy":
-      return (
-        <svg {...p}>
-          <rect x="5.4" y="5.4" width="7.6" height="7.6" rx="1.2" />
-          <path d="M10.6 5.2V3.8A1.2 1.2 0 009.4 2.6H3.8A1.2 1.2 0 002.6 3.8v5.6A1.2 1.2 0 003.8 10.6h1.4" />
-        </svg>
-      );
-    case "clipboard":
-      return (
-        <svg {...p}>
-          <rect x="3.6" y="3.8" width="8.8" height="10" rx="1.2" />
-          <path d="M6 3.8V3a2 2 0 014 0v.8" />
-        </svg>
-      );
-    case "scissors":
-      return (
-        <svg {...p}>
-          <circle cx="4.2" cy="4.4" r="1.6" />
-          <circle cx="4.2" cy="11.6" r="1.6" />
-          <path d="M5.6 5.4L13.2 12M5.6 10.6L13.2 4" />
-        </svg>
-      );
-    case "trash":
-      return (
-        <svg {...p}>
-          <path d="M3.2 5.2h9.6M6.2 5.2V3.6h3.6v1.6M4.6 5.2l.6 7.4h5.6l.6-7.4" />
-        </svg>
-      );
-    case "chevrons-up":
-      return (
-        <svg {...p}>
-          <path d="M4.2 8.4L8 4.6l3.8 3.8M4.2 11.6L8 7.8l3.8 3.8" />
-        </svg>
-      );
-    case "chevron-up":
-      return (
-        <svg {...p}>
-          <path d="M4.2 10L8 6.2 11.8 10" />
-        </svg>
-      );
-    case "chevron-down":
-      return (
-        <svg {...p}>
-          <path d="M4.2 6L8 9.8 11.8 6" />
-        </svg>
-      );
-    case "chevrons-down":
-      return (
-        <svg {...p}>
-          <path d="M4.2 4.4L8 8.2l3.8-3.8M4.2 7.6L8 11.4l3.8-3.8" />
+          <path d="M3 8h10M6 5L3 8l3 3M10 5l3 3-3 3" strokeWidth={1.25} />
         </svg>
       );
     case "help":
+    case "info":
       return (
         <svg {...p}>
-          <circle cx="8" cy="8" r="5.4" />
-          <path d="M6.4 6.2a1.6 1.6 0 012.8 1.1c0 1.1-1.6 1.4-1.6 2.4" />
-          <circle cx="8" cy="11.4" r="0.6" fill="currentColor" stroke="none" />
+          <circle cx="8" cy="8" r="5.5" strokeWidth={1.25} />
+          <path d="M6.5 6.2a1.6 1.6 0 012.9 1c0 1.1-1.4 1.5-1.4 2.5" strokeWidth={1.25} />
+          <circle cx="8" cy="11.5" r="0.75" fill="currentColor" stroke="none" />
         </svg>
       );
-    case "zoom-in":
+    case "settings":
+    case "adjust":
       return (
         <svg {...p}>
-          <circle cx="7" cy="7" r="3.5" />
-          <path d="M12.5 12.5L9.6 9.6M7 5.4v3.2M5.4 7h3.2" />
+          <circle cx="8" cy="8" r="2.5" strokeWidth={1.2} />
+          <path d="M8 1.5v1.8M8 12.7v1.8M1.5 8h1.8M12.7 8h1.8M3.4 3.4l1.3 1.3M11.3 11.3l1.3 1.3M12.6 3.4l-1.3 1.3M4.7 11.3l-1.3 1.3" strokeWidth={1.2} />
         </svg>
       );
-    case "zoom-out":
+    case "resources":
+    case "community":
+    case "ui-kit":
       return (
         <svg {...p}>
-          <circle cx="7" cy="7" r="3.5" />
-          <path d="M12.5 12.5L9.6 9.6M5.4 7h3.2" />
+          <path d="M8 2.2l3.2 3.2L8 8.6 4.8 5.4z" strokeWidth={1.2} />
+          <path d="M8 8.6l3.2 3.2-1.4 1.4-3.2-3.2zM4.8 5.4L2.4 7.8l1.4 1.4 3.2-3.2z" strokeWidth={1.2} />
+        </svg>
+      );
+    case "tools":
+      return (
+        <svg {...p}>
+          <rect x="2.5" y="2.5" width="4.8" height="4.8" rx="1.2" strokeWidth={1.2} />
+          <rect x="8.7" y="2.5" width="4.8" height="4.8" rx="1.2" strokeWidth={1.2} />
+          <rect x="2.5" y="8.7" width="4.8" height="4.8" rx="1.2" strokeWidth={1.2} />
+          <path d="M10.2 11.1h3M11.7 9.6v3" strokeWidth={1.25} />
+        </svg>
+      );
+    case "agent":
+    case "ai":
+    case "qwand":
+    case "wand":
+      return (
+        <svg {...p}>
+          <path d="M8 2l1.3 3.5L12.8 7 9.3 8.5 8 12 6.7 8.5 3.2 7l3.5-1.5z" strokeWidth={1.2} />
+          <path d="M12.5 2l.5 1.5 1.5.5-1.5.5-.5 1.5-.5-1.5-1.5-.5 1.5-.5z" fill="currentColor" stroke="none" />
+        </svg>
+      );
+    case "vars":
+    case "variable":
+      return (
+        <svg {...p}>
+          <rect x="2.5" y="4.5" width="11" height="7" rx="3.5" strokeWidth={1.2} />
+          <circle cx="6" cy="8" r="1.5" fill="currentColor" stroke="none" />
+        </svg>
+      );
+    case "styles":
+    case "text-library":
+    case "library":
+      return (
+        <svg {...p} fill="currentColor" stroke="none">
+          <circle cx="5" cy="5" r="1.5" />
+          <circle cx="11" cy="5" r="1.5" />
+          <circle cx="5" cy="11" r="1.5" />
+          <circle cx="11" cy="11" r="1.5" />
+        </svg>
+      );
+    case "layers":
+    case "stack":
+      return (
+        <svg {...p}>
+          <path d="M2.5 6L8 3.2l5.5 2.8L8 8.8z" strokeWidth={1.25} />
+          <path d="M2.5 8.8L8 11.6l5.5-2.8M2.5 11.6L8 14.4l5.5-2.8" strokeWidth={1.25} />
+        </svg>
+      );
+    case "page":
+    case "pages":
+      return (
+        <svg {...p}>
+          <path d="M4 2.5h5.5L12.5 5.5v8H4z" strokeWidth={1.25} />
+          <path d="M9.5 2.5v3h3" strokeWidth={1.25} />
+        </svg>
+      );
+    case "group":
+    case "collapse-layers":
+      return (
+        <svg {...p} strokeDasharray="2 1.4">
+          <rect x="2.5" y="2.5" width="11" height="11" rx="1.5" strokeWidth={1.2} />
+        </svg>
+      );
+    case "target":
+      return (
+        <svg {...p}>
+          <circle cx="8" cy="8" r="5.5" strokeWidth={1.2} />
+          <circle cx="8" cy="8" r="2.5" strokeWidth={1.2} />
+          <path d="M8 1v2M8 13v2M1 8h2M13 8h2" strokeWidth={1.2} />
+        </svg>
+      );
+    case "phone":
+    case "mobile":
+      return (
+        <svg {...p}>
+          <rect x="4.5" y="2" width="7" height="12" rx="1.5" strokeWidth={1.25} />
+          <circle cx="8" cy="11.5" r="0.75" fill="currentColor" stroke="none" />
+        </svg>
+      );
+    case "tablet":
+      return (
+        <svg {...p}>
+          <rect x="3" y="2.5" width="10" height="11" rx="1.5" strokeWidth={1.25} />
+          <circle cx="8" cy="11" r="0.75" fill="currentColor" stroke="none" />
+        </svg>
+      );
+    case "desktop":
+      return (
+        <svg {...p}>
+          <rect x="2.5" y="3" width="11" height="7.5" rx="1.5" strokeWidth={1.25} />
+          <path d="M5.5 13.5h5M8 10.5v3" strokeWidth={1.25} />
+        </svg>
+      );
+    case "slide":
+    case "slides":
+    case "play-rectangle":
+      return (
+        <svg {...p}>
+          <rect x="2.5" y="3" width="11" height="8" rx="1.5" strokeWidth={1.25} />
+          <path d="M4 14l4-3 4 3" strokeWidth={1.25} />
+        </svg>
+      );
+    case "check":
+    case "checkmark":
+    case "check-large":
+      return (
+        <svg {...p}>
+          <path d="M3.5 8.5l3 3 6-6" strokeWidth={1.4} />
+        </svg>
+      );
+    case "folder":
+      return (
+        <svg {...p}>
+          <path d="M2.5 4a1.5 1.5 0 011.5-1.5h3l1.5 1.5h3.5A1.5 1.5 0 0113.5 5.5v6a1.5 1.5 0 01-1.5 1.5H4A1.5 1.5 0 012.5 11.5v-7.5z" strokeWidth={1.25} />
+        </svg>
+      );
+    case "import":
+      return (
+        <svg {...p}>
+          <path d="M8 2.5v7.5M5.5 7.5L8 10l2.5-2.5M2.5 11v2a.5.5 0 00.5.5h10a.5.5 0 00.5-.5v-2" strokeWidth={1.25} />
+        </svg>
+      );
+    case "export":
+      return (
+        <svg {...p}>
+          <path d="M8 10V2.5M5.5 5L8 2.5 10.5 5M2.5 9v3.5a1 1 0 001 1h9a1 1 0 001-1V9" strokeWidth={1.25} />
         </svg>
       );
     case "logo":
@@ -705,7 +1230,7 @@ export function Icon({
     default:
       return (
         <svg {...p}>
-          <circle cx="8" cy="8" r="5" />
+          <circle cx="8" cy="8" r="4.5" strokeWidth={1.2} />
         </svg>
       );
   }
@@ -755,8 +1280,9 @@ export function kindIcon(k: string, imageSrc?: string): string {
     case "group":
       return "group";
     case "component":
-    case "instance":
       return "component";
+    case "instance":
+      return "instance";
     case "boolean":
     case "vector":
       return "pen";

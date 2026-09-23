@@ -19,11 +19,14 @@ import type {
   TextAlignVertical,
   Interaction,
   ProtoAnim,
+  ProtoEasing,
   ProtoTrigger,
+  LayoutGrid,
+  GridPattern,
   XNode,
 } from "../engine/types";
 import { collectColors, defaultEffect, defaultLayout, find, findParent, framesOf, worldPos } from "../engine/memory";
-import { shapePoly } from "../engine/geometry";
+import { shapePoly, pathToVectorNetwork, vectorNetworkToSvgPath, vertexDegree, simplifyPath, smoothPath } from "../engine/geometry";
 import { Icon } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { copyText } from "../engine/clipboard";
@@ -39,11 +42,13 @@ export function RightPanel({
   snap,
   onPresent,
   onShare,
+  onInspectFig,
 }: {
   engine: Engine;
   snap: Snapshot;
   onPresent?: () => void;
   onShare?: () => void;
+  onInspectFig?: () => void;
 }) {
   const tabs: { id: RightTab; label: string }[] = [
     { id: "design", label: "Design" },
@@ -60,6 +65,14 @@ export function RightPanel({
         <div className="avatar" title="You">
           X
         </div>
+        <button
+          className={`icon-btn${inspect ? " on" : ""}`}
+          title={inspect ? "Exit Dev Mode (⇧D)" : "Dev Mode (⇧D)"}
+          onClick={() => engine.dispatch({ type: "setRightTab", tab: inspect ? "design" : "inspect" })}
+          style={inspect ? { background: "rgba(16, 185, 129, 0.2)", color: "#10b981", borderRadius: 6 } : {}}
+        >
+          <Icon name="dev" />
+        </button>
         <button className="icon-btn" title="Present" onClick={() => onPresent?.()}>
           <Icon name="play" />
         </button>
@@ -69,9 +82,18 @@ export function RightPanel({
       </div>
       <div className="tabs">
         {inspect ? (
-          <button className="tab" aria-current="true">
-            Inspect
-          </button>
+          <>
+            <button className="tab" aria-current="true">
+              Inspect
+            </button>
+            <button
+              className="tab"
+              onClick={() => engine.dispatch({ type: "setRightTab", tab: "design" })}
+              style={{ color: "var(--dim)", cursor: "pointer" }}
+            >
+              Design
+            </button>
+          </>
         ) : (
           tabs.map((t) => (
             <button
@@ -90,7 +112,7 @@ export function RightPanel({
         {snap.rightTab === "prototype" && !inspect && (
           <Prototype n={n} engine={engine} snap={snap} onPresent={onPresent} />
         )}
-        {inspect && <Inspect n={n} />}
+        {inspect && <Inspect n={n} engine={engine} snap={snap} onInspectFig={onInspectFig} />}
         {snap.rightTab === "design" && !inspect && !n && (
           <PageDesign engine={engine} tool={snap.tool} />
         )}
@@ -102,13 +124,58 @@ export function RightPanel({
   );
 }
 
-const PRESETS: { name: string; w: number; h: number }[] = [
-  { name: "iPhone 14", w: 390, h: 844 },
-  { name: "iPhone 14 Pro Max", w: 430, h: 932 },
-  { name: "Android", w: 360, h: 800 },
-  { name: "Desktop", w: 1440, h: 900 },
-  { name: "Tablet", w: 768, h: 1024 },
-  { name: "Slide 16:9", w: 1920, h: 1080 },
+interface PresetCategory {
+  category: string;
+  icon: string;
+  items: { name: string; w: number; h: number }[];
+}
+
+const PRESET_GROUPS: PresetCategory[] = [
+  {
+    category: "Phone",
+    icon: "phone",
+    items: [
+      { name: "iPhone 16 Pro", w: 393, h: 852 },
+      { name: "iPhone 16 Pro Max", w: 440, h: 956 },
+      { name: "iPhone 15 / 14", w: 393, h: 852 },
+      { name: "Google Pixel 8", w: 412, h: 915 },
+    ],
+  },
+  {
+    category: "Tablet",
+    icon: "tablet",
+    items: [
+      { name: "iPad Pro 11\"", w: 834, h: 1194 },
+      { name: "iPad Pro 12.9\"", w: 1024, h: 1366 },
+    ],
+  },
+  {
+    category: "Desktop",
+    icon: "desktop",
+    items: [
+      { name: "Desktop", w: 1440, h: 1024 },
+      { name: "MacBook Air", w: 1280, h: 832 },
+      { name: "MacBook Pro 14\"", w: 1512, h: 982 },
+      { name: "Wireframe", w: 1200, h: 800 },
+    ],
+  },
+  {
+    category: "Presentation",
+    icon: "slide",
+    items: [
+      { name: "Slide 16:9", w: 1920, h: 1080 },
+      { name: "Slide 4:3", w: 1024, h: 768 },
+    ],
+  },
+  {
+    category: "Social",
+    icon: "community",
+    items: [
+      { name: "Instagram Post", w: 1080, h: 1080 },
+      { name: "Instagram Story", w: 1080, h: 1920 },
+      { name: "X / Twitter Post", w: 1200, h: 675 },
+    ],
+  },
 ];
 
 function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
@@ -134,29 +201,37 @@ function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
       {tool === "frame" && (
         <>
           <div className="h-row">
-            <h3>Frame</h3>
+            <h3>Frame Presets</h3>
           </div>
-          <div className="presets">
-            {PRESETS.map((p) => (
-              <button
-                key={p.name}
-                onClick={() =>
-                  engine.dispatch({
-                    type: "add",
-                    kind: "frame",
-                    x: 80,
-                    y: 80,
-                    w: p.w,
-                    h: p.h,
-                    extra: { name: p.name, overflow: "clip", fill: "#ffffff", fillVisible: true },
-                  })
-                }
-              >
-                {p.name}
-                <span className="sz">
-                  {p.w} × {p.h}
-                </span>
-              </button>
+          <div className="presets" style={{ maxHeight: 340, overflowY: "auto" }}>
+            {PRESET_GROUPS.map((grp) => (
+              <div key={grp.category} style={{ marginBottom: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", padding: "4px 8px" }}>
+                  <Icon name={grp.icon} size={14} />
+                  <span>{grp.category}</span>
+                </div>
+                {grp.items.map((p) => (
+                  <button
+                    key={p.name}
+                    onClick={() =>
+                      engine.dispatch({
+                        type: "add",
+                        kind: "frame",
+                        x: 80,
+                        y: 80,
+                        w: p.w,
+                        h: p.h,
+                        extra: { name: p.name, overflow: "clip", fill: "#ffffff", fillVisible: true },
+                      })
+                    }
+                  >
+                    {p.name}
+                    <span className="sz">
+                      {p.w} × {p.h}
+                    </span>
+                  </button>
+                ))}
+              </div>
             ))}
           </div>
           <div className="hr" />
@@ -187,7 +262,7 @@ function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
           value={snap.pages[snap.page].pixelGridColor || "#cccccc"}
           opacity={snap.pages[snap.page].pixelGrid ? 100 : 0}
           visible={!!snap.pages[snap.page].pixelGrid}
-          recents={["#cccccc", "#e6e6e6", "#8a8a8a", "#0d99ff"]}
+          recents={["#cccccc", "#e6e6e6", "#8a8a8a", "#6366f1"]}
           onChange={(pixelGridColor) =>
             engine.dispatch({ type: "patchPage", patch: { pixelGridColor, pixelGrid: true } })
           }
@@ -239,15 +314,42 @@ function Prototype({
           ))}
         </select>
       </div>
-      <div className="proto-preview">
-        <div className="phone" style={{ background: n?.fillVisible ? n.fill : "#fff" }} />
+
+      <div className="h-row" style={{ marginTop: 8 }}>
+        <h3>Device Mockup</h3>
       </div>
-      <p className="muted">Present opens {startName}. Esc steps back, then exits.</p>
-      <div className="h-row">
-        <h3>Motion</h3>
+      <div className="proto-row">
+        <span>Device</span>
+        <select
+          value={snap.prototypeDevice || "none"}
+          onChange={(e) =>
+            engine.dispatch({
+              type: "setPrototypeDevice",
+              device: e.target.value as "iphone-16-pro" | "pixel-9" | "ipad-pro" | "macbook-pro" | "apple-watch" | "none",
+            })
+          }
+          style={{ border: 0, background: "var(--input)", borderRadius: 6, height: 24, padding: "0 6px" }}
+        >
+          <option value="none">None (Borderless)</option>
+          <option value="iphone-16-pro">iPhone 16 Pro (Titanium)</option>
+          <option value="pixel-9">Google Pixel 9</option>
+          <option value="macbook-pro">MacBook Pro 16"</option>
+        </select>
       </div>
-      <p className="muted">Animation on the interaction below.</p>
-      <div className="h-row">
+
+      <div className="proto-preview" style={{ marginTop: 8 }}>
+        <div
+          className="phone"
+          style={{
+            background: n?.fillVisible ? n.fill : "#fff",
+            borderRadius: snap.prototypeDevice === "iphone-16-pro" ? 14 : 4,
+            border: snap.prototypeDevice === "iphone-16-pro" ? "3px solid #383a3f" : "1px solid var(--line)",
+          }}
+        />
+      </div>
+      <p className="muted">Flow starts at {startName}. Esc steps back, then exits.</p>
+
+      <div className="h-row" style={{ marginTop: 8 }}>
         <h3>Interactions</h3>
         <button
           className="plus"
@@ -273,20 +375,35 @@ function Prototype({
       {!n && <p className="muted">Select a layer to add On click → Navigate.</p>}
       {n &&
         interactions.map((ix, i) => (
-          <div key={i} className="insp-pad" style={{ display: "grid", gap: 4, marginBottom: 8 }}>
-            <select
-              value={ix.trigger}
-              onChange={(e) => {
-                const next = interactions.map((x, j) =>
-                  j === i ? { ...x, trigger: e.target.value as ProtoTrigger } : x,
-                );
-                setIx(next);
-              }}
-            >
-              <option value="onClick">On click</option>
-              <option value="onHover">While hovering</option>
-              <option value="afterDelay">After delay</option>
-            </select>
+          <div key={i} className="insp-pad" style={{ display: "grid", gap: 5, marginBottom: 8, background: "var(--hover)", borderRadius: 8, padding: 8 }}>
+            <div style={{ display: "flex", gap: 4 }}>
+              <select
+                style={{ flex: 1 }}
+                value={ix.trigger}
+                onChange={(e) => {
+                  const next = interactions.map((x, j) =>
+                    j === i ? { ...x, trigger: e.target.value as ProtoTrigger } : x,
+                  );
+                  setIx(next);
+                }}
+              >
+                <option value="onClick">On click</option>
+                <option value="onHover">While hovering</option>
+                <option value="afterDelay">After delay</option>
+                <option value="mouseEnter">Mouse enter</option>
+                <option value="mouseLeave">Mouse leave</option>
+                <option value="keyPress">Key / Gamepad press</option>
+                <option value="onDrag">On drag</option>
+              </select>
+              <button
+                className="mini minus"
+                title="Remove interaction"
+                onClick={() => setIx(interactions.filter((_, j) => j !== i))}
+              >
+                <Icon name="minus" size={12} />
+              </button>
+            </div>
+
             <select
               value={ix.action}
               onChange={(e) => {
@@ -295,17 +412,26 @@ function Prototype({
               }}
             >
               <option value="navigate">Navigate to</option>
+              <option value="openOverlay">Open overlay</option>
+              <option value="closeOverlay">Close overlay</option>
+              <option value="swapOverlay">Swap overlay</option>
               <option value="back">Back</option>
-              <option value="openUrl">Open URL</option>
+              <option value="scrollTo">Scroll to</option>
+              <option value="openUrl">Open link</option>
+              <option value="setVariable">Set variable</option>
             </select>
-            {ix.action === "navigate" && (
+
+            {(ix.action === "navigate" ||
+              ix.action === "scrollTo" ||
+              ix.action === "openOverlay" ||
+              ix.action === "swapOverlay") && (
               <select
                 value={ix.destination}
                 onChange={(e) =>
                   setIx(interactions.map((x, j) => (j === i ? { ...x, destination: e.target.value } : x)))
                 }
               >
-                <option value="">Choose frame…</option>
+                <option value="">Choose target…</option>
                 {frames
                   .filter((f) => f.id !== n.id)
                   .map((f) => (
@@ -315,6 +441,40 @@ function Prototype({
                   ))}
               </select>
             )}
+
+            {(ix.action === "openOverlay" || ix.action === "swapOverlay") && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+                <select
+                  value={ix.overlayPosition || "center"}
+                  onChange={(e) =>
+                    setIx(
+                      interactions.map((x, j) =>
+                        j === i ? { ...x, overlayPosition: e.target.value as "center" | "top" | "bottom" | "manual" } : x,
+                      ),
+                    )
+                  }
+                >
+                  <option value="center">Center modal</option>
+                  <option value="bottom">Bottom sheet</option>
+                  <option value="top">Top banner</option>
+                </select>
+                <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: "var(--dim)" }}>
+                  <input
+                    type="checkbox"
+                    checked={ix.overlayCloseOutside !== false}
+                    onChange={(e) =>
+                      setIx(
+                        interactions.map((x, j) =>
+                          j === i ? { ...x, overlayCloseOutside: e.target.checked } : x,
+                        ),
+                      )
+                    }
+                  />
+                  Close outside
+                </label>
+              </div>
+            )}
+
             {ix.action === "openUrl" && (
               <input
                 placeholder="https://example.com"
@@ -324,69 +484,690 @@ function Prototype({
                 }
               />
             )}
-            <select
-              value={ix.animation}
-              onChange={(e) =>
-                setIx(
-                  interactions.map((x, j) =>
-                    j === i ? { ...x, animation: e.target.value as ProtoAnim } : x,
-                  ),
-                )
-              }
-            >
-              <option value="instant">Instant</option>
-              <option value="dissolve">Dissolve</option>
-              <option value="smart">Smart animate</option>
-            </select>
-            <button
-              className="mini minus"
-              title="Remove"
-              onClick={() => setIx(interactions.filter((_, j) => j !== i))}
-            >
-              <Icon name="minus" size={12} />
-            </button>
+
+            {ix.action === "setVariable" && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+                <select
+                  value={ix.variableId || ""}
+                  onChange={(e) =>
+                    setIx(interactions.map((x, j) => (j === i ? { ...x, variableId: e.target.value } : x)))
+                  }
+                >
+                  <option value="">Choose variable…</option>
+                  {(snap.variables || []).map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={ix.variableOp || "toggle"}
+                  onChange={(e) =>
+                    setIx(
+                      interactions.map((x, j) =>
+                        j === i ? { ...x, variableOp: e.target.value as "set" | "increment" | "decrement" | "toggle" } : x,
+                      ),
+                    )
+                  }
+                >
+                  <option value="toggle">Toggle boolean</option>
+                  <option value="increment">Increment +1</option>
+                  <option value="decrement">Decrement -1</option>
+                </select>
+              </div>
+            )}
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 60px", gap: 4 }}>
+              <select
+                value={ix.animation}
+                onChange={(e) =>
+                  setIx(
+                    interactions.map((x, j) =>
+                      j === i ? { ...x, animation: e.target.value as ProtoAnim } : x,
+                    ),
+                  )
+                }
+              >
+                <option value="instant">Instant</option>
+                <option value="dissolve">Dissolve</option>
+                <option value="smart">Smart animate</option>
+                <option value="slideInLeft">Slide in (Left)</option>
+                <option value="slideInRight">Slide in (Right)</option>
+                <option value="slideInTop">Slide in (Top)</option>
+                <option value="slideInBottom">Slide in (Bottom)</option>
+                <option value="pushLeft">Push (Left)</option>
+                <option value="pushRight">Push (Right)</option>
+              </select>
+              <input
+                type="number"
+                placeholder="250ms"
+                title="Duration in ms"
+                value={ix.duration || 250}
+                onChange={(e) => {
+                  const d = parseInt(e.target.value, 10) || 250;
+                  setIx(interactions.map((x, j) => (j === i ? { ...x, duration: d } : x)));
+                }}
+              />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+              <select
+                value={ix.easing || "easeOut"}
+                onChange={(e) =>
+                  setIx(
+                    interactions.map((x, j) =>
+                      j === i ? { ...x, easing: e.target.value as ProtoEasing } : x,
+                    ),
+                  )
+                }
+                title="Animation Easing Curve"
+              >
+                <option value="easeOut">Ease out</option>
+                <option value="easeIn">Ease in</option>
+                <option value="easeInOut">Ease in and out</option>
+                <option value="linear">Linear</option>
+                <option value="spring">Spring (Gentle)</option>
+                <option value="bouncy">Spring (Bouncy)</option>
+              </select>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                  fontSize: 10,
+                  color: "var(--fg-muted)",
+                  cursor: "pointer",
+                  userSelect: "none",
+                }}
+                title="Match layers by name and interpolate their properties"
+              >
+                <input
+                  type="checkbox"
+                  checked={Boolean(ix.smartMatch || ix.animation === "smart")}
+                  disabled={ix.animation === "smart"}
+                  onChange={(e) =>
+                    setIx(
+                      interactions.map((x, j) =>
+                        j === i ? { ...x, smartMatch: e.target.checked } : x,
+                      ),
+                    )
+                  }
+                />
+                Smart match
+              </label>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 4px", background: "var(--bg-subtle)", borderRadius: 4 }}>
+              <svg width="32" height="18" viewBox="0 0 32 18" style={{ overflow: "visible" }}>
+                {ix.easing === "linear" && <line x1="2" y1="16" x2="30" y2="2" stroke="var(--accent)" strokeWidth="1.5" />}
+                {ix.easing === "easeIn" && <path d="M 2 16 Q 22 16, 30 2" fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
+                {(ix.easing === "easeOut" || !ix.easing) && <path d="M 2 16 Q 8 2, 30 2" fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
+                {ix.easing === "easeInOut" && <path d="M 2 16 C 14 16, 18 2, 30 2" fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
+                {ix.easing === "spring" && <path d="M 2 16 C 10 0, 16 2, 22 4 C 26 3, 30 2, 30 2" fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
+                {ix.easing === "bouncy" && <path d="M 2 16 C 8 -4, 14 6, 20 0 C 24 4, 30 2, 30 2" fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
+              </svg>
+              <span style={{ fontSize: 10, color: "var(--dim)" }}>
+                {ix.duration || 250}ms • {ix.easing || "easeOut"}
+              </span>
+            </div>
           </div>
         ))}
       <div className="insp-pad">
         <button className="export-run" onClick={() => onPresent?.()}>
-          Present
+          Present Prototype
         </button>
       </div>
     </>
   );
 }
 
-function Inspect({ n }: { n?: XNode }) {
-  if (!n) return <p className="empty">Select a layer to inspect</p>;
-  const css = [
+type DevFormat = "css" | "tailwind" | "swiftui" | "compose" | "flutter" | "svg" | "figma";
+
+function generateCss(n: XNode): string {
+  const rules: string[] = [
+    `/* ${n.name} (${n.kind}) */`,
     `width: ${Math.round(n.w)}px;`,
     `height: ${Math.round(n.h)}px;`,
-    n.cornerRadii[0] ? `border-radius: ${n.cornerRadii[0]}px;` : "",
-    n.fill && n.fill !== "#00000000" ? `background: ${n.fill};` : "",
-    n.opacity < 1 ? `opacity: ${n.opacity};` : "",
-    n.layout
-      ? `display: flex;\nflex-direction: ${n.layout.direction === "horizontal" ? "row" : "column"};\ngap: ${n.layout.gap}px;`
-      : "",
-    n.kind === "text"
-      ? `font: ${n.fontWeight} ${n.fontSize}px ${n.fontFamily};`
-      : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  ];
+  if (n.cornerRadii && n.cornerRadii.some((r) => r > 0)) {
+    if (n.cornerIndependent) {
+      rules.push(`border-radius: ${[n.cornerRadii[0], n.cornerRadii[1], n.cornerRadii[3], n.cornerRadii[2]].map((r) => `${r}px`).join(" ")};`);
+    } else {
+      rules.push(`border-radius: ${n.cornerRadii[0]}px;`);
+    }
+  }
+  if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") {
+    rules.push(`background: ${n.fill};`);
+  }
+  if (n.strokeVisible && n.strokeWidth > 0 && n.strokePaint) {
+    rules.push(`border: ${n.strokeWidth}px solid ${n.strokePaint};`);
+  }
+  if (n.opacity < 1) {
+    rules.push(`opacity: ${Math.round(n.opacity * 100) / 100};`);
+  }
+  if (n.layout) {
+    rules.push("display: flex;");
+    rules.push(`flex-direction: ${n.layout.direction === "horizontal" ? "row" : "column"};`);
+    if (n.layout.gap) rules.push(`gap: ${n.layout.gap}px;`);
+    const [pl, pr, pt, pb] = n.layout.padding;
+    if (pl || pr || pt || pb) {
+      rules.push(`padding: ${pt}px ${pr}px ${pb}px ${pl}px;`);
+    }
+    if (n.layout.align === "center") rules.push("align-items: center;");
+    else if (n.layout.align === "max") rules.push("align-items: flex-end;");
+    else if (n.layout.align === "baseline") rules.push("align-items: baseline;");
+    if (n.layout.justify === "center") rules.push("justify-content: center;");
+    else if (n.layout.justify === "between") rules.push("justify-content: space-between;");
+    else if (n.layout.justify === "max") rules.push("justify-content: flex-end;");
+    if (n.layout.wrap) rules.push("flex-wrap: wrap;");
+  }
+  if (n.kind === "text") {
+    rules.push(`font-family: "${n.fontFamily}", sans-serif;`);
+    rules.push(`font-size: ${n.fontSize}px;`);
+    rules.push(`font-weight: ${n.fontWeight};`);
+    if (n.lineHeight) rules.push(`line-height: ${Math.round(n.lineHeight)}px;`);
+    if (n.letterSpacing) rules.push(`letter-spacing: ${n.letterSpacing}px;`);
+    if (n.textAlign && n.textAlign !== "left") rules.push(`text-align: ${n.textAlign};`);
+  }
+  if (n.effects?.length) {
+    const shadows = n.effects
+      .filter((e) => e.visible && (e.kind === "drop-shadow" || e.kind === "inner-shadow"))
+      .map((e) => `${e.kind === "inner-shadow" ? "inset " : ""}${e.x}px ${e.y}px ${e.blur}px ${e.spread}px ${e.color}`);
+    if (shadows.length) rules.push(`box-shadow: ${shadows.join(", ")};`);
+  }
+  return rules.join("\n");
+}
+
+function generateTailwind(n: XNode): string {
+  const cls: string[] = [];
+  if (n.sizingW === "fill") cls.push("w-full");
+  else cls.push(`w-[${Math.round(n.w)}px]`);
+
+  if (n.sizingH === "fill") cls.push("h-full");
+  else cls.push(`h-[${Math.round(n.h)}px]`);
+
+  if (n.cornerRadii && n.cornerRadii.some((r) => r > 0)) {
+    if (n.cornerIndependent) {
+      if (n.cornerRadii[0]) cls.push(`rounded-tl-[${n.cornerRadii[0]}px]`);
+      if (n.cornerRadii[1]) cls.push(`rounded-tr-[${n.cornerRadii[1]}px]`);
+      if (n.cornerRadii[3]) cls.push(`rounded-br-[${n.cornerRadii[3]}px]`);
+      if (n.cornerRadii[2]) cls.push(`rounded-bl-[${n.cornerRadii[2]}px]`);
+    } else {
+      cls.push(`rounded-[${n.cornerRadii[0]}px]`);
+    }
+  }
+  if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") {
+    cls.push(`bg-[${n.fill}]`);
+  }
+  if (n.strokeVisible && n.strokeWidth > 0 && n.strokePaint) {
+    cls.push(`border-[${n.strokeWidth}px]`, `border-[${n.strokePaint}]`);
+  }
+  if (n.opacity < 1) {
+    cls.push(`opacity-${Math.round(n.opacity * 100)}`);
+  }
+  if (n.layout) {
+    cls.push("flex");
+    cls.push(n.layout.direction === "horizontal" ? "flex-row" : "flex-col");
+    if (n.layout.gap) cls.push(`gap-[${n.layout.gap}px]`);
+    const [pl, pr, pt, pb] = n.layout.padding;
+    if (pl === pr && pt === pb && pl === pt && pl > 0) cls.push(`p-[${pl}px]`);
+    else {
+      if (pl || pr) cls.push(`px-[${pl}px]`);
+      if (pt || pb) cls.push(`py-[${pt}px]`);
+    }
+    if (n.layout.align === "center") cls.push("items-center");
+    else if (n.layout.align === "max") cls.push("items-end");
+    else if (n.layout.align === "baseline") cls.push("items-baseline");
+    if (n.layout.justify === "center") cls.push("justify-center");
+    else if (n.layout.justify === "between") cls.push("justify-between");
+    else if (n.layout.justify === "max") cls.push("justify-end");
+    if (n.layout.wrap) cls.push("flex-wrap");
+  }
+  if (n.kind === "text") {
+    cls.push(`text-[${n.fontSize}px]`);
+    if (n.fontWeight >= 700) cls.push("font-bold");
+    else if (n.fontWeight >= 600) cls.push("font-semibold");
+    else if (n.fontWeight >= 500) cls.push("font-medium");
+    if (n.lineHeight) cls.push(`leading-[${Math.round(n.lineHeight)}px]`);
+    if (n.textAlign && n.textAlign !== "left") cls.push(`text-${n.textAlign}`);
+  }
+  return `<!-- ${n.name} -->\n<div className="${cls.join(" ")}">\n  {/* Children */}\n</div>`;
+}
+
+function generateSwiftUI(n: XNode): string {
+  const hex = (c: string) => c.replace("#", "").slice(0, 6).toUpperCase();
+  if (n.kind === "text") {
+    const weight = n.fontWeight >= 700 ? ".bold" : n.fontWeight >= 600 ? ".semibold" : n.fontWeight >= 500 ? ".medium" : ".regular";
+    return `Text("${n.text || n.name}")
+    .font(.system(size: ${n.fontSize}, weight: ${weight}))
+    .foregroundColor(Color(hex: "${hex(n.fill || "#000000")}"))`;
+  }
+  const stack = n.layout ? (n.layout.direction === "horizontal" ? "HStack" : "VStack") : "ZStack";
+  const spacing = n.layout?.gap ? `spacing: ${n.layout.gap}` : "";
+  const align = n.layout?.align === "center" ? "alignment: .center" : n.layout?.align === "max" ? "alignment: .trailing" : "";
+  const args = [align, spacing].filter(Boolean).join(", ");
+  const [pl, pr, pt, pb] = n.layout?.padding ?? [0, 0, 0, 0];
+  const padStr = pl || pr || pt || pb ? `\n    .padding(EdgeInsets(top: ${pt}, leading: ${pl}, bottom: ${pb}, trailing: ${pr}))` : "";
+  const bgStr = n.fillVisible !== false && n.fill && n.fill !== "#00000000" ? `\n    .background(Color(hex: "${hex(n.fill)}"))` : "";
+  const cornerStr = n.cornerRadii[0] > 0 ? `\n    .cornerRadius(${n.cornerRadii[0]})` : "";
+  const borderStr = n.strokeVisible && n.strokeWidth > 0 ? `\n    .overlay(RoundedRectangle(cornerRadius: ${n.cornerRadii[0] || 0}).stroke(Color(hex: "${hex(n.strokePaint)}"), lineWidth: ${n.strokeWidth}))` : "";
+
+  return `${stack}(${args}) {
+    // Child views
+}
+.frame(width: ${Math.round(n.w)}, height: ${Math.round(n.h)})${padStr}${bgStr}${cornerStr}${borderStr}`;
+}
+
+function generateCompose(n: XNode): string {
+  const hex8 = (c: string) => "0xFF" + c.replace("#", "").slice(0, 6).toUpperCase();
+  if (n.kind === "text") {
+    const weight = n.fontWeight >= 700 ? "Bold" : n.fontWeight >= 600 ? "SemiBold" : n.fontWeight >= 500 ? "Medium" : "Normal";
+    return `Text(
+    text = "${n.text || n.name}",
+    fontSize = ${n.fontSize}.sp,
+    fontWeight = FontWeight.${weight},
+    color = Color(${hex8(n.fill || "#000000")})
+)`;
+  }
+  const container = n.layout ? (n.layout.direction === "horizontal" ? "Row" : "Column") : "Box";
+  const mod: string[] = [`Modifier.size(${Math.round(n.w)}.dp, ${Math.round(n.h)}.dp)`];
+  if (n.cornerRadii[0] > 0) mod.push(`clip(RoundedCornerShape(${n.cornerRadii[0]}.dp))`);
+  if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") mod.push(`background(Color(${hex8(n.fill)}))`);
+  if (n.strokeVisible && n.strokeWidth > 0) mod.push(`border(${n.strokeWidth}.dp, Color(${hex8(n.strokePaint)}))`);
+  const [pl, pr, pt, pb] = n.layout?.padding ?? [0, 0, 0, 0];
+  if (pl || pr || pt || pb) mod.push(`padding(${pt}.dp, ${pr}.dp, ${pb}.dp, ${pl}.dp)`);
+
+  return `${container}(
+    modifier = ${mod.join("\n        .")}
+) {
+    // Child composables
+}`;
+}
+
+function generateFlutter(n: XNode): string {
+  const hex = (n.fill || "#000000").replace("#", "").padEnd(6, "0");
+  return `Container(
+  width: ${Math.round(n.w)}.0,
+  height: ${Math.round(n.h)}.0,
+  decoration: BoxDecoration(
+    color: const Color(0xFF${hex.toUpperCase()}),
+    borderRadius: BorderRadius.circular(${n.cornerRadii[0]}.0),
+  ),
+  child: ${n.kind === "text" ? `Text(
+    '${n.text.replace(/'/g, "\\'")}',
+    style: TextStyle(
+      fontSize: ${n.fontSize}.0,
+      fontWeight: FontWeight.w${n.fontWeight},
+    ),
+  )` : "// Children"},
+)`;
+}
+
+function generateSvg(n: XNode): string {
+  let pathD = "";
+  if (n.vectorNetwork && n.vectorNetwork.segments.length > 0) {
+    pathD = vectorNetworkToSvgPath(n.vectorNetwork);
+  } else if (n.path.length > 0) {
+    pathD = n.path
+      .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(2)} ${p.y.toFixed(2)}`)
+      .join(" ") + (n.closed ? " Z" : "");
+  }
+  const w = Math.round(Math.max(1, n.w));
+  const h = Math.round(Math.max(1, n.h));
+
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path
+    d="${pathD || `M 0 0 L ${w} 0 L ${w} ${h} L 0 ${h} Z`}"
+    fill="${n.fillVisible && !isNone(n.fill) ? n.fill : "none"}"
+    stroke="${n.strokeVisible && !isNone(n.strokePaint) ? n.strokePaint : "none"}"
+    stroke-width="${n.strokeWidth}"
+  />
+</svg>`;
+}
+
+function generateFigmaJson(n: XNode): string {
+  const hexToFigmaColor = (hex: string) => {
+    const clean = hex.replace("#", "");
+    const r = parseInt(clean.slice(0, 2) || "0", 16) / 255;
+    const g = parseInt(clean.slice(2, 4) || "0", 16) / 255;
+    const b = parseInt(clean.slice(4, 6) || "0", 16) / 255;
+    return { r, g, b, a: 1 };
+  };
+
+  const payload: Record<string, unknown> = {
+    id: n.id,
+    name: n.name,
+    type: n.kind.toUpperCase(),
+    visible: n.visible,
+    opacity: n.opacity,
+    blendMode: n.blendMode.toUpperCase(),
+    absoluteBoundingBox: {
+      x: n.x,
+      y: n.y,
+      width: n.w,
+      height: n.h,
+    },
+    constraints: {
+      horizontal: n.constraintH.toUpperCase(),
+      vertical: n.constraintV.toUpperCase(),
+    },
+    fills: n.fillVisible && !isNone(n.fill)
+      ? [{
+          type: "SOLID",
+          visible: true,
+          opacity: n.fillOpacity,
+          color: hexToFigmaColor(n.fill),
+        }]
+      : [],
+    strokes: n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)
+      ? [{
+          type: "SOLID",
+          visible: true,
+          opacity: n.strokeOpacity,
+          color: hexToFigmaColor(n.strokePaint),
+        }]
+      : [],
+    strokeWeight: n.strokeWidth,
+    strokeAlign: n.strokeAlign.toUpperCase(),
+    strokeCap: n.strokeCap.toUpperCase(),
+    strokeJoin: n.strokeJoin.toUpperCase(),
+    cornerRadius: n.cornerRadii[0],
+    effects: n.effects,
+  };
+
+  if (n.layout) {
+    payload.layoutMode = n.layout.direction === "horizontal" ? "HORIZONTAL" : "VERTICAL";
+    payload.itemSpacing = n.layout.gap;
+    payload.paddingLeft = n.layout.padding[0];
+    payload.paddingRight = n.layout.padding[1];
+    payload.paddingTop = n.layout.padding[2];
+    payload.paddingBottom = n.layout.padding[3];
+  }
+
+  if (n.kind === "text") {
+    payload.characters = n.text;
+    payload.style = {
+      fontFamily: n.fontFamily,
+      fontSize: n.fontSize,
+      fontWeight: n.fontWeight,
+      textAlignHorizontal: n.textAlign.toUpperCase(),
+    };
+  }
+
+  if (n.vectorNetwork && n.vectorNetwork.vertices.length > 0) {
+    payload.vectorNetwork = {
+      vertices: n.vectorNetwork.vertices,
+      segments: n.vectorNetwork.segments,
+      regions: n.vectorNetwork.regions,
+    };
+  }
+
+  return JSON.stringify(payload, null, 2);
+}
+
+function BoxModelDiagram({ n }: { n: XNode }) {
+  const [pl, pr, pt, pb] = n.layout?.padding ?? [0, 0, 0, 0];
+  return (
+    <div className="box-model-diagram">
+      <div className="bm-padding-label">padding: {pt} {pr} {pb} {pl}</div>
+      <div className="bm-outer">
+        <div className="bm-pad-box">
+          <div className="bm-inner">
+            <span className="bm-dims">{Math.round(n.w)} × {Math.round(n.h)}</span>
+            {n.cornerRadii[0] > 0 && <span className="bm-radius">r:{n.cornerRadii[0]}</span>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Inspect({
+  n,
+  engine,
+  snap,
+  onInspectFig,
+}: {
+  n?: XNode;
+  engine?: Engine;
+  snap?: Snapshot;
+  onInspectFig?: () => void;
+}) {
+  const [format, setFormat] = useState<DevFormat>("css");
+  const [note, setNote] = useState("");
+  if (!n) {
+    return (
+      <div style={{ padding: 16 }}>
+        <p className="empty" style={{ margin: "16px 0" }}>Select a layer to inspect</p>
+        <div
+          style={{
+            padding: 12,
+            background: "var(--hover)",
+            borderRadius: 8,
+            border: "1px solid var(--line)",
+            display: "grid",
+            gap: 8,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <Icon name="figma" size={16} />
+            <strong style={{ fontSize: 12 }}>Figma File Inspector</strong>
+          </div>
+          <div style={{ fontSize: 11, color: "var(--dim)" }}>
+            Inspect Kiwi binary schemas, node hierarchy, and vector networks from any .fig file.
+          </div>
+          <button
+            className="export-run"
+            style={{ padding: "6px 12px", fontSize: 11 }}
+            onClick={() => onInspectFig?.()}
+          >
+            Launch .fig Inspector
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  let code = "";
+  if (format === "css") code = generateCss(n);
+  else if (format === "tailwind") code = generateTailwind(n);
+  else if (format === "swiftui") code = generateSwiftUI(n);
+  else if (format === "compose") code = generateCompose(n);
+  else if (format === "flutter") code = generateFlutter(n);
+  else if (format === "svg") code = generateSvg(n);
+  else if (format === "figma") code = generateFigmaJson(n);
+
+  const copy = () => {
+    copyText(code);
+    toast(`Copied ${format.toUpperCase()} code`);
+  };
+
+  const layerAnnotations = snap?.annotations?.filter((a) => a.nodeId === n.id) ?? [];
+  const vn = n.vectorNetwork || (n.path.length > 0 ? pathToVectorNetwork(n.path, n.closed) : null);
+  const branchingCount = vn ? vn.vertices.filter((_, i) => vertexDegree(vn, i) >= 3).length : 0;
+
   return (
     <>
       <div className="h-row">
-        <h3>CSS</h3>
+        <h3>Dev Mode</h3>
         <button
-          className="plus"
-          title="Copy CSS"
-          onClick={() => copyText(css)}
+          className="export-run"
+          style={{ padding: "2px 8px", fontSize: 10, display: "flex", alignItems: "center", gap: 4 }}
+          onClick={() => onInspectFig?.()}
+          title="Inspect Figma .fig binary file"
         >
-          <Icon name="copy" size={14} />
+          <Icon name="figma" size={12} />
+          .fig Inspector
         </button>
       </div>
-      <pre className="css-block">{css}</pre>
-      <p className="muted">Dev Mode — copy CSS from the selected layer.</p>
+
+      <div className="dir-row" style={{ padding: "0 12px", marginBottom: 8 }}>
+        <div
+          className="seg"
+          style={{
+            width: "100%",
+            display: "grid",
+            gridTemplateColumns: "repeat(7, 1fr)",
+            fontSize: 10,
+          }}
+        >
+          <button className={format === "css" ? "on" : ""} onClick={() => setFormat("css")}>CSS</button>
+          <button className={format === "tailwind" ? "on" : ""} onClick={() => setFormat("tailwind")}>TW</button>
+          <button className={format === "swiftui" ? "on" : ""} onClick={() => setFormat("swiftui")}>Swift</button>
+          <button className={format === "compose" ? "on" : ""} onClick={() => setFormat("compose")}>KMP</button>
+          <button className={format === "flutter" ? "on" : ""} onClick={() => setFormat("flutter")}>Dart</button>
+          <button className={format === "svg" ? "on" : ""} onClick={() => setFormat("svg")}>SVG</button>
+          <button className={format === "figma" ? "on" : ""} onClick={() => setFormat("figma")}>Fig</button>
+        </div>
+      </div>
+
+      <div className="insp-pad">
+        <BoxModelDiagram n={n} />
+        <pre className="css-block" style={{ maxHeight: 220, overflowY: "auto", fontSize: 10 }}>{code}</pre>
+        <button className="export-run" onClick={copy} style={{ marginTop: 8 }}>
+          Copy {format.toUpperCase()}
+        </button>
+      </div>
+
+      {/* Figma Properties Table */}
+      <div className="hr" />
+      <div className="h-row">
+        <h3>Figma Properties</h3>
+        <span style={{ fontSize: 10, color: "var(--dim)", marginLeft: "auto" }}>REST Schema</span>
+      </div>
+      <div className="insp-pad" style={{ display: "grid", gap: 6, fontSize: 11 }}>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ color: "var(--dim)" }}>Node Type:</span>
+          <strong>{n.kind.toUpperCase()}</strong>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ color: "var(--dim)" }}>Layer Name:</span>
+          <span>{n.name}</span>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ color: "var(--dim)" }}>Dimensions:</span>
+          <span>{Math.round(n.w)} × {Math.round(n.h)} px</span>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ color: "var(--dim)" }}>Position:</span>
+          <span>X: {Math.round(n.x)}, Y: {Math.round(n.y)}</span>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ color: "var(--dim)" }}>Constraints:</span>
+          <span>H: {n.constraintH} • V: {n.constraintV}</span>
+        </div>
+        {n.fillVisible && !isNone(n.fill) && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ color: "var(--dim)" }}>Fill Paint:</span>
+            <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: n.fill }} />
+              <code>{n.fill}</code> ({Math.round(n.fillOpacity * 100)}%)
+            </span>
+          </div>
+        )}
+        {n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint) && (
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <span style={{ color: "var(--dim)" }}>Stroke:</span>
+            <span>{n.strokeWidth}px {n.strokeAlign} {n.strokeCap} cap</span>
+          </div>
+        )}
+        {vn && (
+          <div style={{ marginTop: 4, padding: 8, background: "rgba(13,153,255,0.08)", borderRadius: 6, border: "1px solid rgba(13,153,255,0.2)" }}>
+            <div style={{ fontWeight: 600, color: "var(--accent)", marginBottom: 4 }}>
+              Vector Network Graph
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, fontSize: 10 }}>
+              <div>Vertices: <strong>{vn.vertices.length}</strong></div>
+              <div>Segments: <strong>{vn.segments.length}</strong></div>
+              <div>Branching (≥3): <strong>{branchingCount}</strong></div>
+              <div>Closed: <strong>{n.closed ? "Yes" : "No"}</strong></div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="hr" />
+      <div className="h-row">
+        <h3>Annotations</h3>
+        <span style={{ fontSize: 10, color: "var(--dim)", marginLeft: "auto" }}>⇧T</span>
+      </div>
+      <div className="insp-pad" style={{ display: "grid", gap: 6 }}>
+        {layerAnnotations.map((ann) => (
+          <div
+            key={ann.id}
+            style={{
+              padding: 8,
+              borderRadius: 6,
+              background: "var(--hover)",
+              borderLeft: "3px solid #10b981",
+              fontSize: 11,
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <span>{ann.note}</span>
+            <button
+              className="icon-btn"
+              title="Delete note"
+              onClick={() => engine?.dispatch({ type: "deleteAnnotation", id: ann.id })}
+            >
+              <Icon name="trash" size={12} />
+            </button>
+          </div>
+        ))}
+        <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+          <input
+            placeholder="Add note for dev…"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && note.trim() && engine) {
+                engine.dispatch({
+                  type: "addAnnotation",
+                  annotation: {
+                    id: "ann_" + Date.now(),
+                    nodeId: n.id,
+                    note: note.trim(),
+                    date: new Date().toLocaleTimeString(),
+                  },
+                });
+                setNote("");
+                toast("Annotation added");
+              }
+            }}
+            style={{
+              flex: 1,
+              height: 28,
+              background: "var(--input)",
+              border: "1px solid var(--line)",
+              borderRadius: 6,
+              padding: "0 8px",
+              fontSize: 11,
+              color: "var(--text)",
+            }}
+          />
+          <button
+            className="icon-btn"
+            title="Add note"
+            onClick={() => {
+              if (note.trim() && engine) {
+                engine.dispatch({
+                  type: "addAnnotation",
+                  annotation: {
+                    id: "ann_" + Date.now(),
+                    nodeId: n.id,
+                    note: note.trim(),
+                    date: new Date().toLocaleTimeString(),
+                  },
+                });
+                setNote("");
+                toast("Annotation added");
+              }
+            }}
+          >
+            <Icon name="plus" size={14} />
+          </button>
+        </div>
+      </div>
     </>
   );
 }
@@ -448,6 +1229,8 @@ function Design({
           ? "Rectangle"
           : n.kind[0].toUpperCase() + n.kind.slice(1);
   const patch = (p: Partial<XNode>) => engine.dispatch({ type: "patch", id: n.id, patch: p });
+  const parent = findParent(snap.pages[snap.page].root, n.id);
+  const hasAutoLayoutParent = !!parent?.layout;
   return (
     <>
       <div className="layer-type">
@@ -509,26 +1292,44 @@ function Design({
             <h3>Boolean</h3>
           </div>
           <div className="insp-pad">
-            <div className="seg">
+            <div className="seg icons">
               {(["union", "subtract", "intersect", "exclude"] as const).map((op) => (
                 <button
                   key={op}
-                  title={op[0].toUpperCase() + op.slice(1)}
+                  title={`Boolean ${op[0].toUpperCase() + op.slice(1)}`}
                   onClick={() => engine.dispatch({ type: "boolean", op })}
                 >
-                  {op[0].toUpperCase() + op.slice(1)}
+                  <Icon name={`boolean-${op}`} size={16} />
                 </button>
               ))}
             </div>
-            <button style={{ marginTop: 6 }} onClick={() => engine.dispatch({ type: "flatten" })}>
-              Flatten
+            <button
+              style={{ marginTop: 6, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+              onClick={() => engine.dispatch({ type: "flatten" })}
+            >
+              <Icon name="flatten" size={14} />
+              <span>Flatten</span>
             </button>
           </div>
         </>
       )}
       {multi && <SelectionColors engine={engine} snap={snap} />}
 
-      <Section id="position" title="Position">
+      <Section
+        id="position"
+        title="Position"
+        actions={
+          hasAutoLayoutParent ? (
+            <button
+              className={`plus${n.absolutePosition ? " on" : ""}`}
+              title={n.absolutePosition ? "In auto layout flow" : "Absolute position (exclude from auto layout flow)"}
+              onClick={() => patch({ absolutePosition: !n.absolutePosition })}
+            >
+              <Icon name="absolute" size={14} />
+            </button>
+          ) : undefined
+        }
+      >
       <div className="insp-pad">
         <div className="align">
           <div className="g">
@@ -709,6 +1510,22 @@ function Design({
             <Icon name="aspect" size={14} />
           </button>
         </div>
+        <div className="grid2" style={{ marginTop: 4 }}>
+          <Field label="Min W" value={n.minW || 0} onChange={(v) => patch({ minW: v > 0 ? v : undefined })} />
+          <Field label="Max W" value={n.maxW || 0} onChange={(v) => patch({ maxW: v > 0 ? v : undefined })} />
+          <Field label="Min H" value={n.minH || 0} onChange={(v) => patch({ minH: v > 0 ? v : undefined })} />
+          <Field label="Max H" value={n.maxH || 0} onChange={(v) => patch({ maxH: v > 0 ? v : undefined })} />
+        </div>
+        {hasAutoLayoutParent && (
+          <label className="check" style={{ marginTop: 6, paddingLeft: 0 }}>
+            <input
+              type="checkbox"
+              checked={!!n.absolutePosition}
+              onChange={(e) => patch({ absolutePosition: e.target.checked })}
+            />
+            Absolute position (in auto layout)
+          </label>
+        )}
       </div>
       <label className="check">
         <input
@@ -762,36 +1579,339 @@ function Design({
           )}
         </div>
       </div>
-      {(n.isComponent || n.componentId) && (
-        <>
-          <div className="h-row">
-            <h3>Variants</h3>
-          </div>
-          <div className="insp-pad">
-            <select
-              value={n.variant || "Default"}
-              onChange={(e) => engine.dispatch({ type: "setVariant", id: n.id, name: e.target.value })}
-            >
-              {(snap.components.find((c) => c.id === n.componentId)?.variants ?? [{ name: "Default" }]).map((v) => (
-                <option key={v.name} value={v.name}>
-                  {v.name}
-                </option>
-              ))}
-            </select>
-            {n.isComponent && (
+      {(n.kind === "vector" || n.path.length > 0) && (
+        <div className="insp-pad" style={{ marginTop: 2 }}>
+          <div style={{ padding: 10, background: "var(--hover)", borderRadius: 8, border: "1px solid var(--line)", display: "grid", gap: 8 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <strong style={{ fontSize: 11 }}>Vector Network</strong>
+              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                {snap.vecEdit === n.id ? (
+                  <button
+                    className="export-run"
+                    style={{ padding: "2px 8px", fontSize: 10, background: "var(--accent)", color: "#fff" }}
+                    onClick={() => engine.dispatch({ type: "setVecEdit", id: null, pointIndex: null })}
+                    title="Exit vector edit mode (Esc / ⌘↵)"
+                  >
+                    Done
+                  </button>
+                ) : (
+                  <button
+                    className="export-run"
+                    style={{ padding: "2px 8px", fontSize: 10 }}
+                    onClick={() => engine.dispatch({ type: "setVecEdit", id: n.id, pointIndex: 0 })}
+                    title="Enter vector edit mode (↵)"
+                  >
+                    Edit Path
+                  </button>
+                )}
+                <span style={{ fontSize: 9, padding: "2px 6px", background: "var(--accent)", color: "#fff", borderRadius: 10 }}>
+                  Evan Wallace Graph
+                </span>
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, fontSize: 10, color: "var(--dim)" }}>
+              <div>Vertices: <strong style={{ color: "var(--text)" }}>{n.vectorNetwork?.vertices.length ?? n.path.length}</strong></div>
+              <div>Segments: <strong style={{ color: "var(--text)" }}>{n.vectorNetwork?.segments.length ?? (n.path.length > 1 ? n.path.length - (n.closed ? 0 : 1) : 0)}</strong></div>
+              <div>Branching (≥3): <strong style={{ color: "var(--text)" }}>{n.vectorNetwork ? n.vectorNetwork.vertices.filter((_, i) => vertexDegree(n.vectorNetwork!, i) >= 3).length : 0}</strong></div>
+              <div>Closed: <strong style={{ color: "var(--text)" }}>{n.closed ? "Yes" : "No"}</strong></div>
+            </div>
+
+            {snap.vecEdit === n.id && (() => {
+              const activePtIdx =
+                snap.vecPoint !== null &&
+                snap.vecPoint !== undefined &&
+                snap.vecPoint >= 0 &&
+                snap.vecPoint < n.path.length
+                  ? snap.vecPoint
+                  : (n.path.length > 0 ? 0 : null);
+              const pt = activePtIdx !== null ? n.path[activePtIdx] : null;
+              if (activePtIdx === null || !pt) return null;
+              return (
+                <div style={{ padding: 8, background: "var(--bg-subtle)", borderRadius: 6, border: "1px solid var(--border)", display: "grid", gap: 6 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: 11, fontWeight: 600 }}>Vertex #{activePtIdx + 1}</span>
+                    <span style={{ fontSize: 10, color: "var(--dim)" }}>({Math.round(pt.x)}, {Math.round(pt.y)})</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                    <span style={{ fontSize: 10, color: "var(--dim)" }}>Point Radius</span>
+                    <input
+                      type="number"
+                      min={0}
+                      value={pt.cornerRadius ?? 0}
+                      style={{ width: 64, padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                      onChange={(e) => {
+                        const r = parseFloat(e.target.value) || 0;
+                        engine.dispatch({ type: "setPointCornerRadius", id: n.id, pointIndex: activePtIdx, radius: r });
+                      }}
+                    />
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <span style={{ fontSize: 10, color: "var(--dim)" }}>Vertex Mirror Mode</span>
+                    <div className="seg" style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", fontSize: 10 }}>
+                      <button
+                        className={pt.mirrorMode === "none" || !pt.mirrorMode ? "on" : ""}
+                        title="Independent handles / Sharp corner"
+                        onClick={() => engine.dispatch({ type: "setPointMirror", id: n.id, pointIndex: activePtIdx, mode: "none" })}
+                      >
+                        Corner
+                      </button>
+                      <button
+                        className={pt.mirrorMode === "angle" ? "on" : ""}
+                        title="Mirror angle only, independent length"
+                        onClick={() => engine.dispatch({ type: "setPointMirror", id: n.id, pointIndex: activePtIdx, mode: "angle" })}
+                      >
+                        Angle
+                      </button>
+                      <button
+                        className={pt.mirrorMode === "angleAndLength" ? "on" : ""}
+                        title="Symmetric mirror angle & length"
+                        onClick={() => engine.dispatch({ type: "setPointMirror", id: n.id, pointIndex: activePtIdx, mode: "angleAndLength" })}
+                      >
+                        Mirror
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            <div style={{ display: "flex", gap: 6 }}>
               <button
-                style={{ marginTop: 6 }}
+                className="export-run"
+                style={{ flex: 1, padding: "4px 8px", fontSize: 10 }}
                 onClick={() => {
-                  const name = `Variant ${(snap.components.find((c) => c.id === n.componentId)?.variants?.length ?? 1) + 1}`;
-                  engine.dispatch({ type: "addVariant", name });
+                  const vn = n.vectorNetwork || pathToVectorNetwork(n.path, n.closed);
+                  const svgD = vectorNetworkToSvgPath(vn);
+                  copyText(svgD);
+                  toast("Copied SVG Path");
                 }}
               >
-                Add variant
+                Copy SVG Path
               </button>
-            )}
+              <button
+                className="export-run"
+                style={{ padding: "4px 8px", fontSize: 10 }}
+                onClick={() => {
+                  const smoothed = smoothPath(n.path, n.closed);
+                  engine.dispatch({ type: "patchPath", id: n.id, path: smoothed, closed: n.closed });
+                  toast("Smoothed vector handles");
+                }}
+              >
+                Smooth
+              </button>
+              <button
+                className="export-run"
+                style={{ padding: "4px 8px", fontSize: 10 }}
+                onClick={() => {
+                  const simplified = simplifyPath(n.path, 1.5);
+                  engine.dispatch({ type: "patchPath", id: n.id, path: simplified, closed: n.closed });
+                  toast("Simplified vector path");
+                }}
+              >
+                Simplify
+              </button>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 4 }}>
+              <div style={{ fontSize: 10, color: "var(--dim)" }}>Global Symmetry:</div>
+              <div className="seg" style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", fontSize: 10 }}>
+                <button
+                  title="Symmetric angle and length"
+                  onClick={() => {
+                    const newPath = n.path.map((p) => ({ ...p, mirrorMode: "angleAndLength" as const }));
+                    engine.dispatch({ type: "patchPath", id: n.id, path: newPath, closed: n.closed });
+                    toast("Handles: Mirrored (Angle & Length)");
+                  }}
+                >
+                  Mirrored
+                </button>
+                <button
+                  title="Mirror angle only, independent length"
+                  onClick={() => {
+                    const newPath = n.path.map((p) => ({ ...p, mirrorMode: "angle" as const }));
+                    engine.dispatch({ type: "patchPath", id: n.id, path: newPath, closed: n.closed });
+                    toast("Handles: Asymmetric Angle");
+                  }}
+                >
+                  Asymmetric
+                </button>
+                <button
+                  title="Independent angle and length (sharp corner)"
+                  onClick={() => {
+                    const newPath = n.path.map((p) => ({ ...p, mirrorMode: "none" as const }));
+                    engine.dispatch({ type: "patchPath", id: n.id, path: newPath, closed: n.closed });
+                    toast("Handles: Corner (Independent)");
+                  }}
+                >
+                  Corner
+                </button>
+              </div>
+            </div>
           </div>
-        </>
+        </div>
       )}
+      {(n.isComponent || n.componentId) && (() => {
+        const master = snap.components.find((c) => c.id === n.componentId || c.node.id === n.componentId || (n.isComponent && (c.id === n.id || c.node.id === n.id)));
+        const propDefs = master?.properties ?? [];
+        return (
+          <>
+            <div className="h-row">
+              <h3>{n.isComponent ? "Component" : "Instance"}</h3>
+              <div style={{ display: "flex", gap: 4 }}>
+                {n.componentId && (
+                  <>
+                    <button
+                      className="icon-btn"
+                      title="Go to main component"
+                      onClick={() => {
+                        if (master) {
+                          engine.dispatch({ type: "select", ids: [master.node.id] });
+                          toast("Navigated to main component");
+                        }
+                      }}
+                    >
+                      <Icon name="component" size={14} />
+                    </button>
+                    <button
+                      className="icon-btn"
+                      title="Reset all overrides"
+                      onClick={() => {
+                        engine.dispatch({ type: "resetOverrides", id: n.id });
+                        toast("Overrides reset");
+                      }}
+                    >
+                      <Icon name="reset" size={14} />
+                    </button>
+                    <button
+                      className="icon-btn"
+                      title="Detach instance (⌥⌘B)"
+                      onClick={() => {
+                        engine.dispatch({ type: "detachInstance" });
+                        toast("Instance detached");
+                      }}
+                    >
+                      <Icon name="detach" size={14} />
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+            <div className="insp-pad">
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                <span style={{ fontSize: 11, color: "var(--fg-muted)" }}>Variant</span>
+                <select
+                  style={{ flex: 1, maxWidth: 140 }}
+                  value={n.variant || "Default"}
+                  onChange={(e) => engine.dispatch({ type: "setVariant", id: n.id, name: e.target.value })}
+                >
+                  {(master?.variants ?? [{ name: "Default" }]).map((v) => (
+                    <option key={v.name} value={v.name}>
+                      {v.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {propDefs.filter((p) => p.type !== "variant").map((prop) => {
+                const currentVal = n.componentProperties?.[prop.name] ?? prop.defaultValue;
+                return (
+                  <div key={prop.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                    <span style={{ fontSize: 11, color: "var(--fg-muted)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={prop.name}>
+                      {prop.name}
+                    </span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      {prop.type === "boolean" ? (
+                        <input
+                          type="checkbox"
+                          checked={Boolean(currentVal)}
+                          onChange={(e) =>
+                            engine.dispatch({
+                              type: "setComponentProperty",
+                              id: n.id,
+                              propName: prop.name,
+                              value: e.target.checked,
+                            })
+                          }
+                        />
+                      ) : (
+                        <input
+                          type="text"
+                          style={{ width: 110, padding: "2px 6px", fontSize: 11, background: "var(--bg-subtle)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                          value={String(currentVal)}
+                          onChange={(e) =>
+                            engine.dispatch({
+                              type: "setComponentProperty",
+                              id: n.id,
+                              propName: prop.name,
+                              value: e.target.value,
+                            })
+                          }
+                        />
+                      )}
+                      {n.isComponent && master && (
+                        <button
+                          className="icon-btn"
+                          title={`Delete property "${prop.name}"`}
+                          onClick={() => {
+                            engine.dispatch({
+                              type: "deleteComponentProperty",
+                              componentId: master.id,
+                              propId: prop.id,
+                            });
+                            toast(`Property "${prop.name}" deleted`);
+                          }}
+                          style={{ padding: 2, opacity: 0.6 }}
+                        >
+                          <Icon name="trash" size={12} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {n.isComponent && master && (
+                <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                  <button
+                    style={{ flex: 1, fontSize: 11, padding: "4px 8px" }}
+                    onClick={() => {
+                      const name = `Variant ${(master.variants?.length ?? 1) + 1}`;
+                      engine.dispatch({ type: "addVariant", name });
+                    }}
+                  >
+                    + Add variant
+                  </button>
+                  <button
+                    style={{ flex: 1, fontSize: 11, padding: "4px 8px" }}
+                    onClick={() => {
+                      const propType = prompt("Property type: boolean or text?", "boolean")?.toLowerCase();
+                      if (propType === "boolean" || propType === "text") {
+                        const propName = prompt(`Enter ${propType} property name (e.g. Show icon, Title):`);
+                        if (propName) {
+                          const targetLayer = prompt("Child layer name to bind to (optional):") || undefined;
+                          engine.dispatch({
+                            type: "addComponentProperty",
+                            componentId: master.id,
+                            property: {
+                              id: `prop-${Date.now()}`,
+                              name: propName,
+                              type: propType,
+                              defaultValue: propType === "boolean" ? true : "Text",
+                              targetNodeName: targetLayer,
+                            },
+                          });
+                          toast(`Added ${propType} property: ${propName}`);
+                        }
+                      }
+                    }}
+                  >
+                    + Property
+                  </button>
+                </div>
+              )}
+            </div>
+          </>
+        );
+      })()}
       {n.layout && (
         <>
           <div className="dir-row">
@@ -817,6 +1937,24 @@ function Design({
             >
               <Icon name="distribute-h" />
             </button>
+            {n.layout.direction === "horizontal" && (
+              <button
+                className={`icon-btn${n.layout.align === "baseline" ? " on" : ""}`}
+                title={n.layout.align === "baseline" ? "Baseline alignment active" : "Align to text baseline"}
+                onClick={() =>
+                  engine.dispatch({
+                    type: "autoLayout",
+                    id: n.id,
+                    layout: {
+                      ...n.layout!,
+                      align: n.layout!.align === "baseline" ? "min" : "baseline",
+                    },
+                  })
+                }
+              >
+                <Icon name="align-bottom" />
+              </button>
+            )}
           </div>
           <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
             <Field
@@ -867,10 +2005,185 @@ function Design({
             >
               <Icon name="independent" size={14} />
             </button>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gridColumn: "1 / -1", marginTop: 4 }}>
+              <span style={{ fontSize: 10, color: "var(--dim)" }}>Canvas stacking</span>
+              <button
+                className={`icon-btn${n.layout.itemReverseZIndex ? " on" : ""}`}
+                style={{ fontSize: 10, padding: "2px 8px", width: "auto", height: 22 }}
+                title={n.layout.itemReverseZIndex ? "First on top (earlier children overlap later ones)" : "Last on top (standard CSS/DOM order)"}
+                onClick={() =>
+                  engine.dispatch({
+                    type: "autoLayout",
+                    id: n.id,
+                    layout: { ...n.layout!, itemReverseZIndex: !n.layout!.itemReverseZIndex },
+                  })
+                }
+              >
+                {n.layout.itemReverseZIndex ? "First on top" : "Last on top"}
+              </button>
+            </div>
           </div>
         </>
       )}
       </Section>
+
+      {n.kind === "frame" && (
+        <>
+          <div className="hr" />
+          <Section
+            id="layoutGrid"
+            title="Layout grid"
+            actions={
+              <button
+                className="plus"
+                title="Add layout grid"
+                onClick={() => {
+                  const current = n.layoutGrids ?? [];
+                  const newGrid: LayoutGrid = {
+                    id: `grid-${Date.now()}`,
+                    pattern: "columns",
+                    count: 12,
+                    gutter: 20,
+                    margin: 20,
+                    alignment: "stretch",
+                    color: "rgba(255, 0, 0, 0.08)",
+                    visible: true,
+                  };
+                  engine.dispatch({
+                    type: "patch",
+                    id: n.id,
+                    patch: { layoutGrids: [...current, newGrid] },
+                  });
+                }}
+              >
+                <Icon name="plus" size={14} />
+              </button>
+            }
+          >
+            {(n.layoutGrids ?? []).length > 0 && (
+              <div className="insp-pad" style={{ display: "grid", gap: 6 }}>
+                {(n.layoutGrids ?? []).map((g, gi) => (
+                  <div
+                    key={g.id}
+                    style={{
+                      background: "var(--bg-subtle)",
+                      border: "1px solid var(--border)",
+                      borderRadius: 6,
+                      padding: "6px 8px",
+                      display: "grid",
+                      gap: 4,
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <select
+                        style={{ fontSize: 11, fontWeight: 500 }}
+                        value={g.pattern}
+                        onChange={(e) => {
+                          const next = [...n.layoutGrids!];
+                          next[gi] = { ...g, pattern: e.target.value as GridPattern };
+                          engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                        }}
+                      >
+                        <option value="columns">Columns</option>
+                        <option value="rows">Rows</option>
+                        <option value="grid">Grid</option>
+                      </select>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        <button
+                          className="icon-btn"
+                          title={g.visible !== false ? "Hide layout grid" : "Show layout grid"}
+                          onClick={() => {
+                            const next = [...n.layoutGrids!];
+                            next[gi] = { ...g, visible: g.visible === false ? true : false };
+                            engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                          }}
+                        >
+                          <Icon name={g.visible !== false ? "eye" : "eye-closed"} size={13} />
+                        </button>
+                        <button
+                          className="icon-btn"
+                          title="Delete layout grid"
+                          onClick={() => {
+                            const next = n.layoutGrids!.filter((_, j) => j !== gi);
+                            engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                          }}
+                        >
+                          <Icon name="minus" size={13} />
+                        </button>
+                      </div>
+                    </div>
+                    {g.pattern === "grid" ? (
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <span style={{ fontSize: 10, color: "var(--dim)" }}>Size</span>
+                        <input
+                          type="number"
+                          min={1}
+                          value={g.sectionSize ?? 10}
+                          style={{ width: 60, padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                          onChange={(e) => {
+                            const sz = Math.max(1, parseInt(e.target.value, 10) || 10);
+                            const next = [...n.layoutGrids!];
+                            next[gi] = { ...g, sectionSize: sz };
+                            engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                          }}
+                        />
+                      </div>
+                    ) : (
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Count</span>
+                          <input
+                            type="number"
+                            min={1}
+                            value={g.count ?? (g.pattern === "columns" ? 12 : 8)}
+                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                            onChange={(e) => {
+                              const cnt = Math.max(1, parseInt(e.target.value, 10) || 1);
+                              const next = [...n.layoutGrids!];
+                              next[gi] = { ...g, count: cnt };
+                              engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                            }}
+                          />
+                        </div>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Gutter</span>
+                          <input
+                            type="number"
+                            min={0}
+                            value={g.gutter ?? 20}
+                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                            onChange={(e) => {
+                              const gut = Math.max(0, parseInt(e.target.value, 10) || 0);
+                              const next = [...n.layoutGrids!];
+                              next[gi] = { ...g, gutter: gut };
+                              engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                            }}
+                          />
+                        </div>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Margin</span>
+                          <input
+                            type="number"
+                            min={0}
+                            value={g.margin ?? 20}
+                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                            onChange={(e) => {
+                              const mg = Math.max(0, parseInt(e.target.value, 10) || 0);
+                              const next = [...n.layoutGrids!];
+                              next[gi] = { ...g, margin: mg };
+                              engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </Section>
+        </>
+      )}
 
       <div className="hr" />
       <Section id="appearance" title="Appearance">
@@ -1173,14 +2486,14 @@ function Design({
           </div>
           <div className="stroke-ends">
           <div className="seg icons">
-            {(["none", "round", "square", "arrow"] as StrokeCap[]).map((c) => (
+            {(["none", "round", "square", "arrow", "triangle"] as StrokeCap[]).map((c) => (
               <button
                 key={c}
                 className={n.strokeCap === c ? "on" : ""}
                 title={c === "none" ? "Cap butt" : `Cap ${c}`}
                 onClick={() => patch({ strokeCap: c })}
               >
-                <Icon name={c === "arrow" ? "arrow" : `cap-${c}`} size={14} />
+                <Icon name={c === "arrow" ? "arrow" : c === "triangle" ? "poly" : `cap-${c}`} size={14} />
               </button>
             ))}
           </div>
@@ -1288,6 +2601,49 @@ function Design({
                 onChange={(v) => patch({ starRatio: Math.max(0.05, Math.min(0.95, v / 100)) })}
               />
             )}
+            <Field
+              label="r"
+              value={n.cornerRadii[0] || 0}
+              onChange={(r) => patch({ cornerRadii: [Math.max(0, r), Math.max(0, r), Math.max(0, r), Math.max(0, r)] })}
+            />
+          </div>
+        </>
+      )}
+
+      {n.kind === "ellipse" && (
+        <>
+          <div className="hr" />
+          <div className="insp-pad" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
+            <Field
+              label="Sweep"
+              hint="°"
+              value={Math.round(((n.arcData?.endingAngle ?? Math.PI * 2) * 180) / Math.PI)}
+              onChange={(deg) => {
+                const rad = Math.max(0, Math.min(360, deg)) * (Math.PI / 180);
+                const cur = n.arcData ?? { startingAngle: 0, endingAngle: Math.PI * 2, innerRadius: 0 };
+                patch({ arcData: { ...cur, endingAngle: rad } });
+              }}
+            />
+            <Field
+              label="Start"
+              hint="°"
+              value={Math.round(((n.arcData?.startingAngle ?? 0) * 180) / Math.PI)}
+              onChange={(deg) => {
+                const rad = Math.max(0, Math.min(360, deg)) * (Math.PI / 180);
+                const cur = n.arcData ?? { startingAngle: 0, endingAngle: Math.PI * 2, innerRadius: 0 };
+                patch({ arcData: { ...cur, startingAngle: rad } });
+              }}
+            />
+            <Field
+              label="Ratio"
+              hint="%"
+              value={Math.round((n.arcData?.innerRadius ?? 0) * 100)}
+              onChange={(pct) => {
+                const ratio = Math.max(0, Math.min(99, pct)) / 100;
+                const cur = n.arcData ?? { startingAngle: 0, endingAngle: Math.PI * 2, innerRadius: 0 };
+                patch({ arcData: { ...cur, innerRadius: ratio } });
+              }}
+            />
           </div>
         </>
       )}
@@ -1312,7 +2668,19 @@ function Design({
                   engine.dispatch({ type: "patch", id: n.id, patch: { fontFamily: e.target.value } })
                 }
               >
-                {["Inter", "Roboto", "SF Pro", "Geist", "Space Grotesk"].map((f) => (
+                {[
+                  "Inter",
+                  "Roboto",
+                  "SF Pro",
+                  "Geist",
+                  "Space Grotesk",
+                  "Plus Jakarta Sans",
+                  "Poppins",
+                  "Outfit",
+                  "Fira Code",
+                  "JetBrains Mono",
+                  "system-ui",
+                ].map((f) => (
                   <option key={f}>{f}</option>
                 ))}
               </select>
@@ -1329,10 +2697,15 @@ function Design({
                     })
                   }
                 >
-                  <option value={400}>Regular</option>
-                  <option value={500}>Medium</option>
-                  <option value={600}>Semi Bold</option>
-                  <option value={700}>Bold</option>
+                  <option value={100}>Thin (100)</option>
+                  <option value={200}>Extra Light (200)</option>
+                  <option value={300}>Light (300)</option>
+                  <option value={400}>Regular (400)</option>
+                  <option value={500}>Medium (500)</option>
+                  <option value={600}>Semi Bold (600)</option>
+                  <option value={700}>Bold (700)</option>
+                  <option value={800}>Extra Bold (800)</option>
+                  <option value={900}>Black (900)</option>
                 </select>
               </div>
               <Field label="S" value={n.fontSize} onChange={(v) => num("fontSize", v)} />
@@ -1344,22 +2717,34 @@ function Design({
               />
               <Field label="↔" value={n.letterSpacing} onChange={(v) => num("letterSpacing", v)} />
             </div>
-            <div className="field">
-              <select
-                value={
-                  n.sizingW === "hug" ? "auto-width" : n.sizingH === "hug" ? "auto-height" : "fixed"
-                }
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (v === "auto-width") patch({ sizingW: "hug", sizingH: "hug" });
-                  else if (v === "auto-height") patch({ sizingW: "fixed", sizingH: "hug" });
-                  else patch({ sizingW: "fixed", sizingH: "fixed" });
-                }}
-              >
-                <option value="auto-width">Auto width</option>
-                <option value="auto-height">Auto height</option>
-                <option value="fixed">Fixed size</option>
-              </select>
+            <div className="seg" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", width: "100%", margin: "2px 0" }}>
+              <Tooltip label="Auto width" shortcut="">
+                <button
+                  className={n.sizingW === "hug" ? "on" : ""}
+                  onClick={() => patch({ sizingW: "hug", sizingH: "hug" })}
+                >
+                  <Icon name="text-auto-width" size={14} />
+                  <span style={{ fontSize: 10, marginLeft: 4 }}>Auto W</span>
+                </button>
+              </Tooltip>
+              <Tooltip label="Auto height" shortcut="">
+                <button
+                  className={n.sizingW !== "hug" && n.sizingH === "hug" ? "on" : ""}
+                  onClick={() => patch({ sizingW: "fixed", sizingH: "hug" })}
+                >
+                  <Icon name="text-auto-height" size={14} />
+                  <span style={{ fontSize: 10, marginLeft: 4 }}>Auto H</span>
+                </button>
+              </Tooltip>
+              <Tooltip label="Fixed size" shortcut="">
+                <button
+                  className={n.sizingW !== "hug" && n.sizingH !== "hug" ? "on" : ""}
+                  onClick={() => patch({ sizingW: "fixed", sizingH: "fixed" })}
+                >
+                  <Icon name="text-fixed" size={14} />
+                  <span style={{ fontSize: 10, marginLeft: 4 }}>Fixed</span>
+                </button>
+              </Tooltip>
             </div>
             <div className="seg icons">
               {(["left", "center", "right", "justified"] as TextAlign[]).map((a) => (
@@ -1564,6 +2949,12 @@ function EffectPopover({
           onOpacity={(v) => onChange({ color: withAlpha(fx.color, v / 100) })}
         />
       )}
+      {fx.kind === "texture" && (
+        <div className="grid2">
+          <Field label="Density" aria="Texture density" value={fx.blur} onChange={(v) => onChange({ blur: v })} />
+          <Field label="Scale" aria="Texture scale" value={fx.spread} onChange={(v) => onChange({ spread: v })} />
+        </div>
+      )}
     </div>
   );
 }
@@ -1575,6 +2966,7 @@ const EFFECT_LABEL: Record<string, string> = {
   "background-blur": "Background blur",
   noise: "Noise",
   glass: "Glass",
+  texture: "Texture",
 };
 
 function Effects({ n, engine }: { n: XNode; engine: Engine }) {
@@ -1587,6 +2979,7 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
     { id: "background-blur", label: "Background blur" },
     { id: "noise", label: "Noise" },
     { id: "glass", label: "Glass" },
+    { id: "texture", label: "Texture" },
   ];
   const effects = n.effects ?? [];
   const set = (i: number, p: Partial<Effect>) => {
@@ -2391,7 +3784,8 @@ function ColorRow({
 
 function fmt(v: number) {
   const r = Math.round(v);
-  return Math.abs(v - r) < 0.05 ? String(r) : v.toFixed(1);
+  if (Math.abs(v - r) < 0.001) return String(r);
+  return String(Math.round(v * 100) / 100);
 }
 
 function setDir(engine: Engine, n: XNode, direction: "horizontal" | "vertical") {

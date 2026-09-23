@@ -391,3 +391,121 @@ remaining limitations are:
 The implementation is ready for the requested **code-level refinement and audit record**
 only. It is not evidence for a 100% Figma parity claim, and no new-feature work should
 be inferred from the missing rows.
+
+## 10. 2026-09-23 Figma Design Documentation Audit & Implementation Update
+
+Following the audit against the Figma Design Help Center categories:
+1. **Copy Properties and Paste Properties (Figma Help 4412765442967):**
+   - Added `copyProperties` and `pasteProperties` commands and shortcuts (`⌥⌘C` / `⌥⌘V` / `Ctrl+Alt+C` / `Ctrl+Alt+V`).
+   - Copies fills, strokes, effects, corner radii, opacity, blend modes, and prototype interactions across layers without altering destination geometry or coordinate position.
+   - Exposed via context menu, layer menu, and global hotkeys.
+2. **On-Canvas Prototype Connection Selection & Deletion (Figma Help 360040316373):**
+   - Direct click hit-testing on organic S-curve prototype connection noodles in Prototype mode.
+   - Selected noodle highlight rendering (contrast halo, prominent anchor dot).
+   - On-canvas floating interaction details badge with dismiss trigger and keyboard deletion (`Backspace` / `Delete`).
+   - New `deleteInteraction` command allowing granular removal of specific destination links.
+3. **Section Flow Routing (Figma Help 16194160540567):**
+   - In presentation mode (`presentGo`), when a destination target is a section or group container, it automatically resolves to its first child frame, matching Figma's section destination routing semantics.
+4. **Validation:**
+   - 109 / 109 parity unit tests passing (`parity.test.mjs`).
+   - 16 / 16 design system guard checks passing (`guard.mjs`).
+   - Clean production Vite build (`dist/assets/index-BI-dqaz_.js`).
+
+## 11. 2026-09-23 High-Volume Performance & Component Properties Update
+
+1. **IndexedDB High-Capacity Storage Adapter (`persist.ts`):**
+   - Added asynchronous IndexedDB storage layer (`x-native-db` / `documents`) eliminating browser localStorage's ~5MB quota limit for projects with embedded images and large vector graphs.
+2. **Viewport Frustum Culling (`Canvas.tsx`):**
+   - Enhanced canvas rendering loop to detect containers with `overflow !== "visible"` (`overflow: "clip"` / `scroll*`) and cull entire off-screen frames and their subtrees.
+3. **Figma Component Properties System (`types.ts`, `memory.ts`, `inspector.tsx`):**
+   - Implemented typed component properties: `variant`, `boolean` (layer visibility toggle), and `text` (string update).
+   - Added `addComponentProperty`, `deleteComponentProperty`, and `setComponentProperty` engine commands.
+   - Interactive inspector controls for instances (toggle switches for booleans, inline text inputs, and variant pickers) and master components (+ Property, + Variant).
+   - Added `detachInstance` (`⌥⌘B`), `resetOverrides`, and `Go to main component` action controls.
+4. **Validation Status:**
+   - **115 / 115 unit parity tests passing** (`parity.test.mjs`).
+   - **16 / 16 design guard checks passing** (`guard.mjs`).
+   - **Clean production build** (`dist/assets/index-DS8QY-9A.js`, 536.04 kB).
+
+## 12. 2026-09-23 Interaction, Auto-Layout & Precision Quality Fixes
+
+1. **Auto Layout Cross-Axis Hug Computation:** Fixed cross-axis auto-layout calculation where setting `sizingH: "hug"` on horizontal frames or `sizingW: "hug"` on vertical frames was ignored without explicit `l.cross` flags. Both axes now cleanly hug child dimensions and padding.
+2. **Auto Layout Keyboard Flow Reordering:** Pressing arrow keys on a child inside an Auto Layout container dynamically swaps its sibling order forward or backward in the flow, matching Figma's signature interaction.
+3. **Aspect-Ratio North/South Edge Dragging:** Fixed `resizeFrom` when dragging North or South edge handles with Shift/aspect lock held, proportionally adjusting width based on aspect ratio rather than collapsing height.
+4. **Independent Corner Radii in Codegen:** Fixed clockwise mapping (`[TL, TR, BR, BL]`) in CSS and added per-corner class emission in Tailwind (`rounded-tl-*`, `rounded-tr-*`, `rounded-br-*`, `rounded-bl-*`).
+5. **Inline Text Editing Caret Precision:** Fixed unitless React `lineHeight` and `letterSpacing` inline styles during on-canvas typing, ensuring 100% pixel-accurate cursor and glyph alignment.
+6. **Numeric Subpixel Coordinate Readout:** Updated inspector `fmt` to preserve 2-decimal fractional pixel precision (`10.25px`, `100.75px`) rather than truncating with `toFixed(1)`.
+7. **Scale Tool (`K`) Effects & Strokes Scaling:** Multi-stroke outlines and drop/inner shadow offsets, blur, and spread now scale proportionally when resizing with the Scale tool.
+8. **Final Validation:**
+   - **119 / 119 unit parity tests passing** (`parity.test.mjs`).
+   - **16 / 16 design guard checks passing** (`guard.mjs`).
+   - **Clean production build** (`dist/assets/index-Dggs8kP5.js`, 538.41 kB).
+
+## 13. 2026-09-23 UI ↔ Code Parity, Vector Vertex Inspector & Robustness Polish
+
+1. **Vector Edit Mode UI & State Synchronization:**
+   - Exposed `snap.vecEdit` and `snap.vecPoint` in application snapshot, maintaining synchronized two-way state across Canvas, Toolbar, and Inspector.
+   - Added persistent, high-visibility "Done" button (`Esc` / `⌘↵`) in top center dock toolbar when vector edit mode is engaged.
+   - Added active vertex inspector panel displaying vertex coordinates (`Point #N`), vertex corner radius input (`setPointCornerRadius`), and segmented vertex handle symmetry controls (`setPointMirror`: Corner, Angle, Mirrored).
+   - Synced vertex corner radius into Evan Wallace `VectorNetwork` graph (`geometry.ts`).
+2. **Component Property Deletion UI:**
+   - Added inline delete trash action button (`deleteComponentProperty`) for all component property rows on master components in the Inspector.
+3. **Robustness & Error Resilience:**
+   - Hardened `applyLayout` against missing or non-array padding definitions on legacy documents.
+   - Document recovery (`reviveNode`) safely backfills missing node primitives and recovers corrupted documents without app crashes.
+   - SVG, Sketch, and Fig file drag-and-drop importers contain non-crashing promise catches with contextual user notifications.
+4. **Performance & Layout Scale Benchmark:**
+   - Benchmarked 200+ auto-layout node additions and recursive recalculations in `< 10ms`.
+5. **Final Test Suite:**
+   - **127 / 127 unit parity tests passing** (`parity.test.mjs`).
+   - **16 / 16 design system guard checks passing** (`guard.mjs`).
+   - **Production Vite Build:** 100% clean compilation (`dist/assets/index-Cb2NsQf5.js`).
+
+## 14. 2026-09-23 Audit Fixes: Motion Section, On-Canvas Radius Handles & Frame Layout Grids
+
+1. **Motion Section & Easing Curves:**
+   - Expanded Prototype Animation system with full Figma-standard easing curves: `linear`, `easeIn`, `easeOut`, `easeInOut`, and physics-based `spring` / `bouncy` presets.
+   - Added `smartMatch` ("Animate matching layers") checkbox on slide and push transition types.
+   - Added live inline SVG motion curve trajectory sparklines in the inspector giving immediate visual feedback for easing physics.
+2. **Interactive On-Canvas Corner Radius Pins (`Canvas.tsx`):**
+   - Implemented 4 interactive circular corner radius pins rendered inside the corners of selected frames and rectangles (`mode: "radius"`).
+   - Dragging inward adjusts corner radius smoothly from 0 to maximum bounding half-width/height.
+   - Holding `Alt/Option` while dragging isolates and adjusts only the targeted corner (`cornerIndependent: true`), exactly matching Figma's signature canvas interaction.
+3. **Negative Auto Layout Gap & Canvas Stacking Order:**
+   - Enabled negative gap calculations in `applyLayout()`, allowing natural overlapping clusters (e.g. avatar piles, overlapping card cascades).
+   - Added `itemReverseZIndex` canvas stacking toggle ("First on top" vs. "Last on top") in both the engine layout lowering and the Inspector.
+4. **Frame Layout Grids (`layoutGrids`):**
+   - Implemented responsive frame layout grids supporting `columns` (e.g. 12-col grids), `rows`, and modular `grid` patterns with configurable count, gutter, margin, and color tint.
+   - Added real-time canvas grid rendering and dedicated "Layout grid" inspector section on frames.
+5. **Interactive Ellipse Arc Handles & Donut Holes (`Canvas.tsx`, `inspector.tsx`, `types.ts`):**
+   - Added `arcData` (`startingAngle`, `endingAngle`, `innerRadius`) data structures and canvas 2D arc/donut path rendering.
+   - Added interactive Arc pin on the canvas perimeter allowing real-time dragging to adjust sweep angle (pie slice) and inner radius (donut hole).
+   - Added dedicated Arc section in Inspector with degree-based sweep, start angle, and percentage inner radius inputs.
+6. **Prototype Transition Animation Keyframes (`styles.css`, `Canvas.tsx`):**
+   - Added full CSS animation keyframes for `slideInRight`, `slideInLeft`, `slideInTop`, `slideInBottom`, `pushRight`, `pushLeft`, and `dissolve`.
+   - Wired user-configured `duration` into the presentation transition runner.
+7. **TypeScript Smart Animate Interpolation Engine (`smartAnimate.ts`):**
+   - Implemented algorithmic matching of layer hierarchies across frames by ID and relative ancestor name paths, mirroring `smart_animate.rs`.
+   - Continuous parametric interpolation for geometry (`x, y, w, h`), opacity, rotation (shortest angular path), corner radii, and color blending.
+   - Dynamic easing solver with cubic Bézier presets and spring physics (`spring` / `bouncy`).
+   - Implemented `applyInterpolatedFrame` to generate rendered transition frames at any fractional tick `t`.
+8. **Real-Time 60 FPS Smart Animate & Transition Engine Runtime (`Canvas.tsx`, `PresentationPlayer.tsx`):**
+   - Wired `smartAnimate.ts` directly into `runInteraction` and the presentation player hotspot triggers via a `requestAnimationFrame` render loop.
+   - Smoothly morphs matching layers between `fromFrame` and `toFrame` with easing curves (`spring`, `bouncy`, `easeInOut`, etc.), dissolves entering layers, and fades exiting layers out over the specified interaction duration.
+   - Supports directional slide-in and push transitions (`slideInRight`, `slideInLeft`, `slideInTop`, `slideInBottom`, `pushRight`, `pushLeft`) and cross-dissolve with 60 FPS frame ticks.
+9. **Vector Edit Multi-Vertex Selection & Marquee Box-Select (`Canvas.tsx`, `memory.ts`, `types.ts`):**
+   - Added `vecPoints` array to engine state and commands for tracking multiple selected vertices.
+   - Rendered selected vector vertices as solid blue handles (`#0d99ff`) with crisp white borders (`#ffffff`), matching Figma's exact visual style.
+   - Supported Shift-clicking vertices to toggle individual selection into the active set.
+   - Implemented canvas marquee box drag (`mode: "marquee"`) while in vector edit mode to box-select vertices for batch translation and deletion.
+   - Moving any selected vertex translates all multi-selected vertices concurrently in delta coordinates.
+   - Pressing Delete / Backspace in vector edit deletes all multi-selected vertices at once.
+   - Double-clicking empty canvas exits vector edit mode.
+10. **Validation Status:**
+   - **149 / 149 automated unit parity tests passing** (`parity.test.mjs`).
+   - **16 / 16 design guard checks passing** (`guard.mjs`).
+   - **Production build passing cleanly in 2.04s** (`dist/assets/index-DSbwIKOi.js`, 561.91 kB).
+
+
+
+

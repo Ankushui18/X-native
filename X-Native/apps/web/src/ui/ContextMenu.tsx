@@ -130,7 +130,9 @@ export function canvasMenu(sel: number, isGroup: boolean, hasImage: boolean): Me
   const items: MenuItem[] = [
     { kind: "action", id: "cut", label: "Cut", shortcut: "⌘X", icon: "scissors" },
     { kind: "action", id: "copy", label: "Copy", shortcut: "⌘C", icon: "copy" },
+    { kind: "action", id: "copyProperties", label: "Copy properties", shortcut: "⌥⌘C", icon: "copy" },
     { kind: "action", id: "paste", label: "Paste", shortcut: "⌘V", icon: "clipboard" },
+    { kind: "action", id: "pasteProperties", label: "Paste properties", shortcut: "⌥⌘V", icon: "clipboard" },
     { kind: "action", id: "copyCode", label: "Copy as code", icon: "code" },
     { kind: "action", id: "duplicate", label: "Duplicate", shortcut: "⌘D", icon: "copy" },
     { kind: "sep" },
@@ -139,8 +141,9 @@ export function canvasMenu(sel: number, isGroup: boolean, hasImage: boolean): Me
   if (isGroup) items.push({ kind: "action", id: "ungroup", label: "Ungroup", shortcut: "⇧⌘G", icon: "group" });
   items.push({ kind: "action", id: "wrapSection", label: "Wrap in new section", icon: "section" });
   items.push({ kind: "action", id: "makeComponent", label: "Create component", shortcut: "⌘⌥K", icon: "component" });
-  items.push({ kind: "action", id: "detachInstance", label: "Detach instance", icon: "component" });
-  items.push({ kind: "action", id: "useAsMask", label: "Use as mask", shortcut: "⌘⌥M", icon: "rect" });
+  items.push({ kind: "action", id: "detachInstance", label: "Detach instance", shortcut: "⌥⌘B", icon: "detach" });
+  items.push({ kind: "action", id: "resetOverrides", label: "Reset all overrides", icon: "reset" });
+  items.push({ kind: "action", id: "useAsMask", label: "Use as mask", shortcut: "⌘⌥M", icon: "mask" });
   items.push({ kind: "action", id: "flipH", label: "Flip horizontal", shortcut: "⇧H", icon: "flip-h" });
   items.push({ kind: "action", id: "flipV", label: "Flip vertical", shortcut: "⇧V", icon: "flip-v" });
   if (hasImage) {
@@ -189,11 +192,15 @@ export function layerMenu(isGroup: boolean): MenuItem[] {
     { kind: "sep" },
     { kind: "action", id: "cut", label: "Cut", shortcut: "⌘X", icon: "scissors" },
     { kind: "action", id: "copy", label: "Copy", shortcut: "⌘C", icon: "copy" },
+    { kind: "action", id: "copyProperties", label: "Copy properties", shortcut: "⌥⌘C", icon: "copy" },
     { kind: "action", id: "paste", label: "Paste", shortcut: "⌘V", icon: "clipboard" },
+    { kind: "action", id: "pasteProperties", label: "Paste properties", shortcut: "⌥⌘V", icon: "clipboard" },
     { kind: "action", id: "duplicate", label: "Duplicate", shortcut: "⌘D", icon: "copy" },
     { kind: "sep" },
     { kind: "action", id: "makeComponent", label: "Create component", shortcut: "⌘⌥K", icon: "component" },
-    { kind: "action", id: "detachInstance", label: "Detach instance", icon: "component" },
+    { kind: "action", id: "detachInstance", label: "Detach instance", shortcut: "⌥⌘B", icon: "detach" },
+    { kind: "action", id: "resetOverrides", label: "Reset all overrides", icon: "reset" },
+    { kind: "action", id: "useAsMask", label: "Use as mask", shortcut: "⌘⌥M", icon: "mask" },
     { kind: "sep" },
     ...(isGroup
       ? [{ kind: "action" as const, id: "ungroup", label: "Ungroup", shortcut: "⇧⌘G", icon: "group" }]
@@ -236,6 +243,14 @@ export function runMenu(
       // The result lands on the clipboard with no visible change on canvas, so
       // without a toast the command looks like it did nothing.
       toast("Copied as CSS");
+      break;
+    case "copyProperties":
+      engine.dispatch({ type: "copyProperties" });
+      toast("Copied properties");
+      break;
+    case "pasteProperties":
+      engine.dispatch({ type: "pasteProperties" });
+      toast("Pasted properties");
       break;
     case "duplicate":
       engine.dispatch({ type: "duplicate" });
@@ -303,6 +318,23 @@ export function runMenu(
       break;
     case "detachInstance":
       engine.dispatch({ type: "detachInstance" });
+      break;
+    case "resetOverrides":
+      engine.dispatch({ type: "resetOverrides" });
+      toast("Reset all instance overrides");
+      break;
+    case "resetOverrides:text":
+      engine.dispatch({ type: "resetOverrides", property: "text" });
+      toast("Reset text override");
+      break;
+    case "resetOverrides:fill":
+      engine.dispatch({ type: "resetOverrides", property: "fill" });
+      toast("Reset fill override");
+      break;
+    case "resetOverrides:size":
+      engine.dispatch({ type: "resetOverrides", property: "w" });
+      engine.dispatch({ type: "resetOverrides", property: "h" });
+      toast("Reset size override");
       break;
     case "flatten":
       engine.dispatch({ type: "flatten" });

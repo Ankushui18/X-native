@@ -1,4 +1,4 @@
-import type { BooleanOp, PathPoint, XNode } from "./types";
+import type { BooleanOp, PathPoint, VectorNetwork, VectorSegment, VectorVertex, XNode } from "./types";
 
 /** Sample a node's outline in local coordinates (for booleans / vector edit). */
 export function shapePoly(n: XNode, steps = 48): PathPoint[] {
@@ -133,7 +133,7 @@ export function booleanPath(
   maxY += pad;
   const bw = Math.max(2, maxX - minX);
   const bh = Math.max(2, maxY - minY);
-  const res = 96;
+  const res = 160;
   const gw = res;
   const gh = Math.max(8, Math.round((bh / bw) * res));
   const sx = bw / gw;
@@ -182,7 +182,11 @@ export function booleanPath(
         cx = next[0];
         cy = next[1];
       }
-      if (ring.length >= 3) path.push(...simplify(ring, Math.max(sx, sy) * 0.85));
+      if (ring.length >= 3) {
+        const simp = simplify(ring, Math.max(sx, sy) * 0.85);
+        const curved = shapes.some((s) => s.poly.some((p) => (p.ox && p.ox !== 0) || (p.oy && p.oy !== 0)));
+        path.push(...(curved && simp.length >= 4 ? smoothPath(simp, true, 0.35) : simp));
+      }
     }
   }
   if (path.length < 3) return null;
@@ -304,4 +308,468 @@ export function erasePath(
   }
   if (run.length > 1) runs.push(run);
   return runs;
+}
+
+/**
+ * Converts a sequence of `PathPoint`s to Figma's `VectorNetwork` graph representation.
+ */
+export function pathToVectorNetwork(path: PathPoint[], closed: boolean): VectorNetwork {
+  if (!path.length) return { vertices: [], segments: [] };
+  const vertices: VectorVertex[] = path.map((p) => ({
+    x: p.x,
+    y: p.y,
+    ...(p.cornerRadius != null ? { cornerRadius: p.cornerRadius } : {}),
+  }));
+  const segments: VectorSegment[] = [];
+
+  for (let i = 0; i < path.length - 1; i++) {
+    const cur = path[i];
+    const nxt = path[i + 1];
+    segments.push({
+      start: i,
+      end: i + 1,
+      tangentStart: cur.ox != null || cur.oy != null ? { x: cur.ox ?? 0, y: cur.oy ?? 0 } : undefined,
+      tangentEnd: nxt.ix != null || nxt.iy != null ? { x: nxt.ix ?? 0, y: nxt.iy ?? 0 } : undefined,
+    });
+  }
+
+  if (closed && path.length > 2) {
+    const last = path[path.length - 1];
+    const first = path[0];
+    segments.push({
+      start: path.length - 1,
+      end: 0,
+      tangentStart: last.ox != null || last.oy != null ? { x: last.ox ?? 0, y: last.oy ?? 0 } : undefined,
+      tangentEnd: first.ix != null || first.iy != null ? { x: first.ix ?? 0, y: first.iy ?? 0 } : undefined,
+    });
+  }
+
+  const regions = closed && path.length > 2
+    ? [{ windingRule: "NONZERO" as const, loops: [Array.from({ length: path.length }, (_, i) => i)] }]
+    : undefined;
+
+  return { vertices, segments, regions };
+}
+
+/**
+ * Calculate the degree (connected segment count) for a vertex in a VectorNetwork.
+ * A degree >= 3 indicates a branching point (Figma Vector Network characteristic).
+ */
+export function vertexDegree(vn: VectorNetwork, vertexIndex: number): number {
+  let count = 0;
+  for (const s of vn.segments) {
+    if (s.start === vertexIndex) count++;
+    if (s.end === vertexIndex) count++;
+  }
+  return count;
+}
+
+/**
+ * Returns segment indices connected to the given vertex.
+ */
+export function connectedSegments(vn: VectorNetwork, vertexIndex: number): number[] {
+  const result: number[] = [];
+  for (let i = 0; i < vn.segments.length; i++) {
+    const s = vn.segments[i];
+    if (s.start === vertexIndex || s.end === vertexIndex) result.push(i);
+  }
+  return result;
+}
+
+/**
+ * Adds a new branch connecting an existing vertex to a new or existing vertex.
+ * If target exists or is newly created, connects a segment with optional tangent handles.
+ */
+export function addVectorBranch(
+  vn: VectorNetwork,
+  fromVertexIndex: number,
+  to: VectorVertex,
+  tangentStart?: { x: number; y: number },
+  tangentEnd?: { x: number; y: number },
+): VectorNetwork {
+  const vertices = [...vn.vertices];
+  let targetIndex = -1;
+
+  // Check if target matches an existing vertex within 1px
+  for (let i = 0; i < vertices.length; i++) {
+    if (Math.hypot(vertices[i].x - to.x, vertices[i].y - to.y) < 1) {
+      targetIndex = i;
+      break;
+    }
+  }
+
+  if (targetIndex === -1) {
+    targetIndex = vertices.length;
+    vertices.push({ x: to.x, y: to.y, strokeCap: to.strokeCap, strokeJoin: to.strokeJoin });
+  }
+
+  // Avoid duplicate identical segment
+  const exists = vn.segments.some(
+    (s) =>
+      (s.start === fromVertexIndex && s.end === targetIndex) ||
+      (s.start === targetIndex && s.end === fromVertexIndex),
+  );
+
+  const segments = [...vn.segments];
+  if (!exists && fromVertexIndex !== targetIndex) {
+    segments.push({
+      start: fromVertexIndex,
+      end: targetIndex,
+      tangentStart,
+      tangentEnd,
+    });
+  }
+
+  return {
+    vertices,
+    segments,
+    regions: vn.regions,
+  };
+}
+
+/**
+ * Converts a `VectorNetwork` into a standard SVG path definition string (`d="..."`).
+ */
+export function vectorNetworkToSvgPath(vn: VectorNetwork): string {
+  if (!vn.vertices.length || !vn.segments.length) return "";
+  const parts: string[] = [];
+
+  for (const s of vn.segments) {
+    const v0 = vn.vertices[s.start];
+    const v1 = vn.vertices[s.end];
+    if (!v0 || !v1) continue;
+
+    parts.push(`M ${v0.x.toFixed(2)} ${v0.y.toFixed(2)}`);
+    if (s.tangentStart || s.tangentEnd) {
+      const c1x = (v0.x + (s.tangentStart?.x ?? 0)).toFixed(2);
+      const c1y = (v0.y + (s.tangentStart?.y ?? 0)).toFixed(2);
+      const c2x = (v1.x + (s.tangentEnd?.x ?? 0)).toFixed(2);
+      const c2y = (v1.y + (s.tangentEnd?.y ?? 0)).toFixed(2);
+      parts.push(`C ${c1x} ${c1y}, ${c2x} ${c2y}, ${v1.x.toFixed(2)} ${v1.y.toFixed(2)}`);
+    } else {
+      parts.push(`L ${v1.x.toFixed(2)} ${v1.y.toFixed(2)}`);
+    }
+  }
+
+  return parts.join(" ");
+}
+
+/**
+ * Converts a simple (degree <= 2) VectorNetwork back to a `PathPoint[]` array.
+ */
+export function vectorNetworkToPath(vn: VectorNetwork): { path: PathPoint[]; closed: boolean } {
+  if (!vn.vertices.length) return { path: [], closed: false };
+  if (!vn.segments.length) {
+    return { path: vn.vertices.map((v) => ({ x: v.x, y: v.y })), closed: false };
+  }
+
+  // Follow segments
+  const path: PathPoint[] = [];
+  const visited = new Set<number>();
+  let cur = vn.segments[0].start;
+  let closed = false;
+
+  path.push({ x: vn.vertices[cur].x, y: vn.vertices[cur].y });
+  visited.add(cur);
+
+  let advanced = true;
+  while (advanced) {
+    advanced = false;
+    const seg = vn.segments.find((s) => s.start === cur && !visited.has(s.end));
+    if (seg) {
+      const lastPoint = path[path.length - 1];
+      if (seg.tangentStart) {
+        lastPoint.ox = seg.tangentStart.x;
+        lastPoint.oy = seg.tangentStart.y;
+      }
+      const nextV = vn.vertices[seg.end];
+      path.push({
+        x: nextV.x,
+        y: nextV.y,
+        ix: seg.tangentEnd?.x,
+        iy: seg.tangentEnd?.y,
+      });
+      visited.add(seg.end);
+      cur = seg.end;
+      advanced = true;
+    }
+  }
+
+  // Check if closed
+  if (vn.segments.some((s) => s.start === cur && s.end === vn.segments[0].start)) {
+    closed = true;
+  }
+
+  return { path, closed };
+}
+
+/**
+ * Projects a point onto a line segment and calculates orthogonal distance.
+ */
+export function projectPointOnSegment(
+  px: number,
+  py: number,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+): { x: number; y: number; dist: number; t: number } {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) {
+    return { x: x1, y: y1, dist: Math.hypot(px - x1, py - y1), t: 0 };
+  }
+  let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  const projX = x1 + t * dx;
+  const projY = y1 + t * dy;
+  return { x: projX, y: projY, dist: Math.hypot(px - projX, py - projY), t };
+}
+
+/**
+ * Inserts a new point onto an existing vector path by splitting the nearest segment.
+ */
+export function insertPointOnPath(
+  pts: PathPoint[],
+  px: number,
+  py: number,
+  closed: boolean,
+  maxDist = 12,
+): { newPath: PathPoint[]; insertedIndex: number } | null {
+  if (pts.length < 2) return null;
+  const n = pts.length;
+  const count = closed ? n : n - 1;
+  let bestDist = maxDist;
+  let bestIdx = -1;
+  let bestProj = { x: px, y: py };
+
+  for (let i = 0; i < count; i++) {
+    const p1 = pts[i];
+    const p2 = pts[(i + 1) % n];
+    const res = projectPointOnSegment(px, py, p1.x, p1.y, p2.x, p2.y);
+    if (res.dist < bestDist && res.t > 0.05 && res.t < 0.95) {
+      bestDist = res.dist;
+      bestIdx = i;
+      bestProj = { x: res.x, y: res.y };
+    }
+  }
+
+  if (bestIdx === -1) return null;
+
+  const newPt: PathPoint = { x: bestProj.x, y: bestProj.y };
+  const newPath = [...pts];
+  newPath.splice(bestIdx + 1, 0, newPt);
+  return { newPath, insertedIndex: bestIdx + 1 };
+}
+
+/**
+ * Bends a path segment towards a mouse drag point (Bend Tool / Curvature Tool).
+ * Calculates exact cubic Bézier handles on the segment endpoints so the curve passes through (dragX, dragY).
+ */
+export function bendSegment(
+  pts: PathPoint[],
+  segIndex: number,
+  closed: boolean,
+  dragX: number,
+  dragY: number,
+): PathPoint[] {
+  const n = pts.length;
+  if (segIndex < 0 || (closed ? segIndex >= n : segIndex >= n - 1)) return pts;
+
+  const p0 = pts[segIndex];
+  const p1 = pts[(segIndex + 1) % n];
+
+  // Pass through mouse point at t=0.5
+  const cx = 2 * dragX - 0.5 * (p0.x + p1.x);
+  const cy = 2 * dragY - 0.5 * (p0.y + p1.y);
+
+  // Convert quadratic control point to cubic bezier handles
+  const cp1x = p0.x + (2 / 3) * (cx - p0.x);
+  const cp1y = p0.y + (2 / 3) * (cy - p0.y);
+  const cp2x = p1.x + (2 / 3) * (cx - p1.x);
+  const cp2y = p1.y + (2 / 3) * (cy - p1.y);
+
+  const newPts = pts.map((p) => ({ ...p }));
+  newPts[segIndex].ox = cp1x - p0.x;
+  newPts[segIndex].oy = cp1y - p0.y;
+  newPts[(segIndex + 1) % n].ix = cp2x - p1.x;
+  newPts[(segIndex + 1) % n].iy = cp2y - p1.y;
+
+  return newPts;
+}
+
+/**
+ * Finds all fundamental closed loops/faces in a VectorNetwork graph
+ * to automatically form filled planar regions.
+ */
+export function findNetworkLoops(vn: VectorNetwork): number[][] {
+  if (vn.vertices.length < 3 || vn.segments.length < 3) return [];
+  const adj = new Map<number, number[]>();
+  for (let i = 0; i < vn.vertices.length; i++) adj.set(i, []);
+  for (const s of vn.segments) {
+    adj.get(s.start)?.push(s.end);
+    adj.get(s.end)?.push(s.start);
+  }
+
+  const loops: number[][] = [];
+  const visited = new Set<string>();
+
+  const findCyclesFrom = (start: number, cur: number, path: number[]) => {
+    if (path.length > 16) return;
+    const neighbors = adj.get(cur) || [];
+    for (const next of neighbors) {
+      if (next === start && path.length >= 3) {
+        const sorted = [...path].sort((a, b) => a - b).join(",");
+        if (!visited.has(sorted)) {
+          visited.add(sorted);
+          loops.push([...path]);
+        }
+        continue;
+      }
+      if (!path.includes(next)) {
+        findCyclesFrom(start, next, [...path, next]);
+      }
+    }
+  };
+
+  for (let i = 0; i < vn.vertices.length; i++) {
+    findCyclesFrom(i, i, [i]);
+  }
+
+  return loops;
+}
+
+export interface NoodleCurve {
+  ax: number;
+  ay: number;
+  cp1x: number;
+  cp1y: number;
+  cp2x: number;
+  cp2y: number;
+  bx: number;
+  by: number;
+  angle: number;
+  sourceSide: "right" | "bottom" | "left" | "top";
+  destSide: "right" | "bottom" | "left" | "top";
+}
+
+/**
+ * Calculates a smooth, organic Figma-grade S-curve connection noodle between
+ * source node and destination frame (or mouse cursor). Dynamically selects the
+ * best perimeter edges (right/left/top/bottom) and computes tangential cubic
+ * Bézier control handles and rotating arrowhead orientation.
+ */
+export function computeFigmaNoodle(
+  srcX: number,
+  srcY: number,
+  srcW: number,
+  srcH: number,
+  destX: number,
+  destY: number,
+  destW: number = 0,
+  destH: number = 0,
+  forcedSourceSide?: "right" | "bottom" | "left" | "top",
+): NoodleCurve {
+  const scx = srcX + srcW / 2;
+  const scy = srcY + srcH / 2;
+  const dcx = destW > 0 ? destX + destW / 2 : destX;
+  const dcy = destH > 0 ? destY + destH / 2 : destY;
+
+  const dx = dcx - scx;
+  const dy = dcy - scy;
+
+  let sourceSide: "right" | "bottom" | "left" | "top" = forcedSourceSide || "right";
+  let destSide: "right" | "bottom" | "left" | "top" = "left";
+
+  if (!forcedSourceSide) {
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      sourceSide = dx >= 0 ? "right" : "left";
+      destSide = dx >= 0 ? "left" : "right";
+    } else {
+      sourceSide = dy >= 0 ? "bottom" : "top";
+      destSide = dy >= 0 ? "top" : "bottom";
+    }
+  } else {
+    if (sourceSide === "right") destSide = "left";
+    else if (sourceSide === "left") destSide = "right";
+    else if (sourceSide === "bottom") destSide = "top";
+    else if (sourceSide === "top") destSide = "bottom";
+  }
+
+  let ax = srcX + srcW;
+  let ay = scy;
+  let normAx = 1;
+  let normAy = 0;
+
+  if (sourceSide === "right") {
+    ax = srcX + srcW;
+    ay = scy;
+    normAx = 1;
+    normAy = 0;
+  } else if (sourceSide === "left") {
+    ax = srcX;
+    ay = scy;
+    normAx = -1;
+    normAy = 0;
+  } else if (sourceSide === "bottom") {
+    ax = scx;
+    ay = srcY + srcH;
+    normAx = 0;
+    normAy = 1;
+  } else if (sourceSide === "top") {
+    ax = scx;
+    ay = srcY;
+    normAx = 0;
+    normAy = -1;
+  }
+
+  let bx = destX;
+  let by = destH > 0 ? dcy : destY;
+  let normBx = -1;
+  let normBy = 0;
+
+  if (destW > 0 || destH > 0) {
+    if (destSide === "left") {
+      bx = destX;
+      by = dcy;
+      normBx = -1;
+      normBy = 0;
+    } else if (destSide === "right") {
+      bx = destX + destW;
+      by = dcy;
+      normBx = 1;
+      normBy = 0;
+    } else if (destSide === "top") {
+      bx = dcx;
+      by = destY;
+      normBx = 0;
+      normBy = -1;
+    } else if (destSide === "bottom") {
+      bx = dcx;
+      by = destY + destH;
+      normBx = 0;
+      normBy = 1;
+    }
+  } else {
+    bx = destX;
+    by = destY;
+    const dragDx = bx - ax;
+    const dragDy = by - ay;
+    const dragDist = Math.hypot(dragDx, dragDy) || 1;
+    normBx = -dragDx / dragDist;
+    normBy = -dragDy / dragDist;
+  }
+
+  const dist = Math.hypot(bx - ax, by - ay);
+  const curvature = Math.max(32, Math.min(220, dist * 0.42));
+
+  const cp1x = ax + normAx * curvature;
+  const cp1y = ay + normAy * curvature;
+  const cp2x = bx + normBx * curvature;
+  const cp2y = by + normBy * curvature;
+
+  const angle = Math.atan2(by - cp2y, bx - cp2x);
+
+  return { ax, ay, cp1x, cp1y, cp2x, cp2y, bx, by, angle, sourceSide, destSide };
 }

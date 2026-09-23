@@ -55,19 +55,19 @@ export function Rulers({
     ctx.clearRect(0, 0, width, height);
 
     const dark = theme === "dark" || theme === "graphite";
-    const bg = dark ? "#2c2c2c" : "#ffffff";
-    const line = dark ? "#444444" : "#e5e5e5";
-    const text = dark ? "#b3b3b3" : "#8c8c8c";
-    const accent = "#0d99ff";
+    const bg = dark ? "#181922" : "#ffffff";
+    const line = dark ? "#333647" : "#e5e5e5";
+    const text = dark ? "#94a3b8" : "#8c8c8c";
+    const accent = "#6366f1";
 
     // Rails
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, width, SIZE);
     ctx.fillRect(0, 0, SIZE, height);
 
-    // Highlight the selected range, as Figma does.
+    // Highlight the selected range
     if (selection) {
-      ctx.fillStyle = dark ? "rgba(13,153,255,.25)" : "rgba(13,153,255,.18)";
+      ctx.fillStyle = dark ? "rgba(99,102,241,.25)" : "rgba(99,102,241,.18)";
       const sx = panX + selection.x * zoom;
       const sy = panY + selection.y * zoom;
       ctx.fillRect(sx, 0, selection.w * zoom, SIZE);

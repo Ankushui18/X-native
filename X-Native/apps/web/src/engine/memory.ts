@@ -11,10 +11,22 @@ import type {
   Snapshot,
   Tool,
   XNode,
+  VariableItem,
+  AnnotationItem,
 } from "./types";
 import { copyText } from "./clipboard";
 import { loadDoc, type PersistedDoc } from "./persist";
-import { booleanPath, outlineStroke as outlineStrokePath, shapePoly, transformedPoly } from "./geometry";
+import {
+  booleanPath,
+  outlineStroke as outlineStrokePath,
+  shapePoly,
+  transformedPoly,
+  addVectorBranch,
+  pathToVectorNetwork,
+  vectorNetworkToPath,
+  bendSegment,
+  insertPointOnPath,
+} from "./geometry";
 
 let seq = 1;
 const uid = (p: string) => `${p}_${seq++}`;
@@ -148,23 +160,43 @@ function findParent(root: XNode, id: string): XNode | null {
   return null;
 }
 
+function findInstanceRoot(root: XNode, id: string): XNode | null {
+  const curr = find(root, id);
+  if (!curr) return null;
+  if (curr.componentId && !curr.isComponent) return curr;
+  let p = findParent(root, id);
+  while (p && p !== root) {
+    if (p.componentId && !p.isComponent) return p;
+    p = findParent(root, p.id);
+  }
+  return null;
+}
+
+function clampDims(n: XNode) {
+  if (n.minW != null && Number.isFinite(n.minW) && n.w < n.minW) n.w = n.minW;
+  if (n.maxW != null && Number.isFinite(n.maxW) && n.w > n.maxW) n.w = n.maxW;
+  if (n.minH != null && Number.isFinite(n.minH) && n.h < n.minH) n.h = n.minH;
+  if (n.maxH != null && Number.isFinite(n.maxH) && n.h > n.maxH) n.h = n.maxH;
+}
+
 function applyLayout(n: XNode) {
   for (const c of n.children) applyLayout(c);
   const l = n.layout;
   if (!l) {
     if (n.children.length && (n.sizingW === "hug" || n.sizingH === "hug")) {
-      const vis = n.children.filter((c) => c.visible);
+      const vis = n.children.filter((c) => c.visible && !c.absolutePosition);
       if (vis.length) {
         if (n.sizingW === "hug") n.w = Math.max(1, Math.max(...vis.map((c) => c.x + c.w)));
         if (n.sizingH === "hug") n.h = Math.max(1, Math.max(...vis.map((c) => c.y + c.h)));
       }
     }
+    clampDims(n);
     return;
   }
-  const flow = n.children.filter((c) => c.visible);
-  const [pl, pr, pt, pb] = l.padding;
+  const flow = n.children.filter((c) => c.visible && !c.absolutePosition);
+  const [pl, pr, pt, pb] = Array.isArray(l.padding) ? l.padding : [0, 0, 0, 0];
   const horiz = l.direction === "horizontal";
-  const gap = l.gap;
+  const gap = typeof l.gap === "number" ? l.gap : 0;
   const innerW = n.w - pl - pr;
   const innerH = n.h - pt - pb;
   const fillers = flow.filter((c) => (horiz ? c.sizingW : c.sizingH) === "fill");
@@ -178,6 +210,7 @@ function applyLayout(n: XNode) {
     for (const c of fillers) {
       if (horiz) c.w = Math.max(1, each);
       else c.h = Math.max(1, each);
+      clampDims(c);
     }
   }
   if (l.wrap && flow.length) {
@@ -218,6 +251,8 @@ function applyLayout(n: XNode) {
       if (horiz) n.h = y + rowH + pb;
       else n.w = x + rowW + pr;
     }
+    for (const c of flow) clampDims(c);
+    clampDims(n);
     return;
   }
   const mainTotal = flow.reduce((s, c) => s + (horiz ? c.w : c.h), 0) + gap * Math.max(0, flow.length - 1);
@@ -228,12 +263,23 @@ function applyLayout(n: XNode) {
   const between = l.justify === "between" && flow.length > 1 ? free / (flow.length - 1) : gap;
   let cursor = origin;
   let crossMax = 0;
+  const maxBaseline =
+    horiz && l.align === "baseline"
+      ? Math.max(
+          ...flow.map((c) => (c.kind === "text" ? (c.fontSize || 14) * 0.8 : c.h * 0.8)),
+        )
+      : 0;
   for (let i = 0; i < flow.length; i++) {
     const c = flow[i];
     if (horiz) {
       c.x = cursor;
       const extra = innerH - c.h;
-      c.y = pt + (l.align === "center" ? extra / 2 : l.align === "max" ? extra : 0);
+      if (l.align === "baseline") {
+        const itemBaseline = c.kind === "text" ? (c.fontSize || 14) * 0.8 : c.h * 0.8;
+        c.y = pt + (maxBaseline - itemBaseline);
+      } else {
+        c.y = pt + (l.align === "center" ? extra / 2 : l.align === "max" ? extra : 0);
+      }
       cursor += c.w + (i < flow.length - 1 ? between : 0);
       crossMax = Math.max(crossMax, c.h);
     } else {
@@ -243,49 +289,58 @@ function applyLayout(n: XNode) {
       cursor += c.h + (i < flow.length - 1 ? between : 0);
       crossMax = Math.max(crossMax, c.w);
     }
+    clampDims(c);
   }
-  if (l.sizing === "hug" || n.sizingW === "hug") {
-    if (horiz) n.w = pl + mainTotal + pr;
+  if (horiz) {
+    if (l.sizing === "hug" || n.sizingW === "hug") n.w = Math.max(1, pl + mainTotal + pr);
+    if (l.cross === "hug" || n.sizingH === "hug") n.h = Math.max(1, crossMax + pt + pb);
+  } else {
+    if (l.sizing === "hug" || n.sizingH === "hug") n.h = Math.max(1, pt + mainTotal + pb);
+    if (l.cross === "hug" || n.sizingW === "hug") n.w = Math.max(1, crossMax + pl + pr);
   }
-  if (l.sizing === "hug" || n.sizingH === "hug") {
-    if (!horiz) n.h = pt + mainTotal + pb;
-  }
-  if (l.cross === "hug") {
-    if (horiz) n.h = crossMax + pt + pb;
-    else n.w = crossMax + pl + pr;
-  }
+  clampDims(n);
 }
 
 function demoPage(): Page {
   const title = node("text", "Title", 24, 28, 300, 32, {
-    text: "Product card",
+    text: "Explore Store",
     fontSize: 24,
-    fontWeight: 600,
+    fontWeight: 700,
     fill: "#0d1220",
   });
-  const body = node("text", "Body", 24, 68, 300, 40, {
-    text: "Auto layout, clip, and type — same model as x-core.",
+  const notifSwitch = node("rect", "Notifications Switch", 316, 32, 48, 26, {
+    fill: "#10b981",
+    cornerRadii: [13, 13, 13, 13],
+  });
+  const searchInput = node("text", "Search Input", 24, 76, 342, 40, {
+    text: "Search designs, icons, UI kits…",
+    fontSize: 13,
+    fill: "#64748b",
+  });
+  const body = node("text", "Body", 24, 126, 342, 36, {
+    text: "Interactive prototypes with live form typing and S-curve noodles.",
     fontSize: 13,
     fill: "#5a5f6b",
   });
-  const pill = node("rect", "Chip", 0, 0, 72, 28, {
-    fill: "#6b49f5",
-    cornerRadii: [14, 14, 14, 14],
+  const pill = node("rect", "View Details Button", 0, 0, 110, 32, {
+    fill: "#0d99ff",
+    cornerRadii: [16, 16, 16, 16],
   });
-  const pillLabel = node("text", "Label", 14, 6, 48, 16, {
-    text: "Ship",
+  const pillLabel = node("text", "Label", 18, 8, 80, 16, {
+    text: "View Details →",
     fontSize: 12,
     fontWeight: 600,
     fill: "#ffffff",
   });
   pill.children = [pillLabel];
-  const card = node("frame", "Card", 24, 128, 342, 160, {
-    fill: "#f7f8fa",
+
+  const card = node("frame", "Card", 24, 172, 342, 170, {
+    fill: "#f8fafc",
     cornerRadii: [16, 16, 16, 16],
     overflow: "clip",
     layout: {
       direction: "vertical",
-      gap: 8,
+      gap: 10,
       padding: [16, 16, 16, 16],
       sizing: "fixed",
       cross: "fixed",
@@ -295,49 +350,122 @@ function demoPage(): Page {
     },
   });
   const cardTitle = node("text", "Heading", 0, 0, 300, 22, {
-    text: "Frame with clip",
+    text: "Smart Animate Card",
     fontSize: 16,
     fontWeight: 600,
     fill: "#0d1220",
   });
   const cardBody = node("text", "Note", 0, 0, 300, 36, {
-    text: "Children that overflow are clipped when Clip content is on.",
+    text: "Click below to navigate with smooth Smart Animate transition.",
     fontSize: 12,
-    fill: "#5a5f6b",
+    fill: "#64748b",
   });
   card.children = [cardTitle, cardBody, pill];
-  const phone = node("frame", "iPhone 14", 80, 60, 390, 844, {
-    fill: "#ffffff",
-    cornerRadii: [32, 32, 32, 32],
-    overflow: "clip",
-    children: [title, body, card],
+
+  const filterBtn = node("rect", "Filter Options Button", 24, 360, 342, 44, {
+    fill: "#f1f5f9",
+    cornerRadii: [12, 12, 12, 12],
+    strokePaint: "#cbd5e1",
+    strokeWidth: 1,
+    strokeVisible: true,
   });
+  const filterLabel = node("text", "Filter Label", 110, 13, 140, 20, {
+    text: "⚙ Open Filter Sheet",
+    fontSize: 14,
+    fontWeight: 600,
+    fill: "#1e293b",
+  });
+  filterBtn.children = [filterLabel];
+
+  const phone = node("frame", "iPhone 16 Pro", 80, 60, 390, 844, {
+    fill: "#ffffff",
+    cornerRadii: [48, 48, 48, 48],
+    overflow: "clip",
+    children: [title, notifSwitch, searchInput, body, card, filterBtn],
+  });
+
   const back = node("text", "Back", 24, 28, 120, 24, {
     text: "← Back",
     fontSize: 16,
     fontWeight: 600,
-    fill: "#0d70f6",
-    interactions: [{ trigger: "onClick", action: "back", destination: "", animation: "instant", delay: 0 }],
+    fill: "#0d99ff",
+    interactions: [{ trigger: "onClick", action: "back", destination: "", animation: "dissolve", delay: 0 }],
   });
   const done = node("text", "Done", 24, 80, 320, 40, {
-    text: "Second screen — Esc or Back.",
-    fontSize: 20,
-    fontWeight: 600,
+    text: "Success Screen 🎉",
+    fontSize: 22,
+    fontWeight: 700,
     fill: "#0d1220",
   });
-  const screen2 = node("frame", "Success", 520, 60, 390, 844, {
-    fill: "#ffffff",
-    cornerRadii: [32, 32, 32, 32],
-    overflow: "clip",
-    children: [back, done],
+  const doneDesc = node("text", "DoneDesc", 24, 125, 342, 60, {
+    text: "Navigated via organic Figma S-curve noodle. Click ← Back or press Esc to return.",
+    fontSize: 14,
+    fill: "#64748b",
   });
+  const screen2 = node("frame", "Success", 540, 60, 390, 844, {
+    fill: "#ffffff",
+    cornerRadii: [48, 48, 48, 48],
+    overflow: "clip",
+    children: [back, done, doneDesc],
+  });
+
   pill.interactions = [
-    { trigger: "onClick", action: "navigate", destination: screen2.id, animation: "instant", delay: 0 },
+    { trigger: "onClick", action: "navigate", destination: screen2.id, animation: "smart", delay: 0 },
   ];
-  const pageRoot = node("frame", "Page 1", 0, 0, 1200, 800, {
+
+  // Bottom sheet modal overlay
+  const sheetHandle = node("rect", "Sheet Handle", 165, 12, 60, 5, {
+    fill: "#cbd5e1",
+    cornerRadii: [3, 3, 3, 3],
+  });
+  const sheetTitle = node("text", "Sheet Title", 24, 36, 260, 28, {
+    text: "Filter Options (Overlay)",
+    fontSize: 18,
+    fontWeight: 700,
+    fill: "#0f172a",
+  });
+  const sheetBody = node("text", "Sheet Body", 24, 70, 342, 40, {
+    text: "Interactive bottom sheet with dimmed backdrop. Tap outside to dismiss.",
+    fontSize: 13,
+    fill: "#64748b",
+  });
+  const closeSheet = node("rect", "Close Sheet Button", 24, 240, 342, 44, {
+    fill: "#0d99ff",
+    cornerRadii: [12, 12, 12, 12],
+    interactions: [{ trigger: "onClick", action: "closeOverlay", destination: "", animation: "dissolve", delay: 0 }],
+  });
+  const closeLabel = node("text", "Close Label", 125, 13, 120, 20, {
+    text: "Apply & Close",
+    fontSize: 14,
+    fontWeight: 600,
+    fill: "#ffffff",
+  });
+  closeSheet.children = [closeLabel];
+
+  const filterSheet = node("frame", "Filter Sheet", 80, 960, 390, 320, {
+    fill: "#ffffff",
+    cornerRadii: [24, 24, 0, 0],
+    overflow: "clip",
+    children: [sheetHandle, sheetTitle, sheetBody, closeSheet],
+  });
+
+  filterBtn.interactions = [
+    {
+      trigger: "onClick",
+      action: "openOverlay",
+      destination: filterSheet.id,
+      animation: "slideInBottom",
+      delay: 0,
+      overlayPosition: "bottom",
+      overlayCloseOutside: true,
+      overlayBackdrop: true,
+    },
+  ];
+
+  const pageRoot = node("frame", "Page 1", 0, 0, 1400, 1400, {
     fill: "#00000000",
     overflow: "visible",
-    children: [phone, screen2],
+    children: [phone, screen2, filterSheet],
   });
   applyLayout(phone);
   applyLayout(card);
@@ -368,10 +496,22 @@ interface Internal {
   styles: SharedStyle[];
   presentFrame: string;
   presentStack: string[];
+  prototypeDevice: Snapshot["prototypeDevice"];
+  prototypeOrientation: Snapshot["prototypeOrientation"];
+  prototypeScale: Snapshot["prototypeScale"];
+  prototypeHotspots: boolean;
+  prototypeLiveInputs: boolean;
+  prototypeSound: boolean;
+  activeOverlay: Snapshot["activeOverlay"];
   showRulers: boolean;
   showMinimap: boolean;
   showComments: boolean;
   openComment: string;
+  variables: VariableItem[];
+  annotations: AnnotationItem[];
+  vecEdit: string | null;
+  vecPoint: number | null;
+  vecPoints: number[];
 }
 
 /** Cap the undo stack. Each entry is a full document clone, so an unbounded
@@ -432,6 +572,7 @@ export class MemoryEngine implements Engine {
    *  single undo step, as Figma does. */
   private lastHist: { type: string; at: number } | null = null;
   private clip: XNode[] = [];
+  private copiedProps: Partial<XNode> | null = null;
 
   /** Set when a stored document existed but could not be read, so the UI can
    *  tell the user their work was replaced rather than silently starting over. */
@@ -470,10 +611,28 @@ export class MemoryEngine implements Engine {
       styles: doc?.styles ?? [],
       presentFrame: "",
       presentStack: [],
+      prototypeDevice: "none",
+      prototypeOrientation: "portrait",
+      prototypeScale: "fit",
+      prototypeHotspots: true,
+      prototypeLiveInputs: true,
+      prototypeSound: true,
+      activeOverlay: null,
       showRulers: doc?.showRulers ?? false,
       showMinimap: doc?.showMinimap ?? false,
       showComments: doc?.showComments ?? false,
       openComment: "",
+      variables: [
+        { id: "var-1", name: "primary", type: "color", value: "#0d99ff", collection: "Brand" },
+        { id: "var-2", name: "secondary", type: "color", value: "#6366f1", collection: "Brand" },
+        { id: "var-3", name: "spacing-sm", type: "number", value: 8, collection: "Spacing" },
+        { id: "var-4", name: "spacing-md", type: "number", value: 16, collection: "Spacing" },
+        { id: "var-5", name: "radius-md", type: "number", value: 8, collection: "Radius" },
+      ],
+      annotations: [],
+      vecEdit: null,
+      vecPoint: null,
+      vecPoints: [],
     };
     this.relayout();
     this.snapCache = this.build();
@@ -553,10 +712,12 @@ export class MemoryEngine implements Engine {
       "redo",
       "copy",
       "copyCode",
+      "copyProperties",
       "presentGo",
       "presentBack",
       "presentStart",
       "presentStop",
+      "setVecEdit",
     ].includes(cmd.type);
     if (hist && !this.grouping) {
       // Coalesce a burst of identical commands (arrow-key nudges, repeated
@@ -616,6 +777,18 @@ export class MemoryEngine implements Engine {
       openComment: this.state.openComment,
       presentFrame: this.state.presentFrame,
       presentStack: this.state.presentStack,
+      prototypeDevice: this.state.prototypeDevice,
+      prototypeOrientation: this.state.prototypeOrientation,
+      prototypeScale: this.state.prototypeScale,
+      prototypeHotspots: this.state.prototypeHotspots,
+      prototypeLiveInputs: this.state.prototypeLiveInputs,
+      prototypeSound: this.state.prototypeSound,
+      activeOverlay: this.state.activeOverlay,
+      variables: this.state.variables,
+      annotations: this.state.annotations,
+      vecEdit: this.state.vecEdit,
+      vecPoint: this.state.vecPoint,
+      vecPoints: this.state.vecPoints ?? [],
     };
   }
 
@@ -624,6 +797,11 @@ export class MemoryEngine implements Engine {
     switch (cmd.type) {
       case "select":
         s.selection = cmd.ids;
+        if (s.vecEdit && !s.selection.includes(s.vecEdit)) {
+          s.vecEdit = null;
+          s.vecPoint = null;
+          s.vecPoints = [];
+        }
         break;
       case "setTool":
         s.tool = cmd.tool;
@@ -752,7 +930,19 @@ export class MemoryEngine implements Engine {
       case "nudge":
         for (const id of s.selection) {
           const n = find(this.root(), id);
-          if (n && !n.locked) {
+          if (!n || n.locked) continue;
+          const parent = findParent(this.root(), id);
+          if (parent?.layout && !n.absolutePosition) {
+            const idx = parent.children.findIndex((c) => c.id === id);
+            if (idx >= 0) {
+              const forward = cmd.dx > 0 || cmd.dy > 0;
+              const targetIdx = forward ? idx + 1 : idx - 1;
+              if (targetIdx >= 0 && targetIdx < parent.children.length) {
+                const [item] = parent.children.splice(idx, 1);
+                parent.children.splice(targetIdx, 0, item);
+              }
+            }
+          } else {
             n.x += cmd.dx;
             n.y += cmd.dy;
             if (s.pages[s.page].pixelGrid) {
@@ -852,10 +1042,18 @@ export class MemoryEngine implements Engine {
           reid(copy);
           copy.x += 10;
           copy.y += 10;
+          const baseName = n.name;
+          const copyMatch = baseName.match(/^(.*?)(?: copy(?: (\d+))?)?$/);
+          if (copyMatch) {
+            const rootName = copyMatch[1];
+            const hasCopy = baseName.includes(" copy");
+            const currentNum = copyMatch[2] ? parseInt(copyMatch[2], 10) : (hasCopy ? 1 : 0);
+            const nextNum = currentNum + 1;
+            copy.name = nextNum === 1 ? `${rootName} copy` : `${rootName} copy ${nextNum}`;
+          }
           if (n.isComponent) {
             copy.isComponent = false;
             copy.componentId = masterId;
-            copy.name = n.name;
           }
           p.children.push(copy);
           created.push(copy.id);
@@ -890,6 +1088,13 @@ export class MemoryEngine implements Engine {
               lib.node = clone(n);
             }
             syncInstances(s.pages, n);
+          } else if (n.componentId && !n.isComponent) {
+            n.overrides = { ...(n.overrides || {}), ...cmd.patch };
+          } else {
+            const inst = findInstanceRoot(this.root(), n.id);
+            if (inst && inst !== n) {
+              n.overrides = { ...(n.overrides || {}), ...cmd.patch };
+            }
           }
         }
         break;
@@ -967,6 +1172,11 @@ export class MemoryEngine implements Engine {
         const id = s.selection[0];
         const parent = id ? findParent(this.root(), id) ?? this.root() : this.root();
         s.selection = parent.children.filter((c) => c.visible && !c.locked).map((c) => c.id);
+        if (s.vecEdit && !s.selection.includes(s.vecEdit)) {
+          s.vecEdit = null;
+          s.vecPoint = null;
+          s.vecPoints = [];
+        }
         break;
       }
       case "lockSel":
@@ -1012,6 +1222,82 @@ export class MemoryEngine implements Engine {
           .filter(Boolean)
           .join("\n");
         copyText(css);
+        break;
+      }
+      case "copyProperties": {
+        const id = s.selection[0];
+        if (!id) break;
+        const n = find(this.root(), id);
+        if (!n) break;
+        this.copiedProps = {
+          fill: n.fill,
+          fillVisible: n.fillVisible,
+          fillOpacity: n.fillOpacity,
+          fillType: n.fillType,
+          fillGX: n.fillGX,
+          fillGY: n.fillGY,
+          fillHX: n.fillHX,
+          fillHY: n.fillHY,
+          gradientStops: n.gradientStops ? clone(n.gradientStops) : undefined,
+          fills: n.fills ? clone(n.fills) : undefined,
+          strokePaint: n.strokePaint,
+          strokeWidth: n.strokeWidth,
+          strokeVisible: n.strokeVisible,
+          strokeOpacity: n.strokeOpacity,
+          strokeDash: n.strokeDash,
+          strokeGap: n.strokeGap,
+          strokeCap: n.strokeCap,
+          strokeJoin: n.strokeJoin,
+          strokeAlign: n.strokeAlign,
+          strokes: n.strokes ? clone(n.strokes) : undefined,
+          effects: n.effects ? clone(n.effects) : undefined,
+          opacity: n.opacity,
+          blendMode: n.blendMode,
+          cornerRadii: n.cornerRadii ? [...n.cornerRadii] : undefined,
+          cornerIndependent: n.cornerIndependent,
+          interactions: n.interactions ? clone(n.interactions) : undefined,
+        };
+        break;
+      }
+      case "pasteProperties": {
+        if (!this.copiedProps || s.selection.length === 0) break;
+        const p = this.copiedProps;
+        for (const id of s.selection) {
+          const n = find(this.root(), id);
+          if (!n || n.locked) continue;
+          if (p.fill !== undefined) n.fill = p.fill;
+          if (p.fillVisible !== undefined) n.fillVisible = p.fillVisible;
+          if (p.fillOpacity !== undefined) n.fillOpacity = p.fillOpacity;
+          if (p.fillType !== undefined) n.fillType = p.fillType;
+          if (p.fillGX !== undefined) n.fillGX = p.fillGX;
+          if (p.fillGY !== undefined) n.fillGY = p.fillGY;
+          if (p.fillHX !== undefined) n.fillHX = p.fillHX;
+          if (p.fillHY !== undefined) n.fillHY = p.fillHY;
+          if (p.gradientStops) n.gradientStops = clone(p.gradientStops);
+          if (p.fills) n.fills = clone(p.fills);
+          if (p.strokePaint !== undefined) n.strokePaint = p.strokePaint;
+          if (p.strokeWidth !== undefined) n.strokeWidth = p.strokeWidth;
+          if (p.strokeVisible !== undefined) n.strokeVisible = p.strokeVisible;
+          if (p.strokeOpacity !== undefined) n.strokeOpacity = p.strokeOpacity;
+          if (p.strokeDash !== undefined) n.strokeDash = p.strokeDash;
+          if (p.strokeGap !== undefined) n.strokeGap = p.strokeGap;
+          if (p.strokeCap !== undefined) n.strokeCap = p.strokeCap;
+          if (p.strokeJoin !== undefined) n.strokeJoin = p.strokeJoin;
+          if (p.strokeAlign !== undefined) n.strokeAlign = p.strokeAlign;
+          if (p.strokes) n.strokes = clone(p.strokes);
+          if (p.effects) n.effects = clone(p.effects);
+          if (p.opacity !== undefined) n.opacity = p.opacity;
+          if (p.blendMode !== undefined) n.blendMode = p.blendMode;
+          if (p.cornerRadii) n.cornerRadii = [...p.cornerRadii];
+          if (p.cornerIndependent !== undefined) n.cornerIndependent = p.cornerIndependent;
+          if (p.interactions) n.interactions = clone(p.interactions);
+        }
+        break;
+      }
+      case "deleteInteraction": {
+        const n = find(this.root(), cmd.id);
+        if (!n || !n.interactions) break;
+        n.interactions = n.interactions.filter((ix) => ix.destination !== cmd.destId);
         break;
       }
       case "group":
@@ -1080,7 +1366,17 @@ export class MemoryEngine implements Engine {
         const ids = new Map<string, string>();
         const oldFlowStart = p.flowStart;
         p.id = uid("page");
-        p.name = `${p.name} copy`;
+        const baseName = p.name;
+        const copyMatch = baseName.match(/^(.*?)(?: copy(?: (\d+))?)?$/);
+        if (copyMatch) {
+          const rootName = copyMatch[1];
+          const hasCopy = baseName.includes(" copy");
+          const currentNum = copyMatch[2] ? parseInt(copyMatch[2], 10) : (hasCopy ? 1 : 0);
+          const nextNum = currentNum + 1;
+          p.name = nextNum === 1 ? `${rootName} copy` : `${rootName} copy ${nextNum}`;
+        } else {
+          p.name = `${p.name} copy`;
+        }
         reid(p.root, ids);
         p.flowStart = ids.get(oldFlowStart) ?? "";
         s.pages.splice(s.page + 1, 0, p);
@@ -1253,8 +1549,68 @@ export class MemoryEngine implements Engine {
         if (!n.name || n.name === "Group" || n.name === "Rectangle") n.name = "Component";
         const existing = s.components.find((c) => c.id === cid);
         if (existing) existing.node = clone(n);
-        else s.components.push({ id: cid, name: n.name, node: clone(n), variants: [{ name: "Default", node: clone(n) }], property: "Variant" });
+        else
+          s.components.push({
+            id: cid,
+            name: n.name,
+            node: clone(n),
+            variants: [{ name: "Default", node: clone(n) }],
+            property: "Variant",
+            properties: [{ id: uid("prop"), name: "Variant", type: "variant", defaultValue: "Default" }],
+          });
         s.selection = [n.id];
+        break;
+      }
+      case "addComponentProperty": {
+        const lib = s.components.find((c) => c.id === cmd.componentId || c.node.id === cmd.componentId);
+        if (!lib) break;
+        if (!lib.properties) lib.properties = [];
+        if (!lib.properties.some((p) => p.name === cmd.property.name)) {
+          lib.properties.push(cmd.property);
+        }
+        break;
+      }
+      case "deleteComponentProperty": {
+        const lib = s.components.find((c) => c.id === cmd.componentId || c.node.id === cmd.componentId);
+        if (!lib || !lib.properties) break;
+        lib.properties = lib.properties.filter((p) => p.id !== cmd.propId && p.name !== cmd.propId);
+        break;
+      }
+      case "setComponentProperty": {
+        const n = find(this.root(), cmd.id);
+        if (!n) break;
+        if (!n.componentProperties) n.componentProperties = {};
+        n.componentProperties[cmd.propName] = cmd.value;
+        const lib = s.components.find((c) => c.id === n.componentId || c.node.id === n.componentId);
+        const propDef = lib?.properties?.find((p) => p.name === cmd.propName);
+        if (propDef) {
+          if (propDef.type === "boolean" && propDef.targetNodeName) {
+            const child = n.children.find((c) => c.name.toLowerCase() === propDef.targetNodeName?.toLowerCase());
+            if (child) child.visible = Boolean(cmd.value);
+          }
+          if (propDef.type === "text" && propDef.targetNodeName) {
+            const child = n.children.find((c) => c.name.toLowerCase() === propDef.targetNodeName?.toLowerCase() && c.kind === "text");
+            if (child) child.text = String(cmd.value);
+          }
+          if (propDef.type === "variant") {
+            const v = lib?.variants?.find((x) => x.name === String(cmd.value));
+            if (v) {
+              const x = n.x;
+              const y = n.y;
+              const id = n.id;
+              const props = clone(n.componentProperties);
+              Object.assign(n, clone(v.node), {
+                x,
+                y,
+                id,
+                isComponent: n.isComponent,
+                componentId: n.componentId,
+                variant: String(cmd.value),
+                componentProperties: props,
+              });
+            }
+          }
+        }
         break;
       }
       case "detachInstance": {
@@ -1267,7 +1623,7 @@ export class MemoryEngine implements Engine {
         break;
       }
       case "placeComponent": {
-        const lib = s.components.find((c) => c.id === cmd.id);
+        const lib = s.components.find((c) => c.id === cmd.id || c.node.id === cmd.id);
         if (!lib) break;
         const copy = clone(lib.node);
         reid(copy);
@@ -1276,6 +1632,10 @@ export class MemoryEngine implements Engine {
         copy.isComponent = false;
         copy.componentId = lib.id;
         copy.name = lib.name;
+        copy.componentProperties = {};
+        for (const p of lib.properties ?? []) {
+          copy.componentProperties[p.name] = p.defaultValue;
+        }
         this.root().children.push(copy);
         s.selection = [copy.id];
         s.tool = "select";
@@ -1318,12 +1678,89 @@ export class MemoryEngine implements Engine {
         n.path = cmd.path;
         if (cmd.closed != null) n.closed = cmd.closed;
         n.kind = "vector";
+        n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
         const xs = n.path.map((pt) => pt.x);
         const ys = n.path.map((pt) => pt.y);
         if (xs.length) {
           n.w = Math.max(1, Math.max(...xs) - Math.min(0, ...xs));
           n.h = Math.max(1, Math.max(...ys) - Math.min(0, ...ys));
         }
+        break;
+      }
+      case "patchVectorNetwork": {
+        const n = find(this.root(), cmd.id);
+        if (!n || n.locked) break;
+        n.vectorNetwork = cmd.network;
+        n.kind = "vector";
+        const res = vectorNetworkToPath(cmd.network);
+        n.path = res.path;
+        if (res.closed) n.closed = true;
+        const xs = cmd.network.vertices.map((v) => v.x);
+        const ys = cmd.network.vertices.map((v) => v.y);
+        if (xs.length) {
+          n.w = Math.max(1, Math.max(...xs) - Math.min(0, ...xs));
+          n.h = Math.max(1, Math.max(...ys) - Math.min(0, ...ys));
+        }
+        break;
+      }
+      case "addVectorBranch": {
+        const n = find(this.root(), cmd.id);
+        if (!n || n.locked) break;
+        const currentVn = n.vectorNetwork || pathToVectorNetwork(n.path, n.closed);
+        const updated = addVectorBranch(
+          currentVn,
+          cmd.fromVertexIndex,
+          cmd.to,
+          cmd.tangentStart,
+          cmd.tangentEnd,
+        );
+        n.vectorNetwork = updated;
+        n.kind = "vector";
+        const res = vectorNetworkToPath(updated);
+        n.path = res.path;
+        if (res.closed) n.closed = true;
+        break;
+      }
+      case "bendSegment": {
+        const n = find(this.root(), cmd.id);
+        if (!n || n.locked || n.path.length < 2) break;
+        n.path = bendSegment(n.path, cmd.segIndex, n.closed, cmd.dragX, cmd.dragY);
+        n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+        break;
+      }
+      case "insertPointOnPath": {
+        const n = find(this.root(), cmd.id);
+        if (!n || n.locked || n.path.length < 2) break;
+        const res = insertPointOnPath(n.path, cmd.x, cmd.y, n.closed);
+        if (res) {
+          n.path = res.newPath;
+          n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+        }
+        break;
+      }
+      case "setPointMirror": {
+        const n = find(this.root(), cmd.id);
+        if (!n || !n.path[cmd.pointIndex]) break;
+        const pt = n.path[cmd.pointIndex];
+        pt.mirrorMode = cmd.mode;
+        if (cmd.mode === "angleAndLength" && (pt.ox || pt.oy)) {
+          pt.ix = -(pt.ox || 0);
+          pt.iy = -(pt.oy || 0);
+        }
+        n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+        break;
+      }
+      case "setPointCornerRadius": {
+        const n = find(this.root(), cmd.id);
+        if (!n || !n.path[cmd.pointIndex]) break;
+        n.path[cmd.pointIndex].cornerRadius = Math.max(0, cmd.radius);
+        n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+        break;
+      }
+      case "setVecEdit": {
+        s.vecEdit = cmd.id;
+        s.vecPoint = cmd.pointIndex ?? null;
+        s.vecPoints = cmd.pointIndices ?? (cmd.pointIndex != null ? [cmd.pointIndex] : []);
         break;
       }
       case "flatten": {
@@ -1404,9 +1841,62 @@ export class MemoryEngine implements Engine {
         });
         break;
       }
+      case "resetOverrides": {
+        const ids = cmd.id ? [cmd.id] : s.selection;
+        for (const id of ids) {
+          const n = find(this.root(), id);
+          if (!n) continue;
+          const cid = n.componentId;
+          if (!cid && n.kind !== "instance") continue;
+          const lib = s.components.find((c) => c.id === cid || c.node.id === cid);
+          if (!lib) continue;
+          if (cmd.property) {
+            if (n.overrides) delete n.overrides[cmd.property];
+            const masterVal = (lib.node as unknown as Record<string, unknown>)[cmd.property];
+            if (masterVal !== undefined) {
+              (n as unknown as Record<string, unknown>)[cmd.property] = clone(masterVal);
+            }
+            continue;
+          }
+          const x = n.x;
+          const y = n.y;
+          const copy = clone(lib.node);
+          reid(copy);
+          copy.x = x;
+          copy.y = y;
+          copy.id = n.id;
+          copy.isComponent = false;
+          copy.componentId = cid;
+          copy.overrides = undefined;
+          walk(copy, (c) => { c.overrides = undefined; });
+          Object.assign(n, copy);
+        }
+        break;
+      }
       case "setInteractions": {
         const n = find(this.root(), cmd.id);
         if (n) n.interactions = cmd.interactions;
+        break;
+      }
+      case "addVariable": {
+        s.variables.push(cmd.variable);
+        break;
+      }
+      case "patchVariable": {
+        const v = s.variables.find((x) => x.id === cmd.id);
+        if (v) Object.assign(v, cmd.patch);
+        break;
+      }
+      case "deleteVariable": {
+        s.variables = s.variables.filter((x) => x.id !== cmd.id);
+        break;
+      }
+      case "addAnnotation": {
+        s.annotations.push(cmd.annotation);
+        break;
+      }
+      case "deleteAnnotation": {
+        s.annotations = s.annotations.filter((x) => x.id !== cmd.id);
         break;
       }
       case "presentStart": {
@@ -1425,9 +1915,15 @@ export class MemoryEngine implements Engine {
       }
       case "presentGo": {
         if (!cmd.id) break;
-        s.presentStack = [...s.presentStack, cmd.id];
-        s.presentFrame = cmd.id;
-        focusFrame(s, this.root(), cmd.id);
+        let destId = cmd.id;
+        const targetNode = find(this.root(), destId);
+        if (targetNode && (targetNode.kind === "group" || targetNode.name.toLowerCase().includes("section"))) {
+          const childFrame = targetNode.children.find((c) => c.kind === "frame");
+          if (childFrame) destId = childFrame.id;
+        }
+        s.presentStack = [...s.presentStack, destId];
+        s.presentFrame = destId;
+        focusFrame(s, this.root(), destId);
         break;
       }
       case "presentBack": {
@@ -1444,6 +1940,37 @@ export class MemoryEngine implements Engine {
       case "presentStop":
         s.presentFrame = "";
         s.presentStack = [];
+        s.activeOverlay = null;
+        break;
+      case "setPrototypeDevice":
+        s.prototypeDevice = cmd.device;
+        break;
+      case "setPrototypeOrientation":
+        s.prototypeOrientation = cmd.orientation;
+        break;
+      case "setPrototypeScale":
+        s.prototypeScale = cmd.scale;
+        break;
+      case "togglePrototypeHotspots":
+        s.prototypeHotspots = cmd.enabled !== undefined ? cmd.enabled : !s.prototypeHotspots;
+        break;
+      case "togglePrototypeLiveInputs":
+        s.prototypeLiveInputs = cmd.enabled !== undefined ? cmd.enabled : !s.prototypeLiveInputs;
+        break;
+      case "togglePrototypeSound":
+        s.prototypeSound = cmd.enabled !== undefined ? cmd.enabled : !s.prototypeSound;
+        break;
+      case "openOverlay":
+        s.activeOverlay = {
+          id: cmd.id,
+          position: cmd.position || "center",
+          closeOutside: cmd.closeOutside !== false,
+          backdrop: cmd.backdrop !== false,
+          backdropColor: cmd.backdropColor || "rgba(0, 0, 0, 0.45)",
+        };
+        break;
+      case "closeOverlay":
+        s.activeOverlay = null;
         break;
       case "distribute": {
         const items = s.selection
@@ -1525,10 +2052,14 @@ function reid(n: XNode, ids?: Map<string, string>) {
 function focusFrame(s: Internal, root: XNode, id: string) {
   const wp = worldPos(root, id);
   if (!wp) return;
-  const z = Math.min(1.2, Math.max(0.25, 720 / Math.max(wp.node.w, 1)));
+  const vw = typeof window !== "undefined" ? window.innerWidth : 1200;
+  const vh = typeof window !== "undefined" ? window.innerHeight : 800;
+  const availW = Math.max(300, vw - 160);
+  const availH = Math.max(300, vh - 160);
+  const z = Math.min(1.0, Math.max(0.2, Math.min(availW / Math.max(wp.node.w, 1), availH / Math.max(wp.node.h, 1))));
   s.zoom = z;
-  s.panX = 48 - wp.x * z;
-  s.panY = 48 - wp.y * z;
+  s.panX = Math.round((vw - wp.node.w * z) / 2 - wp.x * z);
+  s.panY = Math.round((vh - wp.node.h * z) / 2 - wp.y * z);
 }
 
 function framesOf(root: XNode): XNode[] {
@@ -1542,15 +2073,53 @@ function framesOf(root: XNode): XNode[] {
 function syncInstances(pages: Page[], master: XNode) {
   const cid = master.componentId;
   if (!cid) return;
+
+  function syncNode(instNode: XNode, masterDef: XNode) {
+    const x = instNode.x;
+    const y = instNode.y;
+    const id = instNode.id;
+    const interactions = instNode.interactions;
+    const localOverrides = instNode.overrides ? { ...instNode.overrides } : {};
+
+    const masterKids = masterDef.children ?? [];
+    const instKids = instNode.children ?? [];
+    const syncedKids: XNode[] = [];
+
+    for (let i = 0; i < masterKids.length; i++) {
+      const mk = masterKids[i];
+      if (i < instKids.length) {
+        const ik = instKids[i];
+        syncNode(ik, mk);
+        syncedKids.push(ik);
+      } else {
+        const newKid = clone(mk);
+        reid(newKid);
+        syncedKids.push(newKid);
+      }
+    }
+
+    const masterProps: Partial<XNode> = { ...masterDef };
+    delete masterProps.id;
+    delete masterProps.children;
+
+    Object.assign(instNode, masterProps, {
+      x,
+      y,
+      id,
+      interactions,
+      isComponent: false,
+      componentId: cid,
+      children: syncedKids,
+      overrides: localOverrides,
+      ...localOverrides,
+    });
+  }
+
   for (const page of pages) {
     walk(page.root, (n) => {
       if (n === master) return;
       if (n.componentId !== cid || n.isComponent) return;
-      const x = n.x;
-      const y = n.y;
-      const id = n.id;
-      const interactions = n.interactions;
-      Object.assign(n, clone(master), { x, y, id, interactions, isComponent: false, componentId: cid });
+      syncNode(n, master);
     });
   }
 }
@@ -1802,6 +2371,17 @@ function scaleProps(n: XNode, sx: number, sy: number) {
   n.letterSpacing *= s;
   if (n.lineHeight) n.lineHeight *= s;
   n.cornerRadii = n.cornerRadii.map((r) => r * s) as [number, number, number, number];
+  if (n.strokes) {
+    for (const st of n.strokes) st.width *= s;
+  }
+  if (n.effects) {
+    for (const ef of n.effects) {
+      if (ef.x != null) ef.x *= s;
+      if (ef.y != null) ef.y *= s;
+      if (ef.blur != null) ef.blur *= s;
+      if (ef.spread != null) ef.spread *= s;
+    }
+  }
   n.path = n.path.map((p) => ({
     ...p,
     x: p.x * sx,
@@ -1859,11 +2439,26 @@ export function defaultEffect(kind: Effect["kind"]): Effect {
   const shadow = kind === "drop-shadow" || kind === "inner-shadow";
   return {
     kind,
-    color: shadow ? "#00000040" : kind === "glass" ? "#ffffff80" : "#000000",
+    color: shadow
+      ? "#00000040"
+      : kind === "glass"
+        ? "#ffffff80"
+        : kind === "texture"
+          ? "#00000020"
+          : "#000000",
     x: 0,
     y: shadow ? 4 : 0,
-    blur: kind === "noise" ? 40 : kind === "glass" || kind.includes("blur") ? 12 : shadow ? 4 : 4,
-    spread: 0,
+    blur:
+      kind === "noise"
+        ? 40
+        : kind === "texture"
+          ? 16
+          : kind === "glass" || kind.includes("blur")
+            ? 12
+            : shadow
+              ? 4
+              : 4,
+    spread: kind === "texture" ? 4 : 0,
     visible: true,
   };
 }
