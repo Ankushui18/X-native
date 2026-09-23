@@ -1,0 +1,21 @@
+[package]
+name = "x-wasm"
+version = "0.34.0"
+edition = "2021"
+
+# cdylib is what wasm-bindgen links; rlib keeps `cargo test` able to see the
+# crate on a normal host target.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+x-core = { path = "../x-core" }
+x-format = { path = "../x-format" }
+
+# Pinned to the version already in Cargo.lock so `cargo test --locked` — which
+# CI runs — does not need a lockfile update to build this crate.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2.127"
+
+[lints]
+workspace = true
