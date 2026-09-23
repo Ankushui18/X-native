@@ -156,12 +156,45 @@ ever been exercised by its own test suite.
 
 ## Why the bridge does not exist yet
 
-An environment limit, verified rather than assumed:
+An environment limit, not a decision. Every route to a toolchain was probed;
+the results are recorded here so nobody repeats the search.
 
-- no `cargo` / `rustc` on the machine
-- `static.rust-lang.org`, `sh.rustup.rs`, `crates.io` unreachable
-- the `wasm-pack` npm package installs but fetches its binary from a blocked host
-- `apt` requires root
+**Reachable:** `registry.npmjs.org`, `pypi.org`, `github.com` (API + `git
+clone`).
+
+**Blocked:** `static.rust-lang.org`, `sh.rustup.rs`, `forge.rust-lang.org`,
+`crates.io`, `static.crates.io`, `index.crates.io`, the tuna and rsproxy
+mirrors, `cdn.jsdelivr.net`, `unpkg.com`, and — decisively —
+`objects.githubusercontent.com`, `raw.githubusercontent.com` and
+`release-assets.githubusercontent.com`.
+
+Routes tried and why each fails:
+
+| Route | Result |
+| --- | --- |
+| `rustup` / official installer | host blocked |
+| `apt install rustc` | needs root |
+| npm `wasm-pack` | installs, then fetches its binary from a blocked host |
+| PyPI `maturin`, `setuptools-rust` | install fine, but both are *drivers*: neither bundles a compiler |
+| GitHub release assets (`gh release download`) | API lists them, download fails — the asset CDN returns EOF |
+| Build rustc from source | needs a bootstrap rustc, which comes from the blocked host |
+| Bootstrap via `mrustc` (gcc/g++/make are present) | would still need crates.io for dependencies |
+
+The dependency problem is independent of the compiler problem: `Cargo.lock`
+pins **218 packages** and the workspace declares **37 direct** external crates
+including `wgpu` and `vello`. There is no `vendor/` directory and no `.cargo/`
+config, so a build would have to fetch all of them from crates.io. Even a
+working rustc would not produce a build here.
+
+**What would unblock it**, in order of preference:
+
+1. Allowlist `static.rust-lang.org` and `crates.io` (plus `index.crates.io`,
+   `static.crates.io`) in the sandbox egress rules.
+2. Or bake `cargo`/`rustc` into the dev image and commit a `vendor/` directory
+   (`cargo vendor`) so builds are offline-capable.
+3. Or run the Rust half in CI only, where the network is unrestricted, and
+   treat local work as TypeScript-only — in which case this document's
+   migration sequence happens on CI rather than a developer machine.
 
 No Rust in this repository has been compiled or executed in this environment.
 The 914 `#[test]` annotations in `crates/` are real code, but nobody has run
