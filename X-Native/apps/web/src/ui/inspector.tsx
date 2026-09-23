@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type {
   AutoLayout,
   Constraint,
+  Effect,
   EffectKind,
   Engine,
   ExportFormat,
@@ -26,6 +27,8 @@ import { shapePoly } from "../engine/geometry";
 import { Icon } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { copyText } from "../engine/clipboard";
+import { buildPdf } from "../engine/pdf";
+import { toast } from "./toast";
 import { ZOOM_STEPS, zoomTo } from "./zoom";
 import { FillPicker, type FillValue } from "./FillPicker";
 import { BLENDS, handlesForFill, isNone, parseHex, withAlpha } from "./color";
@@ -525,9 +528,7 @@ function Design({
       )}
       {multi && <SelectionColors engine={engine} snap={snap} />}
 
-      <div className="h-row">
-        <h3>Position</h3>
-      </div>
+      <Section id="position" title="Position">
       <div className="insp-pad">
         <div className="align">
           <div className="g">
@@ -592,10 +593,10 @@ function Design({
           />
         )}
       </div>
+      </Section>
 
       <div className="hr" />
-      <div className="h-row">
-        <h3>Layout</h3>
+      <Section id="layout" title="Layout" actions={
         <div style={{ display: "flex", gap: 2 }}>
           <button
             className="plus"
@@ -611,7 +612,7 @@ function Design({
             <Icon name={n.layout ? "minus" : "plus"} size={14} />
           </button>
         </div>
-      </div>
+      }>
       <div className="dir-row">
         <div className="seg icons">
           <button
@@ -869,11 +870,10 @@ function Design({
           </div>
         </>
       )}
+      </Section>
 
       <div className="hr" />
-      <div className="h-row">
-        <h3>Appearance</h3>
-      </div>
+      <Section id="appearance" title="Appearance">
       <div className="insp-pad">
         <div className="grid2">
           <div className="field">
@@ -963,10 +963,10 @@ function Design({
           Show name
         </label>
       )}
+      </Section>
 
       <div className="hr" />
-      <div className="h-row">
-        <h3>Fill</h3>
+      <Section id="fill" title="Fill" actions={
         <button
           className="plus"
           title="Add fill"
@@ -995,7 +995,7 @@ function Design({
         >
           <Icon name="plus" size={14} />
         </button>
-      </div>
+      }>
       {(!isNone(n.fill) || n.fillVisible) && (
         <div className="insp-pad">
           <ColorRow
@@ -1090,27 +1090,43 @@ function Design({
           </div>
         );
       })}
+      </Section>
 
-      <div className="h-row">
-        <h3>Stroke</h3>
+      <Section id="stroke" title="Stroke" actions={
         <button
           className="plus"
           title="Add stroke"
-          onClick={() =>
+          onClick={() => {
+            // First press turns the base stroke on; after that each press
+            // stacks another stroke on top, the way Figma's Stroke "+" behaves.
+            const hasBase = n.strokeWidth > 0 && (!isNone(n.strokePaint) || n.strokeVisible);
+            if (!hasBase) {
+              engine.dispatch({
+                type: "patch",
+                id: n.id,
+                patch: {
+                  strokePaint: isNone(n.strokePaint) ? "#1e1e1e" : n.strokePaint,
+                  strokeVisible: true,
+                  strokeWidth: n.strokeWidth || 1,
+                },
+              });
+              return;
+            }
             engine.dispatch({
               type: "patch",
               id: n.id,
               patch: {
-                strokePaint: isNone(n.strokePaint) ? "#1e1e1e" : n.strokePaint,
-                strokeVisible: true,
-                strokeWidth: n.strokeWidth || 1,
+                strokes: [
+                  ...(n.strokes ?? []),
+                  { color: "#1e1e1e", opacity: 1, visible: true, width: 1, align: n.strokeAlign },
+                ],
               },
-            })
-          }
+            });
+          }}
         >
           <Icon name="plus" size={14} />
         </button>
-      </div>
+      }>
       {n.strokeWidth > 0 && (!isNone(n.strokePaint) || n.strokeVisible) && (
         <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
           <ColorRow
@@ -1202,6 +1218,56 @@ function Design({
           )}
         </div>
       )}
+      {(n.strokes ?? []).map((sk, i) => {
+        const setStroke = (p: Partial<typeof sk>) =>
+          engine.dispatch({
+            type: "patch",
+            id: n.id,
+            patch: { strokes: (n.strokes ?? []).map((q, j) => (j === i ? { ...q, ...p } : q)) },
+          });
+        return (
+          <div className="insp-pad" key={i} style={{ display: "grid", gap: 4 }}>
+            <ColorRow
+              title="Stroke"
+              value={sk.color}
+              opacity={Math.round((sk.opacity ?? 1) * 100)}
+              visible={sk.visible}
+              recents={collectColors(snap.pages[snap.page].root)}
+              onChange={(color) => setStroke({ color, visible: true })}
+              onOpacity={(v) => setStroke({ opacity: v / 100 })}
+              onVisible={(v) => setStroke({ visible: v })}
+              onRemove={() =>
+                engine.dispatch({
+                  type: "patch",
+                  id: n.id,
+                  patch: { strokes: (n.strokes ?? []).filter((_, j) => j !== i) },
+                })
+              }
+            />
+            <div className="grid2">
+              <Field
+                label="W"
+                aria={`Stroke ${i + 2} width`}
+                value={sk.width}
+                onChange={(width) => setStroke({ width: Math.max(0, width) })}
+              />
+              <div className="seg icons">
+                {(["inside", "center", "outside"] as StrokeAlign[]).map((a) => (
+                  <button
+                    key={a}
+                    className={sk.align === a ? "on" : ""}
+                    title={a}
+                    onClick={() => setStroke({ align: a })}
+                  >
+                    <Icon name={`stroke-${a}`} size={14} />
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+      </Section>
 
       {(n.kind === "star" || n.kind === "poly") && (
         <>
@@ -1229,12 +1295,15 @@ function Design({
       {n.kind === "text" && (
         <>
           <div className="hr" />
-          <div className="h-row">
-            <h3>Typography</h3>
-            <button className="plus" title="Type settings" onClick={() => setTypeOpen((v) => !v)}>
-              <Icon name="type-settings" size={14} />
-            </button>
-          </div>
+          <Section
+            id="typography"
+            title="Typography"
+            actions={
+              <button className="plus" title="Type settings" onClick={() => setTypeOpen((v) => !v)}>
+                <Icon name="type-settings" size={14} />
+              </button>
+            }
+          >
           <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
             <div className="field">
               <select
@@ -1400,6 +1469,7 @@ function Design({
               </div>
             </div>
           )}
+          </Section>
         </>
       )}
 
@@ -1410,8 +1480,106 @@ function Design({
   );
 }
 
+/**
+ * One effect's controls, shown in a popover anchored to its row.
+ *
+ * Inline these cost ~148px each — three shadows pushed the inspector 314px past
+ * its viewport (measured). Figma keeps the list scannable and puts the detail
+ * behind a click, which is what this does: the row stays one line, the editing
+ * surface opens next to it.
+ */
+function EffectPopover({
+  fx,
+  anchor,
+  onChange,
+  onClose,
+}: {
+  fx: Effect;
+  anchor: DOMRect;
+  onChange: (p: Partial<Effect>) => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const click = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      // The colour picker portals outside this popover, so a click inside it
+      // must not count as "outside" and close the editor underneath.
+      if (!t.closest(".fx-pop") && !t.closest(".fx-row") && !t.closest(".fill-pop")) onClose();
+    };
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("mousedown", click);
+    window.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("mousedown", click);
+      window.removeEventListener("keydown", key);
+    };
+  }, [onClose]);
+
+  const shadow = fx.kind === "drop-shadow" || fx.kind === "inner-shadow";
+  const blur = fx.kind === "layer-blur" || fx.kind === "background-blur";
+  // Keep the panel on screen when the row sits near the bottom of the window.
+  const top = Math.min(anchor.top, window.innerHeight - 250);
+  return (
+    <div
+      className="fill-pop fx-pop"
+      style={{ left: Math.max(8, anchor.left - 252), top: Math.max(8, top) }}
+      role="dialog"
+      aria-label={`${EFFECT_LABEL[fx.kind]} settings`}
+    >
+      {shadow && (
+        <ColorRow
+          title="Shadow"
+          value={fx.color}
+          opacity={Math.round(parseHex(fx.color).a * 100)}
+          visible
+          recents={["#000000", "#00000040", "#ffffff"]}
+          onChange={(color) => onChange({ color: withAlpha(color, parseHex(fx.color).a) })}
+          onOpacity={(v) => onChange({ color: withAlpha(fx.color, v / 100) })}
+        />
+      )}
+      {shadow && (
+        <div className="grid2">
+          <Field label="X" aria="Shadow X" value={fx.x} onChange={(x) => onChange({ x })} />
+          <Field label="Y" aria="Shadow Y" value={fx.y} onChange={(y) => onChange({ y })} />
+        </div>
+      )}
+      <div className="grid2">
+        {(shadow || blur || fx.kind === "noise") && (
+          <Field label="Blur" aria="Blur" value={fx.blur} onChange={(v) => onChange({ blur: v })} />
+        )}
+        {shadow && (
+          <Field label="Spread" aria="Spread" value={fx.spread} onChange={(v) => onChange({ spread: v })} />
+        )}
+      </div>
+      {fx.kind === "glass" && (
+        <ColorRow
+          title="Tint"
+          value={fx.color}
+          opacity={Math.round(parseHex(fx.color).a * 100)}
+          visible
+          recents={["#ffffff", "#000000"]}
+          onChange={(color) => onChange({ color: withAlpha(color, parseHex(fx.color).a) })}
+          onOpacity={(v) => onChange({ color: withAlpha(fx.color, v / 100) })}
+        />
+      )}
+    </div>
+  );
+}
+
+const EFFECT_LABEL: Record<string, string> = {
+  "drop-shadow": "Drop shadow",
+  "inner-shadow": "Inner shadow",
+  "layer-blur": "Layer blur",
+  "background-blur": "Background blur",
+  noise: "Noise",
+  glass: "Glass",
+};
+
 function Effects({ n, engine }: { n: XNode; engine: Engine }) {
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<{ i: number; rect: DOMRect } | null>(null);
   const kinds: { id: EffectKind; label: string }[] = [
     { id: "drop-shadow", label: "Drop shadow" },
     { id: "inner-shadow", label: "Inner shadow" },
@@ -1420,81 +1588,107 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
     { id: "noise", label: "Noise" },
     { id: "glass", label: "Glass" },
   ];
+  const effects = n.effects ?? [];
+  const set = (i: number, p: Partial<Effect>) => {
+    const next = effects.map((e2, j) => (j === i ? { ...e2, ...p } : e2));
+    engine.dispatch({ type: "patch", id: n.id, patch: { effects: next } });
+  };
+  // A removed row must not leave its popover open over the wrong effect.
+  const remove = (i: number) => {
+    setEditing(null);
+    engine.dispatch({ type: "patch", id: n.id, patch: { effects: effects.filter((_, j) => j !== i) } });
+  };
   return (
     <>
-      <div className="h-row" style={{ position: "relative" }}>
-        <h3>Effects</h3>
-        <button className="plus" title="Add effect" onClick={() => setOpen((v) => !v)}>
-          <Icon name="plus" size={14} />
-        </button>
-        {open && (
-          <div className="type-menu" style={{ right: 8, top: 28, left: "auto", width: 180 }}>
-            {kinds.map((k) => (
+      <Section
+        id="effects"
+        title="Effects"
+        defaultOpen={effects.length > 0}
+        actions={
+          <div style={{ position: "relative", display: "flex" }}>
+            <button className="plus" title="Add effect" onClick={() => setOpen((v) => !v)}>
+              <Icon name="plus" size={14} />
+            </button>
+            {open && (
+              <div className="type-menu" style={{ right: 8, top: 28, left: "auto", width: 180 }}>
+                {kinds.map((k) => (
+                  <button
+                    key={k.id}
+                    onClick={() => {
+                      engine.dispatch({
+                        type: "patch",
+                        id: n.id,
+                        patch: { effects: [...effects, defaultEffect(k.id)] },
+                      });
+                      setOpen(false);
+                    }}
+                  >
+                    {k.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        }
+      >
+        {effects.map((fx, i) => (
+          <div className="insp-pad" key={i} style={{ marginBottom: 4 }}>
+            <div className="color-row fx-row">
+              {(fx.kind === "drop-shadow" || fx.kind === "inner-shadow" || fx.kind === "glass") && (
+                <span className="swatch" style={{ background: fx.color }} />
+              )}
               <button
-                key={k.id}
-                onClick={() => {
-                  engine.dispatch({
-                    type: "patch",
-                    id: n.id,
-                    patch: { effects: [...(n.effects ?? []), defaultEffect(k.id)] },
-                  });
-                  setOpen(false);
+                className="hex"
+                style={{
+                  flex: 1,
+                  textAlign: "left",
+                  background: "none",
+                  border: 0,
+                  padding: 0,
+                  cursor: "pointer",
+                  color: "inherit",
+                }}
+                title={`${EFFECT_LABEL[fx.kind]} settings`}
+                aria-label={`Edit ${EFFECT_LABEL[fx.kind]}`}
+                aria-expanded={editing?.i === i}
+                onClick={(e) => {
+                  // Read the rect before the state updater runs: inside the
+                  // updater `e.currentTarget` is already null, which threw
+                  // "getBoundingClientRect of null" and left the popover shut.
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  setEditing((cur) => (cur?.i === i ? null : { i, rect }));
                 }}
               >
-                {k.label}
+                {EFFECT_LABEL[fx.kind]}
               </button>
-            ))}
-          </div>
-        )}
-      </div>
-      {(n.effects ?? []).map((fx, i) => {
-        const set = (p: Partial<typeof fx>) => {
-          const effects = (n.effects ?? []).map((e2, j) => (j === i ? { ...e2, ...p } : e2));
-          engine.dispatch({ type: "patch", id: n.id, patch: { effects } });
-        };
-        const shadow = fx.kind === "drop-shadow" || fx.kind === "inner-shadow";
-        return (
-          <div key={i} className="insp-pad" style={{ marginBottom: 8, display: "grid", gap: 4 }}>
-            <div className="color-row">
-              <span className="hex">{kinds.find((k) => k.id === fx.kind)?.label}</span>
               <button
                 className="mini"
                 title={fx.visible ? "Hide" : "Show"}
-                onClick={() => set({ visible: !fx.visible })}
+                aria-label={`${fx.visible ? "Hide" : "Show"} ${EFFECT_LABEL[fx.kind]}`}
+                onClick={() => set(i, { visible: !fx.visible })}
               >
                 <Icon name={fx.visible ? "eye" : "eye-off"} size={14} />
               </button>
               <button
                 className="mini minus"
                 title="Remove"
-                onClick={() => {
-                  const effects = (n.effects ?? []).filter((_, j) => j !== i);
-                  engine.dispatch({ type: "patch", id: n.id, patch: { effects } });
-                }}
+                aria-label={`Remove ${EFFECT_LABEL[fx.kind]}`}
+                onClick={() => remove(i)}
               >
                 <Icon name="minus" size={14} />
               </button>
             </div>
-            {shadow && (
-              <ColorRow
-                title="Shadow"
-                value={fx.color}
-                opacity={Math.round(parseHex(fx.color).a * 100)}
-                visible
-                recents={["#000000", "#00000040", "#ffffff"]}
-                onChange={(color) => set({ color: withAlpha(color, parseHex(fx.color).a) })}
-                onOpacity={(v) => set({ color: withAlpha(fx.color, v / 100) })}
-              />
-            )}
-            <div className="grid2">
-              {shadow && <Field label="X" value={fx.x} onChange={(x) => set({ x })} />}
-              {shadow && <Field label="Y" value={fx.y} onChange={(y) => set({ y })} />}
-              <Field label="Blur" value={fx.blur} onChange={(blur) => set({ blur })} />
-              {shadow && <Field label="Spread" value={fx.spread} onChange={(spread) => set({ spread })} />}
-            </div>
           </div>
-        );
-      })}
+        ))}
+      </Section>
+      {editing && effects[editing.i] && (
+        <EffectPopover
+          fx={effects[editing.i]}
+          anchor={editing.rect}
+          onChange={(p) => set(editing.i, p)}
+          onClose={() => setEditing(null)}
+        />
+      )}
     </>
   );
 }
@@ -1710,12 +1904,16 @@ function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
   };
   return (
     <>
-      <div className="h-row">
-        <h3>Export</h3>
-        <button className="plus" title="Add export" onClick={add}>
-          <Icon name="plus" size={14} />
-        </button>
-      </div>
+      <Section
+        id="export"
+        title="Export"
+        defaultOpen={false}
+        actions={
+          <button className="plus" title="Add export" onClick={add}>
+            <Icon name="plus" size={14} />
+          </button>
+        }
+      >
       {presets.map((p, i) => (
         <div key={i} className="insp-pad" style={{ marginBottom: 4 }}>
           <div className="export-row">
@@ -1762,6 +1960,7 @@ function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
           </button>
         </div>
       )}
+      </Section>
     </>
   );
 }
@@ -1884,9 +2083,8 @@ function runExport(n: XNode, p: ExportPreset) {
   const height = Math.max(1, Math.round(n.h * p.scale));
   const name = `${n.name}${p.suffix}.${p.format.toLowerCase()}`;
   const svg = exportSvg(n, p);
-  if (p.format === "SVG" || p.format === "PDF") {
-    // PDF export remains an SVG download in browsers without a PDF encoder.
-    downloadBlob(new Blob([svg], { type: "image/svg+xml" }), name.replace(/\.pdf$/i, ".svg"));
+  if (p.format === "SVG") {
+    downloadBlob(new Blob([svg], { type: "image/svg+xml" }), name);
     return;
   }
   const image = new Image();
@@ -1896,13 +2094,24 @@ function runExport(n: XNode, p: ExportPreset) {
     c.height = height;
     const ctx = c.getContext("2d");
     if (!ctx) return;
+    // PDF keeps transparency via a soft mask, so it must not be flattened.
     if (p.format === "JPG") {
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, width, height);
     }
     ctx.drawImage(image, 0, 0, width, height);
+    if (p.format === "PDF") {
+      const px = ctx.getImageData(0, 0, width, height).data;
+      // Page size is the design size in points; the bitmap may be larger when
+      // exporting at 2x/3x, which just raises the effective resolution.
+      void buildPdf(new Uint8Array(px.buffer.slice(0)), width, height, Math.max(1, n.w), Math.max(1, n.h), n.name)
+        .then((blob) => downloadBlob(blob, name))
+        .catch(() => toast("Could not build the PDF"));
+      return;
+    }
     c.toBlob((blob) => blob && downloadBlob(blob, name), p.format === "JPG" ? "image/jpeg" : "image/png", 0.92);
   };
+  image.onerror = () => toast(`Could not render ${n.name} for export`);
   image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
@@ -1933,6 +2142,69 @@ function fillValuePatch(v: FillValue): Partial<XNode> {
         ? { fillGX: handles.fillGX, fillGY: handles.fillGY, fillHX: handles.fillHX, fillHY: handles.fillHY }
         : {}),
   };
+}
+
+/** Collapsible inspector section.
+ *
+ *  The panel runs past the viewport on a text layer (1043px of content in
+ *  912px), so the lower sections — Effects, Export — are below the fold and
+ *  easy to miss. Rather than hide controls behind an "Advanced" bucket, which
+ *  makes real properties harder to find, each section can be folded away and
+ *  remembers that choice. Nothing is removed, and everything stays one click
+ *  from view.
+ *
+ *  `id` keys the persisted open/closed state; `defaultOpen` false starts a
+ *  section folded for layers that rarely need it.
+ */
+const SECTION_KEY = "x-native-inspector-sections";
+
+function readSections(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(SECTION_KEY);
+    const v: unknown = raw ? JSON.parse(raw) : null;
+    return v && typeof v === "object" ? (v as Record<string, boolean>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function Section({
+  id,
+  title,
+  defaultOpen = true,
+  actions,
+  children,
+}: {
+  id: string;
+  title: string;
+  defaultOpen?: boolean;
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(() => readSections()[id] ?? defaultOpen);
+  const toggle = () => {
+    setOpen((v) => {
+      const next = !v;
+      try {
+        localStorage.setItem(SECTION_KEY, JSON.stringify({ ...readSections(), [id]: next }));
+      } catch {
+        /* preference only; not worth surfacing */
+      }
+      return next;
+    });
+  };
+  return (
+    <>
+      <div className="h-row">
+        <button className="sec-toggle" aria-expanded={open} onClick={toggle}>
+          <Icon name={open ? "chevron" : "chevron-right"} size={12} />
+          <h3>{title}</h3>
+        </button>
+        {actions}
+      </div>
+      {open && children}
+    </>
+  );
 }
 
 function ColorRow({

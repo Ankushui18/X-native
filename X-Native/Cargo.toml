@@ -10,6 +10,7 @@ members = [
     "crates/x-native",
     "crates/x-ui",
     "crates/x-board",
+    "crates/x-wasm",
     "apps/x-designer",
 ]
 

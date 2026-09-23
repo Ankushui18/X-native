@@ -2005,6 +2005,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "x-wasm"
+version = "0.34.0"
+dependencies = [
+ "wasm-bindgen",
+ "x-core",
+ "x-format",
+]
+
+[[package]]
 name = "xml-rs"
 version = "0.8.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"

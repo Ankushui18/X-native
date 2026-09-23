@@ -72,6 +72,25 @@ export interface ComponentVariant {
   node: XNode;
 }
 
+/**
+ * A named, reusable paint definition — Figma's colour styles.
+ *
+ * A style owns the paint; nodes reference it by id through `XNode.fillStyle` /
+ * `XNode.strokeStyle`. Editing the style repaints every node bound to it,
+ * which is the whole point: the binding is live, not a one-off copy.
+ *
+ * Scoped to solid paints for now. Text and effect styles reuse the same store
+ * shape when they arrive, which is why the kind is explicit rather than
+ * implied by which array it lives in.
+ */
+export interface SharedStyle {
+  id: string;
+  name: string;
+  kind: "paint";
+  /** #rrggbb or #rrggbbaa, matching every other colour field in the engine. */
+  color: string;
+}
+
 export interface ComponentMaster {
   id: string;
   name: string;
@@ -119,6 +138,31 @@ export interface Paint {
   hx?: number;
   hy?: number;
   stops?: GradientStop[];
+}
+
+/**
+ * One additional stroke, painted over the base stroke.
+ *
+ * Same split as fills: the scalar `strokePaint`/`strokeWidth`/… fields on
+ * XNode describe the *bottom* stroke and stay authoritative on their own, so
+ * every existing call site keeps working. `XNode.strokes` holds any extra
+ * strokes drawn on top, bottom-to-top, the way Figma stacks them. An empty or
+ * absent array means "single stroke", which is the legacy behaviour.
+ *
+ * Each layer carries its own geometry (width, align, dash, caps) because in
+ * Figma a second stroke is a genuinely independent outline, not a recolour of
+ * the first.
+ */
+export interface StrokeLayer {
+  color: string;
+  opacity: number;
+  visible: boolean;
+  width: number;
+  align: StrokeAlign;
+  dash?: number;
+  gap?: number;
+  cap?: StrokeCap;
+  join?: StrokeJoin;
 }
 
 export interface Effect {
@@ -187,6 +231,14 @@ export interface XNode {
    * Figma stacks them. Absent/empty means the node has a single fill.
    */
   fills?: Paint[];
+  /** Extra strokes painted over the base stroke; see StrokeLayer. */
+  strokes?: StrokeLayer[];
+  /** Id of the SharedStyle driving `fill`, if the fill is bound to one.
+   *  Editing that style updates this node; editing the node's colour directly
+   *  detaches it, as in Figma. */
+  fillStyle?: string;
+  /** Id of the SharedStyle driving `strokePaint`. */
+  strokeStyle?: string;
   fillBlend: string;
   strokePaint: string;
   strokeOpacity: number;
@@ -279,11 +331,26 @@ export interface CommentThread {
   replies: CommentReply[];
 }
 
+/**
+ * A ruler guide: an infinite line the user drags out of a ruler.
+ *
+ * Distinct from `snapping.Guide`, which is the transient red line drawn while
+ * dragging a layer. These persist with the page and objects snap to them.
+ */
+export interface RulerGuide {
+  id: string;
+  axis: "x" | "y";
+  /** Position in world units. */
+  at: number;
+}
+
 export interface Page {
   id: string;
   name: string;
   root: XNode;
   comments: CommentThread[];
+  /** Ruler guides for this page; see RulerGuide. */
+  guides: RulerGuide[];
   pixelGrid: boolean;
   pixelGridColor: string;
   flowStart: string;
@@ -303,10 +370,14 @@ export interface Snapshot {
   canUndo: boolean;
   canRedo: boolean;
   components: ComponentMaster[];
+  /** Document-level named paints; see SharedStyle. */
+  styles: SharedStyle[];
   presentFrame: string;
   presentStack: string[];
   /** Figma's View > Rulers (⇧R). */
   showRulers: boolean;
+  /** Figma's View > Minimap. Off by default; it costs its own render pass. */
+  showMinimap: boolean;
   /** Comment pins are hidden unless the comment tool is active or the user
    *  has explicitly turned them on, as in Figma. */
   showComments: boolean;
@@ -322,6 +393,7 @@ export type Command =
   | { type: "setPan"; x: number; y: number }
   | { type: "setRightTab"; tab: RightTab }
   | { type: "toggleRulers" }
+  | { type: "toggleMinimap" }
   | { type: "toggleComments" }
   | { type: "addComment"; x: number; y: number; body: string }
   | { type: "replyComment"; id: string; body: string }
@@ -379,6 +451,19 @@ export type Command =
   | { type: "patchPage"; patch: Partial<Pick<Page, "pixelGrid" | "pixelGridColor" | "name" | "flowStart">> }
   | { type: "distribute"; axis: "h" | "v" }
   | { type: "boolean"; op: BooleanOp }
+  /** Create a named style from the selection's current fill or stroke and
+   *  bind the selection to it. */
+  | { type: "createStyle"; kind: "fill" | "stroke"; name: string }
+  /** Point the selection at an existing style. */
+  | { type: "applyStyle"; kind: "fill" | "stroke"; styleId: string }
+  /** Drop the binding, keeping the painted colour. */
+  | { type: "detachStyle"; kind: "fill" | "stroke" }
+  /** Recolour a style; every bound node follows. */
+  | { type: "editStyle"; id: string; color?: string; name?: string }
+  | { type: "deleteStyle"; id: string }
+  | { type: "addGuide"; axis: "x" | "y"; at: number }
+  | { type: "moveGuide"; id: string; at: number }
+  | { type: "removeGuide"; id: string }
   | { type: "makeComponent" }
   | { type: "detachInstance" }
   | { type: "placeComponent"; id: string; x: number; y: number }

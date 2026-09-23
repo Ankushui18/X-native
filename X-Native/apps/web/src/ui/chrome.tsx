@@ -9,6 +9,8 @@ import { ContextMenu, isGroupNode, layerMenu, pageMenu, runMenu } from "./Contex
 import { align } from "./inspector";
 import { stepZoom, zoomTo } from "./zoom";
 import { clearDoc } from "../engine/persist";
+import { copyText } from "../engine/clipboard";
+import { isNone } from "./color";
 
 export type NavId = "file" | "assets" | "tools" | "variables" | "agent";
 
@@ -723,6 +725,7 @@ export function Actions({
     { label: "Duplicate", sc: "⌘D", run: () => engine.dispatch({ type: "duplicate" }) },
     { label: "Delete", sc: "⌫", run: () => engine.dispatch({ type: "delete" }) },
     { label: "Rulers", sc: "⇧R", run: () => engine.dispatch({ type: "toggleRulers" }) },
+    { label: "Minimap", sc: "⇧M", run: () => engine.dispatch({ type: "toggleMinimap" }) },
     {
       // With autosave the document is now sticky, so there has to be a way back
       // to a blank file. Destructive and unrecoverable, hence the confirm.
@@ -971,6 +974,11 @@ export function bindHotkeys(
       engine.dispatch({ type: "toggleRulers" });
       return;
     }
+    if (!meta && !e.altKey && e.shiftKey && e.key.toLowerCase() === "m") {
+      e.preventDefault();
+      engine.dispatch({ type: "toggleMinimap" });
+      return;
+    }
     if (meta && e.shiftKey && e.key.toLowerCase() === "h") {
       e.preventDefault();
       engine.dispatch({ type: "hideSel" });
@@ -1197,19 +1205,136 @@ function AssetsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
 
 function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const colors = Array.from(new Set(collectColors(snap.pages[snap.page].root)));
+  const sel = snap.selection[0];
+  const selNode = sel ? findNode(snap.pages[snap.page].root, sel)?.node : null;
   return (
     <>
+      <div className="h-row">
+        <h3 style={{ margin: 0, fontSize: 11, fontWeight: 500, padding: "8px 4px" }}>Styles</h3>
+        <button
+          className="plus"
+          title="Create style from selection"
+          onClick={() => {
+            if (!selNode) {
+              toast("Select a layer to create a style from its fill or stroke");
+              return;
+            }
+            // A layer can contribute either paint, so ask rather than silently
+            // assuming fill — the engine has supported both since styles landed.
+            const hasStroke = selNode.strokeWidth > 0 && !isNone(selNode.strokePaint);
+            const kind: "fill" | "stroke" =
+              hasStroke && window.confirm("Create from the stroke?\n\nOK = stroke, Cancel = fill")
+                ? "stroke"
+                : "fill";
+            const name = window.prompt(`Style name (${kind})`, selNode.name || "Style");
+            if (name === null) return;
+            engine.dispatch({ type: "createStyle", kind, name });
+          }}
+        >
+          <Icon name="plus" size={14} />
+        </button>
+      </div>
+      <div className="insp-pad" style={{ display: "grid", gap: 4, padding: "0 12px" }}>
+        {snap.styles.length === 0 && (
+          <p className="muted">
+            No styles yet. Select a layer and press + to save its fill as a reusable style.
+          </p>
+        )}
+        {snap.styles.map((st) => {
+          const bound = selNode?.fillStyle === st.id;
+          const boundStroke = selNode?.strokeStyle === st.id;
+          return (
+            <div key={st.id} className="color-row" style={{ width: "100%" }}>
+              <button
+                className="swatch"
+                title={`Apply ${st.name} to the fill — shift-click for the stroke`}
+                aria-label={`Apply style ${st.name}`}
+                style={{
+                  background: st.color,
+                  border: bound || boundStroke ? "2px solid var(--accent)" : undefined,
+                }}
+                onClick={(e) => {
+                  if (!sel) {
+                    toast("Select a layer first");
+                    return;
+                  }
+                  const kind = e.shiftKey ? "stroke" : "fill";
+                  engine.dispatch({ type: "applyStyle", kind, styleId: st.id });
+                  if (kind === "stroke") toast(`Applied ${st.name} to the stroke`);
+                }}
+              />
+              <span className="hex" style={{ flex: 1 }}>
+                {st.name}
+              </span>
+              {(bound || boundStroke) && (
+                <button
+                  className="mini"
+                  title={`Detach the selection from ${st.name}`}
+                  aria-label={`Detach style ${st.name}`}
+                  onClick={() => {
+                    // Keeps the painted colour and drops the link, so the node
+                    // stops following later edits to this style.
+                    if (bound) engine.dispatch({ type: "detachStyle", kind: "fill" });
+                    if (boundStroke) engine.dispatch({ type: "detachStyle", kind: "stroke" });
+                    toast(`Detached from ${st.name}`);
+                  }}
+                >
+                  <Icon name="unlock" size={14} />
+                </button>
+              )}
+              <button
+                className="mini"
+                title={`Edit ${st.name}`}
+                aria-label={`Edit style ${st.name}`}
+                onClick={() => {
+                  const next = window.prompt(`Colour for ${st.name}`, st.color);
+                  if (!next) return;
+                  const hex = next.trim().startsWith("#") ? next.trim() : `#${next.trim()}`;
+                  engine.dispatch({ type: "editStyle", id: st.id, color: hex });
+                }}
+              >
+                <Icon name="eyedropper" size={14} />
+              </button>
+              <button
+                className="mini minus"
+                title={`Delete ${st.name}`}
+                aria-label={`Delete style ${st.name}`}
+                onClick={() => engine.dispatch({ type: "deleteStyle", id: st.id })}
+              >
+                <Icon name="trash" size={14} />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <div className="hr" />
       <div className="h-row">
         <h3 style={{ margin: 0, fontSize: 11, fontWeight: 500, padding: "8px 4px" }}>Color Primitive</h3>
         <button
           className="plus"
-          title="Add from selection"
+          // This list is derived from the colours actually used in the file, so
+          // there is nothing to "add" — a colour appears here as soon as a layer
+          // uses it. The button used to dispatch copyCode, which copied CSS and
+          // added nothing, so it read as dead. Copying the selected layer's
+          // fill is the useful action that matches what the panel shows.
+          title="Copy selected layer's colour"
           onClick={() => {
             const id = snap.selection[0];
-            if (id) engine.dispatch({ type: "copyCode" });
+            const n = id ? findNode(snap.pages[snap.page].root, id)?.node : null;
+            if (!n) {
+              toast("Select a layer to copy its colour");
+              return;
+            }
+            const hex = (n.fill || "").slice(0, 7);
+            if (!hex) {
+              toast("That layer has no solid fill");
+              return;
+            }
+            void copyText(hex);
+            toast(`Copied ${hex}`);
           }}
         >
-          <Icon name="plus" size={14} />
+          <Icon name="copy" size={14} />
         </button>
       </div>
       <div className="insp-pad" style={{ display: "grid", gap: 4, padding: "0 12px" }}>

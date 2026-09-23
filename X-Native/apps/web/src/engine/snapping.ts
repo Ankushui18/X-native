@@ -97,15 +97,22 @@ function span(b: Box, axis: "x" | "y"): [number, number] {
  * and gap badges to render. Edge-to-edge alignment wins over center alignment
  * at equal distance, matching Figma.
  */
-export function snapMove(moving: Box, others: Box[], tol: number): SnapResult {
-  if (!others.length || tol <= 0) return EMPTY;
+export function snapMove(
+  moving: Box,
+  others: Box[],
+  tol: number,
+  /** Ruler guide positions per axis; objects snap to these as well as to
+   *  each other, which is the point of placing a guide. */
+  rulerGuides: { axis: "x" | "y"; at: number }[] = [],
+): SnapResult {
+  if ((!others.length && !rulerGuides.length) || tol <= 0) return EMPTY;
   const guides: Guide[] = [];
   let dx = 0;
   let dy = 0;
 
   for (const axis of ["x", "y"] as const) {
     const mine = edges(moving, axis);
-    let best: { delta: number; at: number; center: boolean; other: Box } | null = null;
+    let best: { delta: number; at: number; center: boolean; other: Box | null } | null = null;
     for (const o of others) {
       for (const theirs of edges(o, axis)) {
         for (const m of mine) {
@@ -120,13 +127,25 @@ export function snapMove(moving: Box, others: Box[], tol: number): SnapResult {
         }
       }
     }
+    // A ruler guide is an explicit instruction, so it wins ties against a
+    // merely-coincidental object edge at the same distance.
+    for (const g of rulerGuides) {
+      if (g.axis !== axis) continue;
+      for (const m of mine) {
+        const delta = g.at - m.at;
+        if (Math.abs(delta) > tol) continue;
+        if (!best || Math.abs(delta) <= Math.abs(best.delta) + 1e-6) {
+          best = { delta, at: g.at, center: false, other: null };
+        }
+      }
+    }
     if (!best) continue;
     if (axis === "x") dx = best.delta;
     else dy = best.delta;
 
     // Draw the guide across the union of both boxes on the opposite axis.
     const [ma, mb] = span(moving, axis);
-    const [oa, ob] = span(best.other, axis);
+    const [oa, ob] = best.other ? span(best.other, axis) : [ma, mb];
     guides.push({
       axis,
       at: best.at,

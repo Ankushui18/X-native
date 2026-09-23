@@ -477,3 +477,64 @@ export function paintInnerShadows(ctx: CanvasRenderingContext2D, n: XNode, z: nu
   }
 }
 
+
+/**
+ * Paint the extra strokes in `n.strokes` over an already-traced path.
+ *
+ * The base stroke is drawn by the caller from the scalar `stroke*` fields;
+ * this adds the stack on top, bottom-to-top, matching how `paintFill` layers
+ * `n.fills`. `trace` re-establishes the path for each layer because a stroke
+ * can change `lineWidth`, and some callers clip between passes.
+ *
+ * Alignment is emulated the same way the base stroke does it: canvas only
+ * centres a stroke, so inside/outside double the width and clip or overdraw.
+ */
+export function paintExtraStrokes(
+  ctx: CanvasRenderingContext2D,
+  n: XNode,
+  z: number,
+  trace: () => void,
+) {
+  for (const s of n.strokes ?? []) {
+    if (s.visible === false || !(s.width > 0)) continue;
+    const colour = s.color ?? "";
+    if (!colour || colour === "#00000000") continue;
+    ctx.save();
+    ctx.globalAlpha *= s.opacity ?? 1;
+    ctx.strokeStyle = cssRgba(colour);
+    const lw = Math.max(0.5, s.width * z);
+    ctx.lineCap = s.cap === "round" ? "round" : s.cap === "square" ? "square" : "butt";
+    ctx.lineJoin = s.join === "round" ? "round" : s.join === "bevel" ? "bevel" : "miter";
+    const dash = s.dash ?? 0;
+    ctx.setLineDash(dash > 0 ? [dash * z, (s.gap || dash) * z] : []);
+    trace();
+    if (s.align === "inside") {
+      ctx.save();
+      ctx.clip();
+      ctx.lineWidth = lw * 2;
+      ctx.stroke();
+      ctx.restore();
+    } else if (s.align === "outside") {
+      // Canvas only centres a stroke, so an outside stroke is drawn at double
+      // width with the shape interior clipped out — "clip to everything except
+      // the shape" — leaving just the outer half. Erasing the interior with
+      // destination-out instead would also destroy the base stroke's inside
+      // band and anything else already painted there.
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(-1e6, -1e6, 2e6, 2e6);
+      trace();
+      // The outer rect plus the shape, filled even-odd, is the region outside
+      // the shape; clipping to it protects everything already drawn inside.
+      ctx.clip("evenodd");
+      trace();
+      ctx.lineWidth = lw * 2;
+      ctx.stroke();
+      ctx.restore();
+    } else {
+      ctx.lineWidth = lw;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}

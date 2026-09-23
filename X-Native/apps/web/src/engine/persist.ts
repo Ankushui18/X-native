@@ -1,4 +1,4 @@
-import type { ComponentMaster, Page } from "./types";
+import type { ComponentMaster, Page, SharedStyle } from "./types";
 
 /** Bump when the persisted shape changes incompatibly. A mismatch is discarded
  *  rather than migrated blindly, so a stale document can never half-load. */
@@ -14,11 +14,13 @@ export interface PersistedDoc {
   fileName: string;
   pages: Page[];
   components: ComponentMaster[];
+  styles: SharedStyle[];
   page: number;
   zoom: number;
   panX: number;
   panY: number;
   showRulers: boolean;
+  showMinimap: boolean;
   showComments: boolean;
 }
 
@@ -45,22 +47,31 @@ function validate(v: unknown): PersistedDoc | null {
     if (!Array.isArray((p.root as Record<string, unknown>).children)) return null;
   }
   if (!Array.isArray(v.components)) return null;
+  // Documents written before shared styles have no array; give them one so
+  // callers never have to null-check it.
+  if (!Array.isArray(v.styles)) v.styles = [];
   const num = (x: unknown, lo: number, hi: number, dflt: number) =>
     typeof x === "number" && Number.isFinite(x) && x >= lo && x <= hi ? x : dflt;
   const pages = v.pages as Page[];
   // Pages written before comments existed have no `comments` array; give them
   // one so callers never have to null-check it.
-  for (const p of pages) if (!Array.isArray(p.comments)) p.comments = [];
+  for (const p of pages) {
+    if (!Array.isArray(p.comments)) p.comments = [];
+    // Pages written before ruler guides existed have no array.
+    if (!Array.isArray(p.guides)) p.guides = [];
+  }
   return {
     version: VERSION,
     fileName: v.fileName,
     pages,
     components: v.components as ComponentMaster[],
+    styles: v.styles as SharedStyle[],
     page: num(v.page, 0, pages.length - 1, 0),
     zoom: num(v.zoom, 0.1, 8, 1),
     panX: num(v.panX, -1e7, 1e7, 0),
     panY: num(v.panY, -1e7, 1e7, 0),
     showRulers: v.showRulers === true,
+    showMinimap: v.showMinimap === true,
     showComments: v.showComments === true,
   };
 }

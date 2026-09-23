@@ -1,4 +1,5 @@
 import type {
+  SharedStyle,
   AutoLayout,
   Command,
   ComponentMaster,
@@ -345,6 +346,7 @@ function demoPage(): Page {
     name: "Page 1",
     root: pageRoot,
     comments: [],
+    guides: [],
     pixelGrid: false,
     pixelGridColor: "#cccccc",
     flowStart: phone.id,
@@ -363,9 +365,11 @@ interface Internal {
   rightTab: Snapshot["rightTab"];
   leftTab: Snapshot["leftTab"];
   components: ComponentMaster[];
+  styles: SharedStyle[];
   presentFrame: string;
   presentStack: string[];
   showRulers: boolean;
+  showMinimap: boolean;
   showComments: boolean;
   openComment: string;
 }
@@ -463,9 +467,11 @@ export class MemoryEngine implements Engine {
       rightTab: "design",
       leftTab: "layers",
       components: doc?.components ?? [],
+      styles: doc?.styles ?? [],
       presentFrame: "",
       presentStack: [],
       showRulers: doc?.showRulers ?? false,
+      showMinimap: doc?.showMinimap ?? false,
       showComments: doc?.showComments ?? false,
       openComment: "",
     };
@@ -480,11 +486,13 @@ export class MemoryEngine implements Engine {
       fileName: this.state.fileName,
       pages: this.state.pages,
       components: this.state.components,
+      styles: this.state.styles,
       page: this.state.page,
       zoom: this.state.zoom,
       panX: this.state.panX,
       panY: this.state.panY,
       showRulers: this.state.showRulers,
+      showMinimap: this.state.showMinimap,
       showComments: this.state.showComments,
     };
   }
@@ -522,6 +530,7 @@ export class MemoryEngine implements Engine {
       "select",
       "selectAll",
       "toggleRulers",
+      "toggleMinimap",
       // Comments are annotations layered over the design, not part of it.
       // Figma keeps them off the design undo stack entirely: ⌘Z after posting
       // a comment reverts your last *design* edit, it does not delete the note.
@@ -600,7 +609,9 @@ export class MemoryEngine implements Engine {
       canUndo: this.undo.length > 0,
       canRedo: this.redo.length > 0,
       components: this.state.components,
+      styles: this.state.styles,
       showRulers: this.state.showRulers,
+      showMinimap: this.state.showMinimap,
       showComments: this.state.showComments,
       openComment: this.state.openComment,
       presentFrame: this.state.presentFrame,
@@ -630,6 +641,9 @@ export class MemoryEngine implements Engine {
         break;
       case "toggleRulers":
         s.showRulers = !s.showRulers;
+        break;
+      case "toggleMinimap":
+        s.showMinimap = !s.showMinimap;
         break;
       case "toggleComments":
         s.showComments = !s.showComments;
@@ -698,6 +712,7 @@ export class MemoryEngine implements Engine {
         p.name = `Page ${s.pages.length + 1}`;
         p.root.children = [];
         p.comments = [];
+        p.guides = [];
         p.flowStart = "";
         s.pages.push(p);
         s.page = s.pages.length - 1;
@@ -853,6 +868,15 @@ export class MemoryEngine implements Engine {
         if (n) {
           // A hand-typed name pins the layer name; automatic naming stops.
           if (cmd.patch.name !== undefined) n.nameLocked = true;
+          // Editing a bound colour by hand detaches it from its style, as in
+          // Figma — the alternative is silently diverging from the style, or
+          // silently reverting the user's edit. Re-binding is explicit.
+          if (cmd.patch.fill !== undefined && cmd.patch.fillStyle === undefined && n.fillStyle) {
+            delete n.fillStyle;
+          }
+          if (cmd.patch.strokePaint !== undefined && cmd.patch.strokeStyle === undefined && n.strokeStyle) {
+            delete n.strokeStyle;
+          }
           Object.assign(n, cmd.patch);
           // Text layers follow their content until renamed, as in Figma.
           if (n.kind === "text" && cmd.patch.text !== undefined && !n.nameLocked) {
@@ -1114,6 +1138,99 @@ export class MemoryEngine implements Engine {
             g.kind = "boolean";
           }
         }
+        break;
+      }
+      case "createStyle": {
+        const nodes = s.selection.map((id) => find(this.root(), id)).filter((n): n is XNode => !!n);
+        if (!nodes.length) break;
+        const first = nodes[0];
+        const color = cmd.kind === "fill" ? first.fill : first.strokePaint;
+        const style: SharedStyle = { id: uid("style"), name: cmd.name.trim() || "Style", kind: "paint", color };
+        s.styles.push(style);
+        // Bind every selected node, so "create from selection" works on a
+        // multi-selection the way Figma does.
+        for (const n of nodes) {
+          if (cmd.kind === "fill") {
+            n.fillStyle = style.id;
+            n.fill = color;
+            n.fillVisible = true;
+          } else {
+            n.strokeStyle = style.id;
+            n.strokePaint = color;
+            n.strokeVisible = true;
+            if (!(n.strokeWidth > 0)) n.strokeWidth = 1;
+          }
+        }
+        break;
+      }
+      case "applyStyle": {
+        const style = s.styles.find((x) => x.id === cmd.styleId);
+        if (!style) break;
+        for (const id of s.selection) {
+          const n = find(this.root(), id);
+          if (!n) continue;
+          if (cmd.kind === "fill") {
+            n.fillStyle = style.id;
+            n.fill = style.color;
+            n.fillVisible = true;
+          } else {
+            n.strokeStyle = style.id;
+            n.strokePaint = style.color;
+            n.strokeVisible = true;
+            if (!(n.strokeWidth > 0)) n.strokeWidth = 1;
+          }
+        }
+        break;
+      }
+      case "detachStyle": {
+        // Keep the painted colour; only the link goes away.
+        for (const id of s.selection) {
+          const n = find(this.root(), id);
+          if (!n) continue;
+          if (cmd.kind === "fill") delete n.fillStyle;
+          else delete n.strokeStyle;
+        }
+        break;
+      }
+      case "editStyle": {
+        const style = s.styles.find((x) => x.id === cmd.id);
+        if (!style) break;
+        if (cmd.name !== undefined) style.name = cmd.name;
+        if (cmd.color !== undefined) {
+          style.color = cmd.color;
+          // The binding is live: repaint every node pointing at this style.
+          const walk = (n: XNode) => {
+            if (n.fillStyle === style.id) n.fill = style.color;
+            if (n.strokeStyle === style.id) n.strokePaint = style.color;
+            n.children.forEach(walk);
+          };
+          for (const pg of s.pages) walk(pg.root);
+        }
+        break;
+      }
+      case "deleteStyle": {
+        s.styles = s.styles.filter((x) => x.id !== cmd.id);
+        // Bound nodes keep their colour and simply become unbound.
+        const walk = (n: XNode) => {
+          if (n.fillStyle === cmd.id) delete n.fillStyle;
+          if (n.strokeStyle === cmd.id) delete n.strokeStyle;
+          n.children.forEach(walk);
+        };
+        for (const pg of s.pages) walk(pg.root);
+        break;
+      }
+      case "addGuide": {
+        s.pages[s.page].guides.push({ id: uid("guide"), axis: cmd.axis, at: cmd.at });
+        break;
+      }
+      case "moveGuide": {
+        const g = s.pages[s.page].guides.find((x) => x.id === cmd.id);
+        if (g) g.at = cmd.at;
+        break;
+      }
+      case "removeGuide": {
+        const pg = s.pages[s.page];
+        pg.guides = pg.guides.filter((x) => x.id !== cmd.id);
         break;
       }
       case "makeComponent": {

@@ -1,6 +1,11 @@
 // Behaviour suite: drives the running app and asserts on engine state / DOM,
 // not on source. Re-created after the original /tmp harness was lost.
 import puppeteer from "puppeteer-core";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 // Point CHROMIUM_PATH / CHROMIUM_LIBS at a local Chromium (e.g. the binary that
 // ships inside @sparticuz/chromium) to run this suite.
@@ -215,6 +220,800 @@ for (const [label, payload] of [
   });
   await sleep(800);
   t("Copy as code raises no unhandled rejection", allErrors.length === errsBefore);
+  await p.close();
+}
+
+// 9. export: PDF must be a real PDF, not an SVG with the extension swapped ---
+{
+  const p = await page();
+  await p.evaluate(() => {
+    window.__dl = [];
+    const real = URL.createObjectURL.bind(URL);
+    URL.createObjectURL = (blob) => {
+      const rec = { type: blob.type, size: blob.size };
+      window.__dl.push(rec);
+      blob.arrayBuffer().then((b) => { rec.head = new TextDecoder().decode(new Uint8Array(b).slice(0, 5)); });
+      return real(blob);
+    };
+    const click = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () {
+      const d = window.__dl[window.__dl.length - 1];
+      if (this.download && d) d.name = this.download;
+      return click.call(this);
+    };
+  });
+  const rs = await p.$$(".panel.left .row");
+  await rs[2].click(); await sleep(450);
+  // Export now starts folded, so open it before reaching for its "+".
+  await p.evaluate(() => {
+    const b = [...document.querySelectorAll(".sec-toggle")].find(x => x.textContent.trim() === "Export");
+    if (b && b.getAttribute("aria-expanded") === "false") b.click();
+  });
+  await sleep(350);
+  await p.evaluate(() => document.querySelector('button.plus[title="Add export"]').click());
+  await sleep(450);
+  for (let i = 0; i < 3; i++) {
+    await p.evaluate(() => document.querySelector('button.fmt[title="Format"]').click());
+    await sleep(200);
+  }
+  t("export format cycles to PDF",
+    (await p.evaluate(() => document.querySelector('button.fmt[title="Format"]').textContent.trim())) === "PDF");
+  await p.evaluate(() => document.querySelector("button.export-run").click());
+  await sleep(2500);
+  const dl = (await p.evaluate(() => window.__dl))[0] || {};
+  t(`PDF export has a .pdf name (${dl.name})`, /\.pdf$/i.test(dl.name || ""));
+  t(`PDF export has the PDF mime (${dl.type})`, dl.type === "application/pdf");
+  t(`PDF export starts with %PDF (${dl.head})`, dl.head === "%PDF-");
+  await p.close();
+}
+
+// 10. Vars "+" must do something visible ----------------------------------
+{
+  const p = await page();
+  const openVars = async () => {
+    await p.evaluate(() => {
+      const b = [...document.querySelectorAll("button")]
+        .find(x => (x.getAttribute("aria-label") || x.textContent).trim() === "Vars");
+      b.click();
+    });
+    await sleep(550);
+  };
+  await openVars();
+  await (await p.$('.panel.left button.plus[title*="Copy"]')).click();
+  await sleep(800);
+  t("Vars + with no selection explains itself",
+    /select a layer/i.test(await p.evaluate(() => document.querySelector(".toast")?.textContent || "")));
+  await p.evaluate(() => {
+    const b = [...document.querySelectorAll("button")]
+      .find(x => (x.getAttribute("aria-label") || x.textContent).trim() === "File");
+    b.click();
+  });
+  await sleep(450);
+  const rs = await p.$$(".panel.left .row");
+  await rs[6].click(); await sleep(400);
+  await openVars();
+  await (await p.$('.panel.left button.plus[title*="Copy"]')).click();
+  await sleep(900);
+  t("Vars + copies the selected layer's colour",
+    /^Copied #/.test(await p.evaluate(() => document.querySelector(".toast")?.textContent || "")));
+  await p.close();
+}
+
+// 11. Agent pane actually mutates the document ----------------------------
+{
+  const p = await page();
+  await p.evaluate(() => {
+    const b = [...document.querySelectorAll("button")]
+      .find(x => (x.getAttribute("aria-label") || x.textContent).trim() === "Agent");
+    b.click();
+  });
+  await sleep(550);
+  const inp = await p.$(".panel.left .search input");
+  await inp.click();
+  await p.keyboard.type("add a frame");
+  await p.keyboard.press("Enter");
+  await sleep(900);
+  await p.evaluate(() => {
+    const b = [...document.querySelectorAll("button")]
+      .find(x => (x.getAttribute("aria-label") || x.textContent).trim() === "File");
+    b.click();
+  });
+  await sleep(550);
+  t("Agent request creates the layer it promises",
+    (await rows(p)).some(r => /Agent frame/.test(r)));
+  await p.close();
+}
+
+// 12. inspector sections fold away without hiding anything ----------------
+{
+  const p = await page();
+  await p.evaluate(() => { try { localStorage.removeItem("x-native-inspector-sections"); } catch {} });
+  await p.reload({ waitUntil: "networkidle0" });
+  await sleep(600);
+  const names = await rows(p);
+  const rs = await p.$$(".panel.left .row");
+  await rs[names.indexOf("Title")].click();
+  await sleep(650);
+  const read = () => p.evaluate(() => {
+    const i = document.querySelector(".inspector");
+    return {
+      sh: i.scrollHeight, ch: i.clientHeight,
+      toggles: [...i.querySelectorAll(".sec-toggle")].map(b => b.textContent.trim()),
+      controls: i.querySelectorAll("button,select,input").length,
+    };
+  });
+  const base = await read();
+  t(`every inspector section is collapsible (${base.toggles.length})`, base.toggles.length === 8);
+  const click = async (nm) => {
+    await p.evaluate((n) => {
+      const b = [...document.querySelectorAll(".sec-toggle")].find(x => x.textContent.trim() === n);
+      b && b.click();
+    }, nm);
+    await sleep(200);
+  };
+  for (const nm of base.toggles) await click(nm);
+  const closed = await read();
+  t(`collapsing removes the overflow (${(base.sh / base.ch).toFixed(2)}x -> ${(closed.sh / closed.ch).toFixed(2)}x)`,
+    closed.sh <= closed.ch && closed.sh < base.sh);
+  for (const nm of base.toggles) await click(nm);
+  const back = await read();
+  t(`reopening restores every control (${back.controls}/${base.controls})`, back.controls === base.controls);
+  // the choice must survive a reload, or it is noise rather than a preference
+  await click("Typography");
+  await p.reload({ waitUntil: "networkidle0" });
+  await sleep(700);
+  const rs2 = await p.$$(".panel.left .row");
+  await rs2[names.indexOf("Title")].click();
+  await sleep(650);
+  const kept = await p.evaluate(() => {
+    const b = [...document.querySelectorAll(".sec-toggle")].find(x => x.textContent.trim() === "Typography");
+    return b ? b.getAttribute("aria-expanded") : "missing";
+  });
+  t(`a folded section stays folded across a reload (${kept})`, kept === "false");
+  await p.close();
+}
+
+// 13. SVG import produces editable layers, not a flat image ---------------
+{
+  const p = await page();
+  const drop = (svg, name) => p.evaluate((s, n) => {
+    const dt = new DataTransfer();
+    dt.items.add(new File([s], n, { type: "image/svg+xml" }));
+    document.querySelector(".canvas-wrap").dispatchEvent(
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 700, clientY: 450 }));
+  }, svg, name);
+
+  const before = (await rows(p)).length;
+  await drop(`<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120">
+    <rect x="10" y="10" width="80" height="50" fill="#ff0000"/>
+    <circle cx="150" cy="40" r="30" fill="#00ff00"/>
+    <text x="20" y="100" font-size="16" fill="#0000ff">Hello</text></svg>`, "logo.svg");
+  await sleep(1400);
+  const after = await rows(p);
+  t(`SVG becomes one layer per shape (${before} -> ${after.length})`, after.length === before + 3);
+  t("SVG text arrives as a text layer", after.includes("Hello"));
+  t("SVG circle arrives as an ellipse", after.includes("Ellipse"));
+
+  // the fill has to actually render, not just exist in the model
+  const red = await p.evaluate(() => {
+    const c = document.querySelector("canvas");
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i] > 200 && d[i + 1] < 60 && d[i + 2] < 60 && d[i + 3] > 200) n++;
+    }
+    return n;
+  });
+  t(`imported fill renders on canvas (${red}px red)`, red > 200);
+
+  // one undo must remove the whole file, not one shape
+  await p.keyboard.down("Meta"); await p.keyboard.press("z"); await p.keyboard.up("Meta");
+  await sleep(700);
+  t(`one undo removes the whole import (${(await rows(p)).length})`, (await rows(p)).length === before);
+  await p.close();
+}
+{
+  const p = await page();
+  const before = (await rows(p)).length;
+  // groups with transforms, paths and polygons
+  await p.evaluate(() => {
+    const s = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">
+      <g transform="translate(50,20)" fill="#00aa00">
+        <rect x="0" y="0" width="40" height="40"/><circle cx="80" cy="20" r="15"/></g>
+      <path d="M10 150 L60 120 L110 150 Z" fill="#884400"/>
+      <polygon points="200,20 240,60 200,100 160,60" fill="#0088ff"/></svg>`;
+    const dt = new DataTransfer();
+    dt.items.add(new File([s], "b.svg", { type: "image/svg+xml" }));
+    document.querySelector(".canvas-wrap").dispatchEvent(
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 700, clientY: 450 }));
+  });
+  await sleep(1400);
+  const after = await rows(p);
+  t(`nested groups, paths and polygons all import (${before} -> ${after.length})`, after.length === before + 4);
+  t("path imports as a vector layer", after.includes("Path"));
+  await p.close();
+}
+{
+  // a malformed file must not break the app
+  const p = await page();
+  const before = (await rows(p)).length;
+  await p.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.items.add(new File(["<svg><broken"], "bad.svg", { type: "image/svg+xml" }));
+    document.querySelector(".canvas-wrap").dispatchEvent(
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 700, clientY: 450 }));
+  });
+  await sleep(1000);
+  const toast = await p.evaluate(() => document.querySelector(".toast")?.textContent || "");
+  t(`malformed SVG is reported, not crashed (${JSON.stringify(toast)})`,
+    (await rows(p)).length === before && /could not read|nothing importable/i.test(toast));
+  await p.close();
+}
+
+// 14. Sketch import: a .sketch file opens as editable layers ---------------
+{
+  const p = await page();
+  const b64 = fs.readFileSync(path.join(HERE, "fixtures", "sample.sketch")).toString("base64");
+  const dropSketch = (name) => p.evaluate((data, n) => {
+    const bin = atob(data);
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    const dt = new DataTransfer();
+    dt.items.add(new File([u8], n, { type: "" }));
+    document.querySelector(".canvas-wrap").dispatchEvent(
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 700, clientY: 450 }));
+  }, b64, name);
+
+  const before = (await rows(p)).length;
+  await dropSketch("design.sketch");
+  await sleep(2000);
+  const after = await rows(p);
+  t(`.sketch opens as layers (${before} -> ${after.length})`, after.length === before + 5);
+  t("artboard, shapes and text all arrive",
+    ["Home", "Card", "Dot", "Label", "Inner"].every((n) => after.includes(n)));
+
+  // geometry and style must survive the round trip, not just the names
+  const names = await rows(p);
+  const rs = await p.$$(".panel.left .row");
+  await rs[names.indexOf("Card")].click();
+  await sleep(650);
+  const f = await p.evaluate(() =>
+    [...document.querySelectorAll(".inspector .field input")].map((i) => i.value).slice(0, 8));
+  t(`Card keeps its 120x60 size (${f[3]}x${f[4]})`, f[3] === "120" && f[4] === "60");
+  t(`Card keeps corner radius 8 and stroke 2 (r${f[6]} s${f[7]})`, f[6] === "8" && f[7] === "2");
+
+  // and it has to actually render
+  const px = await p.evaluate(() => {
+    const c = document.querySelector("canvas");
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let red = 0, green = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i] > 200 && d[i + 1] < 70 && d[i + 2] < 70 && d[i + 3] > 200) red++;
+      if (d[i] < 80 && d[i + 1] > 150 && d[i + 2] < 80 && d[i + 3] > 200) green++;
+    }
+    return { red, green };
+  });
+  t(`imported Sketch fills render (${px.red}px red, ${px.green}px green)`, px.red > 500 && px.green > 200);
+
+  await p.keyboard.down("Meta"); await p.keyboard.press("z"); await p.keyboard.up("Meta");
+  await sleep(800);
+  t(`one undo removes the whole .sketch import (${(await rows(p)).length})`, (await rows(p)).length === before);
+  await p.close();
+}
+{
+  // a non-ZIP file named .sketch must report, not crash
+  const p = await page();
+  const before = (await rows(p)).length;
+  await p.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.items.add(new File(["definitely not a zip"], "broken.sketch", { type: "" }));
+    document.querySelector(".canvas-wrap").dispatchEvent(
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 700, clientY: 450 }));
+  });
+  await sleep(1200);
+  const toast = await p.evaluate(() => document.querySelector(".toast")?.textContent || "");
+  t(`a corrupt .sketch is reported (${JSON.stringify(toast.slice(0, 48))})`,
+    (await rows(p)).length === before && /could not read/i.test(toast));
+  await p.close();
+}
+
+// 15. .fig import: Figma binary opens as editable layers -------------------
+{
+  const p = await page();
+  const b64 = fs.readFileSync(path.join(HERE, "fixtures", "sample.fig")).toString("base64");
+  const before = (await rows(p)).length;
+  await p.evaluate((data) => {
+    const bin = atob(data);
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    const dt = new DataTransfer();
+    dt.items.add(new File([u8], "design.fig", { type: "" }));
+    document.querySelector(".canvas-wrap").dispatchEvent(
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 700, clientY: 450 }));
+  }, b64);
+  await sleep(2200);
+  const after = await rows(p);
+  t(`.fig opens as layers (${before} -> ${after.length})`, after.length === before + 4);
+  t("frame, rect, ellipse and text all arrive",
+    ["Home", "FigCard", "FigDot", "FigLabel"].every((n) => after.includes(n)));
+
+  const rs = await p.$$(".panel.left .row");
+  await rs[after.indexOf("FigCard")].click();
+  await sleep(650);
+  const f = await p.evaluate(() =>
+    [...document.querySelectorAll(".inspector .field input")].map((i) => i.value).slice(0, 8));
+  t(`.fig keeps exact geometry (${f[3]}x${f[4]})`, f[3] === "120" && f[4] === "60");
+  t(`.fig keeps radius 8 and stroke 2 (r${f[6]} s${f[7]})`, f[6] === "8" && f[7] === "2");
+
+  const px = await p.evaluate(() => {
+    const c = document.querySelector("canvas");
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let red = 0, green = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i] > 200 && d[i + 1] < 70 && d[i + 2] < 70 && d[i + 3] > 200) red++;
+      if (d[i] < 80 && d[i + 1] > 150 && d[i + 2] < 80 && d[i + 3] > 200) green++;
+    }
+    return { red, green };
+  });
+  t(`.fig fills render (${px.red}px red, ${px.green}px green)`, px.red > 500 && px.green > 200);
+
+  await p.keyboard.down("Meta"); await p.keyboard.press("z"); await p.keyboard.up("Meta");
+  await sleep(800);
+  t(`one undo removes the whole .fig import (${(await rows(p)).length})`, (await rows(p)).length === before);
+  await p.close();
+}
+{
+  // a .fig that is not a ZIP, and a ZIP with no canvas.fig, must both report
+  const p = await page();
+  const before = (await rows(p)).length;
+  await p.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.items.add(new File(["nope"], "broken.fig", { type: "" }));
+    document.querySelector(".canvas-wrap").dispatchEvent(
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 700, clientY: 450 }));
+  });
+  await sleep(1200);
+  const toast = await p.evaluate(() => document.querySelector(".toast")?.textContent || "");
+  t(`a corrupt .fig is reported (${JSON.stringify(toast.slice(0, 44))})`,
+    (await rows(p)).length === before && /could not read/i.test(toast));
+  await p.close();
+}
+
+// 16. multiple strokes per layer -------------------------------------------
+{
+  const p = await page();
+  // thick red base stroke (inside) so a second stroke can sit beside it
+  await p.evaluate(() => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="220" height="160">
+      <rect x="30" y="30" width="160" height="100" fill="#dddddd" stroke="#ff0000" stroke-width="10"/></svg>`;
+    const dt = new DataTransfer();
+    dt.items.add(new File([svg], "a.svg", { type: "image/svg+xml" }));
+    document.querySelector(".canvas-wrap").dispatchEvent(
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 800, clientY: 520 }));
+  });
+  await sleep(1400);
+  const openStroke = async () => {
+    await p.evaluate(() => {
+      const t = [...document.querySelectorAll(".sec-toggle")].find(x => x.textContent.trim() === "Stroke");
+      if (t && t.getAttribute("aria-expanded") === "false") t.click();
+    });
+    await sleep(400);
+  };
+  const px = () => p.evaluate(() => {
+    const c = document.querySelector("canvas");
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let red = 0, blue = 0, grey = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i] > 180 && d[i + 1] < 80 && d[i + 2] < 80 && d[i + 3] > 200) red++;
+      if (d[i] < 80 && d[i + 1] < 80 && d[i + 2] > 180 && d[i + 3] > 200) blue++;
+      if (Math.abs(d[i] - 221) < 12 && Math.abs(d[i + 1] - 221) < 12 && d[i + 3] > 200) grey++;
+    }
+    return { red, blue, grey };
+  });
+  const before = await px();
+  t(`base stroke renders (${before.red}px red)`, before.red > 500);
+
+  await openStroke();
+  await p.evaluate(() => {
+    const el = [...document.querySelectorAll(".inspector button.plus")].find(b => b.getAttribute("title") === "Add stroke");
+    el && el.click();
+  });
+  await sleep(800);
+  const widths = await p.$$('.inspector input[aria-label*="Stroke 2 width"]');
+  t("a second stroke gets its own width control", widths.length === 1);
+
+  await widths[0].click();
+  await p.keyboard.down("Control"); await p.keyboard.press("a"); await p.keyboard.up("Control");
+  await p.keyboard.type("4"); await p.keyboard.press("Enter");
+  await sleep(600);
+  await p.evaluate(() => {
+    const bs = [...document.querySelectorAll('.inspector button[title="outside"]')];
+    bs[bs.length - 1]?.click();
+  });
+  await sleep(600);
+  const hexes = await p.$$(".inspector .color-row input");
+  let target = null;
+  for (const h of hexes) {
+    const v = await p.evaluate(e => e.value, h);
+    if (/^[0-9a-fA-F]{6}$/.test(v)) target = h;
+  }
+  await target.click({ clickCount: 3 });
+  await p.keyboard.type("0000ff"); await p.keyboard.press("Enter");
+  await sleep(900);
+
+  const after = await px();
+  // The point of the feature: both outlines and the fill coexist. An outside
+  // stroke must not erase what is already painted inside the shape.
+  t(`both strokes and the fill render together (red ${after.red}, blue ${after.blue}, fill ${after.grey})`,
+    after.red > 300 && after.blue > 200 && after.grey > 1000);
+
+  await p.keyboard.down("Meta"); await p.keyboard.press("z"); await p.keyboard.up("Meta");
+  await sleep(700);
+  t("undo steps back through the stroke stack", (await px()).blue < after.blue);
+  await p.close();
+}
+
+// 17. shared styles: one edit repaints every bound layer -------------------
+{
+  const p = await page();
+  let reply = "Brand";
+  const onDialog = async (d) => { await d.accept(reply); };
+  p.on("dialog", onDialog);
+  await p.evaluate(() => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="140">
+      <rect x="10" y="20" width="110" height="90" fill="#ff0000"/>
+      <rect x="160" y="20" width="110" height="90" fill="#ff0000"/></svg>`;
+    const dt = new DataTransfer();
+    dt.items.add(new File([svg], "a.svg", { type: "image/svg+xml" }));
+    document.querySelector(".canvas-wrap").dispatchEvent(
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 800, clientY: 520 }));
+  });
+  await sleep(1400);
+  const px = () => p.evaluate(() => {
+    const c = document.querySelector("canvas");
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let red = 0, blue = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i] > 180 && d[i + 1] < 80 && d[i + 2] < 80 && d[i + 3] > 200) red++;
+      if (d[i] < 80 && d[i + 1] < 80 && d[i + 2] > 180 && d[i + 3] > 200) blue++;
+    }
+    return { red, blue };
+  });
+  const openVars = async () => {
+    await p.evaluate(() => {
+      const b = [...document.querySelectorAll("button")]
+        .find(x => (x.getAttribute("aria-label") || x.textContent).trim() === "Vars");
+      b.click();
+    });
+    await sleep(500);
+  };
+  const openFile = async () => {
+    await p.evaluate(() => {
+      const b = [...document.querySelectorAll("button")]
+        .find(x => (x.getAttribute("aria-label") || x.textContent).trim() === "File");
+      b.click();
+    });
+    await sleep(500);
+  };
+
+  const names = await rows(p);
+  const idx = names.map((n, i) => [n, i]).filter(([n]) => n === "Rectangle").map(([, i]) => i);
+  let rs = await p.$$(".panel.left .row");
+  await rs[idx[0]].click(); await sleep(500);
+  await openVars();
+  await p.evaluate(() => {
+    const el = [...document.querySelectorAll(".panel.left button.plus")]
+      .find(b => b.getAttribute("title") === "Create style from selection");
+    el && el.click();
+  });
+  await sleep(900);
+  t("creating a style lists it", (await p.evaluate(() =>
+    document.querySelectorAll('.panel.left button[aria-label^="Apply style"]').length)) === 1);
+
+  await openFile();
+  rs = await p.$$(".panel.left .row");
+  await rs[idx[1]].click(); await sleep(500);
+  await openVars();
+  await p.evaluate(() => {
+    const el = document.querySelector('.panel.left button[aria-label^="Apply style"]');
+    el && el.click();
+  });
+  await sleep(800);
+
+  reply = "#0000ff";
+  await p.evaluate(() => {
+    const el = document.querySelector('.panel.left button[aria-label^="Edit style"]');
+    el && el.click();
+  });
+  await sleep(1000);
+  const after = await px();
+  t(`one style edit repaints every bound layer (red ${after.red}, blue ${after.blue})`,
+    after.blue > 1000 && after.red < 200);
+
+  // styles and their bindings are part of the document, so they must persist
+  await sleep(1300);
+  await p.reload({ waitUntil: "networkidle0" });
+  await sleep(1200);
+  const kept = await px();
+  t(`styles survive a reload (blue ${kept.blue})`, kept.blue > 1000);
+  await openVars();
+  t("the style list survives a reload", (await p.evaluate(() =>
+    document.querySelectorAll('.panel.left button[aria-label^="Apply style"]').length)) === 1);
+  p.off("dialog", onDialog);
+  await p.close();
+}
+
+// 18. effects: compact rows, controls in a popover -------------------------
+{
+  const p = await page();
+  const names = await rows(p);
+  const rs = await p.$$(".panel.left .row");
+  await rs[names.indexOf("Chip")].click();
+  await sleep(600);
+  const height = () => p.evaluate(() => {
+    const i = document.querySelector(".inspector");
+    return { sh: i.scrollHeight, ch: i.clientHeight };
+  });
+  const base = await height();
+  await p.evaluate(() => {
+    const t = [...document.querySelectorAll(".sec-toggle")].find(x => x.textContent.trim() === "Effects");
+    if (t && t.getAttribute("aria-expanded") === "false") t.click();
+  });
+  await sleep(400);
+  for (let k = 0; k < 3; k++) {
+    await p.evaluate(() => {
+      const el = [...document.querySelectorAll(".inspector button.plus")].find(b => b.getAttribute("title") === "Add effect");
+      el && el.click();
+    });
+    await sleep(350);
+    await p.evaluate(() => {
+      const btns = [...document.querySelectorAll(".type-menu button")];
+      btns[0] && btns[0].click();
+    });
+    await sleep(450);
+  }
+  t("three effects are listed", (await p.evaluate(() => document.querySelectorAll(".fx-row").length)) === 3);
+  // Inline these cost ~148px each and pushed the panel 314px past its viewport.
+  const after = await height();
+  t(`three effects do not overflow the panel (${base.sh} -> ${after.sh} in ${after.ch})`,
+    after.sh <= after.ch);
+
+  await p.evaluate(() => {
+    const el = document.querySelector('.fx-row button[aria-label^="Edit"]');
+    el && el.click();
+  });
+  await sleep(600);
+  t("the row opens an effect popover", await p.evaluate(() => !!document.querySelector(".fx-pop")));
+  const f = await p.$$(".fx-pop .field input");
+  t(`the popover carries the shadow controls (${f.length})`, f.length === 4);
+  await f[1].click();
+  await p.keyboard.down("Control"); await p.keyboard.press("a"); await p.keyboard.up("Control");
+  await p.keyboard.type("18"); await p.keyboard.press("Enter");
+  await sleep(600);
+  const vals = await p.evaluate(() => [...document.querySelectorAll(".fx-pop .field input")].map(i => i.value));
+  t(`editing in the popover reaches the model (Y=${vals[1]})`, vals[1] === "18");
+  await p.keyboard.press("Escape");
+  await sleep(400);
+  t("Escape closes the popover", !(await p.evaluate(() => !!document.querySelector(".fx-pop"))));
+  await p.close();
+}
+
+// 19. ruler guides ---------------------------------------------------------
+{
+  const p = await page();
+  await p.keyboard.down("Shift"); await p.keyboard.press("R"); await p.keyboard.up("Shift");
+  await sleep(450);
+  const wrap = await p.evaluate(() => {
+    const r = document.querySelector(".canvas-wrap").getBoundingClientRect();
+    return { x: Math.round(r.left), y: Math.round(r.top) };
+  });
+  t("both ruler rails are grabbable", (await p.evaluate(() => document.querySelectorAll(".guide-rail").length)) === 2);
+
+  // drag a horizontal guide out of the top rail
+  await p.mouse.move(wrap.x + 500, wrap.y + 10);
+  await p.mouse.down();
+  await p.mouse.move(wrap.x + 500, wrap.y + 300, { steps: 10 });
+  await p.mouse.up();
+  await sleep(600);
+  t("dragging from the top rail creates a horizontal guide",
+    (await p.evaluate(() => document.querySelectorAll(".guide-y").length)) === 1);
+
+  // and a vertical one out of the left rail
+  await p.mouse.move(wrap.x + 10, wrap.y + 400);
+  await p.mouse.down();
+  await p.mouse.move(wrap.x + 900, wrap.y + 400, { steps: 10 });
+  await p.mouse.up();
+  await sleep(600);
+  t("dragging from the left rail creates a vertical guide",
+    (await p.evaluate(() => document.querySelectorAll(".guide-x").length)) === 1);
+
+  // a guide drag must not disturb the canvas selection underneath
+  const sel = await p.evaluate(() => document.querySelector(".inspector")?.innerText.slice(0, 20) || "");
+  await p.mouse.move(wrap.x + 10, wrap.y + 600);
+  await p.mouse.down();
+  await p.mouse.move(wrap.x + 950, wrap.y + 600, { steps: 8 });
+  await p.mouse.up();
+  await sleep(500);
+  t("pulling a guide does not change the selection",
+    (await p.evaluate(() => document.querySelector(".inspector")?.innerText.slice(0, 20) || "")) === sel);
+
+  // double-click removes one
+  const before = await p.evaluate(() => document.querySelectorAll(".guide-x").length);
+  await p.evaluate(() => {
+    const g = document.querySelector(".guide-x");
+    g.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+  });
+  await sleep(500);
+  t(`double-click removes a guide (${before} -> ${await p.evaluate(() => document.querySelectorAll(".guide-x").length)})`,
+    (await p.evaluate(() => document.querySelectorAll(".guide-x").length)) === before - 1);
+
+  // guides belong to the page, so they persist
+  await sleep(1300);
+  await p.reload({ waitUntil: "networkidle0" });
+  await sleep(1200);
+  t("guides survive a reload",
+    (await p.evaluate(() => document.querySelectorAll(".guide").length)) >= 2);
+  await p.close();
+}
+
+// 20. minimap --------------------------------------------------------------
+{
+  const p = await page();
+  t("minimap is off by default", (await p.evaluate(() => document.querySelectorAll(".minimap").length)) === 0);
+  await p.keyboard.down("Shift"); await p.keyboard.press("M"); await p.keyboard.up("Shift");
+  await sleep(600);
+  t("Shift+M shows the minimap", (await p.evaluate(() => document.querySelectorAll(".minimap").length)) === 1);
+
+  // it must actually draw the document, not sit there as an empty box
+  const ink = await p.evaluate(() => {
+    const c = document.querySelector(".minimap canvas");
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i + 3] > 10) n++;
+    return n;
+  });
+  t(`the thumbnail renders content (${ink}px)`, ink > 5000);
+
+  // clicking the centre must centre the viewport there; the rectangle also has
+  // to stay inside the thumbnail, which it did not when the fit ignored the
+  // viewport and the visible area was larger than the artwork.
+  const mm = await p.evaluate(() => {
+    const c = document.querySelector(".minimap canvas").getBoundingClientRect();
+    return { x: c.left, y: c.top, w: c.width, h: c.height };
+  });
+  await p.mouse.click(Math.round(mm.x + mm.w / 2), Math.round(mm.y + mm.h / 2));
+  await sleep(700);
+  const rect = await p.evaluate(() => {
+    const c = document.querySelector(".minimap canvas");
+    const dpr = window.devicePixelRatio || 1;
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let minX = 1e9, minY = 1e9, maxX = -1, maxY = -1;
+    for (let y = 0; y < c.height; y++) {
+      for (let x = 0; x < c.width; x++) {
+        const i = (y * c.width + x) * 4;
+        if (d[i] < 90 && d[i + 1] > 120 && d[i + 2] > 200) {
+          if (x < minX) minX = x; if (x > maxX) maxX = x;
+          if (y < minY) minY = y; if (y > maxY) maxY = y;
+        }
+      }
+    }
+    return maxX < 0 ? null : {
+      cx: (minX + maxX) / 2 / dpr, cy: (minY + maxY) / 2 / dpr,
+      w: (maxX - minX) / dpr, h: (maxY - minY) / dpr,
+    };
+  });
+  t("the viewport rectangle is drawn", !!rect);
+  if (rect) {
+    t(`clicking centres the viewport (dx=${Math.abs(rect.cx - mm.w / 2).toFixed(0)}, dy=${Math.abs(rect.cy - mm.h / 2).toFixed(0)})`,
+      Math.abs(rect.cx - mm.w / 2) < 6 && Math.abs(rect.cy - mm.h / 2) < 6);
+    t(`the viewport rectangle fits the thumbnail (${rect.w.toFixed(0)}x${rect.h.toFixed(0)})`,
+      rect.w <= mm.w && rect.h <= mm.h);
+  }
+
+  await p.keyboard.down("Shift"); await p.keyboard.press("M"); await p.keyboard.up("Shift");
+  await sleep(500);
+  t("Shift+M hides it again", (await p.evaluate(() => document.querySelectorAll(".minimap").length)) === 0);
+  await p.close();
+}
+
+// 21. remaining gaps: stroke styles and draggable comment pins -------------
+{
+  const p = await page();
+  let reply = "Brand";
+  const onDialog = async (d) => {
+    if (d.type() === "confirm") await d.accept();   // create from the stroke
+    else await d.accept(reply);
+  };
+  p.on("dialog", onDialog);
+  await p.evaluate(() => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="140">
+      <rect x="20" y="20" width="150" height="90" fill="#dddddd" stroke="#ff0000" stroke-width="8"/></svg>`;
+    const dt = new DataTransfer();
+    dt.items.add(new File([svg], "a.svg", { type: "image/svg+xml" }));
+    document.querySelector(".canvas-wrap").dispatchEvent(
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 800, clientY: 520 }));
+  });
+  await sleep(1400);
+  await p.evaluate(() => {
+    const el = [...document.querySelectorAll("button")]
+      .find((x) => (x.getAttribute("aria-label") || x.textContent).trim() === "Vars");
+    el.click();
+  });
+  await sleep(500);
+  await p.evaluate(() => {
+    const el = [...document.querySelectorAll(".panel.left button.plus")]
+      .find((x) => x.getAttribute("title") === "Create style from selection");
+    el && el.click();
+  });
+  await sleep(900);
+  // The engine has always supported stroke styles; only the UI was missing.
+  const swatch = await p.evaluate(() => {
+    const el = document.querySelector('.panel.left button[aria-label^="Apply style"]');
+    return el ? getComputedStyle(el).backgroundColor : "";
+  });
+  t(`a style can be created from the stroke (${swatch})`, swatch.includes("255, 0, 0"));
+  t("a bound selection offers detach", (await p.evaluate(() =>
+    document.querySelectorAll('.panel.left button[aria-label^="Detach style"]').length)) === 1);
+  await p.evaluate(() => {
+    const el = document.querySelector('.panel.left button[aria-label^="Detach style"]');
+    el && el.click();
+  });
+  await sleep(700);
+  t("detaching drops the binding", (await p.evaluate(() =>
+    document.querySelectorAll('.panel.left button[aria-label^="Detach style"]').length)) === 0);
+
+  // comment pins: moveComment existed in the engine with no way to reach it
+  await p.evaluate(() => {
+    const el = [...document.querySelectorAll("button")]
+      .find((x) => (x.getAttribute("aria-label") || x.textContent).trim() === "File");
+    el.click();
+  });
+  await sleep(500);
+  const wrap = await p.evaluate(() => {
+    const r = document.querySelector(".canvas-wrap").getBoundingClientRect();
+    return { x: Math.round(r.left), y: Math.round(r.top) };
+  });
+  await p.keyboard.press("c");
+  await sleep(300);
+  await p.mouse.click(wrap.x + 700, wrap.y + 300);
+  await sleep(450);
+  await p.keyboard.type("Move me");
+  await p.keyboard.press("Enter");
+  await sleep(800);
+  const pinLeft = () => p.evaluate(() => Math.round(document.querySelector(".cm-pin").getBoundingClientRect().left));
+  const pinCentre = () => p.evaluate(() => {
+    const r = document.querySelector(".cm-pin").getBoundingClientRect();
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+  });
+  const before = await pinLeft();
+  await p.keyboard.press("v");
+  const c = await pinCentre();
+  await p.mouse.move(c.x, c.y);
+  await p.mouse.down();
+  await p.mouse.move(c.x + 60, c.y, { steps: 8 });
+  await p.mouse.move(c.x + 140, c.y, { steps: 8 });
+  await p.mouse.up();
+  await sleep(700);
+  const after = await pinLeft();
+  t(`a comment pin can be dragged (${before} -> ${after})`, Math.abs(after - before) > 100);
+
+  // a press that never moves must still count as a click
+  let c2 = await pinCentre();
+  await p.mouse.click(c2.x, c2.y);
+  await sleep(600);
+  const closed = !(await p.evaluate(() => !!document.querySelector(".cm-pop")));
+  c2 = await pinCentre();
+  await p.mouse.click(c2.x, c2.y);
+  await sleep(600);
+  t("dragging did not break click-to-open",
+    closed && (await p.evaluate(() => !!document.querySelector(".cm-pop"))));
+
+  // the new anchor is part of the document
+  await sleep(1300);
+  await p.reload({ waitUntil: "networkidle0" });
+  await sleep(1200);
+  t(`the moved pin persists (${await pinLeft()})`, Math.abs((await pinLeft()) - after) < 4);
+  p.off("dialog", onDialog);
   await p.close();
 }
 

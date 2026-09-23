@@ -98,6 +98,27 @@ jobs:
           cat /tmp/gate.log || true
           exit $status
 
+      # The wasm bridge (crates/x-wasm) is the first slice connecting the Rust
+      # engine to the web app; see docs/ARCHITECTURE_BOUNDARY.md. Building it
+      # here is what makes the boundary mechanically checkable instead of a
+      # review rule — the sandbox this is developed in cannot reach the Rust
+      # toolchain hosts, so CI is the only place the artifact is produced.
+      #
+      # Runs after the Gate so a wasm failure can never be mistaken for, or
+      # mask, a workspace failure.
+      - name: Wasm bridge
+        run: |
+          rustup target add wasm32-unknown-unknown --toolchain 1.98.1
+          cargo build -p x-wasm --target wasm32-unknown-unknown --release --locked
+          ls -la target/wasm32-unknown-unknown/release/*.wasm
+
+      - name: Upload wasm artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: x-wasm
+          path: X-Native/target/wasm32-unknown-unknown/release/x_wasm.wasm
+          if-no-files-found: error
+
       # scripts/check.sh is deliberately opaque: cargo writes into temp files it
       # greps, the CLI build sends stderr to /dev/null, and the clippy branch
       # prints only lines starting with "error". When the gate fails, re-run the

@@ -10,12 +10,18 @@ import {
   type GapBadge,
   type Guide,
 } from "../engine/snapping";
-import { fillStyle, paintDropShadows, paintFill, paintImageFill, paintInnerShadows } from "../engine/paint";
+import { fillStyle, paintDropShadows, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows } from "../engine/paint";
 import { Rulers } from "./Rulers";
+import { Guides } from "./Guides";
+import { Minimap } from "./Minimap";
 import { Comments } from "./Comments";
 import { useTheme } from "./theme";
 import { cssRgba, isNone, parseHex, takeEyedrop, toHex } from "./color";
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
+import { importSvg, type ImportedNode } from "../engine/svgImport";
+import { importSketch } from "../engine/sketchImport";
+import { importFig } from "../engine/figImport";
+import { toast } from "./toast";
 
 /** Snap radius in screen pixels; divided by zoom to get world tolerance. */
 const SNAP_PX = 6;
@@ -391,27 +397,35 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           ctx.stroke();
           ctx.restore();
         }
+        paintExtraStrokes(ctx, n, z, () =>
+          tracePath(ctx, n.path.length ? n.path : shapePoly(n), snap.panX + x * z, snap.panY + y * z, z, true),
+        );
         ctx.restore();
         return;
       }
-      if (n.kind === "text") {
-        ctx.beginPath();
-      } else if ((n.kind === "vector" || n.kind === "boolean") && n.path.length) {
-        tracePath(ctx, n.path, snap.panX + x * z, snap.panY + y * z, z, n.closed);
-      } else if (n.kind === "ellipse") {
-        ctx.beginPath();
-        ctx.ellipse(sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), 0, 0, Math.PI * 2);
-      } else if (n.kind === "line" || n.kind === "arrow") {
-        ctx.beginPath();
-        ctx.moveTo(sx, sy + sh / 2);
-        ctx.lineTo(sx + sw, sy + sh / 2);
-      } else if (n.kind === "star") {
-        starPath(ctx, sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), n.count || 5, n.starRatio || 0.4);
-      } else if (n.kind === "poly") {
-        polyPath(ctx, sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), n.count || 3);
-      } else {
-        round();
-      }
+      // Named so extra stroke layers can re-trace the same outline; a stroke
+      // pass changes lineWidth and may clip, so the path has to be rebuilt.
+      const traceShape = () => {
+        if (n.kind === "text") {
+          ctx.beginPath();
+        } else if ((n.kind === "vector" || n.kind === "boolean") && n.path.length) {
+          tracePath(ctx, n.path, snap.panX + x * z, snap.panY + y * z, z, n.closed);
+        } else if (n.kind === "ellipse") {
+          ctx.beginPath();
+          ctx.ellipse(sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), 0, 0, Math.PI * 2);
+        } else if (n.kind === "line" || n.kind === "arrow") {
+          ctx.beginPath();
+          ctx.moveTo(sx, sy + sh / 2);
+          ctx.lineTo(sx + sw, sy + sh / 2);
+        } else if (n.kind === "star") {
+          starPath(ctx, sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), n.count || 5, n.starRatio || 0.4);
+        } else if (n.kind === "poly") {
+          polyPath(ctx, sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), n.count || 3);
+        } else {
+          round();
+        }
+      };
+      traceShape();
       const bgBlur = (n.effects ?? []).find(
         (e) => (e.kind === "background-blur" || e.kind === "glass") && e.visible,
       );
@@ -538,6 +552,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         }
         ctx.restore();
       }
+      paintExtraStrokes(ctx, n, z, traceShape);
       if (n.kind === "text" && edit?.id !== n.id) {
         paintText(ctx, n, sx, sy, sw, sh, z);
       }
@@ -1382,7 +1397,12 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           const bb = selectionBounds(root2, sel);
           if (bb) {
             const moved = { id: "sel", x: bb.x + dx, y: bb.y + dy, w: bb.w, h: bb.h };
-            const res = snapMove(moved, snapTargets.current, SNAP_PX / snap.zoom);
+            const res = snapMove(
+              moved,
+              snapTargets.current,
+              SNAP_PX / snap.zoom,
+              snap.pages[snap.page].guides,
+            );
             dx += res.dx;
             dy += res.dy;
             setGuides(res.guides);
@@ -1858,8 +1878,98 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     hoverIx.current = "";
   };
 
+  /** SVG is a vector format, so it becomes editable layers rather than a flat
+   *  image fill. Everything else is placed as an image as before. */
+  const placeSvg = (file: File, at?: { x: number; y: number }) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      let result;
+      try {
+        result = importSvg(String(reader.result));
+      } catch {
+        toast(`Could not read ${file.name}`);
+        return;
+      }
+      placeNodes(result, file.name, at);
+    };
+    reader.readAsText(file);
+  };
+
+  /** Shared tail for every vector-ish import: place the produced nodes as one
+   *  undo step and report what happened. */
+  const placeNodes = (
+    result: { nodes: ImportedNode[]; skipped: number },
+    fileName: string,
+    at?: { x: number; y: number },
+  ) => {
+    if (!result.nodes.length) {
+      toast(`Nothing importable in ${fileName}`);
+      return;
+    }
+    const ox = at?.x ?? 80;
+    const oy = at?.y ?? 80;
+    const current = engine.snapshot();
+    const root = current.pages[current.page].root;
+    const host = deepestFrame(root, ox, oy);
+    const origin = host ? worldToLocal(root, host.id, ox, oy) : { x: ox, y: oy };
+    engine.dispatch({ type: "begin" });
+    for (const n of result.nodes) {
+      const { kind, name, x, y, w, h, ...rest } = n;
+      // Spreading an explicit `undefined` overwrites the node factory's
+      // default (cornerRadii became undefined and crashed the inspector), so
+      // unset optional fields must be dropped rather than passed through.
+      for (const k of Object.keys(rest) as (keyof typeof rest)[]) {
+        if (rest[k] === undefined) delete rest[k];
+      }
+      engine.dispatch({
+        type: "add",
+        kind,
+        x: origin.x + x,
+        y: origin.y + y,
+        w: Math.max(1, w),
+        h: Math.max(1, h),
+        parent: host?.id,
+        extra: { name, ...rest } as Partial<XNode>,
+      });
+    }
+    engine.dispatch({ type: "end" });
+    toast(
+      result.skipped
+        ? `Imported ${result.nodes.length} layers · ${result.skipped} unsupported skipped`
+        : `Imported ${result.nodes.length} layers`,
+    );
+  };
+
+  const placeSketch = (file: File, at?: { x: number; y: number }) => {
+    file
+      .arrayBuffer()
+      .then((buf) => importSketch(buf))
+      .then((result) => placeNodes(result, file.name, at))
+      .catch((err: unknown) => {
+        toast(`Could not read ${file.name}: ${err instanceof Error ? err.message : "unreadable"}`);
+      });
+  };
+
+  const placeFig = (file: File, at?: { x: number; y: number }) => {
+    file
+      .arrayBuffer()
+      .then((buf) => importFig(buf))
+      .then((result) => placeNodes(result, file.name, at))
+      .catch((err: unknown) => {
+        toast(`Could not read ${file.name}: ${err instanceof Error ? err.message : "unreadable"}`);
+      });
+  };
+
   const placeFiles = (files: FileList | File[], at?: { x: number; y: number }) => {
-    const list = Array.from(files).filter((f) => f.type.startsWith("image/"));
+    const all = Array.from(files);
+    for (const f of all) {
+      if (f.type === "image/svg+xml" || /\.svg$/i.test(f.name)) placeSvg(f, at);
+      else if (/\.sketch$/i.test(f.name)) placeSketch(f, at);
+      else if (/\.fig$/i.test(f.name)) placeFig(f, at);
+    }
+    const list = all.filter(
+      (f) => f.type.startsWith("image/") && f.type !== "image/svg+xml" && !/\.svg$/i.test(f.name),
+    );
     let ox = at?.x ?? 80;
     let oy = at?.y ?? 80;
     list.forEach((file) => {
@@ -1997,6 +2107,17 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         />
       )}
       {snap.showRulers && (
+        <Guides
+          guides={snap.pages[snap.page].guides}
+          engine={engine}
+          zoom={snap.zoom}
+          panX={snap.panX}
+          panY={snap.panY}
+          width={box.w}
+          height={box.h}
+        />
+      )}
+      {snap.showRulers && (
         <Rulers
           zoom={snap.zoom}
           panX={snap.panX}
@@ -2005,6 +2126,18 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           height={box.h}
           theme={theme}
           selection={selectionBounds(snap.pages[snap.page].root, snap.selection)}
+        />
+      )}
+      {snap.showMinimap && !snap.presentFrame && (
+        <Minimap
+          root={snap.pages[snap.page].root}
+          engine={engine}
+          zoom={snap.zoom}
+          panX={snap.panX}
+          panY={snap.panY}
+          viewW={box.w}
+          viewH={box.h}
+          theme={theme}
         />
       )}
       {transition && <div className={`proto-transition ${transition}`} aria-hidden="true" />}
@@ -2042,7 +2175,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       <input
         ref={fileRef}
         type="file"
-        accept="image/png,image/jpeg,image/gif,image/webp,image/*"
+        accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml,.svg,.sketch,.fig,image/*"
         hidden
         onChange={(e) => {
           if (e.target.files) placeFiles(e.target.files, pendingImage.current ?? undefined);
