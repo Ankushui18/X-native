@@ -28,7 +28,10 @@ fn envelope(result: Result<String, String>) -> String {
         Err(e) => {
             // The message is user-visible, so escape it rather than trusting
             // importer text to be JSON-safe.
-            let msg = e.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', " ");
+            let msg = e
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', " ");
             format!("{{\"ok\":false,\"error\":\"{msg}\"}}")
         }
     }
