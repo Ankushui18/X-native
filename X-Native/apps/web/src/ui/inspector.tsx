@@ -35,6 +35,7 @@ import { Tooltip } from "./Tooltip";
 import { copyText } from "../engine/clipboard";
 import { buildPdf } from "../engine/pdf";
 import { plural, toast } from "./toast";
+import { armPopover } from "./popoverGuard";
 import { ZOOM_STEPS, parseZoomInput, stepZoom, zoomLabel, zoomTo } from "./zoom";
 import { DEVICE_GROUPS, DevicePreview, deviceFor } from "./devices";
 import { roundToPixel } from "./round";
@@ -1310,6 +1311,7 @@ function DevLangMenu({
       window.removeEventListener("keydown", esc);
     };
   }, [open]);
+  useEffect(() => (open ? armPopover() : undefined), [open]);
   const current = DEV_LANGS.find((l) => l.id === format)?.label ?? "CSS";
   const pick = (fn: () => void) => () => {
     fn();
@@ -1706,6 +1708,8 @@ function DevAnnotations({ n, engine, snap }: { n: XNode; engine: Engine; snap: S
     window.addEventListener("x-native-annotate", on);
     return () => window.removeEventListener("x-native-annotate", on);
   }, []);
+  // While the property menu is open it owns Escape, like the language menu.
+  useEffect(() => (pin ? armPopover() : undefined), [pin]);
   const list = (snap.annotations ?? []).filter((a) => a.nodeId === n.id) ?? [];
   const pins: [string, () => string][] = [
     ["Fill", () => (n.fillVisible === false || isNone(n.fill) ? "Fill: none" : `Fill: ${n.fill.toUpperCase()}`)],

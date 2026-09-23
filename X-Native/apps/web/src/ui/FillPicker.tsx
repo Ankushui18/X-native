@@ -27,6 +27,7 @@ import {
   type FillType,
   type ImageFit,
 } from "./color";
+import { armPopover } from "./popoverGuard";
 
 export interface FillValue {
   color: string;
@@ -122,9 +123,12 @@ export function FillPicker({
     };
     window.addEventListener("mousedown", on);
     window.addEventListener("keydown", key);
+    // Escape closes the picker; it should not also drop the selection behind it.
+    const disarm = armPopover();
     return () => {
       window.removeEventListener("mousedown", on);
       window.removeEventListener("keydown", key);
+      disarm();
     };
   }, [onClose, value]);
 

@@ -4,6 +4,7 @@ import { collectColors, defaultLayout, find } from "../engine/memory";
 import { Icon, TOOL_ICON, kindIcon } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { plural, toast } from "./toast";
+import { popoverArmed } from "./popoverGuard";
 import { useTheme, type ThemePref } from "./theme";
 import { ContextMenu, isGroupNode, layerMenu, pageMenu, runMenu } from "./ContextMenu";
 import { align } from "./inspector";
@@ -1180,6 +1181,9 @@ export function bindHotkeys(
       return;
     }
     if (e.key === "Escape") {
+      // A popover that is open owns Escape: its own handler closes it, and the
+      // selection behind it must survive the keypress.
+      if (popoverArmed()) return;
       if (engine.snapshot().presentFrame) {
         extra.onPresentExit?.();
         return;
