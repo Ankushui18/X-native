@@ -416,6 +416,13 @@ interface Internal {
   styles: SharedStyle[];
   presentFrame: string;
   presentStack: string[];
+  prototypeDevice: Snapshot["prototypeDevice"];
+  prototypeOrientation: Snapshot["prototypeOrientation"];
+  prototypeScale: Snapshot["prototypeScale"];
+  prototypeHotspots: boolean;
+  prototypeLiveInputs: boolean;
+  prototypeSound: boolean;
+  activeOverlay: Snapshot["activeOverlay"];
   showRulers: boolean;
   showMinimap: boolean;
   showComments: boolean;
@@ -520,6 +527,13 @@ export class MemoryEngine implements Engine {
       styles: doc?.styles ?? [],
       presentFrame: "",
       presentStack: [],
+      prototypeDevice: "none",
+      prototypeOrientation: "portrait",
+      prototypeScale: "fit",
+      prototypeHotspots: true,
+      prototypeLiveInputs: true,
+      prototypeSound: true,
+      activeOverlay: null,
       showRulers: doc?.showRulers ?? false,
       showMinimap: doc?.showMinimap ?? false,
       showComments: doc?.showComments ?? false,
@@ -674,6 +688,13 @@ export class MemoryEngine implements Engine {
       openComment: this.state.openComment,
       presentFrame: this.state.presentFrame,
       presentStack: this.state.presentStack,
+      prototypeDevice: this.state.prototypeDevice,
+      prototypeOrientation: this.state.prototypeOrientation,
+      prototypeScale: this.state.prototypeScale,
+      prototypeHotspots: this.state.prototypeHotspots,
+      prototypeLiveInputs: this.state.prototypeLiveInputs,
+      prototypeSound: this.state.prototypeSound,
+      activeOverlay: this.state.activeOverlay,
       variables: this.state.variables,
       annotations: this.state.annotations,
     };
@@ -1655,6 +1676,37 @@ export class MemoryEngine implements Engine {
       case "presentStop":
         s.presentFrame = "";
         s.presentStack = [];
+        s.activeOverlay = null;
+        break;
+      case "setPrototypeDevice":
+        s.prototypeDevice = cmd.device;
+        break;
+      case "setPrototypeOrientation":
+        s.prototypeOrientation = cmd.orientation;
+        break;
+      case "setPrototypeScale":
+        s.prototypeScale = cmd.scale;
+        break;
+      case "togglePrototypeHotspots":
+        s.prototypeHotspots = cmd.enabled !== undefined ? cmd.enabled : !s.prototypeHotspots;
+        break;
+      case "togglePrototypeLiveInputs":
+        s.prototypeLiveInputs = cmd.enabled !== undefined ? cmd.enabled : !s.prototypeLiveInputs;
+        break;
+      case "togglePrototypeSound":
+        s.prototypeSound = cmd.enabled !== undefined ? cmd.enabled : !s.prototypeSound;
+        break;
+      case "openOverlay":
+        s.activeOverlay = {
+          id: cmd.id,
+          position: cmd.position || "center",
+          closeOutside: cmd.closeOutside !== false,
+          backdrop: cmd.backdrop !== false,
+          backdropColor: cmd.backdropColor || "rgba(0, 0, 0, 0.45)",
+        };
+        break;
+      case "closeOverlay":
+        s.activeOverlay = null;
         break;
       case "distribute": {
         const items = s.selection
@@ -1736,10 +1788,14 @@ function reid(n: XNode, ids?: Map<string, string>) {
 function focusFrame(s: Internal, root: XNode, id: string) {
   const wp = worldPos(root, id);
   if (!wp) return;
-  const z = Math.min(1.2, Math.max(0.25, 720 / Math.max(wp.node.w, 1)));
+  const vw = typeof window !== "undefined" ? window.innerWidth : 1200;
+  const vh = typeof window !== "undefined" ? window.innerHeight : 800;
+  const availW = Math.max(300, vw - 160);
+  const availH = Math.max(300, vh - 160);
+  const z = Math.min(1.0, Math.max(0.2, Math.min(availW / Math.max(wp.node.w, 1), availH / Math.max(wp.node.h, 1))));
   s.zoom = z;
-  s.panX = 48 - wp.x * z;
-  s.panY = 48 - wp.y * z;
+  s.panX = Math.round((vw - wp.node.w * z) / 2 - wp.x * z);
+  s.panY = Math.round((vh - wp.node.h * z) / 2 - wp.y * z);
 }
 
 function framesOf(root: XNode): XNode[] {

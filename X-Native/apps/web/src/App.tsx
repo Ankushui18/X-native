@@ -14,6 +14,7 @@ import {
 } from "./ui/chrome";
 import { RightPanel } from "./ui/inspector";
 import { FigInspectorModal } from "./ui/FigInspectorModal";
+import { PresentationPlayer } from "./ui/PresentationPlayer";
 import { subscribeToast, toast as toastMsg } from "./ui/toast";
 import { saveDoc } from "./engine/persist";
 
@@ -119,8 +120,11 @@ export default function App() {
         onPresentExit: () => {
           const s = engine.snapshot();
           if (s.presentFrame) {
-            if (s.presentStack.length > 1) engine.dispatch({ type: "presentBack" });
-            else {
+            if (s.activeOverlay) {
+              engine.dispatch({ type: "closeOverlay" });
+            } else if (s.presentStack.length > 1) {
+              engine.dispatch({ type: "presentBack" });
+            } else {
               engine.dispatch({ type: "presentStop" });
               setHideUi(false);
             }
@@ -164,8 +168,21 @@ export default function App() {
       />
       <div className="canvas-col">
         <Canvas engine={engine} snap={snap} />
-        <Toolbar engine={engine} snap={snap} onActions={() => setActions(true)} />
-        <HelpBtn />
+        {snap.presentFrame ? (
+          <PresentationPlayer
+            engine={engine}
+            snap={snap}
+            onExit={() => {
+              engine.dispatch({ type: "presentStop" });
+              setHideUi(false);
+            }}
+          />
+        ) : (
+          <>
+            <Toolbar engine={engine} snap={snap} onActions={() => setActions(true)} />
+            <HelpBtn />
+          </>
+        )}
         {actions && (
           <Actions
             engine={engine}

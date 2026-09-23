@@ -563,5 +563,44 @@ console.log("component instance overrides:");
   }
 }
 
+{
+  console.log("advanced prototyping & presentation (better than Figma):");
+  const ep = new MemoryEngine();
+  t("default prototype settings present", ep.snapshot().prototypeDevice === "none");
+  t("default prototype hotspots enabled", ep.snapshot().prototypeHotspots === true);
+  t("default prototype live inputs enabled", ep.snapshot().prototypeLiveInputs === true);
+
+  // Set prototype device
+  ep.dispatch({ type: "setPrototypeDevice", device: "iphone-16-pro" });
+  t("setPrototypeDevice sets iphone-16-pro", ep.snapshot().prototypeDevice === "iphone-16-pro");
+
+  // Toggle live inputs and hotspots
+  ep.dispatch({ type: "togglePrototypeHotspots", enabled: false });
+  t("togglePrototypeHotspots toggles false", ep.snapshot().prototypeHotspots === false);
+
+  ep.dispatch({ type: "togglePrototypeLiveInputs", enabled: false });
+  t("togglePrototypeLiveInputs toggles false", ep.snapshot().prototypeLiveInputs === false);
+
+  // Overlays
+  ep.dispatch({
+    type: "openOverlay",
+    id: "frame-overlay-1",
+    position: "bottom",
+    closeOutside: true,
+    backdrop: true,
+  });
+  t("openOverlay registers activeOverlay", ep.snapshot().activeOverlay?.id === "frame-overlay-1");
+  t("activeOverlay preserves position bottom", ep.snapshot().activeOverlay?.position === "bottom");
+  t("activeOverlay preserves backdrop", ep.snapshot().activeOverlay?.backdrop === true);
+
+  ep.dispatch({ type: "closeOverlay" });
+  t("closeOverlay clears activeOverlay", ep.snapshot().activeOverlay === null);
+
+  // Variable execution in prototype
+  const varId = ep.snapshot().variables?.[2].id;
+  ep.dispatch({ type: "patchVariable", id: varId, patch: { value: 9 } });
+  t("patchVariable executes state mutation", ep.snapshot().variables?.find((v) => v.id === varId)?.value === 9);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);

@@ -45,7 +45,16 @@ export type EffectKind =
   | "glass"
   | "texture";
 export type BooleanOp = "union" | "subtract" | "intersect" | "exclude";
-export type ProtoTrigger = "onClick" | "onHover" | "afterDelay";
+export type ProtoTrigger =
+  | "onClick"
+  | "onHover"
+  | "afterDelay"
+  | "mouseEnter"
+  | "mouseLeave"
+  | "mouseDown"
+  | "mouseUp"
+  | "keyPress"
+  | "onDrag";
 export type ProtoAction =
   | "navigate"
   | "back"
@@ -53,8 +62,26 @@ export type ProtoAction =
   | "openOverlay"
   | "closeOverlay"
   | "swapOverlay"
-  | "openUrl";
-export type ProtoAnim = "instant" | "dissolve" | "smart";
+  | "openUrl"
+  | "setVariable";
+export type ProtoAnim =
+  | "instant"
+  | "dissolve"
+  | "smart"
+  | "slideInLeft"
+  | "slideInRight"
+  | "slideInTop"
+  | "slideInBottom"
+  | "pushLeft"
+  | "pushRight";
+
+export type ProtoDevice =
+  | "iphone-16-pro"
+  | "pixel-9"
+  | "ipad-pro"
+  | "macbook-pro"
+  | "apple-watch"
+  | "none";
 
 export type VariableType = "color" | "number" | "string" | "boolean";
 
@@ -124,6 +151,16 @@ export interface Interaction {
   destination: string;
   animation: ProtoAnim;
   delay: number;
+  duration?: number;
+  easing?: "linear" | "easeIn" | "easeOut" | "easeInOut" | "spring";
+  overlayPosition?: "center" | "top" | "bottom" | "left" | "right" | "manual";
+  overlayCloseOutside?: boolean;
+  overlayBackdrop?: boolean;
+  overlayBackdropColor?: string;
+  keyKey?: string;
+  variableId?: string;
+  variableOp?: "set" | "increment" | "decrement" | "toggle";
+  variableValue?: string | number | boolean;
 }
 
 export interface ComponentVariant {
@@ -458,6 +495,19 @@ export interface Snapshot {
   styles: SharedStyle[];
   presentFrame: string;
   presentStack: string[];
+  prototypeDevice?: ProtoDevice;
+  prototypeOrientation?: "portrait" | "landscape";
+  prototypeScale?: "fit" | "100%" | "fill";
+  prototypeHotspots?: boolean;
+  prototypeLiveInputs?: boolean;
+  prototypeSound?: boolean;
+  activeOverlay?: {
+    id: string;
+    position?: "center" | "top" | "bottom" | "left" | "right" | "manual";
+    closeOutside?: boolean;
+    backdrop?: boolean;
+    backdropColor?: string;
+  } | null;
   /** Figma's View > Rulers (⇧R). */
   showRulers: boolean;
   /** Figma's View > Minimap. Off by default; it costs its own render pass. */
@@ -577,7 +627,22 @@ export type Command =
   | { type: "presentStart"; id?: string }
   | { type: "presentGo"; id: string }
   | { type: "presentBack" }
-  | { type: "presentStop" };
+  | { type: "presentStop" }
+  | { type: "setPrototypeDevice"; device: ProtoDevice }
+  | { type: "setPrototypeOrientation"; orientation: "portrait" | "landscape" }
+  | { type: "setPrototypeScale"; scale: "fit" | "100%" | "fill" }
+  | { type: "togglePrototypeHotspots"; enabled?: boolean }
+  | { type: "togglePrototypeLiveInputs"; enabled?: boolean }
+  | { type: "togglePrototypeSound"; enabled?: boolean }
+  | {
+      type: "openOverlay";
+      id: string;
+      position?: "center" | "top" | "bottom" | "left" | "right" | "manual";
+      closeOutside?: boolean;
+      backdrop?: boolean;
+      backdropColor?: string;
+    }
+  | { type: "closeOverlay" };
 
 export interface Engine {
   snapshot(): Snapshot;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Engine, Interaction, NodeKind, PathPoint, Snapshot, Tool, VectorNetwork, XNode } from "../engine/types";
+import type { Engine, Interaction, NodeKind, PathPoint, ProtoAnim, Snapshot, Tool, VectorNetwork, XNode } from "../engine/types";
 import { deepestFrame, find, findParent, hitTest, worldToLocal, worldPos } from "../engine/memory";
 import { erasePath, shapePoly, simplifyPath, smoothPath, vertexDegree, insertPointOnPath, projectPointOnSegment } from "../engine/geometry";
 import {
@@ -141,7 +141,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const [draft, setDraft] = useState<PathPoint[]>([]);
   const [ghost, setGhost] = useState<PathPoint | null>(null);
   const [hoverId, setHoverId] = useState("");
-  const [transition, setTransition] = useState<"dissolve" | "smart" | null>(null);
+  const [transition, setTransition] = useState<ProtoAnim | null>(null);
   const pencil = useRef<PathPoint[] | null>(null);
   const penDrag = useRef<{ i: number; x: number; y: number } | null>(null);
   const vecPt = useRef(-1);
@@ -185,9 +185,35 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             });
           }
         } else if (ix.action === "openOverlay" && ix.destination) {
-          engine.dispatch({ type: "presentGo", id: ix.destination });
+          engine.dispatch({
+            type: "openOverlay",
+            id: ix.destination,
+            position: ix.overlayPosition || "center",
+            closeOutside: ix.overlayCloseOutside !== false,
+            backdrop: ix.overlayBackdrop !== false,
+            backdropColor: ix.overlayBackdropColor,
+          });
+        } else if (ix.action === "swapOverlay" && ix.destination) {
+          engine.dispatch({
+            type: "openOverlay",
+            id: ix.destination,
+            position: ix.overlayPosition || "center",
+            closeOutside: ix.overlayCloseOutside !== false,
+            backdrop: ix.overlayBackdrop !== false,
+            backdropColor: ix.overlayBackdropColor,
+          });
         } else if (ix.action === "closeOverlay") {
-          engine.dispatch({ type: "presentBack" });
+          engine.dispatch({ type: "closeOverlay" });
+        } else if (ix.action === "setVariable" && ix.variableId) {
+          const s = engine.snapshot();
+          const v = s.variables?.find((varItem) => varItem.id === ix.variableId);
+          if (v) {
+            let nextVal = ix.variableValue !== undefined ? ix.variableValue : v.value;
+            if (ix.variableOp === "increment" && typeof v.value === "number") nextVal = v.value + 1;
+            else if (ix.variableOp === "decrement" && typeof v.value === "number") nextVal = v.value - 1;
+            else if (ix.variableOp === "toggle") nextVal = !v.value;
+            engine.dispatch({ type: "patchVariable", id: ix.variableId, patch: { value: nextVal } });
+          }
         }
       };
       if (ix.animation === "instant" || ix.action === "openUrl") {
@@ -681,6 +707,34 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     if (present) {
       const wp = worldPos(root, present.id);
       paint(present, wp ? wp.x - present.x : 0, wp ? wp.y - present.y : 0);
+
+      // Paint active overlay if present
+      if (snap.activeOverlay?.id) {
+        const overlayNode = find(root, snap.activeOverlay.id);
+        if (overlayNode && wp) {
+          if (snap.activeOverlay.backdrop !== false) {
+            ctx.save();
+            ctx.fillStyle = snap.activeOverlay.backdropColor || "rgba(0, 0, 0, 0.45)";
+            ctx.fillRect(
+              snap.panX + wp.x * z,
+              snap.panY + wp.y * z,
+              present.w * z,
+              present.h * z,
+            );
+            ctx.restore();
+          }
+          let ox = wp.x + (present.w - overlayNode.w) / 2;
+          let oy = wp.y + (present.h - overlayNode.h) / 2;
+          if (snap.activeOverlay.position === "bottom") {
+            ox = wp.x + (present.w - overlayNode.w) / 2;
+            oy = wp.y + present.h - overlayNode.h;
+          } else if (snap.activeOverlay.position === "top") {
+            ox = wp.x + (present.w - overlayNode.w) / 2;
+            oy = wp.y;
+          }
+          paint(overlayNode, ox - overlayNode.x, oy - overlayNode.y);
+        }
+      }
     } else {
       for (const ch of root.children) paint(ch, 0, 0);
     }
@@ -1326,6 +1380,48 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     if (snap.presentFrame) {
       const wpt = toWorld(e.clientX, e.clientY);
       const root = snap.pages[snap.page].root;
+
+      // Handle active overlay clicks & dismiss
+      if (snap.activeOverlay?.id) {
+        const overlayNode = find(root, snap.activeOverlay.id);
+        const presentNode = find(root, snap.presentFrame);
+        if (overlayNode && presentNode) {
+          const wp = worldPos(root, presentNode.id);
+          if (wp) {
+            let ox = wp.x + (presentNode.w - overlayNode.w) / 2;
+            let oy = wp.y + (presentNode.h - overlayNode.h) / 2;
+            if (snap.activeOverlay.position === "bottom") {
+              ox = wp.x + (presentNode.w - overlayNode.w) / 2;
+              oy = wp.y + presentNode.h - overlayNode.h;
+            } else if (snap.activeOverlay.position === "top") {
+              ox = wp.x + (presentNode.w - overlayNode.w) / 2;
+              oy = wp.y;
+            }
+            if (
+              wpt.x >= ox &&
+              wpt.x <= ox + overlayNode.w &&
+              wpt.y >= oy &&
+              wpt.y <= oy + overlayNode.h
+            ) {
+              let n: XNode | null = hitTest(overlayNode, wpt.x - ox + overlayNode.x, wpt.y - oy + overlayNode.y, { includeLocked: true });
+              while (n) {
+                const ix = (n.interactions ?? []).find((i) => i.trigger === "onClick");
+                if (ix) {
+                  runInteraction(ix);
+                  return;
+                }
+                const p = findParent(overlayNode, n.id);
+                n = p && p !== overlayNode ? p : null;
+              }
+              return;
+            } else if (snap.activeOverlay.closeOutside !== false) {
+              engine.dispatch({ type: "closeOverlay" });
+              return;
+            }
+          }
+        }
+      }
+
       let n: XNode | null = hitTest(root, wpt.x, wpt.y, { includeLocked: true });
       while (n) {
         const ix = (n.interactions ?? []).find((i) => i.trigger === "onClick");

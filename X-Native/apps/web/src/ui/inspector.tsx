@@ -294,15 +294,42 @@ function Prototype({
           ))}
         </select>
       </div>
-      <div className="proto-preview">
-        <div className="phone" style={{ background: n?.fillVisible ? n.fill : "#fff" }} />
+
+      <div className="h-row" style={{ marginTop: 8 }}>
+        <h3>Device Mockup</h3>
       </div>
-      <p className="muted">Present opens {startName}. Esc steps back, then exits.</p>
-      <div className="h-row">
-        <h3>Motion</h3>
+      <div className="proto-row">
+        <span>Device</span>
+        <select
+          value={snap.prototypeDevice || "none"}
+          onChange={(e) =>
+            engine.dispatch({
+              type: "setPrototypeDevice",
+              device: e.target.value as "iphone-16-pro" | "pixel-9" | "ipad-pro" | "macbook-pro" | "apple-watch" | "none",
+            })
+          }
+          style={{ border: 0, background: "var(--input)", borderRadius: 6, height: 24, padding: "0 6px" }}
+        >
+          <option value="none">None (Borderless)</option>
+          <option value="iphone-16-pro">iPhone 16 Pro (Titanium)</option>
+          <option value="pixel-9">Google Pixel 9</option>
+          <option value="macbook-pro">MacBook Pro 16"</option>
+        </select>
       </div>
-      <p className="muted">Animation on the interaction below.</p>
-      <div className="h-row">
+
+      <div className="proto-preview" style={{ marginTop: 8 }}>
+        <div
+          className="phone"
+          style={{
+            background: n?.fillVisible ? n.fill : "#fff",
+            borderRadius: snap.prototypeDevice === "iphone-16-pro" ? 14 : 4,
+            border: snap.prototypeDevice === "iphone-16-pro" ? "3px solid #383a3f" : "1px solid var(--line)",
+          }}
+        />
+      </div>
+      <p className="muted">Flow starts at {startName}. Esc steps back, then exits.</p>
+
+      <div className="h-row" style={{ marginTop: 8 }}>
         <h3>Interactions</h3>
         <button
           className="plus"
@@ -328,20 +355,35 @@ function Prototype({
       {!n && <p className="muted">Select a layer to add On click → Navigate.</p>}
       {n &&
         interactions.map((ix, i) => (
-          <div key={i} className="insp-pad" style={{ display: "grid", gap: 4, marginBottom: 8 }}>
-            <select
-              value={ix.trigger}
-              onChange={(e) => {
-                const next = interactions.map((x, j) =>
-                  j === i ? { ...x, trigger: e.target.value as ProtoTrigger } : x,
-                );
-                setIx(next);
-              }}
-            >
-              <option value="onClick">On click</option>
-              <option value="onHover">While hovering</option>
-              <option value="afterDelay">After delay</option>
-            </select>
+          <div key={i} className="insp-pad" style={{ display: "grid", gap: 5, marginBottom: 8, background: "var(--hover)", borderRadius: 8, padding: 8 }}>
+            <div style={{ display: "flex", gap: 4 }}>
+              <select
+                style={{ flex: 1 }}
+                value={ix.trigger}
+                onChange={(e) => {
+                  const next = interactions.map((x, j) =>
+                    j === i ? { ...x, trigger: e.target.value as ProtoTrigger } : x,
+                  );
+                  setIx(next);
+                }}
+              >
+                <option value="onClick">On click</option>
+                <option value="onHover">While hovering</option>
+                <option value="afterDelay">After delay</option>
+                <option value="mouseEnter">Mouse enter</option>
+                <option value="mouseLeave">Mouse leave</option>
+                <option value="keyPress">Key / Gamepad press</option>
+                <option value="onDrag">On drag</option>
+              </select>
+              <button
+                className="mini minus"
+                title="Remove interaction"
+                onClick={() => setIx(interactions.filter((_, j) => j !== i))}
+              >
+                <Icon name="minus" size={12} />
+              </button>
+            </div>
+
             <select
               value={ix.action}
               onChange={(e) => {
@@ -350,13 +392,15 @@ function Prototype({
               }}
             >
               <option value="navigate">Navigate to</option>
-              <option value="back">Back</option>
-              <option value="scrollTo">Scroll to</option>
               <option value="openOverlay">Open overlay</option>
               <option value="closeOverlay">Close overlay</option>
               <option value="swapOverlay">Swap overlay</option>
+              <option value="back">Back</option>
+              <option value="scrollTo">Scroll to</option>
               <option value="openUrl">Open link</option>
+              <option value="setVariable">Set variable</option>
             </select>
+
             {(ix.action === "navigate" ||
               ix.action === "scrollTo" ||
               ix.action === "openOverlay" ||
@@ -377,6 +421,40 @@ function Prototype({
                   ))}
               </select>
             )}
+
+            {(ix.action === "openOverlay" || ix.action === "swapOverlay") && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+                <select
+                  value={ix.overlayPosition || "center"}
+                  onChange={(e) =>
+                    setIx(
+                      interactions.map((x, j) =>
+                        j === i ? { ...x, overlayPosition: e.target.value as "center" | "top" | "bottom" | "manual" } : x,
+                      ),
+                    )
+                  }
+                >
+                  <option value="center">Center modal</option>
+                  <option value="bottom">Bottom sheet</option>
+                  <option value="top">Top banner</option>
+                </select>
+                <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: "var(--dim)" }}>
+                  <input
+                    type="checkbox"
+                    checked={ix.overlayCloseOutside !== false}
+                    onChange={(e) =>
+                      setIx(
+                        interactions.map((x, j) =>
+                          j === i ? { ...x, overlayCloseOutside: e.target.checked } : x,
+                        ),
+                      )
+                    }
+                  />
+                  Close outside
+                </label>
+              </div>
+            )}
+
             {ix.action === "openUrl" && (
               <input
                 placeholder="https://example.com"
@@ -386,32 +464,76 @@ function Prototype({
                 }
               />
             )}
-            <select
-              value={ix.animation}
-              onChange={(e) =>
-                setIx(
-                  interactions.map((x, j) =>
-                    j === i ? { ...x, animation: e.target.value as ProtoAnim } : x,
-                  ),
-                )
-              }
-            >
-              <option value="instant">Instant</option>
-              <option value="dissolve">Dissolve</option>
-              <option value="smart">Smart animate</option>
-            </select>
-            <button
-              className="mini minus"
-              title="Remove"
-              onClick={() => setIx(interactions.filter((_, j) => j !== i))}
-            >
-              <Icon name="minus" size={12} />
-            </button>
+
+            {ix.action === "setVariable" && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+                <select
+                  value={ix.variableId || ""}
+                  onChange={(e) =>
+                    setIx(interactions.map((x, j) => (j === i ? { ...x, variableId: e.target.value } : x)))
+                  }
+                >
+                  <option value="">Choose variable…</option>
+                  {(snap.variables || []).map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={ix.variableOp || "toggle"}
+                  onChange={(e) =>
+                    setIx(
+                      interactions.map((x, j) =>
+                        j === i ? { ...x, variableOp: e.target.value as "set" | "increment" | "decrement" | "toggle" } : x,
+                      ),
+                    )
+                  }
+                >
+                  <option value="toggle">Toggle boolean</option>
+                  <option value="increment">Increment +1</option>
+                  <option value="decrement">Decrement -1</option>
+                </select>
+              </div>
+            )}
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 60px", gap: 4 }}>
+              <select
+                value={ix.animation}
+                onChange={(e) =>
+                  setIx(
+                    interactions.map((x, j) =>
+                      j === i ? { ...x, animation: e.target.value as ProtoAnim } : x,
+                    ),
+                  )
+                }
+              >
+                <option value="instant">Instant</option>
+                <option value="dissolve">Dissolve</option>
+                <option value="smart">Smart animate</option>
+                <option value="slideInLeft">Slide in (Left)</option>
+                <option value="slideInRight">Slide in (Right)</option>
+                <option value="slideInTop">Slide in (Top)</option>
+                <option value="slideInBottom">Slide in (Bottom)</option>
+                <option value="pushLeft">Push (Left)</option>
+                <option value="pushRight">Push (Right)</option>
+              </select>
+              <input
+                type="number"
+                placeholder="250ms"
+                title="Duration in ms"
+                value={ix.duration || 250}
+                onChange={(e) => {
+                  const d = parseInt(e.target.value, 10) || 250;
+                  setIx(interactions.map((x, j) => (j === i ? { ...x, duration: d } : x)));
+                }}
+              />
+            </div>
           </div>
         ))}
       <div className="insp-pad">
         <button className="export-run" onClick={() => onPresent?.()}>
-          Present
+          Present Prototype
         </button>
       </div>
     </>

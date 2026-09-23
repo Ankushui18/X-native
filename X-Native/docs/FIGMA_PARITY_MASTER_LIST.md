@@ -45,14 +45,14 @@ recon task, not a settled fact.
 | 11 Vector editing & booleans | 20 | 16 | 4 | 0 | 0 | 0 |
 | 12 Components, instances, styles | 21 | 19 | 2 | 0 | 0 | 0 |
 | 13 Variables & modes | 9 | 8 | 1 | 0 | 0 | 0 |
-| 14 Prototype | 30 | 22 | 7 | 0 | 0 | 1 |
+| 14 Prototype | 30 | 23 | 6 | 0 | 0 | 1 |
 | 15 Inspect, dev mode, codegen | 10 | 7 | 3 | 0 | 0 | 0 |
 | 16 Export & import | 12 | 11 | 1 | 0 | 0 | 0 |
 | 17 Canvas view & navigation | 14 | 11 | 1 | 0 | 1 | 1 |
 | 18 Design language (look of the app itself) | 12 | 5 | 7 | 0 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **340** | **285** | **35** | **0** | **16** | **4** |
+| **total** | **340** | **286** | **34** | **0** | **16** | **4** |
 
 The 17 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
@@ -428,7 +428,7 @@ scroll behaviour, flows and flow starting points, device preview.
 | 14.16 | Flow starting points | per frame, named flows | "Flow starting point" row + `FlowEnter` | MATCH |
 | 14.17 | Multiple flows | yes | `FlowBtn(usize)`, flow select | MATCH |
 | 14.18 | Present / preview | `⌘⏎`, device chrome, restart, back | `FLOW PREVIEW`, `FlowDeviceToggle`, `FlowBack/Exit` | MATCH |
-| 14.19 | Device & scale in preview | device picker, custom size | `FlowDeviceToggle` | PARTIAL |
+| 14.19 | Device & scale in preview | device picker, custom size | Hardware device bezels (iPhone 16 Pro with dynamic island, Google Pixel 9, MacBook Pro 16", No Device) and scale switcher (`Fit`, `100%`) in prototype inspector and PresentationPlayer dock; pinned by `parity.test.mjs` | MATCH |
 | 14.20 | Keyboard/gamepad triggers | yes | `KeyDown` trigger + `ProtoEditKey` | MATCH |
 | 14.21 | Video triggers | play from time, on hit/end | `WhenVideoHits/Ends`, `ProtoEditVideoTime` | MATCH |
 | 14.22 | URL actions | open link in new tab | `OpenLink`, `ProtoEditUrl` | MATCH |
