@@ -50,12 +50,53 @@ name — exactly what Figma documents.
 - Figma's “Additional labels” toggle, Assets panel tab, and panel-width overflow
   `⋯` menu — real features, but each is its own project; none is a defect today.
 
+## Dev Mode (second round, same session)
+
+Figma's *Guide to inspecting* is the reference; the panel was rebuilt on our own
+tokens instead of the inline styles and the REST-schema table it used to show:
+Code | List toggle, a language menu with the units setting in its footer,
+click-to-copy property rows, a typographic specimen for text layers, component
+info with a route to the main component, an Assets list, Interactions, and
+annotations with a "pin a property" menu (`⇧T` focuses the note field, like
+Figma's Annotate). The `.fig` reader left the panel for the rail and ⌘K.
+
+Three defects were only findable in a real browser — worth recording because
+neither type-checking nor the engine suite could have caught them:
+
+1. `⇧⌘\` never fired. The handler tested `e.key === "\\"`, but holding Shift
+   turns that physical key into another character, so *minimize* was dead while
+   *hide* worked. Keyed off `e.code` now.
+2. Minimize UI collapsed the canvas to zero width. The rail and left panel are
+   grid items, and `display: none` let auto-placement slide the canvas into the
+   first (0 px) column: a blank document. They collapse in place instead.
+3. A modal rendered through a `document.body` portal cannot see its own
+   keydowns — neither a listener it attaches itself nor React's synthetic
+   handlers fire for a key targeted at `body`. Escape on the export sheet now
+   goes through the central hotkey handler, which already owns the palette and
+   the `.fig` modal.
+
+## Verifying in a browser, from this sandbox
+
+`storage.googleapis.com` is blocked, so `puppeteer`'s usual download fails, but
+`@sparticuz/chromium` carries the binary in its npm tarball and installs fine:
+
+```sh
+mkdir -p /tmp/bt && cd /tmp/bt && npm i @sparticuz/chromium puppeteer-core
+node -e 'const fs=require("fs"),z=require("zlib");const b="node_modules/@sparticuz/chromium/bin";
+fs.writeFileSync("/tmp/chromium.tar",z.brotliDecompressSync(fs.readFileSync(b+"/chromium.tar.br")));'
+# extract the chromium binary, then al2023.tar.br into /tmp/ails and fonts.tar.br
+# into /tmp/aifonts, and launch with:
+#   env: { LD_LIBRARY_PATH: "/tmp/ails/lib", FONTCONFIG_FILE: "/tmp/fonts.conf" }
+```
+
+`LD_LIBRARY_PATH` is required (the bundle has `libnspr4`/`libnss3`, the image
+does not). Fonts are cosmetic: without them, `⌥ ⇧ ⌘` glyphs render as boxes in
+screenshots, which is a sandbox artefact and not a bug in the UI.
+
 ## Open
 
-- **Dev Mode quality** (the last item of the original defect list) is still
-  untouched: the Inspect tab exists with measurements and code, but the panel
-  split handle and FigInspector's annotation tools have not been reviewed.
-- No browser was available in this session (several Chromium downloads are
-  blocked from the sandbox), so this round is verified by `tsc -b`, the 149
-  engine assertions, and Vite transform checks on each touched module — the
-  *look* of the new surfaces is not yet eyeballed. Worth a pass in the preview.
+- Sketch's top-bar Insert menu and Figma's Assets panel tab, "Additional
+  labels", and panel-width `⋯` overflow — real features in both apps, each its
+  own project, none a defect today.
+- The panel split handle (dragging the inspector wider) exists but has not been
+  reviewed for the Dev Mode layout at narrow widths.
