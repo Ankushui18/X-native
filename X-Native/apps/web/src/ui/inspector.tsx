@@ -3128,7 +3128,9 @@ function Design({
 function SelectionColors({ n, engine, snap }: { n: XNode; engine: Engine; snap: Snapshot }) {
   const usage = colorUsage(n);
   const [picking, setPicking] = useState<{ key: string; rect: DOMRect } | null>(null);
-  if (usage.length < 2) return null;
+  // Sketch shows the section for any selection, single colour included — the
+  // count and the select-all affordance are the point, not the list length.
+  if (!usage.length) return null;
   const root = snap.pages[snap.page].root;
   return (
     <>
