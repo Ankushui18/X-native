@@ -52,13 +52,16 @@ export function RightPanel({
   snap,
   onPresent,
   onShare,
-  onInspectFig,
+  exportOpen,
+  onCloseExport,
 }: {
   engine: Engine;
   snap: Snapshot;
   onPresent?: () => void;
   onShare?: () => void;
-  onInspectFig?: () => void;
+  /** ⇧⌘E's bulk sheet. App owns the flag so Escape can be handled centrally. */
+  exportOpen?: boolean;
+  onCloseExport?: () => void;
 }) {
   const tabs: { id: RightTab; label: string }[] = [
     { id: "design", label: "Design" },
@@ -69,14 +72,6 @@ export function RightPanel({
   const wp = id ? worldPos(root, id) : null;
   const n = wp?.node;
   const inspect = snap.rightTab === "inspect";
-  // ⇧⌘E is the same command in both apps: a bulk export sheet for the page.
-  // The right panel owns it because that is where export settings live.
-  const [exportAll, setExportAll] = useState(false);
-  useEffect(() => {
-    const on = () => setExportAll(true);
-    window.addEventListener("x-native-export-dialog", on);
-    return () => window.removeEventListener("x-native-export-dialog", on);
-  }, []);
   return (
     <aside className="panel right">
       <div className="right-head">
@@ -137,7 +132,7 @@ export function RightPanel({
         {snap.rightTab === "prototype" && !inspect && (
           <Prototype n={n} engine={engine} snap={snap} onPresent={onPresent} />
         )}
-        {inspect && <Inspect n={n} engine={engine} snap={snap} onInspectFig={onInspectFig} />}
+        {inspect && <Inspect n={n} engine={engine} snap={snap} />}
         {snap.rightTab === "design" && !inspect && !n && (
           <PageDesign engine={engine} tool={snap.tool} />
         )}
@@ -145,13 +140,8 @@ export function RightPanel({
           <Design key={n.id} n={n} x={n.x} y={n.y} engine={engine} snap={snap} />
         )}
       </div>
-      {exportAll && (
-        <ExportAssetsDialog
-          engine={engine}
-          snap={snap}
-          onClose={() => setExportAll(false)}
-          onPresent={onPresent}
-        />
+      {exportOpen && (
+        <ExportAssetsDialog engine={engine} snap={snap} onClose={() => onCloseExport?.()} />
       )}
     </aside>
   );
@@ -195,6 +185,12 @@ function ExportAssetsDialog({
   const [checked, setChecked] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {};
     for (const n of candidates) if (withConfig(n) || selected.has(n.id)) init[n.id] = true;
+    // Opened with nothing configured and nothing selected, the useful default is
+    // the top level of the page — that is what "export the design" means.
+    if (!Object.keys(init).length) {
+      const top = new Set(root.children.map((c) => c.id));
+      for (const n of candidates) if (top.has(n.id)) init[n.id] = true;
+    }
     return init;
   });
   const [configs, setConfigs] = useState<Record<string, ExportPreset>>(() => {
@@ -213,18 +209,6 @@ function ExportAssetsDialog({
   }, [candidates]);
   const chosen = candidates.filter((n) => checked[n.id]);
   const total = chosen.reduce((acc, n) => acc + Math.max(1, (n.exports?.length ?? 0) || 1), 0);
-
-  useEffect(() => {
-    // Capture phase, so Escape closes the sheet without also reaching the
-    // canvas handler that clears the selection behind it.
-    const on = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.stopPropagation();
-      onClose();
-    };
-    window.addEventListener("keydown", on, true);
-    return () => window.removeEventListener("keydown", on, true);
-  }, [onClose]);
 
   const run = () => {
     if (!chosen.length) {
@@ -860,24 +844,31 @@ function Prototype({
 
 type DevFormat = "css" | "tailwind" | "swiftui" | "compose" | "flutter" | "svg" | "figma";
 
-function generateCss(n: XNode): string {
+/** Figma's Code-section setting: CSS may be read in px or rem. */
+type DevUnit = "px" | "rem";
+
+/**
+ * CSS for the layer. `unit` is Figma's Dev Mode setting — the numbers are
+ * the same, only the unit they are written in changes.
+ */
+function generateCss(n: XNode, unit: DevUnit = "px"): string {
   const rules: string[] = [
     `/* ${n.name} (${n.kind}) */`,
-    `width: ${Math.round(n.w)}px;`,
-    `height: ${Math.round(n.h)}px;`,
+    `width: ${devLen(n.w, unit)};`,
+    `height: ${devLen(n.h, unit)};`,
   ];
   if (n.cornerRadii && n.cornerRadii.some((r) => r > 0)) {
     if (n.cornerIndependent) {
-      rules.push(`border-radius: ${[n.cornerRadii[0], n.cornerRadii[1], n.cornerRadii[3], n.cornerRadii[2]].map((r) => `${r}px`).join(" ")};`);
+      rules.push(`border-radius: ${[n.cornerRadii[0], n.cornerRadii[1], n.cornerRadii[3], n.cornerRadii[2]].map((r) => devLen(r, unit)).join(" ")};`);
     } else {
-      rules.push(`border-radius: ${n.cornerRadii[0]}px;`);
+      rules.push(`border-radius: ${devLen(n.cornerRadii[0], unit)};`);
     }
   }
   if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") {
     rules.push(`background: ${n.fill};`);
   }
   if (n.strokeVisible && n.strokeWidth > 0 && n.strokePaint) {
-    rules.push(`border: ${n.strokeWidth}px solid ${n.strokePaint};`);
+    rules.push(`border: ${devLen(n.strokeWidth, unit)} solid ${n.strokePaint};`);
   }
   if (n.opacity < 1) {
     rules.push(`opacity: ${Math.round(n.opacity * 100) / 100};`);
@@ -885,10 +876,10 @@ function generateCss(n: XNode): string {
   if (n.layout) {
     rules.push("display: flex;");
     rules.push(`flex-direction: ${n.layout.direction === "horizontal" ? "row" : "column"};`);
-    if (n.layout.gap) rules.push(`gap: ${n.layout.gap}px;`);
+    if (n.layout.gap) rules.push(`gap: ${devLen(n.layout.gap, unit)};`);
     const [pl, pr, pt, pb] = n.layout.padding;
     if (pl || pr || pt || pb) {
-      rules.push(`padding: ${pt}px ${pr}px ${pb}px ${pl}px;`);
+      rules.push(`padding: ${[pt, pr, pb, pl].map((v) => devLen(v, unit)).join(" ")};`);
     }
     if (n.layout.align === "center") rules.push("align-items: center;");
     else if (n.layout.align === "max") rules.push("align-items: flex-end;");
@@ -900,16 +891,16 @@ function generateCss(n: XNode): string {
   }
   if (n.kind === "text") {
     rules.push(`font-family: "${n.fontFamily}", sans-serif;`);
-    rules.push(`font-size: ${n.fontSize}px;`);
+    rules.push(`font-size: ${devLen(n.fontSize, unit)};`);
     rules.push(`font-weight: ${n.fontWeight};`);
-    if (n.lineHeight) rules.push(`line-height: ${Math.round(n.lineHeight)}px;`);
-    if (n.letterSpacing) rules.push(`letter-spacing: ${n.letterSpacing}px;`);
+    if (n.lineHeight) rules.push(`line-height: ${devLen(Math.round(n.lineHeight), unit)};`);
+    if (n.letterSpacing) rules.push(`letter-spacing: ${devLen(n.letterSpacing, unit)};`);
     if (n.textAlign && n.textAlign !== "left") rules.push(`text-align: ${n.textAlign};`);
   }
   if (n.effects?.length) {
     const shadows = n.effects
       .filter((e) => e.visible && (e.kind === "drop-shadow" || e.kind === "inner-shadow"))
-      .map((e) => `${e.kind === "inner-shadow" ? "inset " : ""}${e.x}px ${e.y}px ${e.blur}px ${e.spread}px ${e.color}`);
+      .map((e) => `${e.kind === "inner-shadow" ? "inset " : ""}${[e.x, e.y, e.blur, e.spread].map((v) => devLen(v, unit)).join(" ")} ${e.color}`);
     if (shadows.length) rules.push(`box-shadow: ${shadows.join(", ")};`);
   }
   return rules.join("\n");
@@ -1146,7 +1137,9 @@ function BoxModelDiagram({ n }: { n: XNode }) {
   const [pl, pr, pt, pb] = n.layout?.padding ?? [0, 0, 0, 0];
   return (
     <div className="box-model-diagram">
-      <div className="bm-padding-label">padding: {pt} {pr} {pb} {pl}</div>
+      {/* Only auto-layout frames have padding; showing 0 0 0 0 elsewhere reads
+          as a fact when it is an absence. */}
+      {n.layout && <div className="bm-padding-label">padding: {pt} {pr} {pb} {pl}</div>}
       <div className="bm-outer">
         <div className="bm-pad-box">
           <div className="bm-inner">
@@ -1159,258 +1152,675 @@ function BoxModelDiagram({ n }: { n: XNode }) {
   );
 }
 
-function Inspect({
-  n,
-  engine,
-  snap,
-  onInspectFig,
-}: {
-  n?: XNode;
-  engine?: Engine;
-  snap?: Snapshot;
-  onInspectFig?: () => void;
-}) {
+/**
+ * Dev Mode. Figma's inspect panel is the reference for behaviour: a Code|List
+ * toggle over the layer properties, a language picker with a units setting,
+ * click any value to copy it, then component info, assets, prototype
+ * interactions and annotations. The styling is ours.
+ */
+function Inspect({ n, engine, snap }: { n?: XNode; engine: Engine; snap: Snapshot }) {
+  const [mode, setMode] = useState<"code" | "list">("code");
   const [format, setFormat] = useState<DevFormat>("css");
-  const [note, setNote] = useState("");
+  const [unit, setUnit] = useState<DevUnit>("px");
+
   if (!n) {
     return (
-      <div style={{ padding: 16 }}>
-        <p className="empty" style={{ margin: "16px 0" }}>Select a layer to inspect</p>
-        <div
-          style={{
-            padding: 12,
-            background: "var(--hover)",
-            borderRadius: 8,
-            border: "1px solid var(--line)",
-            display: "grid",
-            gap: 8,
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <Icon name="figma" size={16} />
-            <strong style={{ fontSize: 12 }}>Figma File Inspector</strong>
-          </div>
-          <div style={{ fontSize: 11, color: "var(--dim)" }}>
-            Inspect Kiwi binary schemas, node hierarchy, and vector networks from any .fig file.
-          </div>
-          <button
-            className="export-run"
-            style={{ padding: "6px 12px", fontSize: 11 }}
-            onClick={() => onInspectFig?.()}
-          >
-            Launch .fig Inspector
-          </button>
-        </div>
+      <div className="insp-pad dev-empty">
+        <p className="dev-empty-title">Select a layer to inspect</p>
+        <ul>
+          <li>
+            <b>⌥ hover</b> a layer with one selected to measure the distance between them.
+          </li>
+          <li>
+            <b>⇧⌘E</b> exports every asset on this page at once.
+          </li>
+          <li>
+            <b>⇧D</b> leaves Dev Mode.
+          </li>
+        </ul>
       </div>
     );
   }
 
-  let code = "";
-  if (format === "css") code = generateCss(n);
-  else if (format === "tailwind") code = generateTailwind(n);
-  else if (format === "swiftui") code = generateSwiftUI(n);
-  else if (format === "compose") code = generateCompose(n);
-  else if (format === "flutter") code = generateFlutter(n);
-  else if (format === "svg") code = generateSvg(n);
-  else if (format === "figma") code = generateFigmaJson(n);
-
-  const copy = () => {
-    copyText(code);
-    toast(`Copied ${format.toUpperCase()} code`);
-  };
-
-  const layerAnnotations = snap?.annotations?.filter((a) => a.nodeId === n.id) ?? [];
-  const vn = n.vectorNetwork || (n.path.length > 0 ? pathToVectorNetwork(n.path, n.closed) : null);
-  const branchingCount = vn ? vn.vertices.filter((_, i) => vertexDegree(vn, i) >= 3).length : 0;
-
+  const code = renderDevCode(n, format, unit);
   return (
     <>
-      <div className="h-row">
+      <div className="h-row dev-head">
         <h3>Dev Mode</h3>
-        <button
-          className="export-run"
-          style={{ padding: "2px 8px", fontSize: 10, display: "flex", alignItems: "center", gap: 4 }}
-          onClick={() => onInspectFig?.()}
-          title="Inspect Figma .fig binary file"
-        >
-          <Icon name="figma" size={12} />
-          .fig Inspector
-        </button>
-      </div>
-
-      <div className="dir-row" style={{ padding: "0 12px", marginBottom: 8 }}>
-        <div
-          className="seg"
-          style={{
-            width: "100%",
-            display: "grid",
-            gridTemplateColumns: "repeat(7, 1fr)",
-            fontSize: 10,
-          }}
-        >
-          <button className={format === "css" ? "on" : ""} onClick={() => setFormat("css")}>CSS</button>
-          <button className={format === "tailwind" ? "on" : ""} onClick={() => setFormat("tailwind")}>TW</button>
-          <button className={format === "swiftui" ? "on" : ""} onClick={() => setFormat("swiftui")}>Swift</button>
-          <button className={format === "compose" ? "on" : ""} onClick={() => setFormat("compose")}>KMP</button>
-          <button className={format === "flutter" ? "on" : ""} onClick={() => setFormat("flutter")}>Dart</button>
-          <button className={format === "svg" ? "on" : ""} onClick={() => setFormat("svg")}>SVG</button>
-          <button className={format === "figma" ? "on" : ""} onClick={() => setFormat("figma")}>Fig</button>
+        <div className="seg dev-seg" role="tablist" aria-label="Inspect view">
+          <button
+            role="tab"
+            aria-selected={mode === "code"}
+            className={mode === "code" ? "on" : ""}
+            onClick={() => setMode("code")}
+          >
+            Code
+          </button>
+          <button
+            role="tab"
+            aria-selected={mode === "list"}
+            className={mode === "list" ? "on" : ""}
+            onClick={() => setMode("list")}
+          >
+            List
+          </button>
         </div>
       </div>
-
-      <div className="insp-pad">
-        <BoxModelDiagram n={n} />
-        <pre className="css-block" style={{ maxHeight: 220, overflowY: "auto", fontSize: 10 }}>{code}</pre>
-        <button className="export-run" onClick={copy} style={{ marginTop: 8 }}>
-          Copy {format.toUpperCase()}
-        </button>
+      <div className="insp-pad dev-preview">
+        {n.kind === "text" ? <TypeSpecimen n={n} /> : <BoxModelDiagram n={n} />}
       </div>
+      {mode === "code" ? (
+        <div className="insp-pad dev-code">
+          <div className="dev-codebar">
+            <DevLangMenu
+              format={format}
+              setFormat={setFormat}
+              unit={unit}
+              setUnit={setUnit}
+              showUnits={format === "css"}
+            />
+            <Tooltip label="Copy the snippet">
+              <button
+                className="mini"
+                aria-label="Copy code"
+                onClick={() => {
+                  copyText(code);
+                  toast(`Copied ${DEV_LANGS.find((l) => l.id === format)?.label ?? "code"}`);
+                }}
+              >
+                <Icon name="copy" size={12} />
+              </button>
+            </Tooltip>
+          </div>
+          <pre className="css-block dev-pre">{code}</pre>
+        </div>
+      ) : (
+        <DevList n={n} snap={snap} unit={unit} />
+      )}
+      <DevComponent n={n} engine={engine} snap={snap} />
+      <DevAssets n={n} engine={engine} />
+      <DevInteractions n={n} engine={engine} snap={snap} />
+      <DevAnnotations n={n} engine={engine} snap={snap} />
+    </>
+  );
+}
 
-      {/* Figma Properties Table */}
+/** Value of a property in the unit the developer asked for. */
+function devLen(v: number, unit: DevUnit): string {
+  const r = Math.round(v * 100) / 100;
+  if (unit === "rem") return `${Math.round((r / 16) * 10000) / 10000}rem`;
+  return `${r}px`;
+}
+
+const DEV_LANGS: { id: DevFormat; label: string; lang: string }[] = [
+  { id: "css", label: "CSS", lang: "css" },
+  { id: "tailwind", label: "Tailwind", lang: "html" },
+  { id: "swiftui", label: "SwiftUI", lang: "swift" },
+  { id: "compose", label: "Compose", lang: "kotlin" },
+  { id: "flutter", label: "Flutter", lang: "dart" },
+  { id: "svg", label: "SVG", lang: "xml" },
+  { id: "figma", label: "JSON", lang: "json" },
+];
+
+function renderDevCode(n: XNode, format: DevFormat, unit: DevUnit): string {
+  switch (format) {
+    case "tailwind":
+      return generateTailwind(n);
+    case "swiftui":
+      return generateSwiftUI(n);
+    case "compose":
+      return generateCompose(n);
+    case "flutter":
+      return generateFlutter(n);
+    case "svg":
+      return generateSvg(n);
+    case "figma":
+      return generateFigmaJson(n);
+    default:
+      return generateCss(n, unit);
+  }
+}
+
+/** Language dropdown with the units setting underneath, as in Figma. */
+function DevLangMenu({
+  format,
+  setFormat,
+  unit,
+  setUnit,
+  showUnits,
+}: {
+  format: DevFormat;
+  setFormat: (f: DevFormat) => void;
+  unit: DevUnit;
+  setUnit: (u: DevUnit) => void;
+  showUnits: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (!root.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", esc);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+  const current = DEV_LANGS.find((l) => l.id === format)?.label ?? "CSS";
+  const pick = (fn: () => void) => () => {
+    fn();
+    setOpen(false);
+  };
+  return (
+    <div className="dev-lang" ref={root}>
+      <button className="dev-lang-btn" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        {current}
+        {showUnits && <span className="dev-lang-unit">{unit}</span>}
+        <span className={`dev-lang-caret${open ? " up" : ""}`}>
+          <Icon name="chevron-down" size={11} />
+        </span>
+      </button>
+      {open && (
+        <div className="dev-menu" role="menu">
+          <p className="menu-label">Language</p>
+          {DEV_LANGS.map((l) => (
+            <button
+              key={l.id}
+              role="menuitemradio"
+              aria-checked={l.id === format}
+              className={l.id === format ? "on" : ""}
+              onClick={pick(() => setFormat(l.id))}
+            >
+              {l.label}
+              <span className="dev-menu-note">{l.lang}</span>
+            </button>
+          ))}
+          {showUnits && (
+            <>
+              <p className="menu-label">Units</p>
+              {(["px", "rem"] as DevUnit[]).map((u) => (
+                <button
+                  key={u}
+                  role="menuitemradio"
+                  aria-checked={u === unit}
+                  className={u === unit ? "on" : ""}
+                  onClick={pick(() => setUnit(u))}
+                >
+                  {u === "px" ? "Pixels (px)" : "Root em (rem)"}
+                  <span className="dev-menu-note">{u}</span>
+                </button>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Figma's List view: property rows whose values copy on click. */
+function DevList({ n, snap, unit }: { n: XNode; snap: Snapshot; unit: DevUnit }) {
+  const rows = devProperties(n, snap, unit);
+  const groups: { title: string; items: DevProp[] }[] = [];
+  for (const r of rows) {
+    let g = groups.find((x) => x.title === r.group);
+    if (!g) {
+      g = { title: r.group, items: [] };
+      groups.push(g);
+    }
+    g.items.push(r);
+  }
+  return (
+    <>
+      {groups.map((g) => (
+        <div key={g.title} className="insp-pad dev-group">
+          <p className="dev-group-title">{g.title}</p>
+          {g.items.map((r) => (
+            <DevRow key={r.label} p={r} />
+          ))}
+        </div>
+      ))}
+    </>
+  );
+}
+
+interface DevProp {
+  group: string;
+  label: string;
+  value: string;
+  swatch?: string;
+}
+
+function DevRow({ p }: { p: DevProp }) {
+  return (
+    <button
+      className="dev-row"
+      title="Copy value"
+      onClick={() => {
+        copyText(p.value);
+        toast(`Copied ${p.label}`);
+      }}
+    >
+      <span className="dev-k">{p.label}</span>
+      {p.swatch && <span className="dev-sw" style={{ background: p.swatch }} />}
+      <span className="dev-v">{p.value}</span>
+      <Icon name="copy" size={11} />
+    </button>
+  );
+}
+
+function devProperties(n: XNode, snap: Snapshot, unit: DevUnit): DevProp[] {
+  const out: DevProp[] = [];
+  const L = (label: string, value: string, group = "Layout", swatch?: string) =>
+    out.push({ group, label, value, swatch });
+  L("Position", `${Math.round(n.x)}, ${Math.round(n.y)}`);
+  L("Size", `${devLen(n.w, unit)} × ${devLen(n.h, unit)}`);
+  if (n.rotation) L("Rotation", `${Math.round(n.rotation * 100) / 100}°`);
+  if (n.flipH || n.flipV) L("Flip", [n.flipH && "Horizontal", n.flipV && "Vertical"].filter(Boolean).join(", "));
+  L("Constraints", `${n.constraintH} / ${n.constraintV}`);
+  if (n.layout) {
+    const [pl, pr, pt, pb] = n.layout.padding;
+    L("Direction", n.layout.direction === "horizontal" ? "Row" : "Column");
+    if (n.layout.gap) L("Gap", devLen(n.layout.gap, unit));
+    L("Padding", [pl, pr, pb, pt].map((v) => devLen(v, unit)).join(" "));
+    if (n.layout.wrap) L("Wrap", "Enabled");
+  }
+  if (n.sizingW !== "fixed" || n.sizingH !== "fixed") {
+    const size = (v: string) => (v === "hug" ? "Hug" : v === "fill" ? "Fill" : "Fixed");
+    L("Sizing", `${size(n.sizingW)} / ${size(n.sizingH)}`);
+  }
+  if (n.opacity < 1) L("Opacity", `${Math.round(n.opacity * 100)}%`, "Layer");
+  if (n.blendMode && n.blendMode !== "normal") L("Blend mode", n.blendMode, "Layer");
+  if (n.isMask) L("Mask", n.maskType === "luminance" ? "Luminance" : "Alpha", "Layer");
+  const fills = (n.fills ?? []).filter((f) => f.visible !== false);
+  if (n.fillVisible && !isNone(n.fill)) {
+    L("Fill", `${n.fill.toUpperCase()} · ${Math.round((n.fillOpacity ?? 1) * 100)}%`, "Style", n.fill);
+  }
+  for (const f of fills) {
+    if (isNone(f.color)) continue;
+    const label = f.type === "solid" ? "Fill" : f.type.replace("-", " ").replace(/^./, (c) => c.toUpperCase());
+    L(label, `${f.color.toUpperCase()} · ${Math.round((f.opacity ?? 1) * 100)}%`, "Style", f.color);
+  }
+  if (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)) {
+    L(
+      "Border",
+      `${devLen(n.strokeWidth, unit)} ${n.strokeAlign} ${n.strokePaint.toUpperCase()}`,
+      "Style",
+      n.strokePaint,
+    );
+  }
+  if (n.strokeDash && n.strokeDash > 0) L("Dashed", `${n.strokeDash}`, "Style");
+  for (const e of n.effects ?? []) {
+    if (e.visible === false) continue;
+    if (e.kind === "drop-shadow" || e.kind === "inner-shadow") {
+      L(
+        e.kind === "drop-shadow" ? "Drop shadow" : "Inner shadow",
+        `${e.x}, ${e.y} · blur ${e.blur}${e.spread ? ` · spread ${e.spread}` : ""} · ${e.color}`,
+        "Style",
+        e.color,
+      );
+    } else {
+      L(e.kind === "layer-blur" ? "Layer blur" : "Blur", `${e.blur}`, "Style");
+    }
+  }
+  if (n.cornerRadii?.some((r) => r > 0)) {
+    if (n.cornerIndependent) {
+      L("Corner radius", n.cornerRadii.map((r) => devLen(r, unit)).join(" "));
+    } else {
+      L("Corner radius", devLen(n.cornerRadii[0], unit));
+    }
+  }
+  if (n.kind === "text") {
+    L("Text", n.text || "", "Typography");
+    L("Font", `${n.fontFamily} ${n.fontWeight}`, "Typography");
+    L("Font size", devLen(n.fontSize, unit), "Typography");
+    if (n.lineHeight) L("Line height", devLen(n.lineHeight, unit), "Typography");
+    if (n.letterSpacing) L("Letter spacing", devLen(n.letterSpacing, unit), "Typography");
+    if (n.textAlign && n.textAlign !== "left") L("Alignment", n.textAlign, "Typography");
+  }
+  // Figma's "view applied styles": only paints are named here, matching the
+  // two style slots the engine actually has.
+  for (const [label, id] of [
+    ["Fill style", n.fillStyle],
+    ["Stroke style", n.strokeStyle],
+  ] as [string, string | undefined][]) {
+    if (!id) continue;
+    const style = snap.styles.find((s) => s.id === id || s.name === id);
+    L(label, style ? `${style.name} · ${style.color.toUpperCase()}` : String(id), "Styles", style?.color);
+  }
+  if (n.exports?.length) {
+    L(
+      "Export",
+      n.exports.map((p) => `${p.format} ${p.scale}×${p.suffix ? ` ${p.suffix}` : ""}`).join(", "),
+      "Export",
+    );
+  }
+  return out;
+}
+
+/** Figma shows a typographic sample instead of the box model for text layers. */
+function TypeSpecimen({ n }: { n: XNode }) {
+  return (
+    <div className="dev-type">
+      <div
+        className="dev-type-sample"
+        style={{
+          fontFamily: `${n.fontFamily}, Inter, system-ui, sans-serif`,
+          fontSize: Math.min(28, Math.max(11, n.fontSize / 2)),
+          fontWeight: n.fontWeight,
+          lineHeight: n.lineHeight ? `${n.lineHeight / n.fontSize}` : 1.3,
+          letterSpacing: n.letterSpacing ? `${n.letterSpacing}px` : undefined,
+          color: n.fillVisible === false || isNone(n.fill) ? "var(--text)" : n.fill,
+          textAlign: n.textAlign === "center" ? "center" : n.textAlign === "right" ? "right" : "left",
+        }}
+      >
+        {(n.text || n.name).split("\n").slice(0, 3).join("\n")}
+      </div>
+      <div className="dev-type-meta">
+        <span>
+          {n.fontFamily} {n.fontWeight}
+        </span>
+        <span>
+          {Math.round(n.fontSize)} / {n.lineHeight ? Math.round(n.lineHeight) : "auto"}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/** Component / instance information, with a route to the main component. */
+function DevComponent({ n, engine, snap }: { n: XNode; engine: Engine; snap: Snapshot }) {
+  const root = snap.pages[snap.page].root;
+  const master = snap.components.find((c) => c.id === (n.componentId || n.id));
+  const own = n.componentId ? find(root, n.componentId) : null;
+  const instances = n.isComponent
+    ? (() => {
+        let count = 0;
+        const walk = (p: XNode) => {
+          for (const ch of p.children) {
+            if (ch.componentId === n.id) count++;
+            walk(ch);
+          }
+        };
+        walk(root);
+        return count;
+      })()
+    : 0;
+  if (!n.isComponent && !n.componentId) return null;
+  const props = Object.entries(n.componentProperties ?? {});
+  return (
+    <>
       <div className="hr" />
-      <div className="h-row">
-        <h3>Figma Properties</h3>
-        <span style={{ fontSize: 10, color: "var(--dim)", marginLeft: "auto" }}>REST Schema</span>
-      </div>
-      <div className="insp-pad" style={{ display: "grid", gap: 6, fontSize: 11 }}>
-        <div style={{ display: "flex", justifyContent: "space-between" }}>
-          <span style={{ color: "var(--dim)" }}>Node Type:</span>
-          <strong>{n.kind.toUpperCase()}</strong>
+      <Section id="dev-component" title="Component" defaultOpen={true}>
+        <div className="insp-pad dev-group">
+          {n.componentId && (
+            <button
+              className="dev-row link"
+              title="Select the main component"
+              onClick={() => {
+                const id = n.componentId;
+                if (own || master) {
+                  engine.dispatch({ type: "select", ids: [id] });
+                  toast(`Selected ${master?.name ?? "main component"}`);
+                } else {
+                  toast("Main component is on another page");
+                }
+              }}
+            >
+              <span className="dev-k">Instance of</span>
+              <span className="dev-v">{master?.name ?? "Component"}</span>
+              <Icon name="chevron-right" size={11} />
+            </button>
+          )}
+          {n.isComponent && (
+            <DevRow p={{ group: "Component", label: "Instances", value: `${instances} on this page` }} />
+          )}
+          {n.variant && <DevRow p={{ group: "Component", label: "Variant", value: n.variant }} />}
+          {master && master.variants.length > 0 && (
+            <DevRow
+              p={{ group: "Component", label: "Variants", value: master.variants.map((v) => v.name).join(", ") }}
+            />
+          )}
+          {props.map(([k, v]) => (
+            <DevRow key={k} p={{ group: "Component", label: k, value: String(v) }} />
+          ))}
+          {master?.properties?.length ? (
+            <p className="dev-note">
+              {master.properties.length} {plural(master.properties.length, "property", "properties")} defined on the
+              main component.
+            </p>
+          ) : null}
         </div>
-        <div style={{ display: "flex", justifyContent: "space-between" }}>
-          <span style={{ color: "var(--dim)" }}>Layer Name:</span>
-          <span>{n.name}</span>
-        </div>
-        <div style={{ display: "flex", justifyContent: "space-between" }}>
-          <span style={{ color: "var(--dim)" }}>Dimensions:</span>
-          <span>{Math.round(n.w)} × {Math.round(n.h)} px</span>
-        </div>
-        <div style={{ display: "flex", justifyContent: "space-between" }}>
-          <span style={{ color: "var(--dim)" }}>Position:</span>
-          <span>X: {Math.round(n.x)}, Y: {Math.round(n.y)}</span>
-        </div>
-        <div style={{ display: "flex", justifyContent: "space-between" }}>
-          <span style={{ color: "var(--dim)" }}>Constraints:</span>
-          <span>H: {n.constraintH} • V: {n.constraintV}</span>
-        </div>
-        {n.fillVisible && !isNone(n.fill) && (
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ color: "var(--dim)" }}>Fill Paint:</span>
-            <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: n.fill }} />
-              <code>{n.fill}</code> ({Math.round(n.fillOpacity * 100)}%)
-            </span>
-          </div>
-        )}
-        {n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint) && (
-          <div style={{ display: "flex", justifyContent: "space-between" }}>
-            <span style={{ color: "var(--dim)" }}>Stroke:</span>
-            <span>{n.strokeWidth}px {n.strokeAlign} {n.strokeCap} cap</span>
-          </div>
-        )}
-        {vn && (
-          <div style={{ marginTop: 4, padding: 8, background: "rgba(13,153,255,0.08)", borderRadius: 6, border: "1px solid rgba(13,153,255,0.2)" }}>
-            <div style={{ fontWeight: 600, color: "var(--accent)", marginBottom: 4 }}>
-              Vector Network Graph
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, fontSize: 10 }}>
-              <div>Vertices: <strong>{vn.vertices.length}</strong></div>
-              <div>Segments: <strong>{vn.segments.length}</strong></div>
-              <div>Branching (≥3): <strong>{branchingCount}</strong></div>
-              <div>Closed: <strong>{n.closed ? "Yes" : "No"}</strong></div>
-            </div>
-          </div>
-        )}
-      </div>
+      </Section>
+    </>
+  );
+}
 
+/** Everything exportable inside the selection, downloadable from the panel. */
+function DevAssets({ n, engine }: { n: XNode; engine: Engine }) {
+  const items = collectExportables(n);
+  if (!items.length) return null;
+  return (
+    <>
+      <div className="hr" />
+      <Section id="dev-assets" title={`Assets · ${items.length}`} defaultOpen={true}>
+        <div className="insp-pad dev-assets">
+          {items.map((a) => {
+            const p = a.exports?.[0] ?? { format: "PNG" as const, scale: 1, suffix: "" };
+            return (
+              <div className="dev-asset" key={a.id}>
+                <img className="xrow-thumb" src={previewUrl(a, { ...p, scale: 0.2 })} alt="" />
+                <button
+                  className="dev-asset-name"
+                  title="Select on canvas"
+                  onClick={() => {
+                    engine.dispatch({ type: "select", ids: [a.id] });
+                    zoomTo(engine, "selection");
+                  }}
+                >
+                  {a.name}
+                </button>
+                <span className="dev-asset-size">
+                  {Math.round(a.w)} × {Math.round(a.h)}
+                </span>
+                <button className="mini" title={`Download ${p.format}`} onClick={() => runExport(a, p)}>
+                  <Icon name="arrow-downward" size={12} />
+                </button>
+              </div>
+            );
+          })}
+          <button
+            className="export-run"
+            onClick={() => {
+              items.forEach((a, i) =>
+                window.setTimeout(() => runExport(a, a.exports?.[0] ?? { format: "PNG", scale: 1, suffix: "" }), i * 220),
+              );
+              toast(`Exporting ${plural(items.length, "asset")}`);
+            }}
+          >
+            Download all
+          </button>
+        </div>
+      </Section>
+    </>
+  );
+}
+
+/** Prototype interactions on the layer — Figma lists them with a jump. */
+function DevInteractions({ n, engine, snap }: { n: XNode; engine: Engine; snap: Snapshot }) {
+  const list = n.interactions ?? [];
+  if (!list.length) return null;
+  const root = snap.pages[snap.page].root;
+  return (
+    <>
+      <div className="hr" />
+      <Section id="dev-interactions" title={`Interactions · ${list.length}`} defaultOpen={true}>
+        <div className="insp-pad dev-group">
+          {list.map((it, i) => {
+            const dest = it.destination ? find(root, it.destination) : null;
+            return (
+              <div className="dev-row" key={i}>
+                <span className="dev-k">{devLabel(it.trigger)}</span>
+                <span className="dev-v">
+                  {devLabel(it.action)}
+                  {dest ? ` → ${dest.name}` : ""}
+                  {it.duration ? ` · ${it.duration}ms` : ""}
+                </span>
+                {dest && (
+                  <button
+                    className="mini"
+                    title="Go to destination"
+                    onClick={() => {
+                      engine.dispatch({ type: "select", ids: [dest.id] });
+                      zoomTo(engine, "selection");
+                    }}
+                  >
+                    <Icon name="chevron-right" size={11} />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </Section>
+    </>
+  );
+}
+
+/**
+ * Annotations. Figma lets a note pin a property so the value travels with the
+ * callout; here the + menu writes the property text into the note, which keeps
+ * the model a single string (and the canvas marker unchanged).
+ */
+function DevAnnotations({ n, engine, snap }: { n: XNode; engine: Engine; snap: Snapshot }) {
+  const [note, setNote] = useState("");
+  const [pin, setPin] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+  // ⇧T lands here, so the caret should already be in the note field.
+  useEffect(() => {
+    const on = () => input.current?.focus();
+    window.addEventListener("x-native-annotate", on);
+    return () => window.removeEventListener("x-native-annotate", on);
+  }, []);
+  const list = (snap.annotations ?? []).filter((a) => a.nodeId === n.id) ?? [];
+  const pins: [string, () => string][] = [
+    ["Fill", () => (n.fillVisible === false || isNone(n.fill) ? "Fill: none" : `Fill: ${n.fill.toUpperCase()}`)],
+    ["Border", () => `Border: ${n.strokeWidth}px ${n.strokePaint.toUpperCase()}`],
+    ["Size", () => `Size: ${Math.round(n.w)} × ${Math.round(n.h)}`],
+    ["Position", () => `Position: ${Math.round(n.x)}, ${Math.round(n.y)}`],
+    ["Radius", () => `Radius: ${n.cornerRadii.join(" ")}`],
+    ["Font", () => `Font: ${n.fontFamily} ${n.fontSize}/${n.lineHeight || "auto"}`],
+  ];
+  const add = () => {
+    const text = note.trim();
+    if (!text) return;
+    engine.dispatch({
+      type: "addAnnotation",
+      annotation: {
+        id: `ann_${Date.now().toString(36)}`,
+        nodeId: n.id,
+        note: text,
+        author: "You",
+        date: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      },
+    });
+    setNote("");
+    toast(`Annotation pinned to ${n.name}`);
+  };
+  return (
+    <>
       <div className="hr" />
       <div className="h-row">
         <h3>Annotations</h3>
-        <span style={{ fontSize: 10, color: "var(--dim)", marginLeft: "auto" }}>⇧T</span>
+        <span className="grow" />
+        <span className="sc">{list.length}</span>
       </div>
-      <div className="insp-pad" style={{ display: "grid", gap: 6 }}>
-        {layerAnnotations.map((ann) => (
-          <div
-            key={ann.id}
-            style={{
-              padding: 8,
-              borderRadius: 6,
-              background: "var(--hover)",
-              borderLeft: "3px solid #10b981",
-              fontSize: 11,
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-            }}
-          >
-            <span>{ann.note}</span>
+      <div className="insp-pad dev-annos">
+        {list.map((a) => (
+          <div className="dev-anno" key={a.id}>
+            <span className="dev-anno-dot" aria-hidden />
+            <div className="dev-anno-body">
+              <p>{a.note}</p>
+              <span className="dev-anno-meta">
+                {a.author ?? "You"}
+                {a.date ? ` · ${a.date}` : ""}
+              </span>
+            </div>
             <button
-              className="icon-btn"
-              title="Delete note"
-              onClick={() => engine?.dispatch({ type: "deleteAnnotation", id: ann.id })}
+              className="mini"
+              title="Delete annotation"
+              onClick={() => engine.dispatch({ type: "deleteAnnotation", id: a.id })}
             >
               <Icon name="trash" size={12} />
             </button>
           </div>
         ))}
-        <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+        <div className="dev-anno-add">
           <input
-            placeholder="Add note for dev…"
+            ref={input}
+            placeholder="Add a note…"
             value={note}
             onChange={(e) => setNote(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && note.trim() && engine) {
-                engine.dispatch({
-                  type: "addAnnotation",
-                  annotation: {
-                    id: "ann_" + Date.now(),
-                    nodeId: n.id,
-                    note: note.trim(),
-                    date: new Date().toLocaleTimeString(),
-                  },
-                });
-                setNote("");
-                toast("Annotation added");
-              }
-            }}
-            style={{
-              flex: 1,
-              height: 28,
-              background: "var(--input)",
-              border: "1px solid var(--line)",
-              borderRadius: 6,
-              padding: "0 8px",
-              fontSize: 11,
-              color: "var(--text)",
+              if (e.key === "Enter") add();
             }}
           />
-          <button
-            className="icon-btn"
-            title="Add note"
-            onClick={() => {
-              if (note.trim() && engine) {
-                engine.dispatch({
-                  type: "addAnnotation",
-                  annotation: {
-                    id: "ann_" + Date.now(),
-                    nodeId: n.id,
-                    note: note.trim(),
-                    date: new Date().toLocaleTimeString(),
-                  },
-                });
-                setNote("");
-                toast("Annotation added");
-              }
-            }}
-          >
-            <Icon name="plus" size={14} />
+          <div className="dev-pin">
+            <button className="mini" title="Pin a property" aria-expanded={pin} onClick={() => setPin((v) => !v)}>
+              <Icon name="plus" size={13} />
+            </button>
+            {pin && (
+              <div className="dev-menu right">
+                <p className="menu-label">Add property</p>
+                {pins.map(([label, get]) => (
+                  <button
+                    key={label}
+                    onClick={() => {
+                      const t = get();
+                      setNote((v) => (v.trim() ? `${v.trim()}\n${t}` : t));
+                      setPin(false);
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <button className="mini primary" title="Post annotation" onClick={add}>
+            <Icon name="check" size={13} />
           </button>
         </div>
+        <p className="dev-note">Markers show on the canvas as green dots while Dev Mode is on.</p>
       </div>
     </>
   );
 }
 
+/** "closeOverlay" reads as code; the panel lists intent, so split the camelCase. */
+function devLabel(v: string): string {
+  return (v || "")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/^./, (c) => c.toUpperCase());
+}
+
+/** Layers that can be exported: frames, slices and anything with settings. */
+function collectExportables(n: XNode): XNode[] {
+  const out: XNode[] = [];
+  const walk = (p: XNode) => {
+    for (const ch of p.children) {
+      if (ch.visible === false) continue;
+      if (ch.kind === "frame" || (ch.exports?.length ?? 0) > 0) out.push(ch);
+      else walk(ch);
+    }
+  };
+  walk(n);
+  return out;
+}
 function Design({
   n,
   x,

@@ -179,15 +179,25 @@ input, textarea { user-select: text; }
 .app.min-ui {
   grid-template-columns: 0 0 1fr 0;
 }
+/* Collapsed instead of display:none. Removing the rail and left panel from the
+   grid makes auto-placement slide the canvas into the first (zero-width)
+   column, which blanked the whole document — minimized UI had to keep the four
+   items in place for `1fr` to land on the canvas. */
 .app.min-ui .rail,
-.app.min-ui .left { display: none; }
+.app.min-ui .left {
+  width: 0;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  visibility: hidden;
+}
 /* Figma floats the right sidebar over the canvas while minimized, so the
    document keeps its full width instead of being squeezed by a docked panel.
    With nothing selected it collapses away entirely, and reappears on select. */
 .app.min-ui .right {
   position: absolute;
-  /* Below the floating toolbar, which stays visible in this state. */
-  top: 60px;
+  top: 12px;
   right: 8px;
   bottom: 8px;
   width: var(--right-w);
@@ -2759,6 +2769,9 @@ html[data-theme="graphite"] .primary { background: var(--blue); color: #fff; }
 
 /* Export assets sheet (⇧⌘E in both apps) */
 .xmodal-veil {
+  /* It takes focus so Escape is caught here; without this the veil would show
+     a root-sized focus ring. */
+  outline: none;
   position: fixed;
   inset: 0;
   background: rgba(8, 10, 16, 0.42);
@@ -2871,7 +2884,14 @@ html[data-theme="graphite"] .primary { background: var(--blue); color: #fff; }
   padding: 10px 12px;
   border-top: 1px solid var(--line);
 }
-.xmodal-foot .export-run { min-width: 120px; }
+.xmodal-foot .export-run {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 132px;
+  height: 30px;
+  padding: 0 14px;
+}
+.xmodal-foot .muted { flex: 1; min-width: 0; }
 
 /* Transient canvas hint for the tool that needs one */
 .canvas-hud {
@@ -2895,3 +2915,311 @@ html[data-theme="graphite"] .primary { background: var(--blue); color: #fff; }
 .canvas-hud b { font-weight: 600; font-variant-numeric: tabular-nums; }
 
 .right-head .grow { flex: 1; }
+
+/* ------------------------------------------------------------------ Dev Mode */
+.grow { flex: 1; }
+.dev-head { align-items: center; }
+.dev-seg { height: 22px; }
+.dev-seg button { padding: 0 8px; font-size: 11px; }
+/* The panel is only ~230px wide; without these, flex children keep their
+   intrinsic width and the row content is clipped by the panel edge. */
+.dev-annos,
+.dev-anno-add,
+.dev-anno-body,
+.dev-group,
+.dev-assets,
+.dev-asset,
+.dev-code,
+.dev-note,
+.dev-type { min-width: 0; overflow-wrap: anywhere; }
+.dev-anno-add input { flex: 1 1 auto; }
+.dev-preview { padding-bottom: 8px; }
+.dev-code { padding-top: 0; }
+.dev-codebar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.dev-codebar .mini { margin-left: auto; }
+.dev-pre {
+  max-height: 260px;
+  overflow: auto;
+  font-size: 10.5px;
+  line-height: 1.55;
+  white-space: pre;
+}
+/* Language + units menu, the same popover shape as the zoom menu. */
+.dev-lang { position: relative; }
+.dev-lang-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 6px 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--input);
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+.dev-lang-btn:hover { border-color: var(--line-2); background: var(--hover); }
+.dev-lang-unit {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--hover);
+  color: var(--muted);
+  font-size: 10px;
+}
+.dev-lang-caret { display: grid; place-items: center; opacity: 0.55; transition: transform 120ms ease; }
+.dev-lang-caret.up { transform: rotate(180deg); }
+/* Anchored to the trailing edge: the panel sits against the window, so a
+   left-aligned popover would be cut off by the viewport. */
+.dev-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  left: auto;
+  width: max(190px, 100%);
+  max-width: 240px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border-radius: 8px;
+  background: var(--elevated);
+  box-shadow: var(--shadow);
+  z-index: 90;
+  animation: x-pop-in 110ms cubic-bezier(0.2, 0, 0.13, 1);
+}
+.dev-menu.right { right: 0; left: auto; }
+.dev-menu .menu-label {
+  padding: 5px 8px 3px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.dev-menu button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.dev-menu button:hover { background: var(--hover); }
+.dev-menu button.on { background: var(--sel); color: var(--blue); font-weight: 600; }
+.dev-menu-note { margin-left: auto; color: var(--dim); font-size: 10px; }
+/* List view: property rows, click the value to copy it */
+.dev-group { display: grid; gap: 1px; padding-top: 2px; padding-bottom: 8px; }
+.dev-group-title {
+  margin: 4px 0 2px;
+  color: var(--dim);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.dev-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  height: 24px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.dev-row:hover { background: var(--hover); }
+.dev-row > svg { margin-left: auto; opacity: 0; }
+.dev-row:hover > svg { opacity: 0.6; }
+.dev-k {
+  flex: 0 0 84px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dev-v {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.dev-sw {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 11px;
+  border: 1px solid var(--line-2);
+  border-radius: 3px;
+}
+.dev-row.link:hover .dev-v { color: var(--blue); }
+/* Typographic preview */
+.dev-type {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--canvas);
+}
+.dev-type-sample {
+  margin: 0;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.dev-type-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+  color: var(--dim);
+  font-size: 10px;
+}
+/* Assets */
+.dev-assets { display: grid; gap: 2px; }
+.dev-asset {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 2px;
+  border-radius: 6px;
+}
+.dev-asset:hover { background: var(--hover); }
+.dev-asset-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.dev-asset-name:hover { color: var(--blue); }
+.dev-asset-size { color: var(--dim); font-size: 10px; font-variant-numeric: tabular-nums; }
+/* Annotations */
+.dev-annos { display: grid; gap: 6px; padding-bottom: 10px; }
+.dev-anno {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 7px 6px;
+  border-radius: 7px;
+  background: var(--hover);
+}
+.dev-anno-dot {
+  width: 7px;
+  height: 7px;
+  margin-top: 4px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.22);
+}
+.dev-anno-body { flex: 1; min-width: 0; }
+.dev-anno-body p { margin: 0; color: var(--text); font-size: 11px; white-space: pre-wrap; word-break: break-word; }
+.dev-anno-meta { color: var(--dim); font-size: 10px; }
+.dev-anno-add {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 4px 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--input);
+}
+.dev-anno-add:focus-within { border-color: var(--blue); background: var(--field-focus); }
+.dev-anno-add input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 11px;
+}
+.dev-pin { position: relative; }
+/* Both note buttons sit on the field's own surface: without this they inherit
+   the generic dark .mini plate and read as one chunky block. */
+.dev-anno-add .mini {
+  background: transparent;
+  color: var(--muted);
+}
+.dev-anno-add .mini:hover { background: var(--hover); color: var(--text); }
+.dev-anno-add .mini.primary { color: var(--blue); }
+.dev-anno-add .mini.primary:hover { background: var(--sel); color: var(--blue); }
+.dev-note { margin: 2px 0 0; color: var(--dim); font-size: 10px; line-height: 1.45; }
+.dev-empty { padding: 16px 14px; }
+.dev-empty-title { margin: 0 0 10px; font-size: 12px; font-weight: 600; }
+.dev-empty ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 7px; }
+.dev-empty li {
+  position: relative;
+  padding-left: 12px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.dev-empty li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--line-2);
+}
+.dev-empty b { color: var(--text); font-weight: 600; }
+
+/* File chrome for the minimized state: the left panel is collapsed, so the
+   name and the escape hatch float over the canvas instead. */
+.min-chip {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 34px;
+  padding: 0 4px 0 6px;
+  border-radius: 10px;
+  background: var(--elevated);
+  box-shadow: var(--shadow);
+  z-index: 61;
+}
+.min-chip-name {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+}

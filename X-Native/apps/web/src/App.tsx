@@ -12,6 +12,7 @@ import {
   usePanelDrag,
   type NavId,
 } from "./ui/chrome";
+import { Icon } from "./ui/icons";
 import { RightPanel } from "./ui/inspector";
 import { FigInspectorModal } from "./ui/FigInspectorModal";
 import { PresentationPlayer } from "./ui/PresentationPlayer";
@@ -205,14 +206,31 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
 
   // The zoom menu offers "Hide UI", which is this component's state, so it asks
   // through an event rather than threading another prop through the inspector.
+  // ⇧⌘E's bulk export sheet. The flag lives here, not in the panel, because
+  // Escape has to be resolved by the central hotkey handler: listeners a modal
+  // attaches itself are starved by the app's own capture-phase handler.
+  const [exportOpen, setExportOpen] = useState(false);
+  const overlayRef = useRef({ exportOpen, actions, figInspector });
+  overlayRef.current = { exportOpen, actions, figInspector };
+  const closeOverlay = () => {
+    const o = overlayRef.current;
+    if (o.exportOpen) setExportOpen(false);
+    else if (o.actions) setActions(false);
+    else if (o.figInspector) setFigInspector(false);
+    else return false;
+    return true;
+  };
   useEffect(() => {
     const on = () => setHideUi((v) => !v);
     const onMin = () => setMinUi((v) => !v);
+    const onExport = () => setExportOpen(true);
     window.addEventListener("x-native-hide-ui", on);
     window.addEventListener("x-native-minimize-ui", onMin);
+    window.addEventListener("x-native-export-dialog", onExport);
     return () => {
       window.removeEventListener("x-native-hide-ui", on);
       window.removeEventListener("x-native-minimize-ui", onMin);
+      window.removeEventListener("x-native-export-dialog", onExport);
     };
   }, []);
 
@@ -237,6 +255,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
         onHide: () => setHideUi((v) => !v),
         onMinimize: () => setMinUi((v) => !v),
         onNav: setNav,
+        onEscapeOverlay: closeOverlay,
         onPresentExit: () => {
           const s = engine.snapshot();
           if (s.presentFrame) {
@@ -289,6 +308,22 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
         {...leftDrag}
       />
       <div className="canvas-col">
+        {minUi && !hideUi && !snap.presentFrame && (
+          // Figma keeps the file name and a way out of the minimized state on
+          // screen; ours lives at the top of the left panel, which is hidden
+          // here, so the same two controls float in its place.
+          <div className="min-chip">
+            <button className="icon-btn" title="Back to files" onClick={onHome}>
+              <Icon name="back" size={14} />
+            </button>
+            <span className="min-chip-name" title="UI minimized · ⇧⌘\ restores the panels">
+              {snap.fileName}
+            </span>
+            <button className="icon-btn" title="Restore UI (⇧⌘\)" onClick={() => setMinUi(false)}>
+              <Icon name="minimize" size={14} />
+            </button>
+          </div>
+        )}
         <Canvas
           engine={engine}
           snap={snap}
@@ -339,7 +374,8 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
         snap={snap}
         onPresent={present}
         onShare={share}
-        onInspectFig={() => setFigInspector(true)}
+        exportOpen={exportOpen}
+        onCloseExport={() => setExportOpen(false)}
       />
       <div className="split r" style={{ display: hideUi ? "none" : undefined }} {...rightDrag} />
       {toast && <div className="toast">{toast}</div>}

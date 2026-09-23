@@ -871,6 +871,14 @@ export function Actions({
     { label: "Minimize UI", sc: "⇧⌘\\", run: () => onMinimize?.() },
     { label: "Export assets…", sc: "⇧⌘E", run: () => window.dispatchEvent(new CustomEvent("x-native-export-dialog")) },
     { label: "Dev Mode", sc: "⇧D", run: () => engine.dispatch({ type: "setRightTab", tab: "inspect" }) },
+    {
+      label: "Annotate selection",
+      sc: "⇧T",
+      run: () => {
+        engine.dispatch({ type: "setRightTab", tab: "inspect" });
+        window.dispatchEvent(new CustomEvent("x-native-annotate"));
+      },
+    },
     { label: "Prototype", sc: "", run: () => engine.dispatch({ type: "setRightTab", tab: "prototype" }) },
     { label: "Design", sc: "", run: () => engine.dispatch({ type: "setRightTab", tab: "design" }) },
     {
@@ -948,11 +956,21 @@ export function bindHotkeys(
     onMinimize: () => void;
     onNav?: (n: NavId) => void;
     onPresentExit?: () => void;
+    /** Close the topmost modal; returns whether one was open. */
+    onEscapeOverlay?: () => boolean;
   },
 ) {
   const onKey = (e: KeyboardEvent) => {
     const t = e.target as HTMLElement;
-    if (t.tagName === "INPUT" || t.tagName === "TEXTAREA") return;
+    const typing = t.tagName === "INPUT" || t.tagName === "TEXTAREA";
+    // Escape belongs to the open sheet, even while one of its own fields has
+    // focus — so it is resolved before the typing guard below can skip it.
+    if (e.key === "Escape" && !engine.snapshot().presentFrame && extra.onEscapeOverlay?.()) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      return;
+    }
+    if (typing) return;
     if (engine.snapshot().presentFrame && e.key !== "Escape") return;
     const meta = e.metaKey || e.ctrlKey;
     if (meta && e.altKey && e.key.toLowerCase() === "k") {
@@ -983,14 +1001,36 @@ export function bindHotkeys(
       extra.onActions();
       return;
     }
-    if (meta && e.shiftKey && e.key === "\\") {
+    // Keyed off `code`, not `key`: holding Shift turns this keyboard's
+    // backslash into another character, which silently broke the minimize half
+    // of the pair while ⌘\ (unshifted) kept working.
+    const backslash = e.code === "Backslash" || e.key === "\\" || e.key === "|";
+    if (meta && e.shiftKey && backslash) {
       e.preventDefault();
       extra.onMinimize();
       return;
     }
-    if (meta && e.key === "\\") {
+    if (meta && backslash) {
       e.preventDefault();
       extra.onHide();
+      return;
+    }
+    // ⇧T — Figma's Annotate: Dev Mode on, note field focused, ready to type.
+    if (e.shiftKey && !meta && !e.altKey && e.key.toLowerCase() === "t") {
+      e.preventDefault();
+      if (engine.snapshot().rightTab !== "inspect") {
+        engine.dispatch({ type: "setRightTab", tab: "inspect" });
+      }
+      window.dispatchEvent(new CustomEvent("x-native-annotate"));
+      return;
+    }
+    // ⇧T — Figma's Annotate: Dev Mode on, note field focused, ready to type.
+    if (e.shiftKey && !meta && !e.altKey && e.key.toLowerCase() === "t") {
+      e.preventDefault();
+      if (engine.snapshot().rightTab !== "inspect") {
+        engine.dispatch({ type: "setRightTab", tab: "inspect" });
+      }
+      window.dispatchEvent(new CustomEvent("x-native-annotate"));
       return;
     }
     if (e.shiftKey && e.key.toLowerCase() === "d" && !meta) {
@@ -1931,7 +1971,11 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
       { id: "search", name: "Quick actions / Search", keys: ["⌘", "/"] },
       { id: "hide-ui", name: "Show / hide UI", keys: ["⌘", "\\"] },
       { id: "dev-mode", name: "Dev Mode toggle", keys: ["⇧", "D"] },
+      { id: "annotate", name: "Annotate selection", keys: ["⇧", "T"] },
+      { id: "annotate", name: "Annotate selection", keys: ["⇧", "T"] },
       { id: "measure", name: "Measure distance", keys: ["⌥ (hold)"] },
+      { id: "export-all", name: "Export assets", keys: ["⇧", "⌘", "E"] },
+      { id: "export-all", name: "Export assets", keys: ["⇧", "⌘", "E"] },
     ],
   },
   {
@@ -2067,6 +2111,10 @@ export function HelpBtn() {
       else if (meta && k === "u") matchedId = "underline";
       else if (e.shiftKey && k === "a") matchedId = "auto-layout";
       else if (e.shiftKey && k === "d") matchedId = "dev-mode";
+      else if (e.shiftKey && k === "t") matchedId = "annotate";
+      else if (e.shiftKey && e.metaKey && k === "e") matchedId = "export-all";
+      else if (e.shiftKey && k === "t") matchedId = "annotate";
+      else if (e.shiftKey && e.metaKey && k === "e") matchedId = "export-all";
       else if (
         !meta &&
         !e.shiftKey &&
