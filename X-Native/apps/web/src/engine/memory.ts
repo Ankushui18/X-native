@@ -306,34 +306,44 @@ function applyLayout(n: XNode) {
 
 function demoPage(): Page {
   const title = node("text", "Title", 24, 28, 300, 32, {
-    text: "Product card",
+    text: "Explore Store",
     fontSize: 24,
-    fontWeight: 600,
+    fontWeight: 700,
     fill: "#0d1220",
   });
-  const body = node("text", "Body", 24, 68, 300, 40, {
-    text: "Auto layout, clip, and type — same model as x-core.",
+  const notifSwitch = node("rect", "Notifications Switch", 316, 32, 48, 26, {
+    fill: "#10b981",
+    cornerRadii: [13, 13, 13, 13],
+  });
+  const searchInput = node("text", "Search Input", 24, 76, 342, 40, {
+    text: "Search designs, icons, UI kits…",
+    fontSize: 13,
+    fill: "#64748b",
+  });
+  const body = node("text", "Body", 24, 126, 342, 36, {
+    text: "Interactive prototypes with live form typing and S-curve noodles.",
     fontSize: 13,
     fill: "#5a5f6b",
   });
-  const pill = node("rect", "Chip", 0, 0, 72, 28, {
-    fill: "#6b49f5",
-    cornerRadii: [14, 14, 14, 14],
+  const pill = node("rect", "View Details Button", 0, 0, 110, 32, {
+    fill: "#0d99ff",
+    cornerRadii: [16, 16, 16, 16],
   });
-  const pillLabel = node("text", "Label", 14, 6, 48, 16, {
-    text: "Ship",
+  const pillLabel = node("text", "Label", 18, 8, 80, 16, {
+    text: "View Details →",
     fontSize: 12,
     fontWeight: 600,
     fill: "#ffffff",
   });
   pill.children = [pillLabel];
-  const card = node("frame", "Card", 24, 128, 342, 160, {
-    fill: "#f7f8fa",
+
+  const card = node("frame", "Card", 24, 172, 342, 170, {
+    fill: "#f8fafc",
     cornerRadii: [16, 16, 16, 16],
     overflow: "clip",
     layout: {
       direction: "vertical",
-      gap: 8,
+      gap: 10,
       padding: [16, 16, 16, 16],
       sizing: "fixed",
       cross: "fixed",
@@ -343,49 +353,122 @@ function demoPage(): Page {
     },
   });
   const cardTitle = node("text", "Heading", 0, 0, 300, 22, {
-    text: "Frame with clip",
+    text: "Smart Animate Card",
     fontSize: 16,
     fontWeight: 600,
     fill: "#0d1220",
   });
   const cardBody = node("text", "Note", 0, 0, 300, 36, {
-    text: "Children that overflow are clipped when Clip content is on.",
+    text: "Click below to navigate with smooth Smart Animate transition.",
     fontSize: 12,
-    fill: "#5a5f6b",
+    fill: "#64748b",
   });
   card.children = [cardTitle, cardBody, pill];
-  const phone = node("frame", "iPhone 14", 80, 60, 390, 844, {
-    fill: "#ffffff",
-    cornerRadii: [32, 32, 32, 32],
-    overflow: "clip",
-    children: [title, body, card],
+
+  const filterBtn = node("rect", "Filter Options Button", 24, 360, 342, 44, {
+    fill: "#f1f5f9",
+    cornerRadii: [12, 12, 12, 12],
+    strokePaint: "#cbd5e1",
+    strokeWidth: 1,
+    strokeVisible: true,
   });
+  const filterLabel = node("text", "Filter Label", 110, 13, 140, 20, {
+    text: "⚙ Open Filter Sheet",
+    fontSize: 14,
+    fontWeight: 600,
+    fill: "#1e293b",
+  });
+  filterBtn.children = [filterLabel];
+
+  const phone = node("frame", "iPhone 16 Pro", 80, 60, 390, 844, {
+    fill: "#ffffff",
+    cornerRadii: [48, 48, 48, 48],
+    overflow: "clip",
+    children: [title, notifSwitch, searchInput, body, card, filterBtn],
+  });
+
   const back = node("text", "Back", 24, 28, 120, 24, {
     text: "← Back",
     fontSize: 16,
     fontWeight: 600,
-    fill: "#0d70f6",
-    interactions: [{ trigger: "onClick", action: "back", destination: "", animation: "instant", delay: 0 }],
+    fill: "#0d99ff",
+    interactions: [{ trigger: "onClick", action: "back", destination: "", animation: "dissolve", delay: 0 }],
   });
   const done = node("text", "Done", 24, 80, 320, 40, {
-    text: "Second screen — Esc or Back.",
-    fontSize: 20,
-    fontWeight: 600,
+    text: "Success Screen 🎉",
+    fontSize: 22,
+    fontWeight: 700,
     fill: "#0d1220",
   });
-  const screen2 = node("frame", "Success", 520, 60, 390, 844, {
-    fill: "#ffffff",
-    cornerRadii: [32, 32, 32, 32],
-    overflow: "clip",
-    children: [back, done],
+  const doneDesc = node("text", "DoneDesc", 24, 125, 342, 60, {
+    text: "Navigated via organic Figma S-curve noodle. Click ← Back or press Esc to return.",
+    fontSize: 14,
+    fill: "#64748b",
   });
+  const screen2 = node("frame", "Success", 540, 60, 390, 844, {
+    fill: "#ffffff",
+    cornerRadii: [48, 48, 48, 48],
+    overflow: "clip",
+    children: [back, done, doneDesc],
+  });
+
   pill.interactions = [
-    { trigger: "onClick", action: "navigate", destination: screen2.id, animation: "instant", delay: 0 },
+    { trigger: "onClick", action: "navigate", destination: screen2.id, animation: "smart", delay: 0 },
   ];
-  const pageRoot = node("frame", "Page 1", 0, 0, 1200, 800, {
+
+  // Bottom sheet modal overlay
+  const sheetHandle = node("rect", "Sheet Handle", 165, 12, 60, 5, {
+    fill: "#cbd5e1",
+    cornerRadii: [3, 3, 3, 3],
+  });
+  const sheetTitle = node("text", "Sheet Title", 24, 36, 260, 28, {
+    text: "Filter Options (Overlay)",
+    fontSize: 18,
+    fontWeight: 700,
+    fill: "#0f172a",
+  });
+  const sheetBody = node("text", "Sheet Body", 24, 70, 342, 40, {
+    text: "Interactive bottom sheet with dimmed backdrop. Tap outside to dismiss.",
+    fontSize: 13,
+    fill: "#64748b",
+  });
+  const closeSheet = node("rect", "Close Sheet Button", 24, 240, 342, 44, {
+    fill: "#0d99ff",
+    cornerRadii: [12, 12, 12, 12],
+    interactions: [{ trigger: "onClick", action: "closeOverlay", destination: "", animation: "dissolve", delay: 0 }],
+  });
+  const closeLabel = node("text", "Close Label", 125, 13, 120, 20, {
+    text: "Apply & Close",
+    fontSize: 14,
+    fontWeight: 600,
+    fill: "#ffffff",
+  });
+  closeSheet.children = [closeLabel];
+
+  const filterSheet = node("frame", "Filter Sheet", 80, 960, 390, 320, {
+    fill: "#ffffff",
+    cornerRadii: [24, 24, 0, 0],
+    overflow: "clip",
+    children: [sheetHandle, sheetTitle, sheetBody, closeSheet],
+  });
+
+  filterBtn.interactions = [
+    {
+      trigger: "onClick",
+      action: "openOverlay",
+      destination: filterSheet.id,
+      animation: "slideInBottom",
+      delay: 0,
+      overlayPosition: "bottom",
+      overlayCloseOutside: true,
+      overlayBackdrop: true,
+    },
+  ];
+
+  const pageRoot = node("frame", "Page 1", 0, 0, 1400, 1400, {
     fill: "#00000000",
     overflow: "visible",
-    children: [phone, screen2],
+    children: [phone, screen2, filterSheet],
   });
   applyLayout(phone);
   applyLayout(card);
