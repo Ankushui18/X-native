@@ -186,10 +186,12 @@ input, textarea { user-select: text; }
    With nothing selected it collapses away entirely, and reappears on select. */
 .app.min-ui .right {
   position: absolute;
-  top: 8px;
+  /* Below the floating toolbar, which stays visible in this state. */
+  top: 60px;
   right: 8px;
   bottom: 8px;
   width: var(--right-w);
+  border-left: 0;
   border-radius: 12px;
   box-shadow: var(--shadow);
   z-index: 60;
