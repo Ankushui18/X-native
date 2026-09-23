@@ -18,6 +18,7 @@ import {
   bendSegment,
   insertPointOnPath,
   projectPointOnSegment,
+  computeFigmaNoodle,
 } from "../geometry.ts";
 import { MemoryEngine } from "../memory.ts";
 import { inspectFigFile, importFig } from "../figImport.ts";
@@ -600,6 +601,21 @@ console.log("component instance overrides:");
   const varId = ep.snapshot().variables?.[2].id;
   ep.dispatch({ type: "patchVariable", id: varId, patch: { value: 9 } });
   t("patchVariable executes state mutation", ep.snapshot().variables?.find((v) => v.id === varId)?.value === 9);
+
+  // Organic S-curve noodle routing (Figma Guide parity)
+  const nRight = computeFigmaNoodle(0, 0, 100, 50, 300, 0, 100, 50);
+  t("noodle chooses right-to-left for rightward destination", nRight.sourceSide === "right" && nRight.destSide === "left");
+  t("noodle creates smooth horizontal S-curve control points", nRight.cp1x > nRight.ax && nRight.cp2x < nRight.bx);
+
+  const nBelow = computeFigmaNoodle(0, 0, 100, 50, 0, 300, 100, 50);
+  t("noodle chooses bottom-to-top for downward destination", nBelow.sourceSide === "bottom" && nBelow.destSide === "top");
+  t("noodle creates smooth vertical S-curve control points", nBelow.cp1y > nBelow.ay && nBelow.cp2y < nBelow.by);
+
+  const nLeft = computeFigmaNoodle(300, 0, 100, 50, 0, 0, 100, 50);
+  t("noodle chooses left-to-right for leftward destination", nLeft.sourceSide === "left" && nLeft.destSide === "right");
+
+  const nAbove = computeFigmaNoodle(0, 300, 100, 50, 0, 0, 100, 50);
+  t("noodle chooses top-to-bottom for upward destination", nAbove.sourceSide === "top" && nAbove.destSide === "bottom");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

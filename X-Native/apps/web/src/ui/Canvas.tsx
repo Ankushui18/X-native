@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Engine, Interaction, NodeKind, PathPoint, ProtoAnim, Snapshot, Tool, VectorNetwork, XNode } from "../engine/types";
 import { deepestFrame, find, findParent, hitTest, worldToLocal, worldPos } from "../engine/memory";
-import { erasePath, shapePoly, simplifyPath, smoothPath, vertexDegree, insertPointOnPath, projectPointOnSegment } from "../engine/geometry";
+import { erasePath, shapePoly, simplifyPath, smoothPath, vertexDegree, insertPointOnPath, projectPointOnSegment, computeFigmaNoodle } from "../engine/geometry";
 import {
   snapCandidates,
   snapMove,
@@ -87,6 +87,7 @@ type Drag =
       segIndex?: number;
       handle?: "in" | "out" | "g" | "h";
       padEdge?: "top" | "right" | "bottom" | "left";
+      forcedSide?: "right" | "bottom" | "left" | "top";
       origPad?: [number, number, number, number];
       origGap?: number;
       fromX?: number;
@@ -161,7 +162,9 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     fromY: number;
     toX: number;
     toY: number;
+    srcId?: string;
     targetId?: string;
+    forcedSide?: "right" | "bottom" | "left" | "top";
   } | null>(null);
   /** Static snap targets, captured once at drag start so they never shift mid-drag. */
   const snapTargets = useRef<Box[]>([]);
@@ -790,90 +793,226 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     }
 
     if (snap.rightTab === "prototype" && !snap.presentFrame) {
-      walkInteractions(root, 0, 0, (n, nx, ny, destId) => {
-        const dest = worldPos(root, destId);
-        if (!dest) return;
-        const ax = snap.panX + (nx + n.w) * z;
-        const ay = snap.panY + (ny + n.h / 2) * z;
-        const bx = snap.panX + dest.x * z;
-        const by = snap.panY + (dest.y + dest.node.h / 2) * z;
-        ctx.strokeStyle = "#0d99ff";
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(ax, ay);
-        ctx.bezierCurveTo(ax + 40, ay, bx - 40, by, bx, by);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(ax, ay, 4, 0, Math.PI * 2);
-        ctx.fillStyle = "#0d99ff";
-        ctx.fill();
-        // Destination arrowhead
-        ctx.fillStyle = "#0d99ff";
-        ctx.beginPath();
-        ctx.moveTo(bx, by);
-        ctx.lineTo(bx - 7, by - 4);
-        ctx.lineTo(bx - 7, by + 4);
-        ctx.closePath();
-        ctx.fill();
-      });
+      // 1. Render Flow Starting Point Badge ("Flow 1") on starting frame (Figma parity)
+      const flowStartId = snap.pages[snap.page].flowStart;
+      if (flowStartId) {
+        const startWp = worldPos(root, flowStartId);
+        if (startWp) {
+          const fx = snap.panX + startWp.x * z;
+          const fy = snap.panY + startWp.y * z;
+          const badgeText = "Flow 1";
+          ctx.save();
+          ctx.font = "600 11px Inter, system-ui";
+          const tw = ctx.measureText(badgeText).width;
+          const pw = tw + 28;
+          const ph = 22;
+          const px = fx;
+          const py = fy - ph - 8;
 
-      // Hotspot on selected node in prototype mode
-      if (snap.selection.length === 1) {
-        const wp = worldPos(root, snap.selection[0]);
-        if (wp) {
-          const cx = snap.panX + (wp.x + wp.node.w) * z;
-          const cy = snap.panY + (wp.y + wp.node.h / 2) * z;
-          ctx.beginPath();
-          ctx.arc(cx, cy, 7, 0, Math.PI * 2);
           ctx.fillStyle = "#0d99ff";
-          ctx.fill();
-          ctx.lineWidth = 1.5;
-          ctx.strokeStyle = "#ffffff";
-          ctx.stroke();
-          // Plus symbol
           ctx.beginPath();
-          ctx.strokeStyle = "#ffffff";
-          ctx.lineWidth = 1.5;
-          ctx.moveTo(cx - 3.5, cy);
-          ctx.lineTo(cx + 3.5, cy);
-          ctx.moveTo(cx, cy - 3.5);
-          ctx.lineTo(cx, cy + 3.5);
-          ctx.stroke();
+          if (typeof ctx.roundRect === "function") {
+            ctx.roundRect(px, py, pw, ph, 11);
+          } else {
+            ctx.rect(px, py, pw, ph);
+          }
+          ctx.fill();
+
+          // Play icon
+          ctx.fillStyle = "#ffffff";
+          ctx.beginPath();
+          ctx.moveTo(px + 8, py + 6);
+          ctx.lineTo(px + 16, py + 11);
+          ctx.lineTo(px + 8, py + 16);
+          ctx.closePath();
+          ctx.fill();
+
+          ctx.fillStyle = "#ffffff";
+          ctx.fillText(badgeText, px + 20, py + 15);
+          ctx.restore();
         }
       }
 
-      // Live dragging noodle
-      if (protoDrag) {
-        const ax = snap.panX + protoDrag.fromX * z;
-        const ay = snap.panY + protoDrag.fromY * z;
-        const bx = snap.panX + protoDrag.toX * z;
-        const by = snap.panY + protoDrag.toY * z;
-        ctx.strokeStyle = "#0d99ff";
-        ctx.lineWidth = 2;
+      // 2. Render all interaction connection noodles with smooth Figma S-curve geometry
+      walkInteractions(root, 0, 0, (n, nx, ny, destId, _ix, isOverlay) => {
+        const dest = worldPos(root, destId);
+        if (!dest) return;
+
+        const noodle = computeFigmaNoodle(
+          nx,
+          ny,
+          n.w,
+          n.h,
+          dest.x,
+          dest.y,
+          dest.node.w,
+          dest.node.h,
+        );
+
+        const sax = snap.panX + noodle.ax * z;
+        const say = snap.panY + noodle.ay * z;
+        const scp1x = snap.panX + noodle.cp1x * z;
+        const scp1y = snap.panY + noodle.cp1y * z;
+        const scp2x = snap.panX + noodle.cp2x * z;
+        const scp2y = snap.panY + noodle.cp2y * z;
+        const sbx = snap.panX + noodle.bx * z;
+        const sby = snap.panY + noodle.by * z;
+
+        ctx.save();
+        ctx.strokeStyle = isOverlay ? "#a855f7" : "#0d99ff";
+        ctx.lineWidth = 1.8;
+        if (isOverlay) ctx.setLineDash([5, 4]);
+
         ctx.beginPath();
-        ctx.moveTo(ax, ay);
-        ctx.bezierCurveTo(ax + 50, ay, bx - 50, by, bx, by);
+        ctx.moveTo(sax, say);
+        ctx.bezierCurveTo(scp1x, scp1y, scp2x, scp2y, sbx, sby);
         ctx.stroke();
 
-        ctx.fillStyle = "#0d99ff";
+        // Source circular anchor dot
+        ctx.fillStyle = isOverlay ? "#a855f7" : "#0d99ff";
         ctx.beginPath();
-        ctx.arc(bx, by, 5, 0, Math.PI * 2);
+        ctx.arc(sax, say, 4.5, 0, Math.PI * 2);
         ctx.fill();
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 1.25;
+        ctx.stroke();
 
-        // Highlight candidate destination frame
-        if (protoDrag.targetId) {
-          const twp = worldPos(root, protoDrag.targetId);
-          if (twp) {
-            ctx.strokeStyle = "#0d99ff";
-            ctx.lineWidth = 2;
-            ctx.strokeRect(
-              snap.panX + twp.x * z,
-              snap.panY + twp.y * z,
-              twp.node.w * z,
-              twp.node.h * z,
-            );
+        // Destination rotated arrowhead
+        ctx.save();
+        ctx.translate(sbx, sby);
+        ctx.rotate(noodle.angle);
+        ctx.fillStyle = isOverlay ? "#a855f7" : "#0d99ff";
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(-8, -4.5);
+        ctx.lineTo(-6.5, 0);
+        ctx.lineTo(-8, 4.5);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+
+        ctx.restore();
+      });
+
+      // 3. Hotspot connector handles on selected node (4 sides)
+      if (snap.selection.length === 1) {
+        const wp = worldPos(root, snap.selection[0]);
+        if (wp) {
+          const sx = snap.panX + wp.x * z;
+          const sy = snap.panY + wp.y * z;
+          const sw = wp.node.w * z;
+          const sh = wp.node.h * z;
+
+          const handles = [
+            { x: sx + sw, y: sy + sh / 2 },
+            { x: sx + sw / 2, y: sy + sh },
+            { x: sx, y: sy + sh / 2 },
+            { x: sx + sw / 2, y: sy },
+          ];
+
+          for (const h of handles) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(h.x, h.y, 6.5, 0, Math.PI * 2);
+            ctx.fillStyle = "#0d99ff";
+            ctx.fill();
+            ctx.strokeStyle = "#ffffff";
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+
+            // Plus symbol inside handle
+            ctx.beginPath();
+            ctx.strokeStyle = "#ffffff";
+            ctx.lineWidth = 1.5;
+            ctx.moveTo(h.x - 3, h.y);
+            ctx.lineTo(h.x + 3, h.y);
+            ctx.moveTo(h.x, h.y - 3);
+            ctx.lineTo(h.x, h.y + 3);
+            ctx.stroke();
+            ctx.restore();
           }
         }
+      }
+
+      // 4. Live dragging noodle using computeFigmaNoodle
+      if (protoDrag) {
+        const srcWp = protoDrag.srcId ? worldPos(root, protoDrag.srcId) : null;
+        const twp = protoDrag.targetId ? worldPos(root, protoDrag.targetId) : null;
+
+        const noodle = computeFigmaNoodle(
+          srcWp ? srcWp.x : protoDrag.fromX,
+          srcWp ? srcWp.y : protoDrag.fromY,
+          srcWp ? srcWp.node.w : 0,
+          srcWp ? srcWp.node.h : 0,
+          twp ? twp.x : protoDrag.toX,
+          twp ? twp.y : protoDrag.toY,
+          twp ? twp.node.w : 0,
+          twp ? twp.node.h : 0,
+          protoDrag.forcedSide,
+        );
+
+        const sax = snap.panX + noodle.ax * z;
+        const say = snap.panY + noodle.ay * z;
+        const scp1x = snap.panX + noodle.cp1x * z;
+        const scp1y = snap.panY + noodle.cp1y * z;
+        const scp2x = snap.panX + noodle.cp2x * z;
+        const scp2y = snap.panY + noodle.cp2y * z;
+        const sbx = snap.panX + noodle.bx * z;
+        const sby = snap.panY + noodle.by * z;
+
+        ctx.save();
+        ctx.strokeStyle = "#0d99ff";
+        ctx.lineWidth = 2.2;
+        ctx.beginPath();
+        ctx.moveTo(sax, say);
+        ctx.bezierCurveTo(scp1x, scp1y, scp2x, scp2y, sbx, sby);
+        ctx.stroke();
+
+        // Source circle
+        ctx.fillStyle = "#0d99ff";
+        ctx.beginPath();
+        ctx.arc(sax, say, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // Destination indicator / arrow
+        if (twp) {
+          ctx.save();
+          ctx.translate(sbx, sby);
+          ctx.rotate(noodle.angle);
+          ctx.fillStyle = "#0d99ff";
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.lineTo(-9, -5);
+          ctx.lineTo(-7, 0);
+          ctx.lineTo(-9, 5);
+          ctx.closePath();
+          ctx.fill();
+          ctx.restore();
+        } else {
+          ctx.fillStyle = "#0d99ff";
+          ctx.beginPath();
+          ctx.arc(sbx, sby, 5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
+
+        // Highlight candidate destination frame
+        if (twp) {
+          ctx.strokeStyle = "#0d99ff";
+          ctx.lineWidth = 2.5;
+          ctx.strokeRect(
+            snap.panX + twp.x * z,
+            snap.panY + twp.y * z,
+            twp.node.w * z,
+            twp.node.h * z,
+          );
+        }
+        ctx.restore();
       }
     }
 
@@ -1581,26 +1720,53 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         }
         const ft = wp.node.fillType;
         if (snap.rightTab === "prototype") {
-          const cx = sx + wp.node.w * z;
-          const cy = sy + (wp.node.h * z) / 2;
-          if (Math.hypot(rawX - cx, rawY - cy) <= 12) {
-            drag.current = {
-              mode: "protoConnect",
-              sx: e.clientX,
-              sy: e.clientY,
-              wx: wpt.x,
-              wy: wpt.y,
-              fromX: wp.x + wp.node.w,
-              fromY: wp.y + wp.node.h / 2,
-              id: wp.node.id,
-            };
-            setProtoDrag({
-              fromX: wp.x + wp.node.w,
-              fromY: wp.y + wp.node.h / 2,
-              toX: wpt.x,
-              toY: wpt.y,
-            });
-            return;
+          // Flow starting point badge click
+          const flowStartId = snap.pages[snap.page].flowStart;
+          if (flowStartId) {
+            const startWp = worldPos(root, flowStartId);
+            if (startWp) {
+              const fx = snap.panX + startWp.x * z;
+              const fy = snap.panY + startWp.y * z;
+              if (rawX >= fx && rawX <= fx + 75 && rawY >= fy - 32 && rawY <= fy - 8) {
+                engine.dispatch({ type: "presentStart", id: flowStartId });
+                return;
+              }
+            }
+          }
+
+          const sw = wp.node.w * z;
+          const sh = wp.node.h * z;
+          const handles = [
+            { x: sx + sw, y: sy + sh / 2, side: "right" as const },
+            { x: sx + sw / 2, y: sy + sh, side: "bottom" as const },
+            { x: sx, y: sy + sh / 2, side: "left" as const },
+            { x: sx + sw / 2, y: sy, side: "top" as const },
+          ];
+          for (const h of handles) {
+            if (Math.hypot(rawX - h.x, rawY - h.y) <= 13) {
+              const fromX = wp.x + (h.side === "right" ? wp.node.w : h.side === "left" ? 0 : wp.node.w / 2);
+              const fromY = wp.y + (h.side === "bottom" ? wp.node.h : h.side === "top" ? 0 : wp.node.h / 2);
+              drag.current = {
+                mode: "protoConnect",
+                sx: e.clientX,
+                sy: e.clientY,
+                wx: wpt.x,
+                wy: wpt.y,
+                fromX,
+                fromY,
+                id: wp.node.id,
+                forcedSide: h.side,
+              };
+              setProtoDrag({
+                srcId: wp.node.id,
+                fromX,
+                fromY,
+                toX: wpt.x,
+                toY: wpt.y,
+                forcedSide: h.side,
+              });
+              return;
+            }
           }
         }
         if (ft === "linear" || ft === "radial" || ft === "angular" || ft === "diamond") {
@@ -1919,14 +2085,29 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       d.sy = e.clientY;
     } else if (d.mode === "protoConnect" && d.id) {
       const wpt = toWorld(e.clientX, e.clientY);
-      const hit = hitTest(snap.pages[snap.page].root, wpt.x, wpt.y, { includeLocked: false });
-      const targetId = hit && hit.id !== d.id ? hit.id : undefined;
+      const root = snap.pages[snap.page].root;
+      let targetId: string | undefined = undefined;
+      for (const ch of root.children) {
+        if (ch.id !== d.id && ch.kind === "frame") {
+          const wp = worldPos(root, ch.id);
+          if (wp && wpt.x >= wp.x && wpt.x <= wp.x + wp.node.w && wpt.y >= wp.y && wpt.y <= wp.y + wp.node.h) {
+            targetId = ch.id;
+            break;
+          }
+        }
+      }
+      if (!targetId) {
+        const hit = hitTest(root, wpt.x, wpt.y, { includeLocked: false });
+        if (hit && hit.id !== d.id) targetId = hit.id;
+      }
       setProtoDrag({
+        srcId: d.id,
         fromX: d.fromX ?? wpt.x,
         fromY: d.fromY ?? wpt.y,
         toX: wpt.x,
         toY: wpt.y,
         targetId,
+        forcedSide: d.forcedSide,
       });
       return;
     } else if (d.mode === "move" && (snap.tool === "select" || snap.tool === "scale")) {
@@ -2236,6 +2417,18 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
               },
             ],
           });
+          // Auto-set flow starting point on first connection (Figma parity)
+          const currentPage = snap.pages[snap.page];
+          if (!currentPage.flowStart) {
+            let startFrame: XNode | null = srcNode.kind === "frame" ? srcNode : findParent(root, srcNode.id);
+            while (startFrame && startFrame.kind !== "frame" && startFrame !== root) {
+              startFrame = findParent(root, startFrame.id);
+            }
+            const flowId = startFrame && startFrame !== root ? startFrame.id : (srcNode.kind === "frame" ? srcNode.id : targetNode.id);
+            if (flowId) {
+              engine.dispatch({ type: "patchPage", patch: { flowStart: flowId } });
+            }
+          }
           toast(`Connected to ${targetNode.name}`);
         }
       }
@@ -3465,12 +3658,17 @@ function walkInteractions(
   n: XNode,
   px: number,
   py: number,
-  fn: (n: XNode, x: number, y: number, dest: string) => void,
+  fn: (n: XNode, x: number, y: number, dest: string, ix: Interaction, isOverlay: boolean) => void,
 ) {
   const x = px + n.x;
   const y = py + n.y;
   for (const ix of n.interactions ?? []) {
-    if (ix.action === "navigate" && ix.destination) fn(n, x, y, ix.destination);
+    if (ix.destination) {
+      const isOverlay = ix.action === "openOverlay" || ix.action === "swapOverlay";
+      if (ix.action === "navigate" || isOverlay) {
+        fn(n, x, y, ix.destination, ix, isOverlay);
+      }
+    }
   }
   for (const c of n.children) walkInteractions(c, x, y, fn);
 }

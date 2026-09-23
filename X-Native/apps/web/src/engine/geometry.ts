@@ -635,3 +635,137 @@ export function findNetworkLoops(vn: VectorNetwork): number[][] {
 
   return loops;
 }
+
+export interface NoodleCurve {
+  ax: number;
+  ay: number;
+  cp1x: number;
+  cp1y: number;
+  cp2x: number;
+  cp2y: number;
+  bx: number;
+  by: number;
+  angle: number;
+  sourceSide: "right" | "bottom" | "left" | "top";
+  destSide: "right" | "bottom" | "left" | "top";
+}
+
+/**
+ * Calculates a smooth, organic Figma-grade S-curve connection noodle between
+ * source node and destination frame (or mouse cursor). Dynamically selects the
+ * best perimeter edges (right/left/top/bottom) and computes tangential cubic
+ * Bézier control handles and rotating arrowhead orientation.
+ */
+export function computeFigmaNoodle(
+  srcX: number,
+  srcY: number,
+  srcW: number,
+  srcH: number,
+  destX: number,
+  destY: number,
+  destW: number = 0,
+  destH: number = 0,
+  forcedSourceSide?: "right" | "bottom" | "left" | "top",
+): NoodleCurve {
+  const scx = srcX + srcW / 2;
+  const scy = srcY + srcH / 2;
+  const dcx = destW > 0 ? destX + destW / 2 : destX;
+  const dcy = destH > 0 ? destY + destH / 2 : destY;
+
+  const dx = dcx - scx;
+  const dy = dcy - scy;
+
+  let sourceSide: "right" | "bottom" | "left" | "top" = forcedSourceSide || "right";
+  let destSide: "right" | "bottom" | "left" | "top" = "left";
+
+  if (!forcedSourceSide) {
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      sourceSide = dx >= 0 ? "right" : "left";
+      destSide = dx >= 0 ? "left" : "right";
+    } else {
+      sourceSide = dy >= 0 ? "bottom" : "top";
+      destSide = dy >= 0 ? "top" : "bottom";
+    }
+  } else {
+    if (sourceSide === "right") destSide = "left";
+    else if (sourceSide === "left") destSide = "right";
+    else if (sourceSide === "bottom") destSide = "top";
+    else if (sourceSide === "top") destSide = "bottom";
+  }
+
+  let ax = srcX + srcW;
+  let ay = scy;
+  let normAx = 1;
+  let normAy = 0;
+
+  if (sourceSide === "right") {
+    ax = srcX + srcW;
+    ay = scy;
+    normAx = 1;
+    normAy = 0;
+  } else if (sourceSide === "left") {
+    ax = srcX;
+    ay = scy;
+    normAx = -1;
+    normAy = 0;
+  } else if (sourceSide === "bottom") {
+    ax = scx;
+    ay = srcY + srcH;
+    normAx = 0;
+    normAy = 1;
+  } else if (sourceSide === "top") {
+    ax = scx;
+    ay = srcY;
+    normAx = 0;
+    normAy = -1;
+  }
+
+  let bx = destX;
+  let by = destH > 0 ? dcy : destY;
+  let normBx = -1;
+  let normBy = 0;
+
+  if (destW > 0 || destH > 0) {
+    if (destSide === "left") {
+      bx = destX;
+      by = dcy;
+      normBx = -1;
+      normBy = 0;
+    } else if (destSide === "right") {
+      bx = destX + destW;
+      by = dcy;
+      normBx = 1;
+      normBy = 0;
+    } else if (destSide === "top") {
+      bx = dcx;
+      by = destY;
+      normBx = 0;
+      normBy = -1;
+    } else if (destSide === "bottom") {
+      bx = dcx;
+      by = destY + destH;
+      normBx = 0;
+      normBy = 1;
+    }
+  } else {
+    bx = destX;
+    by = destY;
+    const dragDx = bx - ax;
+    const dragDy = by - ay;
+    const dragDist = Math.hypot(dragDx, dragDy) || 1;
+    normBx = -dragDx / dragDist;
+    normBy = -dragDy / dragDist;
+  }
+
+  const dist = Math.hypot(bx - ax, by - ay);
+  const curvature = Math.max(32, Math.min(220, dist * 0.42));
+
+  const cp1x = ax + normAx * curvature;
+  const cp1y = ay + normAy * curvature;
+  const cp2x = bx + normBx * curvature;
+  const cp2y = by + normBy * curvature;
+
+  const angle = Math.atan2(by - cp2y, bx - cp2x);
+
+  return { ax, ay, cp1x, cp1y, cp2x, cp2y, bx, by, angle, sourceSide, destSide };
+}
