@@ -82,11 +82,10 @@ the relationship is recorded in the source and not only here.
 
 ## Two tracks, running in parallel
 
-Provisioning a reproducible Rust toolchain is the blocker for **evaluating the
-Rust architecture and beginning a safe migration**. It is *not* a blocker for
-continuing to improve the current TypeScript product. Freezing product work
-around an architecture that has not yet been demonstrated would be the wrong
-trade.
+A local Rust toolchain would make migration work comfortable, but it is not a
+prerequisite: CI already builds and tests the workspace. Neither track blocks
+the other, and freezing product work around an architecture that has not yet
+been demonstrated would be the wrong trade.
 
 ```
 TYPESCRIPT PRODUCT              RUST MIGRATION TRACK
@@ -101,7 +100,7 @@ TYPESCRIPT PRODUCT              RUST MIGRATION TRACK
 
 Both tracks are live. Neither waits on the other.
 
-## Migration, when the toolchain exists
+## Migration sequence
 
 ```
 TypeScript production
@@ -186,23 +185,33 @@ including `wgpu` and `vello`. There is no `vendor/` directory and no `.cargo/`
 config, so a build would have to fetch all of them from crates.io. Even a
 working rustc would not produce a build here.
 
-**What would unblock it**, in order of preference:
+**What would unblock local work**, in order of preference:
 
 1. Allowlist `static.rust-lang.org` and `crates.io` (plus `index.crates.io`,
    `static.crates.io`) in the sandbox egress rules.
 2. Or bake `cargo`/`rustc` into the dev image and commit a `vendor/` directory
    (`cargo vendor`) so builds are offline-capable.
-3. Or run the Rust half in CI only, where the network is unrestricted, and
-   treat local work as TypeScript-only — in which case this document's
-   migration sequence happens on CI rather than a developer machine.
 
-No Rust in this repository has been compiled or executed in this environment.
-The 914 `#[test]` annotations in `crates/` are real code, but nobody has run
-them here — any claim that they pass is unverified.
+Neither is needed to *begin*. CI already compiles and tests the workspace, so
+the first slice can be proven there. Local access decides whether the work is
+comfortable, not whether it is possible.
+
+No Rust in this repository has been compiled or executed **in this sandbox**.
+
+**CI is a different story, and it changes the plan.**
+`.github/workflows/ci.yml` installs the pinned 1.98.1 toolchain and runs
+`scripts/check.sh`, which does `cargo fmt --check`, `cargo clippy --workspace
+--all-targets` and `cargo test --workspace --locked`. Those runs pass on this
+branch. So the Rust does compile and its tests do run — just not here.
+
+The toolchain is therefore not a blocker for *evaluating* the Rust
+architecture. It only blocks doing that work interactively. The first bridge
+slice can be built and proven in CI today.
 
 ## Enforcement
 
-Until a toolchain exists this is a review rule, not a build gate:
+This is a review rule rather than a build gate, because no CI job yet compares
+the two implementations:
 
 - A new file in `apps/web/src/engine/` should say which capability it owns and
   whether a Rust counterpart exists.
@@ -212,6 +221,6 @@ Until a toolchain exists this is a review rule, not a build gate:
 - Adding a *second* implementation of a capability that already has an
   authoritative one requires a migration plan, not just a patch.
 
-Once a toolchain exists, the migration track should add a CI job that builds the
-wasm artifact and runs the equivalence checks, so the boundary becomes
-mechanically checkable instead of social.
+The migration track should add a CI job that builds the wasm artifact and runs
+the equivalence checks, so the boundary becomes mechanically checkable instead
+of social. CI already has the toolchain, so this is buildable now.
