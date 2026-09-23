@@ -42,7 +42,7 @@ recon task, not a settled fact.
 | 8 Fill, stroke, effects, colour | 25 | 25 | 0 | 0 | 0 | 0 |
 | 9 Images | 9 | 7 | 2 | 0 | 0 | 0 |
 | 10 Text & typography | 18 | 18 | 0 | 0 | 0 | 0 |
-| 11 Vector editing & booleans | 20 | 15 | 4 | 1 | 0 | 0 |
+| 11 Vector editing & booleans | 20 | 16 | 4 | 0 | 0 | 0 |
 | 12 Components, instances, styles | 21 | 19 | 2 | 0 | 0 | 0 |
 | 13 Variables & modes | 9 | 8 | 1 | 0 | 0 | 0 |
 | 14 Prototype | 30 | 22 | 7 | 0 | 0 | 1 |
@@ -52,7 +52,7 @@ recon task, not a settled fact.
 | 18 Design language (look of the app itself) | 12 | 5 | 7 | 0 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **340** | **284** | **35** | **1** | **16** | **4** |
+| **total** | **340** | **285** | **35** | **0** | **16** | **4** |
 
 The 17 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
@@ -353,7 +353,7 @@ position, canvas stacking, "distribute", `⇧A` to add.
 | 11.14 | Pen: click-drag curves | yes | yes | MATCH |
 | 11.15 | Pen: close path | click the first point | yes | MATCH |
 | 11.16 | **Pen: edit while drawing** | exit/`Esc`, reopen, continue | our pen commits on finish; *verify* continue-a-path | PARTIAL |
-| 11.17 | **Vector networks** | branches, not just paths | we are path-based only | **MISSING** (structural) |
+| 11.17 | **Vector networks** | branches, not just paths | Evan Wallace Vector Network planar graph model (`VectorNetwork`, `VectorVertex`, `VectorSegment`, `VectorRegion`); supports arbitrary branching (degree ≥ 3), T-junctions, interior faces, Bézier handles, canvas rendering, and Figma Kiwi binary blob parsing; pinned by `parity.test.mjs` | MATCH |
 | 11.18 | **Snap to pixel / snap to objects** | toggles + `⌘⇧` modifiers | snapping exists inside drags; no explicit toggle row | PARTIAL |
 | 11.19 | Arc as a vector | arc → edit points | arc geometry editable as shape only | PARTIAL |
 | 11.20 | Sketch import of vectors | n/a (Figma reads .fig) | sketch.rs (2229 lines) | MATCH |

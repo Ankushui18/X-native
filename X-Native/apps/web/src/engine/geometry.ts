@@ -1,4 +1,4 @@
-import type { BooleanOp, PathPoint, XNode } from "./types";
+import type { BooleanOp, PathPoint, VectorNetwork, VectorSegment, VectorVertex, XNode } from "./types";
 
 /** Sample a node's outline in local coordinates (for booleans / vector edit). */
 export function shapePoly(n: XNode, steps = 48): PathPoint[] {
@@ -308,4 +308,193 @@ export function erasePath(
   }
   if (run.length > 1) runs.push(run);
   return runs;
+}
+
+/**
+ * Converts a sequence of `PathPoint`s to Figma's `VectorNetwork` graph representation.
+ */
+export function pathToVectorNetwork(path: PathPoint[], closed: boolean): VectorNetwork {
+  if (!path.length) return { vertices: [], segments: [] };
+  const vertices: VectorVertex[] = path.map((p) => ({ x: p.x, y: p.y }));
+  const segments: VectorSegment[] = [];
+
+  for (let i = 0; i < path.length - 1; i++) {
+    const cur = path[i];
+    const nxt = path[i + 1];
+    segments.push({
+      start: i,
+      end: i + 1,
+      tangentStart: cur.ox != null || cur.oy != null ? { x: cur.ox ?? 0, y: cur.oy ?? 0 } : undefined,
+      tangentEnd: nxt.ix != null || nxt.iy != null ? { x: nxt.ix ?? 0, y: nxt.iy ?? 0 } : undefined,
+    });
+  }
+
+  if (closed && path.length > 2) {
+    const last = path[path.length - 1];
+    const first = path[0];
+    segments.push({
+      start: path.length - 1,
+      end: 0,
+      tangentStart: last.ox != null || last.oy != null ? { x: last.ox ?? 0, y: last.oy ?? 0 } : undefined,
+      tangentEnd: first.ix != null || first.iy != null ? { x: first.ix ?? 0, y: first.iy ?? 0 } : undefined,
+    });
+  }
+
+  const regions = closed && path.length > 2
+    ? [{ windingRule: "NONZERO" as const, loops: [Array.from({ length: path.length }, (_, i) => i)] }]
+    : undefined;
+
+  return { vertices, segments, regions };
+}
+
+/**
+ * Calculate the degree (connected segment count) for a vertex in a VectorNetwork.
+ * A degree >= 3 indicates a branching point (Figma Vector Network characteristic).
+ */
+export function vertexDegree(vn: VectorNetwork, vertexIndex: number): number {
+  let count = 0;
+  for (const s of vn.segments) {
+    if (s.start === vertexIndex) count++;
+    if (s.end === vertexIndex) count++;
+  }
+  return count;
+}
+
+/**
+ * Returns segment indices connected to the given vertex.
+ */
+export function connectedSegments(vn: VectorNetwork, vertexIndex: number): number[] {
+  const result: number[] = [];
+  for (let i = 0; i < vn.segments.length; i++) {
+    const s = vn.segments[i];
+    if (s.start === vertexIndex || s.end === vertexIndex) result.push(i);
+  }
+  return result;
+}
+
+/**
+ * Adds a new branch connecting an existing vertex to a new or existing vertex.
+ * If target exists or is newly created, connects a segment with optional tangent handles.
+ */
+export function addVectorBranch(
+  vn: VectorNetwork,
+  fromVertexIndex: number,
+  to: VectorVertex,
+  tangentStart?: { x: number; y: number },
+  tangentEnd?: { x: number; y: number },
+): VectorNetwork {
+  const vertices = [...vn.vertices];
+  let targetIndex = -1;
+
+  // Check if target matches an existing vertex within 1px
+  for (let i = 0; i < vertices.length; i++) {
+    if (Math.hypot(vertices[i].x - to.x, vertices[i].y - to.y) < 1) {
+      targetIndex = i;
+      break;
+    }
+  }
+
+  if (targetIndex === -1) {
+    targetIndex = vertices.length;
+    vertices.push({ x: to.x, y: to.y, strokeCap: to.strokeCap, strokeJoin: to.strokeJoin });
+  }
+
+  // Avoid duplicate identical segment
+  const exists = vn.segments.some(
+    (s) =>
+      (s.start === fromVertexIndex && s.end === targetIndex) ||
+      (s.start === targetIndex && s.end === fromVertexIndex),
+  );
+
+  const segments = [...vn.segments];
+  if (!exists && fromVertexIndex !== targetIndex) {
+    segments.push({
+      start: fromVertexIndex,
+      end: targetIndex,
+      tangentStart,
+      tangentEnd,
+    });
+  }
+
+  return {
+    vertices,
+    segments,
+    regions: vn.regions,
+  };
+}
+
+/**
+ * Converts a `VectorNetwork` into a standard SVG path definition string (`d="..."`).
+ */
+export function vectorNetworkToSvgPath(vn: VectorNetwork): string {
+  if (!vn.vertices.length || !vn.segments.length) return "";
+  const parts: string[] = [];
+
+  for (const s of vn.segments) {
+    const v0 = vn.vertices[s.start];
+    const v1 = vn.vertices[s.end];
+    if (!v0 || !v1) continue;
+
+    parts.push(`M ${v0.x.toFixed(2)} ${v0.y.toFixed(2)}`);
+    if (s.tangentStart || s.tangentEnd) {
+      const c1x = (v0.x + (s.tangentStart?.x ?? 0)).toFixed(2);
+      const c1y = (v0.y + (s.tangentStart?.y ?? 0)).toFixed(2);
+      const c2x = (v1.x + (s.tangentEnd?.x ?? 0)).toFixed(2);
+      const c2y = (v1.y + (s.tangentEnd?.y ?? 0)).toFixed(2);
+      parts.push(`C ${c1x} ${c1y}, ${c2x} ${c2y}, ${v1.x.toFixed(2)} ${v1.y.toFixed(2)}`);
+    } else {
+      parts.push(`L ${v1.x.toFixed(2)} ${v1.y.toFixed(2)}`);
+    }
+  }
+
+  return parts.join(" ");
+}
+
+/**
+ * Converts a simple (degree <= 2) VectorNetwork back to a `PathPoint[]` array.
+ */
+export function vectorNetworkToPath(vn: VectorNetwork): { path: PathPoint[]; closed: boolean } {
+  if (!vn.vertices.length) return { path: [], closed: false };
+  if (!vn.segments.length) {
+    return { path: vn.vertices.map((v) => ({ x: v.x, y: v.y })), closed: false };
+  }
+
+  // Follow segments
+  const path: PathPoint[] = [];
+  const visited = new Set<number>();
+  let cur = vn.segments[0].start;
+  let closed = false;
+
+  path.push({ x: vn.vertices[cur].x, y: vn.vertices[cur].y });
+  visited.add(cur);
+
+  let advanced = true;
+  while (advanced) {
+    advanced = false;
+    const seg = vn.segments.find((s) => s.start === cur && !visited.has(s.end));
+    if (seg) {
+      const lastPoint = path[path.length - 1];
+      if (seg.tangentStart) {
+        lastPoint.ox = seg.tangentStart.x;
+        lastPoint.oy = seg.tangentStart.y;
+      }
+      const nextV = vn.vertices[seg.end];
+      path.push({
+        x: nextV.x,
+        y: nextV.y,
+        ix: seg.tangentEnd?.x,
+        iy: seg.tangentEnd?.y,
+      });
+      visited.add(seg.end);
+      cur = seg.end;
+      advanced = true;
+    }
+  }
+
+  // Check if closed
+  if (vn.segments.some((s) => s.start === cur && s.end === vn.segments[0].start)) {
+    closed = true;
+  }
+
+  return { path, closed };
 }

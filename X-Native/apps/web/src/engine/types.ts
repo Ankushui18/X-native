@@ -85,6 +85,37 @@ export interface PathPoint {
   oy?: number;
 }
 
+/**
+ * Evan Wallace / Figma Vector Network Model.
+ * Represents vector paths as an arbitrary planar graph where vertices
+ * can connect to 3 or more segments (branching, T-junctions, interior faces).
+ */
+export interface VectorVertex {
+  x: number;
+  y: number;
+  strokeCap?: StrokeCap;
+  strokeJoin?: StrokeJoin;
+  cornerRadius?: number;
+}
+
+export interface VectorSegment {
+  start: number; // index into vertices
+  end: number;   // index into vertices
+  tangentStart?: { x: number; y: number }; // relative handle from start vertex
+  tangentEnd?: { x: number; y: number };   // relative handle from end vertex
+}
+
+export interface VectorRegion {
+  windingRule?: "NONZERO" | "EVENODD";
+  loops: number[][]; // array of vertex index sequences forming closed loops
+}
+
+export interface VectorNetwork {
+  vertices: VectorVertex[];
+  segments: VectorSegment[];
+  regions?: VectorRegion[];
+}
+
 export interface Interaction {
   trigger: ProtoTrigger;
   action: ProtoAction;
@@ -345,6 +376,7 @@ export interface XNode {
   children: XNode[];
   layout: AutoLayout | null;
   path: PathPoint[];
+  vectorNetwork?: VectorNetwork;
   closed: boolean;
   booleanOp: BooleanOp | null;
   componentId: string;
@@ -523,6 +555,8 @@ export type Command =
   | { type: "placeComponent"; id: string; x: number; y: number }
   | { type: "addPath"; points: PathPoint[]; closed: boolean }
   | { type: "patchPath"; id: string; path: PathPoint[]; closed?: boolean }
+  | { type: "patchVectorNetwork"; id: string; network: VectorNetwork }
+  | { type: "addVectorBranch"; id: string; fromVertexIndex: number; to: VectorVertex; tangentStart?: { x: number; y: number }; tangentEnd?: { x: number; y: number } }
   | { type: "flatten" }
   | { type: "outlineStroke" }
   | { type: "addVariant"; name: string }

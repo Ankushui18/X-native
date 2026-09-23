@@ -20,11 +20,13 @@ export function NavRail({
   nav,
   setNav,
   onActions,
+  onInspectFig,
 }: {
   engine: Engine;
   nav: NavId;
   setNav: (n: NavId) => void;
   onActions: () => void;
+  onInspectFig?: () => void;
 }) {
   const [menu, setMenu] = useState(false);
   const { pref, setPref } = useTheme();
@@ -55,6 +57,14 @@ export function NavRail({
             <hr />
             <button onClick={onActions}>
               Actions <span className="sc">⌘K</span>
+            </button>
+            <button
+              onClick={() => {
+                onInspectFig?.();
+                setMenu(false);
+              }}
+            >
+              Inspect Figma (.fig) <span className="sc">⇧⌘F</span>
             </button>
             <button onClick={() => engine.dispatch({ type: "undo" })}>
               Undo <span className="sc">⌘Z</span>
@@ -103,6 +113,14 @@ export function NavRail({
         </button>
       ))}
       <div className="spacer" />
+      <button
+        className="nav"
+        title="Inspect Figma (.fig) file"
+        onClick={onInspectFig}
+      >
+        <Icon name="figma" size={16} />
+        <span>Figma</span>
+      </button>
       <button
         className="nav"
         title="File notifications"
@@ -700,16 +718,23 @@ export function Actions({
   onClose,
   onHide,
   onMinimize,
+  onInspectFig,
 }: {
   engine: Engine;
   onPresent?: () => void;
   onClose: () => void;
   onHide: () => void;
   onMinimize?: () => void;
+  onInspectFig?: () => void;
 }) {
   const [q, setQ] = useState("");
   const { setPref } = useTheme();
   const items = [
+    {
+      label: "Inspect Figma (.fig) file",
+      sc: "⇧⌘F",
+      run: () => onInspectFig?.(),
+    },
     { label: "Move tool", sc: "V", run: () => engine.dispatch({ type: "setTool", tool: "select" }) },
     { label: "Scale tool", sc: "K", run: () => engine.dispatch({ type: "setTool", tool: "scale" }) },
     { label: "Frame", sc: "F", run: () => engine.dispatch({ type: "setTool", tool: "frame" }) },

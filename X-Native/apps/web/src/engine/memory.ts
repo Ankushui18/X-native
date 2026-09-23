@@ -16,7 +16,15 @@ import type {
 } from "./types";
 import { copyText } from "./clipboard";
 import { loadDoc, type PersistedDoc } from "./persist";
-import { booleanPath, outlineStroke as outlineStrokePath, shapePoly, transformedPoly } from "./geometry";
+import {
+  booleanPath,
+  outlineStroke as outlineStrokePath,
+  shapePoly,
+  transformedPoly,
+  addVectorBranch,
+  pathToVectorNetwork,
+  vectorNetworkToPath,
+} from "./geometry";
 
 let seq = 1;
 const uid = (p: string) => `${p}_${seq++}`;
@@ -1393,12 +1401,47 @@ export class MemoryEngine implements Engine {
         n.path = cmd.path;
         if (cmd.closed != null) n.closed = cmd.closed;
         n.kind = "vector";
+        n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
         const xs = n.path.map((pt) => pt.x);
         const ys = n.path.map((pt) => pt.y);
         if (xs.length) {
           n.w = Math.max(1, Math.max(...xs) - Math.min(0, ...xs));
           n.h = Math.max(1, Math.max(...ys) - Math.min(0, ...ys));
         }
+        break;
+      }
+      case "patchVectorNetwork": {
+        const n = find(this.root(), cmd.id);
+        if (!n || n.locked) break;
+        n.vectorNetwork = cmd.network;
+        n.kind = "vector";
+        const res = vectorNetworkToPath(cmd.network);
+        n.path = res.path;
+        if (res.closed) n.closed = true;
+        const xs = cmd.network.vertices.map((v) => v.x);
+        const ys = cmd.network.vertices.map((v) => v.y);
+        if (xs.length) {
+          n.w = Math.max(1, Math.max(...xs) - Math.min(0, ...xs));
+          n.h = Math.max(1, Math.max(...ys) - Math.min(0, ...ys));
+        }
+        break;
+      }
+      case "addVectorBranch": {
+        const n = find(this.root(), cmd.id);
+        if (!n || n.locked) break;
+        const currentVn = n.vectorNetwork || pathToVectorNetwork(n.path, n.closed);
+        const updated = addVectorBranch(
+          currentVn,
+          cmd.fromVertexIndex,
+          cmd.to,
+          cmd.tangentStart,
+          cmd.tangentEnd,
+        );
+        n.vectorNetwork = updated;
+        n.kind = "vector";
+        const res = vectorNetworkToPath(updated);
+        n.path = res.path;
+        if (res.closed) n.closed = true;
         break;
       }
       case "flatten": {

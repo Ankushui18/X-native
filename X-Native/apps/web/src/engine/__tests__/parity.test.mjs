@@ -7,8 +7,11 @@
  * that is easy to get subtly wrong lives. Canvas wiring is verified in-browser.
  */
 import { snapMove, snapCandidates } from "../snapping.ts";
-import { simplifyPath, smoothPath, erasePath } from "../geometry.ts";
+import { simplifyPath, smoothPath, erasePath, pathToVectorNetwork, addVectorBranch, vertexDegree, vectorNetworkToSvgPath } from "../geometry.ts";
 import { MemoryEngine } from "../memory.ts";
+import { inspectFigFile, importFig } from "../figImport.ts";
+import { readFileSync, existsSync } from "fs";
+import { resolve } from "path";
 
 let pass=0, fail=0;
 const t=(n,c)=>{ if(c){pass++;console.log("  ok  "+n);} else {fail++;console.log("  FAIL "+n);} };
@@ -445,6 +448,89 @@ console.log("component instance overrides:");
   const rect = e.snapshot().pages[e.snapshot().page].root.children.find((c) => c.id === rectId);
   t("glass effect stored on node", rect?.effects?.some((fx) => fx.kind === "glass" && fx.blur === 16));
   t("texture effect stored on node", rect?.effects?.some((fx) => fx.kind === "texture" && fx.spread === 4));
+}
+
+{
+  console.log("vector networks & branching (Figma parity 11.17):");
+  const poly = [
+    { x: 0, y: 0 },
+    { x: 100, y: 100 },
+    { x: 200, y: 0 },
+  ];
+  const vn = pathToVectorNetwork(poly, false);
+  t("initial polyline has 3 vertices and 2 segments", vn.vertices.length === 3 && vn.segments.length === 2);
+  t("vertex 1 initial degree is 2", vertexDegree(vn, 1) === 2);
+
+  // Add branch from center vertex (degree >= 3)
+  const branched = addVectorBranch(vn, 1, { x: 100, y: 200 });
+  t("branched network has 4 vertices", branched.vertices.length === 4);
+  t("branched network has 3 segments", branched.segments.length === 3);
+  t("vertex 1 degree is now 3 (Figma branching point)", vertexDegree(branched, 1) === 3);
+
+  const svgPath = vectorNetworkToSvgPath(branched);
+  t("vectorNetworkToSvgPath generates valid path commands", svgPath.includes("M") && svgPath.includes("L"));
+
+  const e = new MemoryEngine();
+  e.dispatch({
+    type: "add",
+    kind: "vector",
+    x: 0,
+    y: 0,
+    w: 200,
+    h: 200,
+    extra: { vectorNetwork: branched },
+  });
+  const vid = e.snapshot().selection[0];
+  const vNode = e.snapshot().pages[e.snapshot().page].root.children.find((c) => c.id === vid);
+  t("node stores vectorNetwork graph", vNode?.vectorNetwork?.vertices.length === 4);
+
+  // Dispatch patchVectorNetwork
+  const updatedNetwork = addVectorBranch(branched, 0, { x: 0, y: 100 });
+  e.dispatch({ type: "patchVectorNetwork", id: vid, network: updatedNetwork });
+  const patchedNode = e.snapshot().pages[e.snapshot().page].root.children.find((c) => c.id === vid);
+  t("patchVectorNetwork updates node vertices", patchedNode?.vectorNetwork?.vertices.length === 5);
+}
+
+{
+  console.log("Figma binary inspection & vector decoding (inspect .fig):");
+  const figPaths = [
+    resolve(process.cwd(), "figrefs/circle.fig"),
+    resolve(process.cwd(), "../../../figrefs/circle.fig"),
+    resolve(process.cwd(), "../../figrefs/circle.fig"),
+    resolve(process.cwd(), "public/samples/circle.fig"),
+  ];
+  const circlePath = figPaths.find((p) => existsSync(p));
+
+  const openFigPaths = [
+    resolve(process.cwd(), "figrefs/OpenFigs.fig"),
+    resolve(process.cwd(), "../../../figrefs/OpenFigs.fig"),
+    resolve(process.cwd(), "../../figrefs/OpenFigs.fig"),
+    resolve(process.cwd(), "public/samples/OpenFigs.fig"),
+  ];
+  const openFigsPath = openFigPaths.find((p) => existsSync(p));
+
+  if (circlePath) {
+    const cBuf = readFileSync(circlePath);
+    const rep = await inspectFigFile(cBuf.buffer.slice(cBuf.byteOffset, cBuf.byteOffset + cBuf.byteLength), "circle.fig");
+    t("inspectFigFile reads 'fig-kiwi' prelude", rep.prelude === "fig-kiwi");
+    t("inspectFigFile reads format version", rep.version >= 100);
+    t("inspectFigFile parses Kiwi schema dictionary (>500 defs)", rep.schemaDefsCount > 500);
+    t("inspectFigFile parses 2 container chunks", rep.chunksCount === 2);
+    t("inspectFigFile decompresses zstd chunk 1", rep.chunks.some((c) => c.compression === "zstd"));
+    t("inspectFigFile extracts active nodes", rep.activeNodesCount > 0);
+  }
+
+  if (openFigsPath) {
+    const oBuf = readFileSync(openFigsPath);
+    const oRep = await inspectFigFile(oBuf.buffer.slice(oBuf.byteOffset, oBuf.byteOffset + oBuf.byteLength), "OpenFigs.fig");
+    t("OpenFigs.fig has vector geometry blobs", oRep.blobsCount > 10);
+    t("OpenFigs.fig reports VECTOR layers", (oRep.nodesByType["VECTOR"] || 0) > 0);
+
+    const imported = await importFig(oBuf.buffer.slice(oBuf.byteOffset, oBuf.byteOffset + oBuf.byteLength));
+    const importedVector = imported.nodes.find((n) => n.kind === "vector");
+    t("importFig imports vector node with path", !!importedVector?.path?.length);
+    t("importFig imports vector node with vectorNetwork", !!importedVector?.vectorNetwork);
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

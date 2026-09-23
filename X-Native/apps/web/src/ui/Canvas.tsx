@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Engine, Interaction, NodeKind, PathPoint, Snapshot, Tool, XNode } from "../engine/types";
+import type { Engine, Interaction, NodeKind, PathPoint, Snapshot, Tool, VectorNetwork, XNode } from "../engine/types";
 import { deepestFrame, find, findParent, hitTest, worldToLocal, worldPos } from "../engine/memory";
-import { erasePath, shapePoly, simplifyPath, smoothPath } from "../engine/geometry";
+import { erasePath, shapePoly, simplifyPath, smoothPath, vertexDegree } from "../engine/geometry";
 import {
   snapCandidates,
   snapMove,
@@ -465,8 +465,12 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       const traceShape = () => {
         if (n.kind === "text") {
           ctx.beginPath();
-        } else if ((n.kind === "vector" || n.kind === "boolean") && n.path.length) {
-          tracePath(ctx, n.path, snap.panX + x * z, snap.panY + y * z, z, n.closed);
+        } else if ((n.kind === "vector" || n.kind === "boolean") && (n.vectorNetwork || n.path.length)) {
+          if (n.vectorNetwork && n.vectorNetwork.segments.length > 0) {
+            traceVectorNetwork(ctx, n.vectorNetwork, snap.panX + x * z, snap.panY + y * z, z);
+          } else {
+            tracePath(ctx, n.path, snap.panX + x * z, snap.panY + y * z, z, n.closed);
+          }
         } else if (n.kind === "ellipse") {
           ctx.beginPath();
           ctx.ellipse(sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), 0, 0, Math.PI * 2);
@@ -1106,7 +1110,9 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         }
         ctx.strokeStyle = "#0d99ff";
         ctx.lineWidth = 1;
-        for (const p of pts) {
+        const vn = wp.node.vectorNetwork;
+        for (let i = 0; i < pts.length; i++) {
+          const p = pts[i];
           const px = snap.panX + (wp.x + p.x) * z;
           const py = snap.panY + (wp.y + p.y) * z;
           if ((p.ox && p.ox !== 0) || (p.oy && p.oy !== 0) || (p.ix && p.ix !== 0) || (p.iy && p.iy !== 0)) {
@@ -1125,11 +1131,33 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
               ctx.stroke();
             }
           }
-          ctx.fillStyle = "#fff";
-          ctx.beginPath();
-          ctx.rect(px - 3.5, py - 3.5, 7, 7);
-          ctx.fill();
-          ctx.stroke();
+          const deg = vn ? vertexDegree(vn, i) : 2;
+          if (deg >= 3) {
+            // Branching node indicator (Figma Vector Network Degree >= 3)
+            ctx.save();
+            ctx.fillStyle = "rgba(16, 185, 129, 0.25)";
+            ctx.beginPath();
+            ctx.arc(px, py, 9, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = "#10b981";
+            ctx.strokeStyle = "#ffffff";
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(px, py - 5);
+            ctx.lineTo(px + 5, py);
+            ctx.lineTo(px, py + 5);
+            ctx.lineTo(px - 5, py);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+          } else {
+            ctx.fillStyle = "#fff";
+            ctx.beginPath();
+            ctx.rect(px - 3.5, py - 3.5, 7, 7);
+            ctx.fill();
+            ctx.stroke();
+          }
         }
         ctx.restore();
       }
@@ -2978,6 +3006,72 @@ function tracePath(
       );
     }
     ctx.closePath();
+  }
+}
+
+function traceVectorNetwork(
+  ctx: CanvasRenderingContext2D,
+  vn: VectorNetwork,
+  ox: number,
+  oy: number,
+  z: number,
+) {
+  ctx.beginPath();
+  if (vn.regions && vn.regions.length > 0) {
+    for (const region of vn.regions) {
+      for (const loop of region.loops) {
+        if (!loop.length) continue;
+        const v0 = vn.vertices[loop[0]];
+        if (!v0) continue;
+        ctx.moveTo(ox + v0.x * z, oy + v0.y * z);
+        for (let i = 0; i < loop.length; i++) {
+          const curIdx = loop[i];
+          const nxtIdx = loop[(i + 1) % loop.length];
+          const curV = vn.vertices[curIdx];
+          const nxtV = vn.vertices[nxtIdx];
+          const seg = vn.segments.find(
+            (s) =>
+              (s.start === curIdx && s.end === nxtIdx) ||
+              (s.start === nxtIdx && s.end === curIdx),
+          );
+          if (seg && (seg.tangentStart || seg.tangentEnd)) {
+            const isFwd = seg.start === curIdx;
+            const tStart = isFwd ? seg.tangentStart : seg.tangentEnd;
+            const tEnd = isFwd ? seg.tangentEnd : seg.tangentStart;
+            ctx.bezierCurveTo(
+              ox + (curV.x + (tStart?.x || 0)) * z,
+              oy + (curV.y + (tStart?.y || 0)) * z,
+              ox + (nxtV.x + (tEnd?.x || 0)) * z,
+              oy + (nxtV.y + (tEnd?.y || 0)) * z,
+              ox + nxtV.x * z,
+              oy + nxtV.y * z,
+            );
+          } else {
+            ctx.lineTo(ox + nxtV.x * z, oy + nxtV.y * z);
+          }
+        }
+        ctx.closePath();
+      }
+    }
+  } else {
+    for (const seg of vn.segments) {
+      const v0 = vn.vertices[seg.start];
+      const v1 = vn.vertices[seg.end];
+      if (!v0 || !v1) continue;
+      ctx.moveTo(ox + v0.x * z, oy + v0.y * z);
+      if (seg.tangentStart || seg.tangentEnd) {
+        ctx.bezierCurveTo(
+          ox + (v0.x + (seg.tangentStart?.x || 0)) * z,
+          oy + (v0.y + (seg.tangentStart?.y || 0)) * z,
+          ox + (v1.x + (seg.tangentEnd?.x || 0)) * z,
+          oy + (v1.y + (seg.tangentEnd?.y || 0)) * z,
+          ox + v1.x * z,
+          oy + v1.y * z,
+        );
+      } else {
+        ctx.lineTo(ox + v1.x * z, oy + v1.y * z);
+      }
+    }
   }
 }
 

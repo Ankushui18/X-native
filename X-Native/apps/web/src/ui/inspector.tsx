@@ -23,7 +23,7 @@ import type {
   XNode,
 } from "../engine/types";
 import { collectColors, defaultEffect, defaultLayout, find, findParent, framesOf, worldPos } from "../engine/memory";
-import { shapePoly } from "../engine/geometry";
+import { shapePoly, pathToVectorNetwork, vectorNetworkToSvgPath, vertexDegree, simplifyPath, smoothPath } from "../engine/geometry";
 import { Icon } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { copyText } from "../engine/clipboard";
@@ -39,11 +39,13 @@ export function RightPanel({
   snap,
   onPresent,
   onShare,
+  onInspectFig,
 }: {
   engine: Engine;
   snap: Snapshot;
   onPresent?: () => void;
   onShare?: () => void;
+  onInspectFig?: () => void;
 }) {
   const tabs: { id: RightTab; label: string }[] = [
     { id: "design", label: "Design" },
@@ -90,7 +92,7 @@ export function RightPanel({
         {snap.rightTab === "prototype" && !inspect && (
           <Prototype n={n} engine={engine} snap={snap} onPresent={onPresent} />
         )}
-        {inspect && <Inspect n={n} engine={engine} snap={snap} />}
+        {inspect && <Inspect n={n} engine={engine} snap={snap} onInspectFig={onInspectFig} />}
         {snap.rightTab === "design" && !inspect && !n && (
           <PageDesign engine={engine} tool={snap.tool} />
         )}
@@ -416,7 +418,7 @@ function Prototype({
   );
 }
 
-type DevFormat = "css" | "tailwind" | "swiftui" | "compose";
+type DevFormat = "css" | "tailwind" | "swiftui" | "compose" | "flutter" | "svg" | "figma";
 
 function generateCss(n: XNode): string {
   const rules: string[] = [
@@ -572,6 +574,127 @@ function generateCompose(n: XNode): string {
 }`;
 }
 
+function generateFlutter(n: XNode): string {
+  const hex = (n.fill || "#000000").replace("#", "").padEnd(6, "0");
+  return `Container(
+  width: ${Math.round(n.w)}.0,
+  height: ${Math.round(n.h)}.0,
+  decoration: BoxDecoration(
+    color: const Color(0xFF${hex.toUpperCase()}),
+    borderRadius: BorderRadius.circular(${n.cornerRadii[0]}.0),
+  ),
+  child: ${n.kind === "text" ? `Text(
+    '${n.text.replace(/'/g, "\\'")}',
+    style: TextStyle(
+      fontSize: ${n.fontSize}.0,
+      fontWeight: FontWeight.w${n.fontWeight},
+    ),
+  )` : "// Children"},
+)`;
+}
+
+function generateSvg(n: XNode): string {
+  let pathD = "";
+  if (n.vectorNetwork && n.vectorNetwork.segments.length > 0) {
+    pathD = vectorNetworkToSvgPath(n.vectorNetwork);
+  } else if (n.path.length > 0) {
+    pathD = n.path
+      .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(2)} ${p.y.toFixed(2)}`)
+      .join(" ") + (n.closed ? " Z" : "");
+  }
+  const w = Math.round(Math.max(1, n.w));
+  const h = Math.round(Math.max(1, n.h));
+
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path
+    d="${pathD || `M 0 0 L ${w} 0 L ${w} ${h} L 0 ${h} Z`}"
+    fill="${n.fillVisible && !isNone(n.fill) ? n.fill : "none"}"
+    stroke="${n.strokeVisible && !isNone(n.strokePaint) ? n.strokePaint : "none"}"
+    stroke-width="${n.strokeWidth}"
+  />
+</svg>`;
+}
+
+function generateFigmaJson(n: XNode): string {
+  const hexToFigmaColor = (hex: string) => {
+    const clean = hex.replace("#", "");
+    const r = parseInt(clean.slice(0, 2) || "0", 16) / 255;
+    const g = parseInt(clean.slice(2, 4) || "0", 16) / 255;
+    const b = parseInt(clean.slice(4, 6) || "0", 16) / 255;
+    return { r, g, b, a: 1 };
+  };
+
+  const payload: Record<string, unknown> = {
+    id: n.id,
+    name: n.name,
+    type: n.kind.toUpperCase(),
+    visible: n.visible,
+    opacity: n.opacity,
+    blendMode: n.blendMode.toUpperCase(),
+    absoluteBoundingBox: {
+      x: n.x,
+      y: n.y,
+      width: n.w,
+      height: n.h,
+    },
+    constraints: {
+      horizontal: n.constraintH.toUpperCase(),
+      vertical: n.constraintV.toUpperCase(),
+    },
+    fills: n.fillVisible && !isNone(n.fill)
+      ? [{
+          type: "SOLID",
+          visible: true,
+          opacity: n.fillOpacity,
+          color: hexToFigmaColor(n.fill),
+        }]
+      : [],
+    strokes: n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)
+      ? [{
+          type: "SOLID",
+          visible: true,
+          opacity: n.strokeOpacity,
+          color: hexToFigmaColor(n.strokePaint),
+        }]
+      : [],
+    strokeWeight: n.strokeWidth,
+    strokeAlign: n.strokeAlign.toUpperCase(),
+    strokeCap: n.strokeCap.toUpperCase(),
+    strokeJoin: n.strokeJoin.toUpperCase(),
+    cornerRadius: n.cornerRadii[0],
+    effects: n.effects,
+  };
+
+  if (n.layout) {
+    payload.layoutMode = n.layout.direction === "horizontal" ? "HORIZONTAL" : "VERTICAL";
+    payload.itemSpacing = n.layout.gap;
+    payload.paddingLeft = n.layout.padding[0];
+    payload.paddingRight = n.layout.padding[1];
+    payload.paddingTop = n.layout.padding[2];
+    payload.paddingBottom = n.layout.padding[3];
+  }
+
+  if (n.kind === "text") {
+    payload.characters = n.text;
+    payload.style = {
+      fontFamily: n.fontFamily,
+      fontSize: n.fontSize,
+      fontWeight: n.fontWeight,
+      textAlignHorizontal: n.textAlign.toUpperCase(),
+    };
+  }
+
+  if (n.vectorNetwork && n.vectorNetwork.vertices.length > 0) {
+    payload.vectorNetwork = {
+      vertices: n.vectorNetwork.vertices,
+      segments: n.vectorNetwork.segments,
+      regions: n.vectorNetwork.regions,
+    };
+  }
+
+  return JSON.stringify(payload, null, 2);
+}
+
 function BoxModelDiagram({ n }: { n: XNode }) {
   const [pl, pr, pt, pb] = n.layout?.padding ?? [0, 0, 0, 0];
   return (
@@ -589,16 +712,60 @@ function BoxModelDiagram({ n }: { n: XNode }) {
   );
 }
 
-function Inspect({ n, engine, snap }: { n?: XNode; engine?: Engine; snap?: Snapshot }) {
+function Inspect({
+  n,
+  engine,
+  snap,
+  onInspectFig,
+}: {
+  n?: XNode;
+  engine?: Engine;
+  snap?: Snapshot;
+  onInspectFig?: () => void;
+}) {
   const [format, setFormat] = useState<DevFormat>("css");
   const [note, setNote] = useState("");
-  if (!n) return <p className="empty">Select a layer to inspect</p>;
+  if (!n) {
+    return (
+      <div style={{ padding: 16 }}>
+        <p className="empty" style={{ margin: "16px 0" }}>Select a layer to inspect</p>
+        <div
+          style={{
+            padding: 12,
+            background: "var(--hover)",
+            borderRadius: 8,
+            border: "1px solid var(--line)",
+            display: "grid",
+            gap: 8,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <Icon name="figma" size={16} />
+            <strong style={{ fontSize: 12 }}>Figma File Inspector</strong>
+          </div>
+          <div style={{ fontSize: 11, color: "var(--dim)" }}>
+            Inspect Kiwi binary schemas, node hierarchy, and vector networks from any .fig file.
+          </div>
+          <button
+            className="export-run"
+            style={{ padding: "6px 12px", fontSize: 11 }}
+            onClick={() => onInspectFig?.()}
+          >
+            Launch .fig Inspector
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   let code = "";
   if (format === "css") code = generateCss(n);
   else if (format === "tailwind") code = generateTailwind(n);
   else if (format === "swiftui") code = generateSwiftUI(n);
   else if (format === "compose") code = generateCompose(n);
+  else if (format === "flutter") code = generateFlutter(n);
+  else if (format === "svg") code = generateSvg(n);
+  else if (format === "figma") code = generateFigmaJson(n);
 
   const copy = () => {
     copyText(code);
@@ -606,31 +773,107 @@ function Inspect({ n, engine, snap }: { n?: XNode; engine?: Engine; snap?: Snaps
   };
 
   const layerAnnotations = snap?.annotations?.filter((a) => a.nodeId === n.id) ?? [];
+  const vn = n.vectorNetwork || (n.path.length > 0 ? pathToVectorNetwork(n.path, n.closed) : null);
+  const branchingCount = vn ? vn.vertices.filter((_, i) => vertexDegree(vn, i) >= 3).length : 0;
 
   return (
     <>
       <div className="h-row">
-        <h3>Inspect</h3>
-        <button className="plus" title={`Copy ${format.toUpperCase()}`} onClick={copy}>
-          <Icon name="copy" size={14} />
+        <h3>Dev Mode</h3>
+        <button
+          className="export-run"
+          style={{ padding: "2px 8px", fontSize: 10, display: "flex", alignItems: "center", gap: 4 }}
+          onClick={() => onInspectFig?.()}
+          title="Inspect Figma .fig binary file"
+        >
+          <Icon name="figma" size={12} />
+          .fig Inspector
         </button>
       </div>
 
       <div className="dir-row" style={{ padding: "0 12px", marginBottom: 8 }}>
-        <div className="seg" style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr" }}>
+        <div
+          className="seg"
+          style={{
+            width: "100%",
+            display: "grid",
+            gridTemplateColumns: "repeat(7, 1fr)",
+            fontSize: 10,
+          }}
+        >
           <button className={format === "css" ? "on" : ""} onClick={() => setFormat("css")}>CSS</button>
-          <button className={format === "tailwind" ? "on" : ""} onClick={() => setFormat("tailwind")}>Tailwind</button>
-          <button className={format === "swiftui" ? "on" : ""} onClick={() => setFormat("swiftui")}>SwiftUI</button>
-          <button className={format === "compose" ? "on" : ""} onClick={() => setFormat("compose")}>Compose</button>
+          <button className={format === "tailwind" ? "on" : ""} onClick={() => setFormat("tailwind")}>TW</button>
+          <button className={format === "swiftui" ? "on" : ""} onClick={() => setFormat("swiftui")}>Swift</button>
+          <button className={format === "compose" ? "on" : ""} onClick={() => setFormat("compose")}>KMP</button>
+          <button className={format === "flutter" ? "on" : ""} onClick={() => setFormat("flutter")}>Dart</button>
+          <button className={format === "svg" ? "on" : ""} onClick={() => setFormat("svg")}>SVG</button>
+          <button className={format === "figma" ? "on" : ""} onClick={() => setFormat("figma")}>Fig</button>
         </div>
       </div>
 
       <div className="insp-pad">
         <BoxModelDiagram n={n} />
-        <pre className="css-block" style={{ maxHeight: 240, overflowY: "auto" }}>{code}</pre>
+        <pre className="css-block" style={{ maxHeight: 220, overflowY: "auto", fontSize: 10 }}>{code}</pre>
         <button className="export-run" onClick={copy} style={{ marginTop: 8 }}>
           Copy {format.toUpperCase()}
         </button>
+      </div>
+
+      {/* Figma Properties Table */}
+      <div className="hr" />
+      <div className="h-row">
+        <h3>Figma Properties</h3>
+        <span style={{ fontSize: 10, color: "var(--dim)", marginLeft: "auto" }}>REST Schema</span>
+      </div>
+      <div className="insp-pad" style={{ display: "grid", gap: 6, fontSize: 11 }}>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ color: "var(--dim)" }}>Node Type:</span>
+          <strong>{n.kind.toUpperCase()}</strong>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ color: "var(--dim)" }}>Layer Name:</span>
+          <span>{n.name}</span>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ color: "var(--dim)" }}>Dimensions:</span>
+          <span>{Math.round(n.w)} × {Math.round(n.h)} px</span>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ color: "var(--dim)" }}>Position:</span>
+          <span>X: {Math.round(n.x)}, Y: {Math.round(n.y)}</span>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ color: "var(--dim)" }}>Constraints:</span>
+          <span>H: {n.constraintH} • V: {n.constraintV}</span>
+        </div>
+        {n.fillVisible && !isNone(n.fill) && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ color: "var(--dim)" }}>Fill Paint:</span>
+            <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: n.fill }} />
+              <code>{n.fill}</code> ({Math.round(n.fillOpacity * 100)}%)
+            </span>
+          </div>
+        )}
+        {n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint) && (
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <span style={{ color: "var(--dim)" }}>Stroke:</span>
+            <span>{n.strokeWidth}px {n.strokeAlign} {n.strokeCap} cap</span>
+          </div>
+        )}
+        {vn && (
+          <div style={{ marginTop: 4, padding: 8, background: "rgba(13,153,255,0.08)", borderRadius: 6, border: "1px solid rgba(13,153,255,0.2)" }}>
+            <div style={{ fontWeight: 600, color: "var(--accent)", marginBottom: 4 }}>
+              Vector Network Graph
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, fontSize: 10 }}>
+              <div>Vertices: <strong>{vn.vertices.length}</strong></div>
+              <div>Segments: <strong>{vn.segments.length}</strong></div>
+              <div>Branching (≥3): <strong>{branchingCount}</strong></div>
+              <div>Closed: <strong>{n.closed ? "Yes" : "No"}</strong></div>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="hr" />
@@ -1128,6 +1371,60 @@ function Design({
           )}
         </div>
       </div>
+      {(n.kind === "vector" || n.path.length > 0) && (
+        <div className="insp-pad" style={{ marginTop: 2 }}>
+          <div style={{ padding: 10, background: "var(--hover)", borderRadius: 8, border: "1px solid var(--line)", display: "grid", gap: 8 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <strong style={{ fontSize: 11 }}>Vector Network</strong>
+              <span style={{ fontSize: 9, padding: "2px 6px", background: "var(--accent)", color: "#fff", borderRadius: 10 }}>
+                Evan Wallace Graph
+              </span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, fontSize: 10, color: "var(--dim)" }}>
+              <div>Vertices: <strong style={{ color: "var(--text)" }}>{n.vectorNetwork?.vertices.length ?? n.path.length}</strong></div>
+              <div>Segments: <strong style={{ color: "var(--text)" }}>{n.vectorNetwork?.segments.length ?? (n.path.length > 1 ? n.path.length - (n.closed ? 0 : 1) : 0)}</strong></div>
+              <div>Branching (≥3): <strong style={{ color: "var(--text)" }}>{n.vectorNetwork ? n.vectorNetwork.vertices.filter((_, i) => vertexDegree(n.vectorNetwork!, i) >= 3).length : 0}</strong></div>
+              <div>Closed: <strong style={{ color: "var(--text)" }}>{n.closed ? "Yes" : "No"}</strong></div>
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                className="export-run"
+                style={{ flex: 1, padding: "4px 8px", fontSize: 10 }}
+                onClick={() => {
+                  const vn = n.vectorNetwork || pathToVectorNetwork(n.path, n.closed);
+                  const svgD = vectorNetworkToSvgPath(vn);
+                  copyText(svgD);
+                  toast("Copied SVG Path");
+                }}
+              >
+                Copy SVG Path
+              </button>
+              <button
+                className="export-run"
+                style={{ padding: "4px 8px", fontSize: 10 }}
+                onClick={() => {
+                  const smoothed = smoothPath(n.path, n.closed);
+                  engine.dispatch({ type: "patchPath", id: n.id, path: smoothed, closed: n.closed });
+                  toast("Smoothed vector handles");
+                }}
+              >
+                Smooth
+              </button>
+              <button
+                className="export-run"
+                style={{ padding: "4px 8px", fontSize: 10 }}
+                onClick={() => {
+                  const simplified = simplifyPath(n.path, 1.5);
+                  engine.dispatch({ type: "patchPath", id: n.id, path: simplified, closed: n.closed });
+                  toast("Simplified vector path");
+                }}
+              >
+                Simplify
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {(n.isComponent || n.componentId) && (
         <>
           <div className="h-row">

@@ -13,6 +13,7 @@ import {
   type NavId,
 } from "./ui/chrome";
 import { RightPanel } from "./ui/inspector";
+import { FigInspectorModal } from "./ui/FigInspectorModal";
 import { subscribeToast, toast as toastMsg } from "./ui/toast";
 import { saveDoc } from "./engine/persist";
 
@@ -29,6 +30,7 @@ export default function App() {
   const [minUi, setMinUi] = useState(false);
   const [hideUi, setHideUi] = useState(false);
   const [actions, setActions] = useState(false);
+  const [figInspector, setFigInspector] = useState(false);
   const [toast, setToast] = useState("");
   const leftDrag = usePanelDrag(leftW, setLeftW, 180, 420);
   const rightDrag = usePanelDrag(rightW, setRightW, 200, 420, true);
@@ -141,7 +143,13 @@ export default function App() {
       className={cls}
       style={{ ["--left-w" as string]: `${leftW}px`, ["--right-w" as string]: `${rightW}px` }}
     >
-      <NavRail engine={engine} nav={nav} setNav={setNav} onActions={() => setActions(true)} />
+      <NavRail
+        engine={engine}
+        nav={nav}
+        setNav={setNav}
+        onActions={() => setActions(true)}
+        onInspectFig={() => setFigInspector(true)}
+      />
       <LeftPanel
         engine={engine}
         snap={snap}
@@ -171,12 +179,23 @@ export default function App() {
               setMinUi((v) => !v);
               setActions(false);
             }}
+            onInspectFig={() => {
+              setFigInspector(true);
+              setActions(false);
+            }}
           />
         )}
       </div>
-      <RightPanel engine={engine} snap={snap} onPresent={present} onShare={share} />
+      <RightPanel
+        engine={engine}
+        snap={snap}
+        onPresent={present}
+        onShare={share}
+        onInspectFig={() => setFigInspector(true)}
+      />
       <div className="split r" style={{ display: hideUi ? "none" : undefined }} {...rightDrag} />
       {toast && <div className="toast">{toast}</div>}
+      {figInspector && <FigInspectorModal engine={engine} onClose={() => setFigInspector(false)} />}
     </div>
   );
 }
