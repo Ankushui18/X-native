@@ -353,7 +353,7 @@ position, canvas stacking, "distribute", `⇧A` to add.
 | 11.14 | Pen: click-drag curves | yes | yes | MATCH |
 | 11.15 | Pen: close path | click the first point | yes | MATCH |
 | 11.16 | **Pen: edit while drawing** | exit/`Esc`, reopen, continue | our pen commits on finish; *verify* continue-a-path | PARTIAL |
-| 11.17 | **Vector networks** | branches, not just paths | Evan Wallace Vector Network planar graph model (`VectorNetwork`, `VectorVertex`, `VectorSegment`, `VectorRegion`); supports arbitrary branching (degree ≥ 3), T-junctions, interior faces, Bézier handles, canvas rendering, and Figma Kiwi binary blob parsing; pinned by `parity.test.mjs` | MATCH |
+| 11.17 | **Vector networks** | branches, not just paths | Evan Wallace Vector Network planar graph model (`VectorNetwork`, `VectorVertex`, `VectorSegment`, `VectorRegion`); supports arbitrary branching (degree ≥ 3), T-junctions, interior faces, Bézier handles, canvas rendering, Figma Kiwi binary blob parsing, bend tool (`⌘`/Alt-drag), interactive segment point insertion, and handle symmetry mirror modes (`angleAndLength`, `angle`, `none`); pinned by `parity.test.mjs` | MATCH |
 | 11.18 | **Snap to pixel / snap to objects** | toggles + `⌘⇧` modifiers | snapping exists inside drags; no explicit toggle row | PARTIAL |
 | 11.19 | Arc as a vector | arc → edit points | arc geometry editable as shape only | PARTIAL |
 | 11.20 | Sketch import of vectors | n/a (Figma reads .fig) | sketch.rs (2229 lines) | MATCH |

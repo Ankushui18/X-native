@@ -24,6 +24,8 @@ import {
   addVectorBranch,
   pathToVectorNetwork,
   vectorNetworkToPath,
+  bendSegment,
+  insertPointOnPath,
 } from "./geometry";
 
 let seq = 1;
@@ -1442,6 +1444,44 @@ export class MemoryEngine implements Engine {
         const res = vectorNetworkToPath(updated);
         n.path = res.path;
         if (res.closed) n.closed = true;
+        break;
+      }
+      case "bendSegment": {
+        const n = find(this.root(), cmd.id);
+        if (!n || n.locked || n.path.length < 2) break;
+        n.path = bendSegment(n.path, cmd.segIndex, n.closed, cmd.dragX, cmd.dragY);
+        n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+        break;
+      }
+      case "insertPointOnPath": {
+        const n = find(this.root(), cmd.id);
+        if (!n || n.locked || n.path.length < 2) break;
+        const res = insertPointOnPath(n.path, cmd.x, cmd.y, n.closed);
+        if (res) {
+          n.path = res.newPath;
+          n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+        }
+        break;
+      }
+      case "setPointMirror": {
+        const n = find(this.root(), cmd.id);
+        if (!n || !n.path[cmd.pointIndex]) break;
+        const pt = n.path[cmd.pointIndex];
+        pt.mirrorMode = cmd.mode;
+        if (cmd.mode === "angleAndLength" && (pt.ox || pt.oy)) {
+          pt.ix = -(pt.ox || 0);
+          pt.iy = -(pt.oy || 0);
+        }
+        n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+        break;
+      }
+      case "setPointCornerRadius": {
+        const n = find(this.root(), cmd.id);
+        if (!n || !n.path[cmd.pointIndex]) break;
+        n.path[cmd.pointIndex].cornerRadius = Math.max(0, cmd.radius);
+        if (n.vectorNetwork?.vertices[cmd.pointIndex]) {
+          n.vectorNetwork.vertices[cmd.pointIndex].cornerRadius = Math.max(0, cmd.radius);
+        }
         break;
       }
       case "flatten": {

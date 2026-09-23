@@ -83,6 +83,8 @@ export interface PathPoint {
   /** Outgoing bezier handle, relative to the point. */
   ox?: number;
   oy?: number;
+  mirrorMode?: "none" | "angle" | "angleAndLength";
+  cornerRadius?: number;
 }
 
 /**
@@ -557,6 +559,10 @@ export type Command =
   | { type: "patchPath"; id: string; path: PathPoint[]; closed?: boolean }
   | { type: "patchVectorNetwork"; id: string; network: VectorNetwork }
   | { type: "addVectorBranch"; id: string; fromVertexIndex: number; to: VectorVertex; tangentStart?: { x: number; y: number }; tangentEnd?: { x: number; y: number } }
+  | { type: "bendSegment"; id: string; segIndex: number; dragX: number; dragY: number }
+  | { type: "insertPointOnPath"; id: string; x: number; y: number }
+  | { type: "setPointMirror"; id: string; pointIndex: number; mode: "none" | "angle" | "angleAndLength" }
+  | { type: "setPointCornerRadius"; id: string; pointIndex: number; radius: number }
   | { type: "flatten" }
   | { type: "outlineStroke" }
   | { type: "addVariant"; name: string }

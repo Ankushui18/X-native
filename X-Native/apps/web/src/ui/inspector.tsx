@@ -1422,6 +1422,41 @@ function Design({
                 Simplify
               </button>
             </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 4 }}>
+              <div style={{ fontSize: 10, color: "var(--dim)" }}>Handle Symmetry:</div>
+              <div className="seg" style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", fontSize: 10 }}>
+                <button
+                  title="Symmetric angle and length"
+                  onClick={() => {
+                    const newPath = n.path.map((p) => ({ ...p, mirrorMode: "angleAndLength" as const }));
+                    engine.dispatch({ type: "patchPath", id: n.id, path: newPath, closed: n.closed });
+                    toast("Handles: Mirrored (Angle & Length)");
+                  }}
+                >
+                  Mirrored
+                </button>
+                <button
+                  title="Mirror angle only, independent length"
+                  onClick={() => {
+                    const newPath = n.path.map((p) => ({ ...p, mirrorMode: "angle" as const }));
+                    engine.dispatch({ type: "patchPath", id: n.id, path: newPath, closed: n.closed });
+                    toast("Handles: Asymmetric Angle");
+                  }}
+                >
+                  Asymmetric
+                </button>
+                <button
+                  title="Independent angle and length (sharp corner)"
+                  onClick={() => {
+                    const newPath = n.path.map((p) => ({ ...p, mirrorMode: "none" as const }));
+                    engine.dispatch({ type: "patchPath", id: n.id, path: newPath, closed: n.closed });
+                    toast("Handles: Corner (Independent)");
+                  }}
+                >
+                  Corner
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

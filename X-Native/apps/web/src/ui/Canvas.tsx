@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Engine, Interaction, NodeKind, PathPoint, Snapshot, Tool, VectorNetwork, XNode } from "../engine/types";
 import { deepestFrame, find, findParent, hitTest, worldToLocal, worldPos } from "../engine/memory";
-import { erasePath, shapePoly, simplifyPath, smoothPath, vertexDegree } from "../engine/geometry";
+import { erasePath, shapePoly, simplifyPath, smoothPath, vertexDegree, insertPointOnPath, projectPointOnSegment } from "../engine/geometry";
 import {
   snapCandidates,
   snapMove,
@@ -76,6 +76,7 @@ type Drag =
         | "marquee"
         | "rotate"
         | "vec"
+        | "bend"
         | "grad"
         | "multiResize"
         | "multiRotate"
@@ -83,6 +84,7 @@ type Drag =
         | "autoGap"
         | "protoConnect";
       point?: number;
+      segIndex?: number;
       handle?: "in" | "out" | "g" | "h";
       padEdge?: "top" | "right" | "bottom" | "left";
       origPad?: [number, number, number, number];
@@ -1544,6 +1546,31 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
               return;
             }
           }
+          const local = nodeLocalPoint(wpt.x, wpt.y, wp.x, wp.y, wp.node);
+          const meta = e.metaKey || e.ctrlKey || e.altKey;
+          if (meta) {
+            const npts = pts.length;
+            const count = wp.node.closed ? npts : npts - 1;
+            for (let si = 0; si < count; si++) {
+              const p1 = pts[si];
+              const p2 = pts[(si + 1) % npts];
+              const pr = projectPointOnSegment(local.x, local.y, p1.x, p1.y, p2.x, p2.y);
+              if (pr.dist < 12 / snap.zoom && pr.t > 0.05 && pr.t < 0.95) {
+                engine.dispatch({ type: "begin" });
+                drag.current = { mode: "bend", id: wp.node.id, segIndex: si, sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y };
+                toast("Bending segment (Bend tool)");
+                return;
+              }
+            }
+          } else {
+            const res = insertPointOnPath(pts, local.x, local.y, wp.node.closed, 10 / snap.zoom);
+            if (res) {
+              engine.dispatch({ type: "insertPointOnPath", id: wp.node.id, x: local.x, y: local.y });
+              vecPt.current = res.insertedIndex;
+              toast("Point added on path");
+              return;
+            }
+          }
         }
         if (Math.hypot(px - (sx + (wp.node.w * z) / 2), py - (sy - 20)) < 8) {
           drag.current = {
@@ -1987,14 +2014,49 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         if (d.handle === "in") {
           p.ix = lx - p.x;
           p.iy = ly - p.y;
+          if (p.mirrorMode === "angleAndLength" && !e.altKey) {
+            p.ox = -p.ix;
+            p.oy = -p.iy;
+          } else if (p.mirrorMode === "angle" && !e.altKey && (p.ox || p.oy)) {
+            const inLen = Math.hypot(p.ix, p.iy);
+            const outLen = Math.hypot(p.ox || 0, p.oy || 0);
+            if (inLen > 0.001) {
+              p.ox = (-p.ix / inLen) * outLen;
+              p.oy = (-p.iy / inLen) * outLen;
+            }
+          }
         } else if (d.handle === "out") {
           p.ox = lx - p.x;
           p.oy = ly - p.y;
+          if (p.mirrorMode === "angleAndLength" && !e.altKey) {
+            p.ix = -p.ox;
+            p.iy = -p.oy;
+          } else if (p.mirrorMode === "angle" && !e.altKey && (p.ix || p.iy)) {
+            const outLen = Math.hypot(p.ox, p.oy);
+            const inLen = Math.hypot(p.ix || 0, p.iy || 0);
+            if (outLen > 0.001) {
+              p.ix = (-p.ox / outLen) * inLen;
+              p.iy = (-p.oy / outLen) * inLen;
+            }
+          }
         } else {
           p.x = lx;
           p.y = ly;
         }
         engine.dispatch({ type: "patchPath", id: n.id, path: pts, closed: n.closed });
+      }
+    } else if (d.mode === "bend" && d.id != null && d.segIndex != null) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      const loc = worldPos(snap.pages[snap.page].root, d.id);
+      if (loc) {
+        const local = nodeLocalPoint(wpt.x, wpt.y, loc.x, loc.y, loc.node);
+        engine.dispatch({
+          type: "bendSegment",
+          id: d.id,
+          segIndex: d.segIndex,
+          dragX: local.x,
+          dragY: local.y,
+        });
       }
     } else if (d.mode === "rotate" && d.orig && d.id) {
       const wp = worldPos(snap.pages[snap.page].root, d.id);

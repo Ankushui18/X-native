@@ -498,3 +498,140 @@ export function vectorNetworkToPath(vn: VectorNetwork): { path: PathPoint[]; clo
 
   return { path, closed };
 }
+
+/**
+ * Projects a point onto a line segment and calculates orthogonal distance.
+ */
+export function projectPointOnSegment(
+  px: number,
+  py: number,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+): { x: number; y: number; dist: number; t: number } {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) {
+    return { x: x1, y: y1, dist: Math.hypot(px - x1, py - y1), t: 0 };
+  }
+  let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  const projX = x1 + t * dx;
+  const projY = y1 + t * dy;
+  return { x: projX, y: projY, dist: Math.hypot(px - projX, py - projY), t };
+}
+
+/**
+ * Inserts a new point onto an existing vector path by splitting the nearest segment.
+ */
+export function insertPointOnPath(
+  pts: PathPoint[],
+  px: number,
+  py: number,
+  closed: boolean,
+  maxDist = 12,
+): { newPath: PathPoint[]; insertedIndex: number } | null {
+  if (pts.length < 2) return null;
+  const n = pts.length;
+  const count = closed ? n : n - 1;
+  let bestDist = maxDist;
+  let bestIdx = -1;
+  let bestProj = { x: px, y: py };
+
+  for (let i = 0; i < count; i++) {
+    const p1 = pts[i];
+    const p2 = pts[(i + 1) % n];
+    const res = projectPointOnSegment(px, py, p1.x, p1.y, p2.x, p2.y);
+    if (res.dist < bestDist && res.t > 0.05 && res.t < 0.95) {
+      bestDist = res.dist;
+      bestIdx = i;
+      bestProj = { x: res.x, y: res.y };
+    }
+  }
+
+  if (bestIdx === -1) return null;
+
+  const newPt: PathPoint = { x: bestProj.x, y: bestProj.y };
+  const newPath = [...pts];
+  newPath.splice(bestIdx + 1, 0, newPt);
+  return { newPath, insertedIndex: bestIdx + 1 };
+}
+
+/**
+ * Bends a path segment towards a mouse drag point (Bend Tool / Curvature Tool).
+ * Calculates exact cubic Bézier handles on the segment endpoints so the curve passes through (dragX, dragY).
+ */
+export function bendSegment(
+  pts: PathPoint[],
+  segIndex: number,
+  closed: boolean,
+  dragX: number,
+  dragY: number,
+): PathPoint[] {
+  const n = pts.length;
+  if (segIndex < 0 || (closed ? segIndex >= n : segIndex >= n - 1)) return pts;
+
+  const p0 = pts[segIndex];
+  const p1 = pts[(segIndex + 1) % n];
+
+  // Pass through mouse point at t=0.5
+  const cx = 2 * dragX - 0.5 * (p0.x + p1.x);
+  const cy = 2 * dragY - 0.5 * (p0.y + p1.y);
+
+  // Convert quadratic control point to cubic bezier handles
+  const cp1x = p0.x + (2 / 3) * (cx - p0.x);
+  const cp1y = p0.y + (2 / 3) * (cy - p0.y);
+  const cp2x = p1.x + (2 / 3) * (cx - p1.x);
+  const cp2y = p1.y + (2 / 3) * (cy - p1.y);
+
+  const newPts = pts.map((p) => ({ ...p }));
+  newPts[segIndex].ox = cp1x - p0.x;
+  newPts[segIndex].oy = cp1y - p0.y;
+  newPts[(segIndex + 1) % n].ix = cp2x - p1.x;
+  newPts[(segIndex + 1) % n].iy = cp2y - p1.y;
+
+  return newPts;
+}
+
+/**
+ * Finds all fundamental closed loops/faces in a VectorNetwork graph
+ * to automatically form filled planar regions.
+ */
+export function findNetworkLoops(vn: VectorNetwork): number[][] {
+  if (vn.vertices.length < 3 || vn.segments.length < 3) return [];
+  const adj = new Map<number, number[]>();
+  for (let i = 0; i < vn.vertices.length; i++) adj.set(i, []);
+  for (const s of vn.segments) {
+    adj.get(s.start)?.push(s.end);
+    adj.get(s.end)?.push(s.start);
+  }
+
+  const loops: number[][] = [];
+  const visited = new Set<string>();
+
+  const findCyclesFrom = (start: number, cur: number, path: number[]) => {
+    if (path.length > 16) return;
+    const neighbors = adj.get(cur) || [];
+    for (const next of neighbors) {
+      if (next === start && path.length >= 3) {
+        const sorted = [...path].sort((a, b) => a - b).join(",");
+        if (!visited.has(sorted)) {
+          visited.add(sorted);
+          loops.push([...path]);
+        }
+        continue;
+      }
+      if (!path.includes(next)) {
+        findCyclesFrom(start, next, [...path, next]);
+      }
+    }
+  };
+
+  for (let i = 0; i < vn.vertices.length; i++) {
+    findCyclesFrom(i, i, [i]);
+  }
+
+  return loops;
+}

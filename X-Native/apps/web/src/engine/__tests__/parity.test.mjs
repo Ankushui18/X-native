@@ -7,7 +7,18 @@
  * that is easy to get subtly wrong lives. Canvas wiring is verified in-browser.
  */
 import { snapMove, snapCandidates } from "../snapping.ts";
-import { simplifyPath, smoothPath, erasePath, pathToVectorNetwork, addVectorBranch, vertexDegree, vectorNetworkToSvgPath } from "../geometry.ts";
+import {
+  simplifyPath,
+  smoothPath,
+  erasePath,
+  pathToVectorNetwork,
+  addVectorBranch,
+  vertexDegree,
+  vectorNetworkToSvgPath,
+  bendSegment,
+  insertPointOnPath,
+  projectPointOnSegment,
+} from "../geometry.ts";
 import { MemoryEngine } from "../memory.ts";
 import { inspectFigFile, importFig } from "../figImport.ts";
 import { readFileSync, existsSync } from "fs";
@@ -489,6 +500,25 @@ console.log("component instance overrides:");
   e.dispatch({ type: "patchVectorNetwork", id: vid, network: updatedNetwork });
   const patchedNode = e.snapshot().pages[e.snapshot().page].root.children.find((c) => c.id === vid);
   t("patchVectorNetwork updates node vertices", patchedNode?.vectorNetwork?.vertices.length === 5);
+
+  // Advanced vector tools: insert point & bend segment
+  const baseLine = [{ x: 0, y: 0 }, { x: 100, y: 0 }];
+  const pr = projectPointOnSegment(50, 10, 0, 0, 100, 0);
+  t("projectPointOnSegment projects midpoint", Math.abs(pr.x - 50) < 1e-4 && Math.abs(pr.y - 0) < 1e-4);
+  t("projectPointOnSegment measures distance", Math.abs(pr.dist - 10) < 1e-4);
+
+  const ins = insertPointOnPath(baseLine, 50, 0, false, 8);
+  t("insertPointOnPath splits segment and inserts vertex", ins?.newPath.length === 3 && ins.insertedIndex === 1);
+  t("inserted vertex has correct coordinates", ins?.newPath[1].x === 50 && ins?.newPath[1].y === 0);
+
+  const bent = bendSegment(baseLine, 0, false, 50, 50);
+  t("bendSegment creates outgoing handle on start vertex", bent[0].ox != null && Math.abs(bent[0].ox - 33.33) < 0.1);
+  t("bendSegment creates incoming handle on end vertex", bent[1].ix != null && Math.abs(bent[1].ix - (-33.33)) < 0.1);
+
+  // Dispatch bendSegment through engine
+  e.dispatch({ type: "bendSegment", id: vid, segIndex: 0, dragX: 50, dragY: 50 });
+  const bentNode = e.snapshot().pages[e.snapshot().page].root.children.find((c) => c.id === vid);
+  t("engine bendSegment dispatches and updates node handles", bentNode?.path[0].ox != null);
 }
 
 {
