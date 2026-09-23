@@ -145,6 +145,8 @@ export interface VectorNetwork {
   regions?: VectorRegion[];
 }
 
+export type ProtoEasing = "linear" | "easeIn" | "easeOut" | "easeInOut" | "spring" | "bouncy";
+
 export interface Interaction {
   trigger: ProtoTrigger;
   action: ProtoAction;
@@ -152,7 +154,8 @@ export interface Interaction {
   animation: ProtoAnim;
   delay: number;
   duration?: number;
-  easing?: "linear" | "easeIn" | "easeOut" | "easeInOut" | "spring";
+  easing?: ProtoEasing;
+  smartMatch?: boolean;
   overlayPosition?: "center" | "top" | "bottom" | "left" | "right" | "manual";
   overlayCloseOutside?: boolean;
   overlayBackdrop?: boolean;
@@ -187,12 +190,21 @@ export interface SharedStyle {
   color: string;
 }
 
+export interface ComponentPropertyDef {
+  id: string;
+  name: string;
+  type: "variant" | "boolean" | "text";
+  defaultValue: string | boolean;
+  targetNodeName?: string;
+}
+
 export interface ComponentMaster {
   id: string;
   name: string;
   node: XNode;
   variants: ComponentVariant[];
   property: string;
+  properties?: ComponentPropertyDef[];
 }
 
 export interface ExportPreset {
@@ -314,6 +326,29 @@ export interface AutoLayout {
   wrap: boolean;
   align: LayoutAlign;
   justify: LayoutJustify;
+  /** Canvas stacking: true = First on top, false = Last on top (Figma parity) */
+  itemReverseZIndex?: boolean;
+}
+
+export type GridPattern = "columns" | "rows" | "grid";
+export type GridAlignment = "stretch" | "center" | "min" | "max";
+
+export interface LayoutGrid {
+  id: string;
+  pattern: GridPattern;
+  sectionSize?: number;
+  count?: number;
+  gutter?: number;
+  margin?: number;
+  alignment?: GridAlignment;
+  color?: string;
+  visible?: boolean;
+}
+
+export interface ArcData {
+  startingAngle: number;
+  endingAngle: number;
+  innerRadius: number;
 }
 
 export interface XNode {
@@ -430,6 +465,11 @@ export interface XNode {
   isMask: boolean;
   maskType: "alpha" | "vector" | "luminance";
   variant: string;
+  componentProperties?: Record<string, string | boolean>;
+  /** Figma frame layout grids (columns, rows, grid) */
+  layoutGrids?: LayoutGrid[];
+  /** Figma ellipse arc / donut properties */
+  arcData?: ArcData;
 }
 
 /** A single message inside a comment thread. */
@@ -521,6 +561,12 @@ export interface Snapshot {
   variables?: VariableItem[];
   /** Dev Mode Annotations store */
   annotations?: AnnotationItem[];
+  /** Node ID currently in vector edit mode, if any. */
+  vecEdit?: string | null;
+  /** Active vector point index currently selected, if any. */
+  vecPoint?: number | null;
+  /** Selected vector point indices for multi-selection. */
+  vecPoints?: number[];
 }
 
 export type Command =
@@ -582,6 +628,9 @@ export type Command =
   | { type: "lockSel" }
   | { type: "hideSel" }
   | { type: "copyCode" }
+  | { type: "copyProperties" }
+  | { type: "pasteProperties" }
+  | { type: "deleteInteraction"; id: string; destId: string }
   | { type: "flip"; axis: "h" | "v" }
   | { type: "duplicatePage" }
   | { type: "deletePage" }
@@ -617,6 +666,10 @@ export type Command =
   | { type: "outlineStroke" }
   | { type: "addVariant"; name: string }
   | { type: "setVariant"; id: string; name: string }
+  | { type: "setVecEdit"; id: string | null; pointIndex?: number | null; pointIndices?: number[] }
+  | { type: "addComponentProperty"; componentId: string; property: ComponentPropertyDef }
+  | { type: "deleteComponentProperty"; componentId: string; propId: string }
+  | { type: "setComponentProperty"; id: string; propName: string; value: string | boolean }
   | { type: "resetOverrides"; id?: string; property?: string }
   | { type: "setInteractions"; id: string; interactions: Interaction[] }
   | { type: "addVariable"; variable: VariableItem }

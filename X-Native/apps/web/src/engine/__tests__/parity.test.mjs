@@ -22,6 +22,7 @@ import {
 } from "../geometry.ts";
 import { MemoryEngine } from "../memory.ts";
 import { inspectFigFile, importFig } from "../figImport.ts";
+import { interpolateMatchingLayers, solveEasing, applyInterpolatedFrame } from "../smartAnimate.ts";
 import { readFileSync, existsSync } from "fs";
 import { resolve } from "path";
 
@@ -616,6 +617,602 @@ console.log("component instance overrides:");
 
   const nAbove = computeFigmaNoodle(0, 300, 100, 50, 0, 0, 100, 50);
   t("noodle chooses top-to-bottom for upward destination", nAbove.sourceSide === "top" && nAbove.destSide === "bottom");
+
+  console.log("copy/paste properties & interaction editing (Figma parity):");
+  // Copy and Paste properties
+  const eprops = new MemoryEngine();
+  const root = eprops.snapshot().pages[0].root;
+  const src = root.children[0];
+  const target = root.children[1];
+  eprops.dispatch({
+    type: "patch",
+    id: src.id,
+    patch: {
+      fill: "#ff5500",
+      strokePaint: "#00ff00",
+      strokeWidth: 3,
+      cornerRadii: [12, 12, 12, 12],
+      effects: [{ kind: "dropShadow", color: "#00000040", blur: 8, x: 0, y: 4 }],
+      interactions: [{ trigger: "onClick", action: "navigate", destination: target.id }],
+    },
+  });
+  eprops.dispatch({ type: "select", ids: [src.id] });
+  eprops.dispatch({ type: "copyProperties" });
+
+  const oldTargetX = target.x;
+  const oldTargetW = target.w;
+  eprops.dispatch({ type: "select", ids: [target.id] });
+  eprops.dispatch({ type: "pasteProperties" });
+
+  const updatedTarget = eprops.snapshot().pages[0].root.children[1];
+  t("pasteProperties copies fill", updatedTarget.fill === "#ff5500");
+  t("pasteProperties copies strokePaint and strokeWidth", updatedTarget.strokePaint === "#00ff00" && updatedTarget.strokeWidth === 3);
+  t("pasteProperties copies cornerRadii", updatedTarget.cornerRadii[0] === 12);
+  t("pasteProperties copies effects", updatedTarget.effects?.length === 1 && updatedTarget.effects[0].blur === 8);
+  t("pasteProperties copies interactions", updatedTarget.interactions?.length === 1 && updatedTarget.interactions[0].destination === target.id);
+  t("pasteProperties preserves target geometry (x, w)", updatedTarget.x === oldTargetX && updatedTarget.w === oldTargetW);
+
+  // Delete interaction
+  eprops.dispatch({ type: "deleteInteraction", id: target.id, destId: target.id });
+  const cleanedTarget = eprops.snapshot().pages[0].root.children[1];
+  t("deleteInteraction removes interaction by destination id", cleanedTarget.interactions?.length === 0);
+
+  // Section routing in presentGo
+  eprops.dispatch({
+    type: "add",
+    kind: "frame",
+    x: 0,
+    y: 0,
+    w: 800,
+    h: 600,
+    extra: { name: "App Flow Section" },
+  });
+  const sectionNode = eprops.snapshot().pages[0].root.children.find((c) => c.name === "App Flow Section");
+  eprops.dispatch({
+    type: "add",
+    kind: "frame",
+    parent: sectionNode.id,
+    x: 20,
+    y: 20,
+    w: 375,
+    h: 560,
+    extra: { name: "Child Screen 1" },
+  });
+  const childScreen = sectionNode.children[0];
+  eprops.dispatch({ type: "presentGo", id: sectionNode.id });
+  t("presentGo routes section to its first child frame", eprops.snapshot().presentFrame === childScreen.id);
+
+  console.log("instance lifecycle & persistence (Figma parity):");
+  // Component creation, instance placement, and detachInstance (⌥⌘B)
+  const targetFrame = eprops.snapshot().pages[0].root.children[0];
+  eprops.dispatch({ type: "select", ids: [targetFrame.id] });
+  eprops.dispatch({ type: "makeComponent" });
+  const comp = eprops.snapshot().components[0];
+  eprops.dispatch({ type: "placeComponent", id: comp.id, x: 100, y: 100 });
+  const instanceId = eprops.snapshot().selection[0];
+  const placedInstance = eprops.snapshot().pages[0].root.children.find((c) => c.id === instanceId);
+  t("placeComponent creates instance linked to master", placedInstance && (placedInstance.componentId === comp.id || placedInstance.kind === "instance"));
+
+  eprops.dispatch({ type: "detachInstance" });
+  const detachedNode = eprops.snapshot().pages[0].root.children.find((c) => c.id === instanceId);
+  t("detachInstance unlinks instance from master (⌥⌘B)", detachedNode && !detachedNode.componentId && !detachedNode.isComponent);
+
+  console.log("component properties system (Figma parity):");
+  // Create a structured component master with nested layers
+  eprops.dispatch({
+    type: "add",
+    kind: "frame",
+    x: 200,
+    y: 200,
+    w: 240,
+    h: 48,
+    extra: {
+      name: "Interactive Button",
+      children: [
+        {
+          id: "btn-label-1",
+          name: "Label",
+          kind: "text",
+          text: "Click Me",
+          x: 10,
+          y: 14,
+          w: 100,
+          h: 20,
+          children: [],
+          visible: true,
+        },
+        {
+          id: "btn-badge-1",
+          name: "Badge",
+          kind: "rect",
+          x: 180,
+          y: 10,
+          w: 28,
+          h: 28,
+          children: [],
+          visible: true,
+        },
+      ],
+    },
+  });
+  const btnFrame = eprops.snapshot().pages[0].root.children.find((c) => c.name === "Interactive Button");
+  eprops.dispatch({ type: "select", ids: [btnFrame.id] });
+  eprops.dispatch({ type: "makeComponent" });
+  const btnComp = eprops.snapshot().components.find((c) => c.name === "Interactive Button");
+
+  // Add boolean property ("Show badge" controlling "Badge" layer visibility)
+  eprops.dispatch({
+    type: "addComponentProperty",
+    componentId: btnComp.id,
+    property: {
+      id: "prop-show-badge",
+      name: "Show badge",
+      type: "boolean",
+      defaultValue: true,
+      targetNodeName: "Badge",
+    },
+  });
+
+  // Add text property ("Button label" controlling "Label" text content)
+  eprops.dispatch({
+    type: "addComponentProperty",
+    componentId: btnComp.id,
+    property: {
+      id: "prop-btn-label",
+      name: "Button label",
+      type: "text",
+      defaultValue: "Default Text",
+      targetNodeName: "Label",
+    },
+  });
+
+  // Place instance and test default property bindings
+  eprops.dispatch({ type: "placeComponent", id: btnComp.id, x: 300, y: 300 });
+  const instId = eprops.snapshot().selection[0];
+  const inst = eprops.snapshot().pages[0].root.children.find((c) => c.id === instId);
+  t("instance initializes component properties from master", inst.componentProperties?.["Show badge"] === true && inst.componentProperties?.["Button label"] === "Default Text");
+
+  // Toggle boolean property to false -> hides "Badge" child
+  eprops.dispatch({
+    type: "setComponentProperty",
+    id: instId,
+    propName: "Show badge",
+    value: false,
+  });
+  const updatedInst = eprops.snapshot().pages[0].root.children.find((c) => c.id === instId);
+  const badgeChild = updatedInst.children.find((c) => c.name === "Badge");
+  t("setComponentProperty(boolean) hides target child layer", badgeChild?.visible === false);
+
+  // Update text property -> updates "Label" text layer
+  eprops.dispatch({
+    type: "setComponentProperty",
+    id: instId,
+    propName: "Button label",
+    value: "Get Started Now",
+  });
+  const textUpdatedInst = eprops.snapshot().pages[0].root.children.find((c) => c.id === instId);
+  const labelChild = textUpdatedInst.children.find((c) => c.name === "Label");
+  t("setComponentProperty(text) updates target child text string", labelChild?.text === "Get Started Now");
+
+  // Delete component property
+  eprops.dispatch({
+    type: "deleteComponentProperty",
+    componentId: btnComp.id,
+    propId: "prop-show-badge",
+  });
+  const masterAfterDelete = eprops.snapshot().components.find((c) => c.id === btnComp.id);
+  t("deleteComponentProperty removes property definition from master", !masterAfterDelete.properties?.some((p) => p.name === "Show badge"));
+
+  console.log("star handles, corner radii & mask display (Figma parity):");
+  // Star creation and starRatio
+  eprops.dispatch({
+    type: "add",
+    kind: "star",
+    x: 400,
+    y: 100,
+    w: 120,
+    h: 120,
+    extra: { name: "Rating Star", starRatio: 0.5, cornerRadii: [8, 8, 8, 8] },
+  });
+  const starNode = eprops.snapshot().pages[0].root.children.find((c) => c.name === "Rating Star");
+  t("star node stores starRatio and cornerRadii", starNode.starRatio === 0.5 && starNode.cornerRadii[0] === 8);
+
+  // Mask layer icon & toggle
+  eprops.dispatch({
+    type: "patch",
+    id: starNode.id,
+    patch: { isMask: true },
+  });
+  const maskedStar = eprops.snapshot().pages[0].root.children.find((c) => c.id === starNode.id);
+  t("star node set as mask has isMask true", maskedStar.isMask === true);
+
+  console.log("auto layout cross-axis hug & arrow reordering (Figma parity):");
+  // Auto Layout cross-axis hug
+  eprops.dispatch({
+    type: "add",
+    kind: "frame",
+    x: 10,
+    y: 10,
+    w: 300,
+    h: 50,
+    extra: {
+      name: "Row Frame",
+      layout: {
+        direction: "horizontal",
+        gap: 8,
+        padding: [10, 10, 15, 15],
+        align: "min",
+        justify: "min",
+        sizing: "fixed",
+        cross: "fixed",
+        wrap: false,
+      },
+      sizingH: "hug",
+    },
+  });
+  const rowFrame = eprops.snapshot().pages[0].root.children.find((c) => c.name === "Row Frame");
+  eprops.dispatch({
+    type: "add",
+    kind: "rect",
+    parent: rowFrame.id,
+    x: 0,
+    y: 0,
+    w: 50,
+    h: 80,
+    extra: { name: "Child Box" },
+  });
+  const updatedRow = eprops.snapshot().pages[0].root.children.find((c) => c.name === "Row Frame");
+  t("horizontal auto-layout with sizingH:hug computes height from children + padding", updatedRow.h === 110); // 80 + 15 + 15 = 110
+
+  // Auto Layout arrow key reordering
+  eprops.dispatch({
+    type: "add",
+    kind: "rect",
+    parent: rowFrame.id,
+    x: 0,
+    y: 0,
+    w: 50,
+    h: 60,
+    extra: { name: "Second Child Box" },
+  });
+  const firstChild = updatedRow.children[0];
+  const secondChild = updatedRow.children[1];
+  eprops.dispatch({ type: "select", ids: [firstChild.id] });
+  eprops.dispatch({ type: "nudge", dx: 1, dy: 0 }); // ArrowRight reorders forward in Auto Layout
+  const reorderedRow = eprops.snapshot().pages[0].root.children.find((c) => c.name === "Row Frame");
+  t("arrow key nudge reorders child inside Auto Layout flow", reorderedRow.children[0].id === secondChild.id && reorderedRow.children[1].id === firstChild.id);
+
+  // Vector editing vertex properties & mirror modes (Figma parity)
+  console.log("vector edit vertex controls & mirror modes (Figma parity):");
+  const evec = new MemoryEngine(false);
+  evec.dispatch({
+    type: "add",
+    kind: "vector",
+    x: 0,
+    y: 0,
+    w: 100,
+    h: 100,
+    extra: {
+      path: [
+        { x: 0, y: 0, ox: 10, oy: 5 },
+        { x: 100, y: 0, ix: -10, iy: -5 },
+        { x: 50, y: 100 },
+      ],
+      closed: true,
+    },
+  });
+  const vecId = evec.snapshot().selection[0];
+  evec.dispatch({ type: "setVecEdit", id: vecId, pointIndex: 0 });
+  t("setVecEdit sets active vecEdit node and vecPoint", evec.snapshot().vecEdit === vecId && evec.snapshot().vecPoint === 0);
+
+  evec.dispatch({ type: "setPointCornerRadius", id: vecId, pointIndex: 1, radius: 12 });
+  const vecAfterRadius = evec.snapshot().pages[0].root.children.find((c) => c.id === vecId);
+  t("setPointCornerRadius sets cornerRadius on path vertex", vecAfterRadius.path[1].cornerRadius === 12);
+  t("setPointCornerRadius syncs cornerRadius into vectorNetwork", vecAfterRadius.vectorNetwork?.vertices[1]?.cornerRadius === 12);
+
+  evec.dispatch({ type: "setPointMirror", id: vecId, pointIndex: 0, mode: "angleAndLength" });
+  const vecAfterMirror = evec.snapshot().pages[0].root.children.find((c) => c.id === vecId);
+  t("setPointMirror sets mirrorMode on path vertex", vecAfterMirror.path[0].mirrorMode === "angleAndLength");
+  t("setPointMirror angleAndLength mirrors incoming handle", vecAfterMirror.path[0].ix === -10 && vecAfterMirror.path[0].iy === -5);
+
+  evec.dispatch({ type: "select", ids: [] });
+  t("clearing selection exits vector edit mode", evec.snapshot().vecEdit === null && evec.snapshot().vecPoint === null);
+
+  // Performance & layout scale benchmark (cold startup & large document)
+  console.log("performance & layout scale benchmark:");
+  const ebench = new MemoryEngine(false);
+  ebench.dispatch({
+    type: "add",
+    kind: "frame",
+    x: 0,
+    y: 0,
+    w: 1200,
+    h: 800,
+    extra: {
+      name: "Perf Container",
+      layout: {
+        direction: "vertical",
+        gap: 8,
+        padding: [16, 16, 16, 16],
+        sizing: "hug",
+        cross: "fixed",
+        wrap: false,
+        align: "start",
+        justify: "start",
+      },
+      sizingH: "hug",
+    },
+  });
+  const container = ebench.snapshot().pages[0].root.children.find((c) => c.name === "Perf Container");
+  const tStart = performance.now();
+  ebench.dispatch({ type: "begin" });
+  for (let i = 0; i < 200; i++) {
+    ebench.dispatch({
+      type: "add",
+      kind: "rect",
+      parent: container.id,
+      x: 0,
+      y: 0,
+      w: 200,
+      h: 24,
+      extra: { name: `Row Item ${i}` },
+    });
+  }
+  ebench.dispatch({ type: "end" });
+  const tEnd = performance.now();
+  const perfDuration = tEnd - tStart;
+  const perfSnap = ebench.snapshot().pages[0].root.children.find((c) => c.id === container.id);
+  t("200 auto-layout children dispatched and computed in under 100ms", perfDuration < 100);
+  t("perf container height correctly accumulated across all 200 rows", perfSnap.h === 16 + 16 + (200 * 24) + (199 * 8));
+
+  // Layout grids, negative gap & canvas stacking (Figma parity)
+  console.log("layout grids, negative gap & canvas stacking (Figma parity):");
+  const egrid = new MemoryEngine(false);
+  egrid.dispatch({
+    type: "add",
+    kind: "frame",
+    x: 0,
+    y: 0,
+    w: 1200,
+    h: 800,
+    extra: {
+      name: "Grid Frame",
+      layout: {
+        direction: "horizontal",
+        gap: -12,
+        padding: [20, 20, 20, 20],
+        sizing: "hug",
+        cross: "fixed",
+        wrap: false,
+        align: "min",
+        justify: "min",
+        itemReverseZIndex: true,
+      },
+      layoutGrids: [
+        {
+          id: "grid-1",
+          pattern: "columns",
+          count: 12,
+          gutter: 20,
+          margin: 24,
+          alignment: "stretch",
+          color: "rgba(255, 0, 0, 0.1)",
+          visible: true,
+        },
+      ],
+    },
+  });
+  const gframe = egrid.snapshot().pages[0].root.children.find((c) => c.name === "Grid Frame");
+  t("frame stores 12-column layout grid", gframe.layoutGrids?.length === 1 && gframe.layoutGrids[0].count === 12);
+  t("auto layout stores canvas stacking order itemReverseZIndex", gframe.layout?.itemReverseZIndex === true);
+
+  egrid.dispatch({
+    type: "add",
+    kind: "rect",
+    parent: gframe.id,
+    x: 0,
+    y: 0,
+    w: 60,
+    h: 60,
+    extra: { name: "Avatar 1" },
+  });
+  egrid.dispatch({
+    type: "add",
+    kind: "rect",
+    parent: gframe.id,
+    x: 0,
+    y: 0,
+    w: 60,
+    h: 60,
+    extra: { name: "Avatar 2" },
+  });
+  const gframeAfter = egrid.snapshot().pages[0].root.children.find((c) => c.id === gframe.id);
+  // Avatar 1 x is 20, Avatar 2 x is 20 + 60 + (-12) = 68 (overlapping by 12px)
+  t("negative gap computes overlapping child coordinates", gframeAfter.children[1].x === 68);
+
+  // Motion easing and smart match in interaction
+  console.log("motion easing and smart match interaction (Figma parity):");
+  egrid.dispatch({
+    type: "setInteractions",
+    id: gframeAfter.children[0].id,
+    interactions: [
+      {
+        trigger: "onClick",
+        action: "navigate",
+        destination: gframe.id,
+        animation: "smart",
+        delay: 0,
+        duration: 350,
+        easing: "spring",
+        smartMatch: true,
+      },
+    ],
+  });
+  const ixNode = egrid.snapshot().pages[0].root.children.find((c) => c.id === gframe.id).children[0];
+  t("interaction stores spring easing curve", ixNode.interactions[0].easing === "spring");
+  t("interaction stores smartMatch flag", ixNode.interactions[0].smartMatch === true);
+
+  // Ellipse arcData, donut hole & sweep angles (Figma parity)
+  console.log("ellipse arcData & donut hole (Figma parity):");
+  const earc = new MemoryEngine(false);
+  earc.dispatch({
+    type: "add",
+    kind: "ellipse",
+    x: 0,
+    y: 0,
+    w: 120,
+    h: 120,
+    extra: {
+      arcData: {
+        startingAngle: 0,
+        endingAngle: Math.PI * 1.5,
+        innerRadius: 0.4,
+      },
+    },
+  });
+  const arcNode = earc.snapshot().pages[0].root.children.find((c) => c.kind === "ellipse");
+  t("ellipse node stores arcData with sweep and innerRadius", arcNode.arcData?.innerRadius === 0.4);
+  t("ellipse arcData preserves endingAngle (270 degrees)", Math.abs(arcNode.arcData?.endingAngle - Math.PI * 1.5) < 0.001);
+
+  // Smart Animate interpolation & easing curves (Figma parity)
+  console.log("smart animate interpolation & easing curves (Figma parity):");
+  t("solveEasing linear at 0.5 is 0.5", solveEasing("linear", 0.5) === 0.5);
+  t("solveEasing easeIn at 0.5 is slower than 0.5", solveEasing("easeIn", 0.5) < 0.5);
+  t("solveEasing easeOut at 0.5 is faster than 0.5", solveEasing("easeOut", 0.5) > 0.5);
+  t("solveEasing spring reaches 1.0 at finish", Math.abs(solveEasing("spring", 1.0) - 1.0) < 0.05);
+
+  const fromF = {
+    id: "f1",
+    name: "Frame 1",
+    kind: "frame",
+    x: 0,
+    y: 0,
+    w: 300,
+    h: 400,
+    cornerRadii: [0, 0, 0, 0],
+    children: [
+      {
+        id: "card-src",
+        name: "Card",
+        kind: "rect",
+        x: 20,
+        y: 20,
+        w: 100,
+        h: 100,
+        opacity: 1,
+        rotation: 0,
+        cornerRadii: [0, 0, 0, 0],
+        fill: "#ff0000",
+        children: [],
+      },
+    ],
+  };
+
+  const toF = {
+    id: "f2",
+    name: "Frame 2",
+    kind: "frame",
+    x: 0,
+    y: 0,
+    w: 300,
+    h: 400,
+    cornerRadii: [0, 0, 0, 0],
+    children: [
+      {
+        id: "card-dst",
+        name: "Card",
+        kind: "rect",
+        x: 120,
+        y: 220,
+        w: 200,
+        h: 150,
+        opacity: 1,
+        rotation: 45,
+        cornerRadii: [16, 16, 16, 16],
+        fill: "#0000ff",
+        children: [],
+      },
+      {
+        id: "new-badge",
+        name: "Badge",
+        kind: "rect",
+        x: 50,
+        y: 50,
+        w: 40,
+        h: 20,
+        opacity: 1,
+        rotation: 0,
+        cornerRadii: [4, 4, 4, 4],
+        fill: "#00ff00",
+        children: [],
+      },
+    ],
+  };
+
+  const smartMap = interpolateMatchingLayers(fromF, toF, 0.5, "linear");
+  const morphCard = smartMap.get("card-dst");
+  t("card matched by name morphs x halfway (20 -> 120 = 70)", morphCard.x === 70);
+  t("card matched by name morphs y halfway (20 -> 220 = 120)", morphCard.y === 120);
+  t("card matched by name morphs width halfway (100 -> 200 = 150)", morphCard.w === 150);
+  t("card matched by name morphs corner radius halfway (0 -> 16 = 8)", morphCard.cornerRadii[0] === 8);
+  t("card matched by name morphs rotation halfway (0 -> 45 = 22.5)", morphCard.rotation === 22.5);
+
+  const arrivingBadge = smartMap.get("new-badge");
+  t("unmatched layer in destination dissolves in halfway (opacity = 0.5)", arrivingBadge.opacity === 0.5);
+
+  const appliedTree = applyInterpolatedFrame(toF, smartMap);
+  t("applied interpolated tree produces valid cloned node with morphed x", appliedTree.children[0].x === 70);
+
+  // Exiting layer dissolves out
+  const fromWithOld = {
+    ...fromF,
+    children: [
+      ...fromF.children,
+      {
+        id: "old-badge",
+        name: "Old Badge",
+        kind: "rect",
+        x: 10,
+        y: 10,
+        w: 30,
+        h: 20,
+        opacity: 1,
+        rotation: 0,
+        cornerRadii: [0, 0, 0, 0],
+        fill: "#ff0000",
+        children: [],
+      },
+    ],
+  };
+  const exitMap = interpolateMatchingLayers(fromWithOld, toF, 0.5, "linear");
+  const exiting = exitMap.get("old-badge");
+  t("exiting layer in source dissolves out halfway (opacity = 0.5)", exiting && exiting.opacity === 0.5);
+
+  const appliedWithExit = applyInterpolatedFrame(toF, exitMap, fromWithOld);
+  t("applied frame includes dissolving exiting layer", appliedWithExit.children.some((c) => c.id === "old-badge" && c.opacity === 0.5));
+}
+
+console.log("vector edit multi-selection & marquee (Figma parity):");
+{
+  const eng = new MemoryEngine();
+  eng.dispatch({
+    type: "addPath",
+    points: [
+      { x: 0, y: 0 },
+      { x: 100, y: 0 },
+      { x: 100, y: 100 },
+      { x: 0, y: 100 },
+    ],
+    closed: true,
+  });
+  const vecId = eng.snapshot().selection[0];
+  eng.dispatch({ type: "setVecEdit", id: vecId, pointIndex: 1, pointIndices: [1, 2] });
+  const s1 = eng.snapshot();
+  t("setVecEdit stores active vecPoint and vecPoints array", s1.vecPoint === 1 && s1.vecPoints.length === 2 && s1.vecPoints.includes(2));
+
+  eng.dispatch({ type: "select", ids: [] });
+  const s2 = eng.snapshot();
+  t("clearing selection clears vecPoint and vecPoints", s2.vecEdit === null && s2.vecPoint === null && s2.vecPoints.length === 0);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

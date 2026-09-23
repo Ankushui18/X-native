@@ -19,7 +19,10 @@ import type {
   TextAlignVertical,
   Interaction,
   ProtoAnim,
+  ProtoEasing,
   ProtoTrigger,
+  LayoutGrid,
+  GridPattern,
   XNode,
 } from "../engine/types";
 import { collectColors, defaultEffect, defaultLayout, find, findParent, framesOf, worldPos } from "../engine/memory";
@@ -62,6 +65,14 @@ export function RightPanel({
         <div className="avatar" title="You">
           X
         </div>
+        <button
+          className={`icon-btn${inspect ? " on" : ""}`}
+          title={inspect ? "Exit Dev Mode (⇧D)" : "Dev Mode (⇧D)"}
+          onClick={() => engine.dispatch({ type: "setRightTab", tab: inspect ? "design" : "inspect" })}
+          style={inspect ? { background: "rgba(16, 185, 129, 0.2)", color: "#10b981", borderRadius: 6 } : {}}
+        >
+          <Icon name="dev" />
+        </button>
         <button className="icon-btn" title="Present" onClick={() => onPresent?.()}>
           <Icon name="play" />
         </button>
@@ -71,9 +82,18 @@ export function RightPanel({
       </div>
       <div className="tabs">
         {inspect ? (
-          <button className="tab" aria-current="true">
-            Inspect
-          </button>
+          <>
+            <button className="tab" aria-current="true">
+              Inspect
+            </button>
+            <button
+              className="tab"
+              onClick={() => engine.dispatch({ type: "setRightTab", tab: "design" })}
+              style={{ color: "var(--dim)", cursor: "pointer" }}
+            >
+              Design
+            </button>
+          </>
         ) : (
           tabs.map((t) => (
             <button
@@ -242,7 +262,7 @@ function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
           value={snap.pages[snap.page].pixelGridColor || "#cccccc"}
           opacity={snap.pages[snap.page].pixelGrid ? 100 : 0}
           visible={!!snap.pages[snap.page].pixelGrid}
-          recents={["#cccccc", "#e6e6e6", "#8a8a8a", "#0d99ff"]}
+          recents={["#cccccc", "#e6e6e6", "#8a8a8a", "#6366f1"]}
           onChange={(pixelGridColor) =>
             engine.dispatch({ type: "patchPage", patch: { pixelGridColor, pixelGrid: true } })
           }
@@ -529,6 +549,65 @@ function Prototype({
                 }}
               />
             </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+              <select
+                value={ix.easing || "easeOut"}
+                onChange={(e) =>
+                  setIx(
+                    interactions.map((x, j) =>
+                      j === i ? { ...x, easing: e.target.value as ProtoEasing } : x,
+                    ),
+                  )
+                }
+                title="Animation Easing Curve"
+              >
+                <option value="easeOut">Ease out</option>
+                <option value="easeIn">Ease in</option>
+                <option value="easeInOut">Ease in and out</option>
+                <option value="linear">Linear</option>
+                <option value="spring">Spring (Gentle)</option>
+                <option value="bouncy">Spring (Bouncy)</option>
+              </select>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                  fontSize: 10,
+                  color: "var(--fg-muted)",
+                  cursor: "pointer",
+                  userSelect: "none",
+                }}
+                title="Match layers by name and interpolate their properties"
+              >
+                <input
+                  type="checkbox"
+                  checked={Boolean(ix.smartMatch || ix.animation === "smart")}
+                  disabled={ix.animation === "smart"}
+                  onChange={(e) =>
+                    setIx(
+                      interactions.map((x, j) =>
+                        j === i ? { ...x, smartMatch: e.target.checked } : x,
+                      ),
+                    )
+                  }
+                />
+                Smart match
+              </label>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 4px", background: "var(--bg-subtle)", borderRadius: 4 }}>
+              <svg width="32" height="18" viewBox="0 0 32 18" style={{ overflow: "visible" }}>
+                {ix.easing === "linear" && <line x1="2" y1="16" x2="30" y2="2" stroke="var(--accent)" strokeWidth="1.5" />}
+                {ix.easing === "easeIn" && <path d="M 2 16 Q 22 16, 30 2" fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
+                {(ix.easing === "easeOut" || !ix.easing) && <path d="M 2 16 Q 8 2, 30 2" fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
+                {ix.easing === "easeInOut" && <path d="M 2 16 C 14 16, 18 2, 30 2" fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
+                {ix.easing === "spring" && <path d="M 2 16 C 10 0, 16 2, 22 4 C 26 3, 30 2, 30 2" fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
+                {ix.easing === "bouncy" && <path d="M 2 16 C 8 -4, 14 6, 20 0 C 24 4, 30 2, 30 2" fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
+              </svg>
+              <span style={{ fontSize: 10, color: "var(--dim)" }}>
+                {ix.duration || 250}ms • {ix.easing || "easeOut"}
+              </span>
+            </div>
           </div>
         ))}
       <div className="insp-pad">
@@ -550,7 +629,7 @@ function generateCss(n: XNode): string {
   ];
   if (n.cornerRadii && n.cornerRadii.some((r) => r > 0)) {
     if (n.cornerIndependent) {
-      rules.push(`border-radius: ${n.cornerRadii.map((r) => `${r}px`).join(" ")};`);
+      rules.push(`border-radius: ${[n.cornerRadii[0], n.cornerRadii[1], n.cornerRadii[3], n.cornerRadii[2]].map((r) => `${r}px`).join(" ")};`);
     } else {
       rules.push(`border-radius: ${n.cornerRadii[0]}px;`);
     }
@@ -605,8 +684,15 @@ function generateTailwind(n: XNode): string {
   if (n.sizingH === "fill") cls.push("h-full");
   else cls.push(`h-[${Math.round(n.h)}px]`);
 
-  if (n.cornerRadii && n.cornerRadii[0] > 0) {
-    cls.push(`rounded-[${n.cornerRadii[0]}px]`);
+  if (n.cornerRadii && n.cornerRadii.some((r) => r > 0)) {
+    if (n.cornerIndependent) {
+      if (n.cornerRadii[0]) cls.push(`rounded-tl-[${n.cornerRadii[0]}px]`);
+      if (n.cornerRadii[1]) cls.push(`rounded-tr-[${n.cornerRadii[1]}px]`);
+      if (n.cornerRadii[3]) cls.push(`rounded-br-[${n.cornerRadii[3]}px]`);
+      if (n.cornerRadii[2]) cls.push(`rounded-bl-[${n.cornerRadii[2]}px]`);
+    } else {
+      cls.push(`rounded-[${n.cornerRadii[0]}px]`);
+    }
   }
   if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") {
     cls.push(`bg-[${n.fill}]`);
@@ -1498,9 +1584,30 @@ function Design({
           <div style={{ padding: 10, background: "var(--hover)", borderRadius: 8, border: "1px solid var(--line)", display: "grid", gap: 8 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <strong style={{ fontSize: 11 }}>Vector Network</strong>
-              <span style={{ fontSize: 9, padding: "2px 6px", background: "var(--accent)", color: "#fff", borderRadius: 10 }}>
-                Evan Wallace Graph
-              </span>
+              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                {snap.vecEdit === n.id ? (
+                  <button
+                    className="export-run"
+                    style={{ padding: "2px 8px", fontSize: 10, background: "var(--accent)", color: "#fff" }}
+                    onClick={() => engine.dispatch({ type: "setVecEdit", id: null, pointIndex: null })}
+                    title="Exit vector edit mode (Esc / ⌘↵)"
+                  >
+                    Done
+                  </button>
+                ) : (
+                  <button
+                    className="export-run"
+                    style={{ padding: "2px 8px", fontSize: 10 }}
+                    onClick={() => engine.dispatch({ type: "setVecEdit", id: n.id, pointIndex: 0 })}
+                    title="Enter vector edit mode (↵)"
+                  >
+                    Edit Path
+                  </button>
+                )}
+                <span style={{ fontSize: 9, padding: "2px 6px", background: "var(--accent)", color: "#fff", borderRadius: 10 }}>
+                  Evan Wallace Graph
+                </span>
+              </div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, fontSize: 10, color: "var(--dim)" }}>
               <div>Vertices: <strong style={{ color: "var(--text)" }}>{n.vectorNetwork?.vertices.length ?? n.path.length}</strong></div>
@@ -1508,6 +1615,66 @@ function Design({
               <div>Branching (≥3): <strong style={{ color: "var(--text)" }}>{n.vectorNetwork ? n.vectorNetwork.vertices.filter((_, i) => vertexDegree(n.vectorNetwork!, i) >= 3).length : 0}</strong></div>
               <div>Closed: <strong style={{ color: "var(--text)" }}>{n.closed ? "Yes" : "No"}</strong></div>
             </div>
+
+            {snap.vecEdit === n.id && (() => {
+              const activePtIdx =
+                snap.vecPoint !== null &&
+                snap.vecPoint !== undefined &&
+                snap.vecPoint >= 0 &&
+                snap.vecPoint < n.path.length
+                  ? snap.vecPoint
+                  : (n.path.length > 0 ? 0 : null);
+              const pt = activePtIdx !== null ? n.path[activePtIdx] : null;
+              if (activePtIdx === null || !pt) return null;
+              return (
+                <div style={{ padding: 8, background: "var(--bg-subtle)", borderRadius: 6, border: "1px solid var(--border)", display: "grid", gap: 6 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: 11, fontWeight: 600 }}>Vertex #{activePtIdx + 1}</span>
+                    <span style={{ fontSize: 10, color: "var(--dim)" }}>({Math.round(pt.x)}, {Math.round(pt.y)})</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                    <span style={{ fontSize: 10, color: "var(--dim)" }}>Point Radius</span>
+                    <input
+                      type="number"
+                      min={0}
+                      value={pt.cornerRadius ?? 0}
+                      style={{ width: 64, padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                      onChange={(e) => {
+                        const r = parseFloat(e.target.value) || 0;
+                        engine.dispatch({ type: "setPointCornerRadius", id: n.id, pointIndex: activePtIdx, radius: r });
+                      }}
+                    />
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <span style={{ fontSize: 10, color: "var(--dim)" }}>Vertex Mirror Mode</span>
+                    <div className="seg" style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", fontSize: 10 }}>
+                      <button
+                        className={pt.mirrorMode === "none" || !pt.mirrorMode ? "on" : ""}
+                        title="Independent handles / Sharp corner"
+                        onClick={() => engine.dispatch({ type: "setPointMirror", id: n.id, pointIndex: activePtIdx, mode: "none" })}
+                      >
+                        Corner
+                      </button>
+                      <button
+                        className={pt.mirrorMode === "angle" ? "on" : ""}
+                        title="Mirror angle only, independent length"
+                        onClick={() => engine.dispatch({ type: "setPointMirror", id: n.id, pointIndex: activePtIdx, mode: "angle" })}
+                      >
+                        Angle
+                      </button>
+                      <button
+                        className={pt.mirrorMode === "angleAndLength" ? "on" : ""}
+                        title="Symmetric mirror angle & length"
+                        onClick={() => engine.dispatch({ type: "setPointMirror", id: n.id, pointIndex: activePtIdx, mode: "angleAndLength" })}
+                      >
+                        Mirror
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
             <div style={{ display: "flex", gap: 6 }}>
               <button
                 className="export-run"
@@ -1545,7 +1712,7 @@ function Design({
               </button>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 4 }}>
-              <div style={{ fontSize: 10, color: "var(--dim)" }}>Handle Symmetry:</div>
+              <div style={{ fontSize: 10, color: "var(--dim)" }}>Global Symmetry:</div>
               <div className="seg" style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", fontSize: 10 }}>
                 <button
                   title="Symmetric angle and length"
@@ -1582,36 +1749,169 @@ function Design({
           </div>
         </div>
       )}
-      {(n.isComponent || n.componentId) && (
-        <>
-          <div className="h-row">
-            <h3>Variants</h3>
-          </div>
-          <div className="insp-pad">
-            <select
-              value={n.variant || "Default"}
-              onChange={(e) => engine.dispatch({ type: "setVariant", id: n.id, name: e.target.value })}
-            >
-              {(snap.components.find((c) => c.id === n.componentId)?.variants ?? [{ name: "Default" }]).map((v) => (
-                <option key={v.name} value={v.name}>
-                  {v.name}
-                </option>
-              ))}
-            </select>
-            {n.isComponent && (
-              <button
-                style={{ marginTop: 6 }}
-                onClick={() => {
-                  const name = `Variant ${(snap.components.find((c) => c.id === n.componentId)?.variants?.length ?? 1) + 1}`;
-                  engine.dispatch({ type: "addVariant", name });
-                }}
-              >
-                Add variant
-              </button>
-            )}
-          </div>
-        </>
-      )}
+      {(n.isComponent || n.componentId) && (() => {
+        const master = snap.components.find((c) => c.id === n.componentId || c.node.id === n.componentId || (n.isComponent && (c.id === n.id || c.node.id === n.id)));
+        const propDefs = master?.properties ?? [];
+        return (
+          <>
+            <div className="h-row">
+              <h3>{n.isComponent ? "Component" : "Instance"}</h3>
+              <div style={{ display: "flex", gap: 4 }}>
+                {n.componentId && (
+                  <>
+                    <button
+                      className="icon-btn"
+                      title="Go to main component"
+                      onClick={() => {
+                        if (master) {
+                          engine.dispatch({ type: "select", ids: [master.node.id] });
+                          toast("Navigated to main component");
+                        }
+                      }}
+                    >
+                      <Icon name="component" size={14} />
+                    </button>
+                    <button
+                      className="icon-btn"
+                      title="Reset all overrides"
+                      onClick={() => {
+                        engine.dispatch({ type: "resetOverrides", id: n.id });
+                        toast("Overrides reset");
+                      }}
+                    >
+                      <Icon name="reset" size={14} />
+                    </button>
+                    <button
+                      className="icon-btn"
+                      title="Detach instance (⌥⌘B)"
+                      onClick={() => {
+                        engine.dispatch({ type: "detachInstance" });
+                        toast("Instance detached");
+                      }}
+                    >
+                      <Icon name="detach" size={14} />
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+            <div className="insp-pad">
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                <span style={{ fontSize: 11, color: "var(--fg-muted)" }}>Variant</span>
+                <select
+                  style={{ flex: 1, maxWidth: 140 }}
+                  value={n.variant || "Default"}
+                  onChange={(e) => engine.dispatch({ type: "setVariant", id: n.id, name: e.target.value })}
+                >
+                  {(master?.variants ?? [{ name: "Default" }]).map((v) => (
+                    <option key={v.name} value={v.name}>
+                      {v.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {propDefs.filter((p) => p.type !== "variant").map((prop) => {
+                const currentVal = n.componentProperties?.[prop.name] ?? prop.defaultValue;
+                return (
+                  <div key={prop.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                    <span style={{ fontSize: 11, color: "var(--fg-muted)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={prop.name}>
+                      {prop.name}
+                    </span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      {prop.type === "boolean" ? (
+                        <input
+                          type="checkbox"
+                          checked={Boolean(currentVal)}
+                          onChange={(e) =>
+                            engine.dispatch({
+                              type: "setComponentProperty",
+                              id: n.id,
+                              propName: prop.name,
+                              value: e.target.checked,
+                            })
+                          }
+                        />
+                      ) : (
+                        <input
+                          type="text"
+                          style={{ width: 110, padding: "2px 6px", fontSize: 11, background: "var(--bg-subtle)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                          value={String(currentVal)}
+                          onChange={(e) =>
+                            engine.dispatch({
+                              type: "setComponentProperty",
+                              id: n.id,
+                              propName: prop.name,
+                              value: e.target.value,
+                            })
+                          }
+                        />
+                      )}
+                      {n.isComponent && master && (
+                        <button
+                          className="icon-btn"
+                          title={`Delete property "${prop.name}"`}
+                          onClick={() => {
+                            engine.dispatch({
+                              type: "deleteComponentProperty",
+                              componentId: master.id,
+                              propId: prop.id,
+                            });
+                            toast(`Property "${prop.name}" deleted`);
+                          }}
+                          style={{ padding: 2, opacity: 0.6 }}
+                        >
+                          <Icon name="trash" size={12} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {n.isComponent && master && (
+                <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                  <button
+                    style={{ flex: 1, fontSize: 11, padding: "4px 8px" }}
+                    onClick={() => {
+                      const name = `Variant ${(master.variants?.length ?? 1) + 1}`;
+                      engine.dispatch({ type: "addVariant", name });
+                    }}
+                  >
+                    + Add variant
+                  </button>
+                  <button
+                    style={{ flex: 1, fontSize: 11, padding: "4px 8px" }}
+                    onClick={() => {
+                      const propType = prompt("Property type: boolean or text?", "boolean")?.toLowerCase();
+                      if (propType === "boolean" || propType === "text") {
+                        const propName = prompt(`Enter ${propType} property name (e.g. Show icon, Title):`);
+                        if (propName) {
+                          const targetLayer = prompt("Child layer name to bind to (optional):") || undefined;
+                          engine.dispatch({
+                            type: "addComponentProperty",
+                            componentId: master.id,
+                            property: {
+                              id: `prop-${Date.now()}`,
+                              name: propName,
+                              type: propType,
+                              defaultValue: propType === "boolean" ? true : "Text",
+                              targetNodeName: targetLayer,
+                            },
+                          });
+                          toast(`Added ${propType} property: ${propName}`);
+                        }
+                      }
+                    }}
+                  >
+                    + Property
+                  </button>
+                </div>
+              )}
+            </div>
+          </>
+        );
+      })()}
       {n.layout && (
         <>
           <div className="dir-row">
@@ -1705,10 +2005,185 @@ function Design({
             >
               <Icon name="independent" size={14} />
             </button>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gridColumn: "1 / -1", marginTop: 4 }}>
+              <span style={{ fontSize: 10, color: "var(--dim)" }}>Canvas stacking</span>
+              <button
+                className={`icon-btn${n.layout.itemReverseZIndex ? " on" : ""}`}
+                style={{ fontSize: 10, padding: "2px 8px", width: "auto", height: 22 }}
+                title={n.layout.itemReverseZIndex ? "First on top (earlier children overlap later ones)" : "Last on top (standard CSS/DOM order)"}
+                onClick={() =>
+                  engine.dispatch({
+                    type: "autoLayout",
+                    id: n.id,
+                    layout: { ...n.layout!, itemReverseZIndex: !n.layout!.itemReverseZIndex },
+                  })
+                }
+              >
+                {n.layout.itemReverseZIndex ? "First on top" : "Last on top"}
+              </button>
+            </div>
           </div>
         </>
       )}
       </Section>
+
+      {n.kind === "frame" && (
+        <>
+          <div className="hr" />
+          <Section
+            id="layoutGrid"
+            title="Layout grid"
+            actions={
+              <button
+                className="plus"
+                title="Add layout grid"
+                onClick={() => {
+                  const current = n.layoutGrids ?? [];
+                  const newGrid: LayoutGrid = {
+                    id: `grid-${Date.now()}`,
+                    pattern: "columns",
+                    count: 12,
+                    gutter: 20,
+                    margin: 20,
+                    alignment: "stretch",
+                    color: "rgba(255, 0, 0, 0.08)",
+                    visible: true,
+                  };
+                  engine.dispatch({
+                    type: "patch",
+                    id: n.id,
+                    patch: { layoutGrids: [...current, newGrid] },
+                  });
+                }}
+              >
+                <Icon name="plus" size={14} />
+              </button>
+            }
+          >
+            {(n.layoutGrids ?? []).length > 0 && (
+              <div className="insp-pad" style={{ display: "grid", gap: 6 }}>
+                {(n.layoutGrids ?? []).map((g, gi) => (
+                  <div
+                    key={g.id}
+                    style={{
+                      background: "var(--bg-subtle)",
+                      border: "1px solid var(--border)",
+                      borderRadius: 6,
+                      padding: "6px 8px",
+                      display: "grid",
+                      gap: 4,
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <select
+                        style={{ fontSize: 11, fontWeight: 500 }}
+                        value={g.pattern}
+                        onChange={(e) => {
+                          const next = [...n.layoutGrids!];
+                          next[gi] = { ...g, pattern: e.target.value as GridPattern };
+                          engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                        }}
+                      >
+                        <option value="columns">Columns</option>
+                        <option value="rows">Rows</option>
+                        <option value="grid">Grid</option>
+                      </select>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        <button
+                          className="icon-btn"
+                          title={g.visible !== false ? "Hide layout grid" : "Show layout grid"}
+                          onClick={() => {
+                            const next = [...n.layoutGrids!];
+                            next[gi] = { ...g, visible: g.visible === false ? true : false };
+                            engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                          }}
+                        >
+                          <Icon name={g.visible !== false ? "eye" : "eye-closed"} size={13} />
+                        </button>
+                        <button
+                          className="icon-btn"
+                          title="Delete layout grid"
+                          onClick={() => {
+                            const next = n.layoutGrids!.filter((_, j) => j !== gi);
+                            engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                          }}
+                        >
+                          <Icon name="minus" size={13} />
+                        </button>
+                      </div>
+                    </div>
+                    {g.pattern === "grid" ? (
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <span style={{ fontSize: 10, color: "var(--dim)" }}>Size</span>
+                        <input
+                          type="number"
+                          min={1}
+                          value={g.sectionSize ?? 10}
+                          style={{ width: 60, padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                          onChange={(e) => {
+                            const sz = Math.max(1, parseInt(e.target.value, 10) || 10);
+                            const next = [...n.layoutGrids!];
+                            next[gi] = { ...g, sectionSize: sz };
+                            engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                          }}
+                        />
+                      </div>
+                    ) : (
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Count</span>
+                          <input
+                            type="number"
+                            min={1}
+                            value={g.count ?? (g.pattern === "columns" ? 12 : 8)}
+                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                            onChange={(e) => {
+                              const cnt = Math.max(1, parseInt(e.target.value, 10) || 1);
+                              const next = [...n.layoutGrids!];
+                              next[gi] = { ...g, count: cnt };
+                              engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                            }}
+                          />
+                        </div>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Gutter</span>
+                          <input
+                            type="number"
+                            min={0}
+                            value={g.gutter ?? 20}
+                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                            onChange={(e) => {
+                              const gut = Math.max(0, parseInt(e.target.value, 10) || 0);
+                              const next = [...n.layoutGrids!];
+                              next[gi] = { ...g, gutter: gut };
+                              engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                            }}
+                          />
+                        </div>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Margin</span>
+                          <input
+                            type="number"
+                            min={0}
+                            value={g.margin ?? 20}
+                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                            onChange={(e) => {
+                              const mg = Math.max(0, parseInt(e.target.value, 10) || 0);
+                              const next = [...n.layoutGrids!];
+                              next[gi] = { ...g, margin: mg };
+                              engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </Section>
+        </>
+      )}
 
       <div className="hr" />
       <Section id="appearance" title="Appearance">
@@ -2126,6 +2601,49 @@ function Design({
                 onChange={(v) => patch({ starRatio: Math.max(0.05, Math.min(0.95, v / 100)) })}
               />
             )}
+            <Field
+              label="r"
+              value={n.cornerRadii[0] || 0}
+              onChange={(r) => patch({ cornerRadii: [Math.max(0, r), Math.max(0, r), Math.max(0, r), Math.max(0, r)] })}
+            />
+          </div>
+        </>
+      )}
+
+      {n.kind === "ellipse" && (
+        <>
+          <div className="hr" />
+          <div className="insp-pad" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
+            <Field
+              label="Sweep"
+              hint="°"
+              value={Math.round(((n.arcData?.endingAngle ?? Math.PI * 2) * 180) / Math.PI)}
+              onChange={(deg) => {
+                const rad = Math.max(0, Math.min(360, deg)) * (Math.PI / 180);
+                const cur = n.arcData ?? { startingAngle: 0, endingAngle: Math.PI * 2, innerRadius: 0 };
+                patch({ arcData: { ...cur, endingAngle: rad } });
+              }}
+            />
+            <Field
+              label="Start"
+              hint="°"
+              value={Math.round(((n.arcData?.startingAngle ?? 0) * 180) / Math.PI)}
+              onChange={(deg) => {
+                const rad = Math.max(0, Math.min(360, deg)) * (Math.PI / 180);
+                const cur = n.arcData ?? { startingAngle: 0, endingAngle: Math.PI * 2, innerRadius: 0 };
+                patch({ arcData: { ...cur, startingAngle: rad } });
+              }}
+            />
+            <Field
+              label="Ratio"
+              hint="%"
+              value={Math.round((n.arcData?.innerRadius ?? 0) * 100)}
+              onChange={(pct) => {
+                const ratio = Math.max(0, Math.min(99, pct)) / 100;
+                const cur = n.arcData ?? { startingAngle: 0, endingAngle: Math.PI * 2, innerRadius: 0 };
+                patch({ arcData: { ...cur, innerRadius: ratio } });
+              }}
+            />
           </div>
         </>
       )}
@@ -2150,7 +2668,19 @@ function Design({
                   engine.dispatch({ type: "patch", id: n.id, patch: { fontFamily: e.target.value } })
                 }
               >
-                {["Inter", "Roboto", "SF Pro", "Geist", "Space Grotesk"].map((f) => (
+                {[
+                  "Inter",
+                  "Roboto",
+                  "SF Pro",
+                  "Geist",
+                  "Space Grotesk",
+                  "Plus Jakarta Sans",
+                  "Poppins",
+                  "Outfit",
+                  "Fira Code",
+                  "JetBrains Mono",
+                  "system-ui",
+                ].map((f) => (
                   <option key={f}>{f}</option>
                 ))}
               </select>
@@ -2167,10 +2697,15 @@ function Design({
                     })
                   }
                 >
-                  <option value={400}>Regular</option>
-                  <option value={500}>Medium</option>
-                  <option value={600}>Semi Bold</option>
-                  <option value={700}>Bold</option>
+                  <option value={100}>Thin (100)</option>
+                  <option value={200}>Extra Light (200)</option>
+                  <option value={300}>Light (300)</option>
+                  <option value={400}>Regular (400)</option>
+                  <option value={500}>Medium (500)</option>
+                  <option value={600}>Semi Bold (600)</option>
+                  <option value={700}>Bold (700)</option>
+                  <option value={800}>Extra Bold (800)</option>
+                  <option value={900}>Black (900)</option>
                 </select>
               </div>
               <Field label="S" value={n.fontSize} onChange={(v) => num("fontSize", v)} />
@@ -3249,7 +3784,8 @@ function ColorRow({
 
 function fmt(v: number) {
   const r = Math.round(v);
-  return Math.abs(v - r) < 0.05 ? String(r) : v.toFixed(1);
+  if (Math.abs(v - r) < 0.001) return String(r);
+  return String(Math.round(v * 100) / 100);
 }
 
 function setDir(engine: Engine, n: XNode, direction: "horizontal" | "vertical") {

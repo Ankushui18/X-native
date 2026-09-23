@@ -133,10 +133,10 @@ export function Minimap({
     const vy = oy + (-panY / zoom) * scale;
     const vw = (viewW / zoom) * scale;
     const vh = (viewH / zoom) * scale;
-    ctx.strokeStyle = dark ? "#ffffff" : "#0d99ff";
+    ctx.strokeStyle = dark ? "#ffffff" : "#6366f1";
     ctx.lineWidth = 1;
     ctx.strokeRect(Math.round(vx) + 0.5, Math.round(vy) + 0.5, Math.round(vw), Math.round(vh));
-    ctx.fillStyle = dark ? "rgba(255,255,255,.10)" : "rgba(13,153,255,.12)";
+    ctx.fillStyle = dark ? "rgba(255,255,255,.10)" : "rgba(99,102,241,.14)";
     ctx.fillRect(vx, vy, vw, vh);
   }, [root, zoom, panX, panY, viewW, viewH, theme]);
 

@@ -300,9 +300,11 @@ function LayerRow({
         )}
         <Icon
           name={
-            n.isComponent || n.kind === "component" || n.kind === "instance"
-              ? "component"
-              : kindIcon(n.kind, n.imageSrc)
+            n.isMask
+              ? "mask"
+              : n.isComponent || n.kind === "component" || n.kind === "instance"
+                ? "component"
+                : kindIcon(n.kind, n.imageSrc)
           }
           size={14}
         />
@@ -427,6 +429,23 @@ function LeftPanelImpl({
   return (
     <aside className="panel left">
       <div className="file-head">
+        <span
+          style={{
+            fontSize: 10,
+            fontWeight: 800,
+            letterSpacing: "0.06em",
+            color: "var(--blue)",
+            background: "rgba(99, 102, 241, 0.12)",
+            border: "1px solid rgba(99, 102, 241, 0.25)",
+            padding: "2px 6px",
+            borderRadius: 4,
+            marginRight: 6,
+            userSelect: "none",
+            flexShrink: 0,
+          }}
+        >
+          X-NATIVE
+        </span>
         <input
           className="name"
           aria-label="File name"
@@ -708,6 +727,31 @@ export function Toolbar({
           <Icon name="search" size={16} />
         </button>
       </div>
+      {snap.vecEdit && (
+        <>
+          <div className="div" />
+          <div className="tool">
+            <button
+              className="hit"
+              style={{
+                background: "var(--accent)",
+                color: "#fff",
+                padding: "0 10px",
+                width: "auto",
+                borderRadius: 6,
+                fontWeight: 500,
+                fontSize: 12,
+                gap: 4,
+              }}
+              onClick={() => engine.dispatch({ type: "setVecEdit", id: null, pointIndex: null })}
+              title="Done editing path (Esc or ⌘↵)"
+            >
+              <Icon name="check" size={14} />
+              Done
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -864,6 +908,24 @@ export function bindHotkeys(
     if (meta && e.altKey && e.key.toLowerCase() === "k") {
       e.preventDefault();
       engine.dispatch({ type: "makeComponent" });
+      return;
+    }
+    if (meta && e.altKey && e.key.toLowerCase() === "b") {
+      e.preventDefault();
+      engine.dispatch({ type: "detachInstance" });
+      toast("Instance detached");
+      return;
+    }
+    if (meta && e.altKey && !e.shiftKey && e.key.toLowerCase() === "c") {
+      e.preventDefault();
+      engine.dispatch({ type: "copyProperties" });
+      toast("Copied properties");
+      return;
+    }
+    if (meta && e.altKey && !e.shiftKey && e.key.toLowerCase() === "v") {
+      e.preventDefault();
+      engine.dispatch({ type: "pasteProperties" });
+      toast("Pasted properties");
       return;
     }
     if (meta && e.key.toLowerCase() === "k") {

@@ -194,9 +194,9 @@ function applyLayout(n: XNode) {
     return;
   }
   const flow = n.children.filter((c) => c.visible && !c.absolutePosition);
-  const [pl, pr, pt, pb] = l.padding;
+  const [pl, pr, pt, pb] = Array.isArray(l.padding) ? l.padding : [0, 0, 0, 0];
   const horiz = l.direction === "horizontal";
-  const gap = l.gap;
+  const gap = typeof l.gap === "number" ? l.gap : 0;
   const innerW = n.w - pl - pr;
   const innerH = n.h - pt - pb;
   const fillers = flow.filter((c) => (horiz ? c.sizingW : c.sizingH) === "fill");
@@ -291,15 +291,12 @@ function applyLayout(n: XNode) {
     }
     clampDims(c);
   }
-  if (l.sizing === "hug" || n.sizingW === "hug") {
-    if (horiz) n.w = pl + mainTotal + pr;
-  }
-  if (l.sizing === "hug" || n.sizingH === "hug") {
-    if (!horiz) n.h = pt + mainTotal + pb;
-  }
-  if (l.cross === "hug") {
-    if (horiz) n.h = crossMax + pt + pb;
-    else n.w = crossMax + pl + pr;
+  if (horiz) {
+    if (l.sizing === "hug" || n.sizingW === "hug") n.w = Math.max(1, pl + mainTotal + pr);
+    if (l.cross === "hug" || n.sizingH === "hug") n.h = Math.max(1, crossMax + pt + pb);
+  } else {
+    if (l.sizing === "hug" || n.sizingH === "hug") n.h = Math.max(1, pt + mainTotal + pb);
+    if (l.cross === "hug" || n.sizingW === "hug") n.w = Math.max(1, crossMax + pl + pr);
   }
   clampDims(n);
 }
@@ -512,6 +509,9 @@ interface Internal {
   openComment: string;
   variables: VariableItem[];
   annotations: AnnotationItem[];
+  vecEdit: string | null;
+  vecPoint: number | null;
+  vecPoints: number[];
 }
 
 /** Cap the undo stack. Each entry is a full document clone, so an unbounded
@@ -572,6 +572,7 @@ export class MemoryEngine implements Engine {
    *  single undo step, as Figma does. */
   private lastHist: { type: string; at: number } | null = null;
   private clip: XNode[] = [];
+  private copiedProps: Partial<XNode> | null = null;
 
   /** Set when a stored document existed but could not be read, so the UI can
    *  tell the user their work was replaced rather than silently starting over. */
@@ -629,6 +630,9 @@ export class MemoryEngine implements Engine {
         { id: "var-5", name: "radius-md", type: "number", value: 8, collection: "Radius" },
       ],
       annotations: [],
+      vecEdit: null,
+      vecPoint: null,
+      vecPoints: [],
     };
     this.relayout();
     this.snapCache = this.build();
@@ -708,10 +712,12 @@ export class MemoryEngine implements Engine {
       "redo",
       "copy",
       "copyCode",
+      "copyProperties",
       "presentGo",
       "presentBack",
       "presentStart",
       "presentStop",
+      "setVecEdit",
     ].includes(cmd.type);
     if (hist && !this.grouping) {
       // Coalesce a burst of identical commands (arrow-key nudges, repeated
@@ -780,6 +786,9 @@ export class MemoryEngine implements Engine {
       activeOverlay: this.state.activeOverlay,
       variables: this.state.variables,
       annotations: this.state.annotations,
+      vecEdit: this.state.vecEdit,
+      vecPoint: this.state.vecPoint,
+      vecPoints: this.state.vecPoints ?? [],
     };
   }
 
@@ -788,6 +797,11 @@ export class MemoryEngine implements Engine {
     switch (cmd.type) {
       case "select":
         s.selection = cmd.ids;
+        if (s.vecEdit && !s.selection.includes(s.vecEdit)) {
+          s.vecEdit = null;
+          s.vecPoint = null;
+          s.vecPoints = [];
+        }
         break;
       case "setTool":
         s.tool = cmd.tool;
@@ -916,7 +930,19 @@ export class MemoryEngine implements Engine {
       case "nudge":
         for (const id of s.selection) {
           const n = find(this.root(), id);
-          if (n && !n.locked) {
+          if (!n || n.locked) continue;
+          const parent = findParent(this.root(), id);
+          if (parent?.layout && !n.absolutePosition) {
+            const idx = parent.children.findIndex((c) => c.id === id);
+            if (idx >= 0) {
+              const forward = cmd.dx > 0 || cmd.dy > 0;
+              const targetIdx = forward ? idx + 1 : idx - 1;
+              if (targetIdx >= 0 && targetIdx < parent.children.length) {
+                const [item] = parent.children.splice(idx, 1);
+                parent.children.splice(targetIdx, 0, item);
+              }
+            }
+          } else {
             n.x += cmd.dx;
             n.y += cmd.dy;
             if (s.pages[s.page].pixelGrid) {
@@ -1146,6 +1172,11 @@ export class MemoryEngine implements Engine {
         const id = s.selection[0];
         const parent = id ? findParent(this.root(), id) ?? this.root() : this.root();
         s.selection = parent.children.filter((c) => c.visible && !c.locked).map((c) => c.id);
+        if (s.vecEdit && !s.selection.includes(s.vecEdit)) {
+          s.vecEdit = null;
+          s.vecPoint = null;
+          s.vecPoints = [];
+        }
         break;
       }
       case "lockSel":
@@ -1191,6 +1222,82 @@ export class MemoryEngine implements Engine {
           .filter(Boolean)
           .join("\n");
         copyText(css);
+        break;
+      }
+      case "copyProperties": {
+        const id = s.selection[0];
+        if (!id) break;
+        const n = find(this.root(), id);
+        if (!n) break;
+        this.copiedProps = {
+          fill: n.fill,
+          fillVisible: n.fillVisible,
+          fillOpacity: n.fillOpacity,
+          fillType: n.fillType,
+          fillGX: n.fillGX,
+          fillGY: n.fillGY,
+          fillHX: n.fillHX,
+          fillHY: n.fillHY,
+          gradientStops: n.gradientStops ? clone(n.gradientStops) : undefined,
+          fills: n.fills ? clone(n.fills) : undefined,
+          strokePaint: n.strokePaint,
+          strokeWidth: n.strokeWidth,
+          strokeVisible: n.strokeVisible,
+          strokeOpacity: n.strokeOpacity,
+          strokeDash: n.strokeDash,
+          strokeGap: n.strokeGap,
+          strokeCap: n.strokeCap,
+          strokeJoin: n.strokeJoin,
+          strokeAlign: n.strokeAlign,
+          strokes: n.strokes ? clone(n.strokes) : undefined,
+          effects: n.effects ? clone(n.effects) : undefined,
+          opacity: n.opacity,
+          blendMode: n.blendMode,
+          cornerRadii: n.cornerRadii ? [...n.cornerRadii] : undefined,
+          cornerIndependent: n.cornerIndependent,
+          interactions: n.interactions ? clone(n.interactions) : undefined,
+        };
+        break;
+      }
+      case "pasteProperties": {
+        if (!this.copiedProps || s.selection.length === 0) break;
+        const p = this.copiedProps;
+        for (const id of s.selection) {
+          const n = find(this.root(), id);
+          if (!n || n.locked) continue;
+          if (p.fill !== undefined) n.fill = p.fill;
+          if (p.fillVisible !== undefined) n.fillVisible = p.fillVisible;
+          if (p.fillOpacity !== undefined) n.fillOpacity = p.fillOpacity;
+          if (p.fillType !== undefined) n.fillType = p.fillType;
+          if (p.fillGX !== undefined) n.fillGX = p.fillGX;
+          if (p.fillGY !== undefined) n.fillGY = p.fillGY;
+          if (p.fillHX !== undefined) n.fillHX = p.fillHX;
+          if (p.fillHY !== undefined) n.fillHY = p.fillHY;
+          if (p.gradientStops) n.gradientStops = clone(p.gradientStops);
+          if (p.fills) n.fills = clone(p.fills);
+          if (p.strokePaint !== undefined) n.strokePaint = p.strokePaint;
+          if (p.strokeWidth !== undefined) n.strokeWidth = p.strokeWidth;
+          if (p.strokeVisible !== undefined) n.strokeVisible = p.strokeVisible;
+          if (p.strokeOpacity !== undefined) n.strokeOpacity = p.strokeOpacity;
+          if (p.strokeDash !== undefined) n.strokeDash = p.strokeDash;
+          if (p.strokeGap !== undefined) n.strokeGap = p.strokeGap;
+          if (p.strokeCap !== undefined) n.strokeCap = p.strokeCap;
+          if (p.strokeJoin !== undefined) n.strokeJoin = p.strokeJoin;
+          if (p.strokeAlign !== undefined) n.strokeAlign = p.strokeAlign;
+          if (p.strokes) n.strokes = clone(p.strokes);
+          if (p.effects) n.effects = clone(p.effects);
+          if (p.opacity !== undefined) n.opacity = p.opacity;
+          if (p.blendMode !== undefined) n.blendMode = p.blendMode;
+          if (p.cornerRadii) n.cornerRadii = [...p.cornerRadii];
+          if (p.cornerIndependent !== undefined) n.cornerIndependent = p.cornerIndependent;
+          if (p.interactions) n.interactions = clone(p.interactions);
+        }
+        break;
+      }
+      case "deleteInteraction": {
+        const n = find(this.root(), cmd.id);
+        if (!n || !n.interactions) break;
+        n.interactions = n.interactions.filter((ix) => ix.destination !== cmd.destId);
         break;
       }
       case "group":
@@ -1442,8 +1549,68 @@ export class MemoryEngine implements Engine {
         if (!n.name || n.name === "Group" || n.name === "Rectangle") n.name = "Component";
         const existing = s.components.find((c) => c.id === cid);
         if (existing) existing.node = clone(n);
-        else s.components.push({ id: cid, name: n.name, node: clone(n), variants: [{ name: "Default", node: clone(n) }], property: "Variant" });
+        else
+          s.components.push({
+            id: cid,
+            name: n.name,
+            node: clone(n),
+            variants: [{ name: "Default", node: clone(n) }],
+            property: "Variant",
+            properties: [{ id: uid("prop"), name: "Variant", type: "variant", defaultValue: "Default" }],
+          });
         s.selection = [n.id];
+        break;
+      }
+      case "addComponentProperty": {
+        const lib = s.components.find((c) => c.id === cmd.componentId || c.node.id === cmd.componentId);
+        if (!lib) break;
+        if (!lib.properties) lib.properties = [];
+        if (!lib.properties.some((p) => p.name === cmd.property.name)) {
+          lib.properties.push(cmd.property);
+        }
+        break;
+      }
+      case "deleteComponentProperty": {
+        const lib = s.components.find((c) => c.id === cmd.componentId || c.node.id === cmd.componentId);
+        if (!lib || !lib.properties) break;
+        lib.properties = lib.properties.filter((p) => p.id !== cmd.propId && p.name !== cmd.propId);
+        break;
+      }
+      case "setComponentProperty": {
+        const n = find(this.root(), cmd.id);
+        if (!n) break;
+        if (!n.componentProperties) n.componentProperties = {};
+        n.componentProperties[cmd.propName] = cmd.value;
+        const lib = s.components.find((c) => c.id === n.componentId || c.node.id === n.componentId);
+        const propDef = lib?.properties?.find((p) => p.name === cmd.propName);
+        if (propDef) {
+          if (propDef.type === "boolean" && propDef.targetNodeName) {
+            const child = n.children.find((c) => c.name.toLowerCase() === propDef.targetNodeName?.toLowerCase());
+            if (child) child.visible = Boolean(cmd.value);
+          }
+          if (propDef.type === "text" && propDef.targetNodeName) {
+            const child = n.children.find((c) => c.name.toLowerCase() === propDef.targetNodeName?.toLowerCase() && c.kind === "text");
+            if (child) child.text = String(cmd.value);
+          }
+          if (propDef.type === "variant") {
+            const v = lib?.variants?.find((x) => x.name === String(cmd.value));
+            if (v) {
+              const x = n.x;
+              const y = n.y;
+              const id = n.id;
+              const props = clone(n.componentProperties);
+              Object.assign(n, clone(v.node), {
+                x,
+                y,
+                id,
+                isComponent: n.isComponent,
+                componentId: n.componentId,
+                variant: String(cmd.value),
+                componentProperties: props,
+              });
+            }
+          }
+        }
         break;
       }
       case "detachInstance": {
@@ -1465,6 +1632,10 @@ export class MemoryEngine implements Engine {
         copy.isComponent = false;
         copy.componentId = lib.id;
         copy.name = lib.name;
+        copy.componentProperties = {};
+        for (const p of lib.properties ?? []) {
+          copy.componentProperties[p.name] = p.defaultValue;
+        }
         this.root().children.push(copy);
         s.selection = [copy.id];
         s.tool = "select";
@@ -1583,9 +1754,13 @@ export class MemoryEngine implements Engine {
         const n = find(this.root(), cmd.id);
         if (!n || !n.path[cmd.pointIndex]) break;
         n.path[cmd.pointIndex].cornerRadius = Math.max(0, cmd.radius);
-        if (n.vectorNetwork?.vertices[cmd.pointIndex]) {
-          n.vectorNetwork.vertices[cmd.pointIndex].cornerRadius = Math.max(0, cmd.radius);
-        }
+        n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+        break;
+      }
+      case "setVecEdit": {
+        s.vecEdit = cmd.id;
+        s.vecPoint = cmd.pointIndex ?? null;
+        s.vecPoints = cmd.pointIndices ?? (cmd.pointIndex != null ? [cmd.pointIndex] : []);
         break;
       }
       case "flatten": {
@@ -1740,9 +1915,15 @@ export class MemoryEngine implements Engine {
       }
       case "presentGo": {
         if (!cmd.id) break;
-        s.presentStack = [...s.presentStack, cmd.id];
-        s.presentFrame = cmd.id;
-        focusFrame(s, this.root(), cmd.id);
+        let destId = cmd.id;
+        const targetNode = find(this.root(), destId);
+        if (targetNode && (targetNode.kind === "group" || targetNode.name.toLowerCase().includes("section"))) {
+          const childFrame = targetNode.children.find((c) => c.kind === "frame");
+          if (childFrame) destId = childFrame.id;
+        }
+        s.presentStack = [...s.presentStack, destId];
+        s.presentFrame = destId;
+        focusFrame(s, this.root(), destId);
         break;
       }
       case "presentBack": {
@@ -2190,6 +2371,17 @@ function scaleProps(n: XNode, sx: number, sy: number) {
   n.letterSpacing *= s;
   if (n.lineHeight) n.lineHeight *= s;
   n.cornerRadii = n.cornerRadii.map((r) => r * s) as [number, number, number, number];
+  if (n.strokes) {
+    for (const st of n.strokes) st.width *= s;
+  }
+  if (n.effects) {
+    for (const ef of n.effects) {
+      if (ef.x != null) ef.x *= s;
+      if (ef.y != null) ef.y *= s;
+      if (ef.blur != null) ef.blur *= s;
+      if (ef.spread != null) ef.spread *= s;
+    }
+  }
   n.path = n.path.map((p) => ({
     ...p,
     x: p.x * sx,

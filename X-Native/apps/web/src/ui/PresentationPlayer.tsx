@@ -57,10 +57,12 @@ export function PresentationPlayer({
   engine,
   snap,
   onExit,
+  onInteraction,
 }: {
   engine: Engine;
   snap: Snapshot;
   onExit: () => void;
+  onInteraction?: (ix: Interaction) => void;
 }) {
   const root = snap.pages[snap.page].root;
   const presentNode = snap.presentFrame ? find(root, snap.presentFrame) : null;
@@ -163,6 +165,10 @@ export function PresentationPlayer({
   // Execute hotspot interaction
   const triggerHotspot = useCallback((ix: Interaction) => {
     if (soundActive) playTapSound(880, 0.05);
+    if (onInteraction) {
+      onInteraction(ix);
+      return;
+    }
     if (ix.action === "back") {
       engine.dispatch({ type: "presentBack" });
     } else if (ix.action === "navigate" && ix.destination) {
@@ -206,9 +212,23 @@ export function PresentationPlayer({
           onExit();
         }
       } else if (e.key === "ArrowLeft" || e.key === "Backspace") {
-        if (curIndex > 0) engine.dispatch({ type: "presentGo", id: allFrames[curIndex - 1].id });
+        if (curIndex > 0) {
+          const target = allFrames[curIndex - 1];
+          if (onInteraction) {
+            onInteraction({ trigger: "onClick", action: "navigate", destination: target.id, animation: "smart", delay: 0 });
+          } else {
+            engine.dispatch({ type: "presentGo", id: target.id });
+          }
+        }
       } else if (e.key === "ArrowRight" || e.key === " ") {
-        if (curIndex < allFrames.length - 1) engine.dispatch({ type: "presentGo", id: allFrames[curIndex + 1].id });
+        if (curIndex < allFrames.length - 1) {
+          const target = allFrames[curIndex + 1];
+          if (onInteraction) {
+            onInteraction({ trigger: "onClick", action: "navigate", destination: target.id, animation: "smart", delay: 0 });
+          } else {
+            engine.dispatch({ type: "presentGo", id: target.id });
+          }
+        }
       } else if (e.key.toLowerCase() === "r") {
         engine.dispatch({ type: "presentStart" });
       } else if (e.key.toLowerCase() === "h") {
@@ -269,8 +289,8 @@ export function PresentationPlayer({
             width: 48,
             height: 48,
             borderRadius: "50%",
-            border: "2px solid #0d99ff",
-            background: "rgba(13, 153, 255, 0.2)",
+            border: "2px solid #6366f1",
+            background: "rgba(99, 102, 241, 0.2)",
             pointerEvents: "none",
             animation: "proto-ripple 0.5s ease-out forwards",
           }}
@@ -446,7 +466,7 @@ export function PresentationPlayer({
                     width: Math.min(sw / 2, sh - 4),
                     height: Math.min(sw / 2, sh - 4),
                     borderRadius: "50%",
-                    background: isChecked ? "#0d99ff" : "#94a3b8",
+                    background: isChecked ? "#6366f1" : "#94a3b8",
                     boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
                     transition: "all 0.15s ease",
                   }}
@@ -511,8 +531,8 @@ export function PresentationPlayer({
               cursor: "pointer",
               zIndex: 43,
               borderRadius: 6 * z,
-              border: isGlowing ? "2px solid #0d99ff" : "1px solid transparent",
-              background: isGlowing ? "rgba(13, 153, 255, 0.16)" : "transparent",
+              border: isGlowing ? "2px solid #6366f1" : "1px solid transparent",
+              background: isGlowing ? "rgba(99, 102, 241, 0.16)" : "transparent",
               boxShadow: isGlowing ? "0 0 12px rgba(13, 153, 255, 0.45)" : "none",
               transition: "border 0.2s, background 0.2s, box-shadow 0.2s",
             }}
@@ -549,7 +569,14 @@ export function PresentationPlayer({
         {/* Flow & Frame Selector */}
         <select
           value={snap.presentFrame}
-          onChange={(e) => engine.dispatch({ type: "presentGo", id: e.target.value })}
+          onChange={(e) => {
+            const dest = e.target.value;
+            if (onInteraction) {
+              onInteraction({ trigger: "onClick", action: "navigate", destination: dest, animation: "smart", delay: 0 });
+            } else {
+              engine.dispatch({ type: "presentGo", id: dest });
+            }
+          }}
           style={{
             background: "rgba(255, 255, 255, 0.08)",
             border: "1px solid rgba(255, 255, 255, 0.14)",

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { MemoryEngine } from "./engine/memory";
 import { Canvas } from "./ui/Canvas";
 import { copyText } from "./engine/clipboard";
@@ -33,6 +33,7 @@ export default function App() {
   const [actions, setActions] = useState(false);
   const [figInspector, setFigInspector] = useState(false);
   const [toast, setToast] = useState("");
+  const runnerRef = useRef<((ix: any) => void) | null>(null);
   const leftDrag = usePanelDrag(leftW, setLeftW, 180, 420);
   const rightDrag = usePanelDrag(rightW, setRightW, 200, 420, true);
 
@@ -167,11 +168,20 @@ export default function App() {
         {...leftDrag}
       />
       <div className="canvas-col">
-        <Canvas engine={engine} snap={snap} />
+        <Canvas
+          engine={engine}
+          snap={snap}
+          onRunInteraction={(runner) => {
+            runnerRef.current = runner;
+          }}
+        />
         {snap.presentFrame ? (
           <PresentationPlayer
             engine={engine}
             snap={snap}
+            onInteraction={(ix) => {
+              if (runnerRef.current) runnerRef.current(ix);
+            }}
             onExit={() => {
               engine.dispatch({ type: "presentStop" });
               setHideUi(false);

@@ -315,7 +315,11 @@ export function erasePath(
  */
 export function pathToVectorNetwork(path: PathPoint[], closed: boolean): VectorNetwork {
   if (!path.length) return { vertices: [], segments: [] };
-  const vertices: VectorVertex[] = path.map((p) => ({ x: p.x, y: p.y }));
+  const vertices: VectorVertex[] = path.map((p) => ({
+    x: p.x,
+    y: p.y,
+    ...(p.cornerRadius != null ? { cornerRadius: p.cornerRadius } : {}),
+  }));
   const segments: VectorSegment[] = [];
 
   for (let i = 0; i < path.length - 1; i++) {

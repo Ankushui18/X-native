@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Engine, Interaction, NodeKind, PathPoint, ProtoAnim, Snapshot, Tool, VectorNetwork, XNode } from "../engine/types";
 import { deepestFrame, find, findParent, hitTest, worldToLocal, worldPos } from "../engine/memory";
 import { erasePath, shapePoly, simplifyPath, smoothPath, vertexDegree, insertPointOnPath, projectPointOnSegment, computeFigmaNoodle } from "../engine/geometry";
+import { interpolateMatchingLayers, solveEasing, applyInterpolatedFrame } from "../engine/smartAnimate";
 import {
   snapCandidates,
   snapMove,
@@ -22,6 +23,7 @@ import { importSvg, type ImportedNode } from "../engine/svgImport";
 import { importSketch } from "../engine/sketchImport";
 import { importFig } from "../engine/figImport";
 import { toast } from "./toast";
+import { Icon } from "./icons";
 
 /** Snap radius in screen pixels; divided by zoom to get world tolerance. */
 const SNAP_PX = 6;
@@ -29,6 +31,11 @@ const SNAP_PX = 6;
 const ERASER_PX = 10;
 /** RDP tolerance for freehand strokes, in screen pixels. */
 const PENCIL_TOLERANCE_PX = 2;
+
+/** X-Native signature brand accents (electric cyber indigo). */
+const BRAND_ACCENT = "#6366f1";
+const BRAND_ACCENT_WASH = "rgba(99, 102, 241, 0.14)";
+const BRAND_ACCENT_GLOW = "rgba(99, 102, 241, 0.35)";
 
 const CREATE: Tool[] = [
   "frame",
@@ -82,7 +89,10 @@ type Drag =
         | "multiRotate"
         | "autoPad"
         | "autoGap"
-        | "protoConnect";
+        | "protoConnect"
+        | "starRatio"
+        | "radius"
+        | "arc";
       point?: number;
       segIndex?: number;
       handle?: "in" | "out" | "g" | "h";
@@ -104,6 +114,7 @@ type Drag =
       /** Combined selection bounds at drag start (group transforms). */
       bounds?: { x: number; y: number; w: number; h: number };
       origs?: MultiOrigin[];
+      origPts?: PathPoint[];
     };
 
 /** Snapshot every selected node's world + local box before a group transform. */
@@ -126,7 +137,15 @@ function multiOrigins(root: XNode, ids: string[]): MultiOrigin[] {
   return out;
 }
 
-export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
+export function Canvas({
+  engine,
+  snap,
+  onRunInteraction,
+}: {
+  engine: Engine;
+  snap: Snapshot;
+  onRunInteraction?: (runner: (ix: Interaction) => void) => void;
+}) {
   const ref = useRef<HTMLCanvasElement>(null);
   const wrap = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
@@ -138,14 +157,32 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const [menu, setMenu] = useState<{ x: number; y: number; wx: number; wy: number } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const pendingImage = useRef<{ x: number; y: number } | null>(null);
-  const [vecEdit, setVecEdit] = useState<string | null>(null);
+  const vecEdit = snap.vecEdit ?? null;
+  const setVecEdit = useCallback(
+    (id: string | null, ptIndex: number | null = null, ptIndices: number[] = []) => {
+      engine.dispatch({ type: "setVecEdit", id, pointIndex: ptIndex, pointIndices: ptIndices });
+    },
+    [engine],
+  );
   const [draft, setDraft] = useState<PathPoint[]>([]);
   const [ghost, setGhost] = useState<PathPoint | null>(null);
   const [hoverId, setHoverId] = useState("");
   const [transition, setTransition] = useState<ProtoAnim | null>(null);
+  const [animFrame, setAnimFrame] = useState<{
+    frame: XNode;
+    toFrame?: XNode;
+    progress: number;
+    type: ProtoAnim;
+    targetId?: string;
+  } | null>(null);
   const pencil = useRef<PathPoint[] | null>(null);
   const penDrag = useRef<{ i: number; x: number; y: number } | null>(null);
   const vecPt = useRef(-1);
+  useEffect(() => {
+    if (snap.vecPoint !== undefined && snap.vecPoint !== null) {
+      vecPt.current = snap.vecPoint;
+    }
+  }, [snap.vecPoint]);
   const hoverIx = useRef("");
   /** Cursor implied by whatever selection chrome is under the pointer. */
   const [hoverCursor, setHoverCursor] = useState<string | null>(null);
@@ -165,6 +202,14 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     srcId?: string;
     targetId?: string;
     forcedSide?: "right" | "bottom" | "left" | "top";
+  } | null>(null);
+  /** Selected prototype connection for on-canvas deletion and details */
+  const [selectedConn, setSelectedConn] = useState<{
+    srcId: string;
+    destId: string;
+    midX: number;
+    midY: number;
+    label: string;
   } | null>(null);
   /** Static snap targets, captured once at drag start so they never shift mid-drag. */
   const snapTargets = useRef<Box[]>([]);
@@ -219,18 +264,64 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           }
         }
       };
-      if (ix.animation === "instant" || ix.action === "openUrl") {
+      if (ix.animation === "instant" || !ix.animation || ix.action === "openUrl" || ix.action === "scrollTo" || ix.action === "setVariable") {
         run();
         return;
       }
+
+      const root = engine.snapshot().pages[engine.snapshot().page].root;
+      const fromId = engine.snapshot().presentFrame;
+      const fromNode = fromId ? find(root, fromId) : null;
+      let destId: string | undefined = ix.destination;
+      if (ix.action === "back") {
+        const stack = engine.snapshot().presentStack;
+        destId = stack.length > 1 ? stack[stack.length - 2] : undefined;
+      }
+      const toNode = destId ? find(root, destId) : null;
+
+      if (fromNode && toNode && (ix.action === "navigate" || ix.action === "back")) {
+        const dur = ix.duration || (ix.animation === "smart" ? 300 : 250);
+        const easing = ix.easing || "easeOut";
+        const start = performance.now();
+
+        const tick = () => {
+          const now = performance.now();
+          const elapsed = now - start;
+          const t = Math.min(1, Math.max(0, elapsed / dur));
+          const easedT = solveEasing(easing, t);
+
+          if (ix.animation === "smart") {
+            const interpolated = interpolateMatchingLayers(fromNode, toNode, t, easing);
+            const morphed = applyInterpolatedFrame(toNode, interpolated, fromNode);
+            setAnimFrame({ frame: morphed, progress: easedT, type: "smart", targetId: toNode.id });
+          } else {
+            setAnimFrame({ frame: fromNode, toFrame: toNode, progress: easedT, type: ix.animation, targetId: toNode.id });
+          }
+
+          if (t < 1) {
+            requestAnimationFrame(tick);
+          } else {
+            setAnimFrame(null);
+            run();
+          }
+        };
+        requestAnimationFrame(tick);
+        return;
+      }
+
       setTransition(ix.animation);
+      const dur = ix.duration || (ix.animation === "smart" ? 260 : 220);
       window.setTimeout(() => {
         run();
         setTransition(null);
-      }, ix.animation === "smart" ? 260 : 180);
+      }, dur);
     },
     [engine],
   );
+
+  useEffect(() => {
+    if (onRunInteraction) onRunInteraction(runInteraction);
+  }, [onRunInteraction, runInteraction]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -320,13 +411,27 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         setVecEdit(null);
         e.stopImmediatePropagation();
       }
+      if (e.type === "keydown" && (e.key === "Delete" || e.key === "Backspace") && selectedConn && !edit) {
+        engine.dispatch({ type: "deleteInteraction", id: selectedConn.srcId, destId: selectedConn.destId });
+        setSelectedConn(null);
+        toast("Connection deleted");
+        e.stopImmediatePropagation();
+        return;
+      }
       if (e.type === "keydown" && (e.key === "Delete" || e.key === "Backspace") && vecEdit && !edit) {
         const n = worldPos(snap.pages[snap.page].root, vecEdit)?.node;
         if (n?.path.length) {
-          const i = vecPt.current >= 0 ? vecPt.current : n.path.length - 1;
+          const selectedSet = new Set<number>(
+            snap.vecPoints && snap.vecPoints.length > 0
+              ? snap.vecPoints
+              : vecPt.current >= 0
+                ? [vecPt.current]
+                : [n.path.length - 1],
+          );
           const isHeal = e.shiftKey;
           let path = [...n.path];
-          if (isHeal && path.length >= 3) {
+          if (isHeal && path.length >= 3 && selectedSet.size === 1) {
+            const i = Array.from(selectedSet)[0];
             const prevIdx = i > 0 ? i - 1 : (n.closed ? path.length - 1 : null);
             const nextIdx = i < path.length - 1 ? i + 1 : (n.closed ? 0 : null);
             if (prevIdx !== null && nextIdx !== null) {
@@ -344,9 +449,12 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             }
             toast("Point deleted & healed");
           }
-          path = path.filter((_, j) => j !== i);
+          path = path.filter((_, j) => !selectedSet.has(j));
           engine.dispatch({ type: "patchPath", id: n.id, path, closed: n.closed });
-          vecPt.current = Math.min(i, path.length - 1);
+          const firstSel = Math.min(...Array.from(selectedSet));
+          const nextPt = path.length ? Math.max(0, Math.min(path.length - 1, firstSel)) : -1;
+          vecPt.current = nextPt;
+          setVecEdit(n.id, nextPt >= 0 ? nextPt : null, nextPt >= 0 ? [nextPt] : []);
           e.stopImmediatePropagation();
         }
       }
@@ -420,14 +528,15 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       if (!n.visible) return;
       const x = px + n.x;
       const y = py + n.y;
-      // Viewport culling. Only childless nodes are considered: a container may
-      // paint children outside its own bounds when overflow is visible, and
-      // children are positioned relative to the parent, so skipping a parent
-      // would wrongly skip its subtree. Bounds are padded for stroke width and
-      // for any shadow offset/blur, and rotation is covered by using the
-      // diagonal, so nothing that could touch a pixel on screen is dropped.
-      if (!n.children.length) {
+      // Viewport culling. Leaf nodes and clipped-overflow containers (frames with
+      // overflow: "clip" | "scroll*") cannot paint outside their bounding box.
+      // Skipping them culls entire off-screen frames/subtrees instantly.
+      // Bounds are padded for stroke width, shadow offset/blur, and rotation.
+      if (!n.children.length || n.overflow !== "visible") {
         let pad = (n.strokeWidth ?? 0) + 2;
+        for (const st of n.strokes ?? []) {
+          if (st.visible) pad = Math.max(pad, st.width + 2);
+        }
         for (const e of n.effects ?? []) {
           if (!e.visible) continue;
           pad = Math.max(pad, Math.abs(e.x ?? 0) + Math.abs(e.y ?? 0) + Math.abs(e.blur ?? 0) + Math.abs(e.spread ?? 0));
@@ -504,7 +613,29 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           }
         } else if (n.kind === "ellipse") {
           ctx.beginPath();
-          ctx.ellipse(sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), 0, 0, Math.PI * 2);
+          if (n.arcData && (n.arcData.endingAngle < Math.PI * 2 - 0.001 || n.arcData.innerRadius > 0.001 || n.arcData.startingAngle > 0.001)) {
+            const sa = n.arcData.startingAngle ?? 0;
+            const ea = n.arcData.endingAngle ?? Math.PI * 2;
+            const ir = Math.max(0, Math.min(0.99, n.arcData.innerRadius ?? 0));
+            const cx = sx + sw / 2;
+            const cy = sy + sh / 2;
+            const rx = Math.abs(sw / 2);
+            const ry = Math.abs(sh / 2);
+            if (ir > 0.001) {
+              ctx.ellipse(cx, cy, rx, ry, 0, sa, ea, false);
+              ctx.lineTo(cx + Math.cos(ea) * rx * ir, cy + Math.sin(ea) * ry * ir);
+              ctx.ellipse(cx, cy, rx * ir, ry * ir, 0, ea, sa, true);
+              ctx.closePath();
+            } else if (Math.abs(ea - sa) < Math.PI * 2 - 0.001) {
+              ctx.moveTo(cx, cy);
+              ctx.ellipse(cx, cy, rx, ry, 0, sa, ea, false);
+              ctx.closePath();
+            } else {
+              ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+            }
+          } else {
+            ctx.ellipse(sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), 0, 0, Math.PI * 2);
+          }
         } else if (n.kind === "line" || n.kind === "arrow") {
           ctx.beginPath();
           ctx.moveTo(sx, sy + sh / 2);
@@ -666,8 +797,53 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         round();
         ctx.clip();
       }
+      if (n.kind === "frame" && n.layoutGrids?.length && !snap.presentFrame) {
+        ctx.save();
+        for (const g of n.layoutGrids) {
+          if (g.visible === false) continue;
+          const color = g.color || "rgba(255, 0, 0, 0.08)";
+          ctx.fillStyle = color;
+          if (g.pattern === "columns") {
+            const count = g.count || 12;
+            const gutter = g.gutter !== undefined ? g.gutter : 20;
+            const margin = g.margin !== undefined ? g.margin : 20;
+            const avail = n.w - margin * 2 - gutter * (count - 1);
+            const colW = Math.max(1, avail / count);
+            for (let ci = 0; ci < count; ci++) {
+              const cx = x + margin + ci * (colW + gutter);
+              ctx.fillRect(snap.panX + cx * z, snap.panY + y * z, colW * z, n.h * z);
+            }
+          } else if (g.pattern === "rows") {
+            const count = g.count || 8;
+            const gutter = g.gutter !== undefined ? g.gutter : 20;
+            const margin = g.margin !== undefined ? g.margin : 20;
+            const avail = n.h - margin * 2 - gutter * (count - 1);
+            const rowH = Math.max(1, avail / count);
+            for (let ri = 0; ri < count; ri++) {
+              const cy = y + margin + ri * (rowH + gutter);
+              ctx.fillRect(snap.panX + x * z, snap.panY + cy * z, n.w * z, rowH * z);
+            }
+          } else if (g.pattern === "grid") {
+            const sz = g.sectionSize || 10;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            for (let gx = sz; gx < n.w; gx += sz) {
+              ctx.moveTo(snap.panX + (x + gx) * z, snap.panY + y * z);
+              ctx.lineTo(snap.panX + (x + gx) * z, snap.panY + (y + n.h) * z);
+            }
+            for (let gy = sz; gy < n.h; gy += sz) {
+              ctx.moveTo(snap.panX + x * z, snap.panY + (y + gy) * z);
+              ctx.lineTo(snap.panX + (x + n.w) * z, snap.panY + (y + gy) * z);
+            }
+            ctx.stroke();
+          }
+        }
+        ctx.restore();
+      }
       let maskOn = 0;
-      for (const ch of n.children) {
+      const renderChildren = n.layout?.itemReverseZIndex ? [...n.children].reverse() : n.children;
+      for (const ch of renderChildren) {
         if (ch.isMask && ch.visible) {
           ctx.save();
           const mx = snap.panX + (x + ch.x) * z;
@@ -707,7 +883,57 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       ctx.restore();
     };
     const present = snap.presentFrame ? find(root, snap.presentFrame) : null;
-    if (present) {
+    if (animFrame) {
+      if (animFrame.type === "smart") {
+        const targetId = animFrame.targetId || (present ? present.id : animFrame.frame.id);
+        const wp = worldPos(root, targetId) || (present ? worldPos(root, present.id) : null);
+        paint(animFrame.frame, wp ? wp.x - animFrame.frame.x : 0, wp ? wp.y - animFrame.frame.y : 0);
+      } else if (animFrame.type === "dissolve" && animFrame.toFrame) {
+        const wp = worldPos(root, present ? present.id : animFrame.frame.id);
+        const p = animFrame.progress;
+        ctx.save();
+        ctx.globalAlpha = 1 - p;
+        paint(animFrame.frame, wp ? wp.x - animFrame.frame.x : 0, wp ? wp.y - animFrame.frame.y : 0);
+        ctx.restore();
+        ctx.save();
+        ctx.globalAlpha = p;
+        paint(animFrame.toFrame, wp ? wp.x - animFrame.toFrame.x : 0, wp ? wp.y - animFrame.toFrame.y : 0);
+        ctx.restore();
+      } else if (animFrame.type.startsWith("slide") || animFrame.type.startsWith("push")) {
+        const wp = worldPos(root, present ? present.id : animFrame.frame.id);
+        const p = animFrame.progress;
+        const w = animFrame.frame.w;
+        const h = animFrame.frame.h;
+        let fromDx = 0, fromDy = 0, toDx = 0, toDy = 0;
+        if (animFrame.type === "slideInRight") {
+          toDx = (1 - p) * w;
+        } else if (animFrame.type === "slideInLeft") {
+          toDx = -(1 - p) * w;
+        } else if (animFrame.type === "slideInTop") {
+          toDy = -(1 - p) * h;
+        } else if (animFrame.type === "slideInBottom") {
+          toDy = (1 - p) * h;
+        } else if (animFrame.type === "pushRight") {
+          fromDx = p * w;
+          toDx = -(1 - p) * w;
+        } else if (animFrame.type === "pushLeft") {
+          fromDx = -p * w;
+          toDx = (1 - p) * w;
+        }
+        if (animFrame.type.startsWith("push")) {
+          ctx.save();
+          paint(animFrame.frame, (wp ? wp.x - animFrame.frame.x : 0) + fromDx, (wp ? wp.y - animFrame.frame.y : 0) + fromDy);
+          ctx.restore();
+        } else {
+          paint(animFrame.frame, wp ? wp.x - animFrame.frame.x : 0, wp ? wp.y - animFrame.frame.y : 0);
+        }
+        if (animFrame.toFrame) {
+          ctx.save();
+          paint(animFrame.toFrame, (wp ? wp.x - animFrame.toFrame.x : 0) + toDx, (wp ? wp.y - animFrame.toFrame.y : 0) + toDy);
+          ctx.restore();
+        }
+      }
+    } else if (present) {
       const wp = worldPos(root, present.id);
       paint(present, wp ? wp.x - present.x : 0, wp ? wp.y - present.y : 0);
 
@@ -757,7 +983,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     }
 
     if (draft.length) {
-      ctx.strokeStyle = "#0d99ff";
+      ctx.strokeStyle = BRAND_ACCENT;
       ctx.lineWidth = 1.5;
       const preview = ghost ? [...draft, ghost] : draft;
       tracePath(ctx, preview, snap.panX, snap.panY, z, false);
@@ -766,7 +992,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         const px = snap.panX + p.x * z;
         const py = snap.panY + p.y * z;
         if ((p.ox && p.ox !== 0) || (p.oy && p.oy !== 0) || (p.ix && p.ix !== 0) || (p.iy && p.iy !== 0)) {
-          ctx.strokeStyle = "#0d99ff";
+          ctx.strokeStyle = BRAND_ACCENT;
           ctx.lineWidth = 1;
           ctx.beginPath();
           ctx.moveTo(px + (p.ix || 0) * z, py + (p.iy || 0) * z);
@@ -784,7 +1010,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           }
         }
         ctx.fillStyle = "#fff";
-        ctx.strokeStyle = "#0d99ff";
+        ctx.strokeStyle = BRAND_ACCENT;
         ctx.beginPath();
         ctx.arc(px, py, 3.5, 0, Math.PI * 2);
         ctx.fill();
@@ -809,7 +1035,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           const px = fx;
           const py = fy - ph - 8;
 
-          ctx.fillStyle = "#0d99ff";
+          ctx.fillStyle = BRAND_ACCENT;
           ctx.beginPath();
           if (typeof ctx.roundRect === "function") {
             ctx.roundRect(px, py, pw, ph, 11);
@@ -858,9 +1084,20 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         const sbx = snap.panX + noodle.bx * z;
         const sby = snap.panY + noodle.by * z;
 
+        const isSelected = selectedConn && selectedConn.srcId === n.id && selectedConn.destId === destId;
+
         ctx.save();
-        ctx.strokeStyle = isOverlay ? "#a855f7" : "#0d99ff";
-        ctx.lineWidth = 1.8;
+        if (isSelected) {
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = 4.5;
+          ctx.beginPath();
+          ctx.moveTo(sax, say);
+          ctx.bezierCurveTo(scp1x, scp1y, scp2x, scp2y, sbx, sby);
+          ctx.stroke();
+        }
+
+        ctx.strokeStyle = isOverlay ? "#a855f7" : BRAND_ACCENT;
+        ctx.lineWidth = isSelected ? 2.5 : 1.8;
         if (isOverlay) ctx.setLineDash([5, 4]);
 
         ctx.beginPath();
@@ -869,19 +1106,19 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         ctx.stroke();
 
         // Source circular anchor dot
-        ctx.fillStyle = isOverlay ? "#a855f7" : "#0d99ff";
+        ctx.fillStyle = isOverlay ? "#a855f7" : BRAND_ACCENT;
         ctx.beginPath();
-        ctx.arc(sax, say, 4.5, 0, Math.PI * 2);
+        ctx.arc(sax, say, isSelected ? 5.5 : 4.5, 0, Math.PI * 2);
         ctx.fill();
         ctx.strokeStyle = "#ffffff";
-        ctx.lineWidth = 1.25;
+        ctx.lineWidth = isSelected ? 2 : 1.25;
         ctx.stroke();
 
         // Destination rotated arrowhead
         ctx.save();
         ctx.translate(sbx, sby);
         ctx.rotate(noodle.angle);
-        ctx.fillStyle = isOverlay ? "#a855f7" : "#0d99ff";
+        ctx.fillStyle = isOverlay ? "#a855f7" : BRAND_ACCENT;
         ctx.beginPath();
         ctx.moveTo(0, 0);
         ctx.lineTo(-8, -4.5);
@@ -914,7 +1151,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             ctx.save();
             ctx.beginPath();
             ctx.arc(h.x, h.y, 6.5, 0, Math.PI * 2);
-            ctx.fillStyle = "#0d99ff";
+            ctx.fillStyle = BRAND_ACCENT;
             ctx.fill();
             ctx.strokeStyle = "#ffffff";
             ctx.lineWidth = 1.5;
@@ -961,7 +1198,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         const sby = snap.panY + noodle.by * z;
 
         ctx.save();
-        ctx.strokeStyle = "#0d99ff";
+        ctx.strokeStyle = BRAND_ACCENT;
         ctx.lineWidth = 2.2;
         ctx.beginPath();
         ctx.moveTo(sax, say);
@@ -969,7 +1206,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         ctx.stroke();
 
         // Source circle
-        ctx.fillStyle = "#0d99ff";
+        ctx.fillStyle = BRAND_ACCENT;
         ctx.beginPath();
         ctx.arc(sax, say, 5, 0, Math.PI * 2);
         ctx.fill();
@@ -982,7 +1219,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           ctx.save();
           ctx.translate(sbx, sby);
           ctx.rotate(noodle.angle);
-          ctx.fillStyle = "#0d99ff";
+          ctx.fillStyle = BRAND_ACCENT;
           ctx.beginPath();
           ctx.moveTo(0, 0);
           ctx.lineTo(-9, -5);
@@ -992,7 +1229,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           ctx.fill();
           ctx.restore();
         } else {
-          ctx.fillStyle = "#0d99ff";
+          ctx.fillStyle = BRAND_ACCENT;
           ctx.beginPath();
           ctx.arc(sbx, sby, 5, 0, Math.PI * 2);
           ctx.fill();
@@ -1003,7 +1240,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
 
         // Highlight candidate destination frame
         if (twp) {
-          ctx.strokeStyle = "#0d99ff";
+          ctx.strokeStyle = BRAND_ACCENT;
           ctx.lineWidth = 2.5;
           ctx.strokeRect(
             snap.panX + twp.x * z,
@@ -1048,7 +1285,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           ctx.rotate((hp.node.rotation * Math.PI) / 180);
           ctx.translate(-(hx + hw / 2), -(hy + hh / 2));
         }
-        ctx.strokeStyle = "#0d99ff";
+        ctx.strokeStyle = BRAND_ACCENT;
         ctx.lineWidth = 1;
         ctx.strokeRect(hx + 0.5, hy + 0.5, hw, hh);
         ctx.restore();
@@ -1064,7 +1301,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       const sy = snap.panY + wp.y * z;
       const sw = wp.node.w * z;
       const sh = wp.node.h * z;
-      const accent = wp.node.isComponent || wp.node.componentId ? "#7b61ff" : "#0d99ff";
+      const accent = wp.node.isComponent || wp.node.componentId ? "#a855f7" : BRAND_ACCENT;
       ctx.save();
       if (wp.node.rotation || wp.node.flipH || wp.node.flipV) {
         ctx.translate(sx + sw / 2, sy + sh / 2);
@@ -1125,7 +1362,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         const ay = sy + (wp.node.fillGY ?? 0) * sh;
         const bx = sx + (wp.node.fillHX ?? 0.5) * sw;
         const by = sy + (wp.node.fillHY ?? 1) * sh;
-        ctx.strokeStyle = "#0d99ff";
+        ctx.strokeStyle = BRAND_ACCENT;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.moveTo(ax, ay);
@@ -1141,6 +1378,85 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         ctx.arc(bx, by, 6, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
+      }
+      if (wp.node.kind === "star") {
+        const cx = sx + sw / 2;
+        const cy = sy + sh / 2;
+        const rx = sw / 2;
+        const ry = sh / 2;
+        const pts = Math.max(3, Math.min(60, Math.round(wp.node.count || 5)));
+        const a = Math.PI / pts - Math.PI / 2;
+        const k = Math.max(0.05, Math.min(0.95, wp.node.starRatio ?? 0.4));
+        const hx = cx + Math.cos(a) * rx * k;
+        const hy = cy + Math.sin(a) * ry * k;
+
+        ctx.fillStyle = "#ffffff";
+        ctx.strokeStyle = BRAND_ACCENT;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(hx, hy, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+      if (wp.node.kind === "ellipse" && sw >= 36 && sh >= 36) {
+        const cx = sx + sw / 2;
+        const cy = sy + sh / 2;
+        const rx = sw / 2;
+        const ry = sh / 2;
+        const ea = wp.node.arcData?.endingAngle ?? Math.PI * 2;
+        const ir = wp.node.arcData?.innerRadius ?? 0;
+        const hx = cx + Math.cos(ea) * rx;
+        const hy = cy + Math.sin(ea) * ry;
+
+        ctx.fillStyle = "#ffffff";
+        ctx.strokeStyle = BRAND_ACCENT;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(hx, hy, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        if (ir > 0) {
+          const rhx = cx + Math.cos(ea) * rx * ir;
+          const rhy = cy + Math.sin(ea) * ry * ir;
+          ctx.beginPath();
+          ctx.arc(rhx, rhy, 4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        }
+      }
+      if (
+        (wp.node.kind === "rect" || wp.node.kind === "frame" || wp.node.kind === "component" || wp.node.kind === "instance") &&
+        !vecEdit &&
+        sw >= 36 &&
+        sh >= 36
+      ) {
+        const r0 = wp.node.cornerRadii[0] || 0;
+        const r1 = wp.node.cornerRadii[1] || 0;
+        const r2 = wp.node.cornerRadii[2] || 0;
+        const r3 = wp.node.cornerRadii[3] || 0;
+        const maxOffset = Math.min(sw, sh) / 2 - 4;
+        const o0 = Math.max(9, Math.min(maxOffset, r0 * z + 8));
+        const o1 = Math.max(9, Math.min(maxOffset, r1 * z + 8));
+        const o2 = Math.max(9, Math.min(maxOffset, r2 * z + 8));
+        const o3 = Math.max(9, Math.min(maxOffset, r3 * z + 8));
+
+        const rPins = [
+          [sx + o0, sy + o0],
+          [sx + sw - o1, sy + o1],
+          [sx + sw - o2, sy + sh - o2],
+          [sx + o3, sy + sh - o3],
+        ];
+
+        for (const [rx, ry] of rPins) {
+          ctx.beginPath();
+          ctx.arc(rx, ry, 3.5, 0, Math.PI * 2);
+          ctx.fillStyle = "#ffffff";
+          ctx.fill();
+          ctx.strokeStyle = accent;
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
       }
       if (wp.node.layout) {
         const l = wp.node.layout;
@@ -1204,12 +1520,12 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         const sw = bb.w * z;
         const sh = bb.h * z;
         ctx.save();
-        ctx.strokeStyle = "#0d99ff";
+        ctx.strokeStyle = BRAND_ACCENT;
         ctx.lineWidth = 1;
         ctx.strokeRect(sx + 0.5, sy + 0.5, sw, sh);
         for (const [hx, hy] of handles(sx, sy, sw, sh)) {
           ctx.fillStyle = "#ffffff";
-          ctx.strokeStyle = "#0d99ff";
+          ctx.strokeStyle = BRAND_ACCENT;
           ctx.fillRect(hx - 3, hy - 3, 6, 6);
           ctx.strokeRect(hx - 3, hy - 3, 6, 6);
         }
@@ -1227,7 +1543,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         const bw = ctx.measureText(dim).width + 16;
         const bx = sx + sw / 2 - bw / 2;
         const by = sy + sh + 8;
-        ctx.fillStyle = "#0d99ff";
+        ctx.fillStyle = BRAND_ACCENT;
         if (typeof ctx.roundRect === "function") {
           ctx.beginPath();
           ctx.roundRect(bx, by, bw, 20, 4);
@@ -1303,7 +1619,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           if (wp.node.flipH || wp.node.flipV) ctx.scale(wp.node.flipH ? -1 : 1, wp.node.flipV ? -1 : 1);
           ctx.translate(-(vsx + vsw / 2), -(vsy + vsh / 2));
         }
-        ctx.strokeStyle = "#0d99ff";
+        ctx.strokeStyle = BRAND_ACCENT;
         ctx.lineWidth = 1;
         const vn = wp.node.vectorNetwork;
         for (let i = 0; i < pts.length; i++) {
@@ -1327,14 +1643,15 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             }
           }
           const deg = vn ? vertexDegree(vn, i) : 2;
+          const isSelected = (snap.vecPoints && snap.vecPoints.includes(i)) || vecPt.current === i || snap.vecPoint === i;
           if (deg >= 3) {
             // Branching node indicator (Figma Vector Network Degree >= 3)
             ctx.save();
-            ctx.fillStyle = "rgba(16, 185, 129, 0.25)";
+            ctx.fillStyle = isSelected ? BRAND_ACCENT_GLOW : "rgba(16, 185, 129, 0.25)";
             ctx.beginPath();
             ctx.arc(px, py, 9, 0, Math.PI * 2);
             ctx.fill();
-            ctx.fillStyle = "#10b981";
+            ctx.fillStyle = isSelected ? BRAND_ACCENT : "#10b981";
             ctx.strokeStyle = "#ffffff";
             ctx.lineWidth = 1.5;
             ctx.beginPath();
@@ -1347,7 +1664,9 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             ctx.stroke();
             ctx.restore();
           } else {
-            ctx.fillStyle = "#fff";
+            ctx.fillStyle = isSelected ? BRAND_ACCENT : "#fff";
+            ctx.strokeStyle = isSelected ? "#ffffff" : BRAND_ACCENT;
+            ctx.lineWidth = isSelected ? 1.5 : 1;
             ctx.beginPath();
             ctx.rect(px - 3.5, py - 3.5, 7, 7);
             ctx.fill();
@@ -1452,13 +1771,13 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     }
 
     if (band) {
-      ctx.fillStyle = "rgba(13,153,255,0.12)";
-      ctx.strokeStyle = "#0d99ff";
+      ctx.fillStyle = BRAND_ACCENT_WASH;
+      ctx.strokeStyle = BRAND_ACCENT;
       ctx.lineWidth = 1;
       ctx.fillRect(band.x, band.y, band.w, band.h);
       ctx.strokeRect(band.x + 0.5, band.y + 0.5, band.w, band.h);
     }
-  }, [snap, band, edit, engine, theme, draft, vecEdit, hoverId, ghost, guides, gapBadges, altMeasure, protoDrag]);
+  }, [snap, band, edit, engine, theme, draft, vecEdit, hoverId, ghost, guides, gapBadges, altMeasure, protoDrag, selectedConn, animFrame]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();
@@ -1785,6 +2104,115 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             return;
           }
         }
+        if (wp.node.kind === "star") {
+          const sw = wp.node.w * z;
+          const sh = wp.node.h * z;
+          const cx = sx + sw / 2;
+          const cy = sy + sh / 2;
+          const rx = sw / 2;
+          const ry = sh / 2;
+          const pts = Math.max(3, Math.min(60, Math.round(wp.node.count || 5)));
+          const a = Math.PI / pts - Math.PI / 2;
+          const k = Math.max(0.05, Math.min(0.95, wp.node.starRatio ?? 0.4));
+          const hx = cx + Math.cos(a) * rx * k;
+          const hy = cy + Math.sin(a) * ry * k;
+          if (Math.hypot(px - hx, py - hy) <= 9) {
+            engine.dispatch({ type: "begin" });
+            drag.current = {
+              mode: "starRatio",
+              sx: e.clientX,
+              sy: e.clientY,
+              wx: wpt.x,
+              wy: wpt.y,
+              id: wp.node.id,
+            };
+            return;
+          }
+        }
+        if (wp.node.kind === "ellipse") {
+          const sw = wp.node.w * z;
+          const sh = wp.node.h * z;
+          const cx = sx + sw / 2;
+          const cy = sy + sh / 2;
+          const rx = sw / 2;
+          const ry = sh / 2;
+          const ea = wp.node.arcData?.endingAngle ?? Math.PI * 2;
+          const ir = wp.node.arcData?.innerRadius ?? 0;
+          const hx = cx + Math.cos(ea) * rx;
+          const hy = cy + Math.sin(ea) * ry;
+          if (Math.hypot(px - hx, py - hy) <= 9) {
+            engine.dispatch({ type: "begin" });
+            drag.current = {
+              mode: "arc",
+              handle: "out",
+              sx: e.clientX,
+              sy: e.clientY,
+              wx: wpt.x,
+              wy: wpt.y,
+              id: wp.node.id,
+            };
+            return;
+          }
+          if (ir > 0) {
+            const rhx = cx + Math.cos(ea) * rx * ir;
+            const rhy = cy + Math.sin(ea) * ry * ir;
+            if (Math.hypot(px - rhx, py - rhy) <= 9) {
+              engine.dispatch({ type: "begin" });
+              drag.current = {
+                mode: "arc",
+                handle: "in",
+                sx: e.clientX,
+                sy: e.clientY,
+                wx: wpt.x,
+                wy: wpt.y,
+                id: wp.node.id,
+              };
+              return;
+            }
+          }
+        }
+        if (
+          (wp.node.kind === "rect" || wp.node.kind === "frame" || wp.node.kind === "component" || wp.node.kind === "instance") &&
+          !vecEdit &&
+          wp.node.w * z >= 36 &&
+          wp.node.h * z >= 36
+        ) {
+          const sw = wp.node.w * z;
+          const sh = wp.node.h * z;
+          const r0 = wp.node.cornerRadii[0] || 0;
+          const r1 = wp.node.cornerRadii[1] || 0;
+          const r2 = wp.node.cornerRadii[2] || 0;
+          const r3 = wp.node.cornerRadii[3] || 0;
+          const maxOffset = Math.min(sw, sh) / 2 - 4;
+          const o0 = Math.max(9, Math.min(maxOffset, r0 * z + 8));
+          const o1 = Math.max(9, Math.min(maxOffset, r1 * z + 8));
+          const o2 = Math.max(9, Math.min(maxOffset, r2 * z + 8));
+          const o3 = Math.max(9, Math.min(maxOffset, r3 * z + 8));
+
+          const rPins = [
+            [sx + o0, sy + o0],
+            [sx + sw - o1, sy + o1],
+            [sx + sw - o2, sy + sh - o2],
+            [sx + o3, sy + sh - o3],
+          ];
+
+          for (let ci = 0; ci < 4; ci++) {
+            const [rx, ry] = rPins[ci];
+            if (Math.hypot(px - rx, py - ry) <= 7) {
+              engine.dispatch({ type: "begin" });
+              drag.current = {
+                mode: "radius",
+                corner: ci,
+                sx: e.clientX,
+                sy: e.clientY,
+                wx: wpt.x,
+                wy: wpt.y,
+                id: wp.node.id,
+              };
+              return;
+            }
+          }
+        }
         if (vecEdit === wp.node.id) {
           const pts = wp.node.path.length ? wp.node.path : shapePoly(wp.node);
           for (let i = 0; i < pts.length; i++) {
@@ -1803,8 +2231,22 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             }
             if (Math.hypot(px - vx, py - vy) < 8) {
               engine.dispatch({ type: "begin" });
+              const multi = e.shiftKey;
+              let nextSel = snap.vecPoints && snap.vecPoints.length > 0 ? [...snap.vecPoints] : (vecPt.current >= 0 ? [vecPt.current] : []);
+              if (multi) {
+                if (nextSel.includes(i)) {
+                  nextSel = nextSel.filter((idx) => idx !== i);
+                } else {
+                  nextSel.push(i);
+                }
+              } else {
+                if (!nextSel.includes(i)) {
+                  nextSel = [i];
+                }
+              }
               vecPt.current = i;
-              drag.current = { mode: "vec", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, point: i };
+              setVecEdit(wp.node.id, i, nextSel);
+              drag.current = { mode: "vec", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, point: i, origPts: pts.map((pt) => ({ ...pt })) };
               return;
             }
           }
@@ -1829,6 +2271,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             if (res) {
               engine.dispatch({ type: "insertPointOnPath", id: wp.node.id, x: local.x, y: local.y });
               vecPt.current = res.insertedIndex;
+              setVecEdit(wp.node.id, res.insertedIndex);
               toast("Point added on path");
               return;
             }
@@ -1903,6 +2346,18 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         }
       }
     }
+
+    if (snap.rightTab === "prototype" && !snap.presentFrame) {
+      const hitConn = findClickedNoodle(root, wpt, snap.zoom);
+      if (hitConn) {
+        setSelectedConn(hitConn);
+        engine.dispatch({ type: "select", ids: [hitConn.srcId] });
+        return;
+      } else if (selectedConn) {
+        setSelectedConn(null);
+      }
+    }
+
     const hit = hitTest(root, wpt.x, wpt.y, {
       deep: e.metaKey || e.ctrlKey,
       selection: snap.selection,
@@ -1923,7 +2378,9 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         wy: wpt.y,
       };
     } else {
-      engine.dispatch({ type: "select", ids: [] });
+      if (!vecEdit) {
+        engine.dispatch({ type: "select", ids: [] });
+      }
       drag.current = { mode: "marquee", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y };
     }
   };
@@ -2317,8 +2774,21 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             }
           }
         } else {
-          p.x = lx;
-          p.y = ly;
+          const movingIndices = snap.vecPoints && snap.vecPoints.includes(d.point) ? snap.vecPoints : [d.point];
+          if (movingIndices.length > 1 && d.origPts) {
+            const origP = d.origPts[d.point];
+            const totalDx = lx - origP.x;
+            const totalDy = ly - origP.y;
+            for (const idx of movingIndices) {
+              if (d.origPts[idx] && pts[idx]) {
+                pts[idx].x = d.origPts[idx].x + totalDx;
+                pts[idx].y = d.origPts[idx].y + totalDy;
+              }
+            }
+          } else {
+            p.x = lx;
+            p.y = ly;
+          }
         }
         engine.dispatch({ type: "patchPath", id: n.id, path: pts, closed: n.closed });
       }
@@ -2366,6 +2836,79 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         const delta = Math.round(horiz ? wpt.x - d.wx : wpt.y - d.wy);
         const nextGap = Math.max(0, d.origGap + delta);
         engine.dispatch({ type: "autoLayout", id: d.id, layout: { ...wp.node.layout, gap: nextGap } });
+      }
+    } else if (d.mode === "starRatio" && d.id) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      const wp = worldPos(snap.pages[snap.page].root, d.id);
+      if (wp) {
+        const cx = wp.x + wp.node.w / 2;
+        const cy = wp.y + wp.node.h / 2;
+        const maxR = Math.hypot(wp.node.w / 2, wp.node.h / 2);
+        const curR = Math.hypot(wpt.x - cx, wpt.y - cy);
+        const ratio = Math.max(0.05, Math.min(0.95, curR / (maxR || 1)));
+        engine.dispatch({ type: "patch", id: d.id, patch: { starRatio: ratio } });
+      }
+    } else if (d.mode === "radius" && d.id) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      const wp = worldPos(snap.pages[snap.page].root, d.id);
+      if (wp) {
+        const ci = d.corner ?? 0;
+        let dist = 0;
+        if (ci === 0) {
+          dist = Math.min(wpt.x - wp.x, wpt.y - wp.y);
+        } else if (ci === 1) {
+          dist = Math.min(wp.x + wp.node.w - wpt.x, wpt.y - wp.y);
+        } else if (ci === 2) {
+          dist = Math.min(wp.x + wp.node.w - wpt.x, wp.y + wp.node.h - wpt.y);
+        } else {
+          dist = Math.min(wpt.x - wp.x, wp.y + wp.node.h - wpt.y);
+        }
+        const maxR = Math.min(wp.node.w, wp.node.h) / 2;
+        const newR = Math.max(0, Math.min(maxR, Math.round(dist)));
+        if (e.altKey) {
+          const nextRadii: [number, number, number, number] = [...wp.node.cornerRadii];
+          nextRadii[ci] = newR;
+          engine.dispatch({
+            type: "patch",
+            id: d.id,
+            patch: { cornerRadii: nextRadii, cornerIndependent: true },
+          });
+        } else {
+          const nextRadii: [number, number, number, number] = [newR, newR, newR, newR];
+          engine.dispatch({
+            type: "patch",
+            id: d.id,
+            patch: { cornerRadii: nextRadii, cornerIndependent: false },
+          });
+        }
+      }
+    } else if (d.mode === "arc" && d.id) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      const wp = worldPos(snap.pages[snap.page].root, d.id);
+      if (wp) {
+        const cx = wp.x + wp.node.w / 2;
+        const cy = wp.y + wp.node.h / 2;
+        const curArc = wp.node.arcData ?? { startingAngle: 0, endingAngle: Math.PI * 2, innerRadius: 0 };
+        if (d.handle === "in") {
+          const maxR = Math.min(wp.node.w, wp.node.h) / 2;
+          const curR = Math.hypot(wpt.x - cx, wpt.y - cy);
+          const ratio = Math.max(0, Math.min(0.95, curR / (maxR || 1)));
+          engine.dispatch({
+            type: "patch",
+            id: d.id,
+            patch: { arcData: { ...curArc, innerRadius: Math.round(ratio * 100) / 100 } },
+          });
+        } else {
+          let ang = Math.atan2(wpt.y - cy, wpt.x - cx);
+          if (ang < 0) ang += Math.PI * 2;
+          if (e.shiftKey) ang = Math.round((ang * 180) / Math.PI / 15) * (Math.PI / 12);
+          if (ang > Math.PI * 2 - 0.05) ang = Math.PI * 2;
+          engine.dispatch({
+            type: "patch",
+            id: d.id,
+            patch: { arcData: { ...curArc, endingAngle: ang } },
+          });
+        }
       }
     }
   };
@@ -2594,7 +3137,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
                 name: "Slice",
                 fill: "#00000000",
                 fillVisible: false,
-                strokePaint: "#0d99ff",
+                strokePaint: BRAND_ACCENT,
                 strokeVisible: true,
                 strokeWidth: 1,
                 strokeDash: 4,
@@ -2633,6 +3176,35 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       const y0 = Math.min(a.y, b.y);
       const x1 = Math.max(a.x, b.x);
       const y1 = Math.max(a.y, b.y);
+      const isDrag = Math.hypot(e.clientX - d.sx, e.clientY - d.sy) >= 4;
+
+      if (vecEdit) {
+        const wp = worldPos(snap.pages[snap.page].root, vecEdit);
+        if (wp) {
+          const pts = wp.node.path.length ? wp.node.path : shapePoly(wp.node);
+          if (isDrag) {
+            const hitIndices: number[] = [];
+            for (let i = 0; i < pts.length; i++) {
+              const p = pts[i];
+              const wx = wp.x + p.x;
+              const wy = wp.y + p.y;
+              if (wx >= x0 && wx <= x1 && wy >= y0 && wy <= y1) {
+                hitIndices.push(i);
+              }
+            }
+            const shift = e.shiftKey;
+            const prev = snap.vecPoints ?? (vecPt.current >= 0 ? [vecPt.current] : []);
+            const finalIndices = shift ? Array.from(new Set([...prev, ...hitIndices])) : hitIndices;
+            vecPt.current = finalIndices.length ? finalIndices[0] : -1;
+            setVecEdit(vecEdit, finalIndices.length ? finalIndices[0] : null, finalIndices);
+          } else {
+            vecPt.current = -1;
+            setVecEdit(vecEdit, null, []);
+          }
+          return;
+        }
+      }
+
       const ids: string[] = [];
       const deep = e.metaKey || e.ctrlKey;
       const visit = (n: XNode, px: number, py: number, top: boolean) => {
@@ -2705,7 +3277,11 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       engine.dispatch({ type: "select", ids: [hit.id] });
       if (hit.kind !== "vector") engine.dispatch({ type: "flatten" });
       setVecEdit(hit.id);
-    } else if (hit) engine.dispatch({ type: "select", ids: [hit.id] });
+    } else if (hit) {
+      engine.dispatch({ type: "select", ids: [hit.id] });
+    } else if (vecEdit) {
+      setVecEdit(null, null, []);
+    }
   };
 
   const onLeave = (e: React.MouseEvent) => {
@@ -2887,8 +3463,8 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       height: textH * snap.zoom,
       fontSize: wp.node.fontSize * snap.zoom,
       fontWeight: wp.node.fontWeight,
-      lineHeight: (wp.node.lineHeight || wp.node.fontSize * 1.2) * snap.zoom,
-      letterSpacing: wp.node.letterSpacing * snap.zoom,
+      lineHeight: `${(wp.node.lineHeight || wp.node.fontSize * 1.2) * snap.zoom}px`,
+      letterSpacing: `${wp.node.letterSpacing * snap.zoom}px`,
       textAlign: wp.node.textAlign === "justified" ? "left" : wp.node.textAlign,
       color: wp.node.fill,
       fontFamily: wp.node.fontFamily,
@@ -3018,6 +3594,54 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           e.target.value = "";
         }}
       />
+      {selectedConn && snap.rightTab === "prototype" && !snap.presentFrame && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "absolute",
+            left: snap.panX + selectedConn.midX * snap.zoom,
+            top: snap.panY + selectedConn.midY * snap.zoom,
+            transform: "translate(-50%, -50%)",
+            background: "#18181b",
+            color: "#ffffff",
+            padding: "5px 10px",
+            borderRadius: 14,
+            fontSize: 11,
+            fontWeight: 500,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            boxShadow: `0 4px 16px rgba(0,0,0,0.5), 0 0 0 1.5px ${BRAND_ACCENT}`,
+            zIndex: 35,
+            userSelect: "none",
+          }}
+        >
+          <span>{selectedConn.label}</span>
+          <button
+            onClick={() => {
+              engine.dispatch({
+                type: "deleteInteraction",
+                id: selectedConn.srcId,
+                destId: selectedConn.destId,
+              });
+              setSelectedConn(null);
+              toast("Connection deleted");
+            }}
+            title="Delete connection (⌫)"
+            style={{
+              background: "transparent",
+              border: 0,
+              color: "rgba(255,255,255,0.7)",
+              cursor: "pointer",
+              padding: 0,
+              display: "flex",
+              alignItems: "center",
+            }}
+          >
+            <Icon name="close" size={12} />
+          </button>
+        </div>
+      )}
       {menu && (
         <ContextMenu
           x={menu.x}
@@ -3223,11 +3847,17 @@ function resizeFrom(
       w = bx - o.x;
     }
   }
-  if (opts?.aspect && o.w > 0) {
+  if (opts?.aspect && o.w > 0 && o.h > 0) {
     const ratio = o.h / o.w;
-    h = Math.max(1, w * ratio);
-    if (opts.fromCenter) y = cy - h / 2;
-    else if (corner === 0 || corner === 1 || corner === 2) y = bottom - h;
+    if (corner === 1 || corner === 5) {
+      w = Math.max(1, h / ratio);
+      if (opts.fromCenter) x = cx - w / 2;
+      else x = cx - w / 2;
+    } else {
+      h = Math.max(1, w * ratio);
+      if (opts.fromCenter) y = cy - h / 2;
+      else if (corner === 0 || corner === 1 || corner === 2) y = bottom - h;
+    }
   }
   if (w < 1) {
     x += w - 1;
@@ -3671,6 +4301,34 @@ function walkInteractions(
     }
   }
   for (const c of n.children) walkInteractions(c, x, y, fn);
+}
+
+function findClickedNoodle(
+  root: XNode,
+  wpt: { x: number; y: number },
+  zoom: number,
+): { srcId: string; destId: string; midX: number; midY: number; label: string } | null {
+  let hit: { srcId: string; destId: string; midX: number; midY: number; label: string } | null = null;
+  walkInteractions(root, 0, 0, (n, nx, ny, destId, ix) => {
+    if (hit) return;
+    const dest = worldPos(root, destId);
+    if (!dest) return;
+    const noodle = computeFigmaNoodle(nx, ny, n.w, n.h, dest.x, dest.y, dest.node.w, dest.node.h);
+    for (let step = 0; step <= 16; step++) {
+      const t = step / 16;
+      const u = 1 - t;
+      const px = u * u * u * noodle.ax + 3 * u * u * t * noodle.cp1x + 3 * u * t * t * noodle.cp2x + t * t * t * noodle.bx;
+      const py = u * u * u * noodle.ay + 3 * u * u * t * noodle.cp1y + 3 * u * t * t * noodle.cp2y + t * t * t * noodle.by;
+      if (Math.hypot(wpt.x - px, wpt.y - py) <= 12 / zoom) {
+        const midX = (noodle.ax + noodle.bx) / 2;
+        const midY = (noodle.ay + noodle.by) / 2;
+        const trigLabel = ix.trigger === "onClick" ? "On click" : ix.trigger === "onHover" ? "While hovering" : "On drag";
+        hit = { srcId: n.id, destId, midX, midY, label: `${trigLabel} → ${dest.node.name}` };
+        break;
+      }
+    }
+  });
+  return hit;
 }
 
 const booleanCanvases = new Map<string, HTMLCanvasElement>();

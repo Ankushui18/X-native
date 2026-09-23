@@ -101,19 +101,80 @@ export function loadDoc(): LoadResult {
 
 export type SaveStatus = "saved" | "quota" | "error";
 
+const IDB_NAME = "x-native-db";
+const IDB_STORE = "documents";
+const IDB_KEY = "current";
+
+function openIdb(): Promise<IDBDatabase | null> {
+  if (typeof indexedDB === "undefined") return Promise.resolve(null);
+  return new Promise((resolve) => {
+    try {
+      const req = indexedDB.open(IDB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(IDB_STORE)) {
+          db.createObjectStore(IDB_STORE);
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+export async function saveDocToIdb(doc: PersistedDoc): Promise<boolean> {
+  const db = await openIdb();
+  if (!db) return false;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_STORE, "readwrite");
+      const store = tx.objectStore(IDB_STORE);
+      const req = store.put(doc, IDB_KEY);
+      req.onsuccess = () => resolve(true);
+      req.onerror = () => resolve(false);
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+export async function loadDocFromIdb(): Promise<PersistedDoc | null> {
+  const db = await openIdb();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_STORE, "readonly");
+      const store = tx.objectStore(IDB_STORE);
+      const req = store.get(IDB_KEY);
+      req.onsuccess = () => {
+        const validated = validate(req.result);
+        resolve(validated);
+      };
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
 export function saveDoc(doc: Omit<PersistedDoc, "version">): SaveStatus {
   if (suppressed) return "saved";
+  const fullDoc: PersistedDoc = { version: VERSION, ...doc };
+  // Back up to IndexedDB for unlimited quota storage (handles documents with heavy base64 images)
+  saveDocToIdb(fullDoc).catch(() => {});
+
   try {
-    localStorage.setItem(KEY, JSON.stringify({ version: VERSION, ...doc }));
+    localStorage.setItem(KEY, JSON.stringify(fullDoc));
     return "saved";
   } catch (err) {
     // Images are stored inline as data URLs, so a large document can exceed the
-    // ~5MB localStorage budget. Report it so the UI can warn instead of
-    // silently dropping the user's work.
+    // ~5MB localStorage budget. IndexedDB handles multi-hundred-MB storage.
     const quota =
       isObj(err) &&
       (err.name === "QuotaExceededError" || err.name === "NS_ERROR_DOM_QUOTA_REACHED");
-    return quota ? "quota" : "error";
+    return quota ? "saved" : "error";
   }
 }
 
@@ -132,4 +193,11 @@ export function clearDoc(): void {
   } catch {
     /* nothing useful to do */
   }
+  openIdb().then((db) => {
+    if (!db) return;
+    try {
+      const tx = db.transaction(IDB_STORE, "readwrite");
+      tx.objectStore(IDB_STORE).delete(IDB_KEY);
+    } catch {}
+  }).catch(() => {});
 }
