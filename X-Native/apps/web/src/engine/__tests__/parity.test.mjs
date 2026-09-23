@@ -214,5 +214,238 @@ console.log("ruler guides:");
   t("a ruler guide wins a tie against an object edge", Math.abs(94 + tie.dx - 100) < 1e-6);
 }
 
+console.log("auto layout extensions:");
+{
+  const e = new MemoryEngine(false);
+  e.dispatch({ type: "add", kind: "frame", x: 0, y: 0, w: 300, h: 200 });
+  const fid = e.snapshot().selection[0];
+  const baseLayout = {
+    direction: "horizontal", gap: 10, padding: [10, 10, 10, 10],
+    sizing: "fixed", cross: "fixed", wrap: false, align: "min", justify: "min"
+  };
+  e.dispatch({ type: "autoLayout", id: fid, layout: baseLayout });
+
+  // Add normal child 1
+  e.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w: 50, h: 50, parent: fid });
+  const c1 = e.snapshot().selection[0];
+
+  // Add child 2 with absolute positioning
+  e.dispatch({ type: "add", kind: "rect", x: 250, y: 150, w: 40, h: 40, parent: fid, extra: { absolutePosition: true } });
+  const c2 = e.snapshot().selection[0];
+
+  // Add child 3 with min/max bounds
+  e.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w: 20, h: 20, parent: fid, extra: { minW: 60, maxH: 30 } });
+  const c3 = e.snapshot().selection[0];
+
+  const get = (id) => {
+    let found = null;
+    const walk = (n) => { if (n.id === id) found = n; n.children?.forEach(walk); };
+    const sn = e.snapshot();
+    walk(sn.pages[sn.page].root);
+    return found;
+  };
+
+  // c1 is first in auto layout flow -> placed at padding (x=10, y=10)
+  t("normal child flows in auto layout", get(c1).x === 10 && get(c1).y === 10);
+
+  // c2 is absolute positioned -> kept at (250, 150), skipped by flow
+  t("absolute position child is excluded from auto layout flow", get(c2).x === 250 && get(c2).y === 150);
+
+  // c3 flows after c1 (10 + 50 + 10 = 70) and enforces minW: 60
+  t("min/max dimension constraints clamp size", get(c3).x === 70 && get(c3).w === 60);
+}
+
+console.log("component instance overrides:");
+{
+  const e = new MemoryEngine(false);
+  // Create master component
+  e.dispatch({ type: "add", kind: "frame", x: 0, y: 0, w: 120, h: 40, extra: { fill: "#111111" } });
+  const mid = e.snapshot().selection[0];
+  e.dispatch({ type: "add", kind: "text", x: 10, y: 10, w: 60, h: 20, parent: mid, extra: { text: "Original" } });
+  const tid = e.snapshot().selection[0];
+  e.dispatch({ type: "select", ids: [mid] });
+  e.dispatch({ type: "makeComponent" });
+  const compId = e.snapshot().components[0].id;
+
+  // Place an instance
+  e.dispatch({ type: "placeComponent", id: compId, x: 200, y: 0 });
+  const instId = e.snapshot().selection[0];
+
+  const get = (id) => {
+    let found = null;
+    const walk = (n) => { if (n.id === id) found = n; n.children?.forEach(walk); };
+    const sn = e.snapshot();
+    walk(sn.pages[sn.page].root);
+    return found;
+  };
+
+  // Override instance text and fill
+  const inst = get(instId);
+  const instText = inst.children[0];
+  e.dispatch({ type: "patch", id: instText.id, patch: { text: "Overridden" } });
+  e.dispatch({ type: "patch", id: instId, patch: { fill: "#ff00ff" } });
+  t("instance local override applies", get(instId).fill === "#ff00ff" && get(instId).children[0].text === "Overridden");
+
+  // Now modify the master component's background and size
+  e.dispatch({ type: "patch", id: mid, patch: { w: 160 } });
+  t("updating master updates instance width", get(instId).w === 160);
+  t("updating master preserves instance overrides",
+    get(instId).fill === "#ff00ff" && get(instId).children[0].text === "Overridden");
+
+  // Reset overrides
+  e.dispatch({ type: "select", ids: [instId] });
+  e.dispatch({ type: "resetOverrides" });
+  t("resetOverrides restores master defaults",
+    get(instId).fill === "#111111" && get(instId).children[0].text === "Original");
+}
+
+{
+  console.log("duplicate naming (Figma parity):");
+  const e = new MemoryEngine();
+  e.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w: 100, h: 100, extra: { name: "Card" } });
+  e.dispatch({ type: "duplicate" });
+  const id2 = e.snapshot().selection[0];
+  const n2 = e.snapshot().pages[e.snapshot().page].root.children.find((c) => c.id === id2);
+  t("first duplicate gains ' copy' suffix", n2.name === "Card copy");
+
+  e.dispatch({ type: "duplicate" });
+  const id3 = e.snapshot().selection[0];
+  const n3 = e.snapshot().pages[e.snapshot().page].root.children.find((c) => c.id === id3);
+  t("second duplicate gains ' copy 2' suffix", n3.name === "Card copy 2");
+}
+
+{
+  console.log("baseline alignment in horizontal auto-layout:");
+  const e = new MemoryEngine();
+  e.dispatch({
+    type: "add",
+    kind: "frame",
+    x: 0,
+    y: 0,
+    w: 400,
+    h: 100,
+    extra: {
+      name: "Row",
+      layout: {
+        direction: "horizontal",
+        gap: 10,
+        padding: [0, 0, 0, 0],
+        sizing: "fixed",
+        cross: "fixed",
+        wrap: false,
+        align: "baseline",
+        justify: "min",
+      },
+    },
+  });
+  const rowId = e.snapshot().selection[0];
+  // Add a 40px font size text (baseline = 32px) and a 20px font size text (baseline = 16px)
+  e.dispatch({
+    type: "add",
+    kind: "text",
+    x: 0,
+    y: 0,
+    w: 100,
+    h: 40,
+    extra: { text: "Big", fontSize: 40 },
+  });
+  const t1Id = e.snapshot().selection[0];
+  e.dispatch({
+    type: "add",
+    kind: "text",
+    x: 0,
+    y: 0,
+    w: 80,
+    h: 20,
+    extra: { text: "Small", fontSize: 20 },
+  });
+  const t2Id = e.snapshot().selection[0];
+  // Move both children inside Row
+  e.dispatch({ type: "reorder", ids: [t1Id], parent: rowId, index: 0 });
+  e.dispatch({ type: "reorder", ids: [t2Id], parent: rowId, index: 1 });
+
+  const root = e.snapshot().pages[e.snapshot().page].root;
+  const row = root.children.find((c) => c.id === rowId);
+  const t1 = row.children.find((c) => c.id === t1Id);
+  const t2 = row.children.find((c) => c.id === t2Id);
+
+  // maxBaseline = 40 * 0.8 = 32.
+  // t1 baseline = 32 -> y = 32 - 32 = 0.
+  // t2 baseline = 20 * 0.8 = 16 -> y = 32 - 16 = 16.
+  t("t1 baseline aligned at top (y=0)", Math.round(t1.y) === 0);
+  t("t2 baseline shifted down to match t1 baseline (y=16)", Math.round(t2.y) === 16);
+}
+
+{
+  console.log("per-property instance override reset (Figma parity 12.21):");
+  const e = new MemoryEngine();
+  e.dispatch({ type: "add", kind: "frame", x: 0, y: 0, w: 200, h: 100, extra: { name: "CardMaster", fill: "#111111" } });
+  const mid = e.snapshot().selection[0];
+  e.dispatch({ type: "add", kind: "text", x: 10, y: 10, w: 100, h: 20, parent: mid, extra: { text: "Title" } });
+  e.dispatch({ type: "select", ids: [mid] });
+  e.dispatch({ type: "makeComponent" });
+
+  e.dispatch({ type: "placeComponent", id: mid, x: 300, y: 0 });
+  const instId = e.snapshot().selection[0];
+  const inst = e.snapshot().pages[e.snapshot().page].root.children.find((c) => c.id === instId);
+
+  // Apply two distinct overrides: text and fill
+  e.dispatch({ type: "patch", id: inst.children[0].id, patch: { text: "Custom Title" } });
+  e.dispatch({ type: "patch", id: instId, patch: { fill: "#e11d48" } });
+
+  const getInst = () => e.snapshot().pages[e.snapshot().page].root.children.find((c) => c.id === instId);
+  t("instance has custom fill and text overrides",
+    getInst().fill === "#e11d48" && getInst().children[0].text === "Custom Title");
+
+  // Reset only the fill override, keeping custom title intact
+  e.dispatch({ type: "resetOverrides", id: instId, property: "fill" });
+  t("resetOverrides with property:'fill' restores master fill", getInst().fill === "#111111");
+  t("resetOverrides with property:'fill' preserves text override", getInst().children[0].text === "Custom Title");
+}
+
+{
+  console.log("variables & collections (Figma parity 13.8, 13.9):");
+  const e = new MemoryEngine();
+  t("initial variables collection present", (e.snapshot().variables?.length ?? 0) >= 4);
+
+  e.dispatch({
+    type: "addVariable",
+    variable: { id: "brand-accent", name: "accent", type: "color", value: "#ff007f", collection: "Brand" },
+  });
+  t("addVariable registers new variable in Brand collection",
+    e.snapshot().variables?.some((v) => v.id === "brand-accent" && v.value === "#ff007f"));
+
+  e.dispatch({ type: "patchVariable", id: "brand-accent", patch: { value: "#00ffcc" } });
+  t("patchVariable updates variable value",
+    e.snapshot().variables?.find((v) => v.id === "brand-accent")?.value === "#00ffcc");
+
+  e.dispatch({ type: "deleteVariable", id: "brand-accent" });
+  t("deleteVariable removes variable",
+    !e.snapshot().variables?.some((v) => v.id === "brand-accent"));
+}
+
+{
+  console.log("effect types Glass & Texture (Figma parity 8.23, 8.24):");
+  const e = new MemoryEngine();
+  e.dispatch({
+    type: "add",
+    kind: "rect",
+    x: 0,
+    y: 0,
+    w: 120,
+    h: 120,
+    extra: {
+      effects: [
+        { kind: "glass", color: "#ffffff80", x: 0, y: 0, blur: 16, spread: 0, visible: true },
+        { kind: "texture", color: "#00000020", x: 0, y: 0, blur: 20, spread: 4, visible: true },
+      ],
+    },
+  });
+  const rectId = e.snapshot().selection[0];
+  const rect = e.snapshot().pages[e.snapshot().page].root.children.find((c) => c.id === rectId);
+  t("glass effect stored on node", rect?.effects?.some((fx) => fx.kind === "glass" && fx.blur === 16));
+  t("texture effect stored on node", rect?.effects?.some((fx) => fx.kind === "texture" && fx.spread === 4));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);

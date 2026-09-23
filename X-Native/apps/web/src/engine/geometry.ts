@@ -133,7 +133,7 @@ export function booleanPath(
   maxY += pad;
   const bw = Math.max(2, maxX - minX);
   const bh = Math.max(2, maxY - minY);
-  const res = 96;
+  const res = 160;
   const gw = res;
   const gh = Math.max(8, Math.round((bh / bw) * res));
   const sx = bw / gw;
@@ -182,7 +182,11 @@ export function booleanPath(
         cx = next[0];
         cy = next[1];
       }
-      if (ring.length >= 3) path.push(...simplify(ring, Math.max(sx, sy) * 0.85));
+      if (ring.length >= 3) {
+        const simp = simplify(ring, Math.max(sx, sy) * 0.85);
+        const curved = shapes.some((s) => s.poly.some((p) => (p.ox && p.ox !== 0) || (p.oy && p.oy !== 0)));
+        path.push(...(curved && simp.length >= 4 ? smoothPath(simp, true, 0.35) : simp));
+      }
     }
   }
   if (path.length < 3) return null;

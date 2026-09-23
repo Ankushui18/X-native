@@ -21,14 +21,14 @@ export type NodeKind =
 export type Overflow = "visible" | "clip" | "scrollx" | "scrolly" | "scrollboth";
 export type Sizing = "fixed" | "hug" | "fill";
 export type LayoutDirection = "horizontal" | "vertical";
-export type LayoutAlign = "min" | "center" | "max";
+export type LayoutAlign = "min" | "center" | "max" | "baseline";
 export type LayoutJustify = "min" | "center" | "max" | "between";
 export type TextAlign = "left" | "center" | "right" | "justified";
 export type TextAlignVertical = "top" | "middle" | "bottom";
 export type TextDecoration = "none" | "underline" | "strikethrough";
 export type TextCase = "none" | "upper" | "lower" | "title" | "small-caps";
 export type StrokeAlign = "inside" | "center" | "outside";
-export type StrokeCap = "none" | "round" | "square" | "arrow";
+export type StrokeCap = "none" | "round" | "square" | "arrow" | "triangle";
 export type StrokeJoin = "miter" | "bevel" | "round";
 export type Constraint = "min" | "center" | "max" | "stretch" | "scale";
 export type ExportFormat = "PNG" | "JPG" | "SVG" | "PDF";
@@ -42,11 +42,37 @@ export type EffectKind =
   | "layer-blur"
   | "background-blur"
   | "noise"
-  | "glass";
+  | "glass"
+  | "texture";
 export type BooleanOp = "union" | "subtract" | "intersect" | "exclude";
 export type ProtoTrigger = "onClick" | "onHover" | "afterDelay";
-export type ProtoAction = "navigate" | "back" | "openUrl";
+export type ProtoAction =
+  | "navigate"
+  | "back"
+  | "scrollTo"
+  | "openOverlay"
+  | "closeOverlay"
+  | "swapOverlay"
+  | "openUrl";
 export type ProtoAnim = "instant" | "dissolve" | "smart";
+
+export type VariableType = "color" | "number" | "string" | "boolean";
+
+export interface VariableItem {
+  id: string;
+  name: string;
+  type: VariableType;
+  value: string | number | boolean;
+  collection: string;
+}
+
+export interface AnnotationItem {
+  id: string;
+  nodeId: string;
+  note: string;
+  author?: string;
+  date?: string;
+}
 
 export interface PathPoint {
   x: number;
@@ -115,6 +141,19 @@ export interface ExportPreset {
 export interface GradientStop {
   color: string;
   position: number;
+}
+
+/**
+ * A character-level rich text styling run (matching x-core::TextRun).
+ */
+export interface TextRun {
+  start: number;
+  end: number;
+  fill?: string;
+  fontWeight?: number;
+  fontSize?: number;
+  fontFamily?: string;
+  textDecoration?: TextDecoration;
 }
 
 /**
@@ -279,6 +318,17 @@ export interface XNode {
   /** Set once the user renames a layer by hand, so automatic naming (e.g. a
    *  text layer following its content, as in Figma) stops overriding it. */
   nameLocked?: boolean;
+  /** Sizing constraints (Figma min/max width & height) */
+  minW?: number;
+  maxW?: number;
+  minH?: number;
+  maxH?: number;
+  /** Figma's Absolute position inside auto-layout frame */
+  absolutePosition?: boolean;
+  /** Rich text formatting runs */
+  textRuns?: TextRun[];
+  /** Preserved per-instance property overrides */
+  overrides?: Record<string, unknown>;
   text: string;
   fontFamily: string;
   fontSize: number;
@@ -383,6 +433,10 @@ export interface Snapshot {
   showComments: boolean;
   /** Thread whose popover is open, if any. */
   openComment: string;
+  /** Figma Variables / Tokens store */
+  variables?: VariableItem[];
+  /** Dev Mode Annotations store */
+  annotations?: AnnotationItem[];
 }
 
 export type Command =
@@ -473,7 +527,13 @@ export type Command =
   | { type: "outlineStroke" }
   | { type: "addVariant"; name: string }
   | { type: "setVariant"; id: string; name: string }
+  | { type: "resetOverrides"; id?: string; property?: string }
   | { type: "setInteractions"; id: string; interactions: Interaction[] }
+  | { type: "addVariable"; variable: VariableItem }
+  | { type: "patchVariable"; id: string; patch: Partial<VariableItem> }
+  | { type: "deleteVariable"; id: string }
+  | { type: "addAnnotation"; annotation: AnnotationItem }
+  | { type: "deleteAnnotation"; id: string }
   | { type: "presentStart"; id?: string }
   | { type: "presentGo"; id: string }
   | { type: "presentBack" }

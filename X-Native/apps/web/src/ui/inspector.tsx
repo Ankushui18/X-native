@@ -90,7 +90,7 @@ export function RightPanel({
         {snap.rightTab === "prototype" && !inspect && (
           <Prototype n={n} engine={engine} snap={snap} onPresent={onPresent} />
         )}
-        {inspect && <Inspect n={n} />}
+        {inspect && <Inspect n={n} engine={engine} snap={snap} />}
         {snap.rightTab === "design" && !inspect && !n && (
           <PageDesign engine={engine} tool={snap.tool} />
         )}
@@ -102,13 +102,58 @@ export function RightPanel({
   );
 }
 
-const PRESETS: { name: string; w: number; h: number }[] = [
-  { name: "iPhone 14", w: 390, h: 844 },
-  { name: "iPhone 14 Pro Max", w: 430, h: 932 },
-  { name: "Android", w: 360, h: 800 },
-  { name: "Desktop", w: 1440, h: 900 },
-  { name: "Tablet", w: 768, h: 1024 },
-  { name: "Slide 16:9", w: 1920, h: 1080 },
+interface PresetCategory {
+  category: string;
+  icon: string;
+  items: { name: string; w: number; h: number }[];
+}
+
+const PRESET_GROUPS: PresetCategory[] = [
+  {
+    category: "Phone",
+    icon: "phone",
+    items: [
+      { name: "iPhone 16 Pro", w: 393, h: 852 },
+      { name: "iPhone 16 Pro Max", w: 440, h: 956 },
+      { name: "iPhone 15 / 14", w: 393, h: 852 },
+      { name: "Google Pixel 8", w: 412, h: 915 },
+    ],
+  },
+  {
+    category: "Tablet",
+    icon: "tablet",
+    items: [
+      { name: "iPad Pro 11\"", w: 834, h: 1194 },
+      { name: "iPad Pro 12.9\"", w: 1024, h: 1366 },
+    ],
+  },
+  {
+    category: "Desktop",
+    icon: "desktop",
+    items: [
+      { name: "Desktop", w: 1440, h: 1024 },
+      { name: "MacBook Air", w: 1280, h: 832 },
+      { name: "MacBook Pro 14\"", w: 1512, h: 982 },
+      { name: "Wireframe", w: 1200, h: 800 },
+    ],
+  },
+  {
+    category: "Presentation",
+    icon: "slide",
+    items: [
+      { name: "Slide 16:9", w: 1920, h: 1080 },
+      { name: "Slide 4:3", w: 1024, h: 768 },
+    ],
+  },
+  {
+    category: "Social",
+    icon: "community",
+    items: [
+      { name: "Instagram Post", w: 1080, h: 1080 },
+      { name: "Instagram Story", w: 1080, h: 1920 },
+      { name: "X / Twitter Post", w: 1200, h: 675 },
+    ],
+  },
 ];
 
 function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
@@ -134,29 +179,37 @@ function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
       {tool === "frame" && (
         <>
           <div className="h-row">
-            <h3>Frame</h3>
+            <h3>Frame Presets</h3>
           </div>
-          <div className="presets">
-            {PRESETS.map((p) => (
-              <button
-                key={p.name}
-                onClick={() =>
-                  engine.dispatch({
-                    type: "add",
-                    kind: "frame",
-                    x: 80,
-                    y: 80,
-                    w: p.w,
-                    h: p.h,
-                    extra: { name: p.name, overflow: "clip", fill: "#ffffff", fillVisible: true },
-                  })
-                }
-              >
-                {p.name}
-                <span className="sz">
-                  {p.w} × {p.h}
-                </span>
-              </button>
+          <div className="presets" style={{ maxHeight: 340, overflowY: "auto" }}>
+            {PRESET_GROUPS.map((grp) => (
+              <div key={grp.category} style={{ marginBottom: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", padding: "4px 8px" }}>
+                  <Icon name={grp.icon} size={14} />
+                  <span>{grp.category}</span>
+                </div>
+                {grp.items.map((p) => (
+                  <button
+                    key={p.name}
+                    onClick={() =>
+                      engine.dispatch({
+                        type: "add",
+                        kind: "frame",
+                        x: 80,
+                        y: 80,
+                        w: p.w,
+                        h: p.h,
+                        extra: { name: p.name, overflow: "clip", fill: "#ffffff", fillVisible: true },
+                      })
+                    }
+                  >
+                    {p.name}
+                    <span className="sz">
+                      {p.w} × {p.h}
+                    </span>
+                  </button>
+                ))}
+              </div>
             ))}
           </div>
           <div className="hr" />
@@ -296,16 +349,23 @@ function Prototype({
             >
               <option value="navigate">Navigate to</option>
               <option value="back">Back</option>
-              <option value="openUrl">Open URL</option>
+              <option value="scrollTo">Scroll to</option>
+              <option value="openOverlay">Open overlay</option>
+              <option value="closeOverlay">Close overlay</option>
+              <option value="swapOverlay">Swap overlay</option>
+              <option value="openUrl">Open link</option>
             </select>
-            {ix.action === "navigate" && (
+            {(ix.action === "navigate" ||
+              ix.action === "scrollTo" ||
+              ix.action === "openOverlay" ||
+              ix.action === "swapOverlay") && (
               <select
                 value={ix.destination}
                 onChange={(e) =>
                   setIx(interactions.map((x, j) => (j === i ? { ...x, destination: e.target.value } : x)))
                 }
               >
-                <option value="">Choose frame…</option>
+                <option value="">Choose target…</option>
                 {frames
                   .filter((f) => f.id !== n.id)
                   .map((f) => (
@@ -356,37 +416,307 @@ function Prototype({
   );
 }
 
-function Inspect({ n }: { n?: XNode }) {
-  if (!n) return <p className="empty">Select a layer to inspect</p>;
-  const css = [
+type DevFormat = "css" | "tailwind" | "swiftui" | "compose";
+
+function generateCss(n: XNode): string {
+  const rules: string[] = [
+    `/* ${n.name} (${n.kind}) */`,
     `width: ${Math.round(n.w)}px;`,
     `height: ${Math.round(n.h)}px;`,
-    n.cornerRadii[0] ? `border-radius: ${n.cornerRadii[0]}px;` : "",
-    n.fill && n.fill !== "#00000000" ? `background: ${n.fill};` : "",
-    n.opacity < 1 ? `opacity: ${n.opacity};` : "",
-    n.layout
-      ? `display: flex;\nflex-direction: ${n.layout.direction === "horizontal" ? "row" : "column"};\ngap: ${n.layout.gap}px;`
-      : "",
-    n.kind === "text"
-      ? `font: ${n.fontWeight} ${n.fontSize}px ${n.fontFamily};`
-      : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  ];
+  if (n.cornerRadii && n.cornerRadii.some((r) => r > 0)) {
+    if (n.cornerIndependent) {
+      rules.push(`border-radius: ${n.cornerRadii.map((r) => `${r}px`).join(" ")};`);
+    } else {
+      rules.push(`border-radius: ${n.cornerRadii[0]}px;`);
+    }
+  }
+  if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") {
+    rules.push(`background: ${n.fill};`);
+  }
+  if (n.strokeVisible && n.strokeWidth > 0 && n.strokePaint) {
+    rules.push(`border: ${n.strokeWidth}px solid ${n.strokePaint};`);
+  }
+  if (n.opacity < 1) {
+    rules.push(`opacity: ${Math.round(n.opacity * 100) / 100};`);
+  }
+  if (n.layout) {
+    rules.push("display: flex;");
+    rules.push(`flex-direction: ${n.layout.direction === "horizontal" ? "row" : "column"};`);
+    if (n.layout.gap) rules.push(`gap: ${n.layout.gap}px;`);
+    const [pl, pr, pt, pb] = n.layout.padding;
+    if (pl || pr || pt || pb) {
+      rules.push(`padding: ${pt}px ${pr}px ${pb}px ${pl}px;`);
+    }
+    if (n.layout.align === "center") rules.push("align-items: center;");
+    else if (n.layout.align === "max") rules.push("align-items: flex-end;");
+    else if (n.layout.align === "baseline") rules.push("align-items: baseline;");
+    if (n.layout.justify === "center") rules.push("justify-content: center;");
+    else if (n.layout.justify === "between") rules.push("justify-content: space-between;");
+    else if (n.layout.justify === "max") rules.push("justify-content: flex-end;");
+    if (n.layout.wrap) rules.push("flex-wrap: wrap;");
+  }
+  if (n.kind === "text") {
+    rules.push(`font-family: "${n.fontFamily}", sans-serif;`);
+    rules.push(`font-size: ${n.fontSize}px;`);
+    rules.push(`font-weight: ${n.fontWeight};`);
+    if (n.lineHeight) rules.push(`line-height: ${Math.round(n.lineHeight)}px;`);
+    if (n.letterSpacing) rules.push(`letter-spacing: ${n.letterSpacing}px;`);
+    if (n.textAlign && n.textAlign !== "left") rules.push(`text-align: ${n.textAlign};`);
+  }
+  if (n.effects?.length) {
+    const shadows = n.effects
+      .filter((e) => e.visible && (e.kind === "drop-shadow" || e.kind === "inner-shadow"))
+      .map((e) => `${e.kind === "inner-shadow" ? "inset " : ""}${e.x}px ${e.y}px ${e.blur}px ${e.spread}px ${e.color}`);
+    if (shadows.length) rules.push(`box-shadow: ${shadows.join(", ")};`);
+  }
+  return rules.join("\n");
+}
+
+function generateTailwind(n: XNode): string {
+  const cls: string[] = [];
+  if (n.sizingW === "fill") cls.push("w-full");
+  else cls.push(`w-[${Math.round(n.w)}px]`);
+
+  if (n.sizingH === "fill") cls.push("h-full");
+  else cls.push(`h-[${Math.round(n.h)}px]`);
+
+  if (n.cornerRadii && n.cornerRadii[0] > 0) {
+    cls.push(`rounded-[${n.cornerRadii[0]}px]`);
+  }
+  if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") {
+    cls.push(`bg-[${n.fill}]`);
+  }
+  if (n.strokeVisible && n.strokeWidth > 0 && n.strokePaint) {
+    cls.push(`border-[${n.strokeWidth}px]`, `border-[${n.strokePaint}]`);
+  }
+  if (n.opacity < 1) {
+    cls.push(`opacity-${Math.round(n.opacity * 100)}`);
+  }
+  if (n.layout) {
+    cls.push("flex");
+    cls.push(n.layout.direction === "horizontal" ? "flex-row" : "flex-col");
+    if (n.layout.gap) cls.push(`gap-[${n.layout.gap}px]`);
+    const [pl, pr, pt, pb] = n.layout.padding;
+    if (pl === pr && pt === pb && pl === pt && pl > 0) cls.push(`p-[${pl}px]`);
+    else {
+      if (pl || pr) cls.push(`px-[${pl}px]`);
+      if (pt || pb) cls.push(`py-[${pt}px]`);
+    }
+    if (n.layout.align === "center") cls.push("items-center");
+    else if (n.layout.align === "max") cls.push("items-end");
+    else if (n.layout.align === "baseline") cls.push("items-baseline");
+    if (n.layout.justify === "center") cls.push("justify-center");
+    else if (n.layout.justify === "between") cls.push("justify-between");
+    else if (n.layout.justify === "max") cls.push("justify-end");
+    if (n.layout.wrap) cls.push("flex-wrap");
+  }
+  if (n.kind === "text") {
+    cls.push(`text-[${n.fontSize}px]`);
+    if (n.fontWeight >= 700) cls.push("font-bold");
+    else if (n.fontWeight >= 600) cls.push("font-semibold");
+    else if (n.fontWeight >= 500) cls.push("font-medium");
+    if (n.lineHeight) cls.push(`leading-[${Math.round(n.lineHeight)}px]`);
+    if (n.textAlign && n.textAlign !== "left") cls.push(`text-${n.textAlign}`);
+  }
+  return `<!-- ${n.name} -->\n<div className="${cls.join(" ")}">\n  {/* Children */}\n</div>`;
+}
+
+function generateSwiftUI(n: XNode): string {
+  const hex = (c: string) => c.replace("#", "").slice(0, 6).toUpperCase();
+  if (n.kind === "text") {
+    const weight = n.fontWeight >= 700 ? ".bold" : n.fontWeight >= 600 ? ".semibold" : n.fontWeight >= 500 ? ".medium" : ".regular";
+    return `Text("${n.text || n.name}")
+    .font(.system(size: ${n.fontSize}, weight: ${weight}))
+    .foregroundColor(Color(hex: "${hex(n.fill || "#000000")}"))`;
+  }
+  const stack = n.layout ? (n.layout.direction === "horizontal" ? "HStack" : "VStack") : "ZStack";
+  const spacing = n.layout?.gap ? `spacing: ${n.layout.gap}` : "";
+  const align = n.layout?.align === "center" ? "alignment: .center" : n.layout?.align === "max" ? "alignment: .trailing" : "";
+  const args = [align, spacing].filter(Boolean).join(", ");
+  const [pl, pr, pt, pb] = n.layout?.padding ?? [0, 0, 0, 0];
+  const padStr = pl || pr || pt || pb ? `\n    .padding(EdgeInsets(top: ${pt}, leading: ${pl}, bottom: ${pb}, trailing: ${pr}))` : "";
+  const bgStr = n.fillVisible !== false && n.fill && n.fill !== "#00000000" ? `\n    .background(Color(hex: "${hex(n.fill)}"))` : "";
+  const cornerStr = n.cornerRadii[0] > 0 ? `\n    .cornerRadius(${n.cornerRadii[0]})` : "";
+  const borderStr = n.strokeVisible && n.strokeWidth > 0 ? `\n    .overlay(RoundedRectangle(cornerRadius: ${n.cornerRadii[0] || 0}).stroke(Color(hex: "${hex(n.strokePaint)}"), lineWidth: ${n.strokeWidth}))` : "";
+
+  return `${stack}(${args}) {
+    // Child views
+}
+.frame(width: ${Math.round(n.w)}, height: ${Math.round(n.h)})${padStr}${bgStr}${cornerStr}${borderStr}`;
+}
+
+function generateCompose(n: XNode): string {
+  const hex8 = (c: string) => "0xFF" + c.replace("#", "").slice(0, 6).toUpperCase();
+  if (n.kind === "text") {
+    const weight = n.fontWeight >= 700 ? "Bold" : n.fontWeight >= 600 ? "SemiBold" : n.fontWeight >= 500 ? "Medium" : "Normal";
+    return `Text(
+    text = "${n.text || n.name}",
+    fontSize = ${n.fontSize}.sp,
+    fontWeight = FontWeight.${weight},
+    color = Color(${hex8(n.fill || "#000000")})
+)`;
+  }
+  const container = n.layout ? (n.layout.direction === "horizontal" ? "Row" : "Column") : "Box";
+  const mod: string[] = [`Modifier.size(${Math.round(n.w)}.dp, ${Math.round(n.h)}.dp)`];
+  if (n.cornerRadii[0] > 0) mod.push(`clip(RoundedCornerShape(${n.cornerRadii[0]}.dp))`);
+  if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") mod.push(`background(Color(${hex8(n.fill)}))`);
+  if (n.strokeVisible && n.strokeWidth > 0) mod.push(`border(${n.strokeWidth}.dp, Color(${hex8(n.strokePaint)}))`);
+  const [pl, pr, pt, pb] = n.layout?.padding ?? [0, 0, 0, 0];
+  if (pl || pr || pt || pb) mod.push(`padding(${pt}.dp, ${pr}.dp, ${pb}.dp, ${pl}.dp)`);
+
+  return `${container}(
+    modifier = ${mod.join("\n        .")}
+) {
+    // Child composables
+}`;
+}
+
+function BoxModelDiagram({ n }: { n: XNode }) {
+  const [pl, pr, pt, pb] = n.layout?.padding ?? [0, 0, 0, 0];
+  return (
+    <div className="box-model-diagram">
+      <div className="bm-padding-label">padding: {pt} {pr} {pb} {pl}</div>
+      <div className="bm-outer">
+        <div className="bm-pad-box">
+          <div className="bm-inner">
+            <span className="bm-dims">{Math.round(n.w)} × {Math.round(n.h)}</span>
+            {n.cornerRadii[0] > 0 && <span className="bm-radius">r:{n.cornerRadii[0]}</span>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Inspect({ n, engine, snap }: { n?: XNode; engine?: Engine; snap?: Snapshot }) {
+  const [format, setFormat] = useState<DevFormat>("css");
+  const [note, setNote] = useState("");
+  if (!n) return <p className="empty">Select a layer to inspect</p>;
+
+  let code = "";
+  if (format === "css") code = generateCss(n);
+  else if (format === "tailwind") code = generateTailwind(n);
+  else if (format === "swiftui") code = generateSwiftUI(n);
+  else if (format === "compose") code = generateCompose(n);
+
+  const copy = () => {
+    copyText(code);
+    toast(`Copied ${format.toUpperCase()} code`);
+  };
+
+  const layerAnnotations = snap?.annotations?.filter((a) => a.nodeId === n.id) ?? [];
+
   return (
     <>
       <div className="h-row">
-        <h3>CSS</h3>
-        <button
-          className="plus"
-          title="Copy CSS"
-          onClick={() => copyText(css)}
-        >
+        <h3>Inspect</h3>
+        <button className="plus" title={`Copy ${format.toUpperCase()}`} onClick={copy}>
           <Icon name="copy" size={14} />
         </button>
       </div>
-      <pre className="css-block">{css}</pre>
-      <p className="muted">Dev Mode — copy CSS from the selected layer.</p>
+
+      <div className="dir-row" style={{ padding: "0 12px", marginBottom: 8 }}>
+        <div className="seg" style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr" }}>
+          <button className={format === "css" ? "on" : ""} onClick={() => setFormat("css")}>CSS</button>
+          <button className={format === "tailwind" ? "on" : ""} onClick={() => setFormat("tailwind")}>Tailwind</button>
+          <button className={format === "swiftui" ? "on" : ""} onClick={() => setFormat("swiftui")}>SwiftUI</button>
+          <button className={format === "compose" ? "on" : ""} onClick={() => setFormat("compose")}>Compose</button>
+        </div>
+      </div>
+
+      <div className="insp-pad">
+        <BoxModelDiagram n={n} />
+        <pre className="css-block" style={{ maxHeight: 240, overflowY: "auto" }}>{code}</pre>
+        <button className="export-run" onClick={copy} style={{ marginTop: 8 }}>
+          Copy {format.toUpperCase()}
+        </button>
+      </div>
+
+      <div className="hr" />
+      <div className="h-row">
+        <h3>Annotations</h3>
+        <span style={{ fontSize: 10, color: "var(--dim)", marginLeft: "auto" }}>⇧T</span>
+      </div>
+      <div className="insp-pad" style={{ display: "grid", gap: 6 }}>
+        {layerAnnotations.map((ann) => (
+          <div
+            key={ann.id}
+            style={{
+              padding: 8,
+              borderRadius: 6,
+              background: "var(--hover)",
+              borderLeft: "3px solid #10b981",
+              fontSize: 11,
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <span>{ann.note}</span>
+            <button
+              className="icon-btn"
+              title="Delete note"
+              onClick={() => engine?.dispatch({ type: "deleteAnnotation", id: ann.id })}
+            >
+              <Icon name="trash" size={12} />
+            </button>
+          </div>
+        ))}
+        <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+          <input
+            placeholder="Add note for dev…"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && note.trim() && engine) {
+                engine.dispatch({
+                  type: "addAnnotation",
+                  annotation: {
+                    id: "ann_" + Date.now(),
+                    nodeId: n.id,
+                    note: note.trim(),
+                    date: new Date().toLocaleTimeString(),
+                  },
+                });
+                setNote("");
+                toast("Annotation added");
+              }
+            }}
+            style={{
+              flex: 1,
+              height: 28,
+              background: "var(--input)",
+              border: "1px solid var(--line)",
+              borderRadius: 6,
+              padding: "0 8px",
+              fontSize: 11,
+              color: "var(--text)",
+            }}
+          />
+          <button
+            className="icon-btn"
+            title="Add note"
+            onClick={() => {
+              if (note.trim() && engine) {
+                engine.dispatch({
+                  type: "addAnnotation",
+                  annotation: {
+                    id: "ann_" + Date.now(),
+                    nodeId: n.id,
+                    note: note.trim(),
+                    date: new Date().toLocaleTimeString(),
+                  },
+                });
+                setNote("");
+                toast("Annotation added");
+              }
+            }}
+          >
+            <Icon name="plus" size={14} />
+          </button>
+        </div>
+      </div>
     </>
   );
 }
@@ -448,6 +778,8 @@ function Design({
           ? "Rectangle"
           : n.kind[0].toUpperCase() + n.kind.slice(1);
   const patch = (p: Partial<XNode>) => engine.dispatch({ type: "patch", id: n.id, patch: p });
+  const parent = findParent(snap.pages[snap.page].root, n.id);
+  const hasAutoLayoutParent = !!parent?.layout;
   return (
     <>
       <div className="layer-type">
@@ -509,26 +841,44 @@ function Design({
             <h3>Boolean</h3>
           </div>
           <div className="insp-pad">
-            <div className="seg">
+            <div className="seg icons">
               {(["union", "subtract", "intersect", "exclude"] as const).map((op) => (
                 <button
                   key={op}
-                  title={op[0].toUpperCase() + op.slice(1)}
+                  title={`Boolean ${op[0].toUpperCase() + op.slice(1)}`}
                   onClick={() => engine.dispatch({ type: "boolean", op })}
                 >
-                  {op[0].toUpperCase() + op.slice(1)}
+                  <Icon name={`boolean-${op}`} size={16} />
                 </button>
               ))}
             </div>
-            <button style={{ marginTop: 6 }} onClick={() => engine.dispatch({ type: "flatten" })}>
-              Flatten
+            <button
+              style={{ marginTop: 6, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+              onClick={() => engine.dispatch({ type: "flatten" })}
+            >
+              <Icon name="flatten" size={14} />
+              <span>Flatten</span>
             </button>
           </div>
         </>
       )}
       {multi && <SelectionColors engine={engine} snap={snap} />}
 
-      <Section id="position" title="Position">
+      <Section
+        id="position"
+        title="Position"
+        actions={
+          hasAutoLayoutParent ? (
+            <button
+              className={`plus${n.absolutePosition ? " on" : ""}`}
+              title={n.absolutePosition ? "In auto layout flow" : "Absolute position (exclude from auto layout flow)"}
+              onClick={() => patch({ absolutePosition: !n.absolutePosition })}
+            >
+              <Icon name="absolute" size={14} />
+            </button>
+          ) : undefined
+        }
+      >
       <div className="insp-pad">
         <div className="align">
           <div className="g">
@@ -709,6 +1059,22 @@ function Design({
             <Icon name="aspect" size={14} />
           </button>
         </div>
+        <div className="grid2" style={{ marginTop: 4 }}>
+          <Field label="Min W" value={n.minW || 0} onChange={(v) => patch({ minW: v > 0 ? v : undefined })} />
+          <Field label="Max W" value={n.maxW || 0} onChange={(v) => patch({ maxW: v > 0 ? v : undefined })} />
+          <Field label="Min H" value={n.minH || 0} onChange={(v) => patch({ minH: v > 0 ? v : undefined })} />
+          <Field label="Max H" value={n.maxH || 0} onChange={(v) => patch({ maxH: v > 0 ? v : undefined })} />
+        </div>
+        {hasAutoLayoutParent && (
+          <label className="check" style={{ marginTop: 6, paddingLeft: 0 }}>
+            <input
+              type="checkbox"
+              checked={!!n.absolutePosition}
+              onChange={(e) => patch({ absolutePosition: e.target.checked })}
+            />
+            Absolute position (in auto layout)
+          </label>
+        )}
       </div>
       <label className="check">
         <input
@@ -817,6 +1183,24 @@ function Design({
             >
               <Icon name="distribute-h" />
             </button>
+            {n.layout.direction === "horizontal" && (
+              <button
+                className={`icon-btn${n.layout.align === "baseline" ? " on" : ""}`}
+                title={n.layout.align === "baseline" ? "Baseline alignment active" : "Align to text baseline"}
+                onClick={() =>
+                  engine.dispatch({
+                    type: "autoLayout",
+                    id: n.id,
+                    layout: {
+                      ...n.layout!,
+                      align: n.layout!.align === "baseline" ? "min" : "baseline",
+                    },
+                  })
+                }
+              >
+                <Icon name="align-bottom" />
+              </button>
+            )}
           </div>
           <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
             <Field
@@ -1173,14 +1557,14 @@ function Design({
           </div>
           <div className="stroke-ends">
           <div className="seg icons">
-            {(["none", "round", "square", "arrow"] as StrokeCap[]).map((c) => (
+            {(["none", "round", "square", "arrow", "triangle"] as StrokeCap[]).map((c) => (
               <button
                 key={c}
                 className={n.strokeCap === c ? "on" : ""}
                 title={c === "none" ? "Cap butt" : `Cap ${c}`}
                 onClick={() => patch({ strokeCap: c })}
               >
-                <Icon name={c === "arrow" ? "arrow" : `cap-${c}`} size={14} />
+                <Icon name={c === "arrow" ? "arrow" : c === "triangle" ? "poly" : `cap-${c}`} size={14} />
               </button>
             ))}
           </div>
@@ -1344,22 +1728,34 @@ function Design({
               />
               <Field label="↔" value={n.letterSpacing} onChange={(v) => num("letterSpacing", v)} />
             </div>
-            <div className="field">
-              <select
-                value={
-                  n.sizingW === "hug" ? "auto-width" : n.sizingH === "hug" ? "auto-height" : "fixed"
-                }
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (v === "auto-width") patch({ sizingW: "hug", sizingH: "hug" });
-                  else if (v === "auto-height") patch({ sizingW: "fixed", sizingH: "hug" });
-                  else patch({ sizingW: "fixed", sizingH: "fixed" });
-                }}
-              >
-                <option value="auto-width">Auto width</option>
-                <option value="auto-height">Auto height</option>
-                <option value="fixed">Fixed size</option>
-              </select>
+            <div className="seg" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", width: "100%", margin: "2px 0" }}>
+              <Tooltip label="Auto width" shortcut="">
+                <button
+                  className={n.sizingW === "hug" ? "on" : ""}
+                  onClick={() => patch({ sizingW: "hug", sizingH: "hug" })}
+                >
+                  <Icon name="text-auto-width" size={14} />
+                  <span style={{ fontSize: 10, marginLeft: 4 }}>Auto W</span>
+                </button>
+              </Tooltip>
+              <Tooltip label="Auto height" shortcut="">
+                <button
+                  className={n.sizingW !== "hug" && n.sizingH === "hug" ? "on" : ""}
+                  onClick={() => patch({ sizingW: "fixed", sizingH: "hug" })}
+                >
+                  <Icon name="text-auto-height" size={14} />
+                  <span style={{ fontSize: 10, marginLeft: 4 }}>Auto H</span>
+                </button>
+              </Tooltip>
+              <Tooltip label="Fixed size" shortcut="">
+                <button
+                  className={n.sizingW !== "hug" && n.sizingH !== "hug" ? "on" : ""}
+                  onClick={() => patch({ sizingW: "fixed", sizingH: "fixed" })}
+                >
+                  <Icon name="text-fixed" size={14} />
+                  <span style={{ fontSize: 10, marginLeft: 4 }}>Fixed</span>
+                </button>
+              </Tooltip>
             </div>
             <div className="seg icons">
               {(["left", "center", "right", "justified"] as TextAlign[]).map((a) => (
@@ -1564,6 +1960,12 @@ function EffectPopover({
           onOpacity={(v) => onChange({ color: withAlpha(fx.color, v / 100) })}
         />
       )}
+      {fx.kind === "texture" && (
+        <div className="grid2">
+          <Field label="Density" aria="Texture density" value={fx.blur} onChange={(v) => onChange({ blur: v })} />
+          <Field label="Scale" aria="Texture scale" value={fx.spread} onChange={(v) => onChange({ spread: v })} />
+        </div>
+      )}
     </div>
   );
 }
@@ -1575,6 +1977,7 @@ const EFFECT_LABEL: Record<string, string> = {
   "background-blur": "Background blur",
   noise: "Noise",
   glass: "Glass",
+  texture: "Texture",
 };
 
 function Effects({ n, engine }: { n: XNode; engine: Engine }) {
@@ -1587,6 +1990,7 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
     { id: "background-blur", label: "Background blur" },
     { id: "noise", label: "Noise" },
     { id: "glass", label: "Glass" },
+    { id: "texture", label: "Texture" },
   ];
   const effects = n.effects ?? [];
   const set = (i: number, p: Partial<Effect>) => {

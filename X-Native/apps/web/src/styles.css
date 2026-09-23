@@ -506,7 +506,8 @@ html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }
   border-left: 3.5px solid transparent;
   border-top: 3.5px solid currentColor;
   opacity: 0.55;
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: pointer;
 }
 .tool .fly {
   position: absolute;
@@ -1326,6 +1327,149 @@ body.eyedrop, body.eyedrop * { cursor: crosshair !important; }
   box-shadow: var(--shadow);
   padding: 8px 0 12px;
 }
+.help-card.shortcuts-sheet {
+  width: 600px;
+  max-width: 92vw;
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+.shortcuts-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.shortcuts-head h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.shortcuts-close {
+  background: transparent;
+  border: 0;
+  color: var(--dim);
+  cursor: pointer;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  padding: 4px;
+}
+.shortcuts-close:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.shortcuts-search {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.shortcuts-search input {
+  width: 100%;
+  height: 30px;
+  background: var(--input);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 10px;
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+  box-sizing: border-box;
+}
+.shortcuts-search input:focus {
+  border-color: var(--blue);
+}
+.shortcuts-tabs {
+  display: flex;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+  padding: 0 12px;
+  gap: 2px;
+}
+.shortcuts-tabs button {
+  background: transparent;
+  border: 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--dim);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+}
+.shortcuts-tabs button:hover {
+  color: var(--text);
+}
+.shortcuts-tabs button.active {
+  color: var(--blue);
+  border-bottom-color: var(--blue);
+  font-weight: 600;
+}
+.shortcuts-body {
+  padding: 12px 16px;
+  overflow-y: auto;
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 8px 14px;
+}
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--hover);
+  font-size: 12px;
+  color: var(--text);
+  border: 1px solid transparent;
+  transition: all 0.15s ease;
+}
+.shortcut-row.used {
+  background: rgba(13, 153, 255, 0.08);
+  border: 1px solid rgba(13, 153, 255, 0.3);
+}
+.shortcut-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.shortcut-row .used-badge {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--blue);
+  flex-shrink: 0;
+}
+.shortcut-keys {
+  display: flex;
+  gap: 3px;
+  align-items: center;
+}
+.shortcut-keys kbd {
+  background: var(--elevated);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 600;
+  box-shadow: 0 1px 1px rgba(0,0,0,0.1);
+  color: var(--text);
+}
+.shortcuts-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--dim);
+}
 .help-card h4 {
   margin: 0;
   padding: 12px 16px 8px;
@@ -1746,3 +1890,47 @@ input:focus-visible,
   line-height: 0;
 }
 .minimap canvas { border-radius: 4px; cursor: pointer; display: block; }
+
+/* Dev Mode Box Model ---------------------------------------------------- */
+.box-model-diagram {
+  background: var(--input);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 8px;
+  font-size: 10px;
+  text-align: center;
+  color: var(--muted);
+}
+.bm-padding-label {
+  font-size: 9px;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.bm-outer {
+  border: 1px dashed var(--blue);
+  border-radius: 4px;
+  padding: 6px;
+  background: rgba(13, 153, 255, 0.05);
+}
+.bm-pad-box {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.bm-inner {
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  padding: 6px 12px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--text);
+  font-weight: 500;
+}
+.bm-radius {
+  font-size: 9px;
+  color: var(--muted);
+}

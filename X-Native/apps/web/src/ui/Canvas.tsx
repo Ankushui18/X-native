@@ -78,9 +78,17 @@ type Drag =
         | "vec"
         | "grad"
         | "multiResize"
-        | "multiRotate";
+        | "multiRotate"
+        | "autoPad"
+        | "autoGap"
+        | "protoConnect";
       point?: number;
       handle?: "in" | "out" | "g" | "h";
+      padEdge?: "top" | "right" | "bottom" | "left";
+      origPad?: [number, number, number, number];
+      origGap?: number;
+      fromX?: number;
+      fromY?: number;
       sx: number;
       sy: number;
       wx: number;
@@ -143,6 +151,16 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   /** Live smart-guide overlay, produced by the snapping pass during a drag. */
   const [guides, setGuides] = useState<Guide[]>([]);
   const [gapBadges, setGapBadges] = useState<GapBadge[]>([]);
+  /** Live Alt/Option distance measurement state */
+  const [altMeasure, setAltMeasure] = useState(false);
+  /** Live prototype connection dragging state */
+  const [protoDrag, setProtoDrag] = useState<{
+    fromX: number;
+    fromY: number;
+    toX: number;
+    toY: number;
+    targetId?: string;
+  } | null>(null);
   /** Static snap targets, captured once at drag start so they never shift mid-drag. */
   const snapTargets = useRef<Box[]>([]);
   const { theme } = useTheme();
@@ -151,8 +169,24 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       const run = () => {
         if (ix.action === "back") engine.dispatch({ type: "presentBack" });
         else if (ix.action === "navigate" && ix.destination) engine.dispatch({ type: "presentGo", id: ix.destination });
-        else if (ix.action === "openUrl" && ix.destination)
-          window.open(ix.destination, "_blank", "noopener,noreferrer");
+        else if (ix.action === "openUrl" && ix.destination) {
+          const url = /^https?:\/\//i.test(ix.destination) ? ix.destination : `https://${ix.destination}`;
+          window.open(url, "_blank", "noopener,noreferrer");
+        } else if (ix.action === "scrollTo" && ix.destination) {
+          const root = engine.snapshot().pages[engine.snapshot().page].root;
+          const target = worldPos(root, ix.destination);
+          if (target) {
+            engine.dispatch({
+              type: "setPan",
+              x: -target.x * engine.snapshot().zoom + 120,
+              y: -target.y * engine.snapshot().zoom + 120,
+            });
+          }
+        } else if (ix.action === "openOverlay" && ix.destination) {
+          engine.dispatch({ type: "presentGo", id: ix.destination });
+        } else if (ix.action === "closeOverlay") {
+          engine.dispatch({ type: "presentBack" });
+        }
       };
       if (ix.animation === "instant" || ix.action === "openUrl") {
         run();
@@ -169,6 +203,9 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Alt") {
+        setAltMeasure(e.type === "keydown");
+      }
       if (e.code === "Space") {
         space.current = e.type === "keydown";
         if (e.type === "keydown" && (e.target as HTMLElement).tagName !== "INPUT" && (e.target as HTMLElement).tagName !== "TEXTAREA")
@@ -256,7 +293,27 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         const n = worldPos(snap.pages[snap.page].root, vecEdit)?.node;
         if (n?.path.length) {
           const i = vecPt.current >= 0 ? vecPt.current : n.path.length - 1;
-          const path = n.path.filter((_, j) => j !== i);
+          const isHeal = e.shiftKey;
+          let path = [...n.path];
+          if (isHeal && path.length >= 3) {
+            const prevIdx = i > 0 ? i - 1 : (n.closed ? path.length - 1 : null);
+            const nextIdx = i < path.length - 1 ? i + 1 : (n.closed ? 0 : null);
+            if (prevIdx !== null && nextIdx !== null) {
+              const p0 = path[prevIdx];
+              const p1 = path[nextIdx];
+              const dx = p1.x - p0.x;
+              const dy = p1.y - p0.y;
+              const dist = Math.hypot(dx, dy);
+              if (dist > 0.001) {
+                const tx = (dx / dist) * Math.min(dist / 3, 30);
+                const ty = (dy / dist) * Math.min(dist / 3, 30);
+                path[prevIdx] = { ...p0, ox: tx, oy: ty };
+                path[nextIdx] = { ...p1, ix: -tx, iy: -ty };
+              }
+            }
+            toast("Point deleted & healed");
+          }
+          path = path.filter((_, j) => j !== i);
           engine.dispatch({ type: "patchPath", id: n.id, path, closed: n.closed });
           vecPt.current = Math.min(i, path.length - 1);
           e.stopImmediatePropagation();
@@ -418,7 +475,16 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           ctx.moveTo(sx, sy + sh / 2);
           ctx.lineTo(sx + sw, sy + sh / 2);
         } else if (n.kind === "star") {
-          starPath(ctx, sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), n.count || 5, n.starRatio || 0.4);
+          starPath(
+            ctx,
+            sx + sw / 2,
+            sy + sh / 2,
+            Math.abs(sw / 2),
+            Math.abs(sh / 2),
+            n.count || 5,
+            n.starRatio || 0.4,
+            n.cornerRadii[0] || 0,
+          );
         } else if (n.kind === "poly") {
           polyPath(ctx, sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), n.count || 3);
         } else {
@@ -485,6 +551,8 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         ctx.fill();
         ctx.restore();
       }
+      const texture = (n.effects ?? []).find((e) => e.kind === "texture" && e.visible);
+      if (texture) paintTexture(ctx, sx, sy, sw, sh, texture.blur || 16, texture.spread || 4);
       ctx.shadowColor = "transparent";
       ctx.shadowBlur = 0;
       ctx.shadowOffsetX = 0;
@@ -523,7 +591,9 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         }
         const arrowCap =
           n.kind === "arrow" ||
-          ((n.kind === "line" || n.kind === "vector") && !n.closed && n.strokeCap === "arrow");
+          ((n.kind === "line" || n.kind === "vector") &&
+            !n.closed &&
+            (n.strokeCap === "arrow" || n.strokeCap === "triangle"));
         if (arrowCap) {
           ctx.setLineDash([]);
           const ah = Math.max(6, n.strokeWidth * 3 * z);
@@ -542,10 +612,11 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             ux = dx / len;
             uy = dy / len;
           }
+          const kw = n.strokeCap === "triangle" ? 0.75 : 0.55;
           ctx.beginPath();
           ctx.moveTo(ex, ey);
-          ctx.lineTo(ex - ux * ah - uy * ah * 0.55, ey - uy * ah + ux * ah * 0.55);
-          ctx.lineTo(ex - ux * ah + uy * ah * 0.55, ey - uy * ah - ux * ah * 0.55);
+          ctx.lineTo(ex - ux * ah - uy * ah * kw, ey - uy * ah + ux * ah * kw);
+          ctx.lineTo(ex - ux * ah + uy * ah * kw, ey - uy * ah - ux * ah * kw);
           ctx.closePath();
           ctx.fillStyle = cssRgba(n.strokePaint);
           ctx.fill();
@@ -673,13 +744,97 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         ctx.bezierCurveTo(ax + 40, ay, bx - 40, by, bx, by);
         ctx.stroke();
         ctx.beginPath();
-        ctx.arc(ax, ay, 5, 0, Math.PI * 2);
+        ctx.arc(ax, ay, 4, 0, Math.PI * 2);
         ctx.fillStyle = "#0d99ff";
         ctx.fill();
+        // Destination arrowhead
+        ctx.fillStyle = "#0d99ff";
+        ctx.beginPath();
+        ctx.moveTo(bx, by);
+        ctx.lineTo(bx - 7, by - 4);
+        ctx.lineTo(bx - 7, by + 4);
+        ctx.closePath();
+        ctx.fill();
       });
+
+      // Hotspot on selected node in prototype mode
+      if (snap.selection.length === 1) {
+        const wp = worldPos(root, snap.selection[0]);
+        if (wp) {
+          const cx = snap.panX + (wp.x + wp.node.w) * z;
+          const cy = snap.panY + (wp.y + wp.node.h / 2) * z;
+          ctx.beginPath();
+          ctx.arc(cx, cy, 7, 0, Math.PI * 2);
+          ctx.fillStyle = "#0d99ff";
+          ctx.fill();
+          ctx.lineWidth = 1.5;
+          ctx.strokeStyle = "#ffffff";
+          ctx.stroke();
+          // Plus symbol
+          ctx.beginPath();
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = 1.5;
+          ctx.moveTo(cx - 3.5, cy);
+          ctx.lineTo(cx + 3.5, cy);
+          ctx.moveTo(cx, cy - 3.5);
+          ctx.lineTo(cx, cy + 3.5);
+          ctx.stroke();
+        }
+      }
+
+      // Live dragging noodle
+      if (protoDrag) {
+        const ax = snap.panX + protoDrag.fromX * z;
+        const ay = snap.panY + protoDrag.fromY * z;
+        const bx = snap.panX + protoDrag.toX * z;
+        const by = snap.panY + protoDrag.toY * z;
+        ctx.strokeStyle = "#0d99ff";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.bezierCurveTo(ax + 50, ay, bx - 50, by, bx, by);
+        ctx.stroke();
+
+        ctx.fillStyle = "#0d99ff";
+        ctx.beginPath();
+        ctx.arc(bx, by, 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Highlight candidate destination frame
+        if (protoDrag.targetId) {
+          const twp = worldPos(root, protoDrag.targetId);
+          if (twp) {
+            ctx.strokeStyle = "#0d99ff";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(
+              snap.panX + twp.x * z,
+              snap.panY + twp.y * z,
+              twp.node.w * z,
+              twp.node.h * z,
+            );
+          }
+        }
+      }
     }
 
     if (snap.presentFrame) return;
+
+    if (snap.rightTab === "inspect" && snap.annotations?.length) {
+      for (const ann of snap.annotations) {
+        const wp = worldPos(root, ann.nodeId);
+        if (wp) {
+          const ax = snap.panX + (wp.x + wp.node.w) * z;
+          const ay = snap.panY + wp.y * z;
+          ctx.beginPath();
+          ctx.arc(ax, ay, 6, 0, Math.PI * 2);
+          ctx.fillStyle = "#10b981";
+          ctx.fill();
+          ctx.lineWidth = 1.5;
+          ctx.strokeStyle = "#ffffff";
+          ctx.stroke();
+        }
+      }
+    }
 
     if (hoverId && !snap.selection.includes(hoverId)) {
       const hp = worldPos(root, hoverId);
@@ -787,6 +942,55 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         ctx.arc(bx, by, 6, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
+      }
+      if (wp.node.layout) {
+        const l = wp.node.layout;
+        const [pl, pr, pt, pb] = l.padding;
+        const pink = "#ff2d55";
+        ctx.fillStyle = pink;
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 1;
+
+        // Top padding handle
+        const ty = sy + pt * z;
+        ctx.beginPath();
+        ctx.arc(sx + sw / 2, ty, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Bottom padding handle
+        const by = sy + sh - pb * z;
+        ctx.beginPath();
+        ctx.arc(sx + sw / 2, by, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Left padding handle
+        const lx = sx + pl * z;
+        ctx.beginPath();
+        ctx.arc(lx, sy + sh / 2, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Right padding handle
+        const rx = sx + sw - pr * z;
+        ctx.beginPath();
+        ctx.arc(rx, sy + sh / 2, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Gap handle between children
+        const flowKids = wp.node.children.filter((c) => c.visible && !c.absolutePosition);
+        if (flowKids.length >= 2) {
+          const c0 = flowKids[0];
+          const horiz = l.direction === "horizontal";
+          const gx = horiz ? sx + (c0.x + c0.w + l.gap / 2) * z : sx + sw / 2;
+          const gy = horiz ? sy + sh / 2 : sy + (c0.y + c0.h + l.gap / 2) * z;
+          ctx.beginPath();
+          ctx.arc(gx, gy, 4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        }
       }
       ctx.restore();
     }
@@ -931,6 +1135,99 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       }
     }
 
+    if (altMeasure && snap.selection.length === 1 && !drag.current) {
+      const A = worldPos(root, snap.selection[0]);
+      if (A) {
+        ctx.save();
+        ctx.strokeStyle = "#ff3b6b";
+        ctx.fillStyle = "#ff3b6b";
+        ctx.lineWidth = 1;
+        ctx.font = "500 10px Inter, system-ui";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+
+        const drawBadge = (label: string, x: number, y: number) => {
+          const bw = ctx.measureText(label).width + 8;
+          ctx.fillStyle = "#ff3b6b";
+          if (typeof ctx.roundRect === "function") {
+            ctx.beginPath();
+            ctx.roundRect(x - bw / 2, y - 7, bw, 14, 3);
+            ctx.fill();
+          } else ctx.fillRect(x - bw / 2, y - 7, bw, 14);
+          ctx.fillStyle = "#ffffff";
+          ctx.fillText(label, x, y);
+          ctx.fillStyle = "#ff3b6b";
+        };
+
+        const drawMeasLine = (x1: number, y1: number, x2: number, y2: number, label: string) => {
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x2, y2);
+          ctx.stroke();
+          drawBadge(label, (x1 + x2) / 2, (y1 + y2) / 2);
+        };
+
+        const targetWp = hoverId && hoverId !== A.node.id ? worldPos(root, hoverId) : null;
+        if (targetWp) {
+          const B = targetWp;
+          const bsx = snap.panX + B.x * z;
+          const bsy = snap.panY + B.y * z;
+          const bsw = B.node.w * z;
+          const bsh = B.node.h * z;
+          ctx.strokeRect(bsx + 0.5, bsy + 0.5, bsw, bsh);
+
+          const asx = snap.panX + A.x * z;
+          const asy = snap.panY + A.y * z;
+          const asw = A.node.w * z;
+          const ash = A.node.h * z;
+
+          if (B.x >= A.x + A.node.w) {
+            const d = Math.round(B.x - (A.x + A.node.w));
+            const yMid = Math.max(asy, bsy) + Math.min(ash, bsh) / 2;
+            drawMeasLine(asx + asw, yMid, bsx, yMid, `${d}`);
+          } else if (A.x >= B.x + B.node.w) {
+            const d = Math.round(A.x - (B.x + B.node.w));
+            const yMid = Math.max(asy, bsy) + Math.min(ash, bsh) / 2;
+            drawMeasLine(bsx + bsw, yMid, asx, yMid, `${d}`);
+          }
+
+          if (B.y >= A.y + A.node.h) {
+            const d = Math.round(B.y - (A.y + A.node.h));
+            const xMid = Math.max(asx, bsx) + Math.min(asw, bsw) / 2;
+            drawMeasLine(xMid, asy + ash, xMid, bsy, `${d}`);
+          } else if (A.y >= B.y + B.node.h) {
+            const d = Math.round(A.y - (B.y + B.node.h));
+            const xMid = Math.max(asx, bsx) + Math.min(asw, bsw) / 2;
+            drawMeasLine(xMid, bsy + bsh, xMid, asy, `${d}`);
+          }
+        } else {
+          const par = findParent(root, A.node.id);
+          const parWp = par && par.id !== root.id ? worldPos(root, par.id) : null;
+          if (parWp) {
+            const psx = snap.panX + parWp.x * z;
+            const psy = snap.panY + parWp.y * z;
+            const psw = parWp.node.w * z;
+            const psh = parWp.node.h * z;
+            const asx = snap.panX + A.x * z;
+            const asy = snap.panY + A.y * z;
+            const asw = A.node.w * z;
+            const ash = A.node.h * z;
+
+            ctx.setLineDash([3, 2]);
+            const topD = Math.round(A.y - parWp.y);
+            if (topD > 0) drawMeasLine(asx + asw / 2, psy, asx + asw / 2, asy, `${topD}`);
+            const botD = Math.round((parWp.y + parWp.node.h) - (A.y + A.node.h));
+            if (botD > 0) drawMeasLine(asx + asw / 2, asy + ash, asx + asw / 2, psy + psh, `${botD}`);
+            const leftD = Math.round(A.x - parWp.x);
+            if (leftD > 0) drawMeasLine(psx, asy + ash / 2, asx, asy + ash / 2, `${leftD}`);
+            const rightD = Math.round((parWp.x + parWp.node.w) - (A.x + A.node.w));
+            if (rightD > 0) drawMeasLine(asx + asw, asy + ash / 2, psx + psw, asy + ash / 2, `${rightD}`);
+          }
+        }
+        ctx.restore();
+      }
+    }
+
     if (band) {
       ctx.fillStyle = "rgba(13,153,255,0.12)";
       ctx.strokeStyle = "#0d99ff";
@@ -938,7 +1235,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       ctx.fillRect(band.x, band.y, band.w, band.h);
       ctx.strokeRect(band.x + 0.5, band.y + 0.5, band.w, band.h);
     }
-  }, [snap, band, edit, engine, theme, draft, vecEdit, hoverId, ghost, guides, gapBadges]);
+  }, [snap, band, edit, engine, theme, draft, vecEdit, hoverId, ghost, guides, gapBadges, altMeasure, protoDrag]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();
@@ -1157,6 +1454,29 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           py = wp.node.flipV ? cy - (u.y - cy) : u.y;
         }
         const ft = wp.node.fillType;
+        if (snap.rightTab === "prototype") {
+          const cx = sx + wp.node.w * z;
+          const cy = sy + (wp.node.h * z) / 2;
+          if (Math.hypot(rawX - cx, rawY - cy) <= 12) {
+            drag.current = {
+              mode: "protoConnect",
+              sx: e.clientX,
+              sy: e.clientY,
+              wx: wpt.x,
+              wy: wpt.y,
+              fromX: wp.x + wp.node.w,
+              fromY: wp.y + wp.node.h / 2,
+              id: wp.node.id,
+            };
+            setProtoDrag({
+              fromX: wp.x + wp.node.w,
+              fromY: wp.y + wp.node.h / 2,
+              toX: wpt.x,
+              toY: wpt.y,
+            });
+            return;
+          }
+        }
         if (ft === "linear" || ft === "radial" || ft === "angular" || ft === "diamond") {
           const ax = sx + (wp.node.fillGX ?? 0.5) * wp.node.w * z;
           const ay = sy + (wp.node.fillGY ?? 0) * wp.node.h * z;
@@ -1226,6 +1546,44 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             return;
           }
         }
+        if (wp.node.layout) {
+          const l = wp.node.layout;
+          const [pl, pr, pt, pb] = l.padding;
+          const sw = wp.node.w * z;
+          const sh = wp.node.h * z;
+          if (Math.hypot(px - (sx + sw / 2), py - (sy + pt * z)) < 8) {
+            engine.dispatch({ type: "begin" });
+            drag.current = { mode: "autoPad", padEdge: "top", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, origPad: [...l.padding] };
+            return;
+          }
+          if (Math.hypot(px - (sx + sw / 2), py - (sy + sh - pb * z)) < 8) {
+            engine.dispatch({ type: "begin" });
+            drag.current = { mode: "autoPad", padEdge: "bottom", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, origPad: [...l.padding] };
+            return;
+          }
+          if (Math.hypot(px - (sx + pl * z), py - (sy + sh / 2)) < 8) {
+            engine.dispatch({ type: "begin" });
+            drag.current = { mode: "autoPad", padEdge: "left", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, origPad: [...l.padding] };
+            return;
+          }
+          if (Math.hypot(px - (sx + sw - pr * z), py - (sy + sh / 2)) < 8) {
+            engine.dispatch({ type: "begin" });
+            drag.current = { mode: "autoPad", padEdge: "right", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, origPad: [...l.padding] };
+            return;
+          }
+          const flowKids = wp.node.children.filter((c) => c.visible && !c.absolutePosition);
+          if (flowKids.length >= 2) {
+            const c0 = flowKids[0];
+            const horiz = l.direction === "horizontal";
+            const gx = horiz ? sx + (c0.x + c0.w + l.gap / 2) * z : sx + sw / 2;
+            const gy = horiz ? sy + sh / 2 : sy + (c0.y + c0.h + l.gap / 2) * z;
+            if (Math.hypot(px - gx, py - gy) < 8) {
+              engine.dispatch({ type: "begin" });
+              drag.current = { mode: "autoGap", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, origGap: l.gap };
+              return;
+            }
+          }
+        }
       }
     }
     const hit = hitTest(root, wpt.x, wpt.y, {
@@ -1274,6 +1632,7 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       return;
     }
     if (!drag.current && !penDrag.current && !pencil.current && snap.tool === "select") {
+      if (e.altKey !== altMeasure) setAltMeasure(e.altKey);
       const wpt = toWorld(e.clientX, e.clientY);
       const hit = hitTest(snap.pages[snap.page].root, wpt.x, wpt.y, { selection: snap.selection });
       const id = hit && !snap.selection.includes(hit.id) ? hit.id : "";
@@ -1316,6 +1675,32 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             // Just outside a corner is the rotate zone, as in Figma.
             if (i % 2 === 0 && Math.hypot(hx - hs[i][0], hy - hs[i][1]) < 18) next = "grab";
           }
+          if (!next && bb?.node.layout) {
+            const l = bb.node.layout;
+            const [pl, pr, pt, pb] = l.padding;
+            const sw0 = box.w * z;
+            const sh0 = box.h * z;
+            if (Math.hypot(hx - (sx0 + sw0 / 2), hy - (sy0 + pt * z)) < 8) {
+              next = "ns-resize";
+            } else if (Math.hypot(hx - (sx0 + sw0 / 2), hy - (sy0 + sh0 - pb * z)) < 8) {
+              next = "ns-resize";
+            } else if (Math.hypot(hx - (sx0 + pl * z), hy - (sy0 + sh0 / 2)) < 8) {
+              next = "ew-resize";
+            } else if (Math.hypot(hx - (sx0 + sw0 - pr * z), hy - (sy0 + sh0 / 2)) < 8) {
+              next = "ew-resize";
+            } else {
+              const flowKids = bb.node.children.filter((c) => c.visible && !c.absolutePosition);
+              if (flowKids.length >= 2) {
+                const c0 = flowKids[0];
+                const horiz = l.direction === "horizontal";
+                const gx = horiz ? sx0 + (c0.x + c0.w + l.gap / 2) * z : sx0 + sw0 / 2;
+                const gy = horiz ? sy0 + sh0 / 2 : sy0 + (c0.y + c0.h + l.gap / 2) * z;
+                if (Math.hypot(hx - gx, hy - gy) < 8) {
+                  next = horiz ? "col-resize" : "row-resize";
+                }
+              }
+            }
+          }
           if (
             !next &&
             hx >= sx0 &&
@@ -1324,6 +1709,13 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             hy <= sy0 + box.h * z
           ) {
             next = "move";
+          }
+          if (snap.rightTab === "prototype" && bb) {
+            const cx = sx0 + box.w * z;
+            const cy = sy0 + (box.h * z) / 2;
+            if (Math.hypot(px0 - cx, py0 - cy) <= 12) {
+              next = "crosshair";
+            }
           }
         }
       }
@@ -1374,6 +1766,18 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       engine.dispatch({ type: "pan", dx: e.clientX - d.sx, dy: e.clientY - d.sy });
       d.sx = e.clientX;
       d.sy = e.clientY;
+    } else if (d.mode === "protoConnect" && d.id) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      const hit = hitTest(snap.pages[snap.page].root, wpt.x, wpt.y, { includeLocked: false });
+      const targetId = hit && hit.id !== d.id ? hit.id : undefined;
+      setProtoDrag({
+        fromX: d.fromX ?? wpt.x,
+        fromY: d.fromY ?? wpt.y,
+        toX: wpt.x,
+        toY: wpt.y,
+        targetId,
+      });
+      return;
     } else if (d.mode === "move" && (snap.tool === "select" || snap.tool === "scale")) {
       if (e.altKey && !d.duped) {
         engine.dispatch({ type: "duplicate" });
@@ -1573,6 +1977,29 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       let ang = (Math.atan2(b.y - cy, b.x - cx) * 180) / Math.PI + 90;
       if (e.shiftKey) ang = Math.round(ang / 15) * 15;
       engine.dispatch({ type: "patch", id: d.id, patch: { rotation: Math.round(ang) } });
+    } else if (d.mode === "autoPad" && d.id && d.padEdge && d.origPad) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      const wp = worldPos(snap.pages[snap.page].root, d.id);
+      if (wp?.node.layout) {
+        const [pl, pr, pt, pb] = d.origPad;
+        const dx = Math.round(wpt.x - d.wx);
+        const dy = Math.round(wpt.y - d.wy);
+        const nextPad: [number, number, number, number] = [pl, pr, pt, pb];
+        if (d.padEdge === "top") nextPad[2] = Math.max(0, pt + dy);
+        else if (d.padEdge === "bottom") nextPad[3] = Math.max(0, pb - dy);
+        else if (d.padEdge === "left") nextPad[0] = Math.max(0, pl + dx);
+        else if (d.padEdge === "right") nextPad[1] = Math.max(0, pr - dx);
+        engine.dispatch({ type: "autoLayout", id: d.id, layout: { ...wp.node.layout, padding: nextPad } });
+      }
+    } else if (d.mode === "autoGap" && d.id && d.origGap != null) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      const wp = worldPos(snap.pages[snap.page].root, d.id);
+      if (wp?.node.layout) {
+        const horiz = wp.node.layout.direction === "horizontal";
+        const delta = Math.round(horiz ? wpt.x - d.wx : wpt.y - d.wy);
+        const nextGap = Math.max(0, d.origGap + delta);
+        engine.dispatch({ type: "autoLayout", id: d.id, layout: { ...wp.node.layout, gap: nextGap } });
+      }
     }
   };
 
@@ -1602,6 +2029,33 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     setGuides([]);
     setGapBadges([]);
     if (!d) return;
+    if (d.mode === "protoConnect" && d.id) {
+      if (protoDrag?.targetId) {
+        const root = snap.pages[snap.page].root;
+        const srcNode = find(root, d.id);
+        const targetNode = find(root, protoDrag.targetId);
+        if (srcNode && targetNode) {
+          const prev = srcNode.interactions ?? [];
+          engine.dispatch({
+            type: "setInteractions",
+            id: d.id,
+            interactions: [
+              ...prev,
+              {
+                trigger: "onClick",
+                action: "navigate",
+                destination: protoDrag.targetId,
+                animation: "instant",
+                delay: 0,
+              },
+            ],
+          });
+          toast(`Connected to ${targetNode.name}`);
+        }
+      }
+      setProtoDrag(null);
+      return;
+    }
     if (
       d.mode === "move" ||
       d.mode === "resize" ||
@@ -1609,6 +2063,8 @@ export function Canvas({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       d.mode === "grad" ||
       d.mode === "multiResize" ||
       d.mode === "multiRotate" ||
+      d.mode === "autoPad" ||
+      d.mode === "autoGap" ||
       (d.mode === "marquee" && d.id === "erase")
     )
       engine.dispatch({ type: "end" });
@@ -2231,6 +2687,29 @@ function paintNoise(
   ctx.restore();
 }
 
+function paintTexture(
+  ctx: CanvasRenderingContext2D,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+  density = 16,
+  scale = 4,
+) {
+  if (sw < 1 || sh < 1) return;
+  ctx.save();
+  ctx.clip();
+  ctx.fillStyle = "#000000";
+  ctx.globalAlpha = Math.max(0.04, Math.min(0.3, density / 100));
+  const step = Math.max(2, Math.round(scale));
+  for (let x = sx; x < sx + sw; x += step * 2) {
+    for (let y = sy; y < sy + sh; y += step * 2) {
+      ctx.fillRect(x, y, 1, 1);
+    }
+  }
+  ctx.restore();
+}
+
 function canvasBlend(m?: string): GlobalCompositeOperation {
   const k = (m || "normal").toLowerCase().replace(/\s+/g, "-");
   const map: Record<string, GlobalCompositeOperation> = {
@@ -2390,17 +2869,37 @@ function starPath(
   ry: number,
   n: number,
   ratio = 0.4,
+  cornerRadius = 0,
 ) {
   const pts = Math.max(3, Math.min(60, Math.round(n)));
   const inner = Math.max(0.05, Math.min(0.95, ratio));
-  ctx.beginPath();
+  const vertices: { x: number; y: number }[] = [];
   for (let i = 0; i < pts * 2; i++) {
     const a = (i * Math.PI) / pts - Math.PI / 2;
     const k = i % 2 === 0 ? 1 : inner;
-    const x = cx + Math.cos(a) * rx * k;
-    const y = cy + Math.sin(a) * ry * k;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
+    vertices.push({
+      x: cx + Math.cos(a) * rx * k,
+      y: cy + Math.sin(a) * ry * k,
+    });
+  }
+  ctx.beginPath();
+  const len = vertices.length;
+  if (cornerRadius <= 0) {
+    for (let i = 0; i < len; i++) {
+      if (i === 0) ctx.moveTo(vertices[i].x, vertices[i].y);
+      else ctx.lineTo(vertices[i].x, vertices[i].y);
+    }
+  } else {
+    const cr = Math.min(cornerRadius, Math.min(rx, ry) * 0.4);
+    for (let i = 0; i < len; i++) {
+      const pPrev = vertices[(i - 1 + len) % len];
+      const pCurr = vertices[i];
+      const pNext = vertices[(i + 1) % len];
+      if (i === 0) {
+        ctx.moveTo((pPrev.x + pCurr.x) / 2, (pPrev.y + pCurr.y) / 2);
+      }
+      ctx.arcTo(pCurr.x, pCurr.y, pNext.x, pNext.y, cr);
+    }
   }
   ctx.closePath();
 }

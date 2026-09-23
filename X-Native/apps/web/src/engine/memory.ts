@@ -11,6 +11,8 @@ import type {
   Snapshot,
   Tool,
   XNode,
+  VariableItem,
+  AnnotationItem,
 } from "./types";
 import { copyText } from "./clipboard";
 import { loadDoc, type PersistedDoc } from "./persist";
@@ -148,20 +150,40 @@ function findParent(root: XNode, id: string): XNode | null {
   return null;
 }
 
+function findInstanceRoot(root: XNode, id: string): XNode | null {
+  const curr = find(root, id);
+  if (!curr) return null;
+  if (curr.componentId && !curr.isComponent) return curr;
+  let p = findParent(root, id);
+  while (p && p !== root) {
+    if (p.componentId && !p.isComponent) return p;
+    p = findParent(root, p.id);
+  }
+  return null;
+}
+
+function clampDims(n: XNode) {
+  if (n.minW != null && Number.isFinite(n.minW) && n.w < n.minW) n.w = n.minW;
+  if (n.maxW != null && Number.isFinite(n.maxW) && n.w > n.maxW) n.w = n.maxW;
+  if (n.minH != null && Number.isFinite(n.minH) && n.h < n.minH) n.h = n.minH;
+  if (n.maxH != null && Number.isFinite(n.maxH) && n.h > n.maxH) n.h = n.maxH;
+}
+
 function applyLayout(n: XNode) {
   for (const c of n.children) applyLayout(c);
   const l = n.layout;
   if (!l) {
     if (n.children.length && (n.sizingW === "hug" || n.sizingH === "hug")) {
-      const vis = n.children.filter((c) => c.visible);
+      const vis = n.children.filter((c) => c.visible && !c.absolutePosition);
       if (vis.length) {
         if (n.sizingW === "hug") n.w = Math.max(1, Math.max(...vis.map((c) => c.x + c.w)));
         if (n.sizingH === "hug") n.h = Math.max(1, Math.max(...vis.map((c) => c.y + c.h)));
       }
     }
+    clampDims(n);
     return;
   }
-  const flow = n.children.filter((c) => c.visible);
+  const flow = n.children.filter((c) => c.visible && !c.absolutePosition);
   const [pl, pr, pt, pb] = l.padding;
   const horiz = l.direction === "horizontal";
   const gap = l.gap;
@@ -178,6 +200,7 @@ function applyLayout(n: XNode) {
     for (const c of fillers) {
       if (horiz) c.w = Math.max(1, each);
       else c.h = Math.max(1, each);
+      clampDims(c);
     }
   }
   if (l.wrap && flow.length) {
@@ -218,6 +241,8 @@ function applyLayout(n: XNode) {
       if (horiz) n.h = y + rowH + pb;
       else n.w = x + rowW + pr;
     }
+    for (const c of flow) clampDims(c);
+    clampDims(n);
     return;
   }
   const mainTotal = flow.reduce((s, c) => s + (horiz ? c.w : c.h), 0) + gap * Math.max(0, flow.length - 1);
@@ -228,12 +253,23 @@ function applyLayout(n: XNode) {
   const between = l.justify === "between" && flow.length > 1 ? free / (flow.length - 1) : gap;
   let cursor = origin;
   let crossMax = 0;
+  const maxBaseline =
+    horiz && l.align === "baseline"
+      ? Math.max(
+          ...flow.map((c) => (c.kind === "text" ? (c.fontSize || 14) * 0.8 : c.h * 0.8)),
+        )
+      : 0;
   for (let i = 0; i < flow.length; i++) {
     const c = flow[i];
     if (horiz) {
       c.x = cursor;
       const extra = innerH - c.h;
-      c.y = pt + (l.align === "center" ? extra / 2 : l.align === "max" ? extra : 0);
+      if (l.align === "baseline") {
+        const itemBaseline = c.kind === "text" ? (c.fontSize || 14) * 0.8 : c.h * 0.8;
+        c.y = pt + (maxBaseline - itemBaseline);
+      } else {
+        c.y = pt + (l.align === "center" ? extra / 2 : l.align === "max" ? extra : 0);
+      }
       cursor += c.w + (i < flow.length - 1 ? between : 0);
       crossMax = Math.max(crossMax, c.h);
     } else {
@@ -243,6 +279,7 @@ function applyLayout(n: XNode) {
       cursor += c.h + (i < flow.length - 1 ? between : 0);
       crossMax = Math.max(crossMax, c.w);
     }
+    clampDims(c);
   }
   if (l.sizing === "hug" || n.sizingW === "hug") {
     if (horiz) n.w = pl + mainTotal + pr;
@@ -254,6 +291,7 @@ function applyLayout(n: XNode) {
     if (horiz) n.h = crossMax + pt + pb;
     else n.w = crossMax + pl + pr;
   }
+  clampDims(n);
 }
 
 function demoPage(): Page {
@@ -372,6 +410,8 @@ interface Internal {
   showMinimap: boolean;
   showComments: boolean;
   openComment: string;
+  variables: VariableItem[];
+  annotations: AnnotationItem[];
 }
 
 /** Cap the undo stack. Each entry is a full document clone, so an unbounded
@@ -474,6 +514,14 @@ export class MemoryEngine implements Engine {
       showMinimap: doc?.showMinimap ?? false,
       showComments: doc?.showComments ?? false,
       openComment: "",
+      variables: [
+        { id: "var-1", name: "primary", type: "color", value: "#0d99ff", collection: "Brand" },
+        { id: "var-2", name: "secondary", type: "color", value: "#6366f1", collection: "Brand" },
+        { id: "var-3", name: "spacing-sm", type: "number", value: 8, collection: "Spacing" },
+        { id: "var-4", name: "spacing-md", type: "number", value: 16, collection: "Spacing" },
+        { id: "var-5", name: "radius-md", type: "number", value: 8, collection: "Radius" },
+      ],
+      annotations: [],
     };
     this.relayout();
     this.snapCache = this.build();
@@ -616,6 +664,8 @@ export class MemoryEngine implements Engine {
       openComment: this.state.openComment,
       presentFrame: this.state.presentFrame,
       presentStack: this.state.presentStack,
+      variables: this.state.variables,
+      annotations: this.state.annotations,
     };
   }
 
@@ -852,10 +902,18 @@ export class MemoryEngine implements Engine {
           reid(copy);
           copy.x += 10;
           copy.y += 10;
+          const baseName = n.name;
+          const copyMatch = baseName.match(/^(.*?)(?: copy(?: (\d+))?)?$/);
+          if (copyMatch) {
+            const rootName = copyMatch[1];
+            const hasCopy = baseName.includes(" copy");
+            const currentNum = copyMatch[2] ? parseInt(copyMatch[2], 10) : (hasCopy ? 1 : 0);
+            const nextNum = currentNum + 1;
+            copy.name = nextNum === 1 ? `${rootName} copy` : `${rootName} copy ${nextNum}`;
+          }
           if (n.isComponent) {
             copy.isComponent = false;
             copy.componentId = masterId;
-            copy.name = n.name;
           }
           p.children.push(copy);
           created.push(copy.id);
@@ -890,6 +948,13 @@ export class MemoryEngine implements Engine {
               lib.node = clone(n);
             }
             syncInstances(s.pages, n);
+          } else if (n.componentId && !n.isComponent) {
+            n.overrides = { ...(n.overrides || {}), ...cmd.patch };
+          } else {
+            const inst = findInstanceRoot(this.root(), n.id);
+            if (inst && inst !== n) {
+              n.overrides = { ...(n.overrides || {}), ...cmd.patch };
+            }
           }
         }
         break;
@@ -1080,7 +1145,17 @@ export class MemoryEngine implements Engine {
         const ids = new Map<string, string>();
         const oldFlowStart = p.flowStart;
         p.id = uid("page");
-        p.name = `${p.name} copy`;
+        const baseName = p.name;
+        const copyMatch = baseName.match(/^(.*?)(?: copy(?: (\d+))?)?$/);
+        if (copyMatch) {
+          const rootName = copyMatch[1];
+          const hasCopy = baseName.includes(" copy");
+          const currentNum = copyMatch[2] ? parseInt(copyMatch[2], 10) : (hasCopy ? 1 : 0);
+          const nextNum = currentNum + 1;
+          p.name = nextNum === 1 ? `${rootName} copy` : `${rootName} copy ${nextNum}`;
+        } else {
+          p.name = `${p.name} copy`;
+        }
         reid(p.root, ids);
         p.flowStart = ids.get(oldFlowStart) ?? "";
         s.pages.splice(s.page + 1, 0, p);
@@ -1267,7 +1342,7 @@ export class MemoryEngine implements Engine {
         break;
       }
       case "placeComponent": {
-        const lib = s.components.find((c) => c.id === cmd.id);
+        const lib = s.components.find((c) => c.id === cmd.id || c.node.id === cmd.id);
         if (!lib) break;
         const copy = clone(lib.node);
         reid(copy);
@@ -1404,9 +1479,62 @@ export class MemoryEngine implements Engine {
         });
         break;
       }
+      case "resetOverrides": {
+        const ids = cmd.id ? [cmd.id] : s.selection;
+        for (const id of ids) {
+          const n = find(this.root(), id);
+          if (!n) continue;
+          const cid = n.componentId;
+          if (!cid && n.kind !== "instance") continue;
+          const lib = s.components.find((c) => c.id === cid || c.node.id === cid);
+          if (!lib) continue;
+          if (cmd.property) {
+            if (n.overrides) delete n.overrides[cmd.property];
+            const masterVal = (lib.node as unknown as Record<string, unknown>)[cmd.property];
+            if (masterVal !== undefined) {
+              (n as unknown as Record<string, unknown>)[cmd.property] = clone(masterVal);
+            }
+            continue;
+          }
+          const x = n.x;
+          const y = n.y;
+          const copy = clone(lib.node);
+          reid(copy);
+          copy.x = x;
+          copy.y = y;
+          copy.id = n.id;
+          copy.isComponent = false;
+          copy.componentId = cid;
+          copy.overrides = undefined;
+          walk(copy, (c) => { c.overrides = undefined; });
+          Object.assign(n, copy);
+        }
+        break;
+      }
       case "setInteractions": {
         const n = find(this.root(), cmd.id);
         if (n) n.interactions = cmd.interactions;
+        break;
+      }
+      case "addVariable": {
+        s.variables.push(cmd.variable);
+        break;
+      }
+      case "patchVariable": {
+        const v = s.variables.find((x) => x.id === cmd.id);
+        if (v) Object.assign(v, cmd.patch);
+        break;
+      }
+      case "deleteVariable": {
+        s.variables = s.variables.filter((x) => x.id !== cmd.id);
+        break;
+      }
+      case "addAnnotation": {
+        s.annotations.push(cmd.annotation);
+        break;
+      }
+      case "deleteAnnotation": {
+        s.annotations = s.annotations.filter((x) => x.id !== cmd.id);
         break;
       }
       case "presentStart": {
@@ -1542,15 +1670,53 @@ function framesOf(root: XNode): XNode[] {
 function syncInstances(pages: Page[], master: XNode) {
   const cid = master.componentId;
   if (!cid) return;
+
+  function syncNode(instNode: XNode, masterDef: XNode) {
+    const x = instNode.x;
+    const y = instNode.y;
+    const id = instNode.id;
+    const interactions = instNode.interactions;
+    const localOverrides = instNode.overrides ? { ...instNode.overrides } : {};
+
+    const masterKids = masterDef.children ?? [];
+    const instKids = instNode.children ?? [];
+    const syncedKids: XNode[] = [];
+
+    for (let i = 0; i < masterKids.length; i++) {
+      const mk = masterKids[i];
+      if (i < instKids.length) {
+        const ik = instKids[i];
+        syncNode(ik, mk);
+        syncedKids.push(ik);
+      } else {
+        const newKid = clone(mk);
+        reid(newKid);
+        syncedKids.push(newKid);
+      }
+    }
+
+    const masterProps: Partial<XNode> = { ...masterDef };
+    delete masterProps.id;
+    delete masterProps.children;
+
+    Object.assign(instNode, masterProps, {
+      x,
+      y,
+      id,
+      interactions,
+      isComponent: false,
+      componentId: cid,
+      children: syncedKids,
+      overrides: localOverrides,
+      ...localOverrides,
+    });
+  }
+
   for (const page of pages) {
     walk(page.root, (n) => {
       if (n === master) return;
       if (n.componentId !== cid || n.isComponent) return;
-      const x = n.x;
-      const y = n.y;
-      const id = n.id;
-      const interactions = n.interactions;
-      Object.assign(n, clone(master), { x, y, id, interactions, isComponent: false, componentId: cid });
+      syncNode(n, master);
     });
   }
 }
@@ -1859,11 +2025,26 @@ export function defaultEffect(kind: Effect["kind"]): Effect {
   const shadow = kind === "drop-shadow" || kind === "inner-shadow";
   return {
     kind,
-    color: shadow ? "#00000040" : kind === "glass" ? "#ffffff80" : "#000000",
+    color: shadow
+      ? "#00000040"
+      : kind === "glass"
+        ? "#ffffff80"
+        : kind === "texture"
+          ? "#00000020"
+          : "#000000",
     x: 0,
     y: shadow ? 4 : 0,
-    blur: kind === "noise" ? 40 : kind === "glass" || kind.includes("blur") ? 12 : shadow ? 4 : 4,
-    spread: 0,
+    blur:
+      kind === "noise"
+        ? 40
+        : kind === "texture"
+          ? 16
+          : kind === "glass" || kind.includes("blur")
+            ? 12
+            : shadow
+              ? 4
+              : 4,
+    spread: kind === "texture" ? 4 : 0,
     visible: true,
   };
 }

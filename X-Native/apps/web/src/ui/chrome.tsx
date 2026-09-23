@@ -1,6 +1,6 @@
-import { memo, useEffect, useRef, useState } from "react";
-import type { Engine, Snapshot, Tool, XNode } from "../engine/types";
-import { collectColors, defaultLayout } from "../engine/memory";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import type { Engine, Snapshot, Tool, XNode, VariableItem } from "../engine/types";
+import { collectColors, defaultLayout, find } from "../engine/memory";
 import { Icon, TOOL_ICON, kindIcon } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { plural, toast } from "./toast";
@@ -11,6 +11,7 @@ import { stepZoom, zoomTo } from "./zoom";
 import { clearDoc } from "../engine/persist";
 import { copyText } from "../engine/clipboard";
 import { isNone } from "./color";
+import { getEngineInfo } from "../engine/wasmBridge";
 
 export type NavId = "file" | "assets" | "tools" | "variables" | "agent";
 
@@ -552,7 +553,7 @@ const GROUPS: Group[] = [
       { id: "ellipse", label: "Ellipse", shortcut: "O" },
       { id: "poly", label: "Polygon", shortcut: "" },
       { id: "star", label: "Star", shortcut: "" },
-      { id: "image", label: "Place image/video…", shortcut: "⇧I" },
+      { id: "image", label: "Place image/video…", shortcut: "⇧⌘K" },
     ],
   },
   {
@@ -632,7 +633,15 @@ export function Toolbar({
               }}
             >
               <Icon name={TOOL_ICON[current]} size={16} />
-              {multi && <i className="caret" />}
+              {multi && (
+                <i
+                  className="caret"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setOpen((o) => (o === g.id ? null : g.id));
+                  }}
+                />
+              )}
             </button>
             </Tooltip>
             {multi && (
@@ -1055,6 +1064,54 @@ export function bindHotkeys(
       runMenu(engine, "useAsMask");
       return;
     }
+    if (meta && !e.shiftKey && e.key.toLowerCase() === "b") {
+      const root = engine.snapshot().pages[engine.snapshot().page].root;
+      for (const id of engine.snapshot().selection) {
+        const n = find(root, id);
+        if (n && n.kind === "text") {
+          e.preventDefault();
+          engine.dispatch({ type: "patch", id, patch: { fontWeight: n.fontWeight >= 700 ? 400 : 700 } });
+        }
+      }
+      return;
+    }
+    if (meta && !e.shiftKey && e.key.toLowerCase() === "u") {
+      const root = engine.snapshot().pages[engine.snapshot().page].root;
+      for (const id of engine.snapshot().selection) {
+        const n = find(root, id);
+        if (n && n.kind === "text") {
+          e.preventDefault();
+          engine.dispatch({
+            type: "patch",
+            id,
+            patch: { textDecoration: n.textDecoration === "underline" ? "none" : "underline" },
+          });
+        }
+      }
+      return;
+    }
+    if (meta && e.shiftKey && (e.key === ">" || e.code === "Period")) {
+      const root = engine.snapshot().pages[engine.snapshot().page].root;
+      for (const id of engine.snapshot().selection) {
+        const n = find(root, id);
+        if (n && n.kind === "text") {
+          e.preventDefault();
+          engine.dispatch({ type: "patch", id, patch: { fontSize: Math.max(1, (n.fontSize || 14) + 1) } });
+        }
+      }
+      return;
+    }
+    if (meta && e.shiftKey && (e.key === "<" || e.code === "Comma")) {
+      const root = engine.snapshot().pages[engine.snapshot().page].root;
+      for (const id of engine.snapshot().selection) {
+        const n = find(root, id);
+        if (n && n.kind === "text") {
+          e.preventDefault();
+          engine.dispatch({ type: "patch", id, patch: { fontSize: Math.max(1, (n.fontSize || 14) - 1) } });
+        }
+      }
+      return;
+    }
     if (!meta && e.shiftKey && e.key.toLowerCase() === "a") {
       e.preventDefault();
       const id = engine.snapshot().selection[0];
@@ -1096,6 +1153,11 @@ export function bindHotkeys(
     if (!meta && e.shiftKey && e.key.toLowerCase() === "v") {
       e.preventDefault();
       engine.dispatch({ type: "flip", axis: "v" });
+      return;
+    }
+    if (meta && e.shiftKey && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      engine.dispatch({ type: "setTool", tool: "image" });
       return;
     }
     if (!meta && e.shiftKey) {
@@ -1204,156 +1266,374 @@ function AssetsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
 }
 
 function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
+  const [subTab, setSubTab] = useState<"vars" | "styles">("vars");
+  const [col, setCol] = useState("All");
   const colors = Array.from(new Set(collectColors(snap.pages[snap.page].root)));
   const sel = snap.selection[0];
   const selNode = sel ? findNode(snap.pages[snap.page].root, sel)?.node : null;
+
+  const vars = snap.variables ?? [];
+  const collections = ["All", ...Array.from(new Set(vars.map((v) => v.collection)))];
+  const filteredVars = col === "All" ? vars : vars.filter((v) => v.collection === col);
+
   return (
     <>
-      <div className="h-row">
-        <h3 style={{ margin: 0, fontSize: 11, fontWeight: 500, padding: "8px 4px" }}>Styles</h3>
+      <div className="dir-row" style={{ padding: "8px 12px", gap: 4 }}>
         <button
-          className="plus"
-          title="Create style from selection"
-          onClick={() => {
-            if (!selNode) {
-              toast("Select a layer to create a style from its fill or stroke");
-              return;
-            }
-            // A layer can contribute either paint, so ask rather than silently
-            // assuming fill — the engine has supported both since styles landed.
-            const hasStroke = selNode.strokeWidth > 0 && !isNone(selNode.strokePaint);
-            const kind: "fill" | "stroke" =
-              hasStroke && window.confirm("Create from the stroke?\n\nOK = stroke, Cancel = fill")
-                ? "stroke"
-                : "fill";
-            const name = window.prompt(`Style name (${kind})`, selNode.name || "Style");
-            if (name === null) return;
-            engine.dispatch({ type: "createStyle", kind, name });
+          className={subTab === "vars" ? "on" : ""}
+          style={{
+            flex: 1,
+            height: 26,
+            fontSize: 11,
+            borderRadius: 6,
+            border: 0,
+            background: subTab === "vars" ? "var(--sel)" : "var(--hover)",
+            cursor: "pointer",
           }}
+          onClick={() => setSubTab("vars")}
         >
-          <Icon name="plus" size={14} />
+          Variables
+        </button>
+        <button
+          className={subTab === "styles" ? "on" : ""}
+          style={{
+            flex: 1,
+            height: 26,
+            fontSize: 11,
+            borderRadius: 6,
+            border: 0,
+            background: subTab === "styles" ? "var(--sel)" : "var(--hover)",
+            cursor: "pointer",
+          }}
+          onClick={() => setSubTab("styles")}
+        >
+          Styles
         </button>
       </div>
-      <div className="insp-pad" style={{ display: "grid", gap: 4, padding: "0 12px" }}>
-        {snap.styles.length === 0 && (
-          <p className="muted">
-            No styles yet. Select a layer and press + to save its fill as a reusable style.
-          </p>
-        )}
-        {snap.styles.map((st) => {
-          const bound = selNode?.fillStyle === st.id;
-          const boundStroke = selNode?.strokeStyle === st.id;
-          return (
-            <div key={st.id} className="color-row" style={{ width: "100%" }}>
-              <button
-                className="swatch"
-                title={`Apply ${st.name} to the fill — shift-click for the stroke`}
-                aria-label={`Apply style ${st.name}`}
-                style={{
-                  background: st.color,
-                  border: bound || boundStroke ? "2px solid var(--accent)" : undefined,
-                }}
-                onClick={(e) => {
-                  if (!sel) {
-                    toast("Select a layer first");
-                    return;
-                  }
-                  const kind = e.shiftKey ? "stroke" : "fill";
-                  engine.dispatch({ type: "applyStyle", kind, styleId: st.id });
-                  if (kind === "stroke") toast(`Applied ${st.name} to the stroke`);
-                }}
-              />
-              <span className="hex" style={{ flex: 1 }}>
-                {st.name}
-              </span>
-              {(bound || boundStroke) && (
+
+      {subTab === "vars" && (
+        <>
+          <div className="h-row" style={{ padding: "4px 12px" }}>
+            <div style={{ display: "flex", gap: 4, overflowX: "auto" }}>
+              {collections.map((c) => (
                 <button
-                  className="mini"
-                  title={`Detach the selection from ${st.name}`}
-                  aria-label={`Detach style ${st.name}`}
-                  onClick={() => {
-                    // Keeps the painted colour and drops the link, so the node
-                    // stops following later edits to this style.
-                    if (bound) engine.dispatch({ type: "detachStyle", kind: "fill" });
-                    if (boundStroke) engine.dispatch({ type: "detachStyle", kind: "stroke" });
-                    toast(`Detached from ${st.name}`);
+                  key={c}
+                  style={{
+                    padding: "2px 8px",
+                    borderRadius: 4,
+                    fontSize: 10,
+                    border: 0,
+                    background: col === c ? "var(--blue)" : "var(--input)",
+                    color: col === c ? "var(--on-accent)" : "var(--text)",
+                    cursor: "pointer",
                   }}
+                  onClick={() => setCol(c)}
                 >
-                  <Icon name="unlock" size={14} />
+                  {c}
                 </button>
-              )}
-              <button
-                className="mini"
-                title={`Edit ${st.name}`}
-                aria-label={`Edit style ${st.name}`}
-                onClick={() => {
-                  const next = window.prompt(`Colour for ${st.name}`, st.color);
-                  if (!next) return;
-                  const hex = next.trim().startsWith("#") ? next.trim() : `#${next.trim()}`;
-                  engine.dispatch({ type: "editStyle", id: st.id, color: hex });
-                }}
-              >
-                <Icon name="eyedropper" size={14} />
-              </button>
-              <button
-                className="mini minus"
-                title={`Delete ${st.name}`}
-                aria-label={`Delete style ${st.name}`}
-                onClick={() => engine.dispatch({ type: "deleteStyle", id: st.id })}
-              >
-                <Icon name="trash" size={14} />
-              </button>
+              ))}
             </div>
-          );
-        })}
-      </div>
-      <div className="hr" />
-      <div className="h-row">
-        <h3 style={{ margin: 0, fontSize: 11, fontWeight: 500, padding: "8px 4px" }}>Color Primitive</h3>
-        <button
-          className="plus"
-          // This list is derived from the colours actually used in the file, so
-          // there is nothing to "add" — a colour appears here as soon as a layer
-          // uses it. The button used to dispatch copyCode, which copied CSS and
-          // added nothing, so it read as dead. Copying the selected layer's
-          // fill is the useful action that matches what the panel shows.
-          title="Copy selected layer's colour"
-          onClick={() => {
-            const id = snap.selection[0];
-            const n = id ? findNode(snap.pages[snap.page].root, id)?.node : null;
-            if (!n) {
-              toast("Select a layer to copy its colour");
-              return;
-            }
-            const hex = (n.fill || "").slice(0, 7);
-            if (!hex) {
-              toast("That layer has no solid fill");
-              return;
-            }
-            void copyText(hex);
-            toast(`Copied ${hex}`);
-          }}
-        >
-          <Icon name="copy" size={14} />
-        </button>
-      </div>
-      <div className="insp-pad" style={{ display: "grid", gap: 4, padding: "0 12px" }}>
-        {colors.length === 0 && <p className="muted">No colors in this file yet.</p>}
-        {colors.map((c) => (
-          <button
-            key={c}
-            className="color-row"
-            style={{ width: "100%", textAlign: "left" }}
-            onClick={() => {
-              const id = snap.selection[0];
-              if (id) engine.dispatch({ type: "patch", id, patch: { fill: c, fillVisible: true } });
+            <button
+              className="plus"
+              title="Add Variable"
+              onClick={() => {
+                const name = window.prompt("Variable name", "token-1");
+                if (!name) return;
+                const typeStr = window
+                  .prompt("Type: color, number, string, or boolean", "color")
+                  ?.toLowerCase();
+                const type = (
+                  ["color", "number", "string", "boolean"].includes(typeStr || "")
+                    ? typeStr
+                    : "color"
+                ) as VariableItem["type"];
+                const valStr = window.prompt(
+                  `Value for ${type}`,
+                  type === "color" ? "#0d99ff" : type === "number" ? "16" : "text",
+                );
+                if (valStr === null) return;
+                const value =
+                  type === "number"
+                    ? Number(valStr) || 0
+                    : type === "boolean"
+                      ? valStr === "true"
+                      : valStr;
+                const collection = col === "All" ? "Brand" : col;
+                engine.dispatch({
+                  type: "addVariable",
+                  variable: { id: "var_" + Date.now(), name, type, value, collection },
+                });
+                toast(`Added variable ${name}`);
+              }}
+            >
+              <Icon name="plus" size={14} />
+            </button>
+          </div>
+
+          <div
+            className="insp-pad"
+            style={{
+              display: "grid",
+              gap: 4,
+              padding: "4px 12px",
+              maxHeight: "calc(100vh - 280px)",
+              overflowY: "auto",
             }}
           >
-            <span className="swatch" style={{ background: c }} />
-            <span className="hex">{c.replace("#", "")}</span>
-          </button>
-        ))}
-      </div>
+            {filteredVars.map((v) => (
+              <div
+                key={v.id}
+                className="color-row"
+                style={{
+                  padding: "4px 6px",
+                  borderRadius: 6,
+                  background: "var(--hover)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  fontSize: 11,
+                }}
+              >
+                {v.type === "color" && (
+                  <span
+                    className="swatch"
+                    style={{
+                      background: String(v.value),
+                      width: 16,
+                      height: 16,
+                      borderRadius: 4,
+                      flexShrink: 0,
+                      cursor: "pointer",
+                    }}
+                    title="Click to apply color to selected layer fill"
+                    onClick={() => {
+                      if (sel) {
+                        engine.dispatch({
+                          type: "patch",
+                          id: sel,
+                          patch: { fill: String(v.value) },
+                        });
+                        toast(`Applied ${v.name} to fill`);
+                      }
+                    }}
+                  />
+                )}
+                {v.type === "number" && (
+                  <span
+                    style={{
+                      fontSize: 9,
+                      fontWeight: 700,
+                      padding: "1px 4px",
+                      borderRadius: 3,
+                      background: "var(--input)",
+                    }}
+                  >
+                    #
+                  </span>
+                )}
+                {v.type === "string" && (
+                  <span
+                    style={{
+                      fontSize: 9,
+                      fontWeight: 700,
+                      padding: "1px 4px",
+                      borderRadius: 3,
+                      background: "var(--input)",
+                    }}
+                  >
+                    T
+                  </span>
+                )}
+                <span
+                  style={{
+                    flex: 1,
+                    fontWeight: 500,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {v.name}
+                </span>
+                <span
+                  style={{
+                    color: "var(--dim)",
+                    fontSize: 10,
+                    cursor: "pointer",
+                    padding: "2px 4px",
+                    borderRadius: 4,
+                    background: "var(--input)",
+                  }}
+                  title="Click to edit value"
+                  onClick={() => {
+                    const next = window.prompt(`Edit value for ${v.name}`, String(v.value));
+                    if (next === null) return;
+                    const value =
+                      v.type === "number"
+                        ? Number(next) || 0
+                        : v.type === "boolean"
+                          ? next === "true"
+                          : next;
+                    engine.dispatch({ type: "patchVariable", id: v.id, patch: { value } });
+                  }}
+                >
+                  {String(v.value)}
+                </span>
+                <button
+                  className="icon-btn"
+                  title={`Delete ${v.name}`}
+                  onClick={() => engine.dispatch({ type: "deleteVariable", id: v.id })}
+                >
+                  <Icon name="trash" size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {subTab === "styles" && (
+        <>
+          <div className="h-row">
+            <h3 style={{ margin: 0, fontSize: 11, fontWeight: 500, padding: "8px 4px" }}>Styles</h3>
+            <button
+              className="plus"
+              title="Create style from selection"
+              onClick={() => {
+                if (!selNode) {
+                  toast("Select a layer to create a style from its fill or stroke");
+                  return;
+                }
+                const hasStroke = selNode.strokeWidth > 0 && !isNone(selNode.strokePaint);
+                const kind: "fill" | "stroke" =
+                  hasStroke && window.confirm("Create from the stroke?\n\nOK = stroke, Cancel = fill")
+                    ? "stroke"
+                    : "fill";
+                const name = window.prompt(`Style name (${kind})`, selNode.name || "Style");
+                if (name === null) return;
+                engine.dispatch({ type: "createStyle", kind, name });
+              }}
+            >
+              <Icon name="plus" size={14} />
+            </button>
+          </div>
+          <div className="insp-pad" style={{ display: "grid", gap: 4, padding: "0 12px" }}>
+            {snap.styles.length === 0 && (
+              <p className="muted">
+                No styles yet. Select a layer and press + to save its fill as a reusable style.
+              </p>
+            )}
+            {snap.styles.map((st) => {
+              const bound = selNode?.fillStyle === st.id;
+              const boundStroke = selNode?.strokeStyle === st.id;
+              return (
+                <div key={st.id} className="color-row" style={{ width: "100%" }}>
+                  <button
+                    className="swatch"
+                    title={`Apply ${st.name} to the fill — shift-click for the stroke`}
+                    aria-label={`Apply style ${st.name}`}
+                    style={{
+                      background: st.color,
+                      border: bound || boundStroke ? "2px solid var(--accent)" : undefined,
+                    }}
+                    onClick={(e) => {
+                      if (!sel) {
+                        toast("Select a layer first");
+                        return;
+                      }
+                      const kind = e.shiftKey ? "stroke" : "fill";
+                      engine.dispatch({ type: "applyStyle", kind, styleId: st.id });
+                      if (kind === "stroke") toast(`Applied ${st.name} to the stroke`);
+                    }}
+                  />
+                  <span className="hex" style={{ flex: 1 }}>
+                    {st.name}
+                  </span>
+                  {(bound || boundStroke) && (
+                    <button
+                      className="mini"
+                      title={`Detach the selection from ${st.name}`}
+                      aria-label={`Detach style ${st.name}`}
+                      onClick={() => {
+                        if (bound) engine.dispatch({ type: "detachStyle", kind: "fill" });
+                        if (boundStroke) engine.dispatch({ type: "detachStyle", kind: "stroke" });
+                        toast(`Detached from ${st.name}`);
+                      }}
+                    >
+                      <Icon name="unlock" size={14} />
+                    </button>
+                  )}
+                  <button
+                    className="mini"
+                    title={`Edit ${st.name}`}
+                    aria-label={`Edit style ${st.name}`}
+                    onClick={() => {
+                      const next = window.prompt(`Colour for ${st.name}`, st.color);
+                      if (!next) return;
+                      const hex = next.trim().startsWith("#") ? next.trim() : `#${next.trim()}`;
+                      engine.dispatch({ type: "editStyle", id: st.id, color: hex });
+                    }}
+                  >
+                    <Icon name="eyedropper" size={14} />
+                  </button>
+                  <button
+                    className="mini minus"
+                    title={`Delete ${st.name}`}
+                    aria-label={`Delete style ${st.name}`}
+                    onClick={() => engine.dispatch({ type: "deleteStyle", id: st.id })}
+                  >
+                    <Icon name="trash" size={14} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          <div className="hr" />
+          <div className="h-row">
+            <h3 style={{ margin: 0, fontSize: 11, fontWeight: 500, padding: "8px 4px" }}>
+              Color Primitive
+            </h3>
+            <button
+              className="plus"
+              title="Copy selected layer's colour"
+              onClick={() => {
+                const id = snap.selection[0];
+                const n = id ? findNode(snap.pages[snap.page].root, id)?.node : null;
+                if (!n) {
+                  toast("Select a layer to copy its colour");
+                  return;
+                }
+                const hex = (n.fill || "").slice(0, 7);
+                if (!hex) {
+                  toast("That layer has no solid fill");
+                  return;
+                }
+                void copyText(hex);
+                toast(`Copied ${hex}`);
+              }}
+            >
+              <Icon name="copy" size={14} />
+            </button>
+          </div>
+          <div className="insp-pad" style={{ display: "grid", gap: 4, padding: "0 12px" }}>
+            {colors.length === 0 && <p className="muted">No colors in this file yet.</p>}
+            {colors.map((c) => (
+              <button
+                key={c}
+                className="color-row"
+                style={{ width: "100%", textAlign: "left" }}
+                onClick={() => {
+                  const id = snap.selection[0];
+                  if (id) engine.dispatch({ type: "patch", id, patch: { fill: c, fillVisible: true } });
+                }}
+              >
+                <span className="swatch" style={{ background: c }} />
+                <span className="hex">{c.replace("#", "")}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </>
   );
 }
@@ -1437,50 +1717,269 @@ function AgentPane({ engine }: { engine: Engine }) {
   );
 }
 
+interface ShortcutItem {
+  id: string;
+  name: string;
+  keys: string[];
+}
+
+const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
+  {
+    tab: "Essential",
+    items: [
+      { id: "undo", name: "Undo", keys: ["⌘", "Z"] },
+      { id: "redo", name: "Redo", keys: ["⇧", "⌘", "Z"] },
+      { id: "copy", name: "Copy", keys: ["⌘", "C"] },
+      { id: "paste", name: "Paste", keys: ["⌘", "V"] },
+      { id: "duplicate", name: "Duplicate", keys: ["⌘", "D"] },
+      { id: "delete", name: "Delete", keys: ["⌫"] },
+      { id: "select-all", name: "Select all", keys: ["⌘", "A"] },
+      { id: "search", name: "Quick actions / Search", keys: ["⌘", "/"] },
+      { id: "hide-ui", name: "Show / hide UI", keys: ["⌘", "\\"] },
+      { id: "dev-mode", name: "Dev Mode toggle", keys: ["⇧", "D"] },
+      { id: "measure", name: "Measure distance", keys: ["⌥ (hold)"] },
+    ],
+  },
+  {
+    tab: "Tools",
+    items: [
+      { id: "move", name: "Move tool", keys: ["V"] },
+      { id: "scale", name: "Scale tool", keys: ["K"] },
+      { id: "frame", name: "Frame tool", keys: ["F"] },
+      { id: "section", name: "Section tool", keys: ["⇧", "S"] },
+      { id: "slice", name: "Slice tool", keys: ["S"] },
+      { id: "rect", name: "Rectangle", keys: ["R"] },
+      { id: "line", name: "Line", keys: ["L"] },
+      { id: "arrow", name: "Arrow", keys: ["⇧", "L"] },
+      { id: "ellipse", name: "Ellipse", keys: ["O"] },
+      { id: "place-image", name: "Place image / video", keys: ["⇧", "⌘", "K"] },
+      { id: "pen", name: "Pen tool", keys: ["P"] },
+      { id: "pencil", name: "Pencil tool", keys: ["⇧", "P"] },
+      { id: "brush", name: "Brush tool", keys: ["B"] },
+      { id: "text", name: "Text tool", keys: ["T"] },
+      { id: "hand", name: "Hand tool", keys: ["H"] },
+      { id: "comment", name: "Comment", keys: ["C"] },
+    ],
+  },
+  {
+    tab: "View",
+    items: [
+      { id: "zoom-in", name: "Zoom in", keys: ["⌘", "+"] },
+      { id: "zoom-out", name: "Zoom out", keys: ["⌘", "-"] },
+      { id: "zoom-100", name: "Zoom to 100%", keys: ["⌘", "0"] },
+      { id: "zoom-fit", name: "Zoom to fit", keys: ["⇧", "1"] },
+      { id: "zoom-sel", name: "Zoom to selection", keys: ["⇧", "2"] },
+      { id: "rulers", name: "Rulers", keys: ["⇧", "R"] },
+      { id: "pixel-grid", name: "Pixel grid", keys: ["⇧", "'"] },
+      { id: "layout-grids", name: "Layout grids", keys: ["⇧", "G"] },
+      { id: "outline", name: "Outline mode", keys: ["⌘", "Y"] },
+    ],
+  },
+  {
+    tab: "Text",
+    items: [
+      { id: "bold", name: "Bold", keys: ["⌘", "B"] },
+      { id: "underline", name: "Underline", keys: ["⌘", "U"] },
+      { id: "font-inc", name: "Increase font size", keys: ["⌘", "⇧", ">"] },
+      { id: "font-dec", name: "Decrease font size", keys: ["⌘", "⇧", "<"] },
+      { id: "align-left", name: "Text align left", keys: ["⌥", "⌘", "L"] },
+      { id: "align-center", name: "Text align center", keys: ["⌥", "⌘", "T"] },
+      { id: "align-right", name: "Text align right", keys: ["⌥", "⌘", "R"] },
+    ],
+  },
+  {
+    tab: "Arrange",
+    items: [
+      { id: "group", name: "Group selection", keys: ["⌘", "G"] },
+      { id: "ungroup", name: "Ungroup selection", keys: ["⇧", "⌘", "G"] },
+      { id: "frame-sel", name: "Frame selection", keys: ["⌥", "⌘", "G"] },
+      { id: "front", name: "Bring to front", keys: ["⌥", "⌘", "]"] },
+      { id: "forward", name: "Bring forward", keys: ["⌘", "]"] },
+      { id: "back", name: "Send to back", keys: ["⌥", "⌘", "["] },
+      { id: "backward", name: "Send backward", keys: ["⌘", "["] },
+      { id: "flip-h", name: "Flip horizontal", keys: ["⇧", "H"] },
+      { id: "flip-v", name: "Flip vertical", keys: ["⇧", "V"] },
+      { id: "align-l", name: "Align left", keys: ["⌥", "A"] },
+      { id: "align-r", name: "Align right", keys: ["⌥", "D"] },
+      { id: "align-t", name: "Align top", keys: ["⌥", "W"] },
+      { id: "align-b", name: "Align bottom", keys: ["⌥", "S"] },
+      { id: "align-h", name: "Align horizontal centers", keys: ["⌥", "H"] },
+      { id: "align-v", name: "Align vertical centers", keys: ["⌥", "V"] },
+    ],
+  },
+  {
+    tab: "Components",
+    items: [
+      { id: "comp-create", name: "Create component", keys: ["⌥", "⌘", "K"] },
+      { id: "comp-detach", name: "Detach instance", keys: ["⌥", "⌘", "B"] },
+      { id: "comp-reset", name: "Reset all overrides", keys: ["⌥", "⌘", "/"] },
+      { id: "auto-layout", name: "Add auto layout", keys: ["⇧", "A"] },
+      { id: "remove-layout", name: "Remove auto layout", keys: ["⌥", "⇧", "A"] },
+      { id: "mask", name: "Use as mask", keys: ["⌘", "⌥", "M"] },
+      { id: "flatten", name: "Flatten selection", keys: ["⌘", "E"] },
+      { id: "union", name: "Union selection", keys: ["⌥", "⇧", "U"] },
+      { id: "heal", name: "Delete & heal vector point", keys: ["⇧", "⌫"] },
+    ],
+  },
+];
+
 export function HelpBtn() {
   const [open, setOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState("Essential");
+  const [query, setQuery] = useState("");
+  const [usedKeys, setUsedKeys] = useState<Set<string>>(() => new Set(["undo", "move"]));
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = document.activeElement;
+      const isInput =
+        el &&
+        (el.tagName === "INPUT" ||
+          el.tagName === "TEXTAREA" ||
+          (el as HTMLElement).isContentEditable);
+      if (!isInput && (e.key === "?" || (e.shiftKey && e.code === "Slash"))) {
+        e.preventDefault();
+        setOpen((v) => !v);
+        return;
+      }
+      if (e.key === "Escape" && open) {
+        setOpen(false);
+        return;
+      }
+      const meta = e.metaKey || e.ctrlKey;
+      const k = e.key.toLowerCase();
+      let matchedId: string | null = null;
+      if (meta && k === "z") matchedId = e.shiftKey ? "redo" : "undo";
+      else if (meta && k === "c") matchedId = "copy";
+      else if (meta && k === "v") matchedId = "paste";
+      else if (meta && k === "d") matchedId = "duplicate";
+      else if (meta && k === "a") matchedId = "select-all";
+      else if (meta && k === "g") matchedId = e.shiftKey ? "ungroup" : "group";
+      else if (meta && k === "b") matchedId = "bold";
+      else if (meta && k === "u") matchedId = "underline";
+      else if (e.shiftKey && k === "a") matchedId = "auto-layout";
+      else if (e.shiftKey && k === "d") matchedId = "dev-mode";
+      else if (
+        !meta &&
+        !e.shiftKey &&
+        ["v", "k", "f", "r", "o", "t", "p", "h", "c", "s", "l"].includes(k)
+      ) {
+        const toolMap: Record<string, string> = {
+          v: "move",
+          k: "scale",
+          f: "frame",
+          r: "rect",
+          o: "ellipse",
+          t: "text",
+          p: "pen",
+          h: "hand",
+          c: "comment",
+          s: "slice",
+          l: "line",
+        };
+        matchedId = toolMap[k] ?? null;
+      }
+      if (matchedId) {
+        setUsedKeys((prev) => {
+          if (prev.has(matchedId!)) return prev;
+          const next = new Set(prev);
+          next.add(matchedId!);
+          return next;
+        });
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  const allItems = useMemo(() => SHORTCUT_TABS.flatMap((t) => t.items), []);
+  const displayedItems = useMemo(() => {
+    if (query.trim()) {
+      const q = query.toLowerCase();
+      return allItems.filter(
+        (it) =>
+          it.name.toLowerCase().includes(q) ||
+          it.keys.some((k) => k.toLowerCase().includes(q)),
+      );
+    }
+    return SHORTCUT_TABS.find((t) => t.tab === activeTab)?.items ?? [];
+  }, [query, activeTab, allItems]);
+
   return (
     <>
-      <button className="help" title="Help" onClick={() => setOpen((v) => !v)}>
+      <button className="help" title="Keyboard shortcuts (⇧?)" onClick={() => setOpen((v) => !v)}>
         <Icon name="help" size={14} />
       </button>
       {open && (
         <div className="help-pop" onClick={() => setOpen(false)}>
-          <div className="help-card" onClick={(e) => e.stopPropagation()}>
-            <h4>Shortcuts</h4>
-            {[
-              ["V", "Move"],
-              ["K", "Scale"],
-              ["F", "Frame"],
-              ["R", "Rectangle"],
-              ["O", "Ellipse"],
-              ["T", "Text"],
-              ["⌘Z", "Undo"],
-              ["⌘D", "Duplicate"],
-              ["⌘G", "Group"],
-              ["⌘K", "Actions"],
-              ["⇧D", "Dev Mode"],
-              ["⌘\\", "Hide UI"],
-              ["P", "Pen"],
-              ["⇧P", "Pencil"],
-              ["B", "Brush"],
-              ["⇧E", "Design / Prototype"],
-              ["C", "Comment"],
-              ["⌘⌥K", "Component"],
-              ["⌥⇧U", "Union"],
-              ["⌘E", "Flatten"],
-              ["⌘⌥M", "Use as mask"],
-              ["⇧⌘O", "Outline stroke"],
-              ["⌘drag", "Ignore snapping"],
-            ].map(([k, l]) => (
-              <div key={k} className="proto-row">
-                <span>{l}</span>
-                <strong>{k}</strong>
+          <div className="help-card shortcuts-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="shortcuts-head">
+              <h3>Keyboard Shortcuts</h3>
+              <button className="shortcuts-close" onClick={() => setOpen(false)} aria-label="Close">
+                <Icon name="close" size={14} />
+              </button>
+            </div>
+            <div className="shortcuts-search">
+              <input
+                placeholder="Search shortcuts…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                autoFocus
+              />
+            </div>
+            {!query.trim() && (
+              <div className="shortcuts-tabs">
+                {SHORTCUT_TABS.map((t) => (
+                  <button
+                    key={t.tab}
+                    className={activeTab === t.tab ? "active" : ""}
+                    onClick={() => setActiveTab(t.tab)}
+                  >
+                    {t.tab}
+                  </button>
+                ))}
               </div>
-            ))}
-            <button className="export-run" style={{ margin: "8px 12px", width: "calc(100% - 24px)" }} onClick={() => setOpen(false)}>
-              Close
-            </button>
+            )}
+            <div className="shortcuts-body">
+              {displayedItems.map((it) => {
+                const used = usedKeys.has(it.id);
+                return (
+                  <div
+                    key={it.id}
+                    className={`shortcut-row${used ? " used" : ""}`}
+                    title={used ? "You have used this shortcut in this session" : undefined}
+                  >
+                    <div className="shortcut-name">
+                      {used && <span className="used-badge" title="Used" />}
+                      <span>{it.name}</span>
+                    </div>
+                    <div className="shortcut-keys">
+                      {it.keys.map((k, idx) => (
+                        <kbd key={idx}>{k}</kbd>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+              {!displayedItems.length && (
+                <div
+                  style={{
+                    gridColumn: "1 / -1",
+                    textAlign: "center",
+                    padding: "24px 0",
+                    color: "var(--dim)",
+                  }}
+                >
+                  No shortcuts found matching "{query}"
+                </div>
+              )}
+            </div>
+            <div className="shortcuts-footer">
+              <span>
+                {usedKeys.size} of {allItems.length} shortcuts mastered
+              </span>
+              <span>Engine: {getEngineInfo().name}</span>
+            </div>
           </div>
         </div>
       )}
