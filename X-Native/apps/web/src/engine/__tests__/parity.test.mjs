@@ -429,6 +429,13 @@ console.log("component instance overrides:");
   const id3 = e.snapshot().selection[0];
   const n3 = e.snapshot().pages[e.snapshot().page].root.children.find((c) => c.id === id3);
   t("second duplicate gains ' copy 2' suffix", n3.name === "Card copy 2");
+
+  // Smart Duplicate (⌘D repeat transform parity)
+  e.dispatch({ type: "move", ids: [id3], dx: 40, dy: 20 });
+  e.dispatch({ type: "duplicate" });
+  const id4 = e.snapshot().selection[0];
+  const n4 = e.snapshot().pages[e.snapshot().page].root.children.find((c) => c.id === id4);
+  t("subsequent duplicate replicates user move delta (Smart Duplicate)", n4.x === n3.x + 40 && n4.y === n3.y + 20);
 }
 
 {

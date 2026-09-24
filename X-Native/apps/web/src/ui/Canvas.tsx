@@ -208,6 +208,7 @@ export function Canvas({
   const space = useRef(false);
   const imgs = useRef(new Map<string, HTMLImageElement>());
   const [band, setBand] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
   const [edit, setEdit] = useState<{ id: string; text: string } | null>(null);
   const [draftComment, setDraftComment] = useState<{ x: number; y: number } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; wx: number; wy: number } | null>(null);
@@ -2268,7 +2269,82 @@ export function Canvas({
       ctx.fillRect(band.x, band.y, band.w, band.h);
       ctx.strokeRect(band.x + 0.5, band.y + 0.5, band.w, band.h);
     }
-  }, [snap, band, edit, engine, theme, draft, vecEdit, hoverId, ghost, guides, gapBadges, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget]);
+
+    if (cursorPos && wrap.current) {
+      const r = wrap.current.getBoundingClientRect();
+      const cx = cursorPos.x - r.left;
+      const cy = cursorPos.y - r.top;
+
+      if (snap.tool === "eraser") {
+        ctx.save();
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.arc(cx, cy, ERASER_PX, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.strokeStyle = "rgba(0, 0, 0, 0.5)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.arc(cx, cy, ERASER_PX + 0.5, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      } else if (eyedropArmed()) {
+        try {
+          const d = ctx.getImageData(cx, cy, 1, 1).data;
+          const hex = toHex(d[0], d[1], d[2]);
+          const loupeR = 34;
+          const loupeX = cx;
+          const loupeY = Math.max(loupeR + 10, cy - 50);
+
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(loupeX, loupeY, loupeR, 0, Math.PI * 2);
+          ctx.fillStyle = hex;
+          ctx.fill();
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = "#ffffff";
+          ctx.stroke();
+          ctx.lineWidth = 1;
+          ctx.strokeStyle = "rgba(0, 0, 0, 0.2)";
+          ctx.stroke();
+
+          // Crosshair
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(loupeX - 8, loupeY);
+          ctx.lineTo(loupeX + 8, loupeY);
+          ctx.moveTo(loupeX, loupeY - 8);
+          ctx.lineTo(loupeX, loupeY + 8);
+          ctx.stroke();
+
+          // HEX readout pill
+          ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
+          const tw = 60;
+          const th = 20;
+          const bx = loupeX - tw / 2;
+          const by = loupeY + loupeR + 6;
+          if (typeof ctx.roundRect === "function") {
+            ctx.beginPath();
+            ctx.roundRect(bx, by, tw, th, 4);
+            ctx.fill();
+          } else {
+            ctx.fillRect(bx, by, tw, th);
+          }
+          ctx.fillStyle = "#ffffff";
+          ctx.font = "bold 10px monospace";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(hex.toUpperCase(), loupeX, by + th / 2);
+          ctx.restore();
+        } catch {
+          // ignore tainted canvas
+        }
+      }
+    }
+  }, [snap, band, edit, engine, theme, draft, vecEdit, hoverId, ghost, guides, gapBadges, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, cursorPos]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();
@@ -3057,6 +3133,11 @@ export function Canvas({
    *  re-render the whole editor. */
   const [zoomOutCursor, setZoomOutCursor] = useState(false);
   const onMove = (e: React.MouseEvent) => {
+    if (eyedropArmed() || snap.tool === "eraser") {
+      setCursorPos({ x: e.clientX, y: e.clientY });
+    } else if (cursorPos) {
+      setCursorPos(null);
+    }
     if (snap.tool === "zoom") {
       const want = e.altKey;
       setZoomOutCursor((v) => (v === want ? v : want));
@@ -3949,7 +4030,7 @@ export function Canvas({
           : k === "text"
             ? clicked
               ? { text: "", sizingW: "hug", sizingH: "hug", fontSize: 16 }
-              : { text: "", sizingW: "fixed", sizingH: "fixed", fontSize: 16 }
+              : { text: "", sizingW: "fixed", sizingH: "hug", fontSize: 16 }
             : k === "line" || k === "arrow"
               ? { rotation: nodeRotation }
               : {};
@@ -4164,6 +4245,7 @@ export function Canvas({
   const onLeave = (e: React.MouseEvent) => {
     onUp(e);
     hoverIx.current = "";
+    setCursorPos(null);
   };
 
   /** SVG is a vector format, so it becomes editable layers rather than a flat

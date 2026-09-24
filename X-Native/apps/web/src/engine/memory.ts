@@ -764,6 +764,8 @@ export class MemoryEngine implements Engine {
   private lastHist: { type: string; at: number } | null = null;
   private clip: XNode[] = [];
   private copiedProps: Partial<XNode> | null = null;
+  private lastDupDelta: { dx: number; dy: number } | null = null;
+  private justDuplicated = false;
 
   /** Set when a stored document existed but could not be read, so the UI can
    *  tell the user their work was replaced rather than silently starting over. */
@@ -1106,6 +1108,7 @@ export class MemoryEngine implements Engine {
     switch (cmd.type) {
       case "select":
         s.selection = cmd.ids;
+        this.justDuplicated = false;
         if (s.vecEdit && !s.selection.includes(s.vecEdit)) {
           s.vecEdit = null;
           s.vecPoint = null;
@@ -1294,6 +1297,10 @@ export class MemoryEngine implements Engine {
         break;
       }
       case "move":
+        if (this.justDuplicated) {
+          this.lastDupDelta = { dx: cmd.dx, dy: cmd.dy };
+          this.justDuplicated = false;
+        }
         for (const id of cmd.ids) {
           const n = find(this.root(), id);
           if (n && !n.locked) {
@@ -1453,6 +1460,7 @@ export class MemoryEngine implements Engine {
       }
       case "duplicate": {
         const created: string[] = [];
+        const delta = this.lastDupDelta ?? { dx: 10, dy: 10 };
         for (const id of s.selection) {
           const n = find(this.root(), id);
           const p = findParent(this.root(), id) ?? this.root();
@@ -1460,8 +1468,8 @@ export class MemoryEngine implements Engine {
           const copy = clone(n);
           const masterId = n.isComponent ? n.componentId || n.id : n.componentId;
           reid(copy);
-          copy.x += 10;
-          copy.y += 10;
+          copy.x += delta.dx;
+          copy.y += delta.dy;
           const baseName = n.name;
           const copyMatch = baseName.match(/^(.*?)(?: copy(?: (\d+))?)?$/);
           if (copyMatch) {
@@ -1485,6 +1493,7 @@ export class MemoryEngine implements Engine {
           created.push(copy.id);
         }
         s.selection = created;
+        this.justDuplicated = true;
         break;
       }
       case "patch": {
