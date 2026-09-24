@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "reac
 import { MemoryEngine } from "./engine/memory";
 import { Canvas } from "./ui/Canvas";
 import { copyText } from "./engine/clipboard";
+import { worldPos } from "./engine/memory";
+import { zoomTo } from "./ui/zoom";
 import {
   Actions,
   HelpBtn,
@@ -13,7 +15,7 @@ import {
   type NavId,
 } from "./ui/chrome";
 import { Icon } from "./ui/icons";
-import { RightPanel } from "./ui/inspector";
+import { RightPanel, copyPng } from "./ui/inspector";
 import { FigInspectorModal } from "./ui/FigInspectorModal";
 import { PresentationPlayer } from "./ui/PresentationPlayer";
 import { subscribeToast, toast as toastMsg } from "./ui/toast";
@@ -119,6 +121,14 @@ export default function App() {
   return <Dashboard onOpen={(id) => (window.location.hash = `#/file/${encodeURIComponent(id)}`)} />;
 }
 
+/** A file link, narrowed to one layer when exactly one is selected, so the
+ *  receiver opens on that layer rather than somewhere on the page. */
+function linkForSelection(snap: { selection: string[] }, fileId: string): string {
+  const base = `#/file/${encodeURIComponent(fileId)}`;
+  const one = snap.selection.length === 1 ? snap.selection[0] : null;
+  return `${window.location.origin}${window.location.pathname}${base}${one ? `?f=${encodeURIComponent(one)}` : ""}`;
+}
+
 function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null; onHome: () => void }) {
   const engine = useMemo(() => new MemoryEngine(!seed, seed), [seed]);
   const snap = useSyncExternalStore(
@@ -211,6 +221,70 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
   // attaches itself are starved by the app's own capture-phase handler.
   const [exportOpen, setExportOpen] = useState(false);
   const overlayRef = useRef({ exportOpen, actions, figInspector });
+  // Handoff plumbing that needs the live document: land on the layer a shared
+  //  link points at, then answer the two copy commands the menu asks for.
+  useEffect(() => {
+    const linked = /[?&]f=([^/?#]+)/.exec(window.location.hash || "");
+    if (!linked) return undefined;
+    const id = decodeURIComponent(linked[1]);
+    let tries = 0;
+    let timer = 0;
+    // The node lives in whichever page the file last had open, so search every
+    // page and switch if the link points elsewhere. Retrying covers the first
+    // paint, where the restored page index and the tree land in the same tick.
+    const attempt = () => {
+      const s = engine.snapshot();
+      const at = s.pages.findIndex((pg) => !!worldPos(pg.root, id));
+      if (at < 0) {
+        if (++tries < 3) {
+          timer = window.setTimeout(attempt, 220);
+          return false;
+        }
+        // Say so: a link that silently opens the wrong view is worse than one
+        // that admits the layer is not in this copy of the file.
+        setToast("That link points at a layer this copy of the file does not have");
+        window.setTimeout(() => setToast(""), 3200);
+        return false;
+      }
+      if (at !== s.page) engine.dispatch({ type: "setPage", index: at });
+      engine.dispatch({ type: "select", ids: [id] });
+      zoomTo(engine, "selection");
+      return true;
+    };
+    attempt();
+    return () => window.clearTimeout(timer);
+  }, [engine]);
+  useEffect(() => {
+    const selected = () => {
+      const s = engine.snapshot();
+      const id = s.selection[0];
+      return id ? worldPos(s.pages[s.page].root, id)?.node ?? null : null;
+    };
+    const flash = (msg: string) => {
+      setToast(msg);
+      window.setTimeout(() => setToast(""), 1800);
+    };
+    const onCopyLink = () => {
+      const s = engine.snapshot();
+      if (!s.selection.length) flash("Select a layer first · this link opens one layer");
+      else {
+        copyText(linkForSelection(s, fileId));
+        flash(s.selection.length === 1 ? "Link to that layer copied" : "Link copied · opens this file");
+      }
+    };
+    const onCopyPng = () => {
+      const node = selected();
+      if (!node) flash("Select a layer to copy it as a PNG");
+      else copyPng(node);
+    };
+    window.addEventListener("x-native-copy-link", onCopyLink);
+    window.addEventListener("x-native-copy-png", onCopyPng);
+    return () => {
+      window.removeEventListener("x-native-copy-link", onCopyLink);
+      window.removeEventListener("x-native-copy-png", onCopyPng);
+    };
+  }, [engine, fileId]);
+
   overlayRef.current = { exportOpen, actions, figInspector };
   const closeOverlay = () => {
     const o = overlayRef.current;
@@ -236,9 +310,12 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
 
   const share = () => {
     const page = snap.pages[snap.page];
-    const text = `${snap.fileName} · ${page.name} · ${window.location.href}`;
-    copyText(text);
-    setToast("Link copied");
+    // The clipboard gets the link alone — a recipient pastes it into Slack or a
+    // ticket and it stays clickable. The file/page names are in the message.
+    // The button shares the *file*; a link to one layer comes from the layer's
+    // own right-click menu, so a teammate never receives a deep link by accident.
+    copyText(`${window.location.origin}${window.location.pathname}#/file/${encodeURIComponent(fileId)}`);
+    setToast(`Link copied — opens ${snap.fileName} · ${page.name}`);
     window.setTimeout(() => setToast(""), 1600);
   };
   const present = () => {

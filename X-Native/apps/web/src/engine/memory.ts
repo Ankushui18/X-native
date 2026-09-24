@@ -659,7 +659,8 @@ export class MemoryEngine implements Engine {
         { id: "var-4", name: "spacing-md", type: "number", value: 16, collection: "Spacing" },
         { id: "var-5", name: "radius-md", type: "number", value: 8, collection: "Radius" },
       ],
-      annotations: [],
+      // Handoff notes belong to the file, not to the session (see F1).
+      annotations: doc?.annotations ?? [],
       vecEdit: null,
       vecPoint: null,
       vecPoints: [],
@@ -684,6 +685,7 @@ export class MemoryEngine implements Engine {
       showRulers: this.state.showRulers,
       showMinimap: this.state.showMinimap,
       showComments: this.state.showComments,
+      annotations: this.state.annotations,
     };
   }
 

@@ -137,7 +137,7 @@ export function NavRail({
       </button>
       <button
         className="nav"
-        title="File history"
+        title="File history (show every autosaved version)"
         onClick={() => toast("This file autosaves locally · no history to show yet")}
       >
         <Icon name="refresh" size={16} />
@@ -351,7 +351,7 @@ function LayerRow({
         )}
         <button
           className="mini"
-          title={n.visible ? "Hide" : "Show"}
+          title={`${n.visible ? "Hide" : "Show"} layer (⇧⌘H)`}
           onClick={(e) => {
             e.stopPropagation();
             engine.dispatch({ type: "patch", id: n.id, patch: { visible: !n.visible } });
@@ -361,7 +361,7 @@ function LayerRow({
         </button>
         <button
           className="mini"
-          title={n.locked ? "Unlock" : "Lock"}
+          title={`${n.locked ? "Unlock" : "Lock"} layer (⇧⌘L)`}
           onClick={(e) => {
             e.stopPropagation();
             engine.dispatch({ type: "patch", id: n.id, patch: { locked: !n.locked } });
@@ -476,7 +476,7 @@ function LeftPanelImpl({
           value={snap.fileName}
           onChange={(e) => engine.dispatch({ type: "setFileName", name: e.target.value })}
         />
-        <button className="icon-btn" title="Minimize UI" onClick={onMinimize}>
+        <button className="icon-btn" title={"Minimize UI (⇧⌘\\)"} onClick={onMinimize}>
           <Icon name="minimize" size={14} />
         </button>
       </div>
@@ -504,7 +504,7 @@ function LeftPanelImpl({
             <span className="grow" />
             <button
               className="icon-btn"
-              title="Add page"
+              title="Add page (a page is a top-level canvas)"
               onClick={() => engine.dispatch({ type: "addPage" })}
             >
               <Icon name="plus" size={14} />
@@ -823,8 +823,6 @@ export function Actions({
     },
     { label: "Move tool", sc: "V", run: () => engine.dispatch({ type: "setTool", tool: "select" }) },
     { label: "Zoom tool", sc: "Z", run: () => engine.dispatch({ type: "setTool", tool: "zoom" }) },
-    { label: "Zoom to fit", sc: "⇧1", run: () => zoomTo(engine, "fit") },
-    { label: "Zoom to selection", sc: "⇧2", run: () => zoomTo(engine, "selection") },
     {
       label: "Round to whole pixels",
       sc: "⇧⌘P",
@@ -907,7 +905,8 @@ export function Actions({
     { label: "Use as mask", sc: "⌘⌥M", run: () => runMenu(engine, "useAsMask") },
     { label: "Bring to front", sc: "⇧⌘]", run: () => engine.dispatch({ type: "arrange", dir: "front" }) },
     { label: "Send to back", sc: "⇧⌘[", run: () => engine.dispatch({ type: "arrange", dir: "back" }) },
-    { label: "Add auto layout", sc: "⇧A", run: () => {
+    { label: "Copy as code", sc: "⌥⇧⌘C", run: () => engine.dispatch({ type: "copyCode" }) },
+    { label: "Add auto layout", sc: "⇧⌥A", run: () => {
       const id = engine.snapshot().selection[0];
       if (id) engine.dispatch({ type: "autoLayout", id, layout: defaultLayout() });
     } },
@@ -932,9 +931,14 @@ export function Actions({
           }
         }}
       />
-      {items.map((i) => (
+      {items.length === 0 && (
+        <div className="actions-empty">
+          No command matches “{q.trim()}” — try “component”, “export” or “zoom”.
+        </div>
+      )}
+      {items.map((i, idx) => (
         <button
-          key={i.label}
+          key={`${i.label}-${idx}`}
           onClick={() => {
             i.run();
             onClose();
@@ -983,6 +987,14 @@ export function bindHotkeys(
       e.preventDefault();
       engine.dispatch({ type: "detachInstance" });
       toast("Instance detached");
+      return;
+    }
+    // Figma's Copy/Paste as ▸ Copy as code chord, so the clipboard path works
+    // without hunting through a menu.
+    if (meta && e.altKey && e.shiftKey && e.key.toLowerCase() === "c") {
+      e.preventDefault();
+      engine.dispatch({ type: "copyCode" });
+      toast("Copied as CSS");
       return;
     }
     if (meta && e.altKey && !e.shiftKey && e.key.toLowerCase() === "c") {
@@ -1293,6 +1305,9 @@ export function bindHotkeys(
       }
       return;
     }
+    // Add auto layout. ⇧⌥A is Figma's chord (so a Figma user's muscle memory
+    // lands here) and ⇧A is the shorter one this app has always had. Bare ⌥A is
+    // deliberately left alone above: that is Sketch's align-left.
     if (!meta && e.shiftKey && e.key.toLowerCase() === "a") {
       e.preventDefault();
       const id = engine.snapshot().selection[0];
@@ -2061,7 +2076,7 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
       { id: "comp-create", name: "Create component", keys: ["⌥", "⌘", "K"] },
       { id: "comp-detach", name: "Detach instance", keys: ["⌥", "⌘", "B"] },
       { id: "comp-reset", name: "Reset all overrides", keys: ["⌥", "⌘", "/"] },
-      { id: "auto-layout", name: "Add auto layout", keys: ["⇧", "A"] },
+      { id: "auto-layout", name: "Add auto layout (⇧A also works)", keys: ["⇧", "⌥", "A"] },
       { id: "remove-layout", name: "Remove auto layout", keys: ["⌥", "⇧", "A"] },
       { id: "mask", name: "Use as mask", keys: ["⌘", "⌥", "M"] },
       { id: "flatten", name: "Flatten selection", keys: ["⌘", "E"] },

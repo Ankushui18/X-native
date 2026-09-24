@@ -3223,3 +3223,47 @@ html[data-theme="graphite"] .primary { background: var(--blue); color: #fff; }
   font-size: 12px;
   font-weight: 500;
 }
+/* First-run guidance on an empty page. Screen-only chrome: it is a DOM overlay
+   outside the canvas element, so it never prints, exports or lands in a frame. */
+.canvas-start {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  z-index: 6;
+}
+.canvas-start-card {
+  max-width: 340px;
+  padding: 14px 16px 15px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.16);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+  text-align: left;
+}
+.canvas-start-card b { color: var(--text); font-size: 12.5px; }
+.canvas-start-card p { margin: 6px 0 4px; }
+.canvas-start-card span { color: var(--text-3); }
+.canvas-start-card kbd {
+  display: inline-block;
+  min-width: 17px;
+  padding: 1px 4px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--input);
+  color: var(--text);
+  font: 500 10.5px/1.35 var(--mono, ui-monospace, monospace);
+  text-align: center;
+}
+/* The palette's own empty state — without it a miss looked like a broken dialog. */
+.actions-empty {
+  padding: 10px 12px 12px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}

@@ -1,4 +1,4 @@
-import type { ComponentMaster, Page, SharedStyle } from "./types";
+import type { AnnotationItem, ComponentMaster, Page, SharedStyle } from "./types";
 
 /** Bump when the persisted shape changes incompatibly. A mismatch is discarded
  *  rather than migrated blindly, so a stale document can never half-load. */
@@ -24,6 +24,9 @@ export interface PersistedDoc {
   showRulers: boolean;
   showMinimap: boolean;
   showComments: boolean;
+  /** Dev Mode annotations and comment pins, anchored in page space. Absent in
+   *  documents written before handoff notes existed. */
+  annotations?: AnnotationItem[];
 }
 
 export interface LoadResult {
@@ -76,6 +79,14 @@ function validate(v: unknown): PersistedDoc | null {
     showRulers: v.showRulers === true,
     showMinimap: v.showMinimap === true,
     showComments: v.showComments === true,
+    // validate() rebuilds the document key by key, so anything it does not
+    // copy is silently dropped — that is how annotations used to disappear on
+    // reload. Carry them through, keeping only entries that are shaped right.
+    annotations: Array.isArray(v.annotations)
+      ? (v.annotations as AnnotationItem[]).filter(
+          (a) => isObj(a) && typeof a.id === "string" && typeof a.text === "string",
+        )
+      : [],
   };
 }
 

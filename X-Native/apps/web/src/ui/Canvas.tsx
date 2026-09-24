@@ -3636,6 +3636,26 @@ export function Canvas({
           e.target.value = "";
         }}
       />
+      {snap.pages[snap.page].root.children.length === 0 &&
+        snap.tool === "select" &&
+        !edit &&
+        !snap.presentFrame && (
+        <div className="canvas-start">
+          <div className="canvas-start-card">
+            <b>Nothing on this page yet</b>
+            <p>
+              Press <kbd>F</kbd> for a frame, <kbd>R</kbd> for a rectangle, <kbd>T</kbd> for text — or{" "}
+              <kbd>⌘</kbd>
+              <kbd>K</kbd> to search every command.
+            </p>
+            <span>
+              Every shortcut in the app is listed under <kbd>⌥</kbd>
+              <kbd>⇧</kbd>
+              <kbd>?</kbd>.
+            </span>
+          </div>
+        </div>
+      )}
       {snap.tool === "zoom" && !snap.presentFrame && (
         <div className="canvas-hud">
           <span>Zoom tool</span>

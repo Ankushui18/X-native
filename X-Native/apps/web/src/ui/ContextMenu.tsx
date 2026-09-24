@@ -138,7 +138,9 @@ export function canvasMenu(sel: number, isGroup: boolean, hasImage: boolean): Me
     { kind: "action", id: "copyProperties", label: "Copy properties", shortcut: "⌥⌘C", icon: "copy" },
     { kind: "action", id: "paste", label: "Paste", shortcut: "⌘V", icon: "clipboard" },
     { kind: "action", id: "pasteProperties", label: "Paste properties", shortcut: "⌥⌘V", icon: "clipboard" },
-    { kind: "action", id: "copyCode", label: "Copy as code", icon: "code" },
+    { kind: "action", id: "copyCode", label: "Copy as code", shortcut: "⌥⇧⌘C", icon: "code" },
+    { kind: "action", id: "copyPng", label: "Copy as PNG", icon: "image" },
+    { kind: "action", id: "copyLink", label: "Copy link to selection", icon: "link" },
     { kind: "action", id: "duplicate", label: "Duplicate", shortcut: "⌘D", icon: "copy" },
     { kind: "sep" },
   ];
@@ -248,6 +250,14 @@ export function runMenu(
       // The result lands on the clipboard with no visible change on canvas, so
       // without a toast the command looks like it did nothing.
       toast("Copied as CSS");
+      break;
+    case "copyPng":
+      // The rasteriser lives beside the export code in the right panel, so the
+      // menu asks for it over an event rather than duplicating the renderer.
+      window.dispatchEvent(new CustomEvent("x-native-copy-png"));
+      break;
+    case "copyLink":
+      window.dispatchEvent(new CustomEvent("x-native-copy-link"));
       break;
     case "copyProperties":
       engine.dispatch({ type: "copyProperties" });

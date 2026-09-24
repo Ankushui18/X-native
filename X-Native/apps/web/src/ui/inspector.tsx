@@ -382,10 +382,12 @@ function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
           <Icon name="move" size={20} />
           <p className="empty-title">Nothing selected</p>
           <p className="empty-body">
-            Select a layer to edit its position, size, fill, stroke and effects.
+            Pick a layer — on the canvas or in the Layers list — and this panel becomes its
+            position, size, fill, stroke and effects.
           </p>
           <p className="empty-hint">
-            Press <kbd>F</kbd> for a frame, <kbd>R</kbd> for a rectangle, <kbd>T</kbd> for text.
+            Right now these controls are the page&rsquo;s: background and pixel grid. <kbd>&#8984;</kbd>
+            <kbd>K</kbd> finds every command.
           </p>
         </div>
       )}
@@ -4270,6 +4272,43 @@ function runExport(n: XNode, p: ExportPreset) {
   };
   image.onerror = () => toast(`Could not render ${n.name} for export`);
   image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+/** Put a PNG of the layer on the clipboard. It reuses the export renderer, so
+ *  what lands in Slack is what the downloaded file would have contained. */
+export function copyPng(n: XNode) {
+  const preset: ExportPreset = { format: "PNG", scale: 2, suffix: "" };
+  const width = Math.max(1, Math.round(n.w * preset.scale));
+  const height = Math.max(1, Math.round(n.h * preset.scale));
+  const image = new Image();
+  image.onload = () => {
+    const c = document.createElement("canvas");
+    c.width = width;
+    c.height = height;
+    const ctx = c.getContext("2d");
+    if (!ctx) {
+      toast("Could not render this layer");
+      return;
+    }
+    ctx.drawImage(image, 0, 0, width, height);
+    c.toBlob(async (blob) => {
+      if (!blob) {
+        toast(`Could not render ${n.name} for copying`);
+        return;
+      }
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        toast(`Copied ${n.name} as PNG`);
+      } catch {
+        // A clipboard that will not take images (older Safari, denied
+        // permission) still gets the user the pixels, just as a file.
+        downloadBlob(blob, `${n.name}.png`);
+        toast("Clipboard cannot take images · downloaded the PNG instead");
+      }
+    }, "image/png");
+  };
+  image.onerror = () => toast(`Could not render ${n.name} for copying`);
+  image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(exportSvg(n, preset))}`;
 }
 
 function fillValuePatch(v: FillValue): Partial<XNode> {
