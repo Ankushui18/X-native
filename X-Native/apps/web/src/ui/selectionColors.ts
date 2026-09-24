@@ -1,4 +1,4 @@
-import type { Engine, Snapshot, XNode } from "../engine/types";
+import type { Engine, GradientStop, Snapshot, XNode } from "../engine/types";
 import { find } from "../engine/memory";
 import { plural, toast } from "./toast";
 
@@ -19,6 +19,9 @@ export interface ColorUsage {
   bucket: ColorBucket;
   count: number;
   ids: string[];
+  /** The fill opacity shared by every use of this colour, or null when the
+   *  selection is mixed - Figma's field shows nothing until it can show one value. */
+  opacity: number | null;
 }
 
 const NONE = "#00000000";
@@ -28,38 +31,78 @@ function norm(value: string | undefined): string | null {
   return value.slice(0, 7).toLowerCase();
 }
 
+/**
+ * The colours a single paint contributes. Figma's Selection colors skips image
+ * and pattern fills, and shows gradients by the colours in their ramp, because
+ * those are the pixels that are actually on the canvas; a leftover `color`
+ * string on an image fill would otherwise be listed as if it painted.
+ */
+function paintColors(
+  type: string | undefined,
+  color: string | undefined,
+  stops: GradientStop[] | undefined,
+  opacity: number | undefined,
+): { hex: string; opacity: number | undefined }[] {
+  if (type === "image" || type === "pattern" || !color) return [];
+  if (type && type !== "solid" && stops && stops.length)
+    return stops
+      .map((s) => ({ hex: norm(s.color) ?? "", opacity }))
+      .filter((e) => e.hex);
+  const hex = norm(color);
+  return hex ? [{ hex, opacity }] : [];
+}
+
 /** Colours used inside `node`, counted, grouped and ordered by frequency. */
 export function colorUsage(node: XNode): ColorUsage[] {
-  const map = new Map<string, ColorUsage>();
-  const add = (hex: string | null, bucket: ColorBucket, id: string) => {
+  return colorUsageAll([node]);
+}
+
+/** Figma's row lists the colours of the *selection*, not of one layer: every
+ *  selected layer contributes, and a colour used by two of them is still one
+ *  row. Passing several nodes is what makes a multi-select read correctly. */
+export function colorUsageAll(nodes: XNode[]): ColorUsage[] {
+  const map = new Map<string, ColorUsage & { opacities: (number | undefined)[] }>();
+  const add = (hex: string | null, bucket: ColorBucket, id: string, key: string, opacity?: number) => {
     if (!hex) return;
-    const key = `${bucket}:${hex}`;
     const hit = map.get(key);
     if (hit) {
       hit.count++;
       hit.ids.push(id);
+      hit.opacities.push(opacity);
     } else {
-      map.set(key, { hex, bucket, count: 1, ids: [id] });
+      map.set(key, { hex, bucket, count: 1, ids: [id], opacity: null, opacities: [opacity] });
     }
   };
   const walk = (n: XNode) => {
     if (n.visible === false) return;
-    const fill = norm(n.fill);
-    if (fill && n.fillVisible !== false) add(fill, n.kind === "text" ? "Text" : "Fill", n.id);
-    for (const f of n.fills ?? []) {
-      if (f.visible === false) continue;
-      add(norm(f.color), n.kind === "text" ? "Text" : "Fill", n.id);
+    if (n.fillVisible !== false) {
+      for (const e of paintColors(n.fillType, n.fill, n.gradientStops, n.fillOpacity ?? 1))
+        add(e.hex, n.kind === "text" ? "Text" : "Fill", n.id, `${n.kind === "text" ? "Text" : "Fill"}:${e.hex}`, e.opacity);
+      for (const f of n.fills ?? []) {
+        if (f.visible === false) continue;
+        for (const e of paintColors(f.type, f.color, f.stops, f.opacity ?? 1))
+          add(e.hex, n.kind === "text" ? "Text" : "Fill", n.id, `${n.kind === "text" ? "Text" : "Fill"}:${e.hex}`, e.opacity);
+      }
     }
-    const stroke = norm(n.strokePaint);
-    if (stroke && n.strokeVisible !== false && n.strokeWidth > 0) add(stroke, "Border", n.id);
-    for (const s of n.strokes ?? []) {
-      if (s.visible === false) continue;
-      add(norm(s.color), "Border", n.id);
+    if (n.strokeVisible !== false && n.strokeWidth > 0) {
+      for (const e of paintColors(undefined, n.strokePaint, undefined, n.strokeOpacity ?? 1))
+        add(e.hex, "Border", n.id, `Border:${e.hex}`, e.opacity);
+      for (const st of n.strokes ?? []) {
+        if (st.visible === false) continue;
+        for (const e of paintColors(undefined, st.color, undefined, st.opacity ?? 1))
+          add(e.hex, "Border", n.id, `Border:${e.hex}`, e.opacity);
+      }
     }
     for (const ch of n.children) walk(ch);
   };
-  walk(node);
-  return [...map.values()].sort((a, b) => b.count - a.count || a.hex.localeCompare(b.hex));
+  for (const start of nodes) walk(start);
+  return [...map.values()]
+    .map(({ opacities, ...u }) => {
+      const first = opacities[0];
+      const uniform = opacities.every((o) => (o ?? 1) === (first ?? 1));
+      return { ...u, opacity: uniform ? (first ?? 1) : null };
+    })
+    .sort((a, b) => b.count - a.count || a.hex.localeCompare(b.hex));
 }
 
 /** Every layer on the page painted `hex` in the same role, so a click can jump
@@ -95,6 +138,56 @@ export function selectByColor(engine: Engine, snap: Snapshot, usage: ColorUsage,
   const keep = additive ? new Set([...snap.selection, ...found]) : new Set(found);
   engine.dispatch({ type: "select", ids: [...keep] });
   toast(`Selected ${plural(found.length, "layer")} · ${usage.bucket.toLowerCase()} ${usage.hex.toUpperCase()}`);
+}
+
+/**
+ * Set the opacity of every paint that carries this colour, in one undo step -
+ * Figma's percentage field on a Selection colors row. It writes the layers the
+ * row was built from (the selection), not every layer on the page: silently
+ * repainting something the designer never picked is worse than a narrower tool.
+ * A gradient is included as a whole, because the row lists the colours it
+ * paints, not a stop it owns.
+ */
+export function setOpacityMatches(engine: Engine, root: XNode, usage: ColorUsage, pct: number): number {
+  const o = Math.max(0, Math.min(100, pct)) / 100;
+  const ids = [...new Set(usage.ids)];
+  let touched = 0;
+  engine.dispatch({ type: "begin" });
+  for (const id of ids) {
+    const n = find(root, id);
+    if (!n) continue;
+    const patch: Record<string, unknown> = {};
+    if (usage.bucket === "Border") {
+      if (paintColors(undefined, n.strokePaint, undefined, n.strokeOpacity).some((e) => e.hex === usage.hex))
+        patch.strokeOpacity = o;
+      const strokes = n.strokes?.map((st) =>
+        paintColors(undefined, st.color, undefined, st.opacity).some((e) => e.hex === usage.hex) ? { ...st, opacity: o } : st,
+      );
+      if (n.strokes?.length && strokes?.some((st, j) => st !== n.strokes![j])) patch.strokes = strokes;
+    } else {
+      if (
+        n.fillVisible !== false &&
+        paintColors(n.fillType, n.fill, n.gradientStops, n.fillOpacity).some((e) => e.hex === usage.hex)
+      )
+        patch.fillOpacity = o;
+      const fills = n.fills?.map((f) =>
+        f.visible === false || !paintColors(f.type, f.color, f.stops, f.opacity).some((e) => e.hex === usage.hex)
+          ? f
+          : { ...f, opacity: o },
+      );
+      if (n.fills?.length && fills?.some((f, j) => f !== n.fills![j])) patch.fills = fills;
+    }
+    if (Object.keys(patch).length) {
+      engine.dispatch({ type: "patch", id, patch: patch as never });
+      touched++;
+    }
+  }
+  engine.dispatch({ type: "end" });
+  if (touched)
+    toast(
+      `Set ${usage.bucket.toLowerCase()} opacity ${Math.round(o * 100)}% · ${plural(touched, "layer")} · ${usage.hex.toUpperCase()}`,
+    );
+  return touched;
 }
 
 /**

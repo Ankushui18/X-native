@@ -22,6 +22,9 @@ import {
   computeFigmaNoodle,
 } from "../geometry.ts";
 import { MemoryEngine } from "../memory.ts";
+import { colorUsage, colorUsageAll, setOpacityMatches } from "../../ui/selectionColors.ts";
+import { contrastRatio, contrastTarget, nearestAccessible, passesContrast, parseHex, rgbToHsv } from "../../ui/color.ts";
+
 import { inspectFigFile, importFig } from "../figImport.ts";
 import { interpolateMatchingLayers, solveEasing, applyInterpolatedFrame } from "../smartAnimate.ts";
 import { readFileSync, existsSync } from "fs";
@@ -1254,6 +1257,89 @@ console.log("vector edit multi-selection & marquee (Figma parity):");
     balanceLines(hugeLines, 1e6, w, "balance") === hugeLines);
   const cjk = ["\u4e2d\u6587\u53e5\u5b50\u957f", "\u53e6\u4e00\u6bb5"];
   t("balance leaves unspaced CJK lines to the wrapper", balanceLines(cjk, 6, w, "balance").length === 2);
+}
+
+
+console.log("wcag contrast (the picker's check):");
+{
+  t("black on white is 21:1", Math.abs(contrastRatio("#000000", "#ffffff") - 21) < 0.01);
+  t("the same color is 1:1", Math.abs(contrastRatio("#7f7f7f", "#7f7f7f") - 1) < 1e-6);
+  t("AA wants 4.5 for normal text and 3 for large",
+    contrastTarget("normal", "AA") === 4.5 && contrastTarget("large", "AA") === 3);
+  t("graphics has no AAA tier", contrastTarget("graphics", "AAA") === 3);
+  t("#767676 on white is the classic AA floor", passesContrast("#767676", "#ffffff", "normal", "AA"));
+  t("#777777 on white just misses it", !passesContrast("#777777", "#ffffff", "normal", "AA"));
+  const fixed = nearestAccessible("#777777", "#ffffff", contrastTarget("normal", "AA"));
+  t("fixing a failing gray clears the target", contrastRatio(fixed, "#ffffff") + 1e-6 >= 4.5);
+  t("fixing is the smallest change that works", fixed.toLowerCase() === "#767676");
+  const blue = nearestAccessible("#6fb3f2", "#ffffff", contrastTarget("normal", "AA"));
+  const from = rgbToHsv(parseHex("#6fb3f2").r, parseHex("#6fb3f2").g, parseHex("#6fb3f2").b);
+  const to = rgbToHsv(parseHex(blue).r, parseHex(blue).g, parseHex(blue).b);
+  t("a saturated color keeps its hue and chroma when repaired",
+    Math.abs(from.h - to.h) <= 1 && Math.abs(from.s - to.s) <= 0.02 && to.v < from.v);
+  t("repairing reaches the target without overshooting it", contrastRatio(blue, "#ffffff") >= 4.5 && contrastRatio(blue, "#ffffff") < 5.2);
+  t("an already passing color is left alone", nearestAccessible("#000000", "#ffffff", 7) === "#000000");
+  t("an unreachable target returns the best available",
+    contrastRatio(nearestAccessible("#808080", "#7f7f7f", 21), "#7f7f7f") > 1);
+}
+
+console.log("selection colors: only the paints that actually paint:");
+{
+  const e = new MemoryEngine(false);
+  e.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w: 100, h: 100 });
+  const a = e.snapshot().selection[0];
+  e.dispatch({ type: "add", kind: "rect", x: 120, y: 0, w: 100, h: 100 });
+  const b = e.snapshot().selection[0];
+  const rootOf = () => e.snapshot().pages[e.snapshot().page].root;
+  const get = (id) => {
+    let found = null;
+    const walk = (n) => { if (n.id === id) found = n; n.children?.forEach(walk); };
+    walk(rootOf());
+    return found;
+  };
+
+  e.dispatch({
+    type: "patch", id: a,
+    patch: {
+      fill: "#ff0000", fillType: "linear",
+      gradientStops: [{ color: "#00ff00", position: 0 }, { color: "#0000ff", position: 1 }],
+    },
+  });
+  let usage = colorUsage(rootOf());
+  t("a gradient is listed by the stops it paints",
+    usage.some((u) => u.hex === "#00ff00") && usage.some((u) => u.hex === "#0000ff"));
+  t("a gradient does not list the leftover base color", !usage.some((u) => u.hex === "#ff0000"));
+
+  e.dispatch({ type: "patch", id: b, patch: { fill: "#123456", fillType: "image", imageSrc: "data:image/png;base64,AAA" } });
+  t("an image fill contributes no color", !colorUsage(rootOf()).some((u) => u.hex === "#123456"));
+
+  e.dispatch({ type: "patch", id: a, patch: { fillVisible: false } });
+  usage = colorUsage(rootOf());
+  t("hidden fills are left out", !usage.some((u) => u.hex === "#00ff00" || u.hex === "#0000ff"));
+
+  e.dispatch({ type: "patch", id: a, patch: { fillVisible: true, fill: "#00ff00", fillType: "solid", gradientStops: [], fillOpacity: 0.5 } });
+  e.dispatch({ type: "patch", id: b, patch: { fill: "#00ff00", fillType: "solid", imageSrc: "", fillOpacity: 0.5 } });
+  usage = colorUsage(rootOf());
+  const green = usage.find((u) => u.hex === "#00ff00");
+  t("one row per color, counted across layers", !!green && green.count === 2);
+  t("a multi-layer selection merges into one list",
+    colorUsageAll([get(a), get(b)]).some((u) => u.hex === "#00ff00" && u.count === 2 && u.ids.length === 2));
+  t("a shared opacity is shown", green?.opacity === 0.5);
+  e.dispatch({ type: "patch", id: b, patch: { fillOpacity: 0.25 } });
+  t("mixed opacities report null so the field stays empty",
+    colorUsage(rootOf()).find((u) => u.hex === "#00ff00")?.opacity === null);
+
+  // a third layer shares the colour but was never selected
+  e.dispatch({ type: "add", kind: "rect", x: 240, y: 0, w: 100, h: 100 });
+  const c = e.snapshot().selection[0];
+  e.dispatch({ type: "patch", id: c, patch: { fill: "#00ff00", fillType: "solid", fillOpacity: 0.2 } });
+
+  // the row the panel would build: from the selection, so it owns two layers
+  const row = colorUsageAll([get(a), get(b)]).find((u) => u.hex === "#00ff00");
+  const touched = setOpacityMatches(e, rootOf(), row, 75);
+  t("the field rewrites every selected paint carrying that color",
+    touched === 2 && get(a).fillOpacity === 0.75 && get(b).fillOpacity === 0.75);
+  t("a layer outside the selection keeps its own opacity", get(c).fillOpacity === 0.2);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

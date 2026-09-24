@@ -35,7 +35,7 @@ import type {
   XNode,
 } from "../engine/types";
 import { collectColors, defaultEffect, defaultLayout, find, findParent, framesOf, worldPos } from "../engine/memory";
-import { colorUsage, recolorMatches, selectByColor } from "./selectionColors";
+import { colorUsageAll, recolorMatches, selectByColor, setOpacityMatches } from "./selectionColors";
 import { shapePoly, pathToVectorNetwork, vectorNetworkToSvgPath, vertexDegree, simplifyPath, smoothPath } from "../engine/geometry";
 import { hugSize } from "./textLayout";
 import { Icon } from "./icons";
@@ -1566,13 +1566,15 @@ function devProperties(n: XNode, snap: Snapshot, unit: DevUnit): DevProp[] {
   if (n.blendMode && n.blendMode !== "normal") L("Blend mode", n.blendMode, "Layer");
   if (n.isMask) L("Mask", n.maskType === "luminance" ? "Luminance" : "Alpha", "Layer");
   const fills = (n.fills ?? []).filter((f) => f.visible !== false);
-  if (n.fillVisible && !isNone(n.fill)) {
-    L("Fill", `${n.fill.toUpperCase()} · ${Math.round((n.fillOpacity ?? 1) * 100)}%`, "Style", n.fill);
-  }
-  for (const f of fills) {
+  // Same reading order as the Design panel now uses: the paints stacked above
+  // the base fill come first, so both sides count the stack from the canvas down.
+  for (const f of [...fills].reverse()) {
     if (isNone(f.color)) continue;
     const label = f.type === "solid" ? "Fill" : f.type.replace("-", " ").replace(/^./, (c) => c.toUpperCase());
     L(label, `${f.color.toUpperCase()} · ${Math.round((f.opacity ?? 1) * 100)}%`, "Style", f.color);
+  }
+  if (n.fillVisible && !isNone(n.fill)) {
+    L("Fill", `${n.fill.toUpperCase()} · ${Math.round((n.fillOpacity ?? 1) * 100)}%`, "Style", n.fill);
   }
   if (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)) {
     L(
@@ -1971,6 +1973,11 @@ function Design({
   snap: Snapshot;
 }) {
   const [typeOpen, setTypeOpen] = useState(false);
+  /** Which fill row the pointer picked up, and the row it is over. Only fills
+   *  are reorderable: the base fill is the bottom of the stack by definition, so
+   *  the rows above it are the ones a designer moves around. */
+  const [fillDrag, setFillDrag] = useState<number | null>(null);
+  const [fillOver, setFillOver] = useState<number | null>(null);
   const [padOpen, setPadOpen] = useState(false);
   const [conOpen, setConOpen] = useState(false);
   const [cornersOpen, setCornersOpen] = useState(!!n.cornerIndependent);
@@ -2029,6 +2036,15 @@ function Design({
   const patchType = (over: Partial<XNode>) => {
     patch(over);
     refitHug(over);
+  };
+  /** Move a fill within the extra stack; `to` is an index into the same array. */
+  const moveFill = (from: number, to: number) => {
+    const list = [...(n.fills ?? [])];
+    if (from === to || from < 0 || from >= list.length) return;
+    const [item] = list.splice(from, 1);
+    if (!item) return;
+    list.splice(Math.max(0, Math.min(list.length, to)), 0, item);
+    patch({ fills: list });
   };
   const refitHug = (over: Partial<XNode>, axes?: { w?: boolean; h?: boolean }) => {
     if (n.kind !== "text") return;
@@ -3146,49 +3162,12 @@ function Design({
           <Icon name="plus" size={14} />
         </button>
       }>
-      {(!isNone(n.fill) || n.fillVisible) && (
-        <div className="insp-pad">
-          <ColorRow
-            value={n.fill}
-            opacity={Math.round((n.fillOpacity ?? 1) * 100)}
-            visible={n.fillVisible}
-            type={n.fillType}
-            second={n.fillB}
-            blend={n.fillBlend}
-            image={n.imageSrc || undefined}
-            imageFit={n.imageFit}
-            imageRot={n.imageRot}
-            imageExposure={n.imageExposure}
-            imageContrast={n.imageContrast}
-            imageSaturation={n.imageSaturation}
-            imageTemperature={n.imageTemperature}
-            imageTint={n.imageTint}
-            imageHighlights={n.imageHighlights}
-            imageShadows={n.imageShadows}
-            gx={n.fillGX}
-            gy={n.fillGY}
-            hx={n.fillHX}
-            hy={n.fillHY}
-            stops={n.gradientStops}
-            recents={collectColors(snap.pages[snap.page].root)}
-            onChange={(fill) => engine.dispatch({ type: "patch", id: n.id, patch: { fill, fillVisible: true } })}
-            onOpacity={(v) =>
-              engine.dispatch({ type: "patch", id: n.id, patch: { fillOpacity: v / 100 } })
-            }
-            onVisible={(v) => engine.dispatch({ type: "patch", id: n.id, patch: { fillVisible: v } })}
-            onRemove={() =>
-              engine.dispatch({
-                type: "patch",
-                id: n.id,
-                patch: { fill: "#00000000", fillVisible: false },
-              })
-            }
-            onMeta={(p) => engine.dispatch({ type: "patch", id: n.id, patch: p })}
-            onValueChange={(v) => engine.dispatch({ type: "patch", id: n.id, patch: fillValuePatch(v) })}
-          />
-        </div>
-      )}
-      {(n.fills ?? []).map((p, i) => {
+      {/* Figma lists a fill stack top-most first, and the base fill is the
+          bottom of the stack, so it sits last in the list. */}
+      {(n.fills ?? [])
+        .map((p, i) => ({ p, i }))
+        .reverse()
+        .map(({ p, i }) => {
         const setPaint = (patch: Partial<typeof p>) =>
           engine.dispatch({
             type: "patch",
@@ -3196,7 +3175,44 @@ function Design({
             patch: { fills: (n.fills ?? []).map((q, j) => (j === i ? { ...q, ...patch } : q)) },
           });
         return (
-          <div className="insp-pad" key={i}>
+          <div
+            className={`insp-pad paint-row${fillDrag === i ? " dragging" : ""}${fillOver === i ? " drop" : ""}`}
+            key={i}
+            onDragOver={(e) => {
+              if (fillDrag === null) return;
+              e.preventDefault();
+              setFillOver(i);
+            }}
+            onDragLeave={() => setFillOver((v) => (v === i ? null : v))}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (fillDrag !== null) moveFill(fillDrag, i);
+              setFillDrag(null);
+              setFillOver(null);
+            }}
+          >
+            <div className="paint-tools">
+              <span
+                className="grip"
+                draggable
+                title="Drag to reorder this fill"
+                aria-label="Drag to reorder this fill"
+                onDragStart={(e) => {
+                  setFillDrag(i);
+                  e.dataTransfer.effectAllowed = "move";
+                }}
+                onDragEnd={() => {
+                  setFillDrag(null);
+                  setFillOver(null);
+                }}
+              />
+              <button className="mini" title="Bring forward" aria-label="Bring forward" onClick={() => moveFill(i, i + 1)}>
+                <Icon name="chevron-up" size={11} />
+              </button>
+              <button className="mini" title="Send backward" aria-label="Send backward" onClick={() => moveFill(i, i - 1)}>
+                <Icon name="chevron-down" size={11} />
+              </button>
+            </div>
             <ColorRow
               value={p.color}
               opacity={Math.round((p.opacity ?? 1) * 100)}
@@ -3209,6 +3225,8 @@ function Design({
               hy={p.hy}
               blend={p.blend}
               recents={collectColors(snap.pages[snap.page].root)}
+              background={fillBackground(snap.pages[snap.page].root, n)}
+              largeText={isLargeText(n)}
               onChange={(color) => setPaint({ color, visible: true })}
               onOpacity={(v) => setPaint({ opacity: v / 100 })}
               onVisible={(v) => setPaint({ visible: v })}
@@ -3240,6 +3258,50 @@ function Design({
           </div>
         );
       })}
+      {(!isNone(n.fill) || n.fillVisible) && (
+        <div className="insp-pad">
+          <ColorRow
+            value={n.fill}
+            opacity={Math.round((n.fillOpacity ?? 1) * 100)}
+            visible={n.fillVisible}
+            type={n.fillType}
+            second={n.fillB}
+            blend={n.fillBlend}
+            image={n.imageSrc || undefined}
+            imageFit={n.imageFit}
+            imageRot={n.imageRot}
+            imageExposure={n.imageExposure}
+            imageContrast={n.imageContrast}
+            imageSaturation={n.imageSaturation}
+            imageTemperature={n.imageTemperature}
+            imageTint={n.imageTint}
+            imageHighlights={n.imageHighlights}
+            imageShadows={n.imageShadows}
+            gx={n.fillGX}
+            gy={n.fillGY}
+            hx={n.fillHX}
+            hy={n.fillHY}
+            stops={n.gradientStops}
+            recents={collectColors(snap.pages[snap.page].root)}
+            background={fillBackground(snap.pages[snap.page].root, n)}
+            largeText={isLargeText(n)}
+            onChange={(fill) => engine.dispatch({ type: "patch", id: n.id, patch: { fill, fillVisible: true } })}
+            onOpacity={(v) =>
+              engine.dispatch({ type: "patch", id: n.id, patch: { fillOpacity: v / 100 } })
+            }
+            onVisible={(v) => engine.dispatch({ type: "patch", id: n.id, patch: { fillVisible: v } })}
+            onRemove={() =>
+              engine.dispatch({
+                type: "patch",
+                id: n.id,
+                patch: { fill: "#00000000", fillVisible: false },
+              })
+            }
+            onMeta={(p) => engine.dispatch({ type: "patch", id: n.id, patch: p })}
+            onValueChange={(v) => engine.dispatch({ type: "patch", id: n.id, patch: fillValuePatch(v) })}
+          />
+        </div>
+      )}
       </Section>
 
       <Section id="stroke" title="Stroke" actions={
@@ -3269,6 +3331,8 @@ function Design({
             opacity={Math.round((n.strokeOpacity ?? 1) * 100)}
             visible={n.strokeVisible}
             recents={collectColors(snap.pages[snap.page].root)}
+            background={fillBackground(snap.pages[snap.page].root, n)}
+            largeText={isLargeText(n)}
             onChange={(strokePaint) =>
               engine.dispatch({ type: "patch", id: n.id, patch: { strokePaint, strokeVisible: true } })
             }
@@ -3702,7 +3766,14 @@ function Design({
 
       <div className="hr" />
       <Effects n={n} engine={engine} />
-      <SelectionColors n={n} engine={engine} snap={snap} />
+      <SelectionColors
+        n={n}
+        nodes={snap.selection
+          .map((id) => find(snap.pages[snap.page].root, id))
+          .filter((m): m is XNode => !!m)}
+        engine={engine}
+        snap={snap}
+      />
       <ExportBlock n={n} engine={engine} />
     </>
   );
@@ -3716,8 +3787,19 @@ function Design({
  * click-to-update-all, one undo step), the hex selects them (Figma's "Select
  * all with same fill").
  */
-function SelectionColors({ n, engine, snap }: { n: XNode; engine: Engine; snap: Snapshot }) {
-  const usage = colorUsage(n);
+function SelectionColors({
+  n,
+  nodes,
+  engine,
+  snap,
+}: {
+  n: XNode;
+  nodes: XNode[];
+  engine: Engine;
+  snap: Snapshot;
+}) {
+  // The selected layers, not the page: a row is a claim about the selection.
+  const usage = colorUsageAll(nodes.length ? nodes : [n]);
   const [picking, setPicking] = useState<{ key: string; rect: DOMRect } | null>(null);
   // Sketch shows the section for any selection, single colour included — the
   // count and the select-all affordance are the point, not the list length.
@@ -3748,6 +3830,45 @@ function SelectionColors({ n, engine, snap }: { n: XNode; engine: Engine; snap: 
                   {u.hex.replace("#", "").toUpperCase()}
                   <span className="scolor-kind">{u.bucket}</span>
                 </button>
+                <input
+                  className="scolor-op"
+                  aria-label={`Opacity of all ${u.hex.toUpperCase()} ${u.bucket.toLowerCase()}`}
+                  title={`Opacity of the selected layers using ${u.hex.toUpperCase()} · 0-100`}
+                  defaultValue={u.opacity == null ? "" : String(Math.round(u.opacity * 100))}
+                  placeholder="Mixed"
+                  onFocus={(e) => e.target.select()}
+                  // An uncontrolled field only knows what you typed, not what
+                  // landed, so mark the edit and let Escape drop it untouched -
+                  // blurring a field you never changed must not cost an undo step.
+                  onInput={(e) => e.currentTarget.dataset.edited = "1"}
+                  onBlur={(e) => {
+                    const el = e.currentTarget;
+                    if (el.dataset.edited !== "1") return;
+                    delete el.dataset.edited;
+                    const raw = parseFloat(el.value);
+                    if (Number.isNaN(raw)) {
+                      el.value = u.opacity == null ? "" : String(Math.round(u.opacity * 100));
+                      return;
+                    }
+                    const v = Math.max(0, Math.min(100, raw));
+                    // Snap the field back to what was applied, so a typo never
+                    // leaves the row reading a value the document does not have.
+                    if (String(v) !== el.value) el.value = String(v);
+                    setOpacityMatches(engine, root, u, v);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const el = e.target as HTMLInputElement;
+                      delete el.dataset.edited;
+                      el.value = u.opacity == null ? "" : String(Math.round(u.opacity * 100));
+                      el.blur();
+                    }
+                    if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                  }}
+                />
+                <span className="scolor-pct">%</span>
                 <span className="scolor-count" title={`${u.count} layers`}>
                   {u.count}
                 </span>
@@ -4635,6 +4756,8 @@ function ColorRow({
   hy,
   stops,
   recents = [],
+  background,
+  largeText,
   onChange,
   onOpacity,
   onVisible,
@@ -4665,6 +4788,9 @@ function ColorRow({
   hy?: number;
   stops?: FillValue["stops"];
   recents?: string[];
+  /** Passed to the picker's contrast check: what this paint is actually over. */
+  background?: string;
+  largeText?: boolean;
   onChange: (v: string) => void;
   onOpacity?: (v: number) => void;
   onVisible?: (v: boolean) => void;
@@ -4777,6 +4903,8 @@ function ColorRow({
           }}
           recents={recents}
           anchor={anchor}
+          background={background}
+          largeText={largeText}
           onChange={(v) => {
             if (onValueChange) {
               onValueChange(v);
@@ -4791,6 +4919,28 @@ function ColorRow({
       )}
     </div>
   );
+}
+
+/**
+ * What a paint is actually drawn over, for the contrast check: the nearest
+ * ancestor with a visible solid fill, falling back to the white paper the
+ * canvas sits on. Figma resolves the background the same way and always treats
+ * the selected layer as the foreground.
+ */
+function fillBackground(root: XNode, n: XNode): string {
+  for (let p = findParent(root, n.id); p; p = findParent(root, p.id)) {
+    if (p.kind === "text") continue;
+    if (p.fillVisible !== false && !isNone(p.fill) && p.fillType === "solid") return p.fill.slice(0, 7);
+    for (const q of p.fills ?? []) {
+      if (q.visible !== false && q.type === "solid" && !isNone(q.color)) return q.color.slice(0, 7);
+    }
+  }
+  return "#ffffff";
+}
+
+/** WCAG's large-text exemption, in Figma's terms: 24px, or 19px and bold. */
+function isLargeText(n: XNode): boolean {
+  return n.kind === "text" && (n.fontSize >= 24 || (n.fontSize >= 19 && n.fontWeight >= 700));
 }
 
 function fmt(v: number) {

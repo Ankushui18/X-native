@@ -275,6 +275,100 @@ is currently an uppercase transform, not a typeface feature. The Rust side alrea
 carries `list_style` and `paragraph_indent`, so the wasm renderer needs the same two
 when it is next built; `textWrap` has no Rust counterpart yet.
 
+## Colour, gradients and images vs Figma's colour docs
+
+Same loop, on Figma's "Color, gradients, and images" section: read what each
+article says the tool does, measure ours against it, fix what actually
+diverges. Most of it was already true. The picker carries all five colour models
+including HSB and the RGB / HEX / CSS / HSL / HSB notation dropdown; `BLENDS` in
+`ui/color.ts` is exactly Figma's sixteen blend modes and `canvasBlend` maps
+every one of them (plus `pass-through` for groups); gradients work on fills and
+strokes with draggable stops, `+` to add, minus to delete, Flip and Rotate;
+image fills keep Fill / Fit / Crop / Tile across scaling, have the tile size, the
+seven adjustments and `Rotate 90º` that turns only the fill. Four things were
+not.
+
+### The contrast check
+
+Figma's picker has a "Check color contrast" row and we had nothing like it. It
+now sits under the blend row in `FillPicker`, and the maths is the WCAG 2.1
+definition rather than an approximation, so the number in the panel is the
+number a developer gets out of an audit tool: sRGB linearised through the
+`0.03928 / 1.055` piecewise curve, then `(max + 0.05) / (min + 0.05)`, range
+1:1 to 21:1. The targets are the article's: 4.5:1 for normal text and 3:1 for
+large text and graphics at AA, 7:1 and 4.5:1 at AAA, with the catch that
+**graphics has no AAA tier**, so the AAA badge is hidden rather than reported as
+a failure when the category is Graphics.
+
+- The category starts on `Auto`, which reads the layer: text at 24px, or 19px
+  and bold, is large text and gets the 3:1 line; anything else is normal text;
+  `Graphics` is a manual choice.
+- The fill's own opacity is composited before measuring, and the background is
+  resolved by walking up the ancestry to the first visible solid fill, falling
+  back to white, which is the answer you would get by sampling the canvas.
+  Typing a hex overrides it and a reset button goes back to the layer's own.
+- Figma's auto-correct is "click the ✗ indicator"; ours is a **Fix** button that
+  appears only while AA fails. `nearestAccessible` moves the colour's HSB value
+  until it clears the target and leaves hue and saturation intact, which is what
+  "the nearest compliant color" means in practice: `#00FF00` on white reads
+  1.37:1, Fix writes `008A00` into the row it came from, 4.53:1, badges flip.
+- The row is wired to the base fill, every extra fill and the base stroke. Stroke
+  *extras* are left out: they are the least common case and their row has no
+  layer to point at for a background.
+
+### Fill rows are the paint stack, topmost first
+
+The guide to fills says to "hover the left edge of the fill to reveal the drag
+handle; click and drag to reorder", and its list reads topmost-first while ours
+read bottom-first. The engine was right either way: `paintFill` paints the base
+`fill` scalars first and stacks `fills[]` above them bottom-to-top, so it was the
+display that was reversed. Extras now render reversed with the base row pinned
+last, each carrying a grip and *Bring forward* / *Send backward*, and `moveFill`
+does the move in one undo step. The canvas is the proof: with `#0000FF` in the
+top row the centre pixel is blue, *Bring forward* on the green row makes it
+green, and dragging a row past another swaps both the list and the pixels.
+
+Strokes stay base-first and have no reorder control, because the base stroke row
+also carries the shared width, alignment and dash tools, and moving it would
+drag those tools with it. Dev Mode's property list now reads topmost-first too,
+so a designer and a developer are counting the same stack from the same end.
+
+### Selection colors is about the selection
+
+Three fixes to the section we borrowed from Sketch:
+
+- It summarised the first selected layer. Both apps summarise the *selection*, so
+  `colorUsageAll(nodes)` merges every selected layer, and a colour they share is
+  still one row with a count of two.
+- `paintColors` decides what a paint contributes: image and pattern fills
+  nothing, gradients the colours in their ramp (a gradient's leftover `color`
+  string would otherwise be listed as if it painted something), and hidden fills
+  nothing.
+- Each row has Figma's percentage field. It writes the base
+  `fillOpacity` / `strokeOpacity` and any matching entry in `fills[]` /
+  `strokes[]`, for the layers the row was built from: the selection, not the
+  page, because quietly repainting something the designer never picked is worse
+  than a narrower tool. One undo step for the whole row. Layers that disagree
+  show `Mixed` until you set a value; out-of-range input clamps and the field
+  snaps back to what was applied; Escape cancels without costing an undo step.
+
+### Still open in this area
+
+- **Pattern fills**, Figma's fifth fill type, have no UI and no painter. Scaling
+  an image fill is the workaround we have.
+- The **crop tool** is the other real gap. We have Crop as an image *fit mode* -
+  the fill moves inside the layer - but not Figma's modal: crop handles, a crop
+  value slider, an aspect-ratio picker, Resize to fit, ⌥ mirroring the opposite
+  edge, ⌃ freeing the ratio, ⌘-dragging a corner to quick-crop, and
+  non-destructive re-entry afterwards.
+- Figma shows Selection colors only for a mixed selection; ours follows Sketch
+  and shows it whenever there is a colour to list, since the count and the
+  click-to-select are the useful part even for one layer.
+- Reordering a paint is drag or the two buttons; there is no keyboard path yet.
+
+Tests: 22 added to `parity.test.mjs` (12 contrast, 10 selection colors) on top
+of the 162 from earlier rounds, 184 passing; `tsc -b` clean.
+
 ## Open
 
 - Sketch's top-bar Insert menu and Figma's Assets panel tab, "Additional
@@ -282,6 +376,9 @@ when it is next built; `textWrap` has no Rust counterpart yet.
   own project, none a defect today.
 - The panel split handle (dragging the inspector wider) exists but has not been
   reviewed for the Dev Mode layout at narrow widths.
+- Colour: pattern fills are not implemented, and image cropping is a fit mode
+  rather than the interactive modal Figma has; both are written up at the end of
+  the colour section above.
 - Text styles on type fields, plus the wrapping settings the panel does not
   expose yet: percent letter spacing, OpenType and variable-font axes, hanging
   punctuation, whole-paragraph indentation, links in text, middle truncation.

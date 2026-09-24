@@ -285,3 +285,77 @@ export function eyedropArmed(): boolean {
 export function justEyedropped(): boolean {
   return Date.now() - lastDrop < 80;
 }
+
+/* --------------------------------------------------------------- contrast */
+
+/**
+ * WCAG 2.1 relative luminance. Figma's contrast check in the color picker uses
+ * exactly this, so the ratio the picker shows is the ratio a developer's audit
+ * tool will report.
+ */
+export function luminance(hex: string): number {
+  const { r, g, b } = parseHex(hex);
+  const ch = (v: number) => {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b);
+}
+
+/** Contrast ratio between two colors: 1:1 for identical, 21:1 for black on white. */
+export function contrastRatio(a: string, b: string): number {
+  const la = luminance(a);
+  const lb = luminance(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
+
+/** Figma's contrast categories. "Auto" resolves from the layer being painted. */
+export type ContrastKind = "auto" | "large" | "normal" | "graphics";
+
+export const CONTRAST_KINDS: { id: ContrastKind; label: string }[] = [
+  { id: "auto", label: "Auto" },
+  { id: "large", label: "Large text" },
+  { id: "normal", label: "Normal text" },
+  { id: "graphics", label: "Graphics" },
+];
+
+/**
+ * The ratio to clear. WCAG: 4.5 for normal text, 3 for large text and graphics,
+ * 7 for AAA normal text and 4.5 for AAA large text. Graphics has no AAA tier,
+ * which is why the picker only offers AAA for text categories.
+ */
+export function contrastTarget(kind: ContrastKind, level: "AA" | "AAA"): number {
+  if (kind === "large") return level === "AAA" ? 4.5 : 3;
+  if (kind === "graphics") return 3;
+  return level === "AAA" ? 7 : 4.5;
+}
+
+export function passesContrast(fg: string, bg: string, kind: ContrastKind, level: "AA" | "AAA"): boolean {
+  return contrastRatio(fg, bg) + 1e-6 >= contrastTarget(kind, level);
+}
+
+/**
+ * The nearest color that clears `target` against `bg`, found by moving only the
+ * value of the color: Figma repairs a failing fill by changing how light it is,
+ * never its hue or its saturation, so the swatch still reads as the same brand
+ * color. Returns the best reachable color when the target cannot be met.
+ */
+export function nearestAccessible(fg: string, bg: string, target: number): string {
+  if (contrastRatio(fg, bg) + 1e-6 >= target) return fg;
+  const { r, g, b } = parseHex(fg);
+  const { h, s, v } = rgbToHsv(r, g, b);
+  const at = (t: number) => {
+    const c = hsvToRgb(h, s, t);
+    return toHex(c.r, c.g, c.b);
+  };
+  const toward = contrastRatio(at(0), bg) >= contrastRatio(at(1), bg) ? 0 : 1;
+  if (contrastRatio(at(toward), bg) + 1e-6 < target) return at(toward);
+  let lo = v;
+  let hi = toward;
+  for (let i = 0; i < 24; i++) {
+    const mid = (lo + hi) / 2;
+    if (contrastRatio(at(mid), bg) + 1e-6 >= target) hi = mid;
+    else lo = mid;
+  }
+  return at(hi);
+}

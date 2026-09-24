@@ -1297,6 +1297,99 @@ html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }
   color: var(--text);
 }
 .blend-row span { display: flex; align-items: center; gap: 4px; color: var(--muted); }
+
+/* Contrast check in the color picker: the ratio, the two compliance tiers and
+   the one-click repair. Same tokens as the rows it sits under. */
+.a11y-row { width: 100%; display: grid; gap: 4px; margin-top: 2px; }
+.a11y-row .blend-row.on { box-shadow: inset 0 0 0 1px var(--blue); }
+.a11y-body { background: var(--input); border-radius: 6px; padding: 6px; display: grid; gap: 6px; }
+.a11y-bg { display: flex; align-items: center; gap: 4px; }
+.a11y-bg .swatch { width: 16px; height: 16px; border: 1px solid var(--line); border-radius: 3px; }
+.a11y-bg input {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+.a11y-bg select {
+  height: 22px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  font-size: 11px;
+}
+.a11y-result { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.a11y-result strong { font-variant-numeric: tabular-nums; }
+.a11y-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 10px;
+}
+.a11y-badge.ok { color: var(--green, #12a150); }
+.a11y-badge.bad { color: var(--red, #d92d20); }
+.a11y-fix { margin-left: auto; }
+.a11y-note { margin: 0; font-size: 10px; line-height: 1.45; color: var(--muted); }
+
+/* Reordering fills. Figma shows the drag handle on a row's left edge while the
+   pointer is over the row; the stack is listed top-most first so that dragging a
+   row up is the same as moving it toward the front. */
+.paint-row { position: relative; }
+.paint-tools {
+  display: none;
+  position: absolute;
+  left: -15px;
+  top: 4px;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+.paint-row:hover .paint-tools,
+.paint-row:focus-within .paint-tools { display: flex; }
+.paint-tools .grip {
+  width: 9px;
+  height: 13px;
+  cursor: grab;
+  opacity: 0.55;
+  border-radius: 2px;
+  background: repeating-linear-gradient(to bottom, var(--muted) 0 1px, transparent 1px 3px);
+}
+.paint-tools .grip:active { cursor: grabbing; }
+.paint-tools .mini {
+  width: 16px;
+  height: 13px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+.paint-tools .mini:hover { color: var(--text); }
+.paint-row.drop { box-shadow: inset 0 2px 0 0 var(--blue); }
+/* The opacity field on a Selection colors row: one value for every layer that
+   paints this colour, or "Mixed" until you set one. */
+.scolor-op {
+  width: 38px;
+  height: 20px;
+  text-align: right;
+  background: var(--input);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-size: 11px;
+}
+.scolor-op:focus { border-color: var(--blue); outline: none; }
+.scolor-op::placeholder { color: var(--muted); font-size: 10px; }
+.scolor-pct { font-size: 10px; color: var(--muted); margin-left: -2px; }
+.paint-row.dragging { opacity: 0.45; }
 .type-menu {
   position: absolute;
   left: 8px;
