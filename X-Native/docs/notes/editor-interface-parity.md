@@ -619,6 +619,110 @@ geometry, the dash parser, the angle-to-limit conversion, effect budget and
 move, corner slots and smoothing, the instance rule) - 306 passing; `tsc -b`
 clean.
 
+## Blend modes, and what a shadow shows through
+
+The small list the strokes/effects round left open: an effect's blend mode,
+"Show behind transparent areas", and the two places Figma refuses to touch a
+layer that lives inside an instance. Two defects turned up on the way, one of
+them a paint bug that had nothing to do with the plan.
+
+### One list, where there had been three
+
+The layer menu, the fill colour picker and the canvas each carried their own copy
+of Figma's blend-mode list, and the copies had drifted: "Plus darker" and "Plus
+lighter" were in none of them, and the canvas mapped the names through a table a
+third the size of the menus. The fill stack was worse - it assigned its *label*
+straight to a canvas operation, and a canvas ignores an operation it does not
+recognise, so **every multi-word blend mode on a fill row silently did nothing**:
+the menu writes `Soft light`, the operation is `soft-light`, and the assignment
+was thrown away without a word. Measured over a mid-grey fill, a green row
+labelled Soft light painted the same `0,255,0` as Normal; after the fix it paints
+`16,128,16`.
+
+There is one list now, in `ui/color.ts`, next to one name-to-operation helper
+that the canvas, the engine's paint stack and the new effect rows all call. Two
+of the eighteen names take a decision:
+
+- **Plus lighter** is canvas's own `lighter` - `min(1, base + blend)`, exactly.
+- **Plus darker** has no canvas equivalent, and "assign it anyway" is not an
+  option, because an unknown operation is ignored rather than refused. Figma
+  describes the mode as "like Darken, but with a stronger impact on mid-tones",
+  which is the shape of color burn; the two also agree that blending with white
+  does nothing. It maps to color burn, and the comment in the mapping says so.
+
+### An effect carries its own blend mode
+
+Figma offers a blend mode on three of the seven effects - inner shadows, drop
+shadows and noise - so only those rows show **Apply blend mode**, and "Pass
+through" is not in the menu, because the article says it cannot be applied to a
+fill or an effect. The choice is stored on the effect (`Effect.blend`, "Normal"
+by default) and applied while that effect paints. Same shadow, same backdrop,
+one field apart, over `#3366cc`: `153,51,102` as Normal against `51,51,102` as
+Multiply. An effect that predates the field paints as Normal, which the probe
+checks too.
+
+### Show behind transparent areas
+
+Off by default, and off is the interesting state: the shadow is masked by what
+the layer actually paints. For a shape with a fill that changes nothing - the
+fill covers the whole outline either way - but a **stroke-only layer casts the
+shadow of its ring**, not of the box it sits in. Measured on a stroke-only
+rectangle over a `#3366cc` backdrop: the middle of the layer stays the backdrop
+(`51,102,204`) and the ring goes to `0,0,0`; turn the checkbox on and the middle
+goes to `0,0,0` as well, because the whole outline casts one.
+
+Figma only offers the checkbox when the layer has something transparent for a
+shadow to show through, and its article lists what counts: fills all under 100%
+opacity, a stroke with no fill, a fill or stroke that blends with something
+other than Normal, or a centre or outside stroke under 100% opacity. Our version
+greys the checkbox out and says why when none of them holds - a fully opaque
+layer cannot use the setting, so pretending otherwise would just cost a click.
+Those four rules are unit tested, including the awkward one: an inside stroke at
+50% is *not* enough on its own, because an inside stroke is entirely covered by
+the fill.
+
+### The inner shadow that ate the layer
+
+The pixel probe found more than it was asked for. An inner shadow used to fill
+the shape with the shadow colour and then punch the shape back out with
+`destination-out`; on a real canvas that pass does not just remove the shadow's
+source, it removes **the layer's own fill painted a moment earlier, and whatever
+sat under the layer**. The probe found the hole by reading a transparent black
+pixel where a `#808080` fill should have been.
+
+It now does what CSS does for an inset shadow: clip to the shape, then fill the
+ring between the shape and the edge of the canvas - even-odd, offset and blurred
+- which casts the shadow inwards without ever touching the layer's paint. Spread
+deflates that ring the way CSS deflates an inset shadow's hole. Over a `#808080`
+fill with a 4px spread: ink at the edge `128,128,255`, centre still
+`128,128,128`, and the same effect as Multiply `64,64,128`.
+
+### Two more things Figma will not do to an instance
+
+The Scale tool stops at layers inside an instance - "you can scale any object,
+with the exception of locked layers and layers nested inside a component
+instance" - and the aspect-ratio lock is unavailable on an instance's children
+because the ratio belongs to the main component. Both ask the question the
+individual-corner fields already asked, so they share `insideInstance`: a Scale
+drag is refused with a toast, the Scale panel refuses its multiplier, and the
+aspect button greys out with "Aspect ratio comes from the main component". A
+plain resize is still allowed, because that is an override, which is what
+instances are for.
+
+### How this round was checked
+
+The sandbox lost its Chromium during this session - the browser cache and the
+probe harness both live outside the repository and did not survive - so the
+pixel evidence here comes from painting through the engine's own `paint.ts` on a
+Node canvas rather than from the app in a browser. Nineteen pixel assertions:
+the mapping table, a shadow's own blend mode, the ring a stroke-only layer
+casts, the inner shadow's ink and the fill it no longer erases, and the fill
+stack's multi-word blends. The inspector rows and the two instance guards are
+covered by eleven new engine assertions and the build; they have **not** been
+clicked through, and that is the first thing to re-check when a browser is back.
+
+Tests: 317 passing, up from 306; `tsc -b` and `vite build` clean.
+
 ## Open
 
 - Sketch's top-bar Insert menu and Figma's Assets panel tab, "Additional
@@ -632,11 +736,22 @@ clean.
 - Layers: no multi-edit text or variants, no tidy up, no rotation-origin drag,
   and instance children can be scaled when Figma refuses. Written up at the end
   of the layers section above.
-- Strokes and effects: no blend mode per effect and no "Show behind
-  transparent areas"; progressive blur, brush and dynamic strokes and width
-  profiles are absent, and none of the position / cap / join / effect options
-  preview on hover the way Figma's do. Written up at the end of the strokes,
-  effects and corner radius section above.
+- Strokes and effects: progressive blur, brush and dynamic strokes and width
+  profiles are absent, and none of the position / cap / join / blend / effect
+  options preview on hover the way Figma's do. Figma's *effect styles* (a saved
+  shadow or blur that can be applied to other layers), and its shortcuts for
+  copying effect settings and duplicating an effect with `⌘D`, are not built.
+  The effect *settings* panels are still shallower than the article: noise has no
+  Mono/Duo/Multi choice, no size X/Y and no colour-or-opacity switch, texture has
+  no size X/Y or clip-to-shape, glass has none of its seven parameters, and
+  shadow spread does not enforce Figma's restrictions (rectangles, ellipses,
+  frames and components only, and for a frame, clip content plus a visible fill
+  of at least 1%). Background blur does not check the 0.10-99.99% fill-opacity
+  window it needs to be visible. Written up at the end of the section above.
+- The instance guards added with the blend work - the Scale tool and the
+  aspect-ratio lock refusing instance children - are unit tested but were not
+  clicked through, because the sandbox had no browser left. Re-check them with
+  one command the next time a browser is available.
 - Text styles on type fields, plus the wrapping settings the panel does not
   expose yet: percent letter spacing, OpenType and variable-font axes, hanging
   punctuation, whole-paragraph indentation, links in text, middle truncation.

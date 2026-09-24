@@ -2582,6 +2582,9 @@ export function defaultEffect(kind: Effect["kind"]): Effect {
               : 4,
     spread: kind === "texture" ? 4 : 0,
     visible: true,
+    blend: "Normal",
+    // Figma's checkbox starts unchecked, and only a drop shadow has one.
+    ...(kind === "drop-shadow" ? { showBehind: false } : {}),
   };
 }
 

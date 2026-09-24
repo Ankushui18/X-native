@@ -367,6 +367,8 @@ input, textarea { user-select: text; }
   padding: 0;
 }
 .icon-btn:hover { background: var(--hover); }
+.icon-btn:disabled { opacity: 0.4; }
+.icon-btn:disabled:hover { background: transparent; }
 .icon-btn.on { background: var(--active); }
 
 .search {
@@ -928,6 +930,21 @@ html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }
   font-size: 12px;
 }
 .check input { accent-color: var(--blue); }
+
+/* An effect's "Show behind transparent areas" checkbox, in its settings
+   popover. It is disabled - and greyed - on a layer with nothing transparent
+   for the shadow to show through. */
+.fx-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0 2px;
+  font-size: 12px;
+  color: var(--text);
+}
+.fx-check input { accent-color: var(--blue); }
+.fx-check.off { color: var(--muted); }
+.fx-check.off input { opacity: 0.45; }
 
 .dir-row {
   display: flex;

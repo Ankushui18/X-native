@@ -93,9 +93,12 @@ export function canvasBlend(m?: string): GlobalCompositeOperation {
     darken: "darken",
     lighter: "lighten",
     "plus-lighter": "lighter",
-    // lib.dom has no "darker" in its union even though every engine implements
-    // it; the CSS name for it is the "plus darker" blend mode.
-    "plus-darker": "darker" as GlobalCompositeOperation,
+    // Canvas has no "plus darker" (the CSS blend of that name is not one of
+    // its operations, and assigning an unknown operation is silently ignored,
+    // which would render as Normal). Figma describes the mode as "like Darken,
+    // but with a stronger impact on mid-tones", which is the shape of color
+    // burn - the two also agree that blending with white does nothing.
+    "plus-darker": "color-burn",
     lighten: "lighten",
     "color-dodge": "color-dodge",
     "color-burn": "color-burn",

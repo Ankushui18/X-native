@@ -1,4 +1,5 @@
-import type { Effect, EffectKind } from "../engine/types";
+import type { Effect, EffectKind, XNode } from "../engine/types";
+import { parseHex } from "./color";
 
 /**
  * How many of each effect a single layer may carry, and how rows are reordered.
@@ -50,4 +51,52 @@ export function limitMessage(kind: EffectKind, limit: number): string {
     glass: "Glass",
   }[kind];
   return `${label} · a layer takes ${limit === 1 ? "one" : limit} at a time`;
+}
+
+/**
+ * Which effects carry a blend mode. Figma's blend-mode article names exactly
+ * three of them - inner shadows, drop shadows and noise - and "Pass through",
+ * which the same article says cannot be applied to a fill or an effect, is
+ * therefore not in the menu either.
+ */
+export function effectCanBlend(kind: EffectKind): boolean {
+  return kind === "drop-shadow" || kind === "inner-shadow" || kind === "noise";
+}
+
+/**
+ * "Show behind transparent areas" is a drop-shadow setting: Figma's article
+ * says inner shadows don't support it, and the other kinds have no shadow at
+ * all to show through anything.
+ */
+export function effectCanShowBehind(kind: EffectKind): boolean {
+  return kind === "drop-shadow";
+}
+
+/**
+ * Whether the layer has anything transparent for a shadow to show through,
+ * which is what Figma asks for before it will show one. The article's list:
+ * fills all under 100% opacity, a stroke with no fill, a fill or stroke that
+ * blends with something other than Normal, or a centre or outside stroke under
+ * 100% opacity. A layer that fails all four is fully opaque, so the checkbox
+ * cannot do anything for it.
+ */
+export function canShowBehindTransparent(n: XNode): boolean {
+  const paints = (n.fills ?? []).filter((p) => p.visible !== false);
+  const hasFill = n.fillVisible !== false && !!n.fill && n.fill !== "none";
+  const hasStroke = n.strokeVisible !== false && n.strokeWidth > 0 && !!n.strokePaint;
+  const alpha = (c?: string) => (c ? parseHex(c).a : 1);
+  const blended = (b?: string) => !!b && !/^(normal|pass-?through)$/i.test(b);
+  if (blended(n.blendMode) || blended(n.fillBlend) || paints.some((p) => blended(p.blend))) {
+    return true;
+  }
+  if (paints.length > 0 && paints.every((p) => Math.min(p.opacity ?? 1, alpha(p.color)) < 1)) {
+    return true;
+  }
+  if (!paints.length && hasFill && (n.fillOpacity ?? 1) < 1) return true;
+  if (!hasFill && hasStroke) return true;
+  const align = n.strokeAlign ?? "center";
+  if (hasStroke && align !== "inside" && Math.min(n.strokeOpacity ?? 1, alpha(n.strokePaint)) < 1) {
+    return true;
+  }
+  return false;
 }

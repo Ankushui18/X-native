@@ -769,7 +769,13 @@ export function Canvas({
         ctx.restore();
       }
       const noise = (n.effects ?? []).find((e) => e.kind === "noise" && e.visible);
-      if (noise) paintNoise(ctx, sx, sy, sw, sh, noise.blur);
+      if (noise) {
+        ctx.save();
+        const op = canvasBlend(noise.blend);
+        if (op !== "source-over") ctx.globalCompositeOperation = op;
+        paintNoise(ctx, sx, sy, sw, sh, noise.blur);
+        ctx.restore();
+      }
       const glass = (n.effects ?? []).find((e) => e.kind === "glass" && e.visible);
       if (glass) {
         ctx.save();
@@ -785,7 +791,7 @@ export function Canvas({
       ctx.shadowBlur = 0;
       ctx.shadowOffsetX = 0;
       ctx.shadowOffsetY = 0;
-      paintInnerShadows(ctx, n, z);
+      paintInnerShadows(ctx, n, z, traceShape, { x: sx, y: sy, w: sw, h: sh });
       if (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)) {
         ctx.save();
         ctx.globalAlpha *= n.strokeOpacity ?? 1;
@@ -2493,6 +2499,12 @@ export function Canvas({
         const hs = handles(sx, sy, wp.node.w * z, wp.node.h * z);
         for (let i = 0; i < hs.length; i++) {
           if (Math.hypot(px - hs[i][0], py - hs[i][1]) < 8) {
+            // Figma's scale tool ignores layers nested inside an instance; a
+            // plain resize is still allowed, because that is an override.
+            if (snap.tool === "scale" && insideInstance(root, wp.node.id)) {
+              toast("Not scalable · this layer is inside an instance");
+              return;
+            }
             drag.current = {
               mode: "resize",
               sx: e.clientX,
@@ -2569,6 +2581,10 @@ export function Canvas({
           ? snap.selection.filter((i) => i !== hit.id)
           : [...snap.selection, hit.id]
         : [hit.id];
+      if (snap.tool === "scale" && ids.some((id) => insideInstance(root, id))) {
+        toast("Not scalable · this layer is inside an instance");
+        return;
+      }
       engine.dispatch({ type: "select", ids });
       engine.dispatch({ type: "begin" });
       drag.current = {

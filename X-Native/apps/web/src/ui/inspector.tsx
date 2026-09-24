@@ -45,7 +45,16 @@ import {
   sideWidths,
   sidesSupported,
 } from "../engine/strokeModel";
-import { canAddEffect, countKind, limitMessage, moveEffect, EFFECT_LIMITS } from "./effectModel";
+import {
+  canAddEffect,
+  canShowBehindTransparent,
+  countKind,
+  effectCanBlend,
+  effectCanShowBehind,
+  limitMessage,
+  moveEffect,
+  EFFECT_LIMITS,
+} from "./effectModel";
 import {
   SCALE_ANCHORS,
   SCALE_FACTORS,
@@ -1630,7 +1639,9 @@ function devProperties(n: XNode, snap: Snapshot, unit: DevUnit): DevProp[] {
     if (e.kind === "drop-shadow" || e.kind === "inner-shadow") {
       L(
         e.kind === "drop-shadow" ? "Drop shadow" : "Inner shadow",
-        `${e.x}, ${e.y} · blur ${e.blur}${e.spread ? ` · spread ${e.spread}` : ""} · ${e.color}`,
+        `${e.x}, ${e.y} · blur ${e.blur}${e.spread ? ` · spread ${e.spread}` : ""} · ${e.color}${
+          e.blend && e.blend !== "Normal" ? ` · ${e.blend}` : ""
+        }`,
         "Style",
         e.color,
       );
@@ -2023,7 +2034,11 @@ function Design({
   const [conOpen, setConOpen] = useState(false);
   const [cornersOpen, setCornersOpen] = useState(!!n.cornerIndependent);
   // An instance inherits its corners; Figma rejects individual radii there.
-  const cornerLock = insideInstance(snap.pages[snap.page].root, n.id);
+  /* Figma locks a handful of properties on a layer that lives inside an
+   * instance: individual corner radii here, and the aspect-ratio lock and the
+   * Scale tool below. All three ask the same question, so they share one
+   * answer. */
+  const inInstance = insideInstance(snap.pages[snap.page].root, n.id);
   const [strokeMore, setStrokeMore] = useState(n.strokeDash > 0);
   const [more, setMore] = useState<{ x: number; y: number } | null>(null);
   const multi = snap.selection.length > 1;
@@ -2040,6 +2055,18 @@ function Design({
       .filter((m): m is XNode => !!m && !m.locked);
     if (!picked.length) {
       toast("Nothing to scale · the selection is empty or locked");
+      return;
+    }
+    // Figma scales "any object, with the exception of locked layers and layers
+    // nested inside a component instance" - scaling children of an instance
+    // would multiply overrides the instance does not own.
+    const nested = picked.filter((m) => insideInstance(root, m.id));
+    if (nested.length) {
+      toast(
+        nested.length > 1
+          ? `Not scalable · ${nested.length} layers are inside an instance`
+          : "Not scalable · this layer is inside an instance",
+      );
       return;
     }
     const boxes = picked.map((m) => ({ x: m.x, y: m.y, w: m.w, h: m.h }));
@@ -2429,7 +2456,16 @@ function Design({
           />
           <button
             className={`icon-btn${n.aspectLocked ? " on" : ""}`}
-            title={n.aspectLocked ? "Unlock aspect ratio" : "Lock aspect ratio"}
+            // Figma: the aspect ratio of a child layer of an instance "can be
+            // adjusted from their respective main components".
+            disabled={inInstance}
+            title={
+              inInstance
+                ? "Aspect ratio comes from the main component"
+                : n.aspectLocked
+                  ? "Unlock aspect ratio"
+                  : "Lock aspect ratio"
+            }
             onClick={() => patch({ aspectLocked: !n.aspectLocked })}
           >
             <Icon name="aspect" size={14} />
@@ -3200,7 +3236,7 @@ function Design({
         </div>
       </div>
       <div className="insp-pad" style={{ marginTop: 4, display: "grid", gap: 4 }}>
-        {cornersOpen && cornerLock && (
+        {cornersOpen && inInstance && (
           <span className="corner-lock">Individual corners are set on the component</span>
         )}
         {cornersOpen ? (
@@ -3211,7 +3247,7 @@ function Design({
               <Field
                 key={lab}
                 label={lab}
-                disabled={cornerLock}
+                disabled={inInstance}
                 value={n.cornerRadii[i]}
                 onChange={(v) => {
                   const r = [...n.cornerRadii] as [number, number, number, number];
@@ -3233,7 +3269,7 @@ function Design({
             <span />
             <button
               className={`icon-btn${cornersOpen ? " on" : ""}`}
-              disabled={cornerLock}
+              disabled={inInstance}
               title="Independent corners"
               onClick={() => {
                 setCornersOpen(true);
@@ -4170,14 +4206,19 @@ function SelectionColors({
 function EffectPopover({
   fx,
   anchor,
+  layer,
   onChange,
   onClose,
 }: {
   fx: Effect;
   anchor: DOMRect;
+  /** The layer the effect sits on: whether it can show a shadow through itself
+   *  depends on the layer's own fills and strokes. */
+  layer: XNode;
   onChange: (p: Partial<Effect>) => void;
   onClose: () => void;
 }) {
+  const [blendOpen, setBlendOpen] = useState(false);
   useEffect(() => {
     const click = (e: MouseEvent) => {
       const t = e.target as HTMLElement;
@@ -4248,6 +4289,52 @@ function EffectPopover({
           <Field label="Density" aria="Texture density" value={fx.blur} onChange={(v) => onChange({ blur: v })} />
           <Field label="Scale" aria="Texture scale" value={fx.spread} onChange={(v) => onChange({ spread: v })} />
         </div>
+      )}
+      {effectCanBlend(fx.kind) && (
+        <>
+          <button className="blend-row" onClick={() => setBlendOpen((v) => !v)}>
+            Apply blend mode
+            <span>
+              {fx.blend ?? "Normal"}
+              <Icon name="chevron" size={12} />
+            </span>
+          </button>
+          {blendOpen && (
+            <div className="type-menu blend-menu">
+              {BLENDS.map((b) => (
+                <button
+                  key={b}
+                  className={(fx.blend ?? "Normal") === b ? "on" : ""}
+                  onClick={() => {
+                    onChange({ blend: b });
+                    setBlendOpen(false);
+                  }}
+                >
+                  {b}
+                  {(fx.blend ?? "Normal") === b && <span className="sc">✓</span>}
+                </button>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+      {effectCanShowBehind(fx.kind) && (
+        <label
+          className={`fx-check${canShowBehindTransparent(layer) ? "" : " off"}`}
+          title={
+            canShowBehindTransparent(layer)
+              ? "Show this shadow through the layer's transparent areas"
+              : "Needs a translucent fill, a stroke with no fill, a blended fill or stroke, or a centre or outside stroke under 100% opacity"
+          }
+        >
+          <input
+            type="checkbox"
+            checked={!!fx.showBehind}
+            disabled={!canShowBehindTransparent(layer)}
+            onChange={(e) => onChange({ showBehind: e.target.checked })}
+          />
+          Show behind transparent areas
+        </label>
       )}
     </div>
   );
@@ -4440,6 +4527,7 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
         <EffectPopover
           fx={effects[editing.i]}
           anchor={editing.rect}
+          layer={n}
           onChange={(p) => set(editing.i, p)}
           onClose={() => setEditing(null)}
         />

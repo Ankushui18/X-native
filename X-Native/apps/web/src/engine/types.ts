@@ -322,6 +322,14 @@ export interface Effect {
   blur: number;
   spread: number;
   visible: boolean;
+  /** How this effect blends with what is already on the canvas. Only inner
+   *  shadows, drop shadows and noise offer it in Figma; "Normal" is the
+   *  default, and "Pass through" is not available to fills or effects. */
+  blend?: string;
+  /** Drop shadows only. Figma's checkbox; off by default, which means the
+   *  shadow is masked by whatever the layer actually paints, so a stroke-only
+   *  layer casts the shadow of its ring rather than of the whole outline. */
+  showBehind?: boolean;
 }
 
 export type Tool =

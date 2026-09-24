@@ -28,7 +28,7 @@ import {
   projectPointOnSegment,
   computeFigmaNoodle,
 } from "../geometry.ts";
-import { MemoryEngine, insideInstance } from "../memory.ts";
+import { MemoryEngine, defaultEffect, find, insideInstance } from "../memory.ts";
 import { evalField, hasExpression } from "../../ui/fieldExpr.ts";
 import { scaleBoxAround, scaleMembers, sizeKeepingRatio, unionBox } from "../../ui/scaleModel.ts";
 import { layersAt, matchingIds, pathIndex, sameIds } from "../../ui/selectSame.ts";
@@ -41,7 +41,15 @@ import {
   sideWidths,
   sidesSupported,
 } from "../../engine/strokeModel.ts";
-import { EFFECT_LIMITS, canAddEffect, countKind, moveEffect } from "../../ui/effectModel.ts";
+import {
+  EFFECT_LIMITS,
+  canAddEffect,
+  canShowBehindTransparent,
+  countKind,
+  effectCanBlend,
+  effectCanShowBehind,
+  moveEffect,
+} from "../../ui/effectModel.ts";
 
 import { colorUsage, colorUsageAll, setOpacityMatches } from "../../ui/selectionColors.ts";
 import { contrastRatio, contrastTarget, nearestAccessible, passesContrast, parseHex, rgbToHsv } from "../../ui/color.ts";
@@ -1689,6 +1697,75 @@ console.log("the engine carries the new properties:");
   t("copy/paste properties carries the sides", p.strokeSides === "custom" && p.strokeSideW.join() === "8,4,0,12");
   t("and the dash pattern, cap and miter angle", p.strokeDashPattern.join() === "24,12" && p.strokeDashCap === "round" && p.strokeMiterAngle === 90);
   t("and the corner smoothing", p.cornerSmoothing === 0.6 && p.cornerIndependent === true);
+}
+
+console.log("effect blend modes, and what a drop shadow shows through:");
+{
+  const e = new MemoryEngine(false);
+  await e.ready;
+  const root = e.snapshot().pages[e.snapshot().page].root.id;
+  e.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w: 100, h: 100, parent: root });
+  const id = e.snapshot().selection[0];
+  const now = () => find(e.snapshot().pages[e.snapshot().page].root, id);
+
+  t(
+    "only inner shadows, drop shadows and noise offer a blend mode",
+    effectCanBlend("drop-shadow") &&
+      effectCanBlend("inner-shadow") &&
+      effectCanBlend("noise") &&
+      !effectCanBlend("layer-blur") &&
+      !effectCanBlend("background-blur") &&
+      !effectCanBlend("texture") &&
+      !effectCanBlend("glass"),
+  );
+  t(
+    "show-behind is the drop shadow's alone",
+    effectCanShowBehind("drop-shadow") &&
+      !effectCanShowBehind("inner-shadow") &&
+      !effectCanShowBehind("noise"),
+  );
+  const drop = defaultEffect("drop-shadow");
+  t(
+    "a new drop shadow is Normal with show-behind off",
+    drop.blend === "Normal" && drop.showBehind === false,
+  );
+  t(
+    "a new inner shadow has no show-behind field at all",
+    defaultEffect("inner-shadow").showBehind === undefined,
+  );
+
+  t(
+    "an opaque filled rectangle has nothing to show a shadow through",
+    canShowBehindTransparent(now()) === false,
+  );
+  e.dispatch({ type: "patch", id, patch: { fillOpacity: 0.5 } });
+  t("a half-transparent fill does", canShowBehindTransparent(now()) === true);
+  e.dispatch({ type: "patch", id, patch: { fillOpacity: 1, fillBlend: "Multiply" } });
+  t("so does a fill that blends", canShowBehindTransparent(now()) === true);
+  e.dispatch({
+    type: "patch",
+    id,
+    patch: { fillBlend: "Normal", fillVisible: false, strokeVisible: true, strokePaint: "#ff0000", strokeWidth: 2 },
+  });
+  t("and a stroke with no fill", canShowBehindTransparent(now()) === true);
+  e.dispatch({ type: "patch", id, patch: { strokeAlign: "inside" } });
+  t(
+    "a stroke-only layer qualifies whatever its alignment",
+    canShowBehindTransparent(now()) === true,
+  );
+  // The fourth criterion is narrower: a centre or outside stroke at less than
+  // full opacity, which is the only way a stroke can be translucent.
+  e.dispatch({
+    type: "patch",
+    id,
+    patch: { fillVisible: true, fillOpacity: 1, strokeOpacity: 0.5, strokeAlign: "inside" },
+  });
+  t(
+    "an opaque fill with an inside stroke has nothing transparent about it",
+    canShowBehindTransparent(now()) === false,
+  );
+  e.dispatch({ type: "patch", id, patch: { strokeAlign: "center" } });
+  t("a centre stroke at half opacity does", canShowBehindTransparent(now()) === true);
 }
 
 console.log("corners an instance is not allowed to own:");
