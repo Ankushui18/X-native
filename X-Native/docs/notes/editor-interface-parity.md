@@ -917,6 +917,50 @@ multiplayer, but the toggle and its ⌥⌘\ belong in the same menu) and
 article describes is otherwise now this app's zoom field menu plus the canvas
 menu, which between them carry every switch above.
 
+## A frame's name, on the canvas
+
+Reported from the running app: "Frame name is not properly visible incl canvas".
+Two separate things, both real.
+
+**The ink was under the contrast floor.** The name is text drawn straight onto
+the canvas, and its colour was `--canvas-label` (`rgba(15,23,42,0.5)` in the
+light theme) composited over `#f1f2f6`: **#808590, 3.31:1** - under the 4.5:1
+floor for text, which is what made a frame's name read as decoration rather
+than as the layer's name. The label is now pushed through the same
+`nearestAccessible` search the colour picker's contrast check uses, against
+whatever is really behind it: the page's own background when it has one, the
+theme's canvas otherwise. Measured in a browser, sampling the ink and the canvas
+out of the bitmap:
+
+| theme | before | after |
+| --- | --- | --- |
+| light | 3.31:1 | **#6b6f78, 4.50:1** |
+| dark | 5.16:1 | #848689, 5.16:1 (already passing, left alone) |
+| graphite | 8.99:1 | #b3b3b3, unchanged |
+| daylight | 5.48:1 | #5a5a5a, unchanged |
+
+Hue and saturation are kept and only the value moves, so a theme's warm or cool
+grey stays that grey. The three themes that already passed are untouched - a
+"fix" that repainted them would be the bigger bug.
+
+**Every frame was called "Frame".** Figma's first frame is "Frame 1"; ours were
+all "Frame", so the Layers list and the names on the canvas were
+indistinguishable the moment there were two. New layers now take the lowest
+number of their kind not already in the page: Frame 1, Frame 2, Rectangle 1,
+Ellipse 1, Frame 3. Numbering starts at one, matching Figma's own default names.
+
+Two smaller things came with it, both from the same article-language: the name
+now takes the accent colour when the frame is **hovered** as well as selected
+(measured: the ink in the strip above the frame is `#6b6f78` idle, `#6366f1`
+hovered, `#6366f1` selected), and the label pass skips frames whose name is
+off-screen - it runs per frame rather than per visible pixel, so a page holding
+hundreds of them was paying for `fillText` calls nobody could see.
+
+`/tmp/probe/labelpalette.mjs` is the smallest proof (it dumps the strip's
+colours); `framename_probe3.mjs` measures legibility and state across themes.
+Screenshots: `labels_idle.png`, `labels_hover.png`, `labels_selected.png`,
+`labels_dark.png`, `frame_labels_{light,dark,graphite,daylight}.png`.
+
 ## A Figma file that arrives as a Figma file
 
 The third reported defect: "`.fig` import/copy incorrect". Imported through the

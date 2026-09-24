@@ -53,6 +53,7 @@ import {
 } from "../../ui/effectModel.ts";
 
 import { colorUsage, colorUsageAll, setOpacityMatches } from "../../ui/selectionColors.ts";
+import { compositeOver, contrastRatio, readableLabel } from "../../ui/color.ts";
 import { contrastRatio, contrastTarget, nearestAccessible, passesContrast, parseHex, rgbToHsv } from "../../ui/color.ts";
 
 import { inspectFigFile, importFig } from "../figImport.ts";
@@ -2163,6 +2164,59 @@ console.log("zoom keeps what you are looking at:");
   const panBefore = s.panX;
   e.dispatch({ type: "setZoom", zoom: 4 });
   t("an unanchored zoom is the one that leaves the pan alone", e.snapshot().panX === panBefore);
+}
+
+console.log("a name you can read:");
+{
+  // The canvas label is text on whatever the canvas is: a theme colour, or the
+  // page's own background when it has one. Half-transparent grey over a light
+  // canvas is what made frame names read as decoration.
+  t("a half-transparent label composites to what the eye sees", compositeOver("rgba(15,23,42,0.5)", "#f1f2f6") === "#808590");
+  t(
+    "which is under the 4.5:1 floor for text",
+    contrastRatio("#808590", "#f1f2f6") < 4.5,
+  );
+  const lightReadable = readableLabel("rgba(15,23,42,0.5)", "#f1f2f6", 4.5);
+  t("pushed until it clears the floor", contrastRatio(lightReadable, "#f1f2f6") >= 4.5);
+  t("without throwing the theme's hue away", /^#/.test(lightReadable) && lightReadable.length === 7);
+  const darkReadable = readableLabel("rgba(248,250,252,0.5)", "#101116", 4.5);
+  t("a light label on a dark canvas is pushed the other way", contrastRatio(darkReadable, "#101116") >= 4.5);
+  t(
+    "and a dark label on a dark canvas comes back as light text",
+    contrastRatio(readableLabel("#111111", "#101116", 4.5), "#101116") >= 4.5,
+  );
+  // A page can paint its own background over the theme's, and the label has to
+  // follow it rather than assuming the theme's grey.
+  const onPage = readableLabel("rgba(15,23,42,0.5)", "#1b1f2a", 4.5);
+  t("the page's own background decides the label colour", contrastRatio(onPage, "#1b1f2a") >= 4.5);
+  t("a label that already passes is left alone", readableLabel("#333333", "#ffffff", 4.5) === "#333333");
+}
+
+console.log("what a new layer is called:");
+{
+  const e = new MemoryEngine(false);
+  await e.ready;
+  const root = e.snapshot().pages[e.snapshot().page].root.id;
+  const names = () => e.snapshot().pages[e.snapshot().page].root.children.map((c) => c.name);
+  const add = (kind) => e.dispatch({ type: "add", kind, x: 0, y: 0, w: 10, h: 10, parent: root });
+  add("frame");
+  add("frame");
+  add("rect");
+  add("ellipse");
+  const added = names().slice(-4);
+  t(
+    "frames are numbered, as in Figma, rather than all being called Frame",
+    new Set(added).size === 4,
+  );
+  t("the numbering starts at one", added[0] === "Frame 1" && added[1] === "Frame 2");
+  t("each kind has its own count", added[2] === "Rectangle 1" && added[3] === "Ellipse 1");
+  add("frame");
+  t("and it keeps counting past the ones already there", names().slice(-1)[0] === "Frame 3");
+  // A rename must not be undone by the next layer: the counter skips names in
+  // use, it does not remember a count.
+  e.dispatch({ type: "patch", id: e.snapshot().pages[e.snapshot().page].root.children.slice(-1)[0].id, patch: { name: "Frame 3" } });
+  add("frame");
+  t("a taken number is skipped, not reused", names().slice(-1)[0] === "Frame 4");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

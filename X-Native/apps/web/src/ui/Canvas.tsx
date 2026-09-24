@@ -39,7 +39,7 @@ import { Minimap } from "./Minimap";
 import { Comments } from "./Comments";
 import { useTheme } from "./theme";
 import { hugSize, listGutter, listMarker, measureCached, textMetrics, wrapLines } from "./textLayout";
-import { canvasBlend, cssRgba, isNone, parseHex, takeEyedrop, toHex } from "./color";
+import { canvasBlend, cssRgba, isNone, parseHex, readableLabel, takeEyedrop, toHex } from "./color";
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
 import { importSvg, type ImportedNode } from "../engine/svgImport";
 import { importSketch } from "../engine/sketchImport";
@@ -578,14 +578,25 @@ export function Canvas({
     const css = getComputedStyle(document.documentElement);
     const canvasBg = css.getPropertyValue("--canvas").trim() || "#e5e5e5";
     const grid = css.getPropertyValue("--grid").trim() || "rgba(0,0,0,0.06)";
-    const canvasLabel = css.getPropertyValue("--canvas-label").trim() || "rgba(0,0,0,0.45)";
+    const themeLabel = css.getPropertyValue("--canvas-label").trim() || "rgba(0,0,0,0.45)";
     ctx.fillStyle = canvasBg;
     ctx.fillRect(0, 0, w, h);
     const pageRoot = snap.pages[snap.page].root;
-    if (pageRoot.fillVisible !== false && !isNone(pageRoot.fill)) {
-      ctx.fillStyle = cssRgba(pageRoot.fill, pageRoot.fillOpacity ?? 1);
+    const pageFill =
+      pageRoot.fillVisible !== false && !isNone(pageRoot.fill)
+        ? cssRgba(pageRoot.fill, pageRoot.fillOpacity ?? 1)
+        : "";
+    if (pageFill) {
+      ctx.fillStyle = pageFill;
       ctx.fillRect(0, 0, w, h);
     }
+    // Layer names, ruler numbers and badges are text drawn straight onto the
+    // canvas, so their colour has to be legible against whatever is actually
+    // behind them - the page's own background when it has one, the theme's
+    // canvas otherwise. The theme's label grey is a starting point; it is
+    // pushed until it clears 4.5:1, which is the difference between a name you
+    // read and a name you notice.
+    const canvasLabel = readableLabel(themeLabel, pageFill || canvasBg, 4.5);
     const page = snap.pages[snap.page];
     // Figma only paints the pixel grid from 400% up: below that it is grey
     // noise rather than something you can align to.
@@ -1179,18 +1190,38 @@ export function Canvas({
       }
     }
 
-    ctx.font = "500 11px Inter, system-ui";
-    ctx.fillStyle = canvasLabel;
-    const label = (n: XNode, px: number, py: number) => {
+    // A frame's name sits above its top-left corner at a constant 11px, so it
+    // stays the same size as the canvas zooms. Selected or hovered, it takes
+    // the accent colour - Figma's cue that the name belongs to the frame you
+    // are about to act on.
+    const labelNames = (n: XNode, px: number, py: number) => {
       const x = px + n.x;
       const y = py + n.y;
-      if (n.kind === "frame" && n.showName !== false) {
-        ctx.fillText(n.name, snap.panX + x * z, snap.panY + y * z - 14);
+      const screenX = snap.panX + x * z;
+      const screenY = snap.panY + y * z;
+      if (
+        n.kind === "frame" &&
+        n.showName !== false &&
+        // Skip names whose frame is off-screen: at any zoom a page can hold
+        // hundreds of them, and fillText for each is the one thing on this
+        // canvas that runs per layer rather than per visible pixel.
+        screenX > -400 &&
+        screenX < w + 400 &&
+        screenY > -40 &&
+        screenY < h + 400
+      ) {
+        const active = snap.selection.includes(n.id) || hoverId === n.id;
+        ctx.save();
+        ctx.font = active ? "600 11px Inter, system-ui" : "500 11px Inter, system-ui";
+        ctx.fillStyle = active ? BRAND_ACCENT : canvasLabel;
+        ctx.textBaseline = "alphabetic";
+        ctx.fillText(n.name, screenX, screenY - 8);
+        ctx.restore();
       }
-      for (const c of n.children) label(c, x, y);
+      for (const c of n.children) labelNames(c, x, y);
     };
     if (!snap.presentFrame) {
-      for (const ch of root.children) label(ch, 0, 0);
+      for (const ch of root.children) labelNames(ch, 0, 0);
     }
 
     if (penBranch.current && snap.tool === "pen") {

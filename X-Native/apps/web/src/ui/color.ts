@@ -354,6 +354,37 @@ export function contrastRatio(a: string, b: string): number {
   return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
 }
 
+/**
+ * `fg` composited over `bg`, as an opaque hex. A label colour written as
+ * `rgba(15,23,42,0.5)` is not a colour a contrast ratio can be taken of - what
+ * the eye sees is that 50% wash mixed with whatever is behind it.
+ */
+export function compositeOver(fg: string, bg: string): string {
+  const f = parseCssColor(fg);
+  const b = parseCssColor(bg);
+  if (!f) return bg;
+  if (!b || f.a >= 0.999) return toHex(f.r, f.g, f.b);
+  return toHex(
+    f.r * f.a + b.r * (1 - f.a),
+    f.g * f.a + b.g * (1 - f.a),
+    f.b * f.a + b.b * (1 - f.a),
+  );
+}
+
+/**
+ * A readable version of `fg` on `bg`: the canvas's frame names, ruler numbers
+ * and dimension badges, which are drawn as text straight onto whatever colour
+ * the canvas happens to be. Figma's own labels clear about 7:1; ours were
+ * `rgba(15,23,42,0.5)` over `#f1f2f6`, which composites to a 3.3:1 grey - under
+ * the 4.5:1 floor for text, and the reason the names read as decoration rather
+ * than as the layer's name. Hue and saturation are kept, only the value moves,
+ * so a theme's warm or cool grey stays that grey.
+ */
+export function readableLabel(fg: string, bg: string, target = 4.5): string {
+  const base = compositeOver(fg, bg);
+  return nearestAccessible(base, bg, target);
+}
+
 /** Figma's contrast categories. "Auto" resolves from the layer being painted. */
 export type ContrastKind = "auto" | "large" | "normal" | "graphics";
 

@@ -992,16 +992,16 @@ export class MemoryEngine implements Engine {
       }
       case "add": {
         const grid = snapOn(this.state, s.page);
+        const parent = cmd.parent ? find(this.root(), cmd.parent) : this.root();
         const n = node(
           cmd.kind,
-          labelFor(cmd.kind),
+          freshLabel(this.root(), cmd.kind),
           grid ? Math.round(cmd.x) : cmd.x,
           grid ? Math.round(cmd.y) : cmd.y,
           grid ? Math.max(1, Math.round(cmd.w)) : cmd.w,
           grid ? Math.max(1, Math.round(cmd.h)) : cmd.h,
           cmd.extra,
         );
-        const parent = cmd.parent ? find(this.root(), cmd.parent) : this.root();
         (parent ?? this.root()).children.push(n);
         s.selection = [n.id];
         if (cmd.kind === "text" || cmd.extra?.imageSrc) s.tool = "select";
@@ -2270,6 +2270,29 @@ function syncInstances(pages: Page[], master: XNode) {
  */
 function snapOn(s: { pages: Page[]; page: number }, index: number): boolean {
   return s.pages[index]?.pixelSnap ?? true;
+}
+
+/**
+ * Figma's default name for a new layer: the kind, then the lowest number that
+ * is not already taken in the page. "Frame" for every frame - which is what
+ * this used to do - makes the Layers list and the names on the canvas
+ * indistinguishable the moment there are two of them.
+ */
+function freshLabel(root: XNode, k: NodeKind): string {
+  const base = labelFor(k);
+  const taken = new Set<string>();
+  const walk = (n: XNode) => {
+    taken.add(n.name);
+    for (const c of n.children) walk(c);
+  };
+  walk(root);
+  // Always numbered, even the first: Figma's first frame is "Frame 1", not
+  // "Frame", so a document's names never change shape as it grows.
+  for (let i = 1; i < 10_000; i++) {
+    const candidate = `${base} ${i}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return base;
 }
 
 function labelFor(k: NodeKind): string {
