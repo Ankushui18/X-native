@@ -44,8 +44,8 @@ we match.
 | Styles | colour, text, effect, layout-grid styles | shared styles in the engine | read | **partial** |
 | Components | masters, instances, variants, properties, slots | masters and instances | (the app has both plus overrides) | **partial** |
 | Variables | collections, modes, remote | a `tokens` tab and a variable list | read | **partial** |
-| Text | styles, lists, OpenType, variable fonts, CJK, RTL, links, emoji | wrapping, alignment, decoration, auto-height, letter spacing | read | **partial** |
-| Auto layout | horizontal, vertical, grid, wrap, per-child settings, add/remove/suggest | a `layout` model, padding (V/H or per-side, CSS shorthand), gap (number or Auto with Between/Around/Evenly), the alignment box with its keys, hug/fill/fixed, ignore, suggest, edge double-clicks and padding handles on the canvas, the grid flow with tracks, spans, auto-positioning and per-cell alignment, the three routes in and four routes out, and flows nested inside flows with their own padding, gap, fills and hugged heights | read | **done — all four sub-articles; only the text-resizing article the guide links to is left** |
+| Text | styles, lists, OpenType, variable fonts, CJK, RTL, links, emoji | wrapping, alignment, decoration, auto-height, letter spacing, the three text resizing modes, auto width by click and Fixed size by drag, and the scale tool taking the font size along | read | **partial** |
+| Auto layout | horizontal, vertical, grid, wrap, per-child settings, add/remove/suggest | a `layout` model, padding (V/H or per-side, CSS shorthand), gap (number or Auto with Between/Around/Evenly), the alignment box with its keys, hug/fill/fixed, ignore, suggest, edge double-clicks and padding handles on the canvas, the grid flow with tracks, spans, auto-positioning and per-cell alignment, the three routes in and four routes out, and flows nested inside flows with their own padding, gap, fills and hugged heights | read | **done — the guide, its four sub-articles, and the text-resizing article it links to** |
 | Prototypes | triggers, actions, animations, easing, overlays, flows | flows, overlays, transitions, present mode | read | **partial** |
 | Comments | threads, replies, resolve, mentions | threads, replies, resolve | read | **partial** |
 | Multiplayer | cursors, cursor chat, spotlight, branching, history | none of it; a local file | - | **n/a** - no server |
@@ -99,11 +99,12 @@ and the colour models are the remaining items.
 **Additional properties** — strokes, effects and corners are done; the
 sub-options listed under *Open* are not.
 
-**Use auto layout** — six articles. The main guide (360040451373) is audited and
-closed in "Auto layout, held up against «Guide to auto layout»" above, and all
-four sub-articles are done in their own rounds: the horizontal/vertical flows,
-the grid flow, turning auto layout on and off, and combining the flows inside
-one another. The text-resizing article the guide links to is left.
+**Use auto layout** — six articles, and the set is done. The main guide
+(360040451373) is closed in "Auto layout, held up against «Guide to auto layout»"
+above; the four sub-articles have their own rounds (the horizontal/vertical
+flows, the grid flow, turning auto layout on and off, and combining the flows
+inside one another); and the text-resizing article the guide links to is
+"Text dimensions, and the three resizing modes" below.
 
 **Figma Draw, Build design systems, Create prototypes, Import and export, Work
 together in files** — chunks 2 and 3 of the category are not fetched yet, so
@@ -1274,11 +1275,65 @@ end to end, and all four came out of driving the app rather than reading it:
 
 ### Where this leaves the article
 
-All four sub-articles of the "Use auto layout" set are implemented; the only one
-the guide links to that has not been audited is the text-resizing article. What
-this round did not build is in `## Open`: spanning cells by dragging an object's
-edge on the canvas - ours spans through the Col span / Row span fields - and the
-hover highlight of the cell an object would land in.
+All four sub-articles of the "Use auto layout" set are implemented, and the
+text-resizing article the guide links to is audited in the round below. What this
+round did not build is in `## Open`: spanning cells by dragging an object's edge
+on the canvas - ours spans through the Col span / Row span fields - and the hover
+highlight of the cell an object would land in.
+
+## Text dimensions, and the three resizing modes
+
+"Adjust text dimensions and resizing" (27378154668951) is the article the auto
+layout guide's "Text resizing" note links to, and the sixth and last of the set.
+It is about the box rather than the type: what a drag on a text layer does to its
+resizing, the three modes in the Typography section, where the lines are allowed
+to break, and what the scale tool takes with it. `/tmp/probe/textsize.mjs` drove
+every row below through the app.
+
+### The rules
+
+| Article rule | Ours, measured |
+| --- | --- |
+| "Single-click: ... the resizing property is set to **auto width**. This allows the text layer to grow horizontally to accommodate any new text you add." | A click with the Text tool made a layer at `hug / H:hug`. Typing " and a longer tail" took it from 90 to 215 wide, still one line; Return broke the line and the height followed, 20 → 39. |
+| "Click and drag: Figma assumes you want the text layer to be those exact dimensions and sets the resizing to **Fixed size**." | Drawn as a 200 × 60 box and given a sentence that wraps inside it: the layer stayed `fixed / H:fixed` at 200 × 60. |
+| Auto height, the middle mode: the width is the layer's, the height follows the wrap | Auto H re-fitted that layer 60 → 58, and a further clause took it to 116 with the width still 200. |
+| "Layers set to **auto width** only break where you press `Return` or `Enter`, so wrap style has no effect on them." | Auto W made the same copy 1014 × 20 — one line — and a longer line widened it to 1674 rather than wrapping. The wrap styles themselves are the typography round's; what this needs is the measure being untied from the box when the width hugs, which is how the sentence comes out true. |
+| "When you manually change a layer's dimensions in the canvas, Figma will also update the resizing property to **Fixed size**." — and only "on the respective axis" | A drag on the right edge of an auto-width layer read `fixed / H:hug`; a drag on the bottom edge then read `fixed / H:fixed`. |
+| "The scale tool ... you'll change the font size, as well as the bounds of the text layer." | `K` and a corner drag: 74 × 20 at 16 px became 148 × 40 at 32 px. |
+| "Scale ... can lead to fractional font sizes or layers with subpixel positions and dimensions." | Kept rather than rounded away: an odd corner drag left the layer at fontSize 33.562 in a 155 × 42 box. The panel shows the size rounded, the model keeps the fraction — which is the caution the article is giving. |
+
+### What the probe turned up
+
+1. **Return typed itself into the copy.** Pressing Return on a selected text layer
+   mounts the editor *from that same keystroke*, so the browser handed the Return
+   to the new textarea: "Hello" opened as `"\nHello"` with the caret at 1 of 6, and
+   the first character typed landed under a blank line. The key that opens the
+   editor is consumed now, and the caret is put after the copy — 5 of 5 on open,
+   and typing appends: `Hello world`.
+2. **Typing a limit clamped the box and it stayed clamped.** On a hugging text,
+   typing `200` into Max W runs through `2` first, and each keystroke clamps — so
+   the width collapsed to 2 px and, because the clamp only pulls *down*, it never
+   came back once the field read 200. The four min/max fields now re-fit the
+   hugging axes after every change: the same typing ends at the max (76 → 50 on
+   this probe's copy), lifting the limit lets the copy back out (50 → 76), and a
+   min pulls a short copy up to it (45 → 320). That is the guide's "Minimum and
+   maximum dimensions" rule, and the engine side of it is asserted in the parity
+   suite: a max clamps down, a min above the max loses to it, and with nothing
+   binding it the box stays where the clamp put it — the *panel* is what re-fits a
+   hugging layer, because the engine cannot measure type.
+3. **A click that types nothing leaves a layer behind.** Clicking with the Text
+   tool and leaving without typing leaves an empty text layer in the document
+   (measured: 0 → 1 layers where Figma discards a text layer that was never typed
+   into). In `## Open`, with the rest of the typing behaviour below.
+
+### Where this leaves the article
+
+The article's four levers — the box, the three resizing modes, the scale tool and
+the font size — all behave as written. What is left is how the copy lands while
+it is being typed: the reflow is computed when the edit commits, not on each
+keystroke (mid-edit the document still holds the old copy and the siblings have
+not moved; on commit the label grew 20 → 96 and the layer below it moved 40 →
+116), where Figma reflows as you type. Both that and the caret are in `## Open`.
 
 ## Auto layout, held up against "Guide to auto layout"
 
@@ -1300,6 +1355,7 @@ the browser (`/tmp/probe/autolayout.mjs`, `/tmp/probe/al_shortcuts.mjs`).
 | "If any child objects … are set to Fill container, the parent frame will no longer hug contents and become Fixed for the axis" | Setting a child of a 104-wide hugging frame to Fill leaves the frame at 104 and the panel says `W · fixed`, with the label's tooltip giving the reason: *"a child fills the width, so the frame is Fixed here instead of hugging"*. |
 | Hug contents / Fill container / Fixed are offered where Figma offers them | Hug only exists on auto layout frames, Fill only on their children, and the panel shows the *effective* sizing: a hug that a filling child has taken away reads as Fixed. |
 | Ignore auto layout | Present on children of an auto layout frame, renamed from "Absolute position" to the article's current name. The layer stays in the frame, leaves the flow, and keeps its own position. |
+| "Set minimum or maximum width and height to any auto layout frame and its children ... Open the **Width** dropdown to find **Add min width** and **Add max width**" | The four fields exist and clamp: on a 76-wide hugging text, Max W 50 stopped the box at 50, lifting it let the copy back out to 76, and Min W 320 pulled a 45-wide copy up to it. They are reached from a button beside the W/H fields ("Add min/max width and height" / "Remove min and max") rather than from inside the menus themselves, which is in `## Open`. |
 | A text layer cannot keep both a max height and max lines | `textDimensionRule`: a max height sets max lines to Auto, a max-line count clears the max height, and a patch that names both is left alone because the caller meant both. |
 | ⇧A / ⌥⇧A / ⌃⇧A, and the alignment-box keys | The add/remove/suggest trio is wired to the article's own chords. ⌃⇧A **suggests** the values instead of using the defaults — see below. |
 | Padding dragging on the canvas: ⌥ for opposite sides, ⌥⇧ for all sides, ⇧ for big-nudge steps | Dragging the top padding handle moved `T 8` to `38`; with ⌥ held it moved `T` and `B` together to `68`; with ⌥⇧ all four to `98`. |
@@ -1722,6 +1778,17 @@ fields (exposure, contrast, saturation).
   that does not exist here - see the next item.
 - The editor's Actions menu (`⌘/`) has no "New design file"; Figma's does. The
   article for that menu (23570416033943) is not fetched yet.
+- Text resizing, from its article: a click with the Text tool that never types
+  anything leaves an empty text layer behind (Figma discards one that was never
+  typed into); typing lands in the document when the edit commits, so siblings in
+  an auto layout frame reflow then rather than on each keystroke (mid-edit the
+  document still holds the old copy); and the caret opens *after* the copy, not at
+  the character a double-click landed on. All three were measured in the
+  text-resizing round.
+- Min/max dimensions: the fields live behind a button beside the W/H fields
+  rather than as "Add min width" / "Add max width" / "Remove min and max" entries
+  inside the Width and Height menus, and neither W/H icon takes the two-line mark
+  Figma gives a layer that carries a limit.
 - Text styles on type fields, plus the wrapping settings the panel does not
   expose yet: percent letter spacing, OpenType and variable-font axes, hanging
   punctuation, whole-paragraph indentation, links in text, middle truncation.

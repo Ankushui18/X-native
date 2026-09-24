@@ -198,6 +198,7 @@ export function Canvas({
   onRunInteraction?: (runner: (ix: Interaction) => void) => void;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const editRef = useRef<HTMLTextAreaElement | null>(null);
   const wrap = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
   const space = useRef(false);
@@ -482,7 +483,13 @@ export function Canvas({
           e.stopImmediatePropagation();
           return;
         }
-        if (n?.kind === "text") setEdit({ id: n.id, text: n.text });
+        if (n?.kind === "text") {
+          // The editor is mounted from this very keystroke, so the browser would
+          // deliver the Return to the new textarea as well - typing a line break
+          // at the top of the copy before a character was entered.
+          e.preventDefault();
+          setEdit({ id: n.id, text: n.text });
+        }
         else if (
           n &&
           (n.kind === "frame" || n.kind === "group" || (n.kind === "boolean" && n.children.length > 0)) &&
@@ -4076,6 +4083,17 @@ export function Canvas({
             ? hoverCursor
             : "default";
 
+  /* A textarea focused in code lands with its caret at position zero, so the
+   * first keystroke would be inserted before the copy. Put it after the copy,
+   * which is where clicking into the layer leaves it in Figma. */
+  useEffect(() => {
+    if (!edit) return;
+    const el = editRef.current;
+    if (!el) return;
+    const at = el.value.length;
+    el.setSelectionRange(at, at);
+  }, [edit?.id]);
+
   const editBox = (() => {
     if (!edit) return null;
     const wp = worldPos(snap.pages[snap.page].root, edit.id);
@@ -4192,6 +4210,7 @@ export function Canvas({
       {edit && editBox && (
         <textarea
           className="text-edit"
+          ref={editRef}
           style={editBox}
           value={edit.text}
           autoFocus

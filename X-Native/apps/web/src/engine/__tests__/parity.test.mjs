@@ -2800,6 +2800,36 @@ console.log("auto layout: a text layer's max height and max lines:");
   t("and is not the same object", other !== undefined);
 }
 
+console.log("text dimensions: the limits, and which axis a drag fixes:");
+{
+  const e = new MemoryEngine(false);
+  await e.ready;
+  const N = (id) => find(e.snapshot().pages[e.snapshot().page].root, id);
+  e.dispatch({ type: "add", kind: "text", x: 0, y: 0, w: 320, h: 20, extra: { text: "A line of copy", sizingW: "hug", sizingH: "hug" } });
+  const t0 = e.snapshot().selection[0];
+  e.dispatch({ type: "patch", id: t0, patch: { maxW: 200 } });
+  t("a max width clamps the box down to it", Math.round(N(t0).w) === 200);
+  e.dispatch({ type: "patch", id: t0, patch: { minW: 260 } });
+  t("a min above the max loses to it", Math.round(N(t0).w) === 200);
+  e.dispatch({ type: "patch", id: t0, patch: { maxW: undefined } });
+  t("lifting the max lets the min have the box", Math.round(N(t0).w) === 260);
+  e.dispatch({ type: "patch", id: t0, patch: { minW: undefined, maxW: 200 } });
+  e.dispatch({ type: "patch", id: t0, patch: { maxW: undefined } });
+  t("with nothing left to bind it, the engine leaves the box where the clamp put it",
+    Math.round(N(t0).w) === 200, "the panel re-fits a hugging layer; the engine only clamps:");
+
+  // The article: "If you manually resize a layer ... the resizing property will
+  // be set to fixed on the respective axis." Only the axis that moved.
+  e.dispatch({ type: "add", kind: "text", x: 0, y: 200, w: 120, h: 20, extra: { text: "Copy", sizingW: "hug", sizingH: "hug" } });
+  const t1 = e.snapshot().selection[0];
+  e.dispatch({ type: "resize", id: t1, x: 0, y: 200, w: 240, h: N(t1).h });
+  t("a drag on the width fixes the width and leaves the height hugging",
+    N(t1).sizingW === "fixed" && N(t1).sizingH === "hug");
+  e.dispatch({ type: "resize", id: t1, x: 0, y: 200, w: N(t1).w, h: 60 });
+  t("and a drag on the height fixes the height too", N(t1).sizingW === "fixed" && N(t1).sizingH === "fixed");
+  t("with the copy still the layer's own", N(t1).text === "Copy" && N(t1).kind === "text");
+}
+
 console.log("auto layout, through the engine:");
 {
   const e = new MemoryEngine(false);

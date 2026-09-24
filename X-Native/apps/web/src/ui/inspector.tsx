@@ -2247,6 +2247,9 @@ function Design({
     list.splice(Math.max(0, Math.min(list.length, to)), 0, item);
     patch({ fills: list });
   };
+  /* A min or max is a limit the hugging axes have to be measured against: each
+   * keystroke clamps the box, and without a re-fit a limit typed as "200" would
+   * leave the width at the "2" the first keystroke clamped it to. */
   const refitHug = (over: Partial<XNode>, axes?: { w?: boolean; h?: boolean }) => {
     if (n.kind !== "text") return;
     const fit = hugSize({ ...n, ...over } as XNode, n.text, axes);
@@ -2653,13 +2656,16 @@ function Design({
         )}
         {showMinMax && (
           <div className="grid2" style={{ marginTop: 4 }}>
-            <Field label="Min W" value={n.minW || 0} onChange={(v) => patch({ minW: v > 0 ? v : undefined })} />
-            <Field label="Max W" value={n.maxW || 0} onChange={(v) => patch({ maxW: v > 0 ? v : undefined })} />
-            <Field label="Min H" value={n.minH || 0} onChange={(v) => patch({ minH: v > 0 ? v : undefined })} />
+            <Field label="Min W" value={n.minW || 0} onChange={(v) => { patch({ minW: v > 0 ? v : undefined }); refitHug({ minW: v }); }} />
+            <Field label="Max W" value={n.maxW || 0} onChange={(v) => { patch({ maxW: v > 0 ? v : undefined }); refitHug({ maxW: v }); }} />
+            <Field label="Min H" value={n.minH || 0} onChange={(v) => { patch({ minH: v > 0 ? v : undefined }); refitHug({ minH: v }); }} />
             <Field
               label="Max H"
               value={n.maxH || 0}
-              onChange={(v) => patch(n.kind === "text" ? { maxH: v > 0 ? v : undefined, maxLines: 0 } : { maxH: v > 0 ? v : undefined })}
+              onChange={(v) => {
+                patch(n.kind === "text" ? { maxH: v > 0 ? v : undefined, maxLines: 0 } : { maxH: v > 0 ? v : undefined });
+                refitHug({ maxH: v });
+              }}
             />
           </div>
         )}
