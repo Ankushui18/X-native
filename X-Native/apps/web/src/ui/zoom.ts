@@ -14,6 +14,13 @@ function viewport(): { w: number; h: number; x: number; y: number } {
   return { w: window.innerWidth - 520, h: window.innerHeight - 96, x: 240, y: 0 };
 }
 
+/** Change the zoom while keeping the middle of the canvas still, which is what
+ *  Figma's zoom-in/zoom-out shortcuts and its percentage menu do. */
+export function zoomAboutCentre(engine: Engine, zoom: number) {
+  const vp = viewport();
+  engine.dispatch({ type: "setZoom", zoom, anchorX: vp.w / 2, anchorY: vp.h / 2 });
+}
+
 /** Fit the page (or the selection) into the viewport, Figma's ⇧1 / 2.
  *
  * The pan is expressed in canvas-local coordinates because the canvas element

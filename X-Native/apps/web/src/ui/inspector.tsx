@@ -72,7 +72,7 @@ import { buildPdf } from "../engine/pdf";
 import { exportSvg } from "../engine/svgExport";
 import { plural, toast } from "./toast";
 import { armPopover } from "./popoverGuard";
-import { ZOOM_STEPS, parseZoomInput, stepZoom, zoomLabel, zoomTo } from "./zoom";
+import { ZOOM_STEPS, parseZoomInput, stepZoom, zoomAboutCentre, zoomLabel, zoomTo } from "./zoom";
 import { DEVICE_GROUPS, DevicePreview, deviceFor } from "./devices";
 import { roundToPixel } from "./round";
 
@@ -4683,7 +4683,14 @@ function Field({
     }
   };
   return (
-    <div className="field">
+    <div
+      className="field"
+      // View > Property labels reads this: with labels on, an icon-only field
+      // prints the property's own name instead of leaving the icon to be
+      // decoded. The name lives in a data attribute so the sidebar does not
+      // have to thread a boolean through every field in the file.
+      data-pname={icon ? (aria ?? label ?? icon) : undefined}
+    >
       {icon ? (
         <Icon name={icon} size={14} />
       ) : (
@@ -5370,7 +5377,7 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   };
   const commit = () => {
     const z = parseZoomInput(draft);
-    if (z != null) engine.dispatch({ type: "setZoom", zoom: z });
+    if (z != null) zoomAboutCentre(engine, z);
     setEditing(false);
   };
   const page = snap.pages[snap.page];
@@ -5428,7 +5435,7 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           >
             Zoom to selection<span className="sc">⇧2</span>
           </button>
-          <button role="menuitem" onClick={go(() => engine.dispatch({ type: "setZoom", zoom: 1 }))}>
+          <button role="menuitem" onClick={go(() => zoomAboutCentre(engine, 1))}>
             Zoom to 100%<span className="sc">⇧0</span>
           </button>
           <hr />
@@ -5440,17 +5447,17 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
                 role="menuitemradio"
                 aria-checked={near(z)}
                 className={near(z) ? "on" : ""}
-                onClick={go(() => engine.dispatch({ type: "setZoom", zoom: z }))}
+                onClick={go(() => zoomAboutCentre(engine, z))}
               >
                 {Math.round(z * 100)}%
               </button>
             ))}
           </div>
           <div className="zoom-grid">
-            <button role="menuitem" onClick={go(() => engine.dispatch({ type: "setZoom", zoom: stepZoom(snap.zoom, 1) }))}>
+            <button role="menuitem" onClick={go(() => zoomAboutCentre(engine, stepZoom(snap.zoom, 1)))}>
               <Icon name="zoom-in" size={12} /> Zoom in<span className="sc">⇧=</span>
             </button>
-            <button role="menuitem" onClick={go(() => engine.dispatch({ type: "setZoom", zoom: stepZoom(snap.zoom, -1) }))}>
+            <button role="menuitem" onClick={go(() => zoomAboutCentre(engine, stepZoom(snap.zoom, -1)))}>
               <Icon name="zoom-out" size={12} /> Zoom out<span className="sc">⇧−</span>
             </button>
           </div>
@@ -5477,6 +5484,27 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           >
             Snap to pixel grid<span className="sc">⌘⇧&apos;</span>
             {page.pixelSnap ?? true ? <Icon name="check" size={12} className="tick" /> : null}
+          </button>
+          <div className="menu-label">Pixel preview</div>
+          {(["off", "1x", "2x"] as const).map((pv) => (
+            <button
+              key={pv}
+              role="menuitemradio"
+              aria-checked={snap.pixelPreview === pv}
+              onClick={go(() => engine.dispatch({ type: "setPixelPreview", preview: pv }))}
+            >
+              {pv === "off" ? "Off" : `${pv[0]}× device pixels`}
+              <span className="sc">{pv === "off" ? "⌃P" : pv === "1x" ? "⌃⌥P" : ""}</span>
+              {snap.pixelPreview === pv && <Icon name="check" size={12} className="tick" />}
+            </button>
+          ))}
+          <button role="menuitemcheckbox" aria-checked={snap.viewLayoutGuides} onClick={go(() => engine.dispatch({ type: "toggleLayoutGuides" }))}>
+            Layout guides<span className="sc">⇧G</span>
+            {snap.viewLayoutGuides && <Icon name="check" size={12} className="tick" />}
+          </button>
+          <button role="menuitemcheckbox" aria-checked={snap.propertyLabels} onClick={go(() => engine.dispatch({ type: "togglePropertyLabels" }))}>
+            Property labels
+            {snap.propertyLabels && <Icon name="check" size={12} className="tick" />}
           </button>
           <button role="menuitemcheckbox" aria-checked={snap.showMinimap} onClick={go(() => engine.dispatch({ type: "toggleMinimap" }))}>
             Minimap

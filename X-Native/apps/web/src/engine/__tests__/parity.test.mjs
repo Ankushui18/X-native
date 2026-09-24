@@ -56,7 +56,15 @@ import { colorUsage, colorUsageAll, setOpacityMatches } from "../../ui/selection
 import { contrastRatio, contrastTarget, nearestAccessible, passesContrast, parseHex, rgbToHsv } from "../../ui/color.ts";
 
 import { inspectFigFile, importFig } from "../figImport.ts";
-import { ZOOM_MAX, ZOOM_MIN, ZOOM_PRESETS, normalizeWheelDelta, stepZoom, wheelZoomFactor } from "../view.ts";
+import {
+  ZOOM_MAX,
+  ZOOM_MIN,
+  ZOOM_PRESETS,
+  normalizeWheelDelta,
+  panForZoom,
+  stepZoom,
+  wheelZoomFactor,
+} from "../view.ts";
 import { exportSvg, svgPath } from "../svgExport.ts";
 import { interpolateMatchingLayers, solveEasing, applyInterpolatedFrame } from "../smartAnimate.ts";
 import { readFileSync, existsSync } from "fs";
@@ -2061,6 +2069,100 @@ console.log("corners an instance is not allowed to own:");
   t("nor can anything nested inside one", insideInstance(tree(), kid) === true);
   e.dispatch({ type: "reparent", ids: [kid], parent: root, x: 400, y: 0 });
   t("back at the top level it rounds freely again", insideInstance(tree(), kid) === false);
+}
+
+console.log("snap to pixel grid:");
+{
+  const e = new MemoryEngine(false);
+  await e.ready;
+  const pageOf = () => e.snapshot().pages[e.snapshot().page];
+  const nodeOf = (id) => find(pageOf().root, id);
+  const root = pageOf().root.id;
+  t("a page snaps to whole pixels out of the box", pageOf().pixelSnap !== false);
+  e.dispatch({ type: "add", kind: "rect", x: 10.4, y: 20.6, w: 30.4, h: 40.2, parent: root });
+  const id = e.snapshot().selection[0];
+  const n = nodeOf(id);
+  t(
+    "a layer created at fractional coordinates is rounded onto the grid",
+    n.x === 10 && n.y === 21 && n.w === 30 && n.h === 40,
+  );
+  e.dispatch({ type: "move", ids: [id], dx: 0.4, dy: 0.6 });
+  t("dragging it lands on whole pixels again", nodeOf(id).x === 10 && nodeOf(id).y === 22);
+  e.dispatch({ type: "nudge", dx: 1, dy: 1 });
+  t("arrow-key nudges stay on the grid", nodeOf(id).x === 11 && nodeOf(id).y === 23);
+  e.dispatch({ type: "resize", id, x: 5.5, y: 6.5, w: 12.5, h: 9.5 });
+  const r = nodeOf(id);
+  t("resizing rounds both corners", r.x === 6 && r.y === 7 && r.w === 13 && r.h === 10);
+  // The pixel-grid *overlay* is a different switch with a different default.
+  // It used to be the flag the engine read, so the overlay being off (the
+  // default) turned snapping off with it.
+  e.dispatch({ type: "patchPage", patch: { pixelSnap: false, pixelGrid: true } });
+  e.dispatch({ type: "move", ids: [id], dx: 0.25, dy: 0.25 });
+  t(
+    "with snapping off, showing the pixel grid does not start snapping",
+    nodeOf(id).x === 6.25 && nodeOf(id).y === 7.25,
+  );
+  e.dispatch({ type: "patchPage", patch: { pixelSnap: true, pixelGrid: false } });
+  e.dispatch({ type: "move", ids: [id], dx: 0.25, dy: 0.25 });
+  t(
+    "and with snapping on, hiding the pixel grid does not stop snapping",
+    nodeOf(id).x === 7 && nodeOf(id).y === 8,
+  );
+}
+
+console.log("the View menu:");
+{
+  const e = new MemoryEngine(false);
+  await e.ready;
+  const s = () => e.snapshot();
+  t("pixel preview starts off", s().pixelPreview === "off");
+  t("layout guides start visible", s().viewLayoutGuides !== false);
+  t("property labels start off", s().propertyLabels === false);
+  e.dispatch({ type: "setPixelPreview", preview: "2x" });
+  t("the pixel preview takes the density it is given", s().pixelPreview === "2x");
+  e.dispatch({ type: "toggleLayoutGuides" });
+  t("layout guides toggle off", s().viewLayoutGuides === false);
+  e.dispatch({ type: "togglePropertyLabels" });
+  t("property labels toggle on", s().propertyLabels === true);
+  t(
+    "view switches are not document edits, so they stay out of undo",
+    s().canUndo === false,
+  );
+  e.dispatch({ type: "undo" });
+  t("undo does not walk back a view switch", s().pixelPreview === "2x");
+}
+
+console.log("zoom keeps what you are looking at:");
+{
+  // The design point under the anchor is (anchor - pan) / zoom, and it has to
+  // still be under the anchor afterwards. Zooming without moving the pan drags
+  // the drawing towards the canvas's top-left corner, off the window.
+  t("zooming in about a point holds that point still", panForZoom(0, 1, 2, 400) === -400);
+  t("zooming back out undoes it exactly", panForZoom(-400, 2, 1, 400) === 0);
+  t("zooming out about a point moves the pan the other way", panForZoom(-400, 2, 0.5, 400) === 200);
+  const e = new MemoryEngine(false);
+  await e.ready;
+  const start = { zoom: e.snapshot().zoom, x: e.snapshot().panX, y: e.snapshot().panY };
+  e.dispatch({ type: "setZoom", zoom: start.zoom * 2, anchorX: 400, anchorY: 300 });
+  let s = e.snapshot();
+  t(
+    "the engine carries the anchor into the pan",
+    s.panX === panForZoom(start.x, start.zoom, start.zoom * 2, 400) &&
+      s.panY === panForZoom(start.y, start.zoom, start.zoom * 2, 300),
+  );
+  t(
+    "so the middle of the canvas still shows the same design point",
+    Math.abs((400 - s.panX) / s.zoom - (400 - start.x) / start.zoom) < 1e-9,
+  );
+  e.dispatch({ type: "setZoom", zoom: start.zoom, anchorX: 400, anchorY: 300 });
+  s = e.snapshot();
+  t(
+    "and zooming back leaves the view where it started",
+    Math.abs(s.panX - start.x) < 1e-9 && Math.abs(s.panY - start.y) < 1e-9,
+  );
+  const panBefore = s.panX;
+  e.dispatch({ type: "setZoom", zoom: 4 });
+  t("an unanchored zoom is the one that leaves the pan alone", e.snapshot().panX === panBefore);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

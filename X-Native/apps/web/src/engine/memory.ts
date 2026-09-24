@@ -8,6 +8,7 @@ import type {
   NodeKind,
   Page,
   PathPoint,
+  PixelPreview,
   Snapshot,
   Tool,
   XNode,
@@ -16,7 +17,7 @@ import type {
 } from "./types";
 import { copyText } from "./clipboard";
 import { loadDoc, type PersistedDoc } from "./persist";
-import { clampZoom } from "./view";
+import { clampZoom, panForZoom } from "./view";
 import {
   booleanPath,
   outlineStroke as outlineStrokePath,
@@ -551,6 +552,9 @@ interface Internal {
   showRulers: boolean;
   showMinimap: boolean;
   showComments: boolean;
+  pixelPreview: PixelPreview;
+  viewLayoutGuides: boolean;
+  propertyLabels: boolean;
   openComment: string;
   variables: VariableItem[];
   annotations: AnnotationItem[];
@@ -671,6 +675,9 @@ export class MemoryEngine implements Engine {
       showRulers: doc?.showRulers ?? false,
       showMinimap: doc?.showMinimap ?? false,
       showComments: doc?.showComments ?? false,
+      pixelPreview: "off",
+      viewLayoutGuides: true,
+      propertyLabels: false,
       openComment: "",
       variables: [
         { id: "var-1", name: "primary", type: "color", value: "#0d99ff", collection: "Brand" },
@@ -742,6 +749,9 @@ export class MemoryEngine implements Engine {
       "select",
       "selectAll",
       "toggleRulers",
+      "setPixelPreview",
+      "toggleLayoutGuides",
+      "togglePropertyLabels",
       "toggleFlows",
       "toggleMinimap",
       // Comments are annotations layered over the design, not part of it.
@@ -829,7 +839,13 @@ export class MemoryEngine implements Engine {
       showRulers: this.state.showRulers,
       showMinimap: this.state.showMinimap,
       showComments: this.state.showComments,
+      pixelPreview: this.state.pixelPreview,
+      viewLayoutGuides: this.state.viewLayoutGuides,
+      propertyLabels: this.state.propertyLabels,
       openComment: this.state.openComment,
+      // View options live in the tab, not in the file: Figma's article is
+      // explicit that zoom (and the menu beside it) applies to the current tab
+      // only, so none of these are written into the document.
       presentFrame: this.state.presentFrame,
       presentStack: this.state.presentStack,
       prototypeDevice: this.state.prototypeDevice,
@@ -861,9 +877,19 @@ export class MemoryEngine implements Engine {
       case "setTool":
         s.tool = cmd.tool;
         break;
-      case "setZoom":
-        s.zoom = clampZoom(cmd.zoom);
+      case "setZoom": {
+        const next = clampZoom(cmd.zoom);
+        // A zoom that names an anchor keeps that point of the canvas still -
+        // the middle of the viewport for the keyboard and the menu, the pointer
+        // for a wheel. One without an anchor only changes the scale, which is
+        // what restoring a saved viewport wants.
+        if (cmd.anchorX != null && cmd.anchorY != null) {
+          s.panX = panForZoom(s.panX, s.zoom, next, cmd.anchorX);
+          s.panY = panForZoom(s.panY, s.zoom, next, cmd.anchorY);
+        }
+        s.zoom = next;
         break;
+      }
       case "pan":
         s.panX += cmd.dx;
         s.panY += cmd.dy;
@@ -871,6 +897,15 @@ export class MemoryEngine implements Engine {
       case "setPan":
         s.panX = cmd.x;
         s.panY = cmd.y;
+        break;
+      case "setPixelPreview":
+        s.pixelPreview = cmd.preview;
+        break;
+      case "toggleLayoutGuides":
+        s.viewLayoutGuides = !s.viewLayoutGuides;
+        break;
+      case "togglePropertyLabels":
+        s.propertyLabels = !s.propertyLabels;
         break;
       case "toggleRulers":
         s.showRulers = !s.showRulers;
@@ -956,7 +991,7 @@ export class MemoryEngine implements Engine {
         break;
       }
       case "add": {
-        const grid = s.pages[s.page].pixelGrid;
+        const grid = snapOn(this.state, s.page);
         const n = node(
           cmd.kind,
           labelFor(cmd.kind),
@@ -978,7 +1013,7 @@ export class MemoryEngine implements Engine {
           if (n && !n.locked) {
             n.x += cmd.dx;
             n.y += cmd.dy;
-            if (s.pages[s.page].pixelGrid) {
+            if (snapOn(this.state, s.page)) {
               n.x = Math.round(n.x);
               n.y = Math.round(n.y);
             }
@@ -1003,7 +1038,7 @@ export class MemoryEngine implements Engine {
           } else {
             n.x += cmd.dx;
             n.y += cmd.dy;
-            if (s.pages[s.page].pixelGrid) {
+            if (snapOn(this.state, s.page)) {
               n.x = Math.round(n.x);
               n.y = Math.round(n.y);
             }
@@ -1015,10 +1050,10 @@ export class MemoryEngine implements Engine {
         if (n && !n.locked) {
           const oldW = n.w;
           const oldH = n.h;
-          n.x = s.pages[s.page].pixelGrid ? Math.round(cmd.x) : cmd.x;
-          n.y = s.pages[s.page].pixelGrid ? Math.round(cmd.y) : cmd.y;
-          n.w = Math.max(1, s.pages[s.page].pixelGrid ? Math.round(cmd.w) : cmd.w);
-          n.h = Math.max(1, s.pages[s.page].pixelGrid ? Math.round(cmd.h) : cmd.h);
+          n.x = snapOn(this.state, s.page) ? Math.round(cmd.x) : cmd.x;
+          n.y = snapOn(this.state, s.page) ? Math.round(cmd.y) : cmd.y;
+          n.w = Math.max(1, snapOn(this.state, s.page) ? Math.round(cmd.w) : cmd.w);
+          n.h = Math.max(1, snapOn(this.state, s.page) ? Math.round(cmd.h) : cmd.h);
           if (n.kind === "text" && !cmd.scaleProps) {
             if (n.w !== oldW) n.sizingW = "fixed";
             if (n.h !== oldH) n.sizingH = "fixed";
@@ -1202,7 +1237,7 @@ export class MemoryEngine implements Engine {
               ? findParent(this.root(), selected.id) ?? this.root()
               : this.root();
         const parentWorld = parent === this.root() ? { x: 0, y: 0 } : worldPos(this.root(), parent.id) ?? { x: 0, y: 0 };
-        const grid = s.pages[s.page].pixelGrid;
+        const grid = snapOn(this.state, s.page);
         for (const n of this.clip) {
           const copy = clone(n);
           reid(copy);
@@ -2223,6 +2258,18 @@ function syncInstances(pages: Page[], master: XNode) {
       syncNode(n, master);
     });
   }
+}
+
+/**
+ * Is Figma's "snap to pixel grid" (View menu / Shift+Cmd+') switched on for this
+ * page? It is a *drawing* behaviour — objects are rounded to whole pixels as
+ * they are created, moved and resized — and is separate from the pixel-grid
+ * *overlay*, which is only a ruler-grade guide drawn above 400% zoom. The two
+ * used to be the same flag here, which meant the overlay's default of off
+ * silently disabled snapping for everyone.
+ */
+function snapOn(s: { pages: Page[]; page: number }, index: number): boolean {
+  return s.pages[index]?.pixelSnap ?? true;
 }
 
 function labelFor(k: NodeKind): string {

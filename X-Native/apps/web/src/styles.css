@@ -860,6 +860,21 @@ html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }
   flex: 0 0 auto;
   white-space: nowrap;
 }
+/* View > Property labels. The right sidebar is deliberately terse - most
+   properties are a glyph and a number - so this switch spells out the ones
+   that are icon-only, the same teaching aid Figma offers. */
+:root[data-proplabels="on"] .field[data-pname] { gap: 4px; }
+:root[data-proplabels="on"] .field[data-pname] > svg { display: none; }
+:root[data-proplabels="on"] .field[data-pname]::before {
+  content: attr(data-pname);
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  color: var(--muted);
+}
 .field input, .field select {
   flex: 1;
   min-width: 0;

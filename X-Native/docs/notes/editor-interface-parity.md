@@ -849,9 +849,73 @@ Two more things from the article that did not match:
   1024, 1600, 3200, 6400), two rungs per doubling rather than the four arbitrary
   values we had.
 
-19 new assertions (353 total). The rest of this article - pixel preview, the
-independent "snap to pixel grid" toggle, layout guides, multiplayer cursors,
-property labels, and prototype flows - is listed under *Open*.
+19 new assertions (353 total). The rest of this article came next; it is the
+section below.
+
+## The rest of "Adjust your zoom and view options"
+
+The same article, every switch it mentions except the numbers the section above
+already covers.
+
+**Snap to pixel grid was wired to the other switch.** `pages[].pixelGrid` is the
+*overlay* - drawn from 400% up, off by default. The rounding in `add`, `move`,
+`nudge`, `resize` and paste/duplicate read that flag, so snapping was off unless
+you had the overlay on, and turning the overlay on silently changed where every
+new layer landed. The geometry now reads `pixelSnap` (on by default, ⇧⌘'), which
+is the flag Figma's Snap to pixel grid owns. Measured in the engine: a rectangle
+added at (10.4, 20.6) sized 30.4x40.2 lands at (10, 21) 30x40; dragging it by
++0.4/+0.6 rounds again; arrow nudges stay on the grid; resizing to
+5.5, 6.5, 12.5, 9.5 gives 6, 7, 13, 10; and against the old coupling, with
+snapping off *showing* the pixel grid does not start snapping, and with it on
+*hiding* the pixel grid does not stop it.
+
+Clicked through in a browser at 400% zoom, where a screen pixel is a quarter of
+a design pixel: one drag draws X 505, Y 475, W 50, H 38 - all whole. After ⇧⌘'
+turns snapping off, the same drag lands on X **580.25**, Y **475.25**, W
+**50.25**. That chord was itself broken: with Shift held the quote key arrives
+as `"` rather than `'`, so the handler - which matched on the character - had
+never fired, and the snapping half of Figma's pair did nothing on a US layout.
+It matches the physical key now (`e.code`), so ⌘' and ⌘⇧' work on any layout.
+
+**Pixel preview** (View > Pixel preview, ⌃P for 1x, ⌃⌥P for 2x). Frames are
+re-read as the raster they would export as - one device pixel per design pixel
+at 1x, two at 2x - and drawn back over themselves with smoothing off. It is a
+pass over the finished canvas rather than a second renderer, so the pixels being
+resampled are exactly the ones the exporter would see, and the selection, rulers
+and labels drawn afterwards stay crisp. Measured at 400% over a frame and an
+ellipse: the blend between two flat colours runs a median of **1 px** live,
+**4 px** at 1x (all 396 runs a multiple of four - one design pixel) and **2 px**
+at 2x; shared (non-pure) pixels 0.247% -> 1.27% -> 0.512% of the canvas.
+
+**Layout guides** (⇧G, or View > Layout guides) hides every frame's grid in one
+switch without deleting anything. Measured: 93,021 grid pixels -> **0** ->
+93,021 on the second press, with the grid still listed in the right sidebar.
+
+**Property labels** spells out the fields the right sidebar only draws an icon
+for: with it on, the Rotation field reads "Rotation" instead of the glyph. Off
+by default, as in Figma, and the sidebar keeps its width.
+
+**Zoom keeps the middle of the canvas still.** ⇧+, ⇧−, ⇧0 and the percentage
+menu set the scale without touching the pan, and the pan is measured from the
+canvas's top-left corner: press ⇧+ twice and the artboard has walked off the
+right of the window. (This is how it surfaced - the first attempt at measuring
+pixel preview found nothing on screen to measure.) `panForZoom` now re-aims the
+pan so the design point under the anchor stays put: the middle of the viewport
+for the keyboard and the menu, the pointer for a wheel, as before. Measured:
+⇧+ twice from a file that opens at 75% holds the frame under the centre and
+lands on 400% with the content still in view.
+
+7 new assertions (407 total, 0 failed) plus the browser probe:
+`/tmp/probe/view_menu_probe.mjs` (all of the numbers above) and
+`/tmp/probe/proplabels_probe.mjs` (the label itself). Screenshots:
+`view_preview_off.png`, `view_preview_1x.png`, `view_preview_2x.png`,
+`view_guides_on.png`, `view_guides_off.png`, `proplabels_on.png` in `/tmp/probe`.
+
+Left from this article: **multiplayer cursors** (nothing to show until there is
+multiplayer, but the toggle and its ⌥⌘\ belong in the same menu) and
+**prototype flows** as a view option - the 3D-looking canvas menu Figma's
+article describes is otherwise now this app's zoom field menu plus the canvas
+menu, which between them carry every switch above.
 
 ## A Figma file that arrives as a Figma file
 
@@ -1013,14 +1077,12 @@ fields (exposure, contrast, saturation).
   aspect-ratio lock refusing instance children - are unit tested but were not
   clicked through, because the sandbox had no browser left. Re-check them with
   one command the next time a browser is available.
-- From "Adjust your zoom and view options": everything except the zoom numbers
-  themselves. Missing: **pixel preview** (off / 1x / 2x, Ctrl+P, and the toast
-  that confirms it), a **layout guides** master toggle (Ctrl+G), **multiplayer
-  cursors** (nothing to show until there is multiplayer, but the toggle and its
-  ⌥⌘\\ belong in the menu), **property labels**, and **prototype flows**. Also
-  missing: a Figma-style "Zoom/view options" dropdown that holds all of the
-  above in one place - ours live in the zoom field's menu, the canvas menu and
-  Device preview, and the article's menu is one list.
+- From "Adjust your zoom and view options": **multiplayer cursors** (there is
+  nothing to show until there is multiplayer, but the toggle and its ⌥⌘\\
+  belong in the zoom field's menu with the rest) and **prototype flows** as a
+  view option. The article's single "Zoom/view options" list is otherwise split
+  across the zoom field's menu and the canvas menu, which between them now carry
+  every switch it names.
 - What the SVG export still cannot express: angular and diamond gradients (SVG
   has no conic gradient, so the export writes a linear ramp across the box as a
   stand-in), background blur (no SVG filter samples what is behind an element),

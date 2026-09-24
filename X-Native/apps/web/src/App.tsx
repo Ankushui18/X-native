@@ -204,6 +204,17 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     };
   }, [engine, fileId]);
 
+  // Figma's View > Property labels. It is a stylesheet concern rather than a
+  // prop: the right sidebar is built from a hundred small field components and
+  // threading a boolean through all of them would touch every one of them for
+  // what is a single text-versus-icon decision.
+  useEffect(() => {
+    document.documentElement.dataset.proplabels = snap.propertyLabels ? "on" : "off";
+    return () => {
+      delete document.documentElement.dataset.proplabels;
+    };
+  }, [snap.propertyLabels]);
+
   // If a stored document existed but could not be read, say so rather than
   // silently presenting an empty file as if nothing was lost. This sets the
   // toast state directly: the bus subscription below mounts after this effect,

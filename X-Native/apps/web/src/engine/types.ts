@@ -626,6 +626,15 @@ export interface Snapshot {
   showRulers: boolean;
   /** Figma's View > Minimap. Off by default; it costs its own render pass. */
   showMinimap: boolean;
+  /** Figma's "Pixel preview" in the Zoom/view options menu: vectors drawn as
+   *  the raster they would export as, at 1x or 2x device pixels. */
+  pixelPreview: PixelPreview;
+  /** Figma's "Layout guides" in the same menu: one switch to hide every
+   *  frame's layout grid without deleting any of them. */
+  viewLayoutGuides: boolean;
+  /** Figma's "Property labels": names beside the icon-only controls in the
+   *  right sidebar, for someone still learning what each one does. */
+  propertyLabels: boolean;
   /** Comment pins are hidden unless the comment tool is active or the user
    *  has explicitly turned them on, as in Figma. */
   showComments: boolean;
@@ -643,14 +652,20 @@ export interface Snapshot {
   vecPoints?: number[];
 }
 
+/** Off, or the density a rasterised preview is drawn at. */
+export type PixelPreview = "off" | "1x" | "2x";
+
 export type Command =
   | { type: "select"; ids: string[] }
   | { type: "setTool"; tool: Tool }
-  | { type: "setZoom"; zoom: number }
+  | { type: "setZoom"; zoom: number; anchorX?: number; anchorY?: number }
   | { type: "pan"; dx: number; dy: number }
   | { type: "setPan"; x: number; y: number }
   | { type: "setRightTab"; tab: RightTab }
   | { type: "toggleRulers" }
+  | { type: "setPixelPreview"; preview: PixelPreview }
+  | { type: "toggleLayoutGuides" }
+  | { type: "togglePropertyLabels" }
   | { type: "toggleMinimap" }
   | { type: "toggleFlows"; enabled?: boolean }
   | { type: "toggleComments" }

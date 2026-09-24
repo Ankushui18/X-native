@@ -41,6 +41,18 @@ export function zoomBy(current: number, factor: number): number {
   return clampZoom(current * factor);
 }
 
+/** Where the pan has to sit for the design point currently under `anchor` to
+ *  stay under it when the zoom changes from `zoom` to `next`.
+ *
+ *  The canvas keeps the viewport's position in `panX/panY` rather than the
+ *  centre of the view, so changing the zoom alone leaves the drawing anchored
+ *  to the canvas's top-left corner: press ⇧+ twice and the artboard has walked
+ *  off the right of the window. Figma keeps the middle of the canvas still (and
+ *  the pointer, for a wheel), which is what this computes. */
+export function panForZoom(pan: number, zoom: number, next: number, anchor: number): number {
+  return anchor - ((anchor - pan) / zoom) * next;
+}
+
 /** A wheel event, reduced to the facts the zoom needs. */
 export interface WheelGesture {
   deltaY: number;

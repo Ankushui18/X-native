@@ -952,7 +952,15 @@ export function Canvas({
         round();
         ctx.clip();
       }
-      if (n.kind === "frame" && n.layoutGrids?.length && !snap.presentFrame) {
+      if (
+        n.kind === "frame" &&
+        n.layoutGrids?.length &&
+        !snap.presentFrame &&
+        // View > Layout guides hides every frame's grid at once without
+        // deleting them - the switch you want while looking at spacing
+        // rather than columns.
+        snap.viewLayoutGuides !== false
+      ) {
         ctx.save();
         for (const g of n.layoutGrids) {
           if (g.visible === false) continue;
@@ -1121,6 +1129,54 @@ export function Canvas({
       }
     } else {
       for (const ch of root.children) paint(ch, 0, 0);
+    }
+
+    // View > Pixel preview. Frames are re-read as the raster they would export
+    // as - one device pixel per design pixel at 1x, two at 2x - and drawn back
+    // over themselves with smoothing off, so a fractional edge or a hairline
+    // stroke shows up here instead of in the exported file. Doing it as a pass
+    // over the finished canvas (rather than a second renderer) keeps it exactly
+    // faithful: the pixels being resampled are the ones the exporter would see.
+    if (snap.pixelPreview !== "off" && !snap.presentFrame) {
+      const density = snap.pixelPreview === "2x" ? 2 : 1;
+      for (const top of root.children) {
+        if (top.kind !== "frame" || !top.visible) continue;
+        const sx = snap.panX + top.x * z;
+        const sy = snap.panY + top.y * z;
+        const sw = top.w * z;
+        const sh = top.h * z;
+        // Only the on-screen slice, so a frame larger than the window costs a
+        // buffer the size of the window rather than of the frame.
+        const cx0 = Math.round(Math.max(0, sx));
+        const cy0 = Math.round(Math.max(0, sy));
+        const cx1 = Math.round(Math.min(w, sx + sw));
+        const cy1 = Math.round(Math.min(h, sy + sh));
+        if (cx1 - cx0 < 2 || cy1 - cy0 < 2) continue;
+        const bw = Math.max(1, Math.round(((cx1 - cx0) / z) * density));
+        const bh = Math.max(1, Math.round(((cy1 - cy0) / z) * density));
+        if (bw * bh > 16_000_000) continue;
+        const tmp = pixelScratch(bw, bh);
+        const tctx = tmp.getContext("2d");
+        if (!tctx) continue;
+        tctx.setTransform(1, 0, 0, 1, 0, 0);
+        tctx.imageSmoothingEnabled = true;
+        tctx.imageSmoothingQuality = "high";
+        tctx.clearRect(0, 0, bw, bh);
+        tctx.drawImage(
+          c,
+          cx0 * dpr,
+          cy0 * dpr,
+          (cx1 - cx0) * dpr,
+          (cy1 - cy0) * dpr,
+          0,
+          0,
+          bw,
+          bh,
+        );
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(tmp, 0, 0, bw, bh, cx0, cy0, cx1 - cx0, cy1 - cy0);
+        ctx.imageSmoothingEnabled = true;
+      }
     }
 
     ctx.font = "500 11px Inter, system-ui";
@@ -4673,6 +4729,18 @@ function findClickedNoodle(
 }
 
 const booleanCanvases = new Map<string, HTMLCanvasElement>();
+
+/** One reused buffer for View > Pixel preview. Frames are resampled one at a
+ *  time, so a single scratch canvas is enough. */
+let pixelCanvas: HTMLCanvasElement | null = null;
+function pixelScratch(w: number, h: number): HTMLCanvasElement {
+  if (!pixelCanvas) pixelCanvas = document.createElement("canvas");
+  if (pixelCanvas.width !== w || pixelCanvas.height !== h) {
+    pixelCanvas.width = w;
+    pixelCanvas.height = h;
+  }
+  return pixelCanvas;
+}
 
 function paintBoolean(
   ctx: CanvasRenderingContext2D,

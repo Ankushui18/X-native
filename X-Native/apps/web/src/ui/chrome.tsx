@@ -10,7 +10,7 @@ import { finishPenDraft } from "./penDraft";
 import { useTheme, type ThemePref } from "./theme";
 import { ContextMenu, isGroupNode, layerMenu, pageMenu, runMenu } from "./ContextMenu";
 import { align } from "./inspector";
-import { stepZoom, zoomCenter, zoomTo } from "./zoom";
+import { stepZoom, zoomAboutCentre, zoomCenter, zoomTo } from "./zoom";
 import { roundToPixel } from "./round";
 
 import { clearDoc } from "../engine/persist";
@@ -880,6 +880,11 @@ export function Actions({
     { label: "Delete", sc: "⌫", run: () => engine.dispatch({ type: "delete" }) },
     { label: "Rulers", sc: "⇧R", run: () => engine.dispatch({ type: "toggleRulers" }) },
     { label: "Minimap", sc: "⇧M", run: () => engine.dispatch({ type: "toggleMinimap" }) },
+    { label: "Pixel preview: off", sc: "⌃P", run: () => engine.dispatch({ type: "setPixelPreview", preview: "off" }) },
+    { label: "Pixel preview: 1×", sc: "", run: () => engine.dispatch({ type: "setPixelPreview", preview: "1x" }) },
+    { label: "Pixel preview: 2×", sc: "⌃⌥P", run: () => engine.dispatch({ type: "setPixelPreview", preview: "2x" }) },
+    { label: "Layout guides", sc: "⇧G", run: () => engine.dispatch({ type: "toggleLayoutGuides" }) },
+    { label: "Property labels", sc: "", run: () => engine.dispatch({ type: "togglePropertyLabels" }) },
     {
       // With autosave the document is now sticky, so there has to be a way back
       // to a blank file. Destructive and unrecoverable, hence the confirm.
@@ -945,7 +950,7 @@ export function Actions({
     } },
     { label: "Flip horizontal", sc: "⇧H", run: () => engine.dispatch({ type: "flip", axis: "h" }) },
     { label: "Flip vertical", sc: "⇧V", run: () => engine.dispatch({ type: "flip", axis: "v" }) },
-    { label: "Zoom to 100%", sc: "⇧0", run: () => engine.dispatch({ type: "setZoom", zoom: 1 }) },
+    { label: "Zoom to 100%", sc: "⇧0", run: () => zoomAboutCentre(engine, 1) },
     { label: "Zoom to fit", sc: "⇧1", run: () => zoomTo(engine, "fit") },
     { label: "Zoom to selection", sc: "⇧2", run: () => zoomTo(engine, "selection") },
   ].filter((i) => i.label.toLowerCase().includes(q.toLowerCase()));
@@ -1371,29 +1376,29 @@ export function bindHotkeys(
     }
     if ((meta && e.key === "0") || (!meta && e.shiftKey && e.code === "Digit0")) {
       e.preventDefault();
-      engine.dispatch({ type: "setZoom", zoom: 1 });
+      zoomAboutCentre(engine, 1);
       return;
     }
     // Step through the zoom presets so the readout lands on round values
     // (25/50/100/200...) instead of compounding into 94% / 117% / 146%.
     if (!meta && !e.altKey && e.shiftKey && (e.key === "=" || e.key === "+")) {
       e.preventDefault();
-      engine.dispatch({ type: "setZoom", zoom: stepZoom(engine.snapshot().zoom, 1) });
+      zoomAboutCentre(engine, stepZoom(engine.snapshot().zoom, 1));
       return;
     }
     if (!meta && !e.altKey && e.shiftKey && (e.key === "-" || e.key === "_")) {
       e.preventDefault();
-      engine.dispatch({ type: "setZoom", zoom: stepZoom(engine.snapshot().zoom, -1) });
+      zoomAboutCentre(engine, stepZoom(engine.snapshot().zoom, -1));
       return;
     }
     if (meta && (e.key === "=" || e.key === "+")) {
       e.preventDefault();
-      engine.dispatch({ type: "setZoom", zoom: stepZoom(engine.snapshot().zoom, 1) });
+      zoomAboutCentre(engine, stepZoom(engine.snapshot().zoom, 1));
       return;
     }
     if (meta && e.key === "-") {
       e.preventDefault();
-      engine.dispatch({ type: "setZoom", zoom: stepZoom(engine.snapshot().zoom, -1) });
+      zoomAboutCentre(engine, stepZoom(engine.snapshot().zoom, -1));
       return;
     }
     // ⇧F — Figma's "View > Prototype flows": hide the noodles and hotspot
@@ -1403,8 +1408,30 @@ export function bindHotkeys(
       engine.dispatch({ type: "toggleFlows" });
       return;
     }
+    // ⇧G — Figma's View > Layout guides: every frame's grid at once, so a
+    // reviewer can look at spacing without losing the grids themselves.
+    if (!meta && !e.altKey && e.shiftKey && e.key.toLowerCase() === "g") {
+      e.preventDefault();
+      engine.dispatch({ type: "toggleLayoutGuides" });
+      return;
+    }
+    // ⌃P / ⌃⌥P cycle Figma's Pixel preview: the canvas as the raster it would
+    // export as. (Figma also offers 2× at ⌃⌥P.)
+    if (e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key.toLowerCase() === "p" || e.code === "KeyP")) {
+      e.preventDefault();
+      const cur = engine.snapshot().pixelPreview;
+      engine.dispatch({
+        type: "setPixelPreview",
+        preview: e.altKey ? (cur === "2x" ? "off" : "2x") : cur === "1x" ? "off" : "1x",
+      });
+      return;
+    }
     // ⌘' shows the pixel grid, ⌘⇧' toggles snapping to it — Figma's pair.
-    if (meta && (e.key === "'" || e.key === "@")) {
+    // Matched on the physical key as well as the character, because with Shift
+    // held the quote key *is* a different character: on a US layout ⇧' arrives
+    // as `"`, on a German one ⇧2 as `@`, and matching only on those meant the
+    // snapping half of the pair did nothing at all.
+    if (meta && (e.code === "Quote" || e.key === "'" || e.key === "@")) {
       e.preventDefault();
       const cur = engine.snapshot();
       const page = cur.pages[cur.page];
@@ -1953,7 +1980,7 @@ function ToolsPane({ engine, onActions }: { engine: Engine; onActions?: () => vo
     { label: "Group", run: () => engine.dispatch({ type: "group" }) },
     { label: "Undo", run: () => engine.dispatch({ type: "undo" }) },
     { label: "Redo", run: () => engine.dispatch({ type: "redo" }) },
-    { label: "Zoom to 100%", run: () => engine.dispatch({ type: "setZoom", zoom: 1 }) },
+    { label: "Zoom to 100%", run: () => zoomAboutCentre(engine, 1) },
     { label: "All actions…", run: () => onActions?.() },
   ];
   return (
@@ -2085,6 +2112,8 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
       { id: "rulers", name: "Rulers", keys: ["⇧", "R"] },
       { id: "pixel-grid", name: "Pixel grid", keys: ["⌘", "'"] },
       { id: "pixel-snap", name: "Snap to pixel grid", keys: ["⌘", "⇧", "'"] },
+      { id: "pixel-preview", name: "Pixel preview 1×", keys: ["⌃", "P"] },
+      { id: "pixel-preview-2", name: "Pixel preview 2×", keys: ["⌃", "⌥", "P"] },
       { id: "zoom-tool", name: "Zoom tool", keys: ["Z"] },
       { id: "zoom-fit", name: "Zoom to fit", keys: ["⇧", "1"] },
       { id: "zoom-sel", name: "Zoom to selection", keys: ["⇧", "2"] },
