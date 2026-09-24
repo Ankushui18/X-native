@@ -9,6 +9,56 @@ Sources: Figma Help Center — “Hide or minimize the UI” (article 4141491802
 Rule held throughout: **the UI is ours, the functions and behaviour are theirs**.
 Nothing below copies Figma's pixels; each one is a capability our app did not have.
 
+## Inventory
+
+The work is an audit of the whole **Figma Design** help category
+(<https://help.figma.com/hc/en-us/categories/360002042553-Figma-Design>), taken
+one article at a time, in rounds. This is the list, so progress is visible
+rather than implied. A tick means the behaviour is implemented and measured; a
+round's own section below says what was measured.
+
+**Tour the interface**
+- [x] Change the canvas background colour — the page's fill, its own section below
+- [x] Toolbar — tools, groups with flyouts, the caret set
+- [x] Navigation bar and left sidebar — tabs, pages, layers tree
+- [x] Right sidebar — position, layout, appearance, fill, stroke, effects
+- [x] Hide or minimize the UI — `⌘\` / `⇧⌘\`, verified by reading the code
+- [x] Actions menu — the searchable list, and now Preferences › Nudge amount…
+- [x] Keyboard shortcuts — the cheat sheet, kept in step with the handler
+- [x] **Nudge values** — small 1 / big 10, settable. This round
+- [x] Adjust your zoom and view options — the zoom numbers, then the rest of it
+- [ ] Custom thumbnails — a frame marked as the file's preview
+- [ ] Create and manage guides — the canvas guides exist; the article is not audited
+- [ ] Layer outlines — `⌥`-hover to outline, `⌘Y` outline mode
+- [ ] Find and replace — text and layer names across the file
+
+**Create designs** — layers, frames, shapes, masks, vector networks, boolean
+operations, flatten, bulk edit, matching objects, parent/child/sibling, select,
+alignment, copy/paste, scale, sections, measure distances, lock/visibility/
+rename, smart selection, constraints, layout guides all landed in the rounds
+listed below. Not yet audited: **shape builder** (31616004109847), **convert
+strokes to paths** (33052305733015), **offset path** (33792861450263) and
+**bulk edit** (21635177948567) as its own article.
+
+**Text and typography** — 16 articles, and the largest single block left. The
+typography round covered the basics; text styles, bulleted/numbered lists,
+OpenType features, variable fonts, CJK and RTL text, links in text and emoji
+are all still open.
+
+**Color, gradients, and images** — patterns as a fill or stroke, interactive
+cropping, the eyedropper (the tool exists), mixed-selection colour editing (landed),
+and the colour models are the remaining items.
+
+**Additional properties** — strokes, effects and corners are done; the
+sub-options listed under *Open* are not.
+
+**Use auto layout** — six articles; the app has a `layout` model and the
+inspector drives it, but none of the six has been audited.
+
+**Figma Draw, Build design systems, Create prototypes, Import and export, Work
+together in files** — chunks 2 and 3 of the category are not fetched yet, so
+these are listed but not broken down.
+
 ## What the study found
 
 Already at parity, verified by reading the code rather than assumed: `⌘\` hides
