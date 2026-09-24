@@ -232,8 +232,21 @@ export interface ComponentMaster {
 
 export interface ExportPreset {
   format: ExportFormat;
-  scale: number;
+  /** Figma's scale field: a multiplier, or a size with a unit. A number is
+   *  read as a multiplier, the strings "500w" and "300h" as a fixed width or
+   *  height with the other side following the aspect ratio. */
+  scale: number | string;
   suffix: string;
+  /** Format-specific settings. All optional: a preset saved before these
+   *  existed reads through `resolveSettings`, which fills in Figma's defaults
+   *  rather than treating a missing boolean as off. */
+  ignoreOverlap?: boolean;
+  boundingBox?: boolean;
+  includeId?: boolean;
+  outlineText?: boolean;
+  simplifyStroke?: boolean;
+  quality?: "low" | "medium" | "high";
+  resampling?: "detailed" | "basic";
 }
 
 /**

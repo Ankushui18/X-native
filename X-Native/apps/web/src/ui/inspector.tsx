@@ -73,6 +73,16 @@ import { exportSvg } from "../engine/svgExport";
 import { plural, toast } from "./toast";
 import { armPopover } from "./popoverGuard";
 import { ZOOM_STEPS, parseZoomInput, stepZoom, zoomAboutCentre, zoomLabel, zoomTo } from "./zoom";
+import {
+  FORMAT_CAPS,
+  FORMATS,
+  SCALE_PRESETS,
+  exportSize,
+  formatScale,
+  newPreset,
+  qualityValue,
+  resolveSettings,
+} from "./exportModel";
 import { DEVICE_GROUPS, DevicePreview, deviceFor } from "./devices";
 import { roundToPixel } from "./round";
 
@@ -4777,18 +4787,153 @@ function Constraints({
   );
 }
 
-const FORMATS: ExportFormat[] = ["PNG", "JPG", "SVG", "PDF"];
-const SCALES = [0.5, 1, 2, 3, 4];
+/* Formats, scales and the per-format capability table live in ./exportModel, so
+   the panel and the exporter read one source. */
+const SCALES = SCALE_PRESETS;
+
+/* Every format's optional settings live behind one "Export settings" button, as
+   in Figma, and the list is built from the capability table rather than written
+   out per format - so a control cannot appear for something the exporter does
+   not do. */
+function hasSettings(format: ExportFormat): boolean {
+  const c = FORMAT_CAPS[format];
+  return (
+    c.ignoreOverlap ||
+    c.boundingBox ||
+    c.includeId ||
+    c.outlineText ||
+    c.simplifyStroke ||
+    c.quality ||
+    c.resampling
+  );
+}
+
+/** The settings Figma shows for whatever format the row is set to. */
+function ExportSettings({
+  preset,
+  onChange,
+}: {
+  preset: ExportPreset;
+  onChange: (next: ExportPreset) => void;
+}) {
+  const caps = FORMAT_CAPS[preset.format];
+  const settings = resolveSettings(preset);
+  const flip = (key: "ignoreOverlap" | "boundingBox" | "includeId" | "outlineText" | "simplifyStroke") =>
+    onChange({ ...preset, [key]: !settings[key] });
+  /** A caret-down menu, because a native select cannot be styled to match and
+   *  writes its own option list. */
+  const pick = (key: "quality" | "resampling", values: readonly string[]) => {
+    const at = values.indexOf(String(settings[key]));
+    onChange({ ...preset, [key]: values[(at + 1) % values.length] });
+  };
+  return (
+    <div className="export-settings insp-pad">
+      {caps.ignoreOverlap && (
+        <label className="check" title="Export the selected layers only, ignoring anything overlapping them">
+          <input type="checkbox" checked={settings.ignoreOverlap} onChange={() => flip("ignoreOverlap")} />
+          Ignore overlapping layers
+        </label>
+      )}
+      {caps.boundingBox && (
+        <label className="check" title="Text layers only: keep the layer's bounding box, empty space and all">
+          <input type="checkbox" checked={settings.boundingBox} onChange={() => flip("boundingBox")} />
+          Include bounding box
+        </label>
+      )}
+      {caps.includeId && (
+        <label className="check" title="Write an id, taken from the layer's name, onto the svg element">
+          <input type="checkbox" checked={settings.includeId} onChange={() => flip("includeId")} />
+          Include &ldquo;id&rdquo; attribute
+        </label>
+      )}
+      {caps.resampling && (
+        <button className="set-row" onClick={() => pick("resampling", ["detailed", "basic"])}>
+          Image resampling
+          <span className="set-val">
+            {settings.resampling === "basic" ? "Basic" : "Detailed"}
+            <Icon name="chevron" size={caretSize()} />
+          </span>
+        </button>
+      )}
+      {caps.quality && (
+        <button className="set-row" onClick={() => pick("quality", ["low", "medium", "high"])}>
+          Image quality
+          <span className="set-val">
+            {settings.quality[0].toUpperCase() + settings.quality.slice(1)}
+            <Icon name="chevron" size={caretSize()} />
+          </span>
+        </button>
+      )}
+      {caps.resampling && (
+        <p className="hint">
+          {settings.resampling === "basic"
+            ? "Basic picks the nearest pixel: best for icons, logos and pixel art."
+            : "Detailed averages the surrounding pixels: best for gradients, shadows and photographs."}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Figma's scale field: type `2x`, `500w` or `300h`, or click for the presets. */
+function ScaleField({
+  preset,
+  locked,
+  onCommit,
+}: {
+  preset: ExportPreset;
+  locked: boolean;
+  onCommit: (scale: number | string) => void;
+}) {
+  const [draft, setDraft] = useState(() => formatScale(preset.scale));
+  const focused = useRef(false);
+  useEffect(() => {
+    if (!focused.current) setDraft(formatScale(preset.scale));
+  }, [preset.scale]);
+  if (locked) {
+    return (
+      <span className="fmt locked" title="SVGs and PDFs export at 1x only">
+        1x
+      </span>
+    );
+  }
+  return (
+    <input
+      className="scale"
+      aria-label="Scale"
+      title="Scale: a multiplier such as 2x, or a size such as 500w or 300h"
+      value={draft}
+      onFocus={() => {
+        focused.current = true;
+      }}
+      onChange={(e) => {
+        const next = e.target.value;
+        setDraft(next);
+        // Commit as you type once the text is a complete spec, so the preview
+        // follows the field rather than waiting for a blur.
+        if (/^\d*\.?\d+\s*[xwh]?$/i.test(next.trim()) && /\d/.test(next)) onCommit(next.trim());
+      }}
+      onBlur={() => {
+        focused.current = false;
+        setDraft(formatScale(preset.scale));
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+      }}
+    />
+  );
+}
 
 function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
   const presets = n.exports ?? [];
   const [preview, setPreview] = useState<Record<number, boolean>>({});
+  const [settingsOpen, setSettingsOpen] = useState<number | null>(null);
   const add = () => {
     openSection("export");
     engine.dispatch({
       type: "patch",
       id: n.id,
-      patch: { exports: [...presets, { format: "PNG", scale: 1, suffix: "" }] },
+      patch: { exports: [...presets, newPreset("PNG")] },
     });
   };
   const set = (i: number, p: ExportPreset) => {
@@ -4839,23 +4984,54 @@ function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
               <button
                 className="fmt"
                 title="Format"
-                onClick={() => set(i, { ...p, format: FORMATS[(FORMATS.indexOf(p.format) + 1) % FORMATS.length] })}
+                onClick={() => {
+                  const format = FORMATS[(FORMATS.indexOf(p.format) + 1) % FORMATS.length];
+                  // Switching format keeps the settings that still apply and
+                  // drops the rest: a JPG has no "id attribute" to remember, and
+                  // a 2x silently ignored on an SVG would read as a lie.
+                  const keep = FORMAT_CAPS[format];
+                  set(i, {
+                    format,
+                    suffix: p.suffix,
+                    scale: keep.oneToOne ? 1 : p.scale,
+                    includeId: keep.includeId ? p.includeId : undefined,
+                    outlineText: keep.outlineText ? p.outlineText : undefined,
+                    simplifyStroke: keep.simplifyStroke ? p.simplifyStroke : undefined,
+                    ignoreOverlap: keep.ignoreOverlap ? p.ignoreOverlap : undefined,
+                    boundingBox: keep.boundingBox ? p.boundingBox : undefined,
+                    quality: keep.quality ? p.quality : undefined,
+                    resampling: keep.resampling ? p.resampling : undefined,
+                  });
+                }}
               >
                 {p.format}
               </button>
-              <button
-                className="fmt"
-                title="Scale"
-                onClick={() => set(i, { ...p, scale: SCALES[(SCALES.indexOf(p.scale) + 1) % SCALES.length] })}
-              >
-                {p.scale}×
-              </button>
+              {/* Figma's scale field takes a multiplier or a size with a unit:
+                  `2x`, `500w`, `300h`. A vector format is pinned at 1x, because
+                  "Figma only supports exports for SVGs at 1x" - and the same
+                  for PDFs - so the field shows 1x rather than quietly ignoring
+                  what you type. */}
+              <ScaleField
+                preset={p}
+                locked={FORMAT_CAPS[p.format].oneToOne}
+                onCommit={(scale) => set(i, { ...p, scale })}
+              />
               <input
                 className="suffix"
                 placeholder="suffix"
+                title="Appended to the file name"
                 value={p.suffix}
                 onChange={(e) => set(i, { ...p, suffix: e.target.value })}
               />
+              <button
+                className={`mini settings${settingsOpen === i ? " on" : ""}`}
+                title="Export settings"
+                aria-expanded={settingsOpen === i}
+                disabled={!hasSettings(p.format)}
+                onClick={() => setSettingsOpen((v) => (v === i ? null : i))}
+              >
+                <Icon name="more" size={14} />
+              </button>
               <button
                 className="mini minus"
                 title="Remove"
@@ -4870,6 +5046,7 @@ function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
                 <Icon name="minus" size={14} />
               </button>
             </div>
+            {settingsOpen === i && <ExportSettings preset={p} onChange={(next) => set(i, next)} />}
             {preview[i] && (
               <div className="export-checker">
                 <img src={previewUrl(n, p)} alt={`Preview of ${n.name}${p.suffix} at ${p.scale}×`} />
@@ -4913,8 +5090,10 @@ function downloadBlob(blob: Blob, name: string) {
 }
 
 function runExport(n: XNode, p: ExportPreset) {
-  const width = Math.max(1, Math.round(n.w * p.scale));
-  const height = Math.max(1, Math.round(n.h * p.scale));
+  const { width, height } = exportSize(n, p);
+  const settings = resolveSettings(p);
+  // The suffix is appended straight onto the layer's name, with no separator:
+  // the article's own example is "HomePage" + "draft" -> "HomePagedraft.png".
   const name = `${n.name}${p.suffix}.${p.format.toLowerCase()}`;
   const svg = exportSvg(n, p);
   if (p.format === "SVG") {
@@ -4928,6 +5107,16 @@ function runExport(n: XNode, p: ExportPreset) {
     c.height = height;
     const ctx = c.getContext("2d");
     if (!ctx) return;
+    // "Image resampling": Detailed is a weighted average of the surrounding
+    // pixels (what the browser does by default, at high quality); Basic is
+    // nearest neighbour, which keeps a hard edge hard - the right choice for an
+    // icon or pixel art, and the wrong one for a gradient.
+    if (settings.resampling === "basic") {
+      ctx.imageSmoothingEnabled = false;
+    } else {
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+    }
     // PDF keeps transparency via a soft mask, so it must not be flattened.
     if (p.format === "JPG") {
       ctx.fillStyle = "#ffffff";
@@ -4936,14 +5125,18 @@ function runExport(n: XNode, p: ExportPreset) {
     ctx.drawImage(image, 0, 0, width, height);
     if (p.format === "PDF") {
       const px = ctx.getImageData(0, 0, width, height).data;
-      // Page size is the design size in points; the bitmap may be larger when
-      // exporting at 2x/3x, which just raises the effective resolution.
+      // Page size is the design size in points; a larger bitmap raises the
+      // effective resolution of the page without changing its size.
       void buildPdf(new Uint8Array(px.buffer.slice(0)), width, height, Math.max(1, n.w), Math.max(1, n.h), n.name)
         .then((blob) => downloadBlob(blob, name))
         .catch(() => toast("Could not build the PDF"));
       return;
     }
-    c.toBlob((blob) => blob && downloadBlob(blob, name), p.format === "JPG" ? "image/jpeg" : "image/png", 0.92);
+    c.toBlob(
+      (blob) => blob && downloadBlob(blob, name),
+      p.format === "JPG" ? "image/jpeg" : "image/png",
+      qualityValue(settings.quality),
+    );
   };
   image.onerror = () => toast(`Could not render ${n.name} for export`);
   image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
@@ -4964,8 +5157,7 @@ export function copyLayerCode(n: XNode, format?: DevFormat): void {
  *  what lands in Slack is what the downloaded file would have contained. */
 export function copyPng(n: XNode) {
   const preset: ExportPreset = { format: "PNG", scale: 2, suffix: "" };
-  const width = Math.max(1, Math.round(n.w * preset.scale));
-  const height = Math.max(1, Math.round(n.h * preset.scale));
+  const { width, height } = exportSize(n, preset);
   const image = new Image();
   image.onload = () => {
     const c = document.createElement("canvas");

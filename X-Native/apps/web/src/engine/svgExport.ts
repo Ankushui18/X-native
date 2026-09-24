@@ -385,13 +385,55 @@ export function svgNode(n: XNode, top = false): string {
 
 export interface SvgPreset {
   format: string;
-  scale: number;
+  scale: number | string;
   suffix: string;
+  /** "Include id attribute": Figma writes an id from the layer's name so a
+   *  stylesheet or a script can reach the element. */
+  includeId?: boolean;
 }
 
-/** The whole document for one layer, at the preset's scale. */
+/**
+ * The id for a layer, when the export asks for one. Figma bases it on the name
+ * in the Layers panel, tidied into something an `id` selector accepts - a name
+ * like "Card / Header" would otherwise end the attribute early and produce
+ * markup no parser can read.
+ */
+function svgId(name: string): string {
+  const clean = name
+    .trim()
+    .replace(/[^A-Za-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return clean || "layer";
+}
+
+/** The whole document for one layer, at the preset's size. */
 export function exportSvg(n: XNode, p: SvgPreset) {
-  const width = Math.max(1, Math.round(n.w * p.scale));
-  const height = Math.max(1, Math.round(n.h * p.scale));
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${Math.max(1, n.w)} ${Math.max(1, n.h)}"><title>${escXml(n.name)}</title>${svgNode(n, true)}</svg>`;
+  const size = svgSize(n, p);
+  const id = p.includeId ? ` id="${escXml(svgId(n.name))}"` : "";
+  return `<svg xmlns="http://www.w3.org/2000/svg"${id} width="${size.width}" height="${size.height}" viewBox="0 0 ${Math.max(1, n.w)} ${Math.max(1, n.h)}"><title>${escXml(n.name)}</title>${svgNode(n, true)}</svg>`;
+}
+
+/** The pixel size of the export. The scale field takes a multiplier or a size
+ *  with a unit, and the viewBox stays the design size either way - which is
+ *  what makes an SVG at 500w still readable as a vector. */
+function svgSize(n: XNode, p: SvgPreset): { width: number; height: number } {
+  const w = Math.max(1, n.w);
+  const h = Math.max(1, n.h);
+  const raw = typeof p.scale === "number" ? String(p.scale) : String(p.scale ?? "1");
+  const m = /^(\d*\.?\d+)\s*([xwh]?)$/.exec(raw.trim().toLowerCase().replace(",", "."));
+  if (m) {
+    const value = Number(m[1]);
+    if (Number.isFinite(value) && value > 0) {
+      if (m[2] === "w") {
+        const width = Math.max(1, Math.round(value));
+        return { width, height: Math.max(1, Math.round((h * value) / w)) };
+      }
+      if (m[2] === "h") {
+        const height = Math.max(1, Math.round(value));
+        return { width: Math.max(1, Math.round((w * value) / h)), height };
+      }
+      return { width: Math.max(1, Math.round(w * value)), height: Math.max(1, Math.round(h * value)) };
+    }
+  }
+  return { width: Math.max(1, Math.round(w)), height: Math.max(1, Math.round(h)) };
 }

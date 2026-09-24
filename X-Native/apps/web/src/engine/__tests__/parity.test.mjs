@@ -83,6 +83,18 @@ import {
   wheelZoomFactor,
 } from "../view.ts";
 import { exportSvg, svgPath } from "../svgExport.ts";
+import {
+  FORMAT_CAPS,
+  FORMATS,
+  SCALE_PRESETS,
+  clampScale,
+  exportSize,
+  formatScale,
+  newPreset,
+  parseScale,
+  qualityValue,
+  resolveSettings,
+} from "../../ui/exportModel.ts";
 import { interpolateMatchingLayers, solveEasing, applyInterpolatedFrame } from "../smartAnimate.ts";
 import { readFileSync, existsSync } from "fs";
 import { resolve } from "path";
@@ -2283,6 +2295,79 @@ console.log("three themes, not five:");
     "every option has a label and none of them is the old name",
     THEME_OPTIONS.every((o) => o.label && !/graphite|daylight/i.test(o.label)),
   );
+}
+
+console.log("export formats and settings:");
+{
+  t("the four formats are PNG, JPG, SVG and PDF", FORMATS.join(",") === "PNG,JPG,SVG,PDF");
+  // Figma's published capability table.
+  t("PNG takes ignore-overlap and bounding box, not id or outline", FORMAT_CAPS.PNG.ignoreOverlap && FORMAT_CAPS.PNG.boundingBox && !FORMAT_CAPS.PNG.includeId && !FORMAT_CAPS.PNG.outlineText);
+  t("JPG adds image quality", FORMAT_CAPS.JPG.quality && !FORMAT_CAPS.PNG.quality);
+  t("SVG takes the three markup settings", FORMAT_CAPS.SVG.includeId && FORMAT_CAPS.SVG.outlineText && FORMAT_CAPS.SVG.simplifyStroke);
+  t("PDF takes none of them", !FORMAT_CAPS.PDF.ignoreOverlap && !FORMAT_CAPS.PDF.boundingBox && !FORMAT_CAPS.PDF.includeId);
+  t("but PDF does take quality and resampling", FORMAT_CAPS.PDF.quality && FORMAT_CAPS.PDF.resampling);
+  t("SVG exports at 1x only, as the article says", FORMAT_CAPS.SVG.oneToOne);
+  t("and so does PDF", FORMAT_CAPS.PDF.oneToOne);
+  t("PNG and JPG scale freely", !FORMAT_CAPS.PNG.oneToOne && !FORMAT_CAPS.JPG.oneToOne);
+}
+
+console.log("the scale field:");
+{
+  const node = { w: 200, h: 160 };
+  t("a bare number is a multiplier", parseScale("2").kind === "multiplier" && parseScale("2").value === 2);
+  t("2x is the same multiplier", exportSize(node, { format: "PNG", scale: "2x" }).width === 400);
+  t("and the height follows", exportSize(node, { format: "PNG", scale: "2x" }).height === 320);
+  t("1.5x is allowed", exportSize(node, { format: "PNG", scale: "1.5x" }).width === 300);
+  const w = exportSize(node, { format: "PNG", scale: "500w" });
+  t("500w sets the width exactly", w.width === 500);
+  t("and the height follows the aspect ratio", w.height === 400);
+  const h = exportSize(node, { format: "PNG", scale: "300h" });
+  t("300h sets the height exactly", h.height === 300);
+  t("and the width follows the aspect ratio", h.width === 375);
+  t("a comma is read as a decimal point", exportSize(node, { format: "PNG", scale: "1,5x" }).width === 300);
+  t("a nonsense scale falls back to 1x rather than to zero", exportSize(node, { format: "PNG", scale: "wide" }).width === 200);
+  t("the scale reads back the way it was written", formatScale("500w") === "500w" && formatScale(2) === "2x");
+  t("a scale of zero is refused", clampScale(0) === 1);
+  t("and an absurd one is clamped", clampScale(1e6) === 64);
+  // A vector format is pinned, whatever the field says.
+  t("an SVG at 2x still comes out at the design size", exportSize(node, { format: "SVG", scale: "2x" }).width === 200);
+  t("a PDF at 4x as well", exportSize(node, { format: "PDF", scale: "4x" }).width === 200);
+  t("but an SVG at 500w honours the width", exportSize(node, { format: "SVG", scale: "500w" }).width === 200);
+  t("a new PNG preset starts at 1x", newPreset("PNG").scale === 1);
+  t("a new SVG preset never claims a scale it cannot do", newPreset("SVG", 3).scale === 1);
+  t("the preset list still holds whole and half steps", SCALE_PRESETS.includes(0.5) && SCALE_PRESETS.includes(1.5));
+}
+
+console.log("what an export does by default:");
+{
+  const s = resolveSettings({ format: "PNG", scale: 1, suffix: "" });
+  t("overlapping layers are ignored, as Figma defaults", s.ignoreOverlap === true);
+  t("the bounding box is kept", s.boundingBox === true);
+  t("and the resampling is the detailed one", s.resampling === "detailed");
+  t("no id attribute unless asked", s.includeId === false);
+  t("a JPG defaults to high quality, as the article says", resolveSettings({ format: "JPG", scale: 1, suffix: "" }).quality === "high");
+  t("a PDF defaults to medium", resolveSettings({ format: "PDF", scale: 1, suffix: "" }).quality === "medium");
+  t("quality descends from high to low", qualityValue("high") > qualityValue("medium") && qualityValue("medium") > qualityValue("low"));
+  // A preset saved before these existed must not read as "everything off".
+  const old = resolveSettings({ format: "PNG", scale: 2, suffix: "" });
+  t("an older preset with no settings still ignores overlaps", old.ignoreOverlap === true);
+  const off = resolveSettings({ format: "PNG", scale: 1, suffix: "", ignoreOverlap: false });
+  t("an explicit off is respected", off.ignoreOverlap === false);
+  // A setting a format does not have reads as off, not as on.
+  t("id is off for a format that has no id", resolveSettings({ format: "JPG", scale: 1, suffix: "", includeId: true }).includeId === false);
+  t("outline text too", resolveSettings({ format: "PDF", scale: 1, suffix: "", outlineText: true }).outlineText === false);
+}
+
+console.log("the id an SVG is written with:");
+{
+  const named = rect({ name: "Card / Header" });
+  const withId = exportSvg(named, { format: "SVG", scale: 1, suffix: "", includeId: true });
+  const without = exportSvg(named, { format: "SVG", scale: 1, suffix: "" });
+  t("the id attribute is written when the setting is on", /<svg[^>]* id="/.test(withId));
+  t("and absent when it is off", !/<svg[^>]* id="/.test(without));
+  t("a name with a slash does not end the attribute early", withId.includes('id="Card-Header"'));
+  t("a name with nothing usable still gets an id", exportSvg(rect({ name: "///" }), { format: "SVG", scale: 1, suffix: "", includeId: true }).includes('id="layer"'));
+  t("the width follows the scale syntax in the svg element", exportSvg(named, { format: "SVG", scale: "300w", suffix: "" }).includes('width="300"'));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

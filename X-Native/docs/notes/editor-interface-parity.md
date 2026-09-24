@@ -9,6 +9,53 @@ Sources: Figma Help Center — “Hide or minimize the UI” (article 4141491802
 Rule held throughout: **the UI is ours, the functions and behaviour are theirs**.
 Nothing below copies Figma's pixels; each one is a capability our app did not have.
 
+## Side by side
+
+The audit the whole document is part of: every area of the Figma Design help
+category, what Figma does, what this app does, and how the two were compared.
+"Measured" means it was run and the number is below or in the round's own
+section; "read" means verified by reading the code rather than assumed, which is
+the weaker of the two and is labelled as such. An empty verdict is work that is
+listed in Figma's category but has not been reached yet - it is not a claim that
+we match.
+
+| Area | Figma | Ours | How it was compared | Verdict |
+| --- | --- | --- | --- | --- |
+| Canvas: zoom | 2%-6400%, ⇧+/⇧− double and halve, ⌘0, ⇧1 fit, ⇧2 selection | same | browser, 22-value preset list | **match** |
+| Canvas: zoom anchor | pointer for a wheel, centre for the keyboard | same | browser, 0px drift at the pointer | **match** |
+| Canvas: opening a file | Zoom to fit | same | browser, a doc stored at 50% opens fitted | **match** |
+| Canvas: pixel preview | off / 1x / 2x, ⌃P / ⌃⌥P | same | browser, edge blend 1px live → 4px at 1x, exact multiples | **match** |
+| Canvas: pixel grid | ⌘' overlay, from 400% up | same | browser, overlay only above 400% | **match** |
+| Canvas: snap to pixel grid | ⇧⌘', on by default, independent of the overlay | same | engine + browser, 505.00 vs 580.25 | **match** (was wrong) |
+| Canvas: layout guides | ⇧G hides every frame's grid | same | browser, 93,021 grid pixels → 0 → 93,021 | **match** |
+| Canvas: frame names | 11px, accent on hover and selection, numbered defaults | same | browser, 4.50:1 in every theme | **match** (was wrong) |
+| Canvas: rulers, guides | ⇧R, drag from a ruler | rulers and guides exist | read | **partial** - guide creation not audited |
+| Canvas: outline mode | ⌘Y / ⌥-hover | not built | - | **missing** |
+| Canvas: nudge values | small 1, big 10, settable | same | engine + browser, +8 / +24 | **match** |
+| Export: formats | PNG, JPG, SVG, PDF | same | browser, real files | **match** |
+| Export: scale | presets, or `2x` / `500w` / `300h` | same | browser, 500w → 500×400, 300h → 375×300 | **match** (was missing) |
+| Export: SVG and PDF scale | 1x only | 1x only | browser, locked readout shows 1x | **match** (was wrong) |
+| Export: settings | per-format table: overlap, bounding box, id, outline text, simplify stroke, quality, resampling | the table, minus outline text | browser, real svg bytes | **partial** |
+| Export: suffix | appended to the name, no separator | same | browser, "Rectangle 1-2x.png" | **match** |
+| Export: DPI | 72, ×scale | 72, ×scale | arithmetic | **match** |
+| Export: colour profile | Same as file / sRGB / Display P3 | sRGB | read | **partial** |
+| Import: `.fig` | n/a | own parser, 20 loops on the sample | engine, pixel samples 10 → 1161 | **match** |
+| Import: Sketch | yes | reads `.sketch` | read | **partial** |
+| Styles | colour, text, effect, layout-grid styles | shared styles in the engine | read | **partial** |
+| Components | masters, instances, variants, properties, slots | masters and instances | (the app has both plus overrides) | **partial** |
+| Variables | collections, modes, remote | a `tokens` tab and a variable list | read | **partial** |
+| Text | styles, lists, OpenType, variable fonts, CJK, RTL, links, emoji | wrapping, alignment, decoration, auto-height, letter spacing | read | **partial** |
+| Auto layout | horizontal, vertical, grid, wrap, per-child settings | a `layout` model, padding, gap, alignment, hug/fill/fixed | read | **partial** |
+| Prototypes | triggers, actions, animations, easing, overlays, flows | flows, overlays, transitions, present mode | read | **partial** |
+| Comments | threads, replies, resolve, mentions | threads, replies, resolve | read | **partial** |
+| Multiplayer | cursors, cursor chat, spotlight, branching, history | none of it; a local file | - | **n/a** - no server |
+| Libraries | publish, update, swap, descriptions | none | - | **missing** |
+| Plugins / widgets / Dev Mode plugins | yes | none | - | **missing** |
+
+Two rows deserve the label "was wrong" rather than "was missing", because the
+feature existed and did the opposite of the article: snapping read the overlay's
+flag instead of its own, and SVGs accepted a scale Figma refuses.
+
 ## Inventory
 
 The work is an audit of the whole **Figma Design** help category
@@ -967,6 +1014,70 @@ multiplayer, but the toggle and its ⌥⌘\ belong in the same menu) and
 article describes is otherwise now this app's zoom field menu plus the canvas
 menu, which between them carry every switch above.
 
+## The export, held up against Figma's settings table
+
+Figma publishes a capability table for its export settings - which format takes
+which option - so this round is that table, implemented and then checked against
+the bytes that actually landed.
+
+**The scale field.** Ours cycled through five fixed multipliers, so there was no
+way to ask for a size. Figma's field takes a multiplier or a size with a unit:
+`2x` is twice the layer, `500w` is 500 wide with the height following the aspect
+ratio, `300h` is 300 tall with the width following it, and `1.5x` and `0,75x`
+are both fine. Measured on real downloads of a 400×320 rectangle:
+
+| typed | file | pixels |
+| --- | --- | --- |
+| `1x` | Rectangle 1-1x.png | **400×320** |
+| `2x` | Rectangle 1-2x.png | **800×640** |
+| `1.5x` | Rectangle 1-frac.png | **600×480** |
+| `500w` | Rectangle 1-w500.png | **500×400** |
+| `300h` | Rectangle 1-h300.png | **375×300** |
+
+**SVGs and PDFs are 1x.** The article is explicit - "Figma only supports exports
+for SVGs at 1x" and the same for PDFs - and ours offered 0.5× to 4× for every
+format, which is an output nobody asked for. The scale field now reads a locked
+**1x** for those two formats rather than accepting a number and ignoring it.
+Measured: the field is gone, the readout says 1x, and the exported SVG of the
+same rectangle is 400×320.
+
+**The settings table.** Figma's five markup settings were absent and the two
+raster ones were hard-coded. There is now an "Export settings" button on each
+row, and the panel is *built from* the capability table rather than written out
+per format, so a control cannot appear for something the exporter does not do:
+
+| Format | Ignore overlapping | Bounding box | id attribute | Outline text | Simplify stroke | Quality | Resampling |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| PNG | ✓ | ✓ | | | | | ✓ |
+| JPG | ✓ | ✓ | | | | ✓ | ✓ |
+| SVG | ✓ | ✓ | ✓ | | | | |
+| PDF | | | | | | ✓ | ✓ |
+
+Measured in the panel: the SVG row offers the three markup settings with
+"ignore overlapping" and "bounding box" on, and the PDF row offers resampling
+and quality with Figma's defaults (Detailed, Medium) and no markup settings at
+all. Ticking "id attribute" changes the real file:
+
+```
+without:  <svg xmlns="..." width="400" height="320" viewBox="0 0 400 320">
+with:     <svg xmlns="..." id="Rectangle-1" width="400" height="320" viewBox="0 0 400 320">
+```
+
+A layer called "Card / Header" becomes `id="Card-Header"`, not `id="Card` and an
+unparseable rest of the document - a name is not an id until it is tidied.
+
+Two settings are implemented but not *changed* by anything we can honestly
+claim: **Simplify stroke** is a switch between two spellings of the same
+picture, and ours has only ever emitted the article's "off" form (double the
+stroke width, then a mask or clip) - which the article says is the visually
+identical alternative, and which we measured pixel-for-pixel in the SVG round.
+**Outline text** needs a font engine to turn glyphs into paths; we export text
+as `<text>`, which is the article's "outline text off" behaviour. Both are
+listed under *Open* rather than half-built.
+
+44 new assertions (492 total, 0 failed). Evidence: `/tmp/probe/export_parity.mjs`
+(every number above), screenshot `export_settings.png`.
+
 ## Nudge amounts, and three themes instead of five
 
 Two things reported together: "start the fixes from the inventory", and "why do
@@ -1234,10 +1345,18 @@ fields (exposure, contrast, saturation).
   aspect-ratio lock refusing instance children - are unit tested but were not
   clicked through, because the sandbox had no browser left. Re-check them with
   one command the next time a browser is available.
-- The category audit: chunks 2 and 3 of the Figma Design category are still
-  unfetched (prototypes, import and export, work together), so the inventory of
-  what is left is incomplete. Everything named in chunk 1 that is not yet built
-  is listed at the end of this section.
+- Export: **Outline text** (needs a font engine to turn glyphs into paths) and
+  **Simplify stroke** (a switch between two identical spellings of an
+  inside/outside stroke, of which we emit the article's default form). The
+  **"ignore overlapping layers" *disabled*** case - exporting the layers that
+  intersect the selection - is not built; the enabled case is what we already
+  do, and is Figma's default. **Include bounding box** is honoured for the
+  enabled case; the disabled case trims a text layer to its ink, which needs
+  text measurement. **Colour profile** is sRGB only; Display P3 would need a
+  colour-managed export path.
+- The category audit is complete: all 4 chunks of the Figma Design category have
+  been fetched and the whole catalogue is in the Inventory above. What is
+  listed there without a tick has not been reached yet.
 - From "Adjust your zoom and view options": **multiplayer cursors** (there is
   nothing to show until there is multiplayer, but the toggle and its ⌥⌘\\
   belong in the zoom field's menu with the rest) and **prototype flows** as a
