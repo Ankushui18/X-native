@@ -1245,8 +1245,8 @@ fills is left alone by it, because two fills cannot both decide a height.
 
 ### What the probe turned up on the way
 
-Four of the five were the article working and this build not, which is what the
-round was for:
+Four things had to be built or repaired before the article's two examples ran
+end to end, and all four came out of driving the app rather than reading it:
 
 1. **Fill ran on one axis only.** `fillPatch` was applied along the frame's main
    axis, so a width-Fill child of a *vertical* stack kept the width it was drawn
