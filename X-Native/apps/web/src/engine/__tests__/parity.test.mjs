@@ -57,6 +57,7 @@ import { contrastRatio, contrastTarget, nearestAccessible, passesContrast, parse
 
 import { inspectFigFile, importFig } from "../figImport.ts";
 import { ZOOM_MAX, ZOOM_MIN, ZOOM_PRESETS, normalizeWheelDelta, stepZoom, wheelZoomFactor } from "../view.ts";
+import { exportSvg, svgPath } from "../svgExport.ts";
 import { interpolateMatchingLayers, solveEasing, applyInterpolatedFrame } from "../smartAnimate.ts";
 import { readFileSync, existsSync } from "fs";
 import { resolve } from "path";
@@ -651,6 +652,131 @@ console.log("component instance overrides:");
   t("the menu lists Figma's default percentages", ZOOM_PRESETS.includes(0.25) && ZOOM_PRESETS.includes(0.64) && ZOOM_PRESETS.includes(1.28) && ZOOM_PRESETS.includes(10.24));
   t("the default percentages are in ascending order", ZOOM_PRESETS.every((z, i) => i === 0 || z > ZOOM_PRESETS[i - 1]));
   t("every default percentage is inside the range", ZOOM_PRESETS.every((z) => z >= ZOOM_MIN && z <= ZOOM_MAX));
+}
+
+{
+  console.log("svg export: the canvas, written out as a file");
+  const e = new MemoryEngine();
+  e.dispatch({ type: "add", kind: "frame", x: 0, y: 0, w: 400, h: 320, extra: { name: "Card" } });
+  const frame = e.snapshot().selection[0];
+  const nodeIn = (id) => find(e.snapshot().pages[0].root, id);
+  const out = (id) => exportSvg(nodeIn(id), { format: "SVG", scale: 1, suffix: "" });
+
+  t("a plain rectangle exports as a path with its fill", /<path d="M 0 0 .*" fill="#[0-9a-f]{6}"/.test(out(frame)));
+
+  // 1. Effects: the canvas draws a shadow, the file must carry one.
+  e.dispatch({ type: "add", kind: "rect", x: 20, y: 20, w: 100, h: 80, parent: frame, extra: { name: "Shadowed" } });
+  const shadowed = e.snapshot().selection[0];
+  const plain = out(shadowed);
+  t("a layer with no effects exports no filter", !plain.includes("<filter"));
+  e.dispatch({
+    type: "patch",
+    id: shadowed,
+    patch: { effects: [{ kind: "drop-shadow", color: "#00000066", x: 0, y: 6, blur: 12, spread: 2, visible: true }] },
+  });
+  const shadowSvg = out(shadowed);
+  t("a drop shadow exports as a filter", shadowSvg.includes("<filter") && shadowSvg.includes("feGaussianBlur"));
+  t("the filter is applied to the layer", /filter="url\(#paint_/.test(shadowSvg));
+  t("an invisible effect exports nothing", !out((() => { e.dispatch({ type: "patch", id: shadowed, patch: { effects: [{ kind: "drop-shadow", color: "#00000066", x: 0, y: 6, blur: 12, spread: 0, visible: false }] } }); return shadowed; })()).includes("<filter"));
+  e.dispatch({ type: "patch", id: shadowed, patch: { effects: [] } });
+
+  // 2. Gradients: a three-stop ramp used to export as its first two colours.
+  e.dispatch({ type: "add", kind: "rect", x: 140, y: 20, w: 100, h: 80, parent: frame, extra: { name: "Ramp" } });
+  const ramp = e.snapshot().selection[0];
+  e.dispatch({
+    type: "patch",
+    id: ramp,
+    patch: {
+      fillType: "linear",
+      fillGX: 0,
+      fillGY: 0,
+      fillHX: 1,
+      fillHY: 0,
+      gradientStops: [
+        { color: "#ff0000ff", position: 0 },
+        { color: "#00ff00ff", position: 0.5 },
+        { color: "#0000ffff", position: 1 },
+      ],
+    },
+  });
+  const rampSvg = out(ramp);
+  t("a three-stop ramp exports three stops", (rampSvg.match(/<stop /g) || []).length === 3);
+  t("the middle colour survives", rampSvg.includes('stop-color="#00ff00"') && rampSvg.includes('offset="50%"'));
+
+  // 3. Stroke alignment: SVG has none, so it is clipped or masked.
+  e.dispatch({ type: "add", kind: "rect", x: 260, y: 20, w: 100, h: 80, parent: frame, extra: { name: "Stroked" } });
+  const stroked = e.snapshot().selection[0];
+  e.dispatch({
+    type: "patch",
+    id: stroked,
+    patch: { strokeVisible: true, strokePaint: "#000000", strokeWidth: 8, strokeAlign: "inside" },
+  });
+  const insideSvg = out(stroked);
+  t("an inside stroke is clipped to the shape", insideSvg.includes("<clipPath") && insideSvg.includes("stroke-width=\"16\""));
+  e.dispatch({ type: "patch", id: stroked, patch: { strokeAlign: "outside" } });
+  const outsideSvg = out(stroked);
+  t("an outside stroke is masked out of the shape", outsideSvg.includes("<mask") && outsideSvg.includes('mask="url(#mask_'));
+  t("an outside stroke is doubled too", outsideSvg.includes("stroke-width=\"16\""));
+  e.dispatch({ type: "patch", id: stroked, patch: { strokeAlign: "center" } });
+  t("a centre stroke needs neither", !out(stroked).includes("<mask") && out(stroked).includes("stroke-width=\"8\""));
+
+  // 4. A vector network: every loop, not just the first one.
+  e.dispatch({ type: "add", kind: "rect", x: 20, y: 140, w: 100, h: 80, parent: frame, extra: { name: "Donut" } });
+  const donut = e.snapshot().selection[0];
+  const ring = (x0, x1) => [
+    { x: x0, y: x0 },
+    { x: x1, y: x0 },
+    { x: x1, y: x1 },
+    { x: x0, y: x1 },
+  ];
+  e.dispatch({
+    type: "patch",
+    id: donut,
+    patch: {
+      kind: "vector",
+      path: ring(0, 100),
+      closed: true,
+      vectorNetwork: {
+        vertices: [...ring(0, 100), ...ring(30, 70)].map((p) => ({ x: p.x, y: p.y })),
+        segments: [],
+        regions: [{ windingRule: "EVENODD", loops: [[0, 1, 2, 3], [4, 5, 6, 7]] }],
+      },
+    },
+  });
+  const donutSvg = out(donut);
+  t("every loop of a vector network exports", (svgPath(nodeIn(donut)).match(/M /g) || []).length === 2);
+  t("the winding rule comes with it", donutSvg.includes('fill-rule="evenodd"'));
+
+  // 5. Extra fills and strokes stack on top, as they do on the canvas.
+  e.dispatch({ type: "add", kind: "rect", x: 140, y: 140, w: 100, h: 80, parent: frame, extra: { name: "Two fills" } });
+  const two = e.snapshot().selection[0];
+  e.dispatch({
+    type: "patch",
+    id: two,
+    patch: {
+      fill: "#ff0000",
+      fills: [{ type: "solid", color: "#00ff00", opacity: 0.5, visible: true }],
+      strokes: [{ color: "#0000ff", opacity: 1, visible: true, width: 3, align: "center" }],
+    },
+  });
+  const twoSvg = out(two);
+  t("an extra fill is exported", twoSvg.includes('fill="#00ff00"'));
+  t("an extra stroke is exported", twoSvg.includes('stroke="#0000ff"') && twoSvg.includes('stroke-width="3"'));
+
+  // 6. Rotation happens about the layer\'s own origin, not always its centre.
+  e.dispatch({ type: "add", kind: "rect", x: 260, y: 140, w: 100, h: 80, parent: frame, extra: { name: "Turned" } });
+  const turned = e.snapshot().selection[0];
+  e.dispatch({ type: "patch", id: turned, patch: { rotation: 30, rotOrigin: [0, 0] } });
+  t("rotation uses the layer's rotation origin", out(turned).includes("rotate(30 0 0)"));
+  e.dispatch({ type: "patch", id: turned, patch: { rotOrigin: [0.5, 0.5] } });
+  t("and the centre when that is the origin", out(turned).includes("rotate(30 50 40)"));
+
+  // 7. A hidden layer is not in the file at all.
+  e.dispatch({ type: "patch", id: turned, patch: { visible: false } });
+  t("a hidden layer exports nothing", !out(turned).includes("<path"));
+
+  // 8. The export is a file the app can read back. The importer needs a DOM to
+  //    parse with, so this half runs in the browser probe rather than here.
 }
 
 {

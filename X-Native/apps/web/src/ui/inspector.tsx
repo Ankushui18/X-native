@@ -39,9 +39,7 @@ import { colorUsageAll, recolorMatches, selectByColor, setOpacityMatches } from 
 import { evalField, hasExpression } from "./fieldExpr";
 import {
   SIDES,
-  miterLimitFromAngle,
   parseDashPattern,
-  sideCones,
   sideWidths,
   sidesSupported,
 } from "../engine/strokeModel";
@@ -65,12 +63,13 @@ import {
   unionBox,
   type ScaleAnchor,
 } from "./scaleModel";
-import { shapePoly, pathToVectorNetwork, vectorNetworkToSvgPath, vertexDegree, simplifyPath, smoothPath } from "../engine/geometry";
+import { pathToVectorNetwork, vectorNetworkToSvgPath, vertexDegree, simplifyPath, smoothPath } from "../engine/geometry";
 import { hugSize } from "./textLayout";
 import { Icon } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { copyText } from "../engine/clipboard";
 import { buildPdf } from "../engine/pdf";
+import { exportSvg } from "../engine/svgExport";
 import { plural, toast } from "./toast";
 import { armPopover } from "./popoverGuard";
 import { ZOOM_STEPS, parseZoomInput, stepZoom, zoomLabel, zoomTo } from "./zoom";
@@ -4896,146 +4895,6 @@ function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
 /** A data URL of the exact SVG this preset would write, used by the preview. */
 function previewUrl(n: XNode, p: ExportPreset) {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(exportSvg(n, p))}`;
-}
-
-function escXml(value: string) {
-  return value.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[ch] || ch);
-}
-
-function svgColor(value: string) {
-  if (isNone(value) || value.length < 7) return "none";
-  const { r, g, b, a } = parseHex(value);
-  return a < 1 ? `rgba(${r},${g},${b},${a})` : value.slice(0, 7);
-}
-
-function svgPath(n: XNode) {
-  const points = n.path.length ? n.path : shapePoly(n);
-  if (!points.length) return "";
-  const out = [`M ${points[0].x} ${points[0].y}`];
-  for (let i = 1; i < points.length; i++) {
-    const prev = points[i - 1];
-    const point = points[i];
-    if ((prev.ox || prev.oy || point.ix || point.iy) && (prev.ox != null || prev.oy != null || point.ix != null || point.iy != null)) {
-      out.push(
-        `C ${prev.x + (prev.ox || 0)} ${prev.y + (prev.oy || 0)} ${point.x + (point.ix || 0)} ${point.y + (point.iy || 0)} ${point.x} ${point.y}`,
-      );
-    } else out.push(`L ${point.x} ${point.y}`);
-  }
-  if (n.closed || (n.kind !== "line" && n.kind !== "arrow" && n.kind !== "text")) out.push("Z");
-  return out.join(" ");
-}
-
-/** The dash list as SVG wants it: Figma's custom pattern wins over the pair. */
-function svgDash(n: XNode): string {
-  if (n.strokeDashPattern?.length) return n.strokeDashPattern.join(" ");
-  if (n.strokeDash > 0) return `${n.strokeDash} ${n.strokeGap || n.strokeDash}`;
-  return "none";
-}
-
-function svgShape(n: XNode, fill: string, stroke = "none") {
-  const path = svgPath(n);
-  if (!path) return "";
-  const caps = n.strokeCap === "round" ? "round" : n.strokeCap === "square" ? "square" : "butt";
-  const dashCap = n.strokeDashPattern?.length || n.strokeDash > 0 ? (n.strokeDashCap ?? caps) : caps;
-  const common = `stroke-opacity="${Math.max(0, Math.min(1, n.strokeOpacity))}" stroke-linecap="${dashCap}" stroke-linejoin="${n.strokeJoin}" stroke-miterlimit="${Math.round(miterLimitFromAngle(n.strokeMiterAngle) * 1000) / 1000}" stroke-dasharray="${svgDash(n)}"`;
-  const base = `<path d="${path}" fill="${fill}" fill-opacity="${Math.max(0, Math.min(1, n.fillOpacity))}"${stroke === "none" ? ` stroke="none"` : ` stroke="${stroke}" stroke-width="${Math.max(0, n.strokeWidth)}" ${common}`}/>`;
-  // Individual strokes: SVG has no per-side border, so each side is the same
-  // outline clipped to its own 45° cone - the identical construction the canvas
-  // uses, which keeps the export and the editor showing one shape.
-  const widths = sideWidths(n.strokeSides, n.strokeSideW, n.strokeWidth);
-  if (stroke === "none" || !sidesSupported(n.kind) || (n.strokeSides ?? "all") === "all") return base;
-  const cones = sideCones(0, 0, Math.max(1, n.w), Math.max(1, n.h));
-  const clips = widths
-    .map((w, i) =>
-      w > 0
-        ? `<clipPath id="side_${clipId(n)}_${i}"><polygon points="${cones[i].map(([x, y]) => `${x},${y}`).join(" ")}"/></clipPath>`
-        : "",
-    )
-    .join("");
-  const sides = widths
-    .map((w, i) =>
-      w > 0
-        ? `<path d="${path}" fill="none" stroke="${stroke}" stroke-width="${w}" clip-path="url(#side_${clipId(n)}_${i})" ${common}/>`
-        : "",
-    )
-    .join("");
-  return `<defs>${clips}</defs><path d="${path}" fill="${fill}" fill-opacity="${Math.max(0, Math.min(1, n.fillOpacity))}" stroke="none"/>${sides}`;
-}
-
-function clipId(n: XNode) {
-  return `s${n.id.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
-}
-
-function svgNode(n: XNode, top = false): string {
-  const id = `paint_${n.id.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
-  const fill = n.fillVisible !== false ? svgColor(n.fill) : "none";
-  const stroke = n.strokeVisible && n.strokeWidth > 0 ? svgColor(n.strokePaint) : "none";
-  const defs: string[] = [];
-  let paint = fill;
-  if (n.fillType === "linear" && fill !== "none") {
-    defs.push(`<linearGradient id="${id}" x1="${n.fillGX}" y1="${n.fillGY}" x2="${n.fillHX}" y2="${n.fillHY}"><stop offset="0" stop-color="${fill}"/><stop offset="1" stop-color="${svgColor(n.fillB)}"/></linearGradient>`);
-    paint = `url(#${id})`;
-  } else if (n.fillType === "radial" && fill !== "none") {
-    defs.push(`<radialGradient id="${id}" cx="${n.fillGX * 100}%" cy="${n.fillGY * 100}%" r="100%"><stop offset="0" stop-color="${fill}"/><stop offset="1" stop-color="${svgColor(n.fillB)}"/></radialGradient>`);
-    paint = `url(#${id})`;
-  }
-  const transform = [
-    top ? "" : `translate(${n.x} ${n.y})`,
-    n.rotation ? `rotate(${n.rotation} ${n.w / 2} ${n.h / 2})` : "",
-    n.flipH || n.flipV ? `translate(${n.flipH ? n.w : 0} ${n.flipV ? n.h : 0}) scale(${n.flipH ? -1 : 1} ${n.flipV ? -1 : 1})` : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  const body: string[] = [];
-  if (defs.length) body.push(`<defs>${defs.join("")}</defs>`);
-  if (n.kind === "text") {
-    let text = n.text;
-    if (n.textCase === "upper" || n.textCase === "small-caps") text = text.toUpperCase();
-    if (n.textCase === "lower") text = text.toLowerCase();
-    if (n.textCase === "title") text = text.replace(/\w\S*/g, (t) => t[0].toUpperCase() + t.slice(1).toLowerCase());
-    let lines = text.split("\n");
-    if (n.truncate && lines.length > Math.max(1, n.maxLines || 1)) {
-      lines = lines.slice(0, Math.max(1, n.maxLines || 1));
-      lines[lines.length - 1] = `${lines[lines.length - 1].replace(/\s+$/, "")}…`;
-    }
-    const anchor = n.textAlign === "center" ? "middle" : n.textAlign === "right" ? "end" : "start";
-    const tx = n.textAlign === "center" ? n.w / 2 : n.textAlign === "right" ? n.w : 0;
-    const lineHeight = n.lineHeight || n.fontSize * 1.2;
-    const blockHeight = lines.length * lineHeight;
-    const yOffset =
-      n.textAlignVertical === "middle"
-        ? (n.h - blockHeight) / 2
-        : n.textAlignVertical === "bottom"
-          ? n.h - blockHeight
-          : 0;
-    const content = lines
-      .map((line, i) => `<tspan x="${tx}" dy="${i ? lineHeight : yOffset + n.fontSize}">${escXml(line)}</tspan>`)
-      .join("");
-    const textStroke = n.strokeVisible && n.strokeWidth > 0 ? svgColor(n.strokePaint) : "none";
-    body.push(
-      `<text x="${tx}" y="0" text-anchor="${anchor}" dominant-baseline="hanging" fill="${paint}" fill-opacity="${Math.max(0, Math.min(1, n.fillOpacity))}" stroke="${textStroke}" stroke-opacity="${Math.max(0, Math.min(1, n.strokeOpacity))}" stroke-width="${Math.max(0, n.strokeWidth)}" font-family="${escXml(n.fontFamily)}" font-size="${n.fontSize}" font-weight="${n.fontWeight}" letter-spacing="${n.letterSpacing}" text-decoration="${n.textDecoration === "none" ? "none" : n.textDecoration}">${content}</text>`,
-    );
-  } else if (n.imageSrc) {
-    const preserve = n.imageFit === "fit" ? "xMidYMid meet" : n.imageFit === "crop" ? "xMidYMid slice" : n.imageFit === "tile" ? "none" : "none";
-    body.push(`<image href="${escXml(n.imageSrc)}" x="0" y="0" width="${n.w}" height="${n.h}" preserveAspectRatio="${preserve}"/>`);
-  } else if (n.kind !== "group" && n.kind !== "frame" && n.kind !== "component" && n.kind !== "instance") {
-    body.push(svgShape(n, paint, stroke));
-  } else if (fill !== "none" || stroke !== "none") {
-    body.push(svgShape(n, paint, stroke));
-  }
-  if (n.kind === "frame" && n.overflow !== "visible") {
-    body.push(`<g clip-path="url(#clip_${id})">${n.children.map((c) => svgNode(c)).join("")}</g>`);
-    body.unshift(`<defs><clipPath id="clip_${id}"><path d="${svgPath(n)}"/></clipPath></defs>`);
-  } else {
-    body.push(n.children.map((c) => svgNode(c)).join(""));
-  }
-  return `<g${transform ? ` transform="${transform}"` : ""} opacity="${Math.max(0, Math.min(1, n.opacity))}">${body.join("")}</g>`;
-}
-
-function exportSvg(n: XNode, p: ExportPreset) {
-  const width = Math.max(1, Math.round(n.w * p.scale));
-  const height = Math.max(1, Math.round(n.h * p.scale));
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${Math.max(1, n.w)} ${Math.max(1, n.h)}"><title>${escXml(n.name)}</title>${svgNode(n, true)}</svg>`;
 }
 
 function downloadBlob(blob: Blob, name: string) {

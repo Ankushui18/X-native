@@ -6,7 +6,7 @@
  * from a vector format, and it meant the app could not open any existing
  * artwork at all.
  *
- * This is the inverse of `svgNode()` in the inspector, so a document exported
+ * This is the inverse of `engine/svgExport.ts`, so a document exported
  * to SVG and re-imported comes back as layers rather than a picture. It
  * covers the shapes that exporter emits plus the common primitives real files
  * use: rect, circle, ellipse, line, polyline, polygon, path, text and nested

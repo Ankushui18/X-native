@@ -918,6 +918,72 @@ demo layer called "Chip" that the current sample document does not have. It has
 been stale since the dashboard was rebuilt, so it cannot be used as evidence
 until it is brought up to date with the demo file.
 
+## The SVG export, held up against the canvas
+
+The fourth reported defect. The exporter was reading a subset of the node model
+and writing that, so the file disagreed with the editor. It now lives in
+`engine/svgExport.ts` - pure logic over a node, no DOM - which is what let it be
+tested and rasterised instead of trusted.
+
+Fixed, each with an assertion:
+
+- **Effects.** There was no `<filter>` in the file at all: a layer's drop
+  shadow, inner shadow and layer blur were drawn on the canvas and missing from
+  the export. Each effect now emits its own filter (offset, Gaussian with the
+  standard deviation half the Figma radius, flood for the colour, morphology for
+  a drop shadow's spread, composited for an inner shadow), and a layer with no
+  effects emits none.
+- **Vector networks.** `svgPath()` exported `n.path` - one contour - so anything
+  built from a network (the pen tool's shapes, and every vector the `.fig`
+  importer now brings in) exported as its first loop. Loops are exported as
+  subpaths of one path, with the network's winding rule as `fill-rule`, which is
+  what makes a hole a hole.
+- **Gradients.** Two stops were written, taken from the `fill`/`fillB` pair, so
+  a three-stop ramp exported as two colours. The whole ramp is exported now:
+  three stops for a three-stop ramp, each with its own `stop-opacity`, and the
+  radial radius comes from the handle the canvas uses.
+- **Stroke alignment.** SVG strokes are centred; Figma's are not. An inside
+  stroke is the doubled stroke clipped to the shape, an outside stroke is the
+  doubled stroke masked out of it, and a centre stroke is written as-is.
+- **Extra fills and strokes.** `fills` and `strokes` rows are exported in order,
+  above the base fill and stroke, as they are painted.
+- **Rotation origin.** The layer turns about its own `rotOrigin` (Figma's ⌥
+  target) rather than always about its centre.
+- **Hidden layers** are not written into the file.
+
+Two more were found by looking at the result rather than the source, which is
+why the check is a rasterisation and not a string match:
+
+- **A transparent colour exported as opaque black.** `#00000000` is how the
+  model spells "no fill", and the exporter was passing the colour through with
+  its alpha dropped - so a transparent layer painted a black box over everything
+  under it. Alpha-zero now exports as `none`, and a partial alpha (say
+  `#000000aa`) multiplies into the element's `*-opacity` instead of being lost.
+- **An outside stroke was masking the layer's own fill.** The fill and the
+  stroke shared one `<path>`, so the mask that hides everything inside the shape
+  hid the fill with it. They are separate elements now: a filled rectangle with
+  an outside stroke showed no fill at all before, and shows both after.
+
+Measured, in the browser, on a document holding a shadowed rectangle, a
+three-stop ramp, an inside-stroked and an outside-stroked rectangle, a ring
+built from a two-loop network, a two-fill rectangle and a clipping frame: the
+exported file is rasterised and thirteen sampled pixels are checked against what
+the canvas draws - the shadow is present below the layer and bounded, the ramp's
+middle is the middle colour, the outside stroke shows outside the box and the
+fill still shows inside, the ring's hole is a hole, the extra fills stack, and
+the clipping frame clips. **13 of 13 pass.** The same run reads the export back
+through `importSvg`: the round trip returns one 100×80 layer with its colour
+intact. Behind that, 18 new assertions bring the suite to 385.
+
+Also verified through the app's own menu rather than a harness: new file, draw a
+rectangle, open Export, switch the preset to SVG, Export - and a valid
+`<svg width="200" height="160">` file is what lands.
+
+Still not what the canvas draws, and now listed under *Open*: angular and
+diamond gradients (SVG has no conic gradient, so a linear ramp stands in),
+background blur (no SVG equivalent), effect blend modes, and the image adjust
+fields (exposure, contrast, saturation).
+
 ## Open
 
 - Sketch's top-bar Insert menu and Figma's Assets panel tab, "Additional
@@ -955,27 +1021,10 @@ until it is brought up to date with the demo file.
   missing: a Figma-style "Zoom/view options" dropdown that holds all of the
   above in one place - ours live in the zoom field's menu, the canvas menu and
   Device preview, and the article's menu is one list.
-- The SVG path, from the same report as the fifty-photo lag and the `.fig`
-  import above. Read (not yet measured in pixels) in `svgNode()` /
-  `svgShape()` in `ui/inspector.tsx`, the export is missing or simplifying five
-  things the canvas does draw:
-  1. **Effects.** No `<filter>` anywhere: drop shadows, inner shadows, layer
-     blur and background blur are drawn on the canvas and absent from the file.
-  2. **Multi-contour vectors.** `svgPath()` exports `n.path` - one contour -
-     so a shape built from a vector network exports as its first loop only.
-     This is the same bug the `.fig` import had this round: the logo imports as
-     20 loops and would export as one.
-  3. **Gradients.** Only two stops, built from the `fill`/`fillB` pair;
-     `gradientStops` (three or more) is ignored, as are angular and diamond
-     fills, which fall through to a solid.
-  4. **Stroke alignment.** `strokeAlign` is ignored, so an outside stroke
-     exports centred - half of it on the wrong side of the edge.
-  5. **Extra fills and strokes.** `fills` and `strokes` rows are not exported;
-     only the base fill and the single stroke are.
-  Also unwritten: `rotOrigin` (the export always rotates about the centre) and
-  the image adjust fields. The fix belongs in an engine module with unit
-  assertions and a rendered comparison of the exported SVG against the canvas,
-  the way the other rounds have been verified.
+- What the SVG export still cannot express: angular and diamond gradients (SVG
+  has no conic gradient, so the export writes a linear ramp across the box as a
+  stand-in), background blur (no SVG filter samples what is behind an element),
+  effect blend modes, and the image adjust fields.
 - `.fig` images: the `images/<hash>` → asset-store path is written from the
   format but no fixture in the repo carries an image, so it has not been seen
   working. Component and instance links are carried as plain containers - the
