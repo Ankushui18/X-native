@@ -16,6 +16,7 @@ import {
   vertexDegree,
   vectorNetworkToSvgPath,
   bendSegment,
+  balanceLines,
   insertPointOnPath,
   projectPointOnSegment,
   computeFigmaNoodle,
@@ -1213,6 +1214,46 @@ console.log("vector edit multi-selection & marquee (Figma parity):");
   eng.dispatch({ type: "select", ids: [] });
   const s2 = eng.snapshot();
   t("clearing selection clears vecPoint and vecPoints", s2.vecEdit === null && s2.vecPoint === null && s2.vecPoints.length === 0);
+}
+
+// --- Figma's wrap style: Balance / Pretty (x-core's TextWrap) ---------------
+{
+  const w = (s) => s.length; // one column per character keeps the arithmetic readable
+  const maxW = 5;
+  const greedy = ["a b", "c d", "e"]; // 1-char words, two per line where it fits
+  const bal = balanceLines(greedy, maxW, w, "balance");
+  t("balance keeps every word", bal.join(" ").split(/\s+/).length === greedy.join(" ").split(/\s+/).length);
+  t("balance never overflows the box", bal.every((l) => w(l) <= maxW));
+  t("balance leaves a lone final word alone", JSON.stringify(bal) === JSON.stringify(greedy));
+  const pretty = balanceLines(greedy, maxW, w, "pretty");
+  t("pretty moves a word down instead of stranding one", pretty[pretty.length - 1].split(/\s+/).length === 2);
+  t("pretty keeps every word", pretty.join(" ").split(/\s+/).length === greedy.join(" ").split(/\s+/).length);
+  const wide = ["aaaa aaaa", "bb"]; // a short tail the greedy break left behind
+  const evened = balanceLines(wide, 11, w, "balance");
+  t("balance evens two unequal lines", Math.max(...evened.map(w)) < Math.max(...wide.map(w)));
+  t("balance is a no-op for a single line", balanceLines(["only line"], 10, w, "balance").length === 1);
+  t("balance is a no-op when nothing wraps (infinite width)", balanceLines(wide, Infinity, w, "pretty") === wide);
+  const para = "the quick brown fox jumps over the lazy dog and then keeps on going".split(" ");
+  const greedyMany = [];
+  {
+    let cur = "";
+    for (const word of para) {
+      if (cur && w(`${cur} ${word}`) > 26) { greedyMany.push(cur); cur = word; }
+      else cur = cur ? `${cur} ${word}` : word;
+    }
+    if (cur) greedyMany.push(cur);
+  }
+  const evenedMany = balanceLines(greedyMany, 26, w, "balance");
+  t("balance keeps the greedy line count", evenedMany.length === greedyMany.length);
+  t("balance never leaves a line wider than the greedy break",
+    Math.max(...evenedMany.map(w)) <= Math.max(...greedyMany.map(w)));
+  t("balance spreads the words of a long paragraph", new Set(evenedMany.map(w)).size > 1);
+  const huge = Array.from({ length: 240 }, (_, i) => `w${i}`);
+  const hugeLines = [huge.slice(0, 120).join(" "), huge.slice(120).join(" ")];
+  t("balance bails out on a very long paragraph instead of searching",
+    balanceLines(hugeLines, 1e6, w, "balance") === hugeLines);
+  const cjk = ["\u4e2d\u6587\u53e5\u5b50\u957f", "\u53e6\u4e00\u6bb5"];
+  t("balance leaves unspaced CJK lines to the wrapper", balanceLines(cjk, 6, w, "balance").length === 2);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

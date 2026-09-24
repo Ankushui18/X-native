@@ -37,6 +37,7 @@ import type {
 import { collectColors, defaultEffect, defaultLayout, find, findParent, framesOf, worldPos } from "../engine/memory";
 import { colorUsage, recolorMatches, selectByColor } from "./selectionColors";
 import { shapePoly, pathToVectorNetwork, vectorNetworkToSvgPath, vertexDegree, simplifyPath, smoothPath } from "../engine/geometry";
+import { hugSize } from "./textLayout";
 import { Icon } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { copyText } from "../engine/clipboard";
@@ -910,6 +911,13 @@ function generateCss(n: XNode, unit: DevUnit = "px"): string {
     if (n.lineHeight) rules.push(`line-height: ${devLen(Math.round(n.lineHeight), unit)};`);
     if (n.letterSpacing) rules.push(`letter-spacing: ${devLen(n.letterSpacing, unit)};`);
     if (n.textAlign && n.textAlign !== "left") rules.push(`text-align: ${n.textAlign};`);
+    // The three type settings that have a real CSS equivalent are handed over
+    // by name, so the snippet reproduces the paragraph instead of only noting
+    // that it differs.
+    if ((n.textWrap === "balance" || n.textWrap === "pretty")) rules.push(`text-wrap: ${n.textWrap};`);
+    if (n.listStyle && n.listStyle !== "none")
+      rules.push(`list-style-type: ${n.listStyle === "numbered" ? "decimal" : "disc"};`);
+    if (n.paragraphIndent) rules.push(`text-indent: ${devLen(n.paragraphIndent, unit)};`);
   }
   if (n.effects?.length) {
     const shadows = n.effects
@@ -1602,6 +1610,11 @@ function devProperties(n: XNode, snap: Snapshot, unit: DevUnit): DevProp[] {
     if (n.lineHeight) L("Line height", devLen(n.lineHeight, unit), "Typography");
     if (n.letterSpacing) L("Letter spacing", devLen(n.letterSpacing, unit), "Typography");
     if (n.textAlign && n.textAlign !== "left") L("Alignment", n.textAlign, "Typography");
+    if (n.textAlignVertical && n.textAlignVertical !== "top")
+      L("Vertical alignment", n.textAlignVertical, "Typography");
+    if ((n.textWrap === "balance" || n.textWrap === "pretty")) L("Wrap style", n.textWrap, "Typography");
+    if (n.listStyle && n.listStyle !== "none") L("List", n.listStyle, "Typography");
+    if (n.paragraphIndent) L("Paragraph indent", devLen(n.paragraphIndent, unit), "Typography");
   }
   // Figma's "view applied styles": only paints are named here, matching the
   // two style slots the engine actually has.
@@ -1986,10 +1999,15 @@ function Design({
         else w = Math.max(1, v / ratio);
       }
       engine.dispatch({ type: "resize", id: n.id, x: n.x, y: n.y, w, h });
+      // The axis that is still set to hug follows what was just typed.
+      if (key === "w") refitHug({ w, sizingW: "fixed" }, { h: n.sizingH === "hug" });
+      else refitHug({ h, sizingH: "fixed" }, { w: n.sizingW === "hug" });
       return;
     }
     const next = key === "opacity" ? Math.max(0, Math.min(1, v)) : v;
     engine.dispatch({ type: "patch", id: n.id, patch: { [key]: next } });
+    if (key === "fontSize" || key === "letterSpacing" || key === "lineHeight" || key === "paragraphSpacing")
+      refitHug({ [key]: next });
   };
   const kindLabel = n.imageSrc
     ? "Image"
@@ -2001,6 +2019,23 @@ function Design({
           ? "Rectangle"
           : n.kind[0].toUpperCase() + n.kind.slice(1);
   const patch = (p: Partial<XNode>) => engine.dispatch({ type: "patch", id: n.id, patch: p });
+  /* Figma re-fits a text layer the moment a resizing mode is chosen, and after
+   * any type metric that changes how much room the copy needs. The flags and
+   * the box have to travel in the same patch: sizing alone leaves a stale box
+   * up to the next keystroke. */
+  const setSizing = (sizingW: Sizing, sizingH: Sizing) =>
+    patch({ sizingW, sizingH, ...hugSize({ ...n, sizingW, sizingH } as XNode, n.text) });
+  /** A type metric moved: apply it, then re-hug the axes that follow it. */
+  const patchType = (over: Partial<XNode>) => {
+    patch(over);
+    refitHug(over);
+  };
+  const refitHug = (over: Partial<XNode>, axes?: { w?: boolean; h?: boolean }) => {
+    if (n.kind !== "text") return;
+    const fit = hugSize({ ...n, ...over } as XNode, n.text, axes);
+    if (fit.w === undefined && fit.h === undefined) return;
+    patch(fit);
+  };
   const parent = findParent(snap.pages[snap.page].root, n.id);
   const hasAutoLayoutParent = !!parent?.layout;
   /* First press turns the base stroke on; after that each press stacks another
@@ -2274,7 +2309,8 @@ function Design({
             onChange={(v) => num("w", v)}
             onLabelClick={() => {
               const sizingW = cycleSizing(n.sizingW);
-              patch({ sizingW });
+              if (n.kind === "text") setSizing(sizingW, n.sizingH);
+              else patch({ sizingW });
               if (n.layout && (sizingW === "hug" || sizingW === "fixed")) {
                 engine.dispatch({
                   type: "autoLayout",
@@ -2291,7 +2327,8 @@ function Design({
             onChange={(v) => num("h", v)}
             onLabelClick={() => {
               const sizingH = cycleSizing(n.sizingH);
-              patch({ sizingH });
+              if (n.kind === "text") setSizing(n.sizingW, sizingH);
+              else patch({ sizingH });
               if (n.layout && (sizingH === "hug" || sizingH === "fixed")) {
                 engine.dispatch({
                   type: "autoLayout",
@@ -3449,7 +3486,7 @@ function Design({
               <select
                 value={n.fontFamily}
                 onChange={(e) =>
-                  engine.dispatch({ type: "patch", id: n.id, patch: { fontFamily: e.target.value } })
+                  patchType({ fontFamily: e.target.value })
                 }
               >
                 {[
@@ -3473,13 +3510,7 @@ function Design({
               <div className="field">
                 <select
                   value={n.fontWeight}
-                  onChange={(e) =>
-                    engine.dispatch({
-                      type: "patch",
-                      id: n.id,
-                      patch: { fontWeight: parseInt(e.target.value, 10) },
-                    })
-                  }
+                  onChange={(e) => patchType({ fontWeight: parseInt(e.target.value, 10) })}
                 >
                   <option value={100}>Thin (100)</option>
                   <option value={200}>Extra Light (200)</option>
@@ -3505,7 +3536,7 @@ function Design({
               <Tooltip label="Auto width" shortcut="">
                 <button
                   className={n.sizingW === "hug" ? "on" : ""}
-                  onClick={() => patch({ sizingW: "hug", sizingH: "hug" })}
+                  onClick={() => setSizing("hug", "hug")}
                 >
                   <Icon name="text-auto-width" size={14} />
                   <span style={{ fontSize: 10, marginLeft: 4 }}>Auto W</span>
@@ -3514,7 +3545,7 @@ function Design({
               <Tooltip label="Auto height" shortcut="">
                 <button
                   className={n.sizingW !== "hug" && n.sizingH === "hug" ? "on" : ""}
-                  onClick={() => patch({ sizingW: "fixed", sizingH: "hug" })}
+                  onClick={() => setSizing("fixed", "hug")}
                 >
                   <Icon name="text-auto-height" size={14} />
                   <span style={{ fontSize: 10, marginLeft: 4 }}>Auto H</span>
@@ -3523,7 +3554,7 @@ function Design({
               <Tooltip label="Fixed size" shortcut="">
                 <button
                   className={n.sizingW !== "hug" && n.sizingH !== "hug" ? "on" : ""}
-                  onClick={() => patch({ sizingW: "fixed", sizingH: "fixed" })}
+                  onClick={() => setSizing("fixed", "fixed")}
                 >
                   <Icon name="text-fixed" size={14} />
                   <span style={{ fontSize: 10, marginLeft: 4 }}>Fixed</span>
@@ -3592,13 +3623,7 @@ function Design({
                   <select
                     aria-label="Letter case"
                     value={n.textCase}
-                    onChange={(e) =>
-                      engine.dispatch({
-                        type: "patch",
-                        id: n.id,
-                        patch: { textCase: e.target.value as XNode["textCase"] },
-                      })
-                    }
+                    onChange={(e) => patchType({ textCase: e.target.value as XNode["textCase"] })}
                   >
                     <option value="none">Aa</option>
                     <option value="upper">AA</option>
@@ -3613,7 +3638,7 @@ function Design({
                   type="checkbox"
                   checked={n.truncate}
                   onChange={(e) =>
-                    engine.dispatch({ type: "patch", id: n.id, patch: { truncate: e.target.checked } })
+                    patchType({ truncate: e.target.checked })
                   }
                 />
                 Truncate text
@@ -3624,7 +3649,7 @@ function Design({
                     label="L"
                     value={n.maxLines}
                     onChange={(v) =>
-                      engine.dispatch({ type: "patch", id: n.id, patch: { maxLines: v } })
+                      patchType({ maxLines: v })
                     }
                   />
                 </div>
@@ -3634,7 +3659,40 @@ function Design({
                   label="¶"
                   value={n.paragraphSpacing}
                   onChange={(v) => num("paragraphSpacing", v)}
+                  aria="Space after each paragraph"
                 />
+                <Field
+                  label="⇥"
+                  value={n.paragraphIndent}
+                  onChange={(v) =>
+                    patchType({ paragraphIndent: v })
+                  }
+                  aria="First-line indent of each paragraph"
+                />
+              </div>
+              <div className="dir-row">
+                <div className="seg icons">
+                  <select
+                    aria-label="Wrap style"
+                    title="Wrap style - how a fixed-width paragraph breaks its lines"
+                    value={n.textWrap}
+                    onChange={(e) => patchType({ textWrap: e.target.value as XNode["textWrap"] })}
+                  >
+                    <option value="auto">Wrap: Off</option>
+                    <option value="balance">Wrap: Balance</option>
+                    <option value="pretty">Wrap: Pretty</option>
+                  </select>
+                  <select
+                    aria-label="List"
+                    title="List - markers hang in the gutter beside the paragraph"
+                    value={n.listStyle}
+                    onChange={(e) => patchType({ listStyle: e.target.value as XNode["listStyle"] })}
+                  >
+                    <option value="none">No list</option>
+                    <option value="bulleted">Bulleted</option>
+                    <option value="numbered">Numbered</option>
+                  </select>
+                </div>
               </div>
             </div>
           )}

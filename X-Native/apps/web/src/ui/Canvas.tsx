@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Engine, Interaction, NodeKind, PathPoint, ProtoAnim, Snapshot, Tool, VectorNetwork, XNode } from "../engine/types";
 import { deepestFrame, find, findParent, hitTest, worldToLocal, worldPos } from "../engine/memory";
 import {
@@ -11,6 +11,7 @@ import {
   projectPointOnSegment,
   computeFigmaNoodle,
   pathToVectorNetwork,
+  balanceLines,
 } from "../engine/geometry";
 import { interpolateMatchingLayers, solveEasing, applyInterpolatedFrame } from "../engine/smartAnimate";
 import {
@@ -29,6 +30,7 @@ import { Guides } from "./Guides";
 import { Minimap } from "./Minimap";
 import { Comments } from "./Comments";
 import { useTheme } from "./theme";
+import { hugSize, listGutter, listMarker, measureCached, textMetrics, wrapLines } from "./textLayout";
 import { cssRgba, isNone, parseHex, takeEyedrop, toHex } from "./color";
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
 import { importSvg, type ImportedNode } from "../engine/svgImport";
@@ -3624,11 +3626,11 @@ export function Canvas({
     let textW = wp.node.w;
     let textH = wp.node.h;
     if (measure && (wp.node.sizingW === "hug" || wp.node.sizingH === "hug")) {
-      measure.font = `${wp.node.fontWeight} ${wp.node.fontSize}px ${wp.node.fontFamily}, Inter, system-ui`;
-      const lines = (edit.text || " ").split("\n");
-      textW = Math.max(wp.node.w, ...lines.map((line) => measure.measureText(line || " ").width + 4));
-      textH = Math.max(wp.node.h, lines.length * (wp.node.lineHeight || wp.node.fontSize * 1.2));
+      const m = textMetrics(measure, wp.node, edit.text);
+      textW = Math.max(wp.node.w, m.maxW + 4);
+      textH = Math.max(wp.node.h, m.lines * (wp.node.lineHeight || wp.node.fontSize * 1.2));
     }
+    const gutter = listGutter(measure ?? null, wp.node);
     return {
       left: snap.panX + wp.x * snap.zoom,
       top: snap.panY + wp.y * snap.zoom,
@@ -3643,7 +3645,11 @@ export function Canvas({
       fontFamily: wp.node.fontFamily,
       transform: wp.node.rotation ? `rotate(${wp.node.rotation}deg)` : undefined,
       transformOrigin: "center center",
-    };
+      // The overlay is a real textarea, so the wrap style is handed to the
+      // browser's own text-wrap - the same rule Figma applies to its editor.
+      ...((wp.node.textWrap === "balance" || wp.node.textWrap === "pretty") ? { textWrap: wp.node.textWrap } : {}),
+      ...(gutter ? { paddingLeft: Math.round(gutter * snap.zoom) } : {}),
+    } as CSSProperties;
   })();
 
   return (
@@ -3735,17 +3741,8 @@ export function Canvas({
           onBlur={() => {
             const n = worldPos(snap.pages[snap.page].root, edit.id)?.node;
             const patch: Partial<XNode> = { text: edit.text };
-            if (n && (n.sizingW === "hug" || n.sizingH === "hug")) {
-              const ctx = ref.current?.getContext("2d");
-              if (ctx) {
-                ctx.font = `${n.fontWeight} ${n.fontSize}px ${n.fontFamily}, Inter, system-ui`;
-                const lines = (edit.text || " ").split("\n");
-                const tw = Math.max(...lines.map((l) => measureCached(ctx, l)), 8);
-                const lh = n.lineHeight || n.fontSize * 1.2;
-                if (n.sizingW === "hug") patch.w = Math.ceil(tw + 4);
-                if (n.sizingH === "hug") patch.h = Math.ceil(Math.max(1, lines.length) * lh);
-              }
-            }
+            if (n && (n.sizingW === "hug" || n.sizingH === "hug"))
+              Object.assign(patch, hugSize(n, edit.text));
             engine.dispatch({ type: "patch", id: edit.id, patch });
             setEdit(null);
           }}
@@ -4258,88 +4255,6 @@ function traceVectorNetwork(
   }
 }
 
-/** Glyph-width cache. measureText dominated pan/zoom frame time on large
- *  documents because every visible string was re-measured on every frame even
- *  when neither the text nor the font had changed. Keyed by font + string, so
- *  a font change naturally misses and re-measures. Bounded to keep a long
- *  session from growing the cache without limit. */
-const MEASURE_CACHE = new Map<string, number>();
-const MEASURE_CACHE_MAX = 20000;
-
-function measureCached(ctx: CanvasRenderingContext2D, s: string): number {
-  if (!s) return 0;
-  const key = `${ctx.font}\u0000${s}`;
-  const hit = MEASURE_CACHE.get(key);
-  if (hit !== undefined) return hit;
-  const w = ctx.measureText(s).width;
-  if (MEASURE_CACHE.size >= MEASURE_CACHE_MAX) MEASURE_CACHE.clear();
-  MEASURE_CACHE.set(key, w);
-  return w;
-}
-
-function wrapLines(
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  maxW: number,
-  letterSpacing: number,
-): string[] {
-  const paras = text.split("\n");
-  const lines: string[] = [];
-  const widthOf = (s: string) => {
-    if (!s) return 0;
-    const m = measureCached(ctx, s);
-    return letterSpacing ? m + letterSpacing * Math.max(0, s.length - 1) : m;
-  };
-  const splitLong = (word: string) => {
-    let part = "";
-    for (const ch of word) {
-      if (part && widthOf(part + ch) > maxW) {
-        lines.push(part);
-        part = ch;
-      } else {
-        part += ch;
-      }
-    }
-    return part;
-  };
-  for (const para of paras) {
-    if (!para) {
-      lines.push("");
-      continue;
-    }
-    if (maxW <= 0 || widthOf(para) <= maxW) {
-      lines.push(para);
-      continue;
-    }
-    const words = para.split(/(\s+)/);
-    let cur = "";
-    for (const token of words) {
-      if (!token) continue;
-      const word = token.trim();
-      if (!word) {
-        if (cur) cur += token;
-        continue;
-      }
-      if (widthOf(word) > maxW) {
-        if (cur.trim()) {
-          lines.push(cur.trimEnd());
-          cur = "";
-        }
-        cur = splitLong(word);
-        continue;
-      }
-      const next = cur ? `${cur}${token}` : word;
-      if (cur && widthOf(next) > maxW) {
-        lines.push(cur.trimEnd());
-        cur = word;
-      } else {
-        cur = next;
-      }
-    }
-    if (cur) lines.push(cur.trimEnd());
-  }
-  return lines.length ? lines : [""];
-}
 
 function paintText(
   ctx: CanvasRenderingContext2D,
@@ -4375,12 +4290,31 @@ function paintText(
   const paraGap = (n.paragraphSpacing || 0) * z;
   const wrap = n.sizingW !== "hug";
   const paras = content.split("\n");
-  type Row = { line: string; lastInPara: boolean };
+  const indent = (n.paragraphIndent || 0) * z;
+  type Row = { line: string; lastInPara: boolean; lead: number; marker: string };
   const rows: Row[] = [];
-  for (const para of paras) {
-    const wrapped = wrapLines(ctx, para || " ", wrap ? sw : 1e6, ls);
-    wrapped.forEach((line, i) => rows.push({ line: para ? line : "", lastInPara: i === wrapped.length - 1 }));
-  }
+  const widthOfLine = (line: string) =>
+    measureCached(ctx, line) + (ls ? ls * Math.max(0, line.length - 1) : 0);
+  // A list hangs its marker in the gutter and shrinks the width the wrapper may
+  // use; paragraphIndent then offsets the first line of each paragraph.
+  paras.forEach((para, pi) => {
+    const marker = listMarker(n.listStyle, pi);
+    const gutter = marker ? widthOfLine(`${marker} `) : 0;
+    const avail = wrap ? sw - gutter - indent : 1e6;
+    let wrapped = wrapLines(ctx, para || " ", avail > 0 ? avail : 1e6, ls);
+    // Figma's wrap style only has something to say when the layer wraps: an
+    // auto-width layer breaks a line exactly where Return was pressed.
+    if (wrap && (n.textWrap === "balance" || n.textWrap === "pretty") && sw > 0)
+      wrapped = balanceLines(wrapped, avail, widthOfLine, n.textWrap);
+    wrapped.forEach((line, i) =>
+      rows.push({
+        line: para ? line : "",
+        lastInPara: i === wrapped.length - 1,
+        lead: gutter + (i === 0 ? indent : 0),
+        marker: i === 0 && para ? marker : "",
+      }),
+    );
+  });
   let lines = rows;
   if (n.truncate) {
     const limit = Math.max(1, n.maxLines || 1);
@@ -4397,7 +4331,7 @@ function paintText(
       } else {
         line = `${line}…`;
       }
-      clipped[clipped.length - 1] = { line, lastInPara: true };
+      clipped[clipped.length - 1] = { ...last, line, lastInPara: true };
       lines = clipped;
     }
   }
@@ -4436,14 +4370,21 @@ function paintText(
   };
   lines.forEach((row) => {
     const line = row.line;
+    const left = sx + row.lead;
+    const innerW = Math.max(0, sw - row.lead);
+    if (row.marker) paintLine(row.marker, sx + (n.paragraphIndent || 0) * z, ty);
     const tx =
-      n.textAlign === "center" ? sx + sw / 2 : n.textAlign === "right" ? sx + sw : sx;
+      n.textAlign === "center"
+        ? left + innerW / 2
+        : n.textAlign === "right"
+          ? sx + sw
+          : left;
     const justify = n.textAlign === "justified" && wrap && !row.lastInPara && line.includes(" ");
     if (justify) {
       const words = line.trim().split(/\s+/);
       const total = words.reduce((s, w) => s + measureCached(ctx, w), 0);
-      const gap = words.length > 1 ? (sw - total) / (words.length - 1) : 0;
-      let x = sx;
+      const gap = words.length > 1 ? (innerW - total) / (words.length - 1) : 0;
+      let x = left;
       ctx.textAlign = "left";
       for (const w of words) {
         paintLine(w, x, ty);
@@ -4461,7 +4402,7 @@ function paintText(
       }
       ctx.textAlign = n.textAlign === "center" ? "center" : n.textAlign === "right" ? "right" : "left";
     } else {
-      paintLine(line, tx, ty, wrap ? sw : undefined);
+      paintLine(line, tx, ty, wrap ? innerW : undefined);
     }
     if (fillOn && (n.textDecoration === "underline" || n.textDecoration === "strikethrough")) {
       const textWidth = measureCached(ctx, line) + ls * Math.max(0, line.length - 1);

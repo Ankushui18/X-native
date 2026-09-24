@@ -173,6 +173,108 @@ Still open, in priority order:
 4. Clicking a **middle** vertex of an in-progress draft should branch there (Figma); we still
    only join the first point, because a draft lives in `PathPoint[]` until it is committed.
 
+## Text and typography vs Figma's text docs
+
+Evidence: Figma's "Text and typography" help section, read article by article.
+Two of its articles carry the behaviour we could actually test here: *Adjust text
+dimensions and resizing* and *Explore text properties* (the latter enumerates the
+Typography panel: text styles, font family, weight and style, size, line height,
+letter spacing, horizontal and vertical alignment, then the type settings behind
+the `⋯`). Sketch's text docs were consulted for the same list; they add nothing
+Figma's does not already cover, so Figma's wording is what is quoted below.
+
+Measured first, then fixed. Each row was driven in a headless browser and read
+back from the panel or the pixels.
+
+| Figma's rule | Before | Now |
+| --- | --- | --- |
+| Single click with the text tool creates an **auto width** layer | already right (`Auto W` selected, box hugs the copy) | kept |
+| Click-drag creates a **Fixed size** box the size you dragged | already right (240x190 box kept) | kept |
+| Resizing the bounding box by hand sets resizing to **Fixed size** | right, per axis, in x-core's `resize` command | kept; the first attempt at fixing this was reverted as a duplicate of the engine rule |
+| Auto width breaks a line only where Return is pressed, so wrap style does nothing there | n/a | wrapper runs only when the layer wraps |
+| **Wrap style**: Balance distributes the lines evenly, Pretty also avoids a lone final word | absent | `XNode.textWrap`, honoured by the canvas, the editor overlay and the auto-height measure |
+| **Paragraph spacing** beyond the space between lines | honoured in the paint | kept |
+| **Truncate text** plus max lines, with the ellipsis fitting the box | honoured | kept |
+| **Vertical alignment** of the block inside the box | honoured, with the panel's three buttons and a Dev Mode row | kept |
+| Line height as Auto / a length | Auto is `0` with a `1.2` fallback, click the label to reset | kept; the percent mode x-core carries as `lhm`/`lhp` is not surfaced in the panel |
+| **Lists**: numbered and bulleted paragraphs | absent from the web layer although `x-core` carries `list_style` | `XNode.listStyle`: marker hangs in the gutter, the paragraph is indented beside it |
+| **Paragraph indentation** (Details tab) | absent, `paragraph_indent` exists in `x-core` | `XNode.paragraphIndent`, first line of each paragraph |
+| Choosing a resizing mode refits the box | the flags moved, the box did not, until the next keystroke | `hugSize` runs with every mode change |
+| A type metric changes the space the copy needs | font size, weight, letter spacing, case and truncation left a stale box | every type field re-hugs the axes set to hug |
+
+### Where the wrap styles came from
+
+`balanceLines` lives in `engine/geometry.ts` so it is unit-tested and shared.
+Greedy first-fit already produces the fewest lines a paragraph can have, so the
+line count is fixed and the only freedom is where the breaks fall: the function
+searches for the partition whose **widest line is narrowest** (a small DP over
+words x lines, with a sum-of-squares tie-break so ties keep the earlier line
+fuller, the way a greedy break leaves them). Pretty takes the same partition and
+then deals with the widow: it borrows a word from the line above, which keeps the
+line count the editor overlay is already showing, and lifts the lone word up only
+when that would overflow. Results are memoised because this runs inside the paint,
+paragraphs over 220 words fall back to the greedy break, and unspaced scripts
+(CJK) are left to the wrapper, which has no word boundaries to move.
+
+On a seven-line paragraph at 240px the greedy break reaches 235px wide with a
+35px tail; Balance brings the widest line down to 214px with every line between
+173 and 214. The two renders are pixel-identical only when nothing improves.
+
+### Shared text layout
+
+`ui/textLayout.ts` is new: the glyph cache, `wrapLines`, `textMetrics`, the list
+gutter and `hugSize` moved out of `Canvas.tsx` so the inspector measures with the
+same rules the canvas paints with. Duplicated measuring is how a text layer ends
+up with a box sized by one rule and text drawn by another; the auto-height
+re-measure also now counts **wrapped** lines rather than Return characters, which
+is what E2 below exposed.
+
+### Verified in the browser
+
+- E2 - Auto height on a wrapped paragraph: `H 20 -> 77` (four lines at 19.2).
+- F1 - font size 16 to 40 on an auto width layer: `W 129 -> 317`, `H 20 -> 48`.
+- F3 - then 64 with auto height: `H -> 154`, i.e. two wrapped lines, box and text
+  still agreeing.
+- Wrap style Off / Balance / Pretty each change the canvas (md5 of the paint
+  differ), and the panel's select round-trips the value.
+- Bulleted and numbered lists: `w-numbers.png` shows `1.` in the gutter with the
+  paragraph indented beside it and the lines balanced.
+- Dev Mode's List tab gains rows for Wrap style, List, Vertical alignment and
+  Paragraph indent, and the CSS snippet emits `text-wrap`, `list-style-type` and
+  `text-indent` - three properties that translate to web CSS exactly, which is
+  the point of the snippet.
+- Legacy files: the guards compare against `"balance"`/`"pretty"` rather than
+  testing unequal to `"auto"`, so a document saved before this round keeps the
+  greedy break instead of inheriting a mode from `undefined`.
+- 162 parity checks pass (`npm test`), 13 of them new and about wrapping;
+  `tsc -b` clean; no page errors in any of the runs.
+
+### Deliberate differences
+
+- Dragging one edge of a text layer fixes **that axis** rather than the whole
+  setting as Figma's caution describes it, because our three buttons name axes
+  (Auto W / Auto H / Fixed) and x-core's `resize` already works per axis. The
+  visible outcome for a single-line box is the same.
+- The editing overlay hands `text-wrap: balance|pretty` to the browser instead of
+  re-running the DP in the DOM, so the caret and the committed text agree without
+  a second implementation, and a list's overlay is indented by the gutter so the
+  text does not jump on commit (the marker itself cannot live in a textarea).
+- `x-core` has both a `WrapStyle` (normal / break-word) and a `TextWrap`
+  (auto / balance / pretty, the `tw` binding). The web field mirrors `TextWrap`
+  under the name Figma uses in its panel; the overflow rule is not surfaced.
+
+### Still open in this area
+
+Text styles (create, apply, the specimen in the panel) - paint styles exist in our
+engine and a text style needs the same slots on the type fields, which is its own
+round. Letter spacing in percent, OpenType features (ligatures, numerals, fractions),
+variable font axes, writing directions and scripts, hanging punctuation, whole-paragraph
+indentation as well as first line, links inside text, and middle truncation
+(`x-core` has `TextTruncation::{End, Middle}`, the web node has a boolean). Small caps
+is currently an uppercase transform, not a typeface feature. The Rust side already
+carries `list_style` and `paragraph_indent`, so the wasm renderer needs the same two
+when it is next built; `textWrap` has no Rust counterpart yet.
+
 ## Open
 
 - Sketch's top-bar Insert menu and Figma's Assets panel tab, "Additional
@@ -180,3 +282,7 @@ Still open, in priority order:
   own project, none a defect today.
 - The panel split handle (dragging the inspector wider) exists but has not been
   reviewed for the Dev Mode layout at narrow widths.
+- Text styles on type fields, plus the wrapping settings the panel does not
+  expose yet: percent letter spacing, OpenType and variable-font axes, hanging
+  punctuation, whole-paragraph indentation, links in text, middle truncation.
+  Listed in full at the end of the typography section above.

@@ -773,3 +773,105 @@ export function computeFigmaNoodle(
 
   return { ax, ay, cp1x, cp1y, cp2x, cp2y, bx, by, angle, sourceSide, destSide };
 }
+
+/**
+ * Re-break an already wrapped paragraph for Figma's two wrap styles.
+ *
+ * `lines` is the greedy word wrap, one entry per line, and `widthOf` is the
+ * same width model the wrapper used, so the two never disagree about what
+ * fits. Greedy first-fit is already the fewest lines a paragraph can have, so
+ * the count is fixed and the only freedom is *where* the breaks fall: this
+ * picks the partition whose widest line is as narrow as possible, which is
+ * what Figma means by distributing the lines evenly. Pretty takes the same
+ * partition and then refuses a widow - a lone final word is joined to the
+ * line above when it fits, otherwise it borrows a word from it.
+ *
+ * Space-delimited scripts only: CJK has no word boundaries to move and falls
+ * back to the greedy break. Results are memoised because this runs inside the
+ * canvas paint, and the search is skipped for very long paragraphs so a page of
+ * text cannot turn a pan frame into a dynamic programme.
+ */
+const BALANCE_CACHE = new Map<string, string[]>();
+const BALANCE_CACHE_MAX = 4000;
+const BALANCE_MAX_WORDS = 220;
+
+type WidthOf = (s: string) => number;
+
+function evenPartition(lines: string[], maxW: number, widthOf: WidthOf): string[] {
+  const words = lines.flatMap((l) => (l.trim() ? l.trim().split(/\s+/) : []));
+  const n = words.length;
+  const k = lines.filter((l) => l.trim()).length;
+  if (n < 2 || k < 2 || n > BALANCE_MAX_WORDS) return lines;
+  // For every start word, the words that still fit on one line and their width.
+  const fits: { j: number; w: number }[][] = [];
+  for (let i = 0; i < n; i++) {
+    const row: { j: number; w: number }[] = [];
+    let acc = "";
+    for (let j = i; j < n; j++) {
+      acc = j === i ? words[j] : `${acc} ${words[j]}`;
+      const w = widthOf(acc);
+      if (w > maxW) break;
+      row.push({ j: j + 1, w });
+    }
+    if (!row.length) return lines; // a word alone does not fit: the wrapper is on its own
+    fits.push(row);
+  }
+  // cost[i][left] = [widest line from i on, sum of squared widths] for `left` lines.
+  const INF = Number.POSITIVE_INFINITY;
+  const costM = Array.from({ length: n + 1 }, () => new Array<number>(k + 1).fill(INF));
+  const costS = Array.from({ length: n + 1 }, () => new Array<number>(k + 1).fill(INF));
+  const splitAt = Array.from({ length: n + 1 }, () => new Array<number>(k + 1).fill(-1));
+  costM[n][0] = 0;
+  costS[n][0] = 0;
+  for (let i = n - 1; i >= 0; i--) {
+    for (let left = 1; left <= k; left++) {
+      for (let f = fits[i].length - 1; f >= 0; f--) {
+      const { j, w } = fits[i][f];
+        const rest = costM[j][left - 1];
+        if (rest === INF) continue;
+        const m = Math.max(w, rest);
+        const s = w * w + costS[j][left - 1];
+        if (m < costM[i][left] - 0.01 || (Math.abs(m - costM[i][left]) <= 0.01 && s < costS[i][left] - 0.01)) {
+          costM[i][left] = m;
+          costS[i][left] = s;
+          splitAt[i][left] = j;
+        }
+      }
+    }
+  }
+  if (costM[0][k] === INF) return lines;
+  const out: string[] = [];
+  let at = 0;
+  for (let left = k; left > 0; left--) {
+    const j = splitAt[at][left];
+    out.push(words.slice(at, j).join(" "));
+    at = j;
+  }
+  return out;
+}
+
+export function balanceLines(
+  lines: string[],
+  maxW: number,
+  widthOf: WidthOf,
+  mode: "balance" | "pretty",
+): string[] {
+  if (lines.length < 2 || !(maxW > 0) || !Number.isFinite(maxW)) return lines;
+  const key = `${mode}\u0000${Math.round(maxW)}\u0000${lines.join("\n")}`;
+  const hit = BALANCE_CACHE.get(key);
+  if (hit) return hit;
+  let out = evenPartition(lines, maxW, widthOf);
+  if (mode === "pretty" && out.length > 1) {
+    const last = out[out.length - 1];
+    if (last.trim().split(/\s+/).length === 1) {
+      const prev = out[out.length - 2];
+      const words = prev.trim().split(/\s+/);
+      if (words.length > 1 && widthOf(`${last} ${words[words.length - 1]}`) <= maxW)
+        out = [...out.slice(0, -2), words.slice(0, -1).join(" "), [...words.slice(-1), last].join(" ")];
+      else if (widthOf(`${prev} ${last}`) <= maxW) out = [...out.slice(0, -2), `${prev} ${last}`];
+    }
+  }
+  if (BALANCE_CACHE.size >= BALANCE_CACHE_MAX) BALANCE_CACHE.clear();
+  BALANCE_CACHE.set(key, out);
+  return out;
+}

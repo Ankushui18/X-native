@@ -25,6 +25,18 @@ export type LayoutAlign = "min" | "center" | "max" | "baseline";
 export type LayoutJustify = "min" | "center" | "max" | "between";
 export type TextAlign = "left" | "center" | "right" | "justified";
 export type TextAlignVertical = "top" | "middle" | "bottom";
+/**
+ * How a wrapped paragraph breaks its lines - the type setting Figma exposes as
+ * "Wrap style". Mirrors x-core's TextWrap enum, which rides the node as the
+ * "tw" binding: Auto is the greedy first-fit, Balance evens the line lengths
+ * out per paragraph, Pretty balances and keeps a lone word off the last line.
+ */
+export type TextWrap = "auto" | "balance" | "pretty";
+/**
+ * Paragraph markers, x-core's ListStyle. Bulleted and numbered both hang a
+ * marker in the gutter and indent the paragraph beside it.
+ */
+export type ListStyle = "none" | "bulleted" | "numbered";
 export type TextDecoration = "none" | "underline" | "strikethrough";
 export type TextCase = "none" | "upper" | "lower" | "title" | "small-caps";
 export type StrokeAlign = "inside" | "center" | "outside";
@@ -447,6 +459,10 @@ export interface XNode {
   paragraphSpacing: number;
   textAlign: TextAlign;
   textAlignVertical: TextAlignVertical;
+  textWrap: TextWrap;
+  listStyle: ListStyle;
+  /** First-line offset of every paragraph, in points (x-core's paragraph_indent). */
+  paragraphIndent: number;
   textDecoration: TextDecoration;
   textCase: TextCase;
   truncate: boolean;
