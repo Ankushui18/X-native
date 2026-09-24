@@ -1,5 +1,6 @@
 import type { GradientStop, XNode } from "./types";
 import { cssRgba, parseHex, toHexA } from "../ui/color";
+import { dashArray, miterLimitFromAngle, sideCones, sideWidths, sidesSupported } from "./strokeModel";
 
 /** Linear sRGB → OKLab mix so ramps are smoother than canvas sRGB (and Figma’s default). */
 function mixHex(a: string, b: string, t: number): string {
@@ -494,6 +495,8 @@ export function paintExtraStrokes(
   n: XNode,
   z: number,
   trace: () => void,
+  /** Screen box of the node, needed to clip per-side strokes. */
+  box?: { x: number; y: number; w: number; h: number },
 ) {
   for (const s of n.strokes ?? []) {
     if (s.visible === false || !(s.width > 0)) continue;
@@ -502,39 +505,64 @@ export function paintExtraStrokes(
     ctx.save();
     ctx.globalAlpha *= s.opacity ?? 1;
     ctx.strokeStyle = cssRgba(colour);
-    const lw = Math.max(0.5, s.width * z);
     ctx.lineCap = s.cap === "round" ? "round" : s.cap === "square" ? "square" : "butt";
     ctx.lineJoin = s.join === "round" ? "round" : s.join === "bevel" ? "bevel" : "miter";
+    ctx.miterLimit = miterLimitFromAngle(n.strokeMiterAngle);
     const dash = s.dash ?? 0;
-    ctx.setLineDash(dash > 0 ? [dash * z, (s.gap || dash) * z] : []);
-    trace();
-    if (s.align === "inside") {
-      ctx.save();
-      ctx.clip();
-      ctx.lineWidth = lw * 2;
-      ctx.stroke();
+    const dashes = dashArray(s.pattern, dash, s.gap ?? 0, z);
+    ctx.setLineDash(dashes);
+    // A second stroke carries its own per-side settings, the way Figma's stroke
+    // rows each own their weight, alignment and dashes.
+    const widths = sideWidths(s.sides, s.sideW, s.width);
+    const perSide = box && sidesSupported(n.kind) && (s.sides ?? "all") !== "all";
+    const strokePass = (weight: number) => {
+      const w = Math.max(0.5, weight * z);
+      if (s.align === "inside") {
+        ctx.save();
+        ctx.clip();
+        ctx.lineWidth = w * 2;
+        ctx.stroke();
+        ctx.restore();
+      } else if (s.align === "outside") {
+        // Canvas only centres a stroke, so an outside stroke is drawn at double
+        // width with the shape interior clipped out — "clip to everything except
+        // the shape" — leaving just the outer half. Erasing the interior with
+        // destination-out instead would also destroy the base stroke's inside
+        // band and anything else already painted there.
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(-1e6, -1e6, 2e6, 2e6);
+        trace();
+        ctx.clip("evenodd");
+        trace();
+        ctx.lineWidth = w * 2;
+        ctx.stroke();
+        ctx.restore();
+      } else {
+        ctx.lineWidth = w;
+        ctx.stroke();
+      }
+    };
+    if (perSide) {
+      const cones = sideCones(box!.x, box!.y, box!.w, box!.h);
+      for (let i = 0; i < 4; i++) {
+        if (widths[i] <= 0) continue;
+        ctx.save();
+        ctx.beginPath();
+        cones[i].forEach(([bx, by], k) => (k ? ctx.lineTo(bx, by) : ctx.moveTo(bx, by)));
+        ctx.closePath();
+        ctx.clip();
+        // The cone is now the current path, so re-trace the shape before
+        // stroking it, or the band's own edges get the stroke instead.
+        trace();
+        strokePass(widths[i]);
+        ctx.restore();
+      }
       ctx.restore();
-    } else if (s.align === "outside") {
-      // Canvas only centres a stroke, so an outside stroke is drawn at double
-      // width with the shape interior clipped out — "clip to everything except
-      // the shape" — leaving just the outer half. Erasing the interior with
-      // destination-out instead would also destroy the base stroke's inside
-      // band and anything else already painted there.
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(-1e6, -1e6, 2e6, 2e6);
-      trace();
-      // The outer rect plus the shape, filled even-odd, is the region outside
-      // the shape; clipping to it protects everything already drawn inside.
-      ctx.clip("evenodd");
-      trace();
-      ctx.lineWidth = lw * 2;
-      ctx.stroke();
-      ctx.restore();
-    } else {
-      ctx.lineWidth = lw;
-      ctx.stroke();
+      continue;
     }
+    trace();
+    strokePass(s.width);
     ctx.restore();
   }
 }

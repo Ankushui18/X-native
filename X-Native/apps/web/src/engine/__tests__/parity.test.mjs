@@ -8,8 +8,15 @@
  */
 import { snapMove, snapCandidates } from "../snapping.ts";
 import {
+  cornerPinPoints,
+  cornerRadiiOf,
+  cornerReach,
+  hasCornerSmoothing,
+  roundRectRadii,
+  shapePoly,
   simplifyPath,
   smoothPath,
+  squircleOutline,
   erasePath,
   pathToVectorNetwork,
   addVectorBranch,
@@ -21,10 +28,20 @@ import {
   projectPointOnSegment,
   computeFigmaNoodle,
 } from "../geometry.ts";
-import { MemoryEngine } from "../memory.ts";
+import { MemoryEngine, insideInstance } from "../memory.ts";
 import { evalField, hasExpression } from "../../ui/fieldExpr.ts";
 import { scaleBoxAround, scaleMembers, sizeKeepingRatio, unionBox } from "../../ui/scaleModel.ts";
 import { layersAt, matchingIds, pathIndex, sameIds } from "../../ui/selectSame.ts";
+import {
+  SIDES,
+  dashArray,
+  miterLimitFromAngle,
+  parseDashPattern,
+  sideCones,
+  sideWidths,
+  sidesSupported,
+} from "../../engine/strokeModel.ts";
+import { EFFECT_LIMITS, canAddEffect, countKind, moveEffect } from "../../ui/effectModel.ts";
 
 import { colorUsage, colorUsageAll, setOpacityMatches } from "../../ui/selectionColors.ts";
 import { contrastRatio, contrastTarget, nearestAccessible, passesContrast, parseHex, rgbToHsv } from "../../ui/color.ts";
@@ -1503,6 +1520,192 @@ console.log("the scale tool scales content, not just the box:");
   e.dispatch({ type: "resize", id: frame, x: 0, y: 0, w: 200, h: 100 });
   t("a plain resize leaves content alone", look(frame).strokeWidth === 2 && look(frame).cornerRadii[0] === 8);
   t("and re-applies the child's constraints instead of scaling it", look(kid).w !== 40 || look(kid).x === 10);
+}
+
+
+const rect = (over = {}) => ({
+  id: "r", kind: "rect", name: "r", x: 0, y: 0, w: 200, h: 100,
+  path: [], closed: true, cornerRadii: [0, 0, 0, 0], cornerIndependent: false,
+  children: [], ...over,
+});
+
+console.log("corners: one storage order, read the same way everywhere:");
+{
+  // The array is [topLeft, topRight, bottomLeft, bottomRight]; a canvas
+  // roundRect and CSS both want [tl, tr, br, bl].
+  const n = rect({ cornerIndependent: true, cornerRadii: [10, 20, 30, 40] });
+  const c = cornerRadiiOf(n);
+  t("the stored order reads back by name", c.tl === 10 && c.tr === 20 && c.bl === 30 && c.br === 40);
+  t("the canvas order swaps the bottom pair", roundRectRadii(n).join() === "10,20,40,30");
+  const u = rect({ cornerRadii: [12, 99, 99, 99] });
+  t("a uniform shape repeats its first corner", cornerRadiiOf(u).br === 12 && cornerRadiiOf(u).bl === 12);
+  // The radius pins are laid out from the same helper the painter uses, so the
+  // handle drawn on a corner can only ever move that corner.
+  const pins = cornerPinPoints(200, 100, cornerRadiiOf(u), 1);
+  const byIndex = Object.fromEntries(pins.map((p) => [p.index, p]));
+  t("the bottom left pin sits bottom left", byIndex.bl.x < 100 && byIndex.bl.y > 50);
+  t("the bottom right pin sits bottom right", byIndex.br.x > 100 && byIndex.br.y > 50);
+  t("each pin sits further out as its own radius grows", (() => {
+    const small = cornerPinPoints(200, 100, { tl: 4, tr: 0, br: 0, bl: 0 }, 1)[0];
+    const big = cornerPinPoints(200, 100, { tl: 30, tr: 0, br: 0, bl: 0 }, 1)[0];
+    return big.x > small.x && big.y > small.y;
+  })());
+}
+
+console.log("corner smoothing makes a squircle, not a bigger circle:");
+{
+  const flat = rect({ cornerRadii: [40, 40, 40, 40] });
+  t("no smoothing keeps the plain rounded corner", !hasCornerSmoothing(flat) && !hasCornerSmoothing(rect({ cornerSmoothing: 0.6 })));
+  t("smoothing without a radius does nothing", !hasCornerSmoothing(rect({ cornerSmoothing: 0.6 })));
+  t("the corner reaches further along its edges as smoothing grows", cornerReach(40, 1) > cornerReach(40, 0.6) && cornerReach(40, 0.6) > 40);
+  const smooth = squircleOutline(200, 100, { tl: 40, tr: 40, br: 40, bl: 40 }, 1);
+  t("the outline keeps eight points so every consumer still fits", smooth.length === 8);
+  t("tangent points move out past the radius", smooth[0].x > 40);
+  const circ = shapePoly(rect({ cornerIndependent: true, cornerRadii: [40, 40, 40, 40] }));
+  const near = (pts) => {
+    let best = 1e9;
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i];
+      const b = pts[(i + 1) % pts.length];
+      for (let k = 0; k <= 24; k++) {
+        const t = k / 24;
+        const u = 1 - t;
+        const c1x = a.x + (a.ox || 0), c1y = a.y + (a.oy || 0);
+        const c2x = b.x + (b.ix || 0), c2y = b.y + (b.iy || 0);
+        const x = u * u * u * a.x + 3 * u * u * t * c1x + 3 * u * t * t * c2x + t * t * t * b.x;
+        const y = u * u * u * a.y + 3 * u * u * t * c1y + 3 * u * t * t * c2y + t * t * t * b.y;
+        best = Math.min(best, (x + y) / Math.SQRT2);
+      }
+    }
+    return best;
+  };
+  t("the smoothed corner hugs the corner more tightly", near(smooth) < near(circ));
+  const mid = squircleOutline(200, 100, { tl: 40, tr: 40, br: 40, bl: 40 }, 0.6);
+  t("and is symmetric on a uniform shape", Math.abs(mid[0].x - (200 - mid[1].x)) < 1e-6 && Math.abs(mid[0].y - mid[1].y) < 1e-9);
+  // Two neighbours cannot overrun the edge between them: they shrink together.
+  const tight = squircleOutline(100, 100, { tl: 60, tr: 60, br: 0, bl: 0 }, 1);
+  t("neighbouring corners share an edge they would overrun", tight[0].x + (100 - tight[1].x) <= 100.0001);
+  t("and nothing escapes the box", tight.every((p) => p.x >= -1e-6 && p.x <= 200 + 1e-6 && p.y >= -1e-6 && p.y <= 100 + 1e-6));
+}
+
+console.log("individual strokes:");
+{
+  t("the picker offers Figma's six choices", SIDES.map((x) => x.id).join() === "all,top,right,bottom,left,custom");
+  t("All weights every side", sideWidths("all", undefined, 2).join() === "2,2,2,2");
+  t("Top leaves the others empty", sideWidths("top", undefined, 2).join() === "2,0,0,0");
+  t("Right is the second side", sideWidths("right", undefined, 3).join() === "0,3,0,0");
+  t("Bottom is the third", sideWidths("bottom", undefined, 3).join() === "0,0,3,0");
+  t("Left is the fourth", sideWidths("left", undefined, 3).join() === "0,0,0,3");
+  t("Custom reads the four fields", sideWidths("custom", [1, 2, 3, 4], 9).join() === "1,2,3,4");
+  t("Custom ignores the shared weight, and never goes negative", sideWidths("custom", [-4, 0, 2, 0], 9).join() === "0,0,2,0");
+  t("rectangles, frames, components and instances support it", [
+    sidesSupported("rect"), sidesSupported("frame"), sidesSupported("component"), sidesSupported("instance"),
+  ].every(Boolean));
+  t("ellipses, lines and text do not", !sidesSupported("ellipse") && !sidesSupported("line") && !sidesSupported("text"));
+  const [top, right, bottom, left] = sideCones(0, 0, 200, 100);
+  const inTri = (tri, [px, py]) => {
+    const [[ax, ay], [bx, by], [cx, cy]] = tri;
+    const s2 = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+    const w1 = ((px - ax) * (cy - ay) - (py - ay) * (cx - ax)) * Math.sign(s2);
+    const w2 = ((cx - px) * (ay - py) - (cy - py) * (ax - px)) * Math.sign(s2);
+    return w1 >= 0 && w2 >= 0;
+  };
+  t("the top band owns the whole top edge", inTri(top, [100, 0]) && inTri(top, [10, 1]) && inTri(top, [190, 1]));
+  t("but not the bottom edge", !inTri(top, [100, 150]));
+  t("the left band owns the whole left edge", inTri(left, [0, 50]) && inTri(left, [1, 10]) && !inTri(left, [200, 50]));
+  t("right and bottom take the rest", inTri(right, [200, 50]) && inTri(bottom, [100, 100]));
+  t("each band holds its own corners and shares them at 45°", inTri(top, [0, 0]) && inTri(left, [0, 0]) && inTri(bottom, [200, 100]) && inTri(right, [200, 100]));
+}
+
+console.log("dashes, caps and the miter angle:");
+{
+  t("a comma list parses", parseDashPattern("10, 20, 80, 20").join() === "10,20,80,20");
+  t("spaces work as well", parseDashPattern("4 2 1").join() === "4,2,1");
+  t("an empty field means no custom pattern", parseDashPattern("   ").length === 0);
+  t("words are refused rather than truncated", parseDashPattern("4, x") === null);
+  t("negatives are refused", parseDashPattern("10, -2") === null);
+  t("decimals are allowed", parseDashPattern("1.5, 2").join() === "1.5,2");
+  t("the custom pattern wins over the dash/gap pair", dashArray([3, 4], 10, 10).join() === "3,4");
+  t("without one the pair is used, gap falling back to the dash", dashArray([], 6, 0).join() === "6,6");
+  t("the pattern is scaled with the zoom", dashArray([3, 4], 0, 0, 2).join() === "6,8");
+  t("no dash means no pattern at all", dashArray([], 0, 0).length === 0);
+  t("miter angle 60 gives the classic limit of 2", Math.abs(miterLimitFromAngle(60) - 2) < 1e-9);
+  t("a right angle gives sqrt(2)", Math.abs(miterLimitFromAngle(90) - Math.SQRT2) < 1e-9);
+  t("0 never bevels and 180 always does", miterLimitFromAngle(0) > 1e5 && miterLimitFromAngle(180) === 1);
+  t("an unset angle behaves like the miter join", miterLimitFromAngle(undefined) > 1e5);
+}
+
+console.log("effects stack like Figma allows:");
+{
+  const fx = (kind, i) => ({ kind, color: "#000", x: 0, y: 0, blur: 4, spread: 0, visible: true, id: i });
+  const many = (kind, n) => Array.from({ length: n }, (_, i) => fx(kind, i));
+  t("eight drop shadows fit, a ninth does not", canAddEffect(many("drop-shadow", 8), "drop-shadow") === false);
+  t("and eight is allowed", canAddEffect(many("drop-shadow", 7), "drop-shadow") === true);
+  t("inner shadows get their own eight", canAddEffect([...many("drop-shadow", 8), ...many("inner-shadow", 7)], "inner-shadow") === true);
+  t("one blur of each kind", canAddEffect(many("layer-blur", 1), "layer-blur") === false && canAddEffect(many("background-blur", 1), "background-blur") === false);
+  t("two noise rows, one texture, one glass", canAddEffect(many("noise", 2), "noise") === false && canAddEffect(many("texture", 1), "texture") === false && canAddEffect(many("glass", 1), "glass") === false);
+  t("the limits in the table are Figma's", EFFECT_LIMITS["drop-shadow"] === 8 && EFFECT_LIMITS.noise === 2 && EFFECT_LIMITS.glass === 1);
+  t("counts are per kind", countKind([...many("drop-shadow", 3), ...many("noise", 2)], "drop-shadow") === 3);
+  const list = ["a", "b", "c", "d"];
+  t("dragging a row moves it rather than swapping", moveEffect(list, 0, 2).join() === "b,c,a,d");
+  t("moving down lands before the target", moveEffect(list, 3, 1).join() === "a,d,b,c");
+  t("a row dropped where it started is left alone", moveEffect(list, 1, 1).join() === list.join());
+  t("out of range drops change nothing", moveEffect(list, 9, 0).join() === list.join() && moveEffect(list, -1, 2).join() === list.join());
+}
+
+console.log("the engine carries the new properties:");
+{
+  const e = new MemoryEngine(false);
+  e.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w: 100, h: 50 });
+  const id = e.snapshot().selection[0];
+  const look = (nid) => {
+    const sn = e.snapshot();
+    let out = null;
+    const walk = (n) => { if (n.id === nid) out = n; n.children?.forEach(walk); };
+    walk(sn.pages[sn.page].root);
+    return out;
+  };
+  e.dispatch({
+    type: "patch", id,
+    patch: {
+      strokeWidth: 4, strokeSides: "custom", strokeSideW: [4, 2, 0, 6],
+      strokeDashPattern: [12, 6], strokeDashCap: "round", strokeMiterAngle: 90,
+      cornerRadii: [20, 20, 20, 20], cornerIndependent: true, cornerSmoothing: 0.6,
+      strokes: [{ color: "#ff0000", opacity: 1, visible: true, width: 2, align: "center", dash: 8, gap: 4, pattern: [6, 3], sideW: [2, 2, 0, 0], sides: "custom" }],
+    },
+  });
+  e.dispatch({ type: "resize", id, x: 0, y: 0, w: 200, h: 100, scaleProps: true });
+  const n = look(id);
+  t("per-side weights scale", n.strokeSideW.join() === "8,4,0,12");
+  t("the custom dash pattern scales", n.strokeDashPattern.join() === "24,12");
+  t("smoothing is a ratio, so it stays put", n.cornerSmoothing === 0.6);
+  t("extra strokes scale their dashes too", n.strokes[0].dash === 16 && n.strokes[0].gap === 8);
+  t("and their own pattern and side weights", n.strokes[0].pattern.join() === "12,6" && n.strokes[0].sideW.join() === "4,4,0,0");
+  e.dispatch({ type: "copyProperties" });
+  e.dispatch({ type: "add", kind: "rect", x: 300, y: 0, w: 40, h: 40 });
+  const other = e.snapshot().selection[0];
+  e.dispatch({ type: "pasteProperties" });
+  const p = look(other);
+  t("copy/paste properties carries the sides", p.strokeSides === "custom" && p.strokeSideW.join() === "8,4,0,12");
+  t("and the dash pattern, cap and miter angle", p.strokeDashPattern.join() === "24,12" && p.strokeDashCap === "round" && p.strokeMiterAngle === 90);
+  t("and the corner smoothing", p.cornerSmoothing === 0.6 && p.cornerIndependent === true);
+}
+
+console.log("corners an instance is not allowed to own:");
+{
+  const e = new MemoryEngine(false);
+  await e.ready;
+  const root = e.snapshot().pages[e.snapshot().page].root.id;
+  e.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w: 200, h: 120, parent: root });
+  const rect = e.snapshot().selection[0];
+  e.dispatch({ type: "add", kind: "frame", x: 10, y: 10, w: 40, h: 40, parent: rect });
+  const kid = e.snapshot().selection[0];
+  e.dispatch({ type: "patch", id: rect, patch: { kind: "instance", componentId: "c1" } });
+  const tree = () => e.snapshot().pages[e.snapshot().page].root;
+  t("an instance cannot carry individual corners", insideInstance(tree(), rect) === true);
+  t("nor can anything nested inside one", insideInstance(tree(), kid) === true);
+  e.dispatch({ type: "reparent", ids: [kid], parent: root, x: 400, y: 0 });
+  t("back at the top level it rounds freely again", insideInstance(tree(), kid) === false);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

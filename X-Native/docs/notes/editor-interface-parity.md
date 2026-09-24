@@ -486,6 +486,139 @@ been sitting in the list went with them.
 Tests: 56 added to `parity.test.mjs` (17 equations, 8 scale geometry, 22 selection
 helpers, 9 engine content-scaling) - 240 passing; `tsc -b` clean.
 
+## Strokes, effects and corner radius
+
+Three sections of the design panel that Figma documents together, so they went
+in one pass. The official articles are the source for every number here; where
+the panel and the article disagree, the article won.
+
+### What the rules turned out to be
+
+- Stroke **position** (Inside / Center / Outside) belongs to every shape except
+  lines and arrows, which are centre-only, and the **weight is not part of the
+  layer's dimensions**. A layer stacks several strokes, each with its own
+  colour and opacity; only colour styles apply to them.
+- **Individual strokes are only for rectangles, frames, components and
+  instances** - `All | Top | Right | Bottom | Left | Custom`, four weight
+  fields, and a side set to `0` simply goes away. Ellipses, polygons, stars,
+  text and vectors do not get the choice at all.
+- Dashed strokes carry a **dash cap** (None / Round / Projecting), a custom
+  pattern is a plain `dash, gap, dash, gap...` list, and Figma starts and ends a
+  dashed line with a **half dash**. The dotted recipe is centre position, weight
+  and dash both 1, gap 0 or 1, round cap.
+- **Join** is Miter / Bevel / Rounded with a **miter angle** threshold, not the
+  SVG miter limit: at a threshold of 90 degrees, every corner of 90 degrees or
+  tighter is bevelled.
+- Effects are capped per layer: **8 drop shadows, 8 inner shadows, 2 noise, one
+  layer blur, one background blur, one texture, one glass**. `+` opens on Drop
+  shadow, rows drag to reorder, and the list order is the paint order.
+- Corner smoothing is a **whole-shape** property: the independent-corners panel
+  carries one slider for all four corners, never four, and the `iOS` button sets
+  it to 60%. **Individual corner radius cannot be set on an instance.**
+
+### The per-side strokes that only painted their corners
+
+Per-side strokes are painted by clipping the shape, stroking it full-weight, and
+letting each side keep only its own wedge. My first version clipped to a cone
+drawn from the centre of the box to each corner - which is exactly right for a
+square and wrong for everything else: on a 200x120 rectangle the top band ended
+more than a third short of the top edge. Counting red pixels along the top and
+bottom edges gave **1360 of about 2400**, with the corners reaching 140 and the
+middle not painted at all.
+
+The fix was to build each wedge the way CSS does it: the 45 degree lines through
+the *box corners*, so every side owns a trapezoid (a triangle at a square
+corner) that meets its neighbours on the mitre. Same box after that: top band
+**2476 pixels**, tapering to 37 at each end exactly where the side mitres fall;
+Right and Left 1228 each; custom weights `40 / 4 / 4 / 4` put 3569 pixels on the
+top band against 304 on the sides, the 10:1 ratio the fields asked for.
+
+The audit caught a second bug on the way, one that no screenshot review would
+have caught: `clip()` does not disturb the current path, but *building* the
+clipping polygon does - `beginPath()` wipes the shape that was traced a moment
+earlier, so the stroke went round the clip wedge instead of the shape. That is
+why both the canvas and the export painter now re-trace the shape inside the
+clip before stroking. `closePath()` before `clip()` matters too, or the wedge is
+open on the outer edge and paints to infinity.
+
+### Miter angle, dashes and the export path
+
+The inspector takes Figma's **angle** (10 to 179 degrees, default 90) and the
+export takes SVG's `stroke-miterlimit`; one helper converts between them, and the
+limit is clamped so no threshold ever bevels everything. Converting the
+threshold rather than the corner means a square corner lands exactly on the
+boundary, which is the article's "90 degrees or less" rule. Measured on a fresh
+rectangle with a 20 px centre stroke: threshold 0 (every corner bevelled) 11566
+pixels of ink with 552 at the corner; threshold 179 (nothing bevelled) 11346 and
+497 - identical to pressing Join Bevel, as it should be. A 90 degree threshold
+exports `stroke-miterlimit="1.414"`.
+
+Dash and gap are number fields; the custom pattern is a list. Figma caps a
+custom dash at 12 pairs, refuses a dash or gap above 1000, and reverts
+nonsense rather than accepting it - the field marks itself invalid and puts the
+old value back. The pattern round-trips (`12, 6` stays `12, 6`), reaches the
+export as `stroke-dasharray="12 6"`, and the starting offset is half a dash so
+the line opens and closes as the article says it should. Round dash caps are
+visible where they belong: 23386 pixels of stroke ink with None, 34761 with
+Round.
+
+Both things went through the *same* helper as the canvas, which is how I checked
+them: the SVG export preview is read back from the DOM rather than eyeballed in a
+PNG, so `stroke-dasharray`, `stroke-miterlimit`, the per-side `clipPath` and the
+corner curves (`M 55.8256 0 C 105.637...`, 55.83 = the reach of a 40 px radius
+under a 60 % smoothing) are all asserted against the string.
+
+### Effects: the budget, and the order
+
+The `+` menu now shows how full each kind is (`Drop shadow 7/8`) and disables
+what cannot fit, so the limit is visible before the click rather than after.
+Reaching 8 drop shadows and clicking the disabled ninth item leaves the row count
+alone; `Layer blur` stays available next to it. Reordering is a grip drag, and
+the helper that does it *moves* the row rather than swapping two, so a row
+dragged past the last lands last; one `⌘Z` puts the order back (measured:
+X=5/10/15 becomes 10/15/5 after dragging the first row to the bottom, then 5/10/15
+again after undo).
+
+### Corners, and the instance rule
+
+Canvas handles and inspector fields now share one corner order. My first
+indicator drew the radius arc on whichever two corners the loop index happened to
+hit, so a shape with only the bottom-left rounded showed an arc at the
+bottom-right; the pins were laid out `TL, TR, BR, BL` while the array is
+`[tl, tr, bl, br]`, so dragging the handle at the bottom right edited the bottom
+left. Both come from `cornerSlots` now, and the arc is drawn only on corners
+that actually have a radius. `⌥` on the handle is one corner (rectangles, per
+the article), plain drag is all four, `←`/`→` nudge one step, `⇧` a big one.
+
+Smoothing is a 0-100 percent slider with the `iOS` preset in the independent
+corners panel, kept out of the collapsed row because it is not a per-corner
+value. It is stored as a fraction; the exported geometry carries it as
+B'zier handles at 0.8923 of the corner distance and a reach of 1.39564 r, which
+is what pulls a rounded rectangle into a squircle: the ink started 21 px from
+the corner at 0 % smoothing and 16 px at 60 %.
+
+Figma refuses individual radii on an instance, so `insideInstance()` answers
+"this layer or an ancestor is an instance", the four corner fields disable with
+a one-line note in place, the toggle cannot open them, and `⌥`-dragging a canvas
+handle on an instance says why instead of rounding all four corners behind your
+back. The predicate is unit tested; the drag path is not yet exercised by hand,
+because there is still no "Create instance" command in this app - that belongs
+to the components round, and when it lands this is the rule it has to respect.
+
+### What this pass deliberately left alone
+
+Blending and compositing of effects (Figma gives every effect a blend mode,
+plus "Show behind transparent areas" on drop shadows); progressive blur; the
+brush and dynamic stroke styles, which are Figma Pro, and width profiles, which
+need a pen round the UI cannot express yet; and the hover-preview of each
+option in the position, cap, join and effect menus, which needs a canvas preview
+surface rather than a tooltip. Each is listed again under *Open*.
+
+Tests: 66 assertions added to `parity.test.mjs` (side masks, the wedge
+geometry, the dash parser, the angle-to-limit conversion, effect budget and
+move, corner slots and smoothing, the instance rule) - 306 passing; `tsc -b`
+clean.
+
 ## Open
 
 - Sketch's top-bar Insert menu and Figma's Assets panel tab, "Additional
@@ -499,6 +632,11 @@ helpers, 9 engine content-scaling) - 240 passing; `tsc -b` clean.
 - Layers: no multi-edit text or variants, no tidy up, no rotation-origin drag,
   and instance children can be scaled when Figma refuses. Written up at the end
   of the layers section above.
+- Strokes and effects: no blend mode per effect and no "Show behind
+  transparent areas"; progressive blur, brush and dynamic strokes and width
+  profiles are absent, and none of the position / cap / join / effect options
+  preview on hover the way Figma's do. Written up at the end of the strokes,
+  effects and corner radius section above.
 - Text styles on type fields, plus the wrapping settings the panel does not
   expose yet: percent letter spacing, OpenType and variable-font axes, hanging
   punctuation, whole-paragraph indentation, links in text, middle truncation.

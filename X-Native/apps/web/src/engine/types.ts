@@ -40,7 +40,16 @@ export type ListStyle = "none" | "bulleted" | "numbered";
 export type TextDecoration = "none" | "underline" | "strikethrough";
 export type TextCase = "none" | "upper" | "lower" | "title" | "small-caps";
 export type StrokeAlign = "inside" | "center" | "outside";
-export type StrokeCap = "none" | "round" | "square" | "arrow" | "triangle";
+export type StrokeCap =
+  | "none"
+  | "round"
+  | "square"
+  | "arrow"
+  | "triangle"
+  | "reverse-triangle"
+  | "diamond";
+/** Figma's Individual strokes picker; `custom` keeps a weight per side. */
+export type StrokeSides = "all" | "top" | "right" | "bottom" | "left" | "custom";
 export type StrokeJoin = "miter" | "bevel" | "round";
 export type Constraint = "min" | "center" | "max" | "stretch" | "scale";
 export type ExportFormat = "PNG" | "JPG" | "SVG" | "PDF";
@@ -298,6 +307,11 @@ export interface StrokeLayer {
   gap?: number;
   cap?: StrokeCap;
   join?: StrokeJoin;
+  /** Same per-side picker the base stroke has, per stroke layer. */
+  sides?: StrokeSides;
+  sideW?: [number, number, number, number];
+  /** Custom dash sequence for this stroke, `dash, gap, dash, gap…`. */
+  pattern?: number[];
 }
 
 export interface Effect {
@@ -416,6 +430,26 @@ export interface XNode {
   overflow: Overflow;
   cornerRadii: [number, number, number, number];
   cornerIndependent: boolean;
+  /**
+   * Figma's corner smoothing, 0-1: keeps the radius but flattens the corner's
+   * shoulders into a squircle. A whole-shape property, never per corner, which
+   * is why it sits next to `cornerIndependent` rather than inside `cornerRadii`.
+   */
+  cornerSmoothing?: number;
+  /**
+   * Which sides of a rectangle/frame/component/instance carry the stroke.
+   * Figma exposes this as "Individual strokes": the four pickers plus `custom`,
+   * which lets every side keep its own weight.
+   */
+  strokeSides?: StrokeSides;
+  /** Per-side weights in [top, right, bottom, left] order, used by `custom`. */
+  strokeSideW?: [number, number, number, number];
+  /** Custom dash sequence (Figma's `dash, gap, dash, gap…` syntax). Wins over the dash/gap pair. */
+  strokeDashPattern?: number[];
+  /** Cap drawn on each dash segment. */
+  strokeDashCap?: "butt" | "round" | "square";
+  /** Figma's "Miter angle": joins sharper than this bevel instead of pointing. */
+  strokeMiterAngle?: number;
   aspectLocked: boolean;
   sizingW: Sizing;
   sizingH: Sizing;

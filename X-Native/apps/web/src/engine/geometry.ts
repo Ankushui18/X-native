@@ -1,5 +1,144 @@
 import type { BooleanOp, PathPoint, VectorNetwork, VectorSegment, VectorVertex, XNode } from "./types";
 
+/**
+ * Corner geometry.
+ *
+ * `XNode.cornerRadii` is stored `[topLeft, topRight, bottomLeft, bottomRight]`
+ * - the order the inspector's four fields, the flip code and Dev Mode's CSS all
+ * read - while a canvas `roundRect` and CSS `border-radius` want
+ * `[tl, tr, br, bl]`. `cornerRadiiOf` is the one place that translates.
+ *
+ * Corner smoothing (Figma's squircles) is modelled here rather than in the
+ * painter so the canvas, the hit test, the SVG export and the outline-stroke
+ * operation all agree on the same curve.
+ */
+
+/** Handle ratio that turns a 90° arc into a cubic; also the corner's "no smoothing" shape. */
+export const CORNER_KAPPA = 0.5522847498;
+/**
+ * How much further along its edges a corner reaches at full smoothing.
+ * Figma stretches the corner rather than deepening the arc, which is why two
+ * heavily smoothed neighbours on one edge have to shrink to make room.
+ */
+export const SMOOTHING_REACH = 0.39564;
+
+export interface CornerRadii {
+  tl: number;
+  tr: number;
+  br: number;
+  bl: number;
+}
+
+/** Read the stored array in the order the corners actually sit in. */
+export function cornerRadiiOf(n: XNode): CornerRadii {
+  const raw = n.cornerIndependent
+    ? n.cornerRadii
+    : [n.cornerRadii[0], n.cornerRadii[0], n.cornerRadii[0], n.cornerRadii[0]];
+  return { tl: raw[0] || 0, tr: raw[1] || 0, br: raw[3] || 0, bl: raw[2] || 0 };
+}
+
+/** The same four values in the order a canvas `roundRect` / CSS expects. */
+export function roundRectRadii(n: XNode): [number, number, number, number] {
+  const c = cornerRadiiOf(n);
+  return [c.tl, c.tr, c.br, c.bl];
+}
+
+/**
+ * The radius a corner is drawn with, given the shape and the neighbouring
+ * corners: smoothing widens a corner's reach, so an edge shared by two smooth
+ * corners splits whatever length it has between them.
+ */
+export function cornerReach(r: number, smoothing: number): number {
+  return Math.max(0, r) * (1 + SMOOTHING_REACH * Math.max(0, Math.min(1, smoothing)));
+}
+
+/**
+ * One smoothed corner as a single cubic.
+ *
+ * `d` is how far the curve runs along each edge, `a` the handle length. With
+ * `a = d·kappa` the cubic is the familiar circular corner; pulling the handles
+ * further along the edges flattens the shoulders and tightens the turn, which is
+ * what Figma's smoothing slider does - curvature at the tangent points drops
+ * towards zero while the middle of the corner goes past the circle's.
+ */
+export function smoothedCorner(r: number, smoothing: number, w: number, h: number): { reach: number; handle: number } {
+  const s = Math.max(0, Math.min(1, smoothing));
+  const d = Math.min(cornerReach(r, s), Math.min(w, h) / 2);
+  return { reach: d, handle: d * (CORNER_KAPPA + 0.34 * s) };
+}
+
+/**
+ * Outline of a rounded rectangle with corner smoothing, in local coordinates.
+ *
+ * Same eight-bezier-point shape as the plain rounded corner above, with each
+ * corner's tangent distance stretched to its smoothed reach and its handles
+ * lengthened. `tracePath`, the SVG writer and the hit test all take this.
+ */
+export function squircleOutline(w: number, h: number, radii: CornerRadii, smoothing: number): PathPoint[] {
+  const corner = (r: number) => {
+    const { reach, handle } = smoothedCorner(r, smoothing, w, h);
+    return { d: reach, a: handle };
+  };
+  const tl = corner(radii.tl);
+  const tr = corner(radii.tr);
+  const br = corner(radii.br);
+  const bl = corner(radii.bl);
+  // Two corners that would overrun an edge at their smoothed reach shrink
+  // together, keeping the ratio between them - Figma does the same thing to the
+  // plain radii, and it is why the reach has to be shared rather than clamped.
+  const fit = (a: { d: number; a: number }, b: { d: number; a: number }, limit: number) => {
+    const sum = a.d + b.d;
+    if (sum <= limit || sum <= 0) return;
+    const k = limit / sum;
+    a.d *= k;
+    b.d *= k;
+    a.a *= k;
+    b.a *= k;
+  };
+  fit(tl, tr, w);
+  fit(bl, br, w);
+  fit(tl, bl, h);
+  fit(tr, br, h);
+  return [
+    { x: tl.d, y: 0, ix: -tl.a, iy: 0, ox: tl.a, oy: 0 },
+    { x: w - tr.d, y: 0, ix: -tr.a, iy: 0, ox: tr.a, oy: 0 },
+    { x: w, y: tr.d, ix: 0, iy: -tr.a, ox: 0, oy: tr.a },
+    { x: w, y: h - br.d, ix: 0, iy: -br.a, ox: 0, oy: br.a },
+    { x: w - br.d, y: h, ix: br.a, iy: 0, ox: -br.a, oy: 0 },
+    { x: bl.d, y: h, ix: bl.a, iy: 0, ox: -bl.a, oy: 0 },
+    { x: 0, y: h - bl.d, ix: 0, iy: bl.a, ox: 0, oy: -bl.a },
+    { x: 0, y: tl.d, ix: 0, iy: tl.a, ox: 0, oy: -tl.a },
+  ];
+}
+
+/** True when a node has to be traced as a curve rather than a `roundRect`. */
+export function hasCornerSmoothing(n: XNode): boolean {
+  return (n.cornerSmoothing ?? 0) > 0 && cornerRadiiOf(n).tl + cornerRadiiOf(n).tr + cornerRadiiOf(n).br + cornerRadiiOf(n).bl > 0;
+}
+
+/**
+ * Where the four radius handles sit on screen, in the order the corners are
+ * stored. Canvas hit-testing and the little arc indicators both come through
+ * here, because drawing one list and hit-testing another is how the bottom two
+ * corners end up swapped.
+ */
+export function cornerPinPoints(
+  w: number,
+  h: number,
+  radii: CornerRadii,
+  scale: number,
+  min = 9,
+): { index: keyof CornerRadii; x: number; y: number; dir: [number, number] }[] {
+  const reach = (r: number) => Math.max(min, Math.min(Math.min(w, h) / 2 - 4, r * scale + 8));
+  const o = { tl: reach(radii.tl), tr: reach(radii.tr), br: reach(radii.br), bl: reach(radii.bl) };
+  return [
+    { index: "tl", x: o.tl, y: o.tl, dir: [1, 1] },
+    { index: "tr", x: w - o.tr, y: o.tr, dir: [-1, 1] },
+    { index: "bl", x: o.bl, y: h - o.bl, dir: [1, -1] },
+    { index: "br", x: w - o.br, y: h - o.br, dir: [-1, -1] },
+  ];
+}
+
 /** Sample a node's outline in local coordinates (for booleans / vector edit). */
 export function shapePoly(n: XNode, steps = 48): PathPoint[] {
   if ((n.kind === "vector" || n.kind === "boolean") && n.path.length) return n.path.map((p) => ({ ...p }));
@@ -43,6 +182,8 @@ export function shapePoly(n: XNode, steps = 48): PathPoint[] {
       { x: w, y: h / 2 },
     ];
   }
+  const corners = cornerRadiiOf(n);
+  if (hasCornerSmoothing(n)) return squircleOutline(w, h, corners, n.cornerSmoothing ?? 0);
   const raw = n.cornerIndependent ? n.cornerRadii : [n.cornerRadii[0], n.cornerRadii[0], n.cornerRadii[0], n.cornerRadii[0]];
   const tl = Math.min(Math.max(0, raw[0] || 0), w / 2, h / 2);
   const tr = Math.min(Math.max(0, raw[1] || 0), w / 2, h / 2);

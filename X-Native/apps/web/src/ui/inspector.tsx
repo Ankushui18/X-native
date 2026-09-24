@@ -34,9 +34,18 @@ import type {
   GridPattern,
   XNode,
 } from "../engine/types";
-import { collectColors, defaultEffect, defaultLayout, find, findParent, framesOf, worldPos } from "../engine/memory";
+import { collectColors, defaultEffect, defaultLayout, find, findParent, framesOf, insideInstance, worldPos } from "../engine/memory";
 import { colorUsageAll, recolorMatches, selectByColor, setOpacityMatches } from "./selectionColors";
 import { evalField, hasExpression } from "./fieldExpr";
+import {
+  SIDES,
+  miterLimitFromAngle,
+  parseDashPattern,
+  sideCones,
+  sideWidths,
+  sidesSupported,
+} from "../engine/strokeModel";
+import { canAddEffect, countKind, limitMessage, moveEffect, EFFECT_LIMITS } from "./effectModel";
 import {
   SCALE_ANCHORS,
   SCALE_FACTORS,
@@ -888,12 +897,27 @@ function generateCss(n: XNode, unit: DevUnit = "px"): string {
     } else {
       rules.push(`border-radius: ${devLen(n.cornerRadii[0], unit)};`);
     }
+    // Corner smoothing has no CSS equivalent, so the snippet says what it is
+    // rather than pretending the radius alone reproduces the curve.
+    if (n.cornerSmoothing)
+      rules.push(`/* corner smoothing ${Math.round(n.cornerSmoothing * 100)}% - border-radius is a circular arc */`);
   }
   if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") {
     rules.push(`background: ${n.fill};`);
   }
   if (n.strokeVisible && n.strokeWidth > 0 && n.strokePaint) {
-    rules.push(`border: ${devLen(n.strokeWidth, unit)} solid ${n.strokePaint};`);
+    const sides = sideWidths(n.strokeSides, n.strokeSideW, n.strokeWidth);
+    if (sides.some((w) => w !== sides[0])) {
+      // Figma exports individual strokes as per-side borders; a side with no
+      // weight still needs a style, or the corner mitre disappears.
+      rules.push(`border-width: ${sides.map((w) => devLen(w, unit)).join(" ")};`);
+      rules.push(`border-style: ${sides.map((w) => (w > 0 ? "solid" : "none")).join(" ")};`);
+      rules.push(`border-color: ${n.strokePaint};`);
+    } else {
+      rules.push(`border: ${devLen(n.strokeWidth, unit)} solid ${n.strokePaint};`);
+    }
+    if (n.strokeDashPattern?.length)
+      rules.push(`/* dashes: ${n.strokeDashPattern.join(", ")} - no CSS equivalent */`);
   }
   if (n.opacity < 1) {
     rules.push(`opacity: ${Math.round(n.opacity * 100) / 100};`);
@@ -1589,7 +1613,13 @@ function devProperties(n: XNode, snap: Snapshot, unit: DevUnit): DevProp[] {
   if (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)) {
     L(
       "Border",
-      `${devLen(n.strokeWidth, unit)} ${n.strokeAlign} ${n.strokePaint.toUpperCase()}`,
+      `${
+        (n.strokeSides ?? "all") === "custom"
+          ? sideWidths("custom", n.strokeSideW, n.strokeWidth).map((w) => devLen(w, unit)).join(" ")
+          : (n.strokeSides ?? "all") !== "all"
+            ? `${devLen(n.strokeWidth, unit)} ${n.strokeSides} only`
+            : devLen(n.strokeWidth, unit)
+      } ${n.strokeAlign} ${n.strokePaint.toUpperCase()}`,
       "Style",
       n.strokePaint,
     );
@@ -1614,6 +1644,7 @@ function devProperties(n: XNode, snap: Snapshot, unit: DevUnit): DevProp[] {
     } else {
       L("Corner radius", devLen(n.cornerRadii[0], unit));
     }
+    if (n.cornerSmoothing) L("Corner smoothing", `${Math.round(n.cornerSmoothing * 100)}%`);
   }
   if (n.kind === "text") {
     L("Text", n.text || "", "Typography");
@@ -1991,6 +2022,8 @@ function Design({
   const [padOpen, setPadOpen] = useState(false);
   const [conOpen, setConOpen] = useState(false);
   const [cornersOpen, setCornersOpen] = useState(!!n.cornerIndependent);
+  // An instance inherits its corners; Figma rejects individual radii there.
+  const cornerLock = insideInstance(snap.pages[snap.page].root, n.id);
   const [strokeMore, setStrokeMore] = useState(n.strokeDash > 0);
   const [more, setMore] = useState<{ x: number; y: number } | null>(null);
   const multi = snap.selection.length > 1;
@@ -3167,12 +3200,18 @@ function Design({
         </div>
       </div>
       <div className="insp-pad" style={{ marginTop: 4, display: "grid", gap: 4 }}>
+        {cornersOpen && cornerLock && (
+          <span className="corner-lock">Individual corners are set on the component</span>
+        )}
         {cornersOpen ? (
           <div className="grid2">
+            {/* Figma will not let an instance carry its own corner radii; they
+                come from the component. The fields say so instead of no-op'ing. */}
             {(["TL", "TR", "BL", "BR"] as const).map((lab, i) => (
               <Field
                 key={lab}
                 label={lab}
+                disabled={cornerLock}
                 value={n.cornerRadii[i]}
                 onChange={(v) => {
                   const r = [...n.cornerRadii] as [number, number, number, number];
@@ -3188,11 +3227,13 @@ function Design({
               icon="radius"
               aria="Corner radius"
               value={n.cornerRadii[0]}
-              onChange={(v) => patch({ cornerRadii: [v, v, v, v] })}
+              mixed={new Set(n.cornerRadii).size > 1 ? "Mixed" : undefined}
+              onChange={(v) => patch({ cornerRadii: [v, v, v, v], cornerIndependent: false })}
             />
             <span />
             <button
               className={`icon-btn${cornersOpen ? " on" : ""}`}
+              disabled={cornerLock}
               title="Independent corners"
               onClick={() => {
                 setCornersOpen(true);
@@ -3215,6 +3256,33 @@ function Design({
             <Icon name="independent" size={14} />
           </button>
         )}
+        {/* Figma puts smoothing in the corner details panel: one value for the
+            whole shape, a slider, and an iOS preset at 60%. */}
+        <div className="smooth-row">
+          <input
+            type="range"
+            className="smooth-slider"
+            aria-label="Corner smoothing"
+            min={0}
+            max={100}
+            step={1}
+            value={Math.round((n.cornerSmoothing ?? 0) * 100)}
+            onChange={(e) => patch({ cornerSmoothing: Number(e.target.value) / 100 })}
+          />
+          <Field
+            label="%"
+            aria="Corner smoothing percent"
+            value={Math.round((n.cornerSmoothing ?? 0) * 100)}
+            onChange={(v) => patch({ cornerSmoothing: Math.max(0, Math.min(100, v)) / 100 })}
+          />
+          <button
+            className="mini"
+            title="iOS corner smoothing (60%)"
+            onClick={() => patch({ cornerSmoothing: 0.6 })}
+          >
+            iOS
+          </button>
+        </div>
       </div>
       {n.kind === "frame" && (
         <label className="check">
@@ -3449,10 +3517,14 @@ function Design({
           <div className="stroke-width">
             <Field
               label="W"
+              aria="Stroke weight"
               value={n.strokeWidth}
-              onChange={(strokeWidth) =>
-                engine.dispatch({ type: "patch", id: n.id, patch: { strokeWidth } })
-              }
+              onChange={(strokeWidth) => {
+                // In Custom mode the four fields carry the weight, so typing a
+                // new one sets all four, as Figma does.
+                if ((n.strokeSides ?? "all") === "custom") patch({ strokeWidth, strokeSideW: [strokeWidth, strokeWidth, strokeWidth, strokeWidth] });
+                else patch({ strokeWidth });
+              }}
             />
             <div className="seg icons">
               {(["inside", "center", "outside"] as StrokeAlign[]).map((a) => (
@@ -3467,13 +3539,72 @@ function Design({
               ))}
             </div>
           </div>
+          {sidesSupported(n.kind) && (
+            <div className="stroke-sides">
+              <div className="seg sides">
+                {SIDES.map((side) => (
+                  <button
+                    key={side.id}
+                    className={(n.strokeSides ?? "all") === side.id ? "on" : ""}
+                    title={side.label}
+                    aria-label={side.label}
+                    aria-pressed={(n.strokeSides ?? "all") === side.id}
+                    onClick={() => {
+                      if (side.id === "custom") {
+                        // Figma seeds the four fields with the current weight.
+                        const w = n.strokeWidth;
+                        patch({ strokeSides: "custom", strokeSideW: [w, w, w, w] });
+                      } else {
+                        patch({ strokeSides: side.id });
+                      }
+                    }}
+                  >
+                    {side.id === "all" ? "All" : side.id === "custom" ? "Custom" : side.id[0].toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {(n.strokeSides ?? "all") === "custom" && (
+            <div className="grid4">
+              {(["T", "R", "B", "L"] as const).map((lab, i) => (
+                <Field
+                  key={lab}
+                  label={lab}
+                  value={sideWidths("custom", n.strokeSideW, n.strokeWidth)[i]}
+                  onChange={(v) => {
+                    const w = [...(n.strokeSideW ?? [n.strokeWidth, n.strokeWidth, n.strokeWidth, n.strokeWidth])] as [
+                      number,
+                      number,
+                      number,
+                      number,
+                    ];
+                    w[i] = v;
+                    patch({ strokeSideW: w });
+                  }}
+                />
+              ))}
+            </div>
+          )}
           <div className="stroke-ends">
-          <div className="seg icons">
-            {(["none", "round", "square", "arrow", "triangle"] as StrokeCap[]).map((c) => (
+          <div className="seg icons caps">
+            {(["none", "round", "square", "arrow", "triangle", "reverse-triangle", "diamond"] as StrokeCap[]).map((c) => (
               <button
                 key={c}
                 className={n.strokeCap === c ? "on" : ""}
-                title={c === "none" ? "Cap butt" : `Cap ${c}`}
+                title={
+                  c === "none"
+                    ? "Cap butt"
+                    : c === "arrow"
+                      ? "Line arrow"
+                      : c === "triangle"
+                        ? "Triangle arrow"
+                        : c === "reverse-triangle"
+                          ? "Reverse triangle"
+                          : c === "diamond"
+                            ? "Diamond tip"
+                            : `Cap ${c}`
+                }
                 onClick={() => patch({ strokeCap: c })}
               >
                 <Icon name={c === "arrow" ? "arrow" : c === "triangle" ? "poly" : `cap-${c}`} size={14} />
@@ -3494,14 +3625,16 @@ function Design({
           </div>
           <button
             className={`icon-btn${strokeMore ? " on" : ""}`}
-            title="Dash"
+            title="Advanced stroke settings"
+            aria-label="Advanced stroke settings"
+            aria-expanded={strokeMore}
             onClick={() => setStrokeMore((v) => !v)}
           >
             <Icon name="dash" size={14} />
           </button>
           </div>
           {strokeMore && (
-            <>
+            <div className="adv-stroke">
               <div className="grid2">
                 <Field label="–" value={n.strokeDash} onChange={(strokeDash) => patch({ strokeDash })} />
                 <Field
@@ -3510,7 +3643,30 @@ function Design({
                   onChange={(strokeGap) => patch({ strokeGap })}
                 />
               </div>
-            </>
+              <DashPatternField
+                value={n.strokeDashPattern ?? []}
+                onCommit={(pattern) => patch({ strokeDashPattern: pattern })}
+              />
+              <div className="seg caps small">
+                {(["butt", "round", "square"] as const).map((c) => (
+                  <button
+                    key={c}
+                    className={(n.strokeDashCap ?? "butt") === c ? "on" : ""}
+                    title={`Dash cap ${c}`}
+                    aria-label={`Dash cap ${c}`}
+                    onClick={() => patch({ strokeDashCap: c })}
+                  >
+                    {c}
+                  </button>
+                ))}
+              </div>
+              <Field
+                label="miter"
+                hint="Figma's miter angle: joins sharper than this bevel"
+                value={n.strokeMiterAngle ?? 0}
+                onChange={(v) => patch({ strokeMiterAngle: Math.max(0, Math.min(180, v)) })}
+              />
+            </div>
           )}
         </div>
       )}
@@ -4120,10 +4276,26 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
     { id: "texture", label: "Texture" },
   ];
   const effects = n.effects ?? [];
+  // One layer takes eight drop shadows, eight inner shadows, one blur of each
+  // kind, two noise rows and a single glass or texture - Figma's budget, and
+  // the menu says so instead of silently piling on more.
+  const room = (kind: EffectKind) => canAddEffect(effects, kind);
   const addKind = (kind: EffectKind) => {
     openSection("effects");
+    if (!room(kind)) {
+      toast(limitMessage(kind, EFFECT_LIMITS[kind] ?? 1));
+      setOpen(false);
+      return;
+    }
     engine.dispatch({ type: "patch", id: n.id, patch: { effects: [...effects, defaultEffect(kind)] } });
     setOpen(false);
+  };
+  const [drag, setDrag] = useState<number | null>(null);
+  const [over, setOver] = useState<number | null>(null);
+  const reorder = (from: number, to: number) => {
+    const next = moveEffect(effects, from, to);
+    if (next.length !== effects.length || next.every((e, i) => e === effects[i])) return;
+    engine.dispatch({ type: "patch", id: n.id, patch: { effects: next } });
   };
   const set = (i: number, p: Partial<Effect>) => {
     const next = effects.map((e2, j) => (j === i ? { ...e2, ...p } : e2));
@@ -4155,8 +4327,16 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
             {open && (
               <div className="type-menu" style={{ right: 8, top: 28, left: "auto", width: 180 }}>
                 {kinds.map((k) => (
-                  <button key={k.id} onClick={() => addKind(k.id)}>
+                  <button
+                    key={k.id}
+                    disabled={!room(k.id)}
+                    title={room(k.id) ? undefined : limitMessage(k.id, EFFECT_LIMITS[k.id] ?? 1)}
+                    onClick={() => addKind(k.id)}
+                  >
                     {k.label}
+                    <span className="fx-count">
+                      {countKind(effects, k.id)}/{EFFECT_LIMITS[k.id] ?? 0}
+                    </span>
                   </button>
                 ))}
               </div>
@@ -4180,7 +4360,35 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
         )}
         {effects.map((fx, i) => (
           <div className="insp-pad" key={i} style={{ marginBottom: 4 }}>
-            <div className="color-row fx-row">
+            <div
+              className={`color-row fx-row${over === i && drag !== null && drag !== i ? " drop" : ""}`}
+              onDragOver={(e) => {
+                if (drag === null) return;
+                e.preventDefault();
+                setOver(i);
+              }}
+              onDragLeave={() => setOver((v) => (v === i ? null : v))}
+              onDrop={(e) => {
+                e.preventDefault();
+                if (drag !== null) reorder(drag, i);
+                setDrag(null);
+                setOver(null);
+              }}
+            >
+              <span
+                className="grip"
+                draggable
+                title="Drag to reorder this effect"
+                aria-label="Drag to reorder this effect"
+                onDragStart={(e) => {
+                  setDrag(i);
+                  e.dataTransfer.effectAllowed = "move";
+                }}
+                onDragEnd={() => {
+                  setDrag(null);
+                  setOver(null);
+                }}
+              />
               {(fx.kind === "drop-shadow" || fx.kind === "inner-shadow" || fx.kind === "glass") && (
                 <span className="swatch" style={{ background: fx.color }} />
               )}
@@ -4272,6 +4480,57 @@ function Nine({
   );
 }
 
+/**
+ * Figma's custom dash syntax: one text field holding `dash, gap, dash, gap…`.
+ * Anything that is not a list of non-negative numbers is refused and the field
+ * snaps back to what the layer actually has, rather than clearing the dashes.
+ */
+function DashPatternField({
+  value,
+  onCommit,
+}: {
+  value: number[];
+  onCommit: (pattern: number[]) => void;
+}) {
+  const text = value.length ? value.join(", ") : "";
+  const [draft, setDraft] = useState(text);
+  const [bad, setBad] = useState(false);
+  useEffect(() => {
+    setDraft(value.length ? value.join(", ") : "");
+    setBad(false);
+  }, [text]);
+  const commit = () => {
+    const parsed = parseDashPattern(draft);
+    if (parsed === null) {
+      setBad(true);
+      setDraft(text);
+      return;
+    }
+    setBad(false);
+    if (parsed.length !== value.length || parsed.some((v, i) => v !== value[i])) onCommit(parsed);
+    setDraft(parsed.length ? parsed.join(", ") : "");
+  };
+  return (
+    <div className="field">
+      <label title="Custom dash pattern · dash, gap, dash, gap…">dashes</label>
+      <input
+        aria-label="Dash pattern"
+        value={draft}
+        placeholder="10, 20, 80, 20"
+        className={bad ? "bad" : ""}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit();
+          }
+        }}
+      />
+    </div>
+  );
+}
+
 function Field({
   label,
   icon,
@@ -4280,6 +4539,8 @@ function Field({
   hint,
   onLabelClick,
   aria,
+  mixed,
+  disabled,
 }: {
   label?: string;
   icon?: string;
@@ -4290,22 +4551,32 @@ function Field({
   /** Accessible name for icon-only fields, which otherwise expose no label
    *  at all to assistive tech or to keyboard users reading focus. */
   aria?: string;
+  /** Figma shows "Mixed" instead of a number when the selection - or, for
+   *  corner radii, the four corners - disagrees. Typing still applies. */
+  mixed?: string;
+  /** A property the layer cannot own here, e.g. a corner radius on an instance. */
+  disabled?: boolean;
 }) {
-  const [draft, setDraft] = useState(() => fmt(value));
+  const [draft, setDraft] = useState(() => mixed ?? fmt(value));
   const focused = useRef(false);
   useEffect(() => {
-    if (!focused.current) setDraft(fmt(value));
-  }, [value]);
+    if (!focused.current) setDraft(mixed ?? fmt(value));
+  }, [value, mixed]);
   // Figma reads these fields as arithmetic, not just digits: `120/3`, `2^3`,
   // `(40+8)*2`, and `+10` to nudge against whatever is already there. Only the
   // commit evaluates, so typing `12/` mid-expression does not move the layer.
   const commit = () => {
-    const parsed = hasExpression(draft) ? evalField(draft, value) : parseFloat(draft);
+    const parsed =
+      mixed && !hasExpression(draft) && !/[0-9]/.test(draft)
+        ? null
+        : hasExpression(draft)
+          ? evalField(draft, value)
+          : parseFloat(draft);
     if (parsed != null && Number.isFinite(parsed)) {
       onChange(parsed);
       setDraft(fmt(parsed));
     } else {
-      setDraft(fmt(value));
+      setDraft(mixed ?? fmt(value));
     }
   };
   return (
@@ -4323,6 +4594,7 @@ function Field({
       )}
       <input
         value={draft}
+        disabled={disabled}
         aria-label={aria ?? label}
         title={(aria && !label ? aria : "") || "Number or equation · + - * / ^ ( )"}
         onFocus={() => {
@@ -4549,10 +4821,45 @@ function svgPath(n: XNode) {
   return out.join(" ");
 }
 
+/** The dash list as SVG wants it: Figma's custom pattern wins over the pair. */
+function svgDash(n: XNode): string {
+  if (n.strokeDashPattern?.length) return n.strokeDashPattern.join(" ");
+  if (n.strokeDash > 0) return `${n.strokeDash} ${n.strokeGap || n.strokeDash}`;
+  return "none";
+}
+
 function svgShape(n: XNode, fill: string, stroke = "none") {
   const path = svgPath(n);
   if (!path) return "";
-  return `<path d="${path}" fill="${fill}" fill-opacity="${Math.max(0, Math.min(1, n.fillOpacity))}" stroke="${stroke}" stroke-opacity="${Math.max(0, Math.min(1, n.strokeOpacity))}" stroke-width="${Math.max(0, n.strokeWidth)}" stroke-linecap="${n.strokeCap === "round" ? "round" : n.strokeCap === "square" ? "square" : "butt"}" stroke-linejoin="${n.strokeJoin}" stroke-dasharray="${n.strokeDash > 0 ? `${n.strokeDash} ${n.strokeGap || n.strokeDash}` : "none"}"/>`;
+  const caps = n.strokeCap === "round" ? "round" : n.strokeCap === "square" ? "square" : "butt";
+  const dashCap = n.strokeDashPattern?.length || n.strokeDash > 0 ? (n.strokeDashCap ?? caps) : caps;
+  const common = `stroke-opacity="${Math.max(0, Math.min(1, n.strokeOpacity))}" stroke-linecap="${dashCap}" stroke-linejoin="${n.strokeJoin}" stroke-miterlimit="${Math.round(miterLimitFromAngle(n.strokeMiterAngle) * 1000) / 1000}" stroke-dasharray="${svgDash(n)}"`;
+  const base = `<path d="${path}" fill="${fill}" fill-opacity="${Math.max(0, Math.min(1, n.fillOpacity))}"${stroke === "none" ? ` stroke="none"` : ` stroke="${stroke}" stroke-width="${Math.max(0, n.strokeWidth)}" ${common}`}/>`;
+  // Individual strokes: SVG has no per-side border, so each side is the same
+  // outline clipped to its own 45° cone - the identical construction the canvas
+  // uses, which keeps the export and the editor showing one shape.
+  const widths = sideWidths(n.strokeSides, n.strokeSideW, n.strokeWidth);
+  if (stroke === "none" || !sidesSupported(n.kind) || (n.strokeSides ?? "all") === "all") return base;
+  const cones = sideCones(0, 0, Math.max(1, n.w), Math.max(1, n.h));
+  const clips = widths
+    .map((w, i) =>
+      w > 0
+        ? `<clipPath id="side_${clipId(n)}_${i}"><polygon points="${cones[i].map(([x, y]) => `${x},${y}`).join(" ")}"/></clipPath>`
+        : "",
+    )
+    .join("");
+  const sides = widths
+    .map((w, i) =>
+      w > 0
+        ? `<path d="${path}" fill="none" stroke="${stroke}" stroke-width="${w}" clip-path="url(#side_${clipId(n)}_${i})" ${common}/>`
+        : "",
+    )
+    .join("");
+  return `<defs>${clips}</defs><path d="${path}" fill="${fill}" fill-opacity="${Math.max(0, Math.min(1, n.fillOpacity))}" stroke="none"/>${sides}`;
+}
+
+function clipId(n: XNode) {
+  return `s${n.id.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
 }
 
 function svgNode(n: XNode, top = false): string {

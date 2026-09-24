@@ -82,6 +82,11 @@ export function node(
     overflow: kind === "frame" ? "clip" : "visible",
     cornerRadii: [0, 0, 0, 0],
     cornerIndependent: false,
+    cornerSmoothing: 0,
+    strokeSides: "all",
+    strokeSideW: [0, 0, 0, 0],
+    strokeDashCap: "butt",
+    strokeMiterAngle: 0,
     aspectLocked: false,
     sizingW: "fixed",
     sizingH: "fixed",
@@ -176,6 +181,17 @@ function findInstanceRoot(root: XNode, id: string): XNode | null {
     p = findParent(root, p.id);
   }
   return null;
+}
+
+/**
+ * True when the layer is an instance or sits inside one. Figma refuses a small
+ * set of edits there - the geometry belongs to the component, so per-corner
+ * radii in particular can only be set on the master.
+ */
+export function insideInstance(root: XNode, id: string): boolean {
+  const node = find(root, id);
+  if (!node) return false;
+  return node.kind === "instance" || !!findInstanceRoot(root, id);
 }
 
 function clampDims(n: XNode) {
@@ -1300,6 +1316,12 @@ export class MemoryEngine implements Engine {
           blendMode: n.blendMode,
           cornerRadii: n.cornerRadii ? [...n.cornerRadii] : undefined,
           cornerIndependent: n.cornerIndependent,
+          cornerSmoothing: n.cornerSmoothing,
+          strokeSides: n.strokeSides,
+          strokeSideW: n.strokeSideW ? [...n.strokeSideW] : undefined,
+          strokeDashPattern: n.strokeDashPattern ? [...n.strokeDashPattern] : undefined,
+          strokeDashCap: n.strokeDashCap,
+          strokeMiterAngle: n.strokeMiterAngle,
           interactions: n.interactions ? clone(n.interactions) : undefined,
         };
         break;
@@ -1335,6 +1357,12 @@ export class MemoryEngine implements Engine {
           if (p.blendMode !== undefined) n.blendMode = p.blendMode;
           if (p.cornerRadii) n.cornerRadii = [...p.cornerRadii];
           if (p.cornerIndependent !== undefined) n.cornerIndependent = p.cornerIndependent;
+          if (p.cornerSmoothing !== undefined) n.cornerSmoothing = p.cornerSmoothing;
+          if (p.strokeSides !== undefined) n.strokeSides = p.strokeSides;
+          if (p.strokeSideW) n.strokeSideW = [...p.strokeSideW];
+          if (p.strokeDashPattern) n.strokeDashPattern = [...p.strokeDashPattern];
+          if (p.strokeDashCap !== undefined) n.strokeDashCap = p.strokeDashCap;
+          if (p.strokeMiterAngle !== undefined) n.strokeMiterAngle = p.strokeMiterAngle;
           if (p.interactions) n.interactions = clone(p.interactions);
         }
         break;
@@ -2441,6 +2469,10 @@ function scaleProps(n: XNode, sx: number, sy: number) {
   n.strokeWidth *= s;
   n.strokeDash *= s;
   n.strokeGap *= s;
+  // A dashed outline keeps its rhythm when the layer is scaled, and so do the
+  // per-side weights. Smoothing is a ratio rather than a length, so it stays put.
+  if (n.strokeDashPattern?.length) n.strokeDashPattern = n.strokeDashPattern.map((v) => v * s);
+  if (n.strokeSideW) n.strokeSideW = n.strokeSideW.map((v) => v * s) as [number, number, number, number];
   n.fontSize *= s;
   n.letterSpacing *= s;
   n.paragraphSpacing *= s;
@@ -2454,7 +2486,15 @@ function scaleProps(n: XNode, sx: number, sy: number) {
   }
   n.cornerRadii = n.cornerRadii.map((r) => r * s) as [number, number, number, number];
   if (n.strokes) {
-    for (const st of n.strokes) st.width *= s;
+    for (const st of n.strokes) {
+      st.width *= s;
+      // Extra strokes used to keep their dash and side weights unscaled,
+      // which left them visibly wrong against the scaled outline.
+      if (st.dash) st.dash *= s;
+      if (st.gap) st.gap *= s;
+      if (st.pattern?.length) st.pattern = st.pattern.map((v) => v * s);
+      if (st.sideW) st.sideW = st.sideW.map((v) => v * s) as [number, number, number, number];
+    }
   }
   if (n.effects) {
     for (const ef of n.effects) {

@@ -1866,6 +1866,47 @@ body.eyedrop, body.eyedrop * { cursor: crosshair !important; }
 .stroke-ends .seg { flex: 0 0 auto; }
 .stroke-ends .icon-btn { flex: 0 0 auto; margin-left: auto; }
 
+/* Figma lists seven end points (none, round, square, line arrow, triangle,
+   reverse triangle, diamond), so the cap group can no longer assume five
+   32px buttons fit beside the joins: it takes narrower buttons and wraps. */
+.stroke-ends .seg.caps { flex-wrap: wrap; gap: 2px; }
+.stroke-ends .seg.caps > button { width: 26px; }
+.seg.caps.small > button { width: auto; padding: 0 5px; font-size: 9.5px; text-transform: capitalize; }
+
+/* Individual strokes: All / T / R / B / L / Custom, then the four weights. */
+.stroke-sides { display: flex; align-items: center; gap: 6px; }
+.stroke-sides .seg.sides { flex: 1; display: flex; gap: 2px; }
+.stroke-sides .seg.sides > button {
+  flex: 1;
+  height: 22px;
+  font-size: 10px;
+  border: 1px solid var(--line);
+  background: var(--input);
+  color: inherit;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.stroke-sides .seg.sides > button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.grid4 > * { min-width: 0; }
+
+/* Corner smoothing: Figma's slider plus the iOS preset in the corner panel. */
+.smooth-row { display: flex; align-items: center; gap: 6px; }
+.smooth-slider { flex: 1; min-width: 0; height: 3px; accent-color: var(--accent); }
+.smooth-row .field { width: 64px; flex: 0 0 auto; }
+.smooth-row .mini { flex: 0 0 auto; }
+.adv-stroke { display: grid; gap: 6px; padding: 6px 0 2px; }
+
+/* Effects: how full each kind is, and where a dragged row will land. */
+.fx-count { margin-left: auto; color: var(--dim); font-size: 10px; font-variant-numeric: tabular-nums; }
+.type-menu button:disabled { opacity: 0.45; cursor: default; }
+.fx-row.drop { box-shadow: inset 0 2px 0 0 var(--blue, #6366f1); }
+.fx-row .grip { margin-right: 2px; }
+/* the note that explains why per-corner fields are greyed out on an instance */
+.corner-lock { color: var(--dim); font-size: 10.5px; line-height: 1.4; }
+.field input:disabled, .field input[aria-disabled="true"] { opacity: 0.45; cursor: default; }
+.field input.bad { box-shadow: inset 0 0 0 1px #ef4444; }
+
 /* The stroke width row has no trailing 32px control, so unlike .grid3 it should
    give the alignment segment its full intrinsic width (3 x 32px) rather than
    reserving a column for something that is not there. */

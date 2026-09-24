@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Engine, Interaction, NodeKind, PathPoint, ProtoAnim, Snapshot, Tool, VectorNetwork, XNode } from "../engine/types";
-import { deepestFrame, find, findParent, hitTest, worldToLocal, worldPos } from "../engine/memory";
+import { deepestFrame, find, findParent, hitTest, insideInstance, worldToLocal, worldPos } from "../engine/memory";
 import { layersAt } from "./selectSame";
 import {
   erasePath,
@@ -13,7 +13,12 @@ import {
   computeFigmaNoodle,
   pathToVectorNetwork,
   balanceLines,
+  cornerPinPoints,
+  cornerRadiiOf,
+  hasCornerSmoothing,
+  roundRectRadii,
 } from "../engine/geometry";
+import { dashArray, miterLimitFromAngle, sideCones, sideWidths, sidesSupported } from "../engine/strokeModel";
 import { interpolateMatchingLayers, solveEasing, applyInterpolatedFrame } from "../engine/smartAnimate";
 import {
   snapCandidates,
@@ -615,15 +620,17 @@ export function Canvas({
       const sy = snap.panY + y * z;
       const sw = n.w * z;
       const sh = n.h * z;
-      const radii = n.cornerIndependent
-        ? n.cornerRadii.map((r) => Math.max(0, r * z))
-        : Math.max(0, (n.cornerRadii[0] ?? 0) * z);
+      const rr = roundRectRadii(n).map((r) => Math.max(0, r * z)) as [number, number, number, number];
       const round = () => {
         ctx.beginPath();
-        if (typeof ctx.roundRect === "function") {
-          const rr = Array.isArray(radii) ? [radii[0], radii[1], radii[3], radii[2]] : radii;
-          ctx.roundRect(sx, sy, sw, sh, rr);
-        } else ctx.rect(sx, sy, sw, sh);
+        // A smoothed corner is not a roundRect: it goes through the same outline
+        // the hit test and the SVG export use, so the three cannot drift apart.
+        if (hasCornerSmoothing(n)) {
+          tracePath(ctx, shapePoly(n), sx, sy, z, true);
+          return;
+        }
+        if (typeof ctx.roundRect === "function") ctx.roundRect(sx, sy, sw, sh, rr);
+        else ctx.rect(sx, sy, sw, sh);
       };
       if (n.kind === "boolean" && n.booleanOp && n.children.length) {
         const dropB = (n.effects ?? []).find((e) => e.kind === "drop-shadow" && e.visible);
@@ -645,8 +652,12 @@ export function Canvas({
           ctx.stroke();
           ctx.restore();
         }
-        paintExtraStrokes(ctx, n, z, () =>
-          tracePath(ctx, n.path.length ? n.path : shapePoly(n), snap.panX + x * z, snap.panY + y * z, z, true),
+        paintExtraStrokes(
+          ctx,
+          n,
+          z,
+          () => tracePath(ctx, n.path.length ? n.path : shapePoly(n), snap.panX + x * z, snap.panY + y * z, z, true),
+          { x: sx, y: sy, w: sw, h: sh },
         );
         ctx.restore();
         return;
@@ -779,68 +790,129 @@ export function Canvas({
         ctx.save();
         ctx.globalAlpha *= n.strokeOpacity ?? 1;
         ctx.strokeStyle = cssRgba(n.strokePaint);
-        const lw = Math.max(0.5, n.strokeWidth * z);
         ctx.lineCap = n.strokeCap === "round" ? "round" : n.strokeCap === "square" ? "square" : "butt";
         ctx.lineJoin = n.strokeJoin === "round" ? "round" : n.strokeJoin === "bevel" ? "bevel" : "miter";
-        if (n.strokeDash > 0) {
-          const dash = n.strokeDash * z;
-          const gap = (n.strokeGap || n.strokeDash) * z;
-          ctx.setLineDash([dash, gap]);
-        } else {
-          ctx.setLineDash([]);
-        }
-        if (n.strokeAlign === "inside") {
-          ctx.save();
-          ctx.clip();
-          ctx.lineWidth = lw * 2;
-          ctx.stroke();
-          ctx.restore();
-        } else if (n.strokeAlign === "outside") {
-          ctx.lineWidth = lw * 2;
-          ctx.stroke();
-          if (n.fillVisible && !isNone(n.fill) && n.kind !== "line" && n.kind !== "arrow") {
-            ctx.globalCompositeOperation = "source-over";
-            paintFill(ctx, n, sx, sy, sw, sh);
+        ctx.miterLimit = miterLimitFromAngle(n.strokeMiterAngle);
+        const dashes = dashArray(n.strokeDashPattern, n.strokeDash, n.strokeGap, z);
+        // Figma lets the dashes carry their own cap: a dotted line is a 1px dash
+        // with round caps, and only the segments take the rounding.
+        ctx.lineCap = n.strokeDashPattern?.length || n.strokeDash > 0 ? n.strokeDashCap ?? ctx.lineCap : ctx.lineCap;
+        if (dashes.length) ctx.setLineDash(dashes);
+        else ctx.setLineDash([]);
+        // Individual strokes: the outline is stroked once per side, each pass
+        // clipped to a 45° cone from the centre, which is how CSS mitres a
+        // border and keeps a rounded corner split evenly between its sides.
+        const sides = sideWidths(n.strokeSides, n.strokeSideW, n.strokeWidth);
+        const perSide = sidesSupported(n.kind) && (n.strokeSides ?? "all") !== "all";
+        const pass = (lw: number) => {
+          if (lw <= 0) return;
+          const w = Math.max(0.5, lw * z);
+          if (n.strokeAlign === "inside") {
+            ctx.save();
+            ctx.clip();
+            ctx.lineWidth = w * 2;
+            ctx.stroke();
+            ctx.restore();
+          } else if (n.strokeAlign === "outside") {
+            ctx.lineWidth = w * 2;
+            ctx.stroke();
+            if (n.fillVisible && !isNone(n.fill) && n.kind !== "line" && n.kind !== "arrow") {
+              ctx.save();
+              ctx.globalCompositeOperation = "source-over";
+              paintFill(ctx, n, sx, sy, sw, sh);
+              ctx.restore();
+            }
+          } else {
+            ctx.lineWidth = w;
+            ctx.stroke();
+          }
+        };
+        if (perSide) {
+          const cones = sideCones(sx, sy, sw, sh);
+          for (let i = 0; i < 4; i++) {
+            if (sides[i] <= 0) continue;
+            ctx.save();
+            ctx.beginPath();
+            cones[i].forEach(([bx, by], k) => (k ? ctx.lineTo(bx, by) : ctx.moveTo(bx, by)));
+            ctx.closePath();
+            ctx.clip();
+            // Building the cone replaced the current path, so the shape has to
+            // be traced again before it can be stroked inside the band.
+            traceShape();
+            pass(sides[i]);
+            ctx.restore();
           }
         } else {
-          ctx.lineWidth = lw;
-          ctx.stroke();
+          pass(sides[0]);
         }
-        const arrowCap =
-          n.kind === "arrow" ||
-          ((n.kind === "line" || n.kind === "vector") &&
-            !n.closed &&
-            (n.strokeCap === "arrow" || n.strokeCap === "triangle"));
+        const tipCap =
+          n.strokeCap === "arrow" ||
+          n.strokeCap === "triangle" ||
+          n.strokeCap === "reverse-triangle" ||
+          n.strokeCap === "diamond";
+        const arrowCap = n.kind === "arrow" || ((n.kind === "line" || n.kind === "vector") && !n.closed && tipCap);
         if (arrowCap) {
           ctx.setLineDash([]);
           const ah = Math.max(6, n.strokeWidth * 3 * z);
-          let ex = sx + sw;
-          let ey = sy + sh / 2;
-          let ux = 1;
-          let uy = 0;
-          if (n.kind === "vector" && n.path.length > 1) {
-            const last = n.path[n.path.length - 1];
-            const prev = n.path[n.path.length - 2];
-            const dx = (last.x - prev.x) * z;
-            const dy = (last.y - prev.y) * z;
-            const len = Math.hypot(dx, dy) || 1;
-            ex = snap.panX + (x + last.x) * z;
-            ey = snap.panY + (y + last.y) * z;
-            ux = dx / len;
-            uy = dy / len;
+          // Figma puts the tips on both ends of an open path, so each end is
+          // drawn with the unit vector pointing back along its own segment.
+          const ends: { ex: number; ey: number; ux: number; uy: number }[] = [];
+          const pts = n.kind === "vector" || n.kind === "line" ? (n.path.length ? n.path : shapePoly(n)) : [];
+          if (pts.length > 1) {
+            for (const [a, b, sign] of [[pts[pts.length - 1], pts[pts.length - 2], 1], [pts[0], pts[1], -1]] as const) {
+              const dx = (a.x - b.x) * z * sign;
+              const dy = (a.y - b.y) * z * sign;
+              const len = Math.hypot(dx, dy) || 1;
+              ends.push({ ex: sx + a.x * z, ey: sy + a.y * z, ux: dx / len, uy: dy / len });
+            }
+          } else {
+            ends.push({ ex: sx + sw, ey: sy + sh / 2, ux: 1, uy: 0 });
+            ends.push({ ex: sx, ey: sy + sh / 2, ux: -1, uy: 0 });
           }
-          const kw = n.strokeCap === "triangle" ? 0.75 : 0.55;
-          ctx.beginPath();
-          ctx.moveTo(ex, ey);
-          ctx.lineTo(ex - ux * ah - uy * ah * kw, ey - uy * ah + ux * ah * kw);
-          ctx.lineTo(ex - ux * ah + uy * ah * kw, ey - uy * ah - ux * ah * kw);
-          ctx.closePath();
-          ctx.fillStyle = cssRgba(n.strokePaint);
-          ctx.fill();
+          const back = (e: { ex: number; ey: number; ux: number; uy: number }, k: number, s: number) => ({
+            x: e.ex - e.ux * ah + e.uy * k * s,
+            y: e.ey - e.uy * ah - e.ux * k * s,
+          });
+          for (const e of ends) {
+            ctx.beginPath();
+            if (n.strokeCap === "arrow") {
+              // Two 45° lines, the same weight as the path.
+              const p1 = back(e, ah * 0.72, 1);
+              const p2 = back(e, ah * 0.72, -1);
+              ctx.moveTo(p1.x, p1.y);
+              ctx.lineTo(e.ex, e.ey);
+              ctx.lineTo(p2.x, p2.y);
+              ctx.lineWidth = Math.max(0.5, n.strokeWidth * z);
+              ctx.lineCap = "butt";
+              ctx.lineJoin = "miter";
+              ctx.stroke();
+              continue;
+            }
+            if (n.strokeCap === "diamond") {
+              const mid = { x: e.ex - e.ux * ah * 0.8, y: e.ey - e.uy * ah * 0.8 };
+              ctx.moveTo(e.ex, e.ey);
+              ctx.lineTo(mid.x - e.uy * ah * 0.5, mid.y + e.ux * ah * 0.5);
+              ctx.lineTo(e.ex - e.ux * ah * 1.6, e.ey - e.uy * ah * 1.6);
+              ctx.lineTo(mid.x + e.uy * ah * 0.5, mid.y - e.ux * ah * 0.5);
+            } else if (n.strokeCap === "reverse-triangle") {
+              // Flipped: the base sits on the end point, the apex points inward.
+              ctx.moveTo(e.ex, e.ey);
+              ctx.lineTo(e.ex - e.uy * ah * 0.7, e.ey + e.ux * ah * 0.7);
+              ctx.lineTo(e.ex - e.ux * ah * 1.1, e.ey - e.uy * ah * 1.1);
+              ctx.lineTo(e.ex + e.uy * ah * 0.7, e.ey - e.ux * ah * 0.7);
+            } else {
+              ctx.moveTo(e.ex, e.ey);
+              ctx.lineTo(back(e, ah * 0.75, 1).x, back(e, ah * 0.75, 1).y);
+              ctx.lineTo(back(e, ah * 0.75, -1).x, back(e, ah * 0.75, -1).y);
+            }
+            ctx.closePath();
+            ctx.fillStyle = cssRgba(n.strokePaint);
+            ctx.fill();
+          }
         }
         ctx.restore();
       }
-      paintExtraStrokes(ctx, n, z, traceShape);
+      paintExtraStrokes(ctx, n, z, traceShape, { x: sx, y: sy, w: sw, h: sh });
       if (n.kind === "text" && edit?.id !== n.id) {
         paintText(ctx, n, sx, sy, sw, sh, z);
       }
@@ -1524,28 +1596,30 @@ export function Canvas({
         sw >= 36 &&
         sh >= 36
       ) {
-        const radii = wp.node.cornerRadii.map((r) => Math.max(0, r || 0));
-        if (radii.some((r) => r > 0)) {
+        const radii = cornerRadiiOf(wp.node);
+        if (radii.tl + radii.tr + radii.br + radii.bl > 0) {
           const reach = Math.min(14, Math.min(sw, sh) * 0.28);
-          // corner order: TL, TR, BR, BL — with the unit vector pointing into
-          // the box for each, so one draw call covers all four.
-          const dirs = [
-            [1, 1],
-            [-1, 1],
-            [-1, -1],
-            [1, -1],
-          ];
-          const anchors = [
+          // Read the corners through cornerRadiiOf: the stored array is
+          // [tl, tr, bl, br], so indexing it directly marked the wrong corner
+          // whenever the bottom two radii differed.
+          const anchors: [number, number][] = [
             [sx, sy],
             [sx + sw, sy],
-            [sx + sw, sy + sh],
             [sx, sy + sh],
+            [sx + sw, sy + sh],
           ];
+          const dirs: [number, number][] = [
+            [1, 1],
+            [-1, 1],
+            [1, -1],
+            [-1, -1],
+          ];
+          const values = [radii.tl, radii.tr, radii.bl, radii.br];
           ctx.strokeStyle = accent;
           ctx.lineWidth = 1.5;
           ctx.lineCap = "round";
           for (let i = 0; i < 4; i++) {
-            if (radii[i] <= 0) continue;
+            if (values[i] <= 0) continue;
             const [ax, ay] = anchors[i];
             const [dx, dy] = dirs[i];
             ctx.beginPath();
@@ -2312,30 +2386,24 @@ export function Canvas({
         ) {
           const sw = wp.node.w * z;
           const sh = wp.node.h * z;
-          const r0 = wp.node.cornerRadii[0] || 0;
-          const r1 = wp.node.cornerRadii[1] || 0;
-          const r2 = wp.node.cornerRadii[2] || 0;
-          const r3 = wp.node.cornerRadii[3] || 0;
-          const maxOffset = Math.min(sw, sh) / 2 - 4;
-          const o0 = Math.max(9, Math.min(maxOffset, r0 * z + 8));
-          const o1 = Math.max(9, Math.min(maxOffset, r1 * z + 8));
-          const o2 = Math.max(9, Math.min(maxOffset, r2 * z + 8));
-          const o3 = Math.max(9, Math.min(maxOffset, r3 * z + 8));
-
-          const rPins = [
-            [sx + o0, sy + o0],
-            [sx + sw - o1, sy + o1],
-            [sx + sw - o2, sy + sh - o2],
-            [sx + o3, sy + sh - o3],
-          ];
-
-          for (let ci = 0; ci < 4; ci++) {
-            const [rx, ry] = rPins[ci];
-            if (Math.hypot(px - rx, py - ry) <= 7) {
+          // Positions and storage order come from one helper now: the pins were
+          // laid out TL, TR, BR, BL while the array is TL, TR, BL, BR, so the
+          // handle drawn on the bottom right adjusted the bottom left radius.
+          const pins = cornerPinPoints(sw, sh, cornerRadiiOf(wp.node), z);
+          const PIN_INDEX = { tl: 0, tr: 1, bl: 2, br: 3 } as const;
+          for (const pin of pins) {
+            if (Math.hypot(px - (sx + pin.x), py - (sy + pin.y)) <= 7) {
+              // Alt is "this corner only", which Figma refuses on an instance -
+              // the corners belong to the component. Explain instead of
+              // starting a drag that silently rounds all four.
+              if (e.altKey && insideInstance(snap.pages[snap.page].root, wp.node.id)) {
+                toast("Individual corner radius cannot be set on an instance");
+                return;
+              }
               engine.dispatch({ type: "begin" });
               drag.current = {
                 mode: "radius",
-                corner: ci,
+                corner: PIN_INDEX[pin.index],
                 sx: e.clientX,
                 sy: e.clientY,
                 wx: wpt.x,
@@ -3010,19 +3078,16 @@ export function Canvas({
       const wp = worldPos(snap.pages[snap.page].root, d.id);
       if (wp) {
         const ci = d.corner ?? 0;
-        let dist = 0;
-        if (ci === 0) {
-          dist = Math.min(wpt.x - wp.x, wpt.y - wp.y);
-        } else if (ci === 1) {
-          dist = Math.min(wp.x + wp.node.w - wpt.x, wpt.y - wp.y);
-        } else if (ci === 2) {
-          dist = Math.min(wp.x + wp.node.w - wpt.x, wp.y + wp.node.h - wpt.y);
-        } else {
-          dist = Math.min(wpt.x - wp.x, wp.y + wp.node.h - wpt.y);
-        }
+        // Corner indices follow the stored order [tl, tr, bl, br], so the sign
+        // of each edge comes from where that corner actually sits.
+        const left = ci === 0 || ci === 2;
+        const top = ci === 0 || ci === 1;
+        const dx = left ? wpt.x - wp.x : wp.x + wp.node.w - wpt.x;
+        const dy = top ? wpt.y - wp.y : wp.y + wp.node.h - wpt.y;
+        const dist = Math.min(dx, dy);
         const maxR = Math.min(wp.node.w, wp.node.h) / 2;
         const newR = Math.max(0, Math.min(maxR, Math.round(dist)));
-        if (e.altKey) {
+        if (e.altKey && !insideInstance(snap.pages[snap.page].root, d.id)) {
           const nextRadii: [number, number, number, number] = [...wp.node.cornerRadii];
           nextRadii[ci] = newR;
           engine.dispatch({
