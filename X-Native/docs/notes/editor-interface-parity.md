@@ -955,8 +955,27 @@ until it is brought up to date with the demo file.
   missing: a Figma-style "Zoom/view options" dropdown that holds all of the
   above in one place - ours live in the zoom field's menu, the canvas menu and
   Device preview, and the article's menu is one list.
-- The SVG path has issues of its own, still mid-investigation, from the same
-  report as the fifty-photo lag and the `.fig` import above.
+- The SVG path, from the same report as the fifty-photo lag and the `.fig`
+  import above. Read (not yet measured in pixels) in `svgNode()` /
+  `svgShape()` in `ui/inspector.tsx`, the export is missing or simplifying five
+  things the canvas does draw:
+  1. **Effects.** No `<filter>` anywhere: drop shadows, inner shadows, layer
+     blur and background blur are drawn on the canvas and absent from the file.
+  2. **Multi-contour vectors.** `svgPath()` exports `n.path` - one contour -
+     so a shape built from a vector network exports as its first loop only.
+     This is the same bug the `.fig` import had this round: the logo imports as
+     20 loops and would export as one.
+  3. **Gradients.** Only two stops, built from the `fill`/`fillB` pair;
+     `gradientStops` (three or more) is ignored, as are angular and diamond
+     fills, which fall through to a solid.
+  4. **Stroke alignment.** `strokeAlign` is ignored, so an outside stroke
+     exports centred - half of it on the wrong side of the edge.
+  5. **Extra fills and strokes.** `fills` and `strokes` rows are not exported;
+     only the base fill and the single stroke are.
+  Also unwritten: `rotOrigin` (the export always rotates about the centre) and
+  the image adjust fields. The fix belongs in an engine module with unit
+  assertions and a rendered comparison of the exported SVG against the canvas,
+  the way the other rounds have been verified.
 - `.fig` images: the `images/<hash>` → asset-store path is written from the
   format but no fixture in the repo carries an image, so it has not been seen
   working. Component and instance links are carried as plain containers - the
