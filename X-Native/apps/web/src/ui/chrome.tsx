@@ -1059,6 +1059,13 @@ export function bindHotkeys(
       toast("Instance detached");
       return;
     }
+    // Sketch's Detach Symbol: ⇧⌘Y
+    if (meta && e.shiftKey && e.key.toLowerCase() === "y") {
+      e.preventDefault();
+      engine.dispatch({ type: "detachInstance" });
+      toast("Instance detached");
+      return;
+    }
     // Figma's Copy/Paste as ▸ Copy as code chord, so the clipboard path works
     // without hunting through a menu.
     if (meta && e.altKey && e.shiftKey && e.key.toLowerCase() === "c") {
@@ -1097,12 +1104,14 @@ export function bindHotkeys(
     // backslash into another character, which silently broke the minimize half
     // of the pair while ⌘\ (unshifted) kept working.
     const backslash = e.code === "Backslash" || e.key === "\\" || e.key === "|";
+    const period = !e.shiftKey && (e.code === "Period" || e.key === ".");
     if (meta && e.shiftKey && backslash) {
       e.preventDefault();
       extra.onMinimize();
       return;
     }
-    if (meta && backslash) {
+    // Figma ⌘\ / Sketch ⌘. — toggle clean canvas / interface visibility
+    if (meta && (backslash || period)) {
       e.preventDefault();
       extra.onHide();
       return;
@@ -1143,7 +1152,8 @@ export function bindHotkeys(
       engine.dispatch({ type: "setRightTab", tab: cur === "prototype" ? "design" : "prototype" });
       return;
     }
-    if (e.altKey && extra.onNav) {
+    // Figma ⌥1..3 / Sketch ⌃1..3 switch navigation panes
+    if ((e.altKey || (e.ctrlKey && !meta && !e.shiftKey)) && extra.onNav) {
       if (e.key === "1") {
         extra.onNav("file");
         engine.dispatch({ type: "setLeftTab", tab: "layers" });
@@ -1212,12 +1222,27 @@ export function bindHotkeys(
       engine.dispatch({ type: "toggleOutlines" });
       return;
     }
-    if (!meta && !e.ctrlKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "i") {
+    const isEyedrop =
+      (!meta && !e.ctrlKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "i") ||
+      (e.ctrlKey && !meta && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "c");
+    if (isEyedrop) {
       e.preventDefault();
       armEyedrop((c) => {
         const id0 = engine.snapshot().selection[0];
         if (id0) engine.dispatch({ type: "patch", id: id0, patch: { fill: c } });
       });
+      return;
+    }
+    // Figma & Sketch: ⇧X swaps fill and stroke
+    if (!meta && !e.altKey && e.shiftKey && e.key.toLowerCase() === "x") {
+      e.preventDefault();
+      engine.dispatch({ type: "swapFillStroke" });
+      return;
+    }
+    // Sketch: ⇧B toggles stroke / border
+    if (!meta && !e.altKey && e.shiftKey && e.key.toLowerCase() === "b") {
+      e.preventDefault();
+      engine.dispatch({ type: "toggleStroke" });
       return;
     }
     if (e.ctrlKey && e.altKey && e.shiftKey && e.key.toLowerCase() === "t") {
@@ -1291,6 +1316,15 @@ export function bindHotkeys(
     if (meta && e.key === "[") {
       e.preventDefault();
       engine.dispatch({ type: "arrange", dir: e.shiftKey ? "back" : "backward" });
+      return;
+    }
+    // Sketch: ⌘L adds stack layout, ⌥⌘L removes stack layout
+    if (meta && !e.shiftKey && e.key.toLowerCase() === "l") {
+      e.preventDefault();
+      const snap = engine.snapshot();
+      if (!snap.selection.length) return;
+      if (e.altKey) removeAutoLayout(engine, snap);
+      else addAutoLayout(engine, snap);
       return;
     }
     if (meta && e.shiftKey && e.key.toLowerCase() === "l") {

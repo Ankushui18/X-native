@@ -815,6 +815,8 @@ export type Command =
   | { type: "patchPage"; patch: Partial<Pick<Page, "pixelGrid" | "pixelGridColor" | "pixelSnap" | "name" | "flowStart">> }
   | { type: "distribute"; axis: "h" | "v" }
   | { type: "tidyUp"; axis?: "auto" | "h" | "v" }
+  | { type: "swapFillStroke" }
+  | { type: "toggleStroke" }
   | { type: "toggleOutlines" }
   | { type: "boolean"; op: BooleanOp }
   /** Create a named style from the selection's current fill or stroke and

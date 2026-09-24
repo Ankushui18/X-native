@@ -1164,6 +1164,36 @@ export class MemoryEngine implements Engine {
       case "toggleOutlines":
         s.outlineMode = !s.outlineMode;
         break;
+      case "swapFillStroke": {
+        for (const id of s.selection) {
+          const n = find(this.root(), id);
+          if (n && !n.locked) {
+            const curFill = n.fill;
+            const curStroke = n.strokePaint;
+            const curFillVis = n.fillVisible ?? true;
+            const curStrokeVis = n.strokeVisible ?? false;
+            const curWidth = n.strokeWidth || 1;
+            n.fill = curStroke || "#000000";
+            n.strokePaint = curFill || "#000000";
+            n.fillVisible = curStrokeVis;
+            n.strokeVisible = curFillVis;
+            if (!n.strokeWidth) n.strokeWidth = curWidth;
+          }
+        }
+        break;
+      }
+      case "toggleStroke": {
+        for (const id of s.selection) {
+          const n = find(this.root(), id);
+          if (n && !n.locked) {
+            const isVis = n.strokeVisible && n.strokeWidth > 0;
+            n.strokeVisible = !isVis;
+            if (!isVis && !n.strokeWidth) n.strokeWidth = 1;
+            if (!n.strokePaint || n.strokePaint === "#00000000") n.strokePaint = "#000000";
+          }
+        }
+        break;
+      }
       case "tidyUp": {
         const items = s.selection
           .map((id) => find(this.root(), id))

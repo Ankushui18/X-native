@@ -574,6 +574,36 @@ export function Canvas({
           e.stopImmediatePropagation();
         }
       }
+      // Sketch vector editing: 1=Straight, 2=Mirrored, 3=Disconnected, 4=Asymmetric
+      if (e.type === "keydown" && !e.metaKey && !e.ctrlKey && !e.altKey && vecEdit && !edit) {
+        const ptIdx = snap.vecPoint ?? vecPt.current;
+        if (ptIdx >= 0) {
+          if (e.key === "1") {
+            engine.dispatch({ type: "setPointMirror", id: vecEdit, pointIndex: ptIdx, mode: "none" });
+            toast("Point: Straight");
+            e.stopImmediatePropagation();
+            return;
+          }
+          if (e.key === "2") {
+            engine.dispatch({ type: "setPointMirror", id: vecEdit, pointIndex: ptIdx, mode: "angleAndLength" });
+            toast("Point: Mirrored");
+            e.stopImmediatePropagation();
+            return;
+          }
+          if (e.key === "3") {
+            engine.dispatch({ type: "setPointMirror", id: vecEdit, pointIndex: ptIdx, mode: "none" });
+            toast("Point: Disconnected");
+            e.stopImmediatePropagation();
+            return;
+          }
+          if (e.key === "4") {
+            engine.dispatch({ type: "setPointMirror", id: vecEdit, pointIndex: ptIdx, mode: "angle" });
+            toast("Point: Asymmetric");
+            e.stopImmediatePropagation();
+            return;
+          }
+        }
+      }
     };
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("keyup", onKey, true);

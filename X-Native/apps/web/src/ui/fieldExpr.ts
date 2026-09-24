@@ -18,6 +18,7 @@ const NUM = /^\s*-?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?\s*$/;
 export function hasExpression(raw: string): boolean {
   const t = raw.trim();
   if (!t || NUM.test(t)) return false;
+  if (t.endsWith("%")) return true;
   return /[+\-*/^()]/.test(t.slice(t[0] === "-" ? 1 : 0));
 }
 
@@ -30,6 +31,10 @@ export function hasExpression(raw: string): boolean {
 export function evalField(raw: string, current: number): number | null {
   let t = raw.trim();
   if (!t) return null;
+  if (t.endsWith("%")) {
+    const pct = parseFloat(t.slice(0, -1));
+    return Number.isFinite(pct) ? (current * pct) / 100 : null;
+  }
   if (NUM.test(t)) {
     const v = Number(t);
     return Number.isFinite(v) ? v : null;

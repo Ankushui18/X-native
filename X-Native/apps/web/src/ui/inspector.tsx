@@ -1461,6 +1461,39 @@ function DevTokens({ snap }: { snap: Snapshot }) {
   );
 }
 
+function generateDesignTokens(n: XNode): string {
+  const tokens: Record<string, unknown> = {};
+  if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") {
+    tokens.color = {
+      value: n.fill,
+      type: "color",
+    };
+  }
+  if (n.strokeVisible && n.strokeWidth > 0 && n.strokePaint) {
+    tokens.border = {
+      color: { value: n.strokePaint, type: "color" },
+      width: { value: `${n.strokeWidth}px`, type: "dimension" },
+    };
+  }
+  tokens.size = {
+    width: { value: `${Math.round(n.w)}px`, type: "dimension" },
+    height: { value: `${Math.round(n.h)}px`, type: "dimension" },
+  };
+  if (n.cornerRadii && n.cornerRadii.some((r) => r > 0)) {
+    tokens.borderRadius = {
+      value: `${n.cornerRadii[0]}px`,
+      type: "dimension",
+    };
+  }
+  if (n.kind === "text") {
+    tokens.typography = {
+      fontSize: { value: `${n.fontSize}px`, type: "dimension" },
+      fontWeight: { value: String(n.fontWeight), type: "fontWeight" },
+    };
+  }
+  return JSON.stringify(tokens, null, 2);
+}
+
 function renderDevCode(n: XNode, format: DevFormat, unit: DevUnit): string {
   switch (format) {
     case "tailwind":
@@ -1475,6 +1508,8 @@ function renderDevCode(n: XNode, format: DevFormat, unit: DevUnit): string {
       return generateSvg(n);
     case "figma":
       return generateFigmaJson(n);
+    case "tokens":
+      return generateDesignTokens(n);
     default:
       return generateCss(n, unit);
   }

@@ -19,6 +19,7 @@
 
 import { Zip } from "./zip";
 import type { ImportedNode, ImportResult } from "./svgImport";
+import type { Effect, FillType, GradientStop, TextAlign } from "./types";
 
 type J = Record<string, unknown>;
 
@@ -37,16 +38,39 @@ function sketchColor(v: unknown): string | null {
   return a >= 0.999 ? hex : `${hex}${Math.round(a * 255).toString(16).padStart(2, "0")}`;
 }
 
-/** First enabled fill; Sketch keeps disabled entries in the array. */
-function firstFill(layer: J): string | null {
+/** First enabled fill or gradient; Sketch keeps disabled entries in the array. */
+function sketchFillInfo(layer: J): {
+  fill: string | null;
+  fillType?: FillType;
+  gradientStops?: GradientStop[];
+} {
   const style = obj(layer.style);
   for (const f of arr(style?.fills)) {
     const fo = obj(f);
     if (!fo || fo.isEnabled === false) continue;
+    const fillTypeNum = num(fo.fillType, 0);
+    if (fillTypeNum === 1 || fillTypeNum === 2) {
+      const grad = obj(fo.gradient);
+      const stops: GradientStop[] = [];
+      for (const st of arr(grad?.stops)) {
+        const sto = obj(st);
+        if (sto) {
+          const sc = sketchColor(sto.color);
+          if (sc) {
+            stops.push({ position: num(sto.position, 0), color: sc });
+          }
+        }
+      }
+      return {
+        fill: stops[0]?.color ?? "#000000",
+        fillType: fillTypeNum === 2 ? "radial" : "linear",
+        gradientStops: stops.length ? stops : undefined,
+      };
+    }
     const c = sketchColor(fo.color);
-    if (c) return c;
+    if (c) return { fill: c, fillType: "solid" };
   }
-  return null;
+  return { fill: null };
 }
 
 function firstBorder(layer: J): { color: string; width: number } | null {
@@ -58,6 +82,59 @@ function firstBorder(layer: J): { color: string; width: number } | null {
     if (c) return { color: c, width: num(bo.thickness, 1) };
   }
   return null;
+}
+
+function sketchEffects(layer: J): Effect[] {
+  const effects: Effect[] = [];
+  const style = obj(layer.style);
+  if (!style) return effects;
+
+  for (const s of arr(style.shadows)) {
+    const so = obj(s);
+    if (!so || so.isEnabled === false) continue;
+    const c = sketchColor(so.color);
+    effects.push({
+      kind: "drop-shadow",
+      color: c ?? "rgba(0,0,0,0.25)",
+      x: num(so.offsetX, 0),
+      y: num(so.offsetY, 4),
+      blur: num(so.blurRadius, 4),
+      spread: num(so.spread, 0),
+      visible: true,
+    });
+  }
+
+  for (const s of arr(style.innerShadows)) {
+    const so = obj(s);
+    if (!so || so.isEnabled === false) continue;
+    const c = sketchColor(so.color);
+    effects.push({
+      kind: "inner-shadow",
+      color: c ?? "rgba(0,0,0,0.25)",
+      x: num(so.offsetX, 0),
+      y: num(so.offsetY, 2),
+      blur: num(so.blurRadius, 4),
+      spread: num(so.spread, 0),
+      visible: true,
+    });
+  }
+
+  const blur = obj(style.blur);
+  if (blur && blur.isEnabled !== false) {
+    const type = num(blur.type, 0);
+    // 0 = Gaussian (layer-blur), 3 = Background blur
+    effects.push({
+      kind: type === 3 ? "background-blur" : "layer-blur",
+      color: "rgba(0,0,0,0)",
+      x: 0,
+      y: 0,
+      blur: num(blur.radius, 10),
+      spread: 0,
+      visible: true,
+    });
+  }
+
+  return effects;
 }
 
 /** `"{1, 2}"` -> [1, 2]; Sketch encodes points as strings. */
@@ -116,20 +193,30 @@ export async function importSketch(buf: ArrayBuffer): Promise<ImportResult> {
     const opacity = Math.max(0, Math.min(1, num(ctx?.opacity, 1)));
     // Sketch stores rotation counter-clockwise; the engine uses clockwise.
     const rotation = -num(layer.rotation);
-    const fill = firstFill(layer);
+    const fillInfo = sketchFillInfo(layer);
     const border = firstBorder(layer);
+    const effects = sketchEffects(layer);
+    const borderOpts = obj(style?.borderOptions);
+    const dashes = arr(borderOpts?.dashPattern).map((d) => num(d, 0));
     maxX = Math.max(maxX, x + w);
     maxY = Math.max(maxY, y + h);
 
-    const base = {
+    const base: Partial<ImportedNode> = {
       name,
-      fill: fill ?? "#00000000",
-      fillVisible: fill !== null,
+      fill: fillInfo.fill ?? "#00000000",
+      fillVisible: fillInfo.fill !== null,
+      fillType: fillInfo.fillType,
+      gradientStops: fillInfo.gradientStops,
       strokePaint: border?.color ?? "#00000000",
       strokeVisible: !!border,
       strokeWidth: border?.width ?? 0,
       opacity,
       rotation,
+      effects: effects.length ? effects : undefined,
+      strokeDash: dashes[0] || undefined,
+      strokeGap: dashes[1] || undefined,
+      locked: layer.isLocked === true,
+      hidden: layer.isVisible === false,
     };
 
     switch (cls) {
@@ -140,8 +227,8 @@ export async function importSketch(buf: ArrayBuffer): Promise<ImportResult> {
         // Containers contribute their own background when they have a fill,
         // then their children are laid out in absolute coordinates. The engine
         // gets a flat list, so children carry the accumulated offset.
-        if (cls === "artboard" || fill) {
-          nodes.push({ kind: "rect", ...base, x, y, w: Math.max(1, w), h: Math.max(1, h) });
+        if (cls === "artboard" || fillInfo.fill) {
+          nodes.push({ kind: "rect", ...base, x, y, w: Math.max(1, w), h: Math.max(1, h) } as ImportedNode);
         }
         for (const c of arr(layer.layers)) {
           const co = obj(c);
@@ -161,21 +248,29 @@ export async function importSketch(buf: ArrayBuffer): Promise<ImportResult> {
           w: Math.max(1, w),
           h: Math.max(1, h),
           ...(radius > 0 ? { cornerRadii: [radius, radius, radius, radius] as [number, number, number, number] } : {}),
-        });
+        } as ImportedNode);
         return;
       }
       case "oval":
-        nodes.push({ kind: "ellipse", ...base, x, y, w: Math.max(1, w), h: Math.max(1, h) });
+        nodes.push({ kind: "ellipse", ...base, x, y, w: Math.max(1, w), h: Math.max(1, h) } as ImportedNode);
         return;
       case "text": {
         const as = obj(layer.attributedString);
         const content = str(as?.string) ?? "";
         if (!content.trim()) return;
-        const runAttrs = obj(obj(arr(obj(as?.attributes)?.attributes ?? as?.attributes)[0])?.attributes);
+        const rawAttrs = arr(obj(as?.attributes)?.attributes ?? as?.attributes);
+        const firstAttr = obj(rawAttrs[0]);
+        const runAttrs = obj(firstAttr?.attributes ?? firstAttr);
         const font = obj(runAttrs?.NSFontAttribute);
         const size = num(font?.size, 0) || Math.max(8, Math.min(h, 16));
         // Text colour usually lives on the attribute run, not style.fills.
         const runColor = sketchColor(obj(runAttrs?.MSAttributedStringColorAttribute)?.color);
+        const paraStyle = obj(runAttrs?.NSParagraphStyle);
+        const alignNum = num(paraStyle?.alignment, 0);
+        const textAlign: TextAlign = alignNum === 1 ? "right" : alignNum === 2 ? "center" : "left";
+        const lineHeight = num(paraStyle?.maximumLineHeight, 0) || undefined;
+        const letterSpacing = num(runAttrs?.NSKern, 0) || undefined;
+
         nodes.push({
           kind: "text",
           ...base,
@@ -183,12 +278,15 @@ export async function importSketch(buf: ArrayBuffer): Promise<ImportResult> {
           y,
           w: Math.max(8, w),
           h: Math.max(size, h),
-          fill: fill ?? runColor ?? "#000000",
+          fill: fillInfo.fill ?? runColor ?? "#000000",
           fillVisible: true,
           text: content,
           fontSize: size,
           fontWeight: /bold|semibold|medium/i.test(str(font?.name) ?? "") ? 600 : 400,
-        });
+          textAlign,
+          lineHeight,
+          letterSpacing,
+        } as ImportedNode);
         return;
       }
       case "shapePath":
@@ -213,14 +311,14 @@ export async function importSketch(buf: ArrayBuffer): Promise<ImportResult> {
           h: Math.max(1, h),
           path: pts,
           closed: layer.isClosed !== false,
-        });
+        } as ImportedNode);
         return;
       }
       case "symbolInstance": {
         // Overrides are not resolved, so an instance becomes a placeholder box
         // rather than the wrong artwork. Counted so the user is told.
         skipped++;
-        if (fill) nodes.push({ kind: "rect", ...base, x, y, w: Math.max(1, w), h: Math.max(1, h) });
+        if (fillInfo.fill) nodes.push({ kind: "rect", ...base, x, y, w: Math.max(1, w), h: Math.max(1, h) } as ImportedNode);
         return;
       }
       default: {

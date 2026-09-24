@@ -29,6 +29,7 @@ import {
   computeFigmaNoodle,
 } from "../geometry.ts";
 import { MemoryEngine, defaultEffect, find, findParent, insideInstance, worldPos } from "../memory.ts";
+import { evalField } from "../../ui/fieldExpr.ts";
 import {
   SPACING_MODES,
   alignKey,
@@ -3299,6 +3300,46 @@ console.log("nesting flows, from \"Combine vertical, horizontal, and grid auto l
   const polyNode = root().children[root().children.length - 1];
   e.dispatch({ type: "patch", id: polyNode.id, patch: { cornerRadii: [8, 8, 8, 8], count: 6 } });
   t("polygon node stores cornerRadii and count", N(polyNode.id).cornerRadii[0] === 8 && N(polyNode.id).count === 6);
+}
+
+{
+  console.log("Sketch & Figma interoperability parity extensions (swapFillStroke, toggleStroke, math % expressions):");
+  const e = new MemoryEngine();
+  const root = () => e.snapshot().pages[e.snapshot().page].root;
+  const N = (id) => find(root(), id);
+
+  // 1. swapFillStroke (⇧X)
+  e.dispatch({
+    type: "add",
+    kind: "rect",
+    x: 0,
+    y: 0,
+    w: 100,
+    h: 100,
+    extra: {
+      fill: "#ff0000",
+      fillVisible: true,
+      strokePaint: "#0000ff",
+      strokeVisible: false,
+      strokeWidth: 4,
+    },
+  });
+  const rectId = root().children[root().children.length - 1].id;
+  e.dispatch({ type: "select", ids: [rectId] });
+  e.dispatch({ type: "swapFillStroke" });
+  t("swapFillStroke swaps fill to stroke and stroke to fill", N(rectId).fill === "#0000ff" && N(rectId).strokePaint === "#ff0000");
+  t("swapFillStroke swaps fillVisible and strokeVisible flags", N(rectId).fillVisible === false && N(rectId).strokeVisible === true);
+
+  // 2. toggleStroke (⇧B)
+  e.dispatch({ type: "toggleStroke" });
+  t("toggleStroke toggles strokeVisible false", N(rectId).strokeVisible === false);
+  e.dispatch({ type: "toggleStroke" });
+  t("toggleStroke toggles strokeVisible back true", N(rectId).strokeVisible === true);
+
+  // 3. Sketch % sizing math expressions in fieldExpr
+  t("evalField computes 50% of 200 as 100", evalField("50%", 200) === 100);
+  t("evalField computes 150% of 200 as 300", evalField("150%", 200) === 300);
+  t("evalField computes composite math (200+16)/2 as 108", evalField("(200+16)/2", 0) === 108);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
