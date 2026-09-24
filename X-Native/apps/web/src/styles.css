@@ -1389,6 +1389,77 @@ html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }
 .scolor-op:focus { border-color: var(--blue); outline: none; }
 .scolor-op::placeholder { color: var(--muted); font-size: 10px; }
 .scolor-pct { font-size: 10px; color: var(--muted); margin-left: -2px; }
+/* The Scale tool's panel: a multiplier, a typed factor, and the nine-point
+   anchor box that decides which side of the box holds still. */
+.scale-panel {
+  margin-top: 6px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2, transparent);
+}
+.scale-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.scale-head > span {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+.scale-head select {
+  flex: 1;
+  height: 22px;
+  font-size: 11px;
+  background: var(--input);
+  border: 1px solid transparent;
+  border-radius: 4px;
+}
+.scale-head select:focus { border-color: var(--blue); outline: none; }
+.scale-type {
+  width: 42px;
+  height: 22px;
+  text-align: right;
+  font-size: 11px;
+  background: var(--input);
+  border: 1px solid transparent;
+  border-radius: 4px;
+}
+.scale-type:focus { border-color: var(--blue); outline: none; }
+.scale-anchor {
+  display: grid;
+  grid-template-columns: repeat(3, 16px);
+  grid-template-rows: repeat(3, 16px);
+  gap: 2px;
+  justify-content: start;
+  margin-top: 6px;
+}
+.scale-anchor button {
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--input);
+  padding: 0;
+}
+.scale-anchor button::after {
+  content: "";
+  display: block;
+  width: 4px;
+  height: 4px;
+  margin: 5px auto 0;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.scale-anchor button:hover { border-color: var(--muted); }
+.scale-anchor button.on { border-color: var(--blue); background: var(--blue); }
+.scale-anchor button.on::after { background: #fff; }
+.scale-note {
+  display: block;
+  margin-top: 5px;
+  font-size: 10px;
+  color: var(--muted);
+}
 .paint-row.dragging { opacity: 0.45; }
 .type-menu {
   position: absolute;

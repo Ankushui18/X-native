@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Engine, Interaction, NodeKind, PathPoint, ProtoAnim, Snapshot, Tool, VectorNetwork, XNode } from "../engine/types";
 import { deepestFrame, find, findParent, hitTest, worldToLocal, worldPos } from "../engine/memory";
+import { layersAt } from "./selectSame";
 import {
   erasePath,
   shapePoly,
@@ -2840,7 +2841,10 @@ export function Canvas({
       const shape = node ? { ...node, x: d.orig.x, y: d.orig.y, w: d.orig.w, h: d.orig.h } : null;
       const local = shape ? nodeLocalPoint(raw.x, raw.y, d.orig.x, d.orig.y, shape) : { x: raw.x - d.orig.x, y: raw.y - d.orig.y };
       const b = shape ? { x: d.orig.x + local.x, y: d.orig.y + local.y } : raw;
-      const lock = e.shiftKey || !!node?.aspectLocked;
+      // Two escape hatches Figma documents on this drag: the Scale tool always
+      // holds the ratio, and Control releases a ratio that is locked on the layer.
+      const forcing = snap.tool === "scale" || !!node?.aspectLocked;
+      const lock = e.shiftKey ? true : forcing && !e.ctrlKey;
       const next = resizeFrom(d.orig, d.corner, b.x, b.y, {
         aspect: lock,
         fromCenter: e.altKey,
@@ -3854,6 +3858,7 @@ export function Canvas({
             ),
             !!snap.selection[0] &&
               !!worldPos(snap.pages[snap.page].root, snap.selection[0])?.node.imageSrc,
+            layersAt(snap.pages[snap.page].root, menu.wx, menu.wy),
           )}
           onRun={(id) => runMenu(engine, id, { x: menu.wx, y: menu.wy })}
           onClose={() => setMenu(null)}

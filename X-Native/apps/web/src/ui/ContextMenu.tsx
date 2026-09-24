@@ -3,7 +3,8 @@ import { createPortal } from "react-dom";
 import type { Engine, XNode } from "../engine/types";
 import { plural, toast } from "./toast";
 import { find } from "../engine/memory";
-import { Icon } from "./icons";
+import { Icon, kindIcon } from "./icons";
+import { SAME_KINDS, selectInverse, selectMatching, selectSame } from "./selectSame";
 import { DEV_LANGS, type DevFormat } from "./devPrefs";
 
 export type MenuItem =
@@ -48,6 +49,10 @@ export function ContextMenu({
   const estimated = items.reduce((s, it) => s + (it.kind === "sep" ? 7 : 28), 10);
   const [h, setH] = useState(estimated);
   useLayoutEffect(() => {
+    // While a submenu is open the position has to hold still: re-measuring here
+    // shifts the whole list by a row or so, which moves the row the pointer is
+    // on, and the submenu you meant to open closes on the way.
+    if (openSub !== null) return;
     const el = ref.current;
     if (!el) return;
     const real = el.getBoundingClientRect().height;
@@ -67,8 +72,26 @@ export function ContextMenu({
             <div
               key={i}
               className="ctx-row sub"
+              role="menuitem"
+              aria-haspopup="menu"
+              aria-expanded={openSub === i}
+              tabIndex={0}
               onMouseEnter={() => setOpenSub(i)}
               onMouseLeave={() => setOpenSub((n) => (n === i ? null : n))}
+              // Click and the arrow keys open it too: hover alone left the submenu
+              // unreachable with a keyboard, and a touch pointer has no hover.
+              onClick={() => setOpenSub((n) => (n === i ? null : i))}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowRight" || e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setOpenSub(i);
+                }
+                if (e.key === "ArrowLeft" || e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setOpenSub(null);
+                }
+              }}
             >
               {it.icon && <Icon name={it.icon} size={14} />}
               <span>{it.label}</span>
@@ -121,9 +144,44 @@ export function ContextMenu({
   );
 }
 
-export function canvasMenu(sel: number, isGroup: boolean, hasImage: boolean): MenuItem[] {
+/** The rows Figma puts above every canvas menu: pick one layer out of the stack
+ *  under the cursor, then the "everything that matches" commands. */
+function selectItems(under: XNode[]): MenuItem[] {
+  const out: MenuItem[] = [];
+  if (under.length > 1) {
+    out.push({
+      kind: "sub",
+      label: "Select layer",
+      icon: "layers",
+      items: under.map((n) => ({
+        kind: "action" as const,
+        id: `select-layer:${n.id}`,
+        label: n.name || n.kind,
+        icon: n.locked ? "lock" : kindIcon(n.kind, n.imageSrc),
+        shortcut: n.locked ? "locked" : undefined,
+      })),
+    });
+  }
+  out.push({
+    kind: "sub",
+    label: "Select all with same",
+    items: SAME_KINDS.map((k) => ({ kind: "action" as const, id: `select-same:${k.id}`, label: k.label })),
+  });
+  out.push({ kind: "action", id: "selectMatching", label: "Select matching layers", shortcut: "⌥A", icon: "rect" });
+  out.push({ kind: "action", id: "selectInverse", label: "Select inverse", shortcut: "⇧⌘A" });
+  out.push({ kind: "sep" });
+  return out;
+}
+
+export function canvasMenu(
+  sel: number,
+  isGroup: boolean,
+  hasImage: boolean,
+  under: XNode[] = [],
+): MenuItem[] {
   if (sel === 0) {
     return [
+      ...selectItems(under),
       { kind: "action", id: "paste", label: "Paste", shortcut: "⌘V", icon: "clipboard" },
       { kind: "action", id: "selectAll", label: "Select all", shortcut: "⌘A", icon: "rect" },
       // Figma's docs: right-clicking an empty canvas is the second way to get
@@ -134,6 +192,7 @@ export function canvasMenu(sel: number, isGroup: boolean, hasImage: boolean): Me
     ];
   }
   const items: MenuItem[] = [
+    ...selectItems(under),
     { kind: "action", id: "cut", label: "Cut", shortcut: "⌘X", icon: "scissors" },
     { kind: "action", id: "copy", label: "Copy", shortcut: "⌘C", icon: "copy" },
     { kind: "action", id: "copyProperties", label: "Copy properties", shortcut: "⌥⌘C", icon: "copy" },
@@ -213,6 +272,7 @@ export function layerMenu(isGroup: boolean): MenuItem[] {
   return [
     { kind: "action", id: "rename", label: "Rename", shortcut: "⌘R", icon: "text" },
     { kind: "sep" },
+    ...selectItems([]),
     { kind: "action", id: "cut", label: "Cut", shortcut: "⌘X", icon: "scissors" },
     { kind: "action", id: "copy", label: "Copy", shortcut: "⌘C", icon: "copy" },
     { kind: "action", id: "copyProperties", label: "Copy properties", shortcut: "⌥⌘C", icon: "copy" },
@@ -253,7 +313,23 @@ export function runMenu(
     window.dispatchEvent(new CustomEvent("x-native-copy-code", { detail: { format } }));
     return;
   }
+  if (id.startsWith("select-layer:")) {
+    // The whole point of the submenu is reaching a layer the click order hides.
+    engine.dispatch({ type: "select", ids: [id.slice("select-layer:".length)] });
+    return;
+  }
+  if (id.startsWith("select-same:")) {
+    const snapNow = engine.snapshot();
+    selectSame(engine, snapNow, id.slice("select-same:".length) as never);
+    return;
+  }
   switch (id) {
+    case "selectMatching":
+      selectMatching(engine, engine.snapshot());
+      break;
+    case "selectInverse":
+      selectInverse(engine, engine.snapshot());
+      break;
     case "cut":
       engine.dispatch({ type: "cut" });
       break;

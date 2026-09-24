@@ -2439,9 +2439,19 @@ function applyConstraints(parent: XNode, oldW: number, oldH: number, newW: numbe
 function scaleProps(n: XNode, sx: number, sy: number) {
   const s = (Math.abs(sx) + Math.abs(sy)) / 2;
   n.strokeWidth *= s;
+  n.strokeDash *= s;
+  n.strokeGap *= s;
   n.fontSize *= s;
   n.letterSpacing *= s;
+  n.paragraphSpacing *= s;
+  n.paragraphIndent *= s;
   if (n.lineHeight) n.lineHeight *= s;
+  // Auto layout limits travel with the box, or a shrunk layer would still refuse
+  // to grow past the minimum it had before scaling.
+  for (const key of ["minW", "maxW", "minH", "maxH"] as const) {
+    const v = n[key];
+    if (v) n[key] = v * s;
+  }
   n.cornerRadii = n.cornerRadii.map((r) => r * s) as [number, number, number, number];
   if (n.strokes) {
     for (const st of n.strokes) st.width *= s;

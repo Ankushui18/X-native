@@ -36,6 +36,16 @@ import type {
 } from "../engine/types";
 import { collectColors, defaultEffect, defaultLayout, find, findParent, framesOf, worldPos } from "../engine/memory";
 import { colorUsageAll, recolorMatches, selectByColor, setOpacityMatches } from "./selectionColors";
+import { evalField, hasExpression } from "./fieldExpr";
+import {
+  SCALE_ANCHORS,
+  SCALE_FACTORS,
+  scaleMembers,
+  sizeKeepingRatio,
+  SCALE_LABEL,
+  unionBox,
+  type ScaleAnchor,
+} from "./scaleModel";
 import { shapePoly, pathToVectorNetwork, vectorNetworkToSvgPath, vertexDegree, simplifyPath, smoothPath } from "../engine/geometry";
 import { hugSize } from "./textLayout";
 import { Icon } from "./icons";
@@ -1984,6 +1994,30 @@ function Design({
   const [strokeMore, setStrokeMore] = useState(n.strokeDash > 0);
   const [more, setMore] = useState<{ x: number; y: number } | null>(null);
   const multi = snap.selection.length > 1;
+  const [scaleAnchor, setScaleAnchor] = useState<ScaleAnchor>("mc");
+  /* The Scale tool multiplies the box and everything inside it - stroke weights,
+   * corner radii, type sizes, effects, auto layout gaps - while a plain resize
+   * re-applies the parent's constraints. Both end up in the engine's `resize`,
+   * which owns that difference, so the panel only has to choose the numbers. */
+  const applyScale = (f: number) => {
+    if (!Number.isFinite(f) || f <= 0 || f === 1) return;
+    const root = snap.pages[snap.page].root;
+    const picked = snap.selection
+      .map((id) => find(root, id))
+      .filter((m): m is XNode => !!m && !m.locked);
+    if (!picked.length) {
+      toast("Nothing to scale · the selection is empty or locked");
+      return;
+    }
+    const boxes = picked.map((m) => ({ x: m.x, y: m.y, w: m.w, h: m.h }));
+    const next = scaleMembers(unionBox(boxes), boxes, f, scaleAnchor);
+    engine.dispatch({ type: "begin" });
+    picked.forEach((m, i) =>
+      engine.dispatch({ type: "resize", id: m.id, ...next[i], scaleProps: true }),
+    );
+    engine.dispatch({ type: "end" });
+    toast(`Scaled ${SCALE_LABEL(f)}${picked.length > 1 ? ` · ${plural(picked.length, "layer")}` : ""}`);
+  };
   const num = (
     key: "x" | "y" | "w" | "h" | "rotation" | "opacity" | "fontSize" | "letterSpacing" | "lineHeight" | "paragraphSpacing",
     v: number,
@@ -2000,7 +2034,13 @@ function Design({
     if (key === "w" || key === "h") {
       let w = key === "w" ? v : n.w;
       let h = key === "h" ? v : n.h;
-      if (n.aspectLocked && n.w > 0 && n.h > 0) {
+      // The Scale tool's fields are ratio-bound by definition, whether or not the
+      // layer carries an aspect lock.
+      if (snap.tool === "scale" && n.w > 0 && n.h > 0) {
+        const box = sizeKeepingRatio({ x: n.x, y: n.y, w: n.w, h: n.h }, key === "w" ? { w: v } : { h: v });
+        w = box.w;
+        h = box.h;
+      } else if (n.aspectLocked && n.w > 0 && n.h > 0) {
         const ratio = n.h / n.w;
         if (key === "w") h = Math.max(1, v * ratio);
         else w = Math.max(1, v / ratio);
@@ -2362,6 +2402,64 @@ function Design({
             <Icon name="aspect" size={14} />
           </button>
         </div>
+        {snap.tool === "scale" && (
+          <div className="scale-panel">
+            <div className="scale-head">
+              <span>Scale</span>
+              <select
+                aria-label="Scale multiplier"
+                value=""
+                title="Multiply the size of every selected layer, strokes and type included"
+                onChange={(e) => {
+                  const f = Number(e.target.value);
+                  if (f) applyScale(f);
+                }}
+              >
+                <option value="">Multiplier…</option>
+                {SCALE_FACTORS.map((f) => (
+                  <option key={f} value={f}>
+                    {SCALE_LABEL(f)}
+                  </option>
+                ))}
+              </select>
+              <input
+                className="scale-type"
+                aria-label="Scale by"
+                placeholder="×"
+                title="Type a multiplier, e.g. 1.5, then press Enter"
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter") return;
+                  const el = e.target as HTMLInputElement;
+                  const f = parseFloat(el.value);
+                  if (Number.isFinite(f) && f > 0) applyScale(f);
+                  el.value = "";
+                  el.blur();
+                }}
+                onBlur={(e) => {
+                  const el = e.target as HTMLInputElement;
+                  const f = parseFloat(el.value);
+                  if (Number.isFinite(f) && f > 0) applyScale(f);
+                  el.value = "";
+                }}
+              />
+            </div>
+            <div className="scale-anchor" role="group" aria-label="Scale anchor">
+              {SCALE_ANCHORS.map((a) => (
+                <button
+                  key={a.id}
+                  title={`${a.label} stays put`}
+                  aria-label={`Scale from the ${a.label.toLowerCase()}`}
+                  aria-pressed={scaleAnchor === a.id}
+                  className={scaleAnchor === a.id ? "on" : ""}
+                  onClick={() => setScaleAnchor(a.id)}
+                />
+              ))}
+            </div>
+            <span className="scale-note">
+              Anchor sets which side holds while the multiplier or W/H change.
+            </span>
+          </div>
+        )}
         <div className="grid2" style={{ marginTop: 4 }}>
           <Field label="Min W" value={n.minW || 0} onChange={(v) => patch({ minW: v > 0 ? v : undefined })} />
           <Field label="Max W" value={n.maxW || 0} onChange={(v) => patch({ maxW: v > 0 ? v : undefined })} />
@@ -4198,9 +4296,12 @@ function Field({
   useEffect(() => {
     if (!focused.current) setDraft(fmt(value));
   }, [value]);
+  // Figma reads these fields as arithmetic, not just digits: `120/3`, `2^3`,
+  // `(40+8)*2`, and `+10` to nudge against whatever is already there. Only the
+  // commit evaluates, so typing `12/` mid-expression does not move the layer.
   const commit = () => {
-    const parsed = parseFloat(draft);
-    if (!Number.isNaN(parsed)) {
+    const parsed = hasExpression(draft) ? evalField(draft, value) : parseFloat(draft);
+    if (parsed != null && Number.isFinite(parsed)) {
       onChange(parsed);
       setDraft(fmt(parsed));
     } else {
@@ -4223,13 +4324,14 @@ function Field({
       <input
         value={draft}
         aria-label={aria ?? label}
-        title={aria && !label ? aria : undefined}
+        title={(aria && !label ? aria : "") || "Number or equation · + - * / ^ ( )"}
         onFocus={() => {
           focused.current = true;
         }}
         onChange={(e) => {
           const next = e.target.value;
           setDraft(next);
+          if (hasExpression(next)) return;
           const parsed = parseFloat(next);
           if (!Number.isNaN(parsed)) onChange(parsed);
         }}

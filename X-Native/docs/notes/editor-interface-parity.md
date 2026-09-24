@@ -369,6 +369,123 @@ Three fixes to the section we borrowed from Sketch:
 Tests: 22 added to `parity.test.mjs` (12 contrast, 10 selection colors) on top
 of the 162 from earlier rounds, 184 passing; `tsc -b` clean.
 
+## Layers and selection vs Figma's two layer sections
+
+The next two sections of Figma's docs - "Work with layers" and "Create and edit
+layers" - are 27 articles, most of them about selecting and moving things rather
+than drawing them. Measured against the app, a lot of it was already true:
+arrows nudge and ⇧+arrows take the big step; the six alignment buttons carry
+Figma's ⌥A/⌥D/⌥W/⌥S/H/⌥V and align a single layer to its parent; ⇧-clicking one
+aligns a multi-selection to each layer's *own* parent; distribute keeps the
+outermost layers where they are; `Enter` selects a child, `⇧Enter` the parent,
+`Tab`/`⇧Tab` walk siblings; ⌘-click deep-selects, ⌘-marquee reaches nested layers,
+⇧-click removes a layer from the selection; ⌥ held measures distances; ⌘/Ctrl
+bypasses snapping mid-drag; booleans, flatten, outline stroke, copy/paste
+properties, masks, sections, ruler guides and layout grids are all there. Seven
+things were not, and all seven are now.
+
+### The Scale tool scales content
+
+`K` already existed as a drag mode, but it was a drag mode only: no panel, and
+the drag did not even hold the ratio. Against the article it now behaves:
+
+- With `K` armed, the Layout section grows a **Scale** block - a multiplier
+  dropdown (0.5x to 3x), a field that takes any typed multiplier and clears
+  itself afterwards, and the nine-point **anchor box** that decides which corner
+  or edge holds still. Verifying with a 100x100 rect and the bottom-right anchor
+  at 2x: `x 560 y 160 100x100 → x 460 y 60 200x200` - that corner did not move.
+- Typing `W` while `K` is active sets `H` from the ratio, and a corner drag
+  preserves the ratio on its own, with no ⇧ needed.  still constrains a plain
+  resize, and - the half of the article that is easy to miss - **⌃ releases a
+  ratio that is locked on the layer**: measured on a locked 200x100, a corner
+  drag gave 248x124 normally and 248x108 with Control held.
+- Scaling goes through the engine's `scaleProps`, which multiplies the subtree:
+  child positions and sizes, stroke weights and per-stroke widths, font size,
+  letter spacing, line height, corner radii, effect offsets/blur/spread, path
+  points, auto-layout gaps and padding. A plain resize instead re-applies the
+  parent's constraints and leaves content alone, and both halves are pinned by
+  tests.
+- While there, the property set was widened, because scaling a layer and leaving
+  these behind is visibly wrong: the dash pattern (`strokeDash`/`strokeGap`),
+  paragraph spacing and indent, and the auto-layout `min/max` limits - otherwise
+  a layer shrunk to half stays trapped behind the minimum it had before.
+- A multi-selection scales as one group (members are mapped through the same
+  affine map, so gaps grow too) in a single undo step, and locked layers are
+  skipped, as the article says.
+
+### Equations in the numeric fields
+
+Figma reads X, Y, W, H, rotation, font size and friends as arithmetic. The panel
+used `parseFloat`, which quietly turned `120/3` into `120`. `ui/fieldExpr.ts`
+now handles `+ - * / ^ ( )` with the documented precedence and a right-associative
+`^`, plus the two forms that combine with the value in the field: `+10` means ten
+more than now, `*2` doubles it. Refusals matter as much as parses: a division by
+zero, an unbalanced paren or a NaN leaves the field showing what the document
+actually holds, and unit suffixes keep the old leniency, so `120px` is still 120.
+Live typing is untouched - `12/` while you type must not move the layer - so
+evaluation happens on commit.
+
+### Reaching the layer you mean
+
+- Right-click offers **Select layer**, the list of everything under the cursor in
+  Layers-panel order: a container above the layers inside it, topmost first,
+  hidden layers left out and **locked layers kept with a padlock**, since that
+  menu is how you select a locked layer at all. Picking a row selects only that
+  layer. Verified: right-clicking a rect inside a frame listed
+  `Frame, Rectangle`; choosing `Frame` moved the selection to the frame.
+- **Select all with same** covers Figma's Edit-menu list - Properties, Fill,
+  Stroke, Effect, Text properties, Font - matching on paints (base and extra
+  lists, hidden paints ignored), effect parameters, and the whole type recipe.
+- **Select matching layers** (`⌥⌘A`) implements the article's rule rather than a
+  name search: same layer name, same ancestor names, same depth in the
+  hierarchy, and never the same top-level frame - the point is the copy in the
+  *other* frame. Text layers are the documented exception: a layer still named
+  after its content is identified by its typography, so two buttons that read
+  "Submit" and "Send" match while a renamed one must match by name. The canvas
+  run showed the nested `Rectangle` in both frames selected together, and the
+  first version of the key matched a *loose* layer to a nested one as well,
+  which is how the depth ended up inside the key.
+- **Select inverse** (`⇧⌘A`) takes everything at the same level that is not
+  selected, scoped to siblings because ⌘A is; a toast says so when nothing
+  matches, rather than clearing the selection silently.
+- The Layers panel gained **Collapse all layers**, which folds every expanded
+  container but leaves the selected layer's path open (measured 4 rows → 3 with
+  a layer inside one frame selected).
+
+### A submenu that moved out from under the pointer
+
+Wiring these made an existing defect obvious: the context menu re-measured its
+own height on every render and re-centred vertically, so opening a submenu grew
+the list, shifted it by about a row, and the row under the pointer changed - the
+wrong submenu opened, or the right one closed. The position now freezes while a
+submenu is open, and a submenu also opens on click, `→` or `Enter` (hover-only
+menus were unreachable from the keyboard and on touch). The shortcuts sheet
+gained the two new chords, and a duplicated "Annotate selection" row that had
+been sitting in the list went with them.
+
+### Still open in this area
+
+- **Multi-edit text** and **Multi-edit variants**: with several text layers
+  picked, Figma shows a *Multi-edit text* button (and `Enter`) that edits them all
+  at once; `Q` does the same across variants. Ours edits the first layer.
+- **Tidy up** - distribute's stricter cousin, which arranges a selection into a
+  1D or 2D grid from its top-left and reports the mode spacing - is not
+  implemented; distribute is.
+- **Changing the rotation origin** (`⌥R`, then dragging the target) is not
+  implemented; rotation is always about the centre of the selection.
+- Figma blocks scaling layers nested inside a component instance. Our resize path
+  does not distinguish instance children, so it lets you do it.
+- Matching objects inside **sections** are scoped to their section in Figma; our
+  matcher ignores sections.
+- Point dragging in vector edit has no equivalent of Figma's **Snap to
+  geometry**, and the three snap preferences are two toggles here (the grid
+  button, ⇧ for pixel snap) rather than a preferences row.
+- Smart selection / tidy-up spacing handles, and the view-only selection outline
+  (dashed parent box) belong to the prototype and commenting rounds.
+
+Tests: 56 added to `parity.test.mjs` (17 equations, 8 scale geometry, 22 selection
+helpers, 9 engine content-scaling) - 240 passing; `tsc -b` clean.
+
 ## Open
 
 - Sketch's top-bar Insert menu and Figma's Assets panel tab, "Additional
@@ -379,6 +496,9 @@ of the 162 from earlier rounds, 184 passing; `tsc -b` clean.
 - Colour: pattern fills are not implemented, and image cropping is a fit mode
   rather than the interactive modal Figma has; both are written up at the end of
   the colour section above.
+- Layers: no multi-edit text or variants, no tidy up, no rotation-origin drag,
+  and instance children can be scaled when Figma refuses. Written up at the end
+  of the layers section above.
 - Text styles on type fields, plus the wrapping settings the panel does not
   expose yet: percent letter spacing, OpenType and variable-font axes, hanging
   punctuation, whole-paragraph indentation, links in text, middle truncation.

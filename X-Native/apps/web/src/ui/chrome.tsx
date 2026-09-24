@@ -4,6 +4,7 @@ import { collectColors, defaultLayout, find } from "../engine/memory";
 import { Icon, TOOL_ICON, kindIcon } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { plural, toast } from "./toast";
+import { selectInverse, selectMatching } from "./selectSame";
 import { popoverArmed } from "./popoverGuard";
 import { finishPenDraft } from "./penDraft";
 import { useTheme, type ThemePref } from "./theme";
@@ -187,6 +188,7 @@ function LayerRow({
   drag,
   setDrag,
   onDrop,
+  collapseTick = 0,
 }: {
   n: XNode;
   depth: number;
@@ -197,8 +199,19 @@ function LayerRow({
   drag: LayerDrag | null;
   setDrag: (d: LayerDrag | null) => void;
   onDrop: (d: LayerDrag) => void;
+  /** Bumped by the panel's Collapse button; every row folds on the next value. */
+  collapseTick?: number;
 }) {
   const [open, setOpen] = useState(true);
+  const holds = sel.includes(n.id) || n.children.some(function test(c: XNode): boolean {
+    return sel.includes(c.id) || c.children.some(test);
+  });
+  useEffect(() => {
+    if (!collapseTick) return;
+    // Figma keeps the selected layer visible when it folds everything, so a row
+    // that contains it stays open.
+    if (!holds) setOpen(false);
+  }, [collapseTick]);
   const [renaming, setRenaming] = useState(false);
   const cancelRename = useRef(false);
   const lastDown = useRef(0);
@@ -384,6 +397,7 @@ function LayerRow({
             drag={drag}
             setDrag={setDrag}
             onDrop={onDrop}
+            collapseTick={collapseTick}
           />
         ))}
       {menu && (
@@ -418,6 +432,9 @@ function LeftPanelImpl({
   const [pagesOpen, setPagesOpen] = useState(true);
   const [pageMenuAt, setPageMenuAt] = useState<{ x: number; y: number; i: number } | null>(null);
   const [drag, setDrag] = useState<LayerDrag | null>(null);
+  // One counter for the whole tree: bumping it tells every row to fold, and the
+  // rows answer by themselves so no open-state has to be lifted up here.
+  const [collapseTick, setCollapseTick] = useState(0);
   const root = snap.pages[snap.page].root;
 
   /**
@@ -534,6 +551,15 @@ function LeftPanelImpl({
           <div className="section-label">
             <Icon name="chevron" size={12} />
             Layers
+            <span className="grow" />
+            <button
+              className="icon-btn"
+              title="Collapse all layers (the selected layer's path stays open)"
+              aria-label="Collapse all layers"
+              onClick={() => setCollapseTick((v) => v + 1)}
+            >
+              <Icon name="collapse-layers" size={13} />
+            </button>
           </div>
           <div
             className="tree"
@@ -554,6 +580,7 @@ function LeftPanelImpl({
                 drag={drag}
                 setDrag={setDrag}
                 onDrop={onDrop}
+                collapseTick={collapseTick}
               />
             ))}
           </div>
@@ -1148,6 +1175,19 @@ export function bindHotkeys(
     if (meta && e.key.toLowerCase() === "v") {
       e.preventDefault();
       engine.dispatch({ type: "paste", inPlace: e.shiftKey });
+      return;
+    }
+    // Figma's two selection helpers share the ⌘A chord with Select all: with ⌥ it
+    // gathers the same object in every other frame, with ⇧ it takes everything
+    // at this level that is not already picked.
+    if (meta && e.altKey && e.key.toLowerCase() === "a") {
+      e.preventDefault();
+      selectMatching(engine, engine.snapshot());
+      return;
+    }
+    if (meta && e.shiftKey && e.key.toLowerCase() === "a") {
+      e.preventDefault();
+      selectInverse(engine, engine.snapshot());
       return;
     }
     if (meta && e.key.toLowerCase() === "a") {
@@ -2002,10 +2042,11 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
       { id: "duplicate", name: "Duplicate", keys: ["⌘", "D"] },
       { id: "delete", name: "Delete", keys: ["⌫"] },
       { id: "select-all", name: "Select all", keys: ["⌘", "A"] },
+      { id: "select-matching", name: "Select matching layers", keys: ["⌥", "⌘", "A"] },
+      { id: "select-inverse", name: "Select inverse", keys: ["⇧", "⌘", "A"] },
       { id: "search", name: "Quick actions / Search", keys: ["⌘", "/"] },
       { id: "hide-ui", name: "Show / hide UI", keys: ["⌘", "\\"] },
       { id: "dev-mode", name: "Dev Mode toggle", keys: ["⇧", "D"] },
-      { id: "annotate", name: "Annotate selection", keys: ["⇧", "T"] },
       { id: "annotate", name: "Annotate selection", keys: ["⇧", "T"] },
       { id: "measure", name: "Measure distance", keys: ["⌥ (hold)"] },
       { id: "export-all", name: "Export assets", keys: ["⇧", "⌘", "E"] },
@@ -2139,14 +2180,14 @@ export function HelpBtn() {
       else if (meta && k === "c") matchedId = "copy";
       else if (meta && k === "v") matchedId = "paste";
       else if (meta && k === "d") matchedId = "duplicate";
+      else if (meta && e.altKey && k === "a") matchedId = "select-matching";
+      else if (meta && e.shiftKey && k === "a") matchedId = "select-inverse";
       else if (meta && k === "a") matchedId = "select-all";
       else if (meta && k === "g") matchedId = e.shiftKey ? "ungroup" : "group";
       else if (meta && k === "b") matchedId = "bold";
       else if (meta && k === "u") matchedId = "underline";
       else if (e.shiftKey && k === "a") matchedId = "auto-layout";
       else if (e.shiftKey && k === "d") matchedId = "dev-mode";
-      else if (e.shiftKey && k === "t") matchedId = "annotate";
-      else if (e.shiftKey && e.metaKey && k === "e") matchedId = "export-all";
       else if (e.shiftKey && k === "t") matchedId = "annotate";
       else if (e.shiftKey && e.metaKey && k === "e") matchedId = "export-all";
       else if (

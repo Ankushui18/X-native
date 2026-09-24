@@ -22,6 +22,10 @@ import {
   computeFigmaNoodle,
 } from "../geometry.ts";
 import { MemoryEngine } from "../memory.ts";
+import { evalField, hasExpression } from "../../ui/fieldExpr.ts";
+import { scaleBoxAround, scaleMembers, sizeKeepingRatio, unionBox } from "../../ui/scaleModel.ts";
+import { layersAt, matchingIds, pathIndex, sameIds } from "../../ui/selectSame.ts";
+
 import { colorUsage, colorUsageAll, setOpacityMatches } from "../../ui/selectionColors.ts";
 import { contrastRatio, contrastTarget, nearestAccessible, passesContrast, parseHex, rgbToHsv } from "../../ui/color.ts";
 
@@ -1340,6 +1344,165 @@ console.log("selection colors: only the paints that actually paint:");
   t("the field rewrites every selected paint carrying that color",
     touched === 2 && get(a).fillOpacity === 0.75 && get(b).fillOpacity === 0.75);
   t("a layer outside the selection keeps its own opacity", get(c).fillOpacity === 0.2);
+}
+
+
+console.log("field equations (X/Y/W/H, the way Figma reads them):");
+{
+  t("a plain number still parses", evalField("120", 0) === 120);
+  t("a leading minus is a sign", evalField("-8", 40) === -8);
+  t("division", evalField("120/3", 0) === 40);
+  t("exponent", evalField("2^3", 0) === 8);
+  t("parens and mixed operators", evalField("(40+8)*2", 0) === 96);
+  t("multiplication binds tighter than addition", evalField("2+3*4", 0) === 14);
+  t("a power chain is right associative", evalField("2^3^2", 0) === 512);
+  t("an operator up front applies to the current value", evalField("+10", 50) === 60);
+  t("a trailing operator does too", evalField("*2", 100) === 200);
+  t("unary minus inside an expression", evalField("40--10", 0) === 50);
+  t("decimals and whitespace", evalField(" 1.5 * 8 ", 0) === 12);
+  t("unit suffixes keep the old leniency", evalField("120px", 0) === 120);
+  t("division by zero is refused", evalField("120/0", 5) === null);
+  t("an unbalanced paren is refused", evalField("(120+3", 7) === null);
+  t("an empty field is refused, so the field reverts", evalField("   ", 9) === null);
+  t("NaN never reaches the document", evalField("0/0", 3) === null);
+  t("hasExpression leaves plain numbers alone", !hasExpression("120") && !hasExpression("-4.5") && hasExpression("120/2"));
+}
+
+console.log("the scale tool's geometry:");
+{
+  const b = { x: 100, y: 50, w: 200, h: 100 };
+  const tl = scaleBoxAround(b, 2, 0, 0);
+  t("scaling about the top-left leaves it in place", tl.x === 100 && tl.y === 50 && tl.w === 400 && tl.h === 200);
+  const mc = scaleBoxAround(b, 2, 0.5, 0.5);
+  t("scaling about the centre grows both ways", mc.x === 0 && mc.y === 0 && mc.w === 400 && mc.h === 200);
+  const br = scaleBoxAround(b, 0.5, 1, 1);
+  t("scaling about the bottom-right holds that corner", Math.abs(br.x + br.w - 300) < 1e-9 && Math.abs(br.y + br.h - 150) < 1e-9);
+  const pair = [b, { x: 400, y: 50, w: 100, h: 100 }];
+  const scaled = scaleMembers(unionBox(pair), pair, 2, "tl");
+  t("a multi-selection scales as one group, gaps included",
+    scaled[0].x === 100 && scaled[1].x === 700 && scaled[1].w === 200);
+  t("the union box is what the anchor is measured against",
+    unionBox(pair).w === 400 && unionBox(pair).h === 100);
+  const ratio = sizeKeepingRatio(b, { w: 400 });
+  t("typing a width while scaled keeps the ratio", ratio.h === 200);
+  t("a typed height drives the width", sizeKeepingRatio(b, { h: 50 }).w === 100);
+  t("both fields typed is taken literally", sizeKeepingRatio(b, { w: 10, h: 10 }).w === 10);
+}
+
+console.log("selection helpers:");
+{
+  const nd = (o) => ({
+    kind: "rect", name: "n", x: 0, y: 0, w: 100, h: 100, children: [],
+    strokeWidth: 0, opacity: 1, fillVisible: true, strokeVisible: false, ...o,
+  });
+  // two app screens, each Cart/Checkout > Header > Icon, the shape Figma's
+  // "matching objects" rule is written for
+  const aIcon = nd({ id: "a-icon", name: "Icon", fill: "#ff0000", x: 10, y: 10, w: 24, h: 24 });
+  const bIcon = nd({ id: "b-icon", name: "Icon", fill: "#0000ff", x: 12, y: 8, w: 24, h: 24 });
+  const badge = nd({ id: "badge", name: "Badge", x: 4, y: 4, w: 24, h: 24, children: [nd({ id: "badge-icon", name: "Icon", x: 2, y: 2, w: 8, h: 8 })] });
+  const avatar = nd({ id: "avatar", name: "Avatar", fill: "#00ff00", x: 40, y: 8, w: 24, h: 24 });
+  const otherIcon = nd({ id: "other-icon", name: "Icon", x: 60, y: 60, w: 24, h: 24 });
+  const headA = nd({ id: "a-head", name: "Header", x: 0, y: 0, w: 100, h: 40, children: [aIcon] });
+  const headB = nd({ id: "b-head", name: "Header", x: 0, y: 0, w: 100, h: 40, children: [bIcon, avatar, badge] });
+  const frameA = nd({ id: "fa", kind: "frame", name: "Cart", x: 0, y: 0, w: 100, h: 100, children: [headA, otherIcon] });
+  const frameB = nd({ id: "fb", kind: "frame", name: "Checkout", x: 200, y: 0, w: 100, h: 100, children: [headB] });
+  const page = nd({ id: "root", kind: "page", name: "Page", x: 0, y: 0, w: 0, h: 0, children: [frameA, frameB] });
+
+  t("the same layer in another frame matches", matchingIds(page, aIcon).includes("b-icon"));
+  t("a match does not care that the fills differ", matchingIds(page, aIcon).join() === "b-icon");
+  t("a differently named sibling never matches", !matchingIds(page, aIcon).includes("avatar"));
+  t("a different ancestor name breaks the match", !matchingIds(page, otherIcon).includes("b-icon"));
+  t("the same name one level deeper is a different object", !matchingIds(page, aIcon).includes("badge-icon"));
+  t("a match is never the layer itself", !matchingIds(page, aIcon).includes("a-icon"));
+  const idx = pathIndex(page);
+  t("a nested layer's key is its depth and the chain below its top-level frame",
+    idx.get("a-icon").key === "3:Header/Icon" && idx.get("badge-icon").key === "4:Header/Badge/Icon");
+  t("the top-level frame's own name is not part of a child's key",
+    idx.get("fa").key === "1:Cart" && idx.get("a-head").key === "2:Header");
+  // the shape the canvas test hit: a loose layer and a nested one may share a
+  // name without being the same object
+  const loose = nd({ id: "loose", name: "Icon", x: 0, y: 200, w: 24, h: 24 });
+  const page2 = nd({ id: "r5", kind: "page", children: [loose, frameA, frameB] });
+  t("a top-level layer never matches a nested one of the same name",
+    !matchingIds(page2, loose).includes("a-icon") && !matchingIds(page2, aIcon).includes("loose"));
+
+  t("same fill gathers every layer painted with that colour", sameIds(page, aIcon, "fill").length >= 0);
+  const red = nd({ id: "red", name: "Red", fill: "#ff0000" });
+  const redHidden = nd({ id: "red-hidden", name: "Hidden", fill: "#ff0000", fillVisible: false });
+  const withExtra = nd({ id: "extra", name: "Extra", fill: "#00000000", fillVisible: true, fills: [{ color: "#ff0000", type: "solid", visible: true }] });
+  const tree = nd({ id: "r2", kind: "page", children: [red, redHidden, withExtra, nd({ id: "blue", name: "Blue", fill: "#0000ff" })] });
+  const same = sameIds(tree, red, "fill");
+  t("same fill finds an extra paint that carries the colour", same.includes("extra"));
+  t("same fill ignores a hidden layer", !same.includes("hidden"));
+  t("same fill ignores a different colour", !same.includes("blue"));
+
+  const text = (id, over) => nd({ id, kind: "text", children: [], ...over });
+  const t1 = text("t1", { name: "Submit", text: "Submit", fontFamily: "Inter", fontSize: 16, fontWeight: 400 });
+  const t2 = text("t2", { name: "Send", text: "Send", fontFamily: "Inter", fontSize: 16, fontWeight: 400 });
+  const t3 = text("t3", { name: "Send", text: "Send", fontFamily: "serif", fontSize: 16, fontWeight: 700 });
+  const tree2 = nd({ id: "r3", kind: "page", children: [
+    nd({ id: "f1", kind: "frame", name: "A", children: [t1] }),
+    nd({ id: "f2", kind: "frame", name: "B", children: [t2, t3] }),
+  ] });
+  t("auto-named text matches on typography across frames", matchingIds(tree2, t1).includes("t2"));
+  t("text with different type does not match", !matchingIds(tree2, t1).includes("t3"));
+  t("same font finds both weights of the family", sameIds(tree2, t1, "font").includes("t2"));
+  t("same text properties needs the whole recipe", !sameIds(tree2, t1, "text").includes("t3") && sameIds(tree2, t1, "text").includes("t2"));
+
+  const stack = nd({ id: "r4", kind: "page", children: [
+    nd({ id: "bg", name: "BG", x: 0, y: 0, w: 100, h: 100 }),
+    // paint order runs left to right, so Chip (last) is the topmost layer and
+    // the first row the Layers panel - and the select-layer menu - shows
+    nd({ id: "card", name: "Card", x: 0, y: 0, w: 100, h: 100, children: [
+      nd({ id: "gone", name: "Gone", x: 10, y: 10, w: 20, h: 20, visible: false }),
+      nd({ id: "pad", name: "Locked", x: 10, y: 10, w: 20, h: 20, locked: true }),
+      nd({ id: "chip", name: "Chip", x: 10, y: 10, w: 20, h: 20 }),
+    ] }),
+  ] });
+  const at = layersAt(stack, 15, 15).map((n) => n.name);
+  t("the select-layer list reads like the Layers panel", at.join() === "Card,Chip,Locked,BG");
+  t("a parent sits above the layers it contains", at.indexOf("Card") < at.indexOf("Chip"));
+  t("hidden layers are left out of the list", !at.includes("Gone"));
+  t("locked layers are kept so they can still be picked", at.includes("Locked"));
+  t("a point outside every layer lists nothing", layersAt(stack, 500, 500).length === 0);
+}
+
+console.log("the scale tool scales content, not just the box:");
+{
+  const e = new MemoryEngine(false);
+  e.dispatch({ type: "add", kind: "frame", x: 0, y: 0, w: 100, h: 50 });
+  const frame = e.snapshot().selection[0];
+  e.dispatch({ type: "add", kind: "rect", x: 10, y: 10, w: 20, h: 20 });
+  const kid = e.snapshot().selection[0];
+  e.dispatch({ type: "reparent", ids: [kid], parent: frame, x: 10, y: 10 });
+  e.dispatch({
+    type: "patch", id: frame,
+    patch: {
+      strokeWidth: 2, strokeDash: 6, strokeGap: 3,
+      cornerRadii: [8, 8, 8, 8], minW: 40, maxW: 400, paragraphSpacing: 4, paragraphIndent: 12,
+    },
+  });
+  const look = (id) => {
+    const sn = e.snapshot();
+    let out = null;
+    const walk = (n) => { if (n.id === id) out = n; n.children?.forEach(walk); };
+    walk(sn.pages[sn.page].root);
+    return out;
+  };
+  e.dispatch({ type: "resize", id: frame, x: 0, y: 0, w: 200, h: 100, scaleProps: true });
+  const f = look(frame);
+  t("stroke weight follows the box", f.strokeWidth === 4);
+  t("the dash pattern follows too", f.strokeDash === 12 && f.strokeGap === 6);
+  t("corner radii follow", f.cornerRadii[0] === 16);
+  t("auto layout limits follow", f.minW === 80 && f.maxW === 800);
+  t("paragraph metrics follow", f.paragraphSpacing === 8 && f.paragraphIndent === 24);
+  const k = look(kid);
+  t("children move and grow with the parent", k.x === 20 && k.y === 20 && k.w === 40 && k.h === 40);
+  e.dispatch({ type: "undo" });
+  t("one undo restores the whole scale", look(frame).strokeWidth === 2 && look(frame).w === 100);
+  e.dispatch({ type: "resize", id: frame, x: 0, y: 0, w: 200, h: 100 });
+  t("a plain resize leaves content alone", look(frame).strokeWidth === 2 && look(frame).cornerRadii[0] === 8);
+  t("and re-applies the child's constraints instead of scaling it", look(kid).w !== 40 || look(kid).x === 10);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
