@@ -8,7 +8,7 @@
  * different answer for the same layer — so the answer lives here instead, and
  * outlives a reload, which is what Figma's Inspect settings do too.
  */
-export type DevFormat = "css" | "tailwind" | "swiftui" | "compose" | "flutter" | "svg" | "figma";
+export type DevFormat = "css" | "tailwind" | "swiftui" | "compose" | "flutter" | "svg" | "figma" | "tokens";
 export type DevUnit = "px" | "rem";
 
 /** Order matters: it is the order of Figma's language dropdown. */
@@ -20,6 +20,7 @@ export const DEV_LANGS: { id: DevFormat; label: string; lang: string }[] = [
   { id: "flutter", label: "Flutter", lang: "dart" },
   { id: "svg", label: "SVG", lang: "xml" },
   { id: "figma", label: "JSON", lang: "json" },
+  { id: "tokens", label: "Design Tokens", lang: "json" },
 ];
 
 export const devLangLabel = (id: DevFormat): string => DEV_LANGS.find((l) => l.id === id)?.label ?? "CSS";

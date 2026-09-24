@@ -94,6 +94,8 @@ export function node(
     strokeDash: 0,
     strokeGap: 0,
     strokeCap: kind === "arrow" ? "arrow" : "none",
+    strokeCapStart: "none",
+    strokeCapEnd: kind === "arrow" ? "arrow" : "none",
     strokeJoin: "miter",
     opacity: 1,
     visible: true,
@@ -687,6 +689,7 @@ interface Internal {
   showRulers: boolean;
   showMinimap: boolean;
   showComments: boolean;
+  outlineMode: boolean;
   pixelPreview: PixelPreview;
   viewLayoutGuides: boolean;
   propertyLabels: boolean;
@@ -761,6 +764,8 @@ export class MemoryEngine implements Engine {
   private lastHist: { type: string; at: number } | null = null;
   private clip: XNode[] = [];
   private copiedProps: Partial<XNode> | null = null;
+  private lastDupDelta: { dx: number; dy: number } | null = null;
+  private justDuplicated = false;
 
   /** Set when a stored document existed but could not be read, so the UI can
    *  tell the user their work was replaced rather than silently starting over. */
@@ -814,6 +819,7 @@ export class MemoryEngine implements Engine {
       showRulers: doc?.showRulers ?? false,
       showMinimap: doc?.showMinimap ?? false,
       showComments: doc?.showComments ?? false,
+      outlineMode: false,
       pixelPreview: "off",
       viewLayoutGuides: true,
       propertyLabels: false,
@@ -1072,6 +1078,7 @@ export class MemoryEngine implements Engine {
       showRulers: this.state.showRulers,
       showMinimap: this.state.showMinimap,
       showComments: this.state.showComments,
+      outlineMode: this.state.outlineMode ?? false,
       pixelPreview: this.state.pixelPreview,
       viewLayoutGuides: this.state.viewLayoutGuides,
       propertyLabels: this.state.propertyLabels,
@@ -1101,6 +1108,7 @@ export class MemoryEngine implements Engine {
     switch (cmd.type) {
       case "select":
         s.selection = cmd.ids;
+        this.justDuplicated = false;
         if (s.vecEdit && !s.selection.includes(s.vecEdit)) {
           s.vecEdit = null;
           s.vecPoint = null;
@@ -1153,6 +1161,74 @@ export class MemoryEngine implements Engine {
         s.showComments = !s.showComments;
         if (!s.showComments) s.openComment = "";
         break;
+      case "toggleOutlines":
+        s.outlineMode = !s.outlineMode;
+        break;
+      case "swapFillStroke": {
+        for (const id of s.selection) {
+          const n = find(this.root(), id);
+          if (n && !n.locked) {
+            const curFill = n.fill;
+            const curStroke = n.strokePaint;
+            const curFillVis = n.fillVisible ?? true;
+            const curStrokeVis = n.strokeVisible ?? false;
+            const curWidth = n.strokeWidth || 1;
+            n.fill = curStroke || "#000000";
+            n.strokePaint = curFill || "#000000";
+            n.fillVisible = curStrokeVis;
+            n.strokeVisible = curFillVis;
+            if (!n.strokeWidth) n.strokeWidth = curWidth;
+          }
+        }
+        break;
+      }
+      case "toggleStroke": {
+        for (const id of s.selection) {
+          const n = find(this.root(), id);
+          if (n && !n.locked) {
+            const isVis = n.strokeVisible && n.strokeWidth > 0;
+            n.strokeVisible = !isVis;
+            if (!isVis && !n.strokeWidth) n.strokeWidth = 1;
+            if (!n.strokePaint || n.strokePaint === "#00000000") n.strokePaint = "#000000";
+          }
+        }
+        break;
+      }
+      case "tidyUp": {
+        const items = s.selection
+          .map((id) => find(this.root(), id))
+          .filter((n): n is XNode => !!n && !n.locked);
+        if (items.length < 2) break;
+        const xs = items.map((i) => i.x);
+        const ys = items.map((i) => i.y);
+        const spanX = Math.max(...xs) - Math.min(...xs);
+        const spanY = Math.max(...ys) - Math.min(...ys);
+        const isHoriz = cmd.axis === "h" || (cmd.axis !== "v" && spanX >= spanY);
+        if (isHoriz) {
+          items.sort((a, b) => a.x - b.x);
+          const minX = items[0].x;
+          const maxX = items[items.length - 1].x + items[items.length - 1].w;
+          const totalW = items.reduce((sum, n) => sum + n.w, 0);
+          const gap = Math.max(0, (maxX - minX - totalW) / (items.length - 1));
+          let cur = minX;
+          for (const item of items) {
+            item.x = Math.round(cur);
+            cur += item.w + gap;
+          }
+        } else {
+          items.sort((a, b) => a.y - b.y);
+          const minY = items[0].y;
+          const maxY = items[items.length - 1].y + items[items.length - 1].h;
+          const totalH = items.reduce((sum, n) => sum + n.h, 0);
+          const gap = Math.max(0, (maxY - minY - totalH) / (items.length - 1));
+          let cur = minY;
+          for (const item of items) {
+            item.y = Math.round(cur);
+            cur += item.h + gap;
+          }
+        }
+        break;
+      }
       case "openComment":
         s.openComment = cmd.id;
         break;
@@ -1251,6 +1327,10 @@ export class MemoryEngine implements Engine {
         break;
       }
       case "move":
+        if (this.justDuplicated) {
+          this.lastDupDelta = { dx: cmd.dx, dy: cmd.dy };
+          this.justDuplicated = false;
+        }
         for (const id of cmd.ids) {
           const n = find(this.root(), id);
           if (n && !n.locked) {
@@ -1410,6 +1490,7 @@ export class MemoryEngine implements Engine {
       }
       case "duplicate": {
         const created: string[] = [];
+        const delta = this.lastDupDelta ?? { dx: 10, dy: 10 };
         for (const id of s.selection) {
           const n = find(this.root(), id);
           const p = findParent(this.root(), id) ?? this.root();
@@ -1417,8 +1498,8 @@ export class MemoryEngine implements Engine {
           const copy = clone(n);
           const masterId = n.isComponent ? n.componentId || n.id : n.componentId;
           reid(copy);
-          copy.x += 10;
-          copy.y += 10;
+          copy.x += delta.dx;
+          copy.y += delta.dy;
           const baseName = n.name;
           const copyMatch = baseName.match(/^(.*?)(?: copy(?: (\d+))?)?$/);
           if (copyMatch) {
@@ -1442,6 +1523,7 @@ export class MemoryEngine implements Engine {
           created.push(copy.id);
         }
         s.selection = created;
+        this.justDuplicated = true;
         break;
       }
       case "patch": {
@@ -1658,6 +1740,8 @@ export class MemoryEngine implements Engine {
           strokeDash: n.strokeDash,
           strokeGap: n.strokeGap,
           strokeCap: n.strokeCap,
+          strokeCapStart: n.strokeCapStart,
+          strokeCapEnd: n.strokeCapEnd,
           strokeJoin: n.strokeJoin,
           strokeAlign: n.strokeAlign,
           strokes: n.strokes ? clone(n.strokes) : undefined,
@@ -1699,6 +1783,8 @@ export class MemoryEngine implements Engine {
           if (p.strokeDash !== undefined) n.strokeDash = p.strokeDash;
           if (p.strokeGap !== undefined) n.strokeGap = p.strokeGap;
           if (p.strokeCap !== undefined) n.strokeCap = p.strokeCap;
+          if (p.strokeCapStart !== undefined) n.strokeCapStart = p.strokeCapStart;
+          if (p.strokeCapEnd !== undefined) n.strokeCapEnd = p.strokeCapEnd;
           if (p.strokeJoin !== undefined) n.strokeJoin = p.strokeJoin;
           if (p.strokeAlign !== undefined) n.strokeAlign = p.strokeAlign;
           if (p.strokes) n.strokes = clone(p.strokes);
