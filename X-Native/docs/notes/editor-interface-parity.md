@@ -45,7 +45,7 @@ we match.
 | Components | masters, instances, variants, properties, slots | masters and instances | (the app has both plus overrides) | **partial** |
 | Variables | collections, modes, remote | a `tokens` tab and a variable list | read | **partial** |
 | Text | styles, lists, OpenType, variable fonts, CJK, RTL, links, emoji | wrapping, alignment, decoration, auto-height, letter spacing | read | **partial** |
-| Auto layout | horizontal, vertical, grid, wrap, per-child settings | a `layout` model, padding, gap (number or Auto with Between/Around/Evenly), alignment, hug/fill/fixed, ignore, suggest | read | **partial — everything but the grid flow and the alignment-box keys; see the round section** |
+| Auto layout | horizontal, vertical, grid, wrap, per-child settings | a `layout` model, padding (V/H or per-side, CSS shorthand), gap (number or Auto with Between/Around/Evenly), the alignment box with its keys, hug/fill/fixed, ignore, suggest, edge double-clicks and padding handles on the canvas | read | **partial — the grid flow is the next article; see the two round sections** |
 | Prototypes | triggers, actions, animations, easing, overlays, flows | flows, overlays, transitions, present mode | read | **partial** |
 | Comments | threads, replies, resolve, mentions | threads, replies, resolve | read | **partial** |
 | Multiplayer | cursors, cursor chat, spotlight, branching, history | none of it; a local file | - | **n/a** - no server |
@@ -1017,6 +1017,79 @@ multiplayer, but the toggle and its ⌥⌘\ belong in the same menu) and
 article describes is otherwise now this app's zoom field menu plus the canvas
 menu, which between them carry every switch above.
 
+## The alignment box, the padding fields, and the gestures on the canvas
+
+The second auto layout article — "Use the horizontal or vertical flows in auto
+layout" (31289464393751, all three chunks) — is where the alignment box and the
+padding controls are actually specified. Everything below was read off it, put
+in `engine/layout.ts` so the box and the engine share one answer, asserted, and
+then driven through the real panel (`/tmp/probe/align_pad.mjs`).
+
+### The alignment box
+
+| Article | Ours, measured |
+| --- | --- |
+| "Select the box and use arrow keys to switch between the different alignment settings" | The box takes focus and the arrows step: on a 300-wide row holding three 40-wide objects, one press of `→` moved them from x 8 to x 48, a second to x 88, and a third wrapped back to x 8. Arrows move one position at a time rather than jumping to an edge. |
+| "Select the box and press W/A/S/D to set alignment to the edge of the frame" | `D` packed the row to the end (x 8 → 156), `A` brought it back (156 → 8), `W`/`S` did the same on the cross axis (y 8 → 72). The arrows turn with the flow, so on a vertical frame `↓` steps the main axis and `→` the cross axis. |
+| Auto gap reduces the box to three options | With `X` (see below) the gap goes Auto and the box drops from nine cells to three — measured `cells: 3, reduced: true` — and they are the cross-axis positions the article names: horizontal flows get Top / Center / Bottom, vertical flows Left / Center / Right. |
+| "click the alignment box in the right panel, and press `X`" to switch the gap | `X` switched the gap to Auto (`Auto · Between`, child xs 8 / 130 / 252 across a 300-wide frame) and back to a number (gap 8 again). With Auto on, a main-axis key is refused — `D` changed nothing — because Auto owns that axis; `S` still worked. |
+| "press `B` to toggle text baseline alignment on and off" | The align button's tooltip flipped between "Align to text baseline" and "Baseline alignment active" and back. Baseline only exists on a horizontal flow, so a vertical frame refuses it. |
+| "you can't control the alignment of the objects individually … you set the alignment on the parent" | Nothing in the child panel touches alignment; the box writes to the parent's layout, as before. |
+| "If the objects in the frame are too large to fit with positive spacing, the gap will stop at `0`" | Already held by `autoSpacing`; the Auto-gap tests cover the zero-slack case. |
+
+The box also answers the article's single-child note: with the default Between
+spacing, one object in an Auto-gap stack sits at the start of the flow, not in
+the middle.
+
+### The padding fields
+
+Figma's panel keeps padding as a horizontal and a vertical value by default and
+offers the four individual sides behind a button; a pair whose two sides
+disagree reads **Mixed**. Ours now does the same, and the article's shorthand is
+on the fields:
+
+- `⌘`/`Ctrl`+click a padding field and it takes CSS shorthand, as the article
+  describes. Measured on the canvas: `1,2,3,4` gave L,R,T,B = 4, 2, 1, 3 — CSS
+  order, top-right-bottom-left; `10,20` gave L,R,T,B = 10, 10, 20, 20 (top/bottom
+  then left/right); the same works from the vertical field. A nonsense entry
+  ("wide") changes nothing and the field snaps back.
+- The four individual fields appear behind the same button; `L 7 / R 8` reads
+  `Vertical padding: 5, Horizontal padding: Mixed`, which is what Figma shows.
+- A frame can no longer be smaller than its own padding: the article's "If a
+  frame is set to hug contents or a fixed size smaller than its padding, the
+  frame will size up to fit the padding" is now enforced in `applyLayout`, so a
+  300-wide frame with 30 of horizontal padding refuses to be resized to 10 and
+  settles at 60.
+
+### On the canvas
+
+| Gesture | Ours, measured |
+| --- | --- |
+| "Double-click vertical or horizontal edge" → **Hug contents** | Double-clicking the right edge of a 300-wide frame took it to 150, the width of its contents, and the panel read `W · hug`. On a non-auto-layout frame it sets that axis' resizing on the layer, which is what Figma does too. |
+| "⌥ Option + Double-click" → **Fill container** | On a child of an auto layout frame: the child's width went 40 → 190, filling the frame, and the panel read `W · fill`. On a top-level frame there is nothing to fill, so it says so — a toast, "Fill container needs an auto layout parent" — instead of quietly doing nothing. |
+| "Click handles to open input fields and enter a numeric value" | Clicking (not dragging) a padding handle opens a small field over it: the top handle read 5, typing 24 set the top to 24 and left the bottom at 5. Holding `⌥` while clicking opens it as "Opposite sides" and the same entry set T and B to 40 together. ⌥⇧ widens it to all four. |
+| "Click and drag the handle to change the spacing" | Unchanged, and it now shares the exact modifier handling with the click: a drag that does not move the handle by a single unit is treated as the click. |
+
+### One defect found while probing
+
+Typing a width into a **hugging** frame looked like it worked and then snapped
+back: the value showed 300, the panel said `W · fixed`, and the frame went back
+to 152. The cause was a genuine split — an auto layout frame keeps its resizing
+in two places (the layout's own pair, and the layer's resizing menu) and the
+engine hugs if *either* asks for it, but a manual resize was only setting the
+layout's. Both are set now, so the typed number holds and survives the next
+layout pass. Measured after the fix: `W 300` → 300, `W · fixed`, and still 300
+after re-selecting the layer.
+
+### What is still open from this article
+
+The padding *canvas* handles are reachable only on a selected frame, so hovering
+a frame in the layers panel does not show them as Figma's pink handles do;
+"Press the `tab` key to move between input fields" is not wired; and the ⌘+click
+that Figma uses to edit all four sides in place is used here for CSS shorthand
+instead — the same result by a different route, with the four fields one click
+away. The grid flow and multi-dimensional nesting are separate articles.
+
 ## Auto layout, held up against "Guide to auto layout"
 
 The guide (article 360040451373, all three chunks) is the table stakes: what an
@@ -1420,12 +1493,9 @@ fields (exposure, contrast, saturation).
   file's components do not become editable masters (that is the "Build design
   systems" article, still uncovered), and a mirrored node arrives un-mirrored,
   because the node model has no flip.
-- Auto layout: the alignment box is click-only — the article's keys (`↓ → ← ↑`
-  for alignment, `W A S D` for an edge, `B` for baseline, `X` to toggle the gap
-  between) are not wired to it. Double-clicking a bounding-box edge to set Hug,
-  ⌥-double-clicking for Fill, and ⌘+click on a padding field to edit all four
-  sides are likewise not built. The grid flow and multi-dimensional nesting are
-  separate articles this round did not enter.
+- Auto layout: the padding handles only appear on a selected frame rather than
+  on hover, `tab` does not move between the padding fields, and the grid flow
+  and multi-dimensional nesting are separate articles not yet entered.
 - The behaviour suite (`e2e/behaviour.mjs`) is stale: it looks for a "Chip"
   layer the demo document no longer has, so it fails on its first check.
 - Text styles on type fields, plus the wrapping settings the panel does not

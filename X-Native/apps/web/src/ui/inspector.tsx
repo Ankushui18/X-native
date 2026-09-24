@@ -66,11 +66,16 @@ import {
 import { pathToVectorNetwork, vectorNetworkToSvgPath, vertexDegree, simplifyPath, smoothPath } from "../engine/geometry";
 import {
   SPACING_MODES,
+  alignKey,
+  alignmentCells,
   effectiveSizing,
   hasFillChild,
   isAutoGap,
+  layoutKeyPatch,
+  parsePaddingShorthand,
   suggestLayout,
   wraps,
+  type AlignCell,
 } from "../engine/layout";
 import { hugSize } from "./textLayout";
 import { Icon, caretSize, rowIconSize } from "./icons";
@@ -3138,11 +3143,11 @@ function Design({
             {padOpen ? (
               <div className="grid2">
                 {(["L", "R", "T", "B"] as const).map((lab, i) => (
-                  <Field
+                  <PadField
                     key={lab}
                     label={lab}
                     value={n.layout!.padding[i]}
-                    onChange={(v) => {
+                    onCommit={(v) => {
                       const p = [...n.layout!.padding] as [number, number, number, number];
                       p[i] = v;
                       engine.dispatch({
@@ -3155,22 +3160,47 @@ function Design({
                 ))}
               </div>
             ) : (
-              <Field
-                icon="padding"
-                aria="Padding"
-                value={n.layout.padding[0]}
-                onChange={(v) =>
-                  engine.dispatch({
-                    type: "autoLayout",
-                    id: n.id,
-                    layout: { ...n.layout!, padding: [v, v, v, v] },
-                  })
-                }
-              />
+              // Figma's panel keeps the padding as a horizontal and a vertical
+              // value by default - "Padding controls in the right panel are
+              // separated into vertical (top and bottom) and horizontal (left
+              // and right) by default" - and reads Mixed when the two sides of
+              // a pair disagree. The four individual fields are one click away.
+              <div className="grid2">
+                <PadField
+                  icon="padding-horizontal"
+                  aria="Horizontal padding"
+                  value={n.layout.padding[0]}
+                  mixed={n.layout.padding[0] !== n.layout.padding[1] ? "Mixed" : undefined}
+                  onCommit={(v) => {
+                    const p = [...n.layout!.padding] as [number, number, number, number];
+                    p[0] = v;
+                    p[1] = v;
+                    engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, padding: p } });
+                  }}
+                  onShorthand={(p) =>
+                    engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, padding: p } })
+                  }
+                />
+                <PadField
+                  icon="padding-vertical"
+                  aria="Vertical padding"
+                  value={n.layout.padding[2]}
+                  mixed={n.layout.padding[2] !== n.layout.padding[3] ? "Mixed" : undefined}
+                  onCommit={(v) => {
+                    const p = [...n.layout!.padding] as [number, number, number, number];
+                    p[2] = v;
+                    p[3] = v;
+                    engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, padding: p } });
+                  }}
+                  onShorthand={(p) =>
+                    engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, padding: p } })
+                  }
+                />
+              </div>
             )}
             <button
-              className="icon-btn"
-              title="Independent padding"
+              className={`icon-btn${padOpen ? " on" : ""}`}
+              title="Independent padding (top, right, bottom, left)"
               onClick={() => setPadOpen((v) => !v)}
             >
               <Icon name="independent" size={14} />
@@ -4687,6 +4717,17 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
   );
 }
 
+/**
+ * The alignment box.
+ *
+ * Figma's article: "Select the box and use arrow keys to switch between the
+ * different alignment settings. Select the box and press W/A/S/D to set
+ * alignment to the edge of the frame" - so the box takes focus, arrows step the
+ * position along an axis, the letters jump to an edge, `B` toggles baseline
+ * alignment and `X` switches the gap between a number and Auto. The cells
+ * themselves come from `alignmentCells`, which drops the box to the three
+ * cross-axis options once the gap is Auto, as the article describes.
+ */
 function Nine({
   layout,
   onChange,
@@ -4694,24 +4735,56 @@ function Nine({
   layout: AutoLayout;
   onChange: (p: Partial<AutoLayout>) => void;
 }) {
-  const cells: { j: LayoutJustify; a: LayoutAlign }[] = [
-    { j: "min", a: "min" },
-    { j: "center", a: "min" },
-    { j: "max", a: "min" },
-    { j: "min", a: "center" },
-    { j: "center", a: "center" },
-    { j: "max", a: "center" },
-    { j: "min", a: "max" },
-    { j: "center", a: "max" },
-    { j: "max", a: "max" },
-  ];
+  const cells = alignmentCells(layout);
   const jj = layout.justify === "between" ? "min" : layout.justify;
+  const horizontal = layout.direction === "horizontal";
+  const reduced = cells.length === 3;
+  // A baseline position is a cross-axis setting of its own, so it gets its own
+  // name rather than being folded in with the three edges.
+  const crossName = (a: LayoutAlign) =>
+    a === "baseline"
+      ? "Baseline"
+      : a === "min"
+        ? horizontal
+          ? "Top"
+          : "Left"
+        : a === "center"
+          ? "Center"
+          : horizontal
+            ? "Bottom"
+            : "Right";
+  const mainName = (j: LayoutJustify) =>
+    j === "min" ? "" : j === "center" ? " · centered" : j === "between" ? " · space between" : " · packed to the end";
+  const titleOf = (c: AlignCell) =>
+    reduced ? crossName(c.a) : `${crossName(c.a)}${mainName(c.j)}`;
   return (
-    <div className="nine" title="Alignment">
+    // The attribute is how the app-wide key handlers know to stand down: while
+    // this box has focus the keys above are the box's, not the canvas's.
+    <div
+      className={`nine${reduced ? " nine-reduced" : ""}${layout.align === "baseline" ? " baseline" : ""}`}
+      title="Alignment — arrows step, W/A/S/D jump to an edge, B toggles baseline, X switches the gap"
+      data-align-box="1"
+      tabIndex={0}
+      role="group"
+      aria-label="Alignment"
+      onKeyDown={(e) => {
+        // Modifier chords are left to the app: ⌘A, ⌘S and friends still work.
+        if (e.metaKey || e.ctrlKey) return;
+        const key = alignKey(e.key);
+        if (!key) return;
+        const patch = layoutKeyPatch(layout, key);
+        if (!patch) return;
+        e.preventDefault();
+        e.stopPropagation();
+        onChange(patch);
+      }}
+    >
       {cells.map((c, i) => (
         <button
           key={i}
+          title={titleOf(c)}
           className={jj === c.j && layout.align === c.a ? "on" : ""}
+          aria-label={titleOf(c)}
           onClick={() => onChange({ justify: c.j, align: c.a })}
         />
       ))}
@@ -4766,6 +4839,102 @@ function DashPatternField({
           }
         }}
       />
+    </div>
+  );
+}
+
+/**
+ * A padding field.
+ *
+ * Figma: "To set uniform padding or to use CSS shorthand, hold ⌘ Command or
+ * Control and click into any padding field... entering 1,2,3,4 sets the top,
+ * right, bottom, and left to 1, 2, 3, and 4 respectively." So a plain click
+ * commits one number, and a ⌘/Ctrl click turns the same field into a shorthand
+ * entry - `1`, `1,2`, `1,2,3` or `1,2,3,4` - parsed by `parsePaddingShorthand`.
+ * Anything that is not a list of numbers is refused and the field snaps back,
+ * exactly as the other numeric fields in the panel do.
+ */
+function PadField({
+  label,
+  icon,
+  aria,
+  value,
+  mixed,
+  onCommit,
+  onShorthand,
+}: {
+  label?: string;
+  icon?: string;
+  aria?: string;
+  value: number;
+  mixed?: string;
+  onCommit: (v: number) => void;
+  /** Only the H/V fields accept shorthand: with four separate fields there is
+   *  no single entry to spell four sides out in. */
+  onShorthand?: (p: [number, number, number, number]) => void;
+}) {
+  const [shorthand, setShorthand] = useState(false);
+  const [draft, setDraft] = useState("");
+  const shown = shorthand ? draft : mixed ?? String(Math.round(value * 100) / 100);
+  const commit = (raw: string) => {
+    if (shorthand && onShorthand) {
+      const parsed = parsePaddingShorthand(raw);
+      if (parsed) onShorthand(parsed);
+      else if (!/[0-9]/.test(raw)) onCommit(value);
+      setShorthand(false);
+      return;
+    }
+    const n = parseFloat(raw);
+    if (Number.isFinite(n)) onCommit(n);
+  };
+  return (
+    <div className={`field${shorthand ? " shorthand" : ""}`} data-pname={aria ?? label}>
+      {icon ? <Icon name={icon} size={14} /> : <label title={label}>{label}</label>}
+      <input
+        value={shown}
+        aria-label={aria ?? label}
+        title={
+          shorthand
+            ? "CSS shorthand: 1 · 1,2 · 1,2,3 · 1,2,3,4 (top, right, bottom, left)"
+            : "⌘-click to set all sides, or type 1,2,3,4"
+        }
+        onMouseDown={(e) => {
+          if ((e.metaKey || e.ctrlKey) && onShorthand) {
+            // The click that starts the shorthand is also the click that would
+            // have placed the caret: swallow it and put the caret at the end.
+            setShorthand(true);
+            setDraft("");
+            e.preventDefault();
+            (e.target as HTMLInputElement).focus();
+            (e.target as HTMLInputElement).select();
+          }
+        }}
+        onFocus={() => {
+          if (shorthand) setDraft("");
+        }}
+        onChange={(e) => {
+          const next = e.target.value;
+          setDraft(next);
+          // Shorthand is only read once the entry is finished - part-way
+          // through `1,2,3,4` every prefix is a different set of sides.
+          if (shorthand) return;
+          const n = parseFloat(next);
+          if (Number.isFinite(n)) onCommit(n);
+        }}
+        onBlur={(e) => {
+          commit(e.target.value);
+          setDraft("");
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          if (e.key === "Escape") {
+            setShorthand(false);
+            setDraft("");
+            (e.target as HTMLInputElement).blur();
+          }
+        }}
+      />
+      {!shorthand && mixed && <span className="hint">{mixed[0].toUpperCase()}</span>}
     </div>
   );
 }

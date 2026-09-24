@@ -48,6 +48,7 @@ import { toast } from "./toast";
 import { Icon } from "./icons";
 import { zoomAtPoint, zoomToRect } from "./zoom";
 import { getNudgePrefs } from "./nudgePrefs";
+import { alignKey } from "../engine/layout";
 
 /** Snap radius in screen pixels; divided by zoom to get world tolerance. */
 const SNAP_PX = 6;
@@ -126,6 +127,13 @@ type Drag =
       handle?: "in" | "out" | "g" | "h";
       padEdge?: "top" | "right" | "bottom" | "left";
       forcedSide?: "right" | "bottom" | "left" | "top";
+      /** ⌥ at the padding handle: the opposite side follows. ⌥⇧: all four. */
+      padOpp?: boolean;
+      padAll?: boolean;
+      /** A padding handle that was clicked rather than dragged opens a field to
+       *  type a value into - Figma: "Click handles to open input fields and
+       *  enter a numeric value". */
+      moved?: boolean;
       origPad?: [number, number, number, number];
       origGap?: number;
       fromX?: number;
@@ -229,6 +237,16 @@ export function Canvas({
   const [hoverCursor, setHoverCursor] = useState<string | null>(null);
   /* Figma keeps the rotation origin out of the way until `⌥R` asks for it. */
   const [rotTarget, setRotTarget] = useState(false);
+  /** An open padding entry, from clicking a handle on an auto layout frame. */
+  const [padInput, setPadInput] = useState<{
+    id: string;
+    edge: "top" | "right" | "bottom" | "left";
+    value: number;
+    left: number;
+    top: number;
+    opp: boolean;
+    all: boolean;
+  } | null>(null);
   /** Viewport size, tracked so the ruler overlay can size its own canvas. */
   const [box, setBox] = useState({ w: 0, h: 0 });
   /** Live smart-guide overlay, produced by the snapping pass during a drag. */
@@ -368,6 +386,16 @@ export function Canvas({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // The alignment box in the right panel owns arrows and W/A/S/D while it
+      // is focused, so the canvas does not nudge under it. Other letters still
+      // reach the app's own shortcuts.
+      if (
+        !e.metaKey &&
+        !e.ctrlKey &&
+        alignKey(e.key) &&
+        (e.target as HTMLElement)?.closest?.("[data-align-box]")
+      )
+        return;
       if (e.key === "Alt") {
         setAltMeasure(e.type === "keydown");
       }
@@ -2699,22 +2727,22 @@ export function Canvas({
           const sh = wp.node.h * z;
           if (Math.hypot(px - (sx + sw / 2), py - (sy + pt * z)) < 8) {
             engine.dispatch({ type: "begin" });
-            drag.current = { mode: "autoPad", padEdge: "top", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, origPad: [...l.padding] };
+            drag.current = { mode: "autoPad", padEdge: "top", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, origPad: [...l.padding], padOpp: e.altKey, padAll: e.altKey && e.shiftKey, moved: false };
             return;
           }
           if (Math.hypot(px - (sx + sw / 2), py - (sy + sh - pb * z)) < 8) {
             engine.dispatch({ type: "begin" });
-            drag.current = { mode: "autoPad", padEdge: "bottom", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, origPad: [...l.padding] };
+            drag.current = { mode: "autoPad", padEdge: "bottom", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, origPad: [...l.padding], padOpp: e.altKey, padAll: e.altKey && e.shiftKey, moved: false };
             return;
           }
           if (Math.hypot(px - (sx + pl * z), py - (sy + sh / 2)) < 8) {
             engine.dispatch({ type: "begin" });
-            drag.current = { mode: "autoPad", padEdge: "left", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, origPad: [...l.padding] };
+            drag.current = { mode: "autoPad", padEdge: "left", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, origPad: [...l.padding], padOpp: e.altKey, padAll: e.altKey && e.shiftKey, moved: false };
             return;
           }
           if (Math.hypot(px - (sx + sw - pr * z), py - (sy + sh / 2)) < 8) {
             engine.dispatch({ type: "begin" });
-            drag.current = { mode: "autoPad", padEdge: "right", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, origPad: [...l.padding] };
+            drag.current = { mode: "autoPad", padEdge: "right", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, origPad: [...l.padding], padOpp: e.altKey, padAll: e.altKey && e.shiftKey, moved: false };
             return;
           }
           const flowKids = wp.node.children.filter((c) => c.visible && !c.absolutePosition);
@@ -3278,6 +3306,10 @@ export function Canvas({
         else if (d.padEdge === "bottom") value = q(pb - dy);
         else if (d.padEdge === "left") value = q(pl + dx);
         else value = q(pr - dx);
+        // A handle that has not changed anything yet is still a click, not a
+        // drag: the field is opened on mouse-up instead of resizing.
+        const was = d.padEdge === "top" ? pt : d.padEdge === "bottom" ? pb : d.padEdge === "left" ? pl : pr;
+        if (value !== was) d.moved = true;
         const nextPad: [number, number, number, number] = [pl, pr, pt, pb];
         if (all) nextPad[0] = nextPad[1] = nextPad[2] = nextPad[3] = value;
         else if (d.padEdge === "top") {
@@ -3443,6 +3475,28 @@ export function Canvas({
       }
       setProtoDrag(null);
       return;
+    }
+    if (d.mode === "autoPad" && d.id && d.padEdge && !d.moved) {
+      // The handle was clicked, not dragged: open a field to type the value
+      // into, as the article describes. ⌥ and ⌥⇧ were captured on the way down
+      // and decide whether the opposite side, or all four, follow.
+      const wp = worldPos(snap.pages[snap.page].root, d.id);
+      if (wp?.node.layout) {
+        const [pl, pr, pt, pb] = wp.node.layout.padding;
+        const cur = d.padEdge === "top" ? pt : d.padEdge === "bottom" ? pb : d.padEdge === "left" ? pl : pr;
+        const z = snap.zoom;
+        const sx = wp.x * z + snap.panX;
+        const sy = wp.y * z + snap.panY;
+        setPadInput({
+          id: d.id,
+          edge: d.padEdge,
+          value: cur,
+          left: d.padEdge === "left" ? sx : d.padEdge === "right" ? sx + wp.node.w * z : sx + (wp.node.w * z) / 2,
+          top: d.padEdge === "top" ? sy : d.padEdge === "bottom" ? sy + wp.node.h * z : sy + (wp.node.h * z) / 2,
+          opp: !!d.padOpp,
+          all: !!d.padAll,
+        });
+      }
     }
     if (
       d.mode === "move" ||
@@ -3733,6 +3787,66 @@ export function Canvas({
 
   const onDbl = (e: React.MouseEvent) => {
     const wpt = toWorld(e.clientX, e.clientY);
+    /* Double-clicking a bounding-box edge sets that axis's resizing, as the
+     * guide's "From the canvas" table has it: hug contents on its own, or Fill
+     * container with ⌥. This runs before the deep-select below, because the
+     * edge of the selection is exactly where a double-click would otherwise
+     * step into the layer. */
+    const edgeHit = (() => {
+      const id = snap.selection[0];
+      if (!id || snap.selection.length > 1 || snap.tool !== "select") return null;
+      const wp = worldPos(snap.pages[snap.page].root, id);
+      if (!wp) return null;
+      const z = snap.zoom;
+      const x0 = wp.x * z + snap.panX;
+      const y0 = wp.y * z + snap.panY;
+      const w = wp.node.w * z;
+      const h = wp.node.h * z;
+      const px = wpt.x * z + snap.panX;
+      const py = wpt.y * z + snap.panY;
+      const near = 8;
+      const withinX = px >= x0 - near && px <= x0 + w + near;
+      const withinY = py >= y0 - near && py <= y0 + h + near;
+      if (withinY && (Math.abs(px - x0) <= near || Math.abs(px - (x0 + w)) <= near)) {
+        return { id, axis: "w" as const };
+      }
+      if (withinX && (Math.abs(py - y0) <= near || Math.abs(py - (y0 + h)) <= near)) {
+        return { id, axis: "h" as const };
+      }
+      return null;
+    })();
+    if (edgeHit) {
+      const root = snap.pages[snap.page].root;
+      const node = worldPos(root, edgeHit.id)!.node;
+      const fill = e.altKey;
+      const width = edgeHit.axis === "w";
+      if (fill && !findParent(root, edgeHit.id)?.layout) {
+        // Figma only offers Fill container to a child of an auto layout frame:
+        // there has to be something for the layer to fill.
+        toast("Fill container needs an auto layout parent");
+        return;
+      }
+      const want: "fill" | "hug" = fill ? "fill" : "hug";
+      engine.dispatch({
+        type: "patch",
+        id: edgeHit.id,
+        patch: width ? { sizingW: want } : { sizingH: want },
+      });
+      // On an auto layout frame the resizing also lives in the layout itself -
+      // that is what the engine hangs on and what the panel reads - so the two
+      // are kept in step rather than drifting apart.
+      if (node.layout && !fill) {
+        const horiz = node.layout.direction === "horizontal";
+        const next = { ...node.layout };
+        if (width) {
+          if (horiz) next.sizing = "hug";
+          else next.cross = "hug";
+        } else if (horiz) next.cross = "hug";
+        else next.sizing = "hug";
+        engine.dispatch({ type: "autoLayout", id: edgeHit.id, layout: next });
+      }
+      return;
+    }
     const hit = hitTest(snap.pages[snap.page].root, wpt.x, wpt.y, { deep: true });
     if (hit?.kind === "text") setEdit({ id: hit.id, text: hit.text });
     else if (vecEdit && hit && hit.id === vecEdit && hit.path.length) {
@@ -4085,6 +4199,46 @@ export function Canvas({
             e.stopPropagation();
           }}
         />
+      )}
+      {padInput && (
+        /* Figma's on-canvas padding entry: one field, floated over the handle it
+           came from. The label says whether it is setting one side, the
+           opposite side, or all four. */
+        <div className="pad-input" style={{ left: padInput.left, top: padInput.top }}>
+          <span className="pad-input-what">
+            {padInput.all
+              ? "All sides"
+              : padInput.opp
+                ? "Opposite sides"
+                : padInput.edge[0].toUpperCase() + padInput.edge.slice(1)}
+          </span>
+          <input
+            autoFocus
+            defaultValue={String(Math.round(padInput.value * 100) / 100)}
+            aria-label="Padding value"
+            onFocus={(e) => e.target.select()}
+            onBlur={() => setPadInput(null)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                setPadInput(null);
+                return;
+              }
+              if (e.key !== "Enter") return;
+              const v = Math.max(0, parseFloat((e.target as HTMLInputElement).value));
+              const wp = worldPos(snap.pages[snap.page].root, padInput.id);
+              if (wp?.node.layout && Number.isFinite(v)) {
+                const p = [...wp.node.layout.padding] as [number, number, number, number];
+                const i = padInput.edge === "left" ? 0 : padInput.edge === "right" ? 1 : padInput.edge === "top" ? 2 : 3;
+                const opposite = i === 0 ? 1 : i === 1 ? 0 : i === 2 ? 3 : 2;
+                p[i] = v;
+                if (padInput.opp || padInput.all) p[opposite] = v;
+                if (padInput.all) p[0] = p[1] = p[2] = p[3] = v;
+                engine.dispatch({ type: "autoLayout", id: padInput.id, layout: { ...wp.node.layout, padding: p } });
+              }
+              setPadInput(null);
+            }}
+          />
+        </div>
       )}
       <input
         ref={fileRef}

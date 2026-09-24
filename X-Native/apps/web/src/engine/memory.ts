@@ -19,6 +19,7 @@ import { loadDoc, type PersistedDoc } from "./persist";
 import { clampZoom, panForZoom } from "./view";
 import {
   autoSpacing,
+  clampToPadding,
   hugsCross,
   hugsMain,
   isAutoGap,
@@ -298,6 +299,7 @@ function applyLayout(n: XNode) {
       else n.w = x + rowW + pr;
     }
     for (const c of flow) clampDims(c);
+    clampToPadding(n);
     clampDims(n);
     return;
   }
@@ -359,6 +361,8 @@ function applyLayout(n: XNode) {
     if (hugMain) n.h = Math.max(1, pt + packedMain + pb);
     if (hugCross) n.w = Math.max(1, crossMax + pl + pr);
   }
+  // A frame is never narrower than its own padding.
+  clampToPadding(n);
   clampDims(n);
 }
 
@@ -1097,20 +1101,24 @@ export class MemoryEngine implements Engine {
           }
           // Figma: "Any manual adjustments you make will set the layer to Fixed
           // on the relevant axis" - so a typed width or a dragged edge turns a
-          // hug into Fixed. On an auto layout frame the hugging lives in the
-          // layout itself, which would otherwise snap back over the number the
-          // user just typed. The Scale tool is exempt: it scales the frame and
-          // its resizing together.
+          // hug into Fixed. An auto layout frame keeps its resizing in two
+          // places, the layout's own pair and the layer's resizing menu, and the
+          // engine hugs if *either* asks for it; a manual resize therefore has
+          // to set both or the hug snaps back over the number just typed. The
+          // Scale tool is exempt: it scales the frame and its resizing together.
           if (n.layout && !cmd.scaleProps) {
             const l = n.layout;
             const horiz = l.direction === "horizontal";
             if (n.w !== oldW) {
               if (horiz) l.sizing = "fixed";
               else l.cross = "fixed";
+              // A fill would also keep looking for something to fill into.
+              if (n.sizingW !== "fixed") n.sizingW = "fixed";
             }
             if (n.h !== oldH) {
               if (horiz) l.cross = "fixed";
               else l.sizing = "fixed";
+              if (n.sizingH !== "fixed") n.sizingH = "fixed";
             }
           }
           if (cmd.scaleProps && oldW > 0 && oldH > 0) {

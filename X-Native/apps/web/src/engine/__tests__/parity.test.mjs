@@ -31,11 +31,16 @@ import {
 import { MemoryEngine, defaultEffect, find, insideInstance } from "../memory.ts";
 import {
   SPACING_MODES,
+  alignKey,
+  alignmentCells,
   autoSpacing,
+  clampToPadding,
   defaultLayout,
   effectiveSizing,
   hasFillChild,
   isAutoGap,
+  layoutKeyPatch,
+  parsePaddingShorthand,
   suggestLayout,
   textDimensionRule,
   wraps,
@@ -2432,7 +2437,136 @@ console.log("auto layout: wrap, and hugging with a filler inside:");
   t("and leaves the main one alone", effectiveSizing(layout({ sizing: "hug" }), { sizingW: "hug", sizingH: "fixed" }, crossFiller).main === "hug");
 }
 
-console.log("suggest auto layout: reading the arrangement back:");
+console.log("the alignment box: its cells, and its keys:");
+{
+  const flow = (over = {}) => ({
+    direction: "horizontal", gap: 8, padding: [8, 8, 8, 8], sizing: "hug", cross: "hug",
+    wrap: false, align: "min", justify: "min", ...over,
+  });
+  // Figma: nine options when the gap is a number, three when it is Auto.
+  t("a fixed gap offers all nine cells", alignmentCells(flow()).length === 9);
+  t("and they run from the top left to the bottom right", alignmentCells(flow())[0].j === "min" && alignmentCells(flow())[0].a === "min" && alignmentCells(flow())[8].a === "max");
+  const auto = flow({ gapMode: "auto" });
+  t("an Auto gap drops the box to three cells", alignmentCells(auto).length === 3);
+  t("which are the cross-axis positions", alignmentCells(auto).map((c) => c.a).join(",") === "min,center,max");
+  t("and leave the main axis where the Auto gap put it", alignmentCells(auto).every((c) => c.j === "min"));
+
+  const keys = (ch) => alignKey(ch);
+  t("an arrow key is the axis it points along", keys("ArrowRight").axis === "x" && keys("ArrowRight").dir === 1 && keys("ArrowUp").dir === -1);
+  t("W/A/S/D are edges", ["w", "a", "s", "d"].map((c) => keys(c).edge).join(",") === "top,left,bottom,right");
+  t("uppercase letters work too", keys("W").edge === "top");
+  t("B is baseline and X is the gap", keys("b").kind === "baseline" && keys("x").kind === "gap");
+  t("anything else is not an alignment key", alignKey("q") === null && alignKey("Enter") === null);
+
+  // Arrows step; the letters jump to an edge.
+  const right = layoutKeyPatch(flow({ justify: "min" }), keys("ArrowRight"));
+  t("an arrow steps one position along its axis", right.justify === "center");
+  t("and wraps round at the end", layoutKeyPatch(flow({ justify: "max" }), keys("ArrowRight")).justify === "min");
+  t("stepping back goes the other way", layoutKeyPatch(flow({ justify: "center" }), keys("ArrowLeft")).justify === "min");
+  t("down steps the cross axis of a row", layoutKeyPatch(flow(), keys("ArrowDown")).align === "center");
+  t("and leaves the main axis alone", layoutKeyPatch(flow(), keys("ArrowDown")).justify === undefined);
+  // A vertical flow turns the arrows with it: down is now the main axis.
+  const col = flow({ direction: "vertical" });
+  t("down steps the main axis of a column", layoutKeyPatch(col, keys("ArrowDown")).justify === "center");
+  t("and right steps the cross axis", layoutKeyPatch(col, keys("ArrowRight")).align === "center");
+  t("D packs a row to the end", layoutKeyPatch(flow({ justify: "min" }), keys("d")).justify === "max");
+  t("A packs it back to the start", layoutKeyPatch(flow({ justify: "max" }), keys("a")).justify === "min");
+  t("S drops the objects to the bottom of a row", layoutKeyPatch(flow({ align: "min" }), keys("s")).align === "max");
+  t("W lifts them to the top", layoutKeyPatch(flow({ align: "max" }), keys("w")).align === "min");
+  t("in a column, D is the right edge of the cross axis", layoutKeyPatch(col, keys("d")).align === "max");
+  t("and S the bottom of the main axis", layoutKeyPatch(col, keys("s")).justify === "max");
+  // Auto gap owns the main axis, which is why the box loses six cells.
+  t("an Auto gap refuses a main-axis key", layoutKeyPatch(auto, keys("d")) === null);
+  t("but still takes a cross-axis one", layoutKeyPatch(auto, keys("s")).align === "max");
+  t("X switches a number to Auto", layoutKeyPatch(flow(), keys("x")).gapMode === "auto");
+  t("and Auto back to a number", layoutKeyPatch(auto, keys("x")).gapMode === "fixed");
+  t("B turns baseline alignment on", layoutKeyPatch(flow(), keys("b")).align === "baseline");
+  t("and off again", layoutKeyPatch(flow({ align: "baseline" }), keys("b")).align === "min");
+  t("a vertical flow has no baseline", layoutKeyPatch(col, keys("b")) === null);
+  t("stepping off a baseline lands on a real position", layoutKeyPatch(flow({ align: "baseline" }), keys("ArrowDown")).align === "center");
+  t("Space between reads as the start when stepping", layoutKeyPatch(flow({ justify: "between" }), keys("ArrowRight")).justify === "center");
+}
+
+console.log("padding: the field's shorthand, and the frame's floor:");
+{
+  t("one value is every side", parsePaddingShorthand("10").join(",") === "10,10,10,10");
+  // CSS: 1,2 is top/bottom then left/right - the article's own example.
+  t("two values are vertical then horizontal", parsePaddingShorthand("1,2").join(",") === "2,2,1,1");
+  t("three values are top, sides, bottom", parsePaddingShorthand("1,2,3").join(",") === "2,2,1,3");
+  // CSS order is top, right, bottom, left.
+  t("four values are top, right, bottom, left", parsePaddingShorthand("1,2,3,4").join(",") === "4,2,1,3");
+  t("spaces work as well as commas", parsePaddingShorthand("4 8").join(",") === "8,8,4,4");
+  t("decimals survive", parsePaddingShorthand("1.5,2.5").join(",") === "2.5,2.5,1.5,1.5");
+  t("a negative side is clamped to nothing", parsePaddingShorthand("-4").join(",") === "0,0,0,0");
+  t("nonsense is refused", parsePaddingShorthand("wide") === null);
+  t("so is an empty entry", parsePaddingShorthand("") === null);
+  t("and so are five values", parsePaddingShorthand("1,2,3,4,5") === null);
+
+  const frame = { id: "f", kind: "frame", name: "f", visible: true, x: 0, y: 0, w: 10, h: 10 };
+  const padded = { ...frame, layout: { direction: "horizontal", gap: 8, padding: [24, 24, 16, 16], sizing: "fixed", cross: "fixed", wrap: false, align: "min", justify: "min" } };
+  clampToPadding(padded);
+  t("a frame sizes up to fit its horizontal padding", padded.w === 48);
+  t("and its vertical padding", padded.h === 32);
+  const roomy = { ...padded, w: 100, h: 90 };
+  clampToPadding(roomy);
+  t("a frame that is already bigger is left alone", roomy.w === 100 && roomy.h === 90);
+}
+
+console.log("the alignment box, through the engine:");
+{
+  const e = new MemoryEngine(false);
+  await e.ready;
+  const page = () => e.snapshot().pages[e.snapshot().page];
+  const root = page().root.id;
+  const addRect = (w, h) => {
+    e.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w, h, parent: root });
+    return e.snapshot().selection[0];
+  };
+  const box = addRect(200, 100);
+  const kids = [addRect(40, 20), addRect(40, 20)];
+  for (const k of kids) e.dispatch({ type: "reparent", ids: [k], parent: box, x: 0, y: 0 });
+  const layout = { direction: "horizontal", gap: 8, padding: [0, 0, 0, 0], sizing: "fixed", cross: "fixed", wrap: false, align: "min", justify: "min" };
+  e.dispatch({ type: "autoLayout", id: box, layout });
+  const node = () => find(page().root, box);
+  const step = (key) => {
+    const patch = layoutKeyPatch(node().layout, alignKey(key));
+    if (patch) e.dispatch({ type: "autoLayout", id: box, layout: { ...node().layout, ...patch } });
+    return node().layout;
+  };
+  // 200 wide, 80 of objects: the packing shows up in the child positions.
+  t("the row starts packed left", Math.round(node().children[0].x) === 0);
+  step("d");
+  t("D packs it to the right edge", Math.round(node().children[0].x) === 112);
+  step("a");
+  t("A packs it back to the left", Math.round(node().children[0].x) === 0);
+  step("ArrowRight");
+  t("an arrow centres it", Math.round(node().children[0].x) === 56);
+  step("ArrowRight");
+  t("and one more packs it right", Math.round(node().children[0].x) === 112);
+  step("ArrowDown");
+  t("down steps the cross axis to the centre", Math.round(node().children[0].y) === 40);
+  step("ArrowDown");
+  t("and a second press drops them to the bottom", Math.round(node().children[0].y) === 80);
+  // X switches to Auto gap, which takes the main axis over: the objects spread
+  // to the edges and the packing stops mattering.
+  step("x");
+  t("X turns the gap Auto", node().layout.gapMode === "auto");
+  t("and the objects spread across the frame", Math.round(node().children[0].x) === 0 && Math.round(node().children[1].x) === 160);
+  t("the alignment box is down to three cells", alignmentCells(node().layout).length === 3);
+  step("x");
+  t("X turns it back into a number", node().layout.gapMode === "fixed" && node().layout.gap === 8);
+  // A frame cannot be sized under its own padding.
+  e.dispatch({ type: "autoLayout", id: box, layout: { ...node().layout, padding: [30, 30, 20, 20] } });
+  e.dispatch({ type: "resize", id: box, x: 0, y: 0, w: 10, h: 10 });
+  t("resizing under the padding bounces back up to it", Math.round(node().w) === 60 && Math.round(node().h) === 40);
+  // The article's single-child note: with the default Between spacing, one
+  // object in an Auto-gap stack sits at the start.
+  e.dispatch({ type: "autoLayout", id: box, layout: { ...node().layout, padding: [0, 0, 0, 0], gapMode: "auto", spacing: "between" } });
+  e.dispatch({ type: "patch", id: kids[1], patch: { visible: false } });
+  t("a lone object with an Auto gap sits at the start", Math.round(node().children[0].x) === 0);
+}
+
+
 {
   const kid = (x, y, w = 40, h = 20) => ({ id: `k${x}-${y}`, kind: "rect", name: "k", visible: true, x, y, w, h });
   const box = (w, h, kids) => ({ id: "f", kind: "frame", name: "f", visible: true, x: 0, y: 0, w, h, children: kids });
@@ -2597,7 +2731,9 @@ console.log("auto layout, through the engine:");
   e.dispatch({ type: "resize", id: autoHug, x: 0, y: 0, w: 300, h: autoNode().h });
   e.dispatch({ type: "autoLayout", id: autoHug, layout: { ...autoNode().layout } });
   t("a typed width turns a hugging frame Fixed", autoNode().layout.sizing === "fixed");
+  t("on the layer's own resizing too, or the hug would snap back", autoNode().sizingW === "fixed");
   t("so the width the user typed is the width the frame has", Math.round(autoNode().w) === 300);
+  t("and it survives the next layout pass", (e.dispatch({ type: "autoLayout", id: autoHug, layout: { ...autoNode().layout } }), Math.round(autoNode().w) === 300));
 
   // Vertical wrap lays out as a plain stack.
   const col = addRect(120, 300);

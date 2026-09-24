@@ -5,7 +5,7 @@
  * them with the same ones, so what the panel says and where the pixels land
  * cannot drift apart. Everything here is pure: no React, no canvas, no engine.
  */
-import type { AutoLayout, LayoutAlign, Sizing, XNode } from "./types";
+import type { AutoLayout, LayoutAlign, LayoutJustify, Sizing, XNode } from "./types";
 
 /**
  * A brand new auto layout frame, as Figma adds one: a horizontal flow hugging
@@ -98,6 +98,180 @@ export function isAutoGap(layout: AutoLayout | undefined): boolean {
 export function hasFillChild(flow: XNode[], axis: "main" | "cross", horizontal: boolean): boolean {
   const alongX = axis === "main" ? horizontal : !horizontal;
   return flow.some((c) => (alongX ? c.sizingW : c.sizingH) === "fill");
+}
+
+/** One cell of the alignment box: a main-axis packing and a cross-axis position. */
+export interface AlignCell {
+  j: LayoutJustify;
+  a: LayoutAlign;
+}
+
+/** The nine cells, in reading order: top-left through bottom-right. */
+const NINE_CELLS: AlignCell[] = [
+  { j: "min", a: "min" },
+  { j: "center", a: "min" },
+  { j: "max", a: "min" },
+  { j: "min", a: "center" },
+  { j: "center", a: "center" },
+  { j: "max", a: "center" },
+  { j: "min", a: "max" },
+  { j: "center", a: "max" },
+  { j: "max", a: "max" },
+];
+
+/**
+ * What the alignment box offers for this frame.
+ *
+ * The article: "If gap between items is set to a specific number, you have the
+ * same nine options for each auto layout flow... If gap between items is set to
+ * Auto, you have three options for each flow - vertical auto layout flow: Left,
+ * Center, Right; horizontal auto layout flow: Top, Center, Bottom." Auto gap
+ * owns the main axis - it is what decides how the objects are distributed along
+ * it - so only the cross-axis position is left to choose, and the box drops from
+ * nine cells to three.
+ */
+export function alignmentCells(layout: AutoLayout): AlignCell[] {
+  if (!isAutoGap(layout)) return NINE_CELLS;
+  const main = layout.justify === "between" ? "min" : layout.justify;
+  return (["min", "center", "max"] as LayoutAlign[]).map((a) => ({ j: main, a }));
+}
+
+/** The three positions of one axis, in the order the alignment box lays them out. */
+const POSITIONS = ["min", "center", "max"] as const;
+type Position = (typeof POSITIONS)[number];
+
+/**
+ * The keys the alignment box answers to, from the article: "Select the box and
+ * use arrow keys to switch between the different alignment settings. Select the
+ * box and press W/A/S/D to set alignment to the edge of the frame." Plus `B` for
+ * baseline and `X` to switch the gap between a number and Auto.
+ */
+export type AlignKey =
+  | { kind: "arrow"; axis: "x" | "y"; dir: 1 | -1 }
+  | { kind: "edge"; edge: "top" | "left" | "bottom" | "right" }
+  | { kind: "baseline" }
+  | { kind: "gap" };
+
+/**
+ * What one press of a key does to a frame's alignment, as a patch. Null means
+ * "nothing this flow can do" - an arrow aimed at the main axis of an Auto-gap
+ * stack, or `B` on a vertical flow, where text baselines do not apply.
+ */
+export function layoutKeyPatch(layout: AutoLayout, key: AlignKey): Partial<AutoLayout> | null {
+  const horizontal = layout.direction === "horizontal";
+  const auto = isAutoGap(layout);
+  // "main" packs the objects along the flow, "cross" places them across it. The
+  // keys are spatial, so which one they land on depends on the flow's direction:
+  // x is the main axis of a horizontal flow and the cross axis of a vertical one.
+  const axisOf = (axis: "x" | "y"): "main" | "cross" =>
+    (axis === "x") === horizontal ? "main" : "cross";
+  const propOf = (axis: "main" | "cross"): "justify" | "align" =>
+    axis === "main" ? "justify" : "align";
+  /* Auto gap owns the main axis, which is the whole reason the box loses six of
+     its nine cells - so a key aimed at the main axis has nothing to change. */
+  const target = (axis: "main" | "cross") => {
+    if (axis === "main" && auto) return null;
+    return propOf(axis);
+  };
+  if (key.kind === "gap") return { gapMode: auto ? "fixed" : "auto" };
+  if (key.kind === "baseline") {
+    if (!horizontal) return null;
+    return { align: layout.align === "baseline" ? "min" : "baseline" };
+  }
+  const axis = axisOf(key.kind === "arrow" ? key.axis : key.edge === "left" || key.edge === "right" ? "x" : "y");
+  const prop = target(axis);
+  if (!prop) return null;
+  const current = prop === "justify" ? layout.justify : layout.align;
+  if (key.kind === "arrow") {
+    // "Use arrow keys to switch between the different alignment settings": each
+    // press steps one position along that axis and wraps round, rather than
+    // jumping to an edge the way W/A/S/D do.
+    if (prop === "align" && current === "baseline") return { align: key.dir > 0 ? "center" : "max" };
+    const at = (POSITIONS as readonly string[]).indexOf(current === "between" ? "min" : current);
+    const next = POSITIONS[(at + key.dir + POSITIONS.length) % POSITIONS.length];
+    return prop === "justify" ? { justify: next } : { align: next };
+  }
+  const want: Position = key.edge === "left" || key.edge === "top" ? "min" : "max";
+  return prop === "justify" ? { justify: want } : { align: want };
+}
+
+/**
+ * Which alignment key a keystroke is, if any. Kept apart from the DOM so the
+ * mapping is the same wherever it is read - and so the box's keys can be
+ * asserted without a browser. Modifier chords are left alone: ⌘A, ⌘S and the
+ * rest still belong to the app.
+ */
+export function alignKey(ch: string): AlignKey | null {
+  switch (ch.toLowerCase()) {
+    case "arrowleft":
+      return { kind: "arrow", axis: "x", dir: -1 };
+    case "arrowright":
+      return { kind: "arrow", axis: "x", dir: 1 };
+    case "arrowup":
+      return { kind: "arrow", axis: "y", dir: -1 };
+    case "arrowdown":
+      return { kind: "arrow", axis: "y", dir: 1 };
+    case "w":
+      return { kind: "edge", edge: "top" };
+    case "a":
+      return { kind: "edge", edge: "left" };
+    case "s":
+      return { kind: "edge", edge: "bottom" };
+    case "d":
+      return { kind: "edge", edge: "right" };
+    case "b":
+      return { kind: "baseline" };
+    case "x":
+      return { kind: "gap" };
+    default:
+      return null;
+  }
+}
+
+/**
+ * The padding field's shorthand, as CSS writes it: `1` is all four sides, `1,2`
+ * is top/bottom then left/right, `1,2,3` adds the top, `1,2,3,4` is top, right,
+ * bottom, left. The article names all four forms and calls it CSS shorthand, so
+ * this follows CSS rather than inventing an order. Returns null for anything
+ * that is not a list of numbers, so a bad entry changes nothing.
+ */
+export function parsePaddingShorthand(raw: string): [number, number, number, number] | null {
+  const parts = String(raw ?? "")
+    .trim()
+    .split(/[,\s]+/)
+    .filter((t) => t.length > 0)
+    .map((t) => Number(t));
+  if (!parts.length || parts.length > 4) return null;
+  if (parts.some((n) => !Number.isFinite(n))) return null;
+  const clamp = (n: number) => Math.max(0, n);
+  if (parts.length === 1) {
+    const v = clamp(parts[0]);
+    return [v, v, v, v];
+  }
+  if (parts.length === 2) {
+    const [tb, lr] = parts.map(clamp);
+    return [lr, lr, tb, tb];
+  }
+  if (parts.length === 3) {
+    const [t, lr, b] = parts.map(clamp);
+    return [lr, lr, t, b];
+  }
+  const [t, r, b, l] = parts.map(clamp);
+  return [l, r, t, b];
+}
+
+/**
+ * A frame cannot be smaller than its own padding. The article: "If a frame is
+ * set to hug contents or a fixed size smaller than its padding, the frame will
+ * size up to fit the padding." Strokes are not part of this - only inside
+ * strokes count towards layout sizes, and this app does not size them yet.
+ */
+export function clampToPadding(n: XNode): void {
+  const l = n.layout;
+  if (!l || !Array.isArray(l.padding)) return;
+  const [pl, pr, pt, pb] = l.padding;
+  if (n.w < pl + pr) n.w = pl + pr;
+  if (n.h < pt + pb) n.h = pt + pb;
 }
 
 /**

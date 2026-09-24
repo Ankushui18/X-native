@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { Engine, Snapshot, Tool, XNode, VariableItem } from "../engine/types";
 import { collectColors, defaultLayout, find } from "../engine/memory";
-import { suggestLayout } from "../engine/layout";
+import { alignKey, suggestLayout } from "../engine/layout";
 import { Icon, TOOL_ICON, caretSize, kindIcon, rowIconSize } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { plural, toast } from "./toast";
@@ -1017,6 +1017,10 @@ export function bindHotkeys(
       return;
     }
     if (typing) return;
+    // The alignment box in the right panel answers to its own keys while it has
+    // focus - arrows, W/A/S/D, B and X - so just those stand down. Everything
+    // else, tool letters included, still belongs to the app.
+    if (!e.metaKey && !e.ctrlKey && alignKey(e.key) && t.closest?.("[data-align-box]")) return;
     if (engine.snapshot().presentFrame && e.key !== "Escape") return;
     const meta = e.metaKey || e.ctrlKey;
     if (meta && e.altKey && e.key.toLowerCase() === "k") {
@@ -2184,6 +2188,10 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
       { id: "auto-layout", name: "Add auto layout", keys: ["⇧", "A"] },
       { id: "remove-layout", name: "Remove auto layout", keys: ["⌥", "⇧", "A"] },
       { id: "suggest-layout", name: "Suggest auto layout (from how the objects sit)", keys: ["⌃", "⇧", "A"] },
+      { id: "align-box-keys", name: "Alignment box, once clicked: arrows step, W/A/S/D jump to an edge", keys: ["↑", "↓", "←", "→"] },
+      { id: "align-box-baseline", name: "Alignment box: text baseline alignment on and off", keys: ["B"] },
+      { id: "align-box-gap", name: "Alignment box: switch the gap between a number and Auto", keys: ["X"] },
+      { id: "pad-shorthand", name: "Padding field: ⌘-click, then type CSS shorthand (1,2,3 or 1,2,3,4)", keys: ["⌘", "click"] },
       { id: "mask", name: "Use as mask", keys: ["⌘", "⌥", "M"] },
       { id: "flatten", name: "Flatten selection", keys: ["⌘", "E"] },
       { id: "union", name: "Union selection", keys: ["⌥", "⇧", "U"] },
