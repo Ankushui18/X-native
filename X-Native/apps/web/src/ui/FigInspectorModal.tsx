@@ -169,13 +169,13 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <Icon name="figma" size={20} />
+            <Icon name="folder" size={20} />
             <div>
               <div style={{ fontWeight: 600, fontSize: 14 }}>
-                Figma File Inspector (.fig)
+                Design File Inspector
               </div>
               <div style={{ fontSize: 10, color: "var(--dim)" }}>
-                {report?.fileName ?? "No file loaded"} • Kiwi Binary & Vector Network Analyzer
+                {report?.fileName ?? "No file loaded"} • Binary & Vector Network Analyzer
               </div>
             </div>
           </div>
@@ -326,7 +326,7 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
                     {report.prelude} v{report.version}
                   </div>
                   <div style={{ fontSize: 10, color: "var(--dim)", marginTop: 2 }}>
-                    Figma Binary Container
+                    Binary Container
                   </div>
                 </div>
 
@@ -363,7 +363,7 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
 
               {/* Node Types Breakdown */}
               <div style={{ padding: 16, background: "var(--hover)", borderRadius: 8 }}>
-                <div style={{ fontWeight: 600, marginBottom: 10 }}>Layers by Figma Type</div>
+                <div style={{ fontWeight: 600, marginBottom: 10 }}>Layers by Type</div>
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                   {Object.entries(report.nodesByType).map(([type, count]) => (
                     <div
@@ -505,7 +505,7 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
                       <div>
                         <h3 style={{ margin: 0, fontSize: 16 }}>{selectedNode.name}</h3>
                         <div style={{ fontSize: 11, color: "var(--dim)" }}>
-                          Figma GUID: <code>{selectedNode.guid}</code> • Type: <code>{selectedNode.type}</code>
+                          GUID: <code>{selectedNode.guid}</code> • Type: <code>{selectedNode.type}</code>
                         </div>
                       </div>
                       <button
@@ -595,7 +595,7 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
           {!loading && report && activeTab === "vectors" && (
             <div style={{ display: "grid", gap: 16 }}>
               <div style={{ color: "var(--dim)", fontSize: 11 }}>
-                Figma vector networks extracted from binary <code>commandsBlob</code> and <code>vectorNetworkBlob</code>:
+                Vector networks extracted from binary <code>commandsBlob</code> and <code>vectorNetworkBlob</code>:
               </div>
 
               {vectorNodes.map((n) => {

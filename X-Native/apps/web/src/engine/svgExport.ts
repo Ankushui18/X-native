@@ -446,6 +446,32 @@ export function exportSvg(n: XNode, p: SvgPreset) {
   return `<svg xmlns="http://www.w3.org/2000/svg"${id} width="${size.width}" height="${size.height}" viewBox="0 0 ${Math.max(1, n.w)} ${Math.max(1, n.h)}"><title>${escXml(n.name)}</title>${svgNode(n, true)}</svg>`;
 }
 
+/**
+ * Several layers as one `<svg>`, at 1x, with their relative positions intact.
+ *
+ * This is the clipboard's vector flavour: what a browser, a slide deck or
+ * Figma itself renders when this app's ⌘C is pasted somewhere that does not
+ * understand our own payload. `exportSvg` is per-layer and starts its viewBox at
+ * the layer's own origin, so a multi-selection needs the bounding box of all of
+ * them instead — each root keeps its offset and the viewBox starts at the
+ * top-left of the group.
+ */
+export function exportClipSvg(nodes: XNode[]): string {
+  if (!nodes.length) return "";
+  const r = round;
+  const minX = Math.min(...nodes.map((n) => n.x));
+  const minY = Math.min(...nodes.map((n) => n.y));
+  const maxX = Math.max(...nodes.map((n) => n.x + Math.max(1, n.w)));
+  const maxY = Math.max(...nodes.map((n) => n.y + Math.max(1, n.h)));
+  const w = Math.max(1, maxX - minX);
+  const h = Math.max(1, maxY - minY);
+  const title = nodes.length === 1 ? `<title>${escXml(nodes[0].name)}</title>` : "";
+  // svgNode(n) with top=false translates each root by its own x/y, so the
+  // viewBox origin is what lines the group up inside the exported canvas.
+  const body = nodes.map((n) => svgNode(n)).join("");
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${r(w)}" height="${r(h)}" viewBox="${r(minX)} ${r(minY)} ${r(w)} ${r(h)}">${title}${body}</svg>`;
+}
+
 /** The pixel size of the export. The scale field takes a multiplier or a size
  *  with a unit, and the viewBox stays the design size either way - which is
  *  what makes an SVG at 500w still readable as a vector. */

@@ -15,7 +15,9 @@ import type {
   VariableItem,
   AnnotationItem,
 } from "./types";
-import { copyText } from "./clipboard";
+import { clipPlainText, copyText, nativeClipHtml, writeClipboard } from "./clipboard";
+import { dehydrateNode } from "./assets";
+import { exportClipSvg } from "./svgExport";
 import { loadDoc, type PersistedDoc } from "./persist";
 import { clampZoom, panForZoom } from "./view";
 import {
@@ -735,8 +737,10 @@ function coalesceKey(cmd: Command): string {
 /** Fill in anything a persisted node is missing, using the same defaults as a
  *  freshly created node, and recurse through children. Unknown extra keys are
  *  preserved. Throws if the value is not object-shaped, which the caller treats
- *  as a corrupt document. */
-function reviveNode(raw: unknown): XNode {
+ *  as a corrupt document. Exported because a node arriving from the system
+ *  clipboard was serialised by some other session of this app — possibly an
+ *  older one — and needs the same repair a stored document gets. */
+export function reviveNode(raw: unknown): XNode {
   if (typeof raw !== "object" || raw === null) throw new Error("not a node");
   const r = raw as Partial<XNode> & Record<string, unknown>;
   const kind = (typeof r.kind === "string" ? r.kind : "frame") as NodeKind;
@@ -746,6 +750,59 @@ function reviveNode(raw: unknown): XNode {
   const kids = Array.isArray(r.children) ? r.children.map(reviveNode) : [];
   return { ...defaults, ...r, kind, name: nm, id: typeof r.id === "string" && r.id ? r.id : defaults.id, children: kids };
 }
+
+/** The box a set of clipboard roots occupies, plus its centre. `paste` aims the
+ *  centre at the point it is given, so a multi-layer copy arrives with the
+ *  arrangement it was copied in. */
+function clipBounds(nodes: XNode[]): { minX: number; minY: number; cx: number; cy: number } {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const n of nodes) {
+    minX = Math.min(minX, n.x);
+    minY = Math.min(minY, n.y);
+    maxX = Math.max(maxX, n.x + Math.max(1, n.w));
+    maxY = Math.max(maxY, n.y + Math.max(1, n.h));
+  }
+  if (!Number.isFinite(minX)) return { minX: 0, minY: 0, cx: 0, cy: 0 };
+  return { minX, minY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+}
+
+/**
+ * Hand a copy to the OS clipboard as well as to the in-app one.
+ *
+ * The in-app clipboard is what makes ⌘V instant and lossless inside this
+ * document. The system clipboard is what makes the same ⌘V work in another tab,
+ * another file, or another program — and it carries two readings of the same
+ * layers: this app's base64 payload (everything, including the properties no
+ * vector format expresses) and an SVG (what a browser, a deck or Figma renders).
+ * Images go as asset refs, not inline data URLs, so copying a photograph does
+ * not write megabytes of base64 into the clipboard.
+ *
+ * A clipboard that refuses — denied permission, an insecure context, a
+ * headless test run — leaves the in-app copy untouched, so paste still works
+ * here; nothing throws and no rejection escapes.
+ */
+function publishClip(nodes: XNode[], fileName: string): void {
+  if (!nodes.length || typeof document === "undefined") return;
+  const portable = nodes.map((n) => {
+    try {
+      return dehydrateNode(n);
+    } catch {
+      return n;
+    }
+  });
+  let svg = "";
+  try {
+    svg = exportClipSvg(nodes);
+  } catch {
+    /* The vector flavour is a convenience for other apps; our own payload still
+     * carries the layers in full. */
+  }
+  writeClipboard({ html: nativeClipHtml(portable, svg, fileName), text: clipPlainText(nodes) });
+}
+
 
 export class MemoryEngine implements Engine {
   private state: Internal;
@@ -928,6 +985,8 @@ export class MemoryEngine implements Engine {
       "copy",
       "copyCode",
       "copyProperties",
+      // Loading the clipboard is not a document edit; the paste that follows is.
+      "loadClip",
       "presentGo",
       "presentBack",
       "presentStart",
@@ -1612,16 +1671,34 @@ export class MemoryEngine implements Engine {
         }
         break;
       }
-      case "copy":
+      case "copy": {
         this.clip = s.selection
           .map((id) => find(this.root(), id))
           .filter((n): n is XNode => !!n)
           .map(clone);
+        publishClip(this.clip, this.state.fileName);
         break;
+      }
       case "cut":
         this.apply({ type: "copy" });
         this.apply({ type: "delete" });
         break;
+      case "loadClip": {
+        // Layers from outside this document: another tab, another file, or a
+        // payload this app wrote earlier. Repaired the way a stored document is,
+        // because the writer may have been an older build with fewer fields.
+        const incoming = (Array.isArray(cmd.nodes) ? cmd.nodes : [])
+          .map((n) => {
+            try {
+              return reviveNode(n);
+            } catch {
+              return null;
+            }
+          })
+          .filter((n): n is XNode => !!n);
+        if (incoming.length) this.clip = incoming;
+        break;
+      }
       case "paste": {
         if (!this.clip.length) break;
         const created: string[] = [];
@@ -1634,6 +1711,14 @@ export class MemoryEngine implements Engine {
               : this.root();
         const parentWorld = parent === this.root() ? { x: 0, y: 0 } : worldPos(this.root(), parent.id) ?? { x: 0, y: 0 };
         const grid = snapOn(this.state, s.page);
+        // "Paste here" aims the whole copy at one point, so the group's centre
+        // lands there and the layers keep the arrangement they were copied in.
+        // Stacking every root on the same coordinate — what an unadjusted
+        // `copy.x = cmd.x` does — turns a three-layer copy into one visible
+        // layer, which reads as a paste that silently dropped content.
+        const clipBox = clipBounds(this.clip);
+        const aimX = cmd.x != null ? cmd.x - clipBox.cx : 0;
+        const aimY = cmd.y != null ? cmd.y - clipBox.cy : 0;
         for (const n of this.clip) {
           const copy = clone(n);
           reid(copy);
@@ -1641,8 +1726,8 @@ export class MemoryEngine implements Engine {
             copy.x = n.x;
             copy.y = n.y;
           } else if (cmd.x != null && cmd.y != null) {
-            copy.x = cmd.x - parentWorld.x;
-            copy.y = cmd.y - parentWorld.y;
+            copy.x = n.x + aimX - parentWorld.x;
+            copy.y = n.y + aimY - parentWorld.y;
           } else {
             copy.x = n.x + 16;
             copy.y = n.y + 16;
@@ -2867,10 +2952,46 @@ function nodeShapeHit(n: XNode, px: number, py: number): boolean {
     return n.fillVisible !== false && !n.fill.startsWith("#00000000") ? d <= 1 : Math.abs(Math.sqrt(d) - 1) <= Math.max(4, n.strokeWidth / 2);
   }
   if (n.kind === "line" || n.kind === "arrow") {
-    return segmentDistance(px, py, 0, n.h / 2, n.w, n.h / 2) <= Math.max(4, n.strokeWidth / 2);
+    return segmentDistance(px, py, 0, n.h / 2, n.w, n.h / 2) <= Math.max(12, n.strokeWidth / 2 + 4);
   }
-  if ((n.kind === "poly" || n.kind === "star" || n.kind === "vector" || n.kind === "boolean") && n.closed) {
+  if (n.kind === "vector" || n.kind === "boolean") {
+    const poly = n.path.length ? n.path : shapePoly(n);
+    const isClosed = n.closed || (n.vectorNetwork?.regions?.length ?? 0) > 0;
+    if (isClosed) {
+      if (n.fillVisible !== false && !n.fill.startsWith("#00000000") && n.fill !== "#00000000") {
+        if (polygonHit(poly as any, px, py)) return true;
+      }
+      // Also allow selecting by clicking near stroke even when closed
+      const strokeTol = Math.max(6, (n.strokeWidth || 1) / 2 + 3);
+      for (let i = 0; i < poly.length; i++) {
+        const a = poly[i] as any;
+        const b = poly[(i + 1) % poly.length] as any;
+        if (!isClosed && i === poly.length - 1) break;
+        if (segmentDistance(px, py, a.x, a.y, b.x, b.y) <= strokeTol) return true;
+      }
+      if (isClosed) return false;
+    } else if (poly.length >= 2) {
+      const strokeTol = Math.max(6, (n.strokeWidth || 1) / 2 + 4);
+      for (let i = 0; i < poly.length - 1; i++) {
+        const a = poly[i] as any;
+        const b = poly[i + 1] as any;
+        if (segmentDistance(px, py, a.x, a.y, b.x, b.y) <= strokeTol) return true;
+      }
+      return false;
+    }
+  }
+  if ((n.kind === "poly" || n.kind === "star") && n.closed) {
     return polygonHit(shapePoly(n), px, py);
+  }
+  if ((n.kind === "poly" || n.kind === "star") && !n.closed) {
+    const poly = shapePoly(n);
+    const strokeTol = Math.max(6, (n.strokeWidth || 1) / 2 + 4);
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i] as any;
+      const b = poly[(i + 1) % poly.length] as any;
+      if (segmentDistance(px, py, a.x, a.y, b.x, b.y) <= strokeTol) return true;
+    }
+    return false;
   }
   return px >= 0 && py >= 0 && px <= n.w && py <= n.h;
 }

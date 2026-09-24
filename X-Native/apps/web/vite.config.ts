@@ -14,4 +14,15 @@ export default defineConfig({
     port: 5173,
     allowedHosts: true,
   },
+  build: {
+    outDir: "dist",
+    assetsDir: "assets",
+    rollupOptions: {
+      output: {
+        entryFileNames: "assets/x-native-[hash].js",
+        chunkFileNames: "assets/x-native-[hash].js",
+        assetFileNames: "assets/x-native-[hash].[ext]",
+      },
+    },
+  },
 });

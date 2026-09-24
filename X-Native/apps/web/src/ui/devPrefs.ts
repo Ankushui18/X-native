@@ -19,7 +19,7 @@ export const DEV_LANGS: { id: DevFormat; label: string; lang: string }[] = [
   { id: "compose", label: "Compose", lang: "kotlin" },
   { id: "flutter", label: "Flutter", lang: "dart" },
   { id: "svg", label: "SVG", lang: "xml" },
-  { id: "figma", label: "JSON", lang: "json" },
+  { id: "figma", label: "Layer JSON", lang: "json" },
   { id: "tokens", label: "Design Tokens", lang: "json" },
 ];
 

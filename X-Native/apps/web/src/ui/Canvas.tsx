@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import type { Engine, Interaction, NodeKind, PathPoint, ProtoAnim, Snapshot, Tool, VectorNetwork, XNode } from "../engine/types";
 import { deepestFrame, find, findParent, hitTest, insideInstance, worldToLocal, worldPos } from "../engine/memory";
 import { layersAt } from "./selectSame";
-import { rememberImage } from "../engine/assets";
+import { rememberImage, hydrateNodes } from "../engine/assets";
 import { rotateAboutOrigin } from "./scaleModel";
 import {
   erasePath,
@@ -43,7 +43,14 @@ import { canvasBlend, cssRgba, eyedropArmed, isNone, parseHex, readableLabel, ta
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
 import { importSvg, type ImportedNode } from "../engine/svgImport";
 import { importSketch } from "../engine/sketchImport";
-import { importFig } from "../engine/figImport";
+import { importFig, importFigContainer } from "../engine/figImport";
+import {
+  markPasteEvent,
+  parseClipboard,
+  pasteInPlace,
+  readSystemClipboard,
+  type ClipPayload,
+} from "../engine/clipboard";
 import { toast } from "./toast";
 import { Icon } from "./icons";
 import { zoomAtPoint, zoomToRect } from "./zoom";
@@ -210,6 +217,7 @@ export function Canvas({
   const [band, setBand] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
   const [edit, setEdit] = useState<{ id: string; text: string } | null>(null);
+  const [frameEdit, setFrameEdit] = useState<{ id: string; name: string; x: number; y: number } | null>(null);
   const [draftComment, setDraftComment] = useState<{ x: number; y: number } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; wx: number; wy: number } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -2395,19 +2403,37 @@ export function Canvas({
       const hit = hitTest(root, wx, wy, { deep: true });
       if (!hit || hit.locked) return;
       const radius = ERASER_PX / engine.snapshot().zoom;
-      if (hit.kind === "vector" && hit.path.length) {
+      // Vector paths get true partial erasure via erasePath; any other
+      // drawable shape (rect, ellipse, line, poly, star, boolean) is first
+      // converted to its outline polyline so the brush can split it too —
+      // matching Figma's vector eraser which works on any stroked shape,
+      // not just pen paths. Frames/groups/text fall back to delete.
+      const canPartial = (hit.kind === "vector" && hit.path.length) || ["rect", "ellipse", "line", "arrow", "poly", "star", "boolean"].includes(hit.kind);
+      if (canPartial) {
         const wp = worldPos(root, hit.id);
         if (!wp) return;
-        const runs = erasePath(hit.path, wx - wp.x, wy - wp.y, radius);
-        if (runs.length === 1 && runs[0].length === hit.path.length) return;
+        const srcPath = hit.path.length ? hit.path : shapePoly(hit);
+        if (srcPath.length < 2) {
+          engine.dispatch({ type: "select", ids: [hit.id] });
+          engine.dispatch({ type: "delete" });
+          return;
+        }
+        const runs = erasePath(srcPath, wx - wp.x, wy - wp.y, radius);
+        if (runs.length === 1 && runs[0].length === srcPath.length) return;
         if (!runs.length) {
           engine.dispatch({ type: "select", ids: [hit.id] });
           engine.dispatch({ type: "delete" });
           return;
         }
-        // First run stays on the original node; extra runs become new paths so
-        // erasing through the middle of a stroke yields two strokes.
-        engine.dispatch({ type: "patchPath", id: hit.id, path: runs[0], closed: false });
+        // Preserve visual style of the source: if it was not a vector, the split
+        // pieces become vectors with the same fill/stroke so the result looks like
+        // the original shape was cut.
+        if (hit.kind === "vector") {
+          engine.dispatch({ type: "patchPath", id: hit.id, path: runs[0], closed: false });
+        } else {
+          engine.dispatch({ type: "patch", id: hit.id, patch: { kind: "vector", path: runs[0], closed: false, vectorNetwork: undefined } as any });
+          // For closed shapes, ensure fill remains if it had one
+        }
         for (const extra of runs.slice(1)) {
           engine.dispatch({
             type: "addPath",
@@ -4229,6 +4255,44 @@ export function Canvas({
       }
       return;
     }
+    // Canvas frame-name inline rename: double-clicking the label above a
+    // frame opens an input there, as in Figma/Sketch.
+    let frameLabelHit: XNode | null = null;
+    {
+      const root = snap.pages[snap.page].root;
+      const r = wrap.current?.getBoundingClientRect();
+      if (r) {
+        const mx = e.clientX - r.left;
+        const my = e.clientY - r.top;
+        const z = snap.zoom;
+        let hitFrame: XNode | null = null;
+        const walk = (n: XNode, px: number, py: number) => {
+          const x = px + n.x;
+          const y = py + n.y;
+          if (n.kind === "frame" && n.showName !== false) {
+            const sx = snap.panX + x * z;
+            const sy = snap.panY + y * z;
+            const nameW = Math.max(40, n.name.length * 6.5);
+            if (mx >= sx - 2 && mx <= sx + nameW + 10 && my >= sy - 18 && my <= sy - 2) {
+              hitFrame = n;
+            }
+          }
+          for (const c of n.children) walk(c, x, y);
+        };
+        for (const ch of root.children) walk(ch, 0, 0);
+        frameLabelHit = hitFrame;
+      }
+    }
+    if (frameLabelHit) {
+      const wp = worldPos(snap.pages[snap.page].root, (frameLabelHit as XNode).id);
+      if (wp) {
+        const sx = snap.panX + wp.x * snap.zoom;
+        const sy = snap.panY + wp.y * snap.zoom;
+        setFrameEdit({ id: (frameLabelHit as XNode).id, name: (frameLabelHit as XNode).name, x: sx, y: sy - 22 });
+        engine.dispatch({ type: "select", ids: [(frameLabelHit as XNode).id] });
+        return;
+      }
+    }
     const hit = hitTest(snap.pages[snap.page].root, wpt.x, wpt.y, { deep: true });
     if (hit?.kind === "text") setEdit({ id: hit.id, text: hit.text });
     else if (vecEdit && hit && hit.id === vecEdit && hit.path.length) {
@@ -4301,6 +4365,7 @@ export function Canvas({
     result: { nodes: ImportedNode[]; skipped: number },
     fileName: string,
     at?: { x: number; y: number },
+    opts?: { centre?: boolean },
   ) => {
     if (!result.nodes.length) {
       toast(`Nothing importable in ${fileName}`);
@@ -4312,6 +4377,18 @@ export function Canvas({
     const root = current.pages[current.page].root;
     const host = deepestFrame(root, ox, oy);
     const origin = host ? worldToLocal(root, host.id, ox, oy) : { x: ox, y: oy };
+    // An imported root carries the coordinates it had in its own file, so
+    // placing it at `dx + n.x` puts the artwork wherever the source happened to
+    // leave it. What lands on the target is the group's bounding box instead:
+    // its top-left for a drop, its centre for a paste, which is how Figma drops
+    // a copy in the middle of the viewport. Several roots keep the arrangement
+    // they were copied in rather than stacking on one point.
+    const minX = Math.min(...result.nodes.map((n) => n.x));
+    const minY = Math.min(...result.nodes.map((n) => n.y));
+    const spanW = Math.max(...result.nodes.map((n) => n.x + Math.max(1, n.w))) - minX;
+    const spanH = Math.max(...result.nodes.map((n) => n.y + Math.max(1, n.h))) - minY;
+    const dx = -minX - (opts?.centre ? spanW / 2 : 0);
+    const dy = -minY - (opts?.centre ? spanH / 2 : 0);
     engine.dispatch({ type: "begin" });
     // Containers come with their children - a .fig frame arrives holding what
     // was inside it - so the insert walks the tree. A child's coordinates are
@@ -4340,7 +4417,7 @@ export function Canvas({
       const id = engine.snapshot().selection[0];
       for (const c of children ?? []) insert(c, id, 0, 0);
     };
-    for (const n of result.nodes) insert(n, host?.id, origin.x, origin.y);
+    for (const n of result.nodes) insert(n, host?.id, origin.x + dx, origin.y + dy);
     engine.dispatch({ type: "end" });
     toast(
       result.skipped
@@ -4423,6 +4500,147 @@ export function Canvas({
       reader.readAsDataURL(file);
     });
   };
+
+  /* ------------------------------------------------------- system clipboard */
+
+  /** The world point under the middle of the viewport. A paste lands there, the
+   *  way Figma's does, so a layer copied from somewhere off-screen still
+   *  arrives where the user is looking. */
+  const viewCentre = () => {
+    const r = wrap.current?.getBoundingClientRect();
+    return r ? toWorld(r.left + r.width / 2, r.top + r.height / 2) : { x: 0, y: 0 };
+  };
+
+  /**
+   * Put whatever the system clipboard holds onto the canvas.
+   *
+   * The ladder that decides *what* is on the clipboard lives in
+   * `engine/clipboard.ts`; this is the half that needs a document — resolving
+   * asset refs, picking the host frame, and saying what happened.
+   *
+   * Returns false only when the clipboard held nothing this app can read, which
+   * is the caller's cue to fall back to the in-app clipboard: a denied
+   * permission, or a browser that will not expose the clipboard, must not break
+   * ⌘V for a copy made a moment ago in this very document.
+   */
+  const placeClipboard = async (
+    payload: ClipPayload,
+    at?: { x: number; y: number },
+    inPlace = false,
+  ): Promise<boolean> => {
+    const target = at ?? viewCentre();
+    switch (payload.kind) {
+      case "none":
+        return false;
+      case "native": {
+        // Refs are resolved before the nodes reach the engine: a copy from
+        // another tab names images this session may never have loaded, and a
+        // node that arrives still holding `asset:…` paints nothing.
+        const missing = await hydrateNodes(payload.nodes);
+        engine.dispatch({ type: "loadClip", nodes: payload.nodes });
+        engine.dispatch({ type: "paste", x: target.x, y: target.y, inPlace });
+        if (missing) toast(`${missing} image${missing > 1 ? "s" : ""} could not be loaded`);
+        return true;
+      }
+      case "figma": {
+        // The buffer is a whole Figma scene, so it goes through the same reader
+        // as a dropped `.fig` and arrives as editable layers.
+        toast("Pasting from Figma…");
+        try {
+          placeNodes(await importFigContainer(payload.buffer), "the Figma clipboard", target, { centre: true });
+        } catch (err) {
+          toast(`Could not read the Figma clipboard: ${err instanceof Error ? err.message : "unreadable"}`);
+        }
+        return true;
+      }
+      case "svg": {
+        try {
+          placeNodes(importSvg(payload.text), "the clipboard's SVG", target, { centre: true });
+        } catch {
+          toast("Could not read the SVG on the clipboard");
+        }
+        return true;
+      }
+      case "files":
+        // A screenshot, an image, or a design file copied in the file manager:
+        // the same routing as a drop on the canvas.
+        placeFiles(payload.files, target);
+        return true;
+      case "text": {
+        const text = payload.text.replace(/\r\n?/g, "\n");
+        const current = engine.snapshot();
+        const root = current.pages[current.page].root;
+        const host = deepestFrame(root, target.x, target.y);
+        const local = host ? worldToLocal(root, host.id, target.x, target.y) : target;
+        engine.dispatch({
+          type: "add",
+          kind: "text",
+          x: local.x,
+          y: local.y,
+          w: 100,
+          h: 24,
+          parent: host?.id,
+          // The hug sizing the text tool gives a click, so the box grows to the
+          // words instead of clipping them.
+          extra: { text, sizingW: "hug", sizingH: "hug", fontSize: 16 },
+        });
+        toast("Pasted text");
+        return true;
+      }
+    }
+  };
+
+  /** ⌘V. The keydown handler in `chrome.tsx` deliberately lets the keystroke
+   *  through so the browser fires this event — `preventDefault()` on the key
+   *  would suppress it, and with it any chance of seeing the system clipboard.
+   *  The modifiers are not on a ClipboardEvent, so the keydown leaves them here. */
+  const onPasteEvent = (e: ClipboardEvent) => {
+    // Tells the key binding the browser did answer ⌘V, so its own fallback
+    // stands down instead of pasting a second time.
+    markPasteEvent();
+    const t = e.target as HTMLElement | null;
+    // A field keeps its own paste: renaming a layer or editing text must insert
+    // the characters, not a rectangle on the canvas.
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    if (engine.snapshot().presentFrame) return;
+    e.preventDefault();
+    const inPlace = pasteInPlace();
+    void placeClipboard(parseClipboard(e.clipboardData)).then((handled) => {
+      // Nothing readable on the system clipboard: the copy made inside this
+      // document still pastes, which is what ⌘V did before this existed.
+      if (!handled) engine.dispatch({ type: "paste", inPlace });
+    });
+  };
+
+  /* The handlers above close over the current document, viewport and tool, so
+   * the listener is bound once and forwarded to whichever closure is live:
+   * binding the effect to them would re-add and remove the listener on every
+   * frame of a drag. */
+  const pasteHandler = useRef(onPasteEvent);
+  pasteHandler.current = onPasteEvent;
+
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => pasteHandler.current(e);
+    window.addEventListener("paste", onPaste);
+    // The context menu's Paste has no keystroke to ride, so it asks for the
+    // system clipboard through the async API instead. That needs a permission
+    // the event path does not, so a refusal falls back to the in-app clipboard
+    // rather than reporting an error for a routine menu click.
+    const onRequest = (e: Event) => {
+      const d = (e as CustomEvent<{ x?: number; y?: number; inPlace?: boolean }>).detail ?? {};
+      const at = d.x != null && d.y != null ? { x: d.x, y: d.y } : undefined;
+      void readSystemClipboard().then((src) =>
+        placeClipboard(parseClipboard(src), at, !!d.inPlace).then((handled) => {
+          if (!handled) engine.dispatch({ type: "paste", x: d.x, y: d.y, inPlace: d.inPlace });
+        }),
+      );
+    };
+    window.addEventListener("x-native-paste", onRequest);
+    return () => {
+      window.removeEventListener("paste", onPaste);
+      window.removeEventListener("x-native-paste", onRequest);
+    };
+  }, []);
 
   useEffect(() => {
     const el = wrap.current;
@@ -4594,6 +4812,36 @@ export function Canvas({
             e.stopPropagation();
           }}
         />
+      )}
+      {frameEdit && (
+        <div className="frame-name-edit" style={{ left: frameEdit.x, top: frameEdit.y, position: "absolute" }}>
+          <input
+            autoFocus
+            value={frameEdit.name}
+            onChange={(e) => setFrameEdit({ ...frameEdit, name: e.target.value })}
+            onBlur={() => {
+              const v = frameEdit.name.trim() || "Frame";
+              engine.dispatch({ type: "patch", id: frameEdit.id, patch: { name: v } });
+              setFrameEdit(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              if (e.key === "Escape") setFrameEdit(null);
+              e.stopPropagation();
+            }}
+            onFocus={(e) => e.currentTarget.select()}
+            style={{
+              font: "600 11px Inter, system-ui",
+              padding: "2px 6px",
+              border: "1px solid #6366f1",
+              borderRadius: 4,
+              background: "#ffffff",
+              color: "#0f172a",
+              minWidth: 80,
+              boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+            }}
+          />
+        </div>
       )}
       {padInput && (
         /* Figma's on-canvas padding entry: one field, floated over the handle it

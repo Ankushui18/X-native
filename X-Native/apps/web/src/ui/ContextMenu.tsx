@@ -382,7 +382,15 @@ export function runMenu(
       break;
     }
     case "paste":
-      engine.dispatch({ type: "paste", x: extra?.x, y: extra?.y });
+      // A menu click gives the browser no keystroke to turn into a `paste`
+      // event, so the canvas is asked to read the system clipboard through the
+      // async API instead — the same ladder ⌘V rides, which is what lets a copy
+      // from Figma land from the right-click menu too. That listener falls back
+      // to the in-app clipboard when the read is refused, so the menu keeps
+      // working with nothing but a local copy on it.
+      window.dispatchEvent(
+        new CustomEvent("x-native-paste", { detail: { x: extra?.x, y: extra?.y } }),
+      );
       break;
     case "copyCode":
       // The result lands on the clipboard with no visible change on canvas, so
