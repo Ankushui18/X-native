@@ -1,13 +1,20 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { Engine, Snapshot, Tool, XNode, VariableItem } from "../engine/types";
 import { collectColors, defaultLayout, find } from "../engine/memory";
-import { Icon, TOOL_ICON, kindIcon } from "./icons";
+import { Icon, TOOL_ICON, caretSize, kindIcon, rowIconSize } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { plural, toast } from "./toast";
 import { selectInverse, selectMatching } from "./selectSame";
 import { popoverArmed } from "./popoverGuard";
+import {
+  DEFAULT_NUDGE,
+  getNudgePrefs,
+  parseNudge,
+  setNudgePrefs,
+  subscribeNudge,
+} from "./nudgePrefs";
 import { finishPenDraft } from "./penDraft";
-import { useTheme, type ThemePref } from "./theme";
+import { THEME_OPTIONS, useTheme } from "./theme";
 import { ContextMenu, isGroupNode, layerMenu, pageMenu, runMenu } from "./ContextMenu";
 import { align } from "./inspector";
 import { stepZoom, zoomAboutCentre, zoomCenter, zoomTo } from "./zoom";
@@ -97,18 +104,10 @@ export function NavRail({
             </button>
             <hr />
             <div className="kicker">Theme</div>
-            {(["light", "dark", "graphite", "daylight", "system"] as ThemePref[]).map((p) => (
-              <button key={p} className={pref === p ? "on" : ""} onClick={() => setPref(p)}>
-                {p === "light"
-                  ? "Light"
-                  : p === "dark"
-                    ? "Dark"
-                    : p === "graphite"
-                      ? "Graphite"
-                      : p === "daylight"
-                        ? "Daylight"
-                        : "System"}
-                {pref === p && <span className="sc">✓</span>}
+            {THEME_OPTIONS.map((o) => (
+              <button key={o.id} className={pref === o.id ? "on" : ""} onClick={() => setPref(o.id)}>
+                {o.label}
+                {pref === o.id && <span className="sc">✓</span>}
               </button>
             ))}
           </div>
@@ -322,7 +321,7 @@ function LayerRow({
               setOpen((v) => !v);
             }}
           >
-            <Icon name={open ? "chevron" : "chevron-right"} size={12} />
+            <Icon name={open ? "chevron" : "chevron-right"} size={caretSize()} />
           </button>
         ) : (
           <span style={{ width: 16 }} />
@@ -516,7 +515,7 @@ function LeftPanelImpl({
               aria-expanded={pagesOpen}
               onClick={() => setPagesOpen((v) => !v)}
             >
-              <Icon name={pagesOpen ? "chevron" : "chevron-right"} size={12} />
+              <Icon name={pagesOpen ? "chevron" : "chevron-right"} size={caretSize()} />
             </button>
             Pages
             <span className="grow" />
@@ -549,7 +548,7 @@ function LeftPanelImpl({
               </div>
             ))}
           <div className="section-label">
-            <Icon name="chevron" size={12} />
+            <Icon name="chevron" size={caretSize()} />
             Layers
             <span className="grow" />
             <button
@@ -558,7 +557,7 @@ function LeftPanelImpl({
               aria-label="Collapse all layers"
               onClick={() => setCollapseTick((v) => v + 1)}
             >
-              <Icon name="collapse-layers" size={13} />
+              <Icon name="collapse-layers" size={rowIconSize()} />
             </button>
           </div>
           <div
@@ -733,7 +732,7 @@ export function Toolbar({
                     setOpen((o) => (o === g.id ? null : g.id));
                   }}
                 >
-                  <Icon name="chevron" size={9} />
+                  <Icon name="chevron" size={caretSize()} />
                 </i>
               )}
             </button>
@@ -923,9 +922,12 @@ export function Actions({
     },
     { label: "Theme: Light", sc: "", run: () => setPref("light") },
     { label: "Theme: Dark", sc: "", run: () => setPref("dark") },
-    { label: "Theme: Graphite", sc: "", run: () => setPref("graphite") },
-    { label: "Theme: Daylight", sc: "", run: () => setPref("daylight") },
     { label: "Theme: System", sc: "", run: () => setPref("system") },
+    {
+      label: "Nudge amount…",
+      sc: "",
+      run: () => window.dispatchEvent(new CustomEvent("x-native-nudge-dialog")),
+    },
     { label: "Create component", sc: "⌘⌥K", run: () => engine.dispatch({ type: "makeComponent" }) },
     { label: "Detach instance", sc: "", run: () => engine.dispatch({ type: "detachInstance" }) },
     { label: "Union", sc: "⌥⇧U", run: () => engine.dispatch({ type: "boolean", op: "union" }) },
@@ -1527,7 +1529,12 @@ export function bindHotkeys(
     if (!meta && map[e.key.toLowerCase()]) {
       engine.dispatch({ type: "setTool", tool: map[e.key.toLowerCase()] });
     }
-    const step = e.shiftKey ? 10 : 1;
+    // Figma's Preferences > Nudge amount: 1 and 10 out of the box, both
+    // settable, ⇧ for the big one. Nudges are exact - they apply the number you
+    // asked for whether or not snap-to-pixel-grid is on - because an explicit
+    // distance is a request, while a drag is a gesture the grid may round.
+    const prefs = getNudgePrefs();
+    const step = e.shiftKey ? prefs.big : prefs.small;
     if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown") {
       e.preventDefault();
       if (e.key === "ArrowLeft") engine.dispatch({ type: "nudge", dx: -step, dy: 0 });
@@ -2171,6 +2178,91 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
     ],
   },
 ];
+
+/**
+ * Figma's Preferences → "Nudge amount…" dialog: two fields, and it applies as
+ * you leave them - there is no OK button in Figma's, and there should not be
+ * one here. Typing a decimal point, or clearing the field to retype, must not
+ * write a value, so a field only commits when it parses.
+ */
+export function NudgeDialog({ onClose }: { onClose: () => void }) {
+  const prefs = useSyncExternalStore(subscribeNudge, getNudgePrefs, getNudgePrefs);
+  const [small, setSmall] = useState(String(prefs.small));
+  const [big, setBig] = useState(String(prefs.big));
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+
+  const commit = (which: "small" | "big", raw: string) => {
+    const n = parseNudge(raw);
+    if (n == null) {
+      // Nothing usable typed: put back what is actually in effect rather than
+      // leaving the field showing something the app is not using.
+      if (which === "small") setSmall(String(prefs.small));
+      else setBig(String(prefs.big));
+      return;
+    }
+    setNudgePrefs({ [which]: n });
+    if (which === "small") setSmall(String(n));
+    else setBig(String(n));
+  };
+
+  return (
+    <div className="help-pop" onClick={onClose}>
+      <div
+        className="help-card nudge-dialog"
+        role="dialog"
+        aria-label="Nudge amount"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="shortcuts-head">
+          <h3>Nudge amount</h3>
+          <button className="shortcuts-close" onClick={onClose} aria-label="Close">
+            <Icon name="close" size={14} />
+          </button>
+        </div>
+        <div className="nudge-body">
+          <label>
+            <span>Small nudge</span>
+            <input
+              aria-label="Small nudge"
+              value={small}
+              onChange={(e) => setSmall(e.target.value)}
+              onBlur={(e) => commit("small", e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commit("small", (e.target as HTMLInputElement).value);
+              }}
+            />
+          </label>
+          <label>
+            <span>Big nudge</span>
+            <input
+              aria-label="Big nudge"
+              value={big}
+              onChange={(e) => setBig(e.target.value)}
+              onBlur={(e) => commit("big", e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commit("big", (e.target as HTMLInputElement).value);
+              }}
+            />
+          </label>
+          <p className="hint">
+            Arrow keys move a layer by the small nudge, ⇧ with the arrow keys by the big one.
+            Defaults are {DEFAULT_NUDGE.small} and {DEFAULT_NUDGE.big}.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function HelpBtn() {
   const [open, setOpen] = useState(false);

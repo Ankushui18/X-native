@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import type { Engine, XNode } from "../engine/types";
 import { plural, toast } from "./toast";
 import { find } from "../engine/memory";
-import { Icon, kindIcon } from "./icons";
+import { Icon, caretSize, kindIcon } from "./icons";
 import { SAME_KINDS, selectInverse, selectMatching, selectSame } from "./selectSame";
 import { DEV_LANGS, type DevFormat } from "./devPrefs";
 
@@ -96,7 +96,7 @@ export function ContextMenu({
               {it.icon && <Icon name={it.icon} size={14} />}
               <span>{it.label}</span>
               <span className="sc">
-                <Icon name="chevron-right" size={12} />
+                <Icon name="chevron-right" size={caretSize()} />
               </span>
               {openSub === i && (
                 <div className="ctx fly-sub">

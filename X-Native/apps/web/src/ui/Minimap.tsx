@@ -100,7 +100,7 @@ export function Minimap({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
 
-    const dark = theme === "dark" || theme === "graphite";
+    const dark = theme === "dark";
     // Without a canvas-coloured backdrop the document's white frames are
     // invisible against the white panel — the thumbnail read as a few dark
     // bars floating in space.

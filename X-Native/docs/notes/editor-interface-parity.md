@@ -917,6 +917,69 @@ multiplayer, but the toggle and its ⌥⌘\ belong in the same menu) and
 article describes is otherwise now this app's zoom field menu plus the canvas
 menu, which between them carry every switch above.
 
+## Nudge amounts, and three themes instead of five
+
+Two things reported together: "start the fixes from the inventory", and "why do
+we have four themes, light dark and system, that all we don't need" plus "the
+drop-down icon is different and other icons as well".
+
+**Nudge amounts** (Figma's *Set small and big nudge values*). The arrow keys
+were hard-coded to 1 and 10; Figma ships those as the *defaults* of a
+preference, and the article's whole point is that you can change them - nudging
+by a spacing token (8, 12, 16) is the common case, and being stuck at 1/10 means
+holding the key down and counting. There is now a **Preferences › Nudge
+amount…** entry in the actions menu, with the two fields Figma's dialog has, and
+it applies as you leave a field (there is no OK button in Figma's, and there is
+none here). Measured in a browser from X 412, Y 400:
+
+| | X after the press |
+| --- | --- |
+| →, →, ↓ at the defaults | **414**, 401 |
+| ⇧→ at the defaults | **424** (10) |
+| after setting small 8, big 24 | small → **+8**, big → **+24** |
+
+The values are app-wide and outlive a reload, which is where Figma keeps them.
+A field only commits when it parses - typing a decimal point, or clearing the
+field to retype, must not write a value - zero is refused (the keys would stop
+working) and absurd values clamp. 15 assertions.
+
+**Themes.** There were five: Light, Dark, and two near-duplicates - Graphite
+(dark with a violet tint) and Daylight (light with warmer greys). Two extra
+names over the same two colour schemes, so the menu asked a question with more
+answers than there are. There are three now: **Light, Dark, System**, in the
+actions menu and on the dashboard alike. The old preference values are *mapped*
+rather than dropped - a saved `graphite` opens as Dark, `daylight` as Light -
+which was checked by writing `graphite` into storage and reloading: the app came
+up dark with the dark canvas. The two 100-line palette blocks and the three
+one-off rules that named them are gone from the stylesheet; `--canvas`,
+`--text` and the rest of the light and dark palettes are untouched, because the
+audited colours in those two were right.
+
+**Icons.** The complaint was that the drop-down chevron "is different". It was,
+and so were a dozen others: call sites picked their own size, and 9, 10, 11, 12,
+13, 14, 16, 20, 22 and 28 all appeared. The chevrons were the worst of it -
+every one carried its own `strokeWidth` overrides (1.3 and 1.4 against the
+spec's 1.25) - so a 9px chevron drew its stroke at 0.79px, lighter than the
+glyph beside it. Fixed:
+
+- the caret set is one size (`caretSize()`, 12) and one stroke weight, across
+  the toolbar, the zoom field, the layers panel, the property rows, the fill
+  rows, the context menu and the dashboard. Measured over the whole editor:
+  **12 rendered carets, one width, 12px**.
+- the panel-row tier was 13 (a size nothing else used) and is now 14, matching
+  the majority of the rows that were already 14.
+- a brand or empty-state mark was 20, 22 or 28 depending on where it was; 20 is
+  now the single outside-the-scale size.
+- the dock's caret gutter was 9px wide, so a 12px icon was clipped by its own
+  box; it is 13px and the probe confirms no overflow.
+
+Measured across the whole editor after: **81 icons, four sizes only - 12, 14,
+16 and 20** - against ten before.
+
+33 new assertions (448 total, 0 failed) plus `/tmp/probe/nudge_theme_icons.mjs`
+and `icon_audit2.mjs`. Screenshots: `nudge_dialog.png`,
+`icons_dashboard.png`, `icons_editor.png`.
+
 ## A frame's name, on the canvas
 
 Reported from the running app: "Frame name is not properly visible incl canvas".
@@ -1121,6 +1184,10 @@ fields (exposure, contrast, saturation).
   aspect-ratio lock refusing instance children - are unit tested but were not
   clicked through, because the sandbox had no browser left. Re-check them with
   one command the next time a browser is available.
+- The category audit: chunks 2 and 3 of the Figma Design category are still
+  unfetched (prototypes, import and export, work together), so the inventory of
+  what is left is incomplete. Everything named in chunk 1 that is not yet built
+  is listed at the end of this section.
 - From "Adjust your zoom and view options": **multiplayer cursors** (there is
   nothing to show until there is multiplayer, but the toggle and its ⌥⌘\\
   belong in the zoom field's menu with the rest) and **prototype flows** as a

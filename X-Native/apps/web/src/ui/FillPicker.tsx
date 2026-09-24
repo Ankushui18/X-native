@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { GradientStop } from "../engine/types";
-import { Icon } from "./icons";
+import { Icon, caretSize } from "./icons";
 import {
   armEyedrop,
   BLENDS,
@@ -397,7 +397,7 @@ export function FillPicker({
       <div className="fill-head">
         <button className="type-btn" onClick={() => setTypeOpen((v) => !v)}>
           {FILL_TYPES.find((t) => t.id === value.type)?.label ?? "Solid"}
-          <Icon name="chevron" size={12} />
+          <Icon name="chevron" size={caretSize()} />
         </button>
         {typeOpen && (
           <div className="type-menu">
@@ -681,7 +681,7 @@ export function FillPicker({
         Apply blend mode
         <span>
           {value.blend}
-          <Icon name="chevron" size={12} />
+          <Icon name="chevron" size={caretSize()} />
         </span>
       </button>
       {blendOpen && (

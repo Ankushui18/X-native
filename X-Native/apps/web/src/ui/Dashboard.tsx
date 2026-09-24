@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Icon } from "./icons";
+import { ICON_LG, Icon, caretSize } from "./icons";
 import { Tooltip } from "./Tooltip";
-import { useTheme, type ThemePref } from "./theme";
+import { THEME_OPTIONS, useTheme } from "./theme";
 import { toast } from "./toast";
 import {
   createFile,
@@ -297,7 +297,7 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
         <div className="dash-top-l">
           <div className="logo-btn" onMouseDown={(e) => e.stopPropagation()}>
             <button className="icon-btn" title="Account & settings" onClick={() => setAcctMenu((v) => !v)}>
-              <Icon name="logo" size={20} />
+              <Icon name="logo" size={ICON_LG} />
             </button>
             {acctMenu && (
               <div className="dash-menu" onMouseLeave={() => setAcctMenu(false)}>
@@ -311,14 +311,10 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
                 <hr />
                 <div className="dm-label">Theme</div>
                 <div className="dm-themes">
-                  {(["light", "dark", "graphite", "daylight", "system"] as ThemePref[]).map((t) => (
-                    <button
-                      key={t}
-                      className={pref === t ? "on" : ""}
-                      onClick={() => setPref(t)}
-                    >
-                      {t === "daylight" ? "Day" : t === "graphite" ? "Graphite" : t === "system" ? "System" : t[0].toUpperCase() + t.slice(1)}
-                      {pref === t && <Icon name="check" size={12} />}
+                  {THEME_OPTIONS.map((t) => (
+                    <button key={t.id} className={pref === t.id ? "on" : ""} onClick={() => setPref(t.id)}>
+                      {t.label}
+                      {pref === t.id && <Icon name="check" size={12} />}
                     </button>
                   ))}
                 </div>
@@ -378,7 +374,7 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
                 aria-label="New file from template"
                 onClick={() => setNewMenu((v) => !v)}
               >
-                <Icon name="chevron-down" size={12} />
+                <Icon name="chevron-down" size={caretSize()} />
               </button>
             </div>
             {newMenu && (
@@ -503,7 +499,7 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
           {shown.length === 0 ? (
             <div className="dash-empty">
               <div className="dash-empty-art">
-                <Icon name={view === "trash" ? "trash" : "frame"} size={28} />
+                <Icon name={view === "trash" ? "trash" : "frame"} size={ICON_LG} />
               </div>
               <p className="dash-empty-title">
                 {view === "trash"
@@ -553,7 +549,7 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
                       <img src={f.thumb} alt="" />
                     ) : (
                       <div className="thumb-empty">
-                        <Icon name={TEMPLATE_ICON[f.template] ?? "frame"} size={22} />
+                        <Icon name={TEMPLATE_ICON[f.template] ?? "frame"} size={ICON_LG} />
                       </div>
                     )}
                     {view !== "trash" && (
@@ -745,7 +741,7 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
       {dropOn && (
         <div className="dropveil">
           <div className="dropcard">
-            <Icon name="import" size={22} />
+            <Icon name="import" size={ICON_LG} />
             Drop .fig, .sketch or .svg to import
           </div>
         </div>

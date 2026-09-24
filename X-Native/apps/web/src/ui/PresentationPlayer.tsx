@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import type { Engine, Interaction, ProtoDevice, Snapshot, XNode } from "../engine/types";
 import { find, worldPos } from "../engine/memory";
-import { Icon } from "./icons";
+import { Icon, rowIconSize } from "./icons";
 import { DEVICE_GROUPS, DeviceShell, deviceBox, deviceFor } from "./devices";
 
 // Web Audio API synthesizer for tactile prototype sound feedback
@@ -563,7 +563,7 @@ export function PresentationPlayer({
             fontSize: 11,
           }}
         >
-          <Icon name="history" size={13} />
+          <Icon name="history" size={rowIconSize()} />
           <span>Restart</span>
         </button>
 
@@ -584,7 +584,7 @@ export function PresentationPlayer({
             fontSize: 11,
           }}
         >
-          <Icon name="pointer" size={13} />
+          <Icon name="pointer" size={rowIconSize()} />
           <span>Hotspots</span>
         </button>
 
@@ -666,7 +666,7 @@ export function PresentationPlayer({
             fontSize: 11,
           }}
         >
-          <Icon name="type" size={13} />
+          <Icon name="type" size={rowIconSize()} />
           <span>Live Inputs</span>
         </button>
 
@@ -685,7 +685,7 @@ export function PresentationPlayer({
             alignItems: "center",
           }}
         >
-          <Icon name={soundActive ? "volume" : "volume-x"} size={13} />
+          <Icon name={soundActive ? "volume" : "volume-x"} size={rowIconSize()} />
         </button>
 
         {/* Fullscreen Toggle */}
@@ -706,7 +706,7 @@ export function PresentationPlayer({
             alignItems: "center",
           }}
         >
-          <Icon name="fullscreen" size={13} />
+          <Icon name="fullscreen" size={rowIconSize()} />
         </button>
 
         {/* Exit Presentation */}

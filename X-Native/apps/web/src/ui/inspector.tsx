@@ -65,7 +65,7 @@ import {
 } from "./scaleModel";
 import { pathToVectorNetwork, vectorNetworkToSvgPath, vertexDegree, simplifyPath, smoothPath } from "../engine/geometry";
 import { hugSize } from "./textLayout";
-import { Icon } from "./icons";
+import { Icon, caretSize, rowIconSize } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { copyText } from "../engine/clipboard";
 import { buildPdf } from "../engine/pdf";
@@ -1493,7 +1493,7 @@ function DevLangMenu({
         {current}
         {showUnits && <span className="dev-lang-unit">{unit}</span>}
         <span className={`dev-lang-caret${open ? " up" : ""}`}>
-          <Icon name="chevron-down" size={11} />
+          <Icon name="chevron-down" size={caretSize()} />
         </span>
       </button>
       {open && (
@@ -1961,7 +1961,7 @@ function DevAnnotations({ n, engine, snap }: { n: XNode; engine: Engine; snap: S
           />
           <div className="dev-pin">
             <button className="mini" title="Pin a property" aria-expanded={pin} onClick={() => setPin((v) => !v)}>
-              <Icon name="plus" size={13} />
+              <Icon name="plus" size={rowIconSize()} />
             </button>
             {pin && (
               <div className="dev-menu right">
@@ -1982,7 +1982,7 @@ function DevAnnotations({ n, engine, snap }: { n: XNode; engine: Engine; snap: S
             )}
           </div>
           <button className="mini primary" title="Post annotation" onClick={add}>
-            <Icon name="check" size={13} />
+            <Icon name="check" size={rowIconSize()} />
           </button>
         </div>
         <p className="dev-note">Markers show on the canvas as green dots while Dev Mode is on.</p>
@@ -3132,7 +3132,7 @@ function Design({
                             engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
                           }}
                         >
-                          <Icon name={g.visible !== false ? "eye" : "eye-closed"} size={13} />
+                          <Icon name={g.visible !== false ? "eye" : "eye-closed"} size={rowIconSize()} />
                         </button>
                         <button
                           className="icon-btn"
@@ -3142,7 +3142,7 @@ function Design({
                             engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
                           }}
                         >
-                          <Icon name="minus" size={13} />
+                          <Icon name="minus" size={rowIconSize()} />
                         </button>
                       </div>
                     </div>
@@ -3424,10 +3424,10 @@ function Design({
                 }}
               />
               <button className="mini" title="Bring forward" aria-label="Bring forward" onClick={() => moveFill(i, i + 1)}>
-                <Icon name="chevron-up" size={11} />
+                <Icon name="chevron-up" size={caretSize()} />
               </button>
               <button className="mini" title="Send backward" aria-label="Send backward" onClick={() => moveFill(i, i - 1)}>
-                <Icon name="chevron-down" size={11} />
+                <Icon name="chevron-down" size={caretSize()} />
               </button>
             </div>
             <ColorRow
@@ -4311,7 +4311,7 @@ function EffectPopover({
             Apply blend mode
             <span>
               {fx.blend ?? "Normal"}
-              <Icon name="chevron" size={12} />
+              <Icon name="chevron" size={caretSize()} />
             </span>
           </button>
           {blendOpen && (
@@ -5421,7 +5421,7 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        <Icon name="chevron-down" size={10} />
+        <Icon name="chevron-down" size={caretSize()} />
       </button>
       {open && (
         <div className="ctx zoom-menu" role="menu">

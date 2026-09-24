@@ -91,70 +91,6 @@ html[data-theme="dark"] {
   --shadow: 0 8px 30px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.07);
 }
 
-/* crates/x-ui Graphite — audited dark palette, accent #6366f1. */
-html[data-theme="graphite"] {
-  color-scheme: dark;
-  --bg: #181922;
-  --canvas: #101116;
-  --panel: #181922;
-  --elevated: #232534;
-  --hover: #262837;
-  --active: #313446;
-  --sel: rgba(99, 102, 241, 0.22);
-  --line: #333647;
-  --line-2: #43475d;
-  --text: #f5f5f5;
-  --muted: #b3b3b3;
-  --dim: #b1b1b1;
-  --blue: #6366f1;
-  --blue-hover: #818cf8;
-  --on-accent: #ffffff;
-  --input: #383838;
-  --field-focus: #2c2c2c;
-  --dock: #2c2c2c;
-  --tool-fg: #f5f5f5;
-  --tool-on-bg: #f5f5f5;
-  --tool-on-fg: #1e1e1e;
-  --help-bg: #383838;
-  --help-fg: #ffffff;
-  --grid: rgba(255, 255, 255, 0.06);
-  --canvas-label: #b3b3b3;
-  --dot: #555555;
-  --shadow: 0 2px 14px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.08);
-}
-
-/* crates/x-ui Daylight — audited light palette. */
-html[data-theme="daylight"] {
-  color-scheme: light;
-  --bg: #ffffff;
-  --canvas: #e5e5e5;
-  --panel: #ffffff;
-  --elevated: #f5f5f5;
-  --hover: #eeeeee;
-  --active: #e6e6e6;
-  --sel: #e5f4ff;
-  --line: #e6e6e6;
-  --line-2: #b0b0b0;
-  --text: #1a1a1a;
-  --muted: #5a5a5a;
-  --dim: #5a5a5a;
-  --blue: #0d70f6;
-  --blue-hover: #0b63d9;
-  --on-accent: #ffffff;
-  --input: #f5f5f5;
-  --field-focus: #ffffff;
-  --dock: #ffffff;
-  --tool-fg: #1a1a1a;
-  --tool-on-bg: #1a1a1a;
-  --tool-on-fg: #ffffff;
-  --help-bg: #2c2c2c;
-  --help-fg: #ffffff;
-  --grid: rgba(0, 0, 0, 0.06);
-  --canvas-label: #5a5a5a;
-  --dot: #b0b0b0;
-  --shadow: 0 2px 14px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.06);
-}
-
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
 body {
@@ -417,8 +353,7 @@ input, textarea { user-select: text; }
 .row.dim { opacity: 0.45; }
 .row.locked .name { font-style: italic; }
 .row.comp .name { color: #7b61ff; }
-html[data-theme="dark"] .row.comp .name,
-html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }
+html[data-theme="dark"] .row.comp .name { color: #c4b5fd; }
 .row .name {
   flex: 1;
   overflow: hidden;
@@ -584,7 +519,9 @@ html[data-theme="graphite"] .row.comp .name { color: #c4b5fd; }
 .tool .caret {
   display: grid;
   place-items: center;
-  width: 9px;
+  /* Wide enough to hold the 12px caret every other disclosure in the app is
+     drawn at: at the old 9px the icon was clipped by its own box. */
+  width: 13px;
   height: 16px;
   opacity: 0.5;
   pointer-events: auto;
@@ -1651,6 +1588,39 @@ body.eyedrop, body.eyedrop * { cursor: crosshair !important; }
   overflow: hidden;
   border: 1px solid var(--line);
 }
+.nudge-dialog {
+  width: 320px;
+}
+.nudge-body {
+  padding: 4px 16px 16px;
+  display: grid;
+  gap: 10px;
+}
+.nudge-body label {
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.nudge-body input {
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--input);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.nudge-body input:focus {
+  outline: none;
+  border-color: var(--blue);
+}
+.nudge-body .hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--dim);
+  line-height: 1.5;
+}
 .shortcuts-head {
   display: flex;
   align-items: center;
@@ -2023,8 +1993,7 @@ button,
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
   animation: x-pop-in 90ms ease;
 }
-html[data-theme="dark"] .tip,
-html[data-theme="graphite"] .tip { background: #383838; }
+html[data-theme="dark"] .tip { background: #383838; }
 .tip-sc { color: rgba(255, 255, 255, 0.55); }
 
 /* Empty state for the right panel with nothing selected. */
@@ -2392,8 +2361,7 @@ input:focus-visible,
   cursor: pointer;
   transition: transform 100ms ease, opacity 120ms ease;
 }
-html[data-theme="dark"] .primary,
-html[data-theme="graphite"] .primary { background: var(--blue); color: #fff; }
+html[data-theme="dark"] .primary { background: var(--blue); color: #fff; }
 .primary:hover { opacity: 0.88; }
 .primary:active { transform: translateY(0.5px); }
 .new-split { display: flex; align-items: center; }

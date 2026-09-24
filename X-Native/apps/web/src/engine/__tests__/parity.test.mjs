@@ -58,6 +58,22 @@ import { contrastRatio, contrastTarget, nearestAccessible, passesContrast, parse
 
 import { inspectFigFile, importFig } from "../figImport.ts";
 import {
+  DEFAULT_NUDGE,
+  NUDGE_MAX,
+  NUDGE_MIN,
+  clampNudge,
+  normalizeNudge,
+  nudgeStep,
+  parseNudge,
+} from "../../ui/nudgePrefs.ts";
+import {
+  DEFAULT_THEME_PREF,
+  THEME_OPTIONS,
+  normalizeThemePref,
+  resolveTheme,
+  themeLabel,
+} from "../../ui/themeModel.ts";
+import {
   ZOOM_MAX,
   ZOOM_MIN,
   ZOOM_PRESETS,
@@ -2217,6 +2233,56 @@ console.log("what a new layer is called:");
   e.dispatch({ type: "patch", id: e.snapshot().pages[e.snapshot().page].root.children.slice(-1)[0].id, patch: { name: "Frame 3" } });
   add("frame");
   t("a taken number is skipped, not reused", names().slice(-1)[0] === "Frame 4");
+}
+
+console.log("nudge amounts:");
+{
+  t("small nudge is 1 and big nudge is 10, as Figma ships them", DEFAULT_NUDGE.small === 1 && DEFAULT_NUDGE.big === 10);
+  t("an arrow key uses the small value", nudgeStep(DEFAULT_NUDGE, false) === 1);
+  t("shift with an arrow key uses the big one", nudgeStep(DEFAULT_NUDGE, true) === 10);
+  const eight = normalizeNudge({ small: 8, big: 16 });
+  t("a set value is what the keys move by", nudgeStep(eight, false) === 8 && nudgeStep(eight, true) === 16);
+  t("a saved decimal survives", normalizeNudge({ small: 0.5 }).small === 0.5);
+  t("a comma is read as a decimal point", parseNudge("0,5") === 0.5);
+  t("a negative nudge is read as its distance", parseNudge("-4") === 4);
+  t("an empty field parses as nothing at all", parseNudge("") === null);
+  t("so does a half-typed decimal point", parseNudge(".") === null);
+  t("and a word", parseNudge("wide") === null);
+  t("a zero is refused: the keys would stop working", clampNudge(0) === NUDGE_MIN);
+  t("and an absurd one is clamped", clampNudge(1e9) === NUDGE_MAX);
+  t(
+    "one bad field does not take the other down with it",
+    normalizeNudge({ small: "nonsense", big: 24 }).small === 1 &&
+      normalizeNudge({ small: "nonsense", big: 24 }).big === 24,
+  );
+  t(
+    "a preference written by something else falls back to Figma's defaults",
+    normalizeNudge(null).small === 1 && normalizeNudge(undefined).big === 10,
+  );
+  t("a string number from storage is understood", normalizeNudge({ small: "12" }).small === 12);
+}
+
+console.log("three themes, not five:");
+{
+  t("there are exactly three options", THEME_OPTIONS.length === 3);
+  t(
+    "and they are light, dark and system",
+    THEME_OPTIONS.map((o) => o.id).join(",") === "light,dark,system",
+  );
+  t("an old graphite preference opens as dark", normalizeThemePref("graphite") === "dark");
+  t("an old daylight preference opens as light", normalizeThemePref("daylight") === "light");
+  t("the three real names are kept", normalizeThemePref("system") === "system");
+  t("an unreadable preference falls back", normalizeThemePref(null) === DEFAULT_THEME_PREF);
+  t("including one from another app entirely", normalizeThemePref("solarized") === DEFAULT_THEME_PREF);
+  t("capitalisation does not matter", normalizeThemePref(" Dark ") === "dark");
+  t("system follows the OS into dark", resolveTheme("system", true) === "dark");
+  t("and into light", resolveTheme("system", false) === "light");
+  t("an explicit choice ignores the OS", resolveTheme("light", true) === "light");
+  t("the label is the menu's word for it", themeLabel("dark") === "Dark");
+  t(
+    "every option has a label and none of them is the old name",
+    THEME_OPTIONS.every((o) => o.label && !/graphite|daylight/i.test(o.label)),
+  );
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

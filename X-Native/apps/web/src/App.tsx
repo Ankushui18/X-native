@@ -9,6 +9,7 @@ import {
   HelpBtn,
   LeftPanel,
   NavRail,
+  NudgeDialog,
   Toolbar,
   bindHotkeys,
   usePanelDrag,
@@ -269,7 +270,8 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
   // Escape has to be resolved by the central hotkey handler: listeners a modal
   // attaches itself are starved by the app's own capture-phase handler.
   const [exportOpen, setExportOpen] = useState(false);
-  const overlayRef = useRef({ exportOpen, actions, figInspector });
+  const [nudgeOpen, setNudgeOpen] = useState(false);
+  const overlayRef = useRef({ exportOpen, nudgeOpen, actions, figInspector });
   // Handoff plumbing that needs the live document: land on the layer a shared
   //  link points at, then answer the two copy commands the menu asks for.
   useEffect(() => {
@@ -350,10 +352,11 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     };
   }, [engine, fileId]);
 
-  overlayRef.current = { exportOpen, actions, figInspector };
+  overlayRef.current = { exportOpen, nudgeOpen, actions, figInspector };
   const closeOverlay = () => {
     const o = overlayRef.current;
-    if (o.exportOpen) setExportOpen(false);
+    if (o.nudgeOpen) setNudgeOpen(false);
+    else if (o.exportOpen) setExportOpen(false);
     else if (o.actions) setActions(false);
     else if (o.figInspector) setFigInspector(false);
     else return false;
@@ -363,13 +366,16 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     const on = () => setHideUi((v) => !v);
     const onMin = () => setMinUi((v) => !v);
     const onExport = () => setExportOpen(true);
+    const onNudge = () => setNudgeOpen(true);
     window.addEventListener("x-native-hide-ui", on);
     window.addEventListener("x-native-minimize-ui", onMin);
     window.addEventListener("x-native-export-dialog", onExport);
+    window.addEventListener("x-native-nudge-dialog", onNudge);
     return () => {
       window.removeEventListener("x-native-hide-ui", on);
       window.removeEventListener("x-native-minimize-ui", onMin);
       window.removeEventListener("x-native-export-dialog", onExport);
+      window.removeEventListener("x-native-nudge-dialog", onNudge);
     };
   }, []);
 
@@ -521,6 +527,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
       />
       <div className="split r" style={{ display: hideUi ? "none" : undefined }} {...rightDrag} />
       {toast && <div className="toast">{toast}</div>}
+      {nudgeOpen && <NudgeDialog onClose={() => setNudgeOpen(false)} />}
       {figInspector && <FigInspectorModal engine={engine} onClose={() => setFigInspector(false)} />}
     </div>
   );
