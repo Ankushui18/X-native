@@ -377,6 +377,11 @@ export interface AutoLayout {
   wrap: boolean;
   align: LayoutAlign;
   justify: LayoutJustify;
+  /** Figma's Auto gap. When `"auto"`, `gap` is ignored and the space left over
+   *  is distributed by `spacing` - which is what makes a frame's contents sit
+   *  against its padding, or evenly through it, as the frame is resized. */
+  gapMode?: "fixed" | "auto";
+  spacing?: "between" | "around" | "evenly";
   /** Canvas stacking: true = First on top, false = Last on top (Figma parity) */
   itemReverseZIndex?: boolean;
 }

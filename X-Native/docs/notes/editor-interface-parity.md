@@ -45,7 +45,7 @@ we match.
 | Components | masters, instances, variants, properties, slots | masters and instances | (the app has both plus overrides) | **partial** |
 | Variables | collections, modes, remote | a `tokens` tab and a variable list | read | **partial** |
 | Text | styles, lists, OpenType, variable fonts, CJK, RTL, links, emoji | wrapping, alignment, decoration, auto-height, letter spacing | read | **partial** |
-| Auto layout | horizontal, vertical, grid, wrap, per-child settings | a `layout` model, padding, gap, alignment, hug/fill/fixed | read | **partial** |
+| Auto layout | horizontal, vertical, grid, wrap, per-child settings | a `layout` model, padding, gap (number or Auto with Between/Around/Evenly), alignment, hug/fill/fixed, ignore, suggest | read | **partial — everything but the grid flow and the alignment-box keys; see the round section** |
 | Prototypes | triggers, actions, animations, easing, overlays, flows | flows, overlays, transitions, present mode | read | **partial** |
 | Comments | threads, replies, resolve, mentions | threads, replies, resolve | read | **partial** |
 | Multiplayer | cursors, cursor chat, spotlight, branching, history | none of it; a local file | - | **n/a** - no server |
@@ -99,8 +99,11 @@ and the colour models are the remaining items.
 **Additional properties** — strokes, effects and corners are done; the
 sub-options listed under *Open* are not.
 
-**Use auto layout** — six articles; the app has a `layout` model and the
-inspector drives it, but none of the six has been audited.
+**Use auto layout** — six articles. The main guide (360040451373) is audited and
+closed in "Auto layout, held up against «Guide to auto layout»" above; the four
+sub-articles (horizontal/vertical flows, grid flow, adding auto layout,
+multi-dimensional nesting) and the text-resizing article it links to are still
+to come.
 
 **Figma Draw, Build design systems, Create prototypes, Import and export, Work
 together in files** — chunks 2 and 3 of the category are not fetched yet, so
@@ -1014,7 +1017,51 @@ multiplayer, but the toggle and its ⌥⌘\ belong in the same menu) and
 article describes is otherwise now this app's zoom field menu plus the canvas
 menu, which between them carry every switch above.
 
-## The export, held up against Figma's settings table
+## Auto layout, held up against "Guide to auto layout"
+
+The guide (article 360040451373, all three chunks) is the table stakes: what an
+auto layout frame is, how it is added and removed, what the flows, the spacing
+properties, the resizing properties and the shortcut table do. Each rule was
+read off the article, written once in `engine/layout.ts` so the engine and the
+panel cannot disagree, asserted in `parity.test.mjs` and then clicked through in
+the browser (`/tmp/probe/autolayout.mjs`, `/tmp/probe/al_shortcuts.mjs`).
+
+### What the article says, and what this app does
+
+| Article rule | Ours, measured |
+| --- | --- |
+| Add auto layout with ⇧A, remove with ⌥⇧A | Both, clicked. `⇧A` gave a frame a layout with the default gap of 8; `⌥⇧A` took it away again, and the gap row left the panel with it. |
+| "With the horizontal selected, Wrap becomes available" | The wrap button is disabled on a vertical flow and explains itself: *"Wrap is available on a horizontal flow"*. Selecting Vertical also stacks through `wraps()`, so a frame that still carries the flag lays out as a stack (children at x 8, 8, 8). |
+| Gap is a number **or Auto**, and Auto has Between / Around / Evenly | The gap row is a number field until Auto is switched on, then it becomes the packing rule in use — `Auto · Between` — and cycles. On a 360-wide frame with three 40-wide objects and 8px of padding, the measured child X positions were `[8, 160, 312]`, `[45.33, 160, 274.67]`, `[64, 160, 256]`. That is CSS's space-between / space-around / space-evenly, which is what Auto gap is. |
+| "Any manual adjustments you make will set the layer to Fixed on the relevant axis" | Typing W 360 into a 152-wide hugging frame leaves it 360 wide and the panel reads `W · fixed`; while it hugged it read `W · hug`. The engine turns the layout's own sizing to Fixed, not just the layer's, or the hug would swallow the number. |
+| "If any child objects … are set to Fill container, the parent frame will no longer hug contents and become Fixed for the axis" | Setting a child of a 104-wide hugging frame to Fill leaves the frame at 104 and the panel says `W · fixed`, with the label's tooltip giving the reason: *"a child fills the width, so the frame is Fixed here instead of hugging"*. |
+| Hug contents / Fill container / Fixed are offered where Figma offers them | Hug only exists on auto layout frames, Fill only on their children, and the panel shows the *effective* sizing: a hug that a filling child has taken away reads as Fixed. |
+| Ignore auto layout | Present on children of an auto layout frame, renamed from "Absolute position" to the article's current name. The layer stays in the frame, leaves the flow, and keeps its own position. |
+| A text layer cannot keep both a max height and max lines | `textDimensionRule`: a max height sets max lines to Auto, a max-line count clears the max height, and a patch that names both is left alone because the caller meant both. |
+| ⇧A / ⌥⇧A / ⌃⇧A, and the alignment-box keys | The add/remove/suggest trio is wired to the article's own chords. ⌃⇧A **suggests** the values instead of using the defaults — see below. |
+| Padding dragging on the canvas: ⌥ for opposite sides, ⌥⇧ for all sides, ⇧ for big-nudge steps | Dragging the top padding handle moved `T 8` to `38`; with ⌥ held it moved `T` and `B` together to `68`; with ⌥⇧ all four to `98`. |
+
+### Suggest auto layout
+
+`⌃⇧A` (and a new button next to "Add auto layout") reads the arrangement the
+objects are already in and fills in the layout instead of applying defaults:
+the flow is whatever axis the objects march along with even gaps, the gap is the
+median space between neighbours, the padding is the inset the frame can honour
+on both sides of each axis, hug or fixed is whether the frame is exactly its
+contents plus that padding, and the cross-axis alignment is where the objects
+sit. On three objects 36 apart the suggestion came out as **gap 36** with every
+child's X unchanged — the suggestion reproducing the arrangement rather than
+rearranging it.
+
+### Where this leaves the article
+
+Not built, and listed in `## Open` rather than half-built: the alignment-box
+keyboard (`↓ → ← ↑`, `W A S D`, `B`, `X` — the box is click-only today), the
+double-click-a-bounding-box-edge gestures for Hug and Fill, `⌘`+click on a
+padding field to edit all four sides at once, the grid flow of the separate grid
+article, and nested/multi-dimensional flows as their own article.
+
+
 
 Figma publishes a capability table for its export settings - which format takes
 which option - so this round is that table, implemented and then checked against
@@ -1373,6 +1420,12 @@ fields (exposure, contrast, saturation).
   file's components do not become editable masters (that is the "Build design
   systems" article, still uncovered), and a mirrored node arrives un-mirrored,
   because the node model has no flip.
+- Auto layout: the alignment box is click-only — the article's keys (`↓ → ← ↑`
+  for alignment, `W A S D` for an edge, `B` for baseline, `X` to toggle the gap
+  between) are not wired to it. Double-clicking a bounding-box edge to set Hug,
+  ⌥-double-clicking for Fill, and ⌘+click on a padding field to edit all four
+  sides are likewise not built. The grid flow and multi-dimensional nesting are
+  separate articles this round did not enter.
 - The behaviour suite (`e2e/behaviour.mjs`) is stale: it looks for a "Chip"
   layer the demo document no longer has, so it fails on its first check.
 - Text styles on type fields, plus the wrapping settings the panel does not

@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { Engine, Snapshot, Tool, XNode, VariableItem } from "../engine/types";
 import { collectColors, defaultLayout, find } from "../engine/memory";
+import { suggestLayout } from "../engine/layout";
 import { Icon, TOOL_ICON, caretSize, kindIcon, rowIconSize } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { plural, toast } from "./toast";
@@ -1184,6 +1185,26 @@ export function bindHotkeys(
       engine.dispatch({ type: "paste", inPlace: e.shiftKey });
       return;
     }
+    // Auto layout, exactly as the guide's shortcut table has it: ⇧A adds one
+    // with the defaults, ⌥⇧A removes it, ⌃⇧A suggests the values from how the
+    // objects are already arranged. This is tested before the ⌘A family below,
+    // which owns ⌘⇧A: Figma's chord is ⌃ (Control), and Select inverse in this
+    // app has always been ⇧⌘A, so the two do not have to collide.
+    if (!e.metaKey && e.shiftKey && e.key.toLowerCase() === "a") {
+      e.preventDefault();
+      const id = engine.snapshot().selection[0];
+      const root = engine.snapshot().pages[engine.snapshot().page].root;
+      const node = id ? find(root, id) : null;
+      if (!id || !node) return;
+      if (e.ctrlKey) {
+        engine.dispatch({ type: "autoLayout", id, layout: suggestLayout(node) });
+      } else if (e.altKey) {
+        if (node.layout) engine.dispatch({ type: "autoLayout", id, layout: null });
+      } else {
+        engine.dispatch({ type: "autoLayout", id, layout: defaultLayout() });
+      }
+      return;
+    }
     // Figma's two selection helpers share the ⌘A chord with Select all: with ⌥ it
     // gathers the same object in every other frame, with ⇧ it takes everything
     // at this level that is not already picked.
@@ -1365,15 +1386,6 @@ export function bindHotkeys(
           engine.dispatch({ type: "patch", id, patch: { fontSize: Math.max(1, (n.fontSize || 14) - 1) } });
         }
       }
-      return;
-    }
-    // Add auto layout. ⇧⌥A is Figma's chord (so a Figma user's muscle memory
-    // lands here) and ⇧A is the shorter one this app has always had. Bare ⌥A is
-    // deliberately left alone above: that is Sketch's align-left.
-    if (!meta && e.shiftKey && e.key.toLowerCase() === "a") {
-      e.preventDefault();
-      const id = engine.snapshot().selection[0];
-      if (id) engine.dispatch({ type: "autoLayout", id, layout: defaultLayout() });
       return;
     }
     if ((meta && e.key === "0") || (!meta && e.shiftKey && e.code === "Digit0")) {
@@ -2169,8 +2181,9 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
       { id: "comp-create", name: "Create component", keys: ["⌥", "⌘", "K"] },
       { id: "comp-detach", name: "Detach instance", keys: ["⌥", "⌘", "B"] },
       { id: "comp-reset", name: "Reset all overrides", keys: ["⌥", "⌘", "/"] },
-      { id: "auto-layout", name: "Add auto layout (⇧A also works)", keys: ["⇧", "⌥", "A"] },
+      { id: "auto-layout", name: "Add auto layout", keys: ["⇧", "A"] },
       { id: "remove-layout", name: "Remove auto layout", keys: ["⌥", "⇧", "A"] },
+      { id: "suggest-layout", name: "Suggest auto layout (from how the objects sit)", keys: ["⌃", "⇧", "A"] },
       { id: "mask", name: "Use as mask", keys: ["⌘", "⌥", "M"] },
       { id: "flatten", name: "Flatten selection", keys: ["⌘", "E"] },
       { id: "union", name: "Union selection", keys: ["⌥", "⇧", "U"] },
@@ -2303,12 +2316,13 @@ export function HelpBtn() {
       else if (meta && k === "v") matchedId = "paste";
       else if (meta && k === "d") matchedId = "duplicate";
       else if (meta && e.altKey && k === "a") matchedId = "select-matching";
-      else if (meta && e.shiftKey && k === "a") matchedId = "select-inverse";
+      else if (e.metaKey && e.shiftKey && k === "a") matchedId = "select-inverse";
       else if (meta && k === "a") matchedId = "select-all";
       else if (meta && k === "g") matchedId = e.shiftKey ? "ungroup" : "group";
       else if (meta && k === "b") matchedId = "bold";
       else if (meta && k === "u") matchedId = "underline";
-      else if (e.shiftKey && k === "a") matchedId = "auto-layout";
+      else if (e.shiftKey && !e.metaKey && k === "a")
+        matchedId = e.ctrlKey ? "suggest-layout" : e.altKey ? "remove-layout" : "auto-layout";
       else if (e.shiftKey && k === "d") matchedId = "dev-mode";
       else if (e.shiftKey && k === "t") matchedId = "annotate";
       else if (e.shiftKey && e.metaKey && k === "e") matchedId = "export-all";

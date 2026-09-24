@@ -64,6 +64,14 @@ import {
   type ScaleAnchor,
 } from "./scaleModel";
 import { pathToVectorNetwork, vectorNetworkToSvgPath, vertexDegree, simplifyPath, smoothPath } from "../engine/geometry";
+import {
+  SPACING_MODES,
+  effectiveSizing,
+  hasFillChild,
+  isAutoGap,
+  suggestLayout,
+  wraps,
+} from "../engine/layout";
 import { hugSize } from "./textLayout";
 import { Icon, caretSize, rowIconSize } from "./icons";
 import { Tooltip } from "./Tooltip";
@@ -2049,10 +2057,43 @@ function Design({
    * Scale tool below. All three ask the same question, so they share one
    * answer. */
   const inInstance = insideInstance(snap.pages[snap.page].root, n.id);
+  /* Auto layout answers three questions the panel asks in several places: is
+   * the gap on Auto, does this flow wrap, and is a declared hug still a hug
+   * once something inside it is filling the same axis. */
+  const autoGap = n.layout ? isAutoGap(n.layout) : false;
+  const wrapOn = n.layout ? wraps(n.layout) : false;
+  const resolved = n.layout ? effectiveSizing(n.layout, n, n.children) : null;
+  /* Figma: "the parent frame will no longer hug contents and become Fixed for
+   * the axis" - so the resizing menu shows Fixed, and says why. */
+  const showSizing = (axis: "main" | "cross") => {
+    const own = axis === "cross" ? n.sizingH : n.sizingW;
+    if (n.layout && n.kind !== "text") return resolved![axis];
+    return own;
+  };
+  /* When that happens the label says so, so a frame that stopped hugging is
+   * not mistaken for a bug in the resize itself. */
+  const hugNote = (axis: "main" | "cross") => {
+    if (!n.layout || n.kind === "text") return undefined;
+    const horiz = n.layout.direction === "horizontal";
+    const wants = (axis === "main" ? n.layout.sizing : n.layout.cross) === "hug";
+    const nodeWants = (axis === "main" ? n.sizingW : n.sizingH) === "hug";
+    if ((!wants && !nodeWants) || showSizing(axis) !== "fixed") return undefined;
+    const dim = (axis === "main") === horiz ? "width" : "height";
+    return hasFillChild(n.children, axis, horiz)
+      ? `a child fills the ${dim}, so the frame is Fixed here instead of hugging`
+      : undefined;
+  };
   const [strokeMore, setStrokeMore] = useState(n.strokeDash > 0);
   const [more, setMore] = useState<{ x: number; y: number } | null>(null);
   const multi = snap.selection.length > 1;
   const [scaleAnchor, setScaleAnchor] = useState<ScaleAnchor>("mc");
+  /* Figma keeps min and max behind the resizing menu: "Add min/max width and
+   * height" puts the four fields in the panel, "Remove min and max" takes them
+   * away again, and a layer that has none shows none. Tracked per layer, so the
+   * fields come back only for the layer that asked for them. */
+  const [minMaxOpen, setMinMaxOpen] = useState<Record<string, boolean>>({});
+  const hasMinMax = n.minW != null || n.maxW != null || n.minH != null || n.maxH != null;
+  const showMinMax = !!minMaxOpen[n.id] || hasMinMax;
   /* The Scale tool multiplies the box and everything inside it - stroke weights,
    * corner radii, type sizes, effects, auto layout gaps - while a plain resize
    * re-applies the parent's constraints. Both end up in the engine's `resize`,
@@ -2374,9 +2415,20 @@ function Design({
       <div className="hr" />
       <Section id="layout" title="Layout" actions={
         <div style={{ display: "flex", gap: 2 }}>
+          {/* Figma's two ways in: add an auto layout frame with the defaults, or
+              let Figma work the values out from how the objects already sit. */}
+          {!n.layout && (
+            <button
+              className="plus"
+              title="Suggest auto layout"
+              onClick={() => engine.dispatch({ type: "autoLayout", id: n.id, layout: suggestLayout(n) })}
+            >
+              <Icon name="magic-noodle" size={14} />
+            </button>
+          )}
           <button
             className="plus"
-            title="Add auto layout"
+            title={n.layout ? "Remove auto layout" : "Add auto layout"}
             onClick={() =>
               engine.dispatch({
                 type: "autoLayout",
@@ -2412,6 +2464,8 @@ function Design({
           >
             <Icon name="layout-h" />
           </button>
+          {/* Figma's Grid flow is a horizontal flow that wraps; choosing it
+              switches the flow over for you. */}
           <button
             className={n.layout?.wrap && n.layout.direction === "horizontal" ? "on" : ""}
             title="Grid"
@@ -2425,9 +2479,19 @@ function Design({
           >
             <Icon name="layout-grid" />
           </button>
+          {/* Figma: "When you have the horizontal selected, Wrap becomes
+              available." A vertical flow has no wrap to offer, so the button is
+              shown disabled and says why rather than silently doing nothing. */}
           <button
-            className={n.layout?.wrap ? "on" : ""}
-            title="Wrap"
+            className={wrapOn ? "on" : ""}
+            disabled={n.layout?.direction !== "horizontal"}
+            title={
+              n.layout?.direction !== "horizontal"
+                ? "Wrap is available on a horizontal flow"
+                : wrapOn
+                  ? "Wrapping onto the next line"
+                  : "Wrap onto the next line"
+            }
             onClick={() =>
               n.layout &&
               engine.dispatch({
@@ -2445,7 +2509,8 @@ function Design({
         <div className="grid3">
           <Field
             label="W"
-            hint={n.sizingW}
+            hint={showSizing("main")}
+            hintNote={hugNote("main")}
             value={n.w}
             onChange={(v) => num("w", v)}
             onLabelClick={() => {
@@ -2463,7 +2528,8 @@ function Design({
           />
           <Field
             label="H"
-            hint={n.sizingH}
+            hint={showSizing("cross")}
+            hintNote={hugNote("cross")}
             value={n.h}
             onChange={(v) => num("h", v)}
             onLabelClick={() => {
@@ -2494,6 +2560,20 @@ function Design({
             onClick={() => patch({ aspectLocked: !n.aspectLocked })}
           >
             <Icon name="aspect" size={14} />
+          </button>
+          <button
+            className={`icon-btn${showMinMax ? " on" : ""}`}
+            title={showMinMax ? "Remove min and max" : "Add min/max width and height"}
+            onClick={() => {
+              if (showMinMax) {
+                setMinMaxOpen((v) => ({ ...v, [n.id]: false }));
+                if (hasMinMax) patch({ minW: undefined, maxW: undefined, minH: undefined, maxH: undefined });
+              } else {
+                setMinMaxOpen((v) => ({ ...v, [n.id]: true }));
+              }
+            }}
+          >
+            <Icon name={showMinMax ? "minus" : "width-min"} size={14} />
           </button>
         </div>
         {snap.tool === "scale" && (
@@ -2554,12 +2634,18 @@ function Design({
             </span>
           </div>
         )}
-        <div className="grid2" style={{ marginTop: 4 }}>
-          <Field label="Min W" value={n.minW || 0} onChange={(v) => patch({ minW: v > 0 ? v : undefined })} />
-          <Field label="Max W" value={n.maxW || 0} onChange={(v) => patch({ maxW: v > 0 ? v : undefined })} />
-          <Field label="Min H" value={n.minH || 0} onChange={(v) => patch({ minH: v > 0 ? v : undefined })} />
-          <Field label="Max H" value={n.maxH || 0} onChange={(v) => patch({ maxH: v > 0 ? v : undefined })} />
-        </div>
+        {showMinMax && (
+          <div className="grid2" style={{ marginTop: 4 }}>
+            <Field label="Min W" value={n.minW || 0} onChange={(v) => patch({ minW: v > 0 ? v : undefined })} />
+            <Field label="Max W" value={n.maxW || 0} onChange={(v) => patch({ maxW: v > 0 ? v : undefined })} />
+            <Field label="Min H" value={n.minH || 0} onChange={(v) => patch({ minH: v > 0 ? v : undefined })} />
+            <Field
+              label="Max H"
+              value={n.maxH || 0}
+              onChange={(v) => patch(n.kind === "text" ? { maxH: v > 0 ? v : undefined, maxLines: 0 } : { maxH: v > 0 ? v : undefined })}
+            />
+          </div>
+        )}
         {hasAutoLayoutParent && (
           <label className="check" style={{ marginTop: 6, paddingLeft: 0 }}>
             <input
@@ -2567,7 +2653,7 @@ function Design({
               checked={!!n.absolutePosition}
               onChange={(e) => patch({ absolutePosition: e.target.checked })}
             />
-            Absolute position (in auto layout)
+            Ignore auto layout
           </label>
         )}
       </div>
@@ -3001,14 +3087,54 @@ function Design({
             )}
           </div>
           <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
-            <Field
-              icon="gap"
-              aria="Gap between items"
-              value={n.layout.gap}
-              onChange={(v) =>
-                engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, gap: v } })
-              }
-            />
+            {/* Figma's Gap: a number, or Auto - and with Auto, one of three
+                packing rules. A frame that hugs its contents has no slack to
+                distribute, so Auto there is the same as 0. */}
+            <div className="gap-row">
+              {autoGap ? (
+                <button
+                  className="gap-mode"
+                  title="Gap between items"
+                  onClick={() => {
+                    const modes = SPACING_MODES.map((m) => m.id);
+                    const at = modes.indexOf((n.layout!.spacing ?? "between") as never);
+                    engine.dispatch({
+                      type: "autoLayout",
+                      id: n.id,
+                      layout: { ...n.layout!, spacing: modes[(at + 1) % modes.length] },
+                    });
+                  }}
+                >
+                  Auto &middot; {SPACING_MODES.find((m) => m.id === (n.layout!.spacing ?? "between"))?.label}
+                </button>
+              ) : (
+                <Field
+                  icon="gap"
+                  aria="Gap between items"
+                  value={n.layout.gap}
+                  onChange={(v) =>
+                    engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, gap: v } })
+                  }
+                />
+              )}
+              <button
+                className={`icon-btn${autoGap ? " on" : ""}`}
+                title={autoGap ? "Use a fixed gap" : "Set the gap to Auto"}
+                onClick={() =>
+                  engine.dispatch({
+                    type: "autoLayout",
+                    id: n.id,
+                    layout: {
+                      ...n.layout!,
+                      gapMode: autoGap ? "fixed" : "auto",
+                      spacing: n.layout!.spacing ?? "between",
+                    },
+                  })
+                }
+              >
+                <Icon name="distribute-h" size={14} />
+              </button>
+            </div>
             {padOpen ? (
               <div className="grid2">
                 {(["L", "R", "T", "B"] as const).map((lab, i) => (
@@ -4650,6 +4776,7 @@ function Field({
   value,
   onChange,
   hint,
+  hintNote,
   onLabelClick,
   aria,
   mixed,
@@ -4660,6 +4787,9 @@ function Field({
   value: number;
   onChange: (v: number) => void;
   hint?: string;
+  /** Why the hint is what it is, e.g. a hug that a filling child turned into a
+   *  Fixed frame. Shown on the label, next to the value. */
+  hintNote?: string;
   onLabelClick?: () => void;
   /** Accessible name for icon-only fields, which otherwise expose no label
    *  at all to assistive tech or to keyboard users reading focus. */
@@ -4705,7 +4835,7 @@ function Field({
         <Icon name={icon} size={14} />
       ) : (
         <label
-          title={hint ? `${label} · ${hint}` : label}
+          title={hint ? `${label} · ${hintNote ?? hint}` : label}
           onClick={onLabelClick}
           style={onLabelClick ? { cursor: "pointer" } : undefined}
         >

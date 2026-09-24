@@ -47,6 +47,7 @@ import { importFig } from "../engine/figImport";
 import { toast } from "./toast";
 import { Icon } from "./icons";
 import { zoomAtPoint, zoomToRect } from "./zoom";
+import { getNudgePrefs } from "./nudgePrefs";
 
 /** Snap radius in screen pixels; divided by zoom to get world tolerance. */
 const SNAP_PX = 6;
@@ -3265,11 +3266,33 @@ export function Canvas({
         const [pl, pr, pt, pb] = d.origPad;
         const dx = Math.round(wpt.x - d.wx);
         const dy = Math.round(wpt.y - d.wy);
+        // Figma's on-canvas modifiers, from the guide's "From the canvas" table:
+        // ⌥ sets the padding on the opposite side too, ⌥⇧ sets it on all four,
+        // and ⇧ alone drags in big-nudge steps.
+        const opp = e.altKey;
+        const all = e.altKey && e.shiftKey;
+        const big = e.shiftKey && !e.altKey ? getNudgePrefs().big : 1;
+        const q = (v: number) => Math.max(0, Math.round(v / big) * big);
+        let value = 0;
+        if (d.padEdge === "top") value = q(pt + dy);
+        else if (d.padEdge === "bottom") value = q(pb - dy);
+        else if (d.padEdge === "left") value = q(pl + dx);
+        else value = q(pr - dx);
         const nextPad: [number, number, number, number] = [pl, pr, pt, pb];
-        if (d.padEdge === "top") nextPad[2] = Math.max(0, pt + dy);
-        else if (d.padEdge === "bottom") nextPad[3] = Math.max(0, pb - dy);
-        else if (d.padEdge === "left") nextPad[0] = Math.max(0, pl + dx);
-        else if (d.padEdge === "right") nextPad[1] = Math.max(0, pr - dx);
+        if (all) nextPad[0] = nextPad[1] = nextPad[2] = nextPad[3] = value;
+        else if (d.padEdge === "top") {
+          nextPad[2] = value;
+          if (opp) nextPad[3] = value;
+        } else if (d.padEdge === "bottom") {
+          nextPad[3] = value;
+          if (opp) nextPad[2] = value;
+        } else if (d.padEdge === "left") {
+          nextPad[0] = value;
+          if (opp) nextPad[1] = value;
+        } else {
+          nextPad[1] = value;
+          if (opp) nextPad[0] = value;
+        }
         engine.dispatch({ type: "autoLayout", id: d.id, layout: { ...wp.node.layout, padding: nextPad } });
       }
     } else if (d.mode === "autoGap" && d.id && d.origGap != null) {
@@ -3277,8 +3300,10 @@ export function Canvas({
       const wp = worldPos(snap.pages[snap.page].root, d.id);
       if (wp?.node.layout) {
         const horiz = wp.node.layout.direction === "horizontal";
+        // ⇧ drags the gap in big-nudge steps, as it does for padding.
+        const big = e.shiftKey && !e.altKey ? getNudgePrefs().big : 1;
         const delta = Math.round(horiz ? wpt.x - d.wx : wpt.y - d.wy);
-        const nextGap = Math.max(0, d.origGap + delta);
+        const nextGap = Math.max(0, Math.round((d.origGap + delta) / big) * big);
         engine.dispatch({ type: "autoLayout", id: d.id, layout: { ...wp.node.layout, gap: nextGap } });
       }
     } else if (d.mode === "starRatio" && d.id) {

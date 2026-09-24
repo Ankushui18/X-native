@@ -1,6 +1,5 @@
 import type {
   SharedStyle,
-  AutoLayout,
   Command,
   ComponentMaster,
   Effect,
@@ -18,6 +17,15 @@ import type {
 import { copyText } from "./clipboard";
 import { loadDoc, type PersistedDoc } from "./persist";
 import { clampZoom, panForZoom } from "./view";
+import {
+  autoSpacing,
+  hugsCross,
+  hugsMain,
+  isAutoGap,
+  textDimensionRule,
+  wraps,
+  type Spacing,
+} from "./layout";
 import {
   booleanPath,
   outlineStroke as outlineStrokePath,
@@ -220,16 +228,25 @@ function applyLayout(n: XNode) {
   const flow = n.children.filter((c) => c.visible && !c.absolutePosition);
   const [pl, pr, pt, pb] = Array.isArray(l.padding) ? l.padding : [0, 0, 0, 0];
   const horiz = l.direction === "horizontal";
+  // Figma offers Wrap on a horizontal flow only, so a vertical frame that still
+  // carries the flag lays out as a plain stack rather than wrapping.
+  const doesWrap = wraps(l);
   const gap = typeof l.gap === "number" ? l.gap : 0;
   const innerW = n.w - pl - pr;
   const innerH = n.h - pt - pb;
+  const auto = isAutoGap(l);
+  const spacing: Spacing = l.spacing ?? "between";
+  // Auto gap is the space left over, so it is zero whenever something is
+  // claiming that space: a frame that hugs its contents, or a child filling
+  // along the axis - which is also what the hug turns into, one rule above.
   const fillers = flow.filter((c) => (horiz ? c.sizingW : c.sizingH) === "fill");
+  const packedGap = auto && fillers.length ? 0 : gap;
   if (fillers.length) {
     const used = flow.reduce(
       (s, c) => s + ((horiz ? c.sizingW : c.sizingH) === "fill" ? 0 : horiz ? c.w : c.h),
       0,
     );
-    const leftover = Math.max(1, (horiz ? innerW : innerH) - used - gap * Math.max(0, flow.length - 1));
+    const leftover = Math.max(1, (horiz ? innerW : innerH) - used - packedGap * Math.max(0, flow.length - 1));
     const each = leftover / fillers.length;
     for (const c of fillers) {
       if (horiz) c.w = Math.max(1, each);
@@ -237,7 +254,12 @@ function applyLayout(n: XNode) {
       clampDims(c);
     }
   }
-  if (l.wrap && flow.length) {
+  // A hug with something filling inside it is a Fixed frame - the filler has
+  // nothing to hug down to. `effectiveSizing` is the single answer to that, and
+  // the panel shows the same one.
+  const hugMain = hugsMain(l, n, flow);
+  const hugCross = hugsCross(l, n, flow);
+  if (doesWrap && flow.length) {
     let x = pl;
     let y = pt;
     let rowH = 0;
@@ -267,11 +289,11 @@ function applyLayout(n: XNode) {
         rowW = Math.max(rowW, c.w);
       }
     }
-    if (l.sizing === "hug" || n.sizingW === "hug" || n.sizingH === "hug") {
+    if (hugMain) {
       if (horiz) n.w = Math.max(n.w, x + pr);
       else n.h = Math.max(n.h, y + pb);
     }
-    if (l.cross === "hug") {
+    if (hugCross) {
       if (horiz) n.h = y + rowH + pb;
       else n.w = x + rowW + pr;
     }
@@ -280,12 +302,22 @@ function applyLayout(n: XNode) {
     return;
   }
   const mainTotal = flow.reduce((s, c) => s + (horiz ? c.w : c.h), 0) + gap * Math.max(0, flow.length - 1);
+  const inner = horiz ? innerW : innerH;
+  const crossInner = horiz ? innerH : innerW;
+  const contentMain = flow.reduce((s, c) => s + (horiz ? c.w : c.h), 0);
+  // Auto gap distributes whatever is left after the objects have taken their
+  // share; a fixed gap and the older `justify` packing do what they always did.
+  const slack = hugMain || fillers.length ? 0 : Math.max(0, inner - contentMain);
+  const pack = auto ? autoSpacing(slack, flow.length, spacing) : { lead: 0, gap: packedGap };
   let origin = horiz ? pl : pt;
-  if (l.justify === "center") origin += Math.max(0, (horiz ? innerW : innerH) - mainTotal) / 2;
-  if (l.justify === "max") origin += Math.max(0, (horiz ? innerW : innerH) - mainTotal);
-  const free = Math.max(0, (horiz ? innerW : innerH) - flow.reduce((s, c) => s + (horiz ? c.w : c.h), 0));
-  const between = l.justify === "between" && flow.length > 1 ? free / (flow.length - 1) : gap;
-  let cursor = origin;
+  if (!auto) {
+    if (l.justify === "center") origin += Math.max(0, inner - mainTotal) / 2;
+    if (l.justify === "max") origin += Math.max(0, inner - mainTotal);
+    if (l.justify === "between" && flow.length > 1) {
+      pack.gap = Math.max(0, inner - flow.reduce((s, c) => s + (horiz ? c.w : c.h), 0)) / (flow.length - 1);
+    }
+  }
+  let cursor = origin + pack.lead;
   let crossMax = 0;
   const maxBaseline =
     horiz && l.align === "baseline"
@@ -297,30 +329,35 @@ function applyLayout(n: XNode) {
     const c = flow[i];
     if (horiz) {
       c.x = cursor;
-      const extra = innerH - c.h;
+      const extra = crossInner - c.h;
       if (l.align === "baseline") {
         const itemBaseline = c.kind === "text" ? (c.fontSize || 14) * 0.8 : c.h * 0.8;
         c.y = pt + (maxBaseline - itemBaseline);
       } else {
         c.y = pt + (l.align === "center" ? extra / 2 : l.align === "max" ? extra : 0);
       }
-      cursor += c.w + (i < flow.length - 1 ? between : 0);
+      cursor += c.w + (i < flow.length - 1 ? pack.gap : 0);
       crossMax = Math.max(crossMax, c.h);
     } else {
       c.y = cursor;
-      const extra = innerW - c.w;
+      const extra = crossInner - c.w;
       c.x = pl + (l.align === "center" ? extra / 2 : l.align === "max" ? extra : 0);
-      cursor += c.h + (i < flow.length - 1 ? between : 0);
+      cursor += c.h + (i < flow.length - 1 ? pack.gap : 0);
       crossMax = Math.max(crossMax, c.w);
     }
     clampDims(c);
   }
+  // The hug follows the packing that was actually used, lead and all, so a hug
+  // never disagrees with where the objects were put.
+  const packedMain = auto
+    ? contentMain + pack.lead * 2 + pack.gap * Math.max(0, flow.length - 1)
+    : contentMain + packedGap * Math.max(0, flow.length - 1);
   if (horiz) {
-    if (l.sizing === "hug" || n.sizingW === "hug") n.w = Math.max(1, pl + mainTotal + pr);
-    if (l.cross === "hug" || n.sizingH === "hug") n.h = Math.max(1, crossMax + pt + pb);
+    if (hugMain) n.w = Math.max(1, pl + packedMain + pr);
+    if (hugCross) n.h = Math.max(1, crossMax + pt + pb);
   } else {
-    if (l.sizing === "hug" || n.sizingH === "hug") n.h = Math.max(1, pt + mainTotal + pb);
-    if (l.cross === "hug" || n.sizingW === "hug") n.w = Math.max(1, crossMax + pl + pr);
+    if (hugMain) n.h = Math.max(1, pt + packedMain + pb);
+    if (hugCross) n.w = Math.max(1, crossMax + pl + pr);
   }
   clampDims(n);
 }
@@ -1058,6 +1095,24 @@ export class MemoryEngine implements Engine {
             if (n.w !== oldW) n.sizingW = "fixed";
             if (n.h !== oldH) n.sizingH = "fixed";
           }
+          // Figma: "Any manual adjustments you make will set the layer to Fixed
+          // on the relevant axis" - so a typed width or a dragged edge turns a
+          // hug into Fixed. On an auto layout frame the hugging lives in the
+          // layout itself, which would otherwise snap back over the number the
+          // user just typed. The Scale tool is exempt: it scales the frame and
+          // its resizing together.
+          if (n.layout && !cmd.scaleProps) {
+            const l = n.layout;
+            const horiz = l.direction === "horizontal";
+            if (n.w !== oldW) {
+              if (horiz) l.sizing = "fixed";
+              else l.cross = "fixed";
+            }
+            if (n.h !== oldH) {
+              if (horiz) l.cross = "fixed";
+              else l.sizing = "fixed";
+            }
+          }
           if (cmd.scaleProps && oldW > 0 && oldH > 0) {
             scaleProps(n, n.w / oldW, n.h / oldH);
           } else {
@@ -1168,10 +1223,14 @@ export class MemoryEngine implements Engine {
           if (cmd.patch.strokePaint !== undefined && cmd.patch.strokeStyle === undefined && n.strokeStyle) {
             delete n.strokeStyle;
           }
-          Object.assign(n, cmd.patch);
+          // Figma's text rule: a text layer cannot hold a max height and a max
+          // line count at once - setting either clears the other - so the pair
+          // is resolved here rather than in whichever panel did the writing.
+          const patch = n.kind === "text" ? textDimensionRule(cmd.patch) : cmd.patch;
+          Object.assign(n, patch);
           // Text layers follow their content until renamed, as in Figma.
-          if (n.kind === "text" && cmd.patch.text !== undefined && !n.nameLocked) {
-            const first = (cmd.patch.text || "").split("\n")[0].trim();
+          if (n.kind === "text" && patch.text !== undefined && !n.nameLocked) {
+            const first = (patch.text || "").split("\n")[0].trim();
             n.name = first ? first.slice(0, 60) : "Text";
           }
           if (n.isComponent && n.componentId) {
@@ -2659,15 +2718,6 @@ export function defaultEffect(kind: Effect["kind"]): Effect {
   };
 }
 
-export function defaultLayout(): AutoLayout {
-  return {
-    direction: "horizontal",
-    gap: 8,
-    padding: [8, 8, 8, 8],
-    sizing: "hug",
-    cross: "hug",
-    wrap: false,
-    align: "min",
-    justify: "min",
-  };
-}
+/* The default auto layout frame lives in `layout.ts` with the rest of the
+ * auto layout rules; this re-export keeps the existing imports working. */
+export { defaultLayout } from "./layout";

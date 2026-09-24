@@ -29,6 +29,17 @@ import {
   computeFigmaNoodle,
 } from "../geometry.ts";
 import { MemoryEngine, defaultEffect, find, insideInstance } from "../memory.ts";
+import {
+  SPACING_MODES,
+  autoSpacing,
+  defaultLayout,
+  effectiveSizing,
+  hasFillChild,
+  isAutoGap,
+  suggestLayout,
+  textDimensionRule,
+  wraps,
+} from "../layout.ts";
 import { ASSET_PREFIX, assetCount, dehydrateDoc, hydrateDoc, putAsset, resetAssets } from "../assets.ts";
 import { evalField, hasExpression } from "../../ui/fieldExpr.ts";
 import { rotateAboutOrigin, scaleBoxAround, scaleMembers, sizeKeepingRatio, unionBox } from "../../ui/scaleModel.ts";
@@ -2368,6 +2379,251 @@ console.log("the id an SVG is written with:");
   t("a name with a slash does not end the attribute early", withId.includes('id="Card-Header"'));
   t("a name with nothing usable still gets an id", exportSvg(rect({ name: "///" }), { format: "SVG", scale: 1, suffix: "", includeId: true }).includes('id="layer"'));
   t("the width follows the scale syntax in the svg element", exportSvg(named, { format: "SVG", scale: "300w", suffix: "" }).includes('width="300"'));
+}
+
+console.log("auto layout: the gap modes:");
+{
+  // Figma's Auto gap is CSS's three packing rules: Between pushes the objects
+  // to the padding, Around gives each object half a gap on either side, Evenly
+  // puts the same space everywhere including the edges.
+  const b = autoSpacing(60, 3, "between");
+  t("between puts no space before the first object", b.lead === 0);
+  t("and splits the slack between the objects", b.gap === 30);
+  const a = autoSpacing(60, 3, "around");
+  t("around gives the first object half a gap", a.lead === 10);
+  t("and a whole gap between objects", a.gap === 20);
+  const e = autoSpacing(60, 3, "evenly");
+  t("evenly gives the first object a whole gap", e.lead === 15);
+  t("the same one it gives between objects", e.gap === 15);
+  t("a frame with no slack adds no space at all", autoSpacing(0, 3, "between").gap === 0);
+  t("negative slack is treated as none", autoSpacing(-40, 3, "evenly").lead === 0);
+  t("a single object has nothing to be spaced from", autoSpacing(50, 1, "between").gap === 0);
+  t("an empty frame is not a divide by zero", autoSpacing(50, 0, "around").lead === 0);
+  t("the panel offers the three modes", SPACING_MODES.map((m) => m.id).join(",") === "between,around,evenly");
+  t("a numeric gap is not an auto gap", !isAutoGap({ gap: 8 }));
+  t("and an auto gap is", isAutoGap({ gap: 8, gapMode: "auto" }));
+}
+
+console.log("auto layout: wrap, and hugging with a filler inside:");
+{
+  const layout = (over = {}) => ({
+    direction: "horizontal", gap: 8, padding: [0, 0, 0, 0], sizing: "fixed", cross: "fixed",
+    wrap: false, align: "min", justify: "min", ...over,
+  });
+  const child = (over = {}) => ({ id: "c", kind: "rect", name: "c", visible: true, w: 10, h: 10, ...over });
+  t("wrap applies to a horizontal flow", wraps(layout({ wrap: true })));
+  // Figma: "When you have the horizontal selected, Wrap becomes available."
+  t("a vertical flow does not wrap, whatever the flag says", !wraps(layout({ wrap: true, direction: "vertical" })));
+  t("and a horizontal flow without the flag does not wrap", !wraps(layout()));
+  t("no layout at all does not wrap", !wraps(undefined));
+  const filling = [child({ sizingW: "fill" })];
+  t("a filling child is a fill on the main axis of a row", hasFillChild(filling, "main", true));
+  t("and a fill on the cross axis of a column", hasFillChild(filling, "cross", false));
+  t("a fixed child is not", !hasFillChild([child()], "main", true));
+  // The article: "the parent frame will no longer hug contents and become Fixed
+  // for the axis".
+  const hugRule = effectiveSizing(layout({ sizing: "hug" }), { sizingW: "hug", sizingH: "hug" }, [child()]);
+  t("a hug with no filler inside still hugs", hugRule.main === "hug");
+  const brokenHug = effectiveSizing(layout({ sizing: "hug" }), { sizingW: "hug", sizingH: "hug" }, filling);
+  t("a hug with a filling child becomes fixed", brokenHug.main === "fixed");
+  t("and the cross axis is untouched by a main-axis filler", brokenHug.cross === "hug");
+  const crossFiller = [child({ sizingH: "fill" })];
+  t("a child filling the cross axis breaks the cross hug", effectiveSizing(layout({ cross: "hug" }), { sizingW: "fixed", sizingH: "hug" }, crossFiller).cross === "fixed");
+  t("and leaves the main one alone", effectiveSizing(layout({ sizing: "hug" }), { sizingW: "hug", sizingH: "fixed" }, crossFiller).main === "hug");
+}
+
+console.log("suggest auto layout: reading the arrangement back:");
+{
+  const kid = (x, y, w = 40, h = 20) => ({ id: `k${x}-${y}`, kind: "rect", name: "k", visible: true, x, y, w, h });
+  const box = (w, h, kids) => ({ id: "f", kind: "frame", name: "f", visible: true, x: 0, y: 0, w, h, children: kids });
+  // A row: 8 of padding, four 40-wide objects 12 apart = 8+40+12+40+12+40+12+40+8.
+  const row = box(212, 36, [kid(8, 8), kid(60, 8), kid(112, 8), kid(164, 8)]);
+  const rowSug = suggestLayout(row);
+  t("a row of objects suggests a horizontal flow", rowSug.direction === "horizontal");
+  t("with the gap they are actually spaced by", rowSug.gap === 12);
+  t("and the frame's own inset as padding", rowSug.padding.join(",") === "8,8,8,8");
+  t("a frame that is exactly content plus padding hugs", rowSug.sizing === "hug" && rowSug.cross === "hug");
+  t("and the objects start at the top of the flow", rowSug.align === "min");
+  // A column that is centred across the frame, with 10px of slack down it.
+  const col = box(200, 160, [kid(70, 20, 60, 30), kid(70, 70, 60, 30), kid(70, 120, 60, 30)]);
+  const colSug = suggestLayout(col);
+  t("a stack of objects suggests a vertical flow", colSug.direction === "vertical");
+  t("with their own gap", colSug.gap === 20);
+  t("padding across the flow", colSug.padding[0] === 70);
+  t("and only the inset it can honour down it", colSug.padding[2] === 10);
+  t("a frame with slack down its main axis is Fixed", colSug.sizing === "fixed");
+  t("while a cross axis that fits still hugs", colSug.cross === "hug");
+  // A stray object must not drag the gap off.
+  const ragged = box(400, 36, [kid(8, 8), kid(60, 8), kid(112, 8), kid(300, 8)]);
+  t("one stray object does not move the suggested gap", suggestLayout(ragged).gap <= 40);
+  t("a single object has nothing to suggest from", suggestLayout(box(100, 60, [kid(8, 8)])).direction === defaultLayout().direction);
+  t("and neither has an empty frame", suggestLayout(box(100, 60, [])).gap === 8);
+  t("a hidden object is not part of the flow", suggestLayout(box(192, 56, [kid(8, 8), { ...kid(60, 8), visible: false }, kid(112, 8)])).gap === 64);
+  t("a layer that ignores auto layout is not either", suggestLayout(box(192, 56, [kid(8, 8), { ...kid(60, 8), absolutePosition: true }, kid(112, 8)])).gap === 64);
+}
+
+console.log("auto layout: a text layer's max height and max lines:");
+{
+  const both = textDimensionRule({ maxH: 40, maxLines: 3 });
+  t("a patch that sets both keeps both, because the caller said so", both.maxH === 40 && both.maxLines === 3);
+  const height = textDimensionRule({ maxH: 40 });
+  t("adding a max height sets max lines to auto", height.maxLines === 0);
+  const lines = textDimensionRule({ maxLines: 3 });
+  t("setting a max line count removes the max height", lines.maxH === 0);
+  t("setting max lines to auto does not touch a max height", textDimensionRule({ maxLines: 0 }).maxH === undefined);
+  const other = textDimensionRule({ maxW: 100 });
+  t("an unrelated patch is passed through untouched", other.maxW === 100 && other.maxH === undefined);
+  t("and is not the same object", other !== undefined);
+}
+
+console.log("auto layout, through the engine:");
+{
+  const e = new MemoryEngine(false);
+  await e.ready;
+  const page = () => e.snapshot().pages[e.snapshot().page];
+  const root = page().root.id;
+  const addRect = (w, h) => {
+    e.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w, h, parent: root });
+    return e.snapshot().selection[0];
+  };
+  // A fixed 300-wide row with three 40-wide objects in it, Auto gap.
+  const row = addRect(300, 60);
+  const kids = [addRect(40, 20), addRect(40, 20), addRect(40, 20)];
+  e.dispatch({
+    type: "autoLayout",
+    id: row,
+    layout: {
+      direction: "horizontal", gap: 0, gapMode: "auto", spacing: "between",
+      padding: [0, 0, 0, 0], sizing: "fixed", cross: "fixed", wrap: false, align: "min", justify: "min",
+    },
+  });
+  for (const k of kids) e.dispatch({ type: "reparent", ids: [k], parent: row, x: 0, y: 0 });
+  const rowNode = () => find(page().root, row);
+  const xs = () => rowNode().children.map((c) => Math.round(c.x));
+  const layoutWith = (spacing) => {
+    e.dispatch({
+      type: "autoLayout",
+      id: row,
+      layout: { ...rowNode().layout, spacing },
+    });
+    return xs();
+  };
+  // 300 wide, 3x40 of content: 180 slack.
+  t("between starts at the padding", layoutWith("between")[0] === 0);
+  t("and divides the slack between the gaps", layoutWith("between")[1] === 130);
+  t("around starts half a gap in", layoutWith("around")[0] === 30);
+  t("with a whole gap between", layoutWith("around")[1] === 130);
+  t("evenly starts a whole gap in", layoutWith("evenly")[0] === 45);
+  t("with the same gap between", layoutWith("evenly")[1] === 130);
+  // A hug with a filler inside is fixed, so the frame keeps the width it has.
+  const hugRow = addRect(300, 60);
+  const filler = addRect(50, 20);
+  e.dispatch({ type: "reparent", ids: [filler], parent: hugRow, x: 0, y: 0 });
+  e.dispatch({ type: "patch", id: filler, patch: { sizingW: "fill" } });
+  e.dispatch({
+    type: "autoLayout",
+    id: hugRow,
+    layout: {
+      direction: "horizontal", gap: 0, padding: [0, 0, 0, 0], sizing: "hug", cross: "fixed",
+      wrap: false, align: "min", justify: "min",
+    },
+  });
+  const hugNode = () => find(page().root, hugRow);
+  t("a hugging row with a filling child stops hugging, so it keeps its width", Math.round(hugNode().w) === 300);
+  t("and the child fills it", Math.round(hugNode().children[0].w) === 300);
+  // A hug with no filler does hug.
+  const plainHug = addRect(300, 60);
+  const plainKid = addRect(120, 20);
+  e.dispatch({ type: "reparent", ids: [plainKid], parent: plainHug, x: 0, y: 0 });
+  e.dispatch({
+    type: "autoLayout",
+    id: plainHug,
+    layout: {
+      direction: "horizontal", gap: 0, padding: [0, 0, 0, 0], sizing: "hug", cross: "fixed",
+      wrap: false, align: "min", justify: "min",
+    },
+  });
+  t("a hugging row with ordinary children shrinks to them", Math.round(find(page().root, plainHug).w) === 120);
+  // Auto gap on a hugging frame: the frame is the size of its objects, so there
+  // is no leftover space for the packing rule to give away.
+  const autoHug = addRect(300, 60);
+  const autoKids = [addRect(40, 20), addRect(40, 20), addRect(40, 20)];
+  for (const k of autoKids) e.dispatch({ type: "reparent", ids: [k], parent: autoHug, x: 0, y: 0 });
+  e.dispatch({
+    type: "autoLayout",
+    id: autoHug,
+    layout: {
+      direction: "horizontal", gap: 8, gapMode: "auto", spacing: "around",
+      padding: [8, 8, 8, 8], sizing: "hug", cross: "hug", wrap: false, align: "min", justify: "min",
+    },
+  });
+  const autoNode = () => find(page().root, autoHug);
+  t("a hugging frame with Auto gap is the size of its objects and padding", Math.round(autoNode().w) === 136);
+  t("and the objects keep their own widths", autoNode().children.map((c) => Math.round(c.w)).join(",") === "40,40,40");
+  t("with no space distributed that does not exist", autoNode().children.map((c) => Math.round(c.x)).join(",") === "8,48,88");
+  // Give the frame slack by making it Fixed and the packing rule comes alive.
+  e.dispatch({ type: "autoLayout", id: autoHug, layout: { ...autoNode().layout, sizing: "fixed" } });
+  e.dispatch({ type: "resize", id: autoHug, w: 344, h: 60 });
+  e.dispatch({ type: "autoLayout", id: autoHug, layout: { ...autoNode().layout, sizing: "fixed" } });
+  // 344 wide, 8 padding each side, 120 of objects: 208 to share between three.
+  t("a fixed frame with Auto around gives each object a third of the slack",
+    Math.abs(autoNode().children[0].x - 43) <= 1);
+  t("and leaves the rest between them",
+    Math.abs((autoNode().children[1].x - autoNode().children[0].x) - (40 + 69)) <= 1);
+
+  // A filling child and an Auto gap: the filler takes the leftover, so the Auto
+  // gap has nothing to distribute and packs at zero rather than overflowing.
+  const mixed = addRect(360, 60);
+  const fixedKid = addRect(40, 20);
+  const fillKid = addRect(40, 20);
+  e.dispatch({ type: "reparent", ids: [fixedKid], parent: mixed, x: 0, y: 0 });
+  e.dispatch({ type: "reparent", ids: [fillKid], parent: mixed, x: 0, y: 0 });
+  e.dispatch({ type: "patch", id: fillKid, patch: { sizingW: "fill" } });
+  e.dispatch({
+    type: "autoLayout",
+    id: mixed,
+    layout: {
+      direction: "horizontal", gap: 8, gapMode: "auto", spacing: "between",
+      padding: [0, 0, 0, 0], sizing: "fixed", cross: "fixed", wrap: false, align: "min", justify: "min",
+    },
+  });
+  const mixedNode = () => find(page().root, mixed);
+  t("an Auto gap with a filling child packs at zero", Math.round(mixedNode().children[1].x) === 40);
+  t("so the filler takes every pixel that is left", Math.round(mixedNode().children[1].w) === 320);
+  t("and the row still fits its frame", Math.round(mixedNode().children[1].x + mixedNode().children[1].w) === 360);
+
+  // A typed width on a hugging frame is a manual resize, and Figma turns that
+  // into Fixed - otherwise the hug would swallow the number.
+  e.dispatch({ type: "resize", id: autoHug, x: 0, y: 0, w: 300, h: autoNode().h });
+  e.dispatch({ type: "autoLayout", id: autoHug, layout: { ...autoNode().layout } });
+  t("a typed width turns a hugging frame Fixed", autoNode().layout.sizing === "fixed");
+  t("so the width the user typed is the width the frame has", Math.round(autoNode().w) === 300);
+
+  // Vertical wrap lays out as a plain stack.
+  const col = addRect(120, 300);
+  const a1 = addRect(80, 40);
+  const a2 = addRect(80, 40);
+  for (const k of [a1, a2]) e.dispatch({ type: "reparent", ids: [k], parent: col, x: 0, y: 0 });
+  e.dispatch({
+    type: "autoLayout",
+    id: col,
+    layout: {
+      direction: "vertical", gap: 10, padding: [0, 0, 0, 0], sizing: "fixed", cross: "fixed",
+      wrap: true, align: "min", justify: "min",
+    },
+  });
+  const colKids = find(page().root, col).children;
+  t("a vertical flow with wrap set stacks instead of wrapping", Math.round(colKids[0].x) === 0 && Math.round(colKids[1].x) === 0);
+  t("and the second object sits below the first", Math.round(colKids[1].y) === 50);
+  // The text rule, through the real dispatch.
+  const text = addRect(100, 40);
+  e.dispatch({ type: "patch", id: text, patch: { kind: "text", text: "Hello", maxLines: 2, maxH: 60 } });
+  const textNode = () => find(page().root, text);
+  t("the text layer keeps both when the patch sets both", textNode().maxH === 60 && textNode().maxLines === 2);
+  e.dispatch({ type: "patch", id: text, patch: { maxH: 50 } });
+  t("a new max height zeroes the max line count", textNode().maxLines === 0);
+  e.dispatch({ type: "patch", id: text, patch: { maxLines: 3 } });
+  t("a new max line count clears the max height", textNode().maxH === 0);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

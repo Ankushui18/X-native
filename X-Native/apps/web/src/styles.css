@@ -904,6 +904,34 @@ html[data-theme="dark"] .row.comp .name { color: #c4b5fd; }
   align-items: center;
   padding: 0 12px 8px;
 }
+
+/* The auto layout gap reads as one row however it is set: a number field, or -
+   when it is on Auto - the packing rule it is using. The button on the right is
+   the Auto switch itself, the same one Figma puts in the gap's dropdown. */
+.gap-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
+}
+.gap-row .field { flex: 1; min-width: 0; }
+.gap-mode {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  background: var(--input);
+  color: var(--fg);
+  border-radius: 6px;
+  font-size: 11px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.gap-mode:hover { border-color: var(--accent); }
 .seg {
   display: flex;
   background: var(--input);
