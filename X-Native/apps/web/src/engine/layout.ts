@@ -63,42 +63,83 @@ export function placeCells(flow: XNode[], cols: number, auto: boolean): Cell[] {
   const width = Math.max(1, Math.floor(cols));
   const taken = new Set<string>();
   const key = (c: number, r: number) => `${c}:${r}`;
-  const out: Cell[] = [];
+  const out: Cell[] = new Array(flow.length);
+  const spans = flow.map((n) => ({
+    // A span wider than the grid is clamped: there is nothing to reach into.
+    cs: Math.max(1, Math.min(width, Math.floor(n.colSpan ?? 1) || 1)),
+    rs: Math.max(1, Math.floor(n.rowSpan ?? 1) || 1),
+  }));
   const fits = (c: number, r: number, cs: number, rs: number) => {
     if (c + cs > width) return false;
     for (let i = c; i < c + cs; i++) for (let j = r; j < r + rs; j++) if (taken.has(key(i, j))) return false;
     return true;
   };
+  const occupy = (cell: Cell) => {
+    for (let i = cell.col; i < cell.col + cell.colSpan; i++)
+      for (let j = cell.row; j < cell.row + cell.rowSpan; j++) taken.add(key(i, j));
+  };
+  const cellOf = (n: XNode, index: number, cs: number, rs: number): Cell => ({
+    col: Math.max(0, Math.min(width - cs, Math.floor(n.gridCol ?? 0))),
+    row: Math.max(0, Math.floor(n.gridRow ?? Math.floor(index / width))),
+    colSpan: cs,
+    rowSpan: rs,
+  });
+
+  if (!auto) {
+    // With automatic positioning off every object keeps its cell; an object
+    // that has never been placed falls back to its place in the order, and
+    // anything parked past the last column is pulled back into the grid.
+    for (let index = 0; index < flow.length; index++) {
+      const cell = cellOf(flow[index], index, spans[index].cs, spans[index].rs);
+      out[index] = cell;
+      occupy(cell);
+    }
+    return out;
+  }
+
+  /* Automatic positioning. Figma: "click into one of the cells to place a
+   * frame" - an object placed on purpose keeps the cell it was given, and the
+   * rest of the flow reads the same grid and moves around it. Those cells are
+   * reserved first, so an object earlier in the order cannot take one. */
   for (let index = 0; index < flow.length; index++) {
-    const n = flow[index];
-    // A span wider than the grid is clamped: there is nothing to reach into.
-    const cs = Math.max(1, Math.min(width, Math.floor(n.colSpan ?? 1) || 1));
-    const rs = Math.max(1, Math.floor(n.rowSpan ?? 1) || 1);
-    if (!auto) {
-      // With automatic positioning off every object keeps its cell; an object
-      // that has never been placed falls back to its place in the order, and
-      // anything parked past the last column is pulled back into the grid.
-      const c = Math.max(0, Math.min(width - cs, Math.floor(n.gridCol ?? 0)));
-      const r0 = Math.max(0, Math.floor(n.gridRow ?? Math.floor(index / width)));
-      out.push({ col: c, row: r0, colSpan: cs, rowSpan: rs });
-      for (let i = c; i < c + cs; i++) for (let j = r0; j < r0 + rs; j++) taken.add(key(i, j));
+    if (!flow[index].gridPinned) continue;
+    const cell = cellOf(flow[index], index, spans[index].cs, spans[index].rs);
+    // A cell another placed object already holds - a pinned object whose span
+    // grew into one, say - sends this one back to the flow rather than stacking
+    // two objects in the same cell.
+    if (!fits(cell.col, cell.row, cell.colSpan, cell.rowSpan)) continue;
+    out[index] = cell;
+    occupy(cell);
+  }
+
+  /* The rest fill "in succession from left to right, top to bottom" - and the
+   * cells after a placed object are where the flow picks up, so `⌘D` in a grid
+   * fills "the subsequent cells" rather than the first ones. */
+  let cursor = { col: 0, row: 0 };
+  for (let index = 0; index < flow.length; index++) {
+    const placed = out[index];
+    if (placed) {
+      // Only ever forwards: two placed objects can be out of order, and the
+      // flow should pick up after the last of them either way.
+      const after = { col: placed.col + placed.colSpan, row: placed.row };
+      if (after.row > cursor.row || (after.row === cursor.row && after.col > cursor.col)) cursor = after;
       continue;
     }
-    let placed: Cell | null = null;
-    for (let r = 0; !placed; r++) {
-      for (let c = 0; c + cs <= width; c++) {
+    const { cs, rs } = spans[index];
+    let cell: Cell | null = null;
+    for (let r = cursor.row; !cell; r++) {
+      for (let c = r === cursor.row ? cursor.col : 0; c + cs <= width; c++) {
         if (fits(c, r, cs, rs)) {
-          placed = { col: c, row: r, colSpan: cs, rowSpan: rs };
+          cell = { col: c, row: r, colSpan: cs, rowSpan: rs };
           break;
         }
       }
       // A row that cannot hold a one-cell object is a bug guard, not a case.
-      if (r > flow.length + 1) break;
+      if (r > flow.length + cursor.row + 1) break;
     }
-    const cell = placed ?? { col: 0, row: out.length, colSpan: cs, rowSpan: rs };
-    out.push(cell);
-    for (let i = cell.col; i < cell.col + cell.colSpan; i++)
-      for (let j = cell.row; j < cell.row + cell.rowSpan; j++) taken.add(key(i, j));
+    const cell2 = cell ?? { col: 0, row: flow.length, colSpan: cs, rowSpan: rs };
+    out[index] = cell2;
+    occupy(cell2);
   }
   return out;
 }
@@ -184,6 +225,46 @@ export interface GridPlan {
   rowY: number[];
   totalW: number;
   totalH: number;
+}
+
+/**
+ * Where a new object goes in a grid's order.
+ *
+ * "This also means that when you add a cell object to the grid, Figma will try
+ * to place it between the cell objects - in layer order - nearest your cursor."
+ * The track the point falls in is read from the plan the current objects
+ * produce, and the object is inserted before the first object whose cell is at
+ * or after that one in reading order - so the click lands where it was aimed
+ * and everything after it flows on.
+ */
+export function gridSpotForPoint(
+  node: Pick<XNode, "w" | "h">,
+  flow: XNode[],
+  layout: AutoLayout,
+  hugsWidth: boolean,
+  hugsHeight: boolean,
+  x: number,
+  y: number,
+): { index: number; col: number; row: number } {
+  const plan = planGrid(node, flow, layout, hugsWidth, hugsHeight);
+  const [pl, , pt] = Array.isArray(layout.padding) ? layout.padding : [0, 0, 0, 0];
+  const gapCols = layout.gapCols ?? layout.gap ?? 0;
+  const gapRows = layout.gapRows ?? layout.gap ?? 0;
+  const track = (offsets: number[], gap: number, at: number) => {
+    let found = 0;
+    for (let i = 0; i < offsets.length; i++) if (at >= offsets[i] - gap / 2) found = i;
+    return found;
+  };
+  const col = track(plan.colX, gapCols, x - pl);
+  const row = track(plan.rowY, gapRows, y - pt);
+  const rank = row * plan.cols + col;
+  // Only the cells of objects that would still come first count: an object
+  // deleted from this list cannot push the new one along.
+  const index = plan.cells.reduce(
+    (count, cell, i) => (i < flow.length && cell.row * plan.cols + cell.col < rank ? count + 1 : count),
+    0,
+  );
+  return { index, col, row };
 }
 
 /**
@@ -402,6 +483,51 @@ export function isAutoGap(layout: AutoLayout | undefined): boolean {
 export function hasFillChild(flow: XNode[], axis: "main" | "cross", horizontal: boolean): boolean {
   const alongX = axis === "main" ? horizontal : !horizontal;
   return flow.some((c) => (alongX ? c.sizingW : c.sizingH) === "fill");
+}
+
+/**
+ * The children of a flow that fill along one axis.
+ *
+ * Fill is per dimension in Figma, not per flow, which is the whole basis of the
+ * nesting article: "Set their width resizing to Fill container ... Set their
+ * height resizing to Hug contents" is a *vertical* stack whose children fill
+ * its width - the cross axis of that flow.
+ */
+export function fillersAlong(flow: XNode[], axis: "main" | "cross", horizontal: boolean): XNode[] {
+  const alongX = axis === "main" ? horizontal : !horizontal;
+  return flow.filter((c) => (alongX ? c.sizingW : c.sizingH) === "fill");
+}
+
+/**
+ * The size a child takes when it fills along one axis, with the aspect-ratio
+ * rule that goes with it.
+ *
+ * From the nesting article: "Set the width resizing to Fill container. Toggle on
+ * Aspect ratio to maintain the current ratio of the image whenever it resizes."
+ * So a filling dimension that is locked takes the other dimension with it - but
+ * only when the other dimension is not filling something of its own, since two
+ * fills cannot both be the one that decides the ratio.
+ */
+export function fillPatch(
+  child: Pick<XNode, "w" | "h" | "aspectLocked" | "aspectRatio">,
+  axis: "w" | "h",
+  value: number,
+  otherAxisFills: boolean,
+): { w?: number; h?: number } {
+  const size = Math.max(1, value);
+  // The ratio the lock was taken at, not the one the box happens to have now:
+  // a fill that has just clamped to a pixel would make a locked image square.
+  const ratio =
+    child.aspectRatio && child.aspectRatio > 0
+      ? child.aspectRatio
+      : child.w > 0 && child.h > 0
+        ? child.h / child.w
+        : 0;
+  const locked = !!child.aspectLocked && !otherAxisFills && ratio > 0;
+  if (!locked) return axis === "w" ? { w: size } : { h: size };
+  return axis === "w"
+    ? { w: size, h: Math.max(1, size * ratio) }
+    : { w: Math.max(1, size / ratio), h: size };
 }
 
 /** One cell of the alignment box: a main-axis packing and a cross-axis position. */
@@ -701,10 +827,16 @@ export function effectiveSizing(
   // `sizing` pair, and the layer's width/height resizing menu. They are kept in
   // step by the panel, but a document written by an older build may only have
   // one of them set, so both are read.
-  const wantsMain =
-    layout.sizing === "hug" || (horizontal ? node.sizingW : node.sizingH) === "hug";
-  const wantsCross =
-    layout.cross === "hug" || (horizontal ? node.sizingH : node.sizingW) === "hug";
+  //
+  // A layer that *fills* its parent is the exception: filling is the opposite
+  // of hugging, so the resizing menu it was asked from wins over a hug the
+  // layout still carries. Without that, choosing Fill container on a frame
+  // whose flow had just been applied would leave it hugging, and a grid's
+  // automatic tracks would have no free space to divide.
+  const ownMain = horizontal ? node.sizingW : node.sizingH;
+  const ownCross = horizontal ? node.sizingH : node.sizingW;
+  const wantsMain = ownMain !== "fill" && (layout.sizing === "hug" || ownMain === "hug");
+  const wantsCross = ownCross !== "fill" && (layout.cross === "hug" || ownCross === "hug");
   const main: Sizing = wantsMain && !hasFillChild(flow, "main", horizontal) ? "hug" : "fixed";
   const cross: Sizing = wantsCross && !hasFillChild(flow, "cross", horizontal) ? "hug" : "fixed";
   return { main, cross };

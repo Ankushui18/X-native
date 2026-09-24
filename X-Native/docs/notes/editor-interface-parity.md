@@ -45,7 +45,7 @@ we match.
 | Components | masters, instances, variants, properties, slots | masters and instances | (the app has both plus overrides) | **partial** |
 | Variables | collections, modes, remote | a `tokens` tab and a variable list | read | **partial** |
 | Text | styles, lists, OpenType, variable fonts, CJK, RTL, links, emoji | wrapping, alignment, decoration, auto-height, letter spacing | read | **partial** |
-| Auto layout | horizontal, vertical, grid, wrap, per-child settings, add/remove/suggest | a `layout` model, padding (V/H or per-side, CSS shorthand), gap (number or Auto with Between/Around/Evenly), the alignment box with its keys, hug/fill/fixed, ignore, suggest, edge double-clicks and padding handles on the canvas, the grid flow with tracks, spans, auto-positioning and per-cell alignment, and the three routes in and four routes out | read | **partial — multi-dimensional nesting is the article left; see the round sections** |
+| Auto layout | horizontal, vertical, grid, wrap, per-child settings, add/remove/suggest | a `layout` model, padding (V/H or per-side, CSS shorthand), gap (number or Auto with Between/Around/Evenly), the alignment box with its keys, hug/fill/fixed, ignore, suggest, edge double-clicks and padding handles on the canvas, the grid flow with tracks, spans, auto-positioning and per-cell alignment, the three routes in and four routes out, and flows nested inside flows with their own padding, gap, fills and hugged heights | read | **done — all four sub-articles; only the text-resizing article the guide links to is left** |
 | Prototypes | triggers, actions, animations, easing, overlays, flows | flows, overlays, transitions, present mode | read | **partial** |
 | Comments | threads, replies, resolve, mentions | threads, replies, resolve | read | **partial** |
 | Multiplayer | cursors, cursor chat, spotlight, branching, history | none of it; a local file | - | **n/a** - no server |
@@ -100,10 +100,10 @@ and the colour models are the remaining items.
 sub-options listed under *Open* are not.
 
 **Use auto layout** — six articles. The main guide (360040451373) is audited and
-closed in "Auto layout, held up against «Guide to auto layout»" above, and three
-of the four sub-articles are done in their own rounds: the horizontal/vertical
-flows, the grid flow, and turning auto layout on and off. Multi-dimensional
-nesting is left, along with the text-resizing article the guide links to.
+closed in "Auto layout, held up against «Guide to auto layout»" above, and all
+four sub-articles are done in their own rounds: the horizontal/vertical flows,
+the grid flow, turning auto layout on and off, and combining the flows inside
+one another. The text-resizing article the guide links to is left.
 
 **Figma Draw, Build design systems, Create prototypes, Import and export, Work
 together in files** — chunks 2 and 3 of the category are not fetched yet, so
@@ -1088,8 +1088,8 @@ a frame in the layers panel does not show them as Figma's pink handles do;
 "Press the `tab` key to move between input fields" is not wired; and the ⌘+click
 that Figma uses to edit all four sides in place is used here for CSS shorthand
 instead — the same result by a different route, with the four fields one click
-away. The grid flow is the round above; multi-dimensional nesting is still a
-separate article.
+away. The grid flow is the round above; multi-dimensional nesting has its own
+round below.
 
 ## The grid flow
 
@@ -1208,6 +1208,77 @@ alignment, gap and padding and hands back one set of values); the article's
 mention that you can add auto layout to a *component set* is not exercised,
 since component sets are not built; and the layers panel marks auto layout with
 a dot but does not yet show Figma's blue outline on hover.
+
+## Combining the flows
+
+"Combine vertical, horizontal, and grid auto layout flows" (31441443713047, both
+chunks) is the last of the four sub-articles, and the one that makes the other
+three worth having: a flow inside a flow, with each level keeping its own
+padding and gap. Its first example is a newsfeed - author and date in a vertical
+frame, that beside an avatar in a horizontal frame, that inside a post with an
+image and a description, the posts inside the feed - and its second is the home
+screen from the grid article, this time with a folder spanning four of its
+cells. Every number below was driven through the real app by
+`/tmp/probe/nesting.mjs`; the engine side is in the parity suite.
+
+### Each level keeps its own numbers
+
+| Article rule | Ours, measured |
+| --- | --- |
+| "The nested frames will have both parent and child properties ... each frame will have its own separate padding and gap between values" | Four levels deep, four sets of numbers: the newsfeed pad 16 / gap 12, the post 12 / 8, the profile 8 / 8, the author-and-date frame 8 / 4. A child's origin is its parent's padding - the post at (16, 16) in the feed, the profile at (12, 12) in the post, the two texts at (8, 8) and (8, 32) in theirs - so nothing drifts as the levels go in. |
+| "Set the width resizing to Fill container" on the layers *and* their parents | At a 400-wide feed: post 368 (400 less 16 a side), profile 344 (less 12 a side), author-and-date frame 280, its texts 264 (less 8 a side). Each level fills the width its parent hands it, and the level below fills that. |
+| "Set the height resizing to Hug contents" | The post hugs to 255 = 24 padding + 76 profile + 8 gap + 115 image + 8 gap + 24 description, and the feed to 287 = 255 + 32. Hugging runs from the inside out, so a nested frame's height is final before its parent measures it. |
+| "When you resize the frame ... the contents should resize and reflow accordingly" | Typing W 300 on the feed reflowed every width (268 / 244 / 180 / 164) and re-hugged every height: the feed came back 300 × 253, the post 268 × 221. |
+| "Duplicate a post ... the top-level frame will resize to accommodate" | `⌘D` on a post put `Frame 2 copy` directly above its original at the same 268 width, and the feed made room for the second post and settled at 487. A duplicate keeps the flow it was copied with, which is why the copy needs no re-setup. |
+| "Click into one of the cells to place a frame" / "`⌘D` to duplicate ... to fill the subsequent cells" | A frame drawn into the middle cell of the 3 × 6 home screen took column 1 at (105, 8) and stayed there; the copies went to (203, 8) and then down to (8, 73) - the cells after the one it was drawn into, not the first free ones. |
+| Folders spanning four cells, with their own grid inside | The folder spans 2 columns × 2 rows, 187 × 123 at (105, 73), and holds a 3 × 3 grid with **its own** padding 6 and gap 8: the three icons sit at x 6 / 67 / 128, 61 apart, which is the folder's 53-px column plus its 8-px gap - the home screen's own gap never reaches them. |
+
+### Aspect ratio, through the cascade
+
+The article's image is "width Fill container" with "Aspect ratio" toggled on,
+which is a rule about *two* numbers at once. Drawn 240 × 80 (1:3) and filled, the
+image came out 344 × 115 at the 400-wide feed and 244 × 81 after the feed was
+typed to 300: the ratio survived a resize that travelled two levels down. The
+fill's own patch is `{"w":300,"h":150}` for a locked 100 × 50 - the width first,
+then the height the lock asks for - and a locked child whose *other* axis also
+fills is left alone by it, because two fills cannot both decide a height.
+
+### What the probe turned up on the way
+
+Four of the five were the article working and this build not, which is what the
+round was for:
+
+1. **Fill ran on one axis only.** `fillPatch` was applied along the frame's main
+   axis, so a width-Fill child of a *vertical* stack kept the width it was drawn
+   at and resizing the feed never reached it - the post stayed 100 px wide inside
+   a 400 px feed. Fill now runs per axis, cross axis first, which is what makes a
+   vertical stack's members track its width.
+2. **One pass is not enough.** With fills at every level, a nested frame is laid
+   out before its parent has its new width, so a level below was laid out
+   at the size its parent had before the pass - the profile came out at the post's
+   old inner width rather than 244. The engine now re-runs the layout until every size in the tree has stopped
+   changing, capped at four passes so a mutual dependency cannot spin.
+3. **A typed width could square a locked box.** "300" arrives as 3, then 30, then
+   300, and the 3 clamps to a one-pixel box whose ratio is 1:1. The lock now
+   remembers the ratio it was taken at (`aspectRatio`, written when the lock goes
+   on, refreshed when a locked box is resized by hand) instead of reading the
+   box, so a 1:3 image filled to 300 comes back 81 high rather than 300. In the
+   parity suite: "turning the lock on remembers the ratio it was taken at", "a
+   fill that sees a one-pixel box still knows the ratio", "a width typed through
+   a one-pixel step leaves the ratio intact".
+4. **An object aimed at an occupied cell landed in the first free one.** Clicking
+   the middle cell and drawing put the new frame in column 0. The cell an object
+   is *drawn into* is now pinned for the pass that places it and cleared
+   afterwards, which is also why the `⌘D` copies land in the cells the article
+   shows rather than wherever the flow had reached.
+
+### Where this leaves the article
+
+All four sub-articles of the "Use auto layout" set are implemented; the only one
+the guide links to that has not been audited is the text-resizing article. What
+this round did not build is in `## Open`: spanning cells by dragging an object's
+edge on the canvas - ours spans through the Col span / Row span fields - and the
+hover highlight of the cell an object would land in.
 
 ## Auto layout, held up against "Guide to auto layout"
 
@@ -1613,8 +1684,10 @@ fields (exposure, contrast, saturation).
   systems" article, still uncovered), and a mirrored node arrives un-mirrored,
   because the node model has no flip.
 - Auto layout: the padding handles only appear on a selected frame rather than
-  on hover, `tab` does not move between the padding fields, and multi-dimensional
-  nesting is the last article of the "Use auto layout" set not yet entered.
+  on hover, and `tab` does not move between the padding fields. From the nesting
+  round: a cell is spanned with the Col span / Row span fields rather than by
+  dragging an object's edge on the canvas, and the cell an object would land in
+  is not highlighted before it is drawn.
 - Adding auto layout to a *component set* is not exercised, since component sets
   are not built here; a main component takes a layout and passes it on.
 - Suggest auto layout works out one layout for the selection rather than
@@ -1634,8 +1707,21 @@ fields (exposure, contrast, saturation).
   the flow, and a drag only sticks where it is dropped when automatic positioning
   is off. Dragging a child's edge on the canvas to snap a span, and the `⌘D`
   duplicate inside a cell, are the other two from the "Work with objects" list.
-- The behaviour suite (`e2e/behaviour.mjs`) is stale: it looks for a "Chip"
-  layer the demo document no longer has, so it fails on its first check.
+- The behaviour suite (`e2e/behaviour.mjs`) is an inherited harness, partly
+  stale, and worth its own pass. Repaired to the point of running: it asked for a
+  "Chip" layer the demo document never had (three checks now select the "View
+  Details Button" rect), it read the layer list before the panel had rendered
+  (`rows()` now waits for a first row), and it wiped only `localStorage` while a
+  document that overflows lives in IndexedDB - so one check inherited the last
+  one's file (IndexedDB is cleared now too). It then runs 28 checks green, fails
+  two, and stops at a third that expects a *Vars* "copy the selection's colour"
+  button this branch does not have. The two failures assume the old
+  single-document store: a corrupt payload written to `x-native-document` is
+  ignored rather than warned about (the store is per file now, and the warning
+  lives on the restore path), and "New file" from `⌘K` assumes an editor action
+  that does not exist here - see the next item.
+- The editor's Actions menu (`⌘/`) has no "New design file"; Figma's does. The
+  article for that menu (23570416033943) is not fetched yet.
 - Text styles on type fields, plus the wrapping settings the panel does not
   expose yet: percent letter spacing, OpenType and variable-font axes, hanging
   punctuation, whole-paragraph indentation, links in text, middle truncation.

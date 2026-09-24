@@ -36,7 +36,12 @@ import {
   cellAlign,
   cellBox,
   defaultGrid,
+  fillersAlong,
+  fillPatch,
   gridRows,
+  gridSpotForPoint,
+  hugsCross,
+  hugsMain,
   placeCells,
   planGrid,
   widthIsMain,
@@ -3041,6 +3046,167 @@ console.log("the three ways in to auto layout, from \"Toggle on auto layout in d
   // is a refusal - the instance keeps the layout its main component gave it.
   t("Remove all auto layout refuses on an instance", !!node(instanceId).layout);
   t("and the main component is untouched", before && !!node(masterId).layout);
+}
+
+console.log("nesting flows, from \"Combine vertical, horizontal, and grid auto layout flows\":");
+{
+  const e = new MemoryEngine(false);
+  await e.ready;
+  const page = () => e.snapshot().pages[e.snapshot().page];
+  const add = (kind, x, y, w, h, parent) => {
+    e.dispatch({ type: "add", kind, x, y, w, h, parent: parent ?? page().root.id });
+    return e.snapshot().selection[0];
+  };
+  const N = (id) => find(page().root, id);
+  const L = (dir, over = {}) => ({
+    direction: dir, gap: 0, padding: [0, 0, 0, 0], sizing: "fixed", cross: "fixed",
+    wrap: false, align: "min", justify: "min", ...over,
+  });
+
+  // The article's newsfeed: name and date inside a vertical frame, that frame
+  // and an avatar inside a horizontal Profile, that inside a vertical Post, and
+  // the posts inside a vertical Newsfeed. Fill is per dimension, so the widths
+  // cascade while each frame keeps its own height rule.
+  const feed = add("frame", 0, 0, 400, 300);
+  const post = add("frame", 0, 0, 100, 60, feed);
+  const profile = add("frame", 0, 0, 50, 20, post);
+  const name = add("rect", 0, 0, 40, 10, profile);
+  e.dispatch({ type: "autoLayout", id: feed, layout: L("vertical", { padding: [16, 16, 16, 16], gap: 12 }) });
+  e.dispatch({ type: "autoLayout", id: post, layout: L("vertical", { padding: [12, 12, 12, 12], gap: 8 }) });
+  e.dispatch({ type: "autoLayout", id: profile, layout: L("horizontal", { padding: [4, 4, 4, 4], gap: 6 }) });
+  for (const id of [post, profile, name]) e.dispatch({ type: "patch", id, patch: { sizingW: "fill" } });
+  // A child's own height stays its own: wide fill, short fixed height.
+  t("a child filling the width of a vertical stack takes its inner width",
+    Math.round(N(post).w) === 368);
+  t("the next level in takes that frame's own padding off again",
+    Math.round(N(profile).w) === 344);
+  t("and the level inside that again", Math.round(N(name).w) === 336);
+  t("each level keeps its own padding, and so its own origin",
+    Math.round(N(post).x) === 16 && Math.round(N(profile).x) === 12 && Math.round(N(name).x) === 4);
+  t("a cross fill does not stretch the child's height",
+    Math.round(N(post).h) === 60 && Math.round(N(name).h) === 10);
+  e.dispatch({ type: "resize", id: feed, x: 0, y: 0, w: 300, h: 300 });
+  e.dispatch({ type: "autoLayout", id: feed, layout: { ...N(feed).layout } });
+  t("resizing the outer frame reflows all three levels", Math.round(N(post).w) === 268 && Math.round(N(profile).w) === 244 && Math.round(N(name).w) === 236);
+  // A frame cannot hug an axis while a child fills along it; a width-filling
+  // child inside a vertical stack is what turns that stack's cross axis fixed.
+  const wantingHug = { ...N(feed).layout, cross: "hug" };
+  t("a frame cannot hug the axis a child fills", hugsCross(wantingHug, N(feed), N(feed).children) === false);
+  t("an axis nothing fills is still free to hug", hugsCross({ ...wantingHug, cross: "hug" }, N(feed), []) === true);
+
+  // "Set the width resizing to Fill container. Toggle on Aspect ratio to
+  // maintain the current ratio of the image whenever it resizes."
+  const card = add("frame", 500, 0, 200, 300);
+  const img = add("rect", 0, 0, 100, 50, card);
+  e.dispatch({ type: "autoLayout", id: card, layout: L("vertical") });
+  e.dispatch({ type: "patch", id: img, patch: { aspectLocked: true, sizingW: "fill" } });
+  t("a filling image keeps its ratio", Math.round(N(img).w) === 200 && Math.round(N(img).h) === 100);
+  e.dispatch({ type: "resize", id: card, x: 500, y: 0, w: 300, h: 300 });
+  e.dispatch({ type: "autoLayout", id: card, layout: { ...N(card).layout } });
+  t("and follows the frame as it resizes", Math.round(N(img).w) === 300 && Math.round(N(img).h) === 150);
+  // A width is typed a digit at a time, so the box passes through sizes that
+  // clamp to a single pixel. The ratio the lock was taken at is remembered for
+  // exactly that reason - reading the box instead would leave it square.
+  t("turning the lock on remembers the ratio it was taken at", N(img).aspectRatio === 0.5);
+  t("a fill that sees a one-pixel box still knows the ratio",
+    JSON.stringify(fillPatch({ w: 1, h: 1, aspectLocked: true, aspectRatio: 1 / 3 }, "w", 300, false)) === '{"w":300,"h":100}');
+  e.dispatch({ type: "resize", id: card, x: 500, y: 0, w: 1, h: 300 });
+  e.dispatch({ type: "autoLayout", id: card, layout: { ...N(card).layout } });
+  e.dispatch({ type: "resize", id: card, x: 500, y: 0, w: 400, h: 300 });
+  e.dispatch({ type: "autoLayout", id: card, layout: { ...N(card).layout } });
+  t("a width typed through a one-pixel step leaves the ratio intact",
+    Math.round(N(img).w) === 400 && Math.round(N(img).h) === 200);
+  e.dispatch({ type: "resize", id: img, x: 0, y: 0, w: 200, h: 80 });
+  e.dispatch({ type: "autoLayout", id: card, layout: { ...N(card).layout } });
+  t("resizing a locked box by hand takes the new ratio with it",
+    Math.abs(N(img).aspectRatio - 0.4) < 1e-6 && Math.round(N(img).h) === 160);
+  e.dispatch({ type: "resize", id: card, x: 500, y: 0, w: 300, h: 300 });
+  e.dispatch({ type: "autoLayout", id: card, layout: { ...N(card).layout } });
+  const unlocked = add("rect", 0, 0, 100, 50, card);
+  e.dispatch({ type: "patch", id: unlocked, patch: { sizingW: "fill" } });
+  t("an unlocked child keeps the height it was given", Math.round(N(unlocked).w) === 300 && Math.round(N(unlocked).h) === 50);
+  t("fillPatch leaves a free child's other axis alone",
+    JSON.stringify(fillPatch({ w: 100, h: 50, aspectLocked: false }, "w", 300, false)) === '{"w":300}');
+  t("and takes it along when the ratio is locked",
+    JSON.stringify(fillPatch({ w: 100, h: 50, aspectLocked: true }, "w", 300, false)) === '{"w":300,"h":150}');
+  t("a locked child whose other axis also fills is left to the framework",
+    JSON.stringify(fillPatch({ w: 100, h: 50, aspectLocked: true }, "w", 300, true)) === '{"w":300}');
+  t("filling along one axis is not filling along the other",
+    fillersAlong([{ sizingW: "fill", sizingH: "hug" }], "main", false).length === 0 &&
+      fillersAlong([{ sizingW: "fill", sizingH: "hug" }], "cross", false).length === 1);
+
+  // The grid example: a 3x6 home screen, objects created into the cell they
+  // were drawn in, and grids nested inside a folder that spans four cells.
+  const home = add("frame", 0, 500, 300, 400);
+  e.dispatch({ type: "autoLayout", id: home, layout: { ...L("grid", { columns: 3, rows: 6, gapCols: 8, gapRows: 8 }) } });
+  const spot = gridSpotForPoint(N(home), [], N(home).layout, false, false, 110, 20);
+  t("a point in the middle column reads as that column", spot.col === 1 && spot.row === 0);
+  t("and with nothing before it, the new object heads the order", spot.index === 0);
+  // The point is in the grid's own coordinates: that is what the canvas hands
+  // an `add`, already mapped into the frame the object is being drawn into.
+  const mid = add("frame", 110, 20, 60, 60, home);
+  t("an object created into a cell takes that cell", N(mid).gridCol === 1 && N(mid).gridRow === 0);
+  t("and is drawn there", Math.round(N(mid).x) === 103);
+  // "Click into one of the cells to place a frame": the cell is a real
+  // position, and the object keeps it while the rest of the flow goes on.
+  t("and it keeps that cell as the flow goes on", N(mid).gridPinned === true && N(mid).gridCol === 1);
+  const first = add("frame", 10, 20, 60, 60, home);
+  t("a second object aimed at the first cell takes it", N(first).gridCol === 0 && Math.round(N(first).x) === 0);
+  t("and the one already there stays where it was put", N(mid).gridCol === 1);
+  // "Selected the media post and duplicate it. Notice how the top-level frame
+  // resizes to accommodate."
+  e.dispatch({ type: "select", ids: [first] });
+  e.dispatch({ type: "duplicate" });
+  const copy = e.snapshot().selection[0];
+  t("a duplicate fills the next free cell", N(copy).gridCol === 2 && N(copy).gridRow === 0);
+  // "The new frames will fill the subsequent cells": each copy sits directly
+  // above the one it came from, so the flow picks up where the last one ended.
+  e.dispatch({ type: "duplicate" });
+  const copy2 = e.snapshot().selection[0];
+  t("and the next fills the cell after that", N(copy2).gridCol === 0 && N(copy2).gridRow === 1);
+  const folder = add("frame", 0, 0, 100, 100, home);
+  e.dispatch({ type: "patch", id: folder, patch: { sizingW: "fill", sizingH: "fill", colSpan: 2, rowSpan: 2 } });
+  // Three columns of 94.67 with 8 between them: two cells and the gap.
+  t("a folder spanning two columns takes both cells and the gap", Math.round(N(folder).w) === 197);
+  t("and two rows likewise", Math.round(N(folder).h) === 128);
+  e.dispatch({ type: "autoLayout", id: folder, layout: { ...L("grid", { columns: 3, rows: 3, gapCols: 4, gapRows: 4 }), padding: [6, 6, 6, 6] } });
+  // "Copy one of the app frames and paste it multiple times into this folder
+  // frame": the first one goes into the cell it was drawn in, the copies follow.
+  const icon = add("rect", 10, 20, 20, 20, folder);
+  e.dispatch({ type: "select", ids: [icon] });
+  e.dispatch({ type: "duplicate" });
+  e.dispatch({ type: "duplicate" });
+  const icons = N(folder).children;
+  t("a grid inside a spanning cell lays out on its own tracks",
+    icons.length === 3 && Math.round(icons[1].x) === 69 && Math.round(icons[2].x) === 132);
+  t("with the folder's own padding and gap, not the parent's",
+    Math.round(icons[0].x) === 6 && Math.round(icons[0].y) === 6);
+  t("and the inner cells are the folder's, not the home screen's",
+    Math.round(N(folder).w) === 197 && icons[0].w === 20);
+
+  // The browser turned this one up: a flow is applied with Hug, and Fill
+  // container from the resizing menu has to win, or the frame keeps hugging and
+  // a grid's automatic tracks have no free space to divide between them.
+  const filler = add("frame", 700, 0, 300, 60);
+  e.dispatch({ type: "patch", id: filler, patch: { sizingW: "fill", sizingH: "fill" } });
+  e.dispatch({ type: "autoLayout", id: filler, layout: { ...L("grid", { columns: 3, rows: 1, gapCols: 8 }), sizing: "hug", cross: "hug" } });
+  t("a flow applied with hug does not collapse a frame that fills", Math.round(N(filler).w) === 300 && Math.round(N(filler).h) === 60);
+  const f1 = add("rect", 10, 10, 20, 20, filler);
+  const f2 = add("rect", 110, 10, 20, 20, filler);
+  t("Fill container gives a grid's automatic tracks the free space", Math.round(N(f1).x) === 0 && Math.round(N(f2).x) === 103);
+
+  // Typing a width on a frame that hugs its height must leave the height
+  // alone: only the axis the person touched counts as a manual adjustment, and
+  // a hug measured to a fraction of a pixel would otherwise look like one.
+  const tracker = add("frame", 200, 0, 400, 300);
+  e.dispatch({ type: "autoLayout", id: tracker, layout: { ...L("vertical", { padding: [16, 16, 16, 16], gap: 12 }), sizing: "hug", cross: "hug" } });
+  add("rect", 0, 0, 100, 10, tracker);
+  const second = add("rect", 0, 0, 100, 11, tracker);
+  e.dispatch({ type: "patch", id: second, patch: { h: 10.25 } });
+  const hugged = N(tracker).h;
+  e.dispatch({ type: "resize", id: tracker, x: 200, y: 0, w: 300, h: hugged });
+  t("typing a width leaves the height hugging",
+    N(tracker).layout.sizing === "hug" && Math.abs(N(tracker).h - hugged) < 0.01);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

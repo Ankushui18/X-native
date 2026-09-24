@@ -2076,23 +2076,47 @@ function Design({
   const resolved = n.layout ? effectiveSizing(n.layout, n, n.children) : null;
   /* Figma: "the parent frame will no longer hug contents and become Fixed for
    * the axis" - so the resizing menu shows Fixed, and says why. */
-  const showSizing = (axis: "main" | "cross") => {
-    const own = axis === "cross" ? n.sizingH : n.sizingW;
-    if (n.layout && n.kind !== "text") return resolved![axis];
+  /* The two fields ask by *dimension*, not by axis. A vertical flow's main axis
+   * is its height, so asking for "main" in the W field would show - and edit -
+   * the height's answer. */
+  const axisFor = (dim: "width" | "height"): "main" | "cross" => {
+    const horiz = n.layout ? widthIsMain(n.layout) : true;
+    return (dim === "width") === horiz ? "main" : "cross";
+  };
+  const showSizing = (dim: "width" | "height") => {
+    const own = dim === "width" ? n.sizingW : n.sizingH;
+    if (n.layout && n.kind !== "text") {
+      // A layer that fills says so, and the layout's own hug answer only
+      // applies to the axes the layer is not filling along.
+      if (own === "fill") return "fill" as Sizing;
+      return resolved![axisFor(dim)];
+    }
     return own;
   };
   /* When that happens the label says so, so a frame that stopped hugging is
    * not mistaken for a bug in the resize itself. */
-  const hugNote = (axis: "main" | "cross") => {
+  const hugNote = (dim: "width" | "height") => {
     if (!n.layout || n.kind === "text") return undefined;
+    const axis = axisFor(dim);
     const horiz = widthIsMain(n.layout);
     const wants = (axis === "main" ? n.layout.sizing : n.layout.cross) === "hug";
-    const nodeWants = (axis === "main" ? n.sizingW : n.sizingH) === "hug";
-    if ((!wants && !nodeWants) || showSizing(axis) !== "fixed") return undefined;
-    const dim = (axis === "main") === horiz ? "width" : "height";
+    const nodeWants = (dim === "width" ? n.sizingW : n.sizingH) === "hug";
+    if ((!wants && !nodeWants) || showSizing(dim) !== "fixed") return undefined;
     return hasFillChild(n.children, axis, horiz)
       ? `a child fills the ${dim}, so the frame is Fixed here instead of hugging`
       : undefined;
+  };
+  /* Choosing Fixed or Hug - or Fill, which is not a hug - writes the answer on
+   * the axis that dimension belongs to, so the layout's own pair cannot snap
+   * the frame back over what the menu just said. */
+  const setSizingAxis = (dim: "width" | "height", sizing: Sizing) => {
+    if (!n.layout) return;
+    const key = (dim === "width") === widthIsMain(n.layout) ? "sizing" : "cross";
+    engine.dispatch({
+      type: "autoLayout",
+      id: n.id,
+      layout: { ...n.layout, [key]: sizing === "hug" ? "hug" : "fixed" },
+    });
   };
   const [strokeMore, setStrokeMore] = useState(n.strokeDash > 0);
   const [more, setMore] = useState<{ x: number; y: number } | null>(null);
@@ -2162,8 +2186,8 @@ function Design({
         const box = sizeKeepingRatio({ x: n.x, y: n.y, w: n.w, h: n.h }, key === "w" ? { w: v } : { h: v });
         w = box.w;
         h = box.h;
-      } else if (n.aspectLocked && n.w > 0 && n.h > 0) {
-        const ratio = n.h / n.w;
+      } else if (n.aspectLocked) {
+        const ratio = n.aspectRatio && n.aspectRatio > 0 ? n.aspectRatio : n.w > 0 && n.h > 0 ? n.h / n.w : 1;
         if (key === "w") h = Math.max(1, v * ratio);
         else w = Math.max(1, v / ratio);
       }
@@ -2514,40 +2538,28 @@ function Design({
         <div className="grid3">
           <Field
             label="W"
-            hint={showSizing("main")}
-            hintNote={hugNote("main")}
+            hint={showSizing("width")}
+            hintNote={hugNote("width")}
             value={n.w}
             onChange={(v) => num("w", v)}
             onLabelClick={() => {
               const sizingW = cycleSizing(n.sizingW);
               if (n.kind === "text") setSizing(sizingW, n.sizingH);
               else patch({ sizingW });
-              if (n.layout && (sizingW === "hug" || sizingW === "fixed")) {
-                engine.dispatch({
-                  type: "autoLayout",
-                  id: n.id,
-                  layout: { ...n.layout, sizing: sizingW === "hug" ? "hug" : "fixed" },
-                });
-              }
+              setSizingAxis("width", sizingW);
             }}
           />
           <Field
             label="H"
-            hint={showSizing("cross")}
-            hintNote={hugNote("cross")}
+            hint={showSizing("height")}
+            hintNote={hugNote("height")}
             value={n.h}
             onChange={(v) => num("h", v)}
             onLabelClick={() => {
               const sizingH = cycleSizing(n.sizingH);
               if (n.kind === "text") setSizing(n.sizingW, sizingH);
               else patch({ sizingH });
-              if (n.layout && (sizingH === "hug" || sizingH === "fixed")) {
-                engine.dispatch({
-                  type: "autoLayout",
-                  id: n.id,
-                  layout: { ...n.layout, cross: sizingH === "hug" ? "hug" : "fixed" },
-                });
-              }
+              setSizingAxis("height", sizingH);
             }}
           />
           <button

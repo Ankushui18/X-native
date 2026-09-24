@@ -520,6 +520,11 @@ export interface XNode {
   /** Figma's "Miter angle": joins sharper than this bevel instead of pointing. */
   strokeMiterAngle?: number;
   aspectLocked: boolean;
+  /** The ratio the lock was taken at (height ÷ width), remembered so a size
+   *  that clamps to a pixel on the way to a new one cannot leave a locked box
+   *  square. Written when the lock is turned on; a locked resize keeps it up to
+   *  date. */
+  aspectRatio?: number;
   sizingW: Sizing;
   sizingH: Sizing;
   constraintH: Constraint;
@@ -558,6 +563,11 @@ export interface XNode {
   rowSpan?: number;
   gridCol?: number;
   gridRow?: number;
+  /** A cell this object was placed into on purpose - the frame tool clicked
+   *  into one. Automatic positioning keeps it there and flows the rest of the
+   *  objects around it, which is also what puts `⌘D` in the next cell: the
+   *  copy sits directly above its original, so the flow picks up after it. */
+  gridPinned?: boolean;
   /** Rich text formatting runs */
   textRuns?: TextRun[];
   /** Preserved per-instance property overrides */

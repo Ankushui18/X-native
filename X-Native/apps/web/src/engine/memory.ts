@@ -23,10 +23,12 @@ import {
   cellAlign,
   cellAt,
   cellBox,
+  fillPatch,
   clampToPadding,
   hugsCross,
   hugsMain,
   isAutoGap,
+  gridSpotForPoint,
   planGrid,
   widthIsMain,
   textDimensionRule,
@@ -233,6 +235,13 @@ function clampDims(n: XNode) {
   if (n.maxH != null && Number.isFinite(n.maxH) && n.h > n.maxH) n.h = n.maxH;
 }
 
+/** Every size in the tree, rounded: what "settled" means for a reflow. */
+function sizeSignature(n: XNode): string {
+  let s = `${Math.round(n.w * 100)}:${Math.round(n.h * 100)}`;
+  for (const c of n.children) s += `|${sizeSignature(c)}`;
+  return s;
+}
+
 function applyLayout(n: XNode, gesture = false) {
   for (const c of n.children) applyLayout(c, gesture);
   const l = n.layout;
@@ -277,8 +286,16 @@ function applyLayout(n: XNode, gesture = false) {
       // (the end of the gesture) is what puts it in a cell.
       if (gesture && l.autoPosition === false) return;
       const { h: ah, v: av } = cellAlign(c);
-      c.w = Math.max(1, c.sizingW === "fill" ? box.w : c.w);
-      c.h = Math.max(1, c.sizingH === "fill" ? box.h : c.h);
+      if (c.sizingW === "fill") {
+        const patch = fillPatch(c, "w", box.w, c.sizingH === "fill");
+        if (patch.w != null) c.w = patch.w;
+        if (patch.h != null) c.h = patch.h;
+      }
+      if (c.sizingH === "fill") {
+        const patch = fillPatch(c, "h", box.h, c.sizingW === "fill");
+        if (patch.w != null) c.w = patch.w;
+        if (patch.h != null) c.h = patch.h;
+      }
       clampDims(c);
       c.x = gl + box.x + (ah === "center" ? (box.w - c.w) / 2 : ah === "max" ? box.w - c.w : 0);
       c.y = gt + box.y + (av === "center" ? (box.h - c.h) / 2 : av === "max" ? box.h - c.h : 0);
@@ -297,6 +314,20 @@ function applyLayout(n: XNode, gesture = false) {
   const gap = typeof l.gap === "number" ? l.gap : 0;
   const innerW = n.w - pl - pr;
   const innerH = n.h - pt - pb;
+  const crossInner = horiz ? innerH : innerW;
+  // Fill is per dimension: a child of a vertical stack can fill its *width*,
+  // which is what the nesting article's post and profile do ("Set their width
+  // resizing to Fill container ... Set their height resizing to Hug contents").
+  // This runs before anything is placed, since a cross-filling child also
+  // decides how tall a wrapped row is.
+  for (const c of flow) {
+    const fillsCross = (horiz ? c.sizingH : c.sizingW) === "fill";
+    if (!fillsCross) continue;
+    const patch = fillPatch(c, horiz ? "h" : "w", crossInner, false);
+    if (patch.w != null) c.w = patch.w;
+    if (patch.h != null) c.h = patch.h;
+    clampDims(c);
+  }
   const auto = isAutoGap(l);
   const spacing: Spacing = l.spacing ?? "between";
   // Auto gap is the space left over, so it is zero whenever something is
@@ -312,8 +343,10 @@ function applyLayout(n: XNode, gesture = false) {
     const leftover = Math.max(1, (horiz ? innerW : innerH) - used - packedGap * Math.max(0, flow.length - 1));
     const each = leftover / fillers.length;
     for (const c of fillers) {
-      if (horiz) c.w = Math.max(1, each);
-      else c.h = Math.max(1, each);
+      const otherFills = (horiz ? c.sizingH : c.sizingW) === "fill";
+      const patch = fillPatch(c, horiz ? "w" : "h", each, otherFills);
+      if (patch.w != null) c.w = patch.w;
+      if (patch.h != null) c.h = patch.h;
       clampDims(c);
     }
   }
@@ -367,7 +400,6 @@ function applyLayout(n: XNode, gesture = false) {
   }
   const mainTotal = flow.reduce((s, c) => s + (horiz ? c.w : c.h), 0) + gap * Math.max(0, flow.length - 1);
   const inner = horiz ? innerW : innerH;
-  const crossInner = horiz ? innerH : innerW;
   const contentMain = flow.reduce((s, c) => s + (horiz ? c.w : c.h), 0);
   // Auto gap distributes whatever is left after the objects have taken their
   // share; a fixed gap and the older `justify` packing do what they always did.
@@ -929,6 +961,29 @@ export class MemoryEngine implements Engine {
   }
 
   /**
+   * The index a new object takes in `parent`'s children, so that a grid places
+   * it in the cell it was aimed at rather than at the end of the flow.
+   *
+   * Figma: "when you add a cell object to the grid, Figma will try to place it
+   * between the cell objects - in layer order - nearest your cursor." Anything
+   * else - a frame with no layout, a linear flow, automatic positioning off -
+   * appends, which is where it always went.
+   */
+  /**
+   * The cell a point aims at in a grid parent, or null when it is not one.
+   *
+   * `x` and `y` are in the parent's own coordinates: `add` and `reparent` both
+   * carry the point already mapped into the destination, which is where the new
+   * object's own x/y are written from.
+   */
+  private gridSpotFor(parent: XNode, x: number, y: number): { index: number; col: number; row: number } | null {
+    const l = parent.layout;
+    if (!l || l.direction !== "grid" || l.autoPosition === false) return null;
+    const flow = parent.children.filter((c) => c.visible && !c.absolutePosition);
+    return gridSpotForPoint(parent, flow, l, hugsMain(l, parent, flow), hugsCross(l, parent, flow), x, y);
+  }
+
+  /**
    * Put an auto layout frame around what was selected.
    *
    * Figma's note: "Auto layout is only supported on frames. If you have one or
@@ -982,7 +1037,19 @@ export class MemoryEngine implements Engine {
   }
 
   private relayout() {
-    applyLayout(this.root(), this.gesture);
+    // Fill cascades through nesting: a parent's pass resizes a nested auto
+    // layout frame, and that frame's own layout then has to run again at its new
+    // size - which is the whole point of the nesting article ("when you resize
+    // the frame ... the contents should resize and reflow accordingly"). Repeat
+    // until every size in the tree has stopped changing, capped so a document
+    // with a mutual dependency cannot spin.
+    let last = "";
+    for (let i = 0; i < 4; i++) {
+      applyLayout(this.root(), this.gesture);
+      const sig = sizeSignature(this.root());
+      if (sig === last) break;
+      last = sig;
+    }
   }
 
   private build(): Snapshot {
@@ -1168,7 +1235,17 @@ export class MemoryEngine implements Engine {
           grid ? Math.max(1, Math.round(cmd.h)) : cmd.h,
           cmd.extra,
         );
-        (parent ?? this.root()).children.push(n);
+        const into = parent ?? this.root();
+        const spot = this.gridSpotFor(into, cmd.x, cmd.y);
+        into.children.splice(spot?.index ?? into.children.length, 0, n);
+        // "Figma will try to place it between the cell objects - in layer order
+        // - nearest your cursor", so the cell that was clicked is the one it
+        // takes. The rest of the flow arranges itself around it.
+        if (spot) {
+          n.gridCol = spot.col;
+          n.gridRow = spot.row;
+          n.gridPinned = true;
+        }
         s.selection = [n.id];
         if (cmd.kind === "text" || cmd.extra?.imageSrc) s.tool = "select";
         break;
@@ -1216,13 +1293,20 @@ export class MemoryEngine implements Engine {
         if (n && !n.locked) {
           const oldW = n.w;
           const oldH = n.h;
+          // What the person asked for, before snapping: an axis counts as
+          // manually adjusted when its number changed, and a hug is only
+          // measured to a fraction of a pixel, so comparing the snapped box
+          // would call a typed width a change of height too - and fix a frame
+          // that should still be hugging.
+          const askedW = cmd.w;
+          const askedH = cmd.h;
           n.x = snapOn(this.state, s.page) ? Math.round(cmd.x) : cmd.x;
           n.y = snapOn(this.state, s.page) ? Math.round(cmd.y) : cmd.y;
           n.w = Math.max(1, snapOn(this.state, s.page) ? Math.round(cmd.w) : cmd.w);
           n.h = Math.max(1, snapOn(this.state, s.page) ? Math.round(cmd.h) : cmd.h);
           if (n.kind === "text" && !cmd.scaleProps) {
-            if (n.w !== oldW) n.sizingW = "fixed";
-            if (n.h !== oldH) n.sizingH = "fixed";
+            if (askedW !== oldW) n.sizingW = "fixed";
+            if (askedH !== oldH) n.sizingH = "fixed";
           }
           // Figma: "Any manual adjustments you make will set the layer to Fixed
           // on the relevant axis" - so a typed width or a dragged edge turns a
@@ -1234,17 +1318,21 @@ export class MemoryEngine implements Engine {
           if (n.layout && !cmd.scaleProps) {
             const l = n.layout;
             const horiz = widthIsMain(l);
-            if (n.w !== oldW) {
+            if (askedW !== oldW) {
               if (horiz) l.sizing = "fixed";
               else l.cross = "fixed";
               // A fill would also keep looking for something to fill into.
               if (n.sizingW !== "fixed") n.sizingW = "fixed";
             }
-            if (n.h !== oldH) {
+            if (askedH !== oldH) {
               if (horiz) l.cross = "fixed";
               else l.sizing = "fixed";
               if (n.sizingH !== "fixed") n.sizingH = "fixed";
             }
+          }
+          // A locked box that was resized by hand takes its new ratio with it.
+          if (n.aspectLocked && askedW !== oldW && askedH !== oldH && n.w > 0 && n.h > 0) {
+            n.aspectRatio = n.h / n.w;
           }
           if (cmd.scaleProps && oldW > 0 && oldH > 0) {
             scaleProps(n, n.w / oldW, n.h / oldH);
@@ -1261,10 +1349,18 @@ export class MemoryEngine implements Engine {
           const p = findParent(this.root(), id);
           const n = find(this.root(), id);
           if (!p || !n || id === dest.id || !!find(n, dest.id)) continue;
+          // Where it lands is worked out against the destination as it stands,
+          // before this object joins it.
+          const spot = this.gridSpotFor(dest, cmd.x, cmd.y);
           p.children = p.children.filter((c) => c.id !== id);
           n.x = cmd.x;
           n.y = cmd.y;
-          dest.children.push(n);
+          dest.children.splice(spot?.index ?? dest.children.length, 0, n);
+          if (spot) {
+            n.gridCol = spot.col;
+            n.gridRow = spot.row;
+            n.gridPinned = true;
+          }
         }
         break;
       }
@@ -1336,7 +1432,13 @@ export class MemoryEngine implements Engine {
             copy.isComponent = false;
             copy.componentId = masterId;
           }
-          p.children.push(copy);
+          // Figma puts the duplicate directly above the one it came from, and
+          // "the new frames will fill the subsequent cells" - so a copy of an
+          // object that was placed on purpose is not itself placed.
+          copy.gridPinned = false;
+          const at = p.children.findIndex((c) => c.id === n.id);
+          if (at === -1) p.children.push(copy);
+          else p.children.splice(at + 1, 0, copy);
           created.push(copy.id);
         }
         s.selection = created;
@@ -1360,6 +1462,12 @@ export class MemoryEngine implements Engine {
           // line count at once - setting either clears the other - so the pair
           // is resolved here rather than in whichever panel did the writing.
           const patch = n.kind === "text" ? textDimensionRule(cmd.patch) : cmd.patch;
+          // Turning the aspect lock on remembers the ratio it was taken at, so
+          // a later size that clamps to a pixel cannot leave the box square.
+          if (patch.aspectLocked === true && patch.aspectRatio === undefined && n.w > 0 && n.h > 0) {
+            patch.aspectRatio = n.h / n.w;
+          }
+          if (patch.aspectLocked === false) patch.aspectRatio = undefined;
           Object.assign(n, patch);
           // Text layers follow their content until renamed, as in Figma.
           if (n.kind === "text" && patch.text !== undefined && !n.nameLocked) {
