@@ -803,6 +803,56 @@ The other three - zoom behaving differently from Figma, a Figma file that does
 not come across properly, and the SVG path - are the next passes, and are listed
 under *Open* until they land.
 
+## Zoom: what the report was about
+
+The second of the four reported defects. The canvas was already anchored
+correctly - measured in a browser, ⌘+wheel at a point off-centre holds the pixel
+under the cursor to the byte, and stepping back out returns exactly what was
+there, so the "zoom is different from Figma" was not the anchor. It was the
+input.
+
+Measured before: from 50%, one ⌘+wheel notch took the canvas to **136%**, and
+two notches to **369%**. A wheel sends a whole notch per event, and every
+ctrl+wheel event was being treated as a trackpad pinch - the exponential that
+makes a pinch track the fingers 1:1 turns a wheel's 100-pixel notch into
+`e = 2.718x`. A designer scrolling once lost their place completely, which is
+what "doesn't zoom like Figma" feels like from the outside.
+
+The gesture is now identified by the size of the delta rather than by the
+modifier, which is set for both a pinch and a wheel: under 40 pixels is a pinch
+and stays exponential, a whole notch is one fixed step (1.1x), and several
+notches in one event are several steps with a cap so a flick of a
+high-resolution wheel cannot cross the whole range. Line- and page-mode wheels
+(Firefox, some Windows drivers) are converted to pixels first - three lines used
+to be read as a three-pixel pinch and zoomed 3%, and panning had the same bug in
+the other direction.
+
+Measured after: one notch 21% -> **23%**, two -> **25%**, a five-event pinch
+stream of -4 pixels -> **31%** (`e^0.2`, still 1:1 with the fingers).
+
+Two more things from the article that did not match:
+
+- **⇧+ and ⇧− double and halve.** Ours stepped through a private ladder, so
+  from 100% the next press gave 150% where Figma gives 200%, and the zoom-out
+  sequence a designer gets (100, 50, 25, 13, 6) was not reachable. Measured
+  after: 31% -> 62% -> 124%, and back down 124% -> 62% in one press.
+- **⇧2 with nothing selected does nothing.** Ours fell back to fitting the page,
+  making it a second ⇧1. Measured after: the zoom is unchanged with an empty
+  selection and goes to 100% for a selected 600x400 rectangle.
+- **A file opens at Zoom to fit**, not at the viewport the last session left in
+  the document - "any changes you make to zoom only apply in the current tab".
+  Measured after: a file stored at 50% with a two-layer page 4,600x3,400 opens
+  at **21%** with both layers on screen (two separate blue blocks in the
+  screenshot), and a link naming a layer still lands on that layer.
+- The zoom menu's default percentages are now the list Figma's field offers
+  (2, 3, 4, 6, 8, 12, 16, 25, 32, 50, 64, 100, 128, 200, 256, 400, 512, 800,
+  1024, 1600, 3200, 6400), two rungs per doubling rather than the four arbitrary
+  values we had.
+
+21 new assertions (374 total). The rest of this article - pixel preview, the
+independent "snap to pixel grid" toggle, layout guides, multiplayer cursors,
+property labels, and prototype flows - is listed under *Open*.
+
 ## Open
 
 - Sketch's top-bar Insert menu and Figma's Assets panel tab, "Additional
@@ -832,12 +882,14 @@ under *Open* until they land.
   aspect-ratio lock refusing instance children - are unit tested but were not
   clicked through, because the sandbox had no browser left. Re-check them with
   one command the next time a browser is available.
-- Zoom: the range and the gestures match Figma (2%-6400%, the percentage
-  ladder, wheel and pinch at the cursor, zoom to fit and to selection), but the
-  menu that holds them does not - Figma keeps zoom, pixel preview, the pixel
-  grid, snap to pixel grid, layout guides, multiplayer cursors and property
-  labels in one "Zoom/view options" menu, and ours are scattered across the
-  toolbar and the preferences.
+- From "Adjust your zoom and view options": everything except the zoom numbers
+  themselves. Missing: **pixel preview** (off / 1x / 2x, Ctrl+P, and the toast
+  that confirms it), a **layout guides** master toggle (Ctrl+G), **multiplayer
+  cursors** (nothing to show until there is multiplayer, but the toggle and its
+  ⌥⌘\\ belong in the menu), **property labels**, and **prototype flows**. Also
+  missing: a Figma-style "Zoom/view options" dropdown that holds all of the
+  above in one place - ours live in the zoom field's menu, the canvas menu and
+  Device preview, and the article's menu is one list.
 - A Figma file does not come across properly, and the SVG path has issues of
   its own; both are mid-investigation, from the same report as the fifty-photo
   lag above.

@@ -230,6 +230,28 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     };
   }, []);
 
+  // Opening a file shows the whole page - Figma's default for a file you have
+  // not seen before - rather than whatever viewport the last session left in
+  // the document. A link that names a layer fits that layer instead, so this
+  // stands down when one is present.
+  useEffect(() => {
+    if (/[?&]f=/.test(window.location.hash || "")) return undefined;
+    let timer = 0;
+    let tries = 0;
+    const attempt = () => {
+      const wrap = document.querySelector(".canvas-wrap");
+      // Fit needs the size of the canvas that is really on screen; on the first
+      // frame the panels have been laid out but the canvas has not measured.
+      if (!wrap || wrap.getBoundingClientRect().width < 40) {
+        if (++tries < 8) timer = window.setTimeout(attempt, 40);
+        return;
+      }
+      zoomTo(engine, "fit");
+    };
+    timer = window.setTimeout(attempt, 0);
+    return () => window.clearTimeout(timer);
+  }, [engine]);
+
   // The zoom menu offers "Hide UI", which is this component's state, so it asks
   // through an event rather than threading another prop through the inspector.
   // ⇧⌘E's bulk export sheet. The flag lives here, not in the panel, because

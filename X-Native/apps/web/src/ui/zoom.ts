@@ -23,6 +23,9 @@ function viewport(): { w: number; h: number; x: number; y: number } {
 export function zoomTo(engine: Engine, mode: "fit" | "selection", padding = 0.9) {
   const s = engine.snapshot();
   const root = s.pages[s.page].root;
+  // ⇧2 with nothing selected does nothing at all in Figma - it must not fall
+  // back to fitting the page, or the shortcut becomes a second ⇧1.
+  if (mode === "selection" && !s.selection.length) return;
   const nodes =
     mode === "selection" && s.selection.length
       ? s.selection

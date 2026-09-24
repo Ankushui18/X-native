@@ -32,7 +32,7 @@ import {
 } from "../engine/snapping";
 import { fillStyle, paintDropShadows, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows } from "../engine/paint";
 import { registerPenFinisher } from "./penDraft";
-import { clampZoom, wheelZoomFactor } from "../engine/view";
+import { clampZoom, normalizeWheelDelta, wheelZoomFactor } from "../engine/view";
 import { Rulers } from "./Rulers";
 import { Guides } from "./Guides";
 import { Minimap } from "./Minimap";
@@ -3592,10 +3592,10 @@ export function Canvas({
   const onWheel = (e: React.WheelEvent) => {
     e.preventDefault();
     if (e.ctrlKey || e.metaKey) {
-      // Ctrl/⌘ + wheel and trackpad pinch both zoom at the cursor. The pinch
-      // stream is continuous (exp of deltaY) so it tracks the fingers 1:1,
-      // which is what makes Figma's canvas feel attached to the hand.
-      const factor = wheelZoomFactor(e.deltaY, e.ctrlKey);
+      // Ctrl/⌘ + wheel and trackpad pinch both zoom at the cursor: a pinch
+      // stream tracks the fingers, a wheel notch is one fixed step, and line-
+      // and page-mode wheels are converted to pixels first.
+      const factor = wheelZoomFactor({ deltaY: e.deltaY, deltaMode: e.deltaMode, pinch: e.ctrlKey });
       const next = clampZoom(snap.zoom * factor);
       const box = wrap.current!.getBoundingClientRect();
       const cx = e.clientX - box.left;
@@ -3606,9 +3606,16 @@ export function Canvas({
       engine.dispatch({ type: "setPan", x: cx - wx * next, y: cy - wy * next });
     } else if (e.shiftKey) {
       // ⇧ + wheel scrolls horizontally, as in Figma.
-      engine.dispatch({ type: "pan", dx: -(e.deltaY || e.deltaX), dy: 0 });
+      const d = normalizeWheelDelta(e.deltaY || e.deltaX, e.deltaMode);
+      engine.dispatch({ type: "pan", dx: -d, dy: 0 });
     } else {
-      engine.dispatch({ type: "pan", dx: -e.deltaX, dy: -e.deltaY });
+      // Scrolling pans, and a line- or page-mode wheel pans as far as a pixel-
+      // mode one so the canvas feels the same in every browser.
+      engine.dispatch({
+        type: "pan",
+        dx: -normalizeWheelDelta(e.deltaX, e.deltaMode),
+        dy: -normalizeWheelDelta(e.deltaY, e.deltaMode),
+      });
     }
   };
 

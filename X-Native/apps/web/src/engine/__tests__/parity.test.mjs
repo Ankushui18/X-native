@@ -56,6 +56,7 @@ import { colorUsage, colorUsageAll, setOpacityMatches } from "../../ui/selection
 import { contrastRatio, contrastTarget, nearestAccessible, passesContrast, parseHex, rgbToHsv } from "../../ui/color.ts";
 
 import { inspectFigFile, importFig } from "../figImport.ts";
+import { ZOOM_MAX, ZOOM_MIN, ZOOM_PRESETS, normalizeWheelDelta, stepZoom, wheelZoomFactor } from "../view.ts";
 import { interpolateMatchingLayers, solveEasing, applyInterpolatedFrame } from "../smartAnimate.ts";
 import { readFileSync, existsSync } from "fs";
 import { resolve } from "path";
@@ -597,6 +598,37 @@ console.log("component instance overrides:");
     t("importFig imports vector node with path", !!importedVector?.path?.length);
     t("importFig imports vector node with vectorNetwork", !!importedVector?.vectorNetwork);
   }
+}
+
+{
+  console.log("zoom: one wheel notch is a step, not a leap; the keyboard doubles");
+  const notch = wheelZoomFactor({ deltaY: -100, deltaMode: 0, pinch: true });
+  t("one clipped wheel notch zooms 1.1x, not e", Math.abs(notch - 1.1) < 1e-9);
+  t("a notch the other way zooms out by the same step", Math.abs(wheelZoomFactor({ deltaY: 100 }) - 1 / 1.1) < 1e-9);
+  t("four notches in one event are four steps", Math.abs(wheelZoomFactor({ deltaY: -400 }) - 1.1 ** 4) < 1e-9);
+  t("a burst of notches cannot cross the zoom range in one event", wheelZoomFactor({ deltaY: -100000 }) <= 2);
+  const pinch = wheelZoomFactor({ deltaY: -20, deltaMode: 0, pinch: true });
+  t("a trackpad pinch stays exponential and tracks the fingers", Math.abs(pinch - Math.exp(0.2)) < 1e-9);
+  t("a pinch out is the exact inverse", Math.abs(pinch * wheelZoomFactor({ deltaY: 20, pinch: true }) - 1) < 1e-9);
+  t("prefixing ⌘ on a wheel event does not turn a notch into a pinch", wheelZoomFactor({ deltaY: -100, pinch: true }) === notch);
+  t("line-mode wheels are converted to pixels", normalizeWheelDelta(3, 1) === 48);
+  t("page-mode wheels are converted to pixels", normalizeWheelDelta(1, 2) === 100);
+  t(
+    "a three-line Firefox notch zooms like the 48 pixels it is",
+    Math.abs(wheelZoomFactor({ deltaY: -3, deltaMode: 1 }) - 1.1 ** 0.48) < 1e-9,
+  );
+  t(
+    "the same three units unconverted would be read as a pinch and zoom too little",
+    wheelZoomFactor({ deltaY: -3 }) === Math.exp(0.03),
+  );
+  t("zoom in doubles: 50% becomes 100%", stepZoom(0.5, 1) === 1);
+  t("zoom in from 100% is 200%, as in Figma", stepZoom(1, 1) === 2);
+  t("zoom out halves: 100, 50, 25, 12.5", [1, 0.5, 0.25].every((z) => stepZoom(z, -1) === z / 2));
+  t("zoom in stops at 6400%", stepZoom(ZOOM_MAX, 1) === ZOOM_MAX);
+  t("zoom out stops at 2%", stepZoom(ZOOM_MIN, -1) === ZOOM_MIN);
+  t("the menu lists Figma's default percentages", ZOOM_PRESETS.includes(0.25) && ZOOM_PRESETS.includes(0.64) && ZOOM_PRESETS.includes(1.28) && ZOOM_PRESETS.includes(10.24));
+  t("the default percentages are in ascending order", ZOOM_PRESETS.every((z, i) => i === 0 || z > ZOOM_PRESETS[i - 1]));
+  t("every default percentage is inside the range", ZOOM_PRESETS.every((z) => z >= ZOOM_MIN && z <= ZOOM_MAX));
 }
 
 {
