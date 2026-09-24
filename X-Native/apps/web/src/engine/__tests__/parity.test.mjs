@@ -594,9 +594,31 @@ console.log("component instance overrides:");
     t("OpenFigs.fig reports VECTOR layers", (oRep.nodesByType["VECTOR"] || 0) > 0);
 
     const imported = await importFig(oBuf.buffer.slice(oBuf.byteOffset, oBuf.byteOffset + oBuf.byteLength));
-    const importedVector = imported.nodes.find((n) => n.kind === "vector");
+    const flatten = (list) => list.flatMap((n) => [n, ...flatten(n.children ?? [])]);
+    const every = flatten(imported.nodes);
+    const importedVector = every.find((n) => n.kind === "vector");
     t("importFig imports vector node with path", !!importedVector?.path?.length);
     t("importFig imports vector node with vectorNetwork", !!importedVector?.vectorNetwork);
+    // The file is a frame holding a vector, so that is what the import has to
+    // be: the old importer put them side by side at the top level.
+    t("a .fig frame brings its children with it", imported.nodes.length === 1 && imported.nodes[0].kind === "frame");
+    t("the vector is inside the frame, not beside it", (imported.nodes[0].children ?? []).some((n) => n.kind === "vector"));
+    t("nesting does not duplicate layers", every.length === imported.nodes.length + (imported.nodes[0].children?.length ?? 0));
+    t("pages come from the file's canvases", (imported.pages ?? []).length === 1 && imported.pages[0].name === "Page 1");
+    t("Figma's internal canvas is not imported as a page", !(imported.pages ?? []).some((p) => /Internal/i.test(p.name)));
+    t("layer coordinates are kept as the file has them", Math.round(imported.nodes[0].x) === -655 && Math.round(imported.nodes[0].y) === -793);
+    t("the child is placed inside its parent, not at the page origin", imported.nodes[0].children[0].x === 0 && imported.nodes[0].children[0].y === 0);
+    t("a container reports no fill of its own", imported.nodes[0].fillVisible === false);
+    t("the vector keeps its own paint", importedVector.fill.toLowerCase() === "#fefefe" && importedVector.fillVisible === true);
+    // The logo is drawn as a dozen separate contours. Reading only the first
+    // one - which is what the importer used to do - drew a blob where the mark
+    // should be.
+    t("every contour of a multi-subpath vector arrives", (importedVector.vectorNetwork?.vertices.length ?? 0) > 150);
+    const loops = importedVector.vectorNetwork?.regions?.[0]?.loops ?? [];
+    t("each contour becomes one closed loop of the network", loops.length === 20);
+    t("no contour collapses to a punt", loops.every((l) => l.length >= 3));
+    t("the network is one layer, not twenty", every.filter((n) => n.kind === "vector").length === 1);
+    t("the whole mark is inside the node's box", importedVector.vectorNetwork.vertices.every((v) => v.x >= -1 && v.x <= importedVector.w + 1));
   }
 }
 

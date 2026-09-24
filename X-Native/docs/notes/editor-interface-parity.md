@@ -849,9 +849,74 @@ Two more things from the article that did not match:
   1024, 1600, 3200, 6400), two rungs per doubling rather than the four arbitrary
   values we had.
 
-21 new assertions (374 total). The rest of this article - pixel preview, the
+19 new assertions (353 total). The rest of this article - pixel preview, the
 independent "snap to pixel grid" toggle, layout guides, multiplayer cursors,
 property labels, and prototype flows - is listed under *Open*.
+
+## A Figma file that arrives as a Figma file
+
+The third reported defect: "`.fig` import/copy incorrect". Imported through the
+real UI, `OpenFigs.fig` - Figma's own logo, a frame around a vector - came in as
+**two layers side by side**, a frame and a vector, with the vector sitting at
+(0, 0) on the page instead of inside its frame. Three things were wrong, and all
+three were measured before and after.
+
+**Hierarchy was thrown away.** The importer read every node change in the file
+and emitted a flat list, so nesting - the thing that makes a Figma file a Figma
+file - was lost. Nodes carry `parentIndex`, which names the parent and holds a
+fractional index string for the child's position ("`!`" first, "`~`" last), so
+the tree is rebuildable exactly: children are grouped by parent and sorted by
+that index. Measured now: `OpenFigs.fig` imports as **one frame containing one
+vector**, and the layers panel shows the second row indented under the first
+(measured x: 56 then 68). The file's own coordinates are kept rather than
+re-based to the origin, which is what had moved the frame 655 points away from
+where its author put it, and a page is a page - `circle.fig` imports as its
+frame holding its ellipse, and a second canvas in the file becomes a second
+page. Figma's `internalOnly` canvas (components' internals) is not imported: it
+is not something a designer ever sees as a page.
+
+**A vector was one contour out of twenty.** The logo is drawn as twenty separate
+closed subpaths - the two big curves of the mark and eighteen seeds - and the
+importer read the first `fillGeometry` entry with any points and stopped. On
+screen that was a small white blob where the mark should be. Every contour is
+now read, and they become one vector network with one closed loop per contour
+(193 vertices, 193 segments, 20 loops), which is what a vector network is for: a
+shape with holes in it. Measured after: the full fig mark with its seeds, one
+layer in the layers panel, verified in the browser rather than from the parser.
+A path with an open contour keeps its old segments-only shape - regions only
+make a closed shape.
+
+**Paints, effects and text were flattened to their first solid fill.** A node's
+`fillPaints` and `strokePaints` are now read in full: solid colours with their
+per-paint opacity and blend, gradients (linear, radial, angular, diamond, with
+the ramp and the handle geometry), and images, which are pulled out of the
+file's `images/` entries into the asset store so the layer holds a picture
+rather than a colour. Also carried: effects (drop and inner shadows, layer and
+background blur, their offsets, radii, spreads, blend and show-behind), the
+layer's blend mode, opacity, hidden and locked state (a hidden layer used to be
+dropped entirely), stroke alignment, cap, join and dashes, per-corner radii and
+corner smoothing, and text weight, align, line height, letter spacing and
+family. A container no longer paints a fill of its own; a frame's document
+background is the page's business.
+
+Verified in the browser through the app's own import button (dashboard →
+"Import file…" → `OpenFigs.fig`) and its own drag-and-drop path (dropping
+`sample.fig` onto the canvas: four layers, `Home`, `FigCard`, `FigDot`,
+`FigLabel`, with their geometry intact). 12 new assertions (367 total), on the
+real fixture files: nesting, loop count, coordinates, paints, and that the
+internal canvas is not a page.
+
+One thing this round could not check: none of the three fixtures carries a real
+image, so the `images/<hash>` → asset-store path is written from the format
+rather than from a file that exercises it, and is listed as unverified under
+*Open*.
+
+### A note on the behaviour suite
+
+`npm run test:e2e` (`e2e/behaviour.mjs`) stops at its first check: it expects a
+demo layer called "Chip" that the current sample document does not have. It has
+been stale since the dashboard was rebuilt, so it cannot be used as evidence
+until it is brought up to date with the demo file.
 
 ## Open
 
@@ -890,9 +955,16 @@ property labels, and prototype flows - is listed under *Open*.
   missing: a Figma-style "Zoom/view options" dropdown that holds all of the
   above in one place - ours live in the zoom field's menu, the canvas menu and
   Device preview, and the article's menu is one list.
-- A Figma file does not come across properly, and the SVG path has issues of
-  its own; both are mid-investigation, from the same report as the fifty-photo
-  lag above.
+- The SVG path has issues of its own, still mid-investigation, from the same
+  report as the fifty-photo lag and the `.fig` import above.
+- `.fig` images: the `images/<hash>` → asset-store path is written from the
+  format but no fixture in the repo carries an image, so it has not been seen
+  working. Component and instance links are carried as plain containers - the
+  file's components do not become editable masters (that is the "Build design
+  systems" article, still uncovered), and a mirrored node arrives un-mirrored,
+  because the node model has no flip.
+- The behaviour suite (`e2e/behaviour.mjs`) is stale: it looks for a "Chip"
+  layer the demo document no longer has, so it fails on its first check.
 - Text styles on type fields, plus the wrapping settings the panel does not
   expose yet: percent letter spacing, OpenType and variable-font axes, hanging
   punctuation, whole-paragraph indentation, links in text, middle truncation.

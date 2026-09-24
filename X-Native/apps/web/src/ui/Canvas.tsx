@@ -3704,8 +3704,13 @@ export function Canvas({
     const host = deepestFrame(root, ox, oy);
     const origin = host ? worldToLocal(root, host.id, ox, oy) : { x: ox, y: oy };
     engine.dispatch({ type: "begin" });
-    for (const n of result.nodes) {
-      const { kind, name, x, y, w, h, ...rest } = n;
+    // Containers come with their children - a .fig frame arrives holding what
+    // was inside it - so the insert walks the tree. A child's coordinates are
+    // relative to its parent, and only the outermost layers are moved to where
+    // the file was dropped.
+    let placed = 0;
+    const insert = (n: ImportedNode, parent: string | undefined, dx: number, dy: number) => {
+      const { kind, name, x, y, w, h, children, ...rest } = n;
       // Spreading an explicit `undefined` overwrites the node factory's
       // default (cornerRadii became undefined and crashed the inspector), so
       // unset optional fields must be dropped rather than passed through.
@@ -3715,19 +3720,23 @@ export function Canvas({
       engine.dispatch({
         type: "add",
         kind,
-        x: origin.x + x,
-        y: origin.y + y,
+        x: dx + x,
+        y: dy + y,
         w: Math.max(1, w),
         h: Math.max(1, h),
-        parent: host?.id,
+        parent,
         extra: { name, ...rest } as Partial<XNode>,
       });
-    }
+      placed++;
+      const id = engine.snapshot().selection[0];
+      for (const c of children ?? []) insert(c, id, 0, 0);
+    };
+    for (const n of result.nodes) insert(n, host?.id, origin.x, origin.y);
     engine.dispatch({ type: "end" });
     toast(
       result.skipped
-        ? `Imported ${result.nodes.length} layers · ${result.skipped} unsupported skipped`
-        : `Imported ${result.nodes.length} layers`,
+        ? `Imported ${placed} layers · ${result.skipped} unsupported skipped`
+        : `Imported ${placed} layers`,
     );
   };
 

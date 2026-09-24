@@ -13,6 +13,7 @@
 import { blankPage, demoPage, node, uid } from "./memory";
 import type { Page, XNode } from "./types";
 import type { PersistedDoc } from "./persist";
+import type { ImportedNode, ImportResult } from "./svgImport";
 
 export type DocSeed = Omit<PersistedDoc, "version">;
 
@@ -527,40 +528,108 @@ function forApp(screen: XNode): void {
 }
 
 /** Turn an SVG/Sketch/.fig import into a document, so the dashboard can create
- *  a file from an import without first opening the editor. */
-export function docFromImport(
-  fileName: string,
-  result: { nodes: { kind: string; name: string; x: number; y: number; w: number; h: number; fill?: string; fillVisible?: boolean; strokePaint?: string; strokeVisible?: boolean; strokeWidth?: number; opacity?: number; rotation?: number; cornerRadii?: [number, number, number, number]; path?: unknown; closed?: boolean; text?: string; fontSize?: number; fontWeight?: number; textAlign?: "left" | "center" | "right" }[] },
-): DocSeed {
-  const kids: XNode[] = [];
-  for (const n of result.nodes) {
+ *  a file from an import without first opening the editor.
+ *
+ *  Structure survives the trip: an imported `.fig` frame holds the layers that
+ *  were inside it, and a file with several canvases becomes several pages.
+ *  Coordinates are used as they came out of the file - a layer keeps the
+ *  position its author gave it - and a page is sized to hold what is on it
+ *  with the same margin Figma leaves around a frame. */
+export function docFromImport(fileName: string, result: ImportResult): DocSeed {
+  const toNode = (n: ImportedNode): XNode => {
+    // Only the fields the import actually knows about are copied: spreading an
+    // explicit `undefined` would overwrite the node factory's defaults.
     const extra: Partial<XNode> = { name: n.name };
-    if (n.fill !== undefined) extra.fill = n.fill;
-    if (n.fillVisible !== undefined) extra.fillVisible = n.fillVisible;
-    if (n.strokePaint !== undefined) extra.strokePaint = n.strokePaint;
-    if (n.strokeVisible !== undefined) extra.strokeVisible = n.strokeVisible;
-    if (n.strokeWidth !== undefined) extra.strokeWidth = n.strokeWidth;
-    if (n.opacity !== undefined) extra.opacity = n.opacity;
-    if (n.rotation !== undefined) extra.rotation = n.rotation;
-    if (n.cornerRadii) extra.cornerRadii = n.cornerRadii;
-    if (n.text !== undefined) extra.text = n.text;
-    if (n.fontSize !== undefined) extra.fontSize = n.fontSize;
-    if (n.fontWeight !== undefined) extra.fontWeight = n.fontWeight;
-    if (n.textAlign !== undefined) extra.textAlign = n.textAlign;
-    if (n.closed !== undefined) extra.closed = n.closed;
+    const copy = <K extends keyof XNode>(k: K, v: XNode[K] | undefined) => {
+      if (v !== undefined) extra[k] = v;
+    };
+    copy("fill", n.fill as XNode["fill"]);
+    copy("fillVisible", n.fillVisible);
+    copy("fillType", n.fillType);
+    copy("gradientStops", n.gradientStops);
+    copy("fillGX", n.fillGX);
+    copy("fillGY", n.fillGY);
+    copy("fillHX", n.fillHX);
+    copy("fillHY", n.fillHY);
+    copy("fillBlend", n.fillBlend);
+    copy("fills", n.fills as XNode["fills"]);
+    copy("imageSrc", n.imageSrc);
+    copy("imageFit", n.imageFit);
+    copy("effects", n.effects);
+    copy("blendMode", n.blendMode);
+    copy("locked", n.locked);
+    copy("visible", n.hidden ? false : undefined);
+    copy("overflow", n.overflow);
+    copy("strokePaint", n.strokePaint);
+    copy("strokeVisible", n.strokeVisible);
+    copy("strokeWidth", n.strokeWidth);
+    copy("strokeAlign", n.strokeAlign);
+    copy("strokeCap", n.strokeCap);
+    copy("strokeJoin", n.strokeJoin);
+    copy("strokeDash", n.strokeDash);
+    copy("strokeGap", n.strokeGap);
+    copy("opacity", n.opacity);
+    copy("rotation", n.rotation);
+    copy("cornerRadii", n.cornerRadii);
+    copy("cornerIndependent", n.cornerIndependent);
+    copy("cornerSmoothing", n.cornerSmoothing);
+    copy("text", n.text);
+    copy("fontSize", n.fontSize);
+    copy("fontWeight", n.fontWeight);
+    copy("fontFamily", n.fontFamily);
+    copy("textAlign", n.textAlign);
+    copy("lineHeight", n.lineHeight);
+    copy("letterSpacing", n.letterSpacing);
+    copy("closed", n.closed);
     if (Array.isArray(n.path)) extra.path = n.path as XNode["path"];
-    kids.push(node(n.kind as XNode["kind"], n.name, Math.round(n.x), Math.round(n.y), Math.max(1, Math.round(n.w)), Math.max(1, Math.round(n.h)), extra));
-  }
-  const page = blankPage("Imported");
-  page.root = node("frame", "Page 1", 0, 0, 4000, 4000, {
-    fill: "#00000000",
-    overflow: "visible",
-    showName: false,
-    children: kids,
+    if (n.vectorNetwork) extra.vectorNetwork = n.vectorNetwork;
+    if (n.children?.length) extra.children = n.children.map(toNode);
+    // Rounded to whole pixels for the same reason Figma rounds: an imported
+    // file should not start life with half-pixel layers nobody can see.
+    return node(
+      n.kind as XNode["kind"],
+      n.name,
+      Math.round(n.x),
+      Math.round(n.y),
+      Math.max(1, Math.round(n.w)),
+      Math.max(1, Math.round(n.h)),
+      extra,
+    );
+  };
+
+  const importedPages = result.pages?.length ? result.pages : [{ name: "Page 1", nodes: result.nodes }];
+  const pages = importedPages.map((p) => {
+    const kids = p.nodes.map(toNode);
+    let maxX = 1200;
+    let maxY = 900;
+    let minX = 0;
+    let minY = 0;
+    for (const k of p.nodes) {
+      maxX = Math.max(maxX, k.x + k.w);
+      maxY = Math.max(maxY, k.y + k.h);
+      minX = Math.min(minX, k.x);
+      minY = Math.min(minY, k.y);
+    }
+    // 160 of margin on each side, the room Figma leaves around the work.
+    const page = blankPage(p.name || "Imported");
+    page.root = node("frame", p.name || "Page 1", minX - 160, minY - 160, maxX - minX + 320, maxY - minY + 320, {
+      fill: "#00000000",
+      overflow: "visible",
+      showName: false,
+      children: kids,
+    });
+    // The children were placed in page coordinates; the root's own origin is
+    // now the top-left of the margin, so shift them into its space.
+    for (const k of page.root.children) {
+      k.x -= minX - 160;
+      k.y -= minY - 160;
+    }
+    return page;
   });
+
   return {
     fileName,
-    pages: [page],
+    pages,
     components: [],
     styles: [],
     page: 0,
