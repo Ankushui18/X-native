@@ -743,6 +743,66 @@ first thing to re-check when a browser is back.
 
 Tests: 322 passing, up from 306; `tsc -b` and `vite build` clean.
 
+## Fifty photographs, and why the canvas crawled
+
+The first of the reported defects, and the one with a number attached. A file
+with fifty images was slow to render, slow to zoom and slow to pan. It is not
+the canvas: with fifty frames and fifty images on screen the painter holds 60fps
+(measured in a headless Chrome, 1600x1000, at both 1x and 2x device pixel
+ratios, pan and zoom both driven by real pointer and wheel events). What was
+slow was the document.
+
+Every imported image lived in the document as a base64 `data:` URL, and the
+document is serialised on every autosave - twice, once for the session store and
+once for the per-file store. Measured in the browser, with fifty images:
+
+| per image | document | `JSON.stringify` | storage |
+| --- | --- | --- | --- |
+| 0.2 MB | 10 MB | 32 ms | over quota |
+| 1 MB | 50 MB | 186 ms | over quota |
+| 3 MB | 150 MB | 591 ms | over quota |
+
+So a photographer's file froze the main thread for a fifth of a second every
+time editing paused, and never fitted the 5MB localStorage budget at all - it
+went to IndexedDB, which is why opening the file was slow too. This is not a
+rendering problem, and no amount of painter tuning would have fixed it.
+
+Pixels do not belong in a document; a reference does. Images now live in their
+own store (`engine/assets.ts`, IndexedDB, one row per image) and a stored
+document carries `asset:<id>` in `imageSrc` instead of the picture. In memory
+nothing changed - a node's `imageSrc` is still a data URL, so the painter, the
+exporters, the SVG and `.fig` importers and the fill picker are untouched - and
+the swap happens only at the persistence boundary, on a copy, because
+`engine.toDoc()` hands back live nodes and rewriting their pictures in place
+would blank the canvas.
+
+The ids are fingerprints of the image (length plus head and tail, cheap at any
+size) so re-saving does not re-hash a three-megabyte string, and the same image
+used twice in a document stores once. Assets are written the moment an image is
+imported, not at the next save, so closing the tab mid-edit cannot lose bytes.
+Old documents load exactly as they did - their data URLs are inline and stay
+that way - and the first save moves them into the store. A document whose
+assets are missing (opened in another browser) says so - "3 images could not be
+loaded" - rather than showing empty frames.
+
+Measured on the same fifty-photo file, 24.3MB of images: the stored document is
+**156KB** with fifty refs and no data URL in it, and serialising it costs **1ms**
+instead of ~90ms. The images still paint on open and still paint after a reload.
+
+One trap for the next person: the asset database is opened at "whatever version
+is there, plus one if the store is missing", not at a hard-coded version. A
+database left at the hard-coded version *without* the store - which is what a
+first run interrupted at the wrong moment produces - opens successfully and then
+fails every write, and the version bump that would fix it is blocked by the
+connection already open. The store heals itself now, and the tests cover the
+round trip rather than the storage engine.
+
+### Still to come from the same report
+
+The other three - zoom behaving differently from Figma, a Figma file that does
+not come across properly, and the SVG path - are the next passes, and are listed
+under *Open* until they land.
+
 ## Open
 
 - Sketch's top-bar Insert menu and Figma's Assets panel tab, "Additional
@@ -772,6 +832,15 @@ Tests: 322 passing, up from 306; `tsc -b` and `vite build` clean.
   aspect-ratio lock refusing instance children - are unit tested but were not
   clicked through, because the sandbox had no browser left. Re-check them with
   one command the next time a browser is available.
+- Zoom: the range and the gestures match Figma (2%-6400%, the percentage
+  ladder, wheel and pinch at the cursor, zoom to fit and to selection), but the
+  menu that holds them does not - Figma keeps zoom, pixel preview, the pixel
+  grid, snap to pixel grid, layout guides, multiplayer cursors and property
+  labels in one "Zoom/view options" menu, and ours are scattered across the
+  toolbar and the preferences.
+- A Figma file does not come across properly, and the SVG path has issues of
+  its own; both are mid-investigation, from the same report as the fifty-photo
+  lag above.
 - Text styles on type fields, plus the wrapping settings the panel does not
   expose yet: percent letter spacing, OpenType and variable-font axes, hanging
   punctuation, whole-paragraph indentation, links in text, middle truncation.

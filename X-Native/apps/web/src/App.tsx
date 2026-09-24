@@ -22,6 +22,7 @@ import { subscribeToast, toast as toastMsg } from "./ui/toast";
 import { saveDoc } from "./engine/persist";
 import { Dashboard } from "./ui/Dashboard";
 import { ensureDemoFile, getFile, migrateLegacyDoc, readDoc, readDocSync, saveFile, type DocSeed } from "./engine/files";
+import { dehydrateDoc, hydrateDoc } from "./engine/assets";
 
 /** The dashboard is the app's front door; a file opens at `#/file/<id>`. The
  *  hash is the source of truth so reload, back and a shared link all behave. */
@@ -59,12 +60,24 @@ export default function App() {
       setSeed(null);
       return;
     }
+    let alive = true;
+    const present = (doc: DocSeed | null) => {
+      // Images are references in storage; the editor needs the bytes. Resolve
+      // them first, so a document never reaches the engine half-loaded.
+      if (!doc) return Promise.resolve(setSeed({ id: route.id, doc: null, missing: !!getFile(route.id) }));
+      return hydrateDoc(doc as never).then((unresolved) => {
+        if (!alive) return;
+        if (unresolved) toastMsg(`${unresolved} image${unresolved > 1 ? "s" : ""} could not be loaded`);
+        setSeed({ id: route.id, doc, missing: false });
+      });
+    };
     const sync = readDocSync(route.id);
     if (sync) {
-      setSeed({ id: route.id, doc: sync, missing: false });
-      return;
+      void present(sync);
+      return () => {
+        alive = false;
+      };
     }
-    let alive = true;
     setSeed(null);
     readDoc(route.id)
       .then((doc) => {
@@ -155,7 +168,10 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     let timer = 0;
     let warned = false;
     const write = () => {
-      const doc = engine.toDoc();
+      // Stored form: image bytes live in the asset store, so this JSON is a few
+      // kilobytes per image instead of its full data URL - which is what made a
+      // 50-photo file take a fifth of a second to save.
+      const doc = dehydrateDoc(engine.toDoc() as never);
       const status = saveDoc(doc);
       try {
         saveFile(fileId, doc as never);

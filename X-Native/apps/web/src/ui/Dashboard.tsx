@@ -21,6 +21,7 @@ import {
   type FileMeta,
   type TemplateId,
 } from "../engine/files";
+import { hydrateDoc } from "../engine/assets";
 import { importSvg } from "../engine/svgImport";
 import { importSketch } from "../engine/sketchImport";
 import { importFig } from "../engine/figImport";
@@ -115,14 +116,20 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
   const open = (id: string) => {
     const doc = readDocSync(id);
     if (doc) {
-      onOpen(id);
+      // Images are refs in storage and data URLs in the editor; resolve them
+      // before the file opens, so the canvas never starts half-drawn.
+      void hydrateDoc(doc as never).then((unresolved) => {
+        if (unresolved) toast(`${unresolved} image${unresolved > 1 ? "s" : ""} could not be loaded`);
+        onOpen(id);
+      });
       return;
     }
     // The document overflowed localStorage into IndexedDB: read it for real,
     // no invented progress.
     setBusy("Loading…");
     readDoc(id)
-      .then((doc2) => {
+      .then(async (doc2) => {
+        if (doc2) await hydrateDoc(doc2 as never);
         setBusy("");
         if (!doc2) {
           toast("This file's contents could not be read — it may be from another browser");

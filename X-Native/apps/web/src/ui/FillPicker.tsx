@@ -31,6 +31,7 @@ import {
   type FillType,
   type ImageFit,
 } from "./color";
+import { rememberImage } from "../engine/assets";
 import { armPopover } from "./popoverGuard";
 
 export interface FillValue {
@@ -602,7 +603,11 @@ export function FillPicker({
               const f = e.target.files?.[0];
               if (!f) return;
               const reader = new FileReader();
-              reader.onload = () => onChange({ ...value, type: "image", image: String(reader.result) });
+              reader.onload = () => {
+                const src = String(reader.result);
+                rememberImage(src);
+                onChange({ ...value, type: "image", image: src });
+              };
               reader.readAsDataURL(f);
             }}
           />

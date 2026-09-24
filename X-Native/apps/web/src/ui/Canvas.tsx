@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import type { Engine, Interaction, NodeKind, PathPoint, ProtoAnim, Snapshot, Tool, VectorNetwork, XNode } from "../engine/types";
 import { deepestFrame, find, findParent, hitTest, insideInstance, worldToLocal, worldPos } from "../engine/memory";
 import { layersAt } from "./selectSame";
+import { rememberImage } from "../engine/assets";
 import { rotateAboutOrigin } from "./scaleModel";
 import {
   erasePath,
@@ -3759,6 +3760,9 @@ export function Canvas({
       const reader = new FileReader();
       reader.onload = () => {
         const src = String(reader.result);
+        // Written to the asset store now, not at the next save: the document
+        // will only ever hold a reference to it.
+        rememberImage(src);
         const im = new Image();
         im.onload = () => {
           const w = im.naturalWidth;

@@ -29,6 +29,7 @@ import {
   computeFigmaNoodle,
 } from "../geometry.ts";
 import { MemoryEngine, defaultEffect, find, insideInstance } from "../memory.ts";
+import { ASSET_PREFIX, assetCount, dehydrateDoc, hydrateDoc, putAsset, resetAssets } from "../assets.ts";
 import { evalField, hasExpression } from "../../ui/fieldExpr.ts";
 import { rotateAboutOrigin, scaleBoxAround, scaleMembers, sizeKeepingRatio, unionBox } from "../../ui/scaleModel.ts";
 import { layersAt, matchingIds, pathIndex, sameIds } from "../../ui/selectSame.ts";
@@ -1697,6 +1698,62 @@ console.log("the engine carries the new properties:");
   t("copy/paste properties carries the sides", p.strokeSides === "custom" && p.strokeSideW.join() === "8,4,0,12");
   t("and the dash pattern, cap and miter angle", p.strokeDashPattern.join() === "24,12" && p.strokeDashCap === "round" && p.strokeMiterAngle === 90);
   t("and the corner smoothing", p.cornerSmoothing === 0.6 && p.cornerIndependent === true);
+}
+
+console.log("images are stored by reference, not inside the document:");
+{
+  const png = (n) => "data:image/png;base64," + String(n).repeat(64);
+  const leaf = (id, src) => ({
+    id, name: id, kind: "rect", x: 0, y: 0, w: 10, h: 10, rotation: 0, fills: [], effects: [],
+    imageSrc: src, imageFit: "fill", children: [],
+  });
+  const doc = (kids) => ({
+    fileName: "t", page: 0, zoom: 1, panX: 0, panY: 0,
+    pages: [{ name: "Page 1", root: { id: "root", kind: "page", name: "root", x: 0, y: 0, w: 0, h: 0, rotation: 0, fills: [], effects: [], imageSrc: "", children: kids } }],
+    components: [{ id: "c1", name: "Comp", node: leaf("m", png(7)), variants: [], property: "" }],
+  });
+
+  resetAssets();
+  const a = png(1);
+  const b = png(2);
+  const d = doc([leaf("n1", a), leaf("n2", a), leaf("n3", b)]);
+  const stored = dehydrateDoc(d);
+
+  const refs = stored.pages[0].root.children.map((n) => n.imageSrc);
+  t("every inline image becomes a reference", refs.every((r) => r.startsWith(ASSET_PREFIX)));
+  t("the same image in two places gets one reference", refs[0] === refs[1]);
+  t("different images get different references", refs[0] !== refs[2]);
+  t("the stored document keeps no data: URL at all", !JSON.stringify(stored).includes("data:image"));
+  t("a component master's image is stored the same way", stored.components[0].node.imageSrc.startsWith(ASSET_PREFIX));
+
+  t(
+    "the live document is untouched - its nodes still hold the picture",
+    d.pages[0].root.children.every((n) => n.imageSrc.startsWith("data:")),
+  );
+  t(
+    "and dehydrating twice gives the same reference",
+    dehydrateDoc(d).pages[0].root.children[0].imageSrc === refs[0],
+  );
+
+  // The editor's own copy is the one that gets hydrated; work on a fresh one so
+  // the check is about the store, not about the object identity above.
+  const fresh = JSON.parse(JSON.stringify(stored));
+  await hydrateDoc(fresh);
+  t(
+    "loading a stored document brings the pictures back",
+    fresh.pages[0].root.children[0].imageSrc === a && fresh.pages[0].root.children[2].imageSrc === b,
+  );
+  t("and the component's too", fresh.components[0].node.imageSrc === png(7));
+
+  resetAssets();
+  const cold = JSON.parse(JSON.stringify(stored));
+  const unresolved = await hydrateDoc(cold);
+  t("a document from another browser reports what it could not load", unresolved > 0);
+  t("and leaves those references alone rather than blanking them", cold.pages[0].root.children[0].imageSrc.startsWith(ASSET_PREFIX));
+
+  resetAssets();
+  putAsset(a);
+  t("registering the same image twice stores it once", assetCount() === 1 && putAsset(a) === putAsset(a));
 }
 
 console.log("the rotation origin is the point that stays put:");
