@@ -5,7 +5,311 @@
  * them with the same ones, so what the panel says and where the pixels land
  * cannot drift apart. Everything here is pure: no React, no canvas, no engine.
  */
-import type { AutoLayout, LayoutAlign, LayoutJustify, Sizing, XNode } from "./types";
+import type { AutoLayout, GridTrack, LayoutAlign, LayoutDirection, LayoutJustify, Sizing, TrackMode, XNode } from "./types";
+
+/* ── The grid flow ──────────────────────────────────────────────────────────
+ *
+ * Figma's third flow, from "Use the grid in auto layout flow": cells arranged
+ * into columns and rows (tracks), where an object can span several of each.
+ * The geometry is worked out here and applied by the engine, so the panel, the
+ * tests and the canvas all read the same numbers.
+ */
+
+/**
+ * Which axis a frame's main resizing belongs to.
+ *
+ * A horizontal flow and a grid both measure width first, so `sizing` is the
+ * width for both and `cross` the height; a vertical flow's main axis is its
+ * height. Everything that asks about "the main axis" asks this, so a grid can
+ * never end up with its width and height rules swapped.
+ */
+export function widthIsMain(layout: { direction: LayoutDirection }): boolean {
+  return layout.direction !== "vertical";
+}
+
+/** A brand new grid frame's shape: two columns, rows that follow the objects. */
+export function defaultGrid(over: Partial<AutoLayout> = {}): AutoLayout {
+  return {
+    ...defaultLayout(),
+    direction: "grid",
+    columns: 2,
+    rows: "auto",
+    gapRows: 8,
+    gapCols: 8,
+    colTracks: [],
+    rowTracks: [],
+    autoPosition: true,
+    ...over,
+  };
+}
+
+/** Where one object sits in the grid: its first cell and how far it reaches. */
+export interface Cell {
+  col: number;
+  row: number;
+  colSpan: number;
+  rowSpan: number;
+}
+
+/**
+ * Place the objects into cells.
+ *
+ * With automatic positioning on - Figma's default - objects fill the grid "in
+ * succession from left to right, top to bottom", each one taking the first cell
+ * its span fits in. When it is off, every object stays in the cell it already
+ * has (`gridCol`/`gridRow`), which is what preserves empty cells.
+ */
+export function placeCells(flow: XNode[], cols: number, auto: boolean): Cell[] {
+  const width = Math.max(1, Math.floor(cols));
+  const taken = new Set<string>();
+  const key = (c: number, r: number) => `${c}:${r}`;
+  const out: Cell[] = [];
+  const fits = (c: number, r: number, cs: number, rs: number) => {
+    if (c + cs > width) return false;
+    for (let i = c; i < c + cs; i++) for (let j = r; j < r + rs; j++) if (taken.has(key(i, j))) return false;
+    return true;
+  };
+  for (let index = 0; index < flow.length; index++) {
+    const n = flow[index];
+    // A span wider than the grid is clamped: there is nothing to reach into.
+    const cs = Math.max(1, Math.min(width, Math.floor(n.colSpan ?? 1) || 1));
+    const rs = Math.max(1, Math.floor(n.rowSpan ?? 1) || 1);
+    if (!auto) {
+      // With automatic positioning off every object keeps its cell; an object
+      // that has never been placed falls back to its place in the order, and
+      // anything parked past the last column is pulled back into the grid.
+      const c = Math.max(0, Math.min(width - cs, Math.floor(n.gridCol ?? 0)));
+      const r0 = Math.max(0, Math.floor(n.gridRow ?? Math.floor(index / width)));
+      out.push({ col: c, row: r0, colSpan: cs, rowSpan: rs });
+      for (let i = c; i < c + cs; i++) for (let j = r0; j < r0 + rs; j++) taken.add(key(i, j));
+      continue;
+    }
+    let placed: Cell | null = null;
+    for (let r = 0; !placed; r++) {
+      for (let c = 0; c + cs <= width; c++) {
+        if (fits(c, r, cs, rs)) {
+          placed = { col: c, row: r, colSpan: cs, rowSpan: rs };
+          break;
+        }
+      }
+      // A row that cannot hold a one-cell object is a bug guard, not a case.
+      if (r > flow.length + 1) break;
+    }
+    const cell = placed ?? { col: 0, row: out.length, colSpan: cs, rowSpan: rs };
+    out.push(cell);
+    for (let i = cell.col; i < cell.col + cell.colSpan; i++)
+      for (let j = cell.row; j < cell.row + cell.rowSpan; j++) taken.add(key(i, j));
+  }
+  return out;
+}
+
+/**
+ * How many rows the grid needs.
+ *
+ * "By default, Number of rows is set to `auto`... the number of rows in the grid
+ * will increase or decrease to accommodate the number of cells needed by cell
+ * objects. For example, deleting all cell objects from a row will also remove
+ * that row." A row count that was set by hand is a floor, because Figma will
+ * "create new rows or columns to accommodate" objects that do not fit.
+ */
+export function gridRows(layout: AutoLayout, cells: Cell[]): number {
+  const needed = cells.reduce((max, c) => Math.max(max, c.row + c.rowSpan), 0);
+  const declared = typeof layout.rows === "number" ? Math.max(0, Math.floor(layout.rows)) : 0;
+  return Math.max(needed, declared, 1);
+}
+
+/** The size of one track, resolved: a pixel size, plus how it was reached. */
+export interface ResolvedTrack {
+  size: number;
+  mode: TrackMode;
+}
+
+/**
+ * Resolve every track's size along one axis.
+ *
+ * `hug` tracks are as big as the objects inside them, `fixed` tracks keep the
+ * size they were given, and `fill` tracks divide what is left between them by
+ * fractional unit - the article's own formula. A frame that hugs its contents
+ * has no leftover space to divide, so a fill track there falls back to hugging
+ * its contents, which is what stops a hug from chasing its own tail.
+ */
+export function resolveTracks(
+  count: number,
+  tracks: GridTrack[] | undefined,
+  needs: { start: number; span: number; size: number }[],
+  gaps: number,
+  available: number,
+  canFill: boolean,
+): ResolvedTrack[] {
+  // A track that has not been given a mode is Figma's Auto: the free space is
+  // shared out between the tracks that ask for it, in proportion to their
+  // fractional units. (Figma's own help says "by default, the size is set to
+  // auto, which means free space is divided evenly between all rows/columns".)
+  const mode = (i: number): TrackMode => tracks?.[i]?.mode ?? "fill";
+  const fr = (i: number) => Math.max(0.0001, tracks?.[i]?.fr ?? 1);
+  // What each track would need to hug the objects in it. An object that spans
+  // several tracks shares its size between them, once the gaps come out.
+  const hug = new Array<number>(count).fill(0);
+  for (const n of needs) {
+    if (n.size <= 0) continue;
+    const reach = Math.max(1, Math.min(n.span, count - n.start));
+    const each = Math.max(0, (n.size - gaps * (reach - 1)) / reach);
+    for (let i = n.start; i < n.start + reach && i < count; i++) hug[i] = Math.max(hug[i], each);
+  }
+  let totalFr = 0;
+  let taken = 0;
+  const sized = new Array<number>(count).fill(0);
+  for (let i = 0; i < count; i++) {
+    const m = mode(i);
+    if (m === "fixed") sized[i] = tracks?.[i]?.size ?? hug[i];
+    else if (m === "fill" && canFill) totalFr += fr(i);
+    else sized[i] = hug[i];
+    if (sized[i]) taken += sized[i];
+  }
+  const leftover = Math.max(0, available - taken - gaps * Math.max(0, count - 1));
+  for (let i = 0; i < count; i++) {
+    if (mode(i) === "fill" && canFill) sized[i] = totalFr > 0 ? (leftover * fr(i)) / totalFr : hug[i];
+  }
+  return sized.map((size, i) => ({ size, mode: mode(i) }));
+}
+
+/** The whole grid, resolved: where every track starts and how big it is. */
+export interface GridPlan {
+  cols: number;
+  rows: number;
+  cells: Cell[];
+  colW: number[];
+  rowH: number[];
+  colX: number[];
+  rowY: number[];
+  totalW: number;
+  totalH: number;
+}
+
+/**
+ * The cell an object is sitting over.
+ *
+ * Automatic positioning off is the case where the object's own place on the
+ * canvas is the truth: Figma says toggling it off "preserves empty cells", and
+ * the way to move something into one of them is to drag it there. The track a
+ * point falls in is read from the plan the objects' last arrangement produced,
+ * so dragging across a track boundary lands in the next cell rather than being
+ * snapped back to where the drag began.
+ */
+export function cellAt(plan: GridPlan, layout: AutoLayout, child: XNode): Cell {
+  const [pl, , pt] = Array.isArray(layout.padding) ? layout.padding : [0, 0, 0, 0];
+  const gapCols = layout.gapCols ?? layout.gap ?? 0;
+  const gapRows = layout.gapRows ?? layout.gap ?? 0;
+  const colSpan = Math.max(1, Math.min(plan.cols, Math.floor(child.colSpan ?? 1) || 1));
+  const rowSpan = Math.max(1, Math.floor(child.rowSpan ?? 1) || 1);
+  // The last track that starts at or before the object's centre: for an object
+  // dragged out past the end that is the nearest track, which is where Figma
+  // parks it too rather than letting it float off the grid.
+  const track = (offsets: number[], gap: number, at: number) => {
+    let found = 0;
+    // A track owns its own box plus half of each gap beside it, so the
+    // boundary between neighbours is the middle of the gap between them.
+    for (let i = 0; i < offsets.length; i++) if (at >= offsets[i] - gap / 2) found = i;
+    return found;
+  };
+  const cx = child.x - pl + child.w / 2;
+  const cy = child.y - pt + child.h / 2;
+  const col = Math.max(0, Math.min(plan.cols - colSpan, track(plan.colX, gapCols, cx)));
+  const row = Math.max(0, track(plan.rowY, gapRows, cy));
+  return { col, row, colSpan, rowSpan };
+}
+
+/**
+ * Lay a grid frame out. Everything is measured from the frame's own padding, so
+ * `colX`/`rowY` are offsets inside the content box.
+ */
+export function planGrid(
+  node: Pick<XNode, "w" | "h">,
+  flow: XNode[],
+  layout: AutoLayout,
+  hugsWidth: boolean,
+  hugsHeight: boolean,
+  /** Cells worked out by the caller. Automatic positioning off asks the
+   *  objects where they are instead of asking the flow, and that answer
+   *  depends on the tracks - which is this function's job - so it is passed in
+   *  from a first pass. */
+  placed?: Cell[],
+): GridPlan {
+  const [pl, pr, pt, pb] = Array.isArray(layout.padding) ? layout.padding : [0, 0, 0, 0];
+  const cols = Math.max(1, Math.floor(layout.columns ?? 2));
+  const gapCols = layout.gapCols ?? layout.gap ?? 0;
+  const gapRows = layout.gapRows ?? layout.gap ?? 0;
+  const auto = layout.autoPosition !== false;
+  const cells = placed ?? placeCells(flow, cols, auto);
+  const rows = gridRows(layout, cells);
+  // An object that fills its cell asks for no size of its own: the track is
+  // what gives it one, and asking would make a fill track chase itself.
+  const needs = (axis: "x" | "y") =>
+    cells.map((c, i) => ({
+      start: axis === "x" ? c.col : c.row,
+      span: axis === "x" ? c.colSpan : c.rowSpan,
+      size: axis === "x" ? (flow[i].sizingW === "fill" ? 0 : flow[i].w) : flow[i].sizingH === "fill" ? 0 : flow[i].h,
+    }));
+  const colW = resolveTracks(
+    cols,
+    layout.colTracks,
+    needs("x"),
+    gapCols,
+    node.w - pl - pr,
+    !hugsWidth,
+  ).map((t) => t.size);
+  const rowH = resolveTracks(
+    rows,
+    layout.rowTracks,
+    needs("y"),
+    gapRows,
+    node.h - pt - pb,
+    !hugsHeight,
+  ).map((t) => t.size);
+  const colX: number[] = [];
+  const rowY: number[] = [];
+  let x = 0;
+  for (let i = 0; i < cols; i++) {
+    colX.push(x);
+    x += colW[i] + gapCols;
+  }
+  let y = 0;
+  for (let i = 0; i < rows; i++) {
+    rowY.push(y);
+    y += rowH[i] + gapRows;
+  }
+  return {
+    cols,
+    rows,
+    cells,
+    colW,
+    rowH,
+    colX,
+    rowY,
+    totalW: colW.reduce((s2, w) => s2 + w, 0) + gapCols * Math.max(0, cols - 1),
+    totalH: rowH.reduce((s2, h) => s2 + h, 0) + gapRows * Math.max(0, rows - 1),
+  };
+}
+
+/** The box one object's cell (or span) takes up inside the content area. */
+export function cellBox(plan: GridPlan, cell: Cell): { x: number; y: number; w: number; h: number } {
+  const startX = plan.colX[cell.col] ?? 0;
+  const endX = plan.colX[cell.col + cell.colSpan - 1] ?? startX;
+  const startY = plan.rowY[cell.row] ?? 0;
+  const endY = plan.rowY[cell.row + cell.rowSpan - 1] ?? startY;
+  return {
+    x: startX,
+    y: startY,
+    w: endX + plan.colW[cell.col + cell.colSpan - 1] - startX,
+    h: endY + plan.rowH[cell.row + cell.rowSpan - 1] - startY,
+  };
+}
+
+/** How an object sits inside its cell: Figma's Position align buttons. */
+export function cellAlign(n: XNode): { h: "min" | "center" | "max"; v: "min" | "center" | "max" } {
+  const one = (c: string | undefined) => (c === "center" ? "center" : c === "max" ? "max" : "min");
+  return { h: one(n.constraintH), v: one(n.constraintV) };
+}
 
 /**
  * A brand new auto layout frame, as Figma adds one: a horizontal flow hugging
@@ -392,7 +696,7 @@ export function effectiveSizing(
   node: Pick<XNode, "sizingW" | "sizingH">,
   flow: XNode[],
 ): { main: Sizing; cross: Sizing } {
-  const horizontal = layout.direction === "horizontal";
+  const horizontal = widthIsMain(layout);
   // Two places can ask for a hug and either one is enough: the layout's own
   // `sizing` pair, and the layer's width/height resizing menu. They are kept in
   // step by the panel, but a document written by an older build may only have

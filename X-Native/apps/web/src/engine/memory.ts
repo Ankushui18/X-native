@@ -19,10 +19,15 @@ import { loadDoc, type PersistedDoc } from "./persist";
 import { clampZoom, panForZoom } from "./view";
 import {
   autoSpacing,
+  cellAlign,
+  cellAt,
+  cellBox,
   clampToPadding,
   hugsCross,
   hugsMain,
   isAutoGap,
+  planGrid,
+  widthIsMain,
   textDimensionRule,
   wraps,
   type Spacing,
@@ -212,8 +217,8 @@ function clampDims(n: XNode) {
   if (n.maxH != null && Number.isFinite(n.maxH) && n.h > n.maxH) n.h = n.maxH;
 }
 
-function applyLayout(n: XNode) {
-  for (const c of n.children) applyLayout(c);
+function applyLayout(n: XNode, gesture = false) {
+  for (const c of n.children) applyLayout(c, gesture);
   const l = n.layout;
   if (!l) {
     if (n.children.length && (n.sizingW === "hug" || n.sizingH === "hug")) {
@@ -227,6 +232,47 @@ function applyLayout(n: XNode) {
     return;
   }
   const flow = n.children.filter((c) => c.visible && !c.absolutePosition);
+  /* The grid flow is its own geometry: cells, tracks and spans instead of one
+     run of objects. It shares the hug/fill rules above, so it is resolved with
+     the same two questions before the cells are worked out. */
+  if (l.direction === "grid") {
+    const hugW = hugsMain(l, n, flow);
+    const hugH = hugsCross(l, n, flow);
+    // With automatic positioning off the objects stay where they are put - a
+    // drop into a cell keeps it, empty cells and all - so their cells are read
+    // off the arrangement the tracks were resolved from.
+    const first = planGrid(n, flow, l, hugW, hugH);
+    const plan =
+      l.autoPosition === false && !gesture
+        ? planGrid(n, flow, l, hugW, hugH, flow.map((c) => cellAt(first, l, c)))
+        : first;
+    const [gl, gr, gt, gb] = Array.isArray(l.padding) ? l.padding : [0, 0, 0, 0];
+    flow.forEach((c, i) => {
+      const cell = plan.cells[i];
+      if (!cell) return;
+      const box = cellBox(plan, cell);
+      // Where the object landed is written back, so the panel and the object's
+      // own record agree - and so switching automatic positioning off keeps the
+      // arrangement that is on screen.
+      c.gridCol = cell.col;
+      c.gridRow = cell.row;
+      // A gesture in a manually positioned grid is the one time an object is
+      // allowed to sit between cells: it follows the pointer, and the drop
+      // (the end of the gesture) is what puts it in a cell.
+      if (gesture && l.autoPosition === false) return;
+      const { h: ah, v: av } = cellAlign(c);
+      c.w = Math.max(1, c.sizingW === "fill" ? box.w : c.w);
+      c.h = Math.max(1, c.sizingH === "fill" ? box.h : c.h);
+      clampDims(c);
+      c.x = gl + box.x + (ah === "center" ? (box.w - c.w) / 2 : ah === "max" ? box.w - c.w : 0);
+      c.y = gt + box.y + (av === "center" ? (box.h - c.h) / 2 : av === "max" ? box.h - c.h : 0);
+    });
+    if (hugW) n.w = Math.max(1, gl + plan.totalW + gr);
+    if (hugH) n.h = Math.max(1, gt + plan.totalH + gb);
+    clampToPadding(n);
+    clampDims(n);
+    return;
+  }
   const [pl, pr, pt, pb] = Array.isArray(l.padding) ? l.padding : [0, 0, 0, 0];
   const horiz = l.direction === "horizontal";
   // Figma offers Wrap on a horizontal flow only, so a vertical frame that still
@@ -657,6 +703,10 @@ export class MemoryEngine implements Engine {
   private listeners = new Set<() => void>();
   private snapCache: Snapshot;
   private grouping = false;
+  /** True between `begin` and `end`: a pointer gesture is in flight, and a
+   *  manually positioned grid lets its objects follow the pointer until the
+   *  gesture ends and they settle into a cell. */
+  private gesture = false;
   /** Last history-pushing command type and its timestamp, used to coalesce
    *  rapid repeats of the same command (e.g. holding an arrow key) into a
    *  single undo step, as Figma does. */
@@ -771,10 +821,16 @@ export class MemoryEngine implements Engine {
       this.undo.push(clone(this.state));
       this.redo = [];
       this.grouping = true;
+      this.gesture = true;
       return;
     }
     if (cmd.type === "end") {
       this.grouping = false;
+      // The end of a gesture is a drop: a grid in manual positioning reads the
+      // cell the object was let go nearest to, so it settles here rather than
+      // mid-drag.
+      this.gesture = false;
+      this.relayout();
       const previous = this.undo[this.undo.length - 1];
       if (previous && JSON.stringify(previous) === JSON.stringify(this.state)) {
         this.undo.pop();
@@ -857,7 +913,7 @@ export class MemoryEngine implements Engine {
   }
 
   private relayout() {
-    applyLayout(this.root());
+    applyLayout(this.root(), this.gesture);
   }
 
   private build(): Snapshot {
@@ -1108,7 +1164,7 @@ export class MemoryEngine implements Engine {
           // Scale tool is exempt: it scales the frame and its resizing together.
           if (n.layout && !cmd.scaleProps) {
             const l = n.layout;
-            const horiz = l.direction === "horizontal";
+            const horiz = widthIsMain(l);
             if (n.w !== oldW) {
               if (horiz) l.sizing = "fixed";
               else l.cross = "fixed";

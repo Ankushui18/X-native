@@ -15,6 +15,7 @@ import type {
   Engine,
   ExportFormat,
   ExportPreset,
+  GridTrack,
   LayoutAlign,
   LayoutJustify,
   RightTab,
@@ -67,9 +68,14 @@ import { pathToVectorNetwork, vectorNetworkToSvgPath, vertexDegree, simplifyPath
 import {
   SPACING_MODES,
   alignKey,
+  widthIsMain,
   alignmentCells,
+  defaultGrid,
   effectiveSizing,
   hasFillChild,
+  hugsCross,
+  hugsMain,
+  planGrid,
   isAutoGap,
   layoutKeyPatch,
   parsePaddingShorthand,
@@ -2065,6 +2071,7 @@ function Design({
   /* Auto layout answers three questions the panel asks in several places: is
    * the gap on Auto, does this flow wrap, and is a declared hug still a hug
    * once something inside it is filling the same axis. */
+  const isGrid = n.layout?.direction === "grid";
   const autoGap = n.layout ? isAutoGap(n.layout) : false;
   const wrapOn = n.layout ? wraps(n.layout) : false;
   const resolved = n.layout ? effectiveSizing(n.layout, n, n.children) : null;
@@ -2079,7 +2086,7 @@ function Design({
    * not mistaken for a bug in the resize itself. */
   const hugNote = (axis: "main" | "cross") => {
     if (!n.layout || n.kind === "text") return undefined;
-    const horiz = n.layout.direction === "horizontal";
+    const horiz = widthIsMain(n.layout);
     const wants = (axis === "main" ? n.layout.sizing : n.layout.cross) === "hug";
     const nodeWants = (axis === "main" ? n.sizingW : n.sizingH) === "hug";
     if ((!wants && !nodeWants) || showSizing(axis) !== "fixed") return undefined;
@@ -2225,6 +2232,7 @@ function Design({
   };
   const parent = findParent(snap.pages[snap.page].root, n.id);
   const hasAutoLayoutParent = !!parent?.layout;
+  const gridParent = parent?.layout?.direction === "grid";
   /* First press turns the base stroke on; after that each press stacks another
      stroke on top, the way Figma's Stroke "+" behaves. Shared by the header "+"
      and the empty-state row so both paths do exactly the same thing. */
@@ -2469,16 +2477,21 @@ function Design({
           >
             <Icon name="layout-h" />
           </button>
-          {/* Figma's Grid flow is a horizontal flow that wraps; choosing it
-              switches the flow over for you. */}
+          {/* The third flow: cells in columns and rows. Wrap is what a grid
+              does not need, so choosing Grid leaves it out of the picture
+              rather than doubling up on the horizontal flow - and switching
+              back to Horizontal or Vertical drops the grid's own fields. */}
           <button
-            className={n.layout?.wrap && n.layout.direction === "horizontal" ? "on" : ""}
+            className={n.layout?.direction === "grid" ? "on" : ""}
             title="Grid"
             onClick={() =>
               engine.dispatch({
                 type: "autoLayout",
                 id: n.id,
-                layout: { ...(n.layout ?? defaultLayout()), direction: "horizontal", wrap: true, gap: 8 },
+                layout:
+                  n.layout?.direction === "grid"
+                    ? { ...n.layout, direction: "horizontal", wrap: false }
+                    : { ...defaultGrid(), padding: n.layout?.padding ?? defaultGrid().padding },
               })
             }
           >
@@ -2648,6 +2661,22 @@ function Design({
               label="Max H"
               value={n.maxH || 0}
               onChange={(v) => patch(n.kind === "text" ? { maxH: v > 0 ? v : undefined, maxLines: 0 } : { maxH: v > 0 ? v : undefined })}
+            />
+          </div>
+        )}
+        {gridParent && (
+          // "You can also use the Column span and Row span fields in the right
+          // sidebar" - shown only for an object that lives in a grid.
+          <div className="grid2" style={{ marginTop: 4 }}>
+            <Field
+              label="Col span"
+              value={n.colSpan ?? 1}
+              onChange={(v) => patch({ colSpan: Math.max(1, Math.round(v)) })}
+            />
+            <Field
+              label="Row span"
+              value={n.rowSpan ?? 1}
+              onChange={(v) => patch({ rowSpan: Math.max(1, Math.round(v)) })}
             />
           </div>
         )}
@@ -3050,12 +3079,18 @@ function Design({
       {n.layout && (
         <>
           <div className="dir-row">
-            <Nine
-              layout={n.layout}
-              onChange={(patch) =>
-                engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, ...patch } })
-              }
-            />
+            {/* A grid has no single run of objects to pack - its objects are
+                positioned by their cells - so the packing box is the grid's
+                one exception. Per-cell alignment is on the object itself, in
+                the Position section, as the grid article describes. */}
+            {!isGrid && (
+              <Nine
+                layout={n.layout}
+                onChange={(patch) =>
+                  engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, ...patch } })
+                }
+              />
+            )}
             <button
               className="icon-btn"
               title={n.layout.justify === "between" ? "Packed" : "Space between"}
@@ -3091,10 +3126,32 @@ function Design({
               </button>
             )}
           </div>
+          {isGrid && (
+            <GridPanel
+              node={n}
+              layout={n.layout}
+              onChange={(patch) => engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, ...patch } })}
+            />
+          )}
           <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
-            {/* Figma's Gap: a number, or Auto - and with Auto, one of three
-                packing rules. A frame that hugs its contents has no slack to
-                distribute, so Auto there is the same as 0. */}
+            {isGrid ? (
+              // A grid has a gap per axis rather than one gap and a packing
+              // rule: "Gap between rows" and "Gap between columns".
+              <div className="gap-row">
+                <Field
+                  icon="gap"
+                  aria="Gap between columns"
+                  value={n.layout.gapCols ?? n.layout.gap ?? 0}
+                  onChange={(v) => engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, gapCols: v } })}
+                />
+                <Field
+                  icon="padding-vertical"
+                  aria="Gap between rows"
+                  value={n.layout.gapRows ?? n.layout.gap ?? 0}
+                  onChange={(v) => engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, gapRows: v } })}
+                />
+              </div>
+            ) : (
             <div className="gap-row">
               {autoGap ? (
                 <button
@@ -3140,6 +3197,7 @@ function Design({
                 <Icon name="distribute-h" size={14} />
               </button>
             </div>
+            )}
             {padOpen ? (
               <div className="grid2">
                 {(["L", "R", "T", "B"] as const).map((lab, i) => (
@@ -4718,6 +4776,211 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
 }
 
 /**
+ * The grid flow's own panel: the picker, the automatic-positioning switch and
+ * the two track lists.
+ *
+ * Figma's article: "you can choose the desired number of rows and columns by
+ * clicking on the grid picker in the right sidebar. Enter a value in the Number
+ * of columns and Number of rows fields, or use the interactive selector." The
+ * picker here is that selector - a small grid of squares, click one to set the
+ * counts - with the two fields beside it, and rows reads `Auto` when they follow
+ * their contents.
+ */
+/** What the Number of rows field's `Auto` stands for: not a count but a rule,
+ *  the one Figma calls Auto - rows appear as the objects need them. */
+const AUTO_ROWS = 0;
+
+/**
+ * The word a track field was given, if it was given one.
+ *
+ * "Tip: Typing `Auto` or `A` for a track will automatically set it to fill
+ * container at one fractional unit (1fr)." `Hug` is the other mode that has no
+ * size to type, so both words are read here; anything else is a number.
+ */
+function trackWord(raw: string): Partial<GridTrack> | null {
+  const word = raw.trim().toLowerCase();
+  if (word === "auto" || word === "a" || word === "fill") return { mode: "fill", fr: 1 };
+  if (word === "hug" || word === "h") return { mode: "hug" };
+  return null;
+}
+
+function GridPanel({
+  node,
+  layout,
+  onChange,
+}: {
+  node: XNode;
+  layout: AutoLayout;
+  onChange: (patch: Partial<AutoLayout>) => void;
+}) {
+  const cols = Math.max(1, Math.floor(layout.columns ?? 2));
+  const rowsAuto = layout.rows === "auto" || layout.rows == null;
+  const declaredRows = rowsAuto ? 0 : Math.max(1, Math.floor(layout.rows as number));
+  const [pick, setPick] = useState<{ c: number; r: number } | null>(null);
+  // The plan is the engine's own, so the sidebar and the canvas agree. It also
+  // gives the track list the sizes the frame really has: a track switched to
+  // Fixed before a size is typed reads as what it is currently hugging, instead
+  // of a zero that the frame is not actually using.
+  const { used, plan } = useMemo(() => {
+    const cells = [...(node.children ?? [])].filter((c) => c.visible && !c.absolutePosition);
+    // The track list shows what the frame actually has, so the rows it counts
+    // are the ones the objects need when the count is Auto.
+    const need = cells.reduce((max, c) => Math.max(max, (c.gridRow ?? 0) + (c.rowSpan ?? 1)), 0);
+    return {
+      used: { rows: Math.max(need, declaredRows, 1), cols },
+      plan: planGrid(node, cells, layout, hugsMain(layout, node, cells), hugsCross(layout, node, cells)),
+    };
+  }, [node, layout, declaredRows, cols]);
+  const trackRow = (axis: "col" | "row", i: number) => {
+    const list = (axis === "col" ? layout.colTracks : layout.rowTracks) ?? [];
+    const t = list[i] ?? { mode: "fill" as const };
+    const set = (patch: Partial<GridTrack>) => {
+      const next = [...list];
+      // A track that has never been touched is Auto, so the filler for the
+      // tracks before this one has to be Auto too - filling with Hug would
+      // silently change the tracks the user never touched.
+      while (next.length < i) next.push({ mode: "fill" });
+      next[i] = { ...t, ...patch };
+      onChange(axis === "col" ? { colTracks: next } : { rowTracks: next });
+    };
+    return (
+      <div className="track-row" key={`${axis}${i}`}>
+        <span className="track-name">
+          {axis === "col" ? "Column" : "Row"} {i + 1}
+        </span>
+        <button
+          className="track-mode"
+          title="Auto shares the free space out by fractional unit, Hug wraps the objects in the track, Fixed holds a size"
+          onClick={() => set({ mode: t.mode === "fill" ? "hug" : t.mode === "hug" ? "fixed" : "fill" })}
+        >
+          {t.mode === "fixed" ? "Fixed" : t.mode === "hug" ? "Hug" : (t.fr ?? 1) === 1 ? "Auto" : `${t.fr}fr`}
+        </button>
+        {t.mode === "fixed" ? (
+          <input
+            className="track-size"
+            aria-label={`${axis === "col" ? "Column" : "Row"} ${i + 1} size`}
+            defaultValue={String(Math.round(t.size ?? (axis === "col" ? plan.colW[i] : plan.rowH[i]) ?? 0))}
+            onBlur={(e) => {
+              const word = trackWord(e.target.value);
+              if (word) return set(word);
+              const v = parseFloat(e.target.value);
+              if (Number.isFinite(v)) set({ size: Math.max(1, Math.round(v)) });
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            }}
+          />
+        ) : t.mode === "fill" ? (
+          <input
+            className="track-size"
+            aria-label={`${axis === "col" ? "Column" : "Row"} ${i + 1} fraction`}
+            defaultValue={String(t.fr ?? 1)}
+            onBlur={(e) => {
+              const word = trackWord(e.target.value);
+              if (word) return set(word);
+              const v = parseFloat(e.target.value);
+              if (Number.isFinite(v) && v > 0) set({ fr: v });
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            }}
+          />
+        ) : (
+          <span className="track-hint" />
+        )}
+        {!rowsAuto || axis === "col" ? (
+          <button
+            className="track-del"
+            title={`Delete this ${axis === "col" ? "column" : "row"}`}
+            aria-label={`Delete ${axis === "col" ? "column" : "row"} ${i + 1}`}
+            onClick={() => {
+              const next = [...list];
+              while (next.length < i) next.push({ mode: "fill" });
+              next.splice(i, 1);
+              if (axis === "col") onChange({ colTracks: next, columns: Math.max(1, cols - 1) });
+              // Rows on Auto keep following their objects: deleting a track
+              // takes the row out and the objects below it move up. A count
+              // that was typed is lowered with it.
+              else
+                onChange({
+                  rowTracks: next,
+                  ...(rowsAuto ? {} : { rows: Math.max(1, declaredRows - 1) }),
+                });
+            }}
+          >
+            <Icon name="trash" size={12} />
+          </button>
+        ) : null}
+      </div>
+    );
+  };
+  return (
+    <div className="grid-panel">
+      <div className="grid-pick-row">
+        <div
+          className="grid-pick"
+          role="group"
+          aria-label="Grid"
+          onMouseLeave={() => setPick(null)}
+        >
+          {Array.from({ length: 6 * 6 }, (_, i) => {
+            const c = (i % 6) + 1;
+            const r = Math.floor(i / 6) + 1;
+            const on = pick ? c <= pick.c && r <= pick.r : c <= used.cols && r <= used.rows;
+            return (
+              <button
+                key={i}
+                className={on ? "on" : ""}
+                aria-label={`${c} columns by ${r} rows`}
+                onMouseEnter={() => setPick({ c, r })}
+                onClick={() => onChange({ columns: c, rows: r })}
+              />
+            );
+          })}
+        </div>
+        <div className="grid-counts">
+          <Field
+            label="Cols"
+            value={used.cols}
+            onChange={(v) => onChange({ columns: Math.max(1, Math.round(v)) })}
+          />
+          <Field
+            label="Rows"
+            mixed={rowsAuto ? "Auto" : undefined}
+            hint="Auto"
+            hintNote="as many rows as the objects need"
+            value={rowsAuto ? used.rows : declaredRows}
+            token={{ auto: AUTO_ROWS, a: AUTO_ROWS }}
+            // `Auto` (or `A`) is the article's own shorthand for a row count
+            // that follows the objects; anything else is a count of rows, and
+            // a count is a floor - the grid still adds rows to fit.
+            onChange={(v) =>
+              onChange(v === AUTO_ROWS ? { rows: "auto" } : { rows: Math.max(1, Math.round(v)) })
+            }
+          />
+        </div>
+      </div>
+      <label className="check grid-auto">
+        <input
+          type="checkbox"
+          checked={layout.autoPosition !== false}
+          onChange={(e) =>
+            // Turning it back on also sets the row count to Auto, per the
+            // article: "Doing so will also set Number of rows to Auto."
+            onChange(e.target.checked ? { autoPosition: true, rows: "auto" } : { autoPosition: false })
+          }
+        />
+        Automatic positioning
+      </label>
+      <div className="track-list">
+        {Array.from({ length: used.cols }, (_, i) => trackRow("col", i))}
+        {Array.from({ length: used.rows }, (_, i) => trackRow("row", i))}
+      </div>
+    </div>
+  );
+}
+
+/**
  * The alignment box.
  *
  * Figma's article: "Select the box and use arrow keys to switch between the
@@ -4949,6 +5212,7 @@ function Field({
   onLabelClick,
   aria,
   mixed,
+  token,
   disabled,
 }: {
   label?: string;
@@ -4966,6 +5230,10 @@ function Field({
   /** Figma shows "Mixed" instead of a number when the selection - or, for
    *  corner radii, the four corners - disagrees. Typing still applies. */
   mixed?: string;
+  /** Words this field also accepts, each standing for a number: a grid's
+   *  Number of rows takes `Auto` (or `A`), which means "as many as the objects
+   *  need" rather than a count. */
+  token?: Record<string, number>;
   /** A property the layer cannot own here, e.g. a corner radius on an instance. */
   disabled?: boolean;
 }) {
@@ -4978,12 +5246,15 @@ function Field({
   // `(40+8)*2`, and `+10` to nudge against whatever is already there. Only the
   // commit evaluates, so typing `12/` mid-expression does not move the layer.
   const commit = () => {
+    const word = token?.[draft.trim().toLowerCase()];
     const parsed =
-      mixed && !hasExpression(draft) && !/[0-9]/.test(draft)
-        ? null
-        : hasExpression(draft)
-          ? evalField(draft, value)
-          : parseFloat(draft);
+      word != null
+        ? word
+        : mixed && !hasExpression(draft) && !/[0-9]/.test(draft)
+          ? null
+          : hasExpression(draft)
+            ? evalField(draft, value)
+            : parseFloat(draft);
     if (parsed != null && Number.isFinite(parsed)) {
       onChange(parsed);
       setDraft(fmt(parsed));
@@ -6076,6 +6347,24 @@ export function align(
     // raw `move` is recomputed away on the next pass and the button looks dead.
     // Figma instead retargets the alignment onto the parent's layout axes, which
     // is the only thing that can actually move the child. Mirror that.
+    if (p.layout?.direction === "grid") {
+      // "Within a grid auto layout frame, a child object can be aligned to its
+      // cell. Select a child object and use the alignment buttons in the
+      // Position section" - so on a grid the buttons set the object's own
+      // alignment inside its cell, not the parent's packing.
+      const isX = mode.startsWith("align-left") || mode.startsWith("align-h") || mode.startsWith("align-r");
+      const value = mode.endsWith("center")
+        ? "center"
+        : mode === "align-left" || mode === "align-top"
+          ? "min"
+          : "max";
+      engine.dispatch({
+        type: "patch",
+        id: n.id,
+        patch: isX ? { constraintH: value } : { constraintV: value },
+      });
+      return;
+    }
     if (p.layout) {
       const horizontal = p.layout.direction === "horizontal";
       const axis: Record<string, LayoutAlign | LayoutJustify> = {
@@ -6108,6 +6397,33 @@ export function align(
     if (mode === "align-vcenter") dy = (p.h - n.h) / 2 - n.y;
     if (dx || dy) engine.dispatch({ type: "move", ids: [n.id], dx, dy });
     return;
+  }
+  // On a grid a multi-selection is not one group to align with itself: "If you
+  // have multiple child objects selected, each one will align to its respective
+  // cell." So every object sets its own alignment inside its own cell, which is
+  // the same patch the single-object case sends.
+  if (snap.selection.length > 1) {
+    const parents = new Set<string>();
+    let allGrid = true;
+    for (const id of snap.selection) {
+      const n = find(root, id);
+      const p = n ? findParent(root, n.id) : null;
+      if (!n || !p?.layout || p.layout.direction !== "grid") allGrid = false;
+      else parents.add(p.id);
+    }
+    if (allGrid && parents.size === 1) {
+      const isX = mode === "align-left" || mode === "align-hcenter" || mode === "align-right";
+      const value = mode.endsWith("center")
+        ? "center"
+        : mode === "align-left" || mode === "align-top"
+          ? "min"
+          : "max";
+      engine.dispatch({ type: "begin" });
+      for (const id of snap.selection)
+        engine.dispatch({ type: "patch", id, patch: isX ? { constraintH: value } : { constraintV: value } });
+      engine.dispatch({ type: "end" });
+      return;
+    }
   }
   const items = snap.selection
     .map((id) => worldPos(root, id))

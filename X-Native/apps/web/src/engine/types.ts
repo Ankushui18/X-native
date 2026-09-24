@@ -20,7 +20,25 @@ export type NodeKind =
 
 export type Overflow = "visible" | "clip" | "scrollx" | "scrolly" | "scrollboth";
 export type Sizing = "fixed" | "hug" | "fill";
-export type LayoutDirection = "horizontal" | "vertical";
+export type LayoutDirection = "horizontal" | "vertical" | "grid";
+/**
+ * How a grid track is sized, Figma's three options for a column or a row.
+ *
+ * - `hug` keeps the smallest track the objects in it need.
+ * - `fill` shares the leftover space by fractional unit - the article's `fr`:
+ *   "Track proportion = Number of fractional units applied to the current track
+ *   ÷ Total number of fractional units across all tracks on the same dimension".
+ * - `fixed` stays the size it is, whatever the frame does.
+ */
+export type TrackMode = "fixed" | "fill" | "hug";
+
+export interface GridTrack {
+  mode: TrackMode;
+  /** Fractional units, only meaningful when `mode` is `"fill"` (1fr default). */
+  fr?: number;
+  /** The pinned size, only meaningful when `mode` is `"fixed"`. */
+  size?: number;
+}
 export type LayoutAlign = "min" | "center" | "max" | "baseline";
 export type LayoutJustify = "min" | "center" | "max" | "between";
 export type TextAlign = "left" | "center" | "right" | "justified";
@@ -384,6 +402,27 @@ export interface AutoLayout {
   spacing?: "between" | "around" | "evenly";
   /** Canvas stacking: true = First on top, false = Last on top (Figma parity) */
   itemReverseZIndex?: boolean;
+  /* ── The grid flow ────────────────────────────────────────────────────────
+   * Figma's third flow, "Use the grid in auto layout flow": cells arranged
+   * into columns and rows, where an object can span several of each. Only read
+   * when `direction` is `"grid"`. */
+  /** Number of columns. */
+  columns?: number;
+  /** Number of rows, or `"auto"` - the default, where rows appear and vanish
+   *  with the objects that need them. */
+  rows?: number | "auto";
+  /** "Gap between rows" - the vertical gap between tracks. */
+  gapRows?: number;
+  /** "Gap between columns" - falls back to `gap` for documents written before
+   *  the two were separate. */
+  gapCols?: number;
+  /** Per-track sizing; a missing entry is a hug. */
+  colTracks?: GridTrack[];
+  rowTracks?: GridTrack[];
+  /** Figma's automatic positioning, on by default: objects flow left to right
+   *  from the top row. Switching it off keeps every object in the cell it is
+   *  in, which is how empty cells survive a deletion. */
+  autoPosition?: boolean;
 }
 
 export type GridPattern = "columns" | "rows" | "grid";
@@ -510,6 +549,15 @@ export interface XNode {
   maxH?: number;
   /** Figma's Absolute position inside auto-layout frame */
   absolutePosition?: boolean;
+  /* ── Inside a grid ──────────────────────────────────────────────────────
+   * "Column span" / "Row span": how many cells the object stretches across.
+   * `gridCol`/`gridRow` are where it sits, written by the engine while
+   * automatic positioning is on and read back when it is switched off, so
+   * turning the setting off keeps the arrangement the objects already have. */
+  colSpan?: number;
+  rowSpan?: number;
+  gridCol?: number;
+  gridRow?: number;
   /** Rich text formatting runs */
   textRuns?: TextRun[];
   /** Preserved per-instance property overrides */

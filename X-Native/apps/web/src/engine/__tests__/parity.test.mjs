@@ -33,6 +33,13 @@ import {
   SPACING_MODES,
   alignKey,
   alignmentCells,
+  cellAlign,
+  cellBox,
+  defaultGrid,
+  gridRows,
+  placeCells,
+  planGrid,
+  widthIsMain,
   autoSpacing,
   clampToPadding,
   defaultLayout,
@@ -2435,6 +2442,184 @@ console.log("auto layout: wrap, and hugging with a filler inside:");
   const crossFiller = [child({ sizingH: "fill" })];
   t("a child filling the cross axis breaks the cross hug", effectiveSizing(layout({ cross: "hug" }), { sizingW: "fixed", sizingH: "hug" }, crossFiller).cross === "fixed");
   t("and leaves the main one alone", effectiveSizing(layout({ sizing: "hug" }), { sizingW: "hug", sizingH: "fixed" }, crossFiller).main === "hug");
+}
+
+console.log("the grid flow: cells, tracks and spans:");
+{
+  const kid = (over = {}) => ({ id: "k", kind: "rect", name: "k", visible: true, x: 0, y: 0, w: 40, h: 20, ...over });
+  const grid = (over = {}) =>
+    ({ ...defaultGrid(), padding: [0, 0, 0, 0], ...over });
+
+  // "Objects will be placed in succession from left to right, top to bottom."
+  const four = [kid({ id: "a" }), kid({ id: "b" }), kid({ id: "c" }), kid({ id: "d" })];
+  const cells = placeCells(four, 2, true);
+  t("objects fill a row before moving down", cells.map((c) => `${c.col},${c.row}`).join(" ") === "0,0 1,0 0,1 1,1");
+  t("an auto row count follows the objects", gridRows(grid(), cells) === 2);
+  t("one more object needs a third row in a two-column grid", gridRows(grid(), placeCells([...four, kid({ id: "e" })], 2, true)) === 3);
+  t("a row count set by hand is a floor, not a ceiling", gridRows(grid({ rows: 5 }), cells) === 5);
+  t("and Figma adds rows rather than dropping objects", gridRows(grid({ rows: 1 }), cells) === 2);
+  t("an empty grid still has a row", gridRows(grid(), []) === 1);
+
+  // Spans.
+  const spanning = [kid({ id: "a", colSpan: 2 }), kid({ id: "b" }), kid({ id: "c" })];
+  const spanned = placeCells(spanning, 2, true);
+  t("a two-wide object takes the whole row", spanned[0].col === 0 && spanned[0].colSpan === 2);
+  t("and the next object starts on the row below", spanned[1].row === 1 && spanned[1].col === 0);
+  t("a span wider than the grid is clamped to it", placeCells([kid({ colSpan: 9 })], 2, true)[0].colSpan === 2);
+  t("a row span reaches down", placeCells([kid({ rowSpan: 2 }), kid()], 2, true)[1].col === 1);
+
+  // Automatic positioning off: objects stay where they were.
+  const pinned = [kid({ id: "a", gridCol: 1, gridRow: 2 }), kid({ id: "b", gridCol: 0, gridRow: 0 })];
+  const manual = placeCells(pinned, 2, false);
+  t("with automatic positioning off an object keeps its cell", manual[0].col === 1 && manual[0].row === 2);
+  t("empty cells stay empty", manual[1].col === 0 && manual[1].row === 0);
+  t("and the grid is as tall as the furthest object", gridRows(grid(), manual) === 3);
+  t("an object parked past the last column is pulled back", placeCells([kid({ gridCol: 7 })], 2, false)[0].col === 1);
+
+  // Track sizing.
+  const plan = (over, kids, cols) =>
+    planGrid({ w: 200, h: 100 }, kids ?? four, grid({ columns: cols ?? 2, ...over }), false, false);
+  // A track with no mode of its own is Figma's Auto, and its help says what
+  // that means: "by default, the size is set to auto, which means free space is
+  // divided evenly between all rows and columns".
+  const untouched = plan({ gapCols: 0, gapRows: 0 });
+  t("tracks are Auto until told otherwise, and share the space", untouched.colW[0] === 100 && untouched.colW[1] === 100);
+  t("rows are Auto too", untouched.rowH[0] === 50 && untouched.rowH[1] === 50);
+  const g0 = plan({ colTracks: [{ mode: "hug" }, { mode: "hug" }], rowTracks: [{ mode: "hug" }], gapCols: 0, gapRows: 0 });
+  t("a hug track is as wide as its widest object", g0.colW[0] === 40 && g0.colW[1] === 40);
+  t("and a hug row as tall as its tallest", g0.rowH[0] === 20);
+  t("a mix lets hug keep its size and Auto take the rest",
+    plan({ colTracks: [{ mode: "hug" }, { mode: "fill" }], gapCols: 0, gapRows: 0 }).colW[1] === 160);
+  // "fill container ... fractional units (fr) are used"
+  const fill = plan({ colTracks: [{ mode: "fill" }, { mode: "fill" }], gapCols: 0, gapRows: 0, rowTracks: [{ mode: "hug" }] });
+  t("two 1fr columns split the width evenly", fill.colW[0] === 100 && fill.colW[1] === 100);
+  const weighted = plan({ colTracks: [{ mode: "fill", fr: 1 }, { mode: "fill", fr: 3 }], gapCols: 0, gapRows: 0 });
+  t("a 1fr and a 3fr column split four ways", weighted.colW[0] === 50 && weighted.colW[1] === 150);
+  const mixed = plan({ colTracks: [{ mode: "fixed", size: 60 }, { mode: "fill" }], gapCols: 0, gapRows: 0 });
+  t("a fixed track keeps its size", mixed.colW[0] === 60);
+  t("and the fill track takes what is left", mixed.colW[1] === 140);
+  const withGaps = plan({ gapCols: 10, gapRows: 6, colTracks: [{ mode: "fill" }, { mode: "fill" }] });
+  t("gaps come out of the space before it is divided", withGaps.colW[0] === 95 && withGaps.colW[1] === 95);
+  t("and the plan totals include them", withGaps.totalW === 200);
+  t("a hugging frame has nothing to fill from, so fill falls back to hug", planGrid({ w: 0, h: 0 }, four, grid({ rows: "auto" }), true, true).colW[0] === 40);
+
+  // Cell geometry, and where an object sits in its cell.
+  const boxPlan = plan({ gapCols: 0, gapRows: 0 });
+  const b = cellBox(boxPlan, { col: 1, row: 0, colSpan: 1, rowSpan: 1 });
+  t("a cell's box starts where its track starts", b.x === 100 && b.y === 0);
+  const spannedBox = cellBox(boxPlan, { col: 0, row: 0, colSpan: 2, rowSpan: 1 });
+  t("a spanned box covers both tracks", spannedBox.w === 200);
+  t("and a spanned box's gap is inside it",
+    cellBox(plan({ gapCols: 10, colTracks: [{ mode: "hug" }, { mode: "hug" }] }), { col: 0, row: 0, colSpan: 2, rowSpan: 1 }).w === 90);
+  t("a spanned box over fill tracks runs to the frame's edge",
+    cellBox(plan({ gapCols: 10, colTracks: [{ mode: "fill" }, { mode: "fill" }] }), { col: 0, row: 0, colSpan: 2, rowSpan: 1 }).w === 200);
+
+  t("an object with no alignment sits at the cell's start", cellAlign(kid()).h === "min" && cellAlign(kid()).v === "min");
+  t("the Position buttons set the object's own cell alignment", cellAlign(kid({ constraintH: "center", constraintV: "max" })).h === "center" && cellAlign(kid({ constraintH: "center", constraintV: "max" })).v === "max");
+  t("a stray constraint value reads as the start", cellAlign(kid({ constraintH: "scale" })).h === "min");
+
+  // A grid measures width first, like a horizontal flow. Getting this wrong
+  // swaps a frame's width and height rules, and the hug then eats a typed
+  // width - which is exactly what the browser probe caught.
+  t("a grid's main axis is its width", widthIsMain({ direction: "grid" }));
+  t("so is a horizontal flow's", widthIsMain({ direction: "horizontal" }));
+  t("a vertical flow's is its height", !widthIsMain({ direction: "vertical" }));
+}
+
+console.log("the grid flow, through the engine:");
+{
+  const e = new MemoryEngine(false);
+  await e.ready;
+  const page = () => e.snapshot().pages[e.snapshot().page];
+  const root = page().root.id;
+  const addRect = (w, h) => {
+    e.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w, h, parent: root });
+    return e.snapshot().selection[0];
+  };
+  const frame = addRect(300, 200);
+  const kids = [addRect(40, 30), addRect(40, 30), addRect(40, 30), addRect(40, 30)];
+  for (const k of kids) e.dispatch({ type: "reparent", ids: [k], parent: frame, x: 0, y: 0 });
+  e.dispatch({
+    type: "autoLayout",
+    id: frame,
+    layout: {
+      direction: "grid", gap: 8, padding: [8, 8, 8, 8], sizing: "fixed", cross: "fixed",
+      wrap: false, align: "min", justify: "min",
+      columns: 2, rows: "auto", gapRows: 10, gapCols: 20, colTracks: [], rowTracks: [], autoPosition: true,
+    },
+  });
+  const node = () => find(page().root, frame);
+  const xs = () => node().children.map((c) => [Math.round(c.x), Math.round(c.y), Math.round(c.w), Math.round(c.h)]);
+  // Two Auto columns share 300 - 16 (padding) - 20 (one gap) = 264, so each is
+  // 132 wide and they start at 8 and 160. Two Auto rows share 200 - 16 - 10 =
+  // 174, so 87 each and they start at 8 and 105.
+  const colAt = (i) => 8 + i * (132 + 20);
+  const rowAt = (i) => 8 + i * (87 + 10);
+  t("objects fill the first row left to right", xs()[0][0] === 8 && xs()[1][0] === colAt(1));
+  t("then the next row", xs()[2][1] === rowAt(1) && xs()[3][1] === rowAt(1));
+  t("and the row count follows them", node().layout.rows === "auto");
+
+  // A typed width on a grid frame is a manual resize: Fixed on the width, and
+  // the grid's own `sizing` is the width rule, not the cross one.
+  e.dispatch({ type: "resize", id: frame, x: 0, y: 0, w: 300, h: 200 });
+  t("a resized grid frame sets its width rule", node().layout.sizing === "fixed");
+  t("and its own resizing too", node().sizingW === "fixed");
+  e.dispatch({ type: "autoLayout", id: frame, layout: { ...node().layout } });
+  t("so its width survives the next layout pass", Math.round(node().w) === 300);
+
+  // Track sizing, through a real dispatch.
+  e.dispatch({
+    type: "autoLayout",
+    id: frame,
+    // One Auto column beside a hugging one: it takes what the hug leaves.
+    layout: { ...node().layout, colTracks: [{ mode: "fill" }, { mode: "hug" }] },
+  });
+  t("an Auto column takes what a hug column leaves", Math.round(node().children[1].x) === 8 + 224 + 20);
+  t("and an object set to fill takes the cell", (() => {
+    e.dispatch({ type: "patch", id: kids[0], patch: { sizingW: "fill" } });
+    return Math.round(node().children[0].w) === 224;
+  })());
+  // Spans: with the first object filling two columns it takes both tracks.
+  e.dispatch({ type: "autoLayout", id: frame, layout: { ...node().layout, colTracks: [] } });
+  e.dispatch({ type: "patch", id: kids[0], patch: { colSpan: 2 } });
+  t("a two-column span reaches both tracks", Math.round(node().children[0].w) === 284);
+  t("and pushes the rest onto the next rows", node().children[1].gridRow === 1);
+  e.dispatch({ type: "patch", id: kids[0], patch: { colSpan: 1 } });
+  // Automatic positioning off keeps the arrangement.
+  const before = xs();
+  e.dispatch({ type: "autoLayout", id: frame, layout: { ...node().layout, autoPosition: false } });
+  t("switching automatic positioning off leaves the arrangement alone", JSON.stringify(xs()) === JSON.stringify(before));
+  t("and the cells are recorded on the objects", node().children[1].gridCol === 1 && node().children[1].gridRow === 0);
+  // A grid frame with wrap set does not wrap: it is its own flow.
+  t("wrap has no meaning in a grid", !wraps(node().layout));
+
+  // Automatic positioning off, per the article, "preserves empty cells" and
+  // lets you put an object in one. So where the object sits is its cell: a drop
+  // one cell over keeps the object there instead of snapping it back.
+  e.dispatch({ type: "autoLayout", id: frame, layout: { ...node().layout, autoPosition: false, columns: 3 } });
+  t("with automatic positioning off the cells stay put", node().children[0].gridRow === 0);
+  const c2 = node().children[1];
+  e.dispatch({ type: "move", ids: [c2.id], dx: 200, dy: 0 });
+  const moved = node().children[1];
+  t("dragging an object a column over lands it in that column", moved.gridCol === 2);
+  // Three Auto columns now: 244 / 3 each, so the third starts at 210.67.
+  t("and it is drawn in that cell, not snapped back", Math.round(moved.x) === Math.round(8 + 2 * (244 / 3 + 20)));
+  t("the cells it left behind stay empty", node().children[0].gridCol === 0 && node().children[2].gridCol === 0);
+  // A drag back over the first column brings it home again, so the mapping is
+  // the object's own position rather than a one-way latch.
+  e.dispatch({ type: "move", ids: [c2.id], dx: -200, dy: 0 });
+  t("and dragging it back puts it in the first column", node().children[1].gridCol === 0);
+  // A drag is a gesture: an object follows the pointer while the gesture is in
+  // flight, and the drop is what settles it into a cell. Snapping mid-drag
+  // would stop it ever crossing a track, since the snap pulls it back before
+  // the pointer has travelled that far.
+  const colAt3 = (i) => 8 + i * (244 / 3 + 20);
+  e.dispatch({ type: "begin" });
+  e.dispatch({ type: "move", ids: [c2.id], dx: 120, dy: 0 });
+  t("mid-drag the object is where the pointer left it", Math.round(node().children[1].x) === 128);
+  e.dispatch({ type: "end" });
+  t("and the drop settles it into the nearest cell",
+    node().children[1].gridCol === 1 && Math.round(node().children[1].x) === Math.round(colAt3(1)));
 }
 
 console.log("the alignment box: its cells, and its keys:");

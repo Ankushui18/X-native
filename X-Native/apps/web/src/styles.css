@@ -1018,6 +1018,102 @@ html[data-theme="dark"] .row.comp .name { color: #c4b5fd; }
   background: var(--blue);
   border-radius: 2px;
 }
+/* ── The grid flow's panel ────────────────────────────────────────────────── */
+
+.grid-panel {
+  padding: 0 12px 8px;
+  display: grid;
+  gap: 8px;
+}
+.grid-pick-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+/* Figma's interactive selector: a small grid of squares, one per cell. */
+.grid-pick {
+  display: grid;
+  grid-template-columns: repeat(6, 12px);
+  grid-template-rows: repeat(6, 12px);
+  gap: 2px;
+  padding: 4px;
+  background: var(--input);
+  border-radius: 6px;
+  width: fit-content;
+}
+.grid-pick button {
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: var(--dot);
+  cursor: pointer;
+}
+.grid-pick button.on { background: var(--blue); }
+.grid-counts {
+  display: grid;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+.check.grid-auto { padding-left: 12px; }
+.track-list {
+  display: grid;
+  gap: 3px;
+}
+.track-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.track-name {
+  flex: 1;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.track-mode {
+  height: 22px;
+  min-width: 52px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  background: var(--input);
+  color: var(--fg);
+  border-radius: 5px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.track-mode:hover { border-color: var(--accent); }
+.track-size {
+  width: 44px;
+  height: 22px;
+  padding: 0 4px;
+  background: var(--input);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--fg);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  outline: none;
+}
+.track-hint { width: 44px; }
+.track-del {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.track-del:hover { color: var(--fg); background: var(--input); }
+
 .nine:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;

@@ -45,7 +45,7 @@ we match.
 | Components | masters, instances, variants, properties, slots | masters and instances | (the app has both plus overrides) | **partial** |
 | Variables | collections, modes, remote | a `tokens` tab and a variable list | read | **partial** |
 | Text | styles, lists, OpenType, variable fonts, CJK, RTL, links, emoji | wrapping, alignment, decoration, auto-height, letter spacing | read | **partial** |
-| Auto layout | horizontal, vertical, grid, wrap, per-child settings | a `layout` model, padding (V/H or per-side, CSS shorthand), gap (number or Auto with Between/Around/Evenly), the alignment box with its keys, hug/fill/fixed, ignore, suggest, edge double-clicks and padding handles on the canvas | read | **partial — the grid flow is the next article; see the two round sections** |
+| Auto layout | horizontal, vertical, grid, wrap, per-child settings | a `layout` model, padding (V/H or per-side, CSS shorthand), gap (number or Auto with Between/Around/Evenly), the alignment box with its keys, hug/fill/fixed, ignore, suggest, edge double-clicks and padding handles on the canvas, the grid flow with tracks, spans, auto-positioning and per-cell alignment | read | **partial — adding auto layout and multi-dimensional nesting are the articles left; see the round sections** |
 | Prototypes | triggers, actions, animations, easing, overlays, flows | flows, overlays, transitions, present mode | read | **partial** |
 | Comments | threads, replies, resolve, mentions | threads, replies, resolve | read | **partial** |
 | Multiplayer | cursors, cursor chat, spotlight, branching, history | none of it; a local file | - | **n/a** - no server |
@@ -1088,7 +1088,79 @@ a frame in the layers panel does not show them as Figma's pink handles do;
 "Press the `tab` key to move between input fields" is not wired; and the ⌘+click
 that Figma uses to edit all four sides in place is used here for CSS shorthand
 instead — the same result by a different route, with the four fields one click
-away. The grid flow and multi-dimensional nesting are separate articles.
+away. The grid flow is the round above; multi-dimensional nesting is still a
+separate article.
+
+## The grid flow
+
+The third auto layout article, "Use the grid in auto layout flow"
+(31289469907863, both chunks), is where the grid lives: cells in rows and
+columns called tracks, objects that can span them, and objects that flow
+left-to-right, top-to-bottom. It is in the engine (`engine/layout.ts`,
+`engine/types.ts`), the panel (`GridPanel`) and the parity suite, and then it was
+driven through the real sidebar with six 40x30 rectangles in a 300x200 frame
+(`/tmp/probe/grid.mjs`).
+
+### What a new grid looks like
+
+| Article | Ours, measured |
+| --- | --- |
+| "The grid flow brings two-dimensional layout control ... you can choose the desired number of rows and columns by clicking on the grid picker in the right sidebar. Enter a value in the Number of columns and Number of rows fields, or use the interactive selector." | The **Grid** button in the flow section is the third flow. The picker is 36 squares; clicking the 3-column-by-2-row square set Cols 3 / Rows 2 in the fields beside it, and the fields take arithmetic (`+ - * /`) like the rest of the app. |
+| "By default, Number of rows is set to `auto` ... deleting all cell objects from a row will also remove that row." | Rows read `Auto` with the note "as many rows as the objects need". Six objects in a 3x2 grid listed Column 1-3 and Row 1-2; deleting the second row's three objects left only Row 1. A count typed by hand is a floor (4 rows listed with three objects); typing `Auto` — or `A` — gives it back to the objects. |
+| Tracks default to **Auto** ("the size is set to auto, which means free space is divided evenly between all rows and columns") | New tracks come up `Auto` and split the space: three Auto columns in a 300-wide frame with 8 of padding and 20 of gap gave cells of 81.33 (244 ÷ 3), and an object set to fill measured 81.33; a hugging Column 1 left the other two sharing 204, so 102 each. Rows work the same way: two Auto rows split 174. |
+| "Use the dropdowns to select a resizing option", `Fixed` / `Auto` / `Hug` | Each track row carries its name, a resizing chip that cycles Auto → Hug → Fixed, and a field for the value it needs. Switching Column 3 to Fixed showed 40 — the size it was already hugging — and typing 60 into it made the filling object in that cell 60 wide. |
+| "**Tip**: Typing `Auto` or `A` for a track will automatically set it to fill container at one fractional unit (1fr)." | The track fields take the words as well as numbers: `hug` in Column 1's fraction field turned it into Hug (and the objects in it pulled in to 40), `auto` in the Fixed field turned it back to Auto. |
+| "Hold ⌘ Command ... to select more than one track, or hold ⇧ Shift to select a range" | Not built; the sidebar's own track list is how a track is picked here today. In `## Open`. |
+| "You can also manually resize tracks by clicking and dragging their edges" / the blue pills on the canvas | Not built; both are in `## Open`. |
+| "This will delete any contents contained inside the column or row." (the sidebar's ✕) | Ours deletes the track and leaves its objects to the flow — the article's *other* sentence, for lowering the counts from the picker, is "Cell objects inside the deleted track will be preserved and moved to the nearest cells". Which of the two the ✕ should do is in `## Open`. |
+
+### Spacing
+
+| Article | Ours, measured |
+| --- | --- |
+| "**Gap** sets the distance between columns and rows ... using the Gap between rows and Gap between columns fields" | The gap row in the panel is split into those two fields. With 20 between columns and 12 between rows the six objects sat at x 8 / 109.33 / 210.67 and y 8 / 106 — both gaps counted once between neighbours and never outside them. |
+| Padding, exactly as the linear flow | The same `PadField` pair, individual fields, CSS shorthand and the padding floor: a grid frame cannot be sized below its own padding. |
+
+### Working in the cells
+
+| Article | Ours, measured |
+| --- | --- |
+| "Objects will be placed in succession from left to right, top to bottom. If there are not enough empty cells available, Figma will reposition obstructing objects into available cells or create new rows or columns to accommodate." | Placement is first-fit left-to-right, top-to-bottom; a grid adds rows rather than dropping objects, and a span wider than the grid is clamped to it. |
+| "Toggle automatic positioning ... If you want to preserve empty cells in a grid, you can disable the default behavior to position cell objects manually" | The switch is in the panel. Off, an object keeps the cell it is in and empty cells stay empty; on again also sets Number of rows to `Auto`, as the article says. |
+| "Reorder child objects: drag one or more child objects and drop it into an empty cell or in between two cells. Or use the arrow keys" | Arrow keys reorder in the flow already. Dragging in a manual grid moves the object freely with the pointer and the **drop** is what settles it into a cell — measured 68 → 99 → 128 → 159 → 190 as the pointer travelled, ending in the third column. A grid with automatic positioning on still re-derives the arrangement from the order, so dragging there does not insert at the cursor; that is in `## Open`. |
+| "To span a child object, be sure the child object is set to Fill container ... You can also use the Column span and Row span fields." | Both fields are in the panel for a grid child. A two-column span on a filling object measured 162 where the tracks were 40 + 20 + 102, and the objects after it moved onto the next row. Dragging a span out on the canvas until it snaps is in `## Open`. |
+| "Within a grid auto layout frame, a child object can be aligned to its cell. Select a child object and use the alignment buttons in the Position section ... If you have multiple child objects selected, each one will align to its respective cell." | The Position section's buttons set the child's own alignment inside its cell instead of the parent's packing: with a 102-wide cell and a 40-wide object, Align right took it 190 → 252, Align horizontal centers 221, Align left 190; in a Fixed 60-tall row Align top / vertical centers / bottom read 8 / 23 / 38. A multi-selection aligns each object to its *own* cell rather than to the selection's bounds: with Rectangle 2 (in a 40-wide Hug column) and Rectangle 3 (in a 102-wide Auto one) both selected on the canvas, Align right gave 68 and 252 — the second object's own cell edge, not the first object's. |
+
+### Two defects the probe found on the way
+
+**The width axis was the cross axis.** `direction === "horizontal"` is false for
+`"grid"`, so everything that asked "is the width the main axis?" got the wrong
+answer for a grid: typing W 300 left the frame at `W · hug`, typing H 200 flipped
+the width to Fixed, and a fill column collapsed the frame 440 → 104. There is now
+one shared answer, `widthIsMain(l) => l.direction !== "vertical"`, used by the
+engine's `effectiveSizing`, the resize path in `engine/memory.ts` and the
+panel's hug note — a grid measures its width first, like a horizontal flow.
+
+**Setting a track silently changed the one before it.** A track that had never
+been touched has no entry in the track list, and the filler that pads the list up
+to the track being set was still writing `{ mode: "hug" }` — so clicking Column
+2's resizing chip turned *Column 1* to Hug as a side effect. The filler is Auto
+now, which is what an untouched track is. (Measured before the fix: one click on
+Column 2 left both Column 1 and Column 2 reading Hug.)
+
+Also fixed while here, from the earlier round's shelf: a grid in manual
+positioning used to snap an object back to its cell on every frame of a drag, so
+a drag could never cross a track boundary — the object needs to follow the
+pointer until it is dropped.
+
+### Where this leaves the article
+
+In `## Open` rather than half-built: canvas track pills and dragging a track's
+edge to resize it, multi-select and drag-reorder of tracks, what the sidebar's
+per-track ✕ should delete, dragging an object *into* a grid at the cursor with
+automatic positioning on, and dragging a child's edge to snap a span. Arithmetic
+in the count and track fields already works, since they are the same `Field` as
+everywhere else.
 
 ## Auto layout, held up against "Guide to auto layout"
 
@@ -1131,8 +1203,8 @@ rearranging it.
 Not built, and listed in `## Open` rather than half-built: the alignment-box
 keyboard (`↓ → ← ↑`, `W A S D`, `B`, `X` — the box is click-only today), the
 double-click-a-bounding-box-edge gestures for Hug and Fill, `⌘`+click on a
-padding field to edit all four sides at once, the grid flow of the separate grid
-article, and nested/multi-dimensional flows as their own article.
+padding field to edit all four sides at once (the grid flow's own round is
+above), and nested/multi-dimensional flows as their own article.
 
 
 
@@ -1494,8 +1566,19 @@ fields (exposure, contrast, saturation).
   systems" article, still uncovered), and a mirrored node arrives un-mirrored,
   because the node model has no flip.
 - Auto layout: the padding handles only appear on a selected frame rather than
-  on hover, `tab` does not move between the padding fields, and the grid flow
-  and multi-dimensional nesting are separate articles not yet entered.
+  on hover, `tab` does not move between the padding fields, and multi-dimensional
+  nesting is a separate article not yet entered.
+- The grid flow, from its article: the canvas track pills and the drag on a
+  track's edge that sets it Fixed (`⌘`/`Ctrl` multi-select and `⇧` range select
+  of tracks go with them), moving a track by its grabber, and what the ✕ beside
+  a track should delete — the article says both "this will delete any contents
+  contained inside the column or row" and, for lowering the counts, "cell objects
+  inside the deleted track will be preserved and moved to the nearest cells".
+  Dragging an object *into* a grid, or reordering one by drag when automatic
+  positioning is on, does not insert it at the cursor yet: the arrow keys reorder
+  the flow, and a drag only sticks where it is dropped when automatic positioning
+  is off. Dragging a child's edge on the canvas to snap a span, and the `⌘D`
+  duplicate inside a cell, are the other two from the "Work with objects" list.
 - The behaviour suite (`e2e/behaviour.mjs`) is stale: it looks for a "Chip"
   layer the demo document no longer has, so it fails on its first check.
 - Text styles on type fields, plus the wrapping settings the panel does not
