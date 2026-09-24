@@ -1,5 +1,5 @@
 import type { GradientStop, XNode } from "./types";
-import { cssRgba, parseHex, toHexA } from "../ui/color";
+import { canvasBlend, cssRgba, parseHex, toHexA } from "../ui/color";
 import { dashArray, miterLimitFromAngle, sideCones, sideWidths, sidesSupported } from "./strokeModel";
 
 /** Linear sRGB → OKLab mix so ramps are smoother than canvas sRGB (and Figma’s default). */
@@ -169,9 +169,8 @@ export function paintFill(
       fills: undefined,
     };
     ctx.save();
-    if (p.blend && p.blend !== "normal") {
-      ctx.globalCompositeOperation = p.blend as GlobalCompositeOperation;
-    }
+    const op = canvasBlend(p.blend);
+    if (op !== "source-over") ctx.globalCompositeOperation = op;
     if (p.opacity != null && p.opacity < 1) ctx.globalAlpha *= p.opacity;
     paintOnePaint(ctx, layer, sx, sy, sw, sh);
     ctx.restore();

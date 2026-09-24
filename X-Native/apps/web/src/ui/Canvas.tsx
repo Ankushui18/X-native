@@ -37,7 +37,7 @@ import { Minimap } from "./Minimap";
 import { Comments } from "./Comments";
 import { useTheme } from "./theme";
 import { hugSize, listGutter, listMarker, measureCached, textMetrics, wrapLines } from "./textLayout";
-import { cssRgba, isNone, parseHex, takeEyedrop, toHex } from "./color";
+import { canvasBlend, cssRgba, isNone, parseHex, takeEyedrop, toHex } from "./color";
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
 import { importSvg, type ImportedNode } from "../engine/svgImport";
 import { importSketch } from "../engine/sketchImport";
@@ -3980,30 +3980,6 @@ function paintTexture(
     }
   }
   ctx.restore();
-}
-
-function canvasBlend(m?: string): GlobalCompositeOperation {
-  const k = (m || "normal").toLowerCase().replace(/\s+/g, "-");
-  const map: Record<string, GlobalCompositeOperation> = {
-    normal: "source-over",
-    "pass-through": "source-over",
-    multiply: "multiply",
-    screen: "screen",
-    overlay: "overlay",
-    darken: "darken",
-    lighten: "lighten",
-    "color-dodge": "color-dodge",
-    "color-burn": "color-burn",
-    difference: "difference",
-    exclusion: "exclusion",
-    hue: "hue",
-    saturation: "saturation",
-    color: "color",
-    luminosity: "luminosity",
-    "hard-light": "hard-light",
-    "soft-light": "soft-light",
-  };
-  return map[k] || "source-over";
 }
 
 function unrot(px: number, py: number, cx: number, cy: number, deg: number) {

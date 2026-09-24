@@ -50,13 +50,20 @@ export function nextColorModel(m: ColorModel): ColorModel {
   return COLOR_MODELS[(i + 1) % COLOR_MODELS.length].id;
 }
 
+/**
+ * Figma's blend modes, in the order its menu lists them. "Pass through" is
+ * missing on purpose: the article says it cannot be applied to a fill or an
+ * effect, so callers that offer it (frames and groups only) prepend it.
+ */
 export const BLENDS = [
   "Normal",
   "Darken",
   "Multiply",
+  "Plus darker",
   "Color burn",
   "Lighten",
   "Screen",
+  "Plus lighter",
   "Color dodge",
   "Overlay",
   "Soft light",
@@ -68,6 +75,41 @@ export const BLENDS = [
   "Color",
   "Luminosity",
 ];
+
+/**
+ * The composite operation a stored blend name maps to. Names come from the
+ * menus, which are Figma's labels ("Soft light"), while the layers/fills store
+ * lowercase values, so both spellings have to land on the same op. Plus
+ * darker/lighter are canvas's own `darker`/`lighter`.
+ */
+export function canvasBlend(m?: string): GlobalCompositeOperation {
+  const k = (m || "normal").toLowerCase().replace(/\s+/g, "-");
+  const map: Record<string, GlobalCompositeOperation> = {
+    normal: "source-over",
+    "pass-through": "source-over",
+    multiply: "multiply",
+    screen: "screen",
+    overlay: "overlay",
+    darken: "darken",
+    lighter: "lighten",
+    "plus-lighter": "lighter",
+    // lib.dom has no "darker" in its union even though every engine implements
+    // it; the CSS name for it is the "plus darker" blend mode.
+    "plus-darker": "darker" as GlobalCompositeOperation,
+    lighten: "lighten",
+    "color-dodge": "color-dodge",
+    "color-burn": "color-burn",
+    difference: "difference",
+    exclusion: "exclusion",
+    hue: "hue",
+    saturation: "saturation",
+    color: "color",
+    luminosity: "luminosity",
+    "hard-light": "hard-light",
+    "soft-light": "soft-light",
+  };
+  return map[k] || "source-over";
+}
 
 export function parseHex(raw: string): { r: number; g: number; b: number; a: number } {
   let s = raw.trim().replace("#", "");
