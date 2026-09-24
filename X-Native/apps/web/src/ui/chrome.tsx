@@ -5,6 +5,7 @@ import { Icon, TOOL_ICON, kindIcon } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { plural, toast } from "./toast";
 import { popoverArmed } from "./popoverGuard";
+import { finishPenDraft } from "./penDraft";
 import { useTheme, type ThemePref } from "./theme";
 import { ContextMenu, isGroupNode, layerMenu, pageMenu, runMenu } from "./ContextMenu";
 import { align } from "./inspector";
@@ -1202,6 +1203,14 @@ export function bindHotkeys(
       // A popover that is open owns Escape: its own handler closes it, and the
       // selection behind it must survive the keypress.
       if (popoverArmed()) return;
+      // An in-progress pen path owns it next: Escape finishes the shape and
+      // leaves it open, in Figma's words, instead of deselecting out from under
+      // the drawing. The tool stays the pen, so the next path starts at once.
+      if (finishPenDraft()) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return;
+      }
       if (engine.snapshot().presentFrame) {
         extra.onPresentExit?.();
         return;

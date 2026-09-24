@@ -1758,9 +1758,36 @@ export class MemoryEngine implements Engine {
         );
         n.vectorNetwork = updated;
         n.kind = "vector";
+        let net = updated;
         const res = vectorNetworkToPath(updated);
         n.path = res.path;
         if (res.closed) n.closed = true;
+        // Vertices are local to the node, and every other command keeps the
+        // origin at the top-left of the geometry. Drawing a branch beyond the
+        // old box must therefore move the origin and grow the frame, or the
+        // path would reach outside a frame that still has the old size.
+        const vxs = net.vertices.map((v) => v.x);
+        const vys = net.vertices.map((v) => v.y);
+        const minX = Math.min(0, ...vxs);
+        const minY = Math.min(0, ...vys);
+        if (minX < 0 || minY < 0) {
+          const dx = minX < 0 ? -minX : 0;
+          const dy = minY < 0 ? -minY : 0;
+          net = {
+            ...net,
+            vertices: net.vertices.map((v) => ({ ...v, x: v.x + dx, y: v.y + dy })),
+          };
+          n.x -= dx;
+          n.y -= dy;
+          n.path = n.path.map((pt) => ({ ...pt, x: pt.x + dx, y: pt.y + dy }));
+          n.vectorNetwork = net;
+        }
+        const wxs = n.path.map((pt) => pt.x);
+        const wys = n.path.map((pt) => pt.y);
+        if (wxs.length) {
+          n.w = Math.max(1, Math.max(...wxs) - Math.min(0, ...wxs));
+          n.h = Math.max(1, Math.max(...wys) - Math.min(0, ...wys));
+        }
         break;
       }
       case "bendSegment": {

@@ -116,6 +116,63 @@ Three behaviours were missing and are now in, plus one deliberate decline:
   both panels are inline JSX in ~40 places; hiding a subset would read as broken rather
   than as a preference. Revisit only with one CSS-driven class on `.app`.
 
+## Pen tool vs Figma's vector networks
+
+Read against [Vector networks](https://help.figma.com/hc/en-us/articles/360040450213-Vector-networks).
+A headless pass (`audit_pen.mjs`) measured what our pen actually did before the change:
+
+| Figma | X-Native before | evidence |
+| --- | --- | --- |
+| Escape finishes the path and **leaves it open** | Escape threw the drawing away | `vectors before 0 → after Escape 0`, verdict "work discarded" |
+| Clicking away / Enter finishes, still open | Enter **sealed** it, so a drawn line came back as a filled polygon | panel showed a grey Fill on a 3-point path |
+| Networks "can have multiple paths that branch out in various directions without creating and combining separate paths" | every stroke became a **new top-level layer**; a vertex of the selected shape could not be continued from | `vectors 2 → 3`, "made a second, separate shape" |
+| Hovering a point to close shows "a small circle next to the cursor" | no affordance at all; closing silently worked only on the first point | `cursor near vs away: "" / ""` |
+| Click and drag makes a curve | drag handles worked, but only on a brand-new shape | unchanged |
+
+The engine already had the model for this — `VectorNetwork` (vertices + segments graph),
+`pathToVectorNetwork`/`vectorNetworkToPath`, an `addVectorBranch` command and a Vector Network
+panel reading "Vertices / Segments / Branching (≥3) / Closed". The pen simply never used
+any of it: it accumulated `PathPoint[]` and committed `addPath`. So this was a wiring job,
+not a new subsystem.
+
+Now in:
+
+- **Escape and Enter finish an open path** (`addPath { closed: false }`); closing stays the
+  deliberate act of clicking a point, so a drawn line no longer turns into a filled shape.
+  The tool stays the pen, so the next path starts at once.
+- **Branching**: with a vector selected, pressing `P` and clicking one of its vertices anchors
+  the pen there — the ring plus a rubber band show it — and each further click extends that
+  **same layer** through `addVectorBranch`. Verified: `vectors 3 → 3, sameLayer: true`, and the
+  panel went from 3 vertices/2 segments to **4 vertices/4 segments with Branching (≥3): 1**.
+- **A branch outside the old bounds grows the layer.** `addVectorBranch` used to write the
+  vertices and leave `x/y/w/h` alone, so hover, marquee and the export crop still answered for
+  the previous box. The origin now shifts and the frame grows with the geometry
+  (`Y 600 → 460`, `H → 300` in the run above).
+- **The close/join ring** is drawn on whichever point the next click would join, on every draft
+  point rather than only the first, which is what makes closing discoverable.
+
+One real trap surfaced here, worth remembering: both `Canvas`'s key handler and `bindHotkeys`
+listen for `keydown` on `window` in the **capture** phase, and `Canvas` re-registers its listener
+whenever the draft changes — which moves it to the *end* of the listener list. After the first
+click, the app's Escape (deselect) therefore won and the pen's own Escape never ran. The pen
+draft is now published through `ui/penDraft.ts` and finished by whoever handles the key, exactly
+once. Same lesson as `popoverGuard.ts`: ownership of a key has to be explicit, because
+capture-phase order is decided by registration order.
+
+Still open, in priority order:
+
+1. Drag-to-curve works only for a point on a brand-new shape; a branch segment is straight.
+   `addVectorBranch` already takes `tangentStart`/`tangentEnd`, so this is UI work in the
+   `penDrag` path plus a tangent patch on the segment after mouseup.
+2. The doc's six **end caps** for open paths (None / line arrow / triangle / reversed triangle /
+   circle / diamond, with the two-endpoint case in the sidebar and the multi-point case in the
+   advanced stroke menu). The engine stores `strokeCap` per vertex; the panel does not expose it.
+3. Creating *any* layer while a frame is selected puts it at page level, not inside the frame
+   — `addPath` and the rect/ellipse path share that root cause, so it is fixed once, globally,
+   or it will read as a pen-only quirk.
+4. Clicking a **middle** vertex of an in-progress draft should branch there (Figma); we still
+   only join the first point, because a draft lives in `PathPoint[]` until it is committed.
+
 ## Open
 
 - Sketch's top-bar Insert menu and Figma's Assets panel tab, "Additional

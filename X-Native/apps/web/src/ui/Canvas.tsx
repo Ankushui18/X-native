@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Engine, Interaction, NodeKind, PathPoint, ProtoAnim, Snapshot, Tool, VectorNetwork, XNode } from "../engine/types";
 import { deepestFrame, find, findParent, hitTest, worldToLocal, worldPos } from "../engine/memory";
-import { erasePath, shapePoly, simplifyPath, smoothPath, vertexDegree, insertPointOnPath, projectPointOnSegment, computeFigmaNoodle } from "../engine/geometry";
+import {
+  erasePath,
+  shapePoly,
+  simplifyPath,
+  smoothPath,
+  vertexDegree,
+  insertPointOnPath,
+  projectPointOnSegment,
+  computeFigmaNoodle,
+  pathToVectorNetwork,
+} from "../engine/geometry";
 import { interpolateMatchingLayers, solveEasing, applyInterpolatedFrame } from "../engine/smartAnimate";
 import {
   snapCandidates,
@@ -12,6 +22,7 @@ import {
   type Guide,
 } from "../engine/snapping";
 import { fillStyle, paintDropShadows, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows } from "../engine/paint";
+import { registerPenFinisher } from "./penDraft";
 import { clampZoom, wheelZoomFactor } from "../engine/view";
 import { Rulers } from "./Rulers";
 import { Guides } from "./Guides";
@@ -182,6 +193,15 @@ export function Canvas({
   } | null>(null);
   const pencil = useRef<PathPoint[] | null>(null);
   const penDrag = useRef<{ i: number; x: number; y: number } | null>(null);
+  /**
+   * Set while the pen is drawing a branch into an existing vector network: the
+   * node to keep adding to and the vertex index the next click connects from.
+   * Figma's networks "don't require a specific direction" — clicking a point of
+   * the selected shape with the pen resumes drawing from that point, in any
+   * direction, in the same layer.
+   */
+  const penBranch = useRef<{ id: string; vertex: number } | null>(null);
+  const [closeHint, setCloseHint] = useState<number | null>(null);
   const vecPt = useRef(-1);
   useEffect(() => {
     if (snap.vecPoint !== undefined && snap.vecPoint !== null) {
@@ -338,15 +358,20 @@ export function Canvas({
         if (e.type === "keydown" && (e.target as HTMLElement).tagName !== "INPUT" && (e.target as HTMLElement).tagName !== "TEXTAREA")
           e.preventDefault();
       }
-      if (e.type === "keydown" && e.key === "Escape" && draft.length) {
-        e.stopImmediatePropagation();
-        setDraft([]);
+      if (e.type === "keydown" && e.key === "Escape" && !draft.length && penBranch.current) {
+        // A branch is written into its vector as it is drawn, so there is nothing
+        // to commit here; Escape only lets go of the anchor. (A pending path is
+        // finished through ui/penDraft.ts, which owns that key.)
+        penBranch.current = null;
+        setCloseHint(null);
         return;
       }
-      if (e.type === "keydown" && e.key === "Enter" && draft.length >= 2) {
+      if (e.type === "keydown" && e.key === "Enter" && (draft.length >= 2 || penBranch.current)) {
         e.stopImmediatePropagation();
-        engine.dispatch({ type: "addPath", points: draft, closed: true });
+        if (draft.length >= 2) engine.dispatch({ type: "addPath", points: draft, closed: false });
         setDraft([]);
+        setCloseHint(null);
+        penBranch.current = null;
         return;
       }
       if (e.type === "keydown" && e.key === "Backspace" && draft.length && !edit) {
@@ -471,6 +496,22 @@ export function Canvas({
       window.removeEventListener("keyup", onKey, true);
     };
   }, [snap, edit, draft, engine, vecEdit]);
+
+  // Figma: Escape finishes the path and leaves it open. The finisher is published
+  // to ui/penDraft.ts because that is the layer which actually decides Escape.
+  useEffect(() => {
+    if (!draft.length) {
+      registerPenFinisher(null);
+      return undefined;
+    }
+    registerPenFinisher(() => {
+      if (draft.length >= 2) engine.dispatch({ type: "addPath", points: draft, closed: false });
+      setDraft([]);
+      setCloseHint(null);
+      penBranch.current = null;
+    });
+    return () => registerPenFinisher(null);
+  }, [draft, engine]);
 
   useEffect(() => {
     if (vecEdit && !snap.selection.includes(vecEdit)) setVecEdit(null);
@@ -989,6 +1030,34 @@ export function Canvas({
       for (const ch of root.children) label(ch, 0, 0);
     }
 
+    if (penBranch.current && snap.tool === "pen") {
+      // While a branch is armed the pointer has to show what the next click will
+      // do: a live segment out of the anchor, and a ring marking the vertex the
+      // branch is being drawn from.
+      const anchorNode = find(snap.pages[snap.page].root, penBranch.current.id);
+      const vn = anchorNode?.vectorNetwork;
+      const v = anchorNode && vn ? vn.vertices[penBranch.current.vertex] : null;
+      if (anchorNode && v) {
+        const ax = snap.panX + (anchorNode.x + v.x) * z;
+        const ay = snap.panY + (anchorNode.y + v.y) * z;
+        ctx.strokeStyle = BRAND_ACCENT;
+        ctx.lineWidth = 1.5;
+        if (ghost) {
+          ctx.beginPath();
+          ctx.moveTo(ax, ay);
+          ctx.lineTo(snap.panX + ghost.x * z, snap.panY + ghost.y * z);
+          ctx.stroke();
+        }
+        ctx.beginPath();
+        ctx.arc(ax, ay, 7, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.arc(ax, ay, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
     if (draft.length) {
       ctx.strokeStyle = BRAND_ACCENT;
       ctx.lineWidth = 1.5;
@@ -996,6 +1065,7 @@ export function Canvas({
       tracePath(ctx, preview, snap.panX, snap.panY, z, false);
       ctx.stroke();
       for (const p of draft) {
+        const i = draft.indexOf(p);
         const px = snap.panX + p.x * z;
         const py = snap.panY + p.y * z;
         if ((p.ox && p.ox !== 0) || (p.oy && p.oy !== 0) || (p.ix && p.ix !== 0) || (p.iy && p.iy !== 0)) {
@@ -1022,6 +1092,14 @@ export function Canvas({
         ctx.arc(px, py, 3.5, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
+        if (closeHint === i) {
+          // The ring says "this click joins here / closes the path", the same
+          // cue Figma puts next to the cursor.
+          ctx.beginPath();
+          ctx.arc(px, py, 7, 0, Math.PI * 2);
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
       }
     }
 
@@ -1780,7 +1858,7 @@ export function Canvas({
       ctx.fillRect(band.x, band.y, band.w, band.h);
       ctx.strokeRect(band.x + 0.5, band.y + 0.5, band.w, band.h);
     }
-  }, [snap, band, edit, engine, theme, draft, vecEdit, hoverId, ghost, guides, gapBadges, altMeasure, protoDrag, selectedConn, animFrame]);
+  }, [snap, band, edit, engine, theme, draft, vecEdit, hoverId, ghost, guides, gapBadges, altMeasure, protoDrag, selectedConn, animFrame, closeHint]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();
@@ -1913,6 +1991,47 @@ export function Canvas({
     }
     if (snap.tool === "pen") {
       let wpt = toWorld(e.clientX, e.clientY);
+      const rootForPen = snap.pages[snap.page].root;
+      const near = (ax: number, ay: number, bx: number, by: number) => Math.hypot(ax - bx, ay - by) < 8 / snap.zoom;
+      // A branch is anchored on a vertex of the selected vector, so the pen can
+      // keep drawing in that shape instead of starting a second one.
+      if (!penBranch.current && !draft.length && snap.selection.length === 1) {
+        const sel = find(rootForPen, snap.selection[0]);
+        if (sel && sel.kind === "vector" && !sel.locked) {
+          const vn = sel.vectorNetwork ?? pathToVectorNetwork(sel.path, sel.closed);
+          for (let i = 0; i < vn.vertices.length; i++) {
+            const v = vn.vertices[i];
+            if (near(wpt.x, wpt.y, sel.x + v.x, sel.y + v.y)) {
+              penBranch.current = { id: sel.id, vertex: i };
+              e.preventDefault();
+              return;
+            }
+          }
+        }
+      } else if (penBranch.current) {
+        const b = penBranch.current;
+        const node = find(rootForPen, b.id);
+        if (node) {
+          engine.dispatch({
+            type: "addVectorBranch",
+            id: b.id,
+            fromVertexIndex: b.vertex,
+            to: { x: wpt.x - node.x, y: wpt.y - node.y },
+          });
+          // Re-anchor on the vertex that click produced. The helper reuses an
+          // existing point when they coincide, so find it by position rather
+          // than assuming it was appended.
+          const after = find(engine.snapshot().pages[engine.snapshot().page].root, b.id);
+          const vn = after?.vectorNetwork;
+          if (after && vn) {
+            const lx = wpt.x - after.x;
+            const ly = wpt.y - after.y;
+            const idx = vn.vertices.findIndex((v) => Math.abs(v.x - lx) < 0.5 && Math.abs(v.y - ly) < 0.5);
+            if (idx >= 0) penBranch.current = { id: b.id, vertex: idx };
+          }
+        }
+        return;
+      }
       if (e.shiftKey && draft.length) {
         const last = draft[draft.length - 1];
         const ang = Math.round(Math.atan2(wpt.y - last.y, wpt.x - last.x) / (Math.PI / 4)) * (Math.PI / 4);
@@ -1924,6 +2043,7 @@ export function Canvas({
         if (Math.hypot(wpt.x - a.x, wpt.y - a.y) < 8 / snap.zoom) {
           engine.dispatch({ type: "addPath", points: draft, closed: true });
           setDraft([]);
+          setCloseHint(null);
           penDrag.current = null;
           return;
         }
@@ -2515,9 +2635,9 @@ export function Canvas({
       }
       if (next !== hoverCursor) setHoverCursor(next);
     } else if (hoverId && snap.tool !== "select") setHoverId("");
-    if (snap.tool === "pen" && draft.length && !penDrag.current) {
+    if (snap.tool === "pen" && (draft.length || penBranch.current) && !penDrag.current) {
       let wpt = toWorld(e.clientX, e.clientY);
-      if (e.shiftKey) {
+      if (e.shiftKey && draft.length) {
         const last = draft[draft.length - 1];
         const ang = Math.round(Math.atan2(wpt.y - last.y, wpt.x - last.x) / (Math.PI / 4)) * (Math.PI / 4);
         const d = Math.hypot(wpt.x - last.x, wpt.y - last.y);
@@ -2526,6 +2646,17 @@ export function Canvas({
       const gx = Math.round(wpt.x);
       const gy = Math.round(wpt.y);
       if (!ghost || Math.round(ghost.x) !== gx || Math.round(ghost.y) !== gy) setGhost({ x: gx, y: gy });
+      // Which point would this click join? Figma marks it with a circle, and a
+      // guess-the-target affordance is how a pen either feels precise or feels
+      // like a trap.
+      let hint: number | null = null;
+      for (let i = 0; i < draft.length; i++) {
+        if (Math.hypot(wpt.x - draft[i].x, wpt.y - draft[i].y) < 8 / snap.zoom) {
+          hint = i;
+          break;
+        }
+      }
+      if (hint !== closeHint) setCloseHint(hint);
     } else if (ghost) setGhost(null);
     if (penDrag.current) {
       const wpt = toWorld(e.clientX, e.clientY);
