@@ -398,6 +398,10 @@ export interface XNode {
   w: number;
   h: number;
   rotation: number;
+  /** Where the layer turns about, as a fraction of its own box: [0.5, 0.5] is
+   *  the centre, which is Figma's default. `⌥R` reveals a target that drags
+   *  this point, and rotating then slides the box so the point stays put. */
+  rotOrigin?: [number, number];
   fill: string;
   fillOpacity: number;
   fillVisible: boolean;

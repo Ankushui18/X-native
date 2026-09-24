@@ -30,7 +30,7 @@ import {
 } from "../geometry.ts";
 import { MemoryEngine, defaultEffect, find, insideInstance } from "../memory.ts";
 import { evalField, hasExpression } from "../../ui/fieldExpr.ts";
-import { scaleBoxAround, scaleMembers, sizeKeepingRatio, unionBox } from "../../ui/scaleModel.ts";
+import { rotateAboutOrigin, scaleBoxAround, scaleMembers, sizeKeepingRatio, unionBox } from "../../ui/scaleModel.ts";
 import { layersAt, matchingIds, pathIndex, sameIds } from "../../ui/selectSame.ts";
 import {
   SIDES,
@@ -1697,6 +1697,47 @@ console.log("the engine carries the new properties:");
   t("copy/paste properties carries the sides", p.strokeSides === "custom" && p.strokeSideW.join() === "8,4,0,12");
   t("and the dash pattern, cap and miter angle", p.strokeDashPattern.join() === "24,12" && p.strokeDashCap === "round" && p.strokeMiterAngle === 90);
   t("and the corner smoothing", p.cornerSmoothing === 0.6 && p.cornerIndependent === true);
+}
+
+console.log("the rotation origin is the point that stays put:");
+{
+  const box = { x: 10, y: 20, w: 100, h: 50, rotation: 0 };
+  const centre = rotateAboutOrigin(box, [0.5, 0.5], 90);
+  t(
+    "a layer that never moved its origin turns in place",
+    Math.abs(centre.x - 10) < 1e-9 && Math.abs(centre.y - 20) < 1e-9 && centre.rotation === 90,
+  );
+
+  /** Where a point of the box ends up once it has turned by `deg` about the
+   *  box's own middle - the way the renderer and the SVG export do it. */
+  const after = (r, local, deg) => {
+    const cx = r.x + box.w / 2;
+    const cy = r.y + box.h / 2;
+    const rad = (deg * Math.PI) / 180;
+    const dx = local.x - cx;
+    const dy = local.y - cy;
+    return { x: cx + dx * Math.cos(rad) - dy * Math.sin(rad), y: cy + dx * Math.sin(rad) + dy * Math.cos(rad) };
+  };
+
+  const tl = rotateAboutOrigin(box, [0, 0], 90);
+  const tlAfter = after(tl, { x: tl.x, y: tl.y }, 90);
+  t(
+    "turning about the top left holds that corner still",
+    Math.abs(tlAfter.x - 10) < 1e-9 && Math.abs(tlAfter.y - 20) < 1e-9,
+  );
+
+  const left = rotateAboutOrigin(box, [0, 0.5], 180);
+  t(
+    "a half turn about the left edge mirrors the box across it",
+    Math.abs(left.x - (10 - 100)) < 1e-9 && Math.abs(left.y - 20) < 1e-9,
+  );
+
+  const quarter = rotateAboutOrigin(box, [0.5, 0.5], 90);
+  t("an origin on the edge does not move when the spin is zero", (() => {
+    const still = rotateAboutOrigin(box, [0, 1], 0);
+    return still.x === box.x && still.y === box.y;
+  })());
+  t("and the three-quarter case stays finite", Number.isFinite(quarter.x) && Number.isFinite(quarter.y));
 }
 
 console.log("effect blend modes, and what a drop shadow shows through:");

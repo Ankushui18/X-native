@@ -2124,6 +2124,7 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
       { id: "align-b", name: "Align bottom", keys: ["⌥", "S"] },
       { id: "align-h", name: "Align horizontal centers", keys: ["⌥", "H"] },
       { id: "align-v", name: "Align vertical centers", keys: ["⌥", "V"] },
+      { id: "rot-origin", name: "Change the rotation origin", keys: ["⌥", "R"] },
     ],
   },
   {

@@ -52,6 +52,7 @@ export function node(
     w,
     h,
     rotation: 0,
+    rotOrigin: [0.5, 0.5],
     fill:
       kind === "frame"
         ? "#ffffff"

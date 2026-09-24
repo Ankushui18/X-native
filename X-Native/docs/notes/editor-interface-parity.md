@@ -709,6 +709,23 @@ aspect button greys out with "Aspect ratio comes from the main component". A
 plain resize is still allowed, because that is an override, which is what
 instances are for.
 
+### `⌥R`, the point a layer turns about
+
+Figma turns a selection about the middle of its bounds, and lets you move that
+point: `⌥R` reveals a target, dragging it moves the origin, and the layer then
+turns about whatever you left it on. `Esc` puts it away again, which is how the
+article describes it.
+
+There is no need to change the renderer for this. A rotation about a moved
+origin is the same spin plus a slide, so the pivot lands back where it started -
+one helper does that arithmetic and both entry points call it, the canvas drag
+and the `R` field in the inspector. A layer whose origin was never touched comes
+out byte-identical to before, because spinning about the centre moves the pivot
+not at all; the new assertions check that, plus the top-left corner holding still
+through a quarter turn and the left edge holding through a half turn. The target
+is drawn for a single layer: a multi-selection still turns about its bounds, as
+before, and `⌥R` says so rather than showing a target that would do nothing.
+
 ### How this round was checked
 
 The sandbox lost its Chromium during this session - the browser cache and the
@@ -717,11 +734,14 @@ pixel evidence here comes from painting through the engine's own `paint.ts` on a
 Node canvas rather than from the app in a browser. Nineteen pixel assertions:
 the mapping table, a shadow's own blend mode, the ring a stroke-only layer
 casts, the inner shadow's ink and the fill it no longer erases, and the fill
-stack's multi-word blends. The inspector rows and the two instance guards are
-covered by eleven new engine assertions and the build; they have **not** been
-clicked through, and that is the first thing to re-check when a browser is back.
+stack's multi-word blends. The rest is covered by sixteen new engine
+assertions - the four rules for the show-behind checkbox, the effect model's
+limits, and the rotation origin's arithmetic - and by the build. What has **not**
+been exercised is the pointer: the two instance guards, the effect popover's new
+rows, and dragging the `⌥R` target are read-and-tested, not clicked. That is the
+first thing to re-check when a browser is back.
 
-Tests: 317 passing, up from 306; `tsc -b` and `vite build` clean.
+Tests: 322 passing, up from 306; `tsc -b` and `vite build` clean.
 
 ## Open
 

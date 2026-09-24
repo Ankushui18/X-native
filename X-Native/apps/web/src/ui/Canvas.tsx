@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import type { Engine, Interaction, NodeKind, PathPoint, ProtoAnim, Snapshot, Tool, VectorNetwork, XNode } from "../engine/types";
 import { deepestFrame, find, findParent, hitTest, insideInstance, worldToLocal, worldPos } from "../engine/memory";
 import { layersAt } from "./selectSame";
+import { rotateAboutOrigin } from "./scaleModel";
 import {
   erasePath,
   shapePoly,
@@ -113,7 +114,8 @@ type Drag =
         | "protoConnect"
         | "starRatio"
         | "radius"
-        | "arc";
+        | "arc"
+        | "rotOrigin";
       /** Zoom-tool drag: the create block zooms to the rect instead of
        *  committing a node. */
       zoom?: boolean;
@@ -131,6 +133,10 @@ type Drag =
       wx: number;
       wy: number;
       orig?: { x: number; y: number; w: number; h: number; rotation: number };
+      /** The same node's box in its parent's space: a rotation about a moved
+       *  origin slides the box, and sliding needs the local start to slide
+       *  from, or the drag drifts with the pointer. */
+      origLocal?: { x: number; y: number };
       corner?: number;
       id?: string;
       duped?: boolean;
@@ -219,6 +225,8 @@ export function Canvas({
   const hoverIx = useRef("");
   /** Cursor implied by whatever selection chrome is under the pointer. */
   const [hoverCursor, setHoverCursor] = useState<string | null>(null);
+  /* Figma keeps the rotation origin out of the way until `⌥R` asks for it. */
+  const [rotTarget, setRotTarget] = useState(false);
   /** Viewport size, tracked so the ruler overlay can size its own canvas. */
   const [box, setBox] = useState({ w: 0, h: 0 });
   /** Live smart-guide overlay, produced by the snapping pass during a drag. */
@@ -386,6 +394,23 @@ export function Canvas({
         e.stopImmediatePropagation();
         e.preventDefault();
         setDraft((d) => d.slice(0, -1));
+        return;
+      }
+      if (e.type === "keydown" && e.altKey && (e.key === "r" || e.key === "R") && !edit) {
+        // Figma: Option/Alt R reveals the target; it rotates about itself until
+        // it is moved, and Escape puts it away again. A multi-selection turns
+        // about the middle of its bounds and has nothing to drag.
+        setRotTarget((v) => !v);
+        if (!rotTarget && snap.selection.length > 1) {
+          toast("Rotation origin · pick one layer to move it");
+        }
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return;
+      }
+      if (e.type === "keydown" && e.key === "Escape" && rotTarget) {
+        setRotTarget(false);
+        e.stopImmediatePropagation();
         return;
       }
       if (e.type === "keydown" && e.key === "Tab" && !edit && !draft.length) {
@@ -1674,6 +1699,39 @@ export function Canvas({
       ctx.restore();
     }
 
+    // The rotation origin, and only while `⌥R` has asked for it: a target on
+    // each selected layer, drawn where that layer will turn about.
+    if (rotTarget && snap.selection.length === 1) {
+      for (const id of snap.selection) {
+        const t = worldPos(root, id);
+        if (!t) continue;
+        const o = t.node.rotOrigin ?? [0.5, 0.5];
+        const rad = ((t.node.rotation ?? 0) * Math.PI) / 180;
+        const ccx = t.x + t.node.w / 2;
+        const ccy = t.y + t.node.h / 2;
+        const ddx = t.x + o[0] * t.node.w - ccx;
+        const ddy = t.y + o[1] * t.node.h - ccy;
+        const tx = snap.panX + (ccx + ddx * Math.cos(rad) - ddy * Math.sin(rad)) * z;
+        const ty = snap.panY + (ccy + ddx * Math.sin(rad) + ddy * Math.cos(rad)) * z;
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(tx, ty, 7, 0, Math.PI * 2);
+        ctx.fillStyle = "#ffffff";
+        ctx.fill();
+        ctx.strokeStyle = BRAND_ACCENT;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(tx - 4, ty);
+        ctx.lineTo(tx + 4, ty);
+        ctx.moveTo(tx, ty - 4);
+        ctx.lineTo(tx, ty + 4);
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
     // Combined bounding box for a multi-selection: one set of handles, one
     // rotate stem, one size badge — exactly like Figma.
     if (multiSel) {
@@ -1941,7 +1999,7 @@ export function Canvas({
       ctx.fillRect(band.x, band.y, band.w, band.h);
       ctx.strokeRect(band.x + 0.5, band.y + 0.5, band.w, band.h);
     }
-  }, [snap, band, edit, engine, theme, draft, vecEdit, hoverId, ghost, guides, gapBadges, altMeasure, protoDrag, selectedConn, animFrame, closeHint]);
+  }, [snap, band, edit, engine, theme, draft, vecEdit, hoverId, ghost, guides, gapBadges, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();
@@ -2484,6 +2542,31 @@ export function Canvas({
             }
           }
         }
+        if (rotTarget && snap.selection.length === 1) {
+          const o = wp.node.rotOrigin ?? [0.5, 0.5];
+          const ox = wp.x + o[0] * wp.node.w;
+          const oy = wp.y + o[1] * wp.node.h;
+          const rot = ((wp.node.rotation ?? 0) * Math.PI) / 180;
+          const cw = wp.x + wp.node.w / 2;
+          const ch2 = wp.y + wp.node.h / 2;
+          const dx = ox - cw;
+          const dy = oy - ch2;
+          const txs = snap.panX + (cw + dx * Math.cos(rot) - dy * Math.sin(rot)) * z;
+          const tys = snap.panY + (ch2 + dx * Math.sin(rot) + dy * Math.cos(rot)) * z;
+          if (Math.hypot(px - txs, py - tys) < 9) {
+            engine.dispatch({ type: "begin" });
+            drag.current = {
+              mode: "rotOrigin",
+              sx: e.clientX,
+              sy: e.clientY,
+              wx: wpt.x,
+              wy: wpt.y,
+              id: wp.node.id,
+            };
+            toast("Rotation origin");
+            return;
+          }
+        }
         if (Math.hypot(px - (sx + (wp.node.w * z) / 2), py - (sy - 20)) < 8) {
           drag.current = {
             mode: "rotate",
@@ -2492,6 +2575,7 @@ export function Canvas({
             wx: wpt.x,
             wy: wpt.y,
             orig: { x: wp.x, y: wp.y, w: wp.node.w, h: wp.node.h, rotation: wp.node.rotation },
+            origLocal: { x: wp.node.x, y: wp.node.y },
             id: wp.node.id,
           };
           return;
@@ -3054,7 +3138,38 @@ export function Canvas({
       const b = toWorld(e.clientX, e.clientY);
       let ang = (Math.atan2(b.y - cy, b.x - cx) * 180) / Math.PI + 90;
       if (e.shiftKey) ang = Math.round(ang / 15) * 15;
-      engine.dispatch({ type: "patch", id: d.id, patch: { rotation: Math.round(ang) } });
+      // A moved rotation origin means the box has to slide as it turns, so the
+      // pivot is the point that stays put; the spin itself is unchanged.
+      const next = rotateAboutOrigin(
+        { x: d.orig.x, y: d.orig.y, w: d.orig.w, h: d.orig.h, rotation: d.orig.rotation },
+        wp.node.rotOrigin ?? [0.5, 0.5],
+        Math.round(ang),
+      );
+      engine.dispatch({
+        type: "patch",
+        id: d.id,
+        patch: {
+          x: (d.origLocal?.x ?? wp.node.x) + (next.x - d.orig.x),
+          y: (d.origLocal?.y ?? wp.node.y) + (next.y - d.orig.y),
+          rotation: next.rotation,
+        },
+      });
+    } else if (d.mode === "rotOrigin" && d.id) {
+      const wp = worldPos(snap.pages[snap.page].root, d.id);
+      if (wp) {
+        const pt = toWorld(e.clientX, e.clientY);
+        const p = nodeLocalPoint(pt.x, pt.y, wp.x, wp.y, wp.node);
+        engine.dispatch({
+          type: "patch",
+          id: d.id,
+          patch: {
+            rotOrigin: [
+              wp.node.w ? (p.x - wp.x) / wp.node.w : 0.5,
+              wp.node.h ? (p.y - wp.y) / wp.node.h : 0.5,
+            ],
+          },
+        });
+      }
     } else if (d.mode === "autoPad" && d.id && d.padEdge && d.origPad) {
       const wpt = toWorld(e.clientX, e.clientY);
       const wp = worldPos(snap.pages[snap.page].root, d.id);
@@ -3223,6 +3338,7 @@ export function Canvas({
       d.mode === "grad" ||
       d.mode === "multiResize" ||
       d.mode === "multiRotate" ||
+      d.mode === "rotOrigin" ||
       d.mode === "autoPad" ||
       d.mode === "autoGap" ||
       (d.mode === "marquee" && d.id === "erase")

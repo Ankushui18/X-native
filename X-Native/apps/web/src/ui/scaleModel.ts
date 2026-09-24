@@ -105,3 +105,34 @@ export function factorBetween(from: number, to: number): number {
   if (!Number.isFinite(from) || !Number.isFinite(to) || from <= 0) return 1;
   return to / from;
 }
+
+/**
+ * Turn a layer to `deg` about its own rotation origin.
+ *
+ * The renderer (and the SVG export) always spin a layer about the centre of its
+ * box, so a moved origin cannot change the drawing - it changes where the box
+ * *is*. Rotating about a point means: spin by the angle turned, then slide the
+ * box back so the pivot lands where it started. With the default origin the
+ * spin moves the pivot not at all and the box stays put, which is why this
+ * returns the same numbers the old code wrote for every layer that never
+ * touched the target.
+ */
+export function rotateAboutOrigin(
+  box: Box & { rotation: number },
+  origin: readonly [number, number],
+  deg: number,
+): { x: number; y: number; rotation: number } {
+  const cx = box.x + box.w / 2;
+  const cy = box.y + box.h / 2;
+  const px = box.x + origin[0] * box.w;
+  const py = box.y + origin[1] * box.h;
+  const d = ((deg - box.rotation) * Math.PI) / 180;
+  const cos = Math.cos(d);
+  const sin = Math.sin(d);
+  const dx = px - cx;
+  const dy = py - cy;
+  // Where the pivot ends up once the box has turned about its centre.
+  const sx = cx + dx * cos - dy * sin;
+  const sy = cy + dx * sin + dy * cos;
+  return { x: box.x + (px - sx), y: box.y + (py - sy), rotation: deg };
+}

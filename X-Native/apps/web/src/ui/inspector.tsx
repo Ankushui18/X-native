@@ -56,6 +56,7 @@ import {
   EFFECT_LIMITS,
 } from "./effectModel";
 import {
+  rotateAboutOrigin,
   SCALE_ANCHORS,
   SCALE_FACTORS,
   scaleMembers,
@@ -2109,6 +2110,21 @@ function Design({
       // The axis that is still set to hug follows what was just typed.
       if (key === "w") refitHug({ w, sizingW: "fixed" }, { h: n.sizingH === "hug" });
       else refitHug({ h, sizingH: "fixed" }, { w: n.sizingW === "hug" });
+      return;
+    }
+    if (key === "rotation") {
+      // Turning a layer turns it about its rotation origin, so a moved origin
+      // means the box has to slide as well. The arithmetic is the canvas's.
+      const turned = rotateAboutOrigin(
+        { x: n.x, y: n.y, w: n.w, h: n.h, rotation: n.rotation },
+        n.rotOrigin ?? [0.5, 0.5],
+        v,
+      );
+      engine.dispatch({
+        type: "patch",
+        id: n.id,
+        patch: { x: turned.x, y: turned.y, rotation: turned.rotation },
+      });
       return;
     }
     const next = key === "opacity" ? Math.max(0, Math.min(1, v)) : v;
